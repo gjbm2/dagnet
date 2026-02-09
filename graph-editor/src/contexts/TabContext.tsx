@@ -866,8 +866,13 @@ class FileRegistry {
   }
   
   /**
-   * Collect all pending image operations for commit
-   * Returns array of GitFileToCommit objects
+   * Collect all pending image operations for commit.
+   *
+   * PRIMARY source of truth: IndexedDB (dirty image files survive page refresh).
+   * The in-memory `pendingImageOps` array is used ONLY for delete operations
+   * (since deleted images are removed from IDB immediately).
+   *
+   * Returns array of GitFileToCommit objects.
    */
   async commitPendingImages(): Promise<Array<{
     path: string;
@@ -877,25 +882,54 @@ class FileRegistry {
     delete?: boolean;
   }>> {
     const filesToCommit: Array<any> = [];
-    
+    const coveredPaths = new Set<string>();
+
+    // 1. Collect UPLOAD ops from IDB (source of truth — survives page refresh)
+    try {
+      const allFiles = await db.files.toArray();
+      const dirtyImages = allFiles.filter(
+        (f: any) => f.type === 'image' && f.isDirty && f.data?.binaryData
+      );
+
+      for (const img of dirtyImages) {
+        const imgPath = img.path || img.source?.path ||
+          `nodes/images/${img.data.image_id}.${img.data.file_extension}`;
+        // Strip any workspace prefix from the path (basePath is added by caller)
+        filesToCommit.push({
+          path: imgPath,
+          binaryContent: img.data.binaryData,
+          encoding: 'base64'
+        });
+        coveredPaths.add(imgPath);
+      }
+
+      if (dirtyImages.length > 0) {
+        console.log(`FileRegistry: Found ${dirtyImages.length} dirty images in IDB`);
+      }
+    } catch (error) {
+      console.warn('FileRegistry: Failed to scan IDB for dirty images, falling back to in-memory ops', error);
+    }
+
+    // 2. Collect DELETE ops from in-memory array (deletes remove from IDB, so can't query there)
     for (const op of this.pendingImageOps) {
-      if (op.type === 'upload') {
+      if (op.type === 'delete') {
+        filesToCommit.push({
+          path: op.path,
+          delete: true
+        });
+      } else if (op.type === 'upload' && !coveredPaths.has(op.path)) {
+        // Fallback: if IDB scan missed it (shouldn't happen, but belt-and-braces)
         filesToCommit.push({
           path: op.path,
           binaryContent: op.data!,
           encoding: 'base64'
         });
-      } else if (op.type === 'delete') {
-        filesToCommit.push({
-          path: op.path,
-          delete: true
-        });
       }
     }
-    
-    // Clear pending operations
+
+    // Clear in-memory pending operations
     this.pendingImageOps = [];
-    
+
     console.log(`FileRegistry: Collected ${filesToCommit.length} pending image operations for commit`);
     return filesToCommit;
   }

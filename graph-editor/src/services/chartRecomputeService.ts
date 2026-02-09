@@ -33,7 +33,7 @@ async function deriveCurrentDepsStamp(args: {
 }): Promise<ChartDepsStampV1 | null> {
   const chartData = args.chartData;
   const chartKind = chartData?.chart_kind;
-  if (chartKind !== 'analysis_funnel' && chartKind !== 'analysis_bridge') return null;
+  if (chartKind !== 'analysis_funnel' && chartKind !== 'analysis_bridge' && chartKind !== 'analysis_daily_conversions' && chartKind !== 'analysis_cohort_maturity') return null;
 
   const parent_file_id: string | undefined = chartData?.recipe?.parent?.parent_file_id ?? chartData?.source?.parent_file_id;
   const parent_tab_id: string | undefined = chartData?.recipe?.parent?.parent_tab_id ?? chartData?.source?.parent_tab_id;

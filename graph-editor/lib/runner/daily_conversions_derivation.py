@@ -1,7 +1,8 @@
 """
 Daily Conversions Derivation from Snapshot Data
 
-Computes conversions attributed to each calendar date.
+Computes conversions attributed to each calendar date, and per-cohort
+conversion rates (Y/X per anchor_day).
 """
 
 from collections import defaultdict
@@ -11,17 +12,21 @@ from datetime import date, datetime
 
 def derive_daily_conversions(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
     """
-    Derive daily conversion counts from snapshot rows.
+    Derive daily conversion counts and per-cohort conversion rates from snapshot rows.
     
-    For each cohort, ΔY between snapshots = conversions attributed to that snapshot date.
+    Two outputs:
+      1. ``data`` – ΔY (new conversions) attributed to each retrieval date.
+      2. ``rate_by_cohort`` – conversion rate (Y/X) per anchor_day, using the
+         latest snapshot for each (anchor_day, slice_key).
     
     Args:
-        rows: List of snapshot rows with anchor_day, retrieved_at, Y fields
+        rows: List of snapshot rows with anchor_day, retrieved_at, X, Y fields
     
     Returns:
         {
             'analysis_type': 'daily_conversions',
             'data': [{'date': str, 'conversions': int}, ...],
+            'rate_by_cohort': [{'date': str, 'x': int, 'y': int, 'rate': float|None}, ...],
             'total_conversions': int,
             'date_range': {'from': str, 'to': str}
         }
@@ -42,6 +47,10 @@ def derive_daily_conversions(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
         slice_key = row.get('slice_key') or ''
         by_series[(anchor, slice_key)].append(row)
 
+    # --- Per-cohort rate: track latest snapshot per (anchor_day, slice_key) ---
+    # Keyed by anchor_day → accumulated (x, y) across slices.
+    cohort_xy: Dict[date, Dict[str, int]] = defaultdict(lambda: {'x': 0, 'y': 0})
+
     for (anchor_day, _slice_key), snapshots in by_series.items():
         snapshots_sorted = sorted(snapshots, key=lambda r: _parse_datetime(r['retrieved_at']))
         prev_Y = 0
@@ -56,6 +65,13 @@ def derive_daily_conversions(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
                 daily_totals[retrieved.date()] += delta_Y
 
             prev_Y = current_Y
+
+        # Latest snapshot in this series gives the most up-to-date X and Y
+        latest = snapshots_sorted[-1]
+        latest_x = latest.get('x') or latest.get('X') or 0
+        latest_y = latest.get('y') or latest.get('Y') or 0
+        cohort_xy[anchor_day]['x'] += latest_x
+        cohort_xy[anchor_day]['y'] += latest_y
     
     total = sum(daily_totals.values())
     sorted_dates = sorted(daily_totals.keys())
@@ -63,10 +79,25 @@ def derive_daily_conversions(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
         {'date': d.isoformat(), 'conversions': count}
         for d, count in sorted(daily_totals.items())
     ]
+
+    # Build rate_by_cohort sorted by anchor_day
+    rate_by_cohort = []
+    for anchor_day in sorted(cohort_xy.keys()):
+        xy = cohort_xy[anchor_day]
+        x_val = xy['x']
+        y_val = xy['y']
+        rate = y_val / x_val if x_val > 0 else None
+        rate_by_cohort.append({
+            'date': anchor_day.isoformat(),
+            'x': x_val,
+            'y': y_val,
+            'rate': rate,
+        })
     
     return {
         'analysis_type': 'daily_conversions',
         'data': data,
+        'rate_by_cohort': rate_by_cohort,
         'total_conversions': total,
         'date_range': {
             'from': sorted_dates[0].isoformat() if sorted_dates else None,

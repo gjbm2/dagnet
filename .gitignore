@@ -35,6 +35,7 @@ MANIFEST
 .env.test.local
 .env.production.local
 .env.amplitude.local
+.env.git.local
 
 # Build outputs
 dist/

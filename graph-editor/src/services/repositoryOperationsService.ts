@@ -1044,6 +1044,24 @@ class RepositoryOperationsService {
         console.error(`Failed to mark file ${file.fileId} as saved:`, e);
       }
     }
+
+    // Mark committed images as clean in IDB (prevents re-committing on next commit)
+    if (imageFiles && imageFiles.length > 0) {
+      try {
+        const allIdbFiles = await db.files.toArray();
+        const dirtyImages = allIdbFiles.filter(
+          (f: any) => f.type === 'image' && f.isDirty
+        );
+        for (const img of dirtyImages) {
+          img.isDirty = false;
+          img.lastSynced = Date.now();
+          await db.files.put(img);
+        }
+        console.log(`✅ Marked ${dirtyImages.length} images as clean after commit`);
+      } catch (e) {
+        console.error('Failed to mark images as clean after commit:', e);
+      }
+    }
     
     // Invalidate cache since files were committed
     this.invalidateCommittableFilesCache();

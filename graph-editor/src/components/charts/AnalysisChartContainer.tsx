@@ -1,12 +1,13 @@
 import React, { useMemo, useState } from 'react';
 
-import type { AnalysisResult, LagHistogramResult, DailyConversionsResult } from '../../lib/graphComputeClient';
+import type { AnalysisResult, LagHistogramResult } from '../../lib/graphComputeClient';
 import { FunnelChartPreview } from './FunnelChartPreview';
 import { BridgeChartPreview } from './BridgeChartPreview';
 import { FunnelBridgeChartPreview } from './FunnelBridgeChartPreview';
 import { SnapshotHistogramChart } from './SnapshotHistogramChart';
 import { SnapshotDailyConversionsChart } from './SnapshotDailyConversionsChart';
 import { SnapshotCohortMaturityChart } from './SnapshotCohortMaturityChart';
+import type { SnapshotSubjectTemplateV1 } from '../../services/chartOperationsService';
 
 type ChartKind = 'funnel' | 'bridge' | 'bridge_horizontal' | 'histogram' | 'daily_conversions' | 'cohort_maturity';
 
@@ -35,6 +36,7 @@ export function AnalysisChartContainer(props: {
   result: AnalysisResult;
   visibleScenarioIds: string[];
   scenarioDslSubtitleById?: Record<string, string>;
+  snapshotSubjectTemplatesByScenarioId?: Record<string, SnapshotSubjectTemplateV1[]>;
   height?: number;
   fillHeight?: boolean;
   compactControls?: boolean;
@@ -45,7 +47,7 @@ export function AnalysisChartContainer(props: {
     analysis_type?: string;
   };
 }): JSX.Element | null {
-  const { result, visibleScenarioIds, scenarioDslSubtitleById, height = 420, fillHeight = false, compactControls = false, source } = props;
+  const { result, visibleScenarioIds, scenarioDslSubtitleById, snapshotSubjectTemplatesByScenarioId, height = 420, fillHeight = false, compactControls = false, source } = props;
 
   const inferredChartKind = useMemo((): ChartKind | null => {
     const t = (result as any)?.analysis_type;
@@ -91,6 +93,7 @@ export function AnalysisChartContainer(props: {
         gap: 8,
         minHeight: 0,
         height: fillHeight ? '100%' : undefined,
+        position: fillHeight ? 'relative' : undefined,
       }}
     >
       {showChooser ? (
@@ -142,54 +145,67 @@ export function AnalysisChartContainer(props: {
         </div>
       ) : null}
 
-      {kind === 'histogram' ? (
-        <SnapshotHistogramChart
-          data={result as unknown as LagHistogramResult}
-          height={height}
-        />
-      ) : kind === 'daily_conversions' ? (
-        <SnapshotDailyConversionsChart
-          data={result as unknown as DailyConversionsResult}
-          height={height}
-        />
-      ) : kind === 'cohort_maturity' ? (
-        <SnapshotCohortMaturityChart
-          result={result}
-          visibleScenarioIds={visibleScenarioIds}
-          height={height}
-        />
-      ) : kind === 'funnel' ? (
-        <FunnelChartPreview
-          result={result}
-          visibleScenarioIds={visibleScenarioIds}
-          height={height}
-          fillHeight={fillHeight}
-          showToolbox={false}
-          compactControls={compactControls}
-          source={source}
-          scenarioDslSubtitleById={scenarioDslSubtitleById}
-        />
-      ) : result.analysis_type === 'conversion_funnel' ? (
-        <FunnelBridgeChartPreview
-          result={result}
-          visibleScenarioIds={visibleScenarioIds}
-          height={height}
-          compactControls={compactControls}
-          source={source}
-          scenarioDslSubtitleById={scenarioDslSubtitleById}
-        />
-      ) : (
-        <BridgeChartPreview
-          result={result}
-          height={height}
-          fillHeight={fillHeight}
-          showToolbox={false}
-          compactControls={compactControls}
-          scenarioDslSubtitleById={scenarioDslSubtitleById}
-          source={source}
-          orientation={kind === 'bridge_horizontal' ? 'horizontal' : 'vertical'}
-        />
-      )}
+      <div style={{ minHeight: 0, ...(fillHeight ? { position: 'absolute' as const, inset: 0 } : {}) }}>
+        {kind === 'histogram' ? (
+          <SnapshotHistogramChart
+            data={result as unknown as LagHistogramResult}
+            height={height}
+          />
+        ) : kind === 'daily_conversions' ? (
+          <SnapshotDailyConversionsChart
+            result={result}
+            visibleScenarioIds={visibleScenarioIds}
+            height={height}
+            fillHeight={fillHeight}
+            queryDsl={source?.query_dsl}
+            source={source}
+            scenarioDslSubtitleById={scenarioDslSubtitleById}
+            snapshotSubjectTemplatesByScenarioId={snapshotSubjectTemplatesByScenarioId}
+          />
+        ) : kind === 'cohort_maturity' ? (
+          <SnapshotCohortMaturityChart
+            result={result}
+            visibleScenarioIds={visibleScenarioIds}
+            height={height}
+            fillHeight={fillHeight}
+            queryDsl={source?.query_dsl}
+            source={source}
+            scenarioDslSubtitleById={scenarioDslSubtitleById}
+            snapshotSubjectTemplatesByScenarioId={snapshotSubjectTemplatesByScenarioId}
+          />
+        ) : kind === 'funnel' ? (
+          <FunnelChartPreview
+            result={result}
+            visibleScenarioIds={visibleScenarioIds}
+            height={height}
+            fillHeight={fillHeight}
+            showToolbox={false}
+            compactControls={compactControls}
+            source={source}
+            scenarioDslSubtitleById={scenarioDslSubtitleById}
+          />
+        ) : result.analysis_type === 'conversion_funnel' ? (
+          <FunnelBridgeChartPreview
+            result={result}
+            visibleScenarioIds={visibleScenarioIds}
+            height={height}
+            compactControls={compactControls}
+            source={source}
+            scenarioDslSubtitleById={scenarioDslSubtitleById}
+          />
+        ) : (
+          <BridgeChartPreview
+            result={result}
+            height={height}
+            fillHeight={fillHeight}
+            showToolbox={false}
+            compactControls={compactControls}
+            scenarioDslSubtitleById={scenarioDslSubtitleById}
+            source={source}
+            orientation={kind === 'bridge_horizontal' ? 'horizontal' : 'vertical'}
+          />
+        )}
+      </div>
     </div>
   );
 }

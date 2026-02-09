@@ -8,12 +8,25 @@
  */
 import React, { useMemo, useState } from 'react';
 import ReactECharts from 'echarts-for-react';
+import { ExternalLink, Download } from 'lucide-react';
 import type { AnalysisResult } from '../../lib/graphComputeClient';
+import { chartOperationsService } from '../../services/chartOperationsService';
+import { analysisResultToCsv } from '../../services/analysisExportService';
+import { downloadTextFile } from '../../services/downloadService';
 
 interface Props {
   result: AnalysisResult;
   visibleScenarioIds: string[];
   height?: number;
+  fillHeight?: boolean;
+  queryDsl?: string;
+  source?: {
+    parent_file_id?: string;
+    parent_tab_id?: string;
+    query_dsl?: string;
+    analysis_type?: string;
+  };
+  hideOpenAsTab?: boolean;
 }
 
 function formatDate_d_MMM_yy(dateStr: string): string {
@@ -30,7 +43,7 @@ function formatPercent(v: number | null | undefined): string {
   return `${(v * 100).toFixed(1)}%`;
 }
 
-export function SnapshotCohortMaturityChart({ result, visibleScenarioIds, height = 320 }: Props): JSX.Element {
+export function SnapshotCohortMaturityChart({ result, visibleScenarioIds, height = 320, fillHeight = false, queryDsl, source, hideOpenAsTab = false }: Props): JSX.Element {
   const rows = Array.isArray(result?.data) ? result.data : [];
 
   if (rows.length === 0) {
@@ -111,11 +124,6 @@ export function SnapshotCohortMaturityChart({ result, visibleScenarioIds, height
   }, [filteredRows, scenarioMeta]);
 
   const option = useMemo(() => {
-    const anchorFrom = result?.metadata?.anchor_from;
-    const anchorTo = result?.metadata?.anchor_to;
-    const sweepFrom = result?.metadata?.sweep_from;
-    const sweepTo = result?.metadata?.sweep_to;
-
     // Compute Y-axis max from data with headroom, rounded to a clean percentage
     let maxRate = 0;
     for (const s of series) {
@@ -135,7 +143,9 @@ export function SnapshotCohortMaturityChart({ result, visibleScenarioIds, height
           const items = Array.isArray(params) ? params : [params];
           const first = items[0];
           const asAtRaw = first?.value?.[0];
-          const asAt = typeof asAtRaw === 'string' ? asAtRaw : String(asAtRaw || '');
+          const asAt = typeof asAtRaw === 'number'
+            ? new Date(asAtRaw).toISOString().slice(0, 10)
+            : String(asAtRaw || '');
           const title = formatDate_d_MMM_yy(asAt);
           const lines = items.map((it: any) => {
             const scenarioName = it?.seriesName || 'Scenario';
@@ -148,22 +158,23 @@ export function SnapshotCohortMaturityChart({ result, visibleScenarioIds, height
       grid: {
         left: '3%',
         right: '4%',
-        bottom: '10%',
-        top: 50,
+        bottom: 60,
+        top: series.length > 2 ? 80 : 50,
         containLabel: true,
       },
       xAxis: {
         type: 'time',
         name: 'As-at',
-        nameLocation: 'middle',
-        nameGap: 35,
+        nameLocation: 'middle' as const,
+        nameGap: 30,
         axisLabel: {
           fontSize: 10,
-          formatter: (value: any) => {
+          rotate: 30,
+          formatter: (value: number) => {
             const d = new Date(value);
-            if (Number.isNaN(d.getTime())) return String(value);
-            const day = d.getDate();
-            const month = d.toLocaleDateString('en-GB', { month: 'short' });
+            if (Number.isNaN(d.getTime())) return '';
+            const day = d.getUTCDate();
+            const month = d.toLocaleDateString('en-GB', { month: 'short', timeZone: 'UTC' });
             return `${day}-${month}`;
           },
         },
@@ -173,7 +184,7 @@ export function SnapshotCohortMaturityChart({ result, visibleScenarioIds, height
         min: 0,
         max: yMax,
         name: 'Conversion rate',
-        nameLocation: 'middle',
+        nameLocation: 'middle' as const,
         nameGap: 45,
         axisLabel: {
           fontSize: 11,
@@ -188,11 +199,10 @@ export function SnapshotCohortMaturityChart({ result, visibleScenarioIds, height
         icon: 'roundRect',
       },
       series,
-      // Small metadata for toolbox-free download/inspection in devtools.
       dagnet_meta: {
         subject_id: effectiveSubjectId,
-        anchor: { from: anchorFrom, to: anchorTo },
-        sweep: { from: sweepFrom, to: sweepTo },
+        anchor: { from: result?.metadata?.anchor_from, to: result?.metadata?.anchor_to },
+        sweep: { from: result?.metadata?.sweep_from, to: result?.metadata?.sweep_to },
       },
     };
   }, [result, series, effectiveSubjectId]);
@@ -209,7 +219,13 @@ export function SnapshotCohortMaturityChart({ result, visibleScenarioIds, height
   }, [result]);
 
   return (
-    <div style={{ width: '100%' }}>
+    <div style={{
+      width: '100%',
+      height: fillHeight ? '100%' : undefined,
+      display: fillHeight ? 'flex' : undefined,
+      flexDirection: fillHeight ? 'column' : undefined,
+      minHeight: 0,
+    }}>
       <div
         style={{
           padding: '8px 12px',
@@ -220,9 +236,15 @@ export function SnapshotCohortMaturityChart({ result, visibleScenarioIds, height
           fontSize: 12,
           color: '#6b7280',
           gap: 12,
+          flexShrink: 0,
         }}
       >
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0, flexWrap: 'wrap' }}>
+          {queryDsl && (
+            <span style={{ fontFamily: 'monospace', fontSize: 11, color: '#374151', fontWeight: 500 }}>
+              {queryDsl}
+            </span>
+          )}
           <span style={{ whiteSpace: 'nowrap' }}>
             <strong>{subjectMeta?.[effectiveSubjectId]?.name || effectiveSubjectId}</strong>
           </span>
@@ -251,17 +273,80 @@ export function SnapshotCohortMaturityChart({ result, visibleScenarioIds, height
             </select>
           ) : null}
         </div>
-        <div style={{ fontSize: 11, color: '#6b7280', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-          {headerRight}
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexShrink: 0 }}>
+          <span style={{ fontSize: 11, color: '#6b7280', whiteSpace: 'nowrap' }}>
+            {headerRight}
+          </span>
+          {!hideOpenAsTab && (
+            <button
+              type="button"
+              onClick={() => {
+                void chartOperationsService.openAnalysisChartTabFromAnalysis({
+                  chartKind: 'analysis_cohort_maturity',
+                  analysisResult: result,
+                  scenarioIds: visibleScenarioIds,
+                  title: result.analysis_name
+                    ? `Chart — ${result.analysis_name}`
+                    : queryDsl
+                      ? `Chart — ${queryDsl}`
+                      : 'Chart — Cohort Maturity',
+                  source,
+                });
+              }}
+              style={{
+                border: '1px solid #e5e7eb',
+                background: '#ffffff',
+                color: '#374151',
+                borderRadius: 6,
+                padding: '4px 8px',
+                fontSize: 11,
+                cursor: 'pointer',
+                whiteSpace: 'nowrap',
+              }}
+              title="Open as tab"
+              aria-label="Open as tab"
+            >
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                <ExternalLink size={14} />
+              </span>
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={() => {
+              const { filename, csv } = analysisResultToCsv(result);
+              downloadTextFile({ filename, content: csv, mimeType: 'text/csv' });
+            }}
+            style={{
+              border: '1px solid #e5e7eb',
+              background: '#ffffff',
+              color: '#374151',
+              borderRadius: 6,
+              padding: '4px 8px',
+              fontSize: 11,
+              cursor: 'pointer',
+              whiteSpace: 'nowrap',
+            }}
+            title="Download CSV"
+            aria-label="Download CSV"
+          >
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+              <Download size={14} />
+            </span>
+          </button>
         </div>
       </div>
 
       <ReactECharts
         option={option}
-        style={{ height, width: '100%' }}
+        style={{
+          height: fillHeight ? '100%' : height,
+          width: '100%',
+          flex: fillHeight ? 1 : undefined,
+          minHeight: 0,
+        }}
         opts={{ renderer: 'svg' }}
       />
     </div>
   );
 }
-

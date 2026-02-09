@@ -9,8 +9,21 @@ import { chartDepsSignatureV1 } from '../lib/chartDeps';
 import { dslDependsOnReferenceDay } from '../lib/dslDynamics';
 import { ukReferenceDayService } from './ukReferenceDayService';
 import { computeGraphInputsSignatureV1 } from './graphInputSignatureService';
+import type { SnapshotSubjectPayload } from '../lib/graphComputeClient';
 
-export type ChartKind = 'analysis_funnel' | 'analysis_bridge';
+export type ChartKind = 'analysis_funnel' | 'analysis_bridge' | 'analysis_daily_conversions' | 'analysis_cohort_maturity';
+
+/**
+ * Snapshot subject "template" persisted into chart recipe and share payloads.
+ *
+ * Rationale:
+ * - `core_hash` / `canonical_signature` must be preserved from authoring (share boot cannot reliably recompute them).
+ * - `anchor_from/to` and other time bounds must be recomputed at view time for relative windows (viewer-now semantics).
+ */
+export type SnapshotSubjectTemplateV1 = Omit<
+  SnapshotSubjectPayload,
+  'anchor_from' | 'anchor_to' | 'as_at' | 'sweep_from' | 'sweep_to'
+>;
 
 type ChartFileDataV1 = {
   version: '1.0.0';
@@ -46,6 +59,16 @@ type ChartFileDataV1 = {
       effective_dsl?: string;
       is_live?: boolean;
     }>;
+    /**
+     * Optional snapshot recipe metadata.
+     *
+     * Contains per-scenario snapshot subject templates (stable signature-bearing fields),
+     * WITHOUT time bounds. Time bounds are recomputed at runtime for relative DSL windows.
+     */
+    snapshot?: {
+      version: '1.0.0';
+      subjects_by_scenario_id: Record<string, SnapshotSubjectTemplateV1[]>;
+    };
     display?: {
       hide_current?: boolean;
     };
@@ -181,6 +204,7 @@ class ChartOperationsService {
     scenarioDslSubtitleById?: Record<string, string>;
     hideCurrent?: boolean;
     whatIfDsl?: string;
+    snapshotSubjectTemplatesByScenarioId?: Record<string, SnapshotSubjectTemplateV1[]>;
     /** Optional: override the chart fileId (for share-scoped cached chart artefacts). */
     fileId?: string;
   }): Promise<{ fileId: string; tabId: string } | null> {
@@ -223,6 +247,7 @@ class ChartOperationsService {
     scenarioDslSubtitleById?: Record<string, string>;
     hideCurrent?: boolean;
     whatIfDsl?: string;
+    snapshotSubjectTemplatesByScenarioId?: Record<string, SnapshotSubjectTemplateV1[]>;
     fileId?: string;
   }): Promise<{ fileId: string; tabId: string } | null> {
     try {
@@ -345,6 +370,17 @@ class ChartOperationsService {
           what_if_dsl: typeof args.whatIfDsl === 'string' && args.whatIfDsl.trim() ? args.whatIfDsl.trim() : undefined,
         },
         scenarios: recipeScenarios,
+        snapshot: (() => {
+          const raw = args.snapshotSubjectTemplatesByScenarioId || undefined;
+          if (!raw) return undefined;
+          const out: Record<string, SnapshotSubjectTemplateV1[]> = {};
+          for (const [scenarioId, templates] of Object.entries(raw)) {
+            if (!Array.isArray(templates) || templates.length === 0) continue;
+            out[scenarioId] = templates;
+          }
+          if (Object.keys(out).length === 0) return undefined;
+          return { version: '1.0.0', subjects_by_scenario_id: out };
+        })(),
         display: typeof args.hideCurrent === 'boolean' ? { hide_current: args.hideCurrent } : undefined,
         pinned_recompute_eligible: pinnedRecomputeEligible,
       } satisfies ChartFileDataV1['recipe'];

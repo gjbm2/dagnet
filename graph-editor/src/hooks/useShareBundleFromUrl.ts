@@ -14,6 +14,9 @@ import { useGraphStoreOptional } from '../contexts/GraphStoreContext';
 import { fetchDataService } from '../services/fetchDataService';
 import { fetchOrchestratorService } from '../services/fetchOrchestratorService';
 import { sessionLogService } from '../services/sessionLogService';
+import { ANALYSIS_TYPES } from '../components/panels/analysisTypes';
+import { mapFetchPlanToSnapshotSubjects, composeSnapshotDsl, extractDateRangeFromDSL } from '../services/snapshotDependencyPlanService';
+import { buildFetchPlanProduction } from '../services/fetchPlanBuilderService';
 
 async function waitForTabContextInitDone(timeoutMs: number = 10_000): Promise<void> {
   try {
@@ -399,10 +402,70 @@ export function useShareBundleFromUrl(args: { graphFileId: string }): void {
             };
           });
 
+          // ── Snapshot subject resolution for DB-backed analyses ──
+          const bundleAnalysisType = t.analysis?.analysis_type || undefined;
+          const bundleQueryDsl = t.analysis?.query_dsl || undefined;
+          const bundleSnapshotMeta = bundleAnalysisType
+            ? ANALYSIS_TYPES.find(at => at.id === bundleAnalysisType)
+            : undefined;
+
+          if (bundleSnapshotMeta?.snapshotContract) {
+            const identity = shareMode?.identity;
+            const workspace = (identity?.repo && identity?.branch)
+              ? { repository: identity.repo, branch: identity.branch }
+              : undefined;
+
+            if (!workspace) {
+              throw new Error(`Snapshot analysis "${bundleAnalysisType}" requires workspace identity.`);
+            }
+
+            const currentQueryDsl = (payload as any)?.graph_state?.current_query_dsl || '';
+            const baseDsl = (payload as any)?.graph_state?.base_dsl || '';
+
+            for (const sg of scenarioGraphs) {
+              try {
+                const scenarioDsl = scenarioDslSubtitleById[sg.scenario_id] || '';
+                let snapshotDsl = composeSnapshotDsl(bundleQueryDsl || '', scenarioDsl);
+                if (!extractDateRangeFromDSL(snapshotDsl) && currentQueryDsl) {
+                  snapshotDsl = composeSnapshotDsl(snapshotDsl, currentQueryDsl);
+                }
+                if (!extractDateRangeFromDSL(snapshotDsl) && baseDsl) {
+                  snapshotDsl = composeSnapshotDsl(snapshotDsl, baseDsl);
+                }
+
+                const dslWindow = extractDateRangeFromDSL(snapshotDsl);
+                if (!dslWindow) {
+                  console.error(`[ShareBundle] No date range for scenario ${sg.scenario_id}:`, { bundleQueryDsl, scenarioDsl, currentQueryDsl, baseDsl });
+                  continue;
+                }
+
+                  const { computePlannerQuerySignaturesForGraph } = await import('../services/plannerQuerySignatureService');
+                  const sigs = await computePlannerQuerySignaturesForGraph({ graph: sg.graph, dsl: snapshotDsl, forceCompute: true });
+                  const { plan } = await buildFetchPlanProduction(sg.graph, snapshotDsl, dslWindow, { querySignatures: sigs });
+                const resolverResult = await mapFetchPlanToSnapshotSubjects({
+                  plan,
+                  analysisType: bundleAnalysisType!,
+                  graph: sg.graph,
+                  selectedEdgeUuids: [],
+                  workspace,
+                  queryDsl: snapshotDsl,
+                });
+
+                if (resolverResult && resolverResult.subjects.length > 0) {
+                  (sg as any).snapshot_subjects = resolverResult.subjects;
+                  console.log(`[ShareBundle] Resolved ${resolverResult.subjects.length} snapshot subjects for scenario ${sg.scenario_id}`);
+                }
+              } catch (err) {
+                console.error(`[ShareBundle] Snapshot subject resolution failed for scenario ${sg.scenario_id}:`, err);
+                throw err;
+              }
+            }
+          }
+
           const response = await graphComputeClient.analyzeMultipleScenarios(
             scenarioGraphs as any,
-            t.analysis?.query_dsl || undefined,
-            t.analysis?.analysis_type || undefined
+            bundleQueryDsl,
+            bundleAnalysisType
           );
           if (!response?.success || !response.result) throw new Error(response?.error?.message || 'Analysis failed');
 

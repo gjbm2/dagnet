@@ -938,7 +938,10 @@ class WorkspaceService {
             lastSynced: Date.now()
           };
           
-          await db.files.put(imageFileState);
+          // Save to IDB with workspace prefix (consistent with clone)
+          const idbFileId = `${repository}-${branch}-${imageFileState.fileId}`;
+          await db.files.put({ ...imageFileState, fileId: idbFileId });
+          // Also add to FileRegistry memory cache (unprefixed)
           (fileRegistry as any).files.set(imageFileState.fileId, imageFileState);
         }
         
@@ -1269,7 +1272,11 @@ class WorkspaceService {
           lastSynced: Date.now()
         };
         
-        await db.files.put(imageFileState);
+        // Save to IDB with workspace prefix (consistent with clone)
+        const idbFileId = `${repository}-${branch}-${imageFileState.fileId}`;
+        await db.files.put({ ...imageFileState, fileId: idbFileId });
+        // Also add to FileRegistry memory cache (unprefixed)
+        (fileRegistry as any).files.set(imageFileState.fileId, imageFileState);
       }
       
       console.log(`✅ WorkspaceService: Stored ${images.length} images in IDB`);
