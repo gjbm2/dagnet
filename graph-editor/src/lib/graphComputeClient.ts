@@ -434,6 +434,192 @@ export class GraphComputeClient {
   }
 
   /**
+   * Normalise multi-scenario / multi-subject daily_conversions responses into a single
+   * AnalysisResult with tabular `data` rows — one row per (scenario_id, subject_id, date).
+   *
+   * Each row contains { date, x, y, rate } from the backend's `rate_by_cohort` output.
+   * Falls back to the raw `data` (ΔY counts) if `rate_by_cohort` is not present.
+   */
+  private normaliseSnapshotDailyConversionsResponse(
+    raw: any,
+    request: AnalysisRequest,
+  ): AnalysisResponse | null {
+    try {
+      const requestedType = request?.analysis_type;
+      if (requestedType !== 'daily_conversions') return null;
+
+      // If it already looks like a normalised AnalysisResult, leave it alone.
+      if (raw?.success === true && raw?.result?.analysis_type === 'daily_conversions'
+          && Array.isArray(raw.result.data) && raw.result.data[0]?.scenario_id) {
+        return null;
+      }
+
+      const isDailyConversionsResult = (r: any): boolean => {
+        if (!r || typeof r !== 'object') return false;
+        if (r.analysis_type === 'daily_conversions') return true;
+        return Array.isArray(r.rate_by_cohort) || (Array.isArray(r.data) && r.data[0]?.conversions !== undefined);
+      };
+
+      // Extract all scenario/subject blocks (same shapes as cohort maturity).
+      type Block = { scenario_id: string; subject_id: string; result: any };
+      const blocks: Block[] = [];
+
+      if (raw && Array.isArray(raw.scenarios)) {
+        for (const sc of raw.scenarios) {
+          const scenarioId = sc?.scenario_id;
+          if (!scenarioId || !Array.isArray(sc?.subjects)) continue;
+          for (const sub of sc.subjects) {
+            if (sub?.success !== true) continue;
+            blocks.push({ scenario_id: scenarioId, subject_id: sub?.subject_id || 'subject', result: sub?.result });
+          }
+        }
+      } else if (raw && Array.isArray(raw.subjects)) {
+        const scenarioId = raw.scenario_id || request?.scenarios?.[0]?.scenario_id || 'base';
+        for (const sub of raw.subjects) {
+          if (sub?.success !== true) continue;
+          blocks.push({ scenario_id: scenarioId, subject_id: sub?.subject_id || 'subject', result: sub?.result });
+        }
+      } else if (raw?.success === true && isDailyConversionsResult(raw?.result)) {
+        const scenarioId = raw.scenario_id || request?.scenarios?.[0]?.scenario_id || 'base';
+        const subjectId = raw.subject_id || 'subject';
+        blocks.push({ scenario_id: scenarioId, subject_id: subjectId, result: raw.result });
+      }
+
+      if (blocks.length === 0) return null;
+      if (!blocks.some(b => isDailyConversionsResult(b.result))) return null;
+
+      // Build dimension values from request scenarios.
+      const scenarioDimensionValues: Record<string, DimensionValueMeta> = {};
+      for (const s of request.scenarios || []) {
+        if (!s?.scenario_id) continue;
+        scenarioDimensionValues[s.scenario_id] = {
+          name: s.name || s.scenario_id,
+          colour: s.colour,
+          visibility_mode: s.visibility_mode,
+        };
+      }
+
+      // Flatten into tabular data rows.
+      const data: Array<Record<string, any>> = [];
+      let globalDateFrom: string | null = null;
+      let globalDateTo: string | null = null;
+      let globalTotalConversions = 0;
+
+      for (const b of blocks) {
+        const r = b.result;
+        if (!isDailyConversionsResult(r)) continue;
+
+        globalTotalConversions += r.total_conversions || 0;
+        const dateRange = r.date_range;
+        if (dateRange?.from && (!globalDateFrom || dateRange.from < globalDateFrom)) {
+          globalDateFrom = dateRange.from;
+        }
+        if (dateRange?.to && (!globalDateTo || dateRange.to > globalDateTo)) {
+          globalDateTo = dateRange.to;
+        }
+
+        // Prefer rate_by_cohort (Y/X per anchor_day) for charting.
+        const rateRows: any[] = Array.isArray(r.rate_by_cohort) ? r.rate_by_cohort : [];
+        if (rateRows.length > 0) {
+          for (const row of rateRows) {
+            data.push({
+              scenario_id: b.scenario_id,
+              subject_id: b.subject_id,
+              date: row.date,
+              x: Number(row.x ?? 0),
+              y: Number(row.y ?? 0),
+              rate: row.rate != null && Number.isFinite(Number(row.rate)) ? Number(row.rate) : null,
+            });
+          }
+        } else {
+          // Fallback: use the ΔY count data (rate not available).
+          for (const row of (r.data || [])) {
+            data.push({
+              scenario_id: b.scenario_id,
+              subject_id: b.subject_id,
+              date: row.date,
+              conversions: Number(row.conversions ?? 0),
+              x: 0,
+              y: 0,
+              rate: null,
+            });
+          }
+        }
+      }
+
+      if (data.length === 0) {
+        const emptyResult: AnalysisResult = {
+          analysis_type: 'daily_conversions',
+          analysis_name: 'Daily Conversions',
+          analysis_description: 'No snapshot data found for this query and date range',
+          metadata: { source: 'snapshot_db', empty: true },
+          semantics: {
+            dimensions: [],
+            metrics: [],
+            chart: { recommended: 'daily_conversions', alternatives: [] },
+          },
+          dimension_values: { scenario_id: scenarioDimensionValues },
+          data: [],
+        };
+        return { success: true, result: emptyResult, query_dsl: request.query_dsl };
+      }
+
+      // Subject dimension values.
+      const subjectLabelLookup = new Map<string, string>();
+      for (const sc of request.scenarios || []) {
+        for (const subj of sc.snapshot_subjects || []) {
+          if (subj.subject_label) {
+            subjectLabelLookup.set(subj.subject_id, subj.subject_label);
+          }
+        }
+      }
+      const subjectDimValues = Object.fromEntries(
+        Array.from(new Set(data.map(d => String(d.subject_id)))).map((id, i) => [
+          id,
+          { name: subjectLabelLookup.get(id) || humaniseSubjectId(id), order: i },
+        ])
+      );
+
+      const result: AnalysisResult = {
+        analysis_type: 'daily_conversions',
+        analysis_name: 'Daily Conversions',
+        analysis_description: 'Daily conversion rate by cohort',
+        metadata: {
+          source: 'snapshot_db',
+          date_range: { from: globalDateFrom, to: globalDateTo },
+          total_conversions: globalTotalConversions,
+        },
+        semantics: {
+          dimensions: [
+            { id: 'date', name: 'Cohort date', type: 'time', role: 'primary' },
+            { id: 'scenario_id', name: 'Scenario', type: 'scenario', role: 'secondary' },
+            { id: 'subject_id', name: 'Subject', type: 'categorical', role: 'filter' },
+          ],
+          metrics: [
+            { id: 'rate', name: 'Conversion rate', type: 'ratio', format: 'percent', role: 'primary' },
+            { id: 'x', name: 'Cohort size', type: 'count', format: 'number', role: 'secondary' },
+            { id: 'y', name: 'Conversions', type: 'count', format: 'number', role: 'secondary' },
+          ],
+          chart: {
+            recommended: 'daily_conversions',
+            alternatives: ['table'],
+          },
+        },
+        dimension_values: {
+          scenario_id: scenarioDimensionValues,
+          subject_id: subjectDimValues,
+        },
+        data,
+      };
+
+      return { success: true, result, query_dsl: request.query_dsl };
+    } catch (err) {
+      console.error('[GraphComputeClient] Daily conversions normalisation CRASHED:', err);
+      return null;
+    }
+  }
+
+  /**
    * Clear all caches (useful for testing or forced refresh)
    */
   clearCache(): void {
@@ -709,7 +895,9 @@ export class GraphComputeClient {
       }
     }
 
-    const normalised = this.normaliseSnapshotCohortMaturityResponse(raw, request);
+    const normalised =
+      this.normaliseSnapshotCohortMaturityResponse(raw, request)
+      ?? this.normaliseSnapshotDailyConversionsResponse(raw, request);
 
     if (import.meta.env.DEV && request.analysis_type === 'cohort_maturity') {
       console.log('[GraphComputeClient] Normalisation result:', {
@@ -860,7 +1048,9 @@ export class GraphComputeClient {
     }
 
     const raw = await response.json();
-    const normalised = this.normaliseSnapshotCohortMaturityResponse(raw, request);
+    const normalised =
+      this.normaliseSnapshotCohortMaturityResponse(raw, request)
+      ?? this.normaliseSnapshotDailyConversionsResponse(raw, request);
     const result = normalised ?? raw;
 
     if (import.meta.env.DEV && typeof window !== 'undefined') {
@@ -1153,6 +1343,7 @@ export interface LagHistogramResult {
 export interface DailyConversionsResult {
   analysis_type: 'daily_conversions';
   data: Array<{ date: string; conversions: number }>;
+  rate_by_cohort?: Array<{ date: string; x: number; y: number; rate: number | null }>;
   total_conversions: number;
   date_range: { from: string | null; to: string | null };
 }

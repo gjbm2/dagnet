@@ -75,11 +75,15 @@ function toISOFromUKOrISO(ukOrIso: string | undefined): string | undefined {
 export async function computePlannerQuerySignaturesForGraph(input: {
   graph: Graph;
   dsl: string;
+  /** Bypass the isSignatureCheckingEnabled() guard. Used by snapshot analysis share
+   *  flows that need core_hash even when signature checking is off at the policy level. */
+  forceCompute?: boolean;
 }): Promise<Record<string, string>> {
-  const { graph, dsl } = input;
+  const { graph, dsl, forceCompute } = input;
 
   // RELEASE SAFETY: signature checking is disabled, so planner signature computation is unnecessary.
-  if (!isSignatureCheckingEnabled()) return {};
+  // Exception: forceCompute bypasses this for snapshot DB lookups in share flows.
+  if (!forceCompute && !isSignatureCheckingEnabled()) return {};
 
   // Resolve providers for connections (cache to avoid repeated YAML reads).
   const providerByConnection = new Map<string, string>();

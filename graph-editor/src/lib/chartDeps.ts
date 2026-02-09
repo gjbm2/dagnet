@@ -4,7 +4,7 @@ export type ChartDepsMode = 'linked' | 'pinned';
 
 export type ChartVisibilityMode = 'f+e' | 'f' | 'e';
 
-export type ChartKind = 'analysis_funnel' | 'analysis_bridge';
+export type ChartKind = 'analysis_funnel' | 'analysis_bridge' | 'analysis_daily_conversions' | 'analysis_cohort_maturity';
 
 export type ChartDepsScenarioV1 = {
   scenario_id: string;

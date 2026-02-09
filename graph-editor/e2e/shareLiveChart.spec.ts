@@ -10,7 +10,7 @@ type SharePayloadV1 =
       version: '1.0.0';
       target: 'chart';
       chart: {
-        kind: 'analysis_funnel' | 'analysis_bridge';
+        kind: 'analysis_funnel' | 'analysis_bridge' | 'analysis_daily_conversions' | 'analysis_cohort_maturity';
         title?: string;
       };
       analysis: {
@@ -28,6 +28,10 @@ type SharePayloadV1 =
         }>;
         hide_current?: boolean;
         selected_scenario_dsl?: string | null;
+      };
+      graph_state?: {
+        base_dsl?: string;
+        current_query_dsl?: string;
       };
     };
 
@@ -1963,6 +1967,153 @@ test.describe.serial('Share-live chart (persistence-first)', () => {
     await expect(page.locator('.dock-tab-title', { hasText: 'Graph B' })).toBeVisible();
 
     await expect(page.locator('.dock-tab-title[data-is-focused="true"]')).toHaveText(/Graph B/);
+  });
+});
+
+
+test.describe.serial('Share-live snapshot chart (daily_conversions)', () => {
+  test('live share of daily_conversions chart sends snapshot_subjects in the analyze request', async ({ browser, baseURL }, testInfo) => {
+    const state: ShareLiveStubState = { version: 'v1', counts: {} };
+
+    // Build a share URL for a daily_conversions chart
+    const payload: SharePayloadV1 = {
+      version: '1.0.0',
+      target: 'chart',
+      chart: {
+        kind: 'analysis_daily_conversions',
+        title: 'Chart — Daily Conversions',
+      },
+      analysis: {
+        query_dsl: 'from(from).to(to)',
+        analysis_type: 'daily_conversions',
+      },
+      scenarios: {
+        items: [],
+        hide_current: false,
+      },
+      graph_state: {
+        base_dsl: 'window(1-Jan-26:2-Jan-26)',
+        current_query_dsl: 'window(1-Jan-26:2-Jan-26)',
+      },
+    };
+
+    const shareUrl = buildLiveChartShareUrl(payload);
+
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    const guards = attachShareBootConsoleGuards(page);
+    const fx = installShareForensics({ page, testInfo, phase: 'snapshot-daily-conversions' });
+    await installShareLiveStubs(page, state);
+
+    try {
+      await page.goto(new URL(shareUrl, baseURL).toString(), { waitUntil: 'domcontentloaded' });
+
+      // Wait for the Live view badge and chart tab to appear
+      await expect(page.getByText('Live view')).toBeVisible();
+      await expect(page.getByText('Chart — Daily Conversions')).toBeVisible({ timeout: 20_000 });
+
+      // Wait for the analyze request to be sent
+      await expect
+        .poll(async () => state.lastAnalyzeRequest != null, { timeout: 20_000 })
+        .toBe(true);
+
+      // The analyze request should include analysis_type = daily_conversions
+      expect(state.lastAnalyzeRequest?.analysis_type).toBe('daily_conversions');
+
+      // At least one scenario should have snapshot_subjects
+      const scenarios: any[] = state.lastAnalyzeRequest?.scenarios || [];
+      expect(scenarios.length).toBeGreaterThan(0);
+
+      const hasSnapshotSubjects = scenarios.some(
+        (s: any) => Array.isArray(s.snapshot_subjects) && s.snapshot_subjects.length > 0
+      );
+      expect(
+        hasSnapshotSubjects,
+        `Expected at least one scenario to have snapshot_subjects. Scenarios: ${JSON.stringify(scenarios.map((s: any) => ({ id: s.scenario_id, has_subjects: !!s.snapshot_subjects?.length })))}`
+      ).toBe(true);
+
+      // Each snapshot subject should have the required fields
+      for (const s of scenarios) {
+        if (!s.snapshot_subjects?.length) continue;
+        for (const subj of s.snapshot_subjects) {
+          expect(subj.param_id, 'snapshot subject must have param_id').toBeTruthy();
+          expect(subj.core_hash, 'snapshot subject must have core_hash').toBeTruthy();
+          expect(subj.anchor_from, 'snapshot subject must have anchor_from').toBeTruthy();
+          expect(subj.anchor_to, 'snapshot subject must have anchor_to').toBeTruthy();
+        }
+      }
+
+      await guards.assertNoStabilityErrors();
+      await fx.recordJson('lastAnalyzeRequest.json', state.lastAnalyzeRequest || null);
+    } finally {
+      await fx.snapshotDb('share');
+      await fx.flush();
+      await context.close();
+    }
+  });
+
+  test('live share of cohort_maturity chart sends snapshot_subjects in the analyze request', async ({ browser, baseURL }, testInfo) => {
+    const state: ShareLiveStubState = { version: 'v1', counts: {} };
+
+    const payload: SharePayloadV1 = {
+      version: '1.0.0',
+      target: 'chart',
+      chart: {
+        kind: 'analysis_cohort_maturity',
+        title: 'Chart — Cohort Maturity',
+      },
+      analysis: {
+        query_dsl: 'from(from).to(to)',
+        analysis_type: 'cohort_maturity',
+      },
+      scenarios: {
+        items: [],
+        hide_current: false,
+      },
+      graph_state: {
+        base_dsl: 'window(1-Jan-26:2-Jan-26)',
+        current_query_dsl: 'window(1-Jan-26:2-Jan-26)',
+      },
+    };
+
+    const shareUrl = buildLiveChartShareUrl(payload);
+
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    const guards = attachShareBootConsoleGuards(page);
+    const fx = installShareForensics({ page, testInfo, phase: 'snapshot-cohort-maturity' });
+    await installShareLiveStubs(page, state);
+
+    try {
+      await page.goto(new URL(shareUrl, baseURL).toString(), { waitUntil: 'domcontentloaded' });
+
+      await expect(page.getByText('Live view')).toBeVisible();
+      await expect(page.getByText('Chart — Cohort Maturity')).toBeVisible({ timeout: 20_000 });
+
+      await expect
+        .poll(async () => state.lastAnalyzeRequest != null, { timeout: 20_000 })
+        .toBe(true);
+
+      expect(state.lastAnalyzeRequest?.analysis_type).toBe('cohort_maturity');
+
+      const scenarios: any[] = state.lastAnalyzeRequest?.scenarios || [];
+      expect(scenarios.length).toBeGreaterThan(0);
+
+      const hasSnapshotSubjects = scenarios.some(
+        (s: any) => Array.isArray(s.snapshot_subjects) && s.snapshot_subjects.length > 0
+      );
+      expect(
+        hasSnapshotSubjects,
+        `Expected at least one scenario to have snapshot_subjects. Scenarios: ${JSON.stringify(scenarios.map((s: any) => ({ id: s.scenario_id, has_subjects: !!s.snapshot_subjects?.length })))}`
+      ).toBe(true);
+
+      await guards.assertNoStabilityErrors();
+      await fx.recordJson('lastAnalyzeRequest.json', state.lastAnalyzeRequest || null);
+    } finally {
+      await fx.snapshotDb('share');
+      await fx.flush();
+      await context.close();
+    }
   });
 });
 

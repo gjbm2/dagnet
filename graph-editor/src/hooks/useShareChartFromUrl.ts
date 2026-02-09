@@ -16,6 +16,9 @@ import { sessionLogService } from '../services/sessionLogService';
 import { useGraphStoreOptional } from '../contexts/GraphStoreContext';
 import { fetchDataService } from '../services/fetchDataService';
 import { fetchOrchestratorService } from '../services/fetchOrchestratorService';
+import { ANALYSIS_TYPES } from '../components/panels/analysisTypes';
+import { mapFetchPlanToSnapshotSubjects, composeSnapshotDsl, extractDateRangeFromDSL } from '../services/snapshotDependencyPlanService';
+import { buildFetchPlanProduction } from '../services/fetchPlanBuilderService';
 
 /**
  * Phase 3: Live chart share boot + refresh recompute pipeline.
@@ -384,6 +387,86 @@ export function useShareChartFromUrl(args: { fileId: string; tabId?: string }) {
           visibility_mode: visibilityMode,
         };
       });
+
+      // ── Snapshot subject resolution (required for DB-backed analyses) ──
+      // Snapshot-based analysis types (daily_conversions, cohort_maturity, lag_histogram)
+      // need snapshot_subjects per scenario so the backend knows what to query from the DB.
+      const snapshotMeta = analysisType
+        ? ANALYSIS_TYPES.find(t => t.id === analysisType)
+        : undefined;
+      const needsSnapshots = !!snapshotMeta?.snapshotContract;
+
+      if (needsSnapshots) {
+        const identity = shareMode?.identity;
+        const workspace = (identity?.repo && identity?.branch)
+          ? { repository: identity.repo, branch: identity.branch }
+          : undefined;
+
+        if (!workspace) {
+          throw new Error(`Snapshot analysis type "${analysisType}" requires workspace identity but none available in share context.`);
+        }
+
+        // Compose snapshot DSL for each scenario. The queryDsl may already contain
+        // window/cohort clauses, or they may come from the scenario's effective DSL
+        // or the graph's currentQueryDSL.
+        const currentQueryDsl = (chartPayload as any)?.graph_state?.current_query_dsl || '';
+        const baseDsl = (chartPayload as any)?.graph_state?.base_dsl || '';
+
+        for (const sg of scenarioGraphs) {
+          try {
+            // Build the most complete DSL by composing from multiple sources
+            const scenarioDsl = scenarioDslSubtitleById[sg.scenario_id] || '';
+            // First compose: analytics DSL + scenario DSL
+            let snapshotDsl = composeSnapshotDsl(queryDsl || '', scenarioDsl);
+            // If still no date range, try composing with graph's currentQueryDSL
+            if (!extractDateRangeFromDSL(snapshotDsl) && currentQueryDsl) {
+              snapshotDsl = composeSnapshotDsl(snapshotDsl, currentQueryDsl);
+            }
+            // Last resort: try graph's baseDSL
+            if (!extractDateRangeFromDSL(snapshotDsl) && baseDsl) {
+              snapshotDsl = composeSnapshotDsl(snapshotDsl, baseDsl);
+            }
+
+            const dslWindow = extractDateRangeFromDSL(snapshotDsl);
+
+            if (!dslWindow) {
+              console.error(`[ShareChart] No date range found for scenario ${sg.scenario_id}. Tried:`,
+                { queryDsl, scenarioDsl, currentQueryDsl, baseDsl, snapshotDsl });
+              throw new Error(`No date range for snapshot analysis. DSL: ${snapshotDsl}`);
+            }
+
+            console.log(`[ShareChart] Snapshot DSL for ${sg.scenario_id}:`, snapshotDsl, 'window:', dslWindow);
+
+            // Force signature computation: buildFetchPlanProduction skips signatures when
+            // signature checking is disabled (release safety), but snapshot DB lookups need
+            // the canonical signature to compute core_hash.
+            const { computePlannerQuerySignaturesForGraph } = await import('../services/plannerQuerySignatureService');
+            const sigs = await computePlannerQuerySignaturesForGraph({ graph: sg.graph, dsl: snapshotDsl, forceCompute: true });
+            const { plan } = await buildFetchPlanProduction(sg.graph, snapshotDsl, dslWindow, { querySignatures: sigs });
+            console.log(`[ShareChart] Fetch plan for ${sg.scenario_id}: ${plan.items.length} items`);
+
+            const resolverResult = await mapFetchPlanToSnapshotSubjects({
+              plan,
+              analysisType: analysisType!,
+              graph: sg.graph,
+              selectedEdgeUuids: [],  // No canvas selection in share mode; DSL specifies edges
+              workspace,
+              queryDsl: snapshotDsl,
+            });
+
+            if (resolverResult && resolverResult.subjects.length > 0) {
+              (sg as any).snapshot_subjects = resolverResult.subjects;
+              console.log(`[ShareChart] Resolved ${resolverResult.subjects.length} snapshot subjects for scenario ${sg.scenario_id}`);
+            } else {
+              const skipReasons = resolverResult?.skipped?.map(s => `${s.subjectId}: ${s.reason}`).join(', ') || 'unknown';
+              console.error(`[ShareChart] No snapshot subjects resolved for scenario ${sg.scenario_id}. Skipped: ${skipReasons}`);
+            }
+          } catch (err) {
+            console.error(`[ShareChart] Snapshot subject resolution failed for scenario ${sg.scenario_id}:`, err);
+            throw err;  // Surface the error instead of silently continuing
+          }
+        }
+      }
 
       const response = await graphComputeClient.analyzeMultipleScenarios(
         scenarioGraphs as any,

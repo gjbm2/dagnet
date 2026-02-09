@@ -28,6 +28,67 @@ import { parseConstraints } from '../lib/queryDSL';
 import { resolveRelativeDate, parseUKDate, formatDateUK } from '../lib/dateFormat';
 
 // ============================================================
+// DSL helpers (shared by AnalyticsPanel + share hooks)
+// ============================================================
+
+/**
+ * Compose a DSL for snapshot analysis by merging:
+ *   - from/to from the analytics DSL (defines what to analyse)
+ *   - window/cohort/asat/context from the query DSL (defines the data scope)
+ *
+ * If the analytics DSL already contains temporal or context clauses, those
+ * take priority (user override).
+ */
+export function composeSnapshotDsl(analyticsDsl: string, queryDsl: string): string {
+  if (!queryDsl) return analyticsDsl;
+  if (!analyticsDsl) return queryDsl;
+
+  const ap = parseConstraints(analyticsDsl);
+  const qp = parseConstraints(queryDsl);
+
+  const parts: string[] = [analyticsDsl];
+
+  if (!ap.window && !ap.cohort) {
+    if (qp.cohort) {
+      const anchor = (qp.cohort as any).anchor;
+      const start = qp.cohort.start ?? '';
+      const end = qp.cohort.end ?? '';
+      parts.push(anchor ? `cohort(${anchor},${start}:${end})` : `cohort(${start}:${end})`);
+    } else if (qp.window) {
+      const start = qp.window.start ?? '';
+      const end = qp.window.end ?? '';
+      parts.push(`window(${start}:${end})`);
+    }
+  }
+
+  if (!ap.asatClausePresent && qp.asat) {
+    parts.push(`asat(${qp.asat})`);
+  }
+
+  if (!ap.contextClausePresent && qp.context && qp.context.length > 0) {
+    for (const ctx of qp.context) {
+      parts.push(ctx.value ? `context(${ctx.key}:${ctx.value})` : `context(${ctx.key})`);
+    }
+  }
+
+  return parts.join('.');
+}
+
+/** Extract DateRange from DSL window()/cohort() clause. */
+export function extractDateRangeFromDSL(dsl: string): { start: string; end: string } | null {
+  try {
+    const constraints = parseConstraints(dsl);
+    const range = constraints.cohort || constraints.window;
+    if (!range || !('start' in range) || !range.start) return null;
+    const start = resolveRelativeDate(range.start);
+    const end = ('end' in range && range.end) ? resolveRelativeDate(range.end) : formatDateUK(new Date());
+    return { start, end };
+  } catch {
+    return null;
+  }
+}
+
+// ============================================================
 // Types
 // ============================================================
 
@@ -118,7 +179,7 @@ export async function mapFetchPlanToSnapshotSubjects(args: {
   const contract = meta.snapshotContract;
 
   // 2. Derive time bounds from DSL
-  const timeBounds = deriveTimeBounds(contract, queryDsl);
+  const timeBounds = deriveSnapshotTimeBoundsFromDsl(contract, queryDsl);
   if (!timeBounds) {
     return { subjects: [], skipped: [{ subjectId: '*', reason: 'Could not derive time bounds from DSL' }] };
   }
@@ -381,7 +442,7 @@ interface TimeBounds {
  * the planner's extractWindowFromDSL, just converted to ISO.
  * sweep_from/to are only set for cohort_maturity read mode.
  */
-function deriveTimeBounds(contract: SnapshotContract, queryDsl: string): TimeBounds | null {
+export function deriveSnapshotTimeBoundsFromDsl(contract: SnapshotContract, queryDsl: string): TimeBounds | null {
   if (contract.timeBoundsSource !== 'query_dsl_window') return null;
 
   const parsed = parseConstraints(queryDsl);

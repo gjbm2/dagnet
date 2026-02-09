@@ -25,77 +25,15 @@ import { QueryExpressionEditor } from '../QueryExpressionEditor';
 import { BarChart3, AlertCircle, CheckCircle2, Loader2, ChevronRight, Eye, EyeOff, Info, Lightbulb, List, Code, RefreshCw } from 'lucide-react';
 import { ANALYSIS_TYPES, getAnalysisTypeMeta } from './analysisTypes';
 import { querySelectionUuids } from '../../hooks/useQuerySelectionUuids';
-import { mapFetchPlanToSnapshotSubjects } from '../../services/snapshotDependencyPlanService';
+import { mapFetchPlanToSnapshotSubjects, composeSnapshotDsl, extractDateRangeFromDSL } from '../../services/snapshotDependencyPlanService';
 import { computeInheritedDSL, computeEffectiveFetchDSL } from '../../services/scenarioRegenerationService';
 import { buildFetchPlanProduction } from '../../services/fetchPlanBuilderService';
-import { parseConstraints } from '../../lib/queryDSL';
-import { resolveRelativeDate, formatDateUK } from '../../lib/dateFormat';
 import { fileRegistry } from '../../contexts/TabContext';
 import CollapsibleSection from '../CollapsibleSection';
 import { AnalysisResultCards } from '../analytics/AnalysisResultCards';
 import './AnalyticsPanel.css';
 
-/** Extract DateRange from DSL window()/cohort() clause. Same logic as planner. */
-function extractDateRangeFromDSL(dsl: string): { start: string; end: string } | null {
-  try {
-    const constraints = parseConstraints(dsl);
-    const range = constraints.cohort || constraints.window;
-    if (!range || !('start' in range) || !range.start) return null;
-    const start = resolveRelativeDate(range.start);
-    const end = ('end' in range && range.end) ? resolveRelativeDate(range.end) : formatDateUK(new Date());
-    return { start, end };
-  } catch {
-    return null;
-  }
-}
-
-/**
- * Compose a DSL for snapshot analysis by merging:
- *   - from/to from the analytics panel DSL (defines what to analyse)
- *   - window/cohort/asat/context from the query DSL (defines the data scope)
- *
- * If the analytics DSL already contains temporal or context clauses, those
- * take priority (user override).  Otherwise they are inherited from the
- * authoritative query DSL.
- */
-function composeSnapshotDsl(analyticsDsl: string, queryDsl: string): string {
-  if (!queryDsl) return analyticsDsl;
-  if (!analyticsDsl) return queryDsl;
-
-  const ap = parseConstraints(analyticsDsl);
-  const qp = parseConstraints(queryDsl);
-
-  // Start from the analytics DSL (preserves from/to)
-  const parts: string[] = [analyticsDsl];
-
-  // Inherit window/cohort from query DSL if analytics DSL lacks one
-  if (!ap.window && !ap.cohort) {
-    if (qp.cohort) {
-      const anchor = (qp.cohort as any).anchor;
-      const start = qp.cohort.start ?? '';
-      const end = qp.cohort.end ?? '';
-      parts.push(anchor ? `cohort(${anchor},${start}:${end})` : `cohort(${start}:${end})`);
-    } else if (qp.window) {
-      const start = qp.window.start ?? '';
-      const end = qp.window.end ?? '';
-      parts.push(`window(${start}:${end})`);
-    }
-  }
-
-  // Inherit asat from query DSL if analytics DSL lacks one
-  if (!ap.asatClausePresent && qp.asat) {
-    parts.push(`asat(${qp.asat})`);
-  }
-
-  // Inherit context from query DSL if analytics DSL lacks context clauses
-  if (!ap.contextClausePresent && qp.context && qp.context.length > 0) {
-    for (const ctx of qp.context) {
-      parts.push(ctx.value ? `context(${ctx.key}:${ctx.value})` : `context(${ctx.key})`);
-    }
-  }
-
-  return parts.join('.');
-}
+// composeSnapshotDsl and extractDateRangeFromDSL are imported from snapshotDependencyPlanService
 
 interface AnalyticsPanelProps {
   tabId?: string;

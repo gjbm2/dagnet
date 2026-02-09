@@ -22,6 +22,8 @@ This document proposes a robust resolution based on **context epochs**:
 
 The design is explicitly extensible to future “context policy as-at date” logic (context definition as-of history), without requiring backend inference.
 
+**Important clarifying note (current brokenness)**: for this design to be implementable, the request must be able to express **uncontexted-only** reads. Today, a selector like `cohort()` / `window()` is treated as “mode-only, any context” in snapshot DB filters, which defeats regime selection. This doc makes the required contract explicit (see §3.5 and §4.6).
+
 ---
 
 ## 2. Diagnosis
@@ -79,6 +81,31 @@ The cohort maturity chart is day-based:
 - Epochs are keyed by retrieved **day** (UTC date), not finer-grained timestamps.
 - If multiple `retrieved_at` timestamps exist within the same day, the day’s effective regime must be defined deterministically (for example “latest retrieved_at that day wins”), and applied consistently across all subjects.
 
+### 3.4 “Least aggregation” is the regime tie-break rule
+
+When multiple representations exist for the same semantic subject on the same retrieved day, we choose the representation that requires the **least aggregation** by the system.
+
+This is the unifying principle behind regime selection:
+
+- Prefer a slice set that already matches the query’s dimensionality (no marginalisation needed).
+- Only aggregate across additional context dimensions when:
+  - the aggregation is explicitly permitted by policy, and
+  - the observed slice set is MECE-complete for the dimension(s) being aggregated away.
+
+This principle is easy to state but non-trivial to encode correctly. The remainder of this document makes it precise and testable.
+
+### 3.5 Slice selector semantics must make “uncontexted-only” representable
+
+The epoch approach requires the frontend to choose **exactly one regime per retrieved day** (uncontexted total *or* an explicit MECE context partition), and to encode that choice into `slice_keys`.
+
+Therefore the DB read API must support a selector that means:
+
+- **uncontexted-only** (no context/case dims), in the requested temporal mode, **and not** “any context in this mode”.
+
+If `cohort()` / `window()` is treated as “mode-only, any context” (matching both `cohort()` and `context(...).cohort()`), then the frontend cannot prevent mixed-regime reads and the derivation will continue to double-count.
+
+This is a *mechanical selector contract* issue, not MECE inference. The backend remains MECE-blind; it just needs to match slice families precisely.
+
 ---
 
 ## 4. Proposal: context epochs for cohort maturity (frontend-led)
@@ -97,7 +124,61 @@ For each cohort maturity subject (per scenario):
 
 The key point is that the backend receives explicit slice families for each epoch and never needs to infer MECE or regime changes.
 
-### 4.2 Observing availability: retrieval calendar with per-slice summary
+### 4.1.1 What already exists vs what is new (design constraint: minimise new code paths)
+
+This work must be anchored on a strict constraint:
+
+- **Do not create new code paths or new logic unless it is required.**
+- Where existing services already implement the needed semantics, **reuse them** and extend only at the edges (inputs/outputs), rather than duplicating behaviour.
+- Test coverage should be driven primarily by the **new required logic**, plus any **contract changes** that alter behaviour.
+
+This design therefore distinguishes:
+
+**Already exists (reuse; do not duplicate):**
+
+- **Slice dimension parsing and normalisation**:
+  - `extractSliceDimensions(...)` in `graph-editor/src/services/sliceIsolation.ts` (canonical context/case dimension string; sorted; window/cohort excluded).
+- **Multi-context “query specifies subset of dims” reduction (MECE-gated)**:
+  - `tryDimensionalReduction(...)` in `graph-editor/src/services/dimensionalReductionService.ts` (verifies MECE per unspecified dimension; combination completeness checks; dedupe before aggregation).
+- **Implicit-uncontexted MECE selection (single-key, hardened)**:
+  - `selectImplicitUncontextedSliceSetSync(...)` in `graph-editor/src/services/meceSliceService.ts` (coherent generation keyed by signature; deterministic selection).
+- **Fetch plan construction**:
+  - `buildFetchPlan(...)` in `graph-editor/src/services/fetchPlanBuilderService.ts` already uses the above primitives for cache fulfilment and staleness evaluation.
+- **Snapshot DB retrieval calendar calls**:
+  - the client/service layer that calls `/api/snapshots/retrievals` already exists (see `graph-editor/src/services/snapshotRetrievalsService.ts`).
+- **Snapshot-subject wire format mapping** (thin mapper):
+  - `mapFetchPlanToSnapshotSubjects(...)` in `graph-editor/src/services/snapshotDependencyPlanService.ts`.
+
+**New required logic (introduces new behaviour; must drive most tests):**
+
+- **Epoch discovery over time** (day-based):
+  - Build a per-day availability map from snapshot retrieval summaries.
+  - Apply “latest `retrieved_at` within the UTC day wins” before regime selection.
+  - Select exactly one candidate representation per day using the “least aggregation” rule and MECE/policy validity gates.
+  - Segment consecutive days into epochs and emit epoch-specific snapshot subjects.
+- **Result stitching across epoch subjects**:
+  - Merge multiple epoch results back into a single logical cohort-maturity curve deterministically (including gaps).
+
+**Contract fix required (backend behavioural change; must be tested):**
+
+- **Slice selector semantics** must allow **uncontexted-only** selection (§3.5). This is not “new planning logic” but a required read-path contract correction.
+
+### 4.2 Definitions (terminology used throughout)
+
+To avoid ambiguity, we define a few terms precisely.
+
+- **Slice family**: a slice key with time arguments stripped for matching, but with its context/case dimensions preserved. For example, `context(channel:paid-search).cohort()` is a different slice family from `cohort()`.
+- **Dimension-set**: the set of declared dimensions present in a slice family, for example:
+  - `cohort()` has dimension-set \(D = \varnothing\)
+  - `context(a:foo).cohort()` has \(D = \{a\}\)
+  - `context(a:foo).context(b:3).cohort()` has \(D = \{a,b\}\)
+- **Query specified dims** \(S\): the set of context keys explicitly specified by the epoch’s query form. For example, epoch query `context(a:foo)` has \(S = \{a\}\).
+- **Pinned interest dims** \(P\): the set of context keys the system considers “in-scope” for this analysis subject, derived from pinned interests (for example `context(a).context(b)` implies \(P = \{a,b\}\)).
+- **Extra dims** \(E\): for a candidate slice family set with dimension-set \(D\), the dims that would need to be marginalised away to answer the epoch query: \(E = D \setminus S\).
+
+We only ever aggregate away dims that are in-scope: \(E \subseteq P\). If a candidate slice family set contains dims outside \(P\), it is not eligible for automatic aggregation.
+
+### 4.3 Observing availability: retrieval calendar with per-slice summary
 
 The frontend can query the snapshot DB for a subject’s retrieval calendar using:
 
@@ -113,7 +194,7 @@ This is sufficient to derive a per-day map of which logical slice families are p
 
 The frontend should treat this as *observational metadata*, not as a decision engine.
 
-### 4.3 Regime choice per day
+### 4.4 Regime choice per day
 
 For each retrieved day, we build candidate regimes:
 
@@ -129,7 +210,44 @@ When both uncontexted and a MECE-valid contexted regime exist on the same day, w
 
 The rule should not be reinvented here; it should be centralised and reused from the existing MECE selection surfaces (see `graph-editor/src/services/meceSliceService.ts` and its current usage in planning).
 
-### 4.4 Complex multi-context and “partial uncontexted”
+#### 4.4.1 Determinism: choose a day’s “generation” first (no cross-generation mixing)
+
+Because equivalence links (and ordinary evolution over time) can introduce multiple slice histories, a single UTC day can contain multiple `retrieved_at` timestamps whose slice availability differs.
+
+To prevent cross-generation mixing within a day:
+
+- For each UTC day, partition retrieval summaries by the exact `retrieved_at` timestamp.
+- Select the day’s effective retrieval group deterministically. **Rule: latest `retrieved_at` within the day wins.**
+- Run candidate regime selection only on that chosen group.
+
+This rule is intentionally simple and observable. It ensures we never “combine” slice availability across multiple retrieval timestamps inside a day.
+
+#### 4.4.2 Selection rule: choose the candidate with least aggregation
+
+Within a day’s chosen retrieval group, we may have multiple eligible candidates that can answer the epoch query.
+
+We select the candidate with the least aggregation cost, defined in two tiers:
+
+- **Primary cost**: minimise \(|E|\), the number of extra dims that must be marginalised away \((E = D \setminus S)\).
+  - Example: `context(a:foo).cohort()` has \(|E| = 0\) for query `context(a:foo)`.
+  - Example: `context(a:foo).context(b:*).cohort()` has \(|E| = 1\) for query `context(a:foo)` and requires marginalising over `b`.
+- **Secondary cost (tie-break)**: minimise the number of slice families that must be summed to implement the marginalisation (fewer terms is safer and less fiddly).
+
+If costs tie, break ties deterministically (stable ordering), but do not attempt to be “smart”; ties should be rare and we want predictable behaviour.
+
+#### 4.4.3 Validity constraints for candidates (MECE and policy)
+
+A candidate is eligible only if:
+
+- It matches the epoch query’s specified dims \(S\) (all specified dims must be present and fixed in the family set), and
+- Any extra dims \(E\) are in-scope \((E \subseteq P)\), and
+- For each dim \(d \in E\), the observed slice family set is MECE-complete for \(d\) under the applicable policy, holding \(S\) fixed.
+
+If any required MECE check fails, the candidate is ineligible.
+
+If no candidate is eligible for a day, that day is treated as **missing data** (a gap).
+
+### 4.5 Complex multi-context and “partial uncontexted” (pinned multi-dim, query subset)
 
 The design must support cases such as:
 
@@ -144,7 +262,30 @@ The epoch logic must defer to the existing frontend slice resolution machinery f
 
 This implies that epoch selection should operate on a richer internal representation than “string contains `context(`”; it should parse slice dimensions and reuse the same parsing and policy checks already in place.
 
-### 4.5 Encoding epochs into the analysis request
+#### 4.5.1 Canonical example: pinned `context(a).context(b)`, epoch query `context(a)`
+
+This is the motivating “fiddly” case.
+
+- Pinned dims: \(P = \{a,b\}\)
+- Epoch query specified dims: \(S = \{a\}\)
+- Therefore, any candidate with \(D = \{a,b\}\) implies extra dims \(E = \{b\}\) which must be marginalised away.
+
+For a given retrieved day (after applying the “latest retrieval group wins” rule):
+
+- If `context(a:foo).cohort()` exists, it is the least-aggregation candidate \(|E| = 0\) and is selected.
+- Otherwise, `context(a:foo).context(b:*).cohort()` is only eligible if:
+  - the `b:*` values observed that day form a MECE-complete partition for key `b` under policy, and
+  - the marginalisation is permitted for this analysis.
+  If eligible, it is selected and we sum over the explicit `b:*` slice families.
+- Otherwise the day is a gap.
+
+This produces the required behaviour:
+
+- We only sum over `b:1…n` when MECE-complete.
+- We never mix `context(a).cohort()` with `context(a).context(b:*).cohort()` on the same day.
+- We prefer the representation requiring least aggregation whenever it exists.
+
+### 4.6 Encoding epochs into the analysis request
 
 The analysis request already supports multiple `snapshot_subjects` per scenario.
 
@@ -159,7 +300,19 @@ The frontend then stitches the returned frames into one curve for display.
 
 This maintains the “frontend does planning; backend executes” principle from `docs/current/project-db/1-reads.md`, while acknowledging that a day-based observational preflight may be required to discover epochs.
 
-### 4.6 Roundtrip concerns and caching
+**Critical: `slice_keys` must be regime-exact (no “mode-only any-context” reads).**
+
+To make regimes enforceable, epoch subjects MUST use one of these encodings:
+
+- **Uncontexted regime (uncontexted-only)**: `slice_keys = ['cohort()']` (or `['window()']` for window-mode reads), meaning *only* the uncontexted family (no context/case dims).
+- **Contexted regime (explicit MECE set)**: `slice_keys = ['context(k:v1).cohort()', 'context(k:v2).cohort()', ...]` (and similarly for multi-context), meaning exactly the explicit slice families chosen by the frontend MECE resolver.
+
+Epoch planning MUST NOT use:
+
+- `slice_keys = ['']` (empty selector) for cohort maturity epochs, because it means “no slice filter” and will reintroduce mixed-regime summation.
+- any selector semantics where `cohort()` / `window()` matches “any context in this mode”; that behaviour is currently broken for regime selection and must be fixed to satisfy §3.5.
+
+### 4.7 Roundtrip concerns and caching
 
 This approach introduces a potential additional network call (retrieval calendar observation) before analysis execution.
 
@@ -177,21 +330,19 @@ This change is correctness-critical and must be proven with both unit and integr
 
 ### 5.1 Unit tests (frontend)
 
-Add unit tests for pure logic functions that:
+Add unit tests for pure logic functions. The focus is: **new epoch logic only**, using existing MECE/dimensional-reduction services as trusted dependencies (they already have their own suites).
 
-- Normalise slice keys to logical families (window/cohort args stripped; canonical clause ordering expectations).
-- Build per-day availability maps from retrieval summaries.
-- Validate MECE eligibility of a candidate context slice set (including:
-  - unknown policy,
-  - incomplete partitions,
-  - multi-key partitions,
-  - contextAny and other non-aggregatable constructs).
-- Choose a regime on tie days using the existing implicit-uncontexted selection semantics.
-- Segment days into epochs and produce deterministic epoch boundaries.
-- Stitch epoch results into a single maturity curve, with guarantees:
+Unit tests should therefore target functions that:
+
+- **Build per-day availability maps** from retrieval summaries (including grouping by UTC day and selecting “latest retrieval group wins”).
+- **Enumerate candidate representations** for a day for a given query/pinned context shape (without duplicating MECE logic; the MECE check can be injected/stubbed in unit tests).
+- **Apply the “least aggregation” selector**:
+  - minimise \(|E|\), then minimise number of families, then deterministic tie-break.
+- **Segment days into epochs** (exact boundaries; deterministic).
+- **Stitch epoch results into a single curve**, with guarantees:
   - monotonicity is not assumed,
-  - missing days are handled consistently,
-  - duplicate as-at days across epochs are resolved deterministically.
+  - missing days remain missing (gaps),
+  - duplicate as-at frames across epochs are resolved deterministically.
 
 Critical unit scenarios to cover:
 
@@ -201,6 +352,13 @@ Critical unit scenarios to cover:
 - Mixed regimes on a single day (due to equivalence links) with explicit tie-break verification.
 - Multi-context slices where only one key is MECE-eligible (partial-uncontexted behaviour).
 - Multiple retrieval timestamps within the same UTC day (ensure “latest per day wins” is applied consistently).
+
+In addition, because “least aggregation” is subtle, unit tests MUST explicitly cover:
+
+- days where both \(|E|=0\) and \(|E|=1\) candidates exist (verify \(|E|=0\) is chosen),
+- days where \(|E|=0\) does not exist and \(|E|=1\) exists but is non-MECE (verify the day is a gap, unless another eligible candidate exists),
+- days where multiple \(|E|=1\) candidates exist (verify the “fewest families” secondary tie-break),
+- days where equivalence closure introduces both an aggregated representation and a partition representation in the same day (verify single-regime selection, no mixing).
 
 ### 5.2 Integration tests (frontend ↔ python API ↔ snapshot DB)
 
@@ -220,7 +378,28 @@ Integration scenarios must include:
 - A dataset with multi-context slices and a partially specified query, ensuring the selected aggregation set matches existing frontend MECE rules.
 - A dataset with incomplete context partitions (should refuse summation, choose uncontexted where available, or report non-resolvable).
 
-### 5.3 “Serious” coverage expectations
+### 5.3 Minimum serious scenario matrix (target: a dozen integration tests)
+
+This change should ship with a “serious” integration matrix, on the order of twelve tests, each small but exact. The intent is not to exhaustively test every clause type, but to fully pin down the regime and epoch semantics.
+
+Required integration scenarios (illustrative IDs):
+
+- **IE-001 Uncontexted-only**: only uncontexted families exist for all days; confirm no preflight ambiguity and no epoch splits.
+- **IE-002 Contexted-only MECE**: only a MECE partition exists for all days; confirm summation is correct and stable.
+- **IE-003 Regime change (partition → uncontexted)**: first half is MECE partition, second half is uncontexted; confirm a single epoch boundary at the transition.
+- **IE-004 Regime change (uncontexted → partition)**: the reverse transition; confirm boundary and correctness.
+- **IE-005 Mixed regimes same day (equivalence links)**: both uncontexted and MECE partition exist on one day; confirm “least aggregation” tie-break and no mixing.
+- **IE-006 Mixed regimes same day (non-MECE partition present)**: uncontexted exists and a partial partition exists; confirm uncontexted is chosen.
+- **IE-007 Non-resolvable day**: only a non-MECE partial partition exists; confirm the day is missing (gap), and that no carry-forward occurs.
+- **IE-008 Multi-context stored, query subset (pinned a,b; query a)**: confirm `context(a)` aggregates over `b:*` only when MECE, otherwise falls back or gaps.
+- **IE-009 Multi-context, tie on \(|E|\)**: two different partition candidates both require \(|E|=1\); confirm the “fewest families” tie-break is applied.
+- **IE-010 Multiple retrieval timestamps within day**: older retrieval group has one regime, newer group has another; confirm latest group wins and no cross-group mixing.
+- **IE-011 Equivalence closure across two param_id sources**: linked hashes bring two sources into scope with differing slice histories; confirm per-day selection is performed on the resolved subject and remains deterministic.
+- **IE-012 Stitching across epochs**: multiple epochs returned from the backend are stitched into one curve with exact expected totals and exact gaps.
+
+These tests should verify exact epoch boundaries and exact \(X,Y,A\) totals (not “looks plausible”), and should be constructed so that any mixed-regime summation produces an unmistakable failure.
+
+### 5.4 “Serious” coverage expectations
 
 The test suite must be designed to catch regressions in:
 
@@ -238,22 +417,51 @@ Tests must be deterministic and avoid “it looks plausible” assertions; they 
 
 ## 6. Open design questions (explicitly tracked)
 
-- Tie-break semantics when both regimes exist on the same day: confirm the current frontend rule used in fetch planning / implicit uncontexted resolution and reuse it.
-- Behaviour when neither regime is valid for a day (for example contexted present but non-MECE, uncontexted absent): define whether the chart should:
-  - omit the day,
-  - carry-forward last valid day,
-  - or fail the subject with a clear error.
+- Confirm that the “least aggregation” rule is consistent with existing frontend behaviour for “implicit uncontexted resolution”, and centralise it so epoch planning and any other slice selection surfaces do not diverge.
+- Behaviour when neither regime is selectable for a day (for example contexted present but non-MECE, uncontexted absent): treat that as **missing data** for that day (a gap in the curve). Do not carry-forward.
 - How to handle equivalence closure that introduces multiple param_id sources with different retrieval patterns: ensure per-day observation is done on the resolved family, not on a single param_id bucket.
 
 ---
 
 ## 7. Immediate next steps
 
-1. Locate and document the existing frontend tie-break rule for “explicit uncontexted vs MECE partition” (expected in `graph-editor/src/services/meceSliceService.ts` and its planner call sites).
-2. Design the epoch selection and stitching functions as pure, testable utilities.
-3. Wire cohort maturity analysis orchestration to:
-   - preflight retrieval summaries (cached/batched),
-   - build epoch-specific subjects,
-   - execute and stitch results.
-4. Implement the full unit + integration test matrix described above before declaring the behaviour safe.
+### 7.1 Implementation plan (explicit TDD; red tests first)
+
+This work should be delivered via a strict TDD workflow to reduce regression risk in fiddly selection logic.
+
+- **Step A (Design-to-tests mapping; no new behaviour yet)**:
+  - Identify the exact “new required logic” surface area (epoch discovery + stitching + backend selector contract).
+  - Explicitly list which existing services are reused unchanged (§4.1.1), to avoid accidental duplication.
+
+- **Step B (Unit tests: write red tests first)**:
+  - Add unit tests for the new pure epoch-selection functions:
+    - per-day availability mapping,
+    - “latest retrieval group wins” determinism,
+    - least-aggregation selection,
+    - epoch segmentation,
+    - stitching.
+  - These tests should be written to fail against the current implementation (or absence) of epoch logic.
+
+- **Step C (Implement minimal pure logic to go green)**:
+  - Implement only the minimal pure functions required to satisfy the unit tests, reusing `extractSliceDimensions`, `contextRegistry`, `meceSliceService`, and `dimensionalReductionService` as dependencies rather than re-implementing them.
+
+- **Step D (Backend contract fix, with its own red/green loop)**:
+  - Add backend-side tests proving “uncontexted-only” selection works as required (§3.5).
+  - Implement the minimal backend change to satisfy the new selector contract.
+
+- **Step E (Integration tests: write red tests for end-to-end epoch behaviour)**:
+  - Implement the integration matrix (§5.3) so failures are unambiguous if regimes mix or epochs stitch incorrectly.
+
+- **Step F (Wire-up: orchestrate preflight → epoch subjects → analyse → stitch)**:
+  - Extend the existing cohort-maturity orchestration to call:
+    - retrieval summary preflight,
+    - epoch subject construction,
+    - analysis execution,
+    - stitching.
+  - Avoid new UI code paths; menus/components remain access points only (service layer owns logic).
+
+### 7.2 Operational next steps (concrete)
+
+1. Locate and document the existing frontend tie-break behaviour (if any) that differs from “least aggregation”, and decide whether to align by reuse or by replacement (but keep one central rule).
+2. Implement Steps B–F in order, keeping tests as the primary driver of changes.
 

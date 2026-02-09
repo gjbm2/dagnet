@@ -17,7 +17,7 @@ import { ukReferenceDayService } from '../../services/ukReferenceDayService';
 
 type ChartFileDataV1 = {
   version: '1.0.0';
-  chart_kind: 'analysis_funnel' | 'analysis_bridge';
+  chart_kind: 'analysis_funnel' | 'analysis_bridge' | 'analysis_daily_conversions' | 'analysis_cohort_maturity';
   title: string;
   created_at_uk: string;
   created_at_ms: number;
@@ -209,40 +209,37 @@ export function ChartViewer({ fileId }: EditorProps): JSX.Element {
         </div>
       </div>
 
-      <div style={{ flex: 1, minHeight: 0, padding: 12, paddingTop: 0 }}>
+      <div style={{ flex: 1, minHeight: 0, padding: '0 12px 12px 12px', position: 'relative' }}>
         <div
           style={{
             background: '#fff',
             border: '1px solid #e5e7eb',
             borderRadius: 10,
-            padding: 10,
-            height: '100%',
-            display: 'grid',
-            gridTemplateRows:
-              showChart && showResults ? '3fr 2fr'
-              : showChart ? '1fr'
-              : showResults ? '1fr'
-              : '1fr',
-            gap: 12,
+            position: 'absolute',
+            inset: '0 12px 12px 12px',
+            display: 'flex',
+            flexDirection: 'column',
             overflow: 'hidden',
           }}
         >
           {showChart && (
-            <div style={{ minHeight: 0, height: '100%' }}>
-              <AnalysisChartContainer
-                result={analysisResult}
-                visibleScenarioIds={scenarioIds}
-                height={420}
-                fillHeight={true}
-                compactControls={false}
-                source={chart.source}
-                scenarioDslSubtitleById={scenarioDslSubtitleById}
-              />
+            <div style={{ flex: showResults ? 3 : 1, minHeight: 0, position: 'relative' }}>
+              <div style={{ position: 'absolute', inset: 0, padding: 10 }}>
+                <AnalysisChartContainer
+                  result={analysisResult}
+                  visibleScenarioIds={scenarioIds}
+                  height={420}
+                  fillHeight={true}
+                  compactControls={false}
+                  source={chart.source}
+                  scenarioDslSubtitleById={scenarioDslSubtitleById}
+                />
+              </div>
             </div>
           )}
 
           {showResults && (
-            <div style={{ minHeight: 0, overflow: 'auto' }}>
+            <div style={{ flex: 2, minHeight: 0, overflow: 'auto', padding: 10, borderTop: '1px solid #e5e7eb' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
                 <div style={{ fontSize: 12, fontWeight: 700, color: '#111827' }}>Results</div>
                 <div style={{ fontSize: 12, color: '#6b7280' }}>({analysisResult.analysis_name || 'Analysis'})</div>
