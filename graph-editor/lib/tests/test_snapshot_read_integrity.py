@@ -21,6 +21,7 @@ from snapshot_service import (
     append_snapshots,
     query_virtual_snapshot,
     query_snapshot_retrievals,
+    query_snapshots_for_sweep,
     get_db_connection,
     get_batch_inventory_v2,
     short_core_hash_from_canonical_signature,
@@ -583,6 +584,68 @@ class TestReadIntegrity:
         assert closure_r["retrieved_at"][0].startswith("2025-10-11")
         assert closure_r["retrieved_at"][1].startswith("2025-10-10")
 
+    def test_ri008c_equivalence_closure_cross_param_reads_source_param(self):
+        """
+        RI-008c: equivalence closure can reference snapshots stored under a different param_id.
+
+        This matches the production scenario: a signature link created on param A points at a
+        core_hash whose snapshots live under param B (via source_param_id).
+        """
+        pid_a = f'{TEST_PREFIX}param-eq-x-a'
+        pid_b = f'{TEST_PREFIX}param-eq-x-b'
+        sig_a = '{"c":"eq-x-A","x":{}}'
+        sig_b = '{"c":"eq-x-B","x":{}}'
+        hash_a = short_core_hash_from_canonical_signature(sig_a)
+        hash_b = short_core_hash_from_canonical_signature(sig_b)
+
+        append_snapshots_for_test(
+            param_id=pid_a,
+            canonical_signature=sig_a,
+            slice_key='',
+            retrieved_at=datetime(2025, 10, 10, 12, 0, 0),
+            rows=[{'anchor_day': '2025-10-01', 'X': 1, 'Y': 1}],
+        )
+        append_snapshots_for_test(
+            param_id=pid_b,
+            canonical_signature=sig_b,
+            slice_key='',
+            retrieved_at=datetime(2025, 10, 11, 12, 0, 0),
+            rows=[{'anchor_day': '2025-10-01', 'X': 999, 'Y': 99}],
+        )
+
+        # Link A ≡ B on pid_a, but indicate B's data lives under pid_b.
+        res_link = create_equivalence_link(
+            param_id=pid_a,
+            core_hash=hash_a,
+            equivalent_to=hash_b,
+            created_by="pytest",
+            reason="cross-param equivalence read test",
+            source_param_id=pid_b,
+        )
+        assert res_link["success"] is True
+
+        # Retrievals for A should include B's retrieval timestamp.
+        closure_r = query_snapshot_retrievals(param_id=pid_a, core_hash=hash_a, include_equivalents=True, limit=10)
+        assert closure_r["success"] is True
+        assert closure_r["count"] == 2
+        assert closure_r["retrieved_at"][0].startswith("2025-10-11")
+        assert closure_r["retrieved_at"][1].startswith("2025-10-10")
+
+        # Virtual snapshot should "latest wins" to B's newer retrieval (even though stored under pid_b).
+        closure = query_virtual_snapshot(
+            param_id=pid_a,
+            as_at=datetime(2025, 10, 12, 0, 0, 0),
+            anchor_from=date(2025, 10, 1),
+            anchor_to=date(2025, 10, 1),
+            core_hash=hash_a,
+            slice_keys=[''],
+            include_equivalents=True,
+            limit=1000,
+        )
+        assert closure["success"] is True
+        assert closure["count"] == 1
+        assert closure["rows"][0]["x"] == 999
+
     def test_ri008b_equivalence_closure_affects_query_full(self):
         """
         RI-008b: equivalence closure affects query_snapshots (query-full route).
@@ -1093,3 +1156,338 @@ class TestTierE_NoDisappearance:
         members = set(families[0]["member_core_hashes"])
         assert hash_old in members
         assert hash_new in members or current["match_mode"] == "strict"
+
+
+class TestCrossParamDataContract:
+    """
+    Tests for the cross-param equivalence data contract (key-fixes.md §3).
+
+    These cover gaps identified in the coverage audit:
+    - resolve_equivalent_hashes returns correct param_ids (including source_param_id)
+    - query_snapshots cross-param equivalence
+    - query_snapshots_for_sweep cross-param equivalence
+    - Multi-day latest-wins across params
+    """
+
+    def test_d007_resolve_returns_param_ids(self):
+        """
+        D-007: resolve_equivalent_hashes returns param_ids including source_param_id.
+
+        When a cross-param equivalence link A→B exists (A on pid_a, B stored under
+        pid_b via source_param_id), resolve should return both pid_a and pid_b in
+        the param_ids list.
+        """
+        pid_a = f'{TEST_PREFIX}resolve-pid-a'
+        pid_b = f'{TEST_PREFIX}resolve-pid-b'
+        sig_a = '{"c":"resolve-A","x":{}}'
+        sig_b = '{"c":"resolve-B","x":{}}'
+        hash_a = short_core_hash_from_canonical_signature(sig_a)
+        hash_b = short_core_hash_from_canonical_signature(sig_b)
+
+        # Write data so hashes exist in signature_registry
+        append_snapshots_for_test(
+            param_id=pid_a,
+            canonical_signature=sig_a,
+            slice_key='',
+            retrieved_at=datetime(2025, 10, 10, 12, 0, 0),
+            rows=[{'anchor_day': '2025-10-01', 'X': 1}],
+        )
+        append_snapshots_for_test(
+            param_id=pid_b,
+            canonical_signature=sig_b,
+            slice_key='',
+            retrieved_at=datetime(2025, 10, 11, 12, 0, 0),
+            rows=[{'anchor_day': '2025-10-01', 'X': 2}],
+        )
+
+        # Create cross-param equivalence link
+        res_link = create_equivalence_link(
+            param_id=pid_a,
+            core_hash=hash_a,
+            equivalent_to=hash_b,
+            created_by="pytest",
+            reason="d007 resolve param_ids test",
+            source_param_id=pid_b,
+        )
+        assert res_link["success"] is True
+
+        # Resolve from pid_a/hash_a should return both param_ids
+        resolved = resolve_equivalent_hashes(
+            param_id=pid_a, core_hash=hash_a, include_equivalents=True
+        )
+        assert resolved["success"] is True
+        assert hash_a in resolved["core_hashes"]
+        assert hash_b in resolved["core_hashes"]
+        assert pid_a in resolved["param_ids"]
+        assert pid_b in resolved["param_ids"]
+
+        # Without equivalents, should return only the seed
+        resolved_strict = resolve_equivalent_hashes(
+            param_id=pid_a, core_hash=hash_a, include_equivalents=False
+        )
+        assert resolved_strict["core_hashes"] == [hash_a]
+        assert resolved_strict["param_ids"] == [pid_a]
+
+    def test_ri011_query_snapshots_cross_param_equivalence(self):
+        """
+        RI-011: query_snapshots with include_equivalents=True returns rows from
+        a different param_id when linked via source_param_id.
+        """
+        pid_a = f'{TEST_PREFIX}qs-xp-a'
+        pid_b = f'{TEST_PREFIX}qs-xp-b'
+        sig_a = '{"c":"qs-xp-A","x":{}}'
+        sig_b = '{"c":"qs-xp-B","x":{}}'
+        hash_a = short_core_hash_from_canonical_signature(sig_a)
+        hash_b = short_core_hash_from_canonical_signature(sig_b)
+
+        append_snapshots_for_test(
+            param_id=pid_a,
+            canonical_signature=sig_a,
+            slice_key='',
+            retrieved_at=datetime(2025, 10, 10, 12, 0, 0),
+            rows=[{'anchor_day': '2025-10-01', 'X': 10}],
+        )
+        append_snapshots_for_test(
+            param_id=pid_b,
+            canonical_signature=sig_b,
+            slice_key='',
+            retrieved_at=datetime(2025, 10, 11, 12, 0, 0),
+            rows=[
+                {'anchor_day': '2025-10-02', 'X': 20},
+                {'anchor_day': '2025-10-03', 'X': 30},
+            ],
+        )
+
+        # Strict: only pid_a's row
+        strict = query_snapshots(param_id=pid_a, core_hash=hash_a, include_equivalents=False)
+        assert len(strict) == 1
+        assert strict[0]['x'] == 10
+
+        # Link A ≡ B cross-param
+        create_equivalence_link(
+            param_id=pid_a,
+            core_hash=hash_a,
+            equivalent_to=hash_b,
+            created_by="pytest",
+            reason="ri011 cross-param query_snapshots",
+            source_param_id=pid_b,
+        )
+
+        # With equivalents: rows from BOTH param_ids
+        closure = query_snapshots(param_id=pid_a, core_hash=hash_a, include_equivalents=True)
+        assert len(closure) == 3
+        hashes_returned = {r['core_hash'] for r in closure}
+        assert hash_a in hashes_returned
+        assert hash_b in hashes_returned
+        pids_returned = {r['param_id'] for r in closure}
+        assert pid_a in pids_returned
+        assert pid_b in pids_returned
+
+    def test_ri012_query_snapshots_for_sweep_cross_param_equivalence(self):
+        """
+        RI-012: query_snapshots_for_sweep returns rows across param_ids
+        when linked via source_param_id.
+        """
+        pid_a = f'{TEST_PREFIX}sweep-xp-a'
+        pid_b = f'{TEST_PREFIX}sweep-xp-b'
+        sig_a = '{"c":"sweep-xp-A","x":{}}'
+        sig_b = '{"c":"sweep-xp-B","x":{}}'
+        hash_a = short_core_hash_from_canonical_signature(sig_a)
+        hash_b = short_core_hash_from_canonical_signature(sig_b)
+
+        # Two retrieval events on different days for the same anchor_day
+        append_snapshots_for_test(
+            param_id=pid_a,
+            canonical_signature=sig_a,
+            slice_key='',
+            retrieved_at=datetime(2025, 10, 10, 12, 0, 0),
+            rows=[{'anchor_day': '2025-10-01', 'X': 100}],
+        )
+        append_snapshots_for_test(
+            param_id=pid_b,
+            canonical_signature=sig_b,
+            slice_key='',
+            retrieved_at=datetime(2025, 10, 12, 12, 0, 0),
+            rows=[{'anchor_day': '2025-10-01', 'X': 200}],
+        )
+
+        # Link A ≡ B cross-param
+        create_equivalence_link(
+            param_id=pid_a,
+            core_hash=hash_a,
+            equivalent_to=hash_b,
+            created_by="pytest",
+            reason="ri012 cross-param sweep",
+            source_param_id=pid_b,
+        )
+
+        # Sweep should return rows from BOTH param_ids
+        sweep_rows = query_snapshots_for_sweep(
+            param_id=pid_a,
+            core_hash=hash_a,
+            slice_keys=[''],
+            anchor_from=date(2025, 10, 1),
+            anchor_to=date(2025, 10, 1),
+            sweep_from=date(2025, 10, 9),
+            sweep_to=date(2025, 10, 13),
+            include_equivalents=True,
+        )
+        assert len(sweep_rows) == 2
+        xs = sorted([r['x'] for r in sweep_rows])
+        assert xs == [100, 200]
+        pids_in_sweep = {r['param_id'] for r in sweep_rows}
+        assert pid_a in pids_in_sweep
+        assert pid_b in pids_in_sweep
+
+        # Without equivalents: only pid_a's row
+        strict_sweep = query_snapshots_for_sweep(
+            param_id=pid_a,
+            core_hash=hash_a,
+            slice_keys=[''],
+            anchor_from=date(2025, 10, 1),
+            anchor_to=date(2025, 10, 1),
+            sweep_from=date(2025, 10, 9),
+            sweep_to=date(2025, 10, 13),
+            include_equivalents=False,
+        )
+        assert len(strict_sweep) == 1
+        assert strict_sweep[0]['x'] == 100
+
+    def test_ri013_latest_wins_across_params_multi_day(self):
+        """
+        RI-013: virtual snapshot "latest wins" works correctly across param_ids
+        when there are multiple anchor_days and different retrieval histories.
+
+        Scenario:
+        - pid_a has anchor_days 1-Oct and 2-Oct, retrieved at t1
+        - pid_b has anchor_days 2-Oct and 3-Oct, retrieved at t2 > t1
+        - Link A ≡ B cross-param
+        - Virtual snapshot as_at > t2 should:
+          - Return pid_a data for 1-Oct (only source)
+          - Return pid_b data for 2-Oct (latest wins, t2 > t1)
+          - Return pid_b data for 3-Oct (only source)
+        """
+        pid_a = f'{TEST_PREFIX}lw-xp-a'
+        pid_b = f'{TEST_PREFIX}lw-xp-b'
+        sig_a = '{"c":"lw-xp-A","x":{}}'
+        sig_b = '{"c":"lw-xp-B","x":{}}'
+        hash_a = short_core_hash_from_canonical_signature(sig_a)
+        hash_b = short_core_hash_from_canonical_signature(sig_b)
+
+        # pid_a: 1-Oct and 2-Oct retrieved at t1
+        append_snapshots_for_test(
+            param_id=pid_a,
+            canonical_signature=sig_a,
+            slice_key='',
+            retrieved_at=datetime(2025, 10, 10, 12, 0, 0),
+            rows=[
+                {'anchor_day': '2025-10-01', 'X': 1},
+                {'anchor_day': '2025-10-02', 'X': 2},
+            ],
+        )
+        # pid_b: 2-Oct and 3-Oct retrieved at t2 (later)
+        append_snapshots_for_test(
+            param_id=pid_b,
+            canonical_signature=sig_b,
+            slice_key='',
+            retrieved_at=datetime(2025, 10, 11, 12, 0, 0),
+            rows=[
+                {'anchor_day': '2025-10-02', 'X': 222},
+                {'anchor_day': '2025-10-03', 'X': 333},
+            ],
+        )
+
+        # Link A ≡ B cross-param
+        create_equivalence_link(
+            param_id=pid_a,
+            core_hash=hash_a,
+            equivalent_to=hash_b,
+            created_by="pytest",
+            reason="ri013 multi-day latest wins",
+            source_param_id=pid_b,
+        )
+
+        # Virtual snapshot as-at after both retrievals
+        result = query_virtual_snapshot(
+            param_id=pid_a,
+            as_at=datetime(2025, 10, 12, 0, 0, 0),
+            anchor_from=date(2025, 10, 1),
+            anchor_to=date(2025, 10, 3),
+            core_hash=hash_a,
+            slice_keys=[''],
+            include_equivalents=True,
+            limit=1000,
+        )
+        assert result["success"] is True
+        assert result["count"] == 3
+
+        rows_by_day = {r['anchor_day'].isoformat() if hasattr(r['anchor_day'], 'isoformat') else r['anchor_day']: r for r in result["rows"]}
+
+        # 1-Oct: only pid_a has data → X=1
+        assert rows_by_day['2025-10-01']['x'] == 1
+
+        # 2-Oct: pid_b's retrieval is newer → X=222 wins
+        assert rows_by_day['2025-10-02']['x'] == 222
+
+        # 3-Oct: only pid_b has data → X=333
+        assert rows_by_day['2025-10-03']['x'] == 333
+
+    def test_ri014_calendar_shows_linked_param_retrieval_days(self):
+        """
+        RI-014: query_snapshot_retrievals returns retrieval timestamps from a
+        linked param_id, making them visible in the @ calendar.
+
+        Scenario:
+        - pid_a has retrievals on 10-Oct
+        - pid_b has retrievals on 15-Oct (5 days later)
+        - Cross-param link A ≡ B
+        - Calendar query on pid_a should show BOTH days
+        """
+        pid_a = f'{TEST_PREFIX}cal-xp-a'
+        pid_b = f'{TEST_PREFIX}cal-xp-b'
+        sig_a = '{"c":"cal-xp-A","x":{}}'
+        sig_b = '{"c":"cal-xp-B","x":{}}'
+        hash_a = short_core_hash_from_canonical_signature(sig_a)
+        hash_b = short_core_hash_from_canonical_signature(sig_b)
+
+        append_snapshots_for_test(
+            param_id=pid_a,
+            canonical_signature=sig_a,
+            slice_key='',
+            retrieved_at=datetime(2025, 10, 10, 12, 0, 0),
+            rows=[{'anchor_day': '2025-10-01', 'X': 1}],
+        )
+        append_snapshots_for_test(
+            param_id=pid_b,
+            canonical_signature=sig_b,
+            slice_key='',
+            retrieved_at=datetime(2025, 10, 15, 18, 0, 0),
+            rows=[{'anchor_day': '2025-10-01', 'X': 999}],
+        )
+
+        # Link A ≡ B cross-param
+        create_equivalence_link(
+            param_id=pid_a,
+            core_hash=hash_a,
+            equivalent_to=hash_b,
+            created_by="pytest",
+            reason="ri014 calendar cross-param",
+            source_param_id=pid_b,
+        )
+
+        # Calendar query for pid_a should show both retrieval days
+        retrievals = query_snapshot_retrievals(
+            param_id=pid_a, core_hash=hash_a, include_equivalents=True, limit=10
+        )
+        assert retrievals["success"] is True
+        assert retrievals["count"] == 2
+        # Should be sorted newest-first
+        assert retrievals["retrieved_at"][0].startswith("2025-10-15")
+        assert retrievals["retrieved_at"][1].startswith("2025-10-10")
+
+        # Strict query should only see pid_a's retrieval
+        strict = query_snapshot_retrievals(
+            param_id=pid_a, core_hash=hash_a, include_equivalents=False, limit=10
+        )
+        assert strict["count"] == 1
+        assert strict["retrieved_at"][0].startswith("2025-10-10")

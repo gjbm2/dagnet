@@ -5,6 +5,7 @@ import { Layout, Maximize2, Eye, Wrench, TrendingUpDown } from 'lucide-react';
 import './ToolsPanel.css';
 import { useViewPreferencesContext } from '../../contexts/ViewPreferencesContext';
 import { useSankeyView } from '../../hooks/useSankeyView';
+import { useNodeImageView } from '../../hooks/useNodeImageView';
 import { useAutoUpdateCharts } from '../../hooks/useAutoUpdateCharts';
 
 interface ToolsPanelProps {
@@ -38,8 +39,9 @@ export default function ToolsPanel({
   const viewPrefs = useViewPreferencesContext();
   const { policy: autoUpdatePolicy, setEnabled: setAutoUpdateEnabled } = useAutoUpdateCharts();
   
-  // Use centralised hook for Sankey view toggle
+  // Use centralised hooks for view toggles
   const { useSankeyView: isSankeyView, setUseSankeyView } = useSankeyView();
+  const { showNodeImages, setShowNodeImages } = useNodeImageView();
   
   if (!viewPrefs) {
     // Should never happen since ToolsPanel is always inside GraphEditor with provider
@@ -99,6 +101,15 @@ export default function ToolsPanel({
               onChange={(e) => setAnimateFlow(e.target.checked)}
             />
             <span>Animate Flow</span>
+          </label>
+          
+          <label className="tool-checkbox">
+            <input
+              type="checkbox"
+              checked={showNodeImages}
+              onChange={(e) => setShowNodeImages(e.target.checked)}
+            />
+            <span>Show Node Images</span>
           </label>
           
           {isSankeyView ? (

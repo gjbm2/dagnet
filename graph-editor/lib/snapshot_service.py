@@ -481,24 +481,30 @@ def query_snapshots(
                 anchor_median_lag_days, anchor_mean_lag_days,
                 onset_delta_days
             FROM snapshots
-            WHERE param_id = %s
         """
-        params: List[Any] = [param_id]
+        params: List[Any] = []
         
         if core_hash is not None:
             if include_equivalents:
-                # Expand via equivalence closure before filtering
+                # Expand via equivalence closure before filtering — includes cross-param sources
                 resolved = resolve_equivalent_hashes(
                     param_id=param_id,
                     core_hash=core_hash,
                     include_equivalents=True,
                 )
                 hashes = resolved.get("core_hashes", [core_hash])
-                query += " AND core_hash = ANY(%s)"
+                resolved_pids = resolved.get("param_ids", [param_id])
+                query += " WHERE param_id = ANY(%s) AND core_hash = ANY(%s)"
+                params.append(resolved_pids)
                 params.append(hashes)
             else:
-                query += " AND core_hash = %s"
+                query += " WHERE param_id = %s AND core_hash = %s"
+                params.append(param_id)
                 params.append(core_hash)
+        else:
+            # No core_hash filter → strict param_id scoping (historical behaviour)
+            query += " WHERE param_id = %s"
+            params.append(param_id)
         
         if slice_keys is not None:
             parts: List[str] = []
@@ -573,6 +579,19 @@ def query_snapshots_for_sweep(
     try:
         cur = conn.cursor()
 
+        # core_hash is mandatory for sweep — resolve equivalence closure including cross-param sources
+        if include_equivalents:
+            resolved = resolve_equivalent_hashes(
+                param_id=param_id,
+                core_hash=core_hash,
+                include_equivalents=True,
+            )
+            hashes = resolved.get("core_hashes", [core_hash])
+            resolved_pids = resolved.get("param_ids", [param_id])
+        else:
+            hashes = [core_hash]
+            resolved_pids = [param_id]
+
         query = """
             SELECT 
                 param_id, core_hash, slice_key, anchor_day, retrieved_at,
@@ -581,23 +600,9 @@ def query_snapshots_for_sweep(
                 anchor_median_lag_days, anchor_mean_lag_days,
                 onset_delta_days
             FROM snapshots
-            WHERE param_id = %s
+            WHERE param_id = ANY(%s) AND core_hash = ANY(%s)
         """
-        params: List[Any] = [param_id]
-
-        # core_hash is mandatory for sweep
-        if include_equivalents:
-            resolved = resolve_equivalent_hashes(
-                param_id=param_id,
-                core_hash=core_hash,
-                include_equivalents=True,
-            )
-            hashes = resolved.get("core_hashes", [core_hash])
-            query += " AND core_hash = ANY(%s)"
-            params.append(hashes)
-        else:
-            query += " AND core_hash = %s"
-            params.append(core_hash)
+        params: List[Any] = [resolved_pids, hashes]
 
         if slice_keys is not None:
             parts: List[str] = []
@@ -1509,16 +1514,26 @@ def query_snapshot_retrievals(
         if anchor_from is not None and anchor_to is not None and anchor_from > anchor_to:
             anchor_from, anchor_to = anchor_to, anchor_from
 
-        where_clauses = ["param_id = %s"]
-        params: List[Any] = [param_id]
+        where_clauses: List[str] = []
+        params: List[Any] = []
 
         if core_hash:
             if include_equivalents:
-                # Expand equivalence closure inside the same SQL query.
+                # Expand equivalence closure (hashes + cross-param source scope) inside the same SQL query.
+                # IMPORTANT: We intentionally scope snapshot reads to ONLY the param_ids that are referenced
+                # by the equivalence edges (via source_param_id), so we do not accidentally read unrelated
+                # params elsewhere in the DB.
+                where_clauses.append("param_id IN (SELECT param_id FROM eq_params)")
                 where_clauses.append("core_hash IN (SELECT core_hash FROM eq)")
             else:
+                where_clauses.append("param_id = %s")
+                params.append(param_id)
                 where_clauses.append("core_hash = %s")
                 params.append(core_hash)
+        else:
+            # No core_hash filter → preserve historical behaviour: strictly scoped to param_id.
+            where_clauses.append("param_id = %s")
+            params.append(param_id)
 
         if slice_keys is not None:
             _append_slice_filter_sql(sql_parts=where_clauses, params=params, slice_keys=slice_keys)
@@ -1559,17 +1574,23 @@ def query_snapshot_retrievals(
                 LIMIT %s
                 """
             query = f"""
-            WITH RECURSIVE eq(core_hash) AS (
-              SELECT %s::text
+            WITH RECURSIVE eq(core_hash, source_param_id) AS (
+              SELECT %s::text, %s::text
               UNION
-              SELECT CASE WHEN e.core_hash = eq.core_hash THEN e.equivalent_to ELSE e.core_hash END
+              SELECT
+                CASE WHEN e.core_hash = eq.core_hash THEN e.equivalent_to ELSE e.core_hash END,
+                COALESCE(e.source_param_id, e.param_id)
               FROM signature_equivalence e
               JOIN eq ON (e.core_hash = eq.core_hash OR e.equivalent_to = eq.core_hash)
               WHERE e.param_id = %s AND e.active = true AND e.operation = 'equivalent'
+            ),
+            eq_params AS (
+              SELECT DISTINCT source_param_id AS param_id
+              FROM eq
             )
             {select_sql}
             """
-            params2 = [core_hash, param_id] + params + [limit_i]
+            params2 = [core_hash, param_id, param_id] + params + [limit_i]
             cur.execute(query, tuple(params2))
         else:
             if include_summary:
@@ -1755,13 +1776,22 @@ def query_virtual_snapshot(
         cur = conn.cursor()
         
         # Build WHERE clause for base filter.
-        where_clauses = [
-            "param_id = %s",
-            "retrieved_at <= %s",
-            "anchor_day >= %s",
-            "anchor_day <= %s"
-        ]
-        params: List[Any] = [param_id, as_at, anchor_from, anchor_to]
+        if include_equivalents:
+            where_clauses = [
+                "retrieved_at <= %s",
+                "anchor_day >= %s",
+                "anchor_day <= %s"
+            ]
+            params: List[Any] = [as_at, anchor_from, anchor_to]
+        else:
+            # Preserve historical behaviour when equivalence expansion is disabled.
+            where_clauses = [
+                "param_id = %s",
+                "retrieved_at <= %s",
+                "anchor_day >= %s",
+                "anchor_day <= %s"
+            ]
+            params = [param_id, as_at, anchor_from, anchor_to]
 
         if slice_keys is not None:
             _append_slice_filter_sql(sql_parts=where_clauses, params=params, slice_keys=slice_keys)
@@ -1770,7 +1800,7 @@ def query_virtual_snapshot(
 
         if include_equivalents:
             # Equivalence closure (undirected graph) is resolved inside the same SQL query.
-            where_match_sql = where_sql + " AND core_hash IN (SELECT core_hash FROM eq)"
+            where_match_sql = where_sql + " AND param_id IN (SELECT param_id FROM eq_params) AND core_hash IN (SELECT core_hash FROM eq)"
         else:
             where_match_sql = where_sql + " AND core_hash = %s"
 
@@ -1787,13 +1817,19 @@ def query_virtual_snapshot(
         # This allows the caller to treat signature mismatch as a hard failure.
         if include_equivalents:
             query = f"""
-            WITH RECURSIVE eq(core_hash) AS (
-              SELECT %s::text
+            WITH RECURSIVE eq(core_hash, source_param_id) AS (
+              SELECT %s::text, %s::text
               UNION
-              SELECT CASE WHEN e.core_hash = eq.core_hash THEN e.equivalent_to ELSE e.core_hash END
+              SELECT
+                CASE WHEN e.core_hash = eq.core_hash THEN e.equivalent_to ELSE e.core_hash END,
+                COALESCE(e.source_param_id, e.param_id)
               FROM signature_equivalence e
               JOIN eq ON (e.core_hash = eq.core_hash OR e.equivalent_to = eq.core_hash)
               WHERE e.param_id = %s AND e.active = true AND e.operation = 'equivalent'
+            ),
+            eq_params AS (
+              SELECT DISTINCT source_param_id AS param_id
+              FROM eq
             ),
             ranked_match AS (
                 SELECT
@@ -1809,7 +1845,7 @@ def query_virtual_snapshot(
                     onset_delta_days,
                     ROW_NUMBER() OVER (
                         PARTITION BY anchor_day, {_partition_key_match_sql_expr()}
-                        ORDER BY retrieved_at DESC
+                        ORDER BY retrieved_at DESC, param_id DESC
                     ) AS rn
                 FROM snapshots
                 WHERE {where_match_sql}
@@ -1820,7 +1856,7 @@ def query_virtual_snapshot(
                         FILTER (WHERE rm.rn = 1),
                     '[]'::jsonb
                 ) AS rows,
-                (SELECT COUNT(*) > 0 FROM snapshots WHERE {where_sql}) AS has_any_rows,
+                (SELECT COUNT(*) > 0 FROM snapshots WHERE {where_sql} AND param_id IN (SELECT param_id FROM eq_params)) AS has_any_rows,
                 (SELECT COUNT(*) > 0 FROM snapshots WHERE {where_match_sql}) AS has_matching_core_hash,
                 MAX(rm.retrieved_at) FILTER (WHERE rm.rn = 1) AS latest_retrieved_at_used,
                 COALESCE(BOOL_OR(rm.rn = 1 AND rm.anchor_day = %s), false) AS has_anchor_to
@@ -1842,7 +1878,7 @@ def query_virtual_snapshot(
                     onset_delta_days,
                     ROW_NUMBER() OVER (
                         PARTITION BY anchor_day, {_partition_key_match_sql_expr()}
-                        ORDER BY retrieved_at DESC
+                        ORDER BY retrieved_at DESC, param_id DESC
                     ) AS rn
                 FROM snapshots
                 WHERE {where_match_sql}
@@ -1872,7 +1908,7 @@ def query_virtual_snapshot(
             # has_matching_core_hash: base params
             # has_anchor_to: anchor_to
             params2 = (
-                [core_hash, param_id] +
+                [core_hash, param_id, param_id] +
                 params +
                 params +
                 params +
@@ -2235,31 +2271,44 @@ def resolve_equivalent_hashes(
     core_hash: str,
     include_equivalents: bool = True
 ) -> Dict[str, Any]:
-    """Resolve equivalence closure for a (param_id, core_hash)."""
+    """Resolve equivalence closure for a (param_id, core_hash).
+
+    Returns:
+        Dict with:
+        - core_hashes: list of core_hash strings in the closure
+        - param_ids: list of param_id strings to search (seed + any source_param_ids)
+        - count: number of core_hashes
+    """
     if not include_equivalents:
-        return {"success": True, "core_hashes": [core_hash], "count": 1}
+        return {"success": True, "core_hashes": [core_hash], "param_ids": [param_id], "count": 1}
     conn = get_db_connection()
     try:
         cur = conn.cursor()
         cur.execute(
             """
-            WITH RECURSIVE eq(core_hash) AS (
-              SELECT %s::text
+            WITH RECURSIVE eq(core_hash, source_param_id) AS (
+              SELECT %s::text, %s::text
               UNION
-              SELECT CASE WHEN e.core_hash = eq.core_hash THEN e.equivalent_to ELSE e.core_hash END
+              SELECT
+                CASE WHEN e.core_hash = eq.core_hash THEN e.equivalent_to ELSE e.core_hash END,
+                COALESCE(e.source_param_id, e.param_id)
               FROM signature_equivalence e
               JOIN eq ON (e.core_hash = eq.core_hash OR e.equivalent_to = eq.core_hash)
               WHERE e.param_id = %s AND e.active = true AND e.operation = 'equivalent'
             )
-            SELECT DISTINCT core_hash FROM eq
+            SELECT DISTINCT core_hash, source_param_id FROM eq
             """,
-            (core_hash, param_id),
+            (core_hash, param_id, param_id),
         )
-        hashes = sorted({str(r[0]) for r in cur.fetchall() if r and r[0]})
+        rows = cur.fetchall()
+        hashes = sorted({str(r[0]) for r in rows if r and r[0]})
+        param_ids = sorted({str(r[1]) for r in rows if r and r[1]})
         if core_hash not in hashes:
             hashes = [core_hash] + hashes
-        return {"success": True, "core_hashes": hashes, "count": len(hashes)}
+        if param_id not in param_ids:
+            param_ids = [param_id] + param_ids
+        return {"success": True, "core_hashes": hashes, "param_ids": param_ids, "count": len(hashes)}
     except Exception as e:
-        return {"success": False, "core_hashes": [core_hash], "count": 1, "error": str(e)}
+        return {"success": False, "core_hashes": [core_hash], "param_ids": [param_id], "count": 1, "error": str(e)}
     finally:
         conn.close()

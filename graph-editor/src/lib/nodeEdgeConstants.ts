@@ -41,6 +41,18 @@ export const MIN_NODE_HEIGHT = 60;
 /** Maximum node height in Sankey view (pixels) */
 export const MAX_NODE_HEIGHT = 400;
 
+/** Node width in image view mode (pixels) */
+export const IMAGE_VIEW_NODE_WIDTH = 160;
+
+/** Node height in image view mode (pixels) */
+export const IMAGE_VIEW_NODE_HEIGHT = 180;
+
+/** Image view label X offset from left edge of node (pixels) */
+export const IMAGE_VIEW_LABEL_X = 20;
+
+/** Image view label Y offset — negative = above node top edge (pixels) */
+export const IMAGE_VIEW_LABEL_Y = 4;
+
 /** Node content padding (pixels) */
 export const NODE_PADDING = 8;
 

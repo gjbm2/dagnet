@@ -467,6 +467,8 @@ class WindowFetchPlannerService {
 
           // Execute the plan windows exactly via DataOperationsService (plan interpreter mode).
           // This avoids any executor-side re-derivation of windows, satisfying Invariant E for execution windows.
+          // Shared batch timestamp for all items (key-fixes.md §2.1).
+          const retrievalBatchAt = new Date();
           for (const item of planItemsToExecute) {
             const g = currentGraph;
             if (!g) break;
@@ -486,6 +488,7 @@ class WindowFetchPlannerService {
                 // First-principles: plan already computed correct windows.
                 skipCohortBounding: true,
                 overrideFetchWindows: item.windows.map((w) => ({ start: w.start, end: w.end })),
+                retrievalBatchAt,
               } as any);
             } else {
               // Cases: keep existing versioned behaviour (window does not drive schedule snapshot).
@@ -497,6 +500,7 @@ class WindowFetchPlannerService {
                 setGraph: trackingSetGraph,
                 bustCache: false,
                 currentDSL: dsl,
+                retrievalBatchAt,
               } as any);
             }
           }

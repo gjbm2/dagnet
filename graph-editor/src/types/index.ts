@@ -107,6 +107,7 @@ export interface TabState {
     rfViewport?: { x: number; y: number; zoom: number };
     autoReroute?: boolean;
     useSankeyView?: boolean;
+    showNodeImages?: boolean;
     confidenceIntervalLevel?: 'none' | '80' | '90' | '95' | '99';
     animateFlow?: boolean;
     sidebarOpen?: boolean;

@@ -39,10 +39,755 @@ import { executeRetrieveAllSlicesWithProgressToast, retrieveAllSlicesService } f
 import { dataOperationsService } from '../dataOperationsService';
 import { buildFetchPlanProduction } from '../fetchPlanBuilderService';
 import { lagHorizonsService } from '../lagHorizonsService';
+import { explodeDSL } from '../../lib/dslExplosion';
 
 describe('retrieveAllSlicesService', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  it('on cooldown, restarts ONLY the failing S; other S remains atomic and unchanged', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-02-09T06:00:00.000Z'));
+
+    // Speed up cooldown in tests.
+    if (typeof (global as any).window === 'undefined') {
+      (global as any).window = {};
+    }
+    (global.window as any).__dagnetTestRateLimitCooloffMinutes = 0.02; // ~1s
+
+    vi.mocked(lagHorizonsService.recomputeHorizons).mockClear();
+
+    const slice1 = 'window(-7d:).context(channel:paid-search)';
+    const slice2 = 'window(-30d:).context(channel:paid-search)';
+
+    // Two params (pA and pB), both same slice family + mode, but different hashes:
+    // - pA uses sigA
+    // - pB uses sigB
+    const sigA = '{"c":"hash-A","x":{}}';
+    const sigB = '{"c":"hash-B","x":{}}';
+
+    // Slice 1: B then A (both succeed)
+    // Slice 2: A fails with 429, cooldown, A retried (new retrieved_at + bustCache), then B (should reuse old retrieved_at)
+    vi.mocked(buildFetchPlanProduction)
+      .mockReturnValueOnce({
+        plan: {
+          version: 1,
+          createdAt: '2026-02-09T06:00:00.000Z',
+          referenceNow: '2026-02-09T06:00:00.000Z',
+          dsl: slice1,
+          items: [
+            {
+              itemKey: 'parameter:pB:edge-b:p:',
+              type: 'parameter',
+              objectId: 'pB',
+              targetId: 'edge-b',
+              slot: 'p',
+              mode: 'window',
+              sliceFamily: 'context(channel:paid-search)',
+              querySignature: sigB,
+              classification: 'fetch',
+              windows: [{ start: '1-Jan-26', end: '1-Jan-26', reason: 'missing', dayCount: 1 }],
+            },
+            {
+              itemKey: 'parameter:pA:edge-a:p:',
+              type: 'parameter',
+              objectId: 'pA',
+              targetId: 'edge-a',
+              slot: 'p',
+              mode: 'window',
+              sliceFamily: 'context(channel:paid-search)',
+              querySignature: sigA,
+              classification: 'fetch',
+              windows: [{ start: '1-Jan-26', end: '1-Jan-26', reason: 'missing', dayCount: 1 }],
+            },
+          ],
+        },
+        diagnostics: { totalItems: 2, itemsNeedingFetch: 2, itemsCovered: 0, itemsUnfetchable: 0, itemDiagnostics: [] },
+      } as any)
+      .mockReturnValueOnce({
+        plan: {
+          version: 1,
+          createdAt: '2026-02-09T06:00:00.000Z',
+          referenceNow: '2026-02-09T06:00:00.000Z',
+          dsl: slice2,
+          items: [
+            {
+              itemKey: 'parameter:pA:edge-a:p:',
+              type: 'parameter',
+              objectId: 'pA',
+              targetId: 'edge-a',
+              slot: 'p',
+              mode: 'window',
+              sliceFamily: 'context(channel:paid-search)',
+              querySignature: sigA,
+              classification: 'fetch',
+              windows: [{ start: '1-Jan-26', end: '1-Jan-26', reason: 'missing', dayCount: 1 }],
+            },
+            {
+              itemKey: 'parameter:pB:edge-b:p:',
+              type: 'parameter',
+              objectId: 'pB',
+              targetId: 'edge-b',
+              slot: 'p',
+              mode: 'window',
+              sliceFamily: 'context(channel:paid-search)',
+              querySignature: sigB,
+              classification: 'fetch',
+              windows: [{ start: '1-Jan-26', end: '1-Jan-26', reason: 'missing', dayCount: 1 }],
+            },
+          ],
+        },
+        diagnostics: { totalItems: 2, itemsNeedingFetch: 2, itemsCovered: 0, itemsUnfetchable: 0, itemDiagnostics: [] },
+      } as any);
+
+    vi.mocked(dataOperationsService.getFromSource)
+      .mockResolvedValueOnce({ success: true, cacheHit: false, daysFetched: 1, daysFromCache: 0 }) // slice1: B
+      .mockResolvedValueOnce({ success: true, cacheHit: false, daysFetched: 1, daysFromCache: 0 }) // slice1: A
+      .mockRejectedValueOnce(new Error('429 Too Many Requests: Exceeded rate limit'))               // slice2: A fails
+      .mockResolvedValueOnce({ success: true, cacheHit: false, daysFetched: 1, daysFromCache: 0 }) // slice2: A retry
+      .mockResolvedValueOnce({ success: true, cacheHit: false, daysFetched: 1, daysFromCache: 0 }); // slice2: B
+
+    const graph: any = {
+      dataInterestsDSL: `${slice1};${slice2}`,
+      edges: [
+        { uuid: 'edge-a', from: 'a', to: 'b', p: { id: 'pA' } },
+        { uuid: 'edge-b', from: 'a', to: 'b', p: { id: 'pB' } },
+      ],
+      nodes: [],
+    };
+
+    const run = retrieveAllSlicesService.execute({
+      getGraph: () => graph,
+      setGraph: () => {},
+      slices: [slice1, slice2],
+      isAutomated: true,
+    });
+
+    await vi.advanceTimersByTimeAsync(2500);
+    const res = await run;
+
+    expect(res.totalErrors).toBe(0);
+
+    const calls = vi.mocked(dataOperationsService.getFromSource).mock.calls;
+    expect(calls.length).toBe(5);
+
+    const callB1 = calls[0][0] as any;
+    const callA1 = calls[1][0] as any;
+    const callA2fail = calls[2][0] as any;
+    const callA2retry = calls[3][0] as any;
+    const callB2 = calls[4][0] as any;
+
+    // A (failing S): retry restarts S
+    expect(callA1.retrievalBatchAt).toBeInstanceOf(Date);
+    expect(callA2retry.retrievalBatchAt).toBeInstanceOf(Date);
+    expect(callA1.retrievalBatchAt).not.toBe(callA2retry.retrievalBatchAt);
+    expect(callA2fail.bustCache).toBe(false);
+    expect(callA2retry.bustCache).toBe(true);
+
+    // B (other S): unchanged; still atomic across both slices
+    expect(callB1.retrievalBatchAt).toBeInstanceOf(Date);
+    expect(callB2.retrievalBatchAt).toBe(callB1.retrievalBatchAt);
+    expect(callB1.bustCache).toBe(false);
+    expect(callB2.bustCache).toBe(false);
+
+    delete (global.window as any).__dagnetTestRateLimitCooloffMinutes;
+    vi.useRealTimers();
+  });
+
+  it('treats window vs cohort as different S (same param+sliceFamily+hash must not coalesce across modes)', async () => {
+    vi.mocked(lagHorizonsService.recomputeHorizons).mockClear();
+
+    vi.mocked(buildFetchPlanProduction).mockReturnValueOnce({
+      plan: {
+        version: 1,
+        createdAt: '2026-02-09T06:00:00.000Z',
+        referenceNow: '2026-02-09T06:00:00.000Z',
+        dsl: 'window(-7d:).context(channel:paid-search)',
+        items: [
+          {
+            itemKey: 'parameter:p-1:edge-1:p:',
+            type: 'parameter',
+            objectId: 'p-1',
+            targetId: 'edge-1',
+            slot: 'p',
+            mode: 'window',
+            sliceFamily: 'context(channel:paid-search)',
+            querySignature: '{"c":"core","x":{}}',
+            classification: 'fetch',
+            windows: [{ start: '1-Jan-26', end: '1-Jan-26', reason: 'missing', dayCount: 1 }],
+          },
+          {
+            itemKey: 'parameter:p-1:edge-1:p:',
+            type: 'parameter',
+            objectId: 'p-1',
+            targetId: 'edge-1',
+            slot: 'p',
+            mode: 'cohort',
+            sliceFamily: 'context(channel:paid-search)',
+            querySignature: '{"c":"core","x":{}}',
+            classification: 'fetch',
+            windows: [{ start: '1-Jan-26', end: '1-Jan-26', reason: 'missing', dayCount: 1 }],
+          },
+        ],
+      },
+      diagnostics: { totalItems: 2, itemsNeedingFetch: 2, itemsCovered: 0, itemsUnfetchable: 0, itemDiagnostics: [] },
+    } as any);
+
+    vi.mocked(dataOperationsService.getFromSource)
+      .mockResolvedValueOnce({ success: true, cacheHit: false, daysFetched: 1, daysFromCache: 0 })
+      .mockResolvedValueOnce({ success: true, cacheHit: false, daysFetched: 1, daysFromCache: 0 });
+
+    const graph: any = {
+      dataInterestsDSL: 'window(-7d:).context(channel:paid-search)',
+      edges: [{ uuid: 'edge-1', from: 'a', to: 'b', p: { id: 'p-1' } }],
+      nodes: [],
+    };
+
+    await retrieveAllSlicesService.execute({
+      getGraph: () => graph,
+      setGraph: () => {},
+      slices: ['window(-7d:).context(channel:paid-search)'],
+      isAutomated: true,
+    });
+
+    const calls = vi.mocked(dataOperationsService.getFromSource).mock.calls;
+    expect(calls.length).toBe(2);
+    const a0 = calls[0][0] as any;
+    const a1 = calls[1][0] as any;
+    expect(a0.retrievalBatchAt).not.toBe(a1.retrievalBatchAt);
+  });
+
+  it('does not enable atomicity enforcement in manual runs', async () => {
+    vi.mocked(lagHorizonsService.recomputeHorizons).mockClear();
+    vi.mocked(buildFetchPlanProduction).mockReturnValueOnce({
+      plan: {
+        version: 1,
+        createdAt: '2026-02-09T06:00:00.000Z',
+        referenceNow: '2026-02-09T06:00:00.000Z',
+        dsl: 'cohort(-90d:)',
+        items: [
+          {
+            itemKey: 'parameter:p-1:edge-1:p:',
+            type: 'parameter',
+            objectId: 'p-1',
+            targetId: 'edge-1',
+            slot: 'p',
+            mode: 'cohort',
+            sliceFamily: '',
+            querySignature: '{"c":"core","x":{}}',
+            classification: 'fetch',
+            windows: [{ start: '1-Jan-26', end: '1-Jan-26', reason: 'missing', dayCount: 1 }],
+          },
+        ],
+      },
+      diagnostics: { totalItems: 1, itemsNeedingFetch: 1, itemsCovered: 0, itemsUnfetchable: 0, itemDiagnostics: [] },
+    } as any);
+    vi.mocked(dataOperationsService.getFromSource).mockResolvedValueOnce({
+      success: true,
+      cacheHit: false,
+      daysFetched: 1,
+      daysFromCache: 0,
+    });
+
+    const graph: any = {
+      dataInterestsDSL: 'cohort(-90d:)',
+      edges: [{ uuid: 'edge-1', from: 'a', to: 'b', p: { id: 'p-1' } }],
+      nodes: [],
+    };
+
+    await retrieveAllSlicesService.execute({
+      getGraph: () => graph,
+      setGraph: () => {},
+      slices: ['cohort(-90d:)'],
+      isAutomated: false,
+    });
+
+    const calls = vi.mocked(dataOperationsService.getFromSource).mock.calls;
+    expect(calls.length).toBe(1);
+    expect((calls[0][0] as any).enforceAtomicityScopeS).toBe(false);
+  });
+
+  it('uses explodeDSL and still preserves S atomicity across slices that differ only by window args', async () => {
+    vi.mocked(lagHorizonsService.recomputeHorizons).mockClear();
+
+    const pinned = '(window(1-Jan-26:2-Jan-26);window(3-Jan-26:4-Jan-26)).context(channel:paid-search)';
+    const slices = await explodeDSL(pinned);
+    expect(slices.length).toBe(2);
+
+    // For each exploded slice, the plan item has the same sliceFamily and hash (S differs only by window args => same S).
+    vi.mocked(buildFetchPlanProduction)
+      .mockReturnValueOnce({
+        plan: {
+          version: 1,
+          createdAt: '2026-02-09T06:00:00.000Z',
+          referenceNow: '2026-02-09T06:00:00.000Z',
+          dsl: slices[0],
+          items: [
+            {
+              itemKey: 'parameter:p-1:edge-1:p:',
+              type: 'parameter',
+              objectId: 'p-1',
+              targetId: 'edge-1',
+              slot: 'p',
+              mode: 'window',
+              sliceFamily: 'context(channel:paid-search)',
+              querySignature: '{"c":"same-core","x":{}}',
+              classification: 'fetch',
+              windows: [{ start: '1-Jan-26', end: '1-Jan-26', reason: 'missing', dayCount: 1 }],
+            },
+          ],
+        },
+        diagnostics: { totalItems: 1, itemsNeedingFetch: 1, itemsCovered: 0, itemsUnfetchable: 0, itemDiagnostics: [] },
+      } as any)
+      .mockReturnValueOnce({
+        plan: {
+          version: 1,
+          createdAt: '2026-02-09T06:00:00.000Z',
+          referenceNow: '2026-02-09T06:00:00.000Z',
+          dsl: slices[1],
+          items: [
+            {
+              itemKey: 'parameter:p-1:edge-1:p:',
+              type: 'parameter',
+              objectId: 'p-1',
+              targetId: 'edge-1',
+              slot: 'p',
+              mode: 'window',
+              sliceFamily: 'context(channel:paid-search)',
+              querySignature: '{"c":"same-core","x":{}}',
+              classification: 'fetch',
+              windows: [{ start: '1-Jan-26', end: '1-Jan-26', reason: 'missing', dayCount: 1 }],
+            },
+          ],
+        },
+        diagnostics: { totalItems: 1, itemsNeedingFetch: 1, itemsCovered: 0, itemsUnfetchable: 0, itemDiagnostics: [] },
+      } as any);
+
+    vi.mocked(dataOperationsService.getFromSource)
+      .mockResolvedValueOnce({ success: true, cacheHit: false, daysFetched: 1, daysFromCache: 0 })
+      .mockResolvedValueOnce({ success: true, cacheHit: false, daysFetched: 1, daysFromCache: 0 });
+
+    const graph: any = {
+      dataInterestsDSL: pinned,
+      edges: [{ uuid: 'edge-1', from: 'a', to: 'b', p: { id: 'p-1' } }],
+      nodes: [],
+    };
+
+    await retrieveAllSlicesService.execute({
+      getGraph: () => graph,
+      setGraph: () => {},
+      // Do NOT pass slices: force explodeDSL inside the service.
+      isAutomated: true,
+    });
+
+    const calls = vi.mocked(dataOperationsService.getFromSource).mock.calls;
+    expect(calls.length).toBe(2);
+    const a0 = calls[0][0] as any;
+    const a1 = calls[1][0] as any;
+    expect(a0.retrievalBatchAt).toBe(a1.retrievalBatchAt);
+  });
+
+  it('coalesces S across different targetId edges when param+slice+hash match', async () => {
+    vi.mocked(lagHorizonsService.recomputeHorizons).mockClear();
+
+    vi.mocked(buildFetchPlanProduction).mockReturnValueOnce({
+      plan: {
+        version: 1,
+        createdAt: '2026-02-09T06:00:00.000Z',
+        referenceNow: '2026-02-09T06:00:00.000Z',
+        dsl: 'window(-7d:).context(channel:paid-search)',
+        items: [
+          {
+            itemKey: 'parameter:p-1:edge-1:p:',
+            type: 'parameter',
+            objectId: 'p-1',
+            targetId: 'edge-1',
+            slot: 'p',
+            mode: 'window',
+            sliceFamily: 'context(channel:paid-search)',
+            querySignature: '{"c":"same-core","x":{}}',
+            classification: 'fetch',
+            windows: [{ start: '1-Jan-26', end: '1-Jan-26', reason: 'missing', dayCount: 1 }],
+          },
+          {
+            itemKey: 'parameter:p-1:edge-2:p:',
+            type: 'parameter',
+            objectId: 'p-1',
+            targetId: 'edge-2',
+            slot: 'p',
+            mode: 'window',
+            sliceFamily: 'context(channel:paid-search)',
+            querySignature: '{"c":"same-core","x":{}}',
+            classification: 'fetch',
+            windows: [{ start: '1-Jan-26', end: '1-Jan-26', reason: 'missing', dayCount: 1 }],
+          },
+        ],
+      },
+      diagnostics: { totalItems: 2, itemsNeedingFetch: 2, itemsCovered: 0, itemsUnfetchable: 0, itemDiagnostics: [] },
+    } as any);
+
+    vi.mocked(dataOperationsService.getFromSource)
+      .mockResolvedValueOnce({ success: true, cacheHit: false, daysFetched: 1, daysFromCache: 0 })
+      .mockResolvedValueOnce({ success: true, cacheHit: false, daysFetched: 1, daysFromCache: 0 });
+
+    const graph: any = {
+      dataInterestsDSL: 'window(-7d:).context(channel:paid-search)',
+      edges: [
+        { uuid: 'edge-1', from: 'a', to: 'b', p: { id: 'p-1' } },
+        { uuid: 'edge-2', from: 'a', to: 'b', p: { id: 'p-1' } },
+      ],
+      nodes: [],
+    };
+
+    await retrieveAllSlicesService.execute({
+      getGraph: () => graph,
+      setGraph: () => {},
+      slices: ['window(-7d:).context(channel:paid-search)'],
+      isAutomated: true,
+    });
+
+    const calls = vi.mocked(dataOperationsService.getFromSource).mock.calls;
+    expect(calls.length).toBe(2);
+    const a0 = calls[0][0] as any;
+    const a1 = calls[1][0] as any;
+    expect(a0.retrievalBatchAt).toBe(a1.retrievalBatchAt);
+  });
+
+  it('keys retrieved_at at scope S (param×slice×hash): window args do not create a new S', async () => {
+    // Two exploded slices that differ only by window args should share the same S:
+    // slice = window() + contexts (args discarded).
+    vi.mocked(lagHorizonsService.recomputeHorizons).mockClear();
+
+    vi.mocked(buildFetchPlanProduction)
+      .mockReturnValueOnce({
+        plan: {
+          version: 1,
+          createdAt: '2026-02-09T06:00:00.000Z',
+          referenceNow: '2026-02-09T06:00:00.000Z',
+          dsl: 'window(-7d:).context(channel:paid-search)',
+          items: [
+            {
+              itemKey: 'parameter:p-1:edge-1:p:',
+              type: 'parameter',
+              objectId: 'p-1',
+              targetId: 'edge-1',
+              slot: 'p',
+              mode: 'window',
+              sliceFamily: 'context(channel:paid-search)',
+              querySignature: '{"c":"same-core","x":{}}',
+              classification: 'fetch',
+              windows: [{ start: '1-Jan-26', end: '1-Jan-26', reason: 'missing', dayCount: 1 }],
+            },
+          ],
+        },
+        diagnostics: { totalItems: 1, itemsNeedingFetch: 1, itemsCovered: 0, itemsUnfetchable: 0, itemDiagnostics: [] },
+      } as any)
+      .mockReturnValueOnce({
+        plan: {
+          version: 1,
+          createdAt: '2026-02-09T06:00:00.000Z',
+          referenceNow: '2026-02-09T06:00:00.000Z',
+          dsl: 'window(-30d:).context(channel:paid-search)',
+          items: [
+            {
+              itemKey: 'parameter:p-1:edge-1:p:',
+              type: 'parameter',
+              objectId: 'p-1',
+              targetId: 'edge-1',
+              slot: 'p',
+              mode: 'window',
+              sliceFamily: 'context(channel:paid-search)', // args discarded
+              querySignature: '{"c":"same-core","x":{}}',
+              classification: 'fetch',
+              windows: [{ start: '1-Jan-26', end: '1-Jan-26', reason: 'missing', dayCount: 1 }],
+            },
+          ],
+        },
+        diagnostics: { totalItems: 1, itemsNeedingFetch: 1, itemsCovered: 0, itemsUnfetchable: 0, itemDiagnostics: [] },
+      } as any);
+
+    vi.mocked(dataOperationsService.getFromSource)
+      .mockResolvedValueOnce({ success: true, cacheHit: false, daysFetched: 1, daysFromCache: 0 })
+      .mockResolvedValueOnce({ success: true, cacheHit: false, daysFetched: 1, daysFromCache: 0 });
+
+    const graph: any = {
+      dataInterestsDSL: 'window(-7d:).context(channel:paid-search);window(-30d:).context(channel:paid-search)',
+      edges: [{ uuid: 'edge-1', from: 'a', to: 'b', p: { id: 'p-1' } }],
+      nodes: [],
+    };
+
+    await retrieveAllSlicesService.execute({
+      getGraph: () => graph,
+      setGraph: () => {},
+      slices: ['window(-7d:).context(channel:paid-search)', 'window(-30d:).context(channel:paid-search)'],
+      isAutomated: true,
+    });
+
+    const calls = vi.mocked(dataOperationsService.getFromSource).mock.calls;
+    expect(calls.length).toBe(2);
+    const a0 = calls[0][0] as any;
+    const a1 = calls[1][0] as any;
+
+    // Same S => same batch timestamp object
+    expect(a0.retrievalBatchAt).toBe(a1.retrievalBatchAt);
+  });
+
+  it('does not coalesce different hashes: same param+slice but different querySignature => different retrieved_at', async () => {
+    vi.mocked(lagHorizonsService.recomputeHorizons).mockClear();
+
+    vi.mocked(buildFetchPlanProduction)
+      .mockReturnValueOnce({
+        plan: {
+          version: 1,
+          createdAt: '2026-02-09T06:00:00.000Z',
+          referenceNow: '2026-02-09T06:00:00.000Z',
+          dsl: 'window(-7d:).context(channel:paid-search)',
+          items: [
+            {
+              itemKey: 'parameter:p-1:edge-1:p:',
+              type: 'parameter',
+              objectId: 'p-1',
+              targetId: 'edge-1',
+              slot: 'p',
+              mode: 'window',
+              sliceFamily: 'context(channel:paid-search)',
+              querySignature: '{"c":"hash-A","x":{}}',
+              classification: 'fetch',
+              windows: [{ start: '1-Jan-26', end: '1-Jan-26', reason: 'missing', dayCount: 1 }],
+            },
+          ],
+        },
+        diagnostics: { totalItems: 1, itemsNeedingFetch: 1, itemsCovered: 0, itemsUnfetchable: 0, itemDiagnostics: [] },
+      } as any)
+      .mockReturnValueOnce({
+        plan: {
+          version: 1,
+          createdAt: '2026-02-09T06:00:00.000Z',
+          referenceNow: '2026-02-09T06:00:00.000Z',
+          dsl: 'window(-7d:).context(channel:paid-search)',
+          items: [
+            {
+              itemKey: 'parameter:p-1:edge-1:p:',
+              type: 'parameter',
+              objectId: 'p-1',
+              targetId: 'edge-1',
+              slot: 'p',
+              mode: 'window',
+              sliceFamily: 'context(channel:paid-search)',
+              querySignature: '{"c":"hash-B","x":{}}', // different hash => different S
+              classification: 'fetch',
+              windows: [{ start: '1-Jan-26', end: '1-Jan-26', reason: 'missing', dayCount: 1 }],
+            },
+          ],
+        },
+        diagnostics: { totalItems: 1, itemsNeedingFetch: 1, itemsCovered: 0, itemsUnfetchable: 0, itemDiagnostics: [] },
+      } as any);
+
+    vi.mocked(dataOperationsService.getFromSource)
+      .mockResolvedValueOnce({ success: true, cacheHit: false, daysFetched: 1, daysFromCache: 0 })
+      .mockResolvedValueOnce({ success: true, cacheHit: false, daysFetched: 1, daysFromCache: 0 });
+
+    const graph: any = {
+      dataInterestsDSL: 'window(-7d:).context(channel:paid-search)',
+      edges: [{ uuid: 'edge-1', from: 'a', to: 'b', p: { id: 'p-1' } }],
+      nodes: [],
+    };
+
+    await retrieveAllSlicesService.execute({
+      getGraph: () => graph,
+      setGraph: () => {},
+      slices: ['window(-7d:).context(channel:paid-search)', 'window(-7d:).context(channel:paid-search)'],
+      isAutomated: true,
+    });
+
+    const calls = vi.mocked(dataOperationsService.getFromSource).mock.calls;
+    expect(calls.length).toBe(2);
+    const a0 = calls[0][0] as any;
+    const a1 = calls[1][0] as any;
+    expect(a0.retrievalBatchAt).not.toBe(a1.retrievalBatchAt);
+  });
+
+  it('clears forced bustCache after successful retry so later duplicate items do not refetch', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-02-09T06:00:00.000Z'));
+
+    if (typeof (global as any).window === 'undefined') {
+      (global as any).window = {};
+    }
+    (global.window as any).__dagnetTestRateLimitCooloffMinutes = 0.02; // ~1s
+
+    vi.mocked(lagHorizonsService.recomputeHorizons).mockClear();
+    vi.mocked(buildFetchPlanProduction).mockReturnValueOnce({
+      plan: {
+        version: 1,
+        createdAt: '2026-02-09T06:00:00.000Z',
+        referenceNow: '2026-02-09T06:00:00.000Z',
+        dsl: 'cohort(-90d:).context(channel:paid-search)',
+        items: [
+          // Duplicate plan items with identical S (same param+slice+hash)
+          {
+            itemKey: 'parameter:p-1:edge-1:p:',
+            type: 'parameter',
+            objectId: 'p-1',
+            targetId: 'edge-1',
+            slot: 'p',
+            mode: 'cohort',
+            sliceFamily: 'context(channel:paid-search)',
+            querySignature: '{"c":"core","x":{}}',
+            classification: 'fetch',
+            windows: [{ start: '1-Jan-26', end: '2-Jan-26', reason: 'missing', dayCount: 2 }],
+          },
+          {
+            itemKey: 'parameter:p-1:edge-1:p:',
+            type: 'parameter',
+            objectId: 'p-1',
+            targetId: 'edge-1',
+            slot: 'p',
+            mode: 'cohort',
+            sliceFamily: 'context(channel:paid-search)',
+            querySignature: '{"c":"core","x":{}}',
+            classification: 'fetch',
+            windows: [{ start: '1-Jan-26', end: '2-Jan-26', reason: 'missing', dayCount: 2 }],
+          },
+        ],
+      },
+      diagnostics: { totalItems: 2, itemsNeedingFetch: 2, itemsCovered: 0, itemsUnfetchable: 0, itemDiagnostics: [] },
+    } as any);
+
+    // 1) Fail with rate-limit (triggers cooldown + retry)
+    // 2) Retry succeeds (bustCache=true)
+    // 3) Second duplicate item executes; bustCache must be false again
+    vi.mocked(dataOperationsService.getFromSource)
+      .mockRejectedValueOnce(new Error('429 Too Many Requests: Exceeded rate limit'))
+      .mockResolvedValueOnce({ success: true, cacheHit: false, daysFetched: 2, daysFromCache: 0 })
+      .mockResolvedValueOnce({ success: true, cacheHit: true, daysFetched: 0, daysFromCache: 2 });
+
+    const graph: any = {
+      dataInterestsDSL: 'cohort(-90d:).context(channel:paid-search)',
+      edges: [{ uuid: 'edge-1', from: 'a', to: 'b', p: { id: 'p-1' } }],
+      nodes: [],
+    };
+
+    const p = retrieveAllSlicesService.execute({
+      getGraph: () => graph,
+      setGraph: () => {},
+      slices: ['cohort(-90d:).context(channel:paid-search)'],
+      isAutomated: true,
+    });
+
+    await vi.advanceTimersByTimeAsync(2500);
+    await p;
+
+    const calls = vi.mocked(dataOperationsService.getFromSource).mock.calls;
+    expect(calls.length).toBe(3);
+
+    const first = calls[0][0] as any;
+    const retry = calls[1][0] as any;
+    const dup = calls[2][0] as any;
+
+    expect(first.bustCache).toBe(false);
+    expect(retry.bustCache).toBe(true);
+    expect(dup.bustCache).toBe(false);
+
+    // Duplicate uses the post-cooloff batch timestamp (same S as retry)
+    expect(dup.retrievalBatchAt).toBe(retry.retrievalBatchAt);
+
+    delete (global.window as any).__dagnetTestRateLimitCooloffMinutes;
+    vi.useRealTimers();
+  });
+
+  it('automated rate-limit cooldown retries same scope S with new retrieved_at and bustCache=true', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-02-09T06:00:00.000Z'));
+
+    // Speed up cooldown in tests (durationSeconds is floored).
+    if (typeof (global as any).window === 'undefined') {
+      (global as any).window = {};
+    }
+    (global.window as any).__dagnetTestRateLimitCooloffMinutes = 0.02; // ~1.2s → 1s
+
+    vi.mocked(lagHorizonsService.recomputeHorizons).mockClear();
+    vi.mocked(buildFetchPlanProduction).mockReturnValueOnce({
+      plan: {
+        version: 1,
+        createdAt: '2026-02-09T06:00:00.000Z',
+        referenceNow: '2026-02-09T06:00:00.000Z',
+        dsl: 'cohort(-90d:).context(channel:paid-search)',
+        items: [
+          {
+            itemKey: 'parameter:p-1:edge-1:p:',
+            type: 'parameter',
+            objectId: 'p-1',
+            targetId: 'edge-1',
+            slot: 'p',
+            mode: 'cohort',
+            sliceFamily: 'context(channel:paid-search)',
+            querySignature: '{"c":"core","x":{"channel":"defhash"}}',
+            classification: 'fetch',
+            windows: [{ start: '1-Jan-26', end: '2-Jan-26', reason: 'missing', dayCount: 2 }],
+          },
+        ],
+      },
+      diagnostics: {
+        totalItems: 1,
+        itemsNeedingFetch: 1,
+        itemsCovered: 0,
+        itemsUnfetchable: 0,
+        itemDiagnostics: [],
+      },
+    } as any);
+
+    // First attempt: rate limit error → cooldown → retry.
+    vi.mocked(dataOperationsService.getFromSource)
+      .mockRejectedValueOnce(new Error('429 Too Many Requests: Exceeded rate limit'))
+      .mockResolvedValueOnce({
+        success: true,
+        cacheHit: false,
+        daysFetched: 2,
+        daysFromCache: 0,
+      });
+
+    const graph: any = {
+      dataInterestsDSL: 'cohort(-90d:).context(channel:paid-search)',
+      edges: [{ uuid: 'edge-1', from: 'a', to: 'b', p: { id: 'p-1' } }],
+      nodes: [],
+    };
+
+    const p = retrieveAllSlicesService.execute({
+      getGraph: () => graph,
+      setGraph: () => {},
+      slices: ['cohort(-90d:).context(channel:paid-search)'],
+      bustCache: false,
+      isAutomated: true,
+    });
+
+    // Let the cooldown elapse.
+    await vi.advanceTimersByTimeAsync(2500);
+    const res = await p;
+
+    expect(res.totalErrors).toBe(0);
+    expect(vi.mocked(dataOperationsService.getFromSource)).toHaveBeenCalledTimes(2);
+
+    const firstCall = vi.mocked(dataOperationsService.getFromSource).mock.calls[0][0] as any;
+    const secondCall = vi.mocked(dataOperationsService.getFromSource).mock.calls[1][0] as any;
+
+    expect(firstCall.enforceAtomicityScopeS).toBe(true);
+    expect(secondCall.enforceAtomicityScopeS).toBe(true);
+
+    // On retry after cooldown, we must ignore cache for scope S and mint a new retrieved_at.
+    expect(firstCall.bustCache).toBe(false);
+    expect(secondCall.bustCache).toBe(true);
+    expect(firstCall.retrievalBatchAt).toBeInstanceOf(Date);
+    expect(secondCall.retrievalBatchAt).toBeInstanceOf(Date);
+    expect(firstCall.retrievalBatchAt).not.toBe(secondCall.retrievalBatchAt);
+
+    // Cleanup: avoid leaking state into subsequent tests in this file.
+    delete (global.window as any).__dagnetTestRateLimitCooloffMinutes;
+    vi.mocked(buildFetchPlanProduction).mockReset();
+    vi.mocked(dataOperationsService.getFromSource).mockReset();
+
+    vi.useRealTimers();
   });
 
   it('counts per-item failures (getFromSource throws) as errors in the final result', async () => {

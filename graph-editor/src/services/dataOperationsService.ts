@@ -3908,8 +3908,25 @@ class DataOperationsService {
      * Used by retrieve-all to show real-time progress.
      */
     onCacheAnalysis?: (result: CacheAnalysisResult) => void;
+    /**
+     * Shared retrieval-batch timestamp (key-fixes.md §2.1).
+     * When provided, all snapshot writes use this instead of minting a new Date().
+     * Callers that orchestrate multiple slices for the same param (e.g. retrieve-all)
+     * should mint one Date and pass it to every per-slice getFromSource call.
+     */
+    retrievalBatchAt?: Date;
+    /**
+     * Enforce atomicity at scope S during execution:
+     * S = param × slice × hash (slice = window()/cohort() + any context(...) clauses, args discarded).
+     *
+     * When true, rate-limit interruptions must NOT allow a partially-persisted S to
+     * limp to completion hours later (which would split the effective retrieved_at
+     * window). Instead, a rate-limit error should be thrown so the caller can apply
+     * cooldown + restart semantics for S.
+     */
+    enforceAtomicityScopeS?: boolean;
   }): Promise<GetFromSourceResult> {
-    const { objectType, objectId, targetId, graph, setGraph, paramSlot, conditionalIndex, bustCache, targetSlice = '', currentDSL, boundedCohortWindow, skipCohortBounding, dontExecuteHttp, overrideFetchWindows, onCacheAnalysis } = options;
+    const { objectType, objectId, targetId, graph, setGraph, paramSlot, conditionalIndex, bustCache, targetSlice = '', currentDSL, boundedCohortWindow, skipCohortBounding, dontExecuteHttp, overrideFetchWindows, onCacheAnalysis, retrievalBatchAt, enforceAtomicityScopeS } = options;
     sessionLogService.info('data-fetch', 'DATA_GET_FROM_SOURCE', `Get from Source (versioned): ${objectType} ${objectId}`,
       undefined, { fileId: `${objectType}-${objectId}`, fileType: objectType });
     
@@ -3946,6 +3963,8 @@ class DataOperationsService {
           dontExecuteHttp,
           overrideFetchWindows,
           onCacheAnalysis,
+          retrievalBatchAt,
+          enforceAtomicityScopeS,
         });
         
         // NOTE: getFromSourceDirect already calls getParameterFromFile internally
@@ -3973,6 +3992,8 @@ class DataOperationsService {
           currentDSL,
           dontExecuteHttp,
           onCacheAnalysis,
+          retrievalBatchAt,
+          enforceAtomicityScopeS,
         });
         
         // 2. Update graph nodes from case file (with windowed aggregation)
@@ -4193,6 +4214,19 @@ class DataOperationsService {
       DEFAULT_T95_DAYS?: number;
       LATENCY_MAX_MEAN_MEDIAN_RATIO?: number;
     };
+    /**
+     * Shared retrieval-batch timestamp (key-fixes.md §2.1).
+     * When provided, all snapshot writes use this instead of minting a new Date().
+     * Callers that orchestrate multiple slices for the same param (e.g. retrieve-all)
+     * should mint one Date and pass it to every per-slice getFromSource call.
+     */
+    retrievalBatchAt?: Date;
+    /**
+     * Enforce atomicity at scope S during execution (see getFromSource docs).
+     * Used by automated retrieve-all to ensure rate-limit interruptions trigger
+     * cooldown + restart at scope S, rather than incremental resume over hours.
+     */
+    enforceAtomicityScopeS?: boolean;
   }): Promise<GetFromSourceResult> {
       const {
         objectType,
@@ -4212,7 +4246,29 @@ class DataOperationsService {
         skipCohortBounding = false,
         overrideFetchWindows,
         onCacheAnalysis,
+        retrievalBatchAt: externalBatchAt,
+        enforceAtomicityScopeS = false,
       } = options;
+
+    // -------------------------------------------------------------------------
+    // SNAPSHOT / RETRIEVAL BATCH IDENTITY
+    // -------------------------------------------------------------------------
+    // `retrieved_at` must be stable for the entire retrieval event so that:
+    // - snapshot DB writes are atomic per retrieval batch
+    // - retries / double-invocations become idempotent via the DB unique key
+    // When a caller (e.g. retrieve-all) orchestrates multiple slices for the
+    // same param, it should mint ONE Date and pass it as `retrievalBatchAt` so
+    // all slices share the same `retrieved_at`.
+    // See: docs/current/project-db/key-fixes.md
+    const retrievalBatchAt = externalBatchAt ?? new Date();
+    const retrievalBatchAtISO = retrievalBatchAt.toISOString();
+
+    const shouldThrowForAtomicityRateLimit = (message: string): boolean => {
+      // For automated retrieve-all, a rate-limit pause implies a long real-world gap.
+      // If we already persisted part of scope S (param × slice × hash), we must throw so
+      // the orchestrator can apply cooldown + restart semantics (new retrieved_at).
+      return enforceAtomicityScopeS === true && rateLimiter.isRateLimitError(message);
+    };
 
     // Per-item slice identity for logging (distinct from the resolved window/cohort range).
     // - `sliceDSLForLog` may be a full DSL (window/cohort/context/etc)
@@ -7070,6 +7126,10 @@ class DataOperationsService {
                 rateLimiter.reportRateLimitError(connectionName, errorMsg);
               }
               toast.error(`n_query composite query failed: ${errorMsg}`, { id: 'das-fetch' });
+              if (shouldThrowForAtomicityRateLimit(errorMsg)) {
+                // Force orchestrator-level cooldown + restart for scope S.
+                throw new Error(errorMsg);
+              }
               // If we already persisted earlier gaps, degrade gracefully (file is partially updated).
               if (shouldPersistPerGap && didPersistAnyGap) {
                 hadGapFailureAfterSomeSuccess = true;
@@ -7101,6 +7161,10 @@ class DataOperationsService {
                 rateLimiter.reportRateLimitError(connectionName, baseResult.error);
               }
               toast.error(`Base query failed: ${baseResult.error}`, { id: 'das-fetch' });
+              if (shouldThrowForAtomicityRateLimit(baseResult.error)) {
+                // Force orchestrator-level cooldown + restart for scope S.
+                throw new Error(baseResult.error);
+              }
               // If we already persisted earlier gaps, degrade gracefully (file is partially updated).
               if (shouldPersistPerGap && didPersistAnyGap) {
                 hadGapFailureAfterSomeSuccess = true;
@@ -7321,6 +7385,10 @@ class DataOperationsService {
               rateLimiter.reportRateLimitError(connectionName, errorMsg);
             }
             toast.error(`Composite query failed for gap ${gapIndex + 1}: ${errorMsg}`, { id: 'das-fetch' });
+          if (shouldThrowForAtomicityRateLimit(errorMsg)) {
+            // Force orchestrator-level cooldown + restart for scope S.
+            throw new Error(errorMsg);
+          }
             // If we already persisted earlier gaps, degrade gracefully (file is partially updated).
             if (shouldPersistPerGap && didPersistAnyGap) {
               hadGapFailureAfterSomeSuccess = true;
@@ -7366,6 +7434,10 @@ class DataOperationsService {
               rateLimiter.reportRateLimitError(connectionName, condResult.error);
             }
             toast.error(`Conditioned query failed: ${condResult.error}`, { id: 'das-fetch' });
+            if (shouldThrowForAtomicityRateLimit(condResult.error)) {
+              // Force orchestrator-level cooldown + restart for scope S.
+              throw new Error(condResult.error);
+            }
             // If we already persisted earlier gaps, degrade gracefully (file is partially updated).
             if (shouldPersistPerGap && didPersistAnyGap) {
               hadGapFailureAfterSomeSuccess = true;
@@ -7566,6 +7638,10 @@ class DataOperationsService {
             // Show user-friendly message in toast
             const userMessage = result.error || 'Failed to fetch data from source';
             toast.error(`${userMessage} (gap ${gapIndex + 1}/${actualFetchWindows.length})`, { id: 'das-fetch' });
+            if (shouldThrowForAtomicityRateLimit(userMessage)) {
+              // Force orchestrator-level cooldown + restart for scope S.
+              throw new Error(userMessage);
+            }
             // If we already persisted earlier gaps, degrade gracefully (file is partially updated).
             if (shouldPersistPerGap && didPersistAnyGap) {
               hadGapFailureAfterSomeSuccess = true;
@@ -7968,7 +8044,7 @@ class DataOperationsService {
         // can remain stale even when n/k changed.
         updateData.window_from = evidenceWindow?.start ? evidenceWindow.start.toISOString() : undefined;
         updateData.window_to = evidenceWindow?.end ? evidenceWindow.end.toISOString() : undefined;
-        updateData.retrieved_at = new Date().toISOString();
+        updateData.retrieved_at = retrievalBatchAtISO;
         updateData.source = connectionName?.includes('amplitude')
           ? 'amplitude'
           : connectionName?.includes('statsig')
@@ -7981,7 +8057,7 @@ class DataOperationsService {
             : connectionName?.includes('statsig')
             ? 'statsig'
             : 'api',
-          retrieved_at: new Date().toISOString(),
+          retrieved_at: retrievalBatchAtISO,
           // NOTE: data_source.query removed - unused and caused type mismatches with Python
           full_query: queryPayload.query || JSON.stringify(queryPayload),
         };
@@ -8081,7 +8157,7 @@ class DataOperationsService {
                       schema: 'flexi_sigs.inputs_json.v1',
                       workspace,
                       param_id: dbParamId,
-                      generated_at: new Date().toISOString(),
+                      generated_at: retrievalBatchAtISO,
                       canonical_signature,
                       canonical_signature_parts: {
                         core,
@@ -8099,7 +8175,7 @@ class DataOperationsService {
                   })(),
                   sig_algo: 'sig_v1_sha256_trunc128_b64url',
                   slice_key: sliceDSL || '',
-                  retrieved_at: new Date(),
+                  retrieved_at: retrievalBatchAt,
                   rows: snapshotRows,
                   diagnostic: diagnosticOn,
                 });
@@ -8386,7 +8462,7 @@ class DataOperationsService {
                       schema: 'flexi_sigs.inputs_json.v1',
                       workspace,
                       param_id: dbParamId,
-                      generated_at: new Date().toISOString(),
+                      generated_at: retrievalBatchAtISO,
                       canonical_signature,
                       canonical_signature_parts: {
                         core,
@@ -8404,7 +8480,7 @@ class DataOperationsService {
                   })(),
                   sig_algo: 'sig_v1_sha256_trunc128_b64url',
                   slice_key: sliceDSL || '',
-                  retrieved_at: new Date(),
+                  retrieved_at: retrievalBatchAt,
                   rows: snapshotRows,
                   diagnostic: diagnosticOn,  // Request detailed info from backend
                 });
@@ -8563,11 +8639,11 @@ class DataOperationsService {
           
           // Create new schedule entry
           const newSchedule = {
-            window_from: normalizeToUK(new Date().toISOString()),
+            window_from: normalizeToUK(retrievalBatchAtISO),
             window_to: null,
             variants,
             // Capture provenance on the schedule itself (case file history)
-            retrieved_at: new Date().toISOString(),
+            retrieved_at: retrievalBatchAtISO,
             source: connectionName?.includes('statsig')
               ? 'statsig'
               : connectionName?.includes('amplitude')
@@ -9219,6 +9295,10 @@ class DataOperationsService {
     if (!initialGraph || items.length === 0) {
       return { success: 0, errors: 0, items: [] };
     }
+
+    // Shared retrieval-batch timestamp for all items in this batch
+    // (key-fixes.md §2.1 — atomic retrieval events).
+    const retrievalBatchAt = new Date();
     
     // CRITICAL: Track current graph state internally to avoid stale closure
     let currentGraph: Graph | null = initialGraph;
@@ -9252,7 +9332,8 @@ class DataOperationsService {
             paramSlot: item.paramSlot,
             bustCache,
             currentDSL: currentDSL || '',
-            targetSlice
+            targetSlice,
+            retrievalBatchAt,
           });
         } else if (item.type === 'case') {
           await this.getFromSource({
@@ -9261,7 +9342,8 @@ class DataOperationsService {
             targetId: item.targetId,
             graph: currentGraph,
             setGraph: setGraphInternal,
-            currentDSL: currentDSL || ''
+            currentDSL: currentDSL || '',
+            retrievalBatchAt,
           });
         }
         

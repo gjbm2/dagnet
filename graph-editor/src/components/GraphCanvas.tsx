@@ -64,7 +64,7 @@ import { computeEffectiveEdgeProbability } from '@/lib/whatIf';
 import { getOptimalFace, assignFacesForNode } from '@/lib/faceSelection';
 import { buildScenarioRenderEdges } from './canvas/buildScenarioRenderEdges';
 import { getCaseEdgeVariantInfo } from './edges/edgeLabelHelpers';
-import { MAX_EDGE_WIDTH, MIN_EDGE_WIDTH, DEFAULT_NODE_WIDTH, DEFAULT_NODE_HEIGHT, MIN_NODE_HEIGHT, MAX_NODE_HEIGHT } from '@/lib/nodeEdgeConstants';
+import { MAX_EDGE_WIDTH, MIN_EDGE_WIDTH, DEFAULT_NODE_WIDTH, DEFAULT_NODE_HEIGHT, MIN_NODE_HEIGHT, MAX_NODE_HEIGHT, IMAGE_VIEW_NODE_WIDTH, IMAGE_VIEW_NODE_HEIGHT } from '@/lib/nodeEdgeConstants';
 import { getSeverityIcon } from './issues/issueIcons';
 
 const nodeTypes: NodeTypes = {
@@ -361,6 +361,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
   const massGenerosity = viewPrefs?.massGenerosity ?? 0.5;
   const autoReroute = viewPrefs?.autoReroute ?? true;
   const useSankeyView = viewPrefs?.useSankeyView ?? false;
+  const showNodeImages = viewPrefs?.showNodeImages ?? false;
   const ts = () => new Date().toISOString();
   const whatIfStartRef = useRef<number | null>(null);
   
@@ -962,6 +963,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
   const isDraggingNodeRef = useRef(false); // Prevents Graph->ReactFlow sync during node dragging
   const dragTimeoutRef = useRef<number | null>(null); // Failsafe to clear drag flag if it gets stuck
   const prevSankeyViewRef = useRef(useSankeyView); // Track Sankey mode changes to force slow path rebuild
+  const prevShowNodeImagesRef = useRef(showNodeImages); // Track image view changes to force slow path rebuild
   const reactFlowWrapperRef = useRef<HTMLDivElement>(null); // For lasso coordinate calculations
   const hasInitialFitViewRef = useRef(false);
   const currentGraphIdRef = useRef<string>('');
@@ -1579,15 +1581,17 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     
     const graphJson = JSON.stringify(graph);
     const sankeyModeChanged = prevSankeyViewRef.current !== useSankeyView;
+    const imageViewChanged = prevShowNodeImagesRef.current !== showNodeImages;
+    const viewModeChanged = sankeyModeChanged || imageViewChanged;
     
-    // Skip if graph unchanged AND Sankey mode unchanged
-    // (Sankey mode changes require full rebuild even if graph is the same)
-    if (graphJson === lastSyncedGraphRef.current && !sankeyModeChanged) {
+    // Skip if graph unchanged AND no view mode changed
+    // (View mode changes require full rebuild even if graph is the same)
+    if (graphJson === lastSyncedGraphRef.current && !viewModeChanged) {
       return;
     }
     lastSyncedGraphRef.current = graphJson;
     
-    console.log('🔄 Graph→ReactFlow sync triggered', sankeyModeChanged ? '(Sankey mode changed)' : '');
+    console.log('🔄 Graph→ReactFlow sync triggered', sankeyModeChanged ? '(Sankey mode changed)' : imageViewChanged ? '(Image view changed)' : '');
     console.log('  Graph edges (UUIDs):', graph.edges?.map((e: any) => e.uuid));
     console.log('  ReactFlow edges (UUIDs):', edges.map(e => e.id));
     
@@ -1687,20 +1691,34 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       return hasChanges;
     });
     
-    // Update Sankey mode ref (sankeyModeChanged was already calculated at top of useEffect)
+    // Update view mode refs (calculated at top of useEffect)
     if (sankeyModeChanged) {
       console.log('  🎨 Sankey mode changed:', prevSankeyViewRef.current, '->', useSankeyView);
       prevSankeyViewRef.current = useSankeyView;
     }
+    if (imageViewChanged) {
+      console.log('  🖼️ Image view changed:', prevShowNodeImagesRef.current, '->', showNodeImages);
+      prevShowNodeImagesRef.current = showNodeImages;
+    }
     
+    // Detect if any node's image count crossed the 0↔1 boundary (requires slow path for size change)
+    const imageBoundaryChanged = showNodeImages && nodes.some(node => {
+      const graphNode = graph.nodes.find((n: any) => n.uuid === node.id || n.id === node.id);
+      if (!graphNode) return false;
+      const hadImages = (node.data?.images?.length || 0) > 0;
+      const hasImages = (graphNode.images?.length || 0) > 0;
+      return hadImages !== hasImages;
+    });
+
     // Fast path: If only edge data changed (no topology, position, or handle changes), update in place
     // CRITICAL: During drag or immediately after drag, ALWAYS take fast path to prevent node position overwrites
     // We ignore nodePositionsChanged during/after drag because ReactFlow has the current drag positions
     // Handle changes require full recalculation because they affect edge bundling, offsets, and widths
     // After drag, we keep isDraggingNodeRef.current true until sync completes to force fast path
-    // Sankey mode changes require slow path because node sizes change, affecting edge routing
+    // View mode changes (Sankey, image view) require slow path because node sizes change
+    // Image boundary changes (0↔1 images) also require slow path for node resizing
     const shouldTakeFastPath = !edgeCountChanged && !nodeCountChanged && !edgeIdsChanged && !edgeHandlesChanged && 
-                               !sankeyModeChanged && edges.length > 0 && (isDraggingNodeRef.current || !nodePositionsChanged);
+                               !viewModeChanged && !imageBoundaryChanged && edges.length > 0 && (isDraggingNodeRef.current || !nodePositionsChanged);
     
     if (shouldTakeFastPath) {
       const pathReason = isDraggingNodeRef.current ? '(DRAG - ignoring position diff)' : '(positions unchanged)';
@@ -1807,6 +1825,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
             const graphNode = graph.nodes.find((n: any) => n.uuid === prevNode.id || n.id === prevNode.id);
             if (!graphNode) return prevNode;
             
+            const hasImages = showNodeImages && (graphNode.images?.length || 0) > 0;
             return {
               ...prevNode,
               data: {
@@ -1822,7 +1841,8 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
                 case: graphNode.case,
                 layout: graphNode.layout,
                 url: graphNode.url,
-                images: graphNode.images
+                images: graphNode.images,
+                showNodeImages: hasImages
               }
             };
           });
@@ -1996,7 +2016,8 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       return; // Skip full toFlow rebuild
     }
     
-    const slowPathReason = sankeyModeChanged ? 'Sankey mode changed' : 
+    const slowPathReason = sankeyModeChanged ? 'Sankey mode changed' :
+                           imageViewChanged ? 'Image view changed' :
                            edgeCountChanged ? 'Edge count changed' :
                            nodeCountChanged ? 'Node count changed' :
                            edgeIdsChanged ? 'Edge IDs changed' :
@@ -2246,6 +2267,34 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       });
     }
     
+    // Apply image view: only enlarge nodes that actually have images
+    if (showNodeImages) {
+      nodesWithSelection = nodesWithSelection.map(node => {
+        const hasImages = node.data?.images && node.data.images.length > 0;
+        if (hasImages && !useSankeyView) {
+          return {
+            ...node,
+            style: {
+              ...node.style,
+              width: IMAGE_VIEW_NODE_WIDTH,
+              height: IMAGE_VIEW_NODE_HEIGHT
+            },
+            data: {
+              ...node.data,
+              sankeyWidth: IMAGE_VIEW_NODE_WIDTH,
+              sankeyHeight: IMAGE_VIEW_NODE_HEIGHT,
+              showNodeImages: true
+            }
+          };
+        } else if (hasImages) {
+          // Sankey on — just pass the flag, Sankey controls dimensions
+          return { ...node, data: { ...node.data, showNodeImages: true } };
+        }
+        // No images — leave node completely unchanged (normal size, normal layout)
+        return node;
+      });
+    }
+    
     // Add edge width calculation to each edge
     const edgesWithWidth = newEdges.map(edge => {
       const isSelected = selectedEdgeIds.has(edge.id);
@@ -2429,7 +2478,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       isSyncingRef.current = false;
       console.log('Reset isSyncingRef to false');
     }, 100);
-  }, [graph, setNodes, setEdges, handleUpdateNode, handleDeleteNode, handleUpdateEdge, handleDeleteEdge, handleReconnect, onDoubleClickNode, onDoubleClickEdge, onSelectEdge, effectiveActiveTabId, tabs, useSankeyView, effectiveWhatIfDSL]);
+  }, [graph, setNodes, setEdges, handleUpdateNode, handleDeleteNode, handleUpdateEdge, handleDeleteEdge, handleReconnect, onDoubleClickNode, onDoubleClickEdge, onSelectEdge, effectiveActiveTabId, tabs, useSankeyView, showNodeImages, effectiveWhatIfDSL]);
 
   // Compute face directions based on edge connections (for curved node outlines)
   // Runs after edges have been auto-routed and have sourceFace/targetFace assigned

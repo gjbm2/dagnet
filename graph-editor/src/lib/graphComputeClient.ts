@@ -310,6 +310,10 @@ export class GraphComputeClient {
           const asAt = f?.as_at_date || f?.retrieved_at_date || f?.date;
           if (!asAt) continue;
           const points: any[] = Array.isArray(f?.data_points) ? f.data_points : [];
+          // Skip empty frames (days before any snapshot was retrieved).
+          // Including them inflates the point count and hides chart symbols,
+          // making sparse data (e.g. a single snapshot) invisible.
+          if (points.length === 0) continue;
           let xTotal = 0;
           let yTotal = 0;
           for (const p of points) {

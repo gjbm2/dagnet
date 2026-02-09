@@ -236,6 +236,133 @@ describe('GraphComputeClient - Environment Detection', () => {
   });
 });
 
+// ============================================================
+// Cohort Maturity Normalisation
+// ============================================================
+
+describe('GraphComputeClient - Cohort Maturity Normalisation', () => {
+  const client = new GraphComputeClient('http://localhost:9000', true);
+
+  /**
+   * Helper: build a minimal backend response shaped like the Python
+   * cohort_maturity derivation output (per-scenario, per-subject blocks
+   * wrapping the derivation result).
+   */
+  function buildRawResponse(frames: any[], scenarioId = 'sc1', subjectId = 'subj1') {
+    return {
+      success: true,
+      scenarios: [
+        {
+          scenario_id: scenarioId,
+          subjects: [
+            {
+              subject_id: subjectId,
+              success: true,
+              result: {
+                analysis_type: 'cohort_maturity',
+                frames,
+                anchor_range: { from: '2025-10-01', to: '2025-10-01' },
+                sweep_range: { from: '2025-10-01', to: '2025-11-01' },
+                cohorts_analysed: 1,
+              },
+            },
+          ],
+        },
+      ],
+    };
+  }
+
+  function buildRequest(queryDsl = 'from(a).to(b).cohort(1-Oct-25,31-Oct-25)') {
+    return {
+      analysis_type: 'cohort_maturity',
+      query_dsl: queryDsl,
+      scenarios: [
+        {
+          scenario_id: 'sc1',
+          scenario_name: 'Baseline',
+          snapshot_subjects: [{ subject_id: 'subj1', subject_label: 'a → b' }],
+        },
+      ],
+    };
+  }
+
+  it('should produce a datapoint from a single snapshot (skip empty frames)', () => {
+    // Simulate sweep grid: 3 days of empty frames (before retrieval),
+    // then 1 frame with actual data.
+    const frames = [
+      { as_at_date: '2025-10-01', data_points: [], total_y: 0 },
+      { as_at_date: '2025-10-02', data_points: [], total_y: 0 },
+      { as_at_date: '2025-10-03', data_points: [], total_y: 0 },
+      {
+        as_at_date: '2025-10-04',
+        data_points: [{ anchor_day: '2025-10-01', y: 42, x: 100, a: 1000, rate: 0.42 }],
+        total_y: 42,
+      },
+    ];
+
+    const raw = buildRawResponse(frames);
+    const request = buildRequest();
+
+    // Access private method via bracket notation (runtime JS has no private)
+    const result = (client as any).normaliseSnapshotCohortMaturityResponse(raw, request);
+
+    expect(result).not.toBeNull();
+    expect(result!.success).toBe(true);
+
+    const data = result!.result!.data;
+    // Only the frame with data_points should survive normalisation
+    expect(data).toHaveLength(1);
+    expect(data[0].as_at_date).toBe('2025-10-04');
+    expect(data[0].x).toBe(100);
+    expect(data[0].y).toBe(42);
+    expect(data[0].rate).toBeCloseTo(0.42);
+  });
+
+  it('should return empty result when ALL frames are empty', () => {
+    const frames = [
+      { as_at_date: '2025-10-01', data_points: [], total_y: 0 },
+      { as_at_date: '2025-10-02', data_points: [], total_y: 0 },
+    ];
+
+    const raw = buildRawResponse(frames);
+    const request = buildRequest();
+
+    const result = (client as any).normaliseSnapshotCohortMaturityResponse(raw, request);
+
+    expect(result).not.toBeNull();
+    expect(result!.result!.metadata!.empty).toBe(true);
+    expect(result!.result!.data).toHaveLength(0);
+  });
+
+  it('should keep all non-empty frames for multi-snapshot maturity curve', () => {
+    const frames = [
+      { as_at_date: '2025-10-01', data_points: [], total_y: 0 },
+      {
+        as_at_date: '2025-10-10',
+        data_points: [{ anchor_day: '2025-10-01', y: 10, x: 100, a: 1000, rate: 0.10 }],
+        total_y: 10,
+      },
+      {
+        as_at_date: '2025-10-20',
+        data_points: [{ anchor_day: '2025-10-01', y: 30, x: 100, a: 1000, rate: 0.30 }],
+        total_y: 30,
+      },
+    ];
+
+    const raw = buildRawResponse(frames);
+    const request = buildRequest();
+
+    const result = (client as any).normaliseSnapshotCohortMaturityResponse(raw, request);
+
+    const data = result!.result!.data;
+    expect(data).toHaveLength(2);
+    expect(data[0].as_at_date).toBe('2025-10-10');
+    expect(data[0].rate).toBeCloseTo(0.10);
+    expect(data[1].as_at_date).toBe('2025-10-20');
+    expect(data[1].rate).toBeCloseTo(0.30);
+  });
+});
+
 describe('GraphComputeClient - Performance', () => {
   const client = new GraphComputeClient('http://localhost:9000', true);
 

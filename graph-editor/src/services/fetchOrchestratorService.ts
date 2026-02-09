@@ -116,6 +116,10 @@ class FetchOrchestratorService {
       if (!simulate) setGraph(g);
     };
 
+    // Shared retrieval-batch timestamp for all items in this plan execution
+    // (key-fixes.md §2.1 — atomic retrieval events).
+    const retrievalBatchAt = new Date();
+
     const executedItemKeys: string[] = [];
     const skippedCoveredItemKeys: string[] = [];
     const skippedUnfetchableItemKeys: string[] = [];
@@ -145,6 +149,7 @@ class FetchOrchestratorService {
             bustCache,
             currentDSL: plan.dsl,
             dontExecuteHttp: simulate,
+            retrievalBatchAt,
           } as any);
         } else {
           await dataOperationsService.getFromSource({
@@ -162,6 +167,7 @@ class FetchOrchestratorService {
             // Plan interpreter: execute exactly these windows.
             skipCohortBounding: true,
             overrideFetchWindows: item.windows.map((w) => ({ start: w.start, end: w.end })),
+            retrievalBatchAt,
           } as any);
         }
         executedItemKeys.push(item.itemKey);
