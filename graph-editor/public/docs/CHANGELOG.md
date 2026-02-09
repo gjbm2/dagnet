@@ -1,4 +1,11 @@
 # DagNet Release Notes
+## Version 1.5.1b
+**Released:** 9-Feb-26
+
+Various sig mapping fixes
+
+---
+
 ## Version 1.4.15b
 **Released:** 9-Feb-26
 
