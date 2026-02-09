@@ -237,6 +237,16 @@ export class GraphComputeClient {
       type ScenarioSubjectBlock = { scenario_id: string; subject_id: string; result: any };
       const blocks: ScenarioSubjectBlock[] = [];
 
+      // Cohort maturity epoch stitching:
+      // Frontend may send multiple epoch-specific snapshot_subjects per logical subject.
+      // Epoch subjects are encoded as "<baseId>::epoch:<n>" and must be stitched back
+      // into a single curve for charting by collapsing subject_id to baseId.
+      const collapseEpochSubjectId = (id: string): string => {
+        const s = String(id || '');
+        const idx = s.indexOf('::epoch:');
+        return idx >= 0 ? s.slice(0, idx) : s;
+      };
+
       // Multi-scenario snapshot shape: { success, scenarios: [{scenario_id, subjects:[{subject_id, success, result}]}] }
       if (raw && typeof raw === 'object' && Array.isArray(raw.scenarios)) {
         for (const sc of raw.scenarios) {
@@ -244,7 +254,7 @@ export class GraphComputeClient {
           if (!scenarioId || !Array.isArray(sc?.subjects)) continue;
           for (const sub of sc.subjects) {
             if (sub?.success !== true) continue;
-            blocks.push({ scenario_id: scenarioId, subject_id: sub?.subject_id || 'subject', result: sub?.result });
+            blocks.push({ scenario_id: scenarioId, subject_id: collapseEpochSubjectId(sub?.subject_id || 'subject'), result: sub?.result });
           }
         }
       } else if (raw && typeof raw === 'object' && Array.isArray(raw.subjects)) {
@@ -252,12 +262,12 @@ export class GraphComputeClient {
         const scenarioId = raw.scenario_id || request?.scenarios?.[0]?.scenario_id || 'base';
         for (const sub of raw.subjects) {
           if (sub?.success !== true) continue;
-          blocks.push({ scenario_id: scenarioId, subject_id: sub?.subject_id || 'subject', result: sub?.result });
+          blocks.push({ scenario_id: scenarioId, subject_id: collapseEpochSubjectId(sub?.subject_id || 'subject'), result: sub?.result });
         }
       } else if (raw && typeof raw === 'object' && raw.result && isCohortMaturityResult(raw.result)) {
         // Single subject flattened shape: { success, scenario_id, subject_id, result: {...frames...} }
         const scenarioId = raw.scenario_id || request?.scenarios?.[0]?.scenario_id || 'base';
-        const subjectId = raw.subject_id || 'subject';
+        const subjectId = collapseEpochSubjectId(raw.subject_id || 'subject');
         blocks.push({ scenario_id: scenarioId, subject_id: subjectId, result: raw.result });
       } else if (raw && typeof raw === 'object' && isCohortMaturityResult(raw)) {
         // Extremely flattened: { analysis_type, frames, ... } (rare)
@@ -283,8 +293,9 @@ export class GraphComputeClient {
       }
 
       // Aggregate to tabular rows for charting:
-      // One row per (scenario_id, subject_id, as_at_date)
-      const data: Array<Record<string, any>> = [];
+      // One row per (scenario_id, subject_id, as_at_date).
+      // If epochs overlap (should not happen), later rows overwrite deterministically.
+      const dataByKey = new Map<string, Record<string, any>>();
 
       // Prefer metadata from the first valid block.
       const firstMeta = (() => {
@@ -328,7 +339,7 @@ export class GraphComputeClient {
               asAt, pointsCount: points.length, xTotal, yTotal, rate,
             });
           }
-          data.push({
+          const row = {
             analysis_type: 'cohort_maturity',
             scenario_id: b.scenario_id,
             subject_id: b.subject_id,
@@ -336,9 +347,22 @@ export class GraphComputeClient {
             x: xTotal,
             y: yTotal,
             rate,
-          });
+          } as Record<string, any>;
+          const k = `${b.scenario_id}||${b.subject_id}||${asAt}`;
+          dataByKey.set(k, row);
         }
       }
+
+      const data: Array<Record<string, any>> = Array.from(dataByKey.values())
+        .sort((a, b) => {
+          const sa = String(a.scenario_id || '');
+          const sb = String(b.scenario_id || '');
+          if (sa !== sb) return sa.localeCompare(sb);
+          const ua = String(a.subject_id || '');
+          const ub = String(b.subject_id || '');
+          if (ua !== ub) return ua.localeCompare(ub);
+          return String(a.as_at_date || '').localeCompare(String(b.as_at_date || ''));
+        });
 
       if (data.length === 0) {
         // Return a proper empty cohort maturity result (not null) so the chart
@@ -378,7 +402,7 @@ export class GraphComputeClient {
       for (const sc of request.scenarios || []) {
         for (const subj of sc.snapshot_subjects || []) {
           if (subj.subject_label) {
-            subjectLabelLookup.set(subj.subject_id, subj.subject_label);
+            subjectLabelLookup.set(collapseEpochSubjectId(subj.subject_id), subj.subject_label);
           }
         }
       }

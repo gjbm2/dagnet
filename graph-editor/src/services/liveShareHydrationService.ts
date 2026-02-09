@@ -2,6 +2,7 @@ import type { Graph } from '../types';
 import { db } from '../db/appDatabase';
 import { fileRegistry } from '../contexts/TabContext';
 import { getItemsForFromFileLoad } from './fetchDataService';
+import { collectGraphDependencies } from '../lib/dependencyClosure';
 
 type Identity = { repo: string; branch: string };
 
@@ -36,11 +37,19 @@ export async function waitForLiveShareGraphDeps(args: {
   const { graph, identity, timeoutMs = 12_000 } = args;
 
   const items = getItemsForFromFileLoad(graph as any);
+  const deps = collectGraphDependencies(graph as any);
+  const eventFileIds = Array.from(deps.eventIds).map((id) => `event-${id}`);
+
   const fileIds = Array.from(
     new Set(
-      items
-        .map(i => fileIdForFetchItem(i as any))
-        .filter((x): x is string => typeof x === 'string' && x.trim().length > 0)
+      [
+        ...items
+          .map(i => fileIdForFetchItem(i as any))
+          .filter((x): x is string => typeof x === 'string' && x.trim().length > 0),
+        ...eventFileIds,
+        // Provider resolution depends on connections.yaml when present (best-effort barrier).
+        'connections-connections',
+      ].filter(Boolean)
     )
   );
 

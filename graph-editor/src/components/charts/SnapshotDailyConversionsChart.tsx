@@ -16,7 +16,7 @@ import React, { useMemo, useState } from 'react';
 import ReactECharts from 'echarts-for-react';
 import { ExternalLink, Download } from 'lucide-react';
 import type { AnalysisResult } from '../../lib/graphComputeClient';
-import { chartOperationsService, type SnapshotSubjectTemplateV1 } from '../../services/chartOperationsService';
+import { chartOperationsService } from '../../services/chartOperationsService';
 import { analysisResultToCsv } from '../../services/analysisExportService';
 import { downloadTextFile } from '../../services/downloadService';
 
@@ -27,8 +27,6 @@ interface Props {
   /** When true, the chart stretches to fill its parent container via CSS. */
   fillHeight?: boolean;
   queryDsl?: string;
-  scenarioDslSubtitleById?: Record<string, string>;
-  snapshotSubjectTemplatesByScenarioId?: Record<string, SnapshotSubjectTemplateV1[]>;
   source?: {
     parent_file_id?: string;
     parent_tab_id?: string;
@@ -389,9 +387,6 @@ export function SnapshotDailyConversionsChart({ result, visibleScenarioIds, heig
                       ? `Chart — ${queryDsl}`
                       : 'Chart — Daily Conversions',
                   source,
-                  scenarioDslSubtitleById: (arguments as any)?.[0]?.scenarioDslSubtitleById,
-                  hideCurrent: !visibleScenarioIds.includes('current'),
-                  snapshotSubjectTemplatesByScenarioId: (arguments as any)?.[0]?.snapshotSubjectTemplatesByScenarioId,
                 });
               }}
               style={{

@@ -12,6 +12,8 @@ export interface SignatureLinksContext {
   dbParamId?: string;
   /** The current core_hash, if already computed by the caller */
   currentCoreHash?: string;
+  /** Prefer displaying cohort/window rows for the current DSL mode */
+  desiredQueryMode?: 'cohort' | 'window';
   /** Which slot on the edge: 'p', 'cost_gbp', 'labour_cost', or 'conditional_p:N' */
   paramSlot?: string;
 }

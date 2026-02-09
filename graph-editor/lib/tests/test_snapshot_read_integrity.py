@@ -292,13 +292,15 @@ class TestReadIntegrity:
         assert xs == [500, 600]
         assert ys == [50, 60]
 
-    def test_ri007_mode_only_selector_matches_contexted_slices(self):
+    def test_ri007_mode_only_selector_is_uncontexted_only(self):
         """
-        RI-007: mode_only_selector_matches_contexted_slices
+        RI-007: mode_only_selector_is_uncontexted_only
 
-        When the frontend is uncontexted (no explicit context dims) but the DB contains only
-        contexted MECE slices, it may send a mode-only selector like "cohort()" to avoid
-        mixing window/cohort modes. Backend must interpret this as "any context, this mode".
+        Backend selector contract:
+        - "cohort()" / "window()" MUST mean uncontexted-only (no context/case dims),
+          not "any context in this mode".
+
+        Broad reads across all slices remain available via the empty selector "".
         """
         res = query_virtual_snapshot(
             param_id=self.param_id,
@@ -310,7 +312,9 @@ class TestReadIntegrity:
             include_equivalents=True,
         )
         assert res["success"] is True
-        assert res["count"] > 0
+        # Only the uncontexted cohort() series should match (2 anchor days in range).
+        assert res["count"] == 2
+        assert all(isinstance(r.get("slice_key"), str) and r["slice_key"].startswith("cohort(") for r in res.get("rows", []))
 
     def test_ri008_inverted_anchor_bounds_are_treated_as_unordered(self):
         """
@@ -763,6 +767,343 @@ class TestReadIntegrity:
         assert fam["family_size"] == 2
         # Total row_count across both signatures: 2 + 1 = 3
         assert fam["overall"]["row_count"] == 3
+
+
+class TestContextEpochs_SliceSelectorContract:
+    """
+    Integration tests for the slice selector contract required by context epochs.
+
+    These are DB-backed (skip when DB_CONNECTION is not configured) and aim to
+    prevent regressions in the selector semantics that epoch planning depends on.
+    """
+
+    @pytest.fixture(autouse=True)
+    def cleanup(self):
+        yield
+        cleanup_test_data()
+
+    def test_ce001_cohort_mode_selector_is_uncontexted_only_in_query_snapshots(self):
+        pid = f'{TEST_PREFIX}ce001'
+        sig = '{"c":"ce001","x":{}}'
+        h = short_core_hash_from_canonical_signature(sig)
+
+        append_snapshots_for_test(
+            param_id=pid, canonical_signature=sig,
+            slice_key='cohort(1-Oct-25:1-Oct-25)',
+            retrieved_at=datetime(2025, 10, 10, 12, 0, 0),
+            rows=[{'anchor_day': '2025-10-01', 'X': 100, 'Y': 10}],
+        )
+        append_snapshots_for_test(
+            param_id=pid, canonical_signature=sig,
+            slice_key='context(channel:google).cohort(1-Oct-25:1-Oct-25)',
+            retrieved_at=datetime(2025, 10, 10, 12, 0, 0),
+            rows=[{'anchor_day': '2025-10-01', 'X': 50, 'Y': 5}],
+        )
+
+        rows = query_snapshots(param_id=pid, core_hash=h, slice_keys=['cohort()'], include_equivalents=False)
+        assert len(rows) == 1
+        assert rows[0]['slice_key'].startswith('cohort(')
+
+    def test_ce002_cohort_mode_selector_is_uncontexted_only_in_sweep_query(self):
+        pid = f'{TEST_PREFIX}ce002'
+        sig = '{"c":"ce002","x":{}}'
+        h = short_core_hash_from_canonical_signature(sig)
+
+        append_snapshots_for_test(
+            param_id=pid, canonical_signature=sig,
+            slice_key='cohort(1-Oct-25:1-Oct-25)',
+            retrieved_at=datetime(2025, 10, 10, 12, 0, 0),
+            rows=[{'anchor_day': '2025-10-01', 'X': 100, 'Y': 10}],
+        )
+        append_snapshots_for_test(
+            param_id=pid, canonical_signature=sig,
+            slice_key='context(channel:google).cohort(1-Oct-25:1-Oct-25)',
+            retrieved_at=datetime(2025, 10, 10, 12, 0, 0),
+            rows=[{'anchor_day': '2025-10-01', 'X': 50, 'Y': 5}],
+        )
+
+        rows = query_snapshots_for_sweep(
+            param_id=pid,
+            core_hash=h,
+            slice_keys=['cohort()'],
+            anchor_from=date(2025, 10, 1),
+            anchor_to=date(2025, 10, 1),
+            sweep_from=date(2025, 10, 10),
+            sweep_to=date(2025, 10, 10),
+            include_equivalents=False,
+            limit=10000,
+        )
+        assert len(rows) == 1
+        assert rows[0]['slice_key'].startswith('cohort(')
+
+    def test_ce003_explicit_context_family_selector_matches_only_that_family(self):
+        pid = f'{TEST_PREFIX}ce003'
+        sig = '{"c":"ce003","x":{}}'
+        h = short_core_hash_from_canonical_signature(sig)
+
+        append_snapshots_for_test(
+            param_id=pid, canonical_signature=sig,
+            slice_key='context(channel:google).cohort(1-Oct-25:1-Oct-25)',
+            retrieved_at=datetime(2025, 10, 10, 12, 0, 0),
+            rows=[{'anchor_day': '2025-10-01', 'X': 50, 'Y': 5}],
+        )
+        append_snapshots_for_test(
+            param_id=pid, canonical_signature=sig,
+            slice_key='context(channel:facebook).cohort(1-Oct-25:1-Oct-25)',
+            retrieved_at=datetime(2025, 10, 10, 12, 0, 0),
+            rows=[{'anchor_day': '2025-10-01', 'X': 60, 'Y': 6}],
+        )
+
+        rows = query_snapshots(
+            param_id=pid, core_hash=h,
+            slice_keys=['context(channel:google).cohort()'],
+            include_equivalents=False,
+        )
+        assert len(rows) == 1
+        assert rows[0]['slice_key'].startswith('context(channel:google).cohort(')
+
+    def test_ce004_empty_selector_is_broad_includes_all_slices(self):
+        pid = f'{TEST_PREFIX}ce004'
+        sig = '{"c":"ce004","x":{}}'
+        h = short_core_hash_from_canonical_signature(sig)
+
+        append_snapshots_for_test(
+            param_id=pid, canonical_signature=sig,
+            slice_key='cohort(1-Oct-25:1-Oct-25)',
+            retrieved_at=datetime(2025, 10, 10, 12, 0, 0),
+            rows=[{'anchor_day': '2025-10-01', 'X': 100, 'Y': 10}],
+        )
+        append_snapshots_for_test(
+            param_id=pid, canonical_signature=sig,
+            slice_key='context(channel:google).cohort(1-Oct-25:1-Oct-25)',
+            retrieved_at=datetime(2025, 10, 10, 12, 0, 0),
+            rows=[{'anchor_day': '2025-10-01', 'X': 50, 'Y': 5}],
+        )
+
+        rows = query_snapshots(param_id=pid, core_hash=h, slice_keys=[''], include_equivalents=False)
+        assert len(rows) == 2
+
+    def test_ce005_gap_slice_key_matches_no_rows(self):
+        pid = f'{TEST_PREFIX}ce005'
+        sig = '{"c":"ce005","x":{}}'
+        h = short_core_hash_from_canonical_signature(sig)
+
+        append_snapshots_for_test(
+            param_id=pid, canonical_signature=sig,
+            slice_key='cohort(1-Oct-25:1-Oct-25)',
+            retrieved_at=datetime(2025, 10, 10, 12, 0, 0),
+            rows=[{'anchor_day': '2025-10-01', 'X': 100, 'Y': 10}],
+        )
+
+        rows = query_snapshots(param_id=pid, core_hash=h, slice_keys=['__epoch_gap__'], include_equivalents=False)
+        assert rows == []
+
+    def test_ce006_retrievals_include_summary_reports_slice_keys(self):
+        pid = f'{TEST_PREFIX}ce006'
+        sig = '{"c":"ce006","x":{}}'
+        h = short_core_hash_from_canonical_signature(sig)
+
+        append_snapshots_for_test(
+            param_id=pid, canonical_signature=sig,
+            slice_key='cohort(1-Oct-25:2-Oct-25)',
+            retrieved_at=datetime(2025, 10, 10, 12, 0, 0),
+            rows=[{'anchor_day': '2025-10-01', 'X': 1, 'Y': 1}],
+        )
+        append_snapshots_for_test(
+            param_id=pid, canonical_signature=sig,
+            slice_key='context(channel:google).cohort(1-Oct-25:2-Oct-25)',
+            retrieved_at=datetime(2025, 10, 10, 12, 0, 0),
+            rows=[{'anchor_day': '2025-10-02', 'X': 2, 'Y': 2}],
+        )
+
+        res = query_snapshot_retrievals(
+            param_id=pid,
+            core_hash=h,
+            include_equivalents=False,
+            include_summary=True,
+            limit=10,
+        )
+        assert res["success"] is True
+        # With include_summary=True, the backend returns one row per (retrieved_at, slice_key),
+        # so count reflects summary row count rather than distinct retrieved_at timestamps.
+        assert len(set(res["retrieved_at"])) == 1
+        assert isinstance(res.get("summary"), list)
+        assert {s["slice_key"] for s in res["summary"]} == {
+            'cohort(1-Oct-25:2-Oct-25)',
+            'context(channel:google).cohort(1-Oct-25:2-Oct-25)',
+        }
+
+    def test_ce007_within_day_multiple_retrieved_at_are_distinct(self):
+        pid = f'{TEST_PREFIX}ce007'
+        sig = '{"c":"ce007","x":{}}'
+        h = short_core_hash_from_canonical_signature(sig)
+
+        append_snapshots_for_test(
+            param_id=pid, canonical_signature=sig,
+            slice_key='cohort(1-Oct-25:1-Oct-25)',
+            retrieved_at=datetime(2025, 10, 10, 9, 0, 0),
+            rows=[{'anchor_day': '2025-10-01', 'X': 1, 'Y': 1}],
+        )
+        append_snapshots_for_test(
+            param_id=pid, canonical_signature=sig,
+            slice_key='cohort(1-Oct-25:1-Oct-25)',
+            retrieved_at=datetime(2025, 10, 10, 18, 0, 0),
+            rows=[{'anchor_day': '2025-10-01', 'X': 2, 'Y': 2}],
+        )
+
+        res = query_snapshot_retrievals(
+            param_id=pid,
+            core_hash=h,
+            include_equivalents=False,
+            include_summary=True,
+            limit=10,
+        )
+        assert res["success"] is True
+        assert res["count"] == 2
+        assert res["retrieved_at"][0].startswith("2025-10-10T18")
+        assert res["retrieved_at"][1].startswith("2025-10-10T09")
+
+    def test_ce008_inventory_v2_slice_filter_respects_exact_uncontexted_selector(self):
+        pid = f'{TEST_PREFIX}ce008'
+        sig = '{"c":"ce008","x":{}}'
+
+        append_snapshots_for_test(
+            param_id=pid, canonical_signature=sig,
+            slice_key='cohort(1-Oct-25:1-Oct-25)',
+            retrieved_at=datetime(2025, 10, 10, 12, 0, 0),
+            rows=[{'anchor_day': '2025-10-01', 'X': 1, 'Y': 1}],
+        )
+        append_snapshots_for_test(
+            param_id=pid, canonical_signature=sig,
+            slice_key='context(channel:google).cohort(1-Oct-25:1-Oct-25)',
+            retrieved_at=datetime(2025, 10, 10, 12, 0, 0),
+            rows=[{'anchor_day': '2025-10-01', 'X': 2, 'Y': 2}],
+        )
+
+        inv = get_batch_inventory_v2(
+            param_ids=[pid],
+            current_signatures={pid: sig},
+            slice_keys_by_param={pid: ['cohort()']},
+            include_equivalents=False,
+            limit_families_per_param=10,
+            limit_slices_per_family=50,
+        )
+        fam = inv[pid]["families"][0]
+        slice_keys = {s["slice_key"] for s in fam.get("by_slice_key") or []}
+        # Only uncontexted cohort family variants should be present.
+        assert all(sk.startswith("cohort(") for sk in slice_keys)
+
+    def test_ce009_sweep_query_with_explicit_partition_avoids_double_counting(self):
+        """
+        If both an uncontexted total and a context partition exist, explicit slice selection
+        must allow choosing one regime without mixing.
+        """
+        pid = f'{TEST_PREFIX}ce009'
+        sig = '{"c":"ce009","x":{}}'
+        h = short_core_hash_from_canonical_signature(sig)
+
+        # Same retrieval day: uncontexted total (X=100,Y=10) AND MECE partition (two slices summing to X=100,Y=10).
+        append_snapshots_for_test(
+            param_id=pid, canonical_signature=sig,
+            slice_key='cohort(1-Oct-25:1-Oct-25)',
+            retrieved_at=datetime(2025, 10, 10, 12, 0, 0),
+            rows=[{'anchor_day': '2025-10-01', 'X': 100, 'Y': 10}],
+        )
+        append_snapshots_for_test(
+            param_id=pid, canonical_signature=sig,
+            slice_key='context(channel:a).cohort(1-Oct-25:1-Oct-25)',
+            retrieved_at=datetime(2025, 10, 10, 12, 0, 0),
+            rows=[{'anchor_day': '2025-10-01', 'X': 40, 'Y': 4}],
+        )
+        append_snapshots_for_test(
+            param_id=pid, canonical_signature=sig,
+            slice_key='context(channel:b).cohort(1-Oct-25:1-Oct-25)',
+            retrieved_at=datetime(2025, 10, 10, 12, 0, 0),
+            rows=[{'anchor_day': '2025-10-01', 'X': 60, 'Y': 6}],
+        )
+
+        # Uncontexted-only: one row
+        rows_u = query_snapshots_for_sweep(
+            param_id=pid, core_hash=h, slice_keys=['cohort()'],
+            anchor_from=date(2025, 10, 1), anchor_to=date(2025, 10, 1),
+            sweep_from=date(2025, 10, 10), sweep_to=date(2025, 10, 10),
+            include_equivalents=False,
+        )
+        assert len(rows_u) == 1
+        assert rows_u[0]["x"] == 100
+
+        # Explicit partition: two rows (caller sums downstream if desired)
+        rows_p = query_snapshots_for_sweep(
+            param_id=pid, core_hash=h,
+            slice_keys=['context(channel:a).cohort()', 'context(channel:b).cohort()'],
+            anchor_from=date(2025, 10, 1), anchor_to=date(2025, 10, 1),
+            sweep_from=date(2025, 10, 10), sweep_to=date(2025, 10, 10),
+            include_equivalents=False,
+        )
+        assert len(rows_p) == 2
+        assert sum(r["x"] for r in rows_p) == 100
+
+    def test_ce010_broad_selector_returns_mixed_regimes(self):
+        """
+        Document the broad selector contract: [''] includes all slices (and therefore can mix regimes).
+        Epoch planning MUST NOT use this for cohort maturity.
+        """
+        pid = f'{TEST_PREFIX}ce010'
+        sig = '{"c":"ce010","x":{}}'
+        h = short_core_hash_from_canonical_signature(sig)
+
+        append_snapshots_for_test(
+            param_id=pid, canonical_signature=sig,
+            slice_key='cohort(1-Oct-25:1-Oct-25)',
+            retrieved_at=datetime(2025, 10, 10, 12, 0, 0),
+            rows=[{'anchor_day': '2025-10-01', 'X': 100, 'Y': 10}],
+        )
+        append_snapshots_for_test(
+            param_id=pid, canonical_signature=sig,
+            slice_key='context(channel:a).cohort(1-Oct-25:1-Oct-25)',
+            retrieved_at=datetime(2025, 10, 10, 12, 0, 0),
+            rows=[{'anchor_day': '2025-10-01', 'X': 40, 'Y': 4}],
+        )
+
+        rows = query_snapshots(param_id=pid, core_hash=h, slice_keys=[''], include_equivalents=False)
+        assert len(rows) == 2
+
+    def test_ce011_slice_key_normalisation_for_matching_is_args_insensitive(self):
+        pid = f'{TEST_PREFIX}ce011'
+        sig = '{"c":"ce011","x":{}}'
+        h = short_core_hash_from_canonical_signature(sig)
+
+        append_snapshots_for_test(
+            param_id=pid, canonical_signature=sig,
+            slice_key='context(channel:google).cohort(1-Oct-25:1-Oct-25)',
+            retrieved_at=datetime(2025, 10, 10, 12, 0, 0),
+            rows=[{'anchor_day': '2025-10-01', 'X': 1, 'Y': 1}],
+        )
+        rows = query_snapshots(
+            param_id=pid, core_hash=h,
+            slice_keys=['context(channel:google).cohort()'],
+            include_equivalents=False,
+        )
+        assert len(rows) == 1
+
+    def test_ce012_mode_mismatch_is_excluded_by_exact_family_selectors(self):
+        pid = f'{TEST_PREFIX}ce012'
+        sig = '{"c":"ce012","x":{}}'
+        h = short_core_hash_from_canonical_signature(sig)
+
+        append_snapshots_for_test(
+            param_id=pid, canonical_signature=sig,
+            slice_key='context(channel:google).window(1-Oct-25:1-Oct-25)',
+            retrieved_at=datetime(2025, 10, 10, 12, 0, 0),
+            rows=[{'anchor_day': '2025-10-01', 'X': 1, 'Y': 1}],
+        )
+        # Cohort selector should not match window slices.
+        rows = query_snapshots(
+            param_id=pid, core_hash=h,
+            slice_keys=['context(channel:google).cohort()'],
+            include_equivalents=False,
+        )
+        assert rows == []
 
 
 class TestTierC_BackendContract:

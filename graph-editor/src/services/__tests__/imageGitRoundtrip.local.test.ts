@@ -531,6 +531,9 @@ describe('Full simulated image roundtrip (mocked Octokit)', () => {
         getCommit: vi.fn().mockResolvedValue({
           data: { tree: { sha: 'base-tree-sha' } },
         }),
+        getTree: vi.fn().mockResolvedValue({
+          data: { tree: [{ path: 'nodes/images/test.png', type: 'blob' }] },
+        }),
         createBlob: vi.fn().mockImplementation(async (args: any) => {
           capturedBlobArgs = args;
           return { data: { sha: 'new-blob-sha' } };

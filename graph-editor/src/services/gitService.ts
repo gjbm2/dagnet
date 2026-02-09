@@ -567,11 +567,22 @@ class GitService {
         content?: string;
       }> = [];
 
+      // Build a set of paths that exist in the base tree (for delete validation)
+      const baseTreeResult = await this.octokit.git.getTree({
+        owner, repo, tree_sha: baseTreeSha, recursive: 'true'
+      });
+      const existingPaths = new Set(
+        baseTreeResult.data.tree.map((item: any) => item.path)
+      );
+
       for (const file of files) {
         if (file.delete) {
-          // Deletion: set sha to null to remove from tree
-          // Note: GitHub API requires we omit deleted files from tree creation
-          // We handle this by creating tree with base_tree and only including changes
+          // Only stage delete if the file actually exists in the remote tree.
+          // Deleting a file that doesn't exist causes GitHub 422 BadObjectState.
+          if (!existingPaths.has(file.path)) {
+            console.log(`🔵 GitService: Skipping DELETE (not in remote tree): ${file.path}`);
+            continue;
+          }
           treeEntries.push({
             path: file.path,
             mode: '100644',

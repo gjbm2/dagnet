@@ -172,6 +172,9 @@ export const SignatureLinksViewer: React.FC = () => {
       if (match) setSelectedGraphName(match.id);
     }
     if (context?.dbParamId) primary.setSelectedParamId(context.dbParamId);
+    if (context?.desiredQueryMode === 'cohort' || context?.desiredQueryMode === 'window') {
+      primary.setQueryModeFilter(context.desiredQueryMode);
+    }
   }, [context?.graphName, context?.graphId, context?.dbParamId, graphItems]);
 
   // ── Right pane state ─────────────────────────────────────────────────────

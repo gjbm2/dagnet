@@ -75,6 +75,24 @@ export async function refreshLiveShareToLatest(): Promise<LiveShareRefreshResult
     }
   }
 
+  // Overwrite-seed event definitions (required for deterministic signature computation).
+  if ((bundle as any).events) {
+    for (const [eventId, ev] of (bundle as any).events) {
+      const evFileId = `event-${eventId}`;
+      await fileRegistry.upsertFileClean(
+        evFileId,
+        'event' as any,
+        {
+          repository: bundle.identity.repo,
+          path: ev.path,
+          branch: bundle.identity.branch,
+        },
+        ev.data,
+        { sha: ev.sha, lastSynced: Date.now() }
+      );
+    }
+  }
+
   // Also overwrite-seed contexts + shared settings when present (share boot parity).
   if (bundle.contexts) {
     for (const [contextId, ctx] of bundle.contexts) {
@@ -104,6 +122,22 @@ export async function refreshLiveShareToLatest(): Promise<LiveShareRefreshResult
       },
       bundle.settings.data,
       { sha: bundle.settings.sha, lastSynced: Date.now() }
+    );
+  }
+
+  // Prefer repo connections.yaml for provider resolution if present in bundle.
+  if ((bundle as any).connections?.data) {
+    const c = (bundle as any).connections;
+    await fileRegistry.upsertFileClean(
+      'connections-connections',
+      'connections' as any,
+      {
+        repository: bundle.identity.repo,
+        path: c.path || 'connections.yaml',
+        branch: bundle.identity.branch,
+      },
+      c.data,
+      { sha: c.sha, lastSynced: Date.now() }
     );
   }
 

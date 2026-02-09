@@ -214,6 +214,66 @@ describe('GraphComputeClient - Schema Compliance', () => {
   });
 });
 
+describe('GraphComputeClient - Cohort maturity epoch stitching', () => {
+  it('collapses epoch subject_ids and stitches frames into one curve', async () => {
+    const client = new GraphComputeClient('http://localhost:9000', true);
+
+    const request: any = {
+      analysis_type: 'cohort_maturity',
+      query_dsl: 'from(A).to(B).cohort(1-Oct-25:3-Oct-25)',
+      scenarios: [{
+        scenario_id: 'base',
+        name: 'Base',
+        colour: '#000000',
+        visibility_mode: 'f+e',
+        graph: {},
+        snapshot_subjects: [
+          { subject_id: 's1::epoch:0', subject_label: 'A → B' },
+          { subject_id: 's1::epoch:1', subject_label: 'A → B' },
+        ],
+      }],
+    };
+
+    const raw: any = {
+      success: true,
+      scenario_id: 'base',
+      subjects: [
+        {
+          subject_id: 's1::epoch:0',
+          success: true,
+          result: {
+            analysis_type: 'cohort_maturity',
+            frames: [
+              { as_at_date: '2025-10-01', data_points: [{ anchor_day: '2025-10-01', x: 10, y: 1 }] },
+            ],
+          },
+        },
+        {
+          subject_id: 's1::epoch:1',
+          success: true,
+          result: {
+            analysis_type: 'cohort_maturity',
+            frames: [
+              { as_at_date: '2025-10-02', data_points: [{ anchor_day: '2025-10-01', x: 20, y: 2 }] },
+            ],
+          },
+        },
+      ],
+    };
+
+    const normalised = (client as any).normaliseSnapshotCohortMaturityResponse(raw, request);
+    expect(normalised).toBeDefined();
+    expect(normalised.success).toBe(true);
+    expect(normalised.result.analysis_type).toBe('cohort_maturity');
+
+    // Data rows should be stitched under the base subject_id 's1'.
+    const rows = normalised.result.data;
+    expect(rows).toHaveLength(2);
+    expect(new Set(rows.map((r: any) => r.subject_id))).toEqual(new Set(['s1']));
+    expect(rows.map((r: any) => r.as_at_date).sort()).toEqual(['2025-10-01', '2025-10-02']);
+  });
+});
+
 describe('GraphComputeClient - Environment Detection', () => {
   it('should use correct base URL for dev environment', () => {
     const devClient = new GraphComputeClient();

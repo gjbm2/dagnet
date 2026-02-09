@@ -180,12 +180,12 @@ The last 30 runs are kept. Older entries are pruned automatically.
 
 ### Auto-close behaviour
 
-After an automation run completes:
+After an automation run completes, the browser window **always** closes itself. The delay depends on the outcome:
 
-- **Clean run** (no errors, no warnings): the browser window closes itself after a 10-second delay. The logs are already persisted to IndexedDB before closing.
-- **Run with errors or warnings**: the browser window **stays open** so the operator can see the Session Log immediately. Logs are also persisted.
+- **Clean run** (no errors, no warnings): closes after **10 seconds**.
+- **Run with errors or warnings**: closes after a **12-hour grace period** so the operator can review the Session Log, but the window is guaranteed to be gone before the next day's scheduled run fires.
 
-This means on a normal day the scheduled browser window opens, runs, and closes itself — leaving the next day's trigger free to fire. If something went wrong, the window stays open as a visible signal.
+Logs are persisted to IndexedDB before any close, so the record is never lost. Use `dagnetAutomationLogs()` or `dagnetAutomationLogEntries("<runId>")` in the console to review past runs even after the window has closed.
 
 ---
 
@@ -207,11 +207,10 @@ This means on a normal day the scheduled browser window opens, runs, and closes 
   - Run `dagnetAutomationLogEntries("<runId>")` for the full log
   - Consider running interactively once to reproduce with full UI context
 
-- **Browser window stayed open and blocked the next scheduled run**
-  - This happens when a run had errors/warnings (window stays open for review)
-  - Close the window manually, or fix the underlying issue
+- **Browser window stayed open unexpectedly**
+  - On error/warning runs the window stays open for up to 12 hours for review, then closes itself
+  - Close it manually if you need to trigger a new run sooner
   - Check `dagnetAutomationLogs()` to see why the previous run had issues
-  - Consider setting `StartWhenAvailable` to `true` in Task Scheduler so missed runs catch up
 
 - **Browser window didn't close despite a clean run**
   - `window.close()` may be blocked outside `--app` mode; use the `--app=` flag (the setup script does this by default)

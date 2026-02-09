@@ -42,6 +42,24 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/**
+ * Wall-clock-aware sleep that is resilient to background-tab timer throttling.
+ *
+ * Browsers can clamp/suspend `setTimeout` in background tabs, so a single
+ * `sleep(12h)` may overshoot by hours. This function polls every `tickMs`
+ * (default 30 s) and re-checks `Date.now()` against a fixed deadline.
+ * Even if a tick is delayed, the very next tick that fires after the deadline
+ * will resolve immediately.
+ */
+async function sleepUntilDeadline(durationMs: number, tickMs = 30_000): Promise<void> {
+  if (durationMs <= 0) return;
+  const deadline = Date.now() + durationMs;
+  while (Date.now() < deadline) {
+    const remaining = deadline - Date.now();
+    await sleep(Math.min(tickMs, Math.max(remaining, 0)));
+  }
+}
+
 async function runAutomationStartCountdown(opts: {
   runId: string;
   totalSeconds: number;
@@ -100,7 +118,41 @@ async function runAutomationStartCountdown(opts: {
 function getURLDailyRetrieveAllStartDelayMs(): number {
   // Vitest should not spend 30 seconds waiting (and the "settling" problem is a real-app concern).
   if ((import.meta as any).env?.MODE === 'test') return 0;
+
+  // Playwright E2E: skip countdown to keep tests brisk.
+  if (typeof window !== 'undefined') {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('e2e') === '1') return 0;
+  }
+
   return 30_000;
+}
+
+/**
+ * How long to wait before auto-closing the browser window after automation.
+ *
+ * - Success: 10 seconds (quick close, nothing to review).
+ * - Non-success (warning/error/aborted): 12 hours grace period so the operator
+ *   can review logs, but the window still closes before the next day's
+ *   scheduled run fires (preventing stale windows blocking future runs).
+ *
+ * In Vitest (`MODE === 'test'`) the delay is 0 to keep tests fast.
+ * With `?e2e=1` (Playwright) the delay is 500 ms so E2E tests can assert the
+ * close without waiting real-world durations.
+ */
+function getAutomationCloseDelayMs(outcome: string): number {
+  // Vitest: instant close.
+  if ((import.meta as any).env?.MODE === 'test') return 0;
+
+  // Playwright E2E: very short delay so tests can assert without real waits.
+  if (typeof window !== 'undefined') {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('e2e') === '1') return 500;
+  }
+
+  // Production.
+  if (outcome === 'success') return 10_000;          // 10 seconds
+  return 12 * 60 * 60 * 1000;                        // 12 hours
 }
 
 function isTabContextInitDone(): boolean {
@@ -631,28 +683,32 @@ export function useURLDailyRetrieveAllQueue(): void {
             entries: runEntries,
           });
 
-          // Auto-close the browser window ONLY on a fully clean run.
-          // On errors/warnings the window stays open so the operator sees the problem.
-          if (outcome === 'success') {
-            sessionLogService.info(
-              'session',
-              'AUTOMATION_WINDOW_CLOSE',
-              'Automation completed cleanly — closing browser window in 10 seconds',
-              'Logs have been persisted to IndexedDB. Run dagnetAutomationLogs() in the console to review past runs.'
-            );
-            await sleep(10_000);
-            try {
-              window.close();
-            } catch {
-              // window.close() may be blocked outside --app mode; best-effort only.
-            }
-          } else {
-            sessionLogService.info(
-              'session',
-              'AUTOMATION_WINDOW_KEPT_OPEN',
-              `Automation finished with ${outcome} — keeping window open for review`,
-              'Logs have been persisted to IndexedDB. Run dagnetAutomationLogs() in the console to review past runs.'
-            );
+          // Auto-close the browser window after automation completes.
+          // Success: close quickly (10 s). Non-success: 12-hour grace period so the
+          // operator can review logs, but the window still closes before the next
+          // day's scheduled run fires.
+          const closeDelayMs = getAutomationCloseDelayMs(outcome);
+          const closeDelayLabel = outcome === 'success'
+            ? '10 seconds'
+            : `${Math.round(closeDelayMs / 60_000)} minutes`;
+
+          sessionLogService.info(
+            'session',
+            'AUTOMATION_WINDOW_CLOSE',
+            `Automation finished (${outcome}) — closing browser window in ${closeDelayLabel}`,
+            'Logs have been persisted to IndexedDB. Run dagnetAutomationLogs() in the console to review past runs.'
+          );
+
+          // Wall-clock wait: browsers aggressively throttle setTimeout in
+          // background tabs, so a bare `sleep(12h)` could take far longer.
+          // Instead, poll every 30 s and re-check Date.now() against a fixed
+          // deadline. Even if individual ticks are delayed, the next tick that
+          // fires will see the deadline has passed and break out immediately.
+          await sleepUntilDeadline(closeDelayMs);
+          try {
+            window.close();
+          } catch {
+            // window.close() may be blocked outside --app mode; best-effort only.
           }
         } catch (persistErr) {
           console.error('[useURLDailyRetrieveAllQueue] Failed to persist automation log:', persistErr);

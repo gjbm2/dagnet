@@ -537,7 +537,13 @@ function buildParameterPlanItem(
     conditionalIndex: raw.conditionalIndex,
     mode: isCohortQuery ? 'cohort' : 'window',
     sliceFamily: extractSliceDimensions(dsl),
-    querySignature: shouldFilterBySignature && typeof currentSignature === 'string' ? currentSignature : '',
+    // IMPORTANT:
+    // - Signature *checking* can be disabled (release safety), but some downstream consumers
+    //   (e.g. snapshot_subjects for snapshot DB lookups in share-live) still require the
+    //   execution-grade canonical signature to compute core_hash.
+    // - We only use signatures to *filter coverage* when shouldFilterBySignature is true,
+    //   but we always propagate the computed signature when provided.
+    querySignature: typeof currentSignature === 'string' && currentSignature.length > 0 ? currentSignature : '',
     classification,
     unfetchableReason,
     windows: classification === 'fetch' ? allWindows : [],

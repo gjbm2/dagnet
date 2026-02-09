@@ -70,6 +70,52 @@ class TestGracefulDegradation:
             assert result['success'] == False
             assert 'error' in result
             assert 'No snapshot data' in result['error']
+
+    def test_gd004_cohort_maturity_empty_epoch_is_success(self):
+        """
+        GD-004: cohort_maturity empty epoch is success.
+
+        Cohort maturity sweep queries may intentionally yield no rows for a planned epoch
+        (e.g. gap epochs, or early days before first retrieval). The per-scenario snapshot
+        handler must return a successful empty result block, not an error.
+        """
+        from api_handlers import handle_runner_analyze
+
+        with patch('snapshot_service.query_snapshots_for_sweep') as mock_sweep:
+            mock_sweep.return_value = []
+
+            req = {
+                "analysis_type": "cohort_maturity",
+                "query_dsl": "from(A).to(B).cohort(1-Oct-25:3-Oct-25).asat(3-Oct-25)",
+                "scenarios": [{
+                    "scenario_id": "base",
+                    "name": "Base",
+                    "colour": "#000000",
+                    "visibility_mode": "f+e",
+                    "graph": {},
+                    "snapshot_subjects": [{
+                        "subject_id": "s1::epoch:0",
+                        "param_id": "pytest-gd-param",
+                        "canonical_signature": '{"c":"gd","x":{}}',
+                        "core_hash": "hash",
+                        "read_mode": "cohort_maturity",
+                        "anchor_from": "2025-10-01",
+                        "anchor_to": "2025-10-03",
+                        "sweep_from": "2025-10-01",
+                        "sweep_to": "2025-10-01",
+                        "slice_keys": ["__epoch_gap__"],
+                        "target": {"targetId": "e1"},
+                    }],
+                }],
+            }
+
+            res = handle_runner_analyze(req)
+            assert res["success"] is True
+            # Single scenario + single subject is flattened by the handler.
+            assert "result" in res
+            result = res["result"]
+            assert result["analysis_type"] == "cohort_maturity"
+            assert isinstance(result.get("frames"), list)
     
     def test_health_check_db_unavailable(self):
         """
