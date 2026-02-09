@@ -153,6 +153,36 @@ class TestSliceAggregation:
         assert dp["x"] == 90  # 50 + 40
         assert dp["rate"] == pytest.approx(18 / 90, rel=1e-4)
 
+    def test_temporal_arg_variants_do_not_double_count(self):
+        """
+        Different stored slice_key strings can represent the same logical slice family
+        when they only differ in the arguments to cohort()/window().
+
+        Cohort maturity must apply "latest wins" across the *normalised* slice family,
+        otherwise it will accidentally sum variants and create non-sensical drops/rises.
+        """
+        rows = [
+            # Same anchor_day, same logical cohort() slice family, but stored under two
+            # different cohort(...) argument variants across retrieval days.
+            _row("2025-10-01", "2025-10-10T12:00:00+00:00", y=10, x=100, slice_key="cohort(1-Oct-25:5-Oct-25)"),
+            _row("2025-10-01", "2025-10-11T12:00:00+00:00", y=20, x=100, slice_key="cohort(-120d:)"),
+        ]
+
+        result = derive_cohort_maturity(rows)
+        assert [f["as_at_date"] for f in result["frames"]] == ["2025-10-10", "2025-10-11"]
+
+        # Day 1: only the first retrieval exists.
+        dp_10 = result["frames"][0]["data_points"][0]
+        assert dp_10["x"] == 100
+        assert dp_10["y"] == 10
+        assert dp_10["rate"] == pytest.approx(0.10)
+
+        # Day 2: latest wins across the logical cohort() family; must NOT sum both variants.
+        dp_11 = result["frames"][1]["data_points"][0]
+        assert dp_11["x"] == 100
+        assert dp_11["y"] == 20
+        assert dp_11["rate"] == pytest.approx(0.20)
+
 
 class TestAnchorRange:
     def test_anchor_range_in_result(self):

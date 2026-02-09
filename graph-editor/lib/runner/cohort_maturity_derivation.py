@@ -31,6 +31,8 @@ from collections import defaultdict
 from typing import List, Dict, Any, Optional, Tuple
 from datetime import date, datetime, timedelta, timezone
 
+from slice_key_normalisation import normalise_slice_key_for_matching
+
 
 def derive_cohort_maturity(
     rows: List[Dict[str, Any]],
@@ -250,7 +252,11 @@ def _parse_row(row: Dict[str, Any]) -> _ParsedRow:
 
     return _ParsedRow(
         anchor_day=anchor,
-        slice_key=row.get("slice_key") or "",
+        # IMPORTANT: normalise temporal args so different cohort()/window() argument
+        # variants collapse into the same logical slice family. Otherwise, cohort
+        # maturity will double-count the same slice family when multiple raw
+        # variants exist (e.g. cohort(11-Jan-26:24-Jan-26) vs cohort(-120d:)).
+        slice_key=normalise_slice_key_for_matching(row.get("slice_key") or ""),
         retrieved_at=retrieved,
         a=_int_or_zero(row.get("a") or row.get("A")),
         x=_int_or_zero(row.get("x") or row.get("X")),
