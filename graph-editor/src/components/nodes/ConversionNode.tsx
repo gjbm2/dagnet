@@ -16,9 +16,11 @@ import { ImageHoverPreview } from '../ImageHoverPreview';
 import { ImageLoupeView } from '../ImageLoupeView';
 import { ImageUploadModal } from '../ImageUploadModal';
 import { imageOperationsService } from '../../services/imageOperationsService';
+import { imageService } from '../../services/imageService';
 import { dataOperationsService } from '../../services/dataOperationsService';
 import { useCtrlKeyState } from '../../hooks/useCtrlKeyState';
-import { CONVEX_DEPTH, CONCAVE_DEPTH, HALO_WIDTH, DEFAULT_NODE_WIDTH, DEFAULT_NODE_HEIGHT, NODE_LABEL_FONT_SIZE, NODE_SECONDARY_FONT_SIZE, NODE_SMALL_FONT_SIZE, CASE_NODE_FONT_SIZE, CONVEX_HANDLE_OFFSET_MULTIPLIER, CONCAVE_HANDLE_OFFSET_MULTIPLIER, FLAT_HANDLE_OFFSET_MULTIPLIER } from '@/lib/nodeEdgeConstants';
+import { CONVEX_DEPTH, CONCAVE_DEPTH, HALO_WIDTH, DEFAULT_NODE_WIDTH, DEFAULT_NODE_HEIGHT, NODE_LABEL_FONT_SIZE, NODE_SECONDARY_FONT_SIZE, NODE_SMALL_FONT_SIZE, CASE_NODE_FONT_SIZE, CONVEX_HANDLE_OFFSET_MULTIPLIER, CONCAVE_HANDLE_OFFSET_MULTIPLIER, FLAT_HANDLE_OFFSET_MULTIPLIER, IMAGE_VIEW_LABEL_X, IMAGE_VIEW_LABEL_Y } from '@/lib/nodeEdgeConstants';
+import { Image as ImageIcon } from 'lucide-react';
 
 interface ConversionNodeData {
   uuid: string;
@@ -57,6 +59,7 @@ interface ConversionNodeData {
   sankeyWidth?: number;
   sankeyHeight?: number;
   useSankeyView?: boolean;
+  showNodeImages?: boolean;
   faceDirections?: {
     left: 'flat' | 'convex' | 'concave';
     right: 'flat' | 'convex' | 'concave';
@@ -86,6 +89,26 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
   const [showImageLoupe, setShowImageLoupe] = useState(false);
   const [showUploadModal, setShowUploadModal] = useState(false);
   const [imagePreviewPosition, setImagePreviewPosition] = useState({ x: 0, y: 0 });
+  
+  // Image view mode: load first image as blob URL
+  const [nodeImageUrl, setNodeImageUrl] = useState<string | null>(null);
+  const firstImage = data.showNodeImages && data.images?.[0] ? data.images[0] : null;
+  
+  useEffect(() => {
+    if (!firstImage) {
+      setNodeImageUrl(null);
+      return;
+    }
+    let cancelled = false;
+    imageService.getImageUrl(firstImage.image_id, firstImage.file_extension)
+      .then(url => { if (!cancelled && url) setNodeImageUrl(url); })
+      .catch(() => { if (!cancelled) setNodeImageUrl(null); });
+    return () => {
+      cancelled = true;
+      // Revoke when unmounting or image changes
+      imageService.revokeImageUrl(firstImage.image_id, firstImage.file_extension);
+    };
+  }, [firstImage?.image_id, firstImage?.file_extension]);
   
   // Check if user is currently connecting (creating a new edge)
   const isConnecting = useStore((state) => state.connectionNodeId !== null);
@@ -835,135 +858,210 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
         />
       )}
       
-      {/* Content wrapper */}
-      <div style={{
-        position: 'relative',
-        zIndex: 10, // Above images (z-index 5) so PMF warnings show on top
-        width: '100%',
-        height: '100%',
-        display: 'flex',
-        flexDirection: 'column',
-        justifyContent: 'center',
-        alignItems: 'center',
-        pointerEvents: 'none' // Allow handles to be clickable
-      }}>
-        {/* Terminal state symbols */}
-        
-        <div 
-          style={{ 
-            fontWeight: 'bold', 
-            marginBottom: '4px', 
-            fontSize: `${NODE_LABEL_FONT_SIZE}px`, 
-            cursor: 'pointer',
-            lineHeight: '1.2',
-            wordWrap: 'break-word',
-            overflowWrap: 'break-word',
-            hyphens: 'auto',
-            maxWidth: '100%',
-            paddingLeft: '12px',
-            paddingRight: '12px',
-            textAlign: 'center',
-            pointerEvents: 'auto' // Re-enable pointer events for interactive content
-          }}
-          onDoubleClick={handleDoubleClick}
-          title="Double-click to edit in properties panel"
-        >
-          {data.label}
-          {nodeOverrideCount > 0 && (
-            <span title={`${nodeOverrideCount} override${nodeOverrideCount > 1 ? 's' : ''} (auto-sync disabled)`}>
-              <ZapOff 
-                size={10} 
-                strokeWidth={2}
-                color="#000000"
-                style={{ 
-                  display: 'inline-block',
-                  verticalAlign: 'middle',
-                  marginLeft: '3px'
-                }}
-              />
+      {/* Content wrapper — image-card layout or standard centred layout */}
+      {data.showNodeImages ? (
+        <>
+          {/* Label above the node — position tuned via IMAGE_VIEW_LABEL_X/Y in nodeEdgeConstants.ts */}
+          <div
+            style={{
+              position: 'absolute',
+              top: `${IMAGE_VIEW_LABEL_Y}px`,
+              left: `${IMAGE_VIEW_LABEL_X}px`,
+              zIndex: 16,
+              pointerEvents: 'auto',
+              cursor: 'pointer',
+              maxWidth: `calc(100% - ${IMAGE_VIEW_LABEL_X * 2}px)`
+            }}
+            onDoubleClick={handleDoubleClick}
+            title="Double-click to edit in properties panel"
+          >
+            <span style={{
+              fontWeight: 500,
+              fontSize: `${NODE_LABEL_FONT_SIZE - 1}px`,
+              lineHeight: '1.2',
+              color: '#475569',
+              whiteSpace: 'nowrap',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              display: 'block'
+            }}>
+              {data.label}
+              {nodeOverrideCount > 0 && (
+                <ZapOff
+                  size={8}
+                  strokeWidth={2}
+                  color="#000000"
+                  style={{ display: 'inline-block', verticalAlign: 'middle', marginLeft: '2px' }}
+                />
+              )}
             </span>
+          </div>
+
+          {/* Image fills the node interior — clicks pass through for normal node selection */}
+          <div style={{
+            position: 'relative',
+            zIndex: 1,
+            width: '100%',
+            height: '100%',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: '12px',
+            pointerEvents: 'none'
+          }}
+          >
+            {nodeImageUrl ? (
+              <img
+                src={nodeImageUrl}
+                alt={firstImage?.caption || data.label}
+                style={{
+                  maxWidth: '100%',
+                  maxHeight: '100%',
+                  objectFit: 'contain',
+                  display: 'block',
+                  borderRadius: '3px'
+                }}
+                draggable={false}
+              />
+            ) : (
+              <ImageIcon
+                size={24}
+                strokeWidth={1}
+                style={{ color: '#cbd5e1', opacity: 0.4 }}
+              />
+            )}
+          </div>
+        </>
+      ) : (
+        <div style={{
+          position: 'relative',
+          zIndex: 10, // Above images (z-index 5) so PMF warnings show on top
+          width: '100%',
+          height: '100%',
+          display: 'flex',
+          flexDirection: 'column',
+          justifyContent: 'center',
+          alignItems: 'center',
+          pointerEvents: 'none' // Allow handles to be clickable
+        }}>
+          {/* Terminal state symbols */}
+          
+          <div 
+            style={{ 
+              fontWeight: 'bold', 
+              marginBottom: '4px', 
+              fontSize: `${NODE_LABEL_FONT_SIZE}px`, 
+              cursor: 'pointer',
+              lineHeight: '1.2',
+              wordWrap: 'break-word',
+              overflowWrap: 'break-word',
+              hyphens: 'auto',
+              maxWidth: '100%',
+              paddingLeft: '12px',
+              paddingRight: '12px',
+              textAlign: 'center',
+              pointerEvents: 'auto' // Re-enable pointer events for interactive content
+            }}
+            onDoubleClick={handleDoubleClick}
+            title="Double-click to edit in properties panel"
+          >
+            {data.label}
+            {nodeOverrideCount > 0 && (
+              <span title={`${nodeOverrideCount} override${nodeOverrideCount > 1 ? 's' : ''} (auto-sync disabled)`}>
+                <ZapOff 
+                  size={10} 
+                  strokeWidth={2}
+                  color="#000000"
+                  style={{ 
+                    display: 'inline-block',
+                    verticalAlign: 'middle',
+                    marginLeft: '3px'
+                  }}
+                />
+              </span>
+            )}
+          </div>
+          
+          {data.absorbing && !isCaseNode && !data.outcome_type && (
+            <div style={{ fontSize: `${NODE_SECONDARY_FONT_SIZE}px`, color: '#666', marginTop: '4px' }}>
+              TERMINAL
+            </div>
+          )}
+
+          {data.entry?.is_start && !isCaseNode && (
+            <div style={{ fontSize: `${NODE_SECONDARY_FONT_SIZE}px`, color: '#16a34a', marginTop: '2px', fontWeight: 'bold' }}>
+              START
+            </div>
+          )}
+
+          {/* Case node variant info */}
+          {isCaseNode && data.case && (
+            <div style={{ 
+              fontSize: `${NODE_SMALL_FONT_SIZE}px`, 
+              color: '#666', // Same secondary color as other nodes
+              marginTop: '2px',
+              opacity: 0.9
+            }}>
+              {data.case.variants.length} variant{data.case.variants.length > 1 ? 's' : ''}
+            </div>
+          )}
+
+          {/* Probability mass warning */}
+          {probabilityMass && !probabilityMass.isComplete && !isCaseNode && !isActiveDrag && (
+            <div style={{ 
+              fontSize: `${NODE_SMALL_FONT_SIZE}px`, 
+              color: '#ff6b6b', 
+              marginTop: '2px',
+              background: '#fff5f5',
+              padding: '2px 4px',
+              borderRadius: '3px',
+              border: '1px solid #ff6b6b',
+              fontWeight: 'bold'
+            }}>
+              ⚠️ Missing {Math.round(probabilityMass.missing * 100)}%
+            </div>
+          )}
+          
+          {/* Case node variant PMF warnings */}
+          {isCaseNode && caseVariantProbabilityMass?.hasAnyIncomplete && !isActiveDrag && (
+            <div style={{ 
+              fontSize: `${NODE_SMALL_FONT_SIZE}px`, 
+              color: '#ff6b6b', 
+              marginTop: '2px',
+              background: '#fff5f5',
+              padding: '2px 4px',
+              borderRadius: '3px',
+              border: '1px solid #ff6b6b',
+              fontWeight: 'bold'
+            }}>
+              {caseVariantProbabilityMass.variants
+                .filter(v => !v.isComplete && v.edgeCount > 0)
+                .map((v, idx, arr) => (
+                  <div key={v.variantName}>
+                    ⚠️ {v.variantName}: Missing {Math.round(v.missing * 100)}%
+                  </div>
+                ))
+              }
+            </div>
+          )}
+          
+          {/* Conditional probability conservation warning */}
+          {conditionalValidation?.hasProbSumError && !isActiveDrag && (
+            <div style={{ 
+              fontSize: `${NODE_SMALL_FONT_SIZE}px`, 
+              color: '#ff6b6b', 
+              marginTop: '2px',
+              background: '#fff5f5',
+              padding: '2px 4px',
+              borderRadius: '3px',
+              border: '1px solid #ff6b6b',
+              fontWeight: 'bold'
+            }}>
+              ⚠️ Conditional P not conserved
+            </div>
           )}
         </div>
-        
-        {data.absorbing && !isCaseNode && !data.outcome_type && (
-          <div style={{ fontSize: `${NODE_SECONDARY_FONT_SIZE}px`, color: '#666', marginTop: '4px' }}>
-            TERMINAL
-          </div>
-        )}
-
-        {data.entry?.is_start && !isCaseNode && (
-          <div style={{ fontSize: `${NODE_SECONDARY_FONT_SIZE}px`, color: '#16a34a', marginTop: '2px', fontWeight: 'bold' }}>
-            START
-          </div>
-        )}
-
-        {/* Case node variant info */}
-        {isCaseNode && data.case && (
-          <div style={{ 
-            fontSize: `${NODE_SMALL_FONT_SIZE}px`, 
-            color: '#666', // Same secondary color as other nodes
-            marginTop: '2px',
-            opacity: 0.9
-          }}>
-            {data.case.variants.length} variant{data.case.variants.length > 1 ? 's' : ''}
-          </div>
-        )}
-
-        {/* Probability mass warning */}
-        {probabilityMass && !probabilityMass.isComplete && !isCaseNode && !isActiveDrag && (
-          <div style={{ 
-            fontSize: `${NODE_SMALL_FONT_SIZE}px`, 
-            color: '#ff6b6b', 
-            marginTop: '2px',
-            background: '#fff5f5',
-            padding: '2px 4px',
-            borderRadius: '3px',
-            border: '1px solid #ff6b6b',
-            fontWeight: 'bold'
-          }}>
-            ⚠️ Missing {Math.round(probabilityMass.missing * 100)}%
-          </div>
-        )}
-        
-        {/* Case node variant PMF warnings */}
-        {isCaseNode && caseVariantProbabilityMass?.hasAnyIncomplete && !isActiveDrag && (
-          <div style={{ 
-            fontSize: `${NODE_SMALL_FONT_SIZE}px`, 
-            color: '#ff6b6b', 
-            marginTop: '2px',
-            background: '#fff5f5',
-            padding: '2px 4px',
-            borderRadius: '3px',
-            border: '1px solid #ff6b6b',
-            fontWeight: 'bold'
-          }}>
-            {caseVariantProbabilityMass.variants
-              .filter(v => !v.isComplete && v.edgeCount > 0)
-              .map((v, idx, arr) => (
-                <div key={v.variantName}>
-                  ⚠️ {v.variantName}: Missing {Math.round(v.missing * 100)}%
-                </div>
-              ))
-            }
-          </div>
-        )}
-        
-        {/* Conditional probability conservation warning */}
-        {conditionalValidation?.hasProbSumError && !isActiveDrag && (
-          <div style={{ 
-            fontSize: `${NODE_SMALL_FONT_SIZE}px`, 
-            color: '#ff6b6b', 
-            marginTop: '2px',
-            background: '#fff5f5',
-            padding: '2px 4px',
-            borderRadius: '3px',
-            border: '1px solid #ff6b6b',
-            fontWeight: 'bold'
-          }}>
-            ⚠️ Conditional P not conserved
-          </div>
-        )}
-      </div>
+      )}
 
       {/* Bottom-left connection status icons for node/case/event files */}
       <div
@@ -975,6 +1073,8 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
           gap: 2,
           alignItems: 'center',
           pointerEvents: 'auto',
+          zIndex: 12,
+          ...(data.showNodeImages ? { background: 'rgba(255,255,255,0.8)', borderRadius: 3, padding: '1px 2px' } : {})
         }}
       >
         {nodeFile && (
@@ -1043,7 +1143,8 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
           gap: 4,
           alignItems: 'center',
           pointerEvents: 'auto',
-          zIndex: 5 // Below PMF warning (z-index 10) and case status indicator (z-index 15)
+          zIndex: data.showNodeImages ? 12 : 5, // Raised above image (z-1), below badges (z-15)
+          ...(data.showNodeImages ? { background: 'rgba(255,255,255,0.8)', borderRadius: 3, padding: '1px 2px' } : {})
         }}
       >
         {/* URL icon (left of images) */}
@@ -1083,8 +1184,8 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
           </Tooltip>
         )}
         
-        {/* Image preview (right of URL) */}
-        {data.images && data.images.length > 0 && (
+        {/* Image preview (right of URL) — hidden when image view is active */}
+        {data.images && data.images.length > 0 && !data.showNodeImages && (
           <div
             style={{ 
               cursor: 'pointer',
@@ -1313,8 +1414,8 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
         </div>
       )}
     </div>
-    {/* Hover preview popup */}
-    {showImagePreview && data.images && data.images[0] && (
+    {/* Hover preview popup — suppressed when image view is active */}
+    {showImagePreview && !data.showNodeImages && data.images && data.images[0] && (
       <ImageHoverPreview
         image={data.images[0]}
         position={imagePreviewPosition}

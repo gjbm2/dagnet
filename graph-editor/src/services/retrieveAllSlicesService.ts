@@ -219,6 +219,43 @@ class RetrieveAllSlicesService {
     // Batch bracketing: freeze a reference "now" once for the entire run.
     // This prevents staleness semantics drifting mid-run due to wall-clock movement.
     const batchReferenceNow = new Date().toISOString();
+
+    // -------------------------------------------------------------------------
+    // Retrieval batch timestamps at scope S (key-fixes.md §2.1 + cooldown semantics).
+    // -------------------------------------------------------------------------
+    // Scope S (fetch-time): param × slice × hash
+    // - param: planItem.objectId
+    // - slice: mode (window|cohort) + context/case dimensions (args discarded)
+    // - hash: querySignature (canonical signature string)
+    //
+    // We memoise one Date per S so all writes for the same (param, slice, hash)
+    // within a retrieve-all run share the same retrieved_at.
+    //
+    // On automated rate-limit cooldown, we MUST restart S with a NEW retrieved_at
+    // and (optionally) re-fetch from the start of S to avoid long splits (61+ mins).
+    const batchAtByScopeS = new Map<string, Date>();
+    const forceBustCacheByScopeS = new Set<string>();
+
+    const getScopeSKey = (planItem: FetchPlanItem): string => {
+      // Only parameters participate in snapshot DB writes; cases have no querySignature.
+      // If querySignature is missing, fall back to itemKey to avoid accidentally
+      // coalescing distinct hashes.
+      const sig = (planItem.querySignature && planItem.querySignature.trim().length > 0)
+        ? planItem.querySignature.trim()
+        : planItem.itemKey;
+      const sliceFamily = typeof planItem.sliceFamily === 'string' ? planItem.sliceFamily : '';
+      const mode = planItem.mode || 'window';
+      return `p:${planItem.objectId}::${mode}::${sliceFamily}::sig:${sig}`;
+    };
+
+    const getBatchAtForScopeS = (scopeSKey: string): Date => {
+      let ts = batchAtByScopeS.get(scopeSKey);
+      if (!ts) {
+        ts = new Date();
+        batchAtByScopeS.set(scopeSKey, ts);
+      }
+      return ts;
+    };
     
     const emptyResult: RetrieveAllSlicesResult = {
       totalSlices: 0,
@@ -458,6 +495,10 @@ class RetrieveAllSlicesService {
                 // In batch mode we drive progress from the plan. Cache analysis remains useful for logs only.
               };
 
+              const scopeSKey = getScopeSKey(planItem);
+              const itemRetrievalBatchAt = getBatchAtForScopeS(scopeSKey);
+              const bustCacheForThisCall = bustCache || forceBustCacheByScopeS.has(scopeSKey);
+
               const result =
                 planItem.type === 'case'
                   ? await dataOperationsService.getFromSource({
@@ -466,10 +507,14 @@ class RetrieveAllSlicesService {
                       targetId,
                       graph: g,
                       setGraph: simulate ? (() => {}) : trackingSetGraph,
-                      bustCache,
+                      bustCache: bustCacheForThisCall,
                       currentDSL: sliceDSL,
                       dontExecuteHttp: simulate,
                       onCacheAnalysis,
+                      // For retrieve-all automation: enforce atomicity at scope S and
+                      // ensure rate-limit interruptions trigger cooldown + restart.
+                      enforceAtomicityScopeS: isAutomated === true,
+                      retrievalBatchAt: itemRetrievalBatchAt,
                     } as any)
                   : await dataOperationsService.getFromSource({
                       objectType: 'parameter',
@@ -479,7 +524,7 @@ class RetrieveAllSlicesService {
                       setGraph: simulate ? (() => {}) : trackingSetGraph,
                       paramSlot: slot || undefined,
                       conditionalIndex,
-                      bustCache,
+                      bustCache: bustCacheForThisCall,
                       currentDSL: sliceDSL,
                       targetSlice: sliceDSL,
                       dontExecuteHttp: simulate,
@@ -487,7 +532,15 @@ class RetrieveAllSlicesService {
                       skipCohortBounding: true,
                       overrideFetchWindows: planItem.windows.map((w) => ({ start: w.start, end: w.end })),
                       onCacheAnalysis,
+                      // For retrieve-all automation: enforce atomicity at scope S and
+                      // ensure rate-limit interruptions trigger cooldown + restart.
+                      enforceAtomicityScopeS: isAutomated === true,
+                      retrievalBatchAt: itemRetrievalBatchAt,
                     } as any);
+
+              // If this scope previously requested a "restart from start" bust, clear it
+              // after a successful execution so later duplicate plan items don't refetch.
+              forceBustCacheByScopeS.delete(scopeSKey);
 
               sliceSuccess++;
               runningTotalProcessed++;
@@ -563,6 +616,15 @@ class RetrieveAllSlicesService {
                   break;
                 }
                 
+                // After 61+ min cooloff, restart S (param × slice × hash):
+                // - mint a NEW retrieved_at (batch timestamp)
+                // - re-fetch from the start of S (ignore cache) so S does not
+                //   get split across a long pause where real-world conversions
+                //   may have occurred.
+                const scopeSKey = getScopeSKey(planItem);
+                batchAtByScopeS.delete(scopeSKey);
+                forceBustCacheByScopeS.add(scopeSKey);
+
                 // Retry the same item by decrementing the index
                 // The loop will increment it back, effectively retrying this item
                 itemIdx--;

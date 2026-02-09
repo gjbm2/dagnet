@@ -5,6 +5,7 @@ import { useNavigatorContext } from '../../contexts/NavigatorContext';
 import EdgeScalingControl from '../EdgeScalingControl';
 import { useViewPreferencesContext } from '../../contexts/ViewPreferencesContext';
 import { useSankeyView } from '../../hooks/useSankeyView';
+import { useNodeImageView } from '../../hooks/useNodeImageView';
 import { useDashboardMode } from '../../hooks/useDashboardMode';
 import { sessionLogService } from '../../services/sessionLogService';
 import { graphIssuesService } from '../../services/graphIssuesService';
@@ -37,8 +38,9 @@ export function ViewMenu() {
   const confidenceIntervalLevel = viewPrefsCtx?.confidenceIntervalLevel ?? (activeTab?.editorState?.confidenceIntervalLevel as 'none' | '80' | '90' | '95' | '99' ?? 'none');
   const animateFlow = viewPrefsCtx?.animateFlow ?? (activeTab?.editorState?.animateFlow ?? true);
   
-  // Use centralised hook for Sankey view toggle
+  // Use centralised hooks for view toggles
   const { useSankeyView: isSankeyView, toggleSankeyView } = useSankeyView();
+  const { showNodeImages, toggleNodeImageView } = useNodeImageView();
   
   // Debug: Log when menu is checked
   React.useEffect(() => {
@@ -222,6 +224,13 @@ export function ViewMenu() {
                 onSelect={handleToggleAnimateFlow}
               >
                 {animateFlow ? '✓ ' : ''}Animate Flow
+              </Menubar.Item>
+
+              <Menubar.Item 
+                className="menubar-item" 
+                onSelect={toggleNodeImageView}
+              >
+                {showNodeImages ? '✓ ' : ''}Show Node Images
               </Menubar.Item>
 
               <Menubar.Separator className="menubar-separator" />

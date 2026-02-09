@@ -182,3 +182,27 @@ class TestSweepRange:
         result = derive_cohort_maturity(rows)
         assert result["sweep_range"]["from"] == "2025-10-15"
         assert result["sweep_range"]["to"] == "2025-10-25"
+
+    def test_single_retrieval_with_sweep_grid(self):
+        """With an explicit sweep range and a single retrieval, empty frames are
+        generated for days before the retrieval (no data existed yet).  The
+        frontend normalisation skips these.  This test documents the expected
+        derivation output shape."""
+        rows = [
+            _row("2025-10-01", "2025-10-04T12:00:00+00:00", y=42, x=100),
+        ]
+        result = derive_cohort_maturity(rows, sweep_from="2025-10-01", sweep_to="2025-10-05")
+
+        # 5 days: Oct 1–5
+        assert len(result["frames"]) == 5
+
+        # Days before retrieval (Oct 1–3): empty data_points
+        for f in result["frames"][:3]:
+            assert f["data_points"] == []
+            assert f["total_y"] == 0
+
+        # Days from retrieval onward (Oct 4–5): carry-forward data
+        for f in result["frames"][3:]:
+            assert len(f["data_points"]) == 1
+            assert f["data_points"][0]["y"] == 42
+            assert f["data_points"][0]["rate"] == pytest.approx(0.42)

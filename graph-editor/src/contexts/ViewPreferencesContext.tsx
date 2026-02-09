@@ -6,6 +6,7 @@ export interface ViewPreferencesState {
   massGenerosity: number;
   autoReroute: boolean;
   useSankeyView: boolean;
+  showNodeImages: boolean;
   confidenceIntervalLevel: 'none' | '80' | '90' | '95' | '99';
   animateFlow: boolean;
 }
@@ -15,6 +16,7 @@ interface ViewPreferencesContextValue extends ViewPreferencesState {
   setMassGenerosity: (value: number) => void;
   setAutoReroute: (value: boolean) => void;
   setUseSankeyView: (value: boolean) => void;
+  setShowNodeImages: (value: boolean) => void;
   setConfidenceIntervalLevel: (value: 'none' | '80' | '90' | '95' | '99') => void;
   setAnimateFlow: (value: boolean) => void;
 }
@@ -36,6 +38,7 @@ export function ViewPreferencesProvider({ tabId, children }: { tabId?: string; c
   const [massGenerosity, setMassGenerosityLocal] = useState<number>(editorState.massGenerosity ?? 0.5);
   const [autoReroute, setAutoRerouteLocal] = useState<boolean>(editorState.autoReroute ?? true);
   const [useSankeyView, setUseSankeyViewLocal] = useState<boolean>(editorState.useSankeyView ?? false);
+  const [showNodeImages, setShowNodeImagesLocal] = useState<boolean>(editorState.showNodeImages ?? true);
   const [confidenceIntervalLevel, setConfidenceIntervalLevelLocal] = useState<'none' | '80' | '90' | '95' | '99'>(
     (editorState.confidenceIntervalLevel as 'none' | '80' | '90' | '95' | '99') ?? 'none'
   );
@@ -54,6 +57,9 @@ export function ViewPreferencesProvider({ tabId, children }: { tabId?: string; c
   useEffect(() => {
     if (editorState.useSankeyView !== undefined) setUseSankeyViewLocal(editorState.useSankeyView);
   }, [editorState.useSankeyView]);
+  useEffect(() => {
+    if (editorState.showNodeImages !== undefined) setShowNodeImagesLocal(editorState.showNodeImages);
+  }, [editorState.showNodeImages]);
   useEffect(() => {
     if (editorState.confidenceIntervalLevel !== undefined) {
       setConfidenceIntervalLevelLocal(editorState.confidenceIntervalLevel as 'none' | '80' | '90' | '95' | '99');
@@ -80,6 +86,10 @@ export function ViewPreferencesProvider({ tabId, children }: { tabId?: string; c
     setUseSankeyViewLocal(value);
     if (tabId) tabOps.updateTabState(tabId, { useSankeyView: value });
   };
+  const setShowNodeImages = (value: boolean) => {
+    setShowNodeImagesLocal(value);
+    if (tabId) tabOps.updateTabState(tabId, { showNodeImages: value });
+  };
   const setConfidenceIntervalLevel = (value: 'none' | '80' | '90' | '95' | '99') => {
     setConfidenceIntervalLevelLocal(value);
     if (tabId) tabOps.updateTabState(tabId, { confidenceIntervalLevel: value });
@@ -94,15 +104,17 @@ export function ViewPreferencesProvider({ tabId, children }: { tabId?: string; c
     massGenerosity,
     autoReroute,
     useSankeyView,
+    showNodeImages,
     confidenceIntervalLevel,
     animateFlow,
     setUseUniformScaling,
     setMassGenerosity,
     setAutoReroute,
     setUseSankeyView,
+    setShowNodeImages,
     setConfidenceIntervalLevel,
     setAnimateFlow
-  }), [useUniformScaling, massGenerosity, autoReroute, useSankeyView, confidenceIntervalLevel, animateFlow]);
+  }), [useUniformScaling, massGenerosity, autoReroute, useSankeyView, showNodeImages, confidenceIntervalLevel, animateFlow]);
 
   return (
     <ViewPreferencesContext.Provider value={value}>
