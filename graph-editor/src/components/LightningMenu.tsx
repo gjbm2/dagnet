@@ -22,6 +22,8 @@ interface LightningMenuProps {
   hasFile: boolean;
   targetId?: string; // graph element ID (edge, node)
   graph: any; // Tab-specific graph
+  /** File-level graph ID, e.g. "graph-my-graph" — authoritative, unlike graph.metadata.name */
+  graphFileId?: string | null;
   setGraph: (graph: any) => void; // Tab-specific graph setter
   // For direct parameter references (no param file)
   paramSlot?: 'p' | 'cost_gbp' | 'labour_cost'; // Which parameter on edge
@@ -36,6 +38,7 @@ export const LightningMenu: React.FC<LightningMenuProps> = ({
   hasFile,
   targetId,
   graph,
+  graphFileId,
   setGraph,
   paramSlot,
   conditionalIndex,
@@ -155,6 +158,7 @@ export const LightningMenu: React.FC<LightningMenuProps> = ({
         hasFile={hasFile}
         targetId={targetId}
         graph={graph}
+        graphFileId={graphFileId}
         setGraph={setGraph}
         paramSlot={paramSlot}
         conditionalIndex={conditionalIndex}

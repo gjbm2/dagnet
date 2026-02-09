@@ -24,6 +24,7 @@ import { ConnectionControl } from './ConnectionControl';
 import { ImageThumbnail } from './ImageThumbnail';
 import { ImageUploadModal } from './ImageUploadModal';
 import { ImageLoupeView } from './ImageLoupeView';
+import { ChipInput } from './ChipInput';
 import { imageOperationsService } from '../services/imageOperationsService';
 import { getObjectTypeTheme } from '../theme/objectTypeTheme';
 import { Box, Settings, Layers, Edit3, ChevronDown, ChevronRight, X, Sliders, Info, TrendingUp, Coins, Clock, FileJson, ZapOff, RefreshCcw, ExternalLink, Zap } from 'lucide-react';
@@ -189,6 +190,25 @@ export default function PropertiesPanel({
   
   // Track which conditional probabilities are collapsed (by index) - true = collapsed, false/undefined = expanded
   const [collapsedConditionals, setCollapsedConditionals] = useState<{ [key: number]: boolean }>({});
+
+  // Collect all existing tags across the workspace for autocomplete suggestions
+  const allWorkspaceTags = useMemo(() => {
+    const tagSet = new Set<string>();
+    // Collect tags from graph nodes
+    graph?.nodes?.forEach((n: any) => n.tags?.forEach((t: string) => tagSet.add(t)));
+    // Collect tags from graph metadata
+    graph?.metadata?.tags?.forEach((t: string) => tagSet.add(t));
+    // Collect tags from all files in registry
+    try {
+      const allFiles = fileRegistry.getAllFiles?.() ?? [];
+      for (const file of allFiles) {
+        const data = file?.data as any;
+        data?.tags?.forEach?.((t: string) => tagSet.add(t));
+        data?.metadata?.tags?.forEach?.((t: string) => tagSet.add(t));
+      }
+    } catch { /* registry not available in tests */ }
+    return Array.from(tagSet).sort();
+  }, [graph]);
 
   // Local state for edge query (to prevent eager updates during editing)
   const [localEdgeQuery, setLocalEdgeQuery] = useState<string>('');
@@ -1139,6 +1159,16 @@ export default function PropertiesPanel({
                   placeholder="Your name"
                 />
               </div>
+
+              <div className="property-section">
+                <label className="property-label">Tags</label>
+                <ChipInput
+                  values={graph?.metadata?.tags || []}
+                  onChange={(tags) => updateGraph(['metadata', 'tags'], tags)}
+                  suggestions={allWorkspaceTags}
+                  placeholder="Add tag…"
+                />
+              </div>
             </CollapsibleSection>
           </>
         )}
@@ -1514,17 +1544,15 @@ export default function PropertiesPanel({
                   {/* Tags */}
                   <div className="property-section">
                     <label className="property-label">Tags</label>
-                    <input
-                      className="property-input"
-                      value={localNodeData.tags?.join(', ') || ''}
-                      onChange={(e) => {
-                        const tags = e.target.value.split(',').map(t => t.trim()).filter(t => t);
+                    <ChipInput
+                      values={localNodeData.tags || []}
+                      onChange={(tags) => {
                         setLocalNodeData({...localNodeData, tags});
+                        updateNode('tags', tags);
                       }}
-                      onBlur={() => updateNode('tags', localNodeData.tags)}
-                      placeholder="tag1, tag2, tag3"
+                      suggestions={allWorkspaceTags}
+                      placeholder="Add tag…"
                     />
-                    <div className="property-helper-text">Comma-separated tags</div>
                   </div>
 
               </CollapsibleSection>

@@ -126,6 +126,12 @@ class RegistryService {
         existing.lastModified = file.lastModified;
         existing.lastOpened = file.lastOpened;
         
+        // Tags from file data override index tags (user may have edited via tag editor)
+        const fileTags = file.data?.tags || file.data?.metadata?.tags;
+        if (fileTags) {
+          existing.tags = fileTags;
+        }
+        
         // Extract type from file data if available (overrides index type)
         if (file.data?.type) {
           if (type === 'parameter') existing.parameter_type = file.data.type;
@@ -147,6 +153,7 @@ class RegistryService {
           isOpen: tabs.some((tab: any) => tab.fileId === file.fileId),
           inIndex: false,
           isOrphan: true,
+          tags: file.data?.tags || file.data?.metadata?.tags,
           lastModified: file.lastModified,
           lastOpened: file.lastOpened,
           // Extract type from file data

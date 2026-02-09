@@ -961,7 +961,7 @@ export function DataMenu() {
             className="menubar-item"
             onSelect={handleSignatureLinks}
           >
-            Signature Links...
+            Snapshot Manager...
           </Menubar.Item>
           
           <Menubar.Separator className="menubar-separator" />

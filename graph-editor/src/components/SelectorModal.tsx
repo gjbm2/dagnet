@@ -154,10 +154,12 @@ export function SelectorModal({
           <NavigatorControls
             filter={filterMode}
             sortBy={sortBy}
-            groupBy={groupBy}
             onFilterChange={setFilterMode}
             onSortChange={setSortBy}
-            onGroupChange={setGroupBy}
+            availableTags={[]}
+            selectedTags={[]}
+            onTagToggle={() => {}}
+            onTagsClear={() => {}}
           />
         </div>
 

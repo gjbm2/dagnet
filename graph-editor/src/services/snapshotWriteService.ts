@@ -376,6 +376,8 @@ export interface QuerySnapshotsFullParams {
   anchor_from?: string; // ISO date
   anchor_to?: string; // ISO date
   as_at?: string; // ISO datetime
+  /** Optional restriction to specific retrieved_at timestamps (ISO datetimes) */
+  retrieved_ats?: string[];
   /** Max rows to return (default backend: 10000) */
   limit?: number;
 }
@@ -410,6 +412,7 @@ export async function querySnapshotsFull(params: QuerySnapshotsFullParams): Prom
         anchor_from: params.anchor_from,
         anchor_to: params.anchor_to,
         as_at: params.as_at,
+        retrieved_ats: params.retrieved_ats,
         limit: params.limit,
       }),
     });
@@ -489,6 +492,8 @@ export interface QuerySnapshotRetrievalsParams {
   param_id: string;
   /** Canonical semantic signature (`query_signature`); optional filter */
   canonical_signature?: string;
+  /** Core hash; preferred filter when available */
+  core_hash?: string;
   /** Slice keys (context/case dimensions only), or omit to include all */
   slice_keys?: string[];
   /** ISO date (YYYY-MM-DD) lower bound on anchor_day, inclusive */
@@ -497,8 +502,20 @@ export interface QuerySnapshotRetrievalsParams {
   anchor_to?: string;
   /** If true, expand equivalence links when filtering by signature (default true) */
   include_equivalents?: boolean;
+  /** If true, include per-retrieval summary rows (default false) */
+  include_summary?: boolean;
   /** Hard cap on timestamps returned (default 200) */
   limit?: number;
+}
+
+export interface SnapshotRetrievalSummaryRow {
+  retrieved_at: string; // ISO datetime
+  slice_key: string;
+  anchor_from: string | null; // ISO date
+  anchor_to: string | null; // ISO date
+  row_count: number;
+  sum_x: number;
+  sum_y: number;
 }
 
 export interface QuerySnapshotRetrievalsResult {
@@ -507,6 +524,7 @@ export interface QuerySnapshotRetrievalsResult {
   retrieved_days: string[];
   latest_retrieved_at: string | null;
   count: number;
+  summary?: SnapshotRetrievalSummaryRow[];
   error?: string;
 }
 
@@ -592,10 +610,10 @@ export async function querySnapshotRetrievals(params: QuerySnapshotRetrievalsPar
   }
 
   try {
-    // Frontend computes core_hash when canonical_signature is present (hash-fixes.md)
-    const core_hash = params.canonical_signature
-      ? await computeShortCoreHash(params.canonical_signature)
-      : undefined;
+    // Prefer explicit core_hash; else compute from canonical_signature if provided (hash-fixes.md)
+    const core_hash = params.core_hash
+      ? params.core_hash
+      : (params.canonical_signature ? await computeShortCoreHash(params.canonical_signature) : undefined);
 
     const response = await fetch(`${PYTHON_API_BASE}/api/snapshots/retrievals`, {
       method: 'POST',
@@ -608,6 +626,7 @@ export async function querySnapshotRetrievals(params: QuerySnapshotRetrievalsPar
         anchor_from: params.anchor_from,
         anchor_to: params.anchor_to,
         include_equivalents: params.include_equivalents ?? true,
+        include_summary: params.include_summary ?? false,
         limit: params.limit,
       }),
     });
@@ -625,6 +644,7 @@ export async function querySnapshotRetrievals(params: QuerySnapshotRetrievalsPar
       retrieved_days: Array.isArray(body.retrieved_days) ? body.retrieved_days : [],
       latest_retrieved_at: body.latest_retrieved_at ?? null,
       count: typeof body.count === 'number' ? body.count : (Array.isArray(body.retrieved_at) ? body.retrieved_at.length : 0),
+      summary: Array.isArray(body.summary) ? body.summary : undefined,
       error: body.error,
     };
   } catch (error) {
@@ -837,7 +857,11 @@ export async function getInventory(paramId: string): Promise<SnapshotInventory> 
  * @param core_hashes - Optional list of core_hash values to scope the delete
  * @returns Result with deleted count
  */
-export async function deleteSnapshots(paramId: string, core_hashes?: string[]): Promise<DeleteSnapshotsResult> {
+export async function deleteSnapshots(
+  paramId: string,
+  core_hashes?: string[],
+  retrieved_ats?: string[],
+): Promise<DeleteSnapshotsResult> {
   if (!SNAPSHOTS_ENABLED) {
     return { success: true, deleted: 0 };
   }
@@ -846,6 +870,9 @@ export async function deleteSnapshots(paramId: string, core_hashes?: string[]): 
     const body: Record<string, unknown> = { param_id: paramId };
     if (core_hashes && core_hashes.length > 0) {
       body.core_hashes = core_hashes;
+    }
+    if (retrieved_ats && retrieved_ats.length > 0) {
+      body.retrieved_ats = retrieved_ats;
     }
     const response = await fetch(`${PYTHON_API_BASE}/api/snapshots/delete`, {
       method: 'POST',

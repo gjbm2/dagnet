@@ -1,24 +1,29 @@
 /**
  * NavigatorControls
  * 
- * Compact control bar for filtering, sorting, and grouping Navigator items
+ * Compact control bar: Filter | Sort | Tags
  */
 
 import React, { useState, useRef, useEffect } from 'react';
-import { Filter, ArrowUpDown, FolderTree, Check, Circle, LucideIcon } from 'lucide-react';
+import { Filter, ArrowUpDown, Tag, Check, Circle, LucideIcon } from 'lucide-react';
 import './NavigatorControls.css';
 
 export type FilterMode = 'all' | 'dirty' | 'open' | 'local';
 export type SortMode = 'name' | 'modified' | 'opened' | 'status' | 'type';
-export type GroupMode = 'type' | 'tags' | 'status' | 'none';
 
 interface NavigatorControlsProps {
   filter: FilterMode;
   sortBy: SortMode;
-  groupBy: GroupMode;
   onFilterChange: (filter: FilterMode) => void;
   onSortChange: (sort: SortMode) => void;
-  onGroupChange: (group: GroupMode) => void;
+  /** All tags that exist in the workspace */
+  availableTags: string[];
+  /** Currently selected tags (filter) */
+  selectedTags: string[];
+  /** Toggle a tag selection */
+  onTagToggle: (tag: string) => void;
+  /** Clear all tag selections */
+  onTagsClear: () => void;
 }
 
 interface DropdownOption<T> {
@@ -42,37 +47,18 @@ const SORT_OPTIONS: DropdownOption<SortMode>[] = [
   { value: 'type', label: 'Type (A→Z)' },
 ];
 
-const GROUP_OPTIONS: DropdownOption<GroupMode>[] = [
-  { value: 'type', label: 'By Type', showCheckmark: true },
-  { value: 'tags', label: 'By Tags', showCheckmark: true },
-  { value: 'status', label: 'By Status', showCheckmark: true },
-  { value: 'none', label: 'Flat list', showCheckmark: true },
-];
-
 function getFilterLabel(filter: FilterMode): string {
   return FILTER_OPTIONS.find(o => o.value === filter)?.label || 'All';
 }
 
 function getSortLabel(sort: SortMode): string {
-  const option = SORT_OPTIONS.find(o => o.value === sort);
-  // Show short labels
   switch (sort) {
     case 'name': return 'Name';
     case 'modified': return 'Modified';
     case 'opened': return 'Opened';
     case 'status': return 'Status';
     case 'type': return 'Type';
-    default: return option?.label || 'Name';
-  }
-}
-
-function getGroupLabel(group: GroupMode): string {
-  switch (group) {
-    case 'type': return 'Type';
-    case 'tags': return 'Tags';
-    case 'status': return 'Status';
-    case 'none': return 'Flat';
-    default: return 'Type';
+    default: return 'Name';
   }
 }
 
@@ -96,7 +82,6 @@ function ControlDropdown<T extends string>({
   const buttonRef = useRef<HTMLButtonElement>(null);
   const [dropdownStyle, setDropdownStyle] = useState<React.CSSProperties>({});
 
-  // Calculate dropdown position when opening
   useEffect(() => {
     if (isOpen && buttonRef.current) {
       const rect = buttonRef.current.getBoundingClientRect();
@@ -108,16 +93,13 @@ function ControlDropdown<T extends string>({
     }
   }, [isOpen]);
 
-  // Close dropdown when clicking outside
   useEffect(() => {
     if (!isOpen) return;
-    
     const handleClickOutside = (e: MouseEvent) => {
       if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
         setIsOpen(false);
       }
     };
-    
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, [isOpen]);
@@ -164,13 +146,116 @@ function ControlDropdown<T extends string>({
   );
 }
 
+/** Tags multi-select dropdown */
+function TagsDropdown({
+  availableTags,
+  selectedTags,
+  onTagToggle,
+  onTagsClear,
+}: {
+  availableTags: string[];
+  selectedTags: string[];
+  onTagToggle: (tag: string) => void;
+  onTagsClear: () => void;
+}) {
+  const [isOpen, setIsOpen] = useState(false);
+  const dropdownRef = useRef<HTMLDivElement>(null);
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  const [dropdownStyle, setDropdownStyle] = useState<React.CSSProperties>({});
+
+  useEffect(() => {
+    if (isOpen && buttonRef.current) {
+      const rect = buttonRef.current.getBoundingClientRect();
+      setDropdownStyle({
+        top: `${rect.bottom + 2}px`,
+        left: `${rect.left}px`,
+        minWidth: `${Math.max(rect.width, 140)}px`
+      });
+    }
+  }, [isOpen]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleClickOutside = (e: MouseEvent) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
+        setIsOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [isOpen]);
+
+  const count = selectedTags.length;
+  const label = count === 0 ? 'Tags' : count === 1 ? selectedTags[0] : `${count} tags`;
+  const hasSelection = count > 0;
+
+  return (
+    <div className="control-dropdown-container" ref={dropdownRef}>
+      <button
+        ref={buttonRef}
+        className={`control-button ${isOpen ? 'active' : ''} ${hasSelection ? 'has-selection' : ''}`}
+        onClick={() => setIsOpen(!isOpen)}
+        title={hasSelection ? `Tags: ${selectedTags.join(', ')}` : 'Filter by tags'}
+      >
+        <span className="control-button-label">
+          <Tag className="control-button-icon" size={14} strokeWidth={2} />
+          <span className="control-button-text">{label}</span>
+        </span>
+        <span className="control-button-arrow">▾</span>
+      </button>
+
+      {isOpen && (
+        <div className="control-dropdown" style={dropdownStyle}>
+          {availableTags.length === 0 ? (
+            <div className="control-dropdown-item" style={{ color: '#999', fontStyle: 'italic' }}>
+              No tags yet
+            </div>
+          ) : (
+            <>
+              {availableTags.map(tag => {
+                const isSelected = selectedTags.includes(tag);
+                return (
+                  <div
+                    key={tag}
+                    className={`control-dropdown-item ${isSelected ? 'active' : ''}`}
+                    onClick={() => onTagToggle(tag)}
+                  >
+                    <span className="dropdown-item-icon">
+                      {isSelected ? <Check size={14} strokeWidth={2} /> : <Circle size={14} strokeWidth={2} />}
+                    </span>
+                    <span className="dropdown-item-label">{tag}</span>
+                  </div>
+                );
+              })}
+              {hasSelection && (
+                <>
+                  <div style={{ height: '1px', background: '#e0e0e0', margin: '4px 0' }} />
+                  <div
+                    className="control-dropdown-item"
+                    onClick={() => { onTagsClear(); setIsOpen(false); }}
+                    style={{ color: '#666', fontSize: '12px' }}
+                  >
+                    <span className="dropdown-item-label">Clear all</span>
+                  </div>
+                </>
+              )}
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function NavigatorControls({
   filter,
   sortBy,
-  groupBy,
   onFilterChange,
   onSortChange,
-  onGroupChange
+  availableTags,
+  selectedTags,
+  onTagToggle,
+  onTagsClear,
 }: NavigatorControlsProps) {
   return (
     <div className="navigator-controls">
@@ -190,14 +275,12 @@ export function NavigatorControls({
         onChange={onSortChange}
       />
       
-      <ControlDropdown
-        icon={FolderTree}
-        label={getGroupLabel(groupBy)}
-        value={groupBy}
-        options={GROUP_OPTIONS}
-        onChange={onGroupChange}
+      <TagsDropdown
+        availableTags={availableTags}
+        selectedTags={selectedTags}
+        onTagToggle={onTagToggle}
+        onTagsClear={onTagsClear}
       />
     </div>
   );
 }
-

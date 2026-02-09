@@ -39,14 +39,26 @@ export interface SigRegistryRow {
 }
 
 export interface ListSignaturesParams {
-  param_id: string;
+  param_id?: string;
+  param_id_prefix?: string;
+  graph_name?: string;
+  list_params?: boolean;
   limit?: number;
   include_inputs?: boolean;
+}
+
+export interface SigParamSummary {
+  param_id: string;
+  signature_count: number;
+  latest_created_at: string;
+  earliest_created_at: string;
 }
 
 export interface ListSignaturesResult {
   success: boolean;
   rows: SigRegistryRow[];
+  /** Only present when list_params=true */
+  params?: SigParamSummary[];
   count: number;
   error?: string;
 }
@@ -62,6 +74,8 @@ export interface GetSignatureResult {
   error?: string;
 }
 
+export type SigLinkOperation = 'equivalent' | 'sum' | 'average' | 'weighted_average' | 'first' | 'last';
+
 export interface SigEquivalenceLinkRow {
   param_id: string;
   core_hash: string;
@@ -70,6 +84,9 @@ export interface SigEquivalenceLinkRow {
   created_by?: string | null;
   reason?: string | null;
   active: boolean;
+  operation: SigLinkOperation;
+  weight: number;
+  source_param_id?: string | null;
 }
 
 export interface ListEquivalenceLinksParams {
@@ -92,6 +109,9 @@ export interface CreateEquivalenceLinkParams {
   equivalent_to: string;
   created_by: string;
   reason: string;
+  operation?: SigLinkOperation;
+  weight?: number;
+  source_param_id?: string;
 }
 
 export interface CreateEquivalenceLinkResult {
@@ -156,11 +176,15 @@ async function postJson<T>(path: string, body: any): Promise<T> {
 export async function listSignatures(params: ListSignaturesParams): Promise<ListSignaturesResult> {
   if (!SIGS_ENABLED) return { success: true, rows: [], count: 0 };
   try {
-    return await postJson<ListSignaturesResult>('/api/sigs/list', {
-      param_id: params.param_id,
+    const body: Record<string, unknown> = {
       limit: params.limit,
       include_inputs: params.include_inputs ?? false,
-    });
+    };
+    if (params.param_id) body.param_id = params.param_id;
+    if (params.param_id_prefix) body.param_id_prefix = params.param_id_prefix;
+    if (params.graph_name) body.graph_name = params.graph_name;
+    if (params.list_params) body.list_params = true;
+    return await postJson<ListSignaturesResult>('/api/sigs/list', body);
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
     console.error('[SignatureLinks] listSignatures failed:', errorMessage);
@@ -201,13 +225,17 @@ export async function listEquivalenceLinks(params: ListEquivalenceLinksParams): 
 export async function createEquivalenceLink(params: CreateEquivalenceLinkParams): Promise<CreateEquivalenceLinkResult> {
   if (!SIGS_ENABLED) return { success: false, error: 'disabled' };
   try {
-    return await postJson<CreateEquivalenceLinkResult>('/api/sigs/links/create', {
+    const body: Record<string, unknown> = {
       param_id: params.param_id,
       core_hash: params.core_hash,
       equivalent_to: params.equivalent_to,
       created_by: params.created_by,
       reason: params.reason,
-    });
+    };
+    if (params.operation && params.operation !== 'equivalent') body.operation = params.operation;
+    if (params.weight != null && params.weight !== 1.0) body.weight = params.weight;
+    if (params.source_param_id) body.source_param_id = params.source_param_id;
+    return await postJson<CreateEquivalenceLinkResult>('/api/sigs/links/create', body);
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
     console.error('[SignatureLinks] createEquivalenceLink failed:', errorMessage);

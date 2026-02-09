@@ -344,6 +344,17 @@ select.property-input {
   font-size: 13px !important;
 }
 
+/* ChipInput: prevent global input styles from affecting the inner input */
+.chip-input-container input {
+  font-size: 12px !important;
+  font-family: inherit !important;
+  border: none !important;
+  box-shadow: none !important;
+  padding: 1px 0 !important;
+  background: transparent !important;
+  min-height: auto !important;
+}
+
 /* Animation for conditional probability node chips */
 @keyframes chipAppear {
   0% {

@@ -638,39 +638,17 @@ async def runner_analyze_endpoint(request: Request):
     try:
         data = await request.json()
         
-        from runner import analyze
-        from runner.types import AnalysisRequest, ScenarioData
-        
-        # Validate request
-        if 'scenarios' not in data or not data['scenarios']:
-            raise HTTPException(status_code=400, detail="Missing 'scenarios' field")
-        
-        # Build request
-        scenarios = [
-            ScenarioData(
-                scenario_id=s.get('scenario_id', f'scenario_{i}'),
-                name=s.get('name'),
-                colour=s.get('colour'),
-                visibility_mode=s.get('visibility_mode', 'f+e'),
-                graph=s.get('graph', {}),
-            )
-            for i, s in enumerate(data['scenarios'])
-        ]
-        
-        request_obj = AnalysisRequest(
-            scenarios=scenarios,
-            query_dsl=data.get('query_dsl'),
-            analysis_type=data.get('analysis_type'),
-        )
-        
-        # Run analysis
-        response = analyze(request_obj)
-        
-        # Return JSON-serializable response
-        return response.model_dump()
+        # Delegate to the centralised handler (api_handlers.py) which correctly
+        # routes snapshot-based analysis vs standard analysis.
+        # DO NOT duplicate the routing logic here — see .cursorrules §2.
+        from api_handlers import handle_runner_analyze
+        response = handle_runner_analyze(data)
+        return response
         
     except HTTPException:
         raise
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

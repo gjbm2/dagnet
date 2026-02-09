@@ -822,6 +822,10 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
     setState(prev => ({ ...prev, groupByTags: group }));
   }, []);
 
+  const setSelectedTags = useCallback((tags: string[]) => {
+    setState(prev => ({ ...prev, selectedTags: tags }));
+  }, []);
+
   const operations: NavigatorOperations = {
     toggleNavigator,
     togglePin,
@@ -927,7 +931,8 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
     setShowOpenOnly,
     setSortBy,
     setGroupBySubCategories,
-    setGroupByTags
+    setGroupByTags,
+    setSelectedTags
   };
 
   // Listen for last view closed events

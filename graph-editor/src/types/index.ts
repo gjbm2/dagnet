@@ -180,6 +180,7 @@ export interface NavigatorState {
   sortBy?: 'name' | 'modified' | 'opened' | 'status' | 'type';  // Sort order
   groupBySubCategories?: boolean;       // Group by sub-categories (parameter_type, node_type, etc.)
   groupByTags?: boolean;                // Group by tags
+  selectedTags?: string[];              // Active tag filter selections
   
   // Registry indexes (lightweight metadata catalogs)
   registryIndexes?: {
@@ -363,6 +364,7 @@ export interface NavigatorOperations {
   setSortBy: (sort: 'name' | 'modified' | 'opened' | 'status' | 'type') => void;
   setGroupBySubCategories: (group: boolean) => void;
   setGroupByTags: (group: boolean) => void;
+  setSelectedTags: (tags: string[]) => void;
 }
 
 /**

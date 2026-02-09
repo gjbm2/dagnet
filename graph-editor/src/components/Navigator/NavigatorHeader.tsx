@@ -1,6 +1,7 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useMemo, useCallback } from 'react';
 import { useNavigatorContext } from '../../contexts/NavigatorContext';
-import { Search, Settings } from 'lucide-react';
+import { fileRegistry } from '../../contexts/TabContext';
+import { Search, Settings, Tag } from 'lucide-react';
 import './Navigator.css';
 
 /**
@@ -28,6 +29,31 @@ export function NavigatorHeader() {
     }
   }, [isFilterDropdownOpen]);
 
+  // Collect all tags across workspace — re-scan periodically via a counter
+  const [tagScanCounter, setTagScanCounter] = useState(0);
+  // Rescan tags when dropdown opens or navigator regains focus (picks up newly added tags)
+  useEffect(() => {
+    if (isFilterDropdownOpen) setTagScanCounter(c => c + 1);
+  }, [isFilterDropdownOpen]);
+
+  // Also rescan on any click within the navigator header (catches post-tag-edit)
+  const handleTagRescan = useCallback(() => {
+    setTagScanCounter(c => c + 1);
+  }, []);
+
+  const allTags = useMemo(() => {
+    const tagSet = new Set<string>();
+    try {
+      for (const file of fileRegistry.getAllFiles?.() ?? []) {
+        const data = file?.data as any;
+        data?.tags?.forEach?.((t: string) => tagSet.add(t));
+        data?.metadata?.tags?.forEach?.((t: string) => tagSet.add(t));
+      }
+    } catch { /* ignore */ }
+    return Array.from(tagSet).sort();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tagScanCounter]);
+
   // Count active filters for badge
   const activeFilterCount = [
     state.showLocalOnly,
@@ -36,7 +62,7 @@ export function NavigatorHeader() {
   ].filter(Boolean).length;
 
   return (
-    <div className="navigator-header">
+    <div className="navigator-header" onMouseEnter={handleTagRescan}>
       {/* Full-width search bar with filter dropdown */}
       <div className="navigator-search-container">
         <div className="search-input-container">
@@ -173,6 +199,32 @@ export function NavigatorHeader() {
                   <span>Tags</span>
                 </label>
               </div>
+
+              {/* Tag Filter */}
+              {allTags.length > 0 && (
+                <>
+                  <div className="filter-divider" />
+                  <div className="filter-section">
+                    <label className="filter-section-label">
+                      <Tag size={11} strokeWidth={2} style={{ marginRight: '4px', verticalAlign: '-1px' }} />
+                      Filter by Tag
+                    </label>
+                    <div className="tag-filter-chips">
+                      {allTags.map(tag => (
+                        <span
+                          key={tag}
+                          className={`tag-filter-chip ${state.searchQuery === tag ? 'active' : ''}`}
+                          onClick={() => {
+                            operations.setSearchQuery(state.searchQuery === tag ? '' : tag);
+                          }}
+                        >
+                          {tag}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                </>
+              )}
 
             </div>
           )}
