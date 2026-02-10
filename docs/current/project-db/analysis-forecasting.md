@@ -164,7 +164,9 @@ These are **not exposed in the edge properties panel** and have **no `_overridde
 
 The existing flat fields (`t95`, `median_lag_days`, `mean_lag_days`, `onset_delta_days`, `completeness`) remain unchanged. After cutover, `t95` becomes derived from `mu`/`sigma` rather than independently fitted, but the field itself stays the same.
 
-Provenance fields (training window, settings signature, quality gates, total converters) are returned by the recompute API response for logging/audit but are **not persisted on the graph**. They can be added later if audit requirements warrant it.
+**File persistence**: `mu`, `sigma`, and `model_trained_at` are synced to the parameter file via the existing graph↔file push/pull mechanism, alongside `t95`, `median_lag_days`, etc. This means they are committed to git and available in shared/cloned workspaces. The same fields appear in the parameter file's latency section and in the YAML param schema.
+
+Provenance fields (training window, settings signature, quality gates, total converters) are returned by the recompute API response for logging/audit but are **not persisted on the graph or parameter files**. They can be added later if audit requirements warrant it.
 
 This is the “one or two more modelling params” referenced in the requirement.
 

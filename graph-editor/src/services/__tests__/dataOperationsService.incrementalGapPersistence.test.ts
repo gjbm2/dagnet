@@ -37,6 +37,28 @@ vi.mock('../contextRegistry', () => ({
   contextRegistry: { clearCache: vi.fn(() => {}) },
 }));
 
+// Mock snapshot write service so DB writes don't hit network.
+const appendSnapshotsSpy = vi.fn(async (_params: any) => ({
+  success: true,
+  inserted: Array.isArray(_params?.rows) ? _params.rows.length : 0,
+  core_hash: _params?.core_hash,
+  diagnostic: {
+    rows_attempted: Array.isArray(_params?.rows) ? _params.rows.length : 0,
+    rows_inserted: Array.isArray(_params?.rows) ? _params.rows.length : 0,
+    duplicates_skipped: 0,
+    sql_time_ms: 0,
+    date_range: '',
+    has_latency: false,
+    has_anchor: false,
+    slice_key: _params?.slice_key ?? '',
+  },
+}));
+vi.mock('../snapshotWriteService', () => ({
+  appendSnapshots: (...args: any[]) => appendSnapshotsSpy(...args),
+  // Imported by dataOperationsService but not exercised in these tests
+  querySnapshotsVirtual: vi.fn(async () => ({ success: false, error: 'not mocked' })),
+}));
+
 // Minimal in-memory file registry mock that actually persists updates
 vi.mock('../../contexts/TabContext', () => {
   const mockFiles = new Map<string, any>();
@@ -98,6 +120,7 @@ describe('dataOperationsService.getFromSourceDirect persists successful gaps imm
     (fileRegistry as any)._mockFiles.clear();
     executeSpy.mockReset();
     compositeExecuteSpy.mockReset();
+    appendSnapshotsSpy.mockClear();
   });
 
   it('does not misclassify "executed but returned no daily data" as cacheHit (plan-interpreter override windows)', async () => {
@@ -157,6 +180,27 @@ describe('dataOperationsService.getFromSourceDirect persists successful gaps imm
     // Explicit warning emitted for plan-interpreter (override windows) empty response.
     const noDataCalls = addChildSpy.mock.calls.filter((c) => c[2] === 'FETCH_NO_DATA_RETURNED');
     expect(noDataCalls.length).toBeGreaterThan(0);
+
+    // CRITICAL: Dense snapshot DB write should still occur (explicit zeros for each day in window).
+    expect(appendSnapshotsSpy).toHaveBeenCalledTimes(1);
+    const callParams = appendSnapshotsSpy.mock.calls[0][0];
+    const rows = callParams?.rows;
+    expect(Array.isArray(rows)).toBe(true);
+    // 1-Dec-25..5-Dec-25 inclusive => 5 rows
+    expect(rows).toHaveLength(5);
+    expect(rows.map((r: any) => r.anchor_day)).toEqual([
+      '2025-12-01',
+      '2025-12-02',
+      '2025-12-03',
+      '2025-12-04',
+      '2025-12-05',
+    ]);
+    for (const r of rows) {
+      expect(r.X).toBe(0);
+      expect(r.Y).toBe(0);
+      // Window mode: no A column expected
+      expect('A' in r).toBe(false);
+    }
   });
 
   it('writes first gap to file even if second gap fails', async () => {

@@ -134,6 +134,8 @@
   - adding session-log diagnostics that explicitly report signature matching counts per item (so “COVERED but filtered out” is visible).
 
 
+- **Nousmates context cleanup**: The `nousmates` context was a rush implementation and needs proper cleanup — genericise test data that references it, rename to something domain-neutral, and ensure it doesn't leak commercially identifiable information in the public repo. Affected files include test fixtures and `contexts-index.yaml` references.
+
 - Dark mode on user devices looks ugly (as only some elements are re-colouring)
 
 ## Pull latest issues

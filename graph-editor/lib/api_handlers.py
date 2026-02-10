@@ -252,9 +252,31 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
     from runner.histogram_derivation import derive_lag_histogram
     from runner.daily_conversions_derivation import derive_daily_conversions
     from runner.cohort_maturity_derivation import derive_cohort_maturity
+    from runner.forecast_application import annotate_rows
 
     analysis_type = data.get('analysis_type', 'lag_histogram')
     scenarios = data.get('scenarios', [])
+
+    def _read_edge_model_params(graph: Any, target_id: str) -> Optional[Dict[str, float]]:
+        """Read mu/sigma/onset from graph edge latency config (if present)."""
+        if not graph or not target_id:
+            return None
+        edges = graph.get('edges', []) if isinstance(graph, dict) else []
+        edge = next(
+            (e for e in edges
+             if str(e.get('uuid') or e.get('id') or '') == str(target_id)),
+            None,
+        )
+        if not edge:
+            return None
+        p = edge.get('p') or {}
+        latency = p.get('latency') or {}
+        mu = latency.get('mu')
+        sigma = latency.get('sigma')
+        if not isinstance(mu, (int, float)) or not isinstance(sigma, (int, float)):
+            return None
+        onset = latency.get('onset_delta_days') or 0
+        return {'mu': float(mu), 'sigma': float(sigma), 'onset_delta_days': float(onset) if isinstance(onset, (int, float)) else 0.0}
 
     per_scenario_results: List[Dict[str, Any]] = []
     total_rows = 0
@@ -371,6 +393,31 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
                     result = derive_cohort_maturity(rows)
                 else:
                     raise ValueError(f"Unknown analysis_type for snapshot: {analysis_type}")
+
+            # ── Completeness annotation (Phase 6) ──────────────
+            # If the graph edge has mu/sigma (from a prior recompute),
+            # annotate each data point with completeness and layer.
+            # This is naturally dormant until Phase 7 persists mu/sigma.
+            graph = scenario.get('graph') or {}
+            target_id = (subj.get('target') or {}).get('targetId')
+            model_params = _read_edge_model_params(graph, target_id)
+            if model_params and result:
+                mu = model_params['mu']
+                sigma = model_params['sigma']
+                onset = model_params['onset_delta_days']
+
+                if analysis_type == 'cohort_maturity' and 'frames' in result:
+                    for frame in result['frames']:
+                        as_at_date = frame.get('as_at_date', '')
+                        if frame.get('data_points'):
+                            frame['data_points'] = annotate_rows(
+                                frame['data_points'], mu, sigma, onset,
+                                retrieved_at_override=as_at_date,
+                            )
+                elif analysis_type == 'daily_conversions' and 'rate_by_cohort' in result:
+                    result['rate_by_cohort'] = annotate_rows(
+                        result['rate_by_cohort'], mu, sigma, onset,
+                    )
 
             per_subject_results.append({
                 "subject_id": subj.get('subject_id'),
@@ -1134,6 +1181,73 @@ def handle_snapshots_query_virtual(data: Dict[str, Any]) -> Dict[str, Any]:
 
 
 # =============================================================================
+# Batch Anchor Coverage — missing anchor-day ranges for Retrieve All preflight
+# =============================================================================
+
+
+def handle_snapshots_batch_anchor_coverage(data: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Handle batch anchor coverage endpoint.
+
+    For each subject, compute which anchor-day ranges are missing from the
+    snapshot DB within [anchor_from, anchor_to], considering equivalence closure.
+
+    Args:
+        data: Request body containing:
+            - subjects: List of dicts, each with:
+                - param_id (str, required)
+                - core_hash (str, required)
+                - slice_keys (list[str], required)
+                - anchor_from (ISO date str, required)
+                - anchor_to (ISO date str, required)
+                - include_equivalents (bool, optional; default True)
+
+    Returns:
+        Response dict with:
+            - success: bool
+            - results: list of per-subject coverage results
+    """
+    from datetime import date as date_type
+    from snapshot_service import batch_anchor_coverage
+    diagnostic = bool(data.get("diagnostic", False))
+
+    subjects_raw = data.get("subjects")
+    if not subjects_raw:
+        raise ValueError("Missing 'subjects' field")
+    if not isinstance(subjects_raw, list):
+        raise ValueError("'subjects' must be a list")
+
+    # Parse and validate each subject
+    subjects = []
+    for i, s in enumerate(subjects_raw):
+        if not isinstance(s, dict):
+            raise ValueError(f"subjects[{i}] must be a dict")
+        param_id = s.get("param_id")
+        if not param_id:
+            raise ValueError(f"subjects[{i}] missing 'param_id'")
+        core_hash = s.get("core_hash")
+        if not core_hash:
+            raise ValueError(f"subjects[{i}] missing 'core_hash'")
+        anchor_from_str = s.get("anchor_from")
+        if not anchor_from_str:
+            raise ValueError(f"subjects[{i}] missing 'anchor_from'")
+        anchor_to_str = s.get("anchor_to")
+        if not anchor_to_str:
+            raise ValueError(f"subjects[{i}] missing 'anchor_to'")
+        subjects.append({
+            "param_id": param_id,
+            "core_hash": core_hash,
+            "slice_keys": s.get("slice_keys") or [],
+            "anchor_from": date_type.fromisoformat(anchor_from_str),
+            "anchor_to": date_type.fromisoformat(anchor_to_str),
+            "include_equivalents": bool(s.get("include_equivalents", True)),
+        })
+
+    results = batch_anchor_coverage(subjects, diagnostic=diagnostic)
+    return {"success": True, "results": results}
+
+
+# =============================================================================
 # Flexible signatures: Signature Links UI routes
 # =============================================================================
 
@@ -1254,3 +1368,144 @@ def handle_sigs_resolve(data: Dict[str, Any]) -> Dict[str, Any]:
         core_hash=core_hash,
         include_equivalents=bool(data.get("include_equivalents", True)),
     )
+
+
+def handle_lag_recompute_models(data: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Recompute lag models for a set of subjects using snapshot DB evidence.
+
+    Request shape (see analysis-forecasting.md §5.2):
+      - subjects: array of {subject_id, param_id, core_hash, slice_keys,
+                             anchor_from, anchor_to, target: {targetId, ...}}
+      - forecasting_settings: required settings object (see §4.5)
+      - graph: scenario graph (for reading t95 constraint from edge)
+      - training_anchor_from/to: ISO dates (optional; defaults to subject anchor range)
+      - as_at: ISO datetime (optional; for as-at evidence selection)
+
+    Returns per-subject fitted model params.
+    """
+    from datetime import date, datetime
+    from snapshot_service import query_snapshots
+    from runner.lag_model_fitter import fit_model_from_evidence
+    from runner.forecasting_settings import settings_from_dict, compute_settings_signature
+
+    # ── Validate required fields ──────────────────────────────
+    forecasting_settings_raw = data.get('forecasting_settings')
+    if not forecasting_settings_raw:
+        raise ValueError("Missing required 'forecasting_settings' field")
+    settings = settings_from_dict(forecasting_settings_raw)
+    sig = compute_settings_signature(settings)
+
+    subjects = data.get('subjects', [])
+    if not subjects:
+        raise ValueError("Missing or empty 'subjects' array")
+
+    graph = data.get('graph', {})
+    edges = graph.get('edges', []) if isinstance(graph, dict) else []
+    as_at_str = data.get('as_at')
+    as_at = datetime.fromisoformat(as_at_str) if as_at_str else None
+
+    # UK date for model_trained_at provenance.
+    from datetime import date as _date
+    today = _date.today()
+    model_trained_at = today.strftime('%-d-%b-%y')
+
+    # ── Process each subject ──────────────────────────────────
+    results = []
+    for subj in subjects:
+        subject_id = subj.get('subject_id', '')
+        param_id = subj.get('param_id')
+        core_hash = subj.get('core_hash')
+        if not param_id or not core_hash:
+            results.append({
+                'subject_id': subject_id,
+                'success': False,
+                'error': 'Missing param_id or core_hash',
+            })
+            continue
+
+        slice_keys = subj.get('slice_keys', [''])
+        anchor_from_str = data.get('training_anchor_from') or subj.get('anchor_from')
+        anchor_to_str = data.get('training_anchor_to') or subj.get('anchor_to')
+
+        print(f"[lag_recompute] subject={subject_id}, param_id={param_id}, core_hash={core_hash[:12]}..., slice_keys={slice_keys}, anchor_from={anchor_from_str}, anchor_to={anchor_to_str}")
+
+        try:
+            anchor_from = date.fromisoformat(anchor_from_str) if anchor_from_str else None
+            anchor_to = date.fromisoformat(anchor_to_str) if anchor_to_str else None
+        except (ValueError, TypeError):
+            anchor_from = None
+            anchor_to = None
+
+        # Read t95 constraint from graph edge (one-way sigma constraint).
+        target = subj.get('target', {})
+        target_id = target.get('targetId')
+        t95_constraint = None
+        if target_id and edges:
+            edge = next(
+                (e for e in edges
+                 if str(e.get('uuid') or e.get('id') or '') == str(target_id)),
+                None,
+            )
+            if edge:
+                p = edge.get('p') or {}
+                latency = p.get('latency') or {}
+                t95_val = latency.get('t95') or p.get('t95')
+                if isinstance(t95_val, (int, float)) and t95_val > 0:
+                    t95_constraint = float(t95_val)
+
+        # Query DB evidence.
+        try:
+            rows = query_snapshots(
+                param_id=param_id,
+                core_hash=core_hash,
+                slice_keys=slice_keys,
+                anchor_from=anchor_from,
+                anchor_to=anchor_to,
+                as_at=as_at,
+                include_equivalents=True,
+            )
+        except Exception as e:
+            results.append({
+                'subject_id': subject_id,
+                'success': False,
+                'error': f'DB query failed: {e}',
+            })
+            continue
+
+        # Fit model from evidence.
+        training_window = {}
+        if anchor_from_str:
+            training_window['anchor_from'] = anchor_from_str
+        if anchor_to_str:
+            training_window['anchor_to'] = anchor_to_str
+
+        fit = fit_model_from_evidence(
+            rows=rows,
+            settings=settings,
+            t95_constraint=t95_constraint,
+            model_trained_at=model_trained_at,
+            training_window=training_window or None,
+            settings_signature=sig,
+        )
+
+        results.append({
+            'subject_id': subject_id,
+            'success': True,
+            'mu': fit.mu,
+            'sigma': fit.sigma,
+            'model_trained_at': fit.model_trained_at,
+            't95_days': fit.t95_days,
+            'onset_delta_days': fit.onset_delta_days,
+            'quality_ok': fit.quality_ok,
+            'total_k': fit.total_k,
+            'quality_failure_reason': fit.quality_failure_reason,
+            'training_window': fit.training_window,
+            'settings_signature': fit.settings_signature,
+            'evidence_anchor_days': fit.evidence_anchor_days,
+        })
+
+    return {
+        'success': True,
+        'subjects': results,
+    }

@@ -60,6 +60,84 @@ describe('selectLatencyToApplyForTopoPass', () => {
     expect(selected).toEqual(computed);
   });
 
+  it('preserves computed mu/sigma in from-file mode (not stripped by type narrowing)', () => {
+    const computed = {
+      median_lag_days: 2.5,
+      mean_lag_days: 2.7,
+      t95: 6.1,
+      completeness: 0.91,
+      path_t95: 8.43,
+      onset_delta_days: 3,
+      mu: 1.609,
+      sigma: 0.8,
+    };
+
+    const existing = {
+      median_lag_days: 6.4,
+      mean_lag_days: 6.8,
+      t95: 13.12,
+      completeness: 0.6032414791916322,
+      onset_delta_days: 9,
+    };
+
+    const selected = selectLatencyToApplyForTopoPass(computed, existing, true);
+
+    // mu/sigma must always come from the topo pass (fitted model params).
+    // This test catches the bug where type narrowing in from-file mode stripped them.
+    expect(selected.mu).toBe(1.609);
+    expect(selected.sigma).toBe(0.8);
+  });
+
+  it('mu/sigma survive the full from-file pipeline: select → applyBatchLAGValues → graph edge', () => {
+    const graph: any = {
+      nodes: [{ id: 'A' }, { id: 'B' }],
+      edges: [
+        {
+          id: 'e1',
+          uuid: 'e1',
+          from: 'A',
+          to: 'B',
+          p: {
+            mean: 0.5,
+            latency: {
+              latency_parameter: true,
+              onset_delta_days_overridden: false,
+            },
+          },
+        },
+      ],
+    };
+
+    const computed = {
+      median_lag_days: 2.5,
+      mean_lag_days: 2.7,
+      t95: 6.1,
+      completeness: 0.91,
+      path_t95: 8.43,
+      onset_delta_days: 3,
+      mu: 1.609,
+      sigma: 0.8,
+    };
+
+    const existing = {
+      median_lag_days: 6.4,
+      mean_lag_days: 6.8,
+    };
+
+    const selected = selectLatencyToApplyForTopoPass(computed, existing, true);
+
+    const um = new UpdateManager();
+    const next = um.applyBatchLAGValues(
+      graph,
+      [{ edgeId: 'e1', latency: selected }],
+      { writeHorizonsToGraph: false },
+    );
+
+    const e1 = next.edges.find((e: any) => e.uuid === 'e1' || e.id === 'e1');
+    expect(e1?.p?.latency?.mu).toBe(1.609);
+    expect(e1?.p?.latency?.sigma).toBe(0.8);
+  });
+
   it('from-file topo pass: selected onset persists onto graph via UpdateManager', () => {
     // This reproduces the exact app flow:
     // - Stage‑2 (from-file) chooses which latency fields to apply

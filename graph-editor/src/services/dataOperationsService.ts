@@ -77,7 +77,7 @@ import { rateLimiter } from './rateLimiter';
 import { buildDslFromEdge } from '../lib/das/buildDslFromEdge';
 import { createDASRunner } from '../lib/das';
 import { db } from '../db/appDatabase';
-import { querySnapshotsVirtual, type VirtualSnapshotRow } from './snapshotWriteService';
+import { querySnapshotsVirtual, type VirtualSnapshotRow, type SnapshotRow } from './snapshotWriteService';
 import { RECENCY_HALF_LIFE_DAYS, DEFAULT_T95_DAYS } from '../constants/latency';
 import { normalizeWindow } from './fetchDataService';
 import { LATENCY_T95_PERCENTILE, LATENCY_PATH_T95_PERCENTILE } from '../constants/latency';
@@ -1190,6 +1190,94 @@ export function fireAsatWarnings(
 }
 
 class DataOperationsService {
+  /**
+   * Build dense snapshot rows for DB writes: for every anchor day in each fetched window,
+   * ensure a row exists (fill gaps with explicit zeros).
+   *
+   * This prevents the snapshot DB coverage preflight from interpreting sparse/empty API
+   * responses as "never fetched".
+   */
+  private buildDenseSnapshotRowsForDbWrite(params: {
+    allTimeSeriesData: Array<any>;
+    actualFetchWindows: Array<{ start: string; end: string }>;
+    isCohortQuery: boolean;
+    lastOnsetDeltaDays?: number;
+  }): SnapshotRow[] {
+    const { allTimeSeriesData, actualFetchWindows, isCohortQuery, lastOnsetDeltaDays } = params;
+
+    // Index returned points by anchor_day (ISO YYYY-MM-DD) for quick lookup.
+    // CRITICAL: Must use ISO format here because the window-iteration loop below
+    // generates keys via toISOString().split('T')[0] — format must match.
+    const byDay = new Map<string, any>();
+    for (const day of allTimeSeriesData || []) {
+      if (!day || typeof day.date !== 'string') continue;
+      const anchor_day = parseDate(day.date).toISOString().split('T')[0];
+      if (!anchor_day) continue;
+      // Prefer the richer / larger row if duplicates somehow occur.
+      const prev = byDay.get(anchor_day);
+      if (!prev) {
+        byDay.set(anchor_day, day);
+      } else {
+        const prevN = Number(prev?.n ?? 0);
+        const prevK = Number(prev?.k ?? 0);
+        const nextN = Number(day?.n ?? 0);
+        const nextK = Number(day?.k ?? 0);
+        if (nextN + nextK >= prevN + prevK) {
+          byDay.set(anchor_day, day);
+        }
+      }
+    }
+
+    const outByDay = new Map<string, SnapshotRow>();
+
+    for (const fetchWindow of actualFetchWindows || []) {
+      let startD: Date;
+      let endD: Date;
+      try {
+        startD = parseDate(normalizeDate(fetchWindow.start));
+        endD = parseDate(normalizeDate(fetchWindow.end));
+      } catch {
+        continue;
+      }
+      if (Number.isNaN(startD.getTime()) || Number.isNaN(endD.getTime())) continue;
+
+      const currentD = new Date(startD);
+      while (currentD <= endD) {
+        const anchor_day = currentD.toISOString().split('T')[0];
+        const found = byDay.get(anchor_day);
+
+        const row: SnapshotRow = {
+          anchor_day,
+          X: found ? Number(found.n ?? 0) : 0,
+          Y: found ? Number(found.k ?? 0) : 0,
+          ...(isCohortQuery ? { A: found ? Number((found as any).anchor_n ?? 0) : 0 } : {}),
+          ...(found && (found as any).median_lag_days !== undefined ? { median_lag_days: (found as any).median_lag_days } : {}),
+          ...(found && (found as any).mean_lag_days !== undefined ? { mean_lag_days: (found as any).mean_lag_days } : {}),
+          ...(found && (found as any).anchor_median_lag_days !== undefined ? { anchor_median_lag_days: (found as any).anchor_median_lag_days } : {}),
+          ...(found && (found as any).anchor_mean_lag_days !== undefined ? { anchor_mean_lag_days: (found as any).anchor_mean_lag_days } : {}),
+          ...(lastOnsetDeltaDays !== undefined ? { onset_delta_days: lastOnsetDeltaDays } : {}),
+        };
+
+        // If overlaps occur, prefer the non-zero / richer row.
+        const prev = outByDay.get(anchor_day);
+        if (!prev) {
+          outByDay.set(anchor_day, row);
+        } else {
+          const prevX = Number(prev.X ?? 0);
+          const prevY = Number(prev.Y ?? 0);
+          const nextX = Number(row.X ?? 0);
+          const nextY = Number(row.Y ?? 0);
+          if (nextX + nextY >= prevX + prevY) outByDay.set(anchor_day, row);
+        }
+
+        // CRITICAL: UTC iteration to avoid DST/local-time drift.
+        currentD.setUTCDate(currentD.getUTCDate() + 1);
+      }
+    }
+
+    return [...outByDay.values()].sort((a, b) => a.anchor_day.localeCompare(b.anchor_day));
+  }
+
   /**
    * Get data from parameter file → graph edge
    * 
@@ -8108,7 +8196,9 @@ class DataOperationsService {
             // SNAPSHOT DB: Shadow-write fetched data to database (incremental persist path)
             // This mirrors the snapshot write in the else branch below.
             // =========================================================================
-            if (allTimeSeriesData.length > 0 && querySignature) {
+            // Dense snapshot DB writes: write explicit 0 rows for missing days too.
+            // This keeps DB coverage aligned with file-side "no data" markers.
+            if (querySignature && actualFetchWindows.length > 0 && !dontExecuteHttp) {
               const diagnosticOn = sessionLogService.getDiagnosticLoggingEnabled();
               let dbParamId = '';
               
@@ -8124,18 +8214,12 @@ class DataOperationsService {
                 dbParamId = `${workspace.repository}-${workspace.branch}-${objectId}`;
                 const sliceDSL = targetSlice || extractSliceDimensions(currentDSL || '');
                 
-                // Map time-series to snapshot rows
-                const snapshotRows = allTimeSeriesData.map(day => ({
-                  anchor_day: normalizeDate(day.date),
-                  A: (day as any).anchor_n,
-                  X: day.n,
-                  Y: day.k,
-                  median_lag_days: (day as any).median_lag_days,
-                  mean_lag_days: (day as any).mean_lag_days,
-                  anchor_median_lag_days: (day as any).anchor_median_lag_days,
-                  anchor_mean_lag_days: (day as any).anchor_mean_lag_days,
-                  onset_delta_days: lastOnsetDeltaDays,
-                }));
+                const snapshotRows = this.buildDenseSnapshotRowsForDbWrite({
+                  allTimeSeriesData,
+                  actualFetchWindows,
+                  isCohortQuery,
+                  lastOnsetDeltaDays,
+                });
                 
                 const { appendSnapshots } = await import('./snapshotWriteService');
                 
@@ -8410,9 +8494,13 @@ class DataOperationsService {
             // =========================================================================
             // SNAPSHOT DB: Shadow-write fetched data to database
             // This is fire-and-forget - failures are logged but don't block the fetch.
-            // Only write if we have actual fetched data (not cache hit or no-data marker).
+            //
+            // CRITICAL:
+            // - Write is gated on "we actually fetched windows" (actualFetchWindows > 0), not on
+            //   "API returned non-empty time-series". Sparse/empty responses should still record
+            //   explicit zeros in the DB so coverage checks don't interpret "no rows" as "never fetched".
             // =========================================================================
-            if (allTimeSeriesData.length > 0 && querySignature && !dontExecuteHttp) {
+            if (querySignature && actualFetchWindows.length > 0 && !dontExecuteHttp) {
               const diagnosticOn = sessionLogService.getDiagnosticLoggingEnabled();
               let dbParamId = '';
               
@@ -8427,18 +8515,12 @@ class DataOperationsService {
                 
                 dbParamId = `${workspace.repository}-${workspace.branch}-${objectId}`;
                 
-                // Map time-series to snapshot rows
-                const snapshotRows = allTimeSeriesData.map(day => ({
-                  anchor_day: normalizeDate(day.date),
-                  A: (day as any).anchor_n,  // Cohort mode only
-                  X: day.n,
-                  Y: day.k,
-                  median_lag_days: (day as any).median_lag_days,
-                  mean_lag_days: (day as any).mean_lag_days,
-                  anchor_median_lag_days: (day as any).anchor_median_lag_days,
-                  anchor_mean_lag_days: (day as any).anchor_mean_lag_days,
-                  onset_delta_days: lastOnsetDeltaDays,
-                }));
+                const snapshotRows = this.buildDenseSnapshotRowsForDbWrite({
+                  allTimeSeriesData,
+                  actualFetchWindows,
+                  isCohortQuery,
+                  lastOnsetDeltaDays,
+                });
                 
                 // Dynamic import to avoid circular deps and enable tree-shaking
                 const { appendSnapshots } = await import('./snapshotWriteService');

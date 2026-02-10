@@ -113,6 +113,8 @@ class DailyRetrieveAllAutomationService {
         shouldAbort,
         toastId: `retrieve-all-automation:${graphFileId}`,
         toastLabel: `Retrieve All (${graphName})`,
+        checkDbCoverageFirst: true,
+        workspace: { repository, branch },
       });
       sessionLogService.addChild(
         logOpId,

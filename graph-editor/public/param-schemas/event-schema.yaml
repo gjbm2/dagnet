@@ -111,9 +111,16 @@ properties:
 
 # Example valid event definitions
 examples:
-  # Minimal example for new event creation (used as default template)
+  # Default template for new event creation (first example is used by fileOperationsService)
+  # Include all user-facing fields so the form editor renders them immediately.
   - id: example_event
     name: "Example Event"
+    description: ""
+    category: conversion
+    tags: []
+    provider_event_names:
+      amplitude: ""
+    amplitude_filters: []
   
   - id: household-delegated
     name: Delegation Completed

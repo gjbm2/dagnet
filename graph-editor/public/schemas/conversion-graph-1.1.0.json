@@ -386,7 +386,10 @@
         "onset_delta_days_overridden": { "type": "boolean", "default": false, "description": "If true, user manually set onset_delta_days" },
         "median_lag_days": { "type": "number", "minimum": 0, "description": "Weighted median lag in days (display only)" },
         "mean_lag_days": { "type": "number", "minimum": 0, "description": "Weighted mean lag in days (used with median to compute t95)" },
-        "completeness": { "type": "number", "minimum": 0, "maximum": 1, "description": "Maturity progress 0-1 (display only)" }
+        "completeness": { "type": "number", "minimum": 0, "maximum": 1, "description": "Maturity progress 0-1 (display only)" },
+        "mu": { "type": "number", "description": "Fitted log-normal mu parameter (internal, not UI-exposed)" },
+        "sigma": { "type": "number", "minimum": 0, "description": "Fitted log-normal sigma parameter (internal, not UI-exposed)" },
+        "model_trained_at": { "type": "string", "description": "UK date (d-MMM-yy) when the model was last fitted (staleness detection)" }
       }
     },
 

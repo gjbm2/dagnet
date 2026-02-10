@@ -883,7 +883,6 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
     if (days === 'today') {
       // Today only (start and end are same day)
       const todayStr = formatDateUK(today);
-      const newWindow: DateRange = { start: todayStr, end: todayStr };
       
       // Skip if window unchanged
       if (window && window.start === todayStr && window.end === todayStr) {
@@ -892,7 +891,9 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
       }
       
       console.log('[WindowSelector] Preset today:', todayStr);
-      setWindow?.(newWindow);
+      // IMPORTANT: Update BOTH window state and authoritative DSL (mirrors 7d/30d/90d presets).
+      // Otherwise the UI shows "today" but data operations still use the previous DSL.
+      updateWindowAndDSL(todayStr, todayStr);
       return;
     }
     

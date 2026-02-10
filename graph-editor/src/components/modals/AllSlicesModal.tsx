@@ -10,7 +10,7 @@ import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { explodeDSL } from '../../lib/dslExplosion';
 import { retrieveAllSlicesService } from '../../services/retrieveAllSlicesService';
-import { useTabContext } from '../../contexts/TabContext';
+import { useTabContext, fileRegistry } from '../../contexts/TabContext';
 import toast from 'react-hot-toast';
 import type { GraphData } from '../../types';
 import { requestPutToBase } from '../../hooks/usePutToBaseRequestListener';
@@ -54,6 +54,7 @@ export function AllSlicesModal({
   const [bustCache, setBustCache] = useState(false);
   const [simulateToLog, setSimulateToLog] = useState(false);
   const [putToBaseAfter, setPutToBaseAfter] = useState(true);
+  const [checkDbCoverage, setCheckDbCoverage] = useState(false);
   
   // CRITICAL: Use ref for log content so it's synchronously available at end of batch
   // React state setters are async, so logContent state would be empty when we check it
@@ -133,6 +134,13 @@ export function AllSlicesModal({
     // - no file writes
     // - no graph mutation
     //
+    // Derive workspace identity from the active graph file for DB coverage preflight
+    const activeTab = activeTabId ? tabs.find(t => t.id === activeTabId) : undefined;
+    const graphFileSource = activeTab?.fileId ? fileRegistry.getFile(activeTab.fileId)?.source : undefined;
+    const wsForCoverage = (checkDbCoverage && graphFileSource?.repository && graphFileSource?.branch)
+      ? { repository: graphFileSource.repository, branch: graphFileSource.branch }
+      : undefined;
+
     // The artefact is the session log trace (DRY_RUN_HTTP entries).
     if (simulateToLog) {
       setIsProcessing(true);
@@ -147,6 +155,8 @@ export function AllSlicesModal({
           slices: selectedSlices.map(s => s.dsl),
           bustCache,
           simulate: true,
+          checkDbCoverageFirst: checkDbCoverage,
+          workspace: wsForCoverage,
           shouldAbort: () => abortRef.current,
           onProgress: (p) => {
             setProgress({
@@ -187,7 +197,6 @@ export function AllSlicesModal({
     };
 
     // Apply a temporary evidence-mode override for ALL tabs viewing this graph file.
-    const activeTab = activeTabId ? tabs.find(t => t.id === activeTabId) : undefined;
     const targetFileId = activeTab?.fileId;
     const affectedTabIds = targetFileId ? tabs.filter(t => t.fileId === targetFileId).map(t => t.id) : [];
     const prevModes = new Map<string, 'f+e' | 'f' | 'e'>();
@@ -206,6 +215,8 @@ export function AllSlicesModal({
         setGraph: setGraphWithRef,
         slices: selectedSlices.map(s => s.dsl),
         bustCache,
+        checkDbCoverageFirst: checkDbCoverage,
+        workspace: wsForCoverage,
         postRunRefreshDsl: currentDSL,
         shouldAbort: () => abortRef.current,
         onProgress: (p) => {
@@ -440,6 +451,18 @@ export function AllSlicesModal({
                   />
                   <span style={{ fontSize: '14px' }}>
                     Bust cache (re-fetch all dates, ignore existing data)
+                  </span>
+                </label>
+
+                <label style={{ display: 'flex', alignItems: 'center', cursor: 'pointer' }}>
+                  <input
+                    type="checkbox"
+                    checked={checkDbCoverage}
+                    onChange={(e) => setCheckDbCoverage(e.target.checked)}
+                    style={{ marginRight: '8px' }}
+                  />
+                  <span style={{ fontSize: '14px' }}>
+                    Check snapshot DB coverage first (fills historic gaps)
                   </span>
                 </label>
               </div>

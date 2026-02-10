@@ -691,6 +691,107 @@ export async function getBatchRetrievalDays(
   }
 }
 
+// =============================================================================
+// Batch Anchor Coverage — missing anchor-day ranges for Retrieve All preflight
+// =============================================================================
+
+export interface BatchAnchorCoverageSubject {
+  param_id: string;
+  core_hash: string;
+  slice_keys: string[];
+  /** ISO date (YYYY-MM-DD) */
+  anchor_from: string;
+  /** ISO date (YYYY-MM-DD) */
+  anchor_to: string;
+  include_equivalents?: boolean;
+}
+
+export interface BatchAnchorCoverageResult {
+  subject_index: number;
+  coverage_ok: boolean;
+  missing_anchor_ranges: Array<{ start: string; end: string }>;
+  /**
+   * Optional: present ranges (normalised union) returned in diagnostic mode.
+   * Inclusive ISO date bounds.
+   */
+  present_anchor_ranges?: Array<{ start: string; end: string }>;
+  present_anchor_day_count: number;
+  expected_anchor_day_count: number;
+  equivalence_resolution: {
+    core_hashes: string[];
+    param_ids: string[];
+  };
+  /** Optional: slice-key normalisation evidence (diagnostic mode). */
+  slice_keys_normalised?: string[];
+  /** Optional: whether slice filter was applied (diagnostic mode). */
+  slice_filter_kind?: 'none' | 'families' | 'empty';
+  error?: string;
+}
+
+/**
+ * Query the snapshot DB for missing anchor-day ranges per subject.
+ *
+ * Used by Retrieve All DB preflight (bd-pre-fetch-pass.md) to detect
+ * historic gaps caused by hash drift or late-start snapshotting.
+ *
+ * Graceful degradation: returns empty/error results on failure so the
+ * caller can fall back to file-only planning.
+ */
+export async function batchAnchorCoverage(
+  subjects: BatchAnchorCoverageSubject[],
+  opts?: { diagnostic?: boolean }
+): Promise<BatchAnchorCoverageResult[]> {
+  if (!SNAPSHOTS_ENABLED || subjects.length === 0) {
+    return subjects.map((_, i) => ({
+      subject_index: i,
+      coverage_ok: true, // assume covered when snapshots disabled
+      missing_anchor_ranges: [],
+      present_anchor_day_count: 0,
+      expected_anchor_day_count: 0,
+      equivalence_resolution: { core_hashes: [], param_ids: [] },
+    }));
+  }
+
+  try {
+    const response = await fetch(`${PYTHON_API_BASE}/api/snapshots/batch-anchor-coverage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        diagnostic: opts?.diagnostic === true,
+        subjects: subjects.map(s => ({
+          param_id: s.param_id,
+          core_hash: s.core_hash,
+          slice_keys: s.slice_keys,
+          anchor_from: s.anchor_from,
+          anchor_to: s.anchor_to,
+          include_equivalents: s.include_equivalents ?? true,
+        })),
+      }),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error('[batchAnchorCoverage] Failed:', response.status, errorText);
+      throw new Error(`HTTP ${response.status}: ${errorText}`);
+    }
+
+    const data = await response.json();
+    return Array.isArray(data.results) ? data.results : [];
+  } catch (error) {
+    console.error('[batchAnchorCoverage] Error:', error);
+    // Graceful degradation: return "assume covered" so caller falls back
+    return subjects.map((_, i) => ({
+      subject_index: i,
+      coverage_ok: true,
+      missing_anchor_ranges: [],
+      present_anchor_day_count: 0,
+      expected_anchor_day_count: 0,
+      equivalence_resolution: { core_hashes: [], param_ids: [] },
+      error: error instanceof Error ? error.message : String(error),
+    }));
+  }
+}
+
 /**
  * Get snapshot inventory for multiple parameters in one request.
  *

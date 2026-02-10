@@ -5,13 +5,15 @@ import { dataOperationsService, setBatchMode, type CacheAnalysisResult } from '.
 import { sessionLogService } from './sessionLogService';
 import { retrieveAllSlicesPlannerService } from './retrieveAllSlicesPlannerService';
 import { parseConstraints } from '../lib/queryDSL';
-import { resolveRelativeDate, formatDateUK } from '../lib/dateFormat';
+import { resolveRelativeDate, formatDateUK, parseUKDate } from '../lib/dateFormat';
 import { buildFetchPlanProduction } from './fetchPlanBuilderService';
-import { summarisePlan, type FetchPlan, type FetchPlanItem } from './fetchPlanTypes';
+import { summarisePlan, type FetchPlan, type FetchPlanItem, type FetchWindow } from './fetchPlanTypes';
 import { fetchDataService, type FetchItem } from './fetchDataService';
 import { lagHorizonsService } from './lagHorizonsService';
 import { rateLimiter, getEffectiveRateLimitCooloffMinutes } from './rateLimiter';
 import { countdownService } from './countdownService';
+import { batchAnchorCoverage, type BatchAnchorCoverageSubject } from './snapshotWriteService';
+import { computeShortCoreHash } from './coreHashService';
 
 /**
  * Current item cache status - reported immediately after cache analysis, before API fetch.
@@ -117,6 +119,26 @@ export interface RetrieveAllSlicesOptions {
    * - This must never run in simulate mode.
    */
   postRunRefreshDsl?: string;
+
+  /**
+   * If true, run a DB coverage preflight before each slice to detect historic
+   * anchor-day gaps in the snapshot DB (caused by hash drift or late-start
+   * snapshotting). Detected gaps are unioned into the plan as `db_missing` windows.
+   *
+   * Default: false (manual runs). Automated overnight runs set this to true.
+   *
+   * See docs/current/project-db/bd-pre-fetch-pass.md for design.
+   */
+  checkDbCoverageFirst?: boolean;
+
+  /**
+   * Workspace identity (repository + branch), needed for DB coverage preflight
+   * to construct workspace-prefixed param_ids.
+   *
+   * If `checkDbCoverageFirst` is true but `workspace` is not provided, the
+   * preflight is silently skipped with a warning log.
+   */
+  workspace?: { repository: string; branch: string };
 }
 
 export interface RetrieveAllSlicesWithProgressToastOptions extends RetrieveAllSlicesOptions {
@@ -213,6 +235,8 @@ class RetrieveAllSlicesService {
       shouldAbort,
       onProgress,
       postRunRefreshDsl,
+      checkDbCoverageFirst = false,
+      workspace,
     } = options;
 
     const startTime = performance.now();
@@ -390,6 +414,336 @@ class RetrieveAllSlicesService {
           );
         } catch {
           // Best-effort only: do not fail the slice because the table renderer errored.
+        }
+
+        // ---------------------------------------------------------------
+        // DB COVERAGE PREFLIGHT (bd-pre-fetch-pass.md)
+        // ---------------------------------------------------------------
+        if (checkDbCoverageFirst && workspace) {
+          try {
+            sessionLogService.addChild(
+              logOpId, 'info', 'DB_COVERAGE_PREFLIGHT_START',
+              `DB coverage preflight: ${fetchPlan.items.filter(i => i.type === 'parameter').length} subjects`,
+              undefined,
+              { sliceDSL, anchor_from: window.start, anchor_to: window.end }
+            );
+
+            // Build coverage subjects from parameter plan items
+            const coverageSubjects: BatchAnchorCoverageSubject[] = [];
+            const subjectIndexToItemIndex: number[] = []; // maps coverage result index → fetchPlan.items index
+            const subjectIndexToItemKey: string[] = [];   // maps coverage result index → itemKey (for diagnostics)
+            let anchorFromISOForCall: string | null = null;
+            let anchorToISOForCall: string | null = null;
+            let skippedNonParameter = 0;
+            let skippedNoSignature = 0;
+            let skippedHashFail = 0;
+
+            for (let ii = 0; ii < fetchPlan.items.length; ii++) {
+              const item = fetchPlan.items[ii];
+              if (item.type !== 'parameter') { skippedNonParameter++; continue; }
+              if (!item.querySignature) { skippedNoSignature++; continue; }
+
+              let coreHash: string;
+              try {
+                coreHash = await computeShortCoreHash(item.querySignature);
+              } catch {
+                skippedHashFail++;
+                continue; // skip items where hash computation fails
+              }
+
+              const paramId = `${workspace.repository}-${workspace.branch}-${item.objectId}`;
+              const modeClause = item.mode === 'cohort' ? 'cohort()' : 'window()';
+              const sliceKeys = item.sliceFamily
+                ? [`${item.sliceFamily}.${modeClause}`]
+                : [modeClause];
+
+              // Convert UK dates to ISO for the backend
+              const anchorFromISO = (() => { try { return parseUKDate(resolveRelativeDate(window.start)).toISOString().split('T')[0]; } catch { return window.start; } })();
+              const anchorToISO = (() => { try { return parseUKDate(resolveRelativeDate(window.end)).toISOString().split('T')[0]; } catch { return window.end; } })();
+              if (!anchorFromISOForCall) anchorFromISOForCall = anchorFromISO;
+              if (!anchorToISOForCall) anchorToISOForCall = anchorToISO;
+
+              coverageSubjects.push({
+                param_id: paramId,
+                core_hash: coreHash,
+                slice_keys: sliceKeys,
+                anchor_from: anchorFromISO,
+                anchor_to: anchorToISO,
+                include_equivalents: true,
+              });
+              subjectIndexToItemIndex.push(ii);
+              subjectIndexToItemKey.push(item.itemKey);
+            }
+
+            if (coverageSubjects.length > 0) {
+              const coverageResults = await batchAnchorCoverage(coverageSubjects, {
+                diagnostic: sessionLogService.getDiagnosticLoggingEnabled() === true,
+              });
+              const diagnosticOn = sessionLogService.getDiagnosticLoggingEnabled() === true;
+
+              if (diagnosticOn) {
+                // Mirror the Amplitude/DAS diagnostic approach: record full request/response shape.
+                const maxSubjectsToDump = 200;
+                const requestDump = coverageSubjects.length <= maxSubjectsToDump
+                  ? coverageSubjects
+                  : coverageSubjects.slice(0, maxSubjectsToDump);
+
+                sessionLogService.addChild(
+                  logOpId,
+                  'info',
+                  'DB_COVERAGE_PREFLIGHT_SHAPE',
+                  'DB preflight shape (how subjects were built)',
+                  [
+                    `slice=${sliceDSL}`,
+                    `workspace=${workspace.repository}/${workspace.branch}`,
+                    `window_uk=${window.start}→${window.end}`,
+                    `anchor_from_iso=${anchorFromISOForCall ?? ''}`,
+                    `anchor_to_iso=${anchorToISOForCall ?? ''}`,
+                    `subjects_sent=${coverageSubjects.length}`,
+                    `skipped_non_parameter=${skippedNonParameter}`,
+                    `skipped_no_query_signature=${skippedNoSignature}`,
+                    `skipped_core_hash_failed=${skippedHashFail}`,
+                    '',
+                    'subject shape:',
+                    '- param_id (workspace-prefixed)',
+                    '- core_hash (short)',
+                    '- slice_keys (family.mode())',
+                    '- anchor_from/to (ISO date)',
+                    '- include_equivalents (bool)',
+                  ].join('\n'),
+                  {
+                    sliceDSL,
+                    subjects_sent: coverageSubjects.length,
+                    skippedNonParameter,
+                    skippedNoSignature,
+                    skippedHashFail,
+                  } as any
+                );
+
+                sessionLogService.addChild(
+                  logOpId,
+                  'info',
+                  'DB_COVERAGE_PREFLIGHT_REQUEST',
+                  `DB preflight request payload (${Math.min(coverageSubjects.length, maxSubjectsToDump)}/${coverageSubjects.length})`,
+                  JSON.stringify(
+                    {
+                      diagnostic: true,
+                      subjects: requestDump,
+                      truncated: coverageSubjects.length > maxSubjectsToDump,
+                      maxSubjectsToDump,
+                    },
+                    null,
+                    2
+                  ),
+                  {
+                    sliceDSL,
+                    subjects: coverageSubjects.length,
+                    truncated: coverageSubjects.length > maxSubjectsToDump,
+                    maxSubjectsToDump,
+                  } as any
+                );
+
+                sessionLogService.addChild(
+                  logOpId,
+                  'info',
+                  'DB_COVERAGE_PREFLIGHT_RESPONSE',
+                  `DB preflight response payload (${Math.min(coverageResults.length, maxSubjectsToDump)}/${coverageResults.length})`,
+                  JSON.stringify(
+                    {
+                      results: coverageResults.length <= maxSubjectsToDump
+                        ? coverageResults
+                        : coverageResults.slice(0, maxSubjectsToDump),
+                      truncated: coverageResults.length > maxSubjectsToDump,
+                      maxSubjectsToDump,
+                    },
+                    null,
+                    2
+                  ),
+                  {
+                    sliceDSL,
+                    results: coverageResults.length,
+                    truncated: coverageResults.length > maxSubjectsToDump,
+                    maxSubjectsToDump,
+                  } as any
+                );
+
+                const maxRows = 50;
+                const rows = coverageResults.slice(0, maxRows).map((cr, i) => {
+                  const subj = coverageSubjects[i];
+                  const itemKey = subjectIndexToItemKey[i] || '(unknown)';
+                  const missCount = Array.isArray(cr?.missing_anchor_ranges) ? cr.missing_anchor_ranges.length : 0;
+                  const missPreview =
+                    missCount > 0
+                      ? ` missing=${missCount} [${cr.missing_anchor_ranges.slice(0, 4).map(r => `${r.start}→${r.end}`).join(', ')}${missCount > 4 ? ', …' : ''}]`
+                      : '';
+                  const presCount = Array.isArray((cr as any)?.present_anchor_ranges) ? (cr as any).present_anchor_ranges.length : 0;
+                  const presPreview =
+                    presCount > 0
+                      ? ` present_ranges=${presCount} [${(cr as any).present_anchor_ranges.slice(0, 3).map((r: any) => `${r.start}→${r.end}`).join(', ')}${presCount > 3 ? ', …' : ''}]`
+                      : '';
+                  const eq = (cr as any)?.equivalence_resolution;
+                  const eqHashes = Array.isArray(eq?.core_hashes) ? eq.core_hashes : [];
+                  const eqPids = Array.isArray(eq?.param_ids) ? eq.param_ids : [];
+                  const eqHashN = eqHashes.length;
+                  const eqPidN = eqPids.length;
+                  const eqHashesPreview = eqHashN > 0 ? ` [${eqHashes.slice(0, 6).join(', ')}${eqHashN > 6 ? ', …' : ''}]` : '';
+                  const eqPidsPreview = eqPidN > 0 ? ` [${eqPids.slice(0, 6).join(', ')}${eqPidN > 6 ? ', …' : ''}]` : '';
+                  const counts = `present=${(cr as any)?.present_anchor_day_count ?? '?'} expected=${(cr as any)?.expected_anchor_day_count ?? '?'}`;
+                  const sel = `slice_keys=[${(subj?.slice_keys || []).join(', ')}]`;
+                  const subjId = `param_id=${subj?.param_id ?? ''} core_hash=${subj?.core_hash ?? ''}`;
+                  const subjFlags = `include_equivalents=${subj?.include_equivalents ?? true} anchor=${subj?.anchor_from ?? ''}→${subj?.anchor_to ?? ''}`;
+                  const normSel = Array.isArray((cr as any)?.slice_keys_normalised)
+                    ? ` norm=[${(cr as any).slice_keys_normalised.join(', ')}]`
+                    : '';
+                  const sfk = (cr as any)?.slice_filter_kind ? ` slice_filter=${(cr as any).slice_filter_kind}` : '';
+                  const eqSummary = `eq_hashes=${eqHashN}${eqHashesPreview} eq_params=${eqPidN}${eqPidsPreview}`;
+                  const ok = cr?.coverage_ok === true ? 'OK' : 'MISSING';
+                  return `${ok} ${itemKey} :: ${counts} :: ${subjId} :: ${subjFlags} :: ${sel}${normSel}${sfk} :: ${eqSummary}${presPreview}${missPreview}`;
+                });
+                const truncated = coverageResults.length > maxRows ? `\n… truncated: ${coverageResults.length - maxRows} more subject(s)` : '';
+
+                sessionLogService.addChild(
+                  logOpId,
+                  'info',
+                  'DB_COVERAGE_PREFLIGHT_DETAIL',
+                  `DB preflight detail (${Math.min(coverageResults.length, maxRows)}/${coverageResults.length})`,
+                  [
+                    `slice=${sliceDSL}`,
+                    `anchor_from_iso=${anchorFromISOForCall ?? ''}`,
+                    `anchor_to_iso=${anchorToISOForCall ?? ''}`,
+                    `workspace=${workspace.repository}/${workspace.branch}`,
+                    '',
+                    ...rows,
+                    truncated,
+                  ].join('\n'),
+                  {
+                    sliceDSL,
+                    subjects: coverageResults.length,
+                    truncated: coverageResults.length > maxRows,
+                    maxRows,
+                  } as any
+                );
+              }
+
+              let widenedCount = 0;
+              let totalDbMissingDays = 0;
+
+              for (let ci = 0; ci < coverageResults.length; ci++) {
+                const cr = coverageResults[ci];
+                const itemIdx = subjectIndexToItemIndex[ci];
+                const planItem = fetchPlan.items[itemIdx];
+                const noop = cr.coverage_ok || !cr.missing_anchor_ranges || cr.missing_anchor_ranges.length === 0;
+
+                if (diagnosticOn) {
+                  sessionLogService.addChild(
+                    logOpId,
+                    noop ? 'success' : 'info',
+                    noop ? 'DB_COVERAGE_ITEM_NOOP' : 'DB_COVERAGE_ITEM_MISSING',
+                    `${planItem.itemKey}: ${noop ? 'coverage ok (no plan change)' : 'missing ranges (will widen plan)'}`,
+                    JSON.stringify(
+                      {
+                        subject: coverageSubjects[ci],
+                        result: cr,
+                        plan_before: {
+                          classification: planItem.classification,
+                          windows: planItem.windows,
+                        },
+                      },
+                      null,
+                      2
+                    )
+                  );
+                }
+
+                if (noop) continue;
+
+                // Convert ISO missing ranges to FetchWindows with reason 'db_missing'
+                const dbWindows: FetchWindow[] = cr.missing_anchor_ranges.map(range => {
+                  const startDate = new Date(range.start + 'T00:00:00Z');
+                  const endDate = new Date(range.end + 'T00:00:00Z');
+                  const dayCount = Math.round((endDate.getTime() - startDate.getTime()) / (24 * 60 * 60 * 1000)) + 1;
+                  // Convert to UK date format for consistency with existing windows
+                  const fmtStart = formatDateUK(startDate);
+                  const fmtEnd = formatDateUK(endDate);
+                  return { start: fmtStart, end: fmtEnd, reason: 'db_missing' as const, dayCount };
+                });
+
+                // Merge DB-missing windows into existing plan item windows
+                const existingWindows = planItem.windows;
+                const allWindows = [...existingWindows, ...dbWindows].sort((a, b) => a.start.localeCompare(b.start));
+                planItem.windows = allWindows;
+
+                // If item was 'covered', upgrade to 'fetch'
+                if (planItem.classification === 'covered') {
+                  planItem.classification = 'fetch';
+                }
+
+                widenedCount++;
+                totalDbMissingDays += dbWindows.reduce((sum, w) => sum + w.dayCount, 0);
+
+                sessionLogService.addChild(
+                  logOpId, 'info', 'DB_COVERAGE_ITEM_WIDENED',
+                  `${planItem.itemKey}: +${dbWindows.length} DB-missing window(s), ${dbWindows.reduce((s, w) => s + w.dayCount, 0)} days`,
+                  undefined,
+                  {
+                    itemKey: planItem.itemKey,
+                    param_id: coverageSubjects[ci].param_id,
+                    core_hash: coverageSubjects[ci].core_hash,
+                    slice_keys: coverageSubjects[ci].slice_keys,
+                    missing_ranges: cr.missing_anchor_ranges,
+                    equivalence_resolution: cr.equivalence_resolution,
+                    original_windows: existingWindows.length,
+                    final_windows: allWindows.length,
+                  } as any
+                );
+
+                if (diagnosticOn) {
+                  sessionLogService.addChild(
+                    logOpId,
+                    'info',
+                    'DB_COVERAGE_ITEM_AFTER',
+                    `${planItem.itemKey}: plan updated from DB coverage`,
+                    JSON.stringify(
+                      {
+                        db_windows_added: dbWindows,
+                        plan_after: {
+                          classification: planItem.classification,
+                          windows: planItem.windows,
+                        },
+                      },
+                      null,
+                      2
+                    )
+                  );
+                }
+              }
+
+              sessionLogService.addChild(
+                logOpId,
+                widenedCount > 0 ? 'info' : 'success',
+                'DB_COVERAGE_PREFLIGHT_RESULT',
+                widenedCount > 0
+                  ? `DB preflight: ${widenedCount} item(s) widened, ${totalDbMissingDays} DB-missing days added`
+                  : `DB preflight: all ${coverageSubjects.length} subject(s) fully covered`,
+                undefined,
+                { subjects: coverageSubjects.length, widenedCount, totalDbMissingDays }
+              );
+            }
+          } catch (preflightErr) {
+            // Graceful degradation: proceed with file-only plan
+            const errMsg = preflightErr instanceof Error ? preflightErr.message : String(preflightErr);
+            sessionLogService.addChild(
+              logOpId, 'warning', 'DB_COVERAGE_PREFLIGHT_FAIL_FALLBACK',
+              `DB coverage preflight failed — proceeding with file-only plan: ${errMsg}`,
+              undefined,
+              { error: errMsg }
+            );
+          }
+        } else if (checkDbCoverageFirst && !workspace) {
+          sessionLogService.addChild(
+            logOpId, 'warning', 'DB_COVERAGE_PREFLIGHT_SKIP',
+            'DB coverage preflight requested but workspace identity not provided — skipped'
+          );
         }
 
         reportProgress({

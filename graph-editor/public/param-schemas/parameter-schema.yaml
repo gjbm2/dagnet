@@ -106,6 +106,16 @@ properties:
       onset_delta_days_overridden:
         type: boolean
         description: "If true, user manually set onset_delta_days"
+      mu:
+        type: number
+        description: "Fitted log-normal mu parameter (internal, not UI-exposed)"
+      sigma:
+        type: number
+        minimum: 0
+        description: "Fitted log-normal sigma parameter (internal, not UI-exposed)"
+      model_trained_at:
+        type: string
+        description: "UK date (d-MMM-yy) when the model was last fitted (staleness detection)"
     additionalProperties: false
 
   force_replace_at_ms:

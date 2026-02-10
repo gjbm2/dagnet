@@ -1612,6 +1612,8 @@ export interface EdgeLAGValues {
     completeness: number;
     path_t95: number;
     onset_delta_days?: number;  // Aggregated onset delay from window slices (min)
+    mu?: number;     // Fitted log-normal mu (for offline completeness + parity comparison)
+    sigma?: number;  // Fitted log-normal sigma (for offline completeness + parity comparison)
   };
   /** Blended p.mean (if computed) */
   blendedMean?: number;
@@ -2477,6 +2479,8 @@ export function enhanceGraphLatencies(
           t95: latencyStats.t95,
           completeness: completenessUsed,
           path_t95: edgePathT95,
+          mu: latencyStats.completeness_cdf.mu,
+          sigma: latencyStats.completeness_cdf.sigma,
           onset_delta_days: edgeOnsetDeltaDays,
         },
         debug: {
@@ -3012,6 +3016,8 @@ export function enhanceGraphLatencies(
             t95: cpLatencyStats.t95,
             completeness: cpCompleteness,
             path_t95: edgePathT95, // Shared with base edge
+            mu: cpLatencyStats.completeness_cdf.mu,
+            sigma: cpLatencyStats.completeness_cdf.sigma,
             onset_delta_days: cpOnsetDeltaDays,
           },
         };

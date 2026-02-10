@@ -1,0 +1,110 @@
+#!/usr/bin/env bash
+# Pre-commit hook: prevent accidental commit of commercial data to the public dagnet repo.
+#
+# Checks:
+#   1. No staged files under <private-repo>/ (commercial data repo)
+#   2. No staged diffs containing real Amplitude user counts or leaked credentials
+#
+# Setup (one-time per clone):
+#   git config core.hooksPath .githooks
+#
+# Bypass (only if you know what you're doing):
+#   git commit --no-verify
+
+set -euo pipefail
+
+ERRORS=0
+
+# ─── Check 1: No <private-repo>/ files staged ───────────────────────────────
+
+COMMERCIAL_FILES=$(git diff --cached --name-only | grep '^<private-repo>/' || true)
+if [ -n "$COMMERCIAL_FILES" ]; then
+  echo ""
+  echo "╔══════════════════════════════════════════════════════════════════╗"
+  echo "║  BLOCKED: Commercial data files staged for commit              ║"
+  echo "╚══════════════════════════════════════════════════════════════════╝"
+  echo ""
+  echo "The following <private-repo>/ files are staged:"
+  echo "$COMMERCIAL_FILES" | while read -r f; do echo "  - $f"; done
+  echo ""
+  echo "<private-repo>/ is a private commercial repo and must NEVER be"
+  echo "committed to the public dagnet repository."
+  echo ""
+  echo "To unstage: git reset HEAD <private-repo>/"
+  echo ""
+  ERRORS=$((ERRORS + 1))
+fi
+
+# ─── Check 2: No commercial data patterns in staged diffs ────────────────────
+#
+# We scan the actual diff content (not full files) so we only catch NEW additions.
+# Exclude paths that legitimately document these patterns.
+
+DIFF_TO_SCAN=$(git diff --cached --unified=0 \
+  -- . \
+  ':!graph-ops/' \
+  ':!graph-editor/public/param-schemas/' \
+  ':!.githooks/' \
+  2>/dev/null || true)
+
+if [ -n "$DIFF_TO_SCAN" ]; then
+
+  # Pattern: cumulativeRaw (Amplitude response field containing real user counts)
+  CUMRAW_HITS=$(echo "$DIFF_TO_SCAN" | grep -n '^\+.*cumulativeRaw' || true)
+  if [ -n "$CUMRAW_HITS" ]; then
+    echo ""
+    echo "╔══════════════════════════════════════════════════════════════════╗"
+    echo "║  WARNING: Amplitude cumulativeRaw data detected in staged diff ║"
+    echo "╚══════════════════════════════════════════════════════════════════╝"
+    echo ""
+    echo "Lines containing real Amplitude user counts:"
+    echo "$CUMRAW_HITS" | head -5
+    echo ""
+    echo "cumulativeRaw contains real user conversion counts from Amplitude."
+    echo "This data should NOT be committed to the public repo."
+    echo ""
+    ERRORS=$((ERRORS + 1))
+  fi
+
+  # Pattern: Known API key strings (catch re-introduction of revoked credentials)
+  LEAKED_KEYS=$(echo "$DIFF_TO_SCAN" | grep -n '^\+.*\(AMPLITUDE_API_KEY_REDACTED\|AMPLITUDE_SECRET_KEY_REDACTED\)' || true)
+  if [ -n "$LEAKED_KEYS" ]; then
+    echo ""
+    echo "╔══════════════════════════════════════════════════════════════════╗"
+    echo "║  BLOCKED: Known Amplitude API credentials in staged diff       ║"
+    echo "╚══════════════════════════════════════════════════════════════════╝"
+    echo ""
+    echo "Detected known (revoked) Amplitude API key or secret."
+    echo "Use .env.amplitude.local for credentials — see local-env/amplitude.env.example"
+    echo ""
+    ERRORS=$((ERRORS + 1))
+  fi
+
+  # Pattern: Generic API key/secret hardcoded in scripts (heuristic)
+  # Matches: API_KEY="<32+ hex chars>" or SECRET_KEY="<32+ hex chars>"
+  HARDCODED_KEYS=$(echo "$DIFF_TO_SCAN" | grep -nE '^\+.*(API_KEY|SECRET_KEY)\s*=\s*"[0-9a-fA-F]{32,}"' || true)
+  if [ -n "$HARDCODED_KEYS" ]; then
+    echo ""
+    echo "╔══════════════════════════════════════════════════════════════════╗"
+    echo "║  WARNING: Possible hardcoded API credentials in staged diff    ║"
+    echo "╚══════════════════════════════════════════════════════════════════╝"
+    echo ""
+    echo "$HARDCODED_KEYS" | head -5
+    echo ""
+    echo "API keys should be loaded from .env files, not hardcoded."
+    echo "See local-env/amplitude.env.example"
+    echo ""
+    ERRORS=$((ERRORS + 1))
+  fi
+
+fi
+
+# ─── Result ───────────────────────────────────────────────────────────────────
+
+if [ "$ERRORS" -gt 0 ]; then
+  echo "Pre-commit check FAILED ($ERRORS issue(s)). Commit aborted."
+  echo "To bypass (use with caution): git commit --no-verify"
+  exit 1
+fi
+
+exit 0

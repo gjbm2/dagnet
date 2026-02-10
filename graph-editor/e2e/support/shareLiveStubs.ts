@@ -1179,6 +1179,35 @@ export async function installShareLiveStubs(page: Page, state: ShareLiveStubStat
       });
     }
 
+    // Health check endpoints (fired on page mount by useHealthStatus).
+    if (url.endsWith('/api/snapshots/health')) {
+      inc(state, 'compute:snapshots:health');
+      return route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ status: 'ok', db: 'stub' }),
+      });
+    }
+
+    if (url.endsWith('/api/parse-query')) {
+      inc(state, 'compute:parse-query');
+      return route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ success: true, parsed: {} }),
+      });
+    }
+
+    // Lag model recompute (parity comparison — fires for latency-enabled graphs).
+    if (url.endsWith('/api/lag/recompute-models')) {
+      inc(state, 'compute:lag:recompute-models');
+      return route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ success: true, subjects: [] }),
+      });
+    }
+
     if (url.endsWith('/api/runner/analyze')) {
       inc(state, 'compute:analyze');
       inc(state, `compute:analyze:${state.version}`);

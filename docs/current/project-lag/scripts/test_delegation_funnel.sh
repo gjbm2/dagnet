@@ -3,9 +3,15 @@
 # 
 # This query demonstrates what daily n/k data looks like for a multi-day conversion
 
-# API credentials
-API_KEY="AMPLITUDE_API_KEY_REDACTED"
-SECRET_KEY="AMPLITUDE_SECRET_KEY_REDACTED"
+# Load credentials from .env.amplitude.local (see local-env/amplitude.env.example)
+ENV_FILE="$(git rev-parse --show-toplevel)/.env.amplitude.local"
+if [ ! -f "$ENV_FILE" ]; then
+  echo "Missing $ENV_FILE — copy from local-env/amplitude.env.example and fill in your keys"
+  exit 1
+fi
+source "$ENV_FILE"
+API_KEY="${AMPLITUDE_API_KEY:?Set AMPLITUDE_API_KEY in .env.amplitude.local}"
+SECRET_KEY="${AMPLITUDE_SECRET_KEY:?Set AMPLITUDE_SECRET_KEY in .env.amplitude.local}"
 
 # Base64 encode for Basic auth
 AUTH=$(echo -n "${API_KEY}:${SECRET_KEY}" | base64)

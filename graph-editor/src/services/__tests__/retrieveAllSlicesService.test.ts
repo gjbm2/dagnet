@@ -34,12 +34,22 @@ vi.mock('../../components/ProgressToast', () => ({
   completeProgressToast: vi.fn(),
 }));
 
+vi.mock('../snapshotWriteService', () => ({
+  batchAnchorCoverage: vi.fn(),
+}));
+
+vi.mock('../coreHashService', () => ({
+  computeShortCoreHash: vi.fn().mockResolvedValue('mock-core-hash'),
+}));
+
 import { completeProgressToast, showProgressToast } from '../../components/ProgressToast';
 import { executeRetrieveAllSlicesWithProgressToast, retrieveAllSlicesService } from '../retrieveAllSlicesService';
 import { dataOperationsService } from '../dataOperationsService';
 import { buildFetchPlanProduction } from '../fetchPlanBuilderService';
 import { lagHorizonsService } from '../lagHorizonsService';
 import { explodeDSL } from '../../lib/dslExplosion';
+import { batchAnchorCoverage } from '../snapshotWriteService';
+import { computeShortCoreHash } from '../coreHashService';
 
 describe('retrieveAllSlicesService', () => {
   beforeEach(() => {
@@ -1245,6 +1255,198 @@ describe('retrieveAllSlicesService', () => {
       cacheHit: false,
       daysToFetch: 7,
       gapCount: 2,
+    });
+  });
+
+  // =========================================================================
+  // DB Coverage Preflight Tests (RADB-001 through RADB-005)
+  // =========================================================================
+
+  describe('DB coverage preflight (checkDbCoverageFirst)', () => {
+    const WORKSPACE = { repository: 'repo', branch: 'main' };
+
+    function makePlanResult(items: any[]) {
+      return {
+        plan: {
+          version: 1,
+          createdAt: '2026-02-10T06:00:00.000Z',
+          referenceNow: '2026-02-10T06:00:00.000Z',
+          dsl: 'window(1-Dec-25:5-Dec-25)',
+          items,
+        },
+        diagnostics: {
+          totalItems: items.length,
+          itemsNeedingFetch: items.filter((i: any) => i.classification === 'fetch').length,
+          itemsCovered: items.filter((i: any) => i.classification === 'covered').length,
+          itemsUnfetchable: 0,
+          itemDiagnostics: [],
+        },
+      } as any;
+    }
+
+    const baseGraph: any = {
+      dataInterestsDSL: 'window(1-Dec-25:5-Dec-25)',
+      edges: [{ uuid: 'edge-1', from: 'a', to: 'b', p: { id: 'p-1' } }],
+      nodes: [],
+    };
+
+    it('RADB-001: checkDbCoverageFirst=false does not call batchAnchorCoverage', async () => {
+      vi.mocked(buildFetchPlanProduction).mockReturnValueOnce(makePlanResult([
+        {
+          itemKey: 'parameter:p-1:edge-1:p:',
+          type: 'parameter', objectId: 'p-1', targetId: 'edge-1', slot: 'p',
+          mode: 'window', sliceFamily: '', querySignature: '{"c":"sig1","x":{}}',
+          classification: 'covered', windows: [],
+        },
+      ]));
+
+      await retrieveAllSlicesService.execute({
+        getGraph: () => baseGraph,
+        setGraph: () => {},
+        slices: ['window(1-Dec-25:5-Dec-25)'],
+        checkDbCoverageFirst: false,
+        workspace: WORKSPACE,
+      });
+
+      expect(vi.mocked(batchAnchorCoverage)).not.toHaveBeenCalled();
+    });
+
+    it('RADB-002: checkDbCoverageFirst=true calls batchAnchorCoverage and widens plan', async () => {
+      vi.mocked(buildFetchPlanProduction).mockReturnValueOnce(makePlanResult([
+        {
+          itemKey: 'parameter:p-1:edge-1:p:',
+          type: 'parameter', objectId: 'p-1', targetId: 'edge-1', slot: 'p',
+          mode: 'window', sliceFamily: '', querySignature: '{"c":"sig1","x":{}}',
+          classification: 'covered', windows: [],
+        },
+      ]));
+
+      vi.mocked(batchAnchorCoverage).mockResolvedValueOnce([{
+        subject_index: 0,
+        coverage_ok: false,
+        missing_anchor_ranges: [{ start: '2025-12-01', end: '2025-12-03' }],
+        present_anchor_day_count: 2,
+        expected_anchor_day_count: 5,
+        equivalence_resolution: { core_hashes: ['mock-core-hash'], param_ids: ['repo-main-p-1'] },
+      }]);
+
+      vi.mocked(dataOperationsService.getFromSource).mockResolvedValueOnce({
+        success: true, cacheHit: false, daysFetched: 3, daysFromCache: 0,
+      });
+
+      await retrieveAllSlicesService.execute({
+        getGraph: () => baseGraph,
+        setGraph: () => {},
+        slices: ['window(1-Dec-25:5-Dec-25)'],
+        checkDbCoverageFirst: true,
+        workspace: WORKSPACE,
+      });
+
+      expect(vi.mocked(batchAnchorCoverage)).toHaveBeenCalledTimes(1);
+      // The item should have been promoted to 'fetch' and getFromSource should have been called
+      expect(vi.mocked(dataOperationsService.getFromSource)).toHaveBeenCalled();
+      const call = vi.mocked(dataOperationsService.getFromSource).mock.calls[0][0] as any;
+      // overrideFetchWindows should include the db_missing window
+      expect(call.overrideFetchWindows).toBeDefined();
+      expect(call.overrideFetchWindows.length).toBeGreaterThan(0);
+    });
+
+    it('RADB-003: checkDbCoverageFirst=true, backend error falls back gracefully', async () => {
+      vi.mocked(buildFetchPlanProduction).mockReturnValueOnce(makePlanResult([
+        {
+          itemKey: 'parameter:p-1:edge-1:p:',
+          type: 'parameter', objectId: 'p-1', targetId: 'edge-1', slot: 'p',
+          mode: 'window', sliceFamily: '', querySignature: '{"c":"sig1","x":{}}',
+          classification: 'covered', windows: [],
+        },
+      ]));
+
+      // batchAnchorCoverage throws
+      vi.mocked(batchAnchorCoverage).mockRejectedValueOnce(new Error('DB connection failed'));
+
+      const result = await retrieveAllSlicesService.execute({
+        getGraph: () => baseGraph,
+        setGraph: () => {},
+        slices: ['window(1-Dec-25:5-Dec-25)'],
+        checkDbCoverageFirst: true,
+        workspace: WORKSPACE,
+      });
+
+      // Should complete without errors (graceful fallback)
+      expect(result.totalErrors).toBe(0);
+      // Item should NOT have been promoted to fetch (preflight failed, fallback to original plan)
+      expect(vi.mocked(dataOperationsService.getFromSource)).not.toHaveBeenCalled();
+    });
+
+    it('RADB-004: unions DB-missing windows with existing stale/missing windows', async () => {
+      vi.mocked(buildFetchPlanProduction).mockReturnValueOnce(makePlanResult([
+        {
+          itemKey: 'parameter:p-1:edge-1:p:',
+          type: 'parameter', objectId: 'p-1', targetId: 'edge-1', slot: 'p',
+          mode: 'window', sliceFamily: '', querySignature: '{"c":"sig1","x":{}}',
+          classification: 'fetch',
+          windows: [{ start: '1-Dec-25', end: '3-Dec-25', reason: 'stale', dayCount: 3 }],
+        },
+      ]));
+
+      vi.mocked(batchAnchorCoverage).mockResolvedValueOnce([{
+        subject_index: 0,
+        coverage_ok: false,
+        missing_anchor_ranges: [{ start: '2025-12-05', end: '2025-12-05' }],
+        present_anchor_day_count: 4,
+        expected_anchor_day_count: 5,
+        equivalence_resolution: { core_hashes: ['mock-core-hash'], param_ids: ['repo-main-p-1'] },
+      }]);
+
+      vi.mocked(dataOperationsService.getFromSource).mockResolvedValueOnce({
+        success: true, cacheHit: false, daysFetched: 4, daysFromCache: 0,
+      });
+
+      await retrieveAllSlicesService.execute({
+        getGraph: () => baseGraph,
+        setGraph: () => {},
+        slices: ['window(1-Dec-25:5-Dec-25)'],
+        checkDbCoverageFirst: true,
+        workspace: WORKSPACE,
+      });
+
+      const call = vi.mocked(dataOperationsService.getFromSource).mock.calls[0][0] as any;
+      // Should have BOTH the original stale window AND the db_missing window
+      expect(call.overrideFetchWindows.length).toBe(2);
+    });
+
+    it('RADB-005: mode-correctness — cohort mode uses .cohort() slice keys', async () => {
+      vi.mocked(buildFetchPlanProduction).mockReturnValueOnce(makePlanResult([
+        {
+          itemKey: 'parameter:p-1:edge-1:p:',
+          type: 'parameter', objectId: 'p-1', targetId: 'edge-1', slot: 'p',
+          mode: 'cohort', sliceFamily: '', querySignature: '{"c":"sig1","x":{}}',
+          classification: 'covered', windows: [],
+        },
+      ]));
+
+      vi.mocked(batchAnchorCoverage).mockResolvedValueOnce([{
+        subject_index: 0,
+        coverage_ok: true,
+        missing_anchor_ranges: [],
+        present_anchor_day_count: 5,
+        expected_anchor_day_count: 5,
+        equivalence_resolution: { core_hashes: ['mock-core-hash'], param_ids: ['repo-main-p-1'] },
+      }]);
+
+      await retrieveAllSlicesService.execute({
+        getGraph: () => baseGraph,
+        setGraph: () => {},
+        slices: ['cohort(1-Dec-25:5-Dec-25)'],
+        checkDbCoverageFirst: true,
+        workspace: WORKSPACE,
+      });
+
+      expect(vi.mocked(batchAnchorCoverage)).toHaveBeenCalledTimes(1);
+      const subjects = vi.mocked(batchAnchorCoverage).mock.calls[0][0];
+      expect(subjects.length).toBe(1);
+      // The slice_keys should end with .cohort(), not .window()
+      expect(subjects[0].slice_keys).toEqual(['cohort()']);
     });
   });
 });
