@@ -25,6 +25,7 @@ import {
 import { isolateSlice, extractSliceDimensions } from './sliceIsolation';
 import { resolveMECEPartitionForImplicitUncontexted } from './meceSliceService';
 import { fileRegistry } from '../contexts/TabContext';
+import { runParityComparison, FORECASTING_PARALLEL_RUN } from './lagRecomputeService';
 import { parseConstraints } from '../lib/queryDSL';
 import { resolveRelativeDate } from '../lib/dateFormat';
 import type { Graph, DateRange } from '../types';
@@ -1772,6 +1773,26 @@ export async function runStage2EnhancementsAndInboundN(
               }
             }
           }
+
+          // ── Forecasting parity comparison (every fetch, gated by flag) ──
+          if (FORECASTING_PARALLEL_RUN && lagResult.edgesWithLAG > 0) {
+            try {
+              const firstParamEdge = finalGraph?.edges?.find((e: any) => e?.p?.id);
+              const firstFileId = firstParamEdge?.p?.id ? `parameter-${firstParamEdge.p.id}` : undefined;
+              const src = firstFileId ? fileRegistry.getFile(firstFileId)?.source : undefined;
+              const ws = src?.repository && src?.branch
+                ? { repository: src.repository as string, branch: src.branch as string }
+                : undefined;
+              if (ws && finalGraph) {
+                // Fire-and-forget: don't block the fetch pipeline.
+                runParityComparison({ graph: finalGraph, workspace: ws }).catch((e: any) =>
+                  console.warn('[fetchDataService] Parity comparison failed (non-fatal):', e?.message || e)
+                );
+              }
+            } catch (e: any) {
+              console.warn('[fetchDataService] Parity comparison setup failed (non-fatal):', e?.message || e);
+            }
+          }
         }
         
         // ═══════════════════════════════════════════════════════════════════
@@ -1897,6 +1918,8 @@ export function selectLatencyToApplyForTopoPass(
     completeness: number;
     path_t95: number;
     onset_delta_days?: number;
+    mu?: number;
+    sigma?: number;
   },
   existing:
     | {
@@ -1915,6 +1938,8 @@ export function selectLatencyToApplyForTopoPass(
   completeness: number;
   path_t95: number;
   onset_delta_days?: number;
+  mu?: number;
+  sigma?: number;
 } {
   if (!preserveLatencySummaryFromFile) {
     return computed;
@@ -1943,6 +1968,9 @@ export function selectLatencyToApplyForTopoPass(
     // onset_delta_days is aggregated in the topo pass from window() slice histograms and should
     // still be applied, even when we preserve median/mean from the file.
     onset_delta_days: computed.onset_delta_days,
+    // mu/sigma: always from the topo pass (fitted model params for offline completeness).
+    mu: computed.mu,
+    sigma: computed.sigma,
   };
 }
 

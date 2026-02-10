@@ -519,6 +519,13 @@ export interface LatencyConfig {
   
   /** Maturity progress 0-1 (see design §5.5) */
   completeness?: number;
+
+  /** Fitted log-normal mu parameter (internal, not UI-exposed) */
+  mu?: number;
+  /** Fitted log-normal sigma parameter (internal, not UI-exposed) */
+  sigma?: number;
+  /** UK date (d-MMM-yy) when the model was last fitted (staleness detection, not UI-exposed) */
+  model_trained_at?: string;
 }
 
 /**

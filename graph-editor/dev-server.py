@@ -133,6 +133,23 @@ async def snapshots_batch_retrieval_days(request: Request):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# Snapshot batch anchor coverage (Retrieve All DB preflight)
+@app.post("/api/snapshots/batch-anchor-coverage")
+async def snapshots_batch_anchor_coverage(request: Request):
+    """Compute missing anchor-day ranges per subject for Retrieve All preflight."""
+    try:
+        data = await request.json()
+        from api_handlers import handle_snapshots_batch_anchor_coverage
+        return handle_snapshots_batch_anchor_coverage(data)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        import traceback
+        print(f"[snapshots/batch-anchor-coverage] Error: {e}")
+        print(f"[snapshots/batch-anchor-coverage] Traceback: {traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # Snapshot retrievals endpoint (Phase 2 @ UI)
 @app.post("/api/snapshots/retrievals")
 async def snapshots_retrievals(request: Request):
@@ -328,6 +345,37 @@ async def sigs_resolve(request: Request):
         import traceback
         print(f"[sigs/resolve] Error: {e}")
         print(f"[sigs/resolve] Traceback: {traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/lag/recompute-models")
+async def lag_recompute_models(request: Request):
+    try:
+        data = await request.json()
+        from api_handlers import handle_lag_recompute_models
+        return handle_lag_recompute_models(data)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        import traceback
+        print(f"[lag/recompute-models] Error: {e}")
+        print(f"[lag/recompute-models] Traceback: {traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# Back-compat alias: older route used hyphen (no /lag prefix).
+@app.post("/api/lag-recompute-models")
+async def lag_recompute_models_alias(request: Request):
+    try:
+        data = await request.json()
+        from api_handlers import handle_lag_recompute_models
+        return handle_lag_recompute_models(data)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        import traceback
+        print(f"[lag-recompute-models] Error: {e}")
+        print(f"[lag-recompute-models] Traceback: {traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

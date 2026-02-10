@@ -2,8 +2,15 @@
 # Test Amplitude API to investigate mean vs k/n discrepancy
 # Based on actual edge data from the graph
 
-API_KEY="b2e8b9addbb55ebab5b54938407fd0fa"
-SECRET_KEY="716dfa8ea6e2aa4a4e8cef3cdf3b6fb3"
+# Load credentials from .env.amplitude.local (see local-env/amplitude.env.example)
+ENV_FILE="$(git rev-parse --show-toplevel)/.env.amplitude.local"
+if [ ! -f "$ENV_FILE" ]; then
+  echo "Missing $ENV_FILE — copy from local-env/amplitude.env.example and fill in your keys"
+  exit 1
+fi
+source "$ENV_FILE"
+API_KEY="${AMPLITUDE_API_KEY:?Set AMPLITUDE_API_KEY in .env.amplitude.local}"
+SECRET_KEY="${AMPLITUDE_SECRET_KEY:?Set AMPLITUDE_SECRET_KEY in .env.amplitude.local}"
 
 # Date range (from edge data)
 START_DATE="20251103"

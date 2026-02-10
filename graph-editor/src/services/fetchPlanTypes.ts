@@ -21,7 +21,7 @@ import { formatDateUK, parseUKDate } from '../lib/dateFormat';
 /**
  * Reason a window is included in the fetch plan.
  */
-export type FetchWindowReason = 'missing' | 'stale';
+export type FetchWindowReason = 'missing' | 'stale' | 'db_missing';
 
 /**
  * A contiguous date window to fetch.
@@ -368,6 +368,7 @@ export interface FetchPlanSummary {
   totalDaysToFetch: number;
   missingDays: number;
   staleDays: number;
+  dbMissingDays: number;
 }
 
 export function summarisePlan(plan: FetchPlan): FetchPlanSummary {
@@ -378,6 +379,7 @@ export function summarisePlan(plan: FetchPlan): FetchPlanSummary {
   let totalDaysToFetch = 0;
   let missingDays = 0;
   let staleDays = 0;
+  let dbMissingDays = 0;
   
   for (const item of plan.items) {
     switch (item.classification) {
@@ -397,6 +399,8 @@ export function summarisePlan(plan: FetchPlan): FetchPlanSummary {
       totalDaysToFetch += w.dayCount;
       if (w.reason === 'missing') {
         missingDays += w.dayCount;
+      } else if (w.reason === 'db_missing') {
+        dbMissingDays += w.dayCount;
       } else {
         staleDays += w.dayCount;
       }
@@ -412,6 +416,7 @@ export function summarisePlan(plan: FetchPlan): FetchPlanSummary {
     totalDaysToFetch,
     missingDays,
     staleDays,
+    dbMissingDays,
   };
 }
 

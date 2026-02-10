@@ -421,5 +421,50 @@ export const LATENCY_REFETCH_COOLDOWN_MINUTES = 720;
  */
 export const LATENCY_MIN_EFFECTIVE_SAMPLE_SIZE = 150;
 
+// =============================================================================
+// Forecasting Settings (wire format for Python backend)
+// =============================================================================
 
+/**
+ * Settings bundle sent to the Python backend in API requests.
+ *
+ * The frontend is the canonical source of these values (they are per-repo
+ * configuration edited in this file). The backend defines matching defaults
+ * for tests/documentation but always prefers the request-supplied values.
+ *
+ * See analysis-forecasting.md §4.5.
+ */
+export interface ForecastingSettings {
+  // Fitting (quality gates + estimation)
+  min_fit_converters: number;
+  min_mean_median_ratio: number;
+  max_mean_median_ratio: number;
+  default_sigma: number;
+  recency_half_life_days: number;
+  onset_mass_fraction_alpha: number;
+  onset_aggregation_beta: number;
+  // Application (completeness + blending)
+  t95_percentile: number;
+  forecast_blend_lambda: number;
+  blend_completeness_power: number;
+}
+
+/**
+ * Build the ForecastingSettings object for inclusion in API requests.
+ * Single choke-point: all constants are bundled here.
+ */
+export function buildForecastingSettings(): ForecastingSettings {
+  return {
+    min_fit_converters: LATENCY_MIN_FIT_CONVERTERS,
+    min_mean_median_ratio: LATENCY_MIN_MEAN_MEDIAN_RATIO,
+    max_mean_median_ratio: LATENCY_MAX_MEAN_MEDIAN_RATIO,
+    default_sigma: LATENCY_DEFAULT_SIGMA,
+    recency_half_life_days: RECENCY_HALF_LIFE_DAYS,
+    onset_mass_fraction_alpha: ONSET_MASS_FRACTION_ALPHA,
+    onset_aggregation_beta: ONSET_AGGREGATION_BETA,
+    t95_percentile: LATENCY_T95_PERCENTILE,
+    forecast_blend_lambda: FORECAST_BLEND_LAMBDA,
+    blend_completeness_power: LATENCY_BLEND_COMPLETENESS_POWER,
+  };
+}
 

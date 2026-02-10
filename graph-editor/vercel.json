@@ -41,6 +41,10 @@
       "destination": "/api/python-api?endpoint=snapshots-batch-retrieval-days"
     },
     {
+      "source": "/api/snapshots/batch-anchor-coverage",
+      "destination": "/api/python-api?endpoint=snapshots-batch-anchor-coverage"
+    },
+    {
       "source": "/api/snapshots/delete",
       "destination": "/api/python-api?endpoint=snapshots-delete"
     },
@@ -79,6 +83,14 @@
     {
       "source": "/api/sigs/resolve",
       "destination": "/api/python-api?endpoint=sigs-resolve"
+    },
+    {
+      "source": "/api/lag/recompute-models",
+      "destination": "/api/python-api?endpoint=lag-recompute-models"
+    },
+    {
+      "source": "/api/lag-recompute-models",
+      "destination": "/api/python-api?endpoint=lag-recompute-models"
     }
   ]
 }

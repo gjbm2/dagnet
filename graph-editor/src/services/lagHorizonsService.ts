@@ -4,6 +4,7 @@ import { retrieveAllSlicesPlannerService } from './retrieveAllSlicesPlannerServi
 import { fetchDataService, type FetchItem, persistGraphMasteredLatencyToParameterFiles } from './fetchDataService';
 import { dataOperationsService } from './dataOperationsService';
 import { fileRegistry } from '../contexts/TabContext';
+import { runParityComparison, FORECASTING_PARALLEL_RUN } from './lagRecomputeService';
 
 export type LagHorizonsRecomputeMode = 'current' | 'global';
 
@@ -228,6 +229,28 @@ class LagHorizonsService {
         setGraph: args.setGraph,
         parentLogId: opId,
       });
+
+      // Parallel-run parity comparison (gated by FORECASTING_PARALLEL_RUN flag).
+      if (FORECASTING_PARALLEL_RUN) {
+        try {
+          const g = args.getGraph();
+          if (g) {
+            // Get workspace from the first parameter file's source in fileRegistry.
+            const firstParamEdge = (g as any)?.edges?.find((e: any) => e?.p?.id);
+            const firstParamFileId = firstParamEdge?.p?.id ? `parameter-${firstParamEdge.p.id}` : undefined;
+            const source = firstParamFileId ? fileRegistry.getFile(firstParamFileId)?.source : undefined;
+            const workspace = source?.repository && source?.branch
+              ? { repository: source.repository as string, branch: source.branch as string }
+              : undefined;
+            if (workspace) {
+              await runParityComparison({ graph: g, workspace });
+            }
+          }
+        } catch (e: any) {
+          console.warn('[lagHorizonsService] Parity comparison failed (non-fatal):', e?.message || e);
+        }
+      }
+
       sessionLogService.endOperation(opId, 'success', 'Recomputed + persisted LAG horizons');
     } catch (e: any) {
       sessionLogService.endOperation(opId, 'error', e?.message || String(e));

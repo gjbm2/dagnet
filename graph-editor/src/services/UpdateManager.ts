@@ -1705,6 +1705,23 @@ export class UpdateManager {
         targetField: 'latency.onset_delta_days_overridden',
         requiresIgnoreOverrideFlags: true,
         condition: (source) => source.p?.latency?.onset_delta_days_overridden !== undefined && source.p?.id
+      },
+      // mu, sigma, model_trained_at: fitted model params (internal, no override flags)
+      // Synced to file so they survive git commit/clone and are available offline.
+      {
+        sourceField: 'p.latency.mu',
+        targetField: 'latency.mu',
+        condition: (source) => source.p?.latency?.mu !== undefined && source.p?.id
+      },
+      {
+        sourceField: 'p.latency.sigma',
+        targetField: 'latency.sigma',
+        condition: (source) => source.p?.latency?.sigma !== undefined && source.p?.id
+      },
+      {
+        sourceField: 'p.latency.model_trained_at',
+        targetField: 'latency.model_trained_at',
+        condition: (source) => source.p?.latency?.model_trained_at !== undefined && source.p?.id
       }
     ]);
     
@@ -2131,6 +2148,10 @@ export class UpdateManager {
         condition: isProbType
       },
       { sourceField: 'latency.onset_delta_days_overridden', targetField: 'p.latency.onset_delta_days_overridden', requiresIgnoreOverrideFlags: true },
+      // mu, sigma, model_trained_at: fitted model params (internal, no override flags)
+      { sourceField: 'latency.mu', targetField: 'p.latency.mu', condition: isProbType },
+      { sourceField: 'latency.sigma', targetField: 'p.latency.sigma', condition: isProbType },
+      { sourceField: 'latency.model_trained_at', targetField: 'p.latency.model_trained_at', condition: isProbType },
       
       // LAG: Latency DATA fields (file → graph only, display-only)
       { 
@@ -3566,6 +3587,13 @@ export class UpdateManager {
       if ((update.latency as any).onset_delta_days !== undefined && 
           targetP.latency.onset_delta_days_overridden !== true) {
         targetP.latency.onset_delta_days = (update.latency as any).onset_delta_days;
+      }
+      // mu/sigma: fitted model params (internal, always written when available)
+      if ((update.latency as any).mu !== undefined) {
+        targetP.latency.mu = (update.latency as any).mu;
+      }
+      if ((update.latency as any).sigma !== undefined) {
+        targetP.latency.sigma = (update.latency as any).sigma;
       }
       
       // Apply forecast if provided

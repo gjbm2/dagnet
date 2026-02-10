@@ -1,6 +1,6 @@
 # Analysis Forecasting: Implementation Plan
 
-**Status**: Draft (10-Feb-26)  
+**Status**: In progress (10-Feb-26). Phases 1–8 complete. Parallel-run tested and debugged. Code defects 1–2 fixed; defect 3 was not a defect. **Defect 4 (DB coverage gap)** is the remaining blocker — the snapshot DB has fewer anchor days than the parameter file for historical data. Flag is ON for monitoring. Next: close the DB gap (backfill + fix write path).  
 **Parent**: `analysis-forecasting.md` (design/architecture)  
 **Approach**: Parallel-run migration (§7.0 of design doc)
 
@@ -10,7 +10,7 @@ This plan lists every file touched, in dependency order. Update as work proceeds
 
 ---
 
-## Phase 1: Python Pure Maths Library + Golden Tests
+## Phase 1: Python Pure Maths Library + Golden Tests — DONE (10-Feb-26)
 
 **Goal**: Port `lagDistributionUtils.ts` to Python with numerical parity. No runtime changes. No API changes. Foundation for everything else.
 
@@ -36,7 +36,7 @@ This plan lists every file touched, in dependency order. Update as work proceeds
 
 ---
 
-## Phase 2: Forecasting Settings Module
+## Phase 2: Forecasting Settings Module — DONE (10-Feb-26)
 
 **Goal**: Python can receive, validate, and hash a `forecasting_settings` object. No API changes yet.
 
@@ -61,7 +61,7 @@ This plan lists every file touched, in dependency order. Update as work proceeds
 
 ---
 
-## Phase 3: Model Fitter
+## Phase 3: Model Fitter — DONE (10-Feb-26)
 
 **Goal**: Python can query snapshot DB evidence and produce fitted model params (`mu`, `sigma`, plus provenance metadata) for a given subject. No API route yet — library only.
 
@@ -84,7 +84,7 @@ This plan lists every file touched, in dependency order. Update as work proceeds
 
 ---
 
-## Phase 4: Forecast Application (Completeness + Projections)
+## Phase 4: Forecast Application (Completeness + Projections) — DONE (10-Feb-26)
 
 **Goal**: Python can evaluate completeness per anchor_day and produce evidence/forecast split outputs given a fitted model.
 
@@ -112,7 +112,7 @@ This plan lists every file touched, in dependency order. Update as work proceeds
 
 ---
 
-## Phase 5: Recompute API Route
+## Phase 5: Recompute API Route — DONE (10-Feb-26)
 
 **Goal**: Frontend can call `/api/lag/recompute-models` to get fitted models for a set of subjects.
 
@@ -141,7 +141,7 @@ This plan lists every file touched, in dependency order. Update as work proceeds
 
 ---
 
-## Phase 6: Analysis Response Enrichment
+## Phase 6: Analysis Response Enrichment — DONE (10-Feb-26)
 
 **Goal**: Analysis responses (cohort maturity, daily conversions) include completeness and layer fields when a model is available.
 
@@ -177,9 +177,9 @@ This plan lists every file touched, in dependency order. Update as work proceeds
 
 ---
 
-## Phase 7: Persistence (mu/sigma on Graph)
+## Phase 7: Persistence (mu/sigma on Graph) — DONE (10-Feb-26, sync + schema only; gated trigger wiring deferred to Phase 8)
 
-**Goal**: Fitted models are persisted on graph edges so they survive across sessions and are available offline.
+**Goal**: Fitted models are persisted on graph edges AND parameter files (via the existing graph↔file push/pull) so they survive across sessions, are committed to git, and are available offline and in shared/cloned workspaces.
 
 **Depends on**: Phase 5 (recompute API returns models), Phase 6 (types defined).
 
@@ -187,7 +187,9 @@ This plan lists every file touched, in dependency order. Update as work proceeds
 
 ### Files modified
 
-- `src/services/` (new or existing service, e.g. `lagRecomputeService.ts`) — after calling the recompute API and receiving fitted params, apply them to the graph: set `edge.p.latency.mu`, `.sigma`, `.model_trained_at` for each subject. Mark the graph as dirty. This is an explicit user action (or post-fetch trigger), not automatic on every DSL change. Entire call gated by `FORECASTING_PARALLEL_RUN`.
+- `src/services/` (new or existing service, e.g. `lagRecomputeService.ts`) — after calling the recompute API and receiving fitted params, apply them to the graph: set `edge.p.latency.mu`, `.sigma`, `.model_trained_at` for each subject. Mark the graph as dirty. The existing graph→file push mechanism will then sync these fields to the parameter file's latency section (alongside t95, median_lag_days, etc.). This is an explicit user action (or post-fetch trigger), not automatic on every DSL change. Entire call gated by `FORECASTING_PARALLEL_RUN`.
+
+- `src/services/dataOperationsService.ts` (or UpdateManager) — ensure `mu`, `sigma`, `model_trained_at` are included in the graph→file field sync for latency config. They must be pushed to the parameter file and pulled back, same as `t95` and other latency fields.
 
 - `src/services/dataOperationsService.ts` — in the post-fetch workflow (after `appendSnapshots` succeeds), if `FORECASTING_PARALLEL_RUN` is enabled, call the recompute API for affected subjects and apply results to the graph. This is the "automatic" trigger from design doc §7.3. When flag is off, this codepath is skipped entirely.
 
@@ -197,10 +199,11 @@ This plan lists every file touched, in dependency order. Update as work proceeds
 
 - Integration test: after calling recompute, graph edge has mu, sigma, model_trained_at with expected values
 - Integration test: mu/sigma/model_trained_at survive serialisation/deserialisation (YAML round-trip)
+- Integration test: mu/sigma/model_trained_at are pushed to parameter file and pulled back correctly (graph↔file sync)
 
 ---
 
-## Phase 8: Parallel-Run Comparison
+## Phase 8: Parallel-Run Comparison — DONE (10-Feb-26)
 
 **Goal**: Both FE and BE compute models and completeness. Frontend compares and emits diagnostics on mismatch.
 
@@ -228,11 +231,66 @@ This plan lists every file touched, in dependency order. Update as work proceeds
 
 ---
 
+## Phase 8.5: Fix Parity Defects (discovered 10-Feb-26)
+
+**Goal**: Fix the three defects surfaced by the first parallel-run test. Until these are fixed, the parity comparison produces false mismatches and the flag must remain off.
+
+### Defect 1: BE queries wrong slice (broad instead of window-only) — FIXED (10-Feb-26)
+
+The `runParityComparison` in `lagRecomputeService.ts` was sending `slice_keys: ['']` (broad = all slices). Fixed to send the correct window slice key (e.g. `window(6-Sep-25:10-Feb-26)`) derived from the parameter file's window value entry.
+
+### Defect 2: BE uses wrong anchor range — FIXED (10-Feb-26)
+
+The parity comparison was picking `window_from`/`window_to` from whichever value entry has a `query_signature` first — which might be the cohort entry. Fixed to explicitly select the window value entry (where `sliceDSL` starts with `window(`) and use its `window_from`/`window_to`. Also fixed UK date → ISO conversion (was using `new Date()` which can't parse `d-MMM-yy`; now uses `parseUKDate`).
+
+### Defect 3: FE recency weighting — NOT A DEFECT
+
+Investigated (10-Feb-26): the FE's `aggregateLatencyStats` in `windowAggregationService.ts` (line 2419) DOES apply recency weighting via `computeRecencyWeight(cohort.age, recencyHalfLifeDays)`. Both FE and BE use the same `k × recency_weight` formula. This is aligned.
+
+### Finding 4: Snapshot DB has a historical coverage gap (minor, not the root cause)
+
+The DB is missing 36 days of pre-12-Oct-25 data across all params (DB starts at 12-Oct-25; parameter files go back to 6-Sep-25). This is a one-time gap from before the DB shadow-write was enabled. It affects all four `gm-*` params equally.
+
+**However, this is NOT the root cause of the parity mismatches.** With recency weighting (half-life 30 days), data from Sep–Oct 2025 would have negligible weight. The delta from missing old data would be tiny.
+
+### Defect 5: Parity comparison sends the wrong anchor range — THE ACTUAL ROOT CAUSE
+
+**Discovered 10-Feb-26.** This is the real reason for the large mu/sigma deltas.
+
+The FE topo pass does NOT fit from the full window range. It fits from a **query-scoped cohort window** — typically the last ~30 days. The parity comparison was sending the **full window range** (158 days) to the BE.
+
+**Evidence:**
+
+| | FE topo pass | BE parity comparison |
+|---|---|---|
+| **Anchor range** | 11-Jan-26 to 9-Feb-26 (30 days) | 6-Sep-25 to 10-Feb-26 (158 days) |
+| **Edge 7bb83fbf K** | 359 | 2177 |
+| **Edge 97b11265 K** | 139 | 2323 |
+
+The FE fits from 30 recent cohorts. The BE fits from 122+ historical days. Completely different sample sizes, completely different aggregate lag moments, completely different mu/sigma. The mismatches are not a code bug or a data bug — they are an **input mismatch** in the parity comparison.
+
+**Fix required:** The parity comparison must send the same anchor range the FE used. The FE's effective cohort window (`2026-01-11 to 2026-02-09` in this case) is determined by the query DSL and the LAG pass's window scoping logic. Options:
+
+1. **Store the effective anchor range on the graph edge** alongside mu/sigma (e.g. `latency.model_anchor_from`, `latency.model_anchor_to`). The parity comparison reads it and sends it to the BE. Clean, explicit, survives across sessions.
+
+2. **Derive the anchor range from the current query DSL** in the parity comparison. The FE topo pass uses a scoped window; the parity service could apply the same scoping logic. More complex, duplicates logic.
+
+3. **Pass the FE's aggregate values directly to the BE** instead of having the BE re-aggregate from DB. The BE receives `(median_lag=X, mean_lag=Y, total_k=Z, onset=W)` and just calls `fit_lag_distribution`. This tests fitting parity only, not aggregation parity. Simplest for a first parity pass.
+
+**Recommendation:** Option 1 for proper parity testing (store anchor range, send to BE, verify end-to-end). Option 3 as a quick win to verify the pure fitting function is identical.
+
+### Files fixed (10-Feb-26)
+
+- `src/services/lagRecomputeService.ts` — fixed subject construction (defects 1 + 2), added `parseUKDate` for date conversion, added diagnostic logging to `FORECASTING_PARITY_START`
+- `lib/api_handlers.py` — added diagnostic print for incoming recompute subjects
+
+---
+
 ## Phase 9: Soak in Production
 
 **Goal**: Run in parallel-run mode in production. Investigate and fix any parity mismatches.
 
-**Depends on**: Phase 8.
+**Depends on**: Phase 8.5 defects fixed.
 
 ### No new files
 

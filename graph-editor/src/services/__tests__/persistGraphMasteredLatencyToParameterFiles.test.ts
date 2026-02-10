@@ -161,6 +161,91 @@ describe('persistGraphMasteredLatencyToParameterFiles', () => {
     expect(updated?.latency?.onset_delta_days).toBe(5);
   });
 
+  // ── mu/sigma graph → file sync ──────────────────────────────
+
+  it('writes latency.mu and latency.sigma from graph → parameter file', async () => {
+    await registerFileForTest('parameter-p1', 'parameter', {
+      id: 'p1',
+      type: 'probability',
+      latency: {},
+      values: [],
+    });
+
+    const graph: Graph = {
+      nodes: [{ id: 'A' } as any, { id: 'B' } as any],
+      edges: [{
+        uuid: 'e1',
+        id: 'A-to-B',
+        from: 'A',
+        to: 'B',
+        query: 'from(A).to(B)',
+        p: {
+          id: 'p1',
+          latency: {
+            path_t95: 37.61,
+            t95: 13.12,
+            mu: 1.609,
+            sigma: 0.8,
+            model_trained_at: '10-Feb-26',
+          },
+        } as any,
+      } as any],
+    } as any;
+
+    await persistGraphMasteredLatencyToParameterFiles({
+      graph,
+      setGraph: () => {},
+      edgeIds: ['e1'],
+    });
+
+    const updated = fileRegistry.getFile('parameter-p1')?.data as any;
+    expect(updated?.latency?.mu).toBe(1.609);
+    expect(updated?.latency?.sigma).toBe(0.8);
+    expect(updated?.latency?.model_trained_at).toBe('10-Feb-26');
+  });
+
+  it('overwrites existing mu/sigma on file (no override flags for model params)', async () => {
+    await registerFileForTest('parameter-p1', 'parameter', {
+      id: 'p1',
+      type: 'probability',
+      latency: { mu: 0.5, sigma: 0.3, model_trained_at: '1-Jan-26' },
+      values: [],
+    });
+
+    const graph: Graph = {
+      nodes: [{ id: 'A' } as any, { id: 'B' } as any],
+      edges: [{
+        uuid: 'e1',
+        id: 'A-to-B',
+        from: 'A',
+        to: 'B',
+        query: 'from(A).to(B)',
+        p: {
+          id: 'p1',
+          latency: {
+            path_t95: 37.61,
+            t95: 13.12,
+            mu: 1.609,
+            sigma: 0.8,
+            model_trained_at: '10-Feb-26',
+          },
+        } as any,
+      } as any],
+    } as any;
+
+    await persistGraphMasteredLatencyToParameterFiles({
+      graph,
+      setGraph: () => {},
+      edgeIds: ['e1'],
+    });
+
+    const updated = fileRegistry.getFile('parameter-p1')?.data as any;
+    // Must overwrite — no override flags on mu/sigma
+    expect(updated?.latency?.mu).toBe(1.609);
+    expect(updated?.latency?.sigma).toBe(0.8);
+    expect(updated?.latency?.model_trained_at).toBe('10-Feb-26');
+  });
+
   it('does NOT overwrite latency.onset_delta_days when file onset_delta_days_overridden=true (§0.3)', async () => {
     await registerFileForTest('parameter-p1', 'parameter', {
       id: 'p1',

@@ -73,6 +73,9 @@ class LatencyConfig(BaseModel):
     median_lag_days: Optional[float] = Field(None, ge=0, description="Weighted median lag in days (display only)")
     mean_lag_days: Optional[float] = Field(None, ge=0, description="Weighted mean lag in days (used with median to compute t95)")
     completeness: Optional[float] = Field(None, ge=0, le=1, description="Maturity progress 0-1 (display only)")
+    mu: Optional[float] = Field(None, description="Fitted log-normal mu parameter (internal, not UI-exposed)")
+    sigma: Optional[float] = Field(None, ge=0, description="Fitted log-normal sigma parameter (internal, not UI-exposed)")
+    model_trained_at: Optional[str] = Field(None, description="UK date (d-MMM-yy) when the model was last fitted (staleness detection)")
 
 
 class ForecastParams(BaseModel):

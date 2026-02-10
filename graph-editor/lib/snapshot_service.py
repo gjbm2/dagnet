@@ -14,7 +14,7 @@ import base64
 import psycopg2
 from psycopg2.extras import execute_values
 from typing import List, Dict, Any, Optional
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 import re
 
 from slice_key_normalisation import normalise_slice_key_for_matching
@@ -1373,6 +1373,209 @@ def get_batch_inventory_v2(
             }
 
         return inventory
+    finally:
+        conn.close()
+
+
+# =============================================================================
+# Phase 2b+: Batch Anchor Coverage — missing anchor-day ranges per subject
+# =============================================================================
+
+def batch_anchor_coverage(
+    subjects: List[Dict[str, Any]],
+    diagnostic: bool = False,
+) -> List[Dict[str, Any]]:
+    """
+    For each subject, compute which anchor-day ranges within [anchor_from, anchor_to]
+    are missing from the snapshot DB, considering equivalence closure.
+
+    This is the "Tier B" preflight used by Retrieve All to detect DB gaps that
+    file-cache planning cannot see (hash drift, late-start snapshotting).
+
+    Args:
+        subjects: List of dicts, each with:
+            - param_id (str, required)
+            - core_hash (str, required)
+            - slice_keys (list[str], required)
+            - anchor_from (date, required)
+            - anchor_to (date, required)
+            - include_equivalents (bool, default True)
+
+    Returns:
+        List of result dicts (same order as subjects), each with:
+            - subject_index (int)
+            - coverage_ok (bool)
+            - missing_anchor_ranges (list of {start, end} ISO date strings, inclusive)
+            - present_anchor_ranges (list of {start, end} ISO date strings, inclusive) [diagnostic only]
+            - present_anchor_day_count (int)
+            - expected_anchor_day_count (int)
+            - equivalence_resolution (dict with core_hashes and param_ids lists)
+            - slice_keys_normalised (list[str]) [diagnostic only]
+            - slice_filter_kind ("none" | "families" | "empty") [diagnostic only]
+    """
+    if not subjects:
+        return []
+
+    conn = get_db_connection()
+    try:
+        cur = conn.cursor()
+        results: List[Dict[str, Any]] = []
+
+        for idx, subj in enumerate(subjects):
+            param_id = subj["param_id"]
+            core_hash = subj["core_hash"]
+            slice_keys = subj.get("slice_keys") or []
+            anchor_from = subj["anchor_from"]
+            anchor_to = subj["anchor_to"]
+            include_equivalents = subj.get("include_equivalents", True)
+
+            # --- Resolve equivalence closure ---
+            if include_equivalents and core_hash:
+                cur.execute(
+                    """
+                    WITH RECURSIVE eq(core_hash, source_param_id) AS (
+                      SELECT %s::text, %s::text
+                      UNION
+                      SELECT
+                        CASE WHEN e.core_hash = eq.core_hash THEN e.equivalent_to ELSE e.core_hash END,
+                        COALESCE(e.source_param_id, e.param_id)
+                      FROM signature_equivalence e
+                      JOIN eq ON (e.core_hash = eq.core_hash OR e.equivalent_to = eq.core_hash)
+                      WHERE e.param_id = %s AND e.active = true AND e.operation = 'equivalent'
+                    )
+                    SELECT DISTINCT core_hash, source_param_id FROM eq
+                    """,
+                    (core_hash, param_id, param_id),
+                )
+                eq_rows = cur.fetchall()
+                resolved_hashes = sorted({str(r[0]) for r in eq_rows if r and r[0]})
+                resolved_pids = sorted({str(r[1]) for r in eq_rows if r and r[1]})
+                if core_hash not in resolved_hashes:
+                    resolved_hashes = [core_hash] + resolved_hashes
+                if param_id not in resolved_pids:
+                    resolved_pids = [param_id] + resolved_pids
+            else:
+                resolved_hashes = [core_hash]
+                resolved_pids = [param_id]
+
+            # --- Query distinct anchor_day present in DB ---
+            where_clauses: List[str] = [
+                "param_id = ANY(%s)",
+                "core_hash = ANY(%s)",
+                "anchor_day >= %s",
+                "anchor_day <= %s",
+            ]
+            params: List[Any] = [resolved_pids, resolved_hashes, anchor_from, anchor_to]
+
+            # Diagnostic evidence for slice-key normalisation + filter semantics
+            slice_keys_normalised: List[str] = [normalise_slice_key_for_matching(sk) for sk in slice_keys] if slice_keys else []
+            if not slice_keys:
+                slice_filter_kind = "empty"
+            elif "" in slice_keys_normalised:
+                slice_filter_kind = "none"
+            else:
+                slice_filter_kind = "families"
+
+            if slice_keys:
+                slice_parts: List[str] = []
+                _append_slice_filter_sql(sql_parts=slice_parts, params=params, slice_keys=slice_keys)
+                if slice_parts:
+                    where_clauses.extend(slice_parts)
+
+            where_sql = " AND ".join(where_clauses)
+            cur.execute(
+                f"SELECT DISTINCT anchor_day FROM snapshots WHERE {where_sql} ORDER BY anchor_day",
+                tuple(params),
+            )
+            present_days = {r[0] for r in cur.fetchall() if r and r[0]}
+
+            # --- Compute expected day set and missing ranges ---
+            expected_days: List[date] = []
+            d = anchor_from
+            one_day = timedelta(days=1)
+            while d <= anchor_to:
+                expected_days.append(d)
+                d += one_day
+
+            missing_ranges: List[Dict[str, str]] = []
+            range_start: Optional[date] = None
+            range_end: Optional[date] = None
+
+            for day in expected_days:
+                if day not in present_days:
+                    if range_start is None:
+                        range_start = day
+                    range_end = day
+                else:
+                    if range_start is not None and range_end is not None:
+                        missing_ranges.append({
+                            "start": range_start.isoformat(),
+                            "end": range_end.isoformat(),
+                        })
+                        range_start = None
+                        range_end = None
+
+            # Flush final open range
+            if range_start is not None and range_end is not None:
+                missing_ranges.append({
+                    "start": range_start.isoformat(),
+                    "end": range_end.isoformat(),
+                })
+
+            out = {
+                "subject_index": idx,
+                "coverage_ok": len(missing_ranges) == 0,
+                "missing_anchor_ranges": missing_ranges,
+                "present_anchor_day_count": len(present_days),
+                "expected_anchor_day_count": len(expected_days),
+                "equivalence_resolution": {
+                    "core_hashes": resolved_hashes,
+                    "param_ids": resolved_pids,
+                },
+            }
+
+            if diagnostic:
+                # Present anchor evidence as a normalised union of ranges (bounded by gaps).
+                present_ranges: List[Dict[str, str]] = []
+                pr_start: Optional[date] = None
+                pr_end: Optional[date] = None
+                for day in expected_days:
+                    if day in present_days:
+                        if pr_start is None:
+                            pr_start = day
+                        pr_end = day
+                    else:
+                        if pr_start is not None and pr_end is not None:
+                            present_ranges.append({"start": pr_start.isoformat(), "end": pr_end.isoformat()})
+                            pr_start = None
+                            pr_end = None
+                if pr_start is not None and pr_end is not None:
+                    present_ranges.append({"start": pr_start.isoformat(), "end": pr_end.isoformat()})
+
+                out["present_anchor_ranges"] = present_ranges
+                out["slice_keys_normalised"] = slice_keys_normalised
+                out["slice_filter_kind"] = slice_filter_kind
+
+            results.append(out)
+
+        return results
+    except Exception as e:
+        # Return per-subject error for all subjects
+        return [
+            {
+                "subject_index": i,
+                "coverage_ok": False,
+                "missing_anchor_ranges": [],
+                "present_anchor_ranges": [] if diagnostic else None,
+                "present_anchor_day_count": 0,
+                "expected_anchor_day_count": 0,
+                "equivalence_resolution": {"core_hashes": [], "param_ids": []},
+                "slice_keys_normalised": [] if diagnostic else None,
+                "slice_filter_kind": None,
+                "error": str(e),
+            }
+            for i in range(len(subjects))
+        ]
     finally:
         conn.close()
 

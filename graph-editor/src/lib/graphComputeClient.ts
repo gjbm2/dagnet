@@ -461,6 +461,11 @@ export class GraphComputeClient {
                 median_lag_days: (p?.median_lag_days === null || p?.median_lag_days === undefined) ? null : Number(p.median_lag_days),
                 mean_lag_days: (p?.mean_lag_days === null || p?.mean_lag_days === undefined) ? null : Number(p.mean_lag_days),
                 onset_delta_days: (p?.onset_delta_days === null || p?.onset_delta_days === undefined) ? null : Number(p.onset_delta_days),
+                completeness: (p?.completeness === null || p?.completeness === undefined) ? null : Number(p.completeness),
+                layer: p?.layer ?? null,
+                evidence_y: (p?.evidence_y === null || p?.evidence_y === undefined) ? null : Number(p.evidence_y),
+                forecast_y: (p?.forecast_y === null || p?.forecast_y === undefined) ? null : Number(p.forecast_y),
+                projected_y: (p?.projected_y === null || p?.projected_y === undefined) ? null : Number(p.projected_y),
                 epoch_subject_id: epochPayload?.subject_id,
                 epoch_sweep_from: epochPayload?.sweep_from,
                 epoch_sweep_to: epochPayload?.sweep_to,
@@ -786,6 +791,11 @@ export class GraphComputeClient {
               x: Number(row.x ?? 0),
               y: Number(row.y ?? 0),
               rate: row.rate != null && Number.isFinite(Number(row.rate)) ? Number(row.rate) : null,
+              completeness: row.completeness != null ? Number(row.completeness) : null,
+              layer: row.layer ?? null,
+              evidence_y: row.evidence_y != null ? Number(row.evidence_y) : null,
+              forecast_y: row.forecast_y != null ? Number(row.forecast_y) : null,
+              projected_y: row.projected_y != null ? Number(row.projected_y) : null,
             });
           }
         } else {
@@ -1451,6 +1461,8 @@ export interface AnalysisRequest {
   scenarios: ScenarioData[];
   query_dsl?: string;
   analysis_type?: string;
+  /** Forecasting settings from buildForecastingSettings(). Sent for snapshot analyses. */
+  forecasting_settings?: import('../constants/latency').ForecastingSettings;
 }
 
 /**

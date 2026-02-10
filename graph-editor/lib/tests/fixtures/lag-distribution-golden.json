@@ -1,0 +1,107 @@
+{
+  "_comment": "Golden test vectors for lag distribution maths. Consumed by both Python and TypeScript test suites to verify cross-language numerical parity.",
+  "standard_normal_inverse_cdf": [
+    { "p": 0.5, "expected": 0.0, "tol": 1e-12 },
+    { "p": 0.841344746, "expected": 1.0, "tol": 1e-6 },
+    { "p": 0.977249868, "expected": 2.0, "tol": 1e-6 },
+    { "p": 0.0, "expected": "-inf", "tol": 0 },
+    { "p": 1.0, "expected": "inf", "tol": 0 },
+    { "p": 0.01, "expected": -2.3263478740, "tol": 1e-6 },
+    { "p": 0.99, "expected": 2.3263478740, "tol": 1e-6 }
+  ],
+  "log_normal_cdf": [
+    {
+      "_comment": "t <= 0 returns 0",
+      "t": 0, "mu": 1.0986122886681098, "sigma": 0.8, "expected": 0.0, "tol": 0
+    },
+    {
+      "_comment": "t = -1 returns 0",
+      "t": -1, "mu": 1.0986122886681098, "sigma": 0.8, "expected": 0.0, "tol": 0
+    },
+    {
+      "_comment": "median point: CDF(exp(mu)) = 0.5",
+      "t": 3.0, "mu": 1.0986122886681098, "sigma": 0.8, "expected": 0.5, "tol": 1e-8
+    },
+    {
+      "_comment": "non-median point (t=5, precomputed from scipy)",
+      "t": 5.0, "mu": 1.0986122886681098, "sigma": 0.8, "expected": 0.7384362945, "tol": 1e-6
+    }
+  ],
+  "log_normal_inverse_cdf": [
+    {
+      "_comment": "median: inverseCDF(0.5) = exp(mu) = 3.0",
+      "p": 0.5, "mu": 1.0986122886681098, "sigma": 0.8, "expected": 3.0, "tol": 1e-10
+    },
+    {
+      "_comment": "95th percentile (precomputed)",
+      "p": 0.95, "mu": 1.0986122886681098, "sigma": 0.8, "expected": 11.1841, "tol": 1e-4
+    },
+    {
+      "_comment": "p=0 returns 0",
+      "p": 0.0, "mu": 1.0, "sigma": 0.5, "expected": 0.0, "tol": 0
+    },
+    {
+      "_comment": "p=1 returns inf",
+      "p": 1.0, "mu": 1.0, "sigma": 0.5, "expected": "inf", "tol": 0
+    }
+  ],
+  "fit_lag_distribution": [
+    {
+      "_comment": "typical fit: mu = ln(2), sigma = sqrt(2*ln(2))",
+      "median_lag": 2, "mean_lag": 4, "total_k": 200,
+      "expected_mu": 0.6931471805599453, "expected_sigma": 1.1774100225154747,
+      "expected_quality_ok": true, "tol_mu": 1e-12, "tol_sigma": 1e-12
+    },
+    {
+      "_comment": "missing mean: uses default sigma",
+      "median_lag": 5, "mean_lag": null, "total_k": 500,
+      "expected_mu": 1.6094379124341003, "expected_sigma": 0.5,
+      "expected_quality_ok": true, "tol_mu": 1e-12, "tol_sigma": 0
+    },
+    {
+      "_comment": "insufficient converters: quality gate fails",
+      "median_lag": 2, "mean_lag": 4, "total_k": 1,
+      "expected_mu": 0.6931471805599453, "expected_sigma": 0.5,
+      "expected_quality_ok": false, "tol_mu": 1e-12, "tol_sigma": 0
+    },
+    {
+      "_comment": "zero median: quality fails",
+      "median_lag": 0, "mean_lag": 4, "total_k": 200,
+      "expected_mu": 0, "expected_sigma": 0.5,
+      "expected_quality_ok": false, "tol_mu": 0, "tol_sigma": 0
+    },
+    {
+      "_comment": "mean == median (ratio 1.0): sigma = 0",
+      "median_lag": 3, "mean_lag": 3, "total_k": 200,
+      "expected_mu": 1.0986122886681098, "expected_sigma": 0.0,
+      "expected_quality_ok": true, "tol_mu": 1e-12, "tol_sigma": 1e-12
+    },
+    {
+      "_comment": "negative median: quality fails",
+      "median_lag": -1, "mean_lag": 4, "total_k": 200,
+      "expected_mu": 0, "expected_sigma": 0.5,
+      "expected_quality_ok": false, "tol_mu": 0, "tol_sigma": 0
+    }
+  ],
+  "to_model_space": [
+    {
+      "_comment": "standard shift: all values reduced by onset delta",
+      "onset_delta_days": 2, "median_t": 10, "mean_t": 12, "t95_t": 20, "age_t": 9,
+      "expected_onset": 2, "expected_median_x": 8, "expected_mean_x": 10,
+      "expected_t95_x": 18, "expected_age_x": 7, "tol": 1e-12
+    },
+    {
+      "_comment": "age during dead-time clamps to 0",
+      "onset_delta_days": 5, "median_t": 10, "mean_t": 12, "t95_t": 20, "age_t": 5,
+      "expected_onset": 5, "expected_median_x": 5, "expected_mean_x": 7,
+      "expected_t95_x": 15, "expected_age_x": 0, "tol": 1e-12
+    },
+    {
+      "_comment": "onset exceeds all values: lag clamped to epsilon, age to 0",
+      "onset_delta_days": 100, "median_t": 10, "mean_t": 12, "t95_t": 20, "age_t": 9,
+      "expected_onset": 100,
+      "expected_median_x_gt": 0, "expected_mean_x_gt": 0, "expected_t95_x_gt": 0,
+      "expected_age_x": 0, "tol": 1e-12
+    }
+  ]
+}
