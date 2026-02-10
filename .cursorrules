@@ -25,6 +25,18 @@
   - `cd graph-editor && nvm use "$(cat .nvmrc)"`
   - After this, `node` and `npm` should be available for `npm test`, etc.
 
+## Adjacent Private Repos (read-only context)
+
+Two private repos are cloned into the workspace root for reference. They are **git-excluded** (via `.git/info/exclude`) and protected by a pre-commit hook — they must NEVER be committed to the public dagnet repo.
+
+- **Monorepo** (directory name in `.private-repos.conf` as `MONOREPO_DIR`) — The production site codebase. Use for inspecting production code, understanding how the product works, tracing data flows, etc.
+- **Data repo** (directory name in `.private-repos.conf` as `DATA_REPO_DIR`) — The BI/analytics fileset: conversion graphs, events, nodes, parameters, and contexts used by DagNet for analytics. Contains its own `graph-ops/` with playbooks, reference docs, and scripts for graph development.
+
+These are **not** DagNet core code. They are context repos for inspection and traversal. When working in them:
+- **Do not modify** files in the monorepo directory unless explicitly asked.
+- **Do not commit** anything from either directory to the dagnet repo.
+- For data repo edits, always follow the branch workflow in the data repo’s `graph-ops/playbooks/branch-workflow.md` (inside the directory named by `DATA_REPO_DIR` in `.private-repos.conf`).
+
 ## Core Principles
 
 ### 0. SYSTEMATIC CAUTION UNTIL FULL CONTEXT IS UNDERSTOOD

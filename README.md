@@ -16,7 +16,26 @@ A web-based visual editor for creating and analyzing directed acyclic graphs (DA
    cd dagnet
    ```
 
-2. **Configure environment variables**
+2. **(Optional) Clone private context repos into this workspace (since 10-Feb-26)**
+
+DagNet can be used alongside two private repos cloned into the workspace root (for reference and graph development). These repos are **never** committed to this public repo: they are git-excluded via `.git/info/exclude` and protected by a pre-commit leak guard. This workflow applies **since 10-Feb-26**.
+
+- Edit `.private-repos.conf` (repo root) and set the two directory names (`DATA_REPO_DIR`, `MONOREPO_DIR`).
+- Clone the private repos into those directories (ask a team member for the repo URLs).
+- Run the idempotent setup script:
+
+```bash
+bash scripts/setup-workspace.sh
+```
+
+This script is safe to run repeatedly. It will:
+- Add the private directories to `.git/info/exclude` (git ignores them, Cursor can still see them)
+- Activate the pre-commit hook (`core.hooksPath=.githooks`)
+- Verify both exclusions and hook activation
+
+Graph-development playbooks and scripts live in the private data repo under `graph-ops/`.
+
+3. **Configure environment variables**
    ```bash
    cd graph-editor
    cp .env.example .env.local  # or .env

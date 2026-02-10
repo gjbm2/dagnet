@@ -12,7 +12,7 @@ See analysis-forecasting.md §4.6 for what data the fitter needs.
 
 import math
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, time
 from typing import Any, Dict, List, Optional
 
 from .lag_distribution_utils import (
@@ -198,6 +198,7 @@ def aggregate_evidence(
     evidence: List[_EvidenceRow],
     settings: ForecastingSettings,
     reference_date: Optional[date] = None,
+    reference_datetime: Optional[datetime] = None,
 ) -> tuple:
     """
     Aggregate evidence rows into a single (median_lag, mean_lag, total_k, onset_delta).
@@ -207,11 +208,14 @@ def aggregate_evidence(
 
     Returns: (aggregate_median_lag, aggregate_mean_lag, total_k, aggregate_onset_delta)
     """
-    if reference_date is None:
-        # Use latest anchor_day as reference.
+    if reference_datetime is None and reference_date is None:
+        # Default reference: latest anchor_day at midnight.
         dates = [_parse_date(e.anchor_day) for e in evidence]
         valid_dates = [d for d in dates if d is not None]
-        reference_date = max(valid_dates) if valid_dates else date.today()
+        d = max(valid_dates) if valid_dates else date.today()
+        reference_datetime = datetime.combine(d, time.min)
+    elif reference_datetime is None and reference_date is not None:
+        reference_datetime = datetime.combine(reference_date, time.min)
 
     w_median_num = 0.0
     w_median_denom = 0.0
@@ -226,7 +230,11 @@ def aggregate_evidence(
             continue
 
         anchor_date = _parse_date(ev.anchor_day)
-        age_days = (reference_date - anchor_date).days if anchor_date else 0
+        anchor_dt = datetime.combine(anchor_date, time.min) if anchor_date else None
+        if anchor_dt is not None and reference_datetime is not None and reference_datetime.tzinfo is not None:
+            # Align naive anchor midnight with the reference timezone to avoid naive/aware subtraction.
+            anchor_dt = anchor_dt.replace(tzinfo=reference_datetime.tzinfo)
+        age_days = ((reference_datetime - anchor_dt).total_seconds() / 86400.0) if (reference_datetime and anchor_dt) else 0.0
         recency_w = _recency_weight(age_days, settings.recency_half_life_days)
         w = ev.y * recency_w
 
@@ -257,10 +265,12 @@ def fit_model_from_evidence(
     settings: ForecastingSettings,
     *,
     t95_constraint: Optional[float] = None,
+    onset_override: Optional[float] = None,
     model_trained_at: str = '',
     training_window: Optional[Dict[str, str]] = None,
     settings_signature: Optional[str] = None,
     reference_date: Optional[date] = None,
+    reference_datetime: Optional[datetime] = None,
 ) -> FitResult:
     """
     Fit a lognormal lag model from snapshot evidence rows.
@@ -273,6 +283,8 @@ def fit_model_from_evidence(
         training_window: {anchor_from, anchor_to} ISO dates for provenance.
         settings_signature: Hash of settings for provenance.
         reference_date: Reference date for recency weighting (default: latest anchor_day).
+        reference_datetime: Reference datetime for recency weighting (allows fractional days; overrides reference_date).
+        onset_override: Authoritative onset_delta_days (graph-mastered). If provided, overrides evidence onset.
 
     Returns:
         FitResult with mu, sigma, provenance, and quality metadata.
@@ -297,8 +309,15 @@ def fit_model_from_evidence(
 
     # Step 2: Aggregate with recency weighting.
     agg_median, agg_mean, total_k, agg_onset = aggregate_evidence(
-        evidence, settings, reference_date
+        evidence, settings, reference_date, reference_datetime
     )
+    if onset_override is not None:
+        try:
+            o = float(onset_override)
+            if math.isfinite(o) and o >= 0:
+                agg_onset = o
+        except (ValueError, TypeError):
+            pass
 
     if agg_median is None or agg_median <= 0:
         return FitResult(

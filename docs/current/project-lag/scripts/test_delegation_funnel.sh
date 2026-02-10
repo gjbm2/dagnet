@@ -16,10 +16,12 @@ SECRET_KEY="${AMPLITUDE_SECRET_KEY:?Set AMPLITUDE_SECRET_KEY in .env.amplitude.l
 # Base64 encode for Basic auth
 AUTH=$(echo -n "${API_KEY}:${SECRET_KEY}" | base64)
 
-# Date range - use a window where we expect to see multi-day conversions
-# Using 60 days ago to 30 days ago (so cohorts have had 30+ days to mature)
-END_DATE=$(date -d "30 days ago" +%Y%m%d)
-START_DATE=$(date -d "60 days ago" +%Y%m%d)
+# Date range - use a window where we expect to see multi-day conversions.
+# Using 60 days ago to 30 days ago (so cohorts have had 30+ days to mature).
+#
+# Portability note: use Python for date arithmetic (GNU `date -d` is not portable).
+END_DATE=$(python3 -c "import datetime as d; print((d.date.today() - d.timedelta(days=30)).strftime('%Y%m%d'))")
+START_DATE=$(python3 -c "import datetime as d; print((d.date.today() - d.timedelta(days=60)).strftime('%Y%m%d'))")
 
 echo "Querying Amplitude: Household Created → Delegation Completed"
 echo "Date range: ${START_DATE} to ${END_DATE}"

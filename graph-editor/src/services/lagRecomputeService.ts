@@ -149,35 +149,69 @@ export async function runParityComparison(args: {
     });
 
     // Build subject for backend recompute.
-    // MUST use the WINDOW slice (not cohort, not broad) — the FE fits from window data only.
+    // MUST use the same slice family/signature as the FE fitter used for mu/sigma fitting:
+    // - FE fits from cohort() full-history evidence (cohortsAll), not window().
     const fileId = `parameter-${paramId}`;
     const file = fileRegistry.getFile(fileId);
     const values: any[] = file?.data?.values || [];
 
-    // Find the window value entry: has window_from/window_to, or sliceDSL starts with 'window('.
-    const windowValue = values.find((v: any) =>
-      v?.query_signature && (
-        v.window_from ||
-        (typeof v.sliceDSL === 'string' && v.sliceDSL.startsWith('window('))
-      )
+    // Prefer cohort() slice entry (full-history fit basis).
+    //
+    // For MECE unions (common in prod): some params have ONLY cohort()+context slices (no uncontexted cohort slice).
+    // In that case, FE effectively fits from the union of context slices; BE must receive ALL those slice keys.
+    const cohortValues = values.filter((v: any) =>
+      v?.query_signature && (typeof v.sliceDSL === 'string' && v.sliceDSL.startsWith('cohort('))
     );
-    if (!windowValue?.query_signature) continue;
+    const uncontextedCohortValue = cohortValues.find((v: any) => {
+      const dsl = String(v.sliceDSL || '');
+      return !dsl.includes('.context(') && !dsl.includes('contextAny(');
+    });
+    const windowValue = values.find((v: any) =>
+      v?.query_signature && (typeof v.sliceDSL === 'string' && v.sliceDSL.startsWith('window('))
+    );
+    const chosenValues: any[] =
+      uncontextedCohortValue
+        ? [uncontextedCohortValue]
+        : (cohortValues.length > 0 ? cohortValues : (windowValue ? [windowValue] : []));
+    if (!chosenValues.length || !chosenValues[0]?.query_signature) continue;
 
+    // All chosen slices must belong to the same signature family (same core_hash), otherwise
+    // we cannot query the snapshot DB in a single recompute call safely.
     let coreHash: string;
     try {
-      coreHash = await computeShortCoreHash(windowValue.query_signature);
+      coreHash = await computeShortCoreHash(chosenValues[0].query_signature);
+      for (const v of chosenValues.slice(1)) {
+        const ch = await computeShortCoreHash(v.query_signature);
+        if (ch !== coreHash) {
+          console.warn(
+            `[lagRecomputeService] Skipping parity subject for ${paramId}: ` +
+            `MECE union spans multiple core_hash families (first=${coreHash.substring(0, 8)}..., other=${ch.substring(0, 8)}...)`
+          );
+          coreHash = '';
+          break;
+        }
+      }
+      if (!coreHash) continue;
     } catch {
       continue;
     }
 
-    // Use the window slice's date range and sliceDSL.
-    const anchorFrom = windowValue.window_from || '';
-    const anchorTo = windowValue.window_to || '';
+    // Use the chosen slice's date range and sliceDSL.
+    const anchorFrom =
+      chosenValues[0].cohort_from ||
+      chosenValues[0].window_from ||
+      '';
+    const anchorTo =
+      chosenValues[0].cohort_to ||
+      chosenValues[0].window_to ||
+      '';
+
     // Use the exact sliceDSL as the slice key — NOT broad [''].
-    // This ensures the BE queries the same rows the FE aggregated.
-    const sliceKey = typeof windowValue.sliceDSL === 'string' && windowValue.sliceDSL
-      ? windowValue.sliceDSL
-      : '';
+    // This ensures the BE queries the same signature family and slice semantics.
+    const sliceKeys: string[] = chosenValues
+      .map(v => (typeof v.sliceDSL === 'string' ? v.sliceDSL : ''))
+      .filter(Boolean);
+    if (!sliceKeys.length) continue;
 
     // Convert UK dates (d-MMM-yy) to ISO for the API.
     const toISO = (ukDate: string): string => {
@@ -194,13 +228,17 @@ export async function runParityComparison(args: {
     const isoFrom = toISO(anchorFrom);
     const isoTo = toISO(anchorTo);
 
-    console.log(`[lagRecomputeService] Subject: edge=${edgeUuid.substring(0, 8)}, param=${paramId}, sliceKey=${sliceKey}, anchorFrom=${anchorFrom} → ${isoFrom}, anchorTo=${anchorTo} → ${isoTo}`);
+    console.log(
+      `[lagRecomputeService] Subject: edge=${edgeUuid.substring(0, 8)}, param=${paramId}, ` +
+      `sliceKeys=${sliceKeys.length}, anchorFrom=${anchorFrom} → ${isoFrom}, anchorTo=${anchorTo} → ${isoTo}, ` +
+      `source=${uncontextedCohortValue ? 'cohort' : cohortValues.length > 0 ? 'cohort_mece' : windowValue ? 'window' : 'none'}`
+    );
 
     subjects.push({
       subject_id: edgeUuid,
       param_id: `${workspace.repository}-${workspace.branch}-${paramId}`,
       core_hash: coreHash,
-      slice_keys: [sliceKey],
+      slice_keys: sliceKeys,
       anchor_from: isoFrom,
       anchor_to: isoTo,
       target: { targetId: edgeUuid },

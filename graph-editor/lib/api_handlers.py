@@ -1403,7 +1403,8 @@ def handle_lag_recompute_models(data: Dict[str, Any]) -> Dict[str, Any]:
     graph = data.get('graph', {})
     edges = graph.get('edges', []) if isinstance(graph, dict) else []
     as_at_str = data.get('as_at')
-    as_at = datetime.fromisoformat(as_at_str) if as_at_str else None
+    # Accept both ISO with offset and Zulu suffix.
+    as_at = datetime.fromisoformat(as_at_str.replace('Z', '+00:00')) if as_at_str else None
 
     # UK date for model_trained_at provenance.
     from datetime import date as _date
@@ -1441,6 +1442,7 @@ def handle_lag_recompute_models(data: Dict[str, Any]) -> Dict[str, Any]:
         target = subj.get('target', {})
         target_id = target.get('targetId')
         t95_constraint = None
+        onset_override = None
         if target_id and edges:
             edge = next(
                 (e for e in edges
@@ -1453,6 +1455,9 @@ def handle_lag_recompute_models(data: Dict[str, Any]) -> Dict[str, Any]:
                 t95_val = latency.get('t95') or p.get('t95')
                 if isinstance(t95_val, (int, float)) and t95_val > 0:
                     t95_constraint = float(t95_val)
+                onset_val = latency.get('onset_delta_days') or p.get('onset_delta_days')
+                if isinstance(onset_val, (int, float)) and onset_val >= 0:
+                    onset_override = float(onset_val)
 
         # Query DB evidence.
         try:
@@ -1484,9 +1489,11 @@ def handle_lag_recompute_models(data: Dict[str, Any]) -> Dict[str, Any]:
             rows=rows,
             settings=settings,
             t95_constraint=t95_constraint,
+            onset_override=onset_override,
             model_trained_at=model_trained_at,
             training_window=training_window or None,
             settings_signature=sig,
+            reference_datetime=as_at,
         )
 
         results.append({

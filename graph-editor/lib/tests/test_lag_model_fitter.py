@@ -213,6 +213,16 @@ class TestFitModelFromEvidence:
         # mu should be ln(median - onset) = ln(7), not ln(10).
         assert result.mu == pytest.approx(math.log(7.0), abs=1e-4)
 
+    def test_onset_override_is_authoritative(self):
+        """Graph-mastered onset_override must override evidence onset."""
+        rows = [
+            _row(f'2026-01-{d:02d}', 100, 40, median_lag=10.0, mean_lag=14.0, onset=0.0)
+            for d in range(1, 11)
+        ]
+        result = fit_model_from_evidence(rows, DEFAULTS, onset_override=3.0)
+        assert result.onset_delta_days == pytest.approx(3.0)
+        assert result.mu == pytest.approx(math.log(7.0), abs=1e-4)
+
     def test_settings_override_quality_gate(self):
         """Custom min_fit_converters from settings should be respected."""
         rows = [_row('2026-01-01', 100, 15, median_lag=5.0, mean_lag=7.0)]
