@@ -27,6 +27,8 @@ import { automationRunService } from '../services/automationRunService';
 import { automationLogService } from '../services/automationLogService';
 import { isShareMode } from '../lib/shareBootResolver';
 import { countdownService } from '../services/countdownService';
+import { repositoryOperationsService } from '../services/repositoryOperationsService';
+import { workspaceService } from '../services/workspaceService';
 import { db } from '../db/appDatabase';
 import { APP_VERSION } from '../version';
 
@@ -487,8 +489,45 @@ export function useURLDailyRetrieveAllQueue(): void {
         repoForLog = repoFinal;
         branchForLog = branchFinal;
 
-        // If enumeration mode, enumerate dailyFetch graphs from IDB now
+        // If enumeration mode, pull latest from Git BEFORE enumerating so that
+        // newly-added dailyFetch flags (committed remotely) are visible in IDB.
         if (isEnumerationMode) {
+          sessionLogService.info(
+            'session',
+            'DAILY_RETRIEVE_ALL_PRE_PULL',
+            'Pulling latest from Git before enumerating dailyFetch graphs',
+            undefined,
+            { repository: repoFinal, branch: branchFinal }
+          );
+
+          try {
+            const prePullResult = await repositoryOperationsService.pullLatestRemoteWins(repoFinal, branchFinal);
+            if ((prePullResult.conflictsResolved ?? 0) > 0) {
+              sessionLogService.warning(
+                'session',
+                'DAILY_RETRIEVE_ALL_PRE_PULL_CONFLICTS',
+                `Pre-enumeration pull resolved ${prePullResult.conflictsResolved} conflict(s) by accepting remote`,
+                undefined,
+                { repository: repoFinal, branch: branchFinal }
+              );
+            }
+
+            // Ensure FileRegistry is fully reloaded from IDB after pull.
+            // pullLatestRemoteWins triggers navigatorOps.refreshItems() which calls
+            // loadWorkspaceFromIDB, but that can be silently dropped by a concurrent-
+            // load guard. Explicitly reload here so the per-graph automation loop
+            // (which reads FileRegistry) sees the freshly-pulled data.
+            await workspaceService.loadWorkspaceFromIDB(repoFinal, branchFinal);
+          } catch (pullErr) {
+            sessionLogService.warning(
+              'session',
+              'DAILY_RETRIEVE_ALL_PRE_PULL_FAILED',
+              `Pre-enumeration pull failed (proceeding with cached data): ${pullErr instanceof Error ? pullErr.message : String(pullErr)}`,
+              undefined,
+              { repository: repoFinal, branch: branchFinal }
+            );
+          }
+
           sessionLogService.info(
             'session',
             'DAILY_RETRIEVE_ALL_ENUMERATE',
