@@ -1,7 +1,6 @@
 import type { GraphData } from '../types';
 import { fileRegistry } from '../contexts/TabContext';
 import { parseConstraints } from '../lib/queryDSL';
-import { formatDateUK, parseUKDate, resolveRelativeDate } from '../lib/dateFormat';
 import { extractSliceDimensions, hasContextAny } from './sliceIsolation';
 import { parseSignature } from './signatureMatchingService';
 import { computeQuerySignature } from './dataOperationsService';
@@ -61,9 +60,6 @@ function stripAsatClause(dsl: string): string {
   return (dsl || '').replace(/\.?(?:asat|at)\([^)]+\)/g, '').replace(/^\./, '');
 }
 
-function toISODate(ukDate: string): string {
-  return parseUKDate(ukDate).toISOString().split('T')[0];
-}
 
 export async function buildSnapshotRetrievalsQueryForEdge(args: {
   graph: GraphData;
@@ -90,11 +86,12 @@ export async function buildSnapshotRetrievalsQueryForEdge(args: {
   const dslWithoutAsat = stripAsatClause(effectiveDSL);
   const constraintsWithoutAsat = parseConstraints(dslWithoutAsat);
 
-  // Anchor bounds (date-only) for calendar scoping.
-  const todayUK = formatDateUK(new Date());
-  const range = constraintsWithoutAsat.cohort ?? constraintsWithoutAsat.window;
-  const anchorFromUK = range?.start ? resolveRelativeDate(range.start) : resolveRelativeDate('-60d');
-  const anchorToUK = range?.end ? resolveRelativeDate(range.end) : todayUK;
+  // NOTE: We intentionally do NOT send anchor_from/anchor_to to the retrievals
+  // endpoint.  The @ calendar answers "was a snapshot retrieved on this day?" —
+  // it doesn't matter whether the anchor_days in that retrieval happen to
+  // overlap the user's current query window.  Filtering by anchor range caused
+  // incremental fetches (which only cover new days) to be invisible in the
+  // calendar even though the retrieval genuinely exists.
 
   // Slice filter:
   // The DB stores `slice_key` as a FULL clause string including BOTH:
@@ -212,8 +209,7 @@ export async function buildSnapshotRetrievalsQueryForEdge(args: {
     // (It derives the short `core_hash` server-side.)
     canonical_signature: signature,
     slice_keys,
-    anchor_from: toISODate(anchorFromUK),
-    anchor_to: toISODate(anchorToUK),
+    // No anchor_from/anchor_to — see comment above.
     limit: 200,
   };
 }

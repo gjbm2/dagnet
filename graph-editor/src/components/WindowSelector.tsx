@@ -399,18 +399,12 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
     setIsAsatDropdownOpen((v) => {
       const next = !v;
       if (next && !activeAsat) {
-        try {
-          const w = window || defaultWindowDates;
-          const endUK = resolveRelativeDate(w.end);
-          const d = parseUKDate(endUK);
-          setAsatMonthCursor(new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1)));
-        } catch {
-          // ignore
-        }
+        const now = new Date();
+        setAsatMonthCursor(new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)));
       }
       return next;
     });
-  }, [isReadOnlyShare, activeAsat, window, defaultWindowDates]);
+  }, [isReadOnlyShare, activeAsat]);
 
   // When dropdown opens, fetch availability
   useEffect(() => {

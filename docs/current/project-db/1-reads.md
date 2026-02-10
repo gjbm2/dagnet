@@ -1,7 +1,7 @@
 # Snapshot DB Reads: Design Specification
 
-**Status**: Phase 1–4 complete; edge-selection DSL + subject labels done (9-Feb-26); Phase 5 (forecasting) and additional analysis types outstanding  
-**Date**: 9-Feb-26  
+**Status**: Phases 1–4.5 complete (9-Feb-26). Phase 5 (forecasting integration) and Phase 6 (additional analysis types) not started — blocked on `analysis-forecasting.md`.  
+**Date**: 9-Feb-26 · 10-Feb-26 (status review)  
 **Related**: `00-snapshot-db-design.md` §2, `hash-fixes.md`, `analysis-forecasting.md`
 
 ---

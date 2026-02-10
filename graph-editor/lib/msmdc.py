@@ -19,8 +19,7 @@ DEPRECATED for Amplitude. Amplitude now supports native exclude via inline
 behavioral cohort segment filters (discovered in the Dashboard REST API).
 
 The compilation code will NOT be triggered for Amplitude because:
-- connections.yaml: supports_native_exclude: true
-- connection_capabilities.py: supports_native_exclude: True (default for amplitude)
+- connection_capabilities.py: supports_native_exclude: True (default for amplitude provider)
 
 The exclude() → minus()/plus() compilation remains for providers that don't
 support native excludes (e.g., legacy providers).
@@ -341,8 +340,7 @@ def generate_query_for_edge(
             # native excludes via inline behavioral cohort segment filters.
             # 
             # This code path will NOT execute for Amplitude because:
-            # - connections.yaml: supports_native_exclude: true
-            # - connection_capabilities.py defaults: supports_native_exclude: True
+            # - connection_capabilities.py: supports_native_exclude: True (amplitude default)
             # 
             # This code remains for non-Amplitude providers that don't support
             # native excludes (e.g., legacy providers).
