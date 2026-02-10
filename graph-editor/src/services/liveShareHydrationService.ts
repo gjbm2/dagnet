@@ -40,15 +40,13 @@ export async function waitForLiveShareGraphDeps(args: {
   const deps = collectGraphDependencies(graph as any);
   const eventFileIds = Array.from(deps.eventIds).map((id) => `event-${id}`);
 
-  const fileIds = Array.from(
+  const requiredFileIds = Array.from(
     new Set(
       [
         ...items
           .map(i => fileIdForFetchItem(i as any))
           .filter((x): x is string => typeof x === 'string' && x.trim().length > 0),
         ...eventFileIds,
-        // Provider resolution depends on connections.yaml when present (best-effort barrier).
-        'connections-connections',
       ].filter(Boolean)
     )
   );
@@ -57,8 +55,8 @@ export async function waitForLiveShareGraphDeps(args: {
   let missing: string[] = [];
 
   while (Date.now() - start < timeoutMs) {
-    const checks = await Promise.all(fileIds.map(f => idbHasEitherFileId(f, identity)));
-    missing = fileIds.filter((_f, idx) => !checks[idx]);
+    const checks = await Promise.all(requiredFileIds.map(f => idbHasEitherFileId(f, identity)));
+    missing = requiredFileIds.filter((_f, idx) => !checks[idx]);
     if (missing.length === 0) break;
     await new Promise(resolve => setTimeout(resolve, 75));
   }
@@ -68,12 +66,20 @@ export async function waitForLiveShareGraphDeps(args: {
   }
 
   // Hydrate into FileRegistry (unprefixed ids are the runtime convention).
-  for (const fileId of fileIds) {
+  for (const fileId of requiredFileIds) {
     try {
       await fileRegistry.restoreFile(fileId);
     } catch {
       // best-effort: the IDB presence check above should make this extremely rare
     }
+  }
+
+  // Best-effort: connections.yaml affects provider resolution for signatures, but it should not
+  // block share boot (defaults may already be seeded, and inference fallbacks exist in some flows).
+  try {
+    await fileRegistry.restoreFile('connections-connections');
+  } catch {
+    // ignore
   }
 
   return { success: true, missing: [] };

@@ -236,3 +236,12 @@ class TestSweepRange:
             assert len(f["data_points"]) == 1
             assert f["data_points"][0]["y"] == 42
             assert f["data_points"][0]["rate"] == pytest.approx(0.42)
+
+    def test_empty_rows_with_sweep_grid_emits_empty_frames(self):
+        """Even when there are no rows, an explicit sweep range must yield a full grid."""
+        result = derive_cohort_maturity([], sweep_from="2025-10-01", sweep_to="2025-10-05")
+        assert len(result["frames"]) == 5
+        for f in result["frames"]:
+            assert isinstance(f.get("as_at_date"), str)
+            assert f.get("data_points") == []
+            assert f.get("total_y") == 0

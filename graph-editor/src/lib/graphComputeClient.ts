@@ -125,6 +125,9 @@ export class GraphComputeClient {
   private availableAnalysesCache: Map<string, CacheEntry<AvailableAnalysesResponse>> = new Map();
   private readonly CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
   private readonly MAX_CACHE_SIZE = 50; // Prevent unbounded growth
+  // Cache-buster for cohort maturity normalisation semantics. Increment when the
+  // cohort_maturity result interpretation changes (e.g. progress curve / axis semantics).
+  private readonly COHORT_MATURITY_CACHE_VERSION = 8;
 
   constructor(baseUrl: string = API_BASE_URL, useMock: boolean = USE_MOCK) {
     this.baseUrl = baseUrl;
@@ -191,6 +194,40 @@ export class GraphComputeClient {
     return parts.join('|');
   }
   
+  /**
+   * Check whether the current compute should bypass cache.
+   * Respects: clearCache() timestamp, one-shot flag, permanent flag, URL params.
+   */
+  private shouldBypassCache(): boolean {
+    try {
+      if (typeof window === 'undefined') return false;
+      const g: any = globalThis as any;
+
+      // One-shot flag (set by clearCache or refresh button).
+      if (g.__dagnetComputeNoCacheOnce === true) {
+        g.__dagnetComputeNoCacheOnce = false;
+        return true;
+      }
+
+      // Timestamp-based: clearCache() records a timestamp. Any cache entry
+      // created before that timestamp is stale. We treat this as "bypass for
+      // 5 seconds after clear" so all in-flight / debounced runs bypass.
+      const clearedAt = typeof g.__dagnetCacheClearedAtMs === 'number' ? g.__dagnetCacheClearedAtMs : 0;
+      if (clearedAt > 0 && Date.now() - clearedAt < 5000) {
+        return true;
+      }
+
+      // Permanent flag (DevTools: window.__dagnetComputeNoCache = true).
+      if (g.__dagnetComputeNoCache === true) return true;
+
+      // URL params.
+      const params = new URLSearchParams(window.location.search);
+      return params.get('nocache') === '1' || params.get('compute_nocache') === '1';
+    } catch {
+      return false;
+    }
+  }
+
   /**
    * Prune old entries if cache exceeds max size
    */
@@ -303,6 +340,67 @@ export class GraphComputeClient {
         return b?.result || null;
       })();
 
+      // Map (scenario_id, collapsed subject_id) → request subject payload metadata.
+      const subjectPayloadByScenarioSubject = new Map<string, SnapshotSubjectPayload>();
+      const subjectPayloadsByScenarioSubject = new Map<string, SnapshotSubjectPayload[]>();
+      for (const sc of request.scenarios || []) {
+        const scenarioId = String(sc?.scenario_id || '');
+        for (const subj of sc.snapshot_subjects || []) {
+          if (!subj?.subject_id) continue;
+          const collapsed = collapseEpochSubjectId(subj.subject_id);
+          const key = `${scenarioId}||${collapsed}`;
+          subjectPayloadByScenarioSubject.set(key, subj);
+          if (!subjectPayloadsByScenarioSubject.has(key)) subjectPayloadsByScenarioSubject.set(key, []);
+          subjectPayloadsByScenarioSubject.get(key)!.push(subj);
+        }
+      }
+
+      const pickEpochPayloadForAsAt = (key: string, asAt: string): SnapshotSubjectPayload | null => {
+        const payloads = subjectPayloadsByScenarioSubject.get(key) || [];
+        const candidates = payloads.filter((p) => {
+          const sf = String(p?.sweep_from || '');
+          const st = String(p?.sweep_to || '');
+          if (!sf || !st) return false;
+          // sweep_from/to are ISO dates; string compare is safe.
+          return sf <= asAt && asAt <= st;
+        });
+        if (candidates.length === 0) return null;
+        if (candidates.length === 1) return candidates[0];
+        // Prefer the narrowest epoch (smallest sweep span).
+        const spanDays = (p: SnapshotSubjectPayload): number => {
+          const sf = Date.parse(`${String(p?.sweep_from)}T00:00:00Z`);
+          const st = Date.parse(`${String(p?.sweep_to)}T00:00:00Z`);
+          if (Number.isNaN(sf) || Number.isNaN(st)) return Number.POSITIVE_INFINITY;
+          return Math.max(0, Math.floor((st - sf) / (24 * 60 * 60 * 1000)));
+        };
+        return candidates.slice().sort((a, b) => spanDays(a) - spanDays(b))[0] || candidates[0];
+      };
+
+      const readLatencyDays = (graph: any, targetId: string | undefined): { t95Days: number | null; pathT95Days: number | null } => {
+        if (!graph || !targetId) return { t95Days: null, pathT95Days: null };
+        const edges: any[] = Array.isArray(graph?.edges) ? graph.edges : [];
+        const e = edges.find((x: any) => String(x?.uuid || x?.id || '') === String(targetId));
+        const t95 = e?.p?.latency?.t95 ?? e?.p?.t95 ?? null;
+        const pathT95 = e?.p?.latency?.path_t95 ?? e?.p?.path_t95 ?? null;
+        const t95Days = (typeof t95 === 'number' && Number.isFinite(t95)) ? t95 : null;
+        const pathT95Days = (typeof pathT95 === 'number' && Number.isFinite(pathT95)) ? pathT95 : null;
+        return { t95Days, pathT95Days };
+      };
+
+      const dayDiffUTC = (asAtISO: string, anchorToISO: string): number | null => {
+        const t1 = Date.parse(`${asAtISO}T00:00:00Z`);
+        const t0 = Date.parse(`${anchorToISO}T00:00:00Z`);
+        if (Number.isNaN(t1) || Number.isNaN(t0)) return null;
+        return Math.floor((t1 - t0) / (24 * 60 * 60 * 1000));
+      };
+
+      // Collect frames per (scenario, subject) so we can compute a fixed denominator X*.
+      type FrameAgg = { asAt: string; x: number; y: number; a: number; pointsCount: number };
+      const framesByScenarioSubject = new Map<string, FrameAgg[]>();
+      // For CSV export / forensics: keep the fully detailed cohort points
+      // (one row per as_at_date × anchor_day).
+      const cohortPointsByKey = new Map<string, Record<string, any>>();
+
       for (const b of blocks) {
         const r = b.result;
         if (!isCohortMaturityResult(r)) continue;
@@ -321,34 +419,157 @@ export class GraphComputeClient {
           const asAt = f?.as_at_date || f?.retrieved_at_date || f?.date;
           if (!asAt) continue;
           const points: any[] = Array.isArray(f?.data_points) ? f.data_points : [];
-          // Skip empty frames (days before any snapshot was retrieved).
-          // Including them inflates the point count and hides chart symbols,
-          // making sparse data (e.g. a single snapshot) invisible.
-          if (points.length === 0) continue;
           let xTotal = 0;
           let yTotal = 0;
+          let aTotal = 0;
           for (const p of points) {
             const x = Number(p?.x ?? 0);
             const y = Number(p?.y ?? 0);
+            const a = Number(p?.a ?? 0);
             if (Number.isFinite(x)) xTotal += x;
             if (Number.isFinite(y)) yTotal += y;
+            if (Number.isFinite(a)) aTotal += a;
+
+            // Detailed export row (per cohort anchor_day).
+            const anchorDay = String(p?.anchor_day || '');
+            if (anchorDay) {
+              const ssKey = `${b.scenario_id}||${b.subject_id}`;
+              const epochPayload = pickEpochPayloadForAsAt(ssKey, String(asAt));
+              const windowFrom = epochPayload?.anchor_from || firstMeta?.anchor_range?.from || firstMeta?.anchor_from;
+              const windowTo = epochPayload?.anchor_to || firstMeta?.anchor_range?.to || firstMeta?.anchor_to;
+              const cohortAgeDays = dayDiffUTC(String(asAt), anchorDay);
+              const cohortAgeAtWindowEndDays = (windowTo && typeof windowTo === 'string')
+                ? dayDiffUTC(windowTo, anchorDay)
+                : null;
+              const exportRow = {
+                scenario_id: b.scenario_id,
+                subject_id: b.subject_id,
+                as_at_date: String(asAt),
+                anchor_day: anchorDay,
+                // Rebased time axes for chart design:
+                // - cohort_age_days: "days since from-node for this cohort" at this as-at
+                // - cohort_age_at_window_end_days: the max age this cohort could have reached by the window end
+                //   (for the earliest cohort, this is exactly window_to - window_from).
+                cohort_age_days: cohortAgeDays,
+                cohort_age_at_window_end_days: cohortAgeAtWindowEndDays,
+                window_from: windowFrom,
+                window_to: windowTo,
+                x: Number.isFinite(x) ? x : null,
+                y: Number.isFinite(y) ? y : null,
+                a: Number.isFinite(a) ? a : null,
+                rate: (p?.rate === null || p?.rate === undefined) ? null : Number(p.rate),
+                median_lag_days: (p?.median_lag_days === null || p?.median_lag_days === undefined) ? null : Number(p.median_lag_days),
+                mean_lag_days: (p?.mean_lag_days === null || p?.mean_lag_days === undefined) ? null : Number(p.mean_lag_days),
+                onset_delta_days: (p?.onset_delta_days === null || p?.onset_delta_days === undefined) ? null : Number(p.onset_delta_days),
+                epoch_subject_id: epochPayload?.subject_id,
+                epoch_sweep_from: epochPayload?.sweep_from,
+                epoch_sweep_to: epochPayload?.sweep_to,
+                epoch_slice_keys: Array.isArray(epochPayload?.slice_keys) ? epochPayload.slice_keys.join(' | ') : undefined,
+                param_id: epochPayload?.param_id,
+                core_hash: epochPayload?.core_hash,
+              };
+              const exportKey = `${b.scenario_id}||${b.subject_id}||${String(asAt)}||${anchorDay}`;
+              cohortPointsByKey.set(exportKey, exportRow);
+            }
           }
-          const rate = xTotal > 0 ? yTotal / xTotal : null;
           if (import.meta.env.DEV) {
             console.log('[GraphComputeClient] cohort_maturity frame:', {
-              asAt, pointsCount: points.length, xTotal, yTotal, rate,
+              asAt, pointsCount: points.length, xTotal, yTotal,
             });
           }
+          const key = `${b.scenario_id}||${b.subject_id}`;
+          if (!framesByScenarioSubject.has(key)) framesByScenarioSubject.set(key, []);
+          framesByScenarioSubject.get(key)!.push({
+            asAt: String(asAt),
+            x: Number.isFinite(xTotal) ? xTotal : 0,
+            y: Number.isFinite(yTotal) ? yTotal : 0,
+            a: Number.isFinite(aTotal) ? aTotal : 0,
+            pointsCount: points.length,
+          });
+        }
+      }
+
+      // Build rows using fixed denominator X* (per scenario+subject), and phase styling (A/B/C).
+      for (const [ssKey, frames] of framesByScenarioSubject.entries()) {
+        const [scenarioId, subjectId] = ssKey.split('||');
+        const payloadKey = `${scenarioId}||${subjectId}`;
+        const payload = subjectPayloadByScenarioSubject.get(payloadKey);
+        const payloads = subjectPayloadsByScenarioSubject.get(payloadKey) || [];
+        const anchorFrom =
+          payloads.find((p) => typeof p?.anchor_from === 'string' && p.anchor_from)?.anchor_from
+          || payload?.anchor_from
+          || firstMeta?.anchor_range?.from
+          || firstMeta?.anchor_from;
+        const anchorTo =
+          payloads.find((p) => typeof p?.anchor_to === 'string' && p.anchor_to)?.anchor_to
+          || payload?.anchor_to
+          || firstMeta?.anchor_range?.to
+          || firstMeta?.anchor_to;
+        const latency = readLatencyDays(
+          (request.scenarios || []).find((s) => String(s?.scenario_id) === String(scenarioId))?.graph,
+          payload?.target?.targetId,
+        );
+
+        const framesSorted = frames.slice().sort((a, b) => a.asAt.localeCompare(b.asAt));
+
+        // Choose X*:
+        // - Prefer the max X observed in the "closed" region (ageDays > path_t95) if available.
+        // - Else fall back to max X overall in the sweep.
+        const ages = (anchorTo && typeof anchorTo === 'string')
+          ? framesSorted.map((f) => ({ asAt: f.asAt, ageDays: dayDiffUTC(f.asAt, anchorTo) }))
+          : [];
+        const closed = (anchorTo && latency.pathT95Days !== null)
+          ? framesSorted.filter((f) => {
+              const age = dayDiffUTC(f.asAt, anchorTo);
+              return age !== null && age > (latency.pathT95Days as number);
+            })
+          : [];
+        const xStar = Math.max(
+          0,
+          ...((closed.length > 0 ? closed : framesSorted).map((f) => f.x)),
+        );
+
+        // Enforce monotonic progress on Y (belief revision can otherwise make the curve "fall").
+        let yProgress = 0;
+
+        for (const f of framesSorted) {
+          yProgress = Math.max(yProgress, f.y);
+          const rateObserved = f.x > 0 ? (f.y / f.x) : null;
+          const rateProgress = xStar > 0 ? (yProgress / xStar) : null;
+
+          let phase: 'closed' | 'maturing' | 'incomplete' = 'incomplete';
+          if (anchorTo && (latency.t95Days !== null || latency.pathT95Days !== null)) {
+            const age = dayDiffUTC(f.asAt, anchorTo);
+            if (age !== null) {
+              if (latency.pathT95Days !== null && age > latency.pathT95Days) phase = 'closed';
+              else if (latency.t95Days !== null && age > latency.t95Days) phase = 'maturing';
+              else phase = 'incomplete';
+            }
+          }
+
           const row = {
             analysis_type: 'cohort_maturity',
-            scenario_id: b.scenario_id,
-            subject_id: b.subject_id,
-            as_at_date: asAt,
-            x: xTotal,
-            y: yTotal,
-            rate,
+            scenario_id: scenarioId,
+            subject_id: subjectId,
+            as_at_date: f.asAt,
+            // Observed totals (as of that retrieval).
+            x: f.x,
+            y: f.y,
+            a: f.a,
+            // Progress curve fields:
+            x_star: xStar,
+            y_progress: yProgress,
+            rate_observed: rateObserved,
+            rate: rateProgress,
+            // Phase for chart styling:
+            cohort_phase: phase,
+            anchor_from: anchorFrom,
+            anchor_to: anchorTo,
+            t95_days: latency.t95Days,
+            path_t95_days: latency.pathT95Days,
           } as Record<string, any>;
-          const k = `${b.scenario_id}||${b.subject_id}||${asAt}`;
+
+          const k = `${scenarioId}||${subjectId}||${f.asAt}`;
           dataByKey.set(k, row);
         }
       }
@@ -419,12 +640,24 @@ export class GraphComputeClient {
         analysis_description: 'How conversion rates evolved over time for a cohort range',
         metadata: {
           // Preserve raw-ish metadata for debugging and future richer UI.
-          anchor_from: firstMeta?.anchor_from,
-          anchor_to: firstMeta?.anchor_to,
-          sweep_from: firstMeta?.sweep_from,
-          sweep_to: firstMeta?.sweep_to,
+          anchor_from: firstMeta?.anchor_range?.from ?? firstMeta?.anchor_from,
+          anchor_to: firstMeta?.anchor_range?.to ?? firstMeta?.anchor_to,
+          sweep_from: firstMeta?.sweep_range?.from ?? firstMeta?.sweep_from,
+          sweep_to: firstMeta?.sweep_range?.to ?? firstMeta?.sweep_to,
           // Hint to UIs that this came from snapshot reads.
           source: 'snapshot_db',
+          // Export-only tables (avoid polluting the primary `data` rows used by charts).
+          export_tables: {
+            cohort_maturity_points: Array.from(cohortPointsByKey.values()).sort((a: any, b: any) => {
+              const sa = String(a.scenario_id || '').localeCompare(String(b.scenario_id || ''));
+              if (sa !== 0) return sa;
+              const su = String(a.subject_id || '').localeCompare(String(b.subject_id || ''));
+              if (su !== 0) return su;
+              const ad = String(a.as_at_date || '').localeCompare(String(b.as_at_date || ''));
+              if (ad !== 0) return ad;
+              return String(a.anchor_day || '').localeCompare(String(b.anchor_day || ''));
+            }),
+          },
         },
         semantics: {
           dimensions: [
@@ -649,6 +882,11 @@ export class GraphComputeClient {
   clearCache(): void {
     this.analysisCache.clear();
     this.availableAnalysesCache.clear();
+    // Set a global timestamp so ALL GraphComputeClient instances (including
+    // stale HMR singletons) will bypass cache until a fresh compute completes.
+    try {
+      (globalThis as any).__dagnetCacheClearedAtMs = Date.now();
+    } catch { /* ignore */ }
     console.log('[GraphComputeClient] Cache cleared');
   }
 
@@ -798,34 +1036,12 @@ export class GraphComputeClient {
     visibilityMode: 'f+e' | 'f' | 'e' = 'f+e',
     snapshotSubjects?: SnapshotSubjectPayload[]
   ): Promise<AnalysisResponse> {
-    const bypassCache = (() => {
-      try {
-        if (typeof window === 'undefined') return false;
-        const g: any = window as any;
-        if (g.__dagnetComputeNoCacheOnce === true) {
-          g.__dagnetComputeNoCacheOnce = false;
-          return true;
-        }
-        if (g.__dagnetComputeNoCache === true) return true;
-        const params = new URLSearchParams(window.location.search);
-        return params.get('nocache') === '1' || params.get('compute_nocache') === '1';
-      } catch {
-        return false;
-      }
-    })();
+    const bypassCache = this.shouldBypassCache();
 
-    // Check cache first.
-    //
-    // IMPORTANT:
-    // The frontend prepares analysis graphs per scenario and (when requested) bakes the chosen
-    // probability basis into `edge.p.mean` (including E/F residual allocation semantics).
-    //
-    // Therefore the cache key should depend on:
-    // - the prepared graph (including p.mean values)
-    // - the query DSL + analysis type + scenario id
-    // - the requested visibility mode (for labelling and runner metadata)
     const cacheKey =
-      this.generateCacheKey(graph, queryDsl, analysisType, [scenarioId]) + `|vis:${visibilityMode}`;
+      this.generateCacheKey(graph, queryDsl, analysisType, [scenarioId])
+      + `|vis:${visibilityMode}`
+      + (analysisType === 'cohort_maturity' ? `|cmv:${this.COHORT_MATURITY_CACHE_VERSION}` : '');
     if (!bypassCache) {
       const cached = this.analysisCache.get(cacheKey);
       if (cached && Date.now() - cached.timestamp < this.CACHE_TTL_MS) {
@@ -833,7 +1049,7 @@ export class GraphComputeClient {
         return cached.data;
       }
     } else {
-      console.log('[GraphComputeClient] Cache bypass for analyzeSelection (nocache=1)');
+      console.log('[GraphComputeClient] Cache bypass for analyzeSelection');
     }
     
     if (this.useMock) {
@@ -962,21 +1178,7 @@ export class GraphComputeClient {
     queryDsl?: string,
     analysisType?: string,
   ): Promise<AnalysisResponse> {
-    const bypassCache = (() => {
-      try {
-        if (typeof window === 'undefined') return false;
-        const g: any = window as any;
-        if (g.__dagnetComputeNoCacheOnce === true) {
-          g.__dagnetComputeNoCacheOnce = false;
-          return true;
-        }
-        if (g.__dagnetComputeNoCache === true) return true;
-        const params = new URLSearchParams(window.location.search);
-        return params.get('nocache') === '1' || params.get('compute_nocache') === '1';
-      } catch {
-        return false;
-      }
-    })();
+    const bypassCache = this.shouldBypassCache();
 
     // Generate cache key that includes ALL scenarios' data (not just first)
     // This ensures cache invalidates when any scenario's data changes
@@ -993,7 +1195,8 @@ export class GraphComputeClient {
 
     const cacheKey =
       `multi|graphs:${scenarioGraphKey}|dsl:${queryDsl || ''}|type:${analysisType || ''}|scenarios:${scenarioIds.join(',')}`
-      + `|vis:${visibilityModes}`;
+      + `|vis:${visibilityModes}`
+      + (analysisType === 'cohort_maturity' ? `|cmv:${this.COHORT_MATURITY_CACHE_VERSION}` : '');
     
     // Check cache first (unless explicitly bypassed via URL params for debugging).
     if (!bypassCache) {

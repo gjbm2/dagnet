@@ -250,6 +250,20 @@ export async function installShareLiveStubs(page: Page, state: ShareLiveStubStat
         add('parameters-index.yaml', paramsIndex);
         add('nodes-index.yaml', nodesIndex);
         add('events-index.yaml', eventsIndex);
+        // Event definitions: required for live-share signature computation and stable boot.
+        for (const id of [
+          'energy-rec',
+          'gave-bds-in-onboarding',
+          'household-created',
+          'household-delegated',
+          'non-energy-rec',
+          'switch-registered',
+          'switch-success',
+          'viewed-coffee-screen',
+        ]) {
+          const content = fx.readText(`events/${id}.yaml`) || '';
+          add(`events/${id}.yaml`, content);
+        }
         for (const id of paramIds) {
           const content = fx.readText(`parameters/${id}.yaml`) || '';
           add(`parameters/${id}.yaml`, content);
@@ -395,13 +409,25 @@ export async function installShareLiveStubs(page: Page, state: ShareLiveStubStat
           [
             'id: channel',
             'name: Channel',
+            'description: Channel context',
             'otherPolicy: computed',
             'type: categorical',
             'values:',
             '  - id: influencer',
             '    label: Influencer',
+            '    sources:',
+            '      amplitude:',
+            "        filter: \"utm_channel == 'influencer'\"",
             '  - id: paid-search',
             '    label: Paid search',
+            '    sources:',
+            '      amplitude:',
+            "        filter: \"utm_channel == 'paid-search'\"",
+            '  - id: paid-social',
+            '    label: Paid social',
+            '    sources:',
+            '      amplitude:',
+            "        filter: \"utm_channel == 'paid-social'\"",
             '  - id: other',
             '    label: Other',
             '',
@@ -487,6 +513,18 @@ export async function installShareLiveStubs(page: Page, state: ShareLiveStubStat
         addKnown('nodes-index.yaml', fx.readText('nodes-index.yaml') || '');
         addKnown('events-index.yaml', fx.readText('events-index.yaml') || '');
         for (const id of [
+          'energy-rec',
+          'gave-bds-in-onboarding',
+          'household-created',
+          'household-delegated',
+          'non-energy-rec',
+          'switch-registered',
+          'switch-success',
+          'viewed-coffee-screen',
+        ]) {
+          addKnown(`events/${id}.yaml`, fx.readText(`events/${id}.yaml`) || '');
+        }
+        for (const id of [
           'bds-to-energy-rec',
           'coffee-to-bds',
           'delegated-to-coffee',
@@ -520,10 +558,19 @@ export async function installShareLiveStubs(page: Page, state: ShareLiveStubStat
             'values:',
             '  - id: influencer',
             '    label: Influencer',
+            '    sources:',
+            '      amplitude:',
+            "        filter: \"utm_channel == 'influencer'\"",
             '  - id: paid-search',
             '    label: Paid search',
+            '    sources:',
+            '      amplitude:',
+            "        filter: \"utm_channel == 'paid-search'\"",
             '  - id: paid-social',
             '    label: Paid social',
+            '    sources:',
+            '      amplitude:',
+            "        filter: \"utm_channel == 'paid-social'\"",
             '  - id: other',
             '    label: Other',
             '',
@@ -673,13 +720,25 @@ export async function installShareLiveStubs(page: Page, state: ShareLiveStubStat
           [
             'id: channel',
             'name: Channel',
+            'description: Channel context',
             'otherPolicy: computed',
             'type: categorical',
             'values:',
             '  - id: influencer',
             '    label: Influencer',
+            '    sources:',
+            '      amplitude:',
+            "        filter: \"utm_channel == 'influencer'\"",
             '  - id: paid-search',
             '    label: Paid search',
+            '    sources:',
+            '      amplitude:',
+            "        filter: \"utm_channel == 'paid-search'\"",
+            '  - id: paid-social',
+            '    label: Paid social',
+            '    sources:',
+            '      amplitude:',
+            "        filter: \"utm_channel == 'paid-social'\"",
             '  - id: other',
             '    label: Other',
             '',
@@ -1060,8 +1119,21 @@ export async function installShareLiveStubs(page: Page, state: ShareLiveStubStat
           'values:',
           '  - id: influencer',
           '    label: Influencer',
+          '    sources:',
+          '      amplitude:',
+          "        filter: \"utm_channel == 'influencer'\"",
           '  - id: paid-search',
           '    label: Paid search',
+          '    sources:',
+          '      amplitude:',
+          "        filter: \"utm_channel == 'paid-search'\"",
+          '  - id: paid-social',
+          '    label: Paid social',
+          '    sources:',
+          '      amplitude:',
+          "        filter: \"utm_channel == 'paid-social'\"",
+          '  - id: other',
+          '    label: Other',
           '',
         ].join('\n');
         return route.fulfill({

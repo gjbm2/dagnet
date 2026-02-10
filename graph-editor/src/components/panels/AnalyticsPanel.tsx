@@ -158,6 +158,10 @@ export default function AnalyticsPanel({ tabId, hideHeader = false }: AnalyticsP
   const [availableAnalyses, setAvailableAnalyses] = useState<AvailableAnalysis[]>([]);
   const [selectedAnalysisId, setSelectedAnalysisId] = useState<string | null>(null);
   const [results, setResults] = useState<AnalysisResponse | null>(null);
+  // For snapshot-based analyses, charts need the *composed* snapshot DSL (from/to + window/cohort)
+  // so they can apply the correct axis semantics. `results.query_dsl` is currently the panel's
+  // analytics DSL (from/to only), so we track the composed DSL separately.
+  const [snapshotChartDsl, setSnapshotChartDsl] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [showAllAnalyses, setShowAllAnalyses] = useState(false);
   const [showSpinner, setShowSpinner] = useState(false); // Delayed spinner
@@ -468,7 +472,10 @@ export default function AnalyticsPanel({ tabId, hideHeader = false }: AnalyticsP
         scenarioGraph: any,
         analyticsDsl: string,
         scenarioId: string,
-      ): Promise<import('../../services/snapshotDependencyPlanService').SnapshotSubjectRequest[]> => {
+      ): Promise<{
+        subjects: import('../../services/snapshotDependencyPlanService').SnapshotSubjectRequest[];
+        snapshotDsl: string;
+      }> => {
         if (!workspace) {
           throw new Error('Snapshot analysis requires a git-backed graph (no workspace found). Ensure the graph file is associated with a repository.');
         }
@@ -532,7 +539,7 @@ export default function AnalyticsPanel({ tabId, hideHeader = false }: AnalyticsP
             sig_preview: subj.canonical_signature?.substring(0, 80) + '...',
           });
         }
-        return resolverResult.subjects;
+        return { subjects: resolverResult.subjects, snapshotDsl };
       };
       
       // Determine the effective analytics DSL for a scenario layer.
@@ -550,6 +557,7 @@ export default function AnalyticsPanel({ tabId, hideHeader = false }: AnalyticsP
       if (hasMultipleScenarios) {
         // Build scenario-modified graphs for each visible scenario (in legend order)
         // with per-scenario snapshot subjects
+        let chartSnapshotDsl: string | null = null;
         const scenarioGraphs = await Promise.all(orderedVisibleScenarios.map(async (scenarioId) => {
           // Get visibility mode (F/E/F+E) for this scenario from tab state
           const visibilityMode = tabId 
@@ -579,7 +587,9 @@ export default function AnalyticsPanel({ tabId, hideHeader = false }: AnalyticsP
           const analyticsDsl = needsSnapshots ? queryDSL : getEffectiveDslForScenario(scenarioId);
           let snapshotSubjects: import('../../services/snapshotDependencyPlanService').SnapshotSubjectRequest[] | undefined;
           if (needsSnapshots) {
-            snapshotSubjects = await resolveSnapshotSubjectsForScenario(scenarioGraph, analyticsDsl, scenarioId);
+            const resolved = await resolveSnapshotSubjectsForScenario(scenarioGraph, analyticsDsl, scenarioId);
+            snapshotSubjects = resolved.subjects;
+            if (scenarioId === chartScenarioId) chartSnapshotDsl = resolved.snapshotDsl;
           }
           
           return {
@@ -597,6 +607,9 @@ export default function AnalyticsPanel({ tabId, hideHeader = false }: AnalyticsP
           queryDSL || undefined,
           selectedAnalysisId || undefined,
         );
+
+        // Ensure charts can detect window()/cohort() semantics.
+        setSnapshotChartDsl(needsSnapshots ? (chartSnapshotDsl || null) : null);
       } else {
         // Single scenario analysis
         const scenarioId = orderedVisibleScenarios[0] || 'current';
@@ -634,7 +647,11 @@ export default function AnalyticsPanel({ tabId, hideHeader = false }: AnalyticsP
         const analyticsDsl = needsSnapshots ? queryDSL : getEffectiveDslForScenario(scenarioId);
         let snapshotSubjects: import('../../services/snapshotDependencyPlanService').SnapshotSubjectRequest[] | undefined;
         if (needsSnapshots) {
-          snapshotSubjects = await resolveSnapshotSubjectsForScenario(analysisGraph, analyticsDsl, scenarioId);
+          const resolved = await resolveSnapshotSubjectsForScenario(analysisGraph, analyticsDsl, scenarioId);
+          snapshotSubjects = resolved.subjects;
+          setSnapshotChartDsl(resolved.snapshotDsl);
+        } else {
+          setSnapshotChartDsl(null);
         }
         
         response = await graphComputeClient.analyzeSelection(
@@ -693,6 +710,7 @@ export default function AnalyticsPanel({ tabId, hideHeader = false }: AnalyticsP
     // currentDSL is used by getQueryDslForScenario for snapshot analysis date range.
     // Must be in deps to avoid stale closure when WindowSelector updates the DSL.
     currentDSL,
+    chartScenarioId,
   ]);
   
   // Store runAnalysis in a ref to avoid effect re-triggers
@@ -820,9 +838,11 @@ export default function AnalyticsPanel({ tabId, hideHeader = false }: AnalyticsP
     return obj;
   }, [scenarioDslSubtitleById]);
   
-  // Refresh: clear cache and re-run analysis
+  // Refresh: clear cache and re-run analysis (bypasses cache for the next compute)
   const handleRefresh = useCallback(() => {
     graphComputeClient.clearCache();
+    // Set one-shot bypass so the immediate recompute doesn't re-populate from a stale module singleton.
+    try { (window as any).__dagnetComputeNoCacheOnce = true; } catch { /* ignore */ }
     runAnalysis();
   }, [runAnalysis]);
   
@@ -1011,7 +1031,7 @@ export default function AnalyticsPanel({ tabId, hideHeader = false }: AnalyticsP
                   source={{
                     parent_tab_id: tabId,
                     parent_file_id: currentTab?.fileId,
-                    query_dsl: results.query_dsl,
+                    query_dsl: snapshotChartDsl || results.query_dsl,
                     analysis_type: results.result.analysis_type,
                   }}
                 />

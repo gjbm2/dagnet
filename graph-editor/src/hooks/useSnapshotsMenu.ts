@@ -22,6 +22,47 @@ import { sessionLogService } from '../services/sessionLogService';
 import { invalidateInventoryCache } from './useEdgeSnapshotInventory';
 import { fileRegistry } from '../contexts/TabContext';
 
+// -----------------------------------------------------------------------------
+// Hover-driven inventory caching (menu + tooltip)
+// -----------------------------------------------------------------------------
+// Without caching, pointer jitter can spam the backend with inventory calls.
+// We cache per (dbParamId, current_signature) and de-dupe in-flight fetches.
+const INVENTORY_TTL_MS = 15_000;
+type InventoryCacheEntry = { atMs: number; inv: SnapshotInventoryV2Param | undefined };
+const inventoryV2CacheByKey = new Map<string, InventoryCacheEntry>();
+const inventoryV2PendingByKey = new Map<string, Promise<SnapshotInventoryV2Param | undefined>>();
+
+function cacheKeyForInventory(dbParamId: string, currentSignature: string | undefined): string {
+  return `${dbParamId}::${(currentSignature || '').trim()}`;
+}
+
+function getCachedInventoryV2(dbParamId: string, currentSignature: string | undefined): SnapshotInventoryV2Param | undefined | null {
+  const key = cacheKeyForInventory(dbParamId, currentSignature);
+  const hit = inventoryV2CacheByKey.get(key);
+  if (!hit) return null;
+  if (Date.now() - hit.atMs > INVENTORY_TTL_MS) {
+    inventoryV2CacheByKey.delete(key);
+    return null;
+  }
+  return hit.inv;
+}
+
+function invalidateSnapshotsMenuInventory(dbParamId: string) {
+  // Invalidate all signatures for this param id (cohort/window etc.)
+  for (const k of Array.from(inventoryV2CacheByKey.keys())) {
+    if (k.startsWith(`${dbParamId}::`)) inventoryV2CacheByKey.delete(k);
+  }
+  for (const k of Array.from(inventoryV2PendingByKey.keys())) {
+    if (k.startsWith(`${dbParamId}::`)) inventoryV2PendingByKey.delete(k);
+  }
+}
+
+/** Test/support helper: clear hover inventory caches. */
+export function clearSnapshotsMenuInventoryCache(): void {
+  inventoryV2CacheByKey.clear();
+  inventoryV2PendingByKey.clear();
+}
+
 export interface UseSnapshotsMenuResult {
   /** Snapshot inventories keyed by objectId (unprefixed, e.g. parameter ID) */
   inventories: Record<string, SnapshotInventory>;
@@ -179,15 +220,60 @@ export function useSnapshotsMenu(objectIds: string[], options: UseSnapshotsMenuO
     }
     try {
       const current_signatures: Record<string, string> = {};
+      const sigByDbParamId: Record<string, string | undefined> = {};
       for (const objectId of ids) {
         const ws = workspaceById[objectId] || resolveWorkspaceForParam(objectId, repo, branch);
         if (!ws?.repo) continue;
         const dbParamId = buildDbParamId(objectId, ws.repo, ws.branch);
         const sig = latestQuerySignatureForParam(objectId);
+        sigByDbParamId[dbParamId] = sig;
         if (sig) current_signatures[dbParamId] = sig;
       }
 
-      const invByDbParamId = await getBatchInventoryV2(dbParamIds, { current_signatures });
+      // Cache + in-flight de-dupe: fetch only for cache misses / expired entries.
+      const invByDbParamId: Record<string, SnapshotInventoryV2Param | undefined> = {};
+      const awaited: Array<Promise<void>> = [];
+      const backendFetchedDbParamIds = new Set<string>();
+
+      for (const dbParamId of dbParamIds) {
+        const sig = sigByDbParamId[dbParamId];
+        const cached = getCachedInventoryV2(dbParamId, sig);
+        if (cached !== null) {
+          invByDbParamId[dbParamId] = cached || undefined;
+          continue;
+        }
+
+        const key = cacheKeyForInventory(dbParamId, sig);
+        const pending = inventoryV2PendingByKey.get(key);
+        if (pending) {
+          awaited.push(
+            pending.then((inv) => {
+              invByDbParamId[dbParamId] = inv;
+            })
+          );
+          continue;
+        }
+
+        backendFetchedDbParamIds.add(dbParamId);
+        const p = (async () => {
+          const res = await getBatchInventoryV2([dbParamId], { current_signatures: sig ? { [dbParamId]: sig } : {} });
+          return res[dbParamId] as SnapshotInventoryV2Param | undefined;
+        })();
+        inventoryV2PendingByKey.set(key, p);
+        awaited.push(
+          p.then((inv) => {
+            inventoryV2CacheByKey.set(key, { atMs: Date.now(), inv });
+            inventoryV2PendingByKey.delete(key);
+            invByDbParamId[dbParamId] = inv;
+          }).catch(() => {
+            inventoryV2PendingByKey.delete(key);
+          })
+        );
+      }
+
+      if (awaited.length > 0) {
+        await Promise.all(awaited);
+      }
       const nextInventories: Record<string, SnapshotInventory> = {};
       const nextCounts: Record<string, number> = {};
       const nextMatchedCoreHashes: Record<string, string[]> = {};
@@ -216,33 +302,52 @@ export function useSnapshotsMenu(objectIds: string[], options: UseSnapshotsMenuO
           const matchedHasData = !!matchedFamilyWithData;
           const source = matchedFamilyWithData ? matchedFamilyWithData.overall : overallAll;
 
-          // DEV diagnostics: make it visible in console + session logs what inventory we see.
-          // This is critical when users report "snapshots disappeared" after DSL/context changes.
-          try {
-            const debugPayload = {
-              objectId,
-              dbParamId,
-              workspace: { repo: ws.repo, branch: ws.branch },
-              current: inv?.current || null,
-              overall_all_families: overallAll,
-              matched_family_id: inv?.current?.matched_family_id || null,
-              matched_family_overall: matchedFamily?.overall || null,
-              matchedHasData,
-              chosen: matchedHasData ? 'matched_family' : 'overall_all_families',
-              chosen_row_count: source.row_count,
-              chosen_unique_retrieved_days: source.unique_retrieved_days,
-            };
-            // eslint-disable-next-line no-console
-            console.log('[SnapshotsMenu] inventory', debugPayload);
-            sessionLogService.info(
-              'data-fetch',
-              'SNAPSHOT_INVENTORY_MENU',
-              `Snapshot inventory: ${objectId} → ${source.unique_retrieved_days ?? 0} day(s)`,
-              undefined,
-              debugPayload as any
-            );
-          } catch {
-            // ignore
+          // Session logging:
+          // - By default, hover inventory should be a single-line log with no huge context payload.
+          // - Full debug payload is ONLY appropriate when diagnostic logging is enabled (?sessionlogdiag).
+          //
+          // Also, avoid spamming logs on pure cache hits.
+          const diag =
+            typeof (sessionLogService as any).getDiagnosticLoggingEnabled === 'function'
+              ? sessionLogService.getDiagnosticLoggingEnabled()
+              : false;
+          const fetchedThisRefresh = backendFetchedDbParamIds.has(dbParamId);
+          if (diag || fetchedThisRefresh) {
+            try {
+              if (diag) {
+                const debugPayload = {
+                  objectId,
+                  dbParamId,
+                  cached: !fetchedThisRefresh,
+                  workspace: { repo: ws.repo, branch: ws.branch },
+                  current: inv?.current || null,
+                  overall_all_families: overallAll,
+                  matched_family_id: inv?.current?.matched_family_id || null,
+                  matched_family_overall: matchedFamily?.overall || null,
+                  matchedHasData,
+                  chosen: matchedHasData ? 'matched_family' : 'overall_all_families',
+                  chosen_row_count: source.row_count,
+                  chosen_unique_retrieved_days: source.unique_retrieved_days,
+                };
+                // eslint-disable-next-line no-console
+                console.log('[SnapshotsMenu] inventory', debugPayload);
+                sessionLogService.info(
+                  'data-fetch',
+                  'SNAPSHOT_INVENTORY_MENU',
+                  `Snapshot inventory: ${objectId} → ${source.unique_retrieved_days ?? 0} day(s)`,
+                  undefined,
+                  debugPayload as any
+                );
+              } else {
+                sessionLogService.info(
+                  'data-fetch',
+                  'SNAPSHOT_INVENTORY_MENU',
+                  `Snapshot inventory: ${objectId} → ${source.unique_retrieved_days ?? 0} day(s)`
+                );
+              }
+            } catch {
+              // ignore
+            }
           }
 
           nextInventories[objectId] = {
@@ -368,6 +473,7 @@ export function useSnapshotsMenu(objectIds: string[], options: UseSnapshotsMenuO
 
           deletedTotal += result.deleted || 0;
           invalidateInventoryCache(dbParamId);
+          invalidateSnapshotsMenuInventory(dbParamId);
           setSnapshotCounts((prev) => ({ ...prev, [objectId]: 0 }));
         }
 
@@ -438,6 +544,7 @@ export function useSnapshotsMenu(objectIds: string[], options: UseSnapshotsMenuO
         }
 
         invalidateInventoryCache(dbParamId);
+        invalidateSnapshotsMenuInventory(dbParamId);
         setSnapshotCounts((prev) => ({ ...prev, [objectId]: 0 }));
         await refresh();
         toast.success(`Deleted snapshots for ${objectId}`);

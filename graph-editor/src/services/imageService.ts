@@ -36,12 +36,32 @@ class ImageService {
       // If not found, try with workspace prefix (for Git-loaded files)
       if (!imageFile) {
         const appState = await db.appState.get('app-state');
-        const repository = appState?.navigatorState?.selectedRepo || '';
-        const branch = appState?.navigatorState?.selectedBranch || 'main';
+        let repository = appState?.navigatorState?.selectedRepo || '';
+        let branch = appState?.navigatorState?.selectedBranch || '';
+
+        // Navigator state can lag during boot/clone/load. Since we enforce a single-workspace policy,
+        // fall back to the persisted workspace record (source of truth for current repo/branch).
+        if (!repository || !branch) {
+          try {
+            const workspace = await db.workspaces.toCollection().first();
+            if (workspace) {
+              repository = repository || workspace.repository;
+              branch = branch || workspace.branch;
+            }
+          } catch {
+            // Ignore and proceed - we'll throw a "not found" error below if we can't locate the file.
+          }
+        }
+
+        // Final safety: if we have a repo but no branch, default to main (historic behaviour).
+        if (repository && !branch) {
+          branch = 'main';
+        }
+
         if (repository && branch) {
           const prefixedFileId = `${repository}-${branch}-${fileId}`;
           imageFile = await db.files.get(prefixedFileId);
-          
+
           // If found with prefix, strip prefix and add to FileRegistry
           if (imageFile) {
             const unprefixedFile = { ...imageFile, fileId };
