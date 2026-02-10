@@ -1,0 +1,8 @@
+# Private repo directory names (cloned inside dagnet workspace root).
+# Copy this file to .private-repos.conf, fill in the values, then run:
+#   bash scripts/setup-workspace.sh
+#
+# Used by the pre-commit hook and setup script.
+
+DATA_REPO_DIR=
+MONOREPO_DIR=
