@@ -68,6 +68,18 @@ vi.mock('../../services/dailyRetrieveAllAutomationService', () => ({
   },
 }));
 
+vi.mock('../../services/repositoryOperationsService', () => ({
+  repositoryOperationsService: {
+    pullLatestRemoteWins: vi.fn(async () => ({ success: true, conflictsResolved: 0 })),
+  },
+}));
+
+vi.mock('../../services/workspaceService', () => ({
+  workspaceService: {
+    loadWorkspaceFromIDB: vi.fn(async () => ({})),
+  },
+}));
+
 import { resetURLDailyRetrieveAllQueueProcessed, useURLDailyRetrieveAllQueue } from '../useURLDailyRetrieveAllQueue';
 import { automationRunService } from '../../services/automationRunService';
 
