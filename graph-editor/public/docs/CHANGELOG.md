@@ -1,4 +1,11 @@
 # DagNet Release Notes
+## Version 1.5.4b
+**Released:** 10-Feb-26
+
+Forecasting ported to BD, pending fixes; various front end fixes
+
+---
+
 ## Version 1.5.2b
 **Released:** 10-Feb-26
 
