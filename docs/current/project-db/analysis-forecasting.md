@@ -1,7 +1,7 @@
 # Analysis Forecasting: Statistics on the Backend
 
-**Status**: Architectural Note (not yet implemented)  
-**Date**: 8-Feb-26  
+**Status**: Architectural Note (not yet implemented). Settings architecture agreed 10-Feb-26.  
+**Date**: 8-Feb-26 (design) · 10-Feb-26 (settings decision)  
 **Related**: `1-reads.md`, `2-time-series-charting.md`, design.md §5
 
 ---
@@ -146,47 +146,64 @@ Fitting runs only on **model update events**, not on query edits.
 - When the user edits only the DSL (date range changes, `context()` changes, scenario DSL changes).
 - When the user runs an analysis request (including multi-scenario cohort maturity analysis).
 
-### 4.4 Persisted model state (schema extension)
+### 4.4 Persisted model state (schema extension — revised 10-Feb-26)
 
-To apply forecasts later without refitting, we persist the model and its provenance onto the graph/parameter layer.
+To evaluate completeness offline (cached fetch, no backend), the frontend needs the fitted distribution parameters on the graph edge.
 
-We add a new persisted structure (name intentionally versioned):
+**Decision (10-Feb-26)**: Flat scalars on `edge.p.latency`, not a nested `model_v1` object. Minimal schema surface; can be upgraded to a richer structure later if more sophisticated model fitting warrants it.
 
-- `edge.p.latency.model_v1` (and similarly `edge.conditional_p[i].p.latency.model_v1`):
-  - `mu`: number
-  - `sigma`: number
-  - `onset_delta_days`: number
-  - `t95_days`: number (derived from the fit, used for horizons and maturity semantics)
-  - `trained_at`: ISO datetime (UTC)
-  - `training_window`: `{ anchor_from: ISO date, anchor_to: ISO date }` (the evidence window used for fitting)
-  - `settings_signature`: string (hash of the forecasting settings used for this fit)
-  - `quality_ok`: boolean (quality gates passed)
-  - `total_k`: number (converters used for fitting; audit and gating)
-  - `notes?`: optional string (human-readable failure reason when quality gates fail)
+New fields on `edge.p.latency` (and similarly `edge.conditional_p[i].p.latency`):
+
+| Field | Type | Purpose |
+|---|---|---|
+| `mu` | number | Fitted log-normal mu parameter |
+| `sigma` | number | Fitted log-normal sigma parameter |
+| `model_trained_at` | string (UK date, e.g. `10-Feb-26`) | When the model was last fitted; staleness detection |
+
+These are **not exposed in the edge properties panel** and have **no `_overridden` flags**. They are internal model parameters, not user-facing values. If the user wants to constrain the model, they override `t95` (which already has `t95_overridden` and acts as a one-way sigma constraint on the fit). The raw graph YAML is available for inspection if needed.
+
+The existing flat fields (`t95`, `median_lag_days`, `mean_lag_days`, `onset_delta_days`, `completeness`) remain unchanged. After cutover, `t95` becomes derived from `mu`/`sigma` rather than independently fitted, but the field itself stays the same.
+
+Provenance fields (training window, settings signature, quality gates, total converters) are returned by the recompute API response for logging/audit but are **not persisted on the graph**. They can be added later if audit requirements warrant it.
 
 This is the “one or two more modelling params” referenced in the requirement.
 
-### 4.5 Forecasting settings: how Python gets them (and how parity is guaranteed)
+### 4.5 Forecasting settings: frontend sends, Python applies
 
-The backend must have a deterministic, versioned settings input, otherwise fits are not reproducible.
+**Decoupling principle (non-negotiable)**: The Python backend is logically decoupled from the frontend. It must NOT read files from frontend directories (`public/`, `src/`, etc.) at runtime. It may run on a remote server with no access to the repo filesystem. All configuration must arrive via the API request.
 
-**Requirement**: there is exactly one canonical source for forecasting settings used by Python fitting.
+**Decision (10-Feb-26)**: Settings are per-repo configuration, edited in the frontend codebase (currently `graph-editor/src/constants/latency.ts`). The frontend sends them explicitly in every API request that needs them. Python defines hardcoded defaults (for tests and as documentation) but the frontend-supplied values are authoritative when present.
 
-Two acceptable mechanisms (both can coexist, but one must be authoritative):
+**Settings object shape** (`forecasting_settings`):
 
-1. **Backend reads settings from disk**: Python loads `settings/settings.yaml` (or equivalent repo settings) at runtime.
-   - Pros: one source; no API coupling.
-   - Cons: needs deployment discipline (the backend bundle must include the settings file).
+Fitting settings (control model creation):
 
-2. **Frontend includes settings in the recompute request**: Python accepts an explicit settings object and uses it for that job.
-   - Pros: decouples the running backend from local filesystem.
-   - Cons: request must include a stable settings signature and must not drift per user unless that is desired.
+- `min_fit_converters`: minimum converters for quality gate (default: 30)
+- `min_mean_median_ratio`: lower quality gate on mean/median ratio (default: 0.9)
+- `max_mean_median_ratio`: upper quality gate on mean/median ratio (default: 999999)
+- `default_sigma`: fallback sigma when mean is missing (default: 0.5)
+- `recency_half_life_days`: half-life for recency weighting (default: 30)
+- `onset_mass_fraction_alpha`: onset estimation parameter (default: 0.01)
+- `onset_aggregation_beta`: onset aggregation parameter (default: 0.5)
+
+Application settings (control completeness evaluation and blending):
+
+- `t95_percentile`: which percentile defines "t95" (default: 0.95)
+- `forecast_blend_lambda`: evidence/forecast blend weight (default: 0.15)
+- `blend_completeness_power`: blend curve shape (default: 2.25)
+
+Mathematical constants (`epsilon = 1e-9`, erf coefficients, etc.) are hardcoded in both languages — they are mathematical invariants, not configuration.
+
+**`settings_signature`**: Computed by the frontend as a stable hash of the `forecasting_settings` object it sends. Persisted with each fitted model for reproducibility and audit. If the settings change, the signature changes, and stale models can be identified.
+
+**Python defaults**: Python defines the same default values as module-level constants (for use in tests and as self-documentation). A cross-language parity test asserts these defaults match the TS constants. At runtime, request-supplied values always take precedence.
 
 **Parity guarantee** is achieved by:
 
 - Python being the master implementation for fitting and application.
 - Persisting `settings_signature` with each model so analyses can be audited.
 - A golden fixture suite for the pure maths layer (CDF/inverse/fit) to lock behaviour.
+- A parity test asserting Python default constants match the TS constants.
 
 ### 4.6 What data Python needs to fit a model
 
@@ -236,7 +253,7 @@ Inputs:
 - `subjects`: array of `{ subject_id, param_id, core_hash, slice_keys, target: { targetId, slot?, conditionalIndex? } }`
 - `training_anchor_from/to`: ISO dates (explicit), OR a named policy e.g. `last_60d` (backend expands to dates)
 - `as_at` (optional): ISO datetime for “what did we know as of …” fitting (rare; default is latest)
-- `forecasting_settings` (optional): explicit settings object and/or settings signature
+- `forecasting_settings` (required): the full settings object as defined in §4.5, sent by the frontend. Python uses these values for fitting and persists `settings_signature` with each model.
 
 ### 5.3 Response shape (conceptual)
 
@@ -354,7 +371,7 @@ It means Python must not decide what to add. The frontend provides `slice_keys[]
 | Active latency edges | Graph edge metadata | ✅ Yes | Determined from graph (same rules can be implemented in Python). |
 | Path horizon DP (`path_t95`) | Computed in FE | ✅ Yes | Can be recomputed in Python from graph + per-edge `t95`/defaults/overrides. |
 | Query mode (window vs cohort) | DSL + FE mode selection | ✅ Yes, if made explicit | For forecasting in analysis, mode must be explicit in request/contract; avoid implicit inference. |
-| Forecasting settings | FE service | ✅ Yes | Must be provided deterministically (backend authoritative load or request-supplied settings). |
+| Forecasting settings | FE service | ✅ Yes | Frontend sends `forecasting_settings` explicitly in the API request (§4.5). No local file reads. |
 
 Conclusion: **Yes** — Python can reproduce the topo/LAG outputs using only snapshot DB rows + scenario graph + frontend-provided `slice_keys[]` + deterministic forecasting settings.
 
@@ -401,7 +418,7 @@ If the frontend already has a definitive mixture aggregation implementation (e.g
 
 ### 6.4.6 Minimal data contract from frontend to Python (fit/apply)
 
-To keep Python free of inference, the frontend must provide:
+To keep Python free of inference and free of local file dependencies, the frontend must provide:
 
 - The semantic subject identity: `param_id`, `core_hash`
 - The semantic slice plan: `slice_keys[]`
@@ -409,29 +426,64 @@ To keep Python free of inference, the frontend must provide:
   - mode: `'window' | 'cohort'` (or an equivalent explicit flag)
   - evaluation horizon / as-at or sweep range as required by the analysis read mode
 - The scenario graph (already in request)
+- `forecasting_settings`: the full settings object (§4.5), required for both fitting and application
 
 This is sufficient for Python to:
 
 - Query the DB for evidence rows
 - Select evidence by policy P1/P2/P3
-- Fit models (when asked) and/or apply models (always during analysis)
+- Fit models (when asked) using frontend-supplied settings
+- Apply models (always during analysis) using frontend-supplied settings
 - Return completeness and evidence/forecast outputs
 
 ---
 
 ## 7. Implementation Plan (Forecasting Phase)
 
+### 7.0 Risk strategy: parallel-run migration
+
+**Principle**: The frontend currently performs complex statistical fitting and application (topo/LAG pass). After this work, Python handles all of it. To confirm the port is correct, we must pass through an explicit intermediate state where **both codepaths are live and their outputs are compared**.
+
+**Phase sequence**:
+
+1. **Port** — Build the Python library and API. Frontend codepaths unchanged.
+2. **Parallel run** — Both frontend and backend compute models/completeness. Frontend compares results and **hard-fails on mismatch** (session log error, not silent).
+3. **Soak** — Run in production in parallel-run state. Investigate and fix any mismatches.
+4. **Cutover** — Frontend stops computing, uses backend results only. Backend is authoritative.
+5. **Cleanup** — Remove frontend fitting/application codepaths. Reduce code surface area.
+
+**Parallel-run mechanics** (Phase 2):
+
+For model fitting:
+- Frontend computes model params as it does today (topo/LAG pass) producing `fe_model`
+- Frontend calls `/api/lag/recompute-models` with the same subjects + `forecasting_settings` producing `be_model`
+- Frontend compares `be_model.mu`, `.sigma`, `.onset_delta_days`, `.t95_days` against `fe_model`
+- If any value differs beyond tolerance (e.g. |delta| > 1e-4 for mu/sigma, > 0.5 for t95_days): **emit diagnostic error** to session log + console with: subject_id, field name, FE value, BE value, delta, tolerance, and the `forecasting_settings` used. Must be enough to diagnose the mismatch without reproduction.
+
+For completeness/application:
+- Backend analysis responses include `completeness` per anchor_day
+- Frontend also evaluates completeness locally from its own model params
+- Frontend compares per anchor_day: **emit diagnostic error** on mismatch beyond tolerance (e.g. > 1e-3) with: subject_id, anchor_day, FE completeness, BE completeness, delta, and the model params (mu, sigma, onset_delta) used by each side.
+
+**Tolerance rationale**: Floating-point maths is not bit-identical across TS and Python (different erf approximations, different rounding). The tolerances must be tight enough to catch real bugs but loose enough to accept legitimate FP differences. The golden parity tests (§7.1) establish the baseline tolerance.
+
+**Graceful degradation during parallel run**: If the backend is unreachable (offline), the frontend falls back to its own computation silently (no hard error). The parallel comparison only fires when both results are available.
+
+---
+
 ### 7.1 Build the Python modelling library
 
 - `lag_distribution_utils.py`: port pure maths (erf, Φ, Φ⁻¹, lognormal CDF/inverse, moment-fit).
-- `forecasting_settings.py`: load settings and produce a stable `settings_signature`.
-- `lag_model_fitter.py`: queries snapshot DB evidence and produces `model_v1`.
+- `forecasting_settings.py`: define default constants (for tests/documentation), accept request-supplied settings, compute `settings_signature`. No file reads.
+- `lag_model_fitter.py`: queries snapshot DB evidence and produces fitted model params (mu, sigma, plus transient provenance).
 - `forecast_application.py`: computes completeness, projections, layers, fan chart points.
+
+Golden tests: shared numerical fixtures (inputs + expected outputs) consumed independently by both TS and Python test suites. These establish the FP tolerance baseline for the parallel run.
 
 ### 7.2 Add persistence fields on graph/parameter models
 
-- Extend the TypeScript types (`LatencyConfig`) to include `model_v1` so the graph can store fitted model parameters.
-- Extend YAML schema(s) / parameter file formats as needed.
+- Extend the TypeScript types (`LatencyConfig`) to include `mu`, `sigma`, `model_trained_at` as optional flat fields (see §4.4).
+- Extend Python Pydantic `LatencyConfig` and YAML param schema with matching fields.
 
 ### 7.3 Wire recompute into the product workflow
 
@@ -440,10 +492,31 @@ Two triggers:
 - **Automatic**: after a successful fetch-from-origin job that writes new snapshot rows, call `/api/lag/recompute-models` for affected subjects (bounded set).
 - **Manual**: a user action “Recompute lag models/horizons” that calls the same route for all latency edges.
 
-### 7.4 Ensure we do not refit on DSL edits
+### 7.4 Parallel-run comparison (frontend)
+
+- Add a comparison layer in the frontend that runs after both FE and BE results are available.
+- Comparison points: model params (mu, sigma, onset_delta, t95), completeness per anchor_day, blended projections.
+- On mismatch: emit a detailed diagnostic error to both session log (`sessionLogService.error()`) and console log, including the comparison point name, FE value, BE value, delta, and tolerance. Must contain enough detail to unpick the root cause without reproducing the scenario.
+- Gated by a feature flag (e.g. `FORECASTING_PARALLEL_RUN = true`) so it can be enabled/disabled.
+- Offline fallback: if backend is unreachable, skip comparison and use FE results.
+
+### 7.5 Cutover
+
+- Disable the frontend topo/LAG fitting pass. Frontend reads model params from graph (persisted by the recompute workflow).
+- Frontend reads completeness/projections from backend analysis responses.
+- Remove the parallel-run comparison layer.
+
+### 7.6 Cleanup
+
+- Remove frontend fitting codepaths from `statisticalEnhancementService.ts` (the ~3200-line orchestration layer).
+- Remove or simplify `lagDistributionUtils.ts` to retain only functions needed for display (if any).
+- Significant code surface area reduction.
+
+### 7.7 Ensure we do not refit on DSL edits
 
 - Query DSL changes should only affect application (which frames/anchor days are evaluated and displayed), not fitting.
 - Fitting uses the training window policy, not the current query window.
+- This invariant is enforced by the fit/apply split: the recompute API is a separate call from analysis, triggered only by data changes or explicit user action.
 
 ---
 
@@ -452,7 +525,7 @@ Two triggers:
 | Risk | Likelihood | Impact | Mitigation |
 |------|-----------|--------|------------|
 | Behaviour drift between FE and BE | Low | High | Python is the single master; FE only persists and displays model outputs |
-| Settings mismatch | Medium | High | Stable settings signature persisted per model; backend authoritative settings load policy |
+| Settings mismatch | Low | High | Frontend sends settings explicitly in every request (§4.5); `settings_signature` persisted per model; cross-language parity test on defaults |
 | Insufficient DB evidence to fit | Medium | Medium | Quality gates + fallbacks; surface “quality_ok=false” and keep conservative defaults |
 | Performance of bulk model recompute | Medium | Medium | Batch DB queries + dedup; recompute only for affected subjects; cache within request |
 
@@ -466,7 +539,7 @@ The snapshot read path must support application-time forecasting outputs:
 - evidence/forecast split fields (`layer`, `projected_y`, etc.)
 - fan chart support (future)
 
-`SnapshotSubjectRequest` does **not** need to carry a full lag fit if the model is persisted on the graph (`edge.p.latency.model_v1`) and the backend is responsible for applying it.
+`SnapshotSubjectRequest` does **not** need to carry a full lag fit if `mu`/`sigma` are persisted on the graph edge (`edge.p.latency.mu`, `.sigma`) and the backend is responsible for applying them.
 
 ---
 

@@ -1,6 +1,6 @@
 # Context epochs: regime-safe cohort maturity under mixed slice histories
-**Status**: Draft (proposed)  
-**Date**: 9-Feb-26  
+**Status**: Implemented (10-Feb-26). Core logic complete; backend contract fix complete; 17 tests passing (12 backend CE + 3 frontend epoch mapper + 1 stitching + 1 graceful degradation). See §8 for implementation record.  
+**Date**: 9-Feb-26 (design) · 10-Feb-26 (status update)  
 **Scope**: Snapshot DB read path for cohort maturity; frontend fetch planning; MECE-safe slice aggregation; equivalence-link interactions
 
 ---
@@ -462,6 +462,40 @@ This work should be delivered via a strict TDD workflow to reduce regression ris
 
 ### 7.2 Operational next steps (concrete)
 
-1. Locate and document the existing frontend tie-break behaviour (if any) that differs from “least aggregation”, and decide whether to align by reuse or by replacement (but keep one central rule).
-2. Implement Steps B–F in order, keeping tests as the primary driver of changes.
+1. ~~Locate and document the existing frontend tie-break behaviour (if any) that differs from “least aggregation”, and decide whether to align by reuse or by replacement (but keep one central rule).~~ — DONE (centralised in `selectLeastAggregationSliceKeysForDay`)
+2. ~~Implement Steps B–F in order, keeping tests as the primary driver of changes.~~ — DONE
+
+---
+
+## 8. Implementation record (10-Feb-26)
+
+All core logic is implemented and tested. Steps A–F from §7.1 are complete.
+
+### 8.1 Files created/modified
+
+**Frontend (TypeScript):**
+
+| File | Change |
+|---|---|
+| `src/services/snapshotDependencyPlanService.ts` | `chooseLatestRetrievalGroupPerDay()`, `selectLeastAggregationSliceKeysForDay()`, `segmentSweepIntoEpochs()` — pure epoch planning functions. `mapFetchPlanToSnapshotSubjects()` extended with epoch orchestration for `cohort_maturity` read mode: preflight → per-day selection → segmentation → epoch subjects. |
+| `src/lib/graphComputeClient.ts` | `collapseEpochSubjectId()`, `pickEpochPayloadForAsAt()` — epoch stitching in `normaliseSnapshotCohortMaturityResponse()`. |
+
+**Backend (Python):**
+
+| File | Change |
+|---|---|
+| `lib/snapshot_service.py` | `_split_slice_selectors()`, `_append_slice_filter_sql()` — backend slice selector contract fix (§3.5): `cohort()` / `window()` means uncontexted-only, not "any context in this mode". |
+
+### 8.2 Test coverage
+
+| Test file | Tests | What they cover |
+|---|---|---|
+| `lib/tests/test_snapshot_read_integrity.py` (CE-001–CE-012) | 12 | Backend slice selector contract: uncontexted-only semantics, explicit context matching, broad selector behaviour, gap key, retrievals summary, inventory filtering, partition double-count prevention, normalisation, mode mismatch |
+| `src/services/__tests__/snapshotDependencyPlanService.test.ts` (cohort_maturity epochs) | 3 | Epoch splitting on regime change with carry-forward; rolling `retrieved_at` within day; non-MECE partition → gap (safety property) |
+| `src/lib/__tests__/graphComputeClient.test.ts` | 1 | Epoch subject ID collapsing and frame stitching |
+| `lib/tests/test_graceful_degradation.py` (GD-004) | 1 | Empty epoch (`__epoch_gap__`) returns success |
+
+### 8.3 What remains (polish, not blocking)
+
+The §5.3 IE-001–012 end-to-end integration matrix (write → observe → analyse → verify curve) was not implemented. The existing 17 tests cover the backend contract, the frontend planning logic, the safety property (non-MECE → gap), and stitching. The IE matrix would add full round-trip coverage through the analysis pipeline but is not needed to prevent the original double-counting bug.
 

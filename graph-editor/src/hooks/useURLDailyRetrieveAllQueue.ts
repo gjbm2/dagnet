@@ -691,12 +691,22 @@ export function useURLDailyRetrieveAllQueue(): void {
           const allEntries = sessionLogService.getEntries();
           const runEntries = allEntries.slice(logStartIndex);
 
-          // Determine outcome by scanning for errors/warnings (including children)
+          // Determine outcome by scanning for errors/warnings (including children).
+          // Exclude background noise that fires during app init (planner staleness
+          // analysis, integrity checks, chart reconciliation) — these are unrelated
+          // to the automation and would incorrectly inflate the outcome to 'warning'.
+          const isBackgroundNoise = (op: string) =>
+            op === 'PLANNER_ANALYSIS' ||
+            op === 'GRAPH_ISSUES_CHECK' ||
+            op === 'CHART_RECONCILE';
+
           const hasEntryLevel = (level: string) =>
             runEntries.some(
               (e) =>
-                e.level === level ||
-                e.children?.some((c) => c.level === level)
+                !isBackgroundNoise(e.operation) && (
+                  e.level === level ||
+                  e.children?.some((c: any) => c.level === level)
+                )
             );
 
           let outcome: 'success' | 'warning' | 'error' | 'aborted';

@@ -1,7 +1,7 @@
 # Flexible signatures (`flexi_sigs`) — resilient archival identity for snapshots
 
-**Status**: Implemented (tests incomplete; frontend signature matching needs rework)  
-**Date**: 4-Feb-26 (design) · 8-Feb-26 (status update)  
+**Status**: Implemented (10-Feb-26). Backend complete. Frontend feature-complete (functional but FE signature matching code in `dataOperationsService.ts` needs refactor — duplicated across window/cohort paths). UI complete (`SignatureLinksViewer`). Test hardening outstanding: Tier A golden corpus thin (~30%), Tier F Playwright 0%. Neither gap is a functional risk.  
+**Date**: 4-Feb-26 (design) · 8-Feb-26 (status update) · 10-Feb-26 (status review)  
 **Scope**: Snapshot DB write/read identity + operator override for "trivial" signature drift  
 
 ---

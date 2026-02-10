@@ -202,7 +202,7 @@ test.describe('asat Phase 2: @ picker', () => {
     const asatToggle = page.getByTestId('asat-toggle');
     await expect(asatToggle).toBeVisible();
 
-    // Open dropdown (month cursor starts at window end month: Feb-26)
+    // Open dropdown (month cursor starts at current month)
     await asatToggle.click();
     await expect(page.getByTestId('asat-dropdown')).toBeVisible();
 
@@ -215,10 +215,19 @@ test.describe('asat Phase 2: @ picker', () => {
     }
     await expect(page.locator('.calendar-grid-nav-btn').first()).toBeVisible({ timeout: 10_000 });
 
-    // Go to Jan-26 (previous month once)
-    await page.locator('.calendar-grid-nav-btn').first().click();
-
+    // Navigate to Jan-26 (navigate until target day is visible; direction depends on current month)
     const day20 = page.getByTestId('calendar-day-2026-01-20');
+    const navBtns = page.locator('.calendar-grid-nav-btn');
+    for (let i = 0; i < 24; i++) {
+      if (await day20.isVisible().catch(() => false)) break;
+      await navBtns.first().click(); // previous month
+    }
+    if (!(await day20.isVisible().catch(() => false))) {
+      for (let i = 0; i < 24; i++) {
+        if (await day20.isVisible().catch(() => false)) break;
+        await navBtns.nth(1).click(); // next month
+      }
+    }
     await expect(day20).toBeVisible();
     await expect(day20).toHaveClass(/has-snapshot/);
 

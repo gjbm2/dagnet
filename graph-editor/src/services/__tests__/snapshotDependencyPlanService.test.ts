@@ -847,5 +847,51 @@ describe('snapshotDependencyPlanService', () => {
         'context(a:foo).context(b:other).cohort()',
       ].sort());
     });
+
+    it('produces a gap epoch when the only available partition is non-MECE and no uncontexted fallback exists', async () => {
+      // Safety property: rather than double-count with an incomplete partition,
+      // the planner must treat the day as missing data (gap).
+      //
+      // Setup: day 1 has only 2 of 3 required b-values (missing "other"),
+      // so the partition is NOT MECE-complete. No uncontexted fallback exists.
+      // The planner should produce a gap epoch for this day.
+      (querySnapshotRetrievals as any).mockResolvedValue({
+        success: true,
+        retrieved_at: ['2025-10-01T12:00:00Z'],
+        retrieved_days: ['2025-10-01'],
+        latest_retrieved_at: '2025-10-01T12:00:00Z',
+        count: 1,
+        summary: [
+          // Incomplete partition: b:1 and b:2 present, but b:other is missing.
+          // The context definition for "b" has values [1, 2, other], so this is NOT MECE.
+          { retrieved_at: '2025-10-01T12:00:00Z', slice_key: 'context(a:foo).context(b:1).cohort(1-Oct-25:3-Oct-25)', anchor_from: '2025-10-01', anchor_to: '2025-10-03', row_count: 1, sum_x: 40, sum_y: 10 },
+          { retrieved_at: '2025-10-01T12:00:00Z', slice_key: 'context(a:foo).context(b:2).cohort(1-Oct-25:3-Oct-25)', anchor_from: '2025-10-01', anchor_to: '2025-10-03', row_count: 1, sum_x: 60, sum_y: 15 },
+        ],
+      });
+
+      const plan = makePlan([{ targetId: 'e1', objectId: 'p1', mode: 'cohort', sliceFamily: 'context(a:foo)' }]);
+      const graph = { ...makeGraph([{ uuid: 'e1', from: 'node-a', to: 'node-b' }]), dataInterestsDSL: 'context(a:foo).context(b)' } as any;
+
+      const result = await mapFetchPlanToSnapshotSubjects({
+        plan,
+        analysisType: 'cohort_maturity',
+        graph,
+        selectedEdgeUuids: [],
+        workspace: WORKSPACE,
+        queryDsl: 'from(A).to(B).cohort(1-Oct-25:3-Oct-25).asat(3-Oct-25)',
+      });
+
+      expect(result).toBeDefined();
+      // The entire sweep should be a single gap epoch (all 3 days carry the
+      // non-resolvable regime from day 1).
+      expect(result!.subjects.length).toBe(1);
+
+      const subject = result!.subjects[0];
+      expect(subject.sweep_from).toBe('2025-10-01');
+      expect(subject.sweep_to).toBe('2025-10-03');
+      // Gap epochs use the __epoch_gap__ sentinel slice key, which the backend
+      // matches to zero rows (verified by CE-005).
+      expect(subject.slice_keys).toEqual(['__epoch_gap__']);
+    });
   });
 });
