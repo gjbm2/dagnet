@@ -223,7 +223,7 @@ describe('Forecasting parity — query flow + snapshot DB (integration)', () => 
     vi.restoreAllMocks();
   });
 
-  it('structural parity: emits no FORECASTING_PARITY_MISMATCH (single slice)', async () => {
+  it('structural parity: throws + logs FORECASTING_PARITY_MISMATCH when BE is seeded wrong', async () => {
     const parityErrors: any[] = [];
     const errorSpy = vi.spyOn(sessionLogService, 'error').mockImplementation((...args: any[]) => {
       // args: (category, operation, message, details?, context?)
@@ -233,24 +233,22 @@ describe('Forecasting parity — query flow + snapshot DB (integration)', () => 
       return undefined as any;
     });
 
-    // Seed snapshot DB with cohort evidence rows ONLY.
-    // If parity mistakenly queries window(), it should either fail or fall back,
-    // producing massive deltas (this is what we want the test to catch).
+    // Freeze time so the FE/BE “as_at” reference is deterministic.
+    vi.setSystemTime(new Date('2026-02-10T12:00:00.000Z'));
+
+    // Seed snapshot DB with WINDOW evidence rows ONLY (wrong on purpose).
+    // FE fits from cohort(); BE will query cohort slice keys and should fall back / diverge,
+    // which must trigger the structural parity hard-fail.
     const cohortSig = cohortValue.query_signature as string;
     const cohortCoreHash = await computeShortCoreHash(cohortSig);
-    const rawRetrievedAt = cohortValue?.data_source?.retrieved_at;
-    const retrievedAt =
-      rawRetrievedAt instanceof Date
-        ? rawRetrievedAt.toISOString()
-        : (typeof rawRetrievedAt === 'string' && rawRetrievedAt)
-          ? rawRetrievedAt
-          : new Date().toISOString();
+    // Ensure retrieved_at <= as_at (query_snapshots filters by retrieved_at <= as_at).
+    const retrievedAt = new Date('2026-02-10T00:00:00.000Z').toISOString();
 
-    const dates: string[] = cohortValue.dates || [];
-    const nDaily: number[] = cohortValue.n_daily || [];
-    const kDaily: number[] = cohortValue.k_daily || [];
-    const med: number[] = cohortValue.median_lag_days || [];
-    const mn: number[] = cohortValue.mean_lag_days || [];
+    const dates: string[] = windowValue.dates || [];
+    const nDaily: number[] = windowValue.n_daily || [];
+    const kDaily: number[] = windowValue.k_daily || [];
+    const med: number[] = windowValue.median_lag_days || [];
+    const mn: number[] = windowValue.mean_lag_days || [];
     if (!(dates.length && dates.length === nDaily.length && dates.length === kDaily.length)) {
       throw new Error('Cohort slice arrays missing or mismatched lengths');
     }
@@ -268,7 +266,7 @@ describe('Forecasting parity — query flow + snapshot DB (integration)', () => 
       param_id: `${SNAPSHOT_TEST_REPO}-${SNAPSHOT_TEST_BRANCH}-${PARAM_ID}`,
       canonical_signature: cohortSig,
       core_hash: cohortCoreHash,
-      slice_key: cohortValue.sliceDSL,
+      slice_key: windowValue.sliceDSL,
       retrieved_at: retrievedAt,
       rows,
     });
@@ -354,10 +352,12 @@ describe('Forecasting parity — query flow + snapshot DB (integration)', () => 
       return originalFetch(input, init);
     };
 
-    await runParityComparison({
+    await expect(runParityComparison({
       graph: currentGraph as any,
       workspace: { repository: SNAPSHOT_TEST_REPO, branch: SNAPSHOT_TEST_BRANCH },
-    });
+    })).rejects.toThrow(/FORECASTING_PARITY/);
+
+    expect(parityErrors.length).toBeGreaterThan(0);
 
     expect(seen.requestBody).toBeTruthy();
     const subj = seen.requestBody.subjects?.[0];
@@ -368,22 +368,130 @@ describe('Forecasting parity — query flow + snapshot DB (integration)', () => 
     expect(subj.core_hash).toBe(cohortCoreHash);
     expect(subj.slice_keys?.[0]).toBe(cohortValue.sliceDSL);
 
-    expect(seen.responseBody?.success).toBe(true);
-    const beSubj = (seen.responseBody?.subjects || []).find((s: any) => s.subject_id === edgeUuid);
-    expect(beSubj?.success).toBe(true);
+    // We intentionally don't assert BE numbers here — we assert the structural guard tripped.
 
-    const beMu = Number(beSubj.mu);
-    const beSigma = Number(beSubj.sigma);
-    const beOnset = Number(beSubj.onset_delta_days);
+    errorSpy.mockRestore();
+  });
 
-    // Parity tolerance: same as forecastingParityService for mu/sigma.
-    expect(Math.abs(feMu - beMu)).toBeLessThanOrEqual(1e-4);
-    expect(Math.abs(feSigma - beSigma)).toBeLessThanOrEqual(1e-4);
-    expect(Math.abs(feOnset - beOnset)).toBeLessThanOrEqual(1e-9);
+  it('structural parity: does not throw and emits no FORECASTING_PARITY_MISMATCH (single slice, correct seed)', async () => {
+    const parityErrors: any[] = [];
+    const errorSpy = vi.spyOn(sessionLogService, 'error').mockImplementation((...args: any[]) => {
+      const operation = args?.[1];
+      if (operation === 'FORECASTING_PARITY_MISMATCH') parityErrors.push(args);
+      return undefined as any;
+    });
 
-    // Critical: the thing you see in prod — no parity mismatch errors logged.
+    vi.setSystemTime(new Date('2026-02-10T12:00:00.000Z'));
+
+    // Seed snapshot DB with cohort evidence rows ONLY (correct).
+    const cohortSig = cohortValue.query_signature as string;
+    const cohortCoreHash = await computeShortCoreHash(cohortSig);
+    const retrievedAt = new Date('2026-02-10T00:00:00.000Z').toISOString();
+
+    const dates: string[] = cohortValue.dates || [];
+    const nDaily: number[] = cohortValue.n_daily || [];
+    const kDaily: number[] = cohortValue.k_daily || [];
+    const med: number[] = cohortValue.median_lag_days || [];
+    const mn: number[] = cohortValue.mean_lag_days || [];
+    if (!(dates.length && dates.length === nDaily.length && dates.length === kDaily.length)) {
+      throw new Error('Cohort slice arrays missing or mismatched lengths');
+    }
+
+    const rows = dates.map((d, i) => ({
+      anchor_day: ukToISO(d),
+      X: nDaily[i] ?? 0,
+      Y: kDaily[i] ?? 0,
+      median_lag_days: med[i] ?? null,
+      mean_lag_days: mn[i] ?? null,
+      onset_delta_days: null,
+    }));
+
+    await appendSnapshots({
+      param_id: `${SNAPSHOT_TEST_REPO}-${SNAPSHOT_TEST_BRANCH}-${PARAM_ID}`,
+      canonical_signature: cohortSig,
+      core_hash: cohortCoreHash,
+      slice_key: cohortValue.sliceDSL,
+      retrieved_at: retrievedAt,
+      rows,
+    });
+
+    const edgeUuid = 'edge-parity-test-1';
+    let currentGraph: Graph | null = {
+      nodes: [
+        { uuid: 'n1', id: 'household-created', entry: { is_start: true } } as any,
+        { uuid: 'n2', id: 'switch-success' } as any,
+      ],
+      edges: [
+        {
+          uuid: edgeUuid,
+          id: 'household-created-to-switch-success',
+          from: 'n1',
+          to: 'n2',
+          p: {
+            id: PARAM_ID,
+            connection: reducedParam.connection || 'amplitude-prod',
+            latency: {
+              latency_parameter: true,
+              onset_delta_days: 3,
+              t95: 14.0,
+              anchor_node_id: 'household-created',
+            },
+          },
+        } as any,
+      ],
+    } as any;
+    const setGraph = (g: Graph | null) => { currentGraph = g; };
+
+    const item: FetchItem = {
+      id: `param-${PARAM_ID}-p-${edgeUuid}`,
+      type: 'parameter',
+      name: `p: ${PARAM_ID}`,
+      objectId: PARAM_ID,
+      targetId: edgeUuid,
+      paramSlot: 'p',
+    };
+
+    const dsl = String(cohortValue.sliceDSL);
+    const r = await fetchItem(
+      item,
+      { mode: 'from-file' } as any,
+      currentGraph as Graph,
+      setGraph,
+      dsl,
+    );
+    expect(r.success).toBe(true);
+
+    // Capture BE recompute request/response (instrumentation only; still hits the real server).
+    const originalFetch = globalThis.fetch;
+    const seen: { requestBody?: any; responseBody?: any } = {};
+    (globalThis as any).fetch = async (input: any, init?: any): Promise<Response> => {
+      const url = typeof input === 'string' ? input : String(input?.url ?? input);
+      if (url.includes('/api/lag/recompute-models')) {
+        try { seen.requestBody = init?.body ? JSON.parse(init.body) : undefined; } catch { /* ignore */ }
+        const resp = await originalFetch(input, init);
+        const text = await resp.text();
+        try { seen.responseBody = JSON.parse(text); } catch { /* ignore */ }
+        return new Response(text, { status: resp.status, headers: resp.headers });
+      }
+      return originalFetch(input, init);
+    };
+
+    try {
+      await runParityComparison({
+        graph: currentGraph as any,
+        workspace: { repository: SNAPSHOT_TEST_REPO, branch: SNAPSHOT_TEST_BRANCH },
+      });
+    } catch (e: any) {
+      const firstCtx = parityErrors?.[0]?.[4];
+      throw new Error(
+        `Parity threw unexpectedly: ${String(e)}\n` +
+        `first FORECASTING_PARITY_MISMATCH context: ${JSON.stringify(firstCtx)}\n` +
+        `request as_at: ${String(seen.requestBody?.as_at)}`
+      );
+    }
+
+    expect(seen.requestBody?.as_at).toBe('2026-02-10T12:00:00.000Z');
     expect(parityErrors).toHaveLength(0);
-
     errorSpy.mockRestore();
   });
 
@@ -395,18 +503,14 @@ describe('Forecasting parity — query flow + snapshot DB (integration)', () => 
       return undefined as any;
     });
 
+    vi.setSystemTime(new Date('2026-02-10T12:00:00.000Z'));
+
     const cohortSig = cohortValue.query_signature as string;
     const cohortCoreHash = await computeShortCoreHash(cohortSig);
 
     // Seed snapshot DB for BOTH cohort slices, same core_hash family, different slice_key.
     const seedOne = async (v: any) => {
-      const rawRetrievedAt = v?.data_source?.retrieved_at;
-      const retrievedAt =
-        rawRetrievedAt instanceof Date
-          ? rawRetrievedAt.toISOString()
-          : (typeof rawRetrievedAt === 'string' && rawRetrievedAt)
-            ? rawRetrievedAt
-            : new Date().toISOString();
+      const retrievedAt = new Date('2026-02-10T00:00:00.000Z').toISOString();
 
       const dates: string[] = v.dates || [];
       const nDaily: number[] = v.n_daily || [];

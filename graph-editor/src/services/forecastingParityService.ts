@@ -45,6 +45,15 @@ export function compareModelFits(
   if (!FORECASTING_PARALLEL_RUN) return;
   if (!beResults) return;
 
+  const mismatches: Array<{
+    edgeUuid: string;
+    field: string;
+    fe: number;
+    be: number;
+    delta: number;
+    tol: number;
+  }> = [];
+
   for (const be of beResults) {
     if (!be.success || be.mu === undefined || be.sigma === undefined) continue;
 
@@ -89,8 +98,27 @@ export function compareModelFits(
             be_total_k: be.total_k,
           },
         );
+
+        mismatches.push({
+          edgeUuid: fe.edgeUuid,
+          field: check.field,
+          fe: check.fe,
+          be: check.be,
+          delta,
+          tol: check.tol,
+        });
       }
     }
+  }
+
+  // Structural parity check: when enabled, mismatches are a hard failure.
+  if (mismatches.length) {
+    const head = mismatches.slice(0, 5).map(m =>
+      `${m.edgeUuid}:${m.field} FE=${m.fe.toFixed(6)} BE=${m.be.toFixed(6)} Δ=${m.delta.toFixed(6)} tol=${m.tol}`
+    ).join(' | ');
+    throw new Error(
+      `[FORECASTING_PARITY] Hard fail: ${mismatches.length} mismatch(es). ${head}`
+    );
   }
 }
 

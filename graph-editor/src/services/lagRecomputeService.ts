@@ -267,7 +267,8 @@ export async function runParityComparison(args: {
   );
 
   // Call backend.
-  const response = await recomputeLagModels(subjects, graph);
+  // Important: send as_at so BE uses the same “now” reference FE used for recency weighting.
+  const response = await recomputeLagModels(subjects, graph, { asAt: new Date().toISOString() });
   if (!response) {
     sessionLogService.warning(
       'graph', 'FORECASTING_PARITY_SKIPPED',
