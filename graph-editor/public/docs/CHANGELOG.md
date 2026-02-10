@@ -1,4 +1,11 @@
 # DagNet Release Notes
+## Version 1.5.2b
+**Released:** 10-Feb-26
+
+cohort fixing
+
+---
+
 ## Version 1.5.1b
 **Released:** 9-Feb-26
 
