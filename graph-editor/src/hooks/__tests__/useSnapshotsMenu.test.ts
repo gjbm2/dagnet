@@ -70,11 +70,12 @@ vi.mock('../useEdgeSnapshotInventory', () => ({
   invalidateInventoryCache: vi.fn(),
 }));
 
-import { useSnapshotsMenu } from '../useSnapshotsMenu';
+import { useSnapshotsMenu, clearSnapshotsMenuInventoryCache } from '../useSnapshotsMenu';
 
 describe('useSnapshotsMenu', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    clearSnapshotsMenuInventoryCache();
     getBatchInventoryV2Mock.mockResolvedValue({
       'r-b-param-a': {
         overall_all_families: {

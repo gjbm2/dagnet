@@ -340,13 +340,26 @@ describe('GraphComputeClient - Cohort Maturity Normalisation', () => {
         {
           scenario_id: 'sc1',
           scenario_name: 'Baseline',
-          snapshot_subjects: [{ subject_id: 'subj1', subject_label: 'a → b' }],
+          snapshot_subjects: [{
+            subject_id: 'subj1',
+            subject_label: 'a → b',
+            param_id: 'repo-branch-param-1',
+            canonical_signature: 'sig',
+            core_hash: 'hash',
+            read_mode: 'cohort_maturity',
+            anchor_from: '2025-10-01',
+            anchor_to: '2025-10-01',
+            sweep_from: '2025-10-01',
+            sweep_to: '2025-11-01',
+            slice_keys: ['cohort()'],
+            target: { targetId: 'edge-1', slot: 'p' },
+          }],
         },
       ],
     };
   }
 
-  it('should produce a datapoint from a single snapshot (skip empty frames)', () => {
+  it('should include empty frames to cover full sweep range', () => {
     // Simulate sweep grid: 3 days of empty frames (before retrieval),
     // then 1 frame with actual data.
     const frames = [
@@ -370,15 +383,32 @@ describe('GraphComputeClient - Cohort Maturity Normalisation', () => {
     expect(result!.success).toBe(true);
 
     const data = result!.result!.data;
-    // Only the frame with data_points should survive normalisation
-    expect(data).toHaveLength(1);
-    expect(data[0].as_at_date).toBe('2025-10-04');
-    expect(data[0].x).toBe(100);
-    expect(data[0].y).toBe(42);
-    expect(data[0].rate).toBeCloseTo(0.42);
+    // All frames should survive normalisation (empty frames included)
+    expect(data).toHaveLength(4);
+
+    expect(data[0].as_at_date).toBe('2025-10-01');
+    expect(data[0].x).toBe(0);
+    expect(data[0].y).toBe(0);
+    // With fixed denominator X* and monotonic Y-progress, empty frames yield 0 progress.
+    expect(data[0].rate).toBeCloseTo(0);
+
+    expect(data[1].as_at_date).toBe('2025-10-02');
+    expect(data[1].x).toBe(0);
+    expect(data[1].y).toBe(0);
+    expect(data[1].rate).toBeCloseTo(0);
+
+    expect(data[2].as_at_date).toBe('2025-10-03');
+    expect(data[2].x).toBe(0);
+    expect(data[2].y).toBe(0);
+    expect(data[2].rate).toBeCloseTo(0);
+
+    expect(data[3].as_at_date).toBe('2025-10-04');
+    expect(data[3].x).toBe(100);
+    expect(data[3].y).toBe(42);
+    expect(data[3].rate).toBeCloseTo(0.42);
   });
 
-  it('should return empty result when ALL frames are empty', () => {
+  it('should keep the time axis even when ALL frames are empty', () => {
     const frames = [
       { as_at_date: '2025-10-01', data_points: [], total_y: 0 },
       { as_at_date: '2025-10-02', data_points: [], total_y: 0 },
@@ -390,8 +420,12 @@ describe('GraphComputeClient - Cohort Maturity Normalisation', () => {
     const result = (client as any).normaliseSnapshotCohortMaturityResponse(raw, request);
 
     expect(result).not.toBeNull();
-    expect(result!.result!.metadata!.empty).toBe(true);
-    expect(result!.result!.data).toHaveLength(0);
+    const data = result!.result!.data;
+    expect(data).toHaveLength(2);
+    expect(data[0].as_at_date).toBe('2025-10-01');
+    expect(data[0].rate).toBeNull();
+    expect(data[1].as_at_date).toBe('2025-10-02');
+    expect(data[1].rate).toBeNull();
   });
 
   it('should keep all non-empty frames for multi-snapshot maturity curve', () => {
@@ -415,11 +449,44 @@ describe('GraphComputeClient - Cohort Maturity Normalisation', () => {
     const result = (client as any).normaliseSnapshotCohortMaturityResponse(raw, request);
 
     const data = result!.result!.data;
-    expect(data).toHaveLength(2);
-    expect(data[0].as_at_date).toBe('2025-10-10');
-    expect(data[0].rate).toBeCloseTo(0.10);
-    expect(data[1].as_at_date).toBe('2025-10-20');
-    expect(data[1].rate).toBeCloseTo(0.30);
+    expect(data).toHaveLength(3);
+    expect(data[0].as_at_date).toBe('2025-10-01');
+    expect(data[0].rate).toBeCloseTo(0);
+    expect(data[1].as_at_date).toBe('2025-10-10');
+    expect(data[1].rate).toBeCloseTo(0.10);
+    expect(data[2].as_at_date).toBe('2025-10-20');
+    expect(data[2].rate).toBeCloseTo(0.30);
+  });
+
+  it('should attach fully detailed cohort rows for CSV export', () => {
+    const frames = [
+      {
+        as_at_date: '2025-10-04',
+        data_points: [
+          { anchor_day: '2025-10-01', y: 42, x: 100, a: 1000, rate: 0.42, median_lag_days: 3.2, mean_lag_days: 4.1, onset_delta_days: 1.0 },
+          { anchor_day: '2025-10-02', y: 10, x: 50, a: 500, rate: 0.20 },
+        ],
+        total_y: 52,
+      },
+    ];
+
+    const raw = buildRawResponse(frames);
+    const request = buildRequest('from(a).to(b).window(1-Oct-25:31-Oct-25)');
+    const result = (client as any).normaliseSnapshotCohortMaturityResponse(raw, request);
+
+    const exportTables = (result!.result!.metadata as any)?.export_tables;
+    expect(exportTables).toBeTruthy();
+    const points = exportTables.cohort_maturity_points;
+    expect(Array.isArray(points)).toBe(true);
+    expect(points.length).toBe(2);
+    expect(points[0]).toHaveProperty('as_at_date', '2025-10-04');
+    expect(points[0]).toHaveProperty('anchor_day');
+    expect(points[0]).toHaveProperty('cohort_age_days');
+    expect(points[0]).toHaveProperty('cohort_age_at_window_end_days');
+    expect(points[0]).toHaveProperty('window_from');
+    expect(points[0]).toHaveProperty('window_to');
+    expect(points[0]).toHaveProperty('x');
+    expect(points[0]).toHaveProperty('y');
   });
 });
 

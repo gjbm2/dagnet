@@ -43,6 +43,13 @@ function formatPercent(v: number | null | undefined): string {
   return `${(v * 100).toFixed(1)}%`;
 }
 
+function dayDiffUTC(asAtISO: string, originISO: string): number | null {
+  const t1 = Date.parse(`${String(asAtISO)}T00:00:00Z`);
+  const t0 = Date.parse(`${String(originISO)}T00:00:00Z`);
+  if (Number.isNaN(t1) || Number.isNaN(t0)) return null;
+  return Math.floor((t1 - t0) / (24 * 60 * 60 * 1000));
+}
+
 export function SnapshotCohortMaturityChart({ result, visibleScenarioIds, height = 320, fillHeight = false, queryDsl, source, hideOpenAsTab = false }: Props): JSX.Element {
   const rows = Array.isArray(result?.data) ? result.data : [];
 
@@ -82,53 +89,195 @@ export function SnapshotCohortMaturityChart({ result, visibleScenarioIds, height
       .filter(r => visibleScenarioIds.includes(String(r?.scenario_id)));
   }, [rows, effectiveSubjectId, visibleScenarioIds]);
 
+  const axisMode = useMemo((): 'cohort' | 'window' => {
+    const q = String(queryDsl || source?.query_dsl || '');
+    if (q.includes('window(') || q.includes('.window(')) return 'window';
+    return 'cohort';
+  }, [queryDsl, source]);
+
+  const fromNodeLabel = useMemo((): string | null => {
+    const q = String(queryDsl || source?.query_dsl || '');
+    const m = q.match(/\bfrom\(([^)]+)\)/);
+    const raw = m?.[1] ? String(m[1]).trim() : '';
+    return raw ? raw : null;
+  }, [queryDsl, source]);
+
+  // ──────────────────────────────────────────────────────────────
+  // X-AXIS COMPUTATION
+  //
+  // Both modes rebase as_at_date to "days since window/cohort start":
+  //   origin  = anchor_from  (= min of the date range the user selected)
+  //   x       = as_at_date - origin           (always >= 0)
+  //   axisMin = 0
+  //   axisMax = t95 (window) or path_t95 (cohort)
+  //
+  // This means:
+  //   window(-30d:)  → x runs 0..30   (shape of maturity from day 0)
+  //   window(-45d:)  → x runs 0..45   (same shape, more history)
+  //   cohort(A:B)    → x runs 0..path_t95
+  // ──────────────────────────────────────────────────────────────
+  const xAxisMeta = useMemo(() => {
+    // Origin: always anchor_from (= start of the date range).
+    const origin: string | null =
+      (typeof result?.metadata?.anchor_from === 'string' ? String(result.metadata.anchor_from) : null)
+      || (() => {
+        for (const r of filteredRows) {
+          const v = typeof r?.anchor_from === 'string' ? String(r.anchor_from) : null;
+          if (v) return v;
+        }
+        return null;
+      })();
+
+    // Collect t95 / path_t95 for axis max, and first-non-zero for cohort axis min.
+    let t95Max: number | null = null;
+    let pathT95Max: number | null = null;
+    let maxAge: number | null = null;
+    let minNonZeroAge: number | null = null;
+
+    for (const r of filteredRows) {
+      const t95 = Number(r?.t95_days);
+      const pathT95 = Number(r?.path_t95_days);
+      if (Number.isFinite(t95)) t95Max = Math.max(t95Max ?? 0, t95);
+      if (Number.isFinite(pathT95)) pathT95Max = Math.max(pathT95Max ?? 0, pathT95);
+
+      if (origin) {
+        const asAt = typeof r?.as_at_date === 'string' ? String(r.as_at_date) : '';
+        if (asAt) {
+          const age = dayDiffUTC(asAt, origin);
+          if (age !== null && Number.isFinite(age)) {
+            maxAge = (maxAge === null) ? age : Math.max(maxAge, age);
+            const yProgress = Number(r?.y_progress ?? r?.y ?? 0);
+            if (Number.isFinite(yProgress) && yProgress > 0) {
+              minNonZeroAge = (minNonZeroAge === null) ? age : Math.min(minNonZeroAge, age);
+            }
+          }
+        }
+      }
+    }
+
+    // cohort(): start axis at first non-zero data point (skip the empty flat region).
+    // window(): always start at 0 (user wants to see "days since start of window").
+    const axisMin = (axisMode === 'cohort' && minNonZeroAge !== null && Number.isFinite(minNonZeroAge))
+      ? Math.max(0, minNonZeroAge)
+      : 0;
+
+    // Axis max: use t95 (window) or path_t95 (cohort). Fall back to observed max.
+    // IMPORTANT: if latencyMax would clip ALL non-zero data, extend to observed max instead.
+    const latencyMax = axisMode === 'window'
+      ? (t95Max !== null && Number.isFinite(t95Max) && t95Max > 0 ? t95Max : null)
+      : (pathT95Max !== null && Number.isFinite(pathT95Max) && pathT95Max > 0 ? pathT95Max : null);
+
+    const axisMax = (() => {
+      if (latencyMax !== null) {
+        // If latency max would hide all non-zero points, extend to observed max.
+        if (minNonZeroAge !== null && latencyMax < minNonZeroAge) {
+          return maxAge !== null ? Math.max(minNonZeroAge, maxAge) : minNonZeroAge;
+        }
+        return latencyMax;
+      }
+      if (maxAge !== null && Number.isFinite(maxAge)) return Math.max(0, maxAge);
+      return null;
+    })();
+
+    return { origin, axisMin, axisMax };
+  }, [filteredRows, axisMode, result]);
+
+  // ──────────────────────────────────────────────────────────────
+  // SERIES BUILDER
+  //
+  // n = 0
+  // for date D in DATE_RANGE:
+  //   plot maturity(D) at x = n
+  //   n++
+  //
+  // That's it. x = as_at_date - origin.  Clip at axisMax.
+  // ──────────────────────────────────────────────────────────────
   const series = useMemo(() => {
-    const byScenario = new Map<string, Array<{ asAt: string; rate: number | null; x: number; y: number }>>();
+    const origin = xAxisMeta.origin;
+    const byScenario = new Map<string, Array<{ asAt: string; ageDays: number; rate: number | null; phase: string }>>();
+
     for (const r of filteredRows) {
       const scenarioId = String(r?.scenario_id);
       const asAt = String(r?.as_at_date);
       const rate = (r?.rate === null || r?.rate === undefined) ? null : Number(r.rate);
-      const x = Number(r?.x ?? 0);
-      const y = Number(r?.y ?? 0);
-      if (!scenarioId || !asAt) continue;
+      const phase = String(r?.cohort_phase || 'incomplete');
+
+      if (!scenarioId || !asAt || !origin) continue;
+      const ageDays = dayDiffUTC(asAt, origin);
+      if (ageDays === null || !Number.isFinite(ageDays)) continue;
+      if (ageDays < 0) continue; // before origin — skip
+      // Clip at axis max (t95 / path_t95).
+      if (xAxisMeta.axisMax !== null && Number.isFinite(xAxisMeta.axisMax) && ageDays > xAxisMeta.axisMax) continue;
+
       if (!byScenario.has(scenarioId)) byScenario.set(scenarioId, []);
       byScenario.get(scenarioId)!.push({
         asAt,
+        ageDays,
         rate: Number.isFinite(rate as any) ? (rate as number) : null,
-        x: Number.isFinite(x) ? x : 0,
-        y: Number.isFinite(y) ? y : 0,
+        phase,
       });
     }
 
     const out: any[] = [];
-    const scenarios = Array.from(byScenario.keys()).sort();
-    for (const scenarioId of scenarios) {
-      const points = (byScenario.get(scenarioId) || []).slice().sort((a, b) => a.asAt.localeCompare(b.asAt));
+    for (const scenarioId of Array.from(byScenario.keys()).sort()) {
       const name = scenarioMeta?.[scenarioId]?.name || scenarioId;
       const colour = scenarioMeta?.[scenarioId]?.colour;
+      const points = (byScenario.get(scenarioId) || []).slice().sort((a, b) => a.ageDays - b.ageDays);
 
-      out.push({
-        name,
-        type: 'line',
-        showSymbol: points.length <= 12,
-        symbolSize: 6,
-        smooth: false,
-        connectNulls: false,
-        lineStyle: { width: 2, color: colour },
-        itemStyle: { color: colour },
-        emphasis: { focus: 'series' },
-        data: points.map(p => [p.asAt, p.rate]),
-      });
+      type P = { asAt: string; ageDays: number; rate: number | null; phase: string };
+
+      const phasePoints = (phase: string): P[] => points.filter((p) => p.phase === phase);
+      const withContiguousBoundary = (prev: P[], next: P[]): P[] => {
+        if (prev.length === 0 || next.length === 0) return next;
+        const prevLast = prev[prev.length - 1];
+        const nextFirst = next[0];
+        if (prevLast.ageDays < nextFirst.ageDays) return [prevLast, ...next];
+        return next;
+      };
+
+      const incomplete = phasePoints('incomplete');
+      const maturingRaw = phasePoints('maturing');
+      const closedRaw = phasePoints('closed');
+      const maturing = withContiguousBoundary(incomplete, maturingRaw);
+      const closed = withContiguousBoundary(maturingRaw.length > 0 ? maturingRaw : incomplete, closedRaw);
+
+      const mkSeries = (lineType: 'solid' | 'dashed' | 'dotted', dataPoints: P[]) => {
+        const data = dataPoints.map((p) => ({
+          value: [p.ageDays, p.rate],
+          asAt: p.asAt,
+          ageDays: p.ageDays,
+        }));
+        if (data.length === 0) return null;
+        return {
+          name,
+          type: 'line',
+          showSymbol: data.length <= 12,
+          symbolSize: 6,
+          smooth: false,
+          connectNulls: false,
+          lineStyle: { width: 2, color: colour, type: lineType },
+          itemStyle: { color: colour },
+          emphasis: { focus: 'series' },
+          data,
+        };
+      };
+
+      const sIncomplete = mkSeries('dotted', incomplete);
+      const sMaturing = mkSeries('dashed', maturing);
+      const sClosed = mkSeries('solid', closed);
+      if (sIncomplete) out.push(sIncomplete);
+      if (sMaturing) out.push(sMaturing);
+      if (sClosed) out.push(sClosed);
     }
     return out;
-  }, [filteredRows, scenarioMeta]);
+  }, [filteredRows, scenarioMeta, xAxisMeta.origin, xAxisMeta.axisMax]);
 
   const option = useMemo(() => {
     // Compute Y-axis max from data with headroom, rounded to a clean percentage
     let maxRate = 0;
     for (const s of series) {
       for (const d of s.data) {
-        const v = d?.[1];
+        const v = d?.value?.[1];
         if (typeof v === 'number' && Number.isFinite(v) && v > maxRate) maxRate = v;
       }
     }
@@ -142,11 +291,12 @@ export function SnapshotCohortMaturityChart({ result, visibleScenarioIds, height
         formatter: (params: any) => {
           const items = Array.isArray(params) ? params : [params];
           const first = items[0];
-          const asAtRaw = first?.value?.[0];
-          const asAt = typeof asAtRaw === 'number'
-            ? new Date(asAtRaw).toISOString().slice(0, 10)
-            : String(asAtRaw || '');
-          const title = formatDate_d_MMM_yy(asAt);
+          const ageRaw = first?.value?.[0];
+          const ageDays = typeof ageRaw === 'number' ? ageRaw : Number(ageRaw);
+          const anyAsAt = first?.data?.asAt ? String(first.data.asAt) : '';
+          const title = Number.isFinite(ageDays)
+            ? `Δ ${ageDays} day(s) · ${formatDate_d_MMM_yy(anyAsAt)}`
+            : formatDate_d_MMM_yy(anyAsAt);
           const lines = items.map((it: any) => {
             const scenarioName = it?.seriesName || 'Scenario';
             const rate = it?.value?.[1];
@@ -163,20 +313,15 @@ export function SnapshotCohortMaturityChart({ result, visibleScenarioIds, height
         containLabel: true,
       },
       xAxis: {
-        type: 'time',
-        name: 'As-at',
+        type: 'value',
+        name: `Days since ${fromNodeLabel || 'start'}`,
         nameLocation: 'middle' as const,
         nameGap: 30,
+        min: xAxisMeta.axisMin,
+        ...(xAxisMeta.axisMax !== null && Number.isFinite(xAxisMeta.axisMax) ? { max: xAxisMeta.axisMax } : {}),
         axisLabel: {
           fontSize: 10,
-          rotate: 30,
-          formatter: (value: number) => {
-            const d = new Date(value);
-            if (Number.isNaN(d.getTime())) return '';
-            const day = d.getUTCDate();
-            const month = d.toLocaleDateString('en-GB', { month: 'short', timeZone: 'UTC' });
-            return `${day}-${month}`;
-          },
+          formatter: (value: number) => `${Math.round(value)}`,
         },
       },
       yAxis: {
@@ -205,7 +350,7 @@ export function SnapshotCohortMaturityChart({ result, visibleScenarioIds, height
         sweep: { from: result?.metadata?.sweep_from, to: result?.metadata?.sweep_to },
       },
     };
-  }, [result, series, effectiveSubjectId]);
+  }, [result, series, effectiveSubjectId, fromNodeLabel, xAxisMeta.axisMin, xAxisMeta.axisMax]);
 
   const headerRight = useMemo(() => {
     const aFrom = result?.metadata?.anchor_from;
@@ -339,6 +484,8 @@ export function SnapshotCohortMaturityChart({ result, visibleScenarioIds, height
 
       <ReactECharts
         option={option}
+        notMerge={true}
+        lazyUpdate={true}
         style={{
           height: fillHeight ? '100%' : height,
           width: '100%',

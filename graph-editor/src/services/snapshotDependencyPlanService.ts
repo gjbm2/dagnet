@@ -33,7 +33,19 @@ import { querySnapshotRetrievals, type SnapshotRetrievalSummaryRow } from './sna
 
 function isDev(): boolean {
   try {
-    return !!(import.meta as any)?.env?.DEV;
+    const metaDev = (import.meta as any)?.env?.DEV;
+    if (metaDev === true) return true;
+    if (metaDev === false) return false;
+  } catch {
+    // ignore
+  }
+  // Fallback: in some contexts (or HMR edge cases) import.meta.env may not be populated.
+  // We still want epoch debugging logs on localhost during interactive debugging.
+  try {
+    const loc = (globalThis as any)?.location;
+    const host = String(loc?.hostname || '');
+    const port = String(loc?.port || '');
+    return host === 'localhost' || host === '127.0.0.1' || port === '5173';
   } catch {
     return false;
   }
@@ -218,7 +230,7 @@ function contextKeysFromDsl(dsl: string): Set<string> {
   return keys;
 }
 
-type DaySummary = { retrievedAt: string; families: Set<string> };
+type DaySummary = { latestRetrievedAt: string; families: Set<string> };
 
 export function chooseLatestRetrievalGroupPerDay(args: {
   summary: SnapshotRetrievalSummaryRow[];
@@ -226,24 +238,31 @@ export function chooseLatestRetrievalGroupPerDay(args: {
   sweepTo: string;   // ISO date
 }): Map<string, DaySummary> {
   const { summary, sweepFrom, sweepTo } = args;
-  const byDay = new Map<string, Map<string, Set<string>>>();
+  // IMPORTANT:
+  // A single "retrieval run" may write different slice families with slightly different
+  // retrieved_at timestamps (e.g. context(channel:paid-search) a minute before channel:other).
+  //
+  // Therefore, for regime selection we must NOT require identical retrieved_at across families.
+  // We treat a family as "available on day D" if any summary row exists whose retrieved_at UTC
+  // date is D. (Virtual snapshot reconstruction already handles per-slice "latest as-of".)
+  const byDay = new Map<string, { latestRetrievedAt: string; families: Set<string> }>();
   for (const row of Array.isArray(summary) ? summary : []) {
     const day = isoDateFromIsoDatetimeUTC(row.retrieved_at);
     if (!day) continue;
     if (day < sweepFrom || day > sweepTo) continue;
-    const ra = String(row.retrieved_at || '');
-    if (!byDay.has(day)) byDay.set(day, new Map());
-    const byRa = byDay.get(day)!;
-    if (!byRa.has(ra)) byRa.set(ra, new Set());
     const fam = normaliseSummarySliceKeyToFamily(String(row.slice_key || ''));
-    if (fam) byRa.get(ra)!.add(fam);
+    if (!fam) continue;
+
+    const ra = String(row.retrieved_at || '');
+    if (!byDay.has(day)) byDay.set(day, { latestRetrievedAt: ra, families: new Set() });
+    const rec = byDay.get(day)!;
+    rec.families.add(fam);
+    if (ra > rec.latestRetrievedAt) rec.latestRetrievedAt = ra;
   }
 
   const chosen = new Map<string, DaySummary>();
-  for (const [day, groups] of byDay.entries()) {
-    const ras = Array.from(groups.keys()).sort(); // ISO datetime -> lexical sort OK
-    const latest = ras[ras.length - 1];
-    chosen.set(day, { retrievedAt: latest, families: groups.get(latest) || new Set() });
+  for (const [day, rec] of byDay.entries()) {
+    chosen.set(day, { latestRetrievedAt: rec.latestRetrievedAt, families: rec.families });
   }
   return chosen;
 }
@@ -306,8 +325,15 @@ export function selectLeastAggregationSliceKeysForDay(args: {
   for (const meta of modeFamilies) {
     if (!isSubsetContextMatch({ specified, candidate: meta.ctxMap })) continue;
     const extra = meta.keys.filter((k) => !specifiedKeys.has(k));
-    // Only aggregate away dims that are explicitly in-scope (pinned).
-    if (extra.some((k) => !pinnedContextKeys.has(k))) continue;
+    // Guardrail:
+    // - When the query specifies context dims, we only allow aggregating away dims that are in-scope (pinned).
+    // - When the query is UNCONTEXTED (no specified dims), we allow MECE fulfilment over observed dims even
+    //   if nothing is pinned — otherwise an uncontexted cohort maturity query cannot safely use a complete
+    //   partitioned regime (common in linked historic data).
+    const queryIsUncontexted = specifiedKeys.size === 0;
+    if (!queryIsUncontexted) {
+      if (extra.some((k) => !pinnedContextKeys.has(k))) continue;
+    }
 
     // Candidate set = all families with exactly this key-set (dimension-set) and matching specified dims.
     const fams = modeFamilies
@@ -520,6 +546,38 @@ export async function mapFetchPlanToSnapshotSubjects(args: {
         preflight = null;
       }
 
+      if (isDev()) {
+        const summaryRows = Array.isArray(preflight?.summary) ? (preflight.summary as SnapshotRetrievalSummaryRow[]) : [];
+        const byDay: Record<string, { rows: number; retrievedAt: Set<string>; families: Set<string> }> = {};
+        for (const s of summaryRows) {
+          const d = isoDateFromIsoDatetimeUTC(String(s.retrieved_at || ''));
+          if (!d) continue;
+          byDay[d] = byDay[d] || { rows: 0, retrievedAt: new Set(), families: new Set() };
+          byDay[d].rows += 1;
+          byDay[d].retrievedAt.add(String(s.retrieved_at || ''));
+          byDay[d].families.add(normaliseSummarySliceKeyToFamily(String(s.slice_key || '')));
+        }
+        const days = Object.keys(byDay).sort();
+        console.log('[ContextEpochs] preflight:', {
+          subject_id: item.itemKey,
+          param_id: paramId,
+          core_hash: coreHash,
+          anchor_from: timeBounds.anchorFrom,
+          anchor_to: timeBounds.anchorTo,
+          sweep_from: sweepFrom,
+          sweep_to: sweepTo,
+          pinned_keys: Array.from(pinnedKeys).sort(),
+          query_slice_family: item.sliceFamily,
+          requested_mode: modeClause,
+          success: preflight?.success === true,
+          summary_rows: summaryRows.length,
+          distinct_days_in_summary: days.length,
+          days,
+          // Keep this bounded; details per day are printed next (chosenByDay + per-day selection).
+          rows_per_day: Object.fromEntries(days.map((d) => [d, byDay[d].rows])),
+        });
+      }
+
       // Fail-safe: if preflight is unavailable, do NOT do a broad cohort maturity read.
       // Broad reads reintroduce mixed-regime summation. Instead, fall back to a single
       // explicit family selector (or uncontexted-only when query is uncontexted).
@@ -575,6 +633,25 @@ export async function mapFetchPlanToSnapshotSubjects(args: {
         continue;
       }
 
+      if (isDev()) {
+        const chosenDays = Array.from(chosenByDay.keys()).sort();
+        const preview: Record<string, any> = {};
+        for (const d of chosenDays.slice(0, 40)) {
+          const v = chosenByDay.get(d);
+          preview[d] = {
+            latestRetrievedAt: v?.latestRetrievedAt,
+            familyCount: v?.families?.size ?? 0,
+            families: Array.from(v?.families ?? []).sort().slice(0, 40),
+          };
+        }
+        console.log('[ContextEpochs] chosenByDay:', {
+          subject_id: item.itemKey,
+          chosen_day_count: chosenDays.length,
+          chosen_days: chosenDays,
+          preview,
+        });
+      }
+
       // Per-day regime selection with carry-forward on non-retrieval days.
       const perDay = new Map<string, string[] | null>();
       let last: string[] | null = null;
@@ -591,12 +668,29 @@ export async function mapFetchPlanToSnapshotSubjects(args: {
           pinnedContextKeys: pinnedKeys,
           workspace,
         });
+        if (isDev()) {
+          console.log('[ContextEpochs] select day:', {
+            subject_id: item.itemKey,
+            day,
+            latestRetrievedAt: obs.latestRetrievedAt,
+            availableFamilyCount: obs.families.size,
+            availableFamilies: Array.from(obs.families).sort().slice(0, 80),
+            selectedSliceKeys: selected,
+          });
+        }
         // If we can't resolve safely, treat as a gap (missing data).
         last = selected;
         perDay.set(day, selected);
       }
 
       const epochs = segmentSweepIntoEpochs({ sweepFrom, sweepTo, perDay });
+      if (isDev()) {
+        console.log('[ContextEpochs] epochs:', {
+          subject_id: item.itemKey,
+          epoch_count: epochs.length,
+          epochs: epochs.map((e) => ({ from: e.from, to: e.to, slice_keys: e.sliceKeys })),
+        });
+      }
       epochs.forEach((ep, i) => {
         subjects.push({
           subject_id: `${item.itemKey}${EPOCH_SUBJECT_ID_SEP}${i}`,

@@ -62,9 +62,23 @@ def derive_cohort_maturity(
         Result dict with frames array (see module docstring).
     """
     if not rows:
+        # IMPORTANT:
+        # Cohort maturity results are expected to cover the full sweep grid even when
+        # no snapshot rows exist (e.g. planned gap epochs, or days before first retrieval).
+        # The frontend stitches epoch frames across segments; returning [] would collapse
+        # the time axis and produce a misleading curve shape.
+        frames: List[Dict[str, Any]] = []
+        if sweep_from is not None and sweep_to is not None:
+            sf = date.fromisoformat(sweep_from) if isinstance(sweep_from, str) else sweep_from
+            st = date.fromisoformat(sweep_to) if isinstance(sweep_to, str) else sweep_to
+            d = sf
+            while d <= st:
+                frames.append({"as_at_date": d.isoformat(), "data_points": [], "total_y": 0})
+                d += timedelta(days=1)
+
         return {
             "analysis_type": "cohort_maturity",
-            "frames": [],
+            "frames": frames,
             "anchor_range": {"from": None, "to": None},
             "sweep_range": {"from": sweep_from, "to": sweep_to},
             "cohorts_analysed": 0,

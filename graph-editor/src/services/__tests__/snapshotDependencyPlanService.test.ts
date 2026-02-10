@@ -794,5 +794,58 @@ describe('snapshotDependencyPlanService', () => {
         'context(a:foo).context(b:other).cohort()',
       ].sort());
     });
+
+    it('treats all families as available within a day even when retrieved_at differs per slice', async () => {
+      // Regression test for "rolling retrieved_at within day" across a MECE partition.
+      // The planner must NOT require identical retrieved_at across slice families to use the partition.
+      (querySnapshotRetrievals as any).mockResolvedValue({
+        success: true,
+        retrieved_at: [
+          '2025-10-02T12:02:00Z',
+          '2025-10-02T12:01:00Z',
+          '2025-10-02T12:00:00Z',
+          '2025-10-01T12:00:00Z',
+        ],
+        retrieved_days: ['2025-10-02', '2025-10-01'],
+        latest_retrieved_at: '2025-10-02T12:02:00Z',
+        count: 4,
+        summary: [
+          // Day 1: already-aggregated candidate exists (|E|=0)
+          { retrieved_at: '2025-10-01T12:00:00Z', slice_key: 'context(a:foo).cohort(1-Oct-25:3-Oct-25)', anchor_from: '2025-10-01', anchor_to: '2025-10-03', row_count: 1, sum_x: 1, sum_y: 1 },
+          // Day 2: MECE partition exists but has skewed retrieved_at values per slice.
+          { retrieved_at: '2025-10-02T12:00:00Z', slice_key: 'context(a:foo).context(b:1).cohort(1-Oct-25:3-Oct-25)', anchor_from: '2025-10-01', anchor_to: '2025-10-03', row_count: 1, sum_x: 1, sum_y: 1 },
+          { retrieved_at: '2025-10-02T12:01:00Z', slice_key: 'context(a:foo).context(b:2).cohort(1-Oct-25:3-Oct-25)', anchor_from: '2025-10-01', anchor_to: '2025-10-03', row_count: 1, sum_x: 1, sum_y: 1 },
+          { retrieved_at: '2025-10-02T12:02:00Z', slice_key: 'context(a:foo).context(b:other).cohort(1-Oct-25:3-Oct-25)', anchor_from: '2025-10-01', anchor_to: '2025-10-03', row_count: 1, sum_x: 1, sum_y: 1 },
+        ],
+      });
+
+      const plan = makePlan([{ targetId: 'e1', objectId: 'p1', mode: 'cohort', sliceFamily: 'context(a:foo)' }]);
+      const graph = { ...makeGraph([{ uuid: 'e1', from: 'node-a', to: 'node-b' }]), dataInterestsDSL: 'context(a:foo).context(b)' } as any;
+
+      const result = await mapFetchPlanToSnapshotSubjects({
+        plan,
+        analysisType: 'cohort_maturity',
+        graph,
+        selectedEdgeUuids: [],
+        workspace: WORKSPACE,
+        queryDsl: 'from(A).to(B).cohort(1-Oct-25:3-Oct-25).asat(3-Oct-25)',
+      });
+
+      expect(result).toBeDefined();
+      expect(result!.subjects.length).toBe(2);
+
+      const [e1, e2] = result!.subjects;
+      expect(e1.sweep_from).toBe('2025-10-01');
+      expect(e1.sweep_to).toBe('2025-10-01');
+      expect(e1.slice_keys).toEqual(['context(a:foo).cohort()']);
+
+      expect(e2.sweep_from).toBe('2025-10-02');
+      expect(e2.sweep_to).toBe('2025-10-03');
+      expect(e2.slice_keys.sort()).toEqual([
+        'context(a:foo).context(b:1).cohort()',
+        'context(a:foo).context(b:2).cohort()',
+        'context(a:foo).context(b:other).cohort()',
+      ].sort());
+    });
   });
 });

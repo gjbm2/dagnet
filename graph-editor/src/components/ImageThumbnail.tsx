@@ -27,22 +27,40 @@ export function ImageThumbnail({ image, onDelete, onCaptionEdit, isOverridden, o
   const [imageSrc, setImageSrc] = useState<string>('');
   const captionRef = useRef<HTMLDivElement>(null);
   const [editPosition, setEditPosition] = useState<{ x: number; y: number; width: number } | null>(null);
+  const imageSrcRef = useRef<string>('');
   
   // Load image from IDB with retry logic
   useEffect(() => {
+    let cancelled = false;
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
     let retryCount = 0;
-    const maxRetries = 5;
-    const retryDelay = 200; // ms
+
+    // Boot/clone/load can be slow (large workspaces, network). If we give up too quickly,
+    // the thumbnail can permanently show "Loading..." even though the image arrives shortly after.
+    const maxRetries = 60;
+    const baseRetryDelayMs = 200; // ms (will back off up to maxRetryDelayMs)
+    const maxRetryDelayMs = 2000; // ms
     
     const loadImage = async () => {
       try {
         const url = await imageService.getImageUrl(image.image_id, image.file_extension);
+        if (cancelled) return;
+
+        // Revoke any previous URL for this thumbnail before swapping.
+        if (imageSrcRef.current) {
+          imageService.revokeImageUrl(image.image_id, image.file_extension);
+        }
+
+        imageSrcRef.current = url;
         setImageSrc(url);
       } catch (err) {
+        if (cancelled) return;
+
         if (retryCount < maxRetries) {
           retryCount++;
-          console.log(`ImageThumbnail: Retrying load for ${image.image_id} (attempt ${retryCount}/${maxRetries})`);
-          setTimeout(loadImage, retryDelay);
+          const delay = Math.min(baseRetryDelayMs * Math.pow(1.25, retryCount - 1), maxRetryDelayMs);
+          console.log(`ImageThumbnail: Retrying load for ${image.image_id} (attempt ${retryCount}/${maxRetries}, delay ${Math.round(delay)}ms)`);
+          timeoutId = setTimeout(loadImage, delay);
         } else {
           console.error(`Failed to load image ${image.image_id} after ${maxRetries} attempts:`, err);
           setImageSrc(''); // Fallback to empty
@@ -53,9 +71,13 @@ export function ImageThumbnail({ image, onDelete, onCaptionEdit, isOverridden, o
     loadImage();
     
     return () => {
+      cancelled = true;
+      if (timeoutId) clearTimeout(timeoutId);
+
       // Cleanup: revoke blob URL when component unmounts
-      if (imageSrc) {
+      if (imageSrcRef.current) {
         imageService.revokeImageUrl(image.image_id, image.file_extension);
+        imageSrcRef.current = '';
       }
     };
   }, [image.image_id, image.file_extension]);
