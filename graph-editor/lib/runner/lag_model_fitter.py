@@ -71,6 +71,19 @@ def _float_or_none(v: Any) -> Optional[float]:
         return None
 
 
+def _positive_float_or_none(v: Any) -> Optional[float]:
+    """
+    Like _float_or_none, but treats non-positive values as missing.
+
+    FE semantics: per-day lag moments use 0 as a sentinel for "missing/unavailable",
+    and aggregation excludes median/mean <= 0.
+    """
+    f = _float_or_none(v)
+    if f is None:
+        return None
+    return f if f > 0 else None
+
+
 def _get_x(row: Dict) -> int:
     return _int_or_zero(row.get('x') or row.get('X'))
 
@@ -142,8 +155,8 @@ def select_latest_evidence(
             y = _get_y(r)
             if y <= 0:
                 continue
-            med = _float_or_none(r.get('median_lag_days'))
-            mn = _float_or_none(r.get('mean_lag_days'))
+            med = _positive_float_or_none(r.get('median_lag_days'))
+            mn = _positive_float_or_none(r.get('mean_lag_days'))
             onset = _float_or_none(r.get('onset_delta_days'))
             if med is not None:
                 w_median_num += med * y
@@ -208,14 +221,19 @@ def aggregate_evidence(
 
     Returns: (aggregate_median_lag, aggregate_mean_lag, total_k, aggregate_onset_delta)
     """
-    if reference_datetime is None and reference_date is None:
-        # Default reference: latest anchor_day at midnight.
-        dates = [_parse_date(e.anchor_day) for e in evidence]
-        valid_dates = [d for d in dates if d is not None]
-        d = max(valid_dates) if valid_dates else date.today()
-        reference_datetime = datetime.combine(d, time.min)
-    elif reference_datetime is None and reference_date is not None:
-        reference_datetime = datetime.combine(reference_date, time.min)
+    # FE semantics: cohort age is computed as whole days (floor), not fractional.
+    # In the FE pipeline, cohort ages are effectively integer day differences between
+    # queryDate and cohortDate (UTC midnight), due to Math.floor(...) usage.
+    #
+    # Therefore, for parity we derive a reference *date* and use integer day deltas.
+    if reference_date is None:
+        if reference_datetime is not None:
+            reference_date = reference_datetime.date()
+        else:
+            # Use latest anchor_day as reference.
+            dates = [_parse_date(e.anchor_day) for e in evidence]
+            valid_dates = [d for d in dates if d is not None]
+            reference_date = max(valid_dates) if valid_dates else date.today()
 
     w_median_num = 0.0
     w_median_denom = 0.0
@@ -230,20 +248,18 @@ def aggregate_evidence(
             continue
 
         anchor_date = _parse_date(ev.anchor_day)
-        anchor_dt = datetime.combine(anchor_date, time.min) if anchor_date else None
-        if anchor_dt is not None and reference_datetime is not None and reference_datetime.tzinfo is not None:
-            # Align naive anchor midnight with the reference timezone to avoid naive/aware subtraction.
-            anchor_dt = anchor_dt.replace(tzinfo=reference_datetime.tzinfo)
-        age_days = ((reference_datetime - anchor_dt).total_seconds() / 86400.0) if (reference_datetime and anchor_dt) else 0.0
+        age_days = (reference_date - anchor_date).days if (reference_date and anchor_date) else 0
         recency_w = _recency_weight(age_days, settings.recency_half_life_days)
         w = ev.y * recency_w
 
         if ev.median_lag_days is not None:
-            w_median_num += ev.median_lag_days * w
-            w_median_denom += w
+            if ev.median_lag_days > 0:
+                w_median_num += ev.median_lag_days * w
+                w_median_denom += w
         if ev.mean_lag_days is not None:
-            w_mean_num += ev.mean_lag_days * w
-            w_mean_denom += w
+            if ev.mean_lag_days > 0:
+                w_mean_num += ev.mean_lag_days * w
+                w_mean_denom += w
         if ev.onset_delta_days is not None:
             w_onset_num += ev.onset_delta_days * w
             w_onset_denom += w
