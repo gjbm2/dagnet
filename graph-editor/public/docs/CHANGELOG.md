@@ -1,4 +1,11 @@
 # DagNet Release Notes
+## Version 1.5.5b
+**Released:** 11-Feb-26
+
+Forecasting largely ported (not yet cutover); integrated code and graph dirs
+
+---
+
 ## Version 1.5.4b
 **Released:** 10-Feb-26
 
