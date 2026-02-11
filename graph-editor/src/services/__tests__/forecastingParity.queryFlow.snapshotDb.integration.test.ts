@@ -15,6 +15,9 @@
  * - Python dev server running on http://localhost:9000
  * - Snapshot DB configured and reachable (see /api/snapshots/health)
  *
+ * This is a LOCAL integration test (depends on external services + private data repo).
+ * It is skipped automatically when those dependencies are not available (e.g. CI).
+ *
  * @vitest-environment node
  */
 import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from 'vitest';
@@ -60,7 +63,38 @@ function getDataRepoDir(): string {
   return dir;
 }
 
-const DATA_REPO_DIR = getDataRepoDir();
+function safeGetDataRepoDir(): string | null {
+  try {
+    return getDataRepoDir();
+  } catch {
+    return null;
+  }
+}
+
+const PYTHON_BASE_URL =
+  process.env.DAGNET_PYTHON_API_URL ||
+  process.env.VITE_PYTHON_API_URL ||
+  'http://localhost:9000';
+
+async function isPythonSnapshotReachable(): Promise<boolean> {
+  const url = `${PYTHON_BASE_URL}/api/snapshots/health`;
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 1000);
+    try {
+      const resp = await undiciFetch(url, { signal: controller.signal });
+      return resp.ok;
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  } catch {
+    return false;
+  }
+}
+
+const DATA_REPO_DIR = safeGetDataRepoDir();
+const PYTHON_SNAPSHOT_AVAILABLE = await isPythonSnapshotReachable();
+const describeDeps = (PYTHON_SNAPSHOT_AVAILABLE && !!DATA_REPO_DIR) ? describe : describe.skip;
 
 function loadYaml(relPath: string): any {
   return yaml.load(fs.readFileSync(path.join(REPO_ROOT, relPath), 'utf8'));
@@ -83,7 +117,7 @@ function ukToISO(uk: string): string {
 }
 
 async function deleteTestSnapshots(prefix: string): Promise<void> {
-  await undiciFetch('http://localhost:9000/api/snapshots/delete-test', {
+  await undiciFetch(`${PYTHON_BASE_URL}/api/snapshots/delete-test`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ param_id_prefix: prefix }),
@@ -98,7 +132,7 @@ async function appendSnapshots(args: {
   retrieved_at: string;
   rows: Array<Record<string, any>>;
 }): Promise<void> {
-  const resp = await undiciFetch('http://localhost:9000/api/snapshots/append', {
+  const resp = await undiciFetch(`${PYTHON_BASE_URL}/api/snapshots/append`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -121,10 +155,14 @@ async function appendSnapshots(args: {
   if (!body.success) throw new Error(`snapshots/append failed: ${JSON.stringify(body)}`);
 }
 
-describe('Forecasting parity — query flow + snapshot DB (integration)', () => {
+describeDeps('Forecasting parity — query flow + snapshot DB (integration)', () => {
   const SNAPSHOT_TEST_REPO = `pytest-parity-${Date.now()}`;
   const SNAPSHOT_TEST_BRANCH = `run-${Math.random().toString(16).slice(2)}`;
   const SNAPSHOT_PREFIX = `${SNAPSHOT_TEST_REPO}-${SNAPSHOT_TEST_BRANCH}-`;
+
+  if (!DATA_REPO_DIR) {
+    throw new Error('.private-repos.conf / DATA_REPO_DIR not available (required for this local integration test)');
+  }
 
   // Realistic source parameter file containing both window() and cohort() slices with query_signature.
   // Loaded directly from the local data repo (directory name from .private-repos.conf).
@@ -143,7 +181,7 @@ describe('Forecasting parity — query flow + snapshot DB (integration)', () => 
 
   beforeAll(async () => {
     // Ensure Python snapshot API is running and DB is reachable.
-    const health = await undiciFetch('http://localhost:9000/api/snapshots/health');
+    const health = await undiciFetch(`${PYTHON_BASE_URL}/api/snapshots/health`);
     if (!health.ok) {
       throw new Error(`Python snapshot API not reachable: HTTP ${health.status}`);
     }
