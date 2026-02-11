@@ -77,6 +77,23 @@ https://dagnet.vercel.app/?data=%7B%22nodes%22%3A%5B%7B%22id%22%3A%22a%22%2C%22d
 - If decompression fails, an error is shown
 - In normal (non-share) usage, the URL parameter is cleaned up after loading.
 
+### `?branch=<branch_name>`
+
+Switches the navigator to the specified branch before loading any other URL-driven content. Commonly used with `?graph=` to open a graph from a specific branch.
+
+**Usage:**
+```
+https://dagnet.vercel.app/?graph=high-intent-flow-v2&branch=feature/high-intent-flow-v2
+```
+
+**How it works:**
+- Dispatches a branch switch to the NavigatorContext before processing `?graph=` or other file params
+- The navigator loads items from the specified branch
+- Both `?branch=` and `?graph=` are cleaned up from the URL after loading
+- If the branch doesn't exist, the navigator stays on the current branch
+
+**Copy Working Link:** Right-click a graph tab and select "Copy Working Link" to generate a URL with `?graph=` and `?branch=` pre-filled for the current graph and branch.
+
 ### `?graph=<graph_name>`
 
 Opens a specific graph from the default repository by name.

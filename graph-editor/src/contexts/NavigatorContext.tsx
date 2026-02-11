@@ -673,6 +673,8 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
     } finally {
       loadingRef.current = false;
       setIsLoading(false);
+      // Signal that loading is complete (used by AppShell ?branch= URL handling)
+      try { window.dispatchEvent(new CustomEvent('dagnet:navigatorLoadComplete', { detail: { repo, branch } })); } catch { /* best effort */ }
     }
   }, []); // Empty deps - uses params, not external state
 

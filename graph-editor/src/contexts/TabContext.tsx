@@ -1737,6 +1737,52 @@ export function TabProvider({ children }: { children: React.ReactNode }) {
       // - TabContext opens the graph tab
       // - A separate hook (`useURLDailyRetrieveAllQueue`) runs pull → retrieve → commit after load
       //
+      // =======================================================================
+      // BRANCH SWITCH: ?branch=<name> — request modal-gated branch switch
+      // Only triggers when:
+      //   - ?branch= is present (not in live/static share mode)
+      //   - No ?repo= param (which indicates a different boot path, e.g. E2E tests)
+      //   - The requested branch differs from the currently selected branch
+      // =======================================================================
+      const branchParam = urlParams.get('branch');
+      const graphParam = urlParams.get('graph');
+      const repoParam = urlParams.get('repo');
+      if (branchParam && !repoParam && modeParam !== 'static' && modeParam !== 'live') {
+        // Check if branch is different from current — read from persisted navigator state
+        let currentBranch: string | null = null;
+        try {
+          const appState = await db.getAppState?.();
+          currentBranch = appState?.navigatorState?.selectedBranch || null;
+        } catch { /* best effort */ }
+
+        if (currentBranch && currentBranch === branchParam) {
+          // Same branch — no switch needed, let ?graph= handling proceed normally
+          console.log(`[TabContext] URL ?branch=${branchParam} matches current branch — skipping switch`);
+          // Clean up ?branch= from URL but let ?graph= flow through
+          const cleanUrl = new URL(window.location.href);
+          cleanUrl.searchParams.delete('branch');
+          window.history.replaceState({}, document.title, cleanUrl.toString());
+        } else {
+          console.log(`[TabContext] URL ?branch=${branchParam} differs from current (${currentBranch}) — requesting modal-gated branch switch`);
+          
+          // Clean up URL params immediately (prevent re-trigger on refresh)
+          const cleanUrl = new URL(window.location.href);
+          cleanUrl.searchParams.delete('branch');
+          cleanUrl.searchParams.delete('graph');
+          cleanUrl.searchParams.delete('retrieveall');
+          window.history.replaceState({}, document.title, cleanUrl.toString());
+          
+          // Dispatch event for AppShell to show SwitchBranchModal with confirmation
+          // AppShell handles the modal flow and opens the graph on success
+          window.dispatchEvent(new CustomEvent('dagnet:urlBranchSwitch', {
+            detail: { branch: branchParam, graph: graphParam }
+          }));
+          
+          // Don't proceed to ?graph= handling below — AppShell owns the rest
+          return;
+        }
+      }
+
       // Multi-graph support:
       // - `?retrieveall=a,b,c` (comma-separated)
       // - `?retrieveall=a&retrieveall=b` (repeated param)
@@ -1757,7 +1803,7 @@ export function TabProvider({ children }: { children: React.ReactNode }) {
           setActiveTabId(existingTab.id);
           await db.saveAppState({ activeTabId: existingTab.id });
           
-          // Clean up URL parameter
+          // Clean up URL parameter (only ?graph=, not ?branch= which may be needed by other boot paths)
           const url = new URL(window.location.href);
           url.searchParams.delete('graph');
           window.history.replaceState({}, document.title, url.toString());
@@ -1775,7 +1821,7 @@ export function TabProvider({ children }: { children: React.ReactNode }) {
         // Open tab with the named graph
         await openTab(graphItem, 'interactive', true);
         
-        // Clean up URL parameter
+        // Clean up URL parameter (only ?graph=, not ?branch= which may be needed by other boot paths)
         const url = new URL(window.location.href);
         url.searchParams.delete('graph');
         window.history.replaceState({}, document.title, url.toString());

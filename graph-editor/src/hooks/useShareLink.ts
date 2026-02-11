@@ -25,11 +25,17 @@ export interface UseShareLinkResult {
   /** Whether live share is available (requires identity + secret) */
   canShareLive: boolean;
   
+  /** Whether working link (simple ?graph=&branch= URL) is available */
+  canCopyWorkingLink: boolean;
+  
   /** Copy static share link to clipboard */
   copyStaticShareLink: () => Promise<void>;
   
   /** Copy live share link to clipboard */
   copyLiveShareLink: () => Promise<void>;
+  
+  /** Copy working link (?graph=X&branch=Y) to clipboard */
+  copyWorkingLink: () => Promise<void>;
   
   /** Reason why live share is unavailable (if canShareLive is false) */
   liveShareUnavailableReason?: string;
@@ -112,6 +118,15 @@ export function useShareLink(fileId: string | undefined): UseShareLinkResult {
   const canShare = isShareableType && !isReadOnlyShare && !!fileInfo;
   const canShareStatic = canShare;
   const canShareLive = canShare && liveShareCheck.canLive;
+
+  // Working link: simple ?graph=X&branch=Y — available for graph files with identity
+  const canCopyWorkingLink = useMemo(() => {
+    if (!fileId?.startsWith('graph-')) return false;
+    if (isReadOnlyShare) return false;
+    const identity = fileInfo?.identity;
+    if (!identity) return false;
+    return !!(identity as any).branch && !!(identity as any).graph;
+  }, [fileId, fileInfo, isReadOnlyShare]);
   
   // Copy static share link
   const copyStaticShareLink = useCallback(async () => {
@@ -234,13 +249,42 @@ export function useShareLink(fileId: string | undefined): UseShareLinkResult {
       toast.error('Failed to copy live share link');
     }
   }, [fileInfo, urlSecrets, fileId]);
+
+  // Copy working link (?graph=X&branch=Y)
+  const copyWorkingLink = useCallback(async () => {
+    try {
+      if (!fileInfo?.identity) {
+        toast.error('No repository identity available');
+        return;
+      }
+      const { branch, graph } = fileInfo.identity as any;
+      if (!branch || !graph) {
+        toast.error('Missing branch or graph identity');
+        return;
+      }
+
+      const base = `${window.location.origin}${window.location.pathname}`;
+      const url = `${base}?graph=${encodeURIComponent(graph)}&branch=${encodeURIComponent(branch)}`;
+
+      await navigator.clipboard.writeText(url);
+      toast.success('Working link copied!');
+
+      sessionLogService.success('session', 'SHARE_WORKING_LINK_COPIED',
+        `Working link copied: ${graph} @ ${branch}`);
+    } catch (error) {
+      console.error('Failed to copy working link:', error);
+      toast.error('Failed to copy working link');
+    }
+  }, [fileInfo]);
   
   return {
     canShare,
     canShareStatic,
     canShareLive,
+    canCopyWorkingLink,
     copyStaticShareLink,
     copyLiveShareLink,
+    copyWorkingLink,
     liveShareUnavailableReason: liveShareCheck.reason,
   };
 }

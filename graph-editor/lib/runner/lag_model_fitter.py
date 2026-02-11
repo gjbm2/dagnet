@@ -15,8 +15,11 @@ from dataclasses import dataclass
 from datetime import date, datetime, time
 from typing import Any, Dict, List, Optional
 
+from slice_key_normalisation import normalise_slice_key_for_matching
+
 from .lag_distribution_utils import (
     fit_lag_distribution,
+    log_normal_cdf,
     log_normal_inverse_cdf,
     to_model_space_lag_days,
     LagDistributionFit,
@@ -117,19 +120,25 @@ def select_latest_evidence(
 
     Rows with missing anchor_day or retrieved_at are skipped.
     """
-    # Group rows by (anchor_day, slice_key), keep latest retrieved_at per group.
-    best: Dict[tuple, Dict] = {}  # (anchor_day, slice_key) -> row
+    # Group rows by (anchor_day, slice_family_key), keep latest retrieved_at per group.
+    #
+    # CRITICAL (read contract parity):
+    # Snapshot reads match slice_keys by *normalised* slice family (window()/cohort() args stripped),
+    # so the selection policy must also de-duplicate across those same families. Otherwise, historic
+    # argument variants can double-count evidence for the same logical slice.
+    best: Dict[tuple, Dict] = {}  # (anchor_day, slice_family_key) -> row
 
     for row in rows:
         anchor = str(row.get('anchor_day', ''))
         if not anchor:
             continue
         sk = str(row.get('slice_key', ''))
+        sk_norm = normalise_slice_key_for_matching(sk)
         ra = str(row.get('retrieved_at', ''))
         if not ra:
             continue
 
-        key = (anchor, sk)
+        key = (anchor, sk_norm)
         if key not in best or ra > best[key].get('retrieved_at', ''):
             best[key] = row
 
@@ -144,9 +153,12 @@ def select_latest_evidence(
         total_x = sum(_get_x(r) for r in slice_rows)
         total_y = sum(_get_y(r) for r in slice_rows)
 
-        # Weighted-average lag moments (weighted by Y, the converters).
-        w_median_num = 0.0
-        w_median_denom = 0.0
+        # FE parity: when aggregating across MECE slice families for the same anchor_day,
+        # the *median* is a mixture median (not an average of medians).
+        #
+        # FE: aggregateCohortData() uses mixtureLogNormalMedian(comps, weight=k) per day.
+        # BE: replicate by building a lognormal mixture over per-slice (median, mean) moments.
+        mixture_components: List[Dict[str, Any]] = []
         w_mean_num = 0.0
         w_mean_denom = 0.0
         w_onset_num = 0.0
@@ -159,8 +171,11 @@ def select_latest_evidence(
             mn = _positive_float_or_none(r.get('mean_lag_days'))
             onset = _float_or_none(r.get('onset_delta_days'))
             if med is not None:
-                w_median_num += med * y
-                w_median_denom += y
+                mixture_components.append({"weight": float(y), "median_days": float(med), "mean_days": float(mn) if mn is not None else None})
+
+            # FE parity: per-anchor-day mean across slices is conversion-weighted mean of means,
+            # with NO per-slice fallback to median. If no slice has a mean, the day mean is None
+            # and later aggregation across anchor days falls back to the day median.
             if mn is not None:
                 w_mean_num += mn * y
                 w_mean_denom += y
@@ -168,7 +183,7 @@ def select_latest_evidence(
                 w_onset_num += onset * y
                 w_onset_denom += y
 
-        agg_median = (w_median_num / w_median_denom) if w_median_denom > 0 else None
+        agg_median = _mixture_log_normal_quantile(0.5, mixture_components) if mixture_components else None
         agg_mean = (w_mean_num / w_mean_denom) if w_mean_denom > 0 else None
         agg_onset = (w_onset_num / w_onset_denom) if w_onset_denom > 0 else None
         latest_ra = max(str(r.get('retrieved_at', '')) for r in slice_rows)
@@ -189,6 +204,77 @@ def select_latest_evidence(
 # ─────────────────────────────────────────────────────────────
 # Recency-weighted aggregation across anchor days
 # ─────────────────────────────────────────────────────────────
+
+def _mixture_log_normal_quantile(percentile: float, components: List[Dict[str, Any]]) -> Optional[float]:
+    """
+    FE parity: mixture quantiles for MECE union.
+
+    Port of `graph-editor/src/services/lagMixtureAggregationService.ts`.
+
+    Each component is approximated as lognormal via (median, mean) moment fit,
+    and the mixture CDF is the weight-normalised weighted sum of component CDFs.
+
+    components: [{weight, median_days, mean_days?}, ...]
+    """
+    if not (0.0 < percentile < 1.0):
+        return None
+
+    usable = []
+    for c in components:
+        w = _float_or_none(c.get("weight"))
+        med = _positive_float_or_none(c.get("median_days"))
+        if w is None or not (w > 0) or med is None:
+            continue
+        mean = _positive_float_or_none(c.get("mean_days"))
+        usable.append({"w": float(w), "median": float(med), "mean": float(mean) if mean is not None else None})
+
+    if not usable:
+        return None
+
+    if len(usable) == 1 and percentile == 0.5:
+        return usable[0]["median"]
+
+    total_w = sum(u["w"] for u in usable)
+    if not (total_w > 0):
+        return None
+
+    fitted = []
+    for u in usable:
+        # FE parity: quality gate for component fit uses floor(weight) (>=1).
+        # This intentionally forces small components to use default sigma conservatively.
+        k_for_fit = max(1, int(math.floor(u["w"])))
+        fit = fit_lag_distribution(u["median"], u["mean"], k_for_fit)
+        fitted.append({"w": u["w"], "mu": fit.mu, "sigma": fit.sigma, "median": u["median"]})
+
+    min_median = min(f["median"] for f in fitted)
+    max_median = max(f["median"] for f in fitted)
+
+    lo = max(min_median / 100.0, 1e-6)
+    hi = max(max_median * 100.0, lo * 2.0)
+
+    def mixture_cdf(t: float) -> float:
+        s = 0.0
+        for f in fitted:
+            s += f["w"] * log_normal_cdf(t, f["mu"], f["sigma"])
+        return s / total_w
+
+    # Expand hi if needed (rare).
+    for _ in range(8):
+        if mixture_cdf(hi) >= percentile:
+            break
+        hi *= 2.0
+
+    # Binary search.
+    for _ in range(60):
+        mid = (lo + hi) / 2.0
+        cdf = mixture_cdf(mid)
+        if cdf >= percentile:
+            hi = mid
+        else:
+            lo = mid
+
+    return hi
+
 
 def _recency_weight(age_days: float, half_life_days: float) -> float:
     """Exponential decay weight: w = exp(-ln(2) * age / half_life)."""
@@ -214,12 +300,15 @@ def aggregate_evidence(
     reference_datetime: Optional[datetime] = None,
 ) -> tuple:
     """
-    Aggregate evidence rows into a single (median_lag, mean_lag, total_k, onset_delta).
+    Aggregate evidence rows into a single (median_lag, mean_lag, total_k, onset_delta, total_k_recency_weighted).
 
     Uses recency weighting: recent anchor days contribute more.
     Weights are based on Y (converters) * recency_weight.
 
-    Returns: (aggregate_median_lag, aggregate_mean_lag, total_k, aggregate_onset_delta)
+    Returns: (aggregate_median_lag, aggregate_mean_lag, total_k, aggregate_onset_delta, total_k_recency_weighted)
+
+    total_k_recency_weighted is used for the quality gate in fit_lag_distribution
+    (matching FE semantics where totalKForFit = sum(k * recencyWeight)).
     """
     # FE semantics: cohort age is computed as whole days (floor), not fractional.
     # In the FE pipeline, cohort ages are effectively integer day differences between
@@ -242,6 +331,7 @@ def aggregate_evidence(
     w_onset_num = 0.0
     w_onset_denom = 0.0
     total_k = 0.0
+    total_k_recency_weighted = 0.0
 
     for ev in evidence:
         if ev.y <= 0:
@@ -256,20 +346,28 @@ def aggregate_evidence(
             if ev.median_lag_days > 0:
                 w_median_num += ev.median_lag_days * w
                 w_median_denom += w
-        if ev.mean_lag_days is not None:
-            if ev.mean_lag_days > 0:
-                w_mean_num += ev.mean_lag_days * w
-                w_mean_denom += w
+        # FE parity: mean falls back to median when missing/zero.
+        # FE code: `wk * (cohort.mean_lag_days || cohort.median_lag_days || 0)`
+        effective_mean = (
+            ev.mean_lag_days if (ev.mean_lag_days is not None and ev.mean_lag_days > 0)
+            else (ev.median_lag_days if (ev.median_lag_days is not None and ev.median_lag_days > 0) else None)
+        )
+        if effective_mean is not None:
+            w_mean_num += effective_mean * w
+            w_mean_denom += w
         if ev.onset_delta_days is not None:
             w_onset_num += ev.onset_delta_days * w
             w_onset_denom += w
         total_k += ev.y
+        # FE parity: quality gate uses recency-weighted K, not raw sum.
+        # FE code: `sum(c.k * computeRecencyWeight(c.age, RECENCY_HALF_LIFE_DAYS))`
+        total_k_recency_weighted += ev.y * recency_w
 
     agg_median = (w_median_num / w_median_denom) if w_median_denom > 0 else None
     agg_mean = (w_mean_num / w_mean_denom) if w_mean_denom > 0 else None
     agg_onset = (w_onset_num / w_onset_denom) if w_onset_denom > 0 else 0.0
 
-    return agg_median, agg_mean, total_k, agg_onset
+    return agg_median, agg_mean, total_k, agg_onset, total_k_recency_weighted
 
 
 # ─────────────────────────────────────────────────────────────
@@ -282,6 +380,7 @@ def fit_model_from_evidence(
     *,
     t95_constraint: Optional[float] = None,
     onset_override: Optional[float] = None,
+    use_authoritative_t95: bool = False,
     model_trained_at: str = '',
     training_window: Optional[Dict[str, str]] = None,
     settings_signature: Optional[str] = None,
@@ -324,7 +423,7 @@ def fit_model_from_evidence(
         )
 
     # Step 2: Aggregate with recency weighting.
-    agg_median, agg_mean, total_k, agg_onset = aggregate_evidence(
+    agg_median, agg_mean, total_k, agg_onset, total_k_recency_weighted = aggregate_evidence(
         evidence, settings, reference_date, reference_datetime
     )
     if onset_override is not None:
@@ -355,10 +454,12 @@ def fit_model_from_evidence(
     mean_x = to_model_space_lag_days(agg_onset, agg_mean) if agg_mean is not None else None
 
     # Step 4: Fit initial distribution.
+    # FE parity: use recency-weighted K for the quality gate, matching
+    # FE's totalKForFit = sum(c.k * computeRecencyWeight(c.age, halfLife)).
     initial_fit = fit_lag_distribution(
         median_lag=median_x,
         mean_lag=mean_x,
-        total_k=total_k,
+        total_k=total_k_recency_weighted,
         min_fit_converters=settings.min_fit_converters,
         default_sigma=settings.default_sigma,
         min_mean_median_ratio=settings.min_mean_median_ratio,
@@ -382,8 +483,28 @@ def fit_model_from_evidence(
                 sigma = sigma_from_constraint
 
     # Step 6: Derive t95 from final fit.
-    t95_x = log_normal_inverse_cdf(settings.t95_percentile, mu, sigma) if sigma > 0 else 0.0
-    t95_days = (agg_onset or 0.0) + t95_x
+    # FE parity (graph semantics):
+    # - The edge's stored `t95` is the authoritative horizon scalar used for retrieval bounding.
+    # - The FE may preserve/propagate this value independently of the moment fit (especially in
+    #   from-file flows and when onset is unavailable), even when mu/sigma imply a larger t95.
+    #
+    # For parity comparisons, we therefore return the authoritative value when requested.
+    if use_authoritative_t95 and (t95_constraint is not None and math.isfinite(t95_constraint) and t95_constraint > 0):
+        t95_days = float(t95_constraint)
+    else:
+        # Default behaviour: derive t95 from the fit when quality is OK; otherwise fall back to the authoritative t95.
+        if initial_fit.empirical_quality_ok:
+            t95_x = log_normal_inverse_cdf(settings.t95_percentile, mu, sigma) if sigma > 0 else 0.0
+            t95_days = (agg_onset or 0.0) + t95_x
+        else:
+            if (
+                t95_constraint is not None
+                and math.isfinite(t95_constraint)
+                and t95_constraint > 0
+            ):
+                t95_days = t95_constraint
+            else:
+                t95_days = 0.0
 
     return FitResult(
         mu=mu,
@@ -392,7 +513,7 @@ def fit_model_from_evidence(
         t95_days=t95_days,
         onset_delta_days=agg_onset or 0.0,
         quality_ok=initial_fit.empirical_quality_ok,
-        total_k=total_k,
+        total_k=total_k_recency_weighted,
         quality_failure_reason=initial_fit.quality_failure_reason,
         training_window=training_window,
         settings_signature=settings_signature,

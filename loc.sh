@@ -7,6 +7,15 @@ EXTS=(js jsx ts tsx)
 # Directories (by name) to exclude everywhere
 EXCL_DIRS=(node_modules dist build .git coverage .next out .turbo .cache)
 
+# Append private repo dirs from .private-repos.conf (if present)
+CONF="$(cd "$(dirname "$0")" && pwd)/.private-repos.conf"
+if [ -f "$CONF" ]; then
+  _data_dir=$(grep '^DATA_REPO_DIR=' "$CONF" | cut -d= -f2- | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+  _mono_dir=$(grep '^MONOREPO_DIR=' "$CONF" | cut -d= -f2- | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+  [ -n "$_data_dir" ] && EXCL_DIRS+=("$_data_dir")
+  [ -n "$_mono_dir" ] && EXCL_DIRS+=("$_mono_dir")
+fi
+
 echo "Counting source lines of code (excluding blanks/comments) in $(pwd)..."
 echo
 

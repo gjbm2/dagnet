@@ -13,7 +13,7 @@
  */
 
 import React, { useState, useMemo, useCallback } from 'react';
-import { X, Copy, Check, Share2, LayoutDashboard, Layers, Zap } from 'lucide-react';
+import { X, Copy, Check, Share2, LayoutDashboard, Layers, Zap, Link } from 'lucide-react';
 import { useTabContext, fileRegistry } from '../../contexts/TabContext';
 import { shareLinkService, extractIdentityFromFileSource, resolveShareSecretForLinkGeneration } from '../../services/shareLinkService';
 import { sessionLogService } from '../../services/sessionLogService';
@@ -39,8 +39,8 @@ export function ShareLinkModal({ isOpen, onClose }: ShareLinkModalProps) {
   // Modal state
   const [selectedTabIds, setSelectedTabIds] = useState<Set<string>>(new Set());
   const [dashboardMode, setDashboardMode] = useState(true);
-  // Live share is the default: it’s usually what users want (small links + always-fresh).
-  const [liveMode, setLiveMode] = useState(true);
+  // Link type: 'working' (simple ?graph=&branch=), 'live' (fetch from GitHub), 'static' (embedded snapshot)
+  const [linkType, setLinkType] = useState<'working' | 'live' | 'static'>('working');
   const [includeScenarios, setIncludeScenarios] = useState(true);
   const [activeBundleTabId, setActiveBundleTabId] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
@@ -126,8 +126,32 @@ export function ShareLinkModal({ isOpen, onClose }: ShareLinkModalProps) {
     if (selectedTabs.length === 0) return;
     
     try {
+      // --- Working link: simple ?graph=&branch= URL ---
+      if (linkType === 'working') {
+        const selectedTab = selectedTabs[0];
+        const file = fileRegistry.getFile(selectedTab.fileId);
+        const identity = extractIdentityFromFileSource(file?.source);
+        const branch = (identity as any)?.branch;
+        const graph = (identity as any)?.graph;
+        if (!branch || !graph) {
+          toast.error('No branch/graph identity available for working link');
+          return;
+        }
+        const base = `${window.location.origin}${window.location.pathname}`;
+        const url = `${base}?graph=${encodeURIComponent(graph)}&branch=${encodeURIComponent(branch)}`;
+        await navigator.clipboard.writeText(url);
+        setCopied(true);
+        setTimeout(() => setCopied(false), 2000);
+        sessionLogService.success('session', 'SHARE_WORKING_LINK_COPIED', `Working link copied: ${graph} @ ${branch}`);
+        toast.success('Working link copied!');
+        return;
+      }
+
+      // --- Live and Static share links ---
+      const isLive = linkType === 'live';
+
       if (selectedTabs.length === 1) {
-        // Single tab share - use simple format
+        // Single tab share
         const selectedTab = selectedTabs[0];
         const file = fileRegistry.getFile(selectedTab.fileId);
         if (!file?.data) {
@@ -138,7 +162,7 @@ export function ShareLinkModal({ isOpen, onClose }: ShareLinkModalProps) {
         const identity = extractIdentityFromFileSource(file.source);
         let url: string;
 
-        if (liveMode) {
+        if (isLive) {
           const secret = resolveShareSecretForLinkGeneration();
           if (!secret) {
             toast.error('No share secret available (set SHARE_SECRET or open with ?secret=…)');
@@ -156,7 +180,6 @@ export function ShareLinkModal({ isOpen, onClose }: ShareLinkModalProps) {
             }
             url = res.url;
           } else {
-            // For live graph shares, prefer a bundle payload so we can carry scenario DSLs + colours.
             const res = await shareLinkService.buildLiveBundleShareUrlFromTabs({
               tabIds: [selectedTab.id],
               dashboardMode,
@@ -201,16 +224,16 @@ export function ShareLinkModal({ isOpen, onClose }: ShareLinkModalProps) {
         
         sessionLogService.success(
           'session',
-          liveMode ? 'SHARE_LIVE_LINK_COPIED' : 'SHARE_LINK_COPIED',
-          `${liveMode ? 'Live' : 'Static'} share link copied for: ${selectedTab.title}`
+          isLive ? 'SHARE_LIVE_LINK_COPIED' : 'SHARE_LINK_COPIED',
+          `${isLive ? 'Live' : 'Static'} share link copied for: ${selectedTab.title}`
         );
         
-        toast.success(`${liveMode ? 'Live' : 'Static'} share link copied to clipboard!`);
+        toast.success(`${isLive ? 'Live' : 'Static'} share link copied to clipboard!`);
       } else {
         // Multi-tab bundle share
         let url: string | null = null;
 
-        if (liveMode) {
+        if (isLive) {
           const secret = resolveShareSecretForLinkGeneration();
           if (!secret) {
             toast.error('No share secret available (set SHARE_SECRET or open with ?secret=…)');
@@ -261,7 +284,7 @@ export function ShareLinkModal({ isOpen, onClose }: ShareLinkModalProps) {
       console.error('Failed to create share link:', error);
       toast.error('Failed to create share link');
     }
-  }, [selectedTabIds, shareableTabs, dashboardMode, liveMode, includeScenarios, activeBundleTabId, activeTabId]);
+  }, [selectedTabIds, shareableTabs, dashboardMode, linkType, includeScenarios, activeBundleTabId, activeTabId]);
   
   if (!isOpen) return null;
   
@@ -337,48 +360,80 @@ export function ShareLinkModal({ isOpen, onClose }: ShareLinkModalProps) {
             </div>
           </div>
           
-          {/* Options */}
+          {/* Link type */}
           <div className="share-link-modal__section">
-            <span className="share-link-modal__section-title">Options</span>
+            <span className="share-link-modal__section-title">Link type</span>
             
             <label className="share-link-modal__option">
               <input
-                type="checkbox"
-                checked={dashboardMode}
-                onChange={e => setDashboardMode(e.target.checked)}
+                type="radio"
+                name="link-type"
+                checked={linkType === 'working'}
+                onChange={() => setLinkType('working')}
               />
-              <LayoutDashboard size={16} />
-              <span>Open in dashboard mode</span>
+              <Link size={16} />
+              <span>Working link (opens graph + branch in app)</span>
             </label>
-
+            
             <label className="share-link-modal__option">
               <input
-                type="checkbox"
-                checked={liveMode}
-                onChange={e => setLiveMode(e.target.checked)}
+                type="radio"
+                name="link-type"
+                checked={linkType === 'live'}
+                onChange={() => setLinkType('live')}
               />
               <Zap size={16} />
-              <span>Live mode (fetch latest from GitHub)</span>
+              <span>Live link (fetch latest from GitHub)</span>
             </label>
             
             <label className="share-link-modal__option">
               <input
-                type="checkbox"
-                checked={includeScenarios}
-                onChange={e => setIncludeScenarios(e.target.checked)}
+                type="radio"
+                name="link-type"
+                checked={linkType === 'static'}
+                onChange={() => setLinkType('static')}
               />
-              <Layers size={16} />
-              <span>Include scenarios</span>
+              <Share2 size={16} />
+              <span>Static snapshot (data embedded in URL)</span>
             </label>
           </div>
+
+          {/* Options (only for live/static) */}
+          {linkType !== 'working' && (
+            <div className="share-link-modal__section">
+              <span className="share-link-modal__section-title">Options</span>
+              
+              <label className="share-link-modal__option">
+                <input
+                  type="checkbox"
+                  checked={dashboardMode}
+                  onChange={e => setDashboardMode(e.target.checked)}
+                />
+                <LayoutDashboard size={16} />
+                <span>Open in dashboard mode</span>
+              </label>
+              
+              <label className="share-link-modal__option">
+                <input
+                  type="checkbox"
+                  checked={includeScenarios}
+                  onChange={e => setIncludeScenarios(e.target.checked)}
+                />
+                <Layers size={16} />
+                <span>Include scenarios</span>
+              </label>
+            </div>
+          )}
           
           {/* Info note */}
           <div className="share-link-modal__note">
             <strong>Note:</strong>{' '}
-            {liveMode
-              ? 'This creates a live link. Recipients will fetch the latest from GitHub.'
-              : 'This creates a static snapshot link. Recipients can view but not edit.'}
-            {selectedTabIds.size > 1 && (
+            {linkType === 'working'
+              ? 'Simple URL that opens the graph and switches to the correct branch. Recipients need the app running with repo access.'
+              : linkType === 'live'
+              ? 'Live link that fetches the latest from GitHub. Recipients need credentials.'
+              : 'Static snapshot embedded in the URL. No repo access needed, but the link may be very long.'}
+            {linkType !== 'working' && selectedTabIds.size > 1 && (
               <span className="share-link-modal__info">
                 {' '}({selectedTabIds.size} tabs will be bundled)
               </span>

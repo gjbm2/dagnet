@@ -34,6 +34,15 @@ export interface RecomputeSubject {
     slot?: string;
     conditionalIndex?: number;
   };
+  /**
+   * The onset the FE actually used for fitting mu/sigma.
+   *
+   * Derived from: median_lag_days - exp(mu).
+   * The BE must use this value (not the graph edge's onset_delta_days, which
+   * may be stale from a previous topo pass or a user override that the FE
+   * fitting intentionally does not consume).
+   */
+  onset_delta_days?: number;
 }
 
 export interface RecomputeResult {
@@ -234,6 +243,26 @@ export async function runParityComparison(args: {
       `source=${uncontextedCohortValue ? 'cohort' : cohortValues.length > 0 ? 'cohort_mece' : windowValue ? 'window' : 'none'}`
     );
 
+    // Determine the onset the FE actually used for fitting mu/sigma.
+    //
+    // The FE topo pass computes onset from window() slice histogram data.
+    // If window slices have onset → it's written to the edge → we read it.
+    // If no window slices have onset → the FE used 0 → the edge may have
+    // a stale value from a previous pass, so we must NOT read it blindly.
+    //
+    // Check the same source the topo pass checks: do the parameter file's
+    // window() slices have latency.onset_delta_days?
+    const windowSlicesWithOnset = values.filter((v: any) => {
+      const dsl = String(v.sliceDSL ?? '');
+      return dsl.includes('window(') && typeof v.latency?.onset_delta_days === 'number';
+    });
+    const feFittingOnset =
+      windowSlicesWithOnset.length > 0
+        ? (typeof lat.onset_delta_days === 'number' && Number.isFinite(lat.onset_delta_days) && lat.onset_delta_days >= 0
+            ? lat.onset_delta_days
+            : 0)
+        : 0;  // No window onset data → FE used 0
+
     subjects.push({
       subject_id: edgeUuid,
       param_id: `${workspace.repository}-${workspace.branch}-${paramId}`,
@@ -242,6 +271,7 @@ export async function runParityComparison(args: {
       anchor_from: isoFrom,
       anchor_to: isoTo,
       target: { targetId: edgeUuid },
+      onset_delta_days: feFittingOnset,
     });
   }
 
@@ -278,7 +308,15 @@ export async function runParityComparison(args: {
   }
 
   // Compare.
-  compareModelFits(feModels, response.subjects);
+  // Attach the exact request-subject used for each BE result so mismatch logs can
+  // include core_hash/slice_keys/anchor range (critical for debugging selection bugs).
+  const subjById = new Map<string, RecomputeSubject>();
+  for (const s of subjects) subjById.set(s.subject_id, s);
+  const beWithReq = response.subjects.map((r: any) => ({
+    ...r,
+    __parity_request_subject: subjById.get(r.subject_id),
+  }));
+  compareModelFits(feModels, beWithReq);
 
   sessionLogService.info(
     'graph', 'FORECASTING_PARITY_DONE',

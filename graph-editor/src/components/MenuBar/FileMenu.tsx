@@ -107,8 +107,10 @@ export function FileMenu() {
     canShare,
     canShareStatic,
     canShareLive,
+    canCopyWorkingLink,
     copyStaticShareLink,
     copyLiveShareLink,
+    copyWorkingLink,
     liveShareUnavailableReason,
   } = useShareLink(activeTab?.fileId);
   
@@ -687,6 +689,13 @@ export function FileMenu() {
                     disabled={!activeTab}
                   >
                     Download as File...
+                  </Menubar.Item>
+                  <Menubar.Item 
+                    className="menubar-item" 
+                    onSelect={() => copyWorkingLink()}
+                    disabled={!canCopyWorkingLink}
+                  >
+                    Copy Working Link
                   </Menubar.Item>
                   <Menubar.Item 
                     className="menubar-item" 

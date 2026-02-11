@@ -10,6 +10,8 @@ import { useViewHistory } from '../hooks/useViewHistory';
 import { useOpenHistorical } from '../hooks/useOpenHistorical';
 import { useShareLink } from '../hooks/useShareLink';
 import { useManageSnapshots } from '../hooks/useManageSnapshots';
+import { usePullFile } from '../hooks/usePullFile';
+import { usePullAll } from '../hooks/usePullAll';
 
 interface TabContextMenuProps {
   tabId: string;
@@ -74,10 +76,16 @@ export function TabContextMenu({ tabId, x, y, onClose, onRequestCommit }: TabCon
     canShare,
     canShareStatic,
     canShareLive,
+    canCopyWorkingLink,
     copyStaticShareLink,
     copyLiveShareLink,
+    copyWorkingLink,
     liveShareUnavailableReason,
   } = useShareLink(tab?.fileId);
+
+  // Pull hooks — all logic including conflict modal is in the hooks
+  const { canPull, pullFile } = usePullFile(tab?.fileId);
+  const { pullAll, conflictModal: pullAllConflictModal } = usePullAll();
 
   // Snapshot Manager hook (parameters and graphs)
   const tabFileType = tab?.fileId.startsWith('parameter-') ? 'parameter'
@@ -156,17 +164,37 @@ export function TabContextMenu({ tabId, x, y, onClose, onRequestCommit }: TabCon
       });
     }
     
-    // Git operations - only show if file is committable (never for temporary files)
-    if (!isTemporaryFile && fileRegistry.isFileCommittableById(tab.fileId)) {
+    // Git operations (never for temporary files)
+    if (!isTemporaryFile) {
       items.push({ label: '', onClick: () => {}, divider: true });
+
+      // Pull
+      if (canPull) {
+        items.push({
+          label: 'Pull Latest',
+          onClick: async () => {
+            await pullFile();
+            onClose();
+          }
+        });
+      }
       items.push({
-        label: 'Commit This File...',
-        onClick: () => {
-          onRequestCommit([tab.fileId]);
+        label: 'Pull All Latest',
+        onClick: async () => {
+          await pullAll();
+          onClose();
         }
       });
-    }
-    if (!isTemporaryFile) {
+
+      // Commit
+      if (fileRegistry.isFileCommittableById(tab.fileId)) {
+        items.push({
+          label: 'Commit This File...',
+          onClick: () => {
+            onRequestCommit([tab.fileId]);
+          }
+        });
+      }
       items.push({
         label: 'Commit All Changes...',
         onClick: () => {
@@ -273,6 +301,15 @@ export function TabContextMenu({ tabId, x, y, onClose, onRequestCommit }: TabCon
     
     // Share links (for graphs and charts only)
     if (canShare) {
+      if (canCopyWorkingLink) {
+        items.push({
+          label: 'Copy Working Link',
+          onClick: async () => {
+            await copyWorkingLink();
+            onClose();
+          }
+        });
+      }
       if (canShareStatic) {
         items.push({
           label: 'Copy Static Share Link',
@@ -302,7 +339,7 @@ export function TabContextMenu({ tabId, x, y, onClose, onRequestCommit }: TabCon
     });
     
     return items;
-  }, [tab, tabId, tabs, operations, isTemporaryFile, canViewHistory, showHistoryModal, canOpenHistorical, isHistoricalLoading, historicalDateItems, loadHistoricalDates, selectHistoricalCommit, canManageSnapshots, openSnapshotManager, canShare, canShareStatic, canShareLive, copyStaticShareLink, copyLiveShareLink, liveShareUnavailableReason, onClose]);
+  }, [tab, tabId, tabs, operations, isTemporaryFile, canPull, pullFile, pullAll, canViewHistory, showHistoryModal, canOpenHistorical, isHistoricalLoading, historicalDateItems, loadHistoricalDates, selectHistoricalCommit, canManageSnapshots, openSnapshotManager, canShare, canShareStatic, canShareLive, canCopyWorkingLink, copyStaticShareLink, copyLiveShareLink, copyWorkingLink, liveShareUnavailableReason, onClose, onRequestCommit]);
   
   const handleDuplicate = async (name: string, type: ObjectType) => {
     if (!tab) return;
@@ -338,6 +375,9 @@ export function TabContextMenu({ tabId, x, y, onClose, onRequestCommit }: TabCon
         />
       )}
       
+      {/* Pull all conflict modal — managed by usePullAll hook */}
+      {pullAllConflictModal}
+
       {/* History Modal */}
       <HistoryModal
         isOpen={isHistoryModalOpen}

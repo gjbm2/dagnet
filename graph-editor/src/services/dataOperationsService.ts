@@ -66,6 +66,11 @@ import { isolateSlice, extractSliceDimensions, hasContextAny } from './sliceIsol
 import { resolveMECEPartitionForImplicitUncontexted, resolveMECEPartitionForImplicitUncontextedSync } from './meceSliceService';
 import { findBestMECEPartitionCandidateSync, parameterValueRecencyMs, selectImplicitUncontextedSliceSetSync } from './meceSliceService';
 import { sessionLogService } from './sessionLogService';
+
+/** Python API base URL (same pattern as snapshotWriteService / graphComputeClient). */
+const PYTHON_API_BASE = import.meta.env.DEV
+  ? (import.meta.env.VITE_PYTHON_API_URL || 'http://localhost:9000')  // Local Python dev server
+  : '';                                                                 // Vercel serverless (same origin)
 import { isSignatureCheckingEnabled, isSignatureWritingEnabled } from './signaturePolicyService';
 import { parseSignature, serialiseSignature } from './signatureMatchingService';
 import { forecastingSettingsService } from './forecastingSettingsService';
@@ -359,7 +364,7 @@ interface CompileExcludeResult {
 async function compileExcludeQuery(queryString: string, graph: any): Promise<{ compiled: string; wasCompiled: boolean; error?: string }> {
   try {
     // Call Python API endpoint to compile the query
-    const response = await fetch('/api/compile-exclude', {
+    const response = await fetch(`${PYTHON_API_BASE}/api/compile-exclude`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({

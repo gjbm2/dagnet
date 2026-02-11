@@ -135,8 +135,10 @@ export function NavigatorItemContextMenu({ item, x, y, onClose }: NavigatorItemC
     canShare,
     canShareStatic,
     canShareLive,
+    canCopyWorkingLink,
     copyStaticShareLink,
     copyLiveShareLink,
+    copyWorkingLink,
     liveShareUnavailableReason,
   } = useShareLink(fileId);
   
@@ -363,6 +365,15 @@ export function NavigatorItemContextMenu({ item, x, y, onClose }: NavigatorItemC
 
   // Share links (for graphs and charts)
   if (canShare) {
+    if (canCopyWorkingLink) {
+      menuItems.push({
+        label: 'Copy Working Link',
+        onClick: async () => {
+          await copyWorkingLink();
+          onClose();
+        }
+      });
+    }
     if (canShareStatic) {
       menuItems.push({
         label: 'Copy Static Share Link',

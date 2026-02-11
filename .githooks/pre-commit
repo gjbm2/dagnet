@@ -148,6 +148,43 @@ if [ -n "$DIFF_TO_SCAN" ]; then
 
 fi
 
+# ─── Check 3: No leaked private repo names in staged diffs ───────────────────
+#
+# The literal private repo directory names must not appear in committed files.
+# We scan staged diffs (added lines only) for these names, excluding paths
+# that legitimately reference them (this hook, setup script, .gitignore).
+
+LEAK_DIFF=$(git diff --cached --unified=0 \
+  -- . \
+  ':!.githooks/' \
+  ':!scripts/setup-workspace.sh' \
+  ':!.gitignore' \
+  ':!graph-editor/public/param-schemas/' \
+  2>/dev/null || true)
+
+if [ -n "$LEAK_DIFF" ]; then
+  for DIR_NAME in "$DATA_REPO_DIR" "$MONOREPO_DIR"; do
+    LEAKED_NAMES=$(echo "$LEAK_DIFF" | grep -n "^\+.*$(escape_ere "$DIR_NAME")" || true)
+    if [ -n "$LEAKED_NAMES" ]; then
+      echo ""
+      echo "╔══════════════════════════════════════════════════════════════════╗"
+      echo "║  BLOCKED: Private repo name leaked in staged diff              ║"
+      echo "╚══════════════════════════════════════════════════════════════════╝"
+      echo ""
+      echo "The literal directory name '${DIR_NAME}' appears in staged changes."
+      echo "Private repo names must not be committed to the public dagnet repo."
+      echo ""
+      echo "Matches:"
+      echo "$LEAKED_NAMES" | head -5
+      echo ""
+      echo "Use .private-repos.conf at runtime, or refer to repos as"
+      echo "'the data repo' / 'the monorepo' (DATA_REPO_DIR / MONOREPO_DIR)."
+      echo ""
+      ERRORS=$((ERRORS + 1))
+    fi
+  done
+fi
+
 # ─── Result ───────────────────────────────────────────────────────────────────
 
 if [ "$ERRORS" -gt 0 ]; then

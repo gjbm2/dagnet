@@ -18,7 +18,7 @@ A web-based visual editor for creating and analyzing directed acyclic graphs (DA
 
 2. **(Optional) Clone private context repos into this workspace (since 10-Feb-26)**
 
-DagNet can be used alongside two private repos cloned into the workspace root (for reference and graph development). These repos are **never** committed to this public repo: they are git-excluded via `.git/info/exclude` and protected by a pre-commit leak guard. This workflow applies **since 10-Feb-26**.
+DagNet can be used alongside two private repos cloned into the workspace root (for reference and graph development). These repos are **never** committed to this public repo: they are git-excluded via `.git/info/exclude` and `.gitignore`, and protected by a pre-commit leak guard. This workflow applies **since 10-Feb-26**.
 
 - Edit `.private-repos.conf` (repo root) and set the two directory names (`DATA_REPO_DIR`, `MONOREPO_DIR`).
 - Clone the private repos into those directories (ask a team member for the repo URLs).
@@ -31,9 +31,15 @@ bash scripts/setup-workspace.sh
 This script is safe to run repeatedly. It will:
 - Add the private directories to `.git/info/exclude` (git ignores them, Cursor can still see them)
 - Activate the pre-commit hook (`core.hooksPath=.githooks`)
+- Verify `.private-repos.conf` itself is gitignored
+- Scan tracked files for leaked private repo directory names
 - Verify both exclusions and hook activation
 
+**Confidentiality**: The literal directory names of the private repos are confidential and must never appear in tracked files, commit messages, documentation, or code comments. Always refer to them as "the data repo" / "the monorepo" or by their config variable names (`DATA_REPO_DIR` / `MONOREPO_DIR`). The setup script checks for this automatically.
+
 Graph-development playbooks and scripts live in the private data repo under `graph-ops/`.
+
+**Environment files**: `graph-editor/env.local.template` and `graph-editor/env.production` contain private repo names and credential placeholders. They are gitignored and must never be committed. To set up your local environment, copy `graph-editor/.env.example` to `graph-editor/.env.local` and fill in your own values.
 
 3. **Configure environment variables**
    ```bash

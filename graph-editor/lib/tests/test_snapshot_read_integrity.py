@@ -449,8 +449,9 @@ class TestReadIntegrity:
         - supports anchor_day scoping
         """
         pid = f'{TEST_PREFIX}param-retrievals'
-        sig_a = '{"c":"sig-A","x":{}}'
-        sig_b = '{"c":"sig-B","x":{}}'
+        # Use signatures unique to this test to avoid collisions in shared DBs.
+        sig_a = f'{{"c":"{TEST_PREFIX}ri007-sig-A","x":{{}}}}'
+        sig_b = f'{{"c":"{TEST_PREFIX}ri007-sig-B","x":{{}}}}'
         hash_a = short_core_hash_from_canonical_signature(sig_a)
         hash_b = short_core_hash_from_canonical_signature(sig_b)
 
@@ -515,8 +516,10 @@ class TestReadIntegrity:
         - With include_equivalents=True, an equivalence link expands matching to the closure.
         """
         pid = f'{TEST_PREFIX}param-eq'
-        sig_a = '{"c":"eq-A","x":{}}'
-        sig_b = '{"c":"eq-B","x":{}}'
+        # Use unique signatures to avoid collisions in shared DBs now that core_hash reads
+        # are not bucketed by param_id.
+        sig_a = f'{{"c":"{TEST_PREFIX}eq-A","x":{{}}}}'
+        sig_b = f'{{"c":"{TEST_PREFIX}eq-B","x":{{}}}}'
         hash_a = short_core_hash_from_canonical_signature(sig_a)
         hash_b = short_core_hash_from_canonical_signature(sig_b)
 
@@ -597,8 +600,8 @@ class TestReadIntegrity:
         """
         pid_a = f'{TEST_PREFIX}param-eq-x-a'
         pid_b = f'{TEST_PREFIX}param-eq-x-b'
-        sig_a = '{"c":"eq-x-A","x":{}}'
-        sig_b = '{"c":"eq-x-B","x":{}}'
+        sig_a = f'{{"c":"{TEST_PREFIX}eq-x-A","x":{{}}}}'
+        sig_b = f'{{"c":"{TEST_PREFIX}eq-x-B","x":{{}}}}'
         hash_a = short_core_hash_from_canonical_signature(sig_a)
         hash_b = short_core_hash_from_canonical_signature(sig_b)
 
@@ -661,8 +664,8 @@ class TestReadIntegrity:
         - With include_equivalents=True, linked signatures are included.
         """
         pid = f'{TEST_PREFIX}param-eq-full'
-        sig_a = '{"c":"eq-full-A","x":{}}'
-        sig_b = '{"c":"eq-full-B","x":{}}'
+        sig_a = f'{{"c":"{TEST_PREFIX}eq-full-A","x":{{}}}}'
+        sig_b = f'{{"c":"{TEST_PREFIX}eq-full-B","x":{{}}}}'
         hash_a = short_core_hash_from_canonical_signature(sig_a)
         hash_b = short_core_hash_from_canonical_signature(sig_b)
 
@@ -714,8 +717,8 @@ class TestReadIntegrity:
         RI-009: inventory V2 groups equivalence closure into a signature family.
         """
         pid = f'{TEST_PREFIX}param-inv-eq'
-        sig_a = '{"c":"inv-eq-A","x":{}}'
-        sig_b = '{"c":"inv-eq-B","x":{}}'
+        sig_a = f'{{"c":"{TEST_PREFIX}inv-eq-A","x":{{}}}}'
+        sig_b = f'{{"c":"{TEST_PREFIX}inv-eq-B","x":{{}}}}'
         hash_a = short_core_hash_from_canonical_signature(sig_a)
         hash_b = short_core_hash_from_canonical_signature(sig_b)
 
@@ -1363,16 +1366,18 @@ class TestTierD_EquivalenceResolution:
         assert res["core_hashes"] == ["LONELY"]
 
     def test_d006_cross_param_isolation(self):
-        """Links for param X must not affect resolution for param Y."""
+        """Equivalence links are global: resolution does not depend on param_id."""
         pid_x = f'{TEST_PREFIX}d006-x'
         pid_y = f'{TEST_PREFIX}d006-y'
-        create_equivalence_link(param_id=pid_x, core_hash="A", equivalent_to="B", created_by="pytest", reason="x only")
+        a = f"{TEST_PREFIX}d006-A"
+        b = f"{TEST_PREFIX}d006-B"
+        create_equivalence_link(param_id=pid_x, core_hash=a, equivalent_to=b, created_by="pytest", reason="global link")
 
-        res_x = self._resolve(pid_x, "A")
-        assert set(res_x["core_hashes"]) == {"A", "B"}
+        res_x = self._resolve(pid_x, a)
+        assert set(res_x["core_hashes"]) == {a, b}
 
-        res_y = self._resolve(pid_y, "A")
-        assert set(res_y["core_hashes"]) == {"A"}
+        res_y = self._resolve(pid_y, a)
+        assert set(res_y["core_hashes"]) == {a, b}
 
 
 class TestTierE_NoDisappearance:
@@ -1398,8 +1403,8 @@ class TestTierE_NoDisappearance:
         6. Inventory shows both in one family, current matches.
         """
         pid = f'{TEST_PREFIX}e001'
-        sig_old = '{"c":"old-query","x":{}}'
-        sig_new = '{"c":"new-query-after-trivial-change","x":{}}'
+        sig_old = f'{{"c":"{TEST_PREFIX}old-query","x":{{}}}}'
+        sig_new = f'{{"c":"{TEST_PREFIX}new-query-after-trivial-change","x":{{}}}}'
         hash_old = short_core_hash_from_canonical_signature(sig_old)
         hash_new = short_core_hash_from_canonical_signature(sig_new)
 
@@ -1520,8 +1525,8 @@ class TestCrossParamDataContract:
         """
         pid_a = f'{TEST_PREFIX}resolve-pid-a'
         pid_b = f'{TEST_PREFIX}resolve-pid-b'
-        sig_a = '{"c":"resolve-A","x":{}}'
-        sig_b = '{"c":"resolve-B","x":{}}'
+        sig_a = f'{{"c":"{TEST_PREFIX}resolve-A","x":{{}}}}'
+        sig_b = f'{{"c":"{TEST_PREFIX}resolve-B","x":{{}}}}'
         hash_a = short_core_hash_from_canonical_signature(sig_a)
         hash_b = short_core_hash_from_canonical_signature(sig_b)
 
@@ -1576,8 +1581,8 @@ class TestCrossParamDataContract:
         """
         pid_a = f'{TEST_PREFIX}qs-xp-a'
         pid_b = f'{TEST_PREFIX}qs-xp-b'
-        sig_a = '{"c":"qs-xp-A","x":{}}'
-        sig_b = '{"c":"qs-xp-B","x":{}}'
+        sig_a = f'{{"c":"{TEST_PREFIX}qs-xp-A","x":{{}}}}'
+        sig_b = f'{{"c":"{TEST_PREFIX}qs-xp-B","x":{{}}}}'
         hash_a = short_core_hash_from_canonical_signature(sig_a)
         hash_b = short_core_hash_from_canonical_signature(sig_b)
 
@@ -1631,8 +1636,8 @@ class TestCrossParamDataContract:
         """
         pid_a = f'{TEST_PREFIX}sweep-xp-a'
         pid_b = f'{TEST_PREFIX}sweep-xp-b'
-        sig_a = '{"c":"sweep-xp-A","x":{}}'
-        sig_b = '{"c":"sweep-xp-B","x":{}}'
+        sig_a = f'{{"c":"{TEST_PREFIX}sweep-xp-A","x":{{}}}}'
+        sig_b = f'{{"c":"{TEST_PREFIX}sweep-xp-B","x":{{}}}}'
         hash_a = short_core_hash_from_canonical_signature(sig_a)
         hash_b = short_core_hash_from_canonical_signature(sig_b)
 

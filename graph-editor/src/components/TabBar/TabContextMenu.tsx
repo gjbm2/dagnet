@@ -90,8 +90,10 @@ export function TabContextMenu({ tabId, children }: TabContextMenuProps) {
     canShare,
     canShareStatic,
     canShareLive,
+    canCopyWorkingLink,
     copyStaticShareLink,
     copyLiveShareLink,
+    copyWorkingLink,
     liveShareUnavailableReason,
   } = useShareLink(tab?.fileId);
 
@@ -356,6 +358,14 @@ export function TabContextMenu({ tabId, children }: TabContextMenuProps) {
           {canShare && (
             <>
               <DropdownMenu.Separator className="tab-context-separator" />
+              {canCopyWorkingLink && (
+                <DropdownMenu.Item 
+                  className="tab-context-item" 
+                  onSelect={copyWorkingLink}
+                >
+                  Copy Working Link
+                </DropdownMenu.Item>
+              )}
               {canShareStatic && (
                 <DropdownMenu.Item 
                   className="tab-context-item" 

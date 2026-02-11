@@ -1,6 +1,6 @@
 # Analysis Forecasting: Implementation Plan
 
-**Status**: In progress (10-Feb-26). Phases 1–8 complete. Parallel-run tested and debugged. Code defects 1–2 fixed; defect 3 was not a defect. **Defect 4 (DB coverage gap)** is the remaining blocker — the snapshot DB has fewer anchor days than the parameter file for historical data. Flag is ON for monitoring. Next: close the DB gap (backfill + fix write path).  
+**Status**: In progress (11-Feb-26). Phases 1–8 complete. Parallel-run tested and debugged. Defects 1–2, 5–8 fixed. Defect 3 was not a defect. Defect 4 (DB coverage gap) is minor and not a blocker. **Remaining**: small MECE union aggregation mismatch (mu Δ≈0.016, sigma Δ≈0.037 in multi-slice case). Flag is ON for monitoring. Next: investigate MECE aggregation parity, then soak (Phase 9).  
 **Parent**: `analysis-forecasting.md` (design/architecture)  
 **Approach**: Parallel-run migration (§7.0 of design doc)
 
@@ -283,6 +283,45 @@ The FE fits from 30 recent cohorts. The BE fits from 122+ historical days. Compl
 
 - `src/services/lagRecomputeService.ts` — fixed subject construction (defects 1 + 2), added `parseUKDate` for date conversion, added diagnostic logging to `FORECASTING_PARITY_START`
 - `lib/api_handlers.py` — added diagnostic print for incoming recompute subjects
+
+### Defect 6: BE uses graph-edge onset instead of FE's fitting onset — FIXED (11-Feb-26)
+
+**Root cause**: The FE topo pass derives onset from window() histogram data (`edgeOnsetDeltaDays`). The BE was reading `onset_delta_days` from the graph edge, which can be stale (from a previous topo pass or a user override the FE fitting does not consume). When the edge's onset differs from the FE's fitting onset, mu differs by exactly the onset delta.
+
+**Evidence**: Production log showed FE onset=4, BE onset=0, mu delta=0.33 (explained entirely by the 4-day onset difference).
+
+**Fix**: The parity comparison now sends the FE's onset explicitly per subject. It checks whether the parameter file's window() slices have onset data (mirroring the topo pass logic): if yes, reads `lat.onset_delta_days` from the edge (which the topo pass wrote); if no, sends 0 (matching the FE's fallback). The BE reads onset from the subject request, not from the graph edge.
+
+**Files**: `src/services/lagRecomputeService.ts` (send explicit onset per subject), `lib/api_handlers.py` (read onset from subject, not graph edge)
+
+**Noted FE inconsistency** (not fixed; logged in TODO.md): When the topo pass can't compute onset from window data, it writes `undefined` to `edgeLAGValues`, so the UpdateManager skips the write and the edge retains a stale onset_delta_days that's inconsistent with the mu just computed. This doesn't affect the FE's internal computation (which is self-consistent within the topo pass) but leaves the stored edge in an inconsistent state for downstream consumers.
+
+### Defect 7: BE missing mean-fallback-to-median — FIXED (11-Feb-26)
+
+**Root cause**: The FE's `aggregateLatencyStats` falls back to median when mean is missing/zero: `wk * (cohort.mean_lag_days || cohort.median_lag_days || 0)`. The BE's `aggregate_evidence` only included rows with valid positive mean, with no fallback.
+
+**Fix**: Both `select_latest_evidence` (per-row aggregation across slices) and `aggregate_evidence` (across anchor days) now replicate the FE fallback: when `mean_lag_days` is None/≤0 but `median_lag_days > 0`, use median as the mean contribution.
+
+**Files**: `lib/runner/lag_model_fitter.py`
+
+### Defect 8: BE uses raw total_k for quality gate, FE uses recency-weighted — FIXED (11-Feb-26)
+
+**Root cause**: The FE uses `totalKForFit = sum(c.k * computeRecencyWeight(c.age, halfLife))` for the quality gate in `fitLagDistribution`. The BE was using raw `total_k = sum(ev.y)`. With half-life 30 days and older cohort data, the recency-weighted K can drop below the 30-converter threshold while raw K stays well above. This flips the quality gate, causing completely different t95 computation paths (FE uses authoritative fallback; BE computes from fit).
+
+**Fix**: `aggregate_evidence` now returns `total_k_recency_weighted` alongside raw `total_k`. The recency-weighted value is passed to `fit_lag_distribution` for the quality gate, and used in the `FitResult.total_k` field. Also added quality-gate-aware t95 fallback: when `empirical_quality_ok` is false, the BE uses `t95_constraint` (authoritative) directly instead of computing from the fit, matching FE behaviour.
+
+**Files**: `lib/runner/lag_model_fitter.py`
+
+### Remaining: MECE union aggregation mismatch (11-Feb-26)
+
+Small mu/sigma deltas (mu Δ=0.016, sigma Δ=0.037) persist in the MECE multi-slice test case. Onset and quality-gate fixes resolved the single-slice case fully. The MECE mismatch likely involves how the FE and BE combine data from multiple context slices — further investigation needed.
+
+### Files fixed (11-Feb-26)
+
+- `src/services/lagRecomputeService.ts` — explicit onset per subject (defect 6), `onset_delta_days` added to `RecomputeSubject` interface
+- `lib/api_handlers.py` — read onset from subject request instead of graph edge (defect 6)
+- `lib/runner/lag_model_fitter.py` — mean fallback to median (defect 7), recency-weighted K for quality gate (defect 8), quality-gate-aware t95 fallback (defect 8)
+- `src/services/__tests__/forecastingParity.queryFlow.snapshotDb.integration.test.ts` — load parameter/context files from local data repo via `.private-repos.conf` (replaces non-existent graph-bundles path)
 
 ---
 

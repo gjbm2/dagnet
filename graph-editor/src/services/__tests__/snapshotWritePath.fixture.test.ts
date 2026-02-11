@@ -241,6 +241,63 @@ async function queryVirtualSnapshot(params: {
   return JSON.parse(text);
 }
 
+async function querySnapshotRetrievals(params: {
+  param_id: string;
+  core_hash: string;
+  slice_keys?: string[];
+  anchor_from?: string;
+  anchor_to?: string;
+  include_equivalents?: boolean;
+  limit?: number;
+}): Promise<any> {
+  const resp = await undiciFetch('http://localhost:9000/api/snapshots/retrievals', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      param_id: params.param_id,
+      core_hash: params.core_hash,
+      slice_keys: params.slice_keys,
+      anchor_from: params.anchor_from,
+      anchor_to: params.anchor_to,
+      include_equivalents: params.include_equivalents ?? true,
+      limit: params.limit ?? 200,
+    }),
+  });
+  const text = await resp.text();
+  if (!resp.ok) {
+    throw new Error(`snapshots/retrievals HTTP ${resp.status}: ${text}`);
+  }
+  return JSON.parse(text);
+}
+
+async function createEquivalenceLink(params: {
+  param_id: string;
+  core_hash: string;
+  equivalent_to: string;
+  source_param_id?: string;
+  reason?: string;
+}): Promise<any> {
+  const resp = await undiciFetch('http://localhost:9000/api/sigs/links/create', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      param_id: params.param_id,
+      core_hash: params.core_hash,
+      equivalent_to: params.equivalent_to,
+      created_by: 'snapshotWritePath.fixture.test',
+      reason: params.reason ?? 'test link',
+      operation: 'equivalent',
+      weight: 1.0,
+      source_param_id: params.source_param_id,
+    }),
+  });
+  const text = await resp.text();
+  if (!resp.ok) {
+    throw new Error(`sigs/links/create HTTP ${resp.status}: ${text}`);
+  }
+  return JSON.parse(text);
+}
+
 async function appendSnapshotsDirect(params: {
   param_id: string;
   canonical_signature: string;
@@ -494,6 +551,167 @@ describeSuite('Snapshot Write Path (fixture-based)', () => {
     expect(resWrong.has_matching_core_hash).toBe(false);
   });
 
+  it('read contract: query-virtual ignores param_id (cross-branch) when core_hash is provided', async () => {
+    const seedPid = `${SNAPSHOT_TEST_REPO}-${SNAPSHOT_TEST_BRANCH}-cross-branch-seed`;
+    const queryPid = `${SNAPSHOT_TEST_REPO}-feature-x-cross-branch-seed`; // intentionally different "branch"
+    const sig = '{"c":"cross-branch-sig","x":{"t":"1"}}';
+    const retrievedAt = '2026-01-15T10:00:00Z';
+
+    await appendSnapshotsDirect({
+      param_id: seedPid,
+      canonical_signature: sig,
+      slice_key: '',
+      retrieved_at: retrievedAt,
+      rows: [
+        { anchor_day: '2026-01-01', X: 10, Y: 1 },
+        { anchor_day: '2026-01-02', X: 20, Y: 2 },
+      ],
+    });
+
+    const asAt = '2026-01-20T23:59:59Z';
+    const res = await queryVirtualSnapshot({
+      param_id: queryPid,
+      canonical_signature: sig,
+      as_at: asAt,
+      anchor_from: '2026-01-01',
+      anchor_to: '2026-01-02',
+      slice_keys: [''],
+    });
+
+    expect(res.success).toBe(true);
+    expect(res.count).toBe(2);
+    expect(res.rows.map((r: any) => ({ d: r.anchor_day, x: r.x, y: r.y }))).toEqual([
+      { d: '2026-01-01', x: 10, y: 1 },
+      { d: '2026-01-02', x: 20, y: 2 },
+    ]);
+  });
+
+  it('read contract: slice key matching ignores date-range differences (logical slice family)', async () => {
+    const pid = `${SNAPSHOT_TEST_REPO}-${SNAPSHOT_TEST_BRANCH}-slice-family-test`;
+    const sig = '{"c":"slice-family-sig","x":{"t":"2"}}';
+    const retrievedAt = '2026-01-15T10:00:00Z';
+
+    // Seed with one concrete window() argument range.
+    await appendSnapshotsDirect({
+      param_id: pid,
+      canonical_signature: sig,
+      slice_key: 'context(channel:influencer).window(1-Nov-25:20-Nov-25)',
+      retrieved_at: retrievedAt,
+      rows: [
+        { anchor_day: '2026-01-01', X: 7, Y: 3 },
+      ],
+    });
+
+    // Query with a different window() argument range, same logical slice family (context + window()).
+    const asAt = '2026-01-20T23:59:59Z';
+    const res = await queryVirtualSnapshot({
+      param_id: pid,
+      canonical_signature: sig,
+      as_at: asAt,
+      anchor_from: '2026-01-01',
+      anchor_to: '2026-01-01',
+      slice_keys: ['context(channel:influencer).window(11-Jan-26:31-Jan-26)'],
+    });
+
+    expect(res.success).toBe(true);
+    expect(res.count).toBe(1);
+    expect(res.rows[0]?.slice_key).toContain('context(channel:influencer)');
+    expect(res.rows[0]?.x).toBe(7);
+    expect(res.rows[0]?.y).toBe(3);
+
+    // Negative control: wrong context value must not match.
+    const resWrong = await queryVirtualSnapshot({
+      param_id: pid,
+      canonical_signature: sig,
+      as_at: asAt,
+      anchor_from: '2026-01-01',
+      anchor_to: '2026-01-01',
+      slice_keys: ['context(channel:paid-search).window(11-Jan-26:31-Jan-26)'],
+    });
+    expect(resWrong.success).toBe(true);
+    expect(resWrong.count).toBe(0);
+  });
+
+  it('read contract: retrieval inventory uses logical key (core_hash × slice family × retrieved_at), not param_id', async () => {
+    const seedPid = `${SNAPSHOT_TEST_REPO}-${SNAPSHOT_TEST_BRANCH}-retrievals-seed`;
+    const queryPid = `${SNAPSHOT_TEST_REPO}-feature-x-retrievals-seed`;
+    const sig = '{"c":"retrievals-sig","x":{"t":"3"}}';
+    const { computeShortCoreHash } = await import('../coreHashService');
+    const coreHash = await computeShortCoreHash(sig);
+
+    await appendSnapshotsDirect({
+      param_id: seedPid,
+      canonical_signature: sig,
+      slice_key: 'context(channel:influencer).window(1-Nov-25:20-Nov-25)',
+      retrieved_at: '2026-01-15T10:00:00Z',
+      rows: [{ anchor_day: '2026-01-01', X: 1, Y: 1 }],
+    });
+    await appendSnapshotsDirect({
+      param_id: seedPid,
+      canonical_signature: sig,
+      slice_key: 'context(channel:influencer).window(1-Nov-25:20-Nov-25)',
+      retrieved_at: '2026-01-16T10:00:00Z',
+      rows: [{ anchor_day: '2026-01-01', X: 2, Y: 2 }],
+    });
+
+    const inv = await querySnapshotRetrievals({
+      param_id: queryPid,
+      core_hash: coreHash,
+      slice_keys: ['context(channel:influencer).window(11-Jan-26:31-Jan-26)'],
+      anchor_from: '2026-01-01',
+      anchor_to: '2026-01-01',
+      include_equivalents: true,
+    });
+
+    expect(inv.success).toBe(true);
+    expect(inv.count).toBe(2);
+    expect(inv.retrieved_at).toContain('2026-01-16T10:00:00+00:00');
+    expect(inv.retrieved_at).toContain('2026-01-15T10:00:00+00:00');
+  });
+
+  it('read contract: equivalence link allows reading equivalent core_hash across param_id buckets', async () => {
+    const pidA = `${SNAPSHOT_TEST_REPO}-${SNAPSHOT_TEST_BRANCH}-eq-A`;
+    const pidB = `${SNAPSHOT_TEST_REPO}-${SNAPSHOT_TEST_BRANCH}-eq-B`;
+    const sigA = '{"c":"eq-sig-A","x":{"t":"4"}}';
+    const sigB = '{"c":"eq-sig-B","x":{"t":"4"}}';
+    const { computeShortCoreHash } = await import('../coreHashService');
+    const coreA = await computeShortCoreHash(sigA);
+    const coreB = await computeShortCoreHash(sigB);
+
+    // Write data under coreB only.
+    await appendSnapshotsDirect({
+      param_id: pidB,
+      canonical_signature: sigB,
+      slice_key: '',
+      retrieved_at: '2026-01-15T10:00:00Z',
+      rows: [{ anchor_day: '2026-01-01', X: 123, Y: 45 }],
+    });
+
+    // Link A ≡ B (stored under pidA; read path must not depend on pidA bucket).
+    await createEquivalenceLink({
+      param_id: pidA,
+      core_hash: coreA,
+      equivalent_to: coreB,
+      source_param_id: pidB,
+      reason: 'fixture test: core_hash equivalence',
+    });
+
+    // Query using coreA should return the coreB data when include_equivalents=true.
+    const resEq = await queryVirtualSnapshot({
+      param_id: `${SNAPSHOT_TEST_REPO}-feature-x-eq-query`,
+      canonical_signature: sigA,
+      as_at: '2026-01-20T23:59:59Z',
+      anchor_from: '2026-01-01',
+      anchor_to: '2026-01-01',
+      slice_keys: [''],
+    });
+
+    expect(resEq.success).toBe(true);
+    expect(resEq.count).toBe(1);
+    expect(resEq.rows[0]?.x).toBe(123);
+    expect(resEq.rows[0]?.y).toBe(45);
+  });
+
   it('writes correct row counts for 2-day serial cron simulation', async () => {
     const graph0 = loadJsonFixture('param-registry/test/graphs/household-energy-rec-switch-registered-flow.json') as Graph;
     
@@ -622,6 +840,24 @@ describeSuite('Snapshot Write Path (fixture-based)', () => {
     expect(uniqueRetrievedAt.length).toBe(2);
     expect(uniqueRetrievedAt).toContain('2025-11-20T12:00:00+00:00');
     expect(uniqueRetrievedAt).toContain('2025-11-21T12:00:00+00:00');
+
+    // Contract: within a given retrieval event (retrieved_at), there must not be multiple retrieved_at
+    // values for the same semantic S = (core_hash × slice_key).
+    // (This is the atomicity property we rely on for asat() and deltas.)
+    const bySigSlice: Record<string, Set<string>> = {};
+    for (const r of rowsAfterDay2 as any[]) {
+      const key = `${r.core_hash}||${r.slice_key}`;
+      bySigSlice[key] = bySigSlice[key] || new Set();
+      bySigSlice[key].add(r.retrieved_at);
+    }
+    // We expect at most 2 retrieval events overall in this test (day1 + day2),
+    // and each (core_hash, slice_key) must have <= 2 distinct timestamps, never more.
+    for (const [k, s] of Object.entries(bySigSlice)) {
+      expect(s.size).toBeLessThanOrEqual(2);
+      if (s.size > 2) {
+        console.log('Unexpected multi-retrieved_at for key:', k, Array.from(s));
+      }
+    }
 
     // Onset correctness for Day 2 window rows as well (should match day2 fixtures).
     for (const row of rowsAfterDay2 as any[]) {

@@ -1,6 +1,12 @@
 # TODO
 
 
+- **FE defect: topo pass leaves stale `onset_delta_days` on edge when window() slices lack onset data** (11-Feb-26)
+  - The topo pass computes `edgeOnsetDeltaDays` from window() histogram data. When no window slices have onset, it's `undefined`. The topo pass fits mu with onset=0 but writes `onset_delta_days: undefined` to `edgeLAGValues`, so the UpdateManager skips the write and the edge retains whatever previous value it had (e.g. 3 from a prior run). The edge then has mu computed in one coordinate system (onset=0) and `onset_delta_days` from a different one (onset=3). Any downstream consumer of the stored mu+onset pair (offline completeness, file sync, parity comparison) gets wrong results. Fix: write `edgeOnsetDeltaDays ?? 0` so the edge is always self-consistent with the mu the topo pass just computed. The `_overridden` flag in UpdateManager still protects user-set values.
+  - **Location**: `statisticalEnhancementService.ts` line ~2484, `onset_delta_days: edgeOnsetDeltaDays` → `onset_delta_days: edgeOnsetDeltaDays ?? 0`
+
+
+
 - ## Snapshot DB — CRITICAL missing integration vs design (2-Feb-26)
 -
 - **Design intent (explicit):** `docs/current/project-db/completed/snapshot-db-design.md` §2  

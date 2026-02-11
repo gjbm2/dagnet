@@ -1,3 +1,6 @@
+# Private repo workspace config (contains local directory names)
+.private-repos.conf
+
 # Dependencies
 node_modules/
 */node_modules/
@@ -36,6 +39,10 @@ MANIFEST
 .env.production.local
 .env.amplitude.local
 .env.git.local
+
+# Environment templates and production env (contain private repo names / credentials)
+graph-editor/env.local.template
+graph-editor/env.production
 
 # Build outputs
 dist/

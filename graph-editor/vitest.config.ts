@@ -31,8 +31,8 @@ export default defineConfig({
     
     // MERGED: Support both old and new test locations
     setupFiles: [
-      './src/test/setup.ts',  // Original location
-      './tests/setup.ts'       // New comprehensive test suite
+      path.resolve(__dirname, './src/test/setup.ts'),  // Original location
+      path.resolve(__dirname, './tests/setup.ts')      // New comprehensive test suite
     ],
     
     // MERGED: Include both old and new test patterns

@@ -106,7 +106,7 @@ class TestAggregateEvidence:
     def test_single_anchor_day(self):
         rows = [_row('2026-01-01', 100, 30, median_lag=5.0, mean_lag=7.0)]
         ev = select_latest_evidence(rows)
-        med, mean, k, onset = aggregate_evidence(ev, DEFAULTS)
+        med, mean, k, onset, k_rw = aggregate_evidence(ev, DEFAULTS)
         assert med == pytest.approx(5.0)
         assert mean == pytest.approx(7.0)
         assert k == 30
@@ -119,14 +119,14 @@ class TestAggregateEvidence:
         ]
         ev = select_latest_evidence(rows)
         # With reference_date = 2026-02-01, the Jan row is 31 days old (half-life 30d).
-        med, mean, k, _ = aggregate_evidence(ev, DEFAULTS, reference_date=date(2026, 2, 1))
+        med, mean, k, _, k_rw = aggregate_evidence(ev, DEFAULTS, reference_date=date(2026, 2, 1))
         # The Feb row has weight 1.0, Jan row has weight ~0.5.
         # Weighted median should be closer to 9.0 than to 3.0.
         assert med > 6.0, f"Expected recency-weighted median > 6.0, got {med}"
         assert k == 100
 
     def test_no_evidence(self):
-        med, mean, k, onset = aggregate_evidence([], DEFAULTS)
+        med, mean, k, onset, k_rw = aggregate_evidence([], DEFAULTS)
         assert med is None
         assert mean is None
         assert k == 0
@@ -146,7 +146,9 @@ class TestFitModelFromEvidence:
         ]
         result = fit_model_from_evidence(rows, DEFAULTS, model_trained_at='10-Feb-26')
         assert result.quality_ok
-        assert result.total_k == 400
+        # FE parity: FitResult.total_k reflects the recency-weighted converter count
+        # used for the quality gate (not raw ΣY).
+        assert result.total_k == pytest.approx(361.2945514930412, rel=1e-9)
         assert result.mu > 0
         assert result.sigma > 0
         assert result.t95_days > 0
@@ -167,7 +169,7 @@ class TestFitModelFromEvidence:
         assert 'No evidence' in (result.quality_failure_reason or '')
 
     def test_missing_mean_uses_default_sigma(self):
-        """When mean_lag is None, fit uses default sigma."""
+        """When mean_lag is None, FE aggregation falls back mean to median, yielding σ=0 (degenerate lognormal)."""
         rows = [
             _row(f'2026-01-{d:02d}', 100, 40, median_lag=5.0, mean_lag=None)
             for d in range(1, 11)
@@ -177,7 +179,7 @@ class TestFitModelFromEvidence:
             r['mean_lag_days'] = None
         result = fit_model_from_evidence(rows, DEFAULTS)
         assert result.quality_ok
-        assert result.sigma == DEFAULTS.default_sigma
+        assert result.sigma == pytest.approx(0.0)
 
     def test_t95_constraint_widens_sigma(self):
         """Authoritative t95 > moment-fit t95 should widen sigma."""

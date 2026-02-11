@@ -16,6 +16,7 @@ import { MenuBar } from './components/MenuBar';
 import { NavigatorContent } from './components/Navigator';
 import { TabContextMenu } from './components/TabContextMenu';
 import { CommitModal } from './components/CommitModal';
+import { SwitchBranchModal } from './components/modals/SwitchBranchModal';
 import { gitService } from './services/gitService';
 import { getEditorComponent } from './components/editors';
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
@@ -471,6 +472,24 @@ function MainAppShellContent() {
   // Tab context menu state
   const [contextMenu, setContextMenu] = useState<{ tabId: string; x: number; y: number } | null>(null);
   
+  // URL-driven branch switch modal state
+  const [urlBranchSwitch, setUrlBranchSwitch] = useState<{
+    isOpen: boolean;
+    branch: string;
+    graph: string | null;
+  }>({ isOpen: false, branch: '', graph: null });
+
+  // Listen for URL-driven branch switch requests from TabContext
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const { branch, graph } = (e as CustomEvent).detail;
+      console.log(`[AppShell] URL branch switch requested: branch=${branch}, graph=${graph}`);
+      setUrlBranchSwitch({ isOpen: true, branch, graph });
+    };
+    window.addEventListener('dagnet:urlBranchSwitch', handler);
+    return () => window.removeEventListener('dagnet:urlBranchSwitch', handler);
+  }, []);
+
   // Commit modal state (lifted to AppShell to persist when context menu closes)
   const [commitModalState, setCommitModalState] = useState<{
     isOpen: boolean;
@@ -1727,6 +1746,32 @@ function MainAppShellContent() {
               // Open commit modal - remote-ahead check happens inside commitFiles
               setCommitModalState({ isOpen: true, preselectedFiles });
               setContextMenu(null); // Close context menu
+            }}
+          />
+        )}
+
+        {/* URL-driven Branch Switch Modal */}
+        {urlBranchSwitch.isOpen && (
+          <SwitchBranchModal
+            isOpen={urlBranchSwitch.isOpen}
+            onClose={() => setUrlBranchSwitch({ isOpen: false, branch: '', graph: null })}
+            targetBranch={urlBranchSwitch.branch}
+            onSwitchComplete={async () => {
+              const graphToOpen = urlBranchSwitch.graph;
+              setUrlBranchSwitch({ isOpen: false, branch: '', graph: null });
+              if (graphToOpen) {
+                // Open the graph tab after the branch switch
+                try {
+                  await tabOperations.openTab(
+                    { id: graphToOpen, name: graphToOpen, type: 'graph', path: `graphs/${graphToOpen}.json` },
+                    'interactive',
+                    true
+                  );
+                  console.log(`[AppShell] Opened graph '${graphToOpen}' after branch switch`);
+                } catch (err) {
+                  console.error(`[AppShell] Failed to open graph '${graphToOpen}':`, err);
+                }
+              }
             }}
           />
         )}

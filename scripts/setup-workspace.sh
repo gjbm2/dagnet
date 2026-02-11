@@ -80,6 +80,43 @@ else
   PASS=false
 fi
 
+# Check .private-repos.conf is gitignored
+if git check-ignore "$CONF" >/dev/null 2>&1; then
+  echo "    ✓ .private-repos.conf is git-excluded"
+else
+  echo "    ✗ .private-repos.conf is NOT git-excluded — add it to .gitignore"
+  PASS=false
+fi
+
+# ─── 4. Scan tracked files for leaked private repo names ──────────────────────
+
+echo ""
+echo "==> Scanning tracked files for leaked private repo directory names..."
+
+LEAK_FOUND=false
+for DIR_NAME in "$DATA_REPO_DIR" "$MONOREPO_DIR"; do
+  # Search tracked files for the literal directory name (exclude this script, the hook, and .gitignore)
+  HITS=$(git grep -l --fixed-strings "$DIR_NAME" -- \
+    ':!scripts/setup-workspace.sh' \
+    ':!.githooks/' \
+    ':!.gitignore' \
+    2>/dev/null || true)
+  if [ -n "$HITS" ]; then
+    echo "    ✗ Literal name '$DIR_NAME' found in tracked files:"
+    echo "$HITS" | while read -r f; do echo "        - $f"; done
+    LEAK_FOUND=true
+  fi
+done
+
+if [ "$LEAK_FOUND" = true ]; then
+  echo ""
+  echo "    Private repo directory names must not appear in tracked files."
+  echo "    Use .private-repos.conf at runtime, or gitignore the offending files."
+  PASS=false
+else
+  echo "    ✓ No leaked private repo names in tracked files"
+fi
+
 echo ""
 if [ "$PASS" = true ]; then
   echo "Workspace setup complete."

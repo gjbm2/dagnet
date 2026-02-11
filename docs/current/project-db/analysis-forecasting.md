@@ -1,7 +1,7 @@
 # Analysis Forecasting: Statistics on the Backend
 
-**Status**: Architectural Note (not yet implemented). Settings architecture agreed 10-Feb-26.  
-**Date**: 8-Feb-26 (design) · 10-Feb-26 (settings decision)  
+**Status**: Core architecture implemented (Phases 1–8 done, 10-Feb-26). Parallel-run tested; defects 1–2, 5–8 fixed (11-Feb-26). MECE union aggregation mismatch under investigation. See `analysis-forecasting-implementation-plan.md` for detailed status.  
+**Date**: 8-Feb-26 (design) · 10-Feb-26 (settings decision, implementation Phases 1–8)  
 **Related**: `1-reads.md`, `2-time-series-charting.md`, design.md §5
 
 ---

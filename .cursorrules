@@ -27,15 +27,32 @@
 
 ## Adjacent Private Repos (read-only context)
 
-Two private repos are cloned into the workspace root for reference. They are **git-excluded** (via `.git/info/exclude`) and protected by a pre-commit hook — they must NEVER be committed to the public dagnet repo.
+Two private repos are cloned into the workspace root for reference. They are git-excluded (via `.git/info/exclude` and `.gitignore`) and protected by a pre-commit hook — they must NEVER be committed to the public dagnet repo.
 
-- **Monorepo** (directory name in `.private-repos.conf` as `MONOREPO_DIR`) — The production site codebase. Use for inspecting production code, understanding how the product works, tracing data flows, etc.
-- **Data repo** (directory name in `.private-repos.conf` as `DATA_REPO_DIR`) — The BI/analytics fileset: conversion graphs, events, nodes, parameters, and contexts used by DagNet for analytics. Contains its own `graph-ops/` with playbooks, reference docs, and scripts for graph development.
+### Discovering the directory names
 
-These are **not** DagNet core code. They are context repos for inspection and traversal. When working in them:
-- **Do not modify** files in the monorepo directory unless explicitly asked.
+The actual directory names are stored in `.private-repos.conf` at the repo root. **Read this file** to resolve paths before working with either repo — never hardcode or assume the directory names.
+
+### Never reveal the literal directory names
+
+The private repo directory names are confidential. **Never emit them literally** in:
+- Chat messages or explanations
+- Documentation, commit messages, or code comments
+- Any file that could be committed to dagnet
+
+Always refer to them as **"the data repo"** or **"the monorepo"**, or by their config variable names (`DATA_REPO_DIR` / `MONOREPO_DIR`).
+
+### What each repo is for
+
+- **Monorepo** (`MONOREPO_DIR` in `.private-repos.conf`) — The production web application. Inspect for understanding product behaviour, tracing API endpoints, checking how features work in production, and verifying data flows.
+- **Data repo** (`DATA_REPO_DIR` in `.private-repos.conf`) — The analytics/BI workspace. Contains conversion graphs, event definitions, node/parameter YAML files, and `graph-ops/` (playbooks, reference docs, and operational scripts for graph development).
+
+### Rules when working in these repos
+
+These are **not** DagNet core code. They are context repos for inspection and traversal.
+- **Do not modify** files in the monorepo unless explicitly asked.
 - **Do not commit** anything from either directory to the dagnet repo.
-- For data repo edits, always follow the branch workflow in the data repo’s `graph-ops/playbooks/branch-workflow.md` (inside the directory named by `DATA_REPO_DIR` in `.private-repos.conf`).
+- For data repo edits, always follow the branch workflow in the data repo’s `graph-ops/playbooks/branch-workflow.md`.
 
 ## Core Principles
 

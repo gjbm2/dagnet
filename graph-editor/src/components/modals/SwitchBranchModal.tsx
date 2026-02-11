@@ -6,6 +6,10 @@ import './Modal.css';
 interface SwitchBranchModalProps {
   isOpen: boolean;
   onClose: () => void;
+  /** Pre-select a target branch (e.g. from URL ?branch= param) */
+  targetBranch?: string;
+  /** Called after a successful branch switch (e.g. to open a graph from the new branch) */
+  onSwitchComplete?: () => void;
 }
 
 /**
@@ -17,10 +21,15 @@ interface SwitchBranchModalProps {
  * - Discard changes and switch
  * - Cancel the operation
  */
-export function SwitchBranchModal({ isOpen, onClose }: SwitchBranchModalProps) {
+export function SwitchBranchModal({ isOpen, onClose, targetBranch, onSwitchComplete }: SwitchBranchModalProps) {
   const { state: navState, operations: navOps } = useNavigatorContext();
   const { operations: tabOps } = useTabContext();
-  const [selectedBranch, setSelectedBranch] = useState(navState.selectedBranch);
+  const [selectedBranch, setSelectedBranch] = useState(targetBranch || navState.selectedBranch);
+  
+  // Update selected branch when targetBranch changes (e.g. URL-driven)
+  React.useEffect(() => {
+    if (targetBranch) setSelectedBranch(targetBranch);
+  }, [targetBranch]);
   const [isProcessing, setIsProcessing] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -59,8 +68,9 @@ export function SwitchBranchModal({ isOpen, onClose }: SwitchBranchModalProps) {
       console.log(`Switching to branch: ${selectedBranch}`);
       await navOps.selectBranch(selectedBranch);
 
-      // Close modal
+      // Close modal and notify caller
       onClose();
+      onSwitchComplete?.();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to switch branch');
     } finally {

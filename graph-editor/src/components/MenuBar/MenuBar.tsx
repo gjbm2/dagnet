@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import * as Menubar from '@radix-ui/react-menubar';
-import { Share2 } from 'lucide-react';
+import { Share2, GitBranch } from 'lucide-react';
 import { FileMenu } from './FileMenu';
 import { EditMenu } from './EditMenu';
 import { ViewMenu } from './ViewMenu';
@@ -10,9 +10,11 @@ import { RepositoryMenu } from './RepositoryMenu';
 import { HelpMenu } from './HelpMenu';
 import { AppUpdateBadge } from './AppUpdateBadge';
 import { useTabContext } from '../../contexts/TabContext';
+import { useNavigatorContext } from '../../contexts/NavigatorContext';
 import { useDashboardMode } from '../../hooks/useDashboardMode';
 import { DevConsoleMirrorControls } from './DevConsoleMirrorControls';
 import { ShareLinkModal } from '../modals/ShareLinkModal';
+import { SwitchBranchModal } from '../modals/SwitchBranchModal';
 import { APP_VERSION } from '../../version';
 import { useHealthStatus } from '../../hooks/useHealthStatus';
 import './MenuBar.css';
@@ -24,8 +26,10 @@ import './MenuBar.css';
  */
 export function MenuBarComponent() {
   const { operations } = useTabContext();
+  const { state: navState } = useNavigatorContext();
   const { isDashboardMode, toggleDashboardMode } = useDashboardMode();
   const [shareModalOpen, setShareModalOpen] = useState(false);
+  const [branchModalOpen, setBranchModalOpen] = useState(false);
   const { mode: healthMode, tooltip: healthTooltip } = useHealthStatus({ pollIntervalMs: 5 * 60_000 });
 
   const handleBrandClick = async () => {
@@ -46,6 +50,14 @@ export function MenuBarComponent() {
       </Menubar.Root>
       <div className="dagnet-right-controls">
         <DevConsoleMirrorControls />
+        <div
+          className="menubar-branch-indicator"
+          title={`${navState.selectedRepo || 'repo'} / ${navState.selectedBranch || 'main'}\nClick to switch branch`}
+          onClick={() => setBranchModalOpen(true)}
+        >
+          <GitBranch size={14} />
+          <span>{navState.selectedBranch || 'main'}</span>
+        </div>
         {!isDashboardMode && (
           <button
             className="share-link-button"
@@ -65,6 +77,7 @@ export function MenuBarComponent() {
         </div>
       </div>
       <ShareLinkModal isOpen={shareModalOpen} onClose={() => setShareModalOpen(false)} />
+      <SwitchBranchModal isOpen={branchModalOpen} onClose={() => setBranchModalOpen(false)} />
     </div>
   );
 }

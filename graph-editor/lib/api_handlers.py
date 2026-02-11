@@ -1442,7 +1442,6 @@ def handle_lag_recompute_models(data: Dict[str, Any]) -> Dict[str, Any]:
         target = subj.get('target', {})
         target_id = target.get('targetId')
         t95_constraint = None
-        onset_override = None
         if target_id and edges:
             edge = next(
                 (e for e in edges
@@ -1455,9 +1454,17 @@ def handle_lag_recompute_models(data: Dict[str, Any]) -> Dict[str, Any]:
                 t95_val = latency.get('t95') or p.get('t95')
                 if isinstance(t95_val, (int, float)) and t95_val > 0:
                     t95_constraint = float(t95_val)
-                onset_val = latency.get('onset_delta_days') or p.get('onset_delta_days')
-                if isinstance(onset_val, (int, float)) and onset_val >= 0:
-                    onset_override = float(onset_val)
+
+        # Onset: prefer the explicit FE fitting onset sent per-subject.
+        # This is the onset the FE actually used when computing mu/sigma
+        # (derived from window() histogram data). The graph edge's
+        # onset_delta_days may be stale; do NOT read it from the edge.
+        # In future the BE may independently derive onset from historic
+        # snapshots, but for now the FE value is authoritative.
+        onset_override = None
+        subj_onset = subj.get('onset_delta_days')
+        if isinstance(subj_onset, (int, float)) and subj_onset >= 0:
+            onset_override = float(subj_onset)
 
         # Query DB evidence.
         try:
@@ -1490,6 +1497,7 @@ def handle_lag_recompute_models(data: Dict[str, Any]) -> Dict[str, Any]:
             settings=settings,
             t95_constraint=t95_constraint,
             onset_override=onset_override,
+            use_authoritative_t95=True,
             model_trained_at=model_trained_at,
             training_window=training_window or None,
             settings_signature=sig,
