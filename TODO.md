@@ -1,5 +1,27 @@
 # TODO
 
+- **Upstream selecting properties don't propagate to downstream fetches** (11-Feb-26)
+  - Each edge is fetched independently via `from(source).to(target)` with context filters. If the start node's event has a selecting property (e.g. `path = /save-on-energy` on the landing page), that filter is NOT applied to downstream edge queries. This means downstream edges pick up users from other funnels who share the same context properties (e.g. UTM params) but entered via a different route.
+  - **Example**: Landing page filters by `path = /save-on-energy` → 100 users. But `address-setup → energy-questions` returns n=1042 because `Household CreatedAnonymously` fires for all users with matching UTMs, not just those who entered via this landing page.
+  - Cohort/latency mode doesn't help here — it only applies in latency contexts with full funnel sequencing, not in standard edge-by-edge fetching.
+  - **For now**: active gates resolve this cleanly because the gate property uniquely identifies experiment cohort users on every event. No propagation needed.
+  - **Design question**: Should DagNet support propagating selecting properties from anchor/start nodes to all downstream fetches? This would enable "all-of" funnel constructions where the entry filter defines the cohort for the entire graph. Without this, any funnel with entry-point-specific filters will have cross-funnel contamination unless a user-level property (like an active gate) is available.
+  - **Location**: `graph-editor/src/lib/das/buildDslFromEdge.ts` (query building), `graph-editor/src/services/fetchDataService.ts` (fetch orchestration)
+
+- **Case nodes break the fetch chain — architecture design needed** (11-Feb-26)
+  - Case nodes have no Amplitude event, which breaks the node-event-node sequencing that data fetching relies on. Edges to/from a case node can't build `from(source).to(target)` queries because one endpoint has no event.
+  - For the high-intent-flow-v2 graph, we removed the case node and replaced it with a gate-based context filter + direct fetchable edge. This works for the immediate need but means we can't use case nodes for A/B test splits in funnel graphs.
+  - **Design question**: How should DagNet handle eventless routing nodes (case nodes, eligibility gates, etc.) without breaking the fetch chain? Possible approaches:
+    - **Query bridging**: Case edges automatically use the parent node's event as the `from()` and the child node's event as the `to()`, with a case filter (gate segment) applied. The case node becomes transparent to the query builder.
+    - **Composite queries**: The DAS rewrites queries that cross eventless nodes, e.g. `from(A).to(C)` when B (case node) sits between them, with case variant filters injected automatically.
+    - **Statsig-only mode**: Case edges get their weights exclusively from Statsig (no Amplitude query needed). The fetch chain skips the case node and the edges carry static weights from the feature flag system.
+  - **Location**: `graph-editor/src/lib/das/buildDslFromEdge.ts` (query building), `graph-editor/public/defaults/connections.yaml` (adapter case filter logic), `graph-editor/src/services/dataOperationsService.ts` (case fetch flow)
+
+- **AnalyticsPanel `SNAPSHOT DIAG` contract error** (11-Feb-26)
+  - `[AnalyticsPanel] SNAPSHOT DIAG: hasSnapshotContract=false` fires for `graph_overview` analysis type.
+  - `graph_overview` gets `hasSnapshotMeta=true` (because snapshot inventory exists) but `hasSnapshotContract=false` (because `ANALYSIS_TYPES` does not define a `snapshotContract` for `graph_overview`).
+  - This is harmless for now (`needsSnapshots=false`) but indicates the snapshot-gating logic in AnalyticsPanel is not correctly distinguishing "this analysis type needs snapshots" from "snapshots happen to exist".
+  - **Location**: `graph-editor/src/components/panels/AnalyticsPanel.tsx` snapshot-gating block + `analysisTypes.ts` `ANALYSIS_TYPES` registry.
 
 - **FE defect: topo pass leaves stale `onset_delta_days` on edge when window() slices lack onset data** (11-Feb-26)
   - The topo pass computes `edgeOnsetDeltaDays` from window() histogram data. When no window slices have onset, it's `undefined`. The topo pass fits mu with onset=0 but writes `onset_delta_days: undefined` to `edgeLAGValues`, so the UpdateManager skips the write and the edge retains whatever previous value it had (e.g. 3 from a prior run). The edge then has mu computed in one coordinate system (onset=0) and `onset_delta_days` from a different one (onset=3). Any downstream consumer of the stored mu+onset pair (offline completeness, file sync, parity comparison) gets wrong results. Fix: write `edgeOnsetDeltaDays ?? 0` so the edge is always self-consistent with the mu the topo pass just computed. The `_overridden` flag in UpdateManager still protects user-set values.
