@@ -1,4 +1,11 @@
 # DagNet Release Notes
+## Version 1.5.11b
+**Released:** 12-Feb-26
+
+Mid-sized Refactor to move hash matching over to FE from BE. Added setup.md
+
+---
+
 ## Version 1.5.10b
 **Released:** 12-Feb-26
 
