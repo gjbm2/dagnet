@@ -26,8 +26,29 @@ from snapshot_service import (
     query_snapshots,
     get_db_connection,
     short_core_hash_from_canonical_signature,
-    create_equivalence_link,
 )
+
+# Test-only DB helper (production function removed in hash-mappings migration).
+def create_equivalence_link(*, param_id, core_hash, equivalent_to, created_by, reason,
+                            operation='equivalent', weight=1.0, source_param_id=None):
+    conn = get_db_connection()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """INSERT INTO signature_equivalence
+               (param_id, core_hash, equivalent_to, created_by, reason, active, operation, weight, source_param_id)
+               VALUES (%s,%s,%s,%s,%s,true,%s,%s,%s)
+               ON CONFLICT (param_id, core_hash, equivalent_to)
+               DO UPDATE SET active=true, reason=EXCLUDED.reason, created_by=EXCLUDED.created_by,
+                             operation=EXCLUDED.operation, weight=EXCLUDED.weight, source_param_id=EXCLUDED.source_param_id""",
+            (param_id, core_hash, equivalent_to, created_by, reason, operation, weight, source_param_id))
+        conn.commit()
+        return {"success": True}
+    except Exception as e:
+        conn.rollback()
+        return {"success": False, "error": str(e)}
+    finally:
+        conn.close()
 
 # Skip all tests if DB_CONNECTION not available
 pytestmark = pytest.mark.skipif(
@@ -64,7 +85,7 @@ def make_rows(anchor_days):
     return [{'anchor_day': d, 'X': 100, 'Y': 10} for d in anchor_days]
 
 
-def present_anchor_days_via_query_snapshots(*, param_id: str, core_hash: str, slice_keys, anchor_from: date, anchor_to: date, include_equivalents: bool) -> set:
+def present_anchor_days_via_query_snapshots(*, param_id: str, core_hash: str, slice_keys, anchor_from: date, anchor_to: date, include_equivalents: bool = False, equivalent_hashes=None) -> set:
     """
     Parity oracle: query snapshot rows using the canonical read helper and return
     the set of anchor_day values present.
@@ -75,7 +96,7 @@ def present_anchor_days_via_query_snapshots(*, param_id: str, core_hash: str, sl
         slice_keys=slice_keys,
         anchor_from=anchor_from,
         anchor_to=anchor_to,
-        include_equivalents=include_equivalents,
+        equivalent_hashes=equivalent_hashes,
         limit=100000,
     )
     out = set()
@@ -137,7 +158,7 @@ class TestBatchAnchorCoverage:
             'slice_keys': ['window()'],
             'anchor_from': date(2025, 12, 1),
             'anchor_to': date(2025, 12, 5),
-            'include_equivalents': True,
+
         }])
 
         assert len(results) == 1
@@ -162,7 +183,7 @@ class TestBatchAnchorCoverage:
             'slice_keys': ['window()'],
             'anchor_from': date(2025, 12, 1),
             'anchor_to': date(2025, 12, 5),
-            'include_equivalents': True,
+
         }])
 
         r = results[0]
@@ -185,7 +206,7 @@ class TestBatchAnchorCoverage:
             'slice_keys': ['window()'],
             'anchor_from': date(2025, 12, 1),
             'anchor_to': date(2025, 12, 5),
-            'include_equivalents': True,
+
         }])
 
         r = results[0]
@@ -209,7 +230,7 @@ class TestBatchAnchorCoverage:
             'slice_keys': ['window()'],
             'anchor_from': date(2025, 12, 1),
             'anchor_to': date(2025, 12, 10),
-            'include_equivalents': True,
+
         }])
 
         r = results[0]
@@ -237,7 +258,7 @@ class TestBatchAnchorCoverage:
             'slice_keys': ['context(channel:google).window()'],
             'anchor_from': date(2025, 12, 1),
             'anchor_to': date(2025, 12, 5),
-            'include_equivalents': True,
+
         }])[0]
         assert r_google['coverage_ok'] is True
 
@@ -248,7 +269,7 @@ class TestBatchAnchorCoverage:
             'slice_keys': ['context(channel:facebook).window()'],
             'anchor_from': date(2025, 12, 1),
             'anchor_to': date(2025, 12, 5),
-            'include_equivalents': True,
+
         }])[0]
         assert r_fb['coverage_ok'] is False
         assert r_fb['missing_anchor_ranges'] == [{'start': '2025-12-04', 'end': '2025-12-05'}]
@@ -275,7 +296,7 @@ class TestBatchAnchorCoverage:
             'slice_keys': ['window()'],
             'anchor_from': date(2025, 12, 1),
             'anchor_to': date(2025, 12, 5),
-            'include_equivalents': True,
+            'equivalent_hashes': [{'core_hash': ch_b, 'operation': 'equivalent', 'weight': 1.0}],
         }])
 
         r = results[0]
@@ -306,7 +327,7 @@ class TestBatchAnchorCoverage:
             'slice_keys': ['window()'],
             'anchor_from': date(2025, 12, 1),
             'anchor_to': date(2025, 12, 5),
-            'include_equivalents': True,
+            'equivalent_hashes': [{'core_hash': ch_b, 'operation': 'equivalent', 'weight': 1.0}],
         }])
 
         r = results[0]
@@ -338,7 +359,10 @@ class TestBatchAnchorCoverage:
             'slice_keys': ['window()'],
             'anchor_from': date(2025, 12, 1),
             'anchor_to': date(2025, 12, 5),
-            'include_equivalents': True,
+            'equivalent_hashes': [
+                {'core_hash': ch_b, 'operation': 'equivalent', 'weight': 1.0},
+                {'core_hash': ch_c, 'operation': 'equivalent', 'weight': 1.0},
+            ],
         }])
 
         r = results[0]
@@ -365,7 +389,7 @@ class TestBatchAnchorCoverage:
             'slice_keys': ['window()'],
             'anchor_from': date(2025, 12, 1),
             'anchor_to': date(2025, 12, 5),
-            'include_equivalents': True,
+
         }])[0]
         assert r_win['coverage_ok'] is True
 
@@ -376,7 +400,7 @@ class TestBatchAnchorCoverage:
             'slice_keys': ['cohort()'],
             'anchor_from': date(2025, 12, 1),
             'anchor_to': date(2025, 12, 5),
-            'include_equivalents': True,
+
         }])[0]
         assert r_coh['coverage_ok'] is False
         assert r_coh['missing_anchor_ranges'] == [{'start': '2025-12-04', 'end': '2025-12-05'}]
@@ -399,7 +423,7 @@ class TestBatchAnchorCoverage:
             'slice_keys': ['window()'],
             'anchor_from': date(2025, 12, 1),
             'anchor_to': date(2025, 12, 2),
-            'include_equivalents': True,
+            'equivalent_hashes': [{'core_hash': ch_b, 'operation': 'equivalent', 'weight': 1.0}],
         }])
 
         r = results[0]
@@ -419,7 +443,7 @@ class TestBatchAnchorCoverage:
             'slice_keys': ['window()'],
             'anchor_from': date(2025, 12, 1),
             'anchor_to': date(2025, 12, 5),
-            'include_equivalents': False,
+
         }])
 
         r = results[0]
@@ -452,7 +476,7 @@ class TestBatchAnchorCoverage:
                 'slice_keys': ['window()'],
                 'anchor_from': date(2025, 12, 1),
                 'anchor_to': date(2025, 12, 3),
-                'include_equivalents': True,
+    
             },
             {
                 'param_id': pid2,
@@ -460,7 +484,7 @@ class TestBatchAnchorCoverage:
                 'slice_keys': ['window()'],
                 'anchor_from': date(2025, 12, 1),
                 'anchor_to': date(2025, 12, 3),
-                'include_equivalents': True,
+    
             },
         ])
 
@@ -502,7 +526,7 @@ class TestBatchAnchorCoverage:
             'slice_keys': ['window()'],
             'anchor_from': date(2025, 12, 1),
             'anchor_to': date(2025, 12, 5),
-            'include_equivalents': True,
+
         }])[0]
 
         assert res['coverage_ok'] is True
@@ -512,7 +536,7 @@ class TestBatchAnchorCoverage:
         present = present_anchor_days_via_query_snapshots(
             param_id=pid, core_hash=ch, slice_keys=['window()'],
             anchor_from=date(2025, 12, 1), anchor_to=date(2025, 12, 5),
-            include_equivalents=True
+
         )
         assert present == {'2025-12-01', '2025-12-02', '2025-12-03', '2025-12-04', '2025-12-05'}
 
@@ -536,7 +560,7 @@ class TestBatchAnchorCoverage:
             'slice_keys': ['context(channel:google).window()'],
             'anchor_from': date(2025, 12, 1),
             'anchor_to': date(2025, 12, 5),
-            'include_equivalents': True,
+
         }])[0]
 
         assert res['coverage_ok'] is True
@@ -545,15 +569,15 @@ class TestBatchAnchorCoverage:
         present = present_anchor_days_via_query_snapshots(
             param_id=pid, core_hash=ch, slice_keys=['context(channel:google).window()'],
             anchor_from=date(2025, 12, 1), anchor_to=date(2025, 12, 5),
-            include_equivalents=True
+
         )
         assert present == {'2025-12-01', '2025-12-02', '2025-12-03', '2025-12-04', '2025-12-05'}
 
     def test_fn003_include_equivalents_toggle_matches_read_path(self):
         """
         FN-003: Data exists only under an equivalent hash.
-        - include_equivalents=False should report missing (no false positive)
-        - include_equivalents=True should report covered (no false negative)
+        - Without equivalent_hashes: should report missing (no false positive)
+        - With equivalent_hashes: should report covered (no false negative)
         Also asserts parity with query_snapshots() behaviour.
         """
         pid = make_param_id('fn003')
@@ -567,14 +591,15 @@ class TestBatchAnchorCoverage:
                                   rows=make_rows(['2025-12-01', '2025-12-02', '2025-12-03']))
         create_equivalence_link(param_id=pid, core_hash=ch_a, equivalent_to=ch_b, created_by='pytest', reason='fn003 test')
 
-        # include_equivalents=False → missing
+        eq_hashes = [{'core_hash': ch_b, 'operation': 'equivalent', 'weight': 1.0}]
+
+        # No equivalent_hashes → missing
         r_no = batch_anchor_coverage([{
             'param_id': pid,
             'core_hash': ch_a,
             'slice_keys': ['window()'],
             'anchor_from': date(2025, 12, 1),
             'anchor_to': date(2025, 12, 3),
-            'include_equivalents': False,
         }])[0]
         assert r_no['coverage_ok'] is False
         assert r_no['missing_anchor_ranges'] == [{'start': '2025-12-01', 'end': '2025-12-03'}]
@@ -582,18 +607,17 @@ class TestBatchAnchorCoverage:
         present_no = present_anchor_days_via_query_snapshots(
             param_id=pid, core_hash=ch_a, slice_keys=['window()'],
             anchor_from=date(2025, 12, 1), anchor_to=date(2025, 12, 3),
-            include_equivalents=False
         )
         assert present_no == set()
 
-        # include_equivalents=True → covered
+        # With equivalent_hashes → covered
         r_yes = batch_anchor_coverage([{
             'param_id': pid,
             'core_hash': ch_a,
             'slice_keys': ['window()'],
             'anchor_from': date(2025, 12, 1),
             'anchor_to': date(2025, 12, 3),
-            'include_equivalents': True,
+            'equivalent_hashes': eq_hashes,
         }])[0]
         assert r_yes['coverage_ok'] is True
         assert r_yes['missing_anchor_ranges'] == []
@@ -601,7 +625,7 @@ class TestBatchAnchorCoverage:
         present_yes = present_anchor_days_via_query_snapshots(
             param_id=pid, core_hash=ch_a, slice_keys=['window()'],
             anchor_from=date(2025, 12, 1), anchor_to=date(2025, 12, 3),
-            include_equivalents=True
+            equivalent_hashes=eq_hashes,
         )
         assert present_yes == {'2025-12-01', '2025-12-02', '2025-12-03'}
 
@@ -624,7 +648,7 @@ class TestBatchAnchorCoverage:
             'slice_keys': [''],  # broad
             'anchor_from': date(2025, 12, 1),
             'anchor_to': date(2025, 12, 2),
-            'include_equivalents': True,
+
         }])[0]
 
         assert res['coverage_ok'] is True
@@ -633,6 +657,6 @@ class TestBatchAnchorCoverage:
         present = present_anchor_days_via_query_snapshots(
             param_id=pid, core_hash=ch, slice_keys=[''],
             anchor_from=date(2025, 12, 1), anchor_to=date(2025, 12, 2),
-            include_equivalents=True
+
         )
         assert present == {'2025-12-01', '2025-12-02'}

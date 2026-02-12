@@ -26,7 +26,7 @@ import {
   Link2          // Signature Links
 } from 'lucide-react';
 
-export type ObjectType = 'graph' | 'chart' | 'node' | 'case' | 'context' | 'parameter' | 'event' | 'edge' | 'special' | 'credentials' | 'connections' | 'settings' | 'about' | 'markdown' | 'session-log' | 'image' | 'signature-links';
+export type ObjectType = 'graph' | 'chart' | 'node' | 'case' | 'context' | 'parameter' | 'event' | 'edge' | 'special' | 'credentials' | 'connections' | 'settings' | 'about' | 'markdown' | 'session-log' | 'image' | 'signature-links' | 'hash-mappings';
 
 export interface ObjectTypeTheme {
   /** Light pastel background colour */
@@ -159,6 +159,13 @@ export const objectTypeTheme: Record<ObjectType, ObjectTypeTheme> = {
     accentColour: '#6366F1', // indigo-500
     icon: Link2,
     label: 'Snapshot Manager',
+    emoji: '🔗'
+  },
+  'hash-mappings': {
+    lightColour: '#E0E7FF',  // light indigo
+    accentColour: '#6366F1', // indigo-500
+    icon: Link2,
+    label: 'Hash Mappings',
     emoji: '🔗'
   }
 };

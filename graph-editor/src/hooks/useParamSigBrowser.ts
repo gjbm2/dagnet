@@ -8,9 +8,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import toast from 'react-hot-toast';
 import { sessionLogService } from '../services/sessionLogService';
 import {
-  listEquivalenceLinks,
   listSignatures,
-  resolveEquivalentHashes,
   type SigEquivalenceLinkRow,
   type SigParamSummary,
   type SigRegistryRow,
@@ -19,8 +17,33 @@ import {
   getBatchInventoryV2,
   type SnapshotInventoryV2Param,
 } from '../services/snapshotWriteService';
+import { getMappings, getClosureSet, type HashMapping } from '../services/hashMappingsService';
 
 // ─── Shared types & helpers ──────────────────────────────────────────────────
+
+/**
+ * Convert HashMapping[] from hash-mappings.json to SigEquivalenceLinkRow[] for UI compat.
+ *
+ * `hashToParamId` resolves core_hash → param_id so that cross-param link navigation works.
+ * File-backed mappings don't carry param_id; without this map, cross-param links can't navigate.
+ */
+function mappingsToLinkRows(
+  mappings: HashMapping[],
+  hashToParamId?: Map<string, string>,
+): SigEquivalenceLinkRow[] {
+  return mappings.map((m) => ({
+    param_id: hashToParamId?.get(m.core_hash) ?? '',
+    core_hash: m.core_hash,
+    equivalent_to: m.equivalent_to,
+    created_at: '',
+    created_by: m.created_by ?? null,
+    reason: m.reason ?? null,
+    active: true, // File rows are always active (unlink = delete)
+    operation: (m.operation || 'equivalent') as SigEquivalenceLinkRow['operation'],
+    weight: m.weight ?? 1.0,
+    source_param_id: hashToParamId?.get(m.equivalent_to) ?? null,
+  }));
+}
 
 /** Per-core_hash stats derived from inventory data. */
 export interface SigStats {
@@ -138,16 +161,32 @@ export function useParamSigBrowser(options: ParamSigBrowserOptions): ParamSigBro
     setIsLoading(true);
     const opId = sessionLogService.startOperation('info', 'session', 'SIGS_REFRESH', `Loading signatures for ${selectedParamId}`);
     try {
-      const [regRes, linksRes, inventoryRes] = await Promise.all([
+      // Fetch current-param signatures, inventory, AND a broad workspace registry
+      // (the broad listing resolves core_hash → param_id for cross-param link navigation).
+      const [regRes, inventoryRes, broadRegRes] = await Promise.all([
         listSignatures({ param_id: selectedParamId, include_inputs: true, limit: 500 }),
-        listEquivalenceLinks({ param_id: selectedParamId, include_inactive: false, limit: 2000 }),
         getBatchInventoryV2([selectedParamId]).catch(() => ({} as Record<string, SnapshotInventoryV2Param>)),
+        listSignatures({ param_id_prefix: workspacePrefix, limit: 5000 }).catch(() => ({ success: false, rows: [], count: 0 } as any)),
       ]);
       if (!regRes.success) throw new Error(regRes.error || 'listSignatures failed');
-      if (!linksRes.success) throw new Error(linksRes.error || 'listEquivalenceLinks failed');
+
+      // Build core_hash → param_id map from the broad registry.
+      const hashToParamId = new Map<string, string>();
+      if (broadRegRes.success && Array.isArray(broadRegRes.rows)) {
+        for (const row of broadRegRes.rows) {
+          if (row.core_hash && row.param_id) {
+            hashToParamId.set(row.core_hash, row.param_id);
+          }
+        }
+      }
+
+      // Read equivalence links from hash-mappings.json (file-backed, not DB).
+      // Enrich with param_id from the broad registry so cross-param navigation works.
+      const fileMappings = getMappings();
+      const fileLinks = mappingsToLinkRows(fileMappings, hashToParamId);
 
       setRegistryRows(regRes.rows);
-      setLinkRows(linksRes.rows);
+      setLinkRows(fileLinks);
 
       const statsMap = new Map<string, SigStats>();
       const inv = inventoryRes[selectedParamId];
@@ -165,7 +204,7 @@ export function useParamSigBrowser(options: ParamSigBrowserOptions): ParamSigBro
         }
       }
       setSigStatsMap(statsMap);
-      sessionLogService.endOperation(opId, 'success', `Loaded ${regRes.count} sigs + ${linksRes.count} links`);
+      sessionLogService.endOperation(opId, 'success', `Loaded ${regRes.count} sigs + ${fileLinks.length} links (file-backed)`);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       toast.error(`Failed to load signatures: ${msg}`);
@@ -182,16 +221,15 @@ export function useParamSigBrowser(options: ParamSigBrowserOptions): ParamSigBro
     void loadSignatures();
   }, [loadSignatures]);
 
-  // Resolve equivalence closure for selected hash
+  // Resolve equivalence closure for selected hash (file-backed, not BE route).
   useEffect(() => {
     if (!selectedParamId || !selectedHash) {
       setResolvedClosure([]);
       return;
     }
-    void (async () => {
-      const res = await resolveEquivalentHashes({ param_id: selectedParamId, core_hash: selectedHash, include_equivalents: true });
-      if (res.success) setResolvedClosure(res.core_hashes);
-    })();
+    const closure = getClosureSet(selectedHash);
+    // resolvedClosure includes the seed + all reachable hashes (getClosureSet excludes seed).
+    setResolvedClosure([selectedHash, ...closure.map((e) => e.core_hash)]);
   }, [selectedParamId, selectedHash]);
 
   // BFS through equivalence links from currentCoreHash

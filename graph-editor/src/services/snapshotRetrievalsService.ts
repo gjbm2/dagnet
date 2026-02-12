@@ -11,6 +11,7 @@ import {
   type QuerySnapshotRetrievalsResult
 } from './snapshotWriteService';
 import { db } from '../db/appDatabase';
+import { getClosureSet } from './hashMappingsService';
 
 const providerByConnection = new Map<string, string>();
 
@@ -176,9 +177,12 @@ export async function buildSnapshotRetrievalsQueryForEdge(args: {
   const wantSliceFilter = !!contextDims && !hasContextAny(dslWithoutAsat);
   if (wantSliceFilter) {
     try {
+      const closureSet = getClosureSet(sigParsed.coreHash!);
       const inv = await getBatchInventoryV2([dbParamId], {
         current_signatures: { [dbParamId]: signature },
-        include_equivalents: true,
+        ...(closureSet.length > 0
+          ? { equivalent_hashes_by_param: { [dbParamId]: closureSet } }
+          : {}),
         // We want a reliable slice listing for this family; clamp is 2000 server-side.
         limit_families_per_param: 50,
         limit_slices_per_family: 2000,

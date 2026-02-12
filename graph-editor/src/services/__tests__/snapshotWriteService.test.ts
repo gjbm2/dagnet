@@ -19,7 +19,15 @@ const mockFetch = vi.fn();
 global.fetch = mockFetch;
 
 // Import after mocking
-import { appendSnapshots, checkSnapshotHealth } from '../snapshotWriteService';
+import {
+  appendSnapshots,
+  checkSnapshotHealth,
+  querySnapshotsFull,
+  querySnapshotsVirtual,
+  querySnapshotRetrievals,
+  batchAnchorCoverage,
+  getBatchInventoryV2,
+} from '../snapshotWriteService';
 
 // Test fixtures
 const BASE_PARAMS: Omit<AppendSnapshotsParams, 'rows'> = {
@@ -383,6 +391,185 @@ describe('Snapshot Write Service', () => {
       
       expect(result.status).toBe('error');
       expect(result.error).toContain('Network error');
+    });
+  });
+
+  // ===========================================================================
+  // EH-*: Equivalent Hashes — FE request body contract
+  //
+  // These tests verify that the FE-to-BE contract for the new hash-mappings
+  // migration is correct: when equivalent_hashes is provided, it appears in
+  // the request body. When absent, neither equivalent_hashes nor
+  // include_equivalents is sent (BE queries seed hash only).
+  // ===========================================================================
+
+  describe('Equivalent Hashes request-body contract (EH-*)', () => {
+    const CLOSURE = [
+      { core_hash: 'hash-B', operation: 'equivalent', weight: 1.0 },
+      { core_hash: 'hash-C', operation: 'equivalent', weight: 1.0 },
+    ];
+
+    // ── querySnapshotsFull ──────────────────────────────────────────────
+
+    it('EH-001: querySnapshotsFull sends equivalent_hashes and omits include_equivalents when closure provided', async () => {
+      mockFetch.mockResolvedValue({ ok: true, json: () => Promise.resolve({ success: true, rows: [], count: 0 }) });
+
+      await querySnapshotsFull({
+        param_id: 'repo-main-param-x',
+        core_hash: 'hash-A',
+        equivalent_hashes: CLOSURE,
+      });
+
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+      const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+      expect(body.equivalent_hashes).toEqual(CLOSURE);
+      expect(body.include_equivalents).toBeUndefined();
+    });
+
+    it('EH-002: querySnapshotsFull omits equivalent_hashes when closure not provided', async () => {
+      mockFetch.mockResolvedValue({ ok: true, json: () => Promise.resolve({ success: true, rows: [], count: 0 }) });
+
+      await querySnapshotsFull({
+        param_id: 'repo-main-param-x',
+        core_hash: 'hash-A',
+      });
+
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+      const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+      expect(body.equivalent_hashes).toBeUndefined();
+    });
+
+    // ── querySnapshotsVirtual ───────────────────────────────────────────
+
+    it('EH-003: querySnapshotsVirtual sends equivalent_hashes and sets include_equivalents=undefined when closure provided', async () => {
+      mockFetch.mockResolvedValue({ ok: true, json: () => Promise.resolve({ success: true, rows: [], count: 0, latest_retrieved_at_used: null, has_anchor_to: false }) });
+
+      await querySnapshotsVirtual({
+        param_id: 'repo-main-param-x',
+        as_at: '2025-12-10T00:00:00Z',
+        anchor_from: '2025-12-01',
+        anchor_to: '2025-12-10',
+        canonical_signature: '{"c":"test","x":{}}',
+        equivalent_hashes: CLOSURE,
+      });
+
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+      const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+      expect(body.equivalent_hashes).toEqual(CLOSURE);
+      expect(body.include_equivalents).toBeUndefined();
+    });
+
+    it('EH-004: querySnapshotsVirtual omits both equivalent_hashes and include_equivalents when no closure', async () => {
+      mockFetch.mockResolvedValue({ ok: true, json: () => Promise.resolve({ success: true, rows: [], count: 0, latest_retrieved_at_used: null, has_anchor_to: false }) });
+
+      await querySnapshotsVirtual({
+        param_id: 'repo-main-param-x',
+        as_at: '2025-12-10T00:00:00Z',
+        anchor_from: '2025-12-01',
+        anchor_to: '2025-12-10',
+        canonical_signature: '{"c":"test","x":{}}',
+      });
+
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+      const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+      expect(body.equivalent_hashes).toBeUndefined();
+      expect(body.include_equivalents).toBeUndefined();
+    });
+
+    // ── querySnapshotRetrievals ─────────────────────────────────────────
+
+    it('EH-005: querySnapshotRetrievals sends equivalent_hashes and omits include_equivalents when closure provided', async () => {
+      mockFetch.mockResolvedValue({ ok: true, json: () => Promise.resolve({ success: true, retrieved_at: [], retrieved_days: [], latest_retrieved_at: null, count: 0 }) });
+
+      await querySnapshotRetrievals({
+        param_id: 'repo-main-param-x',
+        core_hash: 'hash-A',
+        equivalent_hashes: CLOSURE,
+      });
+
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+      const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+      expect(body.equivalent_hashes).toEqual(CLOSURE);
+      expect(body.include_equivalents).toBeUndefined();
+    });
+
+    it('EH-006: querySnapshotRetrievals omits both when no closure', async () => {
+      mockFetch.mockResolvedValue({ ok: true, json: () => Promise.resolve({ success: true, retrieved_at: [], retrieved_days: [], latest_retrieved_at: null, count: 0 }) });
+
+      await querySnapshotRetrievals({
+        param_id: 'repo-main-param-x',
+        core_hash: 'hash-A',
+      });
+
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+      const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+      expect(body.equivalent_hashes).toBeUndefined();
+      expect(body.include_equivalents).toBeUndefined();
+    });
+
+    // ── batchAnchorCoverage ─────────────────────────────────────────────
+
+    it('EH-007: batchAnchorCoverage sends per-subject equivalent_hashes and omits include_equivalents', async () => {
+      mockFetch.mockResolvedValue({ ok: true, json: () => Promise.resolve({ results: [{ subject_index: 0, coverage_ok: true, missing_anchor_ranges: [], present_anchor_day_count: 5, expected_anchor_day_count: 5, equivalence_resolution: { core_hashes: [], param_ids: [] } }] }) });
+
+      await batchAnchorCoverage([{
+        param_id: 'repo-main-param-x',
+        core_hash: 'hash-A',
+        slice_keys: ['window()'],
+        anchor_from: '2025-12-01',
+        anchor_to: '2025-12-05',
+        equivalent_hashes: CLOSURE,
+      }]);
+
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+      const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+      const subj = body.subjects[0];
+      expect(subj.equivalent_hashes).toEqual(CLOSURE);
+      expect(subj.include_equivalents).toBeUndefined();
+    });
+
+    it('EH-008: batchAnchorCoverage omits both per subject when no closure', async () => {
+      mockFetch.mockResolvedValue({ ok: true, json: () => Promise.resolve({ results: [{ subject_index: 0, coverage_ok: true, missing_anchor_ranges: [], present_anchor_day_count: 5, expected_anchor_day_count: 5, equivalence_resolution: { core_hashes: [], param_ids: [] } }] }) });
+
+      await batchAnchorCoverage([{
+        param_id: 'repo-main-param-x',
+        core_hash: 'hash-A',
+        slice_keys: ['window()'],
+        anchor_from: '2025-12-01',
+        anchor_to: '2025-12-05',
+      }]);
+
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+      const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+      const subj = body.subjects[0];
+      expect(subj.equivalent_hashes).toBeUndefined();
+      expect(subj.include_equivalents).toBeUndefined();
+    });
+
+    // ── getBatchInventoryV2 ─────────────────────────────────────────────
+
+    it('EH-009: getBatchInventoryV2 sends equivalent_hashes_by_param and omits include_equivalents', async () => {
+      mockFetch.mockResolvedValue({ ok: true, json: () => Promise.resolve({ success: true, inventory_version: 2, inventory: {} }) });
+
+      await getBatchInventoryV2(['repo-main-param-x'], {
+        equivalent_hashes_by_param: { 'repo-main-param-x': CLOSURE },
+      });
+
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+      const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+      expect(body.equivalent_hashes_by_param).toEqual({ 'repo-main-param-x': CLOSURE });
+      expect(body.include_equivalents).toBeUndefined();
+    });
+
+    it('EH-010: getBatchInventoryV2 omits both when no closure map', async () => {
+      mockFetch.mockResolvedValue({ ok: true, json: () => Promise.resolve({ success: true, inventory_version: 2, inventory: {} }) });
+
+      await getBatchInventoryV2(['repo-main-param-x']);
+
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+      const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+      expect(body.equivalent_hashes_by_param).toBeUndefined();
+      expect(body.include_equivalents).toBeUndefined();
     });
   });
 });

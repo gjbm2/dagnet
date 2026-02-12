@@ -13,6 +13,7 @@
  */
 
 import { computeShortCoreHash } from './coreHashService';
+import type { ClosureEntry } from './hashMappingsService';
 
 // -----------------------------------------------------------------------------
 // Types
@@ -380,6 +381,8 @@ export interface QuerySnapshotsFullParams {
   retrieved_ats?: string[];
   /** Max rows to return (default backend: 10000) */
   limit?: number;
+  /** FE-derived closure set. When present, BE uses this for equivalence expansion. */
+  equivalent_hashes?: ClosureEntry[];
 }
 
 export interface QuerySnapshotsFullResult {
@@ -414,6 +417,9 @@ export async function querySnapshotsFull(params: QuerySnapshotsFullParams): Prom
         as_at: params.as_at,
         retrieved_ats: params.retrieved_ats,
         limit: params.limit,
+        ...(params.equivalent_hashes && params.equivalent_hashes.length > 0
+          ? { equivalent_hashes: params.equivalent_hashes }
+          : {}),
       }),
     });
 
@@ -455,6 +461,8 @@ export interface QuerySnapshotsVirtualParams {
   slice_keys?: string[];
   /** Max rows to return (default backend: 10000) */
   limit?: number;
+  /** FE-derived closure set. When present, BE uses this for equivalence expansion (replaces include_equivalents). */
+  equivalent_hashes?: ClosureEntry[];
 }
 
 export interface VirtualSnapshotRow {
@@ -500,8 +508,8 @@ export interface QuerySnapshotRetrievalsParams {
   anchor_from?: string;
   /** ISO date (YYYY-MM-DD) upper bound on anchor_day, inclusive */
   anchor_to?: string;
-  /** If true, expand equivalence links when filtering by signature (default true) */
-  include_equivalents?: boolean;
+  /** FE-derived closure set. When present, BE uses this for equivalence expansion. */
+  equivalent_hashes?: ClosureEntry[];
   /** If true, include per-retrieval summary rows (default false) */
   include_summary?: boolean;
   /** Hard cap on timestamps returned (default 200) */
@@ -564,7 +572,9 @@ export async function querySnapshotsVirtual(params: QuerySnapshotsVirtualParams)
         canonical_signature: params.canonical_signature,
         core_hash,
         slice_keys: params.slice_keys,
-        include_equivalents: true,
+        ...(params.equivalent_hashes && params.equivalent_hashes.length > 0
+          ? { equivalent_hashes: params.equivalent_hashes }
+          : {}),
         limit: params.limit,
       }),
     });
@@ -625,7 +635,9 @@ export async function querySnapshotRetrievals(params: QuerySnapshotRetrievalsPar
         slice_keys: params.slice_keys,
         anchor_from: params.anchor_from,
         anchor_to: params.anchor_to,
-        include_equivalents: params.include_equivalents ?? true,
+        ...(params.equivalent_hashes && params.equivalent_hashes.length > 0
+          ? { equivalent_hashes: params.equivalent_hashes }
+          : {}),
         include_summary: params.include_summary ?? false,
         limit: params.limit,
       }),
@@ -703,7 +715,8 @@ export interface BatchAnchorCoverageSubject {
   anchor_from: string;
   /** ISO date (YYYY-MM-DD) */
   anchor_to: string;
-  include_equivalents?: boolean;
+  /** FE-derived closure set for this subject. When present, BE uses this for equivalence expansion. */
+  equivalent_hashes?: ClosureEntry[];
 }
 
 export interface BatchAnchorCoverageResult {
@@ -764,7 +777,9 @@ export async function batchAnchorCoverage(
           slice_keys: s.slice_keys,
           anchor_from: s.anchor_from,
           anchor_to: s.anchor_to,
-          include_equivalents: s.include_equivalents ?? true,
+          ...(s.equivalent_hashes && s.equivalent_hashes.length > 0
+            ? { equivalent_hashes: s.equivalent_hashes }
+            : {}),
         })),
       }),
     });
@@ -819,7 +834,7 @@ export async function getBatchInventory(paramIds: string[]): Promise<Record<stri
   }
 
   try {
-    const v2 = await getBatchInventoryV2(paramIds, { include_equivalents: true });
+    const v2 = await getBatchInventoryV2(paramIds);
     const out: Record<string, SnapshotInventory> = {};
 
     for (const pid of paramIds) {
@@ -883,7 +898,8 @@ export async function getBatchInventoryV2(
   , options?: {
     current_signatures?: Record<string, string>;
     slice_keys?: Record<string, string[]>;
-    include_equivalents?: boolean;
+    /** FE-derived closure sets keyed by param_id. When present, BE uses these for equivalence expansion. */
+    equivalent_hashes_by_param?: Record<string, ClosureEntry[]>;
     limit_families_per_param?: number;
     limit_slices_per_family?: number;
   }
@@ -919,7 +935,9 @@ export async function getBatchInventoryV2(
         current_signatures: options?.current_signatures,
         current_core_hashes,
         slice_keys: options?.slice_keys,
-        include_equivalents: options?.include_equivalents ?? true,
+        ...(options?.equivalent_hashes_by_param
+          ? { equivalent_hashes_by_param: options.equivalent_hashes_by_param }
+          : {}),
         limit_families_per_param: options?.limit_families_per_param,
         limit_slices_per_family: options?.limit_slices_per_family,
       }),

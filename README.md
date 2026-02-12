@@ -1,107 +1,106 @@
-# DagNet - Directed Acyclic Graph Network Editor
+# DagNet — Directed Acyclic Graph Network Editor
 
-**Version 1.1** | [Changelog](graph-editor/public/docs/CHANGELOG.md) | [About](graph-editor/public/docs/about.md)
+**Version 1.5.10b** | [Changelog](graph-editor/public/docs/CHANGELOG.md) | [About](graph-editor/public/docs/about.md)
 
-A web-based visual editor for creating and analyzing directed acyclic graphs (DAGs) with support for conditional probabilities, file-backed parameters, cohort-based analytics, and latency-aware forecasting.
+A web-based visual editor for creating and analysing directed acyclic graphs (DAGs) with conditional probabilities, file-backed parameters, cohort-based analytics, latency-aware forecasting, and snapshot-based time-series storage.
 
-> 📖 **New to DagNet?** See [About DagNet](graph-editor/public/docs/about.md) for an overview of capabilities and the [User Guide](graph-editor/public/docs/user-guide.md) to get started. Full documentation is in [`graph-editor/public/docs/`](graph-editor/public/docs/).
+> **New to DagNet?** See [About DagNet](graph-editor/public/docs/about.md) for an overview and the [User Guide](graph-editor/public/docs/user-guide.md) to get started. Full documentation lives in [`graph-editor/public/docs/`](graph-editor/public/docs/).
+
+---
 
 ## Quick Start
 
-### First Time Setup
-
-1. **Clone the repository**
-   ```bash
-   git clone <your-repo-url>
-   cd dagnet
-   ```
-
-2. **(Optional) Clone private context repos into this workspace (since 10-Feb-26)**
-
-DagNet can be used alongside two private repos cloned into the workspace root (for reference and graph development). These repos are **never** committed to this public repo: they are git-excluded via `.git/info/exclude` and `.gitignore`, and protected by a pre-commit leak guard. This workflow applies **since 10-Feb-26**.
-
-- Edit `.private-repos.conf` (repo root) and set the two directory names (`DATA_REPO_DIR`, `MONOREPO_DIR`).
-- Clone the private repos into those directories (ask a team member for the repo URLs).
-- Run the idempotent setup script:
+### 1. Clone and run setup
 
 ```bash
-bash scripts/setup-workspace.sh
+git clone https://github.com/gjbm2/dagnet.git
+cd dagnet
+./setup.sh
 ```
 
-This script is safe to run repeatedly. It will:
-- Add the private directories to `.git/info/exclude` (git ignores them, Cursor can still see them)
-- Activate the pre-commit hook (`core.hooksPath=.githooks`)
-- Verify `.private-repos.conf` itself is gitignored
-- Scan tracked files for leaked private repo directory names
-- Verify both exclusions and hook activation
+The interactive setup script walks you through everything:
 
-**Confidentiality**: The literal directory names of the private repos are confidential and must never appear in tracked files, commit messages, documentation, or code comments. Always refer to them as "the data repo" / "the monorepo" or by their config variable names (`DATA_REPO_DIR` / `MONOREPO_DIR`). The setup script checks for this automatically.
+- **GitHub token** — step-by-step guidance to create one with the right scopes
+- **Data repo** — clones the graph/parameter repository locally and configures the app to access it via the GitHub API (verifies you have collaborator access before cloning)
+- **Monorepo** (optional) — clones the production web app locally for reference
+- **Snapshot database** (optional) — configures a PostgreSQL connection for local snapshot writes
+- **Dependencies** — installs Node 22 (via nvm), npm packages, Python venv, and Playwright browsers
 
-Graph-development playbooks and scripts live in the private data repo under `graph-ops/`.
+The script is idempotent — safe to re-run at any time. On re-run it detects existing configuration, shows what's found, and asks before changing anything. Re-run it to rotate a token, add the database you skipped earlier, etc.
 
-**Environment files**: `graph-editor/env.local.template` and `graph-editor/env.production` contain private repo names and credential placeholders. They are gitignored and must never be committed. To set up your local environment, copy `graph-editor/.env.example` to `graph-editor/.env.local` and fill in your own values.
-
-3. **Configure environment variables**
-   ```bash
-   cd graph-editor
-   cp .env.example .env.local  # or .env
-   # Edit .env.local with your GitHub token and other settings
-   ```
-   
-   Note: Use `.env.local` for local development with secrets (not committed to git), or `.env` for shared defaults.
-
-   **Required variables:**
-   - `VITE_GITHUB_TOKEN` - GitHub personal access token (for file operations)
-   - `VITE_GIT_REPO_OWNER` - Your GitHub username
-   - `VITE_GIT_REPO_NAME` - Your repository name
-
-   **Database variables (for snapshot storage):**
-   - `DB_CONNECTION` - PostgreSQL connection string for snapshot database (e.g., Neon)
-   - `VITE_SNAPSHOTS_ENABLED=true` - Enable snapshot writes (default: false)
-
-   **Optional variables (defaults work for most setups):**
-   - `VITE_PORT=5173` - Frontend dev server port
-   - `VITE_PYTHON_API_PORT=9000` - Python backend port
-   - `VITE_PYTHON_API_URL=http://localhost:9000` - Python backend URL
-   - `VITE_USE_MOCK_COMPUTE=false` - Set to `true` for frontend-only development
-
-3. **Start development servers**
-   ```bash
-   cd ..  # Back to root
-   ./dev-start.sh
-   ```
-
-   This will:
-   - Install all dependencies (npm + Python)
-   - Start frontend on port specified in `.env` (default: 5173)
-   - Start Python API on port specified in `.env` (default: 9000)
-   - Open split tmux panes for both
-
-### Development (Local)
+### 2. Start development servers
 
 ```bash
-# One-command dev server (frontend + Python API in split panes):
 ./dev-start.sh
+```
 
-# With clean install (clears caches, reinstalls everything):
-./dev-start.sh --clean
+This starts the frontend and Python API in split tmux panes.
 
-# Stop servers:
-./dev-stop.sh
+```bash
+./dev-start.sh --clean   # Full clean reinstall + start
+./dev-stop.sh            # Stop servers
+./dev-restart.sh         # Restart servers
 ```
 
 **Access:**
-- Frontend: http://localhost:5173 (or your `VITE_PORT`)
-- Python API: http://localhost:9000 (or your `PYTHON_API_PORT`)
-- API Docs: http://localhost:9000/docs
 
-**Requirements:**
-- Node.js 18+
-- Python 3.9+
-- tmux (auto-installed by script if missing)
-- GitHub personal access token (create at https://github.com/settings/tokens)
+- Frontend: http://localhost:5173
+- Python API: http://localhost:9000
+- API docs: http://localhost:9000/docs
 
-### Manual Setup
+### What setup.sh configures
+
+| File | Contents |
+|------|----------|
+| `graph-editor/.env.local` | GitHub token, data repo owner/name, DB connection string, port defaults |
+| `.private-repos.conf` | Local directory names for the two private repos (gitignored) |
+
+**Environment variables (in `.env.local`):**
+
+| Variable | Purpose | Default |
+|----------|---------|---------|
+| `VITE_GITHUB_TOKEN` | GitHub personal access token | *(prompted by setup)* |
+| `VITE_GIT_REPO_OWNER` | Data repo owner (parsed from clone URL) | *(prompted by setup)* |
+| `VITE_GIT_REPO_NAME` | Data repo name (parsed from clone URL) | *(prompted by setup)* |
+| `DB_CONNECTION` | PostgreSQL connection string for snapshot storage | *(optional)* |
+| `VITE_SNAPSHOTS_ENABLED` | Enable snapshot writes | `false` |
+| `VITE_PORT` | Frontend dev server port | `5173` |
+| `PYTHON_API_PORT` | Python backend port | `9000` |
+| `VITE_PYTHON_API_URL` | Python backend URL (frontend reads this) | `http://localhost:9000` |
+| `VITE_USE_MOCK_COMPUTE` | Set `true` for frontend-only dev (no Python backend) | `false` |
+
+> **Port note:** `PYTHON_API_PORT` controls the backend process; `VITE_PYTHON_API_URL` tells the frontend where to find it. If you change the port, update both.
+
+### Private context repos
+
+The setup script clones two private repos into the workspace root. These are **never** committed to this public repo; they are git-excluded via `.git/info/exclude` and protected by a pre-commit leak guard.
+
+| Config variable | Role | Contains |
+|-----------------|------|----------|
+| `DATA_REPO_DIR` | "the data repo" | Conversion graphs, event definitions, node/parameter YAML files, and `graph-ops/` (playbooks, validation scripts). This is the same repo DagNet accesses via the GitHub API — cloning it locally enables agentic workflows (direct file editing, commits, playbook execution). |
+| `MONOREPO_DIR` | "the monorepo" | The production web application. Used for tracing API endpoints, understanding product behaviour, and verifying data flows. |
+
+**Confidentiality:** The literal directory names are confidential and must never appear in tracked files, commit messages, or documentation. Always refer to them as "the data repo" / "the monorepo" or by their config-variable names.
+
+### Manual setup (without setup.sh)
+
+If you prefer to configure manually:
+
+1. Copy `graph-editor/.env.example` to `graph-editor/.env.local` and fill in values
+2. Create `.private-repos.conf` at the repo root with `DATA_REPO_DIR=<name>` and `MONOREPO_DIR=<name>`
+3. Clone the private repos and run `bash scripts/setup-workspace.sh`
+4. Run `./dev-bootstrap.sh` to install all dependencies (or just `./dev-start.sh` which also installs deps)
+
+---
+
+## Requirements
+
+- **Node.js 22** (pinned in `graph-editor/.nvmrc`; `dev-start.sh` sources nvm automatically)
+- **Python 3.9+**
+- **tmux** (auto-installed by `dev-start.sh` if missing)
+- **GitHub personal access token**
+
+### Manual setup (without tmux)
 
 ```bash
 # Frontend
@@ -117,135 +116,203 @@ pip install -r requirements.txt
 python dev-server.py
 ```
 
+---
+
+## Features
+
+### Visual Graph Editor
+
+- **Interactive canvas** — drag-and-drop nodes, connect edges, visualise probability flow
+- **Multiple views** — graph canvas, raw JSON/YAML, schema-driven forms (Monaco editor for DSL)
+- **Copy & paste / drag & drop** from registry files for rapid graph construction
+- **Latency beads** — visual indicators showing median lag and cohort completeness on edges
+
+### Latency-Aware Graphs (LAG)
+
+- **Temporal modelling** — edges as time-consuming processes, not just static probabilities
+- **Cohort analysis** — `cohort(1-Dec-25:7-Dec-25)` DSL for entry-date windowing
+- **Evidence vs forecast** — distinguish observed conversions ($p_{\text{evidence}}$) from projected completions ($p_{\infty}$)
+- **Daily time-series** — full `n_daily`, `k_daily` arrays per parameter file
+- **On-the-fly aggregation** — select any date range; evidence recalculates instantly
+
+### Probability & Analytics
+
+- **Conditional probabilities** — `visited()`, `exclude()` modifiers per edge
+- **What-If analysis** — change any parameter, see downstream impact instantly
+- **Scenarios** — save, compare, and overlay parameter configurations with live composition
+- **MSMDC engine** — minimal-set-of-maximally-discriminating-constraints for multi-path probability queries (Python / NetworkX)
+- **Case variants** — A/B testing with weighted variant splits
+- **Bridge view** — attribute reach changes to local probability changes across the graph
+
+### Snapshot Database
+
+- **Automatic persistence** — every data retrieval is stored with retrieval timestamp, cohort anchor, slice context, and conversion counts
+- **Time-series analysis** — cohort maturity charting, `asat(...)` historical queries, lag histograms, daily conversions
+- **Snapshot Manager** — browse, inspect, diff, download, or delete snapshot data; create equivalence links between old and new signatures
+- **Historical file viewing** — open any file as it was at a past git commit
+
+### Data Connections
+
+- **DAS adapters** — Amplitude, Google Sheets, PostgreSQL, and custom HTTP sources with capability detection
+- **Contexts** — segment by channel, device, browser, etc. with MECE partition handling
+- **Incremental fetch** — only retrieve missing days when expanding windows
+- **Query DSL** — `from().to().visited().context().cohort()` chaining
+
+### Sharing & Dashboarding
+
+- **Live share links** — small URLs; content pulled from repo/branch/graph identity on open
+- **Static share links** — self-contained snapshots embedded in the URL
+- **Multi-tab bundles** — share a dashboard containing multiple tabs from a single `share=` payload
+- **Scenario integrity** — scenario names, colours, and visibility modes are carried into shares
+
+### Automation
+
+- **Headless automation mode** — pull latest → retrieve all slices → commit, triggered by `?retrieveall=<graph>` URL parameter
+- **Local scheduling** — designed for Windows Task Scheduler or cron; no server-side scheduler needed
+- **Daily fetch** — `dailyFetch: true` on a graph enables automatic snapshot accumulation
+
+---
+
 ## Project Structure
 
 ```
 dagnet/
-├── graph-editor/             # Frontend React/TypeScript app (**Vercel deployment root**)
-│   ├── src/                  # React/TypeScript source code
-│   ├── public/               # Static assets and public documentation
-│   │   └── docs/            # **PUBLIC USER DOCUMENTATION** (user-facing guides)
-│   ├── api/                  # Serverless functions (TS + Python)
-│   ├── lib/                  # **ALL PYTHON LIBRARIES** (graph computation, MSMDC, queries)
-│   │   ├── algorithms/       # MSMDC algorithms (inclusion-exclusion, graph analysis)
-│   │   ├── msmdc.py          # MSMDC query generation
-│   │   ├── query_dsl.py      # Query DSL parser
-│   │   ├── graph_types.py    # Graph data models
-│   │   ├── graph_select.py   # Graph topology filtering
-│   │   └── stats_enhancement.py  # Statistical enhancements
-│   ├── tests/                # Python tests
-│   ├── docs/                 # Component-specific technical documentation
-│   ├── dev-server.py         # Local Python dev server
-│   ├── requirements.txt      # Python dependencies
-│   ├── pytest.ini           # Pytest configuration
-│   └── venv/                 # Python virtual environment (local dev)
-├── docs/                     # **TECHNICAL DOCUMENTATION** (developer/architecture docs)
-│   ├── current/              # Current technical documentation and specs
-│   │   └── project-contexts/ # Project context and status documents
-│   └── archive/              # Historical documentation and completed work
-│       └── project-perf/     # Performance testing and benchmarks (moved from /perf)
-├── param-registry/           # Dev testing: app accesses git files here; create sample files for testing
-├── apps-script/              # Google Apps Script integrations
-├── dev-start.sh             # Quick-start script (starts frontend + backend)
-├── dev-stop.sh              # Stop all dev servers
-└── dev-restart.sh           # Restart development servers
+├── graph-editor/               # Deployable app (Vercel deployment root)
+│   ├── src/                    # React / TypeScript source
+│   │   ├── components/         # UI components (~160 .tsx files)
+│   │   ├── contexts/           # React contexts
+│   │   ├── hooks/              # Custom hooks
+│   │   ├── services/           # Service layer (48+ modules) — single source of truth for business logic
+│   │   ├── lib/                # Client-side libraries (DSL, DAS adapters, graph helpers, share payload)
+│   │   │   └── das/            # Data adapter system (Amplitude, Sheets, PostgreSQL, HTTP)
+│   │   ├── types/              # TypeScript type definitions
+│   │   └── db/                 # IndexedDB (Dexie) schema
+│   ├── lib/                    # Python libraries (graph computation, MSMDC, queries)
+│   │   ├── algorithms/         # MSMDC algorithms (inclusion-exclusion, graph analysis)
+│   │   ├── runner/             # Path runner, cohort maturity, forecasting, lag model fitter
+│   │   ├── msmdc.py            # MSMDC query generation
+│   │   ├── query_dsl.py        # Query DSL parser
+│   │   ├── graph_types.py      # Graph data models (Pydantic)
+│   │   ├── graph_select.py     # Graph topology filtering
+│   │   ├── snapshot_service.py # Snapshot DB service (Postgres)
+│   │   └── stats_enhancement.py
+│   ├── api/                    # Vercel serverless functions (TS + Python)
+│   ├── server/                 # Dev proxy (GitHub API proxy for local dev)
+│   ├── e2e/                    # Playwright end-to-end tests (~20 specs)
+│   ├── tests/                  # Python tests
+│   ├── public/                 # Static assets
+│   │   └── docs/               # User-facing documentation (served in-app)
+│   ├── scripts/                # Developer utilities (export-graph-bundle, scheduling, etc.)
+│   │   └── scheduling/         # Windows Task Scheduler / cron setup scripts
+│   ├── dev-server.py           # Local Python dev server (FastAPI + Uvicorn)
+│   ├── requirements.txt        # Python dependencies
+│   ├── playwright.config.ts    # E2E test configuration
+│   ├── vite.config.ts          # Vite configuration
+│   └── .nvmrc                  # Node version pin (22)
+├── docs/                       # Technical documentation (developer / architecture)
+│   ├── current/                # Active specs and project contexts
+│   │   └── project-contexts/   # Current project status and work plans
+│   └── archive/                # Historical documentation and completed work
+├── param-registry/             # Dev testing: sample graph/parameter files
+├── apps-script/                # Google Apps Script integrations
+├── scripts/                    # Workspace-level scripts (setup-workspace, extract-mark-logs)
+├── dev-start.sh                # Quick-start (frontend + backend in tmux)
+├── dev-stop.sh                 # Stop all dev servers
+└── dev-restart.sh              # Restart dev servers
 ```
 
-## Features
+---
 
-### 🕐 Project LAG: Temporal Probability (1.0)
+## Tech Stack
 
-The 1.0 release introduces **Latency-Aware Graphs** — a shift from static snapshots to time-indexed flow models.
+**Frontend:**
 
-| Capability | Description |
-|------------|-------------|
-| **Cohort Windows** | Analyse users by *entry date* with `cohort(1-Dec-25:7-Dec-25)` DSL |
-| **Daily Time-Series** | Full `n_daily`, `k_daily` arrays stored per parameter file |
-| **On-the-fly Aggregation** | Select any date range; evidence recalculates instantly |
-| **Latency Tracking** | Model time-to-convert distributions per edge |
-| **Evidence vs Forecast** | Distinguish observed ($p_{evidence}$) from projected ($p_{\infty}$) |
+- React 18 + TypeScript
+- Vite 5
+- ReactFlow (graph visualisation)
+- Monaco Editor (query DSL editing)
+- Zustand (state management)
+- Dexie / IndexedDB (offline-first persistence)
+- ECharts (charting — cohort maturity, lag histograms, daily conversions)
+- MUI + Radix UI (component primitives)
 
-### Visual Graph Editor
-- **Drag-and-Drop Canvas**: Create nodes, connect edges, visualise probability flow
-- **Copy & Paste / Drag & Drop**: Rapid graph construction from registry files
-- **Multiple Views**: Graph canvas, raw JSON/YAML, schema-driven forms
-- **Latency Beads**: Visual indicators showing median lag and cohort completeness
+**Backend:**
 
-### Probability & Analytics
-- **Conditional Probabilities**: `visited()`, `exclude()` modifiers per edge
-- **What-If Analysis**: Change any parameter, see downstream impact instantly
-- **Scenarios**: Save, compare, and overlay parameter configurations
-- **MSMDC Engine**: Multi-path probability calculations (Python/NetworkX)
-- **Case Variants**: A/B testing with weighted variant splits
+- Python 3.9+ (graph computation)
+- NetworkX (graph algorithms)
+- Pydantic (data models with schema parity to TypeScript)
+- FastAPI + Uvicorn (local dev server)
+- psycopg2 (PostgreSQL driver for snapshot DB)
+- Vercel Serverless Functions (production)
 
-### Data Connections
-- **DAS Adapters**: Amplitude, Google Sheets, PostgreSQL, and custom HTTP sources
-- **Contexts**: Segment by channel, device, browser with MECE partition handling
-- **Incremental Fetch**: Only retrieve missing days when expanding windows
-- **Query DSL**: `from().to().visited().context().cohort()` chaining
+**Testing:**
 
-## Documentation
+- Vitest + fake-indexeddb (frontend integration tests)
+- Playwright (E2E browser tests)
+- pytest (Python tests)
 
-### 📚 Public User Documentation
+**Deployment:**
 
-**Location:** [`graph-editor/public/docs/`](graph-editor/public/docs/)
+- Vercel (CDN + serverless Python)
 
-User-facing documentation accessible both in the app and on GitHub:
+---
 
-- **[About DagNet](graph-editor/public/docs/about.md)** - Project overview, capabilities, and independent assessment
-- [User Guide](graph-editor/public/docs/user-guide.md) - Getting started and core concepts
-- [Contexts](graph-editor/public/docs/contexts.md) - Data segmentation by channel, device, browser, etc.
-- [Data Connections & Adapters](graph-editor/public/docs/data-connections.md) - Connect to external data sources
-- [Query Expressions](graph-editor/public/docs/query-expressions.md) - Query DSL reference
-- [What-If Analysis](graph-editor/public/docs/what-ifs-with-conditionals.md) - Scenario modeling
-- [Scenarios](graph-editor/public/docs/scenarios.md) - Parameter overlays and A/B testing
-- [API Reference](graph-editor/public/docs/api-reference.md) - Programmatic access
-- [Keyboard Shortcuts](graph-editor/public/docs/keyboard-shortcuts.md) - Productivity tips
-- [LAG Statistics Reference](graph-editor/public/docs/lag-statistics-reference.md) - Latency-aware graph statistics (canonical)
-- [CHANGELOG](graph-editor/public/docs/CHANGELOG.md) - Release history
+## Architecture
 
-### 🔧 Technical Documentation
+```
+Local Development:
+┌─────────────────┐         ┌──────────────────┐
+│  Vite Frontend  │────────▶│  dev-server.py   │
+│  :5173          │  HTTP   │  :9000           │
+│  (TypeScript)   │◀────────│  (Python/FastAPI) │
+└─────────────────┘         └──────────────────┘
+                                     │
+                                     ▼
+                              ┌─────────────┐
+                              │  lib/*.py    │
+                              │  (NetworkX,  │
+                              │  algorithms, │
+                              │  runner,     │
+                              │  snapshots)  │
+                              └─────────────┘
+                                     │
+                                     ▼
+                              ┌─────────────┐
+                              │  PostgreSQL  │
+                              │  (Neon)      │
+                              │  snapshots   │
+                              └─────────────┘
 
-**Location:** [`docs/`](docs/)
+Production (Vercel):
+┌─────────────────┐         ┌──────────────────┐
+│  Static Assets  │────────▶│  Serverless Fns   │
+│  CDN            │  HTTP   │  /api/*.py        │
+│  (React build)  │◀────────│  (Python)         │
+└─────────────────┘         └──────────────────┘
+```
 
-Developer and architecture documentation:
-
-#### Current Documentation (`docs/current/`)
-Active technical specs, architecture decisions, and project contexts:
-- Check `docs/current/project-contexts/` for current project status and work plans
-
-#### Component-Specific Docs (`graph-editor/docs/`)
-- [Amplitude Credentials Setup](graph-editor/docs/AMPLITUDE_CREDENTIALS_SETUP.md)
-- [DAS CORS Explanation](graph-editor/docs/DAS_CORS_EXPLANATION.md)
-- [DAS DSL Excludes and Subtraction](graph-editor/docs/DAS_DSL_EXCLUDES_AND_SUBTRACTION.md)
-- [Proxy Local vs Production](graph-editor/docs/PROXY_LOCAL_VS_PRODUCTION.md)
-
-#### Testing Documentation (`graph-editor/`)
-- [Integration Testing Guide](graph-editor/INTEGRATION_TESTING_GUIDE.md)
-- [Testing Strategy](graph-editor/TESTING_STRATEGY.md)
-- [Test Quick Start](graph-editor/TEST_QUICK_START.md)
-
-#### Archive (`docs/archive/`)
-Historical documentation and completed work - useful for understanding design decisions and past implementations
+---
 
 ## Database Setup (Snapshot Storage)
 
-DagNet can store historical conversion data in a PostgreSQL database for analytics.
+DagNet stores historical conversion data in PostgreSQL for time-series analysis. This is optional — the app works fully without it.
 
-### Setting Up Neon (Recommended)
+### Setting up Neon (recommended)
 
 1. Create a free account at [neon.tech](https://neon.tech)
 2. Create a new project and database
-3. Copy the connection string from the dashboard
-4. Add to your `.env.local`:
-   ```bash
-   DB_CONNECTION=postgresql://user:password@host/database?sslmode=require
-   VITE_SNAPSHOTS_ENABLED=true
-   ```
+3. Copy the connection string and add to `.env.local`:
 
-### Database Schema
+```bash
+DB_CONNECTION=postgresql://user:password@host/database?sslmode=require
+VITE_SNAPSHOTS_ENABLED=true
+```
 
-The database requires a single `snapshots` table. Create it with:
+### Schema
+
+The database uses two tables, created lazily on first use:
+
+**`snapshots`** — time-series conversion data (core table):
 
 ```sql
 CREATE TABLE IF NOT EXISTS snapshots (
@@ -264,163 +331,136 @@ CREATE TABLE IF NOT EXISTS snapshots (
     onset_delta_days REAL,
     PRIMARY KEY (param_id, core_hash, slice_key, anchor_day, retrieved_at)
 );
-
-CREATE INDEX idx_snapshots_param_hash ON snapshots(param_id, core_hash);
-CREATE INDEX idx_snapshots_anchor ON snapshots(anchor_day);
 ```
 
-### Verifying Database Connection
+**`signature_registry`** — catalogue of known `(param_id, core_hash)` pairs with canonical signature text and inputs. Written during snapshot appends; read for inventory and Snapshot Manager browsing.
 
-Check the connection with the health endpoint:
+Signature equivalence mappings (linking old and new core hashes for data continuity) are stored in a repo-versioned `hash-mappings.json` file, not in the database.
+
+Both tables are created automatically by the backend when first needed — no migration step required.
+
+### Verifying the connection
+
 ```bash
 curl http://localhost:9000/api/snapshots/health
-# Should return: {"status": "ok", "database": "connected"}
+# {"status": "ok", "database": "connected"}
 ```
 
-## Tech Stack
+---
 
-**Frontend:**
-- React 18 + TypeScript
-- Vite
-- ReactFlow (graph visualization)
-- Monaco Editor (query DSL)
-- Zustand (state management)
+## Documentation
 
-**Backend:**
-- Python 3.9+ (graph computation)
-- NetworkX (graph algorithms)
-- FastAPI (local dev server)
-- Vercel Serverless Functions (production)
+### User documentation
 
-**Deployment:**
-- Vercel (edge network + serverless)
-- Region co-location for minimal latency
+**Location:** [`graph-editor/public/docs/`](graph-editor/public/docs/) — accessible in-app and on GitHub.
 
-## Development Workflow
+- [About DagNet](graph-editor/public/docs/about.md) — project overview and independent assessment
+- [User Guide](graph-editor/public/docs/user-guide.md) — getting started and core concepts
+- [Query Expressions](graph-editor/public/docs/query-expressions.md) — query DSL reference
+- [Query Algorithms White Paper](graph-editor/public/docs/query-algorithms-white-paper.md) — MSMDC algorithm
+- [Data Connections & Adapters](graph-editor/public/docs/data-connections.md) — connect to external data sources
+- [Contexts](graph-editor/public/docs/contexts.md) — data segmentation by channel, device, browser, etc.
+- [What-If Analysis](graph-editor/public/docs/what-ifs-with-conditionals.md) — scenario modelling
+- [Scenarios](graph-editor/public/docs/scenarios.md) — parameter overlays and A/B testing
+- [LAG Statistics Reference](graph-editor/public/docs/lag-statistics-reference.md) — latency-aware graph statistics
+- [Forecasting Settings](graph-editor/public/docs/forecasting-settings.md) — forecasting configuration
+- [Automation & Scheduling](graph-editor/public/docs/automation-and-scheduling.md) — headless refreshes and scheduling
+- [Keyboard Shortcuts](graph-editor/public/docs/keyboard-shortcuts.md) — productivity tips
+- [API Reference](graph-editor/public/docs/api-reference.md) — programmatic access
+- [Glossary](graph-editor/public/docs/glossary.md) — terminology
+- [CHANGELOG](graph-editor/public/docs/CHANGELOG.md) — release history
 
-### Hot Reload
-Both servers support hot reload:
-- **Frontend**: Vite HMR (instant updates)
-- **Python**: Uvicorn auto-reload (restarts on file change)
+### Technical documentation
 
-## Local development
+**Location:** [`docs/`](docs/) — developer and architecture docs.
 
-Using /dev-server.py:
+- `docs/current/` — active technical specs and architecture decisions
+- `docs/current/project-contexts/` — current project status and work plans
+- `docs/archive/` — historical documentation (useful for understanding past design decisions)
 
-Local Development:
-┌─────────────────┐         ┌──────────────────┐
-│  Vite Frontend  │────────▶│  dev-server.py   │
-│  :5173          │  HTTP   │  :9000           │
-│  (TypeScript)   │◀────────│  (Python/FastAPI)│
-└─────────────────┘         └──────────────────┘
-                                     │
-                                     ▼
-                              ┌─────────────┐
-                              │ lib/*.py    │
-                              │ (NetworkX,  │
-                              │  algorithms)│
-                              │ (in graph-  │
-                              │  editor/)   │
-                              └─────────────┘
+---
 
-Production (Vercel):
-┌─────────────────┐         ┌──────────────────┐
-│  Static Assets  │────────▶│  Serverless Fns  │
-│  CDN            │  HTTP   │  /api/*.py       │
-│  (React build)  │◀────────│  (Python)        │
-└─────────────────┘         └──────────────────┘
-
-### Testing
+## Testing
 
 ```bash
-# Frontend tests
+# Frontend (Vitest) — specific files only
 cd graph-editor
-npm test
+npm test -- --run src/services/__tests__/yourFile.test.ts
 
-# Python tests
+# Python
 cd graph-editor
 source venv/bin/activate
 pytest tests/ -v
+
+# E2E (Playwright) — specific spec
+cd graph-editor
+npx playwright test e2e/yourSpec.spec.ts
+
+# Python coverage
 pytest tests/ --cov=lib --cov-report=html
 ```
 
-### Cleaning/Resetting
+### Hot reload
+
+- **Frontend**: Vite HMR (instant updates)
+- **Python**: Uvicorn auto-reload (restarts on file change)
+
+---
+
+## Troubleshooting
+
+### Port already in use
 
 ```bash
-# Full clean and restart
-./dev-start.sh --clean
+# Find what's using the port
+lsof -i :5173
+lsof -i :9000
 
-# Manual cleanup
-cd graph-editor
-npm cache clean --force
-rm -rf node_modules package-lock.json
-rm -rf venv
-find . -type d -name "__pycache__" -exec rm -rf {} +
-cd ..
+# Kill if needed
+kill -9 <PID>
+
+# Or use the stop script
+./dev-stop.sh
 ```
 
-### Troubleshooting
-
-#### Port Already in Use
-
-If you get "port already in use" errors:
-
-1. **Change ports in your env file:**
-   ```bash
-   # Edit graph-editor/.env.local (or .env)
-   VITE_PORT=5174              # or any free port
-   VITE_PYTHON_API_PORT=9001   # or any free port
-   VITE_PYTHON_API_URL=http://localhost:9001  # match Python port
-   ```
-
-2. **Find what's using the port:**
-   ```bash
-   # Linux/Mac
-   lsof -i :5173
-   lsof -i :9000
-   
-   # Kill process if needed
-   kill -9 <PID>
-   ```
-
-3. **Or use dev-stop.sh to clean up:**
-   ```bash
-   ./dev-stop.sh
-   ```
-
-#### Python Server Not Starting
-
-- Ensure Python 3.9+ is installed: `python3 --version`
-- Check virtual environment: `cd graph-editor && source venv/bin/activate`
-- Manually install dependencies: `cd graph-editor && pip install -r requirements.txt`
-
-#### Frontend Tests Skipping
-
-Some tests require Python backend running:
-- 11 integration tests will skip if Python server is not running
-- This is normal for frontend-only development
-- To run all tests: start Python server first with `cd graph-editor && python dev-server.py`
-
-#### Mock Mode for Frontend-Only Development
-
-If you don't want to run the Python backend:
+To change ports, edit `graph-editor/.env.local`:
 
 ```bash
-# Set in graph-editor/.env.local (or .env)
+VITE_PORT=5174
+PYTHON_API_PORT=9001
+VITE_PYTHON_API_URL=http://localhost:9001
+```
+
+### Python server not starting
+
+```bash
+python3 --version          # Ensure 3.9+
+cd graph-editor
+source venv/bin/activate
+pip install -r requirements.txt
+python dev-server.py
+```
+
+### Frontend tests skipping
+
+Some tests require the Python backend. Start it first with `python dev-server.py`, then re-run tests.
+
+### Mock mode (frontend-only development)
+
+```bash
+# In graph-editor/.env.local
 VITE_USE_MOCK_COMPUTE=true
 ```
 
-This returns mock data for all Python API calls.
+---
 
 ## Contributing
 
-1. Check `docs/current/project-contexts/` for current project status and priorities
-2. Review technical documentation in `docs/current/` and `docs/archive/`
-3. Write tests for new features
-4. Ensure both frontend and Python tests pass
-5. Update relevant documentation in `graph-editor/public/docs/` for user-facing changes
+1. Check `docs/current/project-contexts/` for current priorities
+2. Write tests for new features (prefer integration tests over unit tests)
+3. Ensure both frontend and Python tests pass
+4. Update `graph-editor/public/docs/` if user-facing behaviour changes
 
-## License
+## Licence
 
 MIT
-

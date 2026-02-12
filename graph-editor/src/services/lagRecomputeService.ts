@@ -13,6 +13,7 @@ import { fileRegistry } from '../contexts/TabContext';
 import { sessionLogService } from './sessionLogService';
 import { compareModelFits, type FEModelParams } from './forecastingParityService';
 import { parseUKDate } from '../lib/dateFormat';
+import { getClosureSet } from './hashMappingsService';
 
 /** Python API base URL (same pattern as snapshotWriteService). */
 const PYTHON_API_BASE = import.meta.env.DEV 
@@ -43,6 +44,8 @@ export interface RecomputeSubject {
    * fitting intentionally does not consume).
    */
   onset_delta_days?: number;
+  /** FE-derived closure set. When present, BE uses this for equivalence expansion. */
+  equivalent_hashes?: Array<{ core_hash: string; operation: string; weight: number }>;
 }
 
 export interface RecomputeResult {
@@ -314,6 +317,7 @@ export async function runParityComparison(args: {
       anchor_to: isoTo,
       target: { targetId: edgeUuid },
       onset_delta_days: feFittingOnset,
+      equivalent_hashes: getClosureSet(coreHash),
     });
   }
 

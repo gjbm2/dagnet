@@ -13,6 +13,7 @@ import { lagHorizonsService } from './lagHorizonsService';
 import { rateLimiter, getEffectiveRateLimitCooloffMinutes } from './rateLimiter';
 import { countdownService } from './countdownService';
 import { batchAnchorCoverage, type BatchAnchorCoverageSubject } from './snapshotWriteService';
+import { getClosureSet } from './hashMappingsService';
 import { computeShortCoreHash } from './coreHashService';
 
 /**
@@ -469,7 +470,7 @@ class RetrieveAllSlicesService {
                 slice_keys: sliceKeys,
                 anchor_from: anchorFromISO,
                 anchor_to: anchorToISO,
-                include_equivalents: true,
+                equivalent_hashes: getClosureSet(coreHash),
               });
               subjectIndexToItemIndex.push(ii);
               subjectIndexToItemKey.push(item.itemKey);
@@ -509,7 +510,7 @@ class RetrieveAllSlicesService {
                     '- core_hash (short)',
                     '- slice_keys (family.mode())',
                     '- anchor_from/to (ISO date)',
-                    '- include_equivalents (bool)',
+                    '- equivalent_hashes (closure set)',
                   ].join('\n'),
                   {
                     sliceDSL,
@@ -591,7 +592,7 @@ class RetrieveAllSlicesService {
                   const counts = `present=${(cr as any)?.present_anchor_day_count ?? '?'} expected=${(cr as any)?.expected_anchor_day_count ?? '?'}`;
                   const sel = `slice_keys=[${(subj?.slice_keys || []).join(', ')}]`;
                   const subjId = `param_id=${subj?.param_id ?? ''} core_hash=${subj?.core_hash ?? ''}`;
-                  const subjFlags = `include_equivalents=${subj?.include_equivalents ?? true} anchor=${subj?.anchor_from ?? ''}→${subj?.anchor_to ?? ''}`;
+                  const subjFlags = `has_closure=${(subj?.equivalent_hashes?.length ?? 0) > 0} anchor=${subj?.anchor_from ?? ''}→${subj?.anchor_to ?? ''}`;
                   const normSel = Array.isArray((cr as any)?.slice_keys_normalised)
                     ? ` norm=[${(cr as any).slice_keys_normalised.join(', ')}]`
                     : '';

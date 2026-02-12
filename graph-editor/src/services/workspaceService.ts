@@ -166,6 +166,19 @@ class WorkspaceService {
         }
       }
 
+      // Add repo-root JSON files (hash-mappings.json etc.)
+      const rootFiles = [
+        { fileName: 'hash-mappings.json', type: 'hash-mappings' as ObjectType },
+      ];
+
+      for (const rootFile of rootFiles) {
+        const fullPath = basePath ? `${basePath}/${rootFile.fileName}` : rootFile.fileName;
+        const rootTreeItem = tree.find((item: any) => item.path === fullPath && item.type === 'blob');
+        if (rootTreeItem) {
+          remoteFiles.push(rootTreeItem);
+        }
+      }
+
       // Compare SHAs
       let changed = 0;
       let added = 0;
@@ -350,6 +363,23 @@ class WorkspaceService {
         }
       }
 
+      // Add repo-root JSON files (hash-mappings.json etc.)
+      const rootFiles = [
+        { fileName: 'hash-mappings.json', type: 'hash-mappings' as ObjectType },
+      ];
+
+      for (const rootFile of rootFiles) {
+        const fullPath = basePath ? `${basePath}/${rootFile.fileName}` : rootFile.fileName;
+        const rootTreeItem = tree.find((item: any) => item.path === fullPath && item.type === 'blob');
+        if (rootTreeItem) {
+          console.log(`📋 WorkspaceService: Found root file ${fullPath}`);
+          filesToFetch.push({
+            treeItem: rootTreeItem,
+            dirConfig: { type: rootFile.type, extension: 'json', isRootFile: true }
+          });
+        }
+      }
+
       // Log summary of what we're about to fetch
       const filesByTypeBeforeFetch = new Map<string, number>();
       for (const { dirConfig } of filesToFetch) {
@@ -386,7 +416,7 @@ class WorkspaceService {
 
             // Parse content
             let data: any;
-          if (dirConfig.type === 'graph') {
+          if (dirConfig.type === 'graph' || dirConfig.extension === 'json') {
               data = JSON.parse(contentStr);
             } else {
               data = YAML.parse(contentStr);
@@ -404,7 +434,9 @@ class WorkspaceService {
           
           const fileId = dirConfig.isIndex 
             ? `${dirConfig.type}-index`
-            : `${dirConfig.type}-${fileNameWithoutExt}`;
+            : dirConfig.isRootFile
+              ? dirConfig.type
+              : `${dirConfig.type}-${fileNameWithoutExt}`;
 
             // Get file modification time from metadata (standardized across all file types)
             let fileModTime = Date.now();
@@ -845,6 +877,22 @@ class WorkspaceService {
         }
       }
 
+      // Add repo-root JSON files (hash-mappings.json etc.)
+      const rootFiles = [
+        { fileName: 'hash-mappings.json', type: 'hash-mappings' as ObjectType },
+      ];
+
+      for (const rootFile of rootFiles) {
+        const fullPath = basePath ? `${basePath}/${rootFile.fileName}` : rootFile.fileName;
+        const rootTreeItem = tree.find((item: any) => item.path === fullPath && item.type === 'blob');
+        if (rootTreeItem) {
+          remoteFileMap.set(fullPath, {
+            treeItem: rootTreeItem,
+            dirConfig: { type: rootFile.type, extension: 'json', isRootFile: true }
+          });
+        }
+      }
+
       console.log(`🔄 WorkspaceService: Remote has ${remoteFileMap.size} relevant files`);
 
       // STEP 4: Compare SHAs and determine what changed
@@ -990,7 +1038,7 @@ class WorkspaceService {
             
             // Parse content
             let data: any;
-            if (dirConfig.type === 'graph') {
+            if (dirConfig.type === 'graph' || dirConfig.extension === 'json') {
               data = JSON.parse(contentStr);
             } else {
               data = YAML.parse(contentStr);
@@ -1008,7 +1056,9 @@ class WorkspaceService {
             
             const fileId = dirConfig.isIndex 
               ? `${dirConfig.type}-index`
-              : `${dirConfig.type}-${fileNameWithoutExt}`;
+              : dirConfig.isRootFile
+                ? dirConfig.type
+                : `${dirConfig.type}-${fileNameWithoutExt}`;
 
             // Check if local file exists and is dirty
             const localFileState = localFileMap.get(treeItem.path);
@@ -1087,14 +1137,15 @@ class WorkspaceService {
               console.log(`🔀 WorkspaceService: 3-way merge needed for ${treeItem.path} (local changes detected)`);
               
               // Convert to strings for merge
+              const isJsonFile = dirConfig.type === 'graph' || dirConfig.extension === 'json';
               const remoteContent = contentStr;
               const baseContent = localFileState.originalData 
-                ? (dirConfig.type === 'graph' 
+                ? (isJsonFile 
                     ? JSON.stringify(localFileState.originalData, null, 2)
                     : YAML.stringify(localFileState.originalData))
                 : '';
               const localContent = localFileState.data
-                ? (dirConfig.type === 'graph'
+                ? (isJsonFile
                     ? JSON.stringify(localFileState.data, null, 2)
                     : YAML.stringify(localFileState.data))
                 : '';
@@ -1125,7 +1176,7 @@ class WorkspaceService {
                 
                 // Parse merged content back to object
                 const mergedContent = mergeResult.merged || remoteContent;
-                const mergedData = dirConfig.type === 'graph'
+                const mergedData = isJsonFile
                   ? JSON.parse(mergedContent)
                   : YAML.parse(mergedContent);
 
@@ -1197,9 +1248,12 @@ class WorkspaceService {
               const prefixedFile = { ...fileState, fileId: prefixedId };
               await db.files.put(prefixedFile);
               
-              // Update in FileRegistry if loaded
-              if (fileRegistry.getFile(fileId)) {
-                (fileRegistry as any).files.set(fileId, fileState);
+              // Always update FileRegistry in-memory cache.
+              // For NEW files this is critical — without it, services that read
+              // from FileRegistry (e.g. getMappings() for hash-mappings.json)
+              // won't see pulled data until a full reload.
+              (fileRegistry as any).files.set(fileId, fileState);
+              if ((fileRegistry as any).notifyListeners) {
                 (fileRegistry as any).notifyListeners(fileId, fileState);
               }
               
@@ -1687,6 +1741,22 @@ class WorkspaceService {
       }
     }
 
+    // Add repo-root JSON files (hash-mappings.json etc.)
+    const rootFiles = [
+      { fileName: 'hash-mappings.json', type: 'hash-mappings' as ObjectType },
+    ];
+
+    for (const rootFile of rootFiles) {
+      const fullPath = basePath ? `${basePath}/${rootFile.fileName}` : rootFile.fileName;
+      const rootTreeItem = tree.find((item: any) => item.path === fullPath && item.type === 'blob');
+      if (rootTreeItem) {
+        filesToFetch.push({
+          treeItem: rootTreeItem,
+          dirConfig: { type: rootFile.type, extension: 'json', isRootFile: true }
+        });
+      }
+    }
+
     console.log(`📦 WorkspaceService: Fetching ${filesToFetch.length} files in parallel...`);
 
     // STEP 3: Fetch all blobs in parallel
@@ -1703,7 +1773,7 @@ class WorkspaceService {
 
         const contentStr = blobResult.data.content;
         let data: any;
-        if (dirConfig.type === 'graph') {
+        if (dirConfig.type === 'graph' || dirConfig.extension === 'json') {
           data = JSON.parse(contentStr);
         } else {
           data = YAML.parse(contentStr);
@@ -1713,7 +1783,9 @@ class WorkspaceService {
         const fileNameWithoutExt = fileName.replace(/\.(yaml|yml|json)$/, '');
         const fileId = dirConfig.isIndex 
           ? `${dirConfig.type}-index`
-          : `${dirConfig.type}-${fileNameWithoutExt}`;
+          : dirConfig.isRootFile
+            ? dirConfig.type
+            : `${dirConfig.type}-${fileNameWithoutExt}`;
 
         // Update or create file in registry
         const existingFile = fileRegistry.getFile(fileId);

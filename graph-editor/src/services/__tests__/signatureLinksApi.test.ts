@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // We test the client behaviour (payload + error handling) by stubbing fetch.
-import { listSignatures, createEquivalenceLink, resolveEquivalentHashes } from '../signatureLinksApi';
+import { listSignatures } from '../signatureLinksApi';
 
 describe('signatureLinksApi', () => {
   beforeEach(() => {
@@ -73,63 +73,6 @@ describe('signatureLinksApi', () => {
     expect(res.params![0].signature_count).toBe(3);
   });
 
-  it('createEquivalenceLink sends operation/weight/source_param_id for cross-param links', async () => {
-    const fetchMock = vi.fn(async (_url: any, init: any) => {
-      const body = JSON.parse(init.body);
-      expect(body.param_id).toBe('repo-main-param-new');
-      expect(body.core_hash).toBe('hash_new');
-      expect(body.equivalent_to).toBe('hash_old');
-      expect(body.operation).toBe('sum');
-      expect(body.weight).toBe(0.5);
-      expect(body.source_param_id).toBe('repo-main-param-old');
-      return new Response(JSON.stringify({ success: true }), { status: 200, headers: { 'Content-Type': 'application/json' } });
-    });
-    vi.stubGlobal('fetch', fetchMock as any);
-
-    const res = await createEquivalenceLink({
-      param_id: 'repo-main-param-new',
-      core_hash: 'hash_new',
-      equivalent_to: 'hash_old',
-      created_by: 'test',
-      reason: 'param split',
-      operation: 'sum',
-      weight: 0.5,
-      source_param_id: 'repo-main-param-old',
-    });
-    expect(res.success).toBe(true);
-  });
-
-  it('createEquivalenceLink omits operation/weight when equivalent (default)', async () => {
-    const fetchMock = vi.fn(async (_url: any, init: any) => {
-      const body = JSON.parse(init.body);
-      expect(body.operation).toBeUndefined();
-      expect(body.weight).toBeUndefined();
-      expect(body.source_param_id).toBeUndefined();
-      return new Response(JSON.stringify({ success: true }), { status: 200, headers: { 'Content-Type': 'application/json' } });
-    });
-    vi.stubGlobal('fetch', fetchMock as any);
-
-    const res = await createEquivalenceLink({
-      param_id: 'repo-main-param-x',
-      core_hash: 'hash1',
-      equivalent_to: 'hash2',
-      created_by: 'test',
-      reason: 'context change',
-    });
-    expect(res.success).toBe(true);
-  });
-
-  it('resolveEquivalentHashes returns a typed error result on non-2xx', async () => {
-    const fetchMock = vi.fn(async () => {
-      return new Response(JSON.stringify({ detail: 'boom' }), { status: 500, headers: { 'Content-Type': 'application/json' } });
-    });
-    vi.stubGlobal('fetch', fetchMock as any);
-
-    const res = await resolveEquivalentHashes({ param_id: 'r-b-param-x', core_hash: 'abc', include_equivalents: true });
-    expect(res.success).toBe(false);
-    expect(res.core_hashes).toEqual(['abc']);
-    expect(res.count).toBe(1);
-    expect(res.error).toContain('boom');
-  });
+  // NOTE: Tests for createEquivalenceLink, deactivateEquivalenceLink, resolveEquivalentHashes
+  // were removed — those functions no longer exist. Equivalence is now FE-owned via hash-mappings.json.
 });
-

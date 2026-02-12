@@ -31,6 +31,7 @@ import { extractSliceDimensions } from './sliceIsolation';
 import { contextRegistry } from './contextRegistry';
 import { verifyAllCombinationsExist } from './dimensionalReductionService';
 import { querySnapshotRetrievals, type SnapshotRetrievalSummaryRow } from './snapshotWriteService';
+import { getClosureSet } from './hashMappingsService';
 
 function isDev(): boolean {
   try {
@@ -534,7 +535,7 @@ export async function mapFetchPlanToSnapshotSubjects(args: {
           slice_keys: [''], // broad: observe all slice families in the signature closure
           anchor_from: timeBounds.anchorFrom,
           anchor_to: timeBounds.anchorTo,
-          include_equivalents: true,
+          equivalent_hashes: getClosureSet(coreHash),
           include_summary: true,
           limit: 2000,
         });

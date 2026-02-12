@@ -206,72 +206,8 @@ export async function getSignature(params: GetSignatureParams): Promise<GetSigna
   }
 }
 
-export async function listEquivalenceLinks(params: ListEquivalenceLinksParams): Promise<ListEquivalenceLinksResult> {
-  if (!SIGS_ENABLED) return { success: true, rows: [], count: 0 };
-  try {
-    return await postJson<ListEquivalenceLinksResult>('/api/sigs/links/list', {
-      param_id: params.param_id,
-      core_hash: params.core_hash,
-      include_inactive: params.include_inactive ?? false,
-      limit: params.limit,
-    });
-  } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : String(error);
-    console.error('[SignatureLinks] listEquivalenceLinks failed:', errorMessage);
-    return { success: false, rows: [], count: 0, error: errorMessage };
-  }
-}
-
-export async function createEquivalenceLink(params: CreateEquivalenceLinkParams): Promise<CreateEquivalenceLinkResult> {
-  if (!SIGS_ENABLED) return { success: false, error: 'disabled' };
-  try {
-    const body: Record<string, unknown> = {
-      param_id: params.param_id,
-      core_hash: params.core_hash,
-      equivalent_to: params.equivalent_to,
-      created_by: params.created_by,
-      reason: params.reason,
-    };
-    if (params.operation && params.operation !== 'equivalent') body.operation = params.operation;
-    if (params.weight != null && params.weight !== 1.0) body.weight = params.weight;
-    if (params.source_param_id) body.source_param_id = params.source_param_id;
-    return await postJson<CreateEquivalenceLinkResult>('/api/sigs/links/create', body);
-  } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : String(error);
-    console.error('[SignatureLinks] createEquivalenceLink failed:', errorMessage);
-    return { success: false, error: errorMessage };
-  }
-}
-
-export async function deactivateEquivalenceLink(params: DeactivateEquivalenceLinkParams): Promise<DeactivateEquivalenceLinkResult> {
-  if (!SIGS_ENABLED) return { success: false, error: 'disabled' };
-  try {
-    return await postJson<DeactivateEquivalenceLinkResult>('/api/sigs/links/deactivate', {
-      param_id: params.param_id,
-      core_hash: params.core_hash,
-      equivalent_to: params.equivalent_to,
-      created_by: params.created_by,
-      reason: params.reason,
-    });
-  } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : String(error);
-    console.error('[SignatureLinks] deactivateEquivalenceLink failed:', errorMessage);
-    return { success: false, error: errorMessage };
-  }
-}
-
-export async function resolveEquivalentHashes(params: ResolveEquivalentHashesParams): Promise<ResolveEquivalentHashesResult> {
-  if (!SIGS_ENABLED) return { success: true, core_hashes: [params.core_hash], count: 1 };
-  try {
-    return await postJson<ResolveEquivalentHashesResult>('/api/sigs/resolve', {
-      param_id: params.param_id,
-      core_hash: params.core_hash,
-      include_equivalents: params.include_equivalents ?? true,
-    });
-  } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : String(error);
-    console.error('[SignatureLinks] resolveEquivalentHashes failed:', errorMessage);
-    return { success: false, core_hashes: [params.core_hash], count: 1, error: errorMessage };
-  }
-}
+// REMOVED: listEquivalenceLinks, createEquivalenceLink,
+// deactivateEquivalenceLink, resolveEquivalentHashes
+// Equivalence is now FE-owned via hash-mappings.json / hashMappingsService.
+// See: docs/current/project-db/hash-mappings-table-location-be-contract-12-Feb-26.md
 

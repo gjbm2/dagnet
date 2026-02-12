@@ -19,7 +19,8 @@ export type ObjectType =
   | 'about'
   | 'markdown'
   | 'image'
-  | 'signature-links';
+  | 'signature-links'
+  | 'hash-mappings';
 
 /**
  * View modes for displaying content

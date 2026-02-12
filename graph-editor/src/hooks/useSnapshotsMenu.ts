@@ -17,6 +17,8 @@ import {
   type SnapshotInventoryV2Param,
   type SnapshotQueryRow,
 } from '../services/snapshotWriteService';
+import type { ClosureEntry } from '../services/hashMappingsService';
+import { getClosureSet } from '../services/hashMappingsService';
 import { downloadTextFile } from '../services/downloadService';
 import { sessionLogService } from '../services/sessionLogService';
 import { invalidateInventoryCache } from './useEdgeSnapshotInventory';
@@ -154,7 +156,12 @@ function rowsToCsv(rows: SnapshotQueryRow[]): string {
   return [header, ...lines].join('\n');
 }
 
-async function queryAllRowsForParam(dbParamId: string, expectedRowCount: number, core_hash?: string): Promise<{
+async function queryAllRowsForParam(
+  dbParamId: string,
+  expectedRowCount: number,
+  core_hash?: string,
+  equivalent_hashes?: ClosureEntry[],
+): Promise<{
   ok: boolean;
   rows: SnapshotQueryRow[];
   truncated: boolean;
@@ -169,6 +176,9 @@ async function queryAllRowsForParam(dbParamId: string, expectedRowCount: number,
     param_id: dbParamId,
     core_hash,
     limit: limit > 0 ? limit : undefined,
+    ...(equivalent_hashes && equivalent_hashes.length > 0
+      ? { equivalent_hashes }
+      : {}),
   });
 
   if (!resp.success) {
@@ -648,6 +658,23 @@ export function useSnapshotsMenu(objectIds: string[], options: UseSnapshotsMenuO
 
       const scoped = core_hashes && core_hashes.length > 0;
 
+      // If downloading for a specific hash that has equivalents, offer the user a choice.
+      let closureForDownload: ClosureEntry[] | undefined;
+      if (scoped && core_hashes!.length === 1) {
+        const closure = getClosureSet(core_hashes![0]);
+        if (closure.length > 0) {
+          const includeEquivalents = await showConfirm({
+            title: 'Include equivalent signatures?',
+            message: `This signature has ${closure.length} equivalent hash${closure.length === 1 ? '' : 'es'}.\n\nInclude rows from equivalent signatures in the download?`,
+            confirmLabel: 'Include equivalents',
+            cancelLabel: 'Seed hash only',
+          });
+          if (includeEquivalents) {
+            closureForDownload = closure;
+          }
+        }
+      }
+
       setIsDownloading(true);
       const opId = sessionLogService.startOperation('info', 'data-fetch', 'SNAPSHOT_DOWNLOAD', `Downloading snapshots for ${objectId}`);
 
@@ -664,7 +691,7 @@ export function useSnapshotsMenu(objectIds: string[], options: UseSnapshotsMenuO
               dbParamId,
               core_hash: ch,
             });
-            const q = await queryAllRowsForParam(dbParamId, expectedRows, ch);
+            const q = await queryAllRowsForParam(dbParamId, expectedRows, ch, closureForDownload);
             if (!q.ok) {
               sessionLogService.addChild(opId, 'error', 'SNAPSHOT_QUERY_FULL_FAILED', `Query failed for ${objectId}`, q.error, { dbParamId });
               toast.error(`Failed to download snapshots for ${objectId}: ${q.error || 'query failed'}`);

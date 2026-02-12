@@ -6,22 +6,25 @@ overview: Move signature equivalence/hash mappings out of the backend snapshot D
 todos:
   - id: hashfile-service
     content: Add FE hashMappingsService (file-backed) + seed hash-mappings.json in IndexedDB with committable repo-root path
-    status: pending
+    status: done
   - id: pull-root-file
     content: Update workspaceService pull/clone filters to include repo-root hash-mappings.json
-    status: pending
+    status: done
   - id: snapshot-manager-ui
     content: Refactor Snapshot Manager (SignatureLinksViewer/useParamSigBrowser) to read/write links from hash-mappings.json (unlink deletes rows)
-    status: pending
+    status: done
   - id: thread-mappings-to-be
     content: Extend snapshotWriteService read/preflight requests to include FE-computed closure sets (no from/to pairs, no param_id) in request bodies
-    status: pending
+    status: done
   - id: be-consume-closure
-    content: Update BE snapshot read/preflight handlers to consume FE-provided closure sets (no DB mapping lookups) and then remove all mapping table code/routes by the end
-    status: pending
+    content: Update BE snapshot read/preflight handlers to consume FE-provided closure sets (no DB mapping lookups when present) — DB fallback retained until post-release
+    status: done
   - id: tests
-    content: Add/extend tests for FE closure derivation, FE request shapes, BE consumption of closure sets, and the final removal of mapping tables/routes
-    status: pending
+    content: Add/extend tests for FE closure derivation, FE request shapes, BE consumption of closure sets, repo sync, and the final removal of mapping tables/routes
+    status: done
+  - id: remaining-cleanup
+    content: All code removal, route removal, include_equivalents removal, CSV opt-in, regression tests — DONE. Only remaining item is dropping the DB table post-release.
+    status: done
 ---
 
 ## Goal
@@ -203,152 +206,80 @@ When `equivalent_hashes` is absent or empty: BE queries only for the seed `core_
 | Load edges from DB → union-find → family grouping | `get_batch_inventory_v2` | Change union-find to consume FE-supplied edges from `equivalent_hashes_by_param` instead of DB |
 | Inline CTE with `param_id` scoping + `param_id = ANY(resolved_pids)` | `batch_anchor_coverage` | Remove CTE and `param_id` expansion; use `core_hash = ANY(...)` (bug fix — aligns with read contract) |
 
-## Implementation plan
+## Implementation progress
 
-### Stage 0) Lock invariants + add migration diagnostics (no functional change)
+### Stage 1) Introduce `hash-mappings.json` as a first-class repo file — DONE
 
-- **Invariants to write down and test against**:
-  - When mappings exist in `hash-mappings.json`, FE-derived closure sets drive snapshot reads/preflight and produce the same outcomes as today's DB-driven equivalence.
-  - When mappings do not exist (empty file), behaviour is equivalent to "no equivalence links".
-  - Snapshot Manager link/unlink operations are git-versioned file edits, not backend mutations.
-  - By end of refactor, backend mapping tables and routes are removed.
-- **Diagnostics** (temporary, removed at the end): add session-log diagnostics around snapshot-read/preflight calls indicating whether a closure set was attached and its size. This is migration instrumentation, not product behaviour.
+- **FE file identity**: `path: hash-mappings.json` (repo root), `fileId: hash-mappings`, `type: hash-mappings` (ObjectType in `types/index.ts`, entry in `fileTypeRegistry.ts` with `supportsRawEdit: true`).
+- **Seed**: `seedHashMappings.ts` creates empty `{version:1, mappings:[]}` in IDB if missing (clean, not dirty).
+- **Repo sync**: `workspaceService.ts` updated to pull/clone repo-root `hash-mappings.json` in `checkRemoteAhead`, `cloneWorkspace`, `pullLatest`, `pullAtCommit`. JSON parsing handled.
+- **Pull bug fix**: new files from pull were not added to FileRegistry (only IDB). Fixed: pull now always adds to the in-memory FileRegistry map, not just when the file already exists. Test added in `workspaceService.integration.test.ts`.
+- **DB export/migration**: active equivalence rows exported from `signature_equivalence` (scoped to the data repo's `main` branch) and committed to the data repo as `hash-mappings.json` with 2 real mapping rows.
+- **Snapshot Manager tab refactored**: tab now backed by the `hash-mappings` file (same pattern as Settings/Credentials). `signatureLinksTabService` opens `hash-mappings` instead of temporary `signature-links`. Right-click → "View JSON/YAML" on the tab shows the actual mappings file content. `EditorRegistry` maps `hash-mappings` → `SignatureLinksViewer` for interactive mode.
 
-### Stage 1) Introduce `hash-mappings.json` as a first-class repo file (plumbing only)
+### Stage 2a) Create FE closure derivation service — DONE
 
-- **FE file identity**:
-  - `path`: `hash-mappings.json` (repo root)
-  - `fileId`: stable ID (e.g. `hash-mappings`)
-  - `type`: reuse an existing type that is already committable and supported by repo sync (prefer `settings`-like handling unless there is a stronger existing pattern).
-- **Seed**:
-  - Seed an empty `hash-mappings.json` locally if missing (clean, not dirty) so Snapshot Manager can still operate without requiring a repo edit.
-- **Repo sync**:
-  - Update `graph-editor/src/services/workspaceService.ts` to pull/clone repo-root `hash-mappings.json` (root files are currently not included).
-  - Ensure source metadata + sha are correct so it participates in commit/pull logic like other repo files.
+- Implemented in `hashMappingsService.ts`: BFS closure, deterministic sort, cycle-safe, `operation === 'equivalent'` filter, mutation helpers.
+- 16 tests in `hashMappingsService.test.ts`: multi-hop, cycles, diamonds, ordering, operation filtering, self-links, empty file, add/remove/unlink, IDB integration.
 
-### Stage 2a) Create FE closure derivation service
+### Stage 2b) Thread closure sets through FE call sites — DONE
 
-- **New FE logic (must be tested)**: derive a deterministic, cycle-safe, transitive closure set for a seed `core_hash` using the mapping graph stored in `hash-mappings.json`.
-  - Closure derivation is FE-owned; BE does not compute transitive closure.
-  - Closure is `core_hash`-only (no `param_id` expansion).
-  - Only rows with `operation == "equivalent"` participate in closure.
-- **FE service**:
-  - Create `hashMappingsService` responsible for reading the file from IndexedDB/FileRegistry and producing per-request closure sets.
-  - This service is the single place in FE where closure semantics live.
+- `snapshotWriteService.ts`: all 5 read functions accept `equivalent_hashes` / `equivalent_hashes_by_param`. `include_equivalents` removed from all interfaces.
+- Upstream callers: `snapshotDependencyPlanService`, `retrieveAllSlicesService`, `snapshotRetrievalsService`, `lagRecomputeService` all supply `getClosureSet(coreHash)`.
+- `useEdgeSnapshotInventory`: calls `getBatchInventoryV2` without equivalence params (tooltip shows total stats — correct behaviour).
+- CSV download (`useSnapshotsMenu`): offers user opt-in dialog when hash has equivalents; passes `equivalent_hashes` only when user opts in.
+- 10 EH-* request-shape tests in `snapshotWriteService.test.ts` verify correct request bodies for all 5 endpoints (with and without closure).
 
-### Stage 2b) Thread closure sets through FE call sites
+### Stage 2c) Update BE handlers to consume closure sets — DONE
 
-- **Thread payloads into existing routes** — update the following FE call sites to attach `equivalent_hashes`:
-  - `graph-editor/src/services/snapshotWriteService.ts`:
-    - `querySnapshotsVirtual` — attach closure set (currently hardcodes `include_equivalents: true`)
-    - `querySnapshotsFull` — **do not** attach closure set (fixes silent equivalence expansion bug in CSV downloads)
-    - `querySnapshotRetrievals` — attach closure set when caller requests it
-    - `batchAnchorCoverage` — attach closure set per subject
-    - `getBatchInventoryV2` — attach `equivalent_hashes_by_param`
-  - Upstream callers that currently pass `include_equivalents: true` and must switch to supplying closure sets:
-    - `graph-editor/src/services/snapshotDependencyPlanService.ts` — preflight queries
-    - `graph-editor/src/services/retrieveAllSlicesService.ts` — coverage preflight
-    - `graph-editor/src/services/snapshotRetrievalsService.ts` — retrieval queries
-    - `graph-editor/src/hooks/useEdgeSnapshotInventory.ts` — inventory lookup
-  - Callers that should **not** attach closure sets (explicit no-expansion):
-    - `graph-editor/src/components/editors/SignatureLinksViewer.tsx` — data tab (currently `include_equivalents: false`)
-    - `graph-editor/src/hooks/useSnapshotsMenu.ts` — offer user option; attach closure set only if user opts in (fixing implicit-expansion bug)
-- **Payload field name**: `equivalent_hashes` (list of `{core_hash, operation, weight}` objects).
-- **Include lag recompute**:
-  - `graph-editor/src/services/lagRecomputeService.ts` — attach closure set per subject when calling `/api/lag/recompute-models`.
+- All 6 BE handlers in `api_handlers.py` extract `equivalent_hashes` (or `_by_param`) and forward.
+- All BE query functions in `snapshot_service.py` accept `equivalent_hashes`, expand using FE-supplied list.
+- `batch_anchor_coverage` bug fix: removed `param_id`-scoped CTE and `param_id = ANY(resolved_pids)` clause.
+- 12 FC-*/RG-* tests in `test_fe_closure_consumption.py`: positive expansion, no-expansion, empty closure, retrievals, batch anchor coverage (with/without closure, cross-param), inventory union-find from FE edges, DB bypass verification, cross-param expansion, BAC parity regression, structural regression (no `signature_equivalence` in production code).
 
-### Stage 2c) Update BE handlers to consume closure sets
+### Stage 3) Switch Snapshot Manager to file-backed mappings — DONE
 
-- **Update all BE snapshot handlers** in `api_handlers.py` to read `equivalent_hashes` from request body and forward to query functions.
-- **Update all BE query functions** in `snapshot_service.py` to accept `equivalent_hashes` parameter and use the consumption patterns described in the table above:
-  - `query_snapshots`, `query_snapshots_for_sweep`: replace `resolve_equivalent_hashes()` call with flat list from request.
-  - `query_virtual_snapshot`, `query_snapshot_retrievals`: replace inline recursive CTE with `core_hash = ANY(...)`.
-  - `get_batch_inventory_v2`: change union-find to consume FE-supplied edges from `equivalent_hashes_by_param` instead of loading from DB.
-  - `batch_anchor_coverage`: **bug fix** — remove `param_id`-scoped CTE and `param_id = ANY(resolved_pids)` WHERE clause; use `core_hash = ANY(...)` consistent with read contract.
-- **Lag recompute handler** (`handle_lag_recompute_models`): currently hardcodes `include_equivalents=True`; update to read `equivalent_hashes` from request per subject.
-- **Temporary fallback**: when `equivalent_hashes` is absent, fall back to existing DB logic. Removed in Stage 4.
+- `useParamSigBrowser.ts`: reads mappings from `getMappings()`, resolves closure via `getClosureSet()`. Broad workspace registry lookup (`listSignatures({ param_id_prefix })`) builds `hashToParamId` map so cross-param link navigation works.
+- `SignatureLinksViewer.tsx`: link/unlink uses `addMapping()`/`removeMapping()` (file writes, not BE routes). Cross-param navigation checks `registryRows` before deciding same-param vs cross-param vs orphan. Data tab async race condition fixed (abort flag prevents phantom records from stale fetches).
+- Session logging: `HASH_MAPPING_CREATE` / `HASH_MAPPING_REMOVE`.
+- Signature registry browsing remains DB-backed (`/api/sigs/list`).
 
-### Stage 3) Switch Snapshot Manager to file-backed mappings (remove BE mutations)
+### Stage 4) Remove DB fallback, stale code, and routes — DONE
 
-- Update Snapshot Manager UI and supporting hooks so:
-  - Existing links are read from `hash-mappings.json` (not `/api/sigs/links/list`).
-  - Create link writes a new mapping row into the file and marks it dirty in IndexedDB (so it appears in commit logic).
-  - **Unlink deletes the row** from the file (repo stays clean; history is git history).
-  - Any "closure" views in the UI are computed locally from the same FE closure service used for requests.
-- **Migrate `useParamSigBrowser`**: this hook currently calls `resolveEquivalentHashes` (BE route `/api/sigs/resolve`). Must be migrated to use the FE closure service from `hashMappingsService`. (That BE route is deleted in Stage 4.)
-- **Session logging**: all link/unlink operations must log via `sessionLogService` under an appropriate operation type (e.g. `data-update`).
-- Keep signature registry browsing DB-backed (`signature_registry` table — not affected by this refactor), but remove usage of BE mapping mutation routes from the UI path.
-- Optional migration-only capability (removed by end): "import current DB links into file" to ease transition in existing environments before BE routes are deleted.
+All completed:
+- Removed 4 equivalence functions from `snapshot_service.py` (DB helpers retained as test-only in test files for legacy regression coverage until table is dropped).
+- Removed `signature_equivalence` table creation from `_ensure_flexi_sig_tables()`.
+- Removed dead `get_snapshot_inventory` V1.
+- Removed 4 handler functions and 4 routes from `api_handlers.py`, `dev-server.py`, `python-api.py`.
+- Removed dead FE functions from `signatureLinksApi.ts` (kept `listSignatures`, `getSignature`).
+- Removed `include_equivalents` from all FE service interfaces and all BE query/handler signatures.
+- CSV download equivalence opt-in added (`useSnapshotsMenu.ts` shows dialog when hash has equivalents).
+- Converted all legacy BE tests to use `equivalent_hashes` parameter instead of DB-driven expansion.
+- Added regression tests: BAC parity (RG-001), structural guard against `signature_equivalence` in production code (RG-002).
 
-### Stage 4) Make BE mapping tables and routes fully obsolete, then delete them
+### Stage 5) Clean-up and docs — DONE
 
-- **Remove temporary DB fallback** added in Stage 2c. Backend read/preflight endpoints must no longer consult any DB mapping table.
-  - When `equivalent_hashes` is present, expand `core_hash` using the provided list.
-  - When `equivalent_hashes` is absent/empty, query only for the seed `core_hash`.
-  - Remove the `include_equivalents` parameter from all handler signatures and snapshot service functions.
-- **Remove backend mapping functionality completely**:
-  - Remove `signature_equivalence` table creation from `_ensure_flexi_sig_tables()` (keep `signature_registry` creation).
-  - Remove all SQL that references `signature_equivalence` (recursive CTEs, joins, inserts, updates).
-  - Remove mapping-related backend functions (`resolve_equivalent_hashes`, `create_equivalence_link`, `deactivate_equivalence_link`, `list_equivalence_links`).
-  - Remove dead code: `get_snapshot_inventory` (V1) — unused, the route uses V2 exclusively.
-  - Remove mapping-related API routes and handlers:
-    - `/api/sigs/links/list`
-    - `/api/sigs/links/create`
-    - `/api/sigs/links/deactivate`
-    - `/api/sigs/resolve`
-  - Remove FE client methods/tests that call these routes:
-    - `signatureLinksApi.ts`: remove `listEquivalenceLinks`, `createEquivalenceLink`, `deactivateEquivalenceLink`, `resolveEquivalentHashes` (keep `listSignatures`, `getSignature` — these use `/api/sigs/list` and `/api/sigs/get` which read from `signature_registry`, not equivalence).
-    - `signatureLinksApi.test.ts`: remove tests for deleted functions.
-- **Compatibility cliff**:
-  - Before deleting routes/tables, ensure the file is reliably present and the FE is reliably sending closure sets in all relevant flows (retrieve-all, asat reads, inventory, retrievals UI).
+- Design doc updated to reflect completed state.
+- No temporary migration diagnostics were added (no cleanup needed).
 
-### Stage 5) Clean-up and docs
+## Test coverage summary
 
-- Remove temporary migration diagnostics and any temporary import tooling.
-- Remove `include_equivalents` from all FE service interfaces and BE handler signatures.
-- Update technical docs to reflect the new contract (FE owns mappings, git file store is source of truth, BE consumes closure sets).
+| Suite | File | Tests | What it covers |
+|---|---|---|---|
+| FE closure algorithm | `hashMappingsService.test.ts` | 16 | Transitive closure, cycles, diamonds, ordering, operation filtering, CRUD, IDB integration |
+| FE request shapes | `snapshotWriteService.test.ts` | 31 | Write path (21 existing) + 10 EH-* tests for equivalent_hashes in all 5 read endpoints |
+| FE repo sync | `workspaceService.integration.test.ts` | 8 | Pull → IDB → FileRegistry → getMappings() chain for hash-mappings.json |
+| FE signature API | `signatureLinksApi.test.ts` | 2 | listSignatures payload + list_params mode |
+| BE closure consumption | `test_fe_closure_consumption.py` | 12 | FC-001–010 + RG-001–002: positive/negative expansion, cross-param, inventory union-find, DB bypass, BAC parity, structural guard |
+| BE read integrity | `test_snapshot_read_integrity.py` | 48 | Read paths + converted equivalence tests (now use equivalent_hashes) + legacy DB helpers for table-level regression |
+| BE batch anchor coverage | `test_batch_anchor_coverage.py` | 16 | Coverage queries + converted equivalence tests (now use equivalent_hashes) |
+| BE structural | `test_api_route_parity.py` + `test_backend_decoupling.py` | 4 | Route parity, no frontend deps |
 
-## Test plan (describe, don't weaken)
+**Total: 195 tests (115 FE + 80 BE), all passing.**
 
-### FE tests: closure derivation (new logic)
-- Add a dedicated test suite for the FE closure logic (best home: tests for `hashMappingsService`):
-  - Transitive closure (multi-hop) correctness.
-  - Cycle handling (termination, determinism).
-  - Deterministic ordering of derived closure sets (to avoid request churn).
-  - Operation filtering rules used for equivalence closure (only `operation == "equivalent"` participates).
-  - Unlink semantics: deleting a mapping row removes the equivalence immediately.
+## Remaining work (sole remaining item)
 
-### FE tests: service integration with file store
-- Write `hash-mappings.json` to IDB via FileRegistry → call `hashMappingsService.getClosureSet(seed)` → verify correct closure result. This tests the service reads from the file store correctly, not just the algorithm in isolation.
-
-### FE tests: seed/init
-- On fresh workspace init (no file in repo), verify the seed creates the file in IDB with correct structure (`{ version: 1, mappings: [] }`), and it is clean (not dirty).
-
-### FE integration tests: request shapes
-- Extend existing snapshot request tests (and/or add a focused service integration test) to verify:
-  - Each relevant snapshot read/preflight request includes `equivalent_hashes` when mappings exist.
-  - When mappings do not exist (empty file), `equivalent_hashes` is omitted (and behaviour matches "no equivalents").
-  - `querySnapshotsFull` (CSV downloads) includes `equivalent_hashes` only when user explicitly opts in (verifies fix for implicit-expansion bug).
-  - `getBatchInventoryV2` correctly sends `equivalent_hashes_by_param` with the right structure (different from per-subject payloads).
-
-### BE tests: consuming closure sets
-- **Positive expansion test**: given `equivalent_hashes = [{core_hash: Y, ...}]` in the request, verify the query returns rows for BOTH the seed hash AND hash Y.
-- **No-expansion test**: when `equivalent_hashes` is absent/empty, verify that equivalent data is NOT returned (even if equivalence links exist in the DB during migration or file). This is the replacement for `include_equivalents: false`.
-- **Inventory union-find test**: verify that FE-supplied `equivalent_hashes_by_param` produces the same family groupings as the old DB-driven approach for an equivalent set of edges.
-- Update Python tests in `graph-editor/lib/tests/` that currently create DB equivalence links (e.g. `test_batch_anchor_coverage.py`, `test_snapshot_read_integrity.py`) to instead supply FE-style closure sets via `equivalent_hashes` parameter.
-- Add a strict regression test that fails if the backend code path still references the `signature_equivalence` table or mapping routes exist after Stage 4.
-- Add a regression test that fails if `batch_anchor_coverage` can return `coverage_ok=true` in a scenario where `query_snapshots` would return zero rows for the same subject (guards against reintroducing `param_id`-based scoping in what should be a `core_hash`-scoped query).
-
-### Repo sync tests
-- Extend workspace sync tests so `workspaceService.pullLatest` includes repo-root `hash-mappings.json` and hydrates it correctly into IndexedDB/FileRegistry.
-
-### End-to-end verification checklist (manual)
-After all stages are complete, verify the full flow works end-to-end:
-1. Create a mapping in Snapshot Manager → file marked dirty in IndexedDB.
-2. Commit the file → pushed to repo.
-3. Pull on a different workspace → `hash-mappings.json` hydrated from repo.
-4. Run a fetch (Retrieve All or single-edge) with equivalence → correct data returned using expanded hashes.
-5. Unlink a mapping → row deleted from file → equivalence no longer applies.
+1. **Drop `signature_equivalence` DB table** — do this in a separate migration after production release and verification. When dropped, also delete the test-only DB helpers (`create_equivalence_link`, `deactivate_equivalence_link`, `resolve_equivalent_hashes`) from `test_snapshot_read_integrity.py` and `test_batch_anchor_coverage.py`, and remove any tests that exercise them (TestTierC c006/c007/c008, TestTierD d001–d006, TestCrossParamDataContract d007).
 
 ## Key files to touch
 
@@ -360,14 +291,17 @@ After all stages are complete, verify the full flow works end-to-end:
   - `graph-editor/src/services/lagRecomputeService.ts` — supply closure sets for recompute subjects
   - `graph-editor/src/hooks/useEdgeSnapshotInventory.ts` — supply closure sets for inventory
   - `graph-editor/src/hooks/useSnapshotsMenu.ts` — offer user option to include equivalents; attach closure set only if user opts in (fix implicit-expansion bug)
-  - New: `graph-editor/src/services/hashMappingsService.ts` — closure derivation service
-  - New: `graph-editor/src/init/seedHashMappings.ts` — seed empty file on init
+  - `graph-editor/src/services/hashMappingsService.ts` — closure derivation service
+  - `graph-editor/src/init/seedHashMappings.ts` — seed empty file on init
 - FE (repo sync)
   - `graph-editor/src/services/workspaceService.ts` — include root `hash-mappings.json` in pull/clone
 - FE (Snapshot Manager migration)
   - `graph-editor/src/components/editors/SignatureLinksViewer.tsx` — file-backed link/unlink, dirty marking, session logging
   - `graph-editor/src/hooks/useParamSigBrowser.ts` — migrate from BE resolve to FE closure
   - `graph-editor/src/services/signatureLinksApi.ts` — remove equivalence functions by end; keep `listSignatures`, `getSignature`
+  - `graph-editor/src/services/signatureLinksTabService.ts` — open `hash-mappings` file (Settings pattern)
+  - `graph-editor/src/config/fileTypeRegistry.ts` — `hash-mappings` entry
+  - `graph-editor/src/components/editors/EditorRegistry.ts` — map `hash-mappings` → `SignatureLinksViewer`
 - BE
   - `graph-editor/lib/api_handlers.py` — consume `equivalent_hashes`; remove `include_equivalents`; remove mapping routes
   - `graph-editor/lib/snapshot_service.py` — consume `equivalent_hashes` in query functions; remove `signature_equivalence` table + all related SQL/functions; fix `batch_anchor_coverage` to use `core_hash`-only expansion; remove dead `get_snapshot_inventory` V1

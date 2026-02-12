@@ -28,15 +28,13 @@ import {
   type SignatureLinksContext,
 } from '../../services/signatureLinksTabService';
 import {
-  createEquivalenceLink,
-  deactivateEquivalenceLink,
-  listEquivalenceLinks,
   listSignatures,
   type SigEquivalenceLinkRow,
   type SigLinkOperation,
   type SigParamSummary,
   type SigRegistryRow,
 } from '../../services/signatureLinksApi';
+import { addMapping, removeMapping, getMappings, type HashMapping } from '../../services/hashMappingsService';
 import { getGraphStore } from '../../contexts/GraphStoreContext';
 import { augmentDSLWithConstraint } from '../../lib/queryDSL';
 import {
@@ -472,26 +470,24 @@ export const SignatureLinksViewer: React.FC = () => {
     });
     if (!confirmed) return;
 
-    const opId = sessionLogService.startOperation('info', 'session', 'SIGS_LINK_CREATE', 'Creating link');
-    const res = await createEquivalenceLink({
-      param_id: primary.selectedParamId,
-      core_hash: primary.selectedHash,
-      equivalent_to: effectiveCompareHash,
-      created_by: linkCreatedBy,
-      reason: linkReason,
-      ...(isSameParam && linkOperation === 'equivalent' ? {} : {
-        operation: linkOperation as SigLinkOperation,
+    const opId = sessionLogService.startOperation('info', 'data-update', 'HASH_MAPPING_CREATE', 'Creating hash mapping link');
+    try {
+      await addMapping({
+        core_hash: primary.selectedHash,
+        equivalent_to: effectiveCompareHash,
+        operation: linkOperation,
         weight: linkWeight,
-        source_param_id: targetParamId,
-      }),
-    });
-    if (!res.success) {
-      toast.error(`Link failed: ${res.error || 'unknown error'}`);
-      sessionLogService.endOperation(opId, 'error', res.error || 'unknown');
+        reason: linkReason || undefined,
+        created_by: linkCreatedBy || undefined,
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      toast.error(`Link failed: ${msg}`);
+      sessionLogService.endOperation(opId, 'error', msg);
       return;
     }
-    toast.success('Link created');
-    sessionLogService.endOperation(opId, 'success', 'Link created');
+    toast.success('Link created (file)');
+    sessionLogService.endOperation(opId, 'success', `Linked ${primary.selectedHash.slice(0, 8)}↔${effectiveCompareHash.slice(0, 8)}`);
     setLinkReason('');
     setLinkSuccessFlash(true);
     setTimeout(() => setLinkSuccessFlash(false), 2000);
@@ -500,28 +496,24 @@ export const SignatureLinksViewer: React.FC = () => {
 
   const handleDeactivateLink = useCallback(async (link: SigEquivalenceLinkRow) => {
     const confirmed = await showConfirm({
-      title: 'Deactivate link',
-      message: `Deactivate link?\n\n${truncateHash(link.core_hash, 16)} ≡ ${truncateHash(link.equivalent_to, 16)}\n\nfor: ${link.param_id}`,
-      confirmLabel: 'Deactivate',
+      title: 'Remove link',
+      message: `Remove link?\n\n${truncateHash(link.core_hash, 16)} ≡ ${truncateHash(link.equivalent_to, 16)}`,
+      confirmLabel: 'Remove',
       cancelLabel: 'Cancel',
       confirmVariant: 'danger',
     });
     if (!confirmed) return;
-    const opId = sessionLogService.startOperation('info', 'session', 'SIGS_LINK_DEACTIVATE', 'Deactivating link');
-    const res = await deactivateEquivalenceLink({
-      param_id: link.param_id,
-      core_hash: link.core_hash,
-      equivalent_to: link.equivalent_to,
-      created_by: 'user',
-      reason: 'Deactivated via Snapshot Manager',
-    });
-    if (!res.success) {
-      toast.error(`Deactivation failed: ${res.error || 'unknown error'}`);
-      sessionLogService.endOperation(opId, 'error', res.error || 'unknown');
+    const opId = sessionLogService.startOperation('info', 'data-update', 'HASH_MAPPING_REMOVE', 'Removing hash mapping link');
+    try {
+      await removeMapping(link.core_hash, link.equivalent_to);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      toast.error(`Removal failed: ${msg}`);
+      sessionLogService.endOperation(opId, 'error', msg);
       return;
     }
-    toast.success('Link deactivated');
-    sessionLogService.endOperation(opId, 'success', 'Link deactivated');
+    toast.success('Link removed (file)');
+    sessionLogService.endOperation(opId, 'success', `Unlinked ${link.core_hash.slice(0, 8)}↔${link.equivalent_to.slice(0, 8)}`);
     await primary.loadSignatures();
   }, [showConfirm, primary.loadSignatures]);
 
@@ -564,7 +556,6 @@ export const SignatureLinksViewer: React.FC = () => {
       const res = await querySnapshotRetrievals({
         param_id: primary.selectedParamId,
         core_hash: coreHash,
-        include_equivalents: false,
         include_summary: true,
         limit: 500,
       });
@@ -600,7 +591,6 @@ export const SignatureLinksViewer: React.FC = () => {
         const res = await querySnapshotRetrievals({
           param_id: compareParamId,
           core_hash: effectiveCompareHash,
-          include_equivalents: false,
           include_summary: true,
           limit: 500,
         });
@@ -638,6 +628,9 @@ export const SignatureLinksViewer: React.FC = () => {
     }
     if (pairs.length === 0) { setLinkedDataSections([]); return; }
 
+    // Guard against stale async results when the user switches hashes
+    // before the fetch completes (prevents phantom data from prior selection).
+    let aborted = false;
     setLinkedDataLoading(true);
     void (async () => {
       try {
@@ -646,7 +639,7 @@ export const SignatureLinksViewer: React.FC = () => {
             try {
               const res = await querySnapshotRetrievals({
                 param_id: p.paramId, core_hash: p.coreHash,
-                include_equivalents: false, include_summary: true, limit: 500,
+                include_summary: true, limit: 500,
               });
               const rows = res.success && Array.isArray(res.summary) ? res.summary : [];
               const paramDisplay = p.paramId === primary.selectedParamId
@@ -661,11 +654,12 @@ export const SignatureLinksViewer: React.FC = () => {
             }
           }),
         );
-        setLinkedDataSections(results);
+        if (!aborted) setLinkedDataSections(results);
       } finally {
-        setLinkedDataLoading(false);
+        if (!aborted) setLinkedDataLoading(false);
       }
     })();
+    return () => { aborted = true; };
   }, [rightTab, selectedRow?.core_hash, primary.selectedParamId, primary.linkRows, primary.resolvedClosure, workspacePrefix]);
 
   // Compare hash linked data sections
@@ -678,22 +672,25 @@ export const SignatureLinksViewer: React.FC = () => {
     const skipHashes = new Set<string>([selectedRow?.core_hash ?? '']);
     for (const s of linkedDataSections) skipHashes.add(s.coreHash);
 
+    let aborted = false;
     setCompareLinkedLoading(true);
     void (async () => {
       try {
-        // Fetch equivalence links for the compare hash
-        const linkRes = await listEquivalenceLinks({ param_id: effectiveCompareParamId, core_hash: effectiveCompareHash });
-        const links = linkRes.success ? (linkRes.rows || []) : [];
+        // Read equivalence links from hash-mappings.json (file-backed).
+        const allMappings = getMappings();
+        // Filter to links involving the compare hash (equivalent only).
+        const relevantMappings = allMappings.filter(
+          (m) => m.operation === 'equivalent' && (m.core_hash === effectiveCompareHash || m.equivalent_to === effectiveCompareHash)
+        );
 
         const pairs: Array<{ paramId: string; coreHash: string }> = [];
         const seen = new Set<string>();
         seen.add(`${effectiveCompareParamId}|${effectiveCompareHash}`);
 
-        for (const l of links) {
-          if (l.operation !== 'equivalent' || !l.active) continue;
-          if (l.core_hash !== effectiveCompareHash && l.equivalent_to !== effectiveCompareHash) continue;
-          const otherHash = l.core_hash === effectiveCompareHash ? l.equivalent_to : l.core_hash;
-          const otherParam = l.core_hash === effectiveCompareHash ? (l.source_param_id || l.param_id) : l.param_id;
+        for (const m of relevantMappings) {
+          const otherHash = m.core_hash === effectiveCompareHash ? m.equivalent_to : m.core_hash;
+          // File-backed mappings don't carry param_id — use the compare param.
+          const otherParam = effectiveCompareParamId;
           const key = `${otherParam}|${otherHash}`;
           if (!seen.has(key) && !skipHashes.has(otherHash)) {
             seen.add(key);
@@ -701,14 +698,14 @@ export const SignatureLinksViewer: React.FC = () => {
           }
         }
 
-        if (pairs.length === 0) { setCompareLinkedSections([]); return; }
+        if (pairs.length === 0) { if (!aborted) setCompareLinkedSections([]); return; }
 
         const results = await Promise.all(
           pairs.map(async (p) => {
             try {
               const res = await querySnapshotRetrievals({
                 param_id: p.paramId, core_hash: p.coreHash,
-                include_equivalents: false, include_summary: true, limit: 500,
+                include_summary: true, limit: 500,
               });
               const rows = res.success && Array.isArray(res.summary) ? res.summary : [];
               const paramDisplay = p.paramId === effectiveCompareParamId
@@ -723,13 +720,14 @@ export const SignatureLinksViewer: React.FC = () => {
             }
           }),
         );
-        setCompareLinkedSections(results);
+        if (!aborted) setCompareLinkedSections(results);
       } catch {
-        setCompareLinkedSections([]);
+        if (!aborted) setCompareLinkedSections([]);
       } finally {
-        setCompareLinkedLoading(false);
+        if (!aborted) setCompareLinkedLoading(false);
       }
     })();
+    return () => { aborted = true; };
   }, [rightTab, effectiveCompareHash, effectiveCompareParamId, selectedRow?.core_hash, linkedDataSections, workspacePrefix]);
 
   type TaggedDataRow = SnapshotRetrievalSummaryRow & { _source: 'primary' | 'compare' };
@@ -1156,11 +1154,20 @@ export const SignatureLinksViewer: React.FC = () => {
                       const handleNavigateToLink = isEquivalent
                         ? () => {
                             pushNav();
-                            if (isSameParam) {
+                            // Check if the other hash actually exists in the current param's rows.
+                            const existsInCurrentParam = primary.registryRows.some((r) => r.core_hash === otherHash);
+
+                            if (existsInCurrentParam) {
+                              // Same param — just select the hash.
                               primary.setSelectedHash(otherHash);
-                            } else {
+                            } else if (otherParamId && otherParamId !== primary.selectedParamId) {
+                              // Cross-param — navigate to the other param and pending-select the hash.
                               primary.setPendingHash(otherHash);
                               primary.setSelectedParamId(otherParamId);
+                            } else {
+                              // Hash not in current param and no known param_id (orphan or unregistered).
+                              // Still select it — it will show as selected even without a registry row.
+                              primary.setSelectedHash(otherHash);
                             }
                           }
                         : undefined;

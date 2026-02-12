@@ -90,53 +90,10 @@ def _ensure_flexi_sig_tables(cur) -> None:
         """
     )
 
-    cur.execute(
-        """
-        CREATE TABLE IF NOT EXISTS signature_equivalence (
-          param_id       TEXT NOT NULL,
-          core_hash      TEXT NOT NULL,
-          equivalent_to  TEXT NOT NULL,
-          created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
-          created_by     TEXT,
-          reason         TEXT,
-          active         BOOLEAN NOT NULL DEFAULT true,
-          operation      TEXT NOT NULL DEFAULT 'equivalent',
-          weight         DOUBLE PRECISION DEFAULT 1.0,
-          source_param_id TEXT,
-          UNIQUE (param_id, core_hash, equivalent_to)
-        )
-        """
-    )
-    cur.execute(
-        """
-        CREATE INDEX IF NOT EXISTS idx_sigeq_param_active
-          ON signature_equivalence (param_id, created_at DESC)
-        """
-    )
-
-    # ── Schema migration: add columns if missing (idempotent) ────────────
-    for col, typedef in [
-        ("operation", "TEXT NOT NULL DEFAULT 'equivalent'"),
-        ("weight", "DOUBLE PRECISION DEFAULT 1.0"),
-        ("source_param_id", "TEXT"),
-    ]:
-        try:
-            cur.execute(
-                f"""
-                ALTER TABLE signature_equivalence
-                  ADD COLUMN IF NOT EXISTS {col} {typedef}
-                """
-            )
-        except Exception:
-            pass  # Column already exists or not supported — safe to ignore
-
-    # Extended unique index including source_param_id for cross-param transforms
-    cur.execute(
-        """
-        CREATE UNIQUE INDEX IF NOT EXISTS idx_sigeq_unique_v2
-          ON signature_equivalence (param_id, core_hash, equivalent_to, COALESCE(source_param_id, param_id))
-        """
-    )
+    # NOTE: signature_equivalence table creation REMOVED.
+    # Equivalence is now owned by the FE via hash-mappings.json.
+    # The table still exists in the DB but is no longer read or written by production code.
+    # It will be dropped in a later migration after production verification.
 
 
 def _require_core_hash(core_hash: Optional[str], context: str = "") -> str:
@@ -467,8 +424,8 @@ def query_snapshots(
     anchor_to: Optional[date] = None,
     as_at: Optional[datetime] = None,
     retrieved_ats: Optional[List[datetime]] = None,
-    include_equivalents: bool = True,
-    limit: int = 10000
+    equivalent_hashes: Optional[List[Dict[str, Any]]] = None,
+    limit: int = 10000,
 ) -> List[Dict[str, Any]]:
     """
     Query snapshot rows from the database.
@@ -480,7 +437,7 @@ def query_snapshots(
         anchor_from: Start of anchor date range (optional)
         anchor_to: End of anchor date range (optional)
         as_at: If provided, only return snapshots retrieved before this timestamp
-        include_equivalents: If True, expand core_hash via equivalence links (default True)
+        equivalent_hashes: FE-supplied closure set (optional; expands core_hash matching)
         limit: Maximum rows to return (default 10000)
     
     Returns:
@@ -507,21 +464,13 @@ def query_snapshots(
         params: List[Any] = []
         
         if core_hash is not None:
-            if include_equivalents:
-                # Expand via equivalence closure before filtering — includes cross-param sources.
-                # When core_hash is provided, it is the logical key — param_id is NOT
-                # required for filtering. This allows cross-branch queries: data written
-                # on main is findable from feature branches (same core_hash, same query).
-                resolved = resolve_equivalent_hashes(
-                    param_id=param_id,
-                    core_hash=core_hash,
-                    include_equivalents=True,
-                )
-                hashes = resolved.get("core_hashes", [core_hash])
+            if equivalent_hashes is not None and len(equivalent_hashes) > 0:
+                # FE-supplied closure set — expand core_hash to include equivalents.
+                hashes = [core_hash] + [e["core_hash"] for e in equivalent_hashes if e.get("core_hash")]
                 query += " WHERE core_hash = ANY(%s)"
                 params.append(hashes)
             else:
-                # Without equivalence expansion, use core_hash alone (not param_id).
+                # No expansion — query only for the seed core_hash.
                 query += " WHERE core_hash = %s"
                 params.append(core_hash)
         else:
@@ -579,7 +528,7 @@ def query_snapshots_for_sweep(
     anchor_to: Optional[date] = None,
     sweep_from: Optional[date] = None,
     sweep_to: Optional[date] = None,
-    include_equivalents: bool = True,
+    equivalent_hashes: Optional[List[Dict[str, Any]]] = None,
     limit: int = 50000,
 ) -> List[Dict[str, Any]]:
     """
@@ -608,13 +557,9 @@ def query_snapshots_for_sweep(
         # Snapshot reads must NOT depend on param_id bucketing (repo/branch).
         # param_id remains useful for audit + write identity, but read identity is:
         #   core_hash family × logical slice family × retrieved_at.
-        if include_equivalents:
-            resolved = resolve_equivalent_hashes(
-                param_id=param_id,
-                core_hash=core_hash,
-                include_equivalents=True,
-            )
-            hashes = resolved.get("core_hashes", [core_hash])
+        if equivalent_hashes is not None and len(equivalent_hashes) > 0:
+            # FE-supplied closure set — use directly.
+            hashes = [core_hash] + [e['core_hash'] for e in equivalent_hashes if e.get('core_hash')]
         else:
             hashes = [core_hash]
 
@@ -671,103 +616,6 @@ def query_snapshots_for_sweep(
     finally:
         conn.close()
 
-
-def get_snapshot_inventory(
-    param_id: str,
-    core_hash: Optional[str] = None
-) -> Dict[str, Any]:
-    """
-    Get inventory summary of available snapshots for a parameter.
-    
-    Args:
-        param_id: Workspace-prefixed parameter ID
-        core_hash: Optional filter by query signature
-    
-    Returns:
-        Dict with:
-        - has_data: bool
-        - earliest: ISO date string or None
-        - latest: ISO date string or None
-        - row_count: int
-        - unique_days: int
-        - unique_slices: int
-        - unique_hashes: int (distinct core_hash values)
-    """
-    conn = get_db_connection()
-    try:
-        cur = conn.cursor()
-        
-        # Build WHERE clause
-        where_clause = "WHERE param_id = %s"
-        params: List[Any] = [param_id]
-        if core_hash is not None:
-            where_clause += " AND core_hash = %s"
-            params.append(core_hash)
-        
-        # Get basic stats
-        cur.execute(f"""
-            SELECT 
-                MIN(anchor_day) as earliest,
-                MAX(anchor_day) as latest,
-                COUNT(*) as row_count,
-                COUNT(DISTINCT anchor_day) as unique_days,
-                COUNT(DISTINCT slice_key) as unique_slices,
-                COUNT(DISTINCT core_hash) as unique_hashes
-            FROM snapshots
-            {where_clause}
-        """, params)
-        row = cur.fetchone()
-        
-        if not row or row[0] is None:
-            return {
-                'has_data': False,
-                'param_id': param_id,
-                'earliest': None,
-                'latest': None,
-                'row_count': 0,
-                'unique_days': 0,
-                'unique_slices': 0,
-                'unique_hashes': 0,
-                'unique_retrievals': 0,
-            }
-        
-        # Get unique retrievals using gap detection
-        cur.execute(f"""
-            WITH distinct_times AS (
-                SELECT retrieved_at
-                FROM snapshots
-                {where_clause}
-                GROUP BY retrieved_at
-            ),
-            marked AS (
-                SELECT
-                    CASE
-                        WHEN LAG(retrieved_at) OVER (ORDER BY retrieved_at) IS NULL THEN 1
-                        WHEN retrieved_at - LAG(retrieved_at) OVER (ORDER BY retrieved_at) > INTERVAL '5 minutes' THEN 1
-                        ELSE 0
-                    END AS is_new_group
-                FROM distinct_times
-            )
-            SELECT COALESCE(SUM(is_new_group), 0) AS unique_retrievals
-            FROM marked
-        """, params)
-        retrieval_row = cur.fetchone()
-        unique_retrievals = retrieval_row[0] if retrieval_row else 0
-        
-        return {
-            'has_data': True,
-            'param_id': param_id,
-            'earliest': row[0].isoformat() if row[0] else None,
-            'latest': row[1].isoformat() if row[1] else None,
-            'row_count': row[2],
-            'unique_days': row[3],
-            'unique_slices': row[4],
-            'unique_hashes': row[5],
-            'unique_retrievals': unique_retrievals,
-        }
-        
-    finally:
-        conn.close()
 
 
 def get_batch_inventory(param_ids: List[str]) -> Dict[str, Dict[str, Any]]:
@@ -1080,7 +928,7 @@ def get_batch_inventory_v2(
     current_signatures: Optional[Dict[str, str]] = None,
     current_core_hashes: Optional[Dict[str, str]] = None,
     slice_keys_by_param: Optional[Dict[str, List[str]]] = None,
-    include_equivalents: bool = True,
+    equivalent_hashes_by_param: Optional[Dict[str, List[Dict[str, Any]]]] = None,
     limit_families_per_param: int = 50,
     limit_slices_per_family: int = 200,
 ) -> Dict[str, Any]:
@@ -1164,26 +1012,25 @@ def get_batch_inventory_v2(
                 "latest_retrieved_at": row[8].isoformat() if row[8] else None,
             }
 
-        # 3) Load active equivalence edges for these params (if enabled).
+        # 3) Load active equivalence edges for these params.
+        # When FE supplies equivalent_hashes_by_param, use those directly.
         edges_by_param: Dict[str, List[tuple[str, str]]] = {pid: [] for pid in param_ids}
         edge_endpoints_by_param: Dict[str, set[str]] = {pid: set() for pid in param_ids}
-        if include_equivalents:
-            cur.execute(
-                """
-                SELECT param_id, core_hash, equivalent_to
-                FROM signature_equivalence
-                WHERE param_id = ANY(%s) AND active = true AND operation = 'equivalent'
-                """,
-                (param_ids,),
-            )
-            for (pid, a, b) in cur.fetchall():
-                if pid not in edges_by_param:
-                    continue
-                a = str(a)
-                b = str(b)
-                edges_by_param[pid].append((a, b))
-                edge_endpoints_by_param[pid].add(a)
-                edge_endpoints_by_param[pid].add(b)
+        if equivalent_hashes_by_param:
+            # FE-supplied edges — build (core_hash, equivalent_to) pairs from closure entries.
+            # The FE sends per-param closure sets. Each entry's core_hash is equivalent to
+            # the param's current core_hash (seed). We treat these as edges between the
+            # seed and each closure entry.
+            for pid in param_ids:
+                fe_entries = equivalent_hashes_by_param.get(pid, [])
+                seed_hash = (current_core_hashes or {}).get(pid)
+                if seed_hash and fe_entries:
+                    for e in fe_entries:
+                        ch = e.get('core_hash')
+                        if ch and ch != seed_hash:
+                            edges_by_param[pid].append((seed_hash, ch))
+                            edge_endpoints_by_param[pid].add(seed_hash)
+                            edge_endpoints_by_param[pid].add(ch)
 
         # 4) Load signature_registry created_at for stability (family_id selection).
         cur.execute(
@@ -1447,7 +1294,7 @@ def batch_anchor_coverage(
             - slice_keys (list[str], required)
             - anchor_from (date, required)
             - anchor_to (date, required)
-            - include_equivalents (bool, default True)
+            - equivalent_hashes (list[dict], optional; FE-supplied closure set)
 
     Returns:
         List of result dicts (same order as subjects), each with:
@@ -1475,45 +1322,24 @@ def batch_anchor_coverage(
             slice_keys = subj.get("slice_keys") or []
             anchor_from = subj["anchor_from"]
             anchor_to = subj["anchor_to"]
-            include_equivalents = subj.get("include_equivalents", True)
+            subj_equivalent_hashes = subj.get("equivalent_hashes")
 
             # --- Resolve equivalence closure ---
-            if include_equivalents and core_hash:
-                cur.execute(
-                    """
-                    WITH RECURSIVE eq(core_hash, source_param_id) AS (
-                      SELECT %s::text, %s::text
-                      UNION
-                      SELECT
-                        CASE WHEN e.core_hash = eq.core_hash THEN e.equivalent_to ELSE e.core_hash END,
-                        COALESCE(e.source_param_id, e.param_id)
-                      FROM signature_equivalence e
-                      JOIN eq ON (e.core_hash = eq.core_hash OR e.equivalent_to = eq.core_hash)
-                      WHERE e.param_id = %s AND e.active = true AND e.operation = 'equivalent'
-                    )
-                    SELECT DISTINCT core_hash, source_param_id FROM eq
-                    """,
-                    (core_hash, param_id, param_id),
-                )
-                eq_rows = cur.fetchall()
-                resolved_hashes = sorted({str(r[0]) for r in eq_rows if r and r[0]})
-                resolved_pids = sorted({str(r[1]) for r in eq_rows if r and r[1]})
-                if core_hash not in resolved_hashes:
-                    resolved_hashes = [core_hash] + resolved_hashes
-                if param_id not in resolved_pids:
-                    resolved_pids = [param_id] + resolved_pids
+            if subj_equivalent_hashes is not None and len(subj_equivalent_hashes) > 0:
+                # FE-supplied closure set — use directly.
+                resolved_hashes = [core_hash] + [e['core_hash'] for e in subj_equivalent_hashes if e.get('core_hash')]
             else:
                 resolved_hashes = [core_hash]
-                resolved_pids = [param_id]
 
             # --- Query distinct anchor_day present in DB ---
+            # core_hash-only scoping (no param_id filter), consistent with
+            # the snapshot read contract (key-fixes.md §2.2).
             where_clauses: List[str] = [
-                "param_id = ANY(%s)",
                 "core_hash = ANY(%s)",
                 "anchor_day >= %s",
                 "anchor_day <= %s",
             ]
-            params: List[Any] = [resolved_pids, resolved_hashes, anchor_from, anchor_to]
+            params: List[Any] = [resolved_hashes, anchor_from, anchor_to]
 
             # Diagnostic evidence for slice-key normalisation + filter semantics
             slice_keys_normalised: List[str] = [normalise_slice_key_for_matching(sk) for sk in slice_keys] if slice_keys else []
@@ -1578,7 +1404,10 @@ def batch_anchor_coverage(
                 "expected_anchor_day_count": len(expected_days),
                 "equivalence_resolution": {
                     "core_hashes": resolved_hashes,
-                    "param_ids": resolved_pids,
+                    # Diagnostic only: historically returned param_ids from DB closure.
+                    # Under the core_hash-only read contract, we keep the field stable
+                    # and report the subject param_id as the sole entry.
+                    "param_ids": [param_id],
                 },
             }
 
@@ -1693,7 +1522,7 @@ def query_snapshot_retrievals(
     slice_keys: Optional[List[str]] = None,
     anchor_from: Optional[date] = None,
     anchor_to: Optional[date] = None,
-    include_equivalents: bool = True,
+    equivalent_hashes: Optional[List[Dict[str, Any]]] = None,
     include_summary: bool = False,
     limit: int = 200
 ) -> Dict[str, Any]:
@@ -1711,6 +1540,7 @@ def query_snapshot_retrievals(
         slice_keys: Slice key filters (optional, None = all slices)
         anchor_from: Optional anchor_day lower bound (inclusive)
         anchor_to: Optional anchor_day upper bound (inclusive)
+        equivalent_hashes: FE-supplied closure set (optional; expands core_hash matching)
         limit: Hard cap on distinct timestamps (default 200)
 
     Returns:
@@ -1752,8 +1582,11 @@ def query_snapshot_retrievals(
         params: List[Any] = []
 
         if core_hash:
-            if include_equivalents:
-                where_clauses.append("core_hash IN (SELECT core_hash FROM eq)")
+            if equivalent_hashes is not None and len(equivalent_hashes) > 0:
+                # FE-supplied closure — use ANY(%s) directly.
+                all_hashes = [core_hash] + [e['core_hash'] for e in equivalent_hashes if e.get('core_hash')]
+                where_clauses.append("core_hash = ANY(%s)")
+                params.append(all_hashes)
             else:
                 where_clauses.append("core_hash = %s")
                 params.append(core_hash)
@@ -1774,9 +1607,9 @@ def query_snapshot_retrievals(
 
         where_sql = " AND ".join(where_clauses)
 
-        if core_hash and include_equivalents:
-            if include_summary:
-                select_sql = f"""
+        if include_summary:
+            cur.execute(
+                f"""
                 SELECT
                   retrieved_at,
                   slice_key,
@@ -1790,61 +1623,21 @@ def query_snapshot_retrievals(
                 GROUP BY retrieved_at, slice_key
                 ORDER BY retrieved_at DESC, slice_key
                 LIMIT %s
-                """
-            else:
-                select_sql = f"""
+                """,
+                tuple(params + [limit_i])
+            )
+        else:
+            # Distinct retrievals bounded by limit, most recent first.
+            cur.execute(
+                f"""
                 SELECT DISTINCT retrieved_at
                 FROM snapshots
                 WHERE {where_sql}
                 ORDER BY retrieved_at DESC
                 LIMIT %s
-                """
-            query = f"""
-            WITH RECURSIVE eq(core_hash) AS (
-              SELECT %s::text
-              UNION
-              SELECT
-                CASE WHEN e.core_hash = eq.core_hash THEN e.equivalent_to ELSE e.core_hash END
-              FROM signature_equivalence e
-              JOIN eq ON (e.core_hash = eq.core_hash OR e.equivalent_to = eq.core_hash)
-              WHERE e.active = true AND e.operation = 'equivalent'
+                """,
+                tuple(params + [limit_i])
             )
-            {select_sql}
-            """
-            params2 = [core_hash] + params + [limit_i]
-            cur.execute(query, tuple(params2))
-        else:
-            if include_summary:
-                cur.execute(
-                    f"""
-                    SELECT
-                      retrieved_at,
-                      slice_key,
-                      MIN(anchor_day) AS anchor_from,
-                      MAX(anchor_day) AS anchor_to,
-                      COUNT(*) AS row_count,
-                      COALESCE(SUM(X), 0) AS sum_x,
-                      COALESCE(SUM(Y), 0) AS sum_y
-                    FROM snapshots
-                    WHERE {where_sql}
-                    GROUP BY retrieved_at, slice_key
-                    ORDER BY retrieved_at DESC, slice_key
-                    LIMIT %s
-                    """,
-                    tuple(params + [limit_i])
-                )
-            else:
-                # Distinct retrievals bounded by limit, most recent first.
-                cur.execute(
-                    f"""
-                    SELECT DISTINCT retrieved_at
-                    FROM snapshots
-                    WHERE {where_sql}
-                    ORDER BY retrieved_at DESC
-                    LIMIT %s
-                    """,
-                    tuple(params + [limit_i])
-                )
 
         rows = cur.fetchall()
         if include_summary:
@@ -1958,7 +1751,7 @@ def query_virtual_snapshot(
     anchor_to: date,
     core_hash: str,
     slice_keys: Optional[List[str]] = None,
-    include_equivalents: bool = True,
+    equivalent_hashes: Optional[List[Dict[str, Any]]] = None,
     limit: int = 10000
 ) -> Dict[str, Any]:
     """
@@ -1976,7 +1769,7 @@ def query_virtual_snapshot(
         anchor_to: End of anchor date range (required)
         core_hash: Short signature key (REQUIRED for semantic integrity)
         slice_keys: List of slice keys to include (optional, None = all)
-        include_equivalents: If True, expand equivalence links before matching core_hash
+        equivalent_hashes: FE-supplied closure set (optional; expands core_hash matching)
         limit: Maximum rows to return (default 10000)
     
     Returns:
@@ -2014,9 +1807,13 @@ def query_virtual_snapshot(
 
         where_sql = " AND ".join(where_clauses)
 
-        if include_equivalents:
-            # Equivalence closure (undirected graph) is resolved inside the same SQL query.
-            where_match_sql = where_sql + " AND core_hash IN (SELECT core_hash FROM eq)"
+        # Determine hash expansion mode.
+        use_fe_closure = equivalent_hashes is not None and len(equivalent_hashes) > 0
+
+        if use_fe_closure:
+            # FE-supplied closure — use ANY(%s) directly.
+            all_hashes = [core_hash] + [e['core_hash'] for e in equivalent_hashes if e.get('core_hash')]
+            where_match_sql = where_sql + " AND core_hash = ANY(%s)"
         else:
             where_match_sql = where_sql + " AND core_hash = %s"
 
@@ -2031,17 +1828,9 @@ def query_virtual_snapshot(
         # - has_any_rows: whether ANY virtual rows exist for this param/window (any core_hash)
         # - has_matching_core_hash: whether ANY virtual rows exist for the requested core_hash
         # This allows the caller to treat signature mismatch as a hard failure.
-        if include_equivalents:
-            query = f"""
-            WITH RECURSIVE eq(core_hash) AS (
-              SELECT %s::text
-              UNION
-              SELECT
-                CASE WHEN e.core_hash = eq.core_hash THEN e.equivalent_to ELSE e.core_hash END
-              FROM signature_equivalence e
-              JOIN eq ON (e.core_hash = eq.core_hash OR e.equivalent_to = eq.core_hash)
-              WHERE e.active = true AND e.operation = 'equivalent'
-            ),
+        # The ranked_match query shape is the same for all paths — only the CTE prefix
+        # and parameter binding differ.
+        ranked_match_body = f"""
             ranked_match AS (
                 SELECT
                     anchor_day,
@@ -2072,60 +1861,28 @@ def query_virtual_snapshot(
                 MAX(rm.retrieved_at) FILTER (WHERE rm.rn = 1) AS latest_retrieved_at_used,
                 COALESCE(BOOL_OR(rm.rn = 1 AND rm.anchor_day = %s), false) AS has_anchor_to
             FROM ranked_match rm
-            """
-        else:
-            query = f"""
-            WITH ranked_match AS (
-                SELECT
-                    anchor_day,
-                    slice_key,
-                    core_hash,
-                    retrieved_at,
-                    A as a, X as x, Y as y,
-                    median_lag_days,
-                    mean_lag_days,
-                    anchor_median_lag_days,
-                    anchor_mean_lag_days,
-                    onset_delta_days,
-                    ROW_NUMBER() OVER (
-                        PARTITION BY anchor_day, {_partition_key_match_sql_expr()}
-                        ORDER BY retrieved_at DESC, param_id DESC
-                    ) AS rn
-                FROM snapshots
-                WHERE {where_match_sql}
-            )
-            SELECT
-                COALESCE(
-                    jsonb_agg((to_jsonb(rm) - 'rn') ORDER BY rm.anchor_day, rm.slice_key)
-                        FILTER (WHERE rm.rn = 1),
-                    '[]'::jsonb
-                ) AS rows,
-                (SELECT COUNT(*) > 0 FROM snapshots WHERE {where_sql}) AS has_any_rows,
-                (SELECT COUNT(*) > 0 FROM snapshots WHERE {where_match_sql}) AS has_matching_core_hash,
-                MAX(rm.retrieved_at) FILTER (WHERE rm.rn = 1) AS latest_retrieved_at_used,
-                COALESCE(BOOL_OR(rm.rn = 1 AND rm.anchor_day = %s), false) AS has_anchor_to
-            FROM ranked_match rm
-            """
+        """
 
-        # Params:
-        # - ranked_match WHERE: base params + core_hash
-        # - has_any_rows subquery: base params
-        # - has_matching_core_hash subquery: base params + core_hash
-        # - has_anchor_to comparison: anchor_to
-        if include_equivalents:
-            # eq CTE needs: seed core_hash
-            # ranked_match WHERE: base params
+        if use_fe_closure:
+            # FE closure path — core_hash = ANY(%s).
+            query = f"""
+            WITH {ranked_match_body}
+            """
+            # ranked_match WHERE: base params + all_hashes
             # has_any_rows: base params
-            # has_matching_core_hash: base params
+            # has_matching_core_hash: base params + all_hashes
             # has_anchor_to: anchor_to
             params2 = (
-                [core_hash] +
+                params + [all_hashes] +
                 params +
-                params +
-                params +
+                params + [all_hashes] +
                 [anchor_to]
             )
         else:
+            # No expansion — core_hash = %s.
+            query = f"""
+            WITH {ranked_match_body}
+            """
             params2 = (
                 params + [core_hash] +
                 params +
@@ -2347,179 +2104,10 @@ def get_signature(
         conn.close()
 
 
-def list_equivalence_links(
-    *,
-    param_id: str,
-    core_hash: Optional[str] = None,
-    include_inactive: bool = False,
-    limit: int = 500
-) -> Dict[str, Any]:
-    """List signature_equivalence edges for a param_id (optionally filtered to touching core_hash)."""
-    limit_i = max(1, min(int(limit or 500), 5000))
-    conn = get_db_connection()
-    try:
-        cur = conn.cursor()
-        where = ["param_id = %s"]
-        params: List[Any] = [param_id]
-        if core_hash:
-            where.append("(core_hash = %s OR equivalent_to = %s)")
-            params.extend([core_hash, core_hash])
-        if not include_inactive:
-            where.append("active = true")
-        where_sql = " AND ".join(where)
-        cur.execute(
-            f"""
-            SELECT param_id, core_hash, equivalent_to, created_at, created_by, reason, active,
-                   operation, weight, source_param_id
-            FROM signature_equivalence
-            WHERE {where_sql}
-            ORDER BY created_at DESC
-            LIMIT %s
-            """,
-            tuple(params + [limit_i]),
-        )
-        rows = cur.fetchall()
-        out = []
-        for row in rows:
-            pid, ch, eq, created_at, created_by, reason, active, operation, weight, source_pid = row
-            out.append(
-                {
-                    "param_id": str(pid),
-                    "core_hash": str(ch),
-                    "equivalent_to": str(eq),
-                    "created_at": created_at.isoformat().replace("+00:00", "Z") if hasattr(created_at, "isoformat") else str(created_at),
-                    "created_by": created_by,
-                    "reason": reason,
-                    "active": bool(active),
-                    "operation": str(operation) if operation else "equivalent",
-                    "weight": float(weight) if weight is not None else 1.0,
-                    "source_param_id": str(source_pid) if source_pid else None,
-                }
-            )
-        return {"success": True, "rows": out, "count": len(out)}
-    except Exception as e:
-        return {"success": False, "rows": [], "count": 0, "error": str(e)}
-    finally:
-        conn.close()
 
-
-def create_equivalence_link(
-    *,
-    param_id: str,
-    core_hash: str,
-    equivalent_to: str,
-    created_by: str,
-    reason: str,
-    operation: str = "equivalent",
-    weight: float = 1.0,
-    source_param_id: Optional[str] = None
-) -> Dict[str, Any]:
-    """Create/activate an equivalence or transform link (idempotent).
-
-    Args:
-        operation: 'equivalent' (default, undirected identity), 'sum', 'average',
-                   'weighted_average', 'first', 'last'.
-        weight: For weighted operations; ignored for 'equivalent'.
-        source_param_id: For cross-param transforms; NULL means same as param_id.
-    """
-    if core_hash == equivalent_to and (source_param_id is None or source_param_id == param_id):
-        return {"success": False, "error": "self_link_not_allowed"}
-    conn = get_db_connection()
-    try:
-        cur = conn.cursor()
-        cur.execute(
-            """
-            INSERT INTO signature_equivalence
-              (param_id, core_hash, equivalent_to, created_by, reason, active, operation, weight, source_param_id)
-            VALUES (%s, %s, %s, %s, %s, true, %s, %s, %s)
-            ON CONFLICT (param_id, core_hash, equivalent_to)
-            DO UPDATE SET active = true, reason = EXCLUDED.reason, created_by = EXCLUDED.created_by,
-                          operation = EXCLUDED.operation, weight = EXCLUDED.weight, source_param_id = EXCLUDED.source_param_id
-            """,
-            (param_id, core_hash, equivalent_to, created_by, reason, operation, weight, source_param_id),
-        )
-        conn.commit()
-        return {"success": True}
-    except Exception as e:
-        conn.rollback()
-        return {"success": False, "error": str(e)}
-    finally:
-        conn.close()
-
-
-def deactivate_equivalence_link(
-    *,
-    param_id: str,
-    core_hash: str,
-    equivalent_to: str,
-    created_by: str,
-    reason: str
-) -> Dict[str, Any]:
-    """Deactivate an equivalence link (soft delete, audit preserved)."""
-    conn = get_db_connection()
-    try:
-        cur = conn.cursor()
-        cur.execute(
-            """
-            UPDATE signature_equivalence
-            SET active = false, created_by = %s, reason = %s
-            WHERE param_id = %s AND core_hash = %s AND equivalent_to = %s
-            """,
-            (created_by, reason, param_id, core_hash, equivalent_to),
-        )
-        conn.commit()
-        return {"success": True}
-    except Exception as e:
-        conn.rollback()
-        return {"success": False, "error": str(e)}
-    finally:
-        conn.close()
-
-
-def resolve_equivalent_hashes(
-    *,
-    param_id: str,
-    core_hash: str,
-    include_equivalents: bool = True
-) -> Dict[str, Any]:
-    """Resolve equivalence closure for a (param_id, core_hash).
-
-    Returns:
-        Dict with:
-        - core_hashes: list of core_hash strings in the closure
-        - param_ids: list of param_id strings to search (seed + any source_param_ids)
-        - count: number of core_hashes
-    """
-    if not include_equivalents:
-        return {"success": True, "core_hashes": [core_hash], "param_ids": [param_id], "count": 1}
-    conn = get_db_connection()
-    try:
-        cur = conn.cursor()
-        cur.execute(
-            """
-            WITH RECURSIVE eq(core_hash, source_param_id) AS (
-              SELECT %s::text, %s::text
-              UNION
-              SELECT
-                CASE WHEN e.core_hash = eq.core_hash THEN e.equivalent_to ELSE e.core_hash END,
-                COALESCE(e.source_param_id, e.param_id)
-              FROM signature_equivalence e
-              JOIN eq ON (e.core_hash = eq.core_hash OR e.equivalent_to = eq.core_hash)
-              WHERE e.active = true AND e.operation = 'equivalent'
-            )
-            SELECT DISTINCT core_hash, source_param_id FROM eq
-            """,
-            (core_hash, param_id),
-        )
-        rows = cur.fetchall()
-        hashes = sorted({str(r[0]) for r in rows if r and r[0]})
-        param_ids = sorted({str(r[1]) for r in rows if r and r[1]})
-        if core_hash not in hashes:
-            hashes = [core_hash] + hashes
-        if param_id not in param_ids:
-            param_ids = [param_id] + param_ids
-        return {"success": True, "core_hashes": hashes, "param_ids": param_ids, "count": len(hashes)}
-    except Exception as e:
-        return {"success": False, "core_hashes": [core_hash], "param_ids": [param_id], "count": 1, "error": str(e)}
-    finally:
-        conn.close()
+# ─── REMOVED: equivalence functions ──────────────────────────────────────────
+# list_equivalence_links, create_equivalence_link, deactivate_equivalence_link,
+# resolve_equivalent_hashes — all removed as part of hash-mappings migration.
+# Equivalence is now owned by the FE via hash-mappings.json; the BE receives
+# pre-computed closure sets in request bodies (equivalent_hashes parameter).
+# See: docs/current/project-db/hash-mappings-table-location-be-contract-12-Feb-26.md

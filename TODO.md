@@ -1,5 +1,10 @@
 
-- **Hash mapping table location + BE contract**: We built the hash-mapping table in the wrong place; it should live in the **git file store**. The FE should send the BE a **list of hash mappings** (no context) only when necessary. The BE should be “dumb” (treat mappings as inputs, not derive/own them). Allwos historicity of mappings & inspectable within code, which is what we need.
+- **Drop `signature_equivalence` DB table** (post-release, after production verification)
+  - The table is no longer read or written by production code (equivalence is FE-owned via `hash-mappings.json`).
+  - When dropping: also delete test-only DB helpers (`create_equivalence_link`, `deactivate_equivalence_link`, `resolve_equivalent_hashes`) from `test_snapshot_read_integrity.py` and `test_batch_anchor_coverage.py`, and remove legacy tests that exercise them (TestTierC c006/c007/c008, TestTierD d001–d006, TestCrossParamDataContract d007).
+  - See: `docs/current/project-db/hash-mappings-table-location-be-contract-12-Feb-26.md`
+- We should remove the parity testing piece and complete cutover of BE stats service soon
+
 
 # TODO
 

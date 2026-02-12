@@ -132,7 +132,7 @@ export function useEdgeSnapshotInventory(edgeId: string | undefined): UseEdgeSna
     // Start new fetch
     fetchedRef.current = dbParamId;
     const fetchPromise = (async (): Promise<SnapshotInventory> => {
-      const invByParam = await getBatchInventoryV2([dbParamId], { include_equivalents: true });
+      const invByParam = await getBatchInventoryV2([dbParamId]);
       return toLegacyInventory(dbParamId, invByParam[dbParamId]);
     })();
     pendingFetches.set(dbParamId, fetchPromise);

@@ -30,7 +30,7 @@ const EDITOR_COMPONENTS = {
  * Get editor component for a given type and view mode.
  * Queries FILE_TYPE_REGISTRY to determine which editor to use.
  */
-export function getEditorComponent(type: ObjectType | 'settings' | 'session-log' | 'issues', viewMode: 'interactive' | 'raw-json' | 'raw-yaml') {
+export function getEditorComponent(type: ObjectType | 'settings' | 'session-log' | 'issues' | 'hash-mappings', viewMode: 'interactive' | 'raw-json' | 'raw-yaml') {
   // Raw views always use RawView component (including settings)
   if (viewMode === 'raw-json' || viewMode === 'raw-yaml') {
     return RawView;
@@ -51,8 +51,8 @@ export function getEditorComponent(type: ObjectType | 'settings' | 'session-log'
     return GraphIssuesViewer;
   }
 
-  // Special case for signature links viewer
-  if (type === 'signature-links') {
+  // Snapshot Manager is the interactive editor for hash-mappings.json
+  if (type === 'hash-mappings' || type === 'signature-links') {
     return SignatureLinksViewer;
   }
   

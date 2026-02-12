@@ -1072,12 +1072,14 @@ export function TabProvider({ children }: { children: React.ReactNode }) {
         await initializeCredentials();
         await initializeConnections();
         await initializeSettings();
+        await initializeHashMappings();
       } else {
         // Normal workspace boot
         await loadTabsFromDB();
         await initializeCredentials();
         await initializeConnections();
         await initializeSettings();
+        await initializeHashMappings();
       }
       
       await loadFromURLData();
@@ -1206,6 +1208,15 @@ export function TabProvider({ children }: { children: React.ReactNode }) {
   const initializeSettings = async () => {
     const { seedSettingsFile } = await import('../init/seedSettings');
     await seedSettingsFile();
+  };
+
+  /**
+   * Initialize hash-mappings.json — seeds empty file if missing.
+   * This runs during TabProvider initialization so hashMappingsService can read it.
+   */
+  const initializeHashMappings = async () => {
+    const { seedHashMappingsFile } = await import('../init/seedHashMappings');
+    await seedHashMappingsFile();
   };
 
   /**

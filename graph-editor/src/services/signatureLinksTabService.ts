@@ -1,7 +1,7 @@
 import { fileRegistry } from '../contexts/TabContext';
 import type { TabState } from '../types';
 
-const FILE_ID = 'signature-links';
+const FILE_ID = 'hash-mappings';
 
 /** Context passed when opening from a graph/edge/parameter entry point. */
 export interface SignatureLinksContext {
@@ -46,15 +46,12 @@ export class SignatureLinksTabService {
       // Store context for the viewer to consume on mount
       this._pendingContext = context ?? null;
 
-      // Ensure file exists (temporary/non-git)
+      // Ensure hash-mappings file exists (seeded at init or pulled from repo).
+      // If somehow missing (e.g. fresh app before first pull), seed an empty one.
       const existing = fileRegistry.getFile(FILE_ID);
       if (!existing) {
-        await fileRegistry.getOrCreateFile(
-          FILE_ID,
-          'signature-links' as any,
-          { repository: 'temporary', path: 'signature-links', branch: 'main' },
-          {}
-        );
+        const { seedHashMappingsFile } = await import('../init/seedHashMappings');
+        await seedHashMappingsFile();
       }
 
       // If the tab already exists, switch to it and push context via event

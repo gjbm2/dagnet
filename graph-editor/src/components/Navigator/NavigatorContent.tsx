@@ -403,6 +403,7 @@ export function NavigatorContent() {
       connections: [],
       image: [],
       'signature-links': [],
+      'hash-mappings': [],
     };
     
     for (const entry of tagFilteredEntries) {

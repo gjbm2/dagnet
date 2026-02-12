@@ -119,19 +119,11 @@ class handler(BaseHTTPRequestHandler):
                     path = '/api/sigs/list'
                 elif endpoint == 'sigs-get':
                     path = '/api/sigs/get'
-                elif endpoint == 'sigs-links-list':
-                    path = '/api/sigs/links/list'
-                elif endpoint == 'sigs-links-create':
-                    path = '/api/sigs/links/create'
-                elif endpoint == 'sigs-links-deactivate':
-                    path = '/api/sigs/links/deactivate'
-                elif endpoint == 'sigs-resolve':
-                    path = '/api/sigs/resolve'
                 elif endpoint == 'lag-recompute-models':
                     path = '/api/lag/recompute-models'
                 # If no endpoint param and no original path header, this is an error
                 elif not original_path:
-                    self.send_error_response(400, "Missing endpoint. Supported: parse-query, generate-all-parameters, stats-enhance, runner-analyze, runner-available-analyses, compile-exclude, snapshots-append, snapshots-health, snapshots-inventory, snapshots-batch-retrieval-days, snapshots-batch-anchor-coverage, snapshots-retrievals, snapshots-delete, snapshots-query-full, snapshots-query-virtual, sigs-list, sigs-get, sigs-links-list, sigs-links-create, sigs-links-deactivate, sigs-resolve, lag-recompute-models")
+                    self.send_error_response(400, "Missing endpoint. Supported: parse-query, generate-all-parameters, stats-enhance, runner-analyze, runner-available-analyses, compile-exclude, snapshots-append, snapshots-health, snapshots-inventory, snapshots-batch-retrieval-days, snapshots-batch-anchor-coverage, snapshots-retrievals, snapshots-delete, snapshots-query-full, snapshots-query-virtual, sigs-list, sigs-get, lag-recompute-models")
                     return
             
             if path == '/api/parse-query':
@@ -168,14 +160,6 @@ class handler(BaseHTTPRequestHandler):
                 self.handle_sigs_list(data)
             elif path == '/api/sigs/get':
                 self.handle_sigs_get(data)
-            elif path == '/api/sigs/links/list':
-                self.handle_sigs_links_list(data)
-            elif path == '/api/sigs/links/create':
-                self.handle_sigs_links_create(data)
-            elif path == '/api/sigs/links/deactivate':
-                self.handle_sigs_links_deactivate(data)
-            elif path == '/api/sigs/resolve':
-                self.handle_sigs_resolve(data)
             elif path == '/api/lag/recompute-models':
                 self.handle_lag_recompute_models(data)
             elif path == '/api/lag-recompute-models':
@@ -374,49 +358,9 @@ class handler(BaseHTTPRequestHandler):
         except Exception as e:
             self.send_error_response(500, str(e))
 
-    def handle_sigs_links_list(self, data):
-        """Handle sigs/links/list endpoint - list equivalence links."""
-        try:
-            from api_handlers import handle_sigs_links_list as handler_func
-            response = handler_func(data)
-            self.send_success_response(response)
-        except ValueError as e:
-            self.send_error_response(400, str(e))
-        except Exception as e:
-            self.send_error_response(500, str(e))
-
-    def handle_sigs_links_create(self, data):
-        """Handle sigs/links/create endpoint - create/activate link."""
-        try:
-            from api_handlers import handle_sigs_links_create as handler_func
-            response = handler_func(data)
-            self.send_success_response(response)
-        except ValueError as e:
-            self.send_error_response(400, str(e))
-        except Exception as e:
-            self.send_error_response(500, str(e))
-
-    def handle_sigs_links_deactivate(self, data):
-        """Handle sigs/links/deactivate endpoint - deactivate link."""
-        try:
-            from api_handlers import handle_sigs_links_deactivate as handler_func
-            response = handler_func(data)
-            self.send_success_response(response)
-        except ValueError as e:
-            self.send_error_response(400, str(e))
-        except Exception as e:
-            self.send_error_response(500, str(e))
-
-    def handle_sigs_resolve(self, data):
-        """Handle sigs/resolve endpoint - resolve equivalence closure."""
-        try:
-            from api_handlers import handle_sigs_resolve as handler_func
-            response = handler_func(data)
-            self.send_success_response(response)
-        except ValueError as e:
-            self.send_error_response(400, str(e))
-        except Exception as e:
-            self.send_error_response(500, str(e))
+    # REMOVED: handle_sigs_links_list, handle_sigs_links_create,
+    # handle_sigs_links_deactivate, handle_sigs_resolve
+    # Equivalence is now FE-owned via hash-mappings.json.
 
     def handle_lag_recompute_models(self, data):
         """Handle lag/recompute-models endpoint - fit lag models from DB evidence."""

@@ -7,7 +7,7 @@
 
 export interface FileTypeConfig {
   /** The type identifier (matches ObjectType) */
-  type: 'graph' | 'chart' | 'parameter' | 'context' | 'case' | 'node' | 'event' | 'credentials' | 'connections' | 'settings' | 'markdown';
+  type: 'graph' | 'chart' | 'parameter' | 'context' | 'case' | 'node' | 'event' | 'credentials' | 'connections' | 'settings' | 'hash-mappings' | 'markdown';
   
   /** Display name (singular) */
   displayName: string;
@@ -190,6 +190,19 @@ export const FILE_TYPE_REGISTRY: Record<string, FileTypeConfig> = {
     interactiveEditor: 'form',
     supportsInteractiveEdit: true,
     supportsRawEdit: true
+  },
+
+  'hash-mappings': {
+    type: 'hash-mappings',
+    displayName: 'Hash Mappings',
+    displayNamePlural: 'Hash Mappings',
+    schemaFile: '', // No schema validation needed — structure is simple and code-owned
+    directory: '', // Repo root
+    extensions: ['.json'],
+    icon: '🔗',
+    interactiveEditor: 'form',
+    supportsInteractiveEdit: false, // Edited via Snapshot Manager, not a generic form
+    supportsRawEdit: true,
   },
 
   markdown: {

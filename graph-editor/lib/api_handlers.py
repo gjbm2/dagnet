@@ -1073,7 +1073,6 @@ def handle_snapshots_query_full(data: Dict[str, Any]) -> Dict[str, Any]:
             - anchor_from: Start date ISO string (optional)
             - anchor_to: End date ISO string (optional)
             - as_at: Timestamp ISO string for point-in-time query (optional)
-            - include_equivalents: bool (optional; default True)
             - limit: Max rows (optional, default 10000)
     
     Returns:
@@ -1118,7 +1117,7 @@ def handle_snapshots_query_full(data: Dict[str, Any]) -> Dict[str, Any]:
         anchor_to=anchor_to,
         as_at=as_at,
         retrieved_ats=retrieved_ats,
-        include_equivalents=bool(data.get('include_equivalents', True)),
+        equivalent_hashes=data.get('equivalent_hashes'),
         limit=data.get('limit', 10000)
     )
     
@@ -1155,7 +1154,7 @@ def handle_snapshots_inventory(data: Dict[str, Any]) -> Dict[str, Any]:
         current_signatures=data.get("current_signatures") or None,
         current_core_hashes=data.get("current_core_hashes") or None,  # Frontend-computed (hash-fixes.md)
         slice_keys_by_param=data.get("slice_keys") or None,
-        include_equivalents=bool(data.get("include_equivalents", True)),
+        equivalent_hashes_by_param=data.get("equivalent_hashes_by_param") or None,
         limit_families_per_param=int(data.get("limit_families_per_param", 50)),
         limit_slices_per_family=int(data.get("limit_slices_per_family", 200)),
     )
@@ -1205,7 +1204,6 @@ def handle_snapshots_retrievals(data: Dict[str, Any]) -> Dict[str, Any]:
             - slice_keys: List of slice keys (optional)
             - anchor_from: Start date ISO string (optional)
             - anchor_to: End date ISO string (optional)
-            - include_equivalents: bool (optional; default True)
             - limit: Max timestamps (optional, default 200)
 
     Returns:
@@ -1236,7 +1234,7 @@ def handle_snapshots_retrievals(data: Dict[str, Any]) -> Dict[str, Any]:
         slice_keys=data.get('slice_keys'),
         anchor_from=anchor_from,
         anchor_to=anchor_to,
-        include_equivalents=bool(data.get('include_equivalents', True)),
+        equivalent_hashes=data.get('equivalent_hashes'),
         include_summary=bool(data.get('include_summary', False)),
         limit=data.get('limit', 200)
     )
@@ -1300,7 +1298,6 @@ def handle_snapshots_query_virtual(data: Dict[str, Any]) -> Dict[str, Any]:
             - anchor_to: End date ISO string (required)
             - canonical_signature: Canonical semantic signature string (REQUIRED; frontend `query_signature`)
             - slice_keys: List of slice keys (optional)
-            - include_equivalents: bool (optional; default True)
             - limit: Max rows (optional, default 10000)
     
     Returns:
@@ -1350,7 +1347,7 @@ def handle_snapshots_query_virtual(data: Dict[str, Any]) -> Dict[str, Any]:
         anchor_to=anchor_to,
         core_hash=core_hash,
         slice_keys=data.get('slice_keys'),
-        include_equivalents=bool(data.get('include_equivalents', True)),
+        equivalent_hashes=data.get('equivalent_hashes'),
         limit=data.get('limit', 10000)
     )
 
@@ -1375,7 +1372,7 @@ def handle_snapshots_batch_anchor_coverage(data: Dict[str, Any]) -> Dict[str, An
                 - slice_keys (list[str], required)
                 - anchor_from (ISO date str, required)
                 - anchor_to (ISO date str, required)
-                - include_equivalents (bool, optional; default True)
+
 
     Returns:
         Response dict with:
@@ -1415,7 +1412,7 @@ def handle_snapshots_batch_anchor_coverage(data: Dict[str, Any]) -> Dict[str, An
             "slice_keys": s.get("slice_keys") or [],
             "anchor_from": date_type.fromisoformat(anchor_from_str),
             "anchor_to": date_type.fromisoformat(anchor_to_str),
-            "include_equivalents": bool(s.get("include_equivalents", True)),
+            "equivalent_hashes": s.get("equivalent_hashes"),
         })
 
     results = batch_anchor_coverage(subjects, diagnostic=diagnostic)
@@ -1466,83 +1463,10 @@ def handle_sigs_get(data: Dict[str, Any]) -> Dict[str, Any]:
     return get_signature(param_id=param_id, core_hash=core_hash)
 
 
-def handle_sigs_links_list(data: Dict[str, Any]) -> Dict[str, Any]:
-    """List equivalence links for a param_id (optionally filtered to core_hash)."""
-    from snapshot_service import list_equivalence_links
-    param_id = data.get("param_id")
-    if not param_id:
-        raise ValueError("Missing 'param_id' field")
-    return list_equivalence_links(
-        param_id=param_id,
-        core_hash=data.get("core_hash"),
-        include_inactive=bool(data.get("include_inactive", False)),
-        limit=int(data.get("limit", 500)),
-    )
-
-
-def handle_sigs_links_create(data: Dict[str, Any]) -> Dict[str, Any]:
-    """Create/activate an equivalence link."""
-    from snapshot_service import create_equivalence_link
-    param_id = data.get("param_id")
-    core_hash = data.get("core_hash")
-    equivalent_to = data.get("equivalent_to")
-    created_by = data.get("created_by", "user")
-    reason = data.get("reason", "")
-    if not param_id:
-        raise ValueError("Missing 'param_id' field")
-    if not core_hash:
-        raise ValueError("Missing 'core_hash' field")
-    if not equivalent_to:
-        raise ValueError("Missing 'equivalent_to' field")
-    return create_equivalence_link(
-        param_id=param_id,
-        core_hash=core_hash,
-        equivalent_to=equivalent_to,
-        created_by=created_by,
-        reason=reason,
-        operation=data.get("operation", "equivalent"),
-        weight=float(data.get("weight", 1.0)),
-        source_param_id=data.get("source_param_id"),
-    )
-
-
-def handle_sigs_links_deactivate(data: Dict[str, Any]) -> Dict[str, Any]:
-    """Deactivate (soft delete) an equivalence link."""
-    from snapshot_service import deactivate_equivalence_link
-    param_id = data.get("param_id")
-    core_hash = data.get("core_hash")
-    equivalent_to = data.get("equivalent_to")
-    created_by = data.get("created_by", "user")
-    reason = data.get("reason", "")
-    if not param_id:
-        raise ValueError("Missing 'param_id' field")
-    if not core_hash:
-        raise ValueError("Missing 'core_hash' field")
-    if not equivalent_to:
-        raise ValueError("Missing 'equivalent_to' field")
-    return deactivate_equivalence_link(
-        param_id=param_id,
-        core_hash=core_hash,
-        equivalent_to=equivalent_to,
-        created_by=created_by,
-        reason=reason,
-    )
-
-
-def handle_sigs_resolve(data: Dict[str, Any]) -> Dict[str, Any]:
-    """Resolve equivalence closure for a signature."""
-    from snapshot_service import resolve_equivalent_hashes
-    param_id = data.get("param_id")
-    core_hash = data.get("core_hash")
-    if not param_id:
-        raise ValueError("Missing 'param_id' field")
-    if not core_hash:
-        raise ValueError("Missing 'core_hash' field")
-    return resolve_equivalent_hashes(
-        param_id=param_id,
-        core_hash=core_hash,
-        include_equivalents=bool(data.get("include_equivalents", True)),
-    )
+# REMOVED: handle_sigs_links_list, handle_sigs_links_create,
+# handle_sigs_links_deactivate, handle_sigs_resolve
+# Equivalence is now FE-owned via hash-mappings.json.
+# See: docs/current/project-db/hash-mappings-table-location-be-contract-12-Feb-26.md
 
 
 def handle_lag_recompute_models(data: Dict[str, Any]) -> Dict[str, Any]:
@@ -1643,6 +1567,7 @@ def handle_lag_recompute_models(data: Dict[str, Any]) -> Dict[str, Any]:
             onset_override = float(subj_onset)
 
         # Query DB evidence.
+        subj_equiv_hashes = subj.get('equivalent_hashes')
         try:
             rows = query_snapshots(
                 param_id=param_id,
@@ -1651,7 +1576,7 @@ def handle_lag_recompute_models(data: Dict[str, Any]) -> Dict[str, Any]:
                 anchor_from=anchor_from,
                 anchor_to=anchor_to,
                 as_at=as_at,
-                include_equivalents=True,
+                equivalent_hashes=subj_equiv_hashes,
             )
         except Exception as e:
             results.append({

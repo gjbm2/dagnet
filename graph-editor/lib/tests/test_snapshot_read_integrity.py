@@ -25,10 +25,72 @@ from snapshot_service import (
     get_db_connection,
     get_batch_inventory_v2,
     short_core_hash_from_canonical_signature,
-    create_equivalence_link,
-    deactivate_equivalence_link,
-    resolve_equivalent_hashes,
 )
+
+# ── Test-only DB helpers (production functions removed in hash-mappings migration) ──
+# The signature_equivalence TABLE still exists (dropped later); these helpers
+# write to it directly so legacy regression tests remain runnable.
+
+def create_equivalence_link(*, param_id, core_hash, equivalent_to, created_by, reason,
+                            operation='equivalent', weight=1.0, source_param_id=None):
+    if core_hash == equivalent_to and (source_param_id is None or source_param_id == param_id):
+        return {"success": False, "error": "self_link_not_allowed"}
+    conn = get_db_connection()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """INSERT INTO signature_equivalence
+               (param_id, core_hash, equivalent_to, created_by, reason, active, operation, weight, source_param_id)
+               VALUES (%s,%s,%s,%s,%s,true,%s,%s,%s)
+               ON CONFLICT (param_id, core_hash, equivalent_to)
+               DO UPDATE SET active=true, reason=EXCLUDED.reason, created_by=EXCLUDED.created_by,
+                             operation=EXCLUDED.operation, weight=EXCLUDED.weight, source_param_id=EXCLUDED.source_param_id""",
+            (param_id, core_hash, equivalent_to, created_by, reason, operation, weight, source_param_id))
+        conn.commit()
+        return {"success": True}
+    except Exception as e:
+        conn.rollback()
+        return {"success": False, "error": str(e)}
+    finally:
+        conn.close()
+
+def deactivate_equivalence_link(*, param_id, core_hash, equivalent_to, created_by, reason):
+    conn = get_db_connection()
+    try:
+        cur = conn.cursor()
+        cur.execute("UPDATE signature_equivalence SET active=false, created_by=%s, reason=%s WHERE param_id=%s AND core_hash=%s AND equivalent_to=%s",
+                    (created_by, reason, param_id, core_hash, equivalent_to))
+        conn.commit()
+        return {"success": True}
+    except Exception as e:
+        conn.rollback()
+        return {"success": False, "error": str(e)}
+    finally:
+        conn.close()
+
+def resolve_equivalent_hashes(*, param_id, core_hash, include_equivalents=True):
+    if not include_equivalents:
+        return {"success": True, "core_hashes": [core_hash], "param_ids": [param_id], "count": 1}
+    conn = get_db_connection()
+    try:
+        cur = conn.cursor()
+        cur.execute("""WITH RECURSIVE eq(core_hash, source_param_id) AS (
+              SELECT %s::text, %s::text UNION
+              SELECT CASE WHEN e.core_hash=eq.core_hash THEN e.equivalent_to ELSE e.core_hash END,
+                     COALESCE(e.source_param_id, e.param_id)
+              FROM signature_equivalence e JOIN eq ON (e.core_hash=eq.core_hash OR e.equivalent_to=eq.core_hash)
+              WHERE e.active=true AND e.operation='equivalent')
+            SELECT DISTINCT core_hash, source_param_id FROM eq""", (core_hash, param_id))
+        rows = cur.fetchall()
+        hashes = sorted({str(r[0]) for r in rows if r and r[0]})
+        pids = sorted({str(r[1]) for r in rows if r and r[1]})
+        if core_hash not in hashes: hashes = [core_hash] + hashes
+        if param_id not in pids: pids = [param_id] + pids
+        return {"success": True, "core_hashes": hashes, "param_ids": pids, "count": len(hashes)}
+    except Exception as e:
+        return {"success": False, "core_hashes": [core_hash], "param_ids": [param_id], "count": 1, "error": str(e)}
+    finally:
+        conn.close()
 
 # Skip all tests if DB_CONNECTION not available
 pytestmark = pytest.mark.skipif(
@@ -238,7 +300,7 @@ class TestReadIntegrity:
             param_ids=[self.param_id],
             current_signatures={self.param_id: self.canonical_signature},
             slice_keys_by_param={self.param_id: ['cohort()', 'context(channel:google).cohort()', 'context(channel:facebook).cohort()']},
-            include_equivalents=True,
+            
             limit_families_per_param=10,
             limit_slices_per_family=10,
         )
@@ -277,7 +339,7 @@ class TestReadIntegrity:
             anchor_to=date(2025, 10, 2),
             core_hash=self.core_hash,
             slice_keys=['context(channel:google).cohort()'],
-            include_equivalents=True,
+            
         )
 
         assert res["success"] is True
@@ -309,7 +371,7 @@ class TestReadIntegrity:
             anchor_to=date(2025, 10, 2),
             core_hash=self.core_hash,
             slice_keys=['cohort()'],
-            include_equivalents=True,
+            
         )
         assert res["success"] is True
         # Only the uncontexted cohort() series should match (2 anchor days in range).
@@ -330,7 +392,7 @@ class TestReadIntegrity:
             anchor_to=date(2025, 10, 1),
             core_hash=self.core_hash,
             slice_keys=['cohort()'],
-            include_equivalents=True,
+            
         )
         assert res["success"] is True
         assert res["count"] > 0
@@ -414,7 +476,7 @@ class TestReadIntegrity:
             anchor_to=date(2025, 10, 2),
             core_hash=hash_a,
             slice_keys=[''],
-            include_equivalents=False,
+            
             limit=10000,
         )
         assert res['success'] is True
@@ -432,7 +494,7 @@ class TestReadIntegrity:
             anchor_to=date(2025, 10, 2),
             core_hash=short_core_hash_from_canonical_signature('{"c":"sig-NOT-THERE","x":{}}'),
             slice_keys=[''],
-            include_equivalents=False,
+            
             limit=10000,
         )
         assert res_wrong['success'] is True
@@ -495,7 +557,7 @@ class TestReadIntegrity:
         assert res_all['retrieved_at'][2].startswith('2025-10-10')
 
         # Filtered by signature: only sig_a's retrievals (2)
-        res_sig = query_snapshot_retrievals(param_id=pid, core_hash=hash_a, include_equivalents=False, limit=10)
+        res_sig = query_snapshot_retrievals(param_id=pid, core_hash=hash_a, limit=10)
         assert res_sig['success'] is True
         assert res_sig['count'] == 2
         assert res_sig['retrieved_at'][0].startswith('2025-10-12')
@@ -546,7 +608,7 @@ class TestReadIntegrity:
             anchor_to=date(2025, 10, 1),
             core_hash=hash_a,
             slice_keys=[''],
-            include_equivalents=False,
+            
             limit=1000,
         )
         assert strict["success"] is True
@@ -563,6 +625,8 @@ class TestReadIntegrity:
         )
         assert res_link["success"] is True
 
+        eq_hashes = [{'core_hash': hash_b, 'operation': 'equivalent', 'weight': 1.0}]
+
         closure = query_virtual_snapshot(
             param_id=pid,
             as_at=datetime(2025, 10, 12, 0, 0, 0),
@@ -570,7 +634,7 @@ class TestReadIntegrity:
             anchor_to=date(2025, 10, 1),
             core_hash=hash_a,
             slice_keys=[''],
-            include_equivalents=True,
+            equivalent_hashes=eq_hashes,
             limit=1000,
         )
         assert closure["success"] is True
@@ -580,12 +644,12 @@ class TestReadIntegrity:
         assert closure["rows"][0]["x"] == 999
 
         # Retrievals: strict filter should only see sig_a's retrieval; closure should see both.
-        strict_r = query_snapshot_retrievals(param_id=pid, core_hash=hash_a, include_equivalents=False, limit=10)
+        strict_r = query_snapshot_retrievals(param_id=pid, core_hash=hash_a, limit=10)
         assert strict_r["success"] is True
         assert strict_r["count"] == 1
         assert strict_r["retrieved_at"][0].startswith("2025-10-10")
 
-        closure_r = query_snapshot_retrievals(param_id=pid, core_hash=hash_a, include_equivalents=True, limit=10)
+        closure_r = query_snapshot_retrievals(param_id=pid, core_hash=hash_a, equivalent_hashes=eq_hashes, limit=10)
         assert closure_r["success"] is True
         assert closure_r["count"] == 2
         assert closure_r["retrieved_at"][0].startswith("2025-10-11")
@@ -631,8 +695,10 @@ class TestReadIntegrity:
         )
         assert res_link["success"] is True
 
+        eq_hashes = [{'core_hash': hash_b, 'operation': 'equivalent', 'weight': 1.0}]
+
         # Retrievals for A should include B's retrieval timestamp.
-        closure_r = query_snapshot_retrievals(param_id=pid_a, core_hash=hash_a, include_equivalents=True, limit=10)
+        closure_r = query_snapshot_retrievals(param_id=pid_a, core_hash=hash_a, equivalent_hashes=eq_hashes, limit=10)
         assert closure_r["success"] is True
         assert closure_r["count"] == 2
         assert closure_r["retrieved_at"][0].startswith("2025-10-11")
@@ -646,7 +712,7 @@ class TestReadIntegrity:
             anchor_to=date(2025, 10, 1),
             core_hash=hash_a,
             slice_keys=[''],
-            include_equivalents=True,
+            equivalent_hashes=eq_hashes,
             limit=1000,
         )
         assert closure["success"] is True
@@ -685,7 +751,7 @@ class TestReadIntegrity:
         )
 
         # Strict: only sig_a's row
-        strict = query_snapshots(param_id=pid, core_hash=hash_a, include_equivalents=False)
+        strict = query_snapshots(param_id=pid, core_hash=hash_a)
         assert len(strict) == 1
         assert strict[0]['x'] == 1
         assert strict[0]['core_hash'] == hash_a
@@ -701,14 +767,15 @@ class TestReadIntegrity:
         assert res_link["success"] is True
 
         # With equivalents: both rows returned
-        closure = query_snapshots(param_id=pid, core_hash=hash_a, include_equivalents=True)
+        eq_hashes = [{'core_hash': hash_b, 'operation': 'equivalent', 'weight': 1.0}]
+        closure = query_snapshots(param_id=pid, core_hash=hash_a, equivalent_hashes=eq_hashes)
         assert len(closure) == 2
         hashes_returned = {r['core_hash'] for r in closure}
         assert hash_a in hashes_returned
         assert hash_b in hashes_returned
 
         # Verify strict still only returns sig_a
-        strict_after = query_snapshots(param_id=pid, core_hash=hash_a, include_equivalents=False)
+        strict_after = query_snapshots(param_id=pid, core_hash=hash_a)
         assert len(strict_after) == 1
         assert strict_after[0]['core_hash'] == hash_a
 
@@ -754,8 +821,9 @@ class TestReadIntegrity:
         inv = get_batch_inventory_v2(
             param_ids=[pid],
             current_signatures={pid: sig_a},
+            current_core_hashes={pid: hash_a},
             slice_keys_by_param={pid: ['']},
-            include_equivalents=True,
+            equivalent_hashes_by_param={pid: [{'core_hash': hash_b, 'operation': 'equivalent', 'weight': 1.0}]},
             limit_families_per_param=10,
             limit_slices_per_family=10,
         )
@@ -803,7 +871,7 @@ class TestContextEpochs_SliceSelectorContract:
             rows=[{'anchor_day': '2025-10-01', 'X': 50, 'Y': 5}],
         )
 
-        rows = query_snapshots(param_id=pid, core_hash=h, slice_keys=['cohort()'], include_equivalents=False)
+        rows = query_snapshots(param_id=pid, core_hash=h, slice_keys=['cohort()'])
         assert len(rows) == 1
         assert rows[0]['slice_key'].startswith('cohort(')
 
@@ -833,7 +901,7 @@ class TestContextEpochs_SliceSelectorContract:
             anchor_to=date(2025, 10, 1),
             sweep_from=date(2025, 10, 10),
             sweep_to=date(2025, 10, 10),
-            include_equivalents=False,
+            
             limit=10000,
         )
         assert len(rows) == 1
@@ -860,7 +928,7 @@ class TestContextEpochs_SliceSelectorContract:
         rows = query_snapshots(
             param_id=pid, core_hash=h,
             slice_keys=['context(channel:google).cohort()'],
-            include_equivalents=False,
+            
         )
         assert len(rows) == 1
         assert rows[0]['slice_key'].startswith('context(channel:google).cohort(')
@@ -883,7 +951,7 @@ class TestContextEpochs_SliceSelectorContract:
             rows=[{'anchor_day': '2025-10-01', 'X': 50, 'Y': 5}],
         )
 
-        rows = query_snapshots(param_id=pid, core_hash=h, slice_keys=[''], include_equivalents=False)
+        rows = query_snapshots(param_id=pid, core_hash=h, slice_keys=[''])
         assert len(rows) == 2
 
     def test_ce005_gap_slice_key_matches_no_rows(self):
@@ -898,7 +966,7 @@ class TestContextEpochs_SliceSelectorContract:
             rows=[{'anchor_day': '2025-10-01', 'X': 100, 'Y': 10}],
         )
 
-        rows = query_snapshots(param_id=pid, core_hash=h, slice_keys=['__epoch_gap__'], include_equivalents=False)
+        rows = query_snapshots(param_id=pid, core_hash=h, slice_keys=['__epoch_gap__'])
         assert rows == []
 
     def test_ce006_retrievals_include_summary_reports_slice_keys(self):
@@ -922,7 +990,7 @@ class TestContextEpochs_SliceSelectorContract:
         res = query_snapshot_retrievals(
             param_id=pid,
             core_hash=h,
-            include_equivalents=False,
+            
             include_summary=True,
             limit=10,
         )
@@ -957,7 +1025,7 @@ class TestContextEpochs_SliceSelectorContract:
         res = query_snapshot_retrievals(
             param_id=pid,
             core_hash=h,
-            include_equivalents=False,
+            
             include_summary=True,
             limit=10,
         )
@@ -987,7 +1055,7 @@ class TestContextEpochs_SliceSelectorContract:
             param_ids=[pid],
             current_signatures={pid: sig},
             slice_keys_by_param={pid: ['cohort()']},
-            include_equivalents=False,
+            
             limit_families_per_param=10,
             limit_slices_per_family=50,
         )
@@ -1030,7 +1098,7 @@ class TestContextEpochs_SliceSelectorContract:
             param_id=pid, core_hash=h, slice_keys=['cohort()'],
             anchor_from=date(2025, 10, 1), anchor_to=date(2025, 10, 1),
             sweep_from=date(2025, 10, 10), sweep_to=date(2025, 10, 10),
-            include_equivalents=False,
+            
         )
         assert len(rows_u) == 1
         assert rows_u[0]["x"] == 100
@@ -1041,7 +1109,7 @@ class TestContextEpochs_SliceSelectorContract:
             slice_keys=['context(channel:a).cohort()', 'context(channel:b).cohort()'],
             anchor_from=date(2025, 10, 1), anchor_to=date(2025, 10, 1),
             sweep_from=date(2025, 10, 10), sweep_to=date(2025, 10, 10),
-            include_equivalents=False,
+            
         )
         assert len(rows_p) == 2
         assert sum(r["x"] for r in rows_p) == 100
@@ -1068,7 +1136,7 @@ class TestContextEpochs_SliceSelectorContract:
             rows=[{'anchor_day': '2025-10-01', 'X': 40, 'Y': 4}],
         )
 
-        rows = query_snapshots(param_id=pid, core_hash=h, slice_keys=[''], include_equivalents=False)
+        rows = query_snapshots(param_id=pid, core_hash=h, slice_keys=[''])
         assert len(rows) == 2
 
     def test_ce011_slice_key_normalisation_for_matching_is_args_insensitive(self):
@@ -1085,7 +1153,7 @@ class TestContextEpochs_SliceSelectorContract:
         rows = query_snapshots(
             param_id=pid, core_hash=h,
             slice_keys=['context(channel:google).cohort()'],
-            include_equivalents=False,
+            
         )
         assert len(rows) == 1
 
@@ -1106,7 +1174,7 @@ class TestContextEpochs_SliceSelectorContract:
         rows = query_snapshots(
             param_id=pid, core_hash=h,
             slice_keys=['context(channel:google).cohort()'],
-            include_equivalents=False,
+            
         )
         assert len(rows) == 1
 
@@ -1125,7 +1193,7 @@ class TestContextEpochs_SliceSelectorContract:
         rows = query_snapshots(
             param_id=pid, core_hash=h,
             slice_keys=['context(channel:google).cohort()'],
-            include_equivalents=False,
+            
         )
         assert rows == []
 
@@ -1309,10 +1377,9 @@ class TestTierD_EquivalenceResolution:
         cleanup_test_data()
 
     def _resolve(self, pid, core_hash):
-        """Helper: resolve equivalence closure."""
-        from snapshot_service import resolve_equivalent_hashes
+        """Helper: resolve equivalence closure (test-only; uses module-level helper)."""
         return resolve_equivalent_hashes(
-            param_id=pid, core_hash=core_hash, include_equivalents=True,
+            param_id=pid, core_hash=core_hash,
         )
 
     def test_d001_symmetry(self):
@@ -1442,11 +1509,11 @@ class TestTierE_NoDisappearance:
         )
 
         # 2. Verify old signature has data
-        old_rows = query_snapshots(param_id=pid, core_hash=hash_old, include_equivalents=False)
+        old_rows = query_snapshots(param_id=pid, core_hash=hash_old)
         assert len(old_rows) == 5
 
         # 3. Strict query with NEW hash: nothing (this is the "disappearance")
-        new_strict = query_snapshots(param_id=pid, core_hash=hash_new, include_equivalents=False)
+        new_strict = query_snapshots(param_id=pid, core_hash=hash_new)
         assert len(new_strict) == 0
 
         # Virtual query also sees nothing with new hash
@@ -1457,7 +1524,7 @@ class TestTierE_NoDisappearance:
             anchor_to=date(2025, 10, 5),
             core_hash=hash_new,
             slice_keys=[''],
-            include_equivalents=False,
+            
         )
         assert virtual_strict["count"] == 0
         assert virtual_strict["has_any_rows"] is True
@@ -1473,8 +1540,10 @@ class TestTierE_NoDisappearance:
         )
         assert link_res["success"] is True
 
+        eq_hashes = [{'core_hash': hash_old, 'operation': 'equivalent', 'weight': 1.0}]
+
         # 5a. query_snapshots with equivalents: old data reappears
-        new_equiv = query_snapshots(param_id=pid, core_hash=hash_new, include_equivalents=True)
+        new_equiv = query_snapshots(param_id=pid, core_hash=hash_new, equivalent_hashes=eq_hashes)
         assert len(new_equiv) == 5
         assert all(r['core_hash'] == hash_old for r in new_equiv)  # data is under old hash
 
@@ -1486,13 +1555,13 @@ class TestTierE_NoDisappearance:
             anchor_to=date(2025, 10, 5),
             core_hash=hash_new,
             slice_keys=[''],
-            include_equivalents=True,
+            equivalent_hashes=eq_hashes,
         )
         assert virtual_equiv["count"] == 5
 
         # 5c. retrievals with equivalents: sees the retrieval
         retrievals_equiv = query_snapshot_retrievals(
-            param_id=pid, core_hash=hash_new, include_equivalents=True, limit=10,
+            param_id=pid, core_hash=hash_new, equivalent_hashes=eq_hashes, limit=10,
         )
         assert retrievals_equiv["count"] == 1
         assert retrievals_equiv["retrieved_at"][0].startswith("2025-10-10")
@@ -1503,7 +1572,7 @@ class TestTierE_NoDisappearance:
             current_signatures={pid: sig_new},
             current_core_hashes={pid: short_core_hash_from_canonical_signature(sig_new)},
             slice_keys_by_param={pid: ['']},
-            include_equivalents=True,
+            equivalent_hashes_by_param={pid: eq_hashes},
             limit_families_per_param=10,
             limit_slices_per_family=10,
         )
@@ -1580,8 +1649,7 @@ class TestCrossParamDataContract:
 
         # Resolve from pid_a/hash_a should return both param_ids
         resolved = resolve_equivalent_hashes(
-            param_id=pid_a, core_hash=hash_a, include_equivalents=True
-        )
+            param_id=pid_a, core_hash=hash_a        )
         assert resolved["success"] is True
         assert hash_a in resolved["core_hashes"]
         assert hash_b in resolved["core_hashes"]
@@ -1590,8 +1658,7 @@ class TestCrossParamDataContract:
 
         # Without equivalents, should return only the seed
         resolved_strict = resolve_equivalent_hashes(
-            param_id=pid_a, core_hash=hash_a, include_equivalents=False
-        )
+            param_id=pid_a, core_hash=hash_a, include_equivalents=False)
         assert resolved_strict["core_hashes"] == [hash_a]
         assert resolved_strict["param_ids"] == [pid_a]
 
@@ -1626,7 +1693,7 @@ class TestCrossParamDataContract:
         )
 
         # Strict: only pid_a's row
-        strict = query_snapshots(param_id=pid_a, core_hash=hash_a, include_equivalents=False)
+        strict = query_snapshots(param_id=pid_a, core_hash=hash_a)
         assert len(strict) == 1
         assert strict[0]['x'] == 10
 
@@ -1641,7 +1708,8 @@ class TestCrossParamDataContract:
         )
 
         # With equivalents: rows from BOTH param_ids
-        closure = query_snapshots(param_id=pid_a, core_hash=hash_a, include_equivalents=True)
+        eq_hashes = [{'core_hash': hash_b, 'operation': 'equivalent', 'weight': 1.0}]
+        closure = query_snapshots(param_id=pid_a, core_hash=hash_a, equivalent_hashes=eq_hashes)
         assert len(closure) == 3
         hashes_returned = {r['core_hash'] for r in closure}
         assert hash_a in hashes_returned
@@ -1689,6 +1757,7 @@ class TestCrossParamDataContract:
         )
 
         # Sweep should return rows from BOTH param_ids
+        eq_hashes = [{'core_hash': hash_b, 'operation': 'equivalent', 'weight': 1.0}]
         sweep_rows = query_snapshots_for_sweep(
             param_id=pid_a,
             core_hash=hash_a,
@@ -1697,7 +1766,7 @@ class TestCrossParamDataContract:
             anchor_to=date(2025, 10, 1),
             sweep_from=date(2025, 10, 9),
             sweep_to=date(2025, 10, 13),
-            include_equivalents=True,
+            equivalent_hashes=eq_hashes,
         )
         assert len(sweep_rows) == 2
         xs = sorted([r['x'] for r in sweep_rows])
@@ -1715,7 +1784,7 @@ class TestCrossParamDataContract:
             anchor_to=date(2025, 10, 1),
             sweep_from=date(2025, 10, 9),
             sweep_to=date(2025, 10, 13),
-            include_equivalents=False,
+            
         )
         assert len(strict_sweep) == 1
         assert strict_sweep[0]['x'] == 100
@@ -1775,6 +1844,7 @@ class TestCrossParamDataContract:
         )
 
         # Virtual snapshot as-at after both retrievals
+        eq_hashes = [{'core_hash': hash_b, 'operation': 'equivalent', 'weight': 1.0}]
         result = query_virtual_snapshot(
             param_id=pid_a,
             as_at=datetime(2025, 10, 12, 0, 0, 0),
@@ -1782,7 +1852,7 @@ class TestCrossParamDataContract:
             anchor_to=date(2025, 10, 3),
             core_hash=hash_a,
             slice_keys=[''],
-            include_equivalents=True,
+            equivalent_hashes=eq_hashes,
             limit=1000,
         )
         assert result["success"] is True
@@ -1842,9 +1912,10 @@ class TestCrossParamDataContract:
             source_param_id=pid_b,
         )
 
-        # Calendar query for pid_a should show both retrieval days
+        # Calendar query for pid_a with equivalents should show both retrieval days
+        eq_hashes = [{'core_hash': hash_b, 'operation': 'equivalent', 'weight': 1.0}]
         retrievals = query_snapshot_retrievals(
-            param_id=pid_a, core_hash=hash_a, include_equivalents=True, limit=10
+            param_id=pid_a, core_hash=hash_a, equivalent_hashes=eq_hashes, limit=10
         )
         assert retrievals["success"] is True
         assert retrievals["count"] == 2
@@ -1852,9 +1923,9 @@ class TestCrossParamDataContract:
         assert retrievals["retrieved_at"][0].startswith("2025-10-15")
         assert retrievals["retrieved_at"][1].startswith("2025-10-10")
 
-        # Strict query should only see pid_a's retrieval
+        # Strict query (no equivalent_hashes) should only see pid_a's retrieval
         strict = query_snapshot_retrievals(
-            param_id=pid_a, core_hash=hash_a, include_equivalents=False, limit=10
+            param_id=pid_a, core_hash=hash_a, limit=10
         )
         assert strict["count"] == 1
         assert strict["retrieved_at"][0].startswith("2025-10-10")

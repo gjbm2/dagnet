@@ -18,18 +18,23 @@ import * as mergeServiceModule from '../mergeService';
 
 // Mock dependencies (not IndexedDB - that's handled by fake-indexeddb)
 vi.mock('../gitService');
-vi.mock('../../contexts/TabContext', () => ({
-  fileRegistry: {
-    getFile: vi.fn(),
-    files: new Map(),
-    listeners: new Map(),
-    notifyListeners: vi.fn()
-  }
-}));
+vi.mock('../../contexts/TabContext', () => {
+  const files = new Map();
+  return {
+    fileRegistry: {
+      getFile: vi.fn((id: string) => files.get(id) ?? null),
+      files,
+      listeners: new Map(),
+      notifyListeners: vi.fn(),
+    },
+  };
+});
 
 describe('workspaceService.pullLatest() - Integration Tests', () => {
   beforeEach(async () => {
     vi.clearAllMocks();
+    // Clear the in-memory FileRegistry mock map
+    (fileRegistry as any).files.clear();
     
     // Clear IndexedDB (using fake-indexeddb)
     await db.workspaces.clear();
@@ -111,6 +116,77 @@ describe('workspaceService.pullLatest() - Integration Tests', () => {
     expect(result.conflicts).toEqual([]);
     expect(result.filesUpdated).toBe(0);
     expect(result.filesDeleted).toBe(0);
+  });
+
+  it('should make hash-mappings.json available via getMappings() after pull', async () => {
+    // This test verifies the full pull → IDB → FileRegistry → getMappings() chain
+    // for the new hash-mappings.json root file. A gap here means Snapshot Manager
+    // shows "no links" even after pulling a repo that contains mappings.
+
+    const { getMappings } = await import('../hashMappingsService');
+
+    const workspaceId = 'test-repo-main';
+    await db.workspaces.add({
+      id: workspaceId,
+      repository: 'test-repo',
+      branch: 'main',
+      fileIds: [],
+      lastSynced: Date.now(),
+    });
+
+    // The repo tree contains hash-mappings.json (new file, no local equivalent)
+    vi.mocked(gitService.setCredentials).mockImplementation(() => {});
+    vi.mocked(gitService.getRepositoryTree).mockResolvedValue({
+      success: true,
+      data: {
+        tree: [
+          {
+            path: 'hash-mappings.json',
+            type: 'blob',
+            sha: 'sha-hash-mappings-001',
+            size: 200,
+          },
+        ],
+        commitSha: 'commit-with-mappings',
+      },
+    });
+
+    const mappingsPayload = {
+      version: 1,
+      mappings: [
+        { core_hash: 'AAA', equivalent_to: 'BBB', operation: 'equivalent', weight: 1.0, created_by: 'test' },
+        { core_hash: 'BBB', equivalent_to: 'CCC', operation: 'equivalent', weight: 1.0, created_by: 'test' },
+      ],
+    };
+
+    vi.mocked(gitService.getBlobContent).mockResolvedValue({
+      success: true,
+      data: { content: JSON.stringify(mappingsPayload) },
+    });
+
+    const gitCreds = {
+      name: 'test-repo',
+      owner: 'test-owner',
+      token: 'test-token',
+      basePath: '',
+      paramsPath: 'parameters',
+      graphsPath: 'graphs',
+      nodesPath: 'nodes',
+      eventsPath: 'events',
+      contextsPath: 'contexts',
+      casesPath: 'cases',
+    };
+
+    const result = await workspaceService.pullLatest('test-repo', 'main', gitCreds);
+    expect(result.success).toBe(true);
+
+    // The critical assertion: getMappings() must return the pulled rows.
+    const mappings = getMappings();
+    expect(mappings).toHaveLength(2);
+    expect(mappings[0].core_hash).toBe('AAA');
+    expect(mappings[0].equivalent_to).toBe('BBB');
+    expect(mappings[1].core_hash).toBe('BBB');
+    expect(mappings[1].equivalent_to).toBe('CCC');
   });
 
   it('should auto-merge when no local changes exist', async () => {
