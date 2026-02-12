@@ -520,7 +520,8 @@ class GitService {
       delete?: boolean;
     }>,
     message: string,
-    branch: string = this.config.branch
+    branch: string = this.config.branch,
+    onProgress?: (completed: number, total: number, phase: 'uploading' | 'finalising') => void
   ): Promise<GitOperationResult> {
     try {
       if (files.length === 0) {
@@ -539,6 +540,9 @@ class GitService {
       if (this.config.debugGitOperations) {
         files.forEach(f => console.log(`   ${f.delete ? 'DELETE' : 'UPSERT'}: ${f.path}`));
       }
+
+      // Report initial progress
+      onProgress?.(0, files.length, 'uploading');
 
       // Step 1: Get current branch HEAD commit
       const refResponse = await this.octokit.git.getRef({
@@ -575,53 +579,75 @@ class GitService {
         baseTreeResult.data.tree.map((item: any) => item.path)
       );
 
-      for (const file of files) {
-        if (file.delete) {
-          // Only stage delete if the file actually exists in the remote tree.
-          // Deleting a file that doesn't exist causes GitHub 422 BadObjectState.
-          if (!existingPaths.has(file.path)) {
-            console.log(`🔵 GitService: Skipping DELETE (not in remote tree): ${file.path}`);
-            continue;
-          }
-          treeEntries.push({
-            path: file.path,
-            mode: '100644',
-            type: 'blob',
-            sha: null // null SHA = delete
-          });
-          console.log(`🔵 GitService: Staging DELETE: ${file.path}`);
-        } else {
-          // Create/Update: create blob first, then reference it
-          let blobContent: string;
-          let blobEncoding: 'utf-8' | 'base64' = 'utf-8';
+      // Separate deletes (no API call needed) from upserts (need blob creation)
+      const deleteFiles = files.filter(f => f.delete);
+      const upsertFiles = files.filter(f => !f.delete);
 
-          if (file.binaryContent) {
-            blobContent = this.uint8ArrayToBase64(file.binaryContent);
-            blobEncoding = 'base64';
-          } else {
-            blobContent = file.content!;
-          }
-
-          // Create blob
-          const blobResponse = await this.octokit.git.createBlob({
-            owner,
-            repo,
-            content: blobContent,
-            encoding: blobEncoding
-          });
-          
-          treeEntries.push({
-            path: file.path,
-            mode: '100644',
-            type: 'blob',
-            sha: blobResponse.data.sha
-          });
-          console.log(`🔵 GitService: Staging UPSERT: ${file.path} (blob: ${blobResponse.data.sha.substring(0, 8)})`);
+      // Handle deletes synchronously — they don't need blob creation
+      let completed = 0;
+      for (const file of deleteFiles) {
+        if (!existingPaths.has(file.path)) {
+          console.log(`🔵 GitService: Skipping DELETE (not in remote tree): ${file.path}`);
+          completed++;
+          onProgress?.(completed, files.length, 'uploading');
+          continue;
         }
+        treeEntries.push({
+          path: file.path,
+          mode: '100644',
+          type: 'blob',
+          sha: null // null SHA = delete
+        });
+        console.log(`🔵 GitService: Staging DELETE: ${file.path}`);
+        completed++;
+        onProgress?.(completed, files.length, 'uploading');
+      }
+
+      // Upload blobs with bounded concurrency (6 parallel requests)
+      const CONCURRENCY = 6;
+      for (let i = 0; i < upsertFiles.length; i += CONCURRENCY) {
+        const batch = upsertFiles.slice(i, i + CONCURRENCY);
+        const blobResults = await Promise.all(
+          batch.map(async (file) => {
+            let blobContent: string;
+            let blobEncoding: 'utf-8' | 'base64' = 'utf-8';
+
+            if (file.binaryContent) {
+              blobContent = this.uint8ArrayToBase64(file.binaryContent);
+              blobEncoding = 'base64';
+            } else {
+              blobContent = file.content!;
+            }
+
+            const blobResponse = await this.octokit.git.createBlob({
+              owner,
+              repo,
+              content: blobContent,
+              encoding: blobEncoding
+            });
+
+            return { path: file.path, sha: blobResponse.data.sha };
+          })
+        );
+
+        for (const result of blobResults) {
+          treeEntries.push({
+            path: result.path,
+            mode: '100644',
+            type: 'blob',
+            sha: result.sha
+          });
+          console.log(`🔵 GitService: Staging UPSERT: ${result.path} (blob: ${result.sha.substring(0, 8)})`);
+        }
+
+        completed += batch.length;
+        onProgress?.(completed, files.length, 'uploading');
       }
 
       // Step 4: Create new tree with all changes
       // base_tree ensures we keep all unchanged files
+      onProgress?.(files.length, files.length, 'finalising');
+
       const treeResponse = await this.octokit.git.createTree({
         owner,
         repo,

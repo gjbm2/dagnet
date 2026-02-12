@@ -22,6 +22,20 @@ import { RECENCY_HALF_LIFE_DAYS } from '../../constants/latency';
 import { parseDate } from '../windowAggregationService';
 import { sessionLogService } from '../sessionLogService';
 
+/**
+ * Helper: produce a UK-format date string (d-MMM-yy) for N days before today (UTC).
+ * Keeps test fixtures immune to calendar drift vs LATENCY_FE_FIT_LEFT_CENSOR_DAYS.
+ */
+function daysAgoUK(days: number): string {
+  const d = new Date();
+  d.setUTCDate(d.getUTCDate() - days);
+  const day = d.getUTCDate();
+  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  const month = months[d.getUTCMonth()];
+  const year = String(d.getUTCFullYear()).slice(-2);
+  return `${day}-${month}-${year}`;
+}
+
 async function hardResetState(): Promise<void> {
   await Promise.all([
     db.workspaces.clear(),
@@ -94,13 +108,17 @@ describe('lag horizons contract (integration)', () => {
   });
 
   it('ordinary Stage‑2 updates completeness but does NOT write horizons onto graph by default', async () => {
+    // Use dynamic dates to stay within LATENCY_FE_FIT_LEFT_CENSOR_DAYS
+    const cohortStart = daysAgoUK(30);
+    const cohortEnd = daysAgoUK(29);
+
     const paramId = 'p1';
     await registerFileForTest(`parameter-${paramId}`, 'parameter', {
       id: paramId,
       type: 'probability',
       latency: { latency_parameter: true, t95_overridden: false, path_t95_overridden: false },
       values: [
-        makeCohortSlice({ start: '1-Nov-25', end: '2-Nov-25', medianLagDays: 10, totalK: 50 }),
+        makeCohortSlice({ start: cohortStart, end: cohortEnd, medianLagDays: 10, totalK: 50 }),
       ],
     });
 
@@ -142,7 +160,7 @@ describe('lag horizons contract (integration)', () => {
       graphState,
       setGraph,
       // cohort-mode so Stage‑2 runs LAG topo pass
-      'cohort(1-Nov-25:2-Nov-25)',
+      `cohort(${cohortStart}:${cohortEnd})`,
       () => graphState
     );
 
@@ -154,6 +172,10 @@ describe('lag horizons contract (integration)', () => {
 
   it('recomputeHorizons(global) recomputes from file slice data, writes horizons to graph, and persists to parameter files', async () => {
     const addChildSpy = vi.spyOn(sessionLogService, 'addChild');
+
+    // Use dynamic dates to stay within LATENCY_FE_FIT_LEFT_CENSOR_DAYS
+    const cohortStart = daysAgoUK(30);
+    const cohortEnd = daysAgoUK(29);
 
     const paramId = 'p1';
     const medianLagDays = 10;
@@ -168,7 +190,7 @@ describe('lag horizons contract (integration)', () => {
       type: 'probability',
       latency: { latency_parameter: true, t95: 5, path_t95: 5, t95_overridden: false, path_t95_overridden: false },
       values: [
-        makeCohortSlice({ start: '1-Nov-25', end: '2-Nov-25', medianLagDays, totalK }),
+        makeCohortSlice({ start: cohortStart, end: cohortEnd, medianLagDays, totalK }),
       ],
     });
 
@@ -228,6 +250,10 @@ describe('lag horizons contract (integration)', () => {
   });
 
   it('recomputeHorizons respects file override flags (locked horizons do not change)', async () => {
+    // Use dynamic dates to stay within LATENCY_FE_FIT_LEFT_CENSOR_DAYS
+    const cohortStart = daysAgoUK(30);
+    const cohortEnd = daysAgoUK(29);
+
     const paramId = 'p1';
     await registerFileForTest(`parameter-${paramId}`, 'parameter', {
       id: paramId,
@@ -235,7 +261,7 @@ describe('lag horizons contract (integration)', () => {
       latency: { latency_parameter: true, t95: 12, path_t95: 20, t95_overridden: true, path_t95_overridden: true },
       values: [
         // If recompute ignored overrides, this would move horizons.
-        makeCohortSlice({ start: '1-Nov-25', end: '2-Nov-25', medianLagDays: 30, totalK: 50 }),
+        makeCohortSlice({ start: cohortStart, end: cohortEnd, medianLagDays: 30, totalK: 50 }),
       ],
     });
 
@@ -292,14 +318,21 @@ describe('lag horizons contract (integration)', () => {
     // Two cohort-days: one very old with long lag, one recent with short lag.
     // With half-life weighting, the recent cohort should dominate the aggregated lag moments,
     // so t95 should be much closer to 10 than 100.
+    //
+    // Use dynamic dates so the recent cohort stays within LATENCY_FE_FIT_LEFT_CENSOR_DAYS.
+    // The old date is intentionally ancient (its recency weight ≈ 0 and it will be left-censored,
+    // but that doesn't affect the result because it contributes negligible weight either way).
+    const oldDate = daysAgoUK(4000);
+    const recentDate = daysAgoUK(30);
+
     await registerFileForTest(`parameter-${paramId}`, 'parameter', {
       id: paramId,
       type: 'probability',
       latency: { latency_parameter: true, t95_overridden: false, path_t95_overridden: false },
       values: [
         {
-          sliceDSL: 'cohort(1-Jan-15:9-Dec-25)',
-          dates: ['1-Jan-15', '9-Dec-25'],
+          sliceDSL: `cohort(${oldDate}:${recentDate})`,
+          dates: [oldDate, recentDate],
           n: 2000,
           k: 2000,
           n_daily: [1000, 1000],
@@ -352,12 +385,16 @@ describe('lag horizons contract (integration)', () => {
 
     // Compute the exact expected aggregated lag when using forecast-style half-life weights.
     // Use the same date parser as the pipeline (UK d-MMM-yy).
+    //
+    // NOTE: The pipeline applies LATENCY_FE_FIT_LEFT_CENSOR_DAYS, so the old date
+    // is censored out entirely. We mirror that here: only the recent date contributes.
     const asOfDate = new Date();
     const ageDays = (uk: string) =>
       Math.floor((asOfDate.getTime() - parseDate(uk).getTime()) / (24 * 60 * 60 * 1000));
     const w = (age: number) => Math.exp(-Math.LN2 * Math.max(0, age) / RECENCY_HALF_LIFE_DAYS);
-    const wkOld = 1000 * w(ageDays('1-Jan-15'));
-    const wkNew = 1000 * w(ageDays('9-Dec-25'));
+    // Old date is left-censored; only the recent date survives.
+    const wkOld = 0;
+    const wkNew = 1000 * w(ageDays(recentDate));
     const effectiveK = wkOld + wkNew;
     const aggregateMedianLag = (wkOld * 100 + wkNew * 10) / (effectiveK || 1);
 

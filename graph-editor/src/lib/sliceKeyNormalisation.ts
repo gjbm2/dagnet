@@ -129,7 +129,12 @@ export function canonicaliseSliceKeyForMatching(
   if (!s) return '';
 
   const clauses = parseSliceKeyClauses(s);
-  if (!clauses) return '';
+  if (!clauses) {
+    // No DSL clauses found — preserve the raw string as-is.
+    // This handles sentinel values like "__epoch_gap__" which are not DSL
+    // but must survive as literal slice_key matchers (not collapse to "").
+    return s;
+  }
 
   const canonicalised = clauses
     .map((c) => {

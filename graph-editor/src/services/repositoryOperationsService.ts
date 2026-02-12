@@ -838,7 +838,8 @@ class RepositoryOperationsService {
     branch: string,
     repository: string,
     showTripleChoice: (options: any) => Promise<'primary' | 'secondary' | 'cancel'>,
-    onPullRequested?: () => Promise<void>
+    onPullRequested?: () => Promise<void>,
+    onProgress?: (completed: number, total: number, phase: 'uploading' | 'finalising') => void
   ): Promise<void> {
     // Start hierarchical log for commit operation
     const logOpId = sessionLogService.startOperation(
@@ -1018,7 +1019,7 @@ class RepositoryOperationsService {
       }
 
     // Commit and push
-    const result = await gitService.commitAndPushFiles(filesToCommit, message, branch);
+    const result = await gitService.commitAndPushFiles(filesToCommit, message, branch, onProgress);
     if (!result.success) {
         sessionLogService.endOperation(logOpId, 'error', `Commit failed: ${result.error || 'Unknown error'}`);
       throw new Error(result.error || 'Failed to commit files');

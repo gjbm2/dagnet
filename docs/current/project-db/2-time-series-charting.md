@@ -1,8 +1,8 @@
 # Time-Series Charting: Phase 5 Design
 
-**Status**: §2.3 (forecast-aware rendering) — active design (11-Feb-26). Remainder deferred.  
+**Status**: §2.3 (forecast-aware rendering) — active design (11-Feb-26). **§2.3.5 implementation is broken — see §2.3.11 for diagnosis and required fix.** Remainder deferred.  
 **Prerequisite**: Phases 1-3 complete (snapshot write/read path working); BE-forecasting Phases 1–8 (`analysis-forecasting.md`).  
-**Date**: 1-Feb-26 (original) · 11-Feb-26 (§2.3 detailed design)
+**Date**: 1-Feb-26 (original) · 11-Feb-26 (§2.3 detailed design) · 12-Feb-26 (§2.3.11 denominator bias diagnosis)
 
 ---
 
@@ -225,6 +225,8 @@ In E mode, show only evidence fields. In F mode, show only projected fields. In 
 ---
 
 #### 2.3.5 Cohort Maturity Chart — Per-Mode Rendering
+
+> **Implementation status (12-Feb-26): BROKEN.** The current frontend normaliser (`graphComputeClient.ts`) produces non-monotonic, nonsensical curves due to the denominator bias problem described in **§2.3.11**. The semantics below are the *intended* design; the implementation does not yet match them. **Do not ship this chart until §2.3.11 is resolved.**
 
 The Cohort Maturity chart is **not** a calendar-date time-series. It is an **age-aligned** maturity curve that represents a *set* of cohort dates by shifting each cohort back to day 0.
 
@@ -482,6 +484,74 @@ We will deliver cohort-chart forecasting in three phases:
 1. **Forecast-at-as-at (final) for cohort maturity**: compute and plot F alongside E for immature/incomplete points; hide F for mature points (E only once mature). This uses existing backend fields (`projected_y`, `completeness`) and requires frontend + normalisation work only.
 2. **Synthetic future frames (backend)**: extend Python to emit synthetic future `as_at_date` frames using the persisted latency model (`mu`, `sigma`, onset delta). Frontend plots a forecast-only tail (consistent with per-scenario visibility mode).
 3. **Confidence spreads (fan-chart style)**: add uncertainty bands around the tail first; then (fast follow) consider adding spreads for immature observed points too. This is explicitly a second phase beyond “just show F”.
+
+---
+
+#### 2.3.11 Cohort Maturity: Denominator Bias Problem (12-Feb-26)
+
+**Status: OPEN — blocks all cohort maturity chart work.**
+
+##### The problem
+
+The age-aligned cohort maturity chart produces **non-monotonic, nonsensical curves** for any edge that is not the first in the graph. The curve spikes upward, then drops — the opposite of a cumulative distribution.
+
+This was discovered on 12-Feb-26 while testing edge `household-delegated → switch-registered` (t95=13.27, path\_t95=36.48). The chart spiked to ~100% at τ≈10 then fell to ~10% by τ=30.
+
+##### Root cause: upstream denominator bias
+
+The cohort maturity derivation produces per-frame data points with fields `y` (observed conversions) and `x` (cohort size at the edge's from-node). For edges that are **not** the first edge in the graph, `x` is itself a latency-dependent quantity — it represents how many people have reached the from-node *by the observation date*.
+
+For a frame at `as_at_date = D` with anchor\_day `a`, the age is `τ = D − a`. The denominator `x` reflects only the people who reached the from-node within `τ` days. At low `τ`, `x` is small (only fast upstream converters), and those fast movers are disproportionately likely to also convert quickly on this edge — producing a high `y/x` ratio. At high `τ`, `x` is the full population, giving the true (lower) rate.
+
+This is a **selection bias**: `rate = y/x` at different ages is comparing **different populations**, not the same population at different stages of maturity. The curve is not a cumulative distribution — it is a conditional rate on a biased sample that changes with τ.
+
+The problem does not affect the first edge in the graph (where `x` = anchor cohort size, which is fixed and does not vary with observation date).
+
+##### Attempted approaches that failed
+
+1. **Per-anchor-day frame lookup** (`byAsAt[anchor_day + τ][anchor_day]`): Most lookups miss due to sparse frame data (gap epochs). Produces non-monotonic curves even without the denominator bias, because different cohorts contribute at different τ values.
+
+2. **Fixed denominator X\_full** (sum of X at boundary frame): Correct in principle but the sparse-data issue means different τ values have wildly different contributing cohort sets, producing the same non-monotonic artefact.
+
+3. **Group-by-age aggregation** (bucket all data points by τ = as\_at − anchor\_day, rate = ΣY/ΣX per bucket): Solves the sparse-data problem but exposes the denominator bias directly. The rate at low τ is inflated because X is small and biased.
+
+4. **Variable denominator per τ** (only count cohorts with data at each τ): Same denominator bias.
+
+##### Correct approach (not yet implemented)
+
+The denominator bias is inherent in the raw `y/x` values whenever `x` varies with observation date. Two correct approaches:
+
+**Option A — Model-based curve (F mode):**
+
+For F mode, the chart should show the **lognormal CDF** evaluated at each integer τ, scaled by the mature conversion rate. The backend already provides `mu`, `sigma`, `onset_delta_days` on the graph edge (persisted latency model). The curve is:
+
+`rate(τ) = mature_rate × CDF(τ | mu, sigma, onset_delta_days)`
+
+where `mature_rate` is derived from fully mature cohorts (those where `completeness ≈ 1` in the boundary frame). This is pure maths on the fitted model — no frame-level aggregation, no denominator issues. The result is a smooth, monotonically increasing S-curve.
+
+The backend already provides `completeness = CDF(age | mu, sigma, onset)` per data point and `projected_y = y / completeness`. These could be used directly.
+
+**Option B — Boundary-frame-only evidence (E mode):**
+
+For E mode, use **only the boundary frame** (latest observation, at date B). This frame contains one data point per anchor\_day, each at its natural age `τ = B − anchor_day`. The rate for each point is `y/x` at that single observation. Since each anchor\_day appears exactly once and at a specific age, this produces N points (one per anchor\_day in the cohort set) scattered across the τ axis. No aggregation across frames, no mixing of different-aged observations for the same anchor\_day.
+
+The X at the boundary frame is the best available (most complete upstream population), so the bias is minimised (though not eliminated for the youngest cohorts).
+
+**Option C — Use `a` (anchor cohort size) as denominator:**
+
+Instead of `y/x` (rate among from-node entrants), compute `y/a` (rate of the original anchor cohort reaching the to-node). This eliminates the upstream dependency entirely because `a` is the total population at the anchor node, which does not vary with observation date. The resulting curve is the cumulative "path conversion rate" from anchor to to-node, which is a genuine cumulative distribution.
+
+Downside: for downstream edges, the absolute rate is very low (because most of the anchor cohort never reaches the from-node). This may be confusing. It could be normalised by the mature path-conversion rate to show the CDF shape.
+
+##### Recommendation
+
+Implement **Option A** for F mode (model CDF — clean S-curve) and **Option B** for E mode (boundary-frame scatter — honest observed data). F+E overlays both. This is the simplest approach that produces correct, interpretable charts.
+
+Option C is worth considering for a "path maturity" view in future, but should not block the current implementation.
+
+##### Implications for §2.3.5
+
+The "fixed denominator \(X_{full}\)" and "diagonal projection" semantics described in §2.3.5 are **correct in theory** but **not implementable** with the current data shape (sparse frames, upstream-dependent X). The implementation should use Options A/B above rather than attempting to evaluate the full diagonal. Once implemented, the §2.3.5 semantics doc should be updated to reflect what actually works.
 
 ---
 

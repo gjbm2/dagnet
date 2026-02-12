@@ -21,6 +21,7 @@ export function useCommitHandler() {
     files: any[], 
     message: string, 
     branch: string,
+    onProgress?: (completed: number, total: number, phase: 'uploading' | 'finalising') => void,
     repository?: string  // Optional - defaults to navState.selectedRepo
   ) => {
     const repo = repository || navState.selectedRepo;
@@ -40,7 +41,7 @@ export function useCommitHandler() {
 
     await repositoryOperationsService.commitFiles(
       files, message, branch, repo,
-      showTripleChoice, handlePull
+      showTripleChoice, handlePull, onProgress
     );
   }, [navState.selectedRepo, showTripleChoice]);
 

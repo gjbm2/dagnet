@@ -1,5 +1,18 @@
 # DagNet Development Guidelines for AI Assistants
 
+## ABSOLUTE BAN: Git Commands
+
+**NEVER run any git command** — `git add`, `git commit`, `git push`, `git checkout`, `git reset`, `git stash`, `git rebase`, `git merge`, `git pull`, `git branch`, or ANY other `git` subcommand — **unless the user has given unmistakable, explicit, unambiguous instruction to do so in the current message**.
+
+- "commit all" in a complaint about app behaviour is **NOT** an instruction to run git.
+- Describing a bug in a commit UI is **NOT** an instruction to run git.
+- Mentioning files or changes is **NOT** an instruction to run git.
+- **The ONLY valid trigger** is a direct, clear instruction like: "please commit these changes", "run git push", "create a branch called X".
+- If there is ANY ambiguity, **ASK FIRST**. Do not guess.
+- Violation of this rule has caused real damage. It is the highest-priority rule in this file.
+
+---
+
 ## Instant-Action Triggers (DO IMMEDIATELY — NO THINKING, NO SEARCHING)
 
 These are **non-negotiable reflexes**. When the user's message matches a trigger, execute the action **as your very first tool call** before doing anything else. Do not search for files, do not reason about the problem, do not read code. Just run the command.

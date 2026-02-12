@@ -63,7 +63,10 @@ def normalise_slice_key_for_matching(slice_key: str) -> str:
         clauses.append((name_lower, name, args_raw))
 
     if not clauses:
-        return ""
+        # No DSL clauses found — preserve the raw string as-is.
+        # This handles sentinel values like "__epoch_gap__" which are not DSL
+        # but must survive as literal slice_key matchers (not collapse to "").
+        return s
 
     def norm_args(name_lower: str, args_raw: str) -> str:
         if name_lower in _MODE_CLAUSES:

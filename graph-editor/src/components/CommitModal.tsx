@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { useTabContext, fileRegistry } from '../contexts/TabContext';
 import { useNavigatorContext } from '../contexts/NavigatorContext';
@@ -6,10 +6,12 @@ import { gitService } from '../services/gitService';
 import { repositoryOperationsService } from '../services/repositoryOperationsService';
 import { ObjectType } from '../types';
 
+export type CommitProgressCallback = (completed: number, total: number, phase: 'uploading' | 'finalising') => void;
+
 interface CommitModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onCommit: (files: CommitFile[], message: string, branch: string) => Promise<void>;
+  onCommit: (files: CommitFile[], message: string, branch: string, onProgress?: CommitProgressCallback) => Promise<void>;
   preselectedFiles?: string[]; // File IDs to pre-select
 }
 
@@ -42,6 +44,7 @@ export function CommitModal({ isOpen, onClose, onCommit, preselectedFiles = [] }
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
+  const [progress, setProgress] = useState<{ completed: number; total: number; phase: 'uploading' | 'finalising' } | null>(null);
   
   // Track if we've initialized the selected files
   const initializedRef = useRef(false);
@@ -144,6 +147,7 @@ export function CommitModal({ isOpen, onClose, onCommit, preselectedFiles = [] }
       setCommitMessage('');
       setError(null);
       setSuccess(false);
+      setProgress(null);
     }
   }, [isOpen]);
 
@@ -214,12 +218,16 @@ export function CommitModal({ isOpen, onClose, onCommit, preselectedFiles = [] }
     setIsLoading(true);
     setError(null);
     setSuccess(false);
+    setProgress(null);
 
     try {
       const filesToCommit = commitableFiles.filter(f => selectedFiles.has(f.fileId));
-      await onCommit(filesToCommit, commitMessage.trim(), selectedBranch);
+      await onCommit(filesToCommit, commitMessage.trim(), selectedBranch, (completed, total, phase) => {
+        setProgress({ completed, total, phase });
+      });
       
       // Show success message
+      setProgress(null);
       setSuccess(true);
       setIsLoading(false);
       
@@ -228,6 +236,7 @@ export function CommitModal({ isOpen, onClose, onCommit, preselectedFiles = [] }
         onClose();
       }, 1500);
     } catch (error) {
+      setProgress(null);
       setError(error instanceof Error ? error.message : 'Failed to commit changes');
       setIsLoading(false);
       setSuccess(false);
@@ -239,6 +248,7 @@ export function CommitModal({ isOpen, onClose, onCommit, preselectedFiles = [] }
     setCommitMessage('');
     setError(null);
     setSuccess(false);
+    setProgress(null);
     onClose();
   };
 
@@ -482,18 +492,62 @@ export function CommitModal({ isOpen, onClose, onCommit, preselectedFiles = [] }
             />
           </div>
 
+          {/* Progress indicator */}
+          {isLoading && progress && (
+            <div style={{ marginBottom: '20px' }}>
+              <div style={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                marginBottom: '6px',
+                fontSize: '13px',
+                color: '#555'
+              }}>
+                <span>
+                  {progress.phase === 'uploading'
+                    ? `Uploading ${progress.completed} / ${progress.total} files…`
+                    : 'Finalising commit…'}
+                </span>
+                <span style={{ fontVariantNumeric: 'tabular-nums' }}>
+                  {progress.total > 0 ? Math.round((progress.completed / progress.total) * 100) : 0}%
+                </span>
+              </div>
+              <div style={{
+                height: '6px',
+                backgroundColor: '#e0e0e0',
+                borderRadius: '3px',
+                overflow: 'hidden'
+              }}>
+                <div style={{
+                  height: '100%',
+                  backgroundColor: progress.phase === 'finalising' ? '#f59e0b' : '#0066cc',
+                  borderRadius: '3px',
+                  width: `${progress.total > 0 ? Math.round((progress.completed / progress.total) * 100) : 0}%`,
+                  transition: 'width 0.15s ease-out'
+                }} />
+              </div>
+            </div>
+          )}
+
           {/* Error message */}
           {error && (
             <div style={{
               padding: '12px',
-              backgroundColor: '#fee',
-              border: '1px solid #fcc',
-              borderRadius: '4px',
-              color: '#c33',
+              backgroundColor: '#fef2f2',
+              border: '1px solid #fecaca',
+              borderRadius: '6px',
+              color: '#dc2626',
               fontSize: '14px',
-              marginBottom: '20px'
+              marginBottom: '20px',
+              display: 'flex',
+              alignItems: 'flex-start',
+              gap: '8px'
             }}>
-              {error}
+              <span style={{ fontSize: '16px', lineHeight: '1.4', flexShrink: 0 }}>✗</span>
+              <div>
+                <div style={{ fontWeight: 600, marginBottom: '2px' }}>Commit failed</div>
+                <div style={{ fontSize: '13px', color: '#b91c1c' }}>{error}</div>
+              </div>
             </div>
           )}
 
@@ -501,10 +555,10 @@ export function CommitModal({ isOpen, onClose, onCommit, preselectedFiles = [] }
           {success && (
             <div style={{
               padding: '12px',
-              backgroundColor: '#e8f5e9',
-              border: '1px solid #a5d6a7',
-              borderRadius: '4px',
-              color: '#2e7d32',
+              backgroundColor: '#f0fdf4',
+              border: '1px solid #86efac',
+              borderRadius: '6px',
+              color: '#16a34a',
               fontSize: '14px',
               marginBottom: '20px',
               display: 'flex',
@@ -512,7 +566,7 @@ export function CommitModal({ isOpen, onClose, onCommit, preselectedFiles = [] }
               gap: '8px'
             }}>
               <span style={{ fontSize: '18px' }}>✓</span>
-              <span>Successfully committed {selectedFiles.size} file{selectedFiles.size !== 1 ? 's' : ''} and pushed to {selectedBranch}</span>
+              <span>Successfully committed {selectedFiles.size} file{selectedFiles.size !== 1 ? 's' : ''} and pushed to <strong>{selectedBranch}</strong></span>
             </div>
           )}
         </div>
@@ -559,7 +613,15 @@ export function CommitModal({ isOpen, onClose, onCommit, preselectedFiles = [] }
               opacity: (isLoading || success || selectedFiles.size === 0 || !commitMessage.trim()) ? 0.5 : 1
             }}
           >
-            {isLoading ? 'Committing...' : success ? 'Committed ✓' : 'Commit & Push'}
+            {isLoading
+              ? (progress
+                  ? (progress.phase === 'finalising'
+                      ? 'Finalising…'
+                      : `Uploading ${progress.completed}/${progress.total}…`)
+                  : 'Preparing…')
+              : success
+                ? 'Committed ✓'
+                : 'Commit & Push'}
           </button>
         </div>
       </div>
