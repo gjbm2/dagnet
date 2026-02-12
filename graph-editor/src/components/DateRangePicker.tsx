@@ -11,11 +11,15 @@ import { Calendar } from 'lucide-react';
 import 'react-date-range/dist/styles.css';
 import 'react-date-range/dist/theme/default.css';
 import './DateRangePicker.css';
-import { isUKDate, parseUKDate, formatDateUK, toUTCMidnightFromLocalDate } from '../lib/dateFormat';
+import { isUKDate, parseUKDate, formatDateUK, toUTCMidnightFromLocalDate, isRelativeDate, resolveRelativeDate } from '../lib/dateFormat';
 
-// Parse date string in either UK (d-MMM-yy) or ISO (YYYY-MM-DD) format
+// Parse date string in UK (d-MMM-yy), relative (e.g. 0d, -30d), or ISO (YYYY-MM-DD) format
 function parseFlexibleDate(dateStr: string): Date {
   if (!dateStr) return new Date();
+  // Resolve relative dates (e.g. "0d", "-30d") to absolute UK dates first
+  if (isRelativeDate(dateStr)) {
+    return parseUKDate(resolveRelativeDate(dateStr));
+  }
   if (isUKDate(dateStr)) {
     return parseUKDate(dateStr);
   }

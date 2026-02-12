@@ -210,6 +210,16 @@ describeDeps('Forecasting parity — query flow + snapshot DB (integration)', ()
       throw new Error('Expected query_signature on both cohort and window values');
     }
 
+    // CRITICAL: Salt the query_signature so the test's core_hash never collides
+    // with production snapshot data. The BE reads by core_hash (not param_id), so
+    // real production rows for the unsalted hash leak into the BE model fit and
+    // cause parity drift as production data accumulates. The salt preserves the
+    // full hash-matching pipeline test -- only the hash value changes, not the logic.
+    const testSalt = `|__test_salt__:${SNAPSHOT_TEST_REPO}`;
+    const unsaltedCohortSig = cohortValue.query_signature;
+    cohortValue = { ...cohortValue, query_signature: cohortValue.query_signature + testSalt };
+    windowValue = { ...windowValue, query_signature: windowValue.query_signature + testSalt };
+
     // Reduce to exactly two slices (one cohort, one window) to make “wrong slice” wiring unambiguous.
     reducedParam = {
       ...fullParam,
@@ -220,13 +230,14 @@ describeDeps('Forecasting parity — query flow + snapshot DB (integration)', ()
     // For MECE-union parity: the parameter file contains ONLY contexted cohort() slices
     // for the (single) MECE key `channel`. For an uncontexted cohort(...) query, FE must
     // treat the MECE partition as the implicit "total" and BE must receive ALL slice_keys.
+    // Filter by unsalted signature (matches on-disk file), then salt each match.
     cohortMECEValues = values.filter(v =>
       typeof v?.sliceDSL === 'string' &&
       v.sliceDSL.startsWith('cohort(') &&
       v.sliceDSL.includes('context(channel:') &&
       typeof v.query_signature === 'string' &&
-      v.query_signature === cohortValue.query_signature
-    );
+      v.query_signature === unsaltedCohortSig
+    ).map(v => ({ ...v, query_signature: v.query_signature + testSalt }));
     if (cohortMECEValues.length < 2) {
       throw new Error(`Expected >=2 cohort()+context(channel:*) slices with same query_signature in ${PARAM_REL}`);
     }
