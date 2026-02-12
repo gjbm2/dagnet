@@ -1,3 +1,5 @@
+- **[12-Feb-26] Forecasting parity: t95 persistence investigation**: see `docs/current/project-db/forecasting-parity-t95-persistence-investigation-12-Feb-26.md`.
+
 # TODO
 
 - **Upstream selecting properties don't propagate to downstream fetches** (11-Feb-26)
