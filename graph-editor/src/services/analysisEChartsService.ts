@@ -97,6 +97,16 @@ export type FunnelSeriesPoint = {
   stepProbability: number | null;
   dropoff: number | null;
   n: number | null;
+  /**
+   * Optional decomposition metrics surfaced by the runner for conversion_funnel/path analyses.
+   *
+   * - evidenceMean: cumulative evidence probability (arrivals/start-N) when available
+   * - forecastMean: edge-local forecast baseline for the direct stage-to-stage edge (when present)
+   * - pMean: blended (F+E) cumulative probability when visibility_mode is 'f+e'
+   */
+  evidenceMean: number | null;
+  forecastMean: number | null;
+  pMean: number | null;
   completeness: number | null;
 };
 
@@ -144,6 +154,9 @@ export function extractFunnelSeriesPoints(result: AnalysisResult, args: FunnelCh
       stepProbability: typeof row?.step_probability === 'number' ? row.step_probability : null,
       dropoff: typeof row?.dropoff === 'number' ? row.dropoff : null,
       n: typeof row?.n === 'number' ? row.n : null,
+      evidenceMean: typeof row?.evidence_mean === 'number' ? row.evidence_mean : null,
+      forecastMean: typeof row?.forecast_mean === 'number' ? row.forecast_mean : null,
+      pMean: typeof row?.p_mean === 'number' ? row.p_mean : null,
       completeness: typeof row?.completeness === 'number' ? row.completeness : null,
     });
   }
@@ -277,6 +290,18 @@ export function buildFunnelBarEChartsOption(result: AnalysisResult, args: Funnel
   const useStepChange = args.metric === 'step_probability' && isConversionFunnelResult(result);
   const metricLabel = useStepChange ? 'Change since last step' : args.metric === 'step_probability' ? 'Step probability' : 'Cum. probability';
 
+  const clamp01 = (x: number) => Math.max(0, Math.min(1, x));
+  const hexToRgba = (hex: string, alpha: number): string => {
+    const h = String(hex || '').replace(/^#/, '').trim();
+    const s = h.length === 3 ? h.split('').map(c => c + c).join('') : h;
+    if (s.length !== 6) return hex;
+    const r = parseInt(s.slice(0, 2), 16);
+    const g = parseInt(s.slice(2, 4), 16);
+    const b = parseInt(s.slice(4, 6), 16);
+    if (![r, g, b].every(n => Number.isFinite(n))) return hex;
+    return `rgba(${r}, ${g}, ${b}, ${Math.max(0, Math.min(1, alpha))})`;
+  };
+
   const makeSeriesData = (scenarioId: string) => {
     const points = extractFunnelSeriesPoints(result, { scenarioId }) || [];
     const byStage = new Map(points.map(p => [p.stageId, p]));
@@ -295,7 +320,46 @@ export function buildFunnelBarEChartsOption(result: AnalysisResult, args: Funnel
           stepProbability: null,
           dropoff: null,
           n: null,
+          evidenceMean: null,
+          forecastMean: null,
+          pMean: null,
           completeness: null,
+        },
+      };
+    });
+  };
+
+  const makeStackedFEData = (scenarioId: string) => {
+    const points = extractFunnelSeriesPoints(result, { scenarioId }) || [];
+    const byStage = new Map(points.map(p => [p.stageId, p]));
+    return stageIds.map(stageId => {
+      const pt = byStage.get(stageId) || null;
+      const total = typeof pt?.pMean === 'number'
+        ? pt.pMean
+        : (typeof pt?.probability === 'number' ? pt.probability : null);
+      const e = typeof pt?.evidenceMean === 'number' ? pt.evidenceMean : null;
+      const total01 = total === null ? null : clamp01(total);
+      const e01 = e === null ? null : clamp01(e);
+      const ev = typeof e01 === 'number' && typeof total01 === 'number' ? Math.min(total01, e01) : (typeof e01 === 'number' ? e01 : 0);
+      const residual = typeof total01 === 'number' ? Math.max(0, total01 - ev) : 0;
+      return {
+        __raw: pt || {
+          stageId,
+          stageLabel: getDimLabel(result.dimension_values, 'stage', stageId),
+          probability: null,
+          stepProbability: null,
+          dropoff: null,
+          n: null,
+          evidenceMean: null,
+          forecastMean: null,
+          pMean: null,
+          completeness: null,
+        },
+        __fe: {
+          total: total01,
+          evidence: typeof e01 === 'number' ? e01 : null,
+          evidenceClamped: ev,
+          forecastMinusEvidence: residual,
         },
       };
     });
@@ -323,6 +387,9 @@ export function buildFunnelBarEChartsOption(result: AnalysisResult, args: Funnel
           stepProbability: null,
           dropoff: null,
           n: null,
+          evidenceMean: null,
+          forecastMean: null,
+          pMean: null,
           completeness: null,
         },
       };
@@ -370,29 +437,82 @@ export function buildFunnelBarEChartsOption(result: AnalysisResult, args: Funnel
     return `${a}\n${b}`;
   };
 
-  const series = scenarioIds.map(scenarioId => {
-    const seriesName = getScenarioTitleWithBasis(result, scenarioId);
+  // Bar width heuristic:
+  // - Separate mode (scenarioCount=1) should be chunky.
+  // - Combined mode shares a category width across scenarios.
+  const plotWidth = Math.max(240, widthPx - 40);
+  const perCategory = plotWidth / Math.max(1, stageCount);
+  const groupTarget = perCategory * (stageCount <= 6 ? 0.72 : 0.62);
+  const gapPx = scenarioCount > 1 ? 4 : 0;
+  const raw = (groupTarget / Math.max(1, scenarioCount)) - gapPx;
+  const maxBar = scenarioCount === 1 ? 84 : 44;
+  const minBar = scenarioCount === 1 ? 18 : 12;
+  const barWidthPx = Math.round(Math.max(minBar, Math.min(maxBar, raw)));
+
+  const series: any[] = [];
+  for (const scenarioId of scenarioIds) {
+    const baseSeriesName = getScenarioTitleWithBasis(result, scenarioId);
     const colour = result.dimension_values?.scenario_id?.[scenarioId]?.colour;
+    const visibilityMode = result.dimension_values?.scenario_id?.[scenarioId]?.visibility_mode ?? 'f+e';
+    const shouldShowFEStack = !useStepChange && args.metric === 'cumulative_probability' && visibilityMode === 'f+e';
 
-    // Bar width heuristic:
-    // - Separate mode (scenarioCount=1) should be chunky.
-    // - Combined mode shares a category width across scenarios.
-    const plotWidth = Math.max(240, widthPx - 40);
-    const perCategory = plotWidth / Math.max(1, stageCount);
-    const groupTarget = perCategory * (stageCount <= 6 ? 0.72 : 0.62);
-    const gapPx = scenarioCount > 1 ? 4 : 0;
-    const raw = (groupTarget / Math.max(1, scenarioCount)) - gapPx;
-    const maxBar = scenarioCount === 1 ? 84 : 44;
-    const minBar = scenarioCount === 1 ? 18 : 12;
-    const barWidthPx = Math.round(Math.max(minBar, Math.min(maxBar, raw)));
-
-    return {
-      name: seriesName,
+    const baseSeriesConfig = {
       type: 'bar',
       barWidth: barWidthPx,
       // Spacing tuning: reduce category gap for sparse charts so bars don't look lost.
       barCategoryGap: stageCount <= 6 ? '18%' : stageCount <= 10 ? '26%' : '34%',
       barGap: scenarioCount > 1 ? '25%' : '18%',
+      labelLayout: showValueLabels ? { hideOverlap: true } : undefined,
+    };
+
+    if (shouldShowFEStack) {
+      const fePoints = makeStackedFEData(scenarioId);
+
+      // Evidence segment (lower stack).
+      series.push({
+        name: `${baseSeriesName} — e`,
+        ...baseSeriesConfig,
+        stack: scenarioId,
+        itemStyle: colour ? { color: hexToRgba(colour, 0.85) } : undefined,
+        label: { show: false },
+        data: fePoints.map(p => ({
+          value: p.__fe?.evidenceClamped ?? 0,
+          __raw: p.__raw,
+          __fe: p.__fe,
+          __component: 'e',
+        })),
+      });
+
+      // Forecast minus evidence segment (upper stack). We render the total label here.
+      series.push({
+        name: `${baseSeriesName} — f−e`,
+        ...baseSeriesConfig,
+        stack: scenarioId,
+        itemStyle: colour ? { color: hexToRgba(colour, 0.35) } : undefined,
+        label: {
+          show: showValueLabels,
+          position: 'top',
+          formatter: (p: any) => {
+            const total = typeof p?.data?.__fe?.total === 'number' ? p.data.__fe.total : null;
+            return typeof total === 'number' && Number.isFinite(total) ? fmtPct(total) : '';
+          },
+          fontSize: 10,
+          color: '#374151',
+        },
+        data: fePoints.map(p => ({
+          value: p.__fe?.forecastMinusEvidence ?? 0,
+          __raw: p.__raw,
+          __fe: p.__fe,
+          __component: 'f_minus_e',
+        })),
+      });
+      continue;
+    }
+
+    // Default: a single bar series per scenario.
+    series.push({
+      name: baseSeriesName,
+      ...baseSeriesConfig,
       itemStyle: colour ? { color: colour } : undefined,
       label: {
         show: showValueLabels,
@@ -410,10 +530,9 @@ export function buildFunnelBarEChartsOption(result: AnalysisResult, args: Funnel
         fontSize: 10,
         color: '#374151',
       },
-      labelLayout: showValueLabels ? { hideOverlap: true } : undefined,
       data: useStepChange ? makeSeriesDataWithStepChange(scenarioId) : makeSeriesData(scenarioId),
-    };
-  });
+    });
+  }
 
   const paddedMin = 0;
   const paddedMax = 1;
@@ -428,6 +547,9 @@ export function buildFunnelBarEChartsOption(result: AnalysisResult, args: Funnel
     const dsl = dslByScenarioId[sid];
     if (ln && typeof dsl === 'string' && dsl.trim()) {
       dslByLegendName.set(ln, dsl);
+      // If we render FE stacked sub-series, also attach the same DSL to those legend entries.
+      dslByLegendName.set(`${ln} — e`, dsl);
+      dslByLegendName.set(`${ln} — f−e`, dsl);
     }
   }
 
@@ -514,13 +636,29 @@ export function buildFunnelBarEChartsOption(result: AnalysisResult, args: Funnel
         for (const p of ps) {
           const raw: any = p?.data?.__raw;
           const metricInfo = p?.data?.__metric;
+          const fe: any = p?.data?.__fe;
+          const component: any = p?.data?.__component;
           const seriesName = p?.seriesName ?? '';
+
+          // In F+E stacked mode we get two series per scenario; only render the summary once
+          // (on the upper segment) so the tooltip stays readable.
+          if (fe && component === 'e') continue;
+
           const metricVal =
             useStepChange && metricInfo?.kind === 'step_change'
               ? (metricInfo?.hasValue ? metricInfo.value : null)
               : (typeof p?.value === 'number' ? p.value : null);
           lines.push(`<div style="margin-top:6px;"><span style="font-weight:600;">${seriesName}</span></div>`);
-          lines.push(`<div><span style="opacity:0.75">${metricLabel}:</span> ${fmtPct(metricVal)}</div>`);
+          if (fe && component === 'f_minus_e') {
+            const total = typeof fe?.total === 'number' ? fe.total : null;
+            const e = typeof fe?.evidence === 'number' ? fe.evidence : null;
+            const feResidual = typeof fe?.forecastMinusEvidence === 'number' ? fe.forecastMinusEvidence : null;
+            lines.push(`<div><span style="opacity:0.75">${metricLabel} (total):</span> ${fmtPct(total)}</div>`);
+            lines.push(`<div><span style="opacity:0.75">e:</span> ${fmtPct(e)}</div>`);
+            lines.push(`<div><span style="opacity:0.75">f−e:</span> ${fmtPct(feResidual)}</div>`);
+          } else {
+            lines.push(`<div><span style="opacity:0.75">${metricLabel}:</span> ${fmtPct(metricVal)}</div>`);
+          }
           if (raw?.dropoff !== null && raw?.dropoff !== undefined) lines.push(`<div><span style="opacity:0.75">Dropoff:</span> ${fmtPct(raw.dropoff)}</div>`);
           if (raw?.n !== null && raw?.n !== undefined) lines.push(`<div><span style="opacity:0.75">n:</span> ${fmtNum(raw.n)}</div>`);
           if (raw?.completeness !== null && raw?.completeness !== undefined) lines.push(`<div><span style="opacity:0.75">Completeness:</span> ${fmtPct(raw.completeness)}</div>`);

@@ -87,6 +87,28 @@ export const LATENCY_BASELINE_MIN_WINDOW_DAYS = 30;
 export const LATENCY_BASELINE_MAX_WINDOW_DAYS = 60;
 
 // =============================================================================
+// TEMP: Fit-history left-censor to avoid FE>DB scope drift
+// =============================================================================
+
+/**
+ * TEMP (Feb 2026): Left-censor FE lag-fitting evidence to the most recent N days.
+ *
+ * Why this exists:
+ * During the snapshot DB migration, parameter files can contain more historic evidence
+ * than the snapshot DB. This can cause apparent FE↔BE "drift" purely because the FE
+ * is fitting on older cohorts that the BE cannot see.
+ *
+ * Semantics:
+ * - Applies ONLY to the frontend fitter (topo/LAG pass), not backend fitting.
+ * - Implemented as a date-based left-censor relative to the "as-of" query date:
+ *     include cohorts where anchor_day >= (asOf - N days)
+ *
+ * Disable:
+ * - Set to 0 (or comment out the value by setting to 0) to apply no cut-off.
+ */
+export const LATENCY_FE_FIT_LEFT_CENSOR_DAYS = 100;
+
+// =============================================================================
 // Default Values
 // =============================================================================
 
@@ -447,6 +469,8 @@ export interface ForecastingSettings {
   t95_percentile: number;
   forecast_blend_lambda: number;
   blend_completeness_power: number;
+  // Evidence scope
+  fit_left_censor_days: number;
 }
 
 /**
@@ -465,6 +489,7 @@ export function buildForecastingSettings(): ForecastingSettings {
     t95_percentile: LATENCY_T95_PERCENTILE,
     forecast_blend_lambda: FORECAST_BLEND_LAMBDA,
     blend_completeness_power: LATENCY_BLEND_COMPLETENESS_POWER,
+    fit_left_censor_days: LATENCY_FE_FIT_LEFT_CENSOR_DAYS,
   };
 }
 

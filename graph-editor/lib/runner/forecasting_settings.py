@@ -58,6 +58,11 @@ class ForecastingSettings:
     blend_completeness_power: float = 2.25
     """Blend curve shape (η): completeness^η for blend weighting."""
 
+    # ── Evidence scope control ─────────────────────────────────
+
+    fit_left_censor_days: float = 0
+    """Left-censor fitting evidence to the most recent N days. 0 = no censor."""
+
 
 def settings_from_dict(d: Optional[Dict[str, Any]]) -> ForecastingSettings:
     """

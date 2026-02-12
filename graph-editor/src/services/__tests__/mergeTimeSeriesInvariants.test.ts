@@ -95,8 +95,9 @@ function windowValue(options: {
   context?: string;
   n?: number;
   k?: number;
+  withLatencyArrays?: boolean;
 }): ParameterValue {
-  const { startDaysAgo, endDaysAgo, context, n = 1000, k = 500 } = options;
+  const { startDaysAgo, endDaysAgo, context, n = 1000, k = 500, withLatencyArrays = false } = options;
   
   const dates: string[] = [];
   for (let i = startDaysAgo; i >= endDaysAgo; i--) {
@@ -105,6 +106,16 @@ function windowValue(options: {
   
   const numDays = dates.length;
   const contextSuffix = context ? `.context(${context})` : '';
+
+  // Deterministic stored latency arrays (mirror makeTimeSeries latency shape)
+  const LATENCY_BASE_MEDIAN = 6;
+  const LATENCY_BASE_MEAN = 7;
+  const median_lag_days = withLatencyArrays
+    ? dates.map((_, idx) => LATENCY_BASE_MEDIAN + ((idx % 5) * 0.1))
+    : undefined;
+  const mean_lag_days = withLatencyArrays
+    ? dates.map((_, idx) => LATENCY_BASE_MEAN + ((idx % 5) * 0.1))
+    : undefined;
   
   return {
     mean: n > 0 ? k / n : 0,
@@ -116,6 +127,8 @@ function windowValue(options: {
     window_from: dates[0],
     window_to: dates[dates.length - 1],
     sliceDSL: `window(${dates[0]}:${dates[dates.length - 1]})${contextSuffix}`,
+    ...(median_lag_days ? { median_lag_days } : {}),
+    ...(mean_lag_days ? { mean_lag_days } : {}),
   };
 }
 
@@ -208,6 +221,55 @@ describe('Window Mode: Single Canonical Entry', () => {
     const usResult = result.find(v => v.sliceDSL?.includes('geo=US'));
     expect(usResult).toBeDefined();
     expect(usResult!.dates).toEqual(usValue.dates);
+  });
+});
+
+// =============================================================================
+// WINDOW MODE: Per-day latency arrays are durable across merges
+// =============================================================================
+
+describe('Window Mode: Latency arrays are preserved', () => {
+  it('preserves existing per-day lag arrays when incoming points omit latency fields', () => {
+    // Existing window slice has stored per-day lag arrays.
+    const existing: ParameterValue[] = [
+      windowValue({ startDaysAgo: 10, endDaysAgo: 8, withLatencyArrays: true }),
+    ];
+
+    // Incoming fetch adds new dates but provides NO latency fields.
+    const newTimeSeries: TimeSeriesPointWithLatency[] = makeTimeSeries(7, 6, { withLatency: false });
+
+    const result = mergeTimeSeriesIntoParameter(
+      existing,
+      newTimeSeries,
+      { start: daysAgo(7), end: daysAgo(6) },
+      undefined,
+      undefined,
+      undefined,
+      'api',
+      '' // No context filter
+    );
+
+    const windowValues = result.filter((v) => !isCohortModeValue(v));
+    expect(windowValues.length).toBe(1);
+    const merged = windowValues[0] as any;
+
+    // Lag arrays must still exist and align to dates.
+    expect(Array.isArray(merged.median_lag_days)).toBe(true);
+    expect(Array.isArray(merged.mean_lag_days)).toBe(true);
+    expect(merged.median_lag_days.length).toBe(merged.dates.length);
+    expect(merged.mean_lag_days.length).toBe(merged.dates.length);
+
+    // The original dates must keep their non-zero stored lag values.
+    // (Newer points without latency fields must not wipe existing evidence.)
+    const idx0 = merged.dates.indexOf(daysAgo(10));
+    const idx1 = merged.dates.indexOf(daysAgo(9));
+    const idx2 = merged.dates.indexOf(daysAgo(8));
+    expect(idx0).toBeGreaterThanOrEqual(0);
+    expect(idx1).toBeGreaterThanOrEqual(0);
+    expect(idx2).toBeGreaterThanOrEqual(0);
+    expect(merged.median_lag_days[idx0]).toBeGreaterThan(0);
+    expect(merged.median_lag_days[idx1]).toBeGreaterThan(0);
+    expect(merged.median_lag_days[idx2]).toBeGreaterThan(0);
   });
 });
 

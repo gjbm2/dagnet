@@ -1743,15 +1743,57 @@ export function mergeTimeSeriesIntoParameter(
     return dims === targetDims;
   });
 
-  // 2) Build date → { n, k } map
-  const dateMap = new Map<string, { n: number; k: number }>();
+  // 2) Build date → { n, k, lag... } map.
+  //
+  // IMPORTANT:
+  // Window-mode merges must preserve per-day lag arrays already stored in the file.
+  // Amplitude/DAS may omit latency fields on some fetches (e.g. segmentation queries),
+  // and incremental merges must not drop previously persisted lag evidence.
+  type WindowDay = {
+    n: number;
+    k: number;
+    median_lag_days?: number | null;
+    mean_lag_days?: number | null;
+    anchor_n?: number | null;
+    anchor_median_lag_days?: number | null;
+    anchor_mean_lag_days?: number | null;
+  };
+  const dateMap = new Map<string, WindowDay>();
 
   // Helper to add existing data; used with oldest→newest ordering so newer overwrites overlaps.
   const addExistingFromValue = (v: ParameterValue) => {
     if (!v.dates || !v.n_daily || !v.k_daily) return;
+    const existingMedianLag = (v as any).median_lag_days as number[] | number | undefined;
+    const existingMeanLag = (v as any).mean_lag_days as number[] | number | undefined;
+    const existingAnchorN = (v as any).anchor_n_daily as number[] | number | undefined;
+    const existingAnchorMedianLag = (v as any).anchor_median_lag_days as number[] | number | undefined;
+    const existingAnchorMeanLag = (v as any).anchor_mean_lag_days as number[] | number | undefined;
     for (let i = 0; i < v.dates.length; i++) {
       const ukDate = normalizeDate(v.dates[i]);
-      dateMap.set(ukDate, { n: v.n_daily[i], k: v.k_daily[i] });
+      const prev = dateMap.get(ukDate);
+      const next: WindowDay = {
+        n: v.n_daily[i],
+        k: v.k_daily[i],
+        ...(prev?.median_lag_days !== undefined ? { median_lag_days: prev.median_lag_days } : {}),
+        ...(prev?.mean_lag_days !== undefined ? { mean_lag_days: prev.mean_lag_days } : {}),
+        ...(prev?.anchor_n !== undefined ? { anchor_n: prev.anchor_n } : {}),
+        ...(prev?.anchor_median_lag_days !== undefined ? { anchor_median_lag_days: prev.anchor_median_lag_days } : {}),
+        ...(prev?.anchor_mean_lag_days !== undefined ? { anchor_mean_lag_days: prev.anchor_mean_lag_days } : {}),
+      };
+
+      const med = Array.isArray(existingMedianLag) ? existingMedianLag[i] : existingMedianLag;
+      if (med !== undefined) next.median_lag_days = med as any;
+      const mean = Array.isArray(existingMeanLag) ? existingMeanLag[i] : existingMeanLag;
+      if (mean !== undefined) next.mean_lag_days = mean as any;
+
+      const aN = Array.isArray(existingAnchorN) ? existingAnchorN[i] : existingAnchorN;
+      if (aN !== undefined) next.anchor_n = aN as any;
+      const aMed = Array.isArray(existingAnchorMedianLag) ? existingAnchorMedianLag[i] : existingAnchorMedianLag;
+      if (aMed !== undefined) next.anchor_median_lag_days = aMed as any;
+      const aMean = Array.isArray(existingAnchorMeanLag) ? existingAnchorMeanLag[i] : existingAnchorMeanLag;
+      if (aMean !== undefined) next.anchor_mean_lag_days = aMean as any;
+
+      dateMap.set(ukDate, next);
     }
   };
 
@@ -1775,7 +1817,18 @@ export function mergeTimeSeriesIntoParameter(
   // 3) Overlay new time-series data (new fetch wins for overlapping dates)
   for (const point of sortedTimeSeries) {
     const ukDate = normalizeDate(point.date);
-    dateMap.set(ukDate, { n: point.n, k: point.k });
+    const prev = dateMap.get(ukDate);
+    const next: WindowDay = {
+      ...(prev || { n: 0, k: 0 }),
+      n: point.n,
+      k: point.k,
+    };
+    if (point.median_lag_days !== undefined) next.median_lag_days = point.median_lag_days;
+    if (point.mean_lag_days !== undefined) next.mean_lag_days = point.mean_lag_days;
+    if (point.anchor_n !== undefined) next.anchor_n = point.anchor_n;
+    if (point.anchor_median_lag_days !== undefined) next.anchor_median_lag_days = point.anchor_median_lag_days;
+    if (point.anchor_mean_lag_days !== undefined) next.anchor_mean_lag_days = point.anchor_mean_lag_days;
+    dateMap.set(ukDate, next);
   }
 
   // 4) Build merged arrays sorted by date
@@ -1786,21 +1839,35 @@ export function mergeTimeSeriesIntoParameter(
   const mergedN = mergedDates.map(d => dateMap.get(d)!.n);
   const mergedK = mergedDates.map(d => dateMap.get(d)!.k);
 
-   // Propagate latency arrays where provided in new time series (if any)
-   let mergedMedianLag: number[] | undefined;
-   let mergedMeanLag: number[] | undefined;
-   if (hasLatencyData) {
-     const latencyMap = new Map<string, { median?: number; mean?: number }>();
-     for (const point of sortedTimeSeries) {
-       const ukDate = normalizeDate(point.date);
-       latencyMap.set(ukDate, {
-         median: point.median_lag_days,
-         mean: point.mean_lag_days,
-       });
-     }
-     mergedMedianLag = mergedDates.map(d => latencyMap.get(d)?.median ?? 0);
-     mergedMeanLag = mergedDates.map(d => latencyMap.get(d)?.mean ?? 0);
-   }
+  // Propagate / preserve latency arrays (window mode).
+  const hasAnyLagData = mergedDates.some((d) => {
+    const e = dateMap.get(d);
+    return e?.median_lag_days !== undefined || e?.mean_lag_days !== undefined;
+  });
+  const mergedMedianLag: number[] | undefined = hasAnyLagData
+    ? mergedDates.map((d) => dateMap.get(d)?.median_lag_days ?? 0)
+    : undefined;
+  const mergedMeanLag: number[] | undefined = hasAnyLagData
+    ? mergedDates.map((d) => dateMap.get(d)?.mean_lag_days ?? 0)
+    : undefined;
+
+  const hasAnyAnchorData = mergedDates.some((d) => {
+    const e = dateMap.get(d);
+    return (
+      e?.anchor_n !== undefined ||
+      e?.anchor_median_lag_days !== undefined ||
+      e?.anchor_mean_lag_days !== undefined
+    );
+  });
+  const mergedAnchorN: number[] | undefined = hasAnyAnchorData
+    ? mergedDates.map((d) => dateMap.get(d)?.anchor_n ?? 0)
+    : undefined;
+  const mergedAnchorMedianLag: number[] | undefined = hasAnyAnchorData
+    ? mergedDates.map((d) => dateMap.get(d)?.anchor_median_lag_days ?? 0)
+    : undefined;
+  const mergedAnchorMeanLag: number[] | undefined = hasAnyAnchorData
+    ? mergedDates.map((d) => dateMap.get(d)?.anchor_mean_lag_days ?? 0)
+    : undefined;
 
   const mergedTotalN = mergedN.reduce((sum, n) => sum + n, 0);
   const mergedTotalK = mergedK.reduce((sum, k) => sum + k, 0);
@@ -1942,6 +2009,9 @@ export function mergeTimeSeriesIntoParameter(
     ...(isSignatureWritingEnabled() && newQuerySignature ? { query_signature: newQuerySignature } : {}),
     ...(mergedMedianLag && { median_lag_days: mergedMedianLag }),
     ...(mergedMeanLag && { mean_lag_days: mergedMeanLag }),
+    ...(mergedAnchorN && { anchor_n_daily: mergedAnchorN }),
+    ...(mergedAnchorMedianLag && { anchor_median_lag_days: mergedAnchorMedianLag }),
+    ...(mergedAnchorMeanLag && { anchor_mean_lag_days: mergedAnchorMeanLag }),
     sliceDSL: canonicalWindowSliceDSL,
     // Persist forecast scalar for window() slices when requested, without computing any LAG stats here.
     //

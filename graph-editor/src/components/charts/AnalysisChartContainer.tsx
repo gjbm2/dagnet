@@ -34,6 +34,8 @@ function labelForChartKind(kind: ChartKind): string {
 export function AnalysisChartContainer(props: {
   result: AnalysisResult;
   visibleScenarioIds: string[];
+  /** Per-scenario F/E/F+E visibility mode (used by forecast-aware charts). */
+  scenarioVisibilityModes?: Record<string, 'f+e' | 'f' | 'e'>;
   scenarioDslSubtitleById?: Record<string, string>;
   height?: number;
   fillHeight?: boolean;
@@ -45,7 +47,7 @@ export function AnalysisChartContainer(props: {
     analysis_type?: string;
   };
 }): JSX.Element | null {
-  const { result, visibleScenarioIds, scenarioDslSubtitleById, height = 420, fillHeight = false, compactControls = false, source } = props;
+  const { result, visibleScenarioIds, scenarioVisibilityModes, scenarioDslSubtitleById, height = 420, fillHeight = false, compactControls = false, source } = props;
 
   const inferredChartKind = useMemo((): ChartKind | null => {
     const t = (result as any)?.analysis_type;
@@ -162,6 +164,7 @@ export function AnalysisChartContainer(props: {
           <SnapshotCohortMaturityChart
             result={result}
             visibleScenarioIds={visibleScenarioIds}
+            scenarioVisibilityModes={scenarioVisibilityModes}
             height={height}
             fillHeight={fillHeight}
             queryDsl={source?.query_dsl}

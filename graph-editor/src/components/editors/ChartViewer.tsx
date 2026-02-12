@@ -77,6 +77,18 @@ export function ChartViewer({ fileId }: EditorProps): JSX.Element {
     return Object.keys(m).length ? m : undefined;
   })();
 
+  const scenarioVisibilityModes = (() => {
+    const items = chart?.recipe?.scenarios || [];
+    const m: Record<string, 'f+e' | 'f' | 'e'> = {};
+    for (const s of items) {
+      const id = String(s?.scenario_id || '');
+      if (!id) continue;
+      const vm = s?.visibility_mode;
+      if (vm === 'f' || vm === 'e' || vm === 'f+e') m[id] = vm;
+    }
+    return Object.keys(m).length ? m : undefined;
+  })();
+
   const [showChart, setShowChart] = useState(true);
   const [showResults, setShowResults] = useState(false);
   const isLinked = Boolean(chart?.recipe?.parent?.parent_tab_id || chart?.source?.parent_tab_id);
@@ -228,6 +240,7 @@ export function ChartViewer({ fileId }: EditorProps): JSX.Element {
                 <AnalysisChartContainer
                   result={analysisResult}
                   visibleScenarioIds={scenarioIds}
+                  scenarioVisibilityModes={scenarioVisibilityModes}
                   height={420}
                   fillHeight={true}
                   compactControls={false}

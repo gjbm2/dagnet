@@ -632,6 +632,37 @@ describeSuite('Snapshot Write Path (fixture-based)', () => {
     expect(resWrong.count).toBe(0);
   });
 
+  it('read contract: slice key matching ignores clause order (context ↔ cohort/window)', async () => {
+    const pid = `${SNAPSHOT_TEST_REPO}-${SNAPSHOT_TEST_BRANCH}-slice-order-test`;
+    const sig = '{"c":"slice-order-sig","x":{"t":"2"}}';
+    const retrievedAt = '2026-01-15T10:00:00Z';
+
+    // Seed with NON-canonical clause order (mode before context).
+    await appendSnapshotsDirect({
+      param_id: pid,
+      canonical_signature: sig,
+      slice_key: 'cohort(1-Oct-25:1-Oct-25).context(channel:google)',
+      retrieved_at: retrievedAt,
+      rows: [{ anchor_day: '2026-01-01', X: 9, Y: 4 }],
+    });
+
+    // Query with canonical order (context before cohort) and a different cohort arg range.
+    const asAt = '2026-01-20T23:59:59Z';
+    const res = await queryVirtualSnapshot({
+      param_id: pid,
+      canonical_signature: sig,
+      as_at: asAt,
+      anchor_from: '2026-01-01',
+      anchor_to: '2026-01-01',
+      slice_keys: ['context(channel:google).cohort(11-Jan-26:31-Jan-26)'],
+    });
+
+    expect(res.success).toBe(true);
+    expect(res.count).toBe(1);
+    expect(res.rows[0]?.x).toBe(9);
+    expect(res.rows[0]?.y).toBe(4);
+  });
+
   it('read contract: retrieval inventory uses logical key (core_hash × slice family × retrieved_at), not param_id', async () => {
     const seedPid = `${SNAPSHOT_TEST_REPO}-${SNAPSHOT_TEST_BRANCH}-retrievals-seed`;
     const queryPid = `${SNAPSHOT_TEST_REPO}-feature-x-retrievals-seed`;

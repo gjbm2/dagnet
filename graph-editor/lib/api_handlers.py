@@ -247,12 +247,14 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
     
     See: docs/current/project-db/1-reads.md §9
     """
-    from datetime import date, datetime
+    from datetime import date, datetime, timedelta
+    import math
     from snapshot_service import query_snapshots, query_snapshots_for_sweep
     from runner.histogram_derivation import derive_lag_histogram
     from runner.daily_conversions_derivation import derive_daily_conversions
     from runner.cohort_maturity_derivation import derive_cohort_maturity
-    from runner.forecast_application import annotate_rows
+    from runner.forecast_application import annotate_rows, compute_completeness
+    from runner.lag_distribution_utils import log_normal_inverse_cdf
 
     analysis_type = data.get('analysis_type', 'lag_histogram')
     scenarios = data.get('scenarios', [])
@@ -277,6 +279,171 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
             return None
         onset = latency.get('onset_delta_days') or 0
         return {'mu': float(mu), 'sigma': float(sigma), 'onset_delta_days': float(onset) if isinstance(onset, (int, float)) else 0.0}
+
+    def _append_synthetic_cohort_maturity_frames(args: Dict[str, Any]) -> None:
+        """
+        Phase 2 (cohort maturity): append synthetic future frames (forecast-only tail).
+
+        This does NOT change the meaning of existing (real) frames. It simply extends
+        `result['frames']` with additional frames beyond the latest real as_at_date so
+        the frontend can plot a forecast-only tail.
+
+        Contract:
+        - Synthetic frames are tagged with `is_synthetic: true`.
+        - Each synthetic frame uses the same `data_points` shape as real frames.
+        - Data points are re-annotated using annotate_rows with retrieved_at_override set
+          to the synthetic as_at_date.
+        """
+        result = args.get('result') or {}
+        frames = result.get('frames') if isinstance(result, dict) else None
+        if not isinstance(frames, list) or len(frames) == 0:
+            return
+
+        mu = float(args['mu'])
+        sigma = float(args['sigma'])
+        onset = float(args.get('onset_delta_days') or 0.0)
+        anchor_to = args.get('anchor_to')
+        if not isinstance(anchor_to, str) or not anchor_to:
+            return
+
+        # Only append tail when there is at least one real frame with data points
+        # and those points have projected_y (requires completeness annotation).
+        real_frames = [f for f in frames if not f.get('is_synthetic')]
+        if not real_frames:
+            return
+
+        # Last real frame with any data points.
+        last_real = None
+        for f in reversed(real_frames):
+            if isinstance(f, dict) and isinstance(f.get('data_points'), list) and len(f.get('data_points')) > 0:
+                last_real = f
+                break
+        if not last_real:
+            return
+
+        last_as_at = str(last_real.get('as_at_date') or '')[:10]
+        if not last_as_at:
+            return
+
+        try:
+            last_as_at_d = date.fromisoformat(last_as_at)
+            anchor_to_d = date.fromisoformat(anchor_to[:10])
+        except ValueError:
+            return
+
+        # Determine tail horizon: extend until the latest cohort (anchor_to) reaches ~t95
+        # under the fitted lognormal model.
+        #
+        # We use 0.95 here (Phase 2). If/when forecasting_settings.t95_percentile is threaded
+        # into snapshot_analyze, swap to that request value.
+        try:
+            t95_model = log_normal_inverse_cdf(0.95, mu, sigma)
+        except Exception:
+            return
+        if not isinstance(t95_model, (int, float)) or not math.isfinite(t95_model) or t95_model <= 0:
+            return
+
+        tail_days = int(math.ceil(float(t95_model) + onset))
+        if tail_days <= 0:
+            return
+
+        tail_to_d = anchor_to_d + timedelta(days=tail_days)
+        start_d = last_as_at_d + timedelta(days=1)
+        if start_d > tail_to_d:
+            return
+
+        base_points = last_real.get('data_points') or []
+        if not isinstance(base_points, list) or len(base_points) == 0:
+            return
+
+        # Build tail frames at daily cadence.
+        new_frames: List[Dict[str, Any]] = []
+        d = start_d
+        while d <= tail_to_d:
+            as_at_iso = d.isoformat()
+            synth_points: List[Dict[str, Any]] = []
+            total_y = 0.0
+
+            for p in base_points:
+                if not isinstance(p, dict):
+                    continue
+                anchor_day = str(p.get('anchor_day') or '')[:10]
+                if not anchor_day:
+                    continue
+                x = p.get('x') or 0
+                a = p.get('a') or 0
+                try:
+                    x = float(x)
+                except (ValueError, TypeError):
+                    x = 0.0
+                try:
+                    a = float(a)
+                except (ValueError, TypeError):
+                    a = 0.0
+
+                # Synthetic tail must respect cohort size invariants:
+                # - 0 <= y <= x (expected conversions cannot exceed cohort size)
+                # - 0 <= rate <= 1
+                if not math.isfinite(x) or x <= 0:
+                    continue
+
+                # Use projected_y (final matured estimate) from the last real frame.
+                # Clamp to x to avoid impossible projections (projected_y is an estimate, not a guarantee).
+                y_inf = p.get('projected_y')
+                try:
+                    y_inf = float(y_inf) if y_inf is not None else None
+                except (ValueError, TypeError):
+                    y_inf = None
+                if y_inf is None or not math.isfinite(y_inf) or y_inf < 0:
+                    # If we can't establish a final-y estimate, we can't extend a future tail.
+                    continue
+                y_inf = min(y_inf, x)
+
+                # Compute expected observed conversions by future date: y(t) = y_inf * completeness(t).
+                try:
+                    cohort_age_days = (d - date.fromisoformat(anchor_day)).days
+                except ValueError:
+                    cohort_age_days = 0
+                c_future = compute_completeness(float(cohort_age_days), mu, sigma, onset)
+                c_future = max(0.0, min(1.0, float(c_future)))
+                y_future = max(0.0, y_inf * c_future)
+                y_future = min(y_future, x)
+
+                rate = (y_future / x) if x > 0 else 0.0
+                rate = max(0.0, min(1.0, rate))
+                total_y += y_future
+                synth_points.append({
+                    "anchor_day": anchor_day,
+                    "y": y_future,
+                    "x": x,
+                    "a": a,
+                    "rate": rate,
+                })
+
+            if synth_points:
+                synth_points = annotate_rows(
+                    synth_points,
+                    mu, sigma, onset,
+                    retrieved_at_override=as_at_iso,
+                )
+
+            new_frames.append({
+                "as_at_date": as_at_iso,
+                "is_synthetic": True,
+                "data_points": synth_points,
+                "total_y": total_y,
+            })
+            d += timedelta(days=1)
+
+        # Append and keep chronological ordering.
+        # We preserve the original (real) frames as-is and append the future tail.
+        result['frames'] = frames + new_frames
+        result['forecast_tail'] = {
+            "from": start_d.isoformat(),
+            "to": tail_to_d.isoformat(),
+            "t95_model_days": float(t95_model),
+            "onset_delta_days": float(onset),
+        }
 
     per_scenario_results: List[Dict[str, Any]] = []
     total_rows = 0
@@ -414,6 +581,14 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
                                 frame['data_points'], mu, sigma, onset,
                                 retrieved_at_override=as_at_date,
                             )
+                    # Phase 2: append synthetic future frames (forecast-only tail).
+                    _append_synthetic_cohort_maturity_frames({
+                        'result': result,
+                        'mu': mu,
+                        'sigma': sigma,
+                        'onset_delta_days': onset,
+                        'anchor_to': subj.get('anchor_to'),
+                    })
                 elif analysis_type == 'daily_conversions' and 'rate_by_cohort' in result:
                     result['rate_by_cohort'] = annotate_rows(
                         result['rate_by_cohort'], mu, sigma, onset,
@@ -1403,6 +1578,7 @@ def handle_lag_recompute_models(data: Dict[str, Any]) -> Dict[str, Any]:
     graph = data.get('graph', {})
     edges = graph.get('edges', []) if isinstance(graph, dict) else []
     as_at_str = data.get('as_at')
+    diagnostic = bool(data.get('diagnostic', False))
     # Accept both ISO with offset and Zulu suffix.
     as_at = datetime.fromisoformat(as_at_str.replace('Z', '+00:00')) if as_at_str else None
 
@@ -1502,9 +1678,10 @@ def handle_lag_recompute_models(data: Dict[str, Any]) -> Dict[str, Any]:
             training_window=training_window or None,
             settings_signature=sig,
             reference_datetime=as_at,
+            diagnostic=diagnostic,
         )
 
-        results.append({
+        result_entry: Dict[str, Any] = {
             'subject_id': subject_id,
             'success': True,
             'mu': fit.mu,
@@ -1518,7 +1695,10 @@ def handle_lag_recompute_models(data: Dict[str, Any]) -> Dict[str, Any]:
             'training_window': fit.training_window,
             'settings_signature': fit.settings_signature,
             'evidence_anchor_days': fit.evidence_anchor_days,
-        })
+        }
+        if diagnostic and fit.diagnostic_evidence is not None:
+            result_entry['diagnostic_evidence'] = fit.diagnostic_evidence
+        results.append(result_entry)
 
     return {
         'success': True,

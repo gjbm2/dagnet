@@ -1089,6 +1089,27 @@ class TestContextEpochs_SliceSelectorContract:
         )
         assert len(rows) == 1
 
+    def test_ce013_slice_key_normalisation_for_matching_is_order_insensitive(self):
+        pid = f'{TEST_PREFIX}ce013'
+        sig = '{"c":"ce013","x":{}}'
+        h = short_core_hash_from_canonical_signature(sig)
+
+        # Seed with NON-canonical clause order (mode before context).
+        append_snapshots_for_test(
+            param_id=pid, canonical_signature=sig,
+            slice_key='cohort(1-Oct-25:1-Oct-25).context(channel:google)',
+            retrieved_at=datetime(2025, 10, 10, 12, 0, 0),
+            rows=[{'anchor_day': '2025-10-01', 'X': 1, 'Y': 1}],
+        )
+
+        # Query using canonical order (context before cohort).
+        rows = query_snapshots(
+            param_id=pid, core_hash=h,
+            slice_keys=['context(channel:google).cohort()'],
+            include_equivalents=False,
+        )
+        assert len(rows) == 1
+
     def test_ce012_mode_mismatch_is_excluded_by_exact_family_selectors(self):
         pid = f'{TEST_PREFIX}ce012'
         sig = '{"c":"ce012","x":{}}'

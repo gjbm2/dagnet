@@ -35,6 +35,7 @@ import {
   DEFAULT_T95_DAYS,
   ONSET_MASS_FRACTION_ALPHA,
   ONSET_AGGREGATION_BETA,
+  LATENCY_FE_FIT_LEFT_CENSOR_DAYS,
 } from '../constants/latency';
 import { computeEffectiveEdgeProbability, type WhatIfOverrides } from '../lib/whatIf';
 import { sessionLogService } from './sessionLogService';
@@ -2044,6 +2045,7 @@ export function enhanceGraphLatencies(
       const aggregateFn = isWindowMode ? windowAggregateFn : helpers.aggregateCohortData;
       const cohortsScoped = aggregateFn(paramValues, queryDate, cohortWindow);
       const cohortsAll = aggregateFn(paramValues, queryDate, undefined);
+
       if (cohortsScoped.length === 0) {
         // Cohort mode: upstream edges (especially the first latency edge from the anchor)
         // may have only a baseline window() slice. Even if we cannot compute cohort-scoped
@@ -2090,11 +2092,39 @@ export function enhanceGraphLatencies(
         cohortsAllCount: cohortsAll.length
       });
 
+      // TEMP (Feb 2026): Left-censor FE fitting evidence so we never fit on older file-only history
+      // that the snapshot DB may not yet contain. If constant is 0/missing, apply no cut-off.
+      const cohortsForFitAllTime = cohortsAll.length > 0 ? cohortsAll : cohortsScoped;
+      const cohortsForFit = (() => {
+        const n = LATENCY_FE_FIT_LEFT_CENSOR_DAYS;
+        if (!(typeof n === 'number' && Number.isFinite(n) && n > 0)) return cohortsForFitAllTime;
+
+        const asOf = new Date(queryDate);
+        // Use UTC-midnight semantics to match UK-date parsing and cohort age behaviour.
+        asOf.setUTCHours(0, 0, 0, 0);
+        const minFitDate = new Date(asOf);
+        // Inclusive "last N days": min = asOf - (N - 1) days.
+        // Example: N=1 → keep only asOf day; N=50 → keep 50 calendar days including asOf.
+        minFitDate.setUTCDate(minFitDate.getUTCDate() - Math.max(0, n - 1));
+
+        const parseCohortDateUTC = (s: string): Date | null => {
+          const datePart = String(s ?? '').split('T')[0];
+          if (isUKDate(datePart)) return parseUKDate(datePart);
+          const d = new Date(datePart);
+          return Number.isFinite(d.getTime()) ? d : null;
+        };
+
+        return cohortsForFitAllTime.filter((c) => {
+          const d = parseCohortDateUTC((c as any).date);
+          if (!d) return false;
+          return d >= minFitDate;
+        });
+      })();
+
       // Get aggregate lag stats for this edge
-      const lagStats = helpers.aggregateLatencyStats(cohortsAll.length > 0 ? cohortsAll : cohortsScoped, MODEL.RECENCY_HALF_LIFE_DAYS);
+      const lagStats = helpers.aggregateLatencyStats(cohortsForFit, MODEL.RECENCY_HALF_LIFE_DAYS);
       const aggregateMedianLag = lagStats?.median_lag_days ?? effectiveHorizonDays / 2;
       const aggregateMeanLag = lagStats?.mean_lag_days;
-      const cohortsForFit = cohortsAll.length > 0 ? cohortsAll : cohortsScoped;
       // Fit quality gate should use an effective converter count consistent with horizon recency weighting.
       const totalKForFit = cohortsForFit.reduce(
         (sum, c) => sum + (c.k ?? 0) * computeRecencyWeight(c.age ?? 0, MODEL.RECENCY_HALF_LIFE_DAYS),
@@ -2220,7 +2250,7 @@ export function enhanceGraphLatencies(
         MODEL.DEFAULT_T95_DAYS,  // Default t95 if fit is invalid
         anchorMedianLag,  // Use observed anchor lag, NOT path_t95
         totalKForFit,     // Fit quality gate should consider full-history converters when available
-        cohortsAll.length > 0 ? cohortsAll : cohortsScoped, // p∞ estimation should use full-history mature cohorts
+        cohortsForFit, // keep p∞ estimation aligned with the same evidence window
         edgeT95,  // Authoritative t95 from edge.p.latency.t95 if set
         MODEL.RECENCY_HALF_LIFE_DAYS,
         edgeOnsetDeltaDays ?? 0,
@@ -2518,6 +2548,20 @@ export function enhanceGraphLatencies(
         },
       };
       
+      // Stash per-anchor-day fit evidence for parity diagnostic (gated).
+      // Written directly to edge.p.latency so runParityComparison can read it.
+      // Always stash fit evidence so parity diagnostic reflects the actual cohortsForFit used,
+      // regardless of whether the left-censor is active.
+      if (edge.p?.latency) {
+        (edge.p.latency as any).__parityEvidence = cohortsForFit.map((c: any) => ({
+          date: c.date,
+          k: c.k ?? 0,
+          n: c.n ?? 0,
+          median_lag_days: c.median_lag_days ?? null,
+          mean_lag_days: c.mean_lag_days ?? null,
+        }));
+      }
+
       // Capture forecast/evidence from edge to pass through to UpdateManager.
       // NOTE: We may later derive forecastMean from window slices; that is applied after
       // forecastMean is computed (to avoid temporal-dead-zone issues).

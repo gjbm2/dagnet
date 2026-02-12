@@ -6,6 +6,7 @@ query_snapshots / query_snapshots_for_sweep return (dict with lowercase keys).
 """
 
 import math
+import json
 import sys
 from datetime import date
 from pathlib import Path
@@ -14,6 +15,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+from slice_key_normalisation import normalise_slice_key_for_matching
 from runner.lag_model_fitter import (
     FitResult,
     select_latest_evidence,
@@ -44,6 +46,22 @@ def _row(anchor_day: str, x: int, y: int,
 
 
 DEFAULTS = ForecastingSettings()
+
+
+class TestSliceKeyNormalisationVectors:
+    def test_vectors_match_frontend_contract(self):
+        """
+        Shared test vectors used by BOTH FE and BE to pin the matching canonical form.
+        """
+        vectors_path = Path(__file__).parent.parent.parent / "test-vectors" / "slice-key-normalisation.v1.json"
+        vectors = json.loads(vectors_path.read_text(encoding="utf-8"))
+        assert isinstance(vectors, list) and len(vectors) > 0
+        for v in vectors:
+            canonical = str(v.get("canonical", ""))
+            variants = v.get("variants") or []
+            assert isinstance(variants, list) and len(variants) > 0
+            for s in variants:
+                assert normalise_slice_key_for_matching(str(s)) == canonical
 
 
 # ─────────────────────────────────────────────────────────────

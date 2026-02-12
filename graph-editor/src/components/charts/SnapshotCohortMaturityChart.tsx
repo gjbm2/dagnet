@@ -1,10 +1,12 @@
 /**
  * SnapshotCohortMaturityChart
  *
- * Renders a time-series line chart showing cohort conversion rate as-at successive snapshot dates.
+ * Renders an age-aligned cohort maturity curve:
+ * - x-axis: age (τ days since cohort anchor_day)
+ * - y-axis: conversion rate (evidenced base line + forecast “crown” + future tail)
  *
  * Input: a normalised AnalysisResult where `data` contains rows:
- * { scenario_id, subject_id, as_at_date, x, y, rate }
+ * { scenario_id, subject_id, tau_days, rate, projected_rate, tau_solid_max, tau_future_max, boundary_date, ... }
  */
 import React, { useMemo, useState } from 'react';
 import ReactECharts from 'echarts-for-react';
@@ -17,6 +19,8 @@ import { downloadTextFile } from '../../services/downloadService';
 interface Props {
   result: AnalysisResult;
   visibleScenarioIds: string[];
+  /** Per-scenario F/E/F+E mode (Scenario Panel). */
+  scenarioVisibilityModes?: Record<string, 'f+e' | 'f' | 'e'>;
   height?: number;
   fillHeight?: boolean;
   queryDsl?: string;
@@ -43,14 +47,7 @@ function formatPercent(v: number | null | undefined): string {
   return `${(v * 100).toFixed(1)}%`;
 }
 
-function dayDiffUTC(asAtISO: string, originISO: string): number | null {
-  const t1 = Date.parse(`${String(asAtISO)}T00:00:00Z`);
-  const t0 = Date.parse(`${String(originISO)}T00:00:00Z`);
-  if (Number.isNaN(t1) || Number.isNaN(t0)) return null;
-  return Math.floor((t1 - t0) / (24 * 60 * 60 * 1000));
-}
-
-export function SnapshotCohortMaturityChart({ result, visibleScenarioIds, height = 320, fillHeight = false, queryDsl, source, hideOpenAsTab = false }: Props): JSX.Element {
+export function SnapshotCohortMaturityChart({ result, visibleScenarioIds, scenarioVisibilityModes, height = 320, fillHeight = false, queryDsl, source, hideOpenAsTab = false }: Props): JSX.Element {
   const rows = Array.isArray(result?.data) ? result.data : [];
 
   if (rows.length === 0) {
@@ -89,132 +86,101 @@ export function SnapshotCohortMaturityChart({ result, visibleScenarioIds, height
       .filter(r => visibleScenarioIds.includes(String(r?.scenario_id)));
   }, [rows, effectiveSubjectId, visibleScenarioIds]);
 
-  const axisMode = useMemo((): 'cohort' | 'window' => {
-    const q = String(queryDsl || source?.query_dsl || '');
-    if (q.includes('window(') || q.includes('.window(')) return 'window';
-    return 'cohort';
-  }, [queryDsl, source]);
-
-  const fromNodeLabel = useMemo((): string | null => {
-    const q = String(queryDsl || source?.query_dsl || '');
-    const m = q.match(/\bfrom\(([^)]+)\)/);
-    const raw = m?.[1] ? String(m[1]).trim() : '';
-    return raw ? raw : null;
-  }, [queryDsl, source]);
-
-  // ──────────────────────────────────────────────────────────────
-  // X-AXIS COMPUTATION
-  //
-  // Both modes rebase as_at_date to "days since window/cohort start":
-  //   origin  = anchor_from  (= min of the date range the user selected)
-  //   x       = as_at_date - origin           (always >= 0)
-  //   axisMin = 0
-  //   axisMax = t95 (window) or path_t95 (cohort)
-  //
-  // This means:
-  //   window(-30d:)  → x runs 0..30   (shape of maturity from day 0)
-  //   window(-45d:)  → x runs 0..45   (same shape, more history)
-  //   cohort(A:B)    → x runs 0..path_t95
-  // ──────────────────────────────────────────────────────────────
-  const xAxisMeta = useMemo(() => {
-    // Origin: always anchor_from (= start of the date range).
-    const origin: string | null =
-      (typeof result?.metadata?.anchor_from === 'string' ? String(result.metadata.anchor_from) : null)
-      || (() => {
-        for (const r of filteredRows) {
-          const v = typeof r?.anchor_from === 'string' ? String(r.anchor_from) : null;
-          if (v) return v;
-        }
-        return null;
-      })();
-
-    // Collect t95 / path_t95 for axis max, and first-non-zero for cohort axis min.
-    let t95Max: number | null = null;
-    let pathT95Max: number | null = null;
-    let maxAge: number | null = null;
-    let minNonZeroAge: number | null = null;
+  const axisMeta = useMemo(() => {
+    let maxTau: number | null = null;
+    let tauSolidMax: number | null = null;
+    let tauFutureMax: number | null = null;
+    let boundaryDate: string | null = null;
 
     for (const r of filteredRows) {
-      const t95 = Number(r?.t95_days);
-      const pathT95 = Number(r?.path_t95_days);
-      if (Number.isFinite(t95)) t95Max = Math.max(t95Max ?? 0, t95);
-      if (Number.isFinite(pathT95)) pathT95Max = Math.max(pathT95Max ?? 0, pathT95);
-
-      if (origin) {
-        const asAt = typeof r?.as_at_date === 'string' ? String(r.as_at_date) : '';
-        if (asAt) {
-          const age = dayDiffUTC(asAt, origin);
-          if (age !== null && Number.isFinite(age)) {
-            maxAge = (maxAge === null) ? age : Math.max(maxAge, age);
-            const yProgress = Number(r?.y_progress ?? r?.y ?? 0);
-            if (Number.isFinite(yProgress) && yProgress > 0) {
-              minNonZeroAge = (minNonZeroAge === null) ? age : Math.min(minNonZeroAge, age);
-            }
-          }
-        }
-      }
+      const tau = Number((r as any)?.tau_days);
+      if (Number.isFinite(tau)) maxTau = Math.max(maxTau ?? 0, tau);
+      const ts = Number((r as any)?.tau_solid_max);
+      const tf = Number((r as any)?.tau_future_max);
+      if (Number.isFinite(ts)) tauSolidMax = Math.max(tauSolidMax ?? 0, ts);
+      if (Number.isFinite(tf)) tauFutureMax = Math.max(tauFutureMax ?? 0, tf);
+      const b = (r as any)?.boundary_date;
+      if (typeof b === 'string' && b) boundaryDate = String(b);
     }
 
-    // cohort(): start axis at first non-zero data point (skip the empty flat region).
-    // window(): always start at 0 (user wants to see "days since start of window").
-    const axisMin = (axisMode === 'cohort' && minNonZeroAge !== null && Number.isFinite(minNonZeroAge))
-      ? Math.max(0, minNonZeroAge)
-      : 0;
-
-    // Axis max: use t95 (window) or path_t95 (cohort). Fall back to observed max.
-    // IMPORTANT: if latencyMax would clip ALL non-zero data, extend to observed max instead.
-    const latencyMax = axisMode === 'window'
-      ? (t95Max !== null && Number.isFinite(t95Max) && t95Max > 0 ? t95Max : null)
-      : (pathT95Max !== null && Number.isFinite(pathT95Max) && pathT95Max > 0 ? pathT95Max : null);
-
-    const axisMax = (() => {
-      if (latencyMax !== null) {
-        // If latency max would hide all non-zero points, extend to observed max.
-        if (minNonZeroAge !== null && latencyMax < minNonZeroAge) {
-          return maxAge !== null ? Math.max(minNonZeroAge, maxAge) : minNonZeroAge;
-        }
-        return latencyMax;
-      }
-      if (maxAge !== null && Number.isFinite(maxAge)) return Math.max(0, maxAge);
-      return null;
-    })();
-
-    return { origin, axisMin, axisMax };
-  }, [filteredRows, axisMode, result]);
+    return {
+      axisMin: 0,
+      axisMax: maxTau,
+      tauSolidMax: tauSolidMax ?? 0,
+      tauFutureMax: tauFutureMax ?? 0,
+      boundaryDate,
+    };
+  }, [filteredRows]);
 
   // ──────────────────────────────────────────────────────────────
   // SERIES BUILDER
   //
-  // n = 0
-  // for date D in DATE_RANGE:
-  //   plot maturity(D) at x = n
-  //   n++
+  // Age-aligned maturity curve:
+  //   x = tau_days (days since cohort anchor)
+  //   y = rate (base evidence) and projected_rate (forecast crown)
   //
-  // That's it. x = as_at_date - origin.  Clip at axisMax.
+  // Segments:
+  //   solid:  τ ≤ tau_solid_max  (all cohorts have reached this age)
+  //   dashed: tau_solid_max < τ ≤ tau_future_max (some cohorts still maturing)
+  //   future: τ > tau_future_max (forecast-only, from synthetic frames)
   // ──────────────────────────────────────────────────────────────
+  const hasAnySignal = useMemo(() => {
+    for (const r of filteredRows) {
+      const base = (r as any)?.rate;
+      const proj = (r as any)?.projected_rate;
+      if ((typeof base === 'number' && Number.isFinite(base)) || (typeof proj === 'number' && Number.isFinite(proj))) return true;
+    }
+    return false;
+  }, [filteredRows]);
+
+  if (!hasAnySignal) {
+    const isEmpty = result?.metadata?.empty === true;
+    return (
+      <div style={{ padding: '24px 16px', color: '#6b7280', fontSize: 13, textAlign: 'center' }}>
+        <p style={{ marginBottom: 8, fontWeight: 600, color: '#374151' }}>No cohort maturity data</p>
+        <p style={{ margin: 0 }}>
+          {isEmpty
+            ? 'No snapshot data was found in the database for this parameter and date range. Ensure snapshots have been written for the selected edge/parameter.'
+            : 'The analysis returned no non-null maturity values for the selected scenarios/subject.'}
+        </p>
+      </div>
+    );
+  }
+
   const series = useMemo(() => {
-    const origin = xAxisMeta.origin;
-    const byScenario = new Map<string, Array<{ asAt: string; ageDays: number; rate: number | null; phase: string }>>();
+    type RowPoint = {
+      tauDays: number;
+      baseRate: number | null;
+      projectedRate: number | null;
+      cohortsExpected: number | null;
+      cohortsInDenom: number | null;
+      cohortsCoveredBase: number | null;
+      cohortsCoveredProjected: number | null;
+    };
+    const byScenario = new Map<string, RowPoint[]>();
 
     for (const r of filteredRows) {
       const scenarioId = String(r?.scenario_id);
-      const asAt = String(r?.as_at_date);
-      const rate = (r?.rate === null || r?.rate === undefined) ? null : Number(r.rate);
-      const phase = String(r?.cohort_phase || 'incomplete');
+      const tauDays = Number((r as any)?.tau_days);
+      if (!scenarioId || !Number.isFinite(tauDays)) continue;
+      if (axisMeta.axisMax !== null && Number.isFinite(axisMeta.axisMax) && tauDays > axisMeta.axisMax) continue;
 
-      if (!scenarioId || !asAt || !origin) continue;
-      const ageDays = dayDiffUTC(asAt, origin);
-      if (ageDays === null || !Number.isFinite(ageDays)) continue;
-      if (ageDays < 0) continue; // before origin — skip
-      // Clip at axis max (t95 / path_t95).
-      if (xAxisMeta.axisMax !== null && Number.isFinite(xAxisMeta.axisMax) && ageDays > xAxisMeta.axisMax) continue;
+      const baseRate = (r as any)?.rate === null || (r as any)?.rate === undefined ? null : Number((r as any).rate);
+      const projectedRate = (r as any)?.projected_rate === null || (r as any)?.projected_rate === undefined ? null : Number((r as any).projected_rate);
+      const cohortsExpected = (r as any)?.cohorts_expected === null || (r as any)?.cohorts_expected === undefined ? null : Number((r as any).cohorts_expected);
+      const cohortsInDenom = (r as any)?.cohorts_in_denominator === null || (r as any)?.cohorts_in_denominator === undefined ? null : Number((r as any).cohorts_in_denominator);
+      const cohortsCoveredBase = (r as any)?.cohorts_covered_base === null || (r as any)?.cohorts_covered_base === undefined ? null : Number((r as any).cohorts_covered_base);
+      const cohortsCoveredProjected = (r as any)?.cohorts_covered_projected === null || (r as any)?.cohorts_covered_projected === undefined ? null : Number((r as any).cohorts_covered_projected);
 
       if (!byScenario.has(scenarioId)) byScenario.set(scenarioId, []);
       byScenario.get(scenarioId)!.push({
-        asAt,
-        ageDays,
-        rate: Number.isFinite(rate as any) ? (rate as number) : null,
-        phase,
+        tauDays,
+        baseRate: Number.isFinite(baseRate as any) ? (baseRate as number) : null,
+        projectedRate: Number.isFinite(projectedRate as any) ? (projectedRate as number) : null,
+        cohortsExpected: Number.isFinite(cohortsExpected as any) ? (cohortsExpected as number) : null,
+        cohortsInDenom: Number.isFinite(cohortsInDenom as any) ? (cohortsInDenom as number) : null,
+        cohortsCoveredBase: Number.isFinite(cohortsCoveredBase as any) ? (cohortsCoveredBase as number) : null,
+        cohortsCoveredProjected: Number.isFinite(cohortsCoveredProjected as any) ? (cohortsCoveredProjected as number) : null,
       });
     }
 
@@ -222,55 +188,137 @@ export function SnapshotCohortMaturityChart({ result, visibleScenarioIds, height
     for (const scenarioId of Array.from(byScenario.keys()).sort()) {
       const name = scenarioMeta?.[scenarioId]?.name || scenarioId;
       const colour = scenarioMeta?.[scenarioId]?.colour;
-      const points = (byScenario.get(scenarioId) || []).slice().sort((a, b) => a.ageDays - b.ageDays);
+      const points = (byScenario.get(scenarioId) || []).slice().sort((a, b) => a.tauDays - b.tauDays);
 
-      type P = { asAt: string; ageDays: number; rate: number | null; phase: string };
+      const mode =
+        scenarioVisibilityModes?.[scenarioId]
+        ?? (scenarioMeta?.[scenarioId]?.visibility_mode as any)
+        ?? 'f+e';
 
-      const phasePoints = (phase: string): P[] => points.filter((p) => p.phase === phase);
-      const withContiguousBoundary = (prev: P[], next: P[]): P[] => {
-        if (prev.length === 0 || next.length === 0) return next;
-        const prevLast = prev[prev.length - 1];
-        const nextFirst = next[0];
-        if (prevLast.ageDays < nextFirst.ageDays) return [prevLast, ...next];
-        return next;
-      };
+      const tauSolidMax = axisMeta.tauSolidMax ?? 0;
+      const tauFutureMax = axisMeta.tauFutureMax ?? 0;
 
-      const incomplete = phasePoints('incomplete');
-      const maturingRaw = phasePoints('maturing');
-      const closedRaw = phasePoints('closed');
-      const maturing = withContiguousBoundary(incomplete, maturingRaw);
-      const closed = withContiguousBoundary(maturingRaw.length > 0 ? maturingRaw : incomplete, closedRaw);
-
-      const mkSeries = (lineType: 'solid' | 'dashed' | 'dotted', dataPoints: P[]) => {
-        const data = dataPoints.map((p) => ({
-          value: [p.ageDays, p.rate],
-          asAt: p.asAt,
-          ageDays: p.ageDays,
+      const mkLine = (args: {
+        id: string;
+        lineType: 'solid' | 'dashed';
+        opacity?: number;
+        data: Array<{ tauDays: number; v: number | null; meta: any }>;
+        showSymbol?: boolean;
+        areaStyle?: any;
+      }): any | null => {
+        const { id, lineType, opacity = 1, data, showSymbol = false, areaStyle } = args;
+        const seriesData = data.map((p) => ({
+          value: [p.tauDays, p.v],
+          ...p.meta,
         }));
-        if (data.length === 0) return null;
+        if (seriesData.length === 0) return null;
         return {
+          id,
           name,
           type: 'line',
-          showSymbol: data.length <= 12,
+          showSymbol,
           symbolSize: 6,
           smooth: false,
           connectNulls: false,
-          lineStyle: { width: 2, color: colour, type: lineType },
-          itemStyle: { color: colour },
+          lineStyle: { width: 2, color: colour, type: lineType, opacity },
+          itemStyle: { color: colour, opacity },
           emphasis: { focus: 'series' },
-          data,
+          ...(areaStyle ? { areaStyle } : {}),
+          data: seriesData,
         };
       };
 
-      const sIncomplete = mkSeries('dotted', incomplete);
-      const sMaturing = mkSeries('dashed', maturing);
-      const sClosed = mkSeries('solid', closed);
-      if (sIncomplete) out.push(sIncomplete);
-      if (sMaturing) out.push(sMaturing);
-      if (sClosed) out.push(sClosed);
+      const baseSolidPts = points
+        .filter((p) => p.tauDays <= tauSolidMax)
+        .map((p) => ({
+          tauDays: p.tauDays,
+          v: p.baseRate,
+          meta: { tauDays: p.tauDays, baseRate: p.baseRate, projectedRate: p.projectedRate, boundaryDate: axisMeta.boundaryDate, cohortsExpected: p.cohortsExpected, cohortsInDenom: p.cohortsInDenom, cohortsCoveredBase: p.cohortsCoveredBase, cohortsCoveredProjected: p.cohortsCoveredProjected },
+        }));
+
+      const baseDashedPts = points
+        .filter((p) => p.tauDays >= tauSolidMax && p.tauDays <= tauFutureMax)
+        .map((p) => ({
+          tauDays: p.tauDays,
+          v: p.baseRate,
+          meta: { tauDays: p.tauDays, baseRate: p.baseRate, projectedRate: p.projectedRate, boundaryDate: axisMeta.boundaryDate, cohortsExpected: p.cohortsExpected, cohortsInDenom: p.cohortsInDenom, cohortsCoveredBase: p.cohortsCoveredBase, cohortsCoveredProjected: p.cohortsCoveredProjected },
+        }));
+
+      const futureForecastPts = points
+        .filter((p) => p.tauDays >= tauFutureMax)
+        .map((p) => ({
+          tauDays: p.tauDays,
+          v: p.projectedRate,
+          meta: { tauDays: p.tauDays, baseRate: p.baseRate, projectedRate: p.projectedRate, boundaryDate: axisMeta.boundaryDate, cohortsExpected: p.cohortsExpected, cohortsInDenom: p.cohortsInDenom, cohortsCoveredBase: p.cohortsCoveredBase, cohortsCoveredProjected: p.cohortsCoveredProjected },
+        }));
+
+      // Projected rate in the dashed region — used for the forecast "crown" fill.
+      const crownProjPts = points
+        .filter((p) => p.tauDays >= tauSolidMax && p.tauDays <= tauFutureMax)
+        .map((p) => ({
+          tauDays: p.tauDays,
+          v: p.projectedRate,
+          meta: { tauDays: p.tauDays, baseRate: p.baseRate, projectedRate: p.projectedRate, boundaryDate: axisMeta.boundaryDate, cohortsExpected: p.cohortsExpected, cohortsInDenom: p.cohortsInDenom, cohortsCoveredBase: p.cohortsCoveredBase, cohortsCoveredProjected: p.cohortsCoveredProjected },
+        }));
+
+      if (mode === 'f') {
+        const forecastAll = points.map((p) => ({
+          tauDays: p.tauDays,
+          v: p.projectedRate,
+          meta: { tauDays: p.tauDays, baseRate: p.baseRate, projectedRate: p.projectedRate, boundaryDate: axisMeta.boundaryDate, cohortsExpected: p.cohortsExpected, cohortsInDenom: p.cohortsInDenom, cohortsCoveredBase: p.cohortsCoveredBase, cohortsCoveredProjected: p.cohortsCoveredProjected },
+        }));
+        const sForecast = mkLine({
+          id: `${scenarioId}::forecast`,
+          lineType: 'dashed',
+          opacity: 0.85,
+          data: forecastAll,
+          showSymbol: forecastAll.length <= 12,
+          areaStyle: { color: colour || '#111827', opacity: 0.08 },
+        });
+        if (sForecast) out.push(sForecast);
+        continue;
+      }
+
+      // Evidence base line: solid (τ ≤ solid), then dashed (solid < τ ≤ future).
+      const sBaseSolid = mkLine({ id: `${scenarioId}::baseSolid`, lineType: 'solid', data: baseSolidPts, showSymbol: baseSolidPts.length <= 12 });
+      const sBaseDashed = mkLine({ id: `${scenarioId}::baseDashed`, lineType: 'dashed', data: baseDashedPts, showSymbol: false });
+
+      if (mode === 'f+e') {
+        // Forecast "crown" in the dashed region (white-mask technique):
+        // 1. Light filled area from 0 to projectedRate
+        // 2. White filled area from 0 to baseRate (masks the lower portion)
+        // Net visible shading = gap between evidence and forecast.
+        const sCrownUpper = mkLine({
+          id: `${scenarioId}::crownUpper`,
+          lineType: 'dashed',
+          opacity: 0,        // invisible line
+          data: crownProjPts,
+          areaStyle: { color: colour || '#111827', opacity: 0.15 },
+        });
+        const sCrownMask = mkLine({
+          id: `${scenarioId}::crownMask`,
+          lineType: 'dashed',
+          opacity: 0,        // invisible line
+          data: baseDashedPts, // same base points
+          areaStyle: { color: '#ffffff', opacity: 1 },  // white mask
+        });
+        if (sCrownUpper) out.push(sCrownUpper);
+        if (sCrownMask) out.push(sCrownMask);
+      }
+
+      // Base lines on top of everything.
+      if (sBaseSolid) out.push(sBaseSolid);
+      if (sBaseDashed) out.push(sBaseDashed);
+
+      if (mode === 'f+e') {
+        // Future region: forecast-only tail beyond the observation boundary.
+        const sFuture = mkLine({ id: `${scenarioId}::futureForecast`, lineType: 'dashed', opacity: 0.75, data: futureForecastPts, showSymbol: false });
+        if (sFuture) out.push(sFuture);
+      }
     }
+
     return out;
-  }, [filteredRows, scenarioMeta, xAxisMeta.origin, xAxisMeta.axisMax]);
+  }, [filteredRows, axisMeta, scenarioMeta, scenarioVisibilityModes]);
 
   const option = useMemo(() => {
     // Compute Y-axis max from data with headroom, rounded to a clean percentage
@@ -291,18 +339,45 @@ export function SnapshotCohortMaturityChart({ result, visibleScenarioIds, height
         formatter: (params: any) => {
           const items = Array.isArray(params) ? params : [params];
           const first = items[0];
-          const ageRaw = first?.value?.[0];
-          const ageDays = typeof ageRaw === 'number' ? ageRaw : Number(ageRaw);
-          const anyAsAt = first?.data?.asAt ? String(first.data.asAt) : '';
-          const title = Number.isFinite(ageDays)
-            ? `Δ ${ageDays} day(s) · ${formatDate_d_MMM_yy(anyAsAt)}`
-            : formatDate_d_MMM_yy(anyAsAt);
-          const lines = items.map((it: any) => {
-            const scenarioName = it?.seriesName || 'Scenario';
-            const rate = it?.value?.[1];
-            return `${scenarioName}: <strong>${formatPercent(rate)}</strong>`;
-          });
-          return `<strong>${title}</strong><br/>${lines.join('<br/>')}`;
+          const tauRaw = first?.value?.[0];
+          const tauDays = typeof tauRaw === 'number' ? tauRaw : Number(tauRaw);
+
+          const best = items.find((it: any) => it?.data && (it.data.baseRate !== undefined || it.data.projectedRate !== undefined))?.data
+            ?? first?.data
+            ?? {};
+          const baseRate = (best?.baseRate === null || best?.baseRate === undefined) ? null : Number(best.baseRate);
+          const projectedRate = (best?.projectedRate === null || best?.projectedRate === undefined) ? null : Number(best.projectedRate);
+          const boundaryDate = typeof best?.boundaryDate === 'string' ? String(best.boundaryDate) : (axisMeta.boundaryDate || '');
+
+          const title = Number.isFinite(tauDays)
+            ? `Age: ${tauDays} day(s) · As at ${formatDate_d_MMM_yy(boundaryDate)}`
+            : `As at ${formatDate_d_MMM_yy(boundaryDate)}`;
+
+          const lines = items
+            // de-dupe repeated series that share a scenario name
+            .filter((it: any, idx: number, arr: any[]) => arr.findIndex((x: any) => String(x?.seriesName || '') === String(it?.seriesName || '')) === idx)
+            .map((it: any) => {
+              const seriesName = it?.seriesName || 'Scenario';
+              const v = it?.value?.[1];
+              return `${seriesName}: <strong>${formatPercent(v)}</strong>`;
+            });
+
+          const extra: string[] = [];
+          if (baseRate !== null) extra.push(`Evidenced: <strong>${formatPercent(baseRate)}</strong>`);
+          if (projectedRate !== null) extra.push(`Projected: <strong>${formatPercent(projectedRate)}</strong>`);
+
+          const ce = best?.cohortsExpected;
+          const cd = best?.cohortsInDenom;
+          const cb = best?.cohortsCoveredBase;
+          const cp = best?.cohortsCoveredProjected;
+          if (typeof ce === 'number' && typeof cd === 'number') {
+            extra.push(`Cohorts: <strong>${cd}/${ce}</strong> in denominator`);
+          }
+          if (typeof cb === 'number' && typeof cp === 'number') {
+            extra.push(`Coverage: base <strong>${cb}</strong> · proj <strong>${cp}</strong> (at this τ)`);
+          }
+
+          return `<strong>${title}</strong><br/>${[...lines, ...extra].join('<br/>')}`;
         },
       },
       grid: {
@@ -314,11 +389,11 @@ export function SnapshotCohortMaturityChart({ result, visibleScenarioIds, height
       },
       xAxis: {
         type: 'value',
-        name: `Days since ${fromNodeLabel || 'start'}`,
+        name: 'Age (days since cohort date)',
         nameLocation: 'middle' as const,
         nameGap: 30,
-        min: xAxisMeta.axisMin,
-        ...(xAxisMeta.axisMax !== null && Number.isFinite(xAxisMeta.axisMax) ? { max: xAxisMeta.axisMax } : {}),
+        min: axisMeta.axisMin,
+        ...(axisMeta.axisMax !== null && Number.isFinite(axisMeta.axisMax) ? { max: axisMeta.axisMax } : {}),
         axisLabel: {
           fontSize: 10,
           formatter: (value: number) => `${Math.round(value)}`,
@@ -350,7 +425,7 @@ export function SnapshotCohortMaturityChart({ result, visibleScenarioIds, height
         sweep: { from: result?.metadata?.sweep_from, to: result?.metadata?.sweep_to },
       },
     };
-  }, [result, series, effectiveSubjectId, fromNodeLabel, xAxisMeta.axisMin, xAxisMeta.axisMax]);
+  }, [result, series, effectiveSubjectId, axisMeta]);
 
   const headerRight = useMemo(() => {
     const aFrom = result?.metadata?.anchor_from;

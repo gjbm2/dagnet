@@ -27,10 +27,12 @@ import { computeShortCoreHash } from '../coreHashService';
 import type { FetchPlan, FetchPlanItem } from '../fetchPlanTypes';
 import {
   mapFetchPlanToSnapshotSubjects,
+  normaliseSliceKeyForMatching,
   resolveFunnelPathEdges,
   resolveReachableEdges,
   type SnapshotSubjectRequest,
 } from '../snapshotDependencyPlanService';
+import sliceKeyVectors from '../../../test-vectors/slice-key-normalisation.v1.json';
 
 // ============================================================
 // Helpers
@@ -63,6 +65,23 @@ function makePlan(items: Partial<FetchPlanItem>[]): FetchPlan {
     })) as FetchPlanItem[],
   };
 }
+
+describe('slice key normalisation (shared vectors)', () => {
+  it('canonicalises all known equivalent variants to the same match key', () => {
+    const vectors: any[] = Array.isArray(sliceKeyVectors) ? (sliceKeyVectors as any[]) : [];
+    expect(vectors.length).toBeGreaterThan(0);
+
+    for (const v of vectors) {
+      const canonical = String(v?.canonical ?? '');
+      const variants: string[] = Array.isArray(v?.variants) ? v.variants.map((x: any) => String(x ?? '')) : [];
+      expect(variants.length).toBeGreaterThan(0);
+
+      for (const s of variants) {
+        expect(normaliseSliceKeyForMatching(s)).toBe(canonical);
+      }
+    }
+  });
+});
 
 /** Minimal graph for scope rule tests */
 function makeGraph(edges: Array<{ uuid: string; from: string; to: string }>) {

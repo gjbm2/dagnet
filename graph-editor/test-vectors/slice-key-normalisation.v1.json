@@ -1,0 +1,51 @@
+[
+  {
+    "name": "empty",
+    "variants": ["", "   ", "."],
+    "canonical": ""
+  },
+  {
+    "name": "mode_args_stripped",
+    "variants": [
+      "cohort(1-Oct-25:5-Oct-25)",
+      "cohort(-30d:)",
+      "cohort()"
+    ],
+    "canonical": "cohort()"
+  },
+  {
+    "name": "context_then_cohort_order_insensitive",
+    "variants": [
+      "context(channel:paid-search).cohort()",
+      "cohort().context(channel:paid-search)",
+      "context(channel:paid-search).cohort(1-Oct-25:5-Oct-25)"
+    ],
+    "canonical": "context(channel:paid-search).cohort()"
+  },
+  {
+    "name": "two_contexts_order_insensitive",
+    "variants": [
+      "context(device:mobile).context(channel:google).cohort()",
+      "cohort().context(channel:google).context(device:mobile)",
+      "context(channel:google).cohort().context(device:mobile)"
+    ],
+    "canonical": "context(channel:google).context(device:mobile).cohort()"
+  },
+  {
+    "name": "contextAny_pair_order_insensitive",
+    "variants": [
+      "contextAny(channel:meta,channel:google).window(1-Oct-25:5-Oct-25)",
+      "window(-7d:).contextAny(channel:google,channel:meta)"
+    ],
+    "canonical": "contextAny(channel:google,channel:meta).window()"
+  },
+  {
+    "name": "dedupe_idempotent_clauses",
+    "variants": [
+      "context(channel:google).context(channel:google).cohort()",
+      "cohort().context(channel:google).context(channel:google)"
+    ],
+    "canonical": "context(channel:google).cohort()"
+  }
+]
+

@@ -80,6 +80,7 @@ export async function recomputeLagModels(
     trainingAnchorTo?: string;
     asAt?: string;
     baseUrl?: string;
+    diagnostic?: boolean;
   },
 ): Promise<RecomputeResponse | null> {
   if (!FORECASTING_PARALLEL_RUN) return null;
@@ -96,6 +97,7 @@ export async function recomputeLagModels(
   if (opts?.trainingAnchorFrom) body.training_anchor_from = opts.trainingAnchorFrom;
   if (opts?.trainingAnchorTo) body.training_anchor_to = opts.trainingAnchorTo;
   if (opts?.asAt) body.as_at = opts.asAt;
+  if (opts?.diagnostic) body.diagnostic = true;
 
   try {
     const resp = await fetch(url, {
@@ -129,10 +131,22 @@ export async function runParityComparison(args: {
 }): Promise<void> {
   if (!FORECASTING_PARALLEL_RUN) return;
 
-  console.log('[lagRecomputeService] runParityComparison ENTERED — version: FIXED_SLICEKEYS_V2');
+  console.log('[lagRecomputeService] runParityComparison ENTERED — version: MODE_AWARE_V3');
 
   const { graph, workspace } = args;
   const edges: any[] = Array.isArray(graph?.edges) ? graph.edges : [];
+
+  // Determine the query mode from the graph's current DSL.
+  // The FE topo pass uses aggregateWindowData for window() DSLs and
+  // aggregateCohortData for cohort() DSLs — the parity request MUST
+  // select slices matching the mode the FE actually fitted from.
+  const currentDSL = String(graph?.currentQueryDSL || '');
+  const hasCohortClause = currentDSL.includes('cohort(');
+  const hasWindowClause = currentDSL.includes('window(');
+  // Default to cohort if DSL is ambiguous or empty (matches FE topo pass default).
+  const queryMode: 'cohort' | 'window' = (hasWindowClause && !hasCohortClause) ? 'window' : 'cohort';
+
+  console.log('[lagRecomputeService] queryMode:', queryMode, '| currentDSL:', currentDSL.substring(0, 80));
 
   // Collect FE model params and build recompute subjects.
   const feModels: FEModelParams[] = [];
@@ -158,30 +172,43 @@ export async function runParityComparison(args: {
     });
 
     // Build subject for backend recompute.
-    // MUST use the same slice family/signature as the FE fitter used for mu/sigma fitting:
-    // - FE fits from cohort() full-history evidence (cohortsAll), not window().
+    // MUST use the same slice family/mode as the FE fitter used for mu/sigma fitting.
+    // In window mode the FE fits from window() slices; in cohort mode from cohort() slices.
     const fileId = `parameter-${paramId}`;
     const file = fileRegistry.getFile(fileId);
     const values: any[] = file?.data?.values || [];
 
-    // Prefer cohort() slice entry (full-history fit basis).
+    // Select slices matching the query mode the FE topo pass actually used.
     //
-    // For MECE unions (common in prod): some params have ONLY cohort()+context slices (no uncontexted cohort slice).
-    // In that case, FE effectively fits from the union of context slices; BE must receive ALL those slice keys.
-    const cohortValues = values.filter((v: any) =>
-      v?.query_signature && (typeof v.sliceDSL === 'string' && v.sliceDSL.startsWith('cohort('))
+    // For MECE unions (common in prod): some params have ONLY mode()+context slices
+    // (no uncontexted slice). In that case, FE fits from the union of context slices;
+    // BE must receive ALL those slice keys.
+    const modePrefix = queryMode === 'window' ? 'window(' : 'cohort(';
+    const modeValues = values.filter((v: any) =>
+      v?.query_signature && (typeof v.sliceDSL === 'string' && v.sliceDSL.startsWith(modePrefix))
     );
-    const uncontextedCohortValue = cohortValues.find((v: any) => {
+    const uncontextedModeValue = modeValues.find((v: any) => {
       const dsl = String(v.sliceDSL || '');
       return !dsl.includes('.context(') && !dsl.includes('contextAny(');
     });
-    const windowValue = values.find((v: any) =>
-      v?.query_signature && (typeof v.sliceDSL === 'string' && v.sliceDSL.startsWith('window('))
+
+    // Fallback: if no slices exist for the active mode, try the other mode.
+    // This can happen for edges whose parameter file only has one mode of data.
+    const altPrefix = queryMode === 'window' ? 'cohort(' : 'window(';
+    const altValues = values.filter((v: any) =>
+      v?.query_signature && (typeof v.sliceDSL === 'string' && v.sliceDSL.startsWith(altPrefix))
     );
+    const uncontextedAltValue = altValues.find((v: any) => {
+      const dsl = String(v.sliceDSL || '');
+      return !dsl.includes('.context(') && !dsl.includes('contextAny(');
+    });
+
     const chosenValues: any[] =
-      uncontextedCohortValue
-        ? [uncontextedCohortValue]
-        : (cohortValues.length > 0 ? cohortValues : (windowValue ? [windowValue] : []));
+      uncontextedModeValue
+        ? [uncontextedModeValue]
+        : (modeValues.length > 0 ? modeValues
+          : (uncontextedAltValue ? [uncontextedAltValue]
+            : (altValues.length > 0 ? altValues : [])));
     if (!chosenValues.length || !chosenValues[0]?.query_signature) continue;
 
     // All chosen slices must belong to the same signature family (same core_hash), otherwise
@@ -237,10 +264,15 @@ export async function runParityComparison(args: {
     const isoFrom = toISO(anchorFrom);
     const isoTo = toISO(anchorTo);
 
+    const sliceSource = uncontextedModeValue
+      ? `${queryMode}`
+      : (modeValues.length > 0 ? `${queryMode}_mece`
+        : (uncontextedAltValue ? `${queryMode === 'window' ? 'cohort' : 'window'}_fallback`
+          : (altValues.length > 0 ? `${queryMode === 'window' ? 'cohort' : 'window'}_mece_fallback` : 'none')));
     console.log(
       `[lagRecomputeService] Subject: edge=${edgeUuid.substring(0, 8)}, param=${paramId}, ` +
       `sliceKeys=${sliceKeys.length}, anchorFrom=${anchorFrom} → ${isoFrom}, anchorTo=${anchorTo} → ${isoTo}, ` +
-      `source=${uncontextedCohortValue ? 'cohort' : cohortValues.length > 0 ? 'cohort_mece' : windowValue ? 'window' : 'none'}`
+      `queryMode=${queryMode}, source=${sliceSource}`
     );
 
     // Determine the onset the FE actually used for fitting mu/sigma.
@@ -296,15 +328,28 @@ export async function runParityComparison(args: {
     },
   );
 
-  // Call backend.
-  // Important: send as_at so BE uses the same “now” reference FE used for recency weighting.
-  const response = await recomputeLagModels(subjects, graph, { asAt: new Date().toISOString() });
+  // Call backend with diagnostic=true so we get per-anchor-day evidence rows back.
+  // Important: send as_at so BE uses the same "now" reference FE used for recency weighting.
+  const response = await recomputeLagModels(subjects, graph, {
+    asAt: new Date().toISOString(),
+    diagnostic: true,
+  });
   if (!response) {
     sessionLogService.warning(
       'graph', 'FORECASTING_PARITY_SKIPPED',
       'Backend unreachable — skipping parity comparison',
     );
     return;
+  }
+
+  // Build FE evidence lookup from stashed __parityEvidence on graph edges.
+  const feEvidenceByEdge = new Map<string, Array<{ date: string; k: number; n: number; median_lag_days: number | null; mean_lag_days: number | null }>>();
+  for (const edge of edges) {
+    const edgeUuid = edge.uuid || edge.id || '';
+    const ev = (edge?.p?.latency as any)?.__parityEvidence;
+    if (Array.isArray(ev)) {
+      feEvidenceByEdge.set(edgeUuid, ev);
+    }
   }
 
   // Compare.
@@ -316,7 +361,7 @@ export async function runParityComparison(args: {
     ...r,
     __parity_request_subject: subjById.get(r.subject_id),
   }));
-  compareModelFits(feModels, beWithReq);
+  compareModelFits(feModels, beWithReq, feEvidenceByEdge);
 
   sessionLogService.info(
     'graph', 'FORECASTING_PARITY_DONE',

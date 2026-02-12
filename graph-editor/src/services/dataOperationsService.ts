@@ -76,6 +76,7 @@ import { parseSignature, serialiseSignature } from './signatureMatchingService';
 import { forecastingSettingsService } from './forecastingSettingsService';
 import { deriveOnsetDeltaDaysFromLagHistogram, roundTo1dp } from './onsetDerivationService';
 import { normalizeConstraintString, parseConstraints, parseDSL } from '../lib/queryDSL';
+import { normaliseSliceKeyForMatching } from '../lib/sliceKeyNormalisation';
 import { contextRegistry } from './contextRegistry';
 import { normalizeToUK, formatDateUK, parseUKDate, resolveRelativeDate } from '../lib/dateFormat';
 import { rateLimiter } from './rateLimiter';
@@ -1051,15 +1052,7 @@ export function convertVirtualSnapshotToTimeSeries(
   sliceKey: string,
   options?: { workspace?: { repository: string; branch: string } }
 ): TimeSeriesPoint[] {
-  const normalise = (sk: string): string => {
-    const s = String(sk || '').trim();
-    if (!s) return '';
-    return s
-      .replace(/(^|\.)((?:window|cohort))\([^)]*\)/g, (_m, p1, fn) => `${p1}${fn}()`)
-      .replace(/^\./, '');
-  };
-
-  const requestedNorm = normalise(sliceKey);
+  const requestedNorm = normaliseSliceKeyForMatching(sliceKey);
 
   // 1) Exact slice match (normal path)
   const exact = rows.filter((row) => row.slice_key === sliceKey);
@@ -1087,7 +1080,7 @@ export function convertVirtualSnapshotToTimeSeries(
 
   // 1b) Normalised slice-family match (ignore window/cohort args)
   if (requestedNorm) {
-    const normMatch = rows.filter((row) => normalise(row.slice_key) === requestedNorm);
+    const normMatch = rows.filter((row) => normaliseSliceKeyForMatching(row.slice_key) === requestedNorm);
     if (normMatch.length > 0) return toPoints(normMatch);
   }
 
@@ -1100,7 +1093,7 @@ export function convertVirtualSnapshotToTimeSeries(
 
   // If caller requested a mode-only selector, restrict to that mode.
   const rowsForAggregation = modeOnly
-    ? rows.filter((r) => normalise(r.slice_key).endsWith(requestedNorm))
+    ? rows.filter((r) => normaliseSliceKeyForMatching(r.slice_key).endsWith(requestedNorm))
     : rows;
 
   const nonEmptyRows = rowsForAggregation.filter((r) => typeof r.slice_key === 'string' && r.slice_key.trim().length > 0);

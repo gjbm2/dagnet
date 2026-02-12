@@ -127,7 +127,7 @@ export class GraphComputeClient {
   private readonly MAX_CACHE_SIZE = 50; // Prevent unbounded growth
   // Cache-buster for cohort maturity normalisation semantics. Increment when the
   // cohort_maturity result interpretation changes (e.g. progress curve / axis semantics).
-  private readonly COHORT_MATURITY_CACHE_VERSION = 8;
+  private readonly COHORT_MATURITY_CACHE_VERSION = 16;
 
   constructor(baseUrl: string = API_BASE_URL, useMock: boolean = USE_MOCK) {
     this.baseUrl = baseUrl;
@@ -330,8 +330,8 @@ export class GraphComputeClient {
       }
 
       // Aggregate to tabular rows for charting:
-      // One row per (scenario_id, subject_id, as_at_date).
-      // If epochs overlap (should not happen), later rows overwrite deterministically.
+      // New semantics (11-Feb-26): age-aligned maturity curve.
+      // One row per (scenario_id, subject_id, tau_days).
       const dataByKey = new Map<string, Record<string, any>>();
 
       // Prefer metadata from the first valid block.
@@ -394,9 +394,6 @@ export class GraphComputeClient {
         return Math.floor((t1 - t0) / (24 * 60 * 60 * 1000));
       };
 
-      // Collect frames per (scenario, subject) so we can compute a fixed denominator X*.
-      type FrameAgg = { asAt: string; x: number; y: number; a: number; pointsCount: number };
-      const framesByScenarioSubject = new Map<string, FrameAgg[]>();
       // For CSV export / forensics: keep the fully detailed cohort points
       // (one row per as_at_date × anchor_day).
       const cohortPointsByKey = new Map<string, Record<string, any>>();
@@ -419,87 +416,74 @@ export class GraphComputeClient {
           const asAt = f?.as_at_date || f?.retrieved_at_date || f?.date;
           if (!asAt) continue;
           const points: any[] = Array.isArray(f?.data_points) ? f.data_points : [];
-          let xTotal = 0;
-          let yTotal = 0;
-          let aTotal = 0;
           for (const p of points) {
             const x = Number(p?.x ?? 0);
             const y = Number(p?.y ?? 0);
             const a = Number(p?.a ?? 0);
-            if (Number.isFinite(x)) xTotal += x;
-            if (Number.isFinite(y)) yTotal += y;
-            if (Number.isFinite(a)) aTotal += a;
 
             // Detailed export row (per cohort anchor_day).
             const anchorDay = String(p?.anchor_day || '');
-            if (anchorDay) {
-              const ssKey = `${b.scenario_id}||${b.subject_id}`;
-              const epochPayload = pickEpochPayloadForAsAt(ssKey, String(asAt));
-              const windowFrom = epochPayload?.anchor_from || firstMeta?.anchor_range?.from || firstMeta?.anchor_from;
-              const windowTo = epochPayload?.anchor_to || firstMeta?.anchor_range?.to || firstMeta?.anchor_to;
-              const cohortAgeDays = dayDiffUTC(String(asAt), anchorDay);
-              const cohortAgeAtWindowEndDays = (windowTo && typeof windowTo === 'string')
-                ? dayDiffUTC(windowTo, anchorDay)
-                : null;
-              const exportRow = {
-                scenario_id: b.scenario_id,
-                subject_id: b.subject_id,
-                as_at_date: String(asAt),
-                anchor_day: anchorDay,
-                // Rebased time axes for chart design:
-                // - cohort_age_days: "days since from-node for this cohort" at this as-at
-                // - cohort_age_at_window_end_days: the max age this cohort could have reached by the window end
-                //   (for the earliest cohort, this is exactly window_to - window_from).
-                cohort_age_days: cohortAgeDays,
-                cohort_age_at_window_end_days: cohortAgeAtWindowEndDays,
-                window_from: windowFrom,
-                window_to: windowTo,
-                x: Number.isFinite(x) ? x : null,
-                y: Number.isFinite(y) ? y : null,
-                a: Number.isFinite(a) ? a : null,
-                rate: (p?.rate === null || p?.rate === undefined) ? null : Number(p.rate),
-                median_lag_days: (p?.median_lag_days === null || p?.median_lag_days === undefined) ? null : Number(p.median_lag_days),
-                mean_lag_days: (p?.mean_lag_days === null || p?.mean_lag_days === undefined) ? null : Number(p.mean_lag_days),
-                onset_delta_days: (p?.onset_delta_days === null || p?.onset_delta_days === undefined) ? null : Number(p.onset_delta_days),
-                completeness: (p?.completeness === null || p?.completeness === undefined) ? null : Number(p.completeness),
-                layer: p?.layer ?? null,
-                evidence_y: (p?.evidence_y === null || p?.evidence_y === undefined) ? null : Number(p.evidence_y),
-                forecast_y: (p?.forecast_y === null || p?.forecast_y === undefined) ? null : Number(p.forecast_y),
-                projected_y: (p?.projected_y === null || p?.projected_y === undefined) ? null : Number(p.projected_y),
-                epoch_subject_id: epochPayload?.subject_id,
-                epoch_sweep_from: epochPayload?.sweep_from,
-                epoch_sweep_to: epochPayload?.sweep_to,
-                epoch_slice_keys: Array.isArray(epochPayload?.slice_keys) ? epochPayload.slice_keys.join(' | ') : undefined,
-                param_id: epochPayload?.param_id,
-                core_hash: epochPayload?.core_hash,
-              };
-              const exportKey = `${b.scenario_id}||${b.subject_id}||${String(asAt)}||${anchorDay}`;
-              cohortPointsByKey.set(exportKey, exportRow);
-            }
+            if (!anchorDay) continue;
+
+            const ssKey = `${b.scenario_id}||${b.subject_id}`;
+            const epochPayload = pickEpochPayloadForAsAt(ssKey, String(asAt));
+            const windowFrom = epochPayload?.anchor_from || firstMeta?.anchor_range?.from || firstMeta?.anchor_from;
+            const windowTo = epochPayload?.anchor_to || firstMeta?.anchor_range?.to || firstMeta?.anchor_to;
+            const cohortAgeDays = dayDiffUTC(String(asAt), anchorDay);
+            const cohortAgeAtWindowEndDays = (windowTo && typeof windowTo === 'string')
+              ? dayDiffUTC(windowTo, anchorDay)
+              : null;
+            const exportRow = {
+              scenario_id: b.scenario_id,
+              subject_id: b.subject_id,
+              as_at_date: String(asAt),
+              anchor_day: anchorDay,
+              cohort_age_days: cohortAgeDays,
+              cohort_age_at_window_end_days: cohortAgeAtWindowEndDays,
+              window_from: windowFrom,
+              window_to: windowTo,
+              x: Number.isFinite(x) ? x : null,
+              y: Number.isFinite(y) ? y : null,
+              a: Number.isFinite(a) ? a : null,
+              rate: (p?.rate === null || p?.rate === undefined) ? null : Number(p.rate),
+              median_lag_days: (p?.median_lag_days === null || p?.median_lag_days === undefined) ? null : Number(p.median_lag_days),
+              mean_lag_days: (p?.mean_lag_days === null || p?.mean_lag_days === undefined) ? null : Number(p.mean_lag_days),
+              onset_delta_days: (p?.onset_delta_days === null || p?.onset_delta_days === undefined) ? null : Number(p.onset_delta_days),
+              completeness: (p?.completeness === null || p?.completeness === undefined) ? null : Number(p.completeness),
+              layer: p?.layer ?? null,
+              evidence_y: (p?.evidence_y === null || p?.evidence_y === undefined) ? null : Number(p.evidence_y),
+              forecast_y: (p?.forecast_y === null || p?.forecast_y === undefined) ? null : Number(p.forecast_y),
+              projected_y: (p?.projected_y === null || p?.projected_y === undefined) ? null : Number(p.projected_y),
+              is_synthetic: Boolean((f as any)?.is_synthetic),
+              epoch_subject_id: epochPayload?.subject_id,
+              epoch_sweep_from: epochPayload?.sweep_from,
+              epoch_sweep_to: epochPayload?.sweep_to,
+              epoch_slice_keys: Array.isArray(epochPayload?.slice_keys) ? epochPayload.slice_keys.join(' | ') : undefined,
+              param_id: epochPayload?.param_id,
+              core_hash: epochPayload?.core_hash,
+            };
+            const exportKey = `${b.scenario_id}||${b.subject_id}||${String(asAt)}||${anchorDay}`;
+            cohortPointsByKey.set(exportKey, exportRow);
           }
-          if (import.meta.env.DEV) {
-            console.log('[GraphComputeClient] cohort_maturity frame:', {
-              asAt, pointsCount: points.length, xTotal, yTotal,
-            });
-          }
-          const key = `${b.scenario_id}||${b.subject_id}`;
-          if (!framesByScenarioSubject.has(key)) framesByScenarioSubject.set(key, []);
-          framesByScenarioSubject.get(key)!.push({
-            asAt: String(asAt),
-            x: Number.isFinite(xTotal) ? xTotal : 0,
-            y: Number.isFinite(yTotal) ? yTotal : 0,
-            a: Number.isFinite(aTotal) ? aTotal : 0,
-            pointsCount: points.length,
-          });
         }
       }
 
-      // Build rows using fixed denominator X* (per scenario+subject), and phase styling (A/B/C).
-      for (const [ssKey, frames] of framesByScenarioSubject.entries()) {
+      // Build age-aligned maturity curve rows (τ-axis) per (scenario, subject).
+      // - Boundary date B: end of sweep (or latest available real frame).
+      // - Fixed denominator X_full: sum of X at B across the cohort set (as known at B).
+      // - Base rate R_base(τ): sum of evidenced Y at min(B, a+τ) over X_full.
+      // - Projected rate R_proj(τ): sum of Y at (a+τ), using future synthetic frames where needed.
+      // IMPORTANT:
+      // Keep axis stable even when ALL frames are empty by deriving the scenario/subject
+      // set from the request payload (not from observed data points).
+      const scenarioSubjectKeys = Array.from(new Set(Array.from(subjectPayloadsByScenarioSubject.keys())));
+
+      for (const ssKey of scenarioSubjectKeys) {
         const [scenarioId, subjectId] = ssKey.split('||');
         const payloadKey = `${scenarioId}||${subjectId}`;
         const payload = subjectPayloadByScenarioSubject.get(payloadKey);
         const payloads = subjectPayloadsByScenarioSubject.get(payloadKey) || [];
+
         const anchorFrom =
           payloads.find((p) => typeof p?.anchor_from === 'string' && p.anchor_from)?.anchor_from
           || payload?.anchor_from
@@ -510,71 +494,115 @@ export class GraphComputeClient {
           || payload?.anchor_to
           || firstMeta?.anchor_range?.to
           || firstMeta?.anchor_to;
+
+        const sweepTo =
+          payloads.filter((p) => typeof p?.sweep_to === 'string' && p.sweep_to).map((p) => String(p.sweep_to)).sort().slice(-1)[0]
+          || (typeof payload?.sweep_to === 'string' ? String(payload.sweep_to) : undefined)
+          || firstMeta?.sweep_range?.to
+          || firstMeta?.sweep_to;
+
         const latency = readLatencyDays(
           (request.scenarios || []).find((s) => String(s?.scenario_id) === String(scenarioId))?.graph,
           payload?.target?.targetId,
         );
 
-        const framesSorted = frames.slice().sort((a, b) => a.asAt.localeCompare(b.asAt));
+        const axisMode: 'cohort' | 'window' = (() => {
+          const q = String(request?.query_dsl || '');
+          if (q.includes('window(') || q.includes('.window(')) return 'window';
+          return 'cohort';
+        })();
 
-        // Choose X*:
-        // - Prefer the max X observed in the "closed" region (ageDays > path_t95) if available.
-        // - Else fall back to max X overall in the sweep.
-        const ages = (anchorTo && typeof anchorTo === 'string')
-          ? framesSorted.map((f) => ({ asAt: f.asAt, ageDays: dayDiffUTC(f.asAt, anchorTo) }))
-          : [];
-        const closed = (anchorTo && latency.pathT95Days !== null)
-          ? framesSorted.filter((f) => {
-              const age = dayDiffUTC(f.asAt, anchorTo);
-              return age !== null && age > (latency.pathT95Days as number);
-            })
-          : [];
-        const xStar = Math.max(
-          0,
-          ...((closed.length > 0 ? closed : framesSorted).map((f) => f.x)),
+        const B = (typeof sweepTo === 'string' && sweepTo) ? String(sweepTo).slice(0, 10) : null;
+        const anchorFromIso = (typeof anchorFrom === 'string' && anchorFrom) ? String(anchorFrom).slice(0, 10) : null;
+        const anchorToIso = (typeof anchorTo === 'string' && anchorTo) ? String(anchorTo).slice(0, 10) : null;
+
+        const tauSolidMax = (B && anchorToIso) ? Math.max(0, dayDiffUTC(B, anchorToIso) ?? 0) : 0;
+        const tauFutureMax = (B && anchorFromIso) ? Math.max(0, dayDiffUTC(B, anchorFromIso) ?? 0) : 0;
+
+        const tauMax = (() => {
+          const v = axisMode === 'window' ? latency.t95Days : latency.pathT95Days;
+          if (typeof v === 'number' && Number.isFinite(v) && v > 0) return Math.floor(v);
+          if (B && anchorFromIso) {
+            const span = dayDiffUTC(B, anchorFromIso);
+            if (span !== null && Number.isFinite(span) && span >= 0) return Math.floor(span);
+          }
+          return 0;
+        })();
+
+        // ── Group-by-age aggregation ──────────────────────────────────
+        // Instead of iterating τ and looking up per-anchor-day frames
+        // (which fails with sparse data), iterate the data points we
+        // actually HAVE and bucket them by age τ = as_at_date − anchor_day.
+        //
+        // For each τ bucket we accumulate:
+        //   sumY, sumX           → evidence rate = sumY / sumX
+        //   sumProjY, sumProjX   → projected rate = sumProjY / sumProjX
+        //
+        // This naturally produces a monotonic cumulative distribution.
+        type TauBucket = { sumY: number; sumX: number; sumProjY: number; sumProjX: number; count: number; projCount: number };
+        const buckets = new Map<number, TauBucket>();
+
+        // Collect all detailed points for this scenario+subject.
+        const points = Array.from(cohortPointsByKey.values()).filter((r: any) =>
+          String(r?.scenario_id) === String(scenarioId) && String(r?.subject_id) === String(subjectId)
         );
 
-        // Enforce monotonic progress on Y (belief revision can otherwise make the curve "fall").
-        let yProgress = 0;
+        for (const p of points) {
+          const asAt = String(p?.as_at_date || '').slice(0, 10);
+          const ad = String(p?.anchor_day || '').slice(0, 10);
+          if (!asAt || !ad) continue;
 
-        for (const f of framesSorted) {
-          yProgress = Math.max(yProgress, f.y);
-          const rateObserved = f.x > 0 ? (f.y / f.x) : null;
-          const rateProgress = xStar > 0 ? (yProgress / xStar) : null;
+          const tau = dayDiffUTC(asAt, ad);
+          if (tau === null || !Number.isFinite(tau) || tau < 0 || tau > tauMax) continue;
 
-          let phase: 'closed' | 'maturing' | 'incomplete' = 'incomplete';
-          if (anchorTo && (latency.t95Days !== null || latency.pathT95Days !== null)) {
-            const age = dayDiffUTC(f.asAt, anchorTo);
-            if (age !== null) {
-              if (latency.pathT95Days !== null && age > latency.pathT95Days) phase = 'closed';
-              else if (latency.t95Days !== null && age > latency.t95Days) phase = 'maturing';
-              else phase = 'incomplete';
-            }
+          const y = p?.y === null || p?.y === undefined ? null : Number(p.y);
+          const x = p?.x === null || p?.x === undefined ? null : Number(p.x);
+          const projY = p?.projected_y === null || p?.projected_y === undefined ? null : Number(p.projected_y);
+          if (x === null || !Number.isFinite(x) || x <= 0) continue;
+
+          let b = buckets.get(tau);
+          if (!b) { b = { sumY: 0, sumX: 0, sumProjY: 0, sumProjX: 0, count: 0, projCount: 0 }; buckets.set(tau, b); }
+
+          if (y !== null && Number.isFinite(y)) {
+            b.sumY += y;
+            b.sumX += x;
+            b.count += 1;
           }
+          if (projY !== null && Number.isFinite(projY)) {
+            b.sumProjY += projY;
+            b.sumProjX += x;
+            b.projCount += 1;
+          }
+        }
+
+        // Emit one row per τ that has data.
+        for (const [tau, b] of Array.from(buckets.entries()).sort((a, c) => a[0] - c[0])) {
+          const baseRate = (b.sumX > 0 && b.count > 0) ? (b.sumY / b.sumX) : null;
+          const projRate = (b.sumProjX > 0 && b.projCount > 0) ? (b.sumProjY / b.sumProjX) : null;
+          const baseRateClipped = (B && tau > tauFutureMax) ? null : baseRate;
 
           const row = {
             analysis_type: 'cohort_maturity',
             scenario_id: scenarioId,
             subject_id: subjectId,
-            as_at_date: f.asAt,
-            // Observed totals (as of that retrieval).
-            x: f.x,
-            y: f.y,
-            a: f.a,
-            // Progress curve fields:
-            x_star: xStar,
-            y_progress: yProgress,
-            rate_observed: rateObserved,
-            rate: rateProgress,
-            // Phase for chart styling:
-            cohort_phase: phase,
-            anchor_from: anchorFrom,
-            anchor_to: anchorTo,
+            tau_days: tau,
+            boundary_date: B,
+            window_from: anchorFromIso,
+            window_to: anchorToIso,
+            x_covered: b.sumX > 0 ? b.sumX : null,
+            y_base: b.count > 0 ? b.sumY : null,
+            y_projected: b.projCount > 0 ? b.sumProjY : null,
+            rate: (baseRateClipped !== null && Number.isFinite(baseRateClipped)) ? Math.max(0, Math.min(1, baseRateClipped)) : null,
+            projected_rate: (projRate !== null && Number.isFinite(projRate)) ? Math.max(0, Math.min(1, projRate)) : null,
+            cohorts_covered_base: b.count,
+            cohorts_covered_projected: b.projCount,
+            tau_solid_max: tauSolidMax,
+            tau_future_max: tauFutureMax,
             t95_days: latency.t95Days,
             path_t95_days: latency.pathT95Days,
           } as Record<string, any>;
 
-          const k = `${scenarioId}||${subjectId}||${f.asAt}`;
+          const k = `${scenarioId}||${subjectId}||tau:${tau}`;
           dataByKey.set(k, row);
         }
       }
@@ -587,7 +615,7 @@ export class GraphComputeClient {
           const ua = String(a.subject_id || '');
           const ub = String(b.subject_id || '');
           if (ua !== ub) return ua.localeCompare(ub);
-          return String(a.as_at_date || '').localeCompare(String(b.as_at_date || ''));
+          return Number(a.tau_days ?? 0) - Number(b.tau_days ?? 0);
         });
 
       if (data.length === 0) {
@@ -666,14 +694,16 @@ export class GraphComputeClient {
         },
         semantics: {
           dimensions: [
-            { id: 'as_at_date', name: 'As-at date', type: 'time', role: 'primary' },
+            { id: 'tau_days', name: 'Age (days)', type: 'number', role: 'primary' },
             { id: 'scenario_id', name: 'Scenario', type: 'scenario', role: 'secondary' },
             { id: 'subject_id', name: 'Subject', type: 'categorical', role: 'filter' },
           ],
           metrics: [
             { id: 'rate', name: 'Conversion rate', type: 'ratio', format: 'percent', role: 'primary' },
-            { id: 'x', name: 'Cohort size', type: 'count', format: 'number', role: 'secondary' },
-            { id: 'y', name: 'Conversions', type: 'count', format: 'number', role: 'secondary' },
+            { id: 'projected_rate', name: 'Projected conversion rate', type: 'ratio', format: 'percent', role: 'secondary' },
+            { id: 'x_covered', name: 'Cohort size (at this age)', type: 'count', format: 'number', role: 'secondary' },
+            { id: 'y_base', name: 'Evidenced conversions', type: 'count', format: 'number', role: 'secondary' },
+            { id: 'y_projected', name: 'Projected conversions', type: 'count', format: 'number', role: 'secondary' },
           ],
           chart: {
             recommended: 'cohort_maturity',

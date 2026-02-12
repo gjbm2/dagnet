@@ -55,6 +55,7 @@ export interface FEModelParams {
 export function compareModelFits(
   feModels: FEModelParams[],
   beResults: RecomputeResult[] | null,
+  feEvidenceByEdge?: Map<string, Array<{ date: string; k: number; n: number; median_lag_days: number | null; mean_lag_days: number | null }>>,
 ): void {
   if (!FORECASTING_PARALLEL_RUN) return;
   if (!beResults) return;
@@ -67,6 +68,7 @@ export function compareModelFits(
     delta: number;
     tol: number;
   }> = [];
+  const driftEdges = new Set<string>(); // all edges with any drift (warn or error)
 
   for (const be of beResults) {
     if (!be.success || be.mu === undefined || be.sigma === undefined) continue;
@@ -150,10 +152,129 @@ export function compareModelFits(
             delta: absDelta,
             tol: check.tol,
           });
+          driftEdges.add(fe.edgeUuid);
         } else {
           sessionLogService.warning('graph', 'FORECASTING_PARITY_DRIFT', msg, undefined, ctx);
+          driftEdges.add(fe.edgeUuid);
         }
       }
+    }
+  }
+
+  // ── Diagnostic evidence diff (per-anchor-day) ──────────────────────────
+  // When a mismatch is detected and both FE and BE evidence are available,
+  // emit a structured per-day diff to session log so we can see exactly
+  // which anchor days have different data.
+  if (driftEdges.size > 0 && feEvidenceByEdge) {
+    for (const edgeUuid of driftEdges) {
+      const feEvidence = feEvidenceByEdge.get(edgeUuid);
+      const beResult = beResults.find((r: any) => r.subject_id === edgeUuid);
+      const beEvidence: Array<Record<string, any>> | undefined = (beResult as any)?.diagnostic_evidence;
+
+      if (!feEvidence || !beEvidence) {
+        sessionLogService.info(
+          'graph', 'FORECASTING_PARITY_EVIDENCE_MISSING',
+          `[FORECASTING_PARITY] Evidence diff unavailable for edge ${edgeUuid}: ` +
+          `feEvidence=${feEvidence ? feEvidence.length + ' rows' : 'null'}, ` +
+          `beEvidence=${beEvidence ? beEvidence.length + ' rows' : 'null'}`,
+        );
+        continue;
+      }
+
+      // Build lookup maps by ISO date.
+      const normaliseDate = (d: string): string => {
+        // Accept UK (d-MMM-yy) or ISO (YYYY-MM-DD).
+        const p = String(d ?? '').split('T')[0];
+        if (/^\d{4}-\d{2}-\d{2}$/.test(p)) return p;
+        // Attempt UK parse — format: d-Mon-yy
+        const m = p.match(/^(\d{1,2})-([A-Za-z]{3})-(\d{2})$/);
+        if (m) {
+          const months: Record<string, string> = {
+            jan: '01', feb: '02', mar: '03', apr: '04', may: '05', jun: '06',
+            jul: '07', aug: '08', sep: '09', oct: '10', nov: '11', dec: '12',
+          };
+          const mm = months[m[2].toLowerCase()];
+          if (mm) return `20${m[3]}-${mm}-${m[1].padStart(2, '0')}`;
+        }
+        return p; // best effort
+      };
+
+      const feByDate = new Map<string, { k: number; n: number; median: number | null; mean: number | null }>();
+      for (const row of feEvidence) {
+        const iso = normaliseDate(row.date);
+        feByDate.set(iso, { k: row.k, n: row.n, median: row.median_lag_days, mean: row.mean_lag_days });
+      }
+
+      const beByDate = new Map<string, { y: number; x: number; median: number | null; mean: number | null; retrieved_at: string | null }>();
+      for (const row of beEvidence) {
+        const iso = normaliseDate(row.anchor_day);
+        beByDate.set(iso, {
+          y: row.y ?? 0,
+          x: row.x ?? 0,
+          median: row.median_lag_days ?? null,
+          mean: row.mean_lag_days ?? null,
+          retrieved_at: row.retrieved_at ?? null,
+        });
+      }
+
+      const allDates = Array.from(new Set([...feByDate.keys(), ...beByDate.keys()])).sort();
+      const EPS = 1e-6;
+      const diffRows: string[] = [];
+      let matchCount = 0;
+      let divergeCount = 0;
+      let feOnlyCount = 0;
+      let beOnlyCount = 0;
+
+      for (const d of allDates) {
+        const fe = feByDate.get(d);
+        const be = beByDate.get(d);
+        if (fe && be) {
+          const kMatch = fe.k === be.y;
+          const medMatch = (fe.median === null && be.median === null) ||
+            (fe.median !== null && be.median !== null && Math.abs(fe.median - be.median) < EPS);
+          const meanMatch = (fe.mean === null && be.mean === null) ||
+            (fe.mean !== null && be.mean !== null && Math.abs(fe.mean - be.mean) < EPS);
+          if (kMatch && medMatch && meanMatch) {
+            matchCount++;
+          } else {
+            divergeCount++;
+            diffRows.push(
+              `  ${d}: FE(k=${fe.k}, med=${fe.median?.toFixed(2) ?? 'null'}, mean=${fe.mean?.toFixed(2) ?? 'null'}) vs ` +
+              `BE(y=${be.y}, med=${be.median?.toFixed(2) ?? 'null'}, mean=${be.mean?.toFixed(2) ?? 'null'}) — DIVERGE` +
+              (be.retrieved_at ? ` [retrieved_at=${be.retrieved_at}]` : '')
+            );
+          }
+        } else if (fe && !be) {
+          feOnlyCount++;
+          diffRows.push(
+            `  ${d}: FE(k=${fe.k}, med=${fe.median?.toFixed(2) ?? 'null'}, mean=${fe.mean?.toFixed(2) ?? 'null'}) vs BE=MISSING — FE_ONLY`
+          );
+        } else if (!fe && be) {
+          beOnlyCount++;
+          diffRows.push(
+            `  ${d}: FE=MISSING vs BE(y=${be.y}, med=${be.median?.toFixed(2) ?? 'null'}, mean=${be.mean?.toFixed(2) ?? 'null'}) — BE_ONLY`
+          );
+        }
+      }
+
+      const summary = `Total: ${allDates.length} dates, ${matchCount} match, ${divergeCount} diverge, ${feOnlyCount} FE-only, ${beOnlyCount} BE-only`;
+      const diffText = `[FORECASTING_PARITY] Evidence diff for edge ${edgeUuid}:\n` +
+        diffRows.join('\n') + '\n  ' + summary;
+
+      sessionLogService.error(
+        'graph', 'FORECASTING_PARITY_EVIDENCE_DIFF',
+        diffText,
+        undefined,
+        {
+          edgeUuid,
+          totalDates: allDates.length,
+          matchCount,
+          divergeCount,
+          feOnlyCount,
+          beOnlyCount,
+          diffRows,
+        },
+      );
     }
   }
 

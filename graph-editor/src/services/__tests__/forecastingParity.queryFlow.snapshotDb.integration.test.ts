@@ -245,8 +245,10 @@ describeDeps('Forecasting parity — query flow + snapshot DB (integration)', ()
   });
 
   beforeEach(async () => {
-    // Clean snapshot rows for this test run.
-    await deleteTestSnapshots(SNAPSHOT_PREFIX);
+    // Snapshot DB is shared across local runs. The BE reads by core_hash (not param_id),
+    // so stale rows from previous local runs can leak into evidence selection unless we
+    // clear the whole pytest-parity namespace.
+    await deleteTestSnapshots('pytest-parity-');
 
     // Register the channel context so implicit-uncontexted MECE resolution is allowed.
     // (MECE logic is conservatively disabled when the context definition is unavailable.)
@@ -595,7 +597,6 @@ describeDeps('Forecasting parity — query flow + snapshot DB (integration)', ()
     const SEED_REPO = `pytest-parity-seed-${Date.now()}`;
     const SEED_BRANCH = 'main';
     const QUERY_BRANCH = 'feature-x';
-
     // Seed under "main".
     await appendSnapshots({
       param_id: `${SEED_REPO}-${SEED_BRANCH}-${PARAM_ID}`,
@@ -818,6 +819,22 @@ describeDeps('Forecasting parity — query flow + snapshot DB (integration)', ()
 
     // The thing you see in prod.
     expect(parityErrors).toHaveLength(0);
+
+    // Tight drift assertion (controlled fixture): FE and BE should match essentially exactly.
+    // This is intentionally stricter than the runtime parity thresholds, so if we ever see
+    // a tiny mismatch here we treat it as a real drift signal to investigate.
+    const feLat = (currentGraph as any)?.edges?.[0]?.p?.latency;
+    const beSubj = seen.responseBody?.subjects?.[0];
+    expect(feLat).toBeTruthy();
+    expect(beSubj).toBeTruthy();
+    expect(typeof feLat.mu).toBe('number');
+    expect(typeof feLat.sigma).toBe('number');
+    expect(typeof beSubj.mu).toBe('number');
+    expect(typeof beSubj.sigma).toBe('number');
+
+    const EPS = 0.000001;
+    expect(Math.abs(feLat.mu - beSubj.mu)).toBeLessThan(EPS);
+    expect(Math.abs(feLat.sigma - beSubj.sigma)).toBeLessThan(EPS);
 
     errorSpy.mockRestore();
   });

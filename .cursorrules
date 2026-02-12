@@ -1,5 +1,19 @@
 # DagNet Development Guidelines for AI Assistants
 
+## Instant-Action Triggers (DO IMMEDIATELY — NO THINKING, NO SEARCHING)
+
+These are **non-negotiable reflexes**. When the user's message matches a trigger, execute the action **as your very first tool call** before doing anything else. Do not search for files, do not reason about the problem, do not read code. Just run the command.
+
+| User says (any variation) | Action |
+|---|---|
+| **"see mark X"**, "inspect mark X", "check mark X", "review mark X", "look at mark X", or **any message containing "mark 'X'"** | `scripts/extract-mark-logs.sh "X"` — then analyse the output. **NEVER** search for log files manually. **NEVER** try to reason without the logs. |
+| "run tests" (without specific files) | Run only tests related to files you changed — use file paths, not patterns |
+| "dry run" / "run the script" | Requires `required_permissions: ["all"]` — the sandbox hides `node_modules` and env files |
+
+**The mark trigger is the most commonly violated.** If the user mentions a mark name, your first action is `scripts/extract-mark-logs.sh`. Period.
+
+---
+
 ## Language and Formatting Standards
 
 ### UK English
@@ -614,12 +628,35 @@ Both streams support **MARK** boundaries:
 
 ### How the agent should analyse logs
 
-The usual workflow is:
+**CRITICAL (see also: Instant-Action Triggers at top of file)**: When the user mentions a mark — **any phrasing**: "see mark X", "inspect mark X", "check mark X", "review mark X", "look at mark X", or just a message containing "mark 'X'" — run the extraction script **immediately as your first tool call**. Do not search for files. Do not try to reason without the logs. Do not use Glob/Grep on the debug directory. Just run the script.
 
-1. **Find the latest mark** (in each file) and record its line number.
-2. **Tail/slice from that line onwards** and analyse only the relevant window.
+**Primary tool** — `scripts/extract-mark-logs.sh`:
 
-Example commands (logs only — this does NOT apply to test/build output):
+```bash
+# Extract the LAST mark matching the label (substring, case-insensitive)
+scripts/extract-mark-logs.sh "bug-20"
+
+# Flags
+scripts/extract-mark-logs.sh "bug-20" --all            # every matching mark, not just the last
+scripts/extract-mark-logs.sh "bug-20" --console-only    # skip session stream
+scripts/extract-mark-logs.sh "bug-20" --session-only    # skip console stream
+```
+
+The script:
+1. Searches both `debug/tmp.browser-console.jsonl` and `debug/tmp.session-log.jsonl`.
+2. Extracts the window from the matched mark to the next mark (or EOF).
+3. Lists matching graph snapshots from `debug/graph-snapshots/`.
+
+**Trimming** — the log files grow unboundedly; trim them proactively when they exceed ~20K lines, or when the user asks:
+
+```bash
+scripts/extract-mark-logs.sh --trim          # keep last 20K lines (default)
+scripts/extract-mark-logs.sh --trim 10000    # keep last 10K lines
+```
+
+Trim snaps the cut point to the nearest mark boundary so partial windows aren't left behind.
+
+**Manual fallback** (if the script is unavailable):
 
 ```bash
 # Find the latest mark line number in the console stream

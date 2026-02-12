@@ -52,6 +52,9 @@ class FitResult:
     settings_signature: Optional[str] = None
     evidence_anchor_days: int = 0  # how many distinct anchor days contributed
 
+    # Diagnostic: per-anchor-day evidence rows (only populated when diagnostic=True)
+    diagnostic_evidence: Optional[List[Dict[str, Any]]] = None
+
 
 # ─────────────────────────────────────────────────────────────
 # Evidence selection: latest retrieved_at per anchor_day
@@ -386,6 +389,7 @@ def fit_model_from_evidence(
     settings_signature: Optional[str] = None,
     reference_date: Optional[date] = None,
     reference_datetime: Optional[datetime] = None,
+    diagnostic: bool = False,
 ) -> FitResult:
     """
     Fit a lognormal lag model from snapshot evidence rows.
@@ -406,6 +410,20 @@ def fit_model_from_evidence(
     """
     # Step 1: Select evidence (latest per anchor_day, aggregate across slices).
     evidence = select_latest_evidence(rows)
+
+    # Step 1b: Left-censor to most recent N days (if configured).
+    censor_n = int(settings.fit_left_censor_days) if settings.fit_left_censor_days > 0 else 0
+    if censor_n > 0 and evidence:
+        ref = reference_date
+        if ref is None and reference_datetime is not None:
+            ref = reference_datetime.date()
+        if ref is None:
+            valid = [_parse_date(e.anchor_day) for e in evidence]
+            valid = [d for d in valid if d is not None]
+            ref = max(valid) if valid else date.today()
+        from datetime import timedelta
+        min_anchor = ref - timedelta(days=censor_n - 1)
+        evidence = [e for e in evidence if (_parse_date(e.anchor_day) or min_anchor) >= min_anchor]
 
     if not evidence:
         return FitResult(
@@ -506,6 +524,21 @@ def fit_model_from_evidence(
             else:
                 t95_days = 0.0
 
+    diag_rows = None
+    if diagnostic and evidence:
+        diag_rows = [
+            {
+                "anchor_day": e.anchor_day,
+                "x": e.x,
+                "y": e.y,
+                "median_lag_days": e.median_lag_days,
+                "mean_lag_days": e.mean_lag_days,
+                "onset_delta_days": e.onset_delta_days,
+                "retrieved_at": e.retrieved_at,
+            }
+            for e in evidence
+        ]
+
     return FitResult(
         mu=mu,
         sigma=sigma,
@@ -518,4 +551,5 @@ def fit_model_from_evidence(
         training_window=training_window,
         settings_signature=settings_signature,
         evidence_anchor_days=len(evidence),
+        diagnostic_evidence=diag_rows,
     )

@@ -1024,6 +1024,13 @@ export default function AnalyticsPanel({ tabId, hideHeader = false }: AnalyticsP
                 <AnalysisChartContainer
                   result={results.result}
                   visibleScenarioIds={orderedVisibleScenarios}
+                  scenarioVisibilityModes={(() => {
+                    const m: Record<string, 'f+e' | 'f' | 'e'> = {};
+                    for (const id of orderedVisibleScenarios) {
+                      m[id] = tabId ? operations.getScenarioVisibilityMode(tabId, id) : 'f+e';
+                    }
+                    return m;
+                  })()}
                   // Panel view is height constrained; keep charts compact to avoid dead space.
                   height={results.result?.semantics?.chart?.recommended === 'bridge' ? 280 : 420}
                   compactControls={true}

@@ -269,6 +269,7 @@ def append_snapshots(
                 row.get('anchor_median_lag_days'),
                 row.get('anchor_mean_lag_days'),
                 row.get('onset_delta_days'),
+                json.dumps(inputs_json),
             )
             for row in rows
         ]
@@ -283,13 +284,15 @@ def append_snapshots(
                 A, X, Y,
                 median_lag_days, mean_lag_days,
                 anchor_median_lag_days, anchor_mean_lag_days,
-                onset_delta_days
+                onset_delta_days,
+                write_inputs_json
             ) VALUES %s
             ON CONFLICT (param_id, core_hash, slice_key, anchor_day, retrieved_at)
             DO NOTHING
             RETURNING 1
             """,
             values,
+            template="(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb)",
             fetch=True
         )
         
@@ -358,10 +361,51 @@ def health_check() -> Dict[str, Any]:
 
 def _slice_key_match_sql_expr() -> str:
     """
-    SQL expression that normalises snapshots.slice_key for matching:
-    strips arguments from window(...) / cohort(...).
+    SQL expression that canonicalises snapshots.slice_key for matching.
+
+    Semantics:
+    - strip arguments from window(...) / cohort(...)
+    - treat clause order as irrelevant for constraint DSL by sorting non-mode clauses,
+      then appending the mode clause(s) (window()/cohort()) last
+
+    NOTE:
+    This is intentionally a pure-SQL canonicaliser so we can match legacy rows where
+    equivalent slice_key strings were written with different clause orders.
     """
-    return r"regexp_replace(slice_key, '(window|cohort)\([^)]*\)', '\1()', 'g')"
+    return r"""
+      COALESCE((
+        SELECT array_to_string(
+          COALESCE(
+            (
+              SELECT array_agg(seg ORDER BY seg)
+              FROM unnest(
+                string_to_array(
+                  regexp_replace(slice_key, '(window|cohort)\([^)]*\)', '\1()', 'g'),
+                  '.'
+                )
+              ) seg
+              WHERE seg <> '' AND seg NOT IN ('window()', 'cohort()')
+            ),
+            ARRAY[]::text[]
+          )
+          ||
+          COALESCE(
+            (
+              SELECT array_agg(DISTINCT seg ORDER BY seg)
+              FROM unnest(
+                string_to_array(
+                  regexp_replace(slice_key, '(window|cohort)\([^)]*\)', '\1()', 'g'),
+                  '.'
+                )
+              ) seg
+              WHERE seg IN ('window()', 'cohort()')
+            ),
+            ARRAY[]::text[]
+          ),
+          '.'
+        )
+      ), '')
+    """
 
 def _partition_key_match_sql_expr() -> str:
     """

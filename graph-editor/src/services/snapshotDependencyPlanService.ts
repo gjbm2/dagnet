@@ -26,6 +26,7 @@ import { computeShortCoreHash } from './coreHashService';
 import { parseDSL } from '../lib/queryDSL';
 import { parseConstraints } from '../lib/queryDSL';
 import { resolveRelativeDate, parseUKDate, formatDateUK } from '../lib/dateFormat';
+import { normaliseSliceKeyForMatching as normaliseSliceKeyForMatchingShared } from '../lib/sliceKeyNormalisation';
 import { extractSliceDimensions } from './sliceIsolation';
 import { contextRegistry } from './contextRegistry';
 import { verifyAllCombinationsExist } from './dimensionalReductionService';
@@ -187,12 +188,7 @@ function isoDateFromIsoDatetimeUTC(dt: string): string | null {
 }
 
 export function normaliseSliceKeyForMatching(sliceKey: string): string {
-  const s = String(sliceKey || '').trim();
-  if (!s) return '';
-  // Strip args from window()/cohort() but preserve context/case dimensions.
-  return s
-    .replace(/(^|\.)((?:window|cohort))\([^)]*\)/g, (_m, p1, fn) => `${p1}${fn}()`)
-    .replace(/^\./, '');
+  return normaliseSliceKeyForMatchingShared(sliceKey);
 }
 
 function normaliseSummarySliceKeyToFamily(sliceKey: string): string {
