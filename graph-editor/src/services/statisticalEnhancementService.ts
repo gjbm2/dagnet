@@ -2560,6 +2560,24 @@ export function enhanceGraphLatencies(
           median_lag_days: c.median_lag_days ?? null,
           mean_lag_days: c.mean_lag_days ?? null,
         }));
+
+        // Parity bug fix (12-Feb-26):
+        // Stash the FE t95 that parity should compare against BE `t95_days`.
+        //
+        // Backend semantics:
+        // - if a horizon exists on the graph edge, BE uses it as `t95_constraint` and reports `t95_days` accordingly
+        // - otherwise BE reports the fitted (derived) t95
+        //
+        // Frontend semantics:
+        // - ordinary fetches intentionally do not write horizons onto `edge.p.latency.t95`
+        //   (anti-floatiness), so parity must NOT default missing horizons to 0.
+        //
+        // Therefore parity should use: horizon t95 (when present) else derived t95.
+        const parityT95Days =
+          (typeof edgeT95 === 'number' && Number.isFinite(edgeT95) && edgeT95 > 0)
+            ? edgeT95
+            : latencyStats.t95;
+        (edge.p.latency as any).__parityComputedT95Days = parityT95Days;
       }
 
       // Capture forecast/evidence from edge to pass through to UpdateManager.

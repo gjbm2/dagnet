@@ -161,12 +161,22 @@ export async function runParityComparison(args: {
     if (!paramId) continue;
     const edgeUuid = edge.uuid || edge.id || '';
 
+    // Parity bug fix (12-Feb-26):
+    // Prefer the topo-pass computed t95 (stashed transiently) over the persisted horizon
+    // field. Ordinary fetches deliberately do not write horizons to edge.p.latency.t95.
+    const parityComputedT95 =
+      (lat as any)?.__parityComputedT95Days;
+    const feT95 =
+      (typeof parityComputedT95 === 'number' && Number.isFinite(parityComputedT95) && parityComputedT95 > 0)
+        ? parityComputedT95
+        : (lat.t95 ?? 0);
+
     // FE model params (already on the graph from the topo pass).
     feModels.push({
       edgeUuid,
       mu: lat.mu,
       sigma: lat.sigma,
-      t95: lat.t95 ?? 0,
+      t95: feT95,
       onset_delta_days: lat.onset_delta_days ?? 0,
       completeness: lat.completeness ?? 0,
     });
