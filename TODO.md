@@ -1,5 +1,7 @@
 - **[12-Feb-26] Forecasting parity: t95 persistence investigation**: see `docs/current/project-db/forecasting-parity-t95-persistence-investigation-12-Feb-26.md`.
 
+- **Hash mapping table location + BE contract**: We built the hash-mapping table in the wrong place; it should live in the **git file store**. The FE should send the BE a **list of hash mappings** (no context) only when necessary. The BE should be “dumb” (treat mappings as inputs, not derive/own them). Allwos historicity of mappings & inspectable within code, which is what we need.
+
 # TODO
 
 - **Upstream selecting properties don't propagate to downstream fetches** (11-Feb-26)
