@@ -1,8 +1,10 @@
-- **[12-Feb-26] Forecasting parity: t95 persistence investigation**: see `docs/current/project-db/forecasting-parity-t95-persistence-investigation-12-Feb-26.md`.
 
 - **Hash mapping table location + BE contract**: We built the hash-mapping table in the wrong place; it should live in the **git file store**. The FE should send the BE a **list of hash mappings** (no context) only when necessary. The BE should be “dumb” (treat mappings as inputs, not derive/own them). Allwos historicity of mappings & inspectable within code, which is what we need.
 
 # TODO
+
+- Do we need a 'live()' view type (alongside window() and cohort() which shows ACTUAL arrives in period, regardless of latency?)
+
 
 - **Upstream selecting properties don't propagate to downstream fetches** (11-Feb-26)
   - Each edge is fetched independently via `from(source).to(target)` with context filters. If the start node's event has a selecting property (e.g. `path = /save-on-energy` on the landing page), that filter is NOT applied to downstream edge queries. This means downstream edges pick up users from other funnels who share the same context properties (e.g. UTM params) but entered via a different route.
@@ -113,59 +115,6 @@
 - Auto-retry if fetch fail on automated chron
 
 - Reason through possiblity of storing data in a dbs (leaving slice headers within param files) -- see docs/current/project-db/initial-thinking.md
-
-- ## CRITICAL — Signature gating disabled for release safety (20-Jan-26)
-+
-### What happened / why this is here
-- **Business-critical workflow broken**: After a Retrieve All (which writes contexted MECE slices) the WindowSelector planner was frequently reporting `Outcome: not_covered` and `needs_fetch missing=Xd` **even when cache coverage was FULL**.
-  - Session logs repeatedly showed the contradiction:
-    - `IMPLICIT_UNCONTEXTED: using MECE partition (key=channel, complete=true)`
-    - `SLICES: ✓ 1-Nov-25 → 15-Dec-25 (FULL)` (for the MECE component slices)
-    - but planner items still came out as `NEEDS_FETCH (COVERED)` with `missingDates=Xd`.
-- The root cause class is **signature enforcement drift**:
-  - We introduced/strengthened `query_signature` “signature isolation” so stale cache entries don’t satisfy a changed query.
-  - In practice, the planner began **rejecting MECE cache generations** due to mismatched signature computation and/or differing context-definition resolution.
-  - This is subtle because:
-    - “Coverage” logging in `COVERAGE_DETAIL` is **not signature-aware** (it inspects raw file values), while the FetchPlan builder uses signature-filtered values for actual planning.
-    - Different parameters can diverge (`1 covered, 9 need fetch`) if only some happen to match the planner’s computed signature set.
-
-### Timeline / key corrective work attempted (high-signal)
-- **Canonical target enumeration** (fixed): introduced `fetchTargetEnumerationService.ts` so all planners enumerate the same fetchable universe, including `conditional_p`, and canonical case IDs (`node.case.id`).
-- **Planner connection detection** (fixed): corrected production connection checks to look at **param-slot** connections (`edge.p.connection`, etc.), preventing “unfetchable” misclassification.
-- **Header-based FULL coverage alignment** (fixed): planner now treats FULL header coverage as zero missing days (avoids per-day sparsity false negatives).
-- **MECE aggregation correctness** (fixed): MECE coverage for cohort/window now honours aggregate header bounds across MECE slices.
-- **Signature isolation** (partially fixed, but still failing in prod):
-  - Removed sentinel-based signature filtering that rejected everything when any signatures existed.
-  - Added planner signature computation (`plannerQuerySignatureService.ts`) to match executor.
-  - Made signatures **context-value independent** (context definition affects signature, not the selected value).
-  - Added multi-candidate planner signatures for implicit-uncontexted fulfilment (MECE key candidates).
-  - Added workspace-scoped context hashing to avoid cross-workspace context confusion in IndexedDB.
-  - Despite this, production logs still show the “COVERED but needs_fetch” contradiction in real graphs (example logs around `cohort(10-Nov-25:13-Nov-25)` and `cohort(19-Nov-25:20-Nov-25)`).
-
-### Current diagnosis (where we are right now)
-- The system is in a state where **signature enforcement can incorrectly reject valid MECE cache** and thereby **block normal fetch flows** (users see fetch required; fetch behaviour becomes unpredictable).
-- It is unclear whether the remaining production mismatch is due to:
-  - legacy signatures written under older semantics (requiring a full Retrieve All to rewrite), and/or
-  - remaining signature-shape drift (e.g. `edge.query` canonicalisation, composite query normalisation), and/or
-  - subtle context definition resolution differences (workspace scoping, cache priming timing).
-
-### Release decision (explicit)
-- **We are disabling signature checking and signature writing for release** so that:
-  - cached data is used based on slice isolation + MECE + header coverage only, and
-  - fetching is never blocked by signature mismatch.
-- This is implemented via `graph-editor/src/services/signaturePolicyService.ts`:
-  - `SIGNATURE_CHECKING_ENABLED = false`
-  - `SIGNATURE_WRITING_ENABLED = false`
-
-### Follow-up work (to re-enable signatures safely)
-- Re-enable signatures only after:
-  - verifying a single canonical signature definition across planner + executor,
-  - proving MECE implicit-uncontexted fulfilment selects the correct signed generation deterministically,
-  - adding hard integration tests that reproduce the real production workflow using real graph/schema and minimal mocking,
-  - ensuring signature mismatch **never prevents fetching** (at worst triggers refetch), and
-  - adding session-log diagnostics that explicitly report signature matching counts per item (so “COVERED but filtered out” is visible).
-
-
 - **Nousmates context cleanup**: The `nousmates` context was a rush implementation and needs proper cleanup — genericise test data that references it, rename to something domain-neutral, and ensure it doesn't leak commercially identifiable information in the public repo. Affected files include test fixtures and `contexts-index.yaml` references.
 
 - Dark mode on user devices looks ugly (as only some elements are re-colouring)
@@ -306,10 +255,6 @@
       - ScenariosContext is ready with correct graph
 
 
-## Consider a live db server for data blobs (data for each slice) so we can store daily histograms, pass pointers to data etc. into analytics, charting, etc.  and reduce file size
-- i.e. re-architect app data handling so we retain slices headers etc. in git, but move actual data blobs into a dbs.
-
-
 - **Performance (not critical path; likely debug-heavy)**: In live share, route all GitHub API calls through a **same-origin proxy** (e.g. `/api/github-proxy/...`) so the browser never calls `api.github.com` directly. This should eliminate most CORS preflight (OPTIONS) overhead and materially speed up boot/refresh, but will require careful debugging across dev/prod and test stubs.
 
 - Investigate Forecast calcs (now that we think evidence is semi-stable; not at all sure forecast is behaving itself when blending...)
@@ -345,7 +290,7 @@ See `investigate/investigation-delegation-vs-registration-1-Nov-25.md`.
 
 ## Test suite hygiene (micro-test shrapnel) — 7-Jan-26
   - **Context**: `npm test` currently has **247** Vitest files; **~100** are “micro candidates” (≤2 tests or ≤120 lines). Audit reports: `debug/tmp.vitest-test-audit.tsv`, `debug/tmp.vitest-test-audit.v2.tsv`.
-  -
+  -u
   - **Goal**: Reduce test-file proliferation and “one-off shrapnel” while **preserving** regression coverage and keeping the suite navigable.
   -
   - **Non-goals**:
