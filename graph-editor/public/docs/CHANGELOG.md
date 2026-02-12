@@ -1,4 +1,11 @@
 # DagNet Release Notes
+## Version 1.5.10b
+**Released:** 12-Feb-26
+
+Fix t95 parity check
+
+---
+
 ## Version 1.5.6b
 **Released:** 12-Feb-26
 
