@@ -427,9 +427,9 @@ git commit -m "Bump version to ${NEW_VERSION}"
 print_blue "[6/7] Creating git tag v${NEW_VERSION}..."
 git tag "v${NEW_VERSION}"
 
-# Push changes and tags
+# Push changes and the new tag (only the new tag, not all local tags)
 print_blue "[7/7] Pushing ${CURRENT_BRANCH} to remote..."
-git push origin "$CURRENT_BRANCH" --tags
+git push origin "$CURRENT_BRANCH" "v${NEW_VERSION}"
 
 # Merge to main if requested
 if [[ "$MERGE_TO_MAIN" == true ]]; then
@@ -437,7 +437,7 @@ if [[ "$MERGE_TO_MAIN" == true ]]; then
   print_blue "[8/8] Pushing to main..."
   
   # Push current branch directly to main without checking it out
-  git push origin "${CURRENT_BRANCH}:main" --tags
+  git push origin "${CURRENT_BRANCH}:main"
   
   echo ""
   print_green "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
