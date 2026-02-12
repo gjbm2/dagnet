@@ -3646,13 +3646,26 @@ export class UpdateManager {
         evidenceMean: targetP.evidence?.mean,
       });
       
-      // Apply blended mean if provided and different
+      // Apply blended mean if provided and different.
+      // Fallback: when blendedMean is unavailable (no forecast/completeness yet, e.g. first
+      // fetch on a new graph), use raw evidence.mean so that p.mean reflects observed data
+      // and sibling rebalancing fires correctly.
       if (update.blendedMean !== undefined) {
         const oldMean = targetP.mean;
         if (oldMean !== update.blendedMean) {
           targetP.mean = this.roundToDP(update.blendedMean);
           // Only rebalance sibling edges for base edge p.mean updates.
           // Conditional probability rebalancing is handled via the dedicated conditional rebalance flows.
+          if (update.conditionalIndex === undefined) {
+            edgesToRebalance.push(update.edgeId);
+          }
+        }
+      } else if (update.evidence?.mean !== undefined && targetP.mean_overridden !== true) {
+        // No blend available (no forecast or completeness yet) — fall back to raw evidence
+        const oldMean = targetP.mean;
+        const evidenceMean = this.roundToDP(update.evidence.mean);
+        if (oldMean !== evidenceMean) {
+          targetP.mean = evidenceMean;
           if (update.conditionalIndex === undefined) {
             edgesToRebalance.push(update.edgeId);
           }

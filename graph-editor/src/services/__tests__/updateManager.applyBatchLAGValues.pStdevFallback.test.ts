@@ -148,6 +148,107 @@ describe('UpdateManager.applyBatchLAGValues', () => {
     const e = next.edges.find((x: any) => x.id === 'A-B');
     expect(e.p.stdev).toBe(0.1234);
   });
+
+  // --- Evidence-fallback rebalancing (no blendedMean) ---
+
+  it('falls back to evidence.mean for p.mean when blendedMean is undefined, and triggers sibling rebalancing', () => {
+    const um = new UpdateManager();
+    // A -> B (fetchable, evidence will arrive) and A -> C (abandon, complement)
+    const graph: any = {
+      nodes: [
+        { id: 'A', uuid: 'a' },
+        { id: 'B', uuid: 'b' },
+        { id: 'C', uuid: 'c', absorbing: true, outcome_type: 'failure' },
+      ],
+      edges: [
+        { id: 'A-B', uuid: 'e1', from: 'a', to: 'b', p: { mean: 0.5, latency: {} } },
+        { id: 'A-C', uuid: 'e2', from: 'a', to: 'c', p: { mean: 0.5 } },
+      ],
+      metadata: {},
+    };
+
+    // blendedMean is undefined (first fetch, no forecast)
+    const next = um.applyBatchLAGValues(graph, [
+      {
+        edgeId: 'A-B',
+        latency: { t95: 10, completeness: 0.8, path_t95: 10 },
+        blendedMean: undefined,
+        evidence: { mean: 0.6, n: 100, k: 60 },
+      },
+    ]);
+
+    const eAB = next.edges.find((x: any) => x.id === 'A-B');
+    const eAC = next.edges.find((x: any) => x.id === 'A-C');
+
+    // p.mean should fall back to evidence.mean
+    expect(eAB.p.mean).toBe(0.6);
+    // Sibling should be rebalanced: 1 - 0.6 = 0.4
+    expect(eAC.p.mean).toBe(0.4);
+  });
+
+  it('does not fall back to evidence.mean when mean_overridden is true', () => {
+    const um = new UpdateManager();
+    const graph: any = {
+      nodes: [
+        { id: 'A', uuid: 'a' },
+        { id: 'B', uuid: 'b' },
+        { id: 'C', uuid: 'c', absorbing: true, outcome_type: 'failure' },
+      ],
+      edges: [
+        { id: 'A-B', uuid: 'e1', from: 'a', to: 'b', p: { mean: 0.7, mean_overridden: true, latency: {} } },
+        { id: 'A-C', uuid: 'e2', from: 'a', to: 'c', p: { mean: 0.3 } },
+      ],
+      metadata: {},
+    };
+
+    const next = um.applyBatchLAGValues(graph, [
+      {
+        edgeId: 'A-B',
+        latency: { t95: 10, completeness: 0.8, path_t95: 10 },
+        blendedMean: undefined,
+        evidence: { mean: 0.6, n: 100, k: 60 },
+      },
+    ]);
+
+    const eAB = next.edges.find((x: any) => x.id === 'A-B');
+    const eAC = next.edges.find((x: any) => x.id === 'A-C');
+
+    // mean_overridden: p.mean stays at 0.7, no rebalancing
+    expect(eAB.p.mean).toBe(0.7);
+    expect(eAC.p.mean).toBe(0.3);
+  });
+
+  it('does not fall back when evidence.mean equals current p.mean (no-op)', () => {
+    const um = new UpdateManager();
+    const graph: any = {
+      nodes: [
+        { id: 'A', uuid: 'a' },
+        { id: 'B', uuid: 'b' },
+        { id: 'C', uuid: 'c', absorbing: true, outcome_type: 'failure' },
+      ],
+      edges: [
+        { id: 'A-B', uuid: 'e1', from: 'a', to: 'b', p: { mean: 0.6, latency: {} } },
+        { id: 'A-C', uuid: 'e2', from: 'a', to: 'c', p: { mean: 0.4 } },
+      ],
+      metadata: {},
+    };
+
+    const next = um.applyBatchLAGValues(graph, [
+      {
+        edgeId: 'A-B',
+        latency: { t95: 10, completeness: 0.8, path_t95: 10 },
+        blendedMean: undefined,
+        evidence: { mean: 0.6, n: 100, k: 60 },
+      },
+    ]);
+
+    const eAB = next.edges.find((x: any) => x.id === 'A-B');
+    const eAC = next.edges.find((x: any) => x.id === 'A-C');
+
+    // No change — evidence.mean == p.mean, no rebalancing triggered
+    expect(eAB.p.mean).toBe(0.6);
+    expect(eAC.p.mean).toBe(0.4);
+  });
 });
 
 
