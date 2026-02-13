@@ -534,6 +534,86 @@ class RepositoryOperationsService {
   }
 
   /**
+   * Create a new branch on the remote from an existing branch
+   */
+  async createBranch(
+    newBranchName: string,
+    sourceBranch: string,
+    repository: string
+  ): Promise<{ success: boolean; error?: string }> {
+    sessionLogService.info('git', 'GIT_CREATE_BRANCH', `Creating branch ${newBranchName} from ${sourceBranch}`, undefined, {
+      repository,
+      sourceBranch,
+      newBranchName
+    });
+
+    const result = await gitService.createBranch(newBranchName, sourceBranch);
+
+    if (!result.success) {
+      sessionLogService.error('git', 'GIT_CREATE_BRANCH_ERROR', `Failed to create branch: ${result.error}`, undefined, {
+        repository,
+        sourceBranch,
+        newBranchName
+      });
+      return { success: false, error: result.error };
+    }
+
+    sessionLogService.success('git', 'GIT_CREATE_BRANCH_SUCCESS', `Created branch ${newBranchName} from ${sourceBranch}`, undefined, {
+      repository,
+      sourceBranch,
+      newBranchName,
+      sha: result.data?.sha
+    });
+
+    return { success: true };
+  }
+
+  /**
+   * Merge one branch into another on the remote.
+   *
+   * Returns { success, alreadyUpToDate?, conflict?, error? }.
+   * On conflict the caller should warn the user and recommend aborting
+   * (Level 3 will add client-side conflict resolution).
+   */
+  async mergeBranch(
+    headBranch: string,
+    baseBranch: string,
+    repository: string,
+    commitMessage?: string
+  ): Promise<{ success: boolean; alreadyUpToDate?: boolean; conflict?: boolean; error?: string }> {
+    sessionLogService.info('git', 'GIT_MERGE_BRANCH', `Merging ${headBranch} → ${baseBranch}`, undefined, {
+      repository,
+      headBranch,
+      baseBranch
+    });
+
+    const result = await gitService.mergeBranch(headBranch, baseBranch, commitMessage);
+
+    if (!result.success) {
+      const isConflict = result.error === 'conflict';
+      sessionLogService[isConflict ? 'warning' : 'error'](
+        'git',
+        isConflict ? 'GIT_MERGE_CONFLICT' : 'GIT_MERGE_ERROR',
+        result.message || 'Merge failed',
+        undefined,
+        { repository, headBranch, baseBranch }
+      );
+      return { success: false, conflict: isConflict, error: result.message || result.error };
+    }
+
+    const alreadyUpToDate = result.data?.alreadyUpToDate === true;
+    sessionLogService.success('git', 'GIT_MERGE_SUCCESS',
+      alreadyUpToDate
+        ? `${baseBranch} already up to date with ${headBranch}`
+        : `Merged ${headBranch} → ${baseBranch}`,
+      undefined,
+      { repository, headBranch, baseBranch, sha: result.data?.sha }
+    );
+
+    return { success: true, alreadyUpToDate };
+  }
+
+  /**
    * Get repository status
    * - Count dirty files
    * - Check connection

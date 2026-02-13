@@ -8,6 +8,8 @@ import { usePullAll } from '../../hooks/usePullAll';
 import { useRollbackRepository } from '../../hooks/useRollbackRepository';
 import { SwitchRepositoryModal } from '../modals/SwitchRepositoryModal';
 import { SwitchBranchModal } from '../modals/SwitchBranchModal';
+import { NewBranchModal } from '../modals/NewBranchModal';
+import { MergeBranchModal } from '../modals/MergeBranchModal';
 import { RepositoryHistoryModal } from '../modals/RepositoryHistoryModal';
 // MergeConflictModal is handled by usePullAll hook
 import { CommitModal } from '../CommitModal';
@@ -41,6 +43,8 @@ export function RepositoryMenu() {
   
   const [isSwitchRepoModalOpen, setIsSwitchRepoModalOpen] = useState(false);
   const [isSwitchBranchModalOpen, setIsSwitchBranchModalOpen] = useState(false);
+  const [isNewBranchModalOpen, setIsNewBranchModalOpen] = useState(false);
+  const [isMergeBranchModalOpen, setIsMergeBranchModalOpen] = useState(false);
   const [isCommitModalOpen, setIsCommitModalOpen] = useState(false);
   
   // Pull all hook - manages everything including conflict modal
@@ -198,6 +202,24 @@ export function RepositoryMenu() {
               <div className="menubar-right-slot">⌘B</div>
             </Menubar.Item>
 
+            <Menubar.Item
+              className="menubar-item"
+              onSelect={() => setIsNewBranchModalOpen(true)}
+              disabled={isReadOnly === true}
+            >
+              New Branch...
+              {isReadOnly && <div className="menubar-right-slot" style={{ fontSize: '10px', opacity: 0.7 }}>read-only</div>}
+            </Menubar.Item>
+
+            <Menubar.Item
+              className="menubar-item"
+              onSelect={() => setIsMergeBranchModalOpen(true)}
+              disabled={isReadOnly === true}
+            >
+              Merge Branch...
+              {isReadOnly && <div className="menubar-right-slot" style={{ fontSize: '10px', opacity: 0.7 }}>read-only</div>}
+            </Menubar.Item>
+
             <Menubar.Separator className="menubar-separator" />
 
             <Menubar.Item 
@@ -273,6 +295,14 @@ export function RepositoryMenu() {
       <SwitchBranchModal
         isOpen={isSwitchBranchModalOpen}
         onClose={() => setIsSwitchBranchModalOpen(false)}
+      />
+      <NewBranchModal
+        isOpen={isNewBranchModalOpen}
+        onClose={() => setIsNewBranchModalOpen(false)}
+      />
+      <MergeBranchModal
+        isOpen={isMergeBranchModalOpen}
+        onClose={() => setIsMergeBranchModalOpen(false)}
       />
       {/* Pull all conflict modal - managed by usePullAll hook */}
       {pullAllConflictModal}

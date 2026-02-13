@@ -228,6 +228,117 @@ class GitService {
     }
   }
 
+  /**
+   * Create a new branch from an existing branch's HEAD
+   */
+  async createBranch(newBranchName: string, sourceBranch: string): Promise<GitOperationResult> {
+    try {
+      const owner = this.currentRepo?.owner || this.config.repoOwner;
+      const repo = this.currentRepo?.repo || this.currentRepo?.name || this.config.repoName;
+
+      // Get the SHA of the source branch HEAD
+      const refResponse = await this.octokit.git.getRef({
+        owner,
+        repo,
+        ref: `heads/${sourceBranch}`
+      });
+      const sourceSha = refResponse.data.object.sha;
+
+      console.log(`🔵 GitService.createBranch: Creating ${newBranchName} from ${sourceBranch} (${sourceSha.substring(0, 8)})`);
+
+      // Create the new ref
+      await this.octokit.git.createRef({
+        owner,
+        repo,
+        ref: `refs/heads/${newBranchName}`,
+        sha: sourceSha
+      });
+
+      return {
+        success: true,
+        data: { name: newBranchName, sourceBranch, sha: sourceSha },
+        message: `Created branch ${newBranchName} from ${sourceBranch}`
+      };
+    } catch (error: any) {
+      // GitHub returns 422 if the branch already exists
+      const message = error?.status === 422
+        ? `Branch '${newBranchName}' already exists`
+        : (error instanceof Error ? error.message : 'Unknown error');
+      return {
+        success: false,
+        error: message,
+        message: `Failed to create branch ${newBranchName}`
+      };
+    }
+  }
+
+  /**
+   * Merge one branch into another using GitHub's merge API.
+   *
+   * On success returns { success: true, data: { sha, message } }.
+   * On conflict returns { success: false, error: 'conflict', message: '...' }.
+   * On other errors returns { success: false, error: '...', message: '...' }.
+   */
+  async mergeBranch(
+    headBranch: string,
+    baseBranch: string,
+    commitMessage?: string
+  ): Promise<GitOperationResult> {
+    try {
+      const owner = this.currentRepo?.owner || this.config.repoOwner;
+      const repo = this.currentRepo?.repo || this.currentRepo?.name || this.config.repoName;
+
+      console.log(`🔵 GitService.mergeBranch: Merging ${headBranch} → ${baseBranch} in ${owner}/${repo}`);
+
+      const response = await this.octokit.repos.merge({
+        owner,
+        repo,
+        base: baseBranch,
+        head: headBranch,
+        commit_message: commitMessage || `Merge ${headBranch} into ${baseBranch}`
+      });
+
+      // 201 = merge commit created, 204 = already up to date (no-op)
+      const sha = response.data?.sha;
+      // Octokit currently types this endpoint as returning status 201 only, but the API
+      // can also return 204 (already up to date). Widen to number to keep the check valid.
+      const status: number = response.status;
+      const isNoOp = status === 204;
+
+      console.log(`🔵 GitService.mergeBranch: ${isNoOp ? 'Already up to date' : `Merge commit ${sha?.substring(0, 8)}`}`);
+
+      return {
+        success: true,
+        data: { sha, alreadyUpToDate: isNoOp },
+        message: isNoOp
+          ? `${baseBranch} is already up to date with ${headBranch}`
+          : `Merged ${headBranch} into ${baseBranch}`
+      };
+    } catch (error: any) {
+      // 409 = merge conflict
+      if (error?.status === 409) {
+        return {
+          success: false,
+          error: 'conflict',
+          message: `Merge conflict: ${headBranch} cannot be cleanly merged into ${baseBranch}`
+        };
+      }
+      // 404 = branch not found
+      if (error?.status === 404) {
+        return {
+          success: false,
+          error: 'not_found',
+          message: `Branch not found — check that both ${headBranch} and ${baseBranch} exist`
+        };
+      }
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Unknown error',
+        message: `Failed to merge ${headBranch} into ${baseBranch}`
+      };
+    }
+  }
+
   // Get files in a directory
   async getDirectoryContents(path: string, branch: string = this.config.branch, repoOwner?: string, repoName?: string, token?: string): Promise<GitOperationResult> {
     try {

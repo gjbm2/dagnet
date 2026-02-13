@@ -81,8 +81,6 @@ export function FunnelChartPreview(props: {
     return visibleScenarioIds.filter(id => known.has(id));
   }, [result.dimension_values, visibleScenarioIds]);
 
-  if (scenarioIds.length === 0) return null;
-
   const computedChartHeight = useMemo(() => {
     if (!fillHeight) return height;
     // Fill mode: chart height adapts to container size minus controls row.
@@ -101,6 +99,8 @@ export function FunnelChartPreview(props: {
     const per = Math.floor((available - gaps - n * approxHeaderAndPadding) / n);
     return Math.max(180, Math.min(360, per || 240));
   }, [fillHeight, layoutMode, computedChartHeight, containerHeight, controlsHeight, scenarioIds.length]);
+
+  if (scenarioIds.length === 0) return null;
 
   return (
     <div

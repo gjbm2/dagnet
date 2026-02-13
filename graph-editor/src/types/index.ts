@@ -355,6 +355,7 @@ export interface NavigatorOperations {
   addLocalItem: (item: RepositoryItem) => void;
   removeLocalItem: (fileId: string) => void;
   refreshItems: () => Promise<void>;
+  refreshBranches: () => Promise<string[]>;
   reloadCredentials: () => Promise<void>;
   forceFullReload: () => Promise<void>;
   

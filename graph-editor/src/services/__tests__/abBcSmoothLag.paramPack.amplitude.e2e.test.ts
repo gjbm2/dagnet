@@ -311,25 +311,60 @@ async function waitForAnySnapshotRows(args: {
 
 async function deleteTestSnapshots(paramIdPrefix: string): Promise<number> {
   const baseUrl = process.env.DAGNET_PYTHON_API_URL || process.env.VITE_PYTHON_API_URL || 'http://localhost:9000';
+  const url = `${baseUrl}/api/snapshots/delete-test`;
 
-  const response = await undiciFetch(`${baseUrl}/api/snapshots/delete-test`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ param_id_prefix: paramIdPrefix }),
-  });
+  // Cleanup helper only. In practice the Python API can occasionally drop the connection
+  // during test teardown (ECONNRESET). Retry a few times to avoid flaking the suite.
+  const maxAttempts = 3;
+  let lastErr: unknown = undefined;
 
-  const raw = await response.text();
-  if (!response.ok) {
-    throw new Error(`[Snapshot Delete] HTTP ${response.status}: ${raw}`);
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 2000);
+
+      const response = await undiciFetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ param_id_prefix: paramIdPrefix }),
+        signal: controller.signal,
+      });
+
+      clearTimeout(timeout);
+
+      const raw = await response.text();
+      if (!response.ok) {
+        throw new Error(`[Snapshot Delete] HTTP ${response.status}: ${raw}`);
+      }
+
+      let body: any;
+      try {
+        body = JSON.parse(raw);
+      } catch {
+        throw new Error(`[Snapshot Delete] Non-JSON response (HTTP ${response.status}): ${raw}`);
+      }
+      return typeof body?.deleted === 'number' ? body.deleted : 0;
+    } catch (e: any) {
+      lastErr = e;
+      const code = e?.cause?.code ?? e?.code;
+      const isTransient =
+        code === 'ECONNRESET' ||
+        code === 'ECONNREFUSED' ||
+        code === 'ETIMEDOUT' ||
+        e?.name === 'AbortError';
+
+      if (attempt < maxAttempts && isTransient) {
+        await new Promise(r => setTimeout(r, 100 * attempt));
+        continue;
+      }
+
+      const detail = e instanceof Error ? e.message : String(e);
+      throw new Error(`[Snapshot Delete] Failed after ${attempt}/${maxAttempts} attempts to reach ${url}: ${detail}`);
+    }
   }
 
-  let body: any;
-  try {
-    body = JSON.parse(raw);
-  } catch {
-    throw new Error(`[Snapshot Delete] Non-JSON response (HTTP ${response.status}): ${raw}`);
-  }
-  return typeof body?.deleted === 'number' ? body.deleted : 0;
+  const detail = lastErr instanceof Error ? lastErr.message : String(lastErr);
+  throw new Error(`[Snapshot Delete] Failed after ${maxAttempts} attempts to reach ${url}: ${detail}`);
 }
 
 function makeTestParamId(baseName: string): string {

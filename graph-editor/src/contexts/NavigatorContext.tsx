@@ -839,6 +839,12 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
     addLocalItem,
     removeLocalItem,
     refreshItems,
+    refreshBranches: async () => {
+      if (!state.selectedRepo) return [];
+      const branches = await fetchBranches(state.selectedRepo);
+      setState(prev => ({ ...prev, availableBranches: branches }));
+      return branches;
+    },
     // Allow external callers (e.g., credentials editor) to reload creds and refresh
     reloadCredentials: async () => {
       console.log('🔄 NavigatorContext: Reloading credentials and workspace...');
