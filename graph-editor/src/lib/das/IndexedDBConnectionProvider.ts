@@ -1,5 +1,6 @@
 import type { ConnectionDefinition, ConnectionFile } from './types';
 import type { ConnectionProvider } from './ConnectionProvider';
+import { resolveConnection, resolveAllConnections } from './resolveConnection';
 import { db } from '@/db/appDatabase';
 
 export class IndexedDBConnectionProvider implements ConnectionProvider {
@@ -37,22 +38,19 @@ export class IndexedDBConnectionProvider implements ConnectionProvider {
       throw new Error('No connections file is available. Use File > Connections to create one.');
     }
 
-    const connection = file.connections.find((c) => c.name === name);
-    if (!connection) {
-      const availableNames = file.connections.map((c) => c.name).join(', ') || 'none';
-      throw new Error(`Connection "${name}" not found. Available connections: ${availableNames}`);
-    }
+    const resolved = resolveConnection(name, file.connections);
 
-    if (connection.enabled === false) {
+    if (resolved.enabled === false) {
       throw new Error(`Connection "${name}" is disabled. Enable it in connections.yaml to use it.`);
     }
 
-    return connection;
+    return resolved;
   }
 
   async getAllConnections(): Promise<ConnectionDefinition[]> {
     const file = await this.loadConnectionFile();
-    return file?.connections ?? [];
+    if (!file?.connections) return [];
+    return resolveAllConnections(file.connections);
   }
 
   async getConnectionFile(): Promise<ConnectionFile | undefined> {

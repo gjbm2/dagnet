@@ -9,6 +9,15 @@
  * - Override flags are not "special at read time" here. They only affect whether persisted values
  *   are overwritten elsewhere (e.g. UpdateManager write-back).
  * - This service is about choosing WHICH persisted record we consult (file vs graph).
+ *
+ * CONNECTION RESOLUTION:
+ * - `connection` (the connection name) is always resolved from the graph edge, NOT from the
+ *   parameter file. Connection is a graph-level concern — the same parameter file may be shared
+ *   across graphs pointing at different environments (e.g. amplitude-prod vs amplitude-staging).
+ *   The parameter file may still carry `connection` as provenance, but it is not used as config input.
+ *   Callers should further fall back to `graph.defaultConnection` if connection is still undefined.
+ * - `connection_string` (the per-parameter JSON blob) continues to come from the file for versioned
+ *   operations, since it is genuinely per-parameter configuration.
  */
 
 import type { LatencyConfig } from '../types';
@@ -49,7 +58,9 @@ export function selectPersistedProbabilityConfig(options: {
       query_overridden: fileParamData.query_overridden,
       n_query: fileParamData.n_query,
       n_query_overridden: fileParamData.n_query_overridden,
-      connection: fileParamData.connection,
+      // Connection name resolved from graph edge, NOT file — connection is a graph-level concern.
+      // Callers should fall back to graph.defaultConnection if this is undefined.
+      connection: graphParam?.connection,
       connection_string: fileParamData.connection_string,
       latency: fileParamData.latency,
     };

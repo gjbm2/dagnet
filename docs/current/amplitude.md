@@ -167,8 +167,8 @@ When a graph has a `defaultConnection` and the user does a bulk fetch (Retrieve 
 
 Add `event_id` validation to `fetchPlanBuilderService.buildParameterPlanItem()` before classification. For connections where `requires_event_ids !== false` (i.e. analytics connections):
 
-- **Both nodes lack `event_id`**: classify as `'unfetchable'` with reason `'no_event_ids'` (silent skip in bulk operations).
-- **One node has `event_id`, the other doesn't**: classify as `'unfetchable'` with reason `'partial_event_ids'` (warn in session log).
+- **Both nodes lack `event_id`**: classify as `'unfetchable'` with reason `'no_event_ids'`. Silent skip — this is normal and expected for structural edges.
+- **One node has `event_id`, the other doesn't**: classify as `'unfetchable'` with reason `'partial_event_ids'`. Also a silent skip — not a warning, since mixed implicit/explicit edges are a normal graph structure. Information-level session log entry only in diagnostic mode.
 - **Both nodes have `event_id`**: proceed as normal.
 
 This requires the `ConnectionChecker` interface to gain a method or the plan builder to access the graph's nodes to check `event_id`. The cleanest approach is to check `event_id` on the edge's `from`/`to` nodes directly in the plan builder, since it already has access to the graph.
@@ -334,8 +334,8 @@ The `?retrieveall` automation path uses `retrieveAllSlicesService` → `dataOper
 - Both nodes lack `event_id` + connection → classified as `'unfetchable'` with reason `'no_event_ids'`
 - One node has `event_id`, other doesn't + connection → classified as `'unfetchable'` with reason `'partial_event_ids'`
 - Connection has `requires_event_ids: false` (e.g. Google Sheets) → skip event_id check, classified as `'fetch'`
-- Bulk fetch: structural edges silently skipped, session log has debug-level entry (not warning)
-- Bulk fetch: half-implicit edges produce session log warning
+- Bulk fetch: both structural and half-implicit edges silently skipped (expected behaviour, not a warning)
+- Diagnostic logging only: information-level session log entry when diagnostic mode is on
 
 ### Phase 4: Parameter file connection cleanup
 

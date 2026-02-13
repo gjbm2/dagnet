@@ -79,6 +79,8 @@ export type AuthType = 'google-service-account' | 'oauth' | 'basic' | 'api-key';
 
 export interface ConnectionDefinition {
   name: string;
+  /** Inherit all fields from another connection. Child fields override parent. One level only (no chains). */
+  extends?: string;
   provider: string;
   kind: ConnectionKind;
   auth_type?: AuthType; // Optional: how to handle authentication

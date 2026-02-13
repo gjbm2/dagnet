@@ -183,7 +183,7 @@ export async function computePlannerQuerySignaturesForGraph(input: {
       graphEdge: edge,
     });
 
-    const connectionName: string | undefined = persistedCfg.connection ?? paramObj?.connection;
+    const connectionName: string | undefined = persistedCfg.connection ?? paramObj?.connection ?? input.graph.defaultConnection;
     if (!connectionName) continue;
 
     // Use the effective query string (conditional overrides base).

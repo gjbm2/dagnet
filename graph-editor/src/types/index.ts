@@ -901,6 +901,13 @@ export interface ConversionGraph {
    * when ?retrieveall is used without an explicit graph list.
    */
   dailyFetch?: boolean;
+
+  /**
+   * Default connection for all edges in this graph.
+   * Used as fallback when edge.p.connection (or slot-level connection) is not set.
+   * e.g. "amplitude-prod", "amplitude-staging"
+   */
+  defaultConnection?: string;
 }
 
 export type Graph = ConversionGraph;

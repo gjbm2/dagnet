@@ -1443,5 +1443,109 @@ describe('UpdateManager', () => {
       expect(graphEdge.p.latency.onset_delta_days).toBe(7);
     });
   });
+
+  // ============================================================
+  // TEST SUITE: Connection field sync (file → graph)
+  // Connection NAME no longer syncs from file → graph.
+  // Connection STRING still syncs.
+  // ============================================================
+
+  describe('Connection file→graph sync', () => {
+    it('should NOT sync connection name from file to graph (connection is graph-level)', async () => {
+      const paramFile = {
+        type: 'probability',
+        parameter_type: 'probability',
+        connection: 'amplitude-staging',
+        connection_string: '{"segment":"mobile"}',
+      };
+
+      const graphEdge = {
+        uuid: 'edge-conn-test',
+        id: 'A-to-B',
+        p: {
+          id: 'param-conn-test',
+          mean: 0.5,
+          connection: 'amplitude-prod',
+          connection_string: '{"segment":"desktop"}',
+          connection_overridden: false,  // NOT overridden — should still not sync connection name
+        },
+      };
+
+      const result = await updateManager.handleFileToGraph(
+        paramFile,
+        graphEdge,
+        'UPDATE',
+        'parameter',
+        { interactive: false }
+      );
+
+      expect(result.success).toBe(true);
+      // Connection NAME should NOT change (file connection is provenance, not config)
+      expect(graphEdge.p.connection).toBe('amplitude-prod');
+      // Connection STRING should sync from file (per-parameter config)
+      expect(graphEdge.p.connection_string).toBe('{"segment":"mobile"}');
+    });
+
+    it('should still sync connection_string from file to graph when not overridden', async () => {
+      const paramFile = {
+        type: 'probability',
+        parameter_type: 'probability',
+        connection_string: '{"segment":"updated"}',
+      };
+
+      const graphEdge = {
+        uuid: 'edge-connstr-test',
+        id: 'B-to-C',
+        p: {
+          id: 'param-connstr-test',
+          mean: 0.5,
+          connection_string: '{"segment":"old"}',
+          connection_overridden: false,
+        },
+      };
+
+      const result = await updateManager.handleFileToGraph(
+        paramFile,
+        graphEdge,
+        'UPDATE',
+        'parameter',
+        { interactive: false }
+      );
+
+      expect(result.success).toBe(true);
+      expect(graphEdge.p.connection_string).toBe('{"segment":"updated"}');
+    });
+
+    it('should NOT sync connection_string when connection_overridden is true', async () => {
+      const paramFile = {
+        type: 'probability',
+        parameter_type: 'probability',
+        connection_string: '{"segment":"from-file"}',
+      };
+
+      const graphEdge = {
+        uuid: 'edge-override-test',
+        id: 'C-to-D',
+        p: {
+          id: 'param-override-test',
+          mean: 0.5,
+          connection_string: '{"segment":"from-graph"}',
+          connection_overridden: true,  // Overridden — skip sync
+        },
+      };
+
+      const result = await updateManager.handleFileToGraph(
+        paramFile,
+        graphEdge,
+        'UPDATE',
+        'parameter',
+        { interactive: false }
+      );
+
+      expect(result.success).toBe(true);
+      // Overridden — neither connection nor connection_string should sync
+      expect(graphEdge.p.connection_string).toBe('{"segment":"from-graph"}');
+    });
+  });
 });
 

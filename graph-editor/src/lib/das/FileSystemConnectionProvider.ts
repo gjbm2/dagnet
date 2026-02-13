@@ -1,5 +1,6 @@
 import type { ConnectionProvider } from './ConnectionProvider';
 import type { ConnectionDefinition, ConnectionFile } from './types';
+import { resolveConnection, resolveAllConnections } from './resolveConnection';
 
 export class FileSystemConnectionProvider implements ConnectionProvider {
   // When running in Node (tests / local tooling), `process.cwd()` is typically `graph-editor/`.
@@ -23,23 +24,18 @@ export class FileSystemConnectionProvider implements ConnectionProvider {
 
   async getConnection(name: string): Promise<ConnectionDefinition> {
     const file = await this.readConnectionFile();
-    const connection = file.connections.find((c) => c.name === name);
+    const resolved = resolveConnection(name, file.connections);
 
-    if (!connection) {
-      const available = file.connections.map((c) => c.name).join(', ') || 'none';
-      throw new Error(`Connection "${name}" not found in ${this.connectionsPath}. Available: ${available}`);
-    }
-
-    if (connection.enabled === false) {
+    if (resolved.enabled === false) {
       throw new Error(`Connection "${name}" is disabled in ${this.connectionsPath}`);
     }
 
-    return connection;
+    return resolved;
   }
 
   async getAllConnections(): Promise<ConnectionDefinition[]> {
     const file = await this.readConnectionFile();
-    return file.connections;
+    return resolveAllConnections(file.connections);
   }
 
   async getConnectionFile(): Promise<ConnectionFile> {

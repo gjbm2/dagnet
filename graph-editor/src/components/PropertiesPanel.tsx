@@ -21,6 +21,7 @@ import { QueryExpressionEditor } from './QueryExpressionEditor';
 import { AutomatableField } from './AutomatableField';
 import { ParameterSection } from './ParameterSection';
 import { ConnectionControl } from './ConnectionControl';
+import { ConnectionSelector } from './ConnectionSelector';
 import { ImageThumbnail } from './ImageThumbnail';
 import { ImageUploadModal } from './ImageUploadModal';
 import { ImageLoupeView } from './ImageLoupeView';
@@ -214,6 +215,17 @@ export default function PropertiesPanel({
   const [localEdgeQuery, setLocalEdgeQuery] = useState<string>('');
   // Local state for edge n_query (optional explicit n denominator query)
   const [localEdgeNQuery, setLocalEdgeNQuery] = useState<string>('');
+  // Local state for graph-level DSL fields (Monaco editor is controlled; avoid eager writes)
+  const [localBaseDSL, setLocalBaseDSL] = useState<string>('');
+  const [localDataInterestsDSL, setLocalDataInterestsDSL] = useState<string>('');
+
+  useEffect(() => {
+    setLocalBaseDSL(graph?.baseDSL || '');
+  }, [graph?.baseDSL]);
+
+  useEffect(() => {
+    setLocalDataInterestsDSL(graph?.dataInterestsDSL || '');
+  }, [graph?.dataInterestsDSL]);
 
   // Helper to open a file by type and ID (reuse existing tab if open)
   const openFileById = useCallback((type: 'case' | 'node' | 'parameter' | 'context' | 'event', id: string) => {
@@ -1131,6 +1143,16 @@ export default function PropertiesPanel({
           <>
             <CollapsibleSection title="Graph Metadata" defaultOpen={true} icon={FileJson}>
               <div className="property-section">
+                <label className="property-label">Name</label>
+                <input
+                  className="property-input"
+                  value={graph?.metadata?.name || ''}
+                  onChange={(e) => updateGraph(['metadata', 'name'], e.target.value)}
+                  placeholder="Graph display name"
+                />
+              </div>
+
+              <div className="property-section">
                 <label className="property-label">Description</label>
                 <textarea
                   className="property-input"
@@ -1169,6 +1191,88 @@ export default function PropertiesPanel({
                   placeholder="Add tag…"
                 />
               </div>
+            </CollapsibleSection>
+
+            <CollapsibleSection title="Data Source" defaultOpen={false} icon={Zap}>
+              <div className="property-section">
+                <label className="property-label">Default Connection</label>
+                <ConnectionSelector
+                  value={graph?.defaultConnection}
+                  onChange={(conn) => updateGraph(['defaultConnection'], conn || undefined)}
+                  hideLabel={true}
+                />
+                <div style={{ fontSize: '11px', color: '#6B7280', marginTop: '4px' }}>
+                  Fallback connection for all edges. Per-edge connection overrides this.
+                </div>
+              </div>
+            </CollapsibleSection>
+
+            <CollapsibleSection title="Query" defaultOpen={false} icon={Sliders}>
+              <div className="property-section">
+                <label className="property-label">Base DSL</label>
+                <QueryExpressionEditor
+                  value={localBaseDSL}
+                  onChange={(value) => setLocalBaseDSL(value)}
+                  onBlur={(value) => updateGraph(['baseDSL'], value.trim() ? value : undefined)}
+                  graph={graph}
+                  placeholder="e.g. window(-30d:)"
+                  height="40px"
+                />
+                <div style={{ fontSize: '11px', color: '#6B7280', marginTop: '4px' }}>
+                  Base query inherited by all live scenarios unless overridden.
+                </div>
+              </div>
+
+              <div className="property-section">
+                <label className="property-label">Data Interests DSL</label>
+                <QueryExpressionEditor
+                  value={localDataInterestsDSL}
+                  onChange={(value) => setLocalDataInterestsDSL(value)}
+                  onBlur={(value) => updateGraph(['dataInterestsDSL'], value.trim() ? value : undefined)}
+                  graph={graph}
+                  placeholder="e.g. context(channel);context(browser-type).window(-90d:)"
+                  height="40px"
+                  allowedFunctions={[ 'from', 'to', 'visited', 'exclude', 'context', 'contextAny', 'window', 'cohort', 'or', 'asat', 'at', 'minus', 'plus' ]}
+                />
+                <div style={{ fontSize: '11px', color: '#6B7280', marginTop: '4px' }}>
+                  Query template driving which slices the nightly runner fetches.
+                </div>
+              </div>
+            </CollapsibleSection>
+
+            <CollapsibleSection title="Automation" defaultOpen={false} icon={RefreshCcw}>
+              <div className="property-section" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <input
+                  type="checkbox"
+                  checked={graph?.dailyFetch === true}
+                  onChange={(e) => updateGraph(['dailyFetch'], e.target.checked || undefined)}
+                  id="dailyFetch"
+                  style={{ margin: 0 }}
+                />
+                <label htmlFor="dailyFetch" className="property-label" style={{ marginBottom: 0, cursor: 'pointer' }}>
+                  Include in daily automation
+                </label>
+              </div>
+              <div style={{ fontSize: '11px', color: '#6B7280', marginTop: '4px', paddingLeft: '4px' }}>
+                When enabled, this graph is included in unattended daily runs via <code>?retrieveall</code>.
+              </div>
+            </CollapsibleSection>
+
+            <CollapsibleSection title="Info" defaultOpen={false} icon={Info}>
+              <div className="property-section">
+                <label className="property-label" style={{ color: '#9CA3AF' }}>Created</label>
+                <div style={{ fontSize: '12px', color: '#6B7280' }}>
+                  {graph?.metadata?.created_at || '—'}
+                </div>
+              </div>
+              {graph?.metadata?.updated_at && (
+                <div className="property-section">
+                  <label className="property-label" style={{ color: '#9CA3AF' }}>Last updated</label>
+                  <div style={{ fontSize: '12px', color: '#6B7280' }}>
+                    {graph.metadata.updated_at}
+                  </div>
+                </div>
+              )}
             </CollapsibleSection>
           </>
         )}

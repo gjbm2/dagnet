@@ -328,13 +328,13 @@ export function itemNeedsFetch(
     const paramFile = fileRegistry.getFile(`parameter-${item.objectId}`);
     if (!paramFile) return false;
     
-    // Check if parameter has connection (file or direct on edge)
+    // Check if parameter has connection (edge slot or graph default)
     const edge = graph.edges?.find((e: any) => e.uuid === item.targetId || e.id === item.targetId);
     const param =
       typeof item.conditionalIndex === 'number'
         ? edge?.conditional_p?.[item.conditionalIndex]?.p
         : edge?.[item.paramSlot || 'p'];
-    const hasConnection = !!paramFile?.data?.connection || !!param?.connection;
+    const hasConnection = !!param?.connection || !!graph.defaultConnection;
     const hasFileData = !!paramFile?.data;
     
     // If no connection AND no file data, nothing to fetch from
@@ -370,7 +370,7 @@ export function itemNeedsFetch(
   } else if (item.type === 'case') {
     const caseFile = fileRegistry.getFile(`case-${item.objectId}`);
     const node = graph.nodes?.find((n: any) => n.uuid === item.targetId || n.id === item.targetId);
-    const hasConnection = !!caseFile?.data?.connection || !!node?.case?.connection;
+    const hasConnection = !!node?.case?.connection || !!graph.defaultConnection;
     const hasFileData = !!caseFile?.data;
     
     // If no connection AND no file data, nothing to fetch from

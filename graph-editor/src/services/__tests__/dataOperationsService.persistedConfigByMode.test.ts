@@ -88,7 +88,7 @@ describe('dataOperationsService.getFromSourceDirect uses correct persisted confi
     (fileRegistry as any)._mockFiles.clear();
   });
 
-  it('in versioned mode (writeToFile=true), uses file connection + file latency.path_t95 for buildDslFromEdge when present', async () => {
+  it('in versioned mode (writeToFile=true), uses graph connection (not file) + file latency.path_t95 for buildDslFromEdge when present', async () => {
     const graph: Graph = {
       schema_version: '1.0.0',
       id: 'g1',
@@ -137,7 +137,8 @@ describe('dataOperationsService.getFromSourceDirect uses correct persisted confi
     expect(buildDslFromEdgeSpy).toHaveBeenCalled();
     const edgeArg = buildDslFromEdgeSpy.mock.calls[0][0];
     expect(edgeArg.p.latency.path_t95).toBe(40);
-    expect(edgeArg.p.connection).toBe('amplitude-prod-file');
+    // Connection always comes from graph (not file) — connection is a graph-level concern.
+    expect(edgeArg.p.connection).toBe('amplitude-prod-graph');
   });
 
   it('in direct mode (writeToFile=false), uses graph connection + graph latency.path_t95 even if file differs', async () => {

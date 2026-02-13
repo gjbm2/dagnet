@@ -2281,40 +2281,26 @@ export class UpdateManager {
       // NOTE: We do NOT map parameter.name or parameter.description to edge.label or edge.description
       // Those are edge-level metadata and should be independent of the parameter
       
-      // Connection settings: sync from file to graph if not overridden
-      // Probability parameter connection
-      { 
-        sourceField: 'connection', 
-        targetField: 'p.connection',
-        overrideFlag: 'p.connection_overridden',
-        condition: (source) => (source.type === 'probability' || source.parameter_type === 'probability') && !!source.connection
-      },
+      // Connection settings: file → graph sync
+      // NOTE: connection NAME no longer syncs from file → graph. Connection is a graph-level concern
+      // (resolved from edge.p.connection → graph.defaultConnection). The file carries connection as
+      // provenance only (written by graph→file flow, not read back).
+      // Connection STRING still syncs (per-parameter provider-specific config).
+      // Probability parameter connection_string
       { 
         sourceField: 'connection_string', 
         targetField: 'p.connection_string',
         overrideFlag: 'p.connection_overridden',
         condition: (source) => (source.type === 'probability' || source.parameter_type === 'probability') && !!source.connection_string
       },
-      // Cost GBP parameter connection
-      { 
-        sourceField: 'connection', 
-        targetField: 'cost_gbp.connection',
-        overrideFlag: 'cost_gbp.connection_overridden',
-        condition: (source) => (source.type === 'cost_gbp' || source.parameter_type === 'cost_gbp') && !!source.connection
-      },
+      // Cost GBP parameter connection_string
       { 
         sourceField: 'connection_string', 
         targetField: 'cost_gbp.connection_string',
         overrideFlag: 'cost_gbp.connection_overridden',
         condition: (source) => (source.type === 'cost_gbp' || source.parameter_type === 'cost_gbp') && !!source.connection_string
       },
-      // Cost Time parameter connection
-      { 
-        sourceField: 'connection', 
-        targetField: 'labour_cost.connection',
-        overrideFlag: 'labour_cost.connection_overridden',
-        condition: (source) => (source.type === 'labour_cost' || source.parameter_type === 'labour_cost') && !!source.connection
-      },
+      // Cost Time parameter connection_string
       { 
         sourceField: 'connection_string', 
         targetField: 'labour_cost.connection_string',

@@ -1947,10 +1947,11 @@ class DataOperationsService {
                 // Build DSL from edge to get current query
                 
                 // Get connection name for signature computation
+                // Resolution: edge slot → graph.defaultConnection (file connection is provenance only)
                 const connectionName = targetEdge.p?.connection || 
                                      targetEdge.cost_gbp?.connection || 
                                      targetEdge.labour_cost?.connection ||
-                                     paramFile.data.connection;
+                                     graph.defaultConnection;
                 
                 // Get connection to extract provider (use cached runner to avoid per-call overhead)
                 const dasRunner = getCachedDASRunner();
@@ -4671,8 +4672,8 @@ class DataOperationsService {
       let connectionString: any = {};
       
       // Persisted config selection (critical):
-      // - Versioned parameter fetch: prefer parameter file connection/connection_string
-      // - Direct parameter fetch: prefer graph edge connection/connection_string
+      // - Connection name: always resolved from graph (edge slot → graph.defaultConnection). File connection is provenance only.
+      // - Connection string: versioned → file; direct → graph edge.
       // - Cases: versionedCase uses file; direct uses node.case
       if (objectType === 'parameter' && targetId && graph) {
         const targetEdge: any = graph.edges?.find((e: any) => e.uuid === targetId || e.id === targetId);
@@ -4826,10 +4827,16 @@ class DataOperationsService {
         }
       }
       
-      // 2. Check if we have a connection configured
+      // 2. Fall back to graph-level default connection
+      if (!connectionName && graph?.defaultConnection) {
+        connectionName = graph.defaultConnection;
+        console.log(`[DataOps] Using graph.defaultConnection: ${connectionName}`);
+      }
+      
+      // 3. Check if we have a connection configured
       if (!connectionName) {
         sessionLogService.endOperation(logOpId, 'error', 'No connection configured');
-        toast.error(`No connection configured. Please set the 'connection' field.`);
+        toast.error(`No connection configured. Set a connection on the edge or set a default connection on the graph.`);
         return errorResult;
       }
       

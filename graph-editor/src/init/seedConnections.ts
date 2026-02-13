@@ -23,54 +23,41 @@ async function loadDefaultConnections(): Promise<any> {
 }
 
 /**
- * Seeds connections.yaml - priority: git > local > defaults
- * Called during app initialization (mirrors credential and registry file loading)
+ * Seeds connections.yaml from shipped defaults on every app init.
+ *
+ * The shipped public/defaults/connections.yaml is the source of truth for connection
+ * definitions. IDB is overwritten on each load so that new app versions automatically
+ * pick up connection changes (e.g. new connections, adapter updates, inheritance).
+ *
+ * Users do not yet have meaningful per-user connection customisations, so this is safe.
+ * When user-level connection editing is needed, switch to a merge strategy that preserves
+ * user additions while still adding new shipped defaults.
  */
 export async function seedConnectionsFile(): Promise<void> {
   try {
     const fileId = 'connections-connections';
     const existing = await db.files.get(fileId);
-
-    // Policy: never sync repo files from git during app init.
-    // Repo content must only be refreshed by explicit pull/automation/user repo change flows.
-    
-    // Fallback: Load default connections.yaml if it doesn't exist locally
     const defaultData = await loadDefaultConnections();
     const defaultConnections = defaultData?.connections;
     const defaultCount = Array.isArray(defaultConnections) ? defaultConnections.length : 0;
-    const existingConnections = existing?.data?.connections;
-    const existingCount = Array.isArray(existingConnections) ? existingConnections.length : 0;
-    const shouldReseedFromDefaults =
-      (!existing || (!existing.isDirty && existingCount === 0 && defaultCount > 0));
 
-    if (shouldReseedFromDefaults) {
-      console.log(
-        `[seedConnections] ${existing ? 'Reseeding' : 'Creating'} connections.yaml from defaults (${defaultCount} connections)`
-      );
-      
-      await db.files.put({
-        fileId,
-        type: 'connections',
-        data: defaultData,
-        lastModified: Date.now(),
-        viewTabs: existing?.viewTabs || [],
-        isDirty: false,
-        originalData: defaultData,
-        // Intentionally no repo source: this is a local default seed.
-      });
-      console.log(
-        '[seedConnections] ✅ connections.yaml',
-        existing ? 'reseeded' : 'created',
-        'with',
-        defaultCount,
-        'default connections'
-      );
-    } else {
-      console.log('[seedConnections] connections.yaml already exists, skipping seed');
-    }
+    console.log(
+      `[seedConnections] ${existing ? 'Updating' : 'Creating'} connections.yaml from shipped defaults (${defaultCount} connections)`
+    );
+
+    await db.files.put({
+      fileId,
+      type: 'connections',
+      data: defaultData,
+      lastModified: Date.now(),
+      viewTabs: existing?.viewTabs || [],
+      isDirty: false,
+      originalData: defaultData,
+    });
+
+    console.log('[seedConnections] ✅ connections.yaml seeded with', defaultCount, 'connections');
   } catch (error) {
     console.error('[seedConnections] Failed to seed connections.yaml:', error);
-    // Don't throw - this is a nice-to-have initialization
   }
 }
 

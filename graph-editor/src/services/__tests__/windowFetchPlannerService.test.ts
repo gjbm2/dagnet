@@ -107,7 +107,24 @@ function createMockGraph(options: {
     hasConnection?: boolean;
   }>;
 }): Graph {
+  // Default edge-endpoint nodes with event_id so edges are considered fetchable
+  const defaultNodes = [
+    { id: 'node1', uuid: 'node1', label: 'Node 1', event_id: 'event-1', x: 0, y: 0 },
+    { id: 'node2', uuid: 'node2', label: 'Node 2', event_id: 'event-2', x: 100, y: 0 },
+  ];
+  // Custom nodes (e.g. case nodes) are appended to defaults
+  const customNodes = (options.nodes || []).map(n => ({
+    id: n.id,
+    uuid: n.id,
+    label: n.id,
+    case: n.caseId ? {
+      id: n.caseId,
+      connection: n.hasConnection ? { type: 'statsig' as const } : undefined,
+    } : undefined,
+  }));
+
   return {
+    nodes: [...defaultNodes, ...customNodes],
     edges: (options.edges || []).map(e => ({
       id: e.id,
       uuid: e.id,
@@ -118,15 +135,6 @@ function createMockGraph(options: {
         // IMPORTANT: connection lives on the param slot (schema), not on the edge.
         connection: e.hasConnection ? 'amplitude-prod' : undefined,
         latency: e.latencyConfig,
-      } : undefined,
-    })),
-    nodes: (options.nodes || []).map(n => ({
-      id: n.id,
-      uuid: n.id,
-      label: n.id,
-      case: n.caseId ? {
-        id: n.caseId,
-        connection: n.hasConnection ? { type: 'statsig' as const } : undefined,
       } : undefined,
     })),
   } as Graph;

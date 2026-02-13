@@ -114,6 +114,10 @@ export function FormEditor({ fileId, tabId, readonly = false }: EditorProps & { 
   const [isBase64ModalOpen, setIsBase64ModalOpen] = useState(false);
   // Share creds link modal state (credentials editor only)
   const [isShareCredsModalOpen, setIsShareCredsModalOpen] = useState(false);
+  // Copy ENV JSON status (credentials editor only)
+  const [copyEnvJsonStatus, setCopyEnvJsonStatus] = useState<{ kind: 'idle' | 'ok' | 'error'; message?: string }>({
+    kind: 'idle',
+  });
 
   // Determine object type from fileId
   // Handle index files specially (e.g., 'parameter-index' → 'parameter-index')
@@ -276,6 +280,24 @@ export function FormEditor({ fileId, tabId, readonly = false }: EditorProps & { 
   const renderContextualTopbar = () => {
     // Extensible: add cases for other object types in future
     if (objectType === 'credentials') {
+      const handleCopyEnvJson = async () => {
+        try {
+          if (!formData || typeof formData !== 'object') {
+            throw new Error('No credentials loaded');
+          }
+          // Single-line JSON is easiest to paste into env var value fields.
+          const envJson = JSON.stringify(formData);
+          await navigator.clipboard.writeText(envJson);
+          setCopyEnvJsonStatus({ kind: 'ok', message: 'Copied env JSON to clipboard' });
+          setTimeout(() => setCopyEnvJsonStatus({ kind: 'idle' }), 2500);
+        } catch (e) {
+          setCopyEnvJsonStatus({
+            kind: 'error',
+            message: e instanceof Error ? e.message : 'Failed to copy',
+          });
+        }
+      };
+
       return (
         <div style={{
           display: 'flex',
@@ -288,36 +310,67 @@ export function FormEditor({ fileId, tabId, readonly = false }: EditorProps & { 
           top: 0,
           zIndex: 1
         }}>
-          <button
-            onClick={() => setIsBase64ModalOpen(true)}
-            style={{
-              background: '#6b7280',
-              color: '#fff',
-              border: 'none',
-              borderRadius: 4,
-              padding: '6px 12px',
-              fontSize: 13,
-              cursor: 'pointer'
-            }}
-          >
-            Base64 Encoder
-          </button>
-          <button
-            onClick={() => setIsShareCredsModalOpen(true)}
-            style={{
-              background: '#dc2626',
-              color: '#fff',
-              border: 'none',
-              borderRadius: 4,
-              padding: '6px 12px',
-              fontSize: 13,
-              cursor: 'pointer',
-              marginLeft: 8
-            }}
-            title="Copy a share link that embeds this repo token in the URL (unsafe)"
-          >
-            Share creds link…
-          </button>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+            <button
+              onClick={() => setIsBase64ModalOpen(true)}
+              style={{
+                background: '#6b7280',
+                color: '#fff',
+                border: 'none',
+                borderRadius: 4,
+                padding: '6px 12px',
+                fontSize: 13,
+                cursor: 'pointer',
+              }}
+            >
+              Base64 Encoder
+            </button>
+            <button
+              onClick={() => setIsShareCredsModalOpen(true)}
+              style={{
+                background: '#dc2626',
+                color: '#fff',
+                border: 'none',
+                borderRadius: 4,
+                padding: '6px 12px',
+                fontSize: 13,
+                cursor: 'pointer',
+              }}
+              title="Copy a share link that embeds this repo token in the URL (unsafe)"
+            >
+              Share creds link…
+            </button>
+            <button
+              onClick={handleCopyEnvJson}
+              style={{
+                background: '#0f766e',
+                color: '#fff',
+                border: 'none',
+                borderRadius: 4,
+                padding: '6px 12px',
+                fontSize: 13,
+                cursor: 'pointer',
+              }}
+              title="Copy single-line JSON suitable for env vars (e.g. VITE_INIT_CREDENTIALS_JSON / INIT_CREDENTIALS_JSON)"
+            >
+              Copy env JSON
+            </button>
+            {copyEnvJsonStatus.kind !== 'idle' && (
+              <span
+                style={{
+                  fontSize: 12,
+                  color: copyEnvJsonStatus.kind === 'ok' ? '#065f46' : '#991b1b',
+                  background: copyEnvJsonStatus.kind === 'ok' ? '#ecfdf5' : '#fef2f2',
+                  border: `1px solid ${copyEnvJsonStatus.kind === 'ok' ? '#6ee7b7' : '#fca5a5'}`,
+                  borderRadius: 6,
+                  padding: '5px 8px',
+                  lineHeight: 1,
+                }}
+              >
+                {copyEnvJsonStatus.message}
+              </span>
+            )}
+          </div>
           <button
             onClick={handleApplySettings}
             disabled={!isDirty}

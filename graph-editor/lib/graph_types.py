@@ -327,6 +327,7 @@ class Graph(BaseModel):
     dataInterestsDSL: Optional[str] = Field(None, description="Pinned DSL for batch/overnight fetches")
     debugging: Optional[bool] = Field(None, description="If true, run Graph Issues checks while this graph is open and show an Issues indicator overlay.")
     dailyFetch: Optional[bool] = Field(None, description="If true, this graph is included in unattended daily automation runs when ?retrieveall is used without an explicit graph list.")
+    defaultConnection: Optional[str] = Field(None, description="Default connection for all edges. Fallback when edge-level connection is not set (e.g. 'amplitude-prod').")
     
     def get_node_by_id(self, node_id: str) -> Optional[Node]:
         """Get node by ID or UUID."""

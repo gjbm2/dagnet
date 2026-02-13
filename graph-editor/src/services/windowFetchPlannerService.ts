@@ -651,7 +651,7 @@ class WindowFetchPlannerService {
       const param = edge?.[item.paramSlot || 'p'];
       
       const hasFileData = !!paramFile?.data;
-      const hasConnection = !!paramFile?.data?.connection || !!param?.connection;
+      const hasConnection = !!param?.connection || !!graph.defaultConnection;
       
       return hasFileData && !hasConnection;
     } else if (item.type === 'case') {
@@ -659,7 +659,7 @@ class WindowFetchPlannerService {
       const node = graph.nodes?.find((n: any) => n.uuid === item.targetId || n.id === item.targetId);
       
       const hasFileData = !!caseFile?.data;
-      const hasConnection = !!caseFile?.data?.connection || !!node?.case?.connection;
+      const hasConnection = !!node?.case?.connection || !!graph.defaultConnection;
       
       return hasFileData && !hasConnection;
     }
@@ -751,11 +751,11 @@ class WindowFetchPlannerService {
         
         // Check connection
         const param = edge?.p;
-        const hasConnection = !!file.data.connection || !!param?.connection;
+        const hasConnection = !!param?.connection || !!graph?.defaultConnection;
         if (!hasConnection) {
           details.push('FILE_ONLY: No connection configured (read-only from file)');
         } else {
-          details.push(`CONNECTION: ${file.data.connection?.id || param?.connection || 'edge-defined'}`);
+          details.push(`CONNECTION: ${param?.connection || graph?.defaultConnection || 'edge-defined'}`);
         }
         
         // Analyse slice coverage.
@@ -1474,7 +1474,7 @@ class WindowFetchPlannerService {
           : (typeof conditionalIndex === 'number'
               ? cond?.p
               : edge?.[i.paramSlot || 'p']);
-      const connection = typeof param?.connection === 'string' ? param.connection : undefined;
+      const connection = typeof param?.connection === 'string' ? param.connection : (graph?.defaultConnection ?? undefined);
 
       return {
         type: i.type,

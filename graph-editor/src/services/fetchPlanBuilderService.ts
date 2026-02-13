@@ -69,6 +69,11 @@ export interface ConnectionChecker {
   hasEdgeConnection(edge: any): boolean;
   /** Check if a node's case has a connection (for cases) */
   hasCaseConnection(node: any): boolean;
+  /**
+   * Return true if the connection requires node event_ids for DSL build/execution.
+   * Default behaviour (when omitted) is true.
+   */
+  requiresEventIds?: (connectionName: string | undefined) => boolean;
 }
 
 /**
@@ -283,6 +288,79 @@ function buildPlanItem(raw: RawItem, ctx: BuildPlanItemContext): BuildPlanItemRe
   const hasConnection = raw.type === 'case'
     ? (raw.node ? ctx.connectionChecker.hasCaseConnection(raw.node) : false)
     : (raw.edge ? ctx.connectionChecker.hasEdgeConnection(raw.edge) : false);
+  
+  // For parameters: check if edge endpoints have event_id (required for analytics connections).
+  // Edges between implicit/structural nodes (no event_id) can't be fetched from Amplitude etc.
+  // Skip them gracefully rather than letting them fail at execution time.
+  if (raw.type === 'parameter' && hasConnection && raw.edge && ctx.graph) {
+    // Resolve the effective connection name for THIS item (slot-aware), then check whether
+    // it requires event_ids. Some connections (e.g. Google Sheets) explicitly do not.
+    const slot = raw.slot || 'p';
+    const effectiveConnectionName = (() => {
+      if (typeof raw.conditionalIndex === 'number') {
+        return raw.edge?.conditional_p?.[raw.conditionalIndex]?.p?.connection || ctx.graph.defaultConnection;
+      }
+      return raw.edge?.[slot]?.connection || raw.edge?.p?.connection || ctx.graph.defaultConnection;
+    })();
+    const requiresEventIds = ctx.connectionChecker.requiresEventIds
+      ? ctx.connectionChecker.requiresEventIds(effectiveConnectionName)
+      : true;
+
+    // If this connection doesn't require event_ids, do not apply implicit-node validation.
+    if (!requiresEventIds) {
+      // Continue normal planning.
+    } else {
+    const fromNodeId = raw.edge.from;
+    const toNodeId = raw.edge.to;
+    const fromNode = ctx.graph.nodes?.find((n: any) => n.id === fromNodeId || n.uuid === fromNodeId);
+    const toNode = ctx.graph.nodes?.find((n: any) => n.id === toNodeId || n.uuid === toNodeId);
+    const fromHasEventId = !!fromNode?.event_id;
+    const toHasEventId = !!toNode?.event_id;
+
+    if (!fromHasEventId && !toHasEventId) {
+      // Both nodes lack event_id — purely structural edge, skip silently
+      notes.push('Structural edge: neither node has event_id');
+      const item: FetchPlanItem = {
+        itemKey,
+        type: 'parameter',
+        objectId: raw.objectId,
+        targetId: raw.targetId,
+        slot: raw.slot,
+        conditionalIndex: raw.conditionalIndex,
+        mode,
+        sliceFamily: ctx.targetSlice,
+        querySignature: '',
+        classification: 'unfetchable',
+        unfetchableReason: 'no_event_ids',
+        windows: [],
+      };
+      return { item, diagnostic: { itemKey, objectId: raw.objectId, mode, missingDates: 0, staleDates: 0, totalFetchDates: 0, classification: 'unfetchable', notes } };
+    }
+
+    if (!fromHasEventId || !toHasEventId) {
+      // One node has event_id, the other doesn't — might be a setup mistake
+      const missingLabel = !fromHasEventId
+        ? (fromNode?.label || fromNodeId || 'from')
+        : (toNode?.label || toNodeId || 'to');
+      notes.push(`Partial event_id: "${missingLabel}" has no event_id`);
+      const item: FetchPlanItem = {
+        itemKey,
+        type: 'parameter',
+        objectId: raw.objectId,
+        targetId: raw.targetId,
+        slot: raw.slot,
+        conditionalIndex: raw.conditionalIndex,
+        mode,
+        sliceFamily: ctx.targetSlice,
+        querySignature: '',
+        classification: 'unfetchable',
+        unfetchableReason: 'partial_event_ids',
+        windows: [],
+      };
+      return { item, diagnostic: { itemKey, objectId: raw.objectId, mode, missingDates: 0, staleDates: 0, totalFetchDates: 0, classification: 'unfetchable', notes } };
+    }
+    }
+  }
   
   // Get file data
   const file = raw.type === 'parameter'
@@ -668,13 +746,15 @@ export function createProductionFileStateAccessor(): FileStateAccessor {
 
 /**
  * Create a ConnectionChecker that uses edge.connection for parameters and node.case.connection for cases.
+ * Falls back to graph.defaultConnection when no edge/node-level connection is set.
  */
-export function createProductionConnectionChecker(): ConnectionChecker {
+export function createProductionConnectionChecker(graph?: Graph): ConnectionChecker {
+  const graphDefault = graph?.defaultConnection;
   return {
     hasEdgeConnection(edge: any): boolean {
       // Connections are attached to parameter objects (slot-level), not to the edge itself.
       // This must mirror how execution resolves providers in DataOperationsService.
-      if (!edge || typeof edge !== 'object') return false;
+      if (!edge || typeof edge !== 'object') return !!graphDefault;
 
       // Standard slots
       if (edge.p?.connection) return true;
@@ -688,11 +768,18 @@ export function createProductionConnectionChecker(): ConnectionChecker {
         }
       }
 
-      return false;
+      // Fall back to graph-level default connection
+      return !!graphDefault;
     },
     hasCaseConnection(node: any): boolean {
       // Cases have their connection at node.case.connection
-      return !!node?.case?.connection;
+      return !!node?.case?.connection || !!graphDefault;
+    },
+    requiresEventIds(connectionName: string | undefined): boolean {
+      // Default true. Production builds may override this by passing a richer checker;
+      // in the simple checker, we assume event_ids are required.
+      // (Connections that do not require event_ids are expected to provide their own policy.)
+      return true;
     },
   };
 }
@@ -721,13 +808,37 @@ export async function buildFetchPlanProduction(
     querySignatures = await computePlannerQuerySignaturesForGraph({ graph, dsl });
   }
 
+  // Best-effort: load connection definitions so we can respect requires_event_ids=false
+  // when classifying implicit/structural edges in the plan.
+  let requiresEventIdsByName: Record<string, boolean> | undefined = undefined;
+  try {
+    const { IndexedDBConnectionProvider } = await import('../lib/das/IndexedDBConnectionProvider');
+    const provider = new IndexedDBConnectionProvider();
+    const conns = await provider.getAllConnections();
+    requiresEventIdsByName = Object.fromEntries(
+      (conns || []).map((c: any) => [String(c.name), c.requires_event_ids !== false])
+    );
+  } catch {
+    // best-effort only
+  }
+
+  const baseChecker = createProductionConnectionChecker(graph);
+  const checker: ConnectionChecker = {
+    ...baseChecker,
+    requiresEventIds(connectionName: string | undefined): boolean {
+      if (!connectionName) return true;
+      const v = requiresEventIdsByName?.[connectionName];
+      return v === undefined ? true : v;
+    },
+  };
+
   return buildFetchPlan({
     graph,
     dsl,
     window,
     referenceNow: options?.referenceNow ?? new Date().toISOString(),
     fileState: createProductionFileStateAccessor(),
-    connectionChecker: createProductionConnectionChecker(),
+    connectionChecker: checker,
     bustCache: options?.bustCache,
     querySignatures,
   });

@@ -626,6 +626,17 @@ connections:
           - target: "/edges/{{edgeId}}/p/evidence/k"
             value: "{{k}}"
 
+  # Amplitude Staging - Inherits everything from amplitude-prod, uses staging credentials
+  # Add amplitude-staging credentials to credentials.yaml when the staging project is ready
+  - name: amplitude-staging
+    extends: amplitude-prod
+    description: "Staging Amplitude analytics (inherits adapter from amplitude-prod)"
+    credsRef: amplitude-staging
+    defaults:
+      base_url: "https://amplitude.com/api/2"
+      # Override parent's cohort exclusions — staging project doesn't have the prod test-users cohort
+      excluded_cohorts: []
+
   # Amplitude Test - Include internal test users (disabled by default)
   # Uncomment and enable this connection to analyze internal test user behavior
   # - name: amplitude-test

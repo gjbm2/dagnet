@@ -70,14 +70,17 @@ const dasExecuteMock = vi.fn(async () => ({
   raw: { n: 0, k: 0, p_mean: 0, time_series: [] },
 }));
 
+const getConnectionMock = vi.fn(async (name?: string) => ({
+  name,
+  provider: 'amplitude',
+  requires_event_ids: true,
+  capabilities: { supports_daily_time_series: true, supports_native_exclude: true },
+}));
+
 vi.mock('../../lib/das', () => ({
   createDASRunner: () => ({
     connectionProvider: {
-      getConnection: vi.fn(async () => ({
-        provider: 'amplitude',
-        requires_event_ids: true,
-        capabilities: { supports_daily_time_series: true, supports_native_exclude: true },
-      })),
+      getConnection: (...args: any[]) => getConnectionMock(...args),
     },
     execute: (...args: any[]) => dasExecuteMock(...args),
     getExecutionHistory: vi.fn(() => []),
@@ -658,6 +661,190 @@ describe('No-Graph Scenarios', () => {
       expect(Array.isArray(latest.k_daily)).toBe(true);
       expect(latest.n_daily[0]).toBe(100);
       expect(latest.k_daily[0]).toBe(20);
+    });
+
+    it('resolves connection from graph.defaultConnection when edge slot has no connection (file connection ignored)', async () => {
+      const paramFile = {
+        id: 'graph-default-conn-param',
+        // Provenance only — must NOT be used to choose connection
+        connection: 'amplitude-prod',
+        query: 'from(a).to(b)',
+        values: [],
+      };
+
+      vi.spyOn(fileRegistry, 'getFile').mockImplementation((fileId: string) => {
+        if (fileId === 'parameter-graph-default-conn-param') {
+          return { data: paramFile, isDirty: false };
+        }
+        // Event files (minimal for resolver)
+        if (fileId === 'event-a') {
+          return { data: { id: 'a', provider_event_names: { amplitude: 'Mapped a' } } };
+        }
+        if (fileId === 'event-b') {
+          return { data: { id: 'b', provider_event_names: { amplitude: 'Mapped b' } } };
+        }
+        return null;
+      });
+
+      vi.spyOn(fileRegistry, 'updateFile').mockResolvedValue(undefined);
+
+      // Make runner succeed deterministically
+      dasExecuteMock.mockResolvedValue({
+        success: true,
+        updates: [],
+        raw: { n: 100, k: 50, p_mean: 0.5, time_series: [] },
+      });
+
+      const graph: any = {
+        schema_version: '1.0.0',
+        id: 'g-default-conn',
+        name: 'Graph Default Connection Test',
+        description: '',
+        defaultConnection: 'amplitude-staging',
+        nodes: [
+          { id: 'a', uuid: 'n-a', label: 'A', event_id: 'a', layout: { x: 0, y: 0 } },
+          { id: 'b', uuid: 'n-b', label: 'B', event_id: 'b', layout: { x: 100, y: 0 } },
+        ],
+        edges: [
+          {
+            id: 'e1',
+            uuid: 'e1',
+            from: 'n-a',
+            to: 'n-b',
+            p: {
+              id: 'graph-default-conn-param',
+              // CRITICAL: no connection on edge slot — must fall back to graph.defaultConnection
+            },
+            query: 'from(a).to(b)',
+          },
+        ],
+      };
+
+      await dataOperationsService.getFromSourceDirect({
+        objectType: 'parameter',
+        objectId: 'graph-default-conn-param',
+        targetId: 'e1',
+        graph,
+        setGraph: undefined,
+        writeToFile: true,
+        bustCache: true,
+        currentDSL: 'window(1-Oct-25:1-Oct-25)',
+        overrideFetchWindows: [{ start: '2025-10-01T00:00:00Z', end: '2025-10-01T00:00:00Z' }],
+      });
+
+      // Ensure ALL getConnection calls used graph.defaultConnection (not the file provenance).
+      expect(getConnectionMock).toHaveBeenCalled();
+      for (const call of getConnectionMock.mock.calls) {
+        expect(call[0]).toBe('amplitude-staging');
+      }
+    });
+
+    it('planner signature matches executor signature when only graph.defaultConnection is set', async () => {
+      // Parameter file carries connection as provenance only — executor must use graph.defaultConnection.
+      const paramFile = {
+        id: 'planner-executor-parity-param',
+        connection: 'amplitude-prod',
+        query: 'from(a).to(b)',
+        values: [],
+      };
+
+      // Provide event files so both planner and executor hash the same event definitions.
+      vi.spyOn(fileRegistry, 'getFile').mockImplementation((fileId: string) => {
+        if (fileId === 'parameter-planner-executor-parity-param') {
+          return { data: paramFile, isDirty: false };
+        }
+        if (fileId === 'event-a') {
+          return { data: { id: 'a', provider_event_names: { amplitude: 'Mapped a' } } };
+        }
+        if (fileId === 'event-b') {
+          return { data: { id: 'b', provider_event_names: { amplitude: 'Mapped b' } } };
+        }
+        return null;
+      });
+
+      let updatedParamData: any | null = null;
+      vi.spyOn(fileRegistry, 'updateFile').mockImplementation(async (...args: any[]) => {
+        updatedParamData = args[1];
+        return undefined as any;
+      });
+
+      // Ensure runner succeeds deterministically (so executor writes values + query_signature).
+      dasExecuteMock.mockResolvedValue({
+        success: true,
+        updates: [],
+        raw: {
+          n: 100,
+          k: 50,
+          p_mean: 0.5,
+          time_series: [{ date: '2025-10-01T00:00:00.000Z', n: 100, k: 50, p: 0.5 }],
+        },
+      });
+
+      const graph: any = {
+        schema_version: '1.0.0',
+        id: 'g-sig-parity',
+        name: 'Planner/Executor Signature Parity',
+        description: '',
+        defaultConnection: 'amplitude-staging',
+        nodes: [
+          { id: 'a', uuid: 'n-a', label: 'A', event_id: 'a', layout: { x: 0, y: 0 } },
+          { id: 'b', uuid: 'n-b', label: 'B', event_id: 'b', layout: { x: 100, y: 0 } },
+        ],
+        edges: [
+          {
+            id: 'e1',
+            uuid: 'e1',
+            from: 'n-a',
+            to: 'n-b',
+            p: {
+              id: 'planner-executor-parity-param',
+              // No slot-level connection — must use graph.defaultConnection
+            },
+            query: 'from(a).to(b)',
+          },
+        ],
+        policies: { default_outcome: 'pass' },
+        metadata: { version: '1.0.0', created_at: '2026-01-01' },
+      };
+
+      // Compute planner signature (forceCompute bypasses policy gate).
+      const { computePlannerQuerySignaturesForGraph } = await import('../plannerQuerySignatureService');
+      const plannerSigs = await computePlannerQuerySignaturesForGraph({
+        graph,
+        dsl: 'window(1-Oct-25:1-Oct-25)',
+        forceCompute: true,
+      });
+      const keys = Object.keys(plannerSigs);
+      expect(keys.length).toBe(1);
+      const plannerSig = plannerSigs[keys[0]];
+      expect(typeof plannerSig).toBe('string');
+      expect(plannerSig.length).toBeGreaterThan(10);
+
+      // Run executor.
+      await dataOperationsService.getFromSourceDirect({
+        objectType: 'parameter',
+        objectId: 'planner-executor-parity-param',
+        targetId: 'e1',
+        graph,
+        setGraph: undefined,
+        writeToFile: true,
+        bustCache: true,
+        currentDSL: 'window(1-Oct-25:1-Oct-25)',
+        overrideFetchWindows: [{ start: '2025-10-01T00:00:00.000Z', end: '2025-10-01T00:00:00.000Z' }],
+      });
+
+      if (!updatedParamData) {
+        throw new Error('Expected parameter file to be updated, but fileRegistry.updateFile was not called.');
+      }
+
+      const sigs = (updatedParamData.values || [])
+        .map((v: any) => v?.query_signature)
+        .filter((s: any) => typeof s === 'string' && s.trim());
+      expect(sigs.length).toBeGreaterThan(0);
+      const executorSig = String(sigs[sigs.length - 1]);
+
+      // Parity assertion: planner signature must match executor signature exactly.
+      expect(executorSig).toBe(plannerSig);
     });
     
     it('should build n_query payload without graph using event files', async () => {

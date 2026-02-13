@@ -804,7 +804,10 @@ describe('FetchPlan Builder', () => {
   
   function createSimpleGraph(edges: Array<{ id: string; paramId: string; connection?: string }>): Graph {
     return {
-      nodes: [],
+      nodes: [
+        { id: 'A', uuid: 'A', label: 'A', event_id: 'event-a', x: 0, y: 0 },
+        { id: 'B', uuid: 'B', label: 'B', event_id: 'event-b', x: 100, y: 0 },
+      ] as any,
       edges: edges.map(e => ({
         uuid: e.id,
         id: e.id,

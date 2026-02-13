@@ -837,6 +837,17 @@ class RetrieveAllSlicesService {
                 classificationExecuted: 'unfetchable',
                 plannedWindows: planItem.windows.map(w => ({ ...w })),
               });
+              // Diagnostic-only info logging for event_id skip reasons
+              if (sessionLogService.getDiagnosticLoggingEnabled() && planItem.unfetchableReason) {
+                const reason = planItem.unfetchableReason;
+                if (reason === 'no_event_ids' || reason === 'partial_event_ids') {
+                  sessionLogService.addChild(logOpId, 'info', 'SKIP_NO_EVENT_ID',
+                    `Skipped ${planItem.itemKey}: ${reason}`,
+                    undefined,
+                    { itemKey: planItem.itemKey, reason } as any
+                  );
+                }
+              }
             } else {
               // Fetch: execute the plan.
               // Parameters are executed in plan-interpreter mode (override windows).

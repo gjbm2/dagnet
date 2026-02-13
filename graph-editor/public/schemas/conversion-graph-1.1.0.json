@@ -40,6 +40,10 @@
       "type": "boolean",
       "default": false,
       "description": "If true, this graph is included in unattended daily automation runs when ?retrieveall is used without an explicit graph list."
+    },
+    "defaultConnection": {
+      "type": "string",
+      "description": "Default connection for all edges in this graph. Used as fallback when edge-level connection is not set. e.g. 'amplitude-prod', 'amplitude-staging'."
     }
   },
   "$defs": {
