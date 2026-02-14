@@ -2,6 +2,13 @@
 ## Version 1.6.1b
 **Released:** 14-Feb-26
 
+'Create Amplitude funnel' feature added and tested through, plus Chrome plug-in to bridge webapps.
+
+---
+
+## Version 1.6.1b
+**Released:** 14-Feb-26
+
 **Create as chart in Amplitude.** Select nodes, click "Amplitude" in the Analytics panel, and DagNet dynamically constructs a correctly specified funnel in Amplitude — including event filters, context segments, cohort exclusions, and graph-derived conversion windows. Works with staging and production (auto-detected from graph connection). Requires the Amplitude Bridge browser extension (Chrome-family only). See user guide for details.
 
 Also in this release:
