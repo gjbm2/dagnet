@@ -1,12 +1,10 @@
-
-- ~~**Drop `signature_equivalence` DB table**~~ — DONE (13-Feb-26). Table creation removed, test-only DB helpers deleted, legacy tests (TestTierC c006–c008, TestTierD d001–d006, TestCrossParamDataContract d007, FC-009) removed, cleanup refs purged from all test files. Remaining tests updated to use FE-supplied closure only.
-- We should remove the parity testing piece and complete cutover of BE stats service soon
-
-
 # TODO
+
+- We should remove the parity testing piece and complete cutover of BE stats service soon
 
 - Do we need a 'live()' view type (alongside window() and cohort() which shows ACTUAL arrives in period, regardless of latency?)
 
+## Case management
 
 - **Upstream selecting properties don't propagate to downstream fetches** (11-Feb-26)
   - Each edge is fetched independently via `from(source).to(target)` with context filters. If the start node's event has a selecting property (e.g. `path = /save-on-energy` on the landing page), that filter is NOT applied to downstream edge queries. This means downstream edges pick up users from other funnels who share the same context properties (e.g. UTM params) but entered via a different route.
@@ -37,36 +35,6 @@
 
 
 
-- ## Snapshot DB — CRITICAL missing integration vs design (2-Feb-26)
--
-- **Design intent (explicit):** `docs/current/project-db/completed/snapshot-db-design.md` §2  
-- **Core principle:** **Frontend resolves everything** (DSL parse, slice plan, MECE verification, signature set) and **Python only queries DB + derives**.
--
-- **What we discovered:** the core wiring is missing in production UI:
--   - `AnalyticsPanel.tsx` always calls `graphComputeClient.analyzeSelection()` / `analyzeMultipleScenarios()` (scenario-based graph analysis).
--   - It does **not** build or send `snapshot_query` (no `param_id`, no `slice_keys`, no `core_hash`, no `as_at`).
--   - `graphComputeClient.analyzeSnapshots()` exists (posts `/api/runner/analyze` with `snapshot_query`) but has **no call sites**.
--   - `AnalyticsPanel.tsx` currently tracks only **selected nodes**, not **selected edges**, so it cannot even identify the parameter edge to analyse from DB.
--   - Python `get_available_analyses` is DSL-driven (`runner/analysis_types.yaml`), and **does not advertise** snapshot analyses (`lag_histogram`, `daily_conversions`) as normal DSL analyses; yet the UI lists them as “snapshot-based analyses”.
--
-- **Impact:** core architecture deviates from the snapshot DB design; snapshot analytics UI can’t be “real” because it never exercises the DB-backed path. Any confidence from UI usage is illusory.
--
-- **Required implementation (minimal, design-conformant):**
--   - **Selection plumbing:** capture selected edge UUID(s) in `AnalyticsPanel.tsx` (from `dagnet:querySelection`) and resolve to the parameter objectId / edge.
--   - **Central service (NOT UI logic):** build `snapshot_query` coordinates:
--     - `param_id` = `${repo}-${branch}-${objectId}`
--     - `slice_keys` = MECE slice plan from context definition + parameter file slices (front end decides).
--     - `core_hash` (optional) = computed from the same query signature mechanism used on write.
--     - `anchor_from/anchor_to` and optional `as_at`.
--   - **Analytics dispatch:** when `analysis_type` is `lag_histogram` or `daily_conversions`, call `graphComputeClient.analyzeSnapshots()` instead of scenario analysis.
--   - **Availability gating:** snapshot analyses must be enabled/disabled based on *edge selection + snapshot inventory coverage*, not DSL matching from `runner/available-analyses`.
--   - **Multi-slice safety:** ensure Python derivations are MECE-safe when multiple `slice_keys` are queried together (deltas must be per-slice).
--
-- **Acceptance criteria:**
--   - Selecting an edge with snapshot history and choosing `lag_histogram` / `daily_conversions` results in a request containing `snapshot_query` (not `scenarios`).
--   - Python returns derived results from DB for the provided `slice_keys` and date range.
--   - Works for MECE union (4 channel slices) and supports successive-day `as_at` compositing without double counting.
--
 - ### Status of the real-Amplitude E2E we built (NOT yet run)
 -
 - **Test file:** `graph-editor/src/services/__tests__/cohortAxy.meceSum.vsAmplitude.local.e2e.test.ts`
@@ -118,8 +86,6 @@
 
 - Reason through possiblity of storing data in a dbs (leaving slice headers within param files) -- see docs/current/project-db/initial-thinking.md
 - **Nousmates context cleanup**: The `nousmates` context was a rush implementation and needs proper cleanup — genericise test data that references it, rename to something domain-neutral, and ensure it doesn't leak commercially identifiable information in the public repo. Affected files include test fixtures and `contexts-index.yaml` references.
-
-- Dark mode on user devices looks ugly (as only some elements are re-colouring)
 
 ## Pull latest issues
 - clients update their graph files after a fetch
@@ -450,6 +416,7 @@ Basic repo ops (switch repo, clear, pull) lack E2E tests and keep breaking. See 
 
 - (17-Dec-25) Intermittent prod error: **“Failed to fetch dynamically imported module”** for the Vite chunk behind `../lib/das/compositeQueryExecutor` (triggered by composite queries / inclusion–exclusion). Likely stale cached entrypoint / SW after deploy → chunk hash 404s. Add a small resilience layer: retry once; if still failing, show a “new version deployed — hard refresh” prompt (and/or trigger reload), so data fetch doesn’t fail with an opaque error.
 
+
 ## Keyboard jamming issue
 
 Now when the bug happens:
@@ -497,69 +464,6 @@ Reproduce the issue and share the console outpu
 **Docs:** See `docs/current/refactor/GRAPH_CANVAS_ARCHITECTURE.md` for full analysis
 
 - Tooltip Redesign (Future)
-
-#
-
-## Background Fetch Queue (DESIGN SKETCH)
-
-**Problem:** Batch fetch operations (Get All for Slice, All Slices) block the UI for minutes due to rate limiting (3s between Amplitude API calls). With 20 items, that's 1+ minute of blocked modal.
-
-**Solution:** Background fetch queue with non-blocking progress.
-
-### Architecture Sketch
-
-```
-FetchQueueService (singleton)
-├── queue: FetchJob[]           // Pending jobs
-├── currentJob: FetchJob | null // Currently executing
-├── state: 'idle' | 'running' | 'paused'
-└── Events: progress, complete, error, cancelled
-
-FetchJob = {
-  id: string
-  items: FetchItem[]           // What to fetch
-  options: { bustCache, slice, ... }
-  progress: { done: number, total: number, errors: number }
-  onProgress?: (job) => void
-  onComplete?: (job) => void
-}
-```
-
-### UI Changes
-
-1. **Modals submit & close immediately**
-   - "Get All for Slice" → submits job → closes modal
-   - Shows toast: "Fetching 20 items in background..."
-
-2. **Progress indicator (non-blocking)**
-   - Small floating widget in corner (like download manager)
-   - Shows: "Fetching: 5/20 (2 errors) [Cancel]"
-   - Expandable to see item-by-item progress
-   - Can be minimised
-
-3. **Toast notifications**
-   - On complete: "✓ Fetched 18/20 items (2 failed)"
-   - On rate limit: "⏳ Rate limited, waiting 30s..."
-   - Clickable to expand progress widget
-
-### Implementation Steps
-
-1. Create `FetchQueueService` with job queue management
-2. Integrate with existing `rateLimiter` service
-3. Create `FetchProgressWidget` component (floating, draggable)
-4. Update `BatchOperationsModal` to submit jobs, not execute inline
-5. Update `AllSlicesModal` similarly
-6. Add cancel/pause capability
-
-### Alternative: Worker Thread
-
-Could use Web Worker for true background execution:
-- Pro: Completely non-blocking, survives tab changes
-- Con: Complex (serialisation, IDB access from worker, etc.)
-- Decision: Start with main-thread queue, upgrade to Worker if needed
-
-**Priority:** Medium - Annoying UX but not blocking
-**Effort:** ~8-12 hours
 
 ---
 
@@ -641,11 +545,9 @@ Could use Web Worker for true background execution:
 
 ## Major components
 - Bayesian modelling (...is expected?)
-- Asynch / api updates
 - Cyclic graphs
 
 - download CSV built from selected funnel (or generate Google spreadsheet?)
-- node renaming, file renaming -- need to handle globally
 - systematically review that DELETE graph changes  go through UpdateManager
 
 ### Analytics / Model Fitting (Future)
@@ -726,15 +628,11 @@ Could use Web Worker for true background execution:
 - Check we load right querydsl on graph load
 - Missing terminal node type on node file
 - Keyboard short cuts, generally
-- Clean up dead / misleading menu items
 - add '?' icons to components, which link to relevant help docs 
 - Image Undo/Redo Broken 
 - bead labels aren't updating when values change e.g. on data retrieval, revbalances, etc. 
-- make 'overridden' icons brighter
 - add icons to collapsed beads?
-- playing with edges resets edge_id! 
 - clicking beads -- make hotspot larger
-- whatif layer: prob needs is own layer in the palette really for clarity...
 - auto-reroute still stubborn
 - let's change the paramster keycolour to pink and nodes from blue to...something else that isn't orange or bright blue...cyan? That will help oragne and blue for dirty/open.
 - put outbound probs. left aligned in edge; arriving prob mix. right aligned in edge
@@ -743,9 +641,6 @@ Could use Web Worker for true background execution:
 - maximised tabs in main app are not reflecting padding
 - somewhere along the line we lose animations on edge width changes, which is sad
 - Sankey mode and normal view use diff code paths for mass infernece; hence sankey requires start node to work -- weird glitch
-- all tests in weird places in the codepath; centralise
-
-
 
 Post Its:
 
