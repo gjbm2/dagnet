@@ -569,7 +569,7 @@ export async function buildDslFromEdge(
  * @param source - Source name (e.g., "amplitude")
  * @returns Array of structured filter objects
  */
-async function buildContextFilters(
+export async function buildContextFilters(
   constraints: ParsedConstraints,
   source: string
 ): Promise<ContextFilterObject[] | undefined> {
@@ -991,7 +991,7 @@ async function buildComputedOtherFilter(
  * @param cohort - Cohort constraint with start/end (and optional anchor)
  * @returns Resolved start and end dates for cohort entry window
  */
-function resolveCohortDates(cohort: { anchor?: string; start?: string; end?: string }): { startDate?: Date; endDate?: Date } {
+export function resolveCohortDates(cohort: { anchor?: string; start?: string; end?: string }): { startDate?: Date; endDate?: Date } {
   // Normalize 'now' to current local date at UTC midnight
   const now = parseUKDate(formatDateUK(new Date()));
   
@@ -1031,7 +1031,7 @@ function resolveCohortDates(cohort: { anchor?: string; start?: string; end?: str
  * @param window - Window constraint with start/end
  * @returns Resolved start and end dates (end may be undefined for open-ended windows)
  */
-function resolveWindowDates(window: { start?: string; end?: string }): { startDate?: Date; endDate?: Date } {
+export function resolveWindowDates(window: { start?: string; end?: string }): { startDate?: Date; endDate?: Date } {
   // Normalize 'now' to current local date at UTC midnight
   // This ensures relative offsets align to date boundaries and prevents timezone drifts
   // Example: Local "Dec 8 14:00" -> "8-Dec-25" -> "2025-12-08T00:00:00.000Z"

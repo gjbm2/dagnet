@@ -22,7 +22,7 @@ import { buildGraphForAnalysisLayer } from '../../services/CompositionService';
 import { AnalysisChartContainer } from '../charts/AnalysisChartContainer';
 import { AutomatableField } from '../AutomatableField';
 import { QueryExpressionEditor } from '../QueryExpressionEditor';
-import { BarChart3, AlertCircle, CheckCircle2, Loader2, ChevronRight, Eye, EyeOff, Info, Lightbulb, List, Code, RefreshCw } from 'lucide-react';
+import { BarChart3, AlertCircle, CheckCircle2, Loader2, ChevronRight, Eye, EyeOff, Info, Lightbulb, List, Code, RefreshCw, ExternalLink } from 'lucide-react';
 import { ANALYSIS_TYPES, getAnalysisTypeMeta } from './analysisTypes';
 import { querySelectionUuids } from '../../hooks/useQuerySelectionUuids';
 import { mapFetchPlanToSnapshotSubjects, composeSnapshotDsl, extractDateRangeFromDSL } from '../../services/snapshotDependencyPlanService';
@@ -31,6 +31,12 @@ import { buildFetchPlanProduction } from '../../services/fetchPlanBuilderService
 import { fileRegistry } from '../../contexts/TabContext';
 import CollapsibleSection from '../CollapsibleSection';
 import { AnalysisResultCards } from '../analytics/AnalysisResultCards';
+import { checkBridgeStatus, createAmplitudeDraft } from '../../services/amplitudeBridgeService';
+import { buildAmplitudeFunnelDefinition } from '../../services/amplitudeFunnelBuilderService';
+import { AmplitudeBridgeInstallModal } from '../modals/AmplitudeBridgeInstallModal';
+import { sessionLogService } from '../../services/sessionLogService';
+import { IndexedDBConnectionProvider } from '../../lib/das/IndexedDBConnectionProvider';
+import toast from 'react-hot-toast';
 import './AnalyticsPanel.css';
 
 // composeSnapshotDsl and extractDateRangeFromDSL are imported from snapshotDependencyPlanService
@@ -845,6 +851,202 @@ export default function AnalyticsPanel({ tabId, hideHeader = false }: AnalyticsP
     try { (window as any).__dagnetComputeNoCacheOnce = true; } catch { /* ignore */ }
     runAnalysis();
   }, [runAnalysis]);
+
+  // ── Amplitude Bridge ──────────────────────────────────────────────────
+  const [showBridgeInstall, setShowBridgeInstall] = useState(false);
+
+  const [amplitudeLoading, setAmplitudeLoading] = useState(false);
+
+  const handleOpenInAmplitude = useCallback(async () => {
+    setAmplitudeLoading(true);
+    const logOpId = sessionLogService.startOperation(
+      'info', 'amplitude', 'AMP_FUNNEL_EXPORT',
+      `Opening funnel in Amplitude (${selectedNodeIds.length} nodes)`,
+      { filesAffected: selectedNodeIds },
+    );
+    try {
+      const status = await checkBridgeStatus();
+      if (!status.installed) {
+        sessionLogService.endOperation(logOpId, 'warning', 'Bridge extension not installed');
+        setShowBridgeInstall(true);
+        return;
+      }
+      sessionLogService.addChild(logOpId, 'info', 'AMP_BRIDGE_OK', `Bridge v${status.version || '?'} detected`);
+
+      if (!graph || selectedNodeIds.length === 0) {
+        sessionLogService.endOperation(logOpId, 'warning', 'No nodes selected');
+        alert('Select at least one node on the graph.');
+        return;
+      }
+
+      // Resolve Amplitude connection from edges touching the selected nodes.
+      // Each edge may specify a connection (edge.p.connection); fall back to graph.defaultConnection.
+      const connProvider = new IndexedDBConnectionProvider();
+      const graphDefaultConn = (graph as any).defaultConnection || '';
+      const selectedNodeSet = new Set(selectedNodeIds);
+
+      // Collect connection names from edges that touch selected nodes
+      const edgeConnections: string[] = [];
+      const nonAmplitudeNodes: string[] = [];
+      for (const edge of (graph.edges || [])) {
+        // Resolve from/to UUIDs to node IDs
+        const fromNode = (graph.nodes || []).find((n: any) => n.uuid === edge.from || n.id === edge.from);
+        const toNode = (graph.nodes || []).find((n: any) => n.uuid === edge.to || n.id === edge.to);
+        const fromId = fromNode?.id;
+        const toId = toNode?.id;
+        if (!fromId || !toId) continue;
+        if (!selectedNodeSet.has(fromId) && !selectedNodeSet.has(toId)) continue;
+
+        const edgeConn = edge.p?.connection || graphDefaultConn;
+        if (!edgeConn) {
+          // Node's edge has no connection at all
+          if (selectedNodeSet.has(fromId)) nonAmplitudeNodes.push(fromId);
+          if (selectedNodeSet.has(toId)) nonAmplitudeNodes.push(toId);
+        } else if (!edgeConn.startsWith('amplitude')) {
+          // Non-amplitude connection
+          if (selectedNodeSet.has(fromId)) nonAmplitudeNodes.push(fromId);
+          if (selectedNodeSet.has(toId)) nonAmplitudeNodes.push(toId);
+        } else {
+          edgeConnections.push(edgeConn);
+        }
+      }
+
+      // Warn if any selected nodes lack Amplitude data
+      const uniqueNonAmp = [...new Set(nonAmplitudeNodes)];
+      if (uniqueNonAmp.length > 0) {
+        const msg = `${uniqueNonAmp.length} node(s) have no Amplitude data source: ${uniqueNonAmp.join(', ')}`;
+        sessionLogService.addChild(logOpId, 'warning', 'AMP_NON_AMP_NODES', msg);
+        toast(msg, { duration: 6000, icon: '⚠️' });
+      }
+
+      // Determine the winning connection
+      const uniqueConns = [...new Set(edgeConnections)];
+      if (uniqueConns.length === 0) {
+        // No amplitude connections found on any edge — fall back to graph default
+        if (graphDefaultConn && graphDefaultConn.startsWith('amplitude')) {
+          uniqueConns.push(graphDefaultConn);
+        }
+      }
+
+      if (uniqueConns.length === 0) {
+        sessionLogService.endOperation(logOpId, 'error', 'No Amplitude connection found on graph or selected edges.');
+        alert('No Amplitude connection found.\n\nThe selected nodes have no edges with an Amplitude connection, and the graph has no defaultConnection set.');
+        return;
+      }
+
+      // Warn if mixed connections (e.g. some edges prod, some staging)
+      if (uniqueConns.length > 1) {
+        const msg = `Mixed Amplitude connections detected: ${uniqueConns.join(', ')}. Using "${uniqueConns[0]}".`;
+        sessionLogService.addChild(logOpId, 'warning', 'AMP_MIXED_CONNECTIONS', msg);
+        toast(msg, { duration: 6000, icon: '⚠️' });
+      }
+
+      const connectionName = uniqueConns[0];
+      let appId = '';
+      let orgId = '';
+      let orgSlug = '';
+      let excludedCohorts: string[] = [];
+      try {
+        const conn = await connProvider.getConnection(connectionName);
+        const defaults = (conn.defaults || {}) as Record<string, any>;
+        appId = defaults.app_id || '';
+        orgId = defaults.org_id || '';
+        orgSlug = defaults.org_slug || '';
+        excludedCohorts = Array.isArray(defaults.excluded_cohorts) ? defaults.excluded_cohorts : [];
+      } catch (e) {
+        sessionLogService.addChild(logOpId, 'warning', 'AMP_CONN_LOAD_ERR',
+          `Could not load connection "${connectionName}": ${e instanceof Error ? e.message : String(e)}`,
+        );
+      }
+
+      if (!appId || !orgId || !orgSlug) {
+        sessionLogService.endOperation(logOpId, 'error',
+          `Amplitude project not configured on connection "${connectionName}". Set app_id, org_id, and org_slug in connections.yaml.`,
+        );
+        alert(`Amplitude project not configured.\n\nThe connection "${connectionName}" is missing app_id, org_id, or org_slug in its defaults.\n\nEdit connections.yaml and add these fields under the "${connectionName}" connection.`);
+        return;
+      }
+
+      sessionLogService.addChild(logOpId, 'info', 'AMP_CONN_RESOLVED',
+        `Connection: ${connectionName} (from ${uniqueConns.length > 1 ? 'first of ' + uniqueConns.length + ' mixed' : 'edges'}) → app=${appId}, org=${orgId}`,
+      );
+
+      // Compose the effective DSL from both sources:
+      // - queryDSL: analytics panel's query (from/to/visited + any user-edited constraints)
+      // - currentDSL: graph-level DSL (window/context/case from window selector)
+      // Both may carry context(), case(), window(), exclude() clauses.
+      const dslParts = [queryDSL, currentDSL].filter(d => d && d.trim()).join('.');
+      const effectiveDsl = dslParts || null;
+
+      sessionLogService.addChild(logOpId, 'info', 'AMP_DSL_COMPOSED',
+        `Effective DSL: ${effectiveDsl || '(none)'}`,
+        `queryDSL: ${queryDSL || '(empty)'}\ncurrentDSL: ${currentDSL || '(empty)'}\ncomposed: ${effectiveDsl || '(none)'}`,
+      );
+
+      // Build the full funnel definition with all constraints
+      const buildResult = await buildAmplitudeFunnelDefinition({
+        selectedNodeIds,
+        graphNodes: graph.nodes || [],
+        graphEdges: graph.edges || [],
+        effectiveDsl,
+        appId,
+        connectionDefaults: { excluded_cohorts: excludedCohorts },
+      });
+
+      // Log the constructed funnel definition
+      const eventNames = buildResult.definition.params.events.map((e: any) => e.event_type);
+      const segCondCount = buildResult.definition.params.segments?.[0]?.conditions?.length || 0;
+      const cs = (buildResult.definition.params as any).conversionSeconds;
+      sessionLogService.addChild(logOpId, 'info', 'AMP_FUNNEL_BUILT',
+        `${eventNames.length} steps, ${segCondCount} segment conditions, cs=${cs ? (cs / 86400) + 'd' : 'default'}`,
+        `Steps: ${buildResult.stepsIncluded.join(' → ')}\nEvents: ${eventNames.join(' → ')}\nConversion window: ${cs ? cs + 's (' + (cs / 86400) + 'd)' : 'default'}`,
+      );
+
+      if (buildResult.warnings.length > 0) {
+        for (const w of buildResult.warnings) {
+          sessionLogService.addChild(logOpId, 'warning', 'AMP_FUNNEL_WARN', w);
+          toast(w, { duration: 6000, icon: '⚠️' });
+        }
+      }
+
+      if (buildResult.definition.params.events.length === 0) {
+        sessionLogService.endOperation(logOpId, 'error', 'No Amplitude events found for selected nodes');
+        alert('No Amplitude events found for the selected nodes. Ensure nodes have event_id bindings with Amplitude event names.');
+        return;
+      }
+
+      sessionLogService.addChild(logOpId, 'info', 'AMP_DRAFT_CREATING', 'Creating Amplitude draft via bridge...');
+      const result = await createAmplitudeDraft(buildResult.definition, orgId, orgSlug);
+      if (result.success) {
+        sessionLogService.endOperation(logOpId, 'success',
+          `Funnel draft created: ${eventNames.join(' → ')}`,
+          { draftUrl: result.draftUrl },
+        );
+        window.open(result.draftUrl, '_blank', 'noopener,noreferrer');
+      } else if (result.reason === 'not_authenticated') {
+        sessionLogService.endOperation(logOpId, 'warning', 'Not authenticated — user redirected to Amplitude login');
+        alert('Not logged into Amplitude. Opening Amplitude login — please sign in, then try again.');
+        window.open('https://app.amplitude.com/login', '_blank', 'noopener,noreferrer');
+      } else {
+        sessionLogService.endOperation(logOpId, 'error', `Draft creation failed: ${result.message}`);
+        alert(`Failed to create Amplitude funnel: ${result.message}`);
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      sessionLogService.endOperation(logOpId, 'error', `Amplitude bridge error: ${msg}`);
+      alert(`Amplitude bridge error: ${msg}`);
+    } finally {
+      setAmplitudeLoading(false);
+    }
+  }, [graph, selectedNodeIds, queryDSL, currentDSL]);
+
+  const handleBridgeInstalled = useCallback(async () => {
+    setShowBridgeInstall(false);
+    // Extension just detected — proceed with the original action
+    await handleOpenInAmplitude();
+  }, [handleOpenInAmplitude]);
+
+  const showAmplitudeButton = selectedNodeIds.length > 0 || queryDSL.trim().length > 0;
   
   return (
     <div className="analytics-panel">
@@ -853,12 +1055,22 @@ export default function AnalyticsPanel({ tabId, hideHeader = false }: AnalyticsP
         <div className="analytics-header">
           <BarChart3 size={14} strokeWidth={2} style={{ flexShrink: 0 }} />
           <h3 className="analytics-title">Analytics</h3>
+          {showAmplitudeButton && (
+            <button
+              onClick={handleOpenInAmplitude}
+              disabled={amplitudeLoading}
+              title="Open funnel in Amplitude"
+              style={{ marginLeft: 'auto', background: 'none', border: '1px solid #6366f1', cursor: amplitudeLoading ? 'wait' : 'pointer', padding: '2px 8px', borderRadius: 4, display: 'flex', alignItems: 'center', gap: 4, fontSize: 11, color: '#4338ca', whiteSpace: 'nowrap', opacity: amplitudeLoading ? 0.5 : 1 }}
+            >
+              {amplitudeLoading ? 'Opening...' : 'Amplitude'} <ExternalLink size={11} strokeWidth={2} />
+            </button>
+          )}
           <button
             className="analytics-refresh-btn"
             onClick={handleRefresh}
             disabled={isLoading}
             title="Clear cache and re-run analysis"
-            style={{ marginLeft: 'auto', background: 'none', border: 'none', cursor: 'pointer', padding: '2px 4px', borderRadius: 4, display: 'flex', alignItems: 'center', opacity: isLoading ? 0.4 : 0.6 }}
+            style={{ marginLeft: showAmplitudeButton ? undefined : 'auto', background: 'none', border: 'none', cursor: 'pointer', padding: '2px 4px', borderRadius: 4, display: 'flex', alignItems: 'center', opacity: isLoading ? 0.4 : 0.6 }}
             onMouseEnter={e => { if (!isLoading) (e.currentTarget.style.opacity = '1'); }}
             onMouseLeave={e => { (e.currentTarget.style.opacity = isLoading ? '0.4' : '0.6'); }}
           >
@@ -1084,6 +1296,13 @@ export default function AnalyticsPanel({ tabId, hideHeader = false }: AnalyticsP
           </div>
         )}
       </div>
+
+      {/* Amplitude Bridge install modal */}
+      <AmplitudeBridgeInstallModal
+        isOpen={showBridgeInstall}
+        onClose={() => setShowBridgeInstall(false)}
+        onInstalled={handleBridgeInstalled}
+      />
     </div>
   );
 }

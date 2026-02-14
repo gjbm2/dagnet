@@ -24,6 +24,13 @@ connections:
       # - US: https://amplitude.com/api/2
       # - EU: https://analytics.eu.amplitude.com/api/2
       base_url: "https://amplitude.com/api/2"
+      # Amplitude project identifiers (for front-end chart creation / funnel export).
+      # These MUST match the Amplitude project tied to the API credentials in credsRef.
+      # Find them in your Amplitude project URL: https://app.amplitude.com/analytics/{org_slug}/...
+      # and in Settings > Organization Settings > General.
+      app_id: "334050"
+      org_id: "126433"
+      org_slug: "project-vault"
       # Cohort exclusions (internal test users - commercially irrelevant)
       # NOTE: Create amplitude-test connection without this exclusion for internal testing
       excluded_cohorts:
@@ -634,6 +641,10 @@ connections:
     credsRef: amplitude-staging
     defaults:
       base_url: "https://amplitude.com/api/2"
+      # Override parent's project identifiers for staging
+      app_id: "785524"
+      org_id: "126433"
+      org_slug: "project-vault"
       # Override parent's cohort exclusions — staging project doesn't have the prod test-users cohort
       excluded_cohorts: []
 

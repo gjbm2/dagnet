@@ -223,6 +223,7 @@ When modifying functionality:
 4. **Add new tests** - For new functionality or bug fixes
 5. **Run RELEVANT tests only** - Don't run full suite unless explicitly asked
 6. **Write INTEGRATION tests, not unit tests** - See Testing Standards below. Unit tests with mocks don't catch real bugs.
+7. **Test design before test code** - Before writing any test code, produce a prose test design covering invariants, scenarios, and mock decisions. See Test Design Discipline below. Jumping straight to `describe()`/`it()` blocks without this step is a violation.
 
 Test files are in:
 - `graph-editor/src/services/__tests__/` - Service integration tests
@@ -361,19 +362,83 @@ await repositoryOperationsService.commitFiles(
 
 ## Testing Standards
 
-### Prefer integration tests for subsystem boundaries (balanced judgement)
+**The core problem these standards address**: over-mocking creates tests that pass but prove nothing. A test that mocks IDB, mocks FileRegistry, mocks the service layer, and asserts against the mocks is a closed loop — it provides zero assurance about real system behaviour. This codebase is complex; the bugs live at subsystem boundaries, not inside individual functions.
 
-Unit tests are still useful for **pure logic** (parsing, formatting, validation, small deterministic helpers).
+**Default posture**: integration-level tests (real internal components, mocked external APIs) are the **default** for this codebase. Moving toward more mocking requires justification. Moving toward less mocking (E2E) requires a UI-timing or visual-correctness reason.
 
-Most bugs occur at the **boundaries between subsystems** (IDB ↔ FileRegistry ↔ GraphStore ↔ UI). Unit tests that mock these dependencies will pass while the real integration is broken.
+### Test Design Gate (MANDATORY before writing test code)
 
-For any behaviour that crosses boundaries, prefer integration tests that use real components:
-- Real IndexedDB (via `fake-indexeddb` — already configured in vitest setup)
-- Real FileRegistry
-- Real GraphStore
-- Real service layer
+Before writing any `describe()` or `it()` blocks, the agent must produce a brief **prose test design** covering:
 
-**Mock external APIs** (GitHub, Amplitude) freely. Mocking internal components is OK only when you are explicitly testing isolated logic and not claiming end-to-end correctness.
+- **Invariants being protected**: what real bug would each test catch?
+- **Scenarios**: happy path, error paths, edge cases, boundary conditions
+- **Mock decisions**: for each dependency, real or mocked — and why (see Mock Discipline below)
+- **What a failing test would prove**: if this test goes red, what broke in the real system?
+
+This is non-negotiable. Jumping straight to test code without a design step is a violation, just as coding without an agreed plan violates Section 0.5. The design does not need to be long — a few bullet points suffice — but it must exist and be shown to the user before code is written.
+
+### Mock Discipline — every mock is a lie with a cost
+
+A mock replaces a real component with an **assumption** about how it behaves. Every mock is a bet that the assumption is correct. The question is not "should I mock?" but **"what is the cost of this lie?"**
+
+**Internal components** (IDB, FileRegistry, GraphStore, services, stores):
+- **Default: use the real thing.** These are where bugs live — prefix mismatches, sync ordering, dirty-state semantics, cache invalidation.
+- Mocking an internal component is permitted **only** when there is a concrete, articulable reason (e.g. the test is deliberately isolating pure logic that does not cross a subsystem boundary).
+- `fake-indexeddb` is already configured in vitest setup. FileRegistry and GraphStore can be instantiated directly. There is no setup cost that justifies mocking them.
+
+**External APIs** (GitHub, Amplitude, network calls):
+- **Default: mock them.** Stable contracts, controlled inputs, no value in hitting real endpoints.
+- Mock at the **narrowest possible boundary** — mock the HTTP call or API client method, not the entire service that wraps it.
+
+**The mock tax**: for every mock the agent introduces, it must be able to state: *"This mock assumes X, which is validated by Y."* If it cannot articulate what the mock assumes, the mock is hiding complexity, not managing it.
+
+**Tiered model of test reality** (default is Integration):
+
+| Level | What's real | What's mocked | Use for |
+|---|---|---|---|
+| **E2E** (Playwright) | Everything | Nothing | Critical user flows, UI timing, visual correctness |
+| **Integration** ← default | IDB, FileRegistry, GraphStore, services | External APIs | Subsystem boundary behaviour — the workhorse |
+| **Focused integration** | Service + one real dependency | Other internal deps + external APIs | Isolating a specific boundary interaction |
+| **Pure unit** | Just the function | Everything | Parsing, formatting, validation, deterministic helpers |
+
+**Agents must justify moving UP this stack** (toward more mocking), not justify staying at integration level.
+
+### Assertion Quality Standards
+
+**Banned shallow assertions** — these prove almost nothing and must not appear as the primary assertion of a test:
+- `expect(result).toBeDefined()` — proves it returned *something*, not the right thing
+- `expect(fn).not.toThrow()` — only proves it didn't crash, not that it did the right thing
+- `expect(result).toBeTruthy()` — weak and ambiguous
+- `expect(array.length).toBeGreaterThan(0)` — doesn't verify content
+- `expect(result).toEqual(expect.any(Object))` — shape-only, no value check
+
+These are acceptable as **precondition guards** (e.g. confirming a setup step succeeded before the real assertions), but never as the substance of a test.
+
+**Replacement mandate**: assert on **specific values** or **specific structural properties** that would change if the behaviour broke. If you cannot name the expected value, you do not understand the behaviour well enough to test it.
+
+**Assertion density**: a single assertion on a complex, multi-step operation is a red flag. Operations touching multiple subsystems (IDB, FileRegistry, GraphStore) should assert state in **each affected subsystem**, not just the final return value.
+
+### Test Names as Specification
+
+Test descriptions must state the **invariant being protected**, not describe implementation steps.
+- ❌ `it('should work')`, `it('handles the edge case')`, `it('returns correct result')`
+- ❌ `it('calls the service')`, `it('updates state')` — describes mechanism, not invariant
+- ✅ `it('should propagate dirty flag from IDB to FileRegistry when file content changes')`
+- ✅ `it('should reject commit when credentials are missing and surface a user-visible error')`
+- ✅ `it('should preserve node references in query fields after node ID rename')`
+
+The `describe` block names the subsystem or feature. The `it` block names the specific invariant. Together they read as a specification of the system's guarantees.
+
+### Red-Green Validity
+
+Before considering tests complete, the agent must satisfy: **"If I deleted the code under test, would this test fail?"**
+
+If the answer is uncertain, the test is tautological. Common causes:
+- Assertions only check values the mock was configured to return (testing the mock, not the system)
+- Assertions check constants or setup data that exist regardless of the code under test
+- The test exercises a code path but never asserts on its *effects*
+
+A tautological test is worse than no test — it inflates coverage metrics while providing zero assurance.
 
 ### Quick decision guide (choose the smallest test that still catches the real bug)
 - If the bug could be caused by **IDB prefixes, dirty state, registry sync, store sync, tab restore, or persistence format** → write an **integration** test (real IDB/registry/store).

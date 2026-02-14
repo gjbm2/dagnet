@@ -34,7 +34,8 @@ export type OperationType =
   | 'graph'
   | 'index'
   | 'merge'
-  | 'integrity';
+  | 'integrity'
+  | 'amplitude';
 
 /**
  * Structured context for different operation types

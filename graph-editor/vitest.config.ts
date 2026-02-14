@@ -56,6 +56,9 @@ export default defineConfig({
       // Local-only tests that require developer env files / real external HTTP.
       // CI must not attempt to run them.
       ...(process.env.CI ? ['**/*.local.*'] : []),
+      // Phase 4 E2E tests require live Amplitude API credentials + session cookies.
+      // Run manually: AMPLITUDE_E2E=1 source .env.amplitude.local && npm test -- --run tests/phase4-e2e/...
+      ...(process.env.AMPLITUDE_E2E ? [] : ['tests/phase4-e2e/**']),
     ],
     
     // Ignore unhandled errors from webidl-conversions (all tests pass, this is a dependency issue)

@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>DagNet Amplitude Bridge — Test</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 640px; margin: 40px auto; padding: 0 20px; }
+    button { padding: 8px 16px; font-size: 14px; cursor: pointer; margin: 4px; }
+    pre { background: #f3f4f6; padding: 12px; border-radius: 6px; overflow-x: auto; font-size: 12px; }
+    .ok { color: #059669; }
+    .err { color: #dc2626; }
+    #log { white-space: pre-wrap; }
+  </style>
+</head>
+<body>
+  <h1>DagNet Amplitude Bridge — Test</h1>
+  <p>This page tests the extension by sending messages from a web page context.</p>
+
+  <p><strong>Extension ID:</strong> <input id="extId" size="40" placeholder="paste from chrome://extensions" /></p>
+
+  <button onclick="testPing()">1. Ping extension</button>
+  <button onclick="testCreateDraft()">2. Create test funnel draft</button>
+
+  <h3>Log</h3>
+  <pre id="log"></pre>
+
+  <script>
+    const log = document.getElementById('log');
+    function append(msg, cls) {
+      const span = document.createElement('span');
+      span.className = cls || '';
+      span.textContent = msg + '\n';
+      log.appendChild(span);
+    }
+
+    function getExtId() {
+      return document.getElementById('extId').value.trim();
+    }
+
+    async function testPing() {
+      const extId = getExtId();
+      if (!extId) { append('Enter the extension ID first.', 'err'); return; }
+      append(`Pinging extension ${extId}...`);
+      try {
+        const resp = await chrome.runtime.sendMessage(extId, { action: 'ping' });
+        append(`Response: ${JSON.stringify(resp)}`, resp?.ok ? 'ok' : 'err');
+      } catch (e) {
+        append(`Error: ${e.message}`, 'err');
+        append('Is the extension installed and does externally_connectable match this origin?', 'err');
+      }
+    }
+
+    async function testCreateDraft() {
+      const extId = getExtId();
+      if (!extId) { append('Enter the extension ID first.', 'err'); return; }
+
+      const definition = {
+        app: 'YOUR_APP_ID',  // Replace with your Amplitude app_id from connections.yaml
+        type: 'funnels',
+        vis: 'bar',
+        version: 41,
+        name: null,
+        params: {
+          mode: 'ordered',
+          range: 'Last 30 Days',
+          interval: 1,
+          metric: 'CONVERSION',
+          conversionSeconds: 86400,
+          newOrActive: 'active',
+          nthTimeLookbackWindow: 365,
+          isFunnelPreciseComputationEnabled: false,
+          countGroup: { name: 'User', is_computed: false },
+          events: [
+            { event_type: 'Household Created', filters: [], group_by: [] },
+            { event_type: 'Household DelegationStatusChanged', filters: [], group_by: [] },
+          ],
+          segments: [{ name: 'All Users', label: '', conditions: [] }],
+          groupBy: [],
+          constantProps: [],
+          excludedEvents: [],
+        },
+      };
+
+      append('Creating draft...');
+      append(`Definition: ${JSON.stringify(definition.params.events.map(e => e.event_type))}`);
+
+      try {
+        const resp = await chrome.runtime.sendMessage(extId, {
+          action: 'createDraft',
+          definition,
+          orgId: 'YOUR_ORG_ID',      // Replace with your org_id from connections.yaml
+          orgSlug: 'YOUR_ORG_SLUG',  // Replace with your org_slug from connections.yaml
+        });
+        append(`Response: ${JSON.stringify(resp, null, 2)}`, resp?.success ? 'ok' : 'err');
+        if (resp?.draftUrl) {
+          append(`\nDraft URL: ${resp.draftUrl}`, 'ok');
+        }
+      } catch (e) {
+        append(`Error: ${e.message}`, 'err');
+      }
+    }
+  </script>
+</body>
+</html>

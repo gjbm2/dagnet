@@ -9,17 +9,17 @@
  *   node scripts/amplitude-sync-custom-events.mjs \
  *     --email greg@nous.co \
  *     --password "YOUR_PASSWORD" \
- *     --org 126433 \
- *     --source 334050 \
- *     --target 785524 \
+ *     --org $AMPLITUDE_ORG_ID \
+ *     --source $SOURCE_PROJECT_ID \
+ *     --target $TARGET_PROJECT_ID \
  *     [--dry-run]
  *
  * Or with saved session (skips login):
  *   node scripts/amplitude-sync-custom-events.mjs \
  *     --session /tmp/amp-session-state.json \
- *     --org 126433 \
- *     --source 334050 \
- *     --target 785524
+ *     --org $AMPLITUDE_ORG_ID \
+ *     --source $SOURCE_PROJECT_ID \
+ *     --target $TARGET_PROJECT_ID
  */
 
 import fs from 'fs';
@@ -115,7 +115,7 @@ function gqlRequest(opName, query, variables) {
     const body = JSON.stringify({ operationName: opName, variables, query });
     const req = https.request({
       hostname: 'app.amplitude.com',
-      path: `/t/graphql/org-url/project-vault?q=${opName}`,
+      path: `/t/graphql/org-url/${orgSlug}?q=${opName}`,
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',

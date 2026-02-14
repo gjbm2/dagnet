@@ -338,6 +338,36 @@ Analysis results include:
 
 When scenarios have different visibility modes, the probability label will differ per scenario.
 
+### Create as Chart in Amplitude
+
+DagNet can construct a correctly specified Amplitude funnel from your selected nodes and open it directly in Amplitude for exploration, slicing, saving, and sharing.
+
+**How to use:**
+
+1. **Select nodes** — Cmd+click (Ctrl+click on Windows) the nodes you want as funnel steps.
+2. **Open the Analytics panel** — click the bar-chart icon in the right sidebar.
+3. **Click "Amplitude"** — the button appears at the top right of the panel.
+4. A new browser tab opens with the funnel pre-built in Amplitude. You can explore it, change date ranges, add breakdowns, save it to a space, or share it with colleagues.
+
+**What's included in the export:**
+
+The chart carries over your graph's full query context: event filters, date range (window or cohort), context segments (e.g. channel), What-If constraints (`visited`, `exclude`, `case`), cohort exclusions, and a conversion window derived from graph latency data. Staging vs production is auto-detected from the graph's connection.
+
+**Browser extension (one-time setup):**
+
+This feature requires the **Amplitude Bridge** extension for Chrome-family browsers (Chrome, Edge, Brave, Arc). The first time you click the Amplitude button, DagNet walks you through installation:
+
+1. Download the extension folder (DagNet provides a link).
+2. Open `chrome://extensions` in your browser, enable "Developer mode".
+3. Click "Load unpacked" and select the downloaded folder.
+4. That's it — the extension runs silently in the background. It simply allows DagNet to create chart drafts using your existing Amplitude login session. It does not access any other data, and you can inspect its source code (it's a small open file in the DagNet repo under `extensions/amplitude-bridge/`).
+
+The extension only activates when DagNet explicitly requests a chart creation. It has no background activity, no tracking, and no permissions beyond the Amplitude domain.
+
+**Staging and production:**
+
+DagNet reads which Amplitude connection your graph edges use and creates the chart in the matching project. Switch between environments by changing the connection in the graph properties panel.
+
 ## File Management
 
 ### Opening Files

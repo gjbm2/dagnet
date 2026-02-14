@@ -1,4 +1,4 @@
-# TODO
+idea# TODO
 
 - We should remove the parity testing piece and complete cutover of BE stats service soon
 
@@ -540,6 +540,28 @@ Reproduce the issue and share the console outpu
 3. Ensure only one form instance per schema is mounted at a time (hide instead of unmount inactive tabs)
 
 **Priority:** Should be fixed before production release
+
+---
+
+## Amplitude front-end funnel export — configuration debt (14-Feb-26)
+
+- **Amplitude project identifiers (`app_id`, `org_id`, `org_slug`) currently live in `connections.yaml`** under each amplitude connection's `defaults`. This is an acceptable interim trade-off during rapid deployment — `connections.yaml` is intended to vary by deployment and is workspace-specific (pulled from the data repo into IDB).
+- **However, these values are not org-generic.** They are specific to a single Amplitude organisation/project. If DagNet were deployed to a second organisation, `connections.yaml` would need per-org values, which conflicts with its role as a shared connection adapter definition.
+- **Future**: move `app_id`, `org_id`, `org_slug` out of `connections.yaml` into a deployment-specific config mechanism (e.g. a `deployment.yaml` or environment-level settings) that is cleanly separated from the adapter logic.
+- **Related known debt**: `excluded_cohorts` in `connections.yaml` has the same issue — it contains an org-specific cohort ID. Same resolution path applies.
+- **Ref**: `graph-editor/src/components/panels/AnalyticsPanel.tsx` (`handleOpenInAmplitude`), `graph-editor/public/defaults/connections.yaml` (amplitude-prod/staging defaults).
+
+---
+
+## Amplitude bi-directional import: URL → graph (14-Feb-26)
+
+- **Feature**: user pastes an Amplitude funnel chart URL into DagNet and we extract the funnel structure into a new graph.
+- **Flow**: paste URL → extract chart ID from URL → query chart definition via `/api/3/chart/:id/csv` or GraphQL `ChartsFromIds` → parse the `events[]` array → reverse-map Amplitude event names back to DagNet node IDs via event definitions → construct graph nodes + edges in topological order → open as a new graph.
+- **Reverse event mapping**: needs a lookup from `provider_event_names.amplitude` → `event_id`. Currently event definitions are keyed by `event_id`; we'd need an inverse index or a scan of all event files.
+- **Segment conditions**: `visited()`, `exclude()`, `context()`, `case()` conditions in the chart's `segments[].conditions[]` would need to be reverse-mapped back to DSL clauses to populate `currentQueryDSL`.
+- **Date handling**: chart `start`/`end` (epoch seconds) → DagNet `window()` or `cohort()` DSL clause (UK date format).
+- **Edge cases**: charts with events not in the DagNet event registry, charts with group-by or non-funnel types, charts from a different Amplitude project than the workspace's connection.
+- **Ref**: `graph-editor/src/services/amplitudeFunnelBuilderService.ts` (forward path), `graph-editor/src/services/amplitudeBridgeService.ts` (chart API access), `docs/archive/PROJECT_CONNECT/CURRENT/DAS_DETAILED_DESIGN/Ampltitude-api-ref.md` (API docs).
 
 ---
 

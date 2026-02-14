@@ -9,8 +9,8 @@
 #   4. Run:
 #      ./scripts/amplitude-sync-custom-events.sh \
 #        --cookie "PASTE_COOKIE_HERE" \
-#        --org 126433 \
-#        --source 334050 \
+#        --org $AMPLITUDE_ORG_ID \
+#        --source $SOURCE_PROJECT_ID \
 #        --target 785524 \
 #        [--dry-run]
 #
@@ -49,7 +49,7 @@ if [[ -z "$COOKIE" || -z "$ORG_ID" || -z "$SOURCE_APP" || -z "$TARGET_APP" ]]; t
   exit 1
 fi
 
-GQL_URL="https://app.amplitude.com/t/graphql/org-url/project-vault"
+GQL_URL="https://app.amplitude.com/t/graphql/org-url/${ORG_SLUG}"
 
 # GraphQL query to list custom events
 LIST_QUERY='query CustomEvents($appId: ID!) {
@@ -200,7 +200,7 @@ for ce in source_active:
         continue
     
     # Execute mutation
-    GQL_URL = "https://app.amplitude.com/t/graphql/org-url/project-vault"
+    GQL_URL = f"https://app.amplitude.com/t/graphql/org-url/{org_slug}"
     
     if action == "CREATE":
         mutation = """mutation CreateCustomEvent($appId: ID!, $name: String!, $definition: JSON!, $description: String!, $isAutotrack: Boolean, $category: String) {

@@ -157,6 +157,7 @@ python dev-server.py
 - **Contexts** — segment by channel, device, browser, etc. with MECE partition handling
 - **Incremental fetch** — only retrieve missing days when expanding windows
 - **Query DSL** — `from().to().visited().context().cohort()` chaining
+- **Amplitude funnel export** — select nodes, click "Amplitude" in the Analytics panel, and DagNet constructs a correctly specified funnel chart in Amplitude (including event filters, context segments, latency-derived conversion windows, and cohort exclusions). Works with staging and production. Requires the Amplitude Bridge browser extension (`extensions/amplitude-bridge/`, Chrome-family only).
 
 ### Sharing & Dashboarding
 
