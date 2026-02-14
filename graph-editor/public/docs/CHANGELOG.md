@@ -1,4 +1,11 @@
 # DagNet Release Notes
+## Version 1.6.0b
+**Released:** 14-Feb-26
+
+Dark mode. 🌙
+
+---
+
 ## Version 1.5.14b
 **Released:** 13-Feb-26
 
