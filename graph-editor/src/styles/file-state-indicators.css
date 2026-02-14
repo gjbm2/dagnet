@@ -333,7 +333,7 @@
 
 /* ===== DARK MODE ===== */
 
-@media (prefers-color-scheme: dark) {
+[data-theme="dark"] {
   .status-dot.open {
     background-color: #4fc3f7;
   }
@@ -378,6 +378,15 @@
 
   .navigator-item-name {
     color: #e0e0e0;
+  }
+
+  /* Preserve open/dirty colours in dark mode (brighter variants) */
+  .navigator-item-name.is-open {
+    color: #60a5fa; /* brighter blue */
+  }
+
+  .navigator-item-name.is-dirty {
+    color: #fb923c; /* brighter orange */
   }
 
   .tab-header:hover {

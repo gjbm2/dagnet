@@ -8,6 +8,7 @@ import { validateConditionalProbabilities } from '@/lib/conditionalValidation';
 import { computeEffectiveEdgeProbability } from '@/lib/whatIf';
 import Tooltip from '@/components/Tooltip';
 import { getObjectTypeTheme } from '@/theme/objectTypeTheme';
+import { useTheme } from '@/contexts/ThemeContext';
 import { fileRegistry } from '@/contexts/TabContext';
 import { ExternalLink, ZapOff } from 'lucide-react';
 import { countNodeOverrides } from '../../hooks/useRemoveOverrides';
@@ -72,6 +73,13 @@ interface ConversionNodeData {
 }
 
 export default function ConversionNode({ data, selected }: NodeProps<ConversionNodeData>) {
+  const { theme } = useTheme();
+  const dark = theme === 'dark';
+  // Canvas background must match the halo colour for edge-clipping to work
+  const canvasBg = dark ? '#1e1e1e' : '#f8fafc';
+  const nodeFill = dark ? '#2d2d2d' : '#fff';
+  const nodeText = dark ? '#e0e0e0' : '#333';
+  const nodeBorder = dark ? '#555' : '#ddd';
   const { getEdges, getNodes, setNodes } = useReactFlow();
   const { activeTabId, operations, tabs } = useTabContext();
   const { graph, setGraph, saveHistoryState } = useGraphStore();
@@ -615,17 +623,17 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
       style={{
         position: 'relative',
         padding: '8px',
-        border: outlinePathD ? 'none' : (selected ? '5px solid #333' : // Thick dark grey border for all selected nodes
-                ((probabilityMass && !probabilityMass.isComplete) || (conditionalValidation?.hasProbSumError)) ? '2px solid #ff6b6b' : // Red border for probability conservation errors
-                '2px solid #ddd'),
-        ...nodeShape, // Apply shape-specific styles
-        background: outlinePathD ? 'transparent' : '#fff', // Same white for all nodes
-        color: '#333', // Same text color for all nodes
+        border: outlinePathD ? 'none' : (selected ? `5px solid ${dark ? '#e0e0e0' : '#333'}` :
+                ((probabilityMass && !probabilityMass.isComplete) || (conditionalValidation?.hasProbSumError)) ? '2px solid #ff6b6b' :
+                `2px solid ${nodeBorder}`),
+        ...nodeShape,
+        background: outlinePathD ? 'transparent' : nodeFill,
+        color: nodeText,
         textAlign: 'center',
         cursor: 'pointer',
         boxShadow: outlinePathD ? 'none' : (() => {
-          // Canvas background colour from GraphCanvas ReactFlow style
-          const canvasColour = '#f8fafc';
+          // Canvas background colour — must match GraphCanvas for edge-clipping halo
+          const canvasColour = canvasBg;
 
           // Outer "halo" in canvas colour to act as a pseudo-clip for edges
           // This renders behind the node but above edges, hiding edge segments near the node boundary.
@@ -722,7 +730,7 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
           <path
             d={outlinePathD}
             fill="none"
-            stroke="#f8fafc"
+            stroke={canvasBg}
             strokeWidth={HALO_WIDTH}
           />
           
@@ -731,7 +739,7 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
             {/* Fill */}
             <path
               d={outlinePathD}
-              fill='#fff' // Same white for all nodes
+              fill={nodeFill}
             />
             
             {/* Inner edge glow - blurred stroke clipped to INSIDE the node face only */}
@@ -767,10 +775,10 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
               d={outlinePathD}
               fill="none"
               stroke={
-                selected ? '#333'
+                selected ? (dark ? '#e0e0e0' : '#333')
                   : (probabilityMass && !probabilityMass.isComplete) || conditionalValidation?.hasProbSumError
                     ? '#ff6b6b'
-                    : '#ddd'
+                    : nodeBorder
               }
               strokeWidth={selected ? 5 : 2}
             />
@@ -786,7 +794,7 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
         position={Position.Left} 
         id="left" 
         style={{ 
-          background: '#555', 
+          background: dark ? '#aaa' : '#555', 
           width: '8px', 
           height: '8px',
           opacity: showHandles ? 1 : 0,
@@ -805,7 +813,7 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
           position={Position.Top} 
           id="top" 
           style={{ 
-            background: '#555', 
+            background: dark ? '#aaa' : '#555', 
             width: '8px', 
             height: '8px',
             opacity: showHandles ? 1 : 0,
@@ -824,7 +832,7 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
         position={Position.Right} 
         id="right" 
         style={{ 
-          background: '#555', 
+          background: dark ? '#aaa' : '#555', 
           width: '8px', 
           height: '8px',
           opacity: showHandles ? 1 : 0,
@@ -843,7 +851,7 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
           position={Position.Bottom} 
           id="bottom" 
           style={{ 
-            background: '#555', 
+            background: dark ? '#aaa' : '#555', 
             width: '8px', 
             height: '8px',
             opacity: showHandles ? 1 : 0,
@@ -927,7 +935,7 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
               <ImageIcon
                 size={24}
                 strokeWidth={1}
-                style={{ color: '#cbd5e1', opacity: 0.4 }}
+                style={{ color: dark ? '#555' : '#cbd5e1', opacity: 0.4 }}
               />
             )}
           </div>
@@ -971,7 +979,7 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
                 <ZapOff 
                   size={10} 
                   strokeWidth={2}
-                  color="#000000"
+                  color={dark ? '#999' : '#000000'}
                   style={{ 
                     display: 'inline-block',
                     verticalAlign: 'middle',
@@ -983,7 +991,7 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
           </div>
           
           {data.absorbing && !isCaseNode && !data.outcome_type && (
-            <div style={{ fontSize: `${NODE_SECONDARY_FONT_SIZE}px`, color: '#666', marginTop: '4px' }}>
+            <div style={{ fontSize: `${NODE_SECONDARY_FONT_SIZE}px`, color: dark ? '#999' : '#666', marginTop: '4px' }}>
               TERMINAL
             </div>
           )}
@@ -998,7 +1006,7 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
           {isCaseNode && data.case && (
             <div style={{ 
               fontSize: `${NODE_SMALL_FONT_SIZE}px`, 
-              color: '#666', // Same secondary color as other nodes
+              color: dark ? '#999' : '#666',
               marginTop: '2px',
               opacity: 0.9
             }}>
@@ -1012,7 +1020,7 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
               fontSize: `${NODE_SMALL_FONT_SIZE}px`, 
               color: '#ff6b6b', 
               marginTop: '2px',
-              background: '#fff5f5',
+              background: dark ? '#3b1c1c' : '#fff5f5',
               padding: '2px 4px',
               borderRadius: '3px',
               border: '1px solid #ff6b6b',
@@ -1028,7 +1036,7 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
               fontSize: `${NODE_SMALL_FONT_SIZE}px`, 
               color: '#ff6b6b', 
               marginTop: '2px',
-              background: '#fff5f5',
+              background: dark ? '#3b1c1c' : '#fff5f5',
               padding: '2px 4px',
               borderRadius: '3px',
               border: '1px solid #ff6b6b',
@@ -1051,7 +1059,7 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
               fontSize: `${NODE_SMALL_FONT_SIZE}px`, 
               color: '#ff6b6b', 
               marginTop: '2px',
-              background: '#fff5f5',
+              background: dark ? '#3b1c1c' : '#fff5f5',
               padding: '2px 4px',
               borderRadius: '3px',
               border: '1px solid #ff6b6b',
@@ -1315,7 +1323,7 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
     position={Position.Left} 
     id="left-out" 
     style={{ 
-      background: '#000', 
+      background: dark ? '#ccc' : '#000', 
       width: '8px', 
       height: '8px',
       opacity: showHandles ? 1 : 0,
@@ -1334,7 +1342,7 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
       position={Position.Top} 
       id="top-out" 
       style={{ 
-        background: '#000', 
+        background: dark ? '#ccc' : '#000', 
         width: '8px', 
         height: '8px',
         opacity: showHandles ? 1 : 0,
@@ -1353,7 +1361,7 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
     position={Position.Right} 
     id="right-out" 
     style={{ 
-      background: '#000', 
+      background: dark ? '#ccc' : '#000', 
       width: '8px', 
       height: '8px',
       opacity: showHandles ? 1 : 0,
@@ -1372,7 +1380,7 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
       position={Position.Bottom} 
       id="bottom-out" 
       style={{ 
-        background: '#000', 
+        background: dark ? '#ccc' : '#000', 
         width: '8px', 
         height: '8px',
         opacity: showHandles ? 1 : 0,

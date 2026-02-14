@@ -5,6 +5,7 @@
  */
 
 import React, { useState, useRef, useEffect } from 'react';
+import { useTheme } from '../contexts/ThemeContext';
 import { dataOperationsService } from '../services/dataOperationsService';
 import { fileOperationsService } from '../services/fileOperationsService';
 import { extractSubgraph, createGraphFromSubgraph, generateSubgraphName } from '../lib/subgraphExtractor';
@@ -54,6 +55,12 @@ export const NodeContextMenu: React.FC<NodeContextMenuProps> = ({
   onSelectNode,
   onDeleteNode,
 }) => {
+  const { theme } = useTheme();
+  const dark = theme === 'dark';
+  const menuBg = dark ? '#2d2d2d' : 'white';
+  const menuBorder = dark ? '#555' : '#ddd';
+  const menuShadow = dark ? '0 4px 12px rgba(0,0,0,0.4)' : '0 4px 12px rgba(0,0,0,0.15)';
+  const menuHover = dark ? '#3d3d3d' : '#f8f9fa';
   const [openSubmenu, setOpenSubmenu] = useState<string | null>(null);
   const submenuTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -610,13 +617,14 @@ export const NodeContextMenu: React.FC<NodeContextMenuProps> = ({
         position: 'fixed',
         left: position.left,
         top: position.top,
-        background: 'white',
-        border: '1px solid #ddd',
+        background: menuBg,
+        border: `1px solid ${menuBorder}`,
         borderRadius: '4px',
-        boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+        boxShadow: menuShadow,
         minWidth: '160px',
         padding: '4px',
-        zIndex: 10000
+        zIndex: 10000,
+        color: dark ? '#e0e0e0' : 'inherit'
       }}
       onClick={(e) => e.stopPropagation()}
     >
@@ -634,8 +642,8 @@ export const NodeContextMenu: React.FC<NodeContextMenuProps> = ({
           fontSize: '13px',
           borderRadius: '2px'
         }}
-        onMouseEnter={(e) => (e.currentTarget.style.background = '#f8f9fa')}
-        onMouseLeave={(e) => (e.currentTarget.style.background = 'white')}
+        onMouseEnter={(e) => (e.currentTarget.style.background = menuHover)}
+        onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
       >
         Properties
       </div>
@@ -653,8 +661,8 @@ export const NodeContextMenu: React.FC<NodeContextMenuProps> = ({
             fontSize: '13px',
             borderRadius: '2px'
           }}
-          onMouseEnter={(e) => (e.currentTarget.style.background = '#f8f9fa')}
-          onMouseLeave={(e) => (e.currentTarget.style.background = 'white')}
+          onMouseEnter={(e) => (e.currentTarget.style.background = menuHover)}
+          onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
         >
           📋 Paste node: {copiedNode.objectId}
         </div>
@@ -673,8 +681,8 @@ export const NodeContextMenu: React.FC<NodeContextMenuProps> = ({
             fontSize: '13px',
             borderRadius: '2px'
           }}
-          onMouseEnter={(e) => (e.currentTarget.style.background = '#f8f9fa')}
-          onMouseLeave={(e) => (e.currentTarget.style.background = 'white')}
+          onMouseEnter={(e) => (e.currentTarget.style.background = menuHover)}
+          onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
         >
           📋 Paste case: {copiedCase.objectId}
         </div>
@@ -693,8 +701,8 @@ export const NodeContextMenu: React.FC<NodeContextMenuProps> = ({
             fontSize: '13px',
             borderRadius: '2px'
           }}
-          onMouseEnter={(e) => (e.currentTarget.style.background = '#f8f9fa')}
-          onMouseLeave={(e) => (e.currentTarget.style.background = 'white')}
+          onMouseEnter={(e) => (e.currentTarget.style.background = menuHover)}
+          onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
         >
           📋 Paste event: {copiedEvent.objectId}
         </div>
@@ -838,8 +846,8 @@ export const NodeContextMenu: React.FC<NodeContextMenuProps> = ({
           alignItems: 'center',
           gap: '8px'
         }}
-        onMouseEnter={(e) => (e.currentTarget.style.background = '#f8f9fa')}
-        onMouseLeave={(e) => (e.currentTarget.style.background = 'white')}
+        onMouseEnter={(e) => (e.currentTarget.style.background = menuHover)}
+        onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
       >
         <Clipboard size={14} />
         <span>Copy{isMultiSelect ? ` (${selectedNodes.length} nodes)` : ''}</span>
@@ -859,8 +867,8 @@ export const NodeContextMenu: React.FC<NodeContextMenuProps> = ({
           alignItems: 'center',
           gap: '8px'
         }}
-        onMouseEnter={(e) => (e.currentTarget.style.background = '#f8f9fa')}
-        onMouseLeave={(e) => (e.currentTarget.style.background = 'white')}
+        onMouseEnter={(e) => (e.currentTarget.style.background = menuHover)}
+        onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
       >
         <Scissors size={14} />
         <span>Cut{isMultiSelect ? ` (${selectedNodes.length} nodes)` : ''}</span>
@@ -882,8 +890,8 @@ export const NodeContextMenu: React.FC<NodeContextMenuProps> = ({
           alignItems: 'center',
           gap: '8px'
         }}
-        onMouseEnter={(e) => (e.currentTarget.style.background = '#f8f9fa')}
-        onMouseLeave={(e) => (e.currentTarget.style.background = 'white')}
+        onMouseEnter={(e) => (e.currentTarget.style.background = menuHover)}
+        onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
       >
         <Copy size={14} />
         <span>Copy vars{isMultiSelect ? ` (${selectedNodes.length} nodes)` : ''}</span>
@@ -914,8 +922,8 @@ export const NodeContextMenu: React.FC<NodeContextMenuProps> = ({
               alignItems: 'center',
               gap: '8px'
             }}
-            onMouseEnter={(e) => (e.currentTarget.style.background = '#f8f9fa')}
-            onMouseLeave={(e) => (e.currentTarget.style.background = 'white')}
+            onMouseEnter={(e) => (e.currentTarget.style.background = menuHover)}
+            onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
           >
             <Share2 size={14} />
             <span>Show in new graph ({selectedNodes.length} nodes)</span>
@@ -942,8 +950,8 @@ export const NodeContextMenu: React.FC<NodeContextMenuProps> = ({
             color: '#28a745',
             borderRadius: '2px'
           }}
-          onMouseEnter={(e) => (e.currentTarget.style.background = '#f8f9fa')}
-          onMouseLeave={(e) => (e.currentTarget.style.background = 'white')}
+          onMouseEnter={(e) => (e.currentTarget.style.background = menuHover)}
+          onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
         >
           Show {isMultiSelect ? `${selectedNodeIds.length} nodes` : 'node'}
         </div>
@@ -963,8 +971,8 @@ export const NodeContextMenu: React.FC<NodeContextMenuProps> = ({
             color: '#6c757d',
             borderRadius: '2px'
           }}
-          onMouseEnter={(e) => (e.currentTarget.style.background = '#f8f9fa')}
-          onMouseLeave={(e) => (e.currentTarget.style.background = 'white')}
+          onMouseEnter={(e) => (e.currentTarget.style.background = menuHover)}
+          onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
         >
           Hide {isMultiSelect ? `${selectedNodeIds.length} nodes` : 'node'}
         </div>
@@ -984,8 +992,8 @@ export const NodeContextMenu: React.FC<NodeContextMenuProps> = ({
           color: '#dc3545',
           borderRadius: '2px'
         }}
-        onMouseEnter={(e) => (e.currentTarget.style.background = '#f8f9fa')}
-        onMouseLeave={(e) => (e.currentTarget.style.background = 'white')}
+        onMouseEnter={(e) => (e.currentTarget.style.background = menuHover)}
+        onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
       >
         Delete node
       </div>

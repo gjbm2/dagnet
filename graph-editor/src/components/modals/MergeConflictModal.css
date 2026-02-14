@@ -274,3 +274,25 @@
   cursor: not-allowed;
 }
 
+/* ===== DARK MODE ===== */
+/* Define the CSS variables that the component uses with light fallbacks */
+[data-theme="dark"] .merge-conflict-modal {
+  --color-bg: #2d2d2d;
+  --color-border: #404040;
+  --color-text: #e0e0e0;
+  --color-text-secondary: #999;
+  --color-hover: #3d3d3d;
+  --color-warning-bg: #3b2f0e;
+  --color-warning-border: #6b5b00;
+  --color-warning-text: #fbbf24;
+}
+
+/* History modal reuses these styles */
+[data-theme="dark"] .history-modal-content {
+  --color-bg: #2d2d2d;
+  --color-border: #404040;
+  --color-text: #e0e0e0;
+  --color-text-secondary: #999;
+  --color-hover: #3d3d3d;
+}
+

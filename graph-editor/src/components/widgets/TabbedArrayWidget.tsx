@@ -53,7 +53,7 @@ export function TabbedArrayWidget(props: ArrayFieldTemplateProps) {
             sx={{ 
               mb: 2, 
               p: 2, 
-              border: '1px solid #e0e0e0', 
+              border: '1px solid var(--border-primary, #e0e0e0)', 
               borderRadius: '4px',
               display: 'flex',
               alignItems: 'flex-start',
@@ -189,9 +189,9 @@ export function TabbedArrayWidget(props: ArrayFieldTemplateProps) {
         sx={{ 
           mt: 2, 
           p: 3, 
-          border: '1px solid #e0e0e0', 
+          border: '1px solid var(--border-primary, #e0e0e0)', 
           borderRadius: '4px',
-          backgroundColor: '#fafafa'
+          backgroundColor: 'var(--bg-secondary, #fafafa)'
         }}
       >
         {items.length === 0 ? (

@@ -1,0 +1,1128 @@
+/*
+ * Dark mode overrides for panels, editors, modals, and secondary UI.
+ * Covers Phases 3–4 of the light/dark mode plan.
+ *
+ * Convention: all selectors are prefixed with [data-theme="dark"].
+ */
+
+/* ============================================================
+   COLLAPSIBLE SECTION (used across many panels)
+   ============================================================ */
+
+[data-theme="dark"] .collapsible-section {
+  background: #252525;
+  border-color: #404040;
+}
+
+[data-theme="dark"] .collapsible-section:hover {
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+}
+
+[data-theme="dark"] .collapsible-section-header {
+  background: #2a2a2a;
+}
+
+[data-theme="dark"] .collapsible-section-header:hover {
+  background-color: #333;
+}
+
+[data-theme="dark"] .collapsible-section-header.is-open {
+  border-bottom-color: #404040;
+}
+
+[data-theme="dark"] .collapsible-section-title {
+  color: #e0e0e0;
+}
+
+[data-theme="dark"] .collapsible-section-expand-icon {
+  color: #999;
+}
+
+[data-theme="dark"] .collapsible-section-badge {
+  background: #404040;
+  color: #999;
+}
+
+[data-theme="dark"] .collapsible-section-content {
+  background: #252525;
+}
+
+/* ============================================================
+   PROPERTIES PANEL
+   ============================================================ */
+
+[data-theme="dark"] .properties-panel {
+  background: #1e1e1e;
+}
+
+[data-theme="dark"] .property-input {
+  background: #2d2d2d;
+  border-color: #404040;
+  color: #e0e0e0;
+}
+
+[data-theme="dark"] .property-input:focus {
+  border-color: #4d9ef7;
+  box-shadow: 0 0 0 3px rgba(77, 158, 247, 0.15);
+}
+
+[data-theme="dark"] .property-input:disabled {
+  background-color: #1e1e1e;
+  color: #666;
+}
+
+[data-theme="dark"] .property-label {
+  color: #aaa;
+}
+
+[data-theme="dark"] .properties-panel label,
+[data-theme="dark"] .properties-panel .property-label {
+  color: #999 !important;
+}
+
+[data-theme="dark"] .property-checkbox-label {
+  color: #e0e0e0;
+}
+
+[data-theme="dark"] .property-helper-text {
+  color: #888;
+}
+
+[data-theme="dark"] .property-toggle-btn {
+  background: #2d2d2d;
+  border-color: #404040;
+  color: #e0e0e0;
+}
+
+[data-theme="dark"] .property-toggle-btn:hover:not(.active) {
+  background: #353535;
+}
+
+[data-theme="dark"] .property-readonly {
+  background: #1e1e1e;
+  color: #888;
+  border-color: #333;
+}
+
+[data-theme="dark"] .property-info-box {
+  background: #1a2a40;
+}
+
+[data-theme="dark"] .property-info-box.case-info {
+  background: #252525;
+  border-color: #404040;
+}
+
+[data-theme="dark"] .property-info-box.what-if-info {
+  background: #3b2f0e;
+  border-color: #6b5b00;
+}
+
+[data-theme="dark"] .variant-card {
+  background: #252525;
+  border-color: #404040;
+}
+
+[data-theme="dark"] .variant-card-header {
+  border-bottom-color: #333;
+}
+
+[data-theme="dark"] .variant-card-title {
+  color: #e0e0e0;
+}
+
+[data-theme="dark"] .property-add-btn {
+  background: #2d2d2d;
+  border-color: #404040;
+  color: #e0e0e0;
+}
+
+[data-theme="dark"] .property-add-btn:hover {
+  background: #353535;
+  border-color: #4d9ef7;
+  color: #4d9ef7;
+}
+
+/* Properties Panel Wrapper */
+[data-theme="dark"] .properties-panel-wrapper {
+  background: #1e1e1e;
+}
+
+[data-theme="dark"] .properties-panel-wrapper .panel-header {
+  background: #252525;
+  border-bottom-color: #404040;
+}
+
+[data-theme="dark"] .properties-panel-wrapper .panel-header h3 {
+  color: #e0e0e0;
+}
+
+[data-theme="dark"] .properties-snapshots-menu {
+  background-color: #2d2d2d;
+  border-color: rgba(255, 255, 255, 0.08);
+}
+
+[data-theme="dark"] .properties-snapshots-item {
+  color: #e0e0e0;
+}
+
+[data-theme="dark"] .properties-snapshots-item:hover {
+  background-color: #3d3d3d;
+}
+
+[data-theme="dark"] .properties-snapshots-separator {
+  background-color: #404040;
+}
+
+/* Analytics Panel dark rules are now in AnalyticsPanel.css */
+
+/* ============================================================
+   SCENARIOS PANEL
+   ============================================================ */
+
+[data-theme="dark"] .scenarios-panel {
+  background: #1e1e1e;
+  color: #e0e0e0;
+}
+
+[data-theme="dark"] .scenarios-header {
+  background: #252525;
+  border-bottom-color: #404040;
+}
+
+[data-theme="dark"] .scenarios-title {
+  color: #e0e0e0;
+}
+
+[data-theme="dark"] .scenario-row {
+  background: #2d2d2d;
+  border-color: #404040;
+}
+
+[data-theme="dark"] .scenario-row:hover {
+  background: #353535;
+  border-color: #555;
+}
+
+[data-theme="dark"] .scenario-row.selected {
+  background: #1a2a40;
+  border-color: #4d9ef7;
+}
+
+[data-theme="dark"] .scenario-row.scenario-base:hover,
+[data-theme="dark"] .scenario-row.scenario-current:hover {
+  background: #2d2d2d;
+  border-color: #404040;
+}
+
+[data-theme="dark"] .scenarios-footer {
+  background: #252525;
+  border-top-color: #404040;
+}
+
+[data-theme="dark"] .scenarios-btn {
+  background: #2d2d2d;
+  border-color: #555;
+  color: #e0e0e0;
+}
+
+[data-theme="dark"] .scenarios-btn:hover:not(:disabled) {
+  background: #353535;
+}
+
+[data-theme="dark"] .scenarios-control-btn {
+  background: #2d2d2d;
+  border-color: #555;
+  color: #e0e0e0;
+}
+
+[data-theme="dark"] .scenarios-divider {
+  background: #404040;
+}
+
+[data-theme="dark"] .current-whatif-button.chip {
+  background: #353535;
+  border-color: #555;
+  color: #e0e0e0;
+}
+
+[data-theme="dark"] .current-whatif-button.tab {
+  background: #353535;
+  color: #e0e0e0;
+}
+
+[data-theme="dark"] .current-whatif-panel.variant-card {
+  background: #353535 !important;
+}
+
+/* ============================================================
+   TOOLS PANEL
+   ============================================================ */
+
+[data-theme="dark"] .tools-panel {
+  background: #1e1e1e;
+}
+
+[data-theme="dark"] .tools-panel .panel-header {
+  background: #252525;
+  border-bottom-color: #404040;
+  color: #e0e0e0;
+}
+
+[data-theme="dark"] .tools-panel .panel-body {
+  background: #1e1e1e;
+}
+
+[data-theme="dark"] .tool-button {
+  background: #2d2d2d;
+  border-color: #404040;
+  color: #e0e0e0;
+}
+
+[data-theme="dark"] .tool-button:hover:not(:disabled) {
+  background: #353535;
+}
+
+[data-theme="dark"] .tool-control {
+  background: #252525;
+}
+
+[data-theme="dark"] .tool-control label {
+  color: #999;
+}
+
+[data-theme="dark"] .tool-checkbox span,
+[data-theme="dark"] .tool-radio span {
+  color: #e0e0e0;
+}
+
+/* ============================================================
+   WHAT-IF PANEL
+   ============================================================ */
+
+[data-theme="dark"] .what-if-panel {
+  background: #1e1e1e;
+}
+
+[data-theme="dark"] .what-if-panel .panel-header {
+  background: #252525;
+}
+
+[data-theme="dark"] .what-if-panel > .collapsible-section:not(:last-child) {
+  border-bottom-color: #404040;
+}
+
+/* ============================================================
+   GRAPH EDITOR
+   ============================================================ */
+
+[data-theme="dark"] .graph-editor-dock-container .dock-panel[data-panel-id="graph-sidebar-panel"],
+[data-theme="dark"] .graph-editor-dock-container .dock-panel[data-dockid="graph-sidebar-panel"] {
+  border-left-color: #404040;
+  background: #1e1e1e;
+}
+
+[data-theme="dark"] .graph-minimize-button {
+  background: #333 !important;
+  border-color: #444 !important;
+  color: #999 !important;
+}
+
+[data-theme="dark"] .graph-minimize-button:hover {
+  background: #444 !important;
+  color: #e0e0e0 !important;
+}
+
+[data-theme="dark"] .dock-splitter {
+  background: #404040 !important;
+}
+
+[data-theme="dark"] .dock-splitter:hover {
+  background: #555 !important;
+}
+
+/* ============================================================
+   SESSION LOG VIEWER
+   ============================================================ */
+
+[data-theme="dark"] .session-log-viewer {
+  background: #1e1e1e;
+  color: #e0e0e0;
+}
+
+[data-theme="dark"] .log-toolbar {
+  background: #252525;
+  border-bottom-color: #404040;
+}
+
+[data-theme="dark"] .log-search {
+  background: #2d2d2d;
+  border-color: #404040;
+  color: #e0e0e0;
+}
+
+[data-theme="dark"] .log-btn {
+  background: #2d2d2d;
+  border-color: #404040;
+  color: #e0e0e0;
+}
+
+[data-theme="dark"] .log-btn:hover {
+  background: #353535;
+}
+
+[data-theme="dark"] .log-message {
+  color: #e0e0e0;
+}
+
+[data-theme="dark"] .log-entry-expandable:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+[data-theme="dark"] .log-context {
+  background: #252525;
+  border-color: #404040;
+}
+
+[data-theme="dark"] .context-value-object {
+  background: #2d2d2d;
+  border-color: #404040;
+}
+
+[data-theme="dark"] .log-children {
+  border-left-color: #555;
+}
+
+[data-theme="dark"] .log-level-success .log-message { color: #34d399; }
+[data-theme="dark"] .log-level-warning .log-message { color: #fbbf24; }
+[data-theme="dark"] .log-level-error .log-message { color: #f87171; }
+
+[data-theme="dark"] .log-context-menu {
+  background: #2d2d2d;
+  border-color: #404040;
+}
+
+[data-theme="dark"] .log-context-menu-item {
+  color: #e0e0e0;
+}
+
+[data-theme="dark"] .log-context-menu-item:hover {
+  background: #3d3d3d;
+}
+
+/* ============================================================
+   GRAPH ISSUES VIEWER
+   ============================================================ */
+
+[data-theme="dark"] .graph-issues-viewer {
+  background: #1e1e1e;
+  color: #e0e0e0;
+}
+
+[data-theme="dark"] .issues-toolbar {
+  background: #252525;
+  border-bottom-color: #404040;
+}
+
+[data-theme="dark"] .issues-search,
+[data-theme="dark"] .issues-graph-filter {
+  background: #2d2d2d;
+  border-color: #404040;
+  color: #e0e0e0;
+}
+
+[data-theme="dark"] .severity-toggle {
+  background: #2d2d2d;
+  border-color: #404040;
+  color: #999;
+}
+
+[data-theme="dark"] .severity-toggle:hover {
+  background: #353535;
+}
+
+[data-theme="dark"] .issues-btn {
+  background: #2d2d2d;
+  border-color: #404040;
+  color: #e0e0e0;
+}
+
+[data-theme="dark"] .issues-status {
+  background: #252525;
+  border-bottom-color: #404040;
+}
+
+[data-theme="dark"] .file-issue-group {
+  border-bottom-color: #404040;
+}
+
+[data-theme="dark"] .file-issues {
+  border-left-color: #555;
+}
+
+[data-theme="dark"] .issue-message {
+  color: #e0e0e0;
+}
+
+[data-theme="dark"] .issue-field code {
+  background: #2d2d2d;
+  color: #f87171;
+}
+
+[data-theme="dark"] .issues-category-menu {
+  background: #2d2d2d;
+  border-color: #404040;
+}
+
+[data-theme="dark"] .issue-context-menu {
+  background: #2d2d2d;
+  border-color: #404040;
+}
+
+[data-theme="dark"] .issue-context-menu button {
+  color: #e0e0e0;
+}
+
+[data-theme="dark"] .issue-context-menu button:hover {
+  background: #3d3d3d;
+}
+
+/* ============================================================
+   MARKDOWN VIEWER (already uses CSS vars, just define them)
+   ============================================================ */
+
+[data-theme="dark"] .markdown-viewer {
+  --background-color: #1e1e1e;
+  --text-color: #e0e0e0;
+  --text-color-secondary: #999;
+  --border-color: #404040;
+  --code-background: #2d2d2d;
+  --code-color: #e0e0e0;
+  --table-header-background: #252525;
+  --table-row-hover: rgba(255, 255, 255, 0.04);
+  --link-color: #4d9ef7;
+}
+
+/* ============================================================
+   MUI (Material UI) DARK OVERRIDES
+   Used by FormEditor (@rjsf/mui), TabbedArrayWidget, etc.
+   ============================================================ */
+
+/* MUI text and labels */
+[data-theme="dark"] .MuiTypography-root {
+  color: #e0e0e0 !important;
+}
+
+[data-theme="dark"] .MuiFormLabel-root,
+[data-theme="dark"] .MuiInputLabel-root {
+  color: #aaa !important;
+}
+
+[data-theme="dark"] .MuiFormLabel-root.Mui-focused {
+  color: #4d9ef7 !important;
+}
+
+/* MUI text inputs */
+[data-theme="dark"] .MuiInputBase-root {
+  color: #e0e0e0 !important;
+}
+
+[data-theme="dark"] .MuiInputBase-input {
+  color: #e0e0e0 !important;
+}
+
+[data-theme="dark"] .MuiOutlinedInput-notchedOutline {
+  border-color: #555 !important;
+}
+
+[data-theme="dark"] .MuiOutlinedInput-root:hover .MuiOutlinedInput-notchedOutline {
+  border-color: #777 !important;
+}
+
+[data-theme="dark"] .MuiOutlinedInput-root.Mui-focused .MuiOutlinedInput-notchedOutline {
+  border-color: #4d9ef7 !important;
+}
+
+[data-theme="dark"] .MuiInput-underline::before {
+  border-bottom-color: #555 !important;
+}
+
+[data-theme="dark"] .MuiInput-underline::after {
+  border-bottom-color: #4d9ef7 !important;
+}
+
+[data-theme="dark"] .MuiFilledInput-root {
+  background-color: #252525 !important;
+}
+
+/* MUI selects */
+[data-theme="dark"] .MuiSelect-select {
+  color: #e0e0e0 !important;
+}
+
+[data-theme="dark"] .MuiSelect-icon {
+  color: #999 !important;
+}
+
+[data-theme="dark"] .MuiMenuItem-root {
+  color: #e0e0e0 !important;
+}
+
+/* MUI paper (dropdowns, menus, popovers) */
+[data-theme="dark"] .MuiPaper-root {
+  background-color: #2d2d2d !important;
+  color: #e0e0e0 !important;
+}
+
+/* MUI tabs */
+[data-theme="dark"] .MuiTab-root {
+  color: #aaa !important;
+}
+
+[data-theme="dark"] .MuiTab-root.Mui-selected {
+  color: #4d9ef7 !important;
+}
+
+[data-theme="dark"] .MuiTabs-indicator {
+  background-color: #4d9ef7 !important;
+}
+
+[data-theme="dark"] .MuiTabs-root {
+  border-bottom-color: #404040;
+}
+
+/* MUI checkboxes and switches */
+[data-theme="dark"] .MuiCheckbox-root {
+  color: #999 !important;
+}
+
+[data-theme="dark"] .MuiSwitch-root .MuiSwitch-track {
+  background-color: #555 !important;
+}
+
+/* MUI helper text */
+[data-theme="dark"] .MuiFormHelperText-root {
+  color: #888 !important;
+}
+
+/* MUI dividers */
+[data-theme="dark"] .MuiDivider-root {
+  border-color: #404040 !important;
+}
+
+/* MUI accordion */
+[data-theme="dark"] .MuiAccordion-root {
+  background-color: #252525 !important;
+  color: #e0e0e0 !important;
+}
+
+[data-theme="dark"] .MuiAccordionSummary-root {
+  color: #e0e0e0 !important;
+}
+
+[data-theme="dark"] .MuiAccordionSummary-expandIconWrapper {
+  color: #999 !important;
+}
+
+/* MUI buttons */
+[data-theme="dark"] .MuiButton-outlined {
+  border-color: #555 !important;
+  color: #e0e0e0 !important;
+}
+
+[data-theme="dark"] .MuiIconButton-root {
+  color: #aaa !important;
+}
+
+/* FormEditor-specific: three-column field template labels */
+[data-theme="dark"] .field-description-column {
+  color: #888 !important;
+}
+
+[data-theme="dark"] .form-editor-wrapper {
+  color: #e0e0e0;
+}
+
+/* Catch ALL text inside the form editor wrapper */
+[data-theme="dark"] .form-editor-wrapper * {
+  color: inherit;
+  border-color: #404040;
+}
+
+/* Re-assert specific colours that should NOT inherit */
+[data-theme="dark"] .form-editor-wrapper .MuiTab-root.Mui-selected {
+  color: #4d9ef7 !important;
+}
+
+[data-theme="dark"] .form-editor-wrapper .MuiButton-containedPrimary,
+[data-theme="dark"] .form-editor-wrapper .MuiButton-colorPrimary {
+  color: #fff !important;
+}
+
+/* RJSF form container background */
+[data-theme="dark"] .form-editor-wrapper .rjsf {
+  background: #1e1e1e !important;
+  color: #e0e0e0 !important;
+}
+
+/* MUI Box containers used by TabbedArrayWidget */
+[data-theme="dark"] .form-editor-wrapper .MuiBox-root {
+  background-color: transparent;
+  border-color: #404040 !important;
+}
+
+/* Tabbed panel container */
+[data-theme="dark"] .tabbed-array-panel {
+  background-color: #1e1e1e !important;
+  border-color: #404040 !important;
+}
+
+/* Required field asterisk */
+[data-theme="dark"] .form-editor-wrapper span[style*="color: rgb(211, 47, 47)"],
+[data-theme="dark"] .form-editor-wrapper span[style*="color: red"] {
+  color: #f87171 !important;
+}
+
+/* Signature Links Viewer dark rules are now in SignatureLinksViewer.css */
+
+/* ============================================================
+   PARAMETER SECTION
+   ============================================================ */
+
+[data-theme="dark"] .parameter-input {
+  background: #2d2d2d;
+  border-color: #404040;
+  color: #e0e0e0;
+}
+
+[data-theme="dark"] .parameter-section-label {
+  color: #999;
+}
+
+/* ============================================================
+   PROGRESS TOAST
+   ============================================================ */
+
+[data-theme="dark"] .progress-toast {
+  background: #2d2d2d;
+  border-color: #404040;
+  color: #e0e0e0;
+}
+
+/* ============================================================
+   ACCORDION
+   ============================================================ */
+
+[data-theme="dark"] .accordion-item {
+  background: #252525;
+  border-color: #404040;
+}
+
+[data-theme="dark"] .accordion-header {
+  background: #2a2a2a;
+  color: #e0e0e0;
+}
+
+[data-theme="dark"] .accordion-header:hover {
+  background: #333;
+}
+
+[data-theme="dark"] .accordion-body {
+  background: #252525;
+  border-top-color: #404040;
+}
+
+/* ============================================================
+   CALENDAR GRID (shared by asat + historical pickers)
+   ============================================================ */
+
+[data-theme="dark"] .calendar-grid {
+  background: #2d2d2d;
+  color: #e0e0e0;
+}
+
+[data-theme="dark"] .calendar-header {
+  color: #e0e0e0;
+}
+
+[data-theme="dark"] .calendar-nav-btn {
+  color: #999;
+  background: transparent;
+}
+
+[data-theme="dark"] .calendar-nav-btn:hover {
+  background: #3d3d3d;
+  color: #e0e0e0;
+}
+
+[data-theme="dark"] .calendar-weekday {
+  color: #888;
+}
+
+[data-theme="dark"] .calendar-day {
+  color: #e0e0e0;
+}
+
+[data-theme="dark"] .calendar-day:hover:not(.empty):not(.disabled) {
+  background: #3d3d3d;
+}
+
+[data-theme="dark"] .calendar-day.today {
+  border-color: #4d9ef7;
+}
+
+[data-theme="dark"] .calendar-day.selected {
+  background: #1976d2;
+  color: white;
+}
+
+[data-theme="dark"] .calendar-day.disabled {
+  color: #555;
+}
+
+[data-theme="dark"] .calendar-day.has-data {
+  background: rgba(77, 158, 247, 0.15);
+}
+
+/* ============================================================
+   DATE RANGE PICKER
+   ============================================================ */
+
+[data-theme="dark"] .date-range-picker {
+  background: #2d2d2d;
+  border-color: #404040;
+}
+
+[data-theme="dark"] .date-range-input {
+  background: #1e1e1e;
+  border-color: #555;
+  color: #e0e0e0;
+}
+
+/* ============================================================
+   EDGE SCALING CONTROL
+   ============================================================ */
+
+[data-theme="dark"] .edge-scaling-control {
+  background: #252525;
+}
+
+[data-theme="dark"] .edge-scaling-label {
+  color: #999;
+}
+
+/* ============================================================
+   GENERIC TEXT AND ICON COLOURS
+   Broad overrides for elements that inherit light-mode colours
+   ============================================================ */
+
+[data-theme="dark"] .chevron {
+  color: #888 !important;
+}
+
+[data-theme="dark"] label {
+  color: #ccc;
+}
+
+/*
+ * Force all inline-styled text and SVG icons in sidebar panels to inherit
+ * the container's dark text colour. This overrides React inline styles.
+ * The * selector with !important is intentionally broad — it catches all
+ * the dozens of hardcoded #333, #666, #6B7280, #374151, #9CA3AF etc.
+ * that would otherwise need individual fixes in the TSX.
+ */
+[data-theme="dark"] .properties-panel,
+[data-theme="dark"] .properties-panel-wrapper,
+[data-theme="dark"] .what-if-panel,
+[data-theme="dark"] .tools-panel,
+[data-theme="dark"] .scenarios-panel,
+[data-theme="dark"] .analytics-panel {
+  color: #e0e0e0 !important;
+}
+
+/* Override inline text/icon colours in ALL sidebar panels.
+   Targets common elements that get hardcoded light-mode colours in TSX. */
+[data-theme="dark"] .properties-panel div,
+[data-theme="dark"] .properties-panel span,
+[data-theme="dark"] .properties-panel label,
+[data-theme="dark"] .properties-panel p,
+[data-theme="dark"] .properties-panel-wrapper div,
+[data-theme="dark"] .properties-panel-wrapper span,
+[data-theme="dark"] .properties-panel-wrapper label,
+[data-theme="dark"] .analytics-panel div,
+[data-theme="dark"] .analytics-panel span,
+[data-theme="dark"] .analytics-panel label,
+[data-theme="dark"] .tools-panel div,
+[data-theme="dark"] .tools-panel span,
+[data-theme="dark"] .tools-panel label,
+[data-theme="dark"] .what-if-panel div,
+[data-theme="dark"] .what-if-panel span,
+[data-theme="dark"] .what-if-panel label,
+[data-theme="dark"] .scenarios-panel div,
+[data-theme="dark"] .scenarios-panel span,
+[data-theme="dark"] .scenarios-panel label {
+  color: inherit;
+}
+
+/* SVG icons: force currentColor inheritance in all sidebar panels */
+[data-theme="dark"] .properties-panel svg,
+[data-theme="dark"] .properties-panel-wrapper svg,
+[data-theme="dark"] .analytics-panel svg,
+[data-theme="dark"] .tools-panel svg,
+[data-theme="dark"] .what-if-panel svg,
+[data-theme="dark"] .scenarios-panel svg {
+  color: #aaa !important;
+}
+
+/* Re-assert specific colours that should NOT inherit */
+[data-theme="dark"] .properties-panel .property-toggle-btn.active {
+  color: #fff !important;
+}
+
+[data-theme="dark"] .properties-panel .property-toggle-btn.active.case-type {
+  color: #fff !important;
+}
+
+/* ============================================================
+   GLOBAL FORM ELEMENTS IN DARK MODE
+   Catches inline-styled and unstyled inputs/selects/textareas
+   ============================================================ */
+
+[data-theme="dark"] input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="color"]),
+[data-theme="dark"] select,
+[data-theme="dark"] textarea {
+  background-color: #2d2d2d;
+  border-color: #555;
+  color: #e0e0e0;
+}
+
+[data-theme="dark"] input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="color"]):focus,
+[data-theme="dark"] select:focus,
+[data-theme="dark"] textarea:focus {
+  border-color: #4d9ef7;
+}
+
+[data-theme="dark"] input::placeholder,
+[data-theme="dark"] textarea::placeholder {
+  color: #777;
+}
+
+/* Broad catch for white backgrounds in panels */
+[data-theme="dark"] .panel-header {
+  background: #252525 !important;
+  border-bottom-color: #404040 !important;
+  color: #e0e0e0 !important;
+}
+
+[data-theme="dark"] .panel-header h3 {
+  color: #e0e0e0 !important;
+}
+
+[data-theme="dark"] .panel-body {
+  background: #1e1e1e !important;
+}
+
+/* ============================================================
+   SHARE LINK MODAL + OTHER CUSTOM MODALS
+   ============================================================ */
+
+[data-theme="dark"] .share-link-modal {
+  background: #2d2d2d;
+}
+
+[data-theme="dark"] .share-link-modal__header {
+  border-bottom-color: #404040;
+}
+
+[data-theme="dark"] .share-link-modal__title {
+  color: #e0e0e0;
+}
+
+[data-theme="dark"] .share-link-modal__close {
+  color: #999;
+}
+
+[data-theme="dark"] .share-link-modal__close:hover {
+  background: #3d3d3d;
+  color: #e0e0e0;
+}
+
+[data-theme="dark"] .share-link-modal__section-title {
+  color: #ccc;
+}
+
+[data-theme="dark"] .share-link-modal__tab-list {
+  border-color: #404040;
+}
+
+[data-theme="dark"] .share-link-modal__tab-item:hover {
+  background: #3d3d3d;
+}
+
+[data-theme="dark"] .share-link-modal__tab-item.selected {
+  background: #1a2a40;
+}
+
+[data-theme="dark"] .share-link-modal__tab-title {
+  color: #e0e0e0;
+}
+
+[data-theme="dark"] .share-link-modal__option {
+  color: #e0e0e0;
+}
+
+[data-theme="dark"] .share-link-modal__note {
+  background: #252525;
+  color: #999;
+}
+
+[data-theme="dark"] .share-link-modal__footer {
+  border-top-color: #404040;
+}
+
+[data-theme="dark"] .share-link-modal__button--secondary {
+  background: #353535;
+  border-color: #555;
+  color: #e0e0e0;
+}
+
+[data-theme="dark"] .share-link-modal__button--secondary:hover {
+  background: #3d3d3d;
+}
+
+[data-theme="dark"] .share-link-modal__empty {
+  color: #888;
+}
+
+/* ============================================================
+   CHIP INPUT (tags component)
+   ============================================================ */
+
+[data-theme="dark"] .chip-input-container {
+  background: #2d2d2d !important;
+  border-color: #555 !important;
+}
+
+/* ============================================================
+   CONNECTION SELECTOR
+   ============================================================ */
+
+[data-theme="dark"] .connection-selector-select {
+  background: #2d2d2d !important;
+  border-color: #555 !important;
+  color: #e0e0e0 !important;
+}
+
+[data-theme="dark"] .connection-selector-label {
+  color: #aaa;
+}
+
+[data-theme="dark"] .connection-selector-hint {
+  color: #888;
+}
+
+/* Icon buttons (database, rebalance, etc.) with inline white background */
+[data-theme="dark"] .icon-button {
+  background: #2d2d2d !important;
+  border-color: #555 !important;
+  color: #aaa !important;
+}
+
+[data-theme="dark"] .icon-button:hover {
+  background: #3d3d3d !important;
+  color: #e0e0e0 !important;
+}
+
+/* ============================================================
+   MINIMAP surround / border
+   ============================================================ */
+
+[data-theme="dark"] .react-flow__minimap {
+  background: #1e1e1e !important;
+  border: 1px solid #404040;
+  border-radius: 4px;
+}
+
+[data-theme="dark"] .react-flow__minimap-mask {
+  fill: rgba(30, 30, 30, 0.8);
+}
+
+/* ============================================================
+   NAVIGATOR — tone down font brightness
+   ============================================================ */
+
+[data-theme="dark"] .navigator-item-name {
+  color: #bbb !important;
+}
+
+[data-theme="dark"] .section-title {
+  color: #ccc !important;
+}
+
+/* Preserve open/dirty accent colours */
+[data-theme="dark"] .navigator-item-name.is-open {
+  color: #60a5fa !important;
+}
+
+[data-theme="dark"] .navigator-item-name.is-dirty {
+  color: #fb923c !important;
+}
+
+/* ============================================================
+   EDGE PROPS: database / rebalance / action buttons
+   ============================================================ */
+
+[data-theme="dark"] .properties-panel button {
+  color: inherit;
+}
+
+[data-theme="dark"] .properties-panel button:hover {
+  background: #3d3d3d;
+}
+
+/* ============================================================
+   IMAGE "+" SQUARE (new picture placeholder)
+   ============================================================ */
+
+[data-theme="dark"] .add-image-button,
+[data-theme="dark"] .image-stack-add,
+[data-theme="dark"] .image-upload-zone {
+  background: #252525 !important;
+  border-color: #555 !important;
+  color: #888 !important;
+}
+
+[data-theme="dark"] .add-image-button:hover,
+[data-theme="dark"] .image-stack-add:hover,
+[data-theme="dark"] .image-upload-zone:hover {
+  background: #2d2d2d !important;
+  border-color: #777 !important;
+  color: #aaa !important;
+}
+
+/* ============================================================
+   SCROLLBARS (global dark override)
+   ============================================================ */
+
+[data-theme="dark"] ::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+[data-theme="dark"] ::-webkit-scrollbar-track {
+  background: #1e1e1e;
+}
+
+[data-theme="dark"] ::-webkit-scrollbar-thumb {
+  background: #404040;
+  border-radius: 4px;
+}
+
+[data-theme="dark"] ::-webkit-scrollbar-thumb:hover {
+  background: #555;
+}
+
+/* Also style scrollbar corner */
+[data-theme="dark"] ::-webkit-scrollbar-corner {
+  background: #1e1e1e;
+}

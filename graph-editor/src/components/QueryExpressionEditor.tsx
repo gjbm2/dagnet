@@ -1,4 +1,5 @@
-import React, { useRef, useEffect, useState, useCallback } from 'react';
+import React, { useRef, useEffect, useState, useCallback, useMemo } from 'react';
+import { useTheme } from '../contexts/ThemeContext';
 import Editor from '@monaco-editor/react';
 import type * as Monaco from 'monaco-editor';
 import { X, MapPinCheckInside, MapPinXInside, ArrowRightFromLine, ArrowLeftFromLine, GitBranch, AlertTriangle, FileText, Calendar, ChevronDown, Minus, Plus, Zap, Clock } from 'lucide-react';
@@ -112,19 +113,17 @@ const outerChipConfig = {
   }
 };
 
-// Inner chip styling by type
-const innerChipConfig = {
-  node: {
-    bgColour: '#DBEAFE',  // Light blue
-    textColour: '#1E40AF',
-    borderColor: '#93C5FD'
-  },
-  case: {
-    bgColour: '#E9D5FF',  // Light purple
-    textColour: '#6B21A8',
-    borderColor: '#C084FC'
-  }
+// Inner chip styling by type — light and dark variants
+const innerChipConfigLight = {
+  node: { bgColour: '#DBEAFE', textColour: '#1E40AF', borderColor: '#93C5FD' },
+  case: { bgColour: '#E9D5FF', textColour: '#6B21A8', borderColor: '#C084FC' }
 };
+const innerChipConfigDark = {
+  node: { bgColour: '#172554', textColour: '#93C5FD', borderColor: '#1E40AF' },
+  case: { bgColour: '#2e1065', textColour: '#C084FC', borderColor: '#6B21A8' }
+};
+// Default (light) — components use getInnerChipConfig(dark) at render time
+const innerChipConfig = innerChipConfigLight;
 
 interface ParsedQueryResult {
   chips: ParsedQueryChip[];
@@ -190,6 +189,10 @@ export function QueryExpressionEditor({
   const [isEditing, setIsEditing] = useState(false);
   const isEditingRef = useRef(false); // Ref for keyboard commands to check current editing state
   const valueBeforeEditRef = useRef<string>(''); // Ref for blur-commit comparison (avoid stale closure)
+
+  const { theme } = useTheme();
+  const dark = theme === 'dark';
+  const chipConfig = dark ? innerChipConfigDark : innerChipConfigLight;
 
   const allowedFunctionList = allowedFunctions ?? QUERY_FUNCTIONS;
   
@@ -446,22 +449,38 @@ export function QueryExpressionEditor({
       }
     });
     
-    // Theme colours (using app's colour scheme)
+    // Theme colours (using app's colour scheme) — light variant
     monaco.editor.defineTheme('dagnet-query-theme', {
       base: 'vs',
       inherit: true,
       rules: [
-        { token: 'keyword', foreground: '3B82F6', fontStyle: 'bold' },  // Blue for from/to
-        { token: 'identifier', foreground: '1F2937' },  // Dark gray for node IDs
-        { token: 'delimiter', foreground: '6B7280' },  // Medium gray for punctuation
+        { token: 'keyword', foreground: '3B82F6', fontStyle: 'bold' },
+        { token: 'identifier', foreground: '1F2937' },
+        { token: 'delimiter', foreground: '6B7280' },
       ],
       colors: {
         'editor.background': '#FFFFFF',
         'editor.foreground': '#1F2937'
       }
     });
-    
-      monaco.editor.setTheme('dagnet-query-theme');
+
+    // Dark variant
+    monaco.editor.defineTheme('dagnet-query-theme-dark', {
+      base: 'vs-dark',
+      inherit: true,
+      rules: [
+        { token: 'keyword', foreground: '60A5FA', fontStyle: 'bold' },
+        { token: 'identifier', foreground: 'E0E0E0' },
+        { token: 'delimiter', foreground: '999999' },
+      ],
+      colors: {
+        'editor.background': '#1E1E1E',
+        'editor.foreground': '#E0E0E0'
+      }
+    });
+
+    const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+    monaco.editor.setTheme(isDark ? 'dagnet-query-theme-dark' : 'dagnet-query-theme');
       
       // Autocomplete (CompletionItemProvider)
       monaco.languages.registerCompletionItemProvider('dagnet-query', {
@@ -1814,10 +1833,10 @@ export function QueryExpressionEditor({
             alignItems: 'center',
             gap: '8px',
             padding: '8px 12px',
-            backgroundColor: '#FEF2F2',
-            borderBottom: '1px solid #FCA5A5',
+            backgroundColor: dark ? '#3b1c1c' : '#FEF2F2',
+            borderBottom: `1px solid ${dark ? '#7f1d1d' : '#FCA5A5'}`,
             fontSize: '12px',
-            color: '#991B1B'
+            color: dark ? '#f87171' : '#991B1B'
           }}>
             <AlertTriangle size={14} />
             <span>{validationErrors.join('; ')}</span>
@@ -1858,7 +1877,7 @@ export function QueryExpressionEditor({
             }}
             style={{
               padding: '10px 12px',
-              color: '#9CA3AF',
+              color: dark ? '#777' : '#9CA3AF',
               fontSize: '13px',
               cursor: readonly ? 'default' : 'pointer',
               fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif'
@@ -1934,14 +1953,14 @@ export function QueryExpressionEditor({
           
           // Determine inner chip type (node or case)
           const innerType = chip.type === 'case' ? 'case' : 'node';
-          const innerConfig = innerChipConfig[innerType];
+          const innerConfig = chipConfig[innerType];
           
           return (
             <React.Fragment key={index}>
               {/* Render preceding text (operators, parens) */}
               {chip.precedingText && (
                 <span style={{ 
-                  color: '#6B7280', 
+                  color: dark ? '#aaa' : '#6B7280', 
                   fontWeight: '600',
                   fontSize: '14px',
                   alignSelf: 'center',
@@ -1964,9 +1983,9 @@ export function QueryExpressionEditor({
                   flexWrap: 'wrap',
                   gap: '4px',
                   padding: '5px 8px',
-                  backgroundColor: '#F9FAFB',  // Neutral light grey
+                  backgroundColor: dark ? '#353535' : '#F9FAFB',
                   borderRadius: '6px',
-                  border: '1px solid #D1D5DB',
+                  border: `1px solid ${dark ? '#555' : '#D1D5DB'}`,
                   fontSize: '12px',
                   fontWeight: '500',
                   position: 'relative',
@@ -1976,11 +1995,11 @@ export function QueryExpressionEditor({
                   minWidth: 0  // Allow shrinking below content size
                 }}
               >
-                <Icon size={13} style={{ color: '#6B7280', alignSelf: 'center' }} />
-                <span style={{ color: '#374151', fontWeight: '600', alignSelf: 'center' }}>
+                <Icon size={13} style={{ color: dark ? '#aaa' : '#6B7280', alignSelf: 'center' }} />
+                <span style={{ color: dark ? '#e0e0e0' : '#374151', fontWeight: '600', alignSelf: 'center' }}>
                   {config.label}
                 </span>
-                <span style={{ color: '#6B7280', alignSelf: 'center' }}>(</span>
+                <span style={{ color: dark ? '#aaa' : '#6B7280', alignSelf: 'center' }}>(</span>
                 
                 {/* Inner chips for values */}
                 {chip.values.map((val, vIndex) => (
@@ -2009,12 +2028,12 @@ export function QueryExpressionEditor({
                       </span>
                     </div>
                     {vIndex < chip.values.length - 1 && (
-                      <span style={{ color: '#6B7280', margin: '0 2px', alignSelf: 'center' }}>,</span>
+                      <span style={{ color: dark ? '#aaa' : '#6B7280', margin: '0 2px', alignSelf: 'center' }}>,</span>
                     )}
                   </React.Fragment>
                 ))}
                 
-                <span style={{ color: '#6B7280', alignSelf: 'center' }}>)</span>
+                <span style={{ color: dark ? '#aaa' : '#6B7280', alignSelf: 'center' }}>)</span>
                 
                 {/* Dropdown button for context chips */}
                 {!readonly && (chip.type === 'context' || chip.type === 'contextAny') && (
@@ -2040,11 +2059,11 @@ export function QueryExpressionEditor({
                       display: 'flex',
                       alignItems: 'center',
                       alignSelf: 'center',
-                      color: '#9CA3AF',
+                      color: dark ? '#888' : '#9CA3AF',
                       transition: 'color 0.15s ease'
                     }}
-                    onMouseEnter={(e) => e.currentTarget.style.color = '#374151'}
-                    onMouseLeave={(e) => e.currentTarget.style.color = '#9CA3AF'}
+                    onMouseEnter={(e) => e.currentTarget.style.color = dark ? '#e0e0e0' : '#374151'}
+                    onMouseLeave={(e) => e.currentTarget.style.color = dark ? '#888' : '#9CA3AF'}
                     title="Change values"
                   >
                     <ChevronDown size={12} />
@@ -2070,11 +2089,11 @@ export function QueryExpressionEditor({
                       display: 'flex',
                       alignItems: 'center',
                       alignSelf: 'center',
-                      color: '#9CA3AF',
+                      color: dark ? '#888' : '#9CA3AF',
                       transition: 'color 0.15s ease'
                     }}
-                    onMouseEnter={(e) => e.currentTarget.style.color = '#374151'}
-                    onMouseLeave={(e) => e.currentTarget.style.color = '#9CA3AF'}
+                    onMouseEnter={(e) => e.currentTarget.style.color = dark ? '#e0e0e0' : '#374151'}
+                    onMouseLeave={(e) => e.currentTarget.style.color = dark ? '#888' : '#9CA3AF'}
                     title="Remove term"
                   >
                     <X size={12} />
@@ -2087,7 +2106,7 @@ export function QueryExpressionEditor({
             {/* Render trailing text (closing parens, trailing operators) */}
             {trailingText && (
               <span style={{ 
-                color: '#6B7280', 
+                color: dark ? '#aaa' : '#6B7280', 
                 fontWeight: '600',
                 fontSize: '14px',
                 alignSelf: 'center',
@@ -2104,10 +2123,10 @@ export function QueryExpressionEditor({
   
   return (
     <div style={{ 
-      border: '1px solid #ddd', 
+      border: `1px solid ${dark ? '#555' : '#ddd'}`, 
       borderRadius: '4px',
-      overflow: 'visible',  // Allow autocomplete to overflow
-      backgroundColor: '#ffffff',
+      overflow: 'visible',
+      backgroundColor: dark ? '#2d2d2d' : '#ffffff',
       position: 'relative',
       zIndex: 'auto',  // Don't create a stacking context - let Monaco widgets (appended to body) use global z-index
       minWidth: widthBeforeEdit ? `${widthBeforeEdit}px` : 'auto',
@@ -2210,10 +2229,10 @@ export function QueryExpressionEditor({
             position: 'fixed',
             left: chipContextMenu.x,
             top: chipContextMenu.y,
-            background: '#fff',
-            border: '1px solid #dee2e6',
+            background: dark ? '#2d2d2d' : '#fff',
+            border: `1px solid ${dark ? '#555' : '#dee2e6'}`,
             borderRadius: '6px',
-            boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+            boxShadow: dark ? '0 4px 12px rgba(0,0,0,0.4)' : '0 4px 12px rgba(0,0,0,0.15)',
             zIndex: 10000,
             minWidth: '180px',
             padding: '4px 0'
@@ -2230,12 +2249,12 @@ export function QueryExpressionEditor({
               padding: '8px 12px',
               border: 'none',
               background: 'transparent',
-              color: '#374151',
+              color: dark ? '#e0e0e0' : '#374151',
               fontSize: '13px',
               textAlign: 'left',
               cursor: 'pointer'
             }}
-            onMouseEnter={(e) => e.currentTarget.style.background = '#f8f9fa'}
+            onMouseEnter={(e) => e.currentTarget.style.background = dark ? '#3d3d3d' : '#f8f9fa'}
             onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
           >
             <X size={14} />
@@ -2245,7 +2264,7 @@ export function QueryExpressionEditor({
           {/* Separator */}
           {chipContextMenu.contextKey && chipContextMenu.contextValuesCount && chipContextMenu.contextValuesCount > 0 && (
             <>
-              <div style={{ height: '1px', background: '#e5e7eb', margin: '4px 0' }} />
+              <div style={{ height: '1px', background: dark ? '#404040' : '#e5e7eb', margin: '4px 0' }} />
               
               {/* Create scenarios option */}
               <button

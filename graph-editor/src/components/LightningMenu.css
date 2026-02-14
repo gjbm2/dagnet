@@ -102,7 +102,7 @@
 }
 
 /* Dark mode support (optional) */
-@media (prefers-color-scheme: dark) {
+[data-theme="dark"] {
   .lightning-menu-dropdown,
   .lightning-menu-submenu {
     background: #2a2a2a;

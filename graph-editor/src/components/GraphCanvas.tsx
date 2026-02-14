@@ -22,6 +22,7 @@ import ReactFlow, {
 } from 'reactflow';
 import 'reactflow/dist/style.css';
 import '../custom-reactflow.css';
+import { useTheme } from '../contexts/ThemeContext';
 import dagre from 'dagre';
 import { sankey, sankeyLinkHorizontal, sankeyCenter, sankeyJustify } from 'd3-sankey';
 
@@ -76,6 +77,8 @@ const edgeTypes: EdgeTypes = {
 };
 
 function GraphIssuesIndicatorOverlay({ tabId }: { tabId?: string }) {
+  const { theme } = useTheme();
+  const dark = theme === 'dark';
   const { tabs } = useTabContext();
   const { graph } = useGraphStore();
 
@@ -130,11 +133,12 @@ function GraphIssuesIndicatorOverlay({ tabId }: { tabId?: string }) {
           display: 'flex',
           gap: '6px',
           alignItems: 'center',
-          background: 'rgba(255,255,255,0.92)',
-          border: '1px solid rgba(0,0,0,0.08)',
+          background: dark ? 'rgba(45,45,45,0.95)' : 'rgba(255,255,255,0.92)',
+          border: `1px solid ${dark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.08)'}`,
           borderRadius: '10px',
           padding: '6px 8px',
-          boxShadow: '0 2px 10px rgba(0,0,0,0.06)',
+          boxShadow: dark ? '0 2px 10px rgba(0,0,0,0.3)' : '0 2px 10px rgba(0,0,0,0.06)',
+          color: dark ? '#e0e0e0' : 'inherit',
           userSelect: 'none',
         }}
         aria-label={`Graph issues for ${graphName}: ${counts.errors} errors, ${counts.warnings} warnings, ${counts.info} info`}
@@ -261,6 +265,8 @@ export default function GraphCanvas({ onSelectedNodeChange, onSelectedEdgeChange
 }
 
 function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClickNode, onDoubleClickEdge, onSelectEdge, onAddNodeRef, onDeleteSelectedRef, onAutoLayoutRef, onSankeyLayoutRef, onForceRerouteRef, onHideUnselectedRef, whatIfDSL, tabId, activeTabId, externalSelectedNodeId, externalSelectedEdgeId }: GraphCanvasProps) {
+  const { theme } = useTheme();
+  const dark = theme === 'dark';
   // Track if user is panning/zooming to disable beads during interaction
   const [isPanningOrZooming, setIsPanningOrZooming] = React.useState(false);
   const panTimeoutRef = React.useRef<NodeJS.Timeout | null>(null);
@@ -5186,11 +5192,11 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
         connectionRadius={50}
         snapToGrid={false}
         snapGrid={[1, 1]}
-        style={{ background: '#f8fafc' }}
+        style={{ background: dark ? '#1e1e1e' : '#f8fafc' }}
       >
-        <Background variant={BackgroundVariant.Dots} gap={16} size={1} color="#ddd" />
+        <Background variant={BackgroundVariant.Dots} gap={16} size={1} color={dark ? '#2a2a2a' : '#ddd'} />
         <Controls />
-        <MiniMap />
+        <MiniMap maskColor={dark ? 'rgba(30,30,30,0.8)' : undefined} />
         <GraphIssuesIndicatorOverlay tabId={tabId} />
         
         {/* Lasso selection rectangle */}
@@ -5245,133 +5251,32 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       {/* Context Menu */}
       {contextMenu && (
         <div
-          style={{
-            position: 'fixed',
-            left: contextMenu.x,
-            top: contextMenu.y,
-            background: 'white',
-            border: '1px solid #ddd',
-            borderRadius: '4px',
-            boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
-            minWidth: '160px',
-            padding: '4px',
-            zIndex: 10000
-          }}
+          className="dagnet-popup"
+          style={{ position: 'fixed', left: contextMenu.x, top: contextMenu.y }}
         >
-          <div
-            onClick={(e) => {
-              e.stopPropagation();
-              setContextMenu(null);
-              toggleDashboardMode({ updateUrl: true });
-            }}
-            style={{
-              padding: '8px 12px',
-              cursor: 'pointer',
-              fontSize: '13px',
-              color: '#333',
-              borderRadius: '2px'
-            }}
-            onMouseEnter={(e) => (e.currentTarget.style.background = '#f8f9fa')}
-            onMouseLeave={(e) => (e.currentTarget.style.background = 'white')}
-          >
+          <div className="dagnet-popup-item" onClick={(e) => { e.stopPropagation(); setContextMenu(null); toggleDashboardMode({ updateUrl: true }); }}>
             🖥️ {isDashboardMode ? 'Exit dashboard mode' : 'Enter dashboard mode'}
           </div>
           {tabId && (
-            <div
-              onClick={async (e) => {
-                e.stopPropagation();
-                setContextMenu(null);
-                await tabOperations.closeTab(tabId);
-              }}
-              style={{
-                padding: '8px 12px',
-                cursor: 'pointer',
-                fontSize: '13px',
-                color: '#333',
-                borderRadius: '2px'
-              }}
-              onMouseEnter={(e) => (e.currentTarget.style.background = '#f8f9fa')}
-              onMouseLeave={(e) => (e.currentTarget.style.background = 'white')}
-            >
+            <div className="dagnet-popup-item" onClick={async (e) => { e.stopPropagation(); setContextMenu(null); await tabOperations.closeTab(tabId); }}>
               ✖ Close tab
             </div>
           )}
-          <div
-            onClick={(e) => {
-              e.stopPropagation();
-              addNodeAtPosition(contextMenu.flowX, contextMenu.flowY);
-            }}
-            style={{
-              padding: '8px 12px',
-              cursor: 'pointer',
-              fontSize: '13px',
-              color: '#333',
-              borderRadius: '2px'
-            }}
-            onMouseEnter={(e) => (e.currentTarget.style.background = '#f8f9fa')}
-            onMouseLeave={(e) => (e.currentTarget.style.background = 'white')}
-          >
+          <div className="dagnet-popup-item" onClick={(e) => { e.stopPropagation(); addNodeAtPosition(contextMenu.flowX, contextMenu.flowY); }}>
             ➕ Add node
           </div>
-          {/* Paste node - only show when a single node reference is copied */}
           {copiedNode && (
-            <div
-              onClick={(e) => {
-                e.stopPropagation();
-                pasteNodeAtPosition(contextMenu.flowX, contextMenu.flowY);
-              }}
-              style={{
-                padding: '8px 12px',
-                cursor: 'pointer',
-                fontSize: '13px',
-                color: '#333',
-                borderRadius: '2px'
-              }}
-              onMouseEnter={(e) => (e.currentTarget.style.background = '#f8f9fa')}
-              onMouseLeave={(e) => (e.currentTarget.style.background = 'white')}
-            >
+            <div className="dagnet-popup-item" onClick={(e) => { e.stopPropagation(); pasteNodeAtPosition(contextMenu.flowX, contextMenu.flowY); }}>
               📋 Paste node: {copiedNode.objectId}
             </div>
           )}
-          {/* Paste subgraph - only show when a subgraph is copied */}
           {copiedSubgraph && (
-            <div
-              onClick={(e) => {
-                e.stopPropagation();
-                pasteSubgraphAtPosition(contextMenu.flowX, contextMenu.flowY);
-              }}
-              style={{
-                padding: '8px 12px',
-                cursor: 'pointer',
-                fontSize: '13px',
-                color: '#333',
-                borderRadius: '2px'
-              }}
-              onMouseEnter={(e) => (e.currentTarget.style.background = '#f8f9fa')}
-              onMouseLeave={(e) => (e.currentTarget.style.background = 'white')}
-            >
+            <div className="dagnet-popup-item" onClick={(e) => { e.stopPropagation(); pasteSubgraphAtPosition(contextMenu.flowX, contextMenu.flowY); }}>
               📋 Paste ({copiedSubgraph.nodes.length} nodes, {copiedSubgraph.edges.length} edges)
             </div>
           )}
-          {/* Select All - always available if there are nodes */}
           {nodes.length > 0 && (
-            <div
-              onClick={(e) => {
-                e.stopPropagation();
-                // Select all nodes using the same event as Edit > Select All
-                window.dispatchEvent(new CustomEvent('dagnet:selectAllNodes'));
-                setContextMenu(null);
-              }}
-              style={{
-                padding: '8px 12px',
-                cursor: 'pointer',
-                fontSize: '13px',
-                color: '#333',
-                borderRadius: '2px'
-              }}
-              onMouseEnter={(e) => (e.currentTarget.style.background = '#f8f9fa')}
-              onMouseLeave={(e) => (e.currentTarget.style.background = 'white')}
-            >
+            <div className="dagnet-popup-item" onClick={(e) => { e.stopPropagation(); window.dispatchEvent(new CustomEvent('dagnet:selectAllNodes')); setContextMenu(null); }}>
               ⬜ Select All
             </div>
           )}

@@ -15,6 +15,7 @@ import PropertiesPanelWrapper from '../panels/PropertiesPanelWrapper';
 import ToolsPanel from '../panels/ToolsPanel';
 import AnalyticsPanel from '../panels/AnalyticsPanel';
 import { useSidebarState } from '../../hooks/useSidebarState';
+import { useTheme } from '../../contexts/ThemeContext';
 import { getGraphEditorLayout, getGraphEditorLayoutMinimized, PANEL_TO_TAB_ID } from '../../layouts/graphSidebarLayout';
 import { dockGroups } from '../../layouts/defaultLayout';
 import { ViewPreferencesProvider } from '../../contexts/ViewPreferencesContext';
@@ -198,6 +199,8 @@ function ScenarioLegendWrapper({ tabId }: { tabId: string }) {
  * Phase 1: Memoized to prevent re-renders when other tabs change
  */
 const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, readonly = false }: EditorProps<GraphData> & { tabId?: string }) {
+  const { theme } = useTheme();
+  const dark = theme === 'dark';
   const { data, isDirty, updateData } = useFileState<GraphData>(fileId);
   const { isDashboardMode } = useDashboardMode();
   
@@ -2149,8 +2152,8 @@ const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, r
             right: 0,
             height: '100%',
             width: '48px',
-            background: '#F9FAFB',
-            borderLeft: '1px solid #E5E7EB',
+            background: dark ? '#1e1e1e' : '#F9FAFB',
+            borderLeft: `1px solid ${dark ? '#404040' : '#E5E7EB'}`,
             zIndex: 100,
             pointerEvents: 'auto'
           }}>

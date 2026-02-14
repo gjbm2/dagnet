@@ -108,7 +108,7 @@ export function ThreeColumnFieldTemplate(props: FieldTemplateProps) {
             className="field-description-column"
             style={{
               fontSize: 11,
-              color: '#6c757d',
+              color: 'var(--text-muted, #6c757d)',
               paddingTop: 8,
               paddingRight: 8,
               paddingLeft: 0,

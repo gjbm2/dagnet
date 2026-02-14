@@ -7,6 +7,7 @@ import { sessionLogService } from '../../services/sessionLogService';
 import { useFetchData, createFetchItem, type FetchMode } from '../../hooks/useFetchData';
 import toast from 'react-hot-toast';
 import type { GraphData } from '../../types';
+import { useTheme } from '../../contexts/ThemeContext';
 import './Modal.css';
 
 export type BatchOperationType = 
@@ -90,6 +91,8 @@ export function BatchOperationsModal({
   const [selectedOperationType, setSelectedOperationType] = useState<BatchOperationType>(
     initialOperationType || 'get-from-sources'
   );
+  const { theme } = useTheme();
+  const dark = theme === 'dark';
   const [selectedItems, setSelectedItems] = useState<Set<string>>(new Set());
   const [createLog, setCreateLog] = useState(false);
   const [bustCache, setBustCache] = useState(false);
@@ -803,7 +806,7 @@ export function BatchOperationsModal({
               <div style={{ fontSize: '16px', marginBottom: '20px' }}>
                 Processing {progress.current} of {progress.total}...
               </div>
-              <div style={{ width: '100%', height: '8px', backgroundColor: '#e0e0e0', borderRadius: '4px', overflow: 'hidden' }}>
+              <div style={{ width: '100%', height: '8px', backgroundColor: dark ? '#404040' : '#e0e0e0', borderRadius: '4px', overflow: 'hidden' }}>
                 <div
                   style={{
                     width: `${(progress.current / progress.total) * 100}%`,
@@ -829,9 +832,10 @@ export function BatchOperationsModal({
                     width: '100%',
                     padding: '10px 12px',
                     fontSize: '14px',
-                    border: '1px solid #ddd',
+                    border: `1px solid ${dark ? '#555' : '#ddd'}`,
                     borderRadius: '6px',
-                    backgroundColor: 'white',
+                    backgroundColor: dark ? '#1e1e1e' : 'white',
+                    color: dark ? '#e0e0e0' : 'inherit',
                     cursor: 'pointer'
                   }}
                 >
@@ -844,7 +848,7 @@ export function BatchOperationsModal({
 
               {/* Put-to-files copy options */}
               {selectedOperationType === 'put-to-files' && (
-                <div style={{ marginBottom: '20px', padding: '12px', backgroundColor: '#f9f9f9', borderRadius: '6px', border: '1px solid #e0e0e0' }}>
+                <div style={{ marginBottom: '20px', padding: '12px', backgroundColor: dark ? '#252525' : '#f9f9f9', borderRadius: '6px', border: `1px solid ${dark ? '#404040' : '#e0e0e0'}` }}>
                   <div style={{ fontSize: '13px', fontWeight: 600, marginBottom: '8px' }}>Put options (parameters)</div>
                   <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', marginBottom: '6px' }}>
                     <input type="checkbox" checked={putIncludeMetadata} onChange={(e) => setPutIncludeMetadata(e.target.checked)} />
@@ -872,7 +876,7 @@ export function BatchOperationsModal({
               )}
 
               {selectedOperationType === 'get-from-files' && (
-                <div style={{ marginBottom: '20px', padding: '12px', backgroundColor: '#f9f9f9', borderRadius: '6px', border: '1px solid #e0e0e0' }}>
+                <div style={{ marginBottom: '20px', padding: '12px', backgroundColor: dark ? '#252525' : '#f9f9f9', borderRadius: '6px', border: `1px solid ${dark ? '#404040' : '#e0e0e0'}` }}>
                   <div style={{ fontSize: '13px', fontWeight: 600, marginBottom: '8px' }}>Get options (parameters)</div>
                   <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', marginBottom: '6px' }}>
                     <input type="checkbox" checked={getIncludeMetadata} onChange={(e) => setGetIncludeMetadata(e.target.checked)} />
@@ -900,7 +904,7 @@ export function BatchOperationsModal({
               )}
 
               {/* Summary */}
-              <div style={{ marginBottom: '20px', padding: '12px', backgroundColor: '#f5f5f5', borderRadius: '6px' }}>
+              <div style={{ marginBottom: '20px', padding: '12px', backgroundColor: dark ? '#252525' : '#f5f5f5', borderRadius: '6px' }}>
                 <div style={{ fontSize: '14px', fontWeight: '500', marginBottom: '4px' }}>
                   {totalCount} item{totalCount !== 1 ? 's' : ''} available for this operation
                 </div>
@@ -920,9 +924,10 @@ export function BatchOperationsModal({
                       style={{
                         fontSize: '12px',
                         padding: '4px 8px',
-                        border: '1px solid #ddd',
+                        border: `1px solid ${dark ? '#555' : '#ddd'}`,
                         borderRadius: '4px',
-                        background: 'white',
+                        background: dark ? '#2d2d2d' : 'white',
+                        color: 'inherit',
                         cursor: 'pointer'
                       }}
                     >
@@ -934,9 +939,10 @@ export function BatchOperationsModal({
                       style={{
                         fontSize: '12px',
                         padding: '4px 8px',
-                        border: '1px solid #ddd',
+                        border: `1px solid ${dark ? '#555' : '#ddd'}`,
                         borderRadius: '4px',
-                        background: 'white',
+                        background: dark ? '#2d2d2d' : 'white',
+                        color: 'inherit',
                         cursor: 'pointer'
                       }}
                     >
@@ -946,7 +952,7 @@ export function BatchOperationsModal({
                 </div>
 
                 <div style={{
-                  border: '1px solid #e0e0e0',
+                  border: `1px solid ${dark ? '#404040' : '#e0e0e0'}`,
                   borderRadius: '6px',
                   maxHeight: '400px',
                   overflowY: 'auto',
@@ -959,7 +965,7 @@ export function BatchOperationsModal({
                   ) : (
                     <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
                       <thead>
-                        <tr style={{ borderBottom: '2px solid #e0e0e0', backgroundColor: '#f9f9f9' }}>
+                        <tr style={{ borderBottom: `2px solid ${dark ? '#404040' : '#e0e0e0'}`, backgroundColor: dark ? '#252525' : '#f9f9f9' }}>
                           <th style={{ padding: '8px', textAlign: 'left', width: '30px' }}>
                             <input
                               type="checkbox"
@@ -986,16 +992,16 @@ export function BatchOperationsModal({
                             <tr
                               key={item.id}
                               style={{
-                                borderBottom: '1px solid #f0f0f0',
+                                borderBottom: `1px solid ${dark ? '#333' : '#f0f0f0'}`,
                                 cursor: 'pointer',
-                                backgroundColor: isSelected ? '#f0f7ff' : 'transparent'
+                                backgroundColor: isSelected ? (dark ? '#1a2a40' : '#f0f7ff') : 'transparent'
                               }}
                               onClick={() => handleItemToggle(item.id)}
                               onMouseEnter={(e) => {
-                                e.currentTarget.style.backgroundColor = isSelected ? '#e6f2ff' : '#f9f9f9';
+                                e.currentTarget.style.backgroundColor = isSelected ? (dark ? '#1e3550' : '#e6f2ff') : (dark ? '#2d2d2d' : '#f9f9f9');
                               }}
                               onMouseLeave={(e) => {
-                                e.currentTarget.style.backgroundColor = isSelected ? '#f0f7ff' : 'transparent';
+                                e.currentTarget.style.backgroundColor = isSelected ? (dark ? '#1a2a40' : '#f0f7ff') : 'transparent';
                               }}
                             >
                               <td style={{ padding: '8px' }}>

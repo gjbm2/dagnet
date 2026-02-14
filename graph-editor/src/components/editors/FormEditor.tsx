@@ -10,6 +10,7 @@ import { GuardedOperationModal } from '../modals/GuardedOperationModal';
 import { MonacoWidget, TabbedArrayWidget, AccordionObjectFieldTemplate, ThreeColumnFieldTemplate } from '../widgets';
 import { FileCode } from 'lucide-react';
 import { CredsShareLinkModal } from '../modals/CredsShareLinkModal';
+import { useTheme } from '../../contexts/ThemeContext';
 
 // Threshold for "large" file warning (in characters when JSON stringified)
 const LARGE_FILE_WARNING_THRESHOLD = 15000;  // ~15KB
@@ -27,6 +28,8 @@ const LARGE_FILE_LINE_BLOCK_THRESHOLD = 800;     // Block above 800 lines
  * Schemas and file type metadata are centrally managed in fileTypeRegistry
  */
 export function FormEditor({ fileId, tabId, readonly = false }: EditorProps & { tabId?: string }) {
+  const { theme: currentTheme } = useTheme();
+  const dark = currentTheme === 'dark';
   const { data, isDirty, updateData } = useFileState(fileId);
   const { operations: navOperations } = useNavigatorContext();
   const { activeTabId, operations: tabOperations } = useTabContext();
@@ -304,8 +307,8 @@ export function FormEditor({ fileId, tabId, readonly = false }: EditorProps & { 
           alignItems: 'center',
           justifyContent: 'space-between',
           padding: '8px 16px',
-          borderBottom: '1px solid #e5e7eb',
-          background: '#fff',
+          borderBottom: `1px solid ${dark ? '#404040' : '#e5e7eb'}`,
+          background: dark ? '#2d2d2d' : '#fff',
           position: 'sticky',
           top: 0,
           zIndex: 1
@@ -395,9 +398,9 @@ export function FormEditor({ fileId, tabId, readonly = false }: EditorProps & { 
         <div
           style={{
             padding: '10px 16px',
-            borderBottom: '1px solid #e5e7eb',
-            background: '#EEF2FF',
-            color: '#1E3A8A',
+            borderBottom: `1px solid ${dark ? '#404040' : '#e5e7eb'}`,
+            background: dark ? '#1a2a40' : '#EEF2FF',
+            color: dark ? '#60a5fa' : '#1E3A8A',
             position: 'sticky',
             top: 0,
             zIndex: 1,
@@ -577,8 +580,9 @@ export function FormEditor({ fileId, tabId, readonly = false }: EditorProps & { 
         display: 'flex',
         flexDirection: 'column',
         height: '100%',
-        background: '#fafafa',
-        overflow: 'auto'
+        background: dark ? '#1e1e1e' : '#fafafa',
+        overflow: 'auto',
+        color: dark ? '#e0e0e0' : 'inherit'
       }}>
         {renderContextualTopbar()}
         
@@ -591,17 +595,17 @@ export function FormEditor({ fileId, tabId, readonly = false }: EditorProps & { 
             justifyContent: 'center',
             gap: '20px',
             padding: '48px 24px',
-            background: '#FFFBEB',
-            border: '1px solid #FCD34D',
+            background: dark ? '#3b2f0e' : '#FFFBEB',
+            border: `1px solid ${dark ? '#6b5b00' : '#FCD34D'}`,
             borderRadius: '8px',
             margin: '24px',
             textAlign: 'center'
           }}>
             <div style={{ fontSize: '48px' }}>⚠️</div>
-            <div style={{ fontSize: '16px', fontWeight: 600, color: '#92400E' }}>
+            <div style={{ fontSize: '16px', fontWeight: 600, color: dark ? '#fbbf24' : '#92400E' }}>
               Large file detected ({Math.round(fileSize / 1000)}KB, {lineCount.toLocaleString()} lines)
             </div>
-            <div style={{ fontSize: '14px', color: '#78350F', maxWidth: '450px' }}>
+            <div style={{ fontSize: '14px', color: dark ? '#e0c060' : '#78350F', maxWidth: '450px' }}>
               Form view is slow for files this size. 
               Use YAML or JSON view instead for much better performance.
             </div>
@@ -651,8 +655,8 @@ export function FormEditor({ fileId, tabId, readonly = false }: EditorProps & { 
                   alignItems: 'center',
                   gap: '8px',
                   padding: '10px 20px',
-                  background: '#fff',
-                  border: '1px solid #D97706',
+                  background: dark ? '#2d2d2d' : '#fff',
+                  border: `1px solid ${dark ? '#D97706' : '#D97706'}`,
                   borderRadius: '6px',
                   fontSize: '14px',
                   fontWeight: 500,
@@ -829,20 +833,21 @@ export function FormEditor({ fileId, tabId, readonly = false }: EditorProps & { 
           zIndex: 10000
         }}>
           <div style={{
-            background: '#fff',
+            background: dark ? '#2d2d2d' : '#fff',
             borderRadius: 8,
             maxWidth: '800px',
             width: '90%',
             maxHeight: '80vh',
             overflow: 'auto',
             position: 'relative',
-            boxShadow: '0 4px 6px rgba(0, 0, 0, 0.1)'
+            boxShadow: dark ? '0 4px 6px rgba(0, 0, 0, 0.4)' : '0 4px 6px rgba(0, 0, 0, 0.1)',
+            color: dark ? '#e0e0e0' : 'inherit'
           }}>
             <div style={{
               position: 'sticky',
               top: 0,
-              background: '#fff',
-              borderBottom: '1px solid #e5e7eb',
+              background: dark ? '#2d2d2d' : '#fff',
+              borderBottom: `1px solid ${dark ? '#404040' : '#e5e7eb'}`,
               padding: '16px',
               display: 'flex',
               justifyContent: 'space-between',
@@ -881,6 +886,8 @@ export function FormEditor({ fileId, tabId, readonly = false }: EditorProps & { 
 
 // Inline Base64 Encoder Component (embedded in modal)
 function Base64EncoderContent() {
+  const { theme: currentTheme } = useTheme();
+  const dark = currentTheme === 'dark';
   const [base64Output, setBase64Output] = useState('');
   const [fileName, setFileName] = useState('');
   const [error, setError] = useState('');
@@ -934,7 +941,7 @@ function Base64EncoderContent() {
         borderRadius: 8,
         textAlign: 'center',
         cursor: 'pointer',
-        background: '#f9fafb',
+        background: dark ? '#252525' : '#f9fafb',
         marginBottom: '16px',
         transition: 'all 0.2s'
       }}>
@@ -969,8 +976,8 @@ function Base64EncoderContent() {
       {error && (
         <div style={{
           padding: '12px',
-          background: '#fee2e2',
-          border: '1px solid #fca5a5',
+          background: dark ? '#3b1c1c' : '#fee2e2',
+          border: `1px solid ${dark ? '#7f1d1d' : '#fca5a5'}`,
           borderRadius: 4,
           marginBottom: '16px',
           fontSize: '14px',
@@ -1024,14 +1031,14 @@ function Base64EncoderContent() {
           <div style={{
             marginTop: '16px',
             padding: '12px',
-            background: '#f3f4f6',
+            background: dark ? '#252525' : '#f3f4f6',
             borderRadius: 4,
             fontSize: '12px',
-            color: '#374151'
+            color: dark ? '#aaa' : '#374151'
           }}>
             <strong>Next step:</strong> Paste into credentials.yaml under:<br />
             <code style={{
-              background: '#fff',
+              background: dark ? '#1e1e1e' : '#fff',
               padding: '2px 6px',
               borderRadius: 3,
               fontFamily: 'monospace'

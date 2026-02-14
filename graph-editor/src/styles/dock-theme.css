@@ -61,9 +61,9 @@ body, body * {
    MAIN TABS AREA - Normal tabs
    ============================================================ */
 
-/* Tab bar styling */
+/* Tab bar styling — use 'background' (not 'background-color') to override rc-dock's shorthand */
 .dock-bar {
-  background-color: #f8f9fa;
+  background: #f8f9fa !important;
   border-bottom: 1px solid #e0e0e0;
   min-height: 36px;
   padding: 0 4px;
@@ -157,7 +157,7 @@ body, body * {
   height: 100%;
   width: 100%;
   overflow: hidden;
-  background-color: #fff;
+  background: #fff;
   box-sizing: border-box;
 }
 
@@ -246,4 +246,122 @@ body, body * {
 .dock-drop-edge-top,
 .dock-drop-edge-bottom {
   height: 80px !important; /* Taller (default ~40px) */
+}
+
+/* ============================================================
+   DARK MODE
+   ============================================================ */
+
+[data-theme="dark"] .dock-bar {
+  background: #2d2d2d !important;
+  border-bottom-color: #404040 !important;
+}
+
+/* Belt-and-braces: override rc-dock's panel-style-specific rules */
+[data-theme="dark"] .app-shell .dock-bar {
+  background: #2d2d2d !important;
+  border-bottom-color: #404040 !important;
+}
+
+/* Override .dock-panel.dock-style-main .dock-tab { background: #fff } */
+[data-theme="dark"] .dock-panel .dock-tab {
+  background: transparent !important;
+}
+
+/* Override all dock bar border-bottom variants:
+   .dock-top .dock-bar { border-bottom: 1px solid #f3f3f3 }
+   .dock-panel.dock-style-main .dock-bar { border-bottom: 1px solid #eee }
+*/
+[data-theme="dark"] .dock-panel .dock-bar,
+[data-theme="dark"] .dock-top .dock-bar {
+  background: #2d2d2d !important;
+  border-bottom-color: #404040 !important;
+}
+
+[data-theme="dark"] .dock-tab {
+  color: #aaa !important;
+  background: transparent !important;  /* Override rc-dock's #fff on .dock-tab */
+}
+
+[data-theme="dark"] .dock-tab:hover {
+  filter: brightness(1.2);
+}
+
+[data-theme="dark"] .dock-tab-active {
+  color: #e0e0e0 !important;
+  background: transparent !important;  /* Override rc-dock's #fff on .dock-tab-active */
+  border-bottom: 2px solid #e0e0e0 !important;
+}
+
+[data-theme="dark"] .dock-tab-active:hover {
+  color: #e0e0e0 !important;
+}
+
+[data-theme="dark"] .dock-tab-close-btn:hover {
+  background-color: rgba(255, 255, 255, 0.12) !important;
+}
+
+[data-theme="dark"] .dock-content {
+  background: #1e1e1e !important;
+}
+
+[data-theme="dark"] .dock-divider {
+  background: #404040 !important;
+}
+
+[data-theme="dark"] .dock-divider:hover {
+  background: #555555 !important;
+}
+
+/* Override .dock-panel text colour */
+[data-theme="dark"] .dock-panel {
+  color: #e0e0e0 !important;
+}
+
+/*
+ * NUCLEAR: override ALL borders inside any dock element in dark mode.
+ * rc-dock uses dozens of selectors with #ddd, #eee, #f3f3f3, #fff borders
+ * at varying specificities. The only reliable way to catch them all is
+ * a broad selector with !important.
+ */
+[data-theme="dark"] .dock-layout,
+[data-theme="dark"] .dock-layout *,
+[data-theme="dark"] .dock-panel,
+[data-theme="dark"] .dock-panel * {
+  border-color: #404040 !important;
+}
+
+/* Re-assert transparent borders where needed */
+[data-theme="dark"] .dock-tab {
+  border-color: transparent !important;
+}
+
+[data-theme="dark"] .dock-tab-active {
+  border-color: transparent !important;
+  border-bottom-color: #e0e0e0 !important;
+}
+
+[data-theme="dark"] .dock-ink-bar {
+  background: transparent !important;
+}
+
+/* Content area */
+[data-theme="dark"] .dock-content-holder {
+  border-color: #404040 !important;
+}
+
+[data-theme="dark"] .dock-panel-float,
+[data-theme="dark"] .dock-fbox > .dock-panel {
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4), 0 2px 8px rgba(0, 0, 0, 0.3) !important;
+  border-color: rgba(255, 255, 255, 0.08);
+}
+
+[data-theme="dark"] .dock-drop-indicator {
+  background-color: rgba(77, 158, 247, 0.2) !important;
+  border-color: #4d9ef7 !important;
+}
+
+[data-theme="dark"] .dock-drop-square:hover,
+[data-theme="dark"] .dock-drop-edge:hover {
+  background-color: rgba(77, 158, 247, 0.4) !important;
 }

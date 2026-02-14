@@ -8,6 +8,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { ChevronRight, Camera, Database, DatabaseZap, Download, Folders, TrendingUpDown, X, Trash2, FileText } from 'lucide-react';
 import type { DataOperationSection } from './DataOperationsSections';
+import '../styles/popup-menu.css';
 
 interface DataSectionSubmenuProps {
   section: DataOperationSection;
@@ -52,6 +53,7 @@ export const DataSectionSubmenu: React.FC<DataSectionSubmenuProps> = ({
   onDeleteSnapshots,
   onManageSnapshots,
 }) => {
+  // All styling via .dagnet-popup / .dagnet-popup-item CSS classes
   const [isSnapshotsSubmenuOpen, setIsSnapshotsSubmenuOpen] = useState(false);
   const closeTimeoutRef = useRef<number | null>(null);
   const snapshotsTriggerRef = useRef<HTMLDivElement>(null);
@@ -209,34 +211,19 @@ export const DataSectionSubmenu: React.FC<DataSectionSubmenuProps> = ({
       onMouseEnter={onMouseEnter}
       onMouseLeave={onMouseLeave}
     >
-      <div
-        style={{
-          padding: '8px 12px',
-          cursor: 'pointer',
-          fontSize: '13px',
-          borderRadius: '2px',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          background: isOpen ? '#f8f9fa' : 'white'
-        }}
-      >
+      <div className="dagnet-popup-item" style={{ background: isOpen ? undefined : undefined }}>
         <span>{section.label}</span>
-        <ChevronRight size={14} style={{ color: '#666' }} />
+        <ChevronRight size={14} className="dagnet-popup-arrow" />
       </div>
       
       {isOpen && (
         <div
+          className="dagnet-popup"
           style={{
             position: 'absolute',
             left: '100%',
             top: 0,
-            background: 'white',
-            border: '1px solid #ddd',
-            borderRadius: '4px',
-            boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
             minWidth: '200px',
-            padding: '4px',
             zIndex: 99999,
             marginLeft: '4px',
             whiteSpace: 'nowrap'
@@ -245,23 +232,9 @@ export const DataSectionSubmenu: React.FC<DataSectionSubmenuProps> = ({
           onMouseLeave={onSubmenuContentLeave}
         >
           {/* Open file */}
-          <div
-            onClick={() => onOpenFile(section)}
-            style={{
-              padding: '6px 12px',
-              cursor: 'pointer',
-              fontSize: '13px',
-              borderRadius: '2px',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-              gap: '16px'
-            }}
-            onMouseEnter={(e) => (e.currentTarget.style.background = '#f8f9fa')}
-            onMouseLeave={(e) => (e.currentTarget.style.background = 'white')}
-          >
+          <div className="dagnet-popup-item" onClick={() => onOpenFile(section)}>
             <span>Open file</span>
-            <FileText size={12} style={{ color: '#666' }} />
+            <FileText size={12} className="dagnet-popup-hint" />
           </div>
           
           {/* Divider after Open file */}
@@ -271,18 +244,7 @@ export const DataSectionSubmenu: React.FC<DataSectionSubmenuProps> = ({
           {section.operations.getFromSourceDirect && (
             <div
               onClick={() => onGetFromSourceDirect(section)}
-              style={{
-                padding: '6px 12px',
-                cursor: 'pointer',
-                fontSize: '13px',
-                borderRadius: '2px',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                gap: '16px'
-              }}
-              onMouseEnter={(e) => (e.currentTarget.style.background = '#f8f9fa')}
-              onMouseLeave={(e) => (e.currentTarget.style.background = 'white')}
+            className="dagnet-popup-item"
             >
               <span>Get from Source (direct)</span>
               <div style={{ display: 'flex', alignItems: 'center', gap: '3px', color: '#666', flexShrink: 0 }}>
@@ -297,18 +259,7 @@ export const DataSectionSubmenu: React.FC<DataSectionSubmenuProps> = ({
           {section.operations.getFromSource && (
             <div
               onClick={() => onGetFromSource(section)}
-              style={{
-                padding: '6px 12px',
-                cursor: 'pointer',
-                fontSize: '13px',
-                borderRadius: '2px',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                gap: '16px'
-              }}
-              onMouseEnter={(e) => (e.currentTarget.style.background = '#f8f9fa')}
-              onMouseLeave={(e) => (e.currentTarget.style.background = 'white')}
+            className="dagnet-popup-item"
             >
               <span>Get from Source</span>
               <div style={{ display: 'flex', alignItems: 'center', gap: '3px', color: '#666', flexShrink: 0 }}>
@@ -325,18 +276,7 @@ export const DataSectionSubmenu: React.FC<DataSectionSubmenuProps> = ({
           {section.operations.getFromFile && (
             <div
               onClick={() => onGetFromFile(section)}
-              style={{
-                padding: '6px 12px',
-                cursor: 'pointer',
-                fontSize: '13px',
-                borderRadius: '2px',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                gap: '16px'
-              }}
-              onMouseEnter={(e) => (e.currentTarget.style.background = '#f8f9fa')}
-              onMouseLeave={(e) => (e.currentTarget.style.background = 'white')}
+            className="dagnet-popup-item"
             >
               <span>Get from file</span>
               <div style={{ display: 'flex', alignItems: 'center', gap: '3px', color: '#666', flexShrink: 0 }}>
@@ -351,18 +291,7 @@ export const DataSectionSubmenu: React.FC<DataSectionSubmenuProps> = ({
           {section.operations.putToFile && (
             <div
               onClick={() => onPutToFile(section)}
-              style={{
-                padding: '6px 12px',
-                cursor: 'pointer',
-                fontSize: '13px',
-                borderRadius: '2px',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                gap: '16px'
-              }}
-              onMouseEnter={(e) => (e.currentTarget.style.background = '#f8f9fa')}
-              onMouseLeave={(e) => (e.currentTarget.style.background = 'white')}
+            className="dagnet-popup-item"
             >
               <span>Put to file</span>
               <div style={{ display: 'flex', alignItems: 'center', gap: '3px', color: '#666', flexShrink: 0 }}>
@@ -382,18 +311,7 @@ export const DataSectionSubmenu: React.FC<DataSectionSubmenuProps> = ({
           {section.operations.clearCache && (
             <div
               onClick={() => onClearCache(section)}
-              style={{
-                padding: '6px 12px',
-                cursor: 'pointer',
-                fontSize: '13px',
-                borderRadius: '2px',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                gap: '16px'
-              }}
-              onMouseEnter={(e) => (e.currentTarget.style.background = '#f8f9fa')}
-              onMouseLeave={(e) => (e.currentTarget.style.background = 'white')}
+            className="dagnet-popup-item"
             >
               <span>Unsign file cache</span>
               <X size={12} style={{ color: '#666' }} />
@@ -404,18 +322,7 @@ export const DataSectionSubmenu: React.FC<DataSectionSubmenuProps> = ({
           {section.operations.clearDataFile && (
             <div
               onClick={() => onClearDataFile(section)}
-              style={{
-                padding: '6px 12px',
-                cursor: 'pointer',
-                fontSize: '13px',
-                borderRadius: '2px',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                gap: '16px'
-              }}
-              onMouseEnter={(e) => (e.currentTarget.style.background = '#f8f9fa')}
-              onMouseLeave={(e) => (e.currentTarget.style.background = 'white')}
+            className="dagnet-popup-item"
             >
               <span>Clear data file</span>
               <Trash2 size={12} style={{ color: '#666' }} />
@@ -430,19 +337,13 @@ export const DataSectionSubmenu: React.FC<DataSectionSubmenuProps> = ({
             >
               <div
                 ref={snapshotsTriggerRef}
+                className="dagnet-popup-item"
                 style={{
-                  padding: '6px 12px',
                   cursor: hasSnapshots ? 'pointer' : 'default',
-                  fontSize: '13px',
-                  borderRadius: '2px',
-                  display: 'flex',
-                  alignItems: 'center',
                   justifyContent: 'space-between',
                   gap: '16px',
                   opacity: hasSnapshots ? 1 : 0.4,
                 }}
-                onMouseEnter={(e) => hasSnapshots && (e.currentTarget.style.background = '#f8f9fa')}
-                onMouseLeave={(e) => (e.currentTarget.style.background = 'white')}
               >
                 <span>Snapshots</span>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: '#666', flexShrink: 0 }}>
@@ -457,14 +358,11 @@ export const DataSectionSubmenu: React.FC<DataSectionSubmenuProps> = ({
                   data-testid="snapshots-flyout"
                   onMouseEnter={onSubmenuContentEnter}
                   onMouseLeave={onSubmenuContentLeave}
+                  className="dagnet-popup"
                   style={{
                     position: 'fixed',
                     left: `${snapshotsMenuPos?.left ?? 0}px`,
                     top: `${snapshotsMenuPos?.top ?? 0}px`,
-                    background: 'white',
-                    border: '1px solid #ddd',
-                    borderRadius: '4px',
-                    boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
                     minWidth: '220px',
                     maxWidth: 'min(420px, calc(100vw - 40px))',
                     padding: '4px',
@@ -476,19 +374,13 @@ export const DataSectionSubmenu: React.FC<DataSectionSubmenuProps> = ({
                   {onDownloadSnapshotData && (
                     <div
                       onClick={hasSnapshots ? () => onDownloadSnapshotData(section) : undefined}
+                      className="dagnet-popup-item"
                       style={{
-                        padding: '6px 12px',
                         cursor: hasSnapshots ? 'pointer' : 'default',
-                        fontSize: '13px',
-                        borderRadius: '2px',
-                        display: 'flex',
-                        alignItems: 'center',
                         justifyContent: 'space-between',
                         gap: '16px',
                         opacity: hasSnapshots ? 1 : 0.4,
                       }}
-                      onMouseEnter={(e) => hasSnapshots && (e.currentTarget.style.background = '#f8f9fa')}
-                      onMouseLeave={(e) => (e.currentTarget.style.background = 'white')}
                     >
                       <span style={{ maxWidth: '320px', overflow: 'hidden', textOverflow: 'ellipsis' }}>Download snapshot data</span>
                       <Download size={12} style={{ color: '#666' }} />
@@ -499,19 +391,13 @@ export const DataSectionSubmenu: React.FC<DataSectionSubmenuProps> = ({
                   {onDeleteSnapshots && (
                     <div
                       onClick={hasSnapshots ? () => onDeleteSnapshots(section) : undefined}
+                      className="dagnet-popup-item"
                       style={{
-                        padding: '6px 12px',
                         cursor: hasSnapshots ? 'pointer' : 'default',
-                        fontSize: '13px',
-                        borderRadius: '2px',
-                        display: 'flex',
-                        alignItems: 'center',
                         justifyContent: 'space-between',
                         gap: '16px',
                         opacity: hasSnapshots ? 1 : 0.4,
                       }}
-                      onMouseEnter={(e) => hasSnapshots && (e.currentTarget.style.background = '#f8f9fa')}
-                      onMouseLeave={(e) => (e.currentTarget.style.background = 'white')}
                     >
                       <span style={{ maxWidth: '320px', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                         Delete {snapshotCount ?? 0} snapshot{(snapshotCount ?? 0) !== 1 ? 's' : ''}
@@ -523,21 +409,14 @@ export const DataSectionSubmenu: React.FC<DataSectionSubmenuProps> = ({
                   {/* Manage in Snapshot Manager */}
                   {onManageSnapshots && (
                     <>
-                      <div style={{ borderTop: '1px solid #eee', margin: '4px 0' }} />
+                      <div className="dagnet-popup-divider" />
                       <div
+                        className="dagnet-popup-item"
                         onClick={() => onManageSnapshots(section)}
                         style={{
-                          padding: '6px 12px',
-                          cursor: 'pointer',
-                          fontSize: '13px',
-                          borderRadius: '2px',
-                          display: 'flex',
-                          alignItems: 'center',
                           justifyContent: 'space-between',
                           gap: '16px',
                         }}
-                        onMouseEnter={(e) => (e.currentTarget.style.background = '#f8f9fa')}
-                        onMouseLeave={(e) => (e.currentTarget.style.background = 'white')}
                       >
                         <span>Manage…</span>
                         <Folders size={12} style={{ color: '#666' }} />

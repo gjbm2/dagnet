@@ -71,3 +71,55 @@
   border-bottom-color: #6B7280 !important; /* Dark grey */
   transition: border-bottom-color 0.2s ease;
 }
+
+/* ===== DARK MODE ===== */
+
+/* Slightly stronger tints in dark mode for visibility */
+[data-theme="dark"] .dock-tab:has([data-object-type="node"]) {
+  background-color: rgba(59, 130, 246, 0.12) !important;
+}
+
+[data-theme="dark"] .dock-tab:has([data-object-type="case"]) {
+  background-color: rgba(167, 139, 250, 0.12) !important;
+}
+
+[data-theme="dark"] .dock-tab:has([data-object-type="context"]) {
+  background-color: rgba(52, 211, 153, 0.12) !important;
+}
+
+[data-theme="dark"] .dock-tab:has([data-object-type="parameter"]) {
+  background-color: rgba(251, 146, 60, 0.12) !important;
+}
+
+[data-theme="dark"] .dock-tab:has([data-object-type="edge"]) {
+  background-color: rgba(99, 102, 241, 0.12) !important;
+}
+
+[data-theme="dark"] .dock-tab:has([data-object-type="graph"]) {
+  background-color: rgba(156, 163, 175, 0.12) !important;
+}
+
+/* Active tab underlines in dark mode - brighter versions */
+[data-theme="dark"] .dock-tab.dock-tab-active:has([data-object-type="node"]) {
+  border-bottom-color: #60a5fa !important;
+}
+
+[data-theme="dark"] .dock-tab.dock-tab-active:has([data-object-type="case"]) {
+  border-bottom-color: #a78bfa !important;
+}
+
+[data-theme="dark"] .dock-tab.dock-tab-active:has([data-object-type="context"]) {
+  border-bottom-color: #34d399 !important;
+}
+
+[data-theme="dark"] .dock-tab.dock-tab-active:has([data-object-type="parameter"]) {
+  border-bottom-color: #fb923c !important;
+}
+
+[data-theme="dark"] .dock-tab.dock-tab-active:has([data-object-type="edge"]) {
+  border-bottom-color: #818cf8 !important;
+}
+
+[data-theme="dark"] .dock-tab.dock-tab-active:has([data-object-type="graph"]) {
+  border-bottom-color: #9ca3af !important;
+}

@@ -689,16 +689,8 @@ export function DataMenu() {
                   <div className="menubar-right-slot">›</div>
                 </Menubar.SubTrigger>
                 <Menubar.SubContent 
-                  className="menubar-submenu-content"
-                  style={{
-                    background: 'white',
-                    border: '1px solid #ddd',
-                    borderRadius: '4px',
-                    boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
-                    minWidth: '180px',
-                    padding: '4px',
-                    zIndex: 99999
-                  }}
+                  className="menubar-content"
+                  style={{ minWidth: '180px' }}
                 >
                   {/* Open file - only show if file exists */}
                   {section.hasFile && (

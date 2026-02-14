@@ -97,4 +97,12 @@
   user-select: none;
 }
 
+/* Dark mode — dashboard is already dark by design; just ensure consistency */
+[data-theme="dark"] .dashboard-shell {
+  background: #0b1020;
+}
 
+[data-theme="dark"] .dashboard-overlay {
+  background: rgba(12, 16, 28, 0.75);
+  border-color: rgba(255, 255, 255, 0.15);
+}

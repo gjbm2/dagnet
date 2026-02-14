@@ -1,4 +1,31 @@
 import type { AnalysisResult, DimensionValueMeta } from '../lib/graphComputeClient';
+import { isDarkMode } from '../theme/objectTypeTheme';
+
+/** ECharts colour palette that respects current theme. Call at render time. */
+function echartsThemeColours() {
+  const dark = isDarkMode();
+  return {
+    text: dark ? '#e0e0e0' : '#374151',
+    textSecondary: dark ? '#aaa' : '#6b7280',
+    textMuted: dark ? '#888' : '#9ca3af',
+    border: dark ? '#404040' : '#e5e7eb',
+    gridLine: dark ? '#333' : '#e5e7eb',
+    bg: dark ? '#1e1e1e' : '#ffffff',
+    tooltipBg: dark ? '#2d2d2d' : '#fff',
+    tooltipBorder: dark ? '#555' : '#ccc',
+    tooltipText: dark ? '#e0e0e0' : '#333',
+  };
+}
+
+/** Shared tooltip styling for all ECharts instances */
+function echartsTooltipStyle() {
+  const c = echartsThemeColours();
+  return {
+    backgroundColor: c.tooltipBg,
+    borderColor: c.tooltipBorder,
+    textStyle: { color: c.tooltipText },
+  };
+}
 
 type ScenarioId = string;
 type StageId = string;
@@ -188,6 +215,7 @@ export function buildFunnelEChartsOption(result: AnalysisResult, args: FunnelCha
     backgroundColor: 'transparent',
     tooltip: {
       trigger: 'item',
+      ...echartsTooltipStyle(),
       formatter: (p: any) => {
         const raw: any = p?.data?.__raw;
         if (!raw) return '';
@@ -497,7 +525,7 @@ export function buildFunnelBarEChartsOption(result: AnalysisResult, args: Funnel
             return typeof total === 'number' && Number.isFinite(total) ? fmtPct(total) : '';
           },
           fontSize: 10,
-          color: '#374151',
+          color: echartsThemeColours().text,
         },
         data: fePoints.map(p => ({
           value: p.__fe?.forecastMinusEvidence ?? 0,
@@ -612,7 +640,7 @@ export function buildFunnelBarEChartsOption(result: AnalysisResult, args: Funnel
             rich: {
               dsl: {
                 fontSize: 10,
-                color: '#6b7280',
+                color: echartsThemeColours().textSecondary,
                 // DSL is often long; monospace is too wide here, so use a compact UI sans font.
                 fontFamily: "system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif",
                 lineHeight: 14,
@@ -625,6 +653,7 @@ export function buildFunnelBarEChartsOption(result: AnalysisResult, args: Funnel
       trigger: 'axis',
       confine: true,
       axisPointer: { type: 'shadow' },
+      ...echartsTooltipStyle(),
       extraCssText: 'max-width: 520px; white-space: normal;',
       formatter: (params: any) => {
         const ps = Array.isArray(params) ? params : [params];
@@ -676,7 +705,9 @@ export function buildFunnelBarEChartsOption(result: AnalysisResult, args: Funnel
         width: axisLabelWidth,
         overflow: 'truncate',
         hideOverlap: true,
+        color: echartsThemeColours().text,
       },
+      axisLine: { lineStyle: { color: echartsThemeColours().border } },
     },
     yAxis: {
       type: 'value',
@@ -685,7 +716,10 @@ export function buildFunnelBarEChartsOption(result: AnalysisResult, args: Funnel
       axisLabel: {
         formatter: (v: number) => `${Math.round(v * 100)}%`,
         fontSize: yAxisLabelFontSizePx,
+        color: echartsThemeColours().text,
       },
+      splitLine: { lineStyle: { color: echartsThemeColours().gridLine } },
+      axisLine: { lineStyle: { color: echartsThemeColours().border } },
     },
     dataZoom: stageCount > 10
       ? [
@@ -959,6 +993,7 @@ export function buildBridgeEChartsOption(result: AnalysisResult, args: BridgeCha
       trigger: 'axis',
       confine: true,
       axisPointer: { type: 'shadow' },
+      ...echartsTooltipStyle(),
       position: (point: number[], _params: any, _dom: any, _rect: any, size: any) => {
         const [x, y] = point;
         const viewW = size.viewSize[0];
@@ -1000,7 +1035,9 @@ export function buildBridgeEChartsOption(result: AnalysisResult, args: BridgeCha
           min: minV,
           max: maxV,
           splitNumber: 4,
-          axisLabel: { formatter: (v: number) => `${Math.round(v * 100)}%`, fontSize: valueAxisLabelFontSizePx, margin: 10 },
+          axisLabel: { formatter: (v: number) => `${Math.round(v * 100)}%`, fontSize: valueAxisLabelFontSizePx, margin: 10, color: echartsThemeColours().text },
+          splitLine: { lineStyle: { color: echartsThemeColours().gridLine } },
+          axisLine: { lineStyle: { color: echartsThemeColours().border } },
         }
       : {
           type: 'category',
@@ -1016,7 +1053,9 @@ export function buildBridgeEChartsOption(result: AnalysisResult, args: BridgeCha
             hideOverlap: false,
             align: axisLabelAlign as any,
             verticalAlign: axisLabelVerticalAlign as any,
+            color: echartsThemeColours().text,
           },
+          axisLine: { lineStyle: { color: echartsThemeColours().border } },
         },
     yAxis: orientation === 'horizontal'
       ? {
@@ -1030,14 +1069,18 @@ export function buildBridgeEChartsOption(result: AnalysisResult, args: BridgeCha
             lineHeight,
             margin: 10,
             hideOverlap: false,
+            color: echartsThemeColours().text,
           },
+          axisLine: { lineStyle: { color: echartsThemeColours().border } },
         }
       : {
           type: 'value',
           min: minV,
           max: maxV,
           splitNumber: 4,
-          axisLabel: { formatter: (v: number) => `${Math.round(v * 100)}%`, fontSize: valueAxisLabelFontSizePx, margin: 10 },
+          axisLabel: { formatter: (v: number) => `${Math.round(v * 100)}%`, fontSize: valueAxisLabelFontSizePx, margin: 10, color: echartsThemeColours().text },
+          splitLine: { lineStyle: { color: echartsThemeColours().gridLine } },
+          axisLine: { lineStyle: { color: echartsThemeColours().border } },
         },
     series: [
       {
@@ -1056,7 +1099,7 @@ export function buildBridgeEChartsOption(result: AnalysisResult, args: BridgeCha
               silent: true,
               symbol: ['none', 'none'],
               label: { show: false },
-              lineStyle: { color: '#9ca3af', width: 1 },
+              lineStyle: { color: echartsThemeColours().textMuted, width: 1 },
               data: connectorSegments,
             }
           : undefined,
@@ -1077,7 +1120,7 @@ export function buildBridgeEChartsOption(result: AnalysisResult, args: BridgeCha
             return typeof v === 'number' && Number.isFinite(v) ? `+${fmtDeltaPct(v)}` : '';
           },
           fontSize: valueLabelFontSizePx,
-          color: '#374151',
+          color: echartsThemeColours().text,
         },
         labelLayout: (p: any) => clampLabelIntoView(p),
         data: inc,
@@ -1097,7 +1140,7 @@ export function buildBridgeEChartsOption(result: AnalysisResult, args: BridgeCha
             return typeof v === 'number' && Number.isFinite(v) ? `-${fmtDeltaPct(v)}` : '';
           },
           fontSize: valueLabelFontSizePx,
-          color: '#374151',
+          color: echartsThemeColours().text,
         },
         labelLayout: (p: any) => clampLabelIntoView(p),
         data: dec,
@@ -1117,7 +1160,7 @@ export function buildBridgeEChartsOption(result: AnalysisResult, args: BridgeCha
             return typeof v === 'number' && Number.isFinite(v) ? fmtTotalPct(v) : '';
           },
           fontSize: valueLabelFontSizePx,
-          color: '#374151',
+          color: echartsThemeColours().text,
         },
         labelLayout: (p: any) => clampLabelIntoView(p),
         data: totalBars,
@@ -1252,6 +1295,7 @@ export function buildFunnelBridgeEChartsOption(result: AnalysisResult, args: Fun
     tooltip: {
       trigger: 'axis',
       axisPointer: { type: 'shadow' },
+      ...echartsTooltipStyle(),
       formatter: (params: any) => {
         const ps = Array.isArray(params) ? params : [params];
         const label = ps[0]?.axisValueLabel ?? '';
@@ -1278,14 +1322,18 @@ export function buildFunnelBridgeEChartsOption(result: AnalysisResult, args: Fun
         formatter: (v: string) => wrapLabel(v),
         margin: 14,
         fontSize: 10,
+        color: echartsThemeColours().text,
       },
+      axisLine: { lineStyle: { color: echartsThemeColours().border } },
     },
     yAxis: {
       type: 'value',
       min: minV,
       max: maxV,
       splitNumber: 4,
-      axisLabel: { formatter: (v: number) => `${Math.round(v * 100)}%`, fontSize: 10, margin: 10 },
+      axisLabel: { formatter: (v: number) => `${Math.round(v * 100)}%`, fontSize: 10, margin: 10, color: echartsThemeColours().text },
+      splitLine: { lineStyle: { color: echartsThemeColours().gridLine } },
+      axisLine: { lineStyle: { color: echartsThemeColours().border } },
     },
     series: [
       {
@@ -1313,7 +1361,7 @@ export function buildFunnelBridgeEChartsOption(result: AnalysisResult, args: Fun
             return typeof v === 'number' && Number.isFinite(v) ? `+${fmtDeltaPct(v)}` : '';
           },
           fontSize: 10,
-          color: '#374151',
+          color: echartsThemeColours().text,
         },
         labelLayout: { hideOverlap: true, moveOverlap: 'shiftY' },
         data: inc,
@@ -1333,7 +1381,7 @@ export function buildFunnelBridgeEChartsOption(result: AnalysisResult, args: Fun
             return typeof v === 'number' && Number.isFinite(v) ? `-${fmtDeltaPct(v)}` : '';
           },
           fontSize: 10,
-          color: '#374151',
+          color: echartsThemeColours().text,
         },
         labelLayout: { hideOverlap: true, moveOverlap: 'shiftY' },
         data: dec,
@@ -1353,7 +1401,7 @@ export function buildFunnelBridgeEChartsOption(result: AnalysisResult, args: Fun
             return typeof v === 'number' && Number.isFinite(v) ? fmtTotalPct(v) : '';
           },
           fontSize: 10,
-          color: '#374151',
+          color: echartsThemeColours().text,
         },
         labelLayout: { hideOverlap: true, moveOverlap: 'shiftY' },
         data: totalBars,

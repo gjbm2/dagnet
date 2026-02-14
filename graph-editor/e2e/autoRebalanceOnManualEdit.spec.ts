@@ -165,7 +165,7 @@ test.describe('auto-rebalance on manual commit', () => {
       e2e.openEdgeContextMenu('edge-start-b', 200, 200);
     });
 
-    const menu = page.locator('div[style*="position: fixed"][style*="z-index: 10000"]').first();
+    const menu = page.locator('.dagnet-popup').first();
     await expect(menu).toBeVisible({ timeout: 2_000 });
 
     const probInput = menu.locator('.probability-input input[type="text"]').first();

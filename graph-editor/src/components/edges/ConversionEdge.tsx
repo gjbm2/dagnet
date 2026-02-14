@@ -15,6 +15,7 @@ import { getVisitedNodeIds } from '@/lib/queryDSL';
 import { calculateConfidenceBounds } from '@/utils/confidenceIntervals';
 import { useEdgeBeads, EdgeBeadsRenderer } from './EdgeBeads';
 import { useDecorationVisibility } from '../GraphCanvas';
+import { useTheme } from '../../contexts/ThemeContext';
 import { 
   EDGE_INSET, 
   EDGE_INITIAL_OFFSET, 
@@ -212,6 +213,8 @@ export default function ConversionEdge({
   source,
   target,
 }: EdgeProps<ConversionEdgeData>) {
+  const { theme } = useTheme();
+  const dark = theme === 'dark';
   // CRITICAL: Overlays should NEVER be selected, even if ReactFlow sets selected=true
   // Only 'current' layer edges can be selected
   const effectiveSelected = data?.scenarioOverlay ? false : selected;
@@ -831,40 +834,42 @@ export default function ConversionEdge({
   // Edge colour logic: highlight/selection shading
   // Case/conditional edge colours now shown as markers, not full edge colouring
   const edgeColour = useMemo(() => {
-    // Selected edges: darker gray to distinguish from highlighted edges
+    // Highlight/selection direction: blend toward black (light mode) or white (dark mode)
+    const emphasisTarget = dark ? { r: 255, g: 255, b: 255 } : { r: 0, g: 0, b: 0 };
+
+    // Selected edges: strong emphasis to distinguish from highlighted edges
     if (effectiveSelected) {
-      return '#222'; // very dark gray for selection
+      return dark ? '#eee' : '#222';
     }
     if (data?.isHighlighted) {
       // Different opacity for different selection types:
       // - Single node (isSingleNodeHighlight=true): 30% fading with depth
       // - Multi-node topological (isSingleNodeHighlight=false): 50% solid
-      let blackIntensity: number;
+      let intensity: number;
       
       if (data.isSingleNodeHighlight) {
         // Single node selection: Start at 30%, fade by 10% per hop
         const depth = data.highlightDepth || 0;
-        blackIntensity = 0.3 * Math.pow(0.9, depth); // 30% × 0.9^depth
+        intensity = 0.3 * Math.pow(0.9, depth); // 30% × 0.9^depth
       } else {
         // Multi-node topological selection: 50% solid
-        blackIntensity = 0.5;
+        intensity = 0.5;
       }
       
-      // Blend scenario colour with black for highlight
+      // Blend scenario colour toward emphasis target
       const baseColourHex = data?.scenarioColour || '#b3b3b3';
-      const black = { r: 0, g: 0, b: 0 };
       const baseColourRgb = hexToRgb(baseColourHex);
       
-      const blendedR = Math.round(black.r * blackIntensity + baseColourRgb.r * (1 - blackIntensity));
-      const blendedG = Math.round(black.g * blackIntensity + baseColourRgb.g * (1 - blackIntensity));
-      const blendedB = Math.round(black.b * blackIntensity + baseColourRgb.b * (1 - blackIntensity));
+      const blendedR = Math.round(emphasisTarget.r * intensity + baseColourRgb.r * (1 - intensity));
+      const blendedG = Math.round(emphasisTarget.g * intensity + baseColourRgb.g * (1 - intensity));
+      const blendedB = Math.round(emphasisTarget.b * intensity + baseColourRgb.b * (1 - intensity));
       
       return `rgb(${blendedR}, ${blendedG}, ${blendedB})`;
     }
     
     // Default: use scenario colour
     return data?.scenarioColour || '#b3b3b3';
-  }, [effectiveSelected, data?.isHighlighted, data?.highlightDepth, data?.isSingleNodeHighlight, data?.scenarioColour]);
+  }, [effectiveSelected, data?.isHighlighted, data?.highlightDepth, data?.isSingleNodeHighlight, data?.scenarioColour, dark]);
   
   const getEdgeColour = () => edgeColour;
 
@@ -2443,7 +2448,7 @@ export default function ConversionEdge({
                   y1={sankeyFERibbons.completenessLine.y1}
                   x2={sankeyFERibbons.completenessLine.x2}
                   y2={sankeyFERibbons.completenessLine.y2}
-                  stroke="#333"
+                  stroke={dark ? '#aaa' : '#333'}
                   strokeWidth={SANKEY_COMPLETENESS_LINE_STROKE}
                   strokeDasharray="4,4"
                   strokeOpacity={0.8}
@@ -3029,56 +3034,27 @@ export default function ConversionEdge({
       {/* Context Menu */}
       {showContextMenu && (
         <div
+          className="dagnet-popup"
           style={{
             position: 'absolute',
             transform: `translate(-50%, -50%) translate(${labelX}px,${labelY}px)`,
-            background: '#fff',
-            border: '1px solid #ddd',
-            borderRadius: '4px',
-            boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
             zIndex: 1000,
             minWidth: '120px',
           }}
         >
-          <div
-            style={{
-              padding: '8px 12px',
-              cursor: 'pointer',
-              fontSize: `${EDGE_LABEL_FONT_SIZE}px`,
-              borderBottom: '1px solid #eee',
-            }}
-            onClick={handleReconnectSource}
-            onMouseEnter={(e) => e.currentTarget.style.background = '#f8f9fa'}
-            onMouseLeave={(e) => e.currentTarget.style.background = '#fff'}
-          >
+          <div className="dagnet-popup-item" onClick={handleReconnectSource}>
             Reconnect Source
           </div>
-          <div
-            style={{
-              padding: '8px 12px',
-              cursor: 'pointer',
-              fontSize: `${EDGE_LABEL_FONT_SIZE}px`,
-              borderBottom: '1px solid #eee',
-            }}
-            onClick={handleReconnectTarget}
-            onMouseEnter={(e) => e.currentTarget.style.background = '#f8f9fa'}
-            onMouseLeave={(e) => e.currentTarget.style.background = '#fff'}
-          >
+          <div className="dagnet-popup-item" onClick={handleReconnectTarget}>
             Reconnect Target
           </div>
+          <div className="dagnet-popup-divider" />
           <div
-            style={{
-              padding: '8px 12px',
-              cursor: 'pointer',
-              fontSize: `${EDGE_LABEL_FONT_SIZE}px`,
-              color: '#dc3545',
-            }}
+            className="dagnet-popup-item danger"
             onClick={() => {
               handleDelete();
               setShowContextMenu(false);
             }}
-            onMouseEnter={(e) => e.currentTarget.style.background = '#f8f9fa'}
-            onMouseLeave={(e) => e.currentTarget.style.background = '#fff'}
           >
             Delete Edge
           </div>
@@ -3103,7 +3079,7 @@ export default function ConversionEdge({
               className="edge-description-text-element"
               style={{
                 fontSize: '9px',
-                fill: selected ? '#000' : '#666',
+                fill: selected ? (dark ? '#fff' : '#000') : (dark ? '#aaa' : '#666'),
                 fontStyle: 'italic',
                 fontWeight: selected ? '600' : 'normal',
                 pointerEvents: 'painted', // Only capture events over painted (visible) text, not the entire path

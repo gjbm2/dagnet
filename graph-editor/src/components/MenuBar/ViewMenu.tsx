@@ -7,6 +7,7 @@ import { useViewPreferencesContext } from '../../contexts/ViewPreferencesContext
 import { useSankeyView } from '../../hooks/useSankeyView';
 import { useNodeImageView } from '../../hooks/useNodeImageView';
 import { useDashboardMode } from '../../hooks/useDashboardMode';
+import { useTheme } from '../../contexts/ThemeContext';
 import { sessionLogService } from '../../services/sessionLogService';
 import { graphIssuesService } from '../../services/graphIssuesService';
 
@@ -22,6 +23,7 @@ export function ViewMenu() {
   const { activeTabId, tabs, operations } = useTabContext();
   const { operations: navOps } = useNavigatorContext();
   const { isDashboardMode, toggleDashboardMode } = useDashboardMode();
+  const { theme, toggleTheme } = useTheme();
   
   const activeTab = tabs.find(t => t.id === activeTabId);
   const isGraphTab = activeTab?.fileId.startsWith('graph-') ?? false;
@@ -349,6 +351,13 @@ export function ViewMenu() {
             onSelect={handleToggleDashboardMode}
           >
             {isDashboardMode ? '✓ ' : ''}Dashboard mode
+          </Menubar.Item>
+
+          <Menubar.Item
+            className="menubar-item"
+            onSelect={toggleTheme}
+          >
+            {theme === 'dark' ? '✓ ' : ''}Dark mode
           </Menubar.Item>
 
           <Menubar.Item 

@@ -1032,3 +1032,289 @@ a.sig-hash-chip.secondary:hover,
   font-size: 10px;
   color: #333;
 }
+
+/* ===== DARK MODE ===== */
+
+[data-theme="dark"] .sig-links-viewer {
+  --clr-secondary-bg: #3b2f0e;
+  --clr-secondary-border: #6b5b00;
+  background: #1e1e1e;
+  color: #e0e0e0;
+}
+
+[data-theme="dark"] .sig-header {
+  background: #252525;
+  border-bottom-color: #404040;
+}
+
+[data-theme="dark"] .sig-header-workspace {
+  color: #888;
+}
+
+[data-theme="dark"] .sig-browse-half.primary,
+[data-theme="dark"] .sig-links-right {
+  background: #1e1e1e;
+  border-color: #404040;
+}
+
+[data-theme="dark"] .sig-browse-params-header,
+[data-theme="dark"] .sig-links-centre-header,
+[data-theme="dark"] .sig-right-tab-bar {
+  background: #252525;
+  border-color: #404040;
+}
+
+[data-theme="dark"] .sig-links-search {
+  background: #2d2d2d;
+  border-color: #555;
+  color: #e0e0e0;
+}
+
+[data-theme="dark"] .sig-links-param-item:hover {
+  background: #2d2d2d;
+}
+
+[data-theme="dark"] .sig-browse-half.primary .sig-links-param-item.selected {
+  background: #1a2a40;
+}
+
+[data-theme="dark"] .sig-card {
+  border-color: #404040;
+  background: transparent;
+}
+
+[data-theme="dark"] .sig-card:hover {
+  border-color: #555;
+  background: #2d2d2d;
+}
+
+[data-theme="dark"] .sig-browse-half.primary .sig-card.selected {
+  background: #252525;
+}
+
+[data-theme="dark"] .sig-card.current {
+  border-color: #22c55e;
+  background: #052e16;
+}
+
+[data-theme="dark"] .sig-card-hash {
+  color: #a5b4fc;
+}
+
+[data-theme="dark"] .sig-card-stats {
+  color: #e0e0e0;
+}
+
+[data-theme="dark"] .sig-card-badge.current {
+  background: #052e16;
+  color: #6ee7b7;
+}
+
+[data-theme="dark"] .sig-card-badge.linked {
+  background: #1e1b4b;
+  color: #a5b4fc;
+}
+
+[data-theme="dark"] .sig-card-badge.unlinked {
+  background: #422006;
+  color: #fbbf24;
+}
+
+[data-theme="dark"] .sig-right-tab {
+  color: #888;
+}
+
+[data-theme="dark"] .sig-right-tab:hover {
+  color: #ccc;
+}
+
+[data-theme="dark"] .sig-right-tab.active {
+  color: #a5b4fc;
+  border-bottom-color: #a5b4fc;
+}
+
+[data-theme="dark"] .sig-subject-strip {
+  background: #252525;
+  border-bottom-color: #404040;
+}
+
+[data-theme="dark"] .sig-subject-param {
+  color: #e0e0e0;
+}
+
+[data-theme="dark"] .sig-detail-strip {
+  border-bottom-color: #404040;
+}
+
+[data-theme="dark"] .sig-detail-value {
+  color: #e0e0e0;
+}
+
+[data-theme="dark"] .sig-detail-editor-wrap {
+  border-color: #404040;
+}
+
+[data-theme="dark"] .sig-centre-controls {
+  background: #252525;
+  border-bottom-color: #404040;
+}
+
+[data-theme="dark"] .sig-summary-bar {
+  background: #1a2a40;
+  border-bottom-color: #404040;
+  color: #aaa;
+}
+
+[data-theme="dark"] .sig-filter-select {
+  background: #2d2d2d;
+  border-color: #555;
+  color: #e0e0e0;
+}
+
+[data-theme="dark"] .sig-action-btn {
+  background: #2d2d2d;
+  border-color: #555;
+  color: #e0e0e0;
+}
+
+[data-theme="dark"] .sig-action-btn:hover {
+  background: #3d3d3d;
+}
+
+[data-theme="dark"] .sig-resize-handle,
+[data-theme="dark"] .sig-grid-handle {
+  background: #404040;
+}
+
+[data-theme="dark"] .sig-existing-link {
+  background: #2d2d2d;
+  border-color: #404040;
+}
+
+[data-theme="dark"] .sig-existing-link-label {
+  color: #e0e0e0;
+}
+
+[data-theme="dark"] .sig-link-form {
+  background: #3b2f0e;
+  border-color: #6b5b00;
+}
+
+[data-theme="dark"] .sig-link-form label {
+  color: #aaa;
+}
+
+[data-theme="dark"] .sig-link-form input,
+[data-theme="dark"] .sig-link-form textarea,
+[data-theme="dark"] .sig-link-form select {
+  background: #2d2d2d;
+  border-color: #555;
+  color: #e0e0e0;
+}
+
+[data-theme="dark"] .sig-data-table-wrap {
+  background: #1e1e1e;
+  border-color: #404040;
+}
+
+[data-theme="dark"] .sig-data-table thead th {
+  background: #252525;
+  border-bottom-color: #404040;
+  color: #aaa;
+}
+
+[data-theme="dark"] .sig-data-table tbody td {
+  border-bottom-color: #333;
+}
+
+[data-theme="dark"] .sig-data-table tbody tr:hover {
+  background: #2d2d2d;
+}
+
+[data-theme="dark"] .sig-data-table tbody tr.selected {
+  background: #1a2a40;
+}
+
+[data-theme="dark"] .sig-data-table tbody tr.data-src-compare {
+  background: #3b2f0e;
+}
+
+[data-theme="dark"] .sig-data-table tbody tr.data-src-compare:hover {
+  background: #4a3a12;
+}
+
+[data-theme="dark"] .sig-data-table tbody tr.data-src-compare.selected {
+  background: #4a3a12;
+}
+
+[data-theme="dark"] .sig-data-table .mono {
+  color: #e0e0e0;
+}
+
+[data-theme="dark"] .sig-hash-chip {
+  background: #1e1b4b;
+  color: #a5b4fc;
+  border-color: #4338ca;
+}
+
+[data-theme="dark"] .sig-links-section-title {
+  color: #888;
+  border-bottom-color: #404040;
+}
+
+[data-theme="dark"] .sig-refresh-btn {
+  border-color: #555;
+  color: #999;
+}
+
+[data-theme="dark"] .sig-refresh-btn:hover {
+  background: #3d3d3d;
+}
+
+[data-theme="dark"] .sig-compare-popup {
+  background: #1e1e1e;
+}
+
+[data-theme="dark"] .sig-compare-popup-header {
+  background: #3b2f0e;
+  border-bottom-color: #6b5b00;
+}
+
+/* Secondary/compare popup selected states */
+[data-theme="dark"] .sig-browse-half.secondary .sig-links-param-item.selected,
+[data-theme="dark"] .sig-compare-popup .sig-links-param-item.selected {
+  background: #3b2f0e;
+}
+
+[data-theme="dark"] .sig-browse-half.secondary .sig-card.selected,
+[data-theme="dark"] .sig-compare-popup .sig-card.selected {
+  background: #3b2f0e;
+}
+
+[data-theme="dark"] .sig-card.current {
+  border-color: #22c55e;
+  background: #052e16;
+}
+
+[data-theme="dark"] .sig-card.compare {
+  background: #3b2f0e;
+}
+
+[data-theme="dark"] .sig-section-collapsible:hover {
+  background: #2d2d2d;
+}
+
+[data-theme="dark"] .sig-source-btn {
+  background: #2d2d2d;
+  color: #aaa;
+  border-color: #555;
+}
+
+[data-theme="dark"] .sig-source-btn:hover {
+  background: #3d3d3d;
+}
+
+[data-theme="dark"] .sig-source-btn.active {
+  background: #353535;
+  color: #e0e0e0;
+}

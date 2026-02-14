@@ -162,3 +162,52 @@
   overflow: hidden;
 }
 
+/* ===== DARK MODE ===== */
+
+/* Sidebar panel — target by panel-id AND by catchall for any dock-bar in the graph editor */
+[data-theme="dark"] .graph-editor-dock-container .dock-bar {
+  background: #252525 !important;
+  border-bottom-color: #404040 !important;
+}
+
+[data-theme="dark"] .graph-editor-dock-container .dock-tab {
+  color: #aaa !important;
+}
+
+[data-theme="dark"] .graph-editor-dock-container .dock-tab:hover {
+  filter: brightness(1.2) !important;
+}
+
+[data-theme="dark"] .graph-editor-dock-container .dock-tab-active {
+  color: #e0e0e0 !important;
+}
+
+[data-theme="dark"] .graph-editor-dock-container .dock-content {
+  background: #1e1e1e !important;
+}
+
+[data-theme="dark"] .graph-editor-dock-container .dock-panel[data-panel-id="graph-sidebar-panel"],
+[data-theme="dark"] .graph-editor-dock-container .dock-panel[data-dockid="graph-sidebar-panel"] {
+  border-left-color: #404040 !important;
+  background: #1e1e1e !important;
+}
+
+[data-theme="dark"] .graph-editor-dock-container .dock-splitter {
+  background: #404040 !important;
+}
+
+[data-theme="dark"] .graph-editor-dock-container .dock-splitter:hover {
+  background: #555 !important;
+}
+
+[data-theme="dark"] .graph-minimize-button {
+  background: #333 !important;
+  border-color: #444 !important;
+  color: #999 !important;
+}
+
+[data-theme="dark"] .graph-minimize-button:hover {
+  background: #444 !important;
+  color: #e0e0e0 !important;
+}
+

@@ -2,12 +2,8 @@
 FE-Supplied Closure Consumption Tests (FC-001 through FC-010)
 
 Tests that the backend correctly uses FE-supplied equivalent_hashes
-(closure sets) instead of DB-driven equivalence expansion.
-
-Key invariant: when equivalent_hashes is provided, the backend MUST
-use it directly and MUST NOT consult the signature_equivalence table.
-These tests verify this by inserting data for multiple hashes with
-NO DB equivalence links, then querying with equivalent_hashes.
+(closure sets). The signature_equivalence table has been dropped;
+equivalence is now entirely FE-owned via hash-mappings.json.
 
 Run with: pytest lib/tests/test_fe_closure_consumption.py -v
 """
@@ -74,7 +70,6 @@ def cleanup_test_data():
     try:
         conn = get_db_connection()
         cur = conn.cursor()
-        cur.execute("DELETE FROM signature_equivalence WHERE param_id LIKE %s", (f'{TEST_PREFIX}%',))
         cur.execute("DELETE FROM signature_registry WHERE param_id LIKE %s", (f'{TEST_PREFIX}%',))
         cur.execute("DELETE FROM snapshots WHERE param_id LIKE %s", (f'{TEST_PREFIX}%',))
         conn.commit()
@@ -93,8 +88,8 @@ def setup_and_cleanup():
 
 class TestFEClosureConsumption:
     """
-    FC-001 through FC-010: FE-supplied closure sets are honoured by the backend,
-    and DB signature_equivalence is NOT consulted when equivalent_hashes is provided.
+    FC-001 through FC-010: FE-supplied closure sets are honoured by the backend.
+    The signature_equivalence table has been dropped; equivalence is FE-owned.
     """
 
     # ── query_snapshots ──────────────────────────────────────────────────
@@ -323,49 +318,8 @@ class TestFEClosureConsumption:
         assert ch_a in all_members, f"Seed hash {ch_a} missing from family members"
         assert ch_b in all_members, f"Equivalent hash {ch_b} missing from family members"
 
-    # ── DB bypass verification ───────────────────────────────────────────
-
-    def test_fc009_db_links_ignored_when_closure_provided(self):
-        """FC-009: When equivalent_hashes is provided, DB equivalence links are NOT used.
-
-        Create a DB link A↔B, then query with equivalent_hashes=[C] (not B).
-        Result should include A+C only, NOT B — proving the DB link was bypassed.
-        """
-        # Test-only DB helper (production function removed).
-        from test_snapshot_read_integrity import create_equivalence_link
-
-        pid = make_param_id('fc009')
-        sig_a = '{"c":"fc009-a","x":{}}'
-        sig_b = '{"c":"fc009-b","x":{}}'
-        sig_c = '{"c":"fc009-c","x":{}}'
-        ch_a = short_core_hash_from_canonical_signature(sig_a)
-        ch_b = short_core_hash_from_canonical_signature(sig_b)
-        ch_c = short_core_hash_from_canonical_signature(sig_c)
-
-        append_for_test(param_id=pid, canonical_signature=sig_a, slice_key='window(1-Dec-25:1-Dec-25)',
-                        rows=make_rows(['2025-12-01']))
-        append_for_test(param_id=pid, canonical_signature=sig_b, slice_key='window(1-Dec-25:1-Dec-25)',
-                        rows=make_rows(['2025-12-01']))
-        append_for_test(param_id=pid, canonical_signature=sig_c, slice_key='window(1-Dec-25:1-Dec-25)',
-                        rows=make_rows(['2025-12-01']))
-
-        # Create DB link A↔B (this should be ignored when closure is provided)
-        create_equivalence_link(param_id=pid, core_hash=ch_a, equivalent_to=ch_b,
-                                created_by='pytest', reason='fc009 test')
-
-        # Query with closure=[C] — should get A+C, NOT B
-        rows = query_snapshots(
-            param_id=pid,
-            core_hash=ch_a,
-            equivalent_hashes=[
-                {'core_hash': ch_c, 'operation': 'equivalent', 'weight': 1.0},
-            ],
-        )
-
-        returned_hashes = {r['core_hash'] for r in rows}
-        assert ch_a in returned_hashes, "Seed hash A must be present"
-        assert ch_c in returned_hashes, "FE-supplied equivalent C must be present"
-        assert ch_b not in returned_hashes, "DB-linked hash B must NOT be present (DB bypass)"
+    # fc009 removed: tested DB bypass which is moot now that the
+    # signature_equivalence table has been dropped.
 
     def test_fc010_cross_param_expansion_works(self):
         """FC-010: FE-supplied closure works across param_id boundaries.
@@ -453,9 +407,9 @@ class TestRegressionGuards:
     def test_rg002_no_signature_equivalence_in_production_code(self):
         """RG-002: production Python code must not reference 'signature_equivalence' table.
 
-        After the hash-mappings migration, the signature_equivalence table is
-        only referenced in test files (for legacy regression coverage).
-        This test fails if any production .py file in lib/ still references it.
+        The signature_equivalence table has been dropped. Equivalence is now
+        entirely FE-owned via hash-mappings.json. This test fails if any
+        production .py file in lib/ still references the table.
         """
         import re
         from pathlib import Path

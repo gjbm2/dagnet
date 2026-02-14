@@ -14,6 +14,7 @@ import { useTabContext, fileRegistry } from '../../contexts/TabContext';
 import toast from 'react-hot-toast';
 import type { GraphData } from '../../types';
 import { requestPutToBase } from '../../hooks/usePutToBaseRequestListener';
+import { useTheme } from '../../contexts/ThemeContext';
 import './Modal.css';
 
 interface AllSlicesModalProps {
@@ -46,6 +47,8 @@ export function AllSlicesModal({
   setGraph,
   currentDSL
 }: AllSlicesModalProps) {
+  const { theme } = useTheme();
+  const dark = theme === 'dark';
   const { activeTabId, tabs, operations: tabOperations } = useTabContext();
   const [slices, setSlices] = useState<SliceItem[]>([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -305,7 +308,7 @@ export function AllSlicesModal({
               <div style={{ fontSize: '13px', color: '#666', marginBottom: '20px', fontFamily: 'monospace' }}>
                 {currentSliceName}
               </div>
-              <div style={{ width: '100%', height: '8px', backgroundColor: '#e0e0e0', borderRadius: '4px', overflow: 'hidden', marginBottom: '8px' }}>
+              <div style={{ width: '100%', height: '8px', backgroundColor: dark ? '#404040' : '#e0e0e0', borderRadius: '4px', overflow: 'hidden', marginBottom: '8px' }}>
                 <div
                   style={{
                     width: `${(progress.currentSlice / progress.totalSlices) * 100}%`,
@@ -329,7 +332,7 @@ export function AllSlicesModal({
               </p>
 
               {/* Summary */}
-              <div style={{ marginBottom: '20px', padding: '12px', backgroundColor: '#f5f5f5', borderRadius: '6px' }}>
+              <div style={{ marginBottom: '20px', padding: '12px', backgroundColor: dark ? '#252525' : '#f5f5f5', borderRadius: '6px' }}>
                 <div style={{ fontSize: '14px', fontWeight: '500', marginBottom: '4px' }}>
                   Found {slices.length} slice{slices.length !== 1 ? 's' : ''} from pinned query
                 </div>
@@ -337,7 +340,7 @@ export function AllSlicesModal({
                   {selectedSlices.length} selected
                 </div>
                 {slices.length > 50 && (
-                  <div style={{ marginTop: '8px', padding: '8px', background: '#FEF3C7', borderRadius: '4px', fontSize: '12px', color: '#854D0E' }}>
+                  <div style={{ marginTop: '8px', padding: '8px', background: dark ? '#3b2f0e' : '#FEF3C7', borderRadius: '4px', fontSize: '12px', color: dark ? '#fbbf24' : '#854D0E' }}>
                     ⚠️ {slices.length} slices is a large number and may take considerable time
                   </div>
                 )}
@@ -354,9 +357,10 @@ export function AllSlicesModal({
                       style={{
                         fontSize: '12px',
                         padding: '4px 8px',
-                        border: '1px solid #ddd',
+                        border: `1px solid ${dark ? '#555' : '#ddd'}`,
                         borderRadius: '4px',
-                        background: 'white',
+                        background: dark ? '#2d2d2d' : 'white',
+                        color: 'inherit',
                         cursor: 'pointer'
                       }}
                     >
@@ -368,9 +372,10 @@ export function AllSlicesModal({
                       style={{
                         fontSize: '12px',
                         padding: '4px 8px',
-                        border: '1px solid #ddd',
+                        border: `1px solid ${dark ? '#555' : '#ddd'}`,
                         borderRadius: '4px',
-                        background: 'white',
+                        background: dark ? '#2d2d2d' : 'white',
+                        color: 'inherit',
                         cursor: 'pointer'
                       }}
                     >
@@ -380,7 +385,7 @@ export function AllSlicesModal({
                 </div>
 
                 <div style={{
-                  border: '1px solid #e0e0e0',
+                  border: `1px solid ${dark ? '#404040' : '#e0e0e0'}`,
                   borderRadius: '6px',
                   maxHeight: '300px',
                   overflowY: 'auto'
@@ -397,9 +402,9 @@ export function AllSlicesModal({
                           display: 'flex',
                           alignItems: 'center',
                           padding: '8px 12px',
-                          borderBottom: '1px solid #f0f0f0',
+                          borderBottom: `1px solid ${dark ? '#333' : '#f0f0f0'}`,
                           cursor: 'pointer',
-                          backgroundColor: slice.selected ? '#f0f7ff' : 'transparent'
+                          backgroundColor: slice.selected ? (dark ? '#1a2a40' : '#f0f7ff') : 'transparent'
                         }}
                         onClick={() => handleToggleSlice(slice.id)}
                       >
@@ -467,7 +472,7 @@ export function AllSlicesModal({
                 </label>
               </div>
 
-              <div style={{ padding: '12px', backgroundColor: '#E0F2FE', borderRadius: '6px', fontSize: '12px', color: '#0369A1' }}>
+              <div style={{ padding: '12px', backgroundColor: dark ? '#0c2a3d' : '#E0F2FE', borderRadius: '6px', fontSize: '12px', color: dark ? '#38bdf8' : '#0369A1' }}>
                 <strong>Note:</strong> This uses incremental fetching - if you ran this yesterday with a 30-day window,
                 today's run will only fetch the 1 new day of data. Enable "Bust cache" to re-fetch everything.
               </div>

@@ -28,28 +28,6 @@ from snapshot_service import (
     short_core_hash_from_canonical_signature,
 )
 
-# Test-only DB helper (production function removed in hash-mappings migration).
-def create_equivalence_link(*, param_id, core_hash, equivalent_to, created_by, reason,
-                            operation='equivalent', weight=1.0, source_param_id=None):
-    conn = get_db_connection()
-    try:
-        cur = conn.cursor()
-        cur.execute(
-            """INSERT INTO signature_equivalence
-               (param_id, core_hash, equivalent_to, created_by, reason, active, operation, weight, source_param_id)
-               VALUES (%s,%s,%s,%s,%s,true,%s,%s,%s)
-               ON CONFLICT (param_id, core_hash, equivalent_to)
-               DO UPDATE SET active=true, reason=EXCLUDED.reason, created_by=EXCLUDED.created_by,
-                             operation=EXCLUDED.operation, weight=EXCLUDED.weight, source_param_id=EXCLUDED.source_param_id""",
-            (param_id, core_hash, equivalent_to, created_by, reason, operation, weight, source_param_id))
-        conn.commit()
-        return {"success": True}
-    except Exception as e:
-        conn.rollback()
-        return {"success": False, "error": str(e)}
-    finally:
-        conn.close()
-
 # Skip all tests if DB_CONNECTION not available
 pytestmark = pytest.mark.skipif(
     not os.environ.get('DB_CONNECTION'),
@@ -116,7 +94,6 @@ def cleanup_test_data():
     try:
         conn = get_db_connection()
         cur = conn.cursor()
-        cur.execute("DELETE FROM signature_equivalence WHERE param_id LIKE %s", (f'{TEST_PREFIX}%',))
         cur.execute("DELETE FROM signature_registry WHERE param_id LIKE %s", (f'{TEST_PREFIX}%',))
         cur.execute("DELETE FROM snapshots WHERE param_id LIKE %s", (f'{TEST_PREFIX}%',))
         conn.commit()
@@ -287,9 +264,6 @@ class TestBatchAnchorCoverage:
         # Hash B: days 4-5
         append_snapshots_for_test(param_id=pid, canonical_signature=sig_b, slice_key='window(4-Dec-25:5-Dec-25)', rows=make_rows(['2025-12-04', '2025-12-05']))
 
-        # Create equivalence link A ≡ B
-        create_equivalence_link(param_id=pid, core_hash=ch_a, equivalent_to=ch_b, created_by='pytest', reason='bc006 test')
-
         results = batch_anchor_coverage([{
             'param_id': pid,
             'core_hash': ch_a,
@@ -319,8 +293,6 @@ class TestBatchAnchorCoverage:
         # Hash B: day 5 only (day 4 missing across closure)
         append_snapshots_for_test(param_id=pid, canonical_signature=sig_b, slice_key='window(5-Dec-25:5-Dec-25)', rows=make_rows(['2025-12-05']))
 
-        create_equivalence_link(param_id=pid, core_hash=ch_a, equivalent_to=ch_b, created_by='pytest', reason='bc007 test')
-
         results = batch_anchor_coverage([{
             'param_id': pid,
             'core_hash': ch_a,
@@ -348,10 +320,6 @@ class TestBatchAnchorCoverage:
         append_snapshots_for_test(param_id=pid, canonical_signature=sig_a, slice_key='window(1-Dec-25:5-Dec-25)', rows=make_rows(['2025-12-01', '2025-12-02']))
         append_snapshots_for_test(param_id=pid, canonical_signature=sig_b, slice_key='window(3-Dec-25:3-Dec-25)', rows=make_rows(['2025-12-03']))
         append_snapshots_for_test(param_id=pid, canonical_signature=sig_c, slice_key='window(4-Dec-25:5-Dec-25)', rows=make_rows(['2025-12-04', '2025-12-05']))
-
-        # A↔B, B↔C
-        create_equivalence_link(param_id=pid, core_hash=ch_a, equivalent_to=ch_b, created_by='pytest', reason='bc008 A-B')
-        create_equivalence_link(param_id=pid, core_hash=ch_b, equivalent_to=ch_c, created_by='pytest', reason='bc008 B-C')
 
         results = batch_anchor_coverage([{
             'param_id': pid,
@@ -415,7 +383,6 @@ class TestBatchAnchorCoverage:
 
         append_snapshots_for_test(param_id=pid, canonical_signature=sig_a, slice_key='window(1-Dec-25:1-Dec-25)', rows=make_rows(['2025-12-01']))
         append_snapshots_for_test(param_id=pid, canonical_signature=sig_b, slice_key='window(2-Dec-25:2-Dec-25)', rows=make_rows(['2025-12-02']))
-        create_equivalence_link(param_id=pid, core_hash=ch_a, equivalent_to=ch_b, created_by='pytest', reason='bc010 test')
 
         results = batch_anchor_coverage([{
             'param_id': pid,
@@ -589,7 +556,6 @@ class TestBatchAnchorCoverage:
         # Only hash B has the data.
         append_snapshots_for_test(param_id=pid, canonical_signature=sig_b, slice_key='window(1-Dec-25:3-Dec-25)',
                                   rows=make_rows(['2025-12-01', '2025-12-02', '2025-12-03']))
-        create_equivalence_link(param_id=pid, core_hash=ch_a, equivalent_to=ch_b, created_by='pytest', reason='fn003 test')
 
         eq_hashes = [{'core_hash': ch_b, 'operation': 'equivalent', 'weight': 1.0}]
 

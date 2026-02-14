@@ -130,7 +130,7 @@
 }
 
 /* Dark mode support */
-@media (prefers-color-scheme: dark) {
+[data-theme="dark"] {
   .dialog-content {
     background-color: #2d2d2d;
   }

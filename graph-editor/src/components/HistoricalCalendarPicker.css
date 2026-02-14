@@ -106,7 +106,7 @@
 }
 
 /* Dark mode */
-@media (prefers-color-scheme: dark) {
+[data-theme="dark"] {
   .historical-calendar-popover {
     background: #2d2d2d;
     border-color: #404040;

@@ -19,6 +19,8 @@ import type { AnalysisResult } from '../../lib/graphComputeClient';
 import { chartOperationsService } from '../../services/chartOperationsService';
 import { analysisResultToCsv } from '../../services/analysisExportService';
 import { downloadTextFile } from '../../services/downloadService';
+import { isDarkMode } from '../../theme/objectTypeTheme';
+import { useTheme } from '../../contexts/ThemeContext';
 
 interface Props {
   result: AnalysisResult;
@@ -79,6 +81,8 @@ function toBarFill(hex: string): string {
 }
 
 export function SnapshotDailyConversionsChart({ result, visibleScenarioIds, height = 340, fillHeight = false, queryDsl, source, hideOpenAsTab = false }: Props): JSX.Element {
+  const { theme: currentTheme } = useTheme();
+  const dark = currentTheme === 'dark';
   const rows = Array.isArray(result?.data) ? result.data : [];
 
   if (rows.length === 0) {
@@ -216,6 +220,9 @@ export function SnapshotDailyConversionsChart({ result, visibleScenarioIds, heig
       tooltip: {
         trigger: 'axis',
         axisPointer: { type: 'shadow' },
+        backgroundColor: dark ? '#2d2d2d' : '#fff',
+        borderColor: dark ? '#555' : '#ccc',
+        textStyle: { color: dark ? '#e0e0e0' : '#333' },
         formatter: (params: any) => {
           const items = Array.isArray(params) ? params : [params];
           const first = items[0];
@@ -301,7 +308,7 @@ export function SnapshotDailyConversionsChart({ result, visibleScenarioIds, heig
       },
       series: allSeries,
     };
-  }, [allSeries]);
+  }, [allSeries, dark]);
 
   // ── Header ───────────────────────────────────────────────────────────
   const dateRange = result?.metadata?.date_range;

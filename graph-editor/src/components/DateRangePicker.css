@@ -59,3 +59,143 @@
   width: 100%;
 }
 
+/* ===== DARK MODE ===== */
+
+[data-theme="dark"] .date-range-picker-trigger {
+  background: #2d2d2d;
+  border-color: #555;
+  color: #e0e0e0;
+}
+
+[data-theme="dark"] .date-range-picker-trigger:hover {
+  border-color: #777;
+}
+
+[data-theme="dark"] .date-range-picker-dropdown {
+  background: #2d2d2d;
+  border-color: #555;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+}
+
+/* react-date-range library dark overrides */
+[data-theme="dark"] .rdrCalendarWrapper {
+  background: #2d2d2d !important;
+  color: #e0e0e0 !important;
+}
+
+[data-theme="dark"] .rdrDateDisplayWrapper {
+  background: #252525 !important;
+}
+
+[data-theme="dark"] .rdrDateDisplayItem {
+  background: #1e1e1e !important;
+  border-color: #555 !important;
+}
+
+[data-theme="dark"] .rdrDateDisplayItem input {
+  color: #e0e0e0 !important;
+}
+
+[data-theme="dark"] .rdrMonthAndYearWrapper {
+  background: #2d2d2d !important;
+}
+
+[data-theme="dark"] .rdrMonthAndYearPickers select {
+  background: #2d2d2d !important;
+  color: #e0e0e0 !important;
+}
+
+[data-theme="dark"] .rdrNextPrevButton {
+  background: #3d3d3d !important;
+}
+
+[data-theme="dark"] .rdrNextPrevButton:hover {
+  background: #4d4d4d !important;
+}
+
+[data-theme="dark"] .rdrNextPrevButton i {
+  border-color: transparent transparent transparent #e0e0e0 !important;
+}
+
+[data-theme="dark"] .rdrPprevButton i {
+  border-color: transparent #e0e0e0 transparent transparent !important;
+}
+
+[data-theme="dark"] .rdrDay {
+  color: #e0e0e0 !important;
+}
+
+[data-theme="dark"] .rdrDayNumber span {
+  color: #e0e0e0 !important;
+}
+
+[data-theme="dark"] .rdrDayPassive .rdrDayNumber span {
+  color: #555 !important;
+}
+
+[data-theme="dark"] .rdrDayDisabled {
+  background: #1e1e1e !important;
+}
+
+[data-theme="dark"] .rdrDayDisabled .rdrDayNumber span {
+  color: #555 !important;
+}
+
+[data-theme="dark"] .rdrMonthName {
+  color: #aaa !important;
+}
+
+[data-theme="dark"] .rdrWeekDay {
+  color: #888 !important;
+}
+
+[data-theme="dark"] .rdrDayToday .rdrDayNumber span::after {
+  background: #4d9ef7 !important;
+}
+
+/* Defined ranges sidebar (Today, Yesterday, This Week, etc.) */
+[data-theme="dark"] .rdrDefinedRangesWrapper {
+  background: #2d2d2d !important;
+  border-right-color: #404040 !important;
+}
+
+[data-theme="dark"] .rdrStaticRange {
+  background: #2d2d2d !important;
+  border-bottom-color: #404040 !important;
+  color: #e0e0e0 !important;
+}
+
+[data-theme="dark"] .rdrStaticRange:hover .rdrStaticRangeLabel,
+[data-theme="dark"] .rdrStaticRange:focus .rdrStaticRangeLabel {
+  background: #3d3d3d !important;
+  color: #fff !important;
+}
+
+[data-theme="dark"] .rdrStaticRangeLabel {
+  color: #e0e0e0 !important;
+}
+
+/* Input ranges (days up to today, days starting today) */
+[data-theme="dark"] .rdrInputRanges {
+  background: #2d2d2d !important;
+}
+
+[data-theme="dark"] .rdrInputRange {
+  border-bottom-color: #404040 !important;
+}
+
+[data-theme="dark"] .rdrInputRangeInput {
+  background: #1e1e1e !important;
+  border-color: #555 !important;
+  color: #e0e0e0 !important;
+}
+
+[data-theme="dark"] .rdrInputRange span {
+  color: #999 !important;
+}
+
+/* Date range picker wrapper */
+[data-theme="dark"] .rdrDateRangePickerWrapper {
+  background: #2d2d2d !important;
+}
+

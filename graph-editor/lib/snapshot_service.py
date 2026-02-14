@@ -90,11 +90,6 @@ def _ensure_flexi_sig_tables(cur) -> None:
         """
     )
 
-    # NOTE: signature_equivalence table creation REMOVED.
-    # Equivalence is now owned by the FE via hash-mappings.json.
-    # The table still exists in the DB but is no longer read or written by production code.
-    # It will be dropped in a later migration after production verification.
-
 
 def _require_core_hash(core_hash: Optional[str], context: str = "") -> str:
     """

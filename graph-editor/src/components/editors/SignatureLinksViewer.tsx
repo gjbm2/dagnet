@@ -20,6 +20,7 @@ import { DiffEditor, Editor } from '@monaco-editor/react';
 import toast from 'react-hot-toast';
 import { Search, Link2, BarChart3 } from 'lucide-react';
 import { useNavigatorContext } from '../../contexts/NavigatorContext';
+import { useTheme } from '../../contexts/ThemeContext';
 import { useDialog } from '../../contexts/DialogContext';
 import { sessionLogService } from '../../services/sessionLogService';
 import {
@@ -89,6 +90,8 @@ function extractParamIdsFromEdges(edges: GraphEdge[]): string[] {
 // ─── Component ───────────────────────────────────────────────────────────────
 
 export const SignatureLinksViewer: React.FC = () => {
+  const { theme: currentTheme } = useTheme();
+  const monacoTheme = currentTheme === 'dark' ? 'vs-dark' : 'vs';
   const { state: navState, items } = useNavigatorContext();
   const { showConfirm } = useDialog();
 
@@ -1011,7 +1014,7 @@ export const SignatureLinksViewer: React.FC = () => {
                         original={safeJsonStringify(primary.selectedRow.inputs_json ?? primary.selectedRow.canonical_signature)}
                         modified={safeJsonStringify(effectiveCompareRow.inputs_json ?? effectiveCompareRow.canonical_signature)}
                         language="json"
-                        theme="vs"
+                        theme={monacoTheme}
                         options={{
                           readOnly: true,
                           renderSideBySide: true,
@@ -1103,7 +1106,7 @@ export const SignatureLinksViewer: React.FC = () => {
                       <Editor
                         value={safeJsonStringify(selectedRow.inputs_json ?? selectedRow.canonical_signature)}
                         language="json"
-                        theme="vs"
+                        theme={monacoTheme}
                         options={{
                           readOnly: true,
                           minimap: { enabled: false },

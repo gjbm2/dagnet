@@ -27,71 +27,6 @@ from snapshot_service import (
     short_core_hash_from_canonical_signature,
 )
 
-# ── Test-only DB helpers (production functions removed in hash-mappings migration) ──
-# The signature_equivalence TABLE still exists (dropped later); these helpers
-# write to it directly so legacy regression tests remain runnable.
-
-def create_equivalence_link(*, param_id, core_hash, equivalent_to, created_by, reason,
-                            operation='equivalent', weight=1.0, source_param_id=None):
-    if core_hash == equivalent_to and (source_param_id is None or source_param_id == param_id):
-        return {"success": False, "error": "self_link_not_allowed"}
-    conn = get_db_connection()
-    try:
-        cur = conn.cursor()
-        cur.execute(
-            """INSERT INTO signature_equivalence
-               (param_id, core_hash, equivalent_to, created_by, reason, active, operation, weight, source_param_id)
-               VALUES (%s,%s,%s,%s,%s,true,%s,%s,%s)
-               ON CONFLICT (param_id, core_hash, equivalent_to)
-               DO UPDATE SET active=true, reason=EXCLUDED.reason, created_by=EXCLUDED.created_by,
-                             operation=EXCLUDED.operation, weight=EXCLUDED.weight, source_param_id=EXCLUDED.source_param_id""",
-            (param_id, core_hash, equivalent_to, created_by, reason, operation, weight, source_param_id))
-        conn.commit()
-        return {"success": True}
-    except Exception as e:
-        conn.rollback()
-        return {"success": False, "error": str(e)}
-    finally:
-        conn.close()
-
-def deactivate_equivalence_link(*, param_id, core_hash, equivalent_to, created_by, reason):
-    conn = get_db_connection()
-    try:
-        cur = conn.cursor()
-        cur.execute("UPDATE signature_equivalence SET active=false, created_by=%s, reason=%s WHERE param_id=%s AND core_hash=%s AND equivalent_to=%s",
-                    (created_by, reason, param_id, core_hash, equivalent_to))
-        conn.commit()
-        return {"success": True}
-    except Exception as e:
-        conn.rollback()
-        return {"success": False, "error": str(e)}
-    finally:
-        conn.close()
-
-def resolve_equivalent_hashes(*, param_id, core_hash, include_equivalents=True):
-    if not include_equivalents:
-        return {"success": True, "core_hashes": [core_hash], "param_ids": [param_id], "count": 1}
-    conn = get_db_connection()
-    try:
-        cur = conn.cursor()
-        cur.execute("""WITH RECURSIVE eq(core_hash, source_param_id) AS (
-              SELECT %s::text, %s::text UNION
-              SELECT CASE WHEN e.core_hash=eq.core_hash THEN e.equivalent_to ELSE e.core_hash END,
-                     COALESCE(e.source_param_id, e.param_id)
-              FROM signature_equivalence e JOIN eq ON (e.core_hash=eq.core_hash OR e.equivalent_to=eq.core_hash)
-              WHERE e.active=true AND e.operation='equivalent')
-            SELECT DISTINCT core_hash, source_param_id FROM eq""", (core_hash, param_id))
-        rows = cur.fetchall()
-        hashes = sorted({str(r[0]) for r in rows if r and r[0]})
-        pids = sorted({str(r[1]) for r in rows if r and r[1]})
-        if core_hash not in hashes: hashes = [core_hash] + hashes
-        if param_id not in pids: pids = [param_id] + pids
-        return {"success": True, "core_hashes": hashes, "param_ids": pids, "count": len(hashes)}
-    except Exception as e:
-        return {"success": False, "core_hashes": [core_hash], "param_ids": [param_id], "count": 1, "error": str(e)}
-    finally:
-        conn.close()
-
 # Skip all tests if DB_CONNECTION not available
 pytestmark = pytest.mark.skipif(
     not os.environ.get('DB_CONNECTION'),
@@ -129,7 +64,6 @@ def cleanup_test_data():
     try:
         conn = get_db_connection()
         cur = conn.cursor()
-        cur.execute("DELETE FROM signature_equivalence WHERE param_id LIKE %s", (f'{TEST_PREFIX}%',))
         cur.execute("DELETE FROM signature_registry WHERE param_id LIKE %s", (f'{TEST_PREFIX}%',))
         cur.execute("DELETE FROM snapshots WHERE param_id LIKE %s", (f'{TEST_PREFIX}%',))
         conn.commit()
@@ -209,7 +143,6 @@ class TestReadIntegrity:
         try:
             conn = get_db_connection()
             cur = conn.cursor()
-            cur.execute("DELETE FROM signature_equivalence WHERE param_id = %s", (self.param_id,))
             cur.execute("DELETE FROM signature_registry WHERE param_id = %s", (self.param_id,))
             cur.execute("DELETE FROM snapshots WHERE param_id = %s", (self.param_id,))
             conn.commit()
@@ -615,16 +548,7 @@ class TestReadIntegrity:
         assert strict["count"] == 1
         assert strict["rows"][0]["x"] == 1
 
-        # Link A ≡ B, then closure-enabled read should include B.
-        res_link = create_equivalence_link(
-            param_id=pid,
-            core_hash=hash_a,
-            equivalent_to=hash_b,
-            created_by="pytest",
-            reason="equivalence closure integration test",
-        )
-        assert res_link["success"] is True
-
+        # FE-supplied closure A ≡ B — closure-enabled read should include B.
         eq_hashes = [{'core_hash': hash_b, 'operation': 'equivalent', 'weight': 1.0}]
 
         closure = query_virtual_snapshot(
@@ -684,17 +608,7 @@ class TestReadIntegrity:
             rows=[{'anchor_day': '2025-10-01', 'X': 999, 'Y': 99}],
         )
 
-        # Link A ≡ B on pid_a, but indicate B's data lives under pid_b.
-        res_link = create_equivalence_link(
-            param_id=pid_a,
-            core_hash=hash_a,
-            equivalent_to=hash_b,
-            created_by="pytest",
-            reason="cross-param equivalence read test",
-            source_param_id=pid_b,
-        )
-        assert res_link["success"] is True
-
+        # FE-supplied closure A ≡ B (B's data lives under pid_b).
         eq_hashes = [{'core_hash': hash_b, 'operation': 'equivalent', 'weight': 1.0}]
 
         # Retrievals for A should include B's retrieval timestamp.
@@ -756,17 +670,7 @@ class TestReadIntegrity:
         assert strict[0]['x'] == 1
         assert strict[0]['core_hash'] == hash_a
 
-        # Link A ≡ B
-        res_link = create_equivalence_link(
-            param_id=pid,
-            core_hash=hash_a,
-            equivalent_to=hash_b,
-            created_by="pytest",
-            reason="query-full equivalence test",
-        )
-        assert res_link["success"] is True
-
-        # With equivalents: both rows returned
+        # FE-supplied closure A ≡ B: both rows returned
         eq_hashes = [{'core_hash': hash_b, 'operation': 'equivalent', 'weight': 1.0}]
         closure = query_snapshots(param_id=pid, core_hash=hash_a, equivalent_hashes=eq_hashes)
         assert len(closure) == 2
@@ -808,15 +712,6 @@ class TestReadIntegrity:
                 {'anchor_day': '2025-10-01', 'X': 10, 'Y': 10},
             ],
         )
-
-        res_link = create_equivalence_link(
-            param_id=pid,
-            core_hash=hash_a,
-            equivalent_to=hash_b,
-            created_by="pytest",
-            reason="inventory family integration test",
-        )
-        assert res_link["success"] is True
 
         inv = get_batch_inventory_v2(
             param_ids=[pid],
@@ -1291,183 +1186,6 @@ class TestTierC_BackendContract:
         finally:
             conn.close()
 
-    def test_c006_link_create_and_deactivate(self):
-        """Create a link, verify it's active, deactivate it, verify it's inactive."""
-        pid = f'{TEST_PREFIX}c006'
-        hash_a = "AAAA"
-        hash_b = "BBBB"
-
-        # Create link
-        res = create_equivalence_link(
-            param_id=pid, core_hash=hash_a, equivalent_to=hash_b,
-            created_by="pytest", reason="test create",
-        )
-        assert res["success"] is True
-
-        # Verify active
-        conn = get_db_connection()
-        try:
-            cur = conn.cursor()
-            cur.execute(
-                "SELECT active FROM signature_equivalence WHERE param_id=%s AND core_hash=%s AND equivalent_to=%s",
-                (pid, hash_a, hash_b),
-            )
-            row = cur.fetchone()
-            assert row is not None
-            assert row[0] is True
-        finally:
-            conn.close()
-
-        # Deactivate
-        res2 = deactivate_equivalence_link(
-            param_id=pid, core_hash=hash_a, equivalent_to=hash_b,
-            created_by="pytest", reason="test deactivate",
-        )
-        assert res2["success"] is True
-
-        # Verify inactive
-        conn = get_db_connection()
-        try:
-            cur = conn.cursor()
-            cur.execute(
-                "SELECT active FROM signature_equivalence WHERE param_id=%s AND core_hash=%s AND equivalent_to=%s",
-                (pid, hash_a, hash_b),
-            )
-            row = cur.fetchone()
-            assert row is not None
-            assert row[0] is False
-        finally:
-            conn.close()
-
-    def test_c007_link_create_idempotent(self):
-        """Creating the same link twice should succeed (upsert) without error."""
-        pid = f'{TEST_PREFIX}c007'
-        res1 = create_equivalence_link(
-            param_id=pid, core_hash="X1", equivalent_to="X2",
-            created_by="pytest", reason="first",
-        )
-        assert res1["success"] is True
-
-        res2 = create_equivalence_link(
-            param_id=pid, core_hash="X1", equivalent_to="X2",
-            created_by="pytest", reason="second (idempotent)",
-        )
-        assert res2["success"] is True
-
-    def test_c008_self_link_rejected(self):
-        """Linking a hash to itself must fail."""
-        pid = f'{TEST_PREFIX}c008'
-        res = create_equivalence_link(
-            param_id=pid, core_hash="SAME", equivalent_to="SAME",
-            created_by="pytest", reason="self link",
-        )
-        assert res["success"] is False
-
-
-class TestTierD_EquivalenceResolution:
-    """
-    Tier D — equivalence resolution correctness tests.
-
-    Symmetry, multi-hop closure, deactivation, cycle robustness.
-    """
-
-    @pytest.fixture(autouse=True)
-    def cleanup(self):
-        yield
-        cleanup_test_data()
-
-    def _resolve(self, pid, core_hash):
-        """Helper: resolve equivalence closure (test-only; uses module-level helper)."""
-        return resolve_equivalent_hashes(
-            param_id=pid, core_hash=core_hash,
-        )
-
-    def test_d001_symmetry(self):
-        """Linking A→B: resolving from A includes B, and resolving from B includes A."""
-        pid = f'{TEST_PREFIX}d001'
-        create_equivalence_link(
-            param_id=pid, core_hash="A", equivalent_to="B",
-            created_by="pytest", reason="symmetry test",
-        )
-
-        res_a = self._resolve(pid, "A")
-        assert set(res_a["core_hashes"]) == {"A", "B"}
-
-        res_b = self._resolve(pid, "B")
-        assert set(res_b["core_hashes"]) == {"A", "B"}
-
-    def test_d002_multi_hop(self):
-        """A↔B, B↔C: resolving A should yield {A, B, C}."""
-        pid = f'{TEST_PREFIX}d002'
-        create_equivalence_link(
-            param_id=pid, core_hash="A", equivalent_to="B",
-            created_by="pytest", reason="hop 1",
-        )
-        create_equivalence_link(
-            param_id=pid, core_hash="B", equivalent_to="C",
-            created_by="pytest", reason="hop 2",
-        )
-
-        res = self._resolve(pid, "A")
-        assert set(res["core_hashes"]) == {"A", "B", "C"}
-
-        # Also from C
-        res_c = self._resolve(pid, "C")
-        assert set(res_c["core_hashes"]) == {"A", "B", "C"}
-
-    def test_d003_deactivated_edges_ignored(self):
-        """Deactivated links must not be traversed."""
-        pid = f'{TEST_PREFIX}d003'
-        create_equivalence_link(
-            param_id=pid, core_hash="A", equivalent_to="B",
-            created_by="pytest", reason="will deactivate",
-        )
-        # Verify link works
-        assert set(self._resolve(pid, "A")["core_hashes"]) == {"A", "B"}
-
-        # Deactivate
-        deactivate_equivalence_link(
-            param_id=pid, core_hash="A", equivalent_to="B",
-            created_by="pytest", reason="deactivate test",
-        )
-
-        # Now resolution should be just {A}
-        res = self._resolve(pid, "A")
-        assert set(res["core_hashes"]) == {"A"}
-
-    def test_d004_cycle_robustness(self):
-        """A↔B, B↔C, C↔A: cycles must not hang; result is {A, B, C} deduplicated."""
-        pid = f'{TEST_PREFIX}d004'
-        create_equivalence_link(param_id=pid, core_hash="A", equivalent_to="B", created_by="pytest", reason="cycle")
-        create_equivalence_link(param_id=pid, core_hash="B", equivalent_to="C", created_by="pytest", reason="cycle")
-        create_equivalence_link(param_id=pid, core_hash="C", equivalent_to="A", created_by="pytest", reason="cycle")
-
-        res = self._resolve(pid, "A")
-        assert res["success"] is True
-        assert set(res["core_hashes"]) == {"A", "B", "C"}
-
-    def test_d005_no_links_resolves_to_self(self):
-        """A hash with no links resolves to just itself."""
-        pid = f'{TEST_PREFIX}d005'
-        res = self._resolve(pid, "LONELY")
-        assert res["success"] is True
-        assert res["core_hashes"] == ["LONELY"]
-
-    def test_d006_cross_param_isolation(self):
-        """Equivalence links are global: resolution does not depend on param_id."""
-        pid_x = f'{TEST_PREFIX}d006-x'
-        pid_y = f'{TEST_PREFIX}d006-y'
-        a = f"{TEST_PREFIX}d006-A"
-        b = f"{TEST_PREFIX}d006-B"
-        create_equivalence_link(param_id=pid_x, core_hash=a, equivalent_to=b, created_by="pytest", reason="global link")
-
-        res_x = self._resolve(pid_x, a)
-        assert set(res_x["core_hashes"]) == {a, b}
-
-        res_y = self._resolve(pid_y, a)
-        assert set(res_y["core_hashes"]) == {a, b}
-
-
 class TestTierE_NoDisappearance:
     """
     Tier E — end-to-end "no disappearance" test.
@@ -1486,8 +1204,8 @@ class TestTierE_NoDisappearance:
         1. Write snapshots under old signature.
         2. New signature appears (different hash).
         3. Strict query with new hash: sees nothing (mismatch).
-        4. Create equivalence link old↔new.
-        5. Query with new hash + include_equivalents=True: sees old data.
+        4. Build FE-supplied closure old↔new.
+        5. Query with new hash + closure: sees old data.
         6. Inventory shows both in one family, current matches.
         """
         pid = f'{TEST_PREFIX}e001'
@@ -1530,16 +1248,7 @@ class TestTierE_NoDisappearance:
         assert virtual_strict["has_any_rows"] is True
         assert virtual_strict["has_matching_core_hash"] is False
 
-        # 4. Operator links old ≡ new
-        link_res = create_equivalence_link(
-            param_id=pid,
-            core_hash=hash_new,
-            equivalent_to=hash_old,
-            created_by="pytest",
-            reason="trivial graph change; semantically identical query",
-        )
-        assert link_res["success"] is True
-
+        # 4. Build FE-supplied closure (old ≡ new)
         eq_hashes = [{'core_hash': hash_old, 'operation': 'equivalent', 'weight': 1.0}]
 
         # 5a. query_snapshots with equivalents: old data reappears
@@ -1596,76 +1305,18 @@ class TestTierE_NoDisappearance:
 
 class TestCrossParamDataContract:
     """
-    Tests for the cross-param equivalence data contract (key-fixes.md §3).
+    Tests for the cross-param data contract (key-fixes.md §3).
 
     These cover gaps identified in the coverage audit:
-    - resolve_equivalent_hashes returns correct param_ids (including source_param_id)
-    - query_snapshots cross-param equivalence
+    - query_snapshots cross-param equivalence via FE-supplied closure
     - query_snapshots_for_sweep cross-param equivalence
     - Multi-day latest-wins across params
     """
 
-    def test_d007_resolve_returns_param_ids(self):
-        """
-        D-007: resolve_equivalent_hashes returns param_ids including source_param_id.
-
-        When a cross-param equivalence link A→B exists (A on pid_a, B stored under
-        pid_b via source_param_id), resolve should return both pid_a and pid_b in
-        the param_ids list.
-        """
-        pid_a = f'{TEST_PREFIX}resolve-pid-a'
-        pid_b = f'{TEST_PREFIX}resolve-pid-b'
-        sig_a = f'{{"c":"{TEST_PREFIX}resolve-A","x":{{}}}}'
-        sig_b = f'{{"c":"{TEST_PREFIX}resolve-B","x":{{}}}}'
-        hash_a = short_core_hash_from_canonical_signature(sig_a)
-        hash_b = short_core_hash_from_canonical_signature(sig_b)
-
-        # Write data so hashes exist in signature_registry
-        append_snapshots_for_test(
-            param_id=pid_a,
-            canonical_signature=sig_a,
-            slice_key='',
-            retrieved_at=datetime(2025, 10, 10, 12, 0, 0),
-            rows=[{'anchor_day': '2025-10-01', 'X': 1}],
-        )
-        append_snapshots_for_test(
-            param_id=pid_b,
-            canonical_signature=sig_b,
-            slice_key='',
-            retrieved_at=datetime(2025, 10, 11, 12, 0, 0),
-            rows=[{'anchor_day': '2025-10-01', 'X': 2}],
-        )
-
-        # Create cross-param equivalence link
-        res_link = create_equivalence_link(
-            param_id=pid_a,
-            core_hash=hash_a,
-            equivalent_to=hash_b,
-            created_by="pytest",
-            reason="d007 resolve param_ids test",
-            source_param_id=pid_b,
-        )
-        assert res_link["success"] is True
-
-        # Resolve from pid_a/hash_a should return both param_ids
-        resolved = resolve_equivalent_hashes(
-            param_id=pid_a, core_hash=hash_a        )
-        assert resolved["success"] is True
-        assert hash_a in resolved["core_hashes"]
-        assert hash_b in resolved["core_hashes"]
-        assert pid_a in resolved["param_ids"]
-        assert pid_b in resolved["param_ids"]
-
-        # Without equivalents, should return only the seed
-        resolved_strict = resolve_equivalent_hashes(
-            param_id=pid_a, core_hash=hash_a, include_equivalents=False)
-        assert resolved_strict["core_hashes"] == [hash_a]
-        assert resolved_strict["param_ids"] == [pid_a]
-
     def test_ri011_query_snapshots_cross_param_equivalence(self):
         """
-        RI-011: query_snapshots with include_equivalents=True returns rows from
-        a different param_id when linked via source_param_id.
+        RI-011: query_snapshots with FE-supplied closure returns rows from
+        a different param_id.
         """
         pid_a = f'{TEST_PREFIX}qs-xp-a'
         pid_b = f'{TEST_PREFIX}qs-xp-b'
@@ -1697,17 +1348,7 @@ class TestCrossParamDataContract:
         assert len(strict) == 1
         assert strict[0]['x'] == 10
 
-        # Link A ≡ B cross-param
-        create_equivalence_link(
-            param_id=pid_a,
-            core_hash=hash_a,
-            equivalent_to=hash_b,
-            created_by="pytest",
-            reason="ri011 cross-param query_snapshots",
-            source_param_id=pid_b,
-        )
-
-        # With equivalents: rows from BOTH param_ids
+        # With FE-supplied closure: rows from BOTH param_ids
         eq_hashes = [{'core_hash': hash_b, 'operation': 'equivalent', 'weight': 1.0}]
         closure = query_snapshots(param_id=pid_a, core_hash=hash_a, equivalent_hashes=eq_hashes)
         assert len(closure) == 3
@@ -1721,7 +1362,7 @@ class TestCrossParamDataContract:
     def test_ri012_query_snapshots_for_sweep_cross_param_equivalence(self):
         """
         RI-012: query_snapshots_for_sweep returns rows across param_ids
-        when linked via source_param_id.
+        via FE-supplied closure.
         """
         pid_a = f'{TEST_PREFIX}sweep-xp-a'
         pid_b = f'{TEST_PREFIX}sweep-xp-b'
@@ -1746,17 +1387,7 @@ class TestCrossParamDataContract:
             rows=[{'anchor_day': '2025-10-01', 'X': 200}],
         )
 
-        # Link A ≡ B cross-param
-        create_equivalence_link(
-            param_id=pid_a,
-            core_hash=hash_a,
-            equivalent_to=hash_b,
-            created_by="pytest",
-            reason="ri012 cross-param sweep",
-            source_param_id=pid_b,
-        )
-
-        # Sweep should return rows from BOTH param_ids
+        # Sweep with FE-supplied closure should return rows from BOTH param_ids
         eq_hashes = [{'core_hash': hash_b, 'operation': 'equivalent', 'weight': 1.0}]
         sweep_rows = query_snapshots_for_sweep(
             param_id=pid_a,
@@ -1797,7 +1428,7 @@ class TestCrossParamDataContract:
         Scenario:
         - pid_a has anchor_days 1-Oct and 2-Oct, retrieved at t1
         - pid_b has anchor_days 2-Oct and 3-Oct, retrieved at t2 > t1
-        - Link A ≡ B cross-param
+        - FE-supplied closure A ≡ B
         - Virtual snapshot as_at > t2 should:
           - Return pid_a data for 1-Oct (only source)
           - Return pid_b data for 2-Oct (latest wins, t2 > t1)
@@ -1833,17 +1464,7 @@ class TestCrossParamDataContract:
             ],
         )
 
-        # Link A ≡ B cross-param
-        create_equivalence_link(
-            param_id=pid_a,
-            core_hash=hash_a,
-            equivalent_to=hash_b,
-            created_by="pytest",
-            reason="ri013 multi-day latest wins",
-            source_param_id=pid_b,
-        )
-
-        # Virtual snapshot as-at after both retrievals
+        # Virtual snapshot as-at after both retrievals, with FE-supplied closure
         eq_hashes = [{'core_hash': hash_b, 'operation': 'equivalent', 'weight': 1.0}]
         result = query_virtual_snapshot(
             param_id=pid_a,
@@ -1877,7 +1498,7 @@ class TestCrossParamDataContract:
         Scenario:
         - pid_a has retrievals on 10-Oct
         - pid_b has retrievals on 15-Oct (5 days later)
-        - Cross-param link A ≡ B
+        - FE-supplied closure A ≡ B
         - Calendar query on pid_a should show BOTH days
         """
         pid_a = f'{TEST_PREFIX}cal-xp-a'
@@ -1902,17 +1523,7 @@ class TestCrossParamDataContract:
             rows=[{'anchor_day': '2025-10-01', 'X': 999}],
         )
 
-        # Link A ≡ B cross-param
-        create_equivalence_link(
-            param_id=pid_a,
-            core_hash=hash_a,
-            equivalent_to=hash_b,
-            created_by="pytest",
-            reason="ri014 calendar cross-param",
-            source_param_id=pid_b,
-        )
-
-        # Calendar query for pid_a with equivalents should show both retrieval days
+        # Calendar query for pid_a with FE-supplied closure should show both retrieval days
         eq_hashes = [{'core_hash': hash_b, 'operation': 'equivalent', 'weight': 1.0}]
         retrievals = query_snapshot_retrievals(
             param_id=pid_a, core_hash=hash_a, equivalent_hashes=eq_hashes, limit=10

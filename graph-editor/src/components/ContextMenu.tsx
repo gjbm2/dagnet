@@ -1,4 +1,25 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useTheme } from '../contexts/ThemeContext';
+
+/** Resolved colour palette for context menus, derived from current theme. */
+interface MenuColours {
+  bg: string;
+  border: string;
+  shadow: string;
+  divider: string;
+  hoverBg: string;
+  text: string;
+  textMuted: string;
+}
+
+const LIGHT_COLOURS: MenuColours = {
+  bg: '#fff', border: '#dee2e6', shadow: '0 4px 12px rgba(0,0,0,0.15)',
+  divider: '#e9ecef', hoverBg: '#f8f9fa', text: 'inherit', textMuted: '#6B7280',
+};
+const DARK_COLOURS: MenuColours = {
+  bg: '#2d2d2d', border: '#555', shadow: '0 4px 12px rgba(0,0,0,0.4)',
+  divider: '#404040', hoverBg: '#3d3d3d', text: '#e0e0e0', textMuted: '#999',
+};
 
 export interface ContextMenuItem {
   label: string;
@@ -42,6 +63,7 @@ interface MenuLevelProps {
   openPath: number[];
   setOpenPath: React.Dispatch<React.SetStateAction<number[]>>;
   onClose: () => void;
+  colours: MenuColours;
 }
 
 const MenuLevel: React.FC<MenuLevelProps> = ({
@@ -53,6 +75,7 @@ const MenuLevel: React.FC<MenuLevelProps> = ({
   openPath,
   setOpenPath,
   onClose,
+  colours,
 }) => {
   const itemRefs = useRef<Array<HTMLDivElement | null>>([]);
 
@@ -102,10 +125,11 @@ const MenuLevel: React.FC<MenuLevelProps> = ({
           position: 'fixed',
           left: position.left,
           top: position.top,
-          background: '#fff',
-          border: '1px solid #dee2e6',
+          background: colours.bg,
+          border: `1px solid ${colours.border}`,
           borderRadius: '6px',
-          boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+          boxShadow: colours.shadow,
+          color: colours.text,
           minWidth: `${MIN_WIDTH_PX}px`,
           maxWidth: `min(${MAX_WIDTH_PX}px, calc(100vw - 40px))`,
           padding: '4px',
@@ -120,7 +144,7 @@ const MenuLevel: React.FC<MenuLevelProps> = ({
             return (
               <div
                 key={`divider-${level}-${index}`}
-                style={{ height: '1px', background: '#e9ecef', margin: '4px 0' }}
+                style={{ height: '1px', background: colours.divider, margin: '4px 0' }}
               />
             );
           }
@@ -142,10 +166,10 @@ const MenuLevel: React.FC<MenuLevelProps> = ({
                 } else {
                   setOpenPath(prefix);
                 }
-                e.currentTarget.style.background = '#f8f9fa';
+                e.currentTarget.style.background = colours.hoverBg;
               }}
               onMouseLeave={(e) => {
-                e.currentTarget.style.background = isActive ? '#f8f9fa' : 'transparent';
+                e.currentTarget.style.background = isActive ? colours.hoverBg : 'transparent';
               }}
               onClick={(e) => {
                 if (item.disabled) return;
@@ -162,7 +186,7 @@ const MenuLevel: React.FC<MenuLevelProps> = ({
                 display: 'flex',
                 justifyContent: 'space-between',
                 alignItems: 'center',
-                background: isActive ? '#f8f9fa' : 'transparent',
+                background: isActive ? colours.hoverBg : 'transparent',
               }}
             >
               <span
@@ -176,7 +200,7 @@ const MenuLevel: React.FC<MenuLevelProps> = ({
               >
                 {item.label}
               </span>
-              {hasSubmenu ? <span style={{ color: '#6B7280' }}>›</span> : null}
+              {hasSubmenu ? <span style={{ color: colours.textMuted }}>›</span> : null}
             </div>
           );
         })}
@@ -191,6 +215,7 @@ const MenuLevel: React.FC<MenuLevelProps> = ({
           openPath={openPath}
           setOpenPath={setOpenPath}
           onClose={onClose}
+          colours={colours}
         />
       )}
     </>
@@ -209,6 +234,8 @@ interface ContextMenuProps {
  * Reusable for tabs, navigator items, etc.
  */
 export function ContextMenu({ x, y, items, onClose }: ContextMenuProps) {
+  const { theme } = useTheme();
+  const colours = theme === 'dark' ? DARK_COLOURS : LIGHT_COLOURS;
   const rootMenuRef = useRef<HTMLDivElement>(null);
   const [rootPosition, setRootPosition] = useState({ left: x, top: y });
   const [openPath, setOpenPath] = useState<number[]>([]);
@@ -274,6 +301,7 @@ export function ContextMenu({ x, y, items, onClose }: ContextMenuProps) {
       openPath={openPath}
       setOpenPath={setOpenPath}
       onClose={onClose}
+      colours={colours}
     />
   );
 }

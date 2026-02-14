@@ -8,6 +8,7 @@ import { useGraphStore } from '../contexts/GraphStoreContext';
 import { fileRegistry } from '../contexts/TabContext';
 import { registryService, RegistryItem } from '../services/registryService';
 import { getObjectTypeTheme } from '../theme/objectTypeTheme';
+import { useTheme } from '../contexts/ThemeContext';
 import { useSelectionContext } from './editors/GraphEditor';
 import { ItemBase } from '../hooks/useItemFiltering';
 import { LightningMenu } from './LightningMenu';
@@ -97,6 +98,8 @@ export function EnhancedSelector({
   onCreateAndInitialize
 }: EnhancedSelectorProps) {
   console.log(`[${new Date().toISOString()}] [EnhancedSelector] RENDER (type=${type}, value=${value})`);
+  const { theme: currentTheme } = useTheme();
+  const dark = currentTheme === 'dark';
   const { operations: navOps } = useNavigatorContext();
   const { tabs, operations: tabOps } = useTabContext();
   const { mode: validationMode } = useValidationMode();
@@ -528,15 +531,15 @@ export function EnhancedSelector({
   const inRegistryOnly = currentItem && !currentItem.file_path && !isLocalFile;
   
   // Determine input text colour and style based on state priority
-  let inputTextColour = 'inherit';
+  let inputTextColour = dark ? '#e0e0e0' : 'inherit';
   let inputFontStyle = 'normal';
   
   if (isDirty) {
-    inputTextColour = '#ea580c'; // Orange for dirty
+    inputTextColour = dark ? '#fb923c' : '#ea580c'; // Orange for dirty
   } else if (hasOpenTabs) {
-    inputTextColour = '#0066cc'; // Blue for open
+    inputTextColour = dark ? '#60a5fa' : '#0066cc'; // Blue for open
   } else if (inRegistryOnly) {
-    inputTextColour = '#6B7280'; // Grey for registry-only
+    inputTextColour = dark ? '#999' : '#6B7280'; // Grey for registry-only
   }
   
   if (isLocalFile) {

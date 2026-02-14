@@ -629,17 +629,13 @@ export const EdgeContextMenu: React.FC<EdgeContextMenuProps> = ({
   return (
     <div
       ref={menuRef}
+      className="dagnet-popup"
       style={{
         position: 'fixed',
         left: position.left,
         top: position.top,
-        background: 'white',
-        border: '1px solid #ddd',
-        borderRadius: '4px',
-        boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
         minWidth: '200px',
-        padding: '8px',
-        zIndex: 10000
+        padding: '8px'
       }}
       onClick={(e) => e.stopPropagation()}
     >
@@ -728,7 +724,7 @@ export const EdgeContextMenu: React.FC<EdgeContextMenuProps> = ({
       {/* Data operations (using single source of truth) */}
       {dataOperationSections.length > 0 && (
         <>
-          <div style={{ height: '1px', background: '#eee', margin: '8px 0' }} />
+          <div className="dagnet-popup-divider" />
           
           {/* Render all data operation sections */}
           {dataOperationSections.map(section => (
@@ -763,7 +759,7 @@ export const EdgeContextMenu: React.FC<EdgeContextMenuProps> = ({
         </>
       )}
 
-      <div style={{ height: '1px', background: '#eee', margin: '8px 0' }} />
+      <div className="dagnet-popup-divider" />
 
       {/* Confidence Intervals */}
       <div
@@ -780,7 +776,7 @@ export const EdgeContextMenu: React.FC<EdgeContextMenuProps> = ({
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'space-between',
-            background: openSubmenu === 'confidence' ? '#f8f9fa' : 'white'
+            background: 'transparent'
           }}
         >
           <span>Confidence Intervals</span>
@@ -789,99 +785,30 @@ export const EdgeContextMenu: React.FC<EdgeContextMenuProps> = ({
         
         {openSubmenu === 'confidence' && (
           <div
+            className="dagnet-popup"
             style={{
               position: 'absolute',
               left: '100%',
               top: 0,
               marginLeft: '4px',
-              background: 'white',
-              border: '1px solid #ddd',
-              borderRadius: '4px',
-              boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
-              minWidth: '120px',
-              zIndex: 99999
+              minWidth: '120px'
             }}
             onMouseEnter={handleSubmenuContentEnter}
             onMouseLeave={handleSubmenuContentLeave}
           >
-            <div
-              onClick={() => {
-                handleConfidenceIntervalChange('99');
-                setOpenSubmenu(null);
-              }}
-              style={{
-                padding: '8px 12px',
-                cursor: 'pointer',
-                fontSize: '13px',
-                background: viewPrefs?.confidenceIntervalLevel === '99' ? '#f0f0f0' : 'white'
-              }}
-              onMouseEnter={(e) => (e.currentTarget.style.background = '#f8f9fa')}
-              onMouseLeave={(e) => (e.currentTarget.style.background = viewPrefs?.confidenceIntervalLevel === '99' ? '#f0f0f0' : 'white')}
-            >
+            <div className="dagnet-popup-item" onClick={() => { handleConfidenceIntervalChange('99'); setOpenSubmenu(null); }}>
               {viewPrefs?.confidenceIntervalLevel === '99' ? '✓ ' : ''}99%
             </div>
-            <div
-              onClick={() => {
-                handleConfidenceIntervalChange('95');
-                setOpenSubmenu(null);
-              }}
-              style={{
-                padding: '8px 12px',
-                cursor: 'pointer',
-                fontSize: '13px',
-                background: viewPrefs?.confidenceIntervalLevel === '95' ? '#f0f0f0' : 'white'
-              }}
-              onMouseEnter={(e) => (e.currentTarget.style.background = '#f8f9fa')}
-              onMouseLeave={(e) => (e.currentTarget.style.background = viewPrefs?.confidenceIntervalLevel === '95' ? '#f0f0f0' : 'white')}
-            >
+            <div className="dagnet-popup-item" onClick={() => { handleConfidenceIntervalChange('95'); setOpenSubmenu(null); }}>
               {viewPrefs?.confidenceIntervalLevel === '95' ? '✓ ' : ''}95%
             </div>
-            <div
-              onClick={() => {
-                handleConfidenceIntervalChange('90');
-                setOpenSubmenu(null);
-              }}
-              style={{
-                padding: '8px 12px',
-                cursor: 'pointer',
-                fontSize: '13px',
-                background: viewPrefs?.confidenceIntervalLevel === '90' ? '#f0f0f0' : 'white'
-              }}
-              onMouseEnter={(e) => (e.currentTarget.style.background = '#f8f9fa')}
-              onMouseLeave={(e) => (e.currentTarget.style.background = viewPrefs?.confidenceIntervalLevel === '90' ? '#f0f0f0' : 'white')}
-            >
+            <div className="dagnet-popup-item" onClick={() => { handleConfidenceIntervalChange('90'); setOpenSubmenu(null); }}>
               {viewPrefs?.confidenceIntervalLevel === '90' ? '✓ ' : ''}90%
             </div>
-            <div
-              onClick={() => {
-                handleConfidenceIntervalChange('80');
-                setOpenSubmenu(null);
-              }}
-              style={{
-                padding: '8px 12px',
-                cursor: 'pointer',
-                fontSize: '13px',
-                background: viewPrefs?.confidenceIntervalLevel === '80' ? '#f0f0f0' : 'white'
-              }}
-              onMouseEnter={(e) => (e.currentTarget.style.background = '#f8f9fa')}
-              onMouseLeave={(e) => (e.currentTarget.style.background = viewPrefs?.confidenceIntervalLevel === '80' ? '#f0f0f0' : 'white')}
-            >
+            <div className="dagnet-popup-item" onClick={() => { handleConfidenceIntervalChange('80'); setOpenSubmenu(null); }}>
               {viewPrefs?.confidenceIntervalLevel === '80' ? '✓ ' : ''}80%
             </div>
-            <div
-              onClick={() => {
-                handleConfidenceIntervalChange('none');
-                setOpenSubmenu(null);
-              }}
-              style={{
-                padding: '8px 12px',
-                cursor: 'pointer',
-                fontSize: '13px',
-                background: viewPrefs?.confidenceIntervalLevel === 'none' ? '#f0f0f0' : 'white'
-              }}
-              onMouseEnter={(e) => (e.currentTarget.style.background = '#f8f9fa')}
-              onMouseLeave={(e) => (e.currentTarget.style.background = viewPrefs?.confidenceIntervalLevel === 'none' ? '#f0f0f0' : 'white')}
-            >
+            <div className="dagnet-popup-item" onClick={() => { handleConfidenceIntervalChange('none'); setOpenSubmenu(null); }}>
               {viewPrefs?.confidenceIntervalLevel === 'none' ? '✓ ' : ''}None
             </div>
           </div>
@@ -899,13 +826,11 @@ export const EdgeContextMenu: React.FC<EdgeContextMenuProps> = ({
           fontSize: '13px',
           borderRadius: '2px',
         }}
-        onMouseEnter={(e) => (e.currentTarget.style.background = '#f8f9fa')}
-        onMouseLeave={(e) => (e.currentTarget.style.background = 'white')}
       >
         {(viewPrefs?.animateFlow ?? true) ? '✓ ' : ''}Animate Flow
       </div>
 
-      <div style={{ height: '1px', background: '#eee', margin: '8px 0' }} />
+      <div className="dagnet-popup-divider" />
 
       {/* Copy vars */}
       <div
@@ -922,8 +847,6 @@ export const EdgeContextMenu: React.FC<EdgeContextMenuProps> = ({
           alignItems: 'center',
           gap: '8px'
         }}
-        onMouseEnter={(e) => (e.currentTarget.style.background = '#f8f9fa')}
-        onMouseLeave={(e) => (e.currentTarget.style.background = 'white')}
       >
         <Copy size={14} />
         <span>Copy vars{isMultiSelect ? ` (${selectedEdges.length} edges)` : ''}</span>
@@ -942,8 +865,6 @@ export const EdgeContextMenu: React.FC<EdgeContextMenuProps> = ({
             fontSize: '13px',
             borderRadius: '2px'
           }}
-          onMouseEnter={(e) => (e.currentTarget.style.background = '#f8f9fa')}
-          onMouseLeave={(e) => (e.currentTarget.style.background = 'white')}
         >
           📋 Paste parameter: {copiedParameter.objectId}
         </div>
@@ -964,14 +885,12 @@ export const EdgeContextMenu: React.FC<EdgeContextMenuProps> = ({
             fontSize: '13px',
             borderRadius: '2px',
           }}
-          onMouseEnter={(e) => (e.currentTarget.style.background = '#f8f9fa')}
-          onMouseLeave={(e) => (e.currentTarget.style.background = 'white')}
         >
           Snapshot Manager
         </div>
       )}
 
-      <div style={{ height: '1px', background: '#eee', margin: '4px 0' }} />
+      <div className="dagnet-popup-divider" />
 
       {/* Properties */}
       <div
@@ -985,8 +904,6 @@ export const EdgeContextMenu: React.FC<EdgeContextMenuProps> = ({
           fontSize: '13px',
           borderRadius: '2px',
         }}
-        onMouseEnter={(e) => (e.currentTarget.style.background = '#f8f9fa')}
-        onMouseLeave={(e) => (e.currentTarget.style.background = 'white')}
       >
         Properties
       </div>
@@ -1004,8 +921,6 @@ export const EdgeContextMenu: React.FC<EdgeContextMenuProps> = ({
           color: '#dc3545',
           borderRadius: '2px'
         }}
-        onMouseEnter={(e) => (e.currentTarget.style.background = '#f8f9fa')}
-        onMouseLeave={(e) => (e.currentTarget.style.background = 'white')}
       >
         Delete edge
       </div>

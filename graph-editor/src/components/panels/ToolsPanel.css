@@ -37,7 +37,7 @@
   border: 1px solid #D1D5DB;
   border-radius: 6px;
   cursor: pointer;
-  font-size: 14px;
+  font-size: 13px;
   color: #374151;
   transition: all 0.2s;
   text-align: left;
@@ -142,7 +142,7 @@
 }
 
 .tool-checkbox span {
-  font-size: 14px;
+  font-size: 13px;
   color: #374151;
 }
 
@@ -168,7 +168,7 @@
 }
 
 .tool-radio span {
-  font-size: 14px;
+  font-size: 13px;
   color: #374151;
 }
 
@@ -176,5 +176,68 @@
   display: flex;
   flex-direction: column;
   gap: 4px;
+}
+
+/* ===== DARK MODE ===== */
+
+[data-theme="dark"] .tools-panel {
+  background: #1e1e1e;
+}
+
+[data-theme="dark"] .tools-panel .panel-header {
+  background: #252525;
+  border-bottom-color: #404040;
+  color: #e0e0e0;
+}
+
+[data-theme="dark"] .tools-panel .panel-body {
+  background: #1e1e1e;
+}
+
+[data-theme="dark"] .tool-button {
+  background: #2d2d2d;
+  border-color: #555;
+  color: #e0e0e0;
+}
+
+[data-theme="dark"] .tool-button:hover:not(:disabled) {
+  background: #3d3d3d;
+  border-color: #777;
+}
+
+[data-theme="dark"] .tool-button:active:not(:disabled) {
+  background: #4d4d4d;
+}
+
+[data-theme="dark"] .tool-control {
+  background: #252525;
+}
+
+[data-theme="dark"] .tool-control label {
+  color: #aaa;
+}
+
+[data-theme="dark"] .tool-control .tool-value {
+  color: #888;
+}
+
+[data-theme="dark"] .tool-control-labels {
+  color: #999;
+}
+
+[data-theme="dark"] .tool-checkbox:hover {
+  background: #2d2d2d;
+}
+
+[data-theme="dark"] .tool-checkbox span {
+  color: #e0e0e0;
+}
+
+[data-theme="dark"] .tool-radio:hover {
+  background: #2d2d2d;
+}
+
+[data-theme="dark"] .tool-radio span {
+  color: #e0e0e0;
 }
 

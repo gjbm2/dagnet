@@ -652,7 +652,7 @@
 }
 
 /* Dark mode support */
-@media (prefers-color-scheme: dark) {
+[data-theme="dark"] {
   .navigator-content {
     background-color: #1e1e1e;
     border-right-color: #333;
@@ -661,6 +661,19 @@
   .navigator-header {
     background-color: #252525;
     border-bottom-color: #333;
+  }
+
+  .search-icon {
+    color: #777;
+  }
+
+  .search-clear-btn {
+    color: #999;
+  }
+
+  .search-clear-btn:hover {
+    background-color: #3d3d3d;
+    color: #e0e0e0;
   }
 
   .navigator-search-input {
@@ -677,8 +690,17 @@
     border-color: #0066cc;
   }
 
+  .navigator-filter-btn {
+    color: #999;
+  }
+
   .navigator-filter-btn:hover {
     background-color: #3d3d3d;
+    color: #e0e0e0;
+  }
+
+  .filter-badge {
+    background-color: #4d9ef7;
   }
 
   .navigator-filter-menu {
@@ -687,7 +709,24 @@
   }
 
   .filter-section-label {
-    color: #999;
+    color: #888;
+  }
+
+  .filter-radio-group label,
+  .filter-checkbox {
+    color: #e0e0e0;
+  }
+
+  .filter-select {
+    background-color: #2d2d2d;
+    border-color: #404040;
+    color: #e0e0e0;
+  }
+
+  .filter-action-btn {
+    background-color: #2d2d2d;
+    border-color: #555;
+    color: #e0e0e0;
   }
 
   .filter-radio-group label:hover,
@@ -780,6 +819,15 @@
     color: #e0e0e0;
   }
 
+  /* Preserve open/dirty colours in dark mode */
+  .navigator-item-name.is-open {
+    color: #60a5fa;
+  }
+
+  .navigator-item-name.is-dirty {
+    color: #fb923c;
+  }
+
   .navigator-item-name.in-index-only {
     color: #999;
   }
@@ -833,6 +881,57 @@
 
   .sub-category-items {
     background: #252525;
+  }
+
+  /* Tag bar + tag chips */
+  .navigator-tag-bar {
+    background: #252525;
+    border-bottom-color: #404040;
+  }
+
+  .navigator-tag-bar-icon {
+    color: #666;
+  }
+
+  .tag-filter-chip {
+    background: #333;
+    color: #999;
+    border-color: #555;
+  }
+
+  .tag-filter-chip:hover {
+    background: #3d3d3d;
+    color: #e0e0e0;
+  }
+
+  .tag-filter-chip.active {
+    background: #1976d2;
+    color: #fff;
+    border-color: #1976d2;
+  }
+
+  .navigator-tag-chip {
+    background: #3d3d3d;
+    color: #999;
+  }
+
+  .navigator-tag-clickable:hover {
+    background: #4d4d4d;
+    color: #e0e0e0;
+  }
+
+  /* Control buttons */
+  .navigator-control-btn {
+    color: #999;
+  }
+
+  .navigator-control-btn.active {
+    color: #4d9ef7;
+  }
+
+  /* Tab count */
+  .tab-count {
+    color: #4d9ef7;
   }
 }
 

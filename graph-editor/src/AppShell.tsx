@@ -32,6 +32,7 @@ import { db } from './db/appDatabase';
 import { getObjectTypeTheme } from './theme/objectTypeTheme';
 import { History } from 'lucide-react';
 import { DashboardModeProvider } from './contexts/DashboardModeContext';
+import { ThemeProvider } from './contexts/ThemeContext';
 import { ShareModeProvider } from './contexts/ShareModeContext';
 import { useDashboardMode } from './hooks/useDashboardMode';
 import { useIsReadOnlyShare } from './contexts/ShareModeContext';
@@ -43,6 +44,10 @@ import 'rc-dock/dist/rc-dock.css'; // Import rc-dock base styles
 import './styles/dock-theme.css'; // Safe customizations
 import './styles/active-tab-highlight.css'; // Active tab highlighting
 import './styles/file-state-indicators.css'; // File state visual indicators
+import './styles/theme-tokens.css'; // Light/dark theme CSS variables
+import './styles/app-shell-theme.css'; // AppShell dark mode overrides
+import './styles/components-dark.css'; // Panels, editors, modals dark mode
+import './styles/popup-menu.css'; // Shared popup/context menu styling
 
 // NOTE: We intentionally do NOT create a permanent right-dock panel.
 // Session Log is "right docked" by splitting the existing main panel at open-time.
@@ -1446,7 +1451,7 @@ function MainAppShellContent() {
   return (
     <div className={`app-shell ${navState.isPinned ? 'nav-pinned' : 'nav-unpinned'}`} style={{ width: '100vw', height: '100vh', display: 'flex', flexDirection: 'column', boxSizing: 'border-box', overflow: 'hidden' }}>
       {/* Menu bar */}
-      <div style={{ height: '40px', borderBottom: '1px solid #e0e0e0', flexShrink: 0, boxSizing: 'border-box' }}>
+      <div className="app-shell-menubar" style={{ height: '40px', borderBottom: '1px solid #e0e0e0', flexShrink: 0, boxSizing: 'border-box' }}>
         <MenuBar />
       </div>
       
@@ -1464,6 +1469,7 @@ function MainAppShellContent() {
         {!navState.isPinned && (
           <div 
             ref={navButtonRef}
+            className="app-shell-nav-button"
             style={{
               position: 'absolute',
               left: 0,
@@ -1493,7 +1499,7 @@ function MainAppShellContent() {
         
         {/* Navigator panel - when pinned */}
         {navState.isPinned && (
-          <div style={{ 
+          <div className="app-shell-nav-panel" style={{ 
             display: 'flex',
             flexDirection: 'column',
             borderRight: isResizing ? '2px solid #0066cc' : '1px solid #e0e0e0',
@@ -1508,7 +1514,7 @@ function MainAppShellContent() {
             transition: isResizing ? 'none' : 'width 0.1s ease-out'
           }}>
             {/* Navigator header - same height as tab bar */}
-            <div style={{
+            <div className="app-shell-nav-header" style={{
               height: '36px',
               padding: '8px 12px',
               background: '#f8f9fa',
@@ -1520,8 +1526,8 @@ function MainAppShellContent() {
               userSelect: 'none',
               flexShrink: 0,
               boxSizing: 'border-box',
-              overflow: 'hidden', // Prevent text overflow
-              whiteSpace: 'nowrap' // Keep text on one line
+              overflow: 'hidden',
+              whiteSpace: 'nowrap'
             }}
             onClick={() => navOperations.togglePin()}
             >
@@ -1550,6 +1556,7 @@ function MainAppShellContent() {
                 resizeStartWidth.current = navWidth;
                 setIsResizing(true);
               }}
+              className="app-shell-resize-handle"
               style={{
                 position: 'absolute',
                 right: '0',
@@ -1559,7 +1566,7 @@ function MainAppShellContent() {
                 cursor: 'col-resize',
                 background: isResizing ? '#0066cc' : 'transparent',
                 borderLeft: isResizing ? 'none' : '1px solid #e0e0e0',
-                zIndex: 1, // Low z-index so context menus appear above it
+                zIndex: 1,
                 transition: isResizing ? 'none' : 'background 0.2s, border 0.2s'
               }}
               onMouseEnter={(e) => {
@@ -1580,6 +1587,7 @@ function MainAppShellContent() {
         {/* Navigator panel - overlay when unpinned + hovering */}
         {!navState.isPinned && isHovering && (
           <div 
+            className="app-shell-nav-panel app-shell-nav-overlay"
             style={{ 
               position: 'absolute',
               left: 0,
@@ -1588,7 +1596,7 @@ function MainAppShellContent() {
               width: '240px',
               borderRight: '1px solid #e0e0e0',
               background: '#f8f9fa',
-              zIndex: 10, // Behind menu bar (which is z-index: 1000+)
+              zIndex: 100, // Above in-content elements (WindowSelector z:55), below menu dropdowns (z:1000+)
               boxShadow: '4px 0 16px rgba(0, 0, 0, 0.2)',
               display: 'flex',
               flexDirection: 'column',
@@ -1598,7 +1606,7 @@ function MainAppShellContent() {
             onMouseLeave={() => setIsHovering(false)}
           >
             {/* Header in overlay */}
-            <div style={{
+            <div className="app-shell-nav-header" style={{
               height: '36px',
               padding: '8px 12px',
               background: '#f8f9fa',
@@ -1654,7 +1662,7 @@ function MainAppShellContent() {
 
             {/* Welcome screen when no tabs - positioned BEHIND dock panels */}
             {tabs.length === 0 && (
-              <div style={{
+              <div className="app-shell-welcome" style={{
                 position: 'absolute',
                 top: 0,
                 left: '0',
@@ -2022,6 +2030,7 @@ export function AppShell() {
 
   return (
     <ErrorBoundary>
+      <ThemeProvider>
       <ShareModeProvider>
         <Toaster 
           position="bottom-center"
@@ -2062,6 +2071,7 @@ export function AppShell() {
           </DialogProvider>
         </DashboardModeProvider>
       </ShareModeProvider>
+      </ThemeProvider>
     </ErrorBoundary>
   );
 }

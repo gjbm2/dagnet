@@ -1,0 +1,61 @@
+/*
+ * AppShell dark mode overrides.
+ *
+ * AppShell uses inline styles with hardcoded colours. These CSS rules
+ * use !important to override inline styles via class-name selectors
+ * added to the key structural containers.
+ */
+
+/* Main app-shell wrapper */
+[data-theme="dark"] .app-shell {
+  background-color: #1e1e1e !important;
+  color: #e0e0e0 !important;
+}
+
+/* MenuBar wrapper */
+[data-theme="dark"] .app-shell-menubar {
+  border-bottom-color: #404040 !important;
+}
+
+/* Navigator button (unpinned) */
+[data-theme="dark"] .app-shell-nav-button {
+  background: #2d2d2d !important;
+  border-right-color: #404040 !important;
+  color: #999 !important;
+}
+
+/* Navigator panel (pinned + overlay) */
+[data-theme="dark"] .app-shell-nav-panel {
+  background: #1e1e1e !important;
+  border-right-color: #404040 !important;
+}
+
+/* Navigator overlay shadow */
+[data-theme="dark"] .app-shell-nav-overlay {
+  box-shadow: 4px 0 16px rgba(0, 0, 0, 0.5) !important;
+}
+
+/* Navigator header */
+[data-theme="dark"] .app-shell-nav-header {
+  background: #252525 !important;
+  border-bottom-color: #404040 !important;
+  color: #e0e0e0 !important;
+}
+
+/* Welcome screen (empty state) */
+/* Navigator resize handle */
+[data-theme="dark"] .app-shell-resize-handle {
+  border-left-color: #404040 !important;
+}
+
+[data-theme="dark"] .app-shell-welcome {
+  background: #1a1a2e !important;
+}
+
+[data-theme="dark"] .app-shell-welcome p {
+  color: #888 !important;
+}
+
+[data-theme="dark"] .app-shell-welcome a {
+  color: #666 !important;
+}

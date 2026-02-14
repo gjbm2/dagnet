@@ -7,6 +7,8 @@
 import React, { useMemo } from 'react';
 import ReactECharts from 'echarts-for-react';
 import type { LagHistogramResult } from '../../lib/graphComputeClient';
+import { isDarkMode } from '../../theme/objectTypeTheme';
+import { useTheme } from '../../contexts/ThemeContext';
 
 interface Props {
   data: LagHistogramResult;
@@ -14,6 +16,8 @@ interface Props {
 }
 
 export function SnapshotHistogramChart({ data, height = 300 }: Props): JSX.Element {
+  const { theme: currentTheme } = useTheme();
+  const dark = currentTheme === 'dark';
   // Detect gaps in lag days (missing days between min and max)
   const gapInfo = useMemo(() => {
     if (data.data.length < 2) return null;
@@ -38,6 +42,9 @@ export function SnapshotHistogramChart({ data, height = 300 }: Props): JSX.Eleme
       tooltip: {
         trigger: 'axis',
         axisPointer: { type: 'shadow' },
+        backgroundColor: dark ? '#2d2d2d' : '#fff',
+        borderColor: dark ? '#555' : '#ccc',
+        textStyle: { color: dark ? '#e0e0e0' : '#333' },
         formatter: (params: any) => {
           const item = params[0];
           const dataItem = data.data[item.dataIndex];
@@ -101,7 +108,7 @@ export function SnapshotHistogramChart({ data, height = 300 }: Props): JSX.Eleme
         },
       ],
     };
-  }, [data]);
+  }, [data, dark]);
 
   return (
     <div style={{ width: '100%' }}>

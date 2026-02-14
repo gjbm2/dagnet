@@ -45,7 +45,7 @@
 }
 
 /* Dark mode support */
-@media (prefers-color-scheme: dark) {
+[data-theme="dark"] {
   .loading-spinner-icon {
     border-color: #404040;
     border-top-color: #0066cc;

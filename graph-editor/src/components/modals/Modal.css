@@ -254,9 +254,95 @@
 
 /* ===== DARK MODE ===== */
 
-@media (prefers-color-scheme: dark) {
+[data-theme="dark"] {
   .modal-container {
     background-color: #2d2d2d;
+    color: #e0e0e0;
+  }
+
+  /* Override inline text colours inside modals */
+  .modal-body div,
+  .modal-body span,
+  .modal-body label,
+  .modal-body p,
+  .modal-body h3,
+  .modal-body h4,
+  .modal-body strong,
+  .modal-body td,
+  .modal-body th {
+    color: inherit;
+  }
+
+  /* Override inline light backgrounds inside modals */
+  .modal-body input,
+  .modal-body select,
+  .modal-body textarea {
+    background: #1e1e1e;
+    border-color: #555;
+    color: #e0e0e0;
+  }
+
+  .modal-body code {
+    background: #1e1e1e;
+    color: #e0e0e0;
+  }
+
+  .modal-body pre {
+    background: #1e1e1e;
+    color: #e0e0e0;
+    border-color: #404040;
+  }
+
+  /* Override inline borders in modal content */
+  .modal-body [style*="border"] {
+    border-color: #404040 !important;
+  }
+
+  /* Override inline light backgrounds on containers inside modals.
+     Targets common patterns: info boxes, list containers, status areas.
+     Uses attribute selectors to match inline background styles. */
+  .modal-body [style*="background-color: rgb(249"],
+  .modal-body [style*="background-color: rgb(243"],
+  .modal-body [style*="background-color: rgb(245"],
+  .modal-body [style*="background-color: rgb(255, 255, 255)"],
+  .modal-body [style*="background: rgb(249"],
+  .modal-body [style*="background: rgb(243"],
+  .modal-body [style*="background: rgb(245"],
+  .modal-body [style*="background: rgb(255, 255, 255)"],
+  .modal-body [style*="background: white"] {
+    background: #252525 !important;
+  }
+
+  /* Override specific light info/warning box backgrounds */
+  .modal-body [style*="background-color: rgb(219, 234, 254)"],
+  .modal-body [style*="background: rgb(219, 234, 254)"],
+  .modal-body [style*="background-color: rgb(240, 253, 244)"],
+  .modal-body [style*="background: rgb(240, 253, 244)"],
+  .modal-body [style*="background-color: rgb(238, 242, 255)"],
+  .modal-body [style*="background: rgb(238, 242, 255)"] {
+    background: #1a2a40 !important;
+  }
+
+  .modal-body [style*="background-color: rgb(254, 252, 232)"],
+  .modal-body [style*="background: rgb(254, 252, 232)"],
+  .modal-body [style*="background-color: rgb(255, 251, 235)"],
+  .modal-body [style*="background: rgb(255, 251, 235)"] {
+    background: #3b2f0e !important;
+  }
+
+  .modal-body [style*="background-color: rgb(254, 226, 226)"],
+  .modal-body [style*="background: rgb(254, 226, 226)"] {
+    background: #3b1c1c !important;
+  }
+
+  /* SVG icons inside modals */
+  .modal-body svg {
+    color: inherit;
+  }
+
+  /* Buttons inside modal body */
+  .modal-body button:not(.modal-btn) {
+    color: inherit;
   }
 
   .modal-header {

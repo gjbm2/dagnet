@@ -90,7 +90,7 @@
 }
 
 /* Dark mode support */
-@media (prefers-color-scheme: dark) {
+[data-theme="dark"] {
   .error-boundary {
     background-color: #1e1e1e;
   }

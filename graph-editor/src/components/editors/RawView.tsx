@@ -3,6 +3,7 @@ import Editor, { DiffEditor } from '@monaco-editor/react';
 import * as yaml from 'js-yaml';
 import { EditorProps, ViewMode } from '../../types';
 import { useFileState, useTabContext } from '../../contexts/TabContext';
+import { useTheme } from '../../contexts/ThemeContext';
 import './RawView.css';
 import { canRawViewWriteBack } from './rawViewWritebackGuard';
 
@@ -15,6 +16,8 @@ import { canRawViewWriteBack } from './rawViewWritebackGuard';
 export function RawView({ fileId, viewMode, readonly = false, tabId }: EditorProps & { tabId?: string }) {
   const { data, isDirty, updateData, originalData } = useFileState(fileId);
   const { activeTabId } = useTabContext();
+  const { theme } = useTheme();
+  const monacoTheme = theme === 'dark' ? 'vs-dark' : 'vs-light';
   const allowWritebackRef = useRef<boolean>(false);
   allowWritebackRef.current = canRawViewWriteBack({ readonly, tabId, activeTabId });
   const [editorValue, setEditorValue] = useState('');
@@ -404,7 +407,7 @@ export function RawView({ fileId, viewMode, readonly = false, tabId }: EditorPro
                 }, 300); // Wait 300ms after last keystroke
               });
             }}
-            theme="vs-light"
+            theme={monacoTheme}
             options={{
               readOnly: readonly,
               minimap: { enabled: false },
@@ -478,7 +481,7 @@ export function RawView({ fileId, viewMode, readonly = false, tabId }: EditorPro
                 }
               });
             }}
-            theme="vs-light"
+            theme={monacoTheme}
             options={{
               readOnly: readonly,
               minimap: { enabled: false },

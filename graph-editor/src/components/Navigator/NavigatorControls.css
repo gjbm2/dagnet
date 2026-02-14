@@ -162,3 +162,55 @@
   }
 }
 
+/* ===== DARK MODE ===== */
+
+[data-theme="dark"] .navigator-controls {
+  background: #252525;
+  border-bottom-color: #404040;
+}
+
+[data-theme="dark"] .control-button {
+  background: #2d2d2d;
+  border-color: #555;
+  color: #e0e0e0;
+}
+
+[data-theme="dark"] .control-button:hover {
+  background: #353535;
+  border-color: #4d9ef7;
+}
+
+[data-theme="dark"] .control-button.active {
+  background: #1a2a40;
+  border-color: #4d9ef7;
+}
+
+[data-theme="dark"] .control-button.has-selection {
+  background: #172554;
+  border-color: #4d9ef7;
+  color: #60a5fa;
+}
+
+[data-theme="dark"] .control-button-arrow {
+  color: #999;
+}
+
+[data-theme="dark"] .control-dropdown {
+  background: #2d2d2d;
+  border-color: #555;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+}
+
+[data-theme="dark"] .control-dropdown-item {
+  color: #e0e0e0;
+}
+
+[data-theme="dark"] .control-dropdown-item:hover {
+  background: #3d3d3d;
+}
+
+[data-theme="dark"] .control-dropdown-item.active {
+  background: #1a2a40;
+  color: #4d9ef7;
+}
+

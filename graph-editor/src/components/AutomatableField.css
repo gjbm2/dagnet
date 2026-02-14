@@ -111,7 +111,7 @@
 }
 
 /* Dark mode support */
-@media (prefers-color-scheme: dark) {
+[data-theme="dark"] {
   .automatable-field-label {
     color: #f9fafb;
   }

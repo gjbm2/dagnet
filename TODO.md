@@ -1,8 +1,5 @@
 
-- **Drop `signature_equivalence` DB table** (post-release, after production verification)
-  - The table is no longer read or written by production code (equivalence is FE-owned via `hash-mappings.json`).
-  - When dropping: also delete test-only DB helpers (`create_equivalence_link`, `deactivate_equivalence_link`, `resolve_equivalent_hashes`) from `test_snapshot_read_integrity.py` and `test_batch_anchor_coverage.py`, and remove legacy tests that exercise them (TestTierC c006/c007/c008, TestTierD d001–d006, TestCrossParamDataContract d007).
-  - See: `docs/current/project-db/hash-mappings-table-location-be-contract-12-Feb-26.md`
+- ~~**Drop `signature_equivalence` DB table**~~ — DONE (13-Feb-26). Table creation removed, test-only DB helpers deleted, legacy tests (TestTierC c006–c008, TestTierD d001–d006, TestCrossParamDataContract d007, FC-009) removed, cleanup refs purged from all test files. Remaining tests updated to use FE-supplied closure only.
 - We should remove the parity testing piece and complete cutover of BE stats service soon
 
 

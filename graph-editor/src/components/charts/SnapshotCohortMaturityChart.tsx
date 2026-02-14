@@ -15,6 +15,8 @@ import type { AnalysisResult } from '../../lib/graphComputeClient';
 import { chartOperationsService } from '../../services/chartOperationsService';
 import { analysisResultToCsv } from '../../services/analysisExportService';
 import { downloadTextFile } from '../../services/downloadService';
+import { isDarkMode } from '../../theme/objectTypeTheme';
+import { useTheme } from '../../contexts/ThemeContext';
 
 interface Props {
   result: AnalysisResult;
@@ -48,6 +50,8 @@ function formatPercent(v: number | null | undefined): string {
 }
 
 export function SnapshotCohortMaturityChart({ result, visibleScenarioIds, scenarioVisibilityModes, height = 320, fillHeight = false, queryDsl, source, hideOpenAsTab = false }: Props): JSX.Element {
+  const { theme: currentTheme } = useTheme();
+  const dark = currentTheme === 'dark';
   const rows = Array.isArray(result?.data) ? result.data : [];
 
   if (rows.length === 0) {
@@ -336,6 +340,9 @@ export function SnapshotCohortMaturityChart({ result, visibleScenarioIds, scenar
       tooltip: {
         trigger: 'axis',
         axisPointer: { type: 'line' },
+        backgroundColor: dark ? '#2d2d2d' : '#fff',
+        borderColor: dark ? '#555' : '#ccc',
+        textStyle: { color: dark ? '#e0e0e0' : '#333' },
         formatter: (params: any) => {
           const items = Array.isArray(params) ? params : [params];
           const first = items[0];
@@ -410,7 +417,7 @@ export function SnapshotCohortMaturityChart({ result, visibleScenarioIds, scenar
           fontSize: 11,
           formatter: (v: number) => `${(v * 100).toFixed(0)}%`,
         },
-        splitLine: { lineStyle: { color: '#f3f4f6' } },
+        splitLine: { lineStyle: { color: dark ? '#333' : '#f3f4f6' } },
       },
       legend: {
         top: 22,
@@ -425,7 +432,7 @@ export function SnapshotCohortMaturityChart({ result, visibleScenarioIds, scenar
         sweep: { from: result?.metadata?.sweep_from, to: result?.metadata?.sweep_to },
       },
     };
-  }, [result, series, effectiveSubjectId, axisMeta]);
+  }, [result, series, effectiveSubjectId, axisMeta, dark]);
 
   const headerRight = useMemo(() => {
     const aFrom = result?.metadata?.anchor_from;

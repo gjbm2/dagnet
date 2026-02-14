@@ -1,0 +1,86 @@
+/*
+ * Theme tokens — light (default) and dark.
+ *
+ * All colour references in the app should migrate to these variables over time.
+ * Dark overrides use [data-theme="dark"] on <html>.
+ */
+
+:root {
+  /* Backgrounds */
+  --bg-primary: #ffffff;
+  --bg-secondary: #f8f9fa;
+  --bg-tertiary: #f0f0f0;
+  --bg-elevated: #ffffff;
+  --bg-hover: #e9ecef;
+  --bg-active: #dee2e6;
+  --bg-input: #ffffff;
+
+  /* Text */
+  --text-primary: #333333;
+  --text-secondary: #666666;
+  --text-muted: #999999;
+  --text-disabled: #aaaaaa;
+  --text-inverse: #ffffff;
+
+  /* Borders */
+  --border-primary: #e0e0e0;
+  --border-subtle: #eeeeee;
+  --border-strong: #cccccc;
+
+  /* Accent / interactive */
+  --accent-primary: #0066cc;
+  --accent-hover: #0052a3;
+  --accent-focus-ring: rgba(0, 102, 204, 0.4);
+
+  /* Semantic */
+  --color-danger: #dc3545;
+  --color-danger-bg: #fff5f5;
+  --color-success: #10b981;
+  --color-success-bg: #ecfdf5;
+  --color-warning: #f59e0b;
+  --color-warning-bg: #fff3cd;
+
+  /* Shadows */
+  --shadow-dropdown: 0px 4px 16px rgba(0, 0, 0, 0.15);
+  --shadow-overlay: 0 8px 32px rgba(0, 0, 0, 0.12);
+}
+
+[data-theme="dark"] {
+  /* Backgrounds */
+  --bg-primary: #1e1e1e;
+  --bg-secondary: #2d2d2d;
+  --bg-tertiary: #353535;
+  --bg-elevated: #2d2d2d;
+  --bg-hover: #3d3d3d;
+  --bg-active: #4d4d4d;
+  --bg-input: #1f1f1f;
+
+  /* Text */
+  --text-primary: #e0e0e0;
+  --text-secondary: #aaaaaa;
+  --text-muted: #777777;
+  --text-disabled: #666666;
+  --text-inverse: #1e1e1e;
+
+  /* Borders */
+  --border-primary: #404040;
+  --border-subtle: #333333;
+  --border-strong: #555555;
+
+  /* Accent / interactive */
+  --accent-primary: #4d9ef7;
+  --accent-hover: #3a8ae0;
+  --accent-focus-ring: rgba(77, 158, 247, 0.4);
+
+  /* Semantic */
+  --color-danger: #f87171;
+  --color-danger-bg: #3b1c1c;
+  --color-success: #34d399;
+  --color-success-bg: #1a3a2a;
+  --color-warning: #fbbf24;
+  --color-warning-bg: #3b2f0e;
+
+  /* Shadows */
+  --shadow-dropdown: 0px 4px 16px rgba(0, 0, 0, 0.5);
+  --shadow-overlay: 0 8px 32px rgba(0, 0, 0, 0.4);
+}

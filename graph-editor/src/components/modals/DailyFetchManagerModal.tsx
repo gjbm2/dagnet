@@ -12,6 +12,7 @@
 import React, { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { X, ChevronRight, ChevronLeft } from 'lucide-react';
+import { useTheme } from '../../contexts/ThemeContext';
 import { dailyFetchService, type GraphListItem, type DailyFetchChange } from '../../services/dailyFetchService';
 import './Modal.css';
 
@@ -22,6 +23,8 @@ interface DailyFetchManagerModalProps {
 }
 
 export function DailyFetchManagerModal({ isOpen, onClose, workspace }: DailyFetchManagerModalProps) {
+  const { theme } = useTheme();
+  const dark = theme === 'dark';
   const [allGraphs, setAllGraphs] = useState<GraphListItem[]>([]);
   const [selectedLeft, setSelectedLeft] = useState<Set<string>>(new Set());
   const [selectedRight, setSelectedRight] = useState<Set<string>>(new Set());
@@ -163,15 +166,15 @@ export function DailyFetchManagerModal({ isOpen, onClose, workspace }: DailyFetc
               <div style={{ display: 'flex', gap: '16px', alignItems: 'stretch' }}>
                 {/* Left: Available graphs */}
                 <div style={{ flex: 1 }}>
-                  <div style={{ fontWeight: 600, marginBottom: '8px', fontSize: '13px', color: '#374151' }}>
+                  <div style={{ fontWeight: 600, marginBottom: '8px', fontSize: '13px' }}>
                     Available Graphs ({availableGraphs.length})
                   </div>
                   <div style={{
-                    border: '1px solid #E5E7EB',
+                    border: `1px solid ${dark ? '#404040' : '#E5E7EB'}`,
                     borderRadius: '4px',
                     height: '280px',
                     overflowY: 'auto',
-                    background: '#F9FAFB'
+                    background: dark ? '#1e1e1e' : '#F9FAFB'
                   }}>
                     {availableGraphs.length === 0 ? (
                       <div style={{ padding: '16px', color: '#6B7280', fontSize: '12px', textAlign: 'center' }}>
@@ -187,8 +190,8 @@ export function DailyFetchManagerModal({ isOpen, onClose, workspace }: DailyFetc
                             gap: '8px',
                             padding: '8px 12px',
                             cursor: 'pointer',
-                            borderBottom: '1px solid #E5E7EB',
-                            background: selectedLeft.has(g.fileId) ? '#DBEAFE' : 'transparent'
+                            borderBottom: `1px solid ${dark ? '#404040' : '#E5E7EB'}`,
+                            background: selectedLeft.has(g.fileId) ? (dark ? '#1a2a40' : '#DBEAFE') : 'transparent'
                           }}
                         >
                           <input
@@ -215,8 +218,8 @@ export function DailyFetchManagerModal({ isOpen, onClose, workspace }: DailyFetc
                     style={{
                       padding: '8px 12px',
                       borderRadius: '4px',
-                      border: '1px solid #D1D5DB',
-                      background: selectedLeft.size > 0 ? '#3B82F6' : '#F3F4F6',
+                      border: `1px solid ${dark ? '#555' : '#D1D5DB'}`,
+                      background: selectedLeft.size > 0 ? '#3B82F6' : (dark ? '#2d2d2d' : '#F3F4F6'),
                       color: selectedLeft.size > 0 ? 'white' : '#9CA3AF',
                       cursor: selectedLeft.size > 0 ? 'pointer' : 'not-allowed',
                       display: 'flex',
@@ -233,8 +236,8 @@ export function DailyFetchManagerModal({ isOpen, onClose, workspace }: DailyFetc
                     style={{
                       padding: '8px 12px',
                       borderRadius: '4px',
-                      border: '1px solid #D1D5DB',
-                      background: selectedRight.size > 0 ? '#3B82F6' : '#F3F4F6',
+                      border: `1px solid ${dark ? '#555' : '#D1D5DB'}`,
+                      background: selectedRight.size > 0 ? '#3B82F6' : (dark ? '#2d2d2d' : '#F3F4F6'),
                       color: selectedRight.size > 0 ? 'white' : '#9CA3AF',
                       cursor: selectedRight.size > 0 ? 'pointer' : 'not-allowed',
                       display: 'flex',
@@ -249,15 +252,15 @@ export function DailyFetchManagerModal({ isOpen, onClose, workspace }: DailyFetc
 
                 {/* Right: Enabled graphs */}
                 <div style={{ flex: 1 }}>
-                  <div style={{ fontWeight: 600, marginBottom: '8px', fontSize: '13px', color: '#374151' }}>
+                  <div style={{ fontWeight: 600, marginBottom: '8px', fontSize: '13px' }}>
                     Daily Fetch Enabled ({enabledGraphs.length})
                   </div>
                   <div style={{
-                    border: '1px solid #E5E7EB',
+                    border: `1px solid ${dark ? '#404040' : '#E5E7EB'}`,
                     borderRadius: '4px',
                     height: '280px',
                     overflowY: 'auto',
-                    background: '#F0FDF4'
+                    background: dark ? '#0a2010' : '#F0FDF4'
                   }}>
                     {enabledGraphs.length === 0 ? (
                       <div style={{ padding: '16px', color: '#6B7280', fontSize: '12px', textAlign: 'center' }}>
@@ -273,8 +276,8 @@ export function DailyFetchManagerModal({ isOpen, onClose, workspace }: DailyFetc
                             gap: '8px',
                             padding: '8px 12px',
                             cursor: 'pointer',
-                            borderBottom: '1px solid #D1FAE5',
-                            background: selectedRight.has(g.fileId) ? '#DBEAFE' : 'transparent'
+                            borderBottom: `1px solid ${dark ? '#1a3a2a' : '#D1FAE5'}`,
+                            background: selectedRight.has(g.fileId) ? (dark ? '#1a2a40' : '#DBEAFE') : 'transparent'
                           }}
                         >
                           <input
@@ -296,7 +299,7 @@ export function DailyFetchManagerModal({ isOpen, onClose, workspace }: DailyFetc
 
               <p style={{ marginTop: '16px', fontSize: '12px', color: '#6B7280', lineHeight: '1.5' }}>
                 ℹ️ Graphs with Daily Fetch enabled will be processed automatically when using{' '}
-                <code style={{ background: '#F3F4F6', padding: '2px 4px', borderRadius: '2px' }}>?retrieveall</code>{' '}
+                <code style={{ background: dark ? '#1e1e1e' : '#F3F4F6', padding: '2px 4px', borderRadius: '2px' }}>?retrieveall</code>{' '}
                 (without specifying graph names). Graphs without a pinned query (⚠️) will still run but skip the retrieve step.
               </p>
             </>

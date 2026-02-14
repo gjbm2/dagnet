@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import * as Menubar from '@radix-ui/react-menubar';
-import { Share2, GitBranch } from 'lucide-react';
+import { Share2, GitBranch, Sun, Moon } from 'lucide-react';
+import { useTheme } from '../../contexts/ThemeContext';
 import { FileMenu } from './FileMenu';
 import { EditMenu } from './EditMenu';
 import { ViewMenu } from './ViewMenu';
@@ -31,6 +32,7 @@ export function MenuBarComponent() {
   const [shareModalOpen, setShareModalOpen] = useState(false);
   const [branchModalOpen, setBranchModalOpen] = useState(false);
   const { mode: healthMode, tooltip: healthTooltip } = useHealthStatus({ pollIntervalMs: 5 * 60_000 });
+  const { theme, toggleTheme } = useTheme();
 
   const handleBrandClick = async () => {
     toggleDashboardMode({ updateUrl: true });
@@ -67,6 +69,13 @@ export function MenuBarComponent() {
             <Share2 size={18} />
           </button>
         )}
+        <button
+          className="theme-toggle-button"
+          onClick={toggleTheme}
+          title={theme === 'light' ? 'Switch to dark mode' : 'Switch to light mode'}
+        >
+          {theme === 'light' ? <Moon size={18} /> : <Sun size={18} />}
+        </button>
         <div
           className={`dagnet-brand dagnet-brand--health-${healthMode}`}
           onClick={handleBrandClick}

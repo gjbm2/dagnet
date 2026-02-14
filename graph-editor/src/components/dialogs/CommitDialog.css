@@ -177,7 +177,7 @@
 }
 
 /* Dark mode support */
-@media (prefers-color-scheme: dark) {
+[data-theme="dark"] {
   .commit-section h3 {
     color: #e0e0e0;
   }

@@ -97,7 +97,6 @@ def cleanup_test_data(param_id: str):
     conn = get_db_connection()
     try:
         cur = conn.cursor()
-        cur.execute("DELETE FROM signature_equivalence WHERE param_id = %s", (param_id,))
         cur.execute("DELETE FROM signature_registry WHERE param_id = %s", (param_id,))
         cur.execute("DELETE FROM snapshots WHERE param_id = %s", (param_id,))
         deleted = cur.rowcount
@@ -114,7 +113,6 @@ def cleanup_all_test_data():
     conn = get_db_connection()
     try:
         cur = conn.cursor()
-        cur.execute("DELETE FROM signature_equivalence WHERE param_id LIKE %s", (f'{TEST_PREFIX}%',))
         cur.execute("DELETE FROM signature_registry WHERE param_id LIKE %s", (f'{TEST_PREFIX}%',))
         cur.execute("DELETE FROM snapshots WHERE param_id LIKE %s", (f'{TEST_PREFIX}%',))
         conn.commit()
@@ -127,7 +125,6 @@ def cleanup_all_test_data():
     conn = get_db_connection()
     try:
         cur = conn.cursor()
-        cur.execute("DELETE FROM signature_equivalence WHERE param_id LIKE %s", (f'{TEST_PREFIX}%',))
         cur.execute("DELETE FROM signature_registry WHERE param_id LIKE %s", (f'{TEST_PREFIX}%',))
         cur.execute("DELETE FROM snapshots WHERE param_id LIKE %s", (f'{TEST_PREFIX}%',))
         conn.commit()

@@ -231,3 +231,98 @@
   border-top: 1px solid #e5e7eb;
   font-style: italic;
 }
+
+/* ===== DARK MODE ===== */
+
+[data-theme="dark"] .context-value-selector {
+  background: #2d2d2d;
+  border-color: #555;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+}
+
+[data-theme="dark"] .context-selector-header {
+  background: #252525;
+  border-bottom-color: #404040;
+}
+
+[data-theme="dark"] .context-selector-title {
+  color: #e0e0e0;
+}
+
+[data-theme="dark"] .context-value-row:hover {
+  background: #3d3d3d;
+}
+
+[data-theme="dark"] .context-value-label {
+  color: #e0e0e0;
+}
+
+[data-theme="dark"] .context-value-create-scenario-btn {
+  color: #888;
+}
+
+[data-theme="dark"] .context-value-create-scenario-btn:hover {
+  background: #3d3d3d;
+  color: #e0e0e0;
+}
+
+[data-theme="dark"] .context-selector-actions {
+  border-top-color: #404040;
+}
+
+[data-theme="dark"] .context-selector-cancel {
+  background: #353535;
+  color: #e0e0e0;
+  border-color: #555;
+}
+
+[data-theme="dark"] .context-selector-cancel:hover {
+  background: #3d3d3d;
+}
+
+[data-theme="dark"] .context-key-section {
+  border-bottom-color: #404040;
+}
+
+[data-theme="dark"] .context-key-header {
+  background: #2d2d2d;
+  color: #e0e0e0;
+}
+
+[data-theme="dark"] .context-key-header:hover {
+  background: #353535;
+}
+
+[data-theme="dark"] .context-key-header.expanded {
+  background: #333;
+}
+
+[data-theme="dark"] .context-create-scenarios-btn {
+  color: #777;
+}
+
+[data-theme="dark"] .context-key-header-row:hover .context-create-scenarios-btn {
+  color: #aaa;
+  border-color: #555;
+}
+
+[data-theme="dark"] .context-create-scenarios-btn:hover {
+  background: #3d3d3d;
+  border-color: #555;
+  color: #e0e0e0;
+}
+
+[data-theme="dark"] .context-show-all-button {
+  border-top-color: #404040;
+  color: #999;
+}
+
+[data-theme="dark"] .context-show-all-button:hover {
+  background: #353535;
+  color: #e0e0e0;
+}
+
+[data-theme="dark"] .context-show-all-indicator {
+  color: #777;
+  border-top-color: #404040;
+}

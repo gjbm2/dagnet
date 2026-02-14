@@ -92,3 +92,36 @@
   outline: none;
 }
 
+/* ===== DARK MODE ===== */
+
+[data-theme="dark"] .sidebar-icon-bar {
+  background: #1e1e1e;
+  border-left-color: #333;
+  box-shadow: -2px 0 8px rgba(0, 0, 0, 0.2);
+}
+
+[data-theme="dark"] .sidebar-icon {
+  background: #2d2d2d;
+  border-color: #404040;
+}
+
+[data-theme="dark"] .sidebar-icon:hover,
+[data-theme="dark"] .sidebar-icon.hovered {
+  background: #1a2a40;
+  border-color: #4d9ef7;
+  box-shadow: 0 2px 8px rgba(77, 158, 247, 0.2);
+}
+
+[data-theme="dark"] .sidebar-icon .icon {
+  color: #999;
+}
+
+[data-theme="dark"] .sidebar-icon:hover .icon,
+[data-theme="dark"] .sidebar-icon.hovered .icon {
+  color: #4d9ef7;
+}
+
+[data-theme="dark"] .sidebar-icon:focus {
+  outline-color: #4d9ef7;
+}
+

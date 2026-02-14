@@ -277,9 +277,11 @@ All completed:
 
 **Total: 195 tests (115 FE + 80 BE), all passing.**
 
-## Remaining work (sole remaining item)
+## Remaining work
 
-1. **Drop `signature_equivalence` DB table** — do this in a separate migration after production release and verification. When dropped, also delete the test-only DB helpers (`create_equivalence_link`, `deactivate_equivalence_link`, `resolve_equivalent_hashes`) from `test_snapshot_read_integrity.py` and `test_batch_anchor_coverage.py`, and remove any tests that exercise them (TestTierC c006/c007/c008, TestTierD d001–d006, TestCrossParamDataContract d007).
+None — all stages complete.
+
+The `signature_equivalence` table has been dropped (13-Feb-26): table creation note removed from `snapshot_service.py`, test-only DB helpers (`create_equivalence_link`, `deactivate_equivalence_link`, `resolve_equivalent_hashes`) deleted, legacy tests (TestTierC c006–c008, TestTierD d001–d006, TestCrossParamDataContract d007, FC-009) removed, `signature_equivalence` cleanup refs purged from all test files, and surviving tests updated to use FE-supplied closure only.
 
 ## Key files to touch
 

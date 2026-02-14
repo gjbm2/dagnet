@@ -100,3 +100,59 @@
   font-size: 11px;
   color: #6b7280;
 }
+
+/* ===== DARK MODE ===== */
+
+[data-theme="dark"] .calendar-grid-month {
+  color: #e0e0e0;
+}
+
+[data-theme="dark"] .calendar-grid-nav-btn {
+  background: #2d2d2d;
+  border-color: #555;
+  color: #e0e0e0;
+}
+
+[data-theme="dark"] .calendar-grid-nav-btn:hover {
+  background: #3d3d3d;
+}
+
+[data-theme="dark"] .calendar-grid-dow {
+  color: #888;
+}
+
+[data-theme="dark"] .calendar-grid-day {
+  color: #e0e0e0;
+}
+
+[data-theme="dark"] .calendar-grid-day.out-month {
+  color: #555;
+}
+
+[data-theme="dark"] .calendar-grid-day:hover {
+  background: #3d3d3d;
+}
+
+[data-theme="dark"] .calendar-grid-day.highlighted {
+  background: rgba(30, 60, 80, var(--highlight-opacity, 1));
+  border-color: rgba(50, 100, 130, var(--highlight-opacity, 1));
+}
+
+[data-theme="dark"] .calendar-grid-day.selected {
+  background: #1a3a52;
+  border-color: #1976d2;
+}
+
+[data-theme="dark"] .calendar-grid-message {
+  color: #999;
+}
+
+[data-theme="dark"] .calendar-grid-error {
+  color: #f87171;
+  background: #3b1c1c;
+  border-color: #7f1d1d;
+}
+
+[data-theme="dark"] .calendar-grid-footer {
+  color: #888;
+}

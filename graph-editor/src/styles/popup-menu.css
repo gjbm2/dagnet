@@ -1,0 +1,96 @@
+/*
+ * Shared popup/context menu styling.
+ *
+ * Use these classes on ALL popup menus, context menus, and dropdown panels
+ * instead of inline styles. This ensures consistent appearance and
+ * automatic dark mode support.
+ *
+ * Classes:
+ *   .dagnet-popup       — the menu container
+ *   .dagnet-popup-item  — each clickable row
+ *   .dagnet-popup-divider — a 1px separator line
+ */
+
+.dagnet-popup {
+  background: #fff;
+  border: 1px solid #dee2e6;
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  padding: 4px;
+  font-size: 13px;
+  min-width: 160px;
+  z-index: 10000;
+  color: #333;
+}
+
+.dagnet-popup-item {
+  padding: 8px 12px;
+  cursor: pointer;
+  border-radius: 2px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  transition: background 0.1s;
+}
+
+.dagnet-popup-item:hover {
+  background: #f8f9fa;
+}
+
+.dagnet-popup-item[data-disabled="true"],
+.dagnet-popup-item.disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.dagnet-popup-item.danger {
+  color: #dc3545;
+}
+
+.dagnet-popup-divider {
+  height: 1px;
+  background: #e9ecef;
+  margin: 4px 0;
+}
+
+/* Submenu arrow */
+.dagnet-popup-arrow {
+  color: #6B7280;
+  font-size: 14px;
+}
+
+/* Right-side hint text (keyboard shortcuts, icons) */
+.dagnet-popup-hint {
+  color: #666;
+  font-size: 12px;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  flex-shrink: 0;
+}
+
+/* ===== DARK MODE ===== */
+
+[data-theme="dark"] .dagnet-popup {
+  background: #2d2d2d;
+  border-color: #555;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+  color: #e0e0e0;
+}
+
+[data-theme="dark"] .dagnet-popup-item:hover {
+  background: #3d3d3d;
+}
+
+[data-theme="dark"] .dagnet-popup-divider {
+  background: #404040;
+}
+
+[data-theme="dark"] .dagnet-popup-arrow {
+  color: #999;
+}
+
+[data-theme="dark"] .dagnet-popup-hint {
+  color: #888;
+}

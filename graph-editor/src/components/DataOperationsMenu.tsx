@@ -573,19 +573,13 @@ export function DataOperationsMenu({
             <div
               ref={snapshotsMenuRef}
               data-testid="snapshots-flyout"
-              className="lightning-menu-submenu"
+              className="dagnet-popup lightning-menu-submenu"
               style={{
                 position: 'fixed',
                 left: `${snapshotsMenuPos?.left ?? 0}px`,
                 top: `${snapshotsMenuPos?.top ?? 0}px`,
-                zIndex: 99999,
-                padding: '4px',
                 minWidth: '220px',
                 maxWidth: 'min(420px, calc(100vw - 40px))',
-                background: 'white',
-                border: '1px solid #ddd',
-                borderRadius: '4px',
-                boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
               }}
             >
               <button
@@ -619,7 +613,7 @@ export function DataOperationsMenu({
                 </div>
               </button>
 
-              <div style={{ borderTop: '1px solid #eee', margin: '4px 0' }} />
+              <div className="dagnet-popup-divider" />
               <button
                 className={itemClassName}
                 onClick={() => {

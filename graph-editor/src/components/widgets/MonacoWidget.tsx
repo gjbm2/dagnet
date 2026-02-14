@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import Editor from '@monaco-editor/react';
 import { WidgetProps } from '@rjsf/utils';
 import { Box, Typography } from '@mui/material';
+import { useTheme } from '../../contexts/ThemeContext';
 
 /**
  * MonacoWidget for React JSON Schema Form
@@ -15,6 +16,7 @@ import { Box, Typography } from '@mui/material';
  * - transform.jsonata (JSONata)
  */
 export function MonacoWidget(props: WidgetProps) {
+  const { theme } = useTheme();
   const {
     id,
     value,
@@ -191,7 +193,7 @@ export function MonacoWidget(props: WidgetProps) {
               useShadows: false
             }
           }}
-          theme="vs-light"
+          theme={theme === 'dark' ? 'vs-dark' : 'vs-light'}
           loading={<Box sx={{ p: 2, textAlign: 'center' }}>Loading editor...</Box>}
         />
       </Box>

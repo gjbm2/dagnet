@@ -473,7 +473,7 @@
 }
 
 /* Dark mode support (if needed) */
-@media (prefers-color-scheme: dark) {
+[data-theme="dark"] {
   .selector-modal-container {
     background: #1f2937;
   }
