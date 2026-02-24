@@ -275,7 +275,7 @@ if [[ -z "$DATA_REPO_DIR" ]]; then
       echo -e "  ${RED}Repo not found or no access. Check the URL and ensure you have collaborator access.${NC}"
       continue
     fi
-    HAS_PUSH="$(echo "$REPO_JSON" | grep '"push"' | head -1 | sed 's/.*: *//;s/[, ]*//')"
+    HAS_PUSH="$(echo "$REPO_JSON" | grep '"push"' | head -1 | sed -E 's/.*: *//;s/[ ,]//g')"
     if [[ "$HAS_PUSH" != "true" ]]; then
       echo -e "  ${RED}You don't have push access to this repo. Ask the repo owner to add you as a collaborator.${NC}"
       continue
