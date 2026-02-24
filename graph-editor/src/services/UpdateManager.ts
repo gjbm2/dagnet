@@ -730,6 +730,31 @@ export class UpdateManager {
   }
   
   /**
+   * Cascade graph.defaultConnection to all edge param slots where
+   * connection_overridden is not true.
+   * 
+   * Mutates the graph in place and returns the number of slots updated.
+   */
+  cascadeDefaultConnection(graph: any): number {
+    const defaultConn: string | undefined = graph?.defaultConnection;
+    let changed = 0;
+
+    for (const edge of (graph?.edges ?? [])) {
+      for (const slot of ['p', 'cost_gbp', 'labour_cost'] as const) {
+        const param = edge[slot];
+        if (!param) continue;
+        if (param.connection_overridden) continue;
+        if (param.connection !== defaultConn) {
+          param.connection = defaultConn;
+          changed++;
+        }
+      }
+    }
+
+    return changed;
+  }
+
+  /**
    * Flows B-F: Graph → File operations
    * Examples: 
    * - CREATE: New parameter file from edge, new case file from node

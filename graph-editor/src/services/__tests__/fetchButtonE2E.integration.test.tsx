@@ -733,7 +733,7 @@ describe('AllSlicesModal → WindowSelector Cache Flow', () => {
             k: 50,
             p_estimate: 0.5,
             query_signature: originalSig, // Signature from original event def
-            data_source: { retrieved_at: '2025-11-15T12:00:00Z' },
+            data_source: { retrieved_at: '2025-12-02T12:00:00Z' },
           } as any,
         ];
 
@@ -850,7 +850,7 @@ describe('AllSlicesModal → WindowSelector Cache Flow', () => {
               k: 50,
               p_estimate: 0.5,
               query_signature: sigs[sigKey],
-              data_source: { retrieved_at: '2025-11-15T12:00:00Z' },
+              data_source: { retrieved_at: '2025-12-02T12:00:00Z' },
             } as any,
           ];
           await fileRegistry.registerFile(`parameter-${paramId}`, {

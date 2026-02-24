@@ -10,6 +10,7 @@
 import { describe, it, expect } from 'vitest';
 import { buildFetchPlan, type ConnectionChecker, type FileStateAccessor } from '../fetchPlanBuilderService';
 import type { Graph, DateRange } from '../../types';
+import type { ParameterValue } from '../../types/parameterData';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -247,5 +248,93 @@ describe('fetchPlanBuilder — implicit node event_id validation', () => {
     // Should not be filtered out by event_id validation.
     expect(item!.unfetchableReason).not.toBe('no_event_ids');
     expect(item!.unfetchableReason).not.toBe('partial_event_ids');
+  });
+});
+
+describe('fetchPlanBuilder — daily completeness (non-latency)', () => {
+  function makeConnectedGraph(paramId: string): Graph {
+    return makeGraph({
+      nodes: [
+        { id: 'n1', label: 'From', event_id: 'from_event', x: 0, y: 0 },
+        { id: 'n2', label: 'To', event_id: 'to_event', x: 100, y: 0 },
+      ] as any,
+      edges: [
+        { id: 'e1', uuid: 'e1', from: 'n1', to: 'n2', p: { id: paramId, mean: 0.5, connection: 'amplitude-prod' } },
+      ] as any,
+    });
+  }
+
+  const connectedGraph = makeConnectedGraph('param-1');
+  const dsl = 'window(1-Jan-26:31-Jan-26)';
+  const windowJan: DateRange = { start: '1-Jan-26', end: '31-Jan-26' };
+
+  it('treats same-day retrieval as incomplete and schedules refetch for that day', () => {
+    const value: ParameterValue = {
+      mean: 0.5,
+      n: 10,
+      k: 5,
+      dates: ['1-Jan-26', '31-Jan-26'],
+      n_daily: [10, 10],
+      k_daily: [5, 5],
+      window_from: '1-Jan-26',
+      window_to: '31-Jan-26',
+      sliceDSL: dsl,
+      data_source: { type: 'api', retrieved_at: '2026-01-31T06:00:00Z' },
+    };
+
+    const fileState: FileStateAccessor = {
+      getParameterFile: () => ({ data: { values: [value] } }),
+      getCaseFile: () => undefined,
+    };
+
+    const { plan } = buildFetchPlan({
+      graph: connectedGraph,
+      dsl,
+      window: windowJan,
+      referenceNow: '2026-02-01T00:00:00.000Z',
+      fileState,
+      connectionChecker: alwaysConnected,
+    });
+
+    const item = plan.items.find(i => i.objectId === 'param-1');
+    expect(item).toBeDefined();
+    expect(item!.classification).toBe('fetch');
+    expect(item!.windows).toEqual([
+      { start: '31-Jan-26', end: '31-Jan-26', reason: 'stale', dayCount: 1 },
+    ]);
+  });
+
+  it('treats next-day retrieval as complete and keeps the window covered', () => {
+    const value: ParameterValue = {
+      mean: 0.5,
+      n: 10,
+      k: 5,
+      dates: ['1-Jan-26', '31-Jan-26'],
+      n_daily: [10, 10],
+      k_daily: [5, 5],
+      window_from: '1-Jan-26',
+      window_to: '31-Jan-26',
+      sliceDSL: dsl,
+      data_source: { type: 'api', retrieved_at: '2026-02-01T06:00:00Z' },
+    };
+
+    const fileState: FileStateAccessor = {
+      getParameterFile: () => ({ data: { values: [value] } }),
+      getCaseFile: () => undefined,
+    };
+
+    const { plan } = buildFetchPlan({
+      graph: connectedGraph,
+      dsl,
+      window: windowJan,
+      referenceNow: '2026-02-01T00:00:00.000Z',
+      fileState,
+      connectionChecker: alwaysConnected,
+    });
+
+    const item = plan.items.find(i => i.objectId === 'param-1');
+    expect(item).toBeDefined();
+    expect(item!.classification).toBe('covered');
+    expect(item!.windows).toEqual([]);
   });
 });

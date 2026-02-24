@@ -1198,7 +1198,16 @@ export default function PropertiesPanel({
                 <label className="property-label">Default Connection</label>
                 <ConnectionSelector
                   value={graph?.defaultConnection}
-                  onChange={(conn) => updateGraph(['defaultConnection'], conn || undefined)}
+                  onChange={async (conn) => {
+                    if (!graph) return;
+                    const next = structuredClone(graph);
+                    next.defaultConnection = conn || undefined;
+                    if (next.metadata) next.metadata.updated_at = new Date().toISOString();
+                    const { updateManager } = await import('../services/UpdateManager');
+                    updateManager.cascadeDefaultConnection(next);
+                    setGraph(next);
+                    saveHistoryState('Update default connection');
+                  }}
                   hideLabel={true}
                 />
                 <div style={{ fontSize: '11px', color: '#6B7280', marginTop: '4px' }}>

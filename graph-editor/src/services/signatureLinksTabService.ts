@@ -16,6 +16,10 @@ export interface SignatureLinksContext {
   desiredQueryMode?: 'cohort' | 'window';
   /** Which slot on the edge: 'p', 'cost_gbp', 'labour_cost', or 'conditional_p:N' */
   paramSlot?: string;
+  /** Edge UUID — allows the Snapshot Manager to recompute signatures when connection changes */
+  edgeId?: string;
+  /** Active connection name on the edge (e.g. 'amplitude-prod') */
+  connectionName?: string;
 }
 
 /** Singleton event name for passing context to the viewer component. */

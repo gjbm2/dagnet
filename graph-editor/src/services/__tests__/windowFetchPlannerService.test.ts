@@ -376,9 +376,11 @@ describe('WindowFetchPlannerService', () => {
           }],
         });
         
-        // Retrieved 10 days ago, query is for dates 17-10 days ago (all mature beyond t95 of 5)
+        // Retrieved 9 days ago, query is for dates 17-10 days ago (all mature beyond t95 of 5)
         const tenDaysAgo = new Date(TODAY);
         tenDaysAgo.setDate(tenDaysAgo.getDate() - 10);
+        const nineDaysAgo = new Date(TODAY);
+        nineDaysAgo.setDate(nineDaysAgo.getDate() - 9);
         const dates = generateDates(daysAgo(17), daysAgo(10));
         
         vi.mocked(fileRegistry.getFile).mockImplementation((fileId: string) => {
@@ -390,7 +392,7 @@ describe('WindowFetchPlannerService', () => {
                 window_from: daysAgo(17),
                 window_to: daysAgo(10),
                 dates,
-                data_source: { retrieved_at: tenDaysAgo.toISOString() },
+                data_source: { retrieved_at: nineDaysAgo.toISOString() },
               }],
             });
           }
@@ -518,15 +520,15 @@ describe('WindowFetchPlannerService', () => {
       });
       
       // Full coverage in file
-      const dates = generateDates(daysAgo(7), daysAgo(0));
+      const dates = generateDates(daysAgo(7), daysAgo(1));
       vi.mocked(fileRegistry.getFile).mockImplementation((fileId: string) => {
         if (fileId === 'parameter-param1') {
           return createMockParamFile({
             hasConnection: true,
             values: [{
-              sliceDSL: `window(${daysAgo(7)}:${daysAgo(0)})`,
+              sliceDSL: `window(${daysAgo(7)}:${daysAgo(1)})`,
               window_from: daysAgo(7),
-              window_to: daysAgo(0),
+              window_to: daysAgo(1),
               dates,
               data_source: { retrieved_at: new Date().toISOString() },
             }],
@@ -535,7 +537,7 @@ describe('WindowFetchPlannerService', () => {
         return undefined;
       });
       
-      const dsl = `window(${daysAgo(7)}:${daysAgo(0)})`;
+      const dsl = `window(${daysAgo(7)}:${daysAgo(1)})`;
       const result = await windowFetchPlannerService.analyse(graph, dsl, 'initial_load');
       
       expect(result.outcome).toBe('covered_stable');

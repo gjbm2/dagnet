@@ -8,12 +8,10 @@
  * PRECISELY mirrors LightningMenu operations with same conditions and visual language.
  */
 
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { 
   Camera,
   DatabaseZap, 
-  Download,
-  Database,
   TrendingUpDown, 
   Folders,
   FileText
@@ -25,6 +23,7 @@ import { useOpenFile } from '../hooks/useOpenFile';
 import { useSnapshotsMenu } from '../hooks/useSnapshotsMenu';
 import { signatureLinksTabService } from '../services/signatureLinksTabService';
 import { useNavigatorContext } from '../contexts/NavigatorContext';
+import { computeCurrentSignatureForEdge } from '../services/snapshotRetrievalsService';
 import './LightningMenu.css';
 import type { BatchOperationType, SingleOperationTarget } from './modals/BatchOperationsModal';
 
@@ -79,13 +78,6 @@ export function DataOperationsMenu({
   showConnectionSettings = true,
   onClose
 }: DataOperationsMenuProps) {
-  const [isSnapshotsSubmenuOpen, setIsSnapshotsSubmenuOpen] = useState(false);
-  const closeTimeoutRef = useRef<number | null>(null);
-  const snapshotsTriggerRef = useRef<HTMLButtonElement>(null);
-  const snapshotsMenuRef = useRef<HTMLDivElement>(null);
-  const [snapshotsMenuPos, setSnapshotsMenuPos] = useState<{ left: number; top: number } | null>(null);
-  const pointerMoveListenerInstalledRef = useRef(false);
-  
   // Compute connection flags (same logic as LightningMenu)
   let hasConnection = false; // Any connection (direct OR file) - for "Get from Source (direct)"
   let hasFileConnection = false; // File exists AND has connection - for "Get from Source" (versioned)
@@ -205,152 +197,28 @@ export function DataOperationsMenu({
   const { state: navState } = useNavigatorContext();
   const { tabs, activeTabId } = useTabContext();
   
-  // Snapshot menu hook (only for parameters)
+  // Snapshot menu hook (only for parameters, env-aware via live signature)
   const paramIds = objectType === 'parameter' && objectId ? [objectId] : [];
-  const { inventories, snapshotCounts, deleteSnapshots, downloadSnapshotData } = useSnapshotsMenu(paramIds);
+  const [currentSignatures, setCurrentSignatures] = useState<Record<string, string>>({});
+  useEffect(() => {
+    if (objectType !== 'parameter' || !objectId || !targetId || !graph) return;
+    const workspace = navState.selectedRepo
+      ? { repository: navState.selectedRepo, branch: navState.selectedBranch || 'main' }
+      : undefined;
+    let cancelled = false;
+    computeCurrentSignatureForEdge({
+      graph, edgeId: targetId, effectiveDSL: currentDSL || '', workspace,
+    }).then(result => {
+      if (!cancelled && result) setCurrentSignatures({ [objectId]: result.signature });
+    }).catch(() => { /* ignore */ });
+    return () => { cancelled = true; };
+  }, [objectType, objectId, targetId, graph, currentDSL, navState.selectedRepo, navState.selectedBranch]);
+  const { inventories, snapshotCounts } = useSnapshotsMenu(
+    paramIds,
+    { currentSignatures },
+  );
   const snapshotCount = objectType === 'parameter' ? snapshotCounts[objectId] : undefined;
-  const snapshotRowCount = objectType === 'parameter' ? inventories[objectId]?.row_count : undefined;
-  const hasSnapshots = (snapshotRowCount ?? 0) > 0;
-
-  const computeFixedSubmenuPos = useMemo(() => {
-    return () => {
-      const trigger = snapshotsTriggerRef.current;
-      const menu = snapshotsMenuRef.current;
-      if (!trigger || !menu) return;
-
-      const triggerRect = trigger.getBoundingClientRect();
-      const menuRect = menu.getBoundingClientRect();
-
-      const viewportWidth = globalThis.innerWidth;
-      const viewportHeight = globalThis.innerHeight;
-
-      let left = triggerRect.right + 6;
-      let top = triggerRect.top;
-
-      // Flip left if needed
-      if (left + menuRect.width > viewportWidth - 20) {
-        left = Math.max(20, triggerRect.left - menuRect.width - 6);
-      }
-
-      // Clamp vertically
-      if (top + menuRect.height > viewportHeight - 20) {
-        top = Math.max(20, viewportHeight - menuRect.height - 20);
-      }
-      if (top < 20) top = 20;
-
-      setSnapshotsMenuPos({ left, top });
-    };
-  }, []);
-
-  useEffect(() => {
-    if (!isSnapshotsSubmenuOpen) return;
-    requestAnimationFrame(() => {
-      computeFixedSubmenuPos();
-    });
-  }, [isSnapshotsSubmenuOpen, computeFixedSubmenuPos]);
-
-  useEffect(() => {
-    return () => {
-      if (closeTimeoutRef.current) {
-        globalThis.clearTimeout(closeTimeoutRef.current);
-        closeTimeoutRef.current = null;
-      }
-    };
-  }, []);
-
-  const openSnapshotsSubmenu = () => {
-    if (closeTimeoutRef.current) {
-      globalThis.clearTimeout(closeTimeoutRef.current);
-      closeTimeoutRef.current = null;
-    }
-    setIsSnapshotsSubmenuOpen(true);
-  };
-
-  const scheduleCloseSnapshotsSubmenu = () => {
-    if (closeTimeoutRef.current) {
-      globalThis.clearTimeout(closeTimeoutRef.current);
-    }
-    closeTimeoutRef.current = globalThis.setTimeout(() => {
-      setIsSnapshotsSubmenuOpen(false);
-      closeTimeoutRef.current = null;
-    }, 300) as unknown as number;
-  };
-
-  const cancelScheduledClose = () => {
-    if (closeTimeoutRef.current) {
-      globalThis.clearTimeout(closeTimeoutRef.current);
-      closeTimeoutRef.current = null;
-    }
-  };
-
-  const isPointerInsideTriggerOrMenu = (clientX: number, clientY: number): boolean => {
-    const trigger = snapshotsTriggerRef.current;
-    const menu = snapshotsMenuRef.current;
-    const pad = 6;
-
-    const inRect = (r: DOMRect) =>
-      clientX >= (r.left - pad) &&
-      clientX <= (r.right + pad) &&
-      clientY >= (r.top - pad) &&
-      clientY <= (r.bottom + pad);
-
-    const triggerRect = trigger ? trigger.getBoundingClientRect() : null;
-    const menuRect = menu ? menu.getBoundingClientRect() : null;
-
-    if (triggerRect && inRect(triggerRect)) return true;
-    if (menuRect && inRect(menuRect)) return true;
-
-    // Bridge/corridor between trigger and menu to avoid premature closes when the menu is
-    // fixed-positioned and slightly offset/clamped.
-    if (triggerRect && menuRect) {
-      const isMenuOnRight = menuRect.left >= triggerRect.right;
-      const isMenuOnLeft = triggerRect.left >= menuRect.right;
-
-      if (isMenuOnRight) {
-        const bridge = new DOMRect(
-          triggerRect.right,
-          Math.min(triggerRect.top, menuRect.top),
-          Math.max(0, menuRect.left - triggerRect.right),
-          Math.max(triggerRect.bottom, menuRect.bottom) - Math.min(triggerRect.top, menuRect.top)
-        );
-        if (inRect(bridge)) return true;
-      } else if (isMenuOnLeft) {
-        const bridge = new DOMRect(
-          menuRect.right,
-          Math.min(triggerRect.top, menuRect.top),
-          Math.max(0, triggerRect.left - menuRect.right),
-          Math.max(triggerRect.bottom, menuRect.bottom) - Math.min(triggerRect.top, menuRect.top)
-        );
-        if (inRect(bridge)) return true;
-      }
-    }
-
-    return false;
-  };
-
-  useEffect(() => {
-    if (!isSnapshotsSubmenuOpen) return;
-
-    const onPointerMove = (e: PointerEvent) => {
-      if (isPointerInsideTriggerOrMenu(e.clientX, e.clientY)) {
-        cancelScheduledClose();
-      } else {
-        scheduleCloseSnapshotsSubmenu();
-      }
-    };
-
-    if (!pointerMoveListenerInstalledRef.current) {
-      pointerMoveListenerInstalledRef.current = true;
-      document.addEventListener('pointermove', onPointerMove);
-    }
-
-    return () => {
-      if (pointerMoveListenerInstalledRef.current) {
-        pointerMoveListenerInstalledRef.current = false;
-        document.removeEventListener('pointermove', onPointerMove);
-      }
-    };
-  }, [isSnapshotsSubmenuOpen]);
+  const hasSnapshots = (inventories[objectId]?.row_count ?? 0) > 0;
   
   // Handlers (same as LightningMenu, now using centralized hook)
   const handleGetFromFile = () => {
@@ -545,110 +413,46 @@ export function DataOperationsMenu({
         </button>
       )}
       
-      {/* Snapshots submenu (for parameters) */}
+      {/* Snapshot Manager shortcut (for parameters) */}
       {objectType === 'parameter' && (
-        <div
-          style={{ position: 'relative' }}
-          onMouseEnter={openSnapshotsSubmenu}
+        <button
+          className={itemClassName}
+          onClick={() => {
+            const repo = navState.selectedRepo;
+            const branch = navState.selectedBranch || 'main';
+            const activeTabFileId = activeTabId
+              ? tabs.find(t => t.id === activeTabId)?.fileId ?? null
+              : null;
+            const effectiveGraphFileId =
+              graphFileId
+              ?? (activeTabFileId?.startsWith('graph-') ? activeTabFileId : null);
+            const bareGraphId =
+              effectiveGraphFileId?.replace(/^graph-/, '')
+              || graph?.metadata?.id
+              || graph?.metadata?.name
+              || '';
+            const edge: any = targetId
+              ? graph?.edges?.find((e: any) => e?.uuid === targetId || e?.id === targetId)
+              : null;
+            const edgeConn = edge?.p?.connection || edge?.cost_gbp?.connection || edge?.labour_cost?.connection || undefined;
+            void signatureLinksTabService.openSignatureLinksTab({
+              graphId: bareGraphId,
+              graphName: bareGraphId,
+              paramId: objectId,
+              dbParamId: `${repo}-${branch}-${objectId}`,
+              paramSlot: paramSlot || 'p',
+              edgeId: targetId,
+              connectionName: edgeConn,
+            });
+            if (onClose) onClose();
+          }}
+          title="Open Snapshot Manager for this parameter"
         >
-          <button
-            ref={snapshotsTriggerRef}
-            data-testid="snapshots-trigger"
-            className={itemClassName}
-            // IMPORTANT: do NOT disable submenu triggers.
-            // Disabled buttons do not reliably emit mouse events, which makes hover submenus
-            // appear "broken" while inventory is still loading / when empty.
-            aria-disabled={!hasSnapshots}
-            title={hasSnapshots ? 'Snapshots' : 'No snapshots available'}
-            style={{ opacity: hasSnapshots ? 1 : 0.4 }}
-          >
-            <span>Snapshots</span>
-            <div className={pathwayClassName}>
-              <Camera size={12} />
-              <span className="lightning-menu-pathway">›</span>
-            </div>
-          </button>
-
-          {isSnapshotsSubmenuOpen && (
-            <div
-              ref={snapshotsMenuRef}
-              data-testid="snapshots-flyout"
-              className="dagnet-popup lightning-menu-submenu"
-              style={{
-                position: 'fixed',
-                left: `${snapshotsMenuPos?.left ?? 0}px`,
-                top: `${snapshotsMenuPos?.top ?? 0}px`,
-                minWidth: '220px',
-                maxWidth: 'min(420px, calc(100vw - 40px))',
-              }}
-            >
-              <button
-                className={itemClassName}
-                disabled={!hasSnapshots}
-                onClick={() => {
-                  void downloadSnapshotData(objectId);
-                  if (onClose) onClose();
-                }}
-                title={hasSnapshots ? 'Download snapshot data (CSV)' : 'No snapshots available'}
-              >
-                <span>Download snapshot data</span>
-                <div className={pathwayClassName}>
-                  <Download size={12} />
-                </div>
-              </button>
-
-              <button
-                className={itemClassName}
-                disabled={!hasSnapshots}
-                onClick={() => {
-                  void deleteSnapshots(objectId);
-                  if (onClose) onClose();
-                }}
-                title={hasSnapshots ? 'Delete snapshot data' : 'No snapshots to delete'}
-                style={{ color: hasSnapshots ? '#dc2626' : '#999' }}
-              >
-                <span>Delete {snapshotCount ?? 0} snapshot{(snapshotCount ?? 0) !== 1 ? 's' : ''}</span>
-                <div className={pathwayClassName}>
-                  <Database size={12} style={{ color: hasSnapshots ? '#dc2626' : '#999' }} />
-                </div>
-              </button>
-
-              <div className="dagnet-popup-divider" />
-              <button
-                className={itemClassName}
-                onClick={() => {
-                  const repo = navState.selectedRepo;
-                  const branch = navState.selectedBranch || 'main';
-                  const activeTabFileId = activeTabId
-                    ? tabs.find(t => t.id === activeTabId)?.fileId ?? null
-                    : null;
-                  const effectiveGraphFileId =
-                    graphFileId
-                    ?? (activeTabFileId?.startsWith('graph-') ? activeTabFileId : null);
-                  const bareGraphId =
-                    effectiveGraphFileId?.replace(/^graph-/, '')
-                    || graph?.metadata?.id
-                    || graph?.metadata?.name
-                    || '';
-                  void signatureLinksTabService.openSignatureLinksTab({
-                    graphId: bareGraphId,
-                    graphName: bareGraphId,
-                    paramId: objectId,
-                    dbParamId: `${repo}-${branch}-${objectId}`,
-                    paramSlot: paramSlot || 'p',
-                  });
-                  if (onClose) onClose();
-                }}
-                title="Open Snapshot Manager for this parameter"
-              >
-                <span>Manage…</span>
-                <div className={pathwayClassName}>
-                  <Folders size={12} />
-                </div>
-              </button>
-            </div>
-          )}
-        </div>
+          <span>Manage{hasSnapshots ? ` (${snapshotCount})` : ''} matching snapshots…</span>
+          <div className={pathwayClassName}>
+            <Camera size={12} />
+          </div>
+        </button>
       )}
       
     </div>

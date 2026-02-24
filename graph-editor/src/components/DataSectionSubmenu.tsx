@@ -5,8 +5,8 @@
  * Used by NodeContextMenu and EdgeContextMenu.
  */
 
-import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { ChevronRight, Camera, Database, DatabaseZap, Download, Folders, TrendingUpDown, X, Trash2, FileText } from 'lucide-react';
+import React from 'react';
+import { ChevronRight, Camera, Database, DatabaseZap, Folders, TrendingUpDown, X, Trash2, FileText } from 'lucide-react';
 import type { DataOperationSection } from './DataOperationsSections';
 import '../styles/popup-menu.css';
 
@@ -26,10 +26,6 @@ interface DataSectionSubmenuProps {
   onOpenFile: (section: DataOperationSection) => void;
   /** Snapshot count for this section (optional, only for parameters) */
   snapshotCount?: number;
-  /** Handler to download snapshot data as CSV (optional) */
-  onDownloadSnapshotData?: (section: DataOperationSection) => void;
-  /** Handler to delete snapshots (optional) */
-  onDeleteSnapshots?: (section: DataOperationSection) => void;
   /** Handler to open Snapshot Manager for this param (optional) */
   onManageSnapshots?: (section: DataOperationSection) => void;
 }
@@ -49,161 +45,9 @@ export const DataSectionSubmenu: React.FC<DataSectionSubmenuProps> = ({
   onClearDataFile,
   onOpenFile,
   snapshotCount,
-  onDownloadSnapshotData,
-  onDeleteSnapshots,
   onManageSnapshots,
 }) => {
-  // All styling via .dagnet-popup / .dagnet-popup-item CSS classes
-  const [isSnapshotsSubmenuOpen, setIsSnapshotsSubmenuOpen] = useState(false);
-  const closeTimeoutRef = useRef<number | null>(null);
-  const snapshotsTriggerRef = useRef<HTMLDivElement>(null);
-  const snapshotsMenuRef = useRef<HTMLDivElement>(null);
-  const [snapshotsMenuPos, setSnapshotsMenuPos] = useState<{ left: number; top: number } | null>(null);
-  const hasSnapshotsActions = !!onDeleteSnapshots || !!onDownloadSnapshotData || !!onManageSnapshots;
   const hasSnapshots = (snapshotCount ?? 0) > 0;
-  const pointerMoveListenerInstalledRef = useRef(false);
-
-  const computeFixedSubmenuPos = useMemo(() => {
-    return () => {
-      const trigger = snapshotsTriggerRef.current;
-      const menu = snapshotsMenuRef.current;
-      if (!trigger || !menu) return;
-
-      const triggerRect = trigger.getBoundingClientRect();
-      const menuRect = menu.getBoundingClientRect();
-
-      const viewportWidth = globalThis.innerWidth;
-      const viewportHeight = globalThis.innerHeight;
-
-      let left = triggerRect.right + 4;
-      let top = triggerRect.top;
-
-      // Flip left if needed
-      if (left + menuRect.width > viewportWidth - 20) {
-        left = Math.max(20, triggerRect.left - menuRect.width - 4);
-      }
-
-      // Clamp vertically
-      if (top + menuRect.height > viewportHeight - 20) {
-        top = Math.max(20, viewportHeight - menuRect.height - 20);
-      }
-      if (top < 20) top = 20;
-
-      setSnapshotsMenuPos({ left, top });
-    };
-  }, []);
-
-  useEffect(() => {
-    if (!isSnapshotsSubmenuOpen) return;
-    // Position after menu mounts
-    requestAnimationFrame(() => {
-      computeFixedSubmenuPos();
-    });
-  }, [isSnapshotsSubmenuOpen, computeFixedSubmenuPos]);
-
-  useEffect(() => {
-    return () => {
-      if (closeTimeoutRef.current) {
-        globalThis.clearTimeout(closeTimeoutRef.current);
-        closeTimeoutRef.current = null;
-      }
-    };
-  }, []);
-
-  const openSnapshotsSubmenu = () => {
-    if (closeTimeoutRef.current) {
-      globalThis.clearTimeout(closeTimeoutRef.current);
-      closeTimeoutRef.current = null;
-    }
-    setIsSnapshotsSubmenuOpen(true);
-  };
-
-  const scheduleCloseSnapshotsSubmenu = () => {
-    if (closeTimeoutRef.current) {
-      globalThis.clearTimeout(closeTimeoutRef.current);
-    }
-    closeTimeoutRef.current = globalThis.setTimeout(() => {
-      setIsSnapshotsSubmenuOpen(false);
-      closeTimeoutRef.current = null;
-    }, 300) as unknown as number;
-  };
-
-  const cancelScheduledClose = () => {
-    if (closeTimeoutRef.current) {
-      globalThis.clearTimeout(closeTimeoutRef.current);
-      closeTimeoutRef.current = null;
-    }
-  };
-
-  const isPointerInsideTriggerOrMenu = (clientX: number, clientY: number): boolean => {
-    const trigger = snapshotsTriggerRef.current;
-    const menu = snapshotsMenuRef.current;
-    const pad = 6;
-
-    const inRect = (r: DOMRect) =>
-      clientX >= (r.left - pad) &&
-      clientX <= (r.right + pad) &&
-      clientY >= (r.top - pad) &&
-      clientY <= (r.bottom + pad);
-
-    const triggerRect = trigger ? trigger.getBoundingClientRect() : null;
-    const menuRect = menu ? menu.getBoundingClientRect() : null;
-
-    if (triggerRect && inRect(triggerRect)) return true;
-    if (menuRect && inRect(menuRect)) return true;
-
-    // Bridge/corridor between trigger and menu to avoid premature closes when the menu is
-    // fixed-positioned and slightly offset/clamped.
-    if (triggerRect && menuRect) {
-      const isMenuOnRight = menuRect.left >= triggerRect.right;
-      const isMenuOnLeft = triggerRect.left >= menuRect.right;
-
-      if (isMenuOnRight) {
-        const bridge = new DOMRect(
-          triggerRect.right,
-          Math.min(triggerRect.top, menuRect.top),
-          Math.max(0, menuRect.left - triggerRect.right),
-          Math.max(triggerRect.bottom, menuRect.bottom) - Math.min(triggerRect.top, menuRect.top)
-        );
-        if (inRect(bridge)) return true;
-      } else if (isMenuOnLeft) {
-        const bridge = new DOMRect(
-          menuRect.right,
-          Math.min(triggerRect.top, menuRect.top),
-          Math.max(0, triggerRect.left - menuRect.right),
-          Math.max(triggerRect.bottom, menuRect.bottom) - Math.min(triggerRect.top, menuRect.top)
-        );
-        if (inRect(bridge)) return true;
-      }
-    }
-
-    return false;
-  };
-
-  useEffect(() => {
-    if (!isSnapshotsSubmenuOpen) return;
-
-    const onPointerMove = (e: PointerEvent) => {
-      // Keep open while pointer is over trigger OR menu (even if menu is fixed-positioned outside)
-      if (isPointerInsideTriggerOrMenu(e.clientX, e.clientY)) {
-        cancelScheduledClose();
-      } else {
-        scheduleCloseSnapshotsSubmenu();
-      }
-    };
-
-    if (!pointerMoveListenerInstalledRef.current) {
-      pointerMoveListenerInstalledRef.current = true;
-      document.addEventListener('pointermove', onPointerMove);
-    }
-
-    return () => {
-      if (pointerMoveListenerInstalledRef.current) {
-        pointerMoveListenerInstalledRef.current = false;
-        document.removeEventListener('pointermove', onPointerMove);
-      }
-    };
-  }, [isSnapshotsSubmenuOpen]);
 
   return (
     <div
@@ -329,102 +173,15 @@ export const DataSectionSubmenu: React.FC<DataSectionSubmenuProps> = ({
             </div>
           )}
           
-          {/* Snapshots submenu - show for parameters (disabled when count is 0) */}
-          {hasSnapshotsActions && (
+          {/* Snapshot Manager shortcut */}
+          {onManageSnapshots && (
             <div
-              style={{ position: 'relative' }}
-              onMouseEnter={openSnapshotsSubmenu}
+              className="dagnet-popup-item"
+              onClick={() => onManageSnapshots(section)}
+              style={{ justifyContent: 'space-between', gap: '16px' }}
             >
-              <div
-                ref={snapshotsTriggerRef}
-                className="dagnet-popup-item"
-                style={{
-                  cursor: hasSnapshots ? 'pointer' : 'default',
-                  justifyContent: 'space-between',
-                  gap: '16px',
-                  opacity: hasSnapshots ? 1 : 0.4,
-                }}
-              >
-                <span>Snapshots</span>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: '#666', flexShrink: 0 }}>
-                  <Camera size={12} style={{ color: hasSnapshots ? '#666' : '#999' }} />
-                  <ChevronRight size={14} style={{ color: '#666' }} />
-                </div>
-              </div>
-
-              {isSnapshotsSubmenuOpen && (
-                <div
-                  ref={snapshotsMenuRef}
-                  data-testid="snapshots-flyout"
-                  onMouseEnter={onSubmenuContentEnter}
-                  onMouseLeave={onSubmenuContentLeave}
-                  className="dagnet-popup"
-                  style={{
-                    position: 'fixed',
-                    left: `${snapshotsMenuPos?.left ?? 0}px`,
-                    top: `${snapshotsMenuPos?.top ?? 0}px`,
-                    minWidth: '220px',
-                    maxWidth: 'min(420px, calc(100vw - 40px))',
-                    padding: '4px',
-                    zIndex: 99999,
-                    whiteSpace: 'nowrap',
-                  }}
-                >
-                  {/* Download snapshot data */}
-                  {onDownloadSnapshotData && (
-                    <div
-                      onClick={hasSnapshots ? () => onDownloadSnapshotData(section) : undefined}
-                      className="dagnet-popup-item"
-                      style={{
-                        cursor: hasSnapshots ? 'pointer' : 'default',
-                        justifyContent: 'space-between',
-                        gap: '16px',
-                        opacity: hasSnapshots ? 1 : 0.4,
-                      }}
-                    >
-                      <span style={{ maxWidth: '320px', overflow: 'hidden', textOverflow: 'ellipsis' }}>Download snapshot data</span>
-                      <Download size={12} style={{ color: '#666' }} />
-                    </div>
-                  )}
-
-                  {/* Delete X snapshots */}
-                  {onDeleteSnapshots && (
-                    <div
-                      onClick={hasSnapshots ? () => onDeleteSnapshots(section) : undefined}
-                      className="dagnet-popup-item"
-                      style={{
-                        cursor: hasSnapshots ? 'pointer' : 'default',
-                        justifyContent: 'space-between',
-                        gap: '16px',
-                        opacity: hasSnapshots ? 1 : 0.4,
-                      }}
-                    >
-                      <span style={{ maxWidth: '320px', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                        Delete {snapshotCount ?? 0} snapshot{(snapshotCount ?? 0) !== 1 ? 's' : ''}
-                      </span>
-                      <Database size={12} style={{ color: hasSnapshots ? '#dc2626' : '#999' }} />
-                    </div>
-                  )}
-
-                  {/* Manage in Snapshot Manager */}
-                  {onManageSnapshots && (
-                    <>
-                      <div className="dagnet-popup-divider" />
-                      <div
-                        className="dagnet-popup-item"
-                        onClick={() => onManageSnapshots(section)}
-                        style={{
-                          justifyContent: 'space-between',
-                          gap: '16px',
-                        }}
-                      >
-                        <span>Manage…</span>
-                        <Folders size={12} style={{ color: '#666' }} />
-                      </div>
-                    </>
-                  )}
-                </div>
-              )}
+              <span>Manage{hasSnapshots ? ` (${snapshotCount})` : ''} matching snapshots…</span>
+              <Camera size={12} style={{ color: '#666' }} />
             </div>
           )}
         </div>

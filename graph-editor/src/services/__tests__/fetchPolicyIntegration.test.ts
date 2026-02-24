@@ -906,15 +906,20 @@ describe('FetchPlan Builder', () => {
       const fileState = createMockFileState({
         'parameter-test-param': {
           data: {
-            values: [buildWindowValue({ startDaysAgo: 30, endDaysAgo: 0 })],
+            values: [
+              {
+                ...buildWindowValue({ startDaysAgo: 30, endDaysAgo: 1 }),
+                data_source: { type: 'api', retrieved_at: REFERENCE_DATE.toISOString() },
+              },
+            ],
           },
         },
       });
       
       const result = buildFetchPlan({
         graph,
-        dsl: `window(${daysAgo(30)}:${daysAgo(0)})`,
-        window: { start: daysAgo(30), end: daysAgo(0) },
+        dsl: `window(${daysAgo(30)}:${daysAgo(1)})`,
+        window: { start: daysAgo(30), end: daysAgo(1) },
         referenceNow: REFERENCE_DATE.toISOString(),
         fileState,
         connectionChecker: createMockConnectionChecker(new Set(['edge-1'])),

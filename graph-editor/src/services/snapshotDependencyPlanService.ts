@@ -796,7 +796,14 @@ export function resolveFunnelPathEdges(graph: Graph, queryDsl?: string): Set<str
   const toUuid = nodes.find((n: any) => n.id === toNodeHrn)?.uuid;
   if (!fromUuid || !toUuid) return new Set();
 
-  // Build adjacency lists
+  // Resolve excluded node IDs to UUIDs
+  const excludedUuids = new Set<string>();
+  for (const hrn of parsed.exclude || []) {
+    const node = nodes.find((n: any) => n.id === hrn);
+    if (node) excludedUuids.add(node.uuid);
+  }
+
+  // Build adjacency lists, skipping edges that touch excluded nodes
   const forwardAdj = new Map<string, string[]>();
   const backwardAdj = new Map<string, string[]>();
 
@@ -804,6 +811,7 @@ export function resolveFunnelPathEdges(graph: Graph, queryDsl?: string): Set<str
     const f = edge.from as string;
     const t = edge.to as string;
     if (!f || !t) continue;
+    if (excludedUuids.has(f) || excludedUuids.has(t)) continue;
 
     if (!forwardAdj.has(f)) forwardAdj.set(f, []);
     forwardAdj.get(f)!.push(t);

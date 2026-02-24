@@ -38,6 +38,7 @@ import {
 import { addMapping, removeMapping, getMappings, type HashMapping } from '../../services/hashMappingsService';
 import { getGraphStore } from '../../contexts/GraphStoreContext';
 import { augmentDSLWithConstraint } from '../../lib/queryDSL';
+import { normaliseSliceKeyForMatching } from '../../lib/sliceKeyNormalisation';
 import {
   deleteSnapshots as deleteSnapshotsApi,
   querySnapshotsFull,
@@ -156,7 +157,68 @@ export const SignatureLinksViewer: React.FC = () => {
   const graphParamIds = useMemo(() => resolveGraphParamIds(selectedGraphName), [selectedGraphName, resolveGraphParamIds]);
   const secondaryGraphParamIds = useMemo(() => resolveGraphParamIds(secondaryGraphName), [secondaryGraphName, resolveGraphParamIds]);
 
-  const currentCoreHash = context?.currentCoreHash ?? null;
+  // ── Connection-aware core hash ───────────────────────────────────────────
+  const [selectedConnection, setSelectedConnection] = useState<string | null>(null);
+  const [availableConnections, setAvailableConnections] = useState<string[]>([]);
+  const [computedCoreHash, setComputedCoreHash] = useState<string | null>(null);
+
+  // Seed connection from opening context
+  useEffect(() => {
+    if (context?.connectionName) setSelectedConnection(context.connectionName);
+  }, [context?.connectionName]);
+
+  // Seed initial core hash from context (before async recomputation)
+  useEffect(() => {
+    if (context?.currentCoreHash && !computedCoreHash) setComputedCoreHash(context.currentCoreHash);
+  }, [context?.currentCoreHash]);
+
+  // Load available connections
+  useEffect(() => {
+    (async () => {
+      try {
+        const { IndexedDBConnectionProvider } = await import('../../lib/das/IndexedDBConnectionProvider');
+        const provider = new IndexedDBConnectionProvider();
+        const conns = await provider.getAllConnections();
+        setAvailableConnections(conns.map((c: any) => c.name).filter(Boolean).sort());
+      } catch { /* ignore */ }
+    })();
+  }, []);
+
+  // Recompute core hash when connection, graph, or edge changes
+  useEffect(() => {
+    if (!context?.edgeId || !selectedGraphName) return;
+    const graphFileId = `graph-${selectedGraphName}`;
+    const graphFile = fileRegistry.getFile(graphFileId);
+    if (!graphFile?.data) return;
+
+    // Temporarily override the edge's connection for signature computation
+    const graphData = graphFile.data as any;
+    const edge: any = graphData.edges?.find((e: any) => e?.uuid === context.edgeId || e?.id === context.edgeId);
+    if (!edge) return;
+
+    const originalConn = edge?.p?.connection;
+    let cancelled = false;
+    (async () => {
+      try {
+        // Temporarily set connection on the edge for signature computation
+        if (selectedConnection && edge?.p) edge.p.connection = selectedConnection;
+        const { computeCurrentSignatureForEdge } = await import('../../services/snapshotRetrievalsService');
+        const result = await computeCurrentSignatureForEdge({
+          graph: graphData,
+          edgeId: context.edgeId!,
+          effectiveDSL: graphData.currentQueryDSL || '',
+          workspace: repo ? { repository: repo, branch } : undefined,
+        });
+        if (!cancelled && result) setComputedCoreHash(result.coreHash);
+      } catch { /* ignore */ } finally {
+        // Restore original connection
+        if (edge?.p) edge.p.connection = originalConn;
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [selectedConnection, selectedGraphName, context?.edgeId, repo, branch]);
+
+  const currentCoreHash = computedCoreHash ?? context?.currentCoreHash ?? null;
 
   // ── Two browser instances ────────────────────────────────────────────────
   const primary = useParamSigBrowser({ workspacePrefix, dbParams, graphParamIds, currentCoreHash });
@@ -217,6 +279,7 @@ export const SignatureLinksViewer: React.FC = () => {
   const [dataSortField, setDataSortField] = useState<'retrieved_at' | 'slice_key' | 'anchor_from' | 'anchor_to' | 'row_count' | 'sum_x' | 'sum_y'>('retrieved_at');
   const [dataSortDir, setDataSortDir] = useState<'desc' | 'asc'>('desc');
   const [dataSelected, setDataSelected] = useState<Set<string>>(new Set());
+  const [dataLatestEffectiveOnly, setDataLatestEffectiveOnly] = useState(false);
 
   // Compare hash data rows (Data tab — when compare target is active)
   const [compareDataRows, setCompareDataRows] = useState<SnapshotRetrievalSummaryRow[]>([]);
@@ -744,6 +807,60 @@ export const SignatureLinksViewer: React.FC = () => {
         : dataSourceFilter === 'compare' ? compareTagged
           : [...primaryTagged, ...compareTagged];
 
+    if (dataLatestEffectiveOnly) {
+      // Data tab rows are *per-retrieval summaries* (retrieved_at + slice_key).
+      // Approximate "effective under asat()" by keeping only retrieval rows that would
+      // be selected at as-at = end-of-day(anchor_to) (or anchor_from if anchor_to missing),
+      // per canonical slice family (window/cohort args stripped, clause order canonicalised).
+      const parseMs = (s: string | null | undefined): number => {
+        const t = s ? new Date(s).getTime() : NaN;
+        return Number.isFinite(t) ? t : NaN;
+      };
+      const asAtEndOfDayMs = (r: TaggedDataRow): number => {
+        const d = r.anchor_to || r.anchor_from;
+        if (!d) return NaN;
+        const ms = new Date(`${d}T23:59:59.999Z`).getTime();
+        return Number.isFinite(ms) ? ms : NaN;
+      };
+
+      const byFamily = new Map<string, TaggedDataRow[]>();
+      for (const r of rows) {
+        const fam = normaliseSliceKeyForMatching(r.slice_key || '');
+        const arr = byFamily.get(fam) || [];
+        arr.push(r);
+        byFamily.set(fam, arr);
+      }
+
+      const out: TaggedDataRow[] = [];
+      for (const arr of byFamily.values()) {
+        // Sort by retrieved_at ascending for binary search.
+        const sorted = [...arr].sort((a, b) => parseMs(a.retrieved_at) - parseMs(b.retrieved_at));
+        const times = sorted.map((r) => parseMs(r.retrieved_at));
+
+        const maxRetrievedAtLe = (asAtMs: number): number => {
+          if (!Number.isFinite(asAtMs)) return NaN;
+          let lo = 0;
+          let hi = times.length - 1;
+          let best = -1;
+          while (lo <= hi) {
+            const mid = (lo + hi) >> 1;
+            const t = times[mid];
+            if (t <= asAtMs) { best = mid; lo = mid + 1; }
+            else { hi = mid - 1; }
+          }
+          return best >= 0 ? times[best] : NaN;
+        };
+
+        for (const r of arr) {
+          const asAtMs = asAtEndOfDayMs(r);
+          const keepMs = maxRetrievedAtLe(asAtMs);
+          const rMs = parseMs(r.retrieved_at);
+          if (Number.isFinite(keepMs) && rMs === keepMs) out.push(r);
+        }
+      }
+      rows = out;
+    }
+
     if (dataFilter.trim()) {
       const q = dataFilter.trim().toLowerCase();
       rows = rows.filter((r) => {
@@ -777,7 +894,7 @@ export const SignatureLinksViewer: React.FC = () => {
       }
     });
     return rows;
-  }, [dataRows, compareDataRows, dataSourceFilter, dataFilter, dataSortField, dataSortDir]);
+  }, [dataRows, compareDataRows, dataSourceFilter, dataFilter, dataSortField, dataSortDir, dataLatestEffectiveOnly]);
 
   const dataRowKey = useCallback((r: TaggedDataRow) => `${r._source}|${r.retrieved_at}|${r.slice_key}`, []);
 
@@ -894,6 +1011,9 @@ export const SignatureLinksViewer: React.FC = () => {
         graphItems={graphItems}
         selectedGraphName={selectedGraphName}
         onGraphChange={setSelectedGraphName}
+        availableConnections={availableConnections}
+        selectedConnection={selectedConnection}
+        onConnectionChange={setSelectedConnection}
         floatingAction={primary.selectedHash && !secondaryOpen ? (
           <button
             className={`sig-floating-pill${compareHash ? ' muted' : ' secondary'}`}
@@ -1322,6 +1442,17 @@ export const SignatureLinksViewer: React.FC = () => {
                       >
                         Delete{dataSelected.size ? ` (${dataSelected.size})` : ''}
                       </button>
+                      <label className="sig-data-latest-effective">
+                        <input
+                          type="checkbox"
+                          checked={dataLatestEffectiveOnly}
+                          onChange={() => {
+                            setDataLatestEffectiveOnly((v) => !v);
+                            setDataSelected(new Set());
+                          }}
+                        />
+                        <span>Latest effective</span>
+                      </label>
                       <label className="sig-data-select-all">
                         <input type="checkbox" checked={dataAllSelected} onChange={toggleDataSelectAll} />
                         <span>Select all</span>

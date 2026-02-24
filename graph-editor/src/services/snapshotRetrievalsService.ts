@@ -61,13 +61,50 @@ function stripAsatClause(dsl: string): string {
   return (dsl || '').replace(/\.?(?:asat|at)\([^)]+\)/g, '').replace(/^\./, '');
 }
 
+// Event loader shared by all signature-computing paths in this module.
+async function loadEventDefinition(eventId: string): Promise<any> {
+  const fileId = `event-${eventId}`;
+  const frFile: any = fileRegistry.getFile(fileId);
+  if (frFile?.data) return frFile.data;
+  try {
+    const dbFile: any = await db.files.get(fileId);
+    if (dbFile?.data) return dbFile.data;
+  } catch { /* ignore */ }
+  throw new Error(`[snapshotRetrievalsService] Event file "${eventId}" not found in fileRegistry or IndexedDB.`);
+}
 
-export async function buildSnapshotRetrievalsQueryForEdge(args: {
+function resolveContextKeys(constraintsWithoutAsat: any, graph: GraphData): string[] {
+  const explicit = extractContextKeysFromConstraints(constraintsWithoutAsat);
+  if (explicit.length > 0) return explicit;
+  try {
+    const pinnedDsl = (graph as any)?.dataInterestsDSL || '';
+    if (!pinnedDsl) return [];
+    return extractContextKeysFromConstraints(parseConstraints(pinnedDsl));
+  } catch {
+    return [];
+  }
+}
+
+export interface EdgeSignatureResult {
+  signature: string;
+  coreHash: string;
+  paramId: string;
+  dbParamId: string;
+  contextKeys: string[];
+}
+
+/**
+ * Compute the current canonical signature for an edge based on live graph state.
+ *
+ * Shared by the @-calendar (retrievals), snapshot menu counts, and Snapshot Manager
+ * so all surfaces use the same code path and the same connection/event inputs.
+ */
+export async function computeCurrentSignatureForEdge(args: {
   graph: GraphData;
   edgeId: string;
   effectiveDSL: string;
   workspace?: { repository: string; branch: string };
-}): Promise<QuerySnapshotRetrievalsParams | null> {
+}): Promise<EdgeSignatureResult | null> {
   const { graph, edgeId, effectiveDSL, workspace } = args;
   const edge: any = graph?.edges?.find((e: any) => e?.uuid === edgeId || e?.id === edgeId);
   if (!edge) return null;
@@ -76,39 +113,14 @@ export async function buildSnapshotRetrievalsQueryForEdge(args: {
   if (!paramId) return null;
 
   const paramFile = fileRegistry.getFile(`parameter-${paramId}`);
-  // Prefer the parameter file's workspace when available (it is the source of truth for param_id prefixing).
-  // Fall back to the caller-provided workspace only when the param file is not loaded in FileRegistry.
   const workspaceRepo = paramFile?.source?.repository ?? workspace?.repository;
   const workspaceBranch = paramFile?.source?.branch ?? workspace?.branch;
   if (!workspaceRepo || !workspaceBranch) return null;
 
   const dbParamId = `${workspaceRepo}-${workspaceBranch}-${paramId}`;
-
   const dslWithoutAsat = stripAsatClause(effectiveDSL);
   const constraintsWithoutAsat = parseConstraints(dslWithoutAsat);
 
-  // NOTE: We intentionally do NOT send anchor_from/anchor_to to the retrievals
-  // endpoint.  The @ calendar answers "was a snapshot retrieved on this day?" —
-  // it doesn't matter whether the anchor_days in that retrieval happen to
-  // overlap the user's current query window.  Filtering by anchor range caused
-  // incremental fetches (which only cover new days) to be invisible in the
-  // calendar even though the retrieval genuinely exists.
-
-  // Slice filter:
-  // The DB stores `slice_key` as a FULL clause string including BOTH:
-  // - context dimensions, e.g. "context(channel:influencer)"
-  // - temporal mode + date-range template, e.g. ".window(-100d:)" or ".cohort(1-Nov-25:15-Dec-25)"
-  //
-  // So we MUST send EXACT `slice_key` strings that exist in the DB — not a derived DSL from the
-  // current query's date bounds (which often differ from what was written historically).
-  //
-  // The DB has sufficient information to do this: we query snapshot inventory V2 for the
-  // matched signature family, then filter its `by_slice_key[].slice_key` entries by context dims.
-  const contextDims = extractSliceDimensions(dslWithoutAsat);
-
-  // Compute signature (core_hash) via the existing code path.
-  // For uncontexted queries, include pinned context keys (graph.dataInterestsDSL) so
-  // the signature remains stable for MECE slice aggregation.
   const connectionName =
     edge?.p?.connection ||
     edge?.cost_gbp?.connection ||
@@ -117,55 +129,15 @@ export async function buildSnapshotRetrievalsQueryForEdge(args: {
 
   const { buildDslFromEdge } = await import('../lib/das/buildDslFromEdge');
   const connectionProvider = await resolveProviderForConnection(connectionName);
-  // IMPORTANT:
-  // We must compute the signature using the same event-definition inputs as the write path,
-  // otherwise `core_hash` won't match and the calendar will show no highlighted days even
-  // when snapshots exist.
-  const eventLoader = async (eventId: string) => {
-    const fileId = `event-${eventId}`;
-
-    // Prefer fileRegistry (already hydrated during normal app flow).
-    const frFile: any = fileRegistry.getFile(fileId);
-    if (frFile?.data) return frFile.data;
-
-    // Fall back to IndexedDB (source of truth) if not hydrated in FileRegistry.
-    try {
-      const dbFile: any = await db.files.get(fileId);
-      if (dbFile?.data) return dbFile.data;
-    } catch {
-      // ignore DB errors, will throw below
-    }
-
-    // HARD FAIL: Event files MUST be available. If not, this is a bug.
-    throw new Error(`[snapshotRetrievalsService] Event file "${eventId}" not found in fileRegistry or IndexedDB. This indicates a workspace/clone issue.`);
-  };
 
   const { queryPayload, eventDefinitions } = await buildDslFromEdge(
-    edge,
-    graph,
-    connectionProvider,
-    eventLoader,
-    constraintsWithoutAsat
+    edge, graph, connectionProvider, loadEventDefinition, constraintsWithoutAsat
   );
 
-  const contextKeys = (() => {
-    const explicit = extractContextKeysFromConstraints(constraintsWithoutAsat);
-    if (explicit.length > 0) return explicit;
-    try {
-      const pinnedDsl = (graph as any)?.dataInterestsDSL || '';
-      if (!pinnedDsl) return [];
-      return extractContextKeysFromConstraints(parseConstraints(pinnedDsl));
-    } catch {
-      return [];
-    }
-  })();
+  const contextKeys = resolveContextKeys(constraintsWithoutAsat, graph);
 
   const signature = await computeQuerySignature(
-    queryPayload,
-    connectionName,
-    graph,
-    edge,
-    contextKeys,
+    queryPayload, connectionName, graph, edge, contextKeys,
     { repository: workspaceRepo, branch: workspaceBranch },
     eventDefinitions
   );
@@ -173,11 +145,28 @@ export async function buildSnapshotRetrievalsQueryForEdge(args: {
   const sigParsed = parseSignature(signature);
   if (!sigParsed.coreHash) return null;
 
+  return { signature, coreHash: sigParsed.coreHash, paramId, dbParamId, contextKeys };
+}
+
+export async function buildSnapshotRetrievalsQueryForEdge(args: {
+  graph: GraphData;
+  edgeId: string;
+  effectiveDSL: string;
+  workspace?: { repository: string; branch: string };
+}): Promise<QuerySnapshotRetrievalsParams | null> {
+  const sigResult = await computeCurrentSignatureForEdge(args);
+  if (!sigResult) return null;
+
+  const { signature, coreHash, paramId, dbParamId } = sigResult;
+
+  const dslWithoutAsat = stripAsatClause(args.effectiveDSL);
+  const contextDims = extractSliceDimensions(dslWithoutAsat);
+
   let slice_keys: string[] | undefined;
   const wantSliceFilter = !!contextDims && !hasContextAny(dslWithoutAsat);
   if (wantSliceFilter) {
     try {
-      const closureSet = getClosureSet(sigParsed.coreHash!);
+      const closureSet = getClosureSet(coreHash);
       const inv = await getBatchInventoryV2([dbParamId], {
         current_signatures: { [dbParamId]: signature },
         ...(closureSet.length > 0

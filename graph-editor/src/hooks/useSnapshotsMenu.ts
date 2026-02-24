@@ -94,6 +94,18 @@ export interface UseSnapshotsMenuOptions {
    * If false, caller must invoke `refresh()` (e.g. on hover).
    */
   autoFetch?: boolean;
+  /**
+   * Live-computed canonical signatures keyed by objectId (param ID).
+   * When provided, these are used instead of reading the write-time signature
+   * from the parameter file.  This makes inventory results env-aware: changing
+   * the edge connection produces a different signature, so only snapshots
+   * matching the current env are counted.
+   *
+   * When a signature is provided but the matched family has no data, the count
+   * is 0 — NOT the overall_all_families fallback — because the user explicitly
+   * chose an env and seeing cross-env data would be misleading.
+   */
+  currentSignatures?: Record<string, string>;
 }
 
 function buildDbParamId(objectId: string, repo: string, branch: string): string {
@@ -193,6 +205,8 @@ async function queryAllRowsForParam(
 export function useSnapshotsMenu(objectIds: string[], options: UseSnapshotsMenuOptions = {}): UseSnapshotsMenuResult {
   const ids = useMemo(() => Array.from(new Set(objectIds.filter(Boolean))), [objectIds.join(',')]);
   const autoFetch = options.autoFetch !== false;
+  const callerSignatures = options.currentSignatures;
+  const hasCallerSignatures = !!callerSignatures && Object.keys(callerSignatures).length > 0;
 
   const [inventories, setInventories] = useState<Record<string, SnapshotInventory>>({});
   const [snapshotCounts, setSnapshotCounts] = useState<Record<string, number>>({});
@@ -235,7 +249,7 @@ export function useSnapshotsMenu(objectIds: string[], options: UseSnapshotsMenuO
         const ws = workspaceById[objectId] || resolveWorkspaceForParam(objectId, repo, branch);
         if (!ws?.repo) continue;
         const dbParamId = buildDbParamId(objectId, ws.repo, ws.branch);
-        const sig = latestQuerySignatureForParam(objectId);
+        const sig = callerSignatures?.[objectId] ?? latestQuerySignatureForParam(objectId);
         sigByDbParamId[dbParamId] = sig;
         if (sig) current_signatures[dbParamId] = sig;
       }
@@ -295,28 +309,22 @@ export function useSnapshotsMenu(objectIds: string[], options: UseSnapshotsMenuO
         const inv = invByDbParamId[dbParamId] as SnapshotInventoryV2Param | undefined;
         const overallAll = inv?.overall_all_families;
         if (overallAll) {
-          // Prefer the matched family (current query signature) over overall-all-families.
           const current = inv?.current;
           const matchedFamilyId = current?.matched_family_id || null;
           const families = Array.isArray(inv?.families) ? inv!.families : [];
           const matchedFamily = matchedFamilyId ? families.find((f) => f.family_id === matchedFamilyId) : undefined;
 
-          // Source for inventory: matched family *only when it actually has data*.
-          //
-          // Rationale:
-          // - It's common for "current signature" to point at a hash that is not yet present in snapshots
-          //   (e.g. user changes context/window before any snapshot write for that exact signature).
-          // - In that case we MUST still show that snapshots exist for the parameter overall.
+          // When the caller provided live-computed signatures (env-aware), we NEVER
+          // fall back to overall_all_families — showing cross-env data is misleading.
+          // Without caller signatures we still fall back so that "no fetch yet" isn't
+          // confused with "no data at all."
           const matchedFamilyWithData =
             matchedFamily && (matchedFamily.overall?.row_count ?? 0) > 0 ? matchedFamily : undefined;
           const matchedHasData = !!matchedFamilyWithData;
-          const source = matchedFamilyWithData ? matchedFamilyWithData.overall : overallAll;
+          const source = matchedFamilyWithData
+            ? matchedFamilyWithData.overall
+            : (hasCallerSignatures ? null : overallAll);
 
-          // Session logging:
-          // - By default, hover inventory should be a single-line log with no huge context payload.
-          // - Full debug payload is ONLY appropriate when diagnostic logging is enabled (?sessionlogdiag).
-          //
-          // Also, avoid spamming logs on pure cache hits.
           const diag =
             typeof (sessionLogService as any).getDiagnosticLoggingEnabled === 'function'
               ? sessionLogService.getDiagnosticLoggingEnabled()
@@ -324,6 +332,7 @@ export function useSnapshotsMenu(objectIds: string[], options: UseSnapshotsMenuO
           const fetchedThisRefresh = backendFetchedDbParamIds.has(dbParamId);
           if (diag || fetchedThisRefresh) {
             try {
+              const days = source?.unique_retrieved_days ?? 0;
               if (diag) {
                 const debugPayload = {
                   objectId,
@@ -335,55 +344,57 @@ export function useSnapshotsMenu(objectIds: string[], options: UseSnapshotsMenuO
                   matched_family_id: inv?.current?.matched_family_id || null,
                   matched_family_overall: matchedFamily?.overall || null,
                   matchedHasData,
-                  chosen: matchedHasData ? 'matched_family' : 'overall_all_families',
-                  chosen_row_count: source.row_count,
-                  chosen_unique_retrieved_days: source.unique_retrieved_days,
+                  envAware: hasCallerSignatures,
+                  chosen: source ? (matchedHasData ? 'matched_family' : 'overall_all_families') : 'none (env mismatch)',
+                  chosen_row_count: source?.row_count ?? 0,
+                  chosen_unique_retrieved_days: days,
                 };
-                // eslint-disable-next-line no-console
                 console.log('[SnapshotsMenu] inventory', debugPayload);
                 sessionLogService.info(
-                  'data-fetch',
-                  'SNAPSHOT_INVENTORY_MENU',
-                  `Snapshot inventory: ${objectId} → ${source.unique_retrieved_days ?? 0} day(s)`,
-                  undefined,
-                  debugPayload as any
+                  'data-fetch', 'SNAPSHOT_INVENTORY_MENU',
+                  `Snapshot inventory: ${objectId} → ${days} day(s)`,
+                  undefined, debugPayload as any
                 );
               } else {
                 sessionLogService.info(
-                  'data-fetch',
-                  'SNAPSHOT_INVENTORY_MENU',
-                  `Snapshot inventory: ${objectId} → ${source.unique_retrieved_days ?? 0} day(s)`
+                  'data-fetch', 'SNAPSHOT_INVENTORY_MENU',
+                  `Snapshot inventory: ${objectId} → ${days} day(s)`
                 );
               }
-            } catch {
-              // ignore
-            }
+            } catch { /* ignore */ }
           }
 
-          nextInventories[objectId] = {
-            has_data: source.row_count > 0,
-            param_id: dbParamId,
-            // Show retrieved_at range (when snapshots were taken), not anchor_day range.
-            earliest: source.earliest_retrieved_at,
-            latest: source.latest_retrieved_at,
-            row_count: source.row_count,
-            unique_days: source.unique_anchor_days,
-            unique_slices: 0,
-            unique_hashes: 0,
-            unique_retrievals: source.unique_retrievals,
-            unique_retrieved_days: source.unique_retrieved_days,
-          };
+          if (source) {
+            nextInventories[objectId] = {
+              has_data: source.row_count > 0,
+              param_id: dbParamId,
+              earliest: source.earliest_retrieved_at,
+              latest: source.latest_retrieved_at,
+              row_count: source.row_count,
+              unique_days: source.unique_anchor_days,
+              unique_slices: 0,
+              unique_hashes: 0,
+              unique_retrievals: source.unique_retrievals,
+              unique_retrieved_days: source.unique_retrieved_days,
+            };
 
-          // User meaning of "snapshots": one per retrieved DAY.
-          if (matchedHasData) {
-            nextCounts[objectId] = matchedFamilyWithData?.overall?.unique_retrieved_days ?? 0;
-            // Expose the family's core_hashes for scoped delete/download.
-            nextMatchedCoreHashes[objectId] = Array.isArray(matchedFamilyWithData?.member_core_hashes)
-              ? matchedFamilyWithData!.member_core_hashes
-              : [];
+            if (matchedHasData) {
+              nextCounts[objectId] = matchedFamilyWithData?.overall?.unique_retrieved_days ?? 0;
+              nextMatchedCoreHashes[objectId] = Array.isArray(matchedFamilyWithData?.member_core_hashes)
+                ? matchedFamilyWithData!.member_core_hashes
+                : [];
+            } else {
+              nextCounts[objectId] = source.unique_retrieved_days ?? 0;
+              nextMatchedCoreHashes[objectId] = [];
+            }
           } else {
-            // If we have history but current signature does not match, do NOT show 0.
-            nextCounts[objectId] = overallAll.unique_retrieved_days ?? 0;
+            // Env-aware mode: current signature doesn't match any family → 0
+            nextInventories[objectId] = {
+              has_data: false, param_id: dbParamId,
+              earliest: null, latest: null, row_count: 0,
+              unique_days: 0, unique_slices: 0, unique_hashes: 0, unique_retrievals: 0,
+            };
+            nextCounts[objectId] = 0;
             nextMatchedCoreHashes[objectId] = [];
           }
         } else {
@@ -409,7 +420,7 @@ export function useSnapshotsMenu(objectIds: string[], options: UseSnapshotsMenuO
     } catch (error) {
       console.error('[useSnapshotsMenu] Failed to fetch inventory:', error);
     }
-  }, [repo, branch, ids.join(',')]);
+  }, [repo, branch, ids.join(','), callerSignatures]);
 
   useEffect(() => {
     if (!autoFetch) return;

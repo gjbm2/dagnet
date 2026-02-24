@@ -1351,5 +1351,123 @@ describe('UpdateManager - Graph-to-Graph Updates', () => {
       expect(result.deletedEdgeCount).toBe(2);
     });
   });
+
+  // ============================================================
+  // TEST SUITE 11: Cascade Default Connection
+  // ============================================================
+
+  describe('cascadeDefaultConnection', () => {
+    it('should write defaultConnection to non-overridden param slots', () => {
+      const graph = {
+        defaultConnection: 'amplitude',
+        edges: [
+          { id: 'e1', p: { mean: 0.5 }, cost_gbp: { mean: 10 }, labour_cost: { mean: 5 } },
+        ],
+      };
+
+      const changed = updateManager.cascadeDefaultConnection(graph);
+
+      expect(graph.edges[0].p.connection).toBe('amplitude');
+      expect(graph.edges[0].cost_gbp.connection).toBe('amplitude');
+      expect(graph.edges[0].labour_cost.connection).toBe('amplitude');
+      expect(changed).toBe(3);
+    });
+
+    it('should not overwrite param slots where connection_overridden is true', () => {
+      const graph = {
+        defaultConnection: 'amplitude',
+        edges: [
+          {
+            id: 'e1',
+            p: { mean: 0.5, connection: 'sheets-readonly', connection_overridden: true },
+            cost_gbp: { mean: 10 },
+          },
+        ],
+      };
+
+      const changed = updateManager.cascadeDefaultConnection(graph);
+
+      expect(graph.edges[0].p.connection).toBe('sheets-readonly');
+      expect(graph.edges[0].cost_gbp.connection).toBe('amplitude');
+      expect(changed).toBe(1);
+    });
+
+    it('should set connection to undefined when defaultConnection is unset', () => {
+      const graph = {
+        defaultConnection: undefined,
+        edges: [
+          { id: 'e1', p: { mean: 0.5, connection: 'amplitude' } },
+        ],
+      };
+
+      const changed = updateManager.cascadeDefaultConnection(graph);
+
+      expect(graph.edges[0].p.connection).toBeUndefined();
+      expect(changed).toBe(1);
+    });
+
+    it('should return 0 when all slots already match the default', () => {
+      const graph = {
+        defaultConnection: 'amplitude',
+        edges: [
+          { id: 'e1', p: { mean: 0.5, connection: 'amplitude' } },
+        ],
+      };
+
+      const changed = updateManager.cascadeDefaultConnection(graph);
+
+      expect(changed).toBe(0);
+    });
+
+    it('should skip param slots that do not exist on an edge', () => {
+      const graph = {
+        defaultConnection: 'amplitude',
+        edges: [
+          { id: 'e1', p: { mean: 0.5 } },
+        ],
+      };
+
+      const changed = updateManager.cascadeDefaultConnection(graph);
+
+      expect(graph.edges[0].p.connection).toBe('amplitude');
+      expect(graph.edges[0].cost_gbp).toBeUndefined();
+      expect(graph.edges[0].labour_cost).toBeUndefined();
+      expect(changed).toBe(1);
+    });
+
+    it('should handle graph with no edges', () => {
+      const graph = { defaultConnection: 'amplitude', edges: [] };
+
+      const changed = updateManager.cascadeDefaultConnection(graph);
+
+      expect(changed).toBe(0);
+    });
+
+    it('should handle graph with missing edges array', () => {
+      const graph = { defaultConnection: 'amplitude' } as any;
+
+      const changed = updateManager.cascadeDefaultConnection(graph);
+
+      expect(changed).toBe(0);
+    });
+
+    it('should cascade across multiple edges with mixed override states', () => {
+      const graph = {
+        defaultConnection: 'amplitude',
+        edges: [
+          { id: 'e1', p: { mean: 0.5 } },
+          { id: 'e2', p: { mean: 0.3, connection: 'old-conn' } },
+          { id: 'e3', p: { mean: 0.2, connection: 'sheets-readonly', connection_overridden: true } },
+        ],
+      };
+
+      const changed = updateManager.cascadeDefaultConnection(graph);
+
+      expect(graph.edges[0].p.connection).toBe('amplitude');
+      expect(graph.edges[1].p.connection).toBe('amplitude');
+      expect(graph.edges[2].p.connection).toBe('sheets-readonly');
+      expect(changed).toBe(2);
+    });
+  });
 });
 

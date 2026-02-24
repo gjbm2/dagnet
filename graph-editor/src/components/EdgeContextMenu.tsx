@@ -30,6 +30,7 @@ import { fileRegistry } from '../contexts/TabContext';
 import { dataOperationsService } from '../services/dataOperationsService';
 import { signatureLinksTabService } from '../services/signatureLinksTabService';
 import { useNavigatorContext } from '../contexts/NavigatorContext';
+import { computeCurrentSignatureForEdge } from '../services/snapshotRetrievalsService';
 import toast from 'react-hot-toast';
 
 interface EdgeContextMenuProps {
@@ -198,11 +199,35 @@ export const EdgeContextMenu: React.FC<EdgeContextMenuProps> = ({
   // Get all data operation sections using single source of truth
   const dataOperationSections = getAllDataSections(null, edgeId, graph);
   
-  // Snapshot menu hook - inventory + delete + download
-  const parameterObjectIds = dataOperationSections
-    .filter(s => s.objectType === 'parameter')
-    .map(s => s.objectId);
-  const { snapshotCounts, matchedCoreHashes, deleteSnapshots, downloadSnapshotData } = useSnapshotsMenu(parameterObjectIds);
+  // Snapshot menu hook - inventory + delete + download (env-aware via live signatures)
+  const parameterSections = dataOperationSections.filter(s => s.objectType === 'parameter');
+  const parameterObjectIds = parameterSections.map(s => s.objectId);
+  const [currentSignatures, setCurrentSignatures] = useState<Record<string, string>>({});
+  useEffect(() => {
+    const workspace = navState.selectedRepo
+      ? { repository: navState.selectedRepo, branch: navState.selectedBranch || 'main' }
+      : undefined;
+    const dsl = currentDSL || '';
+    let cancelled = false;
+    (async () => {
+      const sigs: Record<string, string> = {};
+      for (const section of parameterSections) {
+        if (cancelled) return;
+        try {
+          const result = await computeCurrentSignatureForEdge({
+            graph, edgeId: section.targetId, effectiveDSL: dsl, workspace,
+          });
+          if (result) sigs[section.objectId] = result.signature;
+        } catch { /* skip on error */ }
+      }
+      if (!cancelled) setCurrentSignatures(sigs);
+    })();
+    return () => { cancelled = true; };
+  }, [edgeId, graph, currentDSL, navState.selectedRepo, navState.selectedBranch]);
+  const { snapshotCounts } = useSnapshotsMenu(
+    parameterObjectIds,
+    { currentSignatures },
+  );
   
   // Centralized fetch hook - all fetch operations go through this
   // CRITICAL: Uses graphStore.currentDSL as AUTHORITATIVE source, NOT graph.currentQueryDSL!
@@ -744,8 +769,6 @@ export const EdgeContextMenu: React.FC<EdgeContextMenuProps> = ({
               onClearDataFile={handleSectionClearDataFile}
               onOpenFile={handleSectionOpenFile}
               snapshotCount={section.objectType === 'parameter' ? snapshotCounts[section.objectId] : undefined}
-              onDownloadSnapshotData={section.objectType === 'parameter' ? (s) => { void downloadSnapshotData(s.objectId, matchedCoreHashes[s.objectId]); onClose(); } : undefined}
-              onDeleteSnapshots={section.objectType === 'parameter' ? (s) => { void deleteSnapshots(s.objectId, matchedCoreHashes[s.objectId]); onClose(); } : undefined}
               onManageSnapshots={section.objectType === 'parameter' ? (s) => {
                 void openSnapshotManagerForEdge({
                   edgeId: s.targetId,

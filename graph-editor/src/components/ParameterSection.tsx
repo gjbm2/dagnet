@@ -276,7 +276,11 @@ export function ParameterSection({
           });
         }}
           onOverriddenChange={(overridden) => {
-            onUpdate({ connection_overridden: overridden });
+            if (overridden) {
+              onUpdate({ connection_overridden: true });
+            } else {
+              onUpdate({ connection_overridden: false, connection: graph.defaultConnection || undefined });
+            }
           }}
           label="External Data Source"
           disabled={disabled}

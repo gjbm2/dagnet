@@ -36,6 +36,10 @@ export function useOpenSnapshotManagerForEdge(args: {
       slot: input.slot,
     });
 
+    const edge: any = args.graph?.edges?.find((e: any) => e?.uuid === input.edgeId || e?.id === input.edgeId);
+    const connectionName =
+      edge?.p?.connection || edge?.cost_gbp?.connection || edge?.labour_cost?.connection || undefined;
+
     await signatureLinksTabService.openSignatureLinksTab({
       graphId: bareGraphId,
       graphName: bareGraphId,
@@ -44,6 +48,8 @@ export function useOpenSnapshotManagerForEdge(args: {
       paramSlot: input.slot,
       currentCoreHash: computed?.coreHash,
       desiredQueryMode: desiredQueryMode === 'unknown' ? undefined : desiredQueryMode,
+      edgeId: input.edgeId,
+      connectionName,
     });
   }, [
     args.graph,

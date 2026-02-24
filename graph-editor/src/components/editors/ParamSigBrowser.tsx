@@ -64,11 +64,16 @@ interface ParamListPanelProps {
   graphItems?: Array<{ id: string }>;
   selectedGraphName?: string | null;
   onGraphChange?: (name: string | null) => void;
+  /** Connection selector — rendered below graph selector when provided. */
+  availableConnections?: string[];
+  selectedConnection?: string | null;
+  onConnectionChange?: (name: string | null) => void;
 }
 
 export const ParamListPanel: React.FC<ParamListPanelProps> = ({
   browser: b, label, workspacePrefix, navigatorParams, graphParamIds, dbParams,
   graphItems, selectedGraphName, onGraphChange,
+  availableConnections, selectedConnection, onConnectionChange,
 }) => {
   const noSigParams = navigatorParams
     .filter((np) => !dbParams.some((dp) => dp.param_id === np.dbId))
@@ -93,6 +98,19 @@ export const ParamListPanel: React.FC<ParamListPanelProps> = ({
             <option value="">All graphs</option>
             {graphItems.map((g) => (
               <option key={g.id} value={g.id}>{g.id}</option>
+            ))}
+          </select>
+        )}
+        {availableConnections && availableConnections.length > 0 && onConnectionChange && (
+          <select
+            className="sig-filter-select"
+            value={selectedConnection ?? ''}
+            onChange={(e) => onConnectionChange(e.target.value || null)}
+            style={{ marginTop: 4, width: '100%', boxSizing: 'border-box' }}
+          >
+            <option value="">Connection (default)</option>
+            {availableConnections.map((c) => (
+              <option key={c} value={c}>{c}</option>
             ))}
           </select>
         )}
@@ -165,6 +183,10 @@ interface Props {
   graphItems?: Array<{ id: string }>;
   selectedGraphName?: string | null;
   onGraphChange?: (name: string | null) => void;
+  /** Connection selector props — threaded to ParamListPanel. */
+  availableConnections?: string[];
+  selectedConnection?: string | null;
+  onConnectionChange?: (name: string | null) => void;
 }
 
 // ─── Component ───────────────────────────────────────────────────────────────
@@ -184,6 +206,9 @@ export const ParamSigBrowser: React.FC<Props> = ({
   graphItems,
   selectedGraphName,
   onGraphChange,
+  availableConnections,
+  selectedConnection,
+  onConnectionChange,
 }) => {
   const isPrimary = variant === 'primary';
 
@@ -229,6 +254,9 @@ export const ParamSigBrowser: React.FC<Props> = ({
               graphItems={graphItems}
               selectedGraphName={selectedGraphName}
               onGraphChange={onGraphChange}
+              availableConnections={availableConnections}
+              selectedConnection={selectedConnection}
+              onConnectionChange={onConnectionChange}
             />
           </div>
           <div

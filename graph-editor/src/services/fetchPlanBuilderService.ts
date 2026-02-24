@@ -579,6 +579,43 @@ function buildParameterPlanItem(
     staleDates,
     notes
   );
+
+  // Completeness rule for daily aggregates:
+  // A day D can only be considered "complete" if it was retrieved on a *later* calendar day.
+  //
+  // This is critical for non-latency params (gaps_only), where header-based coverage would otherwise
+  // permanently lock in partial-day results from early-morning automated runs.
+  if (refetchDecision.type === 'gaps_only' && existingSlice && !refetchDecision.cooldownApplied) {
+    // IMPORTANT: Only apply this rule when we have an explicit retrieval timestamp.
+    //
+    // We deliberately do NOT fall back to window_to/cohort_to here because those fields are
+    // "data coverage" boundaries, not evidence of when the data was actually fetched. Using them
+    // would incorrectly classify many fixtures (and some file-only values) as incomplete.
+    const retrievalStamp = existingSlice.data_source?.retrieved_at;
+
+    if (retrievalStamp) {
+      try {
+        const retrievedDay = normalizeDate(retrievalStamp); // UK date for the UTC calendar day of retrieval
+        const retrievedDayMs = parseDate(retrievedDay).getTime();
+
+        let marked = 0;
+        for (const d of generateDatesInRange(window.start, window.end)) {
+          if (missingDates.has(d)) continue;
+          const dayMs = parseDate(d).getTime();
+          if (dayMs >= retrievedDayMs) {
+            staleDates.add(d);
+            marked++;
+          }
+        }
+
+        if (marked > 0) {
+          notes.push(`Incomplete-day refetch: retrieved_on=${retrievedDay} marks ${marked}d stale`);
+        }
+      } catch {
+        // Best-effort only: if parsing fails, do not force refetch.
+      }
+    }
+  }
   
   // Merge missing + stale into fetch set F
   const fetchDates = new Set<string>([...missingDates, ...staleDates]);

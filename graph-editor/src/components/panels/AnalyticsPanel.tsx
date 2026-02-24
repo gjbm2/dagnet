@@ -265,11 +265,16 @@ export default function AnalyticsPanel({ tabId, hideHeader = false }: AnalyticsP
       return constructQueryDSL(selectedNodeIds, nodes as any[], edges as any[]);
     }
 
-    // Single edge selected (no nodes): derive from(A).to(B)
+    // Single edge selected (no nodes): use edge.query if present (includes
+    // exclude/visited clauses needed to identify the specific path), else
+    // fall back to from(A).to(B).
     if (selectedEdgeUuids.length === 1) {
       const edgeUuid = selectedEdgeUuids[0];
       const graphEdge = edges.find((e: any) => e.uuid === edgeUuid || e.id === edgeUuid);
       if (graphEdge) {
+        if ((graphEdge as any).query) {
+          return (graphEdge as any).query;
+        }
         const fromUuid = (graphEdge as any).from || (graphEdge as any).source;
         const toUuid = (graphEdge as any).to || (graphEdge as any).target;
         const fromNode = nodes.find((n: any) => n.uuid === fromUuid || n.id === fromUuid);

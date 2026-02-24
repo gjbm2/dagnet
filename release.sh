@@ -115,7 +115,7 @@ if [[ "$RUN_TESTS" == true ]]; then
   print_yellow "[2/3] Running Playwright E2E tests..."
   # Keep Playwright output readable during release runs.
   # To re-enable verbose per-test logs: E2E_VERBOSE=1 ./release.sh --runtests
-  if ! (cd graph-editor && E2E_VERBOSE=0 npm run e2e); then
+  if ! (cd graph-editor && E2E_VERBOSE=0 npm run e2e -- --workers=2); then
     echo ""
     print_red "✗ Playwright tests failed!"
     print_red "Release aborted."
