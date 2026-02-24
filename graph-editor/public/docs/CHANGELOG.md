@@ -1,4 +1,11 @@
 # DagNet Release Notes
+## Version 1.6.3b
+**Released:** 24-Feb-26
+
+Fixes to data historic logic
+
+---
+
 ## Version 1.6.1b
 **Released:** 14-Feb-26
 
