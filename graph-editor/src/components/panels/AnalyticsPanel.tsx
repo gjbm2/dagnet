@@ -33,6 +33,7 @@ import CollapsibleSection from '../CollapsibleSection';
 import { AnalysisResultCards } from '../analytics/AnalysisResultCards';
 import { checkBridgeStatus, createAmplitudeDraft } from '../../services/amplitudeBridgeService';
 import { buildAmplitudeFunnelDefinition } from '../../services/amplitudeFunnelBuilderService';
+import { parseDSL } from '../../lib/queryDSL';
 import { AmplitudeBridgeInstallModal } from '../modals/AmplitudeBridgeInstallModal';
 import { sessionLogService } from '../../services/sessionLogService';
 import { IndexedDBConnectionProvider } from '../../lib/das/IndexedDBConnectionProvider';
@@ -861,8 +862,7 @@ export default function AnalyticsPanel({ tabId, hideHeader = false }: AnalyticsP
     setAmplitudeLoading(true);
     const logOpId = sessionLogService.startOperation(
       'info', 'amplitude', 'AMP_FUNNEL_EXPORT',
-      `Opening funnel in Amplitude (${selectedNodeIds.length} nodes)`,
-      { filesAffected: selectedNodeIds },
+      `Opening funnel in Amplitude`,
     );
     try {
       const status = await checkBridgeStatus();
@@ -873,17 +873,36 @@ export default function AnalyticsPanel({ tabId, hideHeader = false }: AnalyticsP
       }
       sessionLogService.addChild(logOpId, 'info', 'AMP_BRIDGE_OK', `Bridge v${status.version || '?'} detected`);
 
-      if (!graph || selectedNodeIds.length === 0) {
-        sessionLogService.endOperation(logOpId, 'warning', 'No nodes selected');
-        alert('Select at least one node on the graph.');
+      if (!graph) {
+        sessionLogService.endOperation(logOpId, 'warning', 'No graph');
+        alert('No graph is open.');
         return;
       }
 
-      // Resolve Amplitude connection from edges touching the selected nodes.
+      // Determine funnel steps: from explicit node selection, or from the analytics DSL
+      // (which is auto-generated from edge selection: clicking an edge produces from(A).to(B))
+      let funnelNodeIds = [...selectedNodeIds];
+      if (funnelNodeIds.length === 0 && queryDSL.trim()) {
+        // Parse from/to/visited from the analytics DSL to get funnel steps
+        const parsed = parseDSL(queryDSL);
+        const dslNodes: string[] = [];
+        if (parsed.from) dslNodes.push(parsed.from);
+        if (parsed.visited?.length) dslNodes.push(...parsed.visited);
+        if (parsed.to) dslNodes.push(parsed.to);
+        funnelNodeIds = dslNodes;
+      }
+
+      if (funnelNodeIds.length === 0) {
+        sessionLogService.endOperation(logOpId, 'warning', 'No nodes or edge selected');
+        alert('Select nodes or an edge on the graph.');
+        return;
+      }
+
+      // Resolve Amplitude connection from edges touching the funnel nodes.
       // Each edge may specify a connection (edge.p.connection); fall back to graph.defaultConnection.
       const connProvider = new IndexedDBConnectionProvider();
       const graphDefaultConn = (graph as any).defaultConnection || '';
-      const selectedNodeSet = new Set(selectedNodeIds);
+      const selectedNodeSet = new Set(funnelNodeIds);
 
       // Collect connection names from edges that touch selected nodes
       const edgeConnections: string[] = [];
@@ -985,7 +1004,7 @@ export default function AnalyticsPanel({ tabId, hideHeader = false }: AnalyticsP
 
       // Build the full funnel definition with all constraints
       const buildResult = await buildAmplitudeFunnelDefinition({
-        selectedNodeIds,
+        selectedNodeIds: funnelNodeIds,
         graphNodes: graph.nodes || [],
         graphEdges: graph.edges || [],
         effectiveDsl,

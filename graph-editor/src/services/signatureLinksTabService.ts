@@ -48,10 +48,13 @@ export class SignatureLinksTabService {
 
       // Ensure hash-mappings file exists (seeded at init or pulled from repo).
       // If somehow missing (e.g. fresh app before first pull), seed an empty one.
-      const existing = fileRegistry.getFile(FILE_ID);
+      let existing = fileRegistry.getFile(FILE_ID);
       if (!existing) {
         const { seedHashMappingsFile } = await import('../init/seedHashMappings');
         await seedHashMappingsFile();
+        // seedHashMappingsFile writes to IDB but not the in-memory registry.
+        // Restore so that addViewTab, type resolution, and the editor all work.
+        existing = await fileRegistry.restoreFile(FILE_ID) ?? undefined;
       }
 
       // If the tab already exists, switch to it and push context via event
