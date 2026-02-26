@@ -1906,9 +1906,7 @@ function MainAppShellContent() {
                     lineHeight: 1.4,
                   }}
                 >
-                  Enter the initialization secret provided in your deployment configuration. If it matches the
-                  server&apos;s <code>INIT_CREDENTIALS_SECRET</code>, DagNet will load credentials from
-                  <code> INIT_CREDENTIALS_JSON</code> and apply them as <code>credentials.yaml</code>.
+                  Enter the shared secret you were given to connect to this DagNet instance.
                 </p>
               </div>
               <div

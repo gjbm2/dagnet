@@ -18,6 +18,7 @@ import { ShareLinkModal } from '../modals/ShareLinkModal';
 import { SwitchBranchModal } from '../modals/SwitchBranchModal';
 import { APP_VERSION } from '../../version';
 import { useHealthStatus } from '../../hooks/useHealthStatus';
+import { GitHubOAuthChip } from '../../hooks/useGitHubOAuthChip';
 import './MenuBar.css';
 
 /**
@@ -52,6 +53,7 @@ export function MenuBarComponent() {
       </Menubar.Root>
       <div className="dagnet-right-controls">
         <DevConsoleMirrorControls />
+        <GitHubOAuthChip />
         <div
           className="menubar-branch-indicator"
           title={`${navState.selectedRepo || 'repo'} / ${navState.selectedBranch || 'main'}\nClick to switch branch`}
