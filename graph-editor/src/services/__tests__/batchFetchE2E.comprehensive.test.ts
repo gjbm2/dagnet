@@ -16,7 +16,7 @@
  * @vitest-environment node
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // =============================================================================
 // MOCKS - Must be defined BEFORE imports
@@ -280,8 +280,18 @@ function createDiamondGraph(options: {
 describe('Comprehensive Batch Fetch E2E Tests', () => {
 
   beforeEach(() => {
+    // Pin the clock so cohort ages stay deterministic.
+    // All test data uses Nov-25 dates; anchoring to 25-Nov-25 keeps ages small
+    // and avoids the recency-weighted totalK drifting below LATENCY_MIN_FIT_CONVERTERS.
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2025-11-25T00:00:00Z'));
+
     clearMockFiles();
     vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   // ===========================================================================
