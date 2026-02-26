@@ -1,10 +1,12 @@
 /**
  * GitHub OAuth Service — client-side OAuth flow for GitHub App user authorisation.
  *
- * Handles initiating the OAuth redirect and processing the return.
- * Token storage is handled by the caller (AppShell) using the existing
- * credentials file infrastructure.
+ * Handles initiating the OAuth redirect, processing the return,
+ * and persisting the token into the credentials file in IndexedDB.
  */
+
+import { db } from '../db/appDatabase';
+import { credentialsManager } from '../lib/credentials';
 
 const OAUTH_STATE_KEY = 'dagnet_oauth_state';
 const OAUTH_REPO_KEY = 'dagnet_oauth_repo';
@@ -94,6 +96,42 @@ export function isOAuthEnabled(): boolean {
     return new URLSearchParams(window.location.search).has('oauth');
   }
   return false;
+}
+
+/**
+ * Persist an OAuth token into the credentials file in IndexedDB.
+ * Updates only the git entry matching `repoName`; other entries are untouched.
+ *
+ * @returns true if the token was written, false if it couldn't be (missing file, no matching entry).
+ */
+export async function applyOAuthToken(data: OAuthReturnData): Promise<boolean> {
+  const { token, username, repoName } = data;
+  if (!token || !repoName) return false;
+
+  const credentialsFileId = 'credentials-credentials';
+  const credentialsFile = await db.files.get(credentialsFileId);
+
+  if (!credentialsFile?.data?.git) {
+    console.error('[githubOAuth] No credentials file found in IDB');
+    return false;
+  }
+
+  const gitEntry = credentialsFile.data.git.find(
+    (cred: any) => cred.name === repoName
+  );
+
+  if (!gitEntry) {
+    console.error(`[githubOAuth] No git entry found for repo: ${repoName}`);
+    return false;
+  }
+
+  gitEntry.token = token;
+  if (username) gitEntry.userName = username;
+
+  await db.files.put(credentialsFile);
+  credentialsManager.clearCache();
+
+  return true;
 }
 
 function cleanOAuthParams(): void {
