@@ -18,6 +18,7 @@ import { workspaceService } from '../../services/workspaceService';
 import type { MergeConflict } from '../../services/workspaceService';
 import { gitService } from '../../services/gitService';
 import { credentialsManager } from '../../lib/credentials';
+import { startOAuthFlow, isOAuthEnabled } from '../../services/githubOAuthService';
 import toast from 'react-hot-toast';
 import YAML from 'yaml';
 import type { ObjectType } from '../../types';
@@ -40,7 +41,21 @@ export function RepositoryMenu() {
   const { showConfirm } = useDialog();
   const { handleCommitFiles: commitFiles } = useCommitHandler();
   const isReadOnly = useIsReadOnly();
-  
+  const oauthEnabled = isOAuthEnabled();
+
+  const [connectedUser, setConnectedUser] = useState<string | null>(null);
+  React.useEffect(() => {
+    const check = async () => {
+      if (!state.selectedRepo) { setConnectedUser(null); return; }
+      const result = await credentialsManager.loadCredentials();
+      const gitCreds = result.credentials?.git?.find((c: any) => c.name === state.selectedRepo);
+      const token = gitCreds?.token || '';
+      // A token starting with "ghu_" is a GitHub App user token (from our OAuth flow)
+      setConnectedUser(token.startsWith('ghu_') ? (gitCreds?.userName || null) : null);
+    };
+    check();
+  }, [state.selectedRepo, isReadOnly]);
+
   const [isSwitchRepoModalOpen, setIsSwitchRepoModalOpen] = useState(false);
   const [isSwitchBranchModalOpen, setIsSwitchBranchModalOpen] = useState(false);
   const [isNewBranchModalOpen, setIsNewBranchModalOpen] = useState(false);
@@ -171,7 +186,44 @@ export function RepositoryMenu() {
       <Menubar.Menu>
         <Menubar.Trigger className="menubar-trigger" title={isReadOnly ? 'Read-only mode (no GitHub token)' : undefined}>
           Repository
-          {isReadOnly && (
+          {oauthEnabled && connectedUser && (
+            <span style={{
+              marginLeft: '4px',
+              fontSize: '9px',
+              padding: '1px 4px',
+              borderRadius: '3px',
+              background: '#d1fae5',
+              color: '#065f46',
+              fontWeight: 500
+            }}>
+              @{connectedUser}
+            </span>
+          )}
+          {oauthEnabled && !connectedUser && isReadOnly && (
+            <span
+              style={{
+                marginLeft: '4px',
+                fontSize: '9px',
+                padding: '1px 4px',
+                borderRadius: '3px',
+                background: '#fef3c7',
+                color: '#92400e',
+                fontWeight: 500,
+                cursor: 'pointer',
+              }}
+              title="Click to connect your GitHub account for write access"
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                if (state.selectedRepo) {
+                  startOAuthFlow(state.selectedRepo);
+                }
+              }}
+            >
+              read-only 🔗
+            </span>
+          )}
+          {!oauthEnabled && isReadOnly && (
             <span style={{ 
               marginLeft: '4px', 
               fontSize: '9px', 

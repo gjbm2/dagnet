@@ -1,8 +1,9 @@
 # Git Authentication: Per-User OAuth Design
 
-**Status:** In progress — A0 complete, starting A1
+**Status:** In progress — A0 + A1 complete, starting A2
 **Date:** 24-Feb-26
 **GitHub App:** `dagnet-vercel` (App ID 2955768, Client ID `Iv23liF1oQ3LM14TiZ7A`)
+**A1 verified:** Full OAuth round trip working on production (auth-callback + auth-status deployed, token exchange + redirect confirmed)
 
 ## Problem
 
@@ -83,10 +84,8 @@ After the user has initialised with base credentials (step 4 above), a "Connect 
 4. GitHub redirects to the Vercel serverless callback with a temporary `code`
 5. Serverless function exchanges the code for an access token (server-side, client secret never exposed)
 6. Serverless function redirects back to DagNet with the token (via URL parameter or `postMessage`)
-7. Client stores the OAuth token in IndexedDB under a separate key (e.g. `github-oauth-token`)
-8. Client optionally fetches `GET /user` to display the connected GitHub username
-
-On subsequent loads, the credential manager checks for the OAuth token and overlays it onto the base git config.
+7. Client writes the OAuth token and username directly into the existing credentials file (`git[0].token` and `git[0].userName`), then triggers a credential reload
+8. On subsequent loads, the credentials file already contains the user's OAuth token — no special handling needed
 
 ### Serverless Callback Function
 
@@ -100,24 +99,19 @@ Responsibilities:
 
 The client secret (`GITHUB_OAUTH_CLIENT_SECRET`) lives only in the Vercel env — never sent to the browser.
 
-### Token Storage and Credential Merging
+### Token Storage
 
-The OAuth token is stored **separately** from the base credentials in IndexedDB — not inside the credentials.yaml file. This keeps the base config (repo identity, paths, providers) cleanly separated from the per-user auth token.
+The OAuth token is written directly into the existing credentials file (`credentials-credentials` in IndexedDB), updating the `token` and `userName` fields on the **currently selected repo's** git entry. Other repos in the credentials file are unaffected. No separate storage, no merging logic, no changes to `credentialsManager`. The existing credential loading path works unchanged.
 
-On credential load, `credentialsManager` would:
+The "read-only 🔗" chip is **repo-aware** — it reflects whether the currently selected repo has an OAuth token or the shared PAT. Switching repos may change the chip state.
 
-1. Load base credentials from IndexedDB (as today)
-2. Check for `github-oauth-token` in IndexedDB
-3. If present, overlay it onto `git[0].token` and set `userName` from the stored GitHub username
-4. Return the merged credentials
-
-This means the base config is never mutated. Disconnecting GitHub is simply deleting the `github-oauth-token` entry.
+Disconnecting means the user re-initialises from the shared secret (same flow as first-time setup), which replaces the entire credentials file with the base config including shared tokens for all repos.
 
 ### Token Characteristics
 
 - **Permissions:** Fine-grained — only Contents read/write on repos where the app is installed (much narrower than an OAuth App's broad `repo` scope)
 - **Lifetime:** With "Expire user authorisation tokens" unchecked on the GitHub App, tokens don't expire unless the user revokes them or they go unused for 1 year
-- **Storage:** IndexedDB, per-browser — clearing browser data requires re-authentication
+- **Storage:** Written into the existing credentials file in IndexedDB (`git[0].token`), per-browser — clearing browser data requires re-authentication
 - **Attribution:** Commits made with the user's token are attributed to their GitHub identity
 
 ## Two-Tier Access Model
@@ -150,7 +144,7 @@ The plan is structured around two principles:
 
 ### Macro-phase structure
 
-**Macro A — "Connect GitHub" as optional capability.** Additive. Existing users unaffected. The shared full-access PAT remains. OAuth is an opt-in overlay for users who want their own identity and (eventually) their own write access. Shipped behind a feature flag, validated on production, then flag removed.
+**Macro A — "Connect GitHub" as optional capability.** Additive. Existing users unaffected. The shared full-access PAT remains. OAuth is opt-in — users who connect get their personal token written into the credentials file, replacing the shared token. Shipped behind a feature flag, validated on production, then flag removed.
 
 **Macro B — Cutover to read-only base token.** Breaking change. Swap the shared PAT to read-only, force migration for existing users, revoke old PAT. Only attempted after Macro A is stable in production.
 
@@ -282,6 +276,7 @@ If any step fails, fix the GitHub App config before proceeding. **Do not write c
 
 Set these **now**, for both Preview and Production scopes. They're inert until the callback function is deployed. Setting them now avoids a "forgot to set the env var" redeploy cycle later. No other env vars change — `VITE_INIT_CREDENTIALS_JSON` keeps the existing full-access PAT throughout all of Macro A.
 
+
 ---
 
 ### A1. Callback + bare round trip (one deploy to preview)
@@ -338,23 +333,18 @@ Exports a `GET` handler returning JSON indicating which OAuth env vars are prese
 
 #### Build
 
-**Token storage** (`appDatabase.ts`): dedicated IndexedDB entry for the OAuth token and GitHub username, separate from `credentials-credentials`.
+**OAuth return handler** (`AppShell.tsx` or dedicated component): on app load, check URL for `?github_token=...&github_user=...&state=...` params from the callback. Validate `state` against `sessionStorage`. Write the token and username into the **currently selected repo's** git entry in the credentials file (matching by repo name), using the same `fileRegistry` pattern as the init-from-secret flow. Clean URL via `replaceState`. Trigger credential reload via `navOperations.reloadCredentials()`. No changes to `credentialsManager` or `appDatabase`.
 
-**Credential merging** (`credentials.ts`): after loading base credentials from IndexedDB, check for the OAuth token entry. If present, overlay it onto `git[0].token` and set `userName`. Base config is never mutated.
-
-**OAuth return handler** (`AppShell.tsx` or dedicated component): on app load, check URL for token/username/state params. Validate `state` against `sessionStorage`. Store token in IndexedDB. Clean URL via `replaceState`. Trigger credential reload.
-
-**OAuth trigger** (`githubOAuthService.ts`): `startOAuthFlow()` generates `state`, stores in `sessionStorage`, redirects to GitHub.
+**OAuth trigger** (`githubOAuthService.ts`): `startOAuthFlow()` generates `state`, stores in `sessionStorage`, redirects to GitHub's authorize URL using `VITE_GITHUB_OAUTH_CLIENT_ID` from env.
 
 **Menu bar chip** (`RepositoryMenu.tsx` / `MenuBar.tsx`): "read-only 🔗" (clickable amber chip, tooltip: "Click to connect your GitHub account for write access") when no OAuth token. "@username" when connected; click opens popover with "Disconnect GitHub." Replaces the existing passive "read-only" badge.
 
-**Credentials form banner**: banner at top of credentials editor when no OAuth token.
+**Disconnect**: user re-initialises from the shared secret (same as first-time setup), which replaces the credentials file with the base config including the shared token. No new code needed.
 
-**Post-init toast**: one-time toast after first secret-based init, pointing to the menu bar chip.
-
-**Disconnect**: deletes OAuth token from IndexedDB, reloads credentials, chip reverts.
-
-**Non-collaborator handling**: catch 403 on push/commit, show clear message.
+**Deferred to post-A2 polish (not blocking core flow):**
+- Credentials form banner (banner at top of credentials editor when no OAuth token)
+- Post-init toast (one-time toast after first secret-based init, pointing to the chip)
+- Non-collaborator 403 handling (errors already surface via git API error messages; a friendlier message can be added later)
 
 Feature-flag all new UI behind `?oauth=1` URL param.
 
@@ -533,7 +523,7 @@ If any read endpoint fails, fix the PAT scope before proceeding.
 |---|---|---|
 | A0 | None | GitHub App + env vars verified via `curl`, no code |
 | A1 | Preview (1 deploy) | Serverless callback + bare round trip |
-| A2 | Preview (1 deploy) | Full wiring: OAuth → token → credential merge → git ops |
+| A2 | Preview (1 deploy) | Full wiring: OAuth → token into credentials → git ops |
 | A3 | Production (1 deploy) | Same as A2, on real domain, behind FF |
 | A4 | None | Deployment guide written, README updated |
 | A5 | Production (1 deploy) | Remove FF — OAuth live for all users |
@@ -555,15 +545,17 @@ If any read endpoint fails, fix the PAT scope before proceeding.
 ## Files Changed Summary
 
 ### Macro A — new files
-- `graph-editor/api/auth-callback.ts` — serverless OAuth callback
-- `graph-editor/api/auth-status.ts` — env var health-check endpoint
-- `graph-editor/src/services/githubOAuthService.ts` — client-side OAuth flow (redirect, token receipt, storage, disconnect)
+- `graph-editor/api/auth-callback.ts` — serverless OAuth callback (done in A1)
+- `graph-editor/api/auth-status.ts` — env var health-check endpoint (done in A1)
+- `graph-editor/src/services/githubOAuthService.ts` — client-side OAuth trigger (`startOAuthFlow()`)
 
 ### Macro A — modified files
-- `graph-editor/src/lib/credentials.ts` — OAuth token overlay in `loadCredentials()`
-- `graph-editor/src/db/appDatabase.ts` — storage for OAuth token and username
 - `graph-editor/src/components/MenuBar/RepositoryMenu.tsx` — "read-only 🔗" / "@username" clickable chip
-- `graph-editor/src/AppShell.tsx` — OAuth return handler, post-init toast
+- `graph-editor/src/AppShell.tsx` — OAuth return handler (write token into credentials file, clean URL, reload creds), post-init toast
+
+### Macro A — unchanged
+- `graph-editor/src/lib/credentials.ts` — no changes needed, token is in the credentials file as before
+- `graph-editor/src/db/appDatabase.ts` — no changes needed, no new tables or schema
 
 ### Macro B — new files
 - `graph-editor/src/components/MigrationModal.tsx` — blocking migration modal

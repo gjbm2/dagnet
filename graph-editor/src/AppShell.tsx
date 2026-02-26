@@ -29,6 +29,7 @@ import { BannerHost } from './components/BannerHost';
 import { layoutService } from './services/layoutService';
 import { dockGroups } from './layouts/defaultLayout';
 import { db } from './db/appDatabase';
+import { credentialsManager } from './lib/credentials';
 import { getObjectTypeTheme } from './theme/objectTypeTheme';
 import { History } from 'lucide-react';
 import { DashboardModeProvider } from './contexts/DashboardModeContext';
@@ -342,6 +343,58 @@ function MainAppShellContent() {
     
     checkCredentials();
   }, [tabs.length, navState.selectedRepo, navState.selectedBranch]);
+
+  // Handle OAuth return — check if this page load is a redirect from the auth callback
+  useEffect(() => {
+    const handleOAuthReturn = async () => {
+      const { consumeOAuthReturn, isOAuthEnabled } = await import('./services/githubOAuthService');
+      if (!isOAuthEnabled()) return;
+
+      const oauthData = consumeOAuthReturn();
+      if (!oauthData) return;
+
+      const { token, username, repoName } = oauthData;
+      if (!token || !repoName) return;
+
+      const credentialsFileId = 'credentials-credentials';
+      const credentialsFile = fileRegistry.getFile(credentialsFileId)
+        || await db.files.get(credentialsFileId);
+
+      if (!credentialsFile?.data?.git) {
+        console.error('[OAuth] No credentials file found to update');
+        return;
+      }
+
+      const gitEntry = credentialsFile.data.git.find(
+        (cred: any) => cred.name === repoName
+      );
+
+      if (!gitEntry) {
+        console.error(`[OAuth] No git entry found for repo: ${repoName}`);
+        return;
+      }
+
+      gitEntry.token = token;
+      if (username) gitEntry.userName = username;
+
+      const existingFile = fileRegistry.getFile(credentialsFileId);
+      if (existingFile) {
+        existingFile.data = credentialsFile.data;
+        existingFile.originalData = structuredClone(credentialsFile.data);
+      }
+      await fileRegistry.markSaved(credentialsFileId);
+
+      credentialsManager.clearCache();
+      await navOperations.reloadCredentials();
+
+      toast.success(`Connected as @${username || 'unknown'}`);
+      sessionLogService.info('git', 'GITHUB_OAUTH_CONNECTED', `Connected GitHub account @${username} for ${repoName}`);
+    };
+
+    handleOAuthReturn().catch(err => {
+      console.error('[OAuth] Failed to handle OAuth return:', err);
+    });
+  }, []);
 
   const handleInitCredentialsFromSecret = async () => {
     if (!initSecret.trim()) {
