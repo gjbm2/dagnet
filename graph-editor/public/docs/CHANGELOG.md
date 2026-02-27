@@ -1,4 +1,11 @@
 # DagNet Release Notes
+## Version 1.6.9b
+**Released:** 27-Feb-26
+
+Upgraded Github credentials management with proper GitHub app integration
+
+---
+
 ## Version 1.6.3b
 **Released:** 24-Feb-26
 
