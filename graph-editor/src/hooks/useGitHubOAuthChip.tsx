@@ -29,7 +29,7 @@ export function GitHubOAuthChip() {
       const result = await credentialsManager.loadCredentials();
       const gitCreds = result.credentials?.git?.find((c: any) => c.name === state.selectedRepo);
       const token = gitCreds?.token || '';
-      setConnectedUser(token.startsWith('ghu_') ? (gitCreds?.userName || null) : null);
+      setConnectedUser(token.startsWith('ghu_') ? (gitCreds?.userName || 'connected') : null);
     };
     check();
   }, [state.selectedRepo, isReadOnly]);

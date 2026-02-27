@@ -236,6 +236,12 @@ export function CommitModal({ isOpen, onClose, onCommit, preselectedFiles = [] }
         onClose();
       }, 1500);
     } catch (error) {
+      if ((error as any)?.name === 'GitAuthError') {
+        const { dispatchGitAuthExpired } = await import('../services/gitService');
+        dispatchGitAuthExpired();
+        onClose();
+        return;
+      }
       setProgress(null);
       setError(error instanceof Error ? error.message : 'Failed to commit changes');
       setIsLoading(false);

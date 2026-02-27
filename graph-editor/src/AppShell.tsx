@@ -218,6 +218,15 @@ function MainAppShellContent() {
     };
   }, []);
 
+  // Auth-expired modal state (triggered by dagnet:gitAuthExpired event)
+  const [showAuthExpiredModal, setShowAuthExpiredModal] = useState(false);
+
+  useEffect(() => {
+    const handleAuthExpired = () => setShowAuthExpiredModal(true);
+    window.addEventListener('dagnet:gitAuthExpired', handleAuthExpired);
+    return () => window.removeEventListener('dagnet:gitAuthExpired', handleAuthExpired);
+  }, []);
+
   // Init-from-secret modal state
   const [showInitCredsModal, setShowInitCredsModal] = useState(false);
   const [initSecret, setInitSecret] = useState('');
@@ -343,7 +352,10 @@ function MainAppShellContent() {
     checkCredentials();
   }, [tabs.length, navState.selectedRepo, navState.selectedBranch]);
 
-  // Handle OAuth return — check if this page load is a redirect from the auth callback
+  // Handle OAuth return — check if this page load is a redirect from the auth callback.
+  // Write the token to IDB then reload the page so the app starts fresh with the new token.
+  // A hot-swap via reloadCredentials() races with NavigatorContext init and leaves the app
+  // in a broken state if the old token has been revoked.
   useEffect(() => {
     const handleOAuthReturn = async () => {
       const { consumeOAuthReturn, applyOAuthToken } = await import('./services/githubOAuthService');
@@ -354,11 +366,11 @@ function MainAppShellContent() {
       const applied = await applyOAuthToken(oauthData);
       if (!applied) return;
 
-      await navOperations.reloadCredentials();
-
-      toast.success(`Connected as @${oauthData.username || 'unknown'}`);
       sessionLogService.info('git', 'GITHUB_OAUTH_CONNECTED',
         `Connected GitHub account @${oauthData.username} for ${oauthData.repoName}`);
+
+      // Full reload — the new token is in IDB, the fresh load will pick it up cleanly.
+      window.location.replace(window.location.origin + window.location.pathname);
     };
 
     handleOAuthReturn().catch(err => {
@@ -1819,6 +1831,76 @@ function MainAppShellContent() {
 
         {/* Safety nudge modals (currently: pull conflict resolution UI) */}
         {stalenessNudgeModals}
+
+        {/* Auth Expired Modal */}
+        {showAuthExpiredModal && (
+          <div
+            style={{
+              position: 'fixed',
+              top: 0, left: 0, right: 0, bottom: 0,
+              background: 'rgba(0,0,0,0.5)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              zIndex: 10000,
+            }}
+          >
+            <div
+              style={{
+                background: 'white',
+                borderRadius: '8px',
+                padding: '32px',
+                maxWidth: '420px',
+                width: '90%',
+                textAlign: 'center',
+              }}
+            >
+              <h3 style={{ margin: '0 0 12px', fontSize: '16px' }}>GitHub credentials expired</h3>
+              <p style={{ margin: '0 0 24px', fontSize: '14px', color: '#4b5563', lineHeight: 1.5 }}>
+                Your saved credentials are no longer valid. Connect your GitHub account to continue syncing.
+              </p>
+              <div style={{ display: 'flex', gap: '12px', justifyContent: 'center' }}>
+                <button
+                  style={{
+                    padding: '8px 20px',
+                    borderRadius: '6px',
+                    border: 'none',
+                    background: '#059669',
+                    color: 'white',
+                    fontWeight: 500,
+                    cursor: 'pointer',
+                    fontSize: '14px',
+                  }}
+                  onClick={() => {
+                    setShowAuthExpiredModal(false);
+                    import('./services/githubOAuthService').then(({ startOAuthFlow }) => {
+                      if (navState.selectedRepo) startOAuthFlow(navState.selectedRepo);
+                    });
+                  }}
+                >
+                  Connect GitHub
+                </button>
+                <button
+                  style={{
+                    padding: '8px 20px',
+                    borderRadius: '6px',
+                    border: '1px solid #d1d5db',
+                    background: 'white',
+                    color: '#374151',
+                    cursor: 'pointer',
+                    fontSize: '14px',
+                  }}
+                  onClick={() => {
+                    setShowAuthExpiredModal(false);
+                    toast('You can reconnect any time via the connect 🔗 chip in the menu bar.', { duration: 5000 });
+                  }}
+                >
+                  Dismiss
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Init Credentials Modal */}
         {showInitCredsModal && (

@@ -64,6 +64,8 @@ This starts the frontend and Python API in split tmux panes.
 | `VITE_GIT_REPO_NAME` | Data repo name (parsed from clone URL) | *(prompted by setup)* |
 | `DB_CONNECTION` | PostgreSQL connection string for snapshot storage | *(optional)* |
 | `VITE_SNAPSHOTS_ENABLED` | Enable snapshot writes | `false` |
+| `VITE_GITHUB_OAUTH_CLIENT_ID` | GitHub App client ID for per-user auth | *(see [auth guide](graph-editor/public/docs/deployment-github-auth.md))* |
+| `GITHUB_OAUTH_CLIENT_SECRET` | GitHub App client secret (server-side only) | *(see [auth guide](graph-editor/public/docs/deployment-github-auth.md))* |
 | `VITE_PORT` | Frontend dev server port | `5173` |
 | `PYTHON_API_PORT` | Python backend port | `9000` |
 | `VITE_PYTHON_API_URL` | Python backend URL (frontend reads this) | `http://localhost:9000` |
@@ -360,6 +362,7 @@ curl http://localhost:9000/api/snapshots/health
 - [Query Expressions](graph-editor/public/docs/query-expressions.md) — query DSL reference
 - [Query Algorithms White Paper](graph-editor/public/docs/query-algorithms-white-paper.md) — MSMDC algorithm
 - [Data Connections & Adapters](graph-editor/public/docs/data-connections.md) — connect to external data sources
+- [GitHub Authentication Setup](graph-editor/public/docs/deployment-github-auth.md) — per-user OAuth for deployers
 - [Contexts](graph-editor/public/docs/contexts.md) — data segmentation by channel, device, browser, etc.
 - [What-If Analysis](graph-editor/public/docs/what-ifs-with-conditionals.md) — scenario modelling
 - [Scenarios](graph-editor/public/docs/scenarios.md) — parameter overlays and A/B testing

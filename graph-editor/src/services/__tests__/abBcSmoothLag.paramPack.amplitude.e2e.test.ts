@@ -451,27 +451,41 @@ async function analyzeReachProbabilityViaPython(
     analysis_type: 'to_node_reach',
   };
 
+  const timeoutMs = 10_000;
+  const maxAttempts = 2;
   let response: Awaited<ReturnType<typeof undiciFetch>>;
-  const controller = new AbortController();
-  const timeoutMs = 2000;
-  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    // IMPORTANT: tests/setup.ts stubs globalThis.fetch and intentionally blocks localhost.
-    // Use Undici directly so we can hit the real local Uvicorn server.
-    response = await undiciFetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(request),
-      signal: controller.signal,
-    });
-  } catch (e: any) {
+  let lastError: any;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      // IMPORTANT: tests/setup.ts stubs globalThis.fetch and intentionally blocks localhost.
+      // Use Undici directly so we can hit the real local Uvicorn server.
+      response = await undiciFetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(request),
+        signal: controller.signal,
+      });
+      break;
+    } catch (e: any) {
+      lastError = e;
+      if (attempt < maxAttempts) {
+        await new Promise((r) => setTimeout(r, 1000));
+        continue;
+      }
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  }
+
+  if (!response!) {
     throw new Error(
       `Python GraphCompute server is not reachable at ${url}. ` +
       `Start it with: cd graph-editor && . venv/bin/activate && python dev-server.py\n\n` +
-      `Original error: ${e?.message || String(e)}`
+      `Original error: ${lastError?.message || String(lastError)}`
     );
-  } finally {
-    clearTimeout(timeoutId);
   }
 
   const rawText = await response.text();

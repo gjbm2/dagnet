@@ -17,6 +17,7 @@ import { MergeConflictModal, ConflictFile } from '../components/modals/MergeConf
 import { conflictResolutionService } from '../services/conflictResolutionService';
 import { ForceReplaceOnPullModal, type ForceReplaceOnPullRequest } from '../components/modals/ForceReplaceOnPullModal';
 import { sessionLogService } from '../services/sessionLogService';
+import { dispatchGitAuthExpired } from '../services/gitService';
 import { countdownService } from '../services/countdownService';
 import { useCountdown } from './useCountdown';
 
@@ -201,6 +202,10 @@ export function usePullAll(): UsePullAllResult {
     } catch (error) {
       toast.dismiss(toastId);
       if (applyToastId) toast.dismiss(applyToastId);
+      if ((error as any)?.name === 'GitAuthError') {
+        dispatchGitAuthExpired();
+        return { success: false };
+      }
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
       toast.error(`Pull failed: ${errorMessage}`);
       return { success: false };

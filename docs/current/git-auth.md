@@ -1,9 +1,11 @@
 # Git Authentication: Per-User OAuth Design
 
-**Status:** In progress — A0 + A1 complete, starting A2
+**Status:** Macro A complete. Macro B (migration to read-only base token) not yet started.
 **Date:** 24-Feb-26
 **GitHub App:** `dagnet-vercel` (App ID 2955768, Client ID `Iv23liF1oQ3LM14TiZ7A`)
-**A1 verified:** Full OAuth round trip working on production (auth-callback + auth-status deployed, token exchange + redirect confirmed)
+**A1 verified:** Full OAuth round trip on production
+**A2 verified:** Token persisted to IDB, credential reload works, chip shows @username
+**A4:** Deployment guide written at `graph-editor/public/docs/deployment-github-auth.md`
 
 ## Problem
 
@@ -230,7 +232,7 @@ Register a **GitHub App** (not an OAuth App). GitHub Apps support **multiple cal
    - **All unchecked** (Installation target, Meta, Security advisory — none needed)
 
    **Where can this GitHub App be installed?**
-   - **Only on this account** (only the repo owner's account needs the app installed)
+   - **Any GitHub account** — required so that collaborators (with their own GitHub accounts) can authorise the app. "Only on this account" causes a 404 for other users.
 
 3. Click "Create GitHub App"
 4. On the app page: note the **Client ID** (shown immediately)
@@ -275,7 +277,7 @@ If any step fails, fix the GitHub App config before proceeding. **Do not write c
 | `GITHUB_OAUTH_CLIENT_SECRET` | Serverless only | Preview + Production | GitHub App client secret from A0a |
 
 Set these **now**, for both Preview and Production scopes. They're inert until the callback function is deployed. Setting them now avoids a "forgot to set the env var" redeploy cycle later. No other env vars change — `VITE_INIT_CREDENTIALS_JSON` keeps the existing full-access PAT throughout all of Macro A.
-
+  
 
 ---
 
@@ -429,9 +431,64 @@ Also update:
 
 **Prerequisite:** Macro A is stable in production. Users have been connecting successfully. No operational issues.
 
-### B0. Read-only PAT verification (no deploys)
+**Approach:** Instead of a blocking migration modal, we handle invalid/revoked tokens gracefully. When the old PAT is revoked, users who haven't connected via OAuth will hit 401 errors. The app catches these and nudges them to connect. Users who already connected via OAuth are completely unaffected.
 
-Create a fine-grained PAT scoped to the target repo, **Contents: Read** only.
+### B1. 401 handling and connect nudge (code changes + deploy)
+
+**Goal:** Make the app handle invalid/revoked tokens gracefully so that revoking the old PAT is a smooth experience, not a broken one.
+
+#### Current 401 behaviour (traced from code)
+
+| Scenario | What user currently sees |
+|---|---|
+| Pull Latest | Toast: "Pull failed: Git API Error: 401 Unauthorized..." (raw, unhelpful) |
+| Commit & Push | Raw error in commit modal |
+| Initial clone (first load) | **Nothing visible** — console error, blank navigator |
+| Workspace reload after cred change | **Nothing visible** — console error, possibly broken state |
+
+The initial load case is the worst — a user whose PAT was just revoked sees a blank screen with no explanation.
+
+#### Changes needed
+
+**`gitService.ts` — `makeRequest()`:** Detect 401 specifically and throw a typed error (e.g. `GitAuthError`) distinct from other API errors. This allows callers to handle auth failures differently from network errors or rate limits.
+
+**App-level 401 modal (in `AppShell.tsx`):** A global event-driven modal that any code path can trigger. When a `GitAuthError` is caught anywhere in the app:
+
+1. Dispatch a custom event (e.g. `dagnet:gitAuthExpired`)
+2. AppShell listens for this event and shows a **dismissable modal**:
+
+   > **GitHub credentials expired**
+   >
+   > Your saved credentials are no longer valid. Connect your GitHub account to continue syncing.
+   >
+   > **[Connect GitHub]** &nbsp; **[Dismiss]**
+
+3. **Connect GitHub** triggers `startOAuthFlow()` for the currently selected repo
+4. **Dismiss** closes the modal, then shows a **toast**: "You can reconnect any time via the 'connect 🔗' chip in the menu bar."
+5. The modal reappears on the **next 401** (not suppressed after dismiss)
+
+This centralises the 401 UX in one place rather than adding handling to every caller (usePullAll, commit flow, NavigatorContext, etc.). Any code that catches a `GitAuthError` just dispatches the event.
+
+**Callers (`usePullAll.ts`, `repositoryOperationsService.ts`, `NavigatorContext.tsx`):** Catch `GitAuthError`, dispatch `dagnet:gitAuthExpired`, and suppress the raw error message (the modal handles the user communication).
+
+**Tests:** Integration tests that verify `GitAuthError` is thrown on 401. Test that the event dispatch mechanism works (event fired → modal state set). Test against real fake-indexeddb to verify the app doesn't corrupt state on auth failure.
+
+#### Deploy and test
+
+- Deploy to production
+- Temporarily test by using a revoked/invalid token in a test browser's IDB credentials
+- Verify each scenario shows a clear nudge to connect, not a raw error or blank screen
+- Verify users who are already OAuth-connected are unaffected
+
+---
+
+### B2. PAT swap and revocation (no code deploys)
+
+**Prerequisite:** B1 is deployed and tested. All 401 paths show clear connect nudges.
+
+#### B2a. Create and verify a read-only PAT
+
+Create a fine-grained PAT on the repo owner's GitHub account, scoped to the target repo, **Contents: Read** only.
 
 **Verify with `curl` against every GitHub API endpoint DagNet uses for read operations:**
 
@@ -451,69 +508,33 @@ curl -X POST -H "Authorization: token <ro-pat>" https://api.github.com/repos/<ow
 
 If any read endpoint fails, fix the PAT scope before proceeding.
 
-### B1. Migration modal (deploy to preview, then prod behind FF)
+#### B2b. Update Vercel env vars and redeploy
 
-#### Build
+- Update `VITE_INIT_CREDENTIALS_JSON` in Vercel production env vars: replace the current full-access PAT with the new read-only PAT
+- Redeploy so new users (and anyone who re-inits) get the read-only token
+- **Wait for the deploy to be live before proceeding to B2c**
 
-**Migration detection** (`credentials.ts`): on credential load, check for `authModel: 'oauth-v1'` marker. Absent → old-regime credentials → raise migration flag. Feature-flagged.
+#### B2c. Revoke the old full-access PAT
 
-**`authModel` marker**: added to the base config in `VITE_INIT_CREDENTIALS_JSON`. Present after re-init with new config, absent in old credentials.
+**CRITICAL: B2b must be live before this step.** If the old PAT is revoked while the env still contains it, any user who clears their browser and re-inits will get a revoked token and be unable to clone. The ordering is:
 
-**Modal component** (`MigrationModal.tsx` or inline in `AppShell`): blocking global modal, no dismiss. On mount, calls `db.getDirtyFiles()`:
-- Dirty files exist → show both buttons: **[Push all changes]** and **[Proceed without pushing]**
-- No dirty files → only **[Proceed]** (nothing to lose)
+1. B2b live (new read-only PAT in env) → new inits work
+2. B2c (revoke old PAT) → old tokens in existing users' IDB stop working → B1 nudge kicks in
 
-"Push all changes" uses `repositoryOperationsService.commitFiles()` with the old (still-valid) credentials. On success, clears credentials and OAuth token from IndexedDB, reloads to welcome screen. On failure, shows error, does not wipe — user can retry.
+With this ordering, the user experience is:
 
-"Proceed without pushing" clears credentials immediately, reloads to welcome screen. Local changes are lost.
+- **Already connected via OAuth:** unaffected (they use their own `ghu_` token)
+- **Returning user, never connected (workspace cached in IDB):** can still browse locally from cache. Next pull/push hits 401 → B1 nudge → clicks "connect 🔗" → carries on.
+- **Fresh user or re-init:** gets the read-only PAT from env → clone works → can browse → "connect 🔗" for write access
 
-#### Test on preview
-
-- Init with current (non-`authModel`) secret so IndexedDB has old-regime credentials
-- Enable migration flag → reload → modal appears
-- Test "Push all changes" with actual dirty files → verify pushed to GitHub → credentials cleared → welcome screen
-- Test "Proceed without pushing" → credentials cleared, local changes lost
-- Test no dirty files → only "Proceed" shown
-- After re-init with new config (containing `authModel` marker) → modal does not appear
-
-#### Test on production (behind FF)
-
-- Deploy to production (migration modal feature-flagged)
-- Same test matrix as preview, on real production domain
-- Verify no impact on users without the flag
-
-### B2. Full rollout (one deploy to prod)
-
-#### Pre-deployment
-
-- Notify users: "DagNet is updating authentication on [date]. Please push any unpushed changes before then."
-- Prepare updated `VITE_INIT_CREDENTIALS_JSON` with the read-only PAT and `authModel: 'oauth-v1'` marker
-
-#### Deploy
-
-- Update Vercel production env vars:
-  - `VITE_INIT_CREDENTIALS_JSON` → new base config with read-only token and `authModel` marker
-- Remove migration feature flag
-- Deploy
-
-#### User experience on first load
-
-- Existing users reload → migration check fires (no `authModel` marker) → blocking modal
-- Users with dirty files push first using old (still-valid) shared token, then credentials are wiped
-- Users re-initialise with the same secret → new read-only base config
-- Users connect GitHub via "read-only 🔗" if they want write access
-
-#### Post-deployment
-
-- Monitor Vercel function logs for callback errors
-- Confirm active users have re-initialised successfully
-- Once confirmed: **revoke the old shared full-access PAT** on GitHub
+Steps:
+- Go to `github.com` → Settings → Developer settings → Personal access tokens
+- Find and **revoke** the old full-access PAT
 
 #### Rollback plan
 
-- Revert the Vercel deployment → old client code, no migration modal
-- Users who already had credentials wiped re-initialise with the secret (same flow as before)
-- The old shared PAT is still valid (not yet revoked)
+- If 401 handling (B1) isn't working as expected: re-create a full-access PAT, update env vars, redeploy. Users re-init from secret to pick up the new token.
+- The 401 handling code is harmless even if the rollback PAT is valid — it only triggers on actual 401s.
 
 ---
 
@@ -527,11 +548,10 @@ If any read endpoint fails, fix the PAT scope before proceeding.
 | A3 | Production (1 deploy) | Same as A2, on real domain, behind FF |
 | A4 | None | Deployment guide written, README updated |
 | A5 | Production (1 deploy) | Remove FF — OAuth live for all users |
-| B0 | None | Read-only PAT verified via `curl` |
-| B1 | Preview + Prod (2 deploys) | Migration modal, behind FF |
-| B2 | Production (1 deploy) | Full rollout — token swap, migration live |
+| B1 | Production (1 deploy) | 401 handling + connect nudge |
+| B2 | None (env var + PAT revoke) | Swap to read-only PAT, revoke old PAT |
 
-**Total: 4 deploys to preview, 3 deploys to production** (4 if B1 prod-FF counted separately). Each deploy should work first time because the config and wiring are pre-verified at each stage.
+**Total: 4 deploys to preview, 3 deploys to production.** Each deploy should work first time because the config and wiring are pre-verified at each stage.
 
 ## Environment Variables Summary
 

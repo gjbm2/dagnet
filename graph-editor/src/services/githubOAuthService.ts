@@ -88,14 +88,11 @@ export function consumeOAuthReturn(): OAuthReturnData | null {
 }
 
 /**
- * Check if the GitHub OAuth feature is enabled (via env var or URL flag).
+ * Check if GitHub OAuth is available for this deployment.
+ * Returns true when the GitHub App client ID is configured (via Vercel env vars).
  */
 export function isOAuthEnabled(): boolean {
-  if (import.meta.env.VITE_FEATURE_OAUTH === '1') return true;
-  if (typeof window !== 'undefined') {
-    return new URLSearchParams(window.location.search).has('oauth');
-  }
-  return false;
+  return !!import.meta.env.VITE_GITHUB_OAUTH_CLIENT_ID;
 }
 
 /**

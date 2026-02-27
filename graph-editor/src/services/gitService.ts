@@ -3,6 +3,38 @@ import { throttling } from '@octokit/plugin-throttling';
 import { gitConfig } from '../config/gitConfig';
 import { CredentialsData, GitRepositoryCredential } from '../types/credentials';
 
+/** Thrown when a GitHub API call returns 401 (invalid/revoked/expired token). */
+export class GitAuthError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'GitAuthError';
+  }
+}
+
+/** Fire this event to trigger the app-level 401 modal. */
+export function dispatchGitAuthExpired(): void {
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('dagnet:gitAuthExpired'));
+  }
+}
+
+/**
+ * Re-throw as GitAuthError if the error indicates a 401.
+ * Works with both fetch errors (from makeRequest) and Octokit RequestError.
+ * Call this at the top of any catch block that surfaces errors to the user.
+ */
+export function rethrowIfAuthError(error: unknown): void {
+  if (error instanceof GitAuthError) throw error;
+  const status = (error as any)?.status ?? (error as any)?.response?.status;
+  if (status === 401) {
+    throw new GitAuthError('GitHub credentials are invalid or expired (401). Connect your GitHub account to continue.');
+  }
+  const msg = error instanceof Error ? error.message : String(error);
+  if (msg.includes('401') && (msg.includes('Bad credentials') || msg.includes('Unauthorized'))) {
+    throw new GitAuthError('GitHub credentials are invalid or expired (401). Connect your GitHub account to continue.');
+  }
+}
+
 export interface GitFile {
   name: string;
   path: string;
@@ -189,6 +221,9 @@ class GitService {
 
       if (!response.ok) {
         const errorText = await response.text();
+        if (response.status === 401) {
+          throw new GitAuthError(`GitHub credentials are invalid or expired (401). Connect your GitHub account to continue.`);
+        }
         throw new Error(`Git API Error: ${response.status} ${response.statusText} - ${errorText}`);
       }
 
@@ -220,6 +255,7 @@ class GitService {
         message: `Found ${branches.length} branches`
       };
     } catch (error) {
+      rethrowIfAuthError(error);
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Unknown error',
@@ -798,6 +834,7 @@ class GitService {
         message: `Successfully committed ${files.length} files in single atomic commit`
       };
     } catch (error) {
+      rethrowIfAuthError(error);
       console.error('❌ GitService.commitAndPushFiles: Error:', error);
       return {
         success: false,
@@ -868,6 +905,7 @@ class GitService {
         message: 'Successfully fetched repository info'
       };
     } catch (error) {
+      rethrowIfAuthError(error);
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Unknown error',
@@ -948,6 +986,7 @@ class GitService {
         message: `Successfully fetched tree with ${treeResponse.data.tree.length} items`
       };
     } catch (error) {
+      rethrowIfAuthError(error);
       console.error('❌ GitService.getRepositoryTree: Error:', error);
       return {
         success: false,
@@ -974,6 +1013,7 @@ class GitService {
       
       return refResponse.data.object.sha;
     } catch (error) {
+      rethrowIfAuthError(error);
       console.error('❌ GitService.getRemoteHeadSha: Error:', error);
       return null;
     }
@@ -1026,6 +1066,7 @@ class GitService {
         message: 'Successfully fetched blob'
       };
     } catch (error) {
+      rethrowIfAuthError(error);
       console.error(`❌ GitService.getBlobContent: Failed to fetch blob ${sha.substring(0, 8)}:`, error);
       return {
         success: false,

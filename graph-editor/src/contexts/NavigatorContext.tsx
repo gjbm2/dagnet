@@ -668,6 +668,10 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
       }));
 
     } catch (error) {
+      if ((error as any)?.name === 'GitAuthError') {
+        const { dispatchGitAuthExpired } = await import('../services/gitService');
+        dispatchGitAuthExpired();
+      }
       console.error('Failed to load items:', error);
       setItems([]);
     } finally {
