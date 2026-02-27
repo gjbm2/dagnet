@@ -21,16 +21,22 @@ export function dispatchGitAuthExpired(): void {
 /**
  * Re-throw as GitAuthError if the error indicates a 401.
  * Works with both fetch errors (from makeRequest) and Octokit RequestError.
- * Call this at the top of any catch block that surfaces errors to the user.
+ * Also dispatches the gitAuthExpired event so the modal appears regardless
+ * of whether the caller handles the error.
  */
 export function rethrowIfAuthError(error: unknown): void {
-  if (error instanceof GitAuthError) throw error;
+  if (error instanceof GitAuthError) {
+    dispatchGitAuthExpired();
+    throw error;
+  }
   const status = (error as any)?.status ?? (error as any)?.response?.status;
   if (status === 401) {
+    dispatchGitAuthExpired();
     throw new GitAuthError('GitHub credentials are invalid or expired (401). Connect your GitHub account to continue.');
   }
   const msg = error instanceof Error ? error.message : String(error);
   if (msg.includes('401') && (msg.includes('Bad credentials') || msg.includes('Unauthorized'))) {
+    dispatchGitAuthExpired();
     throw new GitAuthError('GitHub credentials are invalid or expired (401). Connect your GitHub account to continue.');
   }
 }
@@ -222,6 +228,7 @@ class GitService {
       if (!response.ok) {
         const errorText = await response.text();
         if (response.status === 401) {
+          dispatchGitAuthExpired();
           throw new GitAuthError(`GitHub credentials are invalid or expired (401). Connect your GitHub account to continue.`);
         }
         throw new Error(`Git API Error: ${response.status} ${response.statusText} - ${errorText}`);
@@ -296,7 +303,7 @@ class GitService {
         message: `Created branch ${newBranchName} from ${sourceBranch}`
       };
     } catch (error: any) {
-      // GitHub returns 422 if the branch already exists
+      rethrowIfAuthError(error);
       const message = error?.status === 422
         ? `Branch '${newBranchName}' already exists`
         : (error instanceof Error ? error.message : 'Unknown error');
@@ -351,6 +358,7 @@ class GitService {
           : `Merged ${headBranch} into ${baseBranch}`
       };
     } catch (error: any) {
+      rethrowIfAuthError(error);
       // 409 = merge conflict
       if (error?.status === 409) {
         return {
@@ -391,6 +399,7 @@ class GitService {
         message: `Found ${files.length} items in ${path}`
       };
     } catch (error) {
+      rethrowIfAuthError(error);
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Unknown error',
@@ -418,6 +427,7 @@ class GitService {
         message: `Successfully fetched ${path}`
       };
     } catch (error) {
+      rethrowIfAuthError(error);
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Unknown error',
@@ -459,6 +469,7 @@ class GitService {
         message: `Successfully decoded ${path}`
       };
     } catch (error) {
+      rethrowIfAuthError(error);
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Unknown error',
@@ -522,6 +533,7 @@ class GitService {
         message: `Successfully ${sha ? 'updated' : 'created'} ${path}`
       };
     } catch (error) {
+      rethrowIfAuthError(error);
       const errorMsg = error instanceof Error ? error.message : 'Unknown error';
       console.error(`Failed to ${sha ? 'update' : 'create'} file ${path}:`, errorMsg);
       return {
@@ -574,6 +586,7 @@ class GitService {
         message: `Successfully deleted ${path}`
       };
     } catch (error) {
+      rethrowIfAuthError(error);
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Unknown error',
@@ -615,6 +628,7 @@ class GitService {
         message: `Found ${commits.length} commits`
       };
     } catch (error) {
+      rethrowIfAuthError(error);
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Unknown error',
@@ -640,6 +654,7 @@ class GitService {
         message: `Found ${commits.length} commits for ${path}`
       };
     } catch (error) {
+      rethrowIfAuthError(error);
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Unknown error',
@@ -881,6 +896,7 @@ class GitService {
         message: `Successfully pulled latest from ${branch}`
       };
     } catch (error) {
+      rethrowIfAuthError(error);
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Unknown error',
@@ -1099,6 +1115,7 @@ class GitService {
         message: 'Successfully created blob'
       };
     } catch (error) {
+      rethrowIfAuthError(error);
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Unknown error',
@@ -1138,6 +1155,7 @@ class GitService {
         message: 'Successfully created tree'
       };
     } catch (error) {
+      rethrowIfAuthError(error);
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Unknown error',
@@ -1174,6 +1192,7 @@ class GitService {
         message: 'Successfully created commit'
       };
     } catch (error) {
+      rethrowIfAuthError(error);
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Unknown error',
@@ -1208,6 +1227,7 @@ class GitService {
         message: `Successfully updated ${branch} to ${commitSha.substring(0, 8)}`
       };
     } catch (error) {
+      rethrowIfAuthError(error);
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Unknown error',
@@ -1278,6 +1298,7 @@ class GitService {
       console.log(`GitService.checkFilesChangedOnRemote: Checked ${filesToCheck.length} files, ${changedFiles.length} changed (total: ${elapsed.toFixed(0)}ms)`);
       
         } catch (error) {
+      rethrowIfAuthError(error);
       console.error('GitService.checkFilesChangedOnRemote: Error fetching tree:', error);
       // Fall back gracefully - don't block commit
       return [];
