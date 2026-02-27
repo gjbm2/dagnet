@@ -218,13 +218,25 @@ function MainAppShellContent() {
     };
   }, []);
 
-  // Auth-expired modal state (triggered by dagnet:gitAuthExpired event)
+  // Auth-expired modal state (triggered by dagnet:gitAuthExpired event).
+  // Delayed by 2s to avoid false positives from the init race — the health check
+  // and fetchBranches may fire before credentials are loaded from IDB, causing a
+  // transient 401 that resolves once setCredentials runs.
   const [showAuthExpiredModal, setShowAuthExpiredModal] = useState(false);
+  const authExpiredTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
-    const handleAuthExpired = () => setShowAuthExpiredModal(true);
+    const handleAuthExpired = () => {
+      if (authExpiredTimerRef.current) clearTimeout(authExpiredTimerRef.current);
+      authExpiredTimerRef.current = setTimeout(() => {
+        setShowAuthExpiredModal(true);
+      }, 2000);
+    };
     window.addEventListener('dagnet:gitAuthExpired', handleAuthExpired);
-    return () => window.removeEventListener('dagnet:gitAuthExpired', handleAuthExpired);
+    return () => {
+      window.removeEventListener('dagnet:gitAuthExpired', handleAuthExpired);
+      if (authExpiredTimerRef.current) clearTimeout(authExpiredTimerRef.current);
+    };
   }, []);
 
   // Init-from-secret modal state
@@ -374,6 +386,7 @@ function MainAppShellContent() {
       }
 
       setShowAuthExpiredModal(false);
+      if (authExpiredTimerRef.current) { clearTimeout(authExpiredTimerRef.current); authExpiredTimerRef.current = null; }
       window.dispatchEvent(new CustomEvent('dagnet:oauthTokenApplied'));
       toast.success(`Connected as @${oauthData.username || 'unknown'}`);
       sessionLogService.info('git', 'GITHUB_OAUTH_CONNECTED',
@@ -1880,6 +1893,7 @@ function MainAppShellContent() {
                   }}
                   onClick={() => {
                     setShowAuthExpiredModal(false);
+                    if (authExpiredTimerRef.current) { clearTimeout(authExpiredTimerRef.current); authExpiredTimerRef.current = null; }
                     import('./services/githubOAuthService').then(({ startOAuthFlow }) => {
                       if (navState.selectedRepo) startOAuthFlow(navState.selectedRepo);
                     });
@@ -1899,6 +1913,7 @@ function MainAppShellContent() {
                   }}
                   onClick={() => {
                     setShowAuthExpiredModal(false);
+                    if (authExpiredTimerRef.current) { clearTimeout(authExpiredTimerRef.current); authExpiredTimerRef.current = null; }
                     toast('You can reconnect any time via the connect 🔗 chip in the menu bar.', { duration: 5000 });
                   }}
                 >
