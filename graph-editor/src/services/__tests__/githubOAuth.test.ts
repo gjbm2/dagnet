@@ -457,7 +457,7 @@ describe('GitHub OAuth Service', () => {
       if (result.credentials) gitService.setCredentials(result.credentials);
     });
 
-    it('should throw GitAuthError when GitHub API returns 401', async () => {
+    it('should throw GitAuthError when GitHub API returns 401 (user-facing method)', async () => {
       vi.stubGlobal('fetch', vi.fn().mockResolvedValue(
         new Response('{"message":"Bad credentials"}', {
           status: 401,
@@ -466,11 +466,29 @@ describe('GitHub OAuth Service', () => {
       ));
 
       try {
-        await gitService.getRepoInfo();
+        // Use getFile (a user-facing method with rethrowIfAuthError), not getRepoInfo
+        // (which is the health check path and intentionally swallows auth errors)
+        await gitService.getFile('test.json');
         expect.fail('should have thrown');
       } catch (error) {
         expect(error).toBeInstanceOf(GitAuthError);
         expect((error as Error).message).toContain('401');
+      } finally {
+        vi.unstubAllGlobals();
+      }
+    });
+
+    it('should NOT throw GitAuthError from getRepoInfo (health check path)', async () => {
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue(
+        new Response('{"message":"Bad credentials"}', {
+          status: 401,
+          statusText: 'Unauthorized',
+        })
+      ));
+
+      try {
+        const result = await gitService.getRepoInfo();
+        expect(result.success).toBe(false);
       } finally {
         vi.unstubAllGlobals();
       }
@@ -483,7 +501,6 @@ describe('GitHub OAuth Service', () => {
 
       try {
         const result = await gitService.getRepoInfo();
-        // Should not throw, should return error result
         expect(result.success).toBe(false);
       } finally {
         vi.unstubAllGlobals();

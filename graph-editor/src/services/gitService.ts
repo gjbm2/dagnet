@@ -228,7 +228,6 @@ class GitService {
       if (!response.ok) {
         const errorText = await response.text();
         if (response.status === 401) {
-          dispatchGitAuthExpired();
           throw new GitAuthError(`GitHub credentials are invalid or expired (401). Connect your GitHub account to continue.`);
         }
         throw new Error(`Git API Error: ${response.status} ${response.statusText} - ${errorText}`);
@@ -921,7 +920,9 @@ class GitService {
         message: 'Successfully fetched repository info'
       };
     } catch (error) {
-      rethrowIfAuthError(error);
+      // No rethrowIfAuthError here — getRepoInfo is used by the health check,
+      // which runs before credentials are loaded. A 401 from the health check
+      // should update the health indicator, not pop up the auth-expired modal.
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Unknown error',
