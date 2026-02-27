@@ -21,22 +21,17 @@ export function dispatchGitAuthExpired(): void {
 /**
  * Re-throw as GitAuthError if the error indicates a 401.
  * Works with both fetch errors (from makeRequest) and Octokit RequestError.
- * Also dispatches the gitAuthExpired event so the modal appears regardless
- * of whether the caller handles the error.
+ * Does NOT dispatch events — the modal is triggered by a post-init check
+ * and by explicit event dispatch in user-action callers, not here.
  */
 export function rethrowIfAuthError(error: unknown): void {
-  if (error instanceof GitAuthError) {
-    dispatchGitAuthExpired();
-    throw error;
-  }
+  if (error instanceof GitAuthError) throw error;
   const status = (error as any)?.status ?? (error as any)?.response?.status;
   if (status === 401) {
-    dispatchGitAuthExpired();
     throw new GitAuthError('GitHub credentials are invalid or expired (401). Connect your GitHub account to continue.');
   }
   const msg = error instanceof Error ? error.message : String(error);
   if (msg.includes('401') && (msg.includes('Bad credentials') || msg.includes('Unauthorized'))) {
-    dispatchGitAuthExpired();
     throw new GitAuthError('GitHub credentials are invalid or expired (401). Connect your GitHub account to continue.');
   }
 }

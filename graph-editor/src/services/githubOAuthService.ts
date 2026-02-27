@@ -11,6 +11,11 @@ import { credentialsManager } from '../lib/credentials';
 const OAUTH_STATE_KEY = 'dagnet_oauth_state';
 const OAUTH_REPO_KEY = 'dagnet_oauth_repo';
 
+/** Set synchronously when consumeOAuthReturn detects OAuth params, before async work begins. */
+let _oauthReturnInProgress = false;
+export function isOAuthReturnInProgress(): boolean { return _oauthReturnInProgress; }
+export function clearOAuthReturnInProgress(): void { _oauthReturnInProgress = false; }
+
 /**
  * Start the GitHub OAuth flow.
  * Generates a CSRF state token, records the target repo, and redirects to GitHub.
@@ -53,6 +58,10 @@ export interface OAuthReturnData {
 export function consumeOAuthReturn(): OAuthReturnData | null {
   const params = new URLSearchParams(window.location.search);
   const token = params.get('github_token');
+
+  // Set flag synchronously BEFORE any async work or URL cleaning.
+  // shouldShowAuthExpiredModal reads this to avoid false positives during the OAuth return.
+  if (token) _oauthReturnInProgress = true;
   const username = params.get('github_user');
   const state = params.get('state');
   const authError = params.get('auth_error');
@@ -129,6 +138,40 @@ export async function applyOAuthToken(data: OAuthReturnData): Promise<boolean> {
   credentialsManager.clearCache();
 
   return true;
+}
+
+/**
+ * Post-init check: should the auth-expired modal be shown?
+ *
+ * Called ONCE after NavigatorContext init completes (selectedRepo is set).
+ * Returns true only if the credentials have a token AND that token gets 401 from GitHub.
+ * Returns false for: no token (read-only), no creds (blank slate), OAuth return page,
+ * or a valid token.
+ */
+export async function shouldShowAuthExpiredModal(): Promise<boolean> {
+  // Skip if an OAuth return is being processed — the handler will fix the token.
+  // This flag is set synchronously by consumeOAuthReturn() before the URL is cleaned,
+  // so it's reliable regardless of timing between useEffects.
+  if (_oauthReturnInProgress) return false;
+
+  const result = await credentialsManager.loadCredentials();
+  if (!result.credentials?.git?.length) return false;
+
+  const defaultGit = result.credentials.git.find((g: any) => g.isDefault) || result.credentials.git[0];
+  if (!defaultGit?.token || defaultGit.token.trim() === '') return false;
+
+  try {
+    const { gitService } = await import('./gitService');
+    // CRITICAL: Ensure gitService is checking with the same credentials we just loaded.
+    // Otherwise, getRepoInfo() can run with a stale env token before credentials propagate.
+    gitService.setCredentials(result.credentials);
+    const check = await gitService.getRepoInfo();
+    if (!check.success && check.error?.includes('401')) return true;
+  } catch {
+    // getRepoInfo shouldn't throw (it catches internally), but be safe
+  }
+
+  return false;
 }
 
 function cleanOAuthParams(): void {
