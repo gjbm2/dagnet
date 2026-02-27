@@ -237,6 +237,19 @@ Register a **GitHub App** (not an OAuth App). GitHub Apps support **multiple cal
 3. Click "Create GitHub App"
 4. On the app page: note the **Client ID** (shown immediately)
 5. Click "Generate a new client secret" — note the **Client secret** (shown once, save it now)
+6. Under **Optional features**, find **User-to-server token expiration** and click **Opt-out** (so tokens don't expire)
+
+#### A0a.2. Install the GitHub App on the target repos
+
+**This step is required.** A registered GitHub App can only access repos where it is installed. Without installation, user tokens (`ghu_`) will get 404 on all repo API calls.
+
+1. Go to `https://github.com/apps/<your-app-name>` (the app's public page)
+2. Click **Install**
+3. Choose the account that owns the target repository
+4. Select **"Only select repositories"** and pick the graph repo(s) that DagNet users will access
+5. Click **Install**
+
+This grants the app (and therefore all user tokens issued by it) access to the selected repos with the permissions configured in A0a (Contents: Read and write).
 
 **No localhost callback URL.** Local dev (`npm run dev` via Vite on port 5173) doesn't serve serverless functions — files in `graph-editor/api/` only run on Vercel. The dev setup (`./dev-start.sh`) runs Vite + Python in tmux; Vite only proxies `/api/das-proxy` and `/api/github-proxy` via custom middleware. The callback cannot be tested locally.
 

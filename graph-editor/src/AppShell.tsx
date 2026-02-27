@@ -353,9 +353,8 @@ function MainAppShellContent() {
   }, [tabs.length, navState.selectedRepo, navState.selectedBranch]);
 
   // Handle OAuth return — check if this page load is a redirect from the auth callback.
-  // Write the token to IDB then reload the page so the app starts fresh with the new token.
-  // A hot-swap via reloadCredentials() races with NavigatorContext init and leaves the app
-  // in a broken state if the old token has been revoked.
+  // Write the token to IDB, then propagate it through credentialsManager and gitService
+  // inline (no page reload — reload races the IDB write and loses the token).
   useEffect(() => {
     const handleOAuthReturn = async () => {
       const { consumeOAuthReturn, applyOAuthToken } = await import('./services/githubOAuthService');
@@ -366,11 +365,17 @@ function MainAppShellContent() {
       const applied = await applyOAuthToken(oauthData);
       if (!applied) return;
 
+      // Propagate the new token to gitService (Group 3 tests prove this path works)
+      const { credentialsManager } = await import('./lib/credentials');
+      const result = await credentialsManager.loadCredentials();
+      if (result.credentials) {
+        const { gitService } = await import('./services/gitService');
+        gitService.setCredentials(result.credentials);
+      }
+
+      toast.success(`Connected as @${oauthData.username || 'unknown'}`);
       sessionLogService.info('git', 'GITHUB_OAUTH_CONNECTED',
         `Connected GitHub account @${oauthData.username} for ${oauthData.repoName}`);
-
-      // Full reload — the new token is in IDB, the fresh load will pick it up cleanly.
-      window.location.replace(window.location.origin + window.location.pathname);
     };
 
     handleOAuthReturn().catch(err => {

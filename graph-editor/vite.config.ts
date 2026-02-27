@@ -3,6 +3,7 @@ import react from '@vitejs/plugin-react';
 import path from 'path';
 import { handleProxyRequest } from './server/proxy';
 import { handleGithubProxyRequest } from './server/githubProxy';
+import { handleAuthCallback, configureAuthCallback } from './server/authCallback';
 import { execSync } from 'child_process';
 import fs from 'fs';
 
@@ -30,6 +31,12 @@ export default defineConfig(({ mode }) => {
   // Format version for display (0.91.8-beta → 0.91.8b)
   const versionShort = version.replace(/^v/, '').replace(/-beta$/, 'b').replace(/-alpha$/, 'a');
 
+  // Configure auth callback middleware with env vars (dev only)
+  configureAuthCallback(
+    env.VITE_GITHUB_OAUTH_CLIENT_ID || '',
+    env.GITHUB_OAUTH_CLIENT_SECRET || '',
+  );
+
   // Credentials init env (optional, used by welcome-screen init)
   const initSecret = env.INIT_CREDENTIALS_SECRET || '';
   const initCredentialsJson = env.INIT_CREDENTIALS_JSON || '';
@@ -51,6 +58,8 @@ export default defineConfig(({ mode }) => {
               await handleProxyRequest(req, res);
             } else if (req.url?.startsWith('/api/github-proxy')) {
               await handleGithubProxyRequest(req, res);
+            } else if (req.url?.startsWith('/api/auth-callback')) {
+              await handleAuthCallback(req, res);
             } else {
               next();
             }

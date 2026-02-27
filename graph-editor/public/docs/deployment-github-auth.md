@@ -55,6 +55,16 @@ Each DagNet deployment needs its own GitHub App. The app's client ID and secret 
 
 6. Under **Optional features**, find **User-to-server token expiration** and click **Opt-out** if not already opted out
 
+## Step 1b: Install the GitHub App on target repos
+
+**This step is required.** The app must be installed on the repos that DagNet users will access. Without installation, user tokens will get 404 errors.
+
+1. Go to `https://github.com/apps/<your-app-name>` (the app's public page)
+2. Click **Install**
+3. Choose the account that owns the target repository
+4. Select **"Only select repositories"** and pick the graph repo(s)
+5. Click **Install**
+
 ## Step 2: Set Vercel environment variables
 
 In your Vercel project dashboard, go to **Settings → Environment Variables** and add:
@@ -108,6 +118,9 @@ Users who are not collaborators can still connect their GitHub account, but writ
 **auth-status returns "not set" for one or both variables**
 - Check that the environment variables are set in Vercel for the correct scope (Preview + Production, or All Environments).
 - Environment variable changes require a redeploy to take effect.
+
+**404 "Not Found" after connecting**
+- The GitHub App is not installed on the target repository. Go to `https://github.com/apps/<your-app-name>`, click Install, and select the target repos. See Step 1b.
 
 **User can connect but can't push**
 - The user is not a collaborator on the target repository. Add them via GitHub repository settings.
