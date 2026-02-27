@@ -160,10 +160,6 @@ describeDeps('Forecasting parity — query flow + snapshot DB (integration)', ()
   const SNAPSHOT_TEST_BRANCH = `run-${Math.random().toString(16).slice(2)}`;
   const SNAPSHOT_PREFIX = `${SNAPSHOT_TEST_REPO}-${SNAPSHOT_TEST_BRANCH}-`;
 
-  if (!DATA_REPO_DIR) {
-    throw new Error('.private-repos.conf / DATA_REPO_DIR not available (required for this local integration test)');
-  }
-
   // Realistic source parameter file containing both window() and cohort() slices with query_signature.
   // Loaded directly from the local data repo (directory name from .private-repos.conf).
   const PARAM_REL = `${DATA_REPO_DIR}/parameters/registration-to-success.yaml`;
