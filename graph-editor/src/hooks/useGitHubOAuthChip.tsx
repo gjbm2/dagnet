@@ -23,6 +23,14 @@ export function GitHubOAuthChip() {
     setEnabled(isOAuthEnabled());
   }, []);
 
+  const [refreshCounter, setRefreshCounter] = useState(0);
+
+  useEffect(() => {
+    const handleCredentialsChanged = () => setRefreshCounter(c => c + 1);
+    window.addEventListener('dagnet:oauthTokenApplied', handleCredentialsChanged);
+    return () => window.removeEventListener('dagnet:oauthTokenApplied', handleCredentialsChanged);
+  }, []);
+
   useEffect(() => {
     const check = async () => {
       if (!state.selectedRepo) { setConnectedUser(null); return; }
@@ -32,7 +40,7 @@ export function GitHubOAuthChip() {
       setConnectedUser(token.startsWith('ghu_') ? (gitCreds?.userName || 'connected') : null);
     };
     check();
-  }, [state.selectedRepo, isReadOnly]);
+  }, [state.selectedRepo, isReadOnly, refreshCounter]);
 
   if (!enabled) return null;
 

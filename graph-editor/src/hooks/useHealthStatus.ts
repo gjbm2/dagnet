@@ -91,12 +91,17 @@ export function useHealthStatus(options: UseHealthStatusOptions = {}): UseHealth
       void refresh();
     };
 
+    // Re-check after OAuth connect (token changed, git status likely different)
+    const onTokenApplied = () => void refresh();
+
     globalThis.addEventListener?.('online', onOnlineChange);
     globalThis.addEventListener?.('offline', onOnlineChange);
+    globalThis.addEventListener?.('dagnet:oauthTokenApplied', onTokenApplied);
     return () => {
       globalThis.clearInterval(id);
       globalThis.removeEventListener?.('online', onOnlineChange);
       globalThis.removeEventListener?.('offline', onOnlineChange);
+      globalThis.removeEventListener?.('dagnet:oauthTokenApplied', onTokenApplied);
     };
   }, [pollIntervalMs]);
 

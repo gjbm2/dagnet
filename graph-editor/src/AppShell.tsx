@@ -373,6 +373,8 @@ function MainAppShellContent() {
         gitService.setCredentials(result.credentials);
       }
 
+      setShowAuthExpiredModal(false);
+      window.dispatchEvent(new CustomEvent('dagnet:oauthTokenApplied'));
       toast.success(`Connected as @${oauthData.username || 'unknown'}`);
       sessionLogService.info('git', 'GITHUB_OAUTH_CONNECTED',
         `Connected GitHub account @${oauthData.username} for ${oauthData.repoName}`);
