@@ -1265,6 +1265,20 @@ export default function PropertiesPanel({
               <div style={{ fontSize: '11px', color: '#6B7280', marginTop: '4px', paddingLeft: '4px' }}>
                 When enabled, this graph is included in unattended daily runs via <code>?retrieveall</code>.
               </div>
+              {graph?.dailyFetch && !graph?.dataInterestsDSL?.trim() && (
+                <div style={{
+                  marginTop: '8px',
+                  padding: '8px 10px',
+                  background: '#FEF3C7',
+                  border: '1px solid #FDE047',
+                  borderRadius: '4px',
+                  fontSize: '11px',
+                  color: '#854D0E',
+                  lineHeight: '1.4',
+                }}>
+                  ⚠️ No pinned data-interests DSL is set. The nightly runner will include this graph but <strong>skip the retrieve step</strong>. Set a DSL above or via the Pinned Query modal.
+                </div>
+              )}
             </CollapsibleSection>
 
             <CollapsibleSection title="Info" defaultOpen={false} icon={Info}>

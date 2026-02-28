@@ -22,12 +22,13 @@ export function clearOAuthReturnInProgress(): void { _oauthReturnInProgress = fa
  *
  * @param repoName - The git credential entry name (from credentials.git[].name)
  *                   to associate the resulting token with.
+ * @returns true if the redirect was initiated, false if OAuth is not configured.
  */
-export function startOAuthFlow(repoName: string): void {
+export function startOAuthFlow(repoName: string): boolean {
   const clientId = import.meta.env.VITE_GITHUB_OAUTH_CLIENT_ID;
   if (!clientId) {
-    console.error('[githubOAuth] VITE_GITHUB_OAUTH_CLIENT_ID is not set');
-    return;
+    console.error('[githubOAuth] VITE_GITHUB_OAUTH_CLIENT_ID is not set — OAuth is not configured for this environment');
+    return false;
   }
 
   const state = crypto.randomUUID();
@@ -42,6 +43,7 @@ export function startOAuthFlow(repoName: string): void {
   });
 
   window.location.href = `https://github.com/login/oauth/authorize?${params.toString()}`;
+  return true;
 }
 
 export interface OAuthReturnData {
@@ -50,12 +52,25 @@ export interface OAuthReturnData {
   repoName: string;
 }
 
+export interface OAuthReturnResult {
+  data: OAuthReturnData | null;
+  error: string | null;
+}
+
+const AUTH_ERROR_MESSAGES: Record<string, string> = {
+  server_config: 'OAuth server not configured — GITHUB_OAUTH_CLIENT_SECRET may be missing from your environment.',
+  missing_code: 'GitHub did not return an authorisation code.',
+  token_exchange: 'GitHub rejected the token exchange.',
+  server_error: 'Unexpected server error during OAuth callback.',
+};
+
 /**
  * Check if the current page load is a return from the OAuth callback.
  * If so, validate the state, extract the token and username, clean the URL,
- * and return the data. Returns null if this is not an OAuth return.
+ * and return the data. Returns { data: null, error: null } if this is not
+ * an OAuth return. Returns { data: null, error: string } on failure.
  */
-export function consumeOAuthReturn(): OAuthReturnData | null {
+export function consumeOAuthReturn(): OAuthReturnResult {
   const params = new URLSearchParams(window.location.search);
   const token = params.get('github_token');
 
@@ -68,18 +83,19 @@ export function consumeOAuthReturn(): OAuthReturnData | null {
 
   if (authError) {
     const detail = params.get('detail') || '';
+    const friendlyMessage = AUTH_ERROR_MESSAGES[authError] || `Authentication failed: ${authError}`;
     console.error(`[githubOAuth] Auth error: ${authError}${detail ? ` (${detail})` : ''}`);
     cleanOAuthParams();
-    return null;
+    return { data: null, error: friendlyMessage };
   }
 
-  if (!token) return null;
+  if (!token) return { data: null, error: null };
 
   const savedState = sessionStorage.getItem(OAUTH_STATE_KEY);
   if (!state || state !== savedState) {
     console.error('[githubOAuth] State mismatch — possible CSRF. Ignoring token.');
     cleanOAuthParams();
-    return null;
+    return { data: null, error: 'OAuth state mismatch — please try connecting again.' };
   }
 
   const repoName = sessionStorage.getItem(OAUTH_REPO_KEY) || '';
@@ -90,9 +106,12 @@ export function consumeOAuthReturn(): OAuthReturnData | null {
   cleanOAuthParams();
 
   return {
-    token,
-    username: username || '',
-    repoName,
+    data: {
+      token,
+      username: username || '',
+      repoName,
+    },
+    error: null,
   };
 }
 

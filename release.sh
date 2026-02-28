@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 
 # Interactive version bumper for DagNet
-# Usage: ./release.sh [--runtests] [--build]
+# Usage: ./release.sh [--notests] [--nobuild]
 #
+# By default, runs all tests and build checks (each with a 3s skip countdown).
 # Options:
-#   --runtests    Run all tests (npm + pytest) before releasing
-#   --build       Run TypeScript check to verify build will succeed (fast, ~10s)
+#   --notests     Skip all test suites entirely
+#   --nobuild     Skip TypeScript build verification
 
 set -e
 
@@ -50,21 +51,21 @@ print_git_add_dot_preview() {
 }
 
 # Parse command line arguments
-RUN_TESTS=false
-RUN_BUILD=false
+RUN_TESTS=true
+RUN_BUILD=true
 for arg in "$@"; do
   case $arg in
-    --runtests)
-      RUN_TESTS=true
+    --notests)
+      RUN_TESTS=false
       shift
       ;;
-    --build)
-      RUN_BUILD=true
+    --nobuild)
+      RUN_BUILD=false
       shift
       ;;
     *)
       print_red "Unknown option: $arg"
-      echo "Usage: ./release.sh [--runtests] [--build]"
+      echo "Usage: ./release.sh [--notests] [--nobuild]"
       exit 1
       ;;
   esac
@@ -100,40 +101,85 @@ if [[ "$RUN_TESTS" == true ]]; then
   print_blue "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
   echo ""
   
-  # Run all npm tests (unit + integration)
-  print_yellow "[1/3] Running npm tests..."
-  if ! (cd graph-editor && npm run test:all); then
-    echo ""
-    print_red "✗ npm tests failed!"
-    print_red "Release aborted."
-    exit 1
+  # Run all npm tests (unit + integration) (with skip-on-keypress countdown)
+  SKIP_NPM=false
+  print_yellow "[1/3] npm tests — press any key within 3s to skip..."
+  for i in 3 2 1; do
+    printf "\r  Starting in %d... " "$i"
+    if read -r -s -n 1 -t 1 _key 2>/dev/null; then
+      SKIP_NPM=true
+      break
+    fi
+  done
+  printf "\r                              \r"
+
+  if [[ "$SKIP_NPM" == true ]]; then
+    print_yellow "  ⊘ npm tests skipped (user interrupt)"
+  else
+    print_yellow "[1/3] Running npm tests..."
+    if ! (cd graph-editor && npm run test:all); then
+      echo ""
+      print_red "✗ npm tests failed!"
+      print_red "Release aborted."
+      exit 1
+    fi
+    print_green "✓ npm tests passed"
   fi
-  print_green "✓ npm tests passed"
   echo ""
 
-  # Run Playwright E2E tests
-  print_yellow "[2/3] Running Playwright E2E tests..."
-  # Keep Playwright output readable during release runs.
-  # To re-enable verbose per-test logs: E2E_VERBOSE=1 ./release.sh --runtests
-  if ! (cd graph-editor && E2E_VERBOSE=0 npm run e2e -- --workers=2); then
-    echo ""
-    print_red "✗ Playwright tests failed!"
-    print_red "Release aborted."
-    exit 1
+  # Run Playwright E2E tests (with skip-on-keypress countdown)
+  SKIP_PLAYWRIGHT=false
+  print_yellow "[2/3] Playwright E2E tests — press any key within 3s to skip..."
+  for i in 3 2 1; do
+    printf "\r  Starting in %d... " "$i"
+    if read -r -s -n 1 -t 1 _key 2>/dev/null; then
+      SKIP_PLAYWRIGHT=true
+      break
+    fi
+  done
+  printf "\r                              \r"
+
+  if [[ "$SKIP_PLAYWRIGHT" == true ]]; then
+    print_yellow "  ⊘ Playwright tests skipped (user interrupt)"
+  else
+    print_yellow "[2/3] Running Playwright E2E tests..."
+    # Keep Playwright output readable during release runs.
+    # To re-enable verbose per-test logs: E2E_VERBOSE=1 ./release.sh --runtests
+    if ! (cd graph-editor && E2E_VERBOSE=0 npm run e2e -- --workers=2); then
+      echo ""
+      print_red "✗ Playwright tests failed!"
+      print_red "Release aborted."
+      exit 1
+    fi
+    print_green "✓ Playwright tests passed"
   fi
-  print_green "✓ Playwright tests passed"
   echo ""
   
-  # Run Python tests
-  print_yellow "[3/3] Running Python tests..."
-  # Run from graph-editor so pytest picks up graph-editor/pytest.ini (incl pythonpath=lib).
-  if ! (cd graph-editor && venv/bin/pytest --tb=short -q); then
-    echo ""
-    print_red "✗ Python tests failed!"
-    print_red "Release aborted."
-    exit 1
+  # Run Python tests (with skip-on-keypress countdown)
+  SKIP_PYTHON=false
+  print_yellow "[3/3] Python tests — press any key within 3s to skip..."
+  for i in 3 2 1; do
+    printf "\r  Starting in %d... " "$i"
+    if read -r -s -n 1 -t 1 _key 2>/dev/null; then
+      SKIP_PYTHON=true
+      break
+    fi
+  done
+  printf "\r                              \r"
+
+  if [[ "$SKIP_PYTHON" == true ]]; then
+    print_yellow "  ⊘ Python tests skipped (user interrupt)"
+  else
+    print_yellow "[3/3] Running Python tests..."
+    # Run from graph-editor so pytest picks up graph-editor/pytest.ini (incl pythonpath=lib).
+    if ! (cd graph-editor && venv/bin/pytest --tb=short -q); then
+      echo ""
+      print_red "✗ Python tests failed!"
+      print_red "Release aborted."
+      exit 1
+    fi
+    print_green "✓ Python tests passed"
   fi
-  print_green "✓ Python tests passed"
   echo ""
   
   print_green "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -142,34 +188,43 @@ if [[ "$RUN_TESTS" == true ]]; then
   echo ""
 fi
 
-# Run build verification if requested
+# Run build verification unless --nobuild
 if [[ "$RUN_BUILD" == true ]]; then
   print_blue "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-  print_blue "Verifying build will succeed..."
+  print_blue "Build verification"
   print_blue "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
   echo ""
-  
-  # TypeScript type-check catches 95% of build failures, much faster than full build
-  print_yellow "Running TypeScript type check..."
-  
-  # Run tsc and capture output + exit code properly
-  TSC_OUTPUT=$(cd graph-editor && npx tsc --noEmit 2>&1) || TSC_EXIT=$?
-  TSC_EXIT=${TSC_EXIT:-0}
-  
-  if [[ $TSC_EXIT -ne 0 ]]; then
-    echo "$TSC_OUTPUT"
-    echo ""
-    print_red "✗ TypeScript errors - build would fail!"
-    print_red "Release aborted."
-    exit 1
+
+  SKIP_TSC=false
+  print_yellow "TypeScript type check — press any key within 3s to skip..."
+  for i in 3 2 1; do
+    printf "\r  Starting in %d... " "$i"
+    if read -r -s -n 1 -t 1 _key 2>/dev/null; then
+      SKIP_TSC=true
+      break
+    fi
+  done
+  printf "\r                              \r"
+
+  if [[ "$SKIP_TSC" == true ]]; then
+    print_yellow "  ⊘ TypeScript check skipped (user interrupt)"
+  else
+    print_yellow "Running TypeScript type check..."
+
+    # Run tsc and capture output + exit code properly
+    TSC_OUTPUT=$(cd graph-editor && npx tsc --noEmit 2>&1) || TSC_EXIT=$?
+    TSC_EXIT=${TSC_EXIT:-0}
+
+    if [[ $TSC_EXIT -ne 0 ]]; then
+      echo "$TSC_OUTPUT"
+      echo ""
+      print_red "✗ TypeScript errors - build would fail!"
+      print_red "Release aborted."
+      exit 1
+    fi
+
+    print_green "✓ TypeScript check passed"
   fi
-  
-  print_green "✓ TypeScript check passed"
-  echo ""
-  
-  print_green "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-  print_green "✓ Build verification complete!"
-  print_green "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
   echo ""
 fi
 

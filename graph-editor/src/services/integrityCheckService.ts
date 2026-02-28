@@ -1039,6 +1039,18 @@ export class IntegrityCheckService {
         message: 'Graph missing policies block'
       });
     }
+
+    if (data.dailyFetch && !data.dataInterestsDSL?.trim()) {
+      issues.push({
+        fileId: graphFileId,
+        type: 'graph',
+        severity: 'warning',
+        category: 'semantic',
+        field: 'dailyFetch',
+        message: 'Daily fetch is enabled but no pinned data-interests DSL is set — the nightly runner will skip the retrieve step for this graph',
+        suggestion: 'Add a dataInterestsDSL (pinned query) so the runner knows which slices to fetch'
+      });
+    }
     
     // ─────────────────────────────────────────────────────────────────────────
     // Node Validation
@@ -1116,6 +1128,23 @@ export class IntegrityCheckService {
             message: `Node references non-existent event: ${node.event_id}`,
             nodeUuid: node.uuid
           });
+        }
+
+        // Cross-check graph node event_id against node file event_id
+        if (node.id && nodeFiles.has(node.id)) {
+          const nodeFileData = nodeFiles.get(node.id)!.data;
+          if (nodeFileData?.event_id && nodeFileData.event_id !== node.event_id) {
+            issues.push({
+              fileId: graphFileId,
+              type: 'graph',
+              severity: 'error',
+              category: 'reference',
+              field: `nodes[${i}].event_id`,
+              message: `Graph node event_id "${node.event_id}" differs from node file event_id "${nodeFileData.event_id}"`,
+              suggestion: 'The graph node and its node file must agree on event_id; mismatches cause silent data fetch failures',
+              nodeUuid: node.uuid
+            });
+          }
         }
       }
       
@@ -1231,6 +1260,52 @@ export class IntegrityCheckService {
       }
     }
     
+    // ─────────────────────────────────────────────────────────────────────────
+    // Duplicate Event Bindings & Placeholder Labels
+    // ─────────────────────────────────────────────────────────────────────────
+
+    // #7: Multiple graph nodes sharing the same event_id
+    const eventIdToNodeIds = new Map<string, { uuid: string; id: string }[]>();
+    for (const node of nodes) {
+      if (node.event_id && node.uuid) {
+        if (!eventIdToNodeIds.has(node.event_id)) {
+          eventIdToNodeIds.set(node.event_id, []);
+        }
+        eventIdToNodeIds.get(node.event_id)!.push({ uuid: node.uuid, id: node.id || '' });
+      }
+    }
+    for (const [eventId, sharingNodes] of eventIdToNodeIds) {
+      if (sharingNodes.length > 1) {
+        const names = sharingNodes.map(n => `"${n.id || n.uuid.substring(0, 8)}"`).join(', ');
+        issues.push({
+          fileId: graphFileId,
+          type: 'graph',
+          severity: 'info',
+          category: 'semantic',
+          field: `event_id: ${eventId}`,
+          message: `Multiple nodes share event_id "${eventId}": ${names} — data cannot distinguish these states, which may inflate probabilities`,
+          suggestion: 'Ensure this is intentional; if nodes represent distinct states, they should have distinct events'
+        });
+      }
+    }
+
+    // #9: Placeholder labels (e.g. "Node 14")
+    for (const node of nodes) {
+      const label = (node.label || '').trim();
+      if (label && /^node\s+\d+$/i.test(label)) {
+        issues.push({
+          fileId: graphFileId,
+          type: 'graph',
+          severity: 'info',
+          category: 'naming',
+          field: `node: ${node.id || node.uuid?.substring(0, 8)}`,
+          message: `Node has placeholder label "${label}"`,
+          suggestion: 'Rename to a descriptive label that reflects the node\'s role in the funnel',
+          nodeUuid: node.uuid
+        });
+      }
+    }
+
     // ─────────────────────────────────────────────────────────────────────────
     // Edge Validation
     // ─────────────────────────────────────────────────────────────────────────
@@ -1403,6 +1478,29 @@ export class IntegrityCheckService {
           message: 'Edge is a self-loop (connects node to itself)',
           edgeUuid: edge.uuid
         });
+      }
+
+      // #6: Query on unfetchable edge (source or target lacks event_id)
+      if (edge.query) {
+        const sourceNode = nodes.find((n: any) => n.uuid === edge.from || n.id === edge.from);
+        const targetNode = nodes.find((n: any) => n.uuid === edge.to || n.id === edge.to);
+        const srcHasEvent = !!sourceNode?.event_id;
+        const tgtHasEvent = !!targetNode?.event_id;
+        if (!srcHasEvent || !tgtHasEvent) {
+          const detail = !srcHasEvent && !tgtHasEvent
+            ? 'neither source nor target has event_id'
+            : !srcHasEvent ? 'source node lacks event_id' : 'target node lacks event_id';
+          issues.push({
+            fileId: graphFileId,
+            type: 'graph',
+            severity: 'warning',
+            category: 'semantic',
+            field: `edges[${i}]`,
+            message: `Edge has a query but ${detail} — this produces planner warnings at fetch time`,
+            suggestion: 'Remove query, p.connection, and p.id from edges where one or both nodes are unfetchable',
+            edgeUuid: edge.uuid
+          });
+        }
       }
       
       // Parameter references
@@ -1776,6 +1874,132 @@ export class IntegrityCheckService {
             message: `Node "${node.id || 'unnamed'}" is disconnected (no edges)`
           });
         }
+      }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Topology Checks (absorbing, complement, fetchability, probability sums)
+    // ─────────────────────────────────────────────────────────────────────────
+
+    const nodesWithIncoming = new Set<string>();
+    const outgoingByNodeUuid = new Map<string, any[]>();
+    for (const edge of edges) {
+      const fromUuid = nodeUuids.has(edge.from) ? edge.from : nodes.find((n: any) => n.id === edge.from)?.uuid;
+      const toUuid = nodeUuids.has(edge.to) ? edge.to : nodes.find((n: any) => n.id === edge.to)?.uuid;
+
+      if (toUuid) nodesWithIncoming.add(toUuid);
+      if (fromUuid) {
+        if (!outgoingByNodeUuid.has(fromUuid)) outgoingByNodeUuid.set(fromUuid, []);
+        outgoingByNodeUuid.get(fromUuid)!.push({ ...edge, _resolvedToUuid: toUuid });
+      }
+    }
+
+    for (const node of nodes) {
+      if (!node.uuid) continue;
+      const outgoing = outgoingByNodeUuid.get(node.uuid) || [];
+      const hasIncoming = nodesWithIncoming.has(node.uuid);
+      const isStart = node.entry?.is_start;
+      const nodeName = node.id || node.uuid.substring(0, 8);
+
+      // #1: Absorbing node with outgoing edges (dead code)
+      if (node.absorbing && outgoing.length > 0) {
+        issues.push({
+          fileId: graphFileId,
+          type: 'graph',
+          severity: 'error',
+          category: 'graph-structure',
+          field: `node: ${nodeName}`,
+          message: `Absorbing node "${nodeName}" has ${outgoing.length} outgoing edge(s) — these are dead code (the runner stops at absorbing nodes)`,
+          suggestion: 'Either remove the outgoing edges or unmark the node as absorbing',
+          nodeUuid: node.uuid
+        });
+      }
+
+      // #2: Non-absorbing terminal node (has incoming but no outgoing, missing absorbing flag)
+      if (!node.absorbing && outgoing.length === 0 && (hasIncoming || isStart)) {
+        if (node.type !== 'entry' && node.type !== 'exit') {
+          issues.push({
+            fileId: graphFileId,
+            type: 'graph',
+            severity: 'warning',
+            category: 'graph-structure',
+            field: `node: ${nodeName}`,
+            message: `Node "${nodeName}" has no outgoing edges but is not marked absorbing — probability mass will leak`,
+            suggestion: 'Mark as absorbing: true if this is a terminal state, or add outgoing edges',
+            nodeUuid: node.uuid
+          });
+        }
+      }
+
+      if (node.absorbing || outgoing.length === 0) continue;
+
+      // Classify outgoing edges by fetchability
+      const fetchableEdges: any[] = [];
+      const unfetchableEdges: any[] = [];
+      for (const e of outgoing) {
+        const targetNode = nodes.find((n: any) => n.uuid === e._resolvedToUuid);
+        if (node.event_id && targetNode?.event_id) {
+          fetchableEdges.push(e);
+        } else {
+          unfetchableEdges.push(e);
+        }
+      }
+
+      // #3: All outgoing targets lack event_id — complement has no evidence
+      if (outgoing.length > 0 && fetchableEdges.length === 0 && node.event_id) {
+        issues.push({
+          fileId: graphFileId,
+          type: 'graph',
+          severity: 'warning',
+          category: 'semantic',
+          field: `node: ${nodeName}`,
+          message: `All ${outgoing.length} outgoing edge(s) from "${nodeName}" target nodes without event_id — complement fill requires at least one evidence-backed sibling`,
+          suggestion: 'Wire at least one target to an Amplitude event, or mark this node absorbing if there is no downstream instrumentation',
+          nodeUuid: node.uuid
+        });
+      }
+
+      // #4: Missing complement/abandon edge (all outgoing are fetchable, none go to an unfetchable absorbing node)
+      if (fetchableEdges.length > 0 && unfetchableEdges.length === 0) {
+        const hasAbsorbingTarget = outgoing.some((e: any) => {
+          const t = nodes.find((n: any) => n.uuid === e._resolvedToUuid);
+          return t?.absorbing;
+        });
+        if (!hasAbsorbingTarget) {
+          issues.push({
+            fileId: graphFileId,
+            type: 'graph',
+            severity: 'info',
+            category: 'semantic',
+            field: `node: ${nodeName}`,
+            message: `Node "${nodeName}" has only fetchable outgoing edges and no complement edge to an absorbing node — residual probability (1 − Σfetched) may be lost`,
+            suggestion: 'Add an unfetchable edge to an absorbing abandon node so the complement algorithm can assign the residual',
+            nodeUuid: node.uuid
+          });
+        }
+      }
+
+      // #8: Outgoing edge probabilities sum > 1.0
+      let sumP = 0;
+      let hasProbabilities = false;
+      for (const e of outgoing) {
+        const mean = e.p?.mean;
+        if (typeof mean === 'number') {
+          sumP += mean;
+          hasProbabilities = true;
+        }
+      }
+      if (hasProbabilities && sumP > 1.001) {
+        issues.push({
+          fileId: graphFileId,
+          type: 'graph',
+          severity: 'error',
+          category: 'value',
+          field: `node: ${nodeName}`,
+          message: `Outgoing edge probabilities from "${nodeName}" sum to ${(sumP * 100).toFixed(1)}% (> 100%)`,
+          suggestion: 'Adjust probabilities so outgoing edges from this node sum to ≤ 1.0',
+          nodeUuid: node.uuid
+        });
       }
     }
   }

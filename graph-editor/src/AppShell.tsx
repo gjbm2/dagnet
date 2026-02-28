@@ -389,7 +389,13 @@ function MainAppShellContent() {
     const handleOAuthReturn = async () => {
       const { consumeOAuthReturn, applyOAuthToken } = await import('./services/githubOAuthService');
 
-      const oauthData = consumeOAuthReturn();
+      const { data: oauthData, error: oauthError } = consumeOAuthReturn();
+
+      if (oauthError) {
+        toast.error(oauthError, { duration: 8000 });
+        return;
+      }
+
       if (!oauthData) return;
 
       const applied = await applyOAuthToken(oauthData);
@@ -1873,74 +1879,88 @@ function MainAppShellContent() {
         {stalenessNudgeModals}
 
         {/* Auth Expired Modal */}
-        {showAuthExpiredModal && (
-          <div
-            style={{
-              position: 'fixed',
-              top: 0, left: 0, right: 0, bottom: 0,
-              background: 'rgba(0,0,0,0.5)',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              zIndex: 10000,
-            }}
-          >
+        {showAuthExpiredModal && (() => {
+          const oauthAvailable = !!import.meta.env.VITE_GITHUB_OAUTH_CLIENT_ID;
+          return (
             <div
               style={{
-                background: 'white',
-                borderRadius: '8px',
-                padding: '32px',
-                maxWidth: '420px',
-                width: '90%',
-                textAlign: 'center',
+                position: 'fixed',
+                top: 0, left: 0, right: 0, bottom: 0,
+                background: 'rgba(0,0,0,0.5)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                zIndex: 10000,
               }}
             >
-              <h3 style={{ margin: '0 0 12px', fontSize: '16px' }}>GitHub credentials expired</h3>
-              <p style={{ margin: '0 0 24px', fontSize: '14px', color: '#4b5563', lineHeight: 1.5 }}>
-                Your saved credentials are no longer valid. Connect your GitHub account to continue syncing.
-              </p>
-              <div style={{ display: 'flex', gap: '12px', justifyContent: 'center' }}>
-                <button
-                  style={{
-                    padding: '8px 20px',
-                    borderRadius: '6px',
-                    border: 'none',
-                    background: '#059669',
-                    color: 'white',
-                    fontWeight: 500,
-                    cursor: 'pointer',
-                    fontSize: '14px',
-                  }}
-                  onClick={() => {
-                    setShowAuthExpiredModal(false);
-                    import('./services/githubOAuthService').then(({ startOAuthFlow }) => {
-                      if (navState.selectedRepo) startOAuthFlow(navState.selectedRepo);
-                    });
-                  }}
-                >
-                  Connect GitHub
-                </button>
-                <button
-                  style={{
-                    padding: '8px 20px',
-                    borderRadius: '6px',
-                    border: '1px solid #d1d5db',
-                    background: 'white',
-                    color: '#374151',
-                    cursor: 'pointer',
-                    fontSize: '14px',
-                  }}
-                  onClick={() => {
-                    setShowAuthExpiredModal(false);
-                    toast('You can reconnect any time via the connect 🔗 chip in the menu bar.', { duration: 5000 });
-                  }}
-                >
-                  Dismiss
-                </button>
+              <div
+                style={{
+                  background: 'white',
+                  borderRadius: '8px',
+                  padding: '32px',
+                  maxWidth: '420px',
+                  width: '90%',
+                  textAlign: 'center',
+                }}
+              >
+                <h3 style={{ margin: '0 0 12px', fontSize: '16px' }}>GitHub credentials expired</h3>
+                <p style={{ margin: '0 0 24px', fontSize: '14px', color: '#4b5563', lineHeight: 1.5 }}>
+                  {oauthAvailable
+                    ? 'Your saved credentials are no longer valid. Connect your GitHub account to continue syncing.'
+                    : 'Your saved GitHub token is no longer valid and OAuth is not configured for this environment. Update your PAT in credentials, or configure OAuth (see deployment-github-auth docs).'}
+                </p>
+                <div style={{ display: 'flex', gap: '12px', justifyContent: 'center' }}>
+                  {oauthAvailable && (
+                    <button
+                      style={{
+                        padding: '8px 20px',
+                        borderRadius: '6px',
+                        border: 'none',
+                        background: '#059669',
+                        color: 'white',
+                        fontWeight: 500,
+                        cursor: 'pointer',
+                        fontSize: '14px',
+                      }}
+                      onClick={() => {
+                        setShowAuthExpiredModal(false);
+                        import('./services/githubOAuthService').then(({ startOAuthFlow }) => {
+                          if (navState.selectedRepo) {
+                            const started = startOAuthFlow(navState.selectedRepo);
+                            if (!started) {
+                              toast.error('OAuth not configured — check VITE_GITHUB_OAUTH_CLIENT_ID in your environment.');
+                            }
+                          }
+                        });
+                      }}
+                    >
+                      Connect GitHub
+                    </button>
+                  )}
+                  <button
+                    style={{
+                      padding: '8px 20px',
+                      borderRadius: '6px',
+                      border: '1px solid #d1d5db',
+                      background: 'white',
+                      color: '#374151',
+                      cursor: 'pointer',
+                      fontSize: '14px',
+                    }}
+                    onClick={() => {
+                      setShowAuthExpiredModal(false);
+                      if (oauthAvailable) {
+                        toast('You can reconnect any time via the connect 🔗 chip in the menu bar.', { duration: 5000 });
+                      }
+                    }}
+                  >
+                    Dismiss
+                  </button>
+                </div>
               </div>
             </div>
-          </div>
-        )}
+          );
+        })()}
 
         {/* Init Credentials Modal */}
         {showInitCredsModal && (

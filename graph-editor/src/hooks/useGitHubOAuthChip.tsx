@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigatorContext, useIsReadOnly } from '../contexts/NavigatorContext';
 import { credentialsManager } from '../lib/credentials';
+import toast from 'react-hot-toast';
 import { startOAuthFlow, isOAuthEnabled } from '../services/githubOAuthService';
 
 /**
@@ -77,7 +78,10 @@ export function GitHubOAuthChip() {
       title="Click to connect your GitHub account for write access"
       onClick={() => {
         if (state.selectedRepo) {
-          startOAuthFlow(state.selectedRepo);
+          const started = startOAuthFlow(state.selectedRepo);
+          if (!started) {
+            toast.error('OAuth not configured — check VITE_GITHUB_OAUTH_CLIENT_ID in your environment.');
+          }
         }
       }}
     >

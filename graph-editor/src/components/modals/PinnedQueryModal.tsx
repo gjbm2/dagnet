@@ -194,6 +194,21 @@ export function PinnedQueryModal({ isOpen, currentDSL, dailyFetch, onSave, onClo
             <p style={{ fontSize: '11px', color: '#6B7280', marginTop: '4px', marginLeft: '24px' }}>
               Include this graph in unattended nightly automation runs (when using <code style={{ background: '#F3F4F6', padding: '1px 4px', borderRadius: '2px' }}>?retrieveall</code> without specifying graph names)
             </p>
+            {draftDailyFetch && !draftDSL?.trim() && (
+              <div style={{
+                marginTop: '8px',
+                marginLeft: '24px',
+                padding: '8px 10px',
+                background: '#FEF3C7',
+                border: '1px solid #FDE047',
+                borderRadius: '4px',
+                fontSize: '11px',
+                color: '#854D0E',
+                lineHeight: '1.4',
+              }}>
+                ⚠️ No pinned DSL is set. The nightly runner will include this graph but <strong>skip the retrieve step</strong>. Add a query above before saving.
+              </div>
+            )}
           </div>
         </div>
         

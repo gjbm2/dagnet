@@ -202,39 +202,53 @@ describe('GitHub OAuth Service', () => {
 
       const result = consumeOAuthReturn();
 
-      expect(result).toEqual({
+      expect(result.error).toBeNull();
+      expect(result.data).toEqual({
         token: 'ghu_tok',
         username: 'alice',
         repoName: 'my-repo',
       });
     });
 
-    it('should return null and clean URL on state mismatch', () => {
+    it('should return error and clean URL on state mismatch', () => {
       sessionStorage.setItem('dagnet_oauth_state', 'correct_state');
       sessionStorage.setItem('dagnet_oauth_repo', 'my-repo');
       setUrl('?github_token=ghu_tok&github_user=alice&state=wrong_state');
 
       const result = consumeOAuthReturn();
 
-      expect(result).toBeNull();
+      expect(result.data).toBeNull();
+      expect(result.error).toMatch(/state mismatch/i);
       expect(window.history.replaceState).toHaveBeenCalled();
     });
 
-    it('should return null on auth error', () => {
+    it('should return friendly error on auth_error=server_config (missing secret)', () => {
+      setUrl('?auth_error=server_config');
+
+      const result = consumeOAuthReturn();
+
+      expect(result.data).toBeNull();
+      expect(result.error).toMatch(/GITHUB_OAUTH_CLIENT_SECRET/);
+      expect(window.history.replaceState).toHaveBeenCalled();
+    });
+
+    it('should return friendly error on auth_error=token_exchange', () => {
       setUrl('?auth_error=token_exchange&detail=bad_verification_code');
 
       const result = consumeOAuthReturn();
 
-      expect(result).toBeNull();
+      expect(result.data).toBeNull();
+      expect(result.error).toMatch(/token exchange/i);
       expect(window.history.replaceState).toHaveBeenCalled();
     });
 
-    it('should return null when no OAuth params are present (normal page load)', () => {
+    it('should return no data and no error on normal page load', () => {
       setUrl('?oauth');
 
       const result = consumeOAuthReturn();
 
-      expect(result).toBeNull();
+      expect(result.data).toBeNull();
+      expect(result.error).toBeNull();
       expect(window.history.replaceState).not.toHaveBeenCalled();
     });
 
@@ -255,7 +269,8 @@ describe('GitHub OAuth Service', () => {
 
       const result = consumeOAuthReturn();
 
-      expect(result).toEqual({
+      expect(result.error).toBeNull();
+      expect(result.data).toEqual({
         token: 'ghu_tok',
         username: '',
         repoName: '',
