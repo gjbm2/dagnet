@@ -30,6 +30,7 @@ import { fileRegistry } from '../../contexts/TabContext';
 import CollapsibleSection from '../CollapsibleSection';
 import { AnalysisResultCards } from '../analytics/AnalysisResultCards';
 import { checkBridgeStatus, createAmplitudeDraft } from '../../services/amplitudeBridgeService';
+import { computeLagFitAnalysis, checkLagFitAvailable } from '../../services/lagFitAnalysisService';
 import { buildAmplitudeFunnelDefinition } from '../../services/amplitudeFunnelBuilderService';
 import { parseDSL } from '../../lib/queryDSL';
 import { AmplitudeBridgeInstallModal } from '../modals/AmplitudeBridgeInstallModal';
@@ -346,14 +347,23 @@ export default function AnalyticsPanel({ tabId, hideHeader = false }: AnalyticsP
         }));
         
         console.log('[AnalyticsPanel] Got analyses:', normalizedAnalyses.map(a => a.id));
-        setAvailableAnalyses(normalizedAnalyses);
-        
+
+        // Inject frontend-only lag_fit if the DSL points to an edge with cohort data
+        const augmentedAnalyses = [...normalizedAnalyses];
+        if (graph && queryDSL && checkLagFitAvailable(graph, queryDSL)) {
+          if (!augmentedAnalyses.some(a => a.id === 'lag_fit')) {
+            augmentedAnalyses.push({ id: 'lag_fit', name: 'Lag Fit', description: 'Fitted log-normal lag distribution vs. observed cohort completeness', is_primary: false });
+          }
+        }
+
+        setAvailableAnalyses(augmentedAnalyses);
+
         // Preserve current selection if it's still available; otherwise fall back to primary
         setSelectedAnalysisId(prev => {
-          if (prev && normalizedAnalyses.some(a => a.id === prev)) {
+          if (prev && augmentedAnalyses.some(a => a.id === prev)) {
             return prev; // current selection is still valid — keep it
           }
-          const primary = normalizedAnalyses.find(a => a.is_primary);
+          const primary = augmentedAnalyses.find(a => a.is_primary);
           return primary ? primary.id : null;
         });
       } catch (err) {
@@ -399,8 +409,29 @@ export default function AnalyticsPanel({ tabId, hideHeader = false }: AnalyticsP
     }, 500);
     
     try {
+      // === Frontend-only: lag_fit bypass ===
+      // Compute entirely from in-browser parameter data — no backend call needed.
+      if (selectedAnalysisId === 'lag_fit') {
+        const lagResult = graph ? computeLagFitAnalysis(graph, queryDSL) : null;
+        if (analysisRequestRef.current === requestId) {
+          if (lagResult) {
+            setResults({ success: true, result: lagResult });
+          } else {
+            setError('No cohort lag data available for this edge. Ensure the edge has been fetched in cohort mode and has enough converters for a lag fit.');
+            setResults(null);
+          }
+          setIsLoading(false);
+          setShowSpinner(false);
+          if (spinnerTimeoutRef.current) {
+            clearTimeout(spinnerTimeoutRef.current);
+            spinnerTimeoutRef.current = null;
+          }
+        }
+        return;
+      }
+
       let response: AnalysisResponse;
-      
+
       // === Per-scenario snapshot dependency resolution ===
       // If the selected analysis type has a snapshotContract, we resolve DB coordinates
       // *per scenario* so each scenario carries its own snapshot subjects (derived from

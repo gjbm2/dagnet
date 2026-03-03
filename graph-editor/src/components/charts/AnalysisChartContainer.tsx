@@ -7,8 +7,9 @@ import { FunnelBridgeChartPreview } from './FunnelBridgeChartPreview';
 import { SnapshotHistogramChart } from './SnapshotHistogramChart';
 import { SnapshotDailyConversionsChart } from './SnapshotDailyConversionsChart';
 import { SnapshotCohortMaturityChart } from './SnapshotCohortMaturityChart';
+import { LagFitChart } from './LagFitChart';
 
-type ChartKind = 'funnel' | 'bridge' | 'bridge_horizontal' | 'histogram' | 'daily_conversions' | 'cohort_maturity';
+type ChartKind = 'funnel' | 'bridge' | 'bridge_horizontal' | 'histogram' | 'daily_conversions' | 'cohort_maturity' | 'lag_fit';
 
 function normaliseChartKind(kind: string | undefined | null): ChartKind | null {
   if (!kind) return null;
@@ -18,6 +19,7 @@ function normaliseChartKind(kind: string | undefined | null): ChartKind | null {
   if (kind === 'histogram' || kind === 'lag_histogram') return 'histogram';
   if (kind === 'daily_conversions') return 'daily_conversions';
   if (kind === 'cohort_maturity') return 'cohort_maturity';
+  if (kind === 'lag_fit') return 'lag_fit';
   return null;
 }
 
@@ -28,6 +30,7 @@ function labelForChartKind(kind: ChartKind): string {
   if (kind === 'histogram') return 'Lag Histogram';
   if (kind === 'daily_conversions') return 'Daily Conversions';
   if (kind === 'cohort_maturity') return 'Cohort Maturity';
+  if (kind === 'lag_fit') return 'Lag Fit';
   return kind;
 }
 
@@ -55,6 +58,7 @@ export function AnalysisChartContainer(props: {
     if (t === 'lag_histogram') return 'histogram';
     if (t === 'daily_conversions') return 'daily_conversions';
     if (t === 'cohort_maturity') return 'cohort_maturity';
+    if (t === 'lag_fit') return 'lag_fit';
     if (typeof t === 'string' && t.includes('bridge')) return 'bridge';
     // Default to bridge so we never render an empty chart area for valid analysis results
     // that don't include `semantics.chart` (common in share/live flows).
@@ -169,6 +173,11 @@ export function AnalysisChartContainer(props: {
             fillHeight={fillHeight}
             queryDsl={source?.query_dsl}
             source={source}
+          />
+        ) : kind === 'lag_fit' ? (
+          <LagFitChart
+            result={result}
+            height={height}
           />
         ) : kind === 'funnel' ? (
           <FunnelChartPreview
