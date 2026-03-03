@@ -1,4 +1,11 @@
 # DagNet Release Notes
+## Version 1.6.17b
+**Released:** 3-Mar-26
+
+Fix to single-day data fetching logic on dual path (Kevin issue)
+
+---
+
 ## Version 1.6.9b
 **Released:** 27-Feb-26
 
