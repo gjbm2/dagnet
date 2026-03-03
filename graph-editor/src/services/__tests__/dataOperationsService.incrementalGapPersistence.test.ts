@@ -781,6 +781,161 @@ describe('dataOperationsService.getFromSourceDirect persists successful gaps imm
     expect(allDates).toContain('1-Dec-25');
     expect(allDates).toContain('2-Dec-25');
   });
+
+  it('should persist daily datapoint when dual-query DAS returns time_series as a single object (1-day window)', async () => {
+    // Reproduces the bug where JSONata $map on a single-element array returns a bare object
+    // instead of a 1-element array. With window(0d:0d) (today only), the DAS runner produces
+    // time_series: {date, n, k, p} rather than [{date, n, k, p}].
+    // The dual-query path must normalise this into an array; otherwise 0 days are persisted.
+
+    await (fileRegistry as any).registerFile('parameter-p1', {
+      id: 'p1',
+      connection: 'amplitude-test',
+      values: [],
+    });
+
+    let call = 0;
+    executeSpy.mockImplementation(async () => {
+      call += 1;
+      if (call === 1) {
+        // Base query (n_query): single object, NOT an array
+        return {
+          success: true,
+          updates: [],
+          raw: {
+            time_series: { date: '3-Mar-26', n: 407, k: 407, p: 1 },
+            n: 407,
+            k: 407,
+          },
+        };
+      }
+      if (call === 2) {
+        // Conditioned query: single object, NOT an array
+        return {
+          success: true,
+          updates: [],
+          raw: {
+            time_series: { date: '3-Mar-26', n: 407, k: 221, p: 0.543 },
+            n: 407,
+            k: 221,
+          },
+        };
+      }
+      return { success: false, error: 'unexpected call' };
+    });
+
+    const graph: Graph = {
+      nodes: [
+        { id: 'A', uuid: 'A', label: 'A', event_id: 'a' } as any,
+        { id: 'B', uuid: 'B', label: 'B', event_id: 'b' } as any,
+      ],
+      edges: [
+        {
+          id: 'e1',
+          uuid: 'e1',
+          from: 'A',
+          to: 'B',
+          query: 'from(a).to(b)',
+          n_query: 'to(a)',
+          p: { id: 'p1', connection: 'amplitude-test' },
+        } as any,
+      ],
+      currentQueryDSL: 'window(3-Mar-26:3-Mar-26)',
+    } as any;
+
+    const result = await dataOperationsService.getFromSourceDirect({
+      objectType: 'parameter',
+      objectId: 'p1',
+      targetId: 'e1',
+      graph,
+      setGraph: () => {},
+      writeToFile: true,
+      bustCache: false,
+      currentDSL: 'window(3-Mar-26:3-Mar-26)',
+      targetSlice: 'window(3-Mar-26:3-Mar-26)',
+      overrideFetchWindows: [{ start: '3-Mar-26', end: '3-Mar-26' }],
+    } as any);
+
+    // Must have persisted 1 day, not 0
+    expect(result.daysFetched).toBe(1);
+
+    const stored = (fileRegistry as any)._mockFiles.get('parameter-p1')?.data;
+    expect(stored).toBeDefined();
+    const allDates: string[] = (stored.values ?? []).flatMap((v: any) => v.dates ?? []);
+    expect(allDates).toContain('3-Mar-26');
+
+    // n comes from base query (407), k comes from conditioned query (221)
+    const slice = stored.values?.find((v: any) => v.dates?.includes('3-Mar-26'));
+    expect(slice).toBeDefined();
+    const idx = slice.dates.indexOf('3-Mar-26');
+    expect(slice.n_daily[idx]).toBe(407);
+    expect(slice.k_daily[idx]).toBe(221);
+  });
+
+  it('should persist daily datapoint when simple (non-dual-query) DAS returns time_series as a single object', async () => {
+    // Same JSONata quirk but on the simple path (no n_query / visited_upstream).
+    // The simple path already had a fix for this; this test locks it in.
+
+    await (fileRegistry as any).registerFile('parameter-p1', {
+      id: 'p1',
+      connection: 'amplitude-test',
+      values: [],
+    });
+
+    executeSpy.mockResolvedValue({
+      success: true,
+      updates: [],
+      raw: {
+        time_series: { date: '3-Mar-26', n: 100, k: 45, p: 0.45 },
+        n: 100,
+        k: 45,
+      },
+    });
+
+    const graph: Graph = {
+      nodes: [
+        { id: 'A', uuid: 'A', label: 'A', event_id: 'a' } as any,
+        { id: 'B', uuid: 'B', label: 'B', event_id: 'b' } as any,
+      ],
+      edges: [
+        {
+          id: 'e1',
+          uuid: 'e1',
+          from: 'A',
+          to: 'B',
+          query: 'from(a).to(b)',
+          p: { id: 'p1', connection: 'amplitude-test' },
+        } as any,
+      ],
+      currentQueryDSL: 'window(3-Mar-26:3-Mar-26)',
+    } as any;
+
+    const result = await dataOperationsService.getFromSourceDirect({
+      objectType: 'parameter',
+      objectId: 'p1',
+      targetId: 'e1',
+      graph,
+      setGraph: () => {},
+      writeToFile: true,
+      bustCache: false,
+      currentDSL: 'window(3-Mar-26:3-Mar-26)',
+      targetSlice: 'window(3-Mar-26:3-Mar-26)',
+      overrideFetchWindows: [{ start: '3-Mar-26', end: '3-Mar-26' }],
+    } as any);
+
+    expect(result.daysFetched).toBe(1);
+
+    const stored = (fileRegistry as any)._mockFiles.get('parameter-p1')?.data;
+    expect(stored).toBeDefined();
+    const allDates: string[] = (stored.values ?? []).flatMap((v: any) => v.dates ?? []);
+    expect(allDates).toContain('3-Mar-26');
+
+    const slice = stored.values?.find((v: any) => v.dates?.includes('3-Mar-26'));
+    expect(slice).toBeDefined();
+    const idx = slice.dates.indexOf('3-Mar-26');
+    expect(slice.n_daily[idx]).toBe(100);
+    expect(slice.k_daily[idx]).toBe(45);
+  });
 });
 
 

@@ -7306,28 +7306,32 @@ class DataOperationsService {
           
           // For time series: same logic - use k values for explicit n_query, n values for auto-stripped
           // CRITICAL (§0.1): Preserve latency fields from base query
-          if (Array.isArray(baseRaw?.time_series)) {
+          // Normalise single-object time_series (returned by DAS for 1-day windows) into an array
+          const baseRawTimeSeries = Array.isArray(baseRaw?.time_series)
+            ? baseRaw.time_series
+            : (baseRaw?.time_series && typeof baseRaw.time_series === 'object' && baseRaw.time_series.date)
+              ? [baseRaw.time_series]
+              : undefined;
+          if (baseRawTimeSeries) {
             if (explicitNQuery) {
               // For explicit n_query, the "n" for the main query is the "k" of the n_query
               if (explicitNQueryWasToOnlyNormalForm && explicitNQueryWindowDenomUsesFromCount) {
-                baseTimeSeries = baseRaw.time_series.map((day: any) => ({
+                baseTimeSeries = baseRawTimeSeries.map((day: any) => ({
                   date: day.date,
                   n: day.n,  // Use from_count as n for window-mode to(X)
                   k: day.n,
                   p: day.p,
-                  // Preserve latency fields from base query
                   ...(day.median_lag_days !== undefined && { median_lag_days: day.median_lag_days }),
                   ...(day.mean_lag_days !== undefined && { mean_lag_days: day.mean_lag_days }),
                   ...(day.anchor_median_lag_days !== undefined && { anchor_median_lag_days: day.anchor_median_lag_days }),
                   ...(day.anchor_mean_lag_days !== undefined && { anchor_mean_lag_days: day.anchor_mean_lag_days }),
                 }));
               } else {
-                baseTimeSeries = baseRaw.time_series.map((day: any) => ({
+                baseTimeSeries = baseRawTimeSeries.map((day: any) => ({
                   date: day.date,
                   n: day.k,  // Use k as n
                   k: day.k,  // (k is the same for reference)
                   p: day.p,
-                  // Preserve latency fields from base query
                   ...(day.median_lag_days !== undefined && { median_lag_days: day.median_lag_days }),
                   ...(day.mean_lag_days !== undefined && { mean_lag_days: day.mean_lag_days }),
                   ...(day.anchor_median_lag_days !== undefined && { anchor_median_lag_days: day.anchor_median_lag_days }),
@@ -7335,7 +7339,7 @@ class DataOperationsService {
                 }));
               }
             } else {
-              baseTimeSeries = baseRaw.time_series;
+              baseTimeSeries = baseRawTimeSeries;
             }
           }
           
@@ -7594,7 +7598,11 @@ class DataOperationsService {
           
           // Combine time-series data if in writeToFile mode
           if (writeToFile && objectType === 'parameter') {
-            const condTimeSeries = Array.isArray(condRaw?.time_series) ? condRaw.time_series : [];
+            const condTimeSeries = Array.isArray(condRaw?.time_series)
+              ? condRaw.time_series
+              : (condRaw?.time_series && typeof condRaw.time_series === 'object' && condRaw.time_series.date)
+                ? [condRaw.time_series]
+                : [];
             
             // Build combined time series
             // For conditional probability: n comes from conditioned query (users at 'from' who visited upstream)
