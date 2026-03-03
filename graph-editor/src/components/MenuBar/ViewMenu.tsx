@@ -7,6 +7,7 @@ import { useViewPreferencesContext } from '../../contexts/ViewPreferencesContext
 import { useSankeyView } from '../../hooks/useSankeyView';
 import { useNodeImageView } from '../../hooks/useNodeImageView';
 import { useDashboardMode } from '../../hooks/useDashboardMode';
+import { useProjectionMode } from '../../contexts/ProjectionModeContext';
 import { useTheme } from '../../contexts/ThemeContext';
 import { sessionLogService } from '../../services/sessionLogService';
 import { graphIssuesService } from '../../services/graphIssuesService';
@@ -23,6 +24,7 @@ export function ViewMenu() {
   const { activeTabId, tabs, operations } = useTabContext();
   const { operations: navOps } = useNavigatorContext();
   const { isDashboardMode, toggleDashboardMode } = useDashboardMode();
+  const { isProjectionMode, toggleProjectionMode } = useProjectionMode();
   const { theme, toggleTheme } = useTheme();
   
   const activeTab = tabs.find(t => t.id === activeTabId);
@@ -351,6 +353,13 @@ export function ViewMenu() {
             onSelect={handleToggleDashboardMode}
           >
             {isDashboardMode ? '✓ ' : ''}Dashboard mode
+          </Menubar.Item>
+
+          <Menubar.Item
+            className="menubar-item"
+            onSelect={() => toggleProjectionMode({ updateUrl: true })}
+          >
+            {isProjectionMode ? '✓ ' : ''}Projection view
           </Menubar.Item>
 
           <Menubar.Item
