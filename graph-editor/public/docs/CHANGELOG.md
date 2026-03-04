@@ -1,48 +1,30 @@
 # DagNet Release Notes
-## Version 1.6.19b
-**Released:** 4-Mar-26
 
-Fixed sample data retrieval
+## Version 1.6.17b–1.6.19b (3-Mar-26 to 4-Mar-26)
+**Sample data overhaul, cohort maturity curves, fetch fixes**
 
----
-
-## Version 1.6.18b
-**Released:** 4-Mar-26
-
-Exposed cum lognormal curve within Cohort Maturity analysis; persisting path_mu and path_sigma for cohort fit modelling.
-
----
-
-## Version 1.6.17b
-**Released:** 3-Mar-26
-
-Fix to single-day data fetching logic on dual path (Kevin issue)
+- **Bundled sample data** — "Use sample data" now loads from a pre-built static bundle (zero GitHub API calls). Previously the flow cloned from GitHub without auth, exceeding the 60 req/hr rate limit and silently dropping files (including graph files).
+- **Clone resilience** — if a git clone fails partway through, a toast warning now shows how many files were dropped. Blob fetches are priority-sorted (graphs first, then indexes, then structural files) so the most useful files survive rate-limit truncation.
+- **Image fetch optimisation** — clone and pull now reuse the already-fetched repository tree for image discovery instead of making a separate API call.
+- **Sample data quality** — fixed events index (7 missing entries), context ID mismatches, truncated event descriptions; added metadata to lag-fixture parameters; populated latency model fields on 3 latency parameters.
+- **Cleaned up test shrapnel** — removed scratch test*.json files from repo root; moved test-only graph and context fixtures out of the sample data set into the test fixtures directory.
+- Cohort Maturity analysis now shows cumulative lognormal curve overlay; persisting `path_mu` and `path_sigma` for cohort fit modelling.
+- Fixed single-day data fetching logic on dual path (window + cohort).
 
 ---
 
-## Version 1.6.9b
-**Released:** 27-Feb-26
+## Version 1.6.3b–1.6.9b (24-Feb-26 to 27-Feb-26)
+**GitHub OAuth credentials, data historic fixes**
 
-Upgraded Github credentials management with proper GitHub app integration
-
----
-
-## Version 1.6.3b
-**Released:** 24-Feb-26
-
-Fixes to data historic logic
+- Per-user GitHub OAuth flow via GitHub App (replaces shared PAT)
+- OAuth chip in menu bar shows connection status; expired-token modal with one-click reconnect
+- Read-only mode when no token is configured (public repo access)
+- Fixes to data historic logic
 
 ---
 
-## Version 1.6.1b
-**Released:** 14-Feb-26
-
-'Create Amplitude funnel' feature added and tested through, plus Chrome plug-in to bridge webapps.
-
----
-
-## Version 1.6.1b
-**Released:** 14-Feb-26
+## Version 1.6.0b–1.6.1b (14-Feb-26)
+**Amplitude funnel export, dark mode**
 
 **Create as chart in Amplitude.** Select nodes, click "Amplitude" in the Analytics panel, and DagNet dynamically constructs a correctly specified funnel in Amplitude — including event filters, context segments, cohort exclusions, and graph-derived conversion windows. Works with staging and production (auto-detected from graph connection). Requires the Amplitude Bridge browser extension (Chrome-family only). See user guide for details.
 
@@ -51,70 +33,19 @@ Also in this release:
 - Connection-based project selection (no more hardcoded Amplitude project IDs)
 - Session logging for the full Amplitude export flow
 - Mixed-connection and non-Amplitude-node warnings
+- Dark mode 🌙
 
 ---
 
-## Version 1.6.0b
-**Released:** 14-Feb-26
+## Version 1.5.1b–1.5.14b (9-Feb-26 to 13-Feb-26)
+**Forecasting port & signature hardening**
 
-Dark mode. 🌙
-
----
-
-## Version 1.5.14b
-**Released:** 13-Feb-26
-
-Added support for staging environment (amplitude-staging)
-
----
-
-## Version 1.5.11b
-**Released:** 12-Feb-26
-
-Mid-sized Refactor to move hash matching over to FE from BE. Added setup.md
-
----
-
-## Version 1.5.10b
-**Released:** 12-Feb-26
-
-Fix t95 parity check
-
----
-
-## Version 1.5.6b
-**Released:** 12-Feb-26
-
-Git commit all fix
-Attempting to fix cohorts (without success yet)
-
----
-
-## Version 1.5.5b
-**Released:** 11-Feb-26
-
-Forecasting largely ported (not yet cutover); integrated code and graph dirs
-
----
-
-## Version 1.5.4b
-**Released:** 10-Feb-26
-
-Forecasting ported to BD, pending fixes; various front end fixes
-
----
-
-## Version 1.5.2b
-**Released:** 10-Feb-26
-
-cohort fixing
-
----
-
-## Version 1.5.1b
-**Released:** 9-Feb-26
-
-Various sig mapping fixes
+- Forecasting engine ported from backend to frontend (multi-release effort); integrated code and graph directories
+- Hash matching moved to frontend; various signature mapping fixes
+- Staging environment support (amplitude-staging)
+- Cohort fixing and t95 parity checks
+- Git commit all fix
+- setup.sh added for streamlined onboarding
 
 ---
 
@@ -155,15 +86,8 @@ A diagnostic and management tool for the snapshot archive. Open via **Data > Sna
 
 ---
 
-## Version 1.4.0b
-**Released:** 3-Feb-26
-
-DBS added; data snapshots, and improvement to onset / lognormal distro fitting.
-
----
-
-## Version 1.4.0
-**Released:** 2-Feb-26
+## Version 1.4.0–1.4.0b (2-Feb-26 to 3-Feb-26)
+**Snapshot database integration**
 
 ### Snapshot Database Integration (Project DB)
 
@@ -194,134 +118,33 @@ DBS added; data snapshots, and improvement to onset / lognormal distro fitting.
 - Lag histogram and daily conversions charts show warnings for sparse data
 - Indicates missing days within the date range
 
----
-
-## Version 1.3.16b
-**Released:** 30-Jan-26
-
-Upgraded signature matching and slice selection logic
+Also: onset / lognormal distribution fitting improvements.
 
 ---
 
-## Version 1.3.15b
-**Released:** 29-Jan-26
+## Version 1.3.0b–1.3.16b (18-Jan-26 to 30-Jan-26)
+**Fetch pipeline hardening & live charts**
 
-Added parens and other visible syntax to dsl display
-
----
-
-## Version 1.3.14b
-**Released:** 29-Jan-26
-
-Fixed param assignment
-
----
-
-## Version 1.3.13b
-**Released:** 23-Jan-26
-
-Stabilised *t95 mechanics, hopefully improviing determinism in fetch and calcs.
+- Live charts testing and working
+- Subtle and extensive work on the fetch logic to improve and harden (with one serious signature regression outstanding); several important data retrieval fixes
+- Fixed MECE context fetch regression (sigs); fixes to slice merge logic; fixed regression with fetching
+- Stabilised t95 mechanics for deterministic fetch and calculations
+- Re-built nudge machinery properly so it's less brittle and flakey
+- Fixes to batch fetching and logging
+- Upgraded signature matching and slice selection logic
+- Added parens and other visible syntax to DSL display
+- Fixed param assignment; fixed Ezra's bug; force update fixes
+- Added workshop docs to Help menu
 
 ---
 
-## Version 1.3.12b
-**Released:** 22-Jan-26
+## Version 1.2.6b–1.2.9b (14-Jan-26 to 15-Jan-26)
+**Share link fixes**
 
-Fixes to batch fetching and logging
-
----
-
-## Version 1.3.11b
-**Released:** 21-Jan-26
-
-Re-built nudge machinery properly so it's less brittle and flakey.
+- Further fixes to tab sharing
+- Minor fixes
 
 ---
-
-## Version 1.3.10b
-**Released:** 21-Jan-26
-
-Logging fixes
-
----
-
-## Version 1.3.8b
-**Released:** 20-Jan-26
-
-fix
-
----
-
-## Version 1.3.7b
-**Released:** 20-Jan-26
-
-Added workshop docs to Help menu
-
----
-
-## Version 1.3.6b
-**Released:** 20-Jan-26
-
-Fixed Ezra's bug
-
----
-
-## Version 1.3.5b
-**Released:** 20-Jan-26
-
-force update fixes
-
----
-
-## Version 1.3.4b
-**Released:** 20-Jan-26
-
-Subtle and extensive work on the fetch logic to improve and harden in (with one serious signature regression still outstanding); several important data retrieval fixes.
-
----
-
-## Version 1.3.3b
-**Released:** 19-Jan-26
-
-Fixes to slice merge logic
-
----
-
-## Version 1.3.2b
-**Released:** 19-Jan-26
-
-Fixed MECE context fetch regression (sigs)
-
----
-
-## Version 1.3.1b
-**Released:** 19-Jan-26
-
-Fixed regression with fetching
-
----
-
-## Version 1.3.0b
-**Released:** 18-Jan-26
-
-Live charts testing & working
-
----
-
-## Version 1.2.9b
-**Released:** 15-Jan-26
-
-Further fixes to tab sharing
-
----
-
-## Version 1.2.6b
-**Released:** 14-Jan-26
-
-Minor fixes
-
----
-
 
 ## Version 1.2.x Series (13-Jan-26 to 14-Jan-26)
 **Share links & live charts**
@@ -375,10 +198,10 @@ This release completes the Project LAG work begun in v1.0, hardening the statist
 - **Window vs Cohort completeness separation**: Completeness is now scoped to the query mode (`window(start:end)` or `cohort(start:end)`). This ensures evidence and completeness reflect the same temporal slice.
 - **Upstream delay adjustment**: Cohort-mode completeness on downstream edges now accounts for anchor-to-source delay (soft prior→observed blend).
   - **Path-anchored cohort completeness (A→Y)**: maturity is computed for the full path from the cohort anchor (A) to the end of the edge (Y), rather than only the local segment (X→Y).
-  - **Moment-matched path latency**: where upstream anchor latency is available, A→Y latency is derived via moment-matched convolution (Fenton–Wilkinson) of A→X and X→Y lognormal approximations, preventing downstream cohorts from appearing “too complete” too early.
+  - **Moment-matched path latency**: where upstream anchor latency is available, A→Y latency is derived via moment-matched convolution (Fenton–Wilkinson) of A→X and X→Y lognormal approximations, preventing downstream cohorts from appearing "too complete" too early.
   - **Tail pull using authoritative horizons**: completeness CDF fitting applies a one-way tail constraint using authoritative `path_t95` (or `t95` fallback) to avoid thin-tail fits that would overstate maturity for immature cohorts.
 - **Evidence–Forecast blending**: Overhauled to use mode-specific completeness consistently, preventing over/underweighting of immature cohorts.
-  - **Cohort evidence de-biasing for blending**: in cohort path-anchored mode, the blend uses a censoring-aware evidence estimate \((k/n)/completeness\) (clamped to \([0,1]\)) so right-censored cohorts don’t unduly drag `p.mean` down.
+  - **Cohort evidence de-biasing for blending**: in cohort path-anchored mode, the blend uses a censoring-aware evidence estimate \((k/n)/completeness\) (clamped to \([0,1]\)) so right-censored cohorts don't unduly drag `p.mean` down.
   - **Observability**: additional LAG calculation detail is logged for completeness mode, authoritative t95 selection, tail-constraint application, and the evidence term used for blending.
 
 #### Horizon Primitives (`t95` / `path_t95`)
@@ -617,5 +440,3 @@ Major improvements to Amplitude query generation:
 - Parameter registry system
 - Scenario management
 - Git integration
-
-

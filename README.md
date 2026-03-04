@@ -1,6 +1,6 @@
 # DagNet — Directed Acyclic Graph Network Editor
 
-**Version 1.5.10b** | [Changelog](graph-editor/public/docs/CHANGELOG.md) | [About](graph-editor/public/docs/about.md)
+**Version 1.6.19b** | [Changelog](graph-editor/public/docs/CHANGELOG.md) | [About](graph-editor/public/docs/about.md)
 
 A web-based visual editor for creating and analysing directed acyclic graphs (DAGs) with conditional probabilities, file-backed parameters, cohort-based analytics, latency-aware forecasting, and snapshot-based time-series storage.
 
