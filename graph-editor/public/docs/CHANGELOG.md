@@ -1,4 +1,11 @@
 # DagNet Release Notes
+## Version 1.6.19b
+**Released:** 4-Mar-26
+
+Fixed sample data retrieval
+
+---
+
 ## Version 1.6.18b
 **Released:** 4-Mar-26
 
