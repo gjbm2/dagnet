@@ -30,6 +30,10 @@ jobs:
         working-directory: ./graph-editor
         run: npm ci
       
+      - name: Generate sample data bundle
+        working-directory: ./graph-editor
+        run: npm run bundle-sample-data
+      
       - name: Run TypeScript type checking
         working-directory: ./graph-editor
         run: npx tsc --noEmit
