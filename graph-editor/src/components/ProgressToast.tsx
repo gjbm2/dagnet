@@ -15,13 +15,14 @@ interface ProgressToastProps {
   current: number;
   total: number;
   label?: string;
+  onCancel?: () => void;
 }
 
 /**
  * Progress toast content component
  * Supports multi-line labels (split by \n)
  */
-function ProgressToastContent({ current, total, label }: ProgressToastProps) {
+function ProgressToastContent({ current, total, label, onCancel }: ProgressToastProps) {
   const percentage = total > 0 ? Math.round((current / total) * 100) : 0;
   const isComplete = current >= total;
   
@@ -38,6 +39,12 @@ function ProgressToastContent({ current, total, label }: ProgressToastProps) {
         </span>
         <span className="progress-toast-count">
           {current}/{total}
+          {onCancel && !isComplete && (
+            <>
+              {' · '}
+              <button className="progress-toast-cancel" onClick={onCancel}>Cancel</button>
+            </>
+          )}
         </span>
       </div>
       {detailLines.length > 0 && (
@@ -66,15 +73,17 @@ function ProgressToastContent({ current, total, label }: ProgressToastProps) {
  * @param current - Current progress (0 to total)
  * @param total - Total items
  * @param label - Optional label (supports multi-line with \n)
+ * @param onCancel - Optional cancel callback; renders a "Cancel" link in the toast
  */
 export function showProgressToast(
   id: string,
   current: number,
   total: number,
-  label?: string
+  label?: string,
+  onCancel?: () => void
 ): void {
   toast.custom(
-    () => <ProgressToastContent current={current} total={total} label={label} />,
+    () => <ProgressToastContent current={current} total={total} label={label} onCancel={onCancel} />,
     { 
       id,
       duration: Infinity, // Don't auto-dismiss during progress

@@ -254,13 +254,13 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
     from runner.daily_conversions_derivation import derive_daily_conversions
     from runner.cohort_maturity_derivation import derive_cohort_maturity
     from runner.forecast_application import annotate_rows, compute_completeness
-    from runner.lag_distribution_utils import log_normal_inverse_cdf
+    from runner.lag_distribution_utils import log_normal_cdf, log_normal_inverse_cdf, standard_normal_inverse_cdf
 
     analysis_type = data.get('analysis_type', 'lag_histogram')
     scenarios = data.get('scenarios', [])
 
     def _read_edge_model_params(graph: Any, target_id: str) -> Optional[Dict[str, float]]:
-        """Read mu/sigma/onset from graph edge latency config (if present)."""
+        """Read mu/sigma/onset/t95/path_t95 and forecast.mean from graph edge."""
         if not graph or not target_id:
             return None
         edges = graph.get('edges', []) if isinstance(graph, dict) else []
@@ -278,7 +278,22 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
         if not isinstance(mu, (int, float)) or not isinstance(sigma, (int, float)):
             return None
         onset = latency.get('onset_delta_days') or 0
-        return {'mu': float(mu), 'sigma': float(sigma), 'onset_delta_days': float(onset) if isinstance(onset, (int, float)) else 0.0}
+        forecast = p.get('forecast') or {}
+        forecast_mean = forecast.get('mean')
+        t95 = latency.get('t95')
+        path_t95 = latency.get('path_t95')
+        result: Dict[str, Any] = {
+            'mu': float(mu),
+            'sigma': float(sigma),
+            'onset_delta_days': float(onset) if isinstance(onset, (int, float)) else 0.0,
+        }
+        if isinstance(forecast_mean, (int, float)) and math.isfinite(forecast_mean) and forecast_mean > 0:
+            result['forecast_mean'] = float(forecast_mean)
+        if isinstance(t95, (int, float)) and math.isfinite(t95) and t95 > 0:
+            result['t95'] = float(t95)
+        if isinstance(path_t95, (int, float)) and math.isfinite(path_t95) and path_t95 > 0:
+            result['path_t95'] = float(path_t95)
+        return result
 
     def _append_synthetic_cohort_maturity_frames(args: Dict[str, Any]) -> None:
         """
@@ -593,6 +608,99 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
                     result['rate_by_cohort'] = annotate_rows(
                         result['rate_by_cohort'], mu, sigma, onset,
                     )
+
+                # ── Model CDF curve (cohort maturity only) ──────────────
+                # Generate the theoretical cumulative lognormal curve so the
+                # frontend can overlay it on the empirical maturity chart.
+                subj_slice_keys = subj.get('slice_keys') or []
+                is_gap_epoch = any(str(sk) == '__epoch_gap__' for sk in subj_slice_keys)
+
+                if analysis_type == 'cohort_maturity' and 'forecast_mean' in model_params and not is_gap_epoch:
+                    forecast_mean = model_params['forecast_mean']
+
+                    # Determine axis mode: window() uses edge-level X→Y params,
+                    # cohort() uses path-level A→Y params (derived from path_t95).
+                    # Detection: check the subject's slice_keys (authoritative),
+                    # then fall back to query_dsl string matching.
+                    has_window_slice = any('window(' in str(sk) for sk in subj_slice_keys)
+                    has_cohort_slice = any('cohort(' in str(sk) for sk in subj_slice_keys)
+                    if has_window_slice or has_cohort_slice:
+                        is_window = has_window_slice and not has_cohort_slice
+                    else:
+                        query_dsl = data.get('query_dsl') or ''
+                        is_window = 'window(' in query_dsl or '.window(' in query_dsl
+
+                    if is_window:
+                        cdf_mu = mu
+                        cdf_sigma = sigma
+                        cdf_onset = onset
+                        cdf_mode = 'window'
+                    else:
+                        # Cohort mode: derive path-level CDF params from path_t95.
+                        # path_t95 = exp(path_mu + z_{0.95} * path_sigma)
+                        # We keep sigma and derive path_mu so the CDF reaches 95%
+                        # at path_t95 (matching the A→Y cumulative horizon).
+                        edge_path_t95 = model_params.get('path_t95')
+                        edge_t95 = model_params.get('t95')
+                        if isinstance(edge_path_t95, (int, float)) and edge_path_t95 > 0 and edge_path_t95 > (edge_t95 or 0):
+                            z95 = standard_normal_inverse_cdf(0.95)
+                            cdf_mu = math.log(edge_path_t95) - z95 * sigma
+                            cdf_sigma = sigma
+                            cdf_onset = 0.0
+                            cdf_mode = 'cohort_path'
+                        else:
+                            cdf_mu = mu
+                            cdf_sigma = sigma
+                            cdf_onset = onset
+                            cdf_mode = 'cohort_edge_fallback'
+
+                    # Extend curve well beyond t95 so it covers the full displayed
+                    # chart axis. Use sweep_to − anchor_from as a baseline, and
+                    # ensure at least 2× the t95 horizon so the plateau is visible.
+                    anchor_from_str = subj.get('anchor_from', '')
+                    sweep_to_str = subj.get('sweep_to', '')
+                    sweep_span = None
+                    try:
+                        if anchor_from_str and sweep_to_str:
+                            af = date.fromisoformat(str(anchor_from_str)[:10])
+                            st = date.fromisoformat(str(sweep_to_str)[:10])
+                            sweep_span = (st - af).days
+                    except (ValueError, TypeError):
+                        pass
+
+                    t95_extent = None
+                    try:
+                        t95_model = log_normal_inverse_cdf(0.95, cdf_mu, cdf_sigma)
+                        t95_extent = int(math.ceil((t95_model + cdf_onset) * 2)) + 1
+                    except Exception:
+                        pass
+
+                    # Also include path_t95 — the frontend may use it for the axis
+                    # extent (when it detects cohort mode from query_dsl).
+                    edge_path_t95_extent = model_params.get('path_t95')
+                    if not isinstance(edge_path_t95_extent, (int, float)) or not math.isfinite(edge_path_t95_extent) or edge_path_t95_extent <= 0:
+                        edge_path_t95_extent = None
+
+                    candidates = [c for c in [sweep_span, t95_extent, edge_path_t95_extent] if c and c > 0]
+                    axis_tau_max = int(math.ceil(max(candidates))) if candidates else None
+
+                    if axis_tau_max and axis_tau_max > 0:
+                        curve = []
+                        for tau in range(0, axis_tau_max + 1):
+                            c = compute_completeness(float(tau), cdf_mu, cdf_sigma, cdf_onset)
+                            c = max(0.0, min(1.0, float(c)))
+                            curve.append({
+                                'tau_days': tau,
+                                'model_rate': round(forecast_mean * c, 8),
+                            })
+                        result['model_curve'] = curve
+                        result['model_curve_params'] = {
+                            'mu': cdf_mu,
+                            'sigma': cdf_sigma,
+                            'onset_delta_days': cdf_onset,
+                            'forecast_mean': forecast_mean,
+                            'mode': cdf_mode,
+                        }
 
             per_subject_results.append({
                 "subject_id": subj.get('subject_id'),

@@ -468,6 +468,23 @@ export class GraphComputeClient {
         }
       }
 
+      // Collect model CDF curves from backend results, keyed by subject_id.
+      // When multiple epochs collapse into one subject, keep the longest curve
+      // (the gap epoch typically has a short or empty curve).
+      const modelCurveBySubject = new Map<string, { curve: Array<{ tau_days: number; model_rate: number }>; params: Record<string, number> }>();
+      for (const b of blocks) {
+        const r = b.result;
+        if (r?.model_curve && Array.isArray(r.model_curve) && r.model_curve.length > 0) {
+          const existing = modelCurveBySubject.get(b.subject_id);
+          if (!existing || r.model_curve.length > existing.curve.length) {
+            modelCurveBySubject.set(b.subject_id, {
+              curve: r.model_curve,
+              params: r.model_curve_params || {},
+            });
+          }
+        }
+      }
+
       // Build age-aligned maturity curve rows (τ-axis) per (scenario, subject).
       // - Boundary date B: end of sweep (or latest available real frame).
       // - Fixed denominator X_full: sum of X at B across the cohort set (as known at B).
@@ -679,6 +696,8 @@ export class GraphComputeClient {
           sweep_to: firstMeta?.sweep_range?.to ?? firstMeta?.sweep_to,
           // Hint to UIs that this came from snapshot reads.
           source: 'snapshot_db',
+          // Model CDF curves per subject (for overlay on maturity chart).
+          model_curves: Object.fromEntries(modelCurveBySubject),
           // Export-only tables (avoid polluting the primary `data` rows used by charts).
           export_tables: {
             cohort_maturity_points: Array.from(cohortPointsByKey.values()).sort((a: any, b: any) => {

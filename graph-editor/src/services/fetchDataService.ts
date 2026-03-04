@@ -12,6 +12,7 @@
  * This ensures identical behaviour regardless of call site.
  */
 
+import toast from 'react-hot-toast';
 import { dataOperationsService, setBatchMode } from './dataOperationsService';
 import { isBatchMode } from './dataOperationsService';
 import { 

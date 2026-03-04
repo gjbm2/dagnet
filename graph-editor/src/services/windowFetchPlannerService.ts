@@ -29,7 +29,8 @@ import {
   createFetchItem,
   type FetchItem,
 } from './fetchDataService';
-import { dataOperationsService } from './dataOperationsService';
+import { dataOperationsService, setBatchMode } from './dataOperationsService';
+import { showProgressToast, completeProgressToast } from '../components/ProgressToast';
 import { shouldRefetch, type LatencyConfig } from './fetchRefetchPolicy';
 import { extractSliceDimensions, isolateSlice } from './sliceIsolation';
 import { resolveMECEPartitionForImplicitUncontextedSync } from './meceSliceService';
@@ -468,41 +469,77 @@ class WindowFetchPlannerService {
           // Execute the plan windows exactly via DataOperationsService (plan interpreter mode).
           // This avoids any executor-side re-derivation of windows, satisfying Invariant E for execution windows.
           // Shared batch timestamp for all items (key-fixes.md §2.1).
-          const retrievalBatchAt = new Date();
-          for (const item of planItemsToExecute) {
-            const g = currentGraph;
-            if (!g) break;
+          const totalItems = planItemsToExecute.length;
+          const progressToastId = 'window-fetch-progress';
+          let cancelled = false;
+          const onCancel = () => { cancelled = true; };
 
-            if (item.type === 'parameter') {
-              await dataOperationsService.getFromSource({
-                objectType: 'parameter',
-                objectId: item.objectId,
-                targetId: item.targetId,
-                graph: g,
-                setGraph: trackingSetGraph,
-                paramSlot: item.slot,
-                conditionalIndex: item.conditionalIndex,
-                bustCache: false,
-                currentDSL: dsl,
-                targetSlice: dsl,
-                // First-principles: plan already computed correct windows.
-                skipCohortBounding: true,
-                overrideFetchWindows: item.windows.map((w) => ({ start: w.start, end: w.end })),
-                retrievalBatchAt,
-              } as any);
-            } else {
-              // Cases: keep existing versioned behaviour (window does not drive schedule snapshot).
-              await dataOperationsService.getFromSource({
-                objectType: 'case',
-                objectId: item.objectId,
-                targetId: item.targetId,
-                graph: g,
-                setGraph: trackingSetGraph,
-                bustCache: false,
-                currentDSL: dsl,
-                retrievalBatchAt,
-              } as any);
+          setBatchMode(true);
+          showProgressToast(progressToastId, 0, totalItems, 'Fetching', onCancel);
+
+          let successCount = 0;
+          let errorCount = 0;
+          const retrievalBatchAt = new Date();
+          try {
+            for (let idx = 0; idx < planItemsToExecute.length; idx++) {
+              if (cancelled) break;
+
+              const item = planItemsToExecute[idx];
+              const g = currentGraph;
+              if (!g) break;
+
+              const itemLabel = `Fetching\n${item.objectId}`;
+              showProgressToast(progressToastId, idx, totalItems, itemLabel, onCancel);
+
+              try {
+                if (item.type === 'parameter') {
+                  await dataOperationsService.getFromSource({
+                    objectType: 'parameter',
+                    objectId: item.objectId,
+                    targetId: item.targetId,
+                    graph: g,
+                    setGraph: trackingSetGraph,
+                    paramSlot: item.slot,
+                    conditionalIndex: item.conditionalIndex,
+                    bustCache: false,
+                    currentDSL: dsl,
+                    targetSlice: dsl,
+                    skipCohortBounding: true,
+                    overrideFetchWindows: item.windows.map((w) => ({ start: w.start, end: w.end })),
+                    retrievalBatchAt,
+                  } as any);
+                } else {
+                  await dataOperationsService.getFromSource({
+                    objectType: 'case',
+                    objectId: item.objectId,
+                    targetId: item.targetId,
+                    graph: g,
+                    setGraph: trackingSetGraph,
+                    bustCache: false,
+                    currentDSL: dsl,
+                    retrievalBatchAt,
+                  } as any);
+                }
+                successCount++;
+              } catch (itemErr) {
+                errorCount++;
+                console.error(`[windowFetchPlannerService] Item ${idx + 1}/${totalItems} failed:`, itemErr);
+              }
             }
+
+            showProgressToast(progressToastId, cancelled ? successCount : totalItems, totalItems, 'Fetching');
+            setTimeout(() => {
+              if (cancelled) {
+                const remaining = totalItems - successCount - errorCount;
+                completeProgressToast(progressToastId, `Cancelled — ${successCount} fetched, ${remaining} skipped`, true);
+              } else if (errorCount > 0) {
+                completeProgressToast(progressToastId, `Fetched ${successCount}/${totalItems} (${errorCount} failed)`, true);
+              } else {
+                completeProgressToast(progressToastId, `Fetched ${successCount} item${successCount !== 1 ? 's' : ''}`, false);
+              }
+            }, 300);
+          } finally {
+            setBatchMode(false);
           }
         }
       }

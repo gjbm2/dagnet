@@ -324,10 +324,39 @@ export function SnapshotCohortMaturityChart({ result, visibleScenarioIds, scenar
     return out;
   }, [filteredRows, axisMeta, scenarioMeta, scenarioVisibilityModes]);
 
+  const modelCurveSeries = useMemo((): any | null => {
+    const modelCurves = (result?.metadata as any)?.model_curves;
+    if (!modelCurves || typeof modelCurves !== 'object') return null;
+    const entry = modelCurves[effectiveSubjectId];
+    if (!entry?.curve || !Array.isArray(entry.curve) || entry.curve.length === 0) return null;
+
+    const data = entry.curve
+      .filter((p: any) => typeof p?.tau_days === 'number' && typeof p?.model_rate === 'number')
+      .map((p: any) => ({ value: [p.tau_days, p.model_rate] }));
+    if (data.length === 0) return null;
+
+    const modelColour = dark ? '#9ca3af' : '#4b5563';
+    return {
+      id: 'model_cdf',
+      name: 'Model CDF',
+      type: 'line',
+      showSymbol: false,
+      smooth: true,
+      connectNulls: false,
+      lineStyle: { width: 2, color: modelColour, type: 'dotted', opacity: 0.7 },
+      itemStyle: { color: modelColour, opacity: 0 },
+      emphasis: { disabled: true },
+      z: 10,
+      data,
+    };
+  }, [result, effectiveSubjectId, dark]);
+
   const option = useMemo(() => {
+    const allSeries = modelCurveSeries ? [...series, modelCurveSeries] : series;
+
     // Compute Y-axis max from data with headroom, rounded to a clean percentage
     let maxRate = 0;
-    for (const s of series) {
+    for (const s of allSeries) {
       for (const d of s.data) {
         const v = d?.value?.[1];
         if (typeof v === 'number' && Number.isFinite(v) && v > maxRate) maxRate = v;
@@ -360,7 +389,10 @@ export function SnapshotCohortMaturityChart({ result, visibleScenarioIds, scenar
             ? `Age: ${tauDays} day(s) · As at ${formatDate_d_MMM_yy(boundaryDate)}`
             : `As at ${formatDate_d_MMM_yy(boundaryDate)}`;
 
-          const lines = items
+          const modelItem = items.find((it: any) => it?.seriesId === 'model_cdf');
+          const scenarioItems = items.filter((it: any) => it?.seriesId !== 'model_cdf');
+
+          const lines = scenarioItems
             // de-dupe repeated series that share a scenario name
             .filter((it: any, idx: number, arr: any[]) => arr.findIndex((x: any) => String(x?.seriesName || '') === String(it?.seriesName || '')) === idx)
             .map((it: any) => {
@@ -372,6 +404,12 @@ export function SnapshotCohortMaturityChart({ result, visibleScenarioIds, scenar
           const extra: string[] = [];
           if (baseRate !== null) extra.push(`Evidenced: <strong>${formatPercent(baseRate)}</strong>`);
           if (projectedRate !== null) extra.push(`Projected: <strong>${formatPercent(projectedRate)}</strong>`);
+          if (modelItem) {
+            const mv = modelItem?.value?.[1];
+            if (typeof mv === 'number' && Number.isFinite(mv)) {
+              extra.push(`Model CDF: <strong>${formatPercent(mv)}</strong>`);
+            }
+          }
 
           const ce = best?.cohortsExpected;
           const cd = best?.cohortsInDenom;
@@ -391,7 +429,7 @@ export function SnapshotCohortMaturityChart({ result, visibleScenarioIds, scenar
         left: '3%',
         right: '4%',
         bottom: 60,
-        top: series.length > 2 ? 80 : 50,
+        top: allSeries.length > 2 ? 80 : 50,
         containLabel: true,
       },
       xAxis: {
@@ -400,7 +438,17 @@ export function SnapshotCohortMaturityChart({ result, visibleScenarioIds, scenar
         nameLocation: 'middle' as const,
         nameGap: 30,
         min: axisMeta.axisMin,
-        ...(axisMeta.axisMax !== null && Number.isFinite(axisMeta.axisMax) ? { max: axisMeta.axisMax } : {}),
+        ...(() => {
+          let xMax = axisMeta.axisMax;
+          if (modelCurveSeries) {
+            const lastPt = modelCurveSeries.data[modelCurveSeries.data.length - 1];
+            const curveMax = lastPt?.value?.[0];
+            if (typeof curveMax === 'number' && Number.isFinite(curveMax)) {
+              xMax = (xMax !== null && Number.isFinite(xMax)) ? Math.max(xMax, curveMax) : curveMax;
+            }
+          }
+          return (xMax !== null && Number.isFinite(xMax)) ? { max: xMax } : {};
+        })(),
         axisLabel: {
           fontSize: 10,
           formatter: (value: number) => `${Math.round(value)}`,
@@ -425,14 +473,14 @@ export function SnapshotCohortMaturityChart({ result, visibleScenarioIds, scenar
         textStyle: { fontSize: 11 },
         icon: 'roundRect',
       },
-      series,
+      series: allSeries,
       dagnet_meta: {
         subject_id: effectiveSubjectId,
         anchor: { from: result?.metadata?.anchor_from, to: result?.metadata?.anchor_to },
         sweep: { from: result?.metadata?.sweep_from, to: result?.metadata?.sweep_to },
       },
     };
-  }, [result, series, effectiveSubjectId, axisMeta, dark]);
+  }, [result, series, modelCurveSeries, effectiveSubjectId, axisMeta, dark]);
 
   const headerRight = useMemo(() => {
     const aFrom = result?.metadata?.anchor_from;

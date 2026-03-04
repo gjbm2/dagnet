@@ -1007,8 +1007,6 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
       // Update lastAggregatedWindow after successful fetch
         setLastAggregatedWindow(currentWindow);
       lastAggregatedDSLRef.current = authoritativeDSL;
-      
-      toast.success('Data fetched successfully');
     } catch (err: any) {
       console.error('[WindowSelector] Planner fetch failed:', err);
       toast.error(`Fetch failed: ${err.message}`);
