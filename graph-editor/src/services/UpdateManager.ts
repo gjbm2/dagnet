@@ -1747,6 +1747,17 @@ export class UpdateManager {
         sourceField: 'p.latency.model_trained_at',
         targetField: 'latency.model_trained_at',
         condition: (source) => source.p?.latency?.model_trained_at !== undefined && source.p?.id
+      },
+      // path_mu, path_sigma: path-level A→Y CDF params (Fenton–Wilkinson, internal)
+      {
+        sourceField: 'p.latency.path_mu',
+        targetField: 'latency.path_mu',
+        condition: (source) => source.p?.latency?.path_mu !== undefined && source.p?.id
+      },
+      {
+        sourceField: 'p.latency.path_sigma',
+        targetField: 'latency.path_sigma',
+        condition: (source) => source.p?.latency?.path_sigma !== undefined && source.p?.id
       }
     ]);
     
@@ -2177,6 +2188,9 @@ export class UpdateManager {
       { sourceField: 'latency.mu', targetField: 'p.latency.mu', condition: isProbType },
       { sourceField: 'latency.sigma', targetField: 'p.latency.sigma', condition: isProbType },
       { sourceField: 'latency.model_trained_at', targetField: 'p.latency.model_trained_at', condition: isProbType },
+      // path_mu, path_sigma: path-level A→Y CDF params (Fenton–Wilkinson, internal)
+      { sourceField: 'latency.path_mu', targetField: 'p.latency.path_mu', condition: isProbType },
+      { sourceField: 'latency.path_sigma', targetField: 'p.latency.path_sigma', condition: isProbType },
       
       // LAG: Latency DATA fields (file → graph only, display-only)
       { 
@@ -3605,6 +3619,13 @@ export class UpdateManager {
       }
       if ((update.latency as any).sigma !== undefined) {
         targetP.latency.sigma = (update.latency as any).sigma;
+      }
+      // path_mu/path_sigma: path-level A→Y CDF params (Fenton–Wilkinson combined)
+      if ((update.latency as any).path_mu !== undefined) {
+        targetP.latency.path_mu = (update.latency as any).path_mu;
+      }
+      if ((update.latency as any).path_sigma !== undefined) {
+        targetP.latency.path_sigma = (update.latency as any).path_sigma;
       }
       
       // Apply forecast if provided

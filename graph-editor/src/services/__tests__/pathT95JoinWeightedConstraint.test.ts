@@ -101,6 +101,17 @@ describe('path_t95 join-aware constraint uses percentile horizons (not medians) 
     // max-branch + edge t95 (~40+), which would happen if we treated local p.mean as the weight.
     expect(xy!.latency.path_t95).toBeGreaterThan(20);
     expect(xy!.latency.path_t95).toBeLessThan(35);
+
+    // path_mu/path_sigma should be defined (anchor lag data is present)
+    expect(xy!.latency.path_mu).toBeDefined();
+    expect(xy!.latency.path_sigma).toBeDefined();
+    expect(typeof xy!.latency.path_mu).toBe('number');
+    expect(typeof xy!.latency.path_sigma).toBe('number');
+    expect(Number.isFinite(xy!.latency.path_mu)).toBe(true);
+    expect(Number.isFinite(xy!.latency.path_sigma)).toBe(true);
+
+    // path_mu should be larger than edge mu (upstream path delay shifts the distribution)
+    expect(xy!.latency.path_mu!).toBeGreaterThan(xy!.latency.mu!);
   });
 });
 

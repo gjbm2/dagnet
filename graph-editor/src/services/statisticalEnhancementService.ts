@@ -1615,6 +1615,8 @@ export interface EdgeLAGValues {
     onset_delta_days?: number;  // Aggregated onset delay from window slices (min)
     mu?: number;     // Fitted log-normal mu (for offline completeness + parity comparison)
     sigma?: number;  // Fitted log-normal sigma (for offline completeness + parity comparison)
+    path_mu?: number;   // Path-level A→Y mu (Fenton–Wilkinson combined)
+    path_sigma?: number; // Path-level A→Y sigma (Fenton–Wilkinson combined)
   };
   /** Blended p.mean (if computed) */
   blendedMean?: number;
@@ -1901,6 +1903,17 @@ export function enhanceGraphLatencies(
     nodeMedianLagPrior.set(startId, 0);
   }
 
+  // DP state: path-level lognormal params (A→node) for cohort CDF overlay.
+  // Propagated through the topo traversal including skipped/non-latency edges.
+  const nodePathMu = new Map<string, number | undefined>();
+  const nodePathSigma = new Map<string, number | undefined>();
+  for (const startId of startNodes) {
+    nodePathMu.set(startId, undefined);
+    nodePathSigma.set(startId, undefined);
+  }
+  const edgePathMuInPass = new Map<string, number | undefined>();
+  const edgePathSigmaInPass = new Map<string, number | undefined>();
+
   // Compute in-degree for Kahn's algorithm
   const inDegree = new Map<string, number>();
   for (const node of graph.nodes) {
@@ -1992,8 +2005,17 @@ export function enhanceGraphLatencies(
       
       if (!hasLocalLatency && !isBehindLaggedPath) {
         console.log('[LAG_TOPO_SKIP] noLag:', { edgeId, latencyEnabled, edgePrecomputedPathT95 });
-        // Truly simple edge: no latency config AND no upstream lag
-        // Skip LAG computation but update topo state
+        // Truly simple edge: no latency config AND no upstream lag.
+        // Skip LAG computation but propagate path (mu, sigma) through.
+        const skipFromMu = nodePathMu.get(nodeId);
+        const skipFromSigma = nodePathSigma.get(nodeId);
+        edgePathMuInPass.set(edgeId, skipFromMu);
+        edgePathSigmaInPass.set(edgeId, skipFromSigma);
+        const skipEdgeT95 = precomputedPathT95.get(edgeId) ?? 0;
+        if (skipEdgeT95 >= (nodePathT95.get(toNodeId) ?? 0)) {
+          nodePathMu.set(toNodeId, skipFromMu);
+          nodePathSigma.set(toNodeId, skipFromSigma);
+        }
         const newInDegree = (inDegree.get(toNodeId) ?? 1) - 1;
         inDegree.set(toNodeId, newInDegree);
         if (newInDegree === 0 && !queue.includes(toNodeId)) {
@@ -2018,7 +2040,16 @@ export function enhanceGraphLatencies(
       const paramValues = paramLookup.get(edgeId);
       if (!paramValues || paramValues.length === 0) {
         console.log('[LAG_TOPO_SKIP] noParamValues:', { edgeId, hasInLookup: paramLookup.has(edgeId) });
-        // No data for this edge, skip but update topo state
+        // No data for this edge — propagate path (mu, sigma) through.
+        const skipFromMu = nodePathMu.get(nodeId);
+        const skipFromSigma = nodePathSigma.get(nodeId);
+        edgePathMuInPass.set(edgeId, skipFromMu);
+        edgePathSigmaInPass.set(edgeId, skipFromSigma);
+        const skipEdgeT95 = edgePathT95InPass.get(edgeId) ?? precomputedPathT95.get(edgeId) ?? 0;
+        if (skipEdgeT95 >= (nodePathT95.get(toNodeId) ?? 0)) {
+          nodePathMu.set(toNodeId, skipFromMu);
+          nodePathSigma.set(toNodeId, skipFromSigma);
+        }
         const newInDegree = (inDegree.get(toNodeId) ?? 1) - 1;
         inDegree.set(toNodeId, newInDegree);
         if (newInDegree === 0 && !queue.includes(toNodeId)) {
@@ -2075,6 +2106,16 @@ export function enhanceGraphLatencies(
           });
         } else {
           console.log('[LAG_TOPO_SKIP] noData:', { edgeId, paramValuesCount: paramValues.length, isWindowMode });
+        }
+        // Propagate path (mu, sigma) through edges with empty cohort data.
+        const skipFromMu3 = nodePathMu.get(nodeId);
+        const skipFromSigma3 = nodePathSigma.get(nodeId);
+        edgePathMuInPass.set(edgeId, skipFromMu3);
+        edgePathSigmaInPass.set(edgeId, skipFromSigma3);
+        const skipEdgeT953 = edgePathT95InPass.get(edgeId) ?? precomputedPathT95.get(edgeId) ?? 0;
+        if (skipEdgeT953 >= (nodePathT95.get(toNodeId) ?? 0)) {
+          nodePathMu.set(toNodeId, skipFromMu3);
+          nodePathSigma.set(toNodeId, skipFromSigma3);
         }
         const newInDegree = (inDegree.get(toNodeId) ?? 1) - 1;
         inDegree.set(toNodeId, newInDegree);
@@ -2369,6 +2410,8 @@ export function enhanceGraphLatencies(
       // the implied t95 is >= authoritative path_t95.
       // ---------------------------------------------------------------------
       let completenessUsed = latencyStats.completeness;
+      let pathMu: number | undefined;
+      let pathSigma: number | undefined;
       // NOTE: EdgeLAGValues['debug'] is optional (can be undefined), so avoid conditional types that
       // collapse to `never` under union-with-undefined. Use the actual field type.
       let completenessMode: NonNullable<EdgeLAGValues['debug']>['completenessMode'] =
@@ -2439,6 +2482,8 @@ export function enhanceGraphLatencies(
             const ayFit = approximateLogNormalSumFit(anchorFit, latencyStats.fit);
 
             if (ayFit) {
+              pathMu = ayFit.mu;
+              pathSigma = ayFit.sigma;
               const ayMedianDays = Math.exp(ayFit.mu);
               const ayCdfParams = getCompletenessCdfParams(
                 {
@@ -2471,12 +2516,34 @@ export function enhanceGraphLatencies(
           }
         }
       }
+
+      // Fallback (b): edge has own fit but ayFit wasn't computed (window mode,
+      // or no anchor data). Combine upstream path params with edge fit via FW.
+      if (pathMu === undefined) {
+        const upMu = nodePathMu.get(nodeId);
+        const upSigma = nodePathSigma.get(nodeId);
+        if (upMu !== undefined && upSigma !== undefined) {
+          const upstreamFit: LagDistributionFit = { mu: upMu, sigma: upSigma, empirical_quality_ok: true, total_k: 1 };
+          const combined = approximateLogNormalSumFit(upstreamFit, latencyStats.fit);
+          if (combined) {
+            pathMu = combined.mu;
+            pathSigma = combined.sigma;
+          }
+        }
+      }
+      // Fallback (c): pass through upstream params (instant-conversion edge, or FW failed).
+      if (pathMu === undefined) {
+        pathMu = nodePathMu.get(nodeId);
+        pathSigma = nodePathSigma.get(nodeId);
+      }
       
       console.log('[LAG_TOPO_COMPUTED] stats:', {
         edgeId,
         t95: latencyStats.t95,
         completeness: completenessUsed,
         pathT95: edgePathT95,
+        pathMu,
+        pathSigma,
       });
       
       // Build EdgeLAGValues (don't write to graph directly)
@@ -2512,6 +2579,8 @@ export function enhanceGraphLatencies(
           mu: latencyStats.completeness_cdf.mu,
           sigma: latencyStats.completeness_cdf.sigma,
           onset_delta_days: edgeOnsetDeltaDays,
+          path_mu: pathMu,
+          path_sigma: pathSigma,
         },
         debug: {
           queryDate: queryDate.toISOString().split('T')[0],
@@ -2964,6 +3033,13 @@ export function enhanceGraphLatencies(
 
       // Update node path_t95 for target node (needed for downstream edges)
       const currentTargetT95 = nodePathT95.get(toNodeId) ?? 0;
+      // Store and propagate path (mu, sigma) — piggyback on the dominant-path selection.
+      edgePathMuInPass.set(edgeId, pathMu);
+      edgePathSigmaInPass.set(edgeId, pathSigma);
+      if (edgePathT95 >= currentTargetT95) {
+        nodePathMu.set(toNodeId, pathMu);
+        nodePathSigma.set(toNodeId, pathSigma);
+      }
       nodePathT95.set(toNodeId, Math.max(currentTargetT95, edgePathT95));
       
       // Update node median lag prior for target node (for cohort mode soft transition).

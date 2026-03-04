@@ -526,6 +526,12 @@ export interface LatencyConfig {
   mu?: number;
   /** Fitted log-normal sigma parameter (internal, not UI-exposed) */
   sigma?: number;
+
+  /** Path-level A→Y log-normal mu from Fenton–Wilkinson (internal, not UI-exposed) */
+  path_mu?: number;
+  /** Path-level A→Y log-normal sigma from Fenton–Wilkinson (internal, not UI-exposed) */
+  path_sigma?: number;
+
   /** UK date (d-MMM-yy) when the model was last fitted (staleness detection, not UI-exposed) */
   model_trained_at?: string;
 }

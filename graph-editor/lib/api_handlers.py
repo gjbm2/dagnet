@@ -293,6 +293,12 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
             result['t95'] = float(t95)
         if isinstance(path_t95, (int, float)) and math.isfinite(path_t95) and path_t95 > 0:
             result['path_t95'] = float(path_t95)
+        path_mu = latency.get('path_mu')
+        path_sigma = latency.get('path_sigma')
+        if isinstance(path_mu, (int, float)) and math.isfinite(path_mu):
+            result['path_mu'] = float(path_mu)
+        if isinstance(path_sigma, (int, float)) and math.isfinite(path_sigma) and path_sigma > 0:
+            result['path_sigma'] = float(path_sigma)
         return result
 
     def _append_synthetic_cohort_maturity_frames(args: Dict[str, Any]) -> None:
@@ -636,16 +642,12 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
                         cdf_onset = onset
                         cdf_mode = 'window'
                     else:
-                        # Cohort mode: derive path-level CDF params from path_t95.
-                        # path_t95 = exp(path_mu + z_{0.95} * path_sigma)
-                        # We keep sigma and derive path_mu so the CDF reaches 95%
-                        # at path_t95 (matching the A→Y cumulative horizon).
-                        edge_path_t95 = model_params.get('path_t95')
-                        edge_t95 = model_params.get('t95')
-                        if isinstance(edge_path_t95, (int, float)) and edge_path_t95 > 0 and edge_path_t95 > (edge_t95 or 0):
-                            z95 = standard_normal_inverse_cdf(0.95)
-                            cdf_mu = math.log(edge_path_t95) - z95 * sigma
-                            cdf_sigma = sigma
+                        # Cohort mode: use path-level A→Y CDF params if available.
+                        path_mu_val = model_params.get('path_mu')
+                        path_sigma_val = model_params.get('path_sigma')
+                        if path_mu_val is not None and path_sigma_val is not None:
+                            cdf_mu = path_mu_val
+                            cdf_sigma = path_sigma_val
                             cdf_onset = 0.0
                             cdf_mode = 'cohort_path'
                         else:

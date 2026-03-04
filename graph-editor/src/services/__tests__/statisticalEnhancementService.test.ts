@@ -1404,6 +1404,88 @@ describe('enhanceGraphLatencies', () => {
     expect(bToC?.latency.path_t95).toBeGreaterThan(aToB?.latency.path_t95 || 0);
   });
 
+  it('should compute path_mu/path_sigma for downstream edges with anchor lag data', () => {
+    const graph = createLatencyGraph();
+    const now = new Date();
+    const dates = [
+      new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+      new Date(now.getTime() - 15 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+      new Date(now.getTime() - 5 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+    ];
+
+    const paramLookup: Map<string, ParameterValueForLAG[]> = new Map([
+      ['start-to-a', [{
+        mean: 0.8, n: 300, k: 240, dates,
+        n_daily: [100, 100, 100], k_daily: [80, 80, 80],
+        median_lag_days: [5, 5, 5], mean_lag_days: [6, 6, 6],
+      }]],
+      ['a-to-b', [{
+        mean: 0.6, n: 240, k: 144, dates,
+        n_daily: [80, 80, 80], k_daily: [48, 48, 48],
+        median_lag_days: [7, 7, 7], mean_lag_days: [8, 8, 8],
+        anchor_median_lag_days: [5, 5, 5],
+      }]],
+      ['b-to-c', [{
+        mean: 0.4, n: 144, k: 58, dates,
+        n_daily: [48, 48, 48], k_daily: [19, 19, 20],
+        median_lag_days: [10, 10, 10], mean_lag_days: [12, 12, 12],
+        anchor_median_lag_days: [12, 12, 12],
+      }]],
+    ]);
+
+    const result = enhanceGraphLatencies(graph, paramLookup, now, mockHelpers);
+
+    const aToB = result.edgeValues.find(v => v.edgeUuid === 'a-to-b');
+    const bToC = result.edgeValues.find(v => v.edgeUuid === 'b-to-c');
+
+    // Downstream edges with anchor lag data should have path_mu/path_sigma
+    // from Fenton–Wilkinson combining upstream A→X with edge X→Y.
+    expect(aToB?.latency.path_mu).toBeDefined();
+    expect(aToB?.latency.path_sigma).toBeDefined();
+    expect(typeof aToB?.latency.path_mu).toBe('number');
+    expect(typeof aToB?.latency.path_sigma).toBe('number');
+    expect(Number.isFinite(aToB?.latency.path_mu)).toBe(true);
+    expect(Number.isFinite(aToB?.latency.path_sigma)).toBe(true);
+
+    // path_mu should be larger than edge mu (upstream delay increases path median)
+    expect(aToB!.latency.path_mu!).toBeGreaterThan(aToB!.latency.mu!);
+
+    // Deeper edge should have even larger path_mu
+    expect(bToC?.latency.path_mu).toBeDefined();
+    expect(bToC!.latency.path_mu!).toBeGreaterThan(aToB!.latency.path_mu!);
+  });
+
+  it('should not compute path_mu/path_sigma in window mode', () => {
+    const graph: GraphForPath = {
+      nodes: [
+        { id: 'start', entry: { is_start: true } },
+        { id: 'a' },
+      ],
+      edges: [
+        { id: 'start-to-a', from: 'start', to: 'a', p: { mean: 0.8, latency: { latency_parameter: true, t95: 30 } } },
+      ],
+    };
+    const now = new Date();
+    const dates = [
+      new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+    ];
+    const paramLookup: Map<string, ParameterValueForLAG[]> = new Map([
+      ['start-to-a', [{
+        mean: 0.8, n: 100, k: 80, dates,
+        n_daily: [100], k_daily: [80],
+        median_lag_days: [5], mean_lag_days: [6],
+        sliceDSL: 'window(1-Jan-26:1-Feb-26)',
+      }]],
+    ]);
+
+    const result = enhanceGraphLatencies(graph, paramLookup, now, mockHelpers, undefined, undefined, undefined, 'window');
+    const startToA = result.edgeValues.find(v => v.edgeUuid === 'start-to-a');
+
+    // In window mode, ayFit is not computed — path_mu/path_sigma should be undefined
+    expect(startToA?.latency.path_mu).toBeUndefined();
+    expect(startToA?.latency.path_sigma).toBeUndefined();
+  });
+
   it('should compute lower completeness for downstream edges', () => {
     const graph = createLatencyGraph();
     const paramLookup = createParamLookup();

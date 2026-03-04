@@ -249,6 +249,50 @@ describe('UpdateManager.applyBatchLAGValues', () => {
     expect(eAB.p.mean).toBe(0.6);
     expect(eAC.p.mean).toBe(0.4);
   });
+
+  it('should write path_mu and path_sigma to edge.p.latency when provided', () => {
+    const um = new UpdateManager();
+    const graph: any = {
+      nodes: [{ id: 'A' }, { id: 'B' }],
+      edges: [{ id: 'A-B', from: 'A', to: 'B', p: { latency: {} } }],
+      metadata: {},
+    };
+
+    const next = um.applyBatchLAGValues(graph, [
+      {
+        edgeId: 'A-B',
+        latency: { t95: 10, completeness: 0.8, path_t95: 25, path_mu: 2.5, path_sigma: 0.65 },
+        blendedMean: 0.4,
+        evidence: { mean: 0.3, n: 100, k: 30, stdev: 0.01 },
+      },
+    ]);
+
+    const e = next.edges.find((x: any) => x.id === 'A-B');
+    expect(e.p.latency.path_mu).toBe(2.5);
+    expect(e.p.latency.path_sigma).toBe(0.65);
+  });
+
+  it('should not write path_mu/path_sigma when not provided', () => {
+    const um = new UpdateManager();
+    const graph: any = {
+      nodes: [{ id: 'A' }, { id: 'B' }],
+      edges: [{ id: 'A-B', from: 'A', to: 'B', p: { latency: {} } }],
+      metadata: {},
+    };
+
+    const next = um.applyBatchLAGValues(graph, [
+      {
+        edgeId: 'A-B',
+        latency: { t95: 10, completeness: 0.8, path_t95: 25 },
+        blendedMean: 0.4,
+        evidence: { mean: 0.3, n: 100, k: 30, stdev: 0.01 },
+      },
+    ]);
+
+    const e = next.edges.find((x: any) => x.id === 'A-B');
+    expect(e.p.latency.path_mu).toBeUndefined();
+    expect(e.p.latency.path_sigma).toBeUndefined();
+  });
 });
 
 

@@ -113,6 +113,13 @@ properties:
         type: number
         minimum: 0
         description: "Fitted log-normal sigma parameter (internal, not UI-exposed)"
+      path_mu:
+        type: number
+        description: "Path-level A→Y log-normal mu (Fenton–Wilkinson, internal)"
+      path_sigma:
+        type: number
+        minimum: 0
+        description: "Path-level A→Y log-normal sigma (Fenton–Wilkinson, internal)"
       model_trained_at:
         type: string
         description: "UK date (d-MMM-yy) when the model was last fitted (staleness detection)"

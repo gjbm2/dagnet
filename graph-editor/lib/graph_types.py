@@ -75,6 +75,8 @@ class LatencyConfig(BaseModel):
     completeness: Optional[float] = Field(None, ge=0, le=1, description="Maturity progress 0-1 (display only)")
     mu: Optional[float] = Field(None, description="Fitted log-normal mu parameter (internal, not UI-exposed)")
     sigma: Optional[float] = Field(None, ge=0, description="Fitted log-normal sigma parameter (internal, not UI-exposed)")
+    path_mu: Optional[float] = Field(None, description="Path-level A→Y log-normal mu (Fenton–Wilkinson, internal)")
+    path_sigma: Optional[float] = Field(None, ge=0, description="Path-level A→Y log-normal sigma (Fenton–Wilkinson, internal)")
     model_trained_at: Optional[str] = Field(None, description="UK date (d-MMM-yy) when the model was last fitted (staleness detection)")
 
 
