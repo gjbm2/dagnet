@@ -1,4 +1,11 @@
 # DagNet Release Notes
+## Version 1.6.18b
+**Released:** 4-Mar-26
+
+Exposed cum lognormal curve within Cohort Maturity analysis; persisting path_mu and path_sigma for cohort fit modelling.
+
+---
+
 ## Version 1.6.17b
 **Released:** 3-Mar-26
 
