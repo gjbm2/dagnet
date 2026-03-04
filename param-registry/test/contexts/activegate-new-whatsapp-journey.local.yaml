@@ -1,4 +1,4 @@
-id: whatsapp-journey
+id: activegate-new-whatsapp-journey.local
 name: New WhatsApp journey
 description: Whether the Statsig gate is on for the user (via Amplitude user property activeGates.*)
 type: categorical

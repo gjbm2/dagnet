@@ -462,7 +462,7 @@ describeSuite('Snapshot Write Path (fixture-based)', () => {
     await deleteTestSnapshots(SNAPSHOT_TEST_REPO);
 
     // Register test fixtures
-    await registerFile('context-channel', 'context', loadYamlFixture('param-registry/test/contexts/channel-mece-local.yaml'));
+    await registerFile('context-channel', 'context', loadYamlFixture('graph-editor/src/services/__tests__/fixtures/channel-mece-local.yaml'));
     await registerFile('event-household-created', 'event', loadYamlFixture('param-registry/test/events/household-created.yaml'));
     await registerFile('event-energy-rec', 'event', loadYamlFixture('param-registry/test/events/energy-rec.yaml'));
     await registerFile('event-switch-registered', 'event', loadYamlFixture('param-registry/test/events/switch-registered.yaml'));
@@ -751,7 +751,7 @@ describeSuite('Snapshot Write Path (fixture-based)', () => {
   });
 
   it('writes correct row counts for 2-day serial cron simulation', async () => {
-    const graph0 = loadJsonFixture('param-registry/test/graphs/household-energy-rec-switch-registered-flow.json') as Graph;
+    const graph0 = loadJsonFixture('graph-editor/src/services/__tests__/fixtures/household-energy-rec-switch-registered-flow.json') as Graph;
     
     // Override t95 values for controlled incremental behavior
     const graph = structuredClone(graph0) as any;

@@ -279,7 +279,7 @@ describeLocal('LOCAL e2e: context(active gate) matches manual Amplitude segment 
   it('fetchItem(versioned) with context(whatsapp-journey:on) matches manual Amplitude segment baseline', async () => {
     if (!creds) throw new Error('Missing Amplitude creds');
 
-    const graph = loadJsonFixture('param-registry/test/graphs/household-energy-rec-switch-registered-flow.json') as Graph;
+    const graph = loadJsonFixture('graph-editor/src/services/__tests__/fixtures/household-energy-rec-switch-registered-flow.json') as Graph;
     let currentGraph: Graph | null = structuredClone(graph);
     const setGraph = (g: Graph | null) => { currentGraph = g; };
 

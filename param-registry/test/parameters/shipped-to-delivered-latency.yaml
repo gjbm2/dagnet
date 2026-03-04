@@ -13,6 +13,13 @@ latency:
   latency_parameter: true
   anchor_node_id: landing-page
 
+mu: 2.64
+sigma: 0.65
+onset_delta_days: 1
+path_mu: 2.85
+path_sigma: 1.10
+model_trained_at: "2025-11-30T08:00:00Z"
+
 values:
   # ============================================================
   # COHORT SLICE (A-anchored: landing-page → ... → shipped → delivered)

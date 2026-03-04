@@ -1,7 +1,6 @@
 id: household-created
 name: Household Created
-description: |
-  Household has created an account in the system. Dirtying
+description: Household has created an account in the system
 category: conversion
 tags: []
 provider_event_names:

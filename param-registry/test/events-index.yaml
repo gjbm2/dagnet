@@ -55,7 +55,56 @@ events:
     file_path: events/saw-wa-details-page.yaml
     tags: [legacy]
 
+  - id: household-created
+    name: Household Created
+    description: Household has created an account in the system
+    category: conversion
+    file_path: events/household-created.yaml
+    tags: [household, energy]
+
+  - id: energy-rec
+    name: Energy Recommendation Offered
+    description: Customer has been offered an energy recommendation
+    category: conversion
+    file_path: events/energy-rec.yaml
+    tags: [household, energy]
+
+  - id: switch-registered
+    name: Switch Registered
+    description: Customer has registered for an energy switch
+    category: conversion
+    file_path: events/switch-registered.yaml
+    tags: [household, energy]
+
+  - id: switch-success
+    name: Switch Success
+    description: Energy switch has completed successfully
+    category: conversion
+    file_path: events/switch-success.yaml
+    tags: [household, energy]
+
+  - id: event-a
+    name: Event A
+    description: Fixture event A for smooth-lag end-to-end tests
+    category: fixture
+    file_path: events/event-a.yaml
+    tags: [fixtures, stats]
+
+  - id: event-b
+    name: Event B
+    description: Fixture event B for smooth-lag end-to-end tests
+    category: fixture
+    file_path: events/event-b.yaml
+    tags: [fixtures, stats]
+
+  - id: event-c
+    name: Event C
+    description: Fixture event C for smooth-lag end-to-end tests
+    category: fixture
+    file_path: events/event-c.yaml
+    tags: [fixtures, stats]
+
 metadata:
   version: "1.0.0"
-  updated_at: "2025-12-04T21:15:00Z"
-  total_events: 8
+  updated_at: "2026-03-04T00:00:00Z"
+  total_events: 15

@@ -1,5 +1,6 @@
 id: energy-rec
-name: energy-rec
+name: Energy Recommendation Offered
+description: Customer has been offered an energy recommendation
 category: conversion
 tags: []
 provider_event_names:

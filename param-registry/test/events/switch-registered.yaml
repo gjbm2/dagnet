@@ -1,5 +1,6 @@
 id: switch-registered
-name: switch-registered
+name: Switch Registered
+description: Customer has registered for an energy switch
 category: conversion
 tags: []
 provider_event_names:

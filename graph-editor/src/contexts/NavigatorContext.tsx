@@ -936,6 +936,31 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
       }
     },
 
+    // Load items from a workspace that already exists in IDB (no remote API calls).
+    // Used by the sample-data bundle path after hydrateFromBundle.
+    loadLocalWorkspace: async (repo: string, branch: string) => {
+      console.log(`📦 NavigatorContext: loadLocalWorkspace called for ${repo}/${branch}`);
+
+      credentialsManager.clearCache();
+      const result = await credentialsManager.loadCredentials();
+      if (result.credentials) {
+        const { gitService } = await import('../services/gitService');
+        gitService.setCredentials(result.credentials);
+      }
+
+      const availableRepos = result.credentials?.git?.map((r: any) => r.name) || [];
+
+      setState(prev => ({
+        ...prev,
+        selectedRepo: repo,
+        selectedBranch: branch,
+        availableRepos,
+        availableBranches: [branch]
+      }));
+
+      await loadItems(repo, branch, { syncMode: 'none' });
+    },
+
     // Filter and sort operations
     setViewMode,
     setShowLocalOnly,

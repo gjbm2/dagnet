@@ -358,6 +358,7 @@ export interface NavigatorOperations {
   refreshBranches: () => Promise<string[]>;
   reloadCredentials: () => Promise<void>;
   forceFullReload: () => Promise<void>;
+  loadLocalWorkspace: (repo: string, branch: string) => Promise<void>;
   
   // Filter and sort operations
   setViewMode: (mode: 'all' | 'files-only') => void;

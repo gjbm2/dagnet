@@ -1,5 +1,6 @@
 id: switch-success
-name: switch-success
+name: Switch Success
+description: Energy switch has completed successfully
 category: conversion
 tags: []
 provider_event_names:

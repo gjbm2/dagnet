@@ -253,8 +253,19 @@ function MainAppShellContent() {
   // Event listener for post-init user actions (Pull, Push, Commit)
   useEffect(() => {
     const handleAuthExpired = () => setShowAuthExpiredModal(true);
+    const handleClonePartial = (e: Event) => {
+      const { failedCount, totalCount, successCount } = (e as CustomEvent).detail;
+      toast(
+        `Loaded ${successCount} of ${totalCount} files — ${failedCount} could not be fetched. Try pulling later or connecting GitHub.`,
+        { duration: 8000, icon: '⚠️' }
+      );
+    };
     window.addEventListener('dagnet:gitAuthExpired', handleAuthExpired);
-    return () => window.removeEventListener('dagnet:gitAuthExpired', handleAuthExpired);
+    window.addEventListener('dagnet:clonePartialFailure', handleClonePartial);
+    return () => {
+      window.removeEventListener('dagnet:gitAuthExpired', handleAuthExpired);
+      window.removeEventListener('dagnet:clonePartialFailure', handleClonePartial);
+    };
   }, []);
 
   // Init-from-secret modal state
@@ -504,15 +515,15 @@ function MainAppShellContent() {
     setIsInitSubmitting(true);
     
     try {
-      // Sample credentials for the public dagnet repo - no token needed for read access
+      // Sample credentials for the public dagnet repo — no token needed for read access.
+      // If the user later connects via GitHub OAuth, the token is injected into this
+      // entry and pull/push/commit become available.
       const sampleCredentials = {
         version: '1.0.0',
         git: [{
           name: 'dagnet',
           isDefault: true,
           owner: 'gjbm2',
-          // No token - public repo allows unauthenticated read access
-          // Users will be in read-only mode (cannot push/commit)
           basePath: 'param-registry/test',
           graphsPath: 'graphs',
           paramsPath: 'parameters',
@@ -523,7 +534,7 @@ function MainAppShellContent() {
         }]
       };
 
-      // Create or update credentials file in the workspace
+      // 1. Persist credentials
       const credentialsFileId = 'credentials-credentials';
       const existingFile = fileRegistry.getFile(credentialsFileId);
       const source = existingFile?.source || {
@@ -538,15 +549,33 @@ function MainAppShellContent() {
         existingFile.data = sampleCredentials;
         existingFile.originalData = structuredClone(sampleCredentials);
       }
-
       await fileRegistry.markSaved(credentialsFileId);
 
-      // Reload workspace with new credentials
-      await navOperations.reloadCredentials();
+      // 2. Load pre-built sample data bundle (zero GitHub API calls)
+      const { workspaceService } = await import('./services/workspaceService');
+      let bundleLoaded = false;
+
+      try {
+        const resp = await fetch('/defaults/sample-data-bundle.json');
+        if (resp.ok) {
+          const bundle = await resp.json();
+          await workspaceService.hydrateFromBundle('dagnet', 'main', bundle);
+          bundleLoaded = true;
+        }
+      } catch (bundleErr) {
+        console.warn('[handleUseSampleData] Bundle fetch failed, falling back to GitHub clone:', bundleErr);
+      }
+
+      if (!bundleLoaded) {
+        // Fallback: clone from GitHub (may hit rate limits for unauthenticated access)
+        await navOperations.reloadCredentials();
+      } else {
+        // 3. Populate navigator from the locally-hydrated workspace (no remote calls)
+        await navOperations.loadLocalWorkspace('dagnet', 'main');
+      }
 
       setHasUserCredentials(true);
-
-      toast.success('Sample data loaded (read-only mode - no GitHub token)');
+      toast.success('Sample data loaded — connect GitHub later for full access');
     } catch (error) {
       console.error('Failed to load sample data', error);
       toast.error('Failed to load sample data: ' + (error instanceof Error ? error.message : 'Unknown error'));
@@ -1791,7 +1820,7 @@ function MainAppShellContent() {
                       {isInitSubmitting ? 'Loading…' : 'Use sample data'}
                     </button>
                     <span style={{ fontSize: '10px', color: '#999', textAlign: 'center' }}>
-                      Explore example conversion graphs (read-only)
+                      Explore example conversion graphs — connect GitHub later for full access
                     </span>
                     
                     {/* Init from server secret - for authenticated access */}

@@ -805,7 +805,7 @@ describeLocal('LOCAL e2e: cohort(A,-20d:-18d) MECE Σ(channel) == uncontexted Am
     await hardResetState();
 
     // Register fixtures into the workspace registry (ContextRegistry loads from FileRegistry in vitest)
-    const channelContext = loadYamlFixture('param-registry/test/contexts/channel-mece-local.yaml');
+    const channelContext = loadYamlFixture('graph-editor/src/services/__tests__/fixtures/channel-mece-local.yaml');
     await registerFileForTest('context-channel', 'context', channelContext);
 
     const gateContext = loadYamlFixture('param-registry/test/contexts/activegate-new-whatsapp-journey.local.yaml');
@@ -830,7 +830,7 @@ describeLocal('LOCAL e2e: cohort(A,-20d:-18d) MECE Σ(channel) == uncontexted Am
     async () => {
       if (!creds) throw new Error('Missing Amplitude creds');
 
-      const graph = loadJsonFixture('param-registry/test/graphs/household-energy-rec-switch-registered-flow.json') as Graph;
+      const graph = loadJsonFixture('graph-editor/src/services/__tests__/fixtures/household-energy-rec-switch-registered-flow.json') as Graph;
       let currentGraph: Graph | null = structuredClone(graph);
       const setGraph = (g: Graph | null) => {
         currentGraph = g;
@@ -908,7 +908,7 @@ describeLocal('LOCAL e2e: cohort(A,-20d:-18d) MECE Σ(channel) == uncontexted Am
       const paramId = 'energy-rec-to-switch-registered-latency';
       const item: FetchItem = createFetchItem('parameter', paramId, edgeId);
 
-      const graph0 = loadJsonFixture('param-registry/test/graphs/household-energy-rec-switch-registered-flow.json') as Graph;
+      const graph0 = loadJsonFixture('graph-editor/src/services/__tests__/fixtures/household-energy-rec-switch-registered-flow.json') as Graph;
       // IMPORTANT: force a small path_t95 so a “next-day cron” re-fetch only needs a tail subset,
       // rather than re-requesting the full 20-day window.
       const graphForCron = structuredClone(graph0) as any;
@@ -1108,7 +1108,7 @@ describeLocal('LOCAL e2e: cohort(A,-20d:-18d) MECE Σ(channel) == uncontexted Am
     async () => {
       if (!creds) throw new Error('Missing Amplitude creds');
 
-      const graph = loadJsonFixture('param-registry/test/graphs/household-energy-rec-switch-registered-flow.json') as Graph;
+      const graph = loadJsonFixture('graph-editor/src/services/__tests__/fixtures/household-energy-rec-switch-registered-flow.json') as Graph;
       let currentGraph: Graph | null = structuredClone(graph);
       const setGraph = (g: Graph | null) => {
         currentGraph = g;
@@ -1178,7 +1178,7 @@ describeLocalSnapshots('LOCAL e2e: serial snapshot writes (20-Nov then 21-Nov) �
     await hardResetState();
 
     // Register fixtures into the workspace registry (ContextRegistry loads from FileRegistry in vitest)
-    const channelContext = loadYamlFixture('param-registry/test/contexts/channel-mece-local.yaml');
+    const channelContext = loadYamlFixture('graph-editor/src/services/__tests__/fixtures/channel-mece-local.yaml');
     await registerFileForTest('context-channel', 'context', channelContext);
 
     const evA = loadYamlFixture('param-registry/test/events/household-created.yaml');
@@ -1209,7 +1209,7 @@ describeLocalSnapshots('LOCAL e2e: serial snapshot writes (20-Nov then 21-Nov) �
       const days = 20;
       const channels = ['paid-search', 'influencer', 'paid-social', 'other'] as const;
 
-      const graph0 = loadJsonFixture('param-registry/test/graphs/household-energy-rec-switch-registered-flow.json') as Graph;
+      const graph0 = loadJsonFixture('graph-editor/src/services/__tests__/fixtures/household-energy-rec-switch-registered-flow.json') as Graph;
       let currentGraph: Graph | null = structuredClone(graph0);
       const setGraph = (g: Graph | null) => { currentGraph = g; };
 
@@ -1376,7 +1376,7 @@ describeLocalPython('LOCAL e2e: after retrieving all slices, live scenarios → 
     await hardResetState();
 
     // Register fixtures into the workspace registry (ContextRegistry loads from FileRegistry in vitest)
-    const channelContext = loadYamlFixture('param-registry/test/contexts/channel-mece-local.yaml');
+    const channelContext = loadYamlFixture('graph-editor/src/services/__tests__/fixtures/channel-mece-local.yaml');
     await registerFileForTest('context-channel', 'context', channelContext);
 
     const evA = loadYamlFixture('param-registry/test/events/household-created.yaml');
@@ -1402,7 +1402,7 @@ describeLocalPython('LOCAL e2e: after retrieving all slices, live scenarios → 
       // ---------------------------------------------------------------------
       // Step 1: "Retrieve all slices" (real Amplitude HTTP through prod pipeline)
       // ---------------------------------------------------------------------
-      const graph0 = loadJsonFixture('param-registry/test/graphs/household-energy-rec-switch-registered-flow.json') as Graph;
+      const graph0 = loadJsonFixture('graph-editor/src/services/__tests__/fixtures/household-energy-rec-switch-registered-flow.json') as Graph;
       let currentGraph: Graph | null = structuredClone(graph0);
       const setGraph = (g: Graph | null) => { currentGraph = g; };
 
@@ -1449,7 +1449,7 @@ describeLocalPython('LOCAL e2e: after retrieving all slices, live scenarios → 
       const scenarioGraphs: Array<{ scenario_id: string; name: string; colour: string; visibility_mode: 'e'; graph: Graph }> = [];
 
       for (const p of prepared) {
-        const baseGraph = loadJsonFixture('param-registry/test/graphs/household-energy-rec-switch-registered-flow.json') as Graph;
+        const baseGraph = loadJsonFixture('graph-editor/src/services/__tests__/fixtures/household-energy-rec-switch-registered-flow.json') as Graph;
         let g: Graph | null = structuredClone(baseGraph);
         const setG = (next: Graph | null) => { g = next; };
 

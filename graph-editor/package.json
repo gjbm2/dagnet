@@ -4,10 +4,11 @@
   "version": "1.6.18-beta",
   "type": "module",
   "scripts": {
-    "dev": "npm run generate-docs && vite",
+    "dev": "npm run generate-docs && npm run bundle-sample-data && vite",
     "dev:e2e": "vite --host 127.0.0.1 --port 4173 --strictPort",
     "generate-docs": "node scripts/generate-docs-index.js",
-    "prebuild": "npm run generate-docs",
+    "bundle-sample-data": "node ../scripts/bundle-sample-data.js",
+    "prebuild": "npm run generate-docs && npm run bundle-sample-data",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
     "test": "NODE_OPTIONS='--max-old-space-size=8192' vitest",
