@@ -38,7 +38,7 @@ export function PostItEditor({
     content,
     editable: true,
     onUpdate: ({ editor: ed }) => {
-      onChange(ed.storage.markdown?.getMarkdown?.() ?? ed.getText());
+      onChange((ed.storage as any).markdown?.getMarkdown?.() ?? ed.getText());
     },
     onBlur: ({ editor: ed }) => {
       onEditingChange(false);
@@ -67,10 +67,18 @@ export function PostItEditor({
     onFocusAtApplied?.();
   }, [editing, focusAt, editor, onFocusAtApplied]);
 
+  // Auto-focus for freshly-created notes (no click position available).
+  useEffect(() => {
+    if (!editing || focusAt || !editor || editor.isDestroyed) return;
+    if (editor.isFocused) return;
+    if ((content ?? '') !== '') return;
+    editor.commands.focus('end');
+  }, [editing, focusAt, editor, content]);
+
   // Sync external content changes
   useEffect(() => {
     if (!editor || editor.isFocused || editor.isDestroyed) return;
-    const md = editor.storage.markdown?.getMarkdown?.() ?? '';
+    const md = (editor.storage as any).markdown?.getMarkdown?.() ?? '';
     if (md !== content) editor.commands.setContent(content || '');
   }, [editor, content]);
 

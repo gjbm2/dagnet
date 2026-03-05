@@ -24,6 +24,36 @@
   opacity: 0 !important;
 }
 
+/* Hide element palette tab bar (same pattern as canvas) */
+.dock-bar:has([data-node-key="element-palette-tab"]) {
+  display: none !important;
+  height: 0 !important;
+  max-height: 0 !important;
+  visibility: hidden !important;
+  position: absolute !important;
+  left: -9999px !important;
+  overflow: hidden !important;
+  opacity: 0 !important;
+}
+
+/* Hide the vertical splitter between palette panel and sidebar tabs within the sidebar vbox */
+[data-dockid="graph-sidebar-vbox"] > .dock-divider {
+  display: none !important;
+  pointer-events: none !important;
+  height: 0 !important;
+}
+
+/* Palette panel: match sidebar chrome, no padding */
+[data-dockid="element-palette-panel"] .dock-content {
+  padding: 0;
+  background: #F9FAFB !important;
+  border-bottom: 1px solid #E5E7EB;
+}
+[data-theme="dark"] [data-dockid="element-palette-panel"] .dock-content {
+  background: #1e1e1e !important;
+  border-bottom: 1px solid #404040;
+}
+
 /* Fallback if :has() not supported - hide parent of canvas tab */
 [data-node-key="canvas-tab"] {
   display: none !important;

@@ -41,6 +41,7 @@ describe('CRUD and Navigator Sync Reproduction', () => {
 
         mockNavigatorOps = {
             addLocalItem: vi.fn(),
+            removeLocalItem: vi.fn(),
             refreshItems: vi.fn(),
         };
 

@@ -27,7 +27,7 @@ from graph_types import (
     Graph, Node, Edge, Evidence, ProbabilityParam, CostParam,
     ConditionalProbability, Metadata, Policies, Layout,
     ResidualBehavior, DataSource, CaseDataSource,
-    LatencyConfig, ForecastParams, NodeImage
+    LatencyConfig, ForecastParams, NodeImage, PostIt
 )
 
 
@@ -295,6 +295,7 @@ class TestAllSchemaDefsHavePythonTypes:
         'ResidualBehavior': ResidualBehavior,
         'LatencyConfig': LatencyConfig,
         'ForecastParams': ForecastParams,
+        'PostIt': PostIt,
         # These are deprecated or not modeled separately in Python:
         # 'Costs', 'MonetaryCost', 'TimeCost' - deprecated
         # 'UUID', 'Id', 'Condition' - simple types, not classes

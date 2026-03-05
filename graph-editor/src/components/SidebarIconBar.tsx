@@ -1,15 +1,13 @@
 import React, { useState } from 'react';
 import { SidebarState } from '../hooks/useSidebarState';
 import { Layers, FileText, Wrench, BarChart3 } from 'lucide-react';
-import { ElementPalette, ElementToolType } from './ElementPalette';
+import { ElementPalette } from './ElementPalette';
 import './SidebarIconBar.css';
 
 interface SidebarIconBarProps {
   state: SidebarState;
   onIconClick: (panel: 'what-if' | 'properties' | 'tools' | 'analytics') => void;
   onIconHover?: (panel: 'what-if' | 'properties' | 'tools' | 'analytics' | null) => void;
-  activeElementTool?: ElementToolType;
-  onToolSelect?: (tool: ElementToolType) => void;
 }
 
 /**
@@ -18,7 +16,7 @@ interface SidebarIconBarProps {
  * 48px wide vertical bar on right edge showing 3 icons
  * Visible only when sidebar is in 'minimized' mode
  */
-export default function SidebarIconBar({ state, onIconClick, onIconHover, activeElementTool, onToolSelect }: SidebarIconBarProps) {
+export default function SidebarIconBar({ state, onIconClick, onIconHover }: SidebarIconBarProps) {
   const [hoveredIcon, setHoveredIcon] = useState<'what-if' | 'properties' | 'tools' | 'analytics' | null>(null);
   
   const handleMouseEnter = (panel: 'what-if' | 'properties' | 'tools' | 'analytics') => {
@@ -66,7 +64,7 @@ export default function SidebarIconBar({ state, onIconClick, onIconHover, active
   return (
     <div className="sidebar-icon-bar">
       {/* Element creation palette */}
-      <ElementPalette layout="vertical" activeTool={activeElementTool} onToolSelect={onToolSelect} />
+      <ElementPalette layout="vertical" />
       <div style={{ height: '1px', background: 'rgba(0,0,0,0.1)', margin: '4px 8px' }} />
 
       {/* Scenarios Icon */}

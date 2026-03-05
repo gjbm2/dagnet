@@ -492,5 +492,37 @@
     "updated_at": "2025-12-02T00:00:00Z",
     "author": "commerce-team",
     "description": "E-commerce checkout funnel with cart A/B test and phone order path, explicit abandonment edges ensuring pmf=1 at each node. Includes latency tracking on key fulfilment edges."
-  }
+  },
+  "postits": [
+    {
+      "id": "a1b2c3d4-0001-4000-8000-000000000001",
+      "text": "## Cart A/B test\nQuick cart showing **+8pp** uplift in checkout rate.\nDecision due end of Q1.",
+      "colour": "#FFF475",
+      "fontSize": "M",
+      "width": 220,
+      "height": 160,
+      "x": 380,
+      "y": -250
+    },
+    {
+      "id": "a1b2c3d4-0002-4000-8000-000000000002",
+      "text": "Phone orders bypass the web cart entirely.\nTrack via call centre CRM, not Amplitude.",
+      "colour": "#B6E3E9",
+      "fontSize": "S",
+      "width": 200,
+      "height": 120,
+      "x": 200,
+      "y": -200
+    },
+    {
+      "id": "a1b2c3d4-0003-4000-8000-000000000003",
+      "text": "Fulfilment latency: **median 2.1 days** from confirmed to shipped.\nReturn window = 30 days from delivery.",
+      "colour": "#FFD59D",
+      "fontSize": "M",
+      "width": 240,
+      "height": 140,
+      "x": 1700,
+      "y": -80
+    }
+  ]
 }

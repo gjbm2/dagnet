@@ -253,7 +253,7 @@ export function EditMenu() {
       if (detail.selectedPostitIds.length > 0 && nextGraph.postits) {
         const postitIdSet = new Set(detail.selectedPostitIds);
         const cloned = structuredClone(nextGraph);
-        cloned.postits = cloned.postits.filter((p: any) => !postitIdSet.has(p.id));
+        cloned.postits = cloned.postits!.filter((p: any) => !postitIdSet.has(p.id));
         deletedPostitCount = detail.selectedPostitIds.length;
         if (cloned.metadata) cloned.metadata.updated_at = new Date().toISOString();
         nextGraph = cloned;

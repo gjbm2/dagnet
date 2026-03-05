@@ -717,9 +717,9 @@ const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, r
         
         // CRITICAL: Capture the final width BEFORE clearing isResizing
         // Find sidebar using its stable ID (works regardless of position)
-        const sidebarPanel = containerRef.current?.querySelector('[data-dockid="graph-sidebar-panel"]') as HTMLElement;
-        if (sidebarPanel) {
-          const finalWidth = Math.round(sidebarPanel.getBoundingClientRect().width);
+        const sidebarVbox = containerRef.current?.querySelector('[data-dockid="graph-sidebar-vbox"]') as HTMLElement;
+        if (sidebarVbox) {
+          const finalWidth = Math.round(sidebarVbox.getBoundingClientRect().width);
           console.log(`[${new Date().toISOString()}] [GraphEditor ${fileId}] Final width after resize: ${finalWidth}px (integer)`);
           sidebarOps.setSidebarWidth(finalWidth);
         } else {
@@ -787,14 +787,13 @@ const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, r
       return;
     }
     
-    // Find sidebar using its stable ID (works regardless of position)
-    const sidebarPanel = containerRef.current.querySelector('[data-dockid="graph-sidebar-panel"]') as HTMLElement;
+    // Find sidebar vbox using its stable ID (width management targets the vbox, not the inner tabbed panel)
+    const sidebarPanel = containerRef.current.querySelector('[data-dockid="graph-sidebar-vbox"]') as HTMLElement;
     if (!sidebarPanel) {
-      console.log(`[${new Date().toISOString()}] [GraphEditor ${fileId}] useEffect#6b: No sidebar panel found`);
+      console.log(`[${new Date().toISOString()}] [GraphEditor ${fileId}] useEffect#6b: No sidebar vbox found`);
       return;
     }
     
-    // If minimized, force width to 0
     if (sidebarState.mode === 'minimized') {
       sidebarPanel.style.flex = '0 0 0px';
       sidebarPanel.style.width = '0px';
@@ -804,8 +803,6 @@ const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, r
       return;
     }
     
-    // If maximized and user is actively resizing, allow rc-dock to resize freely
-    // but DON'T lock the width - just remove the min/max constraints
     if (sidebarState.mode === 'maximized' && sidebarState.isResizing) {
       const currentWidth = sidebarPanel.getBoundingClientRect().width;
       sidebarPanel.style.flex = `0 0 ${currentWidth}px`;
@@ -855,10 +852,10 @@ const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, r
         // rc-dock adds the panel ID as a data attribute: data-dockid="graph-sidebar-panel"
         let sidebarPanelElement: HTMLElement | null = null;
         
-        sidebarPanelElement = containerRef.current.querySelector('[data-dockid="graph-sidebar-panel"]') as HTMLElement;
+        sidebarPanelElement = containerRef.current.querySelector('[data-dockid="graph-sidebar-vbox"]') as HTMLElement;
         
         if (sidebarPanelElement) {
-          console.log(`[GraphEditor ${fileId}] Found official sidebar panel via data-dockid`);
+          console.log(`[GraphEditor ${fileId}] Found sidebar vbox via data-dockid`);
         }
         
         if (sidebarPanelElement) {
@@ -948,7 +945,7 @@ const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, r
             if (!containerRef.current) return;
             
             // Find sidebar panel using its stable ID
-            const sidebar = containerRef.current.querySelector('[data-dockid="graph-sidebar-panel"]') as HTMLElement;
+            const sidebar = containerRef.current.querySelector('[data-dockid="graph-sidebar-vbox"]') as HTMLElement;
             
             if (sidebar && sidebarState.sidebarWidth && sidebarState.sidebarWidth > MIN_SIDEBAR_WIDTH) {
               sidebar.style.flex = 'none';
@@ -1104,6 +1101,11 @@ const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, r
   
   // Analytics panel
   const analyticsComponent = useMemo(() => <AnalyticsPanel tabId={tabId} />, [tabId]);
+
+  // Element palette (for sidebar maximised mode) — reads tool state from ElementToolContext
+  const paletteComponent = useMemo(() => (
+    <ElementPalette layout="horizontal" />
+  ), []);
   
   // Helper function to create layout structure (uses stable components)
   const createLayoutStructure = useCallback((
@@ -1148,39 +1150,50 @@ const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, r
       }
     }
     
-    // Inject stable sidebar panel components (ALWAYS - even in minimized mode, panels exist with size:0)
-    if (layout.dockbox.children?.[1] && 'tabs' in layout.dockbox.children[1]) {
-      const sidebarPanel = layout.dockbox.children[1];
-      
-      // If specific tabs requested, filter to only those
-      if (sidebarTabsToInclude) {
-        sidebarPanel.tabs = sidebarPanel.tabs.filter((tab: any) => sidebarTabsToInclude.includes(tab.id));
-        console.log(`[GraphEditor ${fileId}] Creating layout with only sidebar tabs:`, sidebarTabsToInclude);
-      }
-      
-      sidebarPanel.tabs.forEach((tab: any) => {
-        if (tab.id === 'what-if-tab') {
-          tab.content = whatIfComponent;
-        } else if (tab.id === 'properties-tab') {
-          tab.content = propertiesComponent;
-        } else if (tab.id === 'tools-tab') {
-          tab.content = toolsComponent;
-        } else if (tab.id === 'analytics-tab') {
-          tab.content = analyticsComponent;
+    // Inject components into the sidebar vbox structure:
+    // children[1] = vbox { children: [palette-panel, sidebar-panel] }
+    const sidebarVbox = layout.dockbox.children?.[1];
+    if (sidebarVbox && 'children' in sidebarVbox) {
+      // Inject palette component
+      const palettePanel = (sidebarVbox as any).children?.[0];
+      if (palettePanel && 'tabs' in palettePanel) {
+        const paletteTab = palettePanel.tabs.find((t: any) => t.id === 'element-palette-tab');
+        if (paletteTab) {
+          paletteTab.content = paletteComponent;
         }
-      });
-      
-      // Set active tab based on sidebar state (if that tab exists in the filtered list)
-      const desiredActiveId = PANEL_TO_TAB_ID[sidebarState.activePanel];
-      if (sidebarPanel.tabs.some((t: any) => t.id === desiredActiveId)) {
-        sidebarPanel.activeId = desiredActiveId;
-      } else if (sidebarPanel.tabs.length > 0) {
-        sidebarPanel.activeId = (sidebarPanel.tabs[0] as any).id;
+      }
+
+      // Inject sidebar tab components
+      const sidebarPanel = (sidebarVbox as any).children?.[1];
+      if (sidebarPanel && 'tabs' in sidebarPanel) {
+        if (sidebarTabsToInclude) {
+          sidebarPanel.tabs = sidebarPanel.tabs.filter((tab: any) => sidebarTabsToInclude.includes(tab.id));
+          console.log(`[GraphEditor ${fileId}] Creating layout with only sidebar tabs:`, sidebarTabsToInclude);
+        }
+        
+        sidebarPanel.tabs.forEach((tab: any) => {
+          if (tab.id === 'what-if-tab') {
+            tab.content = whatIfComponent;
+          } else if (tab.id === 'properties-tab') {
+            tab.content = propertiesComponent;
+          } else if (tab.id === 'tools-tab') {
+            tab.content = toolsComponent;
+          } else if (tab.id === 'analytics-tab') {
+            tab.content = analyticsComponent;
+          }
+        });
+        
+        const desiredActiveId = PANEL_TO_TAB_ID[sidebarState.activePanel];
+        if (sidebarPanel.tabs.some((t: any) => t.id === desiredActiveId)) {
+          sidebarPanel.activeId = desiredActiveId;
+        } else if (sidebarPanel.tabs.length > 0) {
+          sidebarPanel.activeId = (sidebarPanel.tabs[0] as any).id;
+        }
       }
     }
     
     return layout;
-  }, [sidebarState.activePanel, sidebarState.sidebarWidth, fileId, whatIfComponent, propertiesComponent, toolsComponent, analyticsComponent]);
+  }, [sidebarState.activePanel, sidebarState.sidebarWidth, fileId, whatIfComponent, propertiesComponent, toolsComponent, analyticsComponent, paletteComponent]);
   
   // Watch What-If state: no layout reloads needed; CanvasHost reads from context
   // (left intentionally empty to avoid expensive rc-dock loadLayout calls)
@@ -1200,12 +1213,35 @@ const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, r
       // Restore saved layout structure
       console.log(`[${new Date().toISOString()}] [GraphEditor ${fileId}] Restoring saved dock layout`);
       layout = sidebarState.savedDockLayout;
+
+      // Migrate old layout: if children[1] is a panel (not a vbox), wrap it in the vbox structure
+      if (layout.dockbox?.children?.[1] && 'tabs' in layout.dockbox.children[1] && layout.dockbox.children[1].id === 'graph-sidebar-panel') {
+        console.log(`[GraphEditor ${fileId}] Migrating old layout: wrapping sidebar panel in vbox`);
+        const oldPanel = layout.dockbox.children[1];
+        layout.dockbox.children[1] = {
+          id: 'graph-sidebar-vbox',
+          mode: 'vertical',
+          size: oldPanel.size,
+          children: [
+            {
+              id: 'element-palette-panel',
+              size: 40,
+              panelLock: { widthFlex: 0, heightFlex: 0 },
+              tabs: [{ id: 'element-palette-tab', title: '', content: null, cached: true, closable: false, group: 'graph-canvas' }]
+            },
+            { ...oldPanel, size: 1000 }
+          ]
+        } as any;
+      }
       
       // Re-inject React components and titles into all tabs (recursively)
       const reinjectComponents = (node: any) => {
         if (node.tabs) {
           node.tabs.forEach((tab: any) => {
-            if (tab.id === 'canvas-tab') {
+            if (tab.id === 'element-palette-tab') {
+              tab.content = paletteComponent;
+              tab.title = '';
+            } else if (tab.id === 'canvas-tab') {
               tab.content = canvasComponent;
               tab.title = '';
             } else if (tab.id === 'what-if-tab') {
@@ -1298,7 +1334,7 @@ const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, r
       // Set sidebar panel size in layout if mode is maximized
       if (sidebarState.mode === 'maximized' && sidebarState.sidebarWidth) {
         const setSidebarSize = (node: any) => {
-          if (node.id === 'graph-sidebar-panel') {
+          if (node.id === 'graph-sidebar-vbox') {
             node.size = sidebarState.sidebarWidth;
             console.log(`[${new Date().toISOString()}] [GraphEditor ${fileId}] Set sidebar panel size to ${sidebarState.sidebarWidth}px in restored layout`);
           }
@@ -1322,7 +1358,7 @@ const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, r
     if (sidebarState.mode === 'maximized' && !sidebarState.sidebarWidth) {
       setTimeout(() => {
         if (containerRef.current) {
-          const sidebarEl = containerRef.current.querySelector('[data-panel-id="graph-sidebar-panel"], [data-node-key="what-if-tab"], [data-node-key="properties-tab"]')?.closest('.dock-panel') as HTMLElement;
+          const sidebarEl = containerRef.current.querySelector('[data-dockid="graph-sidebar-vbox"]') as HTMLElement;
           if (sidebarEl) {
             const actualWidth = Math.round(sidebarEl.getBoundingClientRect().width);
             console.log(`[${new Date().toISOString()}] [GraphEditor ${fileId}] Initializing with actual rendered sidebar width: ${actualWidth}px (no stored width)`);
@@ -1363,16 +1399,17 @@ const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, r
       const targetTabId = PANEL_TO_TAB_ID[sidebarState.activePanel];
       const dock = dockRef.current;
       
-      // Find and activate the target tab in sidebar panel
+      // Find and activate the target tab in sidebar panel (may be nested inside vbox)
       if (dock.getLayout) {
         const layout = dock.getLayout();
-        if (layout.dockbox && layout.dockbox.children) {
-          // Find sidebar panel (second child) and set active tab
-          layout.dockbox.children.forEach((panel: any) => {
-            if (panel.tabs && panel.tabs.some((t: any) => t.id === targetTabId)) {
-              panel.activeId = targetTabId;
-            }
-          });
+        const activateTab = (node: any) => {
+          if (node.tabs && node.tabs.some((t: any) => t.id === targetTabId)) {
+            node.activeId = targetTabId;
+          }
+          if (node.children) node.children.forEach(activateTab);
+        };
+        if (layout.dockbox) {
+          activateTab(layout.dockbox);
           console.log(`[${new Date().toISOString()}] [GraphEditor] useEffect#11: Loading layout for active panel change`);
           dock.loadLayout(layout);
         }
@@ -1925,9 +1962,9 @@ const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, r
                 return value;
               }));
               
-              // Remove size from sidebar panel (we manage this separately)
+              // Remove size from sidebar vbox (we manage width separately)
               const stripSidebarSize = (node: any) => {
-                if (node.id === 'graph-sidebar-panel') {
+                if (node.id === 'graph-sidebar-vbox') {
                   delete node.size;
                 }
                 if (node.children) {
@@ -2016,14 +2053,20 @@ const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, r
                     const currentLayout = dockRef.current.getLayout();
                     
               // Find existing sidebar panel
+              // Find sidebar panel recursively (it's inside the vbox now)
               let sidebarPanel: any = null;
-              if (currentLayout.dockbox?.children) {
-                for (const child of currentLayout.dockbox.children) {
-                  if (child.id === 'graph-sidebar-panel' && 'tabs' in child) {
-                    sidebarPanel = child;
-                    break;
+              const findSidebarPanel = (node: any): any => {
+                if (node.id === 'graph-sidebar-panel' && 'tabs' in node) return node;
+                if (node.children) {
+                  for (const child of node.children) {
+                    const found = findSidebarPanel(child);
+                    if (found) return found;
                   }
                 }
+                return null;
+              };
+              if (currentLayout.dockbox) {
+                sidebarPanel = findSidebarPanel(currentLayout.dockbox);
               }
               
               // Check if sidebar has any existing sidebar tabs (not just Canvas)
@@ -2196,8 +2239,6 @@ const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, r
               state={sidebarState}
               onIconClick={handleIconClick}
               onIconHover={handleIconHover}
-              activeElementTool={activeElementTool}
-              onToolSelect={setActiveElementTool}
             />
           </div>
         )}

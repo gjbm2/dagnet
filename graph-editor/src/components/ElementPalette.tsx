@@ -1,12 +1,11 @@
 import React, { useCallback } from 'react';
 import { MousePointer2, Hand, SquareIcon, StickyNote } from 'lucide-react';
+import { useElementTool, type ElementToolType } from '../contexts/ElementToolContext';
 
-export type ElementToolType = 'select' | 'pan' | 'new-node' | 'new-postit' | null;
+export type { ElementToolType };
 
 interface ElementPaletteProps {
   layout: 'horizontal' | 'vertical';
-  activeTool?: ElementToolType;
-  onToolSelect?: (tool: ElementToolType) => void;
 }
 
 const TOOLS = [
@@ -19,7 +18,8 @@ const CREATION_ELEMENTS = [
   { id: 'new-postit' as const, label: 'Post-It Note', icon: StickyNote },
 ];
 
-export function ElementPalette({ layout, activeTool, onToolSelect }: ElementPaletteProps) {
+export function ElementPalette({ layout }: ElementPaletteProps) {
+  const { activeElementTool: activeTool, setActiveElementTool: onToolSelect } = useElementTool();
   const currentTool = activeTool ?? 'select';
 
   const handleDragStart = useCallback((e: React.DragEvent, elementId: string) => {
@@ -58,8 +58,8 @@ export function ElementPalette({ layout, activeTool, onToolSelect }: ElementPale
       aria-label={label}
       onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onClick(); } }}
       style={{
-        width: '30px',
-        height: '30px',
+        width: isHorizontal ? '34px' : '30px',
+        height: isHorizontal ? '34px' : '30px',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
@@ -76,7 +76,7 @@ export function ElementPalette({ layout, activeTool, onToolSelect }: ElementPale
         if (!isActive) e.currentTarget.style.background = 'transparent';
       }}
     >
-      <Icon size={16} strokeWidth={1.5} />
+      <Icon size={isHorizontal ? 18 : 16} strokeWidth={1.5} />
     </div>
   );
 

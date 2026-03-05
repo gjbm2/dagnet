@@ -1,6 +1,8 @@
 idea# TODO
 
+- complete project-canvas work (canvas charts)
 - Snap-to behaviour when moving / resizing graph objects (nodes, post it notes, canvas charts)
+- scoped queries: /docs/current/scoped-queries.md
 
 - We should remove the parity testing piece and complete cutover of BE stats service soon
 

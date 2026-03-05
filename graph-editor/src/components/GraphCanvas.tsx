@@ -422,7 +422,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedPos
   const { deleteElements, fitView: rfFitView, screenToFlowPosition, flowToScreenPosition, setCenter } = useReactFlow();
   
   const isCanvasObjectNode = useCallback((id: string) =>
-    id.startsWith('postit-') || id.startsWith('container-') || id.startsWith('analysis-'), []);
+    id?.startsWith('postit-') || id?.startsWith('container-') || id?.startsWith('analysis-'), []);
   
   // ReactFlow maintains local state for smooth interactions
   const [nodes, setNodes, onNodesChangeBase] = useNodesState([]);
@@ -1517,6 +1517,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedPos
     });
   }, [setNodes]);
 
+  const autoEditPostitIdRef = useRef<string | null>(null);
   const postitHistoryTimerRef = useRef<NodeJS.Timeout | null>(null);
   const handleUpdatePostit = useCallback((id: string, updates: any) => {
     if (!graph) return;
@@ -1592,7 +1593,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedPos
     if (selectedPostitIds.length > 0 && nextGraph.postits) {
       const postitIdSet = new Set(selectedPostitIds);
       nextGraph = structuredClone(nextGraph);
-      nextGraph.postits = nextGraph.postits.filter((p: any) => !postitIdSet.has(p.id));
+      nextGraph.postits = nextGraph.postits!.filter((p: any) => !postitIdSet.has(p.id));
     }
 
     if (nextGraph.metadata) {
@@ -1911,6 +1912,8 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedPos
       {
         const graphPostitIds = new Set((graph.postits || []).map((p: any) => p.id));
         setNodes(prevNodes => {
+          const autoEditNodeId = autoEditPostitIdRef.current ? `postit-${autoEditPostitIdRef.current}` : null;
+
           // Remove post-it nodes that no longer exist in the graph (e.g. after undo)
           let updatedNodes = prevNodes
             .filter(prevNode => {
@@ -1929,6 +1932,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedPos
                 zIndex: 5000 + gpIndex,
                 position: { x: graphPostit.x ?? 0, y: graphPostit.y ?? 0 },
                 style: { ...prevNode.style, width: graphPostit.width, height: graphPostit.height },
+                selected: autoEditNodeId ? prevNode.id === autoEditNodeId : prevNode.selected,
                 data: {
                   ...prevNode.data,
                   postit: graphPostit,
@@ -2131,20 +2135,28 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedPos
           for (let pi = 0; pi < graphPostits.length; pi++) {
             const p = graphPostits[pi];
             if (!existingPostitIds.has(p.id)) {
+              const shouldAutoEdit = autoEditNodeId === `postit-${p.id}`;
+              if (shouldAutoEdit) autoEditPostitIdRef.current = null;
               updatedNodes.push({
                 id: `postit-${p.id}`,
                 type: 'postit',
                 position: { x: p.x ?? 0, y: p.y ?? 0 },
                 zIndex: 5000 + pi,
+                selected: shouldAutoEdit,
                 style: { width: p.width, height: p.height },
                 data: {
                   postit: p,
                   onUpdate: handleUpdatePostit,
                   onDelete: handleDeletePostit,
                   onSelect: onSelectedPostitChange || undefined,
+                  ...(shouldAutoEdit ? { autoEdit: true } : {}),
                 },
               });
             }
+          }
+
+          if (autoEditNodeId) {
+            updatedNodes = updatedNodes.map(n => ({ ...n, selected: n.id === autoEditNodeId }));
           }
 
           return updatedNodes;
@@ -2210,11 +2222,17 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedPos
       onSelectPostit: onSelectedPostitChange || undefined,
     }, useSankeyView);
     
-    // Restore selection state
-    let nodesWithSelection = newNodes.map(node => ({
-      ...node,
-      selected: selectedNodeIds.has(node.id)
-    }));
+    // Restore selection state + inject autoEdit flag for newly created post-its
+    const autoEditNodeId = autoEditPostitIdRef.current ? `postit-${autoEditPostitIdRef.current}` : null;
+    let nodesWithSelection = newNodes.map(node => {
+      const base = { ...node, selected: autoEditNodeId ? node.id === autoEditNodeId : selectedNodeIds.has(node.id) };
+      if (autoEditNodeId && node.id === autoEditNodeId) {
+        console.log(`[GraphCanvas] Injecting autoEdit for ${node.id}, selected=true`);
+        autoEditPostitIdRef.current = null;
+        return { ...base, data: { ...base.data, autoEdit: true } };
+      }
+      return base;
+    });
     
     // Apply Sankey view sizing if enabled
     if (useSankeyView) {
@@ -2438,7 +2456,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedPos
     
     // Add edge width calculation to each edge
     const edgesWithWidth = newEdges.map(edge => {
-      const isSelected = selectedEdgeIds.has(edge.id);
+      const isSelected = autoEditNodeId ? false : selectedEdgeIds.has(edge.id);
       return {
       ...edge,
         selected: isSelected,
@@ -4739,11 +4757,11 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedPos
     saveHistoryState('Add post-it');
     setContextMenu(null);
     
-    setTimeout(() => {
-      setNodes((nds) => nds.map((n) => ({ ...n, selected: n.id === `postit-${newId}` })));
-      onSelectedPostitChange?.(newId);
-    }, 50);
-  }, [graph, setGraph, saveHistoryState, setNodes, onSelectedPostitChange]);
+    autoEditPostitIdRef.current = newId;
+    onSelectedNodeChange(null);
+    onSelectedEdgeChange(null);
+    onSelectedPostitChange?.(newId);
+  }, [graph, setGraph, saveHistoryState, onSelectedNodeChange, onSelectedEdgeChange, onSelectedPostitChange]);
 
   const addPostit = useCallback(() => {
     const centre = screenToFlowPosition({ x: window.innerWidth / 2, y: window.innerHeight / 2 });
@@ -5491,8 +5509,8 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedPos
         <Controls />
         <MiniMap
           maskColor={dark ? 'rgba(30,30,30,0.8)' : undefined}
-          nodeColor={(node) => node.id.startsWith('postit-') ? 'transparent' : undefined}
-          nodeStrokeColor={(node) => node.id.startsWith('postit-') ? 'transparent' : undefined}
+          nodeColor={(node) => node.id?.startsWith('postit-') ? 'transparent' : '#e2e2e2'}
+          nodeStrokeColor={(node) => node.id?.startsWith('postit-') ? 'transparent' : '#b1b1b7'}
         />
         <GraphIssuesIndicatorOverlay tabId={tabId} />
         
@@ -5614,7 +5632,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedPos
               const nextGraph = structuredClone(graph);
               const p = nextGraph.postits?.find((p: any) => p.id === id);
               if (p) {
-                p.fontSize = fs;
+                p.fontSize = fs as 'S' | 'M' | 'L' | 'XL';
                 if (nextGraph.metadata) nextGraph.metadata.updated_at = new Date().toISOString();
                 setGraph(nextGraph);
                 saveHistoryState('Update post-it font size');

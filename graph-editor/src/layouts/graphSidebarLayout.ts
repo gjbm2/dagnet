@@ -20,23 +20,45 @@ export function getGraphEditorLayout(): LayoutData {
         // Main canvas area (left, takes most space)
         {
           id: 'graph-canvas-panel',
-          size: 1000, // Flex weight (will take remaining space)
+          size: 1000,
           tabs: [
             {
               id: 'canvas-tab',
-              title: '', // No title - we don't want tab bar for canvas
-              content: null as any, // Will be replaced with GraphCanvas
+              title: '',
+              content: null as any,
               cached: true,
               closable: false,
               group: 'graph-canvas'
             }
           ]
         },
-        // Sidebar panels (right, constrained width)
+        // Sidebar vbox (right) — palette strip + tabbed panel
         {
-          id: 'graph-sidebar-panel',
+          id: 'graph-sidebar-vbox',
+          mode: 'vertical' as any,
           size: DEFAULT_SIDEBAR_WIDTH,
-          tabs: [
+          children: [
+            // Element palette (fixed height, non-interactive chrome)
+            {
+              id: 'element-palette-panel',
+              size: 40,
+              panelLock: { widthFlex: 0, heightFlex: 0 },
+              tabs: [
+                {
+                  id: 'element-palette-tab',
+                  title: '',
+                  content: null as any,
+                  cached: true,
+                  closable: false,
+                  group: 'graph-canvas'
+                }
+              ]
+            },
+            // Sidebar tabbed panel
+            {
+              id: 'graph-sidebar-panel',
+              size: 1000,
+              tabs: [
             {
               id: 'what-if-tab',
               title: React.createElement('div', { 
@@ -126,6 +148,8 @@ export function getGraphEditorLayout(): LayoutData {
               group: 'graph-panels'
             }
           ]
+            }
+          ]
         }
       ]
     },
@@ -158,11 +182,31 @@ export function getGraphEditorLayoutMinimized(): LayoutData {
             }
           ]
         },
-        // Sidebar panel with size: 0 (hidden but present)
+        // Sidebar vbox with size: 0 (hidden but present)
         {
-          id: 'graph-sidebar-panel',
+          id: 'graph-sidebar-vbox',
+          mode: 'vertical' as any,
           size: 0,
-          tabs: [
+          children: [
+            {
+              id: 'element-palette-panel',
+              size: 0,
+              panelLock: { widthFlex: 0, heightFlex: 0 },
+              tabs: [
+                {
+                  id: 'element-palette-tab',
+                  title: '',
+                  content: null as any,
+                  cached: true,
+                  closable: false,
+                  group: 'graph-canvas'
+                }
+              ]
+            },
+            {
+              id: 'graph-sidebar-panel',
+              size: 1000,
+              tabs: [
             {
               id: 'what-if-tab',
               title: React.createElement('div', { 
@@ -250,6 +294,8 @@ export function getGraphEditorLayoutMinimized(): LayoutData {
               cached: true,
               closable: false,  // Dynamic: false at home, true when floating/docked elsewhere
               group: 'graph-panels'
+            }
+          ]
             }
           ]
         }

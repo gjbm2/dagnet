@@ -17,6 +17,7 @@ interface PostItNodeData {
   onUpdate: (id: string, updates: Partial<PostItType>) => void;
   onDelete: (id: string) => void;
   onSelect: (id: string) => void;
+  autoEdit?: boolean;
 }
 
 export default function PostItNode({ data, selected }: NodeProps<PostItNodeData>) {
@@ -34,8 +35,24 @@ export default function PostItNode({ data, selected }: NodeProps<PostItNodeData>
     return () => { if (resizeTimeoutRef.current) clearTimeout(resizeTimeoutRef.current); };
   }, []);
 
+  const pendingAutoEditRef = useRef(false);
+
   useEffect(() => {
-    if ((!selected || interactionDisabled) && editing) setEditing(false);
+    if (data.autoEdit) {
+      console.log(`[PostItNode ${postit.id.slice(0,8)}] autoEdit flag received`);
+      pendingAutoEditRef.current = true;
+    }
+  }, [data.autoEdit, postit.id]);
+
+  useEffect(() => {
+    console.log(`[PostItNode ${postit.id.slice(0,8)}] selection effect: pending=${pendingAutoEditRef.current}, selected=${selected}, editing=${editing}`);
+    if (pendingAutoEditRef.current && selected && !editing) {
+      console.log(`[PostItNode ${postit.id.slice(0,8)}] → entering edit mode`);
+      pendingAutoEditRef.current = false;
+      setEditing(true);
+    } else if ((!selected || interactionDisabled) && editing) {
+      setEditing(false);
+    }
   }, [selected, editing, interactionDisabled]);
 
   const handleChange = useCallback((md: string) => {

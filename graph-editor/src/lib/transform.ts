@@ -120,8 +120,8 @@ export function fromFlow(nodes: Node[], edges: Edge[], original: any): any {
   if (!original) return null;
 
   // Partition ReactFlow nodes: canvas objects use prefixed IDs to avoid contaminating conversion nodes
-  const conversionRfNodes = nodes.filter(n => !n.id.startsWith('postit-') && !n.id.startsWith('container-') && !n.id.startsWith('analysis-'));
-  const postitRfNodes = nodes.filter(n => n.id.startsWith('postit-'));
+  const conversionRfNodes = nodes.filter(n => n.id && !n.id.startsWith('postit-') && !n.id.startsWith('container-') && !n.id.startsWith('analysis-'));
+  const postitRfNodes = nodes.filter(n => n.id?.startsWith('postit-'));
   
   // Update postit positions from ReactFlow state
   const updatedPostits = (original.postits || []).map((originalPostit: any) => {
