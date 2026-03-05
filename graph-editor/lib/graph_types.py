@@ -318,12 +318,25 @@ class Metadata(BaseModel):
         return v
 
 
+class PostIt(BaseModel):
+    """Canvas annotation: sticky note (visual only, not graph semantics)."""
+    id: str
+    text: str = Field("", max_length=4096)
+    colour: str = Field(..., pattern=r"^#([0-9A-Fa-f]{6})$")
+    fontSize: Optional[Literal["S", "M", "L", "XL"]] = Field(None, description="Font size preset")
+    width: float = Field(..., gt=0)
+    height: float = Field(..., gt=0)
+    x: float
+    y: float
+
+
 class Graph(BaseModel):
     """Complete conversion funnel graph."""
     nodes: List[Node] = Field(..., min_length=1)
     edges: List[Edge]
     policies: Policies
     metadata: Metadata
+    postits: Optional[List[PostIt]] = Field(None, description="Canvas annotations: sticky notes (visual only, not graph semantics)")
     baseDSL: Optional[str] = Field(None, description="Base DSL that is always applied (e.g. global context filters)")
     currentQueryDSL: Optional[str] = Field(None, description="Current user query DSL for UI persistence")
     dataInterestsDSL: Optional[str] = Field(None, description="Pinned DSL for batch/overnight fetches")

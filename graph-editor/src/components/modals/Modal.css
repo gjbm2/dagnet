@@ -251,6 +251,62 @@
   margin: 4px 0;
 }
 
+/* ===== STALENESS MODAL (light mode base) ===== */
+
+.staleness-action-card {
+  border: 1px solid #e5e7eb;
+  background: #f9fafb;
+}
+
+.staleness-action-card.staleness-action-due {
+  background: #fff;
+}
+
+.staleness-action-label {
+  color: #111827;
+}
+
+.staleness-muted {
+  color: #555;
+}
+
+.staleness-description {
+  color: #4b5563;
+}
+
+.staleness-meta {
+  color: #6b7280;
+}
+
+.staleness-status-due {
+  color: #b45309;
+}
+
+.staleness-status-blocked {
+  color: #1f2937;
+}
+
+.staleness-status-unknown,
+.staleness-status-not-due {
+  color: #6b7280;
+}
+
+.staleness-last-done-red {
+  color: #dc2626;
+}
+
+.staleness-last-done-amber {
+  color: #b45309;
+}
+
+.staleness-last-done-green {
+  color: #059669;
+}
+
+.staleness-auto-mode-divider {
+  border-top: 1px solid #e5e7eb;
+}
+
 
 /* ===== DARK MODE ===== */
 
@@ -410,6 +466,62 @@
     background-color: #1a3a52;
     border-color: #1976d2;
     color: #90caf9;
+  }
+
+  /* Staleness modal dark overrides */
+  .staleness-action-card {
+    border-color: #404040;
+    background: #252525;
+  }
+
+  .staleness-action-card.staleness-action-due {
+    background: #2d2d2d;
+    border-color: #555;
+  }
+
+  .staleness-action-label {
+    color: #e0e0e0 !important;
+  }
+
+  .staleness-muted {
+    color: #999 !important;
+  }
+
+  .staleness-description {
+    color: #aaa !important;
+  }
+
+  .staleness-meta {
+    color: #888 !important;
+  }
+
+  .staleness-status-due {
+    color: #f59e0b !important;
+  }
+
+  .staleness-status-blocked {
+    color: #888 !important;
+  }
+
+  .staleness-status-unknown,
+  .staleness-status-not-due {
+    color: #888 !important;
+  }
+
+  .staleness-last-done-red {
+    color: #f87171 !important;
+  }
+
+  .staleness-last-done-amber {
+    color: #f59e0b !important;
+  }
+
+  .staleness-last-done-green {
+    color: #34d399 !important;
+  }
+
+  .staleness-auto-mode-divider {
+    border-top-color: #404040;
   }
 }
 

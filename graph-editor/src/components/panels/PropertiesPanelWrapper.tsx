@@ -3,11 +3,12 @@ import PropertiesPanel from '../PropertiesPanel';
 import { useSelectionContext } from '../editors/GraphEditor';
 import { Camera, FileText, Plug, ZapOff } from 'lucide-react';
 import { useGraphStore } from '../../contexts/GraphStoreContext';
+import { useTabContext } from '../../contexts/TabContext';
 import { getPropertiesPanelHeaderBadges } from '../../services/propertiesPanelHeaderBadgeService';
 import { useRemoveOverrides } from '../../hooks/useRemoveOverrides';
 import { useSnapshotsMenu } from '../../hooks/useSnapshotsMenu';
+import { useOpenSnapshotManagerForEdge } from '../../hooks/useOpenSnapshotManagerForEdge';
 import toast from 'react-hot-toast';
-import * as DropdownMenu from '@radix-ui/react-dropdown-menu';
 import './PropertiesPanelWrapper.css';
 
 interface PropertiesPanelWrapperProps {
@@ -21,12 +22,16 @@ interface PropertiesPanelWrapperProps {
  */
 export default function PropertiesPanelWrapper({ tabId }: PropertiesPanelWrapperProps) {
   // Get current selection from context (updates automatically when selection changes)
-  const { selectedNodeId, selectedEdgeId, onSelectedNodeChange, onSelectedEdgeChange } = useSelectionContext();
+  const { selectedNodeId, selectedEdgeId, selectedPostitId, onSelectedNodeChange, onSelectedEdgeChange } = useSelectionContext();
   const graphStore = useGraphStore();
-  const { graph, setGraph, saveHistoryState } = graphStore;
+  const { graph, setGraph, saveHistoryState, currentDSL } = graphStore;
+  const { tabs } = useTabContext();
+  const graphFileId = tabId ? tabs.find(t => t.id === tabId)?.fileId ?? null : null;
   
   // Determine panel title based on selection
-  const title = selectedNodeId 
+  const title = selectedPostitId
+    ? 'Post-It Properties'
+    : selectedNodeId 
     ? 'Node Properties'
     : selectedEdgeId 
       ? 'Edge Properties'
@@ -38,28 +43,31 @@ export default function PropertiesPanelWrapper({ tabId }: PropertiesPanelWrapper
   // Snapshots badge (edge only): show if ANY param on that edge has snapshot DB rows.
   // ---------------------------------------------------------------------------
 
+  const edgeData = React.useMemo(() => {
+    if (!graph || !selectedEdgeId) return null;
+    return graph.edges?.find((e: any) => e.uuid === selectedEdgeId || e.id === selectedEdgeId) ?? null;
+  }, [graph, selectedEdgeId]);
+
   const edgeSnapshotParamIds = React.useMemo(() => {
-    if (!graph || !selectedEdgeId) return [];
-    const edge = graph.edges?.find((e: any) => e.uuid === selectedEdgeId || e.id === selectedEdgeId);
-    if (!edge) return [];
+    if (!edgeData) return [];
     const ids: string[] = [];
-    if (typeof edge?.p?.id === 'string' && edge.p.id.trim()) ids.push(edge.p.id.trim());
-    if (typeof edge?.cost_gbp?.id === 'string' && edge.cost_gbp.id.trim()) ids.push(edge.cost_gbp.id.trim());
-    if (typeof edge?.labour_cost?.id === 'string' && edge.labour_cost.id.trim()) ids.push(edge.labour_cost.id.trim());
-    if (Array.isArray(edge?.conditional_p)) {
-      for (const cp of edge.conditional_p) {
+    if (typeof edgeData?.p?.id === 'string' && edgeData.p.id.trim()) ids.push(edgeData.p.id.trim());
+    if (typeof edgeData?.cost_gbp?.id === 'string' && edgeData.cost_gbp.id.trim()) ids.push(edgeData.cost_gbp.id.trim());
+    if (typeof edgeData?.labour_cost?.id === 'string' && edgeData.labour_cost.id.trim()) ids.push(edgeData.labour_cost.id.trim());
+    if (Array.isArray(edgeData?.conditional_p)) {
+      for (const cp of edgeData.conditional_p) {
         const pid = cp?.p?.id;
         if (typeof pid === 'string' && pid.trim()) ids.push(pid.trim());
       }
     }
     return Array.from(new Set(ids));
-  }, [graph, selectedEdgeId]);
+  }, [edgeData]);
 
-  const snapshots = useSnapshotsMenu(edgeSnapshotParamIds);
+  const { inventories, snapshotCounts } = useSnapshotsMenu(edgeSnapshotParamIds);
 
   const snapshotParamIdsWithData = React.useMemo(() => {
-    return edgeSnapshotParamIds.filter((id) => (snapshots.inventories[id]?.row_count ?? 0) > 0);
-  }, [edgeSnapshotParamIds.join(','), snapshots.inventories]);
+    return edgeSnapshotParamIds.filter((id) => (inventories[id]?.row_count ?? 0) > 0);
+  }, [edgeSnapshotParamIds.join(','), inventories]);
 
   const fmtDate = (d: string) => {
     const date = new Date(d);
@@ -70,15 +78,30 @@ export default function PropertiesPanelWrapper({ tabId }: PropertiesPanelWrapper
     if (!selectedEdgeId || snapshotParamIdsWithData.length === 0) return 'No snapshots';
     const lines: string[] = ['Snapshots (retrieved):'];
     for (const pid of snapshotParamIdsWithData) {
-      const inv = snapshots.inventories[pid];
+      const inv = inventories[pid];
       if (!inv) continue;
-      const count = snapshots.snapshotCounts[pid] ?? 0;
+      const count = snapshotCounts[pid] ?? 0;
       const range = inv.earliest && inv.latest ? `${fmtDate(inv.earliest)} — ${fmtDate(inv.latest)}` : '(range unknown)';
       const countSuffix = count > 0 ? ` (${count}d)` : '';
       lines.push(`- ${pid}: ${range}${countSuffix}`);
     }
     return lines.join('\n');
-  }, [selectedEdgeId, snapshotParamIdsWithData.join(','), snapshots.inventories, snapshots.snapshotCounts]);
+  }, [selectedEdgeId, snapshotParamIdsWithData.join(','), inventories, snapshotCounts]);
+
+  // Snapshot Manager: determine primary parameter slot for the selected edge
+  const primarySnapshotParam = React.useMemo<{ paramId: string; slot: 'p' | 'cost_gbp' | 'labour_cost' } | null>(() => {
+    if (!edgeData) return null;
+    if (typeof edgeData?.p?.id === 'string' && edgeData.p.id.trim()) return { paramId: edgeData.p.id.trim(), slot: 'p' };
+    if (typeof edgeData?.cost_gbp?.id === 'string' && edgeData.cost_gbp.id.trim()) return { paramId: edgeData.cost_gbp.id.trim(), slot: 'cost_gbp' };
+    if (typeof edgeData?.labour_cost?.id === 'string' && edgeData.labour_cost.id.trim()) return { paramId: edgeData.labour_cost.id.trim(), slot: 'labour_cost' };
+    return null;
+  }, [edgeData]);
+
+  const openSnapshotManagerForEdge = useOpenSnapshotManagerForEdge({
+    graph: graph!,
+    graphFileId,
+    currentDsl: currentDSL || '',
+  });
 
   // Toast is shown only after the graph update succeeds (undoable).
   const pendingRemoveOverridesToastRef = React.useRef<number | null>(null);
@@ -121,80 +144,25 @@ export default function PropertiesPanelWrapper({ tabId }: PropertiesPanelWrapper
         <FileText size={14} strokeWidth={2} style={{ flexShrink: 0 }} />
         <h3>{title}</h3>
         <div className="properties-panel-header-badges">
-          {selectedEdgeId && edgeSnapshotParamIds.length > 0 && (
-            <DropdownMenu.Root>
-              <DropdownMenu.Trigger asChild>
-                <div
-                  className="properties-panel-badge"
-                  data-testid="edge-snapshots-badge"
-                  title={snapshotsTooltip}
-                  onClick={(e) => e.stopPropagation()}
-                  style={{ cursor: 'pointer', opacity: snapshotParamIdsWithData.length > 0 ? 1 : 0.4 }}
-                >
-                  <span className="properties-panel-badge-icon">
-                    <Camera size={14} strokeWidth={2} />
-                  </span>
-                </div>
-              </DropdownMenu.Trigger>
-
-              <DropdownMenu.Portal>
-                <DropdownMenu.Content
-                  className="properties-snapshots-menu"
-                  data-testid="edge-snapshots-menu"
-                  sideOffset={6}
-                  align="end"
-                  onClick={(e) => e.stopPropagation()}
-                >
-                  {edgeSnapshotParamIds.map((paramId) => {
-                    const count = snapshots.snapshotCounts[paramId] ?? 0;
-                    const hasRows = (snapshots.inventories[paramId]?.row_count ?? 0) > 0;
-                    return (
-                      <DropdownMenu.Sub key={paramId}>
-                        <DropdownMenu.SubTrigger className="properties-snapshots-item">
-                          {paramId}
-                          <div className="properties-snapshots-right-slot">›</div>
-                        </DropdownMenu.SubTrigger>
-                        <DropdownMenu.Portal>
-                          <DropdownMenu.SubContent className="properties-snapshots-menu" sideOffset={0} alignOffset={0}>
-                            <DropdownMenu.Item
-                              className="properties-snapshots-item"
-                              disabled={!hasRows}
-                              onSelect={() => void snapshots.downloadSnapshotData(paramId)}
-                            >
-                              Download snapshot data
-                            </DropdownMenu.Item>
-                            <DropdownMenu.Item
-                              className="properties-snapshots-item properties-snapshots-item--danger"
-                              disabled={count === 0}
-                              onSelect={() => void snapshots.deleteSnapshots(paramId)}
-                            >
-                              Delete {count} snapshot{count !== 1 ? 's' : ''}
-                            </DropdownMenu.Item>
-                          </DropdownMenu.SubContent>
-                        </DropdownMenu.Portal>
-                      </DropdownMenu.Sub>
-                    );
-                  })}
-
-                  <DropdownMenu.Separator className="properties-snapshots-separator" />
-
-                  <DropdownMenu.Item
-                    className="properties-snapshots-item"
-                    disabled={snapshotParamIdsWithData.length === 0}
-                    onSelect={() => void snapshots.downloadSnapshotDataMany(snapshotParamIdsWithData, `edge-${selectedEdgeId}-snapshots`)}
-                  >
-                    Download all
-                  </DropdownMenu.Item>
-                  <DropdownMenu.Item
-                    className="properties-snapshots-item properties-snapshots-item--danger"
-                    disabled={snapshotParamIdsWithData.length === 0}
-                    onSelect={() => void snapshots.deleteSnapshotsMany(snapshotParamIdsWithData)}
-                  >
-                    Delete all
-                  </DropdownMenu.Item>
-                </DropdownMenu.Content>
-              </DropdownMenu.Portal>
-            </DropdownMenu.Root>
+          {selectedEdgeId && edgeSnapshotParamIds.length > 0 && primarySnapshotParam && (
+            <div
+              className="properties-panel-badge"
+              data-testid="edge-snapshots-badge"
+              title={snapshotsTooltip}
+              onClick={(e) => {
+                e.stopPropagation();
+                void openSnapshotManagerForEdge({
+                  edgeId: selectedEdgeId,
+                  paramId: primarySnapshotParam.paramId,
+                  slot: primarySnapshotParam.slot,
+                });
+              }}
+              style={{ cursor: 'pointer', opacity: snapshotParamIdsWithData.length > 0 ? 1 : 0.4 }}
+            >
+              <span className="properties-panel-badge-icon">
+                <Camera size={14} strokeWidth={2} />
+              </span>
+            </div>
           )}
           {badges.overrides.visible && (
             <div
@@ -228,6 +196,7 @@ export default function PropertiesPanelWrapper({ tabId }: PropertiesPanelWrapper
         <PropertiesPanel
           selectedNodeId={selectedNodeId}
           selectedEdgeId={selectedEdgeId}
+          selectedPostitId={selectedPostitId}
           onSelectedNodeChange={onSelectedNodeChange}
           onSelectedEdgeChange={onSelectedEdgeChange}
           tabId={tabId}

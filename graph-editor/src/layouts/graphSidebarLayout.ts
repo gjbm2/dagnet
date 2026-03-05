@@ -281,4 +281,3 @@ export const TAB_ID_TO_PANEL = {
   'tools-tab': 'tools',
   'analytics-tab': 'analytics'
 } as const;
-

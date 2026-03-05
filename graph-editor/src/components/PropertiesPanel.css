@@ -150,6 +150,24 @@ select.property-input {
   border-color: #8b5cf6;
 }
 
+/* Post-it font size selector buttons */
+.postit-font-size-btn {
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  background: #fff;
+  color: #555;
+}
+
+.postit-font-size-btn:hover:not(.active) {
+  background: #f8f9fa;
+  border-color: #999;
+}
+
+.postit-font-size-btn.active {
+  border-color: #3b82f6;
+  background: #eff6ff;
+  color: #3b82f6;
+}
+
 /* Read-only field styling */
 .property-readonly {
   background: #f8f9fa;

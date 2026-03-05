@@ -17,11 +17,11 @@ import {
   FileText
 } from 'lucide-react';
 import { dataOperationsService } from '../services/dataOperationsService';
-import { fileRegistry, useTabContext } from '../contexts/TabContext';
+import { fileRegistry } from '../contexts/TabContext';
 import { useFetchData, createFetchItem } from '../hooks/useFetchData';
 import { useOpenFile } from '../hooks/useOpenFile';
 import { useSnapshotsMenu } from '../hooks/useSnapshotsMenu';
-import { signatureLinksTabService } from '../services/signatureLinksTabService';
+import { useOpenSnapshotManagerForEdge } from '../hooks/useOpenSnapshotManagerForEdge';
 import { useNavigatorContext } from '../contexts/NavigatorContext';
 import { computeCurrentSignatureForEdge } from '../services/snapshotRetrievalsService';
 import './LightningMenu.css';
@@ -195,7 +195,6 @@ export function DataOperationsMenu({
   // Open file hook
   const { openFile } = useOpenFile();
   const { state: navState } = useNavigatorContext();
-  const { tabs, activeTabId } = useTabContext();
   
   // Snapshot menu hook (only for parameters, env-aware via live signature)
   const paramIds = objectType === 'parameter' && objectId ? [objectId] : [];
@@ -219,6 +218,12 @@ export function DataOperationsMenu({
   );
   const snapshotCount = objectType === 'parameter' ? snapshotCounts[objectId] : undefined;
   const hasSnapshots = (inventories[objectId]?.row_count ?? 0) > 0;
+
+  const openSnapshotManagerForEdge = useOpenSnapshotManagerForEdge({
+    graph,
+    graphFileId,
+    currentDsl: currentDSL || '',
+  });
   
   // Handlers (same as LightningMenu, now using centralized hook)
   const handleGetFromFile = () => {
@@ -414,35 +419,14 @@ export function DataOperationsMenu({
       )}
       
       {/* Snapshot Manager shortcut (for parameters) */}
-      {objectType === 'parameter' && (
+      {objectType === 'parameter' && targetId && (
         <button
           className={itemClassName}
           onClick={() => {
-            const repo = navState.selectedRepo;
-            const branch = navState.selectedBranch || 'main';
-            const activeTabFileId = activeTabId
-              ? tabs.find(t => t.id === activeTabId)?.fileId ?? null
-              : null;
-            const effectiveGraphFileId =
-              graphFileId
-              ?? (activeTabFileId?.startsWith('graph-') ? activeTabFileId : null);
-            const bareGraphId =
-              effectiveGraphFileId?.replace(/^graph-/, '')
-              || graph?.metadata?.id
-              || graph?.metadata?.name
-              || '';
-            const edge: any = targetId
-              ? graph?.edges?.find((e: any) => e?.uuid === targetId || e?.id === targetId)
-              : null;
-            const edgeConn = edge?.p?.connection || edge?.cost_gbp?.connection || edge?.labour_cost?.connection || undefined;
-            void signatureLinksTabService.openSignatureLinksTab({
-              graphId: bareGraphId,
-              graphName: bareGraphId,
-              paramId: objectId,
-              dbParamId: `${repo}-${branch}-${objectId}`,
-              paramSlot: paramSlot || 'p',
+            void openSnapshotManagerForEdge({
               edgeId: targetId,
-              connectionName: edgeConn,
+              paramId: objectId,
+              slot: paramSlot || 'p',
             });
             if (onClose) onClose();
           }}

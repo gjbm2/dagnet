@@ -1786,7 +1786,7 @@ function MainAppShellContent() {
                 zIndex: 0, /* Behind everything */
                 pointerEvents: 'auto' // Allow clicking on links
               }}>
-                <img src="/dagnet2.png" alt="DagNet" style={{ marginBottom: '16px', maxWidth: '400px', height: 'auto' }} />
+                <img src="/dagnet2.png" alt="DagNet" className="app-shell-welcome-logo" style={{ marginBottom: '16px', maxWidth: '400px', height: 'auto' }} />
                 <p style={{ fontSize: '14px', marginBottom: '24px', color: '#666' }}>Conversion Graph Editor</p>
                 <p style={{ fontSize: '12px', color: '#999' }}>Open a file from the Navigator to get started</p>
                 <p style={{ fontSize: '11px', color: '#aaa', marginTop: '40px' }}>

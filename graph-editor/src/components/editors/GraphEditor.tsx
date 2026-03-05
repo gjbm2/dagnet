@@ -9,6 +9,7 @@ import GraphCanvas from '../GraphCanvas';
 import PropertiesPanel from '../PropertiesPanel';
 import CollapsibleSection from '../CollapsibleSection';
 import SidebarIconBar from '../SidebarIconBar';
+import { ElementPalette } from '../ElementPalette';
 import SidebarHoverPreview from '../SidebarHoverPreview';
 import WhatIfPanel from '../panels/WhatIfPanel';
 import PropertiesPanelWrapper from '../panels/PropertiesPanelWrapper';
@@ -30,13 +31,16 @@ import { ItemBase } from '../../hooks/useItemFiltering';
 import { WindowSelector } from '../WindowSelector';
 import { ScenarioLegend } from '../ScenarioLegend';
 import { useActiveGraphTracking } from '../../hooks/useActiveGraphTracking';
+import { ElementToolProvider, type ElementToolContextType } from '../../contexts/ElementToolContext';
 
 // Context to share selection state with sidebar panels
 interface SelectionContextType {
   selectedNodeId: string | null;
   selectedEdgeId: string | null;
+  selectedPostitId: string | null;
   onSelectedNodeChange: (id: string | null) => void;
   onSelectedEdgeChange: (id: string | null) => void;
+  onSelectedPostitChange: (id: string | null) => void;
   openSelectorModal: (config: SelectorModalConfig) => void;
 }
 
@@ -59,8 +63,10 @@ export function useSelectionContext() {
     return {
       selectedNodeId: null,
       selectedEdgeId: null,
+      selectedPostitId: null,
       onSelectedNodeChange: () => {},
       onSelectedEdgeChange: () => {},
+      onSelectedPostitChange: () => {},
       openSelectorModal: () => {},
     } as SelectionContextType;
   }
@@ -265,6 +271,8 @@ const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, r
   // Tab-specific state (persisted per tab, not per file!)
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(tabState.selectedNodeId ?? null);
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(tabState.selectedEdgeId ?? null);
+  const [selectedPostitId, setSelectedPostitId] = useState<string | null>(null);
+  const [activeElementTool, setActiveElementTool] = useState<'select' | 'pan' | 'new-node' | 'new-postit' | null>(null);
   
   // Sync selection state when tabState changes (e.g., from deep linking navigation)
   useEffect(() => {
@@ -297,6 +305,7 @@ const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, r
   
   // Refs for GraphCanvas exposed functions (must be declared before component creation)
   const addNodeRef = React.useRef<(() => void) | null>(null);
+  const addPostitRef = React.useRef<(() => void) | null>(null);
   const deleteSelectedRef = React.useRef<(() => void) | null>(null);
   const autoLayoutRef = React.useRef<((direction: 'LR' | 'RL' | 'TB' | 'BT') => void) | null>(null);
   const sankeyLayoutRef = React.useRef<(() => void) | null>(null);
@@ -355,6 +364,15 @@ const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, r
     }
     prevSelectedEdgeRef.current = edgeId;
   }, [sidebarOps, tabId, tabOps]);
+
+  const handlePostitSelection = React.useCallback((postitId: string | null) => {
+    setSelectedPostitId(postitId);
+    if (postitId) {
+      sidebarOps.handleSelection();
+      setSelectedNodeId(null);
+      setSelectedEdgeId(null);
+    }
+  }, [sidebarOps]);
   
   // Icon bar handlers
   const handleIconClick = React.useCallback((panel: 'what-if' | 'properties' | 'tools' | 'analytics') => {
@@ -1033,7 +1051,11 @@ const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, r
           activeTabId={activeTabId}
           onSelectedNodeChange={handleNodeSelection}
           onSelectedEdgeChange={handleEdgeSelection}
+          onSelectedPostitChange={handlePostitSelection}
           onAddNodeRef={addNodeRef}
+          onAddPostitRef={addPostitRef}
+          activeElementTool={activeElementTool}
+          onClearElementTool={() => setActiveElementTool(null)}
           onDeleteSelectedRef={deleteSelectedRef}
           onAutoLayoutRef={autoLayoutRef}
           onSankeyLayoutRef={sankeyLayoutRef}
@@ -1652,13 +1674,13 @@ const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, r
     // Removed view preference handlers
 
     const handleAddNode = () => {
-      // Only handle if this is the active tab's editor
-      // Phase 4: Use refs to avoid re-running effect when activeTabId changes
       if (tabIdRef.current !== activeTabIdRef.current) return;
-      
-      if (addNodeRef.current) {
-        addNodeRef.current();
-      }
+      if (addNodeRef.current) addNodeRef.current();
+    };
+
+    const handleAddPostit = () => {
+      if (tabIdRef.current !== activeTabIdRef.current) return;
+      if (addPostitRef.current) addPostitRef.current();
     };
 
     const handleDeleteSelected = () => {
@@ -1703,6 +1725,7 @@ const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, r
 
     // View preference listeners removed; handled via context
     window.addEventListener('dagnet:addNode' as any, handleAddNode);
+    window.addEventListener('dagnet:addPostit' as any, handleAddPostit);
     window.addEventListener('dagnet:deleteSelected' as any, handleDeleteSelected);
     window.addEventListener('dagnet:forceReroute' as any, handleForceReroute);
     window.addEventListener('dagnet:autoLayout' as any, handleAutoLayout);
@@ -1734,6 +1757,7 @@ const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, r
     return () => {
       // View preference listeners removed
       window.removeEventListener('dagnet:addNode' as any, handleAddNode);
+      window.removeEventListener('dagnet:addPostit' as any, handleAddPostit);
       window.removeEventListener('dagnet:deleteSelected' as any, handleDeleteSelected);
       window.removeEventListener('dagnet:forceReroute' as any, handleForceReroute);
       window.removeEventListener('dagnet:autoLayout' as any, handleAutoLayout);
@@ -1748,10 +1772,18 @@ const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, r
   const selectionContextValue: SelectionContextType = useMemo(() => ({
     selectedNodeId,
     selectedEdgeId,
+    selectedPostitId,
     onSelectedNodeChange: handleNodeSelection,
     onSelectedEdgeChange: handleEdgeSelection,
+    onSelectedPostitChange: handlePostitSelection,
     openSelectorModal: (config) => setSelectorModalConfig(config)
-  }), [selectedNodeId, selectedEdgeId, handleNodeSelection, handleEdgeSelection]);
+  }), [selectedNodeId, selectedEdgeId, selectedPostitId, handleNodeSelection, handleEdgeSelection, handlePostitSelection]);
+
+  const elementToolContextValue: ElementToolContextType = useMemo(() => ({
+    activeElementTool,
+    setActiveElementTool,
+    clearElementTool: () => setActiveElementTool(null),
+  }), [activeElementTool, setActiveElementTool]);
 
   if (!data) {
     console.log('GraphEditor: No data yet, showing loading...');
@@ -1792,6 +1824,7 @@ const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, r
   // Dashboard mode: suppress GraphEditor chrome (sidebars, tools, selectors, etc.)
   if (isDashboardMode) {
     return (
+      <ElementToolProvider value={elementToolContextValue}>
       <SelectionContext.Provider value={selectionContextValue}>
         <ScenariosProvider fileId={fileId} tabId={tabId}>
           <URLScenariosProcessor fileId={fileId} />
@@ -1807,10 +1840,12 @@ const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, r
           </ViewPreferencesProvider>
         </ScenariosProvider>
       </SelectionContext.Provider>
+      </ElementToolProvider>
     );
   }
 
   return (
+    <ElementToolProvider value={elementToolContextValue}>
     <SelectionContext.Provider value={selectionContextValue}>
       <ScenariosProvider fileId={fileId} tabId={tabId}>
       {/* Process URL scenario parameters after graph loads */}
@@ -2161,10 +2196,13 @@ const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, r
               state={sidebarState}
               onIconClick={handleIconClick}
               onIconHover={handleIconHover}
+              activeElementTool={activeElementTool}
+              onToolSelect={setActiveElementTool}
             />
           </div>
         )}
         
+
         {/* Hover Preview Panel - shows when hovering over icons */}
         {sidebarState.mode === 'minimized' && hoveredPanel && (
           <div
@@ -2251,6 +2289,7 @@ const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, r
       </ViewPreferencesProvider>
       </ScenariosProvider>
     </SelectionContext.Provider>
+    </ElementToolProvider>
   );
 }, (prevProps, nextProps) => {
   // Custom comparison: Only re-render if fileId, tabId, or readonly changed

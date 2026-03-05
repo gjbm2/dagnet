@@ -33,7 +33,7 @@ interface ScenarioEditorModalProps {
 }
 
 export function ScenarioEditorModal({ isOpen, scenarioId, tabId, onClose, onSave }: ScenarioEditorModalProps) {
-  const { scenarios, getScenario, applyContent, validateContent, baseParams, currentParams, setBaseParams, createSnapshot, createBlank, renameScenario, baseDSL, setBaseDSL } = useScenariosContext();
+  const { scenarios, getScenario, applyContent, validateContent, baseParams, currentParams, setBaseParams, captureScenario, createBlank, renameScenario, baseDSL, setBaseDSL } = useScenariosContext();
   const { operations } = useTabContext();
   const graphStore = useGraphStore();
   const graph = graphStore?.getState().graph || null;

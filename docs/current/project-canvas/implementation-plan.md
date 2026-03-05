@@ -54,24 +54,28 @@ Add the `PostIt` type and `postits` array to all three schema layers. This lands
 Wire postits into the ReactFlow canvas as a new node type. Verify CSS stacking, pointer events, and layout exclusions.
 
 **Files to change**:
-- `graph-editor/src/lib/transform.ts` — extend `toFlow()` to append postit nodes (after Sankey layout, with `postit-` prefix, z-index -1); extend `fromFlow()` to partition and extract postit nodes
-- `graph-editor/src/components/GraphCanvas.tsx` — register `postit` in `nodeTypes`; exclude postit nodes from `fitView` calls; verify postit nodes are excluded from auto-layout (dagre)
-- `graph-editor/src/custom-reactflow.css` — add background-tier z-index rules and selected-state boost (architecture doc §2.4)
-- `graph-editor/src/components/nodes/PostItNode.tsx` — update colour palette to 3M colours (post-its doc §3); remove Comic Sans; ensure no `<Handle>` components; verify `NodeResizer` propagates size changes via `onUpdate`
+- `graph-editor/src/lib/transform.ts` — extend `toFlow()` to append postit nodes (after Sankey layout and conversion nodes, with `postit-` prefix); extend `fromFlow()` to partition and extract postit nodes. Do NOT set `draggable` or `selectable` on individual nodes — let global ReactFlow props control.
+- `graph-editor/src/contexts/ElementToolContext.tsx` — standalone context for tool state (select/pan/new-node/new-postit); provided per graph tab from `GraphEditorInner`, consumed by `CanvasInner` and `PostItNode`. Must NOT be in `GraphEditor.tsx` (circular import risk).
+- `graph-editor/src/components/GraphCanvas.tsx` — register `postit` in `nodeTypes`; exclude postit nodes from `fitView` calls; verify postit nodes are excluded from auto-layout (dagre). Pan mode: apply `rf-pan-mode` class to `<ReactFlow>` element; disable pointer-events on node/edge layers via CSS. Create mode: apply `rf-create-mode` class with crosshair cursor. Read tool state from `useElementTool()` context, NOT from props.
+- `graph-editor/src/custom-reactflow.css` — pan-mode and create-mode CSS classes (architecture doc §2.6). Do NOT use `z-index !important` on node type selectors (architecture doc §2.4).
+- `graph-editor/src/components/nodes/PostItNode.tsx` — update colour palette to 3M colours (post-its doc §3); ensure no `<Handle>` components; verify `NodeResizer` propagates size changes via `onUpdate`. Read `activeElementTool` from `useElementTool()` context to disable interaction in pan mode.
 
 **Tests to write**:
-- `toFlow()` with postits → correct prefix, type, z-index
+- `toFlow()` with postits → correct prefix, type; array position maps to DOM order (z-order)
+- `toFlow()` with multiple postits → z-order matches array order (bring-to-front = last in array)
 - `fromFlow()` round-trip → position updated in `graph.postits[]`, no contamination of `graph.nodes[]`
 - `toFlow()` with `graph.postits === undefined` → no error
 
 **Playwright**:
-- `postit-create-and-zindex.spec.ts` — create postit, verify renders below edges
+- `postit-create-and-render.spec.ts` — create postit, verify renders above nodes
 
 **Verify manually**:
-- Pointer events: clicking on postit in area not covered by edges works
+- Pointer events: clicking on postit works
 - MiniMap: postit not visible in minimap
 - Lasso: postit included in lasso selection
 - `onSelectionChange`: fires for postit node type
+- Pan mode: grab cursor everywhere, no node/postit interaction
+- Create-postit mode: crosshair cursor, click-drag draws rectangle
 
 ### 1c. CRUD, selection, edit operations
 
@@ -146,7 +150,7 @@ Before Phase 2, refactor `SelectionContextType` to replace `selectedPostitId` wi
 - `graph-editor/src/components/GraphCanvas.tsx` — register `container` in `nodeTypes`; implement group drag in `onNodeDragStart` / `onNodeDrag` / `onNodeDragStop` (snapshot contained node set, apply delta, exclude selected nodes from contained set to prevent double-move); exclude container nodes from `fitView` and auto-layout
 
 **Tests to write**:
-- `toFlow()` with containers → correct prefix, type, z-index -1, appended before postits
+- `toFlow()` with containers → correct prefix, type, appended after conversion nodes but before postits (DOM order = visual stacking)
 - `data.haloColour` computation: node inside container → blended colour; node outside → absent
 - Group drag: container drag moves contained nodes by same delta
 - Group drag: nodes outside container not moved
@@ -203,7 +207,7 @@ Extract `resolveSnapshotSubjectsForScenario` from `AnalyticsPanel.tsx` into a sh
 - `graph-editor/src/components/nodes/CanvasAnalysisNode.tsx` **(new)** — renders either `AnalysisChartContainer` (view_mode='chart') or `AnalysisResultCards` (view_mode='cards') + title header, loading skeleton, error state, `NodeResizer` with min 300×200, no `<Handle>` components; reads `tabId` from node data for scenario state access
 - `graph-editor/src/lib/transform.ts` — extend `toFlow()` for analyses (prefix `analysis-`, z-index 2500, pass `tabId` in data); extend `fromFlow()` for analysis partition
 - `graph-editor/src/components/GraphCanvas.tsx` — register `canvasAnalysis` in `nodeTypes`; extend `handleDrop` for `objectType: 'canvas-analysis'` (create `CanvasAnalysis` entry, transient cache for instant first render); listen for `dagnet:pinAnalysisToCanvas` event (create at viewport centre); exclude analysis nodes from `fitView` and auto-layout
-- `graph-editor/src/custom-reactflow.css` — foreground-tier z-index rule for `canvasAnalysis` (2500)
+- `graph-editor/src/custom-reactflow.css` — no z-index rules needed; canvas analyses are appended last in `toFlow()` so DOM order places them visually on top (architecture doc §2.4)
 - Chart preview components — add drag affordance + "Pin to Canvas" button to each:
   - `graph-editor/src/components/charts/FunnelChartPreview.tsx`
   - `graph-editor/src/components/charts/BridgeChartPreview.tsx`
@@ -222,7 +226,7 @@ Extract `resolveSnapshotSubjectsForScenario` from `AnalyticsPanel.tsx` into a sh
 **Tests to write**:
 - `useCanvasAnalysisCompute`: live mode returns result, re-computes on graph/DSL change (debounced)
 - `useCanvasAnalysisCompute`: frozen mode computes once, does not re-run on graph change
-- `toFlow()` with analyses → correct prefix `analysis-`, type `canvasAnalysis`, z-index 2500
+- `toFlow()` with analyses → correct prefix `analysis-`, type `canvasAnalysis`, appended last in nodes array (topmost in DOM/visual stacking)
 - `handleDrop` with `objectType: 'canvas-analysis'` → creates entry in `graph.canvasAnalyses`
 
 **Playwright**:
@@ -311,6 +315,7 @@ Snap logic is purely additive — wraps `onNodesChange`, adds guide line SVG. No
 
 | File | Phase | Purpose |
 |------|-------|---------|
+| `ElementToolContext.tsx` | 1b | Tool state context (per tab); consumed by CanvasInner and PostItNode |
 | `PostItContextMenu.tsx` | 1c | Post-it right-click menu |
 | `PostItColourPalette.tsx` | 1d | Shared colour swatch component |
 | `ElementPalette.tsx` | 1e | Drag/click creation strip |
@@ -337,7 +342,7 @@ Snap logic is purely additive — wraps `onNodesChange`, adds guide line SVG. No
 | `GraphEditor.tsx` | 1c, 1e, 2 prereq | Selection context, event listeners, palette rendering |
 | `ConversionNode.tsx` | 2b | `data.haloColour` for both halo mechanisms |
 | `PropertiesPanel.tsx` | 1d, 2c, 3c | Postit, container, chart property sections |
-| `custom-reactflow.css` | 1b, 3b | Background-tier + foreground-tier z-index rules |
+| `custom-reactflow.css` | 1b | Pan-mode + create-mode CSS classes (no z-index rules — DOM order controls stacking) |
 | `useCopyPaste.tsx` | 1c, 2c, 3c | Subgraph clipboard extensions |
 | `subgraphExtractor.ts` | 1c, 2c, 3c | Extract selected canvas objects |
 | `UpdateManager.ts` | 1c, 2c, 3c | Paste canvas objects |
@@ -356,8 +361,8 @@ Snap logic is purely additive — wraps `onNodesChange`, adds guide line SVG. No
 
 | Spec | Phase | Invariant |
 |------|-------|-----------|
-| `postit-create-and-zindex.spec.ts` | 1b | Renders below edges |
-| `postit-select-boost.spec.ts` | 1c | Z-index boost on select/deselect |
+| `postit-create-and-render.spec.ts` | 1b | Renders above nodes |
+| `postit-select-boost.spec.ts` | 1c | Selected postit visually above siblings |
 | `postit-inline-edit.spec.ts` | 1c | Text editing persists |
 | `container-group-drag.spec.ts` | 2b | Drag moves contained nodes |
 | `container-halo-colour.spec.ts` | 2b | Halo adapts to container background |

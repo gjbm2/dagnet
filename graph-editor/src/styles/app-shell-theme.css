@@ -49,7 +49,11 @@
 }
 
 [data-theme="dark"] .app-shell-welcome {
-  background: #1a1a2e !important;
+  background: #0f1218 !important;
+}
+
+[data-theme="dark"] .app-shell-welcome-logo {
+  filter: invert(1);
 }
 
 [data-theme="dark"] .app-shell-welcome p {

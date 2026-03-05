@@ -11,6 +11,7 @@ import ProbabilityInput from './ProbabilityInput';
 import { ParameterEditor } from './ParameterEditor';
 import VariantWeightInput from './VariantWeightInput';
 import CollapsibleSection from './CollapsibleSection';
+import { PostItColourPalette } from './PostItColourPalette';
 import { getNextAvailableColour } from '@/lib/conditionalColours';
 import { useSnapToSlider } from '@/hooks/useSnapToSlider';
 import { ParameterSelector } from './ParameterSelector';
@@ -109,6 +110,7 @@ interface PropertiesPanelProps {
   onSelectedNodeChange: (id: string | null) => void;
   selectedEdgeId: string | null;
   onSelectedEdgeChange: (id: string | null) => void;
+  selectedPostitId?: string | null;
   tabId?: string;
 }
 
@@ -117,6 +119,7 @@ export default function PropertiesPanel({
   onSelectedNodeChange, 
   selectedEdgeId, 
   onSelectedEdgeChange,
+  selectedPostitId,
   tabId
 }: PropertiesPanelProps) {
   const { graph, setGraph, saveHistoryState, currentDSL } = useGraphStore();
@@ -1139,7 +1142,7 @@ export default function PropertiesPanel({
     <div className="properties-panel">
       {/* Content */}
       <div className="properties-panel-content">
-        {!selectedNodeId && !selectedEdgeId && (
+        {!selectedNodeId && !selectedEdgeId && !selectedPostitId && (
           <>
             <CollapsibleSection title="Graph Metadata" defaultOpen={true} icon={FileJson}>
               <div className="property-section">
@@ -2966,6 +2969,89 @@ export default function PropertiesPanel({
             )}
           </div>
         )}
+
+        {selectedPostitId && (() => {
+          const postit = graph?.postits?.find((p: any) => p.id === selectedPostitId);
+          if (!postit) return <div style={{ textAlign: 'center', color: '#666', padding: '20px' }}>Post-it not found</div>;
+          return (
+            <div>
+              <CollapsibleSection title="Post-It Properties" defaultOpen={true}>
+                <div className="property-section">
+                  <div className="property-row">
+                    <label className="property-label">Text</label>
+                    <textarea
+                      className="property-input"
+                      rows={8}
+                      value={postit.text}
+                      onChange={(e) => {
+                        const nextGraph = structuredClone(graph);
+                        const p = nextGraph.postits?.find((p: any) => p.id === selectedPostitId);
+                        if (p) p.text = e.target.value;
+                        setGraph(nextGraph);
+                      }}
+                      onBlur={() => {
+                        if (graph?.metadata) {
+                          const nextGraph = structuredClone(graph);
+                          if (nextGraph.metadata) nextGraph.metadata.updated_at = new Date().toISOString();
+                          setGraph(nextGraph);
+                        }
+                        saveHistoryState('Update post-it text');
+                      }}
+                      style={{ width: '100%', resize: 'vertical', minHeight: '120px' }}
+                      placeholder="Enter text..."
+                    />
+                  </div>
+                  <div className="property-row">
+                    <label className="property-label">Colour</label>
+                    <PostItColourPalette
+                      selectedColour={postit.colour}
+                      onSelectColour={(colour) => {
+                        const nextGraph = structuredClone(graph);
+                        const p = nextGraph.postits?.find((p: any) => p.id === selectedPostitId);
+                        if (p) {
+                          p.colour = colour;
+                          if (nextGraph.metadata) nextGraph.metadata.updated_at = new Date().toISOString();
+                          setGraph(nextGraph);
+                          saveHistoryState('Update post-it colour');
+                        }
+                      }}
+                    />
+                  </div>
+                  <div className="property-row">
+                    <label className="property-label">Font Size</label>
+                    <div style={{ display: 'flex', gap: '2px' }}>
+                      {(['S', 'M', 'L', 'XL'] as const).map((size) => (
+                        <button
+                          key={size}
+                          className={`postit-font-size-btn${(postit.fontSize || 'M') === size ? ' active' : ''}`}
+                          title={size === 'S' ? 'Small' : size === 'M' ? 'Medium' : size === 'L' ? 'Large' : 'Extra Large'}
+                          onClick={() => {
+                            const nextGraph = structuredClone(graph);
+                            const p = nextGraph.postits?.find((p: any) => p.id === selectedPostitId);
+                            if (p) {
+                              p.fontSize = size;
+                              if (nextGraph.metadata) nextGraph.metadata.updated_at = new Date().toISOString();
+                              setGraph(nextGraph);
+                              saveHistoryState('Update post-it font size');
+                            }
+                          }}
+                          style={{
+                            width: '28px', height: '28px', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                            borderRadius: '4px', cursor: 'pointer', padding: 0,
+                            fontWeight: 600,
+                            fontSize: size === 'S' ? '9px' : size === 'M' ? '11px' : size === 'L' ? '13px' : '15px',
+                          }}
+                        >
+                          A
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              </CollapsibleSection>
+            </div>
+          );
+        })()}
       </div>
       
       {/* Image Upload Modal */}

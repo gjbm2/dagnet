@@ -5,7 +5,7 @@ import { useTheme } from '../../contexts/ThemeContext';
 import { FileMenu } from './FileMenu';
 import { EditMenu } from './EditMenu';
 import { ViewMenu } from './ViewMenu';
-import { ObjectsMenu } from './ObjectsMenu';
+import { ElementsMenu } from './ElementsMenu';
 import { DataMenu } from './DataMenu';
 import { RepositoryMenu } from './RepositoryMenu';
 import { HelpMenu } from './HelpMenu';
@@ -45,7 +45,7 @@ export function MenuBarComponent() {
         <FileMenu />
         <EditMenu />
         <ViewMenu />
-        <ObjectsMenu />
+        <ElementsMenu />
         <DataMenu />
         <RepositoryMenu />
         <HelpMenu />

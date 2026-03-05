@@ -101,12 +101,12 @@ export function StalenessUpdateModal({
     return 'Not due';
   };
 
-  const statusColourFor = (a: StalenessUpdateAction): string => {
+  const statusClassFor = (a: StalenessUpdateAction): string => {
     const s = a.status ?? (a.due ? 'due' : 'not_due');
-    if (s === 'due') return '#b45309'; // amber
-    if (s === 'blocked') return '#1f2937'; // dark grey
-    if (s === 'unknown') return '#6b7280'; // grey
-    return '#6b7280';
+    if (s === 'due') return 'staleness-status-due';
+    if (s === 'blocked') return 'staleness-status-blocked';
+    if (s === 'unknown') return 'staleness-status-unknown';
+    return 'staleness-status-not-due';
   };
 
   const anyChecked = actions.some(a => a.checked && !a.disabled);
@@ -137,15 +137,15 @@ export function StalenessUpdateModal({
     return STALENESS_NUDGE_RETRIEVE_ALL_SLICES_AFTER_MS;
   };
 
-  const lastDoneColourFor = (key: StalenessUpdateActionKey, lastDoneAtMs?: number): string => {
-    if (key === 'reload') return '#6b7280'; // grey (informational only)
-    if (key === 'git-pull') return '#6b7280'; // grey (informational only; not time-driven)
-    if (!lastDoneAtMs) return '#6b7280'; // grey (unknown/never)
+  const lastDoneClassFor = (key: StalenessUpdateActionKey, lastDoneAtMs?: number): string => {
+    if (key === 'reload') return 'staleness-meta';
+    if (key === 'git-pull') return 'staleness-meta';
+    if (!lastDoneAtMs) return 'staleness-meta';
     const age = Math.max(0, nowMs - lastDoneAtMs);
     const redAfter = lastDoneRedAfterMsFor(key);
-    if (age > redAfter) return '#dc2626'; // red
-    if (age > redAfter / 2) return '#b45309'; // amber
-    return '#059669'; // green
+    if (age > redAfter) return 'staleness-last-done-red';
+    if (age > redAfter / 2) return 'staleness-last-done-amber';
+    return 'staleness-last-done-green';
   };
 
   const formatShaShort = (sha?: string) => {
@@ -156,7 +156,7 @@ export function StalenessUpdateModal({
 
   const modalContent = (
     <div className="modal-overlay" onClick={onClose}>
-      <div className="modal-container" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '640px' }}>
+      <div className="modal-container staleness-modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '640px' }}>
         <div className="modal-header">
           <h2 className="modal-title">{title}</h2>
           <button className="modal-close-btn" onClick={onClose}>×</button>
@@ -164,7 +164,7 @@ export function StalenessUpdateModal({
 
         <div className="modal-body">
           {!anyDue ? (
-            <p style={{ margin: 0, fontSize: 13, color: '#555' }}>
+            <p className="staleness-muted" style={{ margin: 0, fontSize: 13 }}>
               Nothing is due right now.
             </p>
           ) : (
@@ -211,7 +211,7 @@ export function StalenessUpdateModal({
                 </div>
               )}
 
-              <p style={{ marginTop: 0, marginBottom: 14, fontSize: 13, color: '#555', lineHeight: 1.4 }}>
+              <p className="staleness-muted" style={{ marginTop: 0, marginBottom: 14, fontSize: 13, lineHeight: 1.4 }}>
                 Select what you'd like to do now. Some defaults are pre-selected based on what appears due.
               </p>
 
@@ -219,13 +219,12 @@ export function StalenessUpdateModal({
                 {actions.map((a) => (
                   <label
                     key={a.key}
+                    className={`staleness-action-card${a.due ? ' staleness-action-due' : ''}`}
                     style={{
                       display: 'flex',
                       gap: 12,
                       padding: '10px 12px',
-                      border: '1px solid #e5e7eb',
                       borderRadius: 6,
-                      background: a.due ? '#fff' : '#f9fafb',
                       opacity: a.disabled ? 0.55 : 1,
                       cursor: a.disabled ? 'not-allowed' : 'pointer',
                       alignItems: 'flex-start',
@@ -240,47 +239,35 @@ export function StalenessUpdateModal({
                     />
                     <div style={{ flex: 1 }}>
                       <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12 }}>
-                        <div style={{ fontSize: 14, fontWeight: 600, color: '#111827' }}>
+                        <div className="staleness-action-label" style={{ fontSize: 14, fontWeight: 600 }}>
                           {a.label}
                         </div>
                         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 2 }}>
-                          <div style={{ fontSize: 12, color: statusColourFor(a), whiteSpace: 'nowrap' }}>
+                          <div className={statusClassFor(a)} style={{ fontSize: 12, whiteSpace: 'nowrap' }}>
                             {statusLabelFor(a)}
                           </div>
                           {a.key === 'git-pull' ? (
                             <>
                               {(a.localSha || a.remoteSha) && (
                                 <div
-                                  style={{
-                                    fontSize: 12,
-                                    color: '#6b7280',
-                                    whiteSpace: 'nowrap',
-                                    fontVariantNumeric: 'tabular-nums',
-                                  }}
+                                  className="staleness-meta"
+                                  style={{ fontSize: 12, whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }}
                                   title={`Local: ${a.localSha || 'Unknown'} • Remote: ${a.remoteSha || 'Unknown'}`}
                                 >
                                   Local: {formatShaShort(a.localSha) || 'Unknown'} • Remote: {formatShaShort(a.remoteSha) || 'Unknown'}
                                 </div>
                               )}
                               <div
-                                style={{
-                                  fontSize: 12,
-                                  color: '#6b7280',
-                                  whiteSpace: 'nowrap',
-                                  fontVariantNumeric: 'tabular-nums',
-                                }}
+                                className="staleness-meta"
+                                style={{ fontSize: 12, whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }}
                                 title={a.lastCheckedAtMs ? `Last checked: ${formatDmyHm(a.lastCheckedAtMs)}` : 'Last checked: Unknown'}
                               >
                                 Checked: {a.lastCheckedAtMs ? formatDmyHm(a.lastCheckedAtMs) : 'Unknown'}
                               </div>
                               {a.lastDoneAtMs !== undefined && (
                                 <div
-                                  style={{
-                                    fontSize: 12,
-                                    color: '#6b7280',
-                                    whiteSpace: 'nowrap',
-                                    fontVariantNumeric: 'tabular-nums',
-                                  }}
+                                  className="staleness-meta"
+                                  style={{ fontSize: 12, whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }}
                                   title={`Last pulled: ${formatDmyHm(a.lastDoneAtMs)}`}
                                 >
                                   Pulled: {formatDmyHm(a.lastDoneAtMs)}
@@ -289,12 +276,8 @@ export function StalenessUpdateModal({
                             </>
                           ) : (
                             <div
-                              style={{
-                                fontSize: 12,
-                                color: lastDoneColourFor(a.key, a.lastDoneAtMs),
-                                whiteSpace: 'nowrap',
-                                fontVariantNumeric: 'tabular-nums',
-                              }}
+                              className={lastDoneClassFor(a.key, a.lastDoneAtMs)}
+                              style={{ fontSize: 12, whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }}
                               title={
                                 a.key === 'reload'
                                   ? (a.lastDoneAtMs ? `Page loaded: ${formatDmyHm(a.lastDoneAtMs)}` : 'Page loaded: unknown')
@@ -306,7 +289,7 @@ export function StalenessUpdateModal({
                           )}
                         </div>
                       </div>
-                      <div style={{ marginTop: 4, fontSize: 13, color: '#4b5563', lineHeight: 1.35 }}>
+                      <div className="staleness-description" style={{ marginTop: 4, fontSize: 13, lineHeight: 1.35 }}>
                         {a.description}
                       </div>
                     </div>
@@ -314,7 +297,7 @@ export function StalenessUpdateModal({
                 ))}
               </div>
 
-              <div style={{ marginTop: 14, fontSize: 12, color: '#6b7280', lineHeight: 1.35 }}>
+              <div className="staleness-meta" style={{ marginTop: 14, fontSize: 12, lineHeight: 1.35 }}>
                 {reloadChecked && otherChecked ? (
                   <>
                     Note: you selected <strong>Reload</strong> alongside other actions. DagNet will run the selected actions
@@ -327,7 +310,7 @@ export function StalenessUpdateModal({
                 )}
               </div>
 
-              <div style={{ marginTop: 14, paddingTop: 12, borderTop: '1px solid #e5e7eb' }}>
+              <div className="staleness-auto-mode-divider" style={{ marginTop: 14, paddingTop: 12 }}>
                 <label style={{ display: 'flex', alignItems: 'flex-start', gap: 10, cursor: 'pointer' }}>
                   <input
                     type="checkbox"
@@ -336,10 +319,10 @@ export function StalenessUpdateModal({
                     style={{ marginTop: 2 }}
                   />
                   <div>
-                    <div style={{ fontSize: 13, fontWeight: 600, color: '#111827' }}>
+                    <div className="staleness-action-label" style={{ fontSize: 13, fontWeight: 600 }}>
                       Automatic mode
                     </div>
-                    <div style={{ marginTop: 2, fontSize: 12, color: '#6b7280', lineHeight: 1.35 }}>
+                    <div className="staleness-meta" style={{ marginTop: 2, fontSize: 12, lineHeight: 1.35 }}>
                       If enabled, DagNet will run the selected actions in a headless way (no extra prompts/flows) for this run.
                       This setting does not persist across refresh.
                     </div>

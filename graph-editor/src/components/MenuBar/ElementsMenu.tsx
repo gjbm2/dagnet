@@ -5,16 +5,16 @@ import { useNavigatorContext } from '../../contexts/NavigatorContext';
 import { SyncIndexModal } from '../modals/SyncIndexModal';
 
 /**
- * Objects Menu
+ * Elements Menu
  * 
- * Graph-specific object operations:
+ * Graph-specific element operations:
  * - Add Node
  * - Delete Selected
  * - Sync Index from Graph
  * 
  * Only visible when a graph tab in interactive mode is active
  */
-export function ObjectsMenu() {
+export function ElementsMenu() {
   const { activeTabId, tabs } = useTabContext();
   const { items } = useNavigatorContext();
   const activeTab = tabs.find(t => t.id === activeTabId);
@@ -22,18 +22,19 @@ export function ObjectsMenu() {
   
   const [isSyncIndexModalOpen, setIsSyncIndexModalOpen] = useState(false);
 
-  // Don't render if not a graph tab
   if (!isGraphTab) {
     return null;
   }
 
   const handleAddNode = () => {
-    // Trigger custom event that GraphEditor will listen to
     window.dispatchEvent(new CustomEvent('dagnet:addNode'));
   };
 
+  const handleAddPostit = () => {
+    window.dispatchEvent(new CustomEvent('dagnet:addPostit'));
+  };
+
   const handleDeleteSelected = () => {
-    // Trigger custom event that GraphEditor will listen to
     window.dispatchEvent(new CustomEvent('dagnet:deleteSelected'));
   };
 
@@ -41,7 +42,6 @@ export function ObjectsMenu() {
     setIsSyncIndexModalOpen(true);
   };
 
-  // Get all graph files for the modal
   const graphFiles = items
     .filter(item => item.type === 'graph')
     .map(item => ({ id: item.id, name: item.name }));
@@ -49,7 +49,7 @@ export function ObjectsMenu() {
   return (
     <>
       <Menubar.Menu>
-        <Menubar.Trigger className="menubar-trigger">Objects</Menubar.Trigger>
+        <Menubar.Trigger className="menubar-trigger">Elements</Menubar.Trigger>
         <Menubar.Portal>
           <Menubar.Content className="menubar-content" align="start">
             <Menubar.Item 
@@ -57,6 +57,13 @@ export function ObjectsMenu() {
               onSelect={handleAddNode}
             >
               Add Node
+            </Menubar.Item>
+
+            <Menubar.Item 
+              className="menubar-item" 
+              onSelect={handleAddPostit}
+            >
+              Add Post-It
             </Menubar.Item>
 
             <Menubar.Item 
@@ -79,7 +86,6 @@ export function ObjectsMenu() {
         </Menubar.Portal>
       </Menubar.Menu>
 
-      {/* Modals */}
       <SyncIndexModal
         isOpen={isSyncIndexModalOpen}
         onClose={() => setIsSyncIndexModalOpen(false)}
@@ -88,4 +94,3 @@ export function ObjectsMenu() {
     </>
   );
 }
-

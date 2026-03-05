@@ -28,7 +28,6 @@ import { useCopyPaste } from '../hooks/useCopyPaste';
 import { useOpenSnapshotManagerForEdge } from '../hooks/useOpenSnapshotManagerForEdge';
 import { fileRegistry } from '../contexts/TabContext';
 import { dataOperationsService } from '../services/dataOperationsService';
-import { signatureLinksTabService } from '../services/signatureLinksTabService';
 import { useNavigatorContext } from '../contexts/NavigatorContext';
 import { computeCurrentSignatureForEdge } from '../services/snapshotRetrievalsService';
 import toast from 'react-hot-toast';

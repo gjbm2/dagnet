@@ -23,10 +23,12 @@ import ReactFlow, {
 import 'reactflow/dist/style.css';
 import '../custom-reactflow.css';
 import { useTheme } from '../contexts/ThemeContext';
+import { useElementTool } from '../contexts/ElementToolContext';
 import dagre from 'dagre';
 import { sankey, sankeyLinkHorizontal, sankeyCenter, sankeyJustify } from 'd3-sankey';
 
 import ConversionNode from './nodes/ConversionNode';
+import PostItNode from './nodes/PostItNode';
 import ConversionEdge from './edges/ConversionEdge';
 import ScenarioOverlayRenderer from './ScenarioOverlayRenderer';
 
@@ -47,6 +49,7 @@ export const useDecorationVisibility = () => useContext(DecorationVisibilityCont
 import ProbabilityInput from './ProbabilityInput';
 import VariantWeightInput from './VariantWeightInput';
 import { NodeContextMenu } from './NodeContextMenu';
+import { PostItContextMenu } from './PostItContextMenu';
 import { EdgeContextMenu } from './EdgeContextMenu';
 import { useDashboardMode } from '../hooks/useDashboardMode';
 import { useCopyPaste } from '../hooks/useCopyPaste';
@@ -70,6 +73,7 @@ import { getSeverityIcon } from './issues/issueIcons';
 
 const nodeTypes: NodeTypes = {
   conversion: ConversionNode,
+  postit: PostItNode,
 };
 
 const edgeTypes: EdgeTypes = {
@@ -220,26 +224,27 @@ function GraphIssuesIndicatorOverlay({ tabId }: { tabId?: string }) {
 interface GraphCanvasProps {
   onSelectedNodeChange: (id: string | null) => void;
   onSelectedEdgeChange: (id: string | null) => void;
+  onSelectedPostitChange?: (id: string | null) => void;
   onDoubleClickNode?: (id: string, field: string) => void;
   onDoubleClickEdge?: (id: string, field: string) => void;
   onSelectEdge?: (id: string) => void;
   onAddNodeRef?: React.MutableRefObject<(() => void) | null>;
+  onAddPostitRef?: React.MutableRefObject<(() => void) | null>;
+  activeElementTool?: 'select' | 'pan' | 'new-node' | 'new-postit' | null;
+  onClearElementTool?: () => void;
   onDeleteSelectedRef?: React.MutableRefObject<(() => void) | null>;
   onAutoLayoutRef?: React.MutableRefObject<((direction: 'LR' | 'RL' | 'TB' | 'BT') => void) | null>;
   onSankeyLayoutRef?: React.MutableRefObject<(() => void) | null>;
   onForceRerouteRef?: React.MutableRefObject<(() => void) | null>;
   onHideUnselectedRef?: React.MutableRefObject<(() => void) | null>;
-  // What-if analysis state (from tab state, not GraphStore)
   whatIfDSL?: string | null;
-  // Tab identification for keyboard event filtering
   tabId?: string;
   activeTabId?: string | null;
-  // External selection (for deep linking from issues viewer etc.)
   externalSelectedNodeId?: string | null;
   externalSelectedEdgeId?: string | null;
 }
 
-export default function GraphCanvas({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClickNode, onDoubleClickEdge, onSelectEdge, onAddNodeRef, onDeleteSelectedRef, onAutoLayoutRef, onSankeyLayoutRef, onForceRerouteRef, onHideUnselectedRef, whatIfDSL, tabId, activeTabId, externalSelectedNodeId, externalSelectedEdgeId }: GraphCanvasProps) {
+export default function GraphCanvas({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedPostitChange, onDoubleClickNode, onDoubleClickEdge, onSelectEdge, onAddNodeRef, onAddPostitRef, activeElementTool, onClearElementTool, onDeleteSelectedRef, onAutoLayoutRef, onSankeyLayoutRef, onForceRerouteRef, onHideUnselectedRef, whatIfDSL, tabId, activeTabId, externalSelectedNodeId, externalSelectedEdgeId }: GraphCanvasProps) {
   return (
     <ReactFlowProvider>
       <CanvasInner 
@@ -247,12 +252,16 @@ export default function GraphCanvas({ onSelectedNodeChange, onSelectedEdgeChange
         activeTabId={activeTabId}
         onSelectedNodeChange={onSelectedNodeChange}
         onSelectedEdgeChange={onSelectedEdgeChange}
+        onSelectedPostitChange={onSelectedPostitChange}
         onDoubleClickNode={onDoubleClickNode}
         onDoubleClickEdge={onDoubleClickEdge}
         externalSelectedNodeId={externalSelectedNodeId}
         externalSelectedEdgeId={externalSelectedEdgeId}
         onSelectEdge={onSelectEdge}
         onAddNodeRef={onAddNodeRef}
+        onAddPostitRef={onAddPostitRef}
+        activeElementTool={activeElementTool}
+        onClearElementTool={onClearElementTool}
         onDeleteSelectedRef={onDeleteSelectedRef}
         onAutoLayoutRef={onAutoLayoutRef}
         onSankeyLayoutRef={onSankeyLayoutRef}
@@ -264,7 +273,9 @@ export default function GraphCanvas({ onSelectedNodeChange, onSelectedEdgeChange
   );
 }
 
-function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClickNode, onDoubleClickEdge, onSelectEdge, onAddNodeRef, onDeleteSelectedRef, onAutoLayoutRef, onSankeyLayoutRef, onForceRerouteRef, onHideUnselectedRef, whatIfDSL, tabId, activeTabId, externalSelectedNodeId, externalSelectedEdgeId }: GraphCanvasProps) {
+function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedPostitChange, onDoubleClickNode, onDoubleClickEdge, onSelectEdge, onAddNodeRef, onAddPostitRef, activeElementTool: _propTool, onClearElementTool: _propClear, onDeleteSelectedRef, onAutoLayoutRef, onSankeyLayoutRef, onForceRerouteRef, onHideUnselectedRef, whatIfDSL, tabId, activeTabId, externalSelectedNodeId, externalSelectedEdgeId }: GraphCanvasProps) {
+  const { activeElementTool, clearElementTool: onClearElementTool } = useElementTool();
+  console.log(`[CanvasInner] activeElementTool=${activeElementTool}, tabId=${tabId}`);
   const { theme } = useTheme();
   const dark = theme === 'dark';
   // Track if user is panning/zooming to disable beads during interaction
@@ -408,11 +419,20 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
   // Recompute edge widths when what-if DSL changes
   // Create a "version" to track changes in what-if state (for reactivity)
   const overridesVersion = effectiveWhatIfDSL || '';
-  const { deleteElements, fitView, screenToFlowPosition, setCenter } = useReactFlow();
+  const { deleteElements, fitView: rfFitView, screenToFlowPosition, flowToScreenPosition, setCenter } = useReactFlow();
+  
+  const isCanvasObjectNode = useCallback((id: string) =>
+    id.startsWith('postit-') || id.startsWith('container-') || id.startsWith('analysis-'), []);
   
   // ReactFlow maintains local state for smooth interactions
   const [nodes, setNodes, onNodesChangeBase] = useNodesState([]);
   const [edges, setEdges, onEdgesChangeBase] = useEdgesState([]);
+
+  const fitView = useCallback((options?: any) => {
+    const conversionOnly = nodes.filter(n => !isCanvasObjectNode(n.id));
+    rfFitView({ ...options, nodes: conversionOnly });
+  }, [rfFitView, nodes, isCanvasObjectNode]);
+
   // Track array reference changes to detect loops
   const prevNodesRef = useRef(nodes);
   const prevEdgesRef = useRef(edges);
@@ -435,12 +455,12 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
   
   // Custom onEdgesChange handler to prevent automatic deletion
   const onEdgesChange = useCallback((changes: any[]) => {
-    // Filter out remove changes to prevent automatic deletion
-    const filteredChanges = changes.filter(change => change.type !== 'remove');
-    
-    // Call the base handler with filtered changes
+    let filteredChanges = changes.filter((change: any) => change.type !== 'remove');
+    if (activeElementTool === 'pan') {
+      filteredChanges = filteredChanges.filter((c: any) => c.type !== 'select');
+    }
     onEdgesChangeBase(filteredChanges);
-  }, [onEdgesChangeBase]);
+  }, [onEdgesChangeBase, activeElementTool]);
   
   // Trigger flag for re-routing
   const [shouldReroute, setShouldReroute] = useState(0);
@@ -454,6 +474,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
   // Context menu state
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; flowX: number; flowY: number } | null>(null);
   const [nodeContextMenu, setNodeContextMenu] = useState<{ x: number; y: number; nodeId: string } | null>(null);
+  const [postitContextMenu, setPostitContextMenu] = useState<{ x: number; y: number; postitId: string } | null>(null);
   const [edgeContextMenu, setEdgeContextMenu] = useState<{ x: number; y: number; edgeId: string } | null>(null);
   const [contextMenuLocalData, setContextMenuLocalData] = useState<{
     probability: number;
@@ -463,11 +484,11 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
   
   // Custom onNodesChange handler to detect position changes for auto re-routing
   const onNodesChange = useCallback((changes: any[]) => {
-    // Call the base handler first
-    onNodesChangeBase(changes);
+    const filtered = activeElementTool === 'pan'
+      ? changes.filter((c: any) => c.type !== 'select')
+      : changes;
+    onNodesChangeBase(filtered);
     
-    // Trigger auto-reroute on ANY position change (during or after drag)
-    // But not when syncing from graph to ReactFlow
     if (autoReroute && !isSyncingRef.current) {
       if (sankeyLayoutInProgressRef.current || isEffectsCooldownActive()) {
         console.log(`[${ts()}] [GraphCanvas] Reroute suppressed (layout/cooldown active)`);
@@ -481,7 +502,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
         setShouldReroute((v) => v + 1);
       }
     }
-  }, [autoReroute, onNodesChangeBase]);
+  }, [autoReroute, onNodesChangeBase, activeElementTool]);
 
   // Handle external selection (for deep linking from issues viewer, etc.)
   // Track the last external selection to avoid re-processing
@@ -1480,6 +1501,51 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     onSelectedEdgeChange(null);
   }, [graph, setGraph, onSelectedEdgeChange]);
 
+  // Reorder ReactFlow postit nodes to match graph array order (DOM order = paint order = z-order).
+  // ReactFlow ignores our zIndex values, so we control stacking via array position.
+  const reorderPostitNodes = useCallback((postits: any[]) => {
+    const orderMap = new Map(postits.map((p: any, i: number) => [p.id, i]));
+    setNodes(nds => {
+      const nonPostit = nds.filter(n => !n.id.startsWith('postit-'));
+      const postitNds = nds.filter(n => n.id.startsWith('postit-'));
+      postitNds.sort((a, b) => {
+        const ai = orderMap.get(a.id.replace('postit-', '')) ?? 0;
+        const bi = orderMap.get(b.id.replace('postit-', '')) ?? 0;
+        return ai - bi;
+      });
+      return [...nonPostit, ...postitNds];
+    });
+  }, [setNodes]);
+
+  const postitHistoryTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const handleUpdatePostit = useCallback((id: string, updates: any) => {
+    if (!graph) return;
+    const nextGraph = structuredClone(graph);
+    if (!nextGraph.postits) return;
+    const p = nextGraph.postits.find((p: any) => p.id === id);
+    if (!p) return;
+    Object.assign(p, updates);
+    if (nextGraph.metadata) nextGraph.metadata.updated_at = new Date().toISOString();
+    setGraph(nextGraph);
+    // Debounce history: coalesce rapid changes (typing, resizing) into one undo step
+    if (postitHistoryTimerRef.current) clearTimeout(postitHistoryTimerRef.current);
+    postitHistoryTimerRef.current = setTimeout(() => {
+      saveHistoryState('Update post-it');
+      postitHistoryTimerRef.current = null;
+    }, 800);
+  }, [graph, setGraph, saveHistoryState]);
+
+  const handleDeletePostit = useCallback((id: string) => {
+    if (!graph) return;
+    const nextGraph = structuredClone(graph);
+    if (!nextGraph.postits) return;
+    nextGraph.postits = nextGraph.postits.filter((p: any) => p.id !== id);
+    if (nextGraph.metadata) nextGraph.metadata.updated_at = new Date().toISOString();
+    setGraph(nextGraph);
+    saveHistoryState('Delete post-it');
+    onSelectedPostitChange?.(null);
+  }, [graph, setGraph, saveHistoryState, onSelectedPostitChange]);
+
   // Delete selected elements
   const deleteSelected = useCallback(async () => {
     if (!graph) return;
@@ -1504,33 +1570,47 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     const { updateManager } = await import('../services/UpdateManager');
     let nextGraph = graph;
     
-    // Delete selected nodes (this will also delete their connected edges via UpdateManager)
-    const selectedNodeUUIDs = selectedNodes.map(n => n.id); // ReactFlow IDs are UUIDs
-    for (const nodeUuid of selectedNodeUUIDs) {
+    // Separate canvas object nodes from conversion nodes
+    const selectedPostitIds = selectedNodes.filter(n => n.id.startsWith('postit-')).map(n => n.id.replace('postit-', ''));
+    const selectedConversionNodes = selectedNodes.filter(n => !isCanvasObjectNode(n.id));
+
+    // Delete selected conversion nodes (also deletes their connected edges via UpdateManager)
+    for (const nodeUuid of selectedConversionNodes.map(n => n.id)) {
       nextGraph = await updateManager.deleteNode(nextGraph, nodeUuid);
     }
     
     // Delete selected edges (that weren't already deleted with nodes)
-    const selectedEdgeUUIDs = selectedEdges.map(e => e.id); // ReactFlow IDs are UUIDs
+    const selectedEdgeUUIDs = selectedEdges.map(e => e.id);
     for (const edgeUuid of selectedEdgeUUIDs) {
-      // Check if edge still exists (might have been deleted with a node)
       const edgeExists = nextGraph.edges.some((e: any) => e.uuid === edgeUuid);
       if (edgeExists) {
         nextGraph = updateManager.deleteEdge(nextGraph, edgeUuid);
       }
     }
+
+    // Delete selected postits
+    if (selectedPostitIds.length > 0 && nextGraph.postits) {
+      const postitIdSet = new Set(selectedPostitIds);
+      nextGraph = structuredClone(nextGraph);
+      nextGraph.postits = nextGraph.postits.filter((p: any) => !postitIdSet.has(p.id));
+    }
+
+    if (nextGraph.metadata) {
+      nextGraph.metadata.updated_at = new Date().toISOString();
+    }
     
-    // Single graph update for all deletions
     setGraph(nextGraph);
     
-    // Clear selection
-    if (selectedNodes.length > 0) {
+    if (selectedConversionNodes.length > 0) {
       onSelectedNodeChange(null);
     }
     if (selectedEdges.length > 0) {
       onSelectedEdgeChange(null);
     }
-  }, [nodes, edges, graph, setGraph, saveHistoryState, onSelectedNodeChange, onSelectedEdgeChange]);
+    if (selectedPostitIds.length > 0) {
+      onSelectedPostitChange?.(null);
+    }
+  }, [nodes, edges, graph, setGraph, saveHistoryState, onSelectedNodeChange, onSelectedEdgeChange, onSelectedPostitChange, isCanvasObjectNode]);
 
   // Listen for force redraw events (e.g., after undo/redo)
   useEffect(() => {
@@ -1606,7 +1686,8 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     
     // Check if only edge probabilities changed (not topology or node positions)
     const edgeCountChanged = edges.length !== (graph.edges?.length || 0);
-    const nodeCountChanged = nodes.length !== (graph.nodes?.length || 0);
+    const expectedNodeCount = (graph.nodes?.length || 0) + (graph.postits?.length || 0);
+    const nodeCountChanged = nodes.length !== expectedNodeCount;
     
     console.log('  Edge count changed:', edgeCountChanged, `(${edges.length} -> ${graph.edges?.length || 0})`);
     console.log('  Node count changed:', nodeCountChanged);
@@ -1825,9 +1906,38 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       });
       
       // Also update node properties if they changed, OR recalculate Sankey heights if in Sankey mode
-      if (nodePropertiesChanged || useSankeyView) {
+      // Always update postit data (text, colour, size) from graph.postits
+      // Also handles post-it add/remove (e.g. undo/redo)
+      {
+        const graphPostitIds = new Set((graph.postits || []).map((p: any) => p.id));
         setNodes(prevNodes => {
-          let updatedNodes = prevNodes.map(prevNode => {
+          // Remove post-it nodes that no longer exist in the graph (e.g. after undo)
+          let updatedNodes = prevNodes
+            .filter(prevNode => {
+              if (!prevNode.id.startsWith('postit-')) return true;
+              return graphPostitIds.has(prevNode.id.replace('postit-', ''));
+            })
+            .map(prevNode => {
+            if (prevNode.id.startsWith('postit-')) {
+              const postitId = prevNode.id.replace('postit-', '');
+              const gpArray = graph.postits || [];
+              const gpIndex = gpArray.findIndex((p: any) => p.id === postitId);
+              const graphPostit = gpIndex >= 0 ? gpArray[gpIndex] : null;
+              if (!graphPostit) return prevNode;
+              return {
+                ...prevNode,
+                zIndex: 5000 + gpIndex,
+                position: { x: graphPostit.x ?? 0, y: graphPostit.y ?? 0 },
+                style: { ...prevNode.style, width: graphPostit.width, height: graphPostit.height },
+                data: {
+                  ...prevNode.data,
+                  postit: graphPostit,
+                  onUpdate: handleUpdatePostit,
+                  onDelete: handleDeletePostit,
+                  onSelect: onSelectedPostitChange || undefined,
+                },
+              };
+            }
             const graphNode = graph.nodes.find((n: any) => n.uuid === prevNode.id || n.id === prevNode.id);
             if (!graphNode) return prevNode;
             
@@ -2015,6 +2125,28 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
             });
           }
           
+          // Add post-it nodes that exist in graph but not yet in ReactFlow (e.g. redo)
+          const existingPostitIds = new Set(updatedNodes.filter(n => n.id.startsWith('postit-')).map(n => n.id.replace('postit-', '')));
+          const graphPostits = graph.postits || [];
+          for (let pi = 0; pi < graphPostits.length; pi++) {
+            const p = graphPostits[pi];
+            if (!existingPostitIds.has(p.id)) {
+              updatedNodes.push({
+                id: `postit-${p.id}`,
+                type: 'postit',
+                position: { x: p.x ?? 0, y: p.y ?? 0 },
+                zIndex: 5000 + pi,
+                style: { width: p.width, height: p.height },
+                data: {
+                  postit: p,
+                  onUpdate: handleUpdatePostit,
+                  onDelete: handleDeletePostit,
+                  onSelect: onSelectedPostitChange || undefined,
+                },
+              });
+            }
+          }
+
           return updatedNodes;
         });
       }
@@ -2073,6 +2205,9 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       onDoubleClickEdge: onDoubleClickEdge,
       onSelectEdge: onSelectEdge,
       onReconnect: handleReconnect,
+      onUpdatePostit: handleUpdatePostit,
+      onDeletePostit: handleDeletePostit,
+      onSelectPostit: onSelectedPostitChange || undefined,
     }, useSankeyView);
     
     // Restore selection state
@@ -2485,6 +2620,16 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       console.log('Reset isSyncingRef to false');
     }, 100);
   }, [graph, setNodes, setEdges, handleUpdateNode, handleDeleteNode, handleUpdateEdge, handleDeleteEdge, handleReconnect, onDoubleClickNode, onDoubleClickEdge, onSelectEdge, effectiveActiveTabId, tabs, useSankeyView, showNodeImages, effectiveWhatIfDSL]);
+
+  // Strip per-node draggable/selectable overrides so global ReactFlow props control behaviour
+  useEffect(() => {
+    setNodes(nds => nds.map(n => {
+      if (n.draggable !== undefined || n.selectable !== undefined) {
+        return { ...n, draggable: undefined, selectable: undefined };
+      }
+      return n;
+    }));
+  }, [activeElementTool, setNodes]);
 
   // Compute face directions based on edge connections (for curved node outlines)
   // Runs after edges have been auto-routed and have sourceFace/targetFace assigned
@@ -3529,14 +3674,13 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
         });
 
 
-        // Store the selected node IDs for persistence
-        const selectedNodeIds = selectedNodes.map(n => n.id);
+        const selectedNodeIds = new Set(selectedNodes.map(n => n.id));
+        const addToExisting = e.ctrlKey || e.metaKey;
         
-        // Update nodes with selection state
         setNodes(prevNodes => 
           prevNodes.map(n => ({ 
             ...n, 
-            selected: selectedNodeIds.includes(n.id)
+            selected: selectedNodeIds.has(n.id) || (addToExisting && !!n.selected)
           }))
         );
         
@@ -3884,6 +4028,11 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
   // Handle selection changes
   const onSelectionChange = useCallback(({ nodes: selectedNodes, edges: selectedEdges }: any) => {
     
+    // In pan mode, suppress all selection
+    if (activeElementTool === 'pan') {
+      return;
+    }
+    
     // Update selected nodes for analysis
     setSelectedNodesForAnalysis(selectedNodes);
     
@@ -3907,24 +4056,33 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     // For multi-selection, we'll show the first selected item in the properties panel
     // but keep track of all selected items for operations like delete
     if (selectedNodes.length > 0) {
-      onSelectedNodeChange(selectedNodes[0].id);
-      onSelectedEdgeChange(null);
+      const firstNode = selectedNodes[0];
+      if (firstNode.id.startsWith('postit-')) {
+        onSelectedPostitChange?.(firstNode.id.replace('postit-', ''));
+        onSelectedNodeChange(null);
+        onSelectedEdgeChange(null);
+      } else {
+        onSelectedNodeChange(firstNode.id);
+        onSelectedEdgeChange(null);
+        onSelectedPostitChange?.(null);
+      }
     } else if (selectableEdges.length > 0) {
       const selectedEdgeId = selectableEdges[0].id;
       onSelectedEdgeChange(selectedEdgeId);
       onSelectedNodeChange(null);
+      onSelectedPostitChange?.(null);
     } else {
       onSelectedNodeChange(null);
       onSelectedEdgeChange(null);
+      onSelectedPostitChange?.(null);
     }
-  }, [onSelectedNodeChange, onSelectedEdgeChange, isLassoSelecting, setSelectedNodesForAnalysis]);
+  }, [onSelectedNodeChange, onSelectedEdgeChange, onSelectedPostitChange, isLassoSelecting, setSelectedNodesForAnalysis, activeElementTool]);
 
   // Track whether the current drag actually moved the node (vs. a simple click)
   const hasNodeMovedRef = useRef(false);
 
   // Handle node drag start - set flag and start failsafe timeout
-  const onNodeDragStart = useCallback(() => {
-    // Reset movement flag; we only treat this as a "real" drag if movement occurs
+  const onNodeDragStart = useCallback((_event: any, _node: any) => {
     hasNodeMovedRef.current = false;
 
     // Block Graph→ReactFlow sync during drag to prevent interruption
@@ -4068,12 +4226,10 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
   // Expose addNode function to parent component via ref
   useEffect(() => {
     if (onAddNodeRef) {
-      console.log('Setting addNodeRef.current to addNode function');
       onAddNodeRef.current = addNode;
-    } else {
-      console.log('onAddNodeRef is null');
     }
   }, [addNode, onAddNodeRef]);
+
 
   // Expose deleteSelected function to parent component via ref
   useEffect(() => {
@@ -4492,10 +4648,11 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
 
   // Close context menus on any click
   useEffect(() => {
-    if (contextMenu || nodeContextMenu || edgeContextMenu) {
+    if (contextMenu || nodeContextMenu || postitContextMenu || edgeContextMenu) {
       const handleClick = () => {
         setContextMenu(null);
         setNodeContextMenu(null);
+        setPostitContextMenu(null);
         setEdgeContextMenu(null);
         setContextMenuLocalData(null);
       };
@@ -4559,6 +4716,94 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       onSelectedNodeChange(newId);
     }, 50);
   }, [graph, setGraph, saveHistoryState, setNodes, onSelectedNodeChange]);
+
+  const addPostitAtPosition = useCallback((x: number, y: number, w?: number, h?: number) => {
+    if (!graph) return;
+    
+    const newId = crypto.randomUUID();
+    const nextGraph = structuredClone(graph);
+    if (!nextGraph.postits) nextGraph.postits = [];
+    nextGraph.postits.push({
+      id: newId,
+      text: '',
+      colour: '#FFF475',
+      width: w && w >= 50 ? Math.round(w) : 200,
+      height: h && h >= 50 ? Math.round(h) : 150,
+      x: Math.round(x),
+      y: Math.round(y),
+    });
+    if (nextGraph.metadata) {
+      nextGraph.metadata.updated_at = new Date().toISOString();
+    }
+    setGraph(nextGraph);
+    saveHistoryState('Add post-it');
+    setContextMenu(null);
+    
+    setTimeout(() => {
+      setNodes((nds) => nds.map((n) => ({ ...n, selected: n.id === `postit-${newId}` })));
+      onSelectedPostitChange?.(newId);
+    }, 50);
+  }, [graph, setGraph, saveHistoryState, setNodes, onSelectedPostitChange]);
+
+  const addPostit = useCallback(() => {
+    const centre = screenToFlowPosition({ x: window.innerWidth / 2, y: window.innerHeight / 2 });
+    addPostitAtPosition(centre.x, centre.y);
+  }, [screenToFlowPosition, addPostitAtPosition]);
+
+  useEffect(() => {
+    if (onAddPostitRef) {
+      onAddPostitRef.current = addPostit;
+    }
+  }, [addPostit, onAddPostitRef]);
+
+  // Drag-to-draw state for new-postit creation mode
+  const drawStartRef = useRef<{ screenX: number; screenY: number; flowX: number; flowY: number } | null>(null);
+  const [drawRect, setDrawRect] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
+
+  const onPaneMouseDown = useCallback((event: React.PointerEvent) => {
+    if (activeElementTool !== 'new-postit') return;
+    const target = event.target as HTMLElement;
+    if (target.closest('.react-flow__node') || target.closest('.react-flow__edge')) return;
+    const flowPos = screenToFlowPosition({ x: event.clientX, y: event.clientY });
+    drawStartRef.current = { screenX: event.clientX, screenY: event.clientY, flowX: flowPos.x, flowY: flowPos.y };
+    setDrawRect(null);
+  }, [activeElementTool, screenToFlowPosition]);
+
+  const onPaneMouseMove = useCallback((event: React.PointerEvent) => {
+    if (activeElementTool !== 'new-postit' || !drawStartRef.current) return;
+    const flowPos = screenToFlowPosition({ x: event.clientX, y: event.clientY });
+    const sx = drawStartRef.current.flowX;
+    const sy = drawStartRef.current.flowY;
+    setDrawRect({
+      x: Math.min(sx, flowPos.x),
+      y: Math.min(sy, flowPos.y),
+      w: Math.abs(flowPos.x - sx),
+      h: Math.abs(flowPos.y - sy),
+    });
+  }, [activeElementTool, screenToFlowPosition]);
+
+  const onPaneMouseUp = useCallback((event: React.PointerEvent) => {
+    if (activeElementTool !== 'new-postit' || !drawStartRef.current) return;
+    const flowPos = screenToFlowPosition({ x: event.clientX, y: event.clientY });
+    const sx = drawStartRef.current.flowX;
+    const sy = drawStartRef.current.flowY;
+    const w = Math.abs(flowPos.x - sx);
+    const h = Math.abs(flowPos.y - sy);
+    const x = Math.min(sx, flowPos.x);
+    const y = Math.min(sy, flowPos.y);
+    drawStartRef.current = null;
+    setDrawRect(null);
+    addPostitAtPosition(x, y, w, h);
+    onClearElementTool?.();
+  }, [activeElementTool, screenToFlowPosition, addPostitAtPosition, onClearElementTool]);
+
+  const onPaneClick = useCallback((event: React.MouseEvent) => {
+    if (activeElementTool === 'new-node') {
+      const flowPosition = screenToFlowPosition({ x: event.clientX, y: event.clientY });
+      addNodeAtPosition(flowPosition.x, flowPosition.y);
+      onClearElementTool?.();
+    }
+  }, [activeElementTool, screenToFlowPosition, addNodeAtPosition, onClearElementTool]);
 
   // Paste node at specific position (from copy-paste clipboard)
   const pasteNodeAtPosition = useCallback(async (x: number, y: number) => {
@@ -4780,8 +5025,11 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       
       if (dragData.objectType === 'node') {
         dropNodeAtPosition(dragData.objectId, position.x, position.y);
+      } else if (dragData.objectType === 'new-node') {
+        addNodeAtPosition(position.x, position.y);
+      } else if (dragData.objectType === 'new-postit') {
+        addPostitAtPosition(position.x, position.y);
       } else if (dragData.objectType === 'parameter') {
-        // For parameters, we'd need to drop onto an edge - show message
         toast('Drop parameters onto an edge to attach them');
       }
     } catch (error) {
@@ -4789,16 +5037,23 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
     }
   }, [screenToFlowPosition, dropNodeAtPosition]);
 
-  // Handle node right-click
   const onNodeContextMenu = useCallback((event: React.MouseEvent, node: any) => {
     event.preventDefault();
     event.stopPropagation();
     
-    setNodeContextMenu({
-      x: event.clientX,
-      y: event.clientY,
-      nodeId: node.id
-    });
+    if (node.id.startsWith('postit-')) {
+      setPostitContextMenu({
+        x: event.clientX,
+        y: event.clientY,
+        postitId: node.id.replace('postit-', ''),
+      });
+    } else {
+      setNodeContextMenu({
+        x: event.clientX,
+        y: event.clientY,
+        nodeId: node.id,
+      });
+    }
   }, []);
 
   // Shared: open edge context menu by edge ID (used by real right-click and E2E hooks)
@@ -4997,13 +5252,14 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
       <div 
         ref={reactFlowWrapperRef} 
         style={{ height: '100%', position: 'relative' }}
-        onPointerDown={() => {
-          // Use activeTabIdContext (from context, always fresh) rather than the
-          // activeTabId prop which can be stale due to useMemo closure in GraphEditor.
+        onPointerDown={(e) => {
           if (tabId && activeTabIdContext !== tabId) {
             void tabOperations.switchTab(tabId);
           }
+          onPaneMouseDown(e);
         }}
+        onPointerMove={onPaneMouseMove}
+        onPointerUp={onPaneMouseUp}
         onDragOver={handleDragOver}
         onDrop={handleDrop}
       >
@@ -5012,7 +5268,28 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
             Loading...
           </div>
         )}
+        {drawRect && drawRect.w > 5 && drawRect.h > 5 && (() => {
+          const tl = flowToScreenPosition({ x: drawRect.x, y: drawRect.y });
+          const br = flowToScreenPosition({ x: drawRect.x + drawRect.w, y: drawRect.y + drawRect.h });
+          const wrapperBounds = reactFlowWrapperRef.current?.getBoundingClientRect();
+          if (!wrapperBounds) return null;
+          return (
+            <div style={{
+              position: 'absolute',
+              left: tl.x - wrapperBounds.left,
+              top: tl.y - wrapperBounds.top,
+              width: br.x - tl.x,
+              height: br.y - tl.y,
+              backgroundColor: 'rgba(255, 244, 117, 0.3)',
+              border: '2px dashed rgba(180, 160, 60, 0.6)',
+              borderRadius: '2px',
+              pointerEvents: 'none',
+              zIndex: 9999,
+            }} />
+          );
+        })()}
         <ReactFlow
+          className={activeElementTool === 'pan' ? 'rf-pan-mode' : (activeElementTool === 'new-node' || activeElementTool === 'new-postit') ? 'rf-create-mode' : undefined}
           nodes={nodes}
           edges={renderEdges}
         onNodesChange={onNodesChange}
@@ -5171,6 +5448,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
           onSelectedEdgeChange(edge.id);
           window.dispatchEvent(new CustomEvent('dagnet:openPropertiesPanel'));
         }}
+        onPaneClick={onPaneClick}
         onPaneContextMenu={onPaneContextMenu}
         onNodeContextMenu={onNodeContextMenu}
         onEdgeContextMenu={onEdgeContextMenu}
@@ -5182,21 +5460,30 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
         selectNodesOnDrag={false}
         selectionKeyCode={['Meta', 'Ctrl']}
         panActivationKeyCode={null}
-        nodesDraggable={true}
-        nodesConnectable
-        elementsSelectable
+        nodesDraggable={activeElementTool !== 'pan'}
+        nodesConnectable={activeElementTool !== 'pan'}
+        nodesFocusable={activeElementTool !== 'pan'}
+        edgesFocusable={activeElementTool !== 'pan'}
+        elementsSelectable={activeElementTool !== 'pan'}
         reconnectRadius={40}
         edgeUpdaterRadius={40}
         onlyRenderVisibleElements={false}
-        panOnDrag={!isLassoSelecting}
+        panOnDrag={activeElementTool === 'pan' || (!isLassoSelecting && activeElementTool !== 'new-postit')}
         connectionRadius={50}
         snapToGrid={false}
         snapGrid={[1, 1]}
-        style={{ background: dark ? '#1e1e1e' : '#f8fafc' }}
+        style={{
+          background: dark ? '#1e1e1e' : '#f8fafc',
+          cursor: undefined,
+        }}
       >
         <Background variant={BackgroundVariant.Dots} gap={16} size={1} color={dark ? '#2a2a2a' : '#ddd'} />
         <Controls />
-        <MiniMap maskColor={dark ? 'rgba(30,30,30,0.8)' : undefined} />
+        <MiniMap
+          maskColor={dark ? 'rgba(30,30,30,0.8)' : undefined}
+          nodeColor={(node) => node.id.startsWith('postit-') ? 'transparent' : undefined}
+          nodeStrokeColor={(node) => node.id.startsWith('postit-') ? 'transparent' : undefined}
+        />
         <GraphIssuesIndicatorOverlay tabId={tabId} />
         
         {/* Lasso selection rectangle */}
@@ -5265,6 +5552,9 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
           <div className="dagnet-popup-item" onClick={(e) => { e.stopPropagation(); addNodeAtPosition(contextMenu.flowX, contextMenu.flowY); }}>
             ➕ Add node
           </div>
+          <div className="dagnet-popup-item" onClick={(e) => { e.stopPropagation(); addPostitAtPosition(contextMenu.flowX, contextMenu.flowY); }}>
+            📝 Add post-it
+          </div>
           {copiedNode && (
             <div className="dagnet-popup-item" onClick={(e) => { e.stopPropagation(); pasteNodeAtPosition(contextMenu.flowX, contextMenu.flowY); }}>
               📋 Paste node: {copiedNode.objectId}
@@ -5283,6 +5573,108 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onDoubleClick
         </div>
       )}
       
+      {/* Post-It Context Menu */}
+      {postitContextMenu && graph && (() => {
+        const postit = graph.postits?.find((p: any) => p.id === postitContextMenu.postitId);
+        if (!postit) return null;
+        const postitCount = graph.postits?.length ?? 0;
+        return (
+          <PostItContextMenu
+            x={postitContextMenu.x}
+            y={postitContextMenu.y}
+            postitId={postitContextMenu.postitId}
+            currentColour={postit.colour}
+            currentFontSize={postit.fontSize || 'M'}
+            postitCount={postitCount}
+            onUpdateColour={(id, colour) => {
+              const nextGraph = structuredClone(graph);
+              const p = nextGraph.postits?.find((p: any) => p.id === id);
+              if (p) {
+                p.colour = colour;
+                if (nextGraph.metadata) nextGraph.metadata.updated_at = new Date().toISOString();
+                setGraph(nextGraph);
+                saveHistoryState('Update post-it colour');
+              }
+            }}
+            onUpdateFontSize={(id, fs) => {
+              const nextGraph = structuredClone(graph);
+              const p = nextGraph.postits?.find((p: any) => p.id === id);
+              if (p) {
+                p.fontSize = fs;
+                if (nextGraph.metadata) nextGraph.metadata.updated_at = new Date().toISOString();
+                setGraph(nextGraph);
+                saveHistoryState('Update post-it font size');
+              }
+            }}
+            onBringToFront={(id) => {
+              const nextGraph = structuredClone(graph);
+              if (nextGraph.postits) {
+                const idx = nextGraph.postits.findIndex((p: any) => p.id === id);
+                if (idx >= 0) {
+                  const [item] = nextGraph.postits.splice(idx, 1);
+                  nextGraph.postits.push(item);
+                  if (nextGraph.metadata) nextGraph.metadata.updated_at = new Date().toISOString();
+                  setGraph(nextGraph);
+                  saveHistoryState('Bring post-it to front');
+                  reorderPostitNodes(nextGraph.postits);
+                }
+              }
+            }}
+            onBringForward={(id) => {
+              const nextGraph = structuredClone(graph);
+              if (nextGraph.postits) {
+                const idx = nextGraph.postits.findIndex((p: any) => p.id === id);
+                if (idx >= 0 && idx < nextGraph.postits.length - 1) {
+                  [nextGraph.postits[idx], nextGraph.postits[idx + 1]] = [nextGraph.postits[idx + 1], nextGraph.postits[idx]];
+                  if (nextGraph.metadata) nextGraph.metadata.updated_at = new Date().toISOString();
+                  setGraph(nextGraph);
+                  saveHistoryState('Bring post-it forward');
+                  reorderPostitNodes(nextGraph.postits);
+                }
+              }
+            }}
+            onSendBackward={(id) => {
+              const nextGraph = structuredClone(graph);
+              if (nextGraph.postits) {
+                const idx = nextGraph.postits.findIndex((p: any) => p.id === id);
+                if (idx > 0) {
+                  [nextGraph.postits[idx], nextGraph.postits[idx - 1]] = [nextGraph.postits[idx - 1], nextGraph.postits[idx]];
+                  if (nextGraph.metadata) nextGraph.metadata.updated_at = new Date().toISOString();
+                  setGraph(nextGraph);
+                  saveHistoryState('Send post-it backward');
+                  reorderPostitNodes(nextGraph.postits);
+                }
+              }
+            }}
+            onSendToBack={(id) => {
+              const nextGraph = structuredClone(graph);
+              if (nextGraph.postits) {
+                const idx = nextGraph.postits.findIndex((p: any) => p.id === id);
+                if (idx >= 0) {
+                  const [item] = nextGraph.postits.splice(idx, 1);
+                  nextGraph.postits.unshift(item);
+                  if (nextGraph.metadata) nextGraph.metadata.updated_at = new Date().toISOString();
+                  setGraph(nextGraph);
+                  saveHistoryState('Send post-it to back');
+                  reorderPostitNodes(nextGraph.postits);
+                }
+              }
+            }}
+            onDelete={(id) => {
+              const nextGraph = structuredClone(graph);
+              if (nextGraph.postits) {
+                nextGraph.postits = nextGraph.postits.filter((p: any) => p.id !== id);
+                if (nextGraph.metadata) nextGraph.metadata.updated_at = new Date().toISOString();
+                setGraph(nextGraph);
+                saveHistoryState('Delete post-it');
+                onSelectedPostitChange?.(null);
+              }
+            }}
+            onClose={() => setPostitContextMenu(null)}
+          />
+        );
+      })()}
+
       {/* Node Context Menu */}
       {nodeContextMenu && (
         <NodeContextMenu

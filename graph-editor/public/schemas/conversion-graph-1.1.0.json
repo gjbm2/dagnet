@@ -44,9 +44,30 @@
     "defaultConnection": {
       "type": "string",
       "description": "Default connection for all edges in this graph. Used as fallback when edge-level connection is not set. e.g. 'amplitude-prod', 'amplitude-staging'."
+    },
+    "postits": {
+      "type": "array",
+      "description": "Canvas annotations: sticky notes (visual only, not graph semantics)",
+      "items": { "$ref": "#/$defs/PostIt" }
     }
   },
   "$defs": {
+    "PostIt": {
+      "type": "object",
+      "description": "Canvas annotation: sticky note",
+      "required": ["id", "text", "colour", "width", "height", "x", "y"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string" },
+        "text": { "type": "string", "maxLength": 4096 },
+        "colour": { "type": "string", "pattern": "^#([0-9A-Fa-f]{6})$" },
+        "fontSize": { "type": "string", "enum": ["S", "M", "L", "XL"] },
+        "width": { "type": "number", "exclusiveMinimum": 0 },
+        "height": { "type": "number", "exclusiveMinimum": 0 },
+        "x": { "type": "number" },
+        "y": { "type": "number" }
+      }
+    },
     "UUID": { "type": "string", "format": "uuid" },
     "Id": { 
       "type": "string", 

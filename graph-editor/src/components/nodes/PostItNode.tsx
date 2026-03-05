@@ -1,18 +1,16 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { NodeProps, NodeResizer } from 'reactflow';
-import { GraphData } from '@/types';
+import type { GraphData } from '@/types';
+import { PostItEditor } from './PostItEditor';
+import { useElementTool } from '../../contexts/ElementToolContext';
 
 type PostItType = NonNullable<GraphData['postits']>[number];
 
-// Traditional Post-it Note Colours
-const POSTIT_COLOURS = [
-  '#FFF59D', // Canary Yellow (classic Post-it)
-  '#FFB3D9', // Pink
-  '#AED6F1', // Sky Blue
-  '#A8E6CF', // Mint Green
-  '#FFCCBC', // Peach/Apricot
-  '#E1BEE7', // Lavender
+export const POSTIT_COLOURS = [
+  '#FFF475', '#F4BFDB', '#B6E3E9', '#CEED9D', '#FFD59D', '#D3BFEE',
 ];
+
+const FONT_SIZES: Record<string, number> = { S: 6, M: 9, L: 13, XL: 18 };
 
 interface PostItNodeData {
   postit: PostItType;
@@ -22,227 +20,133 @@ interface PostItNodeData {
 }
 
 export default function PostItNode({ data, selected }: NodeProps<PostItNodeData>) {
-  const { postit, onUpdate, onDelete, onSelect } = data;
-  const [isEditing, setIsEditing] = useState(false);
-  const [text, setText] = useState(postit.text);
-  const [showContextMenu, setShowContextMenu] = useState(false);
-  const [contextMenuPos, setContextMenuPos] = useState({ x: 0, y: 0 });
-  
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const { postit, onUpdate, onDelete } = data;
+  const { activeElementTool } = useElementTool();
+  const interactionDisabled = activeElementTool === 'pan';
+  const [editing, setEditing] = useState(false);
+  const [focusAt, setFocusAt] = useState<{ x: number; y: number } | null>(null);
   const resizeTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const pointerDownRef = useRef<{ x: number; y: number; active: boolean }>({ x: 0, y: 0, active: false });
+  const didMoveRef = useRef(false);
+  const fontSize = FONT_SIZES[postit.fontSize || 'M'];
 
-  // Auto-focus when editing starts
   useEffect(() => {
-    if (isEditing && textareaRef.current) {
-      textareaRef.current.focus();
-      textareaRef.current.select();
-    }
-  }, [isEditing]);
-
-  // Cleanup resize timeout on unmount
-  useEffect(() => {
-    return () => {
-      if (resizeTimeoutRef.current) {
-        clearTimeout(resizeTimeoutRef.current);
-      }
-    };
+    return () => { if (resizeTimeoutRef.current) clearTimeout(resizeTimeoutRef.current); };
   }, []);
 
-  const handleDoubleClick = useCallback((e: React.MouseEvent) => {
-    e.stopPropagation();
-    setIsEditing(true);
-  }, []);
-
-  const handleBlur = useCallback(() => {
-    setIsEditing(false);
-    if (text !== postit.text) {
-      onUpdate(postit.id, { text });
-    }
-  }, [text, postit.text, postit.id, onUpdate]);
-
-  const handleContextMenu = useCallback((e: React.MouseEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setShowContextMenu(true);
-    setContextMenuPos({ x: e.clientX, y: e.clientY });
-    onSelect(postit.id);
-  }, [onSelect, postit.id]);
-
   useEffect(() => {
-    const handleClickOutside = () => setShowContextMenu(false);
-    if (showContextMenu) {
-      document.addEventListener('click', handleClickOutside);
-      return () => document.removeEventListener('click', handleClickOutside);
+    if ((!selected || interactionDisabled) && editing) setEditing(false);
+  }, [selected, editing, interactionDisabled]);
+
+  const handleChange = useCallback((md: string) => {
+    if (md !== postit.text) onUpdate(postit.id, { text: md });
+  }, [postit.id, postit.text, onUpdate]);
+
+  const handlePointerDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    if (editing || interactionDisabled) return;
+    if (e.ctrlKey || e.metaKey || e.shiftKey) return;
+
+    const target = e.target as HTMLElement | null;
+    if (target?.closest('button')) return;
+
+    pointerDownRef.current = { x: e.clientX, y: e.clientY, active: true };
+    didMoveRef.current = false;
+  }, [editing, interactionDisabled]);
+
+  const handlePointerMove = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    if (editing || interactionDisabled) return;
+    if (!pointerDownRef.current.active) return;
+
+    const dx = e.clientX - pointerDownRef.current.x;
+    const dy = e.clientY - pointerDownRef.current.y;
+    if ((dx * dx + dy * dy) > 9) {
+      didMoveRef.current = true;
     }
-  }, [showContextMenu]);
+  }, [editing, interactionDisabled]);
 
-  const handleClick = useCallback((e: React.MouseEvent) => {
-    e.stopPropagation();
-    onSelect(postit.id);
-  }, [onSelect, postit.id]);
+  const handlePointerUp = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    if (editing || interactionDisabled) return;
+    if (!pointerDownRef.current.active) return;
 
-  // Helper to darken colour for folded corner
-  const adjustColourBrightness = (colour: string, amount: number): string => {
-    const hex = colour.replace('#', '');
-    const r = Math.max(0, Math.min(255, parseInt(hex.substring(0, 2), 16) + amount));
-    const g = Math.max(0, Math.min(255, parseInt(hex.substring(2, 4), 16) + amount));
-    const b = Math.max(0, Math.min(255, parseInt(hex.substring(4, 6), 16) + amount));
-    return `#${r.toString(16).padStart(2, '0')}${g.toString(16).padStart(2, '0')}${b.toString(16).padStart(2, '0')}`;
-  };
+    pointerDownRef.current.active = false;
+
+    if (didMoveRef.current) return;
+    if (e.ctrlKey || e.metaKey || e.shiftKey) return;
+
+    const target = e.target as HTMLElement | null;
+    if (target?.closest('button')) return;
+
+    setFocusAt({ x: e.clientX, y: e.clientY });
+    setEditing(true);
+  }, [editing, interactionDisabled]);
 
   return (
     <>
       <NodeResizer
         isVisible={selected}
         minWidth={150}
-        minHeight={100}
-        onResize={(event, params) => {
-          // Debounce updates during resize to prevent infinite loops
-          if (resizeTimeoutRef.current) {
-            clearTimeout(resizeTimeoutRef.current);
-          }
-          
+        minHeight={80}
+        lineStyle={{ display: 'none' }}
+        handleStyle={{
+          width: '8px', height: '8px', borderRadius: '2px',
+          backgroundColor: '#3b82f6', border: '1px solid #fff',
+        }}
+        onResize={(_event, params) => {
+          if (resizeTimeoutRef.current) clearTimeout(resizeTimeoutRef.current);
           resizeTimeoutRef.current = setTimeout(() => {
-            onUpdate(postit.id, { 
-              width: params.width,
-              height: params.height 
-            });
-          }, 50); // Update after 50ms of no resize events
+            onUpdate(postit.id, { width: Math.round(params.width), height: Math.round(params.height) });
+          }, 50);
         }}
       />
-      
-      <div
-        onClick={handleClick}
-        onDoubleClick={handleDoubleClick}
-        onContextMenu={handleContextMenu}
-        style={{
-          width: `${postit.width}px`,
-          height: `${postit.height}px`,
-          backgroundColor: postit.colour,
-          boxShadow: selected ? '0 4px 12px rgba(0,0,0,0.3)' : '0 2px 8px rgba(0,0,0,0.15)',
-          cursor: isEditing ? 'text' : 'pointer',
-          fontFamily: 'Comic Sans MS, cursive, sans-serif',
-          padding: '12px',
-          userSelect: isEditing ? 'text' : 'none',
-          clipPath: 'polygon(0 0, calc(100% - 20px) 0, 100% 20px, 100% 100%, 0 100%)',
-          border: selected ? '2px solid rgba(0,0,0,0.2)' : 'none',
-          transition: 'box-shadow 0.2s ease',
-          position: 'relative',
-        }}
-      >
-        {/* Folded corner */}
-        <div
-          style={{
-            position: 'absolute',
-            top: 0,
-            right: 0,
-            width: 0,
-            height: 0,
-            borderStyle: 'solid',
-            borderWidth: '0 20px 20px 0',
-            borderColor: `transparent ${adjustColourBrightness(postit.colour, -20)} transparent transparent`,
-            pointerEvents: 'none',
-          }}
-        />
-        
-        {isEditing ? (
-          <textarea
-            ref={textareaRef}
-            value={text}
-            onChange={(e) => setText(e.target.value)}
-            onBlur={handleBlur}
-            onKeyDown={(e) => {
-              if (e.key === 'Escape') {
-                e.currentTarget.blur();
-              }
-            }}
-            style={{
-              width: '100%',
-              height: '100%',
-              border: 'none',
-              background: 'transparent',
-              fontFamily: 'inherit',
-              fontSize: '14px',
-              resize: 'none',
-              outline: 'none',
-              color: '#333',
-            }}
-          />
-        ) : (
-          <div
-            style={{
-              width: '100%',
-              height: '100%',
-              fontSize: '14px',
-              color: '#333',
-              whiteSpace: 'pre-wrap',
-              wordWrap: 'break-word',
-              overflow: 'hidden',
-            }}
-          >
-            {postit.text || 'Double-click to edit...'}
-          </div>
-        )}
-      </div>
 
-      {/* Context menu */}
-      {showContextMenu && (
-        <div
+      {selected && (
+        <button
+          className="nodrag"
+          onClick={(e) => { e.stopPropagation(); onDelete(postit.id); }}
+          title="Delete post-it"
           style={{
-            position: 'fixed',
-            left: `${contextMenuPos.x}px`,
-            top: `${contextMenuPos.y}px`,
-            background: '#fff',
-            border: '1px solid #ddd',
-            borderRadius: '4px',
-            boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
-            zIndex: 10003,
-            minWidth: '160px',
-            padding: '4px 0',
+            position: 'absolute', top: -10, right: -10, width: '20px', height: '20px',
+            borderRadius: '50%', border: '1px solid rgba(0,0,0,0.15)', background: '#fff',
+            color: '#dc3545', fontSize: '12px', lineHeight: '18px', textAlign: 'center',
+            cursor: 'pointer', zIndex: 10, padding: 0, boxShadow: '0 1px 3px rgba(0,0,0,0.15)',
           }}
         >
-          <div style={{ padding: '8px 12px', fontSize: '12px', fontWeight: '600', color: '#666' }}>
-            Colour
-          </div>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '4px', padding: '4px 12px' }}>
-            {POSTIT_COLOURS.map((colour) => (
-              <div
-                key={colour}
-                onClick={() => {
-                  onUpdate(postit.id, { colour });
-                  setShowContextMenu(false);
-                }}
-                style={{
-                  width: '32px',
-                  height: '32px',
-                  backgroundColor: colour,
-                  border: postit.colour === colour ? '2px solid #333' : '1px solid #ddd',
-                  borderRadius: '4px',
-                  cursor: 'pointer',
-                }}
-              />
-            ))}
-          </div>
-          <div style={{ borderTop: '1px solid #eee', margin: '4px 0' }} />
-          <div
-            onClick={() => {
-              onDelete(postit.id);
-              setShowContextMenu(false);
-            }}
-            style={{
-              padding: '8px 12px',
-              cursor: 'pointer',
-              fontSize: '12px',
-              color: '#dc3545',
-            }}
-            onMouseEnter={(e) => e.currentTarget.style.background = '#f8f9fa'}
-            onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
-          >
-            Delete Post-It
-          </div>
-        </div>
+          ×
+        </button>
       )}
+
+      <div
+        onPointerDown={handlePointerDown}
+        onPointerMove={handlePointerMove}
+        onPointerUp={handlePointerUp}
+        style={{
+          width: '100%', height: '100%', backgroundColor: postit.colour,
+          boxShadow: '0 0px 1px rgba(0,0,0,0.04), 0 2px 4px rgba(0,0,0,0.06), 0 6px 12px rgba(0,0,0,0.08)',
+          fontFamily: 'inherit', padding: '10px 12px', borderRadius: '1px',
+          border: selected ? '1.5px solid rgba(0,0,0,0.15)' : '1px solid rgba(0,0,0,0.04)',
+          position: 'relative', boxSizing: 'border-box', cursor: editing ? 'text' : 'default',
+        }}
+      >
+        <div style={{
+          position: 'absolute', inset: 0, pointerEvents: 'none', borderRadius: '1px',
+          background: 'linear-gradient(to bottom, transparent 60%, rgba(0,0,0,0.03) 100%)',
+        }} />
+        <div style={{
+          position: 'absolute', bottom: 0, right: 0, width: '16px', height: '16px',
+          background: 'linear-gradient(315deg, rgba(0,0,0,0.08) 0%, transparent 50%)',
+          pointerEvents: 'none',
+        }} />
+
+        <PostItEditor
+          content={postit.text}
+          fontSize={fontSize}
+          editing={editing}
+          focusAt={focusAt}
+          onFocusAtApplied={() => setFocusAt(null)}
+          onEditingChange={setEditing}
+          onChange={handleChange}
+        />
+      </div>
     </>
   );
 }
-

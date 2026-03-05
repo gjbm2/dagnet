@@ -12,11 +12,11 @@ Canvas objects are visual elements that live inside the graph JSON — they pan,
 
 Three canvas object types are planned:
 
-| Type | Phase | Z-index tier | Purpose |
+| Type | Phase | Visual tier | Purpose |
 |------|-------|-------------|---------|
-| Post-it note | Phase 1 | Background (below edges) | Coloured sticky note with editable text |
-| Container | Phase 2 | Background (below edges) | Labelled rectangle; group-drags contained nodes |
-| Canvas analysis | Phase 3 | Foreground (above nodes) | Live analysis pinned to the canvas — chart or result card view |
+| Post-it note | Phase 1 | Annotation (above nodes) | Coloured sticky note with editable text |
+| Container | Phase 2 | Annotation (above nodes) | Labelled rectangle; group-drags contained nodes |
+| Canvas analysis | Phase 3 | Foreground (above annotations) | Live analysis pinned to the canvas — chart or result card view |
 
 Canvas objects share a common rendering layer architecture, transform pipeline, selection model, clipboard integration, and schema pattern. This document specifies those shared foundations.
 
@@ -55,45 +55,69 @@ The CSS painting order within a stacking context is:
 6. Positioned elements with z-index: auto (DOM order)
 7. **Child stacking contexts with positive z-index** (lowest first)
 
-### 2.3 Two-Tier Model
+### 2.3 Tier Model — DOM Order, Not CSS z-index
 
-Not all canvas objects belong in the same layer. Post-its and containers are background elements — visual aids that should not obscure the graph. Charts are foreground elements — prominent data displays that need to be readable and interactive.
+**CRITICAL LESSON (Phase 1 implementation):** ReactFlow v11 completely owns inline `z-index` on node wrapper elements. Its internal `createNodeInternals()` recalculates z-index for every node on every state change, overwriting any value set via the `zIndex` node property or CSS `!important`. Empirically, all nodes converge to the same computed z-index (2000 with `elevateNodesOnSelect`).
 
-| Paint step | Z-index | Elements | Visual role |
-|-----------|---------|---------|-------------|
-| Step 2 | -1 | Post-its, containers | **Background tier** — below edges, below nodes |
-| Step 6 | auto | Edges SVG, edge label div | **Edges** |
-| Step 7 | 2000 | Conversion nodes | **Business objects** |
-| Step 7 | 2500 | Canvas charts | **Foreground tier** — above nodes |
-| Step 7 | 3000 | Any selected canvas object | **Selected** — above everything |
+**What does NOT work** (proven by debugging during Phase 1):
+- Setting `zIndex` on node objects in `toFlow()` — ReactFlow overwrites it
+- CSS `z-index: N !important` on `.react-flow__node-*` — overridden by ReactFlow's inline style recalculation
+- `setNodes()` to update `zIndex` — overwritten on next render cycle by `createNodeInternals()`
 
-Final visual stack (bottom to top): **Background → Post-Its/Containers → Edges → Edge Labels → Nodes → Canvas Charts → Selected Object**
+**What DOES work — DOM order controls paint order:**
+ReactFlow renders nodes in the order they appear in the `nodes` array. Later elements in the DOM paint on top (standard CSS painting order for elements at the same z-index). This is the ONLY reliable stacking mechanism.
 
-### 2.4 CSS Rules
+| Elements | Visual role | Mechanism |
+|---------|-------------|-----------|
+| Edges SVG, edge labels | **Edges** | ReactFlow default rendering |
+| Conversion nodes | **Business objects** | First in nodes array (from `toFlow()`) |
+| Containers | **Annotation tier** | Appended after conversion nodes |
+| Post-its | **Annotation tier** | Appended after containers |
+| Canvas charts | **Foreground tier** | Appended last |
+
+Final visual stack (bottom to top): **Edges → Nodes → Containers → Post-Its → Canvas Charts**
+
+### 2.4 Z-Order Implementation Rules
+
+**Cross-type stacking** is fixed by append order in `toFlow()`. Not user-controllable.
+
+**Within-type z-order** (e.g. one post-it above another) uses array position in the graph data:
+- `graph.postits[0]` = back, `graph.postits[last]` = front
+- Z-order context menu operations (Bring to Front, Send to Back, etc.) reorder the graph array
+- After reordering, call `reorderPostitNodes()` helper that sorts the ReactFlow nodes array to match the graph array order
+- The helper: extracts non-postit + postit nodes, sorts postits by graph array index, concatenates: `[...nonPostit, ...sortedPostits]`
+
+**Selected state**: ReactFlow's `elevateNodesOnSelect` adds 1000 to internal z-index of selected nodes. This is sufficient to bring a selected object above siblings. Do NOT add CSS `!important` rules for selected state.
+
+**DO NOT** use CSS `z-index !important` on `.react-flow__node-*` selectors. It will appear to work initially but break intermittently as ReactFlow recalculates internal z-index.
+
+### 2.5 Tool Mode State — Context, Not Props
+
+**CRITICAL LESSON (Phase 1 implementation):** The `activeElementTool` state (select/pan/new-node/new-postit) must reach `CanvasInner` reliably. It cannot be passed as a prop through `GraphCanvas` because:
+- `CanvasHost` is defined as an inline component inside `GraphEditorInner`
+- `canvasComponent` is wrapped in `useMemo` that doesn't include `activeElementTool` in its deps
+- Adding it to deps would cause canvas remount on every tool change
+
+**Solution**: `ElementToolContext` (in `src/contexts/ElementToolContext.tsx`) provides tool state per graph tab. `GraphEditorInner` provides it; `CanvasInner` and `PostItNode` consume it via `useElementTool()`. Context updates bypass all memoisation.
+
+**Rule**: Any state that needs to flow from `GraphEditorInner` to `CanvasInner` and is NOT part of the graph data model should use a React context, not props through the `CanvasHost`/`canvasComponent` memo boundary.
+
+### 2.6 Pan Mode — pointer-events: none, Not ReactFlow Props Alone
+
+**CRITICAL LESSON (Phase 1 implementation):** Setting `nodesDraggable={false}` and `elementsSelectable={false}` on ReactFlow is necessary but NOT sufficient for pan mode. Per-node `draggable`/`selectable` values (if set) override global props. Interactive components inside nodes (editors, buttons) still receive events.
+
+**Correct implementation**: Apply a CSS class `rf-pan-mode` to the `<ReactFlow>` element. CSS rules disable pointer-events on the entire node/edge layer:
 
 ```css
-/* Background tier — below edges */
-.react-flow__node.react-flow__node-postit,
-.react-flow__node.react-flow__node-container {
-  z-index: -1 !important;
-}
-
-/* Foreground tier — above business nodes */
-.react-flow__node.react-flow__node-canvasAnalysis {
-  z-index: 2500 !important;
-}
-
-/* Selected state — above everything */
-.react-flow__node.react-flow__node-postit.selected,
-.react-flow__node.react-flow__node-container.selected,
-.react-flow__node.react-flow__node-canvasAnalysis.selected {
-  z-index: 3000 !important;
-}
+.rf-pan-mode .react-flow__node,
+.rf-pan-mode .react-flow__nodes,
+.rf-pan-mode .react-flow__edges,
+.rf-pan-mode .react-flow__edge { pointer-events: none !important; }
 ```
 
-The double-class selectors ensure they override the existing `.react-flow__node { z-index: 2000 !important; }` rule. The `!important` also overrides any inline z-index ReactFlow sets during selection/drag.
+This ensures the pane always receives drags. Combined with `cursor: grab !important` on `.rf-pan-mode *`, it produces consistent hand-mode behaviour.
 
-**Implementation note**: these CSS rules MUST be accompanied by a code comment documenting the stacking context assumption (§2.2). If a future ReactFlow version adds `z-index` or `transform` to `.react-flow__nodes`, the tier model breaks.
+**Do NOT** set per-node `draggable: true` or `selectable: true` in `toFlow()`. Leave them `undefined` so global ReactFlow props control behaviour.
 
 ### 2.5 Pointer Events
 
@@ -235,11 +259,13 @@ No explicit migration step is needed — the arrays are optional and default to 
 
 All canvas object types use distinct ID prefixes to avoid collision with graph node UUIDs and enable easy partitioning in `fromFlow()`:
 
-| Type | ReactFlow node ID pattern | ReactFlow node type | Z-index tier |
-|------|--------------------------|-------------------|-------------|
-| Post-it | `postit-${postit.id}` | `postit` | -1 (background) |
-| Container | `container-${container.id}` | `container` | -1 (background) |
-| Canvas analysis | `analysis-${analysis.id}` | `canvasAnalysis` | 2500 (foreground) |
+| Type | ReactFlow node ID pattern | ReactFlow node type | Append order in `toFlow()` |
+|------|--------------------------|-------------------|--------------------------|
+| Container | `container-${container.id}` | `container` | After conversion nodes |
+| Post-it | `postit-${postit.id}` | `postit` | After containers |
+| Canvas analysis | `analysis-${analysis.id}` | `canvasAnalysis` | Last (topmost) |
+
+Append order = DOM order = visual stacking order. See §2.4 for why this is the only reliable approach.
 
 ### 5.2 `toFlow()` Extension Pattern
 
@@ -249,10 +275,8 @@ For each canvas object type, `toFlow()` appends typed ReactFlow nodes to the nod
 - `type`: the ReactFlow node type name
 - `position`: `{ x, y }` from the object data
 - `data`: the object's data plus callbacks (`onUpdate`, `onDelete`, `onSelect`)
-- `zIndex`: per tier (-1 or 2500, belt-and-braces alongside CSS)
-- `selectable`: true
-- `draggable`: true
 - `style`: `{ width, height }` from the object data (ReactFlow uses this for node dimensions)
+- Do NOT set `zIndex`, `selectable`, or `draggable` on individual nodes — global ReactFlow props control these, and ReactFlow's internal z-index recalculation overwrites per-node values (§2.4)
 
 Canvas objects MUST be appended AFTER Sankey layout computation (§3.3). In Sankey mode, conversion nodes get d3-sankey positions first, then canvas objects are appended with their stored positions.
 
@@ -416,7 +440,9 @@ All canvas object context menus share these items:
 | Bring Forward | Swap with next element | Up one level |
 | Send Backward | Swap with previous element | Down one level |
 
-Each is a lightweight array reorder: `structuredClone` → reorder → `setGraph` → `saveHistoryState`. No new data model fields — the array order in `graph.postits[]` / `graph.containers[]` / `graph.canvasCharts[]` IS the z-order. `toFlow()` appends objects in array order; later = rendered on top in the DOM.
+Each is a lightweight array reorder: `structuredClone` → reorder → `setGraph` → `saveHistoryState` → `reorderPostitNodes()` (or equivalent for other types). No new data model fields — the array order in `graph.postits[]` / `graph.containers[]` / `graph.canvasCharts[]` IS the z-order. `toFlow()` appends objects in array order; later = rendered on top in the DOM.
+
+**IMPORTANT**: after calling `setGraph`, also call a `reorder*Nodes()` helper that sorts the ReactFlow nodes array to match the new graph array order. This is necessary because the graph→ReactFlow sync fast path may not detect array-only reorders as "node count changed", so the DOM order might not update otherwise. The helper uses `setNodes()` to rearrange the ReactFlow array: non-type nodes first, then type nodes sorted by their position in the graph array. See architecture doc §2.4 for why DOM order is the only reliable z-order mechanism.
 
 Z-order items are shown only when 2+ objects of the same type exist (no point showing "Bring to Front" for a solo post-it). They can be in a "Layer" or "Order" submenu to keep the menu compact.
 

@@ -19,7 +19,7 @@
 
 import React, { createContext, useContext, useState, useCallback, ReactNode } from 'react';
 import toast from 'react-hot-toast';
-import { GraphNode, GraphEdge } from '../types';
+import { GraphNode, GraphEdge, PostIt } from '../types';
 
 // ============================================================================
 // Types
@@ -42,6 +42,7 @@ export interface DagNetSubgraphClipboardData {
   type: 'dagnet-subgraph';
   nodes: GraphNode[];
   edges: GraphEdge[];
+  postits?: PostIt[];
   sourceGraphId?: string;
   timestamp: number;
 }

@@ -98,6 +98,22 @@
   background: #353535;
 }
 
+[data-theme="dark"] .postit-font-size-btn {
+  background: #2d2d2d;
+  border-color: #404040;
+  color: #e0e0e0;
+}
+
+[data-theme="dark"] .postit-font-size-btn:hover:not(.active) {
+  background: #353535;
+}
+
+[data-theme="dark"] .postit-font-size-btn.active {
+  background: #1e3a5f;
+  border-color: #3b82f6;
+  color: #60a5fa;
+}
+
 [data-theme="dark"] .property-readonly {
   background: #1e1e1e;
   color: #888;
@@ -155,23 +171,6 @@
 
 [data-theme="dark"] .properties-panel-wrapper .panel-header h3 {
   color: #e0e0e0;
-}
-
-[data-theme="dark"] .properties-snapshots-menu {
-  background-color: #2d2d2d;
-  border-color: rgba(255, 255, 255, 0.08);
-}
-
-[data-theme="dark"] .properties-snapshots-item {
-  color: #e0e0e0;
-}
-
-[data-theme="dark"] .properties-snapshots-item:hover {
-  background-color: #3d3d3d;
-}
-
-[data-theme="dark"] .properties-snapshots-separator {
-  background-color: #404040;
 }
 
 /* Analytics Panel dark rules are now in AnalyticsPanel.css */
@@ -881,6 +880,10 @@
 
 [data-theme="dark"] .properties-panel .property-toggle-btn.active.case-type {
   color: #fff !important;
+}
+
+[data-theme="dark"] .properties-panel .postit-font-size-btn.active {
+  color: #60a5fa !important;
 }
 
 /* ============================================================

@@ -33,6 +33,52 @@
   z-index: 2000 !important;
 }
 
+/*
+ * Canvas object z-index tiers.
+ *
+ * STACKING CONTEXT ASSUMPTION: .react-flow__nodes does NOT create a stacking
+ * context (it has position: absolute but no z-index, transform, opacity, or
+ * filter in ReactFlow v11.10.3). Individual .react-flow__node wrappers
+ * therefore participate directly in the viewport's stacking context. This lets
+ * us place canvas objects below edges (z-index: auto ≈ 0) by giving them
+ * negative z-index. If a future ReactFlow version changes .react-flow__nodes
+ * to create a stacking context, this tier model will break.
+ */
+
+/* Pan mode (hand tool) — ONLY move the canvas
+ * - force grab cursor everywhere
+ * - disable pointer-events on nodes/edges so the pane always receives drags
+ */
+.rf-pan-mode,
+.rf-pan-mode * {
+  cursor: grab !important;
+}
+.rf-pan-mode .react-flow__pane.dragging {
+  cursor: grabbing !important;
+}
+.rf-pan-mode .react-flow__node,
+.rf-pan-mode .react-flow__nodes,
+.rf-pan-mode .react-flow__edges,
+.rf-pan-mode .react-flow__edge,
+.rf-pan-mode .react-flow__edge-path,
+.rf-pan-mode .react-flow__connection-path,
+.rf-pan-mode .react-flow__handle,
+.rf-pan-mode .react-flow__resize-control,
+.rf-pan-mode .react-flow__edgeupdater {
+  pointer-events: none !important;
+}
+
+/* Creation mode (new-node / new-postit) — crosshair everywhere */
+.rf-create-mode,
+.rf-create-mode * {
+  cursor: crosshair !important;
+}
+
+/* Annotation tier — z-index set per-node in toFlow (5000 + array index) */
+
+/* Selected post-it: ReactFlow's elevateNodesOnSelect adds 1000 to the node's
+   zIndex automatically, which is sufficient to lift it above siblings. */
+
 /* Selected edges should not float above nodes */
 .react-flow__edge.selected .react-flow__edge-path {
   cursor: default !important;
@@ -152,6 +198,106 @@
   opacity: 0.7;
 }
 
+/* ===== POST-IT TIPTAP EDITOR ===== */
+
+.react-flow__node-postit .postit-editor-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(0,0,0,0.15) transparent;
+}
+.react-flow__node-postit .postit-editor-scroll::-webkit-scrollbar {
+  width: 4px;
+}
+.react-flow__node-postit .postit-editor-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+.react-flow__node-postit .postit-editor-scroll::-webkit-scrollbar-thumb {
+  background: rgba(0,0,0,0.12);
+  border-radius: 4px;
+}
+.react-flow__node-postit .postit-editor-scroll::-webkit-scrollbar-thumb:hover {
+  background: rgba(0,0,0,0.25);
+}
+
+.react-flow__node-postit .tiptap {
+  outline: none;
+  cursor: text;
+}
+
+.react-flow__node-postit .tiptap p {
+  margin: 0 0 4px 0;
+}
+
+.react-flow__node-postit .tiptap h1 {
+  margin: 0 0 4px 0;
+  font-size: 1.3em;
+  font-weight: 700;
+}
+
+.react-flow__node-postit .tiptap h2 {
+  margin: 0 0 4px 0;
+  font-size: 1.15em;
+  font-weight: 600;
+}
+
+.react-flow__node-postit .tiptap h3 {
+  margin: 0 0 3px 0;
+  font-size: 1.05em;
+  font-weight: 600;
+}
+
+.react-flow__node-postit .tiptap ul,
+.react-flow__node-postit .tiptap ol {
+  margin: 0 0 4px 0;
+  padding-left: 16px;
+}
+
+.react-flow__node-postit .tiptap li {
+  margin: 0 0 1px 0;
+}
+
+.react-flow__node-postit .tiptap code {
+  background: rgba(0,0,0,0.06);
+  padding: 1px 3px;
+  border-radius: 2px;
+  font-size: 0.9em;
+}
+
+.react-flow__node-postit .tiptap p.is-editor-empty:first-child::before {
+  content: attr(data-placeholder);
+  float: left;
+  color: rgba(0,0,0,0.25);
+  font-style: italic;
+  pointer-events: none;
+  height: 0;
+}
+
+/* Post-it editor toolbar (light mode) */
+.postit-editor-toolbar {
+  background: rgba(255,255,255,0.85);
+  border: 1px solid rgba(0,0,0,0.1);
+  box-shadow: 0 1px 4px rgba(0,0,0,0.1);
+}
+
+.postit-toolbar-btn {
+  background: transparent;
+  color: #555;
+}
+
+.postit-toolbar-btn.active {
+  background: rgba(0,0,0,0.15);
+  color: #111;
+}
+
+.postit-toolbar-btn:hover:not(.active) {
+  background: rgba(0,0,0,0.07);
+}
+
+.postit-toolbar-divider {
+  width: 1px;
+  background: rgba(0,0,0,0.1);
+  margin: 2px;
+}
+
 /* ===== DARK MODE ===== */
 
 [data-theme="dark"] .react-flow__controls {
@@ -186,4 +332,36 @@
 /* Edge descriptions in dark mode */
 [data-theme="dark"] .edge-description-text-element {
   fill: #e0e0e0;
+}
+
+/* Post-it editor toolbar (dark mode) */
+[data-theme="dark"] .postit-editor-toolbar {
+  background: rgba(40, 40, 40, 0.92);
+  border-color: rgba(255,255,255,0.12);
+  box-shadow: 0 1px 4px rgba(0,0,0,0.3);
+}
+
+[data-theme="dark"] .postit-toolbar-btn {
+  color: #ccc;
+}
+
+[data-theme="dark"] .postit-toolbar-btn.active {
+  background: rgba(255,255,255,0.18);
+  color: #fff;
+}
+
+[data-theme="dark"] .postit-toolbar-btn:hover:not(.active) {
+  background: rgba(255,255,255,0.08);
+}
+
+[data-theme="dark"] .postit-toolbar-divider {
+  background: rgba(255,255,255,0.12);
+}
+
+[data-theme="dark"] .react-flow__node-postit .tiptap code {
+  background: rgba(255,255,255,0.1);
+}
+
+[data-theme="dark"] .react-flow__node-postit .tiptap p.is-editor-empty:first-child::before {
+  color: rgba(255,255,255,0.3);
 }

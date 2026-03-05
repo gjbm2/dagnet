@@ -6,7 +6,7 @@
  * 
  * Responsibilities:
  * - CRUD operations for scenarios
- * - Snapshot creation (all/differences)
+ * - Scenario capture (all/differences)
  * - Content editing and validation
  * - Flatten operation (merge all overlays into Base)
  */
@@ -15,7 +15,7 @@ import React, { createContext, useContext, useState, useCallback, useEffect, use
 import { 
   Scenario, 
   ScenarioParams, 
-  CreateSnapshotOptions,
+  CaptureScenarioOptions,
   ApplyContentOptions,
   ScenarioValidationResult,
   ScenarioMeta
@@ -101,8 +101,8 @@ export interface ScenariosContextValue {
   baseDSL: string;
   
   // CRUD operations
-  createSnapshot: (
-    options: CreateSnapshotOptions, 
+  captureScenario: (
+    options: CaptureScenarioOptions, 
     tabId: string,
     whatIfDSL?: string | null,
     whatIfSummary?: string,
@@ -430,7 +430,7 @@ export function ScenariosProvider({ children, fileId, tabId }: ScenariosProvider
   }, []);
 
   /**
-   * Create a snapshot scenario
+   * Capture a static scenario from the current parameter state
    * 
    * Captures current parameter state along with metadata about:
    * - What-If settings (if active)
@@ -438,8 +438,8 @@ export function ScenariosProvider({ children, fileId, tabId }: ScenariosProvider
    * - Context values
    * - Source (what was diffed against)
    */
-  const createSnapshot = useCallback(async (
-    options: CreateSnapshotOptions,
+  const captureScenario = useCallback(async (
+    options: CaptureScenarioOptions,
     tabId: string,
     whatIfDSL?: string | null,
     whatIfSummary?: string,
@@ -468,7 +468,7 @@ export function ScenariosProvider({ children, fileId, tabId }: ScenariosProvider
     
     // If a What-If DSL is active, we need to compute the EFFECTIVE visual state
     // by running all edges through the What-If engine (case overrides, conditionals, etc.)
-    // This ensures snapshots capture the complete displayed state, not just raw graph values.
+    // This ensures captured scenarios reflect the complete displayed state, not just raw graph values.
     let effectiveCurrentParams: ScenarioParams = currentParams;
     if (whatIfDSL && whatIfDSL.trim() && graph) {
       const { computeEffectiveEdgeProbability } = await import('../lib/whatIf');
@@ -560,7 +560,7 @@ export function ScenariosProvider({ children, fileId, tabId }: ScenariosProvider
     let autoNote = note;
     if (!autoNote) {
       const parts: string[] = [];
-      parts.push(`${type === 'all' ? 'Full' : 'Diff'} snapshot`);
+      parts.push(`${type === 'all' ? 'Full' : 'Diff'} capture`);
       
       if (window) {
         const start = new Date(window.start).toLocaleDateString();
@@ -651,7 +651,7 @@ export function ScenariosProvider({ children, fileId, tabId }: ScenariosProvider
       }
     };
     
-    // Insert new scenario at position 2 (just beneath Current), same as snapshots
+    // Insert new scenario at position 2 (just beneath Current), same as captured scenarios
     setScenarios(prev => [scenario, ...prev]);
     
     // Auto-open in editor
@@ -1137,7 +1137,7 @@ export function ScenariosProvider({ children, fileId, tabId }: ScenariosProvider
           sessionLogService.addChild(opId, 'warning', 'DEV_REFETCH_CURRENT_ERROR', e?.message || String(e));
         }
 
-        // Only regenerate VISIBLE live scenarios (static snapshots do not fetch).
+        // Only regenerate VISIBLE live scenarios (static scenarios do not fetch).
         const idsToRegen = visibleOrder
           .filter((id) => id !== 'base' && id !== 'current')
           .filter((id) => scenarios.some((s) => s.id === id && s.meta?.isLive === true));
@@ -1672,7 +1672,7 @@ export function ScenariosProvider({ children, fileId, tabId }: ScenariosProvider
     scenariosReady: scenariosLoaded,
     graph,
     baseDSL,
-    createSnapshot,
+    captureScenario,
     createBlank,
     getScenario,
     listScenarios,
@@ -1708,7 +1708,7 @@ export function ScenariosProvider({ children, fileId, tabId }: ScenariosProvider
     scenariosLoaded,
     graph,
     baseDSL,
-    createSnapshot,
+    captureScenario,
     createBlank,
     getScenario,
     listScenarios,

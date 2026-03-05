@@ -1,9 +1,9 @@
 import type { Edge, Node } from 'reactflow';
 
-export function toFlow(graph: any, callbacks?: { onUpdateNode?: (id: string, data: any) => void; onDeleteNode?: (id: string) => void; onUpdateEdge?: (id: string, data: any) => void; onDeleteEdge?: (id: string) => void; onDoubleClickNode?: (id: string, field: string) => void; onDoubleClickEdge?: (id: string, field: string) => void; onSelectEdge?: (id: string) => void; onEdgeUpdate?: (oldEdge: any, newConnection: any) => void; onReconnect?: (id: string, newSource?: string, newTarget?: string, newTargetHandle?: string, newSourceHandle?: string) => void }, useSankeyView?: boolean): { nodes: Node[]; edges: Edge[] } {
+export function toFlow(graph: any, callbacks?: { onUpdateNode?: (id: string, data: any) => void; onDeleteNode?: (id: string) => void; onUpdateEdge?: (id: string, data: any) => void; onDeleteEdge?: (id: string, data: any) => void; onDoubleClickNode?: (id: string, field: string) => void; onDoubleClickEdge?: (id: string, field: string) => void; onSelectEdge?: (id: string) => void; onEdgeUpdate?: (oldEdge: any, newConnection: any) => void; onReconnect?: (id: string, newSource?: string, newTarget?: string, newTargetHandle?: string, newSourceHandle?: string) => void; onUpdatePostit?: (id: string, updates: any) => void; onDeletePostit?: (id: string) => void; onSelectPostit?: (id: string) => void }, useSankeyView?: boolean): { nodes: Node[]; edges: Edge[] } {
   if (!graph) return { nodes: [], edges: [] };
   
-  const nodes: Node[] = (graph.nodes || []).map((n: any) => {
+  const conversionNodes: Node[] = (graph.nodes || []).map((n: any) => {
     // In Sankey view, layout.x/y are already top-left coordinates from d3-sankey
     // In normal view, layout.x/y are center coordinates
     // ReactFlow expects top-left, so in Sankey mode we use them directly
@@ -40,6 +40,27 @@ export function toFlow(graph: any, callbacks?: { onUpdateNode?: (id: string, dat
     },
   };
   });
+
+  // Canvas objects: post-it notes (background tier, z-index -1)
+  // Appended AFTER conversion nodes so they appear later in the DOM for correct stacking.
+  // IMPORTANT: .react-flow__nodes does NOT create a stacking context (no z-index set),
+  // so individual node z-indices participate directly in the viewport's stacking context.
+  // Post-its at z-index -1 paint before edges (z-index auto) and conversion nodes (z-index 2000).
+  const postitNodes: Node[] = (graph.postits || []).map((p: any, i: number) => ({
+    id: `postit-${p.id}`,
+    type: 'postit',
+    position: { x: p.x ?? 0, y: p.y ?? 0 },
+    zIndex: 5000 + i,
+    style: { width: p.width, height: p.height },
+    data: {
+      postit: p,
+      onUpdate: callbacks?.onUpdatePostit,
+      onDelete: callbacks?.onDeletePostit,
+      onSelect: callbacks?.onSelectPostit,
+    },
+  }));
+
+  const nodes = [...conversionNodes, ...postitNodes];
 
   const edges: Edge[] = (graph.edges || []).map((e: any) => {
     // Resolve e.from and e.to to UUIDs (they can be either UUID or human-readable ID)
@@ -97,9 +118,27 @@ export function toFlow(graph: any, callbacks?: { onUpdateNode?: (id: string, dat
 
 export function fromFlow(nodes: Node[], edges: Edge[], original: any): any {
   if (!original) return null;
+
+  // Partition ReactFlow nodes: canvas objects use prefixed IDs to avoid contaminating conversion nodes
+  const conversionRfNodes = nodes.filter(n => !n.id.startsWith('postit-') && !n.id.startsWith('container-') && !n.id.startsWith('analysis-'));
+  const postitRfNodes = nodes.filter(n => n.id.startsWith('postit-'));
+  
+  // Update postit positions from ReactFlow state
+  const updatedPostits = (original.postits || []).map((originalPostit: any) => {
+    const rfNode = postitRfNodes.find(n => n.id === `postit-${originalPostit.id}`);
+    if (!rfNode) return originalPostit;
+    return {
+      ...originalPostit,
+      x: Math.round(rfNode.position.x),
+      y: Math.round(rfNode.position.y),
+      ...(rfNode.data?.postit?.width ? { width: rfNode.data.postit.width } : {}),
+      ...(rfNode.data?.postit?.height ? { height: rfNode.data.postit.height } : {}),
+    };
+  });
   
   return {
     ...original,
+    ...(original.postits ? { postits: updatedPostits } : {}),
     // IMPORTANT: Nodes in the graph are the single source of truth for all
     // semantic/business fields (id, label, description, event_id, etc).
     //
@@ -112,7 +151,7 @@ export function fromFlow(nodes: Node[], edges: Edge[], original: any): any {
     // - We ONLY patch its layout from the ReactFlow node position/data
     // - We never re-read event_id / id / label from ReactFlow here
     nodes: (original.nodes || []).map((originalNode: any) => {
-      const rfNode = nodes.find(
+      const rfNode = conversionRfNodes.find(
         (n: any) => n.id === originalNode.uuid || n.id === originalNode.id
       );
 

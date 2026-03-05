@@ -259,13 +259,20 @@ describe('AUTOMATED Schema / TypeScript / Python Parity', () => {
       
       // Known drift: Python has helper methods that aren't fields
       assertTripleParity(schemaFields, tsFields, pyFields, 'Graph', {
-        // baseDSL and postits are in TS but not schema yet
-        tsOnly: ['baseDSL', 'postits']
+        tsOnly: ['baseDSL']
       });
     });
   });
-  
-  // Add more types as needed...
+
+  describe('PostIt', () => {
+    it('must have IDENTICAL fields across schema, TypeScript, and Python', () => {
+      const schemaFields = getSchemaFields(schema, 'PostIt');
+      const tsFields = getTypeScriptFields('PostIt');
+      const pyFields = getPythonFields('PostIt');
+      
+      assertTripleParity(schemaFields, tsFields, pyFields, 'PostIt');
+    });
+  });
 });
 
 /**

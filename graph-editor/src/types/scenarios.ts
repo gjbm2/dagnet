@@ -221,13 +221,13 @@ export interface TabScenarioState {
 }
 
 /**
- * Options for creating a snapshot
+ * Options for capturing a static scenario from the current parameter state
  */
-export interface CreateSnapshotOptions {
+export interface CaptureScenarioOptions {
   /** Name for the new scenario */
   name: string;
   
-  /** Type of snapshot ('all' includes all params, 'differences' only deltas) */
+  /** Type of capture ('all' includes all params, 'differences' only deltas) */
   type: 'all' | 'differences';
   
   /** What to diff against ('visible' = composed overlays, 'base' = Base only) */

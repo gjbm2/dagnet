@@ -869,10 +869,11 @@ export interface PostIt {
   id: string;
   text: string;
   colour: string;
+  fontSize?: 'S' | 'M' | 'L' | 'XL';
   width: number;
   height: number;
-  x?: number;
-  y?: number;
+  x: number;
+  y: number;
 }
 
 export interface ConversionGraph {

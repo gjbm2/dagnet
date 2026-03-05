@@ -133,7 +133,7 @@ export default function ScenariosPanel({ tabId, hideHeader = false }: ScenariosP
     );
   }
   
-  const { scenarios, listScenarios, renameScenario, updateScenarioColour, deleteScenario, createSnapshot, createBlank, openInEditor, closeEditor, editorOpenScenarioId, flatten, setCurrentParams, baseParams, currentParams, composeVisibleParams, currentColour, baseColour, setCurrentColour, setBaseColour, createLiveScenario, createLiveScenarioFromCurrentDelta, regenerateScenario, regenerateAllLive, putToBase, baseDSL } = scenariosContext;
+  const { scenarios, listScenarios, renameScenario, updateScenarioColour, deleteScenario, captureScenario, createBlank, openInEditor, closeEditor, editorOpenScenarioId, flatten, setCurrentParams, baseParams, currentParams, composeVisibleParams, currentColour, baseColour, setCurrentColour, setBaseColour, createLiveScenario, createLiveScenarioFromCurrentDelta, regenerateScenario, regenerateAllLive, putToBase, baseDSL } = scenariosContext;
   const currentTabForShare = tabs.find(t => t.id === tabId);
   const graphFileIdForShare = currentTabForShare?.fileId || '';
   const { canShareScenario, copyStaticScenarioShareLink, copyLiveScenarioShareLink } = useScenarioShareLink(graphFileIdForShare, tabId);
@@ -483,9 +483,9 @@ export default function ScenariosPanel({ tabId, hideHeader = false }: ScenariosP
   }, [openInEditor]);
   
   /**
-   * Create snapshot with timestamp as default name
+   * Capture a static scenario with timestamp as default name
    */
-  const handleCreateSnapshot = useCallback(async (type: 'all' | 'differences', source: 'visible' | 'base') => {
+  const handleCaptureScenario = useCallback(async (type: 'all' | 'differences', source: 'visible' | 'base') => {
     if (!tabId) {
       toast.error('No active tab');
       return;
@@ -515,24 +515,24 @@ export default function ScenariosPanel({ tabId, hideHeader = false }: ScenariosP
       // TODO: Get context values (not implemented yet)
       const context = undefined;
       
-      const newScenario = await createSnapshot({
+      const newScenario = await captureScenario({
         name: timestamp,
         type,
         source,
         diffThreshold: 1e-6
       }, tabId, whatIfDSL, whatIfSummary, window, context);
       
-      // Make the new snapshot visible by default
+      // Make the new scenario visible by default
       await operations.toggleScenarioVisibility(tabId, newScenario.id);
       
-      toast.success('Snapshot created');
+      toast.success('Scenario captured');
       setShowCreateMenu(false);
     } catch (error) {
-      console.error('Failed to create snapshot:', error);
-      const errorMessage = error instanceof Error ? error.message : 'Failed to create snapshot';
+      console.error('Failed to capture scenario:', error);
+      const errorMessage = error instanceof Error ? error.message : 'Failed to capture scenario';
       toast.error(errorMessage);
     }
-  }, [tabId, createSnapshot, tabs, operations]);
+  }, [tabId, captureScenario, tabs, operations]);
 
   /**
    * Create a live scenario in one of three modes:
@@ -1809,10 +1809,10 @@ export default function ScenariosPanel({ tabId, hideHeader = false }: ScenariosP
         </button>
         {/* Divider */}
         <div style={{ height: '1px', background: '#e5e7eb', margin: '4px 0' }} />
-        {/* Static snapshots */}
+        {/* Static scenarios */}
         <button
           onClick={() => {
-            handleCreateSnapshot('all', 'visible');
+            handleCaptureScenario('all', 'visible');
             setShowCreateMenu(false);
           }}
           style={{
@@ -1830,11 +1830,11 @@ export default function ScenariosPanel({ tabId, hideHeader = false }: ScenariosP
           onMouseEnter={(e) => e.currentTarget.style.background = '#f8f9fa'}
           onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
         >
-          Snapshot everything
+          Capture everything
         </button>
         <button
           onClick={() => {
-            handleCreateSnapshot('differences', 'visible');
+            handleCaptureScenario('differences', 'visible');
             setShowCreateMenu(false);
           }}
           style={{
@@ -1852,7 +1852,7 @@ export default function ScenariosPanel({ tabId, hideHeader = false }: ScenariosP
           onMouseEnter={(e) => e.currentTarget.style.background = '#f8f9fa'}
           onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
         >
-          Snapshot differences
+          Capture differences
         </button>
         <button
           onClick={() => {

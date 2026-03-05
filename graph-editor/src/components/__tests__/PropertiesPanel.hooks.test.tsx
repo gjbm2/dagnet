@@ -160,8 +160,17 @@ vi.mock('../../hooks/useSnapshotsMenu', () => ({
   }),
 }));
 
+const mockOpenSnapshotManager = vi.fn(async () => {});
+vi.mock('../../hooks/useOpenSnapshotManagerForEdge', () => ({
+  useOpenSnapshotManagerForEdge: () => mockOpenSnapshotManager,
+}));
+
 describe('PropertiesPanelWrapper snapshots badge', () => {
-  it('shows a camera badge with tooltip and a menu including download/delete all', () => {
+  beforeEach(() => {
+    mockOpenSnapshotManager.mockClear();
+  });
+
+  it('should show camera badge with tooltip and open Snapshot Manager on click', () => {
     currentGraph = {
       nodes: [],
       edges: [
@@ -172,20 +181,19 @@ describe('PropertiesPanelWrapper snapshots badge', () => {
 
     const rendered = render(<PropertiesPanelWrapper tabId="t" />);
 
-    // Badge tooltip should include date range (retrieved_at dates).
     const badge = rendered.container.querySelector('.properties-panel-header-badges .properties-panel-badge[title*="Snapshots (retrieved)"]');
     expect(badge).toBeTruthy();
     expect(badge!.getAttribute('title') || '').toContain('1-Dec-25 — 10-Dec-25');
 
-    // Open menu
     act(() => {
-      fireEvent.pointerDown(badge!);
+      fireEvent.click(badge!);
     });
 
-    // Radix DropdownMenu renders via a portal; assert menu content appears.
-    expect(document.body.textContent || '').toContain('param-1');
-    expect(document.body.textContent || '').toContain('Download all');
-    expect(document.body.textContent || '').toContain('Delete all');
+    expect(mockOpenSnapshotManager).toHaveBeenCalledWith({
+      edgeId: 'e-1',
+      paramId: 'param-1',
+      slot: 'p',
+    });
   });
 });
 
