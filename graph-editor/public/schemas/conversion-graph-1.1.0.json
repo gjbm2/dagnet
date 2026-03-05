@@ -49,9 +49,29 @@
       "type": "array",
       "description": "Canvas annotations: sticky notes (visual only, not graph semantics)",
       "items": { "$ref": "#/$defs/PostIt" }
+    },
+    "containers": {
+      "type": "array",
+      "description": "Canvas annotations: grouping rectangles (visual only, not graph semantics)",
+      "items": { "$ref": "#/$defs/Container" }
     }
   },
   "$defs": {
+    "Container": {
+      "type": "object",
+      "description": "Canvas annotation: labelled grouping rectangle",
+      "required": ["id", "label", "colour", "width", "height", "x", "y"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string" },
+        "label": { "type": "string", "maxLength": 256 },
+        "colour": { "type": "string", "pattern": "^#([0-9A-Fa-f]{6})$" },
+        "width": { "type": "number", "exclusiveMinimum": 0 },
+        "height": { "type": "number", "exclusiveMinimum": 0 },
+        "x": { "type": "number" },
+        "y": { "type": "number" }
+      }
+    },
     "PostIt": {
       "type": "object",
       "description": "Canvas annotation: sticky note",

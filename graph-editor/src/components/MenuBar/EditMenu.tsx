@@ -56,9 +56,11 @@ export function EditMenu() {
         selectedNodeUuids: [] as string[],
         selectedEdgeUuids: [] as string[],
         selectedPostitIds: [] as string[],
+        selectedContainerIds: [] as string[],
+        selectedAnalysisIds: [] as string[],
       };
       window.dispatchEvent(new CustomEvent('dagnet:querySelection', { detail }));
-      setHasSelection(detail.selectedNodeUuids.length > 0 || detail.selectedPostitIds.length > 0);
+      setHasSelection(detail.selectedNodeUuids.length > 0 || detail.selectedPostitIds.length > 0 || detail.selectedContainerIds.length > 0 || detail.selectedAnalysisIds.length > 0);
     };
     
     // Check on mount and periodically
@@ -219,25 +221,33 @@ export function EditMenu() {
         selectedNodeUuids: [] as string[],
         selectedEdgeUuids: [] as string[],
         selectedPostitIds: [] as string[],
+        selectedContainerIds: [] as string[],
+        selectedAnalysisIds: [] as string[],
       };
       window.dispatchEvent(new CustomEvent('dagnet:querySelection', { detail }));
       
-      if (detail.selectedNodeUuids.length === 0 && detail.selectedPostitIds.length === 0) {
+      const hasCanvasObjects = detail.selectedPostitIds.length > 0 || detail.selectedContainerIds.length > 0 || detail.selectedAnalysisIds.length > 0;
+      if (detail.selectedNodeUuids.length === 0 && !hasCanvasObjects) {
         toast.error('Nothing selected to cut');
         return;
       }
       
-      // First copy the selection
       const subgraph = extractSubgraph({
         selectedNodeIds: detail.selectedNodeUuids,
-        selectedPostitIds: detail.selectedPostitIds,
+        selectedCanvasObjectIds: {
+          postits: detail.selectedPostitIds,
+          containers: detail.selectedContainerIds,
+          canvasAnalyses: detail.selectedAnalysisIds,
+        },
         graph,
         includeConnectedEdges: true,
       });
       
-      await copySubgraph(subgraph.nodes, subgraph.edges, activeTab.fileId, subgraph.postits);
+      await copySubgraph(subgraph.nodes, subgraph.edges, activeTab.fileId, subgraph.postits, {
+        containers: subgraph.containers,
+        canvasAnalyses: subgraph.canvasAnalyses,
+      });
       
-      // Then delete: nodes via UpdateManager, post-its by filtering
       let nextGraph = graph;
       let deletedNodeCount = 0;
       let deletedEdgeCount = 0;
@@ -249,29 +259,31 @@ export function EditMenu() {
         deletedEdgeCount = result.deletedEdgeCount;
       }
       
-      let deletedPostitCount = 0;
-      if (detail.selectedPostitIds.length > 0 && nextGraph.postits) {
-        const postitIdSet = new Set(detail.selectedPostitIds);
-        const cloned = structuredClone(nextGraph);
-        cloned.postits = cloned.postits!.filter((p: any) => !postitIdSet.has(p.id));
-        deletedPostitCount = detail.selectedPostitIds.length;
-        if (cloned.metadata) cloned.metadata.updated_at = new Date().toISOString();
-        nextGraph = cloned;
+      // Delete canvas objects — table-driven
+      const canvasDeletes: [string[], string][] = [
+        [detail.selectedPostitIds, 'postits'],
+        [detail.selectedContainerIds, 'containers'],
+        [detail.selectedAnalysisIds, 'canvasAnalyses'],
+      ];
+      let totalCanvasDeletes = 0;
+      let cloned = false;
+      for (const [ids, key] of canvasDeletes) {
+        if (ids.length > 0 && nextGraph[key]) {
+          if (!cloned) { nextGraph = structuredClone(nextGraph); cloned = true; }
+          const idSet = new Set(ids);
+          nextGraph[key] = nextGraph[key].filter((p: any) => !idSet.has(p.id));
+          totalCanvasDeletes += ids.length;
+        }
       }
+      if (cloned && nextGraph.metadata) nextGraph.metadata.updated_at = new Date().toISOString();
       
       await graphMutationService.updateGraph(graph, nextGraph, state.setGraph);
       state.saveHistoryState('Cut selection');
       
       const parts: string[] = [];
-      if (deletedNodeCount > 0) {
-        parts.push(`${deletedNodeCount} node${deletedNodeCount !== 1 ? 's' : ''}`);
-      }
-      if (deletedEdgeCount > 0) {
-        parts.push(`${deletedEdgeCount} edge${deletedEdgeCount !== 1 ? 's' : ''}`);
-      }
-      if (deletedPostitCount > 0) {
-        parts.push(`${deletedPostitCount} post-it${deletedPostitCount !== 1 ? 's' : ''}`);
-      }
+      if (deletedNodeCount > 0) parts.push(`${deletedNodeCount} node${deletedNodeCount !== 1 ? 's' : ''}`);
+      if (deletedEdgeCount > 0) parts.push(`${deletedEdgeCount} edge${deletedEdgeCount !== 1 ? 's' : ''}`);
+      if (totalCanvasDeletes > 0) parts.push(`${totalCanvasDeletes} canvas object${totalCanvasDeletes !== 1 ? 's' : ''}`);
       toast.success(`Cut ${parts.join(' and ')}`);
     } else {
       document.execCommand('cut');
@@ -296,22 +308,32 @@ export function EditMenu() {
         selectedNodeUuids: [] as string[],
         selectedEdgeUuids: [] as string[],
         selectedPostitIds: [] as string[],
+        selectedContainerIds: [] as string[],
+        selectedAnalysisIds: [] as string[],
       };
       window.dispatchEvent(new CustomEvent('dagnet:querySelection', { detail }));
       
-      if (detail.selectedNodeUuids.length === 0 && detail.selectedPostitIds.length === 0) {
+      const hasCanvasObjects = detail.selectedPostitIds.length > 0 || detail.selectedContainerIds.length > 0 || detail.selectedAnalysisIds.length > 0;
+      if (detail.selectedNodeUuids.length === 0 && !hasCanvasObjects) {
         toast.error('Nothing selected to copy');
         return;
       }
       
       const subgraph = extractSubgraph({
         selectedNodeIds: detail.selectedNodeUuids,
-        selectedPostitIds: detail.selectedPostitIds,
+        selectedCanvasObjectIds: {
+          postits: detail.selectedPostitIds,
+          containers: detail.selectedContainerIds,
+          canvasAnalyses: detail.selectedAnalysisIds,
+        },
         graph,
         includeConnectedEdges: true,
       });
       
-      await copySubgraph(subgraph.nodes, subgraph.edges, activeTab.fileId, subgraph.postits);
+      await copySubgraph(subgraph.nodes, subgraph.edges, activeTab.fileId, subgraph.postits, {
+        containers: subgraph.containers,
+        canvasAnalyses: subgraph.canvasAnalyses,
+      });
     } else {
       document.execCommand('copy');
     }
@@ -343,7 +365,8 @@ export function EditMenu() {
         subgraph.nodes,
         subgraph.edges,
         { x: 50, y: 50 },
-        subgraph.postits
+        subgraph.postits,
+        { containers: subgraph.containers, canvasAnalyses: subgraph.canvasAnalyses }
       );
       
       await graphMutationService.updateGraph(currentGraph, result.graph, state.setGraph);
@@ -356,8 +379,9 @@ export function EditMenu() {
       if (result.pastedEdgeUuids.length > 0) {
         parts.push(`${result.pastedEdgeUuids.length} edge${result.pastedEdgeUuids.length !== 1 ? 's' : ''}`);
       }
-      if (result.pastedPostitIds.length > 0) {
-        parts.push(`${result.pastedPostitIds.length} post-it${result.pastedPostitIds.length !== 1 ? 's' : ''}`);
+      const totalCanvasObjects = Object.values(result.pastedCanvasObjectIds).reduce((s, a) => s + a.length, 0);
+      if (totalCanvasObjects > 0) {
+        parts.push(`${totalCanvasObjects} canvas object${totalCanvasObjects !== 1 ? 's' : ''}`);
       }
       toast.success(`Pasted ${parts.join(' and ')}`);
     } else {

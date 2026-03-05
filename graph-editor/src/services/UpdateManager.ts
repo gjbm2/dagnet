@@ -4769,7 +4769,8 @@ export class UpdateManager {
     nodes: any[],
     edges: any[],
     positionOffset: { x: number; y: number } = { x: 50, y: 50 },
-    postits?: any[]
+    postits?: any[],
+    canvasObjects?: { containers?: any[]; canvasAnalyses?: any[] }
   ): { 
     graph: any; 
     uuidMapping: Map<string, string>;
@@ -4777,6 +4778,7 @@ export class UpdateManager {
     pastedNodeUuids: string[];
     pastedEdgeUuids: string[];
     pastedPostitIds: string[];
+    pastedCanvasObjectIds: Record<string, string[]>;
   } {
     const nextGraph = structuredClone(graph);
     
@@ -4823,8 +4825,14 @@ export class UpdateManager {
         newNode.label = this.humanizeNodeId(newId);
       }
       
-      // Offset position
-      if (newNode.position) {
+      // Offset position — graph nodes use layout.{x,y}
+      if (newNode.layout) {
+        newNode.layout = {
+          ...newNode.layout,
+          x: (newNode.layout.x || 0) + positionOffset.x,
+          y: (newNode.layout.y || 0) + positionOffset.y,
+        };
+      } else if (newNode.position) {
         newNode.position = {
           x: (newNode.position.x || 0) + positionOffset.x,
           y: (newNode.position.y || 0) + positionOffset.y,
@@ -4880,24 +4888,58 @@ export class UpdateManager {
       newEdge.from = newFrom;
       newEdge.to = newTo;
       
-      // Update query strings to use new node IDs
-      if (newEdge.query && typeof newEdge.query === 'string') {
-        for (const [oldId, newId] of idMapping) {
-          newEdge.query = this.replaceNodeToken(newEdge.query, oldId, newId as string);
+      // Remap node references in edge fields using the same patterns as renameNodeId
+      const remapString = (str: string): string => {
+        let result = str;
+        for (const [old, mapped] of idMapping) {
+          result = this.replaceNodeToken(result, old, mapped as string);
         }
+        return result;
+      };
+
+      const remapParamQueries = (param: any) => {
+        if (!param || typeof param !== 'object') return;
+        if (param.query && typeof param.query === 'string') {
+          param.query = remapString(param.query);
+        }
+        if (param.n_query && typeof param.n_query === 'string') {
+          param.n_query = remapString(param.n_query);
+        }
+        if (Array.isArray(param.conditional_probabilities)) {
+          for (const cond of param.conditional_probabilities) {
+            if (cond.condition && typeof cond.condition === 'string') {
+              cond.condition = remapString(cond.condition);
+            }
+          }
+        }
+        if (param.latency?.anchor_node_id) {
+          const mapped = idMapping.get(param.latency.anchor_node_id);
+          if (mapped) param.latency.anchor_node_id = mapped;
+        }
+      };
+
+      // Edge-level query and n_query
+      if (newEdge.query && typeof newEdge.query === 'string') {
+        newEdge.query = remapString(newEdge.query);
       }
-      
-      // Update conditional probabilities
+      if (newEdge.n_query && typeof newEdge.n_query === 'string') {
+        newEdge.n_query = remapString(newEdge.n_query);
+      }
+
+      // Edge-level conditional probabilities
       if (Array.isArray(newEdge.conditional_p)) {
         for (const cond of newEdge.conditional_p) {
           if (cond.condition && typeof cond.condition === 'string') {
-            for (const [oldId, newId] of idMapping) {
-              cond.condition = this.replaceNodeToken(cond.condition, oldId, newId as string);
-            }
+            cond.condition = remapString(cond.condition);
           }
         }
       }
       
+      // Edge-level parameter objects (p, cost_gbp, labour_cost)
+      remapParamQueries(newEdge.p);
+      remapParamQueries(newEdge.cost_gbp);
+      remapParamQueries(newEdge.labour_cost);
+
       // Update case_id if it references a pasted node
       if (newEdge.case_id) {
         const mappedCaseId = idMapping.get(newEdge.case_id);
@@ -4914,30 +4956,39 @@ export class UpdateManager {
     nextGraph.nodes = [...(nextGraph.nodes || []), ...newNodes];
     nextGraph.edges = [...(nextGraph.edges || []), ...newEdges];
     
-    // Phase 3: Create new post-its with unique IDs
-    const pastedPostitIds: string[] = [];
-    if (postits && postits.length > 0) {
-      const existingPostitIds = new Set<string>((nextGraph.postits || []).map((p: any) => p.id));
-      const newPostits: any[] = [];
-      
-      for (const postit of postits) {
+    // Phase 3: Paste canvas objects (postits, containers, analyses) — generic
+    const pastedCanvasObjectIds: Record<string, string[]> = {};
+
+    const pasteCanvasArray = (sourceItems: any[] | undefined, graphKey: string) => {
+      if (!sourceItems || sourceItems.length === 0) return;
+      const existing = new Set<string>((nextGraph[graphKey] || []).map((p: any) => p.id));
+      const newItems: any[] = [];
+      const ids: string[] = [];
+
+      for (const item of sourceItems) {
         let newId = crypto.randomUUID();
-        while (existingPostitIds.has(newId)) {
-          newId = crypto.randomUUID();
-        }
-        existingPostitIds.add(newId);
-        
-        const newPostit = structuredClone(postit);
-        newPostit.id = newId;
-        newPostit.x = (newPostit.x || 0) + positionOffset.x;
-        newPostit.y = (newPostit.y || 0) + positionOffset.y;
-        
-        newPostits.push(newPostit);
-        pastedPostitIds.push(newId);
+        while (existing.has(newId)) newId = crypto.randomUUID();
+        existing.add(newId);
+
+        const clone = structuredClone(item);
+        clone.id = newId;
+        clone.x = (clone.x || 0) + positionOffset.x;
+        clone.y = (clone.y || 0) + positionOffset.y;
+
+        newItems.push(clone);
+        ids.push(newId);
       }
-      
-      nextGraph.postits = [...(nextGraph.postits || []), ...newPostits];
-    }
+
+      nextGraph[graphKey] = [...(nextGraph[graphKey] || []), ...newItems];
+      pastedCanvasObjectIds[graphKey] = ids;
+    };
+
+    pasteCanvasArray(postits, 'postits');
+    pasteCanvasArray(canvasObjects?.containers, 'containers');
+    pasteCanvasArray(canvasObjects?.canvasAnalyses, 'canvasAnalyses');
+
+    // Backward-compat alias
+    const pastedPostitIds = pastedCanvasObjectIds['postits'] || [];
     
     // Update metadata
     if (nextGraph.metadata) {
@@ -4945,12 +4996,13 @@ export class UpdateManager {
     }
     
     // Log operation
+    const totalCanvasObjects = Object.values(pastedCanvasObjectIds).reduce((s, a) => s + a.length, 0);
     const logParts = [`${newNodes.length} nodes`, `${newEdges.length} edges`];
-    if (pastedPostitIds.length > 0) logParts.push(`${pastedPostitIds.length} post-its`);
+    if (totalCanvasObjects > 0) logParts.push(`${totalCanvasObjects} canvas objects`);
     sessionLogService.info('graph', 'PASTE_SUBGRAPH', 
       `Pasted ${logParts.join(' and ')}`, 
       undefined,
-      { nodeCount: newNodes.length, edgeCount: newEdges.length, postitCount: pastedPostitIds.length }
+      { nodeCount: newNodes.length, edgeCount: newEdges.length, canvasObjectCount: totalCanvasObjects }
     );
     
     this.auditLog.push({
@@ -4959,7 +5011,7 @@ export class UpdateManager {
       details: {
         nodesAdded: newNodes.length,
         edgesAdded: newEdges.length,
-        postitsAdded: pastedPostitIds.length,
+        canvasObjectsAdded: pastedCanvasObjectIds,
         uuidMapping: Object.fromEntries(uuidMapping),
         idMapping: Object.fromEntries(idMapping),
       }
@@ -4972,6 +5024,7 @@ export class UpdateManager {
       pastedNodeUuids,
       pastedEdgeUuids,
       pastedPostitIds,
+      pastedCanvasObjectIds,
     };
   }
 

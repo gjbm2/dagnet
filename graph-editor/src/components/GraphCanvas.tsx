@@ -29,6 +29,7 @@ import { sankey, sankeyLinkHorizontal, sankeyCenter, sankeyJustify } from 'd3-sa
 
 import ConversionNode from './nodes/ConversionNode';
 import PostItNode from './nodes/PostItNode';
+import ContainerNode from './nodes/ContainerNode';
 import ConversionEdge from './edges/ConversionEdge';
 import ScenarioOverlayRenderer from './ScenarioOverlayRenderer';
 
@@ -50,7 +51,9 @@ import ProbabilityInput from './ProbabilityInput';
 import VariantWeightInput from './VariantWeightInput';
 import { NodeContextMenu } from './NodeContextMenu';
 import { PostItContextMenu } from './PostItContextMenu';
+import { ContainerContextMenu } from './ContainerContextMenu';
 import { EdgeContextMenu } from './EdgeContextMenu';
+import { extractSubgraph } from '../lib/subgraphExtractor';
 import { useDashboardMode } from '../hooks/useDashboardMode';
 import { useCopyPaste } from '../hooks/useCopyPaste';
 import { dataOperationsService } from '../services/dataOperationsService';
@@ -74,6 +77,7 @@ import { getSeverityIcon } from './issues/issueIcons';
 const nodeTypes: NodeTypes = {
   conversion: ConversionNode,
   postit: PostItNode,
+  container: ContainerNode,
 };
 
 const edgeTypes: EdgeTypes = {
@@ -224,13 +228,14 @@ function GraphIssuesIndicatorOverlay({ tabId }: { tabId?: string }) {
 interface GraphCanvasProps {
   onSelectedNodeChange: (id: string | null) => void;
   onSelectedEdgeChange: (id: string | null) => void;
-  onSelectedPostitChange?: (id: string | null) => void;
+  onSelectedAnnotationChange?: (id: string | null, type: 'postit' | 'container' | 'canvasAnalysis' | null) => void;
   onDoubleClickNode?: (id: string, field: string) => void;
   onDoubleClickEdge?: (id: string, field: string) => void;
   onSelectEdge?: (id: string) => void;
   onAddNodeRef?: React.MutableRefObject<(() => void) | null>;
   onAddPostitRef?: React.MutableRefObject<(() => void) | null>;
-  activeElementTool?: 'select' | 'pan' | 'new-node' | 'new-postit' | null;
+  onAddContainerRef?: React.MutableRefObject<(() => void) | null>;
+  activeElementTool?: 'select' | 'pan' | 'new-node' | 'new-postit' | 'new-container' | null;
   onClearElementTool?: () => void;
   onDeleteSelectedRef?: React.MutableRefObject<(() => void) | null>;
   onAutoLayoutRef?: React.MutableRefObject<((direction: 'LR' | 'RL' | 'TB' | 'BT') => void) | null>;
@@ -244,7 +249,7 @@ interface GraphCanvasProps {
   externalSelectedEdgeId?: string | null;
 }
 
-export default function GraphCanvas({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedPostitChange, onDoubleClickNode, onDoubleClickEdge, onSelectEdge, onAddNodeRef, onAddPostitRef, activeElementTool, onClearElementTool, onDeleteSelectedRef, onAutoLayoutRef, onSankeyLayoutRef, onForceRerouteRef, onHideUnselectedRef, whatIfDSL, tabId, activeTabId, externalSelectedNodeId, externalSelectedEdgeId }: GraphCanvasProps) {
+export default function GraphCanvas({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnnotationChange, onDoubleClickNode, onDoubleClickEdge, onSelectEdge, onAddNodeRef, onAddPostitRef, onAddContainerRef, activeElementTool, onClearElementTool, onDeleteSelectedRef, onAutoLayoutRef, onSankeyLayoutRef, onForceRerouteRef, onHideUnselectedRef, whatIfDSL, tabId, activeTabId, externalSelectedNodeId, externalSelectedEdgeId }: GraphCanvasProps) {
   return (
     <ReactFlowProvider>
       <CanvasInner 
@@ -252,7 +257,7 @@ export default function GraphCanvas({ onSelectedNodeChange, onSelectedEdgeChange
         activeTabId={activeTabId}
         onSelectedNodeChange={onSelectedNodeChange}
         onSelectedEdgeChange={onSelectedEdgeChange}
-        onSelectedPostitChange={onSelectedPostitChange}
+        onSelectedAnnotationChange={onSelectedAnnotationChange}
         onDoubleClickNode={onDoubleClickNode}
         onDoubleClickEdge={onDoubleClickEdge}
         externalSelectedNodeId={externalSelectedNodeId}
@@ -260,6 +265,7 @@ export default function GraphCanvas({ onSelectedNodeChange, onSelectedEdgeChange
         onSelectEdge={onSelectEdge}
         onAddNodeRef={onAddNodeRef}
         onAddPostitRef={onAddPostitRef}
+        onAddContainerRef={onAddContainerRef}
         activeElementTool={activeElementTool}
         onClearElementTool={onClearElementTool}
         onDeleteSelectedRef={onDeleteSelectedRef}
@@ -273,7 +279,7 @@ export default function GraphCanvas({ onSelectedNodeChange, onSelectedEdgeChange
   );
 }
 
-function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedPostitChange, onDoubleClickNode, onDoubleClickEdge, onSelectEdge, onAddNodeRef, onAddPostitRef, activeElementTool: _propTool, onClearElementTool: _propClear, onDeleteSelectedRef, onAutoLayoutRef, onSankeyLayoutRef, onForceRerouteRef, onHideUnselectedRef, whatIfDSL, tabId, activeTabId, externalSelectedNodeId, externalSelectedEdgeId }: GraphCanvasProps) {
+function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnnotationChange, onDoubleClickNode, onDoubleClickEdge, onSelectEdge, onAddNodeRef, onAddPostitRef, onAddContainerRef, activeElementTool: _propTool, onClearElementTool: _propClear, onDeleteSelectedRef, onAutoLayoutRef, onSankeyLayoutRef, onForceRerouteRef, onHideUnselectedRef, whatIfDSL, tabId, activeTabId, externalSelectedNodeId, externalSelectedEdgeId }: GraphCanvasProps) {
   const { activeElementTool, clearElementTool: onClearElementTool } = useElementTool();
   console.log(`[CanvasInner] activeElementTool=${activeElementTool}, tabId=${tabId}`);
   const { theme } = useTheme();
@@ -475,6 +481,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedPos
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; flowX: number; flowY: number } | null>(null);
   const [nodeContextMenu, setNodeContextMenu] = useState<{ x: number; y: number; nodeId: string } | null>(null);
   const [postitContextMenu, setPostitContextMenu] = useState<{ x: number; y: number; postitId: string } | null>(null);
+  const [containerContextMenu, setContainerContextMenu] = useState<{ x: number; y: number; containerId: string } | null>(null);
   const [edgeContextMenu, setEdgeContextMenu] = useState<{ x: number; y: number; edgeId: string } | null>(null);
   const [contextMenuLocalData, setContextMenuLocalData] = useState<{
     probability: number;
@@ -1501,19 +1508,20 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedPos
     onSelectedEdgeChange(null);
   }, [graph, setGraph, onSelectedEdgeChange]);
 
-  // Reorder ReactFlow postit nodes to match graph array order (DOM order = paint order = z-order).
-  // ReactFlow ignores our zIndex values, so we control stacking via array position.
-  const reorderPostitNodes = useCallback((postits: any[]) => {
-    const orderMap = new Map(postits.map((p: any, i: number) => [p.id, i]));
+  // Reorder ReactFlow canvas object nodes to match graph array order (DOM order = paint order = z-order).
+  // Containers go at START (behind everything); postits/analyses go at END (on top).
+  const reorderCanvasNodes = useCallback((prefix: string, graphArray: any[]) => {
+    const orderMap = new Map(graphArray.map((p: any, i: number) => [p.id, i]));
+    const isBackground = prefix === 'container-';
     setNodes(nds => {
-      const nonPostit = nds.filter(n => !n.id.startsWith('postit-'));
-      const postitNds = nds.filter(n => n.id.startsWith('postit-'));
-      postitNds.sort((a, b) => {
-        const ai = orderMap.get(a.id.replace('postit-', '')) ?? 0;
-        const bi = orderMap.get(b.id.replace('postit-', '')) ?? 0;
+      const others = nds.filter(n => !n.id?.startsWith(prefix));
+      const typed = nds.filter(n => n.id?.startsWith(prefix));
+      typed.sort((a, b) => {
+        const ai = orderMap.get(a.id.replace(prefix, '')) ?? 0;
+        const bi = orderMap.get(b.id.replace(prefix, '')) ?? 0;
         return ai - bi;
       });
-      return [...nonPostit, ...postitNds];
+      return isBackground ? [...typed, ...others] : [...others, ...typed];
     });
   }, [setNodes]);
 
@@ -1544,8 +1552,36 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedPos
     if (nextGraph.metadata) nextGraph.metadata.updated_at = new Date().toISOString();
     setGraph(nextGraph);
     saveHistoryState('Delete post-it');
-    onSelectedPostitChange?.(null);
-  }, [graph, setGraph, saveHistoryState, onSelectedPostitChange]);
+    onSelectedAnnotationChange?.(null, null);
+  }, [graph, setGraph, saveHistoryState, onSelectedAnnotationChange]);
+
+  const containerHistoryTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const handleUpdateContainer = useCallback((id: string, updates: any) => {
+    if (!graph) return;
+    const nextGraph = structuredClone(graph);
+    if (!nextGraph.containers) return;
+    const c = nextGraph.containers.find((c: any) => c.id === id);
+    if (!c) return;
+    Object.assign(c, updates);
+    if (nextGraph.metadata) nextGraph.metadata.updated_at = new Date().toISOString();
+    setGraph(nextGraph);
+    if (containerHistoryTimerRef.current) clearTimeout(containerHistoryTimerRef.current);
+    containerHistoryTimerRef.current = setTimeout(() => {
+      saveHistoryState('Update container');
+      containerHistoryTimerRef.current = null;
+    }, 800);
+  }, [graph, setGraph, saveHistoryState]);
+
+  const handleDeleteContainer = useCallback((id: string) => {
+    if (!graph) return;
+    const nextGraph = structuredClone(graph);
+    if (!nextGraph.containers) return;
+    nextGraph.containers = nextGraph.containers.filter((c: any) => c.id !== id);
+    if (nextGraph.metadata) nextGraph.metadata.updated_at = new Date().toISOString();
+    setGraph(nextGraph);
+    saveHistoryState('Delete container');
+    onSelectedAnnotationChange?.(null, null);
+  }, [graph, setGraph, saveHistoryState, onSelectedAnnotationChange]);
 
   // Delete selected elements
   const deleteSelected = useCallback(async () => {
@@ -1571,8 +1607,6 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedPos
     const { updateManager } = await import('../services/UpdateManager');
     let nextGraph = graph;
     
-    // Separate canvas object nodes from conversion nodes
-    const selectedPostitIds = selectedNodes.filter(n => n.id.startsWith('postit-')).map(n => n.id.replace('postit-', ''));
     const selectedConversionNodes = selectedNodes.filter(n => !isCanvasObjectNode(n.id));
 
     // Delete selected conversion nodes (also deletes their connected edges via UpdateManager)
@@ -1589,11 +1623,23 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedPos
       }
     }
 
-    // Delete selected postits
-    if (selectedPostitIds.length > 0 && nextGraph.postits) {
-      const postitIdSet = new Set(selectedPostitIds);
-      nextGraph = structuredClone(nextGraph);
-      nextGraph.postits = nextGraph.postits!.filter((p: any) => !postitIdSet.has(p.id));
+    // Delete selected canvas objects (postits, containers, analyses) — table-driven
+    const CANVAS_OBJECT_TYPES = [
+      { prefix: 'postit-', graphKey: 'postits' },
+      { prefix: 'container-', graphKey: 'containers' },
+      { prefix: 'analysis-', graphKey: 'canvasAnalyses' },
+    ] as const;
+
+    let hasCanvasDeletes = false;
+    for (const { prefix, graphKey } of CANVAS_OBJECT_TYPES) {
+      const selectedIds = selectedNodes
+        .filter(n => n.id?.startsWith(prefix))
+        .map(n => n.id.replace(prefix, ''));
+      if (selectedIds.length > 0 && nextGraph[graphKey]) {
+        if (!hasCanvasDeletes) { nextGraph = structuredClone(nextGraph); hasCanvasDeletes = true; }
+        const idSet = new Set(selectedIds);
+        nextGraph[graphKey] = nextGraph[graphKey].filter((obj: any) => !idSet.has(obj.id));
+      }
     }
 
     if (nextGraph.metadata) {
@@ -1608,10 +1654,10 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedPos
     if (selectedEdges.length > 0) {
       onSelectedEdgeChange(null);
     }
-    if (selectedPostitIds.length > 0) {
-      onSelectedPostitChange?.(null);
+    if (hasCanvasDeletes) {
+      onSelectedAnnotationChange?.(null, null);
     }
-  }, [nodes, edges, graph, setGraph, saveHistoryState, onSelectedNodeChange, onSelectedEdgeChange, onSelectedPostitChange, isCanvasObjectNode]);
+  }, [nodes, edges, graph, setGraph, saveHistoryState, onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnnotationChange, isCanvasObjectNode]);
 
   // Listen for force redraw events (e.g., after undo/redo)
   useEffect(() => {
@@ -1633,10 +1679,11 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedPos
       const selectedNodes = nodes.filter(n => n.selected);
       const selectedEdges = edges.filter(e => e.selected);
       
-      // Separate canvas object nodes from conversion nodes
       e.detail.selectedNodeUuids = selectedNodes.filter(n => !isCanvasObjectNode(n.id)).map(n => n.id);
       e.detail.selectedEdgeUuids = selectedEdges.map(e => e.id);
-      e.detail.selectedPostitIds = selectedNodes.filter(n => n.id.startsWith('postit-')).map(n => n.id.replace('postit-', ''));
+      e.detail.selectedPostitIds = selectedNodes.filter(n => n.id?.startsWith('postit-')).map(n => n.id.replace('postit-', ''));
+      e.detail.selectedContainerIds = selectedNodes.filter(n => n.id?.startsWith('container-')).map(n => n.id.replace('container-', ''));
+      e.detail.selectedAnalysisIds = selectedNodes.filter(n => n.id?.startsWith('analysis-')).map(n => n.id.replace('analysis-', ''));
     };
     window.addEventListener('dagnet:querySelection', handler as any);
     return () => window.removeEventListener('dagnet:querySelection', handler as any);
@@ -1911,14 +1958,16 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedPos
       // Also handles post-it add/remove (e.g. undo/redo)
       {
         const graphPostitIds = new Set((graph.postits || []).map((p: any) => p.id));
+        const graphContainerIds = new Set((graph.containers || []).map((c: any) => c.id));
         setNodes(prevNodes => {
           const autoEditNodeId = autoEditPostitIdRef.current ? `postit-${autoEditPostitIdRef.current}` : null;
 
-          // Remove post-it nodes that no longer exist in the graph (e.g. after undo)
+          // Remove canvas object nodes that no longer exist in the graph (e.g. after undo)
           let updatedNodes = prevNodes
             .filter(prevNode => {
-              if (!prevNode.id.startsWith('postit-')) return true;
-              return graphPostitIds.has(prevNode.id.replace('postit-', ''));
+              if (prevNode.id?.startsWith('postit-')) return graphPostitIds.has(prevNode.id.replace('postit-', ''));
+              if (prevNode.id?.startsWith('container-')) return graphContainerIds.has(prevNode.id.replace('container-', ''));
+              return true;
             })
             .map(prevNode => {
             if (prevNode.id.startsWith('postit-')) {
@@ -1938,18 +1987,59 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedPos
                   postit: graphPostit,
                   onUpdate: handleUpdatePostit,
                   onDelete: handleDeletePostit,
-                  onSelect: onSelectedPostitChange || undefined,
+                  onSelect: onSelectedAnnotationChange ? (id: string) => onSelectedAnnotationChange(id, 'postit') : undefined,
+                },
+              };
+            }
+            if (prevNode.id?.startsWith('container-')) {
+              const containerId = prevNode.id.replace('container-', '');
+              const gcArray = graph.containers || [];
+              const gcIndex = gcArray.findIndex((c: any) => c.id === containerId);
+              const graphContainer = gcIndex >= 0 ? gcArray[gcIndex] : null;
+              if (!graphContainer) return prevNode;
+              return {
+                ...prevNode,
+                zIndex: 1000 + gcIndex,
+                position: { x: graphContainer.x ?? 0, y: graphContainer.y ?? 0 },
+                style: { ...prevNode.style, width: graphContainer.width, height: graphContainer.height },
+                data: {
+                  ...prevNode.data,
+                  container: graphContainer,
+                  onUpdate: handleUpdateContainer,
+                  onDelete: handleDeleteContainer,
                 },
               };
             }
             const graphNode = graph.nodes.find((n: any) => n.uuid === prevNode.id || n.id === prevNode.id);
             if (!graphNode) return prevNode;
             
+            // Compute containerColour using actual ReactFlow positions of containers in this batch
+            const CONTAIN_TOL = 10;
+            const nw = (prevNode as any).measured?.width ?? prevNode.width ?? DEFAULT_NODE_WIDTH;
+            const nh = (prevNode as any).measured?.height ?? prevNode.height ?? DEFAULT_NODE_HEIGHT;
+            const nx = prevNode.position?.x ?? 0;
+            const ny = prevNode.position?.y ?? 0;
+            let containerColour: string | undefined;
+            const containerArray = graph.containers || [];
+            for (let ci = containerArray.length - 1; ci >= 0; ci--) {
+              const cont = updatedNodes.find(cn => cn.id === `container-${containerArray[ci].id}`);
+              if (!cont) continue;
+              const cx = cont.position?.x ?? 0;
+              const cy = cont.position?.y ?? 0;
+              const cw = (cont as any).measured?.width ?? cont.width ?? (typeof cont.style?.width === 'number' ? cont.style.width : 400);
+              const ch = (cont as any).measured?.height ?? cont.height ?? (typeof cont.style?.height === 'number' ? cont.style.height : 300);
+              if (nx >= (cx - CONTAIN_TOL) && ny >= (cy - CONTAIN_TOL) && (nx + nw) <= (cx + cw + CONTAIN_TOL) && (ny + nh) <= (cy + ch + CONTAIN_TOL)) {
+                containerColour = containerArray[ci].colour;
+                break;
+              }
+            }
+
             const hasImages = showNodeImages && (graphNode.images?.length || 0) > 0;
             return {
               ...prevNode,
               data: {
                 ...prevNode.data,
+                ...(containerColour !== prevNode.data?.containerColour ? { containerColour } : {}),
                 label: graphNode.label,
                 id: graphNode.id,
                 description: graphNode.description,
@@ -2130,7 +2220,24 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedPos
           }
           
           // Add post-it nodes that exist in graph but not yet in ReactFlow (e.g. redo)
-          const existingPostitIds = new Set(updatedNodes.filter(n => n.id.startsWith('postit-')).map(n => n.id.replace('postit-', '')));
+          // Add canvas object nodes that exist in graph but not yet in ReactFlow (e.g. redo)
+          const existingContainerIds = new Set(updatedNodes.filter(n => n.id?.startsWith('container-')).map(n => n.id.replace('container-', '')));
+          const graphContainers = graph.containers || [];
+          for (let ci = 0; ci < graphContainers.length; ci++) {
+            const c = graphContainers[ci];
+            if (!existingContainerIds.has(c.id)) {
+              updatedNodes.push({
+                id: `container-${c.id}`,
+                type: 'container',
+                position: { x: c.x ?? 0, y: c.y ?? 0 },
+                zIndex: 1000 + ci,
+                style: { width: c.width, height: c.height },
+                data: { container: c, onUpdate: handleUpdateContainer, onDelete: handleDeleteContainer },
+              });
+            }
+          }
+
+          const existingPostitIds = new Set(updatedNodes.filter(n => n.id?.startsWith('postit-')).map(n => n.id.replace('postit-', '')));
           const graphPostits = graph.postits || [];
           for (let pi = 0; pi < graphPostits.length; pi++) {
             const p = graphPostits[pi];
@@ -2148,7 +2255,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedPos
                   postit: p,
                   onUpdate: handleUpdatePostit,
                   onDelete: handleDeletePostit,
-                  onSelect: onSelectedPostitChange || undefined,
+                  onSelect: onSelectedAnnotationChange ? (id: string) => onSelectedAnnotationChange(id, 'postit') : undefined,
                   ...(shouldAutoEdit ? { autoEdit: true } : {}),
                 },
               });
@@ -2219,15 +2326,46 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedPos
       onReconnect: handleReconnect,
       onUpdatePostit: handleUpdatePostit,
       onDeletePostit: handleDeletePostit,
-      onSelectPostit: onSelectedPostitChange || undefined,
+      onSelectPostit: onSelectedAnnotationChange ? (id: string) => onSelectedAnnotationChange(id, 'postit') : undefined,
+      onUpdateContainer: handleUpdateContainer,
+      onDeleteContainer: handleDeleteContainer,
     }, useSankeyView);
     
+    // Inject containerColour for conversion nodes inside containers (using positions from the rebuild)
+    const containerArray = graph.containers || [];
+    const containerRfNodes = newNodes.filter(n => n.id?.startsWith('container-'));
+    const CONTAIN_TOL_SLOW = 10;
+    const injectContainerColour = (node: any) => {
+      if (node.type !== 'conversion') return node;
+      const nw = DEFAULT_NODE_WIDTH;
+      const nh = DEFAULT_NODE_HEIGHT;
+      const nx = node.position?.x ?? 0;
+      const ny = node.position?.y ?? 0;
+      for (let ci = containerArray.length - 1; ci >= 0; ci--) {
+        const cont = containerRfNodes.find(cn => cn.id === `container-${containerArray[ci].id}`);
+        if (!cont) continue;
+        const cx = cont.position?.x ?? 0;
+        const cy = cont.position?.y ?? 0;
+        const cw = typeof cont.style?.width === 'number' ? cont.style.width : 400;
+        const ch = typeof cont.style?.height === 'number' ? cont.style.height : 300;
+        if (nx >= (cx - CONTAIN_TOL_SLOW) && ny >= (cy - CONTAIN_TOL_SLOW) && (nx + nw) <= (cx + cw + CONTAIN_TOL_SLOW) && (ny + nh) <= (cy + ch + CONTAIN_TOL_SLOW)) {
+          return { ...node, data: { ...node.data, containerColour: containerArray[ci].colour } };
+        }
+      }
+      if (node.data?.containerColour) {
+        const { containerColour: _, ...rest } = node.data;
+        return { ...node, data: rest };
+      }
+      return node;
+    };
+
     // Restore selection state + inject autoEdit flag for newly created post-its
     const autoEditNodeId = autoEditPostitIdRef.current ? `postit-${autoEditPostitIdRef.current}` : null;
     let nodesWithSelection = newNodes.map(node => {
-      const base = { ...node, selected: autoEditNodeId ? node.id === autoEditNodeId : selectedNodeIds.has(node.id) };
-      if (autoEditNodeId && node.id === autoEditNodeId) {
-        console.log(`[GraphCanvas] Injecting autoEdit for ${node.id}, selected=true`);
+      const withColour = injectContainerColour(node);
+      const base = { ...withColour, selected: autoEditNodeId ? withColour.id === autoEditNodeId : selectedNodeIds.has(withColour.id) };
+      if (autoEditNodeId && withColour.id === autoEditNodeId) {
+        console.log(`[GraphCanvas] Injecting autoEdit for ${withColour.id}, selected=true`);
         autoEditPostitIdRef.current = null;
         return { ...base, data: { ...base.data, autoEdit: true } };
       }
@@ -4075,29 +4213,37 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedPos
     // but keep track of all selected items for operations like delete
     if (selectedNodes.length > 0) {
       const firstNode = selectedNodes[0];
-      if (firstNode.id.startsWith('postit-')) {
-        onSelectedPostitChange?.(firstNode.id.replace('postit-', ''));
+      if (firstNode.id?.startsWith('postit-')) {
+        onSelectedAnnotationChange?.(firstNode.id.replace('postit-', ''), 'postit');
+        onSelectedNodeChange(null);
+        onSelectedEdgeChange(null);
+      } else if (firstNode.id?.startsWith('container-')) {
+        onSelectedAnnotationChange?.(firstNode.id.replace('container-', ''), 'container');
         onSelectedNodeChange(null);
         onSelectedEdgeChange(null);
       } else {
         onSelectedNodeChange(firstNode.id);
         onSelectedEdgeChange(null);
-        onSelectedPostitChange?.(null);
+        onSelectedAnnotationChange?.(null, null);
       }
     } else if (selectableEdges.length > 0) {
       const selectedEdgeId = selectableEdges[0].id;
       onSelectedEdgeChange(selectedEdgeId);
       onSelectedNodeChange(null);
-      onSelectedPostitChange?.(null);
+      onSelectedAnnotationChange?.(null, null);
     } else {
       onSelectedNodeChange(null);
       onSelectedEdgeChange(null);
-      onSelectedPostitChange?.(null);
+      onSelectedAnnotationChange?.(null, null);
     }
-  }, [onSelectedNodeChange, onSelectedEdgeChange, onSelectedPostitChange, isLassoSelecting, setSelectedNodesForAnalysis, activeElementTool]);
+  }, [onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnnotationChange, isLassoSelecting, setSelectedNodesForAnalysis, activeElementTool]);
 
   // Track whether the current drag actually moved the node (vs. a simple click)
   const hasNodeMovedRef = useRef(false);
+
+  // Group drag state for containers
+  const containerDragContainedRef = useRef<Set<string> | null>(null);
+  const containerDragLastPosRef = useRef<{ x: number; y: number } | null>(null);
 
   // Handle node drag start - set flag and start failsafe timeout
   const onNodeDragStart = useCallback((_event: any, _node: any) => {
@@ -4107,7 +4253,56 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedPos
     isDraggingNodeRef.current = true;
     setIsDraggingNode(true);
 
-    // Failsafe: clear drag flag if it somehow gets stuck (e.g., no edges so fast-path never runs)
+    // Container group drag: snapshot contained objects
+    if (_node.id?.startsWith('container-')) {
+      const containerPos = _node.position || { x: 0, y: 0 };
+      const containerW = (_node as any).measured?.width ?? _node.width ?? (typeof _node.style?.width === 'number' ? _node.style.width : 400);
+      const containerH = (_node as any).measured?.height ?? _node.height ?? (typeof _node.style?.height === 'number' ? _node.style.height : 300);
+
+      console.log(`[GroupDrag] Container ${_node.id}: pos=(${containerPos.x},${containerPos.y}) size=(${containerW}x${containerH}) measured=${JSON.stringify((_node as any).measured)} style.w=${_node.style?.width} style.h=${_node.style?.height} width=${_node.width} height=${_node.height}`);
+
+      const CONTAIN_TOLERANCE = 10;
+      const isFullyInside = (n: any, px: number, py: number, pw: number, ph: number) => {
+        const nw = (n as any).measured?.width ?? n.width ?? (typeof n.style?.width === 'number' ? n.style.width : (n.id?.startsWith('container-') ? 400 : n.id?.startsWith('postit-') ? 200 : DEFAULT_NODE_WIDTH));
+        const nh = (n as any).measured?.height ?? n.height ?? (typeof n.style?.height === 'number' ? n.style.height : (n.id?.startsWith('container-') ? 300 : n.id?.startsWith('postit-') ? 150 : DEFAULT_NODE_HEIGHT));
+        const nx = n.position?.x ?? 0;
+        const ny = n.position?.y ?? 0;
+        const inside = nx >= (px - CONTAIN_TOLERANCE) && ny >= (py - CONTAIN_TOLERANCE) &&
+               (nx + nw) <= (px + pw + CONTAIN_TOLERANCE) && (ny + nh) <= (py + ph + CONTAIN_TOLERANCE);
+        if (!n.id?.startsWith('container-') && !n.id?.startsWith('postit-') && !n.id?.startsWith('analysis-')) {
+          console.log(`[GroupDrag]   Node ${n.id}: pos=(${nx},${ny}) size=(${nw}x${nh}) endAt=(${nx+nw},${ny+nh}) inside=${inside} measured=${JSON.stringify((n as any).measured)} width=${n.width}`);
+        }
+        return inside;
+      };
+
+      // Recursively collect all contained objects (nodes, postits, nested containers)
+      const contained = new Set<string>();
+      const selectedIds = new Set(nodes.filter(n => n.selected).map(n => n.id));
+
+      const collectContained = (parentId: string, px: number, py: number, pw: number, ph: number) => {
+        for (const n of nodes) {
+          if (n.id === parentId || contained.has(n.id) || selectedIds.has(n.id)) continue;
+          if (isFullyInside(n, px, py, pw, ph)) {
+            contained.add(n.id);
+            // Recurse into nested containers
+            if (n.id?.startsWith('container-')) {
+              const nw = (n as any).measured?.width ?? n.style?.width ?? 400;
+              const nh = (n as any).measured?.height ?? n.style?.height ?? 300;
+              collectContained(n.id, n.position?.x ?? 0, n.position?.y ?? 0, nw, nh);
+            }
+          }
+        }
+      };
+
+      collectContained(_node.id, containerPos.x, containerPos.y, containerW, containerH);
+      containerDragContainedRef.current = contained.size > 0 ? contained : null;
+      containerDragLastPosRef.current = { x: containerPos.x, y: containerPos.y };
+    } else {
+      containerDragContainedRef.current = null;
+      containerDragLastPosRef.current = null;
+    }
+
+    // Failsafe: clear drag flag if it somehow gets stuck
     if (dragTimeoutRef.current) {
       clearTimeout(dragTimeoutRef.current);
     }
@@ -4119,17 +4314,37 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedPos
       }
       dragTimeoutRef.current = null;
     }, 5000);
-  }, []);
+  }, [nodes]);
 
-  // Mark drag as "moved" only when ReactFlow reports an actual position change
-  const onNodeDrag = useCallback(() => {
+  // Mark drag as "moved" and apply group drag delta for containers
+  const onNodeDrag = useCallback((_event: any, draggedNode: any) => {
     if (!hasNodeMovedRef.current) {
       hasNodeMovedRef.current = true;
     }
-  }, []);
+
+    // Container group drag: move contained objects by delta
+    if (containerDragContainedRef.current && containerDragLastPosRef.current) {
+      const dx = (draggedNode.position?.x ?? 0) - containerDragLastPosRef.current.x;
+      const dy = (draggedNode.position?.y ?? 0) - containerDragLastPosRef.current.y;
+      containerDragLastPosRef.current = { x: draggedNode.position?.x ?? 0, y: draggedNode.position?.y ?? 0 };
+
+      if (dx !== 0 || dy !== 0) {
+        const containedIds = containerDragContainedRef.current;
+        setNodes(nds => nds.map(n => {
+          if (containedIds.has(n.id)) {
+            return { ...n, position: { x: n.position.x + dx, y: n.position.y + dy } };
+          }
+          return n;
+        }));
+      }
+    }
+  }, [setNodes]);
 
   // Handle node drag stop - save final position to history
   const onNodeDragStop = useCallback(() => {
+    // Clear container group drag state
+    containerDragContainedRef.current = null;
+    containerDragLastPosRef.current = null;
     // Keep drag flag set - it will be cleared by the sync effect when it takes the fast path
     // Use double requestAnimationFrame to ensure ReactFlow has finished updating node positions
     // and React has re-rendered before we sync to graph store and trigger edge recalculation
@@ -4666,11 +4881,12 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedPos
 
   // Close context menus on any click
   useEffect(() => {
-    if (contextMenu || nodeContextMenu || postitContextMenu || edgeContextMenu) {
+    if (contextMenu || nodeContextMenu || postitContextMenu || containerContextMenu || edgeContextMenu) {
       const handleClick = () => {
         setContextMenu(null);
         setNodeContextMenu(null);
         setPostitContextMenu(null);
+        setContainerContextMenu(null);
         setEdgeContextMenu(null);
         setContextMenuLocalData(null);
       };
@@ -4760,13 +4976,36 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedPos
     autoEditPostitIdRef.current = newId;
     onSelectedNodeChange(null);
     onSelectedEdgeChange(null);
-    onSelectedPostitChange?.(newId);
-  }, [graph, setGraph, saveHistoryState, onSelectedNodeChange, onSelectedEdgeChange, onSelectedPostitChange]);
+    onSelectedAnnotationChange?.(newId, 'postit');
+  }, [graph, setGraph, saveHistoryState, onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnnotationChange]);
 
   const addPostit = useCallback(() => {
     const centre = screenToFlowPosition({ x: window.innerWidth / 2, y: window.innerHeight / 2 });
     addPostitAtPosition(centre.x, centre.y);
   }, [screenToFlowPosition, addPostitAtPosition]);
+
+  const addContainerAtPosition = useCallback((x: number, y: number, w?: number, h?: number) => {
+    if (!graph) return;
+    const newId = crypto.randomUUID();
+    const nextGraph = structuredClone(graph);
+    if (!nextGraph.containers) nextGraph.containers = [];
+    nextGraph.containers.push({
+      id: newId,
+      label: 'Group',
+      colour: '#94A3B8',
+      width: w && w >= 100 ? Math.round(w) : 400,
+      height: h && h >= 80 ? Math.round(h) : 300,
+      x: Math.round(x),
+      y: Math.round(y),
+    });
+    if (nextGraph.metadata) nextGraph.metadata.updated_at = new Date().toISOString();
+    setGraph(nextGraph);
+    saveHistoryState('Add container');
+    setContextMenu(null);
+    onSelectedNodeChange(null);
+    onSelectedEdgeChange(null);
+    onSelectedAnnotationChange?.(newId, 'container');
+  }, [graph, setGraph, saveHistoryState, onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnnotationChange]);
 
   useEffect(() => {
     if (onAddPostitRef) {
@@ -4774,21 +5013,34 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedPos
     }
   }, [addPostit, onAddPostitRef]);
 
-  // Drag-to-draw state for new-postit creation mode
-  const drawStartRef = useRef<{ screenX: number; screenY: number; flowX: number; flowY: number } | null>(null);
+  const addContainer = useCallback(() => {
+    const centre = screenToFlowPosition({ x: window.innerWidth / 2, y: window.innerHeight / 2 });
+    addContainerAtPosition(centre.x, centre.y);
+  }, [screenToFlowPosition, addContainerAtPosition]);
+
+  useEffect(() => {
+    if (onAddContainerRef) {
+      onAddContainerRef.current = addContainer;
+    }
+  }, [addContainer, onAddContainerRef]);
+
+  // Drag-to-draw state for creation modes (new-postit, new-container)
+  const drawStartRef = useRef<{ screenX: number; screenY: number; flowX: number; flowY: number; tool: string } | null>(null);
   const [drawRect, setDrawRect] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
 
+  const DRAW_TOOLS = new Set(['new-postit', 'new-container']);
+
   const onPaneMouseDown = useCallback((event: React.PointerEvent) => {
-    if (activeElementTool !== 'new-postit') return;
+    if (!activeElementTool || !DRAW_TOOLS.has(activeElementTool)) return;
     const target = event.target as HTMLElement;
     if (target.closest('.react-flow__node') || target.closest('.react-flow__edge')) return;
     const flowPos = screenToFlowPosition({ x: event.clientX, y: event.clientY });
-    drawStartRef.current = { screenX: event.clientX, screenY: event.clientY, flowX: flowPos.x, flowY: flowPos.y };
+    drawStartRef.current = { screenX: event.clientX, screenY: event.clientY, flowX: flowPos.x, flowY: flowPos.y, tool: activeElementTool };
     setDrawRect(null);
   }, [activeElementTool, screenToFlowPosition]);
 
   const onPaneMouseMove = useCallback((event: React.PointerEvent) => {
-    if (activeElementTool !== 'new-postit' || !drawStartRef.current) return;
+    if (!drawStartRef.current) return;
     const flowPos = screenToFlowPosition({ x: event.clientX, y: event.clientY });
     const sx = drawStartRef.current.flowX;
     const sy = drawStartRef.current.flowY;
@@ -4798,10 +5050,11 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedPos
       w: Math.abs(flowPos.x - sx),
       h: Math.abs(flowPos.y - sy),
     });
-  }, [activeElementTool, screenToFlowPosition]);
+  }, [screenToFlowPosition]);
 
   const onPaneMouseUp = useCallback((event: React.PointerEvent) => {
-    if (activeElementTool !== 'new-postit' || !drawStartRef.current) return;
+    if (!drawStartRef.current) return;
+    const tool = drawStartRef.current.tool;
     const flowPos = screenToFlowPosition({ x: event.clientX, y: event.clientY });
     const sx = drawStartRef.current.flowX;
     const sy = drawStartRef.current.flowY;
@@ -4811,17 +5064,25 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedPos
     const y = Math.min(sy, flowPos.y);
     drawStartRef.current = null;
     setDrawRect(null);
-    addPostitAtPosition(x, y, w, h);
+    if (tool === 'new-postit') {
+      addPostitAtPosition(x, y, w, h);
+    } else if (tool === 'new-container') {
+      addContainerAtPosition(x, y, w, h);
+    }
     onClearElementTool?.();
-  }, [activeElementTool, screenToFlowPosition, addPostitAtPosition, onClearElementTool]);
+  }, [screenToFlowPosition, addPostitAtPosition, addContainerAtPosition, onClearElementTool]);
 
   const onPaneClick = useCallback((event: React.MouseEvent) => {
     if (activeElementTool === 'new-node') {
       const flowPosition = screenToFlowPosition({ x: event.clientX, y: event.clientY });
       addNodeAtPosition(flowPosition.x, flowPosition.y);
       onClearElementTool?.();
+    } else if (activeElementTool === 'new-container') {
+      const flowPosition = screenToFlowPosition({ x: event.clientX, y: event.clientY });
+      addContainerAtPosition(flowPosition.x, flowPosition.y);
+      onClearElementTool?.();
     }
-  }, [activeElementTool, screenToFlowPosition, addNodeAtPosition, onClearElementTool]);
+  }, [activeElementTool, screenToFlowPosition, addNodeAtPosition, addContainerAtPosition, onClearElementTool]);
 
   // Paste node at specific position (from copy-paste clipboard)
   const pasteNodeAtPosition = useCallback(async (x: number, y: number) => {
@@ -4909,8 +5170,9 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedPos
     // Calculate offset from first item's position to target position
     const firstNode = copiedSubgraph.nodes[0];
     const firstPostit = copiedSubgraph.postits?.[0];
-    const refX = firstNode?.layout?.x ?? firstPostit?.x ?? 0;
-    const refY = firstNode?.layout?.y ?? firstPostit?.y ?? 0;
+    const firstContainer = copiedSubgraph.containers?.[0];
+    const refX = firstNode?.layout?.x ?? firstPostit?.x ?? firstContainer?.x ?? 0;
+    const refY = firstNode?.layout?.y ?? firstPostit?.y ?? firstContainer?.y ?? 0;
     const offsetX = x - refX;
     const offsetY = y - refY;
     
@@ -4922,7 +5184,8 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedPos
       copiedSubgraph.nodes,
       copiedSubgraph.edges,
       { x: offsetX, y: offsetY },
-      copiedSubgraph.postits
+      copiedSubgraph.postits,
+      { containers: copiedSubgraph.containers, canvasAnalyses: copiedSubgraph.canvasAnalyses }
     );
     
     setGraph(result.graph);
@@ -4939,28 +5202,32 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedPos
     if (result.pastedEdgeUuids.length > 0) {
       parts.push(`${result.pastedEdgeUuids.length} edge${result.pastedEdgeUuids.length !== 1 ? 's' : ''}`);
     }
-    if (result.pastedPostitIds.length > 0) {
-      parts.push(`${result.pastedPostitIds.length} post-it${result.pastedPostitIds.length !== 1 ? 's' : ''}`);
+    const totalCanvasObjects = Object.values(result.pastedCanvasObjectIds).reduce((s, a) => s + a.length, 0);
+    if (totalCanvasObjects > 0) {
+      parts.push(`${totalCanvasObjects} canvas object${totalCanvasObjects !== 1 ? 's' : ''}`);
     }
     toast.success(`Pasted ${parts.join(' and ')}`);
     
-    // Select the pasted items
+    // Select the pasted items (nodes, postits, containers)
     setTimeout(() => {
       const pastedUuidSet = new Set(result.pastedNodeUuids);
-      const pastedPostitRfIds = new Set(result.pastedPostitIds.map(id => `postit-${id}`));
+      const pastedCanvasRfIds = new Set([
+        ...result.pastedPostitIds.map(id => `postit-${id}`),
+        ...(result.pastedCanvasObjectIds['containers'] || []).map(id => `container-${id}`),
+      ]);
       setNodes((nodes) => 
         nodes.map((node) => ({
           ...node,
-          selected: pastedUuidSet.has(node.id) || pastedPostitRfIds.has(node.id)
+          selected: pastedUuidSet.has(node.id) || pastedCanvasRfIds.has(node.id)
         }))
       );
       if (result.pastedNodeUuids.length > 0) {
         onSelectedNodeChange(result.pastedNodeUuids[0]);
       } else if (result.pastedPostitIds.length > 0) {
-        onSelectedPostitChange?.(result.pastedPostitIds[0]);
+        onSelectedAnnotationChange?.(result.pastedPostitIds[0], 'postit');
       }
     }, 100);
-  }, [graph, setGraph, copiedSubgraph, saveHistoryState, setNodes, onSelectedNodeChange, onSelectedPostitChange]);
+  }, [graph, setGraph, copiedSubgraph, saveHistoryState, setNodes, onSelectedNodeChange, onSelectedAnnotationChange]);
 
   // Drop node at specific position (from drag & drop)
   const dropNodeAtPosition = useCallback(async (nodeId: string, x: number, y: number) => {
@@ -5057,6 +5324,8 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedPos
         addNodeAtPosition(position.x, position.y);
       } else if (dragData.objectType === 'new-postit') {
         addPostitAtPosition(position.x, position.y);
+      } else if (dragData.objectType === 'new-container') {
+        addContainerAtPosition(position.x, position.y);
       } else if (dragData.objectType === 'parameter') {
         toast('Drop parameters onto an edge to attach them');
       }
@@ -5069,11 +5338,17 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedPos
     event.preventDefault();
     event.stopPropagation();
     
-    if (node.id.startsWith('postit-')) {
+    if (node.id?.startsWith('postit-')) {
       setPostitContextMenu({
         x: event.clientX,
         y: event.clientY,
         postitId: node.id.replace('postit-', ''),
+      });
+    } else if (node.id?.startsWith('container-')) {
+      setContainerContextMenu({
+        x: event.clientX,
+        y: event.clientY,
+        containerId: node.id.replace('container-', ''),
       });
     } else {
       setNodeContextMenu({
@@ -5308,8 +5583,8 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedPos
               top: tl.y - wrapperBounds.top,
               width: br.x - tl.x,
               height: br.y - tl.y,
-              backgroundColor: 'rgba(255, 244, 117, 0.3)',
-              border: '2px dashed rgba(180, 160, 60, 0.6)',
+              backgroundColor: drawStartRef.current?.tool === 'new-container' ? 'rgba(148, 163, 184, 0.15)' : 'rgba(255, 244, 117, 0.3)',
+              border: drawStartRef.current?.tool === 'new-container' ? '2px dashed rgba(148, 163, 184, 0.6)' : '2px dashed rgba(180, 160, 60, 0.6)',
               borderRadius: '2px',
               pointerEvents: 'none',
               zIndex: 9999,
@@ -5317,7 +5592,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedPos
           );
         })()}
         <ReactFlow
-          className={activeElementTool === 'pan' ? 'rf-pan-mode' : (activeElementTool === 'new-node' || activeElementTool === 'new-postit') ? 'rf-create-mode' : undefined}
+          className={activeElementTool === 'pan' ? 'rf-pan-mode' : (activeElementTool === 'new-node' || activeElementTool === 'new-postit' || activeElementTool === 'new-container') ? 'rf-create-mode' : undefined}
           nodes={nodes}
           edges={renderEdges}
         onNodesChange={onNodesChange}
@@ -5496,7 +5771,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedPos
         reconnectRadius={40}
         edgeUpdaterRadius={40}
         onlyRenderVisibleElements={false}
-        panOnDrag={activeElementTool === 'pan' || (!isLassoSelecting && activeElementTool !== 'new-postit')}
+        panOnDrag={activeElementTool === 'pan' || (!isLassoSelecting && activeElementTool !== 'new-postit' && activeElementTool !== 'new-container')}
         connectionRadius={50}
         snapToGrid={false}
         snapGrid={[1, 1]}
@@ -5509,8 +5784,8 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedPos
         <Controls />
         <MiniMap
           maskColor={dark ? 'rgba(30,30,30,0.8)' : undefined}
-          nodeColor={(node) => node.id?.startsWith('postit-') ? 'transparent' : '#e2e2e2'}
-          nodeStrokeColor={(node) => node.id?.startsWith('postit-') ? 'transparent' : '#b1b1b7'}
+          nodeColor={(node) => (node.id?.startsWith('postit-') || node.id?.startsWith('container-')) ? 'transparent' : '#e2e2e2'}
+          nodeStrokeColor={(node) => (node.id?.startsWith('postit-') || node.id?.startsWith('container-')) ? 'transparent' : '#b1b1b7'}
         />
         <GraphIssuesIndicatorOverlay tabId={tabId} />
         
@@ -5583,6 +5858,9 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedPos
           <div className="dagnet-popup-item" onClick={(e) => { e.stopPropagation(); addPostitAtPosition(contextMenu.flowX, contextMenu.flowY); }}>
             📝 Add post-it
           </div>
+          <div className="dagnet-popup-item" onClick={(e) => { e.stopPropagation(); addContainerAtPosition(contextMenu.flowX, contextMenu.flowY); }}>
+            ▢ Add container
+          </div>
           {copiedNode && (
             <div className="dagnet-popup-item" onClick={(e) => { e.stopPropagation(); pasteNodeAtPosition(contextMenu.flowX, contextMenu.flowY); }}>
               📋 Paste node: {copiedNode.objectId}
@@ -5648,7 +5926,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedPos
                   if (nextGraph.metadata) nextGraph.metadata.updated_at = new Date().toISOString();
                   setGraph(nextGraph);
                   saveHistoryState('Bring post-it to front');
-                  reorderPostitNodes(nextGraph.postits);
+                  reorderCanvasNodes('postit-', nextGraph.postits);
                 }
               }
             }}
@@ -5661,7 +5939,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedPos
                   if (nextGraph.metadata) nextGraph.metadata.updated_at = new Date().toISOString();
                   setGraph(nextGraph);
                   saveHistoryState('Bring post-it forward');
-                  reorderPostitNodes(nextGraph.postits);
+                  reorderCanvasNodes('postit-', nextGraph.postits);
                 }
               }
             }}
@@ -5674,7 +5952,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedPos
                   if (nextGraph.metadata) nextGraph.metadata.updated_at = new Date().toISOString();
                   setGraph(nextGraph);
                   saveHistoryState('Send post-it backward');
-                  reorderPostitNodes(nextGraph.postits);
+                  reorderCanvasNodes('postit-', nextGraph.postits);
                 }
               }
             }}
@@ -5688,7 +5966,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedPos
                   if (nextGraph.metadata) nextGraph.metadata.updated_at = new Date().toISOString();
                   setGraph(nextGraph);
                   saveHistoryState('Send post-it to back');
-                  reorderPostitNodes(nextGraph.postits);
+                  reorderCanvasNodes('postit-', nextGraph.postits);
                 }
               }
             }}
@@ -5709,7 +5987,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedPos
                   if (nextGraph.metadata) nextGraph.metadata.updated_at = new Date().toISOString();
                   setGraph(nextGraph);
                   saveHistoryState('Cut post-it');
-                  onSelectedPostitChange?.(null);
+                  onSelectedAnnotationChange?.(null, null);
                 }
               }
               setPostitContextMenu(null);
@@ -5721,10 +5999,166 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedPos
                 if (nextGraph.metadata) nextGraph.metadata.updated_at = new Date().toISOString();
                 setGraph(nextGraph);
                 saveHistoryState('Delete post-it');
-                onSelectedPostitChange?.(null);
+                onSelectedAnnotationChange?.(null, null);
               }
             }}
             onClose={() => setPostitContextMenu(null)}
+          />
+        );
+      })()}
+
+      {/* Container Context Menu */}
+      {containerContextMenu && graph && (() => {
+        const container = graph.containers?.find((c: any) => c.id === containerContextMenu.containerId);
+        if (!container) return null;
+        const containerCount = graph.containers?.length ?? 0;
+        return (
+          <ContainerContextMenu
+            x={containerContextMenu.x}
+            y={containerContextMenu.y}
+            containerId={containerContextMenu.containerId}
+            currentColour={container.colour}
+            containerCount={containerCount}
+            onUpdateColour={(id, colour) => {
+              const nextGraph = structuredClone(graph);
+              const c = nextGraph.containers?.find((c: any) => c.id === id);
+              if (c) {
+                c.colour = colour;
+                if (nextGraph.metadata) nextGraph.metadata.updated_at = new Date().toISOString();
+                setGraph(nextGraph);
+                saveHistoryState('Update container colour');
+              }
+              setContainerContextMenu(null);
+            }}
+            onBringToFront={(id) => {
+              const nextGraph = structuredClone(graph);
+              if (nextGraph.containers) {
+                const idx = nextGraph.containers.findIndex((c: any) => c.id === id);
+                if (idx >= 0 && idx < nextGraph.containers.length - 1) {
+                  const [removed] = nextGraph.containers.splice(idx, 1);
+                  nextGraph.containers.push(removed);
+                  if (nextGraph.metadata) nextGraph.metadata.updated_at = new Date().toISOString();
+                  setGraph(nextGraph);
+                  saveHistoryState('Bring container to front');
+                  reorderCanvasNodes('container-', nextGraph.containers);
+                }
+              }
+              setContainerContextMenu(null);
+            }}
+            onBringForward={(id) => {
+              const nextGraph = structuredClone(graph);
+              if (nextGraph.containers) {
+                const idx = nextGraph.containers.findIndex((c: any) => c.id === id);
+                if (idx >= 0 && idx < nextGraph.containers.length - 1) {
+                  [nextGraph.containers[idx], nextGraph.containers[idx + 1]] = [nextGraph.containers[idx + 1], nextGraph.containers[idx]];
+                  if (nextGraph.metadata) nextGraph.metadata.updated_at = new Date().toISOString();
+                  setGraph(nextGraph);
+                  saveHistoryState('Bring container forward');
+                  reorderCanvasNodes('container-', nextGraph.containers);
+                }
+              }
+              setContainerContextMenu(null);
+            }}
+            onSendBackward={(id) => {
+              const nextGraph = structuredClone(graph);
+              if (nextGraph.containers) {
+                const idx = nextGraph.containers.findIndex((c: any) => c.id === id);
+                if (idx > 0) {
+                  [nextGraph.containers[idx], nextGraph.containers[idx - 1]] = [nextGraph.containers[idx - 1], nextGraph.containers[idx]];
+                  if (nextGraph.metadata) nextGraph.metadata.updated_at = new Date().toISOString();
+                  setGraph(nextGraph);
+                  saveHistoryState('Send container backward');
+                  reorderCanvasNodes('container-', nextGraph.containers);
+                }
+              }
+              setContainerContextMenu(null);
+            }}
+            onSendToBack={(id) => {
+              const nextGraph = structuredClone(graph);
+              if (nextGraph.containers) {
+                const idx = nextGraph.containers.findIndex((c: any) => c.id === id);
+                if (idx > 0) {
+                  const [removed] = nextGraph.containers.splice(idx, 1);
+                  nextGraph.containers.unshift(removed);
+                  if (nextGraph.metadata) nextGraph.metadata.updated_at = new Date().toISOString();
+                  setGraph(nextGraph);
+                  saveHistoryState('Send container to back');
+                  reorderCanvasNodes('container-', nextGraph.containers);
+                }
+              }
+              setContainerContextMenu(null);
+            }}
+            onCopy={(id) => {
+              const c = graph.containers?.find((ci: any) => ci.id === id);
+              if (c && graph) {
+                const contained = extractSubgraph({
+                  selectedNodeIds: nodes.filter(n => {
+                    if (isCanvasObjectNode(n.id)) return false;
+                    const nw = (n as any).measured?.width ?? n.width ?? DEFAULT_NODE_WIDTH;
+                    const nh = (n as any).measured?.height ?? n.height ?? DEFAULT_NODE_HEIGHT;
+                    const nx = n.position?.x ?? 0;
+                    const ny = n.position?.y ?? 0;
+                    return nx >= c.x - 10 && ny >= c.y - 10 && (nx + nw) <= (c.x + c.width + 10) && (ny + nh) <= (c.y + c.height + 10);
+                  }).map(n => n.id),
+                  selectedCanvasObjectIds: {
+                    containers: [id],
+                    postits: (graph.postits || []).filter((p: any) =>
+                      p.x >= c.x - 10 && p.y >= c.y - 10 && (p.x + p.width) <= (c.x + c.width + 10) && (p.y + p.height) <= (c.y + c.height + 10)
+                    ).map((p: any) => p.id),
+                  },
+                  graph,
+                  includeConnectedEdges: true,
+                });
+                copySubgraph(contained.nodes, contained.edges, undefined, contained.postits, { containers: contained.containers });
+              }
+              setContainerContextMenu(null);
+            }}
+            onCut={(id) => {
+              const c = graph.containers?.find((ci: any) => ci.id === id);
+              if (c && graph) {
+                const containedNodeIds = nodes.filter(n => {
+                  if (isCanvasObjectNode(n.id)) return false;
+                  const nw = (n as any).measured?.width ?? n.width ?? DEFAULT_NODE_WIDTH;
+                  const nh = (n as any).measured?.height ?? n.height ?? DEFAULT_NODE_HEIGHT;
+                  const nx = n.position?.x ?? 0;
+                  const ny = n.position?.y ?? 0;
+                  return nx >= c.x - 10 && ny >= c.y - 10 && (nx + nw) <= (c.x + c.width + 10) && (ny + nh) <= (c.y + c.height + 10);
+                }).map(n => n.id);
+                const containedPostitIds = (graph.postits || []).filter((p: any) =>
+                  p.x >= c.x - 10 && p.y >= c.y - 10 && (p.x + p.width) <= (c.x + c.width + 10) && (p.y + p.height) <= (c.y + c.height + 10)
+                ).map((p: any) => p.id);
+
+                const contained = extractSubgraph({
+                  selectedNodeIds: containedNodeIds,
+                  selectedCanvasObjectIds: { containers: [id], postits: containedPostitIds },
+                  graph,
+                  includeConnectedEdges: true,
+                });
+                copySubgraph(contained.nodes, contained.edges, undefined, contained.postits, { containers: contained.containers });
+
+                // Delete container + contained objects
+                let nextGraph = structuredClone(graph);
+                if (nextGraph.containers) nextGraph.containers = nextGraph.containers.filter((ci: any) => ci.id !== id);
+                if (containedNodeIds.length > 0) {
+                  const nodeSet = new Set(containedNodeIds);
+                  nextGraph.nodes = nextGraph.nodes.filter((n: any) => !nodeSet.has(n.uuid));
+                  nextGraph.edges = nextGraph.edges.filter((e: any) => !nodeSet.has(e.from) && !nodeSet.has(e.to));
+                }
+                if (containedPostitIds.length > 0) {
+                  const pSet = new Set(containedPostitIds);
+                  nextGraph.postits = (nextGraph.postits || []).filter((p: any) => !pSet.has(p.id));
+                }
+                if (nextGraph.metadata) nextGraph.metadata.updated_at = new Date().toISOString();
+                setGraph(nextGraph);
+                saveHistoryState('Cut container');
+                onSelectedAnnotationChange?.(null, null);
+              }
+              setContainerContextMenu(null);
+            }}
+            onDelete={(id) => {
+              handleDeleteContainer(id);
+            }}
+            onClose={() => setContainerContextMenu(null)}
           />
         );
       })()}

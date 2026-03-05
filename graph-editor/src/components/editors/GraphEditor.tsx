@@ -33,14 +33,18 @@ import { ScenarioLegend } from '../ScenarioLegend';
 import { useActiveGraphTracking } from '../../hooks/useActiveGraphTracking';
 import { ElementToolProvider, type ElementToolContextType } from '../../contexts/ElementToolContext';
 
+// Canvas object type for generalised annotation selection
+export type CanvasAnnotationType = 'postit' | 'container' | 'canvasAnalysis';
+
 // Context to share selection state with sidebar panels
 interface SelectionContextType {
   selectedNodeId: string | null;
   selectedEdgeId: string | null;
-  selectedPostitId: string | null;
+  selectedAnnotationId: string | null;
+  selectedAnnotationType: CanvasAnnotationType | null;
   onSelectedNodeChange: (id: string | null) => void;
   onSelectedEdgeChange: (id: string | null) => void;
-  onSelectedPostitChange: (id: string | null) => void;
+  onSelectedAnnotationChange: (id: string | null, type: CanvasAnnotationType | null) => void;
   openSelectorModal: (config: SelectorModalConfig) => void;
 }
 
@@ -63,10 +67,11 @@ export function useSelectionContext() {
     return {
       selectedNodeId: null,
       selectedEdgeId: null,
-      selectedPostitId: null,
+      selectedAnnotationId: null,
+      selectedAnnotationType: null,
       onSelectedNodeChange: () => {},
       onSelectedEdgeChange: () => {},
-      onSelectedPostitChange: () => {},
+      onSelectedAnnotationChange: () => {},
       openSelectorModal: () => {},
     } as SelectionContextType;
   }
@@ -271,8 +276,9 @@ const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, r
   // Tab-specific state (persisted per tab, not per file!)
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(tabState.selectedNodeId ?? null);
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(tabState.selectedEdgeId ?? null);
-  const [selectedPostitId, setSelectedPostitId] = useState<string | null>(null);
-  const [activeElementTool, setActiveElementTool] = useState<'select' | 'pan' | 'new-node' | 'new-postit' | null>(null);
+  const [selectedAnnotationId, setSelectedAnnotationId] = useState<string | null>(null);
+  const [selectedAnnotationType, setSelectedAnnotationType] = useState<CanvasAnnotationType | null>(null);
+  const [activeElementTool, setActiveElementTool] = useState<'select' | 'pan' | 'new-node' | 'new-postit' | 'new-container' | null>(null);
   
   // Sync selection state when tabState changes (e.g., from deep linking navigation)
   useEffect(() => {
@@ -306,6 +312,7 @@ const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, r
   // Refs for GraphCanvas exposed functions (must be declared before component creation)
   const addNodeRef = React.useRef<(() => void) | null>(null);
   const addPostitRef = React.useRef<(() => void) | null>(null);
+  const addContainerRef = React.useRef<(() => void) | null>(null);
   const deleteSelectedRef = React.useRef<(() => void) | null>(null);
   const autoLayoutRef = React.useRef<((direction: 'LR' | 'RL' | 'TB' | 'BT') => void) | null>(null);
   const sankeyLayoutRef = React.useRef<(() => void) | null>(null);
@@ -365,9 +372,10 @@ const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, r
     prevSelectedEdgeRef.current = edgeId;
   }, [sidebarOps, tabId, tabOps]);
 
-  const handlePostitSelection = React.useCallback((postitId: string | null) => {
-    setSelectedPostitId(postitId);
-    if (postitId) {
+  const handleAnnotationSelection = React.useCallback((id: string | null, type: CanvasAnnotationType | null) => {
+    setSelectedAnnotationId(id);
+    setSelectedAnnotationType(id ? type : null);
+    if (id) {
       sidebarOps.handleSelection();
       setSelectedNodeId(null);
       setSelectedEdgeId(null);
@@ -1048,9 +1056,10 @@ const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, r
           activeTabId={activeTabId}
           onSelectedNodeChange={handleNodeSelection}
           onSelectedEdgeChange={handleEdgeSelection}
-          onSelectedPostitChange={handlePostitSelection}
+          onSelectedAnnotationChange={handleAnnotationSelection}
           onAddNodeRef={addNodeRef}
           onAddPostitRef={addPostitRef}
+          onAddContainerRef={addContainerRef}
           activeElementTool={activeElementTool}
           onClearElementTool={() => setActiveElementTool(null)}
           onDeleteSelectedRef={deleteSelectedRef}
@@ -1720,6 +1729,11 @@ const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, r
       if (addPostitRef.current) addPostitRef.current();
     };
 
+    const handleAddContainer = () => {
+      if (tabIdRef.current !== activeTabIdRef.current) return;
+      if (addContainerRef.current) addContainerRef.current();
+    };
+
     const handleDeleteSelected = () => {
       // Only handle if this is the active tab's editor
       // Phase 4: Use refs to avoid re-running effect when activeTabId changes
@@ -1763,6 +1777,7 @@ const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, r
     // View preference listeners removed; handled via context
     window.addEventListener('dagnet:addNode' as any, handleAddNode);
     window.addEventListener('dagnet:addPostit' as any, handleAddPostit);
+    window.addEventListener('dagnet:addContainer' as any, handleAddContainer);
     window.addEventListener('dagnet:deleteSelected' as any, handleDeleteSelected);
     window.addEventListener('dagnet:forceReroute' as any, handleForceReroute);
     window.addEventListener('dagnet:autoLayout' as any, handleAutoLayout);
@@ -1795,6 +1810,7 @@ const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, r
       // View preference listeners removed
       window.removeEventListener('dagnet:addNode' as any, handleAddNode);
       window.removeEventListener('dagnet:addPostit' as any, handleAddPostit);
+      window.removeEventListener('dagnet:addContainer' as any, handleAddContainer);
       window.removeEventListener('dagnet:deleteSelected' as any, handleDeleteSelected);
       window.removeEventListener('dagnet:forceReroute' as any, handleForceReroute);
       window.removeEventListener('dagnet:autoLayout' as any, handleAutoLayout);
@@ -1809,12 +1825,13 @@ const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, r
   const selectionContextValue: SelectionContextType = useMemo(() => ({
     selectedNodeId,
     selectedEdgeId,
-    selectedPostitId,
+    selectedAnnotationId,
+    selectedAnnotationType,
     onSelectedNodeChange: handleNodeSelection,
     onSelectedEdgeChange: handleEdgeSelection,
-    onSelectedPostitChange: handlePostitSelection,
+    onSelectedAnnotationChange: handleAnnotationSelection,
     openSelectorModal: (config) => setSelectorModalConfig(config)
-  }), [selectedNodeId, selectedEdgeId, selectedPostitId, handleNodeSelection, handleEdgeSelection, handlePostitSelection]);
+  }), [selectedNodeId, selectedEdgeId, selectedAnnotationId, selectedAnnotationType, handleNodeSelection, handleEdgeSelection, handleAnnotationSelection]);
 
   const elementToolContextValue: ElementToolContextType = useMemo(() => ({
     activeElementTool,

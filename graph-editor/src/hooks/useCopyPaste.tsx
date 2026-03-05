@@ -43,6 +43,8 @@ export interface DagNetSubgraphClipboardData {
   nodes: GraphNode[];
   edges: GraphEdge[];
   postits?: PostIt[];
+  containers?: any[];
+  canvasAnalyses?: any[];
   sourceGraphId?: string;
   timestamp: number;
 }
@@ -185,9 +187,11 @@ export function useCopyPaste() {
     nodes: GraphNode[],
     edges: GraphEdge[],
     sourceGraphId?: string,
-    postits?: PostIt[]
+    postits?: PostIt[],
+    canvasObjects?: { containers?: any[]; canvasAnalyses?: any[] }
   ): Promise<boolean> => {
-    if (nodes.length === 0 && (!postits || postits.length === 0)) {
+    const totalCanvasObjects = (postits?.length ?? 0) + (canvasObjects?.containers?.length ?? 0) + (canvasObjects?.canvasAnalyses?.length ?? 0);
+    if (nodes.length === 0 && totalCanvasObjects === 0) {
       toast.error('Nothing selected to copy');
       return false;
     }
@@ -197,38 +201,24 @@ export function useCopyPaste() {
       nodes: structuredClone(nodes),
       edges: structuredClone(edges),
       ...(postits && postits.length > 0 ? { postits: structuredClone(postits) } : {}),
+      ...(canvasObjects?.containers && canvasObjects.containers.length > 0 ? { containers: structuredClone(canvasObjects.containers) } : {}),
+      ...(canvasObjects?.canvasAnalyses && canvasObjects.canvasAnalyses.length > 0 ? { canvasAnalyses: structuredClone(canvasObjects.canvasAnalyses) } : {}),
       sourceGraphId,
       timestamp: Date.now(),
     };
     
-    // Write to system clipboard (best effort - for external paste like Ctrl+V)
     try {
       await navigator.clipboard.writeText(JSON.stringify(data, null, 2));
     } catch (e) {
       console.warn('[useCopyPaste] Clipboard write failed (memory cache still works):', e);
     }
     
-    // Store in memory cache (this is what our paste menus use)
     setCopiedItem(data);
     
-    console.log('[useCopyPaste] Copied subgraph to memory cache:', {
-      nodeCount: nodes.length,
-      edgeCount: edges.length,
-      postitCount: postits?.length ?? 0,
-      sourceGraphId,
-    });
-    
-    // User feedback
     const parts: string[] = [];
-    if (nodes.length > 0) {
-      parts.push(`${nodes.length} node${nodes.length !== 1 ? 's' : ''}`);
-    }
-    if (edges.length > 0) {
-      parts.push(`${edges.length} edge${edges.length !== 1 ? 's' : ''}`);
-    }
-    if (postits && postits.length > 0) {
-      parts.push(`${postits.length} post-it${postits.length !== 1 ? 's' : ''}`);
-    }
+    if (nodes.length > 0) parts.push(`${nodes.length} node${nodes.length !== 1 ? 's' : ''}`);
+    if (edges.length > 0) parts.push(`${edges.length} edge${edges.length !== 1 ? 's' : ''}`);
+    if (totalCanvasObjects > 0) parts.push(`${totalCanvasObjects} canvas object${totalCanvasObjects !== 1 ? 's' : ''}`);
     toast.success(`Copied ${parts.join(' and ')}`);
     
     return true;

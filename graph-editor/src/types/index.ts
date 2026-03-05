@@ -876,12 +876,23 @@ export interface PostIt {
   y: number;
 }
 
+export interface Container {
+  id: string;
+  label: string;
+  colour: string;
+  width: number;
+  height: number;
+  x: number;
+  y: number;
+}
+
 export interface ConversionGraph {
   nodes: GraphNode[];
   edges: GraphEdge[];
   policies: Policies;
   metadata: Metadata;
   postits?: PostIt[];
+  containers?: Container[];
   debugging?: boolean;
   
   // Contexts: Data interests specification for nightly runner

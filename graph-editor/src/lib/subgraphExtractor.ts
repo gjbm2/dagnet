@@ -6,17 +6,31 @@
 
 import { GraphNode, GraphEdge, Graph, PostIt } from '../types';
 
+/** Maps ReactFlow ID prefix → graph array key for all canvas object types. */
+export const CANVAS_OBJECT_TYPES = [
+  { prefix: 'postit-', graphKey: 'postits' },
+  { prefix: 'container-', graphKey: 'containers' },
+  { prefix: 'analysis-', graphKey: 'canvasAnalyses' },
+] as const;
+
+export type CanvasObjectGraphKey = typeof CANVAS_OBJECT_TYPES[number]['graphKey'];
+
 export interface ExtractSubgraphOptions {
-  selectedNodeIds: string[]; // UUIDs of selected nodes
-  selectedPostitIds?: string[]; // IDs of selected post-its (without the 'postit-' prefix)
+  selectedNodeIds: string[];
+  /** Per-type selected canvas object IDs (without prefix). Keys match CANVAS_OBJECT_TYPES[].graphKey. */
+  selectedCanvasObjectIds?: Partial<Record<CanvasObjectGraphKey, string[]>>;
+  /** @deprecated Use selectedCanvasObjectIds.postits instead */
+  selectedPostitIds?: string[];
   graph: Graph;
-  includeConnectedEdges?: boolean; // Include edges between selected nodes (default: true)
+  includeConnectedEdges?: boolean;
 }
 
 export interface ExtractedSubgraph {
   nodes: GraphNode[];
   edges: GraphEdge[];
   postits: PostIt[];
+  containers: any[];
+  canvasAnalyses: any[];
 }
 
 /**
@@ -31,23 +45,20 @@ function findSubsumedNodes(
   const subsumedNodes = new Set<string>(selectedNodeIds);
   let changed = true;
 
-  // Keep iterating until no new nodes are added
   while (changed) {
     changed = false;
     
     for (const node of allNodes) {
       if (subsumedNodes.has(node.uuid)) {
-        continue; // Already included
+        continue;
       }
 
-      // Find all incoming edges to this node
       const incomingEdges = allEdges.filter(edge => edge.to === node.uuid);
       
       if (incomingEdges.length === 0) {
-        continue; // No incoming edges, this is a start node - don't include unless explicitly selected
+        continue;
       }
 
-      // Check if ALL incoming edges come from nodes we're including
       const allIncomingFromIncluded = incomingEdges.every(edge => 
         subsumedNodes.has(edge.from)
       );
@@ -63,62 +74,57 @@ function findSubsumedNodes(
 }
 
 /**
- * Extract a subgraph containing selected nodes, edges between them, and all subsumed nodes
- * 
- * This creates a complete subgraph where:
- * - Selected nodes are included
- * - All nodes wholly subsumed by selected nodes are included (nodes whose ALL incoming edges come from included nodes)
- * - All edges where BOTH source AND target are in the included nodes
- * - All node and edge properties are preserved
+ * Extract canvas objects from a graph by selected IDs.
+ * Works for any canvas object type (postits, containers, canvasAnalyses).
  */
+function extractCanvasObjects(
+  graph: any,
+  graphKey: string,
+  selectedIds: string[] | undefined
+): any[] {
+  if (!selectedIds || selectedIds.length === 0 || !graph[graphKey]) return [];
+  const idSet = new Set(selectedIds);
+  return graph[graphKey].filter((obj: any) => idSet.has(obj.id));
+}
+
 export function extractSubgraph(options: ExtractSubgraphOptions): ExtractedSubgraph {
-  const { selectedNodeIds, selectedPostitIds, graph, includeConnectedEdges = true } = options;
+  const { selectedNodeIds, selectedCanvasObjectIds, selectedPostitIds, graph, includeConnectedEdges = true } = options;
 
   if (!graph || !graph.nodes || !graph.edges) {
-    return { nodes: [], edges: [], postits: [] };
+    return { nodes: [], edges: [], postits: [], containers: [], canvasAnalyses: [] };
   }
 
   const selectedNodeSet = new Set(selectedNodeIds);
-
-  // Find all nodes that are wholly subsumed by the selected nodes
   const allIncludedNodes = findSubsumedNodes(selectedNodeSet, graph.nodes, graph.edges);
 
-  // Extract nodes that are in the included set
   const extractedNodes = graph.nodes.filter(node => 
     allIncludedNodes.has(node.uuid)
   );
 
-  // Extract edges where both source AND target are in the included nodes
   const extractedEdges = includeConnectedEdges
     ? graph.edges.filter(edge => 
         allIncludedNodes.has(edge.from) && allIncludedNodes.has(edge.to)
       )
     : [];
 
-  // Extract selected post-its
-  const extractedPostits: PostIt[] = [];
-  if (selectedPostitIds && selectedPostitIds.length > 0 && graph.postits) {
-    const postitIdSet = new Set(selectedPostitIds);
-    for (const p of graph.postits) {
-      if (postitIdSet.has(p.id)) extractedPostits.push(p);
-    }
+  // Merge legacy selectedPostitIds into the generalised map
+  const canvasIds: Partial<Record<CanvasObjectGraphKey, string[]>> = { ...selectedCanvasObjectIds };
+  if (selectedPostitIds && selectedPostitIds.length > 0) {
+    canvasIds.postits = [...(canvasIds.postits || []), ...selectedPostitIds];
   }
 
-  // Deep clone to avoid reference issues
   const clonedNodes = structuredClone(extractedNodes);
   const clonedEdges = structuredClone(extractedEdges);
-  const clonedPostits = structuredClone(extractedPostits);
 
   return {
     nodes: clonedNodes,
     edges: clonedEdges,
-    postits: clonedPostits,
+    postits: structuredClone(extractCanvasObjects(graph, 'postits', canvasIds.postits)),
+    containers: structuredClone(extractCanvasObjects(graph, 'containers', canvasIds.containers)),
+    canvasAnalyses: structuredClone(extractCanvasObjects(graph, 'canvasAnalyses', canvasIds.canvasAnalyses)),
   };
 }
 
-/**
- * Create a complete graph object from extracted subgraph
- */
 export function createGraphFromSubgraph(
   subgraph: ExtractedSubgraph,
   metadata: {
@@ -130,6 +136,8 @@ export function createGraphFromSubgraph(
     nodes: subgraph.nodes,
     edges: subgraph.edges,
     ...(subgraph.postits.length > 0 ? { postits: subgraph.postits } : {}),
+    ...(subgraph.containers.length > 0 ? { containers: subgraph.containers } : {}),
+    ...(subgraph.canvasAnalyses.length > 0 ? { canvasAnalyses: subgraph.canvasAnalyses } : {}),
     policies: {
       default_outcome: 'outcome',
       overflow_policy: 'normalize',
@@ -145,11 +153,7 @@ export function createGraphFromSubgraph(
   };
 }
 
-/**
- * Generate a unique name for a new subgraph
- */
 export function generateSubgraphName(selectedNodeCount: number): string {
   const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
   return `subgraph-${selectedNodeCount}nodes-${timestamp}`;
 }
-

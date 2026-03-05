@@ -1,6 +1,6 @@
 import React, { createContext, useContext } from 'react';
 
-export type ElementToolType = 'select' | 'pan' | 'new-node' | 'new-postit' | null;
+export type ElementToolType = 'select' | 'pan' | 'new-node' | 'new-postit' | 'new-container' | null;
 
 export interface ElementToolContextType {
   activeElementTool: ElementToolType;

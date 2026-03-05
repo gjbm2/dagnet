@@ -273,6 +273,16 @@ describe('AUTOMATED Schema / TypeScript / Python Parity', () => {
       assertTripleParity(schemaFields, tsFields, pyFields, 'PostIt');
     });
   });
+
+  describe('Container', () => {
+    it('must have IDENTICAL fields across schema, TypeScript, and Python', () => {
+      const schemaFields = getSchemaFields(schema, 'Container');
+      const tsFields = getTypeScriptFields('Container');
+      const pyFields = getPythonFields('Container');
+      
+      assertTripleParity(schemaFields, tsFields, pyFields, 'Container');
+    });
+  });
 });
 
 /**

@@ -330,6 +330,17 @@ class PostIt(BaseModel):
     y: float
 
 
+class Container(BaseModel):
+    """Canvas annotation: labelled grouping rectangle (visual only, not graph semantics)."""
+    id: str
+    label: str = Field("Group", max_length=256)
+    colour: str = Field(..., pattern=r"^#([0-9A-Fa-f]{6})$")
+    width: float = Field(..., gt=0)
+    height: float = Field(..., gt=0)
+    x: float
+    y: float
+
+
 class Graph(BaseModel):
     """Complete conversion funnel graph."""
     nodes: List[Node] = Field(..., min_length=1)
@@ -337,6 +348,7 @@ class Graph(BaseModel):
     policies: Policies
     metadata: Metadata
     postits: Optional[List[PostIt]] = Field(None, description="Canvas annotations: sticky notes (visual only, not graph semantics)")
+    containers: Optional[List[Container]] = Field(None, description="Canvas annotations: grouping rectangles (visual only, not graph semantics)")
     baseDSL: Optional[str] = Field(None, description="Base DSL that is always applied (e.g. global context filters)")
     currentQueryDSL: Optional[str] = Field(None, description="Current user query DSL for UI persistence")
     dataInterestsDSL: Optional[str] = Field(None, description="Pinned DSL for batch/overnight fetches")

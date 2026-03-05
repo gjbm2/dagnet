@@ -1,6 +1,7 @@
 import React, { useCallback } from 'react';
-import { MousePointer2, Hand, SquareIcon, StickyNote } from 'lucide-react';
+import { MousePointer2, Hand, SquareIcon, StickyNote, BoxSelect } from 'lucide-react';
 import { useElementTool, type ElementToolType } from '../contexts/ElementToolContext';
+import './ElementPalette.css';
 
 export type { ElementToolType };
 
@@ -16,6 +17,7 @@ const TOOLS = [
 const CREATION_ELEMENTS = [
   { id: 'new-node' as const, label: 'Conversion Node', icon: SquareIcon },
   { id: 'new-postit' as const, label: 'Post-It Note', icon: StickyNote },
+  { id: 'new-container' as const, label: 'Container', icon: BoxSelect },
 ];
 
 export function ElementPalette({ layout }: ElementPaletteProps) {
@@ -40,70 +42,84 @@ export function ElementPalette({ layout }: ElementPaletteProps) {
     if (onToolSelect) {
       onToolSelect(currentTool === elementId ? 'select' : elementId);
     } else {
-      const events: Record<string, string> = { 'new-node': 'dagnet:addNode', 'new-postit': 'dagnet:addPostit' };
+      const events: Record<string, string> = { 'new-node': 'dagnet:addNode', 'new-postit': 'dagnet:addPostit', 'new-container': 'dagnet:addContainer' };
       if (elementId) window.dispatchEvent(new CustomEvent(events[elementId]));
     }
   }, [onToolSelect, currentTool]);
 
   const isHorizontal = layout === 'horizontal';
 
-  const iconButton = (id: ElementToolType, label: string, Icon: React.ElementType, isActive: boolean, onClick: () => void, draggable?: boolean, onDragStart?: (e: React.DragEvent) => void) => (
-    <div
-      key={id}
-      draggable={draggable}
-      onDragStart={onDragStart}
-      onClick={onClick}
-      title={label}
-      tabIndex={0}
-      aria-label={label}
-      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onClick(); } }}
-      style={{
-        width: isHorizontal ? '34px' : '30px',
-        height: isHorizontal ? '34px' : '30px',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        borderRadius: '5px',
-        cursor: draggable ? 'grab' : 'pointer',
-        border: isActive ? '1.5px solid #3b82f6' : '1px solid transparent',
-        background: isActive ? 'rgba(59, 130, 246, 0.1)' : 'transparent',
-        transition: 'background 0.1s, border-color 0.1s',
-      }}
-      onMouseEnter={(e) => {
-        if (!isActive) e.currentTarget.style.background = 'rgba(0,0,0,0.05)';
-      }}
-      onMouseLeave={(e) => {
-        if (!isActive) e.currentTarget.style.background = 'transparent';
-      }}
-    >
-      <Icon size={isHorizontal ? 18 : 16} strokeWidth={1.5} />
-    </div>
-  );
+  const iconButton = (
+    id: ElementToolType,
+    label: string,
+    Icon: React.ElementType,
+    isActive: boolean,
+    onClick: () => void,
+    opts?: {
+      draggable?: boolean;
+      onDragStart?: (e: React.DragEvent) => void;
+      kind?: 'tool' | 'object';
+    }
+  ) => {
+    const draggable = opts?.draggable ?? false;
+    const kind = opts?.kind ?? 'tool';
+
+    return (
+      <button
+        key={id}
+        type="button"
+        className={[
+          'element-palette__button',
+          isHorizontal ? 'is-horizontal' : 'is-vertical',
+          kind === 'object' ? 'is-object' : 'is-tool',
+          isActive ? 'is-active' : '',
+          draggable ? 'is-draggable' : '',
+        ].filter(Boolean).join(' ')}
+        draggable={draggable}
+        onDragStart={opts?.onDragStart}
+        onClick={onClick}
+        title={label}
+        aria-label={label}
+      >
+        <Icon
+          className="element-palette__icon"
+          size={isHorizontal ? 20 : 18}
+          fill="none"
+          stroke="currentColor"
+          strokeWidth={2}
+        />
+      </button>
+    );
+  };
 
   return (
     <div
-      style={{
-        display: 'flex',
-        flexDirection: isHorizontal ? 'row' : 'column',
-        gap: '2px',
-        padding: '3px',
-        alignItems: 'center',
-      }}
+      className={[
+        'element-palette',
+        isHorizontal ? 'is-horizontal' : 'is-vertical',
+      ].join(' ')}
     >
-      {TOOLS.map((t) => iconButton(t.id, t.label, t.icon, currentTool === t.id, () => handleToolClick(t.id)))}
+      {TOOLS.map((t) =>
+        iconButton(
+          t.id,
+          t.label,
+          t.icon,
+          currentTool === t.id,
+          () => handleToolClick(t.id),
+          { kind: 'tool' }
+        )
+      )}
 
-      <div style={isHorizontal
-        ? { width: '1px', height: '20px', background: 'rgba(0,0,0,0.1)', margin: '0 2px' }
-        : { height: '1px', width: '20px', background: 'rgba(0,0,0,0.1)', margin: '2px 0' }
-      } />
+      <div className="element-palette__divider" />
 
       {CREATION_ELEMENTS.map((el) =>
         iconButton(
-          el.id, `${el.label} (click to place, or drag)`, el.icon,
+          el.id,
+          `${el.label} (click to place, or drag)`,
+          el.icon,
           currentTool === el.id,
           () => handleCreationClick(el.id),
-          true,
-          (e) => handleDragStart(e, el.id),
+          { draggable: true, onDragStart: (e) => handleDragStart(e, el.id), kind: 'object' }
         )
       )}
     </div>

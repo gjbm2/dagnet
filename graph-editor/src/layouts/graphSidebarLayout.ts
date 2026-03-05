@@ -41,7 +41,7 @@ export function getGraphEditorLayout(): LayoutData {
             // Element palette (fixed height, non-interactive chrome)
             {
               id: 'element-palette-panel',
-              size: 40,
+              size: 64,
               panelLock: { widthFlex: 0, heightFlex: 0 },
               tabs: [
                 {

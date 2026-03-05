@@ -67,6 +67,7 @@ interface ConversionNodeData {
     top: 'flat' | 'convex' | 'concave';
     bottom: 'flat' | 'convex' | 'concave';
   };
+  containerColour?: string;
   onUpdate: (id: string, data: Partial<ConversionNodeData>) => void;
   onDelete: (id: string) => void;
   onDoubleClick?: (id: string, field: string) => void;
@@ -75,8 +76,23 @@ interface ConversionNodeData {
 export default function ConversionNode({ data, selected }: NodeProps<ConversionNodeData>) {
   const { theme } = useTheme();
   const dark = theme === 'dark';
-  // Canvas background must match the halo colour for edge-clipping to work
-  const canvasBg = dark ? '#1e1e1e' : '#f8fafc';
+  // Canvas background must match the halo colour for edge-clipping to work.
+  // If inside a container, blend the container fill tint with the canvas background.
+  const baseCanvasBg = dark ? '#1e1e1e' : '#f8fafc';
+  const canvasBg = (() => {
+    if (!data.containerColour) return baseCanvasBg;
+    const FILL_OPACITY = 0.08;
+    const hexToRgb = (hex: string): [number, number, number] => {
+      const h = hex.replace('#', '');
+      return [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16)];
+    };
+    const [br, bg, bb] = hexToRgb(baseCanvasBg);
+    const [cr, cg, cb] = hexToRgb(data.containerColour);
+    const r = Math.round(br * (1 - FILL_OPACITY) + cr * FILL_OPACITY);
+    const g = Math.round(bg * (1 - FILL_OPACITY) + cg * FILL_OPACITY);
+    const b = Math.round(bb * (1 - FILL_OPACITY) + cb * FILL_OPACITY);
+    return `#${r.toString(16).padStart(2, '0')}${g.toString(16).padStart(2, '0')}${b.toString(16).padStart(2, '0')}`;
+  })();
   const nodeFill = dark ? '#2d2d2d' : '#fff';
   const nodeText = dark ? '#e0e0e0' : '#333';
   const nodeBorder = dark ? '#555' : '#ddd';

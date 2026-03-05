@@ -22,14 +22,18 @@ interface PropertiesPanelWrapperProps {
  */
 export default function PropertiesPanelWrapper({ tabId }: PropertiesPanelWrapperProps) {
   // Get current selection from context (updates automatically when selection changes)
-  const { selectedNodeId, selectedEdgeId, selectedPostitId, onSelectedNodeChange, onSelectedEdgeChange } = useSelectionContext();
+  const { selectedNodeId, selectedEdgeId, selectedAnnotationId, selectedAnnotationType, onSelectedNodeChange, onSelectedEdgeChange } = useSelectionContext();
   const graphStore = useGraphStore();
   const { graph, setGraph, saveHistoryState, currentDSL } = graphStore;
   const { tabs } = useTabContext();
   const graphFileId = tabId ? tabs.find(t => t.id === tabId)?.fileId ?? null : null;
   
-  // Determine panel title based on selection
-  const title = selectedPostitId
+  const selectedPostitId = selectedAnnotationType === 'postit' ? selectedAnnotationId : null;
+  const selectedContainerId = selectedAnnotationType === 'container' ? selectedAnnotationId : null;
+
+  const title = selectedContainerId
+    ? 'Container Properties'
+    : selectedPostitId
     ? 'Post-It Properties'
     : selectedNodeId 
     ? 'Node Properties'
@@ -197,6 +201,7 @@ export default function PropertiesPanelWrapper({ tabId }: PropertiesPanelWrapper
           selectedNodeId={selectedNodeId}
           selectedEdgeId={selectedEdgeId}
           selectedPostitId={selectedPostitId}
+          selectedContainerId={selectedContainerId}
           onSelectedNodeChange={onSelectedNodeChange}
           onSelectedEdgeChange={onSelectedEdgeChange}
           tabId={tabId}

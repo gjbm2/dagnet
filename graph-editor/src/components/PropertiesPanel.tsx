@@ -12,6 +12,7 @@ import { ParameterEditor } from './ParameterEditor';
 import VariantWeightInput from './VariantWeightInput';
 import CollapsibleSection from './CollapsibleSection';
 import { PostItColourPalette } from './PostItColourPalette';
+import { CONTAINER_COLOURS } from './nodes/ContainerNode';
 import { getNextAvailableColour } from '@/lib/conditionalColours';
 import { useSnapToSlider } from '@/hooks/useSnapToSlider';
 import { ParameterSelector } from './ParameterSelector';
@@ -111,6 +112,7 @@ interface PropertiesPanelProps {
   selectedEdgeId: string | null;
   onSelectedEdgeChange: (id: string | null) => void;
   selectedPostitId?: string | null;
+  selectedContainerId?: string | null;
   tabId?: string;
 }
 
@@ -120,6 +122,7 @@ export default function PropertiesPanel({
   selectedEdgeId, 
   onSelectedEdgeChange,
   selectedPostitId,
+  selectedContainerId,
   tabId
 }: PropertiesPanelProps) {
   const { graph, setGraph, saveHistoryState, currentDSL } = useGraphStore();
@@ -1142,7 +1145,7 @@ export default function PropertiesPanel({
     <div className="properties-panel">
       {/* Content */}
       <div className="properties-panel-content">
-        {!selectedNodeId && !selectedEdgeId && !selectedPostitId && (
+        {!selectedNodeId && !selectedEdgeId && !selectedPostitId && !selectedContainerId && (
           <>
             <CollapsibleSection title="Graph Metadata" defaultOpen={true} icon={FileJson}>
               <div className="property-section">
@@ -2969,6 +2972,68 @@ export default function PropertiesPanel({
             )}
           </div>
         )}
+
+        {selectedContainerId && (() => {
+          const container = graph?.containers?.find((c: any) => c.id === selectedContainerId);
+          if (!container) return <div style={{ textAlign: 'center', color: '#666', padding: '20px' }}>Container not found</div>;
+          return (
+            <div>
+              <CollapsibleSection title="Container Properties" defaultOpen={true}>
+                <div className="property-section">
+                  <div className="property-row">
+                    <label className="property-label">Label</label>
+                    <input
+                      className="property-input"
+                      value={container.label}
+                      onChange={(e) => {
+                        const nextGraph = structuredClone(graph);
+                        const c = nextGraph.containers?.find((c: any) => c.id === selectedContainerId);
+                        if (c) c.label = e.target.value;
+                        setGraph(nextGraph);
+                      }}
+                      onBlur={() => {
+                        if (graph?.metadata) {
+                          const nextGraph = structuredClone(graph);
+                          if (nextGraph.metadata) nextGraph.metadata.updated_at = new Date().toISOString();
+                          setGraph(nextGraph);
+                        }
+                        saveHistoryState('Update container label');
+                      }}
+                      style={{ width: '100%' }}
+                      placeholder="Group name..."
+                    />
+                  </div>
+                  <div className="property-row">
+                    <label className="property-label">Colour</label>
+                    <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
+                      {CONTAINER_COLOURS.map((colour) => (
+                        <div
+                          key={colour}
+                          onClick={() => {
+                            const nextGraph = structuredClone(graph);
+                            const c = nextGraph.containers?.find((c: any) => c.id === selectedContainerId);
+                            if (c) {
+                              c.colour = colour;
+                              if (nextGraph.metadata) nextGraph.metadata.updated_at = new Date().toISOString();
+                              setGraph(nextGraph);
+                              saveHistoryState('Update container colour');
+                            }
+                          }}
+                          style={{
+                            width: '24px', height: '24px', borderRadius: '4px',
+                            backgroundColor: colour, cursor: 'pointer',
+                            border: container.colour === colour ? '2px solid #333' : '1px solid rgba(0,0,0,0.15)',
+                            boxSizing: 'border-box',
+                          }}
+                        />
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              </CollapsibleSection>
+            </div>
+          );
+        })()}
 
         {selectedPostitId && (() => {
           const postit = graph?.postits?.find((p: any) => p.id === selectedPostitId);

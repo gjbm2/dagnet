@@ -55,8 +55,17 @@ export default function PostItNode({ data, selected }: NodeProps<PostItNodeData>
     }
   }, [selected, editing, interactionDisabled]);
 
+  const pendingTextRef = useRef<string | null>(null);
+
   const handleChange = useCallback((md: string) => {
-    if (md !== postit.text) onUpdate(postit.id, { text: md });
+    pendingTextRef.current = md;
+  }, []);
+
+  const handleTextCommit = useCallback(() => {
+    if (pendingTextRef.current !== null && pendingTextRef.current !== postit.text) {
+      onUpdate(postit.id, { text: pendingTextRef.current });
+    }
+    pendingTextRef.current = null;
   }, [postit.id, postit.text, onUpdate]);
 
   const handlePointerDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
@@ -160,7 +169,10 @@ export default function PostItNode({ data, selected }: NodeProps<PostItNodeData>
           editing={editing}
           focusAt={focusAt}
           onFocusAtApplied={() => setFocusAt(null)}
-          onEditingChange={setEditing}
+          onEditingChange={(isEditing) => {
+            if (!isEditing) handleTextCommit();
+            setEditing(isEditing);
+          }}
           onChange={handleChange}
         />
       </div>

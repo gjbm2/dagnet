@@ -152,13 +152,23 @@ The core behaviour: when a container starts dragging, identify which conversion 
 
 ### 6.1 Containment Test
 
-A conversion node is "inside" a container if the node's centre point falls within the container's bounding rectangle. The centre is at `(node.position.x + node.measured.width / 2, node.position.y + node.measured.height / 2)`. ReactFlow provides `node.measured?.width` and `node.measured?.height` (v11) for the measured dimensions. Fallback to a default (e.g. 150×60) if measurements are not yet available.
+A child object (conversion node or nested container) is "inside" a container if the child's **entire bounding rectangle** falls within the container's bounding rectangle. This means all four corners of the child must be inside the container — not just the centre point.
+
+For a child at position `(cx, cy)` with dimensions `(cw, ch)` and a container at `(px, py)` with dimensions `(pw, ph)`:
+
+```
+contained = cx >= px && cy >= py && (cx + cw) <= (px + pw) && (cy + ch) <= (py + ph)
+```
+
+ReactFlow provides `node.measured?.width` and `node.measured?.height` (v11) for measured dimensions. Fallback to defaults (150×60 for conversion nodes, the stored `width`/`height` for containers) if measurements are not yet available.
+
+**Why full-rect, not centre-point**: centre-point containment creates confusing UX when a large node's centre is inside a container but half of it visually overhangs the container boundary. The user expects "inside" to mean visually enclosed.
 
 ### 6.2 Drag Mechanics
 
-1. **`onNodeDragStart`** (container node detected by type/ID prefix) — snapshot the set of conversion node IDs whose centres are within the container bounds. Store this set in a ref.
-2. **`onNodeDrag`** (fires on each drag tick) — compute the position delta since the last tick. For each node in the contained set, update its position by the same delta. Use `setNodes()` to batch-apply.
-3. **`onNodeDragStop`** — clear the contained set ref. The final positions are written to the graph via the normal `fromFlow()` path. Call `saveHistoryState()` once — this captures the container move and all node moves as a single undo step.
+1. **`onNodeDragStart`** (container node detected by type/ID prefix) — snapshot the set of IDs of all objects fully contained within the container's bounds (conversion nodes AND nested containers, recursively). Store this set in a ref.
+2. **`onNodeDrag`** (fires on each drag tick) — compute the position delta since the last tick. For each object in the contained set, update its position by the same delta. Use `setNodes()` to batch-apply.
+3. **`onNodeDragStop`** — clear the contained set ref. The final positions are written to the graph via the normal `fromFlow()` path. Call `saveHistoryState()` once — this captures the container move and all contained object moves as a single undo step.
 
 ### 6.3 Edge Cases
 
@@ -166,9 +176,11 @@ A conversion node is "inside" a container if the node's centre point falls withi
 
 **Overlapping containers**: if a node is inside two overlapping containers and both are dragged simultaneously (multi-select drag), the node moves once (avoid double-applying the delta). The simpler constraint: only the explicitly dragged container moves its contents.
 
-**Container inside container**: not supported. Containers do not move other containers. Only conversion nodes are subject to group drag.
+**Container inside container**: fully supported. When a parent container is dragged, any nested container whose full bounding rect is inside the parent moves with it. The containment snapshot is computed recursively at drag start: if container A contains container B, and container B contains nodes X and Y, then dragging A moves B, X, and Y. The recursion is bounded by the number of containers (typically < 10) and runs only once at drag start.
 
-**Post-its and charts inside container**: not affected by group drag. Only conversion nodes move with the container.
+**Post-its inside container**: post-its whose full bounding rect is inside a container move with it during group drag — they are spatially grouped visual objects.
+
+**Canvas analyses inside container**: same as post-its — move with the container if fully enclosed.
 
 **Multi-select drag with container + contained nodes**: if the user selects a container AND some of the nodes inside it, then drags the selection, both ReactFlow's multi-select drag and the container's group-drag would move the contained nodes — double-movement. The group drag logic must **exclude nodes that are part of the current ReactFlow selection** (i.e. nodes with `selected: true`). These are already being dragged by ReactFlow; the container should not move them additionally.
 
@@ -191,7 +203,7 @@ Both hard-code `canvasBg` (`dark ? '#1e1e1e' : '#f8fafc'`). When a node is insid
 
 The halo colour must be the **effective background** at the node's position — the canvas background blended with the container's fill tint.
 
-**In `toFlow()`**: for each conversion node, check if its centre falls within any container's bounding rectangle. If so, compute the effective background colour:
+**In `toFlow()`**: for each conversion node, check if its full bounding rect falls within any container's bounding rectangle (same containment test as §6.1). If so, compute the effective background colour:
 
 ```
 effectiveBg = blend(canvasBg, containerColour, containerFillOpacity)
@@ -223,7 +235,7 @@ The blend uses the dark-mode canvas background (`#1e1e1e`) as the base when in d
 
 ## 8. Resize Behaviour
 
-Resizing a container does NOT move nodes. It only changes the visual boundary. Nodes that were "inside" before resize might be outside after, and vice versa. Containment is ephemeral and spatial, not structural.
+Resizing a container does NOT move contained objects. It only changes the visual boundary. Objects that were "inside" before resize might be outside after, and vice versa. Containment is ephemeral and spatial, not structural.
 
 ---
 
