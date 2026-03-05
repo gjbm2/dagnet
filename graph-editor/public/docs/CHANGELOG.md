@@ -1,4 +1,11 @@
 # DagNet Release Notes
+## Version 1.7.0b
+**Released:** 5-Mar-26
+
+Dagnet now has post-it notes and containers (and a tools palette, along the lines you'd expect for an app of this type). Canvas graphs coming shortly.
+
+---
+
 
 ## Version 1.6.17b–1.6.19b (3-Mar-26 to 4-Mar-26)
 **Sample data overhaul, cohort maturity curves, fetch fixes**
