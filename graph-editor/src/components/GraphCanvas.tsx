@@ -353,7 +353,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedPos
   const scenariosContext = useScenariosContextOptional();
   
   // Copy-paste hook for paste node functionality
-  const { copiedItem, canPaste } = useCopyPaste();
+  const { copiedItem, canPaste, copySubgraph } = useCopyPaste();
   const copiedNode = copiedItem?.type === 'dagnet-copy' && copiedItem.objectType === 'node' ? copiedItem : null;
   const copiedSubgraph = copiedItem?.type === 'dagnet-subgraph' ? copiedItem : null;
   
@@ -1624,22 +1624,22 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedPos
     return () => window.removeEventListener('dagnet:forceRedraw', handleForceRedraw);
   }, []);
 
-  // Listen for selection queries (for Copy Vars from Edit menu)
+  // Listen for selection queries (for Copy/Cut/Paste from Edit menu)
   useEffect(() => {
     const handler = (e: any) => {
       if (!e?.detail) return;
       
-      // Get currently selected nodes and edges
       const selectedNodes = nodes.filter(n => n.selected);
       const selectedEdges = edges.filter(e => e.selected);
       
-      // Populate the detail object with UUIDs
-      e.detail.selectedNodeUuids = selectedNodes.map(n => n.id); // ReactFlow IDs are UUIDs
-      e.detail.selectedEdgeUuids = selectedEdges.map(e => e.id); // ReactFlow IDs are UUIDs
+      // Separate canvas object nodes from conversion nodes
+      e.detail.selectedNodeUuids = selectedNodes.filter(n => !isCanvasObjectNode(n.id)).map(n => n.id);
+      e.detail.selectedEdgeUuids = selectedEdges.map(e => e.id);
+      e.detail.selectedPostitIds = selectedNodes.filter(n => n.id.startsWith('postit-')).map(n => n.id.replace('postit-', ''));
     };
     window.addEventListener('dagnet:querySelection', handler as any);
     return () => window.removeEventListener('dagnet:querySelection', handler as any);
-  }, [nodes, edges]);
+  }, [nodes, edges, isCanvasObjectNode]);
 
   // Listen for select all nodes request (from Edit menu)
   useEffect(() => {
@@ -4888,12 +4888,13 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedPos
       return;
     }
     
-    // Calculate offset from first node position to target position
+    // Calculate offset from first item's position to target position
     const firstNode = copiedSubgraph.nodes[0];
-    const firstNodeX = firstNode?.layout?.x ?? 0;
-    const firstNodeY = firstNode?.layout?.y ?? 0;
-    const offsetX = x - firstNodeX;
-    const offsetY = y - firstNodeY;
+    const firstPostit = copiedSubgraph.postits?.[0];
+    const refX = firstNode?.layout?.x ?? firstPostit?.x ?? 0;
+    const refY = firstNode?.layout?.y ?? firstPostit?.y ?? 0;
+    const offsetX = x - refX;
+    const offsetY = y - refY;
     
     // Import updateManager dynamically to avoid circular dependencies
     const { updateManager } = await import('../services/UpdateManager');
@@ -4902,7 +4903,8 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedPos
       graph,
       copiedSubgraph.nodes,
       copiedSubgraph.edges,
-      { x: offsetX, y: offsetY }
+      { x: offsetX, y: offsetY },
+      copiedSubgraph.postits
     );
     
     setGraph(result.graph);
@@ -4913,26 +4915,34 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedPos
     setContextMenu(null);
     
     const parts: string[] = [];
-    parts.push(`${result.pastedNodeUuids.length} node${result.pastedNodeUuids.length !== 1 ? 's' : ''}`);
+    if (result.pastedNodeUuids.length > 0) {
+      parts.push(`${result.pastedNodeUuids.length} node${result.pastedNodeUuids.length !== 1 ? 's' : ''}`);
+    }
     if (result.pastedEdgeUuids.length > 0) {
       parts.push(`${result.pastedEdgeUuids.length} edge${result.pastedEdgeUuids.length !== 1 ? 's' : ''}`);
     }
+    if (result.pastedPostitIds.length > 0) {
+      parts.push(`${result.pastedPostitIds.length} post-it${result.pastedPostitIds.length !== 1 ? 's' : ''}`);
+    }
     toast.success(`Pasted ${parts.join(' and ')}`);
     
-    // Select the new nodes
+    // Select the pasted items
     setTimeout(() => {
       const pastedUuidSet = new Set(result.pastedNodeUuids);
+      const pastedPostitRfIds = new Set(result.pastedPostitIds.map(id => `postit-${id}`));
       setNodes((nodes) => 
         nodes.map((node) => ({
           ...node,
-          selected: pastedUuidSet.has(node.id)
+          selected: pastedUuidSet.has(node.id) || pastedPostitRfIds.has(node.id)
         }))
       );
       if (result.pastedNodeUuids.length > 0) {
         onSelectedNodeChange(result.pastedNodeUuids[0]);
+      } else if (result.pastedPostitIds.length > 0) {
+        onSelectedPostitChange?.(result.pastedPostitIds[0]);
       }
     }, 100);
-  }, [graph, setGraph, copiedSubgraph, saveHistoryState, setNodes, onSelectedNodeChange]);
+  }, [graph, setGraph, copiedSubgraph, saveHistoryState, setNodes, onSelectedNodeChange, onSelectedPostitChange]);
 
   // Drop node at specific position (from drag & drop)
   const dropNodeAtPosition = useCallback(async (nodeId: string, x: number, y: number) => {
@@ -5562,7 +5572,11 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedPos
           )}
           {copiedSubgraph && (
             <div className="dagnet-popup-item" onClick={(e) => { e.stopPropagation(); pasteSubgraphAtPosition(contextMenu.flowX, contextMenu.flowY); }}>
-              📋 Paste ({copiedSubgraph.nodes.length} nodes, {copiedSubgraph.edges.length} edges)
+              📋 Paste ({[
+                copiedSubgraph.nodes.length > 0 && `${copiedSubgraph.nodes.length} node${copiedSubgraph.nodes.length !== 1 ? 's' : ''}`,
+                copiedSubgraph.edges.length > 0 && `${copiedSubgraph.edges.length} edge${copiedSubgraph.edges.length !== 1 ? 's' : ''}`,
+                (copiedSubgraph.postits?.length ?? 0) > 0 && `${copiedSubgraph.postits!.length} post-it${copiedSubgraph.postits!.length !== 1 ? 's' : ''}`,
+              ].filter(Boolean).join(', ')})
             </div>
           )}
           {nodes.length > 0 && (
@@ -5659,6 +5673,28 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedPos
                   reorderPostitNodes(nextGraph.postits);
                 }
               }
+            }}
+            onCopy={(id) => {
+              const p = graph.postits?.find((pi: any) => pi.id === id);
+              if (p) {
+                copySubgraph([], [], undefined, [p]);
+              }
+              setPostitContextMenu(null);
+            }}
+            onCut={(id) => {
+              const p = graph.postits?.find((pi: any) => pi.id === id);
+              if (p) {
+                copySubgraph([], [], undefined, [p]);
+                const nextGraph = structuredClone(graph);
+                if (nextGraph.postits) {
+                  nextGraph.postits = nextGraph.postits.filter((pi: any) => pi.id !== id);
+                  if (nextGraph.metadata) nextGraph.metadata.updated_at = new Date().toISOString();
+                  setGraph(nextGraph);
+                  saveHistoryState('Cut post-it');
+                  onSelectedPostitChange?.(null);
+                }
+              }
+              setPostitContextMenu(null);
             }}
             onDelete={(id) => {
               const nextGraph = structuredClone(graph);

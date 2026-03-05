@@ -4,10 +4,11 @@
  * Utility for extracting a subgraph from selected nodes
  */
 
-import { GraphNode, GraphEdge, Graph } from '../types';
+import { GraphNode, GraphEdge, Graph, PostIt } from '../types';
 
 export interface ExtractSubgraphOptions {
   selectedNodeIds: string[]; // UUIDs of selected nodes
+  selectedPostitIds?: string[]; // IDs of selected post-its (without the 'postit-' prefix)
   graph: Graph;
   includeConnectedEdges?: boolean; // Include edges between selected nodes (default: true)
 }
@@ -15,6 +16,7 @@ export interface ExtractSubgraphOptions {
 export interface ExtractedSubgraph {
   nodes: GraphNode[];
   edges: GraphEdge[];
+  postits: PostIt[];
 }
 
 /**
@@ -70,10 +72,10 @@ function findSubsumedNodes(
  * - All node and edge properties are preserved
  */
 export function extractSubgraph(options: ExtractSubgraphOptions): ExtractedSubgraph {
-  const { selectedNodeIds, graph, includeConnectedEdges = true } = options;
+  const { selectedNodeIds, selectedPostitIds, graph, includeConnectedEdges = true } = options;
 
   if (!graph || !graph.nodes || !graph.edges) {
-    return { nodes: [], edges: [] };
+    return { nodes: [], edges: [], postits: [] };
   }
 
   const selectedNodeSet = new Set(selectedNodeIds);
@@ -93,13 +95,24 @@ export function extractSubgraph(options: ExtractSubgraphOptions): ExtractedSubgr
       )
     : [];
 
-  // Deep clone the nodes and edges to avoid reference issues
+  // Extract selected post-its
+  const extractedPostits: PostIt[] = [];
+  if (selectedPostitIds && selectedPostitIds.length > 0 && graph.postits) {
+    const postitIdSet = new Set(selectedPostitIds);
+    for (const p of graph.postits) {
+      if (postitIdSet.has(p.id)) extractedPostits.push(p);
+    }
+  }
+
+  // Deep clone to avoid reference issues
   const clonedNodes = structuredClone(extractedNodes);
   const clonedEdges = structuredClone(extractedEdges);
+  const clonedPostits = structuredClone(extractedPostits);
 
   return {
     nodes: clonedNodes,
-    edges: clonedEdges
+    edges: clonedEdges,
+    postits: clonedPostits,
   };
 }
 
@@ -116,6 +129,7 @@ export function createGraphFromSubgraph(
   return {
     nodes: subgraph.nodes,
     edges: subgraph.edges,
+    ...(subgraph.postits.length > 0 ? { postits: subgraph.postits } : {}),
     policies: {
       default_outcome: 'outcome',
       overflow_policy: 'normalize',

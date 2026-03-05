@@ -184,10 +184,11 @@ export function useCopyPaste() {
   const copySubgraph = useCallback(async (
     nodes: GraphNode[],
     edges: GraphEdge[],
-    sourceGraphId?: string
+    sourceGraphId?: string,
+    postits?: PostIt[]
   ): Promise<boolean> => {
-    if (nodes.length === 0) {
-      toast.error('No nodes selected to copy');
+    if (nodes.length === 0 && (!postits || postits.length === 0)) {
+      toast.error('Nothing selected to copy');
       return false;
     }
     
@@ -195,6 +196,7 @@ export function useCopyPaste() {
       type: 'dagnet-subgraph',
       nodes: structuredClone(nodes),
       edges: structuredClone(edges),
+      ...(postits && postits.length > 0 ? { postits: structuredClone(postits) } : {}),
       sourceGraphId,
       timestamp: Date.now(),
     };
@@ -203,7 +205,6 @@ export function useCopyPaste() {
     try {
       await navigator.clipboard.writeText(JSON.stringify(data, null, 2));
     } catch (e) {
-      // Clipboard write failed - not critical, memory cache still works
       console.warn('[useCopyPaste] Clipboard write failed (memory cache still works):', e);
     }
     
@@ -213,14 +214,20 @@ export function useCopyPaste() {
     console.log('[useCopyPaste] Copied subgraph to memory cache:', {
       nodeCount: nodes.length,
       edgeCount: edges.length,
+      postitCount: postits?.length ?? 0,
       sourceGraphId,
     });
     
     // User feedback
     const parts: string[] = [];
-    parts.push(`${nodes.length} node${nodes.length !== 1 ? 's' : ''}`);
+    if (nodes.length > 0) {
+      parts.push(`${nodes.length} node${nodes.length !== 1 ? 's' : ''}`);
+    }
     if (edges.length > 0) {
       parts.push(`${edges.length} edge${edges.length !== 1 ? 's' : ''}`);
+    }
+    if (postits && postits.length > 0) {
+      parts.push(`${postits.length} post-it${postits.length !== 1 ? 's' : ''}`);
     }
     toast.success(`Copied ${parts.join(' and ')}`);
     

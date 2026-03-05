@@ -15,6 +15,8 @@ interface PostItContextMenuProps {
   onBringForward: (id: string) => void;
   onSendBackward: (id: string) => void;
   onSendToBack: (id: string) => void;
+  onCopy: (id: string) => void;
+  onCut: (id: string) => void;
   onDelete: (id: string) => void;
   onClose: () => void;
 }
@@ -35,7 +37,7 @@ const FONT_SIZE_LABELS: Record<string, string> = {
   XL: 'Extra Large',
 };
 
-export function PostItContextMenu({ x, y, postitId, currentColour, currentFontSize, postitCount, onUpdateColour, onUpdateFontSize, onBringToFront, onBringForward, onSendBackward, onSendToBack, onDelete, onClose }: PostItContextMenuProps) {
+export function PostItContextMenu({ x, y, postitId, currentColour, currentFontSize, postitCount, onUpdateColour, onUpdateFontSize, onBringToFront, onBringForward, onSendBackward, onSendToBack, onCopy, onCut, onDelete, onClose }: PostItContextMenuProps) {
   const items = useMemo((): ContextMenuItem[] => {
     const colourItems: ContextMenuItem[] = POSTIT_COLOURS.map((colour) => ({
       label: `${colour === currentColour ? '● ' : ''}${COLOUR_NAMES[colour] || colour}`,
@@ -64,11 +66,13 @@ export function PostItContextMenu({ x, y, postitId, currentColour, currentFontSi
 
     result.push(
       { label: '', onClick: () => {}, divider: true },
+      { label: 'Copy', onClick: () => onCopy(postitId) },
+      { label: 'Cut', onClick: () => onCut(postitId) },
       { label: 'Delete', onClick: () => onDelete(postitId) },
     );
 
     return result;
-  }, [postitId, currentColour, currentFontSize, postitCount, onUpdateColour, onUpdateFontSize, onBringToFront, onBringForward, onSendBackward, onSendToBack, onDelete]);
+  }, [postitId, currentColour, currentFontSize, postitCount, onUpdateColour, onUpdateFontSize, onBringToFront, onBringForward, onSendBackward, onSendToBack, onCopy, onCut, onDelete]);
 
   return <ContextMenu x={x} y={y} items={items} onClose={onClose} />;
 }

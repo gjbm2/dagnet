@@ -54,10 +54,11 @@ export function EditMenu() {
     const checkSelection = () => {
       const detail = {
         selectedNodeUuids: [] as string[],
-        selectedEdgeUuids: [] as string[]
+        selectedEdgeUuids: [] as string[],
+        selectedPostitIds: [] as string[],
       };
       window.dispatchEvent(new CustomEvent('dagnet:querySelection', { detail }));
-      setHasSelection(detail.selectedNodeUuids.length > 0);
+      setHasSelection(detail.selectedNodeUuids.length > 0 || detail.selectedPostitIds.length > 0);
     };
     
     // Check on mount and periodically
@@ -201,7 +202,6 @@ export function EditMenu() {
 
   const handleCut = async () => {
     if (isGraphEditor && activeTab?.fileId) {
-      // Graph editor - cut = copy + delete
       const store = getGraphStore(activeTab.fileId);
       if (!store) {
         toast.error('Graph not loaded');
@@ -215,49 +215,71 @@ export function EditMenu() {
         return;
       }
       
-      // Query for selected nodes
       const detail = {
         selectedNodeUuids: [] as string[],
-        selectedEdgeUuids: [] as string[]
+        selectedEdgeUuids: [] as string[],
+        selectedPostitIds: [] as string[],
       };
       window.dispatchEvent(new CustomEvent('dagnet:querySelection', { detail }));
       
-      if (detail.selectedNodeUuids.length === 0) {
-        toast.error('No nodes selected to cut');
+      if (detail.selectedNodeUuids.length === 0 && detail.selectedPostitIds.length === 0) {
+        toast.error('Nothing selected to cut');
         return;
       }
       
       // First copy the selection
       const subgraph = extractSubgraph({
         selectedNodeIds: detail.selectedNodeUuids,
+        selectedPostitIds: detail.selectedPostitIds,
         graph,
         includeConnectedEdges: true,
       });
       
-      await copySubgraph(subgraph.nodes, subgraph.edges, activeTab.fileId);
+      await copySubgraph(subgraph.nodes, subgraph.edges, activeTab.fileId, subgraph.postits);
       
-      // Then delete the nodes using UpdateManager
-      const result = updateManager.deleteNodes(graph, detail.selectedNodeUuids);
+      // Then delete: nodes via UpdateManager, post-its by filtering
+      let nextGraph = graph;
+      let deletedNodeCount = 0;
+      let deletedEdgeCount = 0;
       
-      // Apply the change
-      await graphMutationService.updateGraph(graph, result.graph, state.setGraph);
+      if (detail.selectedNodeUuids.length > 0) {
+        const result = updateManager.deleteNodes(nextGraph, detail.selectedNodeUuids);
+        nextGraph = result.graph;
+        deletedNodeCount = result.deletedNodeCount;
+        deletedEdgeCount = result.deletedEdgeCount;
+      }
+      
+      let deletedPostitCount = 0;
+      if (detail.selectedPostitIds.length > 0 && nextGraph.postits) {
+        const postitIdSet = new Set(detail.selectedPostitIds);
+        const cloned = structuredClone(nextGraph);
+        cloned.postits = cloned.postits.filter((p: any) => !postitIdSet.has(p.id));
+        deletedPostitCount = detail.selectedPostitIds.length;
+        if (cloned.metadata) cloned.metadata.updated_at = new Date().toISOString();
+        nextGraph = cloned;
+      }
+      
+      await graphMutationService.updateGraph(graph, nextGraph, state.setGraph);
       state.saveHistoryState('Cut selection');
       
       const parts: string[] = [];
-      parts.push(`${result.deletedNodeCount} node${result.deletedNodeCount !== 1 ? 's' : ''}`);
-      if (result.deletedEdgeCount > 0) {
-        parts.push(`${result.deletedEdgeCount} edge${result.deletedEdgeCount !== 1 ? 's' : ''}`);
+      if (deletedNodeCount > 0) {
+        parts.push(`${deletedNodeCount} node${deletedNodeCount !== 1 ? 's' : ''}`);
+      }
+      if (deletedEdgeCount > 0) {
+        parts.push(`${deletedEdgeCount} edge${deletedEdgeCount !== 1 ? 's' : ''}`);
+      }
+      if (deletedPostitCount > 0) {
+        parts.push(`${deletedPostitCount} post-it${deletedPostitCount !== 1 ? 's' : ''}`);
       }
       toast.success(`Cut ${parts.join(' and ')}`);
     } else {
-      // Non-graph view - use native cut
       document.execCommand('cut');
     }
   };
 
   const handleCopy = async () => {
     if (isGraphEditor && activeTab?.fileId) {
-      // Graph editor - copy selected nodes and edges as subgraph
       const store = getGraphStore(activeTab.fileId);
       if (!store) {
         toast.error('Graph not loaded');
@@ -270,39 +292,35 @@ export function EditMenu() {
         return;
       }
       
-      // Query for selected nodes
       const detail = {
         selectedNodeUuids: [] as string[],
-        selectedEdgeUuids: [] as string[]
+        selectedEdgeUuids: [] as string[],
+        selectedPostitIds: [] as string[],
       };
       window.dispatchEvent(new CustomEvent('dagnet:querySelection', { detail }));
       
-      if (detail.selectedNodeUuids.length === 0) {
-        toast.error('No nodes selected to copy');
+      if (detail.selectedNodeUuids.length === 0 && detail.selectedPostitIds.length === 0) {
+        toast.error('Nothing selected to copy');
         return;
       }
       
-      // Extract subgraph using the existing extractor
       const subgraph = extractSubgraph({
         selectedNodeIds: detail.selectedNodeUuids,
+        selectedPostitIds: detail.selectedPostitIds,
         graph,
         includeConnectedEdges: true,
       });
       
-      // Copy to clipboard
-      await copySubgraph(subgraph.nodes, subgraph.edges, activeTab.fileId);
+      await copySubgraph(subgraph.nodes, subgraph.edges, activeTab.fileId, subgraph.postits);
     } else {
-      // Non-graph view - use native copy
       document.execCommand('copy');
     }
   };
 
   const handlePaste = async () => {
     if (isGraphEditor && activeTab?.fileId) {
-      // Graph editor - paste subgraph
       const subgraph = getCopiedSubgraph();
       if (!subgraph) {
-        // No dagnet subgraph - fall back to native paste
         document.execCommand('paste');
         return;
       }
@@ -320,26 +338,29 @@ export function EditMenu() {
         return;
       }
       
-      // Use UpdateManager to paste with ID conflict handling
       const result = updateManager.pasteSubgraph(
         currentGraph,
         subgraph.nodes,
         subgraph.edges,
-        { x: 50, y: 50 } // Offset to avoid exact overlap
+        { x: 50, y: 50 },
+        subgraph.postits
       );
       
-      // Apply the change
       await graphMutationService.updateGraph(currentGraph, result.graph, state.setGraph);
       state.saveHistoryState('Paste subgraph');
       
       const parts: string[] = [];
-      parts.push(`${result.pastedNodeUuids.length} node${result.pastedNodeUuids.length !== 1 ? 's' : ''}`);
+      if (result.pastedNodeUuids.length > 0) {
+        parts.push(`${result.pastedNodeUuids.length} node${result.pastedNodeUuids.length !== 1 ? 's' : ''}`);
+      }
       if (result.pastedEdgeUuids.length > 0) {
         parts.push(`${result.pastedEdgeUuids.length} edge${result.pastedEdgeUuids.length !== 1 ? 's' : ''}`);
       }
+      if (result.pastedPostitIds.length > 0) {
+        parts.push(`${result.pastedPostitIds.length} post-it${result.pastedPostitIds.length !== 1 ? 's' : ''}`);
+      }
       toast.success(`Pasted ${parts.join(' and ')}`);
     } else {
-      // Non-graph view - use native paste
       document.execCommand('paste');
     }
   };

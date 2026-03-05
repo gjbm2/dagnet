@@ -4768,13 +4768,15 @@ export class UpdateManager {
     graph: any,
     nodes: any[],
     edges: any[],
-    positionOffset: { x: number; y: number } = { x: 50, y: 50 }
+    positionOffset: { x: number; y: number } = { x: 50, y: 50 },
+    postits?: any[]
   ): { 
     graph: any; 
     uuidMapping: Map<string, string>;
     idMapping: Map<string, string>;
     pastedNodeUuids: string[];
     pastedEdgeUuids: string[];
+    pastedPostitIds: string[];
   } {
     const nextGraph = structuredClone(graph);
     
@@ -4912,16 +4914,43 @@ export class UpdateManager {
     nextGraph.nodes = [...(nextGraph.nodes || []), ...newNodes];
     nextGraph.edges = [...(nextGraph.edges || []), ...newEdges];
     
+    // Phase 3: Create new post-its with unique IDs
+    const pastedPostitIds: string[] = [];
+    if (postits && postits.length > 0) {
+      const existingPostitIds = new Set<string>((nextGraph.postits || []).map((p: any) => p.id));
+      const newPostits: any[] = [];
+      
+      for (const postit of postits) {
+        let newId = crypto.randomUUID();
+        while (existingPostitIds.has(newId)) {
+          newId = crypto.randomUUID();
+        }
+        existingPostitIds.add(newId);
+        
+        const newPostit = structuredClone(postit);
+        newPostit.id = newId;
+        newPostit.x = (newPostit.x || 0) + positionOffset.x;
+        newPostit.y = (newPostit.y || 0) + positionOffset.y;
+        
+        newPostits.push(newPostit);
+        pastedPostitIds.push(newId);
+      }
+      
+      nextGraph.postits = [...(nextGraph.postits || []), ...newPostits];
+    }
+    
     // Update metadata
     if (nextGraph.metadata) {
       nextGraph.metadata.updated_at = new Date().toISOString();
     }
     
     // Log operation
+    const logParts = [`${newNodes.length} nodes`, `${newEdges.length} edges`];
+    if (pastedPostitIds.length > 0) logParts.push(`${pastedPostitIds.length} post-its`);
     sessionLogService.info('graph', 'PASTE_SUBGRAPH', 
-      `Pasted ${newNodes.length} nodes and ${newEdges.length} edges`, 
+      `Pasted ${logParts.join(' and ')}`, 
       undefined,
-      { nodeCount: newNodes.length, edgeCount: newEdges.length }
+      { nodeCount: newNodes.length, edgeCount: newEdges.length, postitCount: pastedPostitIds.length }
     );
     
     this.auditLog.push({
@@ -4930,6 +4959,7 @@ export class UpdateManager {
       details: {
         nodesAdded: newNodes.length,
         edgesAdded: newEdges.length,
+        postitsAdded: pastedPostitIds.length,
         uuidMapping: Object.fromEntries(uuidMapping),
         idMapping: Object.fromEntries(idMapping),
       }
@@ -4941,6 +4971,7 @@ export class UpdateManager {
       idMapping,
       pastedNodeUuids,
       pastedEdgeUuids,
+      pastedPostitIds,
     };
   }
 
