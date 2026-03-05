@@ -1968,8 +1968,8 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
               if (prevNode.id?.startsWith('postit-')) return graphPostitIds.has(prevNode.id.replace('postit-', ''));
               if (prevNode.id?.startsWith('container-')) return graphContainerIds.has(prevNode.id.replace('container-', ''));
               return true;
-            })
-            .map(prevNode => {
+            });
+          updatedNodes = updatedNodes.map(prevNode => {
             if (prevNode.id.startsWith('postit-')) {
               const postitId = prevNode.id.replace('postit-', '');
               const gpArray = graph.postits || [];

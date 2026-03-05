@@ -5,6 +5,8 @@
 **Overall status:** Finished with **error** flag
 **Graphs processed:** 5 (all with `dailyFetch=true`)
 
+**Traceability note:** Graph names and parameter names have been redacted from this document (repo commit rules). To trace "Graph A/B" or any edge UUID back to its graph, search the data repo's graph JSON files for the edge UUID (the short UUIDs below are the first 8 hex chars). The source `tmp.log` also contains the full graph names if it hasn't been overwritten by a subsequent run.
+
 ---
 
 ## Issue 1: Git Commit Race — "Tree SHA does not exist" (CRITICAL)

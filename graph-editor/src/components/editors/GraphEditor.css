@@ -74,9 +74,9 @@
 /* Palette strip height: rc-dock 'size' may behave like flex weight, so set explicit height here. */
 .graph-editor-dock-container .dock-panel[data-panel-id="element-palette-panel"],
 .graph-editor-dock-container .dock-panel[data-dockid="element-palette-panel"] {
-  flex: 0 0 80px !important;
-  min-height: 80px !important;
-  max-height: 80px !important;
+  flex: 0 0 64px !important;
+  min-height: 64px !important;
+  max-height: 64px !important;
   overflow: visible !important;
 }
 

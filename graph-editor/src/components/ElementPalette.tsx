@@ -83,7 +83,7 @@ export function ElementPalette({ layout }: ElementPaletteProps) {
       >
         <Icon
           className="element-palette__icon"
-          size={isHorizontal ? 20 : 18}
+          size={isHorizontal ? 16 : 18}
           fill="none"
           stroke="currentColor"
           strokeWidth={2}

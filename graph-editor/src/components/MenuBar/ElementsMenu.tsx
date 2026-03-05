@@ -8,7 +8,7 @@ import { SyncIndexModal } from '../modals/SyncIndexModal';
  * Elements Menu
  * 
  * Graph-specific element operations:
- * - Add Node
+ * - Add Node / Add Post-It / Add Container
  * - Delete Selected
  * - Sync Index from Graph
  * 
@@ -32,6 +32,10 @@ export function ElementsMenu() {
 
   const handleAddPostit = () => {
     window.dispatchEvent(new CustomEvent('dagnet:addPostit'));
+  };
+
+  const handleAddContainer = () => {
+    window.dispatchEvent(new CustomEvent('dagnet:addContainer'));
   };
 
   const handleDeleteSelected = () => {
@@ -65,6 +69,15 @@ export function ElementsMenu() {
             >
               Add Post-It
             </Menubar.Item>
+
+            <Menubar.Item 
+              className="menubar-item" 
+              onSelect={handleAddContainer}
+            >
+              Add Container
+            </Menubar.Item>
+
+            <Menubar.Separator className="menubar-separator" />
 
             <Menubar.Item 
               className="menubar-item" 

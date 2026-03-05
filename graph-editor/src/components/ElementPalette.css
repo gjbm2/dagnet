@@ -31,7 +31,7 @@
 
 .element-palette.is-horizontal .element-palette__divider {
   width: 1px;
-  height: 22px;
+  height: 18px;
   margin: 0 2px;
 }
 
@@ -61,8 +61,8 @@
 }
 
 .element-palette__button.is-horizontal {
-  width: 38px;
-  height: 38px;
+  width: 32px;
+  height: 32px;
 }
 
 .element-palette__button.is-vertical {
