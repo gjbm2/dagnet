@@ -1,5 +1,7 @@
 idea# TODO
 
+- Snap-to behaviour when moving / resizing graph objects (nodes, post it notes, canvas charts)
+
 - We should remove the parity testing piece and complete cutover of BE stats service soon
 
 - **Daily automation audit 28-Feb-26 — two serious issues need investigation** (see `docs/current/daily-automation-audit-28-feb-26.md`):

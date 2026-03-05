@@ -565,8 +565,9 @@ class FileOperationsService {
       }
     }
 
-    // 6. Remove from Navigator
+    // 6. Remove from Navigator (both local items and IDB-backed items)
     if (this.navigatorOps) {
+      this.navigatorOps.removeLocalItem(fileId);
       await this.navigatorOps.refreshItems();
     }
 
