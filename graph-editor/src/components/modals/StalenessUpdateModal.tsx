@@ -89,6 +89,18 @@ export function StalenessUpdateModal({
     if (hasCountdownEarly) ensureCountdownStyles();
   }, [hasCountdownEarly]);
 
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.stopPropagation();
+        onClose();
+      }
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, onClose]);
+
   if (!isOpen) return null;
 
   const nowMs = Date.now();

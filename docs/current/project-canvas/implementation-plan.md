@@ -1,8 +1,8 @@
 # Canvas Objects — Implementation Plan
 
-**Status**: Phases 1–3c complete; 3d pending; 3e mostly complete; 5 pending  
-**Date**: 5-Mar-26 (updated 5-Mar-26)  
-**Design docs**: [0-architecture.md](0-architecture.md), [1-post-its.md](1-post-its.md), [2-containers.md](2-containers.md), [3-canvas-charts.md](3-canvas-charts.md)
+**Status**: Phases 1–3c complete; 3d (chart rendering consolidation) pending; 3e (result cards DnD) ~80%; 3f (schema unification + chart props + compositor) pending; 4–5 pending  
+**Date**: 5-Mar-26 (updated 6-Mar-26)  
+**Design docs**: [0-architecture.md](0-architecture.md), [1-post-its.md](1-post-its.md), [2-containers.md](2-containers.md), [3-canvas-analyses.md](3-canvas-analyses.md)
 
 ---
 
@@ -179,7 +179,7 @@ Before Phase 2, refactor `SelectionContextType` to replace `selectedPostitId` wi
 
 ---
 
-## Phase 3 — Canvas Analyses (3a–3c ✅, 3d PENDING, 3e ~80%)
+## Phase 3 — Canvas Analyses (3a–3c ✅, 3d PENDING, 3e ~80%, 3f PENDING)
 
 ### Prerequisite: DB-snapshot subject resolution service extraction ✅
 
@@ -291,9 +291,109 @@ After canvas analyses are functional, consolidate the fragmented chart preview c
 
 **Test**: existing analytics tests + Playwright chart specs verify no regressions.
 
---
+---
 
-## Phase 4 - Context menu tidy-up (PENDING)
+## Phase 3f — Chart Definition Schema Unification + Props Exposure + Scenario Compositor UI (PENDING)
+
+**Design reference**: [3-canvas-analyses.md](3-canvas-analyses.md) §2.2 (shared schema), §3.5 (chart props exposure), §9 (properties panel)
+
+This phase unifies the chart definition schema across chart files, canvas analyses, and share payloads; restructures the properties panel; and extracts a shared scenario layer list component. No new composition logic — reuses `augmentDSLWithConstraint()`, `ScenarioQueryEditModal`, `AutomatableField`, and existing CSS classes.
+
+### 3f-prereq. `ChartRecipeCore` schema extraction
+
+Extract the shared chart definition core into a single schema used by all three contexts (chart files, canvas analyses, share payloads).
+
+**Files to change**:
+- `graph-editor/src/types/chartRecipe.ts` **(new)** — `ChartRecipeCore`, `ChartRecipeScenario`, `ChartVisibilityMode` interfaces
+- `graph-editor/src/types/index.ts` — `CanvasAnalysis.recipe` typed as `ChartRecipeCore`; remove inline recipe type
+- `graph-editor/src/services/chartOperationsService.ts` — `ChartFileDataV1.recipe` wraps `ChartRecipeCore` (adds `parent`, `pinned_recompute_eligible`, `display`); retire `query_dsl` field name in favour of `analytics_dsl`
+- `graph-editor/src/lib/sharePayload.ts` — align `SharePayloadV1` scenario field names with `ChartRecipeScenario` (`id` → `scenario_id`, `dsl` → `effective_dsl`)
+- `graph-editor/lib/graph_types.py` — `ChartRecipeCore` and `ChartRecipeScenario` Pydantic models; `CanvasAnalysis.recipe` typed as `ChartRecipeCore`
+- `graph-editor/public/schemas/conversion-graph-1.1.0.json` — extract `chartRecipeCore` as `$ref`-able definition; `canvasAnalyses[].recipe` references it
+
+**Tests to write**:
+- Extend `schemaParityAutomated.test.ts` to verify `ChartRecipeCore` and `ChartRecipeScenario` field parity across TS / Python / JSON schema
+- Verify `ChartRecipeCore` round-trips via Python (unknown fields preserved on `CanvasAnalysisDisplay`)
+- Verify `ChartFileDataV1.recipe` still satisfies existing chart file tests after migration to `ChartRecipeCore` wrapper
+
+### 3f-a. Generalise share + "Open as Tab" to accept `ChartRecipeCore`
+
+**Files to change**:
+- `graph-editor/src/services/shareLinkService.ts` — extract core payload builder that accepts `ChartRecipeCore` + identity + display metadata; existing `buildLiveChartShareUrlFromChartFile` becomes a thin wrapper that reads from chart file and delegates; new `buildLiveChartShareUrlFromCanvasAnalysis` reads from `CanvasAnalysis.recipe` and delegates to same core
+- `graph-editor/src/services/chartOperationsService.ts` — `openAnalysisChartTabFromAnalysis` accepts `ChartRecipeCore` directly; add convenience overload for canvas analyses (adds `parent` from current graph context)
+- `graph-editor/src/hooks/useShareChartFromUrl.ts` — align field name expectations with unified `ChartRecipeScenario` shape
+- `graph-editor/src/hooks/useShareBundleFromUrl.ts` — same alignment
+
+**Tests to write**:
+- Build share payload from a `ChartRecipeCore` (canvas analysis source) → payload has correct field names, scenarios aligned
+- Build share payload from a chart file source → same payload shape (regression)
+- "Open as Tab" from canvas analysis recipe → chart file created with correct `parent`, `pinned_recompute_eligible`, and `analytics_dsl`
+- Share payload round-trip: encode → decode → field names match `ChartRecipeScenario`
+
+### 3f-b. `ScenarioLayerList` extraction from `ScenariosPanel`
+
+Extract the scenario row rendering into a shared component that both `ScenariosPanel` (sidebar) and the chart properties panel can drive.
+
+**Files to change**:
+- `graph-editor/src/components/panels/ScenarioLayerList.tsx` **(new)** — shared layer-list rendering component:
+  - Props: `items: ScenarioLayerItem[]` (id, name, colour, visible, mode, isLive, tooltip), optional callbacks (`onToggleVisibility`, `onCycleMode`, `onRename`, `onColourChange`, `onReorder`, `onDelete`, `onEdit`), `currentSlot?: ReactNode` (for Current row extra content e.g. What-If panel)
+  - Renders Base row, user scenario rows, Current row using existing CSS classes (`.scenario-row`, `.scenario-colour-swatch`, `.scenario-name`, etc.)
+  - DnD reorder via `onReorder(fromIndex, toIndex)` callback
+  - Context menu items driven by which callbacks are provided (absent = suppressed)
+  - Absent callbacks suppress corresponding action buttons (e.g. no `onDelete` = no trash icon)
+- `graph-editor/src/components/panels/ScenariosPanel.tsx` — refactor to wrap `ScenarioLayerList`: provides data from `ScenariosContext` + tab state, passes callbacks, renders sidebar chrome (header, New Scenario menu, Flatten, To Base, What-If panel, modals) around the shared list
+- `graph-editor/src/components/panels/ScenariosPanel.css` — no changes (CSS classes already standalone, not parent-scoped)
+- `graph-editor/src/types/scenarioLayerList.ts` **(new)** — `ScenarioLayerItem` interface
+
+**Tests to write**:
+- `ScenarioLayerList` with full callbacks → renders all action buttons (visibility, mode, edit, delete)
+- `ScenarioLayerList` with `onDelete` absent → no trash icon rendered
+- `ScenarioLayerList` with `onRename` absent → name not clickable-to-edit
+- `ScenariosPanel` refactored → existing scenario panel behaviour unchanged (regression suite)
+- DnD reorder fires `onReorder` with correct indices
+
+### 3f-c. Properties panel restructure + scenario compositor
+
+Restructure the canvas analysis properties panel into four sections and wire the scenario compositor.
+
+**Files to change**:
+- `graph-editor/src/components/PropertiesPanel.tsx` — replace `CanvasAnalysisPropertiesSection` with four-section layout:
+  - Section 1 (Analysis Identity): `QueryExpressionEditor` for `analytics_dsl` (with `suggestionsScope: 'graph'`), analysis type card selector (reuse `analytics-type-card` CSS)
+  - Section 2 (Scenario Compositor): `ScenarioLayerList` in live mode (read-only, from tab state) or copied mode (editable, from `recipe.scenarios`); chart "Current layer" DSL fragment field with `AutomatableField` wrapper; freeze/unfreeze toggle; "Capture from tab" button (copied mode); "Use as Current" in scenario context menu (copied mode)
+  - Section 3 (Chart Kind): card-based selector driven by `result.semantics.chart`
+  - Section 4 (Display Settings): extensible, chart-kind-specific settings from registry
+- `graph-editor/src/components/QueryExpressionEditor.tsx` — add `suggestionsScope?: 'graph' | 'registry' | 'both'` prop; when `'graph'`, suppress registry nodes/cases from autocomplete suggestions; default to `'both'` for backward compatibility
+- `graph-editor/src/hooks/useCanvasAnalysisCompute.ts` — inject chart fragment via `augmentDSLWithConstraint()` in `getQueryDslForScenario()` (live mode) and per-scenario DSL resolution (copied mode), before `composeSnapshotDsl()`; read fragment from `analysis.chart_current_layer_dsl` (new field on `CanvasAnalysis`)
+- `graph-editor/src/types/index.ts` — add `chart_current_layer_dsl?: string` to `CanvasAnalysis`
+- `graph-editor/lib/graph_types.py` — add `chart_current_layer_dsl` to `CanvasAnalysis` model
+- `graph-editor/public/schemas/conversion-graph-1.1.0.json` — add `chart_current_layer_dsl` to `canvasAnalyses` items
+- `graph-editor/src/components/modals/ScenarioQueryEditModal.tsx` — no changes needed (already accepts `currentDSL`, `inheritedDSL`, `onSave` — chart properties section provides chart-appropriate values)
+- `graph-editor/src/components/CanvasAnalysisContextMenu.tsx` — add "Capture from tab" and "Use as Current" items for copied-mode scenarios; wire `ScenarioQueryEditModal` for scenario DSL editing
+
+**Tests to write**:
+- Chart fragment composition (live mode): `augmentDSLWithConstraint(scenarioQueryDsl, chartFragment)` applied uniformly to all visible scenarios before compute
+- Chart fragment composition (copied mode): `augmentDSLWithConstraint(recipe.scenario.effective_dsl, chartFragment)` applied before compute
+- Chart fragment with window override: chart fragment `window(-90d:)` replaces scenario's `window(-30d:)` in composed result
+- Chart fragment with context addition: chart fragment `context(channel:influencer)` added to scenario DSL that has no channel context
+- Chart fragment empty: no composition, scenario DSL used as-is
+- Snapshot subject resolution: chart fragment's window/context is reflected in resolved snapshot subjects (not just in display)
+- `suggestionsScope: 'graph'` on `QueryExpressionEditor`: only graph nodes appear in autocomplete, not registry nodes
+- Freeze with chart fragment: fragment preserved on analysis object after `live` set to `false`
+- Unfreeze: fragment preserved, `recipe.scenarios` cleared
+- "Capture from tab": adds current tab visible scenarios to `recipe.scenarios` (additive, not replacing)
+- "Use as Current": pushes scenario's `effective_dsl` to `graphStore.setCurrentDSL()`
+- Copied-mode scenario edit: editing `effective_dsl` via `ScenarioQueryEditModal` → updated in `recipe.scenarios`, chart recomputes
+- Copied-mode scenario delete: removed from `recipe.scenarios`, chart recomputes with remaining scenarios
+- Copied-mode scenario reorder: `recipe.scenarios` array order changes, chart legend order updates
+
+**Playwright specs**:
+- `canvas-analysis-chart-fragment.spec.ts` — set chart fragment on live chart, verify recompute reflects the fragment; clear fragment, verify revert
+- `canvas-analysis-copied-scenarios.spec.ts` — freeze chart, edit scenario DSL, verify chart updates; add scenario via "Capture from tab", verify it appears; delete scenario, verify removed
+- `canvas-analysis-live-share.spec.ts` — freeze chart with edited scenarios, live share → recipient sees correct chart with correct scenario set
+
+---
+
+## Phase 4 — Context menu tidy-up (PENDING)
 
 See 4-context-menu-refactor.md
 
@@ -352,6 +452,9 @@ Implemented during Phase 3 but not in the original spec:
 | `CanvasAnalysisNode.tsx` | 3b | Analysis ReactFlow node (renders chart or cards by view_mode) |
 | `analysisDisplaySettingsRegistry.ts` | 3c | Shared registry: view mode + chart kind → display settings |
 | `CanvasAnalysisContextMenu.tsx` | 3c | Analysis right-click menu (view toggle, chart kind, freeze, etc.) |
+| `chartRecipe.ts` (types) | 3f-prereq | `ChartRecipeCore`, `ChartRecipeScenario` shared interfaces |
+| `scenarioLayerList.ts` (types) | 3f-b | `ScenarioLayerItem` interface |
+| `ScenarioLayerList.tsx` | 3f-b | Shared scenario layer-list rendering (rows, swatches, DnD, inline edit) |
 | `useSnapToGuides.ts` | 5a | Snap alignment hook (change processor + guide state) |
 | `SnapGuideLines.tsx` | 5b | SVG guide line overlay inside ReactFlow viewport |
 
@@ -359,14 +462,14 @@ Implemented during Phase 3 but not in the original spec:
 
 | File | Phases | Changes |
 |------|--------|---------|
-| `types/index.ts` | 1a, 2a, 3a | PostIt (refine), Container, CanvasAnalysis interfaces |
-| `graph_types.py` | 1a, 2a, 3a | Python models for each type |
-| `conversion-graph-1.1.0.json` | 1a, 2a, 3a | Schema definitions for each type |
+| `types/index.ts` | 1a, 2a, 3a, 3f | PostIt, Container, CanvasAnalysis; add `chart_current_layer_dsl`; recipe typed as `ChartRecipeCore` |
+| `graph_types.py` | 1a, 2a, 3a, 3f | Python models; `ChartRecipeCore`/`ChartRecipeScenario`; `chart_current_layer_dsl` |
+| `conversion-graph-1.1.0.json` | 1a, 2a, 3a, 3f | Schema definitions; `chartRecipeCore` as `$ref`; `chart_current_layer_dsl` |
 | `transform.ts` | 1b, 2b, 3b | `toFlow()` / `fromFlow()` extensions for each type |
 | `GraphCanvas.tsx` | 1b–1e, 2b–2c, 3b–3c | nodeTypes, selection routing, context menu routing, `handleDrop`, `deleteSelected`, fitView/layout exclusions, group drag |
 | `GraphEditor.tsx` | 1c, 1e, 2 prereq | Selection context, event listeners, palette rendering |
 | `ConversionNode.tsx` | 2b | `data.haloColour` for both halo mechanisms |
-| `PropertiesPanel.tsx` | 1d, 2c, 3c | Postit, container, chart property sections |
+| `PropertiesPanel.tsx` | 1d, 2c, 3c, 3f | Postit, container, chart property sections; four-section chart props restructure |
 | `custom-reactflow.css` | 1b | Pan-mode + create-mode CSS classes (no z-index rules — DOM order controls stacking) |
 | `useCopyPaste.tsx` | 1c, 2c, 3c | Subgraph clipboard extensions |
 | `subgraphExtractor.ts` | 1c, 2c, 3c | Extract selected canvas objects |
@@ -380,7 +483,16 @@ Implemented during Phase 3 but not in the original spec:
 | `SnapshotHistogramChart.tsx` | 3b | Drag handle + pin button |
 | `SnapshotDailyConversionsChart.tsx` | 3b | Drag handle + pin button |
 | `SnapshotCohortMaturityChart.tsx` | 3b | Drag handle + pin button |
-| `schemaParityAutomated.test.ts` | 1a, 2a, 3a | Extended for each type |
+| `chartOperationsService.ts` | 3f | Recipe typed as `ChartRecipeCore` wrapper; accepts `ChartRecipeCore` for "Open as Tab" |
+| `shareLinkService.ts` | 3f | Core payload builder accepts `ChartRecipeCore` + identity; existing builders become thin wrappers |
+| `sharePayload.ts` | 3f | Align scenario field names with `ChartRecipeScenario` |
+| `useCanvasAnalysisCompute.ts` | 3f | Chart fragment injection via `augmentDSLWithConstraint()` in both live/copied mode |
+| `QueryExpressionEditor.tsx` | 3f | Add `suggestionsScope` prop |
+| `ScenariosPanel.tsx` | 3f | Refactor to wrap `ScenarioLayerList` (no behaviour change) |
+| `CanvasAnalysisContextMenu.tsx` | 3f | Capture from tab, Use as Current, scenario DSL edit items |
+| `useShareChartFromUrl.ts` | 3f | Align field name expectations with unified `ChartRecipeScenario` |
+| `useShareBundleFromUrl.ts` | 3f | Same alignment |
+| `schemaParityAutomated.test.ts` | 1a, 2a, 3a, 3f | Extended for each type; `ChartRecipeCore` parity |
 
 ## Summary: Playwright Specs
 
@@ -393,3 +505,6 @@ Implemented during Phase 3 but not in the original spec:
 | `container-halo-colour.spec.ts` | 2b | Halo adapts to container background |
 | `canvas-chart-dnd.spec.ts` | 3b | DnD creates chart on canvas |
 | `canvas-chart-live-update.spec.ts` | 3b | Chart re-renders on DSL change |
+| `canvas-analysis-chart-fragment.spec.ts` | 3f | Chart fragment composes onto scenarios, recompute reflects it |
+| `canvas-analysis-copied-scenarios.spec.ts` | 3f | Freeze, edit scenario DSL, capture from tab, delete scenario |
+| `canvas-analysis-live-share.spec.ts` | 3f | Live share from canvas analysis → recipient sees correct chart |
