@@ -22,7 +22,8 @@ import { ScenarioEditorModal } from '../modals/ScenarioEditorModal';
 import { ScenarioQueryEditModal } from '../modals/ScenarioQueryEditModal';
 import { ToBaseConfirmModal } from '../modals/ToBaseConfirmModal';
 import { ContextMenu, ContextMenuItem } from '../ContextMenu';
-import { ColourSelector } from '../ColourSelector';
+import { ScenarioLayerList } from './ScenarioLayerList';
+import type { ScenarioLayerItem } from '../../types/scenarioLayerList';
 import WhatIfAnalysisControl from '../WhatIfAnalysisControl';
 import { parseConstraints } from '@/lib/queryDSL';
 import { computeInheritedDSL, computeEffectiveFetchDSL, deriveBaseDSLForRebase, LIVE_EMPTY_DIFF_DSL, diffQueryDSLFromBase } from '../../services/scenarioRegenerationService';
@@ -30,18 +31,12 @@ import { fetchDataService } from '../../services/fetchDataService';
 import { useCopyAllScenarioParamPacks } from '../../hooks/useCopyAllScenarioParamPacks';
 import { useScenarioShareLink } from '../../hooks/useScenarioShareLink';
 import { 
-  Eye, 
-  EyeOff,
   Images,
   Image,
   Square,
-  Edit2, 
-  Trash2, 
   Plus,
   X, 
-  Camera,
   ChevronDown,
-  Check,
   ArrowDownToLine,
   Layers,
   Zap,
@@ -140,10 +135,6 @@ export default function ScenariosPanel({ tabId, hideHeader = false }: ScenariosP
   
   const [showCreateMenu, setShowCreateMenu] = useState(false);
   const [menuPosition, setMenuPosition] = useState<{ x: number; y: number } | null>(null);
-  const [editingScenarioId, setEditingScenarioId] = useState<string | null>(null);
-  const [editingName, setEditingName] = useState('');
-  const [draggedScenarioId, setDraggedScenarioId] = useState<string | null>(null);
-  const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
   const [pendingBlankScenarioId, setPendingBlankScenarioId] = useState<string | null>(null);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; scenarioId: string } | null>(null);
   const menuButtonRef = useRef<HTMLButtonElement>(null);
@@ -305,13 +296,6 @@ export default function ScenariosPanel({ tabId, hideHeader = false }: ScenariosP
   }, [tabId, operations]);
   
   /**
-   * Get eye icon for simple visibility (bool)
-   */
-  const getVisibilityIcon = useCallback((isVisible: boolean, size: number = 14) => {
-    return isVisible ? <Eye size={size} /> : <EyeOff size={size} />;
-  }, []);
-  
-  /**
    * Get tri-state mode icon for a scenario (F+E / F / E)
    */
   const getModeIcon = useCallback((scenarioId: string, size: number = 14) => {
@@ -409,41 +393,6 @@ export default function ScenariosPanel({ tabId, hideHeader = false }: ScenariosP
   }, [tabId, whatIfDSL, operations]);
   
   /**
-   * Start editing scenario name
-   */
-  const handleStartEdit = useCallback((scenario: Scenario) => {
-    setEditingScenarioId(scenario.id);
-    setEditingName(scenario.name);
-  }, []);
-  
-  /**
-   * Save edited scenario name
-   */
-  const handleSaveEdit = useCallback(async () => {
-    if (!editingScenarioId || !editingName.trim()) {
-      setEditingScenarioId(null);
-      return;
-    }
-    
-    try {
-      await renameScenario(editingScenarioId, editingName.trim());
-      setEditingScenarioId(null);
-      toast.success('Scenario renamed');
-    } catch (error) {
-      console.error('Failed to rename scenario:', error);
-      toast.error('Failed to rename scenario');
-    }
-  }, [editingScenarioId, editingName, renameScenario]);
-  
-  /**
-   * Cancel editing scenario name
-   */
-  const handleCancelEdit = useCallback(() => {
-    setEditingScenarioId(null);
-    setEditingName('');
-  }, []);
-  
-  /**
    * Delete scenario (no confirmation needed - it's reversible via graph history)
    */
   const handleDelete = useCallback(async (scenarioId: string) => {
@@ -474,6 +423,19 @@ export default function ScenariosPanel({ tabId, hideHeader = false }: ScenariosP
       toast.error('Failed to delete scenario');
     }
   }, [deleteScenario, tabId, operations]);
+
+  /**
+   * Rename scenario
+   */
+  const handleRenameScenario = useCallback(async (scenarioId: string, newName: string) => {
+    try {
+      await renameScenario(scenarioId, newName);
+      toast.success('Scenario renamed');
+    } catch (error) {
+      console.error('Failed to rename scenario:', error);
+      toast.error('Failed to rename scenario');
+    }
+  }, [renameScenario]);
   
   /**
    * Open scenario in editor
@@ -1059,105 +1021,39 @@ export default function ScenariosPanel({ tabId, hideHeader = false }: ScenariosP
   }, []);
   
   /**
-   * Drag handlers
-   *
-   * NOTE: We no longer rely on the native `drop` event, because in some
-   * environments the browser reports `dropEffect=none` even when we've
-   * correctly prevented default on drag-over. Instead, we:
-   *   - track the last row index the cursor was over (dragOverIndex)
-   *   - commit the reorder in `handleDragEnd` using that index.
+   * Reorder user scenarios using list indices from ScenarioLayerList
    */
-  const handleDragStart = useCallback((e: React.DragEvent, scenarioId: string) => {
-    console.log(`[D&D] START: dragging scenario ${scenarioId}`);
-    console.log(`[D&D] Current visible order:`, visibleScenarioIds);
-    console.log(`[D&D] All scenarios:`, scenarios.map(s => s.id));
-    setDraggedScenarioId(scenarioId);
-    e.dataTransfer.effectAllowed = 'move';
-    e.dataTransfer.setData('text/plain', scenarioId); // Required for DnD in some browsers
-  }, [visibleScenarioIds, scenarios]);
-  
-  const handleDragOverRow = useCallback((e: React.DragEvent, index: number) => {
-    e.preventDefault();
-    e.dataTransfer.dropEffect = 'move';
-    if (dragOverIndex !== index) {
-      console.log(`[D&D] OVER: row index ${index}`);
-    }
-    setDragOverIndex(index);
-  }, [dragOverIndex]);
+  const handleReorderUserScenarios = useCallback(async (fromIndex: number, toIndex: number) => {
+    if (!tabId) return;
 
-  /**
-   * Core reorder logic, shared by drag-end (and could be reused by drop if needed)
-   */
-  const performReorder = useCallback(async (targetIndex: number) => {
-    if (!draggedScenarioId || !tabId) {
-      console.log(`[D&D] REORDER: Aborting - no draggedScenarioId or tabId`);
-      return;
-    }
-    
     const currentState = operations.getScenarioState(tabId);
-    if (!currentState) {
-      console.log(`[D&D] REORDER: No current state found`);
-      return;
-    }
+    if (!currentState) return;
 
-    // Panel order is tab-specific scenarioOrder
     const orderedScenarios = scenarioOrder.length > 0
       ? scenarioOrder
           .map(id => scenarios.find(s => s.id === id))
           .filter((s): s is Scenario => s !== undefined)
       : scenarios;
 
-    console.log(`[D&D] REORDER: Ordered scenarios in panel:`, orderedScenarios.map(s => s.id));
-    console.log(`[D&D] REORDER: Target index in panel: ${targetIndex}, target scenario:`, orderedScenarios[targetIndex]?.id);
+    const draggedScenarioId = orderedScenarios[fromIndex]?.id;
+    const targetScenario = orderedScenarios[toIndex];
+    if (!draggedScenarioId || !targetScenario || draggedScenarioId === targetScenario.id) return;
 
-    const targetScenario = orderedScenarios[targetIndex];
-    if (!targetScenario) {
-      console.log(`[D&D] REORDER: No target scenario at index ${targetIndex}`);
-      return;
-    }
-
-    // Get current visible order from tab state (includes 'current' and 'base')
     const currentVisibleOrder = currentState.visibleScenarioIds;
-    console.log(`[D&D] REORDER: Current visible order (full):`, currentVisibleOrder);
-
-    // Work ONLY on user scenarios (exclude 'current' and 'base') so the panel order
-    // maps 1:1 to this subset.
-    const visibleUserIds = currentVisibleOrder.filter(
-      id => id !== 'current' && id !== 'base'
-    );
+    const visibleUserIds = currentVisibleOrder.filter(id => id !== 'current' && id !== 'base');
 
     const draggedUserIndex = visibleUserIds.indexOf(draggedScenarioId);
-    if (draggedUserIndex === -1) {
-      console.log(
-        `[D&D] REORDER: Dragged scenario ${draggedScenarioId} is not in visible user subset, ignoring`
-      );
-      return;
-    }
-    
-    // Target may be hidden; if so, treat as "drop at end" of visible user subset
+    if (draggedUserIndex === -1) return;
+
     let targetUserIndex = visibleUserIds.indexOf(targetScenario.id);
     if (targetUserIndex === -1) {
-      console.log(
-        `[D&D] REORDER: Target scenario ${targetScenario.id} not in visible user subset, treating as drop at end`
-      );
-      targetUserIndex = visibleUserIds.length - 1;
+      targetUserIndex = Math.max(visibleUserIds.length - 1, 0);
     }
 
-    console.log(
-      `[D&D] REORDER: User subset before:`,
-      visibleUserIds,
-      `draggedUserIndex=${draggedUserIndex}, targetUserIndex=${targetUserIndex}`
-    );
-
-    // Build new user-only order: remove dragged, then insert at targetUserIndex
     const newUserOrder = [...visibleUserIds];
     newUserOrder.splice(draggedUserIndex, 1);
     newUserOrder.splice(targetUserIndex, 0, draggedScenarioId);
 
-    console.log(`[D&D] REORDER: User subset after:`, newUserOrder);
-
-    // Rebuild full visible order by preserving the positions of 'current'/'base'
-    // and filling user slots with the newUserOrder in sequence.
     const newVisibleOrder: string[] = [];
     let userCursor = 0;
     for (const id of currentVisibleOrder) {
@@ -1168,33 +1064,23 @@ export default function ScenariosPanel({ tabId, hideHeader = false }: ScenariosP
       }
     }
 
-    console.log(`[D&D] REORDER: Final new visible order:`, newVisibleOrder);
-
     try {
-      // Rebuild full scenarioOrder by reordering only the user scenarios
       const newScenarioOrder: string[] = [];
-      let userCursor = 0;
-      
-      // If scenarioOrder includes 'current' or 'base', preserve their positions
+      let orderCursor = 0;
       const oldScenarioOrder = currentState.scenarioOrder || currentVisibleOrder;
+
       for (const id of oldScenarioOrder) {
         if (id === 'current' || id === 'base') {
           newScenarioOrder.push(id);
-        } else if (userCursor < newUserOrder.length) {
-          newScenarioOrder.push(newUserOrder[userCursor++]);
+        } else if (orderCursor < newUserOrder.length) {
+          newScenarioOrder.push(newUserOrder[orderCursor++]);
         }
       }
-      
-      // Add any remaining user scenarios
-      while (userCursor < newUserOrder.length) {
-        newScenarioOrder.push(newUserOrder[userCursor++]);
+      while (orderCursor < newUserOrder.length) {
+        newScenarioOrder.push(newUserOrder[orderCursor++]);
       }
-      
-      console.log(`[D&D] REORDER: New scenarioOrder (full):`, newScenarioOrder);
-      
-      // Update tab state with new orders
+
       await operations.updateTabState(tabId, {
-        // Cast to any to align with extended TabScenarioState shape (includes scenarioOrder)
         scenarioState: {
           ...currentState,
           scenarioOrder: newScenarioOrder,
@@ -1202,27 +1088,54 @@ export default function ScenariosPanel({ tabId, hideHeader = false }: ScenariosP
           visibleColourOrderIds: currentState.visibleColourOrderIds
         } as any
       });
-      console.log(`[D&D] REORDER: Successfully updated tab state`);
     } catch (error) {
-      console.error('[D&D] REORDER: Failed to reorder scenarios:', error);
+      console.error('Failed to reorder scenarios:', error);
       toast.error('Failed to reorder scenarios');
     }
-  }, [draggedScenarioId, tabId, operations, scenarioOrder, visibleScenarioIds, scenarios]);
+  }, [tabId, operations, scenarioOrder, scenarios]);
 
-  const handleDragEnd = useCallback(() => {
-    console.log(`[D&D] END: drag operation ended. draggedScenarioId=${draggedScenarioId}, dragOverIndex=${dragOverIndex}`);
+  const scenarioLayerItems = useMemo((): ScenarioLayerItem[] => {
+    const items: ScenarioLayerItem[] = [];
 
-    if (draggedScenarioId && dragOverIndex !== null) {
-      console.log(`[D&D] END: committing reorder to index ${dragOverIndex} (using last hovered row)`);
-      // Fire and forget; errors are logged inside performReorder
-      void performReorder(dragOverIndex);
-    } else {
-      console.log(`[D&D] END: no valid dragOverIndex, not reordering`);
+    items.push({
+      id: 'current',
+      name: 'Current',
+      colour: getScenarioColour('current', currentVisible),
+      visible: currentVisible,
+      visibilityMode: (tabId ? operations.getScenarioVisibilityMode(tabId, 'current') : 'f+e') as 'f+e' | 'f' | 'e',
+      kind: 'current',
+    });
+
+    const orderedScenarios = scenarioOrder.length > 0
+      ? scenarioOrder.map(id => scenarios.find(s => s.id === id)).filter((s): s is Scenario => s !== undefined)
+      : scenarios;
+
+    for (const scenario of orderedScenarios) {
+      const isVisible = visibleScenarioIds.includes(scenario.id);
+      items.push({
+        id: scenario.id,
+        name: scenario.name,
+        colour: getScenarioColour(scenario.id, isVisible),
+        visible: isVisible,
+        visibilityMode: (tabId ? operations.getScenarioVisibilityMode(tabId, scenario.id) : 'f+e') as 'f+e' | 'f' | 'e',
+        isLive: scenario.meta?.isLive,
+        tooltip: getScenarioTooltip(scenario),
+        kind: 'user',
+      });
     }
-    
-    setDraggedScenarioId(null);
-    setDragOverIndex(null);
-  }, [draggedScenarioId, dragOverIndex, performReorder]);
+
+    items.push({
+      id: 'base',
+      name: 'Base',
+      colour: getScenarioColour('base', baseVisible),
+      visible: baseVisible,
+      visibilityMode: (tabId ? operations.getScenarioVisibilityMode(tabId, 'base') : 'f+e') as 'f+e' | 'f' | 'e',
+      kind: 'base',
+      tooltip: baseDSL ? `Base DSL: ${baseDSL}` : 'Base parameters — inherited by all scenarios unless overridden',
+    });
+
+    return items;
+  }, [scenarios, scenarioOrder, visibleScenarioIds, getScenarioColour, tabId, operations, currentVisible, baseVisible, baseDSL]);
   
   return (
     <>
@@ -1255,444 +1168,165 @@ export default function ScenariosPanel({ tabId, hideHeader = false }: ScenariosP
       )}
       
       {/* Scenario List */}
-      <div 
-        className="scenarios-list"
-      >
-        {/* Current (pinned at TOP, non-draggable, toggleable) */}
-        <div className="scenario-row scenario-current">
-          {/* Swatch - show empty placeholder if not visible, clickable to change colour */}
-          {currentVisible ? (
-            <div className="scenario-colour-swatch-wrapper" style={{ position: 'relative' }}>
-              <ColourSelector
-                compact={true}
-                value={getScenarioColour('current', currentVisible)}
-                onChange={(colour) => handleColourChange('current', colour)}
-              />
-              {getSwatchOverlayStyle('current') && (
-                <div style={getSwatchOverlayStyle('current') as React.CSSProperties} />
-              )}
-            </div>
-          ) : (
-            <div className="scenario-colour-swatch-placeholder"></div>
-          )}
-          
-          {/* Current label and What-If chip/tab grouped together */}
-          <div className="current-label-group">
-            <div 
-              className="scenario-name"
-              onContextMenu={(e) => handleContextMenu(e, 'current')}
+      <ScenarioLayerList
+        items={scenarioLayerItems}
+        onRename={handleRenameScenario}
+        onColourChange={handleColourChange}
+        onDelete={handleDelete}
+        onEdit={(scenarioId) => {
+          if (scenarioId === 'current' || scenarioId === 'base') {
+            handleOpenEditor(scenarioId);
+            return;
+          }
+          const scenario = scenarios.find(s => s.id === scenarioId);
+          if (scenario?.meta?.isLive) handleOpenQueryEdit(scenarioId);
+          else handleOpenEditor(scenarioId);
+        }}
+        onRefresh={(scenarioId) => {
+          if (scenarioId === 'base') {
+            void handleRefreshAllLive();
+            return;
+          }
+          void handleRefreshScenario(scenarioId);
+        }}
+        shouldShowRefresh={(item) => item.id === 'base'
+          ? hasLiveScenarios
+          : Boolean(item.isLive && item.kind === 'user')}
+        onCycleMode={handleCycleVisibilityMode}
+        onToggleVisibility={handleToggleVisibility}
+        onReorder={handleReorderUserScenarios}
+        getSwatchOverlayStyle={getSwatchOverlayStyle}
+        getModeIcon={getModeIcon}
+        getModeTooltip={getModeTooltip}
+        getEditTooltip={(scenarioId) => {
+          if (scenarioId === 'current') return 'Open Current in editor';
+          if (scenarioId === 'base') return 'Edit Base (params and DSL)';
+          const scenario = scenarios.find(s => s.id === scenarioId);
+          return scenario?.meta?.isLive ? 'Edit query DSL' : 'Open in editor';
+        }}
+        onRowContextMenu={handleContextMenu}
+        isSelected={(id) => selectedScenarioId === id}
+        currentSlot={whatIfPanelExpanded ? (
+          <div
+            className="current-whatif-button tab"
+            onClick={(e) => {
+              if ((e.target as HTMLElement).closest('.tab-close-btn')) return;
+              e.stopPropagation();
+              userManuallyClosed.current = true;
+              setWhatIfPanelExpanded(false);
+            }}
+            style={{ cursor: 'pointer' }}
+          >
+            <span
+              className="tab-text"
+              style={{ fontWeight: (whatIfPanelExpanded || whatIfConditionCount > 0) ? '600' : 'normal' }}
             >
-              Current
-            </div>
-            
-            {/* What-If chip/tab button */}
-            {whatIfPanelExpanded ? (
-              <div 
-                className="current-whatif-button tab"
+              + What if{whatIfConditionCount > 0 && ` (${whatIfConditionCount})`}
+            </span>
+            <button
+              className="tab-close-btn"
+              onClick={(e) => {
+                e.stopPropagation();
+                handleClearWhatIf();
+              }}
+              title="Clear What-If and close panel"
+            >
+              <X size={12} />
+            </button>
+          </div>
+        ) : (
+          <div
+            className="current-whatif-button chip"
+            style={{ fontWeight: whatIfConditionCount > 0 ? '600' : 'normal', display: 'inline-flex', alignItems: 'center', gap: '6px' }}
+          >
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                handleOpenWhatIfPanel();
+              }}
+              title="Open What-If panel"
+              style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', display: 'flex', alignItems: 'center' }}
+            >
+              + What if{whatIfConditionCount > 0 && ` (${whatIfConditionCount})`}
+            </button>
+            {whatIfConditionCount > 0 && (
+              <button
+                className="tab-close-btn"
                 onClick={(e) => {
-                  // Only toggle if clicking the text, not the X button
-                  if ((e.target as HTMLElement).closest('.tab-close-btn')) {
-                    return; // X button handles its own click
-                  }
                   e.stopPropagation();
-                  console.log('[ScenariosPanel] Tab clicked, toggling panel');
-                  userManuallyClosed.current = true; // Mark as manually closed
-                  setWhatIfPanelExpanded(false);
+                  handleClearWhatIf();
                 }}
-                style={{ cursor: 'pointer' }}
+                title="Clear What-If conditions"
               >
-                <span 
-                  className="tab-text"
-                  style={{ fontWeight: (whatIfPanelExpanded || whatIfConditionCount > 0) ? '600' : 'normal' }}
-                >
-                  + What if{whatIfConditionCount > 0 && ` (${whatIfConditionCount})`}
-                </span>
-                <button
-                  className="tab-close-btn"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    console.log('[ScenariosPanel] X button clicked, clearing What-If');
-                    handleClearWhatIf();
-                  }}
-                  title="Clear What-If and close panel"
-                >
-                  <X size={12} />
-                </button>
-              </div>
-            ) : (
-              <div 
-                className="current-whatif-button chip"
-                style={{ fontWeight: whatIfConditionCount > 0 ? '600' : 'normal', display: 'inline-flex', alignItems: 'center', gap: '6px' }}
-              >
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    console.log('[ScenariosPanel] Chip clicked, opening panel');
-                    handleOpenWhatIfPanel();
-                  }}
-                  title="Open What-If panel"
-                  style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', display: 'flex', alignItems: 'center' }}
-                >
-                  + What if{whatIfConditionCount > 0 && ` (${whatIfConditionCount})`}
-                </button>
-                {whatIfConditionCount > 0 && (
-                  <button
-                    className="tab-close-btn"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      console.log('[ScenariosPanel] X button clicked on chip, clearing What-If');
-                      handleClearWhatIf();
-                    }}
-                    title="Clear What-If conditions"
-                  >
-                    <X size={12} />
-                  </button>
-                )}
-              </div>
+                <X size={12} />
+              </button>
             )}
           </div>
-          
-          {/* Right-aligned action buttons (order: edit > mode > visible) */}
-          <button
-            className="scenario-action-btn"
-            onClick={() => handleOpenEditor('current')}
-            title="Open Current in editor"
-          >
-            <Edit2 size={14} />
-          </button>
-          <button
-            className="scenario-action-btn"
-            onClick={() => handleCycleVisibilityMode('current')}
-            title={getModeTooltip('current')}
-          >
-            {getModeIcon('current')}
-          </button>
-          <button
-            className="scenario-action-btn"
-            onClick={() => operations.toggleScenarioVisibility(tabId!, 'current')}
-            title={currentVisible ? 'Hide Current' : 'Show Current'}
-          >
-            {getVisibilityIcon(currentVisible)}
-          </button>
-          
-          {/* What-If Panel (rendered INSIDE Current card when expanded) */}
-          {whatIfPanelExpanded && (
-            <div className="variant-card current-whatif-panel" style={{ padding: '12px', boxSizing: 'border-box' }}>
-              <div style={{ margin: 0, padding: 0 }}>
-                <WhatIfAnalysisControl tabId={tabId} />
-              </div>
+        )}
+        currentSlotAfterActions={whatIfPanelExpanded ? (
+          <div className="variant-card current-whatif-panel" style={{ padding: '12px', boxSizing: 'border-box' }}>
+            <div style={{ margin: 0, padding: 0 }}>
+              <WhatIfAnalysisControl tabId={tabId} />
             </div>
-          )}
-        </div>
-        
-        {/* Divider before inline controls */}
-        <div className="scenarios-divider" />
-        
-        {/* Snapshot controls - always shown under Current */}
-        <div className="scenarios-controls">
-          <div className="scenarios-dropdown-container">
-          <button
-              ref={menuButtonRef}
-              className="scenarios-control-btn"
-              onClick={(e) => {
-                if (scenarios.length >= 15) {
-                  toast.error('Maximum of 15 scenarios reached');
-                  return;
-                }
-                const rect = e.currentTarget.getBoundingClientRect();
-                setMenuPosition({ x: rect.left, y: rect.bottom + 4 });
-                setShowCreateMenu(!showCreateMenu);
-              }}
-              title={scenarios.length >= 15 ? 'Maximum scenarios reached' : 'Create new scenario'}
-              disabled={scenarios.length >= 15}
-              style={{ opacity: scenarios.length >= 15 ? 0.5 : 1 }}
-          >
-              <Plus size={14} />
-              <span>New Scenario</span>
-              <ChevronDown size={12} />
-          </button>
-        </div>
-        
-          <button
-            className="scenarios-control-btn scenarios-control-btn-flatten"
-            onClick={handleFlatten}
-            title="Copy Current to Base and remove all scenario overlays"
-            disabled={scenarios.length === 0}
-            style={{ opacity: scenarios.length === 0 ? 0.5 : 1 }}
-          >
-            <ArrowDownToLine size={14} />
-            <span>Flatten</span>
-          </button>
-          
-          {/* To Base button - pushes current DSL to base and regenerates all live scenarios */}
-          <button
-            className="scenarios-control-btn scenarios-control-btn-flatten"
-            onClick={handlePutToBase}
-            title="Push current query DSL to Base and regenerate all live scenarios"
-            disabled={!canPutToBase}
-            style={{ opacity: canPutToBase ? 1 : 0.5 }}
-          >
-            <ArrowDownFromLine size={14} />
-            <span>To Base</span>
-          </button>
-        </div>
-        
-        {/* User Scenarios (draggable) */}
-        {/* Display ALL scenarios in tab-specific layer order */}
-        {/* Invisible scenarios stay in place, just faded - they retain their palette position */}
-        {(() => {
-          // Get all scenarios in tab-specific order (scenarioOrder tracks position of ALL scenarios)
-          // If scenarioOrder is empty/missing, fall back to scenarios creation order
-          const orderedScenarios = scenarioOrder.length > 0
-            ? scenarioOrder
-                .map(id => scenarios.find(s => s.id === id))
-                .filter((s): s is Scenario => s !== undefined)
-            : scenarios;
-
-          // For sliding/shuffling effect during drag, we work in PANEL order
-          const draggedPanelIndex = draggedScenarioId
-            ? orderedScenarios.findIndex(s => s.id === draggedScenarioId)
-            : -1;
-          const targetPanelIndex = dragOverIndex ?? -1;
-          
-          return orderedScenarios.map((scenario, index) => {
-          const isVisible = visibleScenarioIds.includes(scenario.id);
-          const isSelected = selectedScenarioId === scenario.id;
-            const scenarioColour = getScenarioColour(scenario.id, isVisible);
-          const isEditing = editingScenarioId === scenario.id;
-          const isDragging = draggedScenarioId === scenario.id;
-          const isDragOver = dragOverIndex === index;
-
-            // Default: no offset
-            let transform = '';
-
-            // While dragging, slide rows between original and target positions
-            if (
-              draggedPanelIndex !== -1 &&
-              targetPanelIndex !== -1 &&
-              !isDragging // the dragged row itself stays under the cursor
-            ) {
-              // Dragging downwards
-              if (draggedPanelIndex < targetPanelIndex) {
-                if (index > draggedPanelIndex && index <= targetPanelIndex) {
-                  transform = 'translateY(-32px)';
-                }
-              }
-              // Dragging upwards
-              else if (draggedPanelIndex > targetPanelIndex) {
-                if (index >= targetPanelIndex && index < draggedPanelIndex) {
-                  transform = 'translateY(32px)';
-                }
-              }
-            }
-          
-          return (
-            <div
-              key={scenario.id}
-              className={`scenario-row ${isSelected ? 'selected' : ''} ${isDragging ? 'dragging' : ''} ${isDragOver ? 'drag-over' : ''}`}
-                style={{
-                  transform,
-                  transition: isDragging ? 'none' : 'transform 0.15s ease'
-                }}
-                onDragOver={(e) => handleDragOverRow(e, index)}
-                onContextMenu={(e) => handleContextMenu(e, scenario.id)}
-            >
-              {/* Swatch - draggable, always show, faded if not visible, clickable to change colour */}
-              <div
-                className="scenario-colour-swatch-wrapper"
-                style={{ opacity: isVisible ? 1 : 0.3, position: 'relative' }}
-                title="Drag to reorder, click to change colour"
-                draggable={!isEditing}
-                onDragStart={(e) => {
-                  if (isEditing) {
-                    e.preventDefault();
-                    return;
-                  }
-                  e.stopPropagation();
-                  handleDragStart(e, scenario.id);
-                }}
-                onDragEnd={handleDragEnd}
-              >
-                <ColourSelector
-                  compact={true}
-                  value={scenarioColour}
-                  onChange={(colour) => handleColourChange(scenario.id, colour)}
-                />
-                {getSwatchOverlayStyle(scenario.id) && (
-                  <div style={getSwatchOverlayStyle(scenario.id) as React.CSSProperties} />
-                )}
-              </div>
-              
-              {/* Name - clickable to edit, or input when editing */}
-              {isEditing ? (
-                <input
-                  type="text"
-                  className="scenario-name-input"
-                  value={editingName}
-                  onChange={(e) => setEditingName(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') handleSaveEdit();
-                    if (e.key === 'Escape') handleCancelEdit();
-                  }}
-                  autoFocus
-                />
-              ) : (
-                <div
-                  className="scenario-name scenario-name-editable"
-                  title={getScenarioTooltip(scenario)}
-                  onClick={() => handleStartEdit(scenario)}
-                >
-                  {scenario.name}
-                  {/* Live scenario indicator - appended to label if space */}
-                  {scenario.meta?.isLive && (
-                    <span title="Live scenario">
-                      <Zap 
-                        size={11} 
-                        style={{ 
-                          color: '#374151', 
-                          marginLeft: '4px',
-                          verticalAlign: 'middle',
-                          flexShrink: 0
-                        }}
-                      />
-                    </span>
-                  )}
-                </div>
-              )}
-              
-              {/* Right-aligned action buttons */}
-              {isEditing ? (
-                <>
-                  {/* While editing: show commit and cancel buttons */}
-              <button
-                className="scenario-action-btn"
-                    onClick={handleCancelEdit}
-                    title="Cancel"
-              >
-                    <X size={14} />
-              </button>
-              <button
-                className="scenario-action-btn"
-                    onClick={handleSaveEdit}
-                    title="Save"
-                  >
-                    <Check size={14} />
-                  </button>
-                </>
-              ) : (
-                <>
-                  {/* Normal mode: refresh (live only), then delete > edit > mode > visible */}
-                  {scenario.meta?.isLive && (
-                    <button
-                      className="scenario-action-btn"
-                      onClick={() => handleRefreshScenario(scenario.id)}
-                      title="Refresh from source"
-                    >
-                      <RefreshCw size={14} />
-                    </button>
-                  )}
-                  <button
-                    className="scenario-action-btn danger"
-                    onClick={() => handleDelete(scenario.id)}
-                    title="Delete scenario"
-              >
-                    <Trash2 size={14} />
-              </button>
-              <button
-                className="scenario-action-btn"
-                onClick={() => scenario.meta?.isLive 
-                  ? handleOpenQueryEdit(scenario.id) 
-                  : handleOpenEditor(scenario.id)
-                }
-                title={scenario.meta?.isLive ? "Edit query DSL" : "Open in editor"}
-              >
-                <Edit2 size={14} />
-              </button>
-              <button
-                className="scenario-action-btn"
-                onClick={() => handleCycleVisibilityMode(scenario.id)}
-                title={getModeTooltip(scenario.id)}
-              >
-                {getModeIcon(scenario.id)}
-              </button>
-              <button
-                className="scenario-action-btn"
-                onClick={() => operations.toggleScenarioVisibility(tabId!, scenario.id)}
-                title={visibleScenarioIds.includes(scenario.id) ? 'Hide scenario' : 'Show scenario'}
-              >
-                {getVisibilityIcon(visibleScenarioIds.includes(scenario.id))}
-              </button>
-                </>
-              )}
-            </div>
-          );
-        });
-        })()}
-        
-        {/* Divider before Base */}
-        <div className="scenarios-divider" />
-        
-        {/* Base - pinned at BOTTOM, non-draggable, toggleable */}
-        <div className="scenario-row scenario-base">
-          {/* Swatch - show empty placeholder if not visible, clickable to change colour */}
-          {baseVisible ? (
-            <div className="scenario-colour-swatch-wrapper" style={{ position: 'relative' }}>
-              <ColourSelector
-                compact={true}
-                value={getScenarioColour('base', baseVisible)}
-                onChange={(colour) => handleColourChange('base', colour)}
-              />
-              {getSwatchOverlayStyle('base') && (
-                <div style={getSwatchOverlayStyle('base') as React.CSSProperties} />
-              )}
-            </div>
-          ) : (
-            <div className="scenario-colour-swatch-placeholder"></div>
-          )}
-          
-          <div 
-            className="scenario-name"
-            onContextMenu={(e) => handleContextMenu(e, 'base')}
-            title={baseDSL ? `Base DSL: ${baseDSL}` : "Base parameters — inherited by all scenarios unless overridden"}
-          >
-            Base
           </div>
-          
-          {/* Right-aligned action buttons */}
-          {/* Refresh button - refreshes all live scenarios using base DSL */}
-          {hasLiveScenarios && (
-            <button
-              className="scenario-action-btn"
-              onClick={handleRefreshAllLive}
-              title="Refresh all live scenarios"
-            >
-              <RefreshCw size={14} />
-            </button>
-          )}
-          <button
-            className="scenario-action-btn"
-            onClick={() => handleOpenEditor('base')}
-            title="Edit Base (params and DSL)"
-          >
-            <Edit2 size={14} />
-          </button>
-          <button
-            className="scenario-action-btn"
-            onClick={() => handleCycleVisibilityMode('base')}
-            title={getModeTooltip('base')}
-          >
-            {getModeIcon('base')}
-          </button>
-          <button
-            className="scenario-action-btn"
-            onClick={() => operations.toggleScenarioVisibility(tabId!, 'base')}
-            title={baseVisible ? 'Hide Base' : 'Show Base'}
-          >
-            {getVisibilityIcon(baseVisible)}
-          </button>
-        </div>
-      </div>
+        ) : null}
+        afterCurrentSlot={(
+          <>
+            {/* Divider before inline controls */}
+            <div className="scenarios-divider" />
+
+            {/* Snapshot controls - always shown under Current */}
+            <div className="scenarios-controls">
+              <div className="scenarios-dropdown-container">
+                <button
+                  ref={menuButtonRef}
+                  className="scenarios-control-btn"
+                  onClick={(e) => {
+                    if (scenarios.length >= 15) {
+                      toast.error('Maximum of 15 scenarios reached');
+                      return;
+                    }
+                    const rect = e.currentTarget.getBoundingClientRect();
+                    setMenuPosition({ x: rect.left, y: rect.bottom + 4 });
+                    setShowCreateMenu(!showCreateMenu);
+                  }}
+                  title={scenarios.length >= 15 ? 'Maximum scenarios reached' : 'Create new scenario'}
+                  disabled={scenarios.length >= 15}
+                  style={{ opacity: scenarios.length >= 15 ? 0.5 : 1 }}
+                >
+                  <Plus size={14} />
+                  <span>New Scenario</span>
+                  <ChevronDown size={12} />
+                </button>
               </div>
+
+              <button
+                className="scenarios-control-btn scenarios-control-btn-flatten"
+                onClick={handleFlatten}
+                title="Copy Current to Base and remove all scenario overlays"
+                disabled={scenarios.length === 0}
+                style={{ opacity: scenarios.length === 0 ? 0.5 : 1 }}
+              >
+                <ArrowDownToLine size={14} />
+                <span>Flatten</span>
+              </button>
+
+              {/* To Base button - pushes current DSL to base and regenerates all live scenarios */}
+              <button
+                className="scenarios-control-btn scenarios-control-btn-flatten"
+                onClick={handlePutToBase}
+                title="Push current query DSL to Base and regenerate all live scenarios"
+                disabled={!canPutToBase}
+                style={{ opacity: canPutToBase ? 1 : 0.5 }}
+              >
+                <ArrowDownFromLine size={14} />
+                <span>To Base</span>
+              </button>
+            </div>
+          </>
+        )}
+      />
+      </div>
     
     {/* Context Menu */}
     {contextMenu && (

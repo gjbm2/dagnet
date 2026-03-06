@@ -893,6 +893,7 @@ export interface Container {
 
 export interface CanvasAnalysisDisplay {
   hide_current?: boolean;
+  hidden_scenarios?: string[];
   [key: string]: unknown;
 }
 

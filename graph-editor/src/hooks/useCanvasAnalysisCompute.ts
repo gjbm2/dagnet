@@ -15,6 +15,7 @@ import { graphComputeClient, type AnalysisResult } from '../lib/graphComputeClie
 import { buildGraphForAnalysisLayer } from '../services/CompositionService';
 import { ANALYSIS_TYPES } from '../components/panels/analysisTypes';
 import { resolveSnapshotSubjectsForScenario } from '../services/snapshotSubjectResolutionService';
+import { augmentDSLWithConstraint } from '../lib/queryDSL';
 import { fileRegistry } from '../contexts/TabContext';
 import type { CanvasAnalysis } from '../types';
 
@@ -104,19 +105,29 @@ export function useCanvasAnalysisCompute({
     return (repository && branch) ? { repository, branch } : undefined;
   }, [currentTab?.fileId]);
 
+  const chartFragment = analysis.chart_current_layer_dsl || '';
+
   const getQueryDslForScenario = useCallback((scenarioId: string): string => {
-    if (scenarioId === 'current') return currentDSL || '';
-    if (scenarioId === 'base') {
-      const baseDsl = scenariosContext?.baseDSL || (graph as any)?.baseDSL;
-      return typeof baseDsl === 'string' ? baseDsl : currentDSL || '';
+    let baseDslForScenario: string;
+    if (scenarioId === 'current') {
+      baseDslForScenario = currentDSL || '';
+    } else if (scenarioId === 'base') {
+      const bd = scenariosContext?.baseDSL || (graph as any)?.baseDSL;
+      baseDslForScenario = typeof bd === 'string' ? bd : currentDSL || '';
+    } else {
+      const scenario = scenariosContext?.scenarios?.find((s: any) => s.id === scenarioId);
+      const meta: any = scenario?.meta;
+      if (meta?.isLive && typeof meta.lastEffectiveDSL === 'string' && meta.lastEffectiveDSL.trim()) {
+        baseDslForScenario = meta.lastEffectiveDSL;
+      } else {
+        baseDslForScenario = currentDSL || '';
+      }
     }
-    const scenario = scenariosContext?.scenarios?.find((s: any) => s.id === scenarioId);
-    const meta: any = scenario?.meta;
-    if (meta?.isLive && typeof meta.lastEffectiveDSL === 'string' && meta.lastEffectiveDSL.trim()) {
-      return meta.lastEffectiveDSL;
+    if (chartFragment.trim()) {
+      return augmentDSLWithConstraint(baseDslForScenario, chartFragment);
     }
-    return currentDSL || '';
-  }, [currentDSL, scenariosContext, graph]);
+    return baseDslForScenario;
+  }, [currentDSL, scenariosContext, graph, chartFragment]);
 
   const getScenarioColour = useCallback((scenarioId: string): string => {
     if (!scenariosContext) return '#808080';
@@ -152,16 +163,6 @@ export function useCanvasAnalysisCompute({
       if (analysis.live) {
         // Live mode: read from current tab state
         const visibleIds = scenarioState?.visibleScenarioIds || ['current'];
-
-        console.log('[CanvasAnalysisCompute] Live compute:', {
-          analysisType,
-          analyticsDsl,
-          visibleIds,
-          hasScenarios: !!scenariosContext,
-          needsSnapshots,
-          hasWorkspace: !!workspace,
-          currentDSL,
-        });
 
         if (visibleIds.length > 1 && scenariosContext) {
           const scenarioGraphs = await Promise.all(visibleIds.map(async (scenarioId) => {
@@ -205,13 +206,11 @@ export function useCanvasAnalysisCompute({
             };
           }));
 
-          console.log('[CanvasAnalysisCompute] Multi-scenario compute with', scenarioGraphs.length, 'scenarios:', scenarioGraphs.map(s => s.scenario_id));
           response = await graphComputeClient.analyzeMultipleScenarios(
             scenarioGraphs as any,
             analyticsDsl || currentDSL,
             analysisType,
           );
-          console.log('[CanvasAnalysisCompute] Multi-scenario result dimensions:', response?.result?.dimension_values ? Object.keys(response.result.dimension_values) : 'none');
         } else {
           const scenarioId = visibleIds[0] || 'current';
           const visibilityMode = tabId
@@ -242,14 +241,6 @@ export function useCanvasAnalysisCompute({
           }
 
           const finalDsl = analyticsDsl || currentDSL;
-          console.log('[DIAG-COMPUTE] single-scenario analyzeSelection call:', {
-            analyticsDsl,
-            currentDSL,
-            finalDsl,
-            analysisType,
-            scenarioId,
-            needsSnapshots,
-          });
           response = await graphComputeClient.analyzeSelection(
             analysisGraph,
             finalDsl,
@@ -260,32 +251,84 @@ export function useCanvasAnalysisCompute({
             visibilityMode,
             snapshotSubjects,
           );
-          console.log('[DIAG-COMPUTE] response dimensions:', response?.result?.dimension_values ? Object.keys(response.result.dimension_values) : 'none', 'data rows:', response?.result?.data?.length);
         }
       } else {
         // Frozen mode: compute from recipe.scenarios
-        const frozenScenarios = analysis.recipe.scenarios || [];
+        // Each scenario has its own effective_dsl; compose chart fragment onto each.
+        const frozenScenariosAll = analysis.recipe.scenarios || [];
+        const hiddenScenarios = new Set<string>((((analysis.display as any)?.hidden_scenarios) || []) as string[]);
+        const frozenScenariosVisible = frozenScenariosAll.filter((fs: any) => !hiddenScenarios.has(fs.scenario_id));
+        const frozenScenarios = frozenScenariosVisible.length > 0
+          ? frozenScenariosVisible
+          : frozenScenariosAll;
         const frozenWhatIfDsl = analysis.recipe.analysis.what_if_dsl;
 
-        if (frozenScenarios.length > 1) {
-          const scenarioGraphs = frozenScenarios.map(fs => ({
-            scenario_id: fs.scenario_id,
-            name: fs.name || fs.scenario_id,
-            graph: graph,
-            colour: fs.colour,
-            visibility_mode: fs.visibility_mode || 'f+e' as const,
-          }));
+        const getDslForFrozenScenario = (fs: any): string => {
+          let dsl = fs.effective_dsl || analyticsDsl || frozenWhatIfDsl || currentDSL;
+          if (chartFragment.trim()) {
+            dsl = augmentDSLWithConstraint(dsl, chartFragment);
+          }
+          return dsl;
+        };
 
-          response = await graphComputeClient.analyzeMultipleScenarios(
-            scenarioGraphs as any,
-            analyticsDsl || frozenWhatIfDsl || currentDSL,
-            analysisType,
-          );
+        if (frozenScenarios.length > 1) {
+          const allHaveSameDsl = frozenScenarios.every((fs: any) =>
+            (fs.effective_dsl || '') === (frozenScenarios[0].effective_dsl || ''));
+
+          if (allHaveSameDsl) {
+            const scenarioGraphs = frozenScenarios.map((fs: any) => ({
+              scenario_id: fs.scenario_id,
+              name: fs.name || fs.scenario_id,
+              graph: graph,
+              colour: fs.colour,
+              visibility_mode: fs.visibility_mode || 'f+e' as const,
+            }));
+            response = await graphComputeClient.analyzeMultipleScenarios(
+              scenarioGraphs as any,
+              getDslForFrozenScenario(frozenScenarios[0]),
+              analysisType,
+            );
+          } else {
+            const perScenarioResults = await Promise.all(
+              frozenScenarios.map(async (fs: any) => {
+                const scenarioDsl = getDslForFrozenScenario(fs);
+                const res = await graphComputeClient.analyzeSelection(
+                  graph,
+                  scenarioDsl,
+                  fs.scenario_id,
+                  fs.name || fs.scenario_id,
+                  fs.colour || '#808080',
+                  analysisType,
+                  (fs.visibility_mode || 'f+e') as 'f+e' | 'f' | 'e',
+                );
+                return res;
+              }),
+            );
+            const mergedData: any[] = [];
+            const mergedDimValues: any = {};
+            for (const res of perScenarioResults) {
+              if (res?.result?.data) mergedData.push(...res.result.data);
+              if (res?.result?.dimension_values) {
+                for (const [dim, vals] of Object.entries(res.result.dimension_values)) {
+                  if (!mergedDimValues[dim]) mergedDimValues[dim] = {};
+                  Object.assign(mergedDimValues[dim], vals);
+                }
+              }
+            }
+            const firstResult = perScenarioResults.find(r => r?.result)?.result;
+            response = {
+              result: firstResult ? {
+                ...firstResult,
+                data: mergedData,
+                dimension_values: mergedDimValues,
+              } : undefined,
+            };
+          }
         } else {
           const fs = frozenScenarios[0] || { scenario_id: 'current' };
           response = await graphComputeClient.analyzeSelection(
             graph,
-            analyticsDsl || frozenWhatIfDsl || currentDSL,
+            getDslForFrozenScenario(fs),
             fs.scenario_id,
             fs.name || 'Current',
             fs.colour || '#3b82f6',

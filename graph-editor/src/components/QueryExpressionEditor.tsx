@@ -34,6 +34,13 @@ interface QueryExpressionEditorProps {
   label?: string;
   showLabel?: boolean;
   infoTooltip?: string;
+  /**
+   * Controls which node/case suggestions appear in autocomplete.
+   * - 'graph': only nodes loaded in the current graph
+   * - 'registry': only nodes from the parameter registry
+   * - 'both' (default): union of graph + registry
+   */
+  suggestionsScope?: 'graph' | 'registry' | 'both';
 }
 
 interface ParsedQueryChip {
@@ -181,6 +188,7 @@ export function QueryExpressionEditor({
   height = '60px',
   readonly = false,
   allowedFunctions,
+  suggestionsScope,
 }: QueryExpressionEditorProps) {
   const monacoRef = useRef<typeof Monaco | null>(null);
   const editorRef = useRef<Monaco.editor.IStandaloneCodeEditor | null>(null);
@@ -396,12 +404,13 @@ export function QueryExpressionEditor({
     source: 'registry'
   }));
   
-  // Union: prefer graph nodes (by ID/id), add registry nodes not in graph
+  const scope = suggestionsScope ?? 'both';
   const graphNodeIds = new Set(graphNodes.map((n: any) => n.id));
-  const allNodes = [
-    ...graphNodes,
-    ...registryNodes.filter((n: any) => !graphNodeIds.has(n.id))
-  ];
+  const allNodes = scope === 'graph'
+    ? graphNodes
+    : scope === 'registry'
+      ? registryNodes
+      : [...graphNodes, ...registryNodes.filter((n: any) => !graphNodeIds.has(n.id))];
   
   // Merge cases from graph and registry
   const graphCases = (graph?.nodes || [])
@@ -420,12 +429,12 @@ export function QueryExpressionEditor({
     source: 'registry'
   }));
   
-  // Union: prefer graph cases, add registry cases not in graph
   const graphCaseIds = new Set(graphCases.map((c: any) => c.id));
-  const allCases = [
-    ...graphCases,
-    ...registryCases.filter((c: any) => !graphCaseIds.has(c.id))
-  ];
+  const allCases = scope === 'graph'
+    ? graphCases
+    : scope === 'registry'
+      ? registryCases
+      : [...graphCases, ...registryCases.filter((c: any) => !graphCaseIds.has(c.id))];
   
   const handleEditorDidMount = (editor: Monaco.editor.IStandaloneCodeEditor, monaco: typeof Monaco) => {
     editorRef.current = editor;

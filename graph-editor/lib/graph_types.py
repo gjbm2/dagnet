@@ -368,6 +368,7 @@ class ChartRecipeCore(BaseModel):
 class CanvasAnalysisDisplay(BaseModel, extra='allow'):
     """Display settings for a canvas analysis — extensible, preserves unknown fields."""
     hide_current: Optional[bool] = None
+    hidden_scenarios: Optional[List[str]] = None
 
 
 class CanvasAnalysis(BaseModel):

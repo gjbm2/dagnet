@@ -27,6 +27,119 @@ function echartsTooltipStyle() {
   };
 }
 
+/**
+ * Apply common display settings to a built ECharts option object.
+ * Called at the end of every builder so common settings are handled uniformly.
+ * Mutates `opt` in place and returns it.
+ */
+function applyCommonSettings(opt: any, settings: Record<string, any>): any {
+  if (!opt) return opt;
+  const c = echartsThemeColours();
+
+  // ── Legend ──
+  if (settings.show_legend === false) {
+    opt.legend = { show: false };
+  } else if (opt.legend && opt.legend.show !== false) {
+    const pos = settings.legend_position;
+    if (pos === 'bottom') {
+      opt.legend.top = undefined;
+      opt.legend.bottom = 0;
+    } else if (pos === 'right') {
+      opt.legend.top = undefined;
+      opt.legend.left = undefined;
+      opt.legend.right = 0;
+      opt.legend.orient = 'vertical';
+    } else if (pos === 'none') {
+      opt.legend = { show: false };
+    }
+    // 'top' is already the default layout in all builders
+  }
+
+  // ── Grid lines ──
+  const gridLines = settings.show_grid_lines;
+  const gridStyle = settings.grid_line_style ?? 'dashed';
+  const gridLineStyleObj = { type: gridStyle, color: c.gridLine };
+  if (gridLines !== undefined) {
+    const yAxes = Array.isArray(opt.yAxis) ? opt.yAxis : (opt.yAxis ? [opt.yAxis] : []);
+    const xAxes = Array.isArray(opt.xAxis) ? opt.xAxis : (opt.xAxis ? [opt.xAxis] : []);
+    const showH = gridLines === 'horizontal' || gridLines === 'both';
+    const showV = gridLines === 'vertical' || gridLines === 'both';
+    for (const y of yAxes) { y.splitLine = { show: showH, lineStyle: gridLineStyleObj }; }
+    for (const x of xAxes) {
+      if (!x.splitLine) x.splitLine = {};
+      x.splitLine.show = showV;
+      if (showV) x.splitLine.lineStyle = gridLineStyleObj;
+    }
+    if (gridLines === 'none') {
+      for (const y of yAxes) y.splitLine = { show: false };
+      for (const x of xAxes) x.splitLine = { show: false };
+    }
+  }
+
+  // ── Axis label rotation ──
+  const rotation = settings.axis_label_rotation;
+  if (rotation !== undefined && rotation !== 'auto') {
+    const angle = Number(rotation);
+    if (Number.isFinite(angle)) {
+      const xAxes = Array.isArray(opt.xAxis) ? opt.xAxis : (opt.xAxis ? [opt.xAxis] : []);
+      for (const x of xAxes) {
+        if (!x.axisLabel) x.axisLabel = {};
+        x.axisLabel.rotate = angle;
+      }
+    }
+  }
+
+  // ── Axis label format ──
+  const fmt = settings.axis_label_format;
+  if (fmt && fmt !== 'auto') {
+    const fmtFn = (v: number) => {
+      if (fmt === 'percent') return `${(v * 100).toFixed(0)}%`;
+      if (fmt === 'decimal_2') return v.toFixed(2);
+      if (fmt === 'decimal_0') return Math.round(v).toString();
+      if (fmt === 'compact') {
+        if (Math.abs(v) >= 1_000_000) return `${(v / 1_000_000).toFixed(1)}M`;
+        if (Math.abs(v) >= 1_000) return `${(v / 1_000).toFixed(1)}K`;
+        return v.toString();
+      }
+      return v.toString();
+    };
+    const yAxes = Array.isArray(opt.yAxis) ? opt.yAxis : (opt.yAxis ? [opt.yAxis] : []);
+    for (const y of yAxes) {
+      if (!y.axisLabel) y.axisLabel = {};
+      y.axisLabel.formatter = fmtFn;
+    }
+  }
+
+  // ── Tooltip ──
+  if (settings.show_tooltip === false) {
+    opt.tooltip = { show: false };
+  } else if (opt.tooltip) {
+    const mode = settings.tooltip_mode;
+    if (mode === 'item') opt.tooltip.trigger = 'item';
+    else if (mode === 'axis') opt.tooltip.trigger = 'axis';
+  }
+
+  // ── Animation ──
+  if (settings.animate === false) {
+    opt.animation = false;
+  }
+
+  // ── Data labels (series-level) ──
+  const showLabels = settings.show_labels;
+  const labelFontSize = settings.label_font_size;
+  const labelPosition = settings.label_position;
+  if (showLabels !== undefined || labelFontSize !== undefined || labelPosition !== undefined) {
+    for (const s of (opt.series || [])) {
+      if (!s.label) s.label = {};
+      if (showLabels !== undefined && showLabels !== null) s.label.show = !!showLabels;
+      if (labelFontSize !== undefined && labelFontSize !== null) s.label.fontSize = labelFontSize;
+      if (labelPosition !== undefined) s.label.position = labelPosition;
+    }
+  }
+
+  return opt;
+}
+
 type ScenarioId = string;
 type StageId = string;
 
@@ -1410,4 +1523,941 @@ export function buildFunnelBridgeEChartsOption(result: AnalysisResult, args: Fun
   };
 }
 
+// ============================================================
+// Snapshot chart builders (migrated from inline component logic)
+// ============================================================
+
+/**
+ * Build ECharts option for lag histogram (snapshot-based).
+ * Input: LagHistogramResult { data: [{lag_days, conversions, pct}], total_conversions, cohorts_analysed }
+ */
+export function buildHistogramEChartsOption(data: any, settings: Record<string, any> = {}): any | null {
+  if (!data?.data || data.data.length === 0) return null;
+
+  const c = echartsThemeColours();
+  const lagDays = data.data.map((d: any) => d.lag_days);
+  const conversions = data.data.map((d: any) => d.conversions);
+  const percentages = data.data.map((d: any) => d.pct * 100);
+
+  const showLabels = settings.show_labels ?? (data.data.length <= 20);
+  const yScale = settings.y_axis_scale ?? 'linear';
+
+  return {
+    tooltip: {
+      trigger: 'axis',
+      axisPointer: { type: 'shadow' },
+      ...echartsTooltipStyle(),
+      formatter: (params: any) => {
+        const item = params[0];
+        const dataItem = data.data[item.dataIndex];
+        return `<strong>Lag: ${dataItem.lag_days} day${dataItem.lag_days !== 1 ? 's' : ''}</strong><br/>Conversions: ${dataItem.conversions.toLocaleString()}<br/>Percentage: ${(dataItem.pct * 100).toFixed(1)}%`;
+      },
+    },
+    grid: { left: '3%', right: '4%', bottom: '3%', top: 40, containLabel: true },
+    xAxis: {
+      type: 'category',
+      data: lagDays,
+      name: 'Lag (days)',
+      nameLocation: 'middle',
+      nameGap: 30,
+      axisLabel: { fontSize: 11, color: c.text },
+    },
+    yAxis: [{
+      type: yScale === 'log' ? 'log' : 'value',
+      name: settings.y_axis_title ?? 'Conversions',
+      nameLocation: 'middle',
+      nameGap: 45,
+      min: settings.y_axis_min ?? undefined,
+      max: settings.y_axis_max ?? undefined,
+      axisLabel: {
+        fontSize: 11,
+        color: c.text,
+        formatter: (value: number) => value >= 1000 ? `${(value / 1000).toFixed(1)}k` : value.toString(),
+      },
+    }],
+    series: [{
+      name: 'Conversions',
+      type: 'bar',
+      data: conversions,
+      itemStyle: { color: '#3b82f6', borderRadius: [2, 2, 0, 0] },
+      label: {
+        show: showLabels,
+        position: 'top',
+        fontSize: settings.label_font_size ?? 9,
+        formatter: (params: any) => {
+          const pct = percentages[params.dataIndex];
+          return pct >= 1 ? `${pct.toFixed(0)}%` : '';
+        },
+      },
+    }],
+  };
+}
+
+/**
+ * Build ECharts option for daily conversions (snapshot-based dual-axis time-series).
+ *
+ * Left Y-axis: bar chart showing N (cohort size).
+ * Right Y-axis: line chart showing conversion rate (%).
+ */
+export function buildDailyConversionsEChartsOption(
+  result: any,
+  settings: Record<string, any> = {},
+  extra?: { visibleScenarioIds?: string[]; subjectId?: string },
+): any | null {
+  const rows: any[] = Array.isArray(result?.data) ? result.data : [];
+  if (rows.length === 0) return null;
+
+  const c = echartsThemeColours();
+  const visibleScenarioIds = extra?.visibleScenarioIds || ['current'];
+  const scenarioMeta: any = result?.dimension_values?.scenario_id || {};
+  const subjectMeta: any = result?.dimension_values?.subject_id || {};
+
+  const scenarioIds = [...new Set(rows.map((r: any) => String(r?.scenario_id)).filter(Boolean))];
+  const subjectIds = [...new Set(rows.map((r: any) => String(r?.subject_id)).filter(Boolean))];
+  const multiScenario = scenarioIds.length > 1;
+  const effectiveSubjectId = extra?.subjectId || subjectIds[0] || 'subject';
+
+  let filteredRows = rows.filter((r: any) => visibleScenarioIds.includes(String(r?.scenario_id)));
+  if (multiScenario) {
+    filteredRows = filteredRows.filter((r: any) => String(r?.subject_id) === effectiveSubjectId);
+  }
+
+  const seriesKey = multiScenario ? 'scenario_id' : 'subject_id';
+  const meta = multiScenario ? scenarioMeta : subjectMeta;
+
+  const PALETTE = ['#3b82f6', '#ef4444', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899', '#06b6d4', '#84cc16'];
+
+  const toBarFill = (hex: string): string => {
+    const num = parseInt(hex.replace('#', ''), 16);
+    const mix = 0.70;
+    const r = Math.min(255, Math.round(((num >> 16) & 0xff) + (255 - ((num >> 16) & 0xff)) * mix));
+    const g = Math.min(255, Math.round(((num >> 8) & 0xff) + (255 - ((num >> 8) & 0xff)) * mix));
+    const b = Math.min(255, Math.round((num & 0xff) + (255 - (num & 0xff)) * mix));
+    return `#${((1 << 24) + (r << 16) + (g << 8) + b).toString(16).slice(1)}`;
+  };
+
+  type Point = { date: string; rate: number | null; x: number; y: number };
+  const byKey = new Map<string, Point[]>();
+  for (const r of filteredRows) {
+    const key = String(r?.[seriesKey]);
+    const date = String(r?.date);
+    const rate = (r?.rate === null || r?.rate === undefined) ? null : Number(r.rate);
+    const x = Number(r?.x ?? 0);
+    const y = Number(r?.y ?? 0);
+    if (!key || !date) continue;
+    if (!byKey.has(key)) byKey.set(key, []);
+    byKey.get(key)!.push({
+      date,
+      rate: Number.isFinite(rate as any) ? (rate as number) : null,
+      x: Number.isFinite(x) ? x : 0,
+      y: Number.isFinite(y) ? y : 0,
+    });
+  }
+
+  const allSeries: any[] = [];
+  const keys = Array.from(byKey.keys()).sort();
+  const showSmooth = settings.smooth ?? false;
+  const showMarkers = settings.show_markers;
+  const seriesType = settings.series_type ?? 'bar';
+
+  for (let i = 0; i < keys.length; i++) {
+    const key = keys[i];
+    const points = (byKey.get(key) || []).slice().sort((a, b) => a.date.localeCompare(b.date));
+    const name = meta?.[key]?.name || key;
+    const strongColour = meta?.[key]?.colour || PALETTE[i % PALETTE.length];
+    const lightColour = toBarFill(strongColour);
+
+    allSeries.push({
+      name: keys.length > 1 ? `${name} · N` : 'N',
+      type: seriesType,
+      yAxisIndex: 0,
+      barMaxWidth: 24,
+      itemStyle: { color: lightColour, borderRadius: [2, 2, 0, 0] },
+      emphasis: { focus: 'series' },
+      data: points.map(p => [p.date, p.x]),
+    });
+
+    allSeries.push({
+      name: keys.length > 1 ? `${name} · Rate` : 'Conversion %',
+      type: 'line',
+      yAxisIndex: 1,
+      showSymbol: showMarkers ?? (points.length <= 20),
+      symbolSize: settings.marker_size ?? 5,
+      smooth: showSmooth,
+      connectNulls: settings.missing_data === 'connect',
+      lineStyle: { width: 2.5, color: strongColour },
+      itemStyle: { color: strongColour },
+      emphasis: { focus: 'series' },
+      data: points.map(p => [p.date, p.rate]),
+      ...(settings.area_fill ? { areaStyle: { opacity: 0.15 } } : {}),
+    });
+  }
+
+  if (allSeries.length === 0) return null;
+
+  let maxRate = 0;
+  for (const s of allSeries) {
+    if (s.type !== 'line') continue;
+    for (const d of s.data) {
+      const v = d?.[1];
+      if (typeof v === 'number' && Number.isFinite(v) && v > maxRate) maxRate = v;
+    }
+  }
+  const rateMax = Math.min(1.0, Math.max(0.05, Math.ceil((maxRate * 1.2) * 20) / 20));
+
+  const yScale = settings.y_axis_scale ?? 'linear';
+  const showLegend = settings.show_legend ?? true;
+
+  return {
+    tooltip: {
+      trigger: 'axis',
+      axisPointer: { type: 'shadow' },
+      ...echartsTooltipStyle(),
+      formatter: (params: any) => {
+        const items = Array.isArray(params) ? params : [params];
+        const first = items[0];
+        const dateRaw = first?.value?.[0];
+        const dateStr = typeof dateRaw === 'number'
+          ? new Date(dateRaw).toISOString().slice(0, 10)
+          : String(dateRaw || '');
+        const d = new Date(dateStr);
+        const title = Number.isNaN(d.getTime()) ? dateStr : `${d.getDate()}-${d.toLocaleDateString('en-GB', { month: 'short' })}-${d.toLocaleDateString('en-GB', { year: '2-digit' })}`;
+        const lines = items.map((it: any) => {
+          const val = it?.value?.[1];
+          const isRate = it?.seriesIndex !== undefined && allSeries[it.seriesIndex]?.type === 'line';
+          const formatted = isRate
+            ? (val === null || val === undefined || !Number.isFinite(val) ? '—' : `${(val * 100).toFixed(1)}%`)
+            : (val === null || val === undefined || !Number.isFinite(val) ? '—' : val.toLocaleString());
+          return `${it?.marker || ''} ${it?.seriesName || ''}: <strong>${formatted}</strong>`;
+        });
+        return `<strong>${title}</strong><br/>${lines.join('<br/>')}`;
+      },
+    },
+    grid: { left: '3%', right: '4%', bottom: 60, top: allSeries.length > 2 ? 80 : 50, containLabel: true },
+    xAxis: {
+      type: 'time',
+      name: settings.y_axis_title ?? 'Cohort date',
+      nameLocation: 'middle',
+      nameGap: 30,
+      axisLabel: {
+        fontSize: 10,
+        rotate: 30,
+        color: c.text,
+        formatter: (value: number) => {
+          const d = new Date(value);
+          if (Number.isNaN(d.getTime())) return '';
+          return `${d.getUTCDate()}-${d.toLocaleDateString('en-GB', { month: 'short', timeZone: 'UTC' })}`;
+        },
+      },
+    },
+    yAxis: [
+      {
+        type: yScale === 'log' ? 'log' : 'value',
+        name: 'N',
+        nameLocation: 'middle',
+        nameGap: 45,
+        min: settings.y_axis_min ?? 0,
+        axisLabel: {
+          fontSize: 11,
+          color: c.text,
+          formatter: (value: number) => {
+            if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`;
+            if (value >= 1_000) return `${(value / 1_000).toFixed(1)}k`;
+            return value.toString();
+          },
+        },
+        splitLine: { lineStyle: { color: c.gridLine } },
+      },
+      {
+        type: 'value',
+        name: 'Conversion %',
+        nameLocation: 'middle',
+        nameGap: 50,
+        min: 0,
+        max: settings.y_axis_max ?? rateMax,
+        axisLabel: {
+          fontSize: 11,
+          color: c.text,
+          formatter: (v: number) => `${(v * 100).toFixed(0)}%`,
+        },
+        splitLine: { show: false },
+      },
+    ],
+    legend: showLegend ? { top: 22, left: 12, textStyle: { fontSize: 11, color: c.text }, icon: 'roundRect' } : { show: false },
+    series: allSeries,
+    ...(settings.animate === false ? { animation: false } : {}),
+  };
+}
+
+/**
+ * Build ECharts option for cohort maturity (age-aligned τ-curve).
+ *
+ * Segments per scenario:
+ *  - solid: τ ≤ tauSolidMax (all cohorts have reached this age)
+ *  - dashed: tauSolidMax < τ ≤ tauFutureMax (some cohorts still maturing)
+ *  - future: τ > tauFutureMax (forecast-only synthetic frames)
+ *
+ * Visibility modes (per-scenario):
+ *  - 'f+e': evidence base line + forecast crown fill + future tail
+ *  - 'e': evidence only (no forecast)
+ *  - 'f': forecast only (projected_rate as a single dashed line)
+ *
+ * Optionally overlays a model CDF curve from result.metadata.model_curves.
+ */
+export function buildCohortMaturityEChartsOption(
+  result: any,
+  settings: Record<string, any> = {},
+  extra?: {
+    visibleScenarioIds?: string[];
+    scenarioVisibilityModes?: Record<string, 'f+e' | 'f' | 'e'>;
+    subjectId?: string;
+  },
+): any | null {
+  const rows: any[] = Array.isArray(result?.data) ? result.data : [];
+  if (rows.length === 0) return null;
+
+  const c = echartsThemeColours();
+  const visibleScenarioIds = extra?.visibleScenarioIds || ['current'];
+  const scenarioMeta: any = result?.dimension_values?.scenario_id || {};
+
+  const subjectIds = [...new Set(rows.map((r: any) => String(r?.subject_id)).filter(Boolean))];
+  const effectiveSubjectId = extra?.subjectId || subjectIds[0] || 'subject';
+
+  const filteredRows = rows
+    .filter((r: any) => String(r?.subject_id) === effectiveSubjectId)
+    .filter((r: any) => visibleScenarioIds.includes(String(r?.scenario_id)));
+
+  // Axis metadata
+  let maxTau: number | null = null;
+  let tauSolidMax: number | null = null;
+  let tauFutureMax: number | null = null;
+  let boundaryDate: string | null = null;
+  for (const r of filteredRows) {
+    const tau = Number(r?.tau_days);
+    if (Number.isFinite(tau)) maxTau = Math.max(maxTau ?? 0, tau);
+    const ts = Number(r?.tau_solid_max);
+    const tf = Number(r?.tau_future_max);
+    if (Number.isFinite(ts)) tauSolidMax = Math.max(tauSolidMax ?? 0, ts);
+    if (Number.isFinite(tf)) tauFutureMax = Math.max(tauFutureMax ?? 0, tf);
+    const b = r?.boundary_date;
+    if (typeof b === 'string' && b) boundaryDate = b;
+  }
+  const solidMax = tauSolidMax ?? 0;
+  const futureMax = tauFutureMax ?? 0;
+
+  // Check for any signal at all
+  let hasAnySignal = false;
+  for (const r of filteredRows) {
+    const base = r?.rate;
+    const proj = r?.projected_rate;
+    if ((typeof base === 'number' && Number.isFinite(base)) || (typeof proj === 'number' && Number.isFinite(proj))) {
+      hasAnySignal = true;
+      break;
+    }
+  }
+  if (!hasAnySignal) return null;
+
+  // Parse rows into per-scenario point arrays
+  type RowPoint = {
+    tauDays: number;
+    baseRate: number | null;
+    projectedRate: number | null;
+    cohortsExpected: number | null;
+    cohortsInDenom: number | null;
+    cohortsCoveredBase: number | null;
+    cohortsCoveredProjected: number | null;
+  };
+  const byScenario = new Map<string, RowPoint[]>();
+  for (const r of filteredRows) {
+    const sid = String(r?.scenario_id);
+    const tau = Number(r?.tau_days);
+    if (!sid || !Number.isFinite(tau)) continue;
+    if (maxTau !== null && Number.isFinite(maxTau) && tau > maxTau) continue;
+
+    const parse = (v: any) => (v === null || v === undefined) ? null : (Number.isFinite(Number(v)) ? Number(v) : null);
+
+    if (!byScenario.has(sid)) byScenario.set(sid, []);
+    byScenario.get(sid)!.push({
+      tauDays: tau,
+      baseRate: parse(r?.rate),
+      projectedRate: parse(r?.projected_rate),
+      cohortsExpected: parse(r?.cohorts_expected),
+      cohortsInDenom: parse(r?.cohorts_in_denominator),
+      cohortsCoveredBase: parse(r?.cohorts_covered_base),
+      cohortsCoveredProjected: parse(r?.cohorts_covered_projected),
+    });
+  }
+
+  const mkLine = (args: {
+    id: string;
+    name?: string;
+    colour?: string;
+    lineType: 'solid' | 'dashed' | 'dotted';
+    opacity?: number;
+    data: Array<{ value: [number, number | null]; [k: string]: any }>;
+    showSymbol?: boolean;
+    areaStyle?: any;
+    z?: number;
+    smooth?: boolean;
+    emphasis?: any;
+    showInLegend?: boolean;
+  }): any | null => {
+    if (args.data.length === 0) return null;
+    const inLegend = args.showInLegend !== false && !!args.name;
+    return {
+      id: args.id,
+      ...(args.name ? { name: args.name } : {}),
+      type: 'line',
+      showSymbol: args.showSymbol ?? false,
+      symbolSize: 6,
+      smooth: args.smooth ?? (settings.smooth || false),
+      connectNulls: false,
+      lineStyle: { width: 2, color: args.colour, type: args.lineType, opacity: args.opacity ?? 1 },
+      itemStyle: { color: args.colour, opacity: args.opacity ?? 1 },
+      emphasis: args.emphasis ?? { focus: 'series' },
+      ...(args.areaStyle ? { areaStyle: args.areaStyle } : {}),
+      ...(args.z !== undefined ? { z: args.z } : {}),
+      ...(!inLegend ? { legendHoverLink: false } : {}),
+      data: args.data,
+    };
+  };
+
+  const seriesOut: any[] = [];
+  for (const scenarioId of Array.from(byScenario.keys()).sort()) {
+    const name = scenarioMeta?.[scenarioId]?.name || scenarioId;
+    const colour = scenarioMeta?.[scenarioId]?.colour;
+    const points = (byScenario.get(scenarioId) || []).slice().sort((a, b) => a.tauDays - b.tauDays);
+
+    const mode = extra?.scenarioVisibilityModes?.[scenarioId]
+      ?? (scenarioMeta?.[scenarioId]?.visibility_mode as any)
+      ?? 'f+e';
+
+    const toMeta = (p: RowPoint) => ({
+      tauDays: p.tauDays,
+      baseRate: p.baseRate,
+      projectedRate: p.projectedRate,
+      boundaryDate,
+      cohortsExpected: p.cohortsExpected,
+      cohortsInDenom: p.cohortsInDenom,
+      cohortsCoveredBase: p.cohortsCoveredBase,
+      cohortsCoveredProjected: p.cohortsCoveredProjected,
+    });
+
+    if (mode === 'f') {
+      const forecastAll = points.map(p => ({ value: [p.tauDays, p.projectedRate] as [number, number | null], ...toMeta(p) }));
+      const s = mkLine({
+        id: `${scenarioId}::forecast`, name, colour, lineType: 'dashed', opacity: 0.85,
+        data: forecastAll, showSymbol: forecastAll.length <= 12,
+        areaStyle: { color: colour || '#111827', opacity: 0.08 },
+      });
+      if (s) seriesOut.push(s);
+      continue;
+    }
+
+    const baseSolidPts = points.filter(p => p.tauDays <= solidMax).map(p => ({ value: [p.tauDays, p.baseRate] as [number, number | null], ...toMeta(p) }));
+    const baseDashedPts = points.filter(p => p.tauDays >= solidMax && p.tauDays <= futureMax).map(p => ({ value: [p.tauDays, p.baseRate] as [number, number | null], ...toMeta(p) }));
+    const futureForecastPts = points.filter(p => p.tauDays >= futureMax).map(p => ({ value: [p.tauDays, p.projectedRate] as [number, number | null], ...toMeta(p) }));
+    const crownProjPts = points.filter(p => p.tauDays >= solidMax && p.tauDays <= futureMax).map(p => ({ value: [p.tauDays, p.projectedRate] as [number, number | null], ...toMeta(p) }));
+
+    if (mode === 'f+e') {
+      const sCrownUpper = mkLine({
+        id: `${scenarioId}::crownUpper`, colour, lineType: 'dashed', opacity: 0,
+        data: crownProjPts, areaStyle: { color: colour || '#111827', opacity: 0.15 },
+      });
+      const sCrownMask = mkLine({
+        id: `${scenarioId}::crownMask`, colour, lineType: 'dashed', opacity: 0,
+        data: baseDashedPts, areaStyle: { color: c.bg === '#1e1e1e' ? '#1e1e1e' : '#ffffff', opacity: 1 },
+      });
+      if (sCrownUpper) seriesOut.push(sCrownUpper);
+      if (sCrownMask) seriesOut.push(sCrownMask);
+    }
+
+    const sBaseSolid = mkLine({
+      id: `${scenarioId}::baseSolid`, name, colour, lineType: 'solid',
+      data: baseSolidPts, showSymbol: baseSolidPts.length <= 12,
+    });
+    const sBaseDashed = mkLine({
+      id: `${scenarioId}::baseDashed`, colour, lineType: 'dashed',
+      data: baseDashedPts,
+    });
+    if (sBaseSolid) seriesOut.push(sBaseSolid);
+    if (sBaseDashed) seriesOut.push(sBaseDashed);
+
+    if (mode === 'f+e') {
+      const sFuture = mkLine({
+        id: `${scenarioId}::futureForecast`, colour, lineType: 'dashed', opacity: 0.75,
+        data: futureForecastPts,
+      });
+      if (sFuture) seriesOut.push(sFuture);
+    }
+  }
+
+  // Model CDF overlay
+  const modelCurves = result?.metadata?.model_curves;
+  if (modelCurves && typeof modelCurves === 'object') {
+    const entry = modelCurves[effectiveSubjectId];
+    if (entry?.curve && Array.isArray(entry.curve) && entry.curve.length > 0) {
+      const data = entry.curve
+        .filter((p: any) => typeof p?.tau_days === 'number' && typeof p?.model_rate === 'number')
+        .map((p: any) => ({ value: [p.tau_days, p.model_rate] }));
+      if (data.length > 0) {
+        const modelColour = c.text === '#e0e0e0' ? '#9ca3af' : '#4b5563';
+        seriesOut.push({
+          id: 'model_cdf',
+          name: 'Model CDF',
+          type: 'line',
+          showSymbol: false,
+          smooth: true,
+          connectNulls: false,
+          lineStyle: { width: 2, color: modelColour, type: 'dotted', opacity: 0.7 },
+          itemStyle: { color: modelColour },
+          emphasis: { disabled: true },
+          z: 10,
+          data,
+        });
+        if (maxTau !== null) {
+          const curveMax = data[data.length - 1]?.value?.[0];
+          if (typeof curveMax === 'number' && Number.isFinite(curveMax) && curveMax > maxTau) {
+            maxTau = curveMax;
+          }
+        }
+      }
+    }
+  }
+
+  // Y-axis max from data with headroom
+  let maxRate = 0;
+  for (const s of seriesOut) {
+    for (const d of (s.data || [])) {
+      const v = d?.value?.[1];
+      if (typeof v === 'number' && Number.isFinite(v) && v > maxRate) maxRate = v;
+    }
+  }
+  const yMax = settings.y_axis_max ?? Math.min(1.0, Math.max(0.05, Math.ceil((maxRate * 1.2) * 20) / 20));
+  const showLegend = settings.show_legend ?? true;
+
+  const fmtPercent = (v: number | null | undefined): string =>
+    (v === null || v === undefined || !Number.isFinite(v)) ? '—' : `${(v * 100).toFixed(1)}%`;
+
+  return {
+    tooltip: {
+      trigger: 'axis',
+      axisPointer: { type: 'line' },
+      ...echartsTooltipStyle(),
+      formatter: (params: any) => {
+        const items = Array.isArray(params) ? params : [params];
+        const first = items[0];
+        const tauDays = typeof first?.value?.[0] === 'number' ? first.value[0] : Number(first?.value?.[0]);
+
+        const best = items.find((it: any) => it?.data?.baseRate !== undefined || it?.data?.projectedRate !== undefined)?.data ?? first?.data ?? {};
+        const bd = typeof best?.boundaryDate === 'string' ? best.boundaryDate : (boundaryDate || '');
+        const title = Number.isFinite(tauDays)
+          ? `Age: ${tauDays} day(s) · As at ${bd}`
+          : `As at ${bd}`;
+
+        const scenarioItems = items.filter((it: any) => it?.seriesId !== 'model_cdf');
+        const lines = scenarioItems
+          .filter((it: any, idx: number, arr: any[]) => arr.findIndex((x: any) => String(x?.seriesName) === String(it?.seriesName)) === idx)
+          .map((it: any) => `${it?.seriesName || 'Scenario'}: <strong>${fmtPercent(it?.value?.[1])}</strong>`);
+
+        const extra_: string[] = [];
+        if (best?.baseRate !== null && best?.baseRate !== undefined) extra_.push(`Evidenced: <strong>${fmtPercent(best.baseRate)}</strong>`);
+        if (best?.projectedRate !== null && best?.projectedRate !== undefined) extra_.push(`Projected: <strong>${fmtPercent(best.projectedRate)}</strong>`);
+        const modelItem = items.find((it: any) => it?.seriesId === 'model_cdf');
+        if (modelItem) {
+          const mv = modelItem?.value?.[1];
+          if (typeof mv === 'number' && Number.isFinite(mv)) extra_.push(`Model CDF: <strong>${fmtPercent(mv)}</strong>`);
+        }
+        const ce = best?.cohortsExpected;
+        const cd = best?.cohortsInDenom;
+        if (typeof ce === 'number' && typeof cd === 'number') extra_.push(`Cohorts: <strong>${cd}/${ce}</strong> in denominator`);
+        const cb = best?.cohortsCoveredBase;
+        const cp = best?.cohortsCoveredProjected;
+        if (typeof cb === 'number' && typeof cp === 'number') extra_.push(`Coverage: base <strong>${cb}</strong> · proj <strong>${cp}</strong> (at this τ)`);
+
+        return `<strong>${title}</strong><br/>${[...lines, ...extra_].join('<br/>')}`;
+      },
+    },
+    grid: { left: '3%', right: '4%', bottom: 60, top: seriesOut.length > 2 ? 80 : 50, containLabel: true },
+    xAxis: {
+      type: 'value',
+      name: settings.x_axis_title ?? 'Age (days since cohort date)',
+      nameLocation: 'middle',
+      nameGap: 30,
+      min: settings.x_axis_min ?? 0,
+      ...(maxTau !== null && Number.isFinite(maxTau) ? { max: settings.x_axis_max ?? maxTau } : {}),
+      axisLabel: { fontSize: 10, color: c.text, formatter: (v: number) => `${Math.round(v)}` },
+    },
+    yAxis: {
+      type: (settings.y_axis_scale === 'log') ? 'log' : 'value',
+      min: settings.y_axis_min ?? 0,
+      max: yMax,
+      name: settings.y_axis_title ?? 'Conversion rate',
+      nameLocation: 'middle',
+      nameGap: 45,
+      axisLabel: { fontSize: 11, color: c.text, formatter: (v: number) => `${(v * 100).toFixed(0)}%` },
+      splitLine: { lineStyle: { color: c.gridLine } },
+    },
+    legend: showLegend ? { top: 22, left: 12, textStyle: { fontSize: 11, color: c.text }, icon: 'roundRect' } : { show: false },
+    series: seriesOut,
+    dagnet_meta: {
+      subject_id: effectiveSubjectId,
+      anchor: { from: result?.metadata?.anchor_from, to: result?.metadata?.anchor_to },
+      sweep: { from: result?.metadata?.sweep_from, to: result?.metadata?.sweep_to },
+    },
+    ...(settings.animate === false ? { animation: false } : {}),
+  };
+}
+
+// ============================================================
+// Unified dispatch — single entry point for all chart kinds
+// ============================================================
+
+type ChartKindId = 'funnel' | 'bridge' | 'bridge_horizontal' | 'histogram' | 'daily_conversions' | 'cohort_maturity';
+
+/**
+ * Build ECharts options for any chart kind from a unified interface.
+ *
+ * This is the single codepath: AnalysisChartContainer calls this with
+ * (chartKind, result, resolvedSettings) and gets back an ECharts option object.
+ *
+ * Settings come from the display settings registry (resolveDisplaySetting).
+ * The dispatch translates resolvedSettings to per-builder args internally.
+ */
+export function buildChartOption(
+  chartKind: string,
+  result: any,
+  resolvedSettings: Record<string, any> = {},
+  extra?: {
+    visibleScenarioIds?: string[];
+    scenarioVisibilityModes?: Record<string, 'f+e' | 'f' | 'e'>;
+    scenarioDslSubtitleById?: Record<string, string>;
+    subjectId?: string;
+  },
+): any | null {
+  let opt: any | null;
+
+  switch (chartKind) {
+    case 'histogram':
+      opt = buildHistogramEChartsOption(result, resolvedSettings);
+      break;
+
+    case 'funnel':
+      opt = buildFunnelBarEChartsOption(result, {
+        scenarioIds: extra?.visibleScenarioIds || ['current'],
+        metric: resolvedSettings.metric || 'cumulative_probability',
+        legend: { scenarioDslSubtitleById: extra?.scenarioDslSubtitleById },
+        ui: { showToolbox: false },
+      });
+      // funnel_direction: left_to_right swaps axes
+      if (opt && resolvedSettings.funnel_direction === 'left_to_right') {
+        const tmpX = opt.xAxis;
+        opt.xAxis = opt.yAxis;
+        opt.yAxis = tmpX;
+        for (const s of (opt.series || [])) {
+          if (s.label?.position === 'top') s.label.position = 'right';
+        }
+      }
+      break;
+
+    case 'bridge':
+    case 'bridge_horizontal':
+      opt = buildBridgeEChartsOption(result, {
+        ui: {
+          showToolbox: false,
+          orientation: resolvedSettings.orientation || (chartKind === 'bridge_horizontal' ? 'horizontal' : 'vertical'),
+          showRunningTotalLine: resolvedSettings.show_running_total ?? true,
+          barWidthMinPx: 8,
+          barWidthMaxPx: 18,
+        },
+      });
+      break;
+
+    case 'daily_conversions':
+      opt = buildDailyConversionsEChartsOption(result, resolvedSettings, {
+        visibleScenarioIds: extra?.visibleScenarioIds,
+        subjectId: extra?.subjectId,
+      });
+      break;
+
+    case 'cohort_maturity':
+      opt = buildCohortMaturityEChartsOption(result, resolvedSettings, {
+        visibleScenarioIds: extra?.visibleScenarioIds,
+        scenarioVisibilityModes: extra?.scenarioVisibilityModes,
+        subjectId: extra?.subjectId,
+      });
+      break;
+
+    default:
+      return null;
+  }
+
+  if (!opt) return null;
+
+  // ── Time grouping (re-bucket time-series data into week/month bins) ──
+  const grouping = resolvedSettings.time_grouping;
+  if (grouping && grouping !== 'day' && (chartKind === 'daily_conversions' || chartKind === 'cohort_maturity')) {
+    for (const s of (opt.series || [])) {
+      if (!Array.isArray(s.data) || s.data.length === 0) continue;
+      if (!Array.isArray(s.data[0])) continue;
+
+      const buckets = new Map<string, { sum: number; count: number; xKey: string }>();
+      for (const pt of s.data) {
+        const dateStr = String(pt[0]);
+        const d = new Date(dateStr);
+        if (Number.isNaN(d.getTime())) continue;
+
+        let bucketKey: string;
+        if (grouping === 'week') {
+          const day = d.getDay();
+          const weekStart = new Date(d);
+          weekStart.setDate(d.getDate() - day);
+          bucketKey = weekStart.toISOString().slice(0, 10);
+        } else {
+          bucketKey = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-01`;
+        }
+
+        const v = pt[1];
+        if (typeof v !== 'number' || !Number.isFinite(v)) continue;
+        const bucket = buckets.get(bucketKey) || { sum: 0, count: 0, xKey: bucketKey };
+        bucket.sum += v;
+        bucket.count += 1;
+        buckets.set(bucketKey, bucket);
+      }
+
+      s.data = Array.from(buckets.values())
+        .sort((a, b) => a.xKey.localeCompare(b.xKey))
+        .map(b => [b.xKey, s.type === 'bar' ? b.sum : b.sum / b.count]);
+    }
+  }
+
+  // ── Sort (category-axis charts: bridge, histogram) ──
+  const sortBy = resolvedSettings.sort_by;
+  if (sortBy && sortBy !== 'graph_order' && opt.xAxis?.data) {
+    const dir = resolvedSettings.sort_direction === 'asc' ? 1 : -1;
+    const catData = opt.xAxis.data as any[];
+    const indices = catData.map((_: any, i: number) => i);
+
+    if (sortBy === 'name') {
+      indices.sort((a: number, b: number) => dir * String(catData[a]).localeCompare(String(catData[b])));
+    } else if (sortBy === 'value') {
+      const mainSeries = opt.series?.find((s: any) => s.type === 'bar' && s.name !== 'Assist');
+      if (mainSeries?.data) {
+        indices.sort((a: number, b: number) => {
+          const va = typeof mainSeries.data[a] === 'number' ? mainSeries.data[a] : (mainSeries.data[a]?.value ?? 0);
+          const vb = typeof mainSeries.data[b] === 'number' ? mainSeries.data[b] : (mainSeries.data[b]?.value ?? 0);
+          return dir * (va - vb);
+        });
+      }
+    }
+
+    opt.xAxis.data = indices.map((i: number) => catData[i]);
+    for (const s of (opt.series || [])) {
+      if (Array.isArray(s.data) && s.data.length === catData.length) {
+        s.data = indices.map((i: number) => s.data[i]);
+      }
+    }
+  }
+
+  // ── Stack mode (multi-series bar charts) ──
+  const stackMode = resolvedSettings.stack_mode;
+  if (stackMode && stackMode !== 'grouped') {
+    for (const s of (opt.series || [])) {
+      if (s.type === 'bar' && s.name !== 'Assist') {
+        s.stack = 'stack';
+        if (stackMode === 'stacked_100') s.stackStrategy = 'percentage';
+      }
+    }
+  }
+
+  // ── Cumulative toggle (time-series charts) ──
+  if (resolvedSettings.cumulative) {
+    for (const s of (opt.series || [])) {
+      if (Array.isArray(s.data) && s.data.length > 0) {
+        let running = 0;
+        s.data = s.data.map((d: any) => {
+          if (Array.isArray(d)) {
+            running += (typeof d[1] === 'number' ? d[1] : 0);
+            return [d[0], running];
+          }
+          if (typeof d === 'number') {
+            running += d;
+            return running;
+          }
+          return d;
+        });
+      }
+    }
+  }
+
+  // ── Moving average (time-series charts) ──
+  const maWindow = resolvedSettings.moving_average;
+  if (maWindow && maWindow !== 'none') {
+    const windowSize = parseInt(maWindow, 10) || 7;
+    const showRaw = resolvedSettings.show_raw_with_average !== false;
+
+    for (let si = opt.series.length - 1; si >= 0; si--) {
+      const s = opt.series[si];
+      if (s.type !== 'line' || !Array.isArray(s.data) || s.data.length < windowSize) continue;
+
+      const maData = s.data.map((d: any, i: number) => {
+        if (i < windowSize - 1) return Array.isArray(d) ? [d[0], null] : null;
+        let sum = 0;
+        let count = 0;
+        for (let j = i - windowSize + 1; j <= i; j++) {
+          const v = Array.isArray(s.data[j]) ? s.data[j][1] : s.data[j];
+          if (typeof v === 'number' && Number.isFinite(v)) { sum += v; count++; }
+        }
+        const avg = count > 0 ? sum / count : null;
+        return Array.isArray(d) ? [d[0], avg] : avg;
+      });
+
+      if (showRaw) {
+        s.lineStyle = { ...s.lineStyle, opacity: 0.3 };
+        s.showSymbol = false;
+        const maSeries = {
+          ...s,
+          id: `${s.id || s.name}::ma`,
+          name: `${s.name || ''} (${windowSize}d avg)`,
+          data: maData,
+          lineStyle: { ...s.lineStyle, opacity: 1, width: 2.5 },
+        };
+        opt.series.splice(si + 1, 0, maSeries);
+      } else {
+        s.data = maData;
+        s.name = `${s.name || ''} (${windowSize}d avg)`;
+      }
+    }
+  }
+
+  // ── Funnel: show_dropoff adds step-to-step dropoff labels ──
+  if (chartKind === 'funnel' && resolvedSettings.show_dropoff) {
+    const barSeries = opt.series?.find((s: any) => s.type === 'bar' && s.data?.length > 1);
+    if (barSeries?.data) {
+      const dropoffLabels: any[] = [];
+      for (let i = 1; i < barSeries.data.length; i++) {
+        const prev = typeof barSeries.data[i - 1] === 'number' ? barSeries.data[i - 1] : barSeries.data[i - 1]?.value;
+        const curr = typeof barSeries.data[i] === 'number' ? barSeries.data[i] : barSeries.data[i]?.value;
+        if (typeof prev === 'number' && typeof curr === 'number' && prev > 0) {
+          const dropoff = ((prev - curr) / prev * 100).toFixed(0);
+          dropoffLabels.push({
+            coord: [i - 0.5, (prev + curr) / 2],
+            value: `−${dropoff}%`,
+            label: { show: true, formatter: `−${dropoff}%`, fontSize: 9, color: '#ef4444' },
+            symbol: 'none',
+          });
+        }
+      }
+      if (dropoffLabels.length > 0 && !barSeries.markPoint) {
+        barSeries.markPoint = { data: dropoffLabels, silent: true };
+      }
+    }
+  }
+
+  // Bridge-specific: show_connectors controls the markLine connector segments
+  if ((chartKind === 'bridge' || chartKind === 'bridge_horizontal') && resolvedSettings.show_connectors === false) {
+    for (const s of (opt.series || [])) {
+      if (s.markLine) s.markLine = undefined;
+    }
+  }
+
+  // Bridge/histogram: bar_gap maps to barCategoryGap on all bar series
+  const barGap = resolvedSettings.bar_gap;
+  if (barGap !== undefined) {
+    const gapMap: Record<string, string> = { none: '0%', small: '15%', medium: '30%', large: '50%' };
+    const gapPct = gapMap[barGap] ?? barGap;
+    for (const s of (opt.series || [])) {
+      if (s.type === 'bar') s.barCategoryGap = gapPct;
+    }
+  }
+
+  // ── Reference lines (ECharts markLine on first relevant series) ──
+  const refLines = resolvedSettings.reference_lines;
+  if (Array.isArray(refLines) && refLines.length > 0) {
+    const target = opt.series?.find((s: any) => s.type === 'bar' || s.type === 'line');
+    if (target) {
+      const mlData = refLines.map((rl: any) => ({
+        yAxis: rl.value,
+        label: { formatter: rl.label || '', position: 'end', fontSize: 10 },
+        lineStyle: { color: rl.colour || '#9CA3AF', type: rl.line_style || 'dashed', width: 1.5 },
+      }));
+      if (!target.markLine) target.markLine = { silent: true, symbol: ['none', 'none'], data: [] };
+      target.markLine.data = [...(target.markLine.data || []), ...mlData];
+    }
+  }
+
+  // ── Trend line (linear regression overlay for time-series) ──
+  if (resolvedSettings.show_trend_line) {
+    for (const s of (opt.series || [])) {
+      if (s.type !== 'line' || !Array.isArray(s.data) || s.data.length < 3) continue;
+      if (String(s.id || '').includes('::ma') || String(s.id || '').includes('::trend')) continue;
+
+      const pts: Array<{ x: number; y: number }> = [];
+      for (let i = 0; i < s.data.length; i++) {
+        const d = s.data[i];
+        const y = Array.isArray(d) ? d[1] : d;
+        if (typeof y === 'number' && Number.isFinite(y)) pts.push({ x: i, y });
+      }
+      if (pts.length < 3) continue;
+
+      const n = pts.length;
+      const sumX = pts.reduce((a, p) => a + p.x, 0);
+      const sumY = pts.reduce((a, p) => a + p.y, 0);
+      const sumXY = pts.reduce((a, p) => a + p.x * p.y, 0);
+      const sumX2 = pts.reduce((a, p) => a + p.x * p.x, 0);
+      const denom = n * sumX2 - sumX * sumX;
+      if (Math.abs(denom) < 1e-12) continue;
+
+      const slope = (n * sumXY - sumX * sumY) / denom;
+      const intercept = (sumY - slope * sumX) / n;
+
+      const trendData = s.data.map((d: any, i: number) => {
+        const trendY = intercept + slope * i;
+        return Array.isArray(d) ? [d[0], trendY] : trendY;
+      });
+      opt.series.push({
+        id: `${s.id || s.name}::trend`,
+        name: `${s.name || ''} trend`,
+        type: 'line',
+        showSymbol: false,
+        lineStyle: { width: 1.5, type: 'dotted', color: s.lineStyle?.color || s.itemStyle?.color || '#9CA3AF', opacity: 0.6 },
+        itemStyle: { opacity: 0 },
+        legendHoverLink: false,
+        data: trendData,
+        z: 1,
+      });
+      break;
+    }
+  }
+
+  // ── Confidence intervals — requires ci_lower/ci_upper in data ──
+  if (resolvedSettings.show_confidence) {
+    for (const s of (opt.series || [])) {
+      if (s.type !== 'line' || !Array.isArray(s.data)) continue;
+      const hasCi = s.data.some((d: any) => d?.ci_lower !== undefined || d?.ci_upper !== undefined);
+      if (!hasCi) continue;
+
+      const colour = s.lineStyle?.color || s.itemStyle?.color || '#3b82f6';
+      opt.series.push({
+        id: `${s.id}::ci_upper`, type: 'line', showSymbol: false,
+        lineStyle: { opacity: 0 }, itemStyle: { opacity: 0 },
+        areaStyle: { color: colour, opacity: 0.1 },
+        legendHoverLink: false,
+        data: s.data.map((d: any) => Array.isArray(d) ? [d[0], (d as any).ci_upper ?? d[1]] : d),
+        z: 0,
+      });
+      opt.series.push({
+        id: `${s.id}::ci_lower`, type: 'line', showSymbol: false,
+        lineStyle: { opacity: 0 }, itemStyle: { opacity: 0 },
+        areaStyle: { color: '#ffffff', opacity: 1 },
+        legendHoverLink: false,
+        data: s.data.map((d: any) => Array.isArray(d) ? [d[0], (d as any).ci_lower ?? d[1]] : d),
+        z: 0,
+      });
+      break;
+    }
+  }
+
+  return applyCommonSettings(opt, resolvedSettings);
+}
 

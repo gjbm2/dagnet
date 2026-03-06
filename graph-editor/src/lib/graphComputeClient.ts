@@ -1208,6 +1208,19 @@ export class GraphComputeClient {
     }
 
     const result = normalised ?? raw;
+
+    // Patch dimension_values.scenario_id with name/colour from request.
+    if (result?.result && scenarioId) {
+      if (!result.result.dimension_values) result.result.dimension_values = {};
+      if (!result.result.dimension_values.scenario_id) result.result.dimension_values.scenario_id = {};
+      const existing = result.result.dimension_values.scenario_id[scenarioId] || {};
+      result.result.dimension_values.scenario_id[scenarioId] = {
+        ...existing,
+        name: existing.name || scenarioName,
+        colour: existing.colour || scenarioColour,
+        visibility_mode: existing.visibility_mode || visibilityMode,
+      };
+    }
     
     // Cache the result unless bypassed.
     if (!bypassCache) {
@@ -1338,6 +1351,23 @@ export class GraphComputeClient {
       this.normaliseSnapshotCohortMaturityResponse(raw, request)
       ?? this.normaliseSnapshotDailyConversionsResponse(raw, request);
     const result = normalised ?? raw;
+
+    // Patch dimension_values.scenario_id with names/colours from request.
+    // The backend may return raw scenario_ids without display metadata.
+    if (result?.result && request.scenarios?.length) {
+      if (!result.result.dimension_values) result.result.dimension_values = {};
+      if (!result.result.dimension_values.scenario_id) result.result.dimension_values.scenario_id = {};
+      for (const s of request.scenarios) {
+        if (!s?.scenario_id) continue;
+        const existing = result.result.dimension_values.scenario_id[s.scenario_id] || {};
+        result.result.dimension_values.scenario_id[s.scenario_id] = {
+          ...existing,
+          name: existing.name || s.name || s.scenario_id,
+          colour: existing.colour || s.colour,
+          visibility_mode: existing.visibility_mode || s.visibility_mode,
+        };
+      }
+    }
 
     if (import.meta.env.DEV && typeof window !== 'undefined') {
       try {

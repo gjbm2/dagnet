@@ -1,6 +1,7 @@
 import React, { useMemo } from 'react';
 import { ContextMenu, ContextMenuItem } from './ContextMenu';
 import type { CanvasAnalysis } from '@/types';
+import type { ChartRecipeScenario } from '../types/chartRecipe';
 
 interface CanvasAnalysisContextMenuProps {
   x: number;
@@ -9,6 +10,7 @@ interface CanvasAnalysisContextMenuProps {
   analysis: CanvasAnalysis;
   analysisCount: number;
   onUpdate: (id: string, updates: Partial<CanvasAnalysis>) => void;
+  onCaptureFromTab?: () => { scenarios: ChartRecipeScenario[]; what_if_dsl?: string } | null;
   onBringToFront: (id: string) => void;
   onBringForward: (id: string) => void;
   onSendBackward: (id: string) => void;
@@ -21,7 +23,7 @@ interface CanvasAnalysisContextMenuProps {
 
 export function CanvasAnalysisContextMenu({
   x, y, analysisId, analysis, analysisCount,
-  onUpdate, onBringToFront, onBringForward, onSendBackward, onSendToBack,
+  onUpdate, onCaptureFromTab, onBringToFront, onBringForward, onSendBackward, onSendToBack,
   onCopy, onCut, onDelete, onClose,
 }: CanvasAnalysisContextMenuProps) {
   const items = useMemo((): ContextMenuItem[] => {
@@ -35,23 +37,36 @@ export function CanvasAnalysisContextMenu({
 
     result.push(
       { label: '', onClick: () => {}, divider: true },
-      {
-        label: analysis.live ? 'Freeze' : 'Unfreeze',
-        onClick: () => {
-          if (analysis.live) {
-            onUpdate(analysisId, { live: false });
-          } else {
-            onUpdate(analysisId, {
+      analysis.live
+        ? {
+            label: 'Capture scenarios from tab',
+            onClick: () => {
+              const captured = onCaptureFromTab?.();
+              if (captured) {
+                onUpdate(analysisId, {
+                  live: false,
+                  recipe: {
+                    ...analysis.recipe,
+                    scenarios: captured.scenarios,
+                    analysis: { ...analysis.recipe.analysis, what_if_dsl: captured.what_if_dsl },
+                  },
+                } as any);
+              } else {
+                onUpdate(analysisId, { live: false } as any);
+              }
+            },
+          }
+        : {
+            label: 'Return to tab scenarios',
+            onClick: () => onUpdate(analysisId, {
               live: true,
               recipe: {
                 ...analysis.recipe,
                 scenarios: undefined,
                 analysis: { ...analysis.recipe.analysis, what_if_dsl: undefined },
               },
-            } as any);
-          }
-        },
-      },
+            } as any),
+          },
     );
 
     if (analysisCount > 1) {
@@ -72,7 +87,7 @@ export function CanvasAnalysisContextMenu({
     );
 
     return result;
-  }, [analysisId, analysis, analysisCount, onUpdate, onBringToFront, onBringForward, onSendBackward, onSendToBack, onCopy, onCut, onDelete]);
+  }, [analysisId, analysis, analysisCount, onUpdate, onCaptureFromTab, onBringToFront, onBringForward, onSendBackward, onSendToBack, onCopy, onCut, onDelete]);
 
   return <ContextMenu x={x} y={y} items={items} onClose={onClose} />;
 }

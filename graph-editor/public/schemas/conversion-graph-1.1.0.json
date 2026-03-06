@@ -98,7 +98,11 @@
       "description": "Display settings for a canvas analysis (extensible — unknown fields preserved)",
       "additionalProperties": true,
       "properties": {
-        "hide_current": { "type": "boolean" }
+        "hide_current": { "type": "boolean" },
+        "hidden_scenarios": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
       }
     },
     "ChartRecipeAnalysis": {

@@ -32,14 +32,17 @@ export default function CanvasAnalysisNode({ data, selected }: NodeProps<CanvasA
 
   const visibleScenarioIds = useMemo(() => {
     if (!analysis.live && analysis.recipe.scenarios) {
-      return analysis.recipe.scenarios.map(s => s.scenario_id);
+      const hidden = new Set<string>((((analysis.display as any)?.hidden_scenarios) || []) as string[]);
+      return analysis.recipe.scenarios
+        .map(s => s.scenario_id)
+        .filter((id) => !hidden.has(id));
     }
     if (tabId) {
       const state = operations.getScenarioState(tabId);
       return state?.visibleScenarioIds || ['current'];
     }
     return ['current'];
-  }, [analysis.live, analysis.recipe.scenarios, tabId, operations, tabs]);
+  }, [analysis.live, analysis.recipe.scenarios, analysis.display, tabId, operations, tabs]);
 
   const scenarioVisibilityModes = useMemo(() => {
     const m: Record<string, 'f+e' | 'f' | 'e'> = {};
@@ -135,14 +138,13 @@ export default function CanvasAnalysisNode({ data, selected }: NodeProps<CanvasA
         <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
           {displayTitle}
         </span>
-        {analysis.live && (
+        {analysis.live && !analysis.chart_current_layer_dsl ? (
           <span style={{ fontSize: 9, padding: '1px 5px', borderRadius: 3, background: '#dcfce7', color: '#166534', fontWeight: 500, flexShrink: 0 }}>
             LIVE
           </span>
-        )}
-        {!analysis.live && (
-          <span style={{ fontSize: 9, padding: '1px 5px', borderRadius: 3, background: '#f3f4f6', color: '#6b7280', fontWeight: 500, flexShrink: 0 }}>
-            FROZEN
+        ) : (
+          <span style={{ fontSize: 9, padding: '1px 5px', borderRadius: 3, background: '#fef3c7', color: '#92400e', fontWeight: 500, flexShrink: 0 }}>
+            CUSTOM
           </span>
         )}
         {loading && <Loader2 size={12} style={{ animation: 'spin 1s linear infinite', flexShrink: 0 }} />}
@@ -183,6 +185,10 @@ export default function CanvasAnalysisNode({ data, selected }: NodeProps<CanvasA
             result={result}
             visibleScenarioIds={visibleScenarioIds}
             scenarioVisibilityModes={scenarioVisibilityModes}
+            display={analysis.display}
+            onDisplayChange={(key, value) => {
+              onUpdate(analysis.id, { display: { ...analysis.display, [key]: value } });
+            }}
             fillHeight
             compactControls
           />

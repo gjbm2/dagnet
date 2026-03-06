@@ -8,6 +8,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { augmentDSLWithConstraint } from '../../lib/queryDSL';
 
 // Mock all context/service dependencies before imports
 vi.mock('../../contexts/GraphStoreContext', () => ({
@@ -175,5 +176,52 @@ describe('useCanvasAnalysisCompute DSL handling', () => {
     // NEW (fixed): finalDsl = analyticsDsl || currentDSL
     const fixedDsl = analyticsDsl || windowDsl;
     expect(fixedDsl).toBe(analyticsDsl); // Correct — analytics DSL
+  });
+});
+
+describe('chart_current_layer_dsl fragment composition', () => {
+  it('should compose context fragment onto scenario DSL', () => {
+    const scenarioDsl = 'window(-30d:)';
+    const fragment = 'context(channel:influencer)';
+    const composed = augmentDSLWithConstraint(scenarioDsl, fragment);
+    expect(composed).toContain('context(channel:influencer)');
+    expect(composed).toContain('window(-30d:)');
+  });
+
+  it('should replace window when fragment specifies window', () => {
+    const scenarioDsl = 'window(-30d:)';
+    const fragment = 'window(-90d:)';
+    const composed = augmentDSLWithConstraint(scenarioDsl, fragment);
+    expect(composed).toContain('window(-90d:)');
+    expect(composed).not.toContain('window(-30d:)');
+  });
+
+  it('should preserve all clauses when fragment is empty', () => {
+    const scenarioDsl = 'window(-30d:).context(channel:organic)';
+    const result = augmentDSLWithConstraint(scenarioDsl, '');
+    expect(result).toContain('window(-30d:)');
+    expect(result).toContain('context(channel:organic)');
+  });
+
+  it('should return fragment when scenario DSL is empty', () => {
+    const fragment = 'context(channel:influencer)';
+    const composed = augmentDSLWithConstraint('', fragment);
+    expect(composed).toContain('context(channel:influencer)');
+  });
+
+  it('should compose fragment onto frozen scenario effective_dsl', () => {
+    const frozenEffectiveDsl = 'window(-7d:).context(channel:organic)';
+    const fragment = 'context(channel:influencer)';
+    const composed = augmentDSLWithConstraint(frozenEffectiveDsl, fragment);
+    expect(composed).toContain('context(channel:influencer)');
+    expect(composed).not.toContain('context(channel:organic)');
+  });
+
+  it('should add context to DSL that has none', () => {
+    const scenarioDsl = 'window(-30d:)';
+    const fragment = 'context(channel:influencer)';
+    const composed = augmentDSLWithConstraint(scenarioDsl, fragment);
+    expect(composed).toContain('context(channel:influencer)');
+    expect(composed).toContain('window(-30d:)');
   });
 });

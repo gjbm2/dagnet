@@ -62,6 +62,7 @@ import { NodeContextMenu } from './NodeContextMenu';
 import { PostItContextMenu } from './PostItContextMenu';
 import { ContainerContextMenu } from './ContainerContextMenu';
 import { CanvasAnalysisContextMenu } from './CanvasAnalysisContextMenu';
+import { captureTabScenariosToRecipe } from '../services/captureTabScenariosService';
 import { EdgeContextMenu } from './EdgeContextMenu';
 import { extractSubgraph } from '../lib/subgraphExtractor';
 import { useDashboardMode } from '../hooks/useDashboardMode';
@@ -314,16 +315,6 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
   
   // Combined suppression flag for convenience
   const shouldSuppressDecorations = isPanningOrZooming || !beadsVisible;
-  
-  // DIAGNOSTIC: Log when decoration state changes
-  React.useEffect(() => {
-    console.log(`[PERF] Decoration state:`, {
-      isPanningOrZooming,
-      beadsVisible,
-      shouldSuppressDecorations,
-      timestamp: new Date().toISOString()
-    });
-  }, [isPanningOrZooming, beadsVisible, shouldSuppressDecorations]);
   
   // Track when isPanningOrZooming changes (for debugging - can remove later)
   React.useEffect(() => {
@@ -2325,8 +2316,6 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
                            edgeHandlesChanged ? 'Edge handles changed' :
                            nodePositionsChanged ? 'Node positions changed' : 'Unknown';
     console.log(`  🔨 Slow path: ${slowPathReason}, doing full rebuild`);
-    console.log('[DIAG-SLOW] graph.canvasAnalyses:', graph?.canvasAnalyses?.length, graph?.canvasAnalyses?.map((a: any) => a.id));
-    console.log('[DIAG-SLOW] store.graph.canvasAnalyses:', graphStoreHook.getState().graph?.canvasAnalyses?.length, graphStoreHook.getState().graph?.canvasAnalyses?.map((a: any) => a.id));
     
     // Topology changed - do full rebuild
     // Preserve current selection state
@@ -3375,7 +3364,6 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
         return;
       }
       
-      console.log('[DIAG-RF→G] RF→Graph sync WRITING. graph.canvasAnalyses:', graph?.canvasAnalyses?.length, '→ updatedGraph.canvasAnalyses:', updatedGraph?.canvasAnalyses?.length, 'rfAnalysisNodes:', nodes.filter(n => n.id?.startsWith('analysis-')).length);
       isSyncingRef.current = true;
       lastSyncedReactFlowRef.current = updatedJson;
       
@@ -3386,7 +3374,6 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
       // Reset sync flag
       setTimeout(() => {
         isSyncingRef.current = false;
-        console.log('[DIAG-RF→G] Reset isSyncingRef. store.canvasAnalyses:', graphStoreHook.getState().graph?.canvasAnalyses?.length);
       }, 0);
     }
   }, [nodes, edges]); // Removed 'graph' and 'setGraph' from dependencies
@@ -5125,15 +5112,28 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
     return () => window.removeEventListener('dagnet:pinAnalysisToCanvas', handler as any);
   }, [setActiveElementTool]);
 
-  // Listen for 'dagnet:addAnalysis' event — enters draw mode with a blank recipe
+  // Listen for 'dagnet:addAnalysis' event — enters draw mode, pre-populates DSL from selection
   useEffect(() => {
     const handler = () => {
-      pendingAnalysisPayload = {};
+      const selectedConversionNodes = nodes
+        .filter(n => n.selected && !isCanvasObjectNode(n.id))
+        .map(n => n.data?.id || n.id);
+
+      let analyticsDsl = '';
+      if (selectedConversionNodes.length === 2) {
+        analyticsDsl = `from(${selectedConversionNodes[0]}).to(${selectedConversionNodes[1]})`;
+      } else if (selectedConversionNodes.length === 1) {
+        analyticsDsl = `from(${selectedConversionNodes[0]})`;
+      }
+
+      pendingAnalysisPayload = analyticsDsl
+        ? { recipe: { analysis: { analytics_dsl: analyticsDsl } } }
+        : {};
       setActiveElementTool('new-analysis');
     };
     window.addEventListener('dagnet:addAnalysis', handler as any);
     return () => window.removeEventListener('dagnet:addAnalysis', handler as any);
-  }, [setActiveElementTool]);
+  }, [setActiveElementTool, nodes, isCanvasObjectNode]);
 
   // Drag-to-draw state for creation modes (new-postit, new-container)
   const drawStartRef = useRef<{ screenX: number; screenY: number; flowX: number; flowY: number; tool: string } | null>(null);
@@ -5568,7 +5568,6 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
   // Scenario visibility state (for colouring/suppression decisions)
   const scenarioState = tabId ? tabs.find(t => t.id === tabId)?.editorState?.scenarioState : undefined;
 
-  // DIAGNOSTIC URL FLAGS
   const urlParams = new URLSearchParams(window.location.search);
   const MINIMAL_MODE = urlParams.has('minimal');
 
@@ -6304,6 +6303,17 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
               handleUpdateAnalysis(id, updates);
               setAnalysisContextMenu(null);
             }}
+            onCaptureFromTab={tabId && scenariosContext ? () => {
+              const currentTab = tabs.find(t => t.id === tabId);
+              const whatIfDSL = currentTab?.editorState?.whatIfDSL || null;
+              return captureTabScenariosToRecipe({
+                tabId,
+                currentDSL: store.currentDSL || '',
+                operations: tabOperations,
+                scenariosContext: scenariosContext as any,
+                whatIfDSL,
+              });
+            } : undefined}
             onBringToFront={(id) => {
               const nextGraph = structuredClone(graph);
               if (nextGraph.canvasAnalyses) {
