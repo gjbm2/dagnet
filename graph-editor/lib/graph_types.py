@@ -341,15 +341,16 @@ class Container(BaseModel):
     y: float
 
 
-class CanvasAnalysisRecipeAnalysis(BaseModel):
-    """Recipe analysis section — defines what to compute."""
-    analysis_type: str
+class ChartRecipeAnalysis(BaseModel):
+    """Shared chart recipe: what to compute — analysis identity. Used by both canvas analyses and chart files."""
+    analysis_type: Optional[str] = None
     analytics_dsl: Optional[str] = None
+    query_dsl: Optional[str] = Field(None, description="Deprecated alias for analytics_dsl (backward compat)")
     what_if_dsl: Optional[str] = None
 
 
-class CanvasAnalysisRecipeScenario(BaseModel):
-    """Frozen scenario entry within a canvas analysis recipe."""
+class ChartRecipeScenario(BaseModel):
+    """Shared chart recipe: scenario entry. Used by both canvas analyses and chart files."""
     scenario_id: str
     effective_dsl: Optional[str] = None
     name: Optional[str] = None
@@ -358,10 +359,10 @@ class CanvasAnalysisRecipeScenario(BaseModel):
     is_live: Optional[bool] = None
 
 
-class CanvasAnalysisRecipe(BaseModel):
-    """Recipe for a canvas analysis — what to compute."""
-    analysis: CanvasAnalysisRecipeAnalysis
-    scenarios: Optional[List[CanvasAnalysisRecipeScenario]] = None
+class ChartRecipeCore(BaseModel):
+    """Shared chart recipe core — defines what to compute. Used by canvas analyses (directly) and chart files (wrapped)."""
+    analysis: ChartRecipeAnalysis
+    scenarios: Optional[List[ChartRecipeScenario]] = None
 
 
 class CanvasAnalysisDisplay(BaseModel, extra='allow'):
@@ -380,7 +381,8 @@ class CanvasAnalysis(BaseModel):
     chart_kind: Optional[str] = None
     live: bool = True
     title: Optional[str] = None
-    recipe: CanvasAnalysisRecipe
+    chart_current_layer_dsl: Optional[str] = Field(None, description="DSL fragment composed onto all scenarios via augmentDSLWithConstraint (both live and copied mode)")
+    recipe: ChartRecipeCore
     display: Optional[CanvasAnalysisDisplay] = None
 
 

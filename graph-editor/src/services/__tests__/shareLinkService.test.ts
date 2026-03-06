@@ -18,10 +18,13 @@ vi.mock('../../contexts/TabContext', () => ({
   fileRegistry: { getFile: vi.fn(() => null) },
 }));
 
-vi.mock('../../lib/sharePayload', () => ({
-  encodeSharePayloadToParam: vi.fn(() => 'x'),
-  stableShortHash: vi.fn(() => 'x'),
-}));
+vi.mock(import('../../lib/sharePayload'), async (importOriginal) => {
+  const actual = await importOriginal();
+  return {
+    ...actual,
+    stableShortHash: vi.fn(() => 'x'),
+  };
+});
 
 import {
   buildStaticShareUrl,
@@ -29,7 +32,9 @@ import {
   buildLiveShareUrl,
   extractIdentityFromFileSource,
   getShareUrlSoftWarning,
+  buildLiveChartShareUrlFromRecipe,
 } from '../shareLinkService';
+import { decodeSharePayloadFromParam } from '../../lib/sharePayload';
 
 // Mock sessionLogService
 vi.mock('../sessionLogService', () => ({
@@ -223,6 +228,78 @@ describe('shareLinkService', () => {
         path: 'some/nested/path/graphs/deep-graph.json',
       });
       expect(identity?.graph).toBe('deep-graph');
+    });
+  });
+
+  describe('buildLiveChartShareUrlFromRecipe', () => {
+    it('should build a share URL from a ChartRecipeCore with scenarios', () => {
+
+      const result = buildLiveChartShareUrlFromRecipe({
+        recipe: {
+          analysis: { analysis_type: 'conversion_funnel', analytics_dsl: 'from(a).to(b)' },
+          scenarios: [
+            { scenario_id: 'current', effective_dsl: 'window(-30d:)', name: 'Current', colour: '#3b82f6' },
+            { scenario_id: 'sc-1', effective_dsl: 'window(-30d:).context(channel:google)', name: 'Google', colour: '#ec4899', is_live: true },
+          ],
+        },
+        identity: { repo: 'test-repo', branch: 'main', graph: 'test-graph' },
+        secret: 'test-secret',
+        chartKind: 'analysis_funnel',
+        title: 'Test Funnel',
+        graphState: { base_dsl: '', current_query_dsl: 'window(-30d:)' },
+      });
+
+      expect(result.success).toBe(true);
+      expect(result.url).toBeDefined();
+      expect(result.url).toContain('mode=live');
+      expect(result.url).toContain('repo=test-repo');
+      expect(result.url).toContain('share=');
+
+      const url = new URL(result.url!);
+      const shareParam = url.searchParams.get('share');
+      expect(shareParam).toBeTruthy();
+
+      const payload = decodeSharePayloadFromParam(shareParam!);
+      expect(payload).toBeDefined();
+      expect(payload!.target).toBe('chart');
+      expect((payload as any).analysis.query_dsl).toBe('from(a).to(b)');
+      expect((payload as any).scenarios.items).toHaveLength(1);
+      expect((payload as any).scenarios.items[0].dsl).toBe('window(-30d:).context(channel:google)');
+      expect((payload as any).scenarios.items[0].id).toBe('sc-1');
+      expect((payload as any).scenarios.current?.dsl).toBe('window(-30d:)');
+    });
+
+    it('should fail when analytics DSL is missing', () => {
+      const result = buildLiveChartShareUrlFromRecipe({
+        recipe: {
+          analysis: { analysis_type: 'graph_overview' },
+        },
+        identity: { repo: 'r', branch: 'b', graph: 'g' },
+        secret: 's',
+      });
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('analytics DSL');
+    });
+
+    it('should skip scenarios without effective_dsl', () => {
+      const result = buildLiveChartShareUrlFromRecipe({
+        recipe: {
+          analysis: { analysis_type: 'conversion_funnel', analytics_dsl: 'from(a).to(b)' },
+          scenarios: [
+            { scenario_id: 'current', effective_dsl: 'window(-30d:)' },
+            { scenario_id: 'sc-no-dsl', name: 'Empty' },
+            { scenario_id: 'sc-ok', effective_dsl: 'context(channel:meta)', name: 'Meta' },
+          ],
+        },
+        identity: { repo: 'r', branch: 'b', graph: 'g' },
+        secret: 's',
+      });
+
+      expect(result.success).toBe(true);
+      const payload = decodeSharePayloadFromParam(new URL(result.url!).searchParams.get('share')!);
+      expect((payload as any).scenarios.items).toHaveLength(1);
+      expect((payload as any).scenarios.items[0].id).toBe('sc-ok');
     });
   });
 });

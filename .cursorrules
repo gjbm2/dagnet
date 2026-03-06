@@ -4,6 +4,21 @@
 
 **NEVER run any git command that writes** — `git add`, `git commit`, `git push`, `git checkout`, `git reset`, `git stash`, `git rebase`, `git merge`, `git pull`, `git branch`, or ANY other `git` subcommand — **unless the user has given unmistakable, explicit, unambiguous instruction to do so in the current message**.
 
+## ABSOLUTE BAN: Destructive Terminal Commands
+
+**NEVER run ANY terminal command that deletes, truncates, overwrites, or destroys data** without unmistakable, explicit, unambiguous instruction from the user **in the current message**.
+
+This includes but is not limited to:
+- `rm`, `rmdir`, `unlink`
+- `truncate`, `shred`
+- `> file` (redirect that overwrites)
+- `scripts/extract-mark-logs.sh --trim` or any `--trim` flag on log management scripts
+- `echo "" > file`, `cat /dev/null > file`, or any other pattern that empties a file
+- `mv` that would overwrite an existing file without the user's knowledge
+- `sed -i` or `awk` with in-place modification on files the user hasn't asked to edit
+
+**Read-only commands are always safe.** When in doubt, **READ the file first** — never modify, truncate, or delete.
+
 ---
 
 ## Instant-Action Triggers (DO IMMEDIATELY — NO THINKING, NO SEARCHING)

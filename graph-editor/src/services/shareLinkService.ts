@@ -493,6 +493,99 @@ export async function buildLiveChartShareUrlFromChartFile(args: {
 }
 
 /**
+ * Build a live chart share URL from a ChartRecipeCore + resolved context.
+ *
+ * This is the core builder that both chart-file and canvas-analysis share flows delegate to.
+ * The caller resolves their data source (IDB chart file vs graph JSON canvas analysis) and
+ * provides the pre-resolved inputs.
+ */
+export interface ChartShareCoreArgs {
+  recipe: import('../types/chartRecipe').ChartRecipeCore;
+  identity: ShareLinkIdentity;
+  secret: string;
+  chartKind?: string;
+  title?: string;
+  graphState?: { base_dsl?: string; current_query_dsl?: string };
+  hideCurrent?: boolean;
+  whatIfDsl?: string | null;
+  selectedScenarioDsl?: string | null;
+  dashboardMode?: boolean;
+  baseUrl?: string;
+}
+
+export function buildLiveChartShareUrlFromRecipe(args: ChartShareCoreArgs): LiveChartShareUrlResult {
+  try {
+    const { recipe, identity, secret, chartKind, title, graphState, hideCurrent, whatIfDsl, selectedScenarioDsl, dashboardMode, baseUrl } = args;
+    const analyticsDsl = recipe.analysis?.analytics_dsl ?? recipe.analysis?.query_dsl;
+
+    if (!analyticsDsl?.trim()) {
+      return { success: false, error: 'Recipe is missing analytics DSL' };
+    }
+
+    const scenarios = recipe.scenarios || [];
+
+    const liveScenarioItems: ShareChartPayload['scenarios']['items'] = [];
+    for (const s of scenarios) {
+      if (s.scenario_id === 'base' || s.scenario_id === 'current') continue;
+      const dsl = typeof s.effective_dsl === 'string' && s.effective_dsl.trim() ? s.effective_dsl.trim() : undefined;
+      if (!dsl) continue;
+
+      liveScenarioItems.push({
+        id: s.scenario_id,
+        dsl,
+        name: s.name || s.scenario_id,
+        colour: s.colour || undefined,
+        visibility_mode: (s.visibility_mode as any) || 'f+e',
+      });
+    }
+
+    const currentEntry = scenarios.find(s => s.scenario_id === 'current');
+    const currentDsl = typeof currentEntry?.effective_dsl === 'string' && currentEntry.effective_dsl.trim()
+      ? currentEntry.effective_dsl.trim() : undefined;
+    const currentMeta = (currentDsl || currentEntry?.colour || currentEntry?.visibility_mode)
+      ? {
+          dsl: currentDsl,
+          colour: typeof currentEntry?.colour === 'string' ? currentEntry.colour : undefined,
+          visibility_mode: currentEntry?.visibility_mode as any,
+          name: typeof currentEntry?.name === 'string' && currentEntry.name.trim() ? currentEntry.name.trim() : 'Current',
+        }
+      : undefined;
+
+    const payload: SharePayloadV1 = {
+      version: '1.0.0',
+      target: 'chart',
+      graph_state: graphState,
+      chart: {
+        kind: (chartKind || 'analysis_funnel') as any,
+        title,
+      },
+      analysis: {
+        query_dsl: analyticsDsl,
+        analysis_type: recipe.analysis?.analysis_type ?? null,
+        what_if_dsl: whatIfDsl ?? null,
+      },
+      scenarios: {
+        items: liveScenarioItems,
+        current: currentMeta,
+        hide_current: hideCurrent ?? false,
+        selected_scenario_dsl: selectedScenarioDsl ?? null,
+      },
+    };
+
+    const encoded = encodeSharePayloadToParam(payload);
+    const url = new URL(
+      buildLiveShareUrl({ repo: identity.repo, branch: identity.branch, graph: identity.graph, secret, dashboardMode, baseUrl })
+    );
+    url.searchParams.set('share', encoded);
+    url.searchParams.set('shareid', stableShortHash(JSON.stringify(payload)));
+
+    return { success: true, url: url.toString() };
+  } catch (e: any) {
+    return { success: false, error: e?.message || String(e) };
+  }
+}
+
+/**
  * Build a live multi-tab bundle share URL.
  *
  * v1 constraints:

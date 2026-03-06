@@ -4,13 +4,25 @@ import type { TabState } from '../types';
 import { fileRegistry } from '../contexts/TabContext';
 import { sessionLogService } from './sessionLogService';
 import { db } from '../db/appDatabase';
-import type { ChartDepsStampV1, ChartVisibilityMode } from '../lib/chartDeps';
+import type { ChartDepsStampV1 } from '../lib/chartDeps';
+import type { ChartRecipeCore, ChartRecipeScenario, ChartVisibilityMode } from '../types/chartRecipe';
 import { chartDepsSignatureV1 } from '../lib/chartDeps';
 import { dslDependsOnReferenceDay } from '../lib/dslDynamics';
 import { ukReferenceDayService } from './ukReferenceDayService';
 import { computeGraphInputsSignatureV1 } from './graphInputSignatureService';
 
 export type ChartKind = 'analysis_funnel' | 'analysis_bridge' | 'analysis_daily_conversions' | 'analysis_cohort_maturity';
+
+type ChartFileRecipe = ChartRecipeCore & {
+  parent?: {
+    parent_file_id?: string;
+    parent_tab_id?: string;
+  };
+  display?: {
+    hide_current?: boolean;
+  };
+  pinned_recompute_eligible: boolean;
+};
 
 type ChartFileDataV1 = {
   version: '1.0.0';
@@ -24,33 +36,7 @@ type ChartFileDataV1 = {
     query_dsl?: string;
     analysis_type?: string;
   };
-  recipe: {
-    parent?: {
-      parent_file_id?: string;
-      parent_tab_id?: string;
-    };
-    analysis?: {
-      analysis_type?: string;
-      query_dsl?: string;
-      what_if_dsl?: string;
-    };
-    /**
-     * Ordered list of scenarios that participate in the compute.
-     * Includes `current` / `base` when they participate.
-     */
-    scenarios: Array<{
-      scenario_id: string;
-      name?: string;
-      colour?: string;
-      visibility_mode?: ChartVisibilityMode;
-      effective_dsl?: string;
-      is_live?: boolean;
-    }>;
-    display?: {
-      hide_current?: boolean;
-    };
-    pinned_recompute_eligible: boolean;
-  };
+  recipe: ChartFileRecipe;
   deps: ChartDepsStampV1;
   deps_signature: string;
   payload: {
@@ -341,7 +327,7 @@ class ChartOperationsService {
         },
         analysis: {
           analysis_type: args.source?.analysis_type || (args.analysisResult as any)?.analysis_type,
-          query_dsl: args.source?.query_dsl,
+          analytics_dsl: args.source?.query_dsl,
           what_if_dsl: typeof args.whatIfDsl === 'string' && args.whatIfDsl.trim() ? args.whatIfDsl.trim() : undefined,
         },
         scenarios: recipeScenarios,
@@ -359,7 +345,7 @@ class ChartOperationsService {
         },
         analysis: {
           analysis_type: recipe.analysis?.analysis_type,
-          query_dsl: recipe.analysis?.query_dsl,
+          query_dsl: recipe.analysis?.analytics_dsl,
           what_if_dsl: recipe.analysis?.what_if_dsl,
         },
         scenarios: recipe.scenarios.map(s => ({

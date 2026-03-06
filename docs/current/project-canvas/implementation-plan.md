@@ -289,6 +289,35 @@ After canvas analyses are functional, consolidate the fragmented chart preview c
 - Give `SnapshotHistogramChart` the same controls (Open as Tab, Download CSV) as other chart types
 - **Suppress scenario legends for canvas view**: when rendering inside a `CanvasAnalysisNode`, scenario legends are unnecessary — the scenario key is already visible at graph level via the scenario legend. Add a `hideScenarioLegend` prop (or derive from `compactControls` context) so canvas analyses render without per-chart scenario labels, reclaiming vertical space for the actual data.
 
+**Chart display settings registry** (critical prerequisite for 3f-c):
+
+Currently chart display settings are ad-hoc: orientation is derived from `chart_kind`, controls like `compactControls`/`showToolbox`/`fillHeight` are passed as component props, and some chart components have inline toggles that are local state (not persisted). This needs a unified pattern:
+
+- Create `analysisDisplaySettingsRegistry.ts` — maps `chart_kind` → available display settings (key, label, type, options, default)
+- Each chart kind declares its settings: e.g. `bridge` has `orientation` (vertical/horizontal), `funnel` has `show_labels` (boolean), `daily_conversions` has `show_trend_line` (boolean)
+- Settings are stored in `CanvasAnalysisDisplay` (persisted on the graph JSON) and `display` on chart files
+- Settings are surfaced in THREE places using the same registry:
+  - **Chart props panel** (Section 4 in the properties panel restructure) — full settings, always available when a canvas analysis is selected
+  - **Inline chart controls** — compact toggles rendered inside the chart chrome by `AnalysisChartContainer` for quick access
+  - **Context menu** (`CanvasAnalysisContextMenu`) — quick-access settings in the right-click menu (e.g. font size, orientation)
+- All three surfaces read/write from the same `display` object; the registry determines which settings appear where via flags: `propsPanel: true`, `inline: true`, `contextMenu: true`
+- The registry pattern means adding a new setting = one registry entry + one `display` field + handling in the chart render component. No changes to panel or chrome code.
+- Settings that conceptually have "auto vs manual" state (e.g. axis extents) use the overridden-field affordance (`AutomatableField`)
+
+**Files to create**:
+- `graph-editor/src/lib/analysisDisplaySettingsRegistry.ts` — registry type definitions and per-chart-kind setting declarations
+
+**Files to change**:
+- `AnalysisChartContainer.tsx` — read display settings from registry, render inline toggles for settings marked `inline: true`
+- `PropertiesPanel.tsx` (3f-c Section 4) — render all settings marked `propsPanel: true` for the current chart kind from registry
+- `CanvasAnalysisContextMenu.tsx` — render settings marked `contextMenu: true` as submenu items (Phase 4 context menu refactor should generalise the submenu rendering pattern so display settings plug in cleanly)
+- All chart render components — read settings from `display` prop instead of deriving from `chart_kind` or local state
+
+**Additional items (3d scope) identified during Phase 3e/3f work**:
+- View mode toggle (chart ↔ cards) in properties panel doesn't update rendering for all analysis types — needs systematic registration of which analysis types support which view modes
+- `AnalysisChartContainer` falls back to bridge for all unknown analysis types — canvas node now falls back to cards when no real chart kind exists, but the chart container itself still has the bridge fallback for panel use. Consolidation should clean this up.
+- Canvas analysis title field in properties panel may not be responding to input (selection routing issue) — verify and fix during consolidation
+
 **Test**: existing analytics tests + Playwright chart specs verify no regressions.
 
 ---
@@ -361,7 +390,7 @@ Restructure the canvas analysis properties panel into four sections and wire the
   - Section 1 (Analysis Identity): `QueryExpressionEditor` for `analytics_dsl` (with `suggestionsScope: 'graph'`), analysis type card selector (reuse `analytics-type-card` CSS)
   - Section 2 (Scenario Compositor): `ScenarioLayerList` in live mode (read-only, from tab state) or copied mode (editable, from `recipe.scenarios`); chart "Current layer" DSL fragment field with `AutomatableField` wrapper; freeze/unfreeze toggle; "Capture from tab" button (copied mode); "Use as Current" in scenario context menu (copied mode)
   - Section 3 (Chart Kind): card-based selector driven by `result.semantics.chart`
-  - Section 4 (Display Settings): extensible, chart-kind-specific settings from registry
+  - Section 4 (Display Settings): renders all settings for the current `chart_kind` from `analysisDisplaySettingsRegistry` (created in Phase 3d). Each setting is a typed control (checkbox, radio, select, slider) driven by the registry definition. `AutomatableField` wrapper for settings with auto/manual state. Initial settings: cards font size (S/M/L/XL), bridge orientation (vertical/horizontal). All settings persist in `CanvasAnalysisDisplay`. The same registry drives both this panel section AND inline chart controls in `AnalysisChartContainer` — one definition, two surfaces.
 - `graph-editor/src/components/QueryExpressionEditor.tsx` — add `suggestionsScope?: 'graph' | 'registry' | 'both'` prop; when `'graph'`, suppress registry nodes/cases from autocomplete suggestions; default to `'both'` for backward compatibility
 - `graph-editor/src/hooks/useCanvasAnalysisCompute.ts` — inject chart fragment via `augmentDSLWithConstraint()` in `getQueryDslForScenario()` (live mode) and per-scenario DSL resolution (copied mode), before `composeSnapshotDsl()`; read fragment from `analysis.chart_current_layer_dsl` (new field on `CanvasAnalysis`)
 - `graph-editor/src/types/index.ts` — add `chart_current_layer_dsl?: string` to `CanvasAnalysis`
@@ -369,6 +398,7 @@ Restructure the canvas analysis properties panel into four sections and wire the
 - `graph-editor/public/schemas/conversion-graph-1.1.0.json` — add `chart_current_layer_dsl` to `canvasAnalyses` items
 - `graph-editor/src/components/modals/ScenarioQueryEditModal.tsx` — no changes needed (already accepts `currentDSL`, `inheritedDSL`, `onSave` — chart properties section provides chart-appropriate values)
 - `graph-editor/src/components/CanvasAnalysisContextMenu.tsx` — add "Capture from tab" and "Use as Current" items for copied-mode scenarios; wire `ScenarioQueryEditModal` for scenario DSL editing
+- `graph-editor/src/components/GraphCanvas.tsx` + `ElementPalette.tsx` — "Add Analysis" from element palette (click or draw-to-create) should read the current ReactFlow selection and pre-populate `analytics_dsl` from it using the same `constructQueryDSL` path the analytics panel uses. Currently creates a blank analysis with no DSL; should instead create one that matches the current selection (e.g. `from(a).to(b)` if two nodes are selected)
 
 **Tests to write**:
 - Chart fragment composition (live mode): `augmentDSLWithConstraint(scenarioQueryDsl, chartFragment)` applied uniformly to all visible scenarios before compute
@@ -389,13 +419,17 @@ Restructure the canvas analysis properties panel into four sections and wire the
 **Playwright specs**:
 - `canvas-analysis-chart-fragment.spec.ts` — set chart fragment on live chart, verify recompute reflects the fragment; clear fragment, verify revert
 - `canvas-analysis-copied-scenarios.spec.ts` — freeze chart, edit scenario DSL, verify chart updates; add scenario via "Capture from tab", verify it appears; delete scenario, verify removed
-- `canvas-analysis-live-share.spec.ts` — freeze chart with edited scenarios, live share → recipient sees correct chart with correct scenario set
+- `canvas-analysis-live-share.spec.ts` — freeze chart with edited scenarios, live share → recipient sees correct chart with correct scenario set. Extends the existing live share Playwright specs to cover the canvas-analysis → `ChartRecipeCore` → share URL → boot path (complements existing chart-file share specs)
 
 ---
 
 ## Phase 4 — Context menu tidy-up (PENDING)
 
 See 4-context-menu-refactor.md
+
+**Display settings in context menus**: `CanvasAnalysisContextMenu` should render display settings marked `contextMenu: true` in the `analysisDisplaySettingsRegistry` as submenu items. The context menu refactor should generalise submenu rendering (consistent styling via `dagnet-popup`, Lucide icons, theme support) so that registry-driven display settings plug in without bespoke code per setting. E.g. font size (S/M/L/XL radio), orientation (vertical/horizontal toggle), show/hide legend (checkbox).
+
+**Known issues**: `CanvasAnalysisContextMenu` view mode submenu is detached from parent (positioning bug).
 
 ---
 

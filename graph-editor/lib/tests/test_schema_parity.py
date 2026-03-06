@@ -28,8 +28,8 @@ from graph_types import (
     ConditionalProbability, Metadata, Policies, Layout,
     ResidualBehavior, DataSource, CaseDataSource,
     LatencyConfig, ForecastParams, NodeImage, PostIt, Container,
-    CanvasAnalysis, CanvasAnalysisDisplay, CanvasAnalysisRecipe,
-    CanvasAnalysisRecipeAnalysis, CanvasAnalysisRecipeScenario,
+    CanvasAnalysis, CanvasAnalysisDisplay, ChartRecipeCore,
+    ChartRecipeAnalysis, ChartRecipeScenario,
 )
 
 
@@ -301,9 +301,9 @@ class TestAllSchemaDefsHavePythonTypes:
         'Container': Container,
         'CanvasAnalysis': CanvasAnalysis,
         'CanvasAnalysisDisplay': CanvasAnalysisDisplay,
-        'CanvasAnalysisRecipe': CanvasAnalysisRecipe,
-        'CanvasAnalysisRecipeAnalysis': CanvasAnalysisRecipeAnalysis,
-        'CanvasAnalysisRecipeScenario': CanvasAnalysisRecipeScenario,
+        'ChartRecipeCore': ChartRecipeCore,
+        'ChartRecipeAnalysis': ChartRecipeAnalysis,
+        'ChartRecipeScenario': ChartRecipeScenario,
         # These are deprecated or not modeled separately in Python:
         # 'Costs', 'MonetaryCost', 'TimeCost' - deprecated
         # 'UUID', 'Id', 'Condition' - simple types, not classes

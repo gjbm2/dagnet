@@ -294,26 +294,26 @@ describe('AUTOMATED Schema / TypeScript / Python Parity', () => {
     });
 
     it('must have IDENTICAL recipe.analysis fields across schema and Python', () => {
-      const schemaFields = getSchemaFields(schema, 'CanvasAnalysisRecipeAnalysis');
-      const pyFields = getPythonFields('CanvasAnalysisRecipeAnalysis');
+      const schemaFields = getSchemaFields(schema, 'ChartRecipeAnalysis');
+      const pyFields = getPythonFields('ChartRecipeAnalysis');
       
       const schemaOnlyVsPy = [...schemaFields].filter(f => !pyFields.has(f));
       const pyOnlyVsSchema = [...pyFields].filter(f => !schemaFields.has(f));
       
       if (schemaOnlyVsPy.length > 0 || pyOnlyVsSchema.length > 0) {
-        throw new Error(`CanvasAnalysisRecipeAnalysis PARITY FAILURE:\nSchema-only: [${schemaOnlyVsPy}]\nPython-only: [${pyOnlyVsSchema}]\nSchema: [${[...schemaFields].sort()}]\nPython: [${[...pyFields].sort()}]`);
+        throw new Error(`ChartRecipeAnalysis PARITY FAILURE:\nSchema-only: [${schemaOnlyVsPy}]\nPython-only: [${pyOnlyVsSchema}]\nSchema: [${[...schemaFields].sort()}]\nPython: [${[...pyFields].sort()}]`);
       }
     });
 
     it('must have IDENTICAL recipe.scenarios[] fields across schema and Python', () => {
-      const schemaFields = getSchemaFields(schema, 'CanvasAnalysisRecipeScenario');
-      const pyFields = getPythonFields('CanvasAnalysisRecipeScenario');
+      const schemaFields = getSchemaFields(schema, 'ChartRecipeScenario');
+      const pyFields = getPythonFields('ChartRecipeScenario');
       
       const schemaOnlyVsPy = [...schemaFields].filter(f => !pyFields.has(f));
       const pyOnlyVsSchema = [...pyFields].filter(f => !schemaFields.has(f));
       
       if (schemaOnlyVsPy.length > 0 || pyOnlyVsSchema.length > 0) {
-        throw new Error(`CanvasAnalysisRecipeScenario PARITY FAILURE:\nSchema-only: [${schemaOnlyVsPy}]\nPython-only: [${pyOnlyVsSchema}]\nSchema: [${[...schemaFields].sort()}]\nPython: [${[...pyFields].sort()}]`);
+        throw new Error(`ChartRecipeScenario PARITY FAILURE:\nSchema-only: [${schemaOnlyVsPy}]\nPython-only: [${pyOnlyVsSchema}]\nSchema: [${[...schemaFields].sort()}]\nPython: [${[...pyFields].sort()}]`);
       }
     });
 

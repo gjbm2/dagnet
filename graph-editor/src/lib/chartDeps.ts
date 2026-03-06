@@ -1,8 +1,9 @@
 import { fnv1a32, stableStringify } from './stableSignature';
+import type { ChartVisibilityMode } from '../types/chartRecipe';
+
+export type { ChartVisibilityMode };
 
 export type ChartDepsMode = 'linked' | 'pinned';
-
-export type ChartVisibilityMode = 'f+e' | 'f' | 'e';
 
 export type ChartKind = 'analysis_funnel' | 'analysis_bridge' | 'analysis_daily_conversions' | 'analysis_cohort_maturity';
 

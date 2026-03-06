@@ -101,20 +101,20 @@
         "hide_current": { "type": "boolean" }
       }
     },
-    "CanvasAnalysisRecipeAnalysis": {
+    "ChartRecipeAnalysis": {
       "type": "object",
-      "description": "What to compute — analysis identity",
-      "required": ["analysis_type"],
+      "description": "Shared chart recipe: what to compute — analysis identity. Used by both canvas analyses and chart files.",
       "additionalProperties": false,
       "properties": {
         "analysis_type": { "type": "string" },
         "analytics_dsl": { "type": "string" },
+        "query_dsl": { "type": "string", "description": "Deprecated alias for analytics_dsl (backward compatibility with existing chart files)" },
         "what_if_dsl": { "type": "string" }
       }
     },
-    "CanvasAnalysisRecipeScenario": {
+    "ChartRecipeScenario": {
       "type": "object",
-      "description": "Frozen scenario entry",
+      "description": "Shared chart recipe: scenario entry. Used by both canvas analyses and chart files.",
       "required": ["scenario_id"],
       "additionalProperties": false,
       "properties": {
@@ -126,16 +126,16 @@
         "is_live": { "type": "boolean" }
       }
     },
-    "CanvasAnalysisRecipe": {
+    "ChartRecipeCore": {
       "type": "object",
-      "description": "Recipe for a canvas analysis",
+      "description": "Shared chart recipe core — defines what to compute. Used by canvas analyses (directly) and chart files (wrapped with parent/display/eligibility).",
       "required": ["analysis"],
       "additionalProperties": false,
       "properties": {
-        "analysis": { "$ref": "#/$defs/CanvasAnalysisRecipeAnalysis" },
+        "analysis": { "$ref": "#/$defs/ChartRecipeAnalysis" },
         "scenarios": {
           "type": "array",
-          "items": { "$ref": "#/$defs/CanvasAnalysisRecipeScenario" }
+          "items": { "$ref": "#/$defs/ChartRecipeScenario" }
         }
       }
     },
@@ -154,7 +154,8 @@
         "chart_kind": { "type": "string" },
         "live": { "type": "boolean" },
         "title": { "type": "string" },
-        "recipe": { "$ref": "#/$defs/CanvasAnalysisRecipe" },
+        "chart_current_layer_dsl": { "type": "string", "description": "DSL fragment composed onto all scenarios via augmentDSLWithConstraint (both live and copied mode)" },
+        "recipe": { "$ref": "#/$defs/ChartRecipeCore" },
         "display": { "$ref": "#/$defs/CanvasAnalysisDisplay" }
       }
     },

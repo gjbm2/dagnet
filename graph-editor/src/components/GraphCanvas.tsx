@@ -1778,7 +1778,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
     
     // Check if only edge probabilities changed (not topology or node positions)
     const edgeCountChanged = edges.length !== (graph.edges?.length || 0);
-    const expectedNodeCount = (graph.nodes?.length || 0) + (graph.postits?.length || 0);
+    const expectedNodeCount = (graph.nodes?.length || 0) + (graph.postits?.length || 0) + (graph.containers?.length || 0) + (graph.canvasAnalyses?.length || 0);
     const nodeCountChanged = nodes.length !== expectedNodeCount;
     
     console.log('  Edge count changed:', edgeCountChanged, `(${edges.length} -> ${graph.edges?.length || 0})`);
@@ -2325,6 +2325,8 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
                            edgeHandlesChanged ? 'Edge handles changed' :
                            nodePositionsChanged ? 'Node positions changed' : 'Unknown';
     console.log(`  🔨 Slow path: ${slowPathReason}, doing full rebuild`);
+    console.log('[DIAG-SLOW] graph.canvasAnalyses:', graph?.canvasAnalyses?.length, graph?.canvasAnalyses?.map((a: any) => a.id));
+    console.log('[DIAG-SLOW] store.graph.canvasAnalyses:', graphStoreHook.getState().graph?.canvasAnalyses?.length, graphStoreHook.getState().graph?.canvasAnalyses?.map((a: any) => a.id));
     
     // Topology changed - do full rebuild
     // Preserve current selection state
@@ -3373,6 +3375,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
         return;
       }
       
+      console.log('[DIAG-RF→G] RF→Graph sync WRITING. graph.canvasAnalyses:', graph?.canvasAnalyses?.length, '→ updatedGraph.canvasAnalyses:', updatedGraph?.canvasAnalyses?.length, 'rfAnalysisNodes:', nodes.filter(n => n.id?.startsWith('analysis-')).length);
       isSyncingRef.current = true;
       lastSyncedReactFlowRef.current = updatedJson;
       
@@ -3383,7 +3386,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
       // Reset sync flag
       setTimeout(() => {
         isSyncingRef.current = false;
-        // Sync flag reset
+        console.log('[DIAG-RF→G] Reset isSyncingRef. store.canvasAnalyses:', graphStoreHook.getState().graph?.canvasAnalyses?.length);
       }, 0);
     }
   }, [nodes, edges]); // Removed 'graph' and 'setGraph' from dependencies

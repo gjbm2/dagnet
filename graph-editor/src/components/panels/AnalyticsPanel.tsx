@@ -1254,7 +1254,31 @@ export default function AnalyticsPanel({ tabId, hideHeader = false }: AnalyticsP
                   }}
                 />
               </div>
-              <AnalysisResultCards result={results.result} scenarioDslSubtitleById={scenarioDslSubtitleByIdObject} />
+              <div
+                style={{ position: 'relative', cursor: 'grab' }}
+                draggable
+                onDragStart={(e) => {
+                  const payload = {
+                    type: 'dagnet-drag',
+                    objectType: 'canvas-analysis',
+                    chartKind: results.result?.semantics?.chart?.recommended,
+                    recipe: { analysis: { analysis_type: selectedAnalysisId, analytics_dsl: queryDSL || undefined } },
+                    analysisResult: results.result,
+                    viewMode: 'cards',
+                  };
+                  e.dataTransfer.setData('application/json', JSON.stringify(payload));
+                  e.dataTransfer.effectAllowed = 'copy';
+                  const target = e.currentTarget as HTMLElement;
+                  if (target) {
+                    e.dataTransfer.setDragImage(target, target.offsetWidth / 2, 20);
+                  }
+                }}
+              >
+                <div style={{ position: 'absolute', top: 8, right: 8, zIndex: 1, color: '#9ca3af', pointerEvents: 'none' }}>
+                  <GripVertical size={14} />
+                </div>
+                <AnalysisResultCards result={results.result} scenarioDslSubtitleById={scenarioDslSubtitleByIdObject} />
+              </div>
             </div>
           )}
           

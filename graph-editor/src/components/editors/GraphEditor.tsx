@@ -1544,7 +1544,7 @@ const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, r
     
     // Update sync tracking and sync to store
     lastSyncedContentRef.current = dataStr;
-    console.log(`[${new Date().toISOString()}] [GraphEditor] File→Store: SYNCING (nodes: ${data.nodes.length})`);
+    console.log(`[${new Date().toISOString()}] [GraphEditor] File→Store: SYNCING (nodes: ${data.nodes.length}, canvasAnalyses: ${data.canvasAnalyses?.length || 0})`);
     setGraph(data);
     
     // Save to history

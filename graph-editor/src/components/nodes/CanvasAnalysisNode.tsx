@@ -61,15 +61,20 @@ export default function CanvasAnalysisNode({ data, selected }: NodeProps<CanvasA
     }, 200);
   };
 
+  const KNOWN_CHART_KINDS = new Set(['funnel', 'bridge', 'bridge_horizontal', 'histogram', 'lag_histogram', 'daily_conversions', 'cohort_maturity']);
+  const hasRealChart = !!(result?.semantics?.chart?.recommended && KNOWN_CHART_KINDS.has(result.semantics.chart.recommended));
+
   const displayTitle = analysis.title || result?.analysis_name || analysis.recipe.analysis.analysis_type;
 
   console.log('[CanvasAnalysisNode] render:', {
     id: analysis.id,
+    view_mode: analysis.view_mode,
     visibleScenarioIds,
     hasResult: !!result,
     resultDimensions: result?.dimension_values ? Object.keys(result.dimension_values) : 'none',
     loading,
     error,
+    analysis_type: analysis.recipe?.analysis?.analysis_type,
   });
 
   return (
@@ -173,7 +178,7 @@ export default function CanvasAnalysisNode({ data, selected }: NodeProps<CanvasA
           </div>
         )}
 
-        {result && analysis.view_mode === 'chart' && (
+        {result && analysis.view_mode === 'chart' && hasRealChart && (
           <AnalysisChartContainer
             result={result}
             visibleScenarioIds={visibleScenarioIds}
@@ -183,8 +188,10 @@ export default function CanvasAnalysisNode({ data, selected }: NodeProps<CanvasA
           />
         )}
 
-        {result && analysis.view_mode === 'cards' && (
-          <AnalysisResultCards result={result} />
+        {result && (analysis.view_mode === 'cards' || !hasRealChart) && (
+          <div style={{ overflow: 'auto', height: '100%', padding: 8 }}>
+            <AnalysisResultCards result={result} />
+          </div>
         )}
       </div>
     </div>

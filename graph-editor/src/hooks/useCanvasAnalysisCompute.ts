@@ -228,8 +228,6 @@ export function useCanvasAnalysisCompute({
             visibilityMode,
           );
 
-          const effectiveDsl = needsSnapshots ? analyticsDsl : getQueryDslForScenario(scenarioId);
-
           let snapshotSubjects;
           if (needsSnapshots && workspace) {
             const resolved = await resolveSnapshotSubjectsForScenario({
@@ -243,9 +241,18 @@ export function useCanvasAnalysisCompute({
             snapshotSubjects = resolved.subjects;
           }
 
+          const finalDsl = analyticsDsl || currentDSL;
+          console.log('[DIAG-COMPUTE] single-scenario analyzeSelection call:', {
+            analyticsDsl,
+            currentDSL,
+            finalDsl,
+            analysisType,
+            scenarioId,
+            needsSnapshots,
+          });
           response = await graphComputeClient.analyzeSelection(
             analysisGraph,
-            effectiveDsl || currentDSL,
+            finalDsl,
             scenarioId,
             getScenarioName(scenarioId),
             getScenarioColour(scenarioId),
@@ -253,6 +260,7 @@ export function useCanvasAnalysisCompute({
             visibilityMode,
             snapshotSubjects,
           );
+          console.log('[DIAG-COMPUTE] response dimensions:', response?.result?.dimension_values ? Object.keys(response.result.dimension_values) : 'none', 'data rows:', response?.result?.data?.length);
         }
       } else {
         // Frozen mode: compute from recipe.scenarios
