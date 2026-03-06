@@ -179,6 +179,7 @@ export interface NavigatorState {
   showLocalOnly?: boolean;              // Filter to local-only files
   showDirtyOnly?: boolean;              // Filter to dirty files
   showOpenOnly?: boolean;               // Filter to open files
+  showFavouritesOnly?: boolean;         // Filter to favourited files
   sortBy?: 'name' | 'modified' | 'opened' | 'status' | 'type';  // Sort order
   groupBySubCategories?: boolean;       // Group by sub-categories (parameter_type, node_type, etc.)
   groupByTags?: boolean;                // Group by tags
@@ -365,6 +366,7 @@ export interface NavigatorOperations {
   setShowLocalOnly: (show: boolean) => void;
   setShowDirtyOnly: (show: boolean) => void;
   setShowOpenOnly: (show: boolean) => void;
+  setShowFavouritesOnly: (show: boolean) => void;
   setSortBy: (sort: 'name' | 'modified' | 'opened' | 'status' | 'type') => void;
   setGroupBySubCategories: (group: boolean) => void;
   setGroupByTags: (group: boolean) => void;
@@ -886,6 +888,39 @@ export interface Container {
   y: number;
 }
 
+export interface CanvasAnalysisDisplay {
+  hide_current?: boolean;
+  [key: string]: unknown;
+}
+
+export interface CanvasAnalysis {
+  id: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  view_mode: 'chart' | 'cards';
+  chart_kind?: string;
+  live: boolean;
+  title?: string;
+  recipe: {
+    analysis: {
+      analysis_type: string;
+      analytics_dsl?: string;
+      what_if_dsl?: string;
+    };
+    scenarios?: Array<{
+      scenario_id: string;
+      effective_dsl?: string;
+      name?: string;
+      colour?: string;
+      visibility_mode?: 'f+e' | 'f' | 'e';
+      is_live?: boolean;
+    }>;
+  };
+  display?: CanvasAnalysisDisplay;
+}
+
 export interface ConversionGraph {
   nodes: GraphNode[];
   edges: GraphEdge[];
@@ -893,6 +928,7 @@ export interface ConversionGraph {
   metadata: Metadata;
   postits?: PostIt[];
   containers?: Container[];
+  canvasAnalyses?: CanvasAnalysis[];
   debugging?: boolean;
   
   // Contexts: Data interests specification for nightly runner

@@ -1,16 +1,16 @@
 # Canvas Objects — Implementation Plan
 
-**Status**: Ready to implement  
-**Date**: 5-Mar-26  
+**Status**: Phases 1–3c complete; 3d pending; 3e mostly complete; 5 pending  
+**Date**: 5-Mar-26 (updated 5-Mar-26)  
 **Design docs**: [0-architecture.md](0-architecture.md), [1-post-its.md](1-post-its.md), [2-containers.md](2-containers.md), [3-canvas-charts.md](3-canvas-charts.md)
 
 ---
 
-## Prerequisites
+## Prerequisites ✅ COMPLETE
 
 Two standalone commits before any phase begins.
 
-### P1. Terminology rename (~5 files, ~15 occurrences)
+### P1. Terminology rename (~5 files, ~15 occurrences) ✅
 
 Rename scenario-creation terminology to eliminate "snapshot" ambiguity (architecture doc §11.1):
 
@@ -25,7 +25,7 @@ Rename scenario-creation terminology to eliminate "snapshot" ambiguity (architec
 
 **Test**: run existing scenario tests to verify no regressions.
 
-### P2. Rename "Objects" menu → "Elements" menu
+### P2. Rename "Objects" menu → "Elements" menu ✅
 
 Rename `ObjectsMenu.tsx` → `ElementsMenu.tsx`. Update `MenuBar.tsx` import and label. No behaviour change — same three items (Add Node, Delete Selected, Sync Index).
 
@@ -35,9 +35,9 @@ Rename `ObjectsMenu.tsx` → `ElementsMenu.tsx`. Update `MenuBar.tsx` import and
 
 ---
 
-## Phase 1 — Post-It Notes
+## Phase 1 — Post-It Notes ✅ COMPLETE
 
-### 1a. Schema parity
+### 1a. Schema parity ✅
 
 Add the `PostIt` type and `postits` array to all three schema layers. This lands first to prevent Python pipeline stripping.
 
@@ -49,7 +49,7 @@ Add the `PostIt` type and `postits` array to all three schema layers. This lands
 **Tests to write**:
 - Extend `schemaParityAutomated.test.ts` to cover `PostIt` fields across TS / Python / JSON schema
 
-### 1b. Foundation — rendering, drag, resize
+### 1b. Foundation — rendering, drag, resize ✅
 
 Wire postits into the ReactFlow canvas as a new node type. Verify CSS stacking, pointer events, and layout exclusions.
 
@@ -77,7 +77,7 @@ Wire postits into the ReactFlow canvas as a new node type. Verify CSS stacking, 
 - Pan mode: grab cursor everywhere, no node/postit interaction
 - Create-postit mode: crosshair cursor, click-drag draws rectangle
 
-### 1c. CRUD, selection, edit operations
+### 1c. CRUD, selection, edit operations ✅
 
 Full create/select/update/delete/copy/paste lifecycle.
 
@@ -100,7 +100,7 @@ Full create/select/update/delete/copy/paste lifecycle.
 - `postit-select-boost.spec.ts` — click postit, verify z-index boost; click away, verify drop
 - `postit-inline-edit.spec.ts` — double-click, type, blur, verify text persisted
 
-### 1d. Properties panel + shared colour palette
+### 1d. Properties panel + shared colour palette ✅
 
 **Files to change**:
 - `graph-editor/src/components/PostItColourPalette.tsx` **(new)** — shared component: 6 swatch grid, click to select, used by both context menu and properties panel
@@ -109,7 +109,7 @@ Full create/select/update/delete/copy/paste lifecycle.
 
 **Tests**: manual verification of properties panel text/colour editing, undo/redo for postit property changes.
 
-### 1e. Element palette + Elements menu
+### 1e. Element palette + Elements menu ✅
 
 **Files to change**:
 - `graph-editor/src/components/ElementPalette.tsx` **(new)** — horizontal/vertical strip with Node + Post-It icons; drag (`dagnet-drag` with `objectType: 'new-node'` / `'new-postit'`) and click (dispatches `dagnet:addNode` / `dagnet:addPostit`)
@@ -122,9 +122,9 @@ Full create/select/update/delete/copy/paste lifecycle.
 
 ---
 
-## Phase 2 — Containers
+## Phase 2 — Containers ✅ COMPLETE
 
-### Prerequisite: Generalise selection context
+### Prerequisite: Generalise selection context ✅
 
 Before Phase 2, refactor `SelectionContextType` to replace `selectedPostitId` with the generalised `selectedAnnotationId` / `selectedAnnotationType` pattern (architecture doc §6.2). Update all Phase 1 code that reads `selectedPostitId` to use the generalised fields.
 
@@ -132,7 +132,7 @@ Before Phase 2, refactor `SelectionContextType` to replace `selectedPostitId` wi
 
 **Test**: existing postit tests still pass after refactor.
 
-### 2a. Schema parity
+### 2a. Schema parity ✅
 
 **Files to change**:
 - `graph-editor/src/types/index.ts` — add `Container` interface and `containers?` array on `ConversionGraph`
@@ -141,7 +141,7 @@ Before Phase 2, refactor `SelectionContextType` to replace `selectedPostitId` wi
 
 **Tests**: extend `schemaParityAutomated.test.ts` for `Container` fields.
 
-### 2b. Component, rendering, group drag, halo adaptation
+### 2b. Component, rendering, group drag, halo adaptation ✅
 
 **Files to change**:
 - `graph-editor/src/components/nodes/ContainerNode.tsx` **(new)** — labelled rectangle, dashed border, low-opacity fill, `NodeResizer`, inline label editing (double-click), no `<Handle>` components
@@ -162,7 +162,7 @@ Before Phase 2, refactor `SelectionContextType` to replace `selectedPostitId` wi
 - `container-group-drag.spec.ts`
 - `container-halo-colour.spec.ts` (screenshot comparison)
 
-### 2c. CRUD, selection, edit operations, properties panel
+### 2c. CRUD, selection, edit operations, properties panel ✅
 
 **Files to change**:
 - `graph-editor/src/components/GraphCanvas.tsx` — extend `onSelectionChange` for containers (annotation routing); route `onNodeContextMenu` to `ContainerContextMenu`; add "Add Container" to pane context menu; extend `deleteSelected()` for containers; update `metadata.updated_at`
@@ -179,9 +179,9 @@ Before Phase 2, refactor `SelectionContextType` to replace `selectedPostitId` wi
 
 ---
 
-## Phase 3 — Canvas Analyses
+## Phase 3 — Canvas Analyses (3a–3c ✅, 3d PENDING, 3e ~80%)
 
-### Prerequisite: DB-snapshot subject resolution service extraction
+### Prerequisite: DB-snapshot subject resolution service extraction ✅
 
 Extract `resolveSnapshotSubjectsForScenario` from `AnalyticsPanel.tsx` into a shared service.
 
@@ -191,7 +191,7 @@ Extract `resolveSnapshotSubjectsForScenario` from `AnalyticsPanel.tsx` into a sh
 
 **Test**: run existing analytics/snapshot tests to verify no regressions.
 
-### 3a. Schema parity
+### 3a. Schema parity ✅
 
 **Files to change**:
 - `graph-editor/src/types/index.ts` — add `CanvasAnalysis`, `CanvasAnalysisDisplay` interfaces (with `view_mode: 'chart' | 'cards'`), `canvasAnalyses?` array on `ConversionGraph`
@@ -200,7 +200,9 @@ Extract `resolveSnapshotSubjectsForScenario` from `AnalyticsPanel.tsx` into a sh
 
 **Tests**: extend `schemaParityAutomated.test.ts`; verify `CanvasAnalysisDisplay` round-trips unknown fields via Python `extra='allow'`.
 
-### 3b. Compute hook, rendering, DnD
+### 3b. Compute hook, rendering, DnD ✅
+
+**Implementation notes**: DnD from analytics panel implemented on `AnalyticsPanel.tsx` results area (draggable wrapper + grip icon + pin button) rather than on individual chart preview components. Pin button enters draw-to-create mode (same as post-its/containers) rather than placing at viewport centre. Blank chart creation also added via element palette + elements menu (not in original plan).
 
 **Files to change**:
 - `graph-editor/src/hooks/useCanvasAnalysisCompute.ts` **(new)** — encapsulates all compute logic: reads graph from `useGraphStore()`, scenarios from `useScenariosContextOptional()` + `TabContext`, builds per-scenario graphs via `buildGraphForAnalysisLayer()`, calls snapshot subject resolution for DB-snapshot-backed types, calls `graphComputeClient.analyzeSelection/analyzeMultipleScenarios()`, 2-second trailing debounce for live mode, loading/error/backend-unavailable states, ECharts disposal on unmount
@@ -233,7 +235,9 @@ Extract `resolveSnapshotSubjectsForScenario` from `AnalyticsPanel.tsx` into a sh
 - `canvas-chart-dnd.spec.ts` — drag chart preview to canvas, verify renders
 - `canvas-chart-live-update.spec.ts` — pin chart, change window, verify re-render
 
-### 3c. Properties panel, freeze/unfreeze, edit operations
+### 3c. Properties panel, freeze/unfreeze, edit operations ✅
+
+**Implementation notes**: Properties panel uses dynamic analysis type cards (same `analytics-type-card` CSS as AnalyticsPanel), `QueryExpressionEditor` for analytics DSL, result-driven chart kind toggle buttons. `analysisDisplaySettingsRegistry.ts` was not created — display settings are handled inline (registry will be added when settings grow). "Open as Tab" not yet wired. Clipboard infrastructure (copy/paste for canvasAnalyses) was already in place from prior work on `subgraphExtractor.ts` and `UpdateManager.ts`.
 
 **Files to change**:
 - `graph-editor/src/components/GraphCanvas.tsx` — extend `onSelectionChange` for analyses; route `onNodeContextMenu` to `CanvasAnalysisContextMenu`; extend `deleteSelected()` for analyses; update `metadata.updated_at`
@@ -254,7 +258,10 @@ Extract `resolveSnapshotSubjectsForScenario` from `AnalyticsPanel.tsx` into a sh
 
 ---
 
-### 3e. Result cards view + DnD from result cards
+### 3e. Result cards view + DnD from result cards (~80% complete)
+
+**Done**: Cards rendering path in `CanvasAnalysisNode` (view_mode toggle), view mode toggle in context menu and properties panel, `handleDrop` reads `viewMode` from payload.  
+**Pending**: Drag affordance on `AnalysisResultCards.tsx` in the analytics panel (making the result cards area draggable to canvas with `viewMode: 'cards'`).
 
 **Files to change**:
 - `graph-editor/src/components/nodes/CanvasAnalysisNode.tsx` — add cards rendering path (wraps `AnalysisResultCards` when `view_mode === 'cards'`)
@@ -267,7 +274,7 @@ Extract `resolveSnapshotSubjectsForScenario` from `AnalyticsPanel.tsx` into a sh
 
 ---
 
-## Phase 3d — Chart Rendering Consolidation
+## Phase 3d — Chart Rendering Consolidation (PENDING)
 
 After canvas analyses are functional, consolidate the fragmented chart preview components into a single rendering surface. Currently 6 preview components each have their own layout logic, controls chrome, height calculations, and "Open as Tab" implementation. Snapshot charts build ECharts options inline rather than using `analysisEChartsService`.
 
@@ -284,9 +291,15 @@ After canvas analyses are functional, consolidate the fragmented chart preview c
 
 **Test**: existing analytics tests + Playwright chart specs verify no regressions.
 
+--
+
+## Phase 4 - Context menu tidy-up (PENDING)
+
+See 4-context-menu-refactor.md
+
 ---
 
-## Phase 5 — Snap-to Alignment Guides
+## Phase 5 — Snap-to Alignment Guides (PENDING)
 
 See [5-snap-to.md](5-snap-to.md) for full design.
 
@@ -308,6 +321,18 @@ Snap logic is purely additive — wraps `onNodesChange`, adds guide line SVG. No
 - Wire Alt-key detection for temporary suppress
 - Add "Snap to guides" toggle to View menu
 - Persist in `editorState`
+
+---
+
+## Additions Beyond Original Plan
+
+Implemented during Phase 3 but not in the original spec:
+
+- **Blank chart creation from element palette**: BarChart3 icon in `ElementPalette.tsx` — click to enter draw mode, drag to canvas for default size. "Add Analysis" in `ElementsMenu.tsx`. `new-analysis` tool type in `ElementToolContext.tsx`.
+- **Properties panel parity with analytics panel**: Dynamic analysis type cards (same `analytics-type-card` CSS), `QueryExpressionEditor` for DSL editing, result-driven chart kind toggle buttons, shared result cache (`canvasAnalysisResultCache`).
+- **Dashboard mode fitView**: `fitView` in dashboard mode includes all elements (nodes + post-its + containers + analyses), not just conversion nodes.
+- **Delete icon on canvas analysis nodes**: `×` button in top-right when selected (matching post-it/container pattern).
+- **Compute hook reads from graph store**: `useCanvasAnalysisCompute` reads the latest analysis from the graph store (not stale ReactFlow node data) so properties panel edits take effect immediately.
 
 ---
 

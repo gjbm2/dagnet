@@ -28,6 +28,7 @@ import { useWhereUsed } from '../hooks/useWhereUsed';
 import { useCopyPaste } from '../hooks/useCopyPaste';
 import { HistoryModal } from './modals/HistoryModal';
 import { TagEditorPopover } from './TagEditorPopover';
+import { toggleFavourite, isFavourite } from '../utils/favourites';
 
 interface NavigatorItemContextMenuProps {
   item: RepositoryItem;
@@ -282,6 +283,19 @@ export function NavigatorItemContextMenu({ item, x, y, onClose }: NavigatorItemC
       setTagEditorPos({ x: x + 160, y });
     },
     keepMenuOpen: true
+  });
+
+  const fileTags: string[] = (() => {
+    const f = fileRegistry.getFile(fileId);
+    const d = f?.data as any;
+    return d?.tags || d?.metadata?.tags || [];
+  })();
+  menuItems.push({
+    label: isFavourite(fileTags) ? 'Remove from Favourites' : 'Add to Favourites',
+    onClick: () => {
+      toggleFavourite(fileId);
+      onClose();
+    }
   });
   menuItems.push({ label: '', onClick: () => {}, divider: true });
 

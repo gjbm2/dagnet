@@ -8,7 +8,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { Filter, ArrowUpDown, Tag, Check, Circle, LucideIcon } from 'lucide-react';
 import './NavigatorControls.css';
 
-export type FilterMode = 'all' | 'dirty' | 'open' | 'local';
+export type FilterMode = 'all' | 'dirty' | 'open' | 'local' | 'favourites';
 export type SortMode = 'name' | 'modified' | 'opened' | 'status' | 'type';
 
 interface NavigatorControlsProps {
@@ -34,6 +34,7 @@ interface DropdownOption<T> {
 
 const FILTER_OPTIONS: DropdownOption<FilterMode>[] = [
   { value: 'all', label: 'All', showCheckmark: true },
+  { value: 'favourites', label: 'Favourites', showCheckmark: true },
   { value: 'dirty', label: 'Dirty', showCheckmark: true },
   { value: 'open', label: 'Open', showCheckmark: true },
   { value: 'local', label: 'Local', showCheckmark: true },

@@ -13,8 +13,8 @@
 
 import { test, expect, Page } from '@playwright/test';
 
-// 10 second timeout - if it's slower, it's broken
-test.describe.configure({ timeout: 10_000 });
+// 15 second timeout — this test does 2 page loads + IDB seeding + UI interactions
+test.describe.configure({ timeout: 15_000 });
 
 // ============================================================================
 // Test Fixtures

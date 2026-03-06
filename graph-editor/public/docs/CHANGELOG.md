@@ -1,8 +1,65 @@
 # DagNet Release Notes
-## Version 1.7.0b
+## Version 1.7b
 **Released:** 5-Mar-26
+**Canvas elements, navigator favourites**
 
-Dagnet now has post-it notes and containers (and a tools palette, along the lines you'd expect for an app of this type). Canvas graphs coming shortly.
+This release introduces three new canvas element types — post-it notes, containers, and canvas analyses — alongside a tools palette for creating them. Together these turn the graph canvas from a pure DAG editor into a freeform workspace where annotations, grouping, and live analytical charts sit alongside conversion nodes.
+
+### Post-It Notes
+
+Coloured sticky notes on the canvas for freeform annotation.
+
+- Double-click to edit text inline; also editable via the properties panel
+- Draggable and resizable; rendered below edges (annotation layer)
+- Six colours from an authentic 3M Post-it palette, selectable via colour palette or properties panel
+- Four font sizes (S/M/L/XL)
+- Persisted in the graph JSON alongside nodes and edges; ignored by all analytics pipelines
+- Copy, cut, paste, and delete via keyboard shortcuts, context menu, or Edit menu
+
+### Containers
+
+Labelled rectangles for visually grouping conversion nodes.
+
+- Drag a container and all enclosed conversion nodes move with it
+- Rendered on the deepest canvas layer (below post-its, below edges)
+- Label text at the top; customisable border colour with a light tinted fill
+- Resizable via corner/edge handles
+- Useful for marking out funnels, loops, or sub-flows ("Acquisition", "Retention", "Payment")
+
+### Canvas Analyses (Charts on Canvas)
+
+Pin any analysis result directly onto the graph canvas as a live, updating chart or result card.
+
+- **Drag from analytics panel**: drag a chart preview from the sidebar and drop it onto the canvas
+- **Draw on canvas**: click the pin icon on any analytics result, or click the chart tool in the palette, then click-drag a rectangle on the canvas to define the chart's size and position
+- **Blank chart**: create an empty chart via the tools palette (chart icon) or Elements > Add Analysis; configure the analytics DSL and analysis type in the properties panel
+- **Live mode**: chart recomputes automatically when the graph's query context, scenarios, or data change (2-second debounce)
+- **Frozen mode**: freeze a chart to capture its current scenario state; unfreeze to resume live updates
+- **View modes**: toggle between ECharts visualisation and formatted result cards
+- **All computed analysis types**: funnels, bridges, path analyses, outcome comparisons — plus DB-snapshot-backed types (lag histograms, daily conversions, cohort maturity) for graphs with snapshot data
+- **Multi-scenario**: each chart renders all visible scenarios with their assigned colours
+- **Properties panel**: mirrors the analytics panel's workflow — editable QueryExpressionEditor for analytics DSL (with autocomplete), dynamic analysis type card list filtered by availability, result-driven chart kind selector, title, view mode toggle, live/frozen toggle
+- **Context menu**: view mode toggle, freeze/unfreeze, z-order controls, copy, cut, delete
+
+### Tools Palette & Elements Menu
+
+A floating palette for element creation, visible at the top of the sidebar (maximised mode) or in the sidebar icon bar (minimised mode).
+
+- **Select** and **Pan** mode buttons
+- **New Node**, **New Post-It**, **New Container**, **New Analysis** creation tools — click to enter placement mode (crosshair cursor, click-drag on canvas to place), or drag from the palette onto the canvas
+- Active tool highlighted; creation tools auto-revert to Select after placement
+- Elements menu (top menu bar): Add Node, Add Post-It, Add Container, Add Analysis
+
+### Dashboard Mode
+
+- Dashboard fitView now includes all canvas elements (post-its, containers, analyses) when scaling the viewport, not just conversion nodes
+
+### Navigator Favourites
+
+- Star any file (graph, parameter, node, case) to mark it as a favourite
+- Click the star icon in the navigator, or right-click and choose "Add to Favourites"
+- Filter the navigator to show only favourites via the Filter dropdown
+- Implemented as a reserved `_favourite` tag — no new data fields, no schema changes
 
 ---
 

@@ -31,7 +31,7 @@ import { ItemBase } from '../../hooks/useItemFiltering';
 import { WindowSelector } from '../WindowSelector';
 import { ScenarioLegend } from '../ScenarioLegend';
 import { useActiveGraphTracking } from '../../hooks/useActiveGraphTracking';
-import { ElementToolProvider, type ElementToolContextType } from '../../contexts/ElementToolContext';
+import { ElementToolProvider, type ElementToolContextType, type ElementToolType } from '../../contexts/ElementToolContext';
 
 // Canvas object type for generalised annotation selection
 export type CanvasAnnotationType = 'postit' | 'container' | 'canvasAnalysis';
@@ -278,7 +278,7 @@ const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, r
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(tabState.selectedEdgeId ?? null);
   const [selectedAnnotationId, setSelectedAnnotationId] = useState<string | null>(null);
   const [selectedAnnotationType, setSelectedAnnotationType] = useState<CanvasAnnotationType | null>(null);
-  const [activeElementTool, setActiveElementTool] = useState<'select' | 'pan' | 'new-node' | 'new-postit' | 'new-container' | null>(null);
+  const [activeElementTool, setActiveElementTool] = useState<ElementToolType>(null);
   
   // Sync selection state when tabState changes (e.g., from deep linking navigation)
   useEffect(() => {

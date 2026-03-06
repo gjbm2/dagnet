@@ -30,8 +30,11 @@ export default function PropertiesPanelWrapper({ tabId }: PropertiesPanelWrapper
   
   const selectedPostitId = selectedAnnotationType === 'postit' ? selectedAnnotationId : null;
   const selectedContainerId = selectedAnnotationType === 'container' ? selectedAnnotationId : null;
+  const selectedAnalysisId = selectedAnnotationType === 'canvasAnalysis' ? selectedAnnotationId : null;
 
-  const title = selectedContainerId
+  const title = selectedAnalysisId
+    ? 'Canvas Analysis Properties'
+    : selectedContainerId
     ? 'Container Properties'
     : selectedPostitId
     ? 'Post-It Properties'
@@ -202,6 +205,7 @@ export default function PropertiesPanelWrapper({ tabId }: PropertiesPanelWrapper
           selectedEdgeId={selectedEdgeId}
           selectedPostitId={selectedPostitId}
           selectedContainerId={selectedContainerId}
+          selectedAnalysisId={selectedAnalysisId}
           onSelectedNodeChange={onSelectedNodeChange}
           onSelectedEdgeChange={onSelectedEdgeChange}
           tabId={tabId}

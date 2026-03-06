@@ -524,5 +524,51 @@
       "x": 1700,
       "y": -80
     }
+  ],
+  "containers": [
+    {
+      "id": "c0c0c0c0-0001-4000-8000-000000000001",
+      "label": "Fulfilment",
+      "colour": "#7DD3FC",
+      "width": 1450,
+      "height": 700,
+      "x": 1150,
+      "y": -150
+    }
+  ],
+  "canvasAnalyses": [
+    {
+      "id": "ca000000-0001-4000-8000-000000000001",
+      "x": 200,
+      "y": 600,
+      "width": 500,
+      "height": 350,
+      "view_mode": "chart",
+      "chart_kind": "funnel",
+      "live": true,
+      "title": "Checkout Funnel",
+      "recipe": {
+        "analysis": {
+          "analysis_type": "conversion_funnel",
+          "analytics_dsl": "from(landing-page).to(order-complete)"
+        }
+      }
+    },
+    {
+      "id": "ca000000-0002-4000-8000-000000000002",
+      "x": 750,
+      "y": 600,
+      "width": 400,
+      "height": 300,
+      "view_mode": "cards",
+      "live": true,
+      "title": "Checkout Bridge",
+      "recipe": {
+        "analysis": {
+          "analysis_type": "bridge_view",
+          "analytics_dsl": "from(landing-page).to(order-complete)"
+        }
+      }
+    }
   ]
 }

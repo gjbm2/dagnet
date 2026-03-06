@@ -5,6 +5,7 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { ChipInput } from './ChipInput';
 import { fileRegistry } from '../contexts/TabContext';
+import { filterSystemTags } from '../utils/favourites';
 
 interface TagEditorPopoverProps {
   /** File ID to edit tags for */
@@ -22,10 +23,11 @@ export function TagEditorPopover({ fileId, x, y, onClose }: TagEditorPopoverProp
   const data = file?.data as any;
 
   // Current tags — different file types store tags at different paths
-  const currentTags: string[] = data?.tags || data?.metadata?.tags || [];
-  const [tags, setTags] = useState<string[]>(currentTags);
+  const allCurrentTags: string[] = data?.tags || data?.metadata?.tags || [];
+  const systemTags = allCurrentTags.filter(t => t.startsWith('_'));
+  const [tags, setTags] = useState<string[]>(filterSystemTags(allCurrentTags));
 
-  // Collect all existing tags for autocomplete
+  // Collect all existing tags for autocomplete (excluding system tags)
   const [allTags] = useState<string[]>(() => {
     const tagSet = new Set<string>();
     try {
@@ -35,23 +37,23 @@ export function TagEditorPopover({ fileId, x, y, onClose }: TagEditorPopoverProp
         d?.metadata?.tags?.forEach?.((t: string) => tagSet.add(t));
       }
     } catch { /* ignore */ }
-    return Array.from(tagSet).sort();
+    return filterSystemTags(Array.from(tagSet)).sort();
   });
 
-  // Save tags to file
+  // Save tags to file, preserving system tags (e.g. _favourite)
   const saveTags = useCallback((newTags: string[]) => {
     setTags(newTags);
     if (!file) return;
 
+    const merged = [...systemTags, ...newTags];
     const updatedData = { ...data };
-    // Graph files store tags in metadata.tags, all others in data.tags
     if (file.type === 'graph') {
-      updatedData.metadata = { ...(updatedData.metadata || {}), tags: newTags };
+      updatedData.metadata = { ...(updatedData.metadata || {}), tags: merged };
     } else {
-      updatedData.tags = newTags;
+      updatedData.tags = merged;
     }
     fileRegistry.updateFile(fileId, updatedData);
-  }, [file, data, fileId]);
+  }, [file, data, fileId, systemTags]);
 
   // Close on click outside
   useEffect(() => {

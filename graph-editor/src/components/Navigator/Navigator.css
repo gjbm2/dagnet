@@ -531,6 +531,47 @@
   min-width: 0;
 }
 
+/* Favourite star icon */
+.navigator-star {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 16px;
+  height: 16px;
+  margin-right: 3px;
+  vertical-align: middle;
+  cursor: pointer;
+  border-radius: 3px;
+  opacity: 0;
+  transition: opacity 0.12s ease, color 0.12s ease;
+  color: #d1d5db;
+}
+
+.navigator-star svg {
+  fill: none;
+  stroke: currentColor;
+}
+
+.navigator-item:hover .navigator-star.is-hovering {
+  opacity: 0.5;
+}
+
+.navigator-star.is-favourite {
+  opacity: 1;
+  color: #f59e0b;
+}
+
+.navigator-star.is-favourite svg {
+  fill: #f59e0b;
+  stroke: #f59e0b;
+}
+
+.navigator-star:hover {
+  opacity: 1 !important;
+  color: #f59e0b;
+}
+
 .navigator-item-tags {
   display: inline-flex;
   gap: 2px;
@@ -908,6 +949,18 @@
     background: #1976d2;
     color: #fff;
     border-color: #1976d2;
+  }
+
+  .navigator-star {
+    color: #555;
+  }
+
+  .navigator-star.is-favourite {
+    color: #f59e0b;
+  }
+
+  .navigator-star:hover {
+    color: #f59e0b;
   }
 
   .navigator-tag-chip {

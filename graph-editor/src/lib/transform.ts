@@ -1,6 +1,6 @@
 import type { Edge, Node } from 'reactflow';
 
-export function toFlow(graph: any, callbacks?: { onUpdateNode?: (id: string, data: any) => void; onDeleteNode?: (id: string) => void; onUpdateEdge?: (id: string, data: any) => void; onDeleteEdge?: (id: string, data: any) => void; onDoubleClickNode?: (id: string, field: string) => void; onDoubleClickEdge?: (id: string, field: string) => void; onSelectEdge?: (id: string) => void; onEdgeUpdate?: (oldEdge: any, newConnection: any) => void; onReconnect?: (id: string, newSource?: string, newTarget?: string, newTargetHandle?: string, newSourceHandle?: string) => void; onUpdatePostit?: (id: string, updates: any) => void; onDeletePostit?: (id: string) => void; onSelectPostit?: (id: string) => void; onUpdateContainer?: (id: string, updates: any) => void; onDeleteContainer?: (id: string) => void }, useSankeyView?: boolean): { nodes: Node[]; edges: Edge[] } {
+export function toFlow(graph: any, callbacks?: { onUpdateNode?: (id: string, data: any) => void; onDeleteNode?: (id: string) => void; onUpdateEdge?: (id: string, data: any) => void; onDeleteEdge?: (id: string, data: any) => void; onDoubleClickNode?: (id: string, field: string) => void; onDoubleClickEdge?: (id: string, field: string) => void; onSelectEdge?: (id: string) => void; onEdgeUpdate?: (oldEdge: any, newConnection: any) => void; onReconnect?: (id: string, newSource?: string, newTarget?: string, newTargetHandle?: string, newSourceHandle?: string) => void; onUpdatePostit?: (id: string, updates: any) => void; onDeletePostit?: (id: string) => void; onSelectPostit?: (id: string) => void; onUpdateContainer?: (id: string, updates: any) => void; onDeleteContainer?: (id: string) => void; onUpdateAnalysis?: (id: string, updates: any) => void; onDeleteAnalysis?: (id: string) => void; tabId?: string }, useSankeyView?: boolean): { nodes: Node[]; edges: Edge[] } {
   if (!graph) return { nodes: [], edges: [] };
 
   const conversionNodes: Node[] = (graph.nodes || []).map((n: any) => {
@@ -34,8 +34,8 @@ export function toFlow(graph: any, callbacks?: { onUpdateNode?: (id: string, dat
   };
   });
 
-  // Canvas objects — stacking order: containers (background) → conversion nodes → postits → (future: analyses)
-  // Containers are BEFORE conversion nodes so they paint underneath (nodes must be clickable inside containers).
+  // Canvas objects — stacking order: containers → conversion nodes → postits → analyses (topmost)
+  // Containers are BEFORE conversion nodes so they paint underneath.
   const containerNodes: Node[] = (graph.containers || []).map((c: any, i: number) => ({
     id: `container-${c.id}`,
     type: 'container',
@@ -63,7 +63,21 @@ export function toFlow(graph: any, callbacks?: { onUpdateNode?: (id: string, dat
     },
   }));
 
-  const nodes = [...containerNodes, ...conversionNodes, ...postitNodes];
+  // Canvas analyses — appended last = topmost in DOM = visually on top of everything
+  const analysisNodes: Node[] = (graph.canvasAnalyses || []).map((a: any) => ({
+    id: `analysis-${a.id}`,
+    type: 'canvasAnalysis',
+    position: { x: a.x ?? 0, y: a.y ?? 0 },
+    style: { width: a.width, height: a.height },
+    data: {
+      analysis: a,
+      tabId: callbacks?.tabId,
+      onUpdate: callbacks?.onUpdateAnalysis,
+      onDelete: callbacks?.onDeleteAnalysis,
+    },
+  }));
+
+  const nodes = [...containerNodes, ...conversionNodes, ...postitNodes, ...analysisNodes];
 
   const edges: Edge[] = (graph.edges || []).map((e: any) => {
     // Resolve e.from and e.to to UUIDs (they can be either UUID or human-readable ID)
@@ -126,6 +140,7 @@ export function fromFlow(nodes: Node[], edges: Edge[], original: any): any {
   const conversionRfNodes = nodes.filter(n => n.id && !n.id.startsWith('postit-') && !n.id.startsWith('container-') && !n.id.startsWith('analysis-'));
   const postitRfNodes = nodes.filter(n => n.id?.startsWith('postit-'));
   const containerRfNodes = nodes.filter(n => n.id?.startsWith('container-'));
+  const analysisRfNodes = nodes.filter(n => n.id?.startsWith('analysis-'));
   
   // Update postit positions from ReactFlow state
   const updatedPostits = (original.postits || []).map((originalPostit: any) => {
@@ -153,10 +168,24 @@ export function fromFlow(nodes: Node[], edges: Edge[], original: any): any {
     };
   });
   
+  // Update canvas analysis positions from ReactFlow state
+  const updatedAnalyses = (original.canvasAnalyses || []).map((originalAnalysis: any) => {
+    const rfNode = analysisRfNodes.find(n => n.id === `analysis-${originalAnalysis.id}`);
+    if (!rfNode) return originalAnalysis;
+    return {
+      ...originalAnalysis,
+      x: Math.round(rfNode.position.x),
+      y: Math.round(rfNode.position.y),
+      ...(rfNode.data?.analysis?.width ? { width: rfNode.data.analysis.width } : {}),
+      ...(rfNode.data?.analysis?.height ? { height: rfNode.data.analysis.height } : {}),
+    };
+  });
+
   return {
     ...original,
     ...(original.postits ? { postits: updatedPostits } : {}),
     ...(original.containers ? { containers: updatedContainers } : {}),
+    ...(original.canvasAnalyses ? { canvasAnalyses: updatedAnalyses } : {}),
     // IMPORTANT: Nodes in the graph are the single source of truth for all
     // semantic/business fields (id, label, description, event_id, etc).
     //

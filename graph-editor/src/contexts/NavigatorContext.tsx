@@ -816,6 +816,10 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
     setState(prev => ({ ...prev, showOpenOnly: show }));
   }, []);
 
+  const setShowFavouritesOnly = useCallback((show: boolean) => {
+    setState(prev => ({ ...prev, showFavouritesOnly: show }));
+  }, []);
+
   const setSortBy = useCallback((sort: 'name' | 'modified' | 'opened' | 'status' | 'type') => {
     setState(prev => ({ ...prev, sortBy: sort }));
   }, []);
@@ -966,6 +970,7 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
     setShowLocalOnly,
     setShowDirtyOnly,
     setShowOpenOnly,
+    setShowFavouritesOnly,
     setSortBy,
     setGroupBySubCategories,
     setGroupByTags,

@@ -31,6 +31,10 @@ import { ChipInput } from './ChipInput';
 import { imageOperationsService } from '../services/imageOperationsService';
 import { getObjectTypeTheme } from '../theme/objectTypeTheme';
 import { Box, Settings, Layers, Edit3, ChevronDown, ChevronRight, X, Sliders, Info, TrendingUp, Coins, Clock, FileJson, ZapOff, RefreshCcw, ExternalLink, Zap } from 'lucide-react';
+import { ANALYSIS_TYPES } from './panels/analysisTypes';
+import { graphComputeClient, type AvailableAnalysis } from '../lib/graphComputeClient';
+import { canvasAnalysisResultCache } from '../hooks/useCanvasAnalysisCompute';
+import './panels/AnalyticsPanel.css';
 import { normalizeConstraintString } from '@/lib/queryDSL';
 import { isProbabilityMassUnbalanced, getConditionalProbabilityUnbalancedMap } from '../utils/rebalanceUtils';
 import { workspaceService } from '../services/workspaceService';
@@ -113,7 +117,265 @@ interface PropertiesPanelProps {
   onSelectedEdgeChange: (id: string | null) => void;
   selectedPostitId?: string | null;
   selectedContainerId?: string | null;
+  selectedAnalysisId?: string | null;
   tabId?: string;
+}
+
+const CHART_KIND_LABELS: Record<string, string> = {
+  funnel: 'Funnel',
+  bridge: 'Bridge',
+  bridge_horizontal: 'Bridge (Horizontal)',
+  histogram: 'Lag Histogram',
+  daily_conversions: 'Daily Conversions',
+  cohort_maturity: 'Cohort Maturity',
+};
+
+function CanvasAnalysisPropertiesSection({ analysisId, graph, setGraph, saveHistoryState }: {
+  analysisId: string;
+  graph: any;
+  setGraph: (g: any) => void;
+  saveHistoryState: (action: string) => void;
+}) {
+  const analysis = graph?.canvasAnalyses?.find((a: any) => a.id === analysisId);
+  const [availableAnalyses, setAvailableAnalyses] = useState<AvailableAnalysis[]>([]);
+  const fetchKeyRef = useRef('');
+
+  const analyticsDsl = analysis?.recipe?.analysis?.analytics_dsl || '';
+  const selectedType = analysis?.recipe?.analysis?.analysis_type || '';
+
+  const cachedResult = canvasAnalysisResultCache.get(analysisId);
+
+  // Fetch available analyses when DSL changes (debounced)
+  useEffect(() => {
+    if (!graph) return;
+    const key = `${graph.nodes?.length || 0}-${analyticsDsl}`;
+    if (key === fetchKeyRef.current) return;
+    fetchKeyRef.current = key;
+
+    const timer = setTimeout(async () => {
+      try {
+        const resp = await graphComputeClient.getAvailableAnalyses(graph, analyticsDsl || undefined);
+        setAvailableAnalyses(resp.analyses || []);
+      } catch {
+        setAvailableAnalyses([]);
+      }
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [graph, analyticsDsl]);
+
+  const updateAnalysis = useCallback((updates: any) => {
+    const nextGraph = structuredClone(graph);
+    const a = nextGraph.canvasAnalyses?.find((a: any) => a.id === analysisId);
+    if (!a) return;
+    Object.assign(a, updates);
+    if (nextGraph.metadata) nextGraph.metadata.updated_at = new Date().toISOString();
+    setGraph(nextGraph);
+    saveHistoryState('Update canvas analysis');
+  }, [graph, setGraph, saveHistoryState, analysisId]);
+
+  const updateRecipeAnalysis = useCallback((field: string, value: any) => {
+    const nextGraph = structuredClone(graph);
+    const a = nextGraph.canvasAnalyses?.find((a: any) => a.id === analysisId);
+    if (a?.recipe?.analysis) {
+      (a.recipe.analysis as any)[field] = value;
+    }
+    if (nextGraph.metadata) nextGraph.metadata.updated_at = new Date().toISOString();
+    setGraph(nextGraph);
+  }, [graph, setGraph, analysisId]);
+
+  // Chart kind options from result semantics
+  const chartKindOptions = useMemo(() => {
+    const spec: any = cachedResult?.semantics?.chart;
+    const rec = spec?.recommended;
+    const alts = Array.isArray(spec?.alternatives) ? spec.alternatives : [];
+    const all = [rec, ...alts].filter(Boolean) as string[];
+    return Array.from(new Set(all));
+  }, [cachedResult]);
+
+  const analysisTypeMeta = ANALYSIS_TYPES.find(t => t.id === selectedType);
+  const analysisTypeLabel = analysisTypeMeta?.name || selectedType.replace(/_/g, ' ').replace(/\b\w/g, (c: string) => c.toUpperCase()) || 'Unknown';
+
+  if (!analysis) return <div style={{ textAlign: 'center', color: '#666', padding: '20px' }}>Canvas analysis not found</div>;
+
+  return (
+    <div>
+      <CollapsibleSection title="Analytics DSL" defaultOpen={true}>
+        <div className="property-group">
+          <QueryExpressionEditor
+            value={analyticsDsl}
+            onChange={(newValue) => updateRecipeAnalysis('analytics_dsl', newValue || undefined)}
+            onBlur={() => saveHistoryState('Update analytics DSL')}
+            graph={graph}
+            placeholder="from(node).to(node)"
+            height="40px"
+          />
+        </div>
+      </CollapsibleSection>
+
+      <CollapsibleSection title="Analysis Type" defaultOpen={true}>
+        <div className="analytics-type-cards" style={{ maxHeight: 200, overflowY: 'auto' }}>
+          {ANALYSIS_TYPES.map(typeMeta => {
+            const isAvailable = availableAnalyses.some(a => a.id === typeMeta.id);
+            const isSelected = selectedType === typeMeta.id;
+            const Icon = typeMeta.icon;
+
+            return (
+              <button
+                key={typeMeta.id}
+                className={`analytics-type-card ${isSelected ? 'selected' : ''} ${!isAvailable ? 'unavailable' : ''}`}
+                onClick={() => {
+                  updateRecipeAnalysis('analysis_type', typeMeta.id);
+                  saveHistoryState('Update analysis type');
+                }}
+                title={typeMeta.selectionHint}
+                style={{ width: '100%' }}
+              >
+                <div className="analytics-type-card-icon">
+                  <Icon size={14} strokeWidth={2} />
+                </div>
+                <div className="analytics-type-card-content">
+                  <div className="analytics-type-card-name">{typeMeta.name}</div>
+                  <div className="analytics-type-card-desc">{typeMeta.shortDescription}</div>
+                </div>
+              </button>
+            );
+          })}
+        </div>
+      </CollapsibleSection>
+
+      {analysis.view_mode === 'chart' && (
+        <CollapsibleSection title="Chart Kind" defaultOpen={true}>
+          <div className="property-group">
+            {chartKindOptions.length > 0 ? (
+              <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                {chartKindOptions.map(kind => (
+                  <button
+                    key={kind}
+                    type="button"
+                    onClick={() => updateAnalysis({ chart_kind: kind })}
+                    style={{
+                      border: '1px solid',
+                      borderColor: kind === (analysis.chart_kind || chartKindOptions[0]) ? '#3b82f6' : '#e5e7eb',
+                      background: kind === (analysis.chart_kind || chartKindOptions[0]) ? '#eff6ff' : '#ffffff',
+                      color: kind === (analysis.chart_kind || chartKindOptions[0]) ? '#1d4ed8' : '#374151',
+                      borderRadius: 4, padding: '4px 10px', fontSize: 11, cursor: 'pointer',
+                    }}
+                  >
+                    {CHART_KIND_LABELS[kind] || kind}
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <select
+                className="property-input"
+                style={{ fontSize: 12 }}
+                value={analysis.chart_kind || ''}
+                onChange={(e) => updateAnalysis({ chart_kind: e.target.value || undefined })}
+              >
+                <option value="">Auto</option>
+                {Object.entries(CHART_KIND_LABELS).map(([value, label]) => (
+                  <option key={value} value={value}>{label}</option>
+                ))}
+              </select>
+            )}
+          </div>
+        </CollapsibleSection>
+      )}
+
+      <CollapsibleSection title="Display" defaultOpen={true}>
+        <div className="property-group">
+          <div className="property-row">
+            <label className="property-label">Title</label>
+            <input
+              className="property-input"
+              type="text"
+              value={analysis.title || ''}
+              placeholder={analysisTypeLabel}
+              onChange={(e) => {
+                const nextGraph = structuredClone(graph);
+                const a = nextGraph.canvasAnalyses?.find((a: any) => a.id === analysisId);
+                if (a) a.title = e.target.value;
+                setGraph(nextGraph);
+              }}
+              onBlur={() => saveHistoryState('Update analysis title')}
+            />
+          </div>
+          <div className="property-row">
+            <label className="property-label">View Mode</label>
+            <div style={{ display: 'flex', gap: 4 }}>
+              {(['chart', 'cards'] as const).map(mode => (
+                <button
+                  key={mode}
+                  onClick={() => updateAnalysis({ view_mode: mode })}
+                  style={{
+                    flex: 1, padding: '4px 8px', fontSize: 11, border: '1px solid',
+                    borderColor: analysis.view_mode === mode ? 'var(--accent-colour, #3b82f6)' : '#d1d5db',
+                    background: analysis.view_mode === mode ? 'var(--accent-colour, #3b82f6)' : 'transparent',
+                    color: analysis.view_mode === mode ? '#fff' : 'inherit',
+                    borderRadius: 4, cursor: 'pointer', textTransform: 'capitalize',
+                  }}
+                >
+                  {mode}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="property-row">
+            <label className="property-label">Live</label>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <input
+                type="checkbox"
+                checked={analysis.live}
+                onChange={(e) => {
+                  if (e.target.checked) {
+                    updateAnalysis({ live: true, recipe: { ...analysis.recipe, scenarios: undefined, analysis: { ...analysis.recipe.analysis, what_if_dsl: undefined } } });
+                  } else {
+                    updateAnalysis({ live: false });
+                  }
+                }}
+              />
+              <span style={{ fontSize: 11, color: '#6b7280' }}>{analysis.live ? 'Updates with graph changes' : 'Frozen at current state'}</span>
+            </div>
+          </div>
+        </div>
+      </CollapsibleSection>
+
+      {!analysis.live && analysis.recipe?.scenarios && analysis.recipe.scenarios.length > 0 && (
+        <CollapsibleSection title="Frozen Scenarios" defaultOpen={false}>
+          <div className="property-group">
+            <div style={{ fontSize: 11, color: '#6b7280' }}>
+              {analysis.recipe.scenarios.map((s: any) => (
+                <div key={s.scenario_id} style={{ display: 'flex', alignItems: 'center', gap: 4, marginBottom: 2 }}>
+                  {s.colour && <span style={{ width: 8, height: 8, borderRadius: '50%', background: s.colour, display: 'inline-block', flexShrink: 0 }} />}
+                  <span>{s.name || s.scenario_id}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </CollapsibleSection>
+      )}
+
+      <CollapsibleSection title="Actions" defaultOpen={true}>
+        <div className="property-group" style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+          <button
+            className="property-action-button"
+            style={{ padding: '6px 12px', fontSize: 12, cursor: 'pointer', border: '1px solid #d1d5db', borderRadius: 4, background: 'transparent' }}
+            onClick={() => {
+              const nextGraph = structuredClone(graph);
+              if (nextGraph.canvasAnalyses) {
+                nextGraph.canvasAnalyses = nextGraph.canvasAnalyses.filter((a: any) => a.id !== analysisId);
+                if (nextGraph.metadata) nextGraph.metadata.updated_at = new Date().toISOString();
+                setGraph(nextGraph);
+                saveHistoryState('Delete canvas analysis');
+              }
+            }}
+          >
+            Delete
+          </button>
+        </div>
+      </CollapsibleSection>
+    </div>
+  );
 }
 
 export default function PropertiesPanel({ 
@@ -123,6 +385,7 @@ export default function PropertiesPanel({
   onSelectedEdgeChange,
   selectedPostitId,
   selectedContainerId,
+  selectedAnalysisId,
   tabId
 }: PropertiesPanelProps) {
   const { graph, setGraph, saveHistoryState, currentDSL } = useGraphStore();
@@ -1145,7 +1408,7 @@ export default function PropertiesPanel({
     <div className="properties-panel">
       {/* Content */}
       <div className="properties-panel-content">
-        {!selectedNodeId && !selectedEdgeId && !selectedPostitId && !selectedContainerId && (
+        {!selectedNodeId && !selectedEdgeId && !selectedPostitId && !selectedContainerId && !selectedAnalysisId && (
           <>
             <CollapsibleSection title="Graph Metadata" defaultOpen={true} icon={FileJson}>
               <div className="property-section">
@@ -3034,6 +3297,13 @@ export default function PropertiesPanel({
             </div>
           );
         })()}
+
+        {selectedAnalysisId && <CanvasAnalysisPropertiesSection
+          analysisId={selectedAnalysisId}
+          graph={graph}
+          setGraph={setGraph}
+          saveHistoryState={saveHistoryState}
+        />}
 
         {selectedPostitId && (() => {
           const postit = graph?.postits?.find((p: any) => p.id === selectedPostitId);

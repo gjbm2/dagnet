@@ -38,6 +38,10 @@ export function ElementsMenu() {
     window.dispatchEvent(new CustomEvent('dagnet:addContainer'));
   };
 
+  const handleAddAnalysis = () => {
+    window.dispatchEvent(new CustomEvent('dagnet:addAnalysis'));
+  };
+
   const handleDeleteSelected = () => {
     window.dispatchEvent(new CustomEvent('dagnet:deleteSelected'));
   };
@@ -75,6 +79,13 @@ export function ElementsMenu() {
               onSelect={handleAddContainer}
             >
               Add Container
+            </Menubar.Item>
+
+            <Menubar.Item 
+              className="menubar-item" 
+              onSelect={handleAddAnalysis}
+            >
+              Add Analysis
             </Menubar.Item>
 
             <Menubar.Separator className="menubar-separator" />

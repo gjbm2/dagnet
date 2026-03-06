@@ -3,9 +3,10 @@ import { ObjectType } from '../../types';
 import { useTabContext, useFileRegistry } from '../../contexts/TabContext';
 import { useNavigatorContext } from '../../contexts/NavigatorContext';
 import { getObjectTypeTheme } from '../../theme/objectTypeTheme';
-import { AtSign, ChevronRight, FileText, TrendingUp, Coins, Clock, Package, LucideIcon } from 'lucide-react';
+import { AtSign, ChevronRight, FileText, TrendingUp, Coins, Clock, Package, Star, LucideIcon } from 'lucide-react';
 import { WhereUsedService } from '../../services/whereUsedService';
 import { historicalFileService } from '../../services/historicalFileService';
+import { toggleFavourite, isFavourite, filterSystemTags } from '../../utils/favourites';
 import '../../styles/file-state-indicators.css';
 
 /**
@@ -288,22 +289,33 @@ function NavigatorItem({ fileId, isActive, tabCount }: NavigatorItemProps) {
       style={{ cursor: isDraggable ? 'grab' : 'pointer' }}
     >
       <span className={`navigator-item-name ${entry.isLocal ? 'local-only' : ''} ${!entry.hasFile ? 'in-index-only' : ''} ${entry.isDirty ? 'is-dirty' : entry.isOpen ? 'is-open' : ''}`}>
+        <span
+          className={`navigator-star ${isFavourite(entry.tags) ? 'is-favourite' : ''} ${isHovering ? 'is-hovering' : ''}`}
+          onClick={(e) => { e.stopPropagation(); toggleFavourite(fileId); }}
+          title={isFavourite(entry.tags) ? 'Remove from favourites' : 'Add to favourites'}
+        >
+          <Star size={12} strokeWidth={2} />
+        </span>
         {entry.name}
-        {entry.tags && entry.tags.length > 0 && (
-          <span className="navigator-item-tags">
-            {entry.tags.slice(0, 2).map(t => (
-              <span
-                key={t}
-                className="navigator-tag-chip navigator-tag-clickable"
-                onClick={(e) => { e.stopPropagation(); navOps.setSearchQuery(t); }}
-                title={`Filter by tag: ${t}`}
-              >{t}</span>
-            ))}
-            {entry.tags.length > 2 && (
-              <span className="navigator-tag-chip navigator-tag-overflow">+{entry.tags.length - 2}</span>
-            )}
-          </span>
-        )}
+        {(() => {
+          const visibleTags = filterSystemTags(entry.tags ?? []);
+          if (visibleTags.length === 0) return null;
+          return (
+            <span className="navigator-item-tags">
+              {visibleTags.slice(0, 2).map(t => (
+                <span
+                  key={t}
+                  className="navigator-tag-chip navigator-tag-clickable"
+                  onClick={(e) => { e.stopPropagation(); navOps.setSearchQuery(t); }}
+                  title={`Filter by tag: ${t}`}
+                >{t}</span>
+              ))}
+              {visibleTags.length > 2 && (
+                <span className="navigator-tag-chip navigator-tag-overflow">+{visibleTags.length - 2}</span>
+              )}
+            </span>
+          );
+        })()}
       </span>
       <span className="navigator-item-actions">
         {isHovering && canShowHistory && (
@@ -375,7 +387,7 @@ export function ObjectTypeSection({
   useEffect(() => {
     if (!groupByTags) return;
     const tagKeys = entries
-      .flatMap(e => e.tags || [])
+      .flatMap(e => filterSystemTags(e.tags || []))
       .filter((v, i, a) => a.indexOf(v) === i)
       .map(t => `tag:${t}`);
     tagKeys.push('tag:Untagged');
@@ -435,9 +447,10 @@ export function ObjectTypeSection({
     const tagGroups: Record<string, NavigatorEntry[]> = {};
     let hasAnyTag = false;
     for (const entry of entries) {
-      if (entry.tags && entry.tags.length > 0) {
+      const visible = filterSystemTags(entry.tags ?? []);
+      if (visible.length > 0) {
         hasAnyTag = true;
-        for (const tag of entry.tags) {
+        for (const tag of visible) {
           if (!tagGroups[tag]) tagGroups[tag] = [];
           tagGroups[tag].push(entry);
         }

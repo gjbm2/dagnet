@@ -3,7 +3,7 @@
  * Used by Navigator and SelectorModal for consistent behavior
  */
 
-export type FilterMode = 'all' | 'dirty' | 'open' | 'local';
+export type FilterMode = 'all' | 'dirty' | 'open' | 'local' | 'favourites';
 export type SortMode = 'name' | 'modified' | 'opened' | 'status' | 'type';
 export type GroupMode = 'type' | 'tags' | 'status' | 'none';
 

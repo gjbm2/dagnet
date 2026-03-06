@@ -30,6 +30,15 @@ import { sankey, sankeyLinkHorizontal, sankeyCenter, sankeyJustify } from 'd3-sa
 import ConversionNode from './nodes/ConversionNode';
 import PostItNode from './nodes/PostItNode';
 import ContainerNode from './nodes/ContainerNode';
+import CanvasAnalysisNode from './nodes/CanvasAnalysisNode';
+import { canvasAnalysisTransientCache } from '../hooks/useCanvasAnalysisCompute';
+
+/**
+ * Pending payload for the draw-to-create analysis tool.
+ * Set by the pin button, consumed on mouse-up after draw.
+ */
+let pendingAnalysisPayload: any = null;
+export function setPendingAnalysisPayload(payload: any) { pendingAnalysisPayload = payload; }
 import ConversionEdge from './edges/ConversionEdge';
 import ScenarioOverlayRenderer from './ScenarioOverlayRenderer';
 
@@ -52,6 +61,7 @@ import VariantWeightInput from './VariantWeightInput';
 import { NodeContextMenu } from './NodeContextMenu';
 import { PostItContextMenu } from './PostItContextMenu';
 import { ContainerContextMenu } from './ContainerContextMenu';
+import { CanvasAnalysisContextMenu } from './CanvasAnalysisContextMenu';
 import { EdgeContextMenu } from './EdgeContextMenu';
 import { extractSubgraph } from '../lib/subgraphExtractor';
 import { useDashboardMode } from '../hooks/useDashboardMode';
@@ -78,6 +88,7 @@ const nodeTypes: NodeTypes = {
   conversion: ConversionNode,
   postit: PostItNode,
   container: ContainerNode,
+  canvasAnalysis: CanvasAnalysisNode,
 };
 
 const edgeTypes: EdgeTypes = {
@@ -235,7 +246,7 @@ interface GraphCanvasProps {
   onAddNodeRef?: React.MutableRefObject<(() => void) | null>;
   onAddPostitRef?: React.MutableRefObject<(() => void) | null>;
   onAddContainerRef?: React.MutableRefObject<(() => void) | null>;
-  activeElementTool?: 'select' | 'pan' | 'new-node' | 'new-postit' | 'new-container' | null;
+  activeElementTool?: 'select' | 'pan' | 'new-node' | 'new-postit' | 'new-container' | 'new-analysis' | null;
   onClearElementTool?: () => void;
   onDeleteSelectedRef?: React.MutableRefObject<(() => void) | null>;
   onAutoLayoutRef?: React.MutableRefObject<((direction: 'LR' | 'RL' | 'TB' | 'BT') => void) | null>;
@@ -280,7 +291,7 @@ export default function GraphCanvas({ onSelectedNodeChange, onSelectedEdgeChange
 }
 
 function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnnotationChange, onDoubleClickNode, onDoubleClickEdge, onSelectEdge, onAddNodeRef, onAddPostitRef, onAddContainerRef, activeElementTool: _propTool, onClearElementTool: _propClear, onDeleteSelectedRef, onAutoLayoutRef, onSankeyLayoutRef, onForceRerouteRef, onHideUnselectedRef, whatIfDSL, tabId, activeTabId, externalSelectedNodeId, externalSelectedEdgeId }: GraphCanvasProps) {
-  const { activeElementTool, clearElementTool: onClearElementTool } = useElementTool();
+  const { activeElementTool, setActiveElementTool, clearElementTool: onClearElementTool } = useElementTool();
   console.log(`[CanvasInner] activeElementTool=${activeElementTool}, tabId=${tabId}`);
   const { theme } = useTheme();
   const dark = theme === 'dark';
@@ -435,9 +446,13 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
   const [edges, setEdges, onEdgesChangeBase] = useEdgesState([]);
 
   const fitView = useCallback((options?: any) => {
-    const conversionOnly = nodes.filter(n => !isCanvasObjectNode(n.id));
-    rfFitView({ ...options, nodes: conversionOnly });
-  }, [rfFitView, nodes, isCanvasObjectNode]);
+    if (isDashboardMode) {
+      rfFitView({ ...options });
+    } else {
+      const conversionOnly = nodes.filter(n => !isCanvasObjectNode(n.id));
+      rfFitView({ ...options, nodes: conversionOnly });
+    }
+  }, [rfFitView, nodes, isCanvasObjectNode, isDashboardMode]);
 
   // Track array reference changes to detect loops
   const prevNodesRef = useRef(nodes);
@@ -482,6 +497,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
   const [nodeContextMenu, setNodeContextMenu] = useState<{ x: number; y: number; nodeId: string } | null>(null);
   const [postitContextMenu, setPostitContextMenu] = useState<{ x: number; y: number; postitId: string } | null>(null);
   const [containerContextMenu, setContainerContextMenu] = useState<{ x: number; y: number; containerId: string } | null>(null);
+  const [analysisContextMenu, setAnalysisContextMenu] = useState<{ x: number; y: number; analysisId: string } | null>(null);
   const [edgeContextMenu, setEdgeContextMenu] = useState<{ x: number; y: number; edgeId: string } | null>(null);
   const [contextMenuLocalData, setContextMenuLocalData] = useState<{
     probability: number;
@@ -1583,6 +1599,34 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
     onSelectedAnnotationChange?.(null, null);
   }, [graph, setGraph, saveHistoryState, onSelectedAnnotationChange]);
 
+  const analysisHistoryTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const handleUpdateAnalysis = useCallback((id: string, updates: any) => {
+    if (!graph) return;
+    const nextGraph = structuredClone(graph);
+    if (!nextGraph.canvasAnalyses) return;
+    const a = nextGraph.canvasAnalyses.find((a: any) => a.id === id);
+    if (!a) return;
+    Object.assign(a, updates);
+    if (nextGraph.metadata) nextGraph.metadata.updated_at = new Date().toISOString();
+    setGraph(nextGraph);
+    if (analysisHistoryTimerRef.current) clearTimeout(analysisHistoryTimerRef.current);
+    analysisHistoryTimerRef.current = setTimeout(() => {
+      saveHistoryState('Update canvas analysis');
+      analysisHistoryTimerRef.current = null;
+    }, 800);
+  }, [graph, setGraph, saveHistoryState]);
+
+  const handleDeleteAnalysis = useCallback((id: string) => {
+    if (!graph) return;
+    const nextGraph = structuredClone(graph);
+    if (!nextGraph.canvasAnalyses) return;
+    nextGraph.canvasAnalyses = nextGraph.canvasAnalyses.filter((a: any) => a.id !== id);
+    if (nextGraph.metadata) nextGraph.metadata.updated_at = new Date().toISOString();
+    setGraph(nextGraph);
+    saveHistoryState('Delete canvas analysis');
+    onSelectedAnnotationChange?.(null, null);
+  }, [graph, setGraph, saveHistoryState, onSelectedAnnotationChange]);
+
   // Delete selected elements
   const deleteSelected = useCallback(async () => {
     if (!graph) return;
@@ -1638,7 +1682,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
       if (selectedIds.length > 0 && nextGraph[graphKey]) {
         if (!hasCanvasDeletes) { nextGraph = structuredClone(nextGraph); hasCanvasDeletes = true; }
         const idSet = new Set(selectedIds);
-        nextGraph[graphKey] = nextGraph[graphKey].filter((obj: any) => !idSet.has(obj.id));
+        (nextGraph as any)[graphKey] = (nextGraph[graphKey] as any[]).filter((obj: any) => !idSet.has(obj.id));
       }
     }
 
@@ -2329,6 +2373,9 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
       onSelectPostit: onSelectedAnnotationChange ? (id: string) => onSelectedAnnotationChange(id, 'postit') : undefined,
       onUpdateContainer: handleUpdateContainer,
       onDeleteContainer: handleDeleteContainer,
+      onUpdateAnalysis: handleUpdateAnalysis,
+      onDeleteAnalysis: handleDeleteAnalysis,
+      tabId,
     }, useSankeyView);
     
     // Inject containerColour for conversion nodes inside containers (using positions from the rebuild)
@@ -4221,6 +4268,10 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
         onSelectedAnnotationChange?.(firstNode.id.replace('container-', ''), 'container');
         onSelectedNodeChange(null);
         onSelectedEdgeChange(null);
+      } else if (firstNode.id?.startsWith('analysis-')) {
+        onSelectedAnnotationChange?.(firstNode.id.replace('analysis-', ''), 'canvasAnalysis');
+        onSelectedNodeChange(null);
+        onSelectedEdgeChange(null);
       } else {
         onSelectedNodeChange(firstNode.id);
         onSelectedEdgeChange(null);
@@ -4881,12 +4932,13 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
 
   // Close context menus on any click
   useEffect(() => {
-    if (contextMenu || nodeContextMenu || postitContextMenu || containerContextMenu || edgeContextMenu) {
+    if (contextMenu || nodeContextMenu || postitContextMenu || containerContextMenu || analysisContextMenu || edgeContextMenu) {
       const handleClick = () => {
         setContextMenu(null);
         setNodeContextMenu(null);
         setPostitContextMenu(null);
         setContainerContextMenu(null);
+        setAnalysisContextMenu(null);
         setEdgeContextMenu(null);
         setContextMenuLocalData(null);
       };
@@ -5024,11 +5076,67 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
     }
   }, [addContainer, onAddContainerRef]);
 
+  const addCanvasAnalysisAtPosition = useCallback((x: number, y: number, dragData: any) => {
+    if (!graph) return;
+    const newId = crypto.randomUUID();
+    const nextGraph = structuredClone(graph);
+    if (!nextGraph.canvasAnalyses) nextGraph.canvasAnalyses = [];
+
+    const drawnW = dragData.drawWidth && dragData.drawWidth >= 100 ? Math.round(dragData.drawWidth) : 400;
+    const drawnH = dragData.drawHeight && dragData.drawHeight >= 80 ? Math.round(dragData.drawHeight) : 300;
+
+    const analysis: any = {
+      id: newId,
+      x: Math.round(x),
+      y: Math.round(y),
+      width: drawnW,
+      height: drawnH,
+      view_mode: dragData.viewMode || 'chart',
+      chart_kind: dragData.chartKind,
+      live: true,
+      recipe: dragData.recipe || { analysis: { analysis_type: 'unknown' } },
+    };
+
+    nextGraph.canvasAnalyses.push(analysis);
+    if (nextGraph.metadata) nextGraph.metadata.updated_at = new Date().toISOString();
+
+    if (dragData.analysisResult) {
+      canvasAnalysisTransientCache.set(newId, dragData.analysisResult);
+    }
+
+    setGraph(nextGraph);
+    saveHistoryState('Pin analysis to canvas');
+    setContextMenu(null);
+    onSelectedNodeChange(null);
+    onSelectedEdgeChange(null);
+    onSelectedAnnotationChange?.(newId, 'canvasAnalysis');
+  }, [graph, setGraph, saveHistoryState, onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnnotationChange]);
+
+  // Listen for 'dagnet:pinAnalysisToCanvas' event — enters draw mode with a pre-filled recipe
+  useEffect(() => {
+    const handler = (e: CustomEvent) => {
+      pendingAnalysisPayload = e.detail || {};
+      setActiveElementTool('new-analysis');
+    };
+    window.addEventListener('dagnet:pinAnalysisToCanvas', handler as any);
+    return () => window.removeEventListener('dagnet:pinAnalysisToCanvas', handler as any);
+  }, [setActiveElementTool]);
+
+  // Listen for 'dagnet:addAnalysis' event — enters draw mode with a blank recipe
+  useEffect(() => {
+    const handler = () => {
+      pendingAnalysisPayload = {};
+      setActiveElementTool('new-analysis');
+    };
+    window.addEventListener('dagnet:addAnalysis', handler as any);
+    return () => window.removeEventListener('dagnet:addAnalysis', handler as any);
+  }, [setActiveElementTool]);
+
   // Drag-to-draw state for creation modes (new-postit, new-container)
   const drawStartRef = useRef<{ screenX: number; screenY: number; flowX: number; flowY: number; tool: string } | null>(null);
   const [drawRect, setDrawRect] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
 
-  const DRAW_TOOLS = new Set(['new-postit', 'new-container']);
+  const DRAW_TOOLS = new Set(['new-postit', 'new-container', 'new-analysis']);
 
   const onPaneMouseDown = useCallback((event: React.PointerEvent) => {
     if (!activeElementTool || !DRAW_TOOLS.has(activeElementTool)) return;
@@ -5068,9 +5176,13 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
       addPostitAtPosition(x, y, w, h);
     } else if (tool === 'new-container') {
       addContainerAtPosition(x, y, w, h);
+    } else if (tool === 'new-analysis') {
+      const payload = pendingAnalysisPayload;
+      pendingAnalysisPayload = null;
+      addCanvasAnalysisAtPosition(x, y, { ...(payload || {}), drawWidth: w, drawHeight: h });
     }
     onClearElementTool?.();
-  }, [screenToFlowPosition, addPostitAtPosition, addContainerAtPosition, onClearElementTool]);
+  }, [screenToFlowPosition, addPostitAtPosition, addContainerAtPosition, addCanvasAnalysisAtPosition, onClearElementTool]);
 
   const onPaneClick = useCallback((event: React.MouseEvent) => {
     if (activeElementTool === 'new-node') {
@@ -5326,13 +5438,17 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
         addPostitAtPosition(position.x, position.y);
       } else if (dragData.objectType === 'new-container') {
         addContainerAtPosition(position.x, position.y);
+      } else if (dragData.objectType === 'canvas-analysis') {
+        addCanvasAnalysisAtPosition(position.x, position.y, dragData);
+      } else if (dragData.objectType === 'new-analysis') {
+        addCanvasAnalysisAtPosition(position.x, position.y, {});
       } else if (dragData.objectType === 'parameter') {
         toast('Drop parameters onto an edge to attach them');
       }
     } catch (error) {
       console.error('[GraphCanvas] Drop error:', error);
     }
-  }, [screenToFlowPosition, dropNodeAtPosition]);
+  }, [screenToFlowPosition, dropNodeAtPosition, addNodeAtPosition, addPostitAtPosition, addContainerAtPosition, addCanvasAnalysisAtPosition]);
 
   const onNodeContextMenu = useCallback((event: React.MouseEvent, node: any) => {
     event.preventDefault();
@@ -5349,6 +5465,12 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
         x: event.clientX,
         y: event.clientY,
         containerId: node.id.replace('container-', ''),
+      });
+    } else if (node.id?.startsWith('analysis-')) {
+      setAnalysisContextMenu({
+        x: event.clientX,
+        y: event.clientY,
+        analysisId: node.id.replace('analysis-', ''),
       });
     } else {
       setNodeContextMenu({
@@ -5583,8 +5705,8 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
               top: tl.y - wrapperBounds.top,
               width: br.x - tl.x,
               height: br.y - tl.y,
-              backgroundColor: drawStartRef.current?.tool === 'new-container' ? 'rgba(148, 163, 184, 0.15)' : 'rgba(255, 244, 117, 0.3)',
-              border: drawStartRef.current?.tool === 'new-container' ? '2px dashed rgba(148, 163, 184, 0.6)' : '2px dashed rgba(180, 160, 60, 0.6)',
+              backgroundColor: drawStartRef.current?.tool === 'new-container' ? 'rgba(148, 163, 184, 0.15)' : drawStartRef.current?.tool === 'new-analysis' ? 'rgba(59, 130, 246, 0.08)' : 'rgba(255, 244, 117, 0.3)',
+              border: drawStartRef.current?.tool === 'new-container' ? '2px dashed rgba(148, 163, 184, 0.6)' : drawStartRef.current?.tool === 'new-analysis' ? '2px dashed rgba(59, 130, 246, 0.5)' : '2px dashed rgba(180, 160, 60, 0.6)',
               borderRadius: '2px',
               pointerEvents: 'none',
               zIndex: 9999,
@@ -5592,7 +5714,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
           );
         })()}
         <ReactFlow
-          className={activeElementTool === 'pan' ? 'rf-pan-mode' : (activeElementTool === 'new-node' || activeElementTool === 'new-postit' || activeElementTool === 'new-container') ? 'rf-create-mode' : undefined}
+          className={activeElementTool === 'pan' ? 'rf-pan-mode' : (activeElementTool === 'new-node' || activeElementTool === 'new-postit' || activeElementTool === 'new-container' || activeElementTool === 'new-analysis') ? 'rf-create-mode' : undefined}
           nodes={nodes}
           edges={renderEdges}
         onNodesChange={onNodesChange}
@@ -5771,7 +5893,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
         reconnectRadius={40}
         edgeUpdaterRadius={40}
         onlyRenderVisibleElements={false}
-        panOnDrag={activeElementTool === 'pan' || (!isLassoSelecting && activeElementTool !== 'new-postit' && activeElementTool !== 'new-container')}
+        panOnDrag={activeElementTool === 'pan' || (!isLassoSelecting && activeElementTool !== 'new-postit' && activeElementTool !== 'new-container' && activeElementTool !== 'new-analysis')}
         connectionRadius={50}
         snapToGrid={false}
         snapGrid={[1, 1]}
@@ -5784,8 +5906,8 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
         <Controls />
         <MiniMap
           maskColor={dark ? 'rgba(30,30,30,0.8)' : undefined}
-          nodeColor={(node) => (node.id?.startsWith('postit-') || node.id?.startsWith('container-')) ? 'transparent' : '#e2e2e2'}
-          nodeStrokeColor={(node) => (node.id?.startsWith('postit-') || node.id?.startsWith('container-')) ? 'transparent' : '#b1b1b7'}
+          nodeColor={(node) => isCanvasObjectNode(node.id) ? 'transparent' : '#e2e2e2'}
+          nodeStrokeColor={(node) => isCanvasObjectNode(node.id) ? 'transparent' : '#b1b1b7'}
         />
         <GraphIssuesIndicatorOverlay tabId={tabId} />
         
@@ -6159,6 +6281,103 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
               handleDeleteContainer(id);
             }}
             onClose={() => setContainerContextMenu(null)}
+          />
+        );
+      })()}
+
+      {/* Canvas Analysis Context Menu */}
+      {analysisContextMenu && graph && (() => {
+        const analysis = graph.canvasAnalyses?.find((a: any) => a.id === analysisContextMenu.analysisId);
+        if (!analysis) return null;
+        const analysisCount = graph.canvasAnalyses?.length ?? 0;
+        return (
+          <CanvasAnalysisContextMenu
+            x={analysisContextMenu.x}
+            y={analysisContextMenu.y}
+            analysisId={analysisContextMenu.analysisId}
+            analysis={analysis}
+            analysisCount={analysisCount}
+            onUpdate={(id, updates) => {
+              handleUpdateAnalysis(id, updates);
+              setAnalysisContextMenu(null);
+            }}
+            onBringToFront={(id) => {
+              const nextGraph = structuredClone(graph);
+              if (nextGraph.canvasAnalyses) {
+                const idx = nextGraph.canvasAnalyses.findIndex((a: any) => a.id === id);
+                if (idx >= 0 && idx < nextGraph.canvasAnalyses.length - 1) {
+                  const [item] = nextGraph.canvasAnalyses.splice(idx, 1);
+                  nextGraph.canvasAnalyses.push(item);
+                  if (nextGraph.metadata) nextGraph.metadata.updated_at = new Date().toISOString();
+                  setGraph(nextGraph);
+                  saveHistoryState('Bring analysis to front');
+                  reorderCanvasNodes('analysis-', nextGraph.canvasAnalyses);
+                }
+              }
+              setAnalysisContextMenu(null);
+            }}
+            onBringForward={(id) => {
+              const nextGraph = structuredClone(graph);
+              if (nextGraph.canvasAnalyses) {
+                const idx = nextGraph.canvasAnalyses.findIndex((a: any) => a.id === id);
+                if (idx >= 0 && idx < nextGraph.canvasAnalyses.length - 1) {
+                  [nextGraph.canvasAnalyses[idx], nextGraph.canvasAnalyses[idx + 1]] = [nextGraph.canvasAnalyses[idx + 1], nextGraph.canvasAnalyses[idx]];
+                  if (nextGraph.metadata) nextGraph.metadata.updated_at = new Date().toISOString();
+                  setGraph(nextGraph);
+                  saveHistoryState('Bring analysis forward');
+                  reorderCanvasNodes('analysis-', nextGraph.canvasAnalyses);
+                }
+              }
+              setAnalysisContextMenu(null);
+            }}
+            onSendBackward={(id) => {
+              const nextGraph = structuredClone(graph);
+              if (nextGraph.canvasAnalyses) {
+                const idx = nextGraph.canvasAnalyses.findIndex((a: any) => a.id === id);
+                if (idx > 0) {
+                  [nextGraph.canvasAnalyses[idx], nextGraph.canvasAnalyses[idx - 1]] = [nextGraph.canvasAnalyses[idx - 1], nextGraph.canvasAnalyses[idx]];
+                  if (nextGraph.metadata) nextGraph.metadata.updated_at = new Date().toISOString();
+                  setGraph(nextGraph);
+                  saveHistoryState('Send analysis backward');
+                  reorderCanvasNodes('analysis-', nextGraph.canvasAnalyses);
+                }
+              }
+              setAnalysisContextMenu(null);
+            }}
+            onSendToBack={(id) => {
+              const nextGraph = structuredClone(graph);
+              if (nextGraph.canvasAnalyses) {
+                const idx = nextGraph.canvasAnalyses.findIndex((a: any) => a.id === id);
+                if (idx > 0) {
+                  const [item] = nextGraph.canvasAnalyses.splice(idx, 1);
+                  nextGraph.canvasAnalyses.unshift(item);
+                  if (nextGraph.metadata) nextGraph.metadata.updated_at = new Date().toISOString();
+                  setGraph(nextGraph);
+                  saveHistoryState('Send analysis to back');
+                  reorderCanvasNodes('analysis-', nextGraph.canvasAnalyses);
+                }
+              }
+              setAnalysisContextMenu(null);
+            }}
+            onCopy={(id) => {
+              const a = graph.canvasAnalyses?.find((ai: any) => ai.id === id);
+              if (a) {
+                copySubgraph([], [], undefined, undefined, { canvasAnalyses: [a] });
+              }
+              setAnalysisContextMenu(null);
+            }}
+            onCut={(id) => {
+              const a = graph.canvasAnalyses?.find((ai: any) => ai.id === id);
+              if (a) {
+                copySubgraph([], [], undefined, undefined, { canvasAnalyses: [a] });
+                handleDeleteAnalysis(id);
+              }
+              setAnalysisContextMenu(null);
+            }}
+            onDelete={(id) => {
+              handleDeleteAnalysis(id);
+            }}
+            onClose={() => setAnalysisContextMenu(null)}
           />
         );
       })()}

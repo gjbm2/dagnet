@@ -1,5 +1,5 @@
 import React, { useCallback } from 'react';
-import { MousePointer2, Hand, SquareIcon, StickyNote, BoxSelect } from 'lucide-react';
+import { MousePointer2, Hand, SquareIcon, StickyNote, BoxSelect, BarChart3 } from 'lucide-react';
 import { useElementTool, type ElementToolType } from '../contexts/ElementToolContext';
 import './ElementPalette.css';
 
@@ -18,6 +18,7 @@ const CREATION_ELEMENTS = [
   { id: 'new-node' as const, label: 'Conversion Node', icon: SquareIcon },
   { id: 'new-postit' as const, label: 'Post-It Note', icon: StickyNote },
   { id: 'new-container' as const, label: 'Container', icon: BoxSelect },
+  { id: 'new-analysis' as const, label: 'Canvas Analysis', icon: BarChart3 },
 ];
 
 export function ElementPalette({ layout }: ElementPaletteProps) {
@@ -42,7 +43,7 @@ export function ElementPalette({ layout }: ElementPaletteProps) {
     if (onToolSelect) {
       onToolSelect(currentTool === elementId ? 'select' : elementId);
     } else {
-      const events: Record<string, string> = { 'new-node': 'dagnet:addNode', 'new-postit': 'dagnet:addPostit', 'new-container': 'dagnet:addContainer' };
+      const events: Record<string, string> = { 'new-node': 'dagnet:addNode', 'new-postit': 'dagnet:addPostit', 'new-container': 'dagnet:addContainer', 'new-analysis': 'dagnet:addAnalysis' };
       if (elementId) window.dispatchEvent(new CustomEvent(events[elementId]));
     }
   }, [onToolSelect, currentTool]);

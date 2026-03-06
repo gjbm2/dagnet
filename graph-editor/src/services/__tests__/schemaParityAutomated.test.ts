@@ -283,6 +283,57 @@ describe('AUTOMATED Schema / TypeScript / Python Parity', () => {
       assertTripleParity(schemaFields, tsFields, pyFields, 'Container');
     });
   });
+
+  describe('CanvasAnalysis', () => {
+    it('must have IDENTICAL top-level fields across schema, TypeScript, and Python', () => {
+      const schemaFields = getSchemaFields(schema, 'CanvasAnalysis');
+      const tsFields = getTypeScriptFields('CanvasAnalysis');
+      const pyFields = getPythonFields('CanvasAnalysis');
+      
+      assertTripleParity(schemaFields, tsFields, pyFields, 'CanvasAnalysis');
+    });
+
+    it('must have IDENTICAL recipe.analysis fields across schema and Python', () => {
+      const schemaFields = getSchemaFields(schema, 'CanvasAnalysisRecipeAnalysis');
+      const pyFields = getPythonFields('CanvasAnalysisRecipeAnalysis');
+      
+      const schemaOnlyVsPy = [...schemaFields].filter(f => !pyFields.has(f));
+      const pyOnlyVsSchema = [...pyFields].filter(f => !schemaFields.has(f));
+      
+      if (schemaOnlyVsPy.length > 0 || pyOnlyVsSchema.length > 0) {
+        throw new Error(`CanvasAnalysisRecipeAnalysis PARITY FAILURE:\nSchema-only: [${schemaOnlyVsPy}]\nPython-only: [${pyOnlyVsSchema}]\nSchema: [${[...schemaFields].sort()}]\nPython: [${[...pyFields].sort()}]`);
+      }
+    });
+
+    it('must have IDENTICAL recipe.scenarios[] fields across schema and Python', () => {
+      const schemaFields = getSchemaFields(schema, 'CanvasAnalysisRecipeScenario');
+      const pyFields = getPythonFields('CanvasAnalysisRecipeScenario');
+      
+      const schemaOnlyVsPy = [...schemaFields].filter(f => !pyFields.has(f));
+      const pyOnlyVsSchema = [...pyFields].filter(f => !schemaFields.has(f));
+      
+      if (schemaOnlyVsPy.length > 0 || pyOnlyVsSchema.length > 0) {
+        throw new Error(`CanvasAnalysisRecipeScenario PARITY FAILURE:\nSchema-only: [${schemaOnlyVsPy}]\nPython-only: [${pyOnlyVsSchema}]\nSchema: [${[...schemaFields].sort()}]\nPython: [${[...pyFields].sort()}]`);
+      }
+    });
+
+    it('must have IDENTICAL display fields across schema and Python', () => {
+      const schemaFields = getSchemaFields(schema, 'CanvasAnalysisDisplay');
+      const pyFields = getPythonFields('CanvasAnalysisDisplay');
+      
+      const schemaOnlyVsPy = [...schemaFields].filter(f => !pyFields.has(f));
+      const pyOnlyVsSchema = [...pyFields].filter(f => !schemaFields.has(f));
+      
+      if (schemaOnlyVsPy.length > 0 || pyOnlyVsSchema.length > 0) {
+        throw new Error(`CanvasAnalysisDisplay PARITY FAILURE:\nSchema-only: [${schemaOnlyVsPy}]\nPython-only: [${pyOnlyVsSchema}]\nSchema: [${[...schemaFields].sort()}]\nPython: [${[...pyFields].sort()}]`);
+      }
+    });
+
+    it('CanvasAnalysisDisplay must allow additional properties in schema and Python', () => {
+      const displayDef = schema.$defs?.CanvasAnalysisDisplay;
+      expect(displayDef?.additionalProperties).toBe(true);
+    });
+  });
 });
 
 /**

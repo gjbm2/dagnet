@@ -22,12 +22,10 @@ import { buildGraphForAnalysisLayer } from '../../services/CompositionService';
 import { AnalysisChartContainer } from '../charts/AnalysisChartContainer';
 import { AutomatableField } from '../AutomatableField';
 import { QueryExpressionEditor } from '../QueryExpressionEditor';
-import { BarChart3, AlertCircle, CheckCircle2, Loader2, ChevronRight, Eye, EyeOff, Info, Lightbulb, List, Code, RefreshCw, ExternalLink } from 'lucide-react';
+import { BarChart3, AlertCircle, CheckCircle2, Loader2, ChevronRight, Eye, EyeOff, Info, Lightbulb, List, Code, RefreshCw, ExternalLink, GripVertical, PinIcon } from 'lucide-react';
 import { ANALYSIS_TYPES, getAnalysisTypeMeta } from './analysisTypes';
-import { querySelectionUuids } from '../../hooks/useQuerySelectionUuids';
-import { mapFetchPlanToSnapshotSubjects, composeSnapshotDsl, extractDateRangeFromDSL } from '../../services/snapshotDependencyPlanService';
+import { resolveSnapshotSubjectsForScenario } from '../../services/snapshotSubjectResolutionService';
 import { computeInheritedDSL, computeEffectiveFetchDSL } from '../../services/scenarioRegenerationService';
-import { buildFetchPlanProduction } from '../../services/fetchPlanBuilderService';
 import { fileRegistry } from '../../contexts/TabContext';
 import CollapsibleSection from '../CollapsibleSection';
 import { AnalysisResultCards } from '../analytics/AnalysisResultCards';
@@ -39,8 +37,6 @@ import { sessionLogService } from '../../services/sessionLogService';
 import { IndexedDBConnectionProvider } from '../../lib/das/IndexedDBConnectionProvider';
 import toast from 'react-hot-toast';
 import './AnalyticsPanel.css';
-
-// composeSnapshotDsl and extractDateRangeFromDSL are imported from snapshotDependencyPlanService
 
 interface AnalyticsPanelProps {
   tabId?: string;
@@ -471,87 +467,26 @@ export default function AnalyticsPanel({ tabId, hideHeader = false }: AnalyticsP
       };
       
       // Helper: resolve snapshot subjects for a given scenario.
-      //
-      // Composes a FULL snapshot DSL by merging:
-      //   - from/to from the analytics panel DSL (what path to analyse)
-      //   - window/cohort/asat/context from the query DSL (data scope)
-      // If the analytics DSL already has temporal or context clauses, those
-      // take priority (user override).
-      //
-      // IMPORTANT: This THROWS on failure rather than silently returning undefined.
-      // Snapshot analysis types MUST NOT silently fall back to standard analysis.
-      const resolveSnapshotSubjectsForScenario = async (
+      // Delegates to the shared snapshotSubjectResolutionService.
+      const resolveSnapshotSubjectsForScenarioLocal = async (
         scenarioGraph: any,
         analyticsDsl: string,
         scenarioId: string,
-      ): Promise<{
-        subjects: import('../../services/snapshotDependencyPlanService').SnapshotSubjectRequest[];
-        snapshotDsl: string;
-      }> => {
+      ) => {
         if (!workspace) {
           throw new Error('Snapshot analysis requires a git-backed graph (no workspace found). Ensure the graph file is associated with a repository.');
         }
         if (!selectedAnalysisId) {
           throw new Error('No analysis type selected.');
         }
-        
-        // Compose: analytics DSL (from/to) + query DSL (window/cohort/asat/context)
-        // getQueryDslForScenario returns the COMPOSITED effective DSL (not raw)
-        const scenarioQueryDsl = getQueryDslForScenario(scenarioId);
-        const snapshotDsl = composeSnapshotDsl(analyticsDsl, scenarioQueryDsl);
-        
-        console.log('[AnalyticsPanel] Snapshot DSL composed:', snapshotDsl, 'from analyticsDsl:', analyticsDsl, 'queryDsl:', scenarioQueryDsl);
-        
-        const dslWindow = extractDateRangeFromDSL(snapshotDsl);
-        if (!dslWindow) {
-          throw new Error(`No date range for snapshot analysis. The query DSL must include a window() or cohort() clause.\n\nAnalytics DSL: ${analyticsDsl}\nQuery DSL: ${scenarioQueryDsl}\nComposed: ${snapshotDsl}`);
-        }
-        
-        console.log('[AnalyticsPanel] Snapshot DSL window:', dslWindow);
-        
-        const { plan } = await buildFetchPlanProduction(scenarioGraph, snapshotDsl, dslWindow);
-        console.log('[AnalyticsPanel] Fetch plan built:', plan.items.length, 'items, types:', plan.items.map(i => `${i.type}:${i.itemKey}:sig=${!!i.querySignature}`).join(', '));
-        
-        const edgeUuids = querySelectionUuids();
-        const resolverResult = await mapFetchPlanToSnapshotSubjects({
-          plan,
+        return resolveSnapshotSubjectsForScenario({
+          scenarioGraph,
+          analyticsDsl,
+          scenarioId,
           analysisType: selectedAnalysisId,
-          graph: scenarioGraph,
-          selectedEdgeUuids: edgeUuids.selectedEdgeUuids,
           workspace,
-          queryDsl: snapshotDsl,
+          getQueryDslForScenario,
         });
-        
-        if (!resolverResult) {
-          throw new Error(`Snapshot subject resolution returned nothing. The analysis type "${selectedAnalysisId}" may not have a valid snapshotContract.`);
-        }
-        
-        if (resolverResult.skipped.length > 0) {
-          console.warn('[AnalyticsPanel] Snapshot subjects skipped:', resolverResult.skipped);
-        }
-        
-        if (resolverResult.subjects.length === 0) {
-          const skipReasons = resolverResult.skipped.map(s => `${s.subjectId}: ${s.reason}`).join('\n');
-          throw new Error(`No snapshot subjects resolved for analysis.\n\nSkipped:\n${skipReasons || '(none)'}\n\nPlan items: ${plan.items.length}\nComposed DSL: ${snapshotDsl}`);
-        }
-        
-        console.log('[AnalyticsPanel] Resolved snapshot subjects:', resolverResult.subjects.length);
-        // DEV: log full subject payloads so we can trace core_hash / param_id / sweep range
-        for (const subj of resolverResult.subjects) {
-          console.log('[AnalyticsPanel] Snapshot subject:', {
-            subject_id: subj.subject_id,
-            param_id: subj.param_id,
-            core_hash: subj.core_hash,
-            read_mode: subj.read_mode,
-            anchor_from: subj.anchor_from,
-            anchor_to: subj.anchor_to,
-            sweep_from: subj.sweep_from,
-            sweep_to: subj.sweep_to,
-            slice_keys: subj.slice_keys,
-            sig_preview: subj.canonical_signature?.substring(0, 80) + '...',
-          });
-        }
-        return { subjects: resolverResult.subjects, snapshotDsl };
       };
       
       // Determine the effective analytics DSL for a scenario layer.
@@ -599,7 +534,7 @@ export default function AnalyticsPanel({ tabId, hideHeader = false }: AnalyticsP
           const analyticsDsl = needsSnapshots ? queryDSL : getEffectiveDslForScenario(scenarioId);
           let snapshotSubjects: import('../../services/snapshotDependencyPlanService').SnapshotSubjectRequest[] | undefined;
           if (needsSnapshots) {
-            const resolved = await resolveSnapshotSubjectsForScenario(scenarioGraph, analyticsDsl, scenarioId);
+            const resolved = await resolveSnapshotSubjectsForScenarioLocal(scenarioGraph, analyticsDsl, scenarioId);
             snapshotSubjects = resolved.subjects;
             if (scenarioId === chartScenarioId) chartSnapshotDsl = resolved.snapshotDsl;
           }
@@ -659,7 +594,7 @@ export default function AnalyticsPanel({ tabId, hideHeader = false }: AnalyticsP
         const analyticsDsl = needsSnapshots ? queryDSL : getEffectiveDslForScenario(scenarioId);
         let snapshotSubjects: import('../../services/snapshotDependencyPlanService').SnapshotSubjectRequest[] | undefined;
         if (needsSnapshots) {
-          const resolved = await resolveSnapshotSubjectsForScenario(analysisGraph, analyticsDsl, scenarioId);
+          const resolved = await resolveSnapshotSubjectsForScenarioLocal(analysisGraph, analyticsDsl, scenarioId);
           snapshotSubjects = resolved.subjects;
           setSnapshotChartDsl(resolved.snapshotDsl);
         } else {
@@ -1255,8 +1190,49 @@ export default function AnalyticsPanel({ tabId, hideHeader = false }: AnalyticsP
                 {results.result?.analysis_name && (
                   <span className="analytics-section-subtitle">{results.result.analysis_name}{analysisTitleSuffix}</span>
                 )}
+                <div style={{ marginLeft: 'auto', display: 'flex', gap: 4 }}>
+                  <button
+                    title="Draw on canvas — click then drag a rectangle on the canvas"
+                    style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 2, color: '#6b7280', display: 'flex', alignItems: 'center' }}
+                    onClick={() => {
+                      window.dispatchEvent(new CustomEvent('dagnet:pinAnalysisToCanvas', {
+                        detail: {
+                          objectType: 'canvas-analysis',
+                          chartKind: results.result?.semantics?.chart?.recommended,
+                          recipe: { analysis: { analysis_type: selectedAnalysisId, analytics_dsl: queryDSL || undefined } },
+                          analysisResult: results.result,
+                          viewMode: 'chart',
+                        },
+                      }));
+                    }}
+                  >
+                    <PinIcon size={14} />
+                  </button>
+                </div>
               </div>
-              <div style={{ padding: '8px 8px 0 8px' }}>
+              <div
+                style={{ padding: '8px 8px 0 8px', position: 'relative', cursor: 'grab' }}
+                draggable
+                onDragStart={(e) => {
+                  const payload = {
+                    type: 'dagnet-drag',
+                    objectType: 'canvas-analysis',
+                    chartKind: results.result?.semantics?.chart?.recommended,
+                    recipe: { analysis: { analysis_type: selectedAnalysisId, analytics_dsl: queryDSL || undefined } },
+                    analysisResult: results.result,
+                    viewMode: 'chart',
+                  };
+                  e.dataTransfer.setData('application/json', JSON.stringify(payload));
+                  e.dataTransfer.effectAllowed = 'copy';
+                  const target = e.currentTarget as HTMLElement;
+                  if (target) {
+                    e.dataTransfer.setDragImage(target, target.offsetWidth / 2, 20);
+                  }
+                }}
+              >
+                <div style={{ position: 'absolute', top: 12, right: 12, zIndex: 1, color: '#9ca3af', pointerEvents: 'none' }}>
+                  <GripVertical size={14} />
+                </div>
                 <AnalysisChartContainer
                   result={results.result}
                   visibleScenarioIds={orderedVisibleScenarios}
@@ -1267,7 +1243,6 @@ export default function AnalyticsPanel({ tabId, hideHeader = false }: AnalyticsP
                     }
                     return m;
                   })()}
-                  // Panel view is height constrained; keep charts compact to avoid dead space.
                   height={results.result?.semantics?.chart?.recommended === 'bridge' ? 280 : 420}
                   compactControls={true}
                   scenarioDslSubtitleById={scenarioDslSubtitleByIdObject}

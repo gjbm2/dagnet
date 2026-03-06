@@ -13,6 +13,7 @@ import { RepositoryItem, ObjectType } from '../../types';
 import { registryService, RegistryItem } from '../../services/registryService';
 import { getObjectTypeTheme } from '../../theme/objectTypeTheme';
 import { Tag } from 'lucide-react';
+import { filterSystemTags } from '../../utils/favourites';
 import './Navigator.css';
 
 // NavigatorEntry is imported from ObjectTypeSection
@@ -317,6 +318,10 @@ export function NavigatorContent() {
       if (state.showOpenOnly && !entry.isOpen) {
         return false;
       }
+
+      if (state.showFavouritesOnly && !entry.tags?.includes('_favourite')) {
+        return false;
+      }
       
       // Search filter
       if (state.searchQuery) {
@@ -351,7 +356,7 @@ export function NavigatorContent() {
     });
     
     return filtered;
-  }, [navigatorEntries, state.viewMode, state.showLocalOnly, state.showDirtyOnly, state.showOpenOnly, state.searchQuery, state.sortBy]);
+  }, [navigatorEntries, state.viewMode, state.showLocalOnly, state.showDirtyOnly, state.showOpenOnly, state.showFavouritesOnly, state.searchQuery, state.sortBy]);
 
   // --- Tag selection (persisted in NavigatorState) ---
   const selectedTags = state.selectedTags || [];
@@ -365,7 +370,7 @@ export function NavigatorContent() {
         data?.metadata?.tags?.forEach?.((t: string) => tagSet.add(t));
       }
     } catch { /* ignore */ }
-    return Array.from(tagSet).sort();
+    return filterSystemTags(Array.from(tagSet)).sort();
   }, [filteredAndSortedEntries]);
 
   const handleTagToggle = useCallback((tag: string) => {
@@ -509,7 +514,8 @@ export function NavigatorContent() {
   };
 
   // Map state to control props
-  const filterMode: FilterMode = state.showDirtyOnly ? 'dirty' 
+  const filterMode: FilterMode = state.showFavouritesOnly ? 'favourites'
+    : state.showDirtyOnly ? 'dirty' 
     : state.showOpenOnly ? 'open' 
     : state.showLocalOnly ? 'local' 
     : 'all';
@@ -521,6 +527,7 @@ export function NavigatorContent() {
     operations.setShowDirtyOnly(filter === 'dirty');
     operations.setShowOpenOnly(filter === 'open');
     operations.setShowLocalOnly(filter === 'local');
+    operations.setShowFavouritesOnly(filter === 'favourites');
   };
   
   const handleSortChange = (sort: SortMode) => {

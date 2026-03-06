@@ -54,6 +54,11 @@
       "type": "array",
       "description": "Canvas annotations: grouping rectangles (visual only, not graph semantics)",
       "items": { "$ref": "#/$defs/Container" }
+    },
+    "canvasAnalyses": {
+      "type": "array",
+      "description": "Canvas annotations: live analyses pinned to the canvas (chart or result cards)",
+      "items": { "$ref": "#/$defs/CanvasAnalysis" }
     }
   },
   "$defs": {
@@ -86,6 +91,71 @@
         "height": { "type": "number", "exclusiveMinimum": 0 },
         "x": { "type": "number" },
         "y": { "type": "number" }
+      }
+    },
+    "CanvasAnalysisDisplay": {
+      "type": "object",
+      "description": "Display settings for a canvas analysis (extensible — unknown fields preserved)",
+      "additionalProperties": true,
+      "properties": {
+        "hide_current": { "type": "boolean" }
+      }
+    },
+    "CanvasAnalysisRecipeAnalysis": {
+      "type": "object",
+      "description": "What to compute — analysis identity",
+      "required": ["analysis_type"],
+      "additionalProperties": false,
+      "properties": {
+        "analysis_type": { "type": "string" },
+        "analytics_dsl": { "type": "string" },
+        "what_if_dsl": { "type": "string" }
+      }
+    },
+    "CanvasAnalysisRecipeScenario": {
+      "type": "object",
+      "description": "Frozen scenario entry",
+      "required": ["scenario_id"],
+      "additionalProperties": false,
+      "properties": {
+        "scenario_id": { "type": "string" },
+        "effective_dsl": { "type": "string" },
+        "name": { "type": "string" },
+        "colour": { "type": "string" },
+        "visibility_mode": { "type": "string", "enum": ["f+e", "f", "e"] },
+        "is_live": { "type": "boolean" }
+      }
+    },
+    "CanvasAnalysisRecipe": {
+      "type": "object",
+      "description": "Recipe for a canvas analysis",
+      "required": ["analysis"],
+      "additionalProperties": false,
+      "properties": {
+        "analysis": { "$ref": "#/$defs/CanvasAnalysisRecipeAnalysis" },
+        "scenarios": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/CanvasAnalysisRecipeScenario" }
+        }
+      }
+    },
+    "CanvasAnalysis": {
+      "type": "object",
+      "description": "Canvas annotation: live analysis pinned to the canvas",
+      "required": ["id", "x", "y", "width", "height", "view_mode", "live", "recipe"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string" },
+        "x": { "type": "number" },
+        "y": { "type": "number" },
+        "width": { "type": "number", "exclusiveMinimum": 0 },
+        "height": { "type": "number", "exclusiveMinimum": 0 },
+        "view_mode": { "type": "string", "enum": ["chart", "cards"] },
+        "chart_kind": { "type": "string" },
+        "live": { "type": "boolean" },
+        "title": { "type": "string" },
+        "recipe": { "$ref": "#/$defs/CanvasAnalysisRecipe" },
+        "display": { "$ref": "#/$defs/CanvasAnalysisDisplay" }
       }
     },
     "UUID": { "type": "string", "format": "uuid" },

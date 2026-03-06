@@ -341,6 +341,49 @@ class Container(BaseModel):
     y: float
 
 
+class CanvasAnalysisRecipeAnalysis(BaseModel):
+    """Recipe analysis section — defines what to compute."""
+    analysis_type: str
+    analytics_dsl: Optional[str] = None
+    what_if_dsl: Optional[str] = None
+
+
+class CanvasAnalysisRecipeScenario(BaseModel):
+    """Frozen scenario entry within a canvas analysis recipe."""
+    scenario_id: str
+    effective_dsl: Optional[str] = None
+    name: Optional[str] = None
+    colour: Optional[str] = None
+    visibility_mode: Optional[str] = None
+    is_live: Optional[bool] = None
+
+
+class CanvasAnalysisRecipe(BaseModel):
+    """Recipe for a canvas analysis — what to compute."""
+    analysis: CanvasAnalysisRecipeAnalysis
+    scenarios: Optional[List[CanvasAnalysisRecipeScenario]] = None
+
+
+class CanvasAnalysisDisplay(BaseModel, extra='allow'):
+    """Display settings for a canvas analysis — extensible, preserves unknown fields."""
+    hide_current: Optional[bool] = None
+
+
+class CanvasAnalysis(BaseModel):
+    """Canvas annotation: live analysis pinned to the canvas (chart or result cards)."""
+    id: str
+    x: float
+    y: float
+    width: float = Field(..., gt=0)
+    height: float = Field(..., gt=0)
+    view_mode: str = Field(..., pattern=r"^(chart|cards)$")
+    chart_kind: Optional[str] = None
+    live: bool = True
+    title: Optional[str] = None
+    recipe: CanvasAnalysisRecipe
+    display: Optional[CanvasAnalysisDisplay] = None
+
+
 class Graph(BaseModel):
     """Complete conversion funnel graph."""
     nodes: List[Node] = Field(..., min_length=1)
@@ -349,6 +392,7 @@ class Graph(BaseModel):
     metadata: Metadata
     postits: Optional[List[PostIt]] = Field(None, description="Canvas annotations: sticky notes (visual only, not graph semantics)")
     containers: Optional[List[Container]] = Field(None, description="Canvas annotations: grouping rectangles (visual only, not graph semantics)")
+    canvasAnalyses: Optional[List[CanvasAnalysis]] = Field(None, description="Canvas annotations: live analyses pinned to the canvas")
     baseDSL: Optional[str] = Field(None, description="Base DSL that is always applied (e.g. global context filters)")
     currentQueryDSL: Optional[str] = Field(None, description="Current user query DSL for UI persistence")
     dataInterestsDSL: Optional[str] = Field(None, description="Pinned DSL for batch/overnight fetches")
