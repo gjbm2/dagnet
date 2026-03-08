@@ -133,7 +133,6 @@ properties:
   
   values:
     type: array
-    minItems: 1
     description: "Array of parameter values"
     items:
       type: object
