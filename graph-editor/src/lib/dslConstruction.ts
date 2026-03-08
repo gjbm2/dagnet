@@ -20,12 +20,13 @@ function normalizeEdges(edges: any[], nodes: any[]): NormalizedEdge[] {
   // Build UUID -> human-readable ID map
   const uuidToId = new Map<string, string>();
   for (const node of nodes) {
-    if (node.uuid && node.id) {
-      uuidToId.set(node.uuid, node.id);
+    const humanId = node.data?.id || node.id;
+    const uuid = node.data?.uuid || node.uuid || node.id;
+    if (uuid && humanId) {
+      uuidToId.set(uuid, humanId);
     }
-    // Also map id to itself for cases where ids are already human-readable
-    if (node.id) {
-      uuidToId.set(node.id, node.id);
+    if (humanId) {
+      uuidToId.set(humanId, humanId);
     }
   }
   
@@ -179,6 +180,8 @@ function computePredicates(
     const node = n as any;
     if (node.id) nodeMap.set(node.id, n);
     if (node.uuid) nodeMap.set(node.uuid, n);
+    if (node.data?.id) nodeMap.set(node.data.id, n);
+    if (node.data?.uuid) nodeMap.set(node.data.uuid, n);
   }
   
   for (const nodeId of selectedNodeIds) {

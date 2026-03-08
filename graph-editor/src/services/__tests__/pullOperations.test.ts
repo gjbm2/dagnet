@@ -252,8 +252,8 @@ value: 0.5`;
         name: 'test-param',
         type: 'parameter',
         data: { value: 'old' },
-        originalData: { value: 'original' },
-        isDirty: true,
+        originalData: { value: 'old' },
+        isDirty: false,
         isLocal: true,
         sha: 'old-sha',
         source: { path: mockFilePath }
@@ -277,10 +277,49 @@ value: 0.5`;
 
       await repositoryOperationsService.pullFile(mockFileId, mockRepository, mockBranch);
 
-      // Verify the file object was updated
       expect(mockFile.isDirty).toBe(false);
       expect(mockFile.isLocal).toBe(false);
       expect(mockFile.sha).toBe('new-sha');
+    });
+
+    it('should 3-way merge local additions with remote changes instead of overwriting', async () => {
+      const originalGraph = { nodes: [{ id: 'a' }], edges: [] };
+      const localGraph = { nodes: [{ id: 'a' }], edges: [], canvasAnalyses: [{ id: 'chart-1', title: 'My Chart' }] };
+      const remoteGraph = { nodes: [{ id: 'a' }, { id: 'b' }], edges: [] };
+
+      const mockFile: any = {
+        id: 'graph-test',
+        name: 'test-graph',
+        type: 'graph',
+        data: localGraph,
+        originalData: originalGraph,
+        isDirty: true,
+        isLocal: false,
+        sha: 'old-sha',
+        source: { path: 'graphs/test-graph.json' }
+      };
+
+      vi.mocked(fileRegistry.getFile).mockReturnValue(mockFile);
+      vi.mocked(credentialsManager.loadCredentials).mockResolvedValue(
+        createMockCredentials()
+      );
+      vi.mocked(gitService.getFileContent).mockResolvedValue({
+        success: true,
+        data: {
+          content: JSON.stringify(remoteGraph, null, 2),
+          sha: 'new-sha'
+        }
+      });
+      vi.mocked(db.files.put).mockResolvedValue('graph-test');
+
+      const result = await repositoryOperationsService.pullFile('graph-test', mockRepository, mockBranch);
+
+      expect(result.success).toBe(true);
+      const mergedData = mockFile.data;
+      expect(mergedData.canvasAnalyses).toBeDefined();
+      expect(mergedData.canvasAnalyses).toHaveLength(1);
+      expect(mergedData.canvasAnalyses[0].id).toBe('chart-1');
+      expect(mergedData.nodes).toHaveLength(2);
     });
   });
 

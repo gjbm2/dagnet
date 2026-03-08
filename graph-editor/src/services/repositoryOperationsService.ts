@@ -13,6 +13,7 @@ import { db } from '../db/appDatabase';
 import { FileState } from '../types';
 import { sessionLogService } from './sessionLogService';
 import { conflictResolutionService } from './conflictResolutionService';
+import { merge3Way } from './mergeService';
 
 export interface RepositoryStatus {
   repository: string;
@@ -325,44 +326,71 @@ class RepositoryOperationsService {
         throw new Error('File content is empty');
       }
       
-      // Parse the content based on file type
-      let parsedData: any;
-      
-      if (file.source.path.endsWith('.json')) {
-        parsedData = JSON.parse(content);
-      } else if (file.source.path.endsWith('.yaml') || file.source.path.endsWith('.yml')) {
-        const YAML = await import('yaml');
-        parsedData = YAML.parse(content);
+      const isYaml = file.source.path.endsWith('.yaml') || file.source.path.endsWith('.yml');
+      const isJson = file.source.path.endsWith('.json');
+      const YAML = isYaml ? await import('yaml') : null;
+
+      const parseContent = (raw: string): any => {
+        if (isJson) return JSON.parse(raw);
+        if (isYaml && YAML) return YAML.parse(raw);
+        return raw;
+      };
+      const serialise = (data: any): string => {
+        if (isJson) return JSON.stringify(data, null, 2);
+        if (isYaml && YAML) return YAML.stringify(data);
+        return String(data);
+      };
+
+      const remoteData = parseContent(content);
+
+      const hasLocalChanges = file.isDirty ||
+        (file.originalData && serialise(file.data) !== serialise(file.originalData));
+
+      let finalData: any;
+
+      if (hasLocalChanges && file.originalData) {
+        const baseContent = serialise(file.originalData);
+        const localContent = serialise(file.data);
+        const remoteContent = isJson ? JSON.stringify(remoteData, null, 2)
+          : isYaml && YAML ? YAML.stringify(remoteData)
+          : content;
+
+        const mergeResult = merge3Way(baseContent, localContent, remoteContent);
+
+        if (mergeResult.hasConflicts) {
+          sessionLogService.warning('git', 'GIT_PULL_FILE_CONFLICT',
+            `Pull file ${fileId}: 3-way merge has conflicts -- keeping local version`,
+            undefined, { fileId, conflicts: mergeResult.conflicts?.length });
+          return { success: false, message: `Merge conflict pulling ${file.name || fileId}. Local changes preserved.` };
+        }
+
+        finalData = parseContent(mergeResult.merged || remoteContent);
+        sessionLogService.info('git', 'GIT_PULL_FILE_MERGED',
+          `Auto-merged local changes with remote for ${fileId}`, undefined, { fileId });
       } else {
-        parsedData = content;
+        finalData = remoteData;
       }
-      
-      // Update SHA if available
+
       if (fileData.sha) {
         file.sha = fileData.sha;
       }
 
-      // Update file in registry
-      file.data = parsedData;
-      file.originalData = structuredClone(parsedData);
+      file.data = finalData;
+      file.originalData = structuredClone(finalData);
       file.isDirty = false;
       file.isLocal = false;
       file.lastModified = Date.now();
 
-      // Save to IDB
       await db.files.put(file);
 
-      // Also update prefixed version if it exists
       if (file.source?.repository && file.source?.branch) {
         const prefixedId = `${file.source.repository}-${file.source.branch}-${fileId}`;
         const prefixedFile = { ...file, fileId: prefixedId };
         await db.files.put(prefixedFile);
       }
 
-      // Notify listeners
       (fileRegistry as any).notifyListeners(fileId, file);
 
-      // Fire event for UI updates
       window.dispatchEvent(new CustomEvent('dagnet:fileDirtyChanged', { 
         detail: { fileId, isDirty: false } 
       }));

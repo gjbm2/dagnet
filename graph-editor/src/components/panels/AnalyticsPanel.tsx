@@ -25,6 +25,8 @@ import { QueryExpressionEditor } from '../QueryExpressionEditor';
 import { BarChart3, AlertCircle, CheckCircle2, Loader2, Eye, EyeOff, Info, Lightbulb, List, Code, RefreshCw, ExternalLink, GripVertical, PinIcon } from 'lucide-react';
 import { ANALYSIS_TYPES, getAnalysisTypeMeta } from './analysisTypes';
 import { AnalysisTypeCardList } from './AnalysisTypeCardList';
+import { AnalysisTypeSection } from './AnalysisTypeSection';
+import { resolveAnalysisType } from '../../services/analysisTypeResolutionService';
 import { resolveSnapshotSubjectsForScenario } from '../../services/snapshotSubjectResolutionService';
 import { computeInheritedDSL, computeEffectiveFetchDSL } from '../../services/scenarioRegenerationService';
 import { fileRegistry } from '../../contexts/TabContext';
@@ -331,7 +333,6 @@ export default function AnalyticsPanel({ tabId, hideHeader = false }: AnalyticsP
   }, [queryDSL]);
   
   // Fetch available analyses when DSL changes (DSL is source of truth for analysis matching)
-  // Track last fetch key to avoid duplicate requests for same parameters
   const lastFetchKeyRef = useRef<string>('');
   
   useEffect(() => {
@@ -341,40 +342,17 @@ export default function AnalyticsPanel({ tabId, hideHeader = false }: AnalyticsP
       return;
     }
     
-    // Create a key for this fetch request to avoid duplicates
     const fetchKey = `${graph.nodes?.length || 0}-${queryDSL || ''}-${visibleScenarioIds.length}`;
-    if (fetchKey === lastFetchKeyRef.current) {
-      return; // Skip - same parameters as last fetch
-    }
+    if (fetchKey === lastFetchKeyRef.current) return;
     
     const fetchAvailable = async () => {
       try {
-        console.log('[AnalyticsPanel] Fetching analyses for DSL:', JSON.stringify(queryDSL));
         lastFetchKeyRef.current = fetchKey;
-        
-        const response = await graphComputeClient.getAvailableAnalyses(
-          graph,
-          queryDSL || undefined,
-          visibleScenarioIds.length // Pass scenario count for analysis type matching
+        const { availableAnalyses: resolved, primaryAnalysisType } = await resolveAnalysisType(
+          graph, queryDSL || undefined, visibleScenarioIds.length
         );
-        // Normalize IDs (handle aliases like graph_overview_empty -> graph_overview)
-        const normalizeId = (id: string) => id === 'graph_overview_empty' ? 'graph_overview' : id;
-        const normalizedAnalyses = response.analyses.map(a => ({
-          ...a,
-          id: normalizeId(a.id)
-        }));
-        
-        console.log('[AnalyticsPanel] Got analyses:', normalizedAnalyses.map(a => a.id));
-        setAvailableAnalyses(normalizedAnalyses);
-        
-        // Preserve current selection if it's still available; otherwise fall back to primary
-        setSelectedAnalysisId(prev => {
-          if (prev && normalizedAnalyses.some(a => a.id === prev)) {
-            return prev; // current selection is still valid — keep it
-          }
-          const primary = normalizedAnalyses.find(a => a.is_primary);
-          return primary ? primary.id : null;
-        });
+        setAvailableAnalyses(resolved);
+        setSelectedAnalysisId(primaryAnalysisType);
       } catch (err) {
         console.warn('Failed to fetch available analyses:', err);
         setAvailableAnalyses([]);
@@ -1113,33 +1091,15 @@ export default function AnalyticsPanel({ tabId, hideHeader = false }: AnalyticsP
             </div>
           </CollapsibleSection>
           
-          {/* Analysis Type Selector - Mini Cards */}
-          <CollapsibleSection
-            title={
-              <span style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%' }}>
-                <span>Analysis Type</span>
-                <button
-                  className="analytics-show-all-toggle"
-                  onClick={(e) => { e.stopPropagation(); setShowAllAnalyses(!showAllAnalyses); }}
-                  title={showAllAnalyses ? 'Show only available' : 'Show all analysis types'}
-                >
-                  {showAllAnalyses ? <EyeOff size={12} /> : <Eye size={12} />}
-                  <span>{showAllAnalyses ? 'Available only' : 'Show all'}</span>
-                </button>
-              </span>
-            }
+          {/* Analysis Type Selector */}
+          <AnalysisTypeSection
+            availableAnalyses={availableAnalyses}
+            selectedAnalysisId={selectedAnalysisId}
+            onSelect={(analysisId) => setSelectedAnalysisId(analysisId)}
             defaultOpen={true}
-            icon={BarChart3}
-          >
-            <AnalysisTypeCardList
-              availableAnalyses={availableAnalyses}
-              selectedAnalysisId={selectedAnalysisId}
-              onSelect={(analysisId) => setSelectedAnalysisId(analysisId)}
-              showAll={showAllAnalyses}
-              draggableAvailableCards={true}
-              onCardDragStart={handleAnalysisTypeCardDragStart}
-            />
-          </CollapsibleSection>
+            draggableAvailableCards={true}
+            onCardDragStart={handleAnalysisTypeCardDragStart}
+          />
         </div>
         
         {/* Results column */}
@@ -1157,19 +1117,6 @@ export default function AnalyticsPanel({ tabId, hideHeader = false }: AnalyticsP
             <div className="analytics-error">
               <AlertCircle size={14} />
               <span>{error}</span>
-            </div>
-          )}
-          
-          {/* Requirements message for unavailable analysis */}
-          {selectedAnalysisId && !availableAnalyses.some(a => a.id === selectedAnalysisId) && (
-            <div className="analytics-requirements">
-              <div className="analytics-requirements-title">
-                <Lightbulb size={16} />
-                <span>{getAnalysisTypeMeta(selectedAnalysisId)?.name || 'Analysis'}</span>
-              </div>
-              <div className="analytics-requirements-hint">
-                {getAnalysisTypeMeta(selectedAnalysisId)?.selectionHint || 'Select appropriate nodes to enable this analysis.'}
-              </div>
             </div>
           )}
           

@@ -32,8 +32,11 @@ import { imageOperationsService } from '../services/imageOperationsService';
 import { getObjectTypeTheme } from '../theme/objectTypeTheme';
 import { Box, Settings, Layers, Edit3, ChevronDown, ChevronRight, X, Sliders, Info, TrendingUp, Coins, Clock, FileJson, ZapOff, RefreshCcw, ExternalLink, Zap } from 'lucide-react';
 import { ANALYSIS_TYPES } from './panels/analysisTypes';
-import { AnalysisTypeCardList } from './panels/AnalysisTypeCardList';
+import { AnalysisTypeSection } from './panels/AnalysisTypeSection';
+import { ChartSettingsSection } from './panels/ChartSettingsSection';
+import { useCanvasAnalysisScenarioCallbacks } from '../hooks/useCanvasAnalysisScenarioCallbacks';
 import { graphComputeClient, type AvailableAnalysis } from '../lib/graphComputeClient';
+import { resolveAnalysisType } from '../services/analysisTypeResolutionService';
 import { canvasAnalysisResultCache } from '../hooks/useCanvasAnalysisCompute';
 import { getDisplaySettingsForSurface } from '../lib/analysisDisplaySettingsRegistry';
 import { ScenarioLayerList } from './panels/ScenarioLayerList';
@@ -42,6 +45,7 @@ import { useScenariosContextOptional } from '../contexts/ScenariosContext';
 import { ScenarioQueryEditModal } from './modals/ScenarioQueryEditModal';
 import { captureTabScenariosToRecipe } from '../services/captureTabScenariosService';
 import './panels/AnalyticsPanel.css';
+import './panels/ScenariosPanel.css';
 import { normalizeConstraintString } from '@/lib/queryDSL';
 import { isProbabilityMassUnbalanced, getConditionalProbabilityUnbalancedMap } from '../utils/rebalanceUtils';
 import { workspaceService } from '../services/workspaceService';
@@ -128,14 +132,6 @@ interface PropertiesPanelProps {
   tabId?: string;
 }
 
-const CHART_KIND_LABELS: Record<string, string> = {
-  funnel: 'Funnel',
-  bridge: 'Bridge',
-  bridge_horizontal: 'Bridge (Horizontal)',
-  histogram: 'Lag Histogram',
-  daily_conversions: 'Daily Conversions',
-  cohort_maturity: 'Cohort Maturity',
-};
 
 function CanvasAnalysisPropertiesSection({ analysisId, graph, setGraph, saveHistoryState, tabId: propTabId }: {
   analysisId: string;
@@ -147,28 +143,12 @@ function CanvasAnalysisPropertiesSection({ analysisId, graph, setGraph, saveHist
   const analysis = graph?.canvasAnalyses?.find((a: any) => a.id === analysisId);
   const [availableAnalyses, setAvailableAnalyses] = useState<AvailableAnalysis[]>([]);
   const fetchKeyRef = useRef('');
+  const [editingScenarioId, setEditingScenarioId] = useState<string | null>(null);
 
   const analyticsDsl = analysis?.recipe?.analysis?.analytics_dsl || '';
   const selectedType = analysis?.recipe?.analysis?.analysis_type || '';
-
   const cachedResult = canvasAnalysisResultCache.get(analysisId);
 
-  useEffect(() => {
-    if (!graph) return;
-    const key = `${graph.nodes?.length || 0}-${analyticsDsl}`;
-    if (key === fetchKeyRef.current) return;
-    fetchKeyRef.current = key;
-
-    const timer = setTimeout(async () => {
-      try {
-        const resp = await graphComputeClient.getAvailableAnalyses(graph, analyticsDsl || undefined);
-        setAvailableAnalyses(resp.analyses || []);
-      } catch {
-        setAvailableAnalyses([]);
-      }
-    }, 300);
-    return () => clearTimeout(timer);
-  }, [graph, analyticsDsl]);
 
   const updateAnalysis = useCallback((updates: any) => {
     const nextGraph = structuredClone(graph);
@@ -183,9 +163,7 @@ function CanvasAnalysisPropertiesSection({ analysisId, graph, setGraph, saveHist
   const updateRecipeAnalysis = useCallback((field: string, value: any) => {
     const nextGraph = structuredClone(graph);
     const a = nextGraph.canvasAnalyses?.find((a: any) => a.id === analysisId);
-    if (a?.recipe?.analysis) {
-      (a.recipe.analysis as any)[field] = value;
-    }
+    if (a?.recipe?.analysis) (a.recipe.analysis as any)[field] = value;
     if (nextGraph.metadata) nextGraph.metadata.updated_at = new Date().toISOString();
     setGraph(nextGraph);
   }, [graph, setGraph, analysisId]);
@@ -201,16 +179,6 @@ function CanvasAnalysisPropertiesSection({ analysisId, graph, setGraph, saveHist
     saveHistoryState('Update display setting');
   }, [graph, setGraph, saveHistoryState, analysisId]);
 
-  const updateChartOwnedScenarios = useCallback((mutator: (analysisObj: any) => void, historyLabel: string) => {
-    const nextGraph = structuredClone(graph);
-    const a = nextGraph.canvasAnalyses?.find((item: any) => item.id === analysisId);
-    if (!a) return;
-    mutator(a);
-    if (nextGraph.metadata) nextGraph.metadata.updated_at = new Date().toISOString();
-    setGraph(nextGraph);
-    saveHistoryState(historyLabel);
-  }, [graph, setGraph, saveHistoryState, analysisId]);
-
   const chartKindOptions = useMemo(() => {
     const spec: any = cachedResult?.semantics?.chart;
     const rec = spec?.recommended;
@@ -219,18 +187,10 @@ function CanvasAnalysisPropertiesSection({ analysisId, graph, setGraph, saveHist
     return Array.from(new Set(all));
   }, [cachedResult]);
 
-  const analysisTypeMeta = ANALYSIS_TYPES.find(t => t.id === selectedType);
-  const analysisTypeLabel = analysisTypeMeta?.name || selectedType.replace(/_/g, ' ').replace(/\b\w/g, (c: string) => c.toUpperCase()) || 'Unknown';
-
-  // Display settings from registry
-  const displaySettings = useMemo(() => {
-    return getDisplaySettingsForSurface(analysis?.chart_kind, analysis?.view_mode || 'chart', 'propsPanel');
-  }, [analysis?.chart_kind, analysis?.view_mode]);
-
   const scenariosContext = useScenariosContextOptional();
   const { tabs, operations } = useTabContext();
   const graphStore = useGraphStore();
-  const liveScenarioTabId = propTabId || tabs[0]?.id;
+  const liveTabId = propTabId || tabs[0]?.id;
   const chartHiddenScenarioIds = useMemo(
     () => new Set<string>((((analysis?.display as any)?.hidden_scenarios) || []) as string[]),
     [analysis?.display]
@@ -238,9 +198,7 @@ function CanvasAnalysisPropertiesSection({ analysisId, graph, setGraph, saveHist
 
   const scenarioLayerItems = useMemo((): ScenarioLayerItem[] => {
     if (analysis?.live) {
-      const currentTab = tabs[0];
-      const tabId = currentTab?.id;
-      const scenarioState = tabId ? operations.getScenarioState(tabId) : null;
+      const scenarioState = liveTabId ? operations.getScenarioState(liveTabId) : null;
       const visibleIds = scenarioState?.visibleScenarioIds || ['current'];
       const scenarioOrder = scenarioState?.scenarioOrder || [];
       const orderedScenarios = scenarioOrder.length > 0
@@ -249,84 +207,91 @@ function CanvasAnalysisPropertiesSection({ analysisId, graph, setGraph, saveHist
             .filter((s: any) => s !== undefined)
         : ((scenariosContext as any)?.scenarios || []);
       const items: ScenarioLayerItem[] = [];
-
       items.push({
-        id: 'current',
-        name: 'Current',
+        id: 'current', name: 'Current',
         colour: (scenariosContext as any)?.currentColour || '#3b82f6',
         visible: visibleIds.includes('current'),
-        visibilityMode: (tabId ? operations.getScenarioVisibilityMode(tabId, 'current') : 'f+e') as 'f+e' | 'f' | 'e',
+        visibilityMode: (liveTabId ? operations.getScenarioVisibilityMode(liveTabId, 'current') : 'f+e') as 'f+e' | 'f' | 'e',
         kind: 'current',
       });
-
       for (const scenario of orderedScenarios) {
         items.push({
-          id: scenario.id,
-          name: scenario.name || scenario.id,
+          id: scenario.id, name: scenario.name || scenario.id,
           colour: scenario.colour || '#808080',
           visible: visibleIds.includes(scenario.id),
-          visibilityMode: (tabId ? operations.getScenarioVisibilityMode(tabId, scenario.id) : 'f+e') as 'f+e' | 'f' | 'e',
-          isLive: scenario.meta?.isLive,
-          kind: 'user',
+          visibilityMode: (liveTabId ? operations.getScenarioVisibilityMode(liveTabId, scenario.id) : 'f+e') as 'f+e' | 'f' | 'e',
+          isLive: scenario.meta?.isLive, kind: 'user',
         });
       }
-
       items.push({
-        id: 'base',
-        name: 'Base',
+        id: 'base', name: 'Base',
         colour: (scenariosContext as any)?.baseColour || '#6b7280',
         visible: visibleIds.includes('base'),
-        visibilityMode: (tabId ? operations.getScenarioVisibilityMode(tabId, 'base') : 'f+e') as 'f+e' | 'f' | 'e',
+        visibilityMode: (liveTabId ? operations.getScenarioVisibilityMode(liveTabId, 'base') : 'f+e') as 'f+e' | 'f' | 'e',
         kind: 'base',
       });
-
       return items;
     }
-
     const frozenScenarios = analysis?.recipe?.scenarios || [];
     return frozenScenarios.map((fs: any) => ({
-      id: fs.scenario_id,
-      name: fs.name || fs.scenario_id,
+      id: fs.scenario_id, name: fs.name || fs.scenario_id,
       colour: fs.colour || '#808080',
       visible: !chartHiddenScenarioIds.has(fs.scenario_id),
       visibilityMode: (fs.visibility_mode || 'f+e') as 'f+e' | 'f' | 'e',
-      kind: fs.scenario_id === 'base' ? 'base' as const : fs.scenario_id === 'current' ? 'current' as const : 'user' as const,
+      kind: 'user' as const,
       tooltip: fs.effective_dsl,
     }));
-  }, [analysis, scenariosContext, tabs, operations, chartHiddenScenarioIds]);
+  }, [analysis, scenariosContext, liveTabId, operations, chartHiddenScenarioIds]);
 
-  const [editingScenarioId, setEditingScenarioId] = useState<string | null>(null);
+  const visibleScenarioCount = scenarioLayerItems.filter(i => i.visible).length || 1;
+
+  useEffect(() => {
+    if (!graph) return;
+    const key = `${graph.nodes?.length || 0}-${analyticsDsl}-${visibleScenarioCount}`;
+    if (key === fetchKeyRef.current) return;
+    fetchKeyRef.current = key;
+    const timer = setTimeout(async () => {
+      const { availableAnalyses: resolved, primaryAnalysisType } = await resolveAnalysisType(
+        graph, analyticsDsl || undefined, visibleScenarioCount
+      );
+      setAvailableAnalyses(resolved);
+      if (!analysis?.analysis_type_overridden && primaryAnalysisType) {
+        const currentType = analysis?.recipe?.analysis?.analysis_type;
+        if (currentType !== primaryAnalysisType) {
+          const nextGraph = structuredClone(graph);
+          const a = nextGraph.canvasAnalyses?.find((item: any) => item.id === analysisId);
+          if (a?.recipe?.analysis) {
+            a.recipe.analysis.analysis_type = primaryAnalysisType;
+            if (nextGraph.metadata) nextGraph.metadata.updated_at = new Date().toISOString();
+            setGraph(nextGraph);
+          }
+        }
+      }
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [graph, analyticsDsl, visibleScenarioCount, analysis?.analysis_type_overridden, analysisId, setGraph]);
+
+  const scenarioCallbacks = useCanvasAnalysisScenarioCallbacks({
+    analysisId, analysis, graph, setGraph, saveHistoryState, tabId: propTabId,
+    onEditScenarioDsl: (id) => setEditingScenarioId(id),
+  });
+
   const editingScenario = editingScenarioId
     ? analysis?.recipe?.scenarios?.find((s: any) => s.scenario_id === editingScenarioId)
     : null;
+  const isEditingCurrentLayerDsl = editingScenarioId === 'current' && analysis?.live;
   const { currentDSL: graphCurrentDSL } = useGraphStore();
 
   if (!analysis) return <div style={{ textAlign: 'center', color: '#666', padding: '20px' }}>Canvas analysis not found</div>;
 
   return (
     <div>
-      {/* ── Section 1: Analysis Identity ── */}
-      <CollapsibleSection title="Analysis Identity" defaultOpen={true}>
+      {/* ── Section 1: Selection & Query ── */}
+      <CollapsibleSection
+        title={analyticsDsl ? <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>Selection & Query <span style={{ fontSize: 10, color: '#6b7280', fontWeight: 400, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 160 }}>{analyticsDsl}</span></span> : "Selection & Query"}
+        defaultOpen={!analyticsDsl}
+      >
         <div className="property-group">
-          <div className="property-row">
-            <label className="property-label">Title</label>
-            <input
-              className="property-input"
-              type="text"
-              value={analysis.title || ''}
-              placeholder={analysisTypeLabel}
-              onChange={(e) => {
-                const nextGraph = structuredClone(graph);
-                const a = nextGraph.canvasAnalyses?.find((a: any) => a.id === analysisId);
-                if (a) a.title = e.target.value;
-                setGraph(nextGraph);
-              }}
-              onBlur={() => saveHistoryState('Update analysis title')}
-            />
-          </div>
-          <div className="property-row" style={{ marginTop: 8 }}>
-            <label className="property-label">Analytics DSL</label>
-          </div>
           <QueryExpressionEditor
             value={analyticsDsl}
             onChange={(newValue) => updateRecipeAnalysis('analytics_dsl', newValue || undefined)}
@@ -336,455 +301,124 @@ function CanvasAnalysisPropertiesSection({ analysisId, graph, setGraph, saveHist
             height="40px"
             suggestionsScope="graph"
           />
-          <div style={{ maxHeight: 200, overflowY: 'auto', marginTop: 8 }}>
-            <AnalysisTypeCardList
-              availableAnalyses={availableAnalyses}
-              selectedAnalysisId={selectedType || null}
-              onSelect={(analysisType) => {
-                updateRecipeAnalysis('analysis_type', analysisType);
-                saveHistoryState('Update analysis type');
-              }}
-              showAll={true}
-            />
-          </div>
         </div>
       </CollapsibleSection>
 
-      {/* ── Section 2: Scenario Source ── */}
-      <CollapsibleSection title="Scenarios" defaultOpen={true}>
+      {/* ── Section 2: Data Source ── */}
+      <CollapsibleSection
+        title="Data Source"
+        defaultOpen={!analysis.live}
+        withCheckbox={true}
+        checkboxChecked={!analysis.live}
+        toggleLabels={{ off: 'Live', on: 'Custom' }}
+        onCheckboxChange={(checked) => {
+          if (checked && analysis.live) {
+            if (liveTabId && scenariosContext) {
+              const currentTab = tabs.find(t => t.id === liveTabId);
+              const whatIfDSL = currentTab?.editorState?.whatIfDSL || null;
+              const { scenarios: captured, what_if_dsl } = captureTabScenariosToRecipe({
+                tabId: liveTabId,
+                currentDSL: graphStore.currentDSL || '',
+                operations,
+                scenariosContext: scenariosContext as any,
+                whatIfDSL,
+              });
+              updateAnalysis({
+                live: false,
+                recipe: { ...analysis.recipe, scenarios: captured, analysis: { ...analysis.recipe.analysis, what_if_dsl } },
+              });
+            }
+          } else if (!checked && !analysis.live) {
+            updateAnalysis({
+              live: true,
+              recipe: { ...analysis.recipe, scenarios: undefined, analysis: { ...analysis.recipe.analysis, what_if_dsl: undefined } },
+            });
+          }
+        }}
+      >
         <div className="property-group">
-          <div className="property-row">
-            <label className="property-label">Source</label>
-            <div style={{ display: 'flex', gap: 4 }}>
-              {(['tab', 'chart'] as const).map(mode => (
-                <button
-                  key={mode}
-                  onClick={() => {
-                    if (mode === 'tab' && !analysis.live) {
-                      updateAnalysis({ live: true, recipe: { ...analysis.recipe, scenarios: undefined, analysis: { ...analysis.recipe.analysis, what_if_dsl: undefined } } });
-                    } else if (mode === 'chart' && analysis.live && liveScenarioTabId && scenariosContext) {
-                      const currentTab = tabs.find(t => t.id === liveScenarioTabId);
-                      const whatIfDSL = currentTab?.editorState?.whatIfDSL || null;
-                      const { scenarios: captured, what_if_dsl } = captureTabScenariosToRecipe({
-                        tabId: liveScenarioTabId,
-                        currentDSL: graphStore.currentDSL || '',
-                        operations,
-                        scenariosContext: scenariosContext as any,
-                        whatIfDSL,
-                      });
-                      updateAnalysis({
-                        live: false,
-                        recipe: {
-                          ...analysis.recipe,
-                          scenarios: captured,
-                          analysis: { ...analysis.recipe.analysis, what_if_dsl },
-                        },
-                      });
-                    }
-                  }}
-                  style={{
-                    flex: 1, padding: '4px 8px', fontSize: 11, border: '1px solid',
-                    borderColor: (mode === 'tab' ? analysis.live : !analysis.live) ? 'var(--accent-colour, #3b82f6)' : '#d1d5db',
-                    background: (mode === 'tab' ? analysis.live : !analysis.live) ? 'var(--accent-colour, #3b82f6)' : 'transparent',
-                    color: (mode === 'tab' ? analysis.live : !analysis.live) ? '#fff' : 'inherit',
-                    borderRadius: 4, cursor: 'pointer',
-                  }}
-                >
-                  {mode === 'tab' ? 'Following tab' : 'Chart-owned'}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {/* Chart "Current layer" DSL fragment */}
-          <div className="property-row" style={{ marginTop: 8 }}>
-            <label className="property-label" style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-              Chart DSL fragment
-              <span style={{ fontSize: 10, color: '#9ca3af', fontWeight: 'normal' }}>(composes onto all scenarios)</span>
-            </label>
-            <QueryExpressionEditor
-              value={analysis.chart_current_layer_dsl || ''}
-              onChange={(newValue) => updateAnalysis({ chart_current_layer_dsl: newValue || undefined })}
-              onBlur={() => saveHistoryState('Update chart DSL fragment')}
-              graph={graph}
-              placeholder="e.g. context(channel:influencer)"
-              height="32px"
-            />
-          </div>
-
-          {/* Scenario layer list */}
-          {scenarioLayerItems.length > 0 && (
-            <div style={{ marginTop: 8 }}>
-              <ScenarioLayerList
-                items={scenarioLayerItems}
-                {...(analysis.live
-                  ? {
-                      onRename: async (id: string, newName: string) => {
-                        if ((scenariosContext as any)?.renameScenario) {
-                          await (scenariosContext as any).renameScenario(id, newName);
-                        }
-                      },
-                      onColourChange: async (id: string, colour: string) => {
-                        if (id === 'current') {
-                          await (scenariosContext as any)?.setCurrentColour?.(colour);
-                          return;
-                        }
-                        if (id === 'base') {
-                          await (scenariosContext as any)?.setBaseColour?.(colour);
-                          return;
-                        }
-                        await (scenariosContext as any)?.updateScenarioColour?.(id, colour);
-                      },
-                      onToggleVisibility: async (id: string) => {
-                        if (!liveScenarioTabId) return;
-                        await operations.toggleScenarioVisibility(liveScenarioTabId, id);
-                      },
-                      onCycleMode: async (id: string) => {
-                        if (!liveScenarioTabId) return;
-                        await operations.cycleScenarioVisibilityMode(liveScenarioTabId, id);
-                      },
-                      onReorder: async (fromIndex: number, toIndex: number) => {
-                        if (!liveScenarioTabId) return;
-                        const currentState = operations.getScenarioState(liveScenarioTabId);
-                        if (!currentState) return;
-
-                        const liveUserIds = scenarioLayerItems
-                          .filter((item) => item.kind === 'user')
-                          .map((item) => item.id);
-                        const draggedScenarioId = liveUserIds[fromIndex];
-                        const targetScenarioId = liveUserIds[toIndex];
-                        if (!draggedScenarioId || !targetScenarioId || draggedScenarioId === targetScenarioId) return;
-
-                        const currentVisibleOrder = currentState.visibleScenarioIds || [];
-                        const visibleUserIds = currentVisibleOrder.filter((sid: string) => sid !== 'current' && sid !== 'base');
-                        const draggedUserIndex = visibleUserIds.indexOf(draggedScenarioId);
-                        if (draggedUserIndex === -1) return;
-
-                        let targetUserIndex = visibleUserIds.indexOf(targetScenarioId);
-                        if (targetUserIndex === -1) targetUserIndex = Math.max(visibleUserIds.length - 1, 0);
-
-                        const newUserOrder = [...visibleUserIds];
-                        newUserOrder.splice(draggedUserIndex, 1);
-                        newUserOrder.splice(targetUserIndex, 0, draggedScenarioId);
-
-                        const newVisibleOrder: string[] = [];
-                        let visibleCursor = 0;
-                        for (const sid of currentVisibleOrder) {
-                          if (sid === 'current' || sid === 'base') newVisibleOrder.push(sid);
-                          else newVisibleOrder.push(newUserOrder[visibleCursor++]);
-                        }
-
-                        const oldScenarioOrder = currentState.scenarioOrder || currentVisibleOrder;
-                        const newScenarioOrder: string[] = [];
-                        let orderCursor = 0;
-                        for (const sid of oldScenarioOrder) {
-                          if (sid === 'current' || sid === 'base') {
-                            newScenarioOrder.push(sid);
-                          } else if (orderCursor < newUserOrder.length) {
-                            newScenarioOrder.push(newUserOrder[orderCursor++]);
-                          }
-                        }
-                        while (orderCursor < newUserOrder.length) newScenarioOrder.push(newUserOrder[orderCursor++]);
-
-                        await operations.updateTabState(liveScenarioTabId, {
-                          scenarioState: {
-                            ...currentState,
-                            scenarioOrder: newScenarioOrder,
-                            visibleScenarioIds: newVisibleOrder,
-                            visibleColourOrderIds: currentState.visibleColourOrderIds,
-                          } as any,
-                        });
-                      },
-                    }
-                  : {
-                      onRename: (id: string, newName: string) => {
-                        updateChartOwnedScenarios((a) => {
-                          const s = a?.recipe?.scenarios?.find((sc: any) => sc.scenario_id === id);
-                          if (s) s.name = newName;
-                        }, 'Rename chart scenario');
-                      },
-                      onColourChange: (id: string, colour: string) => {
-                        updateChartOwnedScenarios((a) => {
-                          const s = a?.recipe?.scenarios?.find((sc: any) => sc.scenario_id === id);
-                          if (s) s.colour = colour;
-                        }, 'Change chart scenario colour');
-                      },
-                      onDelete: (id: string) => {
-                        updateChartOwnedScenarios((a) => {
-                          if (a?.recipe?.scenarios) {
-                            a.recipe.scenarios = a.recipe.scenarios.filter((sc: any) => sc.scenario_id !== id);
-                          }
-                          if (a?.display && Array.isArray((a.display as any).hidden_scenarios)) {
-                            (a.display as any).hidden_scenarios = (a.display as any).hidden_scenarios.filter((sid: string) => sid !== id);
-                          }
-                        }, 'Delete chart scenario');
-                      },
-                      onToggleVisibility: (id: string) => {
-                        const currentlyVisible = scenarioLayerItems.filter((item) => item.visible);
-                        const target = scenarioLayerItems.find((item) => item.id === id);
-                        const willHide = !!target?.visible;
-                        if (willHide && currentlyVisible.length <= 1) {
-                          toast.error('At least one scenario must remain visible');
-                          return;
-                        }
-
-                        updateChartOwnedScenarios((a) => {
-                          if (!a.display) a.display = {};
-                          const hidden = Array.isArray((a.display as any).hidden_scenarios)
-                            ? [...(a.display as any).hidden_scenarios]
-                            : [];
-                          const idx = hidden.indexOf(id);
-                          if (idx >= 0) hidden.splice(idx, 1);
-                          else hidden.push(id);
-                          (a.display as any).hidden_scenarios = hidden;
-                        }, 'Toggle chart scenario visibility');
-                      },
-                      onCycleMode: (id: string) => {
-                        updateChartOwnedScenarios((a) => {
-                          const s = a?.recipe?.scenarios?.find((sc: any) => sc.scenario_id === id);
-                          if (!s) return;
-                          const modes: Array<'f+e' | 'f' | 'e'> = ['f+e', 'f', 'e'];
-                          const cur = (s.visibility_mode || 'f+e') as 'f+e' | 'f' | 'e';
-                          const idx = modes.indexOf(cur);
-                          s.visibility_mode = modes[(idx + 1) % modes.length];
-                        }, 'Cycle chart scenario display mode');
-                      },
-                      onReorder: (fromIndex: number, toIndex: number) => {
-                        updateChartOwnedScenarios((a) => {
-                          if (!a?.recipe?.scenarios) return;
-                          const arr = [...a.recipe.scenarios];
-                          const userFullIndices = arr
-                            .map((s: any, idx: number) => ({ s, idx }))
-                            .filter(({ s }: any) => s.scenario_id !== 'current' && s.scenario_id !== 'base')
-                            .map(({ idx }: any) => idx);
-
-                          const fromFull = userFullIndices[fromIndex];
-                          const toFull = userFullIndices[toIndex];
-                          if (fromFull == null || toFull == null || fromFull === toFull) return;
-
-                          const [moved] = arr.splice(fromFull, 1);
-                          const adjustedTo = fromFull < toFull ? toFull - 1 : toFull;
-                          arr.splice(adjustedTo, 0, moved);
-                          a.recipe.scenarios = arr;
-                        }, 'Reorder chart scenarios');
-                      },
-                      onEdit: (id: string) => setEditingScenarioId(id),
-                    })}
-              />
-            </div>
-          )}
+          <ScenarioLayerList
+            items={scenarioLayerItems}
+            containerClassName=""
+            allowRenameAll={true}
+            {...scenarioCallbacks}
+          />
         </div>
       </CollapsibleSection>
 
-      {/* Scenario DSL edit modal (chart-owned mode) */}
-      {editingScenario && (
+      {/* Scenario DSL edit modal -- handles both current layer DSL (Live) and scenario effective_dsl (Custom) */}
+      {editingScenarioId && (isEditingCurrentLayerDsl || editingScenario) && (
         <ScenarioQueryEditModal
-          isOpen={!!editingScenarioId}
-          scenarioName={editingScenario.name || editingScenarioId || ''}
-          currentDSL={editingScenario.effective_dsl || ''}
+          isOpen={true}
+          scenarioName={isEditingCurrentLayerDsl ? 'Current layer' : (editingScenario?.name || editingScenarioId || '')}
+          currentDSL={isEditingCurrentLayerDsl ? (analysis.chart_current_layer_dsl || '') : (editingScenario?.effective_dsl || '')}
           inheritedDSL={graphCurrentDSL || ''}
           onSave={(newDSL) => {
-            const nextGraph = structuredClone(graph);
-            const a = nextGraph.canvasAnalyses?.find((a: any) => a.id === analysisId);
-            const s = a?.recipe?.scenarios?.find((s: any) => s.scenario_id === editingScenarioId);
-            if (s) s.effective_dsl = newDSL;
-            if (nextGraph.metadata) nextGraph.metadata.updated_at = new Date().toISOString();
-            setGraph(nextGraph);
-            saveHistoryState('Edit chart scenario DSL');
+            if (isEditingCurrentLayerDsl) {
+              updateAnalysis({ chart_current_layer_dsl: newDSL || undefined });
+              saveHistoryState('Update current layer DSL');
+            } else {
+              const nextGraph = structuredClone(graph);
+              const a = nextGraph.canvasAnalyses?.find((a: any) => a.id === analysisId);
+              const s = a?.recipe?.scenarios?.find((s: any) => s.scenario_id === editingScenarioId);
+              if (s) s.effective_dsl = newDSL;
+              if (nextGraph.metadata) nextGraph.metadata.updated_at = new Date().toISOString();
+              setGraph(nextGraph);
+              saveHistoryState('Edit chart scenario DSL');
+            }
             setEditingScenarioId(null);
           }}
           onClose={() => setEditingScenarioId(null)}
         />
       )}
 
-      {/* ── Section 3: Chart Kind ── */}
-      <CollapsibleSection title="Chart Kind" defaultOpen={true}>
-        <div className="property-group">
-          <div className="property-row">
-            <label className="property-label">View Mode</label>
-            <div style={{ display: 'flex', gap: 4 }}>
-              {(['chart', 'cards'] as const).map(mode => (
-                <button
-                  key={mode}
-                  onClick={() => updateAnalysis({ view_mode: mode })}
-                  style={{
-                    flex: 1, padding: '4px 8px', fontSize: 11, border: '1px solid',
-                    borderColor: analysis.view_mode === mode ? 'var(--accent-colour, #3b82f6)' : '#d1d5db',
-                    background: analysis.view_mode === mode ? 'var(--accent-colour, #3b82f6)' : 'transparent',
-                    color: analysis.view_mode === mode ? '#fff' : 'inherit',
-                    borderRadius: 4, cursor: 'pointer', textTransform: 'capitalize',
-                  }}
-                >
-                  {mode}
-                </button>
-              ))}
-            </div>
-          </div>
-          {analysis.view_mode === 'chart' && (
-            <div style={{ marginTop: 8 }}>
-              {chartKindOptions.length > 0 ? (
-                <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
-                  {chartKindOptions.map(kind => (
-                    <button
-                      key={kind}
-                      type="button"
-                      onClick={() => updateAnalysis({ chart_kind: kind })}
-                      style={{
-                        border: '1px solid',
-                        borderColor: kind === (analysis.chart_kind || chartKindOptions[0]) ? '#3b82f6' : '#e5e7eb',
-                        background: kind === (analysis.chart_kind || chartKindOptions[0]) ? '#eff6ff' : '#ffffff',
-                        color: kind === (analysis.chart_kind || chartKindOptions[0]) ? '#1d4ed8' : '#374151',
-                        borderRadius: 4, padding: '4px 10px', fontSize: 11, cursor: 'pointer',
-                      }}
-                    >
-                      {CHART_KIND_LABELS[kind] || kind}
-                    </button>
-                  ))}
-                </div>
-              ) : (
-                <select
-                  className="property-input"
-                  style={{ fontSize: 12 }}
-                  value={analysis.chart_kind || ''}
-                  onChange={(e) => updateAnalysis({ chart_kind: e.target.value || undefined })}
-                >
-                  <option value="">Auto</option>
-                  {Object.entries(CHART_KIND_LABELS).map(([value, label]) => (
-                    <option key={value} value={value}>{label}</option>
-                  ))}
-                </select>
-              )}
-            </div>
-          )}
-        </div>
-      </CollapsibleSection>
+      {/* ── Section 3: Analysis Type ── */}
+      <AnalysisTypeSection
+        availableAnalyses={availableAnalyses}
+        selectedAnalysisId={selectedType || null}
+        onSelect={(analysisType) => {
+          const nextGraph = structuredClone(graph);
+          const a = nextGraph.canvasAnalyses?.find((item: any) => item.id === analysisId);
+          if (a) {
+            if (a.recipe?.analysis) a.recipe.analysis.analysis_type = analysisType;
+            a.analysis_type_overridden = true;
+            if (nextGraph.metadata) nextGraph.metadata.updated_at = new Date().toISOString();
+            setGraph(nextGraph);
+            saveHistoryState('Update analysis type');
+          }
+        }}
+        defaultOpen={!analysis.analysis_type_overridden}
+      />
 
-      {/* ── Section 4: Display Settings ── */}
-      {displaySettings.length > 0 && (() => {
-        const overrideCount = displaySettings.filter((s: any) => s.overridable && analysis.display?.[s.key] != null).length;
-        return (
-          <CollapsibleSection
-            title={`Display Settings${overrideCount > 0 ? ` (${overrideCount} override${overrideCount > 1 ? 's' : ''})` : ''}`}
-            defaultOpen={false}
-          >
-            <div className="property-group">
-              {overrideCount > 0 && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    const nextGraph = structuredClone(graph);
-                    const a = nextGraph.canvasAnalyses?.find((a: any) => a.id === analysisId);
-                    if (!a?.display) return;
-                    for (const s of displaySettings) {
-                      if ((s as any).overridable) delete a.display[(s as any).key];
-                    }
-                    if (nextGraph.metadata) nextGraph.metadata.updated_at = new Date().toISOString();
-                    setGraph(nextGraph);
-                    saveHistoryState('Clear display overrides');
-                  }}
-                  style={{ fontSize: 10, color: '#6b7280', background: 'none', border: 'none', cursor: 'pointer', padding: 0, marginBottom: 4, textDecoration: 'underline' }}
-                >
-                  <ZapOff size={10} style={{ marginRight: 3, verticalAlign: 'middle' }} />
-                  Clear {overrideCount} override{overrideCount > 1 ? 's' : ''}
-                </button>
-              )}
-              {displaySettings.map((setting: any) => {
-                const rawValue = analysis.display?.[setting.key];
-                const currentValue = rawValue ?? setting.defaultValue;
-                const isOverridden = setting.overridable && rawValue != null;
-
-                const renderControl = () => {
-                  if (setting.type === 'checkbox') {
-                    return (
-                      <label className="property-label" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                        <input
-                          type="checkbox"
-                          checked={!!currentValue}
-                          onChange={(e) => updateDisplaySetting(setting.key, e.target.checked)}
-                        />
-                        {setting.label}
-                      </label>
-                    );
-                  }
-                  if (setting.type === 'radio' && setting.options) {
-                    return (
-                      <div style={{ display: 'flex', gap: 3, flexWrap: 'wrap' }}>
-                        {setting.options.map((opt: any) => (
-                          <button
-                            key={opt.value}
-                            type="button"
-                            onClick={() => updateDisplaySetting(setting.key, opt.value)}
-                            style={{
-                              border: '1px solid',
-                              borderColor: currentValue === opt.value ? '#3b82f6' : '#e5e7eb',
-                              background: currentValue === opt.value ? '#eff6ff' : '#fff',
-                              color: currentValue === opt.value ? '#1d4ed8' : '#374151',
-                              borderRadius: 3, padding: '2px 8px', fontSize: 10, cursor: 'pointer',
-                            }}
-                          >
-                            {opt.label}
-                          </button>
-                        ))}
-                      </div>
-                    );
-                  }
-                  if (setting.type === 'number-range') {
-                    return (
-                      <input
-                        className="property-input"
-                        type="number"
-                        value={currentValue ?? ''}
-                        placeholder="Auto"
-                        style={{ fontSize: 11, width: 80 }}
-                        onChange={(e) => updateDisplaySetting(setting.key, e.target.value === '' ? null : Number(e.target.value))}
-                        onBlur={() => saveHistoryState('Update display setting')}
-                      />
-                    );
-                  }
-                  if (setting.type === 'text') {
-                    return (
-                      <input
-                        className="property-input"
-                        type="text"
-                        value={currentValue ?? ''}
-                        placeholder="Auto"
-                        style={{ fontSize: 11 }}
-                        onChange={(e) => updateDisplaySetting(setting.key, e.target.value || null)}
-                        onBlur={() => saveHistoryState('Update display setting')}
-                      />
-                    );
-                  }
-                  return null;
-                };
-
-                const control = renderControl();
-                if (!control) return null;
-
-                if (setting.overridable) {
-                  return (
-                    <AutomatableField
-                      key={setting.key}
-                      label={setting.label}
-                      value={currentValue}
-                      overridden={isOverridden}
-                      onClearOverride={() => updateDisplaySetting(setting.key, null)}
-                    >
-                      {control}
-                    </AutomatableField>
-                  );
-                }
-
-                return (
-                  <div key={setting.key} className="property-row">
-                    {setting.type !== 'checkbox' && <label className="property-label">{setting.label}</label>}
-                    {control}
-                  </div>
-                );
-              })}
-            </div>
-          </CollapsibleSection>
-        );
-      })()}
+      {/* ── Section 4: Chart Settings ── */}
+      <ChartSettingsSection
+        title={analysis.title || ''}
+        onTitleChange={(title) => {
+          const nextGraph = structuredClone(graph);
+          const a = nextGraph.canvasAnalyses?.find((a: any) => a.id === analysisId);
+          if (a) a.title = title;
+          setGraph(nextGraph);
+        }}
+        viewMode={analysis.view_mode}
+        onViewModeChange={(mode) => updateAnalysis({ view_mode: mode })}
+        chartKind={analysis.chart_kind}
+        onChartKindChange={(kind) => { updateAnalysis({ chart_kind: kind }); saveHistoryState(kind ? 'Pin chart kind' : 'Reset chart kind to auto'); }}
+        chartKindOptions={chartKindOptions}
+        display={analysis.display}
+        onDisplayChange={updateDisplaySetting}
+        onClearAllOverrides={() => {
+          const nextGraph = structuredClone(graph);
+          const a = nextGraph.canvasAnalyses?.find((a: any) => a.id === analysisId);
+          if (!a?.display) return;
+          const displaySettingsList = getDisplaySettingsForSurface(analysis.chart_kind, analysis.view_mode, 'propsPanel');
+          for (const s of displaySettingsList) {
+            if ((s as any).overridable) delete a.display[(s as any).key];
+          }
+          if (nextGraph.metadata) nextGraph.metadata.updated_at = new Date().toISOString();
+          setGraph(nextGraph);
+          saveHistoryState('Clear display overrides');
+        }}
+      />
 
       {/* ── Actions ── */}
       <CollapsibleSection title="Actions" defaultOpen={true}>
@@ -792,6 +426,24 @@ function CanvasAnalysisPropertiesSection({ analysisId, graph, setGraph, saveHist
           <button
             className="property-action-button"
             style={{ padding: '6px 12px', fontSize: 12, cursor: 'pointer', border: '1px solid #d1d5db', borderRadius: 4, background: 'transparent' }}
+            onClick={() => {
+              window.dispatchEvent(new CustomEvent('dagnet:canvasAnalysisRefresh', { detail: { analysisId } }));
+            }}
+          >
+            Refresh
+          </button>
+          <button
+            className="property-action-button"
+            style={{ padding: '6px 12px', fontSize: 12, cursor: 'pointer', border: '1px solid #d1d5db', borderRadius: 4, background: 'transparent' }}
+            onClick={() => {
+              window.dispatchEvent(new CustomEvent('dagnet:canvasAnalysisOpenAsTab', { detail: { analysisId } }));
+            }}
+          >
+            Open as Tab
+          </button>
+          <button
+            className="property-action-button"
+            style={{ padding: '6px 12px', fontSize: 12, cursor: 'pointer', border: '1px solid #d1d5db', borderRadius: 4, background: 'transparent', color: '#dc2626' }}
             onClick={() => {
               const nextGraph = structuredClone(graph);
               if (nextGraph.canvasAnalyses) {
@@ -2549,13 +2201,14 @@ export default function PropertiesPanel({
                   </div>
                 </CollapsibleSection>
 
-                {/* Case Configuration - Checkbox-enabled collapsible */}
+                {/* Case Configuration - Toggle-enabled collapsible */}
                 <CollapsibleSection 
                   title="Case Configuration" 
                   defaultOpen={false}
                   icon={Layers}
                   withCheckbox={true}
                   checkboxChecked={nodeType === 'case'}
+                  toggleLabels={{ off: 'Off', on: 'On' }}
                   onCheckboxChange={(checked) => {
                     if (checked) {
                       setNodeType('case');

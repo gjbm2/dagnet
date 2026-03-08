@@ -3,6 +3,7 @@ idea# TODO
 - complete project-canvas work (canvas charts clean-up)
 - Snap-to behaviour when moving / resizing graph objects (nodes, post it notes, canvas charts)
 - scoped queries: /docs/current/scoped-queries.md -- continue thinking
+- auto, unattended pull (with a standard consolidated class for implementing toast-type automated actions)
 
 - We should remove the parity testing piece and complete cutover of BE stats service soon
 

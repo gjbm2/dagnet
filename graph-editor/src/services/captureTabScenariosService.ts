@@ -5,8 +5,8 @@
  * `scenarios` array (with `effective_dsl`, `is_live`, `name`, `colour`, `visibility_mode`).
  *
  * Used by:
- *  - PropertiesPanel Source toggle ("Following tab" -> "Chart-owned")
- *  - CanvasAnalysisContextMenu "Capture scenarios from tab"
+ *  - PropertiesPanel Data Source toggle (Live -> Custom)
+ *  - CanvasAnalysisContextMenu "Switch to Custom scenarios"
  *
  * The resulting array is suitable for persisting in `CanvasAnalysis.recipe.scenarios`.
  */
@@ -50,7 +50,10 @@ interface CaptureResult {
 export function captureTabScenariosToRecipe(args: CaptureTabScenariosArgs): CaptureResult {
   const { tabId, currentDSL, operations, scenariosContext, whatIfDSL } = args;
   const scenarioState = operations.getScenarioState(tabId);
-  const visibleIds: string[] = scenarioState?.visibleScenarioIds || ['current'];
+  const rawVisibleIds: string[] = scenarioState?.visibleScenarioIds || ['current'];
+  const visibleIds = rawVisibleIds.includes('current')
+    ? ['current', ...rawVisibleIds.filter(id => id !== 'current')]
+    : rawVisibleIds;
 
   const scenarios: ChartRecipeScenario[] = visibleIds.map((sid) => {
     const visibilityMode = operations.getScenarioVisibilityMode(tabId, sid);

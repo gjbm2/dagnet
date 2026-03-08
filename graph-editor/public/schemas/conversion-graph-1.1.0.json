@@ -158,7 +158,8 @@
         "chart_kind": { "type": "string" },
         "live": { "type": "boolean" },
         "title": { "type": "string" },
-        "chart_current_layer_dsl": { "type": "string", "description": "DSL fragment composed onto all scenarios via augmentDSLWithConstraint (both live and copied mode)" },
+        "chart_current_layer_dsl": { "type": "string", "description": "Current layer DSL composed onto all scenarios via augmentDSLWithConstraint (both Live and Custom mode)" },
+        "analysis_type_overridden": { "type": "boolean", "description": "True when user explicitly selected an analysis type (vs auto-assigned at creation)" },
         "recipe": { "$ref": "#/$defs/ChartRecipeCore" },
         "display": { "$ref": "#/$defs/CanvasAnalysisDisplay" }
       }

@@ -41,6 +41,7 @@ function extractSubjectIds(result: AnalysisResult): string[] {
 
 export function AnalysisChartContainer(props: {
   result: AnalysisResult;
+  chartKindOverride?: string;
   visibleScenarioIds: string[];
   scenarioVisibilityModes?: Record<string, 'f+e' | 'f' | 'e'>;
   scenarioDslSubtitleById?: Record<string, string>;
@@ -58,7 +59,7 @@ export function AnalysisChartContainer(props: {
   hideChrome?: boolean;
   hideScenarioLegend?: boolean;
 }): JSX.Element | null {
-  const { result, visibleScenarioIds, scenarioVisibilityModes, scenarioDslSubtitleById, height = 420, fillHeight = false, compactControls = false, display, onDisplayChange, source, hideChrome = false } = props;
+  const { result, chartKindOverride, visibleScenarioIds, scenarioVisibilityModes, scenarioDslSubtitleById, height = 420, fillHeight = false, compactControls = false, display, onDisplayChange, source, hideChrome = false } = props;
   const showChrome = !hideChrome && !compactControls;
   const hideScenarioLegend = props.hideScenarioLegend ?? compactControls;
 
@@ -83,7 +84,8 @@ export function AnalysisChartContainer(props: {
   }, [result, inferredChartKind]);
 
   const [selectedKind, setSelectedKind] = useState<ChartKind | null>(null);
-  const kind = selectedKind ?? availableChartKinds[0] ?? null;
+  const normalisedOverride = normaliseChartKind(chartKindOverride);
+  const kind = normalisedOverride ?? selectedKind ?? availableChartKinds[0] ?? null;
 
   const resolvedSettings = useMemo(() => {
     if (!kind) return {};

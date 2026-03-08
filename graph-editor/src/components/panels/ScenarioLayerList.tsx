@@ -41,6 +41,8 @@ export interface ScenarioLayerListProps {
   onRowContextMenu?: (e: React.MouseEvent, id: string) => void;
   isSelected?: (id: string) => boolean;
   getEditTooltip?: (id: string) => string;
+  /** When true, rename is allowed on current/base rows (not just user rows). Used by chart props where all rows are peers in Custom mode. */
+  allowRenameAll?: boolean;
 
   /** Render prop for extra content inside the Current row (e.g. What-If panel) */
   currentSlot?: React.ReactNode;
@@ -72,6 +74,7 @@ export function ScenarioLayerList({
   onRowContextMenu,
   isSelected,
   getEditTooltip,
+  allowRenameAll = false,
   currentSlot,
   afterCurrentSlot,
   currentSlotAfterActions,
@@ -201,9 +204,9 @@ export function ScenarioLayerList({
       />
     ) : (
       <div
-        className={`scenario-name ${onRename && isUser ? 'scenario-name-editable' : ''}`}
+        className={`scenario-name ${onRename && (isUser || allowRenameAll) ? 'scenario-name-editable' : ''}`}
         title={item.tooltip}
-        onClick={onRename && isUser ? () => handleStartEdit(item) : undefined}
+        onClick={onRename && (isUser || allowRenameAll) ? () => handleStartEdit(item) : undefined}
       >
         {item.name}
         {item.isLive && (

@@ -63,6 +63,9 @@ import { PostItContextMenu } from './PostItContextMenu';
 import { ContainerContextMenu } from './ContainerContextMenu';
 import { CanvasAnalysisContextMenu } from './CanvasAnalysisContextMenu';
 import { captureTabScenariosToRecipe } from '../services/captureTabScenariosService';
+import { constructQueryDSL } from '../lib/dslConstruction';
+import { resolveAnalysisType } from '../services/analysisTypeResolutionService';
+import { ScenarioQueryEditModal } from './modals/ScenarioQueryEditModal';
 import { EdgeContextMenu } from './EdgeContextMenu';
 import { extractSubgraph } from '../lib/subgraphExtractor';
 import { useDashboardMode } from '../hooks/useDashboardMode';
@@ -489,6 +492,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
   const [postitContextMenu, setPostitContextMenu] = useState<{ x: number; y: number; postitId: string } | null>(null);
   const [containerContextMenu, setContainerContextMenu] = useState<{ x: number; y: number; containerId: string } | null>(null);
   const [analysisContextMenu, setAnalysisContextMenu] = useState<{ x: number; y: number; analysisId: string } | null>(null);
+  const [ctxDslEditState, setCtxDslEditState] = useState<{ analysisId: string; scenarioId: string } | null>(null);
   const [edgeContextMenu, setEdgeContextMenu] = useState<{ x: number; y: number; edgeId: string } | null>(null);
   const [contextMenuLocalData, setContextMenuLocalData] = useState<{
     probability: number;
@@ -3764,6 +3768,17 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
         setIsShiftHeld(true);
       }
       
+      // Escape: revert to pointer mode when a non-pointer tool is active
+      if (e.key === 'Escape') {
+        const target = e.target as HTMLElement;
+        const inInput = target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable || target.closest('.monaco-editor');
+        if (!inInput && activeElementTool && activeElementTool !== 'select') {
+          e.preventDefault();
+          onClearElementTool?.();
+          return;
+        }
+      }
+
       // Handle Delete key for selected elements
       if (e.key === 'Delete' || e.key === 'Backspace') {
         console.log(`[GraphCanvas ${tabId}] Delete key detected`);
@@ -3905,7 +3920,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
       window.removeEventListener('mousemove', handleMouseMove, true);
       window.removeEventListener('mouseup', handleMouseUp, true);
     };
-  }, [isShiftHeld, isLassoSelecting, lassoStart, lassoEnd, nodes, setNodes, edges, deleteSelected, tabId]);
+  }, [isShiftHeld, isLassoSelecting, lassoStart, lassoEnd, nodes, setNodes, edges, deleteSelected, tabId, activeElementTool, onClearElementTool]);
 
 
   // Track selected nodes for probability calculation
@@ -5066,7 +5081,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
     }
   }, [addContainer, onAddContainerRef]);
 
-  const addCanvasAnalysisAtPosition = useCallback((x: number, y: number, dragData: any) => {
+  const addCanvasAnalysisAtPosition = useCallback(async (x: number, y: number, dragData: any) => {
     if (!graph) return;
     const newId = crypto.randomUUID();
     const nextGraph = structuredClone(graph);
@@ -5074,6 +5089,19 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
 
     const drawnW = dragData.drawWidth && dragData.drawWidth >= 100 ? Math.round(dragData.drawWidth) : 400;
     const drawnH = dragData.drawHeight && dragData.drawHeight >= 80 ? Math.round(dragData.drawHeight) : 300;
+
+    const hasExplicitType = dragData.recipe?.analysis?.analysis_type && dragData.recipe.analysis.analysis_type !== 'unknown';
+    let analysisType = dragData.recipe?.analysis?.analysis_type;
+
+    if (!hasExplicitType) {
+      const dsl = dragData.recipe?.analysis?.analytics_dsl || '';
+      const { primaryAnalysisType } = await resolveAnalysisType(graph, dsl || undefined);
+      analysisType = primaryAnalysisType || 'graph_overview';
+    }
+
+    const recipe = dragData.recipe
+      ? { ...dragData.recipe, analysis: { ...dragData.recipe.analysis, analysis_type: analysisType } }
+      : { analysis: { analysis_type: analysisType } };
 
     const analysis: any = {
       id: newId,
@@ -5084,7 +5112,8 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
       view_mode: dragData.viewMode || 'chart',
       chart_kind: dragData.chartKind,
       live: true,
-      recipe: dragData.recipe || { analysis: { analysis_type: 'unknown' } },
+      analysis_type_overridden: hasExplicitType || undefined,
+      recipe,
     };
 
     nextGraph.canvasAnalyses.push(analysis);
@@ -5094,13 +5123,13 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
       canvasAnalysisTransientCache.set(newId, dragData.analysisResult);
     }
 
-    setGraph(nextGraph);
+    setGraphDirect(nextGraph as any);
     saveHistoryState('Pin analysis to canvas');
     setContextMenu(null);
     onSelectedNodeChange(null);
     onSelectedEdgeChange(null);
     onSelectedAnnotationChange?.(newId, 'canvasAnalysis');
-  }, [graph, setGraph, saveHistoryState, onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnnotationChange]);
+  }, [graph, setGraphDirect, saveHistoryState, onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnnotationChange]);
 
   // Listen for 'dagnet:pinAnalysisToCanvas' event — enters draw mode with a pre-filled recipe
   useEffect(() => {
@@ -5119,12 +5148,9 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
         .filter(n => n.selected && !isCanvasObjectNode(n.id))
         .map(n => n.data?.id || n.id);
 
-      let analyticsDsl = '';
-      if (selectedConversionNodes.length === 2) {
-        analyticsDsl = `from(${selectedConversionNodes[0]}).to(${selectedConversionNodes[1]})`;
-      } else if (selectedConversionNodes.length === 1) {
-        analyticsDsl = `from(${selectedConversionNodes[0]})`;
-      }
+      const analyticsDsl = selectedConversionNodes.length > 0
+        ? constructQueryDSL(selectedConversionNodes, nodes as any[], (graph?.edges || []) as any[])
+        : '';
 
       pendingAnalysisPayload = analyticsDsl
         ? { recipe: { analysis: { analytics_dsl: analyticsDsl } } }
@@ -5133,7 +5159,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
     };
     window.addEventListener('dagnet:addAnalysis', handler as any);
     return () => window.removeEventListener('dagnet:addAnalysis', handler as any);
-  }, [setActiveElementTool, nodes, isCanvasObjectNode]);
+  }, [setActiveElementTool, nodes, isCanvasObjectNode, graph]);
 
   // Drag-to-draw state for creation modes (new-postit, new-container)
   const drawStartRef = useRef<{ screenX: number; screenY: number; flowX: number; flowY: number; tool: string } | null>(null);
@@ -6314,6 +6340,14 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
                 whatIfDSL,
               });
             } : undefined}
+            onUseAsCurrent={(dsl) => {
+              store.setCurrentDSL(dsl);
+              setAnalysisContextMenu(null);
+            }}
+            onEditScenarioDsl={(scenarioId) => {
+              setCtxDslEditState({ analysisId: analysisContextMenu.analysisId, scenarioId });
+              setAnalysisContextMenu(null);
+            }}
             onBringToFront={(id) => {
               const nextGraph = structuredClone(graph);
               if (nextGraph.canvasAnalyses) {
@@ -6391,6 +6425,33 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
               handleDeleteAnalysis(id);
             }}
             onClose={() => setAnalysisContextMenu(null)}
+          />
+        );
+      })()}
+
+      {/* Scenario DSL Edit Modal (opened from canvas analysis context menu) */}
+      {ctxDslEditState && (() => {
+        const a = graph?.canvasAnalyses?.find((ai: any) => ai.id === ctxDslEditState.analysisId);
+        const s = a?.recipe?.scenarios?.find((sc: any) => sc.scenario_id === ctxDslEditState.scenarioId);
+        if (!a || !s) return null;
+        return (
+          <ScenarioQueryEditModal
+            isOpen={true}
+            scenarioName={s.name || s.scenario_id || ''}
+            currentDSL={s.effective_dsl || ''}
+            inheritedDSL={store.currentDSL || ''}
+            onSave={(newDSL) => {
+              if (!graph) return;
+              const nextGraph = structuredClone(graph);
+              const target = nextGraph?.canvasAnalyses?.find((ai: any) => ai.id === ctxDslEditState.analysisId);
+              const scenario = target?.recipe?.scenarios?.find((sc: any) => sc.scenario_id === ctxDslEditState.scenarioId);
+              if (scenario) scenario.effective_dsl = newDSL;
+              if (nextGraph?.metadata) nextGraph.metadata.updated_at = new Date().toISOString();
+              setGraphDirect(nextGraph as any);
+              saveHistoryState('Edit chart scenario DSL');
+              setCtxDslEditState(null);
+            }}
+            onClose={() => setCtxDslEditState(null)}
           />
         );
       })()}

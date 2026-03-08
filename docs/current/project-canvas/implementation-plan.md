@@ -63,82 +63,72 @@ Legend: [x] = code written AND tested/verified. [~] = code written, NOT yet test
 - [~] `ScenariosPanel.tsx` refactored to drive `ScenarioLayerList` for `current/user/base` rows; panel-specific chrome (What-If, create/flatten/to-base controls) injected via shared-list slots; needs browser regression verification
 - [~] Integration of `ScenarioLayerList` into properties panel Section 2 -- code written, needs browser verification
 
-### 3f-c -- Properties panel restructure + scenario compositor
+### 3f-c -- Properties panel rewrite (8-Mar-26)
 
-**Section 1 (Analysis Identity)**:
-- [x] Title field (editable)
-- [x] `QueryExpressionEditor` for `analytics_dsl`
-- [x] Analysis type card selector (reuses `analytics-type-card` CSS)
-- [~] `suggestionsScope: 'graph'` on `QueryExpressionEditor` -- code written, needs browser verification
+**Terminology**: Live (chart follows tab scenarios) / Custom (chart owns scenarios). All competing terms retired.
 
-**Section 2 (Scenario Source + Per-Field Overrides)**:
+**Section flow** (matches analysis panel information flow):
+1. Selection & Query -- analytics DSL (collapsed by default)
+2. Data Source -- Live/Custom toggle (labelled toggle in header, collapsed when Live, auto-expands on Custom), scenario list via `ScenarioLayerList`, current layer DSL edited via edit button on Current row
+3. Analysis Type -- `AnalysisTypeSection` shared component (identical to AnalyticsPanel), collapsed when `analysis_type_overridden`
+4. Chart Settings -- `ChartSettingsSection` shared component (title, view mode, chart kind with AutomatableField, registry display settings)
+5. Actions -- Refresh, Open as Tab, Delete
 
-Design change (6-Mar-26): "live/frozen" replaced by per-field override model. Scenario source is a binary toggle ("Following tab" / "Chart-owned"); all other fields use per-field `_overridden` + `AutomatableField`. Override count badge + "clear overrides" path matches existing node/edge pattern.
+**Shared components extracted**:
+- [x] `AnalysisTypeSection.tsx` -- CollapsibleSection + BarChart3 icon + Show all toggle + AnalysisTypeCardList + requirements hint. Used by AnalyticsPanel and PropertiesPanel identically.
+- [x] `ChartSettingsSection.tsx` -- title, view mode, chart kind (Auto/pinned with AutomatableField), registry display settings with override count + clear. Shared across props panel, analytics panel (future), chart tab modal (future).
+- [x] `useCanvasAnalysisScenarioCallbacks.ts` -- extracted hook with auto-promote-on-edit (any mutation in Live mode silently captures from tab, flips to Custom, then applies the edit)
+- [x] `captureTabScenariosService.ts` -- shared capture helper with `effective_dsl`, `is_live`, `what_if_dsl`. Ensures "current" is first in captured array.
 
-- [x] Scenario source toggle (currently named `live` -- rename to clarify)
-- [x] Chart DSL fragment field (`QueryExpressionEditor` for `chart_current_layer_dsl`)
-- [x] Crude inline scenario name list (chart-owned mode) -- replaced by ScenarioLayerList
-- [~] Rename `live: boolean` to scenario source semantics in UI ("Following tab" / "Chart-owned" toggle) -- code written, needs browser verification
-- [~] Node badge: LIVE (green) when following tab + no fragment; CUSTOM (amber) otherwise -- code written, needs browser verification
-- [~] Replace crude list with `ScenarioLayerList` component -- code written, needs browser verification
-- [ ] `AutomatableField` wrapper on DSL fragment field
-- [x] Override count indicator on display settings section header
-- [x] "Clear overrides" action on display settings section
-- [~] "Capture from tab" -- code written (toggle to Chart-owned copies scenarios), needs verification
-- [~] "Return to tab" -- code written (toggle to Following tab clears scenarios), needs verification
-- [~] Editable scenario DSLs via `ScenarioQueryEditModal` -- code written, needs verification
-- [~] Scenario reorder (DnD) -- code written via ScenarioLayerList callbacks, needs verification
-- [~] Scenario delete -- code written via ScenarioLayerList callbacks, needs verification
-- [~] Scenario colour editing -- code written via ScenarioLayerList callbacks, needs verification
+**Data source toggle**:
+- [x] `CollapsibleSection` upgraded with `toggleLabels` prop -- labelled toggle switch ("Live" / "Custom") instead of bare checkbox
+- [x] Same labelled toggle used on Case Configuration ("Off" / "On")
+- [x] Live (default): section collapsed. Custom: auto-expands. Any scenario edit in Live mode auto-promotes to Custom.
 
-**Section 3 (Chart Kind)**:
-- [x] View mode toggle (chart / cards)
-- [x] Chart kind selector driven by `result.semantics.chart`
-- [ ] Chart kind uses null-vs-present as override indicator (no `_overridden` flag needed)
+**Scenario list behaviour**:
+- [x] Live mode: `current`/`base` pinned (kind: 'current'/'base'), user scenarios in tab order. Edit on Current row opens DSL modal for `chart_current_layer_dsl` without promoting. Edit on other rows auto-promotes to Custom.
+- [x] Custom mode: ALL rows are `kind: 'user'` -- no pinned rows. All fully editable (rename, reorder, delete, edit DSL, colour, visibility, mode). "Current" and "Base" are just scenario IDs with no special position.
+- [x] `allowRenameAll` prop on `ScenarioLayerList` -- enables rename on current/base rows (used by chart props, not by ScenariosPanel)
 
-**Section 4 (Display Settings)**:
-- [x] Renders all settings from registry
-- [x] All settings wired to builders
-- [~] `AutomatableField` wrapper for settings with `overridable: true` -- code written, needs verification
-- [~] Override count in section title + "Clear N overrides" button -- code written, needs verification
+**Chart kind passthrough (was broken)**:
+- [x] `CanvasAnalysisNode.tsx` passes `chartKindOverride={analysis.chart_kind}` to `AnalysisChartContainer`
+- [x] `AnalysisChartContainer.tsx` uses `chartKindOverride` as primary override: `chartKindOverride ?? selectedKind ?? availableChartKinds[0]`
 
-**Actions**:
-- [x] Refresh button
-- [x] Open as Tab button
-- [x] Delete button
+**Legend defaults**:
+- [x] Canvas Live mode: `hideScenarioLegend={true}` (inherits context from graph)
+- [x] Canvas Custom mode: `hideScenarioLegend={false}` (own scenarios, legend needed)
+- [x] Chart tab: legend visible by default (no graph context)
+
+**Schema**:
+- [x] `analysis_type_overridden?: boolean` added to `CanvasAnalysis` in TS, Python, JSON schema
+- [x] `hidden_scenarios?: string[]` added to `CanvasAnalysisDisplay`
+
+**Node badge**: LIVE (green) when `live && !chart_current_layer_dsl`. CUSTOM (amber) otherwise.
 
 **Compute hook (`useCanvasAnalysisCompute.ts`)**:
-- [x] Read `chart_current_layer_dsl` from analysis object
-- [x] Inject fragment via `augmentDSLWithConstraint()` in `getQueryDslForScenario()` (live mode) -- tested: 6 integration tests for fragment composition
-- [x] Inject fragment onto shared DSL in frozen mode
-- [~] **Frozen mode per-scenario `effective_dsl`** -- code written: each frozen scenario uses its own `effective_dsl` (composed with chart fragment). When all scenarios share the same DSL, uses `analyzeMultipleScenarios`. When DSLs differ, calls `analyzeSelection` per scenario and merges results. Needs browser verification with actual frozen multi-scenario chart.
+- [x] `chart_current_layer_dsl` injected via `augmentDSLWithConstraint()` in both Live and Custom mode
+- [x] Custom mode per-scenario `effective_dsl` -- each scenario uses its own DSL. Same-DSL optimisation uses `analyzeMultipleScenarios`; differing DSLs use per-scenario `analyzeSelection` + merge.
+- [x] `hidden_scenarios` respected in Custom mode compute (excluded from analysis)
 
-**Context menu (`CanvasAnalysisContextMenu.tsx`)**:
-- [~] "Capture scenarios from tab" / "Return to tab scenarios" context menu items -- code written, needs verification
-- [ ] "Use as Current" menu item (pushes scenario effective_dsl to graphStore.setCurrentDSL)
-- [ ] Wire `ScenarioQueryEditModal` for scenario DSL editing in context menu
+**Context menu** (terminology updated, structural changes deferred to Phase 4):
+- [~] "Switch to Custom scenarios" / "Return to Live scenarios" -- code written, needs verification
+- [~] "Use as Current" -- pushes scenario `effective_dsl` to `graphStore.setCurrentDSL`; needs verification
+- [~] "Edit scenario DSL" submenu -- opens `ScenarioQueryEditModal` per scenario; needs verification
 
 **Element palette + analytics panel**:
-- [~] "Add Analysis" from element palette pre-populates `analytics_dsl` from current selection -- code written, needs verification
-- [~] Drag affordance on analysis type cards in `AnalyticsPanel.tsx` -- code written: available type cards are draggable with canvas-analysis payload including analysis_type + current queryDSL. Needs browser verification.
+- [~] "Add Analysis" from element palette pre-populates `analytics_dsl` from current selection -- needs verification
+- [~] Drag affordance on analysis type cards -- needs verification
+- [ ] `ChartSettingsSection` in AnalyticsPanel (below type, above chart) -- deferred, needs transient settings state design
 
-**Tests (3f-c)**:
-- [x] Chart fragment composition (live mode): `augmentDSLWithConstraint` applied before compute
-- [x] Chart fragment composition (copied mode): frozen DSL augmented with fragment
-- [x] Chart fragment with window override (replaces existing window)
-- [x] Chart fragment with context addition (adds to existing DSL)
-- [x] Chart fragment empty: preserves all existing clauses
-- [ ] Freeze with chart fragment preserved
-- [ ] Unfreeze: fragment preserved, `recipe.scenarios` cleared
-- [ ] "Capture from tab" adds scenarios to `recipe.scenarios`
-- [ ] Copied-mode scenario edit via modal → chart recomputes
-- [ ] Copied-mode scenario delete → chart recomputes
-- [ ] Copied-mode scenario reorder → legend order updates
-
-**Playwright specs (3f-c)**:
-- [ ] `canvas-analysis-chart-fragment.spec.ts`
-- [ ] `canvas-analysis-copied-scenarios.spec.ts`
-- [ ] `canvas-analysis-live-share.spec.ts`
+**Tests**:
+- [x] 19 ScenarioLayerList tests (rows, affordances, slots, DnD, context menu, selection)
+- [x] 4 AnalysisTypeCardList tests (filtering, primary indicator, drag)
+- [x] 8 captureTabScenariosService tests (effective_dsl, is_live, what_if_dsl, fallback)
+- [x] 7 canvasAnalysisFreezeUnfreeze tests (freeze/unfreeze, scenario CRUD)
+- [x] 10 useCanvasAnalysisCompute DSL tests (fragment composition)
+- [x] 10 pullOperations tests (including 3-way merge for pullFile)
+- [x] 15 Python schema parity tests
+- [ ] Playwright specs not started: `canvas-analysis-chart-fragment.spec.ts`, `canvas-analysis-copied-scenarios.spec.ts`, `canvas-analysis-live-share.spec.ts`
 
 ### Phase 4 -- Context menu tidy-up
 
@@ -160,7 +150,21 @@ When a canvas analysis (or other canvas object with data subjects) is selected, 
 - [ ] Consider colour-coding: from-nodes, to-nodes, visited-nodes in distinct hues
 - [ ] Performance: only compute when selection changes, not on every render
 
-### Phase 6 -- Snap-to alignment guides
+### Phase 6 -- Multi-tab canvas analysis objects
+
+Allow a single canvas analysis object to contain multiple charts as tabs. Each tab is an independent analysis with its own recipe/settings, but they share a canvas position and size.
+
+- [ ] Data model: `CanvasAnalysis.tabs?: CanvasAnalysisTab[]` -- each tab has its own `recipe`, `chart_kind`, `display`, `title`. The existing single-analysis fields become the first (default) tab for backward compatibility.
+- [ ] Tab bar rendering inside `CanvasAnalysisNode`: horizontal tab strip at top of chart area, each tab labelled by title or analysis type
+- [ ] Tab selection: clicking a tab switches which chart renders in the node body
+- [ ] Drop-to-add: dragging a chart (from analytics panel or another canvas object) onto an existing canvas analysis adds it as a new tab
+- [ ] Drag-out: dragging a tab out of the tab bar creates a new standalone canvas analysis object at the drop position
+- [ ] Tab reorder: drag-and-drop within the tab bar to reorder
+- [ ] Tab close: remove tab (with confirmation if only one remains -- converts back to single-analysis object)
+- [ ] Properties panel: show tabs, selected tab's settings. Tab management (add/remove/reorder) in the panel.
+- [ ] Implementation question: use `rc-tabs` or similar library for the tab bar, or implement with plain HTML/CSS drag. Considerations: rc-tabs provides accessible keyboard nav + ARIA but adds a dependency and may fight ReactFlow's drag system. Plain implementation is lighter but needs manual accessibility. Decision deferred to implementation time -- prototype both and pick the pragmatic winner.
+
+### Phase 7 -- Snap-to alignment guides
 
 - [ ] `useSnapToGuides` hook (change processor, guide line state, threshold)
 - [ ] `SnapGuideLines.tsx` SVG overlay
@@ -173,6 +177,8 @@ When a canvas analysis (or other canvas object with data subjects) is selected, 
 - [x] Remove diagnostic logging from `GraphCanvas.tsx`, `useCanvasAnalysisCompute.ts`
 - [ ] Canvas analysis title field not responding to input (suspected: selection change on click causes component remount, losing focus. Needs browser diagnosis.)
 - [ ] View mode toggle (chart ↔ cards) in props panel doesn't update rendering for all analysis types
+- [~] **CRITICAL: `pullFile` replaces graph instead of merging** -- `repositoryOperationsService.pullFile` (single-file pull from context/tab menu) was doing `file.data = parsedData`, wholly replacing the in-memory graph. Fixed to use `merge3Way` (same as workspace-level `pullLatest`): base = `file.originalData`, local = `file.data`, remote = fetched content. On conflict, preserves local and returns error. Test added: local `canvasAnalyses` survive pull when remote adds nodes. Needs browser verification.
+- [ ] **`pullFile` should pull dependent files** -- when pulling a graph file, it should also pull the graph's dependent data files (parameter YAML, case YAML). Currently only the single file is fetched. No "trace dependents" helper exists yet. Building blocks: `enumerateFetchTargets(graph)` gives `objectId` per edge param (convention: `parameter-{objectId}` file ID); case files follow `case-{caseId}`. Needed: a `resolveGraphDependentFileIds(graph): string[]` helper, then `pullFile` (or `pullFileWithDependents`) iterates and pulls each. Design considerations: (a) which file types to include (parameters, cases -- yes; connections -- probably yes); (b) parallel vs sequential (parallel with concurrency cap); (c) progress indication; (d) whether non-graph files should also pull their parent graph. **Index file hazard**: index files (`nodes-index`, `parameters-index`) are collaboratively maintained on GitHub and are structured YAML lists where line-level 3-way merge is fragile (reordering, whitespace, entry format all produce spurious conflicts). Cascade pull should **exclude index files entirely** -- not pull them, not rebuild them. Reasoning: (1) cascade pull is about data freshness for compute, and compute reads parameter files directly by ID from edge references, not via index lookup; (2) pulling + merging index YAML risks silently incorrect index state that persists until manual rebuild; (3) not pulling index creates only a temporary UI discovery gap (navigator stale until next `pullLatest`), which is benign. Index files are pulled by `pullLatest` (workspace-level) and rebuilt explicitly by user action or commit-time hook.
 
 ---
 

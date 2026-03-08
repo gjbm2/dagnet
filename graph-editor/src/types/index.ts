@@ -908,6 +908,7 @@ export interface CanvasAnalysis {
   live: boolean;
   title?: string;
   chart_current_layer_dsl?: string;
+  analysis_type_overridden?: boolean;
   recipe: ChartRecipeCore;
   display?: CanvasAnalysisDisplay;
 }

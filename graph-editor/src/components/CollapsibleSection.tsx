@@ -8,12 +8,13 @@ interface CollapsibleSectionProps {
   children: React.ReactNode;
   isOpen?: boolean;
   onToggle?: () => void;
-  icon?: React.ElementType; // Changed from string to Lucide icon component
+  icon?: React.ElementType;
   badge?: string;
-  // Checkbox-enabled variant
   withCheckbox?: boolean;
   checkboxChecked?: boolean;
   onCheckboxChange?: (checked: boolean) => void;
+  /** Labelled toggle variant: shows a toggle switch with labels instead of a bare checkbox */
+  toggleLabels?: { off: string; on: string };
 }
 
 export default function CollapsibleSection({ 
@@ -26,7 +27,8 @@ export default function CollapsibleSection({
   badge,
   withCheckbox = false,
   checkboxChecked = false,
-  onCheckboxChange
+  onCheckboxChange,
+  toggleLabels,
 }: CollapsibleSectionProps) {
   const [internalIsOpen, setInternalIsOpen] = useState(defaultOpen);
   const contentRef = useRef<HTMLDivElement>(null);
@@ -137,8 +139,20 @@ export default function CollapsibleSection({
           )}
         </div>
         
-        {/* Checkbox in top right corner when enabled */}
-        {withCheckbox && (
+        {withCheckbox && toggleLabels && (
+          <div
+            className="collapsible-section-toggle"
+            onClick={handleCheckboxClick}
+            title={checkboxChecked ? toggleLabels.on : toggleLabels.off}
+          >
+            <span style={{ fontSize: 10, color: !checkboxChecked ? '#374151' : '#9ca3af', fontWeight: !checkboxChecked ? 600 : 400 }}>{toggleLabels.off}</span>
+            <div className={`collapsible-section-toggle-track ${checkboxChecked ? 'on' : ''}`}>
+              <div className="collapsible-section-toggle-thumb" />
+            </div>
+            <span style={{ fontSize: 10, color: checkboxChecked ? '#374151' : '#9ca3af', fontWeight: checkboxChecked ? 600 : 400 }}>{toggleLabels.on}</span>
+          </div>
+        )}
+        {withCheckbox && !toggleLabels && (
           <input
             type="checkbox"
             className="collapsible-section-checkbox"

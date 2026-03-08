@@ -11,6 +11,8 @@ interface CanvasAnalysisContextMenuProps {
   analysisCount: number;
   onUpdate: (id: string, updates: Partial<CanvasAnalysis>) => void;
   onCaptureFromTab?: () => { scenarios: ChartRecipeScenario[]; what_if_dsl?: string } | null;
+  onUseAsCurrent?: (dsl: string) => void;
+  onEditScenarioDsl?: (scenarioId: string) => void;
   onBringToFront: (id: string) => void;
   onBringForward: (id: string) => void;
   onSendBackward: (id: string) => void;
@@ -23,7 +25,7 @@ interface CanvasAnalysisContextMenuProps {
 
 export function CanvasAnalysisContextMenu({
   x, y, analysisId, analysis, analysisCount,
-  onUpdate, onCaptureFromTab, onBringToFront, onBringForward, onSendBackward, onSendToBack,
+  onUpdate, onCaptureFromTab, onUseAsCurrent, onEditScenarioDsl, onBringToFront, onBringForward, onSendBackward, onSendToBack,
   onCopy, onCut, onDelete, onClose,
 }: CanvasAnalysisContextMenuProps) {
   const items = useMemo((): ContextMenuItem[] => {
@@ -39,7 +41,7 @@ export function CanvasAnalysisContextMenu({
       { label: '', onClick: () => {}, divider: true },
       analysis.live
         ? {
-            label: 'Capture scenarios from tab',
+            label: 'Switch to Custom scenarios',
             onClick: () => {
               const captured = onCaptureFromTab?.();
               if (captured) {
@@ -57,7 +59,7 @@ export function CanvasAnalysisContextMenu({
             },
           }
         : {
-            label: 'Return to tab scenarios',
+            label: 'Return to Live scenarios',
             onClick: () => onUpdate(analysisId, {
               live: true,
               recipe: {
@@ -68,6 +70,29 @@ export function CanvasAnalysisContextMenu({
             } as any),
           },
     );
+
+    if (!analysis.live && onEditScenarioDsl) {
+      const scenarios = analysis.recipe?.scenarios || [];
+      if (scenarios.length > 0) {
+        const editItems: ContextMenuItem[] = scenarios.map((s: any) => ({
+          label: s.name || s.scenario_id,
+          onClick: () => onEditScenarioDsl(s.scenario_id),
+        }));
+        result.push({ label: 'Edit scenario DSL', onClick: () => {}, submenu: editItems });
+      }
+    }
+
+    if (!analysis.live && onUseAsCurrent) {
+      const scenarios = analysis.recipe?.scenarios || [];
+      const currentScenario = scenarios.find((s: any) => s.scenario_id === 'current');
+      const dsl = currentScenario?.effective_dsl;
+      if (typeof dsl === 'string' && dsl.trim()) {
+        result.push({
+          label: 'Use as Current query',
+          onClick: () => onUseAsCurrent(dsl.trim()),
+        });
+      }
+    }
 
     if (analysisCount > 1) {
       result.push(
@@ -87,7 +112,7 @@ export function CanvasAnalysisContextMenu({
     );
 
     return result;
-  }, [analysisId, analysis, analysisCount, onUpdate, onCaptureFromTab, onBringToFront, onBringForward, onSendBackward, onSendToBack, onCopy, onCut, onDelete]);
+  }, [analysisId, analysis, analysisCount, onUpdate, onCaptureFromTab, onUseAsCurrent, onEditScenarioDsl, onBringToFront, onBringForward, onSendBackward, onSendToBack, onCopy, onCut, onDelete]);
 
   return <ContextMenu x={x} y={y} items={items} onClose={onClose} />;
 }

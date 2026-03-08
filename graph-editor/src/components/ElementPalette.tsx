@@ -40,11 +40,15 @@ export function ElementPalette({ layout }: ElementPaletteProps) {
   }, [onToolSelect]);
 
   const handleCreationClick = useCallback((elementId: ElementToolType) => {
-    if (onToolSelect) {
-      onToolSelect(currentTool === elementId ? 'select' : elementId);
-    } else {
-      const events: Record<string, string> = { 'new-node': 'dagnet:addNode', 'new-postit': 'dagnet:addPostit', 'new-container': 'dagnet:addContainer', 'new-analysis': 'dagnet:addAnalysis' };
-      if (elementId) window.dispatchEvent(new CustomEvent(events[elementId]));
+    if (currentTool === elementId) {
+      if (onToolSelect) onToolSelect('select');
+      return;
+    }
+    const events: Record<string, string> = { 'new-node': 'dagnet:addNode', 'new-postit': 'dagnet:addPostit', 'new-container': 'dagnet:addContainer', 'new-analysis': 'dagnet:addAnalysis' };
+    if (elementId && events[elementId]) {
+      window.dispatchEvent(new CustomEvent(events[elementId]));
+    } else if (onToolSelect) {
+      onToolSelect(elementId);
     }
   }, [onToolSelect, currentTool]);
 

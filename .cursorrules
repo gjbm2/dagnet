@@ -392,6 +392,26 @@ Before writing any `describe()` or `it()` blocks, the agent must produce a brief
 
 This is non-negotiable. Jumping straight to test code without a design step is a violation, just as coding without an agreed plan violates Section 0.5. The design does not need to be long — a few bullet points suffice — but it must exist and be shown to the user before code is written.
 
+### CRUD Smoke Tests Are MANDATORY for New Features
+
+**CRITICAL**: When building a new feature (e.g. canvas analysis, new panel, new creation flow), the agent MUST write CRUD smoke tests that exercise the **actual creation/read/update/delete paths** as they will be used by the user. These are NOT optional. They are the FIRST tests to write, not an afterthought.
+
+**What a CRUD smoke test looks like**:
+- Create the object via the same codepath the user would (e.g. element palette click -> event dispatch -> handler -> graph mutation)
+- Verify the created object has the correct initial state (DSL populated, analysis type resolved, scenarios present)
+- Select the object and verify the properties panel renders without crashing
+- Update a field and verify the change persists to the graph
+- Delete the object and verify it's removed
+
+**What a CRUD smoke test does NOT look like**:
+- Testing `resolveAnalysisType` in isolation with a mock graph (that's a unit test — useful but insufficient)
+- Testing that a shared component renders without crashing with hardcoded props (that's a component test — useful but insufficient)
+- Testing that a service function returns the right shape (that's a contract test — useful but insufficient)
+
+**The pattern of failure to avoid**: writing isolated unit/component tests that all pass while the actual user flow is broken because the wiring between components is wrong (event not dispatched, prop not passed, selection not captured, DSL not populated, etc.). This has happened repeatedly and is unacceptable.
+
+**Rule**: For every new feature, BEFORE claiming it works, there must be at least one test that exercises the full creation-to-rendering path with real internal components. If this requires a Playwright E2E test (because it involves ReactFlow selection, drag-and-drop, or browser DOM interactions), write a Playwright test. Do not substitute mock-heavy vitest tests and claim coverage.
+
 ### Mock Discipline — every mock is a lie with a cost
 
 A mock replaces a real component with an **assumption** about how it behaves. Every mock is a bet that the assumption is correct. The question is not "should I mock?" but **"what is the cost of this lie?"**

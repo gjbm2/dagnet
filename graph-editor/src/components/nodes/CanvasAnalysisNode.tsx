@@ -183,6 +183,7 @@ export default function CanvasAnalysisNode({ data, selected }: NodeProps<CanvasA
         {result && analysis.view_mode === 'chart' && hasRealChart && (
           <AnalysisChartContainer
             result={result}
+            chartKindOverride={analysis.chart_kind}
             visibleScenarioIds={visibleScenarioIds}
             scenarioVisibilityModes={scenarioVisibilityModes}
             display={analysis.display}
@@ -191,6 +192,7 @@ export default function CanvasAnalysisNode({ data, selected }: NodeProps<CanvasA
             }}
             fillHeight
             compactControls
+            hideScenarioLegend={analysis.live}
           />
         )}
 

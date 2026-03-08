@@ -382,7 +382,8 @@ class CanvasAnalysis(BaseModel):
     chart_kind: Optional[str] = None
     live: bool = True
     title: Optional[str] = None
-    chart_current_layer_dsl: Optional[str] = Field(None, description="DSL fragment composed onto all scenarios via augmentDSLWithConstraint (both live and copied mode)")
+    chart_current_layer_dsl: Optional[str] = Field(None, description="Current layer DSL composed onto all scenarios via augmentDSLWithConstraint (both Live and Custom mode)")
+    analysis_type_overridden: Optional[bool] = Field(None, description="True when user explicitly selected an analysis type (vs auto-assigned at creation)")
     recipe: ChartRecipeCore
     display: Optional[CanvasAnalysisDisplay] = None
 
