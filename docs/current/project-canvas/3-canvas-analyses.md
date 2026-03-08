@@ -1,8 +1,10 @@
 # Phase 3: Canvas Analyses
 
-**Status**: Design -- ready for implementation  
-**Date**: 5-Mar-26  
+**Status**: Design -- partially implemented (see [implementation-plan.md](implementation-plan.md) for current status)  
+**Date**: 5-Mar-26 (updated 8-Mar-26)  
 **Prerequisite**: [0-architecture.md](0-architecture.md) -- rendering layer, transform pattern, selection model, clipboard integration, test strategy
+
+> **Implementation notes (8-Mar-26)**: Several design decisions were revised during implementation. Key changes are marked inline with `[IMPL NOTE]` tags. Terminology: "frozen"/"copied" mode is now called **Custom** mode; "live" is called **Live** mode. The per-field `_overridden` model was simplified to null-vs-present for most fields (only `analysis_type_overridden` uses a boolean). `objectType` is `'canvas-analysis'` (not `'canvas-chart'`). Array name is `canvasAnalyses` throughout.
 
 ---
 
@@ -45,11 +47,14 @@ interface CanvasAnalysis {
       is_live?: boolean;
     }>;
   };
+  chart_current_layer_dsl?: string;  // [IMPL NOTE] added: query DSL fragment composed onto all scenarios
+  analysis_type_overridden?: boolean; // [IMPL NOTE] added: true when user explicitly selected type; false = auto-resolved
   display?: CanvasAnalysisDisplay;  // how to render -- extensible, view-mode-specific
 }
 
 interface CanvasAnalysisDisplay {
   hide_current?: boolean;
+  hidden_scenarios?: string[];  // [IMPL NOTE] added: scenario IDs hidden in Custom mode
   // Extensible: settings grow here over time.
   // Python model uses extra='allow' to preserve unknown fields.
   // JSON schema uses additionalProperties: true.
@@ -133,7 +138,9 @@ The `deps` / `deps_signature` / staleness system from chart files is not used by
 
 ---
 
-## 3. Scenario Handling -- Live vs Frozen
+## 3. Scenario Handling -- Live vs Custom
+
+> **[IMPL NOTE] Terminology update (8-Mar-26)**: This section originally used "frozen" and "copied" for `live: false` mode. The implementation uses **Live** (= `live: true`, follows tab) and **Custom** (= `live: false`, chart owns scenarios). The terms "frozen"/"copied" in this section should be read as **Custom**. A full terminology pass has not been done on this document to avoid diff noise; the implementation plan and codebase use Live/Custom consistently.
 
 Scenarios are **not** part of the graph file (by design). They are tab-scoped view layers stored in IDB, managed by `ScenariosContext`. Scenario *definitions* are per-file in IDB. Scenario *visibility* is per-tab in `editorState.scenarioState`.
 
@@ -568,22 +575,25 @@ This section is intentionally structured into four UI sections that match the ch
 
 #### Section 2 -- Scenario Source + Per-Field Overrides
 
-**Design decision (6-Mar-26)**: "Frozen/live" replaced by per-field override semantics. Scenario source is the one binary toggle; all other chart fields use per-field `_overridden` + `AutomatableField`, matching the existing node/edge override pattern.
+**Design decision (6-Mar-26, updated 8-Mar-26)**: "Frozen/live" replaced by per-field override semantics. Scenario source is the one binary toggle (Live / Custom). Other chart fields use **null-vs-present** override semantics (not `_overridden` booleans), except `analysis_type_overridden` which needs a boolean because the auto-resolved type changes based on DSL/scenario count.
 
-| Dimension | Auto/inherited | Overridden/owned |
-|---|---|---|
-| Scenarios | Follow tab visibility + context | Chart owns `recipe.scenarios` array |
-| Analytics DSL | From drag source / graph selection | User-edited (`analytics_dsl_overridden`) |
-| Query DSL fragment | Absent | Present (composes onto all scenarios) |
-| Chart kind | Auto from `result.semantics.chart` | User-pinned (`chart_kind_overridden`) |
-| Display settings | Registry defaults | Per-setting user values |
+> **[IMPL NOTE]**: The original design proposed per-field `_overridden` booleans + `AutomatableField` for all dimensions. Implementation simplified this: `analytics_dsl` is identity (not overridable -- user edits it directly), `chart_kind` uses null (auto) vs string (pinned), display settings use null (auto) vs value (override). Only `analysis_type_overridden` is a boolean. `AutomatableField` is used for chart kind and display settings in the UI but does not require a separate `_overridden` field on the data model.
 
-**Scenario source toggle**: "Following tab" / "Chart-owned"
+| Dimension | Auto/inherited | Overridden/owned | Data model |
+|---|---|---|---|
+| Scenarios | Follow tab (Live) | Chart owns `recipe.scenarios` (Custom) | `live: true/false` |
+| Analytics DSL | From drag source / graph selection | User-edited directly | `recipe.analysis.analytics_dsl` (always present) |
+| Analysis type | Auto-resolved from backend | User-selected | `analysis_type_overridden: boolean` |
+| Query DSL fragment | Absent | Present (composes onto all scenarios) | `chart_current_layer_dsl?: string` |
+| Chart kind | Auto from `result.semantics.chart` | User-pinned | `chart_kind?: string` (null = auto) |
+| Display settings | Registry defaults | Per-setting user values | `display.*` fields (null = auto) |
 
-- Following tab: read-only scenario list via `ScenarioLayerList` (from tab state)
-- Chart-owned: editable scenario list via `ScenarioLayerList` (from `recipe.scenarios`) -- edit name, colour, visibility mode, DSL; reorder; delete
-- "Capture from tab": copies visible tab scenarios into `recipe.scenarios`
-- "Return to tab": clears `recipe.scenarios`
+**Scenario source toggle**: "Live" / "Custom"
+
+- Live: read-only scenario list via `ScenarioLayerList` (from tab state)
+- Custom: editable scenario list via `ScenarioLayerList` (from `recipe.scenarios`) -- edit name, colour, visibility mode, DSL; reorder; delete
+- Any edit in Live mode auto-promotes to Custom (silently captures from tab, flips to Custom, applies the edit)
+- "Return to Live scenarios": clears `recipe.scenarios`, sets `live: true`
 
 **Chart DSL fragment** (`chart_current_layer_dsl`): applies in both modes via `augmentDSLWithConstraint()`. Wrapped in `AutomatableField`. Survives source transitions.
 
@@ -761,6 +771,8 @@ Canvas charts built from **static (non-live) scenarios** are out of scope for Ph
 ---
 
 ## 13. Implementation Steps
+
+> **[IMPL NOTE]**: Sections 13-14 below use the original naming (`CanvasChart`, `canvasCharts`, `canvas-chart`, `chart-` prefix). The implementation uses `CanvasAnalysis`, `canvasAnalyses`, `canvas-analysis`, `analysis-` prefix. These sections are superseded by [implementation-plan.md](implementation-plan.md) which has the authoritative, up-to-date checklist. Retained here for design rationale only.
 
 ### Prerequisites
 

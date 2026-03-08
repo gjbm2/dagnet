@@ -243,7 +243,7 @@ Beyond these, each type adds its own fields (text, colour, label, recipe, etc.) 
 
 ### 4.5 Migration — Existing Graphs
 
-Graphs predating this feature have no `postits`, `containers`, or `canvasCharts` arrays. All code must handle missing/`undefined` arrays gracefully:
+Graphs predating this feature have no `postits`, `containers`, or `canvasAnalyses` arrays. All code must handle missing/`undefined` arrays gracefully:
 
 - `toFlow()`: `(graph.postits || []).map(...)` — empty array if absent
 - `fromFlow()`: preserve existing arrays if no ReactFlow nodes match the prefix
@@ -288,7 +288,7 @@ Canvas objects MUST be appended AFTER Sankey layout computation (§3.3). In Sank
 
 1. Nodes with ID starting `postit-` → postit bucket
 2. Nodes with ID starting `container-` → container bucket
-3. Nodes with ID starting `chart-` → canvas chart bucket
+3. Nodes with ID starting `analysis-` → canvas analysis bucket
 4. All other nodes → graph nodes (existing processing)
 
 For each bucket, extract position updates (and any size changes from `data`) and merge back into the corresponding array on the graph object.
@@ -440,7 +440,7 @@ All canvas object context menus share these items:
 | Bring Forward | Swap with next element | Up one level |
 | Send Backward | Swap with previous element | Down one level |
 
-Each is a lightweight array reorder: `structuredClone` → reorder → `setGraph` → `saveHistoryState` → `reorderPostitNodes()` (or equivalent for other types). No new data model fields — the array order in `graph.postits[]` / `graph.containers[]` / `graph.canvasCharts[]` IS the z-order. `toFlow()` appends objects in array order; later = rendered on top in the DOM.
+Each is a lightweight array reorder: `structuredClone` → reorder → `setGraph` → `saveHistoryState` → `reorderPostitNodes()` (or equivalent for other types). No new data model fields — the array order in `graph.postits[]` / `graph.containers[]` / `graph.canvasAnalyses[]` IS the z-order. `toFlow()` appends objects in array order; later = rendered on top in the DOM.
 
 **IMPORTANT**: after calling `setGraph`, also call a `reorder*Nodes()` helper that sorts the ReactFlow nodes array to match the new graph array order. This is necessary because the graph→ReactFlow sync fast path may not detect array-only reorders as "node count changed", so the DOM order might not update otherwise. The helper uses `setNodes()` to rearrange the ReactFlow array: non-type nodes first, then type nodes sorted by their position in the graph array. See architecture doc §2.4 for why DOM order is the only reliable z-order mechanism.
 
@@ -569,7 +569,7 @@ A persistent strip of draggable/clickable icons, always visible regardless of wh
 - **Post-It**: square with folded corner
 - **Container**: dashed rectangle
 
-Canvas charts are NOT in the palette — they require an analysis result. The analytics panel is the creation surface for charts.
+**[IMPL NOTE]**: The original design said canvas charts are NOT in the palette. During implementation, a BarChart3 "Add Analysis" icon was added to the palette (click enters draw-to-create mode, same as post-its/containers). An "Add Analysis" item was also added to the Elements menu. These are additions beyond the original design -- see implementation plan "Additions Beyond Original Plan".
 
 ##### Positioning — the palette is NOT a sidebar tab
 
@@ -630,7 +630,7 @@ Click on a palette icon creates the object at the viewport centre. The palette c
 
 - **Phase 1e**: palette with Node + Post-It icons
 - **Phase 2d**: add Container icon to palette
-- Charts are never in the palette (analytics panel is the creation surface)
+- **Phase 3** [IMPL NOTE]: BarChart3 "Add Analysis" icon added to palette (changed from original design)
 
 #### 8.4.4 Canvas Charts — Analytics Panel
 
@@ -703,7 +703,7 @@ Per `.cursorrules`: each spec must complete in ~10-15s. One focused interaction 
 
 | Spec | Invariant protected |
 |------|-------------------|
-| `canvas-chart-dnd.spec.ts` | Run analysis in analytics panel → drag chart preview to canvas → verify chart node renders at drop position |
+| `canvas-chart-dnd.spec.ts` | Run analysis in analytics panel → drag chart preview to canvas → verify canvas analysis node renders at drop position |
 | `canvas-chart-live-update.spec.ts` | Pin live chart → change window selector → verify chart shows loading state → verify chart re-renders (content changes) |
 
 **Chart specs require a running Python backend** for compute. If the backend is unavailable, these specs should be skipped (not failed) via a pre-check.

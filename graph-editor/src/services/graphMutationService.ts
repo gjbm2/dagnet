@@ -74,13 +74,15 @@ function detectTopologyChange(oldGraph: Graph | null, newGraph: Graph | null): {
   if (!oldGraph || !newGraph) {
     return { hasChange: false };
   }
-  
-  // Check node count
-  if (oldGraph.nodes.length !== newGraph.nodes.length) {
-    return {
-      hasChange: true,
-      changeType: oldGraph.nodes.length < newGraph.nodes.length ? 'node-added' : 'node-removed'
-    };
+
+  // Helper: collect node IDs and UUIDs referenced by edges
+  function connectedNodeIds(graph: Graph): Set<string> {
+    const ids = new Set<string>();
+    for (const e of graph.edges) {
+      if (e.from) ids.add(e.from);
+      if (e.to) ids.add(e.to);
+    }
+    return ids;
   }
   
   // Check edge count
@@ -90,18 +92,30 @@ function detectTopologyChange(oldGraph: Graph | null, newGraph: Graph | null): {
       changeType: oldGraph.edges.length < newGraph.edges.length ? 'edge-added' : 'edge-removed'
     };
   }
-  
-  // Check node UUIDs (detect node replacement)
+
+  // Check node changes — but only flag as topology change if the
+  // added/removed node is connected to at least one edge. Isolated nodes
+  // don't affect queries or MSMDC results.
   const oldNodeUUIDs = new Set(oldGraph.nodes.map(n => n.uuid));
   const newNodeUUIDs = new Set(newGraph.nodes.map(n => n.uuid));
-  for (const uuid of newNodeUUIDs) {
-    if (!oldNodeUUIDs.has(uuid)) {
-      return { hasChange: true, changeType: 'node-added' };
+
+  const newConnected = connectedNodeIds(newGraph);
+  for (const n of newGraph.nodes) {
+    if (!oldNodeUUIDs.has(n.uuid)) {
+      if (newConnected.has(n.id) || newConnected.has(n.uuid)) {
+        return { hasChange: true, changeType: 'node-added' };
+      }
+      console.log('✅ [GraphMutation] Isolated node added — skipping regeneration');
     }
   }
-  for (const uuid of oldNodeUUIDs) {
-    if (!newNodeUUIDs.has(uuid)) {
-      return { hasChange: true, changeType: 'node-removed', affectedNode: uuid };
+
+  const oldConnected = connectedNodeIds(oldGraph);
+  for (const n of oldGraph.nodes) {
+    if (!newNodeUUIDs.has(n.uuid)) {
+      if (oldConnected.has(n.id) || oldConnected.has(n.uuid)) {
+        return { hasChange: true, changeType: 'node-removed', affectedNode: n.uuid };
+      }
+      console.log('✅ [GraphMutation] Isolated node removed — skipping regeneration');
     }
   }
   

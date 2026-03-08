@@ -27,7 +27,7 @@
 | `Delete` | Delete | Delete selected nodes/edges |
 | `Ctrl/Cmd + D` | Duplicate | Duplicate selected elements |
 | `Ctrl/Cmd + A` | Select All | Select all nodes and edges |
-| `Escape` | Deselect | Clear selection |
+| `Escape` | Deselect / Reset tool | Clear selection; if a non-pointer tool is active, reverts to Select mode |
 | `Ctrl/Cmd + C` | Copy | Copy selected elements |
 | `Ctrl/Cmd + V` | Paste | Paste copied elements |
 

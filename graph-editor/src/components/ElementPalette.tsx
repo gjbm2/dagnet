@@ -44,9 +44,8 @@ export function ElementPalette({ layout }: ElementPaletteProps) {
       if (onToolSelect) onToolSelect('select');
       return;
     }
-    const events: Record<string, string> = { 'new-node': 'dagnet:addNode', 'new-postit': 'dagnet:addPostit', 'new-container': 'dagnet:addContainer', 'new-analysis': 'dagnet:addAnalysis' };
-    if (elementId && events[elementId]) {
-      window.dispatchEvent(new CustomEvent(events[elementId]));
+    if (elementId === 'new-analysis') {
+      window.dispatchEvent(new CustomEvent('dagnet:addAnalysis'));
     } else if (onToolSelect) {
       onToolSelect(elementId);
     }

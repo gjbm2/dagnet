@@ -48,6 +48,7 @@ A floating palette for element creation, visible at the top of the sidebar (maxi
 - **Select** and **Pan** mode buttons
 - **New Node**, **New Post-It**, **New Container**, **New Analysis** creation tools — click to enter placement mode (crosshair cursor, click-drag on canvas to place), or drag from the palette onto the canvas
 - Active tool highlighted; creation tools auto-revert to Select after placement
+- Press **Escape** to revert any active tool (Pan, or any creation tool) back to Select mode
 - Elements menu (top menu bar): Add Node, Add Post-It, Add Container, Add Analysis
 
 ### Dashboard Mode

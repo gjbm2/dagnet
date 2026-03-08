@@ -13,11 +13,21 @@ export function graphTopologySignature(graph: any): string | null {
   const edges: any[] = Array.isArray(graph.edges) ? graph.edges : [];
   if (nodes.length === 0 && edges.length === 0) return 'empty';
 
-  const nodeKeys = nodes
-    .map(n => `${String(n?.uuid || '')}:${String(n?.id || '')}`)
-    .sort();
   const edgeKeys = edges
     .map(e => `${String(e?.uuid || '')}:${String(e?.from || '')}->${String(e?.to || '')}`)
+    .sort();
+
+  // Only include nodes referenced by at least one edge — isolated nodes
+  // don't affect queries, MSMDC, or data fetching, so adding/removing them
+  // should not trigger scenario regeneration or chart reconciliation.
+  const connectedIds = new Set<string>();
+  for (const e of edges) {
+    if (e?.from) connectedIds.add(String(e.from));
+    if (e?.to) connectedIds.add(String(e.to));
+  }
+  const nodeKeys = nodes
+    .filter(n => connectedIds.has(String(n?.id || '')) || connectedIds.has(String(n?.uuid || '')))
+    .map(n => `${String(n?.uuid || '')}:${String(n?.id || '')}`)
     .sort();
 
   return `n:${nodeKeys.join('|')};e:${edgeKeys.join('|')}`;

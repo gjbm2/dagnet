@@ -158,7 +158,258 @@ Legend: [x] = code written AND tested/verified. [~] = code written, NOT yet test
 - [x] 4 ElementPalette dispatch tests (dagnet:addAnalysis/addNode/addPostit/addContainer events)
 - [ ] Playwright specs not started: `canvas-analysis-chart-fragment.spec.ts`, `canvas-analysis-copied-scenarios.spec.ts`, `canvas-analysis-live-share.spec.ts`
 
+### 3g -- Analysis type UX fixes (8-Mar-26)
+
+Four interrelated issues with analysis type handling that need resolving together.
+
+#### 3g-1. Unsupported analysis type should auto-expand the Analysis Type section
+
+**Problem**: `AnalysisTypeSection` receives `defaultOpen={!analysis.analysis_type_overridden}`. When the user overrides to a type that later becomes *unsupported* (DSL changes, scenarios hidden, backend availability shifts), the section stays collapsed because `analysis_type_overridden` is still `true`. The requirements hint (Lightbulb + `selectionHint`) exists inside the section but is hidden behind the collapsed header. The user sees a broken/empty chart with no visible nudge to fix it.
+
+**Current code** (`PropertiesPanel.tsx`, `CanvasAnalysisPropertiesSection`):
+- `defaultOpen={!analysis.analysis_type_overridden}` -- only considers override state, not availability.
+
+**Fix**:
+- Compute `isSelectedTypeAvailable` by checking whether `analysis.recipe?.analysis?.analysis_type` is in `availableAnalyses`.
+- Pass `defaultOpen={!analysis.analysis_type_overridden || !isSelectedTypeAvailable}` to `AnalysisTypeSection`.
+- Consider using `forceOpen` (controlled open, not just default) when unsupported, so the section re-expands even if the user previously collapsed it manually.
+
+**Files**: `PropertiesPanel.tsx` (CanvasAnalysisPropertiesSection), possibly `AnalysisTypeSection.tsx` (if `forceOpen` prop needed).
+
+- [ ] Compute `isSelectedTypeAvailable` from `availableAnalyses` and current `analysis_type`
+- [ ] Pass to `AnalysisTypeSection` so section is forced open when type is unsupported
+- [ ] Verify: override to supported type -> section collapsed; override to unsupported type -> section open with requirements hint visible
+
+#### 3g-2. Canvas chart output should show helpful message when analysis type is unsupported
+
+**Problem**: `CanvasAnalysisNode` checks `hasRealChart` (whether `result.semantics.chart.recommended` is in `KNOWN_CHART_KINDS`). When false, it silently falls back to `AnalysisResultCards`. There is no message explaining why the chart is not showing and no nudge to fix it. The user sees cards (which may be empty or misleading) with no indication that their analysis type selection is the issue.
+
+**Current code** (`CanvasAnalysisNode.tsx`):
+- `KNOWN_CHART_KINDS` set: funnel, bridge, bridge_horizontal, histogram, lag_histogram, daily_conversions, cohort_maturity.
+- `hasRealChart = !!(result?.semantics?.chart?.recommended && KNOWN_CHART_KINDS.has(...))`.
+- When `view_mode === 'chart' && !hasRealChart`: renders `AnalysisResultCards` with no explanation.
+
+**Fix**:
+- When `analysis.view_mode === 'chart'` and `!hasRealChart`, instead of silently falling back to cards, render a message panel:
+  - Icon (Lightbulb or AlertTriangle).
+  - "No chart available for **[analysis type name]** with the current selection."
+  - "Select a different analysis type in the properties panel, or switch to cards view."
+  - Optionally: a "Show as cards" link/button that toggles `view_mode` to `'cards'` on the analysis.
+- Use `getAnalysisTypeMeta(analysis.recipe?.analysis?.analysis_type)?.name` for the friendly type name.
+
+**Files**: `CanvasAnalysisNode.tsx`.
+
+- [ ] Add "no chart available" message panel when `view_mode === 'chart'` but `!hasRealChart`
+- [ ] Include analysis type name, actionable hint, and optional "Show as cards" quick action
+- [ ] Verify: unsupported type in chart mode shows message; switching to cards view still works; supported type renders chart normally
+
+#### 3g-3. Show analysis type override state in section header
+
+**Problem**: `analysis_type_overridden` is tracked internally and affects auto-update behaviour and section collapse, but is **invisible to the user**. There is no visual indicator that the type is manually pinned, and no way to clear the override back to "auto". This is inconsistent with `ChartSettingsSection`, which shows override counts and uses `AutomatableField` with clear-override affordances.
+
+**Current code**:
+- `analysis_type_overridden` stored on `CanvasAnalysis` (TS, Python, JSON schema).
+- Affects: (a) whether auto-update `useEffect` runs, (b) `defaultOpen` on `AnalysisTypeSection`.
+- NOT surfaced in UI header or as a clearable toggle.
+
+**Fix**:
+- Add an override indicator to the `AnalysisTypeSection` header, following the `ChartSettingsSection` pattern:
+  - When `analysis_type_overridden === true`: show "Overridden" label or ZapOff icon in the section header, plus a "Reset to auto" action (clears `analysis_type_overridden` on the analysis, triggering the auto-update `useEffect` to re-resolve from backend).
+  - When `analysis_type_overridden === false` or absent: show "Auto" label or no indicator.
+- The `AnalysisTypeSection` component needs new props: `overridden?: boolean`, `onClearOverride?: () => void`.
+- The parent (`CanvasAnalysisPropertiesSection` in `PropertiesPanel.tsx`) provides these, wiring `onClearOverride` to set `analysis_type_overridden = false` on the graph and (optionally) immediately trigger re-resolution.
+
+**Files**: `AnalysisTypeSection.tsx` (add `overridden`/`onClearOverride` props, render indicator in header), `PropertiesPanel.tsx` (pass props from CanvasAnalysisPropertiesSection).
+
+- [ ] Add `overridden` and `onClearOverride` props to `AnalysisTypeSection`
+- [ ] Render override indicator (ZapOff icon or "Overridden" label) and "Reset to auto" action in section header
+- [ ] Wire `onClearOverride` in `CanvasAnalysisPropertiesSection` to clear `analysis_type_overridden` and trigger re-resolution
+- [ ] Verify: manually selecting a type shows "Overridden" indicator; clicking "Reset to auto" clears override and re-resolves to primary type
+
+#### 3g-4. Absorbing node selection + "Create chart" produces wrong default analysis type
+
+**Problem**: selecting a single absorbing node and creating a chart from the element palette does not produce the correct default analysis type. Expected: the DSL should be `to(absorbing-node-id)` which resolves to `to_node_reach` (or similar). Actual: the chart is created with wrong type (likely `graph_overview` or `path_through`).
+
+**Code path** (traced end-to-end):
+1. `ElementPalette.tsx` dispatches `dagnet:addAnalysis` (no payload).
+2. `GraphCanvas.tsx` handler (line ~5144) captures selected conversion nodes via `nodes.filter(n => n.selected && !isCanvasObjectNode(n.id)).map(n => n.data?.id || n.id)`.
+3. Calls `constructQueryDSL(selectedConversionNodes, nodes, graph.edges)`.
+4. `dslConstruction.ts` `computePredicates` classifies node type:
+   - `isAbsorbing = node.data?.absorbing === true || !edges.some(e => e.source === nodeId)`.
+   - Single absorbing node -> DSL = `to(nodeId)`.
+5. `addCanvasAnalysisAtPosition` calls `resolveAnalysisType(graph, dsl)`.
+6. Backend `get_available_analyses` parses DSL predicates and returns primary type.
+
+**Likely failure points** (investigate in order):
+1. **`node.data?.absorbing` not set or not boolean `true`**: `transform.ts` line 18 copies `absorbing: n.absorbing` into ReactFlow node data. If the graph node has `absorbing: true` (boolean), this works. If `absorbing` is a truthy non-boolean (string, object), the `=== true` check fails. The fallback (`!edges.some(...)`) might still catch it if the node truly has no outgoing edges, but if it does have edges (e.g. edges to terminal/self), the node is misclassified as `middle` and DSL becomes `visited(node)` instead of `to(node)`.
+2. **Edge normalisation mismatch**: `normalizeEdges` maps graph edges (UUID-based `from`/`to`) to human-readable IDs. If the mapping fails for some edges (missing UUID in `uuidToId` map), the `!edges.some(e => e.source === nodeId)` check could give wrong results -- a node that has outgoing edges in the graph could appear to have none in the normalised edges (false positive for absorbing) or vice versa.
+3. **`selectedConversionNodes` ID format mismatch with `nodeMap`**: the handler uses `n.data?.id || n.id`. The `nodeMap` in `computePredicates` indexes by `node.id`, `node.uuid`, `node.data?.id`, `node.data?.uuid`. If the ReactFlow node's `n.id` has a prefix (e.g. from `toFlow()` which may use a prefixed ID), the selected ID might not match any key in `nodeMap`, resulting in `nodeTypes[nodeId] = 'unknown'` and DSL = `visited(node)`.
+4. **Backend analysis type matching**: even if DSL is correct (`to(node)`), the backend's analysis type priority ordering might not return the expected primary type for this predicate set. Check `analysis_types.yaml` matching rules.
+
+**Diagnosis**:
+- Add temporary logging in `constructQueryDSL` and `computePredicates` (or use mark-based debugging) to capture: the `selectedNodeIds`, each node's `data.absorbing` value, the normalised edges, and the resulting DSL string.
+- Verify the DSL string passed to `resolveAnalysisType`.
+- Verify the backend response (available analyses and primary type) for that DSL.
+
+**Files**: `dslConstruction.ts` (predicate classification), `GraphCanvas.tsx` (selection -> DSL -> resolve), `transform.ts` (absorbing field propagation), `analysisTypeResolutionService.ts` (backend call).
+
+- [ ] Diagnose: add mark-based logging to capture DSL construction for absorbing node selection
+- [ ] Fix: ensure absorbing nodes produce `to(nodeId)` DSL regardless of edge structure
+- [ ] Fix: if backend returns wrong primary type for `to(nodeId)`, fix analysis type matching rules
+- [ ] Add integration test: single absorbing node selection -> `to(nodeId)` DSL -> correct primary analysis type
+- [ ] Add to existing `canvasAnalysisCreation` integration tests: absorbing node case
+
+### 3-tests -- Canvas analysis integration test coverage (8-Mar-26) **BLOCKING**
+
+**This section is a hard prerequisite for further user testing.** The current test coverage is so poor that user testing surfaces trivial regressions (settings not updating charts, names not editable, wrong analysis types) that should be caught by automated tests. Every bug in the Cleanup/deferred list above is a bug that a proper integration test would have prevented.
+
+**Problem**: Canvas analysis test coverage has significant structural gaps. Existing tests cover individual subsystems (DSL construction, type resolution, transform, freeze/unfreeze shape, ECharts options, display settings registry, component smoke tests) but almost none cross the integration boundaries where bugs actually live. The full audit (below) shows that no test exercises a complete CRUD operation end-to-end.
+
+**Audit of existing coverage** (5 canvas analysis test files + 7 adjacent files):
+
+| File | Tests | What it covers | Integration level |
+|------|-------|----------------|-------------------|
+| `canvasAnalysisCreation.integration.test.ts` | 6 | DSL construction + type resolution (real backend) | Focused integration (DSL → backend) |
+| `canvasAnalysisFreezeUnfreeze.test.ts` | 8 | Freeze/unfreeze recipe shape, scenario CRUD | Pure service logic |
+| `transform.canvasAnalysis.test.ts` | 9 | `toFlow`/`fromFlow` with canvas analyses | Pure transform |
+| `useCanvasAnalysisCompute.dsl.test.ts` | 10 | DSL composition, `augmentDSLWithConstraint` | Pure logic (hook not invoked) |
+| `CanvasAnalysisPropertiesSection.test.tsx` | 6 | Component renders without crash, section order | Smoke (heavily mocked) |
+| `ScenarioLayerList.test.tsx` | 18 | Scenario list UI: rows, callbacks, DnD, slots | Component (mocked callbacks) |
+| `AnalysisTypeCardList.test.tsx` | 4 | Type cards: available/unavailable, primary, drag | Component (mocked data) |
+| `captureTabScenariosService.test.ts` | 8 | `captureTabScenariosToRecipe` scenarios | Pure service |
+| `analysisTypeResolutionService.test.ts` | 9 | `resolveAnalysisType` with real backend | Focused integration (backend) |
+| `analysisDisplaySettingsRegistry.test.ts` | ~46 | Registry structure, per-kind settings, surfaces | Pure data |
+| `ElementPalette.dispatch.test.tsx` | 4 | Event dispatch on click | Component (event assertion) |
+| `analysisEChartsService.*.test.ts` | ~36 | ECharts option builders, common settings | Pure transform |
+
+**Gaps identified** (operations with NO integration test crossing real boundaries):
+
+| Gap | Severity | What's untested |
+|-----|----------|-----------------|
+| **Create (full chain)** | HIGH | Element palette click → event → GraphCanvas handler → DSL from selection → type resolution → graph mutation → analysis appears in `graph.canvasAnalyses` |
+| **Create from DnD** | HIGH | Analytics panel drag → drop on canvas → `addCanvasAnalysisAtPosition` → graph mutation |
+| **Delete** | HIGH | Delete selected analysis → `graph.canvasAnalyses` shrinks → ReactFlow node removed |
+| **Copy/paste** | MEDIUM | Copy analysis → paste → new analysis with new UUID, offset position, correct recipe |
+| **Update: analysis type** | HIGH | Change type in properties panel → `analysis_type_overridden = true` → graph mutation → recompute with new type |
+| **Update: analytics DSL** | HIGH | Edit DSL → graph mutation → recompute → different result |
+| **Update: Live/Custom toggle** | MEDIUM | Toggle to Custom → `captureTabScenariosToRecipe` → scenarios written to graph → compute uses frozen scenarios |
+| **Update: chart kind** | MEDIUM | Change chart kind → graph mutation → `AnalysisChartContainer` renders different chart |
+| **Update: display settings** | LOW | Change setting → graph mutation → resolved setting affects chart option |
+| **Chart rendering fallback** | MEDIUM | Result with unknown chart kind → `CanvasAnalysisNode` falls back to cards (or shows message per 3g-2) |
+| **Transform round-trip (structural)** | LOW | Full structural equality after `toFlow` → `fromFlow` (existing tests check key fields only) |
+| **Compute integration** | HIGH | `useCanvasAnalysisCompute` with real graph store + real backend → correct result shape |
+
+**Test plan**: Add integration tests following the codebase's default posture (real IDB via `fake-indexeddb`, real graph store, real services; mock only external APIs). Tests should be added to existing files where a sensible home exists, or to a new `canvasAnalysisCrud.integration.test.ts` for end-to-end CRUD operations.
+
+**Test suite 1: CRUD operations** (new file: `canvasAnalysisCrud.integration.test.ts`)
+
+Invariants protected: graph mutation correctness for all canvas analysis lifecycle operations.
+
+- [ ] **Create from selection**: build a graph with entry + middle + absorbing nodes. Simulate the element palette path: call `constructQueryDSL` with selected node IDs, call `resolveAnalysisType`, call `addCanvasAnalysisAtPosition` equivalent logic. Assert: `graph.canvasAnalyses` has 1 entry, `analytics_dsl` matches expected DSL, `analysis_type` matches primary type, position is correct, `analysis_type_overridden` is false.
+- [ ] **Create with explicit type**: same as above but provide explicit `analysis_type` in drag payload. Assert: `analysis_type_overridden` is true, type matches payload.
+- [ ] **Create blank (no selection)**: no nodes selected, create analysis. Assert: `analytics_dsl` is empty, `analysis_type` is `graph_overview`.
+- [ ] **Delete**: create analysis, then delete by ID. Assert: `graph.canvasAnalyses` is empty, `metadata.updated_at` changed.
+- [ ] **Copy/paste**: create analysis, extract subgraph, paste subgraph. Assert: pasted analysis has different `id`, offset position, identical `recipe`.
+- [ ] **Update analysis type**: create analysis, change `analysis_type` and set `analysis_type_overridden = true`. Assert: graph mutation persists, type changed.
+- [ ] **Update analytics DSL**: create analysis, change `analytics_dsl`. Assert: graph mutation persists, DSL changed.
+- [ ] **Update chart kind**: create analysis, set `chart_kind`. Assert: graph mutation persists.
+- [ ] **Toggle Live → Custom**: create live analysis, call `captureTabScenariosToRecipe`, write scenarios to recipe, set `live = false`. Assert: `recipe.scenarios` populated, `live` is false.
+- [ ] **Toggle Custom → Live**: from custom, clear `recipe.scenarios`, set `live = true`. Assert: `recipe.scenarios` empty, `live` is true.
+- [ ] **Update display settings → chart reflects change**: create analysis, set a display setting (e.g. `orientation: 'horizontal'`), read back from graph. Assert: `analysis.display.orientation` is `'horizontal'`. Then verify: resolved settings passed to chart builder include `orientation: 'horizontal'`.
+- [ ] **Rename scenario in Custom mode**: create analysis in Custom mode with scenarios, rename a scenario by ID. Assert: `recipe.scenarios` entry has updated `name`.
+- [ ] **Title edit persists**: create analysis, change `title` field. Assert: graph mutation persists, title changed.
+
+**Test suite 2: Transform round-trip** (extend `transform.canvasAnalysis.test.ts`)
+
+- [ ] **Full structural round-trip**: graph with 2 canvas analyses (different types, one live, one custom with scenarios) → `toFlow` → `fromFlow` → deep-equal `canvasAnalyses` array (position, recipe, display, live, scenarios).
+
+**Test suite 3: Type resolution edge cases** (extend `canvasAnalysisCreation.integration.test.ts`)
+
+- [ ] **Single absorbing node**: select absorbing node → DSL is `to(nodeId)` → primary type is `to_node_reach` (not `graph_overview`).
+- [ ] **Single middle node**: select middle node → DSL is `visited(nodeId)` → primary type is `path_through`.
+- [ ] **Edge selection**: construct DSL from edge source/target → `from(source).to(target)` → primary type is `conversion_funnel` or `path_between`.
+
+**Test suite 4: Properties panel content** (extend `CanvasAnalysisPropertiesSection.test.tsx`)
+
+- [ ] **Sections render with correct content**: create analysis with known type and DSL. Assert: Analysis Type section shows correct type name, DSL section shows correct DSL string, Chart Settings section shows correct chart kind.
+- [ ] **Override indicator**: create analysis with `analysis_type_overridden = true`. Assert: override indicator visible in Analysis Type section header.
+- [ ] **Unsupported type forces section open**: create analysis with type not in available list. Assert: Analysis Type section is expanded (not collapsed).
+
+**Test suite 5: Chart rendering paths** (new or extend `CanvasAnalysisNode` tests)
+
+- [ ] **Known chart kind → chart renders**: provide result with `semantics.chart.recommended = 'funnel'`. Assert: `AnalysisChartContainer` rendered (not cards).
+- [ ] **Unknown chart kind → fallback**: provide result with `semantics.chart.recommended = 'unknown_type'`. Assert: fallback message or cards rendered (per 3g-2 fix).
+- [ ] **No result → loading/empty state**: no result provided. Assert: appropriate empty/loading state shown.
+
+### Cleanup / deferred
+
+- [x] Remove diagnostic logging from `GraphCanvas.tsx`, `useCanvasAnalysisCompute.ts`
+- [ ] Canvas analysis title field not responding to input (suspected: selection change on click causes component remount, losing focus. Needs browser diagnosis.)
+- [ ] View mode toggle (chart ↔ cards) in props panel doesn't update rendering for all analysis types
+- [ ] **Scenario names not editable in chart properties panel (regression)** -- clicking a scenario name in the Data Source section of the canvas analysis properties panel does not enter inline edit mode. `ScenarioLayerList` receives `onRename` (from `useCanvasAnalysisScenarioCallbacks`) and `allowRenameAll={true}`, so the click handler and `scenario-name-editable` class should be active for all rows. Suspected causes: (a) the `autoFocus` input renders but immediately loses focus due to a parent re-render or selection change triggered by the click; (b) `onBlur` is missing from the edit input, so if focus is lost the edit is silently discarded with no save; (c) a mousedown/click handler higher in the DOM (e.g. on the `CollapsibleSection` or properties panel container) is intercepting the event before it reaches the name div. Diagnosis: browser DevTools, inspect whether the input appears and loses focus, or whether the click never reaches `handleStartEdit`.
+- [ ] **Changing chart settings doesn't update the chart (regression)** -- modifying display settings in Chart Settings (Section 4) of the canvas analysis properties panel does not cause the chart on the canvas to re-render with the new settings. The plumbing is: properties panel writes `analysis.display` on the graph -> `CanvasAnalysisNode` reads `analysis.display` -> passes to `AnalysisChartContainer` -> resolved settings flow into the ECharts builder. The break could be at any stage: (a) the graph mutation in `ChartSettingsSection` isn't reaching the graph store (e.g. stale closure over `graph`, or the `onDisplayChange` callback not wired correctly); (b) `CanvasAnalysisNode` reads stale `analysis` from ReactFlow node data instead of fresh data from the graph store; (c) `AnalysisChartContainer` doesn't re-render because its props haven't changed (display object reference equality); (d) `resolvedSettings` are computed but the ECharts instance isn't updated (missing `notMerge` or stale option ref). Diagnosis: mark-based logging at each stage -- graph mutation, node data, container props, resolved settings, ECharts option.
+- [ ] **Chart Settings section layout and design is a trainwreck** -- the current `ChartSettingsSection` layout needs a design pass. Issues include: settings not grouped logically, poor visual hierarchy, inconsistent control sizing, override indicators not prominent enough, and the section feeling cluttered when many settings are visible. Needs a proper UX review and redesign of the settings layout -- logical grouping (axes, series, labels, layout), consistent control widths, clearer auto/manual indicators, and collapsible sub-groups for less-used settings.
+- [ ] **Chart display settings not properly exposed** -- not all registry settings are surfaced correctly in the properties panel. Some settings may be declared in `analysisDisplaySettingsRegistry` but not wired to the `ChartSettingsSection` rendering, or wired but with wrong control types. Needs a systematic audit: for each setting in the registry, verify it appears in the properties panel with the correct control type, persists to `analysis.display` on change, and takes effect in the chart builder.
+- [ ] **SYSTEMIC: Canvas chart does not re-render after state changes (multiple symptoms)** -- multiple user-facing operations change the canvas analysis state on the graph but the chart on the canvas does not visually update until F5. Known symptoms: (a) flipping Custom -> Live does not update the chart; (b) changing display settings does not update the chart; (c) changing chart kind may not update. These are likely all the same root cause: a broken or incomplete reactivity chain. The chain is: graph mutation (`setGraph`) -> graph store update -> ReactFlow node data refresh (via `toFlow`) -> `CanvasAnalysisNode` re-render -> `useCanvasAnalysisCompute` re-fires (if inputs changed) -> `AnalysisChartContainer` re-renders with new props. **Diagnosis needed**: trace all dependency arrays and data flow for staleness. Specific things to check: (1) `useCanvasAnalysisCompute` dependency array -- does it include `analysis.live`, `analysis.display`, `analysis.recipe`? Or does it read from stale ReactFlow node data instead of fresh graph store state? (2) `CanvasAnalysisNode` -- does it read `analysis` from `node.data` (which may be stale until next `toFlow` cycle) or from the graph store directly? The implementation plan notes that the compute hook "reads the latest analysis from the graph store (not stale ReactFlow node data)" but this needs verification for ALL fields, not just DSL. (3) `AnalysisChartContainer` -- does it use reference equality on `display` object? A `structuredClone` in the mutation path would create a new object reference, but if the container memoises on the old reference it won't update. (4) ECharts instance -- even if the React component re-renders, ECharts may cache the previous option. Check `notMerge` prop and whether the option object reference changes. **This is the single most important bug to fix** -- until the reactivity chain is solid, every settings/mode change appears broken to the user.
+- [ ] **Canvas analysis loading state needs a spinning indicator** -- when a canvas analysis is computing (waiting for backend response), the node currently shows a static "Computing..." text. This gives no visual feedback that work is in progress and makes it look stuck. Replace with an animated rotating refresh icon (e.g. Lucide `Loader2` with CSS `spin` animation) and a "Computing..." label. The same spinner should appear during initial load after creation and during recompute after DSL/scenario/settings changes. `CanvasAnalysisNode.tsx` has the `loading` state from `useCanvasAnalysisCompute`; the fix is purely visual in the loading branch of the render.
+- [ ] **"Open as Tab" action doesn't work from chart properties panel** -- the Actions section (Section 5) of the canvas analysis properties panel has an "Open as Tab" button that should create a chart file tab from the canvas analysis's `ChartRecipeCore` and open it. This is broken. Related: 3f-a items are mostly not started -- `chartOperationsService.openAnalysisChartTabFromAnalysis` does not yet accept `ChartRecipeCore` directly, `buildLiveChartShareUrlFromCanvasAnalysis` is not implemented, and the share payload field alignment is incomplete. Until 3f-a is done, "Open as Tab" from canvas analyses cannot work. This also affects the shared chart chrome "Open as Tab" button inside `AnalysisChartContainer` when rendered on the canvas.
+- [x] **CRITICAL: `pullFile` replaces graph instead of merging** -- `repositoryOperationsService.pullFile` (single-file pull from context/tab menu) was doing `file.data = parsedData`, wholly replacing the in-memory graph. Fixed to use `merge3Way` (same as workspace-level `pullLatest`): base = `file.originalData`, local = `file.data`, remote = fetched content. On conflict, preserves local and returns error. Test added: local `canvasAnalyses` survive pull when remote adds nodes.
+- [ ] **`pullFile` should pull dependent files** -- when pulling a graph file, it should also pull the graph's dependent data files (parameter YAML, case YAML). Currently only the single file is fetched. No "trace dependents" helper exists yet. Building blocks: `enumerateFetchTargets(graph)` gives `objectId` per edge param (convention: `parameter-{objectId}` file ID); case files follow `case-{caseId}`. Needed: a `resolveGraphDependentFileIds(graph): string[]` helper, then `pullFile` (or `pullFileWithDependents`) iterates and pulls each. Design considerations: (a) which file types to include (parameters, cases -- yes; connections -- probably yes); (b) parallel vs sequential (parallel with concurrency cap); (c) progress indication; (d) whether non-graph files should also pull their parent graph. **Index file hazard**: index files (`nodes-index`, `parameters-index`) are collaboratively maintained on GitHub and are structured YAML lists where line-level 3-way merge is fragile (reordering, whitespace, entry format all produce spurious conflicts). Cascade pull should **exclude index files entirely** -- not pull them, not rebuild them. Reasoning: (1) cascade pull is about data freshness for compute, and compute reads parameter files directly by ID from edge references, not via index lookup; (2) pulling + merging index YAML risks silently incorrect index state that persists until manual rebuild; (3) not pulling index creates only a temporary UI discovery gap (navigator stale until next `pullLatest`), which is benign. Index files are pulled by `pullLatest` (workspace-level) and rebuilt explicitly by user action or commit-time hook.
+
+---
+
 ### Phase 4 -- Context menu tidy-up
+
+#### 4a. "Create chart" from node/edge/graph context menus (8-Mar-26)
+
+**Problem**: Creating a canvas analysis requires either the element palette icon or the analytics panel drag. There is no right-click affordance. Users should be able to select nodes/edges, right-click, and immediately create a canvas analysis with the correct default type. This is one of the most natural discovery paths and is currently missing entirely.
+
+**Current state**:
+- **Graph pane context menu** (`GraphCanvas.tsx` line ~6005): has "Add node", "Add post-it", "Add container". Does NOT have "Add analysis".
+- **Node context menu** (`NodeContextMenu.tsx`): no analysis/chart option.
+- **Edge context menu** (`EdgeContextMenu.tsx`): no analysis/chart option.
+- **Elements menu** (`ElementsMenu.tsx`): ALREADY has "Add Analysis" (dispatches `dagnet:addAnalysis`). No gap here.
+
+**Design**:
+
+The right-click "Create chart" item should show a submenu of available analysis types for the current selection, with the primary (default) type at the top. Selecting a type creates a canvas analysis at the click position with that type pre-set. Selecting the default entry creates one with `analysis_type_overridden = false` (auto-resolved).
+
+All logic must live in a shared hook (not inline in menu files), and this hook should use the same code path as the element palette to avoid duplicate logic.
+
+**Shared hook**: `useCreateCanvasAnalysis`
+- Inputs: current ReactFlow selection (nodes, edges), graph, graph edges
+- Exposes: `availableTypes` (from `resolveAnalysisType`), `primaryType`, `createAtPosition(x, y, analysisType?)` 
+- `createAtPosition` calls the same `addCanvasAnalysisAtPosition` function currently in `GraphCanvas.tsx`
+- The hook calls `constructQueryDSL` from the selection and `resolveAnalysisType` to get the available types
+- The element palette click path should be refactored to use this same hook instead of the current inline `dagnet:addAnalysis` event + `pendingAnalysisPayload` pattern
+
+**Context menu items**:
+
+1. **Graph pane context menu**: "Add analysis" item (alongside existing "Add node", "Add post-it", "Add container"). Creates a blank analysis at the click position (no selection DSL, defaults to `graph_overview`). No submenu needed since there's no selection context.
+
+2. **Node context menu** (single or multi-node selection): "Create chart >" submenu showing available analysis types for the selection. Primary type shown first with "(default)" label. Selecting a type creates a canvas analysis near the selected nodes with the chosen type and pre-populated `analytics_dsl` from the selection. Selecting "(default)" creates with `analysis_type_overridden = false`.
+
+3. **Edge context menu**: "Create chart >" same pattern. For edge selection, the DSL is constructed from the edge's source and target nodes: `from(source).to(target)`.
+
+**Centralisation principle**: The context menu items call the shared hook. The hook calls `constructQueryDSL` + `resolveAnalysisType` + `addCanvasAnalysisAtPosition`. No business logic in menu files. The element palette and Elements menu should also be refactored to use this hook, retiring the `dagnet:addAnalysis` event + `pendingAnalysisPayload` pattern (or at minimum, the hook delegates to the same underlying function).
+
+**Files**:
+- `hooks/useCreateCanvasAnalysis.ts` **(new)** -- shared hook
+- `GraphCanvas.tsx` -- add "Add analysis" to pane context menu; refactor `addCanvasAnalysisAtPosition` to be callable from the hook; refactor element palette handler to use hook
+- `NodeContextMenu.tsx` -- add "Create chart >" submenu driven by hook
+- `EdgeContextMenu.tsx` -- add "Create chart >" submenu driven by hook
+- `ElementPalette.tsx` -- refactor to use shared hook (eliminate `dagnet:addAnalysis` event if possible, or keep event as thin dispatch to hook)
+- `ElementsMenu.tsx` -- already has "Add Analysis"; verify it uses the same code path
+
+- [ ] Create `useCreateCanvasAnalysis` hook with `availableTypes`, `primaryType`, `createAtPosition`
+- [ ] Add "Add analysis" to graph pane context menu (blank, `graph_overview` default)
+- [ ] Add "Create chart >" submenu to `NodeContextMenu` with available types from hook
+- [ ] Add "Create chart >" submenu to `EdgeContextMenu` with available types from hook
+- [ ] Refactor element palette and Elements menu to use shared hook (same code path)
+- [ ] Verify: select 2 nodes -> right-click -> "Create chart" shows correct available types with primary at top
+- [ ] Verify: select edge -> right-click -> "Create chart" shows types for `from(source).to(target)` DSL
+
+#### 4b. Canvas analysis context menu tidy-up
 
 - [ ] Registry-driven display settings in `CanvasAnalysisContextMenu` (settings marked `contextMenu: true`)
 - [ ] Generalised submenu rendering (consistent `dagnet-popup` styling)
@@ -199,14 +450,6 @@ Allow a single canvas analysis object to contain multiple charts as tabs. Each t
 - [ ] Alt-key temporary suppress
 - [ ] "Snap to guides" toggle in View menu
 - [ ] Persist in `editorState`
-
-### Cleanup / deferred
-
-- [x] Remove diagnostic logging from `GraphCanvas.tsx`, `useCanvasAnalysisCompute.ts`
-- [ ] Canvas analysis title field not responding to input (suspected: selection change on click causes component remount, losing focus. Needs browser diagnosis.)
-- [ ] View mode toggle (chart ↔ cards) in props panel doesn't update rendering for all analysis types
-- [x] **CRITICAL: `pullFile` replaces graph instead of merging** -- `repositoryOperationsService.pullFile` (single-file pull from context/tab menu) was doing `file.data = parsedData`, wholly replacing the in-memory graph. Fixed to use `merge3Way` (same as workspace-level `pullLatest`): base = `file.originalData`, local = `file.data`, remote = fetched content. On conflict, preserves local and returns error. Test added: local `canvasAnalyses` survive pull when remote adds nodes.
-- [ ] **`pullFile` should pull dependent files** -- when pulling a graph file, it should also pull the graph's dependent data files (parameter YAML, case YAML). Currently only the single file is fetched. No "trace dependents" helper exists yet. Building blocks: `enumerateFetchTargets(graph)` gives `objectId` per edge param (convention: `parameter-{objectId}` file ID); case files follow `case-{caseId}`. Needed: a `resolveGraphDependentFileIds(graph): string[]` helper, then `pullFile` (or `pullFileWithDependents`) iterates and pulls each. Design considerations: (a) which file types to include (parameters, cases -- yes; connections -- probably yes); (b) parallel vs sequential (parallel with concurrency cap); (c) progress indication; (d) whether non-graph files should also pull their parent graph. **Index file hazard**: index files (`nodes-index`, `parameters-index`) are collaboratively maintained on GitHub and are structured YAML lists where line-level 3-way merge is fragile (reordering, whitespace, entry format all produce spurious conflicts). Cascade pull should **exclude index files entirely** -- not pull them, not rebuild them. Reasoning: (1) cascade pull is about data freshness for compute, and compute reads parameter files directly by ID from edge references, not via index lookup; (2) pulling + merging index YAML risks silently incorrect index state that persists until manual rebuild; (3) not pulling index creates only a temporary UI discovery gap (navigator stale until next `pullLatest`), which is benign. Index files are pulled by `pullLatest` (workspace-level) and rebuilt explicitly by user action or commit-time hook.
 
 ---
 
@@ -383,7 +626,19 @@ Before Phase 2, refactor `SelectionContextType` to replace `selectedPostitId` wi
 
 ---
 
-## Phase 3 -- Canvas Analyses (3a--3c ✅, 3d PENDING, 3e ✅, 3f-prereq ✅, 3f-a ✅, 3f-b--3f-c PENDING)
+## Phase 3 -- Canvas Analyses (3a--3c ✅, 3d ~90%, 3e ~80%, 3f-prereq ✅, 3f-a PENDING, 3f-b ✅, 3f-c ~50% BROKEN, 3g PENDING, 3-tests BLOCKING)
+
+**Honest status (8-Mar-26)**: The structural code for 3f-c exists but the core UX loop is broken -- editing properties does not update the canvas chart, scenario names and titles are not editable, and "Open as Tab" doesn't work. Many `[x]` items below mean "code written" but the wiring between subsystems is defective. Phase 3 is NOT ready for user testing or for building Phase 4+ on top of it.
+
+**Stabilisation work order** (must complete before new features):
+
+1. **Fix systemic reactivity bug** (Cleanup: "SYSTEMIC: Canvas chart does not re-render") -- highest leverage, likely fixes display settings, Live/Custom toggle, and chart kind symptoms simultaneously
+2. **Write CRUD integration tests** (3-tests) -- verify fixes, prevent regressions, blocking for user testing
+3. **Fix input regressions** (scenario rename, title edit) -- likely same root cause (focus/remount)
+4. **Loading spinner** -- trivial visual fix
+5. **3g: analysis type UX** (auto-expand, helpful message, override toggle, absorbing node bug) -- self-contained
+6. **3f-a: Open as Tab / share** -- structural gap blocking a core design requirement
+7. **Then** Phase 4+ can proceed on a stable foundation
 
 ### Prerequisite: DB-snapshot subject resolution service extraction ✅
 
