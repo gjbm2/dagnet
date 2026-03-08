@@ -1,6 +1,7 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react';
+import React, { useRef, useEffect } from 'react';
 import { NodeProps, NodeResizer } from 'reactflow';
 import type { Container } from '@/types';
+import { InlineEditableLabel } from '../InlineEditableLabel';
 
 export const CONTAINER_COLOURS = [
   '#94A3B8', '#86EFAC', '#7DD3FC', '#FCD34D', '#FDA4AF', '#C4B5FD',
@@ -28,38 +29,11 @@ function hexToRgb(hex: string): [number, number, number] {
 
 export default function ContainerNode({ data, selected }: NodeProps<ContainerNodeData>) {
   const { container, onUpdate, onDelete } = data;
-  const [editingLabel, setEditingLabel] = useState(false);
-  const [localLabel, setLocalLabel] = useState(container.label);
-  const inputRef = useRef<HTMLInputElement>(null);
   const resizeTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   useEffect(() => {
     return () => { if (resizeTimeoutRef.current) clearTimeout(resizeTimeoutRef.current); };
   }, []);
-
-  useEffect(() => {
-    if (!editingLabel) setLocalLabel(container.label);
-  }, [container.label, editingLabel]);
-
-  useEffect(() => {
-    if (editingLabel && inputRef.current) {
-      inputRef.current.focus();
-      inputRef.current.select();
-    }
-  }, [editingLabel]);
-
-  const commitLabel = useCallback(() => {
-    setEditingLabel(false);
-    const trimmed = localLabel.trim() || 'Group';
-    if (trimmed !== container.label) {
-      onUpdate(container.id, { label: trimmed });
-    }
-  }, [localLabel, container.id, container.label, onUpdate]);
-
-  const handleLabelKeyDown = useCallback((e: React.KeyboardEvent) => {
-    if (e.key === 'Enter') { e.preventDefault(); commitLabel(); }
-    if (e.key === 'Escape') { setEditingLabel(false); setLocalLabel(container.label); }
-  }, [commitLabel, container.label]);
 
   const [r, g, b] = hexToRgb(container.colour);
   const fillBg = `rgba(${r}, ${g}, ${b}, 0.08)`;
@@ -109,46 +83,33 @@ export default function ContainerNode({ data, selected }: NodeProps<ContainerNod
           borderRadius: '4px',
           boxSizing: 'border-box',
           position: 'relative',
-          boxShadow: selected ? `0 0 0 1px ${container.colour}` : 'none',
+          boxShadow: selected
+            ? `0 0 0 1px ${container.colour}, 0 2px 8px rgba(0,0,0,0.08), 0 8px 24px rgba(0,0,0,0.06)`
+            : 'none',
+          transition: 'box-shadow 0.15s ease-out',
         }}
       >
         {/* Label bar */}
         <div
-          onDoubleClick={(e) => {
-            e.stopPropagation();
-            setEditingLabel(true);
-          }}
           style={{
             padding: '4px 8px',
             backgroundColor: labelBg,
             borderBottom: `1px solid ${borderColour}`,
             borderRadius: '3px 3px 0 0',
-            fontSize: '12px',
+            fontSize: '8px',
             fontWeight: 600,
             color: '#333',
-            cursor: editingLabel ? 'text' : 'default',
-            minHeight: '24px',
+            minHeight: '20px',
             display: 'flex',
             alignItems: 'center',
           }}
         >
-          {editingLabel ? (
-            <input
-              ref={inputRef}
-              className="nodrag nowheel"
-              value={localLabel}
-              onChange={(e) => setLocalLabel(e.target.value)}
-              onBlur={commitLabel}
-              onKeyDown={handleLabelKeyDown}
-              style={{
-                width: '100%', border: 'none', background: 'transparent',
-                fontSize: '12px', fontWeight: 600, color: '#333',
-                outline: 'none', padding: 0, margin: 0,
-              }}
-            />
-          ) : (
-            <span style={{ userSelect: 'none' }}>{container.label}</span>
-          )}
+          <InlineEditableLabel
+            value={container.label}
+            placeholder="Group"
+            selected={!!selected}
+            onCommit={(v) => onUpdate(container.id, { label: v })}
+          />
         </div>
       </div>
     </>

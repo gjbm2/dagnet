@@ -34,8 +34,10 @@ export function toFlow(graph: any, callbacks?: { onUpdateNode?: (id: string, dat
   };
   });
 
-  // Canvas objects — stacking order: containers → conversion nodes → postits → analyses (topmost)
+  // Canvas objects — stacking order:
+  //   containers (1000+) → conversion nodes → floating objects (5000+)
   // Containers are BEFORE conversion nodes so they paint underneath.
+  // Post-its and analyses share a single "floating" tier (5000+).
   const containerNodes: Node[] = (graph.containers || []).map((c: any, i: number) => ({
     id: `container-${c.id}`,
     type: 'container',
@@ -63,11 +65,12 @@ export function toFlow(graph: any, callbacks?: { onUpdateNode?: (id: string, dat
     },
   }));
 
-  // Canvas analyses — appended last = topmost in DOM = visually on top of everything
-  const analysisNodes: Node[] = (graph.canvasAnalyses || []).map((a: any) => ({
+  const postitCount = (graph.postits || []).length;
+  const analysisNodes: Node[] = (graph.canvasAnalyses || []).map((a: any, i: number) => ({
     id: `analysis-${a.id}`,
     type: 'canvasAnalysis',
     position: { x: a.x ?? 0, y: a.y ?? 0 },
+    zIndex: 5000 + postitCount + i,
     style: { width: a.width, height: a.height },
     data: {
       analysis: a,

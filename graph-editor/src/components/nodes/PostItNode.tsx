@@ -147,10 +147,13 @@ export default function PostItNode({ data, selected }: NodeProps<PostItNodeData>
         onPointerUp={handlePointerUp}
         style={{
           width: '100%', height: '100%', backgroundColor: postit.colour,
-          boxShadow: '0 0px 1px rgba(0,0,0,0.04), 0 2px 4px rgba(0,0,0,0.06), 0 6px 12px rgba(0,0,0,0.08)',
+          boxShadow: selected
+            ? '0 2px 4px rgba(0,0,0,0.06), 0 8px 16px rgba(0,0,0,0.12), 0 16px 32px rgba(0,0,0,0.08)'
+            : '0 0px 1px rgba(0,0,0,0.04), 0 2px 4px rgba(0,0,0,0.06), 0 6px 12px rgba(0,0,0,0.08)',
           fontFamily: 'inherit', padding: '10px 12px', borderRadius: '1px',
           border: selected ? '1.5px solid rgba(0,0,0,0.15)' : '1px solid rgba(0,0,0,0.04)',
           position: 'relative', boxSizing: 'border-box', cursor: editing ? 'text' : 'default',
+          transition: 'box-shadow 0.15s ease-out',
         }}
       >
         <div style={{

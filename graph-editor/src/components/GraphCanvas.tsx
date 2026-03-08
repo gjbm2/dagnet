@@ -6037,7 +6037,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
       {postitContextMenu && graph && (() => {
         const postit = graph.postits?.find((p: any) => p.id === postitContextMenu.postitId);
         if (!postit) return null;
-        const postitCount = graph.postits?.length ?? 0;
+        const postitCount = (graph.postits?.length ?? 0) + (graph.canvasAnalyses?.length ?? 0);
         return (
           <PostItContextMenu
             x={postitContextMenu.x}
@@ -6317,7 +6317,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
       {analysisContextMenu && graph && (() => {
         const analysis = graph.canvasAnalyses?.find((a: any) => a.id === analysisContextMenu.analysisId);
         if (!analysis) return null;
-        const analysisCount = graph.canvasAnalyses?.length ?? 0;
+        const analysisCount = (graph.canvasAnalyses?.length ?? 0) + (graph.postits?.length ?? 0);
         return (
           <CanvasAnalysisContextMenu
             x={analysisContextMenu.x}

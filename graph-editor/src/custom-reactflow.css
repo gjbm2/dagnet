@@ -74,10 +74,28 @@
   cursor: crosshair !important;
 }
 
-/* Annotation tier — z-index set per-node in toFlow (5000 + array index) */
+/* Canvas object tiers — z-index set per-node in toFlow:
+   containers 1000+, floating objects (postits + analyses) 5000+ */
 
-/* Selected post-it: ReactFlow's elevateNodesOnSelect adds 1000 to the node's
-   zIndex automatically, which is sufficient to lift it above siblings. */
+/* Selected canvas objects: lift above all siblings so the user can edit
+   without occlusion.  The base rule above (.react-flow__node z-index: 2000
+   !important) flattens all nodes; this overrides it for selected canvas items.
+   Reduced opacity signals the elevation is temporary. */
+.react-flow__node-postit.selected,
+.react-flow__node-container.selected,
+.react-flow__node-canvasAnalysis.selected {
+  z-index: 9000 !important;
+  opacity: 0.82;
+  transition: opacity 0.15s ease-out;
+}
+
+/* When a node is in inline-edit mode, suppress all handles (resize + connection)
+   so the edit input is unobstructed.  Class toggled by InlineEditableLabel. */
+.react-flow__node.dagnet-inline-editing .react-flow__resize-control,
+.react-flow__node.dagnet-inline-editing .react-flow__handle {
+  opacity: 0 !important;
+  pointer-events: none !important;
+}
 
 /* Selected edges should not float above nodes */
 .react-flow__edge.selected .react-flow__edge-path {

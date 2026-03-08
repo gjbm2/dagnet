@@ -18,6 +18,7 @@ import { ImageLoupeView } from '../ImageLoupeView';
 import { ImageUploadModal } from '../ImageUploadModal';
 import { imageOperationsService } from '../../services/imageOperationsService';
 import { imageService } from '../../services/imageService';
+import { InlineEditableLabel } from '../InlineEditableLabel';
 import { dataOperationsService } from '../../services/dataOperationsService';
 import { useCtrlKeyState } from '../../hooks/useCtrlKeyState';
 import { CONVEX_DEPTH, CONCAVE_DEPTH, HALO_WIDTH, DEFAULT_NODE_WIDTH, DEFAULT_NODE_HEIGHT, NODE_LABEL_FONT_SIZE, NODE_SECONDARY_FONT_SIZE, NODE_SMALL_FONT_SIZE, CASE_NODE_FONT_SIZE, CONVEX_HANDLE_OFFSET_MULTIPLIER, CONCAVE_HANDLE_OFFSET_MULTIPLIER, FLAT_HANDLE_OFFSET_MULTIPLIER, IMAGE_VIEW_LABEL_X, IMAGE_VIEW_LABEL_Y } from '@/lib/nodeEdgeConstants';
@@ -96,7 +97,7 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
   const nodeFill = dark ? '#2d2d2d' : '#fff';
   const nodeText = dark ? '#e0e0e0' : '#333';
   const nodeBorder = dark ? '#555' : '#ddd';
-  const { getEdges, getNodes, setNodes } = useReactFlow();
+  const { getEdges, getNodes } = useReactFlow();
   const { activeTabId, operations, tabs } = useTabContext();
   const { graph, setGraph, saveHistoryState } = useGraphStore();
   
@@ -137,21 +138,6 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
   // Check if user is currently connecting (creating a new edge)
   const isConnecting = useStore((state) => state.connectionNodeId !== null);
 
-  const handleDoubleClick = useCallback(() => {
-    // Programmatically select this node to focus the properties panel
-    setNodes((nodes) => 
-      nodes.map((node) => ({
-        ...node,
-        selected: node.id === data.id
-      }))
-    );
-    
-    // Open Properties Panel and focus the label field
-    window.dispatchEvent(new CustomEvent('dagnet:openPropertiesPanel'));
-    window.dispatchEvent(new CustomEvent('dagnet:focusField', { detail: { field: 'label' } }));
-    
-    console.log('Node double-clicked and selected:', data.id);
-  }, [data.id, setNodes]);
 
   const handleDelete = useCallback(() => {
     data.onDelete(data.uuid);
@@ -893,32 +879,32 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
               left: `${IMAGE_VIEW_LABEL_X}px`,
               zIndex: 16,
               pointerEvents: 'auto',
-              cursor: 'pointer',
-              maxWidth: `calc(100% - ${IMAGE_VIEW_LABEL_X * 2}px)`
+              maxWidth: `calc(100% - ${IMAGE_VIEW_LABEL_X * 2}px)`,
+              display: 'flex',
+              alignItems: 'center',
+              gap: 2,
             }}
-            onDoubleClick={handleDoubleClick}
-            title="Double-click to edit in properties panel"
           >
-            <span style={{
-              fontWeight: 500,
-              fontSize: `${NODE_LABEL_FONT_SIZE - 1}px`,
-              lineHeight: '1.2',
-              color: '#475569',
-              whiteSpace: 'nowrap',
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              display: 'block'
-            }}>
-              {data.label}
-              {nodeOverrideCount > 0 && (
-                <ZapOff
-                  size={8}
-                  strokeWidth={2}
-                  color="#000000"
-                  style={{ display: 'inline-block', verticalAlign: 'middle', marginLeft: '2px' }}
-                />
-              )}
-            </span>
+            <InlineEditableLabel
+              value={data.label}
+              selected={!!selected}
+              onCommit={(v) => data.onUpdate(data.uuid, { label: v })}
+              style={{
+                fontWeight: 500,
+                fontSize: `${NODE_LABEL_FONT_SIZE - 1}px`,
+                lineHeight: '1.2',
+                color: '#475569',
+              }}
+              editStyle={{ minWidth: 200 }}
+            />
+            {nodeOverrideCount > 0 && (
+              <ZapOff
+                size={8}
+                strokeWidth={2}
+                color="#000000"
+                style={{ flexShrink: 0 }}
+              />
+            )}
           </div>
 
           {/* Image fills the node interior — clicks pass through for normal node selection */}
@@ -975,32 +961,37 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
               fontWeight: 'bold', 
               marginBottom: '4px', 
               fontSize: `${NODE_LABEL_FONT_SIZE}px`, 
-              cursor: 'pointer',
               lineHeight: '1.2',
-              wordWrap: 'break-word',
-              overflowWrap: 'break-word',
-              hyphens: 'auto',
               maxWidth: '100%',
               paddingLeft: '12px',
               paddingRight: '12px',
               textAlign: 'center',
-              pointerEvents: 'auto' // Re-enable pointer events for interactive content
+              pointerEvents: 'auto',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: 3,
             }}
-            onDoubleClick={handleDoubleClick}
-            title="Double-click to edit in properties panel"
           >
-            {data.label}
+            <InlineEditableLabel
+              value={data.label}
+              selected={!!selected}
+              onCommit={(v) => data.onUpdate(data.uuid, { label: v })}
+              displayStyle={{
+                wordBreak: 'break-word',
+                overflowWrap: 'break-word',
+                whiteSpace: 'normal',
+                textAlign: 'center',
+              }}
+              editStyle={{ textAlign: 'center', minWidth: 200 }}
+            />
             {nodeOverrideCount > 0 && (
               <span title={`${nodeOverrideCount} override${nodeOverrideCount > 1 ? 's' : ''} (auto-sync disabled)`}>
                 <ZapOff 
                   size={10} 
                   strokeWidth={2}
                   color={dark ? '#999' : '#000000'}
-                  style={{ 
-                    display: 'inline-block',
-                    verticalAlign: 'middle',
-                    marginLeft: '3px'
-                  }}
+                  style={{ flexShrink: 0 }}
                 />
               </span>
             )}

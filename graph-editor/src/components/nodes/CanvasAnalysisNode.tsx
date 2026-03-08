@@ -2,11 +2,13 @@ import React, { useEffect, useRef, useMemo } from 'react';
 import { NodeProps, NodeResizer } from 'reactflow';
 import type { CanvasAnalysis } from '@/types';
 import { useCanvasAnalysisCompute } from '@/hooks/useCanvasAnalysisCompute';
+import { useGraphStore } from '@/contexts/GraphStoreContext';
 import { useScenariosContextOptional } from '@/contexts/ScenariosContext';
 import { useTabContext } from '@/contexts/TabContext';
 import { AnalysisChartContainer } from '../charts/AnalysisChartContainer';
 import { AnalysisResultCards } from '../analytics/AnalysisResultCards';
 import { Loader2, AlertCircle, ServerOff, BarChart3 } from 'lucide-react';
+import { InlineEditableLabel } from '../InlineEditableLabel';
 
 interface CanvasAnalysisNodeData {
   analysis: CanvasAnalysis;
@@ -16,7 +18,12 @@ interface CanvasAnalysisNodeData {
 }
 
 export default function CanvasAnalysisNode({ data, selected }: NodeProps<CanvasAnalysisNodeData>) {
-  const { analysis, tabId, onUpdate, onDelete } = data;
+  const { analysis: analysisProp, tabId, onUpdate, onDelete } = data;
+  const { graph } = useGraphStore();
+  const analysis = useMemo(() => {
+    const fromStore = (graph as any)?.canvasAnalyses?.find((a: any) => a.id === analysisProp.id);
+    return (fromStore || analysisProp) as CanvasAnalysis;
+  }, [graph, analysisProp]);
   const resizeTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const scenariosContext = useScenariosContextOptional();
   const { tabs, operations } = useTabContext();
@@ -69,17 +76,6 @@ export default function CanvasAnalysisNode({ data, selected }: NodeProps<CanvasA
 
   const displayTitle = analysis.title || result?.analysis_name || analysis.recipe.analysis.analysis_type;
 
-  console.log('[CanvasAnalysisNode] render:', {
-    id: analysis.id,
-    view_mode: analysis.view_mode,
-    visibleScenarioIds,
-    hasResult: !!result,
-    resultDimensions: result?.dimension_values ? Object.keys(result.dimension_values) : 'none',
-    loading,
-    error,
-    analysis_type: analysis.recipe?.analysis?.analysis_type,
-  });
-
   return (
     <div
       className="canvas-analysis-node"
@@ -87,12 +83,15 @@ export default function CanvasAnalysisNode({ data, selected }: NodeProps<CanvasA
         width: '100%',
         height: '100%',
         background: 'var(--canvas-analysis-bg, #ffffff)',
-        border: selected ? '2px solid var(--accent-colour, #3b82f6)' : '1px solid var(--canvas-analysis-border, #d1d5db)',
+        border: '1px solid var(--canvas-analysis-border, #d1d5db)',
         borderRadius: 8,
         overflow: 'hidden',
         display: 'flex',
         flexDirection: 'column',
-        boxShadow: selected ? '0 0 0 2px rgba(59,130,246,0.3)' : '0 1px 3px rgba(0,0,0,0.1)',
+        boxShadow: selected
+          ? '0 4px 12px rgba(0,0,0,0.10), 0 12px 32px rgba(0,0,0,0.12)'
+          : '0 1px 3px rgba(0,0,0,0.08), 0 4px 12px rgba(0,0,0,0.06)',
+        transition: 'box-shadow 0.15s ease-out',
       }}
     >
       <NodeResizer
@@ -100,8 +99,8 @@ export default function CanvasAnalysisNode({ data, selected }: NodeProps<CanvasA
         minWidth={300}
         minHeight={200}
         onResize={handleResize}
-        lineStyle={{ borderColor: 'var(--accent-colour, #3b82f6)' }}
-        handleStyle={{ width: 8, height: 8, borderRadius: 2 }}
+        lineStyle={{ display: 'none' }}
+        handleStyle={{ width: 8, height: 8, borderRadius: 2, backgroundColor: '#3b82f6', border: '1px solid #fff' }}
       />
 
       {selected && (
@@ -123,8 +122,8 @@ export default function CanvasAnalysisNode({ data, selected }: NodeProps<CanvasA
       {/* Title bar */}
       <div
         style={{
-          padding: '6px 10px',
-          fontSize: 12,
+          padding: '4px 8px',
+          fontSize: 8,
           fontWeight: 600,
           color: 'var(--canvas-analysis-title, #374151)',
           borderBottom: '1px solid var(--canvas-analysis-border, #e5e7eb)',
@@ -135,15 +134,20 @@ export default function CanvasAnalysisNode({ data, selected }: NodeProps<CanvasA
           background: 'var(--canvas-analysis-title-bg, #f9fafb)',
         }}
       >
-        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
-          {displayTitle}
-        </span>
+        <InlineEditableLabel
+          value={analysis.title || ''}
+          placeholder={result?.analysis_name || analysis.recipe.analysis.analysis_type || 'Untitled'}
+          selected={!!selected}
+          onCommit={(v) => onUpdate(analysis.id, { title: v })}
+          displayStyle={{ flex: 1 }}
+          editStyle={{ flex: 1 }}
+        />
         {analysis.live && !analysis.chart_current_layer_dsl ? (
-          <span style={{ fontSize: 9, padding: '1px 5px', borderRadius: 3, background: '#dcfce7', color: '#166534', fontWeight: 500, flexShrink: 0 }}>
+          <span style={{ fontSize: 7, padding: '1px 4px', borderRadius: 2, background: '#dcfce7', color: '#166534', fontWeight: 500, flexShrink: 0 }}>
             LIVE
           </span>
         ) : (
-          <span style={{ fontSize: 9, padding: '1px 5px', borderRadius: 3, background: '#fef3c7', color: '#92400e', fontWeight: 500, flexShrink: 0 }}>
+          <span style={{ fontSize: 7, padding: '1px 4px', borderRadius: 2, background: '#fef3c7', color: '#92400e', fontWeight: 500, flexShrink: 0 }}>
             CUSTOM
           </span>
         )}

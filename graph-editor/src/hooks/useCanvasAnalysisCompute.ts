@@ -263,12 +263,8 @@ export function useCanvasAnalysisCompute({
           : frozenScenariosAll;
         const frozenWhatIfDsl = analysis.recipe.analysis.what_if_dsl;
 
-        const getDslForFrozenScenario = (fs: any): string => {
-          let dsl = fs.effective_dsl || analyticsDsl || frozenWhatIfDsl || currentDSL;
-          if (chartFragment.trim()) {
-            dsl = augmentDSLWithConstraint(dsl, chartFragment);
-          }
-          return dsl;
+        const getDslForFrozenScenario = (): string => {
+          return analyticsDsl || currentDSL;
         };
 
         if (frozenScenarios.length > 1) {
@@ -381,13 +377,22 @@ export function useCanvasAnalysisCompute({
     };
   }, [compute, analysis.live]);
 
-  // Frozen mode: compute once on mount
+  const frozenComputeKey = useMemo(() => {
+    if (analysis.live) return null;
+    return [
+      analysis.recipe?.analysis?.analysis_type,
+      analysis.recipe?.analysis?.analytics_dsl,
+      analysis.chart_current_layer_dsl,
+      analysis.recipe?.scenarios?.map((s: any) => s.scenario_id).join(','),
+      ((analysis.display as any)?.hidden_scenarios || []).join(','),
+    ].join('|');
+  }, [analysis]);
+
   useEffect(() => {
     if (analysis.live) return;
     compute();
-    // Deliberately run only once for frozen mode
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [frozenComputeKey]);
 
   // Compute on first mount for live mode too (immediate, no debounce)
   useEffect(() => {
