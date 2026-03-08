@@ -1,8 +1,15 @@
 import { describe, it, expect } from 'vitest';
 import { captureTabScenariosToRecipe } from '../captureTabScenariosService';
 
-const makeOperations = (visibleIds: string[], modes: Record<string, 'f+e' | 'f' | 'e'> = {}) => ({
-  getScenarioState: () => ({ visibleScenarioIds: visibleIds }),
+const makeOperations = (
+  visibleIds: string[],
+  modes: Record<string, 'f+e' | 'f' | 'e'> = {},
+  scenarioOrder?: string[],
+) => ({
+  getScenarioState: () => ({
+    visibleScenarioIds: visibleIds,
+    scenarioOrder: scenarioOrder || visibleIds.filter(id => id !== 'current' && id !== 'base'),
+  }),
   getScenarioVisibilityMode: (_tabId: string, sid: string) => modes[sid] || ('f+e' as const),
 });
 
@@ -127,6 +134,58 @@ describe('captureTabScenariosToRecipe', () => {
     });
 
     expect(result.what_if_dsl).toBeUndefined();
+  });
+
+  it('should preserve exact visibleScenarioIds order (scenario legend order)', () => {
+    const result = captureTabScenariosToRecipe({
+      tabId: 'tab-1',
+      currentDSL: 'window(-30d:)',
+      operations: makeOperations(['sc-1', 'current', 'base']),
+      scenariosContext: baseScenariosContext,
+    });
+
+    expect(result.scenarios).toHaveLength(3);
+    expect(result.scenarios[0].scenario_id).toBe('sc-1');
+    expect(result.scenarios[1].scenario_id).toBe('current');
+    expect(result.scenarios[2].scenario_id).toBe('base');
+  });
+
+  it('should preserve order when current is last (matching scenario legend)', () => {
+    const result = captureTabScenariosToRecipe({
+      tabId: 'tab-1',
+      currentDSL: 'window(-30d:)',
+      operations: makeOperations(['sc-1', 'sc-2', 'current']),
+      scenariosContext: baseScenariosContext,
+    });
+
+    expect(result.scenarios).toHaveLength(3);
+    expect(result.scenarios[0].scenario_id).toBe('sc-1');
+    expect(result.scenarios[1].scenario_id).toBe('sc-2');
+    expect(result.scenarios[2].scenario_id).toBe('current');
+  });
+
+  it('should only include visible scenarios', () => {
+    const result = captureTabScenariosToRecipe({
+      tabId: 'tab-1',
+      currentDSL: 'window(-30d:)',
+      operations: makeOperations(['current', 'sc-1']),
+      scenariosContext: baseScenariosContext,
+    });
+
+    expect(result.scenarios).toHaveLength(2);
+    expect(result.scenarios.find(s => s.scenario_id === 'sc-2')).toBeUndefined();
+  });
+
+  it('should handle base-only visible (no current)', () => {
+    const result = captureTabScenariosToRecipe({
+      tabId: 'tab-1',
+      currentDSL: 'window(-30d:)',
+      operations: makeOperations(['base']),
+      scenariosContext: baseScenariosContext,
+    });
+
+    expect(result.scenarios).toHaveLength(1);
+    expect(result.scenarios[0].scenario_id).toBe('base');
   });
 
   it('should fall back to queryDSL when lastEffectiveDSL is missing', () => {

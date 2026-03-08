@@ -32,7 +32,7 @@ export default function CanvasAnalysisNode({ data, selected }: NodeProps<CanvasA
     return () => { if (resizeTimeoutRef.current) clearTimeout(resizeTimeoutRef.current); };
   }, []);
 
-  const { result, loading, error, backendUnavailable } = useCanvasAnalysisCompute({
+  const { result, loading, waitingForDeps, error, backendUnavailable } = useCanvasAnalysisCompute({
     analysis,
     tabId,
   });
@@ -63,6 +63,44 @@ export default function CanvasAnalysisNode({ data, selected }: NodeProps<CanvasA
     }
     return m;
   }, [visibleScenarioIds, analysis, tabId, operations]);
+
+  const scenarioMetaById = useMemo(() => {
+    const m: Record<string, { name?: string; colour?: string; visibility_mode?: 'f+e' | 'f' | 'e' }> = {};
+    for (const id of visibleScenarioIds) {
+      if (!analysis.live && analysis.recipe.scenarios) {
+        const s = analysis.recipe.scenarios.find(s => s.scenario_id === id);
+        if (s) {
+          m[id] = {
+            name: s.name || id,
+            colour: s.colour || '#808080',
+            visibility_mode: (s.visibility_mode as any) || 'f+e',
+          };
+        }
+      } else {
+        if (id === 'current') {
+          m[id] = {
+            name: 'Current',
+            colour: (scenariosContext as any)?.currentColour || '#3b82f6',
+            visibility_mode: scenarioVisibilityModes[id] || 'f+e',
+          };
+        } else if (id === 'base') {
+          m[id] = {
+            name: 'Base',
+            colour: (scenariosContext as any)?.baseColour || '#6b7280',
+            visibility_mode: scenarioVisibilityModes[id] || 'f+e',
+          };
+        } else {
+          const s = (scenariosContext as any)?.scenarios?.find((x: any) => x.id === id);
+          m[id] = {
+            name: s?.name || id,
+            colour: s?.colour || '#808080',
+            visibility_mode: scenarioVisibilityModes[id] || 'f+e',
+          };
+        }
+      }
+    }
+    return m;
+  }, [visibleScenarioIds, analysis.live, analysis.recipe.scenarios, scenariosContext, scenarioVisibilityModes]);
 
   const handleResize = (_event: any, params: { width: number; height: number }) => {
     if (resizeTimeoutRef.current) clearTimeout(resizeTimeoutRef.current);
@@ -151,7 +189,7 @@ export default function CanvasAnalysisNode({ data, selected }: NodeProps<CanvasA
             CUSTOM
           </span>
         )}
-        {loading && <Loader2 size={12} style={{ animation: 'spin 1s linear infinite', flexShrink: 0 }} />}
+        {(loading || waitingForDeps) && <Loader2 size={12} style={{ animation: 'spin 1s linear infinite', flexShrink: 0 }} />}
       </div>
 
       {/* Content area */}
@@ -177,10 +215,10 @@ export default function CanvasAnalysisNode({ data, selected }: NodeProps<CanvasA
           </div>
         )}
 
-        {!backendUnavailable && !result && !error && loading && (
+        {!backendUnavailable && !result && !error && (loading || waitingForDeps) && (
           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', gap: 8, color: '#9ca3af' }}>
             <Loader2 size={28} style={{ animation: 'spin 1s linear infinite' }} />
-            <span style={{ fontSize: 12 }}>Computing...</span>
+            <span style={{ fontSize: 12 }}>{waitingForDeps ? 'Loading chart dependencies...' : 'Computing...'}</span>
           </div>
         )}
 
@@ -190,6 +228,7 @@ export default function CanvasAnalysisNode({ data, selected }: NodeProps<CanvasA
             chartKindOverride={analysis.chart_kind}
             visibleScenarioIds={visibleScenarioIds}
             scenarioVisibilityModes={scenarioVisibilityModes}
+            scenarioMetaById={scenarioMetaById}
             display={analysis.display}
             onDisplayChange={(key, value) => {
               onUpdate(analysis.id, { display: { ...analysis.display, [key]: value } });

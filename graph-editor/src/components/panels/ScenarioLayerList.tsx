@@ -112,6 +112,11 @@ export function ScenarioLayerList({
 
   const handleDragStart = useCallback((e: React.DragEvent, id: string) => {
     if (!onReorder) return;
+    const target = e.target as HTMLElement | null;
+    if (target?.closest('button, input, textarea, select, .scenario-colour-swatch-wrapper, .colour-selector-compact, .colour-selector-compact-popup')) {
+      e.preventDefault();
+      return;
+    }
     setDraggedId(id);
     e.dataTransfer.effectAllowed = 'move';
     e.dataTransfer.setData('text/plain', id);
@@ -220,23 +225,24 @@ export function ScenarioLayerList({
     return (
       <div
         key={item.id}
-        className={`scenario-row ${item.kind === 'current' ? 'scenario-current' : ''} ${item.kind === 'base' ? 'scenario-base' : ''} ${selected ? 'selected' : ''} ${isDragging ? 'dragging' : ''} ${isDragOver ? 'drag-over' : ''}`}
+        className={`scenario-row ${item.kind === 'current' ? 'scenario-current' : ''} ${item.kind === 'base' ? 'scenario-base' : ''} ${canDrag ? 'scenario-row-draggable' : ''} ${selected ? 'selected' : ''} ${isDragging ? 'dragging' : ''} ${isDragOver ? 'drag-over' : ''}`}
         style={isUser ? {
           transform,
           transition: isDragging ? 'none' : 'transform 0.15s ease',
         } : undefined}
+        draggable={canDrag && !isEditing}
+        onDragStart={canDrag ? (e) => handleDragStart(e, item.id) : undefined}
+        onDragEnd={canDrag ? handleDragEnd : undefined}
         onDragOver={canDrag ? (e) => handleDragOverRow(e, index!) : undefined}
         onContextMenu={onRowContextMenu ? (e) => onRowContextMenu(e, item.id) : undefined}
+        title={canDrag ? 'Drag to reorder' : undefined}
       >
         {/* Colour swatch */}
         {showSwatch ? (
           <div
             className="scenario-colour-swatch-wrapper"
             style={{ position: 'relative', opacity: item.visible ? 1 : 0.3 }}
-            title={canDrag ? 'Drag to reorder, click to change colour' : undefined}
-            draggable={canDrag && !isEditing}
-            onDragStart={canDrag ? (e) => { e.stopPropagation(); handleDragStart(e, item.id); } : undefined}
-            onDragEnd={canDrag ? handleDragEnd : undefined}
+            title={onColourChange ? 'Click to change colour' : undefined}
           >
             {onColourChange ? (
               <ColourSelector

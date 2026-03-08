@@ -99,4 +99,76 @@ describe('Canvas analysis creation: element palette path (integration)', () => {
     expect(dsl).toContain('to(');
     expect(dsl).toContain('visited(');
   });
+
+  it('should produce bridge_view for absorbing node with scenarioCount=2', async () => {
+    const selectedNodeIds = ['purchase'];
+    const dsl = constructQueryDSL(selectedNodeIds, REACTFLOW_NODES as any[], GRAPH.edges as any[]);
+    expect(dsl).toContain('to(purchase)');
+
+    const { primaryAnalysisType } = await resolveAnalysisType(GRAPH, dsl, 2);
+    expect(primaryAnalysisType).toBe('bridge_view');
+  });
+
+  it('should produce to_node_reach for absorbing node with scenarioCount=1 (default)', async () => {
+    const selectedNodeIds = ['purchase'];
+    const dsl = constructQueryDSL(selectedNodeIds, REACTFLOW_NODES as any[], GRAPH.edges as any[]);
+    expect(dsl).toContain('to(purchase)');
+
+    const { primaryAnalysisType } = await resolveAnalysisType(GRAPH, dsl, 1);
+    expect(primaryAnalysisType).toBe('to_node_reach');
+  });
+
+  it('scenarioCount changes primary type: to(node) with 1 vs 2 scenarios', async () => {
+    const dsl = 'to(purchase)';
+    const { primaryAnalysisType: withOne } = await resolveAnalysisType(GRAPH, dsl, 1);
+    const { primaryAnalysisType: withTwo } = await resolveAnalysisType(GRAPH, dsl, 2);
+
+    expect(withOne).toBe('to_node_reach');
+    expect(withTwo).toBe('bridge_view');
+  });
+});
+
+describe('Canvas analysis creation: element palette path simulates addCanvasAnalysisAtPosition', () => {
+  it('element palette path should resolve type with correct scenario count', async () => {
+    const selectedNodeIds = ['purchase'];
+    const analyticsDsl = constructQueryDSL(selectedNodeIds, REACTFLOW_NODES as any[], GRAPH.edges as any[]);
+    expect(analyticsDsl).toContain('to(purchase)');
+
+    const pendingPayload = analyticsDsl
+      ? { recipe: { analysis: { analytics_dsl: analyticsDsl } } }
+      : {};
+
+    const hasExplicitType = pendingPayload.recipe?.analysis?.analysis_type &&
+      pendingPayload.recipe.analysis.analysis_type !== 'unknown';
+    expect(hasExplicitType).toBeFalsy();
+
+    const scenarioCount = 2;
+    const dsl = pendingPayload.recipe?.analysis?.analytics_dsl || '';
+    const { primaryAnalysisType } = await resolveAnalysisType(GRAPH, dsl || undefined, scenarioCount);
+
+    expect(primaryAnalysisType).toBe('bridge_view');
+  });
+
+  it('element palette path with scenarioCount=1 should resolve to to_node_reach', async () => {
+    const selectedNodeIds = ['purchase'];
+    const analyticsDsl = constructQueryDSL(selectedNodeIds, REACTFLOW_NODES as any[], GRAPH.edges as any[]);
+
+    const scenarioCount = 1;
+    const { primaryAnalysisType } = await resolveAnalysisType(GRAPH, analyticsDsl || undefined, scenarioCount);
+
+    expect(primaryAnalysisType).toBe('to_node_reach');
+  });
+
+  it('analytics panel drag path has explicit type and skips resolution', () => {
+    const dragData = {
+      objectType: 'canvas-analysis',
+      recipe: { analysis: { analysis_type: 'bridge_view', analytics_dsl: 'to(purchase)' } },
+      chartKind: 'bridge',
+      analysisResult: { analysis_type: 'bridge_view' },
+    };
+
+    const hasExplicitType = dragData.recipe?.analysis?.analysis_type &&
+      dragData.recipe.analysis.analysis_type !== 'unknown';
+    expect(hasExplicitType).toBeTruthy();
+  });
 });

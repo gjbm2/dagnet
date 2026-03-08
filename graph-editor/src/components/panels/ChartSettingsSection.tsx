@@ -29,6 +29,7 @@ interface ChartSettingsSectionProps {
   viewMode: 'chart' | 'cards';
   onViewModeChange: (mode: 'chart' | 'cards') => void;
   chartKind?: string;
+  effectiveChartKind?: string;
   onChartKindChange: (kind: string | undefined) => void;
   chartKindOptions: string[];
   display?: Record<string, unknown>;
@@ -43,6 +44,7 @@ export function ChartSettingsSection({
   viewMode,
   onViewModeChange,
   chartKind,
+  effectiveChartKind,
   onChartKindChange,
   chartKindOptions,
   display,
@@ -50,9 +52,10 @@ export function ChartSettingsSection({
   onClearAllOverrides,
   defaultOpen = true,
 }: ChartSettingsSectionProps) {
+  const settingsKind = effectiveChartKind || chartKind;
   const displaySettings = useMemo(() => {
-    return getDisplaySettingsForSurface(chartKind, viewMode, 'propsPanel');
-  }, [chartKind, viewMode]);
+    return getDisplaySettingsForSurface(settingsKind, viewMode, 'propsPanel');
+  }, [settingsKind, viewMode]);
 
   const overrideCount = useMemo(() => {
     return displaySettings.filter((s: any) => s.overridable && display?.[s.key] != null).length;

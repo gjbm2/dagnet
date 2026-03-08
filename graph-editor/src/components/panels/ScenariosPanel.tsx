@@ -30,6 +30,7 @@ import { computeInheritedDSL, computeEffectiveFetchDSL, deriveBaseDSLForRebase, 
 import { fetchDataService } from '../../services/fetchDataService';
 import { useCopyAllScenarioParamPacks } from '../../hooks/useCopyAllScenarioParamPacks';
 import { useScenarioShareLink } from '../../hooks/useScenarioShareLink';
+import { getScenarioVisibilityOverlayStyle } from '../../lib/scenarioVisibilityModeStyles';
 import { 
   Images,
   Image,
@@ -333,34 +334,7 @@ export default function ScenariosPanel({ tabId, hideHeader = false }: ScenariosP
     if (!tabId) return null;
     
     const mode = operations.getScenarioVisibilityMode(tabId, scenarioId);
-    switch (mode) {
-      case 'f+e':
-        // Smooth gradient: solid left → striped right (evidence → forecast)
-        // Stripe overlay fades in from left to right
-        return {
-          position: 'absolute',
-          inset: 0,
-          borderRadius: 'inherit',
-          background: 'repeating-linear-gradient(45deg, transparent 0px, transparent 2px, rgba(255,255,255,0.5) 2px, rgba(255,255,255,0.5) 4px)',
-          maskImage: 'linear-gradient(90deg, transparent 0%, transparent 20%, black 80%, black 100%)',
-          WebkitMaskImage: 'linear-gradient(90deg, transparent 0%, transparent 20%, black 80%, black 100%)',
-          pointerEvents: 'none',
-        } as React.CSSProperties;
-      case 'f':
-        // Striped background (forecast only)
-        return {
-          position: 'absolute',
-          inset: 0,
-          borderRadius: 'inherit',
-          background: 'repeating-linear-gradient(45deg, transparent 0px, transparent 2px, rgba(255,255,255,0.5) 2px, rgba(255,255,255,0.5) 4px)',
-          pointerEvents: 'none',
-        };
-      case 'e':
-        // Solid background (evidence only) - no overlay needed
-        return null;
-      default:
-        return null;
-    }
+    return getScenarioVisibilityOverlayStyle(mode);
   }, [tabId, operations]);
   
   /**

@@ -413,23 +413,7 @@ export default function AnalyticsPanel({ tabId, hideHeader = false }: AnalyticsP
       const branch = graphFile?.source?.branch;
       const workspace = (repository && branch) ? { repository, branch } : undefined;
       
-      // DEV diagnostic: trace snapshot analysis resolution
-      console.error('[AnalyticsPanel] SNAPSHOT DIAG:', {
-        selectedAnalysisId,
-        needsSnapshots,
-        hasSnapshotMeta: !!snapshotMeta,
-        hasSnapshotContract: !!snapshotMeta?.snapshotContract,
-        hasWorkspace: !!workspace,
-        workspace: workspace ? `${repository}/${branch}` : null,
-        currentDSL,
-        queryDSL,
-        tabId,
-        hasCurrentTab: !!currentTab,
-        fileId: currentTab?.fileId,
-        hasGraphFile: !!graphFile,
-        hasSource: !!graphFile?.source,
-      });
-      
+
       // Get the FULL composited query DSL for a scenario.
       // Live scenarios MUST go through the composition machinery — a raw
       // scenario DSL (e.g. just "context(channel:paid-search)") is
@@ -1139,6 +1123,7 @@ export default function AnalyticsPanel({ tabId, hideHeader = false }: AnalyticsP
                           chartKind: results.result?.semantics?.chart?.recommended,
                           recipe: { analysis: { analysis_type: selectedAnalysisId, analytics_dsl: queryDSL || undefined } },
                           analysisResult: results.result,
+                          analysisTypeOverridden: true,
                           viewMode: 'chart',
                         },
                       }));
@@ -1158,6 +1143,7 @@ export default function AnalyticsPanel({ tabId, hideHeader = false }: AnalyticsP
                     chartKind: results.result?.semantics?.chart?.recommended,
                     recipe: { analysis: { analysis_type: selectedAnalysisId, analytics_dsl: queryDSL || undefined } },
                     analysisResult: results.result,
+                    analysisTypeOverridden: true,
                     viewMode: 'chart',
                   };
                   e.dataTransfer.setData('application/json', JSON.stringify(payload));
@@ -1202,6 +1188,7 @@ export default function AnalyticsPanel({ tabId, hideHeader = false }: AnalyticsP
                     chartKind: results.result?.semantics?.chart?.recommended,
                     recipe: { analysis: { analysis_type: selectedAnalysisId, analytics_dsl: queryDSL || undefined } },
                     analysisResult: results.result,
+                    analysisTypeOverridden: true,
                     viewMode: 'cards',
                   };
                   e.dataTransfer.setData('application/json', JSON.stringify(payload));

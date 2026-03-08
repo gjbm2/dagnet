@@ -115,16 +115,11 @@
 }
 
 .colour-selector-compact-popup {
-  position: absolute;
-  top: 100%;
-  left: 0;
-  margin-top: 4px;
   background: white;
   border: 1px solid #ddd;
   border-radius: 6px;
   padding: 8px;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
-  z-index: 1000;
   min-width: 200px;
 }
 
@@ -154,4 +149,3 @@
   opacity: 0.5;
   cursor: not-allowed;
 }
-

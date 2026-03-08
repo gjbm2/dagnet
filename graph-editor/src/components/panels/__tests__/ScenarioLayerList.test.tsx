@@ -110,6 +110,19 @@ describe('ScenarioLayerList', () => {
     expect(container.querySelectorAll('.scenario-colour-swatch-placeholder').length).toBe(0);
   });
 
+  it('should allow dragging from the whole user row', () => {
+    const onReorder = vi.fn();
+    const { container } = render(<ScenarioLayerList items={baseItems} onReorder={onReorder} />);
+    const rows = container.querySelectorAll('.scenario-row');
+    const dataTransfer = { effectAllowed: 'move', dropEffect: 'move', setData: vi.fn(), getData: vi.fn() };
+
+    fireEvent.dragStart(rows[1], { dataTransfer });
+    fireEvent.dragOver(rows[2], { dataTransfer });
+    fireEvent.dragEnd(rows[1], { dataTransfer });
+
+    expect(onReorder).toHaveBeenCalledWith(0, 1);
+  });
+
   it('should render user scenario names as editable when onRename is provided', () => {
     const onRename = vi.fn();
     render(<ScenarioLayerList items={baseItems} onRename={onRename} />);

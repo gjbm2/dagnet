@@ -50,10 +50,7 @@ interface CaptureResult {
 export function captureTabScenariosToRecipe(args: CaptureTabScenariosArgs): CaptureResult {
   const { tabId, currentDSL, operations, scenariosContext, whatIfDSL } = args;
   const scenarioState = operations.getScenarioState(tabId);
-  const rawVisibleIds: string[] = scenarioState?.visibleScenarioIds || ['current'];
-  const visibleIds = rawVisibleIds.includes('current')
-    ? ['current', ...rawVisibleIds.filter(id => id !== 'current')]
-    : rawVisibleIds;
+  const visibleIds: string[] = scenarioState?.visibleScenarioIds || ['current'];
 
   const scenarios: ChartRecipeScenario[] = visibleIds.map((sid) => {
     const visibilityMode = operations.getScenarioVisibilityMode(tabId, sid);

@@ -237,7 +237,11 @@ class FileRegistry {
   /**
    * Update file data
    */
-  async updateFile(fileId: string, newData: any): Promise<void> {
+  async updateFile(
+    fileId: string,
+    newData: any,
+    opts?: { syncRevision?: number; syncOrigin?: 'store' | 'external' }
+  ): Promise<void> {
     // Guard against re-entrant updates.
     // IMPORTANT: Do NOT drop updates (that creates silent data loss and race conditions).
     // Instead, queue the latest pending update and apply it after the current update completes.
@@ -296,6 +300,8 @@ class FileRegistry {
     }
     
     file.data = newData;
+    file.syncRevision = opts?.syncRevision;
+    file.syncOrigin = opts?.syncOrigin;
     const wasDirty = file.isDirty;
     
     // Simple dirty detection: if content changed from original, it's dirty. Period.
@@ -2936,7 +2942,9 @@ export function useFileState<T = any>(fileId: string): {
   data: T | null;
   originalData: T | null;
   isDirty: boolean;
-  updateData: (newData: T) => void;
+  syncRevision?: number;
+  syncOrigin?: 'store' | 'external';
+  updateData: (newData: T, opts?: { syncRevision?: number; syncOrigin?: 'store' | 'external' }) => void;
 } {
   const [file, setFile] = useState<FileState<T> | null>(null);
 
@@ -2966,15 +2974,17 @@ export function useFileState<T = any>(fileId: string): {
     return unsubscribe;
   }, [fileId]);
 
-  const updateData = useCallback((newData: T) => {
+  const updateData = useCallback((newData: T, opts?: { syncRevision?: number; syncOrigin?: 'store' | 'external' }) => {
     console.log(`useFileState.updateData[${fileId}]: Calling FileRegistry.updateFile`);
-    fileRegistry.updateFile(fileId, newData);
+    fileRegistry.updateFile(fileId, newData, opts);
   }, [fileId]);
 
   return {
     data: file?.data ?? null,
     originalData: file?.originalData ?? null,
     isDirty: file?.isDirty ?? false,
+    syncRevision: file?.syncRevision,
+    syncOrigin: file?.syncOrigin,
     updateData
   };
 }

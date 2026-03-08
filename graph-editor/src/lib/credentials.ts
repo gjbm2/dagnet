@@ -395,7 +395,7 @@ export class CredentialsManager {
       
       // Load credentials from the files table (stored as credentials-credentials file)
       const credentialsFile = await db.files.get('credentials-credentials');
-      console.log('🔧 CredentialsManager: Credentials file from IndexedDB:', credentialsFile);
+      console.log('🔧 CredentialsManager: Credentials file from IndexedDB:', credentialsFile ? 'found' : 'not found');
       
       if (!credentialsFile || !credentialsFile.data) {
         console.log('🔧 CredentialsManager: No credentials file found in IndexedDB');

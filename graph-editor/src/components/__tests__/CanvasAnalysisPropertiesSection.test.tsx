@@ -10,7 +10,7 @@
 
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, fireEvent } from '@testing-library/react';
 
 let currentGraph: any = {
   nodes: [{ uuid: 'n1', id: 'node-a', label: 'Node A' }],
@@ -27,12 +27,28 @@ let currentGraph: any = {
   ],
 };
 
+let setGraphMock = vi.fn((g: any) => { currentGraph = g; });
+let saveHistoryStateMock = vi.fn();
+let scenarioStateMock = { visibleScenarioIds: ['current'], scenarioOrder: [] as string[] };
+let scenariosContextValue: any = {
+  scenarios: [
+    { id: 'sc-1', name: 'Google', colour: '#ec4899', meta: { isLive: true, queryDSL: 'context(channel:google)' } },
+    { id: 'sc-2', name: 'Meta', colour: '#f59e0b', meta: { isLive: true, queryDSL: 'context(channel:meta)' } },
+  ],
+  currentColour: '#3b82f6',
+  baseColour: '#6b7280',
+  baseDSL: '',
+};
+let capturedRecipeScenarios: any[] = [
+  { scenario_id: 'current', name: 'Current', colour: '#3b82f6', visibility_mode: 'f+e' },
+];
+
 vi.mock('../../contexts/GraphStoreContext', () => ({
   useGraphStore: (selector?: any) => {
     const state = {
       graph: currentGraph,
-      setGraph: vi.fn((g: any) => { currentGraph = g; }),
-      saveHistoryState: vi.fn(),
+      setGraph: setGraphMock,
+      saveHistoryState: saveHistoryStateMock,
       currentDSL: 'window(-30d:)',
       isAutoUpdating: false,
     };
@@ -52,7 +68,7 @@ vi.mock('../../contexts/TabContext', () => ({
     operations: {
       updateTabState: vi.fn(),
       switchTab: vi.fn(),
-      getScenarioState: () => ({ visibleScenarioIds: ['current'], scenarioOrder: [] }),
+      getScenarioState: () => scenarioStateMock,
       getScenarioVisibilityMode: () => 'f+e',
       toggleScenarioVisibility: vi.fn(),
       cycleScenarioVisibilityMode: vi.fn(),
@@ -65,12 +81,7 @@ vi.mock('../../contexts/TabContext', () => ({
 }));
 
 vi.mock('../../contexts/ScenariosContext', () => ({
-  useScenariosContextOptional: () => ({
-    scenarios: [],
-    currentColour: '#3b82f6',
-    baseColour: '#6b7280',
-    baseDSL: '',
-  }),
+  useScenariosContextOptional: () => scenariosContextValue,
 }));
 
 vi.mock('../../lib/graphComputeClient', () => ({
@@ -118,7 +129,7 @@ vi.mock('../../contexts/NavigatorContext', () => ({
 
 vi.mock('../../services/captureTabScenariosService', () => ({
   captureTabScenariosToRecipe: () => ({
-    scenarios: [{ scenario_id: 'current', name: 'Current', colour: '#3b82f6', visibility_mode: 'f+e' }],
+    scenarios: capturedRecipeScenarios,
     what_if_dsl: undefined,
   }),
 }));
@@ -127,6 +138,21 @@ import PropertiesPanel from '../PropertiesPanel';
 
 describe('CanvasAnalysisPropertiesSection smoke tests', () => {
   beforeEach(() => {
+    setGraphMock = vi.fn((g: any) => { currentGraph = g; });
+    saveHistoryStateMock = vi.fn();
+    scenarioStateMock = { visibleScenarioIds: ['current'], scenarioOrder: [] };
+    scenariosContextValue = {
+      scenarios: [
+        { id: 'sc-1', name: 'Google', colour: '#ec4899', meta: { isLive: true, queryDSL: 'context(channel:google)' } },
+        { id: 'sc-2', name: 'Meta', colour: '#f59e0b', meta: { isLive: true, queryDSL: 'context(channel:meta)' } },
+      ],
+      currentColour: '#3b82f6',
+      baseColour: '#6b7280',
+      baseDSL: '',
+    };
+    capturedRecipeScenarios = [
+      { scenario_id: 'current', name: 'Current', colour: '#3b82f6', visibility_mode: 'f+e' },
+    ];
     currentGraph = {
       nodes: [{ uuid: 'n1', id: 'node-a', label: 'Node A' }],
       edges: [],
@@ -253,5 +279,99 @@ describe('CanvasAnalysisPropertiesSection smoke tests', () => {
         />
       );
     }).not.toThrow();
+  });
+
+  it('should render visibility-mode swatch overlays in custom chart props', () => {
+    currentGraph.canvasAnalyses[0].live = false;
+    currentGraph.canvasAnalyses[0].recipe.scenarios = [
+      { scenario_id: 'current', name: 'Current', colour: '#3b82f6', effective_dsl: 'window(-30d:)', visibility_mode: 'f' },
+      { scenario_id: 'sc-1', name: 'Google', colour: '#ec4899', effective_dsl: 'window(-30d:).context(channel:google)', visibility_mode: 'e' },
+    ];
+
+    const { container } = render(
+      <PropertiesPanel
+        selectedNodeId={null}
+        onSelectedNodeChange={() => {}}
+        selectedEdgeId={null}
+        onSelectedEdgeChange={() => {}}
+        selectedAnalysisId="ca-1"
+        tabId="tab-1"
+      />
+    );
+
+    const swatchWrappers = Array.from(container.querySelectorAll('.scenario-colour-swatch-wrapper'));
+    const wrappersWithOverlay = swatchWrappers.filter((wrapper) => wrapper.children.length > 1);
+    expect(wrappersWithOverlay.length).toBe(1);
+  });
+
+  it('should reorder the full stored scenario list in custom mode', () => {
+    currentGraph.canvasAnalyses[0].live = false;
+    currentGraph.canvasAnalyses[0].recipe.scenarios = [
+      { scenario_id: 'current', name: 'Current', colour: '#3b82f6', effective_dsl: 'window(-30d:)', visibility_mode: 'f+e' },
+      { scenario_id: 'sc-1', name: 'Google', colour: '#ec4899', effective_dsl: 'window(-30d:).context(channel:google)', visibility_mode: 'f+e' },
+      { scenario_id: 'base', name: 'Base', colour: '#6b7280', effective_dsl: 'window(-30d:)', visibility_mode: 'f+e' },
+    ];
+
+    const { container } = render(
+      <PropertiesPanel
+        selectedNodeId={null}
+        onSelectedNodeChange={() => {}}
+        selectedEdgeId={null}
+        onSelectedEdgeChange={() => {}}
+        selectedAnalysisId="ca-1"
+        tabId="tab-1"
+      />
+    );
+
+    const swatches = container.querySelectorAll('.scenario-colour-swatch-wrapper[draggable="true"]');
+    const rows = container.querySelectorAll('.scenario-row');
+    const dataTransfer = { effectAllowed: 'move', dropEffect: 'move', setData: vi.fn(), getData: vi.fn() };
+
+    expect(swatches.length).toBe(3);
+    fireEvent.dragStart(swatches[2], { dataTransfer });
+    fireEvent.dragOver(rows[0], { dataTransfer });
+    fireEvent.dragEnd(swatches[2], { dataTransfer });
+
+    expect(currentGraph.canvasAnalyses[0].recipe.scenarios.map((s: any) => s.scenario_id)).toEqual(['base', 'current', 'sc-1']);
+    expect(saveHistoryStateMock).toHaveBeenCalledWith('Reorder chart scenarios');
+  });
+
+  it('should keep current/base anchored when reordering live-mode user scenarios', () => {
+    scenarioStateMock = {
+      visibleScenarioIds: ['current', 'sc-1', 'sc-2', 'base'],
+      scenarioOrder: ['sc-1', 'sc-2'],
+    };
+    capturedRecipeScenarios = [
+      { scenario_id: 'current', name: 'Current', colour: '#3b82f6', visibility_mode: 'f+e' },
+      { scenario_id: 'sc-1', name: 'Google', colour: '#ec4899', visibility_mode: 'f+e' },
+      { scenario_id: 'sc-2', name: 'Meta', colour: '#f59e0b', visibility_mode: 'f+e' },
+      { scenario_id: 'base', name: 'Base', colour: '#6b7280', visibility_mode: 'f+e' },
+    ];
+
+    const { container } = render(
+      <PropertiesPanel
+        selectedNodeId={null}
+        onSelectedNodeChange={() => {}}
+        selectedEdgeId={null}
+        onSelectedEdgeChange={() => {}}
+        selectedAnalysisId="ca-1"
+        tabId="tab-1"
+      />
+    );
+
+    const swatches = container.querySelectorAll('.scenario-colour-swatch-wrapper[draggable="true"]');
+    const metaRow = screen.getByText('Meta').closest('.scenario-row');
+    const dataTransfer = { effectAllowed: 'move', dropEffect: 'move', setData: vi.fn(), getData: vi.fn() };
+
+    expect(swatches.length).toBe(2);
+    expect(metaRow).toBeTruthy();
+
+    fireEvent.dragStart(swatches[0], { dataTransfer });
+    fireEvent.dragOver(metaRow!, { dataTransfer });
+    fireEvent.dragEnd(swatches[0], { dataTransfer });
+
+    expect(currentGraph.canvasAnalyses[0].live).toBe(false);
+    expect(currentGraph.canvasAnalyses[0].recipe.scenarios.map((s: any) => s.scenario_id)).toEqual(['current', 'sc-2', 'sc-1', 'base']);
+    expect(saveHistoryStateMock).toHaveBeenCalledWith('Reorder chart scenarios');
   });
 });

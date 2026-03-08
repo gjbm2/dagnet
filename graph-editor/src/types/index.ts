@@ -86,6 +86,11 @@ export interface FileState<T = any> {
   lastModified?: number;
   lastSaved?: number;
   lastOpened?: number;
+
+  // Sync metadata (persisted with file state, not with graph JSON)
+  // Used by GraphEditor's store<->file bridge to reject stale echoes of older store writes.
+  syncRevision?: number;
+  syncOrigin?: 'store' | 'external';
   
   // Git metadata
   sha?: string;                // Git SHA for conflict detection

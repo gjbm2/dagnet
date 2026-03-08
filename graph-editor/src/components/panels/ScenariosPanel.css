@@ -60,6 +60,7 @@
   display: flex;
   align-items: center;
   gap: 8px;
+  transition: opacity 0.2s ease, transform 0.2s ease;
   padding: 8px 12px;
   margin: 2px 8px;
   border-radius: 4px;
@@ -67,6 +68,14 @@
   border: 1px solid #E5E7EB;
   transition: all 0.2s ease;
   cursor: default;
+}
+
+.scenario-row.scenario-row-draggable {
+  cursor: grab;
+}
+
+.scenario-row.scenario-row-draggable:active {
+  cursor: grabbing;
 }
 
 .scenario-row:hover {
@@ -119,16 +128,15 @@
 
 /* Drag Handle Placeholder - removed, swatches are now draggable */
 
-/* Colour Swatch - draggable and clickable to change colour */
+/* Colour swatch - clickable to change colour */
 .scenario-colour-swatch-wrapper {
   flex-shrink: 0;
   pointer-events: auto; /* Clickable for colour picker */
-  cursor: grab; /* Show grab cursor for dragging */
   transition: transform 0.2s ease, box-shadow 0.2s ease;
   border-radius: 3px;
 }
 
-/* Hover hint for draggable swatches (exclude Current and Original) */
+/* Hover hint for interactive swatches */
 .scenario-colour-swatch-wrapper:hover {
   transform: translateY(-2px); /* Slight lift on hover */
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1); /* Subtle shadow hint */
@@ -139,12 +147,7 @@
 .scenario-row.scenario-base .scenario-colour-swatch-wrapper:hover {
   transform: none;
   box-shadow: none;
-  cursor: pointer; /* Just pointer, not grab */
-}
-
-.scenario-colour-swatch-wrapper:active {
-  cursor: grabbing;
-  transform: translateY(0); /* Return to normal position when dragging */
+  cursor: pointer;
 }
 
 .scenario-colour-swatch {

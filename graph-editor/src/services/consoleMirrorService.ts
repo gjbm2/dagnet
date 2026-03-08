@@ -31,6 +31,7 @@ type MirrorEntry =
 import { graphSnapshotService } from './graphSnapshotService';
 import { sessionLogService } from './sessionLogService';
 import { sessionLogMirrorService } from './sessionLogMirrorService';
+import { redactDeep } from '../lib/redact';
 
 const STORAGE_KEY = 'dagnet:console-mirror';
 const DEFAULT_ENDPOINT = '/__dagnet/console-log';
@@ -38,14 +39,13 @@ const DEV_LOG_SYNC_START_LABEL = 'log sync start';
 const DEV_LOG_SYNC_STOP_LABEL = 'log sync stop';
 
 function safeSerialiseArgs(args: unknown[]): unknown[] {
-  // Ensure JSON serialisable; fall back to string.
   return args.map((a) => {
     try {
       if (a === undefined) return { __type: 'undefined' };
       if (typeof a === 'bigint') return { __type: 'bigint', value: a.toString() };
-      // Quick path: primitives and plain objects usually work fine
-      JSON.stringify(a);
-      return a;
+      const redacted = redactDeep(a);
+      JSON.stringify(redacted);
+      return redacted;
     } catch {
       try {
         return String(a);

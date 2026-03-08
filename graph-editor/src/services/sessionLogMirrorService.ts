@@ -5,6 +5,7 @@
  * This avoids copy/paste of the in-app Session Log when debugging with Cursor.
  */
 import { sessionLogService, type LogEntry } from './sessionLogService';
+import { redactDeep } from '../lib/redact';
 
 type MirrorEntry = {
   kind: 'session';
@@ -90,7 +91,7 @@ class SessionLogMirrorService {
         operation: e.operation,
         message: e.message,
         details: e.details,
-        context: e.context as any,
+        context: redactDeep(e.context) as Record<string, unknown> | undefined,
       }));
 
       await fetch(this.endpoint, {

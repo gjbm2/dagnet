@@ -58,6 +58,7 @@ function dateRangesEqual(a: DateRange, b: DateRange): boolean {
  */
 export interface GraphStore {
   graph: GraphData | null;
+  graphRevision: number;
   setGraph: (graph: GraphData) => void;
   
   // Auto-update flag (for animation suppression)
@@ -103,6 +104,7 @@ export function createGraphStore(): GraphStoreHook {
   return create<GraphStore>((set, get) => ({
     // Graph data
     graph: null,
+    graphRevision: 0,
     setGraph: (graph: GraphData) => {
       // On initial load, hydrate the AUTHORITATIVE DSL from the graph's persisted DSL.
       // This ensures any early startup logic (planner/fetch) sees the correct DSL
@@ -114,7 +116,7 @@ export function createGraphStore(): GraphStoreHook {
       const isBootstrap = !currentDSL && !!graph?.currentQueryDSL;
 
       if (!isBootstrap) {
-        set({ graph });
+        set((state) => ({ graph, graphRevision: state.graphRevision + 1 }));
         return;
       }
 
@@ -130,7 +132,7 @@ export function createGraphStore(): GraphStoreHook {
           ? { start: range.start, end: range.end }
           : currentWindow;
 
-      set({ graph, currentDSL: nextDSL, window: nextWindow });
+      set((state) => ({ graph, currentDSL: nextDSL, window: nextWindow, graphRevision: state.graphRevision + 1 }));
     },
     
     // Auto-update flag
@@ -212,6 +214,7 @@ export function createGraphStore(): GraphStoreHook {
         const newIndex = historyIndex - 1;
         const newState = {
           graph: JSON.parse(JSON.stringify(history[newIndex])),
+          graphRevision: get().graphRevision + 1,
           historyIndex: newIndex,
           canUndo: newIndex > 0,
           canRedo: true
@@ -227,6 +230,7 @@ export function createGraphStore(): GraphStoreHook {
         const newIndex = historyIndex + 1;
         set({
           graph: JSON.parse(JSON.stringify(history[newIndex])),
+          graphRevision: get().graphRevision + 1,
           historyIndex: newIndex,
           canUndo: true,
           canRedo: newIndex < history.length - 1
@@ -281,6 +285,7 @@ export function cleanupGraphStore(fileId: string): void {
     console.log(`GraphStoreContext: Force cleaning up store for ${fileId}`);
     store.setState({ 
       graph: null,
+      graphRevision: 0,
       history: []
     });
     storeRegistry.delete(fileId);
@@ -589,6 +594,7 @@ export function GraphStoreProvider({
               // Then clean up the store state
               storeToClean.setState({ 
                 graph: null,
+                graphRevision: 0,
                 history: []
               });
             }

@@ -88,6 +88,20 @@ export function ChartViewer({ fileId }: EditorProps): JSX.Element {
     }
     return Object.keys(m).length ? m : undefined;
   })();
+  const scenarioMetaById = (() => {
+    const items = chart?.recipe?.scenarios || [];
+    const m: Record<string, { name?: string; colour?: string; visibility_mode?: 'f+e' | 'f' | 'e' }> = {};
+    for (const s of items) {
+      const id = String(s?.scenario_id || '');
+      if (!id) continue;
+      m[id] = {
+        name: s?.name || id,
+        colour: s?.colour,
+        visibility_mode: (s?.visibility_mode as any) || 'f+e',
+      };
+    }
+    return Object.keys(m).length ? m : undefined;
+  })();
 
   const [showChart, setShowChart] = useState(true);
   const [showResults, setShowResults] = useState(false);
@@ -241,6 +255,7 @@ export function ChartViewer({ fileId }: EditorProps): JSX.Element {
                   result={analysisResult}
                   visibleScenarioIds={scenarioIds}
                   scenarioVisibilityModes={scenarioVisibilityModes}
+                  scenarioMetaById={scenarioMetaById}
                   height={420}
                   fillHeight={true}
                   compactControls={false}

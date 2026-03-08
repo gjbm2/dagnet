@@ -14,6 +14,7 @@ import { useTabContext } from '../contexts/TabContext';
 import { useGraphStore } from '../contexts/GraphStoreContext';
 import { useScenariosContextOptional } from '../contexts/ScenariosContext';
 import { captureTabScenariosToRecipe } from '../services/captureTabScenariosService';
+import { mutateCanvasAnalysisGraph } from '../services/canvasAnalysisMutationService';
 import type { CanvasAnalysis } from '../types';
 import type { ScenarioLayerListProps } from '../components/panels/ScenarioLayerList';
 
@@ -46,58 +47,55 @@ export function useCanvasAnalysisScenarioCallbacks({
   const graphStore = useGraphStore();
   const liveTabId = tabId || tabs[0]?.id;
 
-  const promoteToCustom = useCallback((): any[] | null => {
-    if (!analysis?.live) return null;
+  const captureScenarios = useCallback((): { scenarios: any[]; what_if_dsl?: string } | null => {
     if (!liveTabId || !scenariosContext) return null;
-
     const currentTab = tabs.find(t => t.id === liveTabId);
     const whatIfDSL = currentTab?.editorState?.whatIfDSL || null;
-    const { scenarios: captured, what_if_dsl } = captureTabScenariosToRecipe({
+    return captureTabScenariosToRecipe({
       tabId: liveTabId,
       currentDSL: graphStore.currentDSL || '',
       operations,
       scenariosContext: scenariosContext as any,
       whatIfDSL,
     });
+  }, [liveTabId, scenariosContext, tabs, operations, graphStore]);
 
-    const nextGraph = structuredClone(graph);
-    const a = nextGraph.canvasAnalyses?.find((item: any) => item.id === analysisId);
-    if (!a) return null;
-    a.live = false;
-    a.recipe = {
-      ...a.recipe,
-      scenarios: captured,
-      analysis: { ...a.recipe.analysis, what_if_dsl },
-    };
-    if (nextGraph.metadata) nextGraph.metadata.updated_at = new Date().toISOString();
+  const promoteToCustom = useCallback((): any[] | null => {
+    if (!analysis?.live) return null;
+    const captured = captureScenarios();
+    if (!captured) return null;
+    const nextGraph = mutateCanvasAnalysisGraph(graph, analysisId, (a) => {
+      a.live = false;
+      a.recipe = {
+        ...a.recipe,
+        scenarios: captured.scenarios,
+        analysis: { ...a.recipe.analysis, what_if_dsl: captured.what_if_dsl },
+      };
+    });
+    if (!nextGraph) return null;
     setGraph(nextGraph);
-    return captured;
-  }, [analysis?.live, analysisId, graph, setGraph, liveTabId, scenariosContext, tabs, operations, graphStore]);
+    return captured.scenarios;
+  }, [analysis?.live, analysisId, graph, setGraph, captureScenarios]);
 
   const mutateRecipeScenarios = useCallback((mutator: (a: any) => void, label: string) => {
     if (!analysis) return;
-    if (analysis.live) {
-      const captured = promoteToCustom();
-      if (!captured) return;
-      const nextGraph = structuredClone(graph);
-      const a = nextGraph.canvasAnalyses?.find((item: any) => item.id === analysisId);
-      if (!a) return;
-      a.live = false;
-      a.recipe = { ...a.recipe, scenarios: captured };
+    const nextGraph = mutateCanvasAnalysisGraph(graph, analysisId, (a) => {
+      if (analysis.live) {
+        const captured = captureScenarios();
+        if (!captured) return;
+        a.live = false;
+        a.recipe = {
+          ...a.recipe,
+          scenarios: captured.scenarios,
+          analysis: { ...a.recipe.analysis, what_if_dsl: captured.what_if_dsl },
+        };
+      }
       mutator(a);
-      if (nextGraph.metadata) nextGraph.metadata.updated_at = new Date().toISOString();
-      setGraph(nextGraph);
-      saveHistoryState(label);
-    } else {
-      const nextGraph = structuredClone(graph);
-      const a = nextGraph.canvasAnalyses?.find((item: any) => item.id === analysisId);
-      if (!a) return;
-      mutator(a);
-      if (nextGraph.metadata) nextGraph.metadata.updated_at = new Date().toISOString();
-      setGraph(nextGraph);
-      saveHistoryState(label);
-    }
-  }, [analysis?.live, analysis, analysisId, graph, setGraph, saveHistoryState, promoteToCustom]);
+    });
+    if (!nextGraph) return;
+    setGraph(nextGraph);
+    saveHistoryState(label);
+  }, [analysis?.live, analysis, analysisId, graph, setGraph, saveHistoryState, captureScenarios]);
 
   const onRename = useCallback((id: string, newName: string) => {
     mutateRecipeScenarios((a) => {
@@ -125,10 +123,6 @@ export function useCanvasAnalysisScenarioCallbacks({
   }, [mutateRecipeScenarios]);
 
   const onToggleVisibility = useCallback((id: string) => {
-    if (analysis?.live && liveTabId) {
-      void operations.toggleScenarioVisibility(liveTabId, id);
-      return;
-    }
     mutateRecipeScenarios((a) => {
       if (!a.display) a.display = {};
       const hidden = Array.isArray(a.display.hidden_scenarios) ? [...a.display.hidden_scenarios] : [];
@@ -137,13 +131,9 @@ export function useCanvasAnalysisScenarioCallbacks({
       else hidden.push(id);
       a.display.hidden_scenarios = hidden;
     }, 'Toggle chart scenario visibility');
-  }, [analysis?.live, liveTabId, operations, mutateRecipeScenarios]);
+  }, [mutateRecipeScenarios]);
 
   const onCycleMode = useCallback((id: string) => {
-    if (analysis?.live && liveTabId) {
-      void operations.cycleScenarioVisibilityMode(liveTabId, id);
-      return;
-    }
     mutateRecipeScenarios((a) => {
       const s = a?.recipe?.scenarios?.find((sc: any) => sc.scenario_id === id);
       if (!s) return;
@@ -152,12 +142,20 @@ export function useCanvasAnalysisScenarioCallbacks({
       const idx = modes.indexOf(cur);
       s.visibility_mode = modes[(idx + 1) % modes.length];
     }, 'Cycle chart scenario display mode');
-  }, [analysis?.live, liveTabId, operations, mutateRecipeScenarios]);
+  }, [mutateRecipeScenarios]);
 
   const onReorder = useCallback((fromIndex: number, toIndex: number) => {
     mutateRecipeScenarios((a) => {
       if (!a?.recipe?.scenarios) return;
       const arr = [...a.recipe.scenarios];
+      if (!analysis?.live) {
+        if (fromIndex < 0 || toIndex < 0 || fromIndex >= arr.length || toIndex >= arr.length || fromIndex === toIndex) return;
+        const [moved] = arr.splice(fromIndex, 1);
+        arr.splice(toIndex, 0, moved);
+        a.recipe.scenarios = arr;
+        return;
+      }
+
       const userFullIndices = arr
         .map((s: any, idx: number) => ({ s, idx }))
         .filter(({ s }: any) => s.scenario_id !== 'current' && s.scenario_id !== 'base')
@@ -168,8 +166,7 @@ export function useCanvasAnalysisScenarioCallbacks({
       if (fromFull == null || toFull == null || fromFull === toFull) return;
 
       const [moved] = arr.splice(fromFull, 1);
-      const adjustedTo = fromFull < toFull ? toFull - 1 : toFull;
-      arr.splice(adjustedTo, 0, moved);
+      arr.splice(toFull, 0, moved);
       a.recipe.scenarios = arr;
     }, 'Reorder chart scenarios');
   }, [mutateRecipeScenarios]);

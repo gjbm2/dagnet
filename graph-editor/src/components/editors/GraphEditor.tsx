@@ -212,7 +212,7 @@ function ScenarioLegendWrapper({ tabId }: { tabId: string }) {
 const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, readonly = false }: EditorProps<GraphData> & { tabId?: string }) {
   const { theme } = useTheme();
   const dark = theme === 'dark';
-  const { data, isDirty, updateData } = useFileState<GraphData>(fileId);
+  const { data, isDirty, syncRevision: fileSyncRevision, syncOrigin: fileSyncOrigin, updateData } = useFileState<GraphData>(fileId);
   const { isDashboardMode } = useDashboardMode();
   
   // Phase 1: Use refs to avoid subscribing to all tabs changes
@@ -1429,6 +1429,7 @@ const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, r
   // Phase 1: Use selective store subscription - only subscribe to graph, not window
   // WindowSelector handles window state separately
   const graph = useGraphStore(state => state.graph);
+  const graphRevision = useGraphStore(state => state.graphRevision);
   
   // Get store hook for methods - use ref to avoid subscribing to all state changes
   // Store hook is stable, so we can safely use it in callbacks
@@ -1495,10 +1496,17 @@ const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, r
   // Track the last synced content to detect actual changes vs reference changes
   const lastSyncedContentRef = React.useRef<string>('');
   const initialHistorySavedRef = React.useRef(false);
+  const lastStoreRevisionWrittenRef = React.useRef<number>(-1);
+  const currentStoreRevisionRef = React.useRef<number>(0);
+  const writtenStoreContentsRef = React.useRef<Map<string, number>>(new Map());
   
   // Track data object reference to detect changes
   const prevDataRef = React.useRef(data);
   
+  useEffect(() => {
+    currentStoreRevisionRef.current = graphRevision;
+  }, [graphRevision]);
+
   // Time-based suppression for file→store sync after a store→file sync
   // This prevents the race condition where stale data from FileRegistry overwrites fresh store data
   const suppressFileToStoreUntilRef = React.useRef<number>(0);
@@ -1541,6 +1549,20 @@ const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, r
       console.log(`GraphEditor[${fileId}]: data matches lastSyncedContent, skipping file→store sync`);
       return;
     }
+
+    // Revision-aware stale echo rejection:
+    // if this callback is carrying content from one of our older store->file writes,
+    // and the store has advanced since then, do NOT let it overwrite fresher chart state.
+    const recordedRevision = writtenStoreContentsRef.current.get(dataStr);
+    if (fileSyncOrigin === 'store' && recordedRevision !== undefined && recordedRevision < currentStoreRevisionRef.current) {
+      console.log(`[${new Date().toISOString()}] GraphEditor[${fileId}]: file→store sync skipped (stale store echo)`, {
+        recordedRevision,
+        currentStoreRevision: currentStoreRevisionRef.current,
+        fileSyncRevision,
+        fileSyncOrigin,
+      });
+      return;
+    }
     
     // Update sync tracking and sync to store
     lastSyncedContentRef.current = dataStr;
@@ -1562,7 +1584,7 @@ const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, r
         saveHistoryState();
       }, 150);
     }
-  }, [data, setGraph, saveHistoryState, fileId]);
+  }, [data, setGraph, saveHistoryState, fileId, fileSyncOrigin, fileSyncRevision]);
 
   // Sync graph store changes BACK to file (from interactive edits)
   // This effect runs when `graph` changes (user edits in canvas)
@@ -1587,14 +1609,21 @@ const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, r
     
     // Update sync tracking and sync to file
     lastSyncedContentRef.current = graphStr;
+    lastStoreRevisionWrittenRef.current = graphRevision;
+    writtenStoreContentsRef.current.set(graphStr, graphRevision);
+    // Bound memory: keep only the most recent 25 serialized store writes
+    if (writtenStoreContentsRef.current.size > 25) {
+      const oldestKey = writtenStoreContentsRef.current.keys().next().value;
+      if (oldestKey) writtenStoreContentsRef.current.delete(oldestKey);
+    }
     
     // Suppress file→store sync for 500ms to prevent race condition where
     // stale data from FileRegistry callback overwrites the fresh store data
     suppressFileToStoreUntilRef.current = Date.now() + 500;
     
-    console.log(`[${new Date().toISOString()}] [GraphEditor] Store→File: SYNCING (nodes: ${graph.nodes.length})`);
-    updateData(graph);
-  }, [graph, updateData]);
+    console.log(`[${new Date().toISOString()}] [GraphEditor] Store→File: SYNCING (nodes: ${graph.nodes.length}, revision: ${graphRevision})`);
+    updateData(graph, { syncRevision: graphRevision, syncOrigin: 'store' });
+  }, [graph, graphRevision, updateData]);
 
   // Listen for suppress store→file sync event (for programmatic updates from file pulls)
   // When this fires, update lastSyncedContentRef to match current data to prevent spurious syncs

@@ -39,6 +39,8 @@ import { graphComputeClient, type AvailableAnalysis } from '../lib/graphComputeC
 import { resolveAnalysisType } from '../services/analysisTypeResolutionService';
 import { canvasAnalysisResultCache } from '../hooks/useCanvasAnalysisCompute';
 import { getDisplaySettingsForSurface } from '../lib/analysisDisplaySettingsRegistry';
+import { getScenarioVisibilityOverlayStyle } from '../lib/scenarioVisibilityModeStyles';
+import { mutateCanvasAnalysisGraph, deleteCanvasAnalysisFromGraph } from '../services/canvasAnalysisMutationService';
 import { ScenarioLayerList } from './panels/ScenarioLayerList';
 import type { ScenarioLayerItem } from '../types/scenarioLayerList';
 import { useScenariosContextOptional } from '../contexts/ScenariosContext';
@@ -151,30 +153,28 @@ function CanvasAnalysisPropertiesSection({ analysisId, graph, setGraph, saveHist
 
 
   const updateAnalysis = useCallback((updates: any) => {
-    const nextGraph = structuredClone(graph);
-    const a = nextGraph.canvasAnalyses?.find((a: any) => a.id === analysisId);
-    if (!a) return;
-    Object.assign(a, updates);
-    if (nextGraph.metadata) nextGraph.metadata.updated_at = new Date().toISOString();
+    const nextGraph = mutateCanvasAnalysisGraph(graph, analysisId, (a) => {
+      Object.assign(a, updates);
+    });
+    if (!nextGraph) return;
     setGraph(nextGraph);
     saveHistoryState('Update canvas analysis');
   }, [graph, setGraph, saveHistoryState, analysisId]);
 
   const updateRecipeAnalysis = useCallback((field: string, value: any) => {
-    const nextGraph = structuredClone(graph);
-    const a = nextGraph.canvasAnalyses?.find((a: any) => a.id === analysisId);
-    if (a?.recipe?.analysis) (a.recipe.analysis as any)[field] = value;
-    if (nextGraph.metadata) nextGraph.metadata.updated_at = new Date().toISOString();
+    const nextGraph = mutateCanvasAnalysisGraph(graph, analysisId, (a) => {
+      if (a?.recipe?.analysis) (a.recipe.analysis as any)[field] = value;
+    });
+    if (!nextGraph) return;
     setGraph(nextGraph);
   }, [graph, setGraph, analysisId]);
 
   const updateDisplaySetting = useCallback((key: string, value: any) => {
-    const nextGraph = structuredClone(graph);
-    const a = nextGraph.canvasAnalyses?.find((a: any) => a.id === analysisId);
-    if (!a) return;
-    if (!a.display) a.display = {};
-    a.display[key] = value;
-    if (nextGraph.metadata) nextGraph.metadata.updated_at = new Date().toISOString();
+    const nextGraph = mutateCanvasAnalysisGraph(graph, analysisId, (a) => {
+      if (!a.display) a.display = {};
+      (a.display as any)[key] = value;
+    });
+    if (!nextGraph) return;
     setGraph(nextGraph);
     saveHistoryState('Update display setting');
   }, [graph, setGraph, saveHistoryState, analysisId]);
@@ -186,6 +186,8 @@ function CanvasAnalysisPropertiesSection({ analysisId, graph, setGraph, saveHist
     const all = [rec, ...alts].filter(Boolean) as string[];
     return Array.from(new Set(all));
   }, [cachedResult]);
+
+  const effectiveChartKind = analysis?.chart_kind || cachedResult?.semantics?.chart?.recommended || undefined;
 
   const scenariosContext = useScenariosContextOptional();
   const { tabs, operations } = useTabContext();
@@ -199,38 +201,35 @@ function CanvasAnalysisPropertiesSection({ analysisId, graph, setGraph, saveHist
   const scenarioLayerItems = useMemo((): ScenarioLayerItem[] => {
     if (analysis?.live) {
       const scenarioState = liveTabId ? operations.getScenarioState(liveTabId) : null;
-      const visibleIds = scenarioState?.visibleScenarioIds || ['current'];
-      const scenarioOrder = scenarioState?.scenarioOrder || [];
-      const orderedScenarios = scenarioOrder.length > 0
-        ? scenarioOrder
-            .map((id: string) => ((scenariosContext as any)?.scenarios || []).find((s: any) => s.id === id))
-            .filter((s: any) => s !== undefined)
-        : ((scenariosContext as any)?.scenarios || []);
-      const items: ScenarioLayerItem[] = [];
-      items.push({
-        id: 'current', name: 'Current',
-        colour: (scenariosContext as any)?.currentColour || '#3b82f6',
-        visible: visibleIds.includes('current'),
-        visibilityMode: (liveTabId ? operations.getScenarioVisibilityMode(liveTabId, 'current') : 'f+e') as 'f+e' | 'f' | 'e',
-        kind: 'current',
+      const visibleIds: string[] = scenarioState?.visibleScenarioIds || ['current'];
+      return visibleIds.map((sid: string) => {
+        if (sid === 'current') {
+          return {
+            id: 'current', name: 'Current',
+            colour: (scenariosContext as any)?.currentColour || '#3b82f6',
+            visible: true,
+            visibilityMode: (liveTabId ? operations.getScenarioVisibilityMode(liveTabId, 'current') : 'f+e') as 'f+e' | 'f' | 'e',
+            kind: 'current' as const,
+          };
+        }
+        if (sid === 'base') {
+          return {
+            id: 'base', name: 'Base',
+            colour: (scenariosContext as any)?.baseColour || '#6b7280',
+            visible: true,
+            visibilityMode: (liveTabId ? operations.getScenarioVisibilityMode(liveTabId, 'base') : 'f+e') as 'f+e' | 'f' | 'e',
+            kind: 'base' as const,
+          };
+        }
+        const scenario = ((scenariosContext as any)?.scenarios || []).find((s: any) => s.id === sid);
+        return {
+          id: sid, name: scenario?.name || sid,
+          colour: scenario?.colour || '#808080',
+          visible: true,
+          visibilityMode: (liveTabId ? operations.getScenarioVisibilityMode(liveTabId, sid) : 'f+e') as 'f+e' | 'f' | 'e',
+          isLive: scenario?.meta?.isLive, kind: 'user' as const,
+        };
       });
-      for (const scenario of orderedScenarios) {
-        items.push({
-          id: scenario.id, name: scenario.name || scenario.id,
-          colour: scenario.colour || '#808080',
-          visible: visibleIds.includes(scenario.id),
-          visibilityMode: (liveTabId ? operations.getScenarioVisibilityMode(liveTabId, scenario.id) : 'f+e') as 'f+e' | 'f' | 'e',
-          isLive: scenario.meta?.isLive, kind: 'user',
-        });
-      }
-      items.push({
-        id: 'base', name: 'Base',
-        colour: (scenariosContext as any)?.baseColour || '#6b7280',
-        visible: visibleIds.includes('base'),
-        visibilityMode: (liveTabId ? operations.getScenarioVisibilityMode(liveTabId, 'base') : 'f+e') as 'f+e' | 'f' | 'e',
-        kind: 'base',
-      });
-      return items;
     }
     const frozenScenarios = analysis?.recipe?.scenarios || [];
     return frozenScenarios.map((fs: any) => ({
@@ -244,6 +243,10 @@ function CanvasAnalysisPropertiesSection({ analysisId, graph, setGraph, saveHist
   }, [analysis, scenariosContext, liveTabId, operations, chartHiddenScenarioIds]);
 
   const visibleScenarioCount = scenarioLayerItems.filter(i => i.visible).length || 1;
+  const getScenarioSwatchOverlayStyle = useCallback((id: string) => {
+    const item = scenarioLayerItems.find((entry) => entry.id === id);
+    return getScenarioVisibilityOverlayStyle(item?.visibilityMode);
+  }, [scenarioLayerItems]);
 
   useEffect(() => {
     if (!graph) return;
@@ -341,6 +344,7 @@ function CanvasAnalysisPropertiesSection({ analysisId, graph, setGraph, saveHist
             items={scenarioLayerItems}
             containerClassName=""
             allowRenameAll={true}
+            getSwatchOverlayStyle={getScenarioSwatchOverlayStyle}
             {...scenarioCallbacks}
           />
         </div>
@@ -402,6 +406,7 @@ function CanvasAnalysisPropertiesSection({ analysisId, graph, setGraph, saveHist
         viewMode={analysis.view_mode}
         onViewModeChange={(mode) => updateAnalysis({ view_mode: mode })}
         chartKind={analysis.chart_kind}
+        effectiveChartKind={effectiveChartKind}
         onChartKindChange={(kind) => { updateAnalysis({ chart_kind: kind }); saveHistoryState(kind ? 'Pin chart kind' : 'Reset chart kind to auto'); }}
         chartKindOptions={chartKindOptions}
         display={analysis.display}
@@ -445,13 +450,10 @@ function CanvasAnalysisPropertiesSection({ analysisId, graph, setGraph, saveHist
             className="property-action-button"
             style={{ padding: '6px 12px', fontSize: 12, cursor: 'pointer', border: '1px solid #d1d5db', borderRadius: 4, background: 'transparent', color: '#dc2626' }}
             onClick={() => {
-              const nextGraph = structuredClone(graph);
-              if (nextGraph.canvasAnalyses) {
-                nextGraph.canvasAnalyses = nextGraph.canvasAnalyses.filter((a: any) => a.id !== analysisId);
-                if (nextGraph.metadata) nextGraph.metadata.updated_at = new Date().toISOString();
-                setGraph(nextGraph);
-                saveHistoryState('Delete canvas analysis');
-              }
+              const nextGraph = deleteCanvasAnalysisFromGraph(graph, analysisId);
+              if (!nextGraph) return;
+              setGraph(nextGraph);
+              saveHistoryState('Delete canvas analysis');
             }}
           >
             Delete

@@ -414,8 +414,8 @@ export function composeParams(
   // Start with a deep copy of base
   let result: ScenarioParams = deepClone(base);
   
-  // Apply each overlay in order
   for (const overlay of overlays) {
+    if (!overlay) continue;
     result = mergeScenarioParams(result, overlay);
   }
   

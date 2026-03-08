@@ -479,7 +479,7 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
       
       // Get credentials
       const credentialsResult = await credentialsManager.loadCredentials();
-      console.log('📦 WorkspaceService: Credentials check result:', credentialsResult);
+      console.log('📦 WorkspaceService: Credentials check result:', { success: credentialsResult.success, source: credentialsResult.source, repoCount: credentialsResult.credentials?.git?.length ?? 0 });
 
       if (!credentialsResult.success || !credentialsResult.credentials) {
         console.log('📦 NavigatorContext: No credentials available, cannot load repository items');
@@ -500,7 +500,7 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
 
       // Find the credentials for this repository
       const gitCreds = credentialsResult.credentials.git.find(cred => cred.name === repo);
-      console.log(`📦 NavigatorContext: Looking for creds for repo ${repo}:`, gitCreds);
+      console.log(`📦 NavigatorContext: Looking for creds for repo ${repo}: found=${!!gitCreds}`);
 
       if (!gitCreds) {
         console.log(`📦 NavigatorContext: No credentials found for repository ${repo}`);

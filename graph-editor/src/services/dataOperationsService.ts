@@ -79,6 +79,7 @@ import { normalizeConstraintString, parseConstraints, parseDSL } from '../lib/qu
 import { normaliseSliceKeyForMatching } from '../lib/sliceKeyNormalisation';
 import { contextRegistry } from './contextRegistry';
 import { normalizeToUK, formatDateUK, parseUKDate, resolveRelativeDate } from '../lib/dateFormat';
+import { redactDeep } from '../lib/redact';
 import { rateLimiter } from './rateLimiter';
 import { buildDslFromEdge } from '../lib/das/buildDslFromEdge';
 import { createDASRunner } from '../lib/das';
@@ -6991,34 +6992,6 @@ class DataOperationsService {
           phase?: string;
           details?: unknown;
         }): { detailsText: string; context: Record<string, unknown> } => {
-          const SENSITIVE_KEY_SUBSTRINGS = [
-            'api_key',
-            'secret_key',
-            'password',
-            'token',
-            'access_token',
-            'refresh_token',
-            'authorization',
-            'basic_auth',
-            'client_secret',
-            'service_account',
-          ];
-
-          const redactDeep = (value: unknown): unknown => {
-            if (value === null || value === undefined) return value;
-            if (typeof value !== 'object') return value;
-            if (Array.isArray(value)) return value.map(redactDeep);
-
-            const obj = value as Record<string, unknown>;
-            const out: Record<string, unknown> = {};
-            for (const [k, v] of Object.entries(obj)) {
-              const lower = k.toLowerCase();
-              const isSensitive = SENSITIVE_KEY_SUBSTRINGS.some((s) => lower.includes(s));
-              out[k] = isSensitive ? '[REDACTED]' : redactDeep(v);
-            }
-            return out;
-          };
-
           const safeJson = (value: unknown, maxChars: number): string => {
             try {
               const s = JSON.stringify(redactDeep(value));

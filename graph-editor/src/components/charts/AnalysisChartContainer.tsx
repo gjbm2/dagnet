@@ -44,6 +44,7 @@ export function AnalysisChartContainer(props: {
   chartKindOverride?: string;
   visibleScenarioIds: string[];
   scenarioVisibilityModes?: Record<string, 'f+e' | 'f' | 'e'>;
+  scenarioMetaById?: Record<string, { name?: string; colour?: string; visibility_mode?: 'f+e' | 'f' | 'e' }>;
   scenarioDslSubtitleById?: Record<string, string>;
   height?: number;
   fillHeight?: boolean;
@@ -59,29 +60,69 @@ export function AnalysisChartContainer(props: {
   hideChrome?: boolean;
   hideScenarioLegend?: boolean;
 }): JSX.Element | null {
-  const { result, chartKindOverride, visibleScenarioIds, scenarioVisibilityModes, scenarioDslSubtitleById, height = 420, fillHeight = false, compactControls = false, display, onDisplayChange, source, hideChrome = false } = props;
+  const { result, chartKindOverride, visibleScenarioIds, scenarioVisibilityModes, scenarioMetaById, scenarioDslSubtitleById, height = 420, fillHeight = false, compactControls = false, display, onDisplayChange, source, hideChrome = false } = props;
   const showChrome = !hideChrome && !compactControls;
   const hideScenarioLegend = props.hideScenarioLegend ?? compactControls;
 
+  const patchedResult = useMemo(() => {
+    if (!scenarioMetaById || Object.keys(scenarioMetaById).length === 0) return result;
+    const clone: any = structuredClone(result);
+    clone.dimension_values = clone.dimension_values || {};
+    clone.dimension_values.scenario_id = clone.dimension_values.scenario_id || {};
+
+    for (const [sid, meta] of Object.entries(scenarioMetaById)) {
+      const existing = clone.dimension_values.scenario_id[sid] || {};
+      clone.dimension_values.scenario_id[sid] = {
+        ...existing,
+        ...(meta.name ? { name: meta.name } : null),
+        ...(meta.colour ? { colour: meta.colour } : null),
+        ...(meta.visibility_mode ? { visibility_mode: meta.visibility_mode } : null),
+      };
+    }
+
+    // Bridge results embed scenario names in metadata and step labels.
+    const metaA = clone.metadata?.scenario_a;
+    const metaB = clone.metadata?.scenario_b;
+    const oldA = metaA?.name;
+    const oldB = metaB?.name;
+    if (metaA?.scenario_id && scenarioMetaById[metaA.scenario_id]) {
+      Object.assign(metaA, scenarioMetaById[metaA.scenario_id]);
+    }
+    if (metaB?.scenario_id && scenarioMetaById[metaB.scenario_id]) {
+      Object.assign(metaB, scenarioMetaById[metaB.scenario_id]);
+    }
+    if (clone.dimension_values?.bridge_step) {
+      for (const step of Object.values(clone.dimension_values.bridge_step) as any[]) {
+        if (typeof step?.name === 'string') {
+          let n = step.name;
+          if (oldA && metaA?.name) n = n.replaceAll(oldA, metaA.name);
+          if (oldB && metaB?.name) n = n.replaceAll(oldB, metaB.name);
+          step.name = n;
+        }
+      }
+    }
+    return clone as AnalysisResult;
+  }, [result, scenarioMetaById]);
+
   const inferredChartKind = useMemo((): ChartKind | null => {
-    const t = (result as any)?.analysis_type;
+    const t = (patchedResult as any)?.analysis_type;
     if (t === 'conversion_funnel') return 'funnel';
     if (t === 'lag_histogram') return 'histogram';
     if (t === 'daily_conversions') return 'daily_conversions';
     if (t === 'cohort_maturity') return 'cohort_maturity';
     if (typeof t === 'string' && t.includes('bridge')) return 'bridge';
     return 'bridge';
-  }, [result]);
+  }, [patchedResult]);
 
   const availableChartKinds = useMemo((): ChartKind[] => {
-    const spec: any = result?.semantics?.chart;
+    const spec: any = patchedResult?.semantics?.chart;
     const rec = normaliseChartKind(spec?.recommended);
     const alts = Array.isArray(spec?.alternatives) ? spec.alternatives : [];
     const altKinds = alts.map(normaliseChartKind).filter(Boolean) as ChartKind[];
     const all = [rec, ...altKinds].filter(Boolean) as ChartKind[];
     if (all.length === 0 && inferredChartKind) return [inferredChartKind];
     return Array.from(new Set(all));
-  }, [result, inferredChartKind]);
+  }, [patchedResult, inferredChartKind]);
 
   const [selectedKind, setSelectedKind] = useState<ChartKind | null>(null);
   const normalisedOverride = normaliseChartKind(chartKindOverride);
@@ -110,13 +151,13 @@ export function AnalysisChartContainer(props: {
     const finalSettings = hideScenarioLegend
       ? { ...resolvedSettings, show_legend: false }
       : resolvedSettings;
-    return buildChartOption(kind, result, finalSettings, {
+    return buildChartOption(kind, patchedResult, finalSettings, {
       visibleScenarioIds,
       scenarioVisibilityModes,
       scenarioDslSubtitleById,
       subjectId: effectiveSubjectId,
     });
-  }, [kind, result, resolvedSettings, visibleScenarioIds, scenarioVisibilityModes, scenarioDslSubtitleById, effectiveSubjectId]);
+  }, [kind, patchedResult, resolvedSettings, hideScenarioLegend, visibleScenarioIds, scenarioVisibilityModes, scenarioDslSubtitleById, effectiveSubjectId]);
 
   const onEvents = useMemo(() => ({}), []);
 
