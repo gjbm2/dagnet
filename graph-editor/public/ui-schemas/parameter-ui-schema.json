@@ -76,22 +76,6 @@
       "window_from": {},
       "window_to": {},
       "context_id": {},
-      "k_daily": { "ui:widget": "hidden" },
-      "n_daily": { "ui:widget": "hidden" },
-      "dates": { "ui:widget": "hidden" },
-      "median_lag_days": { "ui:widget": "hidden" },
-      "mean_lag_days": { "ui:widget": "hidden" },
-      "anchor_n_daily": { "ui:widget": "hidden" },
-      "anchor_median_lag_days": { "ui:widget": "hidden" },
-      "anchor_mean_lag_days": { "ui:widget": "hidden" },
-      "forecast": { "ui:widget": "hidden" },
-      "latency": { "ui:widget": "hidden" },
-      "anchor_latency": { "ui:widget": "hidden" },
-      "query_signature": { "ui:widget": "hidden" },
-      "window_from_inclusive": { "ui:widget": "hidden" },
-      "window_to_inclusive": { "ui:widget": "hidden" },
-      "cohort_window_from": { "ui:widget": "hidden" },
-      "cohort_window_to": { "ui:widget": "hidden" },
       "data_source": {
         "ui:options": {
           "accordion": true
