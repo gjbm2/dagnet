@@ -1,4 +1,11 @@
 # DagNet Release Notes
+## Version 1.7.3b
+**Released:** 9-Mar-26
+
+Various chart improvements and signfiicant refactoring
+
+---
+
 ## Version 1.7b
 **Released:** 5-Mar-26
 **Canvas elements, navigator favourites**
