@@ -495,6 +495,11 @@ export function useShareChartFromUrl(args: { fileId: string; tabId?: string }) {
         scenarioDslSubtitleById,
         hideCurrent: Boolean((chartPayload as any)?.scenarios?.hide_current),
         whatIfDsl: (chartPayload as any)?.analysis?.what_if_dsl || undefined,
+        render: {
+          chart_kind: (chartPayload.chart as any).chart_kind_override || undefined,
+          view_mode: ((chartPayload.chart as any).view_mode as any) || 'chart',
+          display: (chartPayload.chart as any).display || {},
+        },
         fileId: chartFileId,
       });
     },

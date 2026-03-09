@@ -15,6 +15,8 @@ interface CollapsibleSectionProps {
   onCheckboxChange?: (checked: boolean) => void;
   /** Labelled toggle variant: shows a toggle switch with labels instead of a bare checkbox */
   toggleLabels?: { off: string; on: string };
+  /** When true, forces the section open regardless of user collapse state */
+  forceOpen?: boolean;
 }
 
 export default function CollapsibleSection({ 
@@ -29,14 +31,15 @@ export default function CollapsibleSection({
   checkboxChecked = false,
   onCheckboxChange,
   toggleLabels,
+  forceOpen = false,
 }: CollapsibleSectionProps) {
   const [internalIsOpen, setInternalIsOpen] = useState(defaultOpen);
   const contentRef = useRef<HTMLDivElement>(null);
   const sectionRef = useRef<HTMLDivElement>(null);
   const [contentHeight, setContentHeight] = useState<number | undefined>(undefined);
   
-  // Use external state if provided, otherwise use internal state
-  const isOpen = externalIsOpen !== undefined ? externalIsOpen : internalIsOpen;
+  // Use external state if provided, otherwise use internal state; forceOpen overrides all
+  const isOpen = forceOpen || (externalIsOpen !== undefined ? externalIsOpen : internalIsOpen);
   const handleToggle = onToggle || (() => setInternalIsOpen(!internalIsOpen));
 
   // Measure content height for smooth animation
@@ -145,11 +148,11 @@ export default function CollapsibleSection({
             onClick={handleCheckboxClick}
             title={checkboxChecked ? toggleLabels.on : toggleLabels.off}
           >
-            <span style={{ fontSize: 10, color: !checkboxChecked ? '#374151' : '#9ca3af', fontWeight: !checkboxChecked ? 600 : 400 }}>{toggleLabels.off}</span>
+            <span className="collapsible-section-toggle-label" style={{ fontWeight: !checkboxChecked ? 600 : 400, color: !checkboxChecked ? 'var(--text-primary)' : 'var(--text-muted)' }}>{toggleLabels.off}</span>
             <div className={`collapsible-section-toggle-track ${checkboxChecked ? 'on' : ''}`}>
               <div className="collapsible-section-toggle-thumb" />
             </div>
-            <span style={{ fontSize: 10, color: checkboxChecked ? '#374151' : '#9ca3af', fontWeight: checkboxChecked ? 600 : 400 }}>{toggleLabels.on}</span>
+            <span className="collapsible-section-toggle-label" style={{ fontWeight: checkboxChecked ? 600 : 400, color: checkboxChecked ? 'var(--text-primary)' : 'var(--text-muted)' }}>{toggleLabels.on}</span>
           </div>
         )}
         {withCheckbox && !toggleLabels && (

@@ -253,6 +253,7 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
     from runner.histogram_derivation import derive_lag_histogram
     from runner.daily_conversions_derivation import derive_daily_conversions
     from runner.cohort_maturity_derivation import derive_cohort_maturity
+    from runner.lag_fit_derivation import derive_lag_fit
     from runner.forecast_application import annotate_rows, compute_completeness
     from runner.lag_distribution_utils import log_normal_cdf, log_normal_inverse_cdf, standard_normal_inverse_cdf
 
@@ -546,6 +547,38 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
                     sweep_from=subj.get('sweep_from'),
                     sweep_to=subj.get('sweep_to'),
                 )
+            elif read_mode == 'sweep_simple':
+                # Simple sweep (no epoch splitting) — used by lag_fit
+                sweep_from = date.fromisoformat(subj['sweep_from']) if subj.get('sweep_from') else None
+                sweep_to = date.fromisoformat(subj['sweep_to']) if subj.get('sweep_to') else None
+
+                rows = query_snapshots_for_sweep(
+                    param_id=subj['param_id'],
+                    core_hash=subj['core_hash'],
+                    slice_keys=subj.get('slice_keys', ['']),
+                    anchor_from=date.fromisoformat(subj['anchor_from']),
+                    anchor_to=date.fromisoformat(subj['anchor_to']),
+                    sweep_from=sweep_from,
+                    sweep_to=sweep_to,
+                )
+
+                scenario_rows += len(rows)
+
+                if analysis_type == 'lag_fit':
+                    graph_data = scenario.get('graph') or {}
+                    target_id = (subj.get('target') or {}).get('targetId')
+                    edge_model = _read_edge_model_params(graph_data, target_id)
+
+                    result = derive_lag_fit(
+                        rows,
+                        t95_constraint=edge_model.get('t95') if edge_model else None,
+                        onset_override=edge_model.get('onset_delta_days') if edge_model else None,
+                        from_node=subj.get('from_node', ''),
+                        to_node=subj.get('to_node', ''),
+                        edge_label=subj.get('edge_label', ''),
+                    )
+                else:
+                    result = {'analysis_type': analysis_type, 'data': [], 'error': f'sweep_simple does not support analysis_type={analysis_type}'}
             else:
                 # raw_snapshots / virtual_snapshot: existing query path
                 as_at = None

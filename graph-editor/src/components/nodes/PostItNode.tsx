@@ -3,12 +3,22 @@ import { NodeProps, NodeResizer } from 'reactflow';
 import type { GraphData } from '@/types';
 import { PostItEditor } from './PostItEditor';
 import { useElementTool } from '../../contexts/ElementToolContext';
+import { useTheme } from '../../contexts/ThemeContext';
 
 type PostItType = NonNullable<GraphData['postits']>[number];
 
 export const POSTIT_COLOURS = [
   '#FFF475', '#F4BFDB', '#B6E3E9', '#CEED9D', '#FFD59D', '#D3BFEE',
 ];
+
+export const POSTIT_COLOURS_DARK: Record<string, string> = {
+  '#FFF475': '#6B6328',
+  '#F4BFDB': '#7A4060',
+  '#B6E3E9': '#3A6B75',
+  '#CEED9D': '#4A6530',
+  '#FFD59D': '#7A5530',
+  '#D3BFEE': '#5A4478',
+};
 
 const FONT_SIZES: Record<string, number> = { S: 6, M: 9, L: 13, XL: 18 };
 
@@ -23,6 +33,8 @@ interface PostItNodeData {
 export default function PostItNode({ data, selected }: NodeProps<PostItNodeData>) {
   const { postit, onUpdate, onDelete } = data;
   const { activeElementTool } = useElementTool();
+  const { theme } = useTheme();
+  const dark = theme === 'dark';
   const interactionDisabled = activeElementTool === 'pan';
   const [editing, setEditing] = useState(false);
   const [focusAt, setFocusAt] = useState<{ x: number; y: number } | null>(null);
@@ -115,7 +127,7 @@ export default function PostItNode({ data, selected }: NodeProps<PostItNodeData>
         lineStyle={{ display: 'none' }}
         handleStyle={{
           width: '8px', height: '8px', borderRadius: '2px',
-          backgroundColor: '#3b82f6', border: '1px solid #fff',
+          backgroundColor: '#3b82f6', border: '1px solid var(--bg-primary)',
         }}
         onResize={(_event, params) => {
           if (resizeTimeoutRef.current) clearTimeout(resizeTimeoutRef.current);
@@ -132,8 +144,8 @@ export default function PostItNode({ data, selected }: NodeProps<PostItNodeData>
           title="Delete post-it"
           style={{
             position: 'absolute', top: -10, right: -10, width: '20px', height: '20px',
-            borderRadius: '50%', border: '1px solid rgba(0,0,0,0.15)', background: '#fff',
-            color: '#dc3545', fontSize: '12px', lineHeight: '18px', textAlign: 'center',
+            borderRadius: '50%', border: '1px solid var(--border-primary)', background: 'var(--bg-primary)',
+            color: 'var(--color-danger)', fontSize: '12px', lineHeight: '18px', textAlign: 'center',
             cursor: 'pointer', zIndex: 10, padding: 0, boxShadow: '0 1px 3px rgba(0,0,0,0.15)',
           }}
         >
@@ -146,7 +158,9 @@ export default function PostItNode({ data, selected }: NodeProps<PostItNodeData>
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
         style={{
-          width: '100%', height: '100%', backgroundColor: postit.colour,
+          width: '100%', height: '100%',
+          backgroundColor: dark ? (POSTIT_COLOURS_DARK[postit.colour] || postit.colour) : postit.colour,
+          color: dark ? '#e8e0d0' : '#333',
           boxShadow: selected
             ? '0 2px 4px rgba(0,0,0,0.06), 0 8px 16px rgba(0,0,0,0.12), 0 16px 32px rgba(0,0,0,0.08)'
             : '0 0px 1px rgba(0,0,0,0.04), 0 2px 4px rgba(0,0,0,0.06), 0 6px 12px rgba(0,0,0,0.08)',
@@ -158,11 +172,15 @@ export default function PostItNode({ data, selected }: NodeProps<PostItNodeData>
       >
         <div style={{
           position: 'absolute', inset: 0, pointerEvents: 'none', borderRadius: '1px',
-          background: 'linear-gradient(to bottom, transparent 60%, rgba(0,0,0,0.03) 100%)',
+          background: dark
+            ? 'linear-gradient(to bottom, rgba(255,255,255,0.03) 0%, transparent 40%)'
+            : 'linear-gradient(to bottom, transparent 60%, rgba(0,0,0,0.03) 100%)',
         }} />
         <div style={{
           position: 'absolute', bottom: 0, right: 0, width: '16px', height: '16px',
-          background: 'linear-gradient(315deg, rgba(0,0,0,0.08) 0%, transparent 50%)',
+          background: dark
+            ? 'linear-gradient(315deg, rgba(0,0,0,0.15) 0%, transparent 50%)'
+            : 'linear-gradient(315deg, rgba(0,0,0,0.08) 0%, transparent 50%)',
           pointerEvents: 'none',
         }} />
 

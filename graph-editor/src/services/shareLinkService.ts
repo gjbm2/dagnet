@@ -338,7 +338,11 @@ export async function buildLiveChartShareUrlFromChartFile(args: {
     })();
     const byId = new Map(scenarios.map(s => [s.id, s]));
 
-    const recipeScenarios: any[] = Array.isArray(chartData?.recipe?.scenarios) ? chartData.recipe.scenarios : [];
+    // Prefer canonical definition.recipe.scenarios, fall back to legacy recipe.scenarios
+    const recipeScenarios: any[] =
+      Array.isArray(chartData?.definition?.recipe?.scenarios) && chartData.definition.recipe.scenarios.length > 0
+        ? chartData.definition.recipe.scenarios
+        : Array.isArray(chartData?.recipe?.scenarios) ? chartData.recipe.scenarios : [];
     if (recipeScenarios.length === 0) {
       return { success: false, error: 'Chart is missing recipe scenarios (cannot build live share)' };
     }
@@ -405,9 +409,11 @@ export async function buildLiveChartShareUrlFromChartFile(args: {
     // - Never emit a share payload with `hide_current=true` and zero scenario items, because that
     //   produces a chart share that has no valid scenarios to run (and looks "blank" on boot).
     const hideCurrent =
-      typeof chartData?.recipe?.display?.hide_current === 'boolean'
-        ? chartData.recipe.display.hide_current
-        : (liveScenarioItems.length === 0 ? false : !visibleScenarioIds.includes('current'));
+      typeof chartData?.definition?.display?.hide_current === 'boolean'
+        ? chartData.definition.display.hide_current
+        : typeof chartData?.recipe?.display?.hide_current === 'boolean'
+          ? chartData.recipe.display.hide_current
+          : (liveScenarioItems.length === 0 ? false : !visibleScenarioIds.includes('current'));
     const selectedScenarioId: string | undefined = scenarioState.selectedScenarioId;
     const selectedScenarioDsl =
       selectedScenarioId && selectedScenarioId !== 'base' && selectedScenarioId !== 'current'
@@ -417,13 +423,20 @@ export async function buildLiveChartShareUrlFromChartFile(args: {
             null)
         : null;
 
-    const queryDsl: string | undefined = chartData?.source?.query_dsl;
+    const queryDsl: string | undefined =
+      chartData?.definition?.recipe?.analysis?.analytics_dsl ||
+      chartData?.definition?.recipe?.analysis?.query_dsl ||
+      chartData?.source?.query_dsl;
     if (!queryDsl || !queryDsl.trim()) {
       return { success: false, error: 'Chart is missing analysis query DSL' };
     }
 
-    const analysisType: string | null | undefined = chartData?.source?.analysis_type ?? null;
-    const whatIfDsl: string | null | undefined = parentTab?.editorState?.whatIfDSL ?? null;
+    const analysisType: string | null | undefined =
+      chartData?.definition?.recipe?.analysis?.analysis_type ??
+      chartData?.source?.analysis_type ?? null;
+    const whatIfDsl: string | null | undefined =
+      chartData?.definition?.recipe?.analysis?.what_if_dsl ||
+      (parentTab?.editorState?.whatIfDSL ?? null);
 
     const currentFromRecipe = recipeScenarios.find(s => s?.scenario_id === 'current') || null;
     const currentDsl =
@@ -440,13 +453,17 @@ export async function buildLiveChartShareUrlFromChartFile(args: {
           }
         : undefined;
 
+    const chartDef = chartData.definition || {};
     const payload: SharePayloadV1 = {
       version: '1.0.0',
       target: 'chart',
       graph_state,
       chart: {
         kind: chartData.chart_kind,
-        title: chartData.title,
+        title: chartDef.title || chartData.title,
+        chart_kind_override: chartDef.chart_kind || undefined,
+        view_mode: chartDef.view_mode || undefined,
+        display: chartDef.display && Object.keys(chartDef.display).length > 0 ? chartDef.display : undefined,
       },
       analysis: {
         query_dsl: queryDsl,
@@ -580,6 +597,66 @@ export function buildLiveChartShareUrlFromRecipe(args: ChartShareCoreArgs): Live
     url.searchParams.set('shareid', stableShortHash(JSON.stringify(payload)));
 
     return { success: true, url: url.toString() };
+  } catch (e: any) {
+    return { success: false, error: e?.message || String(e) };
+  }
+}
+
+/**
+ * Build a live chart share URL from a canvas analysis.
+ *
+ * Resolves parent graph identity from the tab context, then delegates to the
+ * core recipe builder. The canvas analysis's recipe IS the ChartRecipeCore.
+ */
+export async function buildLiveChartShareUrlFromCanvasAnalysis(args: {
+  analysis: import('../types').CanvasAnalysis;
+  tabId: string;
+  dashboardMode?: boolean;
+  baseUrl?: string;
+  secretOverride?: string;
+}): Promise<LiveChartShareUrlResult> {
+  const { analysis, tabId, dashboardMode, baseUrl, secretOverride } = args;
+
+  try {
+    const tab: any = await db.tabs.get(tabId);
+    const parentFileId: string | undefined = tab?.fileId;
+    if (!parentFileId) {
+      return { success: false, error: 'Canvas analysis tab has no parent file' };
+    }
+
+    const parentGraphFile: any = fileRegistry.getFile(parentFileId) || (await db.files.get(parentFileId));
+    const identity = extractIdentityFromFileSource(parentGraphFile?.source);
+    if (!identity?.repo || !identity.branch || !identity.graph) {
+      return { success: false, error: 'Live chart share requires repo/branch/graph identity' };
+    }
+
+    const secret = secretOverride || resolveShareSecretForLinkGeneration();
+    if (!secret) {
+      return { success: false, error: 'No share secret available (set SHARE_SECRET or open with ?secret=…)' };
+    }
+
+    const graphData: any = parentGraphFile?.data;
+    const graphState = (() => {
+      const baseDsl = typeof graphData?.baseDSL === 'string' && graphData.baseDSL.trim() ? graphData.baseDSL : undefined;
+      const currentDsl = typeof graphData?.currentQueryDSL === 'string' && graphData.currentQueryDSL.trim() ? graphData.currentQueryDSL : undefined;
+      if (!baseDsl && !currentDsl) return undefined;
+      return { base_dsl: baseDsl, current_query_dsl: currentDsl };
+    })();
+
+    const whatIfDsl = tab?.editorState?.whatIfDSL ?? null;
+    const effectiveChartKind = analysis.chart_kind || undefined;
+
+    return buildLiveChartShareUrlFromRecipe({
+      recipe: analysis.recipe,
+      identity,
+      secret,
+      chartKind: effectiveChartKind,
+      title: analysis.title,
+      graphState,
+      whatIfDsl,
+      dashboardMode,
+      baseUrl,
+    });
   } catch (e: any) {
     return { success: false, error: e?.message || String(e) };
   }

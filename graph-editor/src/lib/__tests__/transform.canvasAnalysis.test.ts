@@ -169,3 +169,93 @@ describe('Canvas analysis view_mode semantics', () => {
     expect(result.canvasAnalyses[0].chart_current_layer_dsl).toBe('context(channel:influencer)');
   });
 });
+
+describe('Canvas analysis full structural round-trip', () => {
+  it('should preserve all fields for live + custom analyses through toFlow → fromFlow', () => {
+    const graph = {
+      ...baseGraph,
+      canvasAnalyses: [
+        {
+          id: 'live-chart',
+          x: 100, y: 200, width: 500, height: 350,
+          view_mode: 'chart' as const,
+          chart_kind: 'funnel',
+          live: true,
+          title: 'Live Funnel',
+          analysis_type_overridden: false,
+          chart_current_layer_dsl: 'context(channel:organic)',
+          display: { orientation: 'horizontal', show_legend: true },
+          recipe: {
+            analysis: { analysis_type: 'conversion_funnel', analytics_dsl: 'from(start).to(end)' },
+          },
+        },
+        {
+          id: 'custom-chart',
+          x: 600, y: 100, width: 400, height: 300,
+          view_mode: 'cards' as const,
+          live: false,
+          title: 'Custom Bridge',
+          analysis_type_overridden: true,
+          display: { show_labels: false },
+          recipe: {
+            analysis: { analysis_type: 'bridge_view', analytics_dsl: 'to(purchase)', what_if_dsl: 'window(-7d:)' },
+            scenarios: [
+              { scenario_id: 'current', name: 'Current', effective_dsl: 'window(-30d:)', colour: '#3b82f6', visibility_mode: 'f+e' },
+              { scenario_id: 'sc-1', name: 'Test', effective_dsl: 'window(-7d:)', colour: '#ec4899', visibility_mode: 'f' },
+            ],
+          },
+        },
+      ],
+    };
+
+    const { nodes, edges } = toFlow(graph);
+
+    // Move one analysis to verify position updates
+    const movedNodes = nodes.map(n =>
+      n.id === 'analysis-live-chart' ? { ...n, position: { x: 150, y: 250 } } : n
+    );
+
+    const result = fromFlow(movedNodes, edges, graph);
+
+    expect(result.canvasAnalyses).toHaveLength(2);
+
+    // Live chart: position updated, all other fields preserved
+    const live = result.canvasAnalyses.find((a: any) => a.id === 'live-chart');
+    expect(live).toBeDefined();
+    expect(live.x).toBe(150); // moved
+    expect(live.y).toBe(250); // moved
+    expect(live.width).toBe(500);
+    expect(live.height).toBe(350);
+    expect(live.view_mode).toBe('chart');
+    expect(live.chart_kind).toBe('funnel');
+    expect(live.live).toBe(true);
+    expect(live.title).toBe('Live Funnel');
+    expect(live.analysis_type_overridden).toBe(false);
+    expect(live.chart_current_layer_dsl).toBe('context(channel:organic)');
+    expect(live.display).toEqual({ orientation: 'horizontal', show_legend: true });
+    expect(live.recipe.analysis.analysis_type).toBe('conversion_funnel');
+    expect(live.recipe.analysis.analytics_dsl).toBe('from(start).to(end)');
+
+    // Custom chart: position unchanged, recipe with scenarios preserved
+    const custom = result.canvasAnalyses.find((a: any) => a.id === 'custom-chart');
+    expect(custom).toBeDefined();
+    expect(custom.x).toBe(600);
+    expect(custom.y).toBe(100);
+    expect(custom.view_mode).toBe('cards');
+    expect(custom.live).toBe(false);
+    expect(custom.title).toBe('Custom Bridge');
+    expect(custom.analysis_type_overridden).toBe(true);
+    expect(custom.display).toEqual({ show_labels: false });
+    expect(custom.recipe.analysis.analysis_type).toBe('bridge_view');
+    expect(custom.recipe.analysis.what_if_dsl).toBe('window(-7d:)');
+    expect(custom.recipe.scenarios).toHaveLength(2);
+    expect(custom.recipe.scenarios[0].scenario_id).toBe('current');
+    expect(custom.recipe.scenarios[1].scenario_id).toBe('sc-1');
+    expect(custom.recipe.scenarios[1].colour).toBe('#ec4899');
+    expect(custom.recipe.scenarios[1].visibility_mode).toBe('f');
+
+    // Graph nodes not contaminated
+    expect(result.nodes).toHaveLength(1);
+    expect(result.nodes[0].uuid).toBe('node-1');
+  });
+});

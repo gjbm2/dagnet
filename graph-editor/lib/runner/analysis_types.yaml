@@ -104,6 +104,16 @@ analyses:
       has_to: true
     runner: path_runner
 
+  # from(A).to(B) - lag fit (snapshot DB analysis)
+  - id: lag_fit
+    name: "Lag Fit"
+    description: "Fitted log-normal lag distribution vs. observed cohort completeness"
+    when:
+      node_count: 2
+      has_from: true
+      has_to: true
+    runner: path_runner
+
   # from(A).to(B) - daily conversions (snapshot DB analysis)
   - id: daily_conversions
     name: "Daily Conversions"

@@ -1,37 +1,10 @@
-idea# TODO
-
-
-
-
-
-if an unsupported analysis type is shown, unroll analysis types card so that user is nudged to select a supported one
-
-canvas chart output if unsupported should show a helpful message and nudge user to select diff. analysis type
-
-we need to show whether analysis type is overridden in with an 'overridden' toggle in analysis type card header
-
-
-
-
-
-
-
-
-add to implementation plan: 'create chart' to node/edge selection context menus, and graph contxt menu
-
-prob. show avialable analysis types in drop down list with 'default' at top. point being makes it trivial for user to select a couple of nodes, and then right click to create a cavnas chart 
-
-we have all the logic now - this is just a hook -- and ideally would use the same hook as the element panel so we are avoiding duplicate code paths.
-
-I note we're missing 'chart' from Elements menu -- same deal there 
--- again, ensure in impleentation plan
-
-
-
+# TODO
 
 - complete project-canvas work (canvas charts clean-up)
+  - final context menu stuff
+  - chart polishing for diff. chart types
+  - legends, axis positioning, etc. polish, polish, polish
 - Snap-to behaviour when moving / resizing graph objects (nodes, post it notes, canvas charts)
-- scoped queries: /docs/current/scoped-queries.md -- continue thinking
 - auto, unattended pull (with a standard consolidated class for implementing toast-type automated actions)
 
 - We should remove the parity testing piece and complete cutover of BE stats service soon

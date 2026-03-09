@@ -323,14 +323,14 @@ describe('CanvasAnalysisPropertiesSection smoke tests', () => {
       />
     );
 
-    const swatches = container.querySelectorAll('.scenario-colour-swatch-wrapper[draggable="true"]');
-    const rows = container.querySelectorAll('.scenario-row');
+    const draggableRows = container.querySelectorAll('.scenario-row[draggable="true"]');
+    const allRows = container.querySelectorAll('.scenario-row');
     const dataTransfer = { effectAllowed: 'move', dropEffect: 'move', setData: vi.fn(), getData: vi.fn() };
 
-    expect(swatches.length).toBe(3);
-    fireEvent.dragStart(swatches[2], { dataTransfer });
-    fireEvent.dragOver(rows[0], { dataTransfer });
-    fireEvent.dragEnd(swatches[2], { dataTransfer });
+    expect(draggableRows.length).toBe(3);
+    fireEvent.dragStart(draggableRows[2], { dataTransfer });
+    fireEvent.dragOver(allRows[0], { dataTransfer });
+    fireEvent.dragEnd(draggableRows[2], { dataTransfer });
 
     expect(currentGraph.canvasAnalyses[0].recipe.scenarios.map((s: any) => s.scenario_id)).toEqual(['base', 'current', 'sc-1']);
     expect(saveHistoryStateMock).toHaveBeenCalledWith('Reorder chart scenarios');
@@ -359,16 +359,16 @@ describe('CanvasAnalysisPropertiesSection smoke tests', () => {
       />
     );
 
-    const swatches = container.querySelectorAll('.scenario-colour-swatch-wrapper[draggable="true"]');
+    const draggableRows = container.querySelectorAll('.scenario-row[draggable="true"]');
     const metaRow = screen.getByText('Meta').closest('.scenario-row');
     const dataTransfer = { effectAllowed: 'move', dropEffect: 'move', setData: vi.fn(), getData: vi.fn() };
 
-    expect(swatches.length).toBe(2);
+    expect(draggableRows.length).toBe(2);
     expect(metaRow).toBeTruthy();
 
-    fireEvent.dragStart(swatches[0], { dataTransfer });
+    fireEvent.dragStart(draggableRows[0], { dataTransfer });
     fireEvent.dragOver(metaRow!, { dataTransfer });
-    fireEvent.dragEnd(swatches[0], { dataTransfer });
+    fireEvent.dragEnd(draggableRows[0], { dataTransfer });
 
     expect(currentGraph.canvasAnalyses[0].live).toBe(false);
     expect(currentGraph.canvasAnalyses[0].recipe.scenarios.map((s: any) => s.scenario_id)).toEqual(['current', 'sc-2', 'sc-1', 'base']);

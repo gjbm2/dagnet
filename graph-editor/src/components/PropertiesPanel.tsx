@@ -38,6 +38,9 @@ import { useCanvasAnalysisScenarioCallbacks } from '../hooks/useCanvasAnalysisSc
 import { graphComputeClient, type AvailableAnalysis } from '../lib/graphComputeClient';
 import { resolveAnalysisType } from '../services/analysisTypeResolutionService';
 import { canvasAnalysisResultCache } from '../hooks/useCanvasAnalysisCompute';
+import { chartOperationsService } from '../services/chartOperationsService';
+import { analysisResultToCsv } from '../services/analysisExportService';
+import { downloadTextFile } from '../services/downloadService';
 import { getDisplaySettingsForSurface } from '../lib/analysisDisplaySettingsRegistry';
 import { getScenarioVisibilityOverlayStyle } from '../lib/scenarioVisibilityModeStyles';
 import { mutateCanvasAnalysisGraph, deleteCanvasAnalysisFromGraph } from '../services/canvasAnalysisMutationService';
@@ -187,7 +190,7 @@ function CanvasAnalysisPropertiesSection({ analysisId, graph, setGraph, saveHist
     return Array.from(new Set(all));
   }, [cachedResult]);
 
-  const effectiveChartKind = analysis?.chart_kind || cachedResult?.semantics?.chart?.recommended || undefined;
+  const effectiveChartKind = analysis?.chart_kind || cachedResult?.semantics?.chart?.recommended || cachedResult?.analysis_type || undefined;
 
   const scenariosContext = useScenariosContextOptional();
   const { tabs, operations } = useTabContext();
@@ -304,6 +307,40 @@ function CanvasAnalysisPropertiesSection({ analysisId, graph, setGraph, saveHist
             height="40px"
             suggestionsScope="graph"
           />
+          {analyticsDsl && (
+            <div style={{ marginTop: 8, display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: 'var(--text-secondary)' }}>
+              <span>Overlay</span>
+              {['#f59e0b', '#3b82f6', '#22c55e', '#ef4444', '#8b5cf6', '#ec4899'].map(c => (
+                <button
+                  key={c}
+                  type="button"
+                  onClick={() => {
+                    updateAnalysis({ display: { ...analysis.display, show_subject_overlay: true, subject_overlay_colour: c } });
+                    saveHistoryState('Set overlay colour');
+                  }}
+                  style={{
+                    width: 16, height: 16, borderRadius: 3, border: analysis.display?.subject_overlay_colour === c && analysis.display?.show_subject_overlay ? '2px solid var(--text-primary)' : '1px solid var(--border-primary)',
+                    background: c, cursor: 'pointer', padding: 0, flexShrink: 0,
+                  }}
+                  title={`Show subject overlay (${c})`}
+                />
+              ))}
+              <button
+                type="button"
+                onClick={() => {
+                  updateAnalysis({ display: { ...analysis.display, show_subject_overlay: false, subject_overlay_colour: undefined } });
+                  saveHistoryState('Hide overlay');
+                }}
+                style={{
+                  width: 16, height: 16, borderRadius: 3, border: !analysis.display?.show_subject_overlay ? '2px solid var(--text-primary)' : '1px solid var(--border-primary)',
+                  background: 'var(--bg-secondary)', cursor: 'pointer', padding: 0, fontSize: 9, lineHeight: '14px', textAlign: 'center', color: 'var(--text-muted)', flexShrink: 0,
+                }}
+                title="No overlay"
+              >
+                ✕
+              </button>
+            </div>
+          )}
         </div>
       </CollapsibleSection>
 
@@ -392,6 +429,25 @@ function CanvasAnalysisPropertiesSection({ analysisId, graph, setGraph, saveHist
           }
         }}
         defaultOpen={!analysis.analysis_type_overridden}
+        forceOpen={
+          analysis.analysis_type_overridden &&
+          selectedType != null && selectedType !== '' &&
+          availableAnalyses.length > 0 &&
+          !availableAnalyses.some(a => a.id === selectedType)
+        }
+        overridden={!!analysis.analysis_type_overridden}
+        onClearOverride={() => {
+          const primary = availableAnalyses.find(a => a.is_primary);
+          const nextGraph = mutateCanvasAnalysisGraph(graph, analysisId, (a) => {
+            a.analysis_type_overridden = false;
+            if (primary && a.recipe?.analysis) {
+              a.recipe.analysis.analysis_type = primary.id;
+            }
+          });
+          if (!nextGraph) return;
+          setGraph(nextGraph);
+          saveHistoryState('Reset analysis type to auto');
+        }}
       />
 
       {/* ── Section 4: Chart Settings ── */}
@@ -440,11 +496,42 @@ function CanvasAnalysisPropertiesSection({ analysisId, graph, setGraph, saveHist
           <button
             className="property-action-button"
             style={{ padding: '6px 12px', fontSize: 12, cursor: 'pointer', border: '1px solid #d1d5db', borderRadius: 4, background: 'transparent' }}
+            disabled={!cachedResult}
             onClick={() => {
-              window.dispatchEvent(new CustomEvent('dagnet:canvasAnalysisOpenAsTab', { detail: { analysisId } }));
+              if (!cachedResult) return;
+              const currentTab = liveTabId ? tabs.find(t => t.id === liveTabId) : undefined;
+              chartOperationsService.openAnalysisChartTabFromAnalysis({
+                chartKind: effectiveChartKind as any,
+                analysisResult: cachedResult,
+                scenarioIds: scenarioLayerItems.filter(i => i.visible).map(i => i.id),
+                title: analysis.title || undefined,
+                source: {
+                  parent_tab_id: liveTabId,
+                  parent_file_id: currentTab?.fileId,
+                  query_dsl: analyticsDsl || undefined,
+                  analysis_type: selectedType || undefined,
+                },
+                render: {
+                  chart_kind: analysis.chart_kind || undefined,
+                  view_mode: analysis.view_mode || 'chart',
+                  display: analysis.display || {},
+                },
+              });
             }}
           >
             Open as Tab
+          </button>
+          <button
+            className="property-action-button"
+            style={{ padding: '6px 12px', fontSize: 12, cursor: 'pointer', border: '1px solid #d1d5db', borderRadius: 4, background: 'transparent' }}
+            disabled={!cachedResult}
+            onClick={() => {
+              if (!cachedResult) return;
+              const { filename, csv } = analysisResultToCsv(cachedResult);
+              if (csv) downloadTextFile({ filename, content: csv, mimeType: 'text/csv' });
+            }}
+          >
+            Download CSV
           </button>
           <button
             className="property-action-button"

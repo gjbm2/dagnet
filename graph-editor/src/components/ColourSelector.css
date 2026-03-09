@@ -149,3 +149,60 @@
   opacity: 0.5;
   cursor: not-allowed;
 }
+
+/* ===== DARK MODE ===== */
+
+[data-theme="dark"] .colour-selector-label {
+  color: #e0e0e0;
+}
+
+[data-theme="dark"] .colour-selector-preset {
+  border-color: #555;
+  color: #aaa;
+}
+
+[data-theme="dark"] .colour-selector-preset:hover:not(:disabled) {
+  border-color: #888;
+}
+
+[data-theme="dark"] .colour-selector-preset.selected {
+  border-color: #e0e0e0;
+}
+
+[data-theme="dark"] .colour-selector-current {
+  background: #2d2d2d;
+  border-color: #555;
+}
+
+[data-theme="dark"] .colour-selector-current-swatch {
+  border-color: #555;
+}
+
+[data-theme="dark"] .colour-selector-current-value {
+  color: #aaa;
+}
+
+[data-theme="dark"] .colour-selector-compact-swatch {
+  border-color: #555;
+}
+
+[data-theme="dark"] .colour-selector-compact-swatch:hover {
+  border-color: #888;
+}
+
+[data-theme="dark"] .colour-selector-compact-popup {
+  background: #2d2d2d;
+  border-color: #555;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+}
+
+[data-theme="dark"] .colour-selector-clear {
+  background: #353535;
+  border-color: #555;
+  color: #aaa;
+}
+
+[data-theme="dark"] .colour-selector-clear:hover:not(:disabled) {
+  background: #3d3d3d;
+  border-color: #777;
+}

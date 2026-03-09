@@ -167,6 +167,12 @@ class ChartOperationsService {
     scenarioDslSubtitleById?: Record<string, string>;
     hideCurrent?: boolean;
     whatIfDsl?: string;
+    /** Chart rendering spec (display settings, chart kind override, view mode) */
+    render?: { chart_kind?: string; view_mode?: 'chart' | 'cards'; display?: Record<string, unknown> };
+    /** @deprecated Use render.display instead */
+    displaySettings?: Record<string, unknown>;
+    /** @deprecated Use render.chart_kind instead */
+    chartKindOverride?: string;
     /** Optional: override the chart fileId (for share-scoped cached chart artefacts). */
     fileId?: string;
   }): Promise<{ fileId: string; tabId: string } | null> {
@@ -209,6 +215,9 @@ class ChartOperationsService {
     scenarioDslSubtitleById?: Record<string, string>;
     hideCurrent?: boolean;
     whatIfDsl?: string;
+    render?: { chart_kind?: string; view_mode?: 'chart' | 'cards'; display?: Record<string, unknown> };
+    displaySettings?: Record<string, unknown>;
+    chartKindOverride?: string;
     fileId?: string;
   }): Promise<{ fileId: string; tabId: string } | null> {
     try {
@@ -320,18 +329,24 @@ class ChartOperationsService {
         }
       })();
 
+      const recipeAnalysis = {
+        analysis_type: args.source?.analysis_type || (args.analysisResult as any)?.analysis_type,
+        analytics_dsl: args.source?.query_dsl,
+        what_if_dsl: typeof args.whatIfDsl === 'string' && args.whatIfDsl.trim() ? args.whatIfDsl.trim() : undefined,
+      };
+
+      // Top-level recipe: provenance + operational flags + chart state.
+      // definition is the canonical source; recipe mirrors it for backward compat.
       const recipe = {
         parent: {
           parent_file_id: args.source?.parent_file_id,
           parent_tab_id: args.source?.parent_tab_id,
         },
-        analysis: {
-          analysis_type: args.source?.analysis_type || (args.analysisResult as any)?.analysis_type,
-          analytics_dsl: args.source?.query_dsl,
-          what_if_dsl: typeof args.whatIfDsl === 'string' && args.whatIfDsl.trim() ? args.whatIfDsl.trim() : undefined,
-        },
+        analysis: recipeAnalysis,
         scenarios: recipeScenarios,
-        display: typeof args.hideCurrent === 'boolean' ? { hide_current: args.hideCurrent } : undefined,
+        display: {
+          ...(typeof args.hideCurrent === 'boolean' ? { hide_current: args.hideCurrent } : {}),
+        },
         pinned_recompute_eligible: pinnedRecomputeEligible,
       } satisfies ChartFileDataV1['recipe'];
 
@@ -359,13 +374,29 @@ class ChartOperationsService {
       };
       const deps_signature = chartDepsSignatureV1(deps);
 
-      const chartData: ChartFileDataV1 = {
+      const resolvedDisplay = args.render?.display || args.displaySettings || {};
+      const resolvedChartKindOverride = args.render?.chart_kind || args.chartKindOverride;
+      const resolvedViewMode = args.render?.view_mode || 'chart';
+
+      const definition = {
+        title,
+        view_mode: resolvedViewMode,
+        chart_kind: resolvedChartKindOverride,
+        display: Object.keys(resolvedDisplay).length > 0 ? resolvedDisplay : undefined,
+        recipe: {
+          analysis: recipe.analysis,
+          scenarios: recipe.scenarios,
+        },
+      };
+
+      const chartData: any = {
         version: '1.0.0',
         chart_kind: args.chartKind,
         title,
         created_at_uk: formatDateUK(new Date(timestamp)),
         created_at_ms: timestamp,
         source: args.source,
+        definition,
         recipe,
         deps,
         deps_signature,

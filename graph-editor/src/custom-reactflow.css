@@ -77,16 +77,50 @@
 /* Canvas object tiers — z-index set per-node in toFlow:
    containers 1000+, floating objects (postits + analyses) 5000+ */
 
-/* Selected canvas objects: lift above all siblings so the user can edit
-   without occlusion.  The base rule above (.react-flow__node z-index: 2000
-   !important) flattens all nodes; this overrides it for selected canvas items.
-   Reduced opacity signals the elevation is temporary. */
+/* Container nodes: pass pointer events through to edges underneath.
+   Only the label bar (via inline pointerEvents: auto) captures clicks
+   for selection and dragging. Resize handles are re-enabled below. */
+.react-flow__node-container {
+  pointer-events: none !important;
+}
+.react-flow__node-container.selected .react-flow__resize-control {
+  pointer-events: auto !important;
+}
+
+/* Canvas analysis and postit nodes: above selection connector overlays */
+.react-flow__node.react-flow__node-canvasAnalysis,
+.react-flow__node.react-flow__node-postit {
+  z-index: 5000 !important;
+}
+
+/* Selected canvas objects: lift above siblings, full opacity, crisp. */
 .react-flow__node-postit.selected,
 .react-flow__node-container.selected,
 .react-flow__node-canvasAnalysis.selected {
   z-index: 9000 !important;
-  opacity: 0.82;
+  opacity: 1 !important;
+  filter: none !important;
+  transition: opacity 0.15s ease-out, filter 0.15s ease-out;
+}
+
+/* When a canvas object is selected, unselected canvas objects become
+   slightly transparent with the content behind them blurred.
+   Containers are excluded from backdrop-filter — edges sit above them
+   logically and should not be blurred by a container underneath. */
+.react-flow__nodes:has(.react-flow__node-postit.selected, .react-flow__node-container.selected, .react-flow__node-canvasAnalysis.selected)
+  :is(.react-flow__node-postit, .react-flow__node-container, .react-flow__node-canvasAnalysis):not(.selected) {
+  opacity: 0.75;
   transition: opacity 0.15s ease-out;
+}
+
+.react-flow__nodes:has(.react-flow__node-postit.selected, .react-flow__node-container.selected, .react-flow__node-canvasAnalysis.selected)
+  :is(.react-flow__node-postit, .react-flow__node-canvasAnalysis):not(.selected) {
+  backdrop-filter: blur(2px);
+}
+
+[data-theme="dark"] .react-flow__nodes:has(.react-flow__node-postit.selected, .react-flow__node-container.selected, .react-flow__node-canvasAnalysis.selected)
+  :is(.react-flow__node-postit, .react-flow__node-container, .react-flow__node-canvasAnalysis):not(.selected) {
+  opacity: 0.65;
 }
 
 /* When a node is in inline-edit mode, suppress all handles (resize + connection)

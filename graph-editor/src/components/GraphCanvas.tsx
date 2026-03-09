@@ -62,8 +62,9 @@ import { NodeContextMenu } from './NodeContextMenu';
 import { PostItContextMenu } from './PostItContextMenu';
 import { ContainerContextMenu } from './ContainerContextMenu';
 import { CanvasAnalysisContextMenu } from './CanvasAnalysisContextMenu';
+import { SelectionConnectors } from './SelectionConnectors';
 import { captureTabScenariosToRecipe } from '../services/captureTabScenariosService';
-import { constructQueryDSL } from '../lib/dslConstruction';
+import { constructDSLFromSelection } from '../lib/dslConstruction';
 import { resolveAnalysisType } from '../services/analysisTypeResolutionService';
 import { buildCanvasAnalysisObject } from '../services/canvasAnalysisCreationService';
 import { mutateCanvasAnalysisGraph, deleteCanvasAnalysisFromGraph } from '../services/canvasAnalysisMutationService';
@@ -338,6 +339,8 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
   
   const store = useGraphStore();
   const { graph, setGraph: setGraphDirect, setAutoUpdating } = store;
+  const graphRef = useRef(graph);
+  graphRef.current = graph;
   const { operations: tabOperations, activeTabId: activeTabIdContext, tabs } = useTabContext();
   const { isDashboardMode, toggleDashboardMode } = useDashboardMode();
 
@@ -1598,7 +1601,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
 
   const analysisHistoryTimerRef = useRef<NodeJS.Timeout | null>(null);
   const handleUpdateAnalysis = useCallback((id: string, updates: any) => {
-    const nextGraph = mutateCanvasAnalysisGraph(graph, id, (a) => {
+    const nextGraph = mutateCanvasAnalysisGraph(graphRef.current, id, (a) => {
       Object.assign(a, updates);
     });
     if (!nextGraph) return;
@@ -1608,7 +1611,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
       saveHistoryState('Update canvas analysis');
       analysisHistoryTimerRef.current = null;
     }, 800);
-  }, [graph, setGraph, saveHistoryState]);
+  }, [setGraph, saveHistoryState]);
 
   const handleDeleteAnalysis = useCallback((id: string) => {
     const nextGraph = deleteCanvasAnalysisFromGraph(graph, id);
@@ -5129,9 +5132,13 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
         .filter(n => n.selected && !isCanvasObjectNode(n.id))
         .map(n => n.data?.id || n.id);
 
-      const analyticsDsl = selectedConversionNodes.length > 0
-        ? constructQueryDSL(selectedConversionNodes, nodes as any[], (graph?.edges || []) as any[])
-        : '';
+      const selectedEdgeUuids = edges
+        .filter(e => e.selected)
+        .map(e => e.id);
+
+      const analyticsDsl = constructDSLFromSelection(
+        selectedConversionNodes, selectedEdgeUuids, nodes as any[], (graph?.edges || []) as any[],
+      );
 
       const currentScenarioState = tabId ? tabs.find(t => t.id === tabId)?.editorState?.scenarioState : undefined;
       const scenarioCount = (currentScenarioState?.visibleScenarioIds || ['current']).length;
@@ -5145,7 +5152,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
     };
     window.addEventListener('dagnet:addAnalysis', handler as any);
     return () => window.removeEventListener('dagnet:addAnalysis', handler as any);
-  }, [setActiveElementTool, nodes, isCanvasObjectNode, graph, tabId, tabs]);
+  }, [setActiveElementTool, nodes, edges, isCanvasObjectNode, graph, tabId, tabs]);
 
   // Drag-to-draw state for creation modes (new-postit, new-container)
   const drawStartRef = useRef<{ screenX: number; screenY: number; flowX: number; flowY: number; tool: string } | null>(null);
@@ -5912,11 +5919,11 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
         snapToGrid={false}
         snapGrid={[1, 1]}
         style={{
-          background: dark ? '#1e1e1e' : '#f8fafc',
+          background: dark ? '#282828' : '#f8fafc',
           cursor: undefined,
         }}
       >
-        <Background variant={BackgroundVariant.Dots} gap={16} size={1} color={dark ? '#2a2a2a' : '#ddd'} />
+        <Background variant={BackgroundVariant.Dots} gap={16} size={1} color={dark ? '#363636' : '#ddd'} />
         <Controls />
         <MiniMap
           maskColor={dark ? 'rgba(30,30,30,0.8)' : undefined}
@@ -5924,7 +5931,8 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
           nodeStrokeColor={(node) => isCanvasObjectNode(node.id) ? 'transparent' : '#b1b1b7'}
         />
         <GraphIssuesIndicatorOverlay tabId={tabId} />
-        
+        <SelectionConnectors graph={graph} />
+
         {/* Lasso selection rectangle */}
         {isLassoSelecting && lassoStart && lassoEnd && (() => {
           // Convert viewport coordinates to container-relative coordinates

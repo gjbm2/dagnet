@@ -180,3 +180,22 @@
   left: 14px;
 }
 
+/* Toggle label text */
+.collapsible-section-toggle-label {
+  font-size: 10px;
+  color: #6b7280;
+}
+
+/* ===== DARK MODE: Toggle ===== */
+
+[data-theme="dark"] .collapsible-section-toggle-track {
+  background: #555;
+}
+
+[data-theme="dark"] .collapsible-section-toggle-thumb {
+  background: #e0e0e0;
+}
+
+[data-theme="dark"] .collapsible-section-toggle-label {
+  color: #999;
+}

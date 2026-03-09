@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { ZapOff } from 'lucide-react';
-import { useGraphStore } from '../contexts/GraphStoreContext';
+import { useGraphStoreOptional } from '../contexts/GraphStoreContext';
 import './AutomatableField.css';
 
 interface AutomatableFieldProps {
@@ -63,7 +63,8 @@ export function AutomatableField({
   disabled = false,
   className = ''
 }: AutomatableFieldProps) {
-  const { isAutoUpdating } = useGraphStore();
+  const graphStore = useGraphStoreOptional();
+  const isAutoUpdating = graphStore?.isAutoUpdating ?? false;
   const [isDirty, setIsDirty] = useState(false);
   const [shouldAnimate, setShouldAnimate] = useState(false);
   const [shouldPulseOverrideIcon, setShouldPulseOverrideIcon] = useState(false);
@@ -254,7 +255,7 @@ export function AutomatableField({
           <label style={{ 
             fontSize: '12px', 
             fontWeight: '600', 
-            color: '#333',
+            color: 'var(--text-primary)',
             margin: 0
           }}>
             {label}

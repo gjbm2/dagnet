@@ -37,6 +37,7 @@ function applyCommonSettings(opt: any, settings: Record<string, any>): any {
   const c = echartsThemeColours();
 
   // ── Legend ──
+  const legendVisible = settings.show_legend !== false && !(opt.legend?.show === false);
   if (settings.show_legend === false) {
     opt.legend = { show: false };
   } else if (opt.legend && opt.legend.show !== false) {
@@ -52,7 +53,29 @@ function applyCommonSettings(opt: any, settings: Record<string, any>): any {
     } else if (pos === 'none') {
       opt.legend = { show: false };
     }
-    // 'top' is already the default layout in all builders
+  }
+
+  // ── Grid margin adjustment for legend ──
+  // Only adjust pixel-based margins; skip percentage-based values (the builder chose % deliberately).
+  const isPixel = (v: any): boolean => typeof v === 'number' || (typeof v === 'string' && !v.endsWith('%'));
+  if (opt.grid && legendVisible) {
+    const pos = settings.legend_position || 'top';
+    const g = opt.grid;
+    if ((pos === 'top' || pos === undefined) && isPixel(g.top)) {
+      g.top = Math.max(parseInt(g.top, 10) || 0, 40);
+    } else if (pos === 'bottom' && isPixel(g.bottom)) {
+      g.bottom = Math.max(parseInt(g.bottom, 10) || 0, 48);
+    } else if (pos === 'right' && isPixel(g.right)) {
+      g.right = Math.max(parseInt(g.right, 10) || 0, 120);
+    }
+  } else if (opt.grid && !legendVisible && isPixel(opt.grid.top)) {
+    // Legend hidden — builders may have reserved space for it; compact the top margin.
+    const hasToolbox = opt.toolbox?.show === true;
+    const minTop = hasToolbox ? 34 : 16;
+    const current = parseInt(opt.grid.top, 10) || 0;
+    if (current > minTop) {
+      opt.grid.top = minTop;
+    }
   }
 
   // ── Grid lines ──
@@ -177,14 +200,6 @@ export type BridgeChartOptionArgs = {
      * Use 0 in tight panel views to avoid tall reserved label band.
      */
     axisLabelRotateDeg?: number;
-    barWidthMinPx?: number;
-    barWidthMaxPx?: number;
-    /**
-     * Fraction of category width to use as the target bar width before clamping.
-     * This is the primary control for "chunkiness" once you have enough width;
-     * barWidthMaxPx only matters if the raw width exceeds it.
-     */
-    barWidthFraction?: number;
     showRunningTotalLine?: boolean;
     /**
      * Render orientation for bridge charts.
@@ -578,18 +593,6 @@ export function buildFunnelBarEChartsOption(result: AnalysisResult, args: Funnel
     return `${a}\n${b}`;
   };
 
-  // Bar width heuristic:
-  // - Separate mode (scenarioCount=1) should be chunky.
-  // - Combined mode shares a category width across scenarios.
-  const plotWidth = Math.max(240, widthPx - 40);
-  const perCategory = plotWidth / Math.max(1, stageCount);
-  const groupTarget = perCategory * (stageCount <= 6 ? 0.72 : 0.62);
-  const gapPx = scenarioCount > 1 ? 4 : 0;
-  const raw = (groupTarget / Math.max(1, scenarioCount)) - gapPx;
-  const maxBar = scenarioCount === 1 ? 84 : 44;
-  const minBar = scenarioCount === 1 ? 18 : 12;
-  const barWidthPx = Math.round(Math.max(minBar, Math.min(maxBar, raw)));
-
   const series: any[] = [];
   for (const scenarioId of scenarioIds) {
     const baseSeriesName = getScenarioTitleWithBasis(result, scenarioId);
@@ -599,10 +602,8 @@ export function buildFunnelBarEChartsOption(result: AnalysisResult, args: Funnel
 
     const baseSeriesConfig = {
       type: 'bar',
-      barWidth: barWidthPx,
-      // Spacing tuning: reduce category gap for sparse charts so bars don't look lost.
-      barCategoryGap: stageCount <= 6 ? '18%' : stageCount <= 10 ? '26%' : '34%',
-      barGap: scenarioCount > 1 ? '25%' : '18%',
+      barGap: scenarioCount > 4 ? '0%' : scenarioCount > 2 ? '10%' : '20%',
+      barCategoryGap: scenarioCount > 4 ? '15%' : '25%',
       labelLayout: showValueLabels ? { hideOverlap: true } : undefined,
     };
 
@@ -869,9 +870,6 @@ export function buildBridgeEChartsOption(result: AnalysisResult, args: BridgeCha
   const axisLabelMaxLines = args.ui?.axisLabelMaxLines ?? 2;
   const axisLabelMaxCharsPerLine = args.ui?.axisLabelMaxCharsPerLine ?? 12;
   const axisLabelRotateDeg = args.ui?.axisLabelRotateDeg;
-  const barWidthMinPx = args.ui?.barWidthMinPx ?? 12;
-  const barWidthMaxPx = args.ui?.barWidthMaxPx ?? 48;
-  const barWidthFraction = args.ui?.barWidthFraction;
   const showRunningTotalLine = args.ui?.showRunningTotalLine ?? false;
   const orientation = args.ui?.orientation ?? 'vertical';
 
@@ -971,9 +969,7 @@ export function buildBridgeEChartsOption(result: AnalysisResult, args: BridgeCha
   const plotHeight = Math.max(200, heightPx - (showToolbox ? 56 : 42));
   const n = Math.max(1, labels.length);
   const perCategory = (orientation === 'horizontal' ? plotHeight : plotWidth) / n;
-  const defaultFraction = n <= 8 ? 0.56 : 0.44;
-  const fraction = typeof barWidthFraction === 'number' && Number.isFinite(barWidthFraction) ? barWidthFraction : defaultFraction;
-  const barWidthPx = Math.round(Math.max(barWidthMinPx, Math.min(barWidthMaxPx, perCategory * fraction)));
+  const defaultBarWidth = '55%';
 
   const clampLabelIntoView = (p: any) => {
     const lr = p?.labelRect;
@@ -1203,8 +1199,7 @@ export function buildBridgeEChartsOption(result: AnalysisResult, args: BridgeCha
         silent: true,
         itemStyle: { color: 'transparent' },
         emphasis: { disabled: true },
-        barWidth: barWidthPx,
-        barCategoryGap: n <= 8 ? '18%' : n <= 14 ? '26%' : '34%',
+        barWidth: defaultBarWidth,
         // For horizontal waterfall, ECharts expects category axis on y and bars extend on x.
         // No extra config needed; series is shared.
         markLine: connectorSegments
@@ -1223,7 +1218,7 @@ export function buildBridgeEChartsOption(result: AnalysisResult, args: BridgeCha
         type: 'bar',
         stack: 'waterfall',
         itemStyle: { color: '#10b981' },
-        barWidth: barWidthPx,
+        barWidth: defaultBarWidth,
         label: {
           show: true,
           position: orientation === 'horizontal' ? 'right' : 'top',
@@ -1243,7 +1238,7 @@ export function buildBridgeEChartsOption(result: AnalysisResult, args: BridgeCha
         type: 'bar',
         stack: 'waterfall',
         itemStyle: { color: '#ef4444' },
-        barWidth: barWidthPx,
+        barWidth: defaultBarWidth,
         label: {
           show: true,
           position: orientation === 'horizontal' ? 'right' : 'bottom',
@@ -1262,7 +1257,7 @@ export function buildBridgeEChartsOption(result: AnalysisResult, args: BridgeCha
         name: 'Total',
         type: 'bar',
         itemStyle: { color: '#3b82f6' },
-        barWidth: barWidthPx,
+        barWidth: defaultBarWidth,
         barGap: '-100%',
         label: {
           show: true,
@@ -1352,10 +1347,7 @@ export function buildFunnelBridgeEChartsOption(result: AnalysisResult, args: Fun
     }
   }
 
-  const plotWidth = Math.max(240, widthPx - 40);
-  const n = Math.max(1, labels.length);
-  const perCategory = plotWidth / n;
-  const barWidthPx = Math.round(Math.max(18, Math.min(72, perCategory * (n <= 8 ? 0.62 : 0.48))));
+  const defaultBarWidth = '55%';
 
   const fmtTotalPct = (v: number | null) => (typeof v === 'number' ? `${(v * 100).toFixed(1)}%` : '—');
   const fmtDeltaPct = (v: number | null) => (typeof v === 'number' ? `${(v * 100).toFixed(2)}%` : '—');
@@ -1456,7 +1448,7 @@ export function buildFunnelBridgeEChartsOption(result: AnalysisResult, args: Fun
         silent: true,
         itemStyle: { color: 'transparent' },
         emphasis: { disabled: true },
-        barWidth: barWidthPx,
+        barWidth: defaultBarWidth,
         data: assist,
       },
       {
@@ -1464,7 +1456,7 @@ export function buildFunnelBridgeEChartsOption(result: AnalysisResult, args: Fun
         type: 'bar',
         stack: 'waterfall',
         itemStyle: { color: '#10b981' },
-        barWidth: barWidthPx,
+        barWidth: defaultBarWidth,
         label: {
           show: true,
           position: 'top',
@@ -1484,7 +1476,7 @@ export function buildFunnelBridgeEChartsOption(result: AnalysisResult, args: Fun
         type: 'bar',
         stack: 'waterfall',
         itemStyle: { color: '#ef4444' },
-        barWidth: barWidthPx,
+        barWidth: defaultBarWidth,
         label: {
           show: true,
           position: 'bottom',
@@ -1503,7 +1495,7 @@ export function buildFunnelBridgeEChartsOption(result: AnalysisResult, args: Fun
         name: 'Total',
         type: 'bar',
         itemStyle: { color: scenarioColour ? scenarioColour : '#3b82f6' },
-        barWidth: barWidthPx,
+        barWidth: defaultBarWidth,
         barGap: '-100%',
         label: {
           show: true,
@@ -1553,7 +1545,7 @@ export function buildHistogramEChartsOption(data: any, settings: Record<string, 
         return `<strong>Lag: ${dataItem.lag_days} day${dataItem.lag_days !== 1 ? 's' : ''}</strong><br/>Conversions: ${dataItem.conversions.toLocaleString()}<br/>Percentage: ${(dataItem.pct * 100).toFixed(1)}%`;
       },
     },
-    grid: { left: '3%', right: '4%', bottom: '3%', top: 40, containLabel: true },
+    grid: { left: 52, right: 16, bottom: '3%', top: 40, containLabel: false },
     xAxis: {
       type: 'category',
       data: lagDays,
@@ -1602,7 +1594,7 @@ export function buildHistogramEChartsOption(data: any, settings: Record<string, 
 export function buildDailyConversionsEChartsOption(
   result: any,
   settings: Record<string, any> = {},
-  extra?: { visibleScenarioIds?: string[]; subjectId?: string },
+  extra?: { visibleScenarioIds?: string[]; scenarioVisibilityModes?: Record<string, string>; subjectId?: string },
 ): any | null {
   const rows: any[] = Array.isArray(result?.data) ? result.data : [];
   if (rows.length === 0) return null;
@@ -1641,16 +1633,38 @@ export function buildDailyConversionsEChartsOption(
   for (const r of filteredRows) {
     const key = String(r?.[seriesKey]);
     const date = String(r?.date);
-    const rate = (r?.rate === null || r?.rate === undefined) ? null : Number(r.rate);
-    const x = Number(r?.x ?? 0);
-    const y = Number(r?.y ?? 0);
     if (!key || !date) continue;
+
+    // Respect visibility_mode: use evidence_y, forecast_y, or blended y
+    const mode = multiScenario
+      ? (scenarioMeta?.[key]?.visibility_mode ?? extra?.scenarioVisibilityModes?.[key] ?? 'f+e')
+      : 'f+e';
+    const rawX = Number(r?.x ?? 0);
+    const rawY = Number(r?.y ?? 0);
+    const evidenceY = r?.evidence_y != null ? Number(r.evidence_y) : null;
+    const forecastY = r?.forecast_y != null ? Number(r.forecast_y) : null;
+
+    let effectiveY: number;
+    let effectiveX: number = rawX;
+    if (mode === 'e' && evidenceY != null) {
+      effectiveY = evidenceY;
+    } else if (mode === 'f' && forecastY != null) {
+      effectiveY = forecastY;
+    } else {
+      effectiveY = rawY;
+    }
+
+    // Skip rows with zero cohort size (no data for this date in this scenario's scope)
+    if (effectiveX === 0 && effectiveY === 0) continue;
+
+    const effectiveRate = effectiveX > 0 ? effectiveY / effectiveX : null;
+
     if (!byKey.has(key)) byKey.set(key, []);
     byKey.get(key)!.push({
       date,
-      rate: Number.isFinite(rate as any) ? (rate as number) : null,
-      x: Number.isFinite(x) ? x : 0,
-      y: Number.isFinite(y) ? y : 0,
+      rate: effectiveRate != null && Number.isFinite(effectiveRate) ? effectiveRate : null,
+      x: Number.isFinite(effectiveX) ? effectiveX : 0,
+      y: Number.isFinite(effectiveY) ? effectiveY : 0,
     });
   }
 
@@ -1660,12 +1674,24 @@ export function buildDailyConversionsEChartsOption(
   const showMarkers = settings.show_markers;
   const seriesType = settings.series_type ?? 'bar';
 
+  // Collect all dates across all scenarios so stacking aligns correctly
+  const allDates = new Set<string>();
+  for (const points of byKey.values()) {
+    for (const p of points) allDates.add(p.date);
+  }
+  const sortedDates = Array.from(allDates).sort();
+
   for (let i = 0; i < keys.length; i++) {
     const key = keys[i];
     const points = (byKey.get(key) || []).slice().sort((a, b) => a.date.localeCompare(b.date));
+    const pointsByDate = new Map(points.map(p => [p.date, p]));
     const name = meta?.[key]?.name || key;
     const strongColour = meta?.[key]?.colour || PALETTE[i % PALETTE.length];
     const lightColour = toBarFill(strongColour);
+
+    // Align to common date set -- fill missing dates with 0 for correct stacking
+    const alignedN = sortedDates.map(d => [d, pointsByDate.get(d)?.x ?? 0]);
+    const alignedRate = sortedDates.map(d => [d, pointsByDate.get(d)?.rate ?? null]);
 
     allSeries.push({
       name: keys.length > 1 ? `${name} · N` : 'N',
@@ -1674,21 +1700,21 @@ export function buildDailyConversionsEChartsOption(
       barMaxWidth: 24,
       itemStyle: { color: lightColour, borderRadius: [2, 2, 0, 0] },
       emphasis: { focus: 'series' },
-      data: points.map(p => [p.date, p.x]),
+      data: alignedN,
     });
 
     allSeries.push({
       name: keys.length > 1 ? `${name} · Rate` : 'Conversion %',
       type: 'line',
       yAxisIndex: 1,
-      showSymbol: showMarkers ?? (points.length <= 20),
+      showSymbol: showMarkers ?? (sortedDates.length <= 20),
       symbolSize: settings.marker_size ?? 5,
       smooth: showSmooth,
       connectNulls: settings.missing_data === 'connect',
       lineStyle: { width: 2.5, color: strongColour },
       itemStyle: { color: strongColour },
       emphasis: { focus: 'series' },
-      data: points.map(p => [p.date, p.rate]),
+      data: alignedRate,
       ...(settings.area_fill ? { areaStyle: { opacity: 0.15 } } : {}),
     });
   }
@@ -1733,7 +1759,7 @@ export function buildDailyConversionsEChartsOption(
         return `<strong>${title}</strong><br/>${lines.join('<br/>')}`;
       },
     },
-    grid: { left: '3%', right: '4%', bottom: 60, top: allSeries.length > 2 ? 80 : 50, containLabel: true },
+    grid: { left: 52, right: 16, bottom: 60, top: allSeries.length > 2 ? 80 : 50, containLabel: false },
     xAxis: {
       type: 'time',
       name: settings.y_axis_title ?? 'Cohort date',
@@ -2078,7 +2104,7 @@ export function buildCohortMaturityEChartsOption(
         return `<strong>${title}</strong><br/>${[...lines, ...extra_].join('<br/>')}`;
       },
     },
-    grid: { left: '3%', right: '4%', bottom: 60, top: seriesOut.length > 2 ? 80 : 50, containLabel: true },
+    grid: { left: 52, right: 16, bottom: 60, top: seriesOut.length > 2 ? 80 : 50, containLabel: false },
     xAxis: {
       type: 'value',
       name: settings.x_axis_title ?? 'Age (days since cohort date)',
@@ -2113,7 +2139,7 @@ export function buildCohortMaturityEChartsOption(
 // Unified dispatch — single entry point for all chart kinds
 // ============================================================
 
-type ChartKindId = 'funnel' | 'bridge' | 'bridge_horizontal' | 'histogram' | 'daily_conversions' | 'cohort_maturity';
+type ChartKindId = 'funnel' | 'bridge' | 'histogram' | 'daily_conversions' | 'cohort_maturity';
 
 /**
  * Build ECharts options for any chart kind from a unified interface.
@@ -2124,6 +2150,143 @@ type ChartKindId = 'funnel' | 'bridge' | 'bridge_horizontal' | 'histogram' | 'da
  * Settings come from the display settings registry (resolveDisplaySetting).
  * The dispatch translates resolvedSettings to per-builder args internally.
  */
+/**
+ * Build ECharts option for lag_fit analysis.
+ *
+ * Dual-axis chart:
+ *   Left y-axis  — cumulative fraction (fitted CDF + observed cohort scatter)
+ *   Right y-axis — daily probability mass (PMF bars)
+ *   x-axis       — lag in days
+ *   markLines    — median and t95
+ */
+function buildLagFitEChartsOption(
+  result: AnalysisResult,
+  _settings: Record<string, any>,
+): any {
+  const c = echartsThemeColours();
+  const rows: any[] = result.data ?? [];
+  const meta = rows.find(r => r.row_type === 'meta');
+  const curveRows = rows.filter(r => r.row_type === 'curve');
+  const cohortRows = rows.filter(r => r.row_type === 'cohort');
+
+  if (!meta || curveRows.length === 0) return null;
+
+  const { t95, median, edge_label } = meta;
+  const CDF_COLOUR = c.text;
+  const SCATTER_COLOUR = '#3b82f6';
+  const BAR_COLOUR = c.textMuted;
+
+  const tValues = curveRows.map((r: any) => r.t as number);
+  const pdfValues = curveRows.map((r: any) => r.pdf as number);
+  const cdfValues = curveRows.map((r: any) => r.cdf as number);
+
+  const scatterData = cohortRows.map((r: any) => ({
+    value: [r.age as number, r.observed_cdf as number],
+    n: r.n, k: r.k, date: r.date,
+  }));
+
+  const markLines: any[] = [];
+  if (Number.isFinite(median) && median > 0) {
+    markLines.push({
+      xAxis: Math.round(median),
+      lineStyle: { color: c.textSecondary, type: 'dashed', width: 1, opacity: 0.7 },
+      label: { show: true, formatter: `med ${Number(median).toFixed(1)}d`, color: c.textSecondary, fontSize: 10, position: 'start' },
+    });
+  }
+  if (Number.isFinite(t95) && t95 > 0) {
+    markLines.push({
+      xAxis: Math.round(t95),
+      lineStyle: { color: c.textMuted, type: 'dashed', width: 1, opacity: 0.6 },
+      label: { show: true, formatter: `t95 ${Number(t95).toFixed(1)}d`, color: c.textMuted, fontSize: 10, position: 'end' },
+    });
+  }
+
+  const fmtPct = (v: number) => (v * 100).toFixed(1) + '%';
+
+  return {
+    backgroundColor: 'transparent',
+    grid: { top: 32, right: 60, bottom: 60, left: 52, containLabel: false },
+    xAxis: {
+      type: 'value', name: 'Lag (days)',
+      nameTextStyle: { color: c.text, fontSize: 11 },
+      min: 0, max: tValues[tValues.length - 1] ?? 100,
+      axisLabel: { color: c.text, fontSize: 11 },
+      axisLine: { lineStyle: { color: c.gridLine } },
+      splitLine: { lineStyle: { color: c.gridLine } },
+    },
+    yAxis: [
+      {
+        type: 'value', name: 'Cumulative fraction',
+        nameTextStyle: { color: c.text, fontSize: 11 },
+        min: 0, max: 1,
+        axisLabel: { color: c.text, fontSize: 11, formatter: fmtPct },
+        axisLine: { show: false },
+        splitLine: { lineStyle: { color: c.gridLine } },
+      },
+      {
+        type: 'value', name: 'Daily PDF',
+        nameTextStyle: { color: BAR_COLOUR, fontSize: 11 },
+        position: 'right',
+        axisLabel: { color: BAR_COLOUR, fontSize: 11, formatter: (v: number) => v.toFixed(3) },
+        axisLine: { show: false },
+        splitLine: { show: false },
+      },
+    ],
+    tooltip: {
+      trigger: 'axis', axisPointer: { type: 'line' },
+      ...echartsTooltipStyle(),
+      formatter: (params: any[]) => {
+        if (!params?.length) return '';
+        const t = params[0]?.axisValue ?? '';
+        let html = `<div style="font-weight:600;margin-bottom:4px">Day ${t}</div>`;
+        for (const p of params) {
+          if (p.value === null || p.value === undefined) continue;
+          const val = Array.isArray(p.value) ? p.value[1] : p.value;
+          const dot = `<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${p.color};margin-right:5px;vertical-align:middle"></span>`;
+          const formatted = p.seriesName === 'PDF (daily)' ? Number(val).toFixed(2) : fmtPct(Number(val));
+          html += `<div>${dot}${p.seriesName}: <b>${formatted}</b></div>`;
+        }
+        return html;
+      },
+    },
+    legend: {
+      bottom: 0,
+      textStyle: { color: c.text, fontSize: 11 },
+      data: ['PDF (daily)', 'Fitted CDF', 'Observed completeness'],
+    },
+    series: [
+      {
+        name: 'PDF (daily)', type: 'bar', yAxisIndex: 1,
+        data: tValues.map((t, i) => [t, pdfValues[i]]),
+        barWidth: '80%',
+        itemStyle: { color: BAR_COLOUR, opacity: 0.6 },
+        emphasis: { itemStyle: { opacity: 1 } },
+        markLine: markLines.length ? { silent: true, symbol: 'none', data: markLines } : undefined,
+      },
+      {
+        name: 'Fitted CDF', type: 'line', yAxisIndex: 0,
+        data: tValues.map((t, i) => [t, cdfValues[i]]),
+        showSymbol: false, smooth: false,
+        lineStyle: { color: CDF_COLOUR, width: 2.5 },
+        itemStyle: { color: CDF_COLOUR },
+      },
+      {
+        name: 'Observed completeness', type: 'scatter', yAxisIndex: 0,
+        data: scatterData,
+        symbolSize: 7,
+        itemStyle: { color: SCATTER_COLOUR, opacity: 0.85 },
+        emphasis: { itemStyle: { opacity: 1 } },
+        tooltip: {
+          formatter: (p: any) => {
+            const [age, obs] = p.value;
+            return [`<b>Age ${age} days</b>`, `Observed: ${fmtPct(obs)}`, `n=${p.data.n}, k=${p.data.k}`, p.data.date].join('<br/>');
+          },
+        },
+      },
+    ],
+  };
+}
+
 export function buildChartOption(
   chartKind: string,
   result: any,
@@ -2161,14 +2324,11 @@ export function buildChartOption(
       break;
 
     case 'bridge':
-    case 'bridge_horizontal':
       opt = buildBridgeEChartsOption(result, {
         ui: {
           showToolbox: false,
-          orientation: resolvedSettings.orientation || (chartKind === 'bridge_horizontal' ? 'horizontal' : 'vertical'),
+          orientation: resolvedSettings.orientation || 'vertical',
           showRunningTotalLine: resolvedSettings.show_running_total ?? true,
-          barWidthMinPx: 8,
-          barWidthMaxPx: 18,
         },
       });
       break;
@@ -2176,6 +2336,7 @@ export function buildChartOption(
     case 'daily_conversions':
       opt = buildDailyConversionsEChartsOption(result, resolvedSettings, {
         visibleScenarioIds: extra?.visibleScenarioIds,
+        scenarioVisibilityModes: extra?.scenarioVisibilityModes,
         subjectId: extra?.subjectId,
       });
       break;
@@ -2186,6 +2347,10 @@ export function buildChartOption(
         scenarioVisibilityModes: extra?.scenarioVisibilityModes,
         subjectId: extra?.subjectId,
       });
+      break;
+
+    case 'lag_fit':
+      opt = buildLagFitEChartsOption(result, resolvedSettings);
       break;
 
     default:
@@ -2355,19 +2520,41 @@ export function buildChartOption(
   }
 
   // Bridge-specific: show_connectors controls the markLine connector segments
-  if ((chartKind === 'bridge' || chartKind === 'bridge_horizontal') && resolvedSettings.show_connectors === false) {
+  if (chartKind === 'bridge' && resolvedSettings.show_connectors === false) {
     for (const s of (opt.series || [])) {
       if (s.markLine) s.markLine = undefined;
     }
   }
 
-  // Bridge/histogram: bar_gap maps to barCategoryGap on all bar series
-  const barGap = resolvedSettings.bar_gap;
-  if (barGap !== undefined) {
-    const gapMap: Record<string, string> = { none: '0%', small: '15%', medium: '30%', large: '50%' };
-    const gapPct = gapMap[barGap] ?? barGap;
+  // ── Bar width + gap overrides ──
+  // IMPORTANT:
+  // Some builders (notably funnel) compute their own bar geometry based on the
+  // number of scenarios and categories. Do NOT stomp those defaults unless the
+  // user explicitly set an override via the registry-backed display settings.
+  if (resolvedSettings.bar_width != null) {
+    const barWidth = resolvedSettings.bar_width;
+    const barWidthMap: Record<string, { pct: string; min: number; max: number }> = {
+      thin:   { pct: '30%',  min: 4,  max: 28  },
+      medium: { pct: '55%',  min: 8,  max: 72  },
+      wide:   { pct: '75%',  min: 12, max: 120 },
+      full:   { pct: '92%',  min: 16, max: 200 },
+    };
+    const barWidthPreset = barWidthMap[barWidth] || barWidthMap.medium;
     for (const s of (opt.series || [])) {
-      if (s.type === 'bar') s.barCategoryGap = gapPct;
+      if (s.type === 'bar') {
+        s.barWidth = barWidthPreset.pct;
+        s.barMaxWidth = barWidthPreset.max;
+        s.barMinWidth = barWidthPreset.min;
+      }
+    }
+  }
+
+  if (resolvedSettings.bar_gap != null) {
+    const barGap = resolvedSettings.bar_gap;
+    const barGapMap: Record<string, string> = { none: '0%', small: '15%', medium: '30%', large: '50%' };
+    const barGapPct = barGapMap[barGap] ?? '15%';
+    for (const s of (opt.series || [])) {
+      if (s.type === 'bar') s.barCategoryGap = barGapPct;
     }
   }
 

@@ -489,8 +489,7 @@ The backend sums across the provided slice keys per anchor_day. It does not need
 
 **Resolution**: These are already handled by the existing fetch planner. Since `snapshotDependencyPlanService` was refactored (Phase 1 fix) to be a thin mapper over `FetchPlan`, all MECE slice resolution, conditional parameter enumeration, and signature computation are inherited from the planner's existing, tested code paths. No separate implementation needed.
 
-- `FetchPlanItem.sliceFamily` already carries the resolved slice key (MECE or uncontexted)
-- `FetchPlanItem.conditionalIndex` already enumerates conditional parameters
+- `FetchPlanItem.sliceFamily` already carries the resolved slice key (MECE or uncontexted) `FetchPlanItem.conditionalIndex` already enumerates conditional parameters
 - `FetchPlanItem.querySignature` already carries the execution-grade signature
 
 ### Phase 4.5: Edge Selection DSL + Subject Labels — DONE (9-Feb-26)

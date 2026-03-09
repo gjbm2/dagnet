@@ -138,7 +138,7 @@ export interface SnapshotSubjectRequest {
 
   // === Read intent ===
 
-  read_mode: 'raw_snapshots' | 'virtual_snapshot' | 'cohort_maturity';
+  read_mode: 'raw_snapshots' | 'virtual_snapshot' | 'cohort_maturity' | 'sweep_simple';
 
   // === Time bounds ===
 
@@ -712,6 +712,34 @@ export async function mapFetchPlanToSnapshotSubjects(args: {
       continue;
     }
 
+    if (contract.readMode === 'sweep_simple') {
+      const sweepFrom = timeBounds.sweepFrom;
+      const sweepTo = timeBounds.sweepTo;
+      if (!sweepFrom || !sweepTo) {
+        skipped.push({ subjectId: item.itemKey, reason: 'Missing sweep bounds for sweep_simple' });
+        continue;
+      }
+      subjects.push({
+        subject_id: item.itemKey,
+        subject_label: subjectLabel,
+        param_id: paramId,
+        canonical_signature: item.querySignature,
+        core_hash: coreHash,
+        read_mode: 'sweep_simple' as any,
+        anchor_from: timeBounds.anchorFrom,
+        anchor_to: timeBounds.anchorTo,
+        sweep_from: sweepFrom,
+        sweep_to: sweepTo,
+        slice_keys: sliceKeysDefault,
+        target: {
+          targetId: item.targetId,
+          ...(item.slot ? { slot: item.slot } : {}),
+          ...(item.conditionalIndex !== undefined ? { conditionalIndex: item.conditionalIndex } : {}),
+        },
+      });
+      continue;
+    }
+
     subjects.push({
       subject_id: item.itemKey,
       subject_label: subjectLabel,
@@ -965,7 +993,7 @@ function deriveTimeBounds(contract: SnapshotContract, queryDsl: string): TimeBou
     }
   }
 
-  if (contract.readMode === 'cohort_maturity') {
+  if (contract.readMode === 'cohort_maturity' || contract.readMode === 'sweep_simple') {
     result.sweepFrom = anchorFromISO;
     // sweep_to = asat() date if user is doing a historical view, otherwise today
     if (result.asAt) {

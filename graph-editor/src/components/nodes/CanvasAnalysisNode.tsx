@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useMemo } from 'react';
+import React, { useEffect, useRef, useMemo, useCallback } from 'react';
 import { NodeProps, NodeResizer } from 'reactflow';
 import type { CanvasAnalysis } from '@/types';
 import { useCanvasAnalysisCompute } from '@/hooks/useCanvasAnalysisCompute';
@@ -25,6 +25,8 @@ export default function CanvasAnalysisNode({ data, selected }: NodeProps<CanvasA
     return (fromStore || analysisProp) as CanvasAnalysis;
   }, [graph, analysisProp]);
   const resizeTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const onUpdateRef = useRef(onUpdate);
+  onUpdateRef.current = onUpdate;
   const scenariosContext = useScenariosContextOptional();
   const { tabs, operations } = useTabContext();
 
@@ -102,15 +104,26 @@ export default function CanvasAnalysisNode({ data, selected }: NodeProps<CanvasA
     return m;
   }, [visibleScenarioIds, analysis.live, analysis.recipe.scenarios, scenariosContext, scenarioVisibilityModes]);
 
-  const handleResize = (_event: any, params: { width: number; height: number }) => {
+  const analysisIdRef = useRef(analysis.id);
+  analysisIdRef.current = analysis.id;
+
+  const handleResize = useCallback((_event: any, params: { width: number; height: number }) => {
     if (resizeTimeoutRef.current) clearTimeout(resizeTimeoutRef.current);
     resizeTimeoutRef.current = setTimeout(() => {
-      onUpdate(analysis.id, { width: Math.round(params.width), height: Math.round(params.height) });
+      onUpdateRef.current(analysisIdRef.current, { width: Math.round(params.width), height: Math.round(params.height) });
     }, 200);
-  };
+  }, []);
 
-  const KNOWN_CHART_KINDS = new Set(['funnel', 'bridge', 'bridge_horizontal', 'histogram', 'lag_histogram', 'daily_conversions', 'cohort_maturity']);
-  const hasRealChart = !!(result?.semantics?.chart?.recommended && KNOWN_CHART_KINDS.has(result.semantics.chart.recommended));
+
+  const chartSource = useMemo(() => {
+    const currentTab = tabId ? tabs.find(t => t.id === tabId) : undefined;
+    return {
+      parent_tab_id: tabId,
+      parent_file_id: currentTab?.fileId,
+      query_dsl: analysis.recipe?.analysis?.analytics_dsl,
+      analysis_type: analysis.recipe?.analysis?.analysis_type,
+    };
+  }, [tabId, tabs, analysis.recipe?.analysis?.analytics_dsl, analysis.recipe?.analysis?.analysis_type]);
 
   const displayTitle = analysis.title || result?.analysis_name || analysis.recipe.analysis.analysis_type;
 
@@ -138,7 +151,7 @@ export default function CanvasAnalysisNode({ data, selected }: NodeProps<CanvasA
         minHeight={200}
         onResize={handleResize}
         lineStyle={{ display: 'none' }}
-        handleStyle={{ width: 8, height: 8, borderRadius: 2, backgroundColor: '#3b82f6', border: '1px solid #fff' }}
+        handleStyle={{ width: 8, height: 8, borderRadius: 2, backgroundColor: '#3b82f6', border: '1px solid var(--bg-primary)' }}
       />
 
       {selected && (
@@ -148,8 +161,8 @@ export default function CanvasAnalysisNode({ data, selected }: NodeProps<CanvasA
           title="Delete canvas analysis"
           style={{
             position: 'absolute', top: -10, right: -10, width: '20px', height: '20px',
-            borderRadius: '50%', border: '1px solid rgba(0,0,0,0.15)', background: '#fff',
-            color: '#dc3545', fontSize: '12px', lineHeight: '18px', textAlign: 'center',
+            borderRadius: '50%', border: '1px solid var(--border-primary)', background: 'var(--bg-primary)',
+            color: 'var(--color-danger)', fontSize: '12px', lineHeight: '18px', textAlign: 'center',
             cursor: 'pointer', zIndex: 10, padding: 0, boxShadow: '0 1px 3px rgba(0,0,0,0.15)',
           }}
         >
@@ -181,11 +194,11 @@ export default function CanvasAnalysisNode({ data, selected }: NodeProps<CanvasA
           editStyle={{ flex: 1 }}
         />
         {analysis.live && !analysis.chart_current_layer_dsl ? (
-          <span style={{ fontSize: 7, padding: '1px 4px', borderRadius: 2, background: '#dcfce7', color: '#166534', fontWeight: 500, flexShrink: 0 }}>
+          <span style={{ fontSize: 7, padding: '1px 4px', borderRadius: 2, background: 'var(--color-success-bg)', color: 'var(--color-success)', fontWeight: 500, flexShrink: 0 }}>
             LIVE
           </span>
         ) : (
-          <span style={{ fontSize: 7, padding: '1px 4px', borderRadius: 2, background: '#fef3c7', color: '#92400e', fontWeight: 500, flexShrink: 0 }}>
+          <span style={{ fontSize: 7, padding: '1px 4px', borderRadius: 2, background: 'var(--color-warning-bg)', color: 'var(--color-warning)', fontWeight: 500, flexShrink: 0 }}>
             CUSTOM
           </span>
         )}
@@ -194,35 +207,46 @@ export default function CanvasAnalysisNode({ data, selected }: NodeProps<CanvasA
 
       {/* Content area */}
       <div style={{ flex: 1, overflow: 'hidden', position: 'relative', minHeight: 0 }}>
+        {/* Recomputing overlay: shown when loading with a stale result still visible */}
+        {result && loading && (
+          <div style={{
+            position: 'absolute', inset: 0, zIndex: 5,
+            background: 'var(--canvas-analysis-recompute-overlay, rgba(255,255,255,0.55))',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            pointerEvents: 'none',
+          }}>
+            <Loader2 size={20} style={{ animation: 'spin 1s linear infinite', color: 'var(--text-muted, #6b7280)' }} />
+          </div>
+        )}
         {!analysis.recipe?.analysis?.analytics_dsl && !result && !loading && !error && (
-          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', gap: 8, color: '#9ca3af', padding: 16 }}>
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', gap: 8, color: 'var(--text-muted)', padding: 16 }}>
             <BarChart3 size={28} />
             <span style={{ fontSize: 12, textAlign: 'center' }}>Select this analysis and set the Analytics DSL in the properties panel</span>
           </div>
         )}
 
         {backendUnavailable && (
-          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', gap: 8, color: '#9ca3af', padding: 16 }}>
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', gap: 8, color: 'var(--text-muted)', padding: 16 }}>
             <ServerOff size={28} />
             <span style={{ fontSize: 12, textAlign: 'center' }}>Analysis backend unavailable</span>
           </div>
         )}
 
         {!backendUnavailable && error && !result && (
-          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', gap: 8, color: '#ef4444', padding: 16 }}>
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', gap: 8, color: 'var(--color-danger)', padding: 16 }}>
             <AlertCircle size={24} />
             <span style={{ fontSize: 11, textAlign: 'center', maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', WebkitLineClamp: 3, display: '-webkit-box', WebkitBoxOrient: 'vertical' }}>{error}</span>
           </div>
         )}
 
         {!backendUnavailable && !result && !error && (loading || waitingForDeps) && (
-          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', gap: 8, color: '#9ca3af' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', gap: 8, color: 'var(--text-muted)' }}>
             <Loader2 size={28} style={{ animation: 'spin 1s linear infinite' }} />
             <span style={{ fontSize: 12 }}>{waitingForDeps ? 'Loading chart dependencies...' : 'Computing...'}</span>
           </div>
         )}
 
-        {result && analysis.view_mode === 'chart' && hasRealChart && (
+        {result && analysis.view_mode === 'chart' && (
           <AnalysisChartContainer
             result={result}
             chartKindOverride={analysis.chart_kind}
@@ -233,13 +257,14 @@ export default function CanvasAnalysisNode({ data, selected }: NodeProps<CanvasA
             onDisplayChange={(key, value) => {
               onUpdate(analysis.id, { display: { ...analysis.display, [key]: value } });
             }}
+            source={chartSource}
             fillHeight
-            compactControls
+            chartContext="canvas"
             hideScenarioLegend={analysis.live}
           />
         )}
 
-        {result && (analysis.view_mode === 'cards' || !hasRealChart) && (
+        {result && analysis.view_mode === 'cards' && (
           <div style={{ overflow: 'auto', height: '100%', padding: 8 }}>
             <AnalysisResultCards result={result} />
           </div>

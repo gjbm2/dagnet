@@ -936,6 +936,62 @@ export class GraphComputeClient {
   }
 
   /**
+   * Normalise multi-scenario lag_fit response.
+   *
+   * The backend returns the result pre-tabulated (data rows with row_type), so
+   * normalisation is just unwrapping the scenario/subject envelope.  For single-
+   * scenario requests the first subject result is used directly.
+   */
+  private normaliseSnapshotLagFitResponse(
+    raw: any,
+    request: AnalysisRequest,
+  ): AnalysisResponse | null {
+    try {
+      if (request?.analysis_type !== 'lag_fit') return null;
+
+      // Already a flat AnalysisResponse? Leave it alone.
+      if (raw?.success === true && raw?.result?.analysis_type === 'lag_fit' && Array.isArray(raw.result.data)) {
+        return null;
+      }
+
+      // Unwrap multi-scenario envelope
+      const scenarios: any[] = raw?.scenarios || [];
+      if (scenarios.length === 0) return null;
+
+      // Take the first successful subject result
+      for (const sc of scenarios) {
+        const subjects: any[] = sc?.subjects || [];
+        for (const subj of subjects) {
+          if (subj?.success && subj?.result?.analysis_type === 'lag_fit') {
+            const r = subj.result;
+            return {
+              success: true,
+              result: {
+                analysis_type: 'lag_fit',
+                analysis_name: r.analysis_name || 'Lag Fit',
+                analysis_description: r.analysis_description,
+                metadata: r.metadata || {},
+                semantics: {
+                  dimensions: [],
+                  metrics: [],
+                  chart: { recommended: 'lag_fit', alternatives: ['table'] },
+                },
+                dimension_values: {},
+                data: r.data || [],
+              },
+              query_dsl: request.query_dsl,
+            } as AnalysisResponse;
+          }
+        }
+      }
+      return null;
+    } catch (err) {
+      console.error('[GraphComputeClient] Lag fit normalisation failed:', err);
+      return null;
+    }
+  }
+
+  /**
    * Clear all caches (useful for testing or forced refresh)
    */
   clearCache(): void {
@@ -1196,7 +1252,8 @@ export class GraphComputeClient {
 
     const normalised =
       this.normaliseSnapshotCohortMaturityResponse(raw, request)
-      ?? this.normaliseSnapshotDailyConversionsResponse(raw, request);
+      ?? this.normaliseSnapshotDailyConversionsResponse(raw, request)
+      ?? this.normaliseSnapshotLagFitResponse(raw, request);
 
     if (import.meta.env.DEV && request.analysis_type === 'cohort_maturity') {
       console.log('[GraphComputeClient] Normalisation result:', {
@@ -1349,7 +1406,8 @@ export class GraphComputeClient {
     const raw = await response.json();
     const normalised =
       this.normaliseSnapshotCohortMaturityResponse(raw, request)
-      ?? this.normaliseSnapshotDailyConversionsResponse(raw, request);
+      ?? this.normaliseSnapshotDailyConversionsResponse(raw, request)
+      ?? this.normaliseSnapshotLagFitResponse(raw, request);
     const result = normalised ?? raw;
 
     // Patch dimension_values.scenario_id with names/colours from request.

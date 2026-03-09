@@ -3,32 +3,33 @@ import ReactECharts from 'echarts-for-react';
 import { ExternalLink, Download } from 'lucide-react';
 
 import type { AnalysisResult } from '../../lib/graphComputeClient';
-import { getDisplaySettings, resolveDisplaySetting } from '../../lib/analysisDisplaySettingsRegistry';
+import { getDisplaySettings, getDisplaySettingsForSurface, resolveDisplaySetting } from '../../lib/analysisDisplaySettingsRegistry';
+import type { DisplaySettingDef } from '../../lib/analysisDisplaySettingsRegistry';
 import { buildChartOption } from '../../services/analysisEChartsService';
 import { chartOperationsService } from '../../services/chartOperationsService';
 import { analysisResultToCsv } from '../../services/analysisExportService';
 import { downloadTextFile } from '../../services/downloadService';
 
-type ChartKind = 'funnel' | 'bridge' | 'bridge_horizontal' | 'histogram' | 'daily_conversions' | 'cohort_maturity';
+type ChartKind = 'funnel' | 'bridge' | 'histogram' | 'daily_conversions' | 'cohort_maturity' | 'lag_fit';
 
 function normaliseChartKind(kind: string | undefined | null): ChartKind | null {
   if (!kind) return null;
   if (kind === 'funnel') return 'funnel';
-  if (kind === 'bridge') return 'bridge';
-  if (kind === 'bridge_horizontal') return 'bridge_horizontal';
+  if (kind === 'bridge' || kind === 'bridge_horizontal') return 'bridge';
   if (kind === 'histogram' || kind === 'lag_histogram') return 'histogram';
   if (kind === 'daily_conversions') return 'daily_conversions';
   if (kind === 'cohort_maturity') return 'cohort_maturity';
+  if (kind === 'lag_fit') return 'lag_fit';
   return null;
 }
 
 function labelForChartKind(kind: ChartKind): string {
   if (kind === 'funnel') return 'Funnel';
   if (kind === 'bridge') return 'Bridge';
-  if (kind === 'bridge_horizontal') return 'Bridge (Horizontal)';
   if (kind === 'histogram') return 'Lag Histogram';
   if (kind === 'daily_conversions') return 'Daily Conversions';
   if (kind === 'cohort_maturity') return 'Cohort Maturity';
+  if (kind === 'lag_fit') return 'Lag Fit';
   return kind;
 }
 
@@ -59,10 +60,13 @@ export function AnalysisChartContainer(props: {
   };
   hideChrome?: boolean;
   hideScenarioLegend?: boolean;
+  /** Controls which inline settings and actions are shown. 'tab' shows full inline settings + action chrome; 'canvas' shows brief inline settings only. */
+  chartContext?: 'canvas' | 'tab';
 }): JSX.Element | null {
   const { result, chartKindOverride, visibleScenarioIds, scenarioVisibilityModes, scenarioMetaById, scenarioDslSubtitleById, height = 420, fillHeight = false, compactControls = false, display, onDisplayChange, source, hideChrome = false } = props;
-  const showChrome = !hideChrome && !compactControls;
-  const hideScenarioLegend = props.hideScenarioLegend ?? compactControls;
+  const chartContext = props.chartContext || (compactControls ? 'canvas' : 'tab');
+  const showActionChrome = chartContext === 'tab' && !hideChrome;
+  const hideScenarioLegend = props.hideScenarioLegend ?? false;
 
   const patchedResult = useMemo(() => {
     if (!scenarioMetaById || Object.keys(scenarioMetaById).length === 0) return result;
@@ -110,6 +114,7 @@ export function AnalysisChartContainer(props: {
     if (t === 'lag_histogram') return 'histogram';
     if (t === 'daily_conversions') return 'daily_conversions';
     if (t === 'cohort_maturity') return 'cohort_maturity';
+    if (t === 'lag_fit') return 'lag_fit';
     if (typeof t === 'string' && t.includes('bridge')) return 'bridge';
     return 'bridge';
   }, [patchedResult]);
@@ -137,6 +142,11 @@ export function AnalysisChartContainer(props: {
     }
     return resolved;
   }, [kind, display]);
+
+  const inlineSettings = useMemo((): DisplaySettingDef[] => {
+    if (!kind || !onDisplayChange) return [];
+    return getDisplaySettingsForSurface(kind, 'chart', 'inline', chartContext);
+  }, [kind, chartContext, onDisplayChange]);
 
   // Subject selector state for daily_conversions / cohort_maturity
   const subjectIds = useMemo(() => extractSubjectIds(result), [result]);
@@ -167,7 +177,7 @@ export function AnalysisChartContainer(props: {
 
   if (!kind) {
     return (
-      <div style={{ padding: 12, color: '#6b7280' }}>
+      <div style={{ padding: 12, color: 'var(--text-secondary)' }}>
         No chart available for this analysis.
       </div>
     );
@@ -180,33 +190,23 @@ export function AnalysisChartContainer(props: {
       style={{
         display: 'flex',
         flexDirection: 'column',
-        gap: 8,
         minHeight: 0,
         height: fillHeight ? '100%' : undefined,
-        position: fillHeight ? 'relative' : undefined,
       }}
     >
       {(showChooser || showSubjectSelector) ? (
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: compactControls ? 'nowrap' : 'wrap' }}>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', flexShrink: 0, padding: '4px 4px 0' }}>
           {showChooser ? (
             <>
-              {!compactControls ? <span style={{ fontSize: 11, color: '#6b7280' }}>Chart</span> : null}
+              {!compactControls ? <span style={{ fontSize: 11, color: 'var(--text-secondary)' }}>Chart</span> : null}
               {availableChartKinds.length <= 2 ? (
                 availableChartKinds.map(k => (
                   <button
                     key={k}
                     type="button"
+                    className="chart-container-btn"
                     onClick={() => setSelectedKind(k)}
-                    style={{
-                      border: '1px solid #e5e7eb',
-                      background: k === kind ? '#f3f4f6' : '#ffffff',
-                      color: '#374151',
-                      borderRadius: 6,
-                      padding: '4px 8px',
-                      fontSize: 11,
-                      cursor: 'pointer',
-                      whiteSpace: 'nowrap',
-                    }}
+                    style={k === kind ? { background: 'var(--bg-tertiary)' } : undefined}
                     title={labelForChartKind(k)}
                   >
                     {labelForChartKind(k)}
@@ -216,15 +216,7 @@ export function AnalysisChartContainer(props: {
                 <select
                   value={kind}
                   onChange={e => setSelectedKind(e.target.value as ChartKind)}
-                  style={{
-                    border: '1px solid #e5e7eb',
-                    background: '#ffffff',
-                    color: '#374151',
-                    borderRadius: 6,
-                    padding: '4px 8px',
-                    fontSize: 11,
-                    cursor: 'pointer',
-                  }}
+                  className="chart-container-select"
                   aria-label="Chart type"
                 >
                   {availableChartKinds.map(k => (
@@ -239,19 +231,11 @@ export function AnalysisChartContainer(props: {
 
           {showSubjectSelector ? (
             <>
-              {!compactControls ? <span style={{ fontSize: 11, color: '#6b7280', marginLeft: showChooser ? 8 : 0 }}>Subject</span> : null}
+              {!compactControls ? <span style={{ fontSize: 11, color: 'var(--text-secondary)', marginLeft: showChooser ? 8 : 0 }}>Subject</span> : null}
               <select
                 value={effectiveSubjectId || ''}
                 onChange={handleSubjectChange}
-                style={{
-                  border: '1px solid #e5e7eb',
-                  background: '#ffffff',
-                  color: '#374151',
-                  borderRadius: 6,
-                  padding: '4px 8px',
-                  fontSize: 11,
-                  cursor: 'pointer',
-                }}
+                className="chart-container-select"
                 aria-label="Subject"
               >
                 {subjectIds.map(sid => {
@@ -268,39 +252,84 @@ export function AnalysisChartContainer(props: {
         </div>
       ) : null}
 
-      {showChrome && echartsOption && (
-        <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end', padding: '0 4px' }}>
-          <button
-            type="button"
-            onClick={() => {
-              const { filename, csv } = analysisResultToCsv(result);
-              if (csv) downloadTextFile({ filename, content: csv, mimeType: 'text/csv' });
-            }}
-            style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#6b7280', padding: 2, display: 'flex', alignItems: 'center', gap: 3, fontSize: 10 }}
-            title="Download CSV"
-          >
-            <Download size={12} /> CSV
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              if (!kind) return;
-              chartOperationsService.openAnalysisChartTabFromAnalysis({
-                chartKind: kind as any,
-                analysisResult: result,
-                scenarioIds: visibleScenarioIds,
-                source,
-              });
-            }}
-            style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#6b7280', padding: 2, display: 'flex', alignItems: 'center', gap: 3, fontSize: 10 }}
-            title="Open as Tab"
-          >
-            <ExternalLink size={12} /> Open as Tab
-          </button>
+      {/* Inline settings + action chrome */}
+      {echartsOption && (inlineSettings.length > 0 || showActionChrome) && (
+        <div style={{ display: 'flex', gap: 6, alignItems: 'center', padding: '4px 4px 0', flexWrap: 'wrap', flexShrink: 0 }}>
+          {/* Inline settings from registry */}
+          {inlineSettings.map(setting => {
+            const currentValue = resolveDisplaySetting(display, setting);
+            if (setting.type === 'checkbox') {
+              return (
+                <button
+                  key={setting.key}
+                  type="button"
+                  className={`chart-container-btn${currentValue ? ' active' : ''}`}
+                  onClick={() => onDisplayChange?.(setting.key, !currentValue)}
+                  title={setting.label}
+                >
+                  {setting.label}
+                </button>
+              );
+            }
+            if (setting.type === 'radio' && setting.options) {
+              return (
+                <span key={setting.key} style={{ display: 'inline-flex', gap: 1 }}>
+                  {setting.options.map(opt => (
+                    <button
+                      key={opt.value}
+                      type="button"
+                      className={`chart-container-btn${currentValue === opt.value ? ' active' : ''}`}
+                      onClick={() => onDisplayChange?.(setting.key, opt.value)}
+                      title={`${setting.label}: ${opt.label}`}
+                    >
+                      {opt.label}
+                    </button>
+                  ))}
+                </span>
+              );
+            }
+            return null;
+          })}
+
+          {/* Spacer to push actions to the right */}
+          {showActionChrome && <span style={{ flex: 1 }} />}
+
+          {/* Action chrome (tab mode only) */}
+          {showActionChrome && (
+            <>
+              <button
+                type="button"
+                onClick={() => {
+                  const { filename, csv } = analysisResultToCsv(result);
+                  if (csv) downloadTextFile({ filename, content: csv, mimeType: 'text/csv' });
+                }}
+                className="chart-container-link-btn"
+                title="Download CSV"
+              >
+                <Download size={12} /> CSV
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  if (!kind) return;
+                  chartOperationsService.openAnalysisChartTabFromAnalysis({
+                    chartKind: kind as any,
+                    analysisResult: result,
+                    scenarioIds: visibleScenarioIds,
+                    source,
+                  });
+                }}
+                className="chart-container-link-btn"
+                title="Open as Tab"
+              >
+                <ExternalLink size={12} /> Open as Tab
+              </button>
+            </>
+          )}
         </div>
       )}
 
-      <div style={{ minHeight: 0, ...(fillHeight ? { position: 'absolute' as const, inset: 0 } : {}) }}>
+      <div style={{ flex: fillHeight ? 1 : undefined, minHeight: 0 }}>
         {echartsOption ? (
           <ReactECharts
             option={echartsOption}
@@ -309,10 +338,11 @@ export function AnalysisChartContainer(props: {
             onEvents={onEvents}
           />
         ) : (
-          <div style={{ padding: '24px 16px', color: '#6b7280', fontSize: 13, textAlign: 'center' }}>
-            <p style={{ marginBottom: 8, fontWeight: 600, color: '#374151' }}>No data available</p>
+          <div style={{ padding: '24px 16px', color: 'var(--text-secondary)', fontSize: 13, textAlign: 'center' }}>
+            <p style={{ marginBottom: 8, fontWeight: 600, color: 'var(--text-primary)' }}>No data available</p>
             <p style={{ margin: 0 }}>
-              The analysis returned no data for the current selection. Check query DSL, scenario visibility, and date range.
+              {(result as any)?.metadata?.empty_reason
+                || 'The analysis returned no data for the current selection. Check query DSL, scenario visibility, and date range.'}
             </p>
           </div>
         )}

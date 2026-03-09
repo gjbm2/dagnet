@@ -68,6 +68,66 @@ interface SelectionPredicates {
 // ============================================================
 
 /**
+ * Resolve a raw node identifier (UUID or human-readable) to its human-readable ID.
+ * Works with both graph-store nodes (`{uuid, id}`) and ReactFlow nodes
+ * (`{id: uuid, data: {id: humanId, uuid}}`).
+ */
+function resolveHumanId(rawId: string, nodes: any[]): string | null {
+  for (const n of nodes) {
+    const humanId = n.data?.id || n.id;
+    const uuid = n.data?.uuid || n.uuid || n.id;
+    if (uuid === rawId || humanId === rawId) {
+      return humanId;
+    }
+  }
+  return null;
+}
+
+/**
+ * Derive DSL from the current canvas selection (nodes and/or edge).
+ *
+ * This is the **single codepath** used by the AnalyticsPanel, the element
+ * palette chart-creation flow, and any future consumer that needs a DSL
+ * string from the user's current selection.
+ *
+ * Priority: node selection > single edge selection > empty string.
+ *
+ * @param selectedNodeIds   Human-readable IDs of selected conversion nodes
+ * @param selectedEdgeUuids UUIDs (ReactFlow IDs) of selected edges
+ * @param nodes             All nodes (graph-store OR ReactFlow format)
+ * @param graphEdges        Graph-level edges (must have `uuid`, `from`/`to`, optional `query`)
+ */
+export function constructDSLFromSelection(
+  selectedNodeIds: string[],
+  selectedEdgeUuids: string[],
+  nodes: Node[] | any[],
+  graphEdges: any[],
+): string {
+  if (selectedNodeIds.length > 0) {
+    return constructQueryDSL(selectedNodeIds, nodes as Node[], graphEdges);
+  }
+
+  if (selectedEdgeUuids.length === 1) {
+    const edgeUuid = selectedEdgeUuids[0];
+    const graphEdge = graphEdges.find((e: any) => e.uuid === edgeUuid || e.id === edgeUuid);
+    if (graphEdge) {
+      if (graphEdge.query) {
+        return graphEdge.query;
+      }
+      const fromRaw: string | undefined = graphEdge.from || graphEdge.source;
+      const toRaw: string | undefined = graphEdge.to || graphEdge.target;
+      const fromId = fromRaw ? resolveHumanId(fromRaw, nodes as any[]) : null;
+      const toId = toRaw ? resolveHumanId(toRaw, nodes as any[]) : null;
+      if (fromId && toId) {
+        return `from(${fromId}).to(${toId})`;
+      }
+    }
+  }
+
+  return '';
+}
+
+/**
  * Construct a DSL query string from a selection of nodes.
  * 
  * @param selectedNodeIds - IDs of selected nodes
@@ -192,7 +252,7 @@ function computePredicates(
     }
     
     const isEntry = node.data?.entry?.is_start === true;
-    const isAbsorbing = node.data?.absorbing === true || 
+    const isAbsorbing = !!node.data?.absorbing ||
       !edges.some(e => e.source === nodeId);
     
     if (isEntry) {

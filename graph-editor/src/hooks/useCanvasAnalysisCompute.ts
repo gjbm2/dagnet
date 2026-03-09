@@ -445,6 +445,8 @@ export function useCanvasAnalysisCompute({
     if (!analysis.live) return;
     if (!computeReady) return;
     if (debounceRef.current) clearTimeout(debounceRef.current);
+    // Signal loading immediately so the UI shows a spinner before the debounce fires
+    setLoading(true);
     if (!result) {
       computeRef.current();
       return;

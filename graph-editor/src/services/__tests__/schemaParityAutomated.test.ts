@@ -49,21 +49,42 @@ function getTypeScriptFields(interfaceName: string): Set<string> {
   
   project.addSourceFileAtPath(TYPES_PATH);
   const sourceFile = project.getSourceFileOrThrow(TYPES_PATH);
-  
-  // Find the interface
+
+  // Also add files that the types file imports from (e.g. chartRecipe.ts)
+  const typesDir = join(TYPES_PATH, '..');
+  for (const imp of sourceFile.getImportDeclarations()) {
+    const specifier = imp.getModuleSpecifierValue();
+    if (specifier.startsWith('.')) {
+      const resolved = join(typesDir, specifier.endsWith('.ts') ? specifier : specifier + '.ts');
+      try { project.addSourceFileAtPath(resolved); } catch { /* optional */ }
+    }
+  }
+
   const iface = sourceFile.getInterface(interfaceName);
   if (!iface) {
     throw new Error(`Interface '${interfaceName}' not found in ${TYPES_PATH}`);
   }
   
-  // Get all property names (including inherited)
   const fields = new Set<string>();
-  
-  // Direct properties
-  for (const prop of iface.getProperties()) {
-    fields.add(prop.getName());
+
+  // Collect properties from the interface and all ancestors
+  function collectFields(i: ReturnType<typeof sourceFile.getInterface>) {
+    if (!i) return;
+    for (const prop of i.getProperties()) {
+      fields.add(prop.getName());
+    }
+    for (const ext of i.getExtends()) {
+      const extType = ext.getExpression();
+      const extName = extType.getText();
+      // Search all source files in the project for the base interface
+      for (const sf of project.getSourceFiles()) {
+        const base = sf.getInterface(extName);
+        if (base) { collectFields(base); break; }
+      }
+    }
   }
-  
+
+  collectFields(iface);
   return fields;
 }
 

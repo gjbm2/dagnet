@@ -1,9 +1,9 @@
 // Core Types for Tab System
 
 import type { Scenario } from './scenarios';
-import type { ChartRecipeCore } from './chartRecipe';
-export type { ChartRecipeCore, ChartRecipeScenario, ChartRecipeAnalysis, ChartVisibilityMode } from './chartRecipe';
-export { getAnalyticsDsl } from './chartRecipe';
+import type { ChartRecipeCore, ChartDefinition } from './chartRecipe';
+export type { ChartRecipeCore, ChartRecipeScenario, ChartRecipeAnalysis, ChartVisibilityMode, ChartDefinition } from './chartRecipe';
+export { getAnalyticsDsl, toChartDefinition } from './chartRecipe';
 
 /**
  * Object types that can be opened in tabs
@@ -902,19 +902,15 @@ export interface CanvasAnalysisDisplay {
   [key: string]: unknown;
 }
 
-export interface CanvasAnalysis {
+export interface CanvasAnalysis extends ChartDefinition {
   id: string;
   x: number;
   y: number;
   width: number;
   height: number;
-  view_mode: 'chart' | 'cards';
-  chart_kind?: string;
   live: boolean;
-  title?: string;
   chart_current_layer_dsl?: string;
   analysis_type_overridden?: boolean;
-  recipe: ChartRecipeCore;
   display?: CanvasAnalysisDisplay;
 }
 

@@ -128,7 +128,7 @@ export function PostItEditor({
         <EditorContent
           editor={editor}
           className={editing ? 'nodrag nowheel nopan' : ''}
-          style={{ width: '100%', fontSize: `${fontSize}px`, lineHeight: 1.4, color: '#333', cursor: 'text', pointerEvents: editing ? 'auto' : 'none' }}
+          style={{ width: '100%', fontSize: `${fontSize}px`, lineHeight: 1.4, color: 'inherit', cursor: 'text', pointerEvents: editing ? 'auto' : 'none' }}
         />
       </div>
     </>

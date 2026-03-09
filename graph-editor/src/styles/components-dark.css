@@ -1129,3 +1129,290 @@
 [data-theme="dark"] ::-webkit-scrollbar-corner {
   background: #1e1e1e;
 }
+
+/* ============================================================
+   CHART VIEWER (tab editor)
+   ============================================================ */
+
+.chart-viewer-btn {
+  border: 1px solid var(--border-primary, #e5e7eb);
+  background: var(--bg-primary, #fff);
+  color: var(--text-primary, #374151);
+  border-radius: 6px;
+  padding: 4px 8px;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.chart-viewer-btn.active {
+  background: var(--bg-tertiary, #f3f4f6);
+}
+
+.chart-viewer-btn:hover {
+  background: var(--bg-hover, #e9ecef);
+}
+
+[data-theme="dark"] .chart-viewer-btn {
+  border-color: #555;
+  background: #2d2d2d;
+  color: #e0e0e0;
+}
+
+[data-theme="dark"] .chart-viewer-btn.active {
+  background: #353535;
+}
+
+[data-theme="dark"] .chart-viewer-btn:hover {
+  background: #3d3d3d;
+}
+
+/* ============================================================
+   ANALYSIS CHART CONTAINER (shared chart wrapper)
+   ============================================================ */
+
+.chart-container-btn {
+  border: 1px solid var(--border-primary, #e5e7eb);
+  background: var(--bg-primary, #ffffff);
+  color: var(--text-primary, #374151);
+  border-radius: 6px;
+  padding: 4px 8px;
+  font-size: 11px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.chart-container-btn:hover {
+  background: var(--bg-hover, #e9ecef);
+}
+
+.chart-container-select {
+  border: 1px solid var(--border-primary, #e5e7eb);
+  background: var(--bg-primary, #ffffff);
+  color: var(--text-primary, #374151);
+  border-radius: 6px;
+  padding: 4px 8px;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.chart-container-link-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--text-secondary, #6b7280);
+  padding: 2px;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 10px;
+}
+
+.chart-container-link-btn:hover {
+  color: var(--text-primary, #374151);
+}
+
+[data-theme="dark"] .chart-container-btn {
+  border-color: #555;
+  background: #2d2d2d;
+  color: #e0e0e0;
+}
+
+[data-theme="dark"] .chart-container-btn:hover {
+  background: #3d3d3d;
+}
+
+[data-theme="dark"] .chart-container-select {
+  border-color: #555;
+  background: #2d2d2d;
+  color: #e0e0e0;
+}
+
+[data-theme="dark"] .chart-container-link-btn {
+  color: #aaa;
+}
+
+[data-theme="dark"] .chart-container-link-btn:hover {
+  color: #e0e0e0;
+}
+
+/* ============================================================
+   CHART SETTINGS SECTION (properties panel)
+   ============================================================ */
+
+.chart-settings-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+}
+
+.chart-settings-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 3px 0;
+}
+
+.chart-settings-row .automatable-field-wrapper {
+  flex: 1;
+  min-width: 0;
+}
+
+.chart-settings-row .chart-settings-label {
+  padding-top: 4px;
+}
+
+.chart-settings-label {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-secondary, #666);
+  min-width: 72px;
+  flex-shrink: 0;
+}
+
+.chart-settings-group {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border-subtle, #eee);
+}
+
+.chart-settings-group:first-child {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: none;
+}
+
+.chart-settings-group-label {
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted, #999);
+  margin-bottom: 4px;
+}
+
+.chart-settings-chips {
+  display: flex;
+  gap: 3px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.chart-settings-chip {
+  border: 1px solid var(--border-primary, #e5e7eb);
+  background: var(--bg-primary, #ffffff);
+  color: var(--text-primary, #374151);
+  border-radius: 4px;
+  padding: 3px 8px;
+  font-size: 10px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.chart-settings-chip.active {
+  border-color: var(--accent-primary, #3b82f6);
+  background: var(--accent-focus-ring, rgba(0, 102, 204, 0.15));
+  color: var(--accent-primary, #1d4ed8);
+}
+
+.chart-settings-chip:hover:not(.active) {
+  background: var(--bg-hover, #e9ecef);
+}
+
+.chart-settings-toggle-btn {
+  border-radius: 4px;
+  padding: 3px 8px;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.chart-settings-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--text-primary, #374151);
+  cursor: pointer;
+}
+
+.chart-settings-checkbox input[type="checkbox"] {
+  margin: 0;
+}
+
+.chart-settings-header-clear {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 9px;
+  font-weight: 500;
+  color: #f97316;
+  background: rgba(249, 115, 22, 0.1);
+  border: 1px solid rgba(249, 115, 22, 0.25);
+  border-radius: 10px;
+  padding: 1px 6px;
+  cursor: pointer;
+  line-height: 1;
+  transition: background 0.15s ease;
+}
+
+.chart-settings-header-clear:hover {
+  background: rgba(249, 115, 22, 0.2);
+  border-color: rgba(249, 115, 22, 0.4);
+}
+
+[data-theme="dark"] .chart-settings-header-clear {
+  color: #fb923c;
+  background: rgba(251, 146, 60, 0.12);
+  border-color: rgba(251, 146, 60, 0.25);
+}
+
+[data-theme="dark"] .chart-settings-header-clear:hover {
+  background: rgba(251, 146, 60, 0.22);
+  border-color: rgba(251, 146, 60, 0.4);
+}
+
+/* Dark overrides */
+
+[data-theme="dark"] .chart-settings-label {
+  color: #999;
+}
+
+[data-theme="dark"] .chart-settings-group {
+  border-top-color: #404040;
+}
+
+[data-theme="dark"] .chart-settings-group-label {
+  color: #777;
+}
+
+[data-theme="dark"] .chart-settings-chip {
+  border-color: #555;
+  background: #2d2d2d;
+  color: #e0e0e0;
+}
+
+[data-theme="dark"] .chart-settings-chip.active {
+  border-color: #4d9ef7;
+  background: #1a2a40;
+  color: #60a5fa;
+}
+
+[data-theme="dark"] .chart-settings-chip:hover:not(.active) {
+  background: #3d3d3d;
+}
+
+[data-theme="dark"] .chart-settings-checkbox {
+  color: #e0e0e0;
+}
+
+[data-theme="dark"] .chart-settings-clear-btn {
+  color: #aaa;
+}
+
+/* ============================================================
+   CANVAS ANALYSIS NODE (on-canvas)
+   ============================================================ */
+
+[data-theme="dark"] .canvas-analysis-node {
+  box-shadow: 0 1px 3px rgba(0,0,0,0.3), 0 4px 12px rgba(0,0,0,0.25) !important;
+}

@@ -88,6 +88,70 @@ describe('selectLatencyToApplyForTopoPass', () => {
     expect(selected.sigma).toBe(0.8);
   });
 
+  it('preserves computed path_mu/path_sigma in from-file mode (not stripped by type narrowing)', () => {
+    const computed = {
+      median_lag_days: 2.5,
+      mean_lag_days: 2.7,
+      t95: 6.1,
+      completeness: 0.91,
+      path_t95: 8.43,
+      onset_delta_days: 3,
+      mu: 1.609,
+      sigma: 0.8,
+      path_mu: 2.5,
+      path_sigma: 0.65,
+    };
+
+    const existing = {
+      median_lag_days: 6.4,
+      mean_lag_days: 6.8,
+    };
+
+    const selected = selectLatencyToApplyForTopoPass(computed, existing, true);
+
+    expect(selected.path_mu).toBe(2.5);
+    expect(selected.path_sigma).toBe(0.65);
+  });
+
+  it('path_mu/path_sigma survive the full from-file pipeline: select → applyBatchLAGValues → graph edge', () => {
+    const graph: any = {
+      nodes: [{ id: 'A' }, { id: 'B' }],
+      edges: [
+        {
+          id: 'e1', uuid: 'e1', from: 'A', to: 'B',
+          p: { mean: 0.5, latency: { latency_parameter: true } },
+        },
+      ],
+    };
+
+    const computed = {
+      median_lag_days: 2.5,
+      mean_lag_days: 2.7,
+      t95: 6.1,
+      completeness: 0.91,
+      path_t95: 8.43,
+      onset_delta_days: 3,
+      mu: 1.609,
+      sigma: 0.8,
+      path_mu: 2.5,
+      path_sigma: 0.65,
+    };
+
+    const existing = { median_lag_days: 6.4, mean_lag_days: 6.8 };
+    const selected = selectLatencyToApplyForTopoPass(computed, existing, true);
+
+    const um = new UpdateManager();
+    const next = um.applyBatchLAGValues(
+      graph,
+      [{ edgeId: 'e1', latency: selected }],
+      { writeHorizonsToGraph: false },
+    );
+
+    const e1 = next.edges.find((e: any) => e.uuid === 'e1');
+    expect(e1?.p?.latency?.path_mu).toBe(2.5);
+    expect(e1?.p?.latency?.path_sigma).toBe(0.65);
+  });
+
   it('mu/sigma survive the full from-file pipeline: select → applyBatchLAGValues → graph edge', () => {
     const graph: any = {
       nodes: [{ id: 'A' }, { id: 'B' }],

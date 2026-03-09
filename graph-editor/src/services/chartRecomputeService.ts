@@ -38,15 +38,26 @@ async function deriveCurrentDepsStamp(args: {
   const parent_file_id: string | undefined = chartData?.recipe?.parent?.parent_file_id ?? chartData?.source?.parent_file_id;
   const parent_tab_id: string | undefined = chartData?.recipe?.parent?.parent_tab_id ?? chartData?.source?.parent_tab_id;
 
+  // Prefer canonical definition.recipe, fall back to legacy recipe/source
+  const defAnalysis = chartData?.definition?.recipe?.analysis;
+  const legAnalysis = chartData?.recipe?.analysis;
   const analysis_type: string | undefined =
-    chartData?.recipe?.analysis?.analysis_type ||
+    defAnalysis?.analysis_type ||
+    legAnalysis?.analysis_type ||
     chartData?.source?.analysis_type ||
     chartData?.payload?.analysis_result?.analysis_type ||
     undefined;
-  const query_dsl: string | undefined = chartData?.recipe?.analysis?.query_dsl || chartData?.source?.query_dsl || undefined;
-  const what_if_dsl: string | undefined = chartData?.recipe?.analysis?.what_if_dsl || undefined;
+  const query_dsl: string | undefined =
+    defAnalysis?.analytics_dsl || defAnalysis?.query_dsl ||
+    legAnalysis?.query_dsl || legAnalysis?.analytics_dsl ||
+    chartData?.source?.query_dsl || undefined;
+  const what_if_dsl: string | undefined =
+    defAnalysis?.what_if_dsl || legAnalysis?.what_if_dsl || undefined;
 
-  const recipeScenarios: any[] = Array.isArray(chartData?.recipe?.scenarios) ? chartData.recipe.scenarios : [];
+  const recipeScenarios: any[] =
+    Array.isArray(chartData?.definition?.recipe?.scenarios) && chartData.definition.recipe.scenarios.length > 0
+      ? chartData.definition.recipe.scenarios
+      : Array.isArray(chartData?.recipe?.scenarios) ? chartData.recipe.scenarios : [];
   const recipeScenarioIds: string[] = recipeScenarios.map(s => String(s?.scenario_id || '')).filter((x: string) => x.trim());
   if (recipeScenarioIds.length === 0) return null;
 
@@ -168,7 +179,8 @@ export async function recomputeOpenChartsForGraph(args: RecomputeOpenChartsForGr
 
   for (const chartFileId of uniqueChartFileIds) {
     try {
-      const chartFile: any = await db.files.get(chartFileId);
+      const { fileRegistry: fr } = await import('../contexts/TabContext');
+      const chartFile: any = fr.getFile(chartFileId) || await db.files.get(chartFileId);
       const chartData: any = chartFile?.data || null;
       if (!chartData) {
         skipped.push(chartFileId);
@@ -188,7 +200,11 @@ export async function recomputeOpenChartsForGraph(args: RecomputeOpenChartsForGr
         continue;
       }
 
-      const recipeScenarios: any[] = Array.isArray(chartData?.recipe?.scenarios) ? chartData.recipe.scenarios : [];
+      // Prefer definition.recipe.scenarios (canonical), fall back to legacy recipe.scenarios
+      const recipeScenarios: any[] =
+        Array.isArray(chartData?.definition?.recipe?.scenarios) && chartData.definition.recipe.scenarios.length > 0
+          ? chartData.definition.recipe.scenarios
+          : Array.isArray(chartData?.recipe?.scenarios) ? chartData.recipe.scenarios : [];
       const scenarioIdsFromRecipeOrPayload: string[] =
         recipeScenarios.length > 0
           ? recipeScenarios.map(s => String(s?.scenario_id || '')).filter((x: string) => x.trim())
@@ -234,18 +250,24 @@ export async function recomputeOpenChartsForGraph(args: RecomputeOpenChartsForGr
         updatedDetails.push({ chartFileId, prevDepsSignature: prevSig, nextDepsSignature: nextSig, reason: 'stale' });
       }
 
+      // Read from canonical definition.recipe first, fall back to legacy top-level recipe/source
+      const defAnalysis = chartData?.definition?.recipe?.analysis;
+      const legacyAnalysis = chartData?.recipe?.analysis;
       const analysisType: string | undefined =
-        chartData?.recipe?.analysis?.analysis_type ||
+        defAnalysis?.analysis_type ||
+        legacyAnalysis?.analysis_type ||
         chartData?.source?.analysis_type ||
         chartData?.payload?.analysis_result?.analysis_type ||
         undefined;
       const queryDsl: string | undefined =
-        chartData?.recipe?.analysis?.query_dsl || chartData?.source?.query_dsl || undefined;
+        defAnalysis?.analytics_dsl || defAnalysis?.query_dsl ||
+        legacyAnalysis?.query_dsl || legacyAnalysis?.analytics_dsl ||
+        chartData?.source?.query_dsl || undefined;
 
-      const whatIfDsl: string | undefined =
-        typeof chartData?.recipe?.analysis?.what_if_dsl === 'string' && chartData.recipe.analysis.what_if_dsl.trim()
-          ? chartData.recipe.analysis.what_if_dsl.trim()
-          : undefined;
+      const whatIfDsl: string | undefined = (() => {
+        const d = defAnalysis?.what_if_dsl || legacyAnalysis?.what_if_dsl;
+        return typeof d === 'string' && d.trim() ? d.trim() : undefined;
+      })();
 
       const scenarioDslSubtitleById: Record<string, string> = {};
       for (const s of recipeScenarios) {
@@ -295,17 +317,26 @@ export async function recomputeOpenChartsForGraph(args: RecomputeOpenChartsForGr
         continue;
       }
 
-      await chartOperationsService.openAnalysisChartTabFromAnalysis({
-        chartKind: chartData?.chart_kind,
-        analysisResult: resp.result,
-        scenarioIds,
-        title: chartData?.title,
-        source: chartData?.source,
-        fileId: chartFileId,
-        scenarioDslSubtitleById: Object.keys(scenarioDslSubtitleById).length ? scenarioDslSubtitleById : undefined,
-        hideCurrent: typeof chartData?.recipe?.display?.hide_current === 'boolean' ? chartData.recipe.display.hide_current : undefined,
-        whatIfDsl,
-      } as any);
+      // Preserve definition (user edits) — only update derived fields
+      const nextChartData = {
+        ...chartData,
+        payload: {
+          analysis_result: resp.result,
+          scenario_ids: scenarioIds,
+        },
+      };
+      // Recompute deps stamp from current state
+      const nextStamp = await deriveCurrentDepsStamp({
+        chartData: nextChartData,
+        authoritativeCurrentDsl: args.authoritativeCurrentDsl,
+        graph: args.graph,
+      });
+      if (nextStamp) {
+        nextChartData.deps = nextStamp;
+        nextChartData.deps_signature = chartDepsSignatureV1(nextStamp);
+      }
+
+      await (await import('../contexts/TabContext')).fileRegistry.updateFile(chartFileId, nextChartData);
 
       updated.push(chartFileId);
     } catch {

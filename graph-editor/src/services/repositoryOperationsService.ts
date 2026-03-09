@@ -360,7 +360,7 @@ class RepositoryOperationsService {
         if (mergeResult.hasConflicts) {
           sessionLogService.warning('git', 'GIT_PULL_FILE_CONFLICT',
             `Pull file ${fileId}: 3-way merge has conflicts -- keeping local version`,
-            undefined, { fileId, conflicts: mergeResult.conflicts?.length });
+            undefined, { fileId, conflictCount: mergeResult.conflicts?.length });
           return { success: false, message: `Merge conflict pulling ${file.name || fileId}. Local changes preserved.` };
         }
 

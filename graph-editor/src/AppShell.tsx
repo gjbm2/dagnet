@@ -32,11 +32,13 @@ import { db } from './db/appDatabase';
 import { getObjectTypeTheme } from './theme/objectTypeTheme';
 import { History } from 'lucide-react';
 import { DashboardModeProvider } from './contexts/DashboardModeContext';
+import { ProjectionModeProvider, useProjectionMode } from './contexts/ProjectionModeContext';
 import { ThemeProvider } from './contexts/ThemeContext';
 import { ShareModeProvider } from './contexts/ShareModeContext';
 import { useDashboardMode } from './hooks/useDashboardMode';
 import { useIsReadOnlyShare } from './contexts/ShareModeContext';
 import { DashboardShell } from './components/Dashboard/DashboardShell';
+import { ProjectionShell } from './components/Projection/ProjectionShell';
 import { ShareModeBanner } from './components/ShareModeBanner';
 import { ShareChartBootstrapper } from './components/share/ShareChartBootstrapper';
 import { ShareBundleBootstrapper } from './components/share/ShareBundleBootstrapper';
@@ -2157,6 +2159,7 @@ function MainAppShellContent() {
 
 function AppShellContent() {
   const { isDashboardMode } = useDashboardMode();
+  const { isProjectionMode } = useProjectionMode();
   if (isDashboardMode) {
     return (
       <>
@@ -2168,6 +2171,9 @@ function AppShellContent() {
         <DashboardShell />
       </>
     );
+  }
+  if (isProjectionMode) {
+    return <ProjectionShell />;
   }
   return (
     <>
@@ -2248,6 +2254,7 @@ export function AppShell() {
           }}
         />
         <DashboardModeProvider>
+          <ProjectionModeProvider>
           <DialogProvider>
             <ValidationProvider>
               <TabProvider>
@@ -2261,6 +2268,7 @@ export function AppShell() {
               </TabProvider>
             </ValidationProvider>
           </DialogProvider>
+          </ProjectionModeProvider>
         </DashboardModeProvider>
       </ShareModeProvider>
       </ThemeProvider>

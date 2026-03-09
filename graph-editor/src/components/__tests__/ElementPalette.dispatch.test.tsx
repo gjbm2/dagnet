@@ -42,39 +42,27 @@ describe('ElementPalette event dispatch', () => {
     window.removeEventListener('dagnet:addAnalysis', dispatchSpy);
   });
 
-  it('should dispatch dagnet:addNode when Conversion Node button is clicked', () => {
-    const dispatchSpy = vi.fn();
-    window.addEventListener('dagnet:addNode', dispatchSpy);
-
+  it('should call setActiveElementTool with new-node when Conversion Node button is clicked', () => {
     const { getByTitle } = render(<ElementPalette layout="horizontal" />);
     const nodeButton = getByTitle(/Conversion Node/i);
     fireEvent.click(nodeButton);
 
-    expect(dispatchSpy).toHaveBeenCalledTimes(1);
-    window.removeEventListener('dagnet:addNode', dispatchSpy);
+    expect(mockSetActiveElementTool).toHaveBeenCalledWith('new-node');
   });
 
-  it('should dispatch dagnet:addPostit when Post-It Note button is clicked', () => {
-    const dispatchSpy = vi.fn();
-    window.addEventListener('dagnet:addPostit', dispatchSpy);
-
+  it('should call setActiveElementTool with new-postit when Post-It Note button is clicked', () => {
     const { getByTitle } = render(<ElementPalette layout="horizontal" />);
     const postitButton = getByTitle(/Post-It Note/i);
     fireEvent.click(postitButton);
 
-    expect(dispatchSpy).toHaveBeenCalledTimes(1);
-    window.removeEventListener('dagnet:addPostit', dispatchSpy);
+    expect(mockSetActiveElementTool).toHaveBeenCalledWith('new-postit');
   });
 
-  it('should dispatch dagnet:addContainer when Container button is clicked', () => {
-    const dispatchSpy = vi.fn();
-    window.addEventListener('dagnet:addContainer', dispatchSpy);
-
+  it('should call setActiveElementTool with new-container when Container button is clicked', () => {
     const { getByTitle } = render(<ElementPalette layout="horizontal" />);
     const containerButton = getByTitle(/Container/i);
     fireEvent.click(containerButton);
 
-    expect(dispatchSpy).toHaveBeenCalledTimes(1);
-    window.removeEventListener('dagnet:addContainer', dispatchSpy);
+    expect(mockSetActiveElementTool).toHaveBeenCalledWith('new-container');
   });
 });

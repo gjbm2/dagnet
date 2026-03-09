@@ -18,6 +18,10 @@ export type SharePayloadV1 =
       chart: {
         kind: 'analysis_funnel' | 'analysis_bridge';
         title?: string;
+        /** User-pinned chart kind override (distinct from inferred `kind`) */
+        chart_kind_override?: string;
+        view_mode?: 'chart' | 'cards';
+        display?: Record<string, unknown>;
       };
       analysis: {
         query_dsl: string;

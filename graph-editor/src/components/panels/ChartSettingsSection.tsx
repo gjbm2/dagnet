@@ -8,19 +8,67 @@
  *   - Chart tab settings modal (future)
  */
 
-import React, { useMemo } from 'react';
+import React, { useMemo, useState, useEffect } from 'react';
 import { ZapOff, Settings } from 'lucide-react';
 import CollapsibleSection from '../CollapsibleSection';
 import { AutomatableField } from '../AutomatableField';
-import { getDisplaySettingsForSurface, resolveDisplaySetting } from '../../lib/analysisDisplaySettingsRegistry';
+import { getDisplaySettingsForSurface } from '../../lib/analysisDisplaySettingsRegistry';
+import type { DisplaySettingDef } from '../../lib/analysisDisplaySettingsRegistry';
 
 const CHART_KIND_LABELS: Record<string, string> = {
   funnel: 'Funnel',
   bridge: 'Bridge',
-  bridge_horizontal: 'Bridge (Horizontal)',
   histogram: 'Lag Histogram',
   daily_conversions: 'Daily Conversions',
   cohort_maturity: 'Cohort Maturity',
+};
+
+/**
+ * Visual grouping for display settings.
+ * Keys that share a group prefix are rendered under a shared heading.
+ */
+const SETTING_GROUP: Record<string, string> = {
+  metric: 'Chart-specific',
+  funnel_direction: 'Chart-specific',
+  show_dropoff: 'Chart-specific',
+  orientation: 'Chart-specific',
+  show_running_total: 'Chart-specific',
+  show_connectors: 'Chart-specific',
+  series_type: 'Chart-specific',
+  cumulative: 'Chart-specific',
+  stack_mode: 'Chart-specific',
+  time_grouping: 'Chart-specific',
+  moving_average: 'Chart-specific',
+  show_raw_with_average: 'Chart-specific',
+  smooth: 'Chart-specific',
+  missing_data: 'Chart-specific',
+  y_axis_min: 'Axes',
+  y_axis_max: 'Axes',
+  x_axis_min: 'Axes',
+  x_axis_max: 'Axes',
+  y_axis_title: 'Axes',
+  y_axis_scale: 'Axes',
+  axis_label_rotation: 'Axes',
+  axis_label_format: 'Axes',
+  show_grid_lines: 'Grid',
+  grid_line_style: 'Grid',
+  show_legend: 'Legend',
+  legend_position: 'Legend',
+  show_labels: 'Labels',
+  label_font_size: 'Labels',
+  label_position: 'Labels',
+  show_markers: 'Points & area',
+  marker_size: 'Points & area',
+  area_fill: 'Points & area',
+  show_trend_line: 'Points & area',
+  bar_width: 'Bar spacing',
+  bar_gap: 'Bar spacing',
+  sort_by: 'Sorting',
+  sort_direction: 'Sorting',
+  show_tooltip: 'Tooltips',
+  tooltip_mode: 'Tooltips',
+  animate: 'Animation',
+  reference_lines: 'Reference lines',
 };
 
 interface ChartSettingsSectionProps {
@@ -36,6 +84,66 @@ interface ChartSettingsSectionProps {
   onDisplayChange: (key: string, value: any) => void;
   onClearAllOverrides?: () => void;
   defaultOpen?: boolean;
+}
+
+function renderSettingControl(
+  setting: DisplaySettingDef,
+  currentValue: any,
+  onDisplayChange: (key: string, value: any) => void,
+) {
+  if (setting.type === 'checkbox') {
+    return (
+      <label className="chart-settings-checkbox">
+        <input
+          type="checkbox"
+          checked={!!currentValue}
+          onChange={(e) => onDisplayChange(setting.key, e.target.checked)}
+        />
+        <span>{setting.label}</span>
+      </label>
+    );
+  }
+  if (setting.type === 'radio' && setting.options) {
+    return (
+      <div className="chart-settings-chips">
+        {setting.options.map((opt: any) => (
+          <button
+            key={opt.value}
+            type="button"
+            className={`chart-settings-chip${currentValue === opt.value ? ' active' : ''}`}
+            onClick={() => onDisplayChange(setting.key, opt.value)}
+          >
+            {opt.label}
+          </button>
+        ))}
+      </div>
+    );
+  }
+  if (setting.type === 'number-range') {
+    return (
+      <input
+        className="property-input"
+        type="number"
+        value={currentValue ?? ''}
+        placeholder="Auto"
+        style={{ fontSize: 11, width: 80 }}
+        onChange={(e) => onDisplayChange(setting.key, e.target.value === '' ? null : Number(e.target.value))}
+      />
+    );
+  }
+  if (setting.type === 'text') {
+    return (
+      <input
+        className="property-input"
+        type="text"
+        value={currentValue ?? ''}
+        placeholder="Auto"
+        style={{ fontSize: 11 }}
+        onChange={(e) => onDisplayChange(setting.key, e.target.value || null)}
+      />
+    );
+  }
+  return null;
 }
 
 export function ChartSettingsSection({
@@ -61,41 +169,81 @@ export function ChartSettingsSection({
     return displaySettings.filter((s: any) => s.overridable && display?.[s.key] != null).length;
   }, [displaySettings, display]);
 
+  const groupedSettings = useMemo(() => {
+    const groups: Array<{ label: string; settings: DisplaySettingDef[] }> = [];
+    let currentGroup: { label: string; settings: DisplaySettingDef[] } | null = null;
+
+    for (const s of displaySettings) {
+      const groupLabel = SETTING_GROUP[s.key] || 'Other';
+      if (!currentGroup || currentGroup.label !== groupLabel) {
+        currentGroup = { label: groupLabel, settings: [] };
+        groups.push(currentGroup);
+      }
+      currentGroup.settings.push(s);
+    }
+    return groups;
+  }, [displaySettings]);
+
+  // Local state for title -- commit to graph only on blur to avoid re-render focus loss
+  const [localTitle, setLocalTitle] = useState(title || '');
+  useEffect(() => { setLocalTitle(title || ''); }, [title]);
+
+  const sectionTitle = useMemo(() => {
+    if (overrideCount === 0 || !onClearAllOverrides) return 'Chart Settings';
+    return (
+      <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+        Chart Settings
+        <button
+          type="button"
+          className="chart-settings-header-clear"
+          onClick={(e) => { e.stopPropagation(); onClearAllOverrides(); }}
+          title={`Clear ${overrideCount} override${overrideCount > 1 ? 's' : ''}`}
+        >
+          <ZapOff size={10} />
+          <span>{overrideCount}</span>
+        </button>
+      </span>
+    );
+  }, [overrideCount, onClearAllOverrides]);
+
   return (
     <CollapsibleSection
-      title={`Chart Settings${overrideCount > 0 ? ` (${overrideCount} override${overrideCount > 1 ? 's' : ''})` : ''}`}
+      title={sectionTitle}
       defaultOpen={defaultOpen}
       icon={Settings}
     >
-      <div className="property-group">
+      <div className="chart-settings-body">
         {/* Title */}
         {onTitleChange && (
-          <div className="property-row">
-            <label className="property-label">Title</label>
+          <div className="chart-settings-row">
+            <label className="chart-settings-label">Title</label>
             <input
               className="property-input"
               type="text"
-              value={title || ''}
+              value={localTitle}
               placeholder="Chart title"
-              onChange={(e) => onTitleChange(e.target.value)}
+              onChange={(e) => setLocalTitle(e.target.value)}
+              onBlur={() => { if (localTitle !== (title || '')) onTitleChange(localTitle); }}
+              onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
             />
           </div>
         )}
 
         {/* View Mode */}
-        <div className="property-row" style={{ marginTop: onTitleChange ? 8 : 0 }}>
-          <label className="property-label">View</label>
-          <div style={{ display: 'flex', gap: 4 }}>
+        <div className="chart-settings-row">
+          <label className="chart-settings-label">View</label>
+          <div className="chart-settings-chips" style={{ flex: 1 }}>
             {(['chart', 'cards'] as const).map(mode => (
               <button
                 key={mode}
+                className="chart-settings-toggle-btn"
                 onClick={() => onViewModeChange(mode)}
                 style={{
-                  flex: 1, padding: '4px 8px', fontSize: 11, border: '1px solid',
-                  borderColor: viewMode === mode ? 'var(--accent-colour, #3b82f6)' : '#d1d5db',
-                  background: viewMode === mode ? 'var(--accent-colour, #3b82f6)' : 'transparent',
-                  color: viewMode === mode ? '#fff' : 'inherit',
-                  borderRadius: 4, cursor: 'pointer', textTransform: 'capitalize',
+                  flex: 1, border: '1px solid',
+                  borderColor: viewMode === mode ? 'var(--accent-primary)' : 'var(--border-primary)',
+                  background: viewMode === mode ? 'var(--accent-primary)' : 'transparent',
+                  color: viewMode === mode ? 'var(--text-inverse)' : 'inherit',
+                  textTransform: 'capitalize',
                 }}
               >
                 {mode}
@@ -106,7 +254,7 @@ export function ChartSettingsSection({
 
         {/* Chart Kind */}
         {viewMode === 'chart' && (
-          <div style={{ marginTop: 8 }}>
+          <div className="chart-settings-row">
             <AutomatableField
               label="Chart kind"
               value={chartKind || 'auto'}
@@ -114,17 +262,12 @@ export function ChartSettingsSection({
               onClearOverride={() => onChartKindChange(undefined)}
             >
               {chartKindOptions.length > 0 ? (
-                <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', alignItems: 'center' }}>
+                <div className="chart-settings-chips">
                   <button
                     type="button"
+                    className={`chart-settings-chip${!chartKind ? ' active' : ''}`}
                     onClick={() => onChartKindChange(undefined)}
-                    style={{
-                      border: '1px solid',
-                      borderColor: !chartKind ? '#3b82f6' : '#e5e7eb',
-                      background: !chartKind ? '#eff6ff' : '#ffffff',
-                      color: !chartKind ? '#1d4ed8' : '#374151',
-                      borderRadius: 4, padding: '4px 10px', fontSize: 11, cursor: 'pointer', fontStyle: 'italic',
-                    }}
+                    style={{ fontStyle: 'italic' }}
                   >
                     Auto
                   </button>
@@ -132,14 +275,8 @@ export function ChartSettingsSection({
                     <button
                       key={kind}
                       type="button"
+                      className={`chart-settings-chip${kind === chartKind ? ' active' : ''}`}
                       onClick={() => onChartKindChange(kind)}
-                      style={{
-                        border: '1px solid',
-                        borderColor: kind === chartKind ? '#3b82f6' : '#e5e7eb',
-                        background: kind === chartKind ? '#eff6ff' : '#ffffff',
-                        color: kind === chartKind ? '#1d4ed8' : '#374151',
-                        borderRadius: 4, padding: '4px 10px', fontSize: 11, cursor: 'pointer',
-                      }}
                     >
                       {CHART_KIND_LABELS[kind] || kind}
                     </button>
@@ -162,110 +299,38 @@ export function ChartSettingsSection({
           </div>
         )}
 
-        {/* Display Settings */}
-        {displaySettings.length > 0 && (
+        {/* Display Settings — grouped */}
+        {groupedSettings.length > 0 && (
           <>
-            {overrideCount > 0 && onClearAllOverrides && (
-              <button
-                type="button"
-                onClick={onClearAllOverrides}
-                style={{ fontSize: 10, color: '#6b7280', background: 'none', border: 'none', cursor: 'pointer', padding: 0, marginTop: 8, marginBottom: 4, textDecoration: 'underline' }}
-              >
-                <ZapOff size={10} style={{ marginRight: 3, verticalAlign: 'middle' }} />
-                Clear {overrideCount} override{overrideCount > 1 ? 's' : ''}
-              </button>
-            )}
-            {displaySettings.map((setting: any) => {
-              const rawValue = display?.[setting.key];
-              const currentValue = rawValue ?? setting.defaultValue;
-              const isOverridden = setting.overridable && rawValue != null;
+            {groupedSettings.map((group, gi) => (
+              <div key={`${group.label}-${gi}`} className="chart-settings-group">
+                <div className="chart-settings-group-label">{group.label}</div>
+                {group.settings.map((setting) => {
+                  const rawValue = display?.[setting.key];
+                  const currentValue = rawValue ?? setting.defaultValue;
+                  const isOverridden = rawValue != null;
 
-              const renderControl = () => {
-                if (setting.type === 'checkbox') {
+                  const control = renderSettingControl(setting, currentValue, onDisplayChange);
+                  if (!control) return null;
+
+                  const isCheckbox = setting.type === 'checkbox';
+
                   return (
-                    <label className="property-label" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                      <input
-                        type="checkbox"
-                        checked={!!currentValue}
-                        onChange={(e) => onDisplayChange(setting.key, e.target.checked)}
-                      />
-                      {setting.label}
-                    </label>
-                  );
-                }
-                if (setting.type === 'radio' && setting.options) {
-                  return (
-                    <div style={{ display: 'flex', gap: 3, flexWrap: 'wrap' }}>
-                      {setting.options.map((opt: any) => (
-                        <button
-                          key={opt.value}
-                          type="button"
-                          onClick={() => onDisplayChange(setting.key, opt.value)}
-                          style={{
-                            border: '1px solid',
-                            borderColor: currentValue === opt.value ? '#3b82f6' : '#e5e7eb',
-                            background: currentValue === opt.value ? '#eff6ff' : '#fff',
-                            color: currentValue === opt.value ? '#1d4ed8' : '#374151',
-                            borderRadius: 3, padding: '2px 8px', fontSize: 10, cursor: 'pointer',
-                          }}
-                        >
-                          {opt.label}
-                        </button>
-                      ))}
+                    <div key={setting.key} className="chart-settings-row">
+                      {!isCheckbox && <label className="chart-settings-label">{setting.label}</label>}
+                      <AutomatableField
+                        label={setting.label}
+                        value={currentValue}
+                        overridden={isOverridden}
+                        onClearOverride={() => onDisplayChange(setting.key, null)}
+                      >
+                        {control}
+                      </AutomatableField>
                     </div>
                   );
-                }
-                if (setting.type === 'number-range') {
-                  return (
-                    <input
-                      className="property-input"
-                      type="number"
-                      value={currentValue ?? ''}
-                      placeholder="Auto"
-                      style={{ fontSize: 11, width: 80 }}
-                      onChange={(e) => onDisplayChange(setting.key, e.target.value === '' ? null : Number(e.target.value))}
-                    />
-                  );
-                }
-                if (setting.type === 'text') {
-                  return (
-                    <input
-                      className="property-input"
-                      type="text"
-                      value={currentValue ?? ''}
-                      placeholder="Auto"
-                      style={{ fontSize: 11 }}
-                      onChange={(e) => onDisplayChange(setting.key, e.target.value || null)}
-                    />
-                  );
-                }
-                return null;
-              };
-
-              const control = renderControl();
-              if (!control) return null;
-
-              if (setting.overridable) {
-                return (
-                  <AutomatableField
-                    key={setting.key}
-                    label={setting.label}
-                    value={currentValue}
-                    overridden={isOverridden}
-                    onClearOverride={() => onDisplayChange(setting.key, null)}
-                  >
-                    {control}
-                  </AutomatableField>
-                );
-              }
-
-              return (
-                <div key={setting.key} className="property-row">
-                  {setting.type !== 'checkbox' && <label className="property-label">{setting.label}</label>}
-                  {control}
-                </div>
-              );
-            })}
+                })}
+              </div>
+            ))}
           </>
         )}
       </div>

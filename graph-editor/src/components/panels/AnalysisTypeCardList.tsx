@@ -32,9 +32,10 @@ export function AnalysisTypeCardList({
     return map;
   }, [availableAnalyses]);
 
+  const effectiveShowAll = showAll || availableById.size === 0;
   const filteredTypes = useMemo(
-    () => ANALYSIS_TYPES.filter((typeMeta) => showAll || availableById.has(typeMeta.id)),
-    [showAll, availableById]
+    () => ANALYSIS_TYPES.filter((typeMeta) => effectiveShowAll || availableById.has(typeMeta.id)),
+    [effectiveShowAll, availableById]
   );
 
   return (

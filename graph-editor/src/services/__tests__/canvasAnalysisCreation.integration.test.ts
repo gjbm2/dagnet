@@ -128,6 +128,70 @@ describe('Canvas analysis creation: element palette path (integration)', () => {
   });
 });
 
+describe('Canvas analysis creation: type resolution edge cases', () => {
+  it('single absorbing node produces to(nodeId) DSL regardless of edge structure', () => {
+    const graphWithSelfLoop = {
+      ...GRAPH,
+      edges: [
+        ...GRAPH.edges,
+        { uuid: 'e5', from: 'n3', to: 'n3', id: 'purchase-self-loop', p: { mean: 0.1 } },
+      ],
+    };
+    const rfNodes = graphWithSelfLoop.nodes.map(n => ({
+      id: n.uuid,
+      type: 'conversion',
+      position: { x: 0, y: 0 },
+      data: { uuid: n.uuid, id: n.id, label: n.label, entry: (n as any).entry, absorbing: (n as any).absorbing, type: n.type },
+    }));
+
+    const dsl = constructQueryDSL(['purchase'], rfNodes as any[], graphWithSelfLoop.edges as any[]);
+    expect(dsl).toBe('to(purchase)');
+  });
+
+  it('single absorbing node with truthy non-boolean absorbing field produces to(nodeId)', () => {
+    const rfNodes = GRAPH.nodes.map(n => ({
+      id: n.uuid,
+      type: 'conversion',
+      position: { x: 0, y: 0 },
+      data: {
+        uuid: n.uuid, id: n.id, label: n.label,
+        entry: (n as any).entry,
+        absorbing: n.id === 'purchase' ? 'yes' : (n as any).absorbing,
+        type: n.type,
+      },
+    }));
+
+    const dsl = constructQueryDSL(['purchase'], rfNodes as any[], GRAPH.edges as any[]);
+    expect(dsl).toBe('to(purchase)');
+  });
+
+  it('single middle node produces visited(nodeId)', () => {
+    const dsl = constructQueryDSL(['signup'], REACTFLOW_NODES as any[], GRAPH.edges as any[]);
+    expect(dsl).toBe('visited(signup)');
+  });
+
+  it('single middle node resolves to path_through', async () => {
+    const dsl = constructQueryDSL(['signup'], REACTFLOW_NODES as any[], GRAPH.edges as any[]);
+    expect(dsl).toBe('visited(signup)');
+
+    const { primaryAnalysisType } = await resolveAnalysisType(GRAPH, dsl);
+    expect(primaryAnalysisType).toBe('path_through');
+  });
+
+  it('edge selection (source + target) produces from(source).to(target) DSL', () => {
+    const dsl = constructQueryDSL(['landing-page', 'signup'], REACTFLOW_NODES as any[], GRAPH.edges as any[]);
+    expect(dsl).toBe('from(landing-page).to(signup)');
+  });
+
+  it('edge selection resolves to path_between', async () => {
+    const dsl = constructQueryDSL(['landing-page', 'signup'], REACTFLOW_NODES as any[], GRAPH.edges as any[]);
+    expect(dsl).toBe('from(landing-page).to(signup)');
+
+    const { primaryAnalysisType } = await resolveAnalysisType(GRAPH, dsl);
+    expect(primaryAnalysisType).toBe('path_between');
+  });
+});
+
 describe('Canvas analysis creation: element palette path simulates addCanvasAnalysisAtPosition', () => {
   it('element palette path should resolve type with correct scenario count', async () => {
     const selectedNodeIds = ['purchase'];

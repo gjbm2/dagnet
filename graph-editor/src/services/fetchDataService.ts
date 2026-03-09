@@ -1921,6 +1921,8 @@ export function selectLatencyToApplyForTopoPass(
     onset_delta_days?: number;
     mu?: number;
     sigma?: number;
+    path_mu?: number;
+    path_sigma?: number;
   },
   existing:
     | {
@@ -1941,6 +1943,8 @@ export function selectLatencyToApplyForTopoPass(
   onset_delta_days?: number;
   mu?: number;
   sigma?: number;
+  path_mu?: number;
+  path_sigma?: number;
 } {
   if (!preserveLatencySummaryFromFile) {
     return computed;
@@ -1972,6 +1976,9 @@ export function selectLatencyToApplyForTopoPass(
     // mu/sigma: always from the topo pass (fitted model params for offline completeness).
     mu: computed.mu,
     sigma: computed.sigma,
+    // path_mu/path_sigma: path-level A→Y CDF params (Fenton–Wilkinson combined).
+    path_mu: computed.path_mu,
+    path_sigma: computed.path_sigma,
   };
 }
 

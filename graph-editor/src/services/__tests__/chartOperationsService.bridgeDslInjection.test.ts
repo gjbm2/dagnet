@@ -47,6 +47,14 @@ vi.mock('../../contexts/TabContext', () => ({
       } as any);
       return true;
     }),
+    updateFile: vi.fn(async (fileId: string, data: any) => {
+      const existing: any = await db.files.get(fileId);
+      if (existing) {
+        existing.data = data;
+        existing.lastModified = Date.now();
+        await db.files.put(existing);
+      }
+    }),
   },
 }));
 

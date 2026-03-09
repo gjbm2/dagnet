@@ -55,9 +55,14 @@ export interface DisplaySettingDef {
   defaultValue: any;
   /** Show in the chart properties panel (Section 4) */
   propsPanel: boolean;
-  /** Show as inline toggle inside the chart chrome */
-  inline: boolean;
-  /** Show in the right-click context menu */
+  /**
+   * Inline visibility tier inside the chart chrome.
+   *  'full'  = shown inline in tab mode (more screen space)
+   *  'brief' = shown inline in both tab AND canvas mode (key settings only)
+   *  false   = never shown inline (props panel / modal only)
+   */
+  inline: 'full' | 'brief' | false;
+  /** Show in the right-click context menu (later implementation phase) */
   contextMenu: boolean;
   /**
    * If true, the setting supports "auto vs manual" state.
@@ -120,7 +125,6 @@ const COMMON_AXIS_SETTINGS: DisplaySettingDef[] = [
     label: 'Label rotation',
     type: 'radio',
     options: [
-      { value: 'auto', label: 'Auto' },
       { value: '0', label: '0°' },
       { value: '30', label: '30°' },
       { value: '45', label: '45°' },
@@ -138,7 +142,6 @@ const COMMON_AXIS_SETTINGS: DisplaySettingDef[] = [
     label: 'Number format',
     type: 'radio',
     options: [
-      { value: 'auto', label: 'Auto' },
       { value: 'percent', label: 'Percentage' },
       { value: 'decimal_2', label: '2 decimals' },
       { value: 'decimal_0', label: 'Whole number' },
@@ -198,7 +201,7 @@ const COMMON_LEGEND_SETTINGS: DisplaySettingDef[] = [
     type: 'checkbox',
     defaultValue: true,
     propsPanel: true,
-    inline: false,
+    inline: 'brief',
     contextMenu: true,
   },
   {
@@ -279,7 +282,7 @@ const COMMON_TREND_SETTINGS: DisplaySettingDef[] = [
     type: 'checkbox',
     defaultValue: false,
     propsPanel: true,
-    inline: true,
+    inline: 'full',
     contextMenu: true,
   },
 ];
@@ -328,7 +331,7 @@ const COMMON_GROUPING_SETTINGS: DisplaySettingDef[] = [
     ],
     defaultValue: 'day',
     propsPanel: true,
-    inline: true,
+    inline: 'full',
     contextMenu: true,
   },
 ];
@@ -345,7 +348,7 @@ const COMMON_SERIES_TYPE_SETTINGS: DisplaySettingDef[] = [
     ],
     defaultValue: 'bar',
     propsPanel: true,
-    inline: true,
+    inline: 'full',
     contextMenu: true,
   },
 ];
@@ -462,7 +465,7 @@ const COMMON_STACK_SETTINGS: DisplaySettingDef[] = [
     ],
     defaultValue: 'grouped',
     propsPanel: true,
-    inline: true,
+    inline: 'full',
     contextMenu: true,
   },
 ];
@@ -512,7 +515,7 @@ const COMMON_CUMULATIVE_SETTINGS: DisplaySettingDef[] = [
     type: 'checkbox',
     defaultValue: false,
     propsPanel: true,
-    inline: true,
+    inline: 'full',
     contextMenu: true,
   },
 ];
@@ -532,7 +535,7 @@ const COMMON_MOVING_AVERAGE_SETTINGS: DisplaySettingDef[] = [
     ],
     defaultValue: 'none',
     propsPanel: true,
-    inline: true,
+    inline: 'full',
     contextMenu: true,
   },
   {
@@ -546,8 +549,23 @@ const COMMON_MOVING_AVERAGE_SETTINGS: DisplaySettingDef[] = [
   },
 ];
 
-/** Bar spacing controls */
+/** Bar spacing and width controls */
 const COMMON_BAR_SPACING_SETTINGS: DisplaySettingDef[] = [
+  {
+    key: 'bar_width',
+    label: 'Bar width',
+    type: 'radio',
+    options: [
+      { value: 'thin', label: 'Thin' },
+      { value: 'medium', label: 'Medium' },
+      { value: 'wide', label: 'Wide' },
+      { value: 'full', label: 'Full' },
+    ],
+    defaultValue: 'medium',
+    propsPanel: true,
+    inline: false,
+    contextMenu: false,
+  },
   {
     key: 'bar_gap',
     label: 'Gap between bars',
@@ -595,7 +613,7 @@ const BRIDGE_SPECIFIC_SETTINGS: DisplaySettingDef[] = [
     ],
     defaultValue: 'vertical',
     propsPanel: true,
-    inline: true,
+    inline: 'brief',
     contextMenu: true,
   },
   {
@@ -630,7 +648,7 @@ const FUNNEL_SPECIFIC_SETTINGS: DisplaySettingDef[] = [
     ],
     defaultValue: 'cumulative_probability',
     propsPanel: true,
-    inline: true,
+    inline: 'full',
     contextMenu: true,
   },
   // layout_mode (combined/separate) — hidden until multi-chart layout logic is implemented
@@ -669,19 +687,6 @@ const FUNNEL_SPECIFIC_SETTINGS: DisplaySettingDef[] = [
 export const CHART_DISPLAY_SETTINGS: Record<string, DisplaySettingDef[]> = {
   bridge: [
     ...BRIDGE_SPECIFIC_SETTINGS,
-    ...COMMON_AXIS_SETTINGS,
-    ...COMMON_LEGEND_SETTINGS,
-    ...COMMON_LABEL_SETTINGS,
-    ...COMMON_LABEL_POSITION_SETTINGS,
-    ...COMMON_BAR_SPACING_SETTINGS,
-    ...COMMON_SORT_SETTINGS,
-    ...COMMON_TOOLTIP_SETTINGS,
-    ...COMMON_ANIMATION_SETTINGS,
-    ...COMMON_REFERENCE_LINE_SETTINGS,
-  ],
-
-  bridge_horizontal: [
-    ...BRIDGE_SPECIFIC_SETTINGS.filter(s => s.key !== 'orientation'),
     ...COMMON_AXIS_SETTINGS,
     ...COMMON_LEGEND_SETTINGS,
     ...COMMON_LABEL_SETTINGS,
@@ -786,13 +791,24 @@ export function getDisplaySettings(chartKind: string | undefined, viewMode: 'cha
 
 /**
  * Get display settings filtered by surface.
+ *
+ * For the 'inline' surface, an optional `context` narrows the result:
+ *   - 'tab'    -> all inline settings (full + brief)
+ *   - 'canvas' -> only brief inline settings
+ *   - omitted  -> all inline settings (backward compatible)
  */
 export function getDisplaySettingsForSurface(
   chartKind: string | undefined,
   viewMode: 'chart' | 'cards',
   surface: 'propsPanel' | 'inline' | 'contextMenu',
+  context?: 'canvas' | 'tab',
 ): DisplaySettingDef[] {
-  return getDisplaySettings(chartKind, viewMode).filter(s => s[surface]);
+  const all = getDisplaySettings(chartKind, viewMode);
+  if (surface === 'inline') {
+    if (context === 'canvas') return all.filter(s => s.inline === 'brief');
+    return all.filter(s => s.inline !== false);
+  }
+  return all.filter(s => s[surface]);
 }
 
 /**

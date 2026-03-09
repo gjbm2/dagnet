@@ -97,13 +97,7 @@ test.describe('Canvas analysis reload', () => {
 
     await expect(page.locator('.react-flow').first()).toBeVisible({ timeout: 10_000 });
 
-    // Match the working create flow used elsewhere: select the absorbing node first.
-    const purchaseNode = page.locator('.react-flow__node').filter({ hasText: 'Purchase' }).first();
-    await expect(purchaseNode).toBeVisible({ timeout: 5_000 });
-    await purchaseNode.click();
-    await page.waitForTimeout(1000);
-
-    // Create a chart in the running app
+    // Create a chart in the running app via pinAnalysisToCanvas
     await page.evaluate(() => {
       window.dispatchEvent(new CustomEvent('dagnet:pinAnalysisToCanvas', {
         detail: {
@@ -115,9 +109,12 @@ test.describe('Canvas analysis reload', () => {
       }));
     });
 
-    await page.waitForTimeout(1000);
+    // Wait for draw mode to be active (deterministic — no arbitrary timeout)
+    await expect(page.locator('.rf-create-mode')).toBeVisible({ timeout: 5_000 });
+
+    // Click well below the nodes to avoid hitting them (which would abort the draw handler)
     const canvas = page.locator('.react-flow__pane').first();
-    await canvas.click({ position: { x: 500, y: 300 } });
+    await canvas.click({ position: { x: 200, y: 500 }, force: true });
 
     await expect.poll(async () => {
       return await page.evaluate(async () => {

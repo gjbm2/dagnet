@@ -37,7 +37,7 @@ export type ScopeRule =
   | 'reachable_from'
   | 'all_graph_parameters';
 
-export type ReadMode = 'raw_snapshots' | 'virtual_snapshot' | 'cohort_maturity';
+export type ReadMode = 'raw_snapshots' | 'virtual_snapshot' | 'cohort_maturity' | 'sweep_simple';
 
 export type SlicePolicy = 'explicit' | 'mece_fulfilment_allowed';
 
@@ -224,6 +224,20 @@ export const ANALYSIS_TYPES: AnalysisTypeMeta[] = [
     snapshotContract: {
       scopeRule: 'funnel_path',
       readMode: 'cohort_maturity',
+      slicePolicy: 'mece_fulfilment_allowed',
+      timeBoundsSource: 'query_dsl_window',
+      perScenario: false,
+    },
+  },
+  {
+    id: 'lag_fit',
+    name: 'Lag Fit',
+    shortDescription: 'Fitted log-normal lag distribution vs. observed cohort completeness',
+    selectionHint: 'Use from(a).to(b) with a window() or cohort() range',
+    icon: TrendingUp,
+    snapshotContract: {
+      scopeRule: 'funnel_path',
+      readMode: 'sweep_simple',
       slicePolicy: 'mece_fulfilment_allowed',
       timeBoundsSource: 'query_dsl_window',
       perScenario: false,

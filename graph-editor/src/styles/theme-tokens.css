@@ -40,6 +40,13 @@
   --color-warning: #f59e0b;
   --color-warning-bg: #fff3cd;
 
+  /* Canvas analysis node */
+  --canvas-analysis-bg: #ffffff;
+  --canvas-analysis-border: #d1d5db;
+  --canvas-analysis-title: #374151;
+  --canvas-analysis-title-bg: #f9fafb;
+  --canvas-analysis-recompute-overlay: rgba(255, 255, 255, 0.55);
+
   /* Shadows */
   --shadow-dropdown: 0px 4px 16px rgba(0, 0, 0, 0.15);
   --shadow-overlay: 0 8px 32px rgba(0, 0, 0, 0.12);
@@ -79,6 +86,13 @@
   --color-success-bg: #1a3a2a;
   --color-warning: #fbbf24;
   --color-warning-bg: #3b2f0e;
+
+  /* Canvas analysis node */
+  --canvas-analysis-bg: #1e1e1e;
+  --canvas-analysis-border: #404040;
+  --canvas-analysis-title: #e0e0e0;
+  --canvas-analysis-title-bg: #252525;
+  --canvas-analysis-recompute-overlay: rgba(30, 30, 30, 0.6);
 
   /* Shadows */
   --shadow-dropdown: 0px 4px 16px rgba(0, 0, 0, 0.5);

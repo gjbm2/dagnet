@@ -49,7 +49,7 @@ export default function ContainerNode({ data, selected }: NodeProps<ContainerNod
         lineStyle={{ display: 'none' }}
         handleStyle={{
           width: '8px', height: '8px', borderRadius: '2px',
-          backgroundColor: container.colour, border: '1px solid #fff',
+          backgroundColor: container.colour, border: '1px solid var(--bg-primary)',
         }}
         onResize={(_event, params) => {
           if (resizeTimeoutRef.current) clearTimeout(resizeTimeoutRef.current);
@@ -66,9 +66,10 @@ export default function ContainerNode({ data, selected }: NodeProps<ContainerNod
           title="Delete container"
           style={{
             position: 'absolute', top: -10, right: -10, width: '20px', height: '20px',
-            borderRadius: '50%', border: '1px solid rgba(0,0,0,0.15)', background: '#fff',
-            color: '#dc3545', fontSize: '12px', lineHeight: '18px', textAlign: 'center',
+            borderRadius: '50%', border: '1px solid var(--border-primary)', background: 'var(--bg-primary)',
+            color: 'var(--color-danger)', fontSize: '12px', lineHeight: '18px', textAlign: 'center',
             cursor: 'pointer', zIndex: 10, padding: 0, boxShadow: '0 1px 3px rgba(0,0,0,0.15)',
+            pointerEvents: 'auto',
           }}
         >
           ×
@@ -89,7 +90,8 @@ export default function ContainerNode({ data, selected }: NodeProps<ContainerNod
           transition: 'box-shadow 0.15s ease-out',
         }}
       >
-        {/* Label bar */}
+        {/* Label bar — pointer-events: auto so it remains clickable
+           even though the wrapper has pointer-events: none (for edge passthrough) */}
         <div
           style={{
             padding: '4px 8px',
@@ -98,10 +100,11 @@ export default function ContainerNode({ data, selected }: NodeProps<ContainerNod
             borderRadius: '3px 3px 0 0',
             fontSize: '8px',
             fontWeight: 600,
-            color: '#333',
+            color: 'var(--text-primary)',
             minHeight: '20px',
             display: 'flex',
             alignItems: 'center',
+            pointerEvents: 'auto',
           }}
         >
           <InlineEditableLabel

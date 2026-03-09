@@ -46,10 +46,24 @@ describe('analysisDisplaySettingsRegistry', () => {
     expect(panel.every(s => s.propsPanel)).toBe(true);
   });
 
-  it('should filter by inline surface', () => {
+  it('should filter by inline surface (all inline settings)', () => {
     const inline = getDisplaySettingsForSurface('bridge', 'chart', 'inline');
-    expect(inline.every(s => s.inline)).toBe(true);
+    expect(inline.every(s => s.inline !== false)).toBe(true);
     expect(inline.find(s => s.key === 'orientation')).toBeDefined();
+  });
+
+  it('should filter inline by tab context (full + brief)', () => {
+    const inline = getDisplaySettingsForSurface('bridge', 'chart', 'inline', 'tab');
+    expect(inline.every(s => s.inline !== false)).toBe(true);
+    expect(inline.find(s => s.key === 'orientation')).toBeDefined();
+    expect(inline.find(s => s.key === 'show_legend')).toBeDefined();
+  });
+
+  it('should filter inline by canvas context (brief only)', () => {
+    const inline = getDisplaySettingsForSurface('bridge', 'chart', 'inline', 'canvas');
+    expect(inline.every(s => s.inline === 'brief')).toBe(true);
+    expect(inline.find(s => s.key === 'orientation')).toBeDefined();
+    expect(inline.find(s => s.key === 'show_legend')).toBeDefined();
   });
 
   it('should filter by contextMenu surface', () => {
@@ -144,7 +158,7 @@ describe('analysisDisplaySettingsRegistry', () => {
   });
 
   it('should NOT include time grouping for non-time-series chart kinds', () => {
-    for (const kind of ['bridge', 'bridge_horizontal', 'funnel', 'histogram']) {
+    for (const kind of ['bridge', 'funnel', 'histogram']) {
       const settings = getDisplaySettings(kind, 'chart');
       expect(settings.find(s => s.key === 'time_grouping'), `${kind} should not have time_grouping`).toBeUndefined();
     }
@@ -175,7 +189,7 @@ describe('analysisDisplaySettingsRegistry', () => {
   });
 
   it('should NOT include scale for bridge, funnel, cohort_maturity', () => {
-    for (const kind of ['bridge', 'bridge_horizontal', 'funnel', 'cohort_maturity']) {
+    for (const kind of ['bridge', 'funnel', 'cohort_maturity']) {
       const settings = getDisplaySettings(kind, 'chart');
       expect(settings.find(s => s.key === 'y_axis_scale'), `${kind} should not have y_axis_scale`).toBeUndefined();
     }
@@ -202,7 +216,7 @@ describe('analysisDisplaySettingsRegistry', () => {
   // ============================================================
 
   it('should include sort settings for bridge kinds', () => {
-    for (const kind of ['bridge', 'bridge_horizontal']) {
+    for (const kind of ['bridge']) {
       const settings = getDisplaySettings(kind, 'chart');
       expect(settings.find(s => s.key === 'sort_by'), `${kind} missing sort_by`).toBeDefined();
       expect(settings.find(s => s.key === 'sort_direction'), `${kind} missing sort_direction`).toBeDefined();
@@ -234,7 +248,7 @@ describe('analysisDisplaySettingsRegistry', () => {
   // ============================================================
 
   it('should include bar_gap for bar chart kinds', () => {
-    for (const kind of ['bridge', 'bridge_horizontal', 'histogram']) {
+    for (const kind of ['bridge', 'histogram']) {
       const settings = getDisplaySettings(kind, 'chart');
       expect(settings.find(s => s.key === 'bar_gap'), `${kind} missing bar_gap`).toBeDefined();
     }
@@ -245,7 +259,7 @@ describe('analysisDisplaySettingsRegistry', () => {
   // ============================================================
 
   it('should include label_position for bridge and funnel kinds', () => {
-    for (const kind of ['bridge', 'bridge_horizontal', 'funnel']) {
+    for (const kind of ['bridge', 'funnel']) {
       const settings = getDisplaySettings(kind, 'chart');
       expect(settings.find(s => s.key === 'label_position'), `${kind} missing label_position`).toBeDefined();
     }
@@ -361,10 +375,10 @@ describe('analysisDisplaySettingsRegistry', () => {
     }
   });
 
-  it('moving_average should be available inline and in context menu', () => {
+  it('moving_average should be available inline (full) and in context menu', () => {
     const settings = getDisplaySettings('daily_conversions', 'chart');
     const ma = settings.find(s => s.key === 'moving_average')!;
-    expect(ma.inline).toBe(true);
+    expect(ma.inline).toBe('full');
     expect(ma.contextMenu).toBe(true);
   });
 
@@ -387,10 +401,10 @@ describe('analysisDisplaySettingsRegistry', () => {
     expect(settings.find(s => s.key === 'show_connectors')).toBeDefined();
   });
 
-  it('bridge_horizontal should have show_connectors but NOT orientation', () => {
-    const settings = getDisplaySettings('bridge_horizontal', 'chart');
+  it('bridge should have both orientation and show_connectors', () => {
+    const settings = getDisplaySettings('bridge', 'chart');
     expect(settings.find(s => s.key === 'show_connectors')).toBeDefined();
-    expect(settings.find(s => s.key === 'orientation')).toBeUndefined();
+    expect(settings.find(s => s.key === 'orientation')).toBeDefined();
   });
 
   // ============================================================
