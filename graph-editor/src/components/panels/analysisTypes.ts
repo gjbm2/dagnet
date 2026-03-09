@@ -229,14 +229,6 @@ export const ANALYSIS_TYPES: AnalysisTypeMeta[] = [
       perScenario: false,
     },
   },
-  // Frontend-only — no snapshotContract, no backend call
-  {
-    id: 'lag_fit',
-    name: 'Lag Fit',
-    shortDescription: 'Fitted log-normal lag distribution vs. observed cohort completeness',
-    selectionHint: 'Use from(a).to(b) — edge must have cohort-mode parameter data',
-    icon: TrendingUp,
-  },
 ];
 
 /**
