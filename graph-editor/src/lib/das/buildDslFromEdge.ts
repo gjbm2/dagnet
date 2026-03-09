@@ -24,7 +24,6 @@ export interface EventFilter {
   property: string;
   operator: string;
   values: string[];
-  property_type?: 'event' | 'user';
 }
 
 /**

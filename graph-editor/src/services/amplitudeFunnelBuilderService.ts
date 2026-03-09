@@ -377,7 +377,7 @@ export function resolveEvent(eventId: string): { amplitudeName: string; filters:
   const rawFilters: any[] = eventFile?.data?.amplitude_filters || [];
 
   const filters = rawFilters.map((f: any) => ({
-    subprop_type: f.property_type ?? 'event',
+    subprop_type: 'event',
     subprop_key: f.property,
     subprop_op: mapOperator(f.operator),
     subprop_value: f.values,

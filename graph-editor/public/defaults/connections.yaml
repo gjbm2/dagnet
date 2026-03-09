@@ -83,7 +83,7 @@ connections:
             // Add property filters if defined
             if (filters && filters.length > 0) {
               step.filters = filters.map(f => ({
-                subprop_type: f.property_type ?? "event",
+                subprop_type: "event",
                 subprop_key: f.property,
                 subprop_op: mapOperator(f.operator),
                 subprop_value: f.values

@@ -71,10 +71,6 @@ properties:
         property:
           type: string
           description: "Property name to filter on"
-        property_type:
-          type: string
-          enum: ["event", "user"]
-          description: "Whether the property is an event property or Amplitude user property (default: event)"
         operator:
           type: string
           enum: ["is", "is not", "is any of", "is not any of", "contains", "does not contain"]
