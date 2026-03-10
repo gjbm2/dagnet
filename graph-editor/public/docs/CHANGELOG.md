@@ -1,4 +1,11 @@
 # DagNet Release Notes
+## Version 1.7.4b
+**Released:** 10-Mar-26
+
+Chart polishing, context menu refactors, chart toolbars
+
+---
+
 ## Version 1.7.3b
 **Released:** 9-Mar-26
 
