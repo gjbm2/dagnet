@@ -16,6 +16,7 @@ import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { useGraphStore } from '../../contexts/GraphStoreContext';
 import { useTabContext } from '../../contexts/TabContext';
 import { useScenariosContextOptional } from '../../contexts/ScenariosContext';
+import { useAnalysisBootContext } from '../../contexts/AnalysisBootContext';
 import { graphComputeClient, AnalysisResponse, AvailableAnalysis } from '../../lib/graphComputeClient';
 import { constructDSLFromSelection } from '../../lib/dslConstruction';
 import { AnalysisChartContainer } from '../charts/AnalysisChartContainer';
@@ -53,6 +54,8 @@ export default function AnalyticsPanel({ tabId, hideHeader = false }: AnalyticsP
   // Get scenario context for multi-scenario analysis
   const scenariosContext = useScenariosContextOptional();
   const { tabs, operations } = useTabContext();
+  
+  const bootContext = useAnalysisBootContext();
   
   // Extract nodes and edges from graph (for DSL construction)
   const nodes = graph?.nodes || [];
@@ -427,7 +430,7 @@ export default function AnalyticsPanel({ tabId, hideHeader = false }: AnalyticsP
           unavailableFileIds: prepared.unavailableFileIds || [],
         });
         setPlannerFileIds(prepared.requiredFileIds || []);
-        if (prepared.reason === 'planner_inputs_pending_hydration' && (prepared.hydratableFileIds || []).length > 0) {
+        if (!bootContext && prepared.reason === 'planner_inputs_pending_hydration' && (prepared.hydratableFileIds || []).length > 0) {
           logChartReadinessTrace('AnalyticsPanel:hydrate-planner-inputs', {
             tabId,
             analysisType: selectedAnalysisId,
@@ -520,6 +523,8 @@ export default function AnalyticsPanel({ tabId, hideHeader = false }: AnalyticsP
   
   // Single unified effect that handles all triggers
   useEffect(() => {
+    if (bootContext && !bootContext.bootReady) return;
+
     // Analysis changed: either switched from one to another, OR newly selected (prev was null)
     const analysisChanged = selectedAnalysisId !== null && 
                            prevAnalysisIdRef.current !== selectedAnalysisId;
@@ -564,7 +569,7 @@ export default function AnalyticsPanel({ tabId, hideHeader = false }: AnalyticsP
       }, 300);
       return () => clearTimeout(timeoutId);
     }
-  }, [graph, selectedNodeIds, queryDSL, selectedAnalysisId, visibleScenariosKey, visibleScenarioDataKey, whatIfDSL, visibilityModesKey]);
+  }, [graph, selectedNodeIds, queryDSL, selectedAnalysisId, visibleScenariosKey, visibleScenarioDataKey, whatIfDSL, visibilityModesKey, bootContext?.bootReady]);
   
   // Cleanup spinner timeout on unmount
   useEffect(() => {
@@ -576,6 +581,7 @@ export default function AnalyticsPanel({ tabId, hideHeader = false }: AnalyticsP
   }, []);
 
   useEffect(() => {
+    if (bootContext) return undefined;
     if (plannerFileIds.length === 0) return undefined;
     logChartReadinessTrace('AnalyticsPanel:subscribe-planner-files', {
       tabId,
@@ -593,7 +599,7 @@ export default function AnalyticsPanel({ tabId, hideHeader = false }: AnalyticsP
     return () => {
       unsubscribers.forEach((unsubscribe) => unsubscribe());
     };
-  }, [plannerFileIds]);
+  }, [bootContext, plannerFileIds]);
   
   // Format full result as JSON for debug display
   const formattedResult = useMemo(() => {

@@ -12,6 +12,7 @@ import type { Graph, ScenarioVisibilityMode } from '../types';
 
 type ScenarioLike = {
   id: string;
+  params: Record<string, any>;
   name?: string;
   colour?: string;
   meta?: {
@@ -327,7 +328,7 @@ export async function prepareAnalysisComputeInputs(
         effective_query_dsl: effectiveQueryDsl,
       });
     }
-  } else {
+  } else if (params.mode === 'custom') {
     const customScenariosAll = params.customScenarios || [];
     const hiddenScenarioIds = new Set(params.hiddenScenarioIds || []);
     const visibleCustomScenarios = customScenariosAll.filter(

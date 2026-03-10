@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { useGraphStore } from '../contexts/GraphStoreContext';
 import { useScenariosContextOptional } from '../contexts/ScenariosContext';
 import { useTabContext, useFileState, fileRegistry } from '../contexts/TabContext';
+import { useAnalysisBootContext } from '../contexts/AnalysisBootContext';
 import { graphComputeClient, type AnalysisResult } from '../lib/graphComputeClient';
 import { ANALYSIS_TYPES } from '../components/panels/analysisTypes';
 import { hydrateSnapshotPlannerInputs } from '../services/snapshotSubjectResolutionService';
@@ -50,6 +51,10 @@ export function useCanvasAnalysisCompute({
   const { tabs, operations } = useTabContext();
   const operationsRef = useRef(operations);
   operationsRef.current = operations;
+
+  const bootContext = useAnalysisBootContext();
+  const bootReady = bootContext?.bootReady ?? true;
+  const bootReadyEpoch = bootContext?.bootReadyEpoch ?? 0;
 
   const analysis = useMemo(() => {
     const fromStore = (graph as any)?.canvasAnalyses?.find((a: any) => a.id === analysisProp.id);
@@ -215,8 +220,11 @@ export function useCanvasAnalysisCompute({
 
   const prepareVersionRef = useRef(0);
   const lastAppliedPrepareRef = useRef(0);
+  const preparedSignatureRef = useRef<string | null>(null);
 
   useEffect(() => {
+    if (bootContext && !bootReady) return;
+
     const thisVersion = ++prepareVersionRef.current;
 
     const prepare = async () => {
@@ -229,6 +237,7 @@ export function useCanvasAnalysisCompute({
         registryVersion,
         tabId,
         prepareVersion: thisVersion,
+        bootReadyEpoch,
       });
       try {
         const nextPreparedState = await prepareAnalysisComputeInputs(
@@ -269,11 +278,24 @@ export function useCanvasAnalysisCompute({
         if (!mountedRef.current) return;
         if (thisVersion < lastAppliedPrepareRef.current) return;
         lastAppliedPrepareRef.current = thisVersion;
+
+        const nextSig = nextPreparedState.status === 'ready' ? nextPreparedState.signature : null;
+        if (nextSig !== null && nextSig === preparedSignatureRef.current) {
+          logChartReadinessTrace('CanvasScheduler:skip-redundant-prepare', {
+            analysisId: analysis.id,
+            analysisType,
+            signature: nextSig,
+            prepareVersion: thisVersion,
+          });
+          return;
+        }
+        preparedSignatureRef.current = nextSig;
         setPreparedState(nextPreparedState);
       } catch (err: any) {
         if (!mountedRef.current) return;
         if (thisVersion < lastAppliedPrepareRef.current) return;
         lastAppliedPrepareRef.current = thisVersion;
+        preparedSignatureRef.current = null;
         setPreparedState({ status: 'blocked', reason: 'graph_not_ready' });
         setError(err?.message || String(err));
         setLoading(false);
@@ -282,6 +304,9 @@ export function useCanvasAnalysisCompute({
 
     void prepare();
   }, [
+    bootContext,
+    bootReady,
+    bootReadyEpoch,
     graph,
     analysis,
     analysisType,
@@ -300,6 +325,7 @@ export function useCanvasAnalysisCompute({
   ]);
 
   useEffect(() => {
+    if (bootContext) return undefined;
     if (preparedState.status !== 'blocked') return undefined;
     const fileIds = preparedState.requiredFileIds || [];
     if (fileIds.length === 0) return undefined;
@@ -320,9 +346,10 @@ export function useCanvasAnalysisCompute({
     return () => {
       unsubscribers.forEach((unsubscribe) => unsubscribe());
     };
-  }, [preparedState]);
+  }, [bootContext, preparedState]);
 
   useEffect(() => {
+    if (bootContext) return;
     if (preparedState.status !== 'blocked') return;
     if (preparedState.reason !== 'planner_inputs_pending_hydration') return;
     const hydratableFileIds = preparedState.hydratableFileIds || [];
@@ -334,7 +361,7 @@ export function useCanvasAnalysisCompute({
       workspace,
     });
     void hydrateSnapshotPlannerInputs({ fileIds: hydratableFileIds, workspace });
-  }, [preparedState, workspace]);
+  }, [bootContext, preparedState, workspace]);
 
   useEffect(() => {
     if (preparedState.status === 'blocked') {
@@ -342,7 +369,9 @@ export function useCanvasAnalysisCompute({
     }
   }, [preparedState]);
 
-  const waitingForDeps = preparedState.status === 'blocked' && !error && !backendUnavailable;
+  const waitingForDeps =
+    (bootContext && !bootReady)
+    || (preparedState.status === 'blocked' && !error && !backendUnavailable);
   const graphReady = !!(graph && Array.isArray((graph as any).nodes) && Array.isArray((graph as any).edges));
   const analysisReady = typeof analysisType === 'string' && analysisType.trim().length > 0;
   const scenariosCtxReady = scenariosContext ? Boolean((scenariosContext as any).scenariosReady) : false;

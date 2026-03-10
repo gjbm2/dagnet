@@ -83,6 +83,22 @@ async function getEdgeMeans(page: Page): Promise<{ ab: number; ac: number; abOve
   });
 }
 
+async function waitForEdgeMeans(
+  page: Page,
+  expected: { ab: number; ac: number; abOverridden: boolean; acOverridden: boolean },
+): Promise<void> {
+  await expect
+    .poll(async () => {
+      const state = await getEdgeMeans(page);
+      const close = (actual: number, target: number) => Math.abs(actual - target) < 0.001;
+      return close(state.ab, expected.ab)
+        && close(state.ac, expected.ac)
+        && state.abOverridden === expected.abOverridden
+        && state.acOverridden === expected.acOverridden;
+    }, { timeout: 1500 })
+    .toBe(true);
+}
+
 async function getEdgeDescription(page: Page): Promise<{ desc: string; overridden: boolean }> {
   return page.evaluate(async () => {
     const fileRegistry = (window as any).fileRegistry;
@@ -127,18 +143,12 @@ test.describe('auto-rebalance on manual commit', () => {
 
     // Validate: origin edge overridden, sibling edge rebalanced to 0.4 (and not overridden).
     // NOTE: store→fileRegistry sync is async; poll briefly for the updated graph snapshot.
-    await expect
-      .poll(async () => (await getEdgeMeans(page)).ab, { timeout: 1500 })
-      .toBeCloseTo(0.6, 3);
-    await expect
-      .poll(async () => (await getEdgeMeans(page)).ac, { timeout: 1500 })
-      .toBeCloseTo(0.4, 3);
-    await expect
-      .poll(async () => (await getEdgeMeans(page)).abOverridden, { timeout: 1500 })
-      .toBe(true);
-    await expect
-      .poll(async () => (await getEdgeMeans(page)).acOverridden, { timeout: 1500 })
-      .toBe(false);
+    await waitForEdgeMeans(page, {
+      ab: 0.6,
+      ac: 0.4,
+      abOverridden: true,
+      acOverridden: false,
+    });
 
     // ---------------------------------------------------------------------
     // 3) Edge description: blur commit persists (regression guard)
@@ -174,18 +184,12 @@ test.describe('auto-rebalance on manual commit', () => {
     await probInput.press('Enter');
 
     // Validate rebalance: 0.2 + 0.8 = 1.0. Sibling remains non-overridden.
-    await expect
-      .poll(async () => (await getEdgeMeans(page)).ab, { timeout: 1500 })
-      .toBeCloseTo(0.2, 3);
-    await expect
-      .poll(async () => (await getEdgeMeans(page)).ac, { timeout: 1500 })
-      .toBeCloseTo(0.8, 3);
-    await expect
-      .poll(async () => (await getEdgeMeans(page)).abOverridden, { timeout: 1500 })
-      .toBe(true);
-    await expect
-      .poll(async () => (await getEdgeMeans(page)).acOverridden, { timeout: 1500 })
-      .toBe(false);
+    await waitForEdgeMeans(page, {
+      ab: 0.2,
+      ac: 0.8,
+      abOverridden: true,
+      acOverridden: false,
+    });
   });
 });
 

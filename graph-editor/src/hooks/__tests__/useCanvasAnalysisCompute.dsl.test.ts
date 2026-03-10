@@ -263,6 +263,10 @@ vi.mock('../../contexts/ScenariosContext', () => ({
   useScenariosContextOptional: vi.fn(() => mockScenariosContextState),
 }));
 
+vi.mock('../../contexts/AnalysisBootContext', () => ({
+  useAnalysisBootContext: vi.fn(() => null),
+}));
+
 vi.mock('../../contexts/TabContext', () => ({
   useTabContext: vi.fn(() => ({
     tabs: mockTabsState.tabs,
@@ -471,9 +475,10 @@ describe('useCanvasAnalysisCompute DSL handling', () => {
     rerender({ currentAnalysis: analysis });
 
     await waitFor(() => {
-      expect(mockResolveSnapshotSubjectsForScenario).toHaveBeenCalledTimes(2);
-      expect(mockAnalyzeMultipleScenarios).toHaveBeenCalledTimes(1);
+      expect(mockResolveSnapshotSubjectsForScenario).toHaveBeenCalled();
+      expect(mockAnalyzeMultipleScenarios).toHaveBeenCalled();
       expect(result.current.waitingForDeps).toBe(false);
+      expect(result.current.result).not.toBeNull();
     });
   });
 

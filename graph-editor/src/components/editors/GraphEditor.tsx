@@ -33,6 +33,7 @@ import { ScenarioLegend } from '../ScenarioLegend';
 import { useActiveGraphTracking } from '../../hooks/useActiveGraphTracking';
 import { ElementToolProvider, type ElementToolContextType, type ElementToolType } from '../../contexts/ElementToolContext';
 import { logSnapshotBoot, summariseSnapshotCharts } from '../../lib/snapshotBootTrace';
+import { GraphTabBootProvider } from '../../contexts/AnalysisBootContext';
 
 // Canvas object type for generalised annotation selection
 export type CanvasAnnotationType = 'postit' | 'container' | 'canvasAnalysis';
@@ -2441,7 +2442,9 @@ const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, r
 export function GraphEditor(props: EditorProps<GraphData> & { tabId?: string }) {
   return (
     <GraphStoreProvider fileId={props.fileId}>
-      <GraphEditorInner {...props} />
+      <GraphTabBootProvider fileId={props.fileId} tabId={props.tabId}>
+        <GraphEditorInner {...props} />
+      </GraphTabBootProvider>
     </GraphStoreProvider>
   );
 }

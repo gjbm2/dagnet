@@ -20,6 +20,7 @@ import { useElementSize } from '../../hooks/useElementSize';
 import { getAnalysisTypeMeta } from '../panels/analysisTypes';
 import { AnalysisTypeCardList } from '../panels/AnalysisTypeCardList';
 import { ChartFloatingIcon } from './ChartInlineSettingsFloating';
+import { logChartReadinessTrace } from '../../lib/snapshotBootTrace';
 
 const CHECKBOX_ICONS: Record<string, React.ComponentType<{ size?: number | string }>> = {
   show_legend: List,
@@ -231,6 +232,21 @@ function extractSubjectIds(result: AnalysisResult | null): string[] {
   return Array.from(s);
 }
 
+function summariseDailyConversionsOption(option: any): Record<string, unknown> {
+  const series = Array.isArray(option?.series) ? option.series : [];
+  return {
+    seriesCount: series.length,
+    seriesNames: series.map((s: any) => s?.name || null),
+    seriesTypes: series.map((s: any) => s?.type || null),
+    pointCounts: series.map((s: any) => Array.isArray(s?.data) ? s.data.length : 0),
+    firstPoints: series.map((s: any) => Array.isArray(s?.data) && s.data.length > 0 ? s.data[0] : null),
+    lastPoints: series.map((s: any) => Array.isArray(s?.data) && s.data.length > 0 ? s.data[s.data.length - 1] : null),
+    legendShown: option?.legend?.show !== false,
+    xAxisType: option?.xAxis?.type || null,
+    xAxisName: option?.xAxis?.name || null,
+  };
+}
+
 export function AnalysisChartContainer(props: {
   result: AnalysisResult | null;
   chartKindOverride?: string;
@@ -282,6 +298,7 @@ export function AnalysisChartContainer(props: {
   const showActionChrome = chartContext === 'tab' && !hideChrome;
   const hideScenarioLegend = props.hideScenarioLegend ?? false;
   const showInlineAnalysisTypePicker = chartContext === 'canvas' && !props.analysisTypeId && !!props.onAnalysisTypeChange;
+  const isDebugDailyConversions = import.meta.env.DEV && result?.analysis_type === 'daily_conversions';
 
   const patchedResult = useMemo(() => {
     if (!result) return null;
@@ -409,6 +426,10 @@ export function AnalysisChartContainer(props: {
   }, [effectiveKind, patchedResult, resolvedSettings, hideScenarioLegend, displayPlan.scenarioIdsToRender, scenarioVisibilityModes, scenarioDslSubtitleById, effectiveSubjectId, chartWidthPx, chartHeightPx, fillHeight, height]);
 
   const onEvents = useMemo(() => ({}), []);
+  const echartsRef = useRef<any>(null);
+  const dailyRenderCommitRef = useRef(0);
+  const dailyOptionVersionRef = useRef(0);
+  const dailyEchartsReadyCountRef = useRef(0);
 
   const handleSubjectChange = useCallback((e: React.ChangeEvent<HTMLSelectElement>) => {
     setSelectedSubjectId(e.target.value);
@@ -418,6 +439,90 @@ export function AnalysisChartContainer(props: {
     setSelectedKind(nextKind);
     props.onChartKindChange?.(nextKind);
   }, [props]);
+
+  const dailyChartStateKey = useMemo(() => {
+    if (!isDebugDailyConversions) return null;
+    return JSON.stringify({
+      analysisId: props.analysisId || null,
+      chartContext,
+      effectiveKind,
+      visibleScenarioIds,
+      subjectIds,
+      selectedSubjectId,
+      effectiveSubjectId: effectiveSubjectId || null,
+      chartWidthPx,
+      chartHeightPx,
+      rowCount: Array.isArray(result?.data) ? result.data.length : 0,
+      scenarioIds: Array.from(new Set((Array.isArray(result?.data) ? result.data : []).map((r: any) => String(r?.scenario_id)).filter(Boolean))).sort(),
+      option: echartsOption ? summariseDailyConversionsOption(echartsOption) : null,
+    });
+  }, [
+    isDebugDailyConversions,
+    props.analysisId,
+    chartContext,
+    effectiveKind,
+    visibleScenarioIds,
+    subjectIds,
+    selectedSubjectId,
+    effectiveSubjectId,
+    chartWidthPx,
+    chartHeightPx,
+    result,
+    echartsOption,
+  ]);
+
+  useEffect(() => {
+    if (!isDebugDailyConversions || !dailyChartStateKey) return;
+    dailyRenderCommitRef.current += 1;
+    logChartReadinessTrace('DailyConversionsChart:commit', {
+      commit: dailyRenderCommitRef.current,
+      analysisId: props.analysisId,
+      state: JSON.parse(dailyChartStateKey),
+    });
+  }, [isDebugDailyConversions, dailyChartStateKey, props.analysisId]);
+
+  useEffect(() => {
+    if (!isDebugDailyConversions || !echartsOption) return;
+    dailyOptionVersionRef.current += 1;
+    logChartReadinessTrace('DailyConversionsChart:option-updated', {
+      analysisId: props.analysisId,
+      optionVersion: dailyOptionVersionRef.current,
+      summary: summariseDailyConversionsOption(echartsOption),
+    });
+  }, [isDebugDailyConversions, echartsOption, props.analysisId]);
+
+  const handleChartReady = useCallback((instance: any) => {
+    if (!isDebugDailyConversions) return;
+    dailyEchartsReadyCountRef.current += 1;
+    logChartReadinessTrace('DailyConversionsChart:echarts-ready', {
+      analysisId: props.analysisId,
+      readyCount: dailyEchartsReadyCountRef.current,
+      width: typeof instance?.getWidth === 'function' ? instance.getWidth() : null,
+      height: typeof instance?.getHeight === 'function' ? instance.getHeight() : null,
+    });
+
+    const onRendered = () => {
+      logChartReadinessTrace('DailyConversionsChart:echarts-rendered', {
+        analysisId: props.analysisId,
+        readyCount: dailyEchartsReadyCountRef.current,
+        width: typeof instance?.getWidth === 'function' ? instance.getWidth() : null,
+        height: typeof instance?.getHeight === 'function' ? instance.getHeight() : null,
+      });
+    };
+    const onFinished = () => {
+      logChartReadinessTrace('DailyConversionsChart:echarts-finished', {
+        analysisId: props.analysisId,
+        readyCount: dailyEchartsReadyCountRef.current,
+        width: typeof instance?.getWidth === 'function' ? instance.getWidth() : null,
+        height: typeof instance?.getHeight === 'function' ? instance.getHeight() : null,
+      });
+    };
+
+    instance?.off?.('rendered');
+    instance?.off?.('finished');
+    instance?.on?.('rendered', onRendered);
+    instance?.on?.('finished', onFinished);
+  }, [isDebugDailyConversions, props.analysisId]);
 
   if (showInlineAnalysisTypePicker) {
     return (
@@ -834,10 +939,12 @@ export function AnalysisChartContainer(props: {
         {echartsOption ? (
           <div style={{ flex: fillHeight ? 1 : undefined, minHeight: 0, position: 'relative' }}>
             <ReactECharts
+              ref={echartsRef}
               option={echartsOption}
               style={{ height: fillHeight ? '100%' : height, width: '100%' }}
               notMerge
               onEvents={onEvents}
+              onChartReady={handleChartReady}
             />
           </div>
         ) : (

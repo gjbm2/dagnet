@@ -107,8 +107,8 @@ function loadAllParameterFiles(): Array<{ id: string; data: any }> {
     }));
 }
 
-function loadNodeFiles(): Array<{ id: string; data: any }> {
-  const dir = path.join(DATA_REPO!, 'nodes');
+function loadYamlDir(dirName: string): Array<{ id: string; data: any }> {
+  const dir = path.join(DATA_REPO!, dirName);
   if (!fs.existsSync(dir)) return [];
   return fs.readdirSync(dir)
     .filter((f) => f.endsWith('.yaml'))
@@ -116,6 +116,40 @@ function loadNodeFiles(): Array<{ id: string; data: any }> {
       id: f.replace('.yaml', ''),
       data: yaml.load(fs.readFileSync(path.join(dir, f), 'utf-8')) as any,
     }));
+}
+
+function loadNodeFiles(): Array<{ id: string; data: any }> {
+  return loadYamlDir('nodes');
+}
+
+function loadContextFiles(): Array<{ id: string; data: any }> {
+  return loadYamlDir('contexts');
+}
+
+function loadCaseFiles(): Array<{ id: string; data: any }> {
+  return loadYamlDir('cases');
+}
+
+function loadEventFiles(): Array<{ id: string; data: any }> {
+  return loadYamlDir('events');
+}
+
+function indexFileId(name: string): string {
+  if (name === 'parameters-index.yaml') return 'parameter-index';
+  if (name === 'nodes-index.yaml') return 'node-index';
+  if (name === 'contexts-index.yaml') return 'context-index';
+  if (name === 'cases-index.yaml') return 'case-index';
+  if (name === 'events-index.yaml') return 'event-index';
+  return name.replace('.yaml', '');
+}
+
+function indexFileType(name: string): string {
+  if (name === 'parameters-index.yaml') return 'parameter-index';
+  if (name === 'nodes-index.yaml') return 'node-index';
+  if (name === 'contexts-index.yaml') return 'context';
+  if (name === 'cases-index.yaml') return 'case';
+  if (name === 'events-index.yaml') return 'event';
+  return 'unknown';
 }
 
 function loadIndexFile(name: string): any {
@@ -215,9 +249,22 @@ test.describe('Snapshot chart boot (production-weight data)', () => {
     const chartCount = graphData.canvasAnalyses.length;
     const paramFiles = loadAllParameterFiles();
     const nodeFiles = loadNodeFiles();
+    const contextFiles = loadContextFiles();
+    const caseFiles = loadCaseFiles();
+    const eventFiles = loadEventFiles();
     const paramsIndex = loadIndexFile('parameters-index.yaml');
     const nodesIndex = loadIndexFile('nodes-index.yaml');
+    const contextsIndex = loadIndexFile('contexts-index.yaml');
+    const casesIndex = loadIndexFile('cases-index.yaml');
+    const eventsIndex = loadIndexFile('events-index.yaml');
     const { scenarioState, scenarios } = extractScenarioState();
+    const indexFiles = [
+      { fileId: indexFileId('parameters-index.yaml'), type: indexFileType('parameters-index.yaml'), path: 'parameters-index.yaml', data: paramsIndex },
+      { fileId: indexFileId('nodes-index.yaml'), type: indexFileType('nodes-index.yaml'), path: 'nodes-index.yaml', data: nodesIndex },
+      { fileId: indexFileId('contexts-index.yaml'), type: indexFileType('contexts-index.yaml'), path: 'contexts-index.yaml', data: contextsIndex },
+      { fileId: indexFileId('cases-index.yaml'), type: indexFileType('cases-index.yaml'), path: 'cases-index.yaml', data: casesIndex },
+      { fileId: indexFileId('events-index.yaml'), type: indexFileType('events-index.yaml'), path: 'events-index.yaml', data: eventsIndex },
+    ].filter((file) => Boolean(file.data));
 
     // ── Only mock: GitHub API (can't reach it in test) ──
     await page.route('https://api.github.com/**', (route) =>
@@ -240,8 +287,10 @@ test.describe('Snapshot chart boot (production-weight data)', () => {
       repoName: REPO_NAME,
       paramFiles,
       nodeFiles,
-      paramsIndex,
-      nodesIndex,
+      contextFiles,
+      caseFiles,
+      eventFiles,
+      indexFiles,
       scenarioState,
       scenarios,
     };
@@ -291,28 +340,55 @@ test.describe('Snapshot chart boot (production-weight data)', () => {
         });
       }
 
-      // ── Index files ──
-      if (p.paramsIndex) {
+      for (const context of p.contextFiles) {
         await db.files.put({
-          fileId: 'parameter-index',
-          type: 'parameter-index',
-          data: p.paramsIndex,
+          fileId: `context-${context.id}`,
+          type: 'context',
+          data: context.data,
           source: {
             repository: p.repoName,
             branch: 'main',
-            path: 'parameters-index.yaml',
+            path: `contexts/${context.id}.yaml`,
           },
         });
       }
-      if (p.nodesIndex) {
+
+      for (const graphCase of p.caseFiles) {
         await db.files.put({
-          fileId: 'node-index',
-          type: 'node-index',
-          data: p.nodesIndex,
+          fileId: `case-${graphCase.id}`,
+          type: 'case',
+          data: graphCase.data,
           source: {
             repository: p.repoName,
             branch: 'main',
-            path: 'nodes-index.yaml',
+            path: `cases/${graphCase.id}.yaml`,
+          },
+        });
+      }
+
+      for (const event of p.eventFiles) {
+        await db.files.put({
+          fileId: `event-${event.id}`,
+          type: 'event',
+          data: event.data,
+          source: {
+            repository: p.repoName,
+            branch: 'main',
+            path: `events/${event.id}.yaml`,
+          },
+        });
+      }
+
+      // ── Index files ──
+      for (const indexFile of p.indexFiles) {
+        await db.files.put({
+          fileId: indexFile.fileId,
+          type: indexFile.type,
+          data: indexFile.data,
+          source: {
+            repository: p.repoName,
+            branch: 'main',
+            path: indexFile.path,
           },
         });
       }
