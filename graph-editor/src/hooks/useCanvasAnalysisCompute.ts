@@ -77,7 +77,8 @@ export function useCanvasAnalysisCompute({
   const debounceRef = useRef<NodeJS.Timeout | null>(null);
   const mountedRef = useRef(true);
   const computeCountRef = useRef(0);
-  const lastScheduledKeyRef = useRef('');
+  const activeRunKeyRef = useRef<string | null>(null);
+  const completedRunKeyRef = useRef<string | null>(null);
   const seededTransientResultRef = useRef(Boolean(result));
 
   const expectsTimeSeriesBranchResult =
@@ -114,9 +115,16 @@ export function useCanvasAnalysisCompute({
 
   useEffect(() => {
     if (expectsTimeSeriesBranchResult && result && !resultHasTimeDimension) {
-      setResult(null);
-      canvasAnalysisResultCache.delete(analysis.id);
-      setLoading(true);
+      // Only retry if the result has non-empty data in the wrong format
+      // (bar/pie instead of time_series). If the result is genuinely empty
+      // (no data from snapshot DB), retrying would loop forever.
+      const hasNonEmptyData = Array.isArray(result.data) && result.data.length > 0;
+      if (hasNonEmptyData) {
+        completedRunKeyRef.current = null;
+        setResult(null);
+        canvasAnalysisResultCache.delete(analysis.id);
+        setLoading(true);
+      }
     }
   }, [expectsTimeSeriesBranchResult, result, resultHasTimeDimension, analysis.id]);
 
@@ -448,8 +456,9 @@ export function useCanvasAnalysisCompute({
     });
   }, [debugSnapshotChart, preparedState, analysis.id, analysisType, analysis.chart_kind, analysis.live, tabId]);
 
-  const runCompute = useCallback(async (prepared: PreparedAnalysisComputeReady) => {
+  const runCompute = useCallback(async (prepared: PreparedAnalysisComputeReady, runKey: string) => {
     const thisCompute = ++computeCountRef.current;
+    activeRunKeyRef.current = runKey;
     setLoading(true);
     setError(null);
     setBackendUnavailable(false);
@@ -480,6 +489,7 @@ export function useCanvasAnalysisCompute({
       if (thisCompute !== computeCountRef.current || !mountedRef.current) return;
 
       if (response?.result) {
+        completedRunKeyRef.current = runKey;
         if (debugSnapshotChart) {
           recordSnapshotBootLedgerStage('compute-success', {
             analysisId: analysis.id,
@@ -505,11 +515,13 @@ export function useCanvasAnalysisCompute({
         canvasAnalysisResultCache.set(analysis.id, response.result);
         setError(null);
       } else {
+        completedRunKeyRef.current = runKey;
         setError('No result returned from compute');
       }
     } catch (err: any) {
       if (thisCompute !== computeCountRef.current || !mountedRef.current) return;
       const msg = err?.message || String(err);
+      completedRunKeyRef.current = runKey;
       if (debugSnapshotChart) {
         recordSnapshotBootLedgerStage('compute-error', {
           analysisId: analysis.id,
@@ -533,6 +545,9 @@ export function useCanvasAnalysisCompute({
         setError(msg);
       }
     } finally {
+      if (activeRunKeyRef.current === runKey) {
+        activeRunKeyRef.current = null;
+      }
       if (thisCompute === computeCountRef.current && mountedRef.current) {
         setLoading(false);
       }
@@ -543,16 +558,6 @@ export function useCanvasAnalysisCompute({
     if (preparedState.status !== 'ready') return;
 
     const runKey = `${preparedState.signature}|refresh:${manualRefreshNonce}`;
-    if (lastScheduledKeyRef.current === runKey) {
-      logChartReadinessTrace('CanvasScheduler:skip-duplicate-signature', {
-        analysisId: analysis.id,
-        analysisType,
-        runKey,
-      });
-      return;
-    }
-    lastScheduledKeyRef.current = runKey;
-
     if (debounceRef.current) clearTimeout(debounceRef.current);
 
     if (seededTransientResultRef.current && result && manualRefreshNonce === 0) {
@@ -562,6 +567,20 @@ export function useCanvasAnalysisCompute({
         analysisId: analysis.id,
         analysisType,
         signature: preparedState.signature,
+      });
+      return;
+    }
+
+    const activeRunKey = activeRunKeyRef.current;
+    const completedRunKey = completedRunKeyRef.current;
+    const hasSettledCurrentResult = completedRunKey === runKey && !!result && !loading && !error && !backendUnavailable;
+    if (activeRunKey === runKey || hasSettledCurrentResult) {
+      logChartReadinessTrace('CanvasScheduler:skip-duplicate-signature', {
+        analysisId: analysis.id,
+        analysisType,
+        runKey,
+        active: activeRunKey === runKey,
+        completed: hasSettledCurrentResult,
       });
       return;
     }
@@ -578,7 +597,7 @@ export function useCanvasAnalysisCompute({
       });
       setLoading(true);
       debounceRef.current = setTimeout(() => {
-        void runCompute(preparedState);
+        void runCompute(preparedState, runKey);
       }, DEBOUNCE_MS);
       return () => {
         if (debounceRef.current) clearTimeout(debounceRef.current);
@@ -591,9 +610,9 @@ export function useCanvasAnalysisCompute({
       signature: preparedState.signature,
       manualRefresh: isManualRefresh,
     });
-    void runCompute(preparedState);
+    void runCompute(preparedState, runKey);
     return undefined;
-  }, [preparedState, manualRefreshNonce, analysis.live, analysis.id, result, runCompute]);
+  }, [preparedState, manualRefreshNonce, analysis.live, analysis.id, result, runCompute, loading, error, backendUnavailable]);
 
   const refresh = useCallback(() => {
     graphComputeClient.clearCache();

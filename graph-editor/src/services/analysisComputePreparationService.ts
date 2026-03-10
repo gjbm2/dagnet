@@ -381,6 +381,7 @@ export async function prepareAnalysisComputeInputs(
       const plannerStatus = await getSnapshotPlannerInputsStatus({
         scenarioGraph: scenario.graph,
         workspace: params.workspace,
+        dslStrings: [analyticsDsl, scenario.effective_query_dsl].filter(Boolean),
       });
       if (!plannerStatus.ready) {
         return logBlockedResult(params, createBlockedPlannerState(plannerStatus));

@@ -21,6 +21,7 @@ import { enumerateFetchTargets } from './fetchTargetEnumerationService';
 import { fileRegistry } from '../contexts/TabContext';
 import { db } from '../db/appDatabase';
 import { logSnapshotBoot } from '../lib/snapshotBootTrace';
+import { parseConstraints } from '../lib/queryDSL';
 
 export interface SnapshotResolutionParams {
   /** The scenario-specific graph (with params baked in) */
@@ -51,17 +52,55 @@ export interface SnapshotPlannerInputsStatusResult {
 }
 
 /**
- * Snapshot planning depends on parameter/case artefacts being present in FileRegistry.
+ * Snapshot planning depends on parameter/case/event/context artefacts being present
+ * in FileRegistry. Signature computation needs ALL of these: parameter files for
+ * values, event files for provider_event_names (used in core_hash), and context files
+ * for MECE slice detection.
+ *
  * This is a pure readiness check: it does not mutate FileRegistry or trigger hydration.
  */
 export async function getSnapshotPlannerInputsStatus(args: {
   scenarioGraph: any;
   workspace?: { repository: string; branch: string };
+  /** DSL strings to parse for context key dependencies (analytics DSL, scenario DSL, etc.) */
+  dslStrings?: string[];
 }): Promise<SnapshotPlannerInputsStatusResult> {
+  const allRequired = new Set<string>();
+
+  // 1. Parameter + case files (existing logic via enumerateFetchTargets)
   const targets = enumerateFetchTargets(args.scenarioGraph);
-  const requiredFileIds = Array.from(
-    new Set(targets.map((target) => `${target.type}-${target.objectId}`)),
-  );
+  for (const t of targets) allRequired.add(`${t.type}-${t.objectId}`);
+
+  // 2. Event files — every node with an event_id produces event-{event_id}
+  const nodes: any[] = args.scenarioGraph?.nodes || [];
+  for (const node of nodes) {
+    if (node.event_id) allRequired.add(`event-${node.event_id}`);
+  }
+
+  // 3. Context files — extracted from DSL context() / contextAny() clauses
+  const edges: any[] = args.scenarioGraph?.edges || [];
+  const dslSources = [...(args.dslStrings || [])];
+  for (const edge of edges) {
+    if (edge.query) dslSources.push(edge.query);
+  }
+  for (const dslStr of dslSources) {
+    if (!dslStr) continue;
+    try {
+      const parsed = parseConstraints(dslStr);
+      for (const ctx of parsed.context || []) {
+        if (ctx?.key) allRequired.add(`context-${ctx.key}`);
+      }
+      for (const ctxAny of parsed.contextAny || []) {
+        for (const pair of ctxAny?.pairs || []) {
+          if (pair?.key) allRequired.add(`context-${pair.key}`);
+        }
+      }
+    } catch {
+      // Unparseable DSL — skip context extraction for this string
+    }
+  }
+
+  const requiredFileIds = Array.from(allRequired);
   const missingFileIds: string[] = [];
   const hydratableFileIds: string[] = [];
   const unavailableFileIds: string[] = [];

@@ -1,16 +1,17 @@
 /**
  * Snapshot chart boot — heavyweight E2E spec.
  *
- * Loads the REAL production graph + ALL parameter files from the private
- * data repo at runtime, seeds a heavy IDB, sets up multiple scenarios
- * and 9 canvas analyses (4 snapshot-backed, 5 standard), then verifies
- * every chart reaches a rendered state after a single page load.
+ * Loads the REAL production graph from the private data repo, the EXACT
+ * production canvasAnalyses + scenario state from a debug graph snapshot,
+ * and ALL parameter files. Seeds a heavy IDB, then verifies every chart
+ * reaches a rendered state after a single page load.
  *
  * Mocks: ONLY GitHub API (unreachable in test).
- * Real: IDB hydration, FileRegistry, snapshot subject resolution,
- *       preparation pipeline, Python compute backend.
+ * Real: IDB hydration, FileRegistry, fetch planner, signature generation,
+ *       snapshot subject resolution, preparation pipeline, Python compute
+ *       backend, snapshot DB lookups.
  *
- * Skips gracefully when the data repo is not present (CI / fresh clone).
+ * Skips gracefully when the data repo or graph snapshot is not present.
  */
 
 import { test, expect } from '@playwright/test';
@@ -19,233 +20,97 @@ import * as path from 'path';
 import { fileURLToPath } from 'url';
 import * as yaml from 'js-yaml';
 
-// ─── Data repo discovery (dir name NEVER appears in this file) ──────────
+// ─── Path setup ─────────────────────────────────────────────────────────
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const REPO_ROOT = path.resolve(__dirname, '..', '..');
-const CONF_PATH = path.join(REPO_ROOT, '.private-repos.conf');
 
-function resolveDataRepoPath(): string | null {
-  if (!fs.existsSync(CONF_PATH)) return null;
-  const match = fs.readFileSync(CONF_PATH, 'utf-8').match(/^DATA_REPO_DIR=(.+)$/m);
+// ─── Data repo discovery (dir name NEVER appears in this file) ──────────
+
+function resolveDataRepo(): { path: string; name: string } | null {
+  const confPath = path.join(REPO_ROOT, '.private-repos.conf');
+  if (!fs.existsSync(confPath)) return null;
+  const match = fs.readFileSync(confPath, 'utf-8').match(/^DATA_REPO_DIR=(.+)$/m);
   const dir = match?.[1]?.trim();
   if (!dir) return null;
   const full = path.join(REPO_ROOT, dir);
-  return fs.existsSync(full) ? full : null;
+  return fs.existsSync(full) ? { path: full, name: dir } : null;
 }
 
-const DATA_REPO = resolveDataRepoPath();
+const DATA_REPO_INFO = resolveDataRepo();
+const DATA_REPO = DATA_REPO_INFO?.path ?? null;
+const REPO_NAME = DATA_REPO_INFO?.name ?? 'repo-1';
 
-// ─── Graph + fixture loading (all at import time so skip is fast) ───────
+// ─── Graph snapshot discovery (exact production state) ──────────────────
 
 const GRAPH_NAME = 'gm-rebuild-jan-26';
 const GRAPH_FILE_ID = `graph-${GRAPH_NAME}`;
 const TAB_ID = `tab-${GRAPH_FILE_ID}-interactive`;
+const SNAPSHOT_DIR = path.join(REPO_ROOT, 'debug', 'graph-snapshots');
+
+function findLatestGraphSnapshot(): string | null {
+  if (!fs.existsSync(SNAPSHOT_DIR)) return null;
+  const files = fs.readdirSync(SNAPSHOT_DIR)
+    .filter((f) => f.includes(`graph-${GRAPH_NAME}`) && f.endsWith('.json'))
+    .sort()
+    .reverse();
+  return files.length > 0 ? path.join(SNAPSHOT_DIR, files[0]) : null;
+}
+
+function loadGraphSnapshot(): any | null {
+  const p = findLatestGraphSnapshot();
+  if (!p) return null;
+  try {
+    return JSON.parse(fs.readFileSync(p, 'utf-8'));
+  } catch {
+    return null;
+  }
+}
+
+// ─── Readiness checks ───────────────────────────────────────────────────
+
 const GRAPH_PATH = DATA_REPO
   ? path.join(DATA_REPO, 'graphs', `${GRAPH_NAME}.json`)
   : '';
-const HAS_GRAPH = GRAPH_PATH && fs.existsSync(GRAPH_PATH);
+const HAS_GRAPH = Boolean(GRAPH_PATH && fs.existsSync(GRAPH_PATH));
+const SNAPSHOT = loadGraphSnapshot();
+const HAS_SNAPSHOT = Boolean(SNAPSHOT?.graph?.canvasAnalyses?.length);
+const CAN_RUN = HAS_GRAPH && HAS_SNAPSHOT;
 
-function loadGraphData(): any {
-  const raw = JSON.parse(fs.readFileSync(GRAPH_PATH, 'utf-8'));
-  // Use cohort DSL — that's the production state where snapshot charts fire.
-  raw.currentQueryDSL = 'cohort(10-Dec-25:9-Mar-26)';
-  return raw;
-}
+// ─── Loaders ────────────────────────────────────────────────────────────
 
-function nodeById(graph: any, uuid: string): any {
-  return graph.nodes.find((n: any) => n.uuid === uuid);
-}
+function loadGraphWithProductionState(): any {
+  const diskGraph = JSON.parse(fs.readFileSync(GRAPH_PATH, 'utf-8'));
+  const snap = SNAPSHOT!.graph;
 
-function buildCanvasAnalyses(graph: any): any[] {
-  const edgesWithParam = graph.edges.filter((e: any) => e.p?.id);
-  const uuidToId = new Map(graph.nodes.map((n: any) => [n.uuid, n.id]));
-  const intermediateNodes = graph.nodes.filter(
-    (n: any) => !n.absorbing && !n.entry?.is_start,
-  );
-  const absorbingNodes = graph.nodes.filter((n: any) => n.absorbing);
+  // Overlay production runtime state from the snapshot onto the disk graph
+  diskGraph.canvasAnalyses = snap.canvasAnalyses;
+  diskGraph.currentQueryDSL = snap.currentQueryDSL;
+  diskGraph.baseDSL = snap.baseDSL;
+  diskGraph.dataInterestsDSL = snap.dataInterestsDSL;
+  diskGraph.dailyFetch = snap.dailyFetch;
+  diskGraph.defaultConnection = snap.defaultConnection;
+  if (snap.postits) diskGraph.postits = snap.postits;
+  if (snap.containers) diskGraph.containers = snap.containers;
 
-  const edge0From = uuidToId.get(edgesWithParam[0]?.from) || '';
-  const edge0To = uuidToId.get(edgesWithParam[0]?.to) || '';
-  const edge1From = uuidToId.get(edgesWithParam[1]?.from) || '';
-  const edge1To = uuidToId.get(edgesWithParam[1]?.to) || '';
-  const inter0 = intermediateNodes[0]?.id || '';
-  const inter1 = intermediateNodes[1]?.id || '';
-  const inter2 = intermediateNodes[2]?.id || inter0;
-  const absorb0 = absorbingNodes[0]?.id || '';
-  const absorb1 = absorbingNodes[1]?.id || absorb0;
-  const startNode = graph.nodes.find((n: any) => n.entry?.is_start);
-  const startId = startNode?.id || '';
-
-  let x = -650;
-  const col = () => { const v = x; x += 460; return v; };
-
-  return [
-    // ── 4 snapshot-backed charts ──
-    {
-      id: 'e2e-snap-daily',
-      x: col(), y: -180, width: 436, height: 398,
-      view_mode: 'chart',
-      chart_kind: 'daily_conversions',
-      live: true,
-      analysis_type_overridden: true,
-      recipe: {
-        analysis: {
-          analysis_type: 'daily_conversions',
-          analytics_dsl: `from(${edge0From}).to(${edge0To})`,
-        },
-      },
-      display: {
-        show_subject_overlay: false,
-        time_grouping: 'day',
-        show_trend_line: false,
-        cumulative: false,
-        show_legend: false,
-      },
-    },
-    {
-      id: 'e2e-snap-branch1',
-      x: col(), y: -130, width: 651, height: 314,
-      view_mode: 'chart',
-      chart_kind: 'time_series',
-      live: true,
-      analysis_type_overridden: true,
-      recipe: {
-        analysis: {
-          analysis_type: 'branch_comparison',
-          analytics_dsl: `visited(${inter0})`,
-        },
-      },
-      display: {
-        metric_mode: 'absolute',
-        stack_mode: 'stacked',
-        series_type: 'bar',
-        show_legend: true,
-        time_grouping: 'week',
-      },
-    },
-    {
-      id: 'e2e-snap-branch2',
-      x: col(), y: 200, width: 400, height: 300,
-      view_mode: 'chart',
-      chart_kind: 'time_series',
-      live: true,
-      analysis_type_overridden: true,
-      recipe: {
-        analysis: {
-          analysis_type: 'branch_comparison',
-          analytics_dsl: `visited(${inter1})`,
-        },
-      },
-      display: { series_type: 'line', metric_mode: 'absolute', show_legend: false },
-    },
-    {
-      id: 'e2e-snap-cohort',
-      x: -150, y: 950, width: 400, height: 300,
-      view_mode: 'chart',
-      live: true,
-      analysis_type_overridden: true,
-      recipe: {
-        analysis: {
-          analysis_type: 'cohort_maturity',
-          analytics_dsl: `from(${edge1From}).to(${edge1To})`,
-        },
-      },
-    },
-
-    // ── 5 non-snapshot charts (realistic load + potential interference) ──
-    {
-      id: 'e2e-std-general',
-      x: 500, y: 600, width: 326, height: 366,
-      view_mode: 'chart',
-      live: true,
-      analysis_type_overridden: true,
-      recipe: {
-        analysis: {
-          analysis_type: 'general_selection',
-          analytics_dsl: `to(${absorb0})`,
-        },
-      },
-    },
-    {
-      id: 'e2e-std-overview',
-      x: 20, y: 640, width: 400, height: 300,
-      view_mode: 'chart',
-      chart_kind: 'bar_grouped',
-      live: true,
-      analysis_type_overridden: true,
-      recipe: {
-        analysis: { analysis_type: 'graph_overview', analytics_dsl: '.' },
-      },
-    },
-    {
-      id: 'e2e-std-constrained',
-      x: -560, y: -100, width: 400, height: 300,
-      view_mode: 'chart',
-      live: true,
-      analysis_type_overridden: true,
-      recipe: {
-        analysis: {
-          analysis_type: 'constrained_path',
-          analytics_dsl: `from(${edge0From}).to(${absorb0}).visited(${inter2})`,
-        },
-      },
-      display: { show_legend: false },
-    },
-    {
-      id: 'e2e-std-branch-pie',
-      x: -570, y: 730, width: 400, height: 300,
-      view_mode: 'chart',
-      live: false,
-      analysis_type_overridden: true,
-      recipe: {
-        analysis: {
-          analysis_type: 'branch_comparison',
-          analytics_dsl: `visitedAny(${inter2},${absorb1})`,
-        },
-        scenarios: [
-          {
-            scenario_id: 'e2e-scenario-a',
-            name: 'Scenario A',
-            colour: '#EC4899',
-            visibility_mode: 'f+e',
-            effective_dsl: 'window(17-Feb-26:23-Feb-26)',
-            is_live: true,
-          },
-          {
-            scenario_id: 'current',
-            name: 'Current',
-            colour: '#3B82F6',
-            visibility_mode: 'f+e',
-            effective_dsl: 'window(2-Mar-26:8-Mar-26)',
-            is_live: true,
-          },
-        ],
-      },
-      display: { show_legend: false },
-      chart_kind: 'pie',
-    },
-    {
-      id: 'e2e-std-branch-default',
-      x: 680, y: 280, width: 400, height: 300,
-      view_mode: 'chart',
-      live: true,
-      analysis_type_overridden: true,
-      recipe: {
-        analysis: {
-          analysis_type: 'branch_comparison',
-          analytics_dsl: `visited(${inter0})`,
-        },
-      },
-    },
-  ];
+  return diskGraph;
 }
 
 function loadAllParameterFiles(): Array<{ id: string; data: any }> {
   const dir = path.join(DATA_REPO!, 'parameters');
-  return fs
-    .readdirSync(dir)
+  return fs.readdirSync(dir)
+    .filter((f) => f.endsWith('.yaml'))
+    .map((f) => ({
+      id: f.replace('.yaml', ''),
+      data: yaml.load(fs.readFileSync(path.join(dir, f), 'utf-8')) as any,
+    }));
+}
+
+function loadNodeFiles(): Array<{ id: string; data: any }> {
+  const dir = path.join(DATA_REPO!, 'nodes');
+  if (!fs.existsSync(dir)) return [];
+  return fs.readdirSync(dir)
     .filter((f) => f.endsWith('.yaml'))
     .map((f) => ({
       id: f.replace('.yaml', ''),
@@ -263,35 +128,96 @@ function loadIndexFile(name: string): any {
   }
 }
 
-function loadNodeFiles(): Array<{ id: string; data: any }> {
-  const dir = path.join(DATA_REPO!, 'nodes');
-  if (!fs.existsSync(dir)) return [];
-  return fs
-    .readdirSync(dir)
-    .filter((f) => f.endsWith('.yaml'))
-    .map((f) => ({
-      id: f.replace('.yaml', ''),
-      data: yaml.load(fs.readFileSync(path.join(dir, f), 'utf-8')) as any,
-    }));
+function extractScenarioState(): {
+  scenarioState: any;
+  scenarios: Array<{ id: string; name: string; colour: string; meta: any }>;
+} {
+  const tabId = SNAPSHOT!.tabId;
+  // The snapshot doesn't store the tab editorState directly, but we can
+  // reconstruct the scenario state from the canvasAnalyses' custom scenarios
+  // and the known production state.
+  //
+  // From the production snapshot these were the visible scenarios:
+  //   - scenario-1772813352827-fzaxsuy ("17-Feb – 23-Feb", #EC4899)
+  //   - current
+  // With scenario-1772820754238-5136pgm also in the order but not visible.
+
+  const scenarioIds = new Set<string>();
+  for (const ca of SNAPSHOT!.graph.canvasAnalyses || []) {
+    for (const s of ca.recipe?.scenarios || []) {
+      if (s.scenario_id && s.scenario_id !== 'current' && s.scenario_id !== 'base') {
+        scenarioIds.add(s.scenario_id);
+      }
+    }
+  }
+
+  const scenarioRecords: Array<{ id: string; name: string; colour: string; meta: any }> = [];
+  const scenarioOrder = ['base'];
+  const visibleScenarioIds: string[] = [];
+  const visibleColourOrderIds: string[] = ['current'];
+  const visibilityMode: Record<string, string> = { current: 'f+e' };
+
+  for (const sid of scenarioIds) {
+    // Find the scenario details from any canvasAnalysis that references it
+    let name = sid;
+    let colour = '#EC4899';
+    let effectiveDsl = '';
+    for (const ca of SNAPSHOT!.graph.canvasAnalyses || []) {
+      const match = (ca.recipe?.scenarios || []).find((s: any) => s.scenario_id === sid);
+      if (match) {
+        name = match.name || sid;
+        colour = match.colour || colour;
+        effectiveDsl = match.effective_dsl || '';
+        break;
+      }
+    }
+    scenarioOrder.push(sid);
+    visibleScenarioIds.push(sid);
+    visibleColourOrderIds.push(sid);
+    visibilityMode[sid] = 'f+e';
+    scenarioRecords.push({
+      id: sid,
+      name,
+      colour,
+      meta: {
+        isLive: true,
+        queryDSL: effectiveDsl,
+        lastEffectiveDSL: effectiveDsl,
+      },
+    });
+  }
+
+  scenarioOrder.push('current');
+  visibleScenarioIds.push('current');
+
+  return {
+    scenarioState: {
+      scenarioOrder,
+      visibleScenarioIds,
+      visibleColourOrderIds,
+      visibilityMode,
+    },
+    scenarios: scenarioRecords,
+  };
 }
 
 // ─── Test ───────────────────────────────────────────────────────────────
 
 test.describe('Snapshot chart boot (production-weight data)', () => {
-  test.skip(!HAS_GRAPH, 'Requires private data repo with graph fixture');
+  test.skip(!CAN_RUN, 'Requires private data repo + debug graph snapshot');
   test.describe.configure({ timeout: 90_000 });
 
-  test('all 9 charts (4 snapshot) render after a single F5 with heavy IDB', async ({
+  test('all canvas charts render after a single F5 with heavy IDB', async ({
     page,
     baseURL,
   }) => {
-    const graphData = loadGraphData();
-    graphData.canvasAnalyses = buildCanvasAnalyses(graphData);
-
+    const graphData = loadGraphWithProductionState();
+    const chartCount = graphData.canvasAnalyses.length;
     const paramFiles = loadAllParameterFiles();
     const nodeFiles = loadNodeFiles();
     const paramsIndex = loadIndexFile('parameters-index.yaml');
     const nodesIndex = loadIndexFile('nodes-index.yaml');
+    const { scenarioState, scenarios } = extractScenarioState();
 
     // ── Only mock: GitHub API (can't reach it in test) ──
     await page.route('https://api.github.com/**', (route) =>
@@ -311,24 +237,27 @@ test.describe('Snapshot chart boot (production-weight data)', () => {
       graphData,
       graphFileId: GRAPH_FILE_ID,
       tabId: TAB_ID,
+      repoName: REPO_NAME,
       paramFiles,
       nodeFiles,
       paramsIndex,
       nodesIndex,
+      scenarioState,
+      scenarios,
     };
 
     await page.evaluate(async (p) => {
       const db = (window as any).db;
       if (!db) throw new Error('window.db not available — is ?e2e=1 in the URL?');
 
-      // ── Graph ──
+      // ── Graph (with exact production canvasAnalyses + DSLs) ──
       await db.files.put({
         fileId: p.graphFileId,
         type: 'graph',
         viewTabs: [p.tabId],
         data: p.graphData,
         source: {
-          repository: 'repo-1',
+          repository: p.repoName,
           branch: 'main',
           path: `graphs/${p.graphFileId.replace('graph-', '')}.json`,
         },
@@ -341,7 +270,7 @@ test.describe('Snapshot chart boot (production-weight data)', () => {
           type: 'parameter',
           data: param.data,
           source: {
-            repository: 'repo-1',
+            repository: p.repoName,
             branch: 'main',
             path: `parameters/${param.id}.yaml`,
           },
@@ -355,7 +284,7 @@ test.describe('Snapshot chart boot (production-weight data)', () => {
           type: 'node',
           data: node.data,
           source: {
-            repository: 'repo-1',
+            repository: p.repoName,
             branch: 'main',
             path: `nodes/${node.id}.yaml`,
           },
@@ -369,7 +298,7 @@ test.describe('Snapshot chart boot (production-weight data)', () => {
           type: 'parameter-index',
           data: p.paramsIndex,
           source: {
-            repository: 'repo-1',
+            repository: p.repoName,
             branch: 'main',
             path: 'parameters-index.yaml',
           },
@@ -381,38 +310,25 @@ test.describe('Snapshot chart boot (production-weight data)', () => {
           type: 'node-index',
           data: p.nodesIndex,
           source: {
-            repository: 'repo-1',
+            repository: p.repoName,
             branch: 'main',
             path: 'nodes-index.yaml',
           },
         });
       }
 
-      // ── Scenarios (live window-based, like production) ──
-      await db.scenarios.put({
-        id: 'e2e-scenario-a',
-        fileId: p.graphFileId,
-        name: 'Scenario A',
-        colour: '#EC4899',
-        meta: {
-          isLive: true,
-          queryDSL: 'window(17-Feb-26:23-Feb-26)',
-          lastEffectiveDSL: 'window(17-Feb-26:23-Feb-26)',
-        },
-      });
-      await db.scenarios.put({
-        id: 'e2e-scenario-b',
-        fileId: p.graphFileId,
-        name: 'Scenario B',
-        colour: '#10B981',
-        meta: {
-          isLive: true,
-          queryDSL: 'window(10-Feb-26:16-Feb-26)',
-          lastEffectiveDSL: 'window(10-Feb-26:16-Feb-26)',
-        },
-      });
+      // ── Scenarios (exact production scenario records) ──
+      for (const s of p.scenarios) {
+        await db.scenarios.put({
+          id: s.id,
+          fileId: p.graphFileId,
+          name: s.name,
+          colour: s.colour,
+          meta: s.meta,
+        });
+      }
 
-      // ── Tab with multi-scenario state ──
+      // ── Tab with exact production scenario state ──
       await db.tabs.put({
         id: p.tabId,
         fileId: p.graphFileId,
@@ -422,30 +338,21 @@ test.describe('Snapshot chart boot (production-weight data)', () => {
         closable: true,
         group: 'main-content',
         editorState: {
-          scenarioState: {
-            scenarioOrder: ['base', 'e2e-scenario-a', 'e2e-scenario-b', 'current'],
-            visibleScenarioIds: ['e2e-scenario-a', 'current'],
-            visibleColourOrderIds: ['current', 'e2e-scenario-a'],
-            visibilityMode: {
-              'e2e-scenario-a': 'f+e',
-              'e2e-scenario-b': 'f+e',
-              current: 'f+e',
-            },
-          },
+          scenarioState: p.scenarioState,
           whatIfDSL: null,
         },
       });
 
-      // ── Workspace credentials ──
+      // ── Workspace credentials (must match real repo to produce correct signatures) ──
       await db.credentials?.put?.({
         id: 'main',
         data: {
-          defaultGitRepo: 'repo-1',
+          defaultGitRepo: p.repoName,
           git: [
             {
-              name: 'repo-1',
-              owner: 'owner-1',
-              repo: 'repo-1',
+              name: p.repoName,
+              owner: 'e2e-owner',
+              repo: p.repoName,
               token: 'test-token',
               branch: 'main',
               basePath: '',
@@ -459,6 +366,69 @@ test.describe('Snapshot chart boot (production-weight data)', () => {
       }
     }, seedPayload);
 
+    // ── Capture console for diagnostics ──
+    const consoleLogs: string[] = [];
+    page.on('console', (msg) => {
+      const text = msg.text();
+      if (
+        text.includes('CanvasScheduler') ||
+        text.includes('SnapshotBoot') ||
+        text.includes('SnapshotResolution') ||
+        text.includes('SnapshotPlannerInputs') ||
+        text.includes('ChartReadiness') ||
+        text.includes('AnalysisPrepare') ||
+        text.includes('compute-start') ||
+        text.includes('compute-success') ||
+        text.includes('compute-error') ||
+        text.includes('[GraphComputeClient]') ||
+        text.includes('/api/runner') ||
+        text.includes('Failed to fetch') ||
+        text.includes('ECONNREFUSED') ||
+        text.includes('FetchPlan') ||
+        text.includes('signature') ||
+        text.includes('ContextEpochs')
+      ) {
+        consoleLogs.push(`[${Date.now()}] ${text.substring(0, 4000)}`);
+      }
+    });
+
+    // ── Intercept Python backend requests to capture full payloads ──
+    const apiPayloads: string[] = [];
+    await page.route('**/api/runner/analyze', async (route) => {
+      const request = route.request();
+      const postData = request.postData();
+      if (postData) {
+        try {
+          const body = JSON.parse(postData);
+          const analysisType = body.analysis_type || 'unknown';
+          const scenarioCount = body.scenarios?.length || 0;
+          const snapshotInfo = (body.scenarios || []).map((s: any) => ({
+            scenario_id: s.scenario_id,
+            snapshot_subject_count: s.snapshot_subjects?.length || 0,
+            subjects: (s.snapshot_subjects || []).map((sub: any) => ({
+              subject_id: sub.subject_id,
+              param_id: sub.param_id,
+              core_hash: sub.core_hash,
+              anchor_from: sub.anchor_from,
+              anchor_to: sub.anchor_to,
+              sweep_from: sub.sweep_from,
+              sweep_to: sub.sweep_to,
+              slice_keys: sub.slice_keys,
+              sig_len: sub.canonical_signature?.length || 0,
+            })),
+          }));
+          apiPayloads.push(JSON.stringify({
+            ts: Date.now(),
+            analysis_type: analysisType,
+            query_dsl: body.query_dsl,
+            scenario_count: scenarioCount,
+            snapshots: snapshotInfo,
+          }, null, 2));
+        } catch { /* ignore */ }
+      }
+      await route.continue();
+    });
+
     // ── Full reload — this is the moment of truth ──
     await page.reload({ waitUntil: 'domcontentloaded' });
 
@@ -467,26 +437,29 @@ test.describe('Snapshot chart boot (production-weight data)', () => {
       timeout: 15_000,
     });
 
-    // ── All 9 canvas analysis nodes must appear ──
+    // ── All canvas analysis nodes must appear ──
     const nodes = page.locator('.canvas-analysis-node');
-    await expect(nodes).toHaveCount(9, { timeout: 20_000 });
+    await expect(nodes).toHaveCount(chartCount, { timeout: 20_000 });
 
     // ── Every chart must leave the loading/computing state ──
-    // This is the assertion that catches the race condition:
-    // stuck charts show "Computing..." or "Loading chart dependencies..."
-    // indefinitely.
-    for (let i = 0; i < 9; i++) {
-      const node = nodes.nth(i);
-      await expect(node).toBeVisible({ timeout: 5_000 });
+    const diagPath = path.join(REPO_ROOT, 'tmp', 'e2e-snapshot-boot-diag.txt');
+    try {
+      for (let i = 0; i < chartCount; i++) {
+        const node = nodes.nth(i);
+        await expect(node).toBeVisible({ timeout: 5_000 });
 
-      // Must not be stuck computing
-      await expect(node).not.toContainText('Computing...', {
-        timeout: 30_000,
-      });
-      // Must not be stuck waiting for deps (hydration stall)
-      await expect(node).not.toContainText('Loading chart dependencies...', {
-        timeout: 5_000,
-      });
+        await expect(node).not.toContainText('Computing...', {
+          timeout: 30_000,
+        });
+        await expect(node).not.toContainText('Loading chart dependencies...', {
+          timeout: 5_000,
+        });
+      }
+    } finally {
+      fs.mkdirSync(path.dirname(diagPath), { recursive: true });
+      fs.writeFileSync(diagPath, consoleLogs.join('\n'), 'utf-8');
+      const apiDiagPath = path.join(REPO_ROOT, 'tmp', 'e2e-snapshot-api-payloads.txt');
+      fs.writeFileSync(apiDiagPath, apiPayloads.join('\n---\n'), 'utf-8');
     }
   });
 });

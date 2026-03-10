@@ -82,6 +82,28 @@ function makeBranchComparisonTimeSeriesResult() {
   };
 }
 
+function makeBranchComparisonBarResult() {
+  return {
+    result: {
+      analysis_type: 'branch_comparison',
+      analysis_name: 'Branch Comparison',
+      data: [{ scenario_id: 'current', branch: 'child-a', rate: 0.1 }],
+      semantics: {
+        dimensions: [
+          { id: 'scenario_id', role: 'secondary', type: 'scenario' },
+          { id: 'branch', role: 'primary', type: 'node' },
+        ],
+        metrics: [{ id: 'rate', role: 'primary', type: 'ratio' }],
+        chart: { recommended: 'bar_grouped', alternatives: ['time_series'] },
+      },
+      dimension_values: {
+        scenario_id: { current: { name: 'Current', colour: '#3b82f6' } },
+        branch: { 'child-a': { name: 'Child A' } },
+      },
+    },
+  };
+}
+
 function makeEmptyDailyConversionsResult() {
   return {
     result: {
@@ -334,6 +356,7 @@ describe('useCanvasAnalysisCompute DSL handling', () => {
     });
     mockHydrateSnapshotPlannerInputs.mockResolvedValue(undefined);
     fileRegistrySubscribers.clear();
+    vi.resetModules();
   });
 
   it('should pass analyticsDsl (not window DSL) to analyzeSelection for non-snapshot analyses', async () => {
@@ -601,6 +624,57 @@ describe('useCanvasAnalysisCompute DSL handling', () => {
     await waitFor(() => {
       expect(mockAnalyzeMultipleScenarios).toHaveBeenCalledTimes(1);
       expect(result.current.result?.metadata?.empty).toBe(true);
+    });
+  });
+
+  it('should recompute after clearing a seeded non-time-series branch result', async () => {
+    const mod = await import('../useCanvasAnalysisCompute');
+    const { useCanvasAnalysisCompute, canvasAnalysisTransientCache } = mod;
+
+    mockTabsState.tabs = [
+      {
+        id: 'tab-1',
+        fileId: 'graph-1',
+        editorState: {
+          scenarioState: {
+            scenarioOrder: ['scenario-1', 'current'],
+            visibleScenarioIds: ['scenario-1', 'current'],
+            visibleColourOrderIds: ['scenario-1', 'current'],
+            visibilityMode: {
+              'scenario-1': 'f+e' as const,
+              current: 'f+e' as const,
+            },
+          },
+        },
+      },
+    ];
+    mockScenariosContextState.scenarios = [{ id: 'scenario-1', name: 'Scenario 1', colour: '#ec4899' }];
+    mockGraphFileState.source = { repository: 'repo-a', branch: 'main', path: 'graphs/graph-1.yaml' };
+    mockAnalyzeMultipleScenarios.mockResolvedValueOnce(makeBranchComparisonTimeSeriesResult());
+
+    const analysis: any = {
+      id: 'snapshot-analysis-seeded-branch-retry',
+      live: true,
+      view_mode: 'chart',
+      chart_kind: 'time_series',
+      recipe: {
+        analysis: {
+          analysis_type: 'branch_comparison',
+          analytics_dsl: 'visited(household-delegated)',
+        },
+      },
+    };
+
+    canvasAnalysisTransientCache.set(analysis.id, makeBranchComparisonBarResult().result);
+
+    const { result } = renderHook(
+      ({ currentAnalysis }) => useCanvasAnalysisCompute({ analysis: currentAnalysis, tabId: 'tab-1' }),
+      { initialProps: { currentAnalysis: analysis } },
+    );
+
+    await waitFor(() => {
+      expect(mockAnalyzeMultipleScenarios).toHaveBeenCalledTimes(1);
+      expect(result.current.result?.semantics?.dimensions?.some((d: any) => d.id === 'date')).toBe(true);
     });
   });
 
