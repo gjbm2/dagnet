@@ -20,9 +20,8 @@ export function isChartComputeReady(args: {
   const { graph, analysisType, live, scenarioState, scenariosReady, customScenarios } = args;
   const graphReady = !!(graph && Array.isArray((graph as any).nodes) && Array.isArray((graph as any).edges));
   const analysisReady = typeof analysisType === 'string' && analysisType.trim().length > 0;
-  const scenariosCtxReady = scenariosReady === true;
-  const liveReady = live ? !!scenarioState && scenariosCtxReady : true;
-  const customReady = live ? true : Array.isArray(customScenarios) && scenariosCtxReady;
+  const liveReady = live ? !!scenarioState && scenariosReady === true : true;
+  const customReady = live ? true : Array.isArray(customScenarios) && customScenarios.length > 0;
   return graphReady && analysisReady && liveReady && customReady;
 }
 

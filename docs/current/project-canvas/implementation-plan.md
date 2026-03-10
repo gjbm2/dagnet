@@ -1077,7 +1077,7 @@ Implemented during Phase 3 but not in the original spec:
 
 - **Blank chart creation from element palette**: BarChart3 icon in `ElementPalette.tsx` -- click to enter draw mode, drag to canvas for default size. "Add Analysis" in `ElementsMenu.tsx`. `new-analysis` tool type in `ElementToolContext.tsx`.
 - **Properties panel parity with analytics panel**: Dynamic analysis type cards (same `analytics-type-card` CSS), `QueryExpressionEditor` for DSL editing, result-driven chart kind toggle buttons, shared result cache (`canvasAnalysisResultCache`).
-- **Dashboard mode fitView**: `fitView` in dashboard mode includes all elements (nodes + post-its + containers + analyses), not just conversion nodes.
+- **fitView includes canvas objects**: `fitView` includes all elements (nodes + post-its + containers + analyses) in both normal and dashboard modes — single code path.
 - **Delete icon on canvas analysis nodes**: `×` button in top-right when selected (matching post-it/container pattern).
 - **Compute hook reads from graph store**: `useCanvasAnalysisCompute` reads the latest analysis from the graph store (not stale ReactFlow node data) so properties panel edits take effect immediately.
 

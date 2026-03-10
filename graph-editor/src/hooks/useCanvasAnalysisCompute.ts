@@ -1,30 +1,31 @@
-/**
- * useCanvasAnalysisCompute
- *
- * Encapsulates all compute logic for a canvas analysis node:
- * - Live mode: reads graph + scenarios from context, debounced recompute
- * - Frozen mode: computes once on mount from recipe.scenarios
- * - Handles loading / error / backend-unavailable states
- */
-
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { useGraphStore } from '../contexts/GraphStoreContext';
 import { useScenariosContextOptional } from '../contexts/ScenariosContext';
-import { useTabContext } from '../contexts/TabContext';
+import { useTabContext, useFileState, fileRegistry } from '../contexts/TabContext';
 import { graphComputeClient, type AnalysisResult } from '../lib/graphComputeClient';
-import { buildGraphForAnalysisLayer } from '../services/CompositionService';
 import { ANALYSIS_TYPES } from '../components/panels/analysisTypes';
-import { resolveSnapshotSubjectsForScenario } from '../services/snapshotSubjectResolutionService';
-import { augmentDSLWithConstraint } from '../lib/queryDSL';
-import { fileRegistry } from '../contexts/TabContext';
+import { hydrateSnapshotPlannerInputs } from '../services/snapshotSubjectResolutionService';
+import {
+  isSnapshotBootChart,
+  logSnapshotBoot,
+  logChartReadinessTrace,
+  recordSnapshotBootLedgerStage,
+} from '../lib/snapshotBootTrace';
 import type { CanvasAnalysis } from '../types';
 import { isChartComputeReady } from '../services/chartHydrationService';
+import {
+  prepareAnalysisComputeInputs,
+  runPreparedAnalysis,
+  type PreparedAnalysisComputeReady,
+  type PreparedAnalysisComputeState,
+} from '../services/analysisComputePreparationService';
 
 const DEBOUNCE_MS = 2000;
 
 interface UseCanvasAnalysisComputeParams {
   analysis: CanvasAnalysis;
   tabId?: string;
+  debugSnapshotChartOverride?: boolean;
 }
 
 interface UseCanvasAnalysisComputeResult {
@@ -36,30 +37,20 @@ interface UseCanvasAnalysisComputeResult {
   refresh: () => void;
 }
 
-/**
- * Transient cache for instant first render after DnD.
- * Key: analysis.id, Value: AnalysisResult.
- * Entries are consumed once and deleted.
- */
 export const canvasAnalysisTransientCache = new Map<string, AnalysisResult>();
-
-/**
- * Shared result cache: latest compute result per analysis ID.
- * Written by the compute hook on each successful compute.
- * Read by the properties panel for result-driven UI (e.g. chart kind options).
- */
 export const canvasAnalysisResultCache = new Map<string, AnalysisResult>();
 
 export function useCanvasAnalysisCompute({
   analysis: analysisProp,
   tabId,
+  debugSnapshotChartOverride,
 }: UseCanvasAnalysisComputeParams): UseCanvasAnalysisComputeResult {
   const { graph, currentDSL } = useGraphStore();
   const scenariosContext = useScenariosContextOptional();
   const { tabs, operations } = useTabContext();
+  const operationsRef = useRef(operations);
+  operationsRef.current = operations;
 
-  // Read the latest analysis from the graph store (not from stale ReactFlow node data)
-  // This ensures changes from the properties panel are picked up immediately
   const analysis = useMemo(() => {
     const fromStore = (graph as any)?.canvasAnalyses?.find((a: any) => a.id === analysisProp.id);
     return fromStore || analysisProp;
@@ -76,19 +67,51 @@ export function useCanvasAnalysisCompute({
   const [loading, setLoading] = useState(!result);
   const [error, setError] = useState<string | null>(null);
   const [backendUnavailable, setBackendUnavailable] = useState(false);
+  const [manualRefreshNonce, setManualRefreshNonce] = useState(0);
+  const [registryVersion, setRegistryVersion] = useState(0);
+  const [preparedState, setPreparedState] = useState<PreparedAnalysisComputeState>({
+    status: 'blocked',
+    reason: 'graph_not_ready',
+  });
 
   const debounceRef = useRef<NodeJS.Timeout | null>(null);
   const mountedRef = useRef(true);
   const computeCountRef = useRef(0);
+  const lastScheduledKeyRef = useRef('');
+  const seededTransientResultRef = useRef(Boolean(result));
 
   const expectsTimeSeriesBranchResult =
     analysis?.recipe?.analysis?.analysis_type === 'branch_comparison'
     && analysis?.chart_kind === 'time_series';
+  const analysisType = analysis?.recipe?.analysis?.analysis_type;
+  const analyticsDsl = analysis?.recipe?.analysis?.analytics_dsl || '';
+  const snapshotMeta = useMemo(
+    () => ANALYSIS_TYPES.find(t => t.id === analysisType),
+    [analysisType],
+  );
+  const needsSnapshots = !!snapshotMeta?.snapshotContract
+    && (analysisType !== 'branch_comparison' || expectsTimeSeriesBranchResult);
   const resultHasTimeDimension = !!(result?.semantics?.dimensions || []).some((d: any) => d?.id === 'date' || d?.type === 'time');
+  const debugSnapshotChart = debugSnapshotChartOverride ?? isSnapshotBootChart(analysis);
+  const propLooksSnapshot = isSnapshotBootChart(analysisProp);
 
-  // If the chart kind switches into branch-comparison time-series while we still hold the
-  // old categorical comparison result, drop it immediately so the snapshot-backed recompute
-  // can replace it instead of the UI continuing to display stale static rows.
+  useEffect(() => {
+    if (!debugSnapshotChart) return;
+    const storeLooksSnapshot = isSnapshotBootChart(analysis);
+    if (storeLooksSnapshot !== propLooksSnapshot) {
+      logSnapshotBoot('CanvasAnalysisCompute:store-payload-mismatch', {
+        analysisId: analysisProp.id,
+        propAnalysisType: analysisProp.recipe?.analysis?.analysis_type,
+        propChartKind: analysisProp.chart_kind,
+        storeAnalysisType: analysis.recipe?.analysis?.analysis_type,
+        storeChartKind: analysis.chart_kind,
+        propLooksSnapshot,
+        storeLooksSnapshot,
+        tabId,
+      });
+    }
+  }, [debugSnapshotChart, analysis, analysisProp, propLooksSnapshot, tabId]);
+
   useEffect(() => {
     if (expectsTimeSeriesBranchResult && result && !resultHasTimeDimension) {
       setResult(null);
@@ -108,16 +131,8 @@ export function useCanvasAnalysisCompute({
   const currentTab = useMemo(() =>
     tabId ? tabs.find(t => t.id === tabId) : undefined,
   [tabId, tabs]);
+  const graphFileState = useFileState(currentTab?.fileId);
 
-  // IMPORTANT:
-  // `operations.getScenarioState(tabId)` returns a synthetic default state (`['current']`)
-  // when the real tab scenario state has not loaded yet. That is correct for general callers
-  // but WRONG for chart boot, because it lets live charts compute too early against a fake
-  // single-scenario state, then later flip once the real multi-scenario state arrives.
-  //
-  // For readiness gating we must distinguish:
-  // - "real tab state is present" from
-  // - "TabContext handed us a default fallback".
   const rawScenarioState = useMemo(() => {
     if (!tabId) return null;
     return currentTab?.editorState?.scenarioState ?? null;
@@ -130,36 +145,38 @@ export function useCanvasAnalysisCompute({
 
   const whatIfDSL = currentTab?.editorState?.whatIfDSL || null;
 
-  const getWorkspace = useCallback(() => {
-    const graphFile = currentTab?.fileId ? fileRegistry.getFile(currentTab.fileId) : undefined;
-    const repository = graphFile?.source?.repository;
-    const branch = graphFile?.source?.branch;
+  const workspace = useMemo(() => {
+    const repository = graphFileState.source?.repository;
+    const branch = graphFileState.source?.branch;
     return (repository && branch) ? { repository, branch } : undefined;
-  }, [currentTab?.fileId]);
+  }, [graphFileState.source?.branch, graphFileState.source?.repository]);
+  const workspaceReady = !needsSnapshots || !!workspace;
 
-  const chartFragment = analysis.chart_current_layer_dsl || '';
-
-  const getQueryDslForScenario = useCallback((scenarioId: string): string => {
-    let baseDslForScenario: string;
-    if (scenarioId === 'current') {
-      baseDslForScenario = currentDSL || '';
-    } else if (scenarioId === 'base') {
-      const bd = scenariosContext?.baseDSL || (graph as any)?.baseDSL;
-      baseDslForScenario = typeof bd === 'string' ? bd : currentDSL || '';
-    } else {
-      const scenario = scenariosContext?.scenarios?.find((s: any) => s.id === scenarioId);
-      const meta: any = scenario?.meta;
-      if (meta?.isLive && typeof meta.lastEffectiveDSL === 'string' && meta.lastEffectiveDSL.trim()) {
-        baseDslForScenario = meta.lastEffectiveDSL;
-      } else {
-        baseDslForScenario = currentDSL || '';
-      }
-    }
-    if (chartFragment.trim()) {
-      return augmentDSLWithConstraint(baseDslForScenario, chartFragment);
-    }
-    return baseDslForScenario;
-  }, [currentDSL, scenariosContext, graph, chartFragment]);
+  useEffect(() => {
+    if (!debugSnapshotChart) return;
+    logSnapshotBoot('CanvasAnalysisCompute:file-state', {
+      analysisId: analysis.id,
+      analysisType,
+      chartKind: analysis.chart_kind,
+      tabId,
+      fileId: currentTab?.fileId,
+      workspace,
+      workspaceReady,
+      needsSnapshots,
+      source: graphFileState.source || null,
+    });
+  }, [
+    debugSnapshotChart,
+    analysis.id,
+    analysisType,
+    analysis.chart_kind,
+    tabId,
+    currentTab?.fileId,
+    workspace,
+    workspaceReady,
+    needsSnapshots,
+    graphFileState.source,
+  ]);
 
   const getScenarioColour = useCallback((scenarioId: string): string => {
     if (!scenariosContext) return '#808080';
@@ -176,213 +193,314 @@ export function useCanvasAnalysisCompute({
     return scenario?.name || scenarioId;
   }, [scenariosContext]);
 
-  const compute = useCallback(async () => {
-    if (!graph || !graph.nodes || !graph.edges) return;
+  const computeReady = useMemo(() => {
+    const baseReady = isChartComputeReady({
+      graph: graph as any,
+      analysisType,
+      live: analysis.live,
+      scenarioState: analysis.live ? rawScenarioState : scenarioState,
+      scenariosReady: scenariosContext ? Boolean((scenariosContext as any).scenariosReady) : false,
+      customScenarios: analysis.recipe?.scenarios || null,
+    });
+    return baseReady && workspaceReady;
+  }, [graph, analysis, analysisType, rawScenarioState, scenarioState, scenariosContext, workspaceReady]);
 
+  const prepareVersionRef = useRef(0);
+  const lastAppliedPrepareRef = useRef(0);
+
+  useEffect(() => {
+    const thisVersion = ++prepareVersionRef.current;
+
+    const prepare = async () => {
+      logChartReadinessTrace('CanvasScheduler:prepare-triggered', {
+        analysisId: analysis.id,
+        analysisType,
+        chartKind: analysis.chart_kind,
+        live: analysis.live,
+        manualRefreshNonce,
+        registryVersion,
+        tabId,
+        prepareVersion: thisVersion,
+      });
+      try {
+        const nextPreparedState = await prepareAnalysisComputeInputs(
+          analysis.live
+            ? {
+                mode: 'live',
+                graph: graph as any,
+                analysisType,
+                analyticsDsl,
+                currentDSL,
+                chartCurrentLayerDsl: analysis.chart_current_layer_dsl,
+                needsSnapshots,
+                workspace,
+                rawScenarioStateLoaded: Boolean(rawScenarioState),
+                visibleScenarioIds: rawScenarioState?.visibleScenarioIds || [],
+                scenariosContext: scenariosContext as any,
+                whatIfDSL,
+                getScenarioVisibilityMode: (scenarioId) => (
+                  tabId ? operationsRef.current.getScenarioVisibilityMode(tabId, scenarioId) : 'f+e'
+                ),
+                getScenarioName,
+                getScenarioColour,
+              }
+            : {
+                mode: 'custom',
+                graph: graph as any,
+                analysisType,
+                analyticsDsl,
+                currentDSL,
+                chartCurrentLayerDsl: analysis.chart_current_layer_dsl,
+                needsSnapshots,
+                workspace,
+                customScenarios: analysis.recipe?.scenarios as any,
+                hiddenScenarioIds: (((analysis.display as any)?.hidden_scenarios) || []) as string[],
+                frozenWhatIfDsl: analysis.recipe?.analysis?.what_if_dsl,
+              },
+        );
+        if (!mountedRef.current) return;
+        if (thisVersion < lastAppliedPrepareRef.current) return;
+        lastAppliedPrepareRef.current = thisVersion;
+        setPreparedState(nextPreparedState);
+      } catch (err: any) {
+        if (!mountedRef.current) return;
+        if (thisVersion < lastAppliedPrepareRef.current) return;
+        lastAppliedPrepareRef.current = thisVersion;
+        setPreparedState({ status: 'blocked', reason: 'graph_not_ready' });
+        setError(err?.message || String(err));
+        setLoading(false);
+      }
+    };
+
+    void prepare();
+  }, [
+    graph,
+    analysis,
+    analysisType,
+    analyticsDsl,
+    currentDSL,
+    needsSnapshots,
+    workspace,
+    rawScenarioState,
+    scenarioState,
+    scenariosContext,
+    whatIfDSL,
+    tabId,
+    getScenarioColour,
+    getScenarioName,
+    registryVersion,
+  ]);
+
+  useEffect(() => {
+    if (preparedState.status !== 'blocked') return undefined;
+    const fileIds = preparedState.requiredFileIds || [];
+    if (fileIds.length === 0) return undefined;
+    logChartReadinessTrace('CanvasScheduler:subscribe-planner-files', {
+      analysisId: analysis.id,
+      analysisType,
+      fileIds,
+      blockedReason: preparedState.reason,
+    });
+    const unsubscribers = fileIds.map((fileId) => fileRegistry.subscribe(fileId, () => {
+      logChartReadinessTrace('CanvasScheduler:planner-file-updated', {
+        analysisId: analysis.id,
+        analysisType,
+        fileId,
+      });
+      setRegistryVersion((value) => value + 1);
+    }));
+    return () => {
+      unsubscribers.forEach((unsubscribe) => unsubscribe());
+    };
+  }, [preparedState]);
+
+  useEffect(() => {
+    if (preparedState.status !== 'blocked') return;
+    if (preparedState.reason !== 'planner_inputs_pending_hydration') return;
+    const hydratableFileIds = preparedState.hydratableFileIds || [];
+    if (hydratableFileIds.length === 0) return;
+    logChartReadinessTrace('CanvasScheduler:hydrate-planner-inputs', {
+      analysisId: analysis.id,
+      analysisType,
+      hydratableFileIds,
+      workspace,
+    });
+    void hydrateSnapshotPlannerInputs({ fileIds: hydratableFileIds, workspace });
+  }, [preparedState, workspace]);
+
+  useEffect(() => {
+    if (preparedState.status === 'blocked') {
+      setLoading(false);
+    }
+  }, [preparedState]);
+
+  const waitingForDeps = preparedState.status === 'blocked' && !error && !backendUnavailable;
+  const graphReady = !!(graph && Array.isArray((graph as any).nodes) && Array.isArray((graph as any).edges));
+  const analysisReady = typeof analysisType === 'string' && analysisType.trim().length > 0;
+  const scenariosCtxReady = scenariosContext ? Boolean((scenariosContext as any).scenariosReady) : false;
+  const effectiveScenarioState = analysis.live ? rawScenarioState : scenarioState;
+  const scenarioStateReady = analysis.live ? !!effectiveScenarioState : true;
+
+  const readinessSnapshot = useMemo(() => ({
+    analysisId: analysis.id,
+    analysisType,
+    chartKind: analysis.chart_kind,
+    live: analysis.live,
+    tabId,
+    graphReady,
+    analysisReady,
+    scenariosCtxReady,
+    scenarioStateReady,
+    workspaceReady,
+    needsSnapshots,
+    blockedReason: preparedState.status === 'blocked' ? preparedState.reason : null,
+    computeReady,
+    waitingForDeps,
+    visibleScenarioIds: effectiveScenarioState?.visibleScenarioIds || null,
+  }), [
+    analysis.id,
+    analysisType,
+    analysis.chart_kind,
+    analysis.live,
+    tabId,
+    graphReady,
+    analysisReady,
+    scenariosCtxReady,
+    scenarioStateReady,
+    workspaceReady,
+    needsSnapshots,
+    preparedState,
+    computeReady,
+    waitingForDeps,
+    effectiveScenarioState,
+  ]);
+
+  const readinessKey = useMemo(() => JSON.stringify(readinessSnapshot), [readinessSnapshot]);
+  const lastReadinessKeyRef = useRef('');
+  useEffect(() => {
+    if (!debugSnapshotChart) return;
+    if (lastReadinessKeyRef.current === readinessKey) return;
+    lastReadinessKeyRef.current = readinessKey;
+    logSnapshotBoot('CanvasAnalysisCompute:readiness', readinessSnapshot);
+  }, [debugSnapshotChart, readinessKey, readinessSnapshot]);
+
+  useEffect(() => {
+    if (!debugSnapshotChart) return;
+    recordSnapshotBootLedgerStage('hook-mounted', {
+      analysisId: analysis.id,
+      analysisType,
+      chartKind: analysis.chart_kind,
+      live: analysis.live,
+      tabId,
+      source: 'useCanvasAnalysisCompute',
+    });
+    logSnapshotBoot('CanvasAnalysisCompute:hook-mount', {
+      analysisId: analysis.id,
+      analysisType,
+      chartKind: analysis.chart_kind,
+      live: analysis.live,
+      tabId,
+    });
+    return () => {
+      recordSnapshotBootLedgerStage('hook-unmounted', {
+        analysisId: analysis.id,
+        analysisType,
+        chartKind: analysis.chart_kind,
+        live: analysis.live,
+        tabId,
+        source: 'useCanvasAnalysisCompute',
+      });
+      logSnapshotBoot('CanvasAnalysisCompute:hook-unmount', {
+        analysisId: analysis.id,
+        analysisType,
+        chartKind: analysis.chart_kind,
+        live: analysis.live,
+        tabId,
+      });
+    };
+  }, [debugSnapshotChart, analysis.id, analysisType, analysis.chart_kind, analysis.live, tabId]);
+
+  useEffect(() => {
+    if (!debugSnapshotChart) return;
+    if (preparedState.status === 'blocked') {
+      recordSnapshotBootLedgerStage('prepared-blocked', {
+        analysisId: analysis.id,
+        analysisType,
+        chartKind: analysis.chart_kind,
+        live: analysis.live,
+        tabId,
+        reason: preparedState.reason,
+        requiredFileIds: preparedState.requiredFileIds || [],
+        hydratableFileIds: preparedState.hydratableFileIds || [],
+        source: 'useCanvasAnalysisCompute',
+      });
+      return;
+    }
+    recordSnapshotBootLedgerStage('prepared-ready', {
+      analysisId: analysis.id,
+      analysisType,
+      chartKind: analysis.chart_kind,
+      live: analysis.live,
+      tabId,
+      signature: preparedState.signature,
+      scenarioIds: preparedState.scenarios.map((scenario) => scenario.scenario_id),
+      source: 'useCanvasAnalysisCompute',
+    });
+  }, [debugSnapshotChart, preparedState, analysis.id, analysisType, analysis.chart_kind, analysis.live, tabId]);
+
+  const runCompute = useCallback(async (prepared: PreparedAnalysisComputeReady) => {
     const thisCompute = ++computeCountRef.current;
     setLoading(true);
+    setError(null);
     setBackendUnavailable(false);
 
+    if (debugSnapshotChart) {
+      recordSnapshotBootLedgerStage('compute-start', {
+        analysisId: analysis.id,
+        analysisType,
+        chartKind: analysis.chart_kind,
+        live: analysis.live,
+        tabId,
+        scenarioIds: prepared.scenarios.map((scenario) => scenario.scenario_id),
+        signature: prepared.signature,
+        source: 'useCanvasAnalysisCompute',
+      });
+      logSnapshotBoot('CanvasAnalysisCompute:compute-start', {
+        analysisId: analysis.id,
+        analysisType,
+        chartKind: analysis.chart_kind,
+        live: analysis.live,
+        scenarioIds: prepared.scenarios.map((scenario) => scenario.scenario_id),
+        signature: prepared.signature,
+      });
+    }
+
     try {
-      const analysisType = analysis.recipe.analysis.analysis_type;
-      const analyticsDsl = analysis.recipe.analysis.analytics_dsl || '';
-      const snapshotMeta = ANALYSIS_TYPES.find(t => t.id === analysisType);
-      const branchComparisonTimeSeries = analysisType === 'branch_comparison' && analysis.chart_kind === 'time_series';
-      const needsSnapshots = !!snapshotMeta?.snapshotContract
-        && (analysisType !== 'branch_comparison' || branchComparisonTimeSeries);
-      const workspace = getWorkspace();
-
-      let response;
-
-      if (analysis.live) {
-        // Live mode: read from current tab state
-        const visibleIds = scenarioState?.visibleScenarioIds || ['current'];
-
-        if (visibleIds.length > 1 && scenariosContext) {
-          const scenarioGraphs = await Promise.all(visibleIds.map(async (scenarioId) => {
-            const visibilityMode = tabId
-              ? operations.getScenarioVisibilityMode(tabId, scenarioId)
-              : 'f+e' as const;
-
-            const scenarioGraph = buildGraphForAnalysisLayer(
-              scenarioId,
-              graph as any,
-              (scenariosContext as any).baseParams || {},
-              (scenariosContext as any).currentParams || {},
-              (scenariosContext as any).scenarios || [],
-              scenarioId === 'current' ? whatIfDSL : undefined,
-              visibilityMode,
-            );
-
-            const colour = getScenarioColour(scenarioId);
-            const effectiveDsl = needsSnapshots ? analyticsDsl : getQueryDslForScenario(scenarioId);
-
-            let snapshotSubjects;
-            if (needsSnapshots && workspace) {
-              const resolved = await resolveSnapshotSubjectsForScenario({
-                scenarioGraph,
-                analyticsDsl,
-                scenarioId,
-                analysisType,
-                workspace,
-                getQueryDslForScenario,
-              });
-              snapshotSubjects = resolved.subjects;
-            }
-
-            return {
-              scenario_id: scenarioId,
-              name: getScenarioName(scenarioId),
-              graph: scenarioGraph,
-              colour,
-              visibility_mode: visibilityMode,
-              snapshot_subjects: snapshotSubjects,
-            };
-          }));
-
-          response = await graphComputeClient.analyzeMultipleScenarios(
-            scenarioGraphs as any,
-            analyticsDsl || currentDSL,
-            analysisType,
-          );
-        } else {
-          const scenarioId = visibleIds[0] || 'current';
-          const visibilityMode = tabId
-            ? operations.getScenarioVisibilityMode(tabId, scenarioId)
-            : 'f+e' as const;
-
-          const analysisGraph = buildGraphForAnalysisLayer(
-            scenarioId,
-            graph as any,
-            (scenariosContext as any)?.baseParams || {},
-            (scenariosContext as any)?.currentParams || {},
-            (scenariosContext as any)?.scenarios || [],
-            scenarioId === 'current' ? whatIfDSL : undefined,
-            visibilityMode,
-          );
-
-          let snapshotSubjects;
-          if (needsSnapshots && workspace) {
-            const resolved = await resolveSnapshotSubjectsForScenario({
-              scenarioGraph: analysisGraph,
-              analyticsDsl,
-              scenarioId,
-              analysisType,
-              workspace,
-              getQueryDslForScenario,
-            });
-            snapshotSubjects = resolved.subjects;
-          }
-
-          const finalDsl = analyticsDsl || currentDSL;
-          response = await graphComputeClient.analyzeSelection(
-            analysisGraph,
-            finalDsl,
-            scenarioId,
-            getScenarioName(scenarioId),
-            getScenarioColour(scenarioId),
-            analysisType,
-            visibilityMode,
-            snapshotSubjects,
-          );
-        }
-      } else {
-        // Custom mode: compute from recipe.scenarios but use the SAME graph
-        // composition as live mode so results are identical.
-        const frozenScenariosAll = analysis.recipe.scenarios || [];
-        const hiddenScenarios = new Set<string>((((analysis.display as any)?.hidden_scenarios) || []) as string[]);
-        const frozenScenariosVisible = frozenScenariosAll.filter((fs: any) => !hiddenScenarios.has(fs.scenario_id));
-        const frozenScenarios = frozenScenariosVisible.length > 0
-          ? frozenScenariosVisible
-          : frozenScenariosAll;
-        const frozenWhatIfDsl = analysis.recipe.analysis.what_if_dsl;
-        const frozenDsl = analyticsDsl || currentDSL;
-
-        if (frozenScenarios.length > 1) {
-          const scenarioGraphs = await Promise.all(frozenScenarios.map(async (fs: any) => {
-            const scenarioGraph = scenariosContext
-              ? buildGraphForAnalysisLayer(
-                  fs.scenario_id,
-                  graph as any,
-                  (scenariosContext as any).baseParams || {},
-                  (scenariosContext as any).currentParams || {},
-                  (scenariosContext as any).scenarios || [],
-                  fs.scenario_id === 'current' ? frozenWhatIfDsl : undefined,
-                  (fs.visibility_mode || 'f+e') as 'f+e' | 'f' | 'e',
-                )
-              : graph;
-
-            let snapshotSubjects;
-            if (needsSnapshots && workspace) {
-              const resolved = await resolveSnapshotSubjectsForScenario({
-                scenarioGraph,
-                analyticsDsl,
-                scenarioId: fs.scenario_id,
-                analysisType,
-                workspace,
-                getQueryDslForScenario,
-              });
-              snapshotSubjects = resolved.subjects;
-            }
-
-            return {
-              scenario_id: fs.scenario_id,
-              name: fs.name || fs.scenario_id,
-              graph: scenarioGraph,
-              colour: fs.colour || '#808080',
-              visibility_mode: fs.visibility_mode || 'f+e' as const,
-              ...(snapshotSubjects?.length ? { snapshot_subjects: snapshotSubjects } : {}),
-            };
-          }));
-
-          response = await graphComputeClient.analyzeMultipleScenarios(
-            scenarioGraphs as any,
-            frozenDsl,
-            analysisType,
-          );
-        } else {
-          const fs = frozenScenarios[0] || { scenario_id: 'current' };
-          const scenarioGraph = scenariosContext
-            ? buildGraphForAnalysisLayer(
-                fs.scenario_id,
-                graph as any,
-                (scenariosContext as any).baseParams || {},
-                (scenariosContext as any).currentParams || {},
-                (scenariosContext as any).scenarios || [],
-                fs.scenario_id === 'current' ? frozenWhatIfDsl : undefined,
-                (fs.visibility_mode || 'f+e') as 'f+e' | 'f' | 'e',
-              )
-            : graph;
-
-          let snapshotSubjects;
-          if (needsSnapshots && workspace) {
-            const resolved = await resolveSnapshotSubjectsForScenario({
-              scenarioGraph,
-              analyticsDsl,
-              scenarioId: fs.scenario_id,
-              analysisType,
-              workspace,
-              getQueryDslForScenario,
-            });
-            snapshotSubjects = resolved.subjects;
-          }
-
-          response = await graphComputeClient.analyzeSelection(
-            scenarioGraph,
-            frozenDsl,
-            fs.scenario_id,
-            fs.name || 'Current',
-            fs.colour || '#3b82f6',
-            analysisType,
-            (fs.visibility_mode || 'f+e') as 'f+e' | 'f' | 'e',
-            snapshotSubjects,
-          );
-        }
-      }
-
+      const response = await runPreparedAnalysis(prepared);
       if (thisCompute !== computeCountRef.current || !mountedRef.current) return;
 
       if (response?.result) {
+        if (debugSnapshotChart) {
+          recordSnapshotBootLedgerStage('compute-success', {
+            analysisId: analysis.id,
+            analysisType,
+            chartKind: analysis.chart_kind,
+            live: analysis.live,
+            tabId,
+            requestedAnalysisType: analysisType,
+            responseAnalysisType: response.result.analysis_type,
+            responseSource: (response.result.metadata as any)?.source,
+            responseDescription: response.result.analysis_description,
+            source: 'useCanvasAnalysisCompute',
+          });
+          logSnapshotBoot('CanvasAnalysisCompute:compute-success', {
+            analysisId: analysis.id,
+            requestedAnalysisType: analysisType,
+            responseAnalysisType: response.result.analysis_type,
+            responseSource: (response.result.metadata as any)?.source,
+            responseDescription: response.result.analysis_description,
+          });
+        }
         setResult(response.result);
         canvasAnalysisResultCache.set(analysis.id, response.result);
         setError(null);
@@ -391,8 +509,24 @@ export function useCanvasAnalysisCompute({
       }
     } catch (err: any) {
       if (thisCompute !== computeCountRef.current || !mountedRef.current) return;
-
       const msg = err?.message || String(err);
+      if (debugSnapshotChart) {
+        recordSnapshotBootLedgerStage('compute-error', {
+          analysisId: analysis.id,
+          analysisType,
+          chartKind: analysis.chart_kind,
+          live: analysis.live,
+          tabId,
+          message: msg,
+          source: 'useCanvasAnalysisCompute',
+        });
+        logSnapshotBoot('CanvasAnalysisCompute:compute-error', {
+          analysisId: analysis.id,
+          analysisType,
+          chartKind: analysis.chart_kind,
+          message: msg,
+        });
+      }
       if (msg.includes('Failed to fetch') || msg.includes('NetworkError') || msg.includes('ECONNREFUSED')) {
         setBackendUnavailable(true);
       } else {
@@ -403,103 +537,74 @@ export function useCanvasAnalysisCompute({
         setLoading(false);
       }
     }
-  }, [
-    graph, currentDSL, analysis, scenariosContext, scenarioState, whatIfDSL,
-    tabId, operations, getWorkspace, getQueryDslForScenario,
-    getScenarioColour, getScenarioName,
-  ]);
+  }, [analysis.id, analysis.live, analysis.chart_kind, analysisType, debugSnapshotChart, tabId]);
 
-  // Store compute in a ref so effects can call it without depending on it
-  const computeRef = useRef(compute);
-  computeRef.current = compute;
-
-  const computeReady = useMemo(() => {
-    return isChartComputeReady({
-      graph: graph as any,
-      analysisType: analysis?.recipe?.analysis?.analysis_type,
-      live: analysis.live,
-      scenarioState: analysis.live ? rawScenarioState : scenarioState,
-      scenariosReady: scenariosContext ? Boolean((scenariosContext as any).scenariosReady) : false,
-      customScenarios: analysis.recipe?.scenarios || null,
-    });
-  }, [graph, analysis, rawScenarioState, scenarioState, scenariosContext]);
-
-  const waitingForDeps = !computeReady && !error && !backendUnavailable;
-
-  // Live mode: stable compute key based only on compute-relevant inputs
-  const liveComputeKey = useMemo(() => {
-    if (!analysis.live) return null;
-    const visibleIds = rawScenarioState?.visibleScenarioIds || [];
-    return [
-      analysis.recipe?.analysis?.analysis_type,
-      analysis.chart_kind,
-      analysis.recipe?.analysis?.analytics_dsl,
-      analysis.chart_current_layer_dsl,
-      currentDSL,
-      whatIfDSL,
-      visibleIds.join(','),
-      graph?.nodes?.length,
-      graph?.edges?.length,
-    ].join('|');
-  }, [analysis.live, analysis.recipe?.analysis?.analysis_type, analysis.chart_kind, analysis.recipe?.analysis?.analytics_dsl,
-      analysis.chart_current_layer_dsl, currentDSL, whatIfDSL, rawScenarioState, graph?.nodes?.length, graph?.edges?.length]);
-
-  // Custom mode: stable compute key
-  const frozenComputeKey = useMemo(() => {
-    if (analysis.live) return null;
-    const scenarios = analysis.recipe?.scenarios || [];
-    return [
-      analysis.recipe?.analysis?.analysis_type,
-      analysis.chart_kind,
-      analysis.recipe?.analysis?.analytics_dsl,
-      analysis.recipe?.analysis?.what_if_dsl,
-      analysis.chart_current_layer_dsl,
-      scenarios.map((s: any) => `${s.scenario_id}:${s.effective_dsl || ''}:${s.visibility_mode || 'f+e'}`).join(','),
-      ((analysis.display as any)?.hidden_scenarios || []).join(','),
-    ].join('|');
-  }, [analysis]);
-
-  // Live mode: recompute when liveComputeKey changes.
-  // Skip debounce if no result yet (first load / F5 — compute immediately).
   useEffect(() => {
-    if (!analysis.live) return;
-    if (!computeReady) return;
-    if (debounceRef.current) clearTimeout(debounceRef.current);
-    // Signal loading immediately so the UI shows a spinner before the debounce fires
-    setLoading(true);
-    if (!result) {
-      computeRef.current();
+    if (preparedState.status !== 'ready') return;
+
+    const runKey = `${preparedState.signature}|refresh:${manualRefreshNonce}`;
+    if (lastScheduledKeyRef.current === runKey) {
+      logChartReadinessTrace('CanvasScheduler:skip-duplicate-signature', {
+        analysisId: analysis.id,
+        analysisType,
+        runKey,
+      });
       return;
     }
-    debounceRef.current = setTimeout(() => {
-      computeRef.current();
-    }, DEBOUNCE_MS);
-    return () => {
-      if (debounceRef.current) clearTimeout(debounceRef.current);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [liveComputeKey]);
+    lastScheduledKeyRef.current = runKey;
 
-  // Custom mode: recompute when frozenComputeKey changes
-  useEffect(() => {
-    if (analysis.live) return;
-    if (!computeReady) return;
-    computeRef.current();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [frozenComputeKey, computeReady]);
+    if (debounceRef.current) clearTimeout(debounceRef.current);
 
-  // Retry: if we still have no result after graph becomes available, compute.
-  const resultRef = useRef(result);
-  resultRef.current = result;
-  useEffect(() => {
-    if (result) return;
-    if (!computeReady) return;
-    const timer = setTimeout(() => {
-      if (!resultRef.current) computeRef.current();
-    }, 500);
-    return () => clearTimeout(timer);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [computeReady, result]);
+    if (seededTransientResultRef.current && result && manualRefreshNonce === 0) {
+      seededTransientResultRef.current = false;
+      canvasAnalysisResultCache.set(analysis.id, result);
+      logChartReadinessTrace('CanvasScheduler:skip-seeded-result', {
+        analysisId: analysis.id,
+        analysisType,
+        signature: preparedState.signature,
+      });
+      return;
+    }
 
-  return { result, loading, waitingForDeps, error, backendUnavailable, refresh: compute };
+    const isManualRefresh = manualRefreshNonce > 0;
+    const shouldDebounce = analysis.live && !!result && !isManualRefresh;
+
+    if (shouldDebounce) {
+      logChartReadinessTrace('CanvasScheduler:schedule-debounced', {
+        analysisId: analysis.id,
+        analysisType,
+        signature: preparedState.signature,
+        delayMs: DEBOUNCE_MS,
+      });
+      setLoading(true);
+      debounceRef.current = setTimeout(() => {
+        void runCompute(preparedState);
+      }, DEBOUNCE_MS);
+      return () => {
+        if (debounceRef.current) clearTimeout(debounceRef.current);
+      };
+    }
+
+    logChartReadinessTrace('CanvasScheduler:schedule-immediate', {
+      analysisId: analysis.id,
+      analysisType,
+      signature: preparedState.signature,
+      manualRefresh: isManualRefresh,
+    });
+    void runCompute(preparedState);
+    return undefined;
+  }, [preparedState, manualRefreshNonce, analysis.live, analysis.id, result, runCompute]);
+
+  const refresh = useCallback(() => {
+    graphComputeClient.clearCache();
+    try { (window as any).__dagnetComputeNoCacheOnce = true; } catch { /* ignore */ }
+    logChartReadinessTrace('CanvasScheduler:manual-refresh', {
+      analysisId: analysis.id,
+      analysisType,
+      currentNonce: manualRefreshNonce,
+    });
+    setManualRefreshNonce((value) => value + 1);
+  }, [analysis.id, analysisType, manualRefreshNonce]);
+
+  return { result, loading, waitingForDeps, error, backendUnavailable, refresh };
 }

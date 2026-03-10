@@ -794,12 +794,25 @@ class FileRegistry {
    * Restore file from database
    * Used when loading persisted tabs
    */
-  async restoreFile(fileId: string): Promise<FileState | null> {
+  async restoreFile(
+    fileId: string,
+    workspace?: { repository: string; branch: string }
+  ): Promise<FileState | null> {
     const fileInDb = await db.files.get(fileId);
     if (fileInDb) {
       this.files.set(fileId, fileInDb);
       this.notifyListeners(fileId, fileInDb);
       return fileInDb;
+    }
+    if (workspace) {
+      const prefixedFileId = `${workspace.repository}-${workspace.branch}-${fileId}`;
+      const workspaceFile = await db.files.get(prefixedFileId);
+      if (workspaceFile) {
+        const restoredFile = { ...workspaceFile, fileId };
+        this.files.set(fileId, restoredFile);
+        this.notifyListeners(fileId, restoredFile);
+        return restoredFile;
+      }
     }
     return null;
   }
@@ -2938,10 +2951,11 @@ export function useTabContext(): TabContextValue {
 /**
  * Use file state hook - subscribe to file changes
  */
-export function useFileState<T = any>(fileId: string): {
+export function useFileState<T = any>(fileId?: string): {
   data: T | null;
   originalData: T | null;
   isDirty: boolean;
+  source?: FileState<T>['source'];
   syncRevision?: number;
   syncOrigin?: 'store' | 'external';
   updateData: (newData: T, opts?: { syncRevision?: number; syncOrigin?: 'store' | 'external' }) => void;
@@ -2949,6 +2963,10 @@ export function useFileState<T = any>(fileId: string): {
   const [file, setFile] = useState<FileState<T> | null>(null);
 
   useEffect(() => {
+    if (!fileId) {
+      setFile(null);
+      return;
+    }
     console.log(`useFileState: Setting up for ${fileId}`);
     
     // Get initial file state if it exists
@@ -2975,6 +2993,7 @@ export function useFileState<T = any>(fileId: string): {
   }, [fileId]);
 
   const updateData = useCallback((newData: T, opts?: { syncRevision?: number; syncOrigin?: 'store' | 'external' }) => {
+    if (!fileId) return;
     console.log(`useFileState.updateData[${fileId}]: Calling FileRegistry.updateFile`);
     fileRegistry.updateFile(fileId, newData, opts);
   }, [fileId]);
@@ -2983,6 +3002,7 @@ export function useFileState<T = any>(fileId: string): {
     data: file?.data ?? null,
     originalData: file?.originalData ?? null,
     isDirty: file?.isDirty ?? false,
+    source: file?.source,
     syncRevision: file?.syncRevision,
     syncOrigin: file?.syncOrigin,
     updateData

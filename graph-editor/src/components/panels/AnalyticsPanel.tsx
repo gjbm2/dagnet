@@ -18,7 +18,6 @@ import { useTabContext } from '../../contexts/TabContext';
 import { useScenariosContextOptional } from '../../contexts/ScenariosContext';
 import { graphComputeClient, AnalysisResponse, AvailableAnalysis } from '../../lib/graphComputeClient';
 import { constructDSLFromSelection } from '../../lib/dslConstruction';
-import { buildGraphForAnalysisLayer } from '../../services/CompositionService';
 import { AnalysisChartContainer } from '../charts/AnalysisChartContainer';
 import { AutomatableField } from '../AutomatableField';
 import { QueryExpressionEditor } from '../QueryExpressionEditor';
@@ -27,8 +26,7 @@ import { ANALYSIS_TYPES, getAnalysisTypeMeta } from './analysisTypes';
 import { AnalysisTypeCardList } from './AnalysisTypeCardList';
 import { AnalysisTypeSection } from './AnalysisTypeSection';
 import { resolveAnalysisType } from '../../services/analysisTypeResolutionService';
-import { resolveSnapshotSubjectsForScenario } from '../../services/snapshotSubjectResolutionService';
-import { computeInheritedDSL, computeEffectiveFetchDSL } from '../../services/scenarioRegenerationService';
+import { hydrateSnapshotPlannerInputs } from '../../services/snapshotSubjectResolutionService';
 import { fileRegistry } from '../../contexts/TabContext';
 import CollapsibleSection from '../CollapsibleSection';
 import { AnalysisResultCards } from '../analytics/AnalysisResultCards';
@@ -38,6 +36,8 @@ import { parseDSL } from '../../lib/queryDSL';
 import { AmplitudeBridgeInstallModal } from '../modals/AmplitudeBridgeInstallModal';
 import { sessionLogService } from '../../services/sessionLogService';
 import { IndexedDBConnectionProvider } from '../../lib/das/IndexedDBConnectionProvider';
+import { prepareAnalysisComputeInputs, runPreparedAnalysis } from '../../services/analysisComputePreparationService';
+import { logChartReadinessTrace } from '../../lib/snapshotBootTrace';
 import toast from 'react-hot-toast';
 import './AnalyticsPanel.css';
 
@@ -172,6 +172,8 @@ export default function AnalyticsPanel({ tabId, hideHeader = false }: AnalyticsP
   const [showAllAnalyses, setShowAllAnalyses] = useState(false);
   const [showSpinner, setShowSpinner] = useState(false); // Delayed spinner
   const [error, setError] = useState<string | null>(null);
+  const [plannerFileIds, setPlannerFileIds] = useState<string[]>([]);
+  const [plannerRegistryVersion, setPlannerRegistryVersion] = useState(0);
   
   // Refs for debouncing and request tracking
   const analysisRequestRef = useRef<number>(0);
@@ -376,201 +378,83 @@ export default function AnalyticsPanel({ tabId, hideHeader = false }: AnalyticsP
       // Compute entirely from in-browser parameter data — no backend call needed.
       let response: AnalysisResponse;
 
-      // === Per-scenario snapshot dependency resolution ===
-      // If the selected analysis type has a snapshotContract, we resolve DB coordinates
-      // *per scenario* so each scenario carries its own snapshot subjects (derived from
-      // that scenario's effective DSL, not a single global DSL).
       const snapshotMeta = selectedAnalysisId
         ? ANALYSIS_TYPES.find(t => t.id === selectedAnalysisId)
         : undefined;
       const needsSnapshots = !!snapshotMeta?.snapshotContract;
-      
-      // Workspace identity (shared across all scenarios)
       const graphFile = currentTab?.fileId ? fileRegistry.getFile(currentTab.fileId) : undefined;
       const repository = graphFile?.source?.repository;
       const branch = graphFile?.source?.branch;
       const workspace = (repository && branch) ? { repository, branch } : undefined;
-      
 
-      // Get the FULL composited query DSL for a scenario.
-      // Live scenarios MUST go through the composition machinery — a raw
-      // scenario DSL (e.g. just "context(channel:paid-search)") is
-      // meaningless without the inherited base/window context.
-      const getQueryDslForScenario = (scenarioId: string): string => {
-        if (scenarioId === 'current') return currentDSL || '';
-        if (scenarioId === 'base') {
-          const baseDsl = scenariosContext?.baseDSL || graph?.baseDSL;
-          return typeof baseDsl === 'string' ? baseDsl : currentDSL || '';
-        }
-        const scenario = scenariosContext?.scenarios?.find(s => s.id === scenarioId);
-        const meta: any = scenario?.meta;
-        if (meta?.isLive) {
-          // Prefer the pre-computed composited DSL from the regeneration pass
-          if (typeof meta.lastEffectiveDSL === 'string' && meta.lastEffectiveDSL.trim()) {
-            return meta.lastEffectiveDSL;
-          }
-          // Fallback: compute on-the-fly using the compositor machinery.
-          // This covers scenarios that were just created and haven't been
-          // regenerated yet.
-          const visibleScenarios = orderedVisibleScenarios
-            .map(id => scenariosContext?.scenarios?.find(s => s.id === id))
-            .filter(Boolean) as Array<{ id: string; meta?: any }>;
-          const scenarioIndex = visibleScenarios.findIndex(s => s.id === scenarioId);
-          if (scenarioIndex >= 0) {
-            const baseDsl = currentDSL || scenariosContext?.baseDSL || graph?.baseDSL || '';
-            const inheritedDSL = computeInheritedDSL(scenarioIndex, visibleScenarios as any, baseDsl);
-            return computeEffectiveFetchDSL(inheritedDSL, meta.queryDSL || '');
-          }
-        }
-        return currentDSL || '';
-      };
-      
-      // Helper: resolve snapshot subjects for a given scenario.
-      // Delegates to the shared snapshotSubjectResolutionService.
-      const resolveSnapshotSubjectsForScenarioLocal = async (
-        scenarioGraph: any,
-        analyticsDsl: string,
-        scenarioId: string,
-      ) => {
-        if (!workspace) {
-          throw new Error('Snapshot analysis requires a git-backed graph (no workspace found). Ensure the graph file is associated with a repository.');
-        }
-        if (!selectedAnalysisId) {
-          throw new Error('No analysis type selected.');
-        }
-        return resolveSnapshotSubjectsForScenario({
-          scenarioGraph,
-          analyticsDsl,
-          scenarioId,
+      logChartReadinessTrace('AnalyticsPanel:prepare-triggered', {
+        tabId,
+        analysisType: selectedAnalysisId,
+        needsSnapshots,
+        workspace,
+        orderedVisibleScenarios,
+        queryDSL,
+        currentDSL,
+      });
+
+      const prepared = await prepareAnalysisComputeInputs({
+        mode: 'panel',
+        graph,
+        analysisType: selectedAnalysisId,
+        analyticsDsl: queryDSL,
+        currentDSL,
+        chartCurrentLayerDsl: '',
+        needsSnapshots,
+        workspace,
+        rawScenarioStateLoaded: Boolean(scenarioState),
+        visibleScenarioIds: orderedVisibleScenarios,
+        scenariosContext: scenariosContext as any,
+        whatIfDSL,
+        getScenarioVisibilityMode: (scenarioId) => (
+          tabId ? operations.getScenarioVisibilityMode(tabId, scenarioId) : 'f+e'
+        ),
+        getScenarioName,
+        getScenarioColour,
+      });
+
+      if (prepared.status !== 'ready') {
+        logChartReadinessTrace('AnalyticsPanel:blocked', {
+          tabId,
           analysisType: selectedAnalysisId,
-          workspace,
-          getQueryDslForScenario,
+          reason: prepared.reason,
+          requiredFileIds: prepared.requiredFileIds || [],
+          hydratableFileIds: prepared.hydratableFileIds || [],
+          unavailableFileIds: prepared.unavailableFileIds || [],
         });
-      };
-      
-      // Determine the effective analytics DSL for a scenario layer.
-      // For non-snapshot analyses this is the composited DSL; for snapshot
-      // analyses we override this with the panel's queryDSL (see below).
-      const getEffectiveDslForScenario = (scenarioId: string): string => {
-        // For live scenarios, delegate to the compositor-aware function
-        // which returns the full composited DSL (not the raw scenario DSL).
-        return getQueryDslForScenario(scenarioId);
-      };
-      
-      // Check if we have multiple visible scenarios for multi-scenario analysis
-      const hasMultipleScenarios = orderedVisibleScenarios.length > 1 && scenariosContext;
-      
-      if (hasMultipleScenarios) {
-        // Build scenario-modified graphs for each visible scenario (in legend order)
-        // with per-scenario snapshot subjects
-        let chartSnapshotDsl: string | null = null;
-        const scenarioGraphs = await Promise.all(orderedVisibleScenarios.map(async (scenarioId) => {
-          // Get visibility mode (F/E/F+E) for this scenario from tab state
-          const visibilityMode = tabId 
-            ? operations.getScenarioVisibilityMode(tabId, scenarioId)
-            : 'f+e';
-
-          // Pass whatIfDSL only for 'current' layer - scenario layers have their
-          // What-If already baked into their params at snapshot time
-          const scenarioGraph = buildGraphForAnalysisLayer(
-            scenarioId,
-            graph,
-            scenariosContext.baseParams,
-            scenariosContext.currentParams,
-            scenariosContext.scenarios,
-            scenarioId === 'current' ? whatIfDSL : undefined,
-            visibilityMode
-          );
-          
-          const colour = getScenarioColour(scenarioId);
-          
-          // Resolve snapshot subjects if this analysis type requires them
-          // For snapshot analyses, analyticsDsl MUST be the panel's queryDSL
-          // (the user's edge selection — from/to), not the scenario's own DSL
-          // which may only contain window/cohort dates. The scenario's date
-          // range is picked up separately via getQueryDslForScenario inside
-          // resolveSnapshotSubjectsForScenario.
-          const analyticsDsl = needsSnapshots ? queryDSL : getEffectiveDslForScenario(scenarioId);
-          let snapshotSubjects: import('../../services/snapshotDependencyPlanService').SnapshotSubjectRequest[] | undefined;
-          if (needsSnapshots) {
-            const resolved = await resolveSnapshotSubjectsForScenarioLocal(scenarioGraph, analyticsDsl, scenarioId);
-            snapshotSubjects = resolved.subjects;
-            if (scenarioId === chartScenarioId) chartSnapshotDsl = resolved.snapshotDsl;
-          }
-          
-          return {
-            scenario_id: scenarioId,
-            name: getScenarioName(scenarioId),
-            graph: scenarioGraph,
-            colour,
-            visibility_mode: visibilityMode,
-            ...(snapshotSubjects?.length ? { snapshot_subjects: snapshotSubjects } : {}),
-          };
-        }));
-        
-        response = await graphComputeClient.analyzeMultipleScenarios(
-          scenarioGraphs,
-          queryDSL || undefined,
-          selectedAnalysisId || undefined,
-        );
-
-        // Ensure charts can detect window()/cohort() semantics.
-        setSnapshotChartDsl(needsSnapshots ? (chartSnapshotDsl || null) : null);
-      } else {
-        // Single scenario analysis
-        const scenarioId = orderedVisibleScenarios[0] || 'current';
-        const scenarioName = getScenarioName(scenarioId);
-        const scenarioColour = getScenarioColour(scenarioId);
-        
-        // Get visibility mode (F/E/F+E) for this scenario from tab state
-        const visibilityMode = tabId 
-          ? operations.getScenarioVisibilityMode(tabId, scenarioId)
-          : 'f+e';
-        
-        console.log('[AnalyticsPanel] runAnalysis: visibilityMode =', visibilityMode, 'for scenario', scenarioId);
-        
-        // Build the graph with What-If applied (if current layer)
-        let analysisGraph = graph;
-        if (scenariosContext) {
-          analysisGraph = buildGraphForAnalysisLayer(
-            scenarioId,
-            graph,
-            scenariosContext.baseParams,
-            scenariosContext.currentParams,
-            scenariosContext.scenarios,
-            scenarioId === 'current' ? whatIfDSL : undefined,
-            visibilityMode
-          );
-        } else if (scenarioId === 'current' && whatIfDSL) {
-          // No scenario context but we have whatIfDSL - apply it directly
-          const { applyWhatIfToGraph } = await import('../../services/CompositionService');
-          analysisGraph = applyWhatIfToGraph(graph, whatIfDSL);
+        setPlannerFileIds(prepared.requiredFileIds || []);
+        if (prepared.reason === 'planner_inputs_pending_hydration' && (prepared.hydratableFileIds || []).length > 0) {
+          logChartReadinessTrace('AnalyticsPanel:hydrate-planner-inputs', {
+            tabId,
+            analysisType: selectedAnalysisId,
+            hydratableFileIds: prepared.hydratableFileIds || [],
+            workspace,
+          });
+          void hydrateSnapshotPlannerInputs({
+            fileIds: prepared.hydratableFileIds || [],
+            workspace,
+          });
         }
-        
-        // Resolve snapshot subjects if this analysis type requires them
-        // See multi-scenario path comment: for snapshots, always use panel's
-        // queryDSL to preserve the from/to edge selection.
-        const analyticsDsl = needsSnapshots ? queryDSL : getEffectiveDslForScenario(scenarioId);
-        let snapshotSubjects: import('../../services/snapshotDependencyPlanService').SnapshotSubjectRequest[] | undefined;
-        if (needsSnapshots) {
-          const resolved = await resolveSnapshotSubjectsForScenarioLocal(analysisGraph, analyticsDsl, scenarioId);
-          snapshotSubjects = resolved.subjects;
-          setSnapshotChartDsl(resolved.snapshotDsl);
-        } else {
-          setSnapshotChartDsl(null);
-        }
-        
-        response = await graphComputeClient.analyzeSelection(
-          analysisGraph,
-          queryDSL || undefined,
-          scenarioId,
-          scenarioName,
-          scenarioColour,
-          selectedAnalysisId || undefined,
-          visibilityMode,
-          snapshotSubjects
-        );
+        setIsLoading(false);
+        setShowSpinner(false);
+        setError(null);
+        return;
       }
+
+      setPlannerFileIds([]);
+      logChartReadinessTrace('AnalyticsPanel:prepared-ready', {
+        tabId,
+        analysisType: selectedAnalysisId,
+        signature: prepared.signature,
+        scenarioCount: prepared.scenarios.length,
+      });
+      response = await runPreparedAnalysis(prepared);
+      const chartScenario = prepared.scenarios.find((scenario) => scenario.scenario_id === chartScenarioId);
+      setSnapshotChartDsl(needsSnapshots ? (chartScenario?.snapshot_query_dsl || null) : null);
       
       // Only update if this is still the latest request
       if (analysisRequestRef.current === requestId) {
@@ -617,6 +501,7 @@ export default function AnalyticsPanel({ tabId, hideHeader = false }: AnalyticsP
     // Must be in deps to avoid stale closure when WindowSelector updates the DSL.
     currentDSL,
     chartScenarioId,
+    plannerRegistryVersion,
   ]);
   
   // Store runAnalysis in a ref to avoid effect re-triggers
@@ -689,6 +574,26 @@ export default function AnalyticsPanel({ tabId, hideHeader = false }: AnalyticsP
       }
     };
   }, []);
+
+  useEffect(() => {
+    if (plannerFileIds.length === 0) return undefined;
+    logChartReadinessTrace('AnalyticsPanel:subscribe-planner-files', {
+      tabId,
+      analysisType: selectedAnalysisId,
+      fileIds: plannerFileIds,
+    });
+    const unsubscribers = plannerFileIds.map((fileId) => fileRegistry.subscribe(fileId, () => {
+      logChartReadinessTrace('AnalyticsPanel:planner-file-updated', {
+        tabId,
+        analysisType: selectedAnalysisId,
+        fileId,
+      });
+      setPlannerRegistryVersion((value) => value + 1);
+    }));
+    return () => {
+      unsubscribers.forEach((unsubscribe) => unsubscribe());
+    };
+  }, [plannerFileIds]);
   
   // Format full result as JSON for debug display
   const formattedResult = useMemo(() => {

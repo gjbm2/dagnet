@@ -9,6 +9,7 @@ import { AnalysisChartContainer } from '../charts/AnalysisChartContainer';
 import { AnalysisResultCards } from '../analytics/AnalysisResultCards';
 import { resolveAnalysisType } from '@/services/analysisTypeResolutionService';
 import { captureTabScenariosToRecipe } from '@/services/captureTabScenariosService';
+import { isSnapshotBootChart, logSnapshotBoot, recordSnapshotBootLedgerStage } from '@/lib/snapshotBootTrace';
 import { Loader2, AlertCircle, ServerOff } from 'lucide-react';
 import { InlineEditableLabel } from '../InlineEditableLabel';
 import type { AvailableAnalysis } from '@/lib/graphComputeClient';
@@ -27,6 +28,10 @@ export default function CanvasAnalysisNode({ data, selected }: NodeProps<CanvasA
     const fromStore = (graph as any)?.canvasAnalyses?.find((a: any) => a.id === analysisProp.id);
     return (fromStore || analysisProp) as CanvasAnalysis;
   }, [graph, analysisProp]);
+  const analysisType = analysis.recipe?.analysis?.analysis_type;
+  const propAnalysisType = analysisProp.recipe?.analysis?.analysis_type;
+  const propDebugSnapshotChart = isSnapshotBootChart(analysisProp);
+  const debugSnapshotChart = propDebugSnapshotChart;
   const resizeTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const onUpdateRef = useRef(onUpdate);
   onUpdateRef.current = onUpdate;
@@ -37,10 +42,104 @@ export default function CanvasAnalysisNode({ data, selected }: NodeProps<CanvasA
     return () => { if (resizeTimeoutRef.current) clearTimeout(resizeTimeoutRef.current); };
   }, []);
 
-  const { result, loading, waitingForDeps, error, backendUnavailable } = useCanvasAnalysisCompute({
+  useEffect(() => {
+    if (!debugSnapshotChart) return;
+    const storeLooksSnapshot = isSnapshotBootChart(analysis);
+    if (storeLooksSnapshot !== propDebugSnapshotChart) {
+      logSnapshotBoot('CanvasAnalysisNode:store-payload-mismatch', {
+        analysisId: analysisProp.id,
+        propAnalysisType,
+        propChartKind: analysisProp.chart_kind,
+        storeAnalysisType: analysisType,
+        storeChartKind: analysis.chart_kind,
+        propLooksSnapshot: propDebugSnapshotChart,
+        storeLooksSnapshot,
+        tabId,
+      });
+    }
+    recordSnapshotBootLedgerStage('node-mounted', {
+      analysisId: analysisProp.id,
+      analysisType: propAnalysisType,
+      chartKind: analysisProp.chart_kind,
+      live: analysisProp.live,
+      tabId,
+      source: 'CanvasAnalysisNode',
+    });
+    logSnapshotBoot('CanvasAnalysisNode:mount', {
+      analysisId: analysisProp.id,
+      analysisType: propAnalysisType,
+      chartKind: analysisProp.chart_kind,
+      live: analysisProp.live,
+      tabId,
+    });
+    return () => {
+      recordSnapshotBootLedgerStage('node-unmounted', {
+        analysisId: analysisProp.id,
+        analysisType: propAnalysisType,
+        chartKind: analysisProp.chart_kind,
+        live: analysisProp.live,
+        tabId,
+        source: 'CanvasAnalysisNode',
+      });
+      logSnapshotBoot('CanvasAnalysisNode:unmount', {
+        analysisId: analysisProp.id,
+        analysisType: propAnalysisType,
+        chartKind: analysisProp.chart_kind,
+        live: analysisProp.live,
+        tabId,
+      });
+    };
+  }, [debugSnapshotChart, analysis, analysisProp, analysisType, propAnalysisType, propDebugSnapshotChart, tabId]);
+
+  const { result, loading, waitingForDeps, error, backendUnavailable, refresh } = useCanvasAnalysisCompute({
     analysis,
     tabId,
+    debugSnapshotChartOverride: propDebugSnapshotChart,
   });
+
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      if (detail?.analysisId === analysis.id) refresh();
+    };
+    window.addEventListener('dagnet:canvasAnalysisRefresh', handler);
+    return () => window.removeEventListener('dagnet:canvasAnalysisRefresh', handler);
+  }, [analysis.id, refresh]);
+
+  const lifecycleKey = useMemo(() => JSON.stringify({
+    loading,
+    waitingForDeps,
+    hasResult: !!result,
+    error,
+    backendUnavailable,
+  }), [loading, waitingForDeps, result, error, backendUnavailable]);
+  const lastLifecycleKeyRef = useRef<string>('');
+  useEffect(() => {
+    if (!debugSnapshotChart) return;
+    if (lastLifecycleKeyRef.current === lifecycleKey) return;
+    lastLifecycleKeyRef.current = lifecycleKey;
+    logSnapshotBoot('CanvasAnalysisNode:lifecycle', {
+      analysisId: analysisProp.id,
+      analysisType: propAnalysisType,
+      chartKind: analysisProp.chart_kind,
+      loading,
+      waitingForDeps,
+      hasResult: !!result,
+      error,
+      backendUnavailable,
+    });
+  }, [
+    debugSnapshotChart,
+    lifecycleKey,
+    analysisProp.id,
+    propAnalysisType,
+    analysisProp.chart_kind,
+    loading,
+    waitingForDeps,
+    result,
+    error,
+    backendUnavailable,
+  ]);
 
   const [availableAnalyses, setAvailableAnalyses] = useState<AvailableAnalysis[]>([]);
   const hasAnalysisType = !!analysis.recipe?.analysis?.analysis_type;

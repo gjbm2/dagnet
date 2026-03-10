@@ -58,6 +58,9 @@ graph-editor/public/docs/index.json
 # Debug streams & snapshots (dev-only)
 debug/
 
+# Scratch / temporary working files (may contain private repo names in logs)
+tmp/
+
 # Playwright artefacts
 graph-editor/test-results/
 graph-editor/playwright-report/

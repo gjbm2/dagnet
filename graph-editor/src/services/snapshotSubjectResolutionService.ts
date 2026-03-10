@@ -17,6 +17,10 @@ import {
 } from './snapshotDependencyPlanService';
 import { buildFetchPlanProduction } from './fetchPlanBuilderService';
 import { querySelectionUuids } from '../hooks/useQuerySelectionUuids';
+import { enumerateFetchTargets } from './fetchTargetEnumerationService';
+import { fileRegistry } from '../contexts/TabContext';
+import { db } from '../db/appDatabase';
+import { logSnapshotBoot } from '../lib/snapshotBootTrace';
 
 export interface SnapshotResolutionParams {
   /** The scenario-specific graph (with params baked in) */
@@ -36,6 +40,84 @@ export interface SnapshotResolutionParams {
 export interface SnapshotResolutionResult {
   subjects: SnapshotSubjectRequest[];
   snapshotDsl: string;
+}
+
+export interface SnapshotPlannerInputsStatusResult {
+  ready: boolean;
+  requiredFileIds: string[];
+  missingFileIds: string[];
+  hydratableFileIds: string[];
+  unavailableFileIds: string[];
+}
+
+/**
+ * Snapshot planning depends on parameter/case artefacts being present in FileRegistry.
+ * This is a pure readiness check: it does not mutate FileRegistry or trigger hydration.
+ */
+export async function getSnapshotPlannerInputsStatus(args: {
+  scenarioGraph: any;
+  workspace?: { repository: string; branch: string };
+}): Promise<SnapshotPlannerInputsStatusResult> {
+  const targets = enumerateFetchTargets(args.scenarioGraph);
+  const requiredFileIds = Array.from(
+    new Set(targets.map((target) => `${target.type}-${target.objectId}`)),
+  );
+  const missingFileIds: string[] = [];
+  const hydratableFileIds: string[] = [];
+  const unavailableFileIds: string[] = [];
+
+  const hasFileInDb = async (fileId: string): Promise<boolean> => {
+    if (await db.files.get(fileId)) return true;
+    if (args.workspace) {
+      const prefixedId = `${args.workspace.repository}-${args.workspace.branch}-${fileId}`;
+      if (await db.files.get(prefixedId)) return true;
+    }
+    return false;
+  };
+
+  logSnapshotBoot('SnapshotPlannerInputs:check-start', {
+    requiredFileIds,
+    requiredCount: requiredFileIds.length,
+  });
+
+  for (const fileId of requiredFileIds) {
+    if (fileRegistry.getFile(fileId)) continue;
+    missingFileIds.push(fileId);
+    if (await hasFileInDb(fileId)) {
+      hydratableFileIds.push(fileId);
+    } else {
+      unavailableFileIds.push(fileId);
+    }
+  }
+
+  const ready = missingFileIds.length === 0;
+  logSnapshotBoot('SnapshotPlannerInputs:check-finish', {
+    ready,
+    hydratableFileIds,
+    missingFileIds,
+    unavailableFileIds,
+  });
+  return {
+    ready,
+    requiredFileIds,
+    missingFileIds,
+    hydratableFileIds,
+    unavailableFileIds,
+  };
+}
+
+export async function hydrateSnapshotPlannerInputs(args: {
+  fileIds: string[];
+  workspace?: { repository: string; branch: string };
+}): Promise<void> {
+  for (const fileId of args.fileIds) {
+    if (fileRegistry.getFile(fileId)) continue;
+    try {
+      await fileRegistry.restoreFile(fileId, args.workspace);
+    } catch {
+      // Best effort only; readiness will remain blocked until the file is available.
+    }
+  }
 }
 
 /**
@@ -62,6 +144,14 @@ export async function resolveSnapshotSubjectsForScenario(
 
   const scenarioQueryDsl = getQueryDslForScenario(scenarioId);
   const snapshotDsl = composeSnapshotDsl(analyticsDsl, scenarioQueryDsl);
+
+  logSnapshotBoot('SnapshotResolution:start', {
+    scenarioId,
+    analysisType,
+    analyticsDsl,
+    scenarioQueryDsl,
+    workspace,
+  });
 
   console.log('[SnapshotResolution] Snapshot DSL composed:', snapshotDsl,
     'from analyticsDsl:', analyticsDsl, 'queryDsl:', scenarioQueryDsl);
@@ -107,6 +197,13 @@ export async function resolveSnapshotSubjectsForScenario(
       `Skipped:\n${skipReasons || '(none)'}\n\nPlan items: ${plan.items.length}\nComposed DSL: ${snapshotDsl}`,
     );
   }
+
+  logSnapshotBoot('SnapshotResolution:subjects-ready', {
+    scenarioId,
+    analysisType,
+    subjectCount: resolverResult.subjects.length,
+    skippedCount: resolverResult.skipped.length,
+  });
 
   console.log('[SnapshotResolution] Resolved snapshot subjects:', resolverResult.subjects.length);
   for (const subj of resolverResult.subjects) {

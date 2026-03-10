@@ -1,4 +1,9 @@
 import type { Edge, Node } from 'reactflow';
+import {
+  logSnapshotBoot,
+  recordSnapshotBootLedgerStage,
+  summariseSnapshotCharts,
+} from './snapshotBootTrace';
 
 export function toFlow(graph: any, callbacks?: { onUpdateNode?: (id: string, data: any) => void; onDeleteNode?: (id: string) => void; onUpdateEdge?: (id: string, data: any) => void; onDeleteEdge?: (id: string, data: any) => void; onDoubleClickNode?: (id: string, field: string) => void; onDoubleClickEdge?: (id: string, field: string) => void; onSelectEdge?: (id: string) => void; onEdgeUpdate?: (oldEdge: any, newConnection: any) => void; onReconnect?: (id: string, newSource?: string, newTarget?: string, newTargetHandle?: string, newSourceHandle?: string) => void; onUpdatePostit?: (id: string, updates: any) => void; onDeletePostit?: (id: string) => void; onSelectPostit?: (id: string) => void; onUpdateContainer?: (id: string, updates: any) => void; onDeleteContainer?: (id: string) => void; onUpdateAnalysis?: (id: string, updates: any) => void; onDeleteAnalysis?: (id: string) => void; tabId?: string }, useSankeyView?: boolean): { nodes: Node[]; edges: Edge[] } {
   if (!graph) return { nodes: [], edges: [] };
@@ -79,6 +84,32 @@ export function toFlow(graph: any, callbacks?: { onUpdateNode?: (id: string, dat
       onDelete: callbacks?.onDeleteAnalysis,
     },
   }));
+
+  const snapshotCharts = summariseSnapshotCharts(graph);
+  if (snapshotCharts.length > 0) {
+    const snapshotNodeIds = new Set(snapshotCharts.map((chart) => `analysis-${chart.id}`));
+    const materialisedSnapshotNodeIds = analysisNodes
+      .map((node) => node.id)
+      .filter((id) => snapshotNodeIds.has(id));
+    snapshotCharts.forEach((chart) => {
+      if (materialisedSnapshotNodeIds.includes(`analysis-${chart.id}`)) {
+        recordSnapshotBootLedgerStage('reactflow-node-materialised', {
+          analysisId: chart.id,
+          analysisType: chart.analysisType,
+          chartKind: chart.chartKind,
+          live: chart.live,
+          source: 'toFlow',
+        });
+      }
+    });
+    logSnapshotBoot('toFlow:analysis-materialised', {
+      snapshotCharts,
+      materialisedSnapshotNodeIds,
+      totalAnalysisNodes: analysisNodes.length,
+      totalNodes: (graph.nodes || []).length,
+      totalEdges: (graph.edges || []).length,
+    });
+  }
 
   const nodes = [...containerNodes, ...conversionNodes, ...postitNodes, ...analysisNodes];
 

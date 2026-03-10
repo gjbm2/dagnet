@@ -84,6 +84,12 @@ import { useScenariosContextOptional } from '../contexts/ScenariosContext';
 import { getComposedParamsForLayer } from '../services/CompositionService';
 import { graphIssuesService } from '../services/graphIssuesService';
 import { toFlow, fromFlow } from '@/lib/transform';
+import {
+  logSnapshotBoot,
+  recordSnapshotBootLedgerStage,
+  registerSnapshotBootExpectations,
+  summariseSnapshotCharts,
+} from '@/lib/snapshotBootTrace';
 import { generateIdFromLabel, generateUniqueId } from '@/lib/idUtils';
 import { computeEffectiveEdgeProbability } from '@/lib/whatIf';
 import { getOptimalFace, assignFacesForNode } from '@/lib/faceSelection';
@@ -447,13 +453,8 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
   const [edges, setEdges, onEdgesChangeBase] = useEdgesState([]);
 
   const fitView = useCallback((options?: any) => {
-    if (isDashboardMode) {
-      rfFitView({ ...options });
-    } else {
-      const conversionOnly = nodes.filter(n => !isCanvasObjectNode(n.id));
-      rfFitView({ ...options, nodes: conversionOnly });
-    }
-  }, [rfFitView, nodes, isCanvasObjectNode, isDashboardMode]);
+    rfFitView({ ...options });
+  }, [rfFitView]);
 
   // Track array reference changes to detect loops
   const prevNodesRef = useRef(nodes);
@@ -1012,6 +1013,8 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
   // Track the last synced graph to detect real changes
   const lastSyncedGraphRef = useRef<string>('');
   const lastSyncedReactFlowRef = useRef<string>('');
+  const snapshotBootCycleKeyRef = useRef<string>('');
+  const snapshotBootCycleIdRef = useRef<string>('');
   const isSyncingRef = useRef(false); // Prevents ReactFlow->Graph sync loops, but NOT Graph->ReactFlow sync
   const isDraggingNodeRef = useRef(false); // Prevents Graph->ReactFlow sync during node dragging
   const dragTimeoutRef = useRef<number | null>(null); // Failsafe to clear drag flag if it gets stuck
@@ -1756,14 +1759,102 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
     // The isSyncingRef flag should only prevent ReactFlow->Graph sync, not Graph->ReactFlow sync
     
     const graphJson = JSON.stringify(graph);
+    const snapshotBootCycleKey = `${tabId || 'no-tab'}|${graphJson}`;
+    if (snapshotBootCycleKeyRef.current !== snapshotBootCycleKey) {
+      snapshotBootCycleKeyRef.current = snapshotBootCycleKey;
+      snapshotBootCycleIdRef.current = `snapshot-boot-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    }
+    const snapshotBootCycleId = snapshotBootCycleIdRef.current;
     const sankeyModeChanged = prevSankeyViewRef.current !== useSankeyView;
     const imageViewChanged = prevShowNodeImagesRef.current !== showNodeImages;
     const viewModeChanged = sankeyModeChanged || imageViewChanged;
+    const snapshotCharts = summariseSnapshotCharts(graph);
+    const graphAnalysisNodeIds = (graph.canvasAnalyses || []).map((a: any) => `analysis-${a.id}`);
+    const graphAnalysesById = new Map((graph.canvasAnalyses || []).map((a: any) => [a.id, a]));
+    const reactFlowAnalysisNodeIds = nodes.filter((n: any) => n.id?.startsWith('analysis-')).map((n: any) => n.id);
+    const graphAnalysisSet = new Set(graphAnalysisNodeIds);
+    const reactFlowAnalysisSet = new Set(reactFlowAnalysisNodeIds);
+    const missingAnalysisNodeIds = graphAnalysisNodeIds.filter((id: string) => !reactFlowAnalysisSet.has(id));
+    const extraAnalysisNodeIds = reactFlowAnalysisNodeIds.filter((id: string) => !graphAnalysisSet.has(id));
+    const expectedNodeCount = (graph.nodes?.length || 0)
+      + (graph.postits?.length || 0)
+      + (graph.containers?.length || 0)
+      + (graph.canvasAnalyses?.length || 0);
+    const nodeCountChanged = nodes.length !== expectedNodeCount;
+    const analysisNodesOutOfSync = missingAnalysisNodeIds.length > 0 || extraAnalysisNodeIds.length > 0;
+    const analysisNodePayloadChanged = nodes.some((node: any) => {
+      if (!node.id?.startsWith('analysis-')) return false;
+      const analysisId = node.id.replace('analysis-', '');
+      const graphAnalysis = graphAnalysesById.get(analysisId);
+      if (!graphAnalysis) return false;
+      const rfWidth = typeof node.style?.width === 'number' ? node.style.width : node.width;
+      const rfHeight = typeof node.style?.height === 'number' ? node.style.height : node.height;
+      return node.type !== 'canvasAnalysis'
+        || node.position?.x !== (graphAnalysis.x ?? 0)
+        || node.position?.y !== (graphAnalysis.y ?? 0)
+        || rfWidth !== graphAnalysis.width
+        || rfHeight !== graphAnalysis.height
+        || node.data?.tabId !== tabId
+        || JSON.stringify(node.data?.analysis ?? null) !== JSON.stringify(graphAnalysis);
+    });
+    const snapshotGraphAnalysisNodeIds = snapshotCharts.map((chart) => `analysis-${chart.id}`);
+    const snapshotGraphAnalysisSet = new Set(snapshotGraphAnalysisNodeIds);
+    const snapshotReactFlowAnalysisNodeIds = reactFlowAnalysisNodeIds.filter((id: string) => snapshotGraphAnalysisSet.has(id));
+    const snapshotReactFlowSet = new Set(snapshotReactFlowAnalysisNodeIds);
+    const missingSnapshotAnalysisNodeIds = snapshotGraphAnalysisNodeIds.filter((id: string) => !snapshotReactFlowSet.has(id));
+    const extraSnapshotAnalysisNodeIds = reactFlowAnalysisNodeIds.filter((id: string) => !snapshotGraphAnalysisSet.has(id));
+
+    if (snapshotCharts.length > 0) {
+      registerSnapshotBootExpectations(snapshotCharts, {
+        cycleId: snapshotBootCycleId,
+        tabId,
+        source: 'GraphCanvas:sync-start',
+      });
+      snapshotCharts.forEach((chart) => {
+        const nodeId = `analysis-${chart.id}`;
+        if (snapshotReactFlowSet.has(nodeId)) {
+          recordSnapshotBootLedgerStage('reactflow-node-present', {
+            analysisId: chart.id,
+            analysisType: chart.analysisType,
+            chartKind: chart.chartKind,
+            live: chart.live,
+            cycleId: snapshotBootCycleId,
+            tabId,
+            source: 'GraphCanvas:sync-start',
+            nodeId,
+          });
+        }
+      });
+      logSnapshotBoot('GraphCanvas:sync-start', {
+        snapshotCharts,
+        snapshotGraphAnalysisNodeIds,
+        snapshotReactFlowAnalysisNodeIds,
+        missingSnapshotAnalysisNodeIds,
+        extraSnapshotAnalysisNodeIds,
+        nodeCount: nodes.length,
+        expectedNodeCount,
+        edgeCount: edges.length,
+      });
+    }
     
     // Skip if graph unchanged AND no view mode changed
     // (View mode changes require full rebuild even if graph is the same)
-    if (graphJson === lastSyncedGraphRef.current && !viewModeChanged) {
+    if (graphJson === lastSyncedGraphRef.current && !viewModeChanged && !nodeCountChanged && !analysisNodesOutOfSync && !analysisNodePayloadChanged) {
+      if (snapshotCharts.length > 0) {
+        logSnapshotBoot('GraphCanvas:sync-skip-unchanged', {
+          snapshotCharts,
+        });
+      }
       return;
+    }
+    if (snapshotCharts.length > 0 && graphJson === lastSyncedGraphRef.current && !viewModeChanged && (nodeCountChanged || analysisNodesOutOfSync || analysisNodePayloadChanged)) {
+      logSnapshotBoot('GraphCanvas:sync-forced-reconcile', {
+        snapshotCharts,
+        nodeCountChanged,
+        missingAnalysisNodeIds,
+        extraAnalysisNodeIds,
+        analysisNodePayloadChanged,
+      });
     }
     lastSyncedGraphRef.current = graphJson;
     
@@ -1776,11 +1867,15 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
     
     // Check if only edge probabilities changed (not topology or node positions)
     const edgeCountChanged = edges.length !== (graph.edges?.length || 0);
-    const expectedNodeCount = (graph.nodes?.length || 0) + (graph.postits?.length || 0) + (graph.containers?.length || 0) + (graph.canvasAnalyses?.length || 0);
-    const nodeCountChanged = nodes.length !== expectedNodeCount;
-    
     console.log('  Edge count changed:', edgeCountChanged, `(${edges.length} -> ${graph.edges?.length || 0})`);
     console.log('  Node count changed:', nodeCountChanged);
+    console.log('[GraphCanvas][AnalysisNodes] graph vs reactflow', {
+      graphCount: graphAnalysisNodeIds.length,
+      reactFlowCount: reactFlowAnalysisNodeIds.length,
+      missingAnalysisNodeIds,
+      extraAnalysisNodeIds,
+      analysisNodePayloadChanged,
+    });
     
     // Check if any node positions changed
     const nodePositionsChanged = nodes.some(node => {
@@ -1894,12 +1989,42 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
     // After drag, we keep isDraggingNodeRef.current true until sync completes to force fast path
     // View mode changes (Sankey, image view) require slow path because node sizes change
     // Image boundary changes (0↔1 images) also require slow path for node resizing
-    const shouldTakeFastPath = !edgeCountChanged && !nodeCountChanged && !edgeIdsChanged && !edgeHandlesChanged && 
+    const shouldTakeFastPath = !edgeCountChanged && !nodeCountChanged && !edgeIdsChanged && !edgeHandlesChanged &&
+                               !analysisNodePayloadChanged &&
                                !viewModeChanged && !imageBoundaryChanged && edges.length > 0 && (isDraggingNodeRef.current || !nodePositionsChanged);
+
+    if (snapshotCharts.length > 0) {
+      logSnapshotBoot('GraphCanvas:sync-path-decision', {
+        path: shouldTakeFastPath ? 'fast' : 'slow',
+        edgeCountChanged,
+        nodeCountChanged,
+        edgeIdsChanged,
+        edgeHandlesChanged,
+        nodePositionsChanged,
+        analysisNodePayloadChanged,
+        viewModeChanged,
+        imageBoundaryChanged,
+        missingSnapshotAnalysisNodeIds,
+        extraSnapshotAnalysisNodeIds,
+      });
+    }
     
     if (shouldTakeFastPath) {
       const pathReason = isDraggingNodeRef.current ? '(DRAG - ignoring position diff)' : '(positions unchanged)';
       console.log(`  ⚡ Fast path: Topology and handles unchanged, updating edge data in place ${pathReason}`);
+      if (missingAnalysisNodeIds.length > 0 || extraAnalysisNodeIds.length > 0) {
+        console.warn('[GraphCanvas][AnalysisNodes] Fast path with analysis-node mismatch', {
+          missingAnalysisNodeIds,
+          extraAnalysisNodeIds,
+        });
+        if (snapshotCharts.length > 0) {
+          logSnapshotBoot('GraphCanvas:fast-path-analysis-mismatch', {
+            snapshotCharts,
+            missingSnapshotAnalysisNodeIds,
+            extraSnapshotAnalysisNodeIds,
+          });
+        }
+      }
       
       // Clear drag flag after determining fast path (if it was set)
       // This ensures we don't block future syncs unnecessarily
@@ -2001,6 +2126,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
       {
         const graphPostitIds = new Set((graph.postits || []).map((p: any) => p.id));
         const graphContainerIds = new Set((graph.containers || []).map((c: any) => c.id));
+        const graphAnalysisIds = new Set((graph.canvasAnalyses || []).map((a: any) => a.id));
         setNodes(prevNodes => {
           const autoEditNodeId = autoEditPostitIdRef.current ? `postit-${autoEditPostitIdRef.current}` : null;
 
@@ -2009,6 +2135,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
             .filter(prevNode => {
               if (prevNode.id?.startsWith('postit-')) return graphPostitIds.has(prevNode.id.replace('postit-', ''));
               if (prevNode.id?.startsWith('container-')) return graphContainerIds.has(prevNode.id.replace('container-', ''));
+              if (prevNode.id?.startsWith('analysis-')) return graphAnalysisIds.has(prevNode.id.replace('analysis-', ''));
               return true;
             });
           updatedNodes = updatedNodes.map(prevNode => {
@@ -2049,6 +2176,26 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
                   container: graphContainer,
                   onUpdate: handleUpdateContainer,
                   onDelete: handleDeleteContainer,
+                },
+              };
+            }
+            if (prevNode.id?.startsWith('analysis-')) {
+              const analysisId = prevNode.id.replace('analysis-', '');
+              const graphAnalysis = graphAnalysesById.get(analysisId);
+              if (!graphAnalysis) return prevNode;
+              const gaIndex = (graph.canvasAnalyses || []).findIndex((a: any) => a.id === analysisId);
+              return {
+                ...prevNode,
+                type: 'canvasAnalysis',
+                zIndex: 5000 + (graph.postits || []).length + (gaIndex >= 0 ? gaIndex : 0),
+                position: { x: graphAnalysis.x ?? 0, y: graphAnalysis.y ?? 0 },
+                style: { ...prevNode.style, width: graphAnalysis.width, height: graphAnalysis.height },
+                data: {
+                  ...prevNode.data,
+                  analysis: graphAnalysis,
+                  tabId,
+                  onUpdate: handleUpdateAnalysis,
+                  onDelete: handleDeleteAnalysis,
                 },
               };
             }
@@ -2304,8 +2451,43 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
             }
           }
 
+          const existingAnalysisIds = new Set(updatedNodes.filter(n => n.id?.startsWith('analysis-')).map(n => n.id.replace('analysis-', '')));
+          const graphAnalyses = graph.canvasAnalyses || [];
+          for (let ai = 0; ai < graphAnalyses.length; ai++) {
+            const analysis = graphAnalyses[ai];
+            if (!existingAnalysisIds.has(analysis.id)) {
+              updatedNodes.push({
+                id: `analysis-${analysis.id}`,
+                type: 'canvasAnalysis',
+                position: { x: analysis.x ?? 0, y: analysis.y ?? 0 },
+                zIndex: 5000 + graphPostits.length + ai,
+                style: { width: analysis.width, height: analysis.height },
+                data: {
+                  analysis,
+                  tabId,
+                  onUpdate: handleUpdateAnalysis,
+                  onDelete: handleDeleteAnalysis,
+                },
+              });
+            }
+          }
+
           if (autoEditNodeId) {
             updatedNodes = updatedNodes.map(n => ({ ...n, selected: n.id === autoEditNodeId }));
+          }
+
+          if (snapshotCharts.length > 0) {
+            const snapshotNodeIdsAfterUpdate = updatedNodes
+              .filter((node) => node.id?.startsWith('analysis-'))
+              .map((node) => node.id)
+              .filter((id) => snapshotGraphAnalysisSet.has(id));
+            const snapshotNodeSetAfterUpdate = new Set(snapshotNodeIdsAfterUpdate);
+            const missingAfterFastPathUpdate = snapshotGraphAnalysisNodeIds.filter((id) => !snapshotNodeSetAfterUpdate.has(id));
+            logSnapshotBoot('GraphCanvas:fast-path-nodes-updated', {
+              snapshotCharts,
+              snapshotNodeIdsAfterUpdate,
+              missingAfterFastPathUpdate,
+            });
           }
 
           return updatedNodes;
@@ -2323,6 +2505,12 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
                            edgeHandlesChanged ? 'Edge handles changed' :
                            nodePositionsChanged ? 'Node positions changed' : 'Unknown';
     console.log(`  🔨 Slow path: ${slowPathReason}, doing full rebuild`);
+    if (snapshotCharts.length > 0) {
+      logSnapshotBoot('GraphCanvas:slow-path-start', {
+        snapshotCharts,
+        slowPathReason,
+      });
+    }
     
     // Topology changed - do full rebuild
     // Preserve current selection state
@@ -2375,6 +2563,20 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
       onDeleteAnalysis: handleDeleteAnalysis,
       tabId,
     }, useSankeyView);
+
+    if (snapshotCharts.length > 0) {
+      const rebuiltSnapshotNodeIds = newNodes
+        .filter((node) => node.id?.startsWith('analysis-'))
+        .map((node) => node.id)
+        .filter((id) => snapshotGraphAnalysisSet.has(id));
+      const rebuiltSnapshotSet = new Set(rebuiltSnapshotNodeIds);
+      const missingAfterSlowPathBuild = snapshotGraphAnalysisNodeIds.filter((id) => !rebuiltSnapshotSet.has(id));
+      logSnapshotBoot('GraphCanvas:slow-path-built', {
+        snapshotCharts,
+        rebuiltSnapshotNodeIds,
+        missingAfterSlowPathBuild,
+      });
+    }
     
     // Inject containerColour for conversion nodes inside containers (using positions from the rebuild)
     const containerArray = graph.containers || [];
@@ -5962,6 +6164,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
         nodeTypes={nodeTypes}
         edgeTypes={edgeTypes}
         connectionMode={ConnectionMode.Loose}
+        minZoom={0.1}
         fitView
         selectionOnDrag={false}
         selectNodesOnDrag={false}

@@ -162,7 +162,7 @@ Canvas objects are NOT graph semantics. Several existing operations must explici
 
 ### 3.1 `fitView`
 
-ReactFlow's `fitView` zooms to fit all nodes. Since canvas objects are ReactFlow nodes, they'd be included — a post-it far from the graph would cause excessive zoom-out. Use `fitView({ nodes: [...conversionNodesOnly] })` to pass only conversion nodes.
+`fitView` includes all nodes — conversion nodes and canvas objects alike. This is the same behaviour in both normal and dashboard modes (single code path). Canvas objects (post-its, containers, analyses) are legitimate viewport content; excluding them caused the initial zoom to ignore charts and other canvas elements the user had placed.
 
 ### 3.2 Auto-Layout (Dagre)
 

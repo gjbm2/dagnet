@@ -32,6 +32,7 @@ import { WindowSelector } from '../WindowSelector';
 import { ScenarioLegend } from '../ScenarioLegend';
 import { useActiveGraphTracking } from '../../hooks/useActiveGraphTracking';
 import { ElementToolProvider, type ElementToolContextType, type ElementToolType } from '../../contexts/ElementToolContext';
+import { logSnapshotBoot, summariseSnapshotCharts } from '../../lib/snapshotBootTrace';
 
 // Canvas object type for generalised annotation selection
 export type CanvasAnnotationType = 'postit' | 'container' | 'canvasAnalysis';
@@ -1525,13 +1526,26 @@ const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, r
   // This effect ONLY runs when `data` changes (external file changes)
   useEffect(() => {
     console.log(`[${new Date().toISOString()}] [GraphEditor] useEffect#12: Sync file→store triggered`);
+    const snapshotCharts = summariseSnapshotCharts(data);
     if (Date.now() < suspendLayoutUntilRef.current) {
+      if (snapshotCharts.length > 0) {
+        logSnapshotBoot('GraphEditor:file-to-store-skipped-suspended', {
+          fileId,
+          snapshotCharts,
+        });
+      }
       console.log(`[${new Date().toISOString()}] GraphEditor[${fileId}]: file→store sync skipped (suspended)`);
       return;
     }
     
     // Skip if we just did a store→file sync (prevents race condition with stale data)
     if (Date.now() < suppressFileToStoreUntilRef.current) {
+      if (snapshotCharts.length > 0) {
+        logSnapshotBoot('GraphEditor:file-to-store-skipped-suppressed', {
+          fileId,
+          snapshotCharts,
+        });
+      }
       console.log(`[${new Date().toISOString()}] GraphEditor[${fileId}]: file→store sync skipped (suppressed after store→file)`);
       return;
     }
@@ -1556,6 +1570,12 @@ const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, r
     // Skip if content matches what we last synced (prevents loops)
     // This handles both: file→store sync and store→file sync that updated data
     if (dataStr === lastSyncedContentRef.current) {
+      if (snapshotCharts.length > 0) {
+        logSnapshotBoot('GraphEditor:file-to-store-skipped-unchanged', {
+          fileId,
+          snapshotCharts,
+        });
+      }
       console.log(`GraphEditor[${fileId}]: data matches lastSyncedContent, skipping file→store sync`);
       return;
     }
@@ -1565,6 +1585,16 @@ const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, r
     // and the store has advanced since then, do NOT let it overwrite fresher chart state.
     const recordedRevision = writtenStoreContentsRef.current.get(dataStr);
     if (fileSyncOrigin === 'store' && recordedRevision !== undefined && recordedRevision < currentStoreRevisionRef.current) {
+      if (snapshotCharts.length > 0) {
+        logSnapshotBoot('GraphEditor:file-to-store-skipped-stale-echo', {
+          fileId,
+          snapshotCharts,
+          recordedRevision,
+          currentStoreRevision: currentStoreRevisionRef.current,
+          fileSyncRevision,
+          fileSyncOrigin,
+        });
+      }
       console.log(`[${new Date().toISOString()}] GraphEditor[${fileId}]: file→store sync skipped (stale store echo)`, {
         recordedRevision,
         currentStoreRevision: currentStoreRevisionRef.current,
@@ -1576,6 +1606,14 @@ const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, r
     
     // Update sync tracking and sync to store
     lastSyncedContentRef.current = dataStr;
+    if (snapshotCharts.length > 0) {
+      logSnapshotBoot('GraphEditor:file-to-store-sync', {
+        fileId,
+        snapshotCharts,
+        nodeCount: data.nodes.length,
+        canvasAnalysisCount: data.canvasAnalyses?.length || 0,
+      });
+    }
     console.log(`[${new Date().toISOString()}] [GraphEditor] File→Store: SYNCING (nodes: ${data.nodes.length}, canvasAnalyses: ${data.canvasAnalyses?.length || 0})`);
     setGraph(data);
     

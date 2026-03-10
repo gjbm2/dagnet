@@ -262,6 +262,31 @@ export class GraphComputeClient {
       cache.delete(key);
     }
   }
+
+  /**
+   * Snapshot backend "no data" envelope:
+   * { success:false, scenarios:[{ subjects:[{ success:false, error:"No snapshot data found" }] }] }
+   *
+   * Treat this as an empty-but-valid analysis result for snapshot charts.
+   */
+  private isSnapshotNoDataEnvelope(raw: any): boolean {
+    if (!raw || typeof raw !== 'object') return false;
+    const scenarios = Array.isArray(raw.scenarios) ? raw.scenarios : [];
+    if (scenarios.length === 0) return false;
+
+    let sawAnySubject = false;
+    for (const sc of scenarios) {
+      const subjects = Array.isArray(sc?.subjects) ? sc.subjects : [];
+      for (const sub of subjects) {
+        sawAnySubject = true;
+        if (sub?.success === true) return false;
+        const msg = String(sub?.error || '').toLowerCase();
+        if (!msg.includes('no snapshot data')) return false;
+      }
+    }
+
+    return sawAnySubject;
+  }
   
   /**
    * Snapshot cohort maturity responses are not returned in the standard AnalysisResponse/AnalysisResult
@@ -784,6 +809,35 @@ export class GraphComputeClient {
         return null;
       }
 
+      // Build dimension values from request scenarios (used by both empty and non-empty returns).
+      const scenarioDimensionValues: Record<string, DimensionValueMeta> = {};
+      for (const s of request.scenarios || []) {
+        if (!s?.scenario_id) continue;
+        scenarioDimensionValues[s.scenario_id] = {
+          name: s.name || s.scenario_id,
+          colour: s.colour,
+          visibility_mode: s.visibility_mode,
+        };
+      }
+
+      // Snapshot DB no-data envelope: convert to a valid empty result.
+      if (this.isSnapshotNoDataEnvelope(raw)) {
+        const emptyResult: AnalysisResult = {
+          analysis_type: 'daily_conversions',
+          analysis_name: 'Daily Conversions',
+          analysis_description: 'No snapshot data found for this query and date range',
+          metadata: { source: 'snapshot_db', empty: true },
+          semantics: {
+            dimensions: [],
+            metrics: [],
+            chart: { recommended: 'daily_conversions', alternatives: [] },
+          },
+          dimension_values: { scenario_id: scenarioDimensionValues },
+          data: [],
+        };
+        return { success: true, result: emptyResult, query_dsl: request.query_dsl };
+      }
+
       const isDailyConversionsResult = (r: any): boolean => {
         if (!r || typeof r !== 'object') return false;
         if (r.analysis_type === 'daily_conversions') return true;
@@ -817,17 +871,6 @@ export class GraphComputeClient {
 
       if (blocks.length === 0) return null;
       if (!blocks.some(b => isDailyConversionsResult(b.result))) return null;
-
-      // Build dimension values from request scenarios.
-      const scenarioDimensionValues: Record<string, DimensionValueMeta> = {};
-      for (const s of request.scenarios || []) {
-        if (!s?.scenario_id) continue;
-        scenarioDimensionValues[s.scenario_id] = {
-          name: s.name || s.scenario_id,
-          colour: s.colour,
-          visibility_mode: s.visibility_mode,
-        };
-      }
 
       // Flatten into tabular data rows.
       const data: Array<Record<string, any>> = [];
@@ -968,6 +1011,44 @@ export class GraphComputeClient {
     try {
       if (request?.analysis_type !== 'branch_comparison') return null;
 
+      const scenarioDimensionValues: Record<string, DimensionValueMeta> = {};
+      for (const s of request.scenarios || []) {
+        if (!s?.scenario_id) continue;
+        scenarioDimensionValues[s.scenario_id] = {
+          name: s.name || s.scenario_id,
+          colour: s.colour,
+          visibility_mode: s.visibility_mode,
+          probability_label: s.visibility_mode === 'f' ? 'Forecast Probability' : s.visibility_mode === 'e' ? 'Evidence Probability' : 'Probability',
+        };
+      }
+
+      if (this.isSnapshotNoDataEnvelope(raw)) {
+        const emptyResult: AnalysisResult = {
+          analysis_type: 'branch_comparison',
+          analysis_name: 'Branch Comparison',
+          analysis_description: 'No snapshot data found for this query and date range',
+          metadata: {
+            source: 'snapshot_db',
+            empty: true,
+            node_ids: [],
+          },
+          semantics: {
+            dimensions: [],
+            metrics: [],
+            chart: {
+              recommended: 'time_series',
+              alternatives: ['bar_grouped', 'pie', 'table'],
+            },
+          },
+          dimension_values: {
+            scenario_id: scenarioDimensionValues,
+            branch: {},
+          },
+          data: [],
+        };
+        return { success: true, result: emptyResult, query_dsl: request.query_dsl };
+      }
+
       type Block = { scenario_id: string; subject_id: string; result: any };
       const blocks: Block[] = [];
 
@@ -998,17 +1079,6 @@ export class GraphComputeClient {
       }
 
       if (blocks.length === 0) return null;
-
-      const scenarioDimensionValues: Record<string, DimensionValueMeta> = {};
-      for (const s of request.scenarios || []) {
-        if (!s?.scenario_id) continue;
-        scenarioDimensionValues[s.scenario_id] = {
-          name: s.name || s.scenario_id,
-          colour: s.colour,
-          visibility_mode: s.visibility_mode,
-          probability_label: s.visibility_mode === 'f' ? 'Forecast Probability' : s.visibility_mode === 'e' ? 'Evidence Probability' : 'Probability',
-        };
-      }
 
       const branchLabelLookup = new Map<string, string>();
       const branchKeyByScenarioAndSubject = new Map<string, string>();
@@ -1063,7 +1133,32 @@ export class GraphComputeClient {
         }
       }
 
-      if (data.length === 0) return null;
+      if (data.length === 0) {
+        const emptyResult: AnalysisResult = {
+          analysis_type: 'branch_comparison',
+          analysis_name: 'Branch Comparison',
+          analysis_description: 'No snapshot data found for this query and date range',
+          metadata: {
+            source: 'snapshot_db',
+            empty: true,
+            node_ids: [],
+          },
+          semantics: {
+            dimensions: [],
+            metrics: [],
+            chart: {
+              recommended: 'time_series',
+              alternatives: ['bar_grouped', 'pie', 'table'],
+            },
+          },
+          dimension_values: {
+            scenario_id: scenarioDimensionValues,
+            branch: {},
+          },
+          data: [],
+        };
+        return { success: true, result: emptyResult, query_dsl: request.query_dsl };
+      }
 
       // If exactly one child branch has snapshot rows but the selected parent has exactly two
       // immediate children, derive the missing branch as the complement so split-by-child remains

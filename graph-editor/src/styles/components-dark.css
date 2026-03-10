@@ -1577,14 +1577,11 @@
 /* --- Popover (display settings, more actions) --- */
 
 .cfp-popover-anchor {
-  position: relative;
   display: inline-flex;
 }
 
 .cfp-popover {
-  position: absolute;
-  top: calc(100% + 4px);
-  right: 0;
+  position: fixed;
   min-width: 160px;
   max-width: 280px;
   background: rgba(255, 255, 255, 0.97);
@@ -1598,13 +1595,8 @@
   flex-wrap: wrap;
   align-items: center;
   gap: 5px;
-  z-index: 30;
+  z-index: 10000;
   animation: cfp-fade-in 100ms ease-out;
-}
-
-.chart-floating-palette.anchor-bottom .cfp-popover {
-  top: auto;
-  bottom: calc(100% + 4px);
 }
 
 /* --- Menu items (for actions dropdown) --- */

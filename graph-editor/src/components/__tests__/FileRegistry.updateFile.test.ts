@@ -101,4 +101,32 @@ describe('FileRegistry.updateFile listener contract', () => {
 
     unsub();
   });
+
+  it('restoreFile should hydrate unprefixed runtime IDs from workspace-prefixed IndexedDB entries', async () => {
+    await db.files.add({
+      fileId: 'repo-a-main-parameter-gm-delegated-to-registered',
+      type: 'parameter',
+      data: { id: 'gm-delegated-to-registered', values: [{ mean: 0.42 }] },
+      originalData: { id: 'gm-delegated-to-registered', values: [{ mean: 0.42 }] },
+      isDirty: false,
+      isInitializing: false,
+      lastModified: Date.now(),
+      viewTabs: [],
+      source: {
+        repository: 'repo-a',
+        branch: 'main',
+        path: 'parameters/gm-delegated-to-registered.yaml',
+      },
+    });
+
+    const restored = await fileRegistry.restoreFile('parameter-gm-delegated-to-registered', {
+      repository: 'repo-a',
+      branch: 'main',
+    });
+
+    expect(restored).not.toBeNull();
+    expect(restored.fileId).toBe('parameter-gm-delegated-to-registered');
+    expect(restored.source.repository).toBe('repo-a');
+    expect(fileRegistry.getFile('parameter-gm-delegated-to-registered')?.data?.id).toBe('gm-delegated-to-registered');
+  });
 });
