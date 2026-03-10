@@ -1,4 +1,11 @@
 # DagNet Release Notes
+## Version 1.7.5b
+**Released:** 10-Mar-26
+
+Hellscape of race condition issues on chart init. _Unbelievably_ hard to diagnose and resolve. Finally done so with a completely new readiness architecture at tab level. Horrific.
+
+---
+
 ## Version 1.7.4b
 **Released:** 10-Mar-26
 
