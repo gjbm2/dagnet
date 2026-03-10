@@ -127,6 +127,18 @@ class TestAnalysisAdaptor:
         }
         result = adaptor.match(predicates)
         assert result.id == 'branch_comparison'
+
+    def test_single_node_with_multiple_children_branch_comparison(self, adaptor):
+        """Single node with multiple children matches branch_comparison."""
+        predicates = {
+            'node_count': 1,
+            'has_from': False,
+            'has_to': False,
+            'has_multiple_children': True,
+        }
+        matching = adaptor.get_all_matching(predicates)
+        ids = [d.id for d in matching]
+        assert 'branch_comparison' in ids
     
     def test_two_nodes_multi_waypoint(self, adaptor):
         """Two non-sibling non-absorbing nodes match multi_waypoint."""

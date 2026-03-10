@@ -37,6 +37,7 @@ import { ChartSettingsSection } from './panels/ChartSettingsSection';
 import { useCanvasAnalysisScenarioCallbacks } from '../hooks/useCanvasAnalysisScenarioCallbacks';
 import { graphComputeClient, type AvailableAnalysis } from '../lib/graphComputeClient';
 import { resolveAnalysisType } from '../services/analysisTypeResolutionService';
+import { augmentChartKindOptionsForAnalysisType } from '../services/chartDisplayPlanningService';
 import { canvasAnalysisResultCache } from '../hooks/useCanvasAnalysisCompute';
 import { chartOperationsService } from '../services/chartOperationsService';
 import { analysisResultToCsv } from '../services/analysisExportService';
@@ -187,7 +188,7 @@ function CanvasAnalysisPropertiesSection({ analysisId, graph, setGraph, saveHist
     const rec = spec?.recommended;
     const alts = Array.isArray(spec?.alternatives) ? spec.alternatives : [];
     const all = [rec, ...alts].filter(Boolean) as string[];
-    return Array.from(new Set(all));
+    return augmentChartKindOptionsForAnalysisType(cachedResult?.analysis_type, Array.from(new Set(all)));
   }, [cachedResult]);
 
   const effectiveChartKind = analysis?.chart_kind || cachedResult?.semantics?.chart?.recommended || cachedResult?.analysis_type || undefined;
@@ -261,8 +262,10 @@ function CanvasAnalysisPropertiesSection({ analysisId, graph, setGraph, saveHist
         graph, analyticsDsl || undefined, visibleScenarioCount
       );
       setAvailableAnalyses(resolved);
-      if (!analysis?.analysis_type_overridden && primaryAnalysisType) {
-        const currentType = analysis?.recipe?.analysis?.analysis_type;
+      const currentType = analysis?.recipe?.analysis?.analysis_type;
+      // Preserve intentionally blank analysis types for newly created canvas charts.
+      // These should show the picker UI until the user explicitly chooses a type.
+      if (!analysis?.analysis_type_overridden && currentType && primaryAnalysisType) {
         if (currentType !== primaryAnalysisType) {
           const nextGraph = structuredClone(graph);
           const a = nextGraph.canvasAnalyses?.find((item: any) => item.id === analysisId);
@@ -532,6 +535,23 @@ function CanvasAnalysisPropertiesSection({ analysisId, graph, setGraph, saveHist
             }}
           >
             Download CSV
+          </button>
+          <button
+            className="property-action-button"
+            style={{ padding: '6px 12px', fontSize: 12, cursor: 'pointer', border: '1px solid #d1d5db', borderRadius: 4, background: 'transparent', color: '#6b7280', fontFamily: 'monospace' }}
+            onClick={() => {
+              const debugPayload = {
+                id: analysisId,
+                analysis: analysis ? { ...analysis } : null,
+                cachedResult: cachedResult ?? null,
+                effectiveChartKind,
+                scenarioLayerItems,
+                chartKindOptions,
+              };
+              navigator.clipboard.writeText(JSON.stringify(debugPayload, null, 2));
+            }}
+          >
+            Dump Debug JSON
           </button>
           <button
             className="property-action-button"

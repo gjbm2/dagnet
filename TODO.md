@@ -1,9 +1,12 @@
 # TODO
 
-- complete project-canvas work (canvas charts clean-up)
-  - final context menu stuff
-  - chart polishing for diff. chart types
+- complete project-canvas work -- charts
+  - so much chart polishing still to do for diff. chart types
   - legends, axis positioning, etc. polish, polish, polish
+  - axis titles, ranges
+  - chart props section
+  - colourways for e.g. child node charts, etc. , etc. etc.
+  - analysis chart display is a wreck (sigh)
 - Snap-to behaviour when moving / resizing graph objects (nodes, post it notes, canvas charts)
 - auto, unattended pull (with a standard consolidated class for implementing toast-type automated actions)
 

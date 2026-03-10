@@ -93,13 +93,13 @@ Legend: [x] = code written AND tested/verified. [~] = code written, NOT yet test
 - [x] `allowRenameAll` prop on `ScenarioLayerList` -- enables rename on current/base rows (used by chart props, not by ScenariosPanel)
 
 **Analysis type resolution at creation time**:
-- [x] `resolveAnalysisType` service used in `addCanvasAnalysisAtPosition` (GraphCanvas.tsx) -- resolves primary analysis type from backend before adding analysis to graph, so charts are created with the correct type (not always `graph_overview`)
+- [x] `resolveAnalysisType` service centralised for all places that need available types / primary type (`AnalyticsPanel`, properties-panel auto-resolution, explicit type-driven creation paths)
 - [x] `ElementPalette.tsx` fixed to dispatch `dagnet:addAnalysis` event before setting tool -- ensures GraphCanvas captures selected nodes' DSL via `constructQueryDSL`
 - [x] `dslConstruction.ts` fixed: `normalizeEdges` now correctly maps ReactFlow `node.data.uuid` -> `node.data.id` (human-readable); `computePredicates` correctly reads `entry`/`absorbing` from `node.data`
 - [x] `GraphCanvas.tsx` `addCanvasAnalysisAtPosition` uses `setGraphDirect` (synchronous Zustand setter) instead of async `setGraph` wrapper -- fixes race condition that caused charts to vanish seconds after creation
-- [x] `analysis_type_overridden` set to `true` only when explicit type provided in drag payload; `false` when auto-resolved, allowing subsequent data source changes to trigger re-resolution
-- [x] Unified chart creation pathway: `canvasAnalysisCreationService.ts` provides `buildCanvasAnalysisPayload` + `buildCanvasAnalysisObject`. `addCanvasAnalysisAtPosition` is now synchronous (insertion-only, no async resolution). Element palette pre-resolves type with correct scenario count from tab state before entering draw mode. Analytics panel payloads carry `analysisTypeOverridden: true`. All creation paths converge through the same service.
-- [x] 5 Playwright E2E specs: element palette creation parity (absorbing node + 2 scenarios → bridge_view), analytics panel type verification, Live→Custom toggle stability, settings persistence to IDB, recipe round-trip
+- [x] `analysis_type_overridden` set to `true` only when explicit type provided in drag payload; `false` for blank/auto-managed analyses, allowing subsequent data source changes to trigger re-resolution when appropriate
+- [x] Unified chart creation pathway: `canvasAnalysisCreationService.ts` provides `buildCanvasAnalysisPayload` + `buildCanvasAnalysisObject`. `addCanvasAnalysisAtPosition` is now synchronous (insertion-only, no async resolution). Element palette creates a blank analysis seeded with selection DSL, then shows the inline analysis-type chooser. Analytics panel payloads carry explicit `analysis_type` and `analysisTypeOverridden: true`. All creation paths converge through the same service.
+- [x] 5 Playwright E2E specs: element palette chooser contract, analytics panel type verification, Live→Custom toggle stability, settings persistence to IDB, recipe round-trip
 
 **Auto-update of analysis type when not overridden**:
 - [x] `useEffect` in `CanvasAnalysisPropertiesSection` calls `resolveAnalysisType` with `visibleScenarioCount` -- when scenario count changes (e.g. hide a scenario), backend is re-queried and `is_primary` type is auto-applied if `analysis_type_overridden` is false
@@ -401,10 +401,25 @@ Invariants protected: graph mutation correctness for all canvas analysis lifecyc
 
 **Problem**: Creating a canvas analysis requires either the element palette icon or the analytics panel drag. There is no right-click affordance. Users should be able to select nodes/edges, right-click, and immediately create a canvas analysis with the correct default type. This is one of the most natural discovery paths and is currently missing entirely.
 
-**Current state**:
-- **Graph pane context menu** (`GraphCanvas.tsx` line ~6005): has "Add node", "Add post-it", "Add container". Does NOT have "Add analysis".
-- **Node context menu** (`NodeContextMenu.tsx`): no analysis/chart option.
-- **Edge context menu** (`EdgeContextMenu.tsx`): no analysis/chart option.
+**Context menu work completed (9–10 Mar 26)** — see [4-context-menu-refactor.md](4-context-menu-refactor.md):
+
+- [x] **Add chart** in graph pane context menu — enters drag-to-draw mode (same as post-it/container)
+- [x] **Add chart** in node context menu — passes `onAddChart({ contextNodeIds })` via callback; single code path via `startAddChart` in GraphCanvas
+- [x] **Add chart** in edge context menu — passes `onAddChart({ contextEdgeIds })` via callback; works without prior selection (implicit selection from context menu target)
+- [x] Pane/post-it/container creation use **drag-to-draw** (not click-to-create)
+- [x] Menu item order standardised: params/slider first, then Add chart, then copy/paste/utilities, then Properties near bottom, then Delete
+- [x] `popup-menu.css`: `.dagnet-popup-label`, `.dagnet-popup-item` left-aligned (`justify-content: flex-start`)
+- [x] NodeContextMenu, EdgeContextMenu: `dagnet-popup` classes, Lucide icons
+- [x] CanvasAnalysisContextMenu: Display submenu (registry-driven), Open as Tab, Refresh, Lucide icons
+- [x] PostItContextMenu, ContainerContextMenu: Lucide icons
+- [x] RemoveOverridesMenuItem, DataSectionSubmenu: `dagnet-popup` classes
+- [ ] `useCreateCanvasAnalysis` hook — not implemented; direct `startAddChart` callback used instead
+- [ ] "Create chart >" submenu with analysis types — deferred; single "Add chart" enters draw mode, user picks type after placement
+
+**Current state** (pre-9-Mar work):
+- **Graph pane context menu** (`GraphCanvas.tsx` line ~6005): has "Add node", "Add post-it", "Add container", "Add chart".
+- **Node context menu** (`NodeContextMenu.tsx`): has "Add chart" (after params/data sections).
+- **Edge context menu** (`EdgeContextMenu.tsx`): has "Add chart" (after slider/params/data sections).
 - **Elements menu** (`ElementsMenu.tsx`): ALREADY has "Add Analysis" (dispatches `dagnet:addAnalysis`). No gap here.
 
 **Design**:
@@ -438,17 +453,19 @@ All logic must live in a shared hook (not inline in menu files), and this hook s
 - `ElementPalette.tsx` -- refactor to use shared hook (eliminate `dagnet:addAnalysis` event if possible, or keep event as thin dispatch to hook)
 - `ElementsMenu.tsx` -- already has "Add Analysis"; verify it uses the same code path
 
-- [ ] Create `useCreateCanvasAnalysis` hook with `availableTypes`, `primaryType`, `createAtPosition`
-- [ ] Add "Add analysis" to graph pane context menu (blank, `graph_overview` default)
-- [ ] Add "Create chart >" submenu to `NodeContextMenu` with available types from hook
-- [ ] Add "Create chart >" submenu to `EdgeContextMenu` with available types from hook
-- [ ] Refactor element palette and Elements menu to use shared hook (same code path)
-- [ ] Verify: select 2 nodes -> right-click -> "Create chart" shows correct available types with primary at top
-- [ ] Verify: select edge -> right-click -> "Create chart" shows types for `from(source).to(target)` DSL
+- [ ] Create `useCreateCanvasAnalysis` hook with `availableTypes`, `primaryType`, `createAtPosition` — deferred
+- [x] Add "Add chart" to graph pane context menu (drag-to-draw, blank DSL)
+- [x] Add "Add chart" to `NodeContextMenu` (callback with `contextNodeIds`, single item not submenu)
+- [x] Add "Add chart" to `EdgeContextMenu` (callback with `contextEdgeIds`, single item not submenu)
+- [x] Single code path: `startAddChart` in GraphCanvas, passed as `onAddChart` to node/edge menus; pane calls directly
+- [x] Verify: right-click node -> "Add chart" creates chart with node in DSL
+- [x] Verify: right-click edge -> "Add chart" creates chart with edge in DSL (no prior selection needed)
+- [ ] "Create chart >" submenu with analysis types — deferred; current flow: Add chart → draw → pick type in canvas node
 
 #### 4b. Canvas analysis context menu tidy-up
 
-- [ ] Registry-driven display settings in `CanvasAnalysisContextMenu` (settings marked `contextMenu: true`)
+- [x] Registry-driven Display submenu in `CanvasAnalysisContextMenu` via `buildContextMenuSettingItems()`
+- [ ] Remaining registry settings (font size, orientation, etc.) in context menu
 - [ ] Generalised submenu rendering (consistent `dagnet-popup` styling)
 - [ ] Fix: view mode submenu detached from parent (positioning bug)
 - [ ] Font size in context menu (S/M/L/XL)
@@ -1019,13 +1036,13 @@ Restructure the canvas analysis properties panel into four sections and wire the
 
 ---
 
-## Phase 4 -- Context menu tidy-up (PENDING)
+## Phase 4 -- Context menu tidy-up (IN PROGRESS)
 
-See 4-context-menu-refactor.md
+See [4-context-menu-refactor.md](4-context-menu-refactor.md)
 
-**Display settings in context menus**: `CanvasAnalysisContextMenu` should render display settings marked `contextMenu: true` in the `analysisDisplaySettingsRegistry` as submenu items. The context menu refactor should generalise submenu rendering (consistent styling via `dagnet-popup`, Lucide icons, theme support) so that registry-driven display settings plug in without bespoke code per setting. E.g. font size (S/M/L/XL radio), orientation (vertical/horizontal toggle), show/hide legend (checkbox).
+**Done (9–10 Mar 26)**: Add chart from node/edge/pane menus (single `startAddChart` callback); menu order (params first, Add chart, utilities, Properties near bottom, Delete); `dagnet-popup` styling and Lucide icons across NodeContextMenu, EdgeContextMenu, CanvasAnalysisContextMenu, PostItContextMenu, ContainerContextMenu; registry-driven Display submenu in CanvasAnalysisContextMenu; drag-to-draw for pane creation.
 
-**Known issues**: `CanvasAnalysisContextMenu` view mode submenu is detached from parent (positioning bug).
+**Remaining**: Font size/orientation in canvas analysis context menu; view mode submenu positioning bug; `useCreateCanvasAnalysis` hook and "Create chart >" type submenu (deferred — current flow works).
 
 ---
 

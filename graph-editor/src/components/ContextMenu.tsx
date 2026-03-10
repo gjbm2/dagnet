@@ -1,25 +1,5 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useTheme } from '../contexts/ThemeContext';
-
-/** Resolved colour palette for context menus, derived from current theme. */
-interface MenuColours {
-  bg: string;
-  border: string;
-  shadow: string;
-  divider: string;
-  hoverBg: string;
-  text: string;
-  textMuted: string;
-}
-
-const LIGHT_COLOURS: MenuColours = {
-  bg: '#fff', border: '#dee2e6', shadow: '0 4px 12px rgba(0,0,0,0.15)',
-  divider: '#e9ecef', hoverBg: '#f8f9fa', text: 'inherit', textMuted: '#6B7280',
-};
-const DARK_COLOURS: MenuColours = {
-  bg: '#2d2d2d', border: '#555', shadow: '0 4px 12px rgba(0,0,0,0.4)',
-  divider: '#404040', hoverBg: '#3d3d3d', text: '#e0e0e0', textMuted: '#999',
-};
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import '../styles/popup-menu.css';
 
 export interface ContextMenuItem {
   label: string;
@@ -27,8 +7,12 @@ export interface ContextMenuItem {
   disabled?: boolean;
   divider?: boolean;
   submenu?: ContextMenuItem[];
-  keepMenuOpen?: boolean; // If true, don't close menu after onClick
-  onHover?: () => void; // Called when the item is hovered (useful for lazy-loading submenus)
+  keepMenuOpen?: boolean;
+  onHover?: () => void;
+  /** Optional Lucide icon (14px recommended) */
+  icon?: React.ReactNode;
+  /** Show a check mark to the left, indicating the active/selected option */
+  checked?: boolean;
 }
 
 const MIN_WIDTH_PX = 200;
@@ -63,7 +47,6 @@ interface MenuLevelProps {
   openPath: number[];
   setOpenPath: React.Dispatch<React.SetStateAction<number[]>>;
   onClose: () => void;
-  colours: MenuColours;
 }
 
 const MenuLevel: React.FC<MenuLevelProps> = ({
@@ -75,7 +58,6 @@ const MenuLevel: React.FC<MenuLevelProps> = ({
   openPath,
   setOpenPath,
   onClose,
-  colours,
 }) => {
   const itemRefs = useRef<Array<HTMLDivElement | null>>([]);
 
@@ -117,24 +99,20 @@ const MenuLevel: React.FC<MenuLevelProps> = ({
     return { left, top };
   }, [activeSubmenu, activeAnchorRect]);
 
+  const hasAnyChecked = levelItems.some(i => !i.divider && i.checked !== undefined);
+
   return (
     <>
       <div
         ref={menuRef}
+        className="dagnet-popup"
         style={{
           position: 'fixed',
           left: position.left,
           top: position.top,
-          background: colours.bg,
-          border: `1px solid ${colours.border}`,
-          borderRadius: '6px',
-          boxShadow: colours.shadow,
-          color: colours.text,
           minWidth: `${MIN_WIDTH_PX}px`,
           maxWidth: `min(${MAX_WIDTH_PX}px, calc(100vw - 40px))`,
-          padding: '4px',
           zIndex: 10000 + level,
-          fontSize: '13px',
         }}
         onClick={(e) => e.stopPropagation()}
         onContextMenu={(e) => e.preventDefault()}
@@ -144,7 +122,7 @@ const MenuLevel: React.FC<MenuLevelProps> = ({
             return (
               <div
                 key={`divider-${level}-${index}`}
-                style={{ height: '1px', background: colours.divider, margin: '4px 0' }}
+                className="dagnet-popup-divider"
               />
             );
           }
@@ -158,7 +136,9 @@ const MenuLevel: React.FC<MenuLevelProps> = ({
               ref={(el) => {
                 itemRefs.current[index] = el;
               }}
-              onMouseEnter={(e) => {
+              className={`dagnet-popup-item${isActive ? ' dagnet-popup-item--active' : ''}`}
+              data-disabled={item.disabled ? 'true' : undefined}
+              onMouseEnter={() => {
                 if (item.disabled) return;
                 item.onHover?.();
                 if (hasSubmenu) {
@@ -166,10 +146,6 @@ const MenuLevel: React.FC<MenuLevelProps> = ({
                 } else {
                   setOpenPath(prefix);
                 }
-                e.currentTarget.style.background = colours.hoverBg;
-              }}
-              onMouseLeave={(e) => {
-                e.currentTarget.style.background = isActive ? colours.hoverBg : 'transparent';
               }}
               onClick={(e) => {
                 if (item.disabled) return;
@@ -179,16 +155,15 @@ const MenuLevel: React.FC<MenuLevelProps> = ({
                 if (!item.keepMenuOpen) onClose();
               }}
               style={{
-                padding: '8px 12px',
                 cursor: item.disabled ? 'not-allowed' : hasSubmenu ? 'default' : 'pointer',
-                borderRadius: '2px',
                 opacity: item.disabled ? 0.5 : 1,
-                display: 'flex',
-                justifyContent: 'space-between',
-                alignItems: 'center',
-                background: isActive ? colours.hoverBg : 'transparent',
               }}
             >
+              {hasAnyChecked && (
+                <span className="dagnet-popup-check" aria-hidden="true">
+                  {item.checked ? '✓' : ''}
+                </span>
+              )}
               <span
                 title={item.label}
                 style={{
@@ -196,11 +171,15 @@ const MenuLevel: React.FC<MenuLevelProps> = ({
                   textOverflow: 'ellipsis',
                   whiteSpace: 'nowrap',
                   maxWidth: '320px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 8,
                 }}
               >
+                {item.icon}
                 {item.label}
               </span>
-              {hasSubmenu ? <span style={{ color: colours.textMuted }}>›</span> : null}
+              {hasSubmenu ? <span className="dagnet-popup-arrow">›</span> : null}
             </div>
           );
         })}
@@ -215,7 +194,6 @@ const MenuLevel: React.FC<MenuLevelProps> = ({
           openPath={openPath}
           setOpenPath={setOpenPath}
           onClose={onClose}
-          colours={colours}
         />
       )}
     </>
@@ -234,8 +212,6 @@ interface ContextMenuProps {
  * Reusable for tabs, navigator items, etc.
  */
 export function ContextMenu({ x, y, items, onClose }: ContextMenuProps) {
-  const { theme } = useTheme();
-  const colours = theme === 'dark' ? DARK_COLOURS : LIGHT_COLOURS;
   const rootMenuRef = useRef<HTMLDivElement>(null);
   const [rootPosition, setRootPosition] = useState({ left: x, top: y });
   const [openPath, setOpenPath] = useState<number[]>([]);
@@ -301,7 +277,6 @@ export function ContextMenu({ x, y, items, onClose }: ContextMenuProps) {
       openPath={openPath}
       setOpenPath={setOpenPath}
       onClose={onClose}
-      colours={colours}
     />
   );
 }

@@ -354,6 +354,13 @@ describe('analysisDisplaySettingsRegistry', () => {
     expect(settings.find(s => s.key === 'stack_mode')).toBeDefined();
   });
 
+  it('should include metric_mode for comparison chart kinds', () => {
+    for (const kind of ['bar_grouped', 'time_series']) {
+      const settings = getDisplaySettings(kind, 'chart');
+      expect(settings.find(s => s.key === 'metric_mode'), `${kind} missing metric_mode`).toBeDefined();
+    }
+  });
+
   // ============================================================
   // Capability group: CUMULATIVE — daily_conversions
   // ============================================================

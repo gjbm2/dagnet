@@ -31,7 +31,8 @@ import ConversionNode from './nodes/ConversionNode';
 import PostItNode from './nodes/PostItNode';
 import ContainerNode from './nodes/ContainerNode';
 import CanvasAnalysisNode from './nodes/CanvasAnalysisNode';
-import { canvasAnalysisTransientCache } from '../hooks/useCanvasAnalysisCompute';
+import { canvasAnalysisTransientCache, canvasAnalysisResultCache } from '../hooks/useCanvasAnalysisCompute';
+import { chartOperationsService } from '../services/chartOperationsService';
 
 /**
  * Pending payload for the draw-to-create analysis tool.
@@ -65,8 +66,8 @@ import { CanvasAnalysisContextMenu } from './CanvasAnalysisContextMenu';
 import { SelectionConnectors } from './SelectionConnectors';
 import { captureTabScenariosToRecipe } from '../services/captureTabScenariosService';
 import { constructDSLFromSelection } from '../lib/dslConstruction';
-import { resolveAnalysisType } from '../services/analysisTypeResolutionService';
 import { buildCanvasAnalysisObject } from '../services/canvasAnalysisCreationService';
+import { resolveAnalysisType } from '../services/analysisTypeResolutionService';
 import { mutateCanvasAnalysisGraph, deleteCanvasAnalysisFromGraph } from '../services/canvasAnalysisMutationService';
 import { ScenarioQueryEditModal } from './modals/ScenarioQueryEditModal';
 import { EdgeContextMenu } from './EdgeContextMenu';
@@ -90,6 +91,7 @@ import { buildScenarioRenderEdges } from './canvas/buildScenarioRenderEdges';
 import { getCaseEdgeVariantInfo } from './edges/edgeLabelHelpers';
 import { MAX_EDGE_WIDTH, MIN_EDGE_WIDTH, DEFAULT_NODE_WIDTH, DEFAULT_NODE_HEIGHT, MIN_NODE_HEIGHT, MAX_NODE_HEIGHT, IMAGE_VIEW_NODE_WIDTH, IMAGE_VIEW_NODE_HEIGHT } from '@/lib/nodeEdgeConstants';
 import { getSeverityIcon } from './issues/issueIcons';
+import { Monitor, MonitorOff, X, Plus, StickyNote, Square, BarChart3, Clipboard, CheckSquare } from 'lucide-react';
 
 const nodeTypes: NodeTypes = {
   conversion: ConversionNode,
@@ -497,6 +499,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
   const [postitContextMenu, setPostitContextMenu] = useState<{ x: number; y: number; postitId: string } | null>(null);
   const [containerContextMenu, setContainerContextMenu] = useState<{ x: number; y: number; containerId: string } | null>(null);
   const [analysisContextMenu, setAnalysisContextMenu] = useState<{ x: number; y: number; analysisId: string } | null>(null);
+  const [analysisCtxAvailableTypes, setAnalysisCtxAvailableTypes] = useState<import('../lib/graphComputeClient').AvailableAnalysis[]>([]);
   const [ctxDslEditState, setCtxDslEditState] = useState<{ analysisId: string; scenarioId: string } | null>(null);
   const [edgeContextMenu, setEdgeContextMenu] = useState<{ x: number; y: number; edgeId: string } | null>(null);
   const [contextMenuLocalData, setContextMenuLocalData] = useState<{
@@ -1542,6 +1545,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
   }, [setNodes]);
 
   const autoEditPostitIdRef = useRef<string | null>(null);
+  const autoSelectAnalysisIdRef = useRef<string | null>(null);
   const postitHistoryTimerRef = useRef<NodeJS.Timeout | null>(null);
   const handleUpdatePostit = useCallback((id: string, updates: any) => {
     if (!graph) return;
@@ -2402,13 +2406,18 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
 
     // Restore selection state + inject autoEdit flag for newly created post-its
     const autoEditNodeId = autoEditPostitIdRef.current ? `postit-${autoEditPostitIdRef.current}` : null;
+    const autoSelectAnalysisNodeId = autoSelectAnalysisIdRef.current ? `analysis-${autoSelectAnalysisIdRef.current}` : null;
+    const autoSelectId = autoEditNodeId || autoSelectAnalysisNodeId;
     let nodesWithSelection = newNodes.map(node => {
       const withColour = injectContainerColour(node);
-      const base = { ...withColour, selected: autoEditNodeId ? withColour.id === autoEditNodeId : selectedNodeIds.has(withColour.id) };
+      const base = { ...withColour, selected: autoSelectId ? withColour.id === autoSelectId : selectedNodeIds.has(withColour.id) };
       if (autoEditNodeId && withColour.id === autoEditNodeId) {
         console.log(`[GraphCanvas] Injecting autoEdit for ${withColour.id}, selected=true`);
         autoEditPostitIdRef.current = null;
         return { ...base, data: { ...base.data, autoEdit: true } };
+      }
+      if (autoSelectAnalysisNodeId && withColour.id === autoSelectAnalysisNodeId) {
+        autoSelectAnalysisIdRef.current = null;
       }
       return base;
     });
@@ -4934,6 +4943,25 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
     });
   }, [screenToFlowPosition]);
 
+  // Resolve available analysis types when the canvas analysis context menu opens
+  useEffect(() => {
+    if (!analysisContextMenu || !graph) {
+      setAnalysisCtxAvailableTypes([]);
+      return;
+    }
+    const analysis = graph.canvasAnalyses?.find((a: any) => a.id === analysisContextMenu.analysisId) as any;
+    if (!analysis) return;
+    let cancelled = false;
+    const dsl = analysis.recipe?.analysis?.analytics_dsl;
+    const scenarioCount = analysis.live
+      ? (tabId ? tabOperations.getScenarioState(tabId)?.visibleScenarioIds?.length : null) || 1
+      : (analysis.recipe?.scenarios?.length || 1);
+    resolveAnalysisType(graph, dsl || undefined, scenarioCount).then(({ availableAnalyses }) => {
+      if (!cancelled) setAnalysisCtxAvailableTypes(availableAnalyses);
+    });
+    return () => { cancelled = true; };
+  }, [analysisContextMenu, graph, tabId, tabOperations]);
+
   // Close context menus on any click
   useEffect(() => {
     if (contextMenu || nodeContextMenu || postitContextMenu || containerContextMenu || analysisContextMenu || edgeContextMenu) {
@@ -5090,7 +5118,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
 
     const analysis = buildCanvasAnalysisObject(
       {
-        recipe: dragData.recipe || { analysis: { analysis_type: dragData.analysisType || 'graph_overview' } },
+        recipe: dragData.recipe || { analysis: { analysis_type: dragData.analysisType || '' } },
         viewMode: dragData.viewMode || 'chart',
         chartKind: dragData.chartKind,
         analysisResult: dragData.analysisResult,
@@ -5107,6 +5135,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
       canvasAnalysisTransientCache.set(analysis.id, dragData.analysisResult);
     }
 
+    autoSelectAnalysisIdRef.current = analysis.id;
     setGraphDirect(nextGraph as any);
     saveHistoryState('Pin analysis to canvas');
     setContextMenu(null);
@@ -5115,44 +5144,76 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
     onSelectedAnnotationChange?.(analysis.id, 'canvasAnalysis');
   }, [graph, setGraphDirect, saveHistoryState, onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnnotationChange]);
 
+  const startPinnedCanvasAnalysis = useCallback((payload?: any) => {
+    pendingAnalysisPayload = payload || {};
+    setActiveElementTool('new-analysis');
+  }, [setActiveElementTool]);
+
+  const startAddChart = useCallback((detail?: { contextNodeIds?: string[]; contextEdgeIds?: string[] }) => {
+    const ctxNodeIds: string[] = detail?.contextNodeIds || [];
+    const ctxEdgeIds: string[] = detail?.contextEdgeIds || [];
+
+    const selectedConversionNodes = nodes
+      .filter(n => n.selected && !isCanvasObjectNode(n.id))
+      .map(n => n.data?.id || n.id);
+
+    const selectedEdgeUuids = edges
+      .filter(e => e.selected)
+      .map(e => e.id);
+
+    const mergedNodeIds = [...new Set([...selectedConversionNodes, ...ctxNodeIds])];
+    const mergedEdgeIds = [...new Set([...selectedEdgeUuids, ...ctxEdgeIds])];
+
+    let analyticsDsl = constructDSLFromSelection(
+      mergedNodeIds, mergedEdgeIds, nodes as any[], (graph?.edges || []) as any[],
+    );
+
+    if (!analyticsDsl && ctxEdgeIds.length > 0 && graph?.edges) {
+      const ge = graph.edges.find((ed: any) => ed.uuid === ctxEdgeIds[0] || ed.id === ctxEdgeIds[0]);
+      if (ge) {
+        const fromRaw: string = ge.from || (ge as any).source || '';
+        const toRaw: string = ge.to || (ge as any).target || '';
+        const fromNode = graph.nodes?.find((n: any) => n.uuid === fromRaw || n.id === fromRaw);
+        const toNode = graph.nodes?.find((n: any) => n.uuid === toRaw || n.id === toRaw);
+        const fromId = fromNode?.id || fromRaw;
+        const toId = toNode?.id || toRaw;
+        if (fromId && toId) {
+          analyticsDsl = `from(${fromId}).to(${toId})`;
+        }
+      }
+    }
+
+    pendingAnalysisPayload = {
+      recipe: { analysis: { analysis_type: '', analytics_dsl: analyticsDsl || undefined } },
+      analysisTypeOverridden: false,
+    };
+    setActiveElementTool('new-analysis');
+  }, [nodes, edges, isCanvasObjectNode, graph, setActiveElementTool]);
+
   // Listen for 'dagnet:pinAnalysisToCanvas' event — enters draw mode with a pre-filled recipe
   useEffect(() => {
     const handler = (e: CustomEvent) => {
-      pendingAnalysisPayload = e.detail || {};
-      setActiveElementTool('new-analysis');
+      if (tabId !== effectiveActiveTabId) return;
+      startPinnedCanvasAnalysis(e.detail);
     };
     window.addEventListener('dagnet:pinAnalysisToCanvas', handler as any);
     return () => window.removeEventListener('dagnet:pinAnalysisToCanvas', handler as any);
-  }, [setActiveElementTool]);
+  }, [startPinnedCanvasAnalysis, tabId, effectiveActiveTabId]);
 
-  // Listen for 'dagnet:addAnalysis' event — resolves type from selection, then enters draw mode
+  // Listen for 'dagnet:addAnalysis' event — captures selection DSL, then enters draw mode.
+  // Analysis type is always left empty so the canvas node shows the icon picker.
+  // The user explicitly chooses the analysis type after placing the chart on canvas.
+  //
+  // Context menus pass detail.contextNodeIds (human-readable) / detail.contextEdgeIds (UUIDs)
+  // so right-clicking a node/edge and choosing "Add chart" works even without a prior selection.
   useEffect(() => {
-    const handler = async () => {
-      const selectedConversionNodes = nodes
-        .filter(n => n.selected && !isCanvasObjectNode(n.id))
-        .map(n => n.data?.id || n.id);
-
-      const selectedEdgeUuids = edges
-        .filter(e => e.selected)
-        .map(e => e.id);
-
-      const analyticsDsl = constructDSLFromSelection(
-        selectedConversionNodes, selectedEdgeUuids, nodes as any[], (graph?.edges || []) as any[],
-      );
-
-      const currentScenarioState = tabId ? tabs.find(t => t.id === tabId)?.editorState?.scenarioState : undefined;
-      const scenarioCount = (currentScenarioState?.visibleScenarioIds || ['current']).length;
-      const { primaryAnalysisType } = await resolveAnalysisType(graph, analyticsDsl || undefined, scenarioCount);
-
-      pendingAnalysisPayload = {
-        recipe: { analysis: { analysis_type: primaryAnalysisType || 'graph_overview', analytics_dsl: analyticsDsl || undefined } },
-        analysisTypeOverridden: false,
-      };
-      setActiveElementTool('new-analysis');
+    const handler = (e: Event) => {
+      if (tabId !== effectiveActiveTabId) return;
+      startAddChart((e as CustomEvent).detail || {});
     };
     window.addEventListener('dagnet:addAnalysis', handler as any);
     return () => window.removeEventListener('dagnet:addAnalysis', handler as any);
-  }, [setActiveElementTool, nodes, edges, isCanvasObjectNode, graph, tabId, tabs]);
+  }, [startAddChart, tabId, effectiveActiveTabId]);
 
   // Drag-to-draw state for creation modes (new-postit, new-container)
   const drawStartRef = useRef<{ screenX: number; screenY: number; flowX: number; flowY: number; tool: string } | null>(null);
@@ -5988,31 +6049,33 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
           className="dagnet-popup"
           style={{ position: 'fixed', left: contextMenu.x, top: contextMenu.y }}
         >
-          <div className="dagnet-popup-item" onClick={(e) => { e.stopPropagation(); setContextMenu(null); toggleDashboardMode({ updateUrl: true }); }}>
-            🖥️ {isDashboardMode ? 'Exit dashboard mode' : 'Enter dashboard mode'}
+          <div className="dagnet-popup-item" onClick={(e) => { e.stopPropagation(); addNodeAtPosition(contextMenu.flowX, contextMenu.flowY); setContextMenu(null); }} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <Plus size={14} />
+            Add node
           </div>
-          {tabId && (
-            <div className="dagnet-popup-item" onClick={async (e) => { e.stopPropagation(); setContextMenu(null); await tabOperations.closeTab(tabId); }}>
-              ✖ Close tab
-            </div>
-          )}
-          <div className="dagnet-popup-item" onClick={(e) => { e.stopPropagation(); addNodeAtPosition(contextMenu.flowX, contextMenu.flowY); }}>
-            ➕ Add node
+          <div className="dagnet-popup-item" onClick={(e) => { e.stopPropagation(); setActiveElementTool('new-postit'); setContextMenu(null); }} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <StickyNote size={14} />
+            Add post-it
           </div>
-          <div className="dagnet-popup-item" onClick={(e) => { e.stopPropagation(); addPostitAtPosition(contextMenu.flowX, contextMenu.flowY); }}>
-            📝 Add post-it
+          <div className="dagnet-popup-item" onClick={(e) => { e.stopPropagation(); setActiveElementTool('new-container'); setContextMenu(null); }} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <Square size={14} />
+            Add container
           </div>
-          <div className="dagnet-popup-item" onClick={(e) => { e.stopPropagation(); addContainerAtPosition(contextMenu.flowX, contextMenu.flowY); }}>
-            ▢ Add container
+          <div className="dagnet-popup-item" onClick={(e) => { e.stopPropagation(); startAddChart(); setContextMenu(null); }} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <BarChart3 size={14} />
+            Add chart
           </div>
+          <div className="dagnet-popup-divider" />
           {copiedNode && (
-            <div className="dagnet-popup-item" onClick={(e) => { e.stopPropagation(); pasteNodeAtPosition(contextMenu.flowX, contextMenu.flowY); }}>
-              📋 Paste node: {copiedNode.objectId}
+            <div className="dagnet-popup-item" onClick={(e) => { e.stopPropagation(); pasteNodeAtPosition(contextMenu.flowX, contextMenu.flowY); setContextMenu(null); }} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <Clipboard size={14} />
+              Paste node: {copiedNode.objectId}
             </div>
           )}
           {copiedSubgraph && (
-            <div className="dagnet-popup-item" onClick={(e) => { e.stopPropagation(); pasteSubgraphAtPosition(contextMenu.flowX, contextMenu.flowY); }}>
-              📋 Paste ({[
+            <div className="dagnet-popup-item" onClick={(e) => { e.stopPropagation(); pasteSubgraphAtPosition(contextMenu.flowX, contextMenu.flowY); setContextMenu(null); }} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <Clipboard size={14} />
+              Paste ({[
                 copiedSubgraph.nodes.length > 0 && `${copiedSubgraph.nodes.length} node${copiedSubgraph.nodes.length !== 1 ? 's' : ''}`,
                 copiedSubgraph.edges.length > 0 && `${copiedSubgraph.edges.length} edge${copiedSubgraph.edges.length !== 1 ? 's' : ''}`,
                 (copiedSubgraph.postits?.length ?? 0) > 0 && `${copiedSubgraph.postits!.length} post-it${copiedSubgraph.postits!.length !== 1 ? 's' : ''}`,
@@ -6020,8 +6083,20 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
             </div>
           )}
           {nodes.length > 0 && (
-            <div className="dagnet-popup-item" onClick={(e) => { e.stopPropagation(); window.dispatchEvent(new CustomEvent('dagnet:selectAllNodes')); setContextMenu(null); }}>
-              ⬜ Select All
+            <div className="dagnet-popup-item" onClick={(e) => { e.stopPropagation(); window.dispatchEvent(new CustomEvent('dagnet:selectAllNodes')); setContextMenu(null); }} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <CheckSquare size={14} />
+              Select All
+            </div>
+          )}
+          {(copiedNode || copiedSubgraph || nodes.length > 0) && <div className="dagnet-popup-divider" />}
+          <div className="dagnet-popup-item" onClick={(e) => { e.stopPropagation(); setContextMenu(null); toggleDashboardMode({ updateUrl: true }); }} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            {isDashboardMode ? <MonitorOff size={14} /> : <Monitor size={14} />}
+            {isDashboardMode ? 'Exit dashboard mode' : 'Enter dashboard mode'}
+          </div>
+          {tabId && (
+            <div className="dagnet-popup-item" onClick={async (e) => { e.stopPropagation(); setContextMenu(null); await tabOperations.closeTab(tabId); }} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <X size={14} />
+              Close tab
             </div>
           )}
         </div>
@@ -6312,6 +6387,13 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
         const analysis = graph.canvasAnalyses?.find((a: any) => a.id === analysisContextMenu.analysisId);
         if (!analysis) return null;
         const analysisCount = (graph.canvasAnalyses?.length ?? 0) + (graph.postits?.length ?? 0);
+        const cachedResult = canvasAnalysisResultCache.get(analysisContextMenu.analysisId);
+        const effectiveChartKind = analysis.chart_kind || cachedResult?.semantics?.chart?.recommended || cachedResult?.analysis_type || undefined;
+        const hiddenScenarios = new Set<string>((((analysis.display as any)?.hidden_scenarios) || []) as string[]);
+        const visibleScenarioIds = analysis.live
+          ? (tabId ? tabOperations.getScenarioState(tabId)?.visibleScenarioIds : null) || ['current']
+          : (analysis.recipe?.scenarios || []).filter((s: any) => !hiddenScenarios.has(s.scenario_id)).map((s: any) => s.scenario_id);
+        const currentTab = tabId ? tabs.find(t => t.id === tabId) : undefined;
         return (
           <CanvasAnalysisContextMenu
             x={analysisContextMenu.x}
@@ -6321,6 +6403,68 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
             analysisCount={analysisCount}
             onUpdate={(id, updates) => {
               handleUpdateAnalysis(id, updates);
+              setAnalysisContextMenu(null);
+            }}
+            effectiveChartKind={effectiveChartKind}
+            display={analysis.display as Record<string, unknown> | undefined}
+            onDisplayChange={(key, value) => {
+              handleUpdateAnalysis(analysisContextMenu.analysisId, {
+                display: { ...(analysis.display as Record<string, unknown> || {}), [key]: value },
+              });
+              setAnalysisContextMenu(null);
+            }}
+            hasCachedResult={!!cachedResult}
+            availableAnalyses={analysisCtxAvailableTypes}
+            onAnalysisTypeChange={(typeId) => {
+              handleUpdateAnalysis(analysisContextMenu.analysisId, {
+                recipe: { ...analysis.recipe, analysis: { ...analysis.recipe.analysis, analysis_type: typeId } },
+                analysis_type_overridden: true,
+              } as any);
+              setAnalysisContextMenu(null);
+            }}
+            overlayActive={!!analysis.display?.show_subject_overlay}
+            overlayColour={analysis.display?.subject_overlay_colour as string | undefined}
+            onOverlayToggle={(active) => {
+              const colour = analysis.display?.subject_overlay_colour || '#3b82f6';
+              handleUpdateAnalysis(analysisContextMenu.analysisId, {
+                display: { ...(analysis.display as Record<string, unknown> || {}), show_subject_overlay: active, ...(active ? { subject_overlay_colour: colour } : {}) },
+              });
+              setAnalysisContextMenu(null);
+            }}
+            onOverlayColourChange={(colour) => {
+              if (colour) {
+                handleUpdateAnalysis(analysisContextMenu.analysisId, {
+                  display: { ...(analysis.display as Record<string, unknown> || {}), show_subject_overlay: true, subject_overlay_colour: colour },
+                });
+              } else {
+                handleUpdateAnalysis(analysisContextMenu.analysisId, {
+                  display: { ...(analysis.display as Record<string, unknown> || {}), show_subject_overlay: false, subject_overlay_colour: undefined },
+                });
+              }
+              setAnalysisContextMenu(null);
+            }}
+            onOpenAsTab={cachedResult ? () => {
+              chartOperationsService.openAnalysisChartTabFromAnalysis({
+                chartKind: effectiveChartKind as any,
+                analysisResult: cachedResult,
+                scenarioIds: visibleScenarioIds,
+                title: analysis.title || undefined,
+                source: {
+                  parent_tab_id: tabId,
+                  parent_file_id: currentTab?.fileId,
+                  query_dsl: analysis.recipe?.analysis?.analytics_dsl || undefined,
+                  analysis_type: analysis.recipe?.analysis?.analysis_type || undefined,
+                },
+                render: {
+                  chart_kind: analysis.chart_kind || undefined,
+                  view_mode: analysis.view_mode || 'chart',
+                  display: (analysis.display || {}) as Record<string, unknown>,
+                },
+              });
+              setAnalysisContextMenu(null);
+            } : undefined}
+            onRefresh={() => {
+              window.dispatchEvent(new CustomEvent('dagnet:canvasAnalysisRefresh', { detail: { analysisId: analysisContextMenu.analysisId } }));
               setAnalysisContextMenu(null);
             }}
             onCaptureFromTab={tabId && scenariosContext ? () => {
@@ -6463,6 +6607,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
           graph={graph}
           setGraph={setGraph}
           onClose={() => setNodeContextMenu(null)}
+          onAddChart={startAddChart}
           onSelectNode={onSelectedNodeChange}
           onDeleteNode={deleteNode}
         />
@@ -6478,6 +6623,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
           edges={edges}
           graph={graph}
           graphFileId={graphFileId}
+          onAddChart={startAddChart}
               onClose={() => {
                 setEdgeContextMenu(null);
                 setContextMenuLocalData(null);

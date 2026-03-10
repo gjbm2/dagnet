@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useMemo, useCallback } from 'react';
+import React, { useEffect, useRef, useMemo, useState, useCallback } from 'react';
 import { NodeProps, NodeResizer } from 'reactflow';
 import type { CanvasAnalysis } from '@/types';
 import { useCanvasAnalysisCompute } from '@/hooks/useCanvasAnalysisCompute';
@@ -7,8 +7,11 @@ import { useScenariosContextOptional } from '@/contexts/ScenariosContext';
 import { useTabContext } from '@/contexts/TabContext';
 import { AnalysisChartContainer } from '../charts/AnalysisChartContainer';
 import { AnalysisResultCards } from '../analytics/AnalysisResultCards';
-import { Loader2, AlertCircle, ServerOff, BarChart3 } from 'lucide-react';
+import { resolveAnalysisType } from '@/services/analysisTypeResolutionService';
+import { captureTabScenariosToRecipe } from '@/services/captureTabScenariosService';
+import { Loader2, AlertCircle, ServerOff } from 'lucide-react';
 import { InlineEditableLabel } from '../InlineEditableLabel';
+import type { AvailableAnalysis } from '@/lib/graphComputeClient';
 
 interface CanvasAnalysisNodeData {
   analysis: CanvasAnalysis;
@@ -19,7 +22,7 @@ interface CanvasAnalysisNodeData {
 
 export default function CanvasAnalysisNode({ data, selected }: NodeProps<CanvasAnalysisNodeData>) {
   const { analysis: analysisProp, tabId, onUpdate, onDelete } = data;
-  const { graph } = useGraphStore();
+  const { graph, currentDSL } = useGraphStore();
   const analysis = useMemo(() => {
     const fromStore = (graph as any)?.canvasAnalyses?.find((a: any) => a.id === analysisProp.id);
     return (fromStore || analysisProp) as CanvasAnalysis;
@@ -39,6 +42,10 @@ export default function CanvasAnalysisNode({ data, selected }: NodeProps<CanvasA
     tabId,
   });
 
+  const [availableAnalyses, setAvailableAnalyses] = useState<AvailableAnalysis[]>([]);
+  const hasAnalysisType = !!analysis.recipe?.analysis?.analysis_type;
+  const analyticsDsl = analysis.recipe?.analysis?.analytics_dsl;
+
   const visibleScenarioIds = useMemo(() => {
     if (!analysis.live && analysis.recipe.scenarios) {
       const hidden = new Set<string>((((analysis.display as any)?.hidden_scenarios) || []) as string[]);
@@ -52,6 +59,16 @@ export default function CanvasAnalysisNode({ data, selected }: NodeProps<CanvasA
     }
     return ['current'];
   }, [analysis.live, analysis.recipe.scenarios, analysis.display, tabId, operations, tabs]);
+
+  const scenarioCount = visibleScenarioIds.length || 1;
+  useEffect(() => {
+    if (!graph) return;
+    let cancelled = false;
+    resolveAnalysisType(graph, analyticsDsl || undefined, scenarioCount).then(({ availableAnalyses: resolved }) => {
+      if (!cancelled) setAvailableAnalyses(resolved);
+    });
+    return () => { cancelled = true; };
+  }, [graph, analyticsDsl, scenarioCount]);
 
   const scenarioVisibilityModes = useMemo(() => {
     const m: Record<string, 'f+e' | 'f' | 'e'> = {};
@@ -115,6 +132,51 @@ export default function CanvasAnalysisNode({ data, selected }: NodeProps<CanvasA
   }, []);
 
 
+  const handleLiveToggle = useCallback((live: boolean) => {
+    if (live && !analysis.live) {
+      onUpdate(analysis.id, {
+        live: true,
+        recipe: { ...analysis.recipe, scenarios: undefined, analysis: { ...analysis.recipe.analysis, what_if_dsl: undefined } },
+      } as any);
+    } else if (!live && analysis.live) {
+      const liveTabId = tabId || tabs[0]?.id;
+      if (liveTabId && scenariosContext) {
+        const currentTab = tabs.find(t => t.id === liveTabId);
+        const whatIfDSL = currentTab?.editorState?.whatIfDSL || null;
+        const { scenarios: captured, what_if_dsl } = captureTabScenariosToRecipe({
+          tabId: liveTabId,
+          currentDSL: currentDSL || '',
+          operations,
+          scenariosContext: scenariosContext as any,
+          whatIfDSL,
+        });
+        onUpdate(analysis.id, {
+          live: false,
+          recipe: { ...analysis.recipe, scenarios: captured, analysis: { ...analysis.recipe.analysis, what_if_dsl } },
+        } as any);
+      }
+    }
+  }, [analysis, onUpdate, tabId, tabs, scenariosContext, operations, currentDSL]);
+
+  const handleOverlayToggle = useCallback((active: boolean) => {
+    const colour = analysis.display?.subject_overlay_colour || '#3b82f6';
+    onUpdate(analysis.id, {
+      display: { ...analysis.display, show_subject_overlay: active, ...(active ? { subject_overlay_colour: colour } : {}) },
+    });
+  }, [analysis, onUpdate]);
+
+  const handleOverlayColourChange = useCallback((colour: string | null) => {
+    if (colour) {
+      onUpdate(analysis.id, {
+        display: { ...analysis.display, show_subject_overlay: true, subject_overlay_colour: colour },
+      });
+    } else {
+      onUpdate(analysis.id, {
+        display: { ...analysis.display, show_subject_overlay: false, subject_overlay_colour: undefined },
+      });
+    }
+  }, [analysis, onUpdate]);
+
   const chartSource = useMemo(() => {
     const currentTab = tabId ? tabs.find(t => t.id === tabId) : undefined;
     return {
@@ -125,7 +187,7 @@ export default function CanvasAnalysisNode({ data, selected }: NodeProps<CanvasA
     };
   }, [tabId, tabs, analysis.recipe?.analysis?.analytics_dsl, analysis.recipe?.analysis?.analysis_type]);
 
-  const displayTitle = analysis.title || result?.analysis_name || analysis.recipe.analysis.analysis_type;
+  const displayTitle = analysis.title || result?.analysis_name || analysis.recipe.analysis.analysis_type || 'Analysis';
 
   return (
     <div
@@ -187,7 +249,7 @@ export default function CanvasAnalysisNode({ data, selected }: NodeProps<CanvasA
       >
         <InlineEditableLabel
           value={analysis.title || ''}
-          placeholder={result?.analysis_name || analysis.recipe.analysis.analysis_type || 'Untitled'}
+          placeholder={result?.analysis_name || analysis.recipe.analysis.analysis_type || 'Choose analysis type'}
           selected={!!selected}
           onCommit={(v) => onUpdate(analysis.id, { title: v })}
           displayStyle={{ flex: 1 }}
@@ -202,7 +264,7 @@ export default function CanvasAnalysisNode({ data, selected }: NodeProps<CanvasA
             CUSTOM
           </span>
         )}
-        {(loading || waitingForDeps) && <Loader2 size={12} style={{ animation: 'spin 1s linear infinite', flexShrink: 0 }} />}
+        {hasAnalysisType && (loading || waitingForDeps) && <Loader2 size={12} style={{ animation: 'spin 1s linear infinite', flexShrink: 0 }} />}
       </div>
 
       {/* Content area */}
@@ -218,35 +280,28 @@ export default function CanvasAnalysisNode({ data, selected }: NodeProps<CanvasA
             <Loader2 size={20} style={{ animation: 'spin 1s linear infinite', color: 'var(--text-muted, #6b7280)' }} />
           </div>
         )}
-        {!analysis.recipe?.analysis?.analytics_dsl && !result && !loading && !error && (
-          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', gap: 8, color: 'var(--text-muted)', padding: 16 }}>
-            <BarChart3 size={28} />
-            <span style={{ fontSize: 12, textAlign: 'center' }}>Select this analysis and set the Analytics DSL in the properties panel</span>
-          </div>
-        )}
-
-        {backendUnavailable && (
+        {hasAnalysisType && backendUnavailable && (
           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', gap: 8, color: 'var(--text-muted)', padding: 16 }}>
             <ServerOff size={28} />
             <span style={{ fontSize: 12, textAlign: 'center' }}>Analysis backend unavailable</span>
           </div>
         )}
 
-        {!backendUnavailable && error && !result && (
+        {hasAnalysisType && !backendUnavailable && error && !result && (
           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', gap: 8, color: 'var(--color-danger)', padding: 16 }}>
             <AlertCircle size={24} />
             <span style={{ fontSize: 11, textAlign: 'center', maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', WebkitLineClamp: 3, display: '-webkit-box', WebkitBoxOrient: 'vertical' }}>{error}</span>
           </div>
         )}
 
-        {!backendUnavailable && !result && !error && (loading || waitingForDeps) && (
+        {hasAnalysisType && !backendUnavailable && !result && !error && (loading || waitingForDeps) && (
           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', gap: 8, color: 'var(--text-muted)' }}>
             <Loader2 size={28} style={{ animation: 'spin 1s linear infinite' }} />
             <span style={{ fontSize: 12 }}>{waitingForDeps ? 'Loading chart dependencies...' : 'Computing...'}</span>
           </div>
         )}
 
-        {result && analysis.view_mode === 'chart' && (
+        {analysis.view_mode === 'chart' && (result || !hasAnalysisType) && (
           <AnalysisChartContainer
             result={result}
             chartKindOverride={analysis.chart_kind}
@@ -254,13 +309,32 @@ export default function CanvasAnalysisNode({ data, selected }: NodeProps<CanvasA
             scenarioVisibilityModes={scenarioVisibilityModes}
             scenarioMetaById={scenarioMetaById}
             display={analysis.display}
+            onChartKindChange={(kind) => {
+              onUpdate(analysis.id, { chart_kind: kind || undefined } as any);
+            }}
             onDisplayChange={(key, value) => {
               onUpdate(analysis.id, { display: { ...analysis.display, [key]: value } });
             }}
             source={chartSource}
             fillHeight
             chartContext="canvas"
-            hideScenarioLegend={analysis.live}
+            hideScenarioLegend={analysis.live && analysis.display?.show_legend !== true}
+            analysisTypeId={analysis.recipe?.analysis?.analysis_type}
+            availableAnalyses={availableAnalyses}
+            onAnalysisTypeChange={(id) => {
+              onUpdate(analysis.id, {
+                recipe: { ...analysis.recipe, analysis: { ...analysis.recipe.analysis, analysis_type: id } },
+                analysis_type_overridden: true,
+              } as any);
+            }}
+            analysisLive={!!analysis.live}
+            onLiveToggle={handleLiveToggle}
+            overlayActive={!!analysis.display?.show_subject_overlay}
+            overlayColour={analysis.display?.subject_overlay_colour as string | undefined}
+            onOverlayToggle={handleOverlayToggle}
+            onOverlayColourChange={handleOverlayColourChange}
+            analysisId={analysis.id}
+            onDelete={() => onDelete(analysis.id)}
           />
         )}
 

@@ -87,7 +87,7 @@ describe('Canvas analysis CRUD: Create', () => {
     expect(analysis.analysis_type_overridden).toBe(true);
   });
 
-  it('should create blank analysis with graph_overview when no selection', () => {
+  it('should create blank analysis with no selected type when no selection', () => {
     const dsl = constructQueryDSL([], REACTFLOW_NODES as any[], GRAPH_BASE.edges as any[]);
     expect(dsl).toBe('');
 
@@ -95,7 +95,7 @@ describe('Canvas analysis CRUD: Create', () => {
     const analysis = buildCanvasAnalysisObject(payload, { x: 50, y: 50 }, { width: 400, height: 300 });
 
     expect(analysis.recipe.analysis.analytics_dsl).toBeUndefined();
-    expect(analysis.recipe.analysis.analysis_type).toBe('graph_overview');
+    expect(analysis.recipe.analysis.analysis_type).toBe('');
     expect(analysis.analysis_type_overridden).toBeFalsy();
   });
 

@@ -82,7 +82,7 @@ export const DataSectionSubmenu: React.FC<DataSectionSubmenuProps> = ({
           </div>
           
           {/* Divider after Open file */}
-          <div style={{ height: '1px', background: '#eee', margin: '6px 0' }} />
+          <div className="dagnet-popup-divider" />
           
           {/* Get from Source (direct) */}
           {section.operations.getFromSourceDirect && (
@@ -91,9 +91,9 @@ export const DataSectionSubmenu: React.FC<DataSectionSubmenuProps> = ({
             className="dagnet-popup-item"
             >
               <span>Get from Source (direct)</span>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '3px', color: '#666', flexShrink: 0 }}>
+              <div className="dagnet-popup-hint" style={{ display: 'flex', alignItems: 'center', gap: 3 }}>
                 <Database size={12} />
-                <span style={{ fontSize: '10px', fontWeight: '600', color: '#999' }}>→</span>
+                <span>→</span>
                 <TrendingUpDown size={12} />
               </div>
             </div>
@@ -106,11 +106,11 @@ export const DataSectionSubmenu: React.FC<DataSectionSubmenuProps> = ({
             className="dagnet-popup-item"
             >
               <span>Get from Source</span>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '3px', color: '#666', flexShrink: 0 }}>
+              <div className="dagnet-popup-hint" style={{ display: 'flex', alignItems: 'center', gap: 3 }}>
                 <DatabaseZap size={12} />
-                <span style={{ fontSize: '10px', fontWeight: '600', color: '#999' }}>→</span>
+                <span>→</span>
                 <Folders size={12} />
-                <span style={{ fontSize: '10px', fontWeight: '600', color: '#999' }}>+</span>
+                <span>+</span>
                 <TrendingUpDown size={12} />
               </div>
             </div>
@@ -123,9 +123,9 @@ export const DataSectionSubmenu: React.FC<DataSectionSubmenuProps> = ({
             className="dagnet-popup-item"
             >
               <span>Get from file</span>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '3px', color: '#666', flexShrink: 0 }}>
+              <div className="dagnet-popup-hint" style={{ display: 'flex', alignItems: 'center', gap: 3 }}>
                 <Folders size={12} />
-                <span style={{ fontSize: '10px', fontWeight: '600', color: '#999' }}>→</span>
+                <span>→</span>
                 <TrendingUpDown size={12} />
               </div>
             </div>
@@ -138,9 +138,9 @@ export const DataSectionSubmenu: React.FC<DataSectionSubmenuProps> = ({
             className="dagnet-popup-item"
             >
               <span>Put to file</span>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '3px', color: '#666', flexShrink: 0 }}>
+              <div className="dagnet-popup-hint" style={{ display: 'flex', alignItems: 'center', gap: 3 }}>
                 <TrendingUpDown size={12} />
-                <span style={{ fontSize: '10px', fontWeight: '600', color: '#999' }}>→</span>
+                <span>→</span>
                 <Folders size={12} />
               </div>
             </div>
@@ -148,7 +148,7 @@ export const DataSectionSubmenu: React.FC<DataSectionSubmenuProps> = ({
           
           {/* Divider before Unsign cache */}
           {section.operations.clearCache && (
-            <div style={{ height: '1px', background: '#eee', margin: '6px 0' }} />
+            <div className="dagnet-popup-divider" />
           )}
           
           {/* Unsign cache - only show for parameters with files */}
@@ -158,7 +158,7 @@ export const DataSectionSubmenu: React.FC<DataSectionSubmenuProps> = ({
             className="dagnet-popup-item"
             >
               <span>Unsign file cache</span>
-              <X size={12} style={{ color: '#666' }} />
+              <X size={12} className="dagnet-popup-hint" />
             </div>
           )}
           
@@ -169,7 +169,7 @@ export const DataSectionSubmenu: React.FC<DataSectionSubmenuProps> = ({
             className="dagnet-popup-item"
             >
               <span>Clear data file</span>
-              <Trash2 size={12} style={{ color: '#666' }} />
+              <Trash2 size={12} className="dagnet-popup-hint" />
             </div>
           )}
           
@@ -181,7 +181,7 @@ export const DataSectionSubmenu: React.FC<DataSectionSubmenuProps> = ({
               style={{ justifyContent: 'space-between', gap: '16px' }}
             >
               <span>Manage{hasSnapshots ? ` (${snapshotCount})` : ''} matching snapshots…</span>
-              <Camera size={12} style={{ color: '#666' }} />
+              <Camera size={12} className="dagnet-popup-hint" />
             </div>
           )}
         </div>

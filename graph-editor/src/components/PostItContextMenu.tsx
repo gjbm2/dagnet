@@ -1,4 +1,5 @@
 import React, { useMemo } from 'react';
+import { Palette, Type, ArrowUpToLine, ArrowUp, ArrowDown, ArrowDownToLine, Copy, Scissors, Trash2 } from 'lucide-react';
 import { ContextMenu, ContextMenuItem } from './ContextMenu';
 import { POSTIT_COLOURS } from './nodes/PostItNode';
 
@@ -40,35 +41,37 @@ const FONT_SIZE_LABELS: Record<string, string> = {
 export function PostItContextMenu({ x, y, postitId, currentColour, currentFontSize, postitCount, onUpdateColour, onUpdateFontSize, onBringToFront, onBringForward, onSendBackward, onSendToBack, onCopy, onCut, onDelete, onClose }: PostItContextMenuProps) {
   const items = useMemo((): ContextMenuItem[] => {
     const colourItems: ContextMenuItem[] = POSTIT_COLOURS.map((colour) => ({
-      label: `${colour === currentColour ? '● ' : ''}${COLOUR_NAMES[colour] || colour}`,
+      label: COLOUR_NAMES[colour] || colour,
+      checked: colour === currentColour,
       onClick: () => onUpdateColour(postitId, colour),
     }));
 
     const fontSizeItems: ContextMenuItem[] = Object.entries(FONT_SIZE_LABELS).map(([key, label]) => ({
-      label: `${key === currentFontSize ? '● ' : ''}${label}`,
+      label,
+      checked: key === currentFontSize,
       onClick: () => onUpdateFontSize(postitId, key),
     }));
 
     const result: ContextMenuItem[] = [
-      { label: 'Colour', onClick: () => {}, submenu: colourItems },
-      { label: 'Font Size', onClick: () => {}, submenu: fontSizeItems },
+      { label: 'Colour', icon: <Palette size={14} />, onClick: () => {}, submenu: colourItems },
+      { label: 'Font Size', icon: <Type size={14} />, onClick: () => {}, submenu: fontSizeItems },
     ];
 
     if (postitCount > 1) {
       result.push(
         { label: '', onClick: () => {}, divider: true },
-        { label: 'Bring to Front', onClick: () => onBringToFront(postitId) },
-        { label: 'Bring Forward', onClick: () => onBringForward(postitId) },
-        { label: 'Send Backward', onClick: () => onSendBackward(postitId) },
-        { label: 'Send to Back', onClick: () => onSendToBack(postitId) },
+        { label: 'Bring to Front', icon: <ArrowUpToLine size={14} />, onClick: () => onBringToFront(postitId) },
+        { label: 'Bring Forward', icon: <ArrowUp size={14} />, onClick: () => onBringForward(postitId) },
+        { label: 'Send Backward', icon: <ArrowDown size={14} />, onClick: () => onSendBackward(postitId) },
+        { label: 'Send to Back', icon: <ArrowDownToLine size={14} />, onClick: () => onSendToBack(postitId) },
       );
     }
 
     result.push(
       { label: '', onClick: () => {}, divider: true },
-      { label: 'Copy', onClick: () => onCopy(postitId) },
-      { label: 'Cut', onClick: () => onCut(postitId) },
-      { label: 'Delete', onClick: () => onDelete(postitId) },
+      { label: 'Copy', icon: <Copy size={14} />, onClick: () => onCopy(postitId) },
+      { label: 'Cut', icon: <Scissors size={14} />, onClick: () => onCut(postitId) },
+      { label: 'Delete', icon: <Trash2 size={14} />, onClick: () => onDelete(postitId) },
     );
 
     return result;

@@ -609,6 +609,8 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
                     result = derive_lag_histogram(rows)
                 elif analysis_type == 'daily_conversions':
                     result = derive_daily_conversions(rows)
+                elif analysis_type == 'branch_comparison':
+                    result = derive_daily_conversions(rows)
                 elif analysis_type == 'cohort_maturity':
                     # Fallback: cohort_maturity without cohort_maturity read_mode
                     result = derive_cohort_maturity(rows)

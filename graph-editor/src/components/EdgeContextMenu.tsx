@@ -12,7 +12,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { ParameterEditor } from './ParameterEditor';
 import { DataOperationsMenu } from './DataOperationsMenu';
-import { ChevronRight, Copy } from 'lucide-react';
+import { ChevronRight, Copy, Clipboard, BarChart3, Camera, Settings, Trash2 } from 'lucide-react';
 import { useGraphStore } from '../contexts/GraphStoreContext';
 import { RemoveOverridesMenuItem } from './RemoveOverridesMenuItem';
 import { useViewPreferencesContext } from '../contexts/ViewPreferencesContext';
@@ -42,6 +42,7 @@ interface EdgeContextMenuProps {
   /** File-level graph ID, e.g. "graph-my-graph" — authoritative, unlike graph.metadata.name */
   graphFileId?: string | null;
   onClose: () => void;
+  onAddChart: (detail?: { contextNodeIds?: string[]; contextEdgeIds?: string[] }) => void;
   onUpdateGraph: (graph: any, historyLabel?: string, nodeId?: string) => void;
   onDeleteEdge: (edgeId: string) => void;
 }
@@ -55,6 +56,7 @@ export const EdgeContextMenu: React.FC<EdgeContextMenuProps> = ({
   graph,
   graphFileId,
   onClose,
+  onAddChart,
   onUpdateGraph,
   onDeleteEdge,
 }) => {
@@ -659,15 +661,12 @@ export const EdgeContextMenu: React.FC<EdgeContextMenuProps> = ({
         left: position.left,
         top: position.top,
         minWidth: '200px',
-        padding: '8px'
       }}
       onClick={(e) => e.stopPropagation()}
     >
       {/* Probability editing section */}
       <div style={{ marginBottom: '12px' }}>
-        <label style={{ display: 'block', fontSize: '12px', fontWeight: '600', marginBottom: '4px', color: '#333' }}>
-          Probability
-        </label>
+        <div className="dagnet-popup-label" style={{ marginBottom: '4px' }}>Probability</div>
         <ParameterEditor
           paramType="probability"
           value={edge?.p?.mean || 0}
@@ -687,9 +686,7 @@ export const EdgeContextMenu: React.FC<EdgeContextMenuProps> = ({
       {/* Conditional Probabilities editing */}
       {hasConditionalP && (
         <div style={{ marginBottom: '12px' }}>
-          <label style={{ display: 'block', fontSize: '12px', fontWeight: '600', marginBottom: '4px', color: '#333' }}>
-            Conditional Probabilities
-          </label>
+          <div className="dagnet-popup-label" style={{ marginBottom: '4px' }}>Conditional Probabilities</div>
           {edge.conditional_p.map((condP: any, cpIndex: number) => {
             // Skip old format conditions
             if (typeof condP.condition !== 'string') {
@@ -723,9 +720,7 @@ export const EdgeContextMenu: React.FC<EdgeContextMenuProps> = ({
       {/* Variant Weight editing for case edges */}
       {isCaseEdge && variant && variantIndex >= 0 && (
         <div style={{ marginBottom: '12px' }}>
-          <label style={{ display: 'block', fontSize: '12px', fontWeight: '600', marginBottom: '4px', color: '#333' }}>
-            Variant Weight ({edge?.case_variant})
-          </label>
+          <div className="dagnet-popup-label" style={{ marginBottom: '4px' }}>Variant Weight ({edge?.case_variant})</div>
           <ParameterEditor
             paramType="variant_weight"
             value={variant.weight || 0}
@@ -780,6 +775,21 @@ export const EdgeContextMenu: React.FC<EdgeContextMenuProps> = ({
           ))}
         </>
       )}
+
+      <div className="dagnet-popup-divider" />
+
+      <div
+        className="dagnet-popup-item"
+        onClick={(e) => {
+          e.stopPropagation();
+          onAddChart({ contextEdgeIds: [edgeId] });
+          onClose();
+        }}
+        style={{ display: 'flex', alignItems: 'center', gap: 8 }}
+      >
+        <BarChart3 size={14} />
+        Add chart
+      </div>
 
       <div className="dagnet-popup-divider" />
 
@@ -877,18 +887,15 @@ export const EdgeContextMenu: React.FC<EdgeContextMenuProps> = ({
       {/* Paste parameter - only show when a parameter is copied */}
       {copiedParameter && (
         <div
+          className="dagnet-popup-item"
           onClick={(e) => {
             e.stopPropagation();
             handlePasteParameter();
           }}
-          style={{
-            padding: '8px 12px',
-            cursor: 'pointer',
-            fontSize: '13px',
-            borderRadius: '2px'
-          }}
+          style={{ display: 'flex', alignItems: 'center', gap: 8 }}
         >
-          📋 Paste parameter: {copiedParameter.objectId}
+          <Clipboard size={14} />
+          Paste parameter: {copiedParameter.objectId}
         </div>
       )}
 
@@ -897,53 +904,40 @@ export const EdgeContextMenu: React.FC<EdgeContextMenuProps> = ({
       {/* Snapshot Manager */}
       {edgeData?.p?.id && (
         <div
+          className="dagnet-popup-item"
           onClick={() => {
             void openSnapshotManagerForEdge({ edgeId, paramId: edgeData.p.id, slot: 'p' });
             onClose();
           }}
-          style={{
-            padding: '8px 12px',
-            cursor: 'pointer',
-            fontSize: '13px',
-            borderRadius: '2px',
-          }}
+          style={{ display: 'flex', alignItems: 'center', gap: 8 }}
         >
+          <Camera size={14} />
           Snapshot Manager
         </div>
       )}
 
-      <div className="dagnet-popup-divider" />
-
-      {/* Properties */}
       <div
+        className="dagnet-popup-item"
         onClick={() => {
           globalThis.window.dispatchEvent(new CustomEvent('dagnet:openPropertiesPanel'));
           onClose();
         }}
-        style={{
-          padding: '8px 12px',
-          cursor: 'pointer',
-          fontSize: '13px',
-          borderRadius: '2px',
-        }}
+        style={{ display: 'flex', alignItems: 'center', gap: 8 }}
       >
+        <Settings size={14} />
         Properties
       </div>
 
       {/* Delete */}
       <div
+        className="dagnet-popup-item danger"
         onClick={() => {
           onDeleteEdge(edgeId);
           onClose();
         }}
-        style={{
-          padding: '8px 12px',
-          cursor: 'pointer',
-          fontSize: '13px',
-          color: '#dc3545',
-          borderRadius: '2px'
-        }}
+        style={{ display: 'flex', alignItems: 'center', gap: 8 }}
       >
+        <Trash2 size={14} />
         Delete edge
       </div>
     </div>

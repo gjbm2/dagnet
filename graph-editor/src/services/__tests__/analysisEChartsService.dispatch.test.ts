@@ -41,6 +41,157 @@ const BRIDGE_RESULT = {
   },
 };
 
+const DENSE_BRIDGE_RESULT = {
+  analysis_type: 'bridge_view',
+  data: [
+    { bridge_step: 'start', total: 0.8, delta: 0 },
+    { bridge_step: 'step_a', total: 0, delta: -0.1 },
+    { bridge_step: 'step_b', total: 0, delta: 0.05 },
+    { bridge_step: 'step_c', total: 0, delta: -0.04 },
+    { bridge_step: 'step_d', total: 0, delta: 0.24 },
+    { bridge_step: 'end', total: 0.95, delta: 0 },
+  ],
+  semantics: {
+    dimensions: [{ id: 'bridge_step', role: 'primary', type: 'bridge_step' }],
+    metrics: [
+      { id: 'total', role: 'primary', name: 'Total' },
+      { id: 'delta', role: 'secondary', name: 'Delta' },
+    ],
+  },
+  dimension_values: {
+    bridge_step: {
+      start: { name: 'Start', order: 0 },
+      step_a: { name: 'Landing page', order: 1 },
+      step_b: { name: 'phase one', order: 2 },
+      step_c: { name: 'household created', order: 3 },
+      step_d: { name: 'household delegated', order: 4 },
+      end: { name: 'End', order: 5 },
+    },
+  },
+};
+
+const BRANCH_COMPARISON_RESULT = {
+  analysis_type: 'branch_comparison',
+  data: [
+    {
+      branch: 'child_a',
+      scenario_id: 'base',
+      visibility_mode: 'f+e',
+      edge_probability: 0.7,
+      evidence_mean: 0.6,
+      forecast_mean: 0.7,
+      evidence_k: 60,
+      forecast_k: 70,
+    },
+    {
+      branch: 'child_b',
+      scenario_id: 'base',
+      visibility_mode: 'f+e',
+      edge_probability: 0.3,
+      evidence_mean: 0.2,
+      forecast_mean: 0.3,
+      evidence_k: 20,
+      forecast_k: 30,
+    },
+    {
+      branch: 'child_a',
+      scenario_id: 'current',
+      visibility_mode: 'f+e',
+      edge_probability: 0.8,
+      evidence_mean: 0.7,
+      forecast_mean: 0.8,
+      evidence_k: 140,
+      forecast_k: 160,
+    },
+    {
+      branch: 'child_b',
+      scenario_id: 'current',
+      visibility_mode: 'f+e',
+      edge_probability: 0.2,
+      evidence_mean: 0.1,
+      forecast_mean: 0.2,
+      evidence_k: 20,
+      forecast_k: 40,
+    },
+  ],
+  semantics: {
+    dimensions: [
+      { id: 'branch', role: 'primary', type: 'node', name: 'Branch' },
+      { id: 'scenario_id', role: 'secondary', type: 'scenario', name: 'Scenario' },
+    ],
+    metrics: [
+      { id: 'edge_probability', role: 'primary', type: 'probability', name: 'Edge Probability' },
+      { id: 'evidence_mean', type: 'probability', name: 'Evidence' },
+      { id: 'forecast_mean', type: 'probability', name: 'Forecast' },
+      { id: 'evidence_k', type: 'count', name: 'Observed k' },
+      { id: 'forecast_k', type: 'count', name: 'Forecast k' },
+    ],
+    chart: {
+      recommended: 'bar_grouped',
+      alternatives: ['pie', 'table'],
+    },
+  },
+  dimension_values: {
+    branch: {
+      child_a: { name: 'Child A', order: 0, colour: '#3b82f6' },
+      child_b: { name: 'Child B', order: 1, colour: '#10b981' },
+    },
+    scenario_id: {
+      base: { name: 'Base', colour: '#6b7280', visibility_mode: 'f+e', probability_label: 'Probability' },
+      current: { name: 'Current', colour: '#3b82f6', visibility_mode: 'f+e', probability_label: 'Probability' },
+    },
+  },
+};
+
+const BRANCH_COMPARISON_TIME_SERIES_RESULT = {
+  analysis_type: 'branch_comparison',
+  data: [
+    { date: '2025-10-01', scenario_id: 'current', branch: 'child_a', x: 100, y: 70, rate: 0.7, evidence_y: 60, forecast_y: 10, projected_y: 70, completeness: 0.9 },
+    { date: '2025-10-01', scenario_id: 'current', branch: 'child_b', x: 100, y: 30, rate: 0.3, evidence_y: 20, forecast_y: 10, projected_y: 30, completeness: 0.9 },
+    { date: '2025-10-02', scenario_id: 'current', branch: 'child_a', x: 120, y: 84, rate: 0.7, evidence_y: 70, forecast_y: 14, projected_y: 84, completeness: 0.9 },
+    { date: '2025-10-02', scenario_id: 'current', branch: 'child_b', x: 120, y: 36, rate: 0.3, evidence_y: 24, forecast_y: 12, projected_y: 36, completeness: 0.9 },
+  ],
+  semantics: {
+    dimensions: [
+      { id: 'date', role: 'primary', type: 'time', name: 'Cohort date' },
+      { id: 'scenario_id', role: 'secondary', type: 'scenario', name: 'Scenario' },
+      { id: 'branch', role: 'filter', type: 'node', name: 'Branch' },
+    ],
+    metrics: [
+      { id: 'rate', role: 'primary', type: 'ratio', name: 'Conversion rate' },
+      { id: 'x', type: 'count', name: 'Cohort size' },
+      { id: 'y', type: 'count', name: 'Conversions' },
+      { id: 'evidence_y', type: 'count', name: 'Evidence conversions' },
+      { id: 'forecast_y', type: 'count', name: 'Forecast conversions' },
+      { id: 'projected_y', type: 'count', name: 'Projected conversions' },
+      { id: 'completeness', type: 'ratio', name: 'Completeness' },
+    ],
+    chart: {
+      recommended: 'time_series',
+      alternatives: ['bar_grouped', 'pie', 'table'],
+    },
+  },
+  dimension_values: {
+    branch: {
+      child_a: { name: 'Child A', order: 0, colour: '#3b82f6' },
+      child_b: { name: 'Child B', order: 1, colour: '#10b981' },
+    },
+    scenario_id: {
+      current: { name: 'Current', colour: '#3b82f6', visibility_mode: 'f+e', probability_label: 'Probability' },
+    },
+  },
+};
+
+const BRANCH_COMPARISON_TIME_SERIES_SINGLE_CHILD_RESULT = {
+  analysis_type: 'branch_comparison',
+  data: [
+    { date: '2025-10-01', scenario_id: 'current', branch: 'child_b', x: 100, y: 30, rate: 0.3, evidence_y: 20, forecast_y: 10, projected_y: 30, completeness: 0.9 },
+    { date: '2025-10-02', scenario_id: 'current', branch: 'child_b', x: 120, y: 36, rate: 0.3, evidence_y: 24, forecast_y: 12, projected_y: 36, completeness: 0.9 },
+  ],
+  semantics: BRANCH_COMPARISON_TIME_SERIES_RESULT.semantics,
+  dimension_values: BRANCH_COMPARISON_TIME_SERIES_RESULT.dimension_values,
+};
+
 describe('buildChartOption dispatch', () => {
   it('should return null for unknown chart kind', () => {
     expect(buildChartOption('unknown', {})).toBeNull();
@@ -62,6 +213,45 @@ describe('buildChartOption dispatch', () => {
   it('should pass orientation from resolvedSettings to bridge', () => {
     const option = buildChartOption('bridge', BRIDGE_RESULT, { orientation: 'horizontal' });
     expect(option).not.toBeNull();
+  });
+
+  it('should dispatch bar_grouped comparison correctly', () => {
+    const option = buildChartOption('bar_grouped', BRANCH_COMPARISON_RESULT, {}, { visibleScenarioIds: ['base', 'current'] });
+    expect(option).not.toBeNull();
+    expect(option.xAxis.data).toEqual(['Base', 'Current']);
+    expect(option.series.length).toBeGreaterThan(0);
+    expect(option.series.every((s: any) => s.stack === 'comparison')).toBe(true);
+  });
+
+  it('should respect grouped stack_mode override for multi-scenario comparison bars', () => {
+    const option = buildChartOption('bar_grouped', BRANCH_COMPARISON_RESULT, { stack_mode: 'grouped' }, { visibleScenarioIds: ['base', 'current'] });
+    expect(option).not.toBeNull();
+    expect(option.series.some((s: any) => s.stack === 'child_a' || s.stack === 'child_b')).toBe(true);
+  });
+
+  it('should dispatch pie comparison correctly for a single scenario', () => {
+    const option = buildChartOption('pie', BRANCH_COMPARISON_RESULT, {}, { visibleScenarioIds: ['current'] });
+    expect(option).not.toBeNull();
+    expect(option.series[0].type).toBe('pie');
+    expect(option.series[0].data).toHaveLength(2);
+  });
+
+  it('should dispatch time_series comparison correctly', () => {
+    const option = buildChartOption('time_series', BRANCH_COMPARISON_TIME_SERIES_RESULT, {}, { visibleScenarioIds: ['current'] });
+    expect(option).not.toBeNull();
+    expect(option.xAxis.type).toBe('time');
+    expect(option.series.length).toBeGreaterThan(0);
+    expect(option.series.every((s: any) => s.stack === 'comparison')).toBe(true);
+  });
+
+  it('should split f+e time_series into evidence and forecast crown series', () => {
+    const option = buildChartOption('time_series', BRANCH_COMPARISON_TIME_SERIES_RESULT, {}, { visibleScenarioIds: ['current'] });
+    expect(option).not.toBeNull();
+    const names = option.series.map((s: any) => s.name);
+    expect(names).toContain('Child A — e');
+    expect(names).toContain('Child A — f−e');
+    expect(names).toContain('Child B — e');
+    expect(names).toContain('Child B — f−e');
   });
 });
 
@@ -131,6 +321,18 @@ describe('bridge-specific settings via buildChartOption', () => {
     const option = buildChartOption('bridge', BRIDGE_RESULT, { bar_gap: 'large' });
     const barSeries = option.series.filter((s: any) => s.type === 'bar');
     expect(barSeries.every((s: any) => s.barCategoryGap === '50%')).toBe(true);
+  });
+
+  it('should suppress bridge value labels in dense small layouts when layout is provided', () => {
+    const option = buildChartOption(
+      'bridge',
+      DENSE_BRIDGE_RESULT,
+      {},
+      { layout: { widthPx: 260, heightPx: 180 } },
+    );
+    const valueSeries = option.series.filter((s: any) => s.type === 'bar' && s.name !== 'Assist');
+    expect(valueSeries.length).toBeGreaterThan(0);
+    expect(valueSeries.every((s: any) => s.label?.show === false)).toBe(true);
   });
 });
 

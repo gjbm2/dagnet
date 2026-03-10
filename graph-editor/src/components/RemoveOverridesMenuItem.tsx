@@ -43,22 +43,13 @@ export function RemoveOverridesMenuItem({
 
   return (
     <div
+      className="dagnet-popup-item"
       onClick={(e) => {
         e.stopPropagation();
         removeOverrides();
         onClose();
       }}
-      style={{
-        padding: '8px 12px',
-        cursor: 'pointer',
-        fontSize: '13px',
-        borderRadius: '2px',
-        display: 'flex',
-        alignItems: 'center',
-        gap: '8px'
-      }}
-      onMouseEnter={(e) => (e.currentTarget.style.background = '#f8f9fa')}
-      onMouseLeave={(e) => (e.currentTarget.style.background = 'white')}
+      style={{ display: 'flex', alignItems: 'center', gap: 8 }}
     >
       <RotateCcw size={14} />
       <span>Remove overrides ({overrideCount})</span>

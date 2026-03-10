@@ -778,6 +778,11 @@ function applyScopeRule(
     case 'selection_edges':
       return items.filter(item => selectedEdgeUuids.includes(item.targetId));
 
+    case 'children_of_selected_node': {
+      const edgeUuids = resolveImmediateChildEdges(graph, queryDsl);
+      return items.filter(item => edgeUuids.has(item.targetId));
+    }
+
     case 'all_graph_parameters':
       return items;
 
@@ -867,6 +872,33 @@ export function resolveFunnelPathEdges(graph: Graph, queryDsl?: string): Set<str
   }
 
   return result;
+}
+
+/**
+ * Resolve immediate child edges for a single selected node expressed as visited(X).
+ * Used by snapshot-backed branch comparison time-series mode.
+ */
+export function resolveImmediateChildEdges(graph: Graph, queryDsl?: string): Set<string> {
+  if (!queryDsl) return new Set();
+
+  const parsed = parseDSL(queryDsl);
+  const visited = Array.isArray(parsed.visited) ? parsed.visited : [];
+  if (visited.length !== 1 || parsed.from || parsed.to || (parsed.visitedAny && parsed.visitedAny.length > 0)) {
+    return new Set();
+  }
+
+  const parentHrn = visited[0];
+  const nodes = graph.nodes || [];
+  const edges = (graph as any).edges || [];
+  const parentUuid = nodes.find((n: any) => n.id === parentHrn || n.uuid === parentHrn)?.uuid;
+  if (!parentUuid) return new Set();
+
+  return new Set(
+    edges
+      .filter((e: any) => e?.from === parentUuid)
+      .map((e: any) => String(e?.uuid || e?.id || ''))
+      .filter(Boolean),
+  );
 }
 
 /**

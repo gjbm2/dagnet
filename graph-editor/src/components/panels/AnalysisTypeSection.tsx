@@ -1,16 +1,17 @@
 /**
  * AnalysisTypeSection -- shared wrapped analysis type selector.
  *
- * Renders a CollapsibleSection with BarChart3 icon, "Show all / Available only"
- * toggle, AnalysisTypeCardList, and requirements hint for unavailable types.
+ * Renders a CollapsibleSection with BarChart3 icon, view mode toggle (icons/list),
+ * "Show all / Available only" toggle, AnalysisTypeCardList, and requirements hint
+ * for unavailable types.
  *
  * Used identically by AnalyticsPanel and canvas analysis PropertiesPanel.
  */
 
 import React, { useState } from 'react';
-import { BarChart3, Eye, EyeOff, Lightbulb, ZapOff } from 'lucide-react';
+import { BarChart3, Eye, EyeOff, Grid3X3, List, Lightbulb, ZapOff } from 'lucide-react';
 import CollapsibleSection from '../CollapsibleSection';
-import { AnalysisTypeCardList } from './AnalysisTypeCardList';
+import { AnalysisTypeCardList, type AnalysisTypeViewMode } from './AnalysisTypeCardList';
 import { getAnalysisTypeMeta, type AnalysisTypeMeta } from './analysisTypes';
 import type { AvailableAnalysis } from '../../lib/graphComputeClient';
 
@@ -27,6 +28,8 @@ interface AnalysisTypeSectionProps {
   onClearOverride?: () => void;
   draggableAvailableCards?: boolean;
   onCardDragStart?: (event: React.DragEvent<HTMLButtonElement>, typeMeta: AnalysisTypeMeta) => void;
+  /** Default view mode for the analysis type list */
+  defaultViewMode?: AnalysisTypeViewMode;
 }
 
 export function AnalysisTypeSection({
@@ -39,8 +42,10 @@ export function AnalysisTypeSection({
   onClearOverride,
   draggableAvailableCards = false,
   onCardDragStart,
+  defaultViewMode = 'icons',
 }: AnalysisTypeSectionProps) {
   const [showAll, setShowAll] = useState(false);
+  const [viewMode, setViewMode] = useState<AnalysisTypeViewMode>(defaultViewMode);
 
   return (
     <>
@@ -61,6 +66,13 @@ export function AnalysisTypeSection({
             )}
             <button
               className="analytics-show-all-toggle"
+              onClick={(e) => { e.stopPropagation(); setViewMode(viewMode === 'icons' ? 'list' : 'icons'); }}
+              title={viewMode === 'icons' ? 'Switch to list view' : 'Switch to icon view'}
+            >
+              {viewMode === 'icons' ? <List size={12} /> : <Grid3X3 size={12} />}
+            </button>
+            <button
+              className="analytics-show-all-toggle"
               onClick={(e) => { e.stopPropagation(); setShowAll(!showAll); }}
               title={showAll ? 'Show only available' : 'Show all analysis types'}
             >
@@ -78,6 +90,7 @@ export function AnalysisTypeSection({
           selectedAnalysisId={selectedAnalysisId}
           onSelect={onSelect}
           showAll={showAll}
+          viewMode={viewMode}
           draggableAvailableCards={draggableAvailableCards}
           onCardDragStart={onCardDragStart}
         />

@@ -48,7 +48,7 @@ export interface BuildCanvasAnalysisPayloadArgs {
  * This function does NOT call the backend -- it is synchronous and pure.
  */
 export function buildCanvasAnalysisPayload(args: BuildCanvasAnalysisPayloadArgs): CanvasAnalysisCreationPayload {
-  const analysisType = args.analysisType || 'graph_overview';
+  const analysisType = args.analysisType || '';
   const overridden = args.analysisTypeOverridden ?? !!args.analysisType;
 
   return {

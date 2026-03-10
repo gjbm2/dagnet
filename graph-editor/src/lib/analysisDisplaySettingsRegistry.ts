@@ -1,3 +1,5 @@
+import React from 'react';
+
 /**
  * Analysis Display Settings Registry
  *
@@ -50,6 +52,7 @@ export interface ListItemFieldDef {
 export interface DisplaySettingDef {
   key: string;
   label: string;
+  shortLabel?: string;
   type: DisplaySettingType;
   options?: DisplaySettingOption[];
   defaultValue: any;
@@ -470,6 +473,41 @@ const COMMON_STACK_SETTINGS: DisplaySettingDef[] = [
   },
 ];
 
+/** Metric basis for charts that support both proportional and absolute rendering */
+const COMMON_METRIC_MODE_SETTINGS: DisplaySettingDef[] = [
+  {
+    key: 'metric_mode',
+    label: 'Metric',
+    type: 'radio',
+    options: [
+      { value: 'proportional', label: 'Proportional' },
+      { value: 'absolute', label: 'Absolute' },
+    ],
+    defaultValue: 'proportional',
+    propsPanel: true,
+    inline: 'full',
+    contextMenu: true,
+  },
+];
+
+/** Stacking mode for comparison bar charts (default to stacked scenario comparison) */
+const COMPARISON_STACK_SETTINGS: DisplaySettingDef[] = [
+  {
+    key: 'stack_mode',
+    label: 'Stack mode',
+    type: 'radio',
+    options: [
+      { value: 'grouped', label: 'Grouped (side by side)' },
+      { value: 'stacked', label: 'Stacked' },
+      { value: 'stacked_100', label: 'Stacked 100%' },
+    ],
+    defaultValue: 'stacked',
+    propsPanel: true,
+    inline: 'full',
+    contextMenu: true,
+  },
+];
+
 /** Point marker controls for line charts */
 const COMMON_MARKER_SETTINGS: DisplaySettingDef[] = [
   {
@@ -721,6 +759,46 @@ export const CHART_DISPLAY_SETTINGS: Record<string, DisplaySettingDef[]> = {
     ...COMMON_REFERENCE_LINE_SETTINGS,
   ],
 
+  bar_grouped: [
+    ...COMMON_AXIS_SETTINGS,
+    ...COMMON_LEGEND_SETTINGS,
+    ...COMMON_LABEL_SETTINGS,
+    ...COMMON_LABEL_POSITION_SETTINGS,
+    ...COMMON_METRIC_MODE_SETTINGS,
+    ...COMMON_BAR_SPACING_SETTINGS,
+    ...COMPARISON_STACK_SETTINGS,
+    ...COMMON_SORT_SETTINGS,
+    ...COMMON_TOOLTIP_SETTINGS,
+    ...COMMON_ANIMATION_SETTINGS,
+    ...COMMON_REFERENCE_LINE_SETTINGS,
+  ],
+
+  pie: [
+    ...COMMON_AXIS_SETTINGS,
+    ...COMMON_LEGEND_SETTINGS,
+    ...COMMON_LABEL_SETTINGS,
+    ...COMMON_TOOLTIP_SETTINGS,
+    ...COMMON_ANIMATION_SETTINGS,
+    ...COMMON_REFERENCE_LINE_SETTINGS,
+  ],
+
+  time_series: [
+    ...COMMON_SERIES_TYPE_SETTINGS,
+    ...COMMON_AXIS_SETTINGS,
+    ...COMMON_LEGEND_SETTINGS,
+    ...COMMON_LABEL_SETTINGS,
+    ...COMMON_METRIC_MODE_SETTINGS,
+    ...COMMON_GROUPING_SETTINGS,
+    ...COMMON_MOVING_AVERAGE_SETTINGS,
+    ...COMMON_SMOOTHING_SETTINGS,
+    ...COMMON_MARKER_SETTINGS,
+    ...COMMON_AREA_SETTINGS,
+    ...COMMON_STACK_SETTINGS,
+    ...COMMON_TOOLTIP_SETTINGS,
+    ...COMMON_ANIMATION_SETTINGS,
+    ...COMMON_REFERENCE_LINE_SETTINGS,
+  ],
+
   daily_conversions: [
     ...COMMON_SERIES_TYPE_SETTINGS,
     ...COMMON_AXIS_SETTINGS,
@@ -817,4 +895,55 @@ export function getDisplaySettingsForSurface(
 export function resolveDisplaySetting(display: Record<string, unknown> | undefined, setting: DisplaySettingDef): any {
   if (display && setting.key in display) return display[setting.key];
   return setting.defaultValue;
+}
+
+/**
+ * Context menu item shape for registry-driven display settings.
+ * Matches ContextMenuItem from ContextMenu.tsx but defined here to avoid circular imports.
+ */
+export interface ContextMenuSettingItem {
+  label: string;
+  onClick: () => void;
+  icon?: React.ReactNode;
+  checked?: boolean;
+  submenu?: ContextMenuSettingItem[];
+}
+
+/**
+ * Build context menu items from display settings marked contextMenu: true.
+ * Used by CanvasAnalysisContextMenu to render the Display submenu.
+ *
+ * - checkbox: flat item, checked when active, toggle on click
+ * - radio/select: parent with submenu, each option checked when selected
+ */
+export function buildContextMenuSettingItems(
+  chartKind: string | undefined,
+  viewMode: 'chart' | 'cards',
+  display: Record<string, unknown> | undefined,
+  onChange: (key: string, value: any) => void,
+): ContextMenuSettingItem[] {
+  const settings = getDisplaySettingsForSurface(chartKind, viewMode, 'contextMenu');
+  if (settings.length === 0) return [];
+
+  const result: ContextMenuSettingItem[] = [];
+  for (const setting of settings) {
+    const value = resolveDisplaySetting(display, setting);
+
+    if (setting.type === 'checkbox') {
+      const isOn = !!value;
+      result.push({
+        label: setting.label,
+        checked: isOn,
+        onClick: () => onChange(setting.key, !isOn),
+      });
+    } else if ((setting.type === 'radio' || setting.type === 'select') && setting.options) {
+      const submenu = setting.options.map((opt) => ({
+        label: opt.label,
+        checked: value === opt.value,
+        onClick: () => onChange(setting.key, opt.value),
+      }));
+      result.push({ label: setting.label, onClick: () => {}, submenu });
+    }
+  }
+  return result;
 }

@@ -38,10 +38,18 @@ export async function resolveAnalysisType(
       scenarioCount,
     );
 
-    const normalised = (response.analyses || []).map(a => ({
-      ...a,
-      id: normalizeAnalysisId(a.id),
-    }));
+    const dedupedById = new Map<string, AvailableAnalysis>();
+    for (const analysis of (response.analyses || [])) {
+      const normalisedId = normalizeAnalysisId(analysis.id);
+      const existing = dedupedById.get(normalisedId);
+      if (!existing || analysis.is_primary) {
+        dedupedById.set(normalisedId, {
+          ...analysis,
+          id: normalisedId,
+        });
+      }
+    }
+    const normalised = Array.from(dedupedById.values());
 
     const primary = normalised.find(a => a.is_primary);
 

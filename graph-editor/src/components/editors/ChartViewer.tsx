@@ -23,6 +23,7 @@ import { ukReferenceDayService } from '../../services/ukReferenceDayService';
 import { getScenarioVisibilityOverlayStyle } from '../../lib/scenarioVisibilityModeStyles';
 import { ScenarioQueryEditModal } from '../modals/ScenarioQueryEditModal';
 import { resolveAnalysisType } from '../../services/analysisTypeResolutionService';
+import { augmentChartKindOptionsForAnalysisType } from '../../services/chartDisplayPlanningService';
 import { getDisplaySettingsForSurface } from '../../lib/analysisDisplaySettingsRegistry';
 import { fileRegistry } from '../../contexts/TabContext';
 import { db } from '../../db/appDatabase';
@@ -163,7 +164,10 @@ export function ChartViewer({ fileId }: EditorProps): JSX.Element {
     const spec: any = analysisResult?.semantics?.chart;
     const rec = spec?.recommended;
     const alts = Array.isArray(spec?.alternatives) ? spec.alternatives : [];
-    return [rec, ...alts].filter(Boolean) as string[];
+    return augmentChartKindOptionsForAnalysisType(
+      analysisResult?.analysis_type,
+      [rec, ...alts].filter(Boolean) as string[],
+    );
   })();
 
   const updateChartFile = useCallback(async (

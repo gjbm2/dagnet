@@ -260,6 +260,13 @@ def dispatch_runner(
         return run_end_comparison(G, resolved_nodes, pruning, all_scenarios)
     
     elif runner_name == 'branch_comparison_runner':
+        # Single-node affordance: if only one node selected, derive its immediate children
+        if len(resolved_nodes) == 1:
+            parent = resolved_nodes[0]
+            children = sorted(G.successors(parent))
+            if len(children) >= 2:
+                return run_branch_comparison(G, children, pruning, all_scenarios)
+            return {'error': f'Node has fewer than 2 children for branch comparison'}
         return run_branch_comparison(G, resolved_nodes, pruning, all_scenarios)
     
     # Path runners
@@ -451,6 +458,7 @@ def compute_predicates_from_dsl(
         is_absorbing = node_data.get('absorbing', False) or G.out_degree(node_key) == 0
         predicates['is_graph_entry'] = is_entry
         predicates['is_graph_absorbing'] = is_absorbing
+        predicates['has_multiple_children'] = G.out_degree(node_key) > 1
     
     # All absorbing check (for outcome comparison)
     if resolved_nodes:

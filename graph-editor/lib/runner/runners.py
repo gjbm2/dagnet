@@ -794,6 +794,9 @@ def run_branch_comparison(
             forecast_mean = None
             evidence_mean = None
             completeness = None
+            evidence_k = None
+            evidence_n = None
+            forecast_k = None
             parents = list(scenario_G.predecessors(node_id)) if node_id in scenario_G else []
             if parents:
                 parent = parents[0]
@@ -803,8 +806,11 @@ def run_branch_comparison(
                 # LAG fields
                 forecast = edge_data.get('forecast') or {}
                 forecast_mean = forecast.get('mean')
+                forecast_k = forecast.get('k')
                 evidence = edge_data.get('evidence') or {}
                 evidence_mean = evidence.get('mean')
+                evidence_k = evidence.get('k')
+                evidence_n = evidence.get('n')
                 latency = edge_data.get('latency') or {}
                 completeness = latency.get('completeness')
             
@@ -827,6 +833,13 @@ def run_branch_comparison(
                 row['evidence_mean'] = evidence_mean
             if completeness is not None:
                 row['completeness'] = completeness
+            # Absolute traffic metrics
+            if evidence_k is not None:
+                row['evidence_k'] = evidence_k
+            if evidence_n is not None:
+                row['evidence_n'] = evidence_n
+            if forecast_k is not None:
+                row['forecast_k'] = forecast_k
             
             data_rows.append(row)
     
@@ -844,13 +857,16 @@ def run_branch_comparison(
                 {'id': 'forecast_mean', 'name': 'Forecast', 'type': 'probability', 'format': 'percent'},
                 {'id': 'evidence_mean', 'name': 'Evidence', 'type': 'probability', 'format': 'percent'},
                 {'id': 'completeness', 'name': 'Completeness', 'type': 'ratio', 'format': 'percent'},
+                {'id': 'evidence_k', 'name': 'Observed k', 'type': 'count', 'format': 'number'},
+                {'id': 'evidence_n', 'name': 'Population n', 'type': 'count', 'format': 'number'},
+                {'id': 'forecast_k', 'name': 'Forecast k', 'type': 'count', 'format': 'number'},
                 {'id': 'path_through_probability', 'name': 'Path Through', 'type': 'probability', 'format': 'percent'},
                 {'id': 'expected_cost_gbp', 'name': 'Expected Cost (£)', 'type': 'currency', 'format': 'currency_gbp'},
                 {'id': 'expected_labour_cost', 'name': 'Expected Cost (Labour)', 'type': 'duration', 'format': 'number'},
             ],
             'chart': {
                 'recommended': 'bar_grouped',
-                'alternatives': ['table'],
+                'alternatives': ['pie', 'table'],
             }
         },
         'dimension_values': {
@@ -1369,7 +1385,7 @@ def run_partial_path(
             ],
             'chart': {
                 'recommended': 'bar_grouped',
-                'alternatives': ['table'],
+                'alternatives': ['pie', 'table', 'time_series'],
             }
         },
         'dimension_values': {

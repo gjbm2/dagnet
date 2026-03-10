@@ -21,6 +21,9 @@ const CHART_KIND_LABELS: Record<string, string> = {
   histogram: 'Lag Histogram',
   daily_conversions: 'Daily Conversions',
   cohort_maturity: 'Cohort Maturity',
+  bar_grouped: 'Comparison',
+  pie: 'Pie',
+  time_series: 'Time Series',
 };
 
 /**
@@ -29,6 +32,7 @@ const CHART_KIND_LABELS: Record<string, string> = {
  */
 const SETTING_GROUP: Record<string, string> = {
   metric: 'Chart-specific',
+  metric_mode: 'Chart-specific',
   funnel_direction: 'Chart-specific',
   show_dropoff: 'Chart-specific',
   orientation: 'Chart-specific',

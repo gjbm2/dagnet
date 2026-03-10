@@ -116,6 +116,25 @@ function humaniseSubjectId(rawId: string): string {
   return rawId;
 }
 
+function snapshotSubjectsSignature(subjects?: SnapshotSubjectPayload[]): string {
+  const arr = Array.isArray(subjects) ? subjects : [];
+  if (arr.length === 0) return '';
+  return arr
+    .map(s => [
+      s.subject_id || '',
+      s.core_hash || '',
+      s.read_mode || '',
+      s.anchor_from || '',
+      s.anchor_to || '',
+      s.as_at || '',
+      s.sweep_from || '',
+      s.sweep_to || '',
+      Array.isArray(s.slice_keys) ? s.slice_keys.join(',') : '',
+    ].join('|'))
+    .sort()
+    .join('||');
+}
+
 export class GraphComputeClient {
   private baseUrl: string;
   private useMock: boolean;
@@ -936,6 +955,232 @@ export class GraphComputeClient {
   }
 
   /**
+   * Normalise branch_comparison snapshot response into a time-series branch split result.
+   *
+   * Backend shape is the same snapshot envelope as daily_conversions, but each subject
+   * corresponds to a child branch. We flatten successful subject results into rows keyed by
+   * (date, scenario_id, branch).
+   */
+  private normaliseSnapshotBranchComparisonResponse(
+    raw: any,
+    request: AnalysisRequest,
+  ): AnalysisResponse | null {
+    try {
+      if (request?.analysis_type !== 'branch_comparison') return null;
+
+      type Block = { scenario_id: string; subject_id: string; result: any };
+      const blocks: Block[] = [];
+
+      const isDailyResult = (r: any): boolean => {
+        if (!r || typeof r !== 'object') return false;
+        return r.analysis_type === 'daily_conversions' || Array.isArray(r.rate_by_cohort) || (Array.isArray(r.data) && r.data[0]?.conversions !== undefined);
+      };
+
+      if (raw && Array.isArray(raw.scenarios)) {
+        for (const sc of raw.scenarios) {
+          const scenarioId = sc?.scenario_id;
+          if (!scenarioId || !Array.isArray(sc?.subjects)) continue;
+          for (const sub of sc.subjects) {
+            if (sub?.success !== true) continue;
+            blocks.push({ scenario_id: scenarioId, subject_id: sub?.subject_id || 'branch', result: sub?.result });
+          }
+        }
+      } else if (raw && Array.isArray(raw.subjects)) {
+        const scenarioId = raw.scenario_id || request?.scenarios?.[0]?.scenario_id || 'current';
+        for (const sub of raw.subjects) {
+          if (sub?.success !== true) continue;
+          blocks.push({ scenario_id: scenarioId, subject_id: sub?.subject_id || 'branch', result: sub?.result });
+        }
+      } else if (raw?.success === true && isDailyResult(raw?.result)) {
+        const scenarioId = raw.scenario_id || request?.scenarios?.[0]?.scenario_id || 'current';
+        const subjectId = raw.subject_id || 'branch';
+        blocks.push({ scenario_id: scenarioId, subject_id: subjectId, result: raw.result });
+      }
+
+      if (blocks.length === 0) return null;
+
+      const scenarioDimensionValues: Record<string, DimensionValueMeta> = {};
+      for (const s of request.scenarios || []) {
+        if (!s?.scenario_id) continue;
+        scenarioDimensionValues[s.scenario_id] = {
+          name: s.name || s.scenario_id,
+          colour: s.colour,
+          visibility_mode: s.visibility_mode,
+          probability_label: s.visibility_mode === 'f' ? 'Forecast Probability' : s.visibility_mode === 'e' ? 'Evidence Probability' : 'Probability',
+        };
+      }
+
+      const branchLabelLookup = new Map<string, string>();
+      const branchKeyByScenarioAndSubject = new Map<string, string>();
+      for (const sc of request.scenarios || []) {
+        const graph: any = sc.graph || {};
+        const nodes: any[] = Array.isArray(graph?.nodes) ? graph.nodes : [];
+        const edges: any[] = Array.isArray(graph?.edges) ? graph.edges : [];
+        const nodeByUuid = new Map(nodes.map((n: any) => [String(n.uuid || n.id || ''), n]));
+        const edgeByUuid = new Map(edges.map((e: any) => [String(e.uuid || e.id || ''), e]));
+        for (const subj of sc.snapshot_subjects || []) {
+          const subjectId = String(subj.subject_id || '');
+          if (!subjectId) continue;
+          let branchKey = '';
+          let branchName = '';
+          const targetEdge = edgeByUuid.get(String(subj?.target?.targetId || ''));
+          const childNode = targetEdge ? nodeByUuid.get(String(targetEdge.to || '')) : null;
+          if (childNode) {
+            branchKey = String(childNode.id || childNode.uuid || subjectId);
+            branchName = String(childNode.label || childNode.id || branchKey);
+          } else if (subj.subject_label) {
+            branchKey = subjectId;
+            branchName = subj.subject_label;
+          } else {
+            branchKey = subjectId;
+            branchName = humaniseSubjectId(subjectId);
+          }
+          branchLabelLookup.set(branchKey, branchName);
+          branchKeyByScenarioAndSubject.set(`${sc.scenario_id}||${subjectId}`, branchKey);
+        }
+      }
+
+      const data: Array<Record<string, any>> = [];
+      for (const b of blocks) {
+        const r = b.result;
+        if (!isDailyResult(r)) continue;
+        const rateRows: any[] = Array.isArray(r.rate_by_cohort) ? r.rate_by_cohort : [];
+        const branchKey = branchKeyByScenarioAndSubject.get(`${b.scenario_id}||${b.subject_id}`) || b.subject_id;
+        for (const row of rateRows) {
+          data.push({
+            scenario_id: b.scenario_id,
+            branch: branchKey,
+            date: row.date,
+            x: Number(row.x ?? 0),
+            y: Number(row.y ?? 0),
+            rate: row.rate != null && Number.isFinite(Number(row.rate)) ? Number(row.rate) : null,
+            completeness: row.completeness != null ? Number(row.completeness) : null,
+            layer: row.layer ?? null,
+            evidence_y: row.evidence_y != null ? Number(row.evidence_y) : null,
+            forecast_y: row.forecast_y != null ? Number(row.forecast_y) : null,
+            projected_y: row.projected_y != null ? Number(row.projected_y) : null,
+          });
+        }
+      }
+
+      if (data.length === 0) return null;
+
+      // If exactly one child branch has snapshot rows but the selected parent has exactly two
+      // immediate children, derive the missing branch as the complement so split-by-child remains
+      // intelligible in time-series mode.
+      try {
+        const query = request.query_dsl || '';
+        const match = /visited\(([^)]+)\)/.exec(query);
+        const selectedParentId = match?.[1] ? String(match[1]).trim() : '';
+        const firstGraph: any = request.scenarios?.[0]?.graph || {};
+        const nodes: any[] = Array.isArray(firstGraph?.nodes) ? firstGraph.nodes : [];
+        const edges: any[] = Array.isArray(firstGraph?.edges) ? firstGraph.edges : [];
+        const parentNode = nodes.find((n: any) => String(n.id || '') === selectedParentId || String(n.uuid || '') === selectedParentId);
+        if (parentNode) {
+          const childNodes = edges
+            .filter((e: any) => String(e.from || '') === String(parentNode.uuid || parentNode.id || ''))
+            .map((e: any) => nodes.find((n: any) => String(n.uuid || n.id || '') === String(e.to || '')))
+            .filter(Boolean);
+          const expectedBranches = childNodes.map((n: any) => ({
+            key: String(n.id || n.uuid || ''),
+            name: String(n.label || n.id || n.uuid || ''),
+          }));
+          const presentByScenarioAndDate = new Map<string, Set<string>>();
+          for (const row of data) {
+            const key = `${row.scenario_id}||${row.date}`;
+            if (!presentByScenarioAndDate.has(key)) presentByScenarioAndDate.set(key, new Set());
+            presentByScenarioAndDate.get(key)!.add(String(row.branch));
+          }
+          const derivedRows: Array<Record<string, any>> = [];
+          if (expectedBranches.length === 2) {
+            for (const [key, present] of presentByScenarioAndDate.entries()) {
+              if (present.size !== 1) continue;
+              const [scenarioId, date] = key.split('||');
+              const missing = expectedBranches.find(bm => !present.has(bm.key));
+              const known = expectedBranches.find(bm => present.has(bm.key));
+              if (!missing || !known) continue;
+              const knownRow = data.find(r => String(r.scenario_id) === scenarioId && String(r.date) === date && String(r.branch) === known.key);
+              if (!knownRow) continue;
+              const x = Number(knownRow.x ?? 0);
+              const knownEvidence = typeof knownRow.evidence_y === 'number'
+                ? knownRow.evidence_y
+                : (typeof knownRow.y === 'number' ? knownRow.y : null);
+              const knownProjected = typeof knownRow.projected_y === 'number'
+                ? knownRow.projected_y
+                : (typeof knownRow.y === 'number' ? knownRow.y : null);
+              const evidenceY = typeof knownEvidence === 'number' ? Math.max(0, x - knownEvidence) : null;
+              const projectedY = typeof knownProjected === 'number' ? Math.max(0, x - knownProjected) : null;
+              const forecastY = projectedY != null && evidenceY != null ? Math.max(0, projectedY - evidenceY) : null;
+              derivedRows.push({
+                scenario_id: scenarioId,
+                branch: missing.key,
+                date,
+                x,
+                y: projectedY ?? null,
+                rate: projectedY != null && x > 0 ? projectedY / x : null,
+                completeness: knownRow.completeness != null ? Number(knownRow.completeness) : null,
+                layer: knownRow.layer ?? null,
+                evidence_y: evidenceY,
+                forecast_y: forecastY,
+                projected_y: projectedY,
+              });
+              branchLabelLookup.set(missing.key, missing.name);
+            }
+          }
+          if (derivedRows.length > 0) data.push(...derivedRows);
+        }
+      } catch {
+        // Keep the observed rows if complement derivation fails.
+      }
+
+      const branchIds = Array.from(new Set(data.map(d => String(d.branch)).filter(Boolean)));
+      const branchDimensionValues: Record<string, DimensionValueMeta> = Object.fromEntries(
+        branchIds.map((id, i) => [id, { name: branchLabelLookup.get(id) || humaniseSubjectId(id), order: i }]),
+      );
+
+      const result: AnalysisResult = {
+        analysis_type: 'branch_comparison',
+        analysis_name: 'Branch Comparison',
+        analysis_description: 'Traffic split by child over time',
+        metadata: {
+          source: 'snapshot_db',
+          node_ids: branchIds,
+        },
+        semantics: {
+          dimensions: [
+            { id: 'date', name: 'Cohort date', type: 'time', role: 'primary' },
+            { id: 'scenario_id', name: 'Scenario', type: 'scenario', role: 'secondary' },
+            { id: 'branch', name: 'Branch', type: 'node', role: 'filter' },
+          ],
+          metrics: [
+            { id: 'rate', name: 'Conversion rate', type: 'ratio', format: 'percent', role: 'primary' },
+            { id: 'x', name: 'Cohort size', type: 'count', format: 'number' },
+            { id: 'y', name: 'Conversions', type: 'count', format: 'number' },
+            { id: 'evidence_y', name: 'Evidence conversions', type: 'count', format: 'number' },
+            { id: 'forecast_y', name: 'Forecast conversions', type: 'count', format: 'number' },
+            { id: 'projected_y', name: 'Projected conversions', type: 'count', format: 'number' },
+            { id: 'completeness', name: 'Completeness', type: 'ratio', format: 'percent' },
+          ],
+          chart: {
+            recommended: 'time_series',
+            alternatives: ['bar_grouped', 'pie', 'table'],
+          },
+        },
+        dimension_values: {
+          scenario_id: scenarioDimensionValues,
+          branch: branchDimensionValues,
+        },
+        data,
+      };
+
+      return { success: true, result, query_dsl: request.query_dsl };
+    } catch (err) {
+      console.error('[GraphComputeClient] Branch comparison snapshot normalisation CRASHED:', err);
+      return null;
+    }
+  }
+
+  /**
    * Normalise multi-scenario lag_fit response.
    *
    * The backend returns the result pre-tabulated (data rows with row_type), so
@@ -1152,10 +1397,12 @@ export class GraphComputeClient {
     snapshotSubjects?: SnapshotSubjectPayload[]
   ): Promise<AnalysisResponse> {
     const bypassCache = this.shouldBypassCache();
+    const snapshotSig = snapshotSubjectsSignature(snapshotSubjects);
 
     const cacheKey =
       this.generateCacheKey(graph, queryDsl, analysisType, [scenarioId])
       + `|vis:${visibilityMode}`
+      + (snapshotSig ? `|snap:${this.hashString(snapshotSig)}` : '')
       + (analysisType === 'cohort_maturity' ? `|cmv:${this.COHORT_MATURITY_CACHE_VERSION}` : '');
     if (!bypassCache) {
       const cached = this.analysisCache.get(cacheKey);
@@ -1253,6 +1500,7 @@ export class GraphComputeClient {
     const normalised =
       this.normaliseSnapshotCohortMaturityResponse(raw, request)
       ?? this.normaliseSnapshotDailyConversionsResponse(raw, request)
+      ?? this.normaliseSnapshotBranchComparisonResponse(raw, request)
       ?? this.normaliseSnapshotLagFitResponse(raw, request);
 
     if (import.meta.env.DEV && request.analysis_type === 'cohort_maturity') {
@@ -1313,6 +1561,10 @@ export class GraphComputeClient {
     // This ensures cache invalidates when any scenario's data changes
     const scenarioIds = scenarios.map(s => s.scenario_id);
     const visibilityModes = scenarios.map(s => `${s.scenario_id}:${s.visibility_mode || 'f+e'}`).join(',');
+    const snapshotSig = scenarios
+      .map(s => `${s.scenario_id}:${snapshotSubjectsSignature(s.snapshot_subjects)}`)
+      .filter(Boolean)
+      .join('||');
     
     // CRITICAL:
     // Cache key must incorporate ALL scenario graphs (not just scenarios[0]),
@@ -1325,6 +1577,7 @@ export class GraphComputeClient {
     const cacheKey =
       `multi|graphs:${scenarioGraphKey}|dsl:${queryDsl || ''}|type:${analysisType || ''}|scenarios:${scenarioIds.join(',')}`
       + `|vis:${visibilityModes}`
+      + (snapshotSig ? `|snap:${this.hashString(snapshotSig)}` : '')
       + (analysisType === 'cohort_maturity' ? `|cmv:${this.COHORT_MATURITY_CACHE_VERSION}` : '');
     
     // Check cache first (unless explicitly bypassed via URL params for debugging).
@@ -1407,6 +1660,7 @@ export class GraphComputeClient {
     const normalised =
       this.normaliseSnapshotCohortMaturityResponse(raw, request)
       ?? this.normaliseSnapshotDailyConversionsResponse(raw, request)
+      ?? this.normaliseSnapshotBranchComparisonResponse(raw, request)
       ?? this.normaliseSnapshotLagFitResponse(raw, request);
     const result = normalised ?? raw;
 

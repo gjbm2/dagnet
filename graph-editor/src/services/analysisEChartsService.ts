@@ -278,6 +278,35 @@ function getDimOrder(dimensionValues: Record<string, Record<string, DimensionVal
   return typeof order === 'number' && Number.isFinite(order) ? order : 0;
 }
 
+/**
+ * Wrap a label string across multiple lines, splitting on word boundaries
+ * (spaces, hyphens, underscores, slashes, etc.) and hard-breaking long tokens.
+ */
+function wrapAxisLabel(raw: string, maxCharsPerLine = 12, maxLines = 2): string {
+  const s = String(raw ?? '').trim();
+  if (!s) return '';
+  const parts = s.split(/[\s/|._:\-–—]+/g).filter(Boolean);
+  const lines: string[] = [];
+  let current = '';
+  const push = () => { if (current.trim()) lines.push(current.trim()); current = ''; };
+  for (const p of parts) {
+    const chunks: string[] = [];
+    if (p.length > maxCharsPerLine) {
+      for (let i = 0; i < p.length; i += maxCharsPerLine) chunks.push(p.slice(i, i + maxCharsPerLine));
+    } else {
+      chunks.push(p);
+    }
+    for (const token of chunks) {
+      const next = current ? `${current} ${token}` : token;
+      if (next.length > maxCharsPerLine) { push(); current = token; } else { current = next; }
+      if (lines.length >= maxLines) break;
+    }
+    if (lines.length >= maxLines) break;
+  }
+  push();
+  return lines.slice(0, maxLines).join('\n') || s;
+}
+
 function getScenarioTitleWithBasis(result: AnalysisResult, scenarioId: string): string {
   const name = getDimLabel(result.dimension_values, 'scenario_id', scenarioId);
   const basis = (result.dimension_values?.scenario_id?.[scenarioId] as any)?.probability_label;
@@ -970,62 +999,12 @@ export function buildBridgeEChartsOption(result: AnalysisResult, args: BridgeCha
   const n = Math.max(1, labels.length);
   const perCategory = (orientation === 'horizontal' ? plotHeight : plotWidth) / n;
   const defaultBarWidth = '55%';
+  // Hide value labels when bars are too dense — they overlap and become illegible.
+  // Vertical: labels sit above/below bars, competing horizontally (~50px needed per bar).
+  // Horizontal: labels sit to the right, competing vertically (~18px needed per bar).
+  const showValueLabels = orientation === 'horizontal' ? perCategory >= 18 : perCategory >= 50;
 
-  const clampLabelIntoView = (p: any) => {
-    const lr = p?.labelRect;
-    const vr = p?.chartViewRect;
-    if (!lr || !vr) return;
-    let dx = 0;
-    let dy = 0;
-    const rightOverflow = (lr.x + lr.width) - (vr.x + vr.width);
-    if (rightOverflow > 0) dx -= (rightOverflow + 4);
-    const leftOverflow = vr.x - lr.x;
-    if (leftOverflow > 0) dx += (leftOverflow + 4);
-    const bottomOverflow = (lr.y + lr.height) - (vr.y + vr.height);
-    if (bottomOverflow > 0) dy -= (bottomOverflow + 4);
-    const topOverflow = vr.y - lr.y;
-    if (topOverflow > 0) dy += (topOverflow + 4);
-    return dx || dy ? ({ dx, dy } as any) : undefined;
-  };
-
-  const wrapLabel = (raw: string): string => {
-    const s = String(raw ?? '').trim();
-    if (!s) return '';
-    // Split aggressively so IDs like "household-delegated" wrap instead of being truncated.
-    const parts = s.split(/[\s/|._:\-–—]+/g).filter(Boolean);
-    const lines: string[] = [];
-    let current = '';
-    const push = () => {
-      if (current.trim()) lines.push(current.trim());
-      current = '';
-    };
-    for (const p of parts) {
-      // Hard-break very long tokens so we never clip with ellipsis.
-      const chunks: string[] = [];
-      if (p.length > axisLabelMaxCharsPerLine) {
-        for (let i = 0; i < p.length; i += axisLabelMaxCharsPerLine) {
-          chunks.push(p.slice(i, i + axisLabelMaxCharsPerLine));
-        }
-      } else {
-        chunks.push(p);
-      }
-
-      for (const token of chunks) {
-        const next = current ? `${current} ${token}` : token;
-        if (next.length > axisLabelMaxCharsPerLine) {
-          push();
-          current = token;
-        } else {
-          current = next;
-        }
-        if (lines.length >= axisLabelMaxLines) break;
-      }
-      if (lines.length >= axisLabelMaxLines) break;
-    }
-    push();
-    const out = lines.slice(0, axisLabelMaxLines).join('\n');
-    return out || s;
-  };
+  const wrapLabel = (raw: string) => wrapAxisLabel(raw, axisLabelMaxCharsPerLine, axisLabelMaxLines);
 
   const lineHeight = axisLabelFontSizePx + 2;
   const perCategoryPx = widthPx / Math.max(1, labels.length);
@@ -1220,17 +1199,18 @@ export function buildBridgeEChartsOption(result: AnalysisResult, args: BridgeCha
         itemStyle: { color: '#10b981' },
         barWidth: defaultBarWidth,
         label: {
-          show: true,
+          show: showValueLabels,
           position: orientation === 'horizontal' ? 'right' : 'top',
           distance: 6,
           formatter: (p: any) => {
+            if (!showValueLabels) return '';
             const v = typeof p?.value === 'number' ? p.value : null;
             return typeof v === 'number' && Number.isFinite(v) ? `+${fmtDeltaPct(v)}` : '';
           },
           fontSize: valueLabelFontSizePx,
           color: echartsThemeColours().text,
         },
-        labelLayout: (p: any) => clampLabelIntoView(p),
+        labelLayout: showValueLabels ? { hideOverlap: true } : undefined,
         data: inc,
       },
       {
@@ -1240,17 +1220,18 @@ export function buildBridgeEChartsOption(result: AnalysisResult, args: BridgeCha
         itemStyle: { color: '#ef4444' },
         barWidth: defaultBarWidth,
         label: {
-          show: true,
+          show: showValueLabels,
           position: orientation === 'horizontal' ? 'right' : 'bottom',
           distance: 6,
           formatter: (p: any) => {
+            if (!showValueLabels) return '';
             const v = typeof p?.value === 'number' ? p.value : null;
             return typeof v === 'number' && Number.isFinite(v) ? `-${fmtDeltaPct(v)}` : '';
           },
           fontSize: valueLabelFontSizePx,
           color: echartsThemeColours().text,
         },
-        labelLayout: (p: any) => clampLabelIntoView(p),
+        labelLayout: showValueLabels ? { hideOverlap: true } : undefined,
         data: dec,
       },
       {
@@ -1260,17 +1241,18 @@ export function buildBridgeEChartsOption(result: AnalysisResult, args: BridgeCha
         barWidth: defaultBarWidth,
         barGap: '-100%',
         label: {
-          show: true,
+          show: showValueLabels,
           position: orientation === 'horizontal' ? 'right' : 'top',
           distance: 6,
           formatter: (p: any) => {
+            if (!showValueLabels) return '';
             const v = typeof p?.value === 'number' ? p.value : null;
             return typeof v === 'number' && Number.isFinite(v) ? fmtTotalPct(v) : '';
           },
           fontSize: valueLabelFontSizePx,
           color: echartsThemeColours().text,
         },
-        labelLayout: (p: any) => clampLabelIntoView(p),
+        labelLayout: showValueLabels ? { hideOverlap: true } : undefined,
         data: totalBars,
       },
     ],
@@ -2287,6 +2269,632 @@ function buildLagFitEChartsOption(
   };
 }
 
+type ComparisonChartOptionArgs = {
+  scenarioIds?: string[];
+  layout?: {
+    widthPx?: number;
+    heightPx?: number;
+  };
+  ui?: {
+    showToolbox?: boolean;
+  };
+};
+
+function buildComparisonChartState(
+  result: AnalysisResult,
+  settings: Record<string, any> = {},
+  args: ComparisonChartOptionArgs = {},
+) {
+  const dims = result.semantics?.dimensions || [];
+  const metrics = result.semantics?.metrics || [];
+  const primaryDim = dims.find(d => d.id !== 'scenario_id' && d.role === 'primary') || dims.find(d => d.id !== 'scenario_id');
+  const scenarioDim = dims.find(d => d.id === 'scenario_id' || d.type === 'scenario');
+  if (!primaryDim) return null;
+
+  const primaryMetricId = metrics.find(m => m.role === 'primary')?.id || metrics[0]?.id;
+  if (!primaryMetricId) return null;
+
+  const rows = Array.isArray(result.data) ? result.data : [];
+  const scenarioIdField = scenarioDim?.id || 'scenario_id';
+  const allScenarioIds = Array.from(new Set(rows
+    .map(r => (r?.[scenarioIdField] != null ? String(r[scenarioIdField]) : ''))
+    .filter(Boolean)));
+  const scenarioIds = (args.scenarioIds && args.scenarioIds.length ? args.scenarioIds : allScenarioIds).filter(Boolean);
+
+  const primaryIdField = primaryDim.id;
+  const primaryIds = Array.from(new Set(rows
+    .map(r => (r?.[primaryIdField] != null ? String(r[primaryIdField]) : ''))
+    .filter(Boolean)))
+    .sort((a, b) => getDimOrder(result.dimension_values, primaryIdField, a) - getDimOrder(result.dimension_values, primaryIdField, b));
+
+  const byPrimaryAndScenario = new Map<string, any>();
+  for (const row of rows) {
+    const pid = row?.[primaryIdField];
+    const sid = row?.[scenarioIdField];
+    if (pid == null) continue;
+    const key = `${String(pid)}::${sid == null ? '' : String(sid)}`;
+    byPrimaryAndScenario.set(key, row);
+  }
+
+  const hasEvidenceMean = metrics.some(m => m.id === 'evidence_mean');
+  const hasForecastMean = metrics.some(m => m.id === 'forecast_mean');
+  const hasEvidenceK = metrics.some(m => m.id === 'evidence_k');
+  const hasForecastK = metrics.some(m => m.id === 'forecast_k');
+  const metricModeAbsolute = settings.metric_mode === 'absolute';
+  const allFERendered = scenarioIds.length > 0
+    && scenarioIds.every(sid => ((result.dimension_values?.scenario_id?.[sid] as any)?.visibility_mode || 'f+e') === 'f+e');
+  const shouldShowFESplit = allFERendered && (
+    (metricModeAbsolute && hasEvidenceK && hasForecastK)
+    || (!metricModeAbsolute && hasEvidenceMean && hasForecastMean)
+  );
+
+  const comparisonColours = ['#3b82f6', '#10b981', '#f59e0b', '#ec4899', '#8b5cf6', '#14b8a6', '#ef4444', '#6366f1'];
+  const colourForPrimary = (primaryId: string, idx: number) =>
+    result.dimension_values?.[primaryIdField]?.[primaryId]?.colour || comparisonColours[idx % comparisonColours.length];
+  const hexToRgba = (hex: string, alpha: number): string => {
+    const m = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+    if (!m) return hex;
+    const r = parseInt(m[1], 16);
+    const g = parseInt(m[2], 16);
+    const b = parseInt(m[3], 16);
+    return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+  };
+  const forecastDecal = { symbol: 'rect', dashArrayX: [1, 0], dashArrayY: [3, 3], rotation: -Math.PI / 4 } as any;
+  const num = (v: any): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+  const fmtValue = (v: number | null) => {
+    if (typeof v !== 'number' || !Number.isFinite(v)) return '—';
+    if (metricModeAbsolute) return Math.round(v).toLocaleString();
+    return `${(v * 100).toFixed(1)}%`;
+  };
+  const getRow = (primaryId: string, scenarioId?: string) =>
+    byPrimaryAndScenario.get(`${primaryId}::${scenarioId || ''}`) || null;
+  const getTotalValue = (row: any): number | null => {
+    if (!row) return null;
+    if (metricModeAbsolute) {
+      const visibilityMode = row?.visibility_mode || 'f+e';
+      if (visibilityMode === 'f') return num(row?.forecast_k);
+      if (visibilityMode === 'e') return num(row?.evidence_k);
+      return num(row?.forecast_k) ?? num(row?.evidence_k);
+    }
+    return num(row?.[primaryMetricId]);
+  };
+  const getEvidenceValue = (row: any): number | null => metricModeAbsolute ? num(row?.evidence_k) : num(row?.evidence_mean);
+
+  return {
+    primaryDim,
+    scenarioIds,
+    primaryIds,
+    shouldShowFESplit,
+    metricModeAbsolute,
+    colourForPrimary,
+    hexToRgba,
+    forecastDecal,
+    fmtValue,
+    getRow,
+    getTotalValue,
+    getEvidenceValue,
+  };
+}
+
+function buildComparisonBarEChartsOption(
+  result: AnalysisResult,
+  settings: Record<string, any> = {},
+  args: ComparisonChartOptionArgs = {},
+): any | null {
+  const state = buildComparisonChartState(result, settings, args);
+  if (!state) return null;
+
+  const {
+    primaryDim,
+    scenarioIds,
+    primaryIds,
+    shouldShowFESplit,
+    metricModeAbsolute,
+    colourForPrimary,
+    hexToRgba,
+    forecastDecal,
+    fmtValue,
+    getRow,
+    getTotalValue,
+    getEvidenceValue,
+  } = state;
+
+  const showToolbox = args.ui?.showToolbox ?? false;
+  const widthPx = args.layout?.widthPx && Number.isFinite(args.layout.widthPx) ? args.layout.widthPx : 400;
+  const categoryIsScenario = scenarioIds.length > 1;
+  const requestedStackMode = typeof settings.stack_mode === 'string' ? settings.stack_mode : undefined;
+  const effectiveStackMode = requestedStackMode || (categoryIsScenario ? 'stacked' : 'grouped');
+  const useScenarioStack = categoryIsScenario && effectiveStackMode !== 'grouped';
+  const categories = categoryIsScenario
+    ? scenarioIds.map(sid => getScenarioTitleWithBasis(result, sid))
+    : primaryIds.map(pid => getDimLabel(result.dimension_values, primaryDim.id, pid));
+  const categoryCount = Math.max(1, categories.length);
+  const perCategoryPx = widthPx / Math.max(1, categoryCount);
+  const barLabelRotate =
+    categoryCount >= 14 || widthPx < 300 ? 60 :
+    categoryCount >= 8 || perCategoryPx < 52 ? 45 :
+    categoryCount >= 5 && perCategoryPx < 80 ? 30 :
+    0;
+  const seriesCountForDensity = categoryIsScenario ? primaryIds.length : (shouldShowFESplit ? 2 : 1);
+  const showValueLabels = (categoryCount * Math.max(1, seriesCountForDensity)) <= 18;
+
+  const series: any[] = [];
+  if (categoryIsScenario) {
+    primaryIds.forEach((pid, idx) => {
+      const branchLabel = getDimLabel(result.dimension_values, primaryDim.id, pid);
+      const colour = colourForPrimary(pid, idx);
+      if (shouldShowFESplit) {
+        series.push({
+          name: `${branchLabel} — e`,
+          type: 'bar',
+          stack: useScenarioStack ? 'comparison' : pid,
+          ...(effectiveStackMode === 'stacked_100' ? { stackStrategy: 'percentage' as const } : null),
+          itemStyle: { color: hexToRgba(colour, 0.9) },
+          label: { show: false },
+          data: scenarioIds.map(sid => {
+            const row = getRow(pid, sid);
+            const total = getTotalValue(row);
+            const evidence = getEvidenceValue(row);
+            const ev = typeof evidence === 'number' && typeof total === 'number'
+              ? Math.min(total, evidence)
+              : (typeof evidence === 'number' ? evidence : 0);
+            return { value: ev, __raw: row, __total: total };
+          }),
+        });
+        series.push({
+          name: `${branchLabel} — f−e`,
+          type: 'bar',
+          stack: useScenarioStack ? 'comparison' : pid,
+          ...(effectiveStackMode === 'stacked_100' ? { stackStrategy: 'percentage' as const } : null),
+          itemStyle: { color: hexToRgba(colour, 0.4), decal: forecastDecal },
+          label: {
+            show: showValueLabels && !useScenarioStack,
+            position: 'top',
+            formatter: (p: any) => fmtValue(typeof p?.data?.__total === 'number' ? p.data.__total : null),
+            fontSize: 10,
+            color: echartsThemeColours().text,
+          },
+          data: scenarioIds.map(sid => {
+            const row = getRow(pid, sid);
+            const total = getTotalValue(row);
+            const evidence = getEvidenceValue(row);
+            const ev = typeof evidence === 'number' && typeof total === 'number'
+              ? Math.min(total, evidence)
+              : (typeof evidence === 'number' ? evidence : 0);
+            const residual = typeof total === 'number' ? Math.max(0, total - ev) : 0;
+            return { value: residual, __raw: row, __total: total };
+          }),
+        });
+      } else {
+        series.push({
+          name: branchLabel,
+          type: 'bar',
+          ...(useScenarioStack ? { stack: 'comparison' } : null),
+          ...(effectiveStackMode === 'stacked_100' ? { stackStrategy: 'percentage' as const } : null),
+          itemStyle: { color: colour },
+          label: {
+            show: showValueLabels && !useScenarioStack,
+            position: 'top',
+            formatter: (p: any) => fmtValue(typeof p?.value === 'number' ? p.value : null),
+            fontSize: 10,
+            color: echartsThemeColours().text,
+          },
+          labelLayout: showValueLabels ? { hideOverlap: true } : undefined,
+          data: scenarioIds.map(sid => {
+            const row = getRow(pid, sid);
+            return { value: getTotalValue(row) ?? 0, __raw: row };
+          }),
+        });
+      }
+    });
+  } else {
+    const scenarioId = scenarioIds[0];
+    if (shouldShowFESplit) {
+      series.push({
+        name: 'Evidence',
+        type: 'bar',
+        stack: 'comparison',
+        ...(effectiveStackMode === 'stacked_100' ? { stackStrategy: 'percentage' as const } : null),
+        label: { show: false },
+        data: primaryIds.map((pid, idx) => {
+          const row = getRow(pid, scenarioId);
+          const total = getTotalValue(row);
+          const evidence = getEvidenceValue(row);
+          const ev = typeof evidence === 'number' && typeof total === 'number'
+            ? Math.min(total, evidence)
+            : (typeof evidence === 'number' ? evidence : 0);
+          return {
+            value: ev,
+            itemStyle: { color: hexToRgba(colourForPrimary(pid, idx), 0.9) },
+            __raw: row,
+            __total: total,
+          };
+        }),
+      });
+      series.push({
+        name: 'Forecast − Evidence',
+        type: 'bar',
+        stack: 'comparison',
+        ...(effectiveStackMode === 'stacked_100' ? { stackStrategy: 'percentage' as const } : null),
+        label: {
+          show: showValueLabels,
+          position: 'top',
+          formatter: (p: any) => fmtValue(typeof p?.data?.__total === 'number' ? p.data.__total : null),
+          fontSize: 10,
+          color: echartsThemeColours().text,
+        },
+        data: primaryIds.map((pid, idx) => {
+          const row = getRow(pid, scenarioId);
+          const total = getTotalValue(row);
+          const evidence = getEvidenceValue(row);
+          const ev = typeof evidence === 'number' && typeof total === 'number'
+            ? Math.min(total, evidence)
+            : (typeof evidence === 'number' ? evidence : 0);
+          const residual = typeof total === 'number' ? Math.max(0, total - ev) : 0;
+          return {
+            value: residual,
+            itemStyle: { color: hexToRgba(colourForPrimary(pid, idx), 0.4), decal: forecastDecal },
+            __raw: row,
+            __total: total,
+          };
+        }),
+      });
+    } else {
+      series.push({
+        name: scenarioId ? getScenarioTitleWithBasis(result, scenarioId) : 'Comparison',
+        type: 'bar',
+        label: {
+          show: showValueLabels,
+          position: 'top',
+          formatter: (p: any) => fmtValue(typeof p?.value === 'number' ? p.value : null),
+          fontSize: 10,
+          color: echartsThemeColours().text,
+        },
+        labelLayout: showValueLabels ? { hideOverlap: true } : undefined,
+        data: primaryIds.map((pid, idx) => {
+          const row = getRow(pid, scenarioId);
+          return {
+            value: getTotalValue(row) ?? 0,
+            itemStyle: { color: colourForPrimary(pid, idx) },
+            __raw: row,
+          };
+        }),
+      });
+    }
+  }
+
+  return {
+    __dagnet_skip_stack_mode: true,
+    animation: false,
+    backgroundColor: 'transparent',
+    toolbox: showToolbox
+      ? {
+          show: true,
+          right: 8,
+          top: 8,
+          feature: { saveAsImage: { show: true }, restore: { show: true } },
+        }
+      : { show: false },
+    legend: { show: true, top: 0, left: 0, textStyle: { color: echartsThemeColours().text, fontSize: 11 } },
+    grid: { left: 8, right: 16, top: showToolbox ? 34 : 22, bottom: barLabelRotate ? 58 : 42, containLabel: true },
+    tooltip: {
+      trigger: 'axis',
+      axisPointer: { type: 'shadow' },
+      confine: true,
+      ...echartsTooltipStyle(),
+      formatter: (params: any) => {
+        const ps = Array.isArray(params) ? params : [params];
+        const title = ps[0]?.axisValueLabel ?? '';
+        const lines = [`<div style="font-size:11px;line-height:1.25;">`, `<div style="font-weight:600;margin-bottom:4px;">${title}</div>`];
+        for (const p of ps) {
+          if (typeof p?.value !== 'number' || !Number.isFinite(p.value) || p.value === 0) continue;
+          lines.push(`<div>${p.marker || ''}${p.seriesName}: ${fmtValue(p.value)}</div>`);
+        }
+        lines.push(`</div>`);
+        return lines.join('');
+      },
+    },
+    xAxis: {
+      type: 'category',
+      data: categories.map(c => wrapAxisLabel(c)),
+      axisLabel: {
+        interval: 0,
+        rotate: barLabelRotate,
+        fontSize: 10,
+        lineHeight: 12,
+        hideOverlap: true,
+        align: barLabelRotate ? ('right' as const) : ('center' as const),
+        verticalAlign: barLabelRotate ? ('middle' as const) : ('top' as const),
+        color: echartsThemeColours().text,
+      },
+      axisLine: { lineStyle: { color: echartsThemeColours().border } },
+    },
+    yAxis: {
+      type: 'value',
+      axisLabel: {
+        formatter: (v: number) => metricModeAbsolute ? Math.round(v).toString() : `${Math.round(v * 100)}%`,
+        fontSize: 10,
+        color: echartsThemeColours().text,
+      },
+      splitLine: { lineStyle: { color: echartsThemeColours().gridLine } },
+      axisLine: { lineStyle: { color: echartsThemeColours().border } },
+    },
+    series,
+  };
+}
+
+function buildComparisonPieEChartsOption(
+  result: AnalysisResult,
+  settings: Record<string, any> = {},
+  args: ComparisonChartOptionArgs = {},
+): any | null {
+  const state = buildComparisonChartState(result, settings, args);
+  if (!state) return null;
+
+  const {
+    primaryDim,
+    scenarioIds,
+    primaryIds,
+    metricModeAbsolute,
+    colourForPrimary,
+    fmtValue,
+    getRow,
+    getTotalValue,
+  } = state;
+
+  if (scenarioIds.length !== 1) return null;
+  const scenarioId = scenarioIds[0];
+  const data = primaryIds.map((pid, idx) => {
+    const row = getRow(pid, scenarioId);
+    return {
+      name: getDimLabel(result.dimension_values, primaryDim.id, pid),
+      value: getTotalValue(row) ?? 0,
+      itemStyle: { color: colourForPrimary(pid, idx) },
+      __raw: row,
+    };
+  });
+
+  return {
+    animation: false,
+    backgroundColor: 'transparent',
+    tooltip: {
+      trigger: 'item',
+      confine: true,
+      ...echartsTooltipStyle(),
+      formatter: (p: any) => {
+        const v = typeof p?.value === 'number' ? p.value : null;
+        return [`<div style="font-size:11px;line-height:1.25;">`, `<div style="font-weight:600;margin-bottom:4px;">${p?.name || ''}</div>`, `<div>${metricModeAbsolute ? 'Value' : 'Share'}: ${fmtValue(v)}</div>`, `</div>`].join('');
+      },
+    },
+    legend: { show: true, top: 0, left: 0, textStyle: { color: echartsThemeColours().text, fontSize: 11 } },
+    series: [
+      {
+        name: scenarioId ? getScenarioTitleWithBasis(result, scenarioId) : 'Comparison',
+        type: 'pie',
+        radius: '65%',
+        center: ['50%', '58%'],
+        label: {
+          show: true,
+          formatter: (p: any) => `${p.name}\n${metricModeAbsolute ? fmtValue(typeof p?.value === 'number' ? p.value : null) : `${Math.round(p.percent)}%`}`,
+          fontSize: 10,
+          color: echartsThemeColours().text,
+        },
+        labelLayout: { hideOverlap: true },
+        data,
+      },
+    ],
+  };
+}
+
+function buildComparisonTimeSeriesEChartsOption(
+  result: AnalysisResult,
+  settings: Record<string, any> = {},
+  args: ComparisonChartOptionArgs = {},
+): any | null {
+  const rows: any[] = Array.isArray(result?.data) ? result.data : [];
+  if (rows.length === 0) return null;
+  const c = echartsThemeColours();
+  const visibleScenarioIds = args.scenarioIds && args.scenarioIds.length ? args.scenarioIds : ['current'];
+  const filteredRows = rows.filter((r: any) => visibleScenarioIds.includes(String(r?.scenario_id)));
+  if (filteredRows.length === 0) return null;
+
+  const branchMeta: any = result?.dimension_values?.branch || {};
+  const scenarioMeta: any = result?.dimension_values?.scenario_id || {};
+  const branchIds = Array.from(new Set(filteredRows.map((r: any) => String(r?.branch)).filter(Boolean)))
+    .sort((a, b) => getDimOrder(result.dimension_values, 'branch', a) - getDimOrder(result.dimension_values, 'branch', b));
+  const dates = Array.from(new Set(filteredRows.map((r: any) => String(r?.date)).filter(Boolean))).sort();
+  if (dates.length === 0) return null;
+
+  const scenarioId = visibleScenarioIds[0];
+  const visibilityMode = scenarioMeta?.[scenarioId]?.visibility_mode ?? 'f+e';
+  const metricModeAbsolute = settings.metric_mode === 'absolute';
+  const seriesType = settings.series_type ?? 'bar';
+  const showSmooth = settings.smooth ?? false;
+  const showMarkers = settings.show_markers;
+  const showValueLabels = dates.length * branchIds.length <= 24;
+
+  const comparisonColours = ['#3b82f6', '#10b981', '#f59e0b', '#ec4899', '#8b5cf6', '#14b8a6', '#ef4444', '#6366f1'];
+  const colourForBranch = (branchId: string, idx: number) => branchMeta?.[branchId]?.colour || comparisonColours[idx % comparisonColours.length];
+  const hexToRgba = (hex: string, alpha: number): string => {
+    const m = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+    if (!m) return hex;
+    const r = parseInt(m[1], 16);
+    const g = parseInt(m[2], 16);
+    const b = parseInt(m[3], 16);
+    return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+  };
+  const forecastDecal = { symbol: 'rect', dashArrayX: [1, 0], dashArrayY: [3, 3], rotation: -Math.PI / 4 } as any;
+  const pointsByBranchAndDate = new Map<string, any>();
+  for (const row of filteredRows) {
+    pointsByBranchAndDate.set(`${String(row.branch)}::${String(row.date)}`, row);
+  }
+  const fmtValue = (v: number | null) => {
+    if (typeof v !== 'number' || !Number.isFinite(v)) return '—';
+    if (metricModeAbsolute) return Math.round(v).toLocaleString();
+    return `${(v * 100).toFixed(1)}%`;
+  };
+  const getPoint = (branchId: string, date: string) => pointsByBranchAndDate.get(`${branchId}::${date}`) || null;
+  const getValue = (row: any) => {
+    if (!row) return null;
+    if (metricModeAbsolute) {
+      if (visibilityMode === 'e') return typeof row.evidence_y === 'number' ? row.evidence_y : row.y;
+      if (visibilityMode === 'f') return typeof row.projected_y === 'number' ? row.projected_y : (typeof row.forecast_y === 'number' ? row.forecast_y : row.y);
+      return typeof row.projected_y === 'number' ? row.projected_y : row.y;
+    }
+    const x = Number(row.x ?? 0);
+    if (visibilityMode === 'e') {
+      return x > 0 && typeof row.evidence_y === 'number' ? row.evidence_y / x : row.rate;
+    }
+    if (visibilityMode === 'f') {
+      return x > 0 && typeof row.projected_y === 'number' ? row.projected_y / x : row.rate;
+    }
+    return x > 0 && typeof row.projected_y === 'number' ? row.projected_y / x : row.rate;
+  };
+
+  const shouldShowFESplit = visibilityMode === 'f+e'
+    && filteredRows.some((r: any) => typeof r.evidence_y === 'number')
+    && filteredRows.some((r: any) => typeof r.forecast_y === 'number');
+
+  const series: any[] = [];
+  for (let i = 0; i < branchIds.length; i++) {
+    const branchId = branchIds[i];
+    const branchName = branchMeta?.[branchId]?.name || branchId;
+    const colour = colourForBranch(branchId, i);
+    if (shouldShowFESplit) {
+      series.push({
+        name: `${branchName} — e`,
+        type: seriesType === 'line' ? 'line' : 'bar',
+        stack: 'comparison',
+        showSymbol: seriesType === 'line' ? (showMarkers ?? (dates.length <= 20)) : undefined,
+        smooth: seriesType === 'line' ? showSmooth : undefined,
+        lineStyle: seriesType === 'line' ? { width: 2, color: hexToRgba(colour, 0.9) } : undefined,
+        itemStyle: { color: hexToRgba(colour, 0.9) },
+        areaStyle: seriesType === 'line' && settings.area_fill ? { opacity: 0.18 } : undefined,
+        label: { show: false },
+        data: dates.map(d => {
+          const row = getPoint(branchId, d);
+          const x = Number(row?.x ?? 0);
+          const evidenceValue = metricModeAbsolute
+            ? (typeof row?.evidence_y === 'number' ? row.evidence_y : 0)
+            : (x > 0 && typeof row?.evidence_y === 'number' ? row.evidence_y / x : 0);
+          const total = getValue(row);
+          return [d, evidenceValue, { __total: total }];
+        }),
+      });
+      series.push({
+        name: `${branchName} — f−e`,
+        type: seriesType === 'line' ? 'line' : 'bar',
+        stack: 'comparison',
+        showSymbol: seriesType === 'line' ? false : undefined,
+        smooth: seriesType === 'line' ? showSmooth : undefined,
+        lineStyle: seriesType === 'line' ? { width: 2, color: hexToRgba(colour, 0.45), type: 'dashed' } : undefined,
+        itemStyle: { color: hexToRgba(colour, 0.45), decal: forecastDecal },
+        areaStyle: seriesType === 'line' && settings.area_fill ? { opacity: 0.12 } : undefined,
+        label: {
+          show: showValueLabels && seriesType !== 'line',
+          position: 'top',
+          formatter: (p: any) => fmtValue(typeof p?.value?.[2]?.__total === 'number' ? p.value[2].__total : null),
+          fontSize: 10,
+          color: c.text,
+        },
+        data: dates.map(d => {
+          const row = getPoint(branchId, d);
+          const x = Number(row?.x ?? 0);
+          const evidenceValue = metricModeAbsolute
+            ? (typeof row?.evidence_y === 'number' ? row.evidence_y : 0)
+            : (x > 0 && typeof row?.evidence_y === 'number' ? row.evidence_y / x : 0);
+          const total = getValue(row);
+          const residual = typeof total === 'number' ? Math.max(0, total - evidenceValue) : 0;
+          return [d, residual, { __total: total }];
+        }),
+      });
+    } else {
+      series.push({
+        name: branchName,
+        type: seriesType === 'line' ? 'line' : 'bar',
+        stack: 'comparison',
+        showSymbol: seriesType === 'line' ? (showMarkers ?? (dates.length <= 20)) : undefined,
+        smooth: seriesType === 'line' ? showSmooth : undefined,
+        lineStyle: seriesType === 'line' ? { width: 2, color: colour } : undefined,
+        itemStyle: { color: colour },
+        areaStyle: seriesType === 'line' && settings.area_fill ? { opacity: 0.16 } : undefined,
+        label: {
+          show: showValueLabels && seriesType !== 'line',
+          position: 'top',
+          formatter: (p: any) => fmtValue(Array.isArray(p?.value) ? p.value[1] : null),
+          fontSize: 10,
+          color: c.text,
+        },
+        labelLayout: showValueLabels ? { hideOverlap: true } : undefined,
+        data: dates.map(d => {
+          const row = getPoint(branchId, d);
+          return [d, getValue(row) ?? 0];
+        }),
+      });
+    }
+  }
+
+  return {
+    __dagnet_skip_stack_mode: true,
+    animation: false,
+    backgroundColor: 'transparent',
+    tooltip: {
+      trigger: 'axis',
+      axisPointer: { type: 'shadow' },
+      ...echartsTooltipStyle(),
+      formatter: (params: any) => {
+        const items = Array.isArray(params) ? params : [params];
+        const first = items[0];
+        const dateRaw = Array.isArray(first?.value) ? first.value[0] : first?.axisValue;
+        const dateStr = String(dateRaw || '');
+        const lines = items.map((it: any) => {
+          const val = Array.isArray(it?.value) ? it.value[1] : it?.value;
+          return `${it?.marker || ''} ${it?.seriesName || ''}: <strong>${fmtValue(typeof val === 'number' ? val : null)}</strong>`;
+        });
+        return `<strong>${dateStr}</strong><br/>${lines.join('<br/>')}`;
+      },
+    },
+    grid: { left: 52, right: 16, bottom: 60, top: series.length > 3 ? 72 : 46, containLabel: false },
+    xAxis: {
+      type: 'time',
+      name: settings.y_axis_title ?? 'Cohort date',
+      nameLocation: 'middle',
+      nameGap: 30,
+      axisLabel: {
+        fontSize: 10,
+        rotate: 30,
+        color: c.text,
+        formatter: (value: number) => {
+          const d = new Date(value);
+          if (Number.isNaN(d.getTime())) return '';
+          return `${d.getUTCDate()}-${d.toLocaleDateString('en-GB', { month: 'short', timeZone: 'UTC' })}`;
+        },
+      },
+    },
+    yAxis: [{
+      type: 'value',
+      name: metricModeAbsolute ? 'Conversions' : 'Rate',
+      nameLocation: 'middle',
+      nameGap: 45,
+      min: settings.y_axis_min ?? 0,
+      max: settings.y_axis_max ?? undefined,
+      axisLabel: {
+        fontSize: 11,
+        color: c.text,
+        formatter: (value: number) => metricModeAbsolute
+          ? (value >= 1000 ? `${(value / 1000).toFixed(1)}k` : value.toString())
+          : `${Math.round(value * 100)}%`,
+      },
+    }],
+    legend: {
+      show: settings.show_legend ?? true,
+      top: 0,
+      textStyle: { color: c.text, fontSize: 11 },
+    },
+    series,
+  };
+}
+
 export function buildChartOption(
   chartKind: string,
   result: any,
@@ -2296,11 +2904,39 @@ export function buildChartOption(
     scenarioVisibilityModes?: Record<string, 'f+e' | 'f' | 'e'>;
     scenarioDslSubtitleById?: Record<string, string>;
     subjectId?: string;
+    layout?: {
+      widthPx?: number;
+      heightPx?: number;
+    };
   },
 ): any | null {
   let opt: any | null;
 
   switch (chartKind) {
+    case 'time_series':
+      opt = buildComparisonTimeSeriesEChartsOption(result, resolvedSettings, {
+        scenarioIds: extra?.visibleScenarioIds,
+        layout: extra?.layout,
+        ui: { showToolbox: false },
+      });
+      break;
+
+    case 'bar_grouped':
+      opt = buildComparisonBarEChartsOption(result, resolvedSettings, {
+        scenarioIds: extra?.visibleScenarioIds,
+        layout: extra?.layout,
+        ui: { showToolbox: false },
+      });
+      break;
+
+    case 'pie':
+      opt = buildComparisonPieEChartsOption(result, resolvedSettings, {
+        scenarioIds: extra?.visibleScenarioIds,
+        layout: extra?.layout,
+        ui: { showToolbox: false },
+      });
+      break;
+
     case 'histogram':
       opt = buildHistogramEChartsOption(result, resolvedSettings);
       break;
@@ -2325,6 +2961,10 @@ export function buildChartOption(
 
     case 'bridge':
       opt = buildBridgeEChartsOption(result, {
+        layout: {
+          widthPx: extra?.layout?.widthPx,
+          heightPx: extra?.layout?.heightPx,
+        },
         ui: {
           showToolbox: false,
           orientation: resolvedSettings.orientation || 'vertical',
@@ -2426,7 +3066,7 @@ export function buildChartOption(
 
   // ── Stack mode (multi-series bar charts) ──
   const stackMode = resolvedSettings.stack_mode;
-  if (stackMode && stackMode !== 'grouped') {
+  if (stackMode && stackMode !== 'grouped' && !(opt as any).__dagnet_skip_stack_mode) {
     for (const s of (opt.series || [])) {
       if (s.type === 'bar' && s.name !== 'Assist') {
         s.stack = 'stack';
@@ -2645,6 +3285,9 @@ export function buildChartOption(
     }
   }
 
+  if ((opt as any).__dagnet_skip_stack_mode) {
+    delete (opt as any).__dagnet_skip_stack_mode;
+  }
   return applyCommonSettings(opt, resolvedSettings);
 }
 

@@ -12,78 +12,15 @@ import { parseDSL } from '../lib/queryDSL';
 
 const DEFAULT_COLOUR = '#9ca3af';
 const MIN_RADIUS = 80;
-const CIRCLE_PTS = 24;
 
 interface Point { x: number; y: number }
 
-/**
- * Compute a smooth outline path for the union of circles + tube.
- * Samples points on each circle boundary and along the tube edges,
- * takes the convex hull, then smooths with Catmull-Rom splines.
- */
-function computeUnionOutline(
-  nodes: Array<{ centre: Point; radius: number }>,
-  minRadius: number,
-): string {
-  const pts: Point[] = [];
-
-  // Sample each node's circle boundary
-  for (const n of nodes) {
-    for (let i = 0; i < CIRCLE_PTS; i++) {
-      const a = (Math.PI * 2 * i) / CIRCLE_PTS;
-      pts.push({ x: n.centre.x + n.radius * Math.cos(a), y: n.centre.y + n.radius * Math.sin(a) });
-    }
-  }
-
-  // Sample along the tube edges (offset from polyline segments)
-  for (let i = 0; i < nodes.length - 1; i++) {
-    const a = nodes[i].centre, b = nodes[i + 1].centre;
-    const dx = b.x - a.x, dy = b.y - a.y;
-    const len = Math.hypot(dx, dy);
-    if (len < 1) continue;
-    const nx = (-dy / len) * minRadius, ny = (dx / len) * minRadius;
-    const steps = Math.max(2, Math.ceil(len / 20));
-    for (let s = 0; s <= steps; s++) {
-      const t = s / steps;
-      const mx = a.x + dx * t, my = a.y + dy * t;
-      pts.push({ x: mx + nx, y: my + ny });
-      pts.push({ x: mx - nx, y: my - ny });
-    }
-  }
-
-  // Convex hull
-  if (pts.length < 3) return '';
-  const sorted = [...pts].sort((a, b) => a.x - b.x || a.y - b.y);
-  const cross = (o: Point, a: Point, b: Point) =>
-    (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x);
-  const lower: Point[] = [];
-  for (const p of sorted) {
-    while (lower.length >= 2 && cross(lower[lower.length - 2], lower[lower.length - 1], p) <= 0) lower.pop();
-    lower.push(p);
-  }
-  const upper: Point[] = [];
-  for (let i = sorted.length - 1; i >= 0; i--) {
-    const p = sorted[i];
-    while (upper.length >= 2 && cross(upper[upper.length - 2], upper[upper.length - 1], p) <= 0) upper.pop();
-    upper.push(p);
-  }
-  lower.pop(); upper.pop();
-  const hull = lower.concat(upper);
-  if (hull.length < 3) return '';
-
-  // Catmull-Rom smooth
-  const n = hull.length;
-  const tension = 0.25;
-  let d = `M ${hull[0].x} ${hull[0].y}`;
-  for (let i = 0; i < n; i++) {
-    const p0 = hull[(i - 1 + n) % n];
-    const p1 = hull[i];
-    const p2 = hull[(i + 1) % n];
-    const p3 = hull[(i + 2) % n];
-    d += ` C ${p1.x + (p2.x - p0.x) * tension} ${p1.y + (p2.y - p0.y) * tension}, ${p2.x - (p3.x - p1.x) * tension} ${p2.y - (p3.y - p1.y) * tension}, ${p2.x} ${p2.y}`;
-  }
-  return d + ' Z';
+interface TubeSegment {
+  x1: number; y1: number; x2: number; y2: number;
+  width: number;
 }
+
+const TRANSIT_RADIUS = 10;
 
 function findPath(
   fromId: string, toId: string,
@@ -176,9 +113,10 @@ interface ShapeData {
   id: string;
   isSelected: boolean;
   isPersisted: boolean;
-    linePath: string;
-    outlinePath: string;
-    nodes: Array<{ centre: Point; radius: number }>;
+  tubeSegments: TubeSegment[];
+  nodes: Array<{ centre: Point; radius: number }>;
+  connectedNodes: Array<{ centre: Point; radius: number }>;
+  disconnectedNodes: Array<{ centre: Point; radius: number }>;
   centres: Point[];
   cx: number;
   cy: number;
@@ -235,39 +173,68 @@ export function SelectionConnectors({ graph }: { graph: any }) {
 
     return visibleAnalyses.map(va => {
       const parsed = parseDSL(va.dsl);
-      let pathIds: string[] = [];
+
+      let connectedIds: string[] = [];
+      let disconnectedIds: string[] = [];
+      let referencedOnPath = new Set<string>();
+
       if (parsed.from && parsed.to) {
-        pathIds = findPath(parsed.from, parsed.to, graph.edges || [], nodeUuidToId) || [parsed.from, parsed.to];
+        const fullPath = findPath(parsed.from, parsed.to, graph.edges || [], nodeUuidToId);
+        if (fullPath) {
+          referencedOnPath = new Set<string>([parsed.from, parsed.to, ...(parsed.visited || [])]);
+          connectedIds = fullPath;
+        } else {
+          disconnectedIds = [parsed.from, parsed.to];
+        }
       } else if (parsed.from) {
-        pathIds = [parsed.from];
+        disconnectedIds = [parsed.from];
       } else if (parsed.to) {
-        pathIds = [parsed.to];
+        disconnectedIds = [parsed.to];
       }
-      for (const v of parsed.visited || []) { if (!pathIds.includes(v)) pathIds.push(v); }
-      for (const vAny of parsed.visitedAny || []) { if (typeof vAny === 'string' && !pathIds.includes(vAny)) pathIds.push(vAny); }
 
-      const shapeNodes: Array<{ centre: Point; radius: number }> = [];
-      for (const id of pathIds) { const info = getNodeInfo(id); if (info) shapeNodes.push(info); }
-      if (shapeNodes.length === 0) return null;
-
-      const centres = shapeNodes.map(n => n.centre);
-      const minR = Math.min(...shapeNodes.map(n => n.radius));
-      let linePath: string;
-      if (centres.length === 1) {
-        linePath = `M ${centres[0].x} ${centres[0].y} l 0.01 0`;
-      } else {
-        linePath = `M ${centres[0].x} ${centres[0].y}`;
-        for (let i = 1; i < centres.length; i++) linePath += ` L ${centres[i].x} ${centres[i].y}`;
+      for (const v of parsed.visited || []) {
+        if (!connectedIds.includes(v) && !disconnectedIds.includes(v)) disconnectedIds.push(v);
       }
+      for (const group of parsed.visitedAny || []) {
+        for (const nodeId of group) {
+          if (!connectedIds.includes(nodeId) && !disconnectedIds.includes(nodeId)) disconnectedIds.push(nodeId);
+        }
+      }
+
+      const connectedNodes: Array<{ centre: Point; radius: number }> = [];
+      for (const id of connectedIds) {
+        const info = getNodeInfo(id);
+        if (info) {
+          connectedNodes.push(referencedOnPath.has(id) ? info : { centre: info.centre, radius: TRANSIT_RADIUS });
+        }
+      }
+      const disconnectedNodes: Array<{ centre: Point; radius: number }> = [];
+      for (const id of disconnectedIds) { const info = getNodeInfo(id); if (info) disconnectedNodes.push(info); }
+      const allNodes = [...connectedNodes, ...disconnectedNodes];
+      if (allNodes.length === 0) return null;
+
+      const tubeSegments: TubeSegment[] = [];
+      for (let i = 0; i < connectedNodes.length - 1; i++) {
+        const a = connectedNodes[i], b = connectedNodes[i + 1];
+        tubeSegments.push({
+          x1: a.centre.x, y1: a.centre.y,
+          x2: b.centre.x, y2: b.centre.y,
+          width: Math.min(a.radius, b.radius) * 2,
+        });
+      }
+
+      const centres = allNodes.map(n => n.centre);
+      const refNodes = connectedNodes.filter((_, i) => referencedOnPath.has(connectedIds[i]));
+      const minR = refNodes.length > 0
+        ? Math.min(...refNodes.map(n => n.radius))
+        : (allNodes.length > 0 ? Math.min(...allNodes.map(n => n.radius)) : MIN_RADIUS);
 
       let cx = 0, cy = 0;
       for (const c of centres) { cx += c.x; cy += c.y; }
 
-      const outlinePath = computeUnionOutline(shapeNodes, minR);
-
       return {
         id: va.id, isSelected: va.isSelected, isPersisted: va.isPersisted,
-        linePath, outlinePath, nodes: shapeNodes, centres,
+        tubeSegments, nodes: allNodes, connectedNodes, disconnectedNodes, centres,
         cx: cx / centres.length, cy: cy / centres.length,
         minRadius: minR, rfNode: va.rfNode, colour: va.colour,
       };
@@ -375,16 +342,42 @@ export function SelectionConnectors({ graph }: { graph: any }) {
             const aW = (shape.rfNode as any).measured?.width ?? shape.rfNode.width ?? 400;
             const aH = (shape.rfNode as any).measured?.height ?? shape.rfNode.height ?? 300;
             const aCx = aX + aW / 2, aCy = aY + aH / 2;
-            const shapePt = closestPointOnShape(shape.nodes, shape.minRadius, aCx, aCy);
-            const chartPt = closestPointOnRect(aX, aY, aW, aH, shapePt.x, shapePt.y);
-            connector = (
-              <>
-                <line x1={chartPt.x} y1={chartPt.y} x2={shapePt.x} y2={shapePt.y}
-                  stroke={c} strokeWidth={lineSw} strokeOpacity={0.3} strokeDasharray={dash} />
-                <circle cx={chartPt.x} cy={chartPt.y} r={dotR} fill={c} fillOpacity={0.5} />
-                <circle cx={shapePt.x} cy={shapePt.y} r={dotR} fill={c} fillOpacity={0.5} />
-              </>
-            );
+
+            const lines: JSX.Element[] = [];
+
+            if (shape.connectedNodes.length > 0) {
+              const shapePt = closestPointOnShape(shape.connectedNodes, shape.minRadius, aCx, aCy);
+              const chartPt = closestPointOnRect(aX, aY, aW, aH, shapePt.x, shapePt.y);
+              lines.push(
+                <React.Fragment key="conn">
+                  <line x1={chartPt.x} y1={chartPt.y} x2={shapePt.x} y2={shapePt.y}
+                    stroke={c} strokeWidth={lineSw} strokeOpacity={0.3} strokeDasharray={dash} />
+                  <circle cx={chartPt.x} cy={chartPt.y} r={dotR} fill={c} fillOpacity={0.5} />
+                  <circle cx={shapePt.x} cy={shapePt.y} r={dotR} fill={c} fillOpacity={0.5} />
+                </React.Fragment>
+              );
+            }
+
+            for (let i = 0; i < shape.disconnectedNodes.length; i++) {
+              const node = shape.disconnectedNodes[i];
+              const dist = Math.hypot(aCx - node.centre.x, aCy - node.centre.y);
+              const d = Math.max(dist, 0.001);
+              const shapePt = {
+                x: node.centre.x + ((aCx - node.centre.x) / d) * node.radius,
+                y: node.centre.y + ((aCy - node.centre.y) / d) * node.radius,
+              };
+              const chartPt = closestPointOnRect(aX, aY, aW, aH, shapePt.x, shapePt.y);
+              lines.push(
+                <React.Fragment key={`disc-${i}`}>
+                  <line x1={chartPt.x} y1={chartPt.y} x2={shapePt.x} y2={shapePt.y}
+                    stroke={c} strokeWidth={lineSw} strokeOpacity={0.3} strokeDasharray={dash} />
+                  <circle cx={chartPt.x} cy={chartPt.y} r={dotR} fill={c} fillOpacity={0.5} />
+                  <circle cx={shapePt.x} cy={shapePt.y} r={dotR} fill={c} fillOpacity={0.5} />
+                </React.Fragment>
+              );
+            }
+
+            if (lines.length > 0) connector = <>{lines}</>;
           }
 
           const maskId = `shape-mask-${shape.id}`;
@@ -402,22 +395,22 @@ export function SelectionConnectors({ graph }: { graph: any }) {
                   {shape.nodes.map((n, i) => (
                     <circle key={`m-${i}`} cx={n.centre.x} cy={n.centre.y} r={n.radius} fill="black" />
                   ))}
-                  {shape.centres.length > 1 && (
-                    <path d={shape.linePath} fill="none" stroke="black"
-                      strokeWidth={shape.minRadius * 2} strokeLinecap="round" strokeLinejoin="round" />
-                  )}
+                  {shape.tubeSegments.map((seg, i) => (
+                    <line key={`mt-${i}`} x1={seg.x1} y1={seg.y1} x2={seg.x2} y2={seg.y2}
+                      stroke="black" strokeWidth={seg.width} strokeLinecap="round" />
+                  ))}
                 </mask>
               </defs>
 
-              {/* Filled union shape (group opacity prevents double-counting) */}
+              {/* Circles for all nodes; tube segments taper at transit nodes */}
               <g opacity={fillOpacity}>
                 {shape.nodes.map((n, i) => (
                   <circle key={`c-${i}`} cx={n.centre.x} cy={n.centre.y} r={n.radius} fill={c} />
                 ))}
-                {shape.centres.length > 1 && (
-                  <path d={shape.linePath} fill="none" stroke={c}
-                    strokeWidth={shape.minRadius * 2} strokeLinecap="round" strokeLinejoin="round" />
-                )}
+                {shape.tubeSegments.map((seg, i) => (
+                  <line key={`t-${i}`} x1={seg.x1} y1={seg.y1} x2={seg.x2} y2={seg.y2}
+                    stroke={c} strokeWidth={seg.width} strokeLinecap="round" />
+                ))}
               </g>
 
               {/* Perimeter outline via inverted mask */}
@@ -426,11 +419,10 @@ export function SelectionConnectors({ graph }: { graph: any }) {
                   <circle key={`o-${i}`} cx={n.centre.x} cy={n.centre.y}
                     r={n.radius + lineSw * 1.5} fill={c} />
                 ))}
-                {shape.centres.length > 1 && (
-                  <path d={shape.linePath} fill="none" stroke={c}
-                    strokeWidth={shape.minRadius * 2 + lineSw * 3}
-                    strokeLinecap="round" strokeLinejoin="round" />
-                )}
+                {shape.tubeSegments.map((seg, i) => (
+                  <line key={`ot-${i}`} x1={seg.x1} y1={seg.y1} x2={seg.x2} y2={seg.y2}
+                    stroke={c} strokeWidth={seg.width + lineSw * 3} strokeLinecap="round" />
+                ))}
               </g>
 
               {connector}

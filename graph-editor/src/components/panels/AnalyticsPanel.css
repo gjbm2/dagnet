@@ -471,6 +471,63 @@
   color: #6b7280;
 }
 
+/* ── Icon grid view ── */
+.analytics-type-icons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.analytics-type-icon-tile {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  width: 68px;
+  padding: 6px 2px 5px;
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  cursor: pointer;
+  color: #6b7280;
+  transition: all 0.15s ease;
+}
+
+.analytics-type-icon-tile:hover:not(:disabled) {
+  background: #f9fafb;
+  border-color: #d1d5db;
+  color: #374151;
+}
+
+.analytics-type-icon-tile.selected {
+  background: #eff6ff;
+  border-color: #3b82f6;
+  box-shadow: 0 0 0 1px #3b82f6;
+  color: #2563eb;
+}
+
+.analytics-type-icon-tile.primary:not(.selected) {
+  border-color: #93c5fd;
+}
+
+.analytics-type-icon-tile.unavailable {
+  opacity: 0.45;
+  cursor: not-allowed;
+  background: #f9fafb;
+}
+
+.analytics-type-icon-label {
+  font-size: 9px;
+  font-weight: 500;
+  line-height: 1.15;
+  text-align: center;
+  max-width: 64px;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
 .analytics-debug-section {
   margin-top: 8px;
 }
@@ -954,6 +1011,13 @@
 [data-theme="dark"] .analytics-type-card.unavailable .analytics-type-card-name { color: #777 !important; }
 [data-theme="dark"] .analytics-type-card-desc { color: #888 !important; }
 [data-theme="dark"] .analytics-type-card.selected .analytics-type-card-desc { color: #aaa !important; }
+
+/* Icon grid tiles — !important needed because these are <button> elements */
+[data-theme="dark"] .analytics-type-icon-tile { background: #2d2d2d !important; border-color: #404040 !important; color: #aaa !important; }
+[data-theme="dark"] .analytics-type-icon-tile:hover:not(:disabled) { background: #353535 !important; border-color: #555 !important; color: #e0e0e0 !important; }
+[data-theme="dark"] .analytics-type-icon-tile.selected { background: #1a2a40 !important; border-color: #4d9ef7 !important; box-shadow: 0 0 0 1px #4d9ef7 !important; color: #60a5fa !important; }
+[data-theme="dark"] .analytics-type-icon-tile.primary:not(.selected) { border-color: #3b6fa0 !important; }
+[data-theme="dark"] .analytics-type-icon-tile.unavailable { background: #252525 !important; color: #666 !important; }
 
 /* Loading / error */
 [data-theme="dark"] .analytics-loading { background: #1a2a40; border-color: #1976d2; color: #4d9ef7; }

@@ -72,6 +72,15 @@ analyses:
       has_to: false
     runner: path_through_runner
 
+  # Single node with multiple children - branch comparison (auto-derives children)
+  - id: branch_comparison
+    name: "Branch Comparison"
+    description: "Compare traffic split across immediate children of this node"
+    when:
+      node_count: 1
+      has_multiple_children: true
+    runner: branch_comparison_runner
+
   # =========== TWO NODES (node_count=2) ===========
   
   # from(A).to(B) - path between

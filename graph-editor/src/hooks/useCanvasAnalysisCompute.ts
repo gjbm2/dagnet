@@ -81,6 +81,22 @@ export function useCanvasAnalysisCompute({
   const mountedRef = useRef(true);
   const computeCountRef = useRef(0);
 
+  const expectsTimeSeriesBranchResult =
+    analysis?.recipe?.analysis?.analysis_type === 'branch_comparison'
+    && analysis?.chart_kind === 'time_series';
+  const resultHasTimeDimension = !!(result?.semantics?.dimensions || []).some((d: any) => d?.id === 'date' || d?.type === 'time');
+
+  // If the chart kind switches into branch-comparison time-series while we still hold the
+  // old categorical comparison result, drop it immediately so the snapshot-backed recompute
+  // can replace it instead of the UI continuing to display stale static rows.
+  useEffect(() => {
+    if (expectsTimeSeriesBranchResult && result && !resultHasTimeDimension) {
+      setResult(null);
+      canvasAnalysisResultCache.delete(analysis.id);
+      setLoading(true);
+    }
+  }, [expectsTimeSeriesBranchResult, result, resultHasTimeDimension, analysis.id]);
+
   useEffect(() => {
     mountedRef.current = true;
     return () => {
@@ -171,7 +187,9 @@ export function useCanvasAnalysisCompute({
       const analysisType = analysis.recipe.analysis.analysis_type;
       const analyticsDsl = analysis.recipe.analysis.analytics_dsl || '';
       const snapshotMeta = ANALYSIS_TYPES.find(t => t.id === analysisType);
-      const needsSnapshots = !!snapshotMeta?.snapshotContract;
+      const branchComparisonTimeSeries = analysisType === 'branch_comparison' && analysis.chart_kind === 'time_series';
+      const needsSnapshots = !!snapshotMeta?.snapshotContract
+        && (analysisType !== 'branch_comparison' || branchComparisonTimeSeries);
       const workspace = getWorkspace();
 
       let response;
@@ -414,6 +432,7 @@ export function useCanvasAnalysisCompute({
     const visibleIds = rawScenarioState?.visibleScenarioIds || [];
     return [
       analysis.recipe?.analysis?.analysis_type,
+      analysis.chart_kind,
       analysis.recipe?.analysis?.analytics_dsl,
       analysis.chart_current_layer_dsl,
       currentDSL,
@@ -422,7 +441,7 @@ export function useCanvasAnalysisCompute({
       graph?.nodes?.length,
       graph?.edges?.length,
     ].join('|');
-  }, [analysis.live, analysis.recipe?.analysis?.analysis_type, analysis.recipe?.analysis?.analytics_dsl,
+  }, [analysis.live, analysis.recipe?.analysis?.analysis_type, analysis.chart_kind, analysis.recipe?.analysis?.analytics_dsl,
       analysis.chart_current_layer_dsl, currentDSL, whatIfDSL, rawScenarioState, graph?.nodes?.length, graph?.edges?.length]);
 
   // Custom mode: stable compute key
@@ -431,6 +450,7 @@ export function useCanvasAnalysisCompute({
     const scenarios = analysis.recipe?.scenarios || [];
     return [
       analysis.recipe?.analysis?.analysis_type,
+      analysis.chart_kind,
       analysis.recipe?.analysis?.analytics_dsl,
       analysis.recipe?.analysis?.what_if_dsl,
       analysis.chart_current_layer_dsl,

@@ -1235,6 +1235,502 @@
   color: #e0e0e0;
 }
 
+.chart-container-btn.active {
+  background: var(--bg-tertiary, #e5e7eb);
+}
+
+[data-theme="dark"] .chart-container-btn.active {
+  background: #3d3d3d;
+}
+
+/* ============================================================
+   CHART FLOATING PALETTE — draggable, snaps to 4 corners,
+   tray expands on hover away from the anchored corner.
+   ============================================================ */
+
+.chart-floating-palette {
+  display: flex;
+  align-items: flex-start;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.95);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  border: 1px solid rgba(0, 0, 0, 0.10);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12), 0 0 0 0.5px rgba(0, 0, 0, 0.04);
+  user-select: none;
+  opacity: 0.55;
+  transition: opacity 150ms ease, box-shadow 150ms ease;
+}
+
+.chart-floating-palette:hover,
+.chart-floating-palette.expanded {
+  opacity: 1;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.16), 0 0 0 0.5px rgba(0, 0, 0, 0.06);
+}
+
+.chart-floating-palette.dragging {
+  cursor: grabbing;
+  opacity: 1;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.22);
+}
+
+/* --- Handle (the grab icon) --- */
+
+.chart-floating-palette__handle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 28px;
+  flex-shrink: 0;
+  cursor: grab;
+  color: #6b7280;
+  border-radius: 7px;
+}
+
+.chart-floating-palette__handle:hover {
+  color: #374151;
+}
+
+.chart-floating-palette.dragging .chart-floating-palette__handle {
+  cursor: grabbing;
+}
+
+.chart-floating-palette.dragging .chart-floating-palette__tray {
+  max-width: 0 !important;
+  max-height: 28px !important;
+  opacity: 0 !important;
+  padding: 0 !important;
+  transition: none;
+}
+
+/* --- Tray (expandable content) --- */
+
+.chart-floating-palette__tray {
+  display: none;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+  overflow: hidden;
+  opacity: 0;
+  padding: 0;
+}
+
+.chart-floating-palette.expanded .chart-floating-palette__tray {
+  display: flex;
+  opacity: 1;
+  padding: 3px 8px 3px 4px;
+  overflow: visible;
+  animation: cfp-fade-in 150ms ease-in;
+}
+
+@keyframes cfp-fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+/* --- Flex direction per anchor corner --- */
+
+/* Handle is first child in DOM. row = handle on left, row-reverse = handle on right.
+   The handle stays at the corner; tray grows inward. */
+.chart-floating-palette.anchor-left  { flex-direction: row; }
+.chart-floating-palette.anchor-right { flex-direction: row-reverse; }
+.chart-floating-palette.anchor-bottom { align-items: flex-end; }
+
+.chart-floating-palette.anchor-right.expanded .chart-floating-palette__tray {
+  padding: 3px 4px 3px 8px;
+}
+
+/* --- Top toolbar mode --- */
+
+.chart-floating-palette.pos-top {
+  position: relative !important;
+  left: auto !important;
+  right: auto !important;
+  top: auto !important;
+  bottom: auto !important;
+  width: 100%;
+  flex-direction: row;
+  border-radius: 0;
+  border-left: none;
+  border-right: none;
+  border-top: none;
+  box-shadow: none;
+  background: rgba(0, 0, 0, 0.025);
+  opacity: 1;
+}
+
+[data-theme="dark"] .chart-floating-palette.pos-top {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.chart-floating-palette.pos-top .chart-floating-palette__tray {
+  max-width: none;
+  max-height: none;
+  opacity: 1;
+  padding: 3px 8px;
+  flex: 1;
+  overflow: visible;
+  transition: none;
+}
+
+.chart-floating-palette.pos-top.dragging .chart-floating-palette__tray {
+  max-width: 0 !important;
+  flex: 0 !important;
+  padding: 0 !important;
+  opacity: 0 !important;
+}
+
+/* --- Ghost snap indicator --- */
+
+.chart-floating-icon-ghost {
+  border-radius: 8px;
+  border: 2px dashed rgba(99, 102, 241, 0.45);
+  background: rgba(99, 102, 241, 0.06);
+}
+
+.chart-floating-icon-ghost.ghost-top {
+  border-radius: 0;
+  border-left: none;
+  border-right: none;
+  border-top: none;
+}
+
+/* --- Dark theme --- */
+
+[data-theme="dark"] .chart-floating-palette {
+  background: rgba(38, 38, 38, 0.92);
+  border-color: rgba(255, 255, 255, 0.08);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35), 0 0 0 0.5px rgba(255, 255, 255, 0.04);
+}
+
+[data-theme="dark"] .chart-floating-palette:hover,
+[data-theme="dark"] .chart-floating-palette.expanded {
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.45), 0 0 0 0.5px rgba(255, 255, 255, 0.06);
+}
+
+[data-theme="dark"] .chart-floating-palette.dragging {
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.55);
+}
+
+[data-theme="dark"] .chart-floating-palette__handle {
+  color: #999;
+}
+
+[data-theme="dark"] .chart-floating-palette__handle:hover {
+  color: #e0e0e0;
+}
+
+[data-theme="dark"] .chart-floating-icon-ghost {
+  border-color: rgba(129, 140, 248, 0.35);
+  background: rgba(129, 140, 248, 0.05);
+}
+
+[data-theme="dark"] .chart-floating-palette.pos-top {
+  border-bottom-color: rgba(255, 255, 255, 0.08);
+}
+
+/* --- Compact tray pills (cfp = chart floating palette) --- */
+
+.cfp-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  background: transparent;
+  color: var(--text-secondary, #6b7280);
+  border-radius: 5px;
+  padding: 3px 6px;
+  font-size: 10px;
+  line-height: 1;
+  cursor: pointer;
+  white-space: nowrap;
+  min-width: 22px;
+  height: 22px;
+}
+
+.cfp-pill:hover {
+  background: rgba(0, 0, 0, 0.06);
+  color: var(--text-primary, #374151);
+}
+
+.cfp-pill.active {
+  background: var(--bg-tertiary, #e5e7eb);
+  color: var(--text-primary, #374151);
+  border-color: rgba(0, 0, 0, 0.16);
+  font-weight: 600;
+}
+
+.cfp-pill-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 1px;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.03);
+}
+
+.cfp-group-label {
+  font-size: 8px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--text-muted, #9ca3af);
+  padding: 0 3px;
+  white-space: nowrap;
+  line-height: 1;
+}
+
+.cfp-select {
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  background: transparent;
+  color: var(--text-secondary, #6b7280);
+  border-radius: 5px;
+  padding: 3px 6px;
+  font-size: 10px;
+  height: 22px;
+  max-width: 110px;
+  cursor: pointer;
+}
+
+.cfp-sep {
+  display: inline-block;
+  width: 1px;
+  height: 16px;
+  background: rgba(0, 0, 0, 0.12);
+  flex-shrink: 0;
+  margin: 0 2px;
+}
+
+[data-theme="dark"] .cfp-pill {
+  border-color: rgba(255, 255, 255, 0.08);
+  color: #aaa;
+}
+
+[data-theme="dark"] .cfp-pill:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: #e0e0e0;
+}
+
+[data-theme="dark"] .cfp-pill.active {
+  background: rgba(255, 255, 255, 0.14);
+  color: #e0e0e0;
+  border-color: rgba(255, 255, 255, 0.18);
+}
+
+[data-theme="dark"] .cfp-pill-group {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+[data-theme="dark"] .cfp-group-label {
+  color: #777;
+}
+
+[data-theme="dark"] .cfp-select {
+  border-color: rgba(255, 255, 255, 0.08);
+  color: #aaa;
+  background: transparent;
+}
+
+/* --- Colour swatches (overlay picker) --- */
+
+.cfp-colour-swatch {
+  width: 16px;
+  height: 16px;
+  border-radius: 3px;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  cursor: pointer;
+  padding: 0;
+  flex-shrink: 0;
+}
+
+.cfp-colour-swatch:hover {
+  transform: scale(1.15);
+}
+
+.cfp-colour-swatch--none {
+  background: var(--bg-secondary, #f3f4f6);
+  font-size: 8px;
+  line-height: 14px;
+  text-align: center;
+  color: var(--text-muted, #9ca3af);
+}
+
+[data-theme="dark"] .cfp-colour-swatch {
+  border-color: rgba(255, 255, 255, 0.12);
+}
+
+[data-theme="dark"] .cfp-colour-swatch--none {
+  background: rgba(255, 255, 255, 0.08);
+  color: #777;
+}
+
+.cfp-pill--danger {
+  color: #dc2626;
+}
+.cfp-pill--danger:hover {
+  background: rgba(220, 38, 38, 0.08);
+  color: #dc2626;
+}
+
+/* --- Popover (display settings, more actions) --- */
+
+.cfp-popover-anchor {
+  position: relative;
+  display: inline-flex;
+}
+
+.cfp-popover {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  min-width: 160px;
+  max-width: 280px;
+  background: rgba(255, 255, 255, 0.97);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(0, 0, 0, 0.10);
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.14), 0 0 0 0.5px rgba(0, 0, 0, 0.04);
+  padding: 6px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+  z-index: 30;
+  animation: cfp-fade-in 100ms ease-out;
+}
+
+.chart-floating-palette.anchor-bottom .cfp-popover {
+  top: auto;
+  bottom: calc(100% + 4px);
+}
+
+/* --- Menu items (for actions dropdown) --- */
+
+.cfp-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 5px 8px;
+  border: none;
+  background: transparent;
+  color: var(--text-primary, #374151);
+  font-size: 11px;
+  border-radius: 4px;
+  cursor: pointer;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.cfp-menu-item:hover {
+  background: rgba(0, 0, 0, 0.06);
+}
+
+.cfp-menu-item--danger {
+  color: #dc2626;
+}
+
+.cfp-menu-item--danger:hover {
+  background: rgba(220, 38, 38, 0.06);
+}
+
+/* --- Toggle (live/custom) --- */
+
+.cfp-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.cfp-toggle__track {
+  position: relative;
+  width: 26px;
+  height: 14px;
+  border-radius: 7px;
+  background: rgba(0, 0, 0, 0.15);
+  transition: background 0.15s ease;
+  flex-shrink: 0;
+}
+
+.cfp-toggle__track.on {
+  background: #22c55e;
+}
+
+.cfp-toggle__thumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+  transition: left 0.15s ease;
+}
+
+.cfp-toggle__track.on .cfp-toggle__thumb {
+  left: 14px;
+}
+
+.cfp-toggle__label {
+  font-size: 9px;
+  font-weight: 600;
+  color: var(--text-secondary, #6b7280);
+  line-height: 1;
+  white-space: nowrap;
+}
+
+[data-theme="dark"] .cfp-toggle__track {
+  background: rgba(255, 255, 255, 0.15);
+}
+
+[data-theme="dark"] .cfp-toggle__track.on {
+  background: #22c55e;
+}
+
+[data-theme="dark"] .cfp-toggle__label {
+  color: #aaa;
+}
+
+[data-theme="dark"] .cfp-pill--danger {
+  color: #f87171;
+}
+[data-theme="dark"] .cfp-pill--danger:hover {
+  background: rgba(248, 113, 113, 0.12);
+  color: #f87171;
+}
+
+[data-theme="dark"] .cfp-popover {
+  background: rgba(38, 38, 38, 0.97);
+  border-color: rgba(255, 255, 255, 0.10);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4), 0 0 0 0.5px rgba(255, 255, 255, 0.04);
+}
+
+[data-theme="dark"] .cfp-menu-item {
+  color: #d1d5db;
+}
+
+[data-theme="dark"] .cfp-menu-item:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+[data-theme="dark"] .cfp-menu-item--danger {
+  color: #f87171;
+}
+
+[data-theme="dark"] .cfp-menu-item--danger:hover {
+  background: rgba(248, 113, 113, 0.08);
+}
+
+[data-theme="dark"] .cfp-sep {
+  background: rgba(255, 255, 255, 0.12);
+}
+
 /* ============================================================
    CHART SETTINGS SECTION (properties panel)
    ============================================================ */

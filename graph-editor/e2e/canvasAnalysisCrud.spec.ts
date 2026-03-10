@@ -165,11 +165,11 @@ async function selectNodeById(page: Page, nodeLabel: string) {
 
 // ──────────────────────────────────────────────────────────────
 // SPEC 1: Element palette creation with absorbing node + 2 scenarios
-//         must show same chart type as analytics panel
+//         should open the analysis-type chooser, not pre-resolve a type
 // ──────────────────────────────────────────────────────────────
 
 test.describe('Canvas analysis creation parity', () => {
-  test('element palette: absorbing node + 2 scenarios should create bridge_view, not to_node_reach', async ({ page, baseURL }) => {
+  test('element palette: absorbing node + 2 scenarios should show chooser with bridge_view available', async ({ page, baseURL }) => {
     await stubComputeApi(page);
     await page.goto(new URL('/?e2e=1', baseURL!).toString(), { waitUntil: 'domcontentloaded' });
     await seedGraphWithScenarios(page, 2);
@@ -192,9 +192,21 @@ test.describe('Canvas analysis creation parity', () => {
     const analysisNode = page.locator('.canvas-analysis-node').first();
     await expect(analysisNode).toBeVisible({ timeout: 10_000 });
 
-    // The chart title should show Bridge View, NOT Reach Probability
-    await expect(analysisNode).toContainText('Bridge', { timeout: 10_000 });
-    await expect(analysisNode).not.toContainText('Reach Probability');
+    // Element palette creates a blank analysis seeded with DSL.
+    // The user chooses the type here rather than getting a pre-resolved chart.
+    await expect(analysisNode).toContainText('Choose an analysis type', { timeout: 10_000 });
+    await expect(analysisNode).toContainText('Bridge View');
+    await expect(analysisNode).toContainText('Reach Probability');
+
+    // Verify the graph recipe persisted the selection DSL but not an analysis type.
+    const persisted = await page.evaluate(async () => {
+      const db = (window as any).db;
+      if (!db) return null;
+      const file = await db.files.get('graph-e2e-canvas-analysis');
+      return file?.data?.canvasAnalyses?.[0]?.recipe?.analysis || null;
+    });
+    expect(persisted?.analytics_dsl).toBe('to(purchase)');
+    expect(persisted?.analysis_type || '').toBe('');
   });
 
   test('analytics panel drag: absorbing node + 2 scenarios should create bridge_view', async ({ page, baseURL }) => {

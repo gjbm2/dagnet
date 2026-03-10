@@ -5,11 +5,11 @@
  */
 
 import React, { useState, useRef, useEffect } from 'react';
-import { useTheme } from '../contexts/ThemeContext';
 import { dataOperationsService } from '../services/dataOperationsService';
 import { fileOperationsService } from '../services/fileOperationsService';
 import { extractSubgraph, createGraphFromSubgraph, generateSubgraphName } from '../lib/subgraphExtractor';
-import { Folders, TrendingUpDown, ChevronRight, Share2, Database, DatabaseZap, Copy, Scissors, Clipboard } from 'lucide-react';
+import { Folders, TrendingUpDown, ChevronRight, Share2, Database, DatabaseZap, Copy, Scissors, Clipboard, BarChart3, Settings, ClipboardCopy, Eye, EyeOff, Trash2 } from 'lucide-react';
+import '../styles/popup-menu.css';
 import { RemoveOverridesMenuItem } from './RemoveOverridesMenuItem';
 import { fileRegistry } from '../contexts/TabContext';
 import VariantWeightInput from './VariantWeightInput';
@@ -37,6 +37,7 @@ interface NodeContextMenuProps {
   graph: any; // Tab-specific graph
   setGraph: (graph: any) => void; // Tab-specific graph setter
   onClose: () => void;
+  onAddChart: (detail?: { contextNodeIds?: string[]; contextEdgeIds?: string[] }) => void;
   onSelectNode: (nodeId: string) => void;
   onDeleteNode: (nodeId: string) => void;
 }
@@ -52,15 +53,10 @@ export const NodeContextMenu: React.FC<NodeContextMenuProps> = ({
   graph,
   setGraph,
   onClose,
+  onAddChart,
   onSelectNode,
   onDeleteNode,
 }) => {
-  const { theme } = useTheme();
-  const dark = theme === 'dark';
-  const menuBg = dark ? '#2d2d2d' : 'white';
-  const menuBorder = dark ? '#555' : '#ddd';
-  const menuShadow = dark ? '0 4px 12px rgba(0,0,0,0.4)' : '0 4px 12px rgba(0,0,0,0.15)';
-  const menuHover = dark ? '#3d3d3d' : '#f8f9fa';
   const [openSubmenu, setOpenSubmenu] = useState<string | null>(null);
   const submenuTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -613,106 +609,21 @@ export const NodeContextMenu: React.FC<NodeContextMenuProps> = ({
   return (
     <div
       ref={menuRef}
+      className="dagnet-popup"
       style={{
         position: 'fixed',
         left: position.left,
         top: position.top,
-        background: menuBg,
-        border: `1px solid ${menuBorder}`,
-        borderRadius: '4px',
-        boxShadow: menuShadow,
         minWidth: '160px',
-        padding: '4px',
         zIndex: 10000,
-        color: dark ? '#e0e0e0' : 'inherit'
       }}
       onClick={(e) => e.stopPropagation()}
     >
-      {/* Properties */}
-      <div
-        onClick={(e) => {
-          e.stopPropagation();
-          onSelectNode(nodeId);
-          window.dispatchEvent(new CustomEvent('dagnet:openPropertiesPanel'));
-          onClose();
-        }}
-        style={{
-          padding: '8px 12px',
-          cursor: 'pointer',
-          fontSize: '13px',
-          borderRadius: '2px'
-        }}
-        onMouseEnter={(e) => (e.currentTarget.style.background = menuHover)}
-        onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
-      >
-        Properties
-      </div>
-
-      {/* Paste node - only show when a node is copied */}
-      {copiedNode && (
-        <div
-          onClick={(e) => {
-            e.stopPropagation();
-            handlePasteNode();
-          }}
-          style={{
-            padding: '8px 12px',
-            cursor: 'pointer',
-            fontSize: '13px',
-            borderRadius: '2px'
-          }}
-          onMouseEnter={(e) => (e.currentTarget.style.background = menuHover)}
-          onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
-        >
-          📋 Paste node: {copiedNode.objectId}
-        </div>
-      )}
-
-      {/* Paste case - only show when a case is copied */}
-      {copiedCase && (
-        <div
-          onClick={(e) => {
-            e.stopPropagation();
-            handlePasteCase();
-          }}
-          style={{
-            padding: '8px 12px',
-            cursor: 'pointer',
-            fontSize: '13px',
-            borderRadius: '2px'
-          }}
-          onMouseEnter={(e) => (e.currentTarget.style.background = menuHover)}
-          onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
-        >
-          📋 Paste case: {copiedCase.objectId}
-        </div>
-      )}
-
-      {/* Paste event - only show when an event is copied */}
-      {copiedEvent && (
-        <div
-          onClick={(e) => {
-            e.stopPropagation();
-            handlePasteEvent();
-          }}
-          style={{
-            padding: '8px 12px',
-            cursor: 'pointer',
-            fontSize: '13px',
-            borderRadius: '2px'
-          }}
-          onMouseEnter={(e) => (e.currentTarget.style.background = menuHover)}
-          onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
-        >
-          📋 Paste event: {copiedEvent.objectId}
-        </div>
-      )}
-
       {/* Case Variant Weights (if case node) */}
       {!!nodeData?.case && nodeData?.case?.variants && nodeData.case.variants.length > 0 && (
         <>
-          <div style={{ height: '1px', background: '#eee', margin: '8px 0' }} />
-          <div style={{ padding: '8px 12px', fontSize: '12px', fontWeight: '600', color: '#333' }}>
+          <div className="dagnet-popup-divider" />
+          <div className="dagnet-popup-label">
             Variant Weights
           </div>
           {nodeData.case.variants.map((variant: any, index: number) => {
@@ -805,7 +716,7 @@ export const NodeContextMenu: React.FC<NodeContextMenuProps> = ({
       {/* Data operations (using single source of truth) */}
       {dataOperationSections.length > 0 && (
         <>
-          <div style={{ height: '1px', background: '#eee', margin: '8px 0' }} />
+          <div className="dagnet-popup-divider" />
           
           {/* Render all data operation sections */}
           {dataOperationSections.map(section => (
@@ -829,71 +740,105 @@ export const NodeContextMenu: React.FC<NodeContextMenuProps> = ({
         </>
       )}
 
+      <div className="dagnet-popup-divider" />
+
+      {/* Add chart from selection */}
+      <div
+        className="dagnet-popup-item"
+        onClick={(e) => {
+          e.stopPropagation();
+          const humanId = nodeData?.id || nodeId;
+          onAddChart({ contextNodeIds: [humanId] });
+          onClose();
+        }}
+        style={{ display: 'flex', alignItems: 'center', gap: 8 }}
+      >
+        <BarChart3 size={14} />
+        Add chart
+      </div>
+
       {/* Copy vars */}
-      <div style={{ height: '1px', background: '#eee', margin: '4px 0' }} />
       {/* Copy/Cut - available when selection exists */}
       <div
+        className="dagnet-popup-item"
         onClick={(e) => {
           e.stopPropagation();
           handleCopySelection();
         }}
-        style={{
-          padding: '8px 12px',
-          cursor: 'pointer',
-          fontSize: '13px',
-          borderRadius: '2px',
-          display: 'flex',
-          alignItems: 'center',
-          gap: '8px'
-        }}
-        onMouseEnter={(e) => (e.currentTarget.style.background = menuHover)}
-        onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+        style={{ display: 'flex', alignItems: 'center', gap: 8 }}
       >
-        <Clipboard size={14} />
+        <Copy size={14} />
         <span>Copy{isMultiSelect ? ` (${selectedNodes.length} nodes)` : ''}</span>
       </div>
 
       <div
+        className="dagnet-popup-item"
         onClick={(e) => {
           e.stopPropagation();
           handleCutSelection();
         }}
-        style={{
-          padding: '8px 12px',
-          cursor: 'pointer',
-          fontSize: '13px',
-          borderRadius: '2px',
-          display: 'flex',
-          alignItems: 'center',
-          gap: '8px'
-        }}
-        onMouseEnter={(e) => (e.currentTarget.style.background = menuHover)}
-        onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+        style={{ display: 'flex', alignItems: 'center', gap: 8 }}
       >
         <Scissors size={14} />
         <span>Cut{isMultiSelect ? ` (${selectedNodes.length} nodes)` : ''}</span>
       </div>
 
-      <div style={{ height: '1px', background: '#eee', margin: '4px 0' }} />
+      {/* Paste node - only show when a node is copied */}
+      {copiedNode && (
+        <div
+          className="dagnet-popup-item"
+          onClick={(e) => {
+            e.stopPropagation();
+            handlePasteNode();
+          }}
+          style={{ display: 'flex', alignItems: 'center', gap: 8 }}
+        >
+          <Clipboard size={14} />
+          Paste node: {copiedNode.objectId}
+        </div>
+      )}
+
+      {/* Paste case - only show when a case is copied */}
+      {copiedCase && (
+        <div
+          className="dagnet-popup-item"
+          onClick={(e) => {
+            e.stopPropagation();
+            handlePasteCase();
+          }}
+          style={{ display: 'flex', alignItems: 'center', gap: 8 }}
+        >
+          <Clipboard size={14} />
+          Paste case: {copiedCase.objectId}
+        </div>
+      )}
+
+      {/* Paste event - only show when an event is copied */}
+      {copiedEvent && (
+        <div
+          className="dagnet-popup-item"
+          onClick={(e) => {
+            e.stopPropagation();
+            handlePasteEvent();
+          }}
+          style={{ display: 'flex', alignItems: 'center', gap: 8 }}
+        >
+          <Clipboard size={14} />
+          Paste event: {copiedEvent.objectId}
+        </div>
+      )}
+
+      <div className="dagnet-popup-divider" />
 
       <div
+        className="dagnet-popup-item"
         onClick={(e) => {
           e.stopPropagation();
           handleCopyVars();
         }}
-        style={{
-          padding: '8px 12px',
-          cursor: 'pointer',
-          fontSize: '13px',
-          borderRadius: '2px',
-          display: 'flex',
-          alignItems: 'center',
-          gap: '8px'
-        }}
-        onMouseEnter={(e) => (e.currentTarget.style.background = menuHover)}
-        onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+        style={{ display: 'flex', alignItems: 'center', gap: 8 }}
       >
-        <Copy size={14} />
+        <ClipboardCopy size={14} />
         <span>Copy vars{isMultiSelect ? ` (${selectedNodes.length} nodes)` : ''}</span>
       </div>
 
@@ -906,36 +851,25 @@ export const NodeContextMenu: React.FC<NodeContextMenuProps> = ({
 
       {/* Show in new graph (multi-select only) */}
       {isMultiSelect && (
-        <>
-          <div
-            onClick={(e) => {
-              e.stopPropagation();
-              handleShowInNewGraph();
-            }}
-            style={{
-              padding: '8px 12px',
-              cursor: 'pointer',
-              fontSize: '13px',
-              color: '#007bff',
-              borderRadius: '2px',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '8px'
-            }}
-            onMouseEnter={(e) => (e.currentTarget.style.background = menuHover)}
-            onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
-          >
-            <Share2 size={14} />
-            <span>Show in new graph ({selectedNodes.length} nodes)</span>
-          </div>
-        </>
+        <div
+          className="dagnet-popup-item"
+          onClick={(e) => {
+            e.stopPropagation();
+            handleShowInNewGraph();
+          }}
+          style={{ display: 'flex', alignItems: 'center', gap: 8 }}
+        >
+          <Share2 size={14} />
+          <span>Show in new graph ({selectedNodes.length} nodes)</span>
+        </div>
       )}
 
-      <div style={{ height: '1px', background: '#eee', margin: '4px 0' }} />
+      <div className="dagnet-popup-divider" />
 
       {/* Hide/Unhide */}
       {allHidden ? (
         <div
+          className="dagnet-popup-item"
           onClick={(e) => {
             e.stopPropagation();
             if (activeTabId) {
@@ -943,20 +877,14 @@ export const NodeContextMenu: React.FC<NodeContextMenuProps> = ({
             }
             onClose();
           }}
-          style={{
-            padding: '8px 12px',
-            cursor: 'pointer',
-            fontSize: '13px',
-            color: '#28a745',
-            borderRadius: '2px'
-          }}
-          onMouseEnter={(e) => (e.currentTarget.style.background = menuHover)}
-          onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+          style={{ display: 'flex', alignItems: 'center', gap: 8 }}
         >
+          <Eye size={14} />
           Show {isMultiSelect ? `${selectedNodeIds.length} nodes` : 'node'}
         </div>
       ) : (
         <div
+          className="dagnet-popup-item"
           onClick={(e) => {
             e.stopPropagation();
             if (activeTabId) {
@@ -964,37 +892,38 @@ export const NodeContextMenu: React.FC<NodeContextMenuProps> = ({
             }
             onClose();
           }}
-          style={{
-            padding: '8px 12px',
-            cursor: 'pointer',
-            fontSize: '13px',
-            color: '#6c757d',
-            borderRadius: '2px'
-          }}
-          onMouseEnter={(e) => (e.currentTarget.style.background = menuHover)}
-          onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+          style={{ display: 'flex', alignItems: 'center', gap: 8 }}
         >
+          <EyeOff size={14} />
           Hide {isMultiSelect ? `${selectedNodeIds.length} nodes` : 'node'}
         </div>
       )}
 
+      <div
+        className="dagnet-popup-item"
+        onClick={(e) => {
+          e.stopPropagation();
+          onSelectNode(nodeId);
+          window.dispatchEvent(new CustomEvent('dagnet:openPropertiesPanel'));
+          onClose();
+        }}
+        style={{ display: 'flex', alignItems: 'center', gap: 8 }}
+      >
+        <Settings size={14} />
+        Properties
+      </div>
+
       {/* Delete */}
       <div
+        className="dagnet-popup-item danger"
         onClick={(e) => {
           e.stopPropagation();
           onDeleteNode(nodeId);
           onClose();
         }}
-        style={{
-          padding: '8px 12px',
-          cursor: 'pointer',
-          fontSize: '13px',
-          color: '#dc3545',
-          borderRadius: '2px'
-        }}
-        onMouseEnter={(e) => (e.currentTarget.style.background = menuHover)}
-        onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+        style={{ display: 'flex', alignItems: 'center', gap: 8 }}
       >
+        <Trash2 size={14} />
         Delete node
       </div>
     </div>

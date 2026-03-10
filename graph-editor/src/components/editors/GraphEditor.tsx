@@ -453,6 +453,16 @@ const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, r
     window.addEventListener('dagnet:openPropertiesPanel' as any, handler);
     return () => window.removeEventListener('dagnet:openPropertiesPanel' as any, handler);
   }, [sidebarOps]);
+
+  // Listen for request to open a specific canvas analysis's properties
+  useEffect(() => {
+    const handler = (e: CustomEvent<{ analysisId: string }>) => {
+      handleAnnotationSelection(e.detail.analysisId, 'canvasAnalysis');
+      sidebarOps.maximize('properties');
+    };
+    window.addEventListener('dagnet:openAnalysisProperties' as any, handler);
+    return () => window.removeEventListener('dagnet:openAnalysisProperties' as any, handler);
+  }, [handleAnnotationSelection, sidebarOps]);
   
   // E2E hooks: Listen for programmatic selection requests (dev/E2E only)
   useEffect(() => {

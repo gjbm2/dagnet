@@ -3,11 +3,14 @@ import { ChevronRight } from 'lucide-react';
 import type { AvailableAnalysis } from '../../lib/graphComputeClient';
 import { ANALYSIS_TYPES, type AnalysisTypeMeta } from './analysisTypes';
 
+export type AnalysisTypeViewMode = 'list' | 'icons';
+
 interface AnalysisTypeCardListProps {
   availableAnalyses: AvailableAnalysis[];
   selectedAnalysisId: string | null | undefined;
   onSelect: (analysisId: string) => void;
   showAll?: boolean;
+  viewMode?: AnalysisTypeViewMode;
   draggableAvailableCards?: boolean;
   onCardDragStart?: (event: React.DragEvent<HTMLButtonElement>, typeMeta: AnalysisTypeMeta) => void;
   className?: string;
@@ -20,9 +23,10 @@ export function AnalysisTypeCardList({
   selectedAnalysisId,
   onSelect,
   showAll = true,
+  viewMode = 'icons',
   draggableAvailableCards = false,
   onCardDragStart,
-  className = 'analytics-type-cards',
+  className,
 }: AnalysisTypeCardListProps) {
   const availableById = useMemo(() => {
     const map = new Map<string, AvailableAnalysis>();
@@ -38,14 +42,33 @@ export function AnalysisTypeCardList({
     [effectiveShowAll, availableById]
   );
 
+  const isIconMode = viewMode === 'icons';
+  const containerClass = className ?? (isIconMode ? 'analytics-type-icons' : 'analytics-type-cards');
+
   return (
-    <div className={className}>
+    <div className={containerClass}>
       {filteredTypes.map((typeMeta) => {
         const isAvailable = availableById.has(typeMeta.id);
         const isSelected = selectedAnalysisId === typeMeta.id;
         const availableInfo = availableById.get(typeMeta.id);
         const Icon = typeMeta.icon;
         const isDraggable = Boolean(draggableAvailableCards && isAvailable && onCardDragStart);
+
+        if (isIconMode) {
+          return (
+            <button
+              key={typeMeta.id}
+              className={`analytics-type-icon-tile${isSelected ? ' selected' : ''}${!isAvailable ? ' unavailable' : ''}${availableInfo?.is_primary ? ' primary' : ''}`}
+              onClick={() => onSelect(typeMeta.id)}
+              title={`${typeMeta.name}\n${typeMeta.shortDescription}`}
+              draggable={isDraggable}
+              onDragStart={isDraggable ? (event) => onCardDragStart?.(event, typeMeta) : undefined}
+            >
+              <Icon size={16} strokeWidth={2} />
+              <span className="analytics-type-icon-label">{typeMeta.name}</span>
+            </button>
+          );
+        }
 
         return (
           <button

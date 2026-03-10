@@ -33,6 +33,7 @@ import {
 export type ScopeRule =
   | 'selection_edge'
   | 'selection_edges'
+  | 'children_of_selected_node'
   | 'funnel_path'
   | 'reachable_from'
   | 'all_graph_parameters';
@@ -131,6 +132,13 @@ export const ANALYSIS_TYPES: AnalysisTypeMeta[] = [
     shortDescription: 'Compare parallel branches',
     selectionHint: 'Select 2+ sibling nodes with visitedAny()',
     icon: Split,
+    snapshotContract: {
+      scopeRule: 'children_of_selected_node',
+      readMode: 'raw_snapshots',
+      slicePolicy: 'mece_fulfilment_allowed',
+      timeBoundsSource: 'query_dsl_window',
+      perScenario: true,
+    },
   },
   {
     id: 'multi_waypoint',
