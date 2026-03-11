@@ -104,6 +104,11 @@ export function useStalenessNudges(): UseStalenessNudgesResult {
   // - Notion embeds and share links often rely on the URL being stable across reloads.
   // - Rewriting can make behaviour seem “brittle” when an embed cold-starts and the param is gone.
   const suppressStalenessNudges = useMemo(() => {
+    // Static share mode is a read-only snapshot — there is no repo to pull,
+    // no running workspace to reload, and no slices to retrieve.
+    // Nudging download/update actions is irrelevant and confusing.
+    if (shareMode?.isStaticMode) return true;
+
     try {
       const ss = window.sessionStorage;
       if (ss.getItem('dagnet:nonudge') === '1') return true;
@@ -128,7 +133,7 @@ export function useStalenessNudges(): UseStalenessNudgesResult {
       // ignore
     }
     return false;
-  }, []);
+  }, [shareMode?.isStaticMode]);
 
   // Stop countdown timer
   const stopCountdown = useCallback(() => {

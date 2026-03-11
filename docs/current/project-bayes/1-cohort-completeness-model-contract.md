@@ -105,16 +105,66 @@ the app, not around idealised data we wish we had.
 
 ### 4.1 What exists at fetch time
 
-At fetch time, the system can receive:
+For a 3-step `A→X→Y` funnel query, Amplitude returns the following fields that
+the system actively uses (extracted via JMESPath/JSONata in
+`connections.yaml`):
 
-- local `X→Y` counts and lag summaries
-- `A→X` anchor-relative lag summaries on downstream cohort fetches
-- current `A`-anchored cohort counts for `A→X→Y`
-- short-horizon histogram-derived onset and lag shape information
+**Counts:**
 
-However, the histogram-style information is not fully available over the full
-path horizon. In practice it is only available for a short window near the
-start of the cohort and does not directly reveal the long tail.
+- `cumulativeRaw` — user counts at each funnel step. For a 3-step funnel:
+  `[A_count, X_count, Y_count]`. Extracted as `A`, `X` (from-step), `Y`
+  (to-step).
+- `dayFunnels.series` — per-anchor-day counts at each step.
+  `series[dayIdx][stepIdx]` gives the count for that day and step. Transformed
+  into per-day `n` (from-count) and `k` (to-count) records.
+
+**Lag moments (aggregate):**
+
+- `medianTransTimes` — aggregate median transition times in milliseconds per
+  step. For `A→X→Y`: index 0 is `A→X` median, index 1 is `X→Y` median.
+  Converted to days: `median_lag_days` (for `X→Y`) and
+  `anchor_median_lag_days` (for `A→X`).
+- `avgTransTimes` — aggregate mean transition times in milliseconds per step.
+  Same indexing. Converted to `mean_lag_days` and `anchor_mean_lag_days`.
+
+**Lag moments (per anchor day):**
+
+- `dayMedianTransTimes.series` — per-day median transition times.
+  `series[dayIdx][stepIdx]` = median milliseconds for that step on that day.
+  Converted to days and placed in per-day `median_lag_days`.
+- `dayAvgTransTimes.series` — per-day mean transition times. Same structure.
+  Converted to per-day `mean_lag_days`.
+
+**Lag distribution (histogram):**
+
+- `stepTransTimeDistribution` — histogram of transition time distribution per
+  step. Contains bins with `start` (ms), `end` (ms), and `bin_dist` (with
+  `uniques`, `sums`, `totals`). Used for onset estimation and lag CDF fitting.
+
+**What Amplitude returns but the system discards:**
+
+- `cumulative` — normalised conversion rates (0–1). Redundant with
+  `cumulativeRaw`.
+- `converted`, `dropoff`, `excludedDropoff` and their `ByDay` variants —
+  per-user conversion/dropoff tracking.
+- `convertedCounts`, `dropoffCounts` and their `Total`/`Unique` variants —
+  aggregate count breakdowns.
+- `stepPrevStepCountDistribution`, `avgPrevStepCounts`,
+  `medianPrevStepCounts` — distribution of users by previous step count.
+- `dayFunnels.isComplete` — completion flag per day.
+- All top-level metadata (`wasCached`, `novaRuntime`, `costMetadata`, etc.).
+
+**Important limitations of the histogram data:**
+
+The `stepTransTimeDistribution` histogram is bounded by Amplitude's conversion
+window. For long-latency conversions (weeks to months), the histogram only
+covers a short horizon near the start and does not reveal the full long-tail
+shape. The per-day lag moment data (`dayMedianTransTimes`, `dayAvgTransTimes`)
+is available for all days but provides only two summary statistics (median and
+mean) per day, not the full distribution.
+
+This means the durable long-tail signal must come from repeated snapshot
+observations over time, not from a single fetch's histogram.
 
 ### 4.2 What is persisted into snapshot DB
 
@@ -142,18 +192,27 @@ That repeated snapshot panel is the core persisted censoring evidence for
 
 ### 4.3 What does not exist durably today
 
-The system does not currently retain all of the fetch-time information that
-would be useful for richer path fitting.
+**Not available from Amplitude at all:**
 
-In particular, it does not durably preserve:
+- Direct `A→Y` lag summaries — Amplitude reports `A→X` and `X→Y` transition
+  times separately in a 3-step funnel. Path-level timing must be derived by
+  composition.
+- Path-route identity through joins — Amplitude has no knowledge of graph
+  topology.
 
-- a full lag histogram over the whole path horizon
-- explicit direct `A→Y` lag summaries separate from `A→X` plus `X→Y`
-- explicit path-route identity through joins
-- rich onset evidence beyond compressed scalar summaries
+**Exists transiently at fetch time but not persisted:**
 
-So the pre-Bayes architecture must not assume that later analysis can reconstruct
-an exact path mixture or a full path histogram from the DB alone.
+- `stepTransTimeDistribution` histogram bins — used for onset derivation
+  then discarded; only the scalar `onset_delta_days` survives. Persisting
+  the bins would allow re-fitting onset with different parameters and give
+  an empirical CDF for short-horizon edges. However, the histogram is
+  bounded by Amplitude's conversion window and does not reveal the long-tail
+  shape — the snapshot panel (§4.2) is the correct long-tail evidence.
+
+The pre-Bayes architecture must not assume that later analysis can
+reconstruct a full path distribution from the DB alone. The durable
+evidence is the snapshot panel of repeated `(anchor_day, retrieved_at,
+Y/X)` observations.
 
 ### 4.4 Immediate consequence
 
@@ -456,31 +515,107 @@ if it were a mature path fit.
 
 ## 10. What should be persisted additionally
 
-If fetch time exposes information that is useful later but is currently
-discarded, the upgrade should explicitly add persistence for it.
+### 10.1 What Amplitude actually provides (and what we discard)
 
-### 10.1 Why this matters
+For a 3-step A→X→Y funnel, `stepTransTimeDistribution.step_bins` contains
+**four** entries:
 
-The durable long-tail signal is the repeated snapshot panel, but fetch time may
-still expose useful short-horizon structure that later disappears.
+| Index | Content | Currently used? |
+|-------|---------|-----------------|
+| `step_bins[0]` | Entry step (trivial) | No |
+| `step_bins[1]` | A→X transition histogram | No — discarded |
+| `step_bins[2]` | X→Y transition histogram | Yes — onset extraction only |
+| `step_bins[3]` | A→Y overall histogram | No — discarded |
 
-If that structure is informative for path fitting, it should not be thrown away
-simply because the current schema did not anticipate it.
+We currently extract `step_bins[to_step_index]` (= X→Y) and use it solely
+to derive the scalar `onset_delta_days`. The raw bins are then discarded.
 
-### 10.2 Candidate additions
+### 10.2 Why histogram bins are not worth persisting
 
-If available from fetch time, the system should consider persisting:
+The histogram data is bounded by Amplitude's conversion window (~10 days).
+For a real A→X edge, the reference data shows:
 
-- short-horizon `X→Y` lag bucket counts or equivalent early-path shape summaries
-- short-horizon `A→X` lag bucket counts when available
-- explicit bucket-window metadata so truncation is known rather than guessed
-- lag sample sizes and lag coverage metadata
-- richer onset evidence than a single collapsed scalar where the source exposes
-  it
+- Days 3–9: 421 uniques with granular per-day counts (29% of mass)
+- Day 10+: 1,029 uniques in a single catch-all bucket (71% of mass)
 
-These additions are not mandatory for the first pre-Bayes phase, but they are a
-worthwhile part of the upgrade because they improve later path fitting without
-requiring Bayes first.
+This means the histogram's value is **edge-dependent**: for fast edges where
+the bulk of mass falls within ~10 days, it captures useful shape; for slow
+edges it is dominated by the catch-all and adds nothing beyond the scalars.
+
+Persisting the bins was considered and rejected on several grounds:
+
+- **Storage mismatch.** The histogram is aggregate-per-fetch, not
+  per-anchor-day. The snapshots table is keyed per-anchor-day. Storing it
+  requires either redundant JSONB on every row or a new table — neither is
+  clean.
+- **Unpredictable utility.** Whether the histogram is informative depends on
+  the edge's latency relative to the conversion window. The architecture
+  would need to handle both useful and useless histograms gracefully, meaning
+  two code paths regardless.
+- **Snapshot panel supersedes it.** Once snapshots accrue (~10 days), the
+  daily `(anchor_day, retrieved_at, Y/X)` panel provides strictly richer
+  censoring evidence. The histogram's value window is only the first ~10
+  days before snapshots accrue.
+- **Bayesian integration is not straightforward.** Truncated histogram bins
+  can be expressed as a multinomial likelihood, but by the time a Bayesian
+  model is sophisticated enough to consume them, it will already be
+  consuming the snapshot panel — which is better evidence for the same
+  purpose.
+
+### 10.3 Current use: onset derivation
+
+The X→Y histogram (`step_bins[to_step_index]`) is used at fetch time to
+derive `onset_delta_days` — the minimum delay before conversions begin. This
+is the correct use of the data: extract the durable scalar insight, discard
+the raw bins.
+
+### 10.4 Recommendation: derive and persist A→X onset
+
+The A→X histogram (`step_bins[from_step_index]`) is available at fetch time
+for 3-step funnels but currently discarded entirely. We should apply the
+same onset derivation to it, producing a scalar `anchor_onset_delta_days`.
+
+**Extraction change** (connections.yaml):
+
+```yaml
+- name: anchor_lag_histogram
+  jsonata: "step_trans_time_distribution.step_bins[$number($queryPayload.from_step_index)]"
+```
+
+Then run `deriveOnsetDeltaDaysFromLagHistogram()` on it at fetch time, persist
+only the scalar. For 2-step funnels `from_step_index = 0` gives the trivial
+entry step, so onset derivation correctly returns null.
+
+**Persistence:** one new nullable column on the `snapshots` table —
+`anchor_onset_delta_days FLOAT` — mirroring the existing `onset_delta_days`
+column. Same per-row redundancy pattern. Also add the field to
+`SnapshotRow` (snapshotWriteService.ts) and `LatencyConfig` (graph_types.py).
+
+**Backwards compatibility:** older snapshot rows will have `NULL` for this
+column. All consumers must treat missing `anchor_onset_delta_days` as
+"not available" and fall back to user-space A→X fitting (onset = 0) — which
+is exactly what they do today. No regression for existing data.
+
+**Why this matters for path composition:**
+
+Currently the A→X leg is fitted from just two scalars
+(`anchor_median_lag_days`, `anchor_mean_lag_days`) with no onset — implicitly
+assuming onset = 0. With `anchor_onset_delta_days` we can fit a proper
+shifted lognormal in model-space:
+
+```
+mu_ax  = ln(anchor_median - anchor_onset)
+sigma_ax = sqrt(2 * ln(mean_model / median_model))
+```
+
+This is the same fitting method used for X→Y edges, applied to the anchor
+leg. It feeds directly into FW convolution with a properly shifted A→X
+distribution.
+
+**What NOT to persist:** the raw histogram bins. The scalar onset is the
+durable insight; the bins are bounded by the conversion window and superseded
+by the snapshot panel once it accrues. No additional histogram persistence
+is proposed for A→X, X→Y, or A→Y.
 
 ---
 
@@ -828,16 +963,20 @@ path models via two routes:
 
 **(a) Full FW from anchor lag moments** (lines 2466–2515): For downstream edges
 with `anchor_median_lag_days` available, the FE fits an `anchorFit` from
-user-space `A→X` lag moments and composes with the edge's model-space fit:
+`A→X` lag moments and composes with the edge's model-space fit:
 
 ```
-anchorFit = fitLagDistribution(anchor_median, anchor_mean, n)  // user-space
+anchorFit = fitLagDistribution(anchor_median, anchor_mean, n)  // user-space currently
 ayFit = approximateLogNormalSumFit(anchorFit, latencyStats.fit)  // model-space edge
 ```
 
-Here `anchorFit.mu = ln(anchor_median)` — user-space, implicitly includes all
-upstream onsets in the `A→X` path. And `latencyStats.fit.mu = ln(median_X -
-onset_E)` — model-space, onset subtracted.
+Currently `anchorFit.mu = ln(anchor_median)` — fitted in user-space because
+no A→X onset is available. With the proposed `anchor_onset_delta_days` (§10.4),
+this should become model-space:
+`anchorFit.mu = ln(anchor_median - anchor_onset)`. The A→X onset would then
+be tracked as part of `path_delta` alongside the target edge's onset.
+
+`latencyStats.fit.mu = ln(median_X - onset_E)` — model-space, onset subtracted.
 
 So the FW result represents the distribution of
 `(A→X_user_space + X→Y_post_onset)`. This does **not** include the target
@@ -1163,15 +1302,18 @@ The current fetch provides `anchor_median_lag_days` and `anchor_mean_lag_days`
 on the cohort data. No snapshot history yet.
 
 **Computation:**
-1. Fit `A→X` as lognormal from anchor lag moments:
-   `anchorFit = fit_lag_distribution(anchor_median, anchor_mean, total_k)`
-   Note: this is fitted in **user-space** (no onset subtraction) because the
-   anchor lag is an aggregate across the upstream path.
+1. Fit `A→X` as shifted lognormal from anchor lag moments:
+   - If `anchor_onset_delta_days` is available (§10.4):
+     `anchorFit = fit_lag_distribution(anchor_median - anchor_onset, anchor_mean - anchor_onset, total_k)`
+     (model-space, onset subtracted — same method as X→Y edge fitting)
+   - Otherwise fall back to user-space:
+     `anchorFit = fit_lag_distribution(anchor_median, anchor_mean, total_k)`
 2. Compose via FW:
    `pathFit = approximate_lognormal_sum_fit(anchorFit, edgeFit)`
    where `edgeFit` is model-space (onset subtracted).
 3. `path_mu = pathFit.mu`, `path_sigma = pathFit.sigma`
-4. `path_delta = edge.onset_delta_days` (Phase 1) or accumulated (Phase 2)
+4. `path_delta = anchor_onset + edge.onset_delta_days` (if anchor onset
+   available) or `edge.onset_delta_days` (fallback)
 5. completeness = `CDF_LN(max(0, age - path_delta), path_mu, path_sigma)`
 
 **Model-source grade:** `composed_prior`
