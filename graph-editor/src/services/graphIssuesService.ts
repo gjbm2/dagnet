@@ -453,79 +453,31 @@ class GraphIssuesService {
    * Get file IDs referenced by a graph (events, cases, parameters, contexts, nodes).
    */
   private getReferencedFileIds(graphName: string): Set<string> {
-    const referenced = new Set<string>();
-    
     // Try to get graph data from fileRegistry
     const graphFileId = `graph-${graphName}`;
     const graphFile = fileRegistry.getFile(graphFileId);
     
-    if (!graphFile?.data) {
-      // Also try with workspace prefix pattern
-      const allFiles = fileRegistry.getAllFiles();
-      for (const file of allFiles) {
-        if (file.fileId.includes(`graph-${graphName}`) && file.data) {
-          this.extractReferencesFromGraph(file.data, referenced);
-          break;
-        }
-      }
-    } else {
-      this.extractReferencesFromGraph(graphFile.data, referenced);
+    if (graphFile?.data) {
+      return IntegrityCheckService.extractGraphReferences(graphFile.data);
     }
-    
-    return referenced;
-  }
-  
-  /**
-   * Extract all file references from a graph's data.
-   */
-  private extractReferencesFromGraph(graphData: any, referenced: Set<string>): void {
-    const nodes = graphData.nodes || [];
-    const edges = graphData.edges || [];
-    
-    // Extract node references
-    for (const node of nodes) {
-      if (node.event_id) {
-        referenced.add(`event-${node.event_id}`);
-      }
-      if (node.case?.id) {
-        referenced.add(`case-${node.case.id}`);
-      }
-      if (node.context?.id) {
-        referenced.add(`context-${node.context.id}`);
-      }
-      // Node file reference (if it references an external node file)
-      if (node.node_id) {
-        referenced.add(`node-${node.node_id}`);
+
+    // Also try with workspace prefix pattern
+    const allFiles = fileRegistry.getAllFiles();
+    for (const file of allFiles) {
+      if (file.fileId.includes(`graph-${graphName}`) && file.data) {
+        return IntegrityCheckService.extractGraphReferences(file.data);
       }
     }
-    
-    // Extract edge references
-    for (const edge of edges) {
-      if (edge.p?.id) {
-        referenced.add(`parameter-${edge.p.id}`);
-      }
-      if (edge.cost_gbp?.id) {
-        referenced.add(`parameter-${edge.cost_gbp.id}`);
-      }
-      if (edge.labour_cost?.id) {
-        referenced.add(`parameter-${edge.labour_cost.id}`);
-      }
-    }
+
+    return new Set<string>();
   }
   
   /**
    * Extract clean graph name from fileId, stripping workspace prefix if present.
-   * FileId formats:
-   * - "graph-myname" → "myname"
-   * - "repo-branch-graph-myname" → "myname"
+   * Delegates to IntegrityCheckService.extractGraphName (single canonical implementation).
    */
   private extractGraphName(fileId: string): string | null {
-    // Look for 'graph-' anywhere in the fileId
-    const graphIdx = fileId.indexOf('graph-');
-    if (graphIdx === -1) return null;
-    
-    // Extract everything after 'graph-'
-    return fileId.substring(graphIdx + 6);
+    return IntegrityCheckService.extractGraphName(fileId);
   }
   
   /**

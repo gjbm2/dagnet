@@ -584,6 +584,53 @@ export class IntegrityCheckService {
   static getDisplayName(fileId: string, type: string): string {
     return this.extractExpectedId(fileId, type);
   }
+
+  /**
+   * Extract the clean graph name from a (possibly workspace-prefixed) fileId.
+   *
+   * Examples:
+   * - "graph-myname" → "myname"
+   * - "repo-branch-graph-myname" → "myname"
+   * - "parameter-coffee" → null  (not a graph)
+   */
+  static extractGraphName(fileId: string): string | null {
+    const graphIdx = fileId.indexOf('graph-');
+    if (graphIdx === -1) return null;
+    return fileId.substring(graphIdx + 6);
+  }
+
+  /**
+   * Walk a graph's nodes and edges to collect the IDB fileIds of every entity
+   * it references (nodes, events, parameters, cases, contexts).
+   *
+   * This is the single canonical implementation used by both
+   * GraphIssuesService (production filtering) and pre-flight tests.
+   */
+  static extractGraphReferences(graphData: any): Set<string> {
+    const referenced = new Set<string>();
+    const nodes = graphData?.nodes || [];
+    const edges = graphData?.edges || [];
+
+    for (const node of nodes) {
+      if (node.id) referenced.add(`node-${node.id}`);
+      if (node.event_id) referenced.add(`event-${node.event_id}`);
+      if (node.case?.id) referenced.add(`case-${node.case.id}`);
+      if (node.context?.id) referenced.add(`context-${node.context.id}`);
+    }
+
+    for (const edge of edges) {
+      if (edge.p?.id) referenced.add(`parameter-${edge.p.id}`);
+      if (edge.cost_gbp?.id) referenced.add(`parameter-${edge.cost_gbp.id}`);
+      if (edge.labour_cost?.id) referenced.add(`parameter-${edge.labour_cost.id}`);
+      if (edge.conditional_parameters && Array.isArray(edge.conditional_parameters)) {
+        for (const cp of edge.conditional_parameters) {
+          if (cp.p?.id) referenced.add(`parameter-${cp.p.id}`);
+        }
+      }
+    }
+
+    return referenced;
+  }
   
   // ═══════════════════════════════════════════════════════════════════════════
   // ID FORMAT VALIDATION

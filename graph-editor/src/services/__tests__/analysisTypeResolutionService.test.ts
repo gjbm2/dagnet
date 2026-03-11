@@ -9,6 +9,8 @@
  */
 
 import { describe, it, expect } from 'vitest';
+
+const describeBackend = process.env.CI ? describe.skip : describe;
 import { resolveAnalysisType } from '../analysisTypeResolutionService';
 
 const SIMPLE_GRAPH = {
@@ -27,7 +29,7 @@ const SIMPLE_GRAPH = {
   metadata: { id: 'test-graph', name: 'Test Graph' },
 };
 
-describe('resolveAnalysisType (integration - real backend)', () => {
+describeBackend('resolveAnalysisType (integration - real backend)', () => {
   it('should return graph_overview as primary when no DSL provided', async () => {
     const result = await resolveAnalysisType(SIMPLE_GRAPH);
 

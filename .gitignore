@@ -147,6 +147,7 @@ graph-editor/public/defaults/sample-data-bundle.json
 
 # Scratch/test files at repo root
 test*.json
+*-preflight.txt
 
 # Local test data in project-data
 graph-editor/public/project-data/selection-test.json

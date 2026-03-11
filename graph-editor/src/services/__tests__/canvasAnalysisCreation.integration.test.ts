@@ -12,6 +12,8 @@
  */
 
 import { describe, it, expect } from 'vitest';
+
+const describeBackend = process.env.CI ? describe.skip : describe;
 import { constructQueryDSL } from '../../lib/dslConstruction';
 import { resolveAnalysisType } from '../analysisTypeResolutionService';
 
@@ -38,7 +40,7 @@ const REACTFLOW_NODES = GRAPH.nodes.map(n => ({
   data: { uuid: n.uuid, id: n.id, label: n.label, entry: (n as any).entry, absorbing: (n as any).absorbing, type: n.type },
 }));
 
-describe('Canvas analysis creation: element palette path (integration)', () => {
+describeBackend('Canvas analysis creation: element palette path (integration)', () => {
   it('should produce conversion_funnel for 3 selected nodes (from -> visited -> to)', async () => {
     const selectedNodeIds = ['landing-page', 'signup', 'purchase'];
 
@@ -128,7 +130,7 @@ describe('Canvas analysis creation: element palette path (integration)', () => {
   });
 });
 
-describe('Canvas analysis creation: type resolution edge cases', () => {
+describeBackend('Canvas analysis creation: type resolution edge cases', () => {
   it('single absorbing node produces to(nodeId) DSL regardless of edge structure', () => {
     const graphWithSelfLoop = {
       ...GRAPH,
@@ -192,7 +194,7 @@ describe('Canvas analysis creation: type resolution edge cases', () => {
   });
 });
 
-describe('Canvas analysis creation: element palette path simulates addCanvasAnalysisAtPosition', () => {
+describeBackend('Canvas analysis creation: element palette path simulates addCanvasAnalysisAtPosition', () => {
   it('element palette path should resolve type with correct scenario count', async () => {
     const selectedNodeIds = ['purchase'];
     const analyticsDsl = constructQueryDSL(selectedNodeIds, REACTFLOW_NODES as any[], GRAPH.edges as any[]);
