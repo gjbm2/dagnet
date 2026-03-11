@@ -5607,11 +5607,16 @@ class DataOperationsService {
                 }
 
                 if (wantsCohort) {
-                  const anchorId = (graphConstraints?.cohort as any)?.anchor || (nQueryEdgeData as any)?.p?.latency?.anchor_node_id;
-                  if (anchorId && xId) {
-                    nQueryEdgeData.query = `from(${anchorId}).to(${xId})`;
+                  // Use segmentation endpoint (same as window mode) for cohort denominators.
+                  // The old approach built from(anchor).to(X) as a 2-step funnel, but when
+                  // anchor === X (common for entry-node edges), Amplitude treats it as
+                  // "users who did X twice" → returns 0. Segmentation counts unique users
+                  // of X during the cohort date range, which is the correct denominator.
+                  if (xId) {
+                    nQueryEdgeData.query = `from(${xId}).to(${xId})`;
+                    explicitNQueryWindowDenomUsesFromCount = true;
                   } else {
-                    console.warn('[DataOps:DUAL_QUERY] to(X) n_query in cohort mode but no anchor available; skipping explicit n_query for this run');
+                    console.warn('[DataOps:DUAL_QUERY] to(X) n_query in cohort mode but no xId available; skipping explicit n_query for this run');
                     explicitNQuery = undefined;
                     needsDualQuery = false;
                   }
@@ -5671,8 +5676,8 @@ class DataOperationsService {
           
           baseQueryPayload = nQueryResult.queryPayload;
 
-          // Mark window-mode to(X) denominators as "segmentation" so the Amplitude adapter uses
-          // the single-event endpoint rather than /funnels.
+          // Mark to(X) denominators as "segmentation" so the Amplitude adapter uses
+          // the single-event endpoint rather than /funnels (applies to both window and cohort mode).
           if (explicitNQueryWasToOnlyNormalForm && explicitNQueryWindowDenomUsesFromCount) {
             (baseQueryPayload as any).query_kind = 'segmentation';
           }
