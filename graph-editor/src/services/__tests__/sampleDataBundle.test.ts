@@ -36,6 +36,8 @@ const INDEX_FILES = [
   { fileName: 'events-index.yaml',     type: 'event' },
 ];
 
+const EXCLUDED_GRAPHS = new Set(['ab-bc-smooth-lag-rebalance.json']);
+
 function listSourceFiles(dirPath: string, extension: string): string[] {
   if (!fs.existsSync(dirPath)) return [];
   return fs.readdirSync(dirPath)
@@ -78,6 +80,7 @@ describe('Sample data bundle integrity', () => {
       const sourceFiles = listSourceFiles(sourceDir, dir.extension);
 
       for (const fileName of sourceFiles) {
+        if (dir.type === 'graph' && EXCLUDED_GRAPHS.has(fileName)) continue;
         const expectedPath = `${BASE_PATH}/${dir.dirName}/${fileName}`;
         expect(bundlePaths.has(expectedPath)).toBe(true);
       }
@@ -97,7 +100,9 @@ describe('Sample data bundle integrity', () => {
     let expectedCount = 0;
     for (const dir of DIRECTORIES) {
       const sourceDir = path.join(SAMPLE_DATA_PATH, dir.dirName);
-      expectedCount += listSourceFiles(sourceDir, dir.extension).length;
+      let count = listSourceFiles(sourceDir, dir.extension).length;
+      if (dir.type === 'graph') count -= EXCLUDED_GRAPHS.size;
+      expectedCount += count;
     }
     for (const idx of INDEX_FILES) {
       if (fs.existsSync(path.join(SAMPLE_DATA_PATH, idx.fileName))) {
@@ -239,9 +244,8 @@ describe('Sample data bundle hydration', () => {
 
     const wsFiles = await workspaceService.getWorkspaceFiles('dagnet', 'main');
     const graphs = wsFiles.filter(f => f.type === 'graph');
-    expect(graphs.length).toBe(3);
+    expect(graphs.length).toBe(2);
     expect(graphs.map(g => g.fileId).sort()).toEqual([
-      'graph-ab-bc-smooth-lag-rebalance',
       'graph-ecommerce-checkout-flow',
       'graph-sample'
     ]);

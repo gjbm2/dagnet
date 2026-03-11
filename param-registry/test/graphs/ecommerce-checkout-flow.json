@@ -541,7 +541,7 @@
       "id": "ca000000-0001-4000-8000-000000000001",
       "x": 200,
       "y": 600,
-      "width": 500,
+      "width": 560,
       "height": 350,
       "view_mode": "chart",
       "chart_kind": "funnel",
@@ -550,23 +550,24 @@
       "recipe": {
         "analysis": {
           "analysis_type": "conversion_funnel",
-          "analytics_dsl": "from(landing-page).to(order-complete)"
+          "analytics_dsl": "from(landing-page).to(order-complete).visited(product-view).visited(checkout).visited(order-shipped).visited(order-delivered)"
         }
       }
     },
     {
       "id": "ca000000-0002-4000-8000-000000000002",
-      "x": 750,
+      "x": 810,
       "y": 600,
-      "width": 400,
-      "height": 300,
-      "view_mode": "cards",
+      "width": 480,
+      "height": 350,
+      "view_mode": "chart",
+      "chart_kind": "bar_grouped",
       "live": true,
-      "title": "Checkout Bridge",
+      "title": "Checkout Outcomes",
       "recipe": {
         "analysis": {
-          "analysis_type": "bridge_view",
-          "analytics_dsl": "from(landing-page).to(order-complete)"
+          "analysis_type": "from_node_outcomes",
+          "analytics_dsl": "from(checkout)"
         }
       }
     }

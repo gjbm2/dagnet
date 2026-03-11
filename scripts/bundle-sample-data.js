@@ -25,6 +25,11 @@ const OUTPUT_PATH = path.join(REPO_ROOT, 'graph-editor', 'public', 'defaults', '
 
 const BASE_PATH = 'param-registry/test';
 
+// Graphs that exist as test fixtures but should not appear in the user-facing sample data bundle.
+const EXCLUDED_GRAPHS = new Set([
+  'ab-bc-smooth-lag-rebalance.json',
+]);
+
 // Must match cloneWorkspace directory config (workspaceService.ts line 294-302)
 const DIRECTORIES = [
   { dirName: 'graphs',     type: 'graph',     extension: 'json' },
@@ -93,6 +98,7 @@ function main() {
     const fileNames = listFiles(dirPath, dir.extension);
 
     for (const fileName of fileNames) {
+      if (dir.type === 'graph' && EXCLUDED_GRAPHS.has(fileName)) continue;
       const filePath = path.join(dirPath, fileName);
       const repoPath = `${BASE_PATH}/${dir.dirName}/${fileName}`;
       const content = fs.readFileSync(filePath, 'utf8');

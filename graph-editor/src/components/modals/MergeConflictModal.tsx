@@ -75,6 +75,14 @@ export function MergeConflictModal({
     setResolutions(newResolutions);
   };
 
+  const handleResolveAll = (resolution: 'local' | 'remote') => {
+    const newResolutions = new Map(resolutions);
+    for (const c of conflicts) {
+      newResolutions.set(c.fileId, resolution);
+    }
+    setResolutions(newResolutions);
+  };
+
   const handleApply = async () => {
     if (!allResolved) {
       alert('Please resolve all conflicts before applying');
@@ -213,16 +221,36 @@ export function MergeConflictModal({
         </div>
 
         <div className="modal-footer">
-          <button className="button secondary" onClick={onClose} disabled={isResolving}>
-            Cancel
-          </button>
-          <button
-            className="button primary"
-            onClick={handleApply}
-            disabled={!allResolved || isResolving}
-          >
-            {isResolving ? 'Applying...' : 'Apply Resolutions'}
-          </button>
+          <div className="footer-batch-actions">
+            <button
+              className="button batch"
+              onClick={() => handleResolveAll('local')}
+              disabled={isResolving}
+              title="Resolve all conflicts by keeping your local changes"
+            >
+              Local for all
+            </button>
+            <button
+              className="button batch"
+              onClick={() => handleResolveAll('remote')}
+              disabled={isResolving}
+              title="Resolve all conflicts by accepting incoming changes"
+            >
+              Remote for all
+            </button>
+          </div>
+          <div className="footer-main-actions">
+            <button className="button secondary" onClick={onClose} disabled={isResolving}>
+              Cancel
+            </button>
+            <button
+              className="button primary"
+              onClick={handleApply}
+              disabled={!allResolved || isResolving}
+            >
+              {isResolving ? 'Applying...' : 'Apply Resolutions'}
+            </button>
+          </div>
         </div>
       </div>
     </div>

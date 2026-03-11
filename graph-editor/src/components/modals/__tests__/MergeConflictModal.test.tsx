@@ -393,5 +393,69 @@ describe('MergeConflictModal', () => {
     const keepLocalButton = screen.getByText(/Keep Local/);
     expect(keepLocalButton).toHaveClass('selected');
   });
+
+  it('should show Local for all and Remote for all batch buttons', () => {
+    render(
+      <MergeConflictModal
+        isOpen={true}
+        onClose={mockOnClose}
+        conflicts={sampleConflicts}
+        onResolve={mockOnResolve}
+      />
+    );
+
+    expect(screen.getByText('Local for all')).toBeInTheDocument();
+    expect(screen.getByText('Remote for all')).toBeInTheDocument();
+  });
+
+  it('should resolve all conflicts to local when Local for all is clicked', async () => {
+    render(
+      <MergeConflictModal
+        isOpen={true}
+        onClose={mockOnClose}
+        conflicts={sampleConflicts}
+        onResolve={mockOnResolve}
+      />
+    );
+
+    fireEvent.click(screen.getByText('Local for all'));
+
+    const applyButton = screen.getByText('Apply Resolutions');
+    expect(applyButton).not.toBeDisabled();
+    fireEvent.click(applyButton);
+
+    await waitFor(() => {
+      expect(mockOnResolve).toHaveBeenCalledTimes(1);
+    });
+
+    const resolutionMap = mockOnResolve.mock.calls[0][0];
+    expect(resolutionMap.get('parameter-test1')).toBe('local');
+    expect(resolutionMap.get('parameter-test2')).toBe('local');
+  });
+
+  it('should resolve all conflicts to remote when Remote for all is clicked', async () => {
+    render(
+      <MergeConflictModal
+        isOpen={true}
+        onClose={mockOnClose}
+        conflicts={sampleConflicts}
+        onResolve={mockOnResolve}
+      />
+    );
+
+    fireEvent.click(screen.getByText('Remote for all'));
+
+    const applyButton = screen.getByText('Apply Resolutions');
+    expect(applyButton).not.toBeDisabled();
+    fireEvent.click(applyButton);
+
+    await waitFor(() => {
+      expect(mockOnResolve).toHaveBeenCalledTimes(1);
+    });
+
+    const resolutionMap = mockOnResolve.mock.calls[0][0];
+    expect(resolutionMap.get('parameter-test1')).toBe('remote');
+    expect(resolutionMap.get('parameter-test2')).toBe('remote');
+  });
 });
 
