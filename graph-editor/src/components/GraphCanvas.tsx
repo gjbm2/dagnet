@@ -93,6 +93,7 @@ import {
 import { generateIdFromLabel, generateUniqueId } from '@/lib/idUtils';
 import { computeEffectiveEdgeProbability } from '@/lib/whatIf';
 import { getOptimalFace, assignFacesForNode } from '@/lib/faceSelection';
+import { computeFaceDirectionsFromEdges } from '@/lib/faceDirections';
 import { buildScenarioRenderEdges } from './canvas/buildScenarioRenderEdges';
 import { getCaseEdgeVariantInfo } from './edges/edgeLabelHelpers';
 import { MAX_EDGE_WIDTH, MIN_EDGE_WIDTH, DEFAULT_NODE_WIDTH, DEFAULT_NODE_HEIGHT, MIN_NODE_HEIGHT, MAX_NODE_HEIGHT, IMAGE_VIEW_NODE_WIDTH, IMAGE_VIEW_NODE_HEIGHT } from '@/lib/nodeEdgeConstants';
@@ -2945,6 +2946,17 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
     };
   });
     
+    // Compute face directions eagerly so the first paint has correct curved outlines.
+    // edgesWithOffsets already carry .sourceFace/.targetFace from calculateEdgeOffsets.
+    if (!useSankeyView && edgesWithOffsets.length > 0) {
+      const faceMap = computeFaceDirectionsFromEdges(edgesWithOffsets);
+      nodesWithSelection = nodesWithSelection.map((node: any) => {
+        const fd = faceMap.get(node.id);
+        if (!fd) return node;
+        return { ...node, data: { ...node.data, faceDirections: fd } };
+      });
+    }
+
     setNodes(nodesWithSelection);
     // Sort edges so selected edges render last (on top)
     const sortedEdges = [...edgesWithAnchors].sort((a, b) => {
@@ -3039,116 +3051,39 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
     }));
   }, [activeElementTool, setNodes]);
 
-  // Compute face directions based on edge connections (for curved node outlines)
-  // Runs after edges have been auto-routed and have sourceFace/targetFace assigned
-  // Use useLayoutEffect + double-RAF for synchronous update after layout settles
-  const faceDirectionRaf1Ref = useRef<number | null>(null);
-  const faceDirectionRaf2Ref = useRef<number | null>(null);
-  
+  // Safety-net: recompute face directions synchronously before paint if edges change
+  // outside the slow path (e.g. edge handle edits that bypass the full rebuild).
+  // Normally a no-op because the slow path already injects faceDirections into nodes.
   useLayoutEffect(() => {
-    if (useSankeyView) return; // Skip in Sankey view - nodes stay flat
+    if (useSankeyView) return;
     if (edges.length === 0) return;
-    
-    // Cancel pending RAFs to coalesce updates
-    if (faceDirectionRaf1Ref.current) cancelAnimationFrame(faceDirectionRaf1Ref.current);
-    if (faceDirectionRaf2Ref.current) cancelAnimationFrame(faceDirectionRaf2Ref.current);
-    
-    faceDirectionRaf1Ref.current = requestAnimationFrame(() => {
-      faceDirectionRaf2Ref.current = requestAnimationFrame(() => {
-        // Count inbound/outbound edges per face for each node
-        const faceStatsPerNode = new Map<string, Record<string, { in: number; out: number }>>();
-    
-    edges.forEach(edge => {
-      const srcId = edge.source;
-      const tgtId = edge.target;
-      const srcFace = edge.data?.sourceFace;
-      const tgtFace = edge.data?.targetFace;
-      
-      // Initialize stats for source node
-      if (srcId && srcFace) {
-        if (!faceStatsPerNode.has(srcId)) {
-          faceStatsPerNode.set(srcId, {
-            left: { in: 0, out: 0 },
-            right: { in: 0, out: 0 },
-            top: { in: 0, out: 0 },
-            bottom: { in: 0, out: 0 },
-          });
-        }
-        faceStatsPerNode.get(srcId)![srcFace].out += 1;
-      }
-      
-      // Initialize stats for target node
-      if (tgtId && tgtFace) {
-        if (!faceStatsPerNode.has(tgtId)) {
-          faceStatsPerNode.set(tgtId, {
-            left: { in: 0, out: 0 },
-            right: { in: 0, out: 0 },
-            top: { in: 0, out: 0 },
-            bottom: { in: 0, out: 0 },
-          });
-        }
-        faceStatsPerNode.get(tgtId)![tgtFace].in += 1;
-      }
-    });
-    
-    // Classify each face direction and attach to nodes
-    // Guard: only update if faceDirections actually changed
+
+    const faceMap = computeFaceDirectionsFromEdges(edges);
+
     setNodes(prevNodes => {
       let hasChanges = false;
       const newNodes = prevNodes.map(node => {
-        const stats = faceStatsPerNode.get(node.id);
-        
-        const classifyFace = (face: 'left' | 'right' | 'top' | 'bottom'): 'flat' | 'convex' | 'concave' => {
-          if (!stats) return 'flat';
-          const s = stats[face];
-          if (!s || (s.in === 0 && s.out === 0)) return 'flat';
-          if (s.in > 0 && s.out === 0) return 'concave';
-          if (s.out > 0 && s.in === 0) return 'convex';
-          if (s.out > s.in) return 'convex';
-          if (s.in > s.out) return 'concave';
-          return 'flat'; // Tied
-        };
-        
-        const newFaceDirections = {
-          left: classifyFace('left'),
-          right: classifyFace('right'),
-          top: classifyFace('top'),
-          bottom: classifyFace('bottom'),
-        };
-        
-        // Check if this node's faceDirections actually changed
-        const oldFaceDirections = node.data?.faceDirections;
-        if (oldFaceDirections &&
-            oldFaceDirections.left === newFaceDirections.left &&
-            oldFaceDirections.right === newFaceDirections.right &&
-            oldFaceDirections.top === newFaceDirections.top &&
-            oldFaceDirections.bottom === newFaceDirections.bottom) {
-          // No change
+        const fd = faceMap.get(node.id);
+        const oldFd = node.data?.faceDirections;
+
+        // No edge traffic for this node — nothing to set
+        if (!fd) return node;
+
+        // Already correct — skip
+        if (oldFd &&
+            oldFd.left === fd.left &&
+            oldFd.right === fd.right &&
+            oldFd.top === fd.top &&
+            oldFd.bottom === fd.bottom) {
           return node;
         }
-        
+
         hasChanges = true;
-        return {
-          ...node,
-          data: {
-            ...node.data,
-            faceDirections: newFaceDirections
-          }
-        };
+        return { ...node, data: { ...node.data, faceDirections: fd } };
       });
-      
-      // Only return new array if there were actual changes
+
       return hasChanges ? newNodes : prevNodes;
     });
-      });
-    });
-    
-    return () => {
-      if (faceDirectionRaf1Ref.current) cancelAnimationFrame(faceDirectionRaf1Ref.current);
-      if (faceDirectionRaf2Ref.current) cancelAnimationFrame(faceDirectionRaf2Ref.current);
-      faceDirectionRaf1Ref.current = null;
-      faceDirectionRaf2Ref.current = null;
-    };
   }, [edges, useSankeyView, setNodes]);
 
   // Force re-route when Sankey view is actually toggled (to re-assign faces for L/R only constraint)
