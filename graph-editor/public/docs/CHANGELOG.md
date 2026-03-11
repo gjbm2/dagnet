@@ -1,4 +1,11 @@
 # DagNet Release Notes
+## Version 1.7.7b
+**Released:** 11-Mar-26
+
+Updated sample data charts
+
+---
+
 ## Version 1.7.6b
 **Released:** 11-Mar-26
 
