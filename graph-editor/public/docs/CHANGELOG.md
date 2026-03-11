@@ -1,4 +1,11 @@
 # DagNet Release Notes
+## Version 1.7.6b
+**Released:** 11-Mar-26
+
+Improved graph pre-flight testing
+
+---
+
 ## Version 1.7.5b
 **Released:** 10-Mar-26
 
