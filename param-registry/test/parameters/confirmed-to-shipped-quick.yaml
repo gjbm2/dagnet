@@ -7,9 +7,26 @@ query_overridden: false
 values:
   - mean: 0.98
     stdev: 0.01
+    window_from: "2025-01-01T00:00:00Z"
+    window_to: "2025-03-31T23:59:59Z"
+    data_source:
+      type: amplitude
+      retrieved_at: "2025-04-01T08:00:00Z"
+      full_query: "from(order-confirmed).to(order-shipped).visited(quick-cart).window(1-Jan-25:31-Mar-25)"
+  - mean: 0.985
+    stdev: 0.008
+    window_from: "2025-04-01T00:00:00Z"
+    window_to: "2025-06-30T23:59:59Z"
+    data_source:
+      type: amplitude
+      retrieved_at: "2025-07-01T08:00:00Z"
+      full_query: "from(order-confirmed).to(order-shipped).visited(quick-cart).window(1-Apr-25:30-Jun-25)"
 metadata:
+  description: Probability of order being shipped (not cancelled) after quick cart experience
   created_at: "2025-01-01T00:00:00Z"
-  updated_at: "2025-01-01T00:00:00Z"
+  updated_at: "2025-07-01T08:00:00Z"
+  author: analytics-team
+  version: "1.0.0"
   status: active
   tags:
     - fulfilment

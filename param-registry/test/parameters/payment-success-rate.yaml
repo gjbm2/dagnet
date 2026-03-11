@@ -15,6 +15,17 @@ values:
       type: amplitude
       retrieved_at: "2025-04-01T08:00:00Z"
       full_query: "from(payment).to(order-confirmed).window(1-Jan-25:31-Mar-25)"
+  - mean: 0.96
+    stdev: 0.01
+    n: 1600
+    k: 1536
+    distribution: beta
+    window_from: "2025-04-01T00:00:00Z"
+    window_to: "2025-06-30T23:59:59Z"
+    data_source:
+      type: amplitude
+      retrieved_at: "2025-07-01T08:00:00Z"
+      full_query: "from(payment).to(order-confirmed).window(1-Apr-25:30-Jun-25)"
 metadata:
   description: Probability that a payment submission will be successfully authorised. Failures include declined cards, insufficient funds, and fraud checks.
   tags:

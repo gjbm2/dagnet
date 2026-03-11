@@ -15,6 +15,17 @@ values:
       type: api
       retrieved_at: "2025-04-01T08:00:00Z"
       notes: Data from logistics partner API
+  - mean: 0.985
+    stdev: 0.004
+    n: 5200
+    k: 5122
+    distribution: beta
+    window_from: "2025-04-01T00:00:00Z"
+    window_to: "2025-06-30T23:59:59Z"
+    data_source:
+      type: api
+      retrieved_at: "2025-07-01T08:00:00Z"
+      notes: Data from logistics partner API
 metadata:
   description: Probability that a shipped order will be successfully delivered. Failures include multiple failed delivery attempts resulting in return to warehouse.
   tags:

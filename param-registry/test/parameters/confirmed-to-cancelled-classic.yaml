@@ -15,6 +15,17 @@ values:
       type: amplitude
       retrieved_at: "2025-04-01T08:00:00Z"
       full_query: "from(order-confirmed).to(order-cancelled).visited(classic-cart).window(1-Jan-25:31-Mar-25)"
+  - mean: 0.035
+    stdev: 0.01
+    n: 1100
+    k: 39
+    distribution: beta
+    window_from: "2025-04-01T00:00:00Z"
+    window_to: "2025-06-30T23:59:59Z"
+    data_source:
+      type: amplitude
+      retrieved_at: "2025-07-01T08:00:00Z"
+      full_query: "from(order-confirmed).to(order-cancelled).visited(classic-cart).window(1-Apr-25:30-Jun-25)"
 metadata:
   description: Order cancellation rate for customers who used the classic cart. Slightly higher cancellation as slower checkout gives more time for buyer's remorse.
   tags:

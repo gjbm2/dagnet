@@ -570,6 +570,40 @@
           "analytics_dsl": "from(checkout)"
         }
       }
+    },
+    {
+      "id": "ca000000-0003-4000-8000-000000000003",
+      "x": 200,
+      "y": 1000,
+      "width": 560,
+      "height": 350,
+      "view_mode": "chart",
+      "chart_kind": "bridge",
+      "live": false,
+      "title": "Order Reach: Classic vs Quick Cart",
+      "recipe": {
+        "analysis": {
+          "analysis_type": "bridge_view",
+          "analytics_dsl": "to(order-complete)",
+          "what_if_dsl": "case(cart-experience-test:quick)"
+        },
+        "scenarios": [
+          {
+            "scenario_id": "base",
+            "name": "Classic (50%) + Quick (50%)",
+            "effective_dsl": "",
+            "colour": "#6b7280",
+            "visibility_mode": "f+e"
+          },
+          {
+            "scenario_id": "current",
+            "name": "Quick Cart (100%)",
+            "effective_dsl": "",
+            "colour": "#10b981",
+            "visibility_mode": "f+e"
+          }
+        ]
+      }
     }
   ]
 }
