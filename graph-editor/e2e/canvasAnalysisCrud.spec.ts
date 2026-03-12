@@ -265,7 +265,7 @@ test.describe('Live → Custom parity', () => {
 
     // Record what's shown in Live mode
     const liveTitle = await analysisNode.locator('span').first().textContent();
-    await expect(analysisNode.locator('text=LIVE')).toBeVisible();
+    await expect(analysisNode.locator('text="LIVE"')).toBeVisible();
 
     // Select the analysis node and find its props panel
     await analysisNode.click();
@@ -278,7 +278,7 @@ test.describe('Live → Custom parity', () => {
       await page.waitForTimeout(2000);
 
       // Badge should now say CUSTOM
-      await expect(analysisNode.locator('text=CUSTOM')).toBeVisible({ timeout: 5_000 });
+      await expect(analysisNode.locator('text="CUSTOM"')).toBeVisible({ timeout: 5_000 });
 
       // Chart content must remain the same
       const customTitle = await analysisNode.locator('span').first().textContent();

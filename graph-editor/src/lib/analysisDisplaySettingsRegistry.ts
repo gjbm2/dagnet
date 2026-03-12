@@ -424,6 +424,47 @@ const COMMON_TOOLTIP_SETTINGS: DisplaySettingDef[] = [
   },
 ];
 
+/** Chart font size (global scale for all chart text) */
+const COMMON_FONT_SIZE_SETTINGS: DisplaySettingDef[] = [
+  {
+    key: 'chart_font_size',
+    label: 'Font size',
+    shortLabel: 'Font',
+    type: 'radio',
+    options: [
+      { value: 'S', label: 'S' },
+      { value: 'M', label: 'M' },
+      { value: 'L', label: 'L' },
+      { value: 'XL', label: 'XL' },
+    ],
+    defaultValue: 'M',
+    propsPanel: true,
+    inline: 'brief',
+    contextMenu: true,
+  },
+];
+
+/**
+ * Derive concrete font sizes from the chart_font_size setting.
+ * Returns pixel values for each text role in the chart.
+ */
+export function chartFontScale(size: string | null | undefined): {
+  axisTitlePx: number;
+  axisLabelPx: number;
+  legendPx: number;
+  dataLabelPx: number;
+  tooltipPx: number;
+  markLabelPx: number;
+} {
+  switch (size) {
+    case 'S':  return { axisTitlePx: 7, axisLabelPx: 8, legendPx: 8, dataLabelPx: 6, tooltipPx: 9, markLabelPx: 7 };
+    case 'L':  return { axisTitlePx: 10, axisLabelPx: 11, legendPx: 11, dataLabelPx: 9, tooltipPx: 12, markLabelPx: 10 };
+    case 'XL': return { axisTitlePx: 12, axisLabelPx: 13, legendPx: 13, dataLabelPx: 11, tooltipPx: 14, markLabelPx: 12 };
+    case 'M':
+    default:   return { axisTitlePx: 8, axisLabelPx: 9, legendPx: 9, dataLabelPx: 7, tooltipPx: 10, markLabelPx: 8 };
+  }
+}
+
 /** Animation controls */
 const COMMON_ANIMATION_SETTINGS: DisplaySettingDef[] = [
   {
@@ -724,6 +765,7 @@ const FUNNEL_SPECIFIC_SETTINGS: DisplaySettingDef[] = [
  */
 export const CHART_DISPLAY_SETTINGS: Record<string, DisplaySettingDef[]> = {
   bridge: [
+    ...COMMON_FONT_SIZE_SETTINGS,
     ...BRIDGE_SPECIFIC_SETTINGS,
     ...COMMON_AXIS_SETTINGS,
     ...COMMON_LEGEND_SETTINGS,
@@ -737,6 +779,7 @@ export const CHART_DISPLAY_SETTINGS: Record<string, DisplaySettingDef[]> = {
   ],
 
   funnel: [
+    ...COMMON_FONT_SIZE_SETTINGS,
     ...FUNNEL_SPECIFIC_SETTINGS,
     ...COMMON_AXIS_SETTINGS,
     ...COMMON_LEGEND_SETTINGS,
@@ -749,6 +792,7 @@ export const CHART_DISPLAY_SETTINGS: Record<string, DisplaySettingDef[]> = {
   ],
 
   histogram: [
+    ...COMMON_FONT_SIZE_SETTINGS,
     ...COMMON_AXIS_SETTINGS,
     ...COMMON_LEGEND_SETTINGS,
     ...COMMON_LABEL_SETTINGS,
@@ -760,6 +804,7 @@ export const CHART_DISPLAY_SETTINGS: Record<string, DisplaySettingDef[]> = {
   ],
 
   bar_grouped: [
+    ...COMMON_FONT_SIZE_SETTINGS,
     ...COMMON_AXIS_SETTINGS,
     ...COMMON_LEGEND_SETTINGS,
     ...COMMON_LABEL_SETTINGS,
@@ -774,6 +819,7 @@ export const CHART_DISPLAY_SETTINGS: Record<string, DisplaySettingDef[]> = {
   ],
 
   pie: [
+    ...COMMON_FONT_SIZE_SETTINGS,
     ...COMMON_AXIS_SETTINGS,
     ...COMMON_LEGEND_SETTINGS,
     ...COMMON_LABEL_SETTINGS,
@@ -783,6 +829,7 @@ export const CHART_DISPLAY_SETTINGS: Record<string, DisplaySettingDef[]> = {
   ],
 
   time_series: [
+    ...COMMON_FONT_SIZE_SETTINGS,
     ...COMMON_SERIES_TYPE_SETTINGS,
     ...COMMON_AXIS_SETTINGS,
     ...COMMON_LEGEND_SETTINGS,
@@ -800,6 +847,7 @@ export const CHART_DISPLAY_SETTINGS: Record<string, DisplaySettingDef[]> = {
   ],
 
   daily_conversions: [
+    ...COMMON_FONT_SIZE_SETTINGS,
     ...COMMON_SERIES_TYPE_SETTINGS,
     ...COMMON_AXIS_SETTINGS,
     ...COMMON_LEGEND_SETTINGS,
@@ -821,6 +869,7 @@ export const CHART_DISPLAY_SETTINGS: Record<string, DisplaySettingDef[]> = {
   ],
 
   cohort_maturity: [
+    ...COMMON_FONT_SIZE_SETTINGS,
     ...COMMON_AXIS_SETTINGS,
     ...COMMON_LEGEND_SETTINGS,
     ...COMMON_LABEL_SETTINGS,

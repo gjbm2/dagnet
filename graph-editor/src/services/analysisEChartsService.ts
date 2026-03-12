@@ -1,4 +1,5 @@
 import type { AnalysisResult, DimensionValueMeta } from '../lib/graphComputeClient';
+import { chartFontScale } from '../lib/analysisDisplaySettingsRegistry';
 import { isDarkMode } from '../theme/objectTypeTheme';
 
 /** ECharts colour palette that respects current theme. Call at render time. */
@@ -24,6 +25,9 @@ function echartsTooltipStyle() {
     backgroundColor: c.tooltipBg,
     borderColor: c.tooltipBorder,
     textStyle: { color: c.tooltipText },
+    // Render tooltip as a direct child of <body> so it escapes overflow:hidden
+    // containers (canvas analysis nodes, chart viewports, etc.)
+    appendToBody: true,
   };
 }
 
@@ -157,6 +161,38 @@ function applyCommonSettings(opt: any, settings: Record<string, any>): any {
       if (showLabels !== undefined && showLabels !== null) s.label.show = !!showLabels;
       if (labelFontSize !== undefined && labelFontSize !== null) s.label.fontSize = labelFontSize;
       if (labelPosition !== undefined) s.label.position = labelPosition;
+    }
+  }
+
+  // ── Chart font size (global scale) ──
+  const fontSizeSetting = settings.chart_font_size;
+  if (fontSizeSetting) {
+    const fs = chartFontScale(fontSizeSetting);
+    // Axis titles (nameTextStyle)
+    const allAxes = [
+      ...(Array.isArray(opt.xAxis) ? opt.xAxis : opt.xAxis ? [opt.xAxis] : []),
+      ...(Array.isArray(opt.yAxis) ? opt.yAxis : opt.yAxis ? [opt.yAxis] : []),
+    ];
+    for (const ax of allAxes) {
+      if (ax.nameTextStyle) ax.nameTextStyle.fontSize = fs.axisTitlePx;
+      else if (ax.name) ax.nameTextStyle = { fontSize: fs.axisTitlePx, color: c.text };
+      if (ax.axisLabel) ax.axisLabel.fontSize = fs.axisLabelPx;
+    }
+    // Legend
+    if (opt.legend && opt.legend.show !== false) {
+      if (!opt.legend.textStyle) opt.legend.textStyle = {};
+      opt.legend.textStyle.fontSize = fs.legendPx;
+    }
+    // Tooltip
+    if (opt.tooltip && opt.tooltip.show !== false) {
+      if (!opt.tooltip.textStyle) opt.tooltip.textStyle = {};
+      opt.tooltip.textStyle.fontSize = fs.tooltipPx;
+    }
+    // Series data labels (only if label_font_size not explicitly set)
+    if (labelFontSize === undefined || labelFontSize === null) {
+      for (const s of (opt.series || [])) {
+        if (s.label && s.label.fontSize !== undefined) s.label.fontSize = fs.dataLabelPx;
+      }
     }
   }
 
@@ -426,10 +462,11 @@ export function buildFunnelEChartsOption(result: AnalysisResult, args: FunnelCha
             if (!raw) return p?.name ?? '';
             return `${raw.stageLabel}\n${fmtPct(raw.probability)}`;
           },
-          fontSize: 11,
-          overflow: 'truncate',
+          fontSize: 7,
+          overflow: 'none',
         },
         labelLine: { show: false },
+        labelLayout: { hideOverlap: false },
         data: points.map(pt => ({
           name: pt.stageLabel,
           value: pt.probability ?? 0,
@@ -587,7 +624,7 @@ export function buildFunnelBarEChartsOption(result: AnalysisResult, args: Funnel
   const scenarioCount = scenarioIds.length;
   const dslByScenarioId = args.legend?.scenarioDslSubtitleById || {};
   const showToolbox = args.ui?.showToolbox ?? true;
-  const yAxisLabelFontSizePx = args.ui?.yAxisLabelFontSizePx ?? 11;
+  const yAxisLabelFontSizePx = args.ui?.yAxisLabelFontSizePx ?? 9;
 
   const shorten = (s: string, max: number) => {
     const t = (s || '').trim();
@@ -604,9 +641,8 @@ export function buildFunnelBarEChartsOption(result: AnalysisResult, args: Funnel
 
   const axisLabelWidth = Math.max(70, Math.min(140, Math.floor(widthPx / Math.max(1, stageCount)) - 10));
 
-  // Show percent labels more often (requested), but avoid unreadable clutter.
-  // Hide overlaps via labelLayout so we don't need per-analysis tuning.
-  const showValueLabels = (stageCount * scenarioCount) <= 48 || (scenarioCount === 1 && stageCount <= 14);
+  // Conversion funnel: always show value labels — hiding them loses critical information.
+  const showValueLabels = true;
 
   const splitStageLabel = (label: string): string => {
     // Try to wrap long labels into two lines at a natural word boundary.
@@ -633,7 +669,6 @@ export function buildFunnelBarEChartsOption(result: AnalysisResult, args: Funnel
       type: 'bar',
       barGap: scenarioCount > 4 ? '0%' : scenarioCount > 2 ? '10%' : '20%',
       barCategoryGap: scenarioCount > 4 ? '15%' : '25%',
-      labelLayout: showValueLabels ? { hideOverlap: true } : undefined,
     };
 
     if (shouldShowFEStack) {
@@ -667,7 +702,7 @@ export function buildFunnelBarEChartsOption(result: AnalysisResult, args: Funnel
             const total = typeof p?.data?.__fe?.total === 'number' ? p.data.__fe.total : null;
             return typeof total === 'number' && Number.isFinite(total) ? fmtPct(total) : '';
           },
-          fontSize: 10,
+          fontSize: 7,
           color: echartsThemeColours().text,
         },
         data: fePoints.map(p => ({
@@ -698,7 +733,7 @@ export function buildFunnelBarEChartsOption(result: AnalysisResult, args: Funnel
           const v = typeof p?.value === 'number' ? p.value : null;
           return typeof v === 'number' && Number.isFinite(v) ? fmtPct(v) : '';
         },
-        fontSize: 10,
+        fontSize: 7,
         color: '#374151',
       },
       data: useStepChange ? makeSeriesDataWithStepChange(scenarioId) : makeSeriesData(scenarioId),
@@ -782,7 +817,7 @@ export function buildFunnelBarEChartsOption(result: AnalysisResult, args: Funnel
           textStyle: {
             rich: {
               dsl: {
-                fontSize: 10,
+                fontSize: 9,
                 color: echartsThemeColours().textSecondary,
                 // DSL is often long; monospace is too wide here, so use a compact UI sans font.
                 fontFamily: "system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif",
@@ -843,11 +878,11 @@ export function buildFunnelBarEChartsOption(result: AnalysisResult, args: Funnel
       type: 'category',
       data: stageLabels.map(splitStageLabel),
       axisLabel: {
-        interval: 'auto',
+        interval: 0,
         rotate,
         width: axisLabelWidth,
         overflow: 'truncate',
-        hideOverlap: true,
+        fontSize: 9,
         color: echartsThemeColours().text,
       },
       axisLine: { lineStyle: { color: echartsThemeColours().border } },
@@ -895,7 +930,7 @@ export function buildBridgeEChartsOption(result: AnalysisResult, args: BridgeCha
   const showToolbox = args.ui?.showToolbox ?? false;
   const widthPx = args.layout?.widthPx && Number.isFinite(args.layout.widthPx) ? args.layout.widthPx : 640;
   const heightPx = args.layout?.heightPx && Number.isFinite(args.layout.heightPx) ? args.layout.heightPx : 360;
-  const axisLabelFontSizePx = args.ui?.axisLabelFontSizePx ?? 11;
+  const axisLabelFontSizePx = args.ui?.axisLabelFontSizePx ?? 9;
   const axisLabelMaxLines = args.ui?.axisLabelMaxLines ?? 2;
   const axisLabelMaxCharsPerLine = args.ui?.axisLabelMaxCharsPerLine ?? 12;
   const axisLabelRotateDeg = args.ui?.axisLabelRotateDeg;
@@ -989,8 +1024,8 @@ export function buildBridgeEChartsOption(result: AnalysisResult, args: BridgeCha
   const fmtDeltaPct = (v: number | null) => (typeof v === 'number' ? `${(v * 100).toFixed(deltaDecimals)}%` : '—');
 
   // Typography: in tab view we pass a larger axisLabelFontSizePx; keep value labels aligned with that.
-  const valueAxisLabelFontSizePx = Math.max(10, Math.min(12, Math.round(axisLabelFontSizePx * 0.92)));
-  const valueLabelFontSizePx = Math.max(10, Math.min(13, Math.round(axisLabelFontSizePx * 0.95)));
+  const valueAxisLabelFontSizePx = Math.max(8, Math.min(10, Math.round(axisLabelFontSizePx * 0.92)));
+  const valueLabelFontSizePx = Math.max(7, Math.min(9, Math.round(axisLabelFontSizePx * 0.8)));
 
   const plotWidth = Math.max(240, widthPx - 40);
   // Horizontal layout uses category axis on y, so bar thickness should be based on available height,
@@ -1408,7 +1443,7 @@ export function buildFunnelBridgeEChartsOption(result: AnalysisResult, args: Fun
         rotate: (widthPx / Math.max(1, labels.length)) < 70 ? 45 : 0,
         formatter: (v: string) => wrapLabel(v),
         margin: 14,
-        fontSize: 10,
+        fontSize: 9,
         color: echartsThemeColours().text,
       },
       axisLine: { lineStyle: { color: echartsThemeColours().border } },
@@ -1418,7 +1453,7 @@ export function buildFunnelBridgeEChartsOption(result: AnalysisResult, args: Fun
       min: minV,
       max: maxV,
       splitNumber: 4,
-      axisLabel: { formatter: (v: number) => `${Math.round(v * 100)}%`, fontSize: 10, margin: 10, color: echartsThemeColours().text },
+      axisLabel: { formatter: (v: number) => `${Math.round(v * 100)}%`, fontSize: 9, margin: 10, color: echartsThemeColours().text },
       splitLine: { lineStyle: { color: echartsThemeColours().gridLine } },
       axisLine: { lineStyle: { color: echartsThemeColours().border } },
     },
@@ -1447,7 +1482,7 @@ export function buildFunnelBridgeEChartsOption(result: AnalysisResult, args: Fun
             const v = typeof p?.value === 'number' ? p.value : null;
             return typeof v === 'number' && Number.isFinite(v) ? `+${fmtDeltaPct(v)}` : '';
           },
-          fontSize: 10,
+          fontSize: 7,
           color: echartsThemeColours().text,
         },
         labelLayout: { hideOverlap: true, moveOverlap: 'shiftY' },
@@ -1467,7 +1502,7 @@ export function buildFunnelBridgeEChartsOption(result: AnalysisResult, args: Fun
             const v = typeof p?.value === 'number' ? p.value : null;
             return typeof v === 'number' && Number.isFinite(v) ? `-${fmtDeltaPct(v)}` : '';
           },
-          fontSize: 10,
+          fontSize: 7,
           color: echartsThemeColours().text,
         },
         labelLayout: { hideOverlap: true, moveOverlap: 'shiftY' },
@@ -1487,7 +1522,7 @@ export function buildFunnelBridgeEChartsOption(result: AnalysisResult, args: Fun
             const v = typeof p?.value === 'number' ? p.value : null;
             return typeof v === 'number' && Number.isFinite(v) ? fmtTotalPct(v) : '';
           },
-          fontSize: 10,
+          fontSize: 7,
           color: echartsThemeColours().text,
         },
         labelLayout: { hideOverlap: true, moveOverlap: 'shiftY' },
@@ -1534,17 +1569,19 @@ export function buildHistogramEChartsOption(data: any, settings: Record<string, 
       name: 'Lag (days)',
       nameLocation: 'middle',
       nameGap: 30,
-      axisLabel: { fontSize: 11, color: c.text },
+      nameTextStyle: { fontSize: 8, color: c.text },
+      axisLabel: { fontSize: 9, color: c.text },
     },
     yAxis: [{
       type: yScale === 'log' ? 'log' : 'value',
       name: settings.y_axis_title ?? 'Conversions',
       nameLocation: 'middle',
       nameGap: 45,
+      nameTextStyle: { fontSize: 8, color: c.text },
       min: settings.y_axis_min ?? undefined,
       max: settings.y_axis_max ?? undefined,
       axisLabel: {
-        fontSize: 11,
+        fontSize: 9,
         color: c.text,
         formatter: (value: number) => value >= 1000 ? `${(value / 1000).toFixed(1)}k` : value.toString(),
       },
@@ -1557,7 +1594,7 @@ export function buildHistogramEChartsOption(data: any, settings: Record<string, 
       label: {
         show: showLabels,
         position: 'top',
-        fontSize: settings.label_font_size ?? 9,
+        fontSize: settings.label_font_size ?? 7,
         formatter: (params: any) => {
           const pct = percentages[params.dataIndex];
           return pct >= 1 ? `${pct.toFixed(0)}%` : '';
@@ -1747,8 +1784,9 @@ export function buildDailyConversionsEChartsOption(
       name: settings.y_axis_title ?? 'Cohort date',
       nameLocation: 'middle',
       nameGap: 30,
+      nameTextStyle: { fontSize: 8, color: c.text },
       axisLabel: {
-        fontSize: 10,
+        fontSize: 9,
         rotate: 30,
         color: c.text,
         formatter: (value: number) => {
@@ -1764,9 +1802,10 @@ export function buildDailyConversionsEChartsOption(
         name: 'N',
         nameLocation: 'middle',
         nameGap: 45,
+        nameTextStyle: { fontSize: 8, color: c.text },
         min: settings.y_axis_min ?? 0,
         axisLabel: {
-          fontSize: 11,
+          fontSize: 9,
           color: c.text,
           formatter: (value: number) => {
             if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`;
@@ -1781,17 +1820,18 @@ export function buildDailyConversionsEChartsOption(
         name: 'Conversion %',
         nameLocation: 'middle',
         nameGap: 50,
+        nameTextStyle: { fontSize: 8, color: c.text },
         min: 0,
         max: settings.y_axis_max ?? rateMax,
         axisLabel: {
-          fontSize: 11,
+          fontSize: 9,
           color: c.text,
           formatter: (v: number) => `${(v * 100).toFixed(0)}%`,
         },
         splitLine: { show: false },
       },
     ],
-    legend: showLegend ? { top: 22, left: 12, textStyle: { fontSize: 11, color: c.text }, icon: 'roundRect' } : { show: false },
+    legend: showLegend ? { top: 22, left: 12, textStyle: { fontSize: 9, color: c.text }, icon: 'roundRect' } : { show: false },
     series: allSeries,
     ...(settings.animate === false ? { animation: false } : {}),
   };
@@ -2092,9 +2132,10 @@ export function buildCohortMaturityEChartsOption(
       name: settings.x_axis_title ?? 'Age (days since cohort date)',
       nameLocation: 'middle',
       nameGap: 30,
+      nameTextStyle: { fontSize: 8, color: c.text },
       min: settings.x_axis_min ?? 0,
       ...(maxTau !== null && Number.isFinite(maxTau) ? { max: settings.x_axis_max ?? maxTau } : {}),
-      axisLabel: { fontSize: 10, color: c.text, formatter: (v: number) => `${Math.round(v)}` },
+      axisLabel: { fontSize: 9, color: c.text, formatter: (v: number) => `${Math.round(v)}` },
     },
     yAxis: {
       type: (settings.y_axis_scale === 'log') ? 'log' : 'value',
@@ -2103,10 +2144,11 @@ export function buildCohortMaturityEChartsOption(
       name: settings.y_axis_title ?? 'Conversion rate',
       nameLocation: 'middle',
       nameGap: 45,
-      axisLabel: { fontSize: 11, color: c.text, formatter: (v: number) => `${(v * 100).toFixed(0)}%` },
+      nameTextStyle: { fontSize: 8, color: c.text },
+      axisLabel: { fontSize: 9, color: c.text, formatter: (v: number) => `${(v * 100).toFixed(0)}%` },
       splitLine: { lineStyle: { color: c.gridLine } },
     },
-    legend: showLegend ? { top: 22, left: 12, textStyle: { fontSize: 11, color: c.text }, icon: 'roundRect' } : { show: false },
+    legend: showLegend ? { top: 22, left: 12, textStyle: { fontSize: 9, color: c.text }, icon: 'roundRect' } : { show: false },
     series: seriesOut,
     dagnet_meta: {
       subject_id: effectiveSubjectId,
@@ -2172,14 +2214,14 @@ function buildLagFitEChartsOption(
     markLines.push({
       xAxis: Math.round(median),
       lineStyle: { color: c.textSecondary, type: 'dashed', width: 1, opacity: 0.7 },
-      label: { show: true, formatter: `med ${Number(median).toFixed(1)}d`, color: c.textSecondary, fontSize: 10, position: 'start' },
+      label: { show: true, formatter: `med ${Number(median).toFixed(1)}d`, color: c.textSecondary, fontSize: 9, position: 'start' },
     });
   }
   if (Number.isFinite(t95) && t95 > 0) {
     markLines.push({
       xAxis: Math.round(t95),
       lineStyle: { color: c.textMuted, type: 'dashed', width: 1, opacity: 0.6 },
-      label: { show: true, formatter: `t95 ${Number(t95).toFixed(1)}d`, color: c.textMuted, fontSize: 10, position: 'end' },
+      label: { show: true, formatter: `t95 ${Number(t95).toFixed(1)}d`, color: c.textMuted, fontSize: 9, position: 'end' },
     });
   }
 
@@ -2190,26 +2232,26 @@ function buildLagFitEChartsOption(
     grid: { top: 32, right: 60, bottom: 60, left: 52, containLabel: false },
     xAxis: {
       type: 'value', name: 'Lag (days)',
-      nameTextStyle: { color: c.text, fontSize: 11 },
+      nameTextStyle: { color: c.text, fontSize: 8 },
       min: 0, max: tValues[tValues.length - 1] ?? 100,
-      axisLabel: { color: c.text, fontSize: 11 },
+      axisLabel: { color: c.text, fontSize: 9 },
       axisLine: { lineStyle: { color: c.gridLine } },
       splitLine: { lineStyle: { color: c.gridLine } },
     },
     yAxis: [
       {
         type: 'value', name: 'Cumulative fraction',
-        nameTextStyle: { color: c.text, fontSize: 11 },
+        nameTextStyle: { color: c.text, fontSize: 8 },
         min: 0, max: 1,
-        axisLabel: { color: c.text, fontSize: 11, formatter: fmtPct },
+        axisLabel: { color: c.text, fontSize: 9, formatter: fmtPct },
         axisLine: { show: false },
         splitLine: { lineStyle: { color: c.gridLine } },
       },
       {
         type: 'value', name: 'Daily PDF',
-        nameTextStyle: { color: BAR_COLOUR, fontSize: 11 },
+        nameTextStyle: { color: BAR_COLOUR, fontSize: 8 },
         position: 'right',
-        axisLabel: { color: BAR_COLOUR, fontSize: 11, formatter: (v: number) => v.toFixed(3) },
+        axisLabel: { color: BAR_COLOUR, fontSize: 9, formatter: (v: number) => v.toFixed(3) },
         axisLine: { show: false },
         splitLine: { show: false },
       },
@@ -2233,7 +2275,7 @@ function buildLagFitEChartsOption(
     },
     legend: {
       bottom: 0,
-      textStyle: { color: c.text, fontSize: 11 },
+      textStyle: { color: c.text, fontSize: 9 },
       data: ['PDF (daily)', 'Fitted CDF', 'Observed completeness'],
     },
     series: [
@@ -2451,7 +2493,7 @@ function buildComparisonBarEChartsOption(
             show: showValueLabels && !useScenarioStack,
             position: 'top',
             formatter: (p: any) => fmtValue(typeof p?.data?.__total === 'number' ? p.data.__total : null),
-            fontSize: 10,
+            fontSize: 7,
             color: echartsThemeColours().text,
           },
           data: scenarioIds.map(sid => {
@@ -2476,7 +2518,7 @@ function buildComparisonBarEChartsOption(
             show: showValueLabels && !useScenarioStack,
             position: 'top',
             formatter: (p: any) => fmtValue(typeof p?.value === 'number' ? p.value : null),
-            fontSize: 10,
+            fontSize: 7,
             color: echartsThemeColours().text,
           },
           labelLayout: showValueLabels ? { hideOverlap: true } : undefined,
@@ -2520,7 +2562,7 @@ function buildComparisonBarEChartsOption(
           show: showValueLabels,
           position: 'top',
           formatter: (p: any) => fmtValue(typeof p?.data?.__total === 'number' ? p.data.__total : null),
-          fontSize: 10,
+          fontSize: 7,
           color: echartsThemeColours().text,
         },
         data: primaryIds.map((pid, idx) => {
@@ -2547,7 +2589,7 @@ function buildComparisonBarEChartsOption(
           show: showValueLabels,
           position: 'top',
           formatter: (p: any) => fmtValue(typeof p?.value === 'number' ? p.value : null),
-          fontSize: 10,
+          fontSize: 7,
           color: echartsThemeColours().text,
         },
         labelLayout: showValueLabels ? { hideOverlap: true } : undefined,
@@ -2575,7 +2617,7 @@ function buildComparisonBarEChartsOption(
           feature: { saveAsImage: { show: true }, restore: { show: true } },
         }
       : { show: false },
-    legend: { show: true, top: 0, left: 0, textStyle: { color: echartsThemeColours().text, fontSize: 11 } },
+    legend: { show: true, top: 0, left: 0, textStyle: { color: echartsThemeColours().text, fontSize: 9 } },
     grid: { left: 8, right: 16, top: showToolbox ? 34 : 22, bottom: barLabelRotate ? 58 : 42, containLabel: true },
     tooltip: {
       trigger: 'axis',
@@ -2600,7 +2642,7 @@ function buildComparisonBarEChartsOption(
       axisLabel: {
         interval: 0,
         rotate: barLabelRotate,
-        fontSize: 10,
+        fontSize: 9,
         lineHeight: 12,
         hideOverlap: true,
         align: barLabelRotate ? ('right' as const) : ('center' as const),
@@ -2613,7 +2655,7 @@ function buildComparisonBarEChartsOption(
       type: 'value',
       axisLabel: {
         formatter: (v: number) => metricModeAbsolute ? Math.round(v).toString() : `${Math.round(v * 100)}%`,
-        fontSize: 10,
+        fontSize: 9,
         color: echartsThemeColours().text,
       },
       splitLine: { lineStyle: { color: echartsThemeColours().gridLine } },
@@ -2666,7 +2708,7 @@ function buildComparisonPieEChartsOption(
         return [`<div style="font-size:11px;line-height:1.25;">`, `<div style="font-weight:600;margin-bottom:4px;">${p?.name || ''}</div>`, `<div>${metricModeAbsolute ? 'Value' : 'Share'}: ${fmtValue(v)}</div>`, `</div>`].join('');
       },
     },
-    legend: { show: true, top: 0, left: 0, textStyle: { color: echartsThemeColours().text, fontSize: 11 } },
+    legend: { show: true, top: 0, left: 0, textStyle: { color: echartsThemeColours().text, fontSize: 9 } },
     series: [
       {
         name: scenarioId ? getScenarioTitleWithBasis(result, scenarioId) : 'Comparison',
@@ -2676,7 +2718,7 @@ function buildComparisonPieEChartsOption(
         label: {
           show: true,
           formatter: (p: any) => `${p.name}\n${metricModeAbsolute ? fmtValue(typeof p?.value === 'number' ? p.value : null) : `${Math.round(p.percent)}%`}`,
-          fontSize: 10,
+          fontSize: 7,
           color: echartsThemeColours().text,
         },
         labelLayout: { hideOverlap: true },
@@ -2794,7 +2836,7 @@ function buildComparisonTimeSeriesEChartsOption(
           show: showValueLabels && seriesType !== 'line',
           position: 'top',
           formatter: (p: any) => fmtValue(typeof p?.value?.[2]?.__total === 'number' ? p.value[2].__total : null),
-          fontSize: 10,
+          fontSize: 7,
           color: c.text,
         },
         data: dates.map(d => {
@@ -2822,7 +2864,7 @@ function buildComparisonTimeSeriesEChartsOption(
           show: showValueLabels && seriesType !== 'line',
           position: 'top',
           formatter: (p: any) => fmtValue(Array.isArray(p?.value) ? p.value[1] : null),
-          fontSize: 10,
+          fontSize: 9,
           color: c.text,
         },
         labelLayout: showValueLabels ? { hideOverlap: true } : undefined,
@@ -2860,8 +2902,9 @@ function buildComparisonTimeSeriesEChartsOption(
       name: settings.y_axis_title ?? 'Cohort date',
       nameLocation: 'middle',
       nameGap: 30,
+      nameTextStyle: { fontSize: 8, color: c.text },
       axisLabel: {
-        fontSize: 10,
+        fontSize: 9,
         rotate: 30,
         color: c.text,
         formatter: (value: number) => {
@@ -2876,10 +2919,11 @@ function buildComparisonTimeSeriesEChartsOption(
       name: metricModeAbsolute ? 'Conversions' : 'Rate',
       nameLocation: 'middle',
       nameGap: 45,
+      nameTextStyle: { fontSize: 8, color: c.text },
       min: settings.y_axis_min ?? 0,
       max: settings.y_axis_max ?? undefined,
       axisLabel: {
-        fontSize: 11,
+        fontSize: 9,
         color: c.text,
         formatter: (value: number) => metricModeAbsolute
           ? (value >= 1000 ? `${(value / 1000).toFixed(1)}k` : value.toString())
@@ -2889,7 +2933,7 @@ function buildComparisonTimeSeriesEChartsOption(
     legend: {
       show: settings.show_legend ?? true,
       top: 0,
-      textStyle: { color: c.text, fontSize: 11 },
+      textStyle: { color: c.text, fontSize: 9 },
     },
     series,
   };
@@ -3148,7 +3192,7 @@ export function buildChartOption(
           dropoffLabels.push({
             coord: [i - 0.5, (prev + curr) / 2],
             value: `−${dropoff}%`,
-            label: { show: true, formatter: `−${dropoff}%`, fontSize: 9, color: '#ef4444' },
+            label: { show: true, formatter: `−${dropoff}%`, fontSize: 7, color: '#ef4444' },
             symbol: 'none',
           });
         }
@@ -3205,7 +3249,7 @@ export function buildChartOption(
     if (target) {
       const mlData = refLines.map((rl: any) => ({
         yAxis: rl.value,
-        label: { formatter: rl.label || '', position: 'end', fontSize: 10 },
+        label: { formatter: rl.label || '', position: 'end', fontSize: 9 },
         lineStyle: { color: rl.colour || '#9CA3AF', type: rl.line_style || 'dashed', width: 1.5 },
       }));
       if (!target.markLine) target.markLine = { silent: true, symbol: ['none', 'none'], data: [] };

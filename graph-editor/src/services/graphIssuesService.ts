@@ -30,7 +30,8 @@ type IssueCategory =
   | 'naming'
   | 'metadata'
   | 'sync'
-  | 'image';
+  | 'image'
+  | 'face-alignment';
 
 export interface GraphIssue {
   id: string;

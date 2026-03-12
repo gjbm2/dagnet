@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useMemo, useState, useCallback } from 'react';
-import { NodeProps, NodeResizer } from 'reactflow';
+import { NodeProps, NodeResizer, useViewport } from 'reactflow';
 import type { CanvasAnalysis } from '@/types';
 import { useCanvasAnalysisCompute } from '@/hooks/useCanvasAnalysisCompute';
 import { useGraphStore } from '@/contexts/GraphStoreContext';
@@ -37,6 +37,7 @@ export default function CanvasAnalysisNode({ data, selected }: NodeProps<CanvasA
   onUpdateRef.current = onUpdate;
   const scenariosContext = useScenariosContextOptional();
   const { tabs, operations } = useTabContext();
+  const { zoom } = useViewport();
 
   useEffect(() => {
     return () => { if (resizeTimeoutRef.current) clearTimeout(resizeTimeoutRef.current); };
@@ -417,6 +418,7 @@ export default function CanvasAnalysisNode({ data, selected }: NodeProps<CanvasA
             source={chartSource}
             fillHeight
             chartContext="canvas"
+            canvasZoom={zoom}
             hideScenarioLegend={analysis.live && analysis.display?.show_legend !== true}
             analysisTypeId={analysis.recipe?.analysis?.analysis_type}
             availableAnalyses={availableAnalyses}

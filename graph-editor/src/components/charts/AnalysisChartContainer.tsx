@@ -292,6 +292,8 @@ export function AnalysisChartContainer(props: {
   analysisId?: string;
   /** Delete the canvas analysis */
   onDelete?: () => void;
+  /** Current canvas zoom level (for inverse-scaling UI chrome) */
+  canvasZoom?: number;
 }): JSX.Element | null {
   const { result, chartKindOverride, visibleScenarioIds, scenarioVisibilityModes, scenarioMetaById, scenarioDslSubtitleById, height = 420, fillHeight = false, compactControls = false, display, onDisplayChange, source, hideChrome = false } = props;
   const chartContext = props.chartContext || (compactControls ? 'canvas' : 'tab');
@@ -925,17 +927,19 @@ export function AnalysisChartContainer(props: {
         </div>
       )}
 
-      <div
-        ref={chartViewportRef}
-        data-chart-viewport
-        style={{ flex: fillHeight ? 1 : undefined, minHeight: 0, position: 'relative', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}
-      >
-        {echartsOption && chartContext === 'canvas' && (
+      <div style={{ flex: fillHeight ? 1 : undefined, minHeight: 0, position: 'relative', display: 'flex', flexDirection: 'column' }}>
+        {chartContext === 'canvas' && (
           <ChartFloatingIcon
             containerRef={chartViewportRef}
             tray={canvasTray}
+            canvasZoom={props.canvasZoom}
           />
         )}
+        <div
+          ref={chartViewportRef}
+          data-chart-viewport
+          style={{ flex: 1, minHeight: 0, position: 'relative', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}
+        >
         {echartsOption ? (
           <div style={{ flex: fillHeight ? 1 : undefined, minHeight: 0, position: 'relative' }}>
             <ReactECharts
@@ -956,6 +960,7 @@ export function AnalysisChartContainer(props: {
             </p>
           </div>
         )}
+        </div>
       </div>
     </div>
   );

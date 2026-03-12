@@ -75,10 +75,9 @@ export const NodeContextMenu: React.FC<NodeContextMenuProps> = ({
       // Constrain horizontally
       const viewportWidth = window.innerWidth;
       if (left + menuWidth > viewportWidth - 20) {
-        left = Math.max(20, viewportWidth - menuWidth - 20);
-      }
-      if (left < 20) {
-        left = 20;
+        // Show to the left of the cursor (standard OS behaviour)
+        left = x - menuWidth;
+        if (left < 20) left = 20;
       }
       
       // Constrain vertically

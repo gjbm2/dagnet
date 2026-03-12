@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, startTransition, createContext, useContext } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState, startTransition, createContext, useContext } from 'react';
 import { flushSync } from 'react-dom';
 import { useSnapToSlider } from '@/hooks/useSnapToSlider';
 import { roundTo4DP } from '@/utils/rounding';
@@ -1991,7 +1991,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
     // View mode changes (Sankey, image view) require slow path because node sizes change
     // Image boundary changes (0↔1 images) also require slow path for node resizing
     const shouldTakeFastPath = !edgeCountChanged && !nodeCountChanged && !edgeIdsChanged && !edgeHandlesChanged &&
-                               !analysisNodePayloadChanged &&
+                               (isDraggingNodeRef.current || !analysisNodePayloadChanged) &&
                                !viewModeChanged && !imageBoundaryChanged && edges.length > 0 && (isDraggingNodeRef.current || !nodePositionsChanged);
 
     if (snapshotCharts.length > 0) {
@@ -2149,7 +2149,8 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
               return {
                 ...prevNode,
                 zIndex: 5000 + gpIndex,
-                position: { x: graphPostit.x ?? 0, y: graphPostit.y ?? 0 },
+                // During drag, preserve ReactFlow's current position — graph model may not have synced yet
+                ...(isDraggingNodeRef.current ? {} : { position: { x: graphPostit.x ?? 0, y: graphPostit.y ?? 0 } }),
                 style: { ...prevNode.style, width: graphPostit.width, height: graphPostit.height },
                 selected: autoEditNodeId ? prevNode.id === autoEditNodeId : prevNode.selected,
                 data: {
@@ -2170,7 +2171,8 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
               return {
                 ...prevNode,
                 zIndex: 1000 + gcIndex,
-                position: { x: graphContainer.x ?? 0, y: graphContainer.y ?? 0 },
+                // During drag, preserve ReactFlow's current position — graph model may not have synced yet
+                ...(isDraggingNodeRef.current ? {} : { position: { x: graphContainer.x ?? 0, y: graphContainer.y ?? 0 } }),
                 style: { ...prevNode.style, width: graphContainer.width, height: graphContainer.height },
                 data: {
                   ...prevNode.data,
@@ -2189,7 +2191,8 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
                 ...prevNode,
                 type: 'canvasAnalysis',
                 zIndex: 5000 + (graph.postits || []).length + (gaIndex >= 0 ? gaIndex : 0),
-                position: { x: graphAnalysis.x ?? 0, y: graphAnalysis.y ?? 0 },
+                // During drag, preserve ReactFlow's current position — graph model may not have synced yet
+                ...(isDraggingNodeRef.current ? {} : { position: { x: graphAnalysis.x ?? 0, y: graphAnalysis.y ?? 0 } }),
                 style: { ...prevNode.style, width: graphAnalysis.width, height: graphAnalysis.height },
                 data: {
                   ...prevNode.data,
@@ -3051,40 +3054,9 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
     }));
   }, [activeElementTool, setNodes]);
 
-  // Safety-net: recompute face directions synchronously before paint if edges change
-  // outside the slow path (e.g. edge handle edits that bypass the full rebuild).
-  // Normally a no-op because the slow path already injects faceDirections into nodes.
-  useLayoutEffect(() => {
-    if (useSankeyView) return;
-    if (edges.length === 0) return;
-
-    const faceMap = computeFaceDirectionsFromEdges(edges);
-
-    setNodes(prevNodes => {
-      let hasChanges = false;
-      const newNodes = prevNodes.map(node => {
-        const fd = faceMap.get(node.id);
-        const oldFd = node.data?.faceDirections;
-
-        // No edge traffic for this node — nothing to set
-        if (!fd) return node;
-
-        // Already correct — skip
-        if (oldFd &&
-            oldFd.left === fd.left &&
-            oldFd.right === fd.right &&
-            oldFd.top === fd.top &&
-            oldFd.bottom === fd.bottom) {
-          return node;
-        }
-
-        hasChanges = true;
-        return { ...node, data: { ...node.data, faceDirections: fd } };
-      });
-
-      return hasChanges ? newNodes : prevNodes;
-    });
-  }, [edges, useSankeyView, setNodes]);
+  // Face directions are computed eagerly in the slow path (before setNodes) using
+  // computeFaceDirectionsFromEdges. The fast path preserves them via ...prevNode.data spread.
+  // All topology/handle changes route through the slow path, so no safety-net effect is needed.
 
   // Force re-route when Sankey view is actually toggled (to re-assign faces for L/R only constraint)
   // Only react when the value actually changes, not on initial load
