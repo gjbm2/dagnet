@@ -72,15 +72,18 @@ export function ChartFloatingIcon({ containerRef, tray, canvasZoom }: ChartFloat
 
   const block = useCallback((e: React.SyntheticEvent) => { e.stopPropagation(); }, []);
 
+  // Suppress chart pointer-events while the tray is expanded or dragging,
+  // so ECharts tooltips don't appear underneath the toolbar.
+  const suppressChart = !!drag || (hovered && anchor !== 'top');
   useEffect(() => {
-    if (!drag) return;
+    if (!suppressChart) return;
     const ct = containerRef.current;
     if (!ct) return;
     const chart = ct.querySelector('.echarts-for-react') as HTMLElement | null;
     if (!chart) return;
     chart.style.pointerEvents = 'none';
     return () => { chart.style.pointerEvents = ''; };
-  }, [drag, containerRef]);
+  }, [suppressChart, containerRef]);
 
   const onMouseDown = useCallback((e: React.MouseEvent) => {
     e.preventDefault();

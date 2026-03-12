@@ -4,8 +4,8 @@ import ReactECharts from 'echarts-for-react';
 import {
   ExternalLink, Download, RefreshCcw, Trash2, MoreHorizontal, Sliders,
   BarChart3, LineChart, TrendingUp, Percent, Hash,
-  List, Layers, ArrowUpDown, ArrowLeftRight, Sigma,
-  Zap, Lock, Crosshair, Settings2,
+  List, ArrowUpDown, ArrowLeftRight, Sigma,
+  Zap, Lock, Crosshair, Settings2, ChevronDown, Plus,
 } from 'lucide-react';
 
 import type { AnalysisResult, AvailableAnalysis } from '../../lib/graphComputeClient';
@@ -19,6 +19,8 @@ import { downloadTextFile } from '../../services/downloadService';
 import { useElementSize } from '../../hooks/useElementSize';
 import { getAnalysisTypeMeta } from '../panels/analysisTypes';
 import { AnalysisTypeCardList } from '../panels/AnalysisTypeCardList';
+import { ScenarioLayerList } from '../panels/ScenarioLayerList';
+import type { ScenarioLayerItem } from '../../types/scenarioLayerList';
 import { ChartFloatingIcon } from './ChartInlineSettingsFloating';
 import { logChartReadinessTrace } from '../../lib/snapshotBootTrace';
 
@@ -280,6 +282,18 @@ export function AnalysisChartContainer(props: {
   analysisLive?: boolean;
   /** Toggle live/custom mode */
   onLiveToggle?: (live: boolean) => void;
+  /** Scenario layer items for the toolbar scenarios popover */
+  scenarioLayerItems?: ScenarioLayerItem[];
+  /** Toggle scenario visibility in the toolbar popover */
+  onScenarioToggleVisibility?: (id: string) => void;
+  /** Cycle scenario visibility mode (f+e → f → e) */
+  onScenarioCycleMode?: (id: string) => void;
+  /** Change scenario colour */
+  onScenarioColourChange?: (id: string, colour: string) => void;
+  /** Swatch overlay style for visibility mode indicators */
+  getScenarioSwatchOverlayStyle?: (id: string) => React.CSSProperties | null;
+  /** Add a new blank scenario (auto-promotes to custom if live) */
+  onAddScenario?: () => void;
   /** Whether the subject overlay connectors are active */
   overlayActive?: boolean;
   /** Current overlay colour */
@@ -390,15 +404,13 @@ export function AnalysisChartContainer(props: {
     return resolved;
   }, [effectiveKind, display]);
 
-  const inlineSettings = useMemo((): DisplaySettingDef[] => {
+  // Single list of display settings for the unified toolbar.
+  // Always fetch the 'tab' surface set — it's the full set.
+  // When wide, these render inline as pills; when narrow, they collapse into a popover.
+  const toolbarSettings = useMemo((): DisplaySettingDef[] => {
     if (!effectiveKind || !onDisplayChange) return [];
-    return getDisplaySettingsForSurface(effectiveKind, 'chart', 'inline', chartContext);
-  }, [effectiveKind, chartContext, onDisplayChange]);
-
-  const floatingSettings = useMemo((): DisplaySettingDef[] => {
-    if (!effectiveKind || !onDisplayChange || chartContext !== 'canvas') return [];
     return getDisplaySettingsForSurface(effectiveKind, 'chart', 'inline', 'tab');
-  }, [effectiveKind, chartContext, onDisplayChange]);
+  }, [effectiveKind, onDisplayChange]);
 
   // Subject selector state for daily_conversions / cohort_maturity
   const subjectIds = useMemo(() => extractSubjectIds(result), [result]);
@@ -563,50 +575,82 @@ export function AnalysisChartContainer(props: {
   const showChooser = availableChartKinds.length > 1;
   const showAnalysisTypeDropdown = !!props.analysisTypeId && !!props.onAnalysisTypeChange && (props.availableAnalyses?.length ?? 0) > 0;
 
-  const canvasTray = chartContext === 'canvas' ? (
+  // Whether chart is wide enough to auto-expand popovers into inline pills.
+  const wideToolbar = chartWidthPx > 480;
+
+  const toolbarTray = (
     <>
-      {/* --- Analysis type: icon pills --- */}
-      {showAnalysisTypeDropdown && (
-        <span className="cfp-pill-group" title="Analysis type">
-          <span className="cfp-group-label">Type</span>
-          {(props.availableAnalyses || []).map(a => {
-            const meta = getAnalysisTypeMeta(a.id);
-            const Icon = meta?.icon;
-            const active = a.id === props.analysisTypeId;
-            return (
-              <button
-                key={a.id}
-                type="button"
-                className={`cfp-pill${active ? ' active' : ''}`}
-                onClick={() => props.onAnalysisTypeChange?.(a.id)}
-                title={meta?.name || a.name || a.id}
-              >
-                {Icon ? <Icon size={13} /> : (meta?.name || a.name || a.id)}
-              </button>
-            );
-          })}
-        </span>
-      )}
+      {/* --- Analysis type: popover palette --- */}
+      {showAnalysisTypeDropdown && (() => {
+        const activeMeta = getAnalysisTypeMeta(props.analysisTypeId!);
+        const ActiveIcon = activeMeta?.icon;
+        return (
+          <CfpPopover
+            icon={<>{ActiveIcon && <ActiveIcon size={13} />}<ChevronDown size={9} /></>}
+            label={activeMeta?.name}
+            title="Analysis type"
+          >
+            <div className="cfp-type-palette">
+              {(props.availableAnalyses || []).map(a => {
+                const meta = getAnalysisTypeMeta(a.id);
+                const Icon = meta?.icon;
+                const active = a.id === props.analysisTypeId;
+                return (
+                  <button
+                    key={a.id}
+                    type="button"
+                    className={`cfp-type-palette-item${active ? ' active' : ''}`}
+                    onClick={() => props.onAnalysisTypeChange?.(a.id)}
+                    title={meta?.shortDescription || meta?.name || a.id}
+                  >
+                    {Icon && <Icon size={22} />}
+                    <span className="cfp-type-palette-label">{meta?.name || a.name || a.id}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </CfpPopover>
+        );
+      })()}
 
       {/* --- Separator --- */}
       {showAnalysisTypeDropdown && (showChooser || showSubjectSelector) && <span className="cfp-sep" />}
 
-      {/* --- Chart kind pills --- */}
+      {/* --- Chart kind: inline pills (wide) or popover (narrow) --- */}
       {showChooser && (
-        <span className="cfp-pill-group" title="Chart type">
-          <span className="cfp-group-label">Chart</span>
-          {availableChartKinds.map(k => (
-            <button
-              key={k}
-              type="button"
-              className={`cfp-pill${k === kind ? ' active' : ''}`}
-              onClick={() => handleChartKindChange(k)}
-              title={labelForChartKind(k)}
-            >
-              {labelForChartKind(k)}
-            </button>
-          ))}
-        </span>
+        wideToolbar ? (
+          <span className="cfp-pill-group" title="Chart type">
+            <span className="cfp-group-label">Chart</span>
+            {availableChartKinds.map(k => (
+              <button
+                key={k}
+                type="button"
+                className={`cfp-pill${k === kind ? ' active' : ''}`}
+                onClick={() => handleChartKindChange(k)}
+                title={labelForChartKind(k)}
+              >
+                {labelForChartKind(k)}
+              </button>
+            ))}
+          </span>
+        ) : (
+          <CfpPopover
+            icon={<><BarChart3 size={13} /><ChevronDown size={9} /></>}
+            label={kind ? labelForChartKind(kind) : 'Chart'}
+            title="Chart type"
+          >
+            {availableChartKinds.map(k => (
+              <button
+                key={k}
+                type="button"
+                className={`cfp-menu-item${k === kind ? ' active' : ''}`}
+                onClick={() => handleChartKindChange(k)}
+              >
+                {labelForChartKind(k)}
+              </button>
+            ))}
+          </CfpPopover>
+        )
       )}
 
       {/* --- Subject selector --- */}
@@ -627,7 +671,22 @@ export function AnalysisChartContainer(props: {
       {/* --- Separator --- */}
       <span className="cfp-sep" />
 
-      {/* --- Overlay toggle with colour picker --- */}
+      {/* --- Display settings: inline (wide) or popover (narrow) --- */}
+      {onDisplayChange && toolbarSettings.length > 0 && (
+        wideToolbar
+          ? toolbarSettings.map(s => renderTraySetting(s, display, onDisplayChange))
+          : (
+            <CfpPopover
+              icon={<Sliders size={13} />}
+              title="Display"
+              label="Display"
+            >
+              {toolbarSettings.map(s => renderTraySetting(s, display, onDisplayChange))}
+            </CfpPopover>
+          )
+      )}
+
+      {/* --- Overlay toggle with colour picker (canvas only, guarded by prop) --- */}
       {props.onOverlayToggle && (
         <CfpPopover
           icon={<Crosshair size={13} />}
@@ -668,46 +727,106 @@ export function AnalysisChartContainer(props: {
         </CfpPopover>
       )}
 
-      {/* --- Live/Custom toggle --- */}
+      {/* --- Scenarios popover (canvas only, guarded by prop) --- */}
       {props.onLiveToggle && (
-        <span
-          className="cfp-toggle"
-          title={props.analysisLive ? 'Live — click for Custom' : 'Custom — click for Live'}
-          onClick={() => props.onLiveToggle!(!props.analysisLive)}
-        >
-          <span className={`cfp-toggle__track${props.analysisLive ? ' on' : ''}`}>
-            <span className="cfp-toggle__thumb" />
-          </span>
-          <span className="cfp-toggle__label">{props.analysisLive ? 'Live' : 'Custom'}</span>
-        </span>
-      )}
-
-      {/* --- Display settings popover --- */}
-      {onDisplayChange && floatingSettings.length > 0 && (
         <CfpPopover
-          icon={<Sliders size={13} />}
-          title="Display"
-          label="Display"
+          icon={<>{props.analysisLive ? <Zap size={13} /> : <Lock size={13} />}<ChevronDown size={9} /></>}
+          label={props.analysisLive ? 'Live' : 'Custom'}
+          title={props.analysisLive ? 'Live — tracking tab scenarios' : 'Custom — frozen scenarios'}
         >
-          {floatingSettings.map(s => renderTraySetting(s, display, onDisplayChange))}
+          <div className="cfp-scenario-popover">
+            {/* Live/Custom toggle row — ON = Custom, matching PropertiesPanel convention */}
+            <div className="cfp-scenario-popover__toggle-row">
+              <div
+                className="cfp-lc-toggle"
+                onClick={() => props.onLiveToggle!(!props.analysisLive)}
+                title={props.analysisLive ? 'Live — click for Custom' : 'Custom — click for Live'}
+              >
+                <span className={`cfp-lc-toggle__label${props.analysisLive ? ' active' : ''}`}>Live</span>
+                <span className={`cfp-lc-toggle__track${!props.analysisLive ? ' on' : ''}`}>
+                  <span className="cfp-lc-toggle__thumb" />
+                </span>
+                <span className={`cfp-lc-toggle__label${!props.analysisLive ? ' active' : ''}`}>Custom</span>
+              </div>
+            </div>
+            {/* Scenario layers */}
+            {props.scenarioLayerItems && props.scenarioLayerItems.length > 0 && (
+              <ScenarioLayerList
+                items={props.scenarioLayerItems}
+                containerClassName="cfp-scenario-popover__list"
+                onToggleVisibility={props.onScenarioToggleVisibility}
+                onCycleMode={props.onScenarioCycleMode}
+                onColourChange={props.onScenarioColourChange}
+                getSwatchOverlayStyle={props.getScenarioSwatchOverlayStyle}
+              />
+            )}
+            {/* Add scenario button */}
+            {props.onAddScenario && (
+              <button
+                type="button"
+                className="cfp-scenario-popover__add-btn"
+                onClick={props.onAddScenario}
+                title="Add a blank scenario"
+              >
+                <Plus size={12} /> Add scenario
+              </button>
+            )}
+          </div>
         </CfpPopover>
       )}
 
-      {/* --- Open Properties (direct) --- */}
-      <button
-        type="button"
-        className="cfp-pill"
-        onClick={() => {
-          if (props.analysisId) {
-            window.dispatchEvent(new CustomEvent('dagnet:openAnalysisProperties', { detail: { analysisId: props.analysisId } }));
-          } else {
-            window.dispatchEvent(new CustomEvent('dagnet:openPropertiesPanel'));
-          }
-        }}
-        title="Open Properties"
-      >
-        <Settings2 size={13} />
-      </button>
+      {/* --- Open Properties (canvas only, guarded by prop) --- */}
+      {chartContext === 'canvas' && (
+        <button
+          type="button"
+          className="cfp-pill"
+          onClick={() => {
+            if (props.analysisId) {
+              window.dispatchEvent(new CustomEvent('dagnet:openAnalysisProperties', { detail: { analysisId: props.analysisId } }));
+            } else {
+              window.dispatchEvent(new CustomEvent('dagnet:openPropertiesPanel'));
+            }
+          }}
+          title="Open Properties"
+        >
+          <Settings2 size={13} />
+        </button>
+      )}
+
+      {/* --- Inline action chrome (wide only) --- */}
+      {showActionChrome && wideToolbar && (
+        <>
+          <span className="cfp-sep" />
+          <button
+            type="button"
+            className="cfp-pill"
+            onClick={() => {
+              if (!result) return;
+              const { filename, csv } = analysisResultToCsv(result);
+              if (csv) downloadTextFile({ filename, content: csv, mimeType: 'text/csv' });
+            }}
+            title="Download CSV"
+          >
+            <Download size={12} />
+          </button>
+          <button
+            type="button"
+            className="cfp-pill"
+            onClick={() => {
+              if (!kind || !result) return;
+              chartOperationsService.openAnalysisChartTabFromAnalysis({
+                chartKind: kind as any,
+                analysisResult: result,
+                scenarioIds: visibleScenarioIds,
+                source,
+              });
+            }}
+            title="Open as Tab"
+          >
+            <ExternalLink size={12} />
+          </button>
+        </>
+      )}
 
       {/* --- More actions dropdown --- */}
       <CfpPopover
@@ -762,7 +881,7 @@ export function AnalysisChartContainer(props: {
         )}
       </CfpPopover>
     </>
-  ) : null;
+  );
 
   return (
     <div
@@ -773,157 +892,10 @@ export function AnalysisChartContainer(props: {
         height: fillHeight ? '100%' : undefined,
       }}
     >
-      {/* Toolbar (tab only; canvas uses floating panel) */}
-      {chartContext !== 'canvas' && (showChooser || showSubjectSelector || showAnalysisTypeDropdown) ? (
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', flexShrink: 0, padding: '4px 4px 0' }}>
-          {showAnalysisTypeDropdown ? (
-            <select
-              value={props.analysisTypeId || ''}
-              onChange={e => props.onAnalysisTypeChange?.(e.target.value)}
-              className="chart-container-select"
-              aria-label="Analysis type"
-              style={{ fontSize: 10, maxWidth: 140 }}
-            >
-              {(props.availableAnalyses || []).map(a => {
-                const meta = getAnalysisTypeMeta(a.id);
-                return (
-                  <option key={a.id} value={a.id}>
-                    {meta?.name || a.name || a.id}
-                  </option>
-                );
-              })}
-            </select>
-          ) : null}
-          {showChooser ? (
-            <>
-              {!compactControls ? <span style={{ fontSize: 11, color: 'var(--text-secondary)' }}>Chart</span> : null}
-              {availableChartKinds.length <= 2 ? (
-                availableChartKinds.map(k => (
-                  <button
-                    key={k}
-                    type="button"
-                    className="chart-container-btn"
-                    onClick={() => handleChartKindChange(k)}
-                    style={k === kind ? { background: 'var(--bg-tertiary)' } : undefined}
-                    title={labelForChartKind(k)}
-                  >
-                    {labelForChartKind(k)}
-                  </button>
-                ))
-              ) : (
-                <select
-                  value={kind}
-                  onChange={e => handleChartKindChange(e.target.value as ChartKind)}
-                  className="chart-container-select"
-                  aria-label="Chart type"
-                >
-                  {availableChartKinds.map(k => (
-                    <option key={k} value={k}>
-                      {labelForChartKind(k)}
-                    </option>
-                  ))}
-                </select>
-              )}
-            </>
-          ) : null}
-          {showSubjectSelector ? (
-            <>
-              {!compactControls ? <span style={{ fontSize: 11, color: 'var(--text-secondary)', marginLeft: showChooser ? 8 : 0 }}>Subject</span> : null}
-              <select
-                value={effectiveSubjectId || ''}
-                onChange={handleSubjectChange}
-                className="chart-container-select"
-                aria-label="Subject"
-              >
-                {subjectIds.map(sid => {
-                  const meta = (result?.dimension_values as any)?.subject_id?.[sid];
-                  return (
-                    <option key={sid} value={sid}>
-                      {meta?.name || sid}
-                    </option>
-                  );
-                })}
-              </select>
-            </>
-          ) : null}
-        </div>
-      ) : null}
-
-      {/* Inline settings + action chrome (tab only; canvas uses floating panel) */}
-      {echartsOption && chartContext !== 'canvas' && (inlineSettings.length > 0 || showActionChrome) && (
-        <div style={{ display: 'flex', gap: 6, alignItems: 'center', padding: '4px 4px 0', flexWrap: 'wrap', flexShrink: 0 }}>
-          {/* Inline settings from registry */}
-          {inlineSettings.map(setting => {
-            const currentValue = resolveDisplaySetting(display, setting);
-            if (setting.type === 'checkbox') {
-              return (
-                <button
-                  key={setting.key}
-                  type="button"
-                  className={`chart-container-btn${currentValue ? ' active' : ''}`}
-                  onClick={() => onDisplayChange?.(setting.key, !currentValue)}
-                  title={setting.label}
-                >
-                  {setting.label}
-                </button>
-              );
-            }
-            if (setting.type === 'radio' && setting.options) {
-              return (
-                <span key={setting.key} style={{ display: 'inline-flex', gap: 1 }}>
-                  {setting.options.map(opt => (
-                    <button
-                      key={opt.value}
-                      type="button"
-                      className={`chart-container-btn${currentValue === opt.value ? ' active' : ''}`}
-                      onClick={() => onDisplayChange?.(setting.key, opt.value)}
-                      title={`${setting.label}: ${opt.label}`}
-                    >
-                      {opt.label}
-                    </button>
-                  ))}
-                </span>
-              );
-            }
-            return null;
-          })}
-
-          {/* Spacer to push actions to the right */}
-          {showActionChrome && <span style={{ flex: 1 }} />}
-
-          {/* Action chrome (tab mode only) */}
-          {showActionChrome && (
-            <>
-              <button
-                type="button"
-                onClick={() => {
-                  if (!result) return;
-                  const { filename, csv } = analysisResultToCsv(result);
-                  if (csv) downloadTextFile({ filename, content: csv, mimeType: 'text/csv' });
-                }}
-                className="chart-container-link-btn"
-                title="Download CSV"
-              >
-                <Download size={12} /> CSV
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  if (!kind || !result) return;
-                  chartOperationsService.openAnalysisChartTabFromAnalysis({
-                    chartKind: kind as any,
-                    analysisResult: result,
-                    scenarioIds: visibleScenarioIds,
-                    source,
-                  });
-                }}
-                className="chart-container-link-btn"
-                title="Open as Tab"
-              >
-                <ExternalLink size={12} /> Open as Tab
-              </button>
-            </>
-          )}
+      {/* Tab toolbar — static bar using the unified tray content */}
+      {chartContext !== 'canvas' && !hideChrome && (
+        <div className="cfp-tab-toolbar">
+          {toolbarTray}
         </div>
       )}
 
@@ -931,7 +903,7 @@ export function AnalysisChartContainer(props: {
         {chartContext === 'canvas' && (
           <ChartFloatingIcon
             containerRef={chartViewportRef}
-            tray={canvasTray}
+            tray={toolbarTray}
             canvasZoom={props.canvasZoom}
           />
         )}

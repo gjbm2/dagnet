@@ -13,6 +13,9 @@ import { isSnapshotBootChart, logSnapshotBoot, recordSnapshotBootLedgerStage } f
 import { Loader2, AlertCircle, ServerOff } from 'lucide-react';
 import { InlineEditableLabel } from '../InlineEditableLabel';
 import type { AvailableAnalysis } from '@/lib/graphComputeClient';
+import type { ScenarioLayerItem } from '@/types/scenarioLayerList';
+import { getScenarioVisibilityOverlayStyle } from '@/lib/scenarioVisibilityModeStyles';
+import { SCENARIO_PALETTE } from '@/contexts/ScenariosContext';
 
 interface CanvasAnalysisNodeData {
   analysis: CanvasAnalysis;
@@ -220,6 +223,111 @@ export default function CanvasAnalysisNode({ data, selected }: NodeProps<CanvasA
     }
     return m;
   }, [visibleScenarioIds, analysis.live, analysis.recipe.scenarios, scenariosContext, scenarioVisibilityModes]);
+
+  // Build scenario layer items for the toolbar popover
+  const allScenarioLayerItems = useMemo((): ScenarioLayerItem[] => {
+    const hiddenSet = new Set<string>(((analysis.display as any)?.hidden_scenarios || []) as string[]);
+    if (analysis.live) {
+      // Live mode: show tab's scenarios, all visible
+      return visibleScenarioIds.map(sid => {
+        const meta = scenarioMetaById[sid];
+        return {
+          id: sid,
+          name: meta?.name || sid,
+          colour: meta?.colour || '#808080',
+          visible: true,
+          visibilityMode: (meta?.visibility_mode || 'f+e') as 'f+e' | 'f' | 'e',
+          kind: sid === 'current' ? 'current' as const : sid === 'base' ? 'base' as const : 'user' as const,
+        };
+      });
+    }
+    // Custom mode: show all recipe scenarios (including hidden)
+    const frozenScenarios = analysis.recipe?.scenarios || [];
+    return frozenScenarios.map(fs => ({
+      id: fs.scenario_id,
+      name: fs.name || fs.scenario_id,
+      colour: fs.colour || '#808080',
+      visible: !hiddenSet.has(fs.scenario_id),
+      visibilityMode: (fs.visibility_mode || 'f+e') as 'f+e' | 'f' | 'e',
+      kind: 'user' as const,
+    }));
+  }, [analysis.live, analysis.recipe?.scenarios, analysis.display, visibleScenarioIds, scenarioMetaById]);
+
+  // Mutate recipe scenarios with auto-promotion from live → custom
+  const mutateScenarios = useCallback((mutator: (scenarios: any[], display: any) => { scenarios?: any[]; display?: any }) => {
+    if (analysis.live) {
+      const liveTabId = tabId || tabs[0]?.id;
+      if (!liveTabId || !scenariosContext) return;
+      const currentTab = tabs.find(t => t.id === liveTabId);
+      const whatIfDSL = currentTab?.editorState?.whatIfDSL || null;
+      const { scenarios: captured, what_if_dsl } = captureTabScenariosToRecipe({
+        tabId: liveTabId,
+        currentDSL: currentDSL || '',
+        operations,
+        scenariosContext: scenariosContext as any,
+        whatIfDSL,
+      });
+      const result = mutator(captured, analysis.display || {});
+      onUpdate(analysis.id, {
+        live: false,
+        recipe: { ...analysis.recipe, scenarios: result.scenarios ?? captured, analysis: { ...analysis.recipe.analysis, what_if_dsl } },
+        display: result.display !== undefined ? result.display : analysis.display,
+      } as any);
+    } else {
+      const scenarios = [...(analysis.recipe?.scenarios || [])];
+      const result = mutator(scenarios, analysis.display || {});
+      const updates: any = {};
+      if (result.scenarios !== undefined) updates.recipe = { ...analysis.recipe, scenarios: result.scenarios };
+      if (result.display !== undefined) updates.display = result.display;
+      if (Object.keys(updates).length > 0) onUpdate(analysis.id, updates);
+    }
+  }, [analysis, onUpdate, tabId, tabs, scenariosContext, operations, currentDSL]);
+
+  const handleScenarioToggleVisibility = useCallback((id: string) => {
+    mutateScenarios((scenarios, display) => {
+      const hidden = [...(((display as any)?.hidden_scenarios) || []) as string[]];
+      const idx = hidden.indexOf(id);
+      if (idx >= 0) hidden.splice(idx, 1);
+      else hidden.push(id);
+      return { display: { ...display, hidden_scenarios: hidden } };
+    });
+  }, [mutateScenarios]);
+
+  const handleScenarioCycleMode = useCallback((id: string) => {
+    mutateScenarios((scenarios) => {
+      const s = scenarios.find((sc: any) => sc.scenario_id === id);
+      if (s) {
+        const modes: Array<'f+e' | 'f' | 'e'> = ['f+e', 'f', 'e'];
+        const cur = (s.visibility_mode || 'f+e') as 'f+e' | 'f' | 'e';
+        s.visibility_mode = modes[(modes.indexOf(cur) + 1) % modes.length];
+      }
+      return { scenarios };
+    });
+  }, [mutateScenarios]);
+
+  const handleScenarioColourChange = useCallback((id: string, colour: string) => {
+    mutateScenarios((scenarios) => {
+      const s = scenarios.find((sc: any) => sc.scenario_id === id);
+      if (s) s.colour = colour;
+      return { scenarios };
+    });
+  }, [mutateScenarios]);
+
+  const getScenarioSwatchOverlay = useCallback((id: string) => {
+    const item = allScenarioLayerItems.find(entry => entry.id === id);
+    return getScenarioVisibilityOverlayStyle(item?.visibilityMode);
+  }, [allScenarioLayerItems]);
+
+  const handleAddScenario = useCallback(() => {
+    mutateScenarios((scenarios) => {
+      const usedColours = new Set(scenarios.map((s: any) => s.colour));
+      const colour = SCENARIO_PALETTE.find(c => !usedColours.has(c)) || SCENARIO_PALETTE[scenarios.length % SCENARIO_PALETTE.length];
+      const id = `scenario_${Date.now()}`;
+      const name = new Date().toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+      scenarios.push({ scenario_id: id, name, colour, effective_dsl: '', visibility_mode: 'f+e' });
+      return { scenarios };
+    });
+  }, [mutateScenarios]);
 
   const analysisIdRef = useRef(analysis.id);
   analysisIdRef.current = analysis.id;
@@ -430,6 +538,12 @@ export default function CanvasAnalysisNode({ data, selected }: NodeProps<CanvasA
             }}
             analysisLive={!!analysis.live}
             onLiveToggle={handleLiveToggle}
+            scenarioLayerItems={allScenarioLayerItems}
+            onScenarioToggleVisibility={handleScenarioToggleVisibility}
+            onScenarioCycleMode={handleScenarioCycleMode}
+            onScenarioColourChange={handleScenarioColourChange}
+            getScenarioSwatchOverlayStyle={getScenarioSwatchOverlay}
+            onAddScenario={handleAddScenario}
             overlayActive={!!analysis.display?.show_subject_overlay}
             overlayColour={analysis.display?.subject_overlay_colour as string | undefined}
             onOverlayToggle={handleOverlayToggle}

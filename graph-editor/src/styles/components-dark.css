@@ -1258,12 +1258,21 @@
   border: 1px solid rgba(0, 0, 0, 0.10);
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12), 0 0 0 0.5px rgba(0, 0, 0, 0.04);
   user-select: none;
-  opacity: 0.55;
+  /* Level 1: not hovering over chart — nearly invisible */
+  opacity: 0.08;
   transition: opacity 150ms ease, box-shadow 150ms ease;
 }
 
+/* Level 2: hovering over chart but not on toolbar — faint */
+.canvas-analysis-node:hover .chart-floating-palette {
+  opacity: 0.5;
+}
+
+/* Level 3: hovering on toolbar or expanded — fully visible */
 .chart-floating-palette:hover,
-.chart-floating-palette.expanded {
+.chart-floating-palette.expanded,
+.canvas-analysis-node:hover .chart-floating-palette:hover,
+.canvas-analysis-node:hover .chart-floating-palette.expanded {
   opacity: 1;
   box-shadow: 0 2px 12px rgba(0, 0, 0, 0.16), 0 0 0 0.5px rgba(0, 0, 0, 0.06);
 }
@@ -1379,6 +1388,24 @@
   flex: 0 !important;
   padding: 0 !important;
   opacity: 0 !important;
+}
+
+/* --- Tab toolbar — static bar reusing cfp-* tray content --- */
+
+.cfp-tab-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 8px;
+  flex-shrink: 0;
+  background: rgba(0, 0, 0, 0.025);
+  border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+}
+
+[data-theme="dark"] .cfp-tab-toolbar {
+  background: rgba(255, 255, 255, 0.03);
+  border-bottom-color: rgba(255, 255, 255, 0.06);
 }
 
 /* --- Ghost snap indicator --- */
@@ -1599,6 +1626,160 @@
   animation: cfp-fade-in 100ms ease-out;
 }
 
+/* --- Analysis type palette (popover grid) --- */
+
+.cfp-type-palette {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(80px, 1fr));
+  gap: 2px;
+  width: 268px;
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.cfp-type-palette-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 4px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-secondary, #6b7280);
+  border-radius: 6px;
+  cursor: pointer;
+  text-align: center;
+}
+
+.cfp-type-palette-item:hover {
+  background: rgba(0, 0, 0, 0.06);
+  color: var(--text-primary, #374151);
+}
+
+.cfp-type-palette-item.active {
+  background: #eff6ff;
+  border-color: #3b82f6;
+  color: #2563eb;
+}
+
+.cfp-type-palette-label {
+  font-size: 9px;
+  line-height: 1.2;
+  max-width: 72px;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+/* --- Scenario popover (Live/Custom + scenario layers) --- */
+
+.cfp-scenario-popover {
+  display: flex;
+  flex-direction: column;
+  width: 220px;
+  gap: 0;
+}
+
+.cfp-scenario-popover__toggle-row {
+  display: flex;
+  align-items: center;
+  padding: 2px 4px 4px;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.08);
+  margin-bottom: 2px;
+}
+
+.cfp-scenario-popover__list {
+  display: flex;
+  flex-direction: column;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+/* Compact overrides for scenario rows inside the toolbar popover */
+.cfp-scenario-popover__list .scenario-row {
+  padding: 3px 4px;
+  margin: 1px 0;
+  gap: 6px;
+  font-size: 10px;
+  border-radius: 4px;
+}
+
+.cfp-scenario-popover__list .scenario-colour-swatch,
+.cfp-scenario-popover__list .colour-selector-compact-swatch {
+  width: 14px !important;
+  height: 14px !important;
+  min-width: 14px;
+  border-radius: 3px;
+  border-width: 1px;
+}
+
+.cfp-scenario-popover__list .scenario-colour-swatch-wrapper {
+  flex-shrink: 0;
+  position: relative;
+  width: 14px;
+  height: 14px;
+}
+
+.cfp-scenario-popover__list .scenario-colour-swatch-wrapper:hover {
+  transform: none;
+  box-shadow: none;
+}
+
+.cfp-scenario-popover__list .scenario-name {
+  font-size: 10px;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cfp-scenario-popover__list .scenario-action-btn {
+  width: 18px;
+  height: 18px;
+  padding: 2px;
+}
+
+.cfp-scenario-popover__list .scenarios-divider {
+  margin: 2px 4px;
+}
+
+.cfp-scenario-popover__add-btn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+  padding: 4px 6px;
+  margin-top: 2px;
+  border: none;
+  border-top: 1px solid rgba(0, 0, 0, 0.08);
+  background: transparent;
+  color: var(--text-secondary, #6b7280);
+  font-size: 10px;
+  cursor: pointer;
+  border-radius: 0;
+}
+
+.cfp-scenario-popover__add-btn:hover {
+  background: rgba(0, 0, 0, 0.06);
+  color: var(--text-primary, #374151);
+}
+
+[data-theme="dark"] .cfp-scenario-popover__toggle-row {
+  border-bottom-color: rgba(255, 255, 255, 0.08);
+}
+
+[data-theme="dark"] .cfp-scenario-popover__add-btn {
+  border-top-color: rgba(255, 255, 255, 0.08);
+  color: #aaa;
+}
+
+[data-theme="dark"] .cfp-scenario-popover__add-btn:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: #e0e0e0;
+}
+
 /* --- Menu items (for actions dropdown) --- */
 
 .cfp-menu-item {
@@ -1619,6 +1800,11 @@
 
 .cfp-menu-item:hover {
   background: rgba(0, 0, 0, 0.06);
+}
+
+.cfp-menu-item.active {
+  background: rgba(0, 0, 0, 0.06);
+  font-weight: 600;
 }
 
 .cfp-menu-item--danger {
@@ -1689,6 +1875,76 @@
   color: #aaa;
 }
 
+/* --- Live/Custom toggle (shared between toolbar popover and props panel) --- */
+/* ON = Custom (matches CollapsibleSection toggle convention) */
+
+.cfp-lc-toggle {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.cfp-lc-toggle__track {
+  position: relative;
+  width: 28px;
+  height: 16px;
+  border-radius: 8px;
+  background: #d1d5db;
+  transition: background 0.15s ease;
+  flex-shrink: 0;
+}
+
+.cfp-lc-toggle__track.on {
+  background: var(--accent-colour, #3b82f6);
+}
+
+.cfp-lc-toggle__thumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+  transition: left 0.15s ease;
+}
+
+.cfp-lc-toggle__track.on .cfp-lc-toggle__thumb {
+  left: 14px;
+}
+
+.cfp-lc-toggle__label {
+  font-size: 10px;
+  color: var(--text-muted, #9ca3af);
+  line-height: 1;
+  white-space: nowrap;
+  transition: color 0.15s ease, font-weight 0.15s ease;
+}
+
+.cfp-lc-toggle__label.active {
+  font-weight: 600;
+  color: var(--text-primary, #374151);
+}
+
+[data-theme="dark"] .cfp-lc-toggle__track {
+  background: #555;
+}
+
+[data-theme="dark"] .cfp-lc-toggle__thumb {
+  background: #e0e0e0;
+}
+
+[data-theme="dark"] .cfp-lc-toggle__label {
+  color: #777;
+}
+
+[data-theme="dark"] .cfp-lc-toggle__label.active {
+  color: #e0e0e0;
+}
+
 [data-theme="dark"] .cfp-pill--danger {
   color: #f87171;
 }
@@ -1703,12 +1959,32 @@
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4), 0 0 0 0.5px rgba(255, 255, 255, 0.04);
 }
 
+[data-theme="dark"] .cfp-type-palette-item {
+  color: #aaa;
+}
+
+[data-theme="dark"] .cfp-type-palette-item:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: #e0e0e0;
+}
+
+[data-theme="dark"] .cfp-type-palette-item.active {
+  background: rgba(59, 130, 246, 0.18);
+  border-color: #3b82f6;
+  color: #60a5fa;
+}
+
 [data-theme="dark"] .cfp-menu-item {
   color: #d1d5db;
 }
 
 [data-theme="dark"] .cfp-menu-item:hover {
   background: rgba(255, 255, 255, 0.08);
+}
+
+[data-theme="dark"] .cfp-menu-item.active {
+  background: rgba(255, 255, 255, 0.08);
+  font-weight: 600;
 }
 
 [data-theme="dark"] .cfp-menu-item--danger {

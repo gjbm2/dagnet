@@ -5615,8 +5615,15 @@ class DataOperationsService {
                   if (xId) {
                     nQueryEdgeData.query = `from(${xId}).to(${xId})`;
                     explicitNQueryWindowDenomUsesFromCount = true;
+                    sessionLogService.addChild(logOpId, 'info', 'N_QUERY_COHORT_SEGMENTATION',
+                      `Cohort denominator: using segmentation endpoint for to(${xId})`,
+                      `Rewrote n_query to from(${xId}).to(${xId}) to avoid anchor===X funnel bug`
+                    );
                   } else {
                     console.warn('[DataOps:DUAL_QUERY] to(X) n_query in cohort mode but no xId available; skipping explicit n_query for this run');
+                    sessionLogService.addChild(logOpId, 'warning', 'N_QUERY_COHORT_NO_XID',
+                      'Cohort denominator: no xId available, skipping explicit n_query'
+                    );
                     explicitNQuery = undefined;
                     needsDualQuery = false;
                   }
@@ -5629,10 +5636,17 @@ class DataOperationsService {
                     // switches endpoint/response parsing.
                     nQueryEdgeData.query = `from(${xId}).to(${xId})`;
                     explicitNQueryWindowDenomUsesFromCount = true;
+                    sessionLogService.addChild(logOpId, 'info', 'N_QUERY_WINDOW_SEGMENTATION',
+                      `Window denominator: using segmentation endpoint for to(${xId})`,
+                      `Rewrote n_query to from(${xId}).to(${xId})`
+                    );
                   }
                 }
               } catch (error) {
                 console.warn('[DataOps:DUAL_QUERY] Failed to synthesise concrete query for to(X) n_query:', error);
+                sessionLogService.addChild(logOpId, 'error', 'N_QUERY_SYNTHESIS_FAILED',
+                  `Failed to synthesise concrete query for to(X) n_query: ${error instanceof Error ? error.message : String(error)}`
+                );
               }
             }
             

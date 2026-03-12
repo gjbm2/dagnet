@@ -30,7 +30,7 @@ import { ImageLoupeView } from './ImageLoupeView';
 import { ChipInput } from './ChipInput';
 import { imageOperationsService } from '../services/imageOperationsService';
 import { getObjectTypeTheme } from '../theme/objectTypeTheme';
-import { Box, Settings, Layers, Edit3, ChevronDown, ChevronRight, X, Sliders, Info, TrendingUp, Coins, Clock, FileJson, ZapOff, RefreshCcw, ExternalLink, Zap } from 'lucide-react';
+import { Box, Settings, Layers, Edit3, ChevronDown, ChevronRight, X, Sliders, Info, TrendingUp, Coins, Clock, FileJson, ZapOff, RefreshCcw, ExternalLink, Zap, Plus } from 'lucide-react';
 import { ANALYSIS_TYPES } from './panels/analysisTypes';
 import { AnalysisTypeSection } from './panels/AnalysisTypeSection';
 import { ChartSettingsSection } from './panels/ChartSettingsSection';
@@ -47,7 +47,7 @@ import { getScenarioVisibilityOverlayStyle } from '../lib/scenarioVisibilityMode
 import { mutateCanvasAnalysisGraph, deleteCanvasAnalysisFromGraph } from '../services/canvasAnalysisMutationService';
 import { ScenarioLayerList } from './panels/ScenarioLayerList';
 import type { ScenarioLayerItem } from '../types/scenarioLayerList';
-import { useScenariosContextOptional } from '../contexts/ScenariosContext';
+import { useScenariosContextOptional, SCENARIO_PALETTE } from '../contexts/ScenariosContext';
 import { ScenarioQueryEditModal } from './modals/ScenarioQueryEditModal';
 import { captureTabScenariosToRecipe } from '../services/captureTabScenariosService';
 import './panels/AnalyticsPanel.css';
@@ -285,6 +285,45 @@ function CanvasAnalysisPropertiesSection({ analysisId, graph, setGraph, saveHist
     onEditScenarioDsl: (id) => setEditingScenarioId(id),
   });
 
+  const handleAddScenario = useCallback(() => {
+    if (!analysis) return;
+    const existing = analysis.recipe?.scenarios || [];
+    const usedColours = new Set(existing.map((s: any) => s.colour));
+    const colour = SCENARIO_PALETTE.find(c => !usedColours.has(c)) || SCENARIO_PALETTE[existing.length % SCENARIO_PALETTE.length];
+    const id = `scenario_${Date.now()}`;
+    const name = new Date().toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+    const newScenario = { scenario_id: id, name, colour, effective_dsl: '', visibility_mode: 'f+e' as const };
+    if (analysis.live) {
+      // Auto-promote to custom first
+      if (liveTabId && scenariosContext) {
+        const currentTab = tabs.find(t => t.id === liveTabId);
+        const whatIfDSL = currentTab?.editorState?.whatIfDSL || null;
+        const { scenarios: captured, what_if_dsl } = captureTabScenariosToRecipe({
+          tabId: liveTabId,
+          currentDSL: graphStore.currentDSL || '',
+          operations,
+          scenariosContext: scenariosContext as any,
+          whatIfDSL,
+        });
+        const nextGraph = mutateCanvasAnalysisGraph(graph, analysisId, (a) => {
+          a.live = false;
+          a.recipe = {
+            ...a.recipe,
+            scenarios: [...captured, newScenario],
+            analysis: { ...a.recipe.analysis, what_if_dsl },
+          };
+        });
+        if (nextGraph) { setGraph(nextGraph); saveHistoryState('Add chart scenario'); }
+      }
+    } else {
+      const nextGraph = mutateCanvasAnalysisGraph(graph, analysisId, (a) => {
+        if (!a.recipe.scenarios) a.recipe.scenarios = [];
+        a.recipe.scenarios.push(newScenario);
+      });
+      if (nextGraph) { setGraph(nextGraph); saveHistoryState('Add chart scenario'); }
+    }
+  }, [analysis, analysisId, graph, setGraph, saveHistoryState, liveTabId, scenariosContext, tabs, operations, graphStore]);
+
   const editingScenario = editingScenarioId
     ? analysis?.recipe?.scenarios?.find((s: any) => s.scenario_id === editingScenarioId)
     : null;
@@ -387,6 +426,15 @@ function CanvasAnalysisPropertiesSection({ analysisId, graph, setGraph, saveHist
             getSwatchOverlayStyle={getScenarioSwatchOverlayStyle}
             {...scenarioCallbacks}
           />
+          <button
+            type="button"
+            className="scenarios-control-btn"
+            onClick={handleAddScenario}
+            style={{ marginTop: 4, width: '100%' }}
+            title="Add a blank scenario"
+          >
+            <Plus size={12} /> Add scenario
+          </button>
         </div>
       </CollapsibleSection>
 
