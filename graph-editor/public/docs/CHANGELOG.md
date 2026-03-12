@@ -1,4 +1,11 @@
 # DagNet Release Notes
+## Version 1.7.10b
+**Released:** 12-Mar-26
+
+Squeak, squeak -- a LOT of polishing. Also proper progress reporting in app and a number of canvas stability fixes. Charting v1.0??
+
+---
+
 ## Version 1.7.7b
 **Released:** 11-Mar-26
 
