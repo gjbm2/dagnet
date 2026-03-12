@@ -22,6 +22,8 @@ import {
   Database,
   Calendar,
   TrendingUp,
+  CircleDot,
+  Cable,
   type LucideIcon,
 } from 'lucide-react';
 
@@ -185,6 +187,22 @@ export const ANALYSIS_TYPES: AnalysisTypeMeta[] = [
     icon: GitBranch,
   },
   
+  // Element info (FE-computable, progressive BE augmentation)
+  {
+    id: 'node_info',
+    name: 'Node Info',
+    shortDescription: 'Curated summary of a single node',
+    selectionHint: 'Hover over a node or select with from()',
+    icon: CircleDot,
+  },
+  {
+    id: 'edge_info',
+    name: 'Edge Info',
+    shortDescription: 'Curated summary of a single edge',
+    selectionHint: 'Hover over an edge or select with from().to()',
+    icon: Cable,
+  },
+
   // Fallback
   {
     id: 'general_selection',

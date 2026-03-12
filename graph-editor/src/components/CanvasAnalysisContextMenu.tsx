@@ -90,6 +90,7 @@ export function CanvasAnalysisContextMenu({
     const viewModeItems: ContextMenuItem[] = [
       { label: 'Chart', checked: analysis.view_mode === 'chart', onClick: () => onUpdate(analysisId, { view_mode: 'chart' }) },
       { label: 'Cards', checked: analysis.view_mode === 'cards', onClick: () => onUpdate(analysisId, { view_mode: 'cards' }) },
+      { label: 'Table', checked: analysis.view_mode === 'table', onClick: () => onUpdate(analysisId, { view_mode: 'table' }) },
     ];
     result.push({ label: 'View Mode', onClick: () => {}, submenu: viewModeItems });
 

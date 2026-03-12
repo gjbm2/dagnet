@@ -69,6 +69,10 @@ interface EdgeBeadsProps {
   getScenarioVisibilityMode?: (scenarioId: string) => ScenarioVisibilityMode;
   /** Stable key that changes when scenario visibility modes change (forces recompute) */
   visibilityModesKey?: string;
+  /** Hover preview handlers — forwarded from the parent edge */
+  onMouseEnter?: (e: React.MouseEvent) => void;
+  onMouseLeave?: (e: React.MouseEvent) => void;
+  onMouseDown?: (e: React.MouseEvent) => void;
 }
 
 interface BeadState {
@@ -94,7 +98,10 @@ export function useEdgeBeads(props: EdgeBeadsProps): { svg: React.ReactNode; htm
     useSankeyView = false,
     edgeWidth = 0,
     getScenarioVisibilityMode,
-    visibilityModesKey
+    visibilityModesKey,
+    onMouseEnter: onBeadMouseEnter,
+    onMouseLeave: onBeadMouseLeave,
+    onMouseDown: onBeadMouseDown,
   } = props;
   
   // Create a memoized path element from pathD for accurate position calculations
@@ -505,7 +512,7 @@ export function useEdgeBeads(props: EdgeBeadsProps): { svg: React.ReactNode; htm
       };
       
       svgBeads.push(
-        <g 
+        <g
           key={`bead-expanded-${bead.type}-${bead.index}`}
           style={{ cursor: 'pointer', pointerEvents: 'painted' }}
           transform={transformOffset}
@@ -519,6 +526,9 @@ export function useEdgeBeads(props: EdgeBeadsProps): { svg: React.ReactNode; htm
             e.preventDefault();
             onDoubleClick?.();
           }}
+          onMouseEnter={onBeadMouseEnter}
+          onMouseLeave={onBeadMouseLeave}
+          onMouseDown={onBeadMouseDown}
         >
           <defs>
             <path id={beadPathId} d={pathDAttr} />
@@ -711,7 +721,7 @@ export function useEdgeBeads(props: EdgeBeadsProps): { svg: React.ReactNode; htm
       }
       
       svgBeads.push(
-        <g 
+        <g
           key={`bead-collapsed-${bead.type}-${bead.index}`}
           style={{ cursor: 'pointer', pointerEvents: 'painted' }}
           transform={transformOffset}
@@ -725,6 +735,9 @@ export function useEdgeBeads(props: EdgeBeadsProps): { svg: React.ReactNode; htm
             e.preventDefault();
             onDoubleClick?.();
           }}
+          onMouseEnter={onBeadMouseEnter}
+          onMouseLeave={onBeadMouseLeave}
+          onMouseDown={onBeadMouseDown}
         >
           <defs>
             <path id={beadPathId} d={pathDAttr} />

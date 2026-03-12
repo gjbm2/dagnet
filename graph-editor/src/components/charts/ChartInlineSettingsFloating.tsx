@@ -39,15 +39,48 @@ function nearestAnchor(x: number, y: number, cw: number, ch: number): Anchor {
   return midX < cw / 2 ? 'bottom-left' : 'bottom-right';
 }
 
+// Minimum VISUAL scale — toolbar never appears below 80% of its natural
+// screen-pixel size, regardless of canvas zoom direction.
+// Visual scale = cssZoom × canvasZoom, so we enforce:
+//   cssZoom >= MIN_VISUAL_SCALE / canvasZoom
+const MIN_VISUAL_SCALE = 0.8;
+
+/**
+ * Pure function: compute the CSS `zoom` inverse-scale for the floating toolbar.
+ *
+ * Goal: toolbar stays at constant screen-pixel size (cssZoom = 1/canvasZoom).
+ * Two clamps:
+ *  - maxScale: prevent toolbar from overflowing its container (zoomed out)
+ *  - MIN_VISUAL_SCALE: toolbar never appears below 50% of natural size on screen,
+ *    even if that means it overflows slightly (readability > layout).
+ *
+ * Exported for unit testing.
+ */
+export function computeToolbarInvScale(
+  canvasZoom: number | undefined,
+  containerWidth: number,
+): number | undefined {
+  if (!canvasZoom || canvasZoom === 1) return undefined;
+  const rawInvScale = 1 / canvasZoom;
+  const maxScale = containerWidth > 0 ? Math.max(1, containerWidth / (HANDLE_W + 200)) : 2;
+  // First clamp to prevent overflow, then enforce minimum visual size.
+  // min-visual wins over max-scale because an unreadable toolbar is worse than overflow.
+  const overflowClamped = Math.min(rawInvScale, maxScale);
+  const minCssZoom = MIN_VISUAL_SCALE / canvasZoom;
+  return Math.max(minCssZoom, overflowClamped);
+}
+
 export interface ChartFloatingIconProps {
   containerRef: React.RefObject<HTMLDivElement | null>;
   tray?: React.ReactNode;
   /** Current canvas zoom level; toolbar scales at 1/zoom so it stays constant screen size. */
   canvasZoom?: number;
+  /** Initial anchor position. Defaults to 'top-right'. Use 'top' for always-visible pinned toolbar. */
+  defaultAnchor?: Anchor;
 }
 
-export function ChartFloatingIcon({ containerRef, tray, canvasZoom }: ChartFloatingIconProps) {
-  const [anchor, setAnchor] = useState<Anchor>('top-right');
+export function ChartFloatingIcon({ containerRef, tray, canvasZoom, defaultAnchor = 'top-right' }: ChartFloatingIconProps) {
+  const [anchor, setAnchor] = useState<Anchor>(defaultAnchor);
   const [drag, setDrag] = useState<{ x: number; y: number; snap: Anchor } | null>(null);
   const [hovered, setHovered] = useState(false);
   const [box, setBox] = useState({ w: 200, h: 200 });
@@ -147,9 +180,7 @@ export function ChartFloatingIcon({ containerRef, tray, canvasZoom }: ChartFloat
   // Clamp: don't scale beyond what the container can fit (max 50% of container width for the tray).
   // Use CSS `zoom` instead of `transform: scale()` so that layout (flex-wrap, width)
   // recalculates at the scaled size — transform is visual-only and doesn't affect layout.
-  const rawInvScale = canvasZoom && canvasZoom !== 1 && anchor !== 'top' ? 1 / canvasZoom : undefined;
-  const maxScale = box.w > 0 ? Math.max(1, box.w / (HANDLE_W + 200)) : 2;
-  const invScale = rawInvScale ? Math.min(rawInvScale, maxScale) : undefined;
+  const invScale = computeToolbarInvScale(canvasZoom, box.w);
 
   const zoomDiv = invScale ?? 1;
   const positionStyle: React.CSSProperties = drag

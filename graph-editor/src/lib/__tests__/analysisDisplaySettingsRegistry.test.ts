@@ -8,6 +8,9 @@ import {
   type DisplaySettingDef,
 } from '../analysisDisplaySettingsRegistry';
 
+/** Chart kinds that render via ECharts (excludes non-chart kinds like 'info'). */
+const ECHART_KINDS = Object.keys(CHART_DISPLAY_SETTINGS).filter(k => k !== 'info');
+
 describe('analysisDisplaySettingsRegistry', () => {
   // ============================================================
   // Basic retrieval
@@ -28,7 +31,7 @@ describe('analysisDisplaySettingsRegistry', () => {
   it('should return cards settings for view_mode "cards" regardless of chart_kind', () => {
     const settings = getDisplaySettings('bridge', 'cards');
     expect(settings).toBe(CARDS_DISPLAY_SETTINGS);
-    expect(settings.find(s => s.key === 'cards_font_size')).toBeDefined();
+    expect(settings.find(s => s.key === 'font_size')).toBeDefined();
   });
 
   it('should return empty array for unknown chart_kind', () => {
@@ -72,9 +75,9 @@ describe('analysisDisplaySettingsRegistry', () => {
     expect(ctx.find(s => s.key === 'orientation')).toBeDefined();
   });
 
-  it('should return cards_font_size in contextMenu for cards mode', () => {
+  it('should return font_size in contextMenu for cards mode', () => {
     const ctx = getDisplaySettingsForSurface(undefined, 'cards', 'contextMenu');
-    expect(ctx.find(s => s.key === 'cards_font_size')).toBeDefined();
+    expect(ctx.find(s => s.key === 'font_size')).toBeDefined();
   });
 
   // ============================================================
@@ -99,7 +102,7 @@ describe('analysisDisplaySettingsRegistry', () => {
   // ============================================================
 
   it('should include axis overrides for all chart kinds', () => {
-    for (const kind of Object.keys(CHART_DISPLAY_SETTINGS)) {
+    for (const kind of ECHART_KINDS) {
       const settings = getDisplaySettings(kind, 'chart');
       expect(settings.find(s => s.key === 'y_axis_min'), `${kind} missing y_axis_min`).toBeDefined();
       expect(settings.find(s => s.key === 'y_axis_max'), `${kind} missing y_axis_max`).toBeDefined();
@@ -122,7 +125,7 @@ describe('analysisDisplaySettingsRegistry', () => {
   // ============================================================
 
   it('should include legend settings for all chart kinds', () => {
-    for (const kind of Object.keys(CHART_DISPLAY_SETTINGS)) {
+    for (const kind of ECHART_KINDS) {
       const settings = getDisplaySettings(kind, 'chart');
       expect(settings.find(s => s.key === 'show_legend'), `${kind} missing show_legend`).toBeDefined();
       expect(settings.find(s => s.key === 'legend_position'), `${kind} missing legend_position`).toBeDefined();
@@ -134,7 +137,7 @@ describe('analysisDisplaySettingsRegistry', () => {
   // ============================================================
 
   it('should include label settings for all chart kinds', () => {
-    for (const kind of Object.keys(CHART_DISPLAY_SETTINGS)) {
+    for (const kind of ECHART_KINDS) {
       const settings = getDisplaySettings(kind, 'chart');
       expect(settings.find(s => s.key === 'show_labels'), `${kind} missing show_labels`).toBeDefined();
       expect(settings.find(s => s.key === 'label_font_size'), `${kind} missing label_font_size`).toBeDefined();
@@ -270,7 +273,7 @@ describe('analysisDisplaySettingsRegistry', () => {
   // ============================================================
 
   it('should include reference_lines for all chart kinds', () => {
-    for (const kind of Object.keys(CHART_DISPLAY_SETTINGS)) {
+    for (const kind of ECHART_KINDS) {
       const settings = getDisplaySettings(kind, 'chart');
       expect(settings.find(s => s.key === 'reference_lines'), `${kind} missing reference_lines`).toBeDefined();
     }
@@ -293,7 +296,7 @@ describe('analysisDisplaySettingsRegistry', () => {
   // ============================================================
 
   it('should include tooltip settings for all chart kinds', () => {
-    for (const kind of Object.keys(CHART_DISPLAY_SETTINGS)) {
+    for (const kind of ECHART_KINDS) {
       const settings = getDisplaySettings(kind, 'chart');
       expect(settings.find(s => s.key === 'show_tooltip'), `${kind} missing show_tooltip`).toBeDefined();
       expect(settings.find(s => s.key === 'tooltip_mode'), `${kind} missing tooltip_mode`).toBeDefined();
@@ -305,7 +308,7 @@ describe('analysisDisplaySettingsRegistry', () => {
   // ============================================================
 
   it('should include animate for all chart kinds', () => {
-    for (const kind of Object.keys(CHART_DISPLAY_SETTINGS)) {
+    for (const kind of ECHART_KINDS) {
       const settings = getDisplaySettings(kind, 'chart');
       expect(settings.find(s => s.key === 'animate'), `${kind} missing animate`).toBeDefined();
     }

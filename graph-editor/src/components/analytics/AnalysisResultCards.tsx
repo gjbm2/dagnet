@@ -1,5 +1,6 @@
 import React, { useMemo, useCallback } from 'react';
 import type { AnalysisResult } from '../../lib/graphComputeClient';
+import { fontSizeZoom } from '../../lib/analysisDisplaySettingsRegistry';
 
 export function AnalysisResultCards(props: {
   result: AnalysisResult;
@@ -8,8 +9,24 @@ export function AnalysisResultCards(props: {
    * This is a plain object so it can be persisted in chart files.
    */
   scenarioDslSubtitleById?: Record<string, string>;
+  /** Card IDs that are collapsed (body hidden). */
+  collapsedCards?: string[];
+  onCollapsedCardsChange?: (collapsed: string[]) => void;
+  /** Font size: numeric px, or legacy preset 'S'/'M'/'L'/'XL'. */
+  fontSize?: number | string;
 }): JSX.Element | null {
-  const { result, scenarioDslSubtitleById } = props;
+  const { result, scenarioDslSubtitleById, collapsedCards, onCollapsedCardsChange, fontSize } = props;
+  const sizeZoom = fontSizeZoom(fontSize);
+
+  const collapsedSet = useMemo(() => new Set(collapsedCards || []), [collapsedCards]);
+
+  const toggleCollapse = useCallback((cardId: string) => {
+    if (!onCollapsedCardsChange) return;
+    const next = collapsedSet.has(cardId)
+      ? (collapsedCards || []).filter(k => k !== cardId)
+      : [...(collapsedCards || []), cardId];
+    onCollapsedCardsChange(next);
+  }, [collapsedCards, collapsedSet, onCollapsedCardsChange]);
 
   const scenarioDslMap = useMemo(() => {
     const m = new Map<string, string>();
@@ -237,18 +254,26 @@ export function AnalysisResultCards(props: {
 
   if (!renderedCards || renderedCards.length === 0) return null;
 
+  const collapsible = !!onCollapsedCardsChange;
+
   return (
-    <div className={`analytics-cards-container ${renderedCards.length === 1 ? 'single-card' : ''}`}>
-      {renderedCards.map((card: any) => (
+    <div className={`analytics-cards-container ${renderedCards.length === 1 ? 'single-card' : ''}`} style={sizeZoom !== 1 ? { zoom: sizeZoom } as any : undefined}>
+      {renderedCards.map((card: any) => {
+        const isCollapsed = collapsedSet.has(card.id);
+        return (
         <div
           key={card.id}
-          className={`analytics-card ${renderedCards.length === 1 ? 'full-width' : ''}`}
+          className={`analytics-card ${renderedCards.length === 1 ? 'full-width' : ''}${isCollapsed ? ' collapsed' : ''}`}
           style={card.colour ? { borderLeftColor: card.colour } : undefined}
         >
           <div
-            className="analytics-card-header"
+            className={`analytics-card-header${collapsible ? ' clickable' : ''}`}
             style={card.colour ? { borderLeftColor: card.colour } : undefined}
+            onClick={collapsible ? () => toggleCollapse(card.id) : undefined}
           >
+            {collapsible && (
+              <span className="analytics-card-chevron">{isCollapsed ? '\u25B6' : '\u25BC'}</span>
+            )}
             {card.colour && (
               <span
                 className="analytics-card-dot"
@@ -266,7 +291,7 @@ export function AnalysisResultCards(props: {
             </span>
           </div>
 
-          <div className="analytics-card-content">
+          {!isCollapsed && <div className="analytics-card-content">
             {/* Metric rows */}
             {card.metrics && card.metrics.map((m: any) => (
               <div
@@ -304,9 +329,10 @@ export function AnalysisResultCards(props: {
                 ))}
               </>
             )}
-          </div>
+          </div>}
         </div>
-      ))}
+        );
+      })}
     </div>
   );
 }

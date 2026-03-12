@@ -15,6 +15,7 @@ import toast from 'react-hot-toast';
 import { fileRegistry } from '../contexts/TabContext';
 import { useNavigatorContext } from '../contexts/NavigatorContext';
 import { historicalFileService, type CommitDateMap, type HistoricalCommit } from '../services/historicalFileService';
+import { operationRegistryService } from '../services/operationRegistryService';
 
 /** A menu-friendly representation of a historical commit date group */
 export interface HistoricalDateItem {
@@ -165,7 +166,8 @@ export function useOpenHistorical(fileId: string | undefined): UseOpenHistorical
     if (!fileId) return null;
 
     const file = fileRegistry.getFile(fileId);
-    const toastId = toast.loading(`Opening ${file?.name || fileId} at ${commit.dateUK}…`);
+    const opId = `open-historical:${fileId}:${commit.shortSha}`;
+    operationRegistryService.register({ id: opId, kind: 'open-historical', label: `Opening ${file?.name || fileId} at ${commit.dateUK}…`, status: 'running' });
 
     try {
       const tabId = await historicalFileService.openHistoricalVersion(
@@ -175,19 +177,17 @@ export function useOpenHistorical(fileId: string | undefined): UseOpenHistorical
       );
 
       if (tabId) {
-        toast.success(`Opened historical version (${commit.dateUK})`, { id: toastId });
+        operationRegistryService.setLabel(opId, `Opened historical version (${commit.dateUK})`);
+        operationRegistryService.complete(opId, 'complete');
         setIsCalendarOpen(false);
         setCommitDates(null);
       } else {
-        toast.error('Failed to open historical version', { id: toastId });
+        operationRegistryService.complete(opId, 'error', 'Failed to open historical version');
       }
 
       return tabId;
     } catch (error) {
-      toast.error(
-        `Failed to open historical version: ${error instanceof Error ? error.message : 'Unknown error'}`,
-        { id: toastId },
-      );
+      operationRegistryService.complete(opId, 'error', `Failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
       return null;
     }
   }, [fileId, navState.selectedRepo]);

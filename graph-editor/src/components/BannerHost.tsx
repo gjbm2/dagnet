@@ -26,6 +26,7 @@ export function BannerHost(): React.ReactElement | null {
           actionTitle={b.actionTitle}
           topPx={idx * rowHeight}
           zIndex={2000 - idx}
+          operationId={b.operationId}
         />
       ))}
     </>

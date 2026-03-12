@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { NodeProps, NodeResizer } from 'reactflow';
+import { NodeProps, NodeResizer, useViewport } from 'reactflow';
 import type { GraphData } from '@/types';
 import { PostItEditor } from './PostItEditor';
 import { useElementTool } from '../../contexts/ElementToolContext';
@@ -32,6 +32,7 @@ interface PostItNodeData {
 
 export default function PostItNode({ data, selected }: NodeProps<PostItNodeData>) {
   const { postit, onUpdate, onDelete } = data;
+  const { zoom } = useViewport();
   const { activeElementTool } = useElementTool();
   const { theme } = useTheme();
   const dark = theme === 'dark';
@@ -126,7 +127,7 @@ export default function PostItNode({ data, selected }: NodeProps<PostItNodeData>
         minHeight={80}
         lineStyle={{ display: 'none' }}
         handleStyle={{
-          width: '8px', height: '8px', borderRadius: '2px',
+          width: 8 / zoom, height: 8 / zoom, borderRadius: '2px',
           backgroundColor: '#3b82f6', border: '1px solid var(--bg-primary)',
         }}
         onResize={(_event, params) => {
@@ -143,9 +144,9 @@ export default function PostItNode({ data, selected }: NodeProps<PostItNodeData>
           onClick={(e) => { e.stopPropagation(); onDelete(postit.id); }}
           title="Delete post-it"
           style={{
-            position: 'absolute', top: -10, right: -10, width: '20px', height: '20px',
+            position: 'absolute', top: -10 / zoom, right: -10 / zoom, width: 20 / zoom, height: 20 / zoom,
             borderRadius: '50%', border: '1px solid var(--border-primary)', background: 'var(--bg-primary)',
-            color: 'var(--color-danger)', fontSize: '12px', lineHeight: '18px', textAlign: 'center',
+            color: 'var(--color-danger)', fontSize: 12 / zoom, lineHeight: `${18 / zoom}px`, textAlign: 'center',
             cursor: 'pointer', zIndex: 10, padding: 0, boxShadow: '0 1px 3px rgba(0,0,0,0.15)',
           }}
         >

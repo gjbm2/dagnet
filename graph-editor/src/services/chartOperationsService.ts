@@ -5,7 +5,7 @@ import { fileRegistry } from '../contexts/TabContext';
 import { sessionLogService } from './sessionLogService';
 import { db } from '../db/appDatabase';
 import type { ChartDepsStampV1 } from '../lib/chartDeps';
-import type { ChartRecipeCore, ChartRecipeScenario, ChartVisibilityMode } from '../types/chartRecipe';
+import type { ChartRecipeCore, ChartRecipeScenario, ChartVisibilityMode, ViewMode } from '../types/chartRecipe';
 import { chartDepsSignatureV1 } from '../lib/chartDeps';
 import { dslDependsOnReferenceDay } from '../lib/dslDynamics';
 import { ukReferenceDayService } from './ukReferenceDayService';
@@ -168,7 +168,7 @@ class ChartOperationsService {
     hideCurrent?: boolean;
     whatIfDsl?: string;
     /** Chart rendering spec (display settings, chart kind override, view mode) */
-    render?: { chart_kind?: string; view_mode?: 'chart' | 'cards'; display?: Record<string, unknown> };
+    render?: { chart_kind?: string; view_mode?: ViewMode; display?: Record<string, unknown> };
     /** @deprecated Use render.display instead */
     displaySettings?: Record<string, unknown>;
     /** @deprecated Use render.chart_kind instead */
@@ -215,7 +215,7 @@ class ChartOperationsService {
     scenarioDslSubtitleById?: Record<string, string>;
     hideCurrent?: boolean;
     whatIfDsl?: string;
-    render?: { chart_kind?: string; view_mode?: 'chart' | 'cards'; display?: Record<string, unknown> };
+    render?: { chart_kind?: string; view_mode?: ViewMode; display?: Record<string, unknown> };
     displaySettings?: Record<string, unknown>;
     chartKindOverride?: string;
     fileId?: string;

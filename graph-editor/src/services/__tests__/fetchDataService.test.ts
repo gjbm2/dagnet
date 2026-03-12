@@ -64,9 +64,13 @@ vi.mock('../../lib/queryDSL', async (importOriginal) => {
   };
 });
 
-vi.mock('../../components/ProgressToast', () => ({
-  showProgressToast: vi.fn(),
-  completeProgressToast: vi.fn(),
+vi.mock('../operationRegistryService', () => ({
+  operationRegistryService: {
+    register: vi.fn(),
+    setLabel: vi.fn(),
+    setProgress: vi.fn(),
+    complete: vi.fn(),
+  },
 }));
 
 import { fileRegistry } from '../../contexts/TabContext';

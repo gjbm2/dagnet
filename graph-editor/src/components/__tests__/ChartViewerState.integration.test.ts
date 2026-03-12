@@ -78,7 +78,7 @@ function deriveChartDef(chartData: any) {
   const defRecipe = def?.recipe || chartData?.recipe;
   return {
     title: def?.title || chartData?.title,
-    view_mode: (def?.view_mode || 'chart') as 'chart' | 'cards',
+    view_mode: (def?.view_mode || 'chart') as import('../../types/chartRecipe').ViewMode,
     chart_kind: def?.chart_kind || chartData?.chart_kind,
     display: { ...(chartData?.recipe?.display || {}), ...(def?.display || {}) },
     defRecipe,

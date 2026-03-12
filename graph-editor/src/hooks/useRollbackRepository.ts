@@ -13,6 +13,7 @@ import { useNavigatorContext } from '../contexts/NavigatorContext';
 import { gitService } from '../services/gitService';
 import { repositoryOperationsService } from '../services/repositoryOperationsService';
 import { credentialsManager } from '../lib/credentials';
+import { operationRegistryService } from '../services/operationRegistryService';
 
 export interface RepoCommit {
   sha: string;
@@ -144,26 +145,26 @@ export function useRollbackRepository(): UseRollbackRepositoryResult {
   }, [branch, setupGitCredentials]);
   
   const rollbackToCommit = useCallback(async (commitSha: string): Promise<boolean> => {
-    const toastId = toast.loading('Rolling back repository...');
-    
+    const opId = `repo-rollback:${commitSha.substring(0, 7)}:${Date.now()}`;
+    operationRegistryService.register({ id: opId, kind: 'repo-rollback', label: 'Rolling back repository…', status: 'running' });
+
     try {
-      // Use repositoryOperationsService.rollbackToCommit
-      // This fetches all files from the commit and updates local/IDB
       const result = await repositoryOperationsService.rollbackToCommit(
         navState.selectedRepo,
         branch,
         commitSha
       );
-      
+
       if (!result.success) {
-        toast.error('Failed to rollback repository', { id: toastId });
+        operationRegistryService.complete(opId, 'error', 'Failed to rollback repository');
         return false;
       }
-      
-      toast.success(`Rolled back ${result.filesChanged} files (Commit All to save, Pull All to revert)`, { id: toastId });
+
+      operationRegistryService.setLabel(opId, `Rolled back ${result.filesChanged} files`);
+      operationRegistryService.complete(opId, 'complete', 'Commit All to save, Pull All to revert');
       return true;
     } catch (error) {
-      toast.error(`Rollback failed: ${error instanceof Error ? error.message : 'Unknown error'}`, { id: toastId });
+      operationRegistryService.complete(opId, 'error', `Rollback failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
       return false;
     }
   }, [navState.selectedRepo, branch]);

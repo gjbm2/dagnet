@@ -19,9 +19,13 @@ import type { Graph } from '../../types';
 import { parseDate } from '../windowAggregationService';
 import { RECENCY_HALF_LIFE_DAYS } from '../../constants/latency';
 
-vi.mock('../../components/ProgressToast', () => ({
-  showProgressToast: vi.fn(),
-  completeProgressToast: vi.fn(),
+vi.mock('../operationRegistryService', () => ({
+  operationRegistryService: {
+    register: vi.fn(),
+    setLabel: vi.fn(),
+    setProgress: vi.fn(),
+    complete: vi.fn(),
+  },
 }));
 
 describe('cohort() mode: simple edges fetch/aggregate as cohort()', () => {

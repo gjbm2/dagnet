@@ -18,6 +18,7 @@ import { repositoryOperationsService } from '../services/repositoryOperationsSer
 import toast from 'react-hot-toast';
 import { APP_VERSION } from '../version';
 import { bannerManagerService } from '../services/bannerManagerService';
+import { startNonBlockingPull, cancelNonBlockingPull, isNonBlockingPullActive } from '../services/nonBlockingPullService';
 
 export interface UseStalenessNudgesResult {
   /** Must be rendered somewhere (for pull conflict resolution UI). */
@@ -266,6 +267,9 @@ export function useStalenessNudges(): UseStalenessNudgesResult {
       }
     }
 
+    // Safety: if a non-blocking pull countdown is also running, kill it.
+    cancelNonBlockingPull();
+
     closeModal();
   }, [modalActions, navState.selectedRepo, navState.selectedBranch, retrieveTargetGraphFileId, closeModal, shareMode]);
 
@@ -296,6 +300,9 @@ export function useStalenessNudges(): UseStalenessNudgesResult {
         { repository: repo, branch, remoteSha }
       );
     }
+
+    // Safety: if a non-blocking pull countdown is also running, kill it.
+    cancelNonBlockingPull();
 
     closeModal();
   }, [navState.selectedRepo, navState.selectedBranch, closeModal, shareMode]);
@@ -609,12 +616,51 @@ export function useStalenessNudges(): UseStalenessNudgesResult {
         return;
       }
 
+      // ---- Non-blocking path: git-pull without reload ----
+      // When only git-pull is due (no reload), skip the modal entirely.
+      // Show a countdown in the OperationsToast; auto-pull on expiry.
+      if (gitPullDue && !reloadDue && detectedRemoteSha && repository) {
+        if (plan?.steps?.reload?.status === 'due') {
+          // Strict cascade: reload trumps pull.
+        } else {
+          const pullScope = `${repository}-${branch}`;
+          if (!stalenessNudgeService.isSnoozed('git-pull', pullScope, Date.now(), storage) && !isNonBlockingPullActive()) {
+            startNonBlockingPull({
+              repository,
+              branch,
+              remoteSha: detectedRemoteSha,
+              onDismiss: () => {
+                // Record SHA as dismissed so we don't re-prompt until next commit.
+                if (detectedRemoteSha) {
+                  stalenessNudgeService.dismissRemoteSha(repository, branch, detectedRemoteSha, storage);
+                }
+              },
+              onComplete: () => {
+                // Clear dismissed SHA so next remote commit triggers a new nudge.
+                stalenessNudgeService.clearDismissedRemoteSha(repository, branch, storage);
+                // Cascade: if retrieve-all is also due, run it non-blocking via operation registry.
+                if (retrieveDue && retrieveTargetGraphFileId && tabOperations?.updateTabData) {
+                  void executeRetrieveAllSlicesWithProgressToast({
+                    getGraph: () => (fileRegistry.getFile(retrieveTargetGraphFileId) as any)?.data || null,
+                    setGraph: (g) => tabOperations.updateTabData(retrieveTargetGraphFileId, g),
+                    toastId: `cascade-retrieve:${retrieveTargetGraphFileId}`,
+                    toastLabel: 'Retrieve All (post-pull)',
+                  });
+                }
+              },
+            });
+          }
+          // Non-blocking path handles pull and cascaded retrieve — no modal needed.
+          return;
+        }
+      }
+
+      // ---- Modal path: reload needed, or retrieve-only ----
       isModalOpenRef.current = true;
       setIsModalOpen(true);
 
-      // Start countdown if git-pull is due (remote is ahead)
+      // Start countdown if git-pull is due (remote is ahead) — modal-based fallback
       if (gitPullDue && detectedRemoteSha) {
-        // Strict cascade: do not start auto-pull countdown if update is due.
         if (plan?.steps?.reload?.status === 'due') return;
         const pullScope = repository
           ? (isShareLive && graph ? `${repository}-${branch}-${graph}` : `${repository}-${branch}`)
@@ -645,6 +691,7 @@ export function useStalenessNudges(): UseStalenessNudgesResult {
 
   // Cleanup: ensure countdown timer is cancelled on unmount.
   useEffect(() => stopCountdown, [stopCountdown]);
+  useEffect(() => cancelNonBlockingPull, []);
 
   // Run on key "user is back" moments.
   useEffect(() => {

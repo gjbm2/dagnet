@@ -173,10 +173,14 @@ function CanvasAnalysisPropertiesSection({ analysisId, graph, setGraph, saveHist
     setGraph(nextGraph);
   }, [graph, setGraph, analysisId]);
 
-  const updateDisplaySetting = useCallback((key: string, value: any) => {
+  const updateDisplaySetting = useCallback((keyOrBatch: string | Record<string, any>, value?: any) => {
     const nextGraph = mutateCanvasAnalysisGraph(graph, analysisId, (a) => {
       if (!a.display) a.display = {};
-      (a.display as any)[key] = value;
+      if (typeof keyOrBatch === 'object') {
+        Object.assign(a.display as any, keyOrBatch);
+      } else {
+        (a.display as any)[keyOrBatch] = value;
+      }
     });
     if (!nextGraph) return;
     setGraph(nextGraph);
@@ -474,6 +478,7 @@ function CanvasAnalysisPropertiesSection({ analysisId, graph, setGraph, saveHist
           if (a) {
             if (a.recipe?.analysis) a.recipe.analysis.analysis_type = analysisType;
             a.analysis_type_overridden = true;
+            a.chart_kind = undefined;
             if (nextGraph.metadata) nextGraph.metadata.updated_at = new Date().toISOString();
             setGraph(nextGraph);
             saveHistoryState('Update analysis type');

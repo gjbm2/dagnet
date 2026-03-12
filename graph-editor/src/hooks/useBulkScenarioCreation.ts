@@ -17,6 +17,7 @@
 import { useState, useCallback } from 'react';
 import toast from 'react-hot-toast';
 import { useScenariosContextOptional, SCENARIO_PALETTE } from '../contexts/ScenariosContext';
+import { operationRegistryService } from '../services/operationRegistryService';
 import { Scenario } from '../types/scenarios';
 import { useTabContext } from '../contexts/TabContext';
 import { contextRegistry } from '../services/contextRegistry';
@@ -128,68 +129,66 @@ export function useBulkScenarioCreation(tabIdOverride?: string): UseBulkScenario
       scenariosContext.setBaseDSL(newBaseDSL);
     }
     
-    const toastId = toast.loading(`Creating scenarios (0/${valueIds.length})...`);
+    const opId = `bulk-scenario:context:${Date.now()}`;
+    const total = valueIds.length;
+    operationRegistryService.register({
+      id: opId, kind: 'bulk-scenario', label: `Creating scenarios (0/${total})…`,
+      status: 'running', progress: { current: 0, total: total * 2 },
+    });
     const createdScenarios: Scenario[] = [];
     const colours = getAssignedColours(valueIds.length);
 
     try {
       // PHASE 1: Create all scenarios
       for (let i = 0; i < valueIds.length; i++) {
-        toast.loading(`Creating scenarios (${i + 1}/${valueIds.length})...`, { id: toastId });
-        
+        operationRegistryService.setLabel(opId, `Creating scenarios (${i + 1}/${total})…`);
+        operationRegistryService.setProgress(opId, { current: i + 1, total: total * 2 });
+
         const queryDSL = `context(${contextKey}:${valueIds[i]})`;
-        // We await creation to ensure ID generation doesn't collide if using time-based IDs
-        // and to maintain order in the list
         const scenario = await scenariosContext.createLiveScenario(
-          queryDSL, 
-          undefined, 
-          effectiveTabId, 
+          queryDSL,
+          undefined,
+          effectiveTabId,
           colours[i]
         );
         createdScenarios.push(scenario);
       }
 
       // PHASE 2: Update Visibility ATOMICALLY
-      // Use addVisibleScenarios which uses functional state updates
-      // to avoid stale closure issues when called rapidly
       const newScenarioIds = createdScenarios.map(s => s.id);
       await operations.addVisibleScenarios(effectiveTabId, newScenarioIds);
 
       // PHASE 3: Regenerate Data
-      // We must pass the FULL list of scenarios (existing + created) to ensure proper inheritance
-      // because the context state won't have updated yet.
       const existingScenarios = scenariosContext.scenarios || [];
-      const allScenarios = [...[...createdScenarios].reverse(), ...existingScenarios]; // Newest first
-      
-      // Get the visible order from tab state
+      const allScenarios = [...[...createdScenarios].reverse(), ...existingScenarios];
+
       const scenarioState = operations.getScenarioState(effectiveTabId);
       const existingVisibleIds = scenarioState?.visibleScenarioIds || [];
-      // New scenarios are added at the front (top of stack)
       const visibleOrder = [...newScenarioIds, ...existingVisibleIds];
 
       for (let i = 0; i < createdScenarios.length; i++) {
-        const scenario = createdScenarios[i]; // Note: iterating original creation order (oldest -> newest in this batch)
-        toast.loading(`Fetching data (${i + 1}/${createdScenarios.length})...`, { id: toastId });
-        
+        const scenario = createdScenarios[i];
+        operationRegistryService.setLabel(opId, `Fetching data (${i + 1}/${createdScenarios.length})…`);
+        operationRegistryService.setProgress(opId, { current: total + i + 1, total: total * 2 });
+
         await scenariosContext.regenerateScenario(
-          scenario.id, 
-          scenario, 
+          scenario.id,
+          scenario,
           newBaseDSL || undefined,
           allScenarios,
           visibleOrder
         );
       }
 
-      toast.success(`Created ${createdScenarios.length} scenarios`);
+      operationRegistryService.setLabel(opId, `Created ${createdScenarios.length} scenarios`);
+      operationRegistryService.complete(opId, 'complete');
       setBulkCreateModal(null);
       return createdScenarios.length;
 
     } catch (err) {
       console.error('Bulk creation failed:', err);
-      toast.error('Failed to complete bulk creation');
-      return createdScenarios.length; // Return partial success count
-    } finally {
-      toast.dismiss(toastId);
+      operationRegistryService.complete(opId, 'error', 'Failed to complete bulk creation');
+      return createdScenarios.length;
     }
   }, [scenariosContext, effectiveTabId, operations, getAssignedColours]);
   
@@ -222,65 +221,67 @@ export function useBulkScenarioCreation(tabIdOverride?: string): UseBulkScenario
 
     const dateMode = inferDateModeFromDSL(currentDSL);
     
-    const toastId = toast.loading(`Creating scenarios (0/${windowDSLs.length})...`);
+    const opId = `bulk-scenario:window:${Date.now()}`;
+    const total = windowDSLs.length;
+    operationRegistryService.register({
+      id: opId, kind: 'bulk-scenario', label: `Creating scenarios (0/${total})…`,
+      status: 'running', progress: { current: 0, total: total * 2 },
+    });
     const createdScenarios: Scenario[] = [];
     const colours = getAssignedColours(windowDSLs.length);
-    
+
     try {
       // PHASE 1: Create
       for (let i = 0; i < windowDSLs.length; i++) {
-        toast.loading(`Creating scenarios (${i + 1}/${windowDSLs.length})...`, { id: toastId });
+        operationRegistryService.setLabel(opId, `Creating scenarios (${i + 1}/${total})…`);
+        operationRegistryService.setProgress(opId, { current: i + 1, total: total * 2 });
 
         // CRITICAL: Do not create mixed-mode DSLs (cohort + window) – normalise to current mode.
         const queryDSL = normaliseScenarioDateRangeDSL(windowDSLs[i], dateMode);
 
         const scenario = await scenariosContext.createLiveScenario(
-          queryDSL, 
-          undefined, 
-          effectiveTabId, 
+          queryDSL,
+          undefined,
+          effectiveTabId,
           colours[i]
         );
         createdScenarios.push(scenario);
       }
-      
+
       // PHASE 2: Visibility
-      // Use addVisibleScenarios which uses functional state updates
-      // to avoid stale closure issues when called rapidly
       const newScenarioIds = createdScenarios.map(s => s.id);
       await operations.addVisibleScenarios(effectiveTabId, newScenarioIds);
-      
+
       // PHASE 3: Regenerate
       const existingScenarios = scenariosContext.scenarios || [];
       const allScenarios = [...[...createdScenarios].reverse(), ...existingScenarios];
-      
-      // Get the visible order from tab state
+
       const scenarioState = operations.getScenarioState(effectiveTabId);
       const existingVisibleIds = scenarioState?.visibleScenarioIds || [];
-      // New scenarios are added at the front (top of stack)
       const visibleOrder = [...newScenarioIds, ...existingVisibleIds];
 
       for (let i = 0; i < createdScenarios.length; i++) {
         const scenario = createdScenarios[i];
-        toast.loading(`Fetching data (${i + 1}/${createdScenarios.length})...`, { id: toastId });
-        
+        operationRegistryService.setLabel(opId, `Fetching data (${i + 1}/${createdScenarios.length})…`);
+        operationRegistryService.setProgress(opId, { current: total + i + 1, total: total * 2 });
+
         await scenariosContext.regenerateScenario(
-          scenario.id, 
-          scenario, 
+          scenario.id,
+          scenario,
           newBaseDSL || undefined,
           allScenarios,
           visibleOrder
         );
       }
-      
-      toast.success(`Created ${createdScenarios.length} scenarios`);
+
+      operationRegistryService.setLabel(opId, `Created ${createdScenarios.length} scenarios`);
+      operationRegistryService.complete(opId, 'complete');
       return createdScenarios.length;
-      
+
     } catch (err) {
       console.error('Bulk creation failed:', err);
-      toast.error('Failed to create scenarios');
+      operationRegistryService.complete(opId, 'error', 'Failed to create scenarios');
       return createdScenarios.length;
-    } finally {
-      toast.dismiss(toastId);
     }
   }, [scenariosContext, effectiveTabId, operations, getAssignedColours]);
   

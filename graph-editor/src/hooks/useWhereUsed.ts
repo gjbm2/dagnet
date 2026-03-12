@@ -6,9 +6,9 @@
  */
 
 import { useState, useCallback } from 'react';
-import toast from 'react-hot-toast';
 import { useTabContext } from '../contexts/TabContext';
 import { WhereUsedService } from '../services/whereUsedService';
+import { operationRegistryService } from '../services/operationRegistryService';
 
 interface UseWhereUsedResult {
   /** Find where the file is used */
@@ -40,27 +40,21 @@ export function useWhereUsed(fileId: string | undefined): UseWhereUsedResult {
     if (!fileId || isSearching || !canSearch) return;
     
     setIsSearching(true);
-    const toastId = toast.loading('Searching for references...');
-    
+    const opId = `where-used:${fileId}:${Date.now()}`;
+    operationRegistryService.register({ id: opId, kind: 'where-used', label: 'Searching for references…', status: 'running' });
+
     try {
       const result = await WhereUsedService.findReferences(fileId, operations, true);
-      
+
       if (result.references.length === 0) {
-        toast.success(
-          `No references found for "${result.targetId}"`,
-          { id: toastId }
-        );
+        operationRegistryService.setLabel(opId, `No references found for "${result.targetId}"`);
+        operationRegistryService.complete(opId, 'complete');
       } else {
-        toast.success(
-          `Found ${result.references.length} reference(s) - see report`,
-          { id: toastId }
-        );
+        operationRegistryService.setLabel(opId, `Found ${result.references.length} reference(s) — see report`);
+        operationRegistryService.complete(opId, 'complete');
       }
     } catch (error) {
-      toast.error(
-        `Search failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
-        { id: toastId }
-      );
+      operationRegistryService.complete(opId, 'error', `Search failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
     } finally {
       setIsSearching(false);
     }

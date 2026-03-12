@@ -12,7 +12,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { constructQueryDSL } from '../dslConstruction';
+import { constructQueryDSL, constructDSLFromSelection } from '../dslConstruction';
 
 // Helper to create mock nodes
 function createNode(id: string, opts: { isEntry?: boolean; isAbsorbing?: boolean; uuid?: string } = {}) {
@@ -346,10 +346,159 @@ describe('constructQueryDSL', () => {
         createNode('b'),
       ];
       const edges: any[] = []; // No edges
-      
+
       const result = constructQueryDSL(['a', 'b'], nodes, edges);
       // Neither can reach the other, both are "absorbing" (no outgoing edges)
       expect(result).toBe('visitedAny(a,b)');
+    });
+  });
+});
+
+// ============================================================
+// constructDSLFromSelection — end-to-end tests covering the
+// full entry point (node selection + edge selection + format mapping)
+// ============================================================
+
+/** Graph-store node format (no .data wrapper, has .uuid and .id) */
+function graphStoreNode(id: string, uuid: string, opts: { isEntry?: boolean; isAbsorbing?: boolean } = {}) {
+  return {
+    id,
+    uuid,
+    label: id,
+    entry: opts.isEntry ? { is_start: true, entry_weight: 1.0 } : undefined,
+    absorbing: opts.isAbsorbing || false,
+  } as any;
+}
+
+/** ReactFlow node format (.data wrapper, RF id = uuid) */
+function rfNode(id: string, uuid: string, opts: { isEntry?: boolean; isAbsorbing?: boolean; selected?: boolean } = {}) {
+  return {
+    id: uuid,       // ReactFlow uses UUID as node ID
+    selected: opts.selected ?? false,
+    data: {
+      id,            // Human-readable ID
+      uuid,
+      entry: opts.isEntry ? { is_start: true, entry_weight: 1.0 } : undefined,
+      absorbing: opts.isAbsorbing || false,
+    },
+  } as any;
+}
+
+/** Graph-store edge format (from/to are UUIDs) */
+function graphStoreEdge(fromUuid: string, toUuid: string, uuid?: string) {
+  return {
+    uuid: uuid || `edge-${fromUuid}-${toUuid}`,
+    from: fromUuid,
+    to: toUuid,
+    p: { mean: 0.5 },
+  } as any;
+}
+
+describe('constructDSLFromSelection', () => {
+  // Simple funnel: A → B → C (3 consecutive nodes)
+  const uuidA = 'uuid-a';
+  const uuidB = 'uuid-b';
+  const uuidC = 'uuid-c';
+
+  describe('with graph-store format nodes (AnalyticsPanel path)', () => {
+    const gsNodes = [
+      graphStoreNode('switch-registered', uuidA, { isEntry: true }),
+      graphStoreNode('switch-activated', uuidB),
+      graphStoreNode('switch-success', uuidC, { isAbsorbing: true }),
+    ];
+    const gsEdges = [
+      graphStoreEdge(uuidA, uuidB),
+      graphStoreEdge(uuidB, uuidC),
+    ];
+
+    it('should produce DSL for 3 consecutive nodes selected by human-readable IDs', () => {
+      const dsl = constructDSLFromSelection(
+        ['switch-registered', 'switch-activated', 'switch-success'],
+        [],
+        gsNodes,
+        gsEdges,
+      );
+      expect(dsl).toBe('from(switch-registered).to(switch-success).visited(switch-activated)');
+    });
+
+    it('should produce DSL for 2 endpoint nodes', () => {
+      const dsl = constructDSLFromSelection(
+        ['switch-registered', 'switch-success'],
+        [],
+        gsNodes,
+        gsEdges,
+      );
+      expect(dsl).toBe('from(switch-registered).to(switch-success)');
+    });
+
+    it('should produce DSL for single node', () => {
+      const dsl = constructDSLFromSelection(
+        ['switch-activated'],
+        [],
+        gsNodes,
+        gsEdges,
+      );
+      expect(dsl).toBe('visited(switch-activated)');
+    });
+
+    it('should produce DSL for single entry node', () => {
+      const dsl = constructDSLFromSelection(
+        ['switch-registered'],
+        [],
+        gsNodes,
+        gsEdges,
+      );
+      expect(dsl).toBe('from(switch-registered)');
+    });
+
+    it('should produce empty string for empty selection', () => {
+      const dsl = constructDSLFromSelection([], [], gsNodes, gsEdges);
+      expect(dsl).toBe('');
+    });
+
+    it('should produce DSL from single edge selection (by UUID)', () => {
+      const edgeUuid = gsEdges[0].uuid;
+      const dsl = constructDSLFromSelection([], [edgeUuid], gsNodes, gsEdges);
+      expect(dsl).toBe('from(switch-registered).to(switch-activated)');
+    });
+  });
+
+  describe('with ReactFlow format nodes (startAddChart path)', () => {
+    const rfNodes = [
+      rfNode('switch-registered', uuidA, { isEntry: true }),
+      rfNode('switch-activated', uuidB),
+      rfNode('switch-success', uuidC, { isAbsorbing: true }),
+    ];
+    const gsEdges = [
+      graphStoreEdge(uuidA, uuidB),
+      graphStoreEdge(uuidB, uuidC),
+    ];
+
+    it('should produce DSL for 3 consecutive nodes selected by human-readable IDs', () => {
+      const dsl = constructDSLFromSelection(
+        ['switch-registered', 'switch-activated', 'switch-success'],
+        [],
+        rfNodes,
+        gsEdges,
+      );
+      expect(dsl).toBe('from(switch-registered).to(switch-success).visited(switch-activated)');
+    });
+
+    it('should produce DSL for single right-clicked node (contextNodeIds)', () => {
+      // Simulates right-clicking a node: contextNodeIds = [humanId]
+      const dsl = constructDSLFromSelection(
+        ['switch-activated'],
+        [],
+        rfNodes,
+        gsEdges,
+      );
+      expect(dsl).toBe('visited(switch-activated)');
+    });
+
+    it('should produce DSL from single edge selection', () => {
+      const edgeUuid = gsEdges[0].uuid;
+      const dsl = constructDSLFromSelection([], [edgeUuid], rfNodes, gsEdges);
+      expect(dsl).toBe('from(switch-registered).to(switch-activated)');
     });
   });
 });

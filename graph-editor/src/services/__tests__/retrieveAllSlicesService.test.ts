@@ -29,9 +29,13 @@ vi.mock('../lagHorizonsService', () => {
   };
 });
 
-vi.mock('../../components/ProgressToast', () => ({
-  showProgressToast: vi.fn(),
-  completeProgressToast: vi.fn(),
+vi.mock('../operationRegistryService', () => ({
+  operationRegistryService: {
+    register: vi.fn(),
+    setLabel: vi.fn(),
+    setProgress: vi.fn(),
+    complete: vi.fn(),
+  },
 }));
 
 vi.mock('../snapshotWriteService', () => ({
@@ -42,7 +46,7 @@ vi.mock('../coreHashService', () => ({
   computeShortCoreHash: vi.fn().mockResolvedValue('mock-core-hash'),
 }));
 
-import { completeProgressToast, showProgressToast } from '../../components/ProgressToast';
+import { operationRegistryService } from '../operationRegistryService';
 import { executeRetrieveAllSlicesWithProgressToast, retrieveAllSlicesService } from '../retrieveAllSlicesService';
 import { dataOperationsService } from '../dataOperationsService';
 import { buildFetchPlanProduction } from '../fetchPlanBuilderService';
@@ -1020,17 +1024,11 @@ describe('retrieveAllSlicesService', () => {
     expect(res.totalCacheHits).toBe(0);
     expect(res.totalApiFetches).toBe(1);
     expect(res.totalDaysFetched).toBe(5);
-    expect(showProgressToast).toHaveBeenCalled();
-    // New toast format includes cached/fetched stats
-    expect(completeProgressToast).toHaveBeenCalledWith(
-      'retrieve-all-test',
-      expect.stringContaining('0 cached'),
-      false
-    );
-    expect(completeProgressToast).toHaveBeenCalledWith(
-      'retrieve-all-test',
-      expect.stringContaining('1 fetched'),
-      false
+    expect(operationRegistryService.register).toHaveBeenCalled();
+    expect(operationRegistryService.complete).toHaveBeenCalledWith(
+      'retrieve-all:retrieve-all-test',
+      'complete',
+      undefined
     );
   });
 

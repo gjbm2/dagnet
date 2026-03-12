@@ -1,5 +1,5 @@
 import React, { useRef, useEffect } from 'react';
-import { NodeProps, NodeResizer } from 'reactflow';
+import { NodeProps, NodeResizer, useViewport } from 'reactflow';
 import type { Container } from '@/types';
 import { InlineEditableLabel } from '../InlineEditableLabel';
 
@@ -29,6 +29,7 @@ function hexToRgb(hex: string): [number, number, number] {
 
 export default function ContainerNode({ data, selected }: NodeProps<ContainerNodeData>) {
   const { container, onUpdate, onDelete } = data;
+  const { zoom } = useViewport();
   const resizeTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   useEffect(() => {
@@ -48,7 +49,7 @@ export default function ContainerNode({ data, selected }: NodeProps<ContainerNod
         minHeight={120}
         lineStyle={{ display: 'none' }}
         handleStyle={{
-          width: '8px', height: '8px', borderRadius: '2px',
+          width: 8 / zoom, height: 8 / zoom, borderRadius: '2px',
           backgroundColor: container.colour, border: '1px solid var(--bg-primary)',
         }}
         onResize={(_event, params) => {
@@ -65,9 +66,9 @@ export default function ContainerNode({ data, selected }: NodeProps<ContainerNod
           onClick={(e) => { e.stopPropagation(); onDelete(container.id); }}
           title="Delete container"
           style={{
-            position: 'absolute', top: -10, right: -10, width: '20px', height: '20px',
+            position: 'absolute', top: -10 / zoom, right: -10 / zoom, width: 20 / zoom, height: 20 / zoom,
             borderRadius: '50%', border: '1px solid var(--border-primary)', background: 'var(--bg-primary)',
-            color: 'var(--color-danger)', fontSize: '12px', lineHeight: '18px', textAlign: 'center',
+            color: 'var(--color-danger)', fontSize: 12 / zoom, lineHeight: `${18 / zoom}px`, textAlign: 'center',
             cursor: 'pointer', zIndex: 10, padding: 0, boxShadow: '0 1px 3px rgba(0,0,0,0.15)',
             pointerEvents: 'auto',
           }}

@@ -651,6 +651,22 @@ export function useGraphStore<T = GraphStore>(
 }
 
 /**
+ * Imperative store API hook — returns the raw Zustand store handle.
+ *
+ * Use this when you need `.getState()` or `.subscribe()` for imperative
+ * access without causing reactive re-renders. Unlike `useGraphStore(selector)`,
+ * this never subscribes to state changes — calling `.getState()` reads the
+ * latest snapshot on demand.
+ */
+export function useGraphStoreApi() {
+  const store = useContext(GraphStoreContext);
+  if (!store) {
+    throw new Error('useGraphStoreApi must be used within GraphStoreProvider');
+  }
+  return store;
+}
+
+/**
  * Optional Graph Store hook
  *
  * Some UI surfaces (e.g. global menu-driven modals rendered via portals) can be mounted

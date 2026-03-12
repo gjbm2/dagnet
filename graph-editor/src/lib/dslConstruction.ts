@@ -245,14 +245,15 @@ function computePredicates(
   }
   
   for (const nodeId of selectedNodeIds) {
-    const node = nodeMap.get(nodeId);
+    const node: any = nodeMap.get(nodeId);
     if (!node) {
       nodeTypes[nodeId] = 'unknown';
       continue;
     }
-    
-    const isEntry = node.data?.entry?.is_start === true;
-    const isAbsorbing = !!node.data?.absorbing ||
+
+    // Support both ReactFlow format (node.data.entry) and graph-store format (node.entry)
+    const isEntry = (node.data?.entry?.is_start === true) || (node.entry?.is_start === true);
+    const isAbsorbing = !!node.data?.absorbing || !!node.absorbing ||
       !edges.some(e => e.source === nodeId);
     
     if (isEntry) {

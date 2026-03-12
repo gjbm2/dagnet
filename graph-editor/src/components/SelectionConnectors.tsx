@@ -9,6 +9,7 @@
 import React, { useMemo, useEffect, useRef } from 'react';
 import { useViewport, useNodes, useReactFlow } from 'reactflow';
 import { parseDSL } from '../lib/queryDSL';
+import { useDecorationVisibility } from './GraphCanvas';
 
 const DEFAULT_COLOUR = '#9ca3af';
 const MIN_RADIUS = 80;
@@ -22,7 +23,12 @@ interface TubeSegment {
 
 const TRANSIT_RADIUS = 10;
 
-function findPath(
+/**
+ * BFS shortest path from `fromId` to `toId` using human-readable node IDs.
+ * `nodeUuidToId` maps graph edge UUIDs to human IDs.
+ * Returns the full path as an array of human IDs, or null if no path exists.
+ */
+export function findPath(
   fromId: string, toId: string,
   graphEdges: Array<{ from: string; to: string }>,
   nodeUuidToId: Map<string, string>,
@@ -51,6 +57,109 @@ function findPath(
     }
   }
   return null;
+}
+
+export interface ResolvedShapeNodes {
+  /** All node IDs on the BFS path (from→to), including transit nodes. */
+  connectedIds: string[];
+  /** Node IDs that couldn't be connected via a path (e.g. from-only, to-only, no path). */
+  disconnectedIds: string[];
+  /** Only the DSL-referenced node IDs (from, to, visited) — NOT transit nodes. */
+  referencedOnPath: Set<string>;
+}
+
+/**
+ * Resolve a DSL string into lists of connected/disconnected/referenced node IDs.
+ * Pure function — no React or DOM dependencies.
+ */
+export function resolveShapeNodes(
+  dsl: string,
+  graphEdges: Array<{ from: string; to: string }>,
+  nodeUuidToId: Map<string, string>,
+): ResolvedShapeNodes {
+  const parsed = parseDSL(dsl);
+
+  let connectedIds: string[] = [];
+  let disconnectedIds: string[] = [];
+  let referencedOnPath = new Set<string>();
+
+  if (parsed.from && parsed.to) {
+    const fullPath = findPath(parsed.from, parsed.to, graphEdges, nodeUuidToId);
+    if (fullPath) {
+      referencedOnPath = new Set<string>([parsed.from, parsed.to, ...(parsed.visited || [])]);
+      connectedIds = fullPath;
+    } else {
+      disconnectedIds = [parsed.from, parsed.to];
+    }
+  } else if (parsed.from) {
+    disconnectedIds = [parsed.from];
+  } else if (parsed.to) {
+    disconnectedIds = [parsed.to];
+  }
+
+  for (const v of parsed.visited || []) {
+    if (!connectedIds.includes(v) && !disconnectedIds.includes(v)) disconnectedIds.push(v);
+  }
+  for (const group of parsed.visitedAny || []) {
+    for (const nodeId of group) {
+      if (!connectedIds.includes(nodeId) && !disconnectedIds.includes(nodeId)) disconnectedIds.push(nodeId);
+    }
+  }
+
+  return { connectedIds, disconnectedIds, referencedOnPath };
+}
+
+// ---------------------------------------------------------------------------
+// Visibility filter — the ONE place that decides which analyses to display.
+// Every analysis that passes this filter gets identical treatment downstream:
+// SVG shapes, connector lines, AND node halos. No branching.
+// ---------------------------------------------------------------------------
+
+export interface AnalysisVisibilityInput {
+  id: string;
+  display?: { show_subject_overlay?: boolean; subject_overlay_colour?: string };
+  chart_current_layer_dsl?: string;
+  recipe?: { analysis?: { analytics_dsl?: string } };
+}
+
+/**
+ * Determine which analyses should be displayed. ONE filter, used everywhere.
+ * Three triggers, each identifying a SPECIFIC analysis:
+ *   1. selectedAnalysisId — the analysis the user clicked/selected
+ *   2. draggedAnalysisId — the analysis currently being dragged
+ *   3. persisted overlay — analysis.display.show_subject_overlay === true
+ * Returns the IDs of analyses that should show shapes + connectors + halos.
+ * All visible analyses go through ONE rendering codepath downstream.
+ */
+export function getVisibleAnalysisIds(
+  analyses: AnalysisVisibilityInput[],
+  selectedAnalysisId: string | null,
+  draggedAnalysisId: string | null,
+): Set<string> {
+  const visible = new Set<string>();
+  for (const a of analyses) {
+    if (a.id === selectedAnalysisId) { visible.add(a.id); continue; }
+    if (a.id === draggedAnalysisId) { visible.add(a.id); continue; }
+    if (a.display?.show_subject_overlay === true) { visible.add(a.id); continue; }
+  }
+  return visible;
+}
+
+/**
+ * Compute halo node IDs from a set of shapes. No branching — every shape
+ * in the input contributes its referencedCentres to halos.
+ */
+export function computeHaloNodeIds(
+  shapes: Array<{ referencedNodeIds: string[]; colour: string }>,
+): Map<string, string[]> {
+  const map = new Map<string, string[]>();
+  for (const shape of shapes) {
+    for (const nodeId of shape.referencedNodeIds) {
+      if (!map.has(nodeId)) map.set(nodeId, []);
+      if (!map.get(nodeId)!.includes(shape.colour)) map.get(nodeId)!.push(shape.colour);
+    }
+  }
+  return map;
 }
 
 function closestPointOnRect(
@@ -112,12 +221,13 @@ function closestPointOnShape(
 interface ShapeData {
   id: string;
   isSelected: boolean;
-  isPersisted: boolean;
   tubeSegments: TubeSegment[];
   nodes: Array<{ centre: Point; radius: number }>;
   connectedNodes: Array<{ centre: Point; radius: number }>;
   disconnectedNodes: Array<{ centre: Point; radius: number }>;
   centres: Point[];
+  /** Human IDs of DSL-referenced nodes — used for halo highlights. */
+  referencedNodeIds: string[];
   cx: number;
   cy: number;
   minRadius: number;
@@ -128,29 +238,21 @@ interface ShapeData {
 export function SelectionConnectors({ graph }: { graph: any }) {
   const viewport = useViewport();
   const rfNodes = useNodes();
+  const { draggedAnalysisId } = useDecorationVisibility();
 
   const selectedAnalysisId = useMemo(() => {
     const selected = rfNodes.find(n => n.selected && n.id?.startsWith('analysis-'));
     return selected ? selected.id.replace('analysis-', '') : null;
   }, [rfNodes]);
 
-  const visibleAnalyses = useMemo(() => {
-    if (!graph?.canvasAnalyses?.length) return [];
-    return (graph.canvasAnalyses as any[]).filter((a: any) => {
-      if (a.id === selectedAnalysisId) return true;
-      return a.display?.show_subject_overlay === true;
-    }).map((a: any) => {
-      const dsl = a.chart_current_layer_dsl || a.recipe?.analysis?.analytics_dsl;
-      if (!dsl) return null;
-      const rfNode = rfNodes.find(n => n.id === `analysis-${a.id}`);
-      const colour = a.display?.subject_overlay_colour || DEFAULT_COLOUR;
-      const isPersisted = a.display?.show_subject_overlay === true;
-      return { id: a.id, dsl, rfNode, isSelected: a.id === selectedAnalysisId, isPersisted, colour };
-    }).filter(Boolean) as Array<{ id: string; dsl: string; rfNode: any; isSelected: boolean; isPersisted: boolean; colour: string }>;
-  }, [graph, rfNodes, selectedAnalysisId]);
+  // ONE visibility decision — three triggers, same rendering codepath.
+  const visibleIds = useMemo(() => {
+    if (!graph?.canvasAnalyses?.length) return new Set<string>();
+    return getVisibleAnalysisIds(graph.canvasAnalyses, selectedAnalysisId, draggedAnalysisId);
+  }, [graph?.canvasAnalyses, selectedAnalysisId, draggedAnalysisId]);
 
   const allShapes = useMemo((): ShapeData[] => {
-    if (!graph) return [];
+    if (!graph || visibleIds.size === 0) return [];
     const nodeUuidToId = new Map<string, string>();
     for (const n of graph.nodes || []) { if (n.uuid && n.id) nodeUuidToId.set(n.uuid, n.id); }
 
@@ -171,99 +273,97 @@ export function SelectionConnectors({ graph }: { graph: any }) {
       };
     };
 
-    return visibleAnalyses.map(va => {
-      const parsed = parseDSL(va.dsl);
+    return (graph.canvasAnalyses as any[])
+      .filter((a: any) => visibleIds.has(a.id))
+      .map((a: any) => {
+        const dsl = a.chart_current_layer_dsl || a.recipe?.analysis?.analytics_dsl;
+        if (!dsl) return null;
 
-      let connectedIds: string[] = [];
-      let disconnectedIds: string[] = [];
-      let referencedOnPath = new Set<string>();
+        const rfNode = rfNodes.find(n => n.id === `analysis-${a.id}`);
+        const colour = a.display?.subject_overlay_colour || DEFAULT_COLOUR;
+        const isSelected = a.id === selectedAnalysisId;
 
-      if (parsed.from && parsed.to) {
-        const fullPath = findPath(parsed.from, parsed.to, graph.edges || [], nodeUuidToId);
-        if (fullPath) {
-          referencedOnPath = new Set<string>([parsed.from, parsed.to, ...(parsed.visited || [])]);
-          connectedIds = fullPath;
-        } else {
-          disconnectedIds = [parsed.from, parsed.to];
-        }
-      } else if (parsed.from) {
-        disconnectedIds = [parsed.from];
-      } else if (parsed.to) {
-        disconnectedIds = [parsed.to];
-      }
+        const { connectedIds, disconnectedIds, referencedOnPath } = resolveShapeNodes(
+          dsl, graph.edges || [], nodeUuidToId,
+        );
 
-      for (const v of parsed.visited || []) {
-        if (!connectedIds.includes(v) && !disconnectedIds.includes(v)) disconnectedIds.push(v);
-      }
-      for (const group of parsed.visitedAny || []) {
-        for (const nodeId of group) {
-          if (!connectedIds.includes(nodeId) && !disconnectedIds.includes(nodeId)) disconnectedIds.push(nodeId);
-        }
-      }
-
-      const connectedNodes: Array<{ centre: Point; radius: number }> = [];
-      for (const id of connectedIds) {
-        const info = getNodeInfo(id);
-        if (info) {
-          connectedNodes.push(referencedOnPath.has(id) ? info : { centre: info.centre, radius: TRANSIT_RADIUS });
-        }
-      }
-      const disconnectedNodes: Array<{ centre: Point; radius: number }> = [];
-      for (const id of disconnectedIds) { const info = getNodeInfo(id); if (info) disconnectedNodes.push(info); }
-      const allNodes = [...connectedNodes, ...disconnectedNodes];
-      if (allNodes.length === 0) return null;
-
-      const tubeSegments: TubeSegment[] = [];
-      for (let i = 0; i < connectedNodes.length - 1; i++) {
-        const a = connectedNodes[i], b = connectedNodes[i + 1];
-        tubeSegments.push({
-          x1: a.centre.x, y1: a.centre.y,
-          x2: b.centre.x, y2: b.centre.y,
-          width: Math.min(a.radius, b.radius) * 2,
+        console.log('[SelectionConnectors] shape resolve', {
+          analysisId: a.id,
+          dsl,
+          isSelected,
+          connectedIds,
+          disconnectedIds,
+          referencedOnPath: [...referencedOnPath],
         });
-      }
 
-      const centres = allNodes.map(n => n.centre);
-      const refNodes = connectedNodes.filter((_, i) => referencedOnPath.has(connectedIds[i]));
-      const minR = refNodes.length > 0
-        ? Math.min(...refNodes.map(n => n.radius))
-        : (allNodes.length > 0 ? Math.min(...allNodes.map(n => n.radius)) : MIN_RADIUS);
+        const connectedNodes: Array<{ centre: Point; radius: number }> = [];
+        for (const id of connectedIds) {
+          const info = getNodeInfo(id);
+          if (info) {
+            connectedNodes.push(referencedOnPath.has(id) ? info : { centre: info.centre, radius: TRANSIT_RADIUS });
+          }
+        }
+        const disconnectedNodes: Array<{ centre: Point; radius: number }> = [];
+        for (const id of disconnectedIds) { const info = getNodeInfo(id); if (info) disconnectedNodes.push(info); }
+        const allNodes = [...connectedNodes, ...disconnectedNodes];
+        if (allNodes.length === 0) return null;
 
-      let cx = 0, cy = 0;
-      for (const c of centres) { cx += c.x; cy += c.y; }
+        const tubeSegments: TubeSegment[] = [];
+        for (let i = 0; i < connectedNodes.length - 1; i++) {
+          const a2 = connectedNodes[i], b = connectedNodes[i + 1];
+          tubeSegments.push({
+            x1: a2.centre.x, y1: a2.centre.y,
+            x2: b.centre.x, y2: b.centre.y,
+            width: Math.min(a2.radius, b.radius) * 2,
+          });
+        }
 
-      return {
-        id: va.id, isSelected: va.isSelected, isPersisted: va.isPersisted,
-        tubeSegments, nodes: allNodes, connectedNodes, disconnectedNodes, centres,
-        cx: cx / centres.length, cy: cy / centres.length,
-        minRadius: minR, rfNode: va.rfNode, colour: va.colour,
-      };
-    }).filter(Boolean) as ShapeData[];
-  }, [visibleAnalyses, rfNodes, graph]);
+        const centres = allNodes.map(n => n.centre);
 
-  // Halo highlight: for each RF node, collect ALL overlapping shape colours and blend them
+        // Human IDs of DSL-referenced nodes — these get halos.
+        // Transit nodes on the path do NOT get halos.
+        const referencedNodeIds: string[] = [];
+        for (const id of connectedIds) {
+          if (referencedOnPath.has(id)) referencedNodeIds.push(id);
+        }
+        for (const id of disconnectedIds) {
+          referencedNodeIds.push(id);
+        }
+
+        const refNodes = connectedNodes.filter((_, i) => referencedOnPath.has(connectedIds[i]));
+        const minR = refNodes.length > 0
+          ? Math.min(...refNodes.map(n => n.radius))
+          : (allNodes.length > 0 ? Math.min(...allNodes.map(n => n.radius)) : MIN_RADIUS);
+
+        let cx = 0, cy = 0;
+        for (const c of centres) { cx += c.x; cy += c.y; }
+
+        return {
+          id: a.id, isSelected,
+          tubeSegments, nodes: allNodes, connectedNodes, disconnectedNodes, centres,
+          referencedNodeIds,
+          cx: cx / centres.length, cy: cy / centres.length,
+          minRadius: minR, rfNode, colour,
+        };
+      }).filter(Boolean) as ShapeData[];
+  }, [visibleIds, rfNodes, graph, selectedAnalysisId]);
+
+  // Halo highlights — ONE codepath. Every shape contributes equally.
   const { setNodes } = useReactFlow();
-  const prevHighlightRef = useRef<Map<string, string>>(new Map());
 
-  const nodeColourMap = useMemo(() => {
-    const map = new Map<string, string[]>();
-    for (const shape of allShapes) {
-      for (const centre of shape.centres) {
-        const node = rfNodes.find(n => {
-          if (n.id?.startsWith('postit-') || n.id?.startsWith('container-') || n.id?.startsWith('analysis-')) return false;
-          const nx = (n.position?.x ?? 0) + ((n as any).measured?.width ?? n.width ?? 200) / 2;
-          const ny = (n.position?.y ?? 0) + ((n as any).measured?.height ?? n.height ?? 60) / 2;
-          return Math.abs(nx - centre.x) < 1 && Math.abs(ny - centre.y) < 1;
-        });
-        if (node) {
-          if (!map.has(node.id)) map.set(node.id, []);
-          if (!map.get(node.id)!.includes(shape.colour)) map.get(node.id)!.push(shape.colour);
-        }
-      }
-    }
-    // For each node, blend all overlapping colours and track count
+  const haloMap = useMemo(() => {
+    // computeHaloNodeIds: every visible shape's referencedNodeIds → halo colours
+    const rawMap = computeHaloNodeIds(allShapes);
+
+    // Resolve human IDs → RF node IDs
     const result = new Map<string, { colour: string; count: number }>();
-    for (const [id, colours] of map) {
+    for (const [humanId, colours] of rawMap) {
+      const rfNode = rfNodes.find(n => {
+        if (n.id?.startsWith('postit-') || n.id?.startsWith('container-') || n.id?.startsWith('analysis-')) return false;
+        return ((n.data as any)?.id || n.id) === humanId;
+      });
+      if (!rfNode) continue;
+
       let rT = 0, gT = 0, bT = 0;
       for (const hex of colours) {
         const h = hex.replace('#', '');
@@ -273,21 +373,31 @@ export function SelectionConnectors({ graph }: { graph: any }) {
       }
       const n = colours.length;
       const blended = `#${Math.round(rT / n).toString(16).padStart(2, '0')}${Math.round(gT / n).toString(16).padStart(2, '0')}${Math.round(bT / n).toString(16).padStart(2, '0')}`;
-      result.set(id, { colour: blended, count: n });
+      result.set(rfNode.id, { colour: blended, count: n });
+    }
+
+    if (result.size > 0) {
+      const haloEntries: Record<string, string> = {};
+      for (const [id, { colour }] of result) haloEntries[id] = colour;
+      console.log('[SelectionConnectors] halo highlights', {
+        shapeCount: allShapes.length,
+        haloNodeIds: Object.keys(haloEntries),
+        haloEntries,
+      });
     }
     return result;
   }, [allShapes, rfNodes]);
 
-  // Serialise map for comparison
-  const nodeColourKey = useMemo(() => {
+  // Serialise map for effect comparison
+  const haloKey = useMemo(() => {
     const entries: string[] = [];
-    for (const [id, { colour, count }] of nodeColourMap) entries.push(`${id}:${colour}:${count}`);
+    for (const [id, { colour, count }] of haloMap) entries.push(`${id}:${colour}:${count}`);
     return entries.sort().join('|');
-  }, [nodeColourMap]);
+  }, [haloMap]);
 
   useEffect(() => {
     setNodes(nodes => nodes.map(n => {
-      const entry = nodeColourMap.get(n.id);
+      const entry = haloMap.get(n.id);
       const hadColour = (n.data as any)?.selectionHighlightColour;
       if (entry) {
         const val = `${entry.colour}:${entry.count}`;
@@ -310,7 +420,7 @@ export function SelectionConnectors({ graph }: { graph: any }) {
         return n;
       }));
     };
-  }, [nodeColourKey, setNodes]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [haloKey, setNodes]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (allShapes.length === 0) return null;
 
@@ -333,7 +443,8 @@ export function SelectionConnectors({ graph }: { graph: any }) {
         {allShapes.map(shape => {
           const c = shape.colour;
           const fillOpacity = shape.isSelected ? 0.08 : 0.05;
-          const showConnector = shape.rfNode && (shape.isSelected || shape.isPersisted);
+          // Connector lines: always show for visible shapes (same codepath)
+          const showConnector = !!shape.rfNode;
 
           let connector: JSX.Element | null = null;
           if (showConnector) {

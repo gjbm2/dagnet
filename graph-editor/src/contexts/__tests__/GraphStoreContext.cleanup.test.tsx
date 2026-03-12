@@ -17,7 +17,7 @@ vi.mock('../TabContext', () => {
   };
 });
 
-import { GraphStoreProvider, getGraphStore } from '../GraphStoreContext';
+import { GraphStoreProvider, getGraphStore, useGraphStore, useGraphStoreApi } from '../GraphStoreContext';
 
 function Harness({ fileId }: { fileId: string }) {
   return (
@@ -80,4 +80,82 @@ describe('GraphStoreProvider cleanup', () => {
   });
 });
 
+/**
+ * Regression: useGraphStoreApi must return a working store handle with
+ * .getState() and .subscribe(), even when useGraphStore(selector) does not.
+ *
+ * Bug: CanvasAnalysisNode used useGraphStore(s => s.currentDSL) and cast the
+ * return as a store handle. Since useGraphStore with a selector returns only
+ * the selected value (a string), .getState() was undefined and resolveAnalysisType
+ * was never called — available analyses stayed empty.
+ */
+describe('useGraphStoreApi returns imperative store handle', () => {
+  let capturedApi: any = null;
+  let capturedSelectorResult: any = null;
 
+  function ApiConsumer() {
+    capturedApi = useGraphStoreApi();
+    capturedSelectorResult = useGraphStore(s => s.currentDSL);
+    return <div>consumer</div>;
+  }
+
+  it('should provide .getState() and .subscribe() on the API handle', () => {
+    const fileId = 'graph-test-api-handle';
+    const { unmount } = render(
+      <GraphStoreProvider fileId={fileId}>
+        <ApiConsumer />
+      </GraphStoreProvider>
+    );
+
+    // useGraphStoreApi returns a store with imperative methods
+    expect(typeof capturedApi.getState).toBe('function');
+    expect(typeof capturedApi.subscribe).toBe('function');
+
+    // .getState() returns the full store state including graph
+    const state = capturedApi.getState();
+    expect(state).toHaveProperty('graph');
+    expect(state).toHaveProperty('graphRevision');
+
+    unmount();
+  });
+
+  it('should allow imperative graph reads for resolveAnalysisType', () => {
+    const fileId = 'graph-test-api-reads';
+    const { unmount } = render(
+      <GraphStoreProvider fileId={fileId}>
+        <ApiConsumer />
+      </GraphStoreProvider>
+    );
+
+    // Seed graph via the external store handle
+    const externalStore = getGraphStore(fileId)!;
+    externalStore.setState({
+      graph: {
+        nodes: [{ uuid: 'n1', id: 'start', entry: { is_start: true } }],
+        edges: [],
+      } as any,
+    });
+
+    // useGraphStoreApi handle reads the same state
+    const graph = capturedApi.getState().graph;
+    expect(graph.nodes).toHaveLength(1);
+    expect(graph.nodes[0].id).toBe('start');
+
+    unmount();
+  });
+
+  it('should confirm useGraphStore(selector) does NOT carry store methods', () => {
+    const fileId = 'graph-test-selector-no-methods';
+    const { unmount } = render(
+      <GraphStoreProvider fileId={fileId}>
+        <ApiConsumer />
+      </GraphStoreProvider>
+    );
+
+    // useGraphStore with selector returns just the value — no .getState()
+    // This documents the behaviour that caused the original bug
+    expect((capturedSelectorResult as any)?.getState).toBeUndefined();
+
+    unmount();
+  });
+});

@@ -49,13 +49,16 @@ function applyCommonSettings(opt: any, settings: Record<string, any>): any {
     if (pos === 'bottom') {
       opt.legend.top = undefined;
       opt.legend.bottom = 0;
+    } else if (pos === 'left') {
+      opt.legend.top = undefined;
+      opt.legend.right = undefined;
+      opt.legend.left = 0;
+      opt.legend.orient = 'vertical';
     } else if (pos === 'right') {
       opt.legend.top = undefined;
       opt.legend.left = undefined;
       opt.legend.right = 0;
       opt.legend.orient = 'vertical';
-    } else if (pos === 'none') {
-      opt.legend = { show: false };
     }
   }
 
@@ -65,12 +68,32 @@ function applyCommonSettings(opt: any, settings: Record<string, any>): any {
   if (opt.grid && legendVisible) {
     const pos = settings.legend_position || 'top';
     const g = opt.grid;
+    const hasToolbox = opt.toolbox?.show === true;
     if ((pos === 'top' || pos === undefined) && isPixel(g.top)) {
       g.top = Math.max(parseInt(g.top, 10) || 0, 40);
-    } else if (pos === 'bottom' && isPixel(g.bottom)) {
-      g.bottom = Math.max(parseInt(g.bottom, 10) || 0, 48);
-    } else if (pos === 'right' && isPixel(g.right)) {
-      g.right = Math.max(parseInt(g.right, 10) || 0, 120);
+    } else if (pos === 'bottom') {
+      if (isPixel(g.bottom)) g.bottom = Math.max(parseInt(g.bottom, 10) || 0, 48);
+      // Reclaim top space if builder reserved it for a top legend.
+      if (isPixel(g.top)) {
+        const minTop = hasToolbox ? 34 : 16;
+        const cur = parseInt(g.top, 10) || 0;
+        if (cur > minTop) g.top = minTop;
+      }
+    } else if (pos === 'left') {
+      if (isPixel(g.left)) g.left = Math.max(parseInt(g.left, 10) || 0, 120);
+      if (isPixel(g.top)) {
+        const minTop = hasToolbox ? 34 : 16;
+        const cur = parseInt(g.top, 10) || 0;
+        if (cur > minTop) g.top = minTop;
+      }
+    } else if (pos === 'right') {
+      if (isPixel(g.right)) g.right = Math.max(parseInt(g.right, 10) || 0, 120);
+      // Reclaim top space if builder reserved it for a top legend.
+      if (isPixel(g.top)) {
+        const minTop = hasToolbox ? 34 : 16;
+        const cur = parseInt(g.top, 10) || 0;
+        if (cur > minTop) g.top = minTop;
+      }
     }
   } else if (opt.grid && !legendVisible && isPixel(opt.grid.top)) {
     // Legend hidden — builders may have reserved space for it; compact the top margin.
@@ -165,7 +188,7 @@ function applyCommonSettings(opt: any, settings: Record<string, any>): any {
   }
 
   // ── Chart font size (global scale) ──
-  const fontSizeSetting = settings.chart_font_size;
+  const fontSizeSetting = settings.font_size ?? settings.chart_font_size;
   if (fontSizeSetting) {
     const fs = chartFontScale(fontSizeSetting);
     // Axis titles (nameTextStyle)
@@ -1091,6 +1114,15 @@ export function buildBridgeEChartsOption(result: AnalysisResult, args: BridgeCha
   return {
     animation: false,
     backgroundColor: 'transparent',
+    legend: {
+      show: true,
+      data: ['Increase', 'Decrease', 'Total'],
+      top: 0,
+      left: 'center',
+      textStyle: { color: echartsThemeColours().text, fontSize: 10 },
+      itemWidth: 12,
+      itemHeight: 10,
+    },
     toolbox: showToolbox
       ? {
           show: true,
@@ -1104,7 +1136,7 @@ export function buildBridgeEChartsOption(result: AnalysisResult, args: BridgeCha
       : { show: false },
     grid: {
       // Do NOT guess label extents (it creates systematic dead space). Instead keep a small
-      // margin and let `containLabel` reserve what’s actually needed.
+      // margin and let `containLabel` reserve what's actually needed.
       left: 10,
       // Horizontal mode needs extra right padding for % labels placed to the right of bars.
       right: orientation === 'horizontal' ? 44 : 16,
@@ -1402,6 +1434,15 @@ export function buildFunnelBridgeEChartsOption(result: AnalysisResult, args: Fun
   return {
     animation: false,
     backgroundColor: 'transparent',
+    legend: {
+      show: true,
+      data: ['Increase', 'Decrease', 'Total'],
+      top: 0,
+      left: 'center',
+      textStyle: { color: echartsThemeColours().text, fontSize: 10 },
+      itemWidth: 12,
+      itemHeight: 10,
+    },
     toolbox: showToolbox
       ? {
           show: true,

@@ -378,7 +378,7 @@ class CanvasAnalysis(BaseModel):
     y: float
     width: float = Field(..., gt=0)
     height: float = Field(..., gt=0)
-    view_mode: str = Field(..., pattern=r"^(chart|cards)$")
+    view_mode: str = Field(..., pattern=r"^(chart|cards|table)$")
     chart_kind: Optional[str] = None
     live: bool = True
     title: Optional[str] = None

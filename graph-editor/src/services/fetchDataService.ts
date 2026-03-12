@@ -31,7 +31,7 @@ import { parseConstraints } from '../lib/queryDSL';
 import { resolveRelativeDate } from '../lib/dateFormat';
 import type { Graph, DateRange } from '../types';
 import type { GetFromFileCopyOptions } from './dataOperationsService';
-import { showProgressToast, completeProgressToast } from '../components/ProgressToast';
+import { operationRegistryService } from './operationRegistryService';
 import { sessionLogService } from './sessionLogService';
 import { 
   getEdgesInTopologicalOrder, 
@@ -1132,8 +1132,13 @@ export async function fetchItems(
   
   if (shouldUseBatchMode) {
     setBatchMode(true);
-    // Show initial progress toast with visual bar
-    showProgressToast(progressToastId, 0, effectiveItems.length, 'Fetching');
+    operationRegistryService.register({
+      id: progressToastId,
+      kind: 'batch-fetch',
+      label: 'Fetching',
+      status: 'running',
+      progress: { current: 0, total: effectiveItems.length },
+    });
   }
   
   let successCount = 0;
@@ -1143,9 +1148,8 @@ export async function fetchItems(
     for (let i = 0; i < effectiveItems.length; i++) {
       onProgress?.(i + 1, effectiveItems.length, effectiveItems[i]);
       
-      // Update progress toast with visual bar
       if (shouldUseBatchMode) {
-        showProgressToast(progressToastId, i, effectiveItems.length, 'Fetching');
+        operationRegistryService.setProgress(progressToastId, { current: i, total: effectiveItems.length });
       }
       
       // CRITICAL: Use getUpdatedGraph() to get fresh graph for each item
@@ -1170,19 +1174,14 @@ export async function fetchItems(
       }
     }
     
-    // Show completion toast
     if (shouldUseBatchMode) {
-      // Show full bar briefly before completion message
-      showProgressToast(progressToastId, effectiveItems.length, effectiveItems.length, 'Fetching');
-      
-      // Small delay to show completed bar, then show final message
-      setTimeout(() => {
-        if (errorCount > 0) {
-          completeProgressToast(progressToastId, `Fetched ${successCount}/${effectiveItems.length} (${errorCount} failed)`, true);
-        } else {
-          completeProgressToast(progressToastId, `Fetched ${successCount} item${successCount !== 1 ? 's' : ''}`, false);
-        }
-      }, 300);
+      operationRegistryService.setProgress(progressToastId, { current: effectiveItems.length, total: effectiveItems.length });
+      if (errorCount > 0) {
+        operationRegistryService.complete(progressToastId, 'error', `Fetched ${successCount}/${effectiveItems.length} (${errorCount} failed)`);
+      } else {
+        operationRegistryService.setLabel(progressToastId, `Fetched ${successCount} item${successCount !== 1 ? 's' : ''}`);
+        operationRegistryService.complete(progressToastId, 'complete');
+      }
     }
     
     if (successCount > 0 && !itemOptions?.skipStage2) {

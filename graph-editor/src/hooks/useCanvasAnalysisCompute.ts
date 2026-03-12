@@ -514,7 +514,14 @@ export function useCanvasAnalysisCompute({
     }
 
     try {
-      const response = await runPreparedAnalysis(prepared);
+      const response = await runPreparedAnalysis(prepared, (augmented) => {
+        // Progressive enhancement: BE augmentation arrived after FE result
+        if (thisCompute !== computeCountRef.current || !mountedRef.current) return;
+        if (augmented?.result) {
+          setResult(augmented.result);
+          canvasAnalysisResultCache.set(analysis.id, augmented.result);
+        }
+      });
       if (thisCompute !== computeCountRef.current || !mountedRef.current) return;
 
       if (response?.result) {

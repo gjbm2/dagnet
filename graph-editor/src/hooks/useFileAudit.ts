@@ -7,12 +7,12 @@
  */
 
 import { useState, useCallback } from 'react';
-import toast from 'react-hot-toast';
 import { useTabContext } from '../contexts/TabContext';
 import { db } from '../db/appDatabase';
 import { fileRegistry } from '../contexts/TabContext';
 import { LogFileService } from '../services/logFileService';
 import { sessionLogService } from '../services/sessionLogService';
+import { operationRegistryService } from '../services/operationRegistryService';
 
 interface UseFileAuditResult {
   /** Run the file audit */
@@ -52,7 +52,8 @@ export function useFileAudit(): UseFileAuditResult {
     if (isAuditing) return;
     
     setIsAuditing(true);
-    const toastId = toast.loading('Auditing files...');
+    const opId = `file-audit:${Date.now()}`;
+    operationRegistryService.register({ id: opId, kind: 'file-audit', label: 'Auditing files…', status: 'running' });
     const logOpId = sessionLogService.startOperation('info', 'file', 'FILE_AUDIT', 'Running file audit');
     
     try {
@@ -335,17 +336,12 @@ export function useFileAudit(): UseFileAuditResult {
       );
       
       sessionLogService.endOperation(logOpId, 'success', `Audited ${idbFiles.length} files`);
-      
-      toast.success(
-        `Audit complete: ${idbFiles.length} files`,
-        { id: toastId }
-      );
+
+      operationRegistryService.setLabel(opId, `Audit complete: ${idbFiles.length} files`);
+      operationRegistryService.complete(opId, 'complete');
     } catch (error) {
       sessionLogService.endOperation(logOpId, 'error', `Audit failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
-      toast.error(
-        `File audit failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
-        { id: toastId }
-      );
+      operationRegistryService.complete(opId, 'error', `File audit failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
     } finally {
       setIsAuditing(false);
     }

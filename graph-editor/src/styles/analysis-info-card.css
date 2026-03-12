@@ -1,0 +1,123 @@
+/* ============================================================
+   AnalysisInfoCard — table-based section renderer for node_info / edge_info.
+   Uses a single <table> so columns align across all sections.
+   ============================================================ */
+
+.info-card {
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-primary, #e0e0e0);
+  padding: 2px 0;
+  overflow-x: auto;
+}
+
+.info-card-empty {
+  font-size: 11px;
+  color: var(--text-muted, #666);
+  padding: 8px 12px;
+  text-align: center;
+}
+
+/* --- Table --- */
+
+.info-card-table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+}
+
+/* Column sizing */
+.info-card-col-prop {
+  width: 40%;
+}
+
+.info-card-col-val {
+  width: 60%;
+}
+
+.info-card-col-scenario {
+  /* equal-width scenario columns share remaining space */
+}
+
+/* --- Scenario header row --- */
+
+.info-card-scenario-header-row th {
+  padding: 2px 10px 4px;
+  font-size: 9px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  color: var(--text-muted, #999);
+  text-align: right;
+  border-bottom: 2px solid transparent;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.info-card-scenario-header-row th:first-child {
+  /* empty top-left cell */
+}
+
+/* --- Section header rows --- */
+
+.info-card-section-row + .info-card-section-row td,
+.info-card-data-row + .info-card-section-row td,
+.info-card-detail-row + .info-card-section-row td {
+  border-top: 1px solid var(--border-primary, #333);
+  padding-top: 4px;
+}
+
+.info-card-section-title {
+  font-size: 9px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-muted, #888);
+  padding: 3px 10px 1px;
+}
+
+/* --- Data rows --- */
+
+.info-card-data-row:hover {
+  background: var(--bg-hover, rgba(255,255,255,0.03));
+}
+
+.info-card-data-row td {
+  padding: 1px 10px;
+  vertical-align: baseline;
+}
+
+.info-card-prop {
+  color: var(--text-secondary, #aaa);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.info-card-val {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-primary, #e0e0e0);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* --- Multi-scenario value cells --- */
+
+.info-card-scenario-val {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* --- Detail row (subtitle/description under a data row) --- */
+
+.info-card-detail {
+  font-size: 10px;
+  color: var(--text-muted, #777);
+  padding: 0 10px 2px;
+}

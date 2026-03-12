@@ -1,4 +1,7 @@
-import React from 'react';
+import React, { useCallback } from 'react';
+import { useOperation } from '../hooks/useOperations';
+import { operationRegistryService } from '../services/operationRegistryService';
+import './CountdownBanner.css';
 
 export function CountdownBanner(props: {
   label: string;
@@ -11,6 +14,8 @@ export function CountdownBanner(props: {
   topPx?: number;
   /** Optional z-index override (defaults to 2000). */
   zIndex?: number;
+  /** Link to an operation in the registry for countdown bar + pause/resume. */
+  operationId?: string;
 }): React.ReactElement {
   const {
     label,
@@ -21,59 +26,86 @@ export function CountdownBanner(props: {
     actionTitle,
     topPx = 0,
     zIndex = 2000,
+    operationId,
   } = props;
+
+  const op = useOperation(operationId);
+
+  const isCountdown = op?.status === 'countdown';
+  const isPaused = op?.countdownPaused ?? false;
+  const secondsRemaining = op?.countdownSecondsRemaining;
+  const totalSeconds = op?.countdownTotalSeconds;
+
+  const countdownPct =
+    isCountdown && totalSeconds != null && totalSeconds > 0 && secondsRemaining != null
+      ? Math.round((secondsRemaining / totalSeconds) * 100)
+      : undefined;
+
+  const handlePauseResume = useCallback(() => {
+    if (!operationId) return;
+    if (isPaused) {
+      operationRegistryService.resumeCountdown(operationId);
+    } else {
+      operationRegistryService.pauseCountdown(operationId);
+    }
+  }, [operationId, isPaused]);
 
   return (
     <div
-      style={{
-        position: 'fixed',
-        top: topPx,
-        left: 0,
-        right: 0,
-        zIndex,
-        background: '#111827',
-        color: '#fff',
-        display: 'flex',
-        alignItems: 'center',
-        gap: 12,
-        padding: '8px 12px',
-        borderBottom: '1px solid rgba(255,255,255,0.12)',
-      }}
+      className="countdown-banner"
+      style={{ top: topPx, zIndex }}
       role="status"
       aria-live="polite"
     >
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>
-        <div style={{ fontSize: 13, fontWeight: 700, lineHeight: 1.2 }}>{label}</div>
-        {detail ? (
-          <div style={{ fontSize: 12, opacity: 0.82, lineHeight: 1.2, overflow: 'hidden', textOverflow: 'ellipsis' }}>
-            {detail}
-          </div>
-        ) : null}
+      <div className="countdown-banner-content">
+        <div className="countdown-banner-label">
+          {label}
+          {isCountdown && isPaused && (
+            <span className="countdown-banner-paused-badge">paused</span>
+          )}
+        </div>
+        {detail && <div className="countdown-banner-detail">{detail}</div>}
       </div>
 
-      {actionLabel && onAction ? (
-        <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, alignItems: 'center' }}>
+      {isCountdown && secondsRemaining !== undefined && (
+        <span className="countdown-banner-seconds">{secondsRemaining}s</span>
+      )}
+
+      <div className="countdown-banner-actions">
+        {isCountdown && operationId && (
+          <>
+            <button
+              type="button"
+              className="countdown-banner-btn"
+              onClick={handlePauseResume}
+            >
+              {isPaused ? 'Resume' : 'Pause'}
+            </button>
+            <span className="countdown-banner-sep">·</span>
+          </>
+        )}
+        {actionLabel && onAction && (
           <button
             type="button"
+            className={`countdown-banner-btn${!isCountdown ? ' primary' : ''}`}
             onClick={onAction}
             disabled={actionDisabled}
-            style={{
-              border: '1px solid rgba(255,255,255,0.25)',
-              background: actionDisabled ? 'rgba(255,255,255,0.12)' : '#ef4444',
-              color: '#fff',
-              borderRadius: 6,
-              padding: '6px 10px',
-              fontSize: 12,
-              fontWeight: 700,
-              cursor: actionDisabled ? 'not-allowed' : 'pointer',
-            }}
             title={actionTitle}
           >
             {actionLabel}
           </button>
+        )}
+      </div>
+
+      {/* Countdown progress bar (amber, narrowing) */}
+      {isCountdown && countdownPct !== undefined && (
+        <div className="countdown-banner-bar-container">
+          <div
+            className={`countdown-banner-bar${isPaused ? ' paused' : ''}`}
+            style={{ width: `${countdownPct}%` }}
+          />
         </div>
-      ) : null}
+      )}
     </div>
   );
 }
-

@@ -48,12 +48,15 @@ interface DecorationVisibilityContextType {
   beadsVisible: boolean;
   isPanning: boolean;
   isDraggingNode: boolean;
+  /** The analysis ID (without 'analysis-' prefix) currently being dragged, or null. */
+  draggedAnalysisId: string | null;
 }
 
-const DecorationVisibilityContext = createContext<DecorationVisibilityContextType>({ 
+const DecorationVisibilityContext = createContext<DecorationVisibilityContextType>({
   beadsVisible: true,
   isPanning: false,
-  isDraggingNode: false
+  isDraggingNode: false,
+  draggedAnalysisId: null,
 });
 
 export const useDecorationVisibility = () => useContext(DecorationVisibilityContext);
@@ -321,6 +324,8 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
   
   // Track if user is dragging a node to disable beads during drag
   const [isDraggingNode, setIsDraggingNode] = React.useState(false);
+  // Track which specific analysis is being dragged (for SelectionConnectors)
+  const [draggedAnalysisId, setDraggedAnalysisId] = React.useState<string | null>(null);
   
   // ATOMIC RESTORATION: Decoration overlay state (independent of ReactFlow graph state)
   // This flag controls ONLY our overlay components (EdgeBeadsRenderer)
@@ -2187,6 +2192,15 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
               const graphAnalysis = graphAnalysesById.get(analysisId);
               if (!graphAnalysis) return prevNode;
               const gaIndex = (graph.canvasAnalyses || []).findIndex((a: any) => a.id === analysisId);
+              // Stabilise data.analysis reference: only replace when content actually changed.
+              // This prevents cascading re-renders in CanvasAnalysisNode (table/chart flicker)
+              // when unrelated graph mutations (e.g. dragging a conversion node) trigger the slow path.
+              const prevAnalysis = prevNode.data?.analysis;
+              const analysisChanged = !prevAnalysis || JSON.stringify(prevAnalysis) !== JSON.stringify(graphAnalysis);
+              const stableAnalysis = analysisChanged ? graphAnalysis : prevAnalysis;
+              const prevData = prevNode.data;
+              const dataChanged = analysisChanged || prevData?.tabId !== tabId
+                || prevData?.onUpdate !== handleUpdateAnalysis || prevData?.onDelete !== handleDeleteAnalysis;
               return {
                 ...prevNode,
                 type: 'canvasAnalysis',
@@ -2194,45 +2208,28 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
                 // During drag, preserve ReactFlow's current position — graph model may not have synced yet
                 ...(isDraggingNodeRef.current ? {} : { position: { x: graphAnalysis.x ?? 0, y: graphAnalysis.y ?? 0 } }),
                 style: { ...prevNode.style, width: graphAnalysis.width, height: graphAnalysis.height },
-                data: {
-                  ...prevNode.data,
-                  analysis: graphAnalysis,
+                data: dataChanged ? {
+                  ...prevData,
+                  analysis: stableAnalysis,
                   tabId,
                   onUpdate: handleUpdateAnalysis,
                   onDelete: handleDeleteAnalysis,
-                },
+                } : prevData,
               };
             }
             const graphNode = graph.nodes.find((n: any) => n.uuid === prevNode.id || n.id === prevNode.id);
             if (!graphNode) return prevNode;
             
-            // Compute containerColour using actual ReactFlow positions of containers in this batch
-            const CONTAIN_TOL = 10;
-            const nw = (prevNode as any).measured?.width ?? prevNode.width ?? DEFAULT_NODE_WIDTH;
-            const nh = (prevNode as any).measured?.height ?? prevNode.height ?? DEFAULT_NODE_HEIGHT;
-            const nx = prevNode.position?.x ?? 0;
-            const ny = prevNode.position?.y ?? 0;
-            let containerColour: string | undefined;
-            const containerArray = graph.containers || [];
-            for (let ci = containerArray.length - 1; ci >= 0; ci--) {
-              const cont = updatedNodes.find(cn => cn.id === `container-${containerArray[ci].id}`);
-              if (!cont) continue;
-              const cx = cont.position?.x ?? 0;
-              const cy = cont.position?.y ?? 0;
-              const cw = (cont as any).measured?.width ?? cont.width ?? (typeof cont.style?.width === 'number' ? cont.style.width : 400);
-              const ch = (cont as any).measured?.height ?? cont.height ?? (typeof cont.style?.height === 'number' ? cont.style.height : 300);
-              if (nx >= (cx - CONTAIN_TOL) && ny >= (cy - CONTAIN_TOL) && (nx + nw) <= (cx + cw + CONTAIN_TOL) && (ny + nh) <= (cy + ch + CONTAIN_TOL)) {
-                containerColour = containerArray[ci].colour;
-                break;
-              }
-            }
-
             const hasImages = showNodeImages && (graphNode.images?.length || 0) > 0;
             return {
               ...prevNode,
               data: {
                 ...prevNode.data,
-                ...(containerColour !== prevNode.data?.containerColour ? { containerColour } : {}),
+                // Preserve containerColour from slow path — the fast path only runs when
+                // topology is unchanged, so container membership can't have changed.
+                // Re-computing it here risks overwriting with undefined when container
+                // RF nodes haven't been measured yet.
+                ...(prevNode.data?.containerColour ? { containerColour: prevNode.data.containerColour } : {}),
                 label: graphNode.label,
                 id: graphNode.id,
                 description: graphNode.description,
@@ -4358,8 +4355,16 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
       return;
     }
     
-    // Update selected nodes for analysis
-    setSelectedNodesForAnalysis(selectedNodes);
+    // Update selected nodes for analysis — only conversion nodes affect highlighting
+    const conversionNodes = selectedNodes.filter((n: any) => !isCanvasObjectNode(n.id));
+    if (selectedNodes.length > 0) {
+      console.log('[GraphCanvas] onSelectionChange', {
+        allSelectedNodeIds: selectedNodes.map((n: any) => n.id),
+        conversionNodeIds: conversionNodes.map((n: any) => n.id),
+        canvasObjectNodeIds: selectedNodes.filter((n: any) => isCanvasObjectNode(n.id)).map((n: any) => n.id),
+      });
+    }
+    setSelectedNodesForAnalysis(conversionNodes);
     
     // Don't clear selection if we're currently lasso selecting
     if (isLassoSelecting) {
@@ -4409,7 +4414,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
       onSelectedEdgeChange(null);
       onSelectedAnnotationChange?.(null, null);
     }
-  }, [onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnnotationChange, isLassoSelecting, setSelectedNodesForAnalysis, activeElementTool]);
+  }, [onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnnotationChange, isLassoSelecting, setSelectedNodesForAnalysis, activeElementTool, isCanvasObjectNode]);
 
   // Track whether the current drag actually moved the node (vs. a simple click)
   const hasNodeMovedRef = useRef(false);
@@ -4425,6 +4430,14 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
     // Block Graph→ReactFlow sync during drag to prevent interruption
     isDraggingNodeRef.current = true;
     setIsDraggingNode(true);
+
+    // Track the specific analysis being dragged so SelectionConnectors
+    // can show connectors/shapes/halos for it (same codepath as selection)
+    if (_node.id?.startsWith('analysis-')) {
+      setDraggedAnalysisId(_node.id.replace('analysis-', ''));
+    } else {
+      setDraggedAnalysisId(null);
+    }
 
     // Container group drag: snapshot contained objects
     if (_node.id?.startsWith('container-')) {
@@ -4484,6 +4497,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
         console.log('[GraphCanvas] Drag timeout elapsed, clearing drag flag (failsafe)');
         isDraggingNodeRef.current = false;
         setIsDraggingNode(false);
+        setDraggedAnalysisId(null);
       }
       dragTimeoutRef.current = null;
     }, 5000);
@@ -4524,6 +4538,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
     requestAnimationFrame(() => {
       requestAnimationFrame(() => {
         setIsDraggingNode(false);
+        setDraggedAnalysisId(null);
         
         // Only sync positions & save history if the node actually moved.
         if (hasNodeMovedRef.current && graph && nodes.length > 0) {
@@ -5232,6 +5247,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
         chartKind: dragData.chartKind,
         analysisResult: dragData.analysisResult,
         analysisTypeOverridden: dragData.analysisTypeOverridden ?? false,
+        display: dragData.display,
       },
       { x, y },
       { width: w, height: h },
@@ -5277,6 +5293,17 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
       mergedNodeIds, mergedEdgeIds, nodes as any[], (graph?.edges || []) as any[],
     );
 
+    console.log('[startAddChart]', {
+      ctxNodeIds,
+      ctxEdgeIds,
+      selectedConversionNodes,
+      mergedNodeIds,
+      mergedEdgeIds,
+      analyticsDsl,
+      rfNodeCount: nodes.length,
+      graphEdgeCount: graph?.edges?.length || 0,
+    });
+
     if (!analyticsDsl && ctxEdgeIds.length > 0 && graph?.edges) {
       const ge = graph.edges.find((ed: any) => ed.uuid === ctxEdgeIds[0] || ed.id === ctxEdgeIds[0]);
       if (ge) {
@@ -5308,6 +5335,19 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
     window.addEventListener('dagnet:pinAnalysisToCanvas', handler as any);
     return () => window.removeEventListener('dagnet:pinAnalysisToCanvas', handler as any);
   }, [startPinnedCanvasAnalysis, tabId, effectiveActiveTabId]);
+
+  // Listen for 'dagnet:pinAnalysisAtScreenPosition' — instantly pins at a given screen position
+  // Used by HoverAnalysisPreview to persist the preview card as a canvas object in-place.
+  useEffect(() => {
+    const handler = (e: CustomEvent) => {
+      if (tabId !== effectiveActiveTabId) return;
+      const { screenX, screenY, dragData } = e.detail;
+      const flowPos = screenToFlowPosition({ x: screenX, y: screenY });
+      addCanvasAnalysisAtPosition(flowPos.x, flowPos.y, dragData);
+    };
+    window.addEventListener('dagnet:pinAnalysisAtScreenPosition', handler as any);
+    return () => window.removeEventListener('dagnet:pinAnalysisAtScreenPosition', handler as any);
+  }, [addCanvasAnalysisAtPosition, screenToFlowPosition, tabId, effectiveActiveTabId]);
 
   // Listen for 'dagnet:addAnalysis' event — captures selection DSL, then enters draw mode.
   // Analysis type is always left empty so the canvas node shows the icon picker.
@@ -5859,8 +5899,8 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
 
   // ATOMIC RESTORATION: Memoize decoration visibility context value for stability
   const decorationVisibilityValue = React.useMemo(
-    () => ({ beadsVisible, isPanning: isPanningOrZooming, isDraggingNode }),
-    [beadsVisible, isPanningOrZooming, isDraggingNode]
+    () => ({ beadsVisible, isPanning: isPanningOrZooming, isDraggingNode, draggedAnalysisId }),
+    [beadsVisible, isPanningOrZooming, isDraggingNode, draggedAnalysisId]
   );
 
   return (

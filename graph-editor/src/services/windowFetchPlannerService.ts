@@ -30,7 +30,7 @@ import {
   type FetchItem,
 } from './fetchDataService';
 import { dataOperationsService, setBatchMode } from './dataOperationsService';
-import { showProgressToast, completeProgressToast } from '../components/ProgressToast';
+import { operationRegistryService } from './operationRegistryService';
 import { shouldRefetch, type LatencyConfig } from './fetchRefetchPolicy';
 import { extractSliceDimensions, isolateSlice } from './sliceIsolation';
 import { resolveMECEPartitionForImplicitUncontextedSync } from './meceSliceService';
@@ -470,12 +470,23 @@ class WindowFetchPlannerService {
           // This avoids any executor-side re-derivation of windows, satisfying Invariant E for execution windows.
           // Shared batch timestamp for all items (key-fixes.md §2.1).
           const totalItems = planItemsToExecute.length;
-          const progressToastId = 'window-fetch-progress';
+          const opId = 'window-fetch-progress';
           let cancelled = false;
-          const onCancel = () => { cancelled = true; };
+          const onCancel = () => {
+            cancelled = true;
+            operationRegistryService.complete(opId, 'cancelled');
+          };
 
           setBatchMode(true);
-          showProgressToast(progressToastId, 0, totalItems, 'Fetching', onCancel);
+          operationRegistryService.register({
+            id: opId,
+            kind: 'batch-fetch',
+            label: 'Fetching',
+            status: 'running',
+            cancellable: true,
+            onCancel,
+            progress: { current: 0, total: totalItems },
+          });
 
           let successCount = 0;
           let errorCount = 0;
@@ -488,8 +499,8 @@ class WindowFetchPlannerService {
               const g = currentGraph;
               if (!g) break;
 
-              const itemLabel = `Fetching\n${item.objectId}`;
-              showProgressToast(progressToastId, idx, totalItems, itemLabel, onCancel);
+              operationRegistryService.setLabel(opId, `Fetching\n${item.objectId}`);
+              operationRegistryService.setProgress(opId, { current: idx, total: totalItems, detail: item.objectId });
 
               try {
                 if (item.type === 'parameter') {
@@ -527,17 +538,15 @@ class WindowFetchPlannerService {
               }
             }
 
-            showProgressToast(progressToastId, cancelled ? successCount : totalItems, totalItems, 'Fetching');
-            setTimeout(() => {
-              if (cancelled) {
-                const remaining = totalItems - successCount - errorCount;
-                completeProgressToast(progressToastId, `Cancelled — ${successCount} fetched, ${remaining} skipped`, true);
-              } else if (errorCount > 0) {
-                completeProgressToast(progressToastId, `Fetched ${successCount}/${totalItems} (${errorCount} failed)`, true);
+            if (!cancelled) {
+              operationRegistryService.setProgress(opId, { current: totalItems, total: totalItems });
+              if (errorCount > 0) {
+                operationRegistryService.complete(opId, 'error', `Fetched ${successCount}/${totalItems} (${errorCount} failed)`);
               } else {
-                completeProgressToast(progressToastId, `Fetched ${successCount} item${successCount !== 1 ? 's' : ''}`, false);
+                operationRegistryService.setLabel(opId, `Fetched ${successCount} item${successCount !== 1 ? 's' : ''}`);
+                operationRegistryService.complete(opId, 'complete');
               }
-            }, 300);
+            }
           } finally {
             setBatchMode(false);
           }

@@ -7,6 +7,7 @@ import toast from 'react-hot-toast';
 import { validateConditionalProbabilities } from '@/lib/conditionalValidation';
 import { computeEffectiveEdgeProbability } from '@/lib/whatIf';
 import Tooltip from '@/components/Tooltip';
+import { HoverAnalysisPreview, useHoverPreview, useHoverScenarios } from '@/components/HoverAnalysisPreview';
 import { getObjectTypeTheme } from '@/theme/objectTypeTheme';
 import { useTheme } from '@/contexts/ThemeContext';
 import { fileRegistry } from '@/contexts/TabContext';
@@ -116,7 +117,11 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
   
   // Track hover state
   const [isHovered, setIsHovered] = useState(false);
-  
+
+  // Hover analysis preview
+  const hoverPreview = useHoverPreview(500);
+  const hoverScenarios = useHoverScenarios(graph);
+
   // Image preview/loupe state
   const [showImagePreview, setShowImagePreview] = useState(false);
   const [showImageLoupe, setShowImageLoupe] = useState(false);
@@ -145,6 +150,7 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
   
   // Check if user is currently connecting (creating a new edge)
   const isConnecting = useStore((state) => state.connectionNodeId !== null);
+  const canvasZoom = useStore((state) => state.transform[2]);
 
 
   const handleDelete = useCallback(() => {
@@ -459,72 +465,7 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
   }, [graph, data.id, isActiveDrag]);
   
   const conditionalValidation = debouncedValidation;
-  
-  // Generate tooltip content
-  const getTooltipContent = useCallback(() => {
-    const lines: string[] = [];
-    
-    // Basic node info
-    lines.push(`Node: ${data.label || data.id}`);
-    lines.push(`Type: ${data.type || 'normal'}`);
-    lines.push(`Absorbing: ${data.absorbing ? 'Yes' : 'No'}`);
-    
-    if (data.id) {
-      lines.push(`ID: ${data.id}`);
-    }
-    
-    if (data.outcome_type) {
-      lines.push(`Outcome Type: ${data.outcome_type}`);
-    }
-    
-    // Case node specific info
-    if (data.type === 'case' && data.case) {
-      lines.push(`\nCase Info:`);
-      lines.push(`  Status: ${data.case.status}`);
-      lines.push(`  Variants:`);
-      data.case.variants.forEach(variant => {
-        lines.push(`    • ${variant.name}: ${(variant.weight * 100).toFixed(1)}%`);
-        if (variant.description) {
-          lines.push(`      ${variant.description}`);
-        }
-      });
-    }
-    
-    // Entry info
-    if (data.entry) {
-      lines.push(`\nEntry Info:`);
-      if (data.entry.is_start) {
-        lines.push(`  Start Node: Yes`);
-      }
-      if (data.entry.entry_weight !== undefined) {
-        lines.push(`  Entry Weight: ${data.entry.entry_weight}`);
-      }
-    }
-    
-    // Description
-    if (data.description) {
-      lines.push(`\nDescription: ${data.description}`);
-    }
-    
-    // Conditional probability errors
-    if (conditionalValidation?.errors && conditionalValidation.errors.length > 0) {
-      lines.push(`\n⚠️ Conditional Probability Errors:`);
-      conditionalValidation.errors.forEach(err => {
-        lines.push(`  • ${err.message}`);
-      });
-    }
-    
-    // Conditional probability warnings
-    if (conditionalValidation?.warnings && conditionalValidation.warnings.length > 0) {
-      lines.push(`\n⚠️ Conditional Probability Warnings:`);
-      conditionalValidation.warnings.forEach(warn => {
-        lines.push(`  • ${warn.message}`);
-      });
-    }
-    
-    return lines.join('\n');
-  }, [data, conditionalValidation]);
-  
+
   // Determine node shape based on type
   const getNodeShape = () => {
     // Use Sankey dimensions if provided, otherwise default
@@ -623,11 +564,12 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
   const eventTheme = getObjectTypeTheme('event');
 
   return (
-    <Tooltip content={getTooltipContent()} position="top" delay={800}>
-      <div 
+    <>
+      <div
         className={`conversion-node ${selected ? 'selected' : ''} ${data.absorbing ? 'absorbing' : ''} ${isCaseNode ? 'case-node' : ''}`}
-        onMouseEnter={() => setIsHovered(true)}
-        onMouseLeave={() => setIsHovered(false)}
+        onMouseEnter={(e) => { setIsHovered(true); hoverPreview.handleTriggerEnter(e); }}
+        onMouseLeave={() => { setIsHovered(false); hoverPreview.handleTriggerLeave(); }}
+        onMouseDown={() => { hoverPreview.handleDismiss(); }}
         onDragOver={handleDragOver}
         onDrop={handleDrop}
       style={{
@@ -1493,6 +1435,19 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
         onUpload={handleImageUpload}
       />
     )}
-    </Tooltip>
+    {hoverPreview.previewState && graph && (
+      <HoverAnalysisPreview
+        graph={graph}
+        nodeId={data.id || data.uuid}
+        position={hoverPreview.previewState.position}
+        triggerBottom={hoverPreview.previewState.triggerBottom}
+        scenarios={hoverScenarios}
+        canvasZoom={canvasZoom}
+        onCardEnter={hoverPreview.handleCardEnter}
+        onCardLeave={hoverPreview.handleCardLeave}
+        onDismiss={hoverPreview.handleDismiss}
+      />
+    )}
+    </>
   );
 }

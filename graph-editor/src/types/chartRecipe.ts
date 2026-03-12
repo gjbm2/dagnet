@@ -11,6 +11,8 @@
  * See: docs/current/project-canvas/3-canvas-analyses.md §2.2
  */
 
+export type ViewMode = 'chart' | 'cards' | 'table';
+
 export type ChartVisibilityMode = 'f+e' | 'f' | 'e';
 
 export interface ChartRecipeScenario {
@@ -66,7 +68,7 @@ export interface ChartRecipeCore {
  */
 export interface ChartDefinition {
   title?: string;
-  view_mode: 'chart' | 'cards';
+  view_mode: ViewMode;
   /** User-pinned chart kind (undefined = auto-infer from result semantics) */
   chart_kind?: string;
   /** All display settings (orientation, bar width, grid, legend, labels, etc.) */
@@ -79,9 +81,22 @@ export interface ChartDefinition {
  * Extract a ChartDefinition from any object that contains the relevant fields.
  * Works with CanvasAnalysis, chart file data, or any superset.
  */
+/**
+ * Derive which expression modes are available for a given analysis result.
+ * Returns the subset of ViewMode values that can be meaningfully rendered.
+ */
+export function getAvailableExpressions(result: { semantics?: any; data?: any[] } | null | undefined): ViewMode[] {
+  const modes: ViewMode[] = [];
+  if (result?.semantics?.chart?.recommended) modes.push('chart');
+  // Cards require a primary dimension — matches AnalysisResultCards' guard.
+  if (result?.semantics?.dimensions?.some((d: any) => d.role === 'primary')) modes.push('cards');
+  if (result?.data?.length) modes.push('table');
+  return modes;
+}
+
 export function toChartDefinition(source: {
   title?: string;
-  view_mode?: 'chart' | 'cards';
+  view_mode?: ViewMode;
   chart_kind?: string;
   display?: Record<string, unknown>;
   recipe?: ChartRecipeCore;

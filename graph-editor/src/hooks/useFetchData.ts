@@ -33,6 +33,7 @@ import {
 } from '../services/fetchDataService';
 import type { Graph, DateRange } from '../types';
 import toast from 'react-hot-toast';
+import { operationRegistryService } from '../services/operationRegistryService';
 
 // ============================================================================
 // Re-export types from service for backward compatibility
@@ -204,29 +205,31 @@ export async function fetchWithToast(
   modeLabel?: string
 ): Promise<FetchResult[]> {
   const label = modeLabel || 'Fetching';
-  const progressToastId = toast.loading(`${label} 0/${itemCount}...`, { duration: Infinity });
-  
+  const opId = `fetch-toast:${Date.now()}`;
+  operationRegistryService.register({
+    id: opId, kind: 'batch-fetch', label: `${label} 0/${itemCount}…`,
+    status: 'running', progress: { current: 0, total: itemCount },
+  });
+
   try {
     const results = await fetchFn();
-    
-    toast.dismiss(progressToastId);
-    
+
     const successCount = results.filter(r => r.success).length;
     const errorCount = results.filter(r => !r.success).length;
-    
+
     if (successCount > 0) {
-      toast.success(
-        `✓ ${label.replace('ing', 'ed')} ${successCount} item${successCount > 1 ? 's' : ''}${errorCount > 0 ? `, ${errorCount} failed` : ''}`,
-        { duration: 3000 }
-      );
+      const doneLabel = `${label.replace('ing', 'ed')} ${successCount} item${successCount > 1 ? 's' : ''}${errorCount > 0 ? `, ${errorCount} failed` : ''}`;
+      operationRegistryService.setLabel(opId, doneLabel);
+      operationRegistryService.complete(opId, errorCount > 0 ? 'error' : 'complete', errorCount > 0 ? `${errorCount} failed` : undefined);
     } else if (errorCount > 0) {
-      toast.error(`Failed to fetch ${errorCount} item${errorCount > 1 ? 's' : ''}`);
+      operationRegistryService.complete(opId, 'error', `Failed to fetch ${errorCount} item${errorCount > 1 ? 's' : ''}`);
+    } else {
+      operationRegistryService.complete(opId, 'complete');
     }
-    
+
     return results;
   } catch (error) {
-    toast.dismiss(progressToastId);
-    toast.error(`Fetch failed: ${error instanceof Error ? error.message : String(error)}`);
+    operationRegistryService.complete(opId, 'error', `Fetch failed: ${error instanceof Error ? error.message : String(error)}`);
     throw error;
   }
 }

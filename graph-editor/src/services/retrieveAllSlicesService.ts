@@ -1,6 +1,6 @@
 import { explodeDSL } from '../lib/dslExplosion';
 import type { GraphData } from '../types';
-import { completeProgressToast, showProgressToast } from '../components/ProgressToast';
+import { operationRegistryService } from './operationRegistryService';
 import { dataOperationsService, setBatchMode, type CacheAnalysisResult } from './dataOperationsService';
 import { sessionLogService } from './sessionLogService';
 import { retrieveAllSlicesPlannerService } from './retrieveAllSlicesPlannerService';
@@ -1421,45 +1421,51 @@ export async function executeRetrieveAllSlicesWithProgressToast(
   options: RetrieveAllSlicesWithProgressToastOptions
 ): Promise<RetrieveAllSlicesResult> {
   const { toastId, toastLabel, onProgress, ...rest } = options;
-  let toastShown = false;
-  let lastProgress: RetrieveAllSlicesProgress | undefined;
+  const opId = `retrieve-all:${toastId}`;
+
+  operationRegistryService.register({
+    id: opId,
+    kind: 'retrieve-all',
+    label: toastLabel || 'Retrieve All',
+    status: 'running',
+  });
 
   const handleProgress = (p: RetrieveAllSlicesProgress) => {
-    lastProgress = p;
-    
     if (p.totalSlices > 0) {
       // Build detailed progress label
       let label = toastLabel || 'Retrieve All';
-      
-      // Show current slice info
       if (p.currentSliceDSL) {
-        // Extract short slice name (e.g., "channel:influencer.window" from full DSL)
-        const shortSlice = p.currentSliceDSL.length > 30 
-          ? p.currentSliceDSL.slice(0, 27) + '...' 
+        const shortSlice = p.currentSliceDSL.length > 30
+          ? p.currentSliceDSL.slice(0, 27) + '...'
           : p.currentSliceDSL;
         label = `Slice ${p.currentSlice}/${p.totalSlices}: ${shortSlice}`;
       }
-      
-      // Show current item status if available
+
+      // Build detail line for current item
+      let detail: string | undefined;
       if (p.currentItemStatus) {
         if (p.currentItemStatus.cacheHit) {
-          label += `\nItem ${p.currentItem}/${p.totalItems}: cached ✓`;
+          detail = `Item ${p.currentItem}/${p.totalItems}: cached ✓`;
         } else if (p.currentItemStatus.gapCount > 1) {
-          label += `\nItem ${p.currentItem}/${p.totalItems}: fetching ${p.currentItemStatus.daysToFetch}d across ${p.currentItemStatus.gapCount} gaps`;
+          detail = `Item ${p.currentItem}/${p.totalItems}: fetching ${p.currentItemStatus.daysToFetch}d across ${p.currentItemStatus.gapCount} gaps`;
         } else {
-          label += `\nItem ${p.currentItem}/${p.totalItems}: fetching ${p.currentItemStatus.daysToFetch}d`;
+          detail = `Item ${p.currentItem}/${p.totalItems}: fetching ${p.currentItemStatus.daysToFetch}d`;
         }
       } else if (p.currentItem > 0) {
-        label += `\nItem ${p.currentItem}/${p.totalItems}`;
+        detail = `Item ${p.currentItem}/${p.totalItems}`;
       }
-      
-      // Show running totals
+
+      // Append running totals to label
       if (p.runningTotalProcessed > 0) {
         label += `\n${p.runningCacheHits} cached, ${p.runningApiFetches} fetched`;
       }
-      
-      showProgressToast(toastId, p.currentSlice, p.totalSlices, label);
-      toastShown = true;
+
+      operationRegistryService.setLabel(opId, label);
+      operationRegistryService.setProgress(opId, {
+        current: p.currentSlice,
+        total: p.totalSlices,
+        detail,
+      });
     }
     onProgress?.(p);
   };
@@ -1467,32 +1473,29 @@ export async function executeRetrieveAllSlicesWithProgressToast(
   try {
     const result = await retrieveAllSlicesService.execute({
       ...rest,
-      isAutomated: true,  // Toast wrapper is used by automated runs - use 61-min cooldown on rate limit
+      isAutomated: true,
       onProgress: handleProgress,
     });
 
-    if (toastShown) {
-      const hasIssues = result.aborted || result.totalErrors > 0;
-      const durationStr = (result.durationMs / 1000).toFixed(1);
-      
-      let message: string;
-      if (result.aborted) {
-        message = `Retrieve All aborted (${result.totalCacheHits} cached, ${result.totalApiFetches} fetched, ${result.totalErrors} errors)`;
-      } else if (result.totalErrors > 0) {
-        message = `Retrieve All: ${result.totalCacheHits} cached, ${result.totalApiFetches} fetched (${result.totalDaysFetched}d), ${result.totalErrors} failed`;
-      } else {
-        message = `Retrieve All complete (${durationStr}s)\n${result.totalCacheHits} cached, ${result.totalApiFetches} fetched (${result.totalDaysFetched}d new)`;
-      }
-      
-      completeProgressToast(toastId, message, hasIssues);
+    const hasIssues = result.aborted || result.totalErrors > 0;
+    const durationStr = (result.durationMs / 1000).toFixed(1);
+
+    let message: string;
+    if (result.aborted) {
+      message = `Retrieve All aborted (${result.totalCacheHits} cached, ${result.totalApiFetches} fetched, ${result.totalErrors} errors)`;
+    } else if (result.totalErrors > 0) {
+      message = `${result.totalCacheHits} cached, ${result.totalApiFetches} fetched (${result.totalDaysFetched}d), ${result.totalErrors} failed`;
+    } else {
+      message = `${result.totalCacheHits} cached, ${result.totalApiFetches} fetched (${result.totalDaysFetched}d new) in ${durationStr}s`;
     }
+
+    operationRegistryService.setLabel(opId, toastLabel || 'Retrieve All');
+    operationRegistryService.complete(opId, hasIssues ? 'error' : 'complete', hasIssues ? message : undefined);
 
     return result;
   } catch (error) {
-    if (toastShown) {
-      const message = error instanceof Error ? error.message : String(error);
-      completeProgressToast(toastId, `Retrieve All failed: ${message}`, true);
-    }
+    const message = error instanceof Error ? error.message : String(error);
+    operationRegistryService.complete(opId, 'error', `Retrieve All failed: ${message}`);
     throw error;
   }
 }
