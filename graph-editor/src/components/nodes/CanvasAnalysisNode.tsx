@@ -29,6 +29,8 @@ interface CanvasAnalysisNodeData {
   tabId?: string;
   onUpdate: (id: string, updates: Partial<CanvasAnalysis>) => void;
   onDelete: (id: string) => void;
+  onResizeStart?: () => void;
+  onResizeEnd?: () => void;
 }
 
 function CanvasAnalysisNodeInner({ data, selected }: NodeProps<CanvasAnalysisNodeData>) {
@@ -411,11 +413,22 @@ function CanvasAnalysisNodeInner({ data, selected }: NodeProps<CanvasAnalysisNod
   const analysisIdRef = useRef(analysis.id);
   analysisIdRef.current = analysis.id;
 
+  const onResizeStartRef = useRef(data.onResizeStart);
+  onResizeStartRef.current = data.onResizeStart;
+  const onResizeEndRef = useRef(data.onResizeEnd);
+  onResizeEndRef.current = data.onResizeEnd;
+
+  const handleResizeStart = useCallback(() => { onResizeStartRef.current?.(); }, []);
   const handleResize = useCallback((_event: any, params: { width: number; height: number }) => {
     if (resizeTimeoutRef.current) clearTimeout(resizeTimeoutRef.current);
     resizeTimeoutRef.current = setTimeout(() => {
       onUpdateRef.current(analysisIdRef.current, { width: Math.round(params.width), height: Math.round(params.height) });
     }, 200);
+  }, []);
+  const handleResizeEnd = useCallback((_event: any, params: { width: number; height: number }) => {
+    if (resizeTimeoutRef.current) clearTimeout(resizeTimeoutRef.current);
+    onUpdateRef.current(analysisIdRef.current, { width: Math.round(params.width), height: Math.round(params.height) });
+    onResizeEndRef.current?.();
   }, []);
 
 
@@ -584,7 +597,9 @@ function CanvasAnalysisNodeInner({ data, selected }: NodeProps<CanvasAnalysisNod
         isVisible={selected}
         minWidth={300}
         minHeight={200}
+        onResizeStart={handleResizeStart}
         onResize={handleResize}
+        onResizeEnd={handleResizeEnd}
         lineStyle={{ display: 'none' }}
         handleStyle={{ width: 8 / zoom, height: 8 / zoom, borderRadius: 2, backgroundColor: '#3b82f6', border: '1px solid var(--bg-primary)' }}
       />
@@ -595,7 +610,7 @@ function CanvasAnalysisNodeInner({ data, selected }: NodeProps<CanvasAnalysisNod
           onClick={(e) => { e.stopPropagation(); onDelete(analysis.id); }}
           title="Delete canvas analysis"
           style={{
-            position: 'absolute', top: -10 / zoom, right: -10 / zoom, width: 20 / zoom, height: 20 / zoom,
+            position: 'absolute', top: -24 / zoom, right: -24 / zoom, width: 20 / zoom, height: 20 / zoom,
             borderRadius: '50%', border: '1px solid var(--border-primary)', background: 'var(--bg-primary)',
             color: 'var(--color-danger)', fontSize: 12 / zoom, lineHeight: `${18 / zoom}px`, textAlign: 'center',
             cursor: 'pointer', zIndex: 10, padding: 0, boxShadow: '0 1px 3px rgba(0,0,0,0.15)',

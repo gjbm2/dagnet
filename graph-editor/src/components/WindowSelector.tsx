@@ -704,8 +704,11 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
         setPlannerResult(result);
         isInitialMountRef.current = false;
         
-        // Show toast if planner says to
-        if (result.summaries.showToast && result.summaries.toastMessage) {
+        // Show toast if planner says to — but NOT on initial_load, where parameter
+        // files may not yet be in FileRegistry (race with workspace hydration),
+        // causing false "needs fetch" alerts that disappear moments later.
+        if (result.summaries.showToast && result.summaries.toastMessage
+            && result.analysisContext?.trigger !== 'initial_load') {
           toast(result.summaries.toastMessage, { icon: '⚠️', duration: 4000 });
         }
       })

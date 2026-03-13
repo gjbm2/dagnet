@@ -1023,6 +1023,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
   const snapshotBootCycleIdRef = useRef<string>('');
   const isSyncingRef = useRef(false); // Prevents ReactFlow->Graph sync loops, but NOT Graph->ReactFlow sync
   const isDraggingNodeRef = useRef(false); // Prevents Graph->ReactFlow sync during node dragging
+  const isResizingNodeRef = useRef(false); // Prevents Graph->ReactFlow style sync during node resizing
   const dragTimeoutRef = useRef<number | null>(null); // Failsafe to clear drag flag if it gets stuck
   const prevSankeyViewRef = useRef(useSankeyView); // Track Sankey mode changes to force slow path rebuild
   const prevShowNodeImagesRef = useRef(showNodeImages); // Track image view changes to force slow path rebuild
@@ -1555,23 +1556,32 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
 
   const autoEditPostitIdRef = useRef<string | null>(null);
   const autoSelectAnalysisIdRef = useRef<string | null>(null);
+
+  // Resize guard callbacks — passed to canvas object nodes to prevent graph→RF style overwrites mid-resize
+  const handleResizeStart = useCallback(() => { isResizingNodeRef.current = true; }, []);
+  const handleResizeEnd = useCallback(() => { isResizingNodeRef.current = false; }, []);
+
   const postitHistoryTimerRef = useRef<NodeJS.Timeout | null>(null);
   const handleUpdatePostit = useCallback((id: string, updates: any) => {
-    if (!graph) return;
-    const nextGraph = structuredClone(graph);
+    const current = graphRef.current;
+    if (!current) return;
+    const nextGraph = structuredClone(current);
     if (!nextGraph.postits) return;
     const p = nextGraph.postits.find((p: any) => p.id === id);
     if (!p) return;
     Object.assign(p, updates);
     if (nextGraph.metadata) nextGraph.metadata.updated_at = new Date().toISOString();
-    setGraph(nextGraph);
+    // Use setGraphDirect (synchronous) — postit updates are never topology changes
+    // and the async setGraph wrapper causes stale graphRef during rapid resize/typing
+    setGraphDirect(nextGraph);
+    graphRef.current = nextGraph; // Keep ref in sync for rapid successive calls (e.g. resize)
     // Debounce history: coalesce rapid changes (typing, resizing) into one undo step
     if (postitHistoryTimerRef.current) clearTimeout(postitHistoryTimerRef.current);
     postitHistoryTimerRef.current = setTimeout(() => {
       saveHistoryState('Update post-it');
       postitHistoryTimerRef.current = null;
     }, 800);
-  }, [graph, setGraph, saveHistoryState]);
+  }, [setGraphDirect, saveHistoryState]);
 
   const handleDeletePostit = useCallback((id: string) => {
     if (!graph) return;
@@ -1586,20 +1596,24 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
 
   const containerHistoryTimerRef = useRef<NodeJS.Timeout | null>(null);
   const handleUpdateContainer = useCallback((id: string, updates: any) => {
-    if (!graph) return;
-    const nextGraph = structuredClone(graph);
-    if (!nextGraph.containers) return;
+    const current = graphRef.current;
+    if (!current) { console.warn(`[handleUpdateContainer] graphRef.current is null!`); return; }
+    const nextGraph = structuredClone(current);
+    if (!nextGraph.containers) { console.warn(`[handleUpdateContainer] no containers array!`); return; }
     const c = nextGraph.containers.find((c: any) => c.id === id);
-    if (!c) return;
+    if (!c) { console.warn(`[handleUpdateContainer] container ${id.slice(0,8)} not found!`); return; }
+    const prevW = c.width, prevH = c.height;
     Object.assign(c, updates);
+    console.log(`[handleUpdateContainer] ${id.slice(0,8)}: ${prevW}x${prevH} → ${c.width}x${c.height}`);
     if (nextGraph.metadata) nextGraph.metadata.updated_at = new Date().toISOString();
-    setGraph(nextGraph);
+    setGraphDirect(nextGraph);
+    graphRef.current = nextGraph; // Keep ref in sync for rapid successive calls (e.g. resize)
     if (containerHistoryTimerRef.current) clearTimeout(containerHistoryTimerRef.current);
     containerHistoryTimerRef.current = setTimeout(() => {
       saveHistoryState('Update container');
       containerHistoryTimerRef.current = null;
     }, 800);
-  }, [graph, setGraph, saveHistoryState]);
+  }, [setGraphDirect, saveHistoryState]);
 
   const handleDeleteContainer = useCallback((id: string) => {
     if (!graph) return;
@@ -1618,13 +1632,14 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
       Object.assign(a, updates);
     });
     if (!nextGraph) return;
-    setGraph(nextGraph);
+    setGraphDirect(nextGraph);
+    graphRef.current = nextGraph; // Keep ref in sync for rapid successive calls (e.g. resize)
     if (analysisHistoryTimerRef.current) clearTimeout(analysisHistoryTimerRef.current);
     analysisHistoryTimerRef.current = setTimeout(() => {
       saveHistoryState('Update canvas analysis');
       analysisHistoryTimerRef.current = null;
     }, 800);
-  }, [setGraph, saveHistoryState]);
+  }, [setGraphDirect, saveHistoryState]);
 
   const handleDeleteAnalysis = useCallback((id: string) => {
     const nextGraph = deleteCanvasAnalysisFromGraph(graph, id);
@@ -2154,9 +2169,9 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
               return {
                 ...prevNode,
                 zIndex: 5000 + gpIndex,
-                // During drag, preserve ReactFlow's current position — graph model may not have synced yet
+                // During drag/resize, preserve ReactFlow's current position/size — graph model may not have synced yet
                 ...(isDraggingNodeRef.current ? {} : { position: { x: graphPostit.x ?? 0, y: graphPostit.y ?? 0 } }),
-                style: { ...prevNode.style, width: graphPostit.width, height: graphPostit.height },
+                ...(isResizingNodeRef.current ? {} : { style: { ...prevNode.style, width: graphPostit.width, height: graphPostit.height } }),
                 selected: autoEditNodeId ? prevNode.id === autoEditNodeId : prevNode.selected,
                 data: {
                   ...prevNode.data,
@@ -2164,6 +2179,8 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
                   onUpdate: handleUpdatePostit,
                   onDelete: handleDeletePostit,
                   onSelect: onSelectedAnnotationChange ? (id: string) => onSelectedAnnotationChange(id, 'postit') : undefined,
+                  onResizeStart: handleResizeStart,
+                  onResizeEnd: handleResizeEnd,
                 },
               };
             }
@@ -2176,14 +2193,27 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
               return {
                 ...prevNode,
                 zIndex: 1000 + gcIndex,
-                // During drag, preserve ReactFlow's current position — graph model may not have synced yet
+                // During drag/resize, preserve ReactFlow's current position/size — graph model may not have synced yet
                 ...(isDraggingNodeRef.current ? {} : { position: { x: graphContainer.x ?? 0, y: graphContainer.y ?? 0 } }),
-                style: { ...prevNode.style, width: graphContainer.width, height: graphContainer.height },
+                ...(() => {
+                  if (isResizingNodeRef.current) {
+                    console.log(`[SyncGuard] container ${containerId.slice(0,8)}: RESIZE guard active, keeping RF style ${prevNode.style?.width}x${prevNode.style?.height}`);
+                    return {};
+                  }
+                  const gw = graphContainer.width, gh = graphContainer.height;
+                  const rw = prevNode.style?.width, rh = prevNode.style?.height;
+                  if (gw !== rw || gh !== rh) {
+                    console.log(`[SyncGuard] container ${containerId.slice(0,8)}: applying graph ${gw}x${gh} (was RF ${rw}x${rh})`);
+                  }
+                  return { style: { ...prevNode.style, width: gw, height: gh } };
+                })(),
                 data: {
                   ...prevNode.data,
                   container: graphContainer,
                   onUpdate: handleUpdateContainer,
                   onDelete: handleDeleteContainer,
+                  onResizeStart: handleResizeStart,
+                  onResizeEnd: handleResizeEnd,
                 },
               };
             }
@@ -2205,15 +2235,17 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
                 ...prevNode,
                 type: 'canvasAnalysis',
                 zIndex: 5000 + (graph.postits || []).length + (gaIndex >= 0 ? gaIndex : 0),
-                // During drag, preserve ReactFlow's current position — graph model may not have synced yet
+                // During drag/resize, preserve ReactFlow's current position/size — graph model may not have synced yet
                 ...(isDraggingNodeRef.current ? {} : { position: { x: graphAnalysis.x ?? 0, y: graphAnalysis.y ?? 0 } }),
-                style: { ...prevNode.style, width: graphAnalysis.width, height: graphAnalysis.height },
+                ...(isResizingNodeRef.current ? {} : { style: { ...prevNode.style, width: graphAnalysis.width, height: graphAnalysis.height } }),
                 data: dataChanged ? {
                   ...prevData,
                   analysis: stableAnalysis,
                   tabId,
                   onUpdate: handleUpdateAnalysis,
                   onDelete: handleDeleteAnalysis,
+                  onResizeStart: handleResizeStart,
+                  onResizeEnd: handleResizeEnd,
                 } : prevData,
               };
             }
@@ -2422,7 +2454,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
                 position: { x: c.x ?? 0, y: c.y ?? 0 },
                 zIndex: 1000 + ci,
                 style: { width: c.width, height: c.height },
-                data: { container: c, onUpdate: handleUpdateContainer, onDelete: handleDeleteContainer },
+                data: { container: c, onUpdate: handleUpdateContainer, onDelete: handleDeleteContainer, onResizeStart: handleResizeStart, onResizeEnd: handleResizeEnd },
               });
             }
           }
@@ -2446,6 +2478,8 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
                   onUpdate: handleUpdatePostit,
                   onDelete: handleDeletePostit,
                   onSelect: onSelectedAnnotationChange ? (id: string) => onSelectedAnnotationChange(id, 'postit') : undefined,
+                  onResizeStart: handleResizeStart,
+                  onResizeEnd: handleResizeEnd,
                   ...(shouldAutoEdit ? { autoEdit: true } : {}),
                 },
               });
@@ -2468,6 +2502,8 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
                   tabId,
                   onUpdate: handleUpdateAnalysis,
                   onDelete: handleDeleteAnalysis,
+                  onResizeStart: handleResizeStart,
+                  onResizeEnd: handleResizeEnd,
                 },
               });
             }
