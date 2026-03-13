@@ -1,4 +1,11 @@
 # DagNet Release Notes
+## Version 1.7.12b
+**Released:** 13-Mar-26
+
+Fixed nasty pit pull bug, amonth other chart polishing
+
+---
+
 ## Version 1.7.10b
 **Released:** 12-Mar-26
 
