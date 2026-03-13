@@ -6,7 +6,7 @@
  * Correctness here prevents spurious node highlighting on canvas.
  */
 import { describe, it, expect } from 'vitest';
-import { findPath, resolveShapeNodes, getVisibleAnalysisIds, computeHaloNodeIds } from '../SelectionConnectors';
+import { findPath, resolveShapeNodes, getVisibleAnalysisIds, computeHaloNodeIds, topoSortWaypoints } from '../SelectionConnectors';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -151,17 +151,17 @@ describe('resolveShapeNodes', () => {
     expect(result.referencedOnPath.size).toBe(0);
   });
 
-  it('visited nodes not on the path appear in disconnectedIds', () => {
+  it('visited nodes unreachable in graph appear in disconnectedIds', () => {
     const { graphEdges, nodeUuidToId } = buildGraph([['A', 'B']]);
     const result = resolveShapeNodes('from(A).to(B).visited(X)', graphEdges, nodeUuidToId);
 
-    // A→B connected, X is visited but not on path
+    // A→B connected, X is visited but not reachable in the graph at all
     expect(result.connectedIds).toEqual(['A', 'B']);
     expect(result.disconnectedIds).toEqual(['X']);
     expect(result.referencedOnPath.has('A')).toBe(true);
     expect(result.referencedOnPath.has('B')).toBe(true);
-    // X is in referencedOnPath because it's in the DSL visited clause
-    expect(result.referencedOnPath.has('X')).toBe(true);
+    // X is disconnected — not in referencedOnPath
+    expect(result.referencedOnPath.has('X')).toBe(false);
   });
 
   it('handles UUID-based graph edges', () => {
@@ -180,6 +180,139 @@ describe('resolveShapeNodes', () => {
     expect(result.connectedIds).toEqual(['switch-registered', 'switch-success']);
     expect(result.referencedOnPath.has('switch-registered')).toBe(true);
     expect(result.referencedOnPath.has('switch-success')).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// topoSortWaypoints
+// ---------------------------------------------------------------------------
+
+describe('topoSortWaypoints', () => {
+  it('sorts waypoints in topological order of the graph', () => {
+    const { graphEdges, nodeUuidToId } = buildGraph([['A', 'B'], ['B', 'C'], ['C', 'D']]);
+    const sorted = topoSortWaypoints(['D', 'A', 'C'], graphEdges, nodeUuidToId);
+    expect(sorted).toEqual(['A', 'C', 'D']);
+  });
+
+  it('handles waypoints not in the graph — appends them at end', () => {
+    const { graphEdges, nodeUuidToId } = buildGraph([['A', 'B']]);
+    const sorted = topoSortWaypoints(['A', 'X', 'B'], graphEdges, nodeUuidToId);
+    expect(sorted.indexOf('A')).toBeLessThan(sorted.indexOf('B'));
+    expect(sorted).toContain('X');
+  });
+
+  it('handles UUID-based edges', () => {
+    const { graphEdges, nodeUuidToId } = buildGraphWithUuids(
+      [
+        { id: 'start', uuid: 'u1' },
+        { id: 'mid', uuid: 'u2' },
+        { id: 'end', uuid: 'u3' },
+      ],
+      [
+        { fromUuid: 'u1', toUuid: 'u2' },
+        { fromUuid: 'u2', toUuid: 'u3' },
+      ],
+    );
+    const sorted = topoSortWaypoints(['end', 'start', 'mid'], graphEdges, nodeUuidToId);
+    expect(sorted).toEqual(['start', 'mid', 'end']);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// resolveShapeNodes — waypoint chaining
+// ---------------------------------------------------------------------------
+
+describe('resolveShapeNodes waypoint chaining', () => {
+  it('chains visited node into connected path when reachable', () => {
+    // Graph: A→B→C→D, visited(C) — old behaviour would BFS A→D (possibly A→B→C→D),
+    // but if there were a shortcut A→D it would skip C. With chaining, C is a waypoint.
+    const { graphEdges, nodeUuidToId } = buildGraph([
+      ['A', 'B'], ['B', 'C'], ['C', 'D'], ['A', 'D'],
+    ]);
+    const result = resolveShapeNodes('from(A).to(D).visited(C)', graphEdges, nodeUuidToId);
+
+    // C must be on the connected path, not disconnected
+    expect(result.connectedIds).toContain('C');
+    expect(result.disconnectedIds).not.toContain('C');
+    // Path order: A before C, C before D
+    expect(result.connectedIds.indexOf('A')).toBeLessThan(result.connectedIds.indexOf('C'));
+    expect(result.connectedIds.indexOf('C')).toBeLessThan(result.connectedIds.indexOf('D'));
+    expect(result.referencedOnPath.has('A')).toBe(true);
+    expect(result.referencedOnPath.has('C')).toBe(true);
+    expect(result.referencedOnPath.has('D')).toBe(true);
+  });
+
+  it('chains visitedAny nodes into connected path in topo order', () => {
+    // Graph: A→B→C→D→E→F
+    const { graphEdges, nodeUuidToId } = buildGraph([
+      ['A', 'B'], ['B', 'C'], ['C', 'D'], ['D', 'E'], ['E', 'F'],
+    ]);
+    const result = resolveShapeNodes(
+      'from(A).to(F).visited(B).visitedAny(C,D,E)',
+      graphEdges, nodeUuidToId,
+    );
+
+    // All waypoints should be on the connected path in topo order
+    expect(result.connectedIds).toEqual(['A', 'B', 'C', 'D', 'E', 'F']);
+    expect(result.disconnectedIds).toEqual([]);
+    for (const id of ['A', 'B', 'C', 'D', 'E', 'F']) {
+      expect(result.referencedOnPath.has(id)).toBe(true);
+    }
+  });
+
+  it('handles mixed reachable and unreachable visitedAny nodes', () => {
+    // Graph: A→B→C, no path to X
+    const { graphEdges, nodeUuidToId } = buildGraph([['A', 'B'], ['B', 'C']]);
+    const result = resolveShapeNodes(
+      'from(A).to(C).visitedAny(B,X)',
+      graphEdges, nodeUuidToId,
+    );
+
+    expect(result.connectedIds).toContain('A');
+    expect(result.connectedIds).toContain('B');
+    expect(result.connectedIds).toContain('C');
+    expect(result.disconnectedIds).toContain('X');
+  });
+
+  it('real-world funnel: from→to with visited + visitedAny all on a linear chain', () => {
+    // Simulates the user's actual funnel topology
+    const { graphEdges, nodeUuidToId } = buildGraph([
+      ['delegation', 'coffee'],
+      ['coffee', 'classified'],
+      ['classified', 'recommendation'],
+      ['recommendation', 'registration'],
+      ['registration', 'switch-success'],
+      // Extra shortcut edges that BFS might prefer
+      ['delegation', 'switch-success'],
+      ['delegation', 'classified'],
+    ]);
+    const result = resolveShapeNodes(
+      'from(delegation).to(switch-success).visited(coffee).visitedAny(classified,recommendation,registration)',
+      graphEdges, nodeUuidToId,
+    );
+
+    // All funnel stages should be connected in topo order
+    expect(result.disconnectedIds).toEqual([]);
+    const ids = result.connectedIds;
+    expect(ids.indexOf('delegation')).toBeLessThan(ids.indexOf('coffee'));
+    expect(ids.indexOf('coffee')).toBeLessThan(ids.indexOf('classified'));
+    expect(ids.indexOf('classified')).toBeLessThan(ids.indexOf('recommendation'));
+    expect(ids.indexOf('recommendation')).toBeLessThan(ids.indexOf('registration'));
+    expect(ids.indexOf('registration')).toBeLessThan(ids.indexOf('switch-success'));
+  });
+
+  it('from(A).to(D) with no path and waypoints → all disconnected', () => {
+    // Two disconnected subgraphs
+    const { graphEdges, nodeUuidToId } = buildGraph([['A', 'B'], ['C', 'D']]);
+    const result = resolveShapeNodes(
+      'from(A).to(D).visited(B)',
+      graphEdges, nodeUuidToId,
+    );
+
+    // Can't chain A→B→?→D — at some point the chain breaks
+    // All waypoints that can't be connected end up disconnected
+    expect(result.connectedIds.length).toBeLessThan(4);
+    expect(result.disconnectedIds.length).toBeGreaterThan(0);
   });
 });
 

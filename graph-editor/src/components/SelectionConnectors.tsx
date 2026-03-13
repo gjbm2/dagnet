@@ -24,6 +24,23 @@ interface TubeSegment {
 const TRANSIT_RADIUS = 10;
 
 /**
+ * Build a directed adjacency list from graph edges, resolving UUIDs → human IDs.
+ */
+function buildAdjacency(
+  graphEdges: Array<{ from: string; to: string }>,
+  nodeUuidToId: Map<string, string>,
+): Map<string, string[]> {
+  const adj = new Map<string, string[]>();
+  for (const e of graphEdges) {
+    const src = nodeUuidToId.get(e.from) ?? e.from;
+    const tgt = nodeUuidToId.get(e.to) ?? e.to;
+    if (!adj.has(src)) adj.set(src, []);
+    adj.get(src)!.push(tgt);
+  }
+  return adj;
+}
+
+/**
  * BFS shortest path from `fromId` to `toId` using human-readable node IDs.
  * `nodeUuidToId` maps graph edge UUIDs to human IDs.
  * Returns the full path as an array of human IDs, or null if no path exists.
@@ -33,30 +50,127 @@ export function findPath(
   graphEdges: Array<{ from: string; to: string }>,
   nodeUuidToId: Map<string, string>,
 ): string[] | null {
-  const adj = new Map<string, string[]>();
-  for (const e of graphEdges) {
-    const src = nodeUuidToId.get(e.from) ?? e.from;
-    const tgt = nodeUuidToId.get(e.to) ?? e.to;
-    if (!adj.has(src)) adj.set(src, []);
-    adj.get(src)!.push(tgt);
-  }
+  const adj = buildAdjacency(graphEdges, nodeUuidToId);
+  return bfsPath(fromId, toId, adj);
+}
+
+/** BFS on a pre-built adjacency list. */
+function bfsPath(fromId: string, toId: string, adj: Map<string, string[]>): string[] | null {
+  if (fromId === toId) return [fromId];
   const visited = new Set<string>();
   const parent = new Map<string, string>();
   const queue = [fromId];
   visited.add(fromId);
   while (queue.length > 0) {
     const curr = queue.shift()!;
-    if (curr === toId) {
-      const path: string[] = [];
-      let node: string | undefined = toId;
-      while (node !== undefined) { path.unshift(node); node = parent.get(node); }
-      return path;
-    }
     for (const next of adj.get(curr) || []) {
-      if (!visited.has(next)) { visited.add(next); parent.set(next, curr); queue.push(next); }
+      if (!visited.has(next)) {
+        visited.add(next);
+        parent.set(next, curr);
+        if (next === toId) {
+          const path: string[] = [];
+          let node: string | undefined = toId;
+          while (node !== undefined) { path.unshift(node); node = parent.get(node); }
+          return path;
+        }
+        queue.push(next);
+      }
     }
   }
   return null;
+}
+
+/**
+ * Topologically sort a set of waypoints using the full graph's edge structure.
+ * Uses Kahn's algorithm on the full graph, then filters to waypoints.
+ * Waypoints unreachable in the graph are appended at the end.
+ */
+export function topoSortWaypoints(
+  waypoints: string[],
+  graphEdges: Array<{ from: string; to: string }>,
+  nodeUuidToId: Map<string, string>,
+): string[] {
+  const adj = new Map<string, string[]>();
+  const inDegree = new Map<string, number>();
+  const allNodes = new Set<string>();
+
+  for (const e of graphEdges) {
+    const src = nodeUuidToId.get(e.from) ?? e.from;
+    const tgt = nodeUuidToId.get(e.to) ?? e.to;
+    allNodes.add(src);
+    allNodes.add(tgt);
+    if (!adj.has(src)) adj.set(src, []);
+    adj.get(src)!.push(tgt);
+    inDegree.set(tgt, (inDegree.get(tgt) || 0) + 1);
+    if (!inDegree.has(src)) inDegree.set(src, 0);
+  }
+
+  // Kahn's algorithm
+  const queue: string[] = [];
+  for (const n of allNodes) {
+    if ((inDegree.get(n) || 0) === 0) queue.push(n);
+  }
+
+  const waypointSet = new Set(waypoints);
+  const order: string[] = [];
+  const seen = new Set<string>();
+
+  while (queue.length > 0) {
+    const node = queue.shift()!;
+    if (seen.has(node)) continue;
+    seen.add(node);
+    if (waypointSet.has(node)) order.push(node);
+    for (const next of adj.get(node) || []) {
+      const d = (inDegree.get(next) || 1) - 1;
+      inDegree.set(next, d);
+      if (d === 0) queue.push(next);
+    }
+  }
+
+  // Append any waypoints not reached (not in graph, or in cycles)
+  for (const w of waypoints) {
+    if (!order.includes(w)) order.push(w);
+  }
+
+  return order;
+}
+
+/**
+ * Chain waypoints into a single connected path by finding BFS sub-paths
+ * between consecutive topo-sorted waypoints.  When a waypoint can't be
+ * reached, it is marked unreachable and the chain continues from the
+ * current tail of the path (skipping the gap).
+ */
+function chainWaypointPaths(
+  sortedWaypoints: string[],
+  adj: Map<string, string[]>,
+): { path: string[]; unreachable: string[] } {
+  if (sortedWaypoints.length === 0) return { path: [], unreachable: [] };
+  if (sortedWaypoints.length === 1) return { path: [sortedWaypoints[0]], unreachable: [] };
+
+  const path: string[] = [sortedWaypoints[0]];
+  const onPath = new Set<string>([sortedWaypoints[0]]);
+  const unreachable: string[] = [];
+
+  for (let i = 1; i < sortedWaypoints.length; i++) {
+    const target = sortedWaypoints[i];
+    // Try to reach target from the current tail of the path
+    const tail = path[path.length - 1];
+    const subPath = bfsPath(tail, target, adj);
+    if (subPath) {
+      for (let j = 1; j < subPath.length; j++) {
+        if (!onPath.has(subPath[j])) {
+          path.push(subPath[j]);
+          onPath.add(subPath[j]);
+        }
+      }
+    } else {
+      // Can't reach target — mark it unreachable, continue from current tail
+      unreachable.push(target);
+    }
+  }
+
+  return { path, unreachable };
 }
 
 export interface ResolvedShapeNodes {
@@ -71,6 +185,10 @@ export interface ResolvedShapeNodes {
 /**
  * Resolve a DSL string into lists of connected/disconnected/referenced node IDs.
  * Pure function — no React or DOM dependencies.
+ *
+ * Uses topological ordering of waypoints (from, to, visited, visitedAny) to
+ * build a connected path that traces the graph in a sensible order, chaining
+ * BFS sub-paths between consecutive waypoints.
  */
 export function resolveShapeNodes(
   dsl: string,
@@ -84,25 +202,68 @@ export function resolveShapeNodes(
   let referencedOnPath = new Set<string>();
 
   if (parsed.from && parsed.to) {
-    const fullPath = findPath(parsed.from, parsed.to, graphEdges, nodeUuidToId);
-    if (fullPath) {
-      referencedOnPath = new Set<string>([parsed.from, parsed.to, ...(parsed.visited || [])]);
-      connectedIds = fullPath;
+    // Collect all DSL-referenced waypoints
+    const allWaypoints = new Set<string>([parsed.from, parsed.to]);
+    for (const v of parsed.visited || []) allWaypoints.add(v);
+    for (const group of parsed.visitedAny || []) {
+      for (const nodeId of group) allWaypoints.add(nodeId);
+    }
+
+    // Topologically sort waypoints using the graph structure
+    const sorted = topoSortWaypoints([...allWaypoints], graphEdges, nodeUuidToId);
+
+    // Ensure `from` is first and `to` is last (topo sort should do this
+    // naturally for a well-formed DAG, but enforce it for robustness)
+    const fromIdx = sorted.indexOf(parsed.from);
+    if (fromIdx > 0) { sorted.splice(fromIdx, 1); sorted.unshift(parsed.from); }
+    const toIdx = sorted.indexOf(parsed.to);
+    if (toIdx !== sorted.length - 1) { sorted.splice(toIdx, 1); sorted.push(parsed.to); }
+
+    // Chain BFS sub-paths between consecutive topo-sorted waypoints
+    const adj = buildAdjacency(graphEdges, nodeUuidToId);
+    const { path, unreachable } = chainWaypointPaths(sorted, adj);
+
+    if (path.length >= 2) {
+      connectedIds = path;
+      referencedOnPath = new Set<string>(allWaypoints);
+      // Move unreachable waypoints to disconnected
+      for (const id of unreachable) {
+        if (!connectedIds.includes(id)) disconnectedIds.push(id);
+        referencedOnPath.delete(id);
+      }
     } else {
-      disconnectedIds = [parsed.from, parsed.to];
+      // Couldn't build a connected path at all
+      disconnectedIds = [...allWaypoints];
     }
   } else if (parsed.from) {
     disconnectedIds = [parsed.from];
+    for (const v of parsed.visited || []) {
+      if (!disconnectedIds.includes(v)) disconnectedIds.push(v);
+    }
+    for (const group of parsed.visitedAny || []) {
+      for (const nodeId of group) {
+        if (!disconnectedIds.includes(nodeId)) disconnectedIds.push(nodeId);
+      }
+    }
   } else if (parsed.to) {
     disconnectedIds = [parsed.to];
-  }
-
-  for (const v of parsed.visited || []) {
-    if (!connectedIds.includes(v) && !disconnectedIds.includes(v)) disconnectedIds.push(v);
-  }
-  for (const group of parsed.visitedAny || []) {
-    for (const nodeId of group) {
-      if (!connectedIds.includes(nodeId) && !disconnectedIds.includes(nodeId)) disconnectedIds.push(nodeId);
+    for (const v of parsed.visited || []) {
+      if (!disconnectedIds.includes(v)) disconnectedIds.push(v);
+    }
+    for (const group of parsed.visitedAny || []) {
+      for (const nodeId of group) {
+        if (!disconnectedIds.includes(nodeId)) disconnectedIds.push(nodeId);
+      }
+    }
+  } else {
+    // No from/to — just visited/visitedAny
+    for (const v of parsed.visited || []) {
+      if (!disconnectedIds.includes(v)) disconnectedIds.push(v);
+    }
+    for (const group of parsed.visitedAny || []) {
+      for (const nodeId of group) {
+        if (!disconnectedIds.includes(nodeId)) disconnectedIds.push(nodeId);
+      }
     }
   }
 

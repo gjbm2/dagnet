@@ -29,7 +29,7 @@ export function augmentChartKindOptionsForAnalysisType(
   options: string[],
 ): string[] {
   const out = [...options];
-  if (analysisType === 'branch_comparison' && !out.includes('time_series')) {
+  if ((analysisType === 'branch_comparison' || analysisType === 'outcome_comparison') && !out.includes('time_series')) {
     out.push('time_series');
   }
   return out;

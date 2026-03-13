@@ -2,7 +2,7 @@
 
 **Created:** 15-Dec-25
 **Last reviewed:** 13-Mar-26
-**Status:** Revised — ready for implementation (structural refactor only; no intended behavioural changes)
+**Status:** In progress — Target 1 (analysisEChartsService) completed 13-Mar-26
 
 ---
 
@@ -19,6 +19,7 @@ This document is intended to be the **single source of truth** for the slimdown 
 - **15-Dec-25**: Initial plan created.
 - **14-Jan-26**: Up-front decisions agreed; programme order and PR sequences defined.
 - **13-Mar-26**: Full re-analysis. All targets re-inventoried (significant growth since Jan). New target added (`analysisEChartsService`). Responsibility clusters re-mapped against current code. Test runlists updated. Programme order revised.
+- **13-Mar-26**: Target 1 (`analysisEChartsService`) completed. 3,378-line god file split into 5 modules + 452-line facade. All 47 tests pass. Committed as `4f7536db` on `slimdown/src-modularisation`, merged to `feature/snapshot-db-phase0`.
 
 ---
 
@@ -63,7 +64,7 @@ Primary targets (current line counts, with delta from 14-Jan-26 plan):
   - `graph-editor/src/services/UpdateManager.ts` — **5,136** (+221 / +4%)
   - `graph-editor/src/services/statisticalEnhancementService.ts` — **3,434** (+328 / +11%)
   - `graph-editor/src/services/integrityCheckService.ts` — **3,589** (+517 / +17%)
-  - `graph-editor/src/services/analysisEChartsService.ts` — **3,378** (NEW — did not exist in Jan plan)
+  - `graph-editor/src/services/analysisEChartsService.ts` — **452** (facade; was 3,378; modularised 13-Mar-26)
 - **UI**
   - `graph-editor/src/components/GraphCanvas.tsx` — **6,935** (+1,435 / +26%)
   - `graph-editor/src/components/PropertiesPanel.tsx` — **3,667** (+849 / +30%)
@@ -75,7 +76,7 @@ Secondary candidates (only after the above are stable):
 - `graph-editor/src/components/editors/GraphEditor.tsx` — **2,451** (+207 / +9%)
 - `graph-editor/src/components/QueryExpressionEditor.tsx` — **2,318** (+186 / +9%)
 
-**Total primary target surface area: ~39,427 lines** (up from ~30,469 in Jan).
+**Total primary target surface area: ~36,501 lines** (down from ~39,427 after Target 1 completion; originally ~30,469 in Jan).
 
 ---
 
@@ -179,7 +180,7 @@ For each target below, follow the same internal sequencing per Decision 3.
 
 ---
 
-#### Target 1 — `analysisEChartsService.ts` (3,378 lines) — NEW
+#### Target 1 — `analysisEChartsService.ts` (3,378 → 452 lines) — COMPLETED 13-Mar-26
 
 **Current clusters:**
 - A: Theming & common display settings (~220 lines)

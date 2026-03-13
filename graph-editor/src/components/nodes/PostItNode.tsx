@@ -63,15 +63,21 @@ export default function PostItNode({ data, selected }: NodeProps<PostItNodeData>
   }, []);
 
   const stableResizeStart = useCallback(() => { onResizeStartRef.current?.(); }, []);
-  const stableResize = useCallback((_event: any, params: { width: number; height: number }) => {
+  const stableResize = useCallback((_event: any, params: { x: number; y: number; width: number; height: number }) => {
     if (resizeTimeoutRef.current) clearTimeout(resizeTimeoutRef.current);
     resizeTimeoutRef.current = setTimeout(() => {
-      onUpdateRef.current(postitIdRef.current, { width: Math.round(params.width), height: Math.round(params.height) });
+      onUpdateRef.current(postitIdRef.current, {
+        x: Math.round(params.x), y: Math.round(params.y),
+        width: Math.round(params.width), height: Math.round(params.height),
+      });
     }, 50);
   }, []);
-  const stableResizeEnd = useCallback((_event: any, params: { width: number; height: number }) => {
+  const stableResizeEnd = useCallback((_event: any, params: { x: number; y: number; width: number; height: number }) => {
     if (resizeTimeoutRef.current) clearTimeout(resizeTimeoutRef.current);
-    onUpdateRef.current(postitIdRef.current, { width: Math.round(params.width), height: Math.round(params.height) });
+    onUpdateRef.current(postitIdRef.current, {
+      x: Math.round(params.x), y: Math.round(params.y),
+      width: Math.round(params.width), height: Math.round(params.height),
+    });
     onResizeEndRef.current?.();
   }, []);
 

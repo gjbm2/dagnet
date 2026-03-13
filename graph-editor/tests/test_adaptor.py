@@ -105,13 +105,13 @@ class TestAnalysisAdaptor:
         result = adaptor.match(predicates)
         assert result.id == 'path_between'
     
-    def test_two_absorbing_outcome_comparison(self, adaptor):
-        """Two absorbing nodes match outcome_comparison."""
+    def test_two_non_siblings_outcome_comparison(self, adaptor):
+        """Two non-sibling nodes match outcome_comparison."""
         predicates = {
             'node_count': 2,
             'has_from': False,
             'has_to': False,
-            'all_absorbing': True,
+            'all_are_siblings': False,
         }
         result = adaptor.match(predicates)
         assert result.id == 'outcome_comparison'
@@ -122,7 +122,6 @@ class TestAnalysisAdaptor:
             'node_count': 2,
             'has_from': False,
             'has_to': False,
-            'all_absorbing': False,
             'all_are_siblings': True,
         }
         result = adaptor.match(predicates)
@@ -141,24 +140,22 @@ class TestAnalysisAdaptor:
         assert 'branch_comparison' in ids
     
     def test_two_nodes_multi_waypoint(self, adaptor):
-        """Two non-sibling non-absorbing nodes match multi_waypoint."""
+        """Two visited nodes (sibling status unknown) match multi_waypoint."""
         predicates = {
             'node_count': 2,
             'has_from': False,
             'has_to': False,
-            'all_absorbing': False,
-            'all_are_siblings': False,
         }
         result = adaptor.match(predicates)
         assert result.id == 'multi_waypoint'
     
-    def test_three_absorbing_multi_outcome(self, adaptor):
-        """Three absorbing nodes match multi_outcome_comparison."""
+    def test_three_non_siblings_multi_outcome(self, adaptor):
+        """Three non-sibling nodes match multi_outcome_comparison."""
         predicates = {
             'node_count': 3,
             'has_from': False,
             'has_to': False,
-            'all_absorbing': True,
+            'all_are_siblings': False,
         }
         result = adaptor.match(predicates)
         assert result.id == 'multi_outcome_comparison'
@@ -169,7 +166,6 @@ class TestAnalysisAdaptor:
             'node_count': 3,
             'has_from': False,
             'has_to': False,
-            'all_absorbing': False,
             'all_are_siblings': True,
         }
         result = adaptor.match(predicates)
@@ -199,8 +195,6 @@ class TestAnalysisAdaptor:
         """Unmatched predicates fall back to general_selection."""
         predicates = {
             'node_count': 5,
-            'all_absorbing': False,
-            'all_are_siblings': False,
             'has_from': False,
             'has_to': False,
         }
@@ -284,7 +278,6 @@ class TestGetAllMatching:
         # Predicates that match fallback
         predicates = {
             'node_count': 10,
-            'all_absorbing': False,
             'has_from': False,
             'has_to': False,
         }

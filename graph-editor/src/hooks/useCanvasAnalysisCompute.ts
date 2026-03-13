@@ -86,17 +86,20 @@ export function useCanvasAnalysisCompute({
   const completedRunKeyRef = useRef<string | null>(null);
   const seededTransientResultRef = useRef(Boolean(result));
 
+  const isTimeSeriesChartKind = analysis?.chart_kind === 'time_series';
   const expectsTimeSeriesBranchResult =
     analysis?.recipe?.analysis?.analysis_type === 'branch_comparison'
-    && analysis?.chart_kind === 'time_series';
+    && isTimeSeriesChartKind;
   const analysisType = analysis?.recipe?.analysis?.analysis_type;
   const analyticsDsl = analysis?.recipe?.analysis?.analytics_dsl || '';
   const snapshotMeta = useMemo(
     () => ANALYSIS_TYPES.find(t => t.id === analysisType),
     [analysisType],
   );
+  // Snapshot data is only needed when chart_kind is 'time_series' for comparison types
+  const comparisonTypes = new Set(['branch_comparison', 'outcome_comparison', 'multi_branch_comparison', 'multi_outcome_comparison']);
   const needsSnapshots = !!snapshotMeta?.snapshotContract
-    && (analysisType !== 'branch_comparison' || expectsTimeSeriesBranchResult);
+    && (!comparisonTypes.has(analysisType || '') || isTimeSeriesChartKind);
   const resultHasTimeDimension = !!(result?.semantics?.dimensions || []).some((d: any) => d?.id === 'date' || d?.type === 'time');
   const debugSnapshotChart = debugSnapshotChartOverride ?? isSnapshotBootChart(analysis);
   const propLooksSnapshot = isSnapshotBootChart(analysisProp);

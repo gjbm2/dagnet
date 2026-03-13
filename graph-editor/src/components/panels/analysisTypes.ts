@@ -124,9 +124,16 @@ export const ANALYSIS_TYPES: AnalysisTypeMeta[] = [
   {
     id: 'outcome_comparison',
     name: 'Outcome Comparison',
-    shortDescription: 'Compare probabilities of outcomes',
-    selectionHint: 'Select 2+ absorbing nodes with visitedAny()',
+    shortDescription: 'Compare probabilities of reaching nodes',
+    selectionHint: 'Select 2+ nodes with visitedAny()',
     icon: BarChart3,
+    snapshotContract: {
+      scopeRule: 'children_of_selected_node',
+      readMode: 'raw_snapshots',
+      slicePolicy: 'mece_fulfilment_allowed',
+      timeBoundsSource: 'query_dsl_window',
+      perScenario: true,
+    },
   },
   {
     id: 'branch_comparison',
@@ -175,8 +182,8 @@ export const ANALYSIS_TYPES: AnalysisTypeMeta[] = [
   {
     id: 'multi_outcome_comparison',
     name: 'Multi-Outcome Comparison',
-    shortDescription: 'Compare 3+ outcome probabilities',
-    selectionHint: 'Select 3+ absorbing nodes',
+    shortDescription: 'Compare 3+ node probabilities',
+    selectionHint: 'Select 3+ nodes with visitedAny()',
     icon: Combine,
   },
   {

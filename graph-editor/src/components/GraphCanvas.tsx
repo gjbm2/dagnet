@@ -114,6 +114,24 @@ const edgeTypes: EdgeTypes = {
   conversion: ConversionEdge,
 };
 
+/** Resolve conversion node IDs spatially contained within a container. */
+function getContainedConversionNodeIds(
+  container: { x: number; y: number; width: number; height: number },
+  rfNodes: any[],
+  tolerance = 10,
+): string[] {
+  return rfNodes.filter(n => {
+    if (n.id?.startsWith('postit-') || n.id?.startsWith('container-') || n.id?.startsWith('analysis-')) return false;
+    const nw = (n as any).measured?.width ?? n.width ?? DEFAULT_NODE_WIDTH;
+    const nh = (n as any).measured?.height ?? n.height ?? DEFAULT_NODE_HEIGHT;
+    const nx = n.position?.x ?? 0;
+    const ny = n.position?.y ?? 0;
+    return nx >= (container.x - tolerance) && ny >= (container.y - tolerance) &&
+      (nx + nw) <= (container.x + container.width + tolerance) &&
+      (ny + nh) <= (container.y + container.height + tolerance);
+  }).map(n => n.id);
+}
+
 function GraphIssuesIndicatorOverlay({ tabId }: { tabId?: string }) {
   const { theme } = useTheme();
   const dark = theme === 'dark';
@@ -1261,7 +1279,10 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
     }
     
     // Preserve current ReactFlow node positions in the graph
-    // This prevents nodes from jumping back to old positions when graph is synced
+    // This prevents nodes from jumping back to old positions when graph is synced.
+    // Must patch ALL node types: conversion nodes (layout.x/y), containers, postits,
+    // and canvas analyses (x/y directly). During drag, the graph store has stale
+    // positions (only updated at onNodeDragStop), but RF has the current positions.
     nextGraph.nodes.forEach((node: any) => {
       const reactFlowNode = nodes.find(n => n.id === node.uuid || n.id === node.id);
       if (reactFlowNode && node.layout) {
@@ -1269,6 +1290,33 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
         node.layout.y = reactFlowNode.position.y;
       }
     });
+    if (nextGraph.containers) {
+      nextGraph.containers.forEach((container: any) => {
+        const rfNode = nodes.find(n => n.id === `container-${container.id}`);
+        if (rfNode) {
+          container.x = rfNode.position.x;
+          container.y = rfNode.position.y;
+        }
+      });
+    }
+    if (nextGraph.postits) {
+      nextGraph.postits.forEach((postit: any) => {
+        const rfNode = nodes.find(n => n.id === `postit-${postit.id}`);
+        if (rfNode) {
+          postit.x = rfNode.position.x;
+          postit.y = rfNode.position.y;
+        }
+      });
+    }
+    if (nextGraph.canvasAnalyses) {
+      nextGraph.canvasAnalyses.forEach((analysis: any) => {
+        const rfNode = nodes.find(n => n.id === `analysis-${analysis.id}`);
+        if (rfNode) {
+          analysis.x = rfNode.position.x;
+          analysis.y = rfNode.position.y;
+        }
+      });
+    }
     
     if (nextGraph.metadata) {
       nextGraph.metadata.updated_at = new Date().toISOString();
@@ -1745,15 +1793,27 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
       const selectedNodes = nodes.filter(n => n.selected);
       const selectedEdges = edges.filter(e => e.selected);
       
-      e.detail.selectedNodeUuids = selectedNodes.filter(n => !isCanvasObjectNode(n.id)).map(n => n.id);
+      let conversionNodeUuids = selectedNodes.filter(n => !isCanvasObjectNode(n.id)).map(n => n.id);
       e.detail.selectedEdgeUuids = selectedEdges.map(e => e.id);
       e.detail.selectedPostitIds = selectedNodes.filter(n => n.id?.startsWith('postit-')).map(n => n.id.replace('postit-', ''));
-      e.detail.selectedContainerIds = selectedNodes.filter(n => n.id?.startsWith('container-')).map(n => n.id.replace('container-', ''));
+      const containerIds = selectedNodes.filter(n => n.id?.startsWith('container-')).map(n => n.id.replace('container-', ''));
+      e.detail.selectedContainerIds = containerIds;
       e.detail.selectedAnalysisIds = selectedNodes.filter(n => n.id?.startsWith('analysis-')).map(n => n.id.replace('analysis-', ''));
+
+      // When a container is selected and no conversion nodes are, expand to contained nodes
+      if (conversionNodeUuids.length === 0 && containerIds.length > 0 && graph?.containers) {
+        for (const cid of containerIds) {
+          const c = graph.containers.find((ci: any) => ci.id === cid);
+          if (c) {
+            conversionNodeUuids.push(...getContainedConversionNodeIds(c, nodes));
+          }
+        }
+      }
+      e.detail.selectedNodeUuids = conversionNodeUuids;
     };
     window.addEventListener('dagnet:querySelection', handler as any);
     return () => window.removeEventListener('dagnet:querySelection', handler as any);
-  }, [nodes, edges, isCanvasObjectNode]);
+  }, [nodes, edges, graph, isCanvasObjectNode]);
 
   // Listen for select all nodes request (from Edit menu)
   useEffect(() => {
@@ -2004,15 +2064,20 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
     });
 
     // Fast path: If only edge data changed (no topology, position, or handle changes), update in place
-    // CRITICAL: During drag or immediately after drag, ALWAYS take fast path to prevent node position overwrites
-    // We ignore nodePositionsChanged during/after drag because ReactFlow has the current drag positions
-    // Handle changes require full recalculation because they affect edge bundling, offsets, and widths
-    // After drag, we keep isDraggingNodeRef.current true until sync completes to force fast path
+    // CRITICAL: During drag or resize, ALWAYS take fast path to prevent node position/size overwrites.
+    // The fast path already updates edge handles (sourceHandle/targetHandle) and recalculates offsets,
+    // and it has guards that preserve RF positions (isDraggingNodeRef) and styles (isResizingNodeRef)
+    // for container/postit/analysis nodes. The slow path rebuilds ALL nodes from graph data, which
+    // has stale positions during drag (store not updated until onNodeDragStop) and stale dimensions
+    // during resize (store updated by setGraphDirect but slow path would overwrite RF visual state).
     // View mode changes (Sankey, image view) require slow path because node sizes change
     // Image boundary changes (0↔1 images) also require slow path for node resizing
-    const shouldTakeFastPath = !edgeCountChanged && !nodeCountChanged && !edgeIdsChanged && !edgeHandlesChanged &&
-                               (isDraggingNodeRef.current || !analysisNodePayloadChanged) &&
-                               !viewModeChanged && !imageBoundaryChanged && edges.length > 0 && (isDraggingNodeRef.current || !nodePositionsChanged);
+    const isInteracting = isDraggingNodeRef.current || isResizingNodeRef.current;
+    const shouldTakeFastPath = !edgeCountChanged && !nodeCountChanged && !edgeIdsChanged &&
+                               (isInteracting || !edgeHandlesChanged) &&
+                               (isInteracting || !analysisNodePayloadChanged) &&
+                               !viewModeChanged && !imageBoundaryChanged && edges.length > 0 &&
+                               (isInteracting || !nodePositionsChanged);
 
     if (snapshotCharts.length > 0) {
       logSnapshotBoot('GraphCanvas:sync-path-decision', {
@@ -2170,7 +2235,8 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
                 ...prevNode,
                 zIndex: 5000 + gpIndex,
                 // During drag/resize, preserve ReactFlow's current position/size — graph model may not have synced yet
-                ...(isDraggingNodeRef.current ? {} : { position: { x: graphPostit.x ?? 0, y: graphPostit.y ?? 0 } }),
+                // Resize from left/top edge changes position too, so guard position with BOTH refs
+                ...(isInteracting ? {} : { position: { x: graphPostit.x ?? 0, y: graphPostit.y ?? 0 } }),
                 ...(isResizingNodeRef.current ? {} : { style: { ...prevNode.style, width: graphPostit.width, height: graphPostit.height } }),
                 selected: autoEditNodeId ? prevNode.id === autoEditNodeId : prevNode.selected,
                 data: {
@@ -2194,7 +2260,8 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
                 ...prevNode,
                 zIndex: 1000 + gcIndex,
                 // During drag/resize, preserve ReactFlow's current position/size — graph model may not have synced yet
-                ...(isDraggingNodeRef.current ? {} : { position: { x: graphContainer.x ?? 0, y: graphContainer.y ?? 0 } }),
+                // Resize from left/top edge changes position too, so guard position with BOTH refs
+                ...(isInteracting ? {} : { position: { x: graphContainer.x ?? 0, y: graphContainer.y ?? 0 } }),
                 ...(() => {
                   if (isResizingNodeRef.current) {
                     console.log(`[SyncGuard] container ${containerId.slice(0,8)}: RESIZE guard active, keeping RF style ${prevNode.style?.width}x${prevNode.style?.height}`);
@@ -2236,7 +2303,8 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
                 type: 'canvasAnalysis',
                 zIndex: 5000 + (graph.postits || []).length + (gaIndex >= 0 ? gaIndex : 0),
                 // During drag/resize, preserve ReactFlow's current position/size — graph model may not have synced yet
-                ...(isDraggingNodeRef.current ? {} : { position: { x: graphAnalysis.x ?? 0, y: graphAnalysis.y ?? 0 } }),
+                // Resize from left/top edge changes position too, so guard position with BOTH refs
+                ...(isInteracting ? {} : { position: { x: graphAnalysis.x ?? 0, y: graphAnalysis.y ?? 0 } }),
                 ...(isResizingNodeRef.current ? {} : { style: { ...prevNode.style, width: graphAnalysis.width, height: graphAnalysis.height } }),
                 data: dataChanged ? {
                   ...prevData,
@@ -5314,9 +5382,25 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
     const ctxNodeIds: string[] = detail?.contextNodeIds || [];
     const ctxEdgeIds: string[] = detail?.contextEdgeIds || [];
 
-    const selectedConversionNodes = nodes
+    let selectedConversionNodes = nodes
       .filter(n => n.selected && !isCanvasObjectNode(n.id))
       .map(n => n.data?.id || n.id);
+
+    // Expand selected containers to their contained nodes when no conversion nodes are selected
+    if (selectedConversionNodes.length === 0 && graph?.containers) {
+      const selectedContainers = nodes.filter(n => n.selected && n.id?.startsWith('container-'));
+      for (const cn of selectedContainers) {
+        const cid = cn.id.replace('container-', '');
+        const c = graph.containers.find((ci: any) => ci.id === cid);
+        if (c) {
+          const contained = getContainedConversionNodeIds(c, nodes);
+          selectedConversionNodes.push(...contained.map(rfId => {
+            const n = nodes.find(nd => nd.id === rfId);
+            return n?.data?.id || rfId;
+          }));
+        }
+      }
+    }
 
     const selectedEdgeUuids = edges
       .filter(e => e.selected)
@@ -6493,18 +6577,23 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
               }
               setContainerContextMenu(null);
             }}
+            onAddChart={(id) => {
+              const c = graph.containers?.find((ci: any) => ci.id === id);
+              if (c) {
+                const containedIds = getContainedConversionNodeIds(c, nodes);
+                const humanIds = containedIds.map(rfId => {
+                  const n = nodes.find(nd => nd.id === rfId);
+                  return n?.data?.id || rfId;
+                });
+                startAddChart({ contextNodeIds: humanIds });
+              }
+              setContainerContextMenu(null);
+            }}
             onCopy={(id) => {
               const c = graph.containers?.find((ci: any) => ci.id === id);
               if (c && graph) {
                 const contained = extractSubgraph({
-                  selectedNodeIds: nodes.filter(n => {
-                    if (isCanvasObjectNode(n.id)) return false;
-                    const nw = (n as any).measured?.width ?? n.width ?? DEFAULT_NODE_WIDTH;
-                    const nh = (n as any).measured?.height ?? n.height ?? DEFAULT_NODE_HEIGHT;
-                    const nx = n.position?.x ?? 0;
-                    const ny = n.position?.y ?? 0;
-                    return nx >= c.x - 10 && ny >= c.y - 10 && (nx + nw) <= (c.x + c.width + 10) && (ny + nh) <= (c.y + c.height + 10);
-                  }).map(n => n.id),
+                  selectedNodeIds: getContainedConversionNodeIds(c, nodes),
                   selectedCanvasObjectIds: {
                     containers: [id],
                     postits: (graph.postits || []).filter((p: any) =>
@@ -6521,14 +6610,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
             onCut={(id) => {
               const c = graph.containers?.find((ci: any) => ci.id === id);
               if (c && graph) {
-                const containedNodeIds = nodes.filter(n => {
-                  if (isCanvasObjectNode(n.id)) return false;
-                  const nw = (n as any).measured?.width ?? n.width ?? DEFAULT_NODE_WIDTH;
-                  const nh = (n as any).measured?.height ?? n.height ?? DEFAULT_NODE_HEIGHT;
-                  const nx = n.position?.x ?? 0;
-                  const ny = n.position?.y ?? 0;
-                  return nx >= c.x - 10 && ny >= c.y - 10 && (nx + nw) <= (c.x + c.width + 10) && (ny + nh) <= (c.y + c.height + 10);
-                }).map(n => n.id);
+                const containedNodeIds = getContainedConversionNodeIds(c, nodes);
                 const containedPostitIds = (graph.postits || []).filter((p: any) =>
                   p.x >= c.x - 10 && p.y >= c.y - 10 && (p.x + p.width) <= (c.x + c.width + 10) && (p.y + p.height) <= (c.y + c.height + 10)
                 ).map((p: any) => p.id);

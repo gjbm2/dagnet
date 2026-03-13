@@ -674,9 +674,9 @@ def run_end_comparison(
     all_scenarios: Optional[list] = None,
 ) -> dict[str, Any]:
     """
-    Compare probabilities of reaching multiple absorbing nodes.
+    Compare probabilities of reaching multiple nodes (any type, not just absorbing).
     New declarative schema: node-first with scenario secondary.
-    
+
     LAG support: includes visibility_mode per scenario for UI adaptors.
     """
     # Build node dimension values
@@ -734,7 +734,7 @@ def run_end_comparison(
             ],
             'chart': {
                 'recommended': 'bar_grouped',
-                'alternatives': ['table'],
+                'alternatives': ['pie', 'table'],
                 'hints': {
                     'sort': {'by': 'probability', 'order': 'desc'}  # Highest first
                 }

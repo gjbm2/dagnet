@@ -1584,8 +1584,14 @@ const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, r
     // Revision-aware stale echo rejection:
     // if this callback is carrying content from one of our older store->file writes,
     // and the store has advanced since then, do NOT let it overwrite fresher chart state.
+    // NOTE: We intentionally do NOT require fileSyncOrigin === 'store' here.
+    // The FileRegistry pending-update replay mechanism can lose syncOrigin (replayed
+    // via setTimeout without opts). Gating on syncOrigin would let stale echoes through
+    // whenever origin is lost. The revision comparison alone is sufficient and safe:
+    // writtenStoreContentsRef only contains content strings that THIS store wrote,
+    // so a match always means the data originated from the store.
     const recordedRevision = writtenStoreContentsRef.current.get(dataStr);
-    if (fileSyncOrigin === 'store' && recordedRevision !== undefined && recordedRevision < currentStoreRevisionRef.current) {
+    if (recordedRevision !== undefined && recordedRevision < currentStoreRevisionRef.current) {
       if (snapshotCharts.length > 0) {
         logSnapshotBoot('GraphEditor:file-to-store-skipped-stale-echo', {
           fileId,
@@ -1596,7 +1602,7 @@ const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, r
           fileSyncOrigin,
         });
       }
-      console.log(`[${new Date().toISOString()}] GraphEditor[${fileId}]: file→store sync skipped (stale store echo)`, {
+      console.log(`[${new Date().toISOString()}] GraphEditor[${fileId}]: file→store sync skipped (stale store echo, origin=${fileSyncOrigin ?? 'none'})`, {
         recordedRevision,
         currentStoreRevision: currentStoreRevisionRef.current,
         fileSyncRevision,

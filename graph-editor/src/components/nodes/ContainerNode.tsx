@@ -54,16 +54,22 @@ export default function ContainerNode({ data, selected }: NodeProps<ContainerNod
     onResizeStartRef.current?.();
   }, []);
 
-  const handleResize = useCallback((_event: any, params: { width: number; height: number }) => {
+  const handleResize = useCallback((_event: any, params: { x: number; y: number; width: number; height: number }) => {
     if (resizeTimeoutRef.current) clearTimeout(resizeTimeoutRef.current);
     resizeTimeoutRef.current = setTimeout(() => {
-      onUpdateRef.current(containerIdRef.current, { width: Math.round(params.width), height: Math.round(params.height) });
+      onUpdateRef.current(containerIdRef.current, {
+        x: Math.round(params.x), y: Math.round(params.y),
+        width: Math.round(params.width), height: Math.round(params.height),
+      });
     }, 50);
   }, []);
 
-  const handleResizeEnd = useCallback((_event: any, params: { width: number; height: number }) => {
+  const handleResizeEnd = useCallback((_event: any, params: { x: number; y: number; width: number; height: number }) => {
     if (resizeTimeoutRef.current) clearTimeout(resizeTimeoutRef.current);
-    onUpdateRef.current(containerIdRef.current, { width: Math.round(params.width), height: Math.round(params.height) });
+    onUpdateRef.current(containerIdRef.current, {
+      x: Math.round(params.x), y: Math.round(params.y),
+      width: Math.round(params.width), height: Math.round(params.height),
+    });
     onResizeEndRef.current?.();
   }, []);
 

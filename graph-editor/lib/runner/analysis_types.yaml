@@ -9,9 +9,9 @@
 # | visited(A)                     | path_through             | node_count=1            |
 # | from(A).to(B)                  | path_between             | has_from, has_to        |
 # | from(A).to(B).visited(C)       | constrained_path         | node_count>=3, has_from |
-# | visitedAny(A,B) [absorbing]    | outcome_comparison       | all_absorbing           |
+# | visitedAny(A,B) [non-sibling]  | outcome_comparison       | !all_are_siblings       |
 # | visitedAny(A,B) [siblings]     | branch_comparison        | all_are_siblings        |
-# | visitedAny(A,B,C) [absorbing]  | multi_outcome_comparison | all_absorbing           |
+# | visitedAny(A,B,C) [non-sibling]| multi_outcome_comparison | !all_are_siblings       |
 # | visitedAny(A,B,C) [siblings]   | multi_branch_comparison  | all_are_siblings        |
 # | from(A).visitedAny(B,C)        | branches_from_start      | visited_any_count>=1    |
 #
@@ -133,16 +133,16 @@ analyses:
       has_to: true
     runner: path_runner
 
-  # visitedAny(A,B) absorbing - outcome comparison
-  # NOTE: Must come before branch_comparison to match when all are absorbing
+  # visitedAny(A,B) non-sibling - outcome comparison
+  # NOTE: Must come before branch_comparison; siblings match branch_comparison instead
   - id: outcome_comparison
     name: "Outcome Comparison"
-    description: "Compare probabilities of reaching these outcomes"
+    description: "Compare probabilities of reaching these nodes"
     when:
       node_count: 2
       has_from: false
       has_to: false
-      all_absorbing: true
+      all_are_siblings: false
     runner: end_comparison_runner
 
   # visitedAny(A,B) siblings - branch comparison
@@ -199,16 +199,16 @@ analyses:
       visited_any_count: { gte: 1 }
     runner: branches_from_start_runner
 
-  # visitedAny(A,B,C) absorbing - multi outcome comparison
-  # NOTE: Must come before multi_branch_comparison to match when all are absorbing
+  # visitedAny(A,B,C) non-sibling - multi outcome comparison
+  # NOTE: Must come before multi_branch_comparison; siblings match multi_branch instead
   - id: multi_outcome_comparison
     name: "Multi-Outcome Comparison"
-    description: "Compare probabilities of reaching these outcomes"
+    description: "Compare probabilities of reaching these nodes"
     when:
       node_count: { gte: 3 }
       has_from: false
       has_to: false
-      all_absorbing: true
+      all_are_siblings: false
     runner: end_comparison_runner
 
   # visitedAny(A,B,C) - multi branch comparison

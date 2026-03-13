@@ -76,7 +76,8 @@ class FileRegistry {
   private files = new Map<string, FileState>();
   private listeners = new Map<string, Set<(file: FileState) => void>>();
   private updatingFiles = new Set<string>(); // Guard against re-entrant updates
-  private pendingUpdates = new Map<string, { data: any; opts?: { syncRevision?: number; syncOrigin?: 'store' | 'external' } }>(); // Latest queued update per fileId (prevents lost updates)
+  private pendingUpdates = new Map<string, { data: any; opts?: { syncRevision?: number; syncOrigin?: 'store' | 'external' }; generation: number }>(); // Latest queued update per fileId (prevents lost updates)
+  private fileGenerations = new Map<string, number>(); // Monotonic counter per fileId — prevents stale pending replays
 
   /**
    * Get or create a file state
@@ -246,11 +247,16 @@ class FileRegistry {
     // IMPORTANT: Do NOT drop updates (that creates silent data loss and race conditions).
     // Instead, queue the latest pending update and apply it after the current update completes.
     if (this.updatingFiles.has(fileId)) {
-      this.pendingUpdates.set(fileId, { data: newData, opts });
-      console.warn(`FileRegistry: Queued re-entrant update for ${fileId}`);
+      const gen = this.fileGenerations.get(fileId) || 0;
+      this.pendingUpdates.set(fileId, { data: newData, opts, generation: gen });
+      console.warn(`FileRegistry: Queued re-entrant update for ${fileId} (gen=${gen})`);
       return;
     }
-    
+
+    // Increment generation — any pending data queued at an older generation is stale
+    const nextGen = (this.fileGenerations.get(fileId) || 0) + 1;
+    this.fileGenerations.set(fileId, nextGen);
+
     const file = this.files.get(fileId);
     if (!file) {
       console.warn(`FileRegistry: File ${fileId} not found for update (may have been closed)`);
@@ -349,10 +355,16 @@ class FileRegistry {
       const pending = this.pendingUpdates.get(fileId);
       if (pending !== undefined) {
         this.pendingUpdates.delete(fileId);
-        // Defer to next tick to avoid deep recursion and allow current listeners to settle.
-        setTimeout(() => {
+        const currentGen = this.fileGenerations.get(fileId) || 0;
+        if (pending.generation < currentGen) {
+          // A newer write started after this pending was queued — data is stale, drop it
+          console.log(`FileRegistry: Dropped stale pending update for ${fileId} (pending gen=${pending.generation}, current gen=${currentGen})`);
+        } else {
+          // Replay immediately (no setTimeout). The async function runs synchronously up to
+          // its first await, adding fileId to updatingFiles before returning. This eliminates
+          // the macrotask gap that allowed stale data to be re-queued with a newer generation.
           void this.updateFile(fileId, pending.data, pending.opts);
-        }, 0);
+        }
       }
     }
   }
@@ -525,6 +537,8 @@ class FileRegistry {
     // Remove from in-memory registry
     this.files.delete(fileId);
     this.listeners.delete(fileId);
+    this.fileGenerations.delete(fileId);
+    this.pendingUpdates.delete(fileId);
     
     // Delete from IndexedDB.
     // Files cloned from a workspace are stored with a workspace‑prefixed ID
