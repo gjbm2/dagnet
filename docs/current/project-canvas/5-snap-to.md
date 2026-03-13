@@ -237,7 +237,65 @@ If future graphs exceed ~500 nodes, spatial indexing (quadtree or simple grid) c
 
 ---
 
-## 9. Implementation Steps
+## 9. Explicit Alignment & Distribution Commands
+
+Complementary to drag-time snapping: explicit commands that align or distribute selected objects on demand. Standard in Figma, Sketch, PowerPoint, Illustrator.
+
+### 9.1 Commands
+
+**Alignment commands** (require 2+ selected objects):
+
+| Command | Behaviour |
+|---------|-----------|
+| Align left edges | Set all selected objects' left edge to the minimum left edge in the selection |
+| Align right edges | Set all selected objects' right edge to the maximum right edge in the selection |
+| Align top edges | Set all selected objects' top edge to the minimum top edge in the selection |
+| Align bottom edges | Set all selected objects' bottom edge to the maximum bottom edge in the selection |
+| Align centre horizontally | Set all selected objects' horizontal centre to the horizontal centre of the selection bounding box |
+| Align centre vertically | Set all selected objects' vertical centre to the vertical centre of the selection bounding box |
+
+**Distribution commands** (require 3+ selected objects):
+
+| Command | Behaviour |
+|---------|-----------|
+| Distribute horizontally | Space objects evenly along the X axis (equal gaps between bounding boxes, preserving leftmost and rightmost positions) |
+| Distribute vertically | Space objects evenly along the Y axis (equal gaps between bounding boxes, preserving topmost and bottommost positions) |
+
+### 9.2 Anchor Behaviour
+
+Following Figma's default: alignment is relative to the **selection bounding box**, not to any single object. E.g., "Align left" moves all objects to the leftmost edge already present in the selection — no object moves further left than the current leftmost.
+
+Distribution preserves the positions of the two outermost objects and redistributes the interior objects to achieve equal spacing.
+
+### 9.3 Access Points
+
+Both command sets appear in two places (per the "menus are access points" principle — no logic in menu files):
+
+1. **Canvas context menu** — shown when right-clicking with 2+ objects selected. Alignment and distribution commands appear in an "Align" submenu.
+2. **Elements menu** (top menu bar) — same "Align" submenu, enabled/disabled based on current selection count.
+
+Commands are greyed out (not hidden) when the selection count is insufficient — this makes the feature discoverable.
+
+### 9.4 Service Layer
+
+All alignment/distribution logic lives in a centralised service function (not in menu files). The service:
+
+- Accepts an array of node rects (id, x, y, width, height) and the command type
+- Computes new positions
+- Returns an array of position updates `{ id, position: { x, y } }`
+- The caller (hook) applies these updates via `setNodes`
+
+This is pure geometry — no side effects, no state management, trivially testable.
+
+### 9.5 Undo
+
+Position changes from alignment/distribution commands should be undoable. If the canvas has an undo stack, these commands push a single compound entry (all moved nodes in one operation). If no undo stack exists yet, this is noted as a future enhancement.
+
+---
+
+## 10. Implementation Steps
+
+### 10.1 Snap-to Guides (drag-time)
 
 - Create `useSnapToGuides` hook:
   - Accepts snap threshold, enabled flag, Alt-key state
@@ -255,15 +313,36 @@ If future graphs exceed ~500 nodes, spatial indexing (quadtree or simple grid) c
 - Add "Snap to guides" toggle to View menu
 - Persist snap preference in `editorState`
 
+### 10.2 Alignment & Distribution Commands
+
+- Create `alignmentService` (pure geometry functions):
+  - `computeAlignment(nodes, command)` → array of position updates
+  - `computeDistribution(nodes, command)` → array of position updates
+- Create `useAlignSelection` hook:
+  - Reads current selection from ReactFlow
+  - Exposes command handlers that call the service and apply position updates via `setNodes`
+  - Exposes `canAlign` (2+ selected) and `canDistribute` (3+ selected) for menu enable/disable
+- Add "Align" submenu to canvas context menu (calls hook, no logic in menu file)
+- Add "Align" submenu to Elements menu (same hook)
+
 ---
 
-## 10. Test Plan
+## 11. Test Plan
 
-### Integration tests
+### Integration tests — Snap-to guides
 - Position change with snap enabled → position snaps to aligned target within threshold
 - Position change with snap enabled, no nearby targets → position unchanged
 - Position change with snap disabled (Alt held) → position unchanged
 - Multi-select snap uses selection bounding box, not individual nodes
 
+### Integration tests — Alignment & distribution
+- Align left with 3 objects → all left edges equal the minimum left edge
+- Align centre horizontally → all horizontal centres equal the selection bbox centre
+- Distribute horizontally with 4 objects → equal gaps between bounding boxes, outermost objects unmoved
+- Distribute with exactly 2 objects → no-op (command disabled)
+- Align with 1 object → no-op (command disabled)
+- Mixed object types (node, post-it, container) → alignment works on bounding boxes regardless of type
+
 ### Playwright
 - `snap-alignment-guides.spec.ts` — drag node near another node → guide line appears → node snaps to alignment; release → guide line disappears
+- `alignment-commands.spec.ts` — select 3 nodes → context menu → Align left → verify positions; select 4 nodes → Distribute horizontally → verify equal spacing
