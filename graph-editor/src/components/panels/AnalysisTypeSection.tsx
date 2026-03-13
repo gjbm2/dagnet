@@ -95,6 +95,7 @@ export function AnalysisTypeSection({
           viewMode={viewMode}
           draggableAvailableCards={draggableAvailableCards}
           onCardDragStart={onCardDragStart}
+          searchable
         />
       </CollapsibleSection>
 

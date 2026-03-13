@@ -3,7 +3,7 @@ import ReactECharts from 'echarts-for-react';
 import {
   Download, RefreshCcw, Trash2, MoreHorizontal, Sliders,
   BarChart3, Code, ExternalLink, ClipboardCopy,
-  Zap, Lock, Crosshair, ChevronDown, Plus,
+  Zap, Lock, Crosshair, ChevronDown, Plus, Eye, EyeOff,
 } from 'lucide-react';
 
 import type { AnalysisResult, AvailableAnalysis } from '../../lib/graphComputeClient';
@@ -16,7 +16,7 @@ import { augmentChartKindOptionsForAnalysisType, planChartDisplay } from '../../
 import { analysisResultToCsv } from '../../services/analysisExportService';
 import { downloadTextFile } from '../../services/downloadService';
 import { useElementSize } from '../../hooks/useElementSize';
-import { getAnalysisTypeMeta } from '../panels/analysisTypes';
+import { getAnalysisTypeMeta, ANALYSIS_TYPES } from '../panels/analysisTypes';
 import { AnalysisTypeCardList } from '../panels/AnalysisTypeCardList';
 import { ScenarioLayerList } from '../panels/ScenarioLayerList';
 import type { ScenarioLayerItem } from '../../types/scenarioLayerList';
@@ -381,6 +381,7 @@ export function AnalysisChartContainer(props: {
 
   // Right-click context menu (non-canvas contexts only — canvas has its own node-level menu)
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number } | null>(null);
+  const [showAllAnalysisTypes, setShowAllAnalysisTypes] = useState(false);
   const handleContextMenu = useCallback((e: React.MouseEvent) => {
     if (defaultContext === 'canvas') return; // canvas uses CanvasAnalysisContextMenu
     e.preventDefault();
@@ -645,24 +646,41 @@ export function AnalysisChartContainer(props: {
             label={activeMeta?.name}
             title="Analysis type"
           >
+            <div style={{ display: 'flex', justifyContent: 'flex-end', padding: '0 4px 4px' }}>
+              <button
+                type="button"
+                className="cfp-show-all-toggle"
+                onClick={() => setShowAllAnalysisTypes(prev => !prev)}
+                title={showAllAnalysisTypes ? 'Available only' : 'Show all'}
+                style={{ display: 'flex', alignItems: 'center', gap: 3, background: 'none', border: 'none', cursor: 'pointer', fontSize: 10, color: 'var(--text-muted, #9ca3af)', padding: '2px 4px' }}
+              >
+                {showAllAnalysisTypes ? <EyeOff size={11} /> : <Eye size={11} />}
+                {showAllAnalysisTypes ? 'Available only' : 'Show all'}
+              </button>
+            </div>
             <div className="cfp-type-palette">
-              {(props.availableAnalyses || []).map(a => {
-                const meta = getAnalysisTypeMeta(a.id);
-                const Icon = meta?.icon;
-                const active = a.id === props.analysisTypeId;
-                return (
-                  <button
-                    key={a.id}
-                    type="button"
-                    className={`cfp-type-palette-item${active ? ' active' : ''}`}
-                    onClick={() => props.onAnalysisTypeChange?.(a.id)}
-                    title={meta?.shortDescription || meta?.name || a.id}
-                  >
-                    {Icon && <Icon size={22} />}
-                    <span className="cfp-type-palette-label">{meta?.name || a.name || a.id}</span>
-                  </button>
-                );
-              })}
+              {(() => {
+                const availableIds = new Set((props.availableAnalyses || []).map(a => a.id));
+                const types = showAllAnalysisTypes
+                  ? ANALYSIS_TYPES.map(tm => ({ id: tm.id, meta: tm, available: availableIds.has(tm.id) }))
+                  : (props.availableAnalyses || []).map(a => ({ id: a.id, meta: getAnalysisTypeMeta(a.id), available: true }));
+                return types.map(({ id, meta, available }) => {
+                  const Icon = meta?.icon;
+                  const active = id === props.analysisTypeId;
+                  return (
+                    <button
+                      key={id}
+                      type="button"
+                      className={`cfp-type-palette-item${active ? ' active' : ''}${!available ? ' unavailable' : ''}`}
+                      onClick={() => props.onAnalysisTypeChange?.(id)}
+                      title={meta?.shortDescription || meta?.name || id}
+                    >
+                      {Icon && <Icon size={22} />}
+                      <span className="cfp-type-palette-label">{meta?.name || id}</span>
+                    </button>
+                  );
+                });
+              })()}
             </div>
           </CfpPopover>
         );

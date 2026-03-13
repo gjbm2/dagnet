@@ -841,6 +841,66 @@ treatment of chains and joins.
 consumers (charting, commissioned analysis, inline analysis) use BE-published
 `A→Y` model with consistent semantics.
 
+### Phase 2.5: FE stats code cutover and deletion
+
+Phase 2.5 is the final step of the FE→BE migration. Once Phase 2 exits
+(FE LAG pass completeness computation removed, all consumers use BE-published
+`A→Y` model), the FE statistical fitting code is dead and must be deleted.
+
+This is explicitly part of project-bayes because:
+
+- The Bayesian model (Phase 3) replaces the moment-based fitting that the FE
+  code implements. Leaving the FE code in place creates confusion about which
+  implementation is authoritative.
+- The FE code is substantial (~4000+ lines across multiple files) and its
+  continued presence inflates the code surface area, complicates refactoring,
+  and risks accidental re-use.
+- The cutover must happen before or early in Phase 3 so that Bayes development
+  proceeds against a clean codebase where Python is the sole fitting owner.
+
+**Phase 2.5 IS**:
+
+- Completing the parallel-run soak (`analysis-forecasting.md` Phase 9) and
+  confirming parity
+- Disabling the FE topo/LAG fitting pass (`analysis-forecasting.md` Phase 10)
+- Deleting the FE fitting codepaths (`analysis-forecasting.md` Phase 11):
+  - `statisticalEnhancementService.ts` — remove fitting orchestration (~3200
+    lines; retain only display helpers if any are still called)
+  - `lagDistributionUtils.ts` — remove or delete entirely (pure maths layer;
+    all fitting functions move to Python; assess whether any display-only
+    functions remain needed)
+  - `forecastingParityService.ts` — delete entirely (parallel-run comparison
+    layer, no longer needed after cutover)
+  - `lagRecomputeService.ts` — simplify (remove parallel-run comparison;
+    retain the recompute API client)
+  - `constants/latency.ts` — remove fitting-only constants; retain
+    `buildForecastingSettings()` (still needed for API requests)
+  - `utils/confidenceIntervals.ts` — assess; beta quantile and CI functions
+    may still be needed for display
+  - `lagMixtureAggregationService.ts` — assess; mixture quantile functions
+    may move to Python if no FE consumer remains
+  - `lagFitAnalysisService.ts` — assess; lag fit chart rendering may still
+    need the fitted curve display (but reads params from graph, not fitting)
+  - `lagHorizonsService.ts` — assess; horizon recomputation moves to BE
+  - Related test files in `src/services/__tests__/` — update or remove as the
+    code they test is deleted
+
+**Phase 2.5 IS NOT**:
+
+- Changing the BE fitting implementation (that is Phase 3)
+- Removing `buildForecastingSettings()` or the API request contract (still
+  needed by the BE)
+- Removing display-only code that reads persisted model params from graph edges
+
+**Phase 2.5 exit criterion**: no FE code path calls `fitLagDistribution`,
+`computeEdgeLatencyStats`, `approximateLogNormalSumFit`, or any other fitting
+function. Build and lint confirm zero references to deleted functions. Full
+test suite passes with reduced code surface.
+
+**Detailed plan**: `../project-db/analysis-forecasting.md` §7.5 (Cutover) and
+§7.6 (Cleanup), and `../project-db/analysis-forecasting-implementation-plan.md`
+Phases 10–11.
+
 ### Phase 3: Bayes-compatible model structures
 
 Phase 3 formalises the model architecture for Bayesian inference. It includes
@@ -848,7 +908,8 @@ topology signatures, richer provenance, and the transition from FW
 approximation to exact MCMC-based path composition.
 
 Phase 3 should happen after the pre-Bayes semantics and operational behaviour
-are proven in practice.
+are proven in practice, and after the FE stats code has been deleted (Phase
+2.5).
 
 ---
 

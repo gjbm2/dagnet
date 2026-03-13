@@ -522,6 +522,7 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
       // Check if workspace exists
       const workspaceExists = await workspaceService.workspaceExists(repo, branch);
       console.log(`🔍 NavigatorContext: Workspace ${repo}/${branch} exists: ${workspaceExists}`);
+      try { window.dispatchEvent(new CustomEvent('dagnet:navigatorLoadProgress', { detail: { stage: 'workspace-check' } })); } catch { /* best effort */ }
 
       if (!workspaceExists) {
         // Allowed remote sync: first init (initial local clone) OR explicit user repo/branch change.
@@ -554,9 +555,12 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
         await workspaceService.loadWorkspaceFromIDB(repo, branch);
       }
 
+      try { window.dispatchEvent(new CustomEvent('dagnet:navigatorLoadProgress', { detail: { stage: 'sync-done' } })); } catch { /* best effort */ }
+
       // Get all files from workspace (IDB)
       let workspaceFiles = await workspaceService.getWorkspaceFiles(repo, branch);
       console.log(`📦 WorkspaceService: Loaded ${workspaceFiles.length} files from workspace`);
+      try { window.dispatchEvent(new CustomEvent('dagnet:navigatorLoadProgress', { detail: { stage: 'files-loaded', fileCount: workspaceFiles.length } })); } catch { /* best effort */ }
 
       // If workspace exists but has no files, force re-clone
       if (workspaceFiles.length === 0 && workspaceExists) {

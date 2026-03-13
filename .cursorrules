@@ -6,7 +6,9 @@
 
 ## ABSOLUTE BAN: Destructive Terminal Commands
 
-**NEVER run ANY terminal command that deletes, truncates, overwrites, or destroys data** without unmistakable, explicit, unambiguous instruction from the user **in the current message**.
+**NEVER run OR ADVISE any operation that deletes, truncates, overwrites, or destroys data** without unmistakable, explicit, unambiguous instruction from the user **in the current message**. This applies equally to terminal commands, code changes, AND instructions/advice for the user to execute (e.g. browser console commands, IDB operations).
+
+**When you don't know the precise target, investigate or ask — NEVER widen the blast radius.** If the user asks to fix one stale record, do not suggest clearing the whole table. If one table doesn't help, do not escalate to clearing all tables. Uncertainty is a reason to investigate, not to destroy more.
 
 This includes but is not limited to:
 - `rm`, `rmdir`, `unlink`
@@ -16,6 +18,7 @@ This includes but is not limited to:
 - `echo "" > file`, `cat /dev/null > file`, or any other pattern that empties a file
 - `mv` that would overwrite an existing file without the user's knowledge
 - `sed -i` or `awk` with in-place modification on files the user hasn't asked to edit
+- IndexedDB `.clear()`, `.delete()`, `deleteDatabase()` — IDB is the source of truth for files, credentials, tabs, and workspace state
 
 **Read-only commands are always safe.** When in doubt, **READ the file first** — never modify, truncate, or delete.
 

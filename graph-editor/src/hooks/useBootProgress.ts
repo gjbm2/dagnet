@@ -48,16 +48,36 @@ export function useBootProgress(): void {
       tryComplete();
     };
 
+    const onNavigatorProgress = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      if (!detail) return;
+      switch (detail.stage) {
+        case 'workspace-check':
+          operationRegistryService.setLabel(BOOT_OP_ID, 'Checking workspace…');
+          break;
+        case 'sync-done':
+          operationRegistryService.setLabel(BOOT_OP_ID, 'Loading files…');
+          break;
+        case 'files-loaded':
+          if (detail.fileCount != null) {
+            operationRegistryService.setLabel(BOOT_OP_ID, `Loading ${detail.fileCount} files…`);
+          }
+          break;
+      }
+    };
+
     const onNavigatorDone = () => {
       navigatorDone = true;
       tryComplete();
     };
 
     window.addEventListener('dagnet:tabContextInitDone', onTabContextDone);
+    window.addEventListener('dagnet:navigatorLoadProgress', onNavigatorProgress);
     window.addEventListener('dagnet:navigatorLoadComplete', onNavigatorDone as EventListener);
 
     return () => {
       window.removeEventListener('dagnet:tabContextInitDone', onTabContextDone);
+      window.removeEventListener('dagnet:navigatorLoadProgress', onNavigatorProgress);
       window.removeEventListener('dagnet:navigatorLoadComplete', onNavigatorDone as EventListener);
       // If unmounting before init done, clean up.
       const op = operationRegistryService.get(BOOT_OP_ID);

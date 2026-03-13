@@ -337,6 +337,61 @@
   color: #374151;
 }
 
+/* Analysis Type Search */
+.analytics-type-search {
+  position: relative;
+  display: flex;
+  align-items: center;
+  margin-bottom: 6px;
+}
+
+.analytics-type-search-icon {
+  position: absolute;
+  left: 7px;
+  color: #9ca3af;
+  pointer-events: none;
+}
+
+.analytics-type-search-input {
+  width: 100%;
+  padding: 4px 24px 4px 24px;
+  font-size: 11px;
+  border: 1px solid #e5e7eb;
+  border-radius: 4px;
+  background: #fff;
+  color: #374151;
+  outline: none;
+}
+
+.analytics-type-search-input:focus {
+  border-color: #93c5fd;
+  box-shadow: 0 0 0 1px #93c5fd;
+}
+
+.analytics-type-search-input::placeholder {
+  color: #9ca3af;
+}
+
+.analytics-type-search-clear {
+  position: absolute;
+  right: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border: none;
+  background: none;
+  color: #9ca3af;
+  cursor: pointer;
+  border-radius: 2px;
+}
+
+.analytics-type-search-clear:hover {
+  color: #374151;
+  background: #f3f4f6;
+}
+
 /* Analysis Type Mini Cards */
 .analytics-type-cards {
   display: flex;
@@ -370,8 +425,7 @@
 }
 
 .analytics-type-card.unavailable {
-  opacity: 0.5;
-  cursor: not-allowed;
+  opacity: 0.65;
   background: #f9fafb;
 }
 
@@ -479,8 +533,7 @@
 }
 
 .analytics-type-icon-tile.unavailable {
-  opacity: 0.45;
-  cursor: not-allowed;
+  opacity: 0.6;
   background: #f9fafb;
 }
 
@@ -984,6 +1037,12 @@
 [data-theme="dark"] .analytics-select { background: #2d2d2d; border-color: #555; color: #e0e0e0; }
 [data-theme="dark"] .analytics-select-icon { color: #999; }
 [data-theme="dark"] .analytics-type-description { color: #888; }
+
+/* Type search */
+[data-theme="dark"] .analytics-type-search-input { background: #2d2d2d; border-color: #555; color: #e0e0e0; }
+[data-theme="dark"] .analytics-type-search-input:focus { border-color: #4d9ef7; box-shadow: 0 0 0 1px #4d9ef7; }
+[data-theme="dark"] .analytics-type-search-input::placeholder { color: #666; }
+[data-theme="dark"] .analytics-type-search-clear:hover { color: #e0e0e0; background: #353535; }
 
 /* Type cards — !important needed because these are <button> elements */
 [data-theme="dark"] .analytics-type-card { background: #2d2d2d !important; border-color: #404040 !important; color: #e0e0e0 !important; }

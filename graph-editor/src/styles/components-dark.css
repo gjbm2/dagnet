@@ -1674,6 +1674,10 @@
   color: #2563eb;
 }
 
+.cfp-type-palette-item.unavailable {
+  opacity: 0.55;
+}
+
 .cfp-type-palette-label {
   font-size: 9px;
   line-height: 1.2;
