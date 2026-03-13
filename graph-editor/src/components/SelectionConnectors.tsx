@@ -6,7 +6,7 @@
  * `display.show_subject_overlay`.
  */
 
-import React, { useMemo, useEffect, useRef } from 'react';
+import React, { useMemo, useEffect, useRef, useState } from 'react';
 import { useViewport, useNodes, useReactFlow } from 'reactflow';
 import { parseDSL } from '../lib/queryDSL';
 import { useDecorationVisibility } from './GraphCanvas';
@@ -286,10 +286,11 @@ export interface AnalysisVisibilityInput {
 
 /**
  * Determine which analyses should be displayed. ONE filter, used everywhere.
- * Three triggers, each identifying a SPECIFIC analysis:
+ * Four triggers, each identifying a SPECIFIC analysis:
  *   1. selectedAnalysisId — the analysis the user clicked/selected
  *   2. draggedAnalysisId — the analysis currently being dragged
- *   3. persisted overlay — analysis.display.show_subject_overlay === true
+ *   3. hoveredAnalysisId — the analysis the mouse is currently over
+ *   4. persisted overlay — analysis.display.show_subject_overlay === true
  * Returns the IDs of analyses that should show shapes + connectors + halos.
  * All visible analyses go through ONE rendering codepath downstream.
  */
@@ -297,11 +298,13 @@ export function getVisibleAnalysisIds(
   analyses: AnalysisVisibilityInput[],
   selectedAnalysisId: string | null,
   draggedAnalysisId: string | null,
+  hoveredAnalysisId?: string | null,
 ): Set<string> {
   const visible = new Set<string>();
   for (const a of analyses) {
     if (a.id === selectedAnalysisId) { visible.add(a.id); continue; }
     if (a.id === draggedAnalysisId) { visible.add(a.id); continue; }
+    if (a.id === hoveredAnalysisId) { visible.add(a.id); continue; }
     if (a.display?.show_subject_overlay === true) { visible.add(a.id); continue; }
   }
   return visible;
@@ -421,6 +424,8 @@ function closestPointOnShape(
 interface ShapeData {
   id: string;
   isSelected: boolean;
+  /** True when visible only because of mouse hover (faint rendering). */
+  isHovered: boolean;
   tubeSegments: TubeSegment[];
   nodes: Array<{ centre: Point; radius: number }>;
   connectedNodes: Array<{ centre: Point; radius: number }>;
@@ -435,7 +440,7 @@ interface ShapeData {
   minRadius: number;
   rfNode: any;
   colour: string;
-  /** Fill opacity for this shape (varies by selection state). */
+  /** Fill opacity for this shape (varies by selection/hover state). */
   fillOpacity: number;
 }
 
@@ -449,11 +454,21 @@ export function SelectionConnectors({ graph }: { graph: any }) {
     return selected ? selected.id.replace('analysis-', '') : null;
   }, [rfNodes]);
 
-  // ONE visibility decision — three triggers, same rendering codepath.
+  // Track hovered analysis via custom event (avoids context re-renders on all edges)
+  const [hoveredAnalysisId, setHoveredAnalysisId] = useState<string | null>(null);
+  useEffect(() => {
+    const handler = (e: Event) => {
+      setHoveredAnalysisId((e as CustomEvent).detail?.analysisId ?? null);
+    };
+    window.addEventListener('dagnet:analysisHover', handler);
+    return () => window.removeEventListener('dagnet:analysisHover', handler);
+  }, []);
+
+  // ONE visibility decision — four triggers, same rendering codepath.
   const visibleIds = useMemo(() => {
     if (!graph?.canvasAnalyses?.length) return new Set<string>();
-    return getVisibleAnalysisIds(graph.canvasAnalyses, selectedAnalysisId, draggedAnalysisId);
-  }, [graph?.canvasAnalyses, selectedAnalysisId, draggedAnalysisId]);
+    return getVisibleAnalysisIds(graph.canvasAnalyses, selectedAnalysisId, draggedAnalysisId, hoveredAnalysisId);
+  }, [graph?.canvasAnalyses, selectedAnalysisId, draggedAnalysisId, hoveredAnalysisId]);
 
   const allShapes = useMemo((): ShapeData[] => {
     if (!graph || visibleIds.size === 0) return [];
@@ -487,6 +502,9 @@ export function SelectionConnectors({ graph }: { graph: any }) {
         const rfNode = rfNodes.find(n => n.id === `analysis-${a.id}`);
         const colour = a.display?.subject_overlay_colour || DEFAULT_COLOUR;
         const isSelected = a.id === selectedAnalysisId;
+        // Hover-only: visible solely because mouse is over the chart (not selected/dragged/persisted)
+        const isHovered = !isSelected && a.id !== draggedAnalysisId
+          && !a.display?.show_subject_overlay && a.id === hoveredAnalysisId;
 
         const { connectedIds, disconnectedIds, referencedOnPath } = resolveShapeNodes(
           dsl, graph.edges || [], nodeUuidToId,
@@ -530,12 +548,12 @@ export function SelectionConnectors({ graph }: { graph: any }) {
         }
 
         return {
-          id: a.id, isSelected, rfNode, colour,
+          id: a.id, isSelected, isHovered, rfNode, colour,
           connectedNodes, disconnectedNodes, allNodes, nodeHumanIds,
           connectedHumanIds, referencedOnPath, referencedNodeIds,
         };
       }).filter(Boolean) as Array<{
-        id: string; isSelected: boolean; rfNode: any; colour: string;
+        id: string; isSelected: boolean; isHovered: boolean; rfNode: any; colour: string;
         connectedNodes: Array<{ centre: Point; radius: number }>;
         disconnectedNodes: Array<{ centre: Point; radius: number }>;
         allNodes: Array<{ centre: Point; radius: number }>;
@@ -597,16 +615,16 @@ export function SelectionConnectors({ graph }: { graph: any }) {
       for (const c of centres) { cx += c.x; cy += c.y; }
 
       return {
-        id: shape.id, isSelected: shape.isSelected,
+        id: shape.id, isSelected: shape.isSelected, isHovered: shape.isHovered,
         tubeSegments, nodes, connectedNodes, disconnectedNodes, centres,
         referencedNodeIds: shape.referencedNodeIds,
         nodeHumanIds: shape.nodeHumanIds,
         cx: cx / centres.length, cy: cy / centres.length,
         minRadius: minR, rfNode: shape.rfNode, colour: shape.colour,
-        fillOpacity: shape.isSelected ? 0.08 : 0.03,
+        fillOpacity: shape.isSelected ? 0.08 : shape.isHovered ? 0.015 : 0.03,
       } as ShapeData;
     });
-  }, [visibleIds, rfNodes, graph, selectedAnalysisId]);
+  }, [visibleIds, rfNodes, graph, selectedAnalysisId, hoveredAnalysisId, draggedAnalysisId]);
 
   // Halo highlights — ONE codepath. Every shape contributes equally.
   const { setNodes } = useReactFlow();
@@ -692,10 +710,10 @@ export function SelectionConnectors({ graph }: { graph: any }) {
       <g transform={`translate(${viewport.x}, ${viewport.y}) scale(${viewport.zoom})`}>
         {allShapes.map(shape => {
           const c = shape.colour;
-          const fillOpacity = shape.isSelected ? 0.08 : 0.03;
-          const outlineOpacity = shape.isSelected ? 0.2 : 0.1;
-          const lineOpacity = shape.isSelected ? 0.3 : 0.15;
-          const dotOpacity = shape.isSelected ? 0.5 : 0.25;
+          const fillOpacity = shape.isSelected ? 0.08 : shape.isHovered ? 0.015 : 0.03;
+          const outlineOpacity = shape.isSelected ? 0.2 : shape.isHovered ? 0.05 : 0.1;
+          const lineOpacity = shape.isSelected ? 0.3 : shape.isHovered ? 0.1 : 0.15;
+          const dotOpacity = shape.isSelected ? 0.5 : shape.isHovered ? 0.15 : 0.25;
           // Connector lines: always show for visible shapes (same codepath)
           const showConnector = !!shape.rfNode;
 

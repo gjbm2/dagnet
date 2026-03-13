@@ -136,6 +136,7 @@ function DraggableAnalysisCard({
   scaleContent,
   hideHeader,
   chartHeight,
+  onSettled,
   deferred,
 }: {
   analysisType: string;
@@ -156,10 +157,14 @@ function DraggableAnalysisCard({
   hideHeader?: boolean;
   /** Explicit chart height in px — avoids fillHeight flex-chain race conditions */
   chartHeight?: number;
+  /** Called when this card reaches a terminal state. 'rendered' = chart painted with data; 'failed' = error/blocked/empty. */
+  onSettled?: (outcome: 'rendered' | 'failed') => void;
   /** When true, render placeholder shell without starting compute (progressive reveal) */
   deferred?: boolean;
 }) {
   const cardRef = useRef<HTMLDivElement>(null);
+  const { operations } = useTabContext();
+  const scenariosCtx = useScenariosContextOptional();
 
   // Stable unique ID per component instance (for compute caching)
   const stableId = useRef(`hover-${Math.random().toString(36).slice(2, 8)}`).current;
@@ -217,6 +222,42 @@ function DraggableAnalysisCard({
       console.log(`[Satellite:${stableId}] UNMOUNT ${analysisType}×${chartKind} (was: ${prevStateRef.current.split('|')[0]})`);
     };
   }, [isSatellite, stableId, analysisType, chartKind]);
+
+  // Signal settlement to parent — 'rendered' when ECharts finishes painting
+  // real data; 'failed' for error/blocked/empty chart.
+  const settledRef = useRef(false);
+  const fireSettled = useCallback((outcome: 'rendered' | 'failed') => {
+    if (settledRef.current) return;
+    settledRef.current = true;
+    onSettled?.(outcome);
+  }, [onSettled]);
+
+  // Terminal non-render states: settle as failed.
+  // error/backendUnavailable are immediate failures.
+  // waitingForDeps may resolve, but give up after 5s to avoid blocking the queue.
+  useEffect(() => {
+    if (settledRef.current || deferred) return;
+    if (error || backendUnavailable) fireSettled('failed');
+  }, [deferred, error, backendUnavailable, fireSettled]);
+
+  useEffect(() => {
+    if (settledRef.current || deferred || !waitingForDeps) return;
+    const timer = setTimeout(() => fireSettled('failed'), 5000);
+    return () => clearTimeout(timer);
+  }, [deferred, waitingForDeps, fireSettled]);
+
+  // Overall trial timeout: if the card hasn't settled within 10s of mount,
+  // fail it so the queue isn't blocked by slow backend responses.
+  useEffect(() => {
+    if (settledRef.current || deferred) return;
+    const timer = setTimeout(() => {
+      if (import.meta.env.DEV && !settledRef.current) {
+        console.log(`[Satellite:${stableId}] TIMEOUT 10s — failing ${analysisType}×${chartKind}`);
+      }
+      fireSettled('failed');
+    }, 10000);
+    return () => clearTimeout(timer);
+  }, [deferred, fireSettled, stableId, analysisType, chartKind]);
 
   // Effective chart kind: explicit prop → result's recommended → undefined (let chart decide)
   const effectiveChartKind = chartKind || (result as any)?.semantics?.chart?.recommended;
@@ -287,30 +328,52 @@ function DraggableAnalysisCard({
   // --- Render ---
   const meta = ANALYSIS_TYPES.find((t) => t.id === analysisType);
   const label = meta?.name || analysisType;
-  // Derive visible scenario IDs from the result data.
-  // Must extract from actual data rows, not result.scenarios (which may be absent
-  // for satellite/hover cards). If we default to ['current'] but data has real
-  // scenario IDs like 'scenario-...', the chart builders filter out ALL rows.
+  // Visible scenario IDs — same source as CanvasAnalysisNode (live mode).
+  // Uses the tab's scenario state, not bespoke extraction from result data.
   const visibleScenarioIds = useMemo(() => {
-    // First try result.scenarios (explicit scenario list)
-    const scenarios = (result as any)?.scenarios;
-    if (Array.isArray(scenarios) && scenarios.length > 0) {
-      return scenarios.map((s: any) => s.scenario_id ?? 'current');
-    }
-    // Fall back to extracting unique scenario_ids from data rows
-    const data = (result as any)?.data;
-    if (Array.isArray(data) && data.length > 0) {
-      const ids = [...new Set(data.map((r: any) => r?.scenario_id).filter(Boolean))] as string[];
-      if (ids.length > 0) return ids;
-    }
-    // Fall back to dimension_values.scenario_id keys
-    const dimScenarios = (result as any)?.dimension_values?.scenario_id;
-    if (dimScenarios && typeof dimScenarios === 'object') {
-      const ids = Object.keys(dimScenarios);
-      if (ids.length > 0) return ids;
+    if (tabId) {
+      const state = operations.getScenarioState(tabId);
+      return state?.visibleScenarioIds || ['current'];
     }
     return ['current'];
-  }, [result]);
+  }, [tabId, operations]);
+
+  // Scenario visibility modes — same as CanvasAnalysisNode (live mode)
+  const scenarioVisibilityModes = useMemo(() => {
+    const m: Record<string, 'f+e' | 'f' | 'e'> = {};
+    for (const id of visibleScenarioIds) {
+      m[id] = tabId ? operations.getScenarioVisibilityMode(tabId, id) : 'f+e';
+    }
+    return m;
+  }, [visibleScenarioIds, tabId, operations]);
+
+  // Scenario meta — same as CanvasAnalysisNode (live mode)
+  const scenarioMetaById = useMemo(() => {
+    const m: Record<string, { name?: string; colour?: string; visibility_mode?: 'f+e' | 'f' | 'e' }> = {};
+    for (const id of visibleScenarioIds) {
+      if (id === 'current') {
+        m[id] = {
+          name: 'Current',
+          colour: (scenariosCtx as any)?.currentColour || '#3b82f6',
+          visibility_mode: scenarioVisibilityModes[id] || 'f+e',
+        };
+      } else if (id === 'base') {
+        m[id] = {
+          name: 'Base',
+          colour: (scenariosCtx as any)?.baseColour || '#6b7280',
+          visibility_mode: scenarioVisibilityModes[id] || 'f+e',
+        };
+      } else {
+        const s = (scenariosCtx as any)?.scenarios?.find((x: any) => x.id === id);
+        m[id] = {
+          name: s?.name || id,
+          colour: s?.colour || '#808080',
+          visibility_mode: scenarioVisibilityModes[id] || 'f+e',
+        };
+      }
+    }
+    return m;
+  }, [visibleScenarioIds, scenariosCtx, scenarioVisibilityModes]);
 
   return (
     <div
@@ -367,9 +430,12 @@ function DraggableAnalysisCard({
             result={result}
             chartKindOverride={effectiveChartKind}
             visibleScenarioIds={visibleScenarioIds}
+            scenarioVisibilityModes={scenarioVisibilityModes}
+            scenarioMetaById={scenarioMetaById}
             height={chartHeight ?? (effectiveChartKind === 'info' ? undefined : 140)}
             hideChrome
             suppressAnimation={!!scaleContent}
+            onRendered={fireSettled}
           />
         ) : waitingForDeps ? (
           <div style={{ padding: '12px 10px', color: 'var(--text-muted, #666)', fontSize: 10 }}>
@@ -439,7 +505,22 @@ export function HoverAnalysisPreview({
   // satellites show exactly the types valid for the current hover context.
   const [satelliteRecipes, setSatelliteRecipes] = useState<SatelliteRecipe[]>([]);
   const [hoveringPreview, setHoveringPreview] = useState(false);
-  const [commissionedSet, setCommissionedSet] = useState<Set<number>>(new Set());
+
+  // Commission model: trial cards are rendered in the DOM (hidden) so hooks fire
+  // and compute runs. Once ECharts paints real data ('rendered'), the card becomes
+  // visible in the row at its centre-out position. Failed trials are silently
+  // removed and the next recipe is tried. NO empty boxes — a satellite only
+  // appears once it has actual chart content.
+  interface CardEntry {
+    id: string;
+    recipe: SatelliteRecipe;
+    status: 'trial' | 'rendered';
+    slotPosition?: number; // visual position in the row (0..maxSlots-1), assigned on success
+  }
+  const [cards, setCards] = useState<CardEntry[]>([]);
+  const renderedCountRef = useRef(0);
+  const recipeQueueRef = useRef<SatelliteRecipe[]>([]);
+  const activeTrialCountRef = useRef(0);
 
   // Delay satellite rendering by 500ms to avoid positional flicker —
   // satellites need a frame to measure the main card's bounding rect.
@@ -480,10 +561,6 @@ export function HoverAnalysisPreview({
       // Build cartesian product, excluding non-chart kinds (table, info)
       // — satellites are visual chart previews only.
       const NON_CHART_KINDS = new Set(['table', 'info']);
-      // Analysis types that produce bridge-format data (bridge_step/delta/total).
-      // Other types like path_between list 'bridge' as a chart kind but their
-      // backend returns funnel-format data → bridge builder returns null.
-      const BRIDGE_NATIVE_TYPES = new Set(['bridge_view', 'conversion_funnel', 'constrained_path']);
       const hasToPart = dsl.includes('.to(');
       const recipes: SatelliteRecipe[] = [];
       const skippedTypes: string[] = [];
@@ -498,12 +575,7 @@ export function HoverAnalysisPreview({
             continue;
           }
         }
-        const kinds = (a.chart_kinds || []).filter(k => {
-          if (NON_CHART_KINDS.has(k)) return false;
-          // Skip bridge for types that don't produce bridge-format data
-          if (k === 'bridge' && !BRIDGE_NATIVE_TYPES.has(a.id)) return false;
-          return true;
-        });
+        const kinds = (a.chart_kinds || []).filter(k => !NON_CHART_KINDS.has(k));
         for (const kind of kinds) {
           recipes.push({ analysisType: a.id, chartKind: kind });
         }
@@ -631,37 +703,64 @@ export function HoverAnalysisPreview({
     return () => ro.disconnect();
   }, []);
 
-  // Progressive commissioning timer — reveals satellites center-out.
-  // Starts as soon as layout is measured. Each tick commissions one more card.
-  const satelliteCount = satelliteLayout
-    ? Math.min(satelliteRecipes.length, satelliteLayout.count)
-    : 0;
-  const revealOrder = useMemo(() => centerOutOrder(satelliteCount), [satelliteCount]);
+  // Centre-out reveal positions — cards fill from the middle outward.
+  const maxSlots = satelliteLayout?.count ?? 0;
+  const revealOrder = useMemo(() => centerOutOrder(maxSlots), [maxSlots]);
 
-  useEffect(() => {
-    if (revealOrder.length === 0) return;
-    // Commission first batch (up to 4) immediately for faster initial render
-    const immediateBatch = Math.min(4, revealOrder.length);
-    const initialSet = new Set(revealOrder.slice(0, immediateBatch));
-    setCommissionedSet(initialSet);
-    let step = immediateBatch;
-    if (step >= revealOrder.length) return;
+  // Start a new trial from the recipe queue (renders hidden, hooks fire compute)
+  const startNextTrial = useCallback(() => {
+    if (recipeQueueRef.current.length === 0 || renderedCountRef.current >= maxSlots) return;
+    const recipe = recipeQueueRef.current.shift()!;
+    const id = `sat-${Math.random().toString(36).slice(2, 8)}`;
+    activeTrialCountRef.current++;
+    setCards(prev => [...prev, { id, recipe, status: 'trial' }]);
+  }, [maxSlots]);
 
-    const timer = setInterval(() => {
-      if (step >= revealOrder.length) {
-        clearInterval(timer);
-        return;
+  // Settlement: rendered → make visible at next centre-out slot; failed → discard.
+  // After settlement, commission the next trial if none are active.
+  const handleTrialSettled = useCallback((cardId: string, recipe: SatelliteRecipe, outcome: 'rendered' | 'failed') => {
+    activeTrialCountRef.current--;
+    if (outcome === 'rendered') {
+      const pos = renderedCountRef.current;
+      if (pos < revealOrder.length) {
+        const slotIdx = revealOrder[pos];
+        renderedCountRef.current = pos + 1;
+        setCards(prev => prev.map(c =>
+          c.id === cardId ? { ...c, status: 'rendered' as const, slotPosition: slotIdx } : c
+        ));
+        if (import.meta.env.DEV) {
+          console.log(`[Satellite] RENDERED ${recipe.analysisType}×${recipe.chartKind} → slot ${slotIdx} (${pos + 1}/${maxSlots})`);
+        }
       }
-      setCommissionedSet((prev) => {
-        const next = new Set(prev);
-        next.add(revealOrder[step]);
-        return next;
-      });
-      step++;
-    }, 80);
+    } else {
+      setCards(prev => prev.filter(c => c.id !== cardId));
+      if (import.meta.env.DEV) {
+        console.log(`[Satellite] FAILED ${recipe.analysisType}×${recipe.chartKind} — discarded`);
+      }
+    }
+    // Commission next trial if none active
+    if (activeTrialCountRef.current <= 0) {
+      setTimeout(() => startNextTrial(), 0);
+    }
+  }, [revealOrder, maxSlots, startNextTrial]);
 
-    return () => clearInterval(timer);
-  }, [revealOrder]);
+  // Initialise: fill queue and start first 2 trials
+  const initialisedRef = useRef(false);
+  useEffect(() => {
+    if (!satelliteLayout || satelliteRecipes.length === 0 || initialisedRef.current) return;
+    initialisedRef.current = true;
+    recipeQueueRef.current = [...satelliteRecipes];
+    renderedCountRef.current = 0;
+    activeTrialCountRef.current = 0;
+    const initial: CardEntry[] = [];
+    const startCount = Math.min(2, satelliteRecipes.length);
+    for (let i = 0; i < startCount; i++) {
+      const recipe = recipeQueueRef.current.shift()!;
+      initial.push({ id: `sat-${Math.random().toString(36).slice(2, 8)}`, recipe, status: 'trial' });
+      activeTrialCountRef.current++;
+    }
+    setCards(initial);
+  }, [satelliteLayout, satelliteRecipes]);
 
   return ReactDOM.createPortal(
     <>
@@ -683,43 +782,53 @@ export function HoverAnalysisPreview({
       {/* Satellite row — delayed 500ms after mount to avoid positional flicker,
           then gated on satelliteLayout measurement.
           Spans the full viewport width, centered. */}
-      {satelliteDelayElapsed && satelliteLayout && (
+      {satelliteDelayElapsed && satelliteLayout && cards.length > 0 && (
         <div
           className="satellite-row"
           style={{
             position: 'fixed',
             left: satelliteLayout.rowLeft,
             bottom: satelliteLayout.bottom,
+            width: maxSlots * satelliteLayout.tileSize + Math.max(0, maxSlots - 1) * GAP,
+            height: satelliteLayout.tileSize,
             zIndex: 10000,
             pointerEvents: 'auto',
           }}
           onMouseEnter={handleCardEnterWithSatellites}
           onMouseLeave={handleCardLeaveWithSatellites}
         >
-          {satelliteRecipes.slice(0, satelliteCount).map((recipe, i) => (
-            <DraggableAnalysisCard
-              key={`${recipe.analysisType}-${recipe.chartKind ?? 'default'}-${i}`}
-              analysisType={recipe.analysisType}
-              chartKind={recipe.chartKind}
-              dsl={dsl}
-              tabId={activeTabId ?? undefined}
-              canvasZoom={canvasZoom}
-              onDismiss={onDismiss}
-              onCardEnter={handleCardEnterWithSatellites}
-              onCardLeave={handleCardLeaveWithSatellites}
-              className="satellite-card"
-              scaleContent
-              hideHeader
-              deferred={!commissionedSet.has(i)}
-              chartHeight={Math.round((satelliteLayout.tileSize - 4) / SATELLITE_CONTENT_SCALE)}
-              style={{
-                opacity: hoveringPreview ? 0.45 : 0.08,
-                transition: 'opacity 0.4s ease-in-out',
-                width: satelliteLayout.tileSize,
-                height: satelliteLayout.tileSize,
-              }}
-            />
-          ))}
+          {cards.map((card) => {
+            const isTrial = card.status === 'trial';
+            return (
+              <DraggableAnalysisCard
+                key={card.id}
+                analysisType={card.recipe.analysisType}
+                chartKind={card.recipe.chartKind}
+                dsl={dsl}
+                tabId={activeTabId ?? undefined}
+                canvasZoom={canvasZoom}
+                onDismiss={onDismiss}
+                onCardEnter={handleCardEnterWithSatellites}
+                onCardLeave={handleCardLeaveWithSatellites}
+                className="satellite-card"
+                scaleContent
+                hideHeader
+                onSettled={(outcome) => handleTrialSettled(card.id, card.recipe, outcome)}
+                chartHeight={Math.round((satelliteLayout.tileSize - 4) / SATELLITE_CONTENT_SCALE)}
+                style={{
+                  position: 'absolute' as const,
+                  left: isTrial ? 0 : (card.slotPosition! * (satelliteLayout.tileSize + GAP)),
+                  top: 0,
+                  width: satelliteLayout.tileSize,
+                  height: satelliteLayout.tileSize,
+                  visibility: isTrial ? 'hidden' as const : 'visible' as const,
+                  opacity: isTrial ? 0 : (hoveringPreview ? 0.45 : 0.08),
+                  transition: isTrial ? undefined : 'opacity 0.4s ease-in-out',
+                  pointerEvents: isTrial ? 'none' as const : 'auto' as const,
+                }}
+              />
+            );
+          })}
         </div>
       )}
     </>,

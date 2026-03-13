@@ -1621,7 +1621,8 @@ const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, r
         canvasAnalysisCount: data.canvasAnalyses?.length || 0,
       });
     }
-    console.log(`[${new Date().toISOString()}] [GraphEditor] File→Store: SYNCING (nodes: ${data.nodes.length}, canvasAnalyses: ${data.canvasAnalyses?.length || 0})`);
+    // DIAGNOSTIC — remove after debugging DSL-null-on-boot issue
+    console.log(`[${new Date().toISOString()}] [GraphEditor] File→Store: SYNCING (nodes: ${data.nodes.length}, canvasAnalyses: ${data.canvasAnalyses?.length || 0}, currentQueryDSL: ${(data as any).currentQueryDSL ?? '(absent)'})`);
     setGraph(data);
     
     // Save to history

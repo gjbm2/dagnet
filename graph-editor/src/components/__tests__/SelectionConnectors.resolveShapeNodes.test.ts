@@ -380,31 +380,36 @@ describe('getVisibleAnalysisIds', () => {
 // ---------------------------------------------------------------------------
 
 describe('computeHaloNodeIds', () => {
-  it('maps node IDs to their shape colours', () => {
+  it('maps node IDs to composited colour and opacity', () => {
     const shapes = [
-      { referencedNodeIds: ['n1', 'n2'], colour: '#ff0000' },
+      { referencedNodeIds: ['n1', 'n2'], colour: '#ff0000', fillOpacity: 0.08 },
     ];
     const map = computeHaloNodeIds(shapes);
-    expect(map.get('n1')).toEqual(['#ff0000']);
-    expect(map.get('n2')).toEqual(['#ff0000']);
+    expect(map.get('n1')).toEqual({ colour: '#ff0000', opacity: 0.08 });
+    expect(map.get('n2')).toEqual({ colour: '#ff0000', opacity: 0.08 });
   });
 
-  it('multiple shapes referencing same node → multiple colours', () => {
+  it('multiple shapes referencing same node → alpha-composited result', () => {
     const shapes = [
-      { referencedNodeIds: ['n1'], colour: '#ff0000' },
-      { referencedNodeIds: ['n1'], colour: '#00ff00' },
+      { referencedNodeIds: ['n1'], colour: '#ff0000', fillOpacity: 0.08 },
+      { referencedNodeIds: ['n1'], colour: '#00ff00', fillOpacity: 0.08 },
     ];
     const map = computeHaloNodeIds(shapes);
-    expect(map.get('n1')).toEqual(['#ff0000', '#00ff00']);
+    const result = map.get('n1')!;
+    // Two layers composited: result should have higher opacity than either alone
+    expect(result.opacity).toBeGreaterThan(0.08);
+    expect(result.opacity).toBeLessThan(0.16);
   });
 
-  it('same colour from multiple shapes is not duplicated', () => {
+  it('same colour from multiple shapes composites to higher opacity', () => {
     const shapes = [
-      { referencedNodeIds: ['n1'], colour: '#ff0000' },
-      { referencedNodeIds: ['n1'], colour: '#ff0000' },
+      { referencedNodeIds: ['n1'], colour: '#ff0000', fillOpacity: 0.08 },
+      { referencedNodeIds: ['n1'], colour: '#ff0000', fillOpacity: 0.08 },
     ];
     const map = computeHaloNodeIds(shapes);
-    expect(map.get('n1')).toEqual(['#ff0000']);
+    const result = map.get('n1')!;
+    expect(result.colour).toBe('#ff0000');
+    expect(result.opacity).toBeGreaterThan(0.08);
   });
 
   it('empty shapes → empty map', () => {

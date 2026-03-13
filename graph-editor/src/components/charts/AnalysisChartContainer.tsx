@@ -160,6 +160,9 @@ export function AnalysisChartContainer(props: {
   children?: React.ReactNode;
   /** Force-disable ECharts load animations (e.g. hover preview satellites). */
   suppressAnimation?: boolean;
+  /** Called once the chart reaches a terminal visual state.
+   *  'rendered' = ECharts painted real data; 'failed' = null option / info / no chart. */
+  onRendered?: (outcome: 'rendered' | 'failed') => void;
 }): JSX.Element | null {
   const { result, chartKindOverride, visibleScenarioIds, scenarioVisibilityModes, scenarioMetaById, scenarioDslSubtitleById, height = 420, fillHeight = false, display, onDisplayChange, source, hideChrome = false } = props;
   const defaultContext = props.chartContext || 'tab';
@@ -334,6 +337,16 @@ export function AnalysisChartContainer(props: {
     });
   }, [patchedResult, effectiveKind, echartsOption]);
 
+  // Fire onRendered for non-ECharts paths (info card, null option) — these are
+  // already at their final visual state, no ECharts 'finished' event will come.
+  useEffect(() => {
+    if (renderedCallbackFiredRef.current) return;
+    if (!patchedResult) return; // still loading
+    if (echartsOption) return;  // ECharts path — handled by handleChartReady
+    renderedCallbackFiredRef.current = true;
+    props.onRendered?.('failed');
+  }, [patchedResult, echartsOption, props.onRendered]);
+
   // Auto-fallback: when chart view can't render (no echarts option and not info),
   // switch to the next available view mode instead of showing "No data available".
   const chartCanRender = (effectiveKind === 'info' && !!patchedResult) || !!echartsOption;
@@ -425,7 +438,23 @@ export function AnalysisChartContainer(props: {
     });
   }, [isDebugDailyConversions, echartsOption, props.analysisId]);
 
+  const renderedCallbackFiredRef = useRef(false);
   const handleChartReady = useCallback((instance: any) => {
+    // Fire onRendered once the ECharts instance has finished its first paint.
+    // With suppressAnimation, 'finished' fires synchronously during setOption —
+    // BEFORE onChartReady is called — so attaching the listener here is too late.
+    // Fallback: schedule on the next animation frame (chart is already painted).
+    if (!renderedCallbackFiredRef.current && props.onRendered) {
+      const fireOnce = () => {
+        if (renderedCallbackFiredRef.current) return;
+        renderedCallbackFiredRef.current = true;
+        props.onRendered!('rendered');
+      };
+      instance?.on?.('finished', fireOnce);
+      // Fallback for suppressed animation or already-fired finished event
+      requestAnimationFrame(() => fireOnce());
+    }
+
     if (!isDebugDailyConversions) return;
     dailyEchartsReadyCountRef.current += 1;
     logChartReadinessTrace('DailyConversionsChart:echarts-ready', {
@@ -456,7 +485,7 @@ export function AnalysisChartContainer(props: {
     instance?.off?.('finished');
     instance?.on?.('rendered', onRendered);
     instance?.on?.('finished', onFinished);
-  }, [isDebugDailyConversions, props.analysisId]);
+  }, [isDebugDailyConversions, props.analysisId, props.onRendered]);
 
   if (showInlineAnalysisTypePicker) {
     return (

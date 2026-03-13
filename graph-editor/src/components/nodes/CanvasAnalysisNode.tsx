@@ -602,6 +602,12 @@ function CanvasAnalysisNodeInner({ data, selected }: NodeProps<CanvasAnalysisNod
           : '0 1px 3px rgba(0,0,0,0.08), 0 4px 12px rgba(0,0,0,0.06)',
         transition: 'box-shadow 0.15s ease-out',
       }}
+      onMouseEnter={() => {
+        window.dispatchEvent(new CustomEvent('dagnet:analysisHover', { detail: { analysisId: analysis.id } }));
+      }}
+      onMouseLeave={() => {
+        window.dispatchEvent(new CustomEvent('dagnet:analysisHover', { detail: { analysisId: null } }));
+      }}
     >
       <NodeResizer
         isVisible={selected}

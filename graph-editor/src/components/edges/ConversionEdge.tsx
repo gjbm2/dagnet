@@ -301,8 +301,10 @@ export default function ConversionEdge({
     // Trigger snapshot inventory fetch (hook handles caching)
     void snapshots.refresh();
 
-    // Trigger hover preview
-    hoverPreview.handleTriggerEnter(e);
+    // Trigger hover preview — pass mouse coordinates only.
+    // Edge bead <g> elements span the entire edge path, so
+    // getBoundingClientRect() returns the full path extent (too high).
+    hoverPreview.handleTriggerEnter({ clientX: e.clientX, clientY: e.clientY });
   }, [data?.scenarioOverlay, snapshots.refresh, hoverPreview.handleTriggerEnter]);
 
   // Handle mouse move (no-op now, preview position is set on enter)
