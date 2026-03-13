@@ -28,6 +28,7 @@ import { LayoutGrid, Table2 } from 'lucide-react';
 import { AnalysisInfoCard } from '../analytics/AnalysisInfoCard';
 import { renderTraySettings } from './settingPillRenderer';
 import { CfpPopover } from './CfpPopover';
+import { ColourSelector, OVERLAY_PRESET_COLOURS } from '../ColourSelector';
 
 type ChartKind = 'funnel' | 'bridge' | 'histogram' | 'daily_conversions' | 'cohort_maturity' | 'lag_fit' | 'bar_grouped' | 'pie' | 'time_series' | 'info';
 
@@ -157,6 +158,8 @@ export function AnalysisChartContainer(props: {
   onDumpDebug?: () => void;
   /** When provided, replaces the default chart/info content area (used for cards/table views). */
   children?: React.ReactNode;
+  /** Force-disable ECharts load animations (e.g. hover preview satellites). */
+  suppressAnimation?: boolean;
 }): JSX.Element | null {
   const { result, chartKindOverride, visibleScenarioIds, scenarioVisibilityModes, scenarioMetaById, scenarioDslSubtitleById, height = 420, fillHeight = false, display, onDisplayChange, source, hideChrome = false } = props;
   const defaultContext = props.chartContext || 'tab';
@@ -289,7 +292,7 @@ export function AnalysisChartContainer(props: {
     const finalSettings = hideScenarioLegend
       ? { ...resolvedSettings, show_legend: false }
       : resolvedSettings;
-    return buildChartOption(effectiveKind, patchedResult, finalSettings, {
+    const opt = buildChartOption(effectiveKind, patchedResult, finalSettings, {
       visibleScenarioIds: displayPlan.scenarioIdsToRender,
       scenarioVisibilityModes,
       scenarioDslSubtitleById,
@@ -299,7 +302,37 @@ export function AnalysisChartContainer(props: {
         heightPx: chartHeightPx > 0 ? chartHeightPx : (fillHeight ? undefined : height),
       },
     });
-  }, [effectiveKind, patchedResult, resolvedSettings, hideScenarioLegend, displayPlan.scenarioIdsToRender, scenarioVisibilityModes, scenarioDslSubtitleById, effectiveSubjectId, chartWidthPx, chartHeightPx, fillHeight, height]);
+    if (props.suppressAnimation && opt) opt.animation = false;
+    return opt;
+  }, [effectiveKind, patchedResult, resolvedSettings, hideScenarioLegend, displayPlan.scenarioIdsToRender, scenarioVisibilityModes, scenarioDslSubtitleById, effectiveSubjectId, chartWidthPx, chartHeightPx, fillHeight, height, props.suppressAnimation]);
+
+  // Diagnostic: log when we have a result but no chart option
+  useEffect(() => {
+    if (!import.meta.env.DEV) return;
+    if (!patchedResult) return; // still loading — nothing to log
+    if (effectiveKind === 'info') return; // info cards don't need echarts
+    if (echartsOption) {
+      console.log(`[ChartRender] OK ${patchedResult.analysis_type}×${effectiveKind}`, {
+        analysisId: props.analysisId,
+        dataRows: patchedResult.data?.length,
+        seriesCount: echartsOption?.series?.length,
+        source: patchedResult.metadata?.source,
+      });
+      return;
+    }
+    console.warn(`[ChartRender] NULL echartsOption — chart will be invisible`, {
+      analysisId: props.analysisId,
+      analysisType: patchedResult.analysis_type,
+      effectiveKind,
+      hasResult: true,
+      dataRows: patchedResult.data?.length,
+      dimensions: patchedResult.semantics?.dimensions?.map((d: any) => d?.id),
+      metrics: patchedResult.semantics?.metrics?.map((m: any) => m?.id),
+      source: patchedResult.metadata?.source,
+      empty: patchedResult.metadata?.empty,
+      hasOnViewModeChange: !!props.onViewModeChange,
+    });
+  }, [patchedResult, effectiveKind, echartsOption]);
 
   // Auto-fallback: when chart view can't render (no echarts option and not info),
   // switch to the next available view mode instead of showing "No data available".
@@ -719,32 +752,14 @@ export function AnalysisChartContainer(props: {
         >
           <div style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '2px 0' }}>
             <span className="cfp-group-label">Overlay</span>
-            {['#f59e0b', '#3b82f6', '#22c55e', '#ef4444', '#8b5cf6', '#ec4899'].map(c => (
-              <button
-                key={c}
-                type="button"
-                className="cfp-colour-swatch"
-                style={{
-                  background: c,
-                  outline: props.overlayActive && props.overlayColour === c ? '2px solid var(--text-primary)' : undefined,
-                  outlineOffset: 1,
-                }}
-                onClick={() => props.onOverlayColourChange?.(c)}
-                title={`Overlay: ${c}`}
-              />
-            ))}
-            <button
-              type="button"
-              className="cfp-colour-swatch cfp-colour-swatch--none"
-              style={{
-                outline: !props.overlayActive ? '2px solid var(--text-primary)' : undefined,
-                outlineOffset: 1,
-              }}
-              onClick={() => props.onOverlayColourChange?.(null)}
-              title="No overlay"
-            >
-              ✕
-            </button>
+            <ColourSelector
+              compact
+              value={props.overlayActive ? (props.overlayColour || '#3b82f6') : ''}
+              presetColours={OVERLAY_PRESET_COLOURS}
+              showClear
+              onChange={(c) => props.onOverlayColourChange?.(c)}
+              onClear={() => props.onOverlayColourChange?.(null)}
+            />
           </div>
         </CfpPopover>
       )}

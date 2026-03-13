@@ -13,6 +13,7 @@ import { useDecorationVisibility } from './GraphCanvas';
 
 const DEFAULT_COLOUR = '#9ca3af';
 const MIN_RADIUS = 80;
+const STAGGER_STEP = 12;
 
 interface Point { x: number; y: number }
 
@@ -310,17 +311,55 @@ export function getVisibleAnalysisIds(
  * Compute halo node IDs from a set of shapes. No branching — every shape
  * in the input contributes its referencedCentres to halos.
  */
+/**
+ * Alpha-composite a source colour+opacity onto a running (r,g,b,a) accumulator.
+ * Standard Porter-Duff "source over" in premultiplied form.
+ */
+function compositeOver(
+  dstR: number, dstG: number, dstB: number, dstA: number,
+  srcHex: string, srcAlpha: number,
+): [number, number, number, number] {
+  const h = srcHex.replace('#', '');
+  const sR = parseInt(h.slice(0, 2), 16);
+  const sG = parseInt(h.slice(2, 4), 16);
+  const sB = parseInt(h.slice(4, 6), 16);
+  const outA = srcAlpha + dstA * (1 - srcAlpha);
+  if (outA < 0.0001) return [0, 0, 0, 0];
+  const outR = (sR * srcAlpha + dstR * dstA * (1 - srcAlpha)) / outA;
+  const outG = (sG * srcAlpha + dstG * dstA * (1 - srcAlpha)) / outA;
+  const outB = (sB * srcAlpha + dstB * dstA * (1 - srcAlpha)) / outA;
+  return [outR, outG, outB, outA];
+}
+
+/**
+ * Compute halo node data from a set of shapes.
+ * Alpha-composites each overlapping shape's (colour, fillOpacity) per node
+ * so the halo colour matches the visual effect of the stacked SVG fills.
+ */
 export function computeHaloNodeIds(
-  shapes: Array<{ referencedNodeIds: string[]; colour: string }>,
-): Map<string, string[]> {
-  const map = new Map<string, string[]>();
+  shapes: Array<{ referencedNodeIds: string[]; colour: string; fillOpacity: number }>,
+): Map<string, { colour: string; opacity: number }> {
+  // Collect layers per node: ordered list of (colour, opacity)
+  const layers = new Map<string, Array<{ colour: string; opacity: number }>>();
   for (const shape of shapes) {
     for (const nodeId of shape.referencedNodeIds) {
-      if (!map.has(nodeId)) map.set(nodeId, []);
-      if (!map.get(nodeId)!.includes(shape.colour)) map.get(nodeId)!.push(shape.colour);
+      if (!layers.has(nodeId)) layers.set(nodeId, []);
+      layers.get(nodeId)!.push({ colour: shape.colour, opacity: shape.fillOpacity });
     }
   }
-  return map;
+
+  // Alpha-composite layers for each node
+  const result = new Map<string, { colour: string; opacity: number }>();
+  for (const [nodeId, nodeLayers] of layers) {
+    let r = 0, g = 0, b = 0, a = 0;
+    for (const layer of nodeLayers) {
+      [r, g, b, a] = compositeOver(r, g, b, a, layer.colour, layer.opacity);
+    }
+    if (a < 0.001) continue;
+    const hex = `#${Math.round(r).toString(16).padStart(2, '0')}${Math.round(g).toString(16).padStart(2, '0')}${Math.round(b).toString(16).padStart(2, '0')}`;
+    result.set(nodeId, { colour: hex, opacity: a });
+  }
+  return result;
 }
 
 function closestPointOnRect(
@@ -389,11 +428,15 @@ interface ShapeData {
   centres: Point[];
   /** Human IDs of DSL-referenced nodes — used for halo highlights. */
   referencedNodeIds: string[];
+  /** Human IDs parallel to `nodes` array — used for stagger dedup. */
+  nodeHumanIds: string[];
   cx: number;
   cy: number;
   minRadius: number;
   rfNode: any;
   colour: string;
+  /** Fill opacity for this shape (varies by selection state). */
+  fillOpacity: number;
 }
 
 export function SelectionConnectors({ graph }: { graph: any }) {
@@ -434,7 +477,8 @@ export function SelectionConnectors({ graph }: { graph: any }) {
       };
     };
 
-    return (graph.canvasAnalyses as any[])
+    // --- Pass 1: compute shapes with base radii ---
+    const baseShapes = (graph.canvasAnalyses as any[])
       .filter((a: any) => visibleIds.has(a.id))
       .map((a: any) => {
         const dsl = a.chart_current_layer_dsl || a.recipe?.analysis?.analytics_dsl;
@@ -458,31 +502,25 @@ export function SelectionConnectors({ graph }: { graph: any }) {
         });
 
         const connectedNodes: Array<{ centre: Point; radius: number }> = [];
+        const connectedHumanIds: string[] = [];
         for (const id of connectedIds) {
           const info = getNodeInfo(id);
           if (info) {
             connectedNodes.push(referencedOnPath.has(id) ? info : { centre: info.centre, radius: TRANSIT_RADIUS });
+            connectedHumanIds.push(id);
           }
         }
         const disconnectedNodes: Array<{ centre: Point; radius: number }> = [];
-        for (const id of disconnectedIds) { const info = getNodeInfo(id); if (info) disconnectedNodes.push(info); }
+        const disconnectedHumanIds: string[] = [];
+        for (const id of disconnectedIds) {
+          const info = getNodeInfo(id);
+          if (info) { disconnectedNodes.push(info); disconnectedHumanIds.push(id); }
+        }
         const allNodes = [...connectedNodes, ...disconnectedNodes];
+        const nodeHumanIds = [...connectedHumanIds, ...disconnectedHumanIds];
         if (allNodes.length === 0) return null;
 
-        const tubeSegments: TubeSegment[] = [];
-        for (let i = 0; i < connectedNodes.length - 1; i++) {
-          const a2 = connectedNodes[i], b = connectedNodes[i + 1];
-          tubeSegments.push({
-            x1: a2.centre.x, y1: a2.centre.y,
-            x2: b.centre.x, y2: b.centre.y,
-            width: Math.min(a2.radius, b.radius) * 2,
-          });
-        }
-
-        const centres = allNodes.map(n => n.centre);
-
         // Human IDs of DSL-referenced nodes — these get halos.
-        // Transit nodes on the path do NOT get halos.
         const referencedNodeIds: string[] = [];
         for (const id of connectedIds) {
           if (referencedOnPath.has(id)) referencedNodeIds.push(id);
@@ -491,55 +529,106 @@ export function SelectionConnectors({ graph }: { graph: any }) {
           referencedNodeIds.push(id);
         }
 
-        const refNodes = connectedNodes.filter((_, i) => referencedOnPath.has(connectedIds[i]));
-        const minR = refNodes.length > 0
-          ? Math.min(...refNodes.map(n => n.radius))
-          : (allNodes.length > 0 ? Math.min(...allNodes.map(n => n.radius)) : MIN_RADIUS);
-
-        let cx = 0, cy = 0;
-        for (const c of centres) { cx += c.x; cy += c.y; }
-
         return {
-          id: a.id, isSelected,
-          tubeSegments, nodes: allNodes, connectedNodes, disconnectedNodes, centres,
-          referencedNodeIds,
-          cx: cx / centres.length, cy: cy / centres.length,
-          minRadius: minR, rfNode, colour,
+          id: a.id, isSelected, rfNode, colour,
+          connectedNodes, disconnectedNodes, allNodes, nodeHumanIds,
+          connectedHumanIds, referencedOnPath, referencedNodeIds,
         };
-      }).filter(Boolean) as ShapeData[];
+      }).filter(Boolean) as Array<{
+        id: string; isSelected: boolean; rfNode: any; colour: string;
+        connectedNodes: Array<{ centre: Point; radius: number }>;
+        disconnectedNodes: Array<{ centre: Point; radius: number }>;
+        allNodes: Array<{ centre: Point; radius: number }>;
+        nodeHumanIds: string[];
+        connectedHumanIds: string[];
+        referencedOnPath: Set<string>;
+        referencedNodeIds: string[];
+      }>;
+
+    // --- Pass 2: deterministic radius staggering for shared nodes ---
+    // Build node → sorted shape IDs map
+    const nodeToShapeIds = new Map<string, string[]>();
+    for (const shape of baseShapes) {
+      for (const humanId of shape.nodeHumanIds) {
+        if (!nodeToShapeIds.has(humanId)) nodeToShapeIds.set(humanId, []);
+        const list = nodeToShapeIds.get(humanId)!;
+        if (!list.includes(shape.id)) list.push(shape.id);
+      }
+    }
+    // Sort each node's shape list by analysis ID for determinism
+    for (const list of nodeToShapeIds.values()) list.sort();
+
+    return baseShapes.map(shape => {
+      // Apply stagger offset to each node's radius
+      const nodes = shape.allNodes.map((n, i) => {
+        const humanId = shape.nodeHumanIds[i];
+        const shapeList = nodeToShapeIds.get(humanId);
+        const staggerIdx = shapeList ? shapeList.indexOf(shape.id) : 0;
+        return staggerIdx > 0
+          ? { centre: n.centre, radius: n.radius + staggerIdx * STAGGER_STEP }
+          : n;
+      });
+
+      // Split back into connected/disconnected (same lengths as originals)
+      const connLen = shape.connectedNodes.length;
+      const connectedNodes = nodes.slice(0, connLen);
+      const disconnectedNodes = nodes.slice(connLen);
+
+      // Recompute tube segments with staggered radii
+      const tubeSegments: TubeSegment[] = [];
+      for (let i = 0; i < connectedNodes.length - 1; i++) {
+        const a2 = connectedNodes[i], b = connectedNodes[i + 1];
+        tubeSegments.push({
+          x1: a2.centre.x, y1: a2.centre.y,
+          x2: b.centre.x, y2: b.centre.y,
+          width: Math.min(a2.radius, b.radius) * 2,
+        });
+      }
+
+      const centres = nodes.map(n => n.centre);
+
+      // Recompute minRadius from referenced nodes (with stagger applied)
+      const refNodes = connectedNodes.filter((_, i) => shape.referencedOnPath.has(shape.connectedHumanIds[i]));
+      const minR = refNodes.length > 0
+        ? Math.min(...refNodes.map(n => n.radius))
+        : (nodes.length > 0 ? Math.min(...nodes.map(n => n.radius)) : MIN_RADIUS);
+
+      let cx = 0, cy = 0;
+      for (const c of centres) { cx += c.x; cy += c.y; }
+
+      return {
+        id: shape.id, isSelected: shape.isSelected,
+        tubeSegments, nodes, connectedNodes, disconnectedNodes, centres,
+        referencedNodeIds: shape.referencedNodeIds,
+        nodeHumanIds: shape.nodeHumanIds,
+        cx: cx / centres.length, cy: cy / centres.length,
+        minRadius: minR, rfNode: shape.rfNode, colour: shape.colour,
+        fillOpacity: shape.isSelected ? 0.08 : 0.03,
+      } as ShapeData;
+    });
   }, [visibleIds, rfNodes, graph, selectedAnalysisId]);
 
   // Halo highlights — ONE codepath. Every shape contributes equally.
   const { setNodes } = useReactFlow();
 
   const haloMap = useMemo(() => {
-    // computeHaloNodeIds: every visible shape's referencedNodeIds → halo colours
+    // computeHaloNodeIds: alpha-composites each shape's (colour, fillOpacity) per node
     const rawMap = computeHaloNodeIds(allShapes);
 
     // Resolve human IDs → RF node IDs
-    const result = new Map<string, { colour: string; count: number }>();
-    for (const [humanId, colours] of rawMap) {
+    const result = new Map<string, { colour: string; opacity: number }>();
+    for (const [humanId, composited] of rawMap) {
       const rfNode = rfNodes.find(n => {
         if (n.id?.startsWith('postit-') || n.id?.startsWith('container-') || n.id?.startsWith('analysis-')) return false;
         return ((n.data as any)?.id || n.id) === humanId;
       });
       if (!rfNode) continue;
-
-      let rT = 0, gT = 0, bT = 0;
-      for (const hex of colours) {
-        const h = hex.replace('#', '');
-        rT += parseInt(h.slice(0, 2), 16);
-        gT += parseInt(h.slice(2, 4), 16);
-        bT += parseInt(h.slice(4, 6), 16);
-      }
-      const n = colours.length;
-      const blended = `#${Math.round(rT / n).toString(16).padStart(2, '0')}${Math.round(gT / n).toString(16).padStart(2, '0')}${Math.round(bT / n).toString(16).padStart(2, '0')}`;
-      result.set(rfNode.id, { colour: blended, count: n });
+      result.set(rfNode.id, composited);
     }
 
     if (result.size > 0) {
       const haloEntries: Record<string, string> = {};
-      for (const [id, { colour }] of result) haloEntries[id] = colour;
+      for (const [id, { colour, opacity }] of result) haloEntries[id] = `${colour}@${opacity.toFixed(3)}`;
       console.log('[SelectionConnectors] halo highlights', {
         shapeCount: allShapes.length,
         haloNodeIds: Object.keys(haloEntries),
@@ -552,21 +641,21 @@ export function SelectionConnectors({ graph }: { graph: any }) {
   // Serialise map for effect comparison
   const haloKey = useMemo(() => {
     const entries: string[] = [];
-    for (const [id, { colour, count }] of haloMap) entries.push(`${id}:${colour}:${count}`);
+    for (const [id, { colour, opacity }] of haloMap) entries.push(`${id}:${colour}:${opacity.toFixed(4)}`);
     return entries.sort().join('|');
   }, [haloMap]);
 
   useEffect(() => {
     setNodes(nodes => nodes.map(n => {
       const entry = haloMap.get(n.id);
-      const hadColour = (n.data as any)?.selectionHighlightColour;
+      const had = (n.data as any)?.selectionHighlightColour;
       if (entry) {
-        const val = `${entry.colour}:${entry.count}`;
-        if (hadColour !== val) {
-          return { ...n, data: { ...n.data, selectionHighlightColour: entry.colour, selectionHighlightCount: entry.count } };
+        const val = `${entry.colour}:${entry.opacity.toFixed(4)}`;
+        if (had !== val) {
+          return { ...n, data: { ...n.data, selectionHighlightColour: entry.colour, selectionHighlightOpacity: entry.opacity } };
         }
-      } else if (hadColour) {
-        const { selectionHighlightColour: _, selectionHighlightCount: _c, ...rest } = n.data as any;
+      } else if (had) {
+        const { selectionHighlightColour: _, selectionHighlightOpacity: _o, ...rest } = n.data as any;
         return { ...n, data: rest };
       }
       return n;
@@ -575,7 +664,7 @@ export function SelectionConnectors({ graph }: { graph: any }) {
     return () => {
       setNodes(nodes => nodes.map(n => {
         if ((n.data as any)?.selectionHighlightColour) {
-          const { selectionHighlightColour: _, selectionHighlightCount: _c, ...rest } = n.data as any;
+          const { selectionHighlightColour: _, selectionHighlightOpacity: _o, ...rest } = n.data as any;
           return { ...n, data: rest };
         }
         return n;
@@ -603,7 +692,10 @@ export function SelectionConnectors({ graph }: { graph: any }) {
       <g transform={`translate(${viewport.x}, ${viewport.y}) scale(${viewport.zoom})`}>
         {allShapes.map(shape => {
           const c = shape.colour;
-          const fillOpacity = shape.isSelected ? 0.08 : 0.05;
+          const fillOpacity = shape.isSelected ? 0.08 : 0.03;
+          const outlineOpacity = shape.isSelected ? 0.2 : 0.1;
+          const lineOpacity = shape.isSelected ? 0.3 : 0.15;
+          const dotOpacity = shape.isSelected ? 0.5 : 0.25;
           // Connector lines: always show for visible shapes (same codepath)
           const showConnector = !!shape.rfNode;
 
@@ -623,9 +715,9 @@ export function SelectionConnectors({ graph }: { graph: any }) {
               lines.push(
                 <React.Fragment key="conn">
                   <line x1={chartPt.x} y1={chartPt.y} x2={shapePt.x} y2={shapePt.y}
-                    stroke={c} strokeWidth={lineSw} strokeOpacity={0.3} strokeDasharray={dash} />
-                  <circle cx={chartPt.x} cy={chartPt.y} r={dotR} fill={c} fillOpacity={0.5} />
-                  <circle cx={shapePt.x} cy={shapePt.y} r={dotR} fill={c} fillOpacity={0.5} />
+                    stroke={c} strokeWidth={lineSw} strokeOpacity={lineOpacity} strokeDasharray={dash} />
+                  <circle cx={chartPt.x} cy={chartPt.y} r={dotR} fill={c} fillOpacity={dotOpacity} />
+                  <circle cx={shapePt.x} cy={shapePt.y} r={dotR} fill={c} fillOpacity={dotOpacity} />
                 </React.Fragment>
               );
             }
@@ -642,9 +734,9 @@ export function SelectionConnectors({ graph }: { graph: any }) {
               lines.push(
                 <React.Fragment key={`disc-${i}`}>
                   <line x1={chartPt.x} y1={chartPt.y} x2={shapePt.x} y2={shapePt.y}
-                    stroke={c} strokeWidth={lineSw} strokeOpacity={0.3} strokeDasharray={dash} />
-                  <circle cx={chartPt.x} cy={chartPt.y} r={dotR} fill={c} fillOpacity={0.5} />
-                  <circle cx={shapePt.x} cy={shapePt.y} r={dotR} fill={c} fillOpacity={0.5} />
+                    stroke={c} strokeWidth={lineSw} strokeOpacity={lineOpacity} strokeDasharray={dash} />
+                  <circle cx={chartPt.x} cy={chartPt.y} r={dotR} fill={c} fillOpacity={dotOpacity} />
+                  <circle cx={shapePt.x} cy={shapePt.y} r={dotR} fill={c} fillOpacity={dotOpacity} />
                 </React.Fragment>
               );
             }
@@ -686,7 +778,7 @@ export function SelectionConnectors({ graph }: { graph: any }) {
               </g>
 
               {/* Perimeter outline via inverted mask */}
-              <g mask={`url(#${maskId})`} opacity={0.2}>
+              <g mask={`url(#${maskId})`} opacity={outlineOpacity}>
                 {shape.nodes.map((n, i) => (
                   <circle key={`o-${i}`} cx={n.centre.x} cy={n.centre.y}
                     r={n.radius + lineSw * 1.5} fill={c} />

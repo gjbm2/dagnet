@@ -589,6 +589,10 @@ function CanvasAnalysisNodeInner({ data, selected }: NodeProps<CanvasAnalysisNod
         height: '100%',
         background: 'var(--canvas-analysis-bg, #ffffff)',
         border: '1px solid var(--canvas-analysis-border, #d1d5db)',
+        outline: (selected || analysis.display?.show_subject_overlay)
+          ? `12px solid ${analysis.display?.subject_overlay_colour || '#3b82f6'}${selected ? '1a' : '0d'}`
+          : 'none',
+        outlineOffset: -1,
         borderRadius: 8,
         overflow: 'hidden',
         display: 'flex',

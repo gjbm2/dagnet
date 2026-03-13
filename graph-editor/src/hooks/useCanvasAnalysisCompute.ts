@@ -85,6 +85,8 @@ export function useCanvasAnalysisCompute({
   const activeRunKeyRef = useRef<string | null>(null);
   const completedRunKeyRef = useRef<string | null>(null);
   const seededTransientResultRef = useRef(Boolean(result));
+  const timeSeriesRetryCountRef = useRef(0);
+  const snapshotEmptyRetryCountRef = useRef(0);
 
   const isTimeSeriesChartKind = analysis?.chart_kind === 'time_series';
   const expectsTimeSeriesBranchResult =
@@ -96,10 +98,22 @@ export function useCanvasAnalysisCompute({
     () => ANALYSIS_TYPES.find(t => t.id === analysisType),
     [analysisType],
   );
-  // Snapshot data is only needed when chart_kind is 'time_series' for comparison types
-  const comparisonTypes = new Set(['branch_comparison', 'outcome_comparison', 'multi_branch_comparison', 'multi_outcome_comparison']);
-  const needsSnapshots = !!snapshotMeta?.snapshotContract
-    && (!comparisonTypes.has(analysisType || '') || isTimeSeriesChartKind);
+  // Snapshot data is only needed when chart_kind will actually consume it.
+  // When chart_kind is a standard path_runner kind (funnel, bridge, bar_grouped, etc.),
+  // the backend computes without snapshots — no point blocking on snapshot resolution.
+  // Snapshot-requiring chart kinds: 'time_series' (comparison types), the snapshot
+  // type IDs themselves (daily_conversions, cohort_maturity, lag_histogram, lag_fit),
+  // and 'histogram' (the chart kind used by lag_histogram's dedicated builder).
+  const SNAPSHOT_REQUIRING_CHART_KINDS = useMemo(
+    () => new Set([
+      'time_series',
+      'histogram',
+      ...ANALYSIS_TYPES.filter(t => t.snapshotContract).map(t => t.id),
+    ]),
+    [],
+  );
+  const chartKindNeedsSnapshots = !analysis.chart_kind || SNAPSHOT_REQUIRING_CHART_KINDS.has(analysis.chart_kind);
+  const needsSnapshots = !!snapshotMeta?.snapshotContract && chartKindNeedsSnapshots;
   const resultHasTimeDimension = !!(result?.semantics?.dimensions || []).some((d: any) => d?.id === 'date' || d?.type === 'time');
   const debugSnapshotChart = debugSnapshotChartOverride ?? isSnapshotBootChart(analysis);
   const propLooksSnapshot = isSnapshotBootChart(analysisProp);
@@ -123,18 +137,69 @@ export function useCanvasAnalysisCompute({
 
   useEffect(() => {
     if (expectsTimeSeriesBranchResult && result && !resultHasTimeDimension) {
-      // Only retry if the result has non-empty data in the wrong format
-      // (bar/pie instead of time_series). If the result is genuinely empty
-      // (no data from snapshot DB), retrying would loop forever.
+      // Result is in bar/pie format but we expect time_series — likely a stale
+      // cache entry from before snapshot data was available. Clear all caches
+      // and retry once. Only retry if data is non-empty (empty = genuinely no data).
       const hasNonEmptyData = Array.isArray(result.data) && result.data.length > 0;
-      if (hasNonEmptyData) {
+      if (hasNonEmptyData && timeSeriesRetryCountRef.current < 1) {
+        timeSeriesRetryCountRef.current += 1;
         completedRunKeyRef.current = null;
         setResult(null);
         canvasAnalysisResultCache.delete(analysis.id);
+        graphComputeClient.clearCache();
         setLoading(true);
       }
     }
+    if (!expectsTimeSeriesBranchResult) {
+      // Reset retry counter when chart kind changes away from time_series
+      timeSeriesRetryCountRef.current = 0;
+    }
   }, [expectsTimeSeriesBranchResult, result, resultHasTimeDimension, analysis.id]);
+
+  // Retry once (after a delay) when a snapshot chart returns an empty result.
+  // The first compute may fire before all planner input files are fully hydrated,
+  // producing snapshot subjects with stale signatures. A delayed retry gives
+  // FileRegistry time to stabilise, allowing re-preparation with correct data.
+  useEffect(() => {
+    if (!needsSnapshots) return;
+    if (!result) return;
+    const isEmpty = (result.metadata as any)?.empty === true
+      && (result.metadata as any)?.source === 'snapshot_db';
+    if (!isEmpty) return;
+    if (snapshotEmptyRetryCountRef.current >= 1) {
+      console.warn(`[SnapshotRetry] ${analysis.id} (${analysisType}×${analysis.chart_kind}): empty snapshot result after retry — giving up.`, {
+        resultDescription: result.analysis_description,
+        metadata: result.metadata,
+      });
+      return;
+    }
+
+    console.log(`[SnapshotRetry] ${analysis.id} (${analysisType}×${analysis.chart_kind}): empty snapshot result — scheduling retry in 2s.`, {
+      resultDescription: result.analysis_description,
+      metadata: result.metadata,
+      preparedSignature: preparedSignatureRef.current,
+    });
+
+    const timer = setTimeout(() => {
+      if (!mountedRef.current) return;
+      snapshotEmptyRetryCountRef.current += 1;
+      console.log(`[SnapshotRetry] ${analysis.id} (${analysisType}×${analysis.chart_kind}): executing retry now.`);
+      completedRunKeyRef.current = null;
+      preparedSignatureRef.current = null; // Force full re-prepare
+      setResult(null);
+      canvasAnalysisResultCache.delete(analysis.id);
+      graphComputeClient.clearCache();
+      setRegistryVersion((v) => v + 1); // Trigger re-prepare
+      setLoading(true);
+    }, 2000);
+
+    return () => clearTimeout(timer);
+  }, [needsSnapshots, result, analysis.id, analysisType, analysis.chart_kind]);
+
+  // Reset snapshot empty retry counter when the analysis changes
+  useEffect(() => {
+    snapshotEmptyRetryCountRef.current = 0;
+  }, [analysisType, analysis.chart_kind]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -284,23 +349,53 @@ export function useCanvasAnalysisCompute({
 
         const nextSig = nextPreparedState.status === 'ready' ? nextPreparedState.signature : null;
         if (nextSig !== null && nextSig === preparedSignatureRef.current) {
-          logChartReadinessTrace('CanvasScheduler:skip-redundant-prepare', {
-            analysisId: analysis.id,
-            analysisType,
-            signature: nextSig,
-            prepareVersion: thisVersion,
+          console.log(`[Compute] SKIP-redundant-prepare ${analysis.id} (${analysisType}×${analysis.chart_kind})`, {
+            signature: nextSig?.slice(0, 16),
           });
           return;
         }
         preparedSignatureRef.current = nextSig;
+        if (nextPreparedState.status === 'ready' && needsSnapshots) {
+          const scenarios = nextPreparedState.scenarios;
+          console.log(`[CanvasAnalysisCompute] snapshot-ready ${analysis.id} (${analysisType}×${analysis.chart_kind})`, {
+            signature: nextSig,
+            scenarios: scenarios.map(s => ({
+              id: s.scenario_id,
+              subjectCount: s.snapshot_subjects?.length ?? 0,
+              snapshotDsl: s.snapshot_query_dsl,
+              subjects: (s.snapshot_subjects || []).map(subj => ({
+                subject_id: subj.subject_id,
+                param_id: subj.param_id,
+                core_hash: subj.core_hash,
+                read_mode: subj.read_mode,
+                anchor: `${subj.anchor_from}→${subj.anchor_to}`,
+                sweep: subj.sweep_from ? `${subj.sweep_from}→${subj.sweep_to}` : undefined,
+                slice_keys: subj.slice_keys,
+              })),
+            })),
+          });
+        } else if (nextPreparedState.status === 'blocked') {
+          console.log(`[CanvasAnalysisCompute] blocked ${analysis.id} (${analysisType}×${analysis.chart_kind}): ${nextPreparedState.reason}`, {
+            requiredFileIds: nextPreparedState.requiredFileIds,
+            missingFileIds: nextPreparedState.missingFileIds,
+            hydratableFileIds: nextPreparedState.hydratableFileIds,
+          });
+        }
         setPreparedState(nextPreparedState);
       } catch (err: any) {
         if (!mountedRef.current) return;
         if (thisVersion < lastAppliedPrepareRef.current) return;
         lastAppliedPrepareRef.current = thisVersion;
         preparedSignatureRef.current = null;
+        const msg = err?.message || String(err);
+        console.warn(`[CanvasAnalysisCompute] prepare failed for ${analysis.id} (${analysisType}×${analysis.chart_kind}):`, msg, {
+          needsSnapshots,
+          workspace,
+          analyticsDsl,
+          tabId,
+        });
         setPreparedState({ status: 'blocked', reason: 'graph_not_ready' });
-        setError(err?.message || String(err));
+        setError(msg);
         setLoading(false);
       }
     };
@@ -328,7 +423,7 @@ export function useCanvasAnalysisCompute({
   ]);
 
   useEffect(() => {
-    if (bootContext) return undefined;
+    if (bootContext && !bootReady) return undefined;
     if (preparedState.status !== 'blocked') return undefined;
     const fileIds = preparedState.requiredFileIds || [];
     if (fileIds.length === 0) return undefined;
@@ -349,10 +444,10 @@ export function useCanvasAnalysisCompute({
     return () => {
       unsubscribers.forEach((unsubscribe) => unsubscribe());
     };
-  }, [bootContext, preparedState]);
+  }, [bootContext, bootReady, preparedState]);
 
   useEffect(() => {
-    if (bootContext) return;
+    if (bootContext && !bootReady) return;
     if (preparedState.status !== 'blocked') return;
     if (preparedState.reason !== 'planner_inputs_pending_hydration') return;
     const hydratableFileIds = preparedState.hydratableFileIds || [];
@@ -364,10 +459,15 @@ export function useCanvasAnalysisCompute({
       workspace,
     });
     void hydrateSnapshotPlannerInputs({ fileIds: hydratableFileIds, workspace });
-  }, [bootContext, preparedState, workspace]);
+  }, [bootContext, bootReady, preparedState, workspace]);
 
   useEffect(() => {
     if (preparedState.status === 'blocked') {
+      console.log(`[Compute] BLOCKED ${analysis.id} (${analysisType}×${analysis.chart_kind}): ${preparedState.reason}`, {
+        requiredFileIds: preparedState.requiredFileIds?.length,
+        missingFileIds: preparedState.missingFileIds?.length,
+        hydratableFileIds: preparedState.hydratableFileIds?.length,
+      });
       setLoading(false);
     }
   }, [preparedState]);
@@ -529,6 +629,12 @@ export function useCanvasAnalysisCompute({
 
       if (response?.result) {
         completedRunKeyRef.current = runKey;
+        console.log(`[Compute] RESULT ${analysis.id} (${analysisType}×${analysis.chart_kind})`, {
+          responseType: response.result.analysis_type,
+          dataRows: response.result.data?.length,
+          source: (response.result.metadata as any)?.source,
+          empty: (response.result.metadata as any)?.empty,
+        });
         if (debugSnapshotChart) {
           recordSnapshotBootLedgerStage('compute-success', {
             analysisId: analysis.id,
@@ -555,12 +661,14 @@ export function useCanvasAnalysisCompute({
         setError(null);
       } else {
         completedRunKeyRef.current = runKey;
+        console.warn(`[Compute] NO-RESULT ${analysis.id} (${analysisType}×${analysis.chart_kind})`);
         setError('No result returned from compute');
       }
     } catch (err: any) {
       if (thisCompute !== computeCountRef.current || !mountedRef.current) return;
       const msg = err?.message || String(err);
       completedRunKeyRef.current = runKey;
+      console.error(`[Compute] ERROR ${analysis.id} (${analysisType}×${analysis.chart_kind}):`, msg);
       if (debugSnapshotChart) {
         recordSnapshotBootLedgerStage('compute-error', {
           analysisId: analysis.id,
@@ -602,11 +710,7 @@ export function useCanvasAnalysisCompute({
     if (seededTransientResultRef.current && result && manualRefreshNonce === 0) {
       seededTransientResultRef.current = false;
       canvasAnalysisResultCache.set(analysis.id, result);
-      logChartReadinessTrace('CanvasScheduler:skip-seeded-result', {
-        analysisId: analysis.id,
-        analysisType,
-        signature: preparedState.signature,
-      });
+      console.log(`[Compute] SKIP-seeded ${analysis.id} (${analysisType}×${analysis.chart_kind})`);
       return;
     }
 
@@ -614,12 +718,10 @@ export function useCanvasAnalysisCompute({
     const completedRunKey = completedRunKeyRef.current;
     const hasSettledCurrentResult = completedRunKey === runKey && !!result && !loading && !error && !backendUnavailable;
     if (activeRunKey === runKey || hasSettledCurrentResult) {
-      logChartReadinessTrace('CanvasScheduler:skip-duplicate-signature', {
-        analysisId: analysis.id,
-        analysisType,
-        runKey,
-        active: activeRunKey === runKey,
-        completed: hasSettledCurrentResult,
+      console.log(`[Compute] SKIP-dup ${analysis.id} (${analysisType}×${analysis.chart_kind})`, {
+        activeMatch: activeRunKey === runKey,
+        settled: hasSettledCurrentResult,
+        hasResult: !!result,
       });
       return;
     }
@@ -628,12 +730,7 @@ export function useCanvasAnalysisCompute({
     const shouldDebounce = analysis.live && !!result && !isManualRefresh;
 
     if (shouldDebounce) {
-      logChartReadinessTrace('CanvasScheduler:schedule-debounced', {
-        analysisId: analysis.id,
-        analysisType,
-        signature: preparedState.signature,
-        delayMs: DEBOUNCE_MS,
-      });
+      console.log(`[Compute] DEBOUNCE ${analysis.id} (${analysisType}×${analysis.chart_kind}) ${DEBOUNCE_MS}ms`);
       setLoading(true);
       debounceRef.current = setTimeout(() => {
         void runCompute(preparedState, runKey);
@@ -643,11 +740,10 @@ export function useCanvasAnalysisCompute({
       };
     }
 
-    logChartReadinessTrace('CanvasScheduler:schedule-immediate', {
-      analysisId: analysis.id,
-      analysisType,
-      signature: preparedState.signature,
+    console.log(`[Compute] RUN ${analysis.id} (${analysisType}×${analysis.chart_kind})`, {
+      signature: preparedState.signature?.slice(0, 16),
       manualRefresh: isManualRefresh,
+      needsSnapshots,
     });
     void runCompute(preparedState, runKey);
     return undefined;

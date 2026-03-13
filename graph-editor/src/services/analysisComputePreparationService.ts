@@ -190,7 +190,7 @@ function snapshotSubjectsSignature(subjects?: SnapshotSubjectPayload[]): string 
     .join('||');
 }
 
-function createPreparedSignature(
+export function createPreparedSignature(
   analysisType: string,
   queryDsl: string,
   scenarios: PreparedAnalysisScenario[],

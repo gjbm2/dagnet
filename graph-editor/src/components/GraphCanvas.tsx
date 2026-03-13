@@ -2325,11 +2325,11 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
               ...prevNode,
               data: {
                 ...prevNode.data,
-                // Preserve containerColour from slow path — the fast path only runs when
+                // Preserve containerColours from slow path — the fast path only runs when
                 // topology is unchanged, so container membership can't have changed.
                 // Re-computing it here risks overwriting with undefined when container
                 // RF nodes haven't been measured yet.
-                ...(prevNode.data?.containerColour ? { containerColour: prevNode.data.containerColour } : {}),
+                ...(prevNode.data?.containerColours ? { containerColours: prevNode.data.containerColours } : {}),
                 label: graphNode.label,
                 id: graphNode.id,
                 description: graphNode.description,
@@ -2683,7 +2683,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
       });
     }
     
-    // Inject containerColour for conversion nodes inside containers (using positions from the rebuild)
+    // Inject containerColours for conversion nodes inside containers (using positions from the rebuild)
     const containerArray = graph.containers || [];
     const containerRfNodes = newNodes.filter(n => n.id?.startsWith('container-'));
     const CONTAIN_TOL_SLOW = 10;
@@ -2693,7 +2693,9 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
       const nh = DEFAULT_NODE_HEIGHT;
       const nx = node.position?.x ?? 0;
       const ny = node.position?.y ?? 0;
-      for (let ci = containerArray.length - 1; ci >= 0; ci--) {
+      // Collect ALL containers that enclose this node (there may be overlapping ones)
+      const enclosingColours: string[] = [];
+      for (let ci = 0; ci < containerArray.length; ci++) {
         const cont = containerRfNodes.find(cn => cn.id === `container-${containerArray[ci].id}`);
         if (!cont) continue;
         const cx = cont.position?.x ?? 0;
@@ -2701,11 +2703,14 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
         const cw = typeof cont.style?.width === 'number' ? cont.style.width : 400;
         const ch = typeof cont.style?.height === 'number' ? cont.style.height : 300;
         if (nx >= (cx - CONTAIN_TOL_SLOW) && ny >= (cy - CONTAIN_TOL_SLOW) && (nx + nw) <= (cx + cw + CONTAIN_TOL_SLOW) && (ny + nh) <= (cy + ch + CONTAIN_TOL_SLOW)) {
-          return { ...node, data: { ...node.data, containerColour: containerArray[ci].colour } };
+          if (containerArray[ci].colour) enclosingColours.push(containerArray[ci].colour);
         }
       }
-      if (node.data?.containerColour) {
-        const { containerColour: _, ...rest } = node.data;
+      if (enclosingColours.length > 0) {
+        return { ...node, data: { ...node.data, containerColours: enclosingColours } };
+      }
+      if (node.data?.containerColours) {
+        const { containerColours: _, ...rest } = node.data;
         return { ...node, data: rest };
       }
       return node;

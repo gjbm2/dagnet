@@ -109,11 +109,11 @@ describe('Container transform: fromFlow', () => {
 });
 
 describe('Container colour for halo adaptation', () => {
-  it('toFlow does not inject containerColour (computed at render time in GraphCanvas)', () => {
+  it('toFlow does not inject containerColours (computed at render time in GraphCanvas)', () => {
     const graph = makeGraph();
     const { nodes } = toFlow(graph);
     const n1 = nodes.find(n => n.id === 'n1')!;
-    expect(n1.data.containerColour).toBeUndefined();
+    expect(n1.data.containerColours).toBeUndefined();
   });
 });
 

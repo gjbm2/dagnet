@@ -219,6 +219,18 @@ export function isBatchMode(): boolean {
   return batchModeActive;
 }
 
+/**
+ * Deactivate batch mode and discard all buffered toasts without flushing.
+ *
+ * Intended for callers that suppress the batch progress toast (suppressBatchToast)
+ * but still need batch mode active to prevent individual per-item toast spam.
+ * The caller owns its own progress UI, so neither individual nor summary toasts are wanted.
+ */
+export function discardBatchMode(): void {
+  batchToastBuffer = [];
+  batchModeActive = false;
+}
+
 type BatchToastKind = 'success' | 'error' | 'info';
 type BatchToastEntry = { kind: BatchToastKind; message: string };
 

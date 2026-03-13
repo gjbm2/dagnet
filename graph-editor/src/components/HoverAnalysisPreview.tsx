@@ -2,43 +2,414 @@
  * HoverAnalysisPreview
  *
  * Portal-rendered analysis preview card that appears on node/edge hover.
- * Shows instant FE-computed analysis result (node_info / edge_info).
+ * Uses the same compute pipeline as canvas analyses (runPreparedAnalysis):
+ *   - FE-computable types (node_info, edge_info): instant result
+ *   - Other types: backend call, with FE-first progressive augmentation
+ *
+ * Renders via AnalysisChartContainer — the same component canvas analyses use.
  * Draggable to canvas to persist as a standard analysis object.
+ *
+ * Satellite row: when the user hovers over the preview card, a row of
+ * additional cards spans the full viewport width above it, each with a
+ * random analysis type + chart kind. All cards use the same compute and
+ * rendering pipeline.
  */
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import ReactDOM from 'react-dom';
 import { GripVertical } from 'lucide-react';
-import { AnalysisInfoCard } from './analytics/AnalysisInfoCard';
-import { computeLocalResult, computeLocalResultMultiScenario, type LocalScenario } from '../services/localAnalysisComputeService';
+import { AnalysisChartContainer } from './charts/AnalysisChartContainer';
+import { ANALYSIS_TYPES, getAnalysisTypeMeta } from './panels/analysisTypes';
+import { useCanvasAnalysisCompute } from '../hooks/useCanvasAnalysisCompute';
 import { buildGraphForAnalysisLayer } from '../services/CompositionService';
+import { resolveAnalysisType } from '../services/analysisTypeResolutionService';
 import { useScenariosContextOptional } from '../contexts/ScenariosContext';
 import { useTabContext } from '../contexts/TabContext';
-import type { ConversionGraph, Graph } from '../types';
+import type { ConversionGraph, Graph, CanvasAnalysis } from '../types';
 import type { AnalysisResult } from '../lib/graphComputeClient';
+import type { LocalScenario } from '../services/localAnalysisComputeService';
+
+// -------------------------------------------------------------------
+// Satellite helpers
+// -------------------------------------------------------------------
+
+/** Fixed UI scale for satellite cards. Charts are always rendered at this
+ *  fraction of their natural size, regardless of canvas zoom, so they stay
+ *  legible at any zoom level. chartHeight is inflated by 1/this value to
+ *  compensate for the CSS zoom shrink. */
+const SATELLITE_CONTENT_SCALE = 0.5;
+
+interface SatelliteRecipe {
+  analysisType: string;
+  chartKind?: string;
+}
+
+/** Fisher-Yates shuffle (in-place). */
+function shuffle<T>(arr: T[]): T[] {
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+  return arr;
+}
+
+/** Generate center-out reveal order: start at the middle index, then
+ *  alternate left/right. Returns an array of position indices. */
+export function centerOutOrder(count: number): number[] {
+  if (count <= 0) return [];
+  const center = Math.floor(count / 2);
+  const order: number[] = [center];
+  for (let d = 1; order.length < count; d++) {
+    if (center - d >= 0) order.push(center - d);
+    if (center + d < count) order.push(center + d);
+  }
+  return order;
+}
+
+// -------------------------------------------------------------------
+// Drag data builder — extracted for testability
+// -------------------------------------------------------------------
+
+export interface PinDragDataInput {
+  analysisType: string;
+  dsl: string;
+  chartKind?: string;
+  result: AnalysisResult | null;
+  screenWidth: number;
+  screenHeight: number;
+  canvasZoom: number;
+  baseFontSize: number;
+  scaleContent: boolean;
+}
+
+/** Build the drag data payload dispatched when a card is pinned to canvas.
+ *  Pure function — no DOM access. */
+export function buildPinDragData(input: PinDragDataInput) {
+  const { analysisType, dsl, chartKind, result, screenWidth, screenHeight, canvasZoom, baseFontSize, scaleContent } = input;
+  const z = canvasZoom || 1;
+  return {
+    type: 'dagnet-drag' as const,
+    objectType: 'canvas-analysis' as const,
+    recipe: {
+      analysis: {
+        analysis_type: analysisType,
+        analytics_dsl: dsl,
+      },
+    },
+    viewMode: 'chart' as const,
+    chartKind,
+    analysisTypeOverridden: true,
+    analysisResult: result,
+    drawWidth: screenWidth / z,
+    drawHeight: screenHeight / z,
+    display: {
+      font_size: baseFontSize,
+      scale_with_canvas: scaleContent,
+    },
+  };
+}
+
+// -------------------------------------------------------------------
+// DraggableAnalysisCard — self-contained: compute + render + drag
+// -------------------------------------------------------------------
+
+/**
+ * A single analysis card that:
+ *   1. Computes via useCanvasAnalysisCompute (same hook as CanvasAnalysisNode)
+ *   2. Renders via AnalysisChartContainer (same component as canvas analyses)
+ *   3. Can be dragged to pin on canvas (same event as canvas analysis creation)
+ *
+ * Zero bespoke compute logic — the standard hook handles workspace, snapshots,
+ * scenarios, graph-from-store, and progressive augmentation.
+ */
+function DraggableAnalysisCard({
+  analysisType,
+  dsl,
+  chartKind,
+  tabId,
+  canvasZoom,
+  onDismiss,
+  onCardEnter,
+  onCardLeave,
+  style,
+  className,
+  scaleContent,
+  hideHeader,
+  chartHeight,
+  deferred,
+}: {
+  analysisType: string;
+  dsl: string;
+  /** When omitted, uses the result's recommended chart kind */
+  chartKind?: string;
+  /** Tab ID for scenario/workspace context — from activeTabId */
+  tabId?: string;
+  canvasZoom?: number;
+  onDismiss: () => void;
+  onCardEnter: () => void;
+  onCardLeave: () => void;
+  style?: React.CSSProperties;
+  className?: string;
+  /** When true, apply SATELLITE_CONTENT_SCALE zoom to chart body (satellites only) */
+  scaleContent?: boolean;
+  /** Hide the header title bar (satellites show tooltip instead) */
+  hideHeader?: boolean;
+  /** Explicit chart height in px — avoids fillHeight flex-chain race conditions */
+  chartHeight?: number;
+  /** When true, render placeholder shell without starting compute (progressive reveal) */
+  deferred?: boolean;
+}) {
+  const cardRef = useRef<HTMLDivElement>(null);
+
+  // Stable unique ID per component instance (for compute caching)
+  const stableId = useRef(`hover-${Math.random().toString(36).slice(2, 8)}`).current;
+
+  // Synthetic CanvasAnalysis — drives the standard useCanvasAnalysisCompute hook.
+  // When deferred, analysis_type is empty → hook returns blocked (no compute fires).
+  // When commissioned, analysis_type populates → hook triggers compute automatically.
+  const syntheticAnalysis = useMemo((): CanvasAnalysis => ({
+    id: stableId,
+    recipe: {
+      analysis: {
+        analysis_type: deferred ? '' : analysisType,
+        analytics_dsl: dsl,
+      },
+    },
+    view_mode: 'chart',
+    chart_kind: chartKind,
+    live: true,
+    x: 0, y: 0, width: 300, height: 200,
+  }), [stableId, analysisType, dsl, chartKind, deferred]);
+
+  // Standard compute — same hook as CanvasAnalysisNode. Handles workspace,
+  // snapshot subjects, scenarios, graph-from-store, progressive augmentation.
+  const { result, loading, waitingForDeps, error, backendUnavailable } = useCanvasAnalysisCompute({
+    analysis: syntheticAnalysis,
+    tabId,
+  });
+
+  // --- Satellite diagnostic logging ---
+  const isSatellite = !!scaleContent;
+  const prevStateRef = useRef<string>('');
+  const computeState = error ? 'error' : backendUnavailable ? 'backend-unavailable'
+    : loading ? (result ? 'loading-with-result' : 'loading')
+    : result ? 'result' : waitingForDeps ? 'waiting-for-deps' : 'idle';
+  useEffect(() => {
+    if (!isSatellite) return;
+    const isEmpty = result && (result.metadata as any)?.empty === true;
+    const stateKey = `${computeState}|empty=${isEmpty}|type=${analysisType}|chart=${chartKind}`;
+    if (stateKey === prevStateRef.current) return;
+    prevStateRef.current = stateKey;
+    console.log(`[Satellite:${stableId}] ${analysisType}×${chartKind} → ${computeState}`, {
+      deferred,
+      isEmpty,
+      error: error || undefined,
+      resultType: result?.analysis_type,
+      resultSource: (result?.metadata as any)?.source,
+      resultDescription: result?.analysis_description?.substring(0, 80),
+      dataLength: Array.isArray(result?.data) ? result.data.length : undefined,
+    });
+  });
+  // Log final state at unmount so we can see why satellites didn't render
+  useEffect(() => {
+    if (!isSatellite) return;
+    return () => {
+      console.log(`[Satellite:${stableId}] UNMOUNT ${analysisType}×${chartKind} (was: ${prevStateRef.current.split('|')[0]})`);
+    };
+  }, [isSatellite, stableId, analysisType, chartKind]);
+
+  // Effective chart kind: explicit prop → result's recommended → undefined (let chart decide)
+  const effectiveChartKind = chartKind || (result as any)?.semantics?.chart?.recommended;
+
+  // --- Drag-to-pin (same event as canvas analysis creation) ---
+  // Uses transform: translate(dx, dy) for drag movement — immune to containing
+  // block issues (parent transforms, fixed positioning inside transforms).
+  const dragState = useRef<{ startX: number; startY: number; ox: number; oy: number } | null>(null);
+  const [dragging, setDragging] = useState(false);
+  const [dragDelta, setDragDelta] = useState<{ dx: number; dy: number } | null>(null);
+
+  const handlePointerDown = useCallback((e: React.PointerEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const el = cardRef.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    dragState.current = {
+      startX: e.clientX,
+      startY: e.clientY,
+      ox: e.clientX - rect.left,
+      oy: e.clientY - rect.top,
+    };
+    (e.target as HTMLElement).setPointerCapture(e.pointerId);
+    setDragging(true);
+  }, []);
+
+  const handlePointerMove = useCallback((e: React.PointerEvent) => {
+    if (!dragState.current) return;
+    setDragDelta({
+      dx: e.clientX - dragState.current.startX,
+      dy: e.clientY - dragState.current.startY,
+    });
+  }, []);
+
+  const handlePointerUp = useCallback((e: React.PointerEvent) => {
+    if (!dragState.current) return;
+    const ds = dragState.current;
+    dragState.current = null;
+    setDragging(false);
+    setDragDelta(null);
+
+    const dx = e.clientX - ds.startX;
+    const dy = e.clientY - ds.startY;
+    if (dx * dx + dy * dy <= 9) return;
+
+    const el = cardRef.current;
+    const cardLeft = e.clientX - ds.ox;
+    const cardTop = e.clientY - ds.oy;
+
+    const dragData = buildPinDragData({
+      analysisType,
+      dsl,
+      chartKind: effectiveChartKind,
+      result,
+      screenWidth: el ? el.offsetWidth : 400,
+      screenHeight: el ? el.offsetHeight : 300,
+      canvasZoom: canvasZoom || 1,
+      baseFontSize: el ? parseFloat(getComputedStyle(el).fontSize) || 10 : 10,
+      scaleContent: !!scaleContent,
+    });
+    window.dispatchEvent(new CustomEvent('dagnet:pinAnalysisAtScreenPosition', {
+      detail: { screenX: cardLeft, screenY: cardTop, dragData },
+    }));
+    onDismiss();
+  }, [analysisType, dsl, effectiveChartKind, result, canvasZoom, scaleContent, onDismiss]);
+
+  // --- Render ---
+  const meta = ANALYSIS_TYPES.find((t) => t.id === analysisType);
+  const label = meta?.name || analysisType;
+  // Derive visible scenario IDs from the result data.
+  // Must extract from actual data rows, not result.scenarios (which may be absent
+  // for satellite/hover cards). If we default to ['current'] but data has real
+  // scenario IDs like 'scenario-...', the chart builders filter out ALL rows.
+  const visibleScenarioIds = useMemo(() => {
+    // First try result.scenarios (explicit scenario list)
+    const scenarios = (result as any)?.scenarios;
+    if (Array.isArray(scenarios) && scenarios.length > 0) {
+      return scenarios.map((s: any) => s.scenario_id ?? 'current');
+    }
+    // Fall back to extracting unique scenario_ids from data rows
+    const data = (result as any)?.data;
+    if (Array.isArray(data) && data.length > 0) {
+      const ids = [...new Set(data.map((r: any) => r?.scenario_id).filter(Boolean))] as string[];
+      if (ids.length > 0) return ids;
+    }
+    // Fall back to dimension_values.scenario_id keys
+    const dimScenarios = (result as any)?.dimension_values?.scenario_id;
+    if (dimScenarios && typeof dimScenarios === 'object') {
+      const ids = Object.keys(dimScenarios);
+      if (ids.length > 0) return ids;
+    }
+    return ['current'];
+  }, [result]);
+
+  return (
+    <div
+      ref={cardRef}
+      className={
+        'hover-analysis-preview' +
+        (dragging ? ' hover-analysis-preview--dragging' : '') +
+        (className ? ` ${className}` : '')
+      }
+      onMouseEnter={dragging ? undefined : onCardEnter}
+      onMouseLeave={dragging ? undefined : onCardLeave}
+      onPointerDown={handlePointerDown}
+      onPointerMove={handlePointerMove}
+      onPointerUp={handlePointerUp}
+      style={{
+        position: 'relative' as const,
+        cursor: dragging ? 'grabbing' : 'grab',
+        transition: dragging ? undefined : 'opacity 0.25s ease-in-out',
+        ...style,
+        // Invisible only while still loading with no result or error — transition handles the fade-in.
+        // Show the card (with a message) when errored or waiting-for-deps, even without a result.
+        ...(loading && !result && !error && !backendUnavailable && !waitingForDeps ? { opacity: 0 } : {}),
+        // Drag via transform — stays in the same containing block, no
+        // coordinate system issues from parent transforms.
+        ...(dragDelta ? { transform: `translate(${dragDelta.dx}px, ${dragDelta.dy}px)`, zIndex: 10001 } : {}),
+      }}
+    >
+      {!hideHeader && (
+        <div className="hover-analysis-preview-header">
+          <GripVertical size={9} className="hover-analysis-preview-grip" />
+          <span className="hover-analysis-preview-title">
+            {label}{effectiveChartKind && effectiveChartKind !== 'info' ? ` · ${effectiveChartKind.replace(/_/g, ' ')}` : ''}
+          </span>
+          <span className="hover-analysis-preview-hint">drag to pin</span>
+        </div>
+      )}
+      <div
+        className="hover-analysis-preview-body"
+        style={{
+          pointerEvents: 'none',
+          ...(scaleContent ? { zoom: SATELLITE_CONTENT_SCALE } as React.CSSProperties : {}),
+        }}
+      >
+        {error ? (
+          <div style={{ padding: '12px 10px', color: 'var(--text-warning, #b86e00)', fontSize: 10 }}>
+            Error
+          </div>
+        ) : backendUnavailable ? (
+          <div style={{ padding: '12px 10px', color: 'var(--text-muted, #666)', fontSize: 10 }}>
+            Backend unavailable
+          </div>
+        ) : result ? (
+          <AnalysisChartContainer
+            result={result}
+            chartKindOverride={effectiveChartKind}
+            visibleScenarioIds={visibleScenarioIds}
+            height={chartHeight ?? (effectiveChartKind === 'info' ? undefined : 140)}
+            hideChrome
+            suppressAnimation={!!scaleContent}
+          />
+        ) : waitingForDeps ? (
+          <div style={{ padding: '12px 10px', color: 'var(--text-muted, #666)', fontSize: 10 }}>
+            Waiting…
+          </div>
+        ) : loading ? (
+          <div style={{ padding: '12px 10px', color: 'var(--text-muted, #666)', fontSize: 10 }}>
+            Computing…
+          </div>
+        ) : (
+          <div style={{ padding: '12px 10px', color: 'var(--text-muted, #666)', fontSize: 10 }}>
+            No data
+          </div>
+        )}
+      </div>
+      {/* Tooltip — shows analysis type & chart kind on hover (satellites only) */}
+      {hideHeader && (
+        <div className="hover-analysis-preview-tooltip">
+          {label}{effectiveChartKind && effectiveChartKind !== 'info' ? ` · ${effectiveChartKind.replace(/_/g, ' ')}` : ''}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// -------------------------------------------------------------------
+// Main component
+// -------------------------------------------------------------------
 
 interface HoverAnalysisPreviewProps {
-  /** The current graph (for FE compute) */
   graph: ConversionGraph;
-  /** For node_info: the node ID */
   nodeId?: string;
-  /** For edge_info: source node ref */
   edgeSource?: string;
-  /** For edge_info: target node ref */
   edgeTarget?: string;
-  /** Anchor point: top-centre of the trigger element (screen coords) */
   position: { x: number; y: number };
-  /** Bottom edge of trigger element — for fallback positioning below */
   triggerBottom?: number;
-  /** Scenario graphs — when provided, result includes per-scenario data */
   scenarios?: LocalScenario[];
-  /** Current canvas zoom (for sizing the pinned object correctly) */
   canvasZoom?: number;
-  /** Signal that mouse entered the card (cancels hook dismiss timer) */
   onCardEnter: () => void;
-  /** Signal that mouse left the card (starts hook dismiss timer) */
   onCardLeave: () => void;
-  /** Force dismiss (e.g. after drag) */
   onDismiss: () => void;
 }
 
@@ -49,14 +420,44 @@ export function HoverAnalysisPreview({
   edgeTarget,
   position,
   triggerBottom,
-  scenarios,
+  scenarios: _scenarios,
   canvasZoom,
   onCardEnter,
   onCardLeave,
   onDismiss,
 }: HoverAnalysisPreviewProps) {
-  const cardRef = useRef<HTMLDivElement>(null);
-  const [adjustedPos, setAdjustedPos] = useState(position);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const { activeTabId } = useTabContext();
+
+  // --- Satellite row ---
+  // Satellites are commissioned progressively (center-out) to avoid hammering
+  // the server. Each card starts deferred (no compute), then gets commissioned
+  // by a timer that reveals from the center outward.
+  //
+  // Available analysis types are resolved dynamically via resolveAnalysisType —
+  // the same codepath used by the analytics panel palette. This ensures
+  // satellites show exactly the types valid for the current hover context.
+  const [satelliteRecipes, setSatelliteRecipes] = useState<SatelliteRecipe[]>([]);
+  const [hoveringPreview, setHoveringPreview] = useState(false);
+  const [commissionedSet, setCommissionedSet] = useState<Set<number>>(new Set());
+
+  // Delay satellite rendering by 500ms to avoid positional flicker —
+  // satellites need a frame to measure the main card's bounding rect.
+  const [satelliteDelayElapsed, setSatelliteDelayElapsed] = useState(false);
+  useEffect(() => {
+    const timer = setTimeout(() => setSatelliteDelayElapsed(true), 200);
+    return () => clearTimeout(timer);
+  }, []);
+
+  const handleCardEnterWithSatellites = useCallback(() => {
+    onCardEnter();
+    setHoveringPreview(true);
+  }, [onCardEnter]);
+
+  const handleCardLeaveWithSatellites = useCallback(() => {
+    onCardLeave();
+    setHoveringPreview(false);
+  }, [onCardLeave]);
 
   // Determine analysis type and DSL
   const { analysisType, dsl } = useMemo(() => {
@@ -69,171 +470,269 @@ export function HoverAnalysisPreview({
     return { analysisType: '', dsl: '' };
   }, [nodeId, edgeSource, edgeTarget]);
 
-  // Compute result instantly from FE graph data — with scenario support
-  const result: AnalysisResult | null = useMemo(() => {
-    if (!analysisType || !dsl) return null;
-    const response = scenarios && scenarios.length > 0
-      ? computeLocalResultMultiScenario(scenarios, analysisType, dsl)
-      : computeLocalResult(graph, analysisType, dsl);
-    return response.success ? response.result ?? null : null;
-  }, [graph, analysisType, dsl, scenarios]);
-
-  // Self-correct position to stay within viewport
+  // Resolve available analysis types for this DSL (same as analytics palette)
+  // Build cartesian product of analysis type × chart kinds for satellites.
   useEffect(() => {
-    const el = cardRef.current;
+    if (!graph || !dsl || !analysisType) return;
+    let cancelled = false;
+    resolveAnalysisType(graph, dsl).then(({ availableAnalyses }) => {
+      if (cancelled) return;
+      // Build cartesian product, excluding non-chart kinds (table, info)
+      // — satellites are visual chart previews only.
+      const NON_CHART_KINDS = new Set(['table', 'info']);
+      // Analysis types that produce bridge-format data (bridge_step/delta/total).
+      // Other types like path_between list 'bridge' as a chart kind but their
+      // backend returns funnel-format data → bridge builder returns null.
+      const BRIDGE_NATIVE_TYPES = new Set(['bridge_view', 'conversion_funnel', 'constrained_path']);
+      const hasToPart = dsl.includes('.to(');
+      const recipes: SatelliteRecipe[] = [];
+      const skippedTypes: string[] = [];
+      for (const a of availableAnalyses) {
+        // Snapshot types with funnel_path scope need from(a).to(b) in the DSL.
+        // When hovering a node (DSL = from(nodeId)), these types cannot resolve
+        // snapshot subjects and would always fail — skip them.
+        if (!hasToPart) {
+          const meta = getAnalysisTypeMeta(a.id);
+          if (meta?.snapshotContract?.scopeRule === 'funnel_path') {
+            skippedTypes.push(a.id);
+            continue;
+          }
+        }
+        const kinds = (a.chart_kinds || []).filter(k => {
+          if (NON_CHART_KINDS.has(k)) return false;
+          // Skip bridge for types that don't produce bridge-format data
+          if (k === 'bridge' && !BRIDGE_NATIVE_TYPES.has(a.id)) return false;
+          return true;
+        });
+        for (const kind of kinds) {
+          recipes.push({ analysisType: a.id, chartKind: kind });
+        }
+      }
+      // Exclude the main card's exact combo
+      const filtered = recipes.filter(
+        (r) => !(r.analysisType === analysisType && !r.chartKind),
+      );
+      console.log('[SatelliteRecipes] Built', filtered.length, 'recipes from', availableAnalyses.length, 'available types.', {
+        dsl,
+        hasToPart,
+        skippedFunnelPath: skippedTypes,
+        recipes: filtered.map(r => `${r.analysisType}×${r.chartKind}`),
+      });
+      setSatelliteRecipes(shuffle(filtered));
+    });
+    return () => { cancelled = true; };
+  }, [graph, dsl, analysisType]);
+
+  // --- CSS-anchored positioning (no DOM measurement needed for initial frame) ---
+  // position.y = top of the trigger element.
+  // Anchor the container's BOTTOM edge 8px above trigger top via CSS `bottom`.
+  // Horizontal centering via transform: translateX(-50%) — no width measurement.
+  // This eliminates the visible "render then jump" bug entirely: the card is
+  // placed correctly from the very first paint frame.
+  const bottomAnchor = window.innerHeight - position.y + 8;
+
+  // Viewport edge clamping — runs ONCE after mount to adjust for edges.
+  // No ResizeObserver: satellite appearance must NOT trigger re-clamping.
+  const [clampedLeft, setClampedLeft] = useState<number | null>(null);
+  const [flippedBelow, setFlippedBelow] = useState(false);
+  const clampedRef = useRef(false);
+
+  useEffect(() => {
+    if (clampedRef.current) return;
+    const el = containerRef.current;
     if (!el) return;
     const rect = el.getBoundingClientRect();
     const vw = window.innerWidth;
-    const vh = window.innerHeight;
-    let { x, y } = position;
-
-    // Position above the trigger element by default (position.y = element top)
-    y = y - rect.height - 8;
-
-    // If above viewport, show below the trigger element instead
-    if (y < 8) {
-      y = (triggerBottom ?? position.y) + 8;
+    clampedRef.current = true;
+    if (rect.left < 20) {
+      setClampedLeft(20);
+    } else if (rect.right > vw - 20) {
+      setClampedLeft(vw - rect.width - 20);
     }
+    if (rect.top < 8) {
+      setFlippedBelow(true);
+    }
+  });
 
-    // Centre horizontally on the trigger element
-    x = x - rect.width / 2;
+  if (!analysisType || !dsl) return null;
 
-    // Clamp to viewport
-    if (x + rect.width > vw - 20) x = vw - rect.width - 20;
-    if (x < 20) x = 20;
-    if (y + rect.height > vh - 20) y = vh - rect.height - 20;
-    if (y < 20) y = 20;
+  // Main card: bottom-anchored (normal) or top-anchored (flipped below trigger)
+  const mainLeft = clampedLeft ?? position.x;
+  const mainTransform = clampedLeft != null ? undefined : 'translateX(-50%)';
+  const containerStyle: React.CSSProperties = flippedBelow
+    ? {
+        position: 'fixed',
+        left: mainLeft,
+        top: (triggerBottom ?? position.y) + 8,
+        transform: mainTransform,
+        zIndex: 9999,
+        pointerEvents: 'auto' as const,
+      }
+    : {
+        position: 'fixed',
+        left: mainLeft,
+        bottom: bottomAnchor,
+        transform: mainTransform,
+        zIndex: 9999,
+        pointerEvents: 'auto' as const,
+      };
 
-    setAdjustedPos({ x, y });
-  }, [position.x, position.y, result]);
+  // Satellite positioning — measured from the main card's bounding rect.
+  // ResizeObserver fires when the main card changes size (e.g. "Computing..."
+  // → full chart result), so satellites get correct position and tile size
+  // even though the size change is a child state update invisible to us.
+  //
+  // The satellite row is capped to MAX_SATELLITE_ROW_TILES tiles, centred on
+  // the main card. This prevents the row from spanning the entire viewport
+  // (which looked visually disconnected from the hover card).
+  const GAP = 6;
+  const MAX_SATELLITE_ROW_TILES = 8;
+  const [satelliteLayout, setSatelliteLayout] = useState<{
+    tileSize: number;
+    bottom: number;
+    count: number;
+    rowLeft: number;
+  } | null>(null);
 
-  // Custom pointer drag — the card itself follows the mouse, then pins on release
-  const dragState = useRef<{ startX: number; startY: number; offsetX: number; offsetY: number } | null>(null);
-  const [dragging, setDragging] = useState(false);
-
-  const handleGripPointerDown = useCallback((e: React.PointerEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    const el = cardRef.current;
+  useEffect(() => {
+    const el = containerRef.current;
     if (!el) return;
-    // Offset: where in the card the user grabbed
-    dragState.current = {
-      startX: e.clientX,
-      startY: e.clientY,
-      offsetX: e.clientX - adjustedPos.x,
-      offsetY: e.clientY - adjustedPos.y,
+    const measure = () => {
+      const rect = el.getBoundingClientRect();
+      if (rect.width === 0 || rect.height === 0) return;
+      const tileSize = Math.floor((rect.width - 12) / 3);
+      const bottom = window.innerHeight - rect.top + 6;
+      // Fit tiles within viewport, capped at MAX_SATELLITE_ROW_TILES
+      const availableWidth = window.innerWidth - 24; // 12px margin each side
+      const fitCount = Math.max(1, Math.floor((availableWidth + GAP) / (tileSize + GAP)));
+      const count = Math.min(fitCount, MAX_SATELLITE_ROW_TILES);
+      const totalRowWidth = count * tileSize + (count - 1) * GAP;
+      // Centre the satellite row on the main card, clamped to viewport edges.
+      // This keeps satellites visually aligned with the hover card instead of
+      // always viewport-centred (which looks misaligned for nodes near edges).
+      const cardCenterX = rect.left + rect.width / 2;
+      const idealLeft = Math.round(cardCenterX - totalRowWidth / 2);
+      const rowLeft = Math.max(12, Math.min(idealLeft, window.innerWidth - totalRowWidth - 12));
+      const next = { tileSize, bottom, count, rowLeft };
+      setSatelliteLayout((prev) => {
+        if (prev && prev.tileSize === tileSize && prev.bottom === bottom && prev.count === count && prev.rowLeft === rowLeft) return prev;
+        console.log('[SatelliteLayout] measure', {
+          mainCard: { left: Math.round(rect.left), top: Math.round(rect.top), width: Math.round(rect.width), height: Math.round(rect.height) },
+          cardCenterX: Math.round(cardCenterX),
+          viewport: { width: window.innerWidth, height: window.innerHeight },
+          tileSize, count, totalRowWidth, idealLeft, rowLeft, bottom,
+        });
+        return next;
+      });
     };
-    (e.target as HTMLElement).setPointerCapture(e.pointerId);
-    setDragging(true);
-  }, [adjustedPos]);
-
-  const handleGripPointerMove = useCallback((e: React.PointerEvent) => {
-    if (!dragState.current) return;
-    setAdjustedPos({
-      x: e.clientX - dragState.current.offsetX,
-      y: e.clientY - dragState.current.offsetY,
-    });
+    measure(); // initial measurement
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
   }, []);
 
-  const handleGripPointerUp = useCallback((e: React.PointerEvent) => {
-    if (!dragState.current) return;
-    const ds = dragState.current;
-    dragState.current = null;
-    setDragging(false);
+  // Progressive commissioning timer — reveals satellites center-out.
+  // Starts as soon as layout is measured. Each tick commissions one more card.
+  const satelliteCount = satelliteLayout
+    ? Math.min(satelliteRecipes.length, satelliteLayout.count)
+    : 0;
+  const revealOrder = useMemo(() => centerOutOrder(satelliteCount), [satelliteCount]);
 
-    // Check if this was actually a drag (moved more than 3px)
-    const dx = e.clientX - ds.startX;
-    const dy = e.clientY - ds.startY;
-    const wasDrag = (dx * dx + dy * dy) > 9;
-    if (!wasDrag) return; // Just a click on the grip — ignore
+  useEffect(() => {
+    if (revealOrder.length === 0) return;
+    // Commission first batch (up to 4) immediately for faster initial render
+    const immediateBatch = Math.min(4, revealOrder.length);
+    const initialSet = new Set(revealOrder.slice(0, immediateBatch));
+    setCommissionedSet(initialSet);
+    let step = immediateBatch;
+    if (step >= revealOrder.length) return;
 
-    // Measure card size and convert to canvas coordinates
-    const el = cardRef.current;
-    const z = canvasZoom || 1;
-    const drawWidth = el ? el.offsetWidth / z : undefined;
-    const drawHeight = el ? el.offsetHeight / z : undefined;
+    const timer = setInterval(() => {
+      if (step >= revealOrder.length) {
+        clearInterval(timer);
+        return;
+      }
+      setCommissionedSet((prev) => {
+        const next = new Set(prev);
+        next.add(revealOrder[step]);
+        return next;
+      });
+      step++;
+    }, 80);
 
-    // Pin at the card's top-left corner (not the mouse position)
-    // adjustedPos is the card's current top-left in screen coordinates;
-    // screenToFlowPosition in GraphCanvas will convert to flow/canvas coordinates.
-    const cardLeft = e.clientX - ds.offsetX;
-    const cardTop = e.clientY - ds.offsetY;
-
-    // Capture the effective font size from the rendered card so the
-    // persisted canvas node looks identical to the tooltip.
-    const computedFontSize = el ? parseFloat(getComputedStyle(el).fontSize) || 10 : 10;
-
-    const dragData = {
-      type: 'dagnet-drag',
-      objectType: 'canvas-analysis',
-      recipe: {
-        analysis: {
-          analysis_type: analysisType,
-          analytics_dsl: dsl,
-        },
-      },
-      viewMode: 'chart',
-      chartKind: 'info',
-      analysisTypeOverridden: true,
-      analysisResult: result,
-      drawWidth,
-      drawHeight,
-      display: {
-        font_size: computedFontSize,
-        scale_with_canvas: false,
-      },
-    };
-    window.dispatchEvent(new CustomEvent('dagnet:pinAnalysisAtScreenPosition', {
-      detail: { screenX: cardLeft, screenY: cardTop, dragData },
-    }));
-
-    onDismiss();
-  }, [analysisType, dsl, result, onDismiss, canvasZoom]);
-
-  if (!result) return null;
+    return () => clearInterval(timer);
+  }, [revealOrder]);
 
   return ReactDOM.createPortal(
-    <div
-      ref={cardRef}
-      className={'hover-analysis-preview' + (dragging ? ' hover-analysis-preview--dragging' : '')}
-      onMouseEnter={dragging ? undefined : onCardEnter}
-      onMouseLeave={dragging ? undefined : onCardLeave}
-      onPointerDown={handleGripPointerDown}
-      onPointerMove={handleGripPointerMove}
-      onPointerUp={handleGripPointerUp}
-      style={{
-        position: 'fixed',
-        left: adjustedPos.x,
-        top: adjustedPos.y,
-        zIndex: 9999,
-        pointerEvents: 'auto',
-        cursor: dragging ? 'grabbing' : 'grab',
-      }}
-    >
-      <div className="hover-analysis-preview-header">
-        <GripVertical size={12} className="hover-analysis-preview-grip" />
-        <span className="hover-analysis-preview-title">{result.analysis_name}</span>
-        <span className="hover-analysis-preview-hint">drag to pin</span>
+    <>
+      {/* Main preview card — rendered first so containerRef is populated
+          for the layout effect that measures satellite positioning. */}
+      <div ref={containerRef} style={containerStyle}>
+        <DraggableAnalysisCard
+          analysisType={analysisType}
+          dsl={dsl}
+          chartKind="info"
+          tabId={activeTabId ?? undefined}
+          canvasZoom={canvasZoom}
+          onDismiss={onDismiss}
+          onCardEnter={handleCardEnterWithSatellites}
+          onCardLeave={handleCardLeaveWithSatellites}
+        />
       </div>
-      <div className="hover-analysis-preview-body">
-        <AnalysisInfoCard result={result} />
-      </div>
-    </div>,
+
+      {/* Satellite row — delayed 500ms after mount to avoid positional flicker,
+          then gated on satelliteLayout measurement.
+          Spans the full viewport width, centered. */}
+      {satelliteDelayElapsed && satelliteLayout && (
+        <div
+          className="satellite-row"
+          style={{
+            position: 'fixed',
+            left: satelliteLayout.rowLeft,
+            bottom: satelliteLayout.bottom,
+            zIndex: 10000,
+            pointerEvents: 'auto',
+          }}
+          onMouseEnter={handleCardEnterWithSatellites}
+          onMouseLeave={handleCardLeaveWithSatellites}
+        >
+          {satelliteRecipes.slice(0, satelliteCount).map((recipe, i) => (
+            <DraggableAnalysisCard
+              key={`${recipe.analysisType}-${recipe.chartKind ?? 'default'}-${i}`}
+              analysisType={recipe.analysisType}
+              chartKind={recipe.chartKind}
+              dsl={dsl}
+              tabId={activeTabId ?? undefined}
+              canvasZoom={canvasZoom}
+              onDismiss={onDismiss}
+              onCardEnter={handleCardEnterWithSatellites}
+              onCardLeave={handleCardLeaveWithSatellites}
+              className="satellite-card"
+              scaleContent
+              hideHeader
+              deferred={!commissionedSet.has(i)}
+              chartHeight={Math.round((satelliteLayout.tileSize - 4) / SATELLITE_CONTENT_SCALE)}
+              style={{
+                opacity: hoveringPreview ? 0.45 : 0.08,
+                transition: 'opacity 0.4s ease-in-out',
+                width: satelliteLayout.tileSize,
+                height: satelliteLayout.tileSize,
+              }}
+            />
+          ))}
+        </div>
+      )}
+    </>,
     document.body,
   );
 }
 
 /**
  * Hook that manages the hover lifecycle for showing HoverAnalysisPreview.
- *
- * All timer management is centralized here. The preview card signals
- * hover state back to the hook via onCardEnter/onCardLeave, which the
- * hook uses to cancel/start dismiss timers.
  */
 export function useHoverPreview(delay = 500, gracePeriod = 300) {
   const [previewState, setPreviewState] = useState<{
     position: { x: number; y: number };
-    /** Bottom edge of trigger element — used for fallback positioning below */
     triggerBottom?: number;
   } | null>(null);
   const showTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -249,7 +748,6 @@ export function useHoverPreview(delay = 500, gracePeriod = 300) {
   const startGraceTimer = useCallback(() => {
     if (graceTimerRef.current) clearTimeout(graceTimerRef.current);
     graceTimerRef.current = setTimeout(() => {
-      // Only dismiss if neither trigger nor card is hovered
       if (!isHoveringTriggerRef.current && !isHoveringCardRef.current) {
         setPreviewState(null);
       }
@@ -258,20 +756,15 @@ export function useHoverPreview(delay = 500, gracePeriod = 300) {
 
   const handleTriggerEnter = useCallback((e: { currentTarget?: Element | null; clientX: number; clientY: number }) => {
     isHoveringTriggerRef.current = true;
-    // Cancel any pending dismiss
     if (graceTimerRef.current) { clearTimeout(graceTimerRef.current); graceTimerRef.current = null; }
-    // If preview is already showing, keep it
     if (previewState) return;
-    // Start delay to show
     if (showTimerRef.current) clearTimeout(showTimerRef.current);
 
-    // Position based on the graph object's bounding rect, not the cursor.
-    // This ensures the preview never appears under the pointer.
     const el = e.currentTarget;
     const rect = el?.getBoundingClientRect?.();
     const pos = rect
-      ? { x: rect.left + rect.width / 2, y: rect.top }   // top-centre of element
-      : { x: e.clientX, y: e.clientY };                    // fallback to cursor
+      ? { x: rect.left + rect.width / 2, y: rect.top }
+      : { x: e.clientX, y: e.clientY };
     const triggerBottom = rect ? rect.bottom : undefined;
 
     showTimerRef.current = setTimeout(() => {
@@ -284,23 +777,19 @@ export function useHoverPreview(delay = 500, gracePeriod = 300) {
   const handleTriggerLeave = useCallback(() => {
     isHoveringTriggerRef.current = false;
     if (showTimerRef.current) { clearTimeout(showTimerRef.current); showTimerRef.current = null; }
-    // Start grace timer — card's onCardEnter will cancel if mouse moves to card
     startGraceTimer();
   }, [startGraceTimer]);
 
-  /** Card signals mouse entered it */
   const handleCardEnter = useCallback(() => {
     isHoveringCardRef.current = true;
     if (graceTimerRef.current) { clearTimeout(graceTimerRef.current); graceTimerRef.current = null; }
   }, []);
 
-  /** Card signals mouse left it */
   const handleCardLeave = useCallback(() => {
     isHoveringCardRef.current = false;
     startGraceTimer();
   }, [startGraceTimer]);
 
-  /** Force dismiss (e.g. after drag) */
   const handleDismiss = useCallback(() => {
     clearAllTimers();
     isHoveringTriggerRef.current = false;
@@ -308,8 +797,6 @@ export function useHoverPreview(delay = 500, gracePeriod = 300) {
     setPreviewState(null);
   }, [clearAllTimers]);
 
-  // Dismiss instantly on any mousedown outside the preview card.
-  // When the user clicks to select a node/edge, the preview should get out of the way.
   const cardActiveRef = useRef(false);
   useEffect(() => {
     cardActiveRef.current = !!previewState;
@@ -317,7 +804,6 @@ export function useHoverPreview(delay = 500, gracePeriod = 300) {
 
   useEffect(() => {
     const onMouseDown = () => {
-      // If preview is showing and mouse is not on the card, dismiss instantly
       if (cardActiveRef.current && !isHoveringCardRef.current) {
         clearAllTimers();
         isHoveringTriggerRef.current = false;
@@ -329,7 +815,6 @@ export function useHoverPreview(delay = 500, gracePeriod = 300) {
     return () => window.removeEventListener('mousedown', onMouseDown, true);
   }, [clearAllTimers]);
 
-  // Cleanup on unmount
   useEffect(() => {
     return () => clearAllTimers();
   }, [clearAllTimers]);

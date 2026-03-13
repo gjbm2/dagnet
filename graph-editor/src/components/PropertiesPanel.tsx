@@ -17,7 +17,7 @@ import { getNextAvailableColour } from '@/lib/conditionalColours';
 import { useSnapToSlider } from '@/hooks/useSnapToSlider';
 import { ParameterSelector } from './ParameterSelector';
 import { EnhancedSelector } from './EnhancedSelector';
-import { ColourSelector } from './ColourSelector';
+import { ColourSelector, OVERLAY_PRESET_COLOURS } from './ColourSelector';
 import { ConditionalProbabilityEditor } from './ConditionalProbabilityEditor';
 import { QueryExpressionEditor } from './QueryExpressionEditor';
 import { AutomatableField } from './AutomatableField';
@@ -356,35 +356,20 @@ function CanvasAnalysisPropertiesSection({ analysisId, graph, setGraph, saveHist
           {analyticsDsl && (
             <div style={{ marginTop: 8, display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: 'var(--text-secondary)' }}>
               <span>Overlay</span>
-              {['#f59e0b', '#3b82f6', '#22c55e', '#ef4444', '#8b5cf6', '#ec4899'].map(c => (
-                <button
-                  key={c}
-                  type="button"
-                  onClick={() => {
-                    updateAnalysis({ display: { ...analysis.display, show_subject_overlay: true, subject_overlay_colour: c } });
-                    saveHistoryState('Set overlay colour');
-                  }}
-                  style={{
-                    width: 16, height: 16, borderRadius: 3, border: analysis.display?.subject_overlay_colour === c && analysis.display?.show_subject_overlay ? '2px solid var(--text-primary)' : '1px solid var(--border-primary)',
-                    background: c, cursor: 'pointer', padding: 0, flexShrink: 0,
-                  }}
-                  title={`Show subject overlay (${c})`}
-                />
-              ))}
-              <button
-                type="button"
-                onClick={() => {
+              <ColourSelector
+                compact
+                value={analysis.display?.show_subject_overlay ? (analysis.display?.subject_overlay_colour as string || '#3b82f6') : ''}
+                presetColours={OVERLAY_PRESET_COLOURS}
+                showClear
+                onChange={(c) => {
+                  updateAnalysis({ display: { ...analysis.display, show_subject_overlay: true, subject_overlay_colour: c } });
+                  saveHistoryState('Set overlay colour');
+                }}
+                onClear={() => {
                   updateAnalysis({ display: { ...analysis.display, show_subject_overlay: false, subject_overlay_colour: undefined } });
                   saveHistoryState('Hide overlay');
                 }}
-                style={{
-                  width: 16, height: 16, borderRadius: 3, border: !analysis.display?.show_subject_overlay ? '2px solid var(--text-primary)' : '1px solid var(--border-primary)',
-                  background: 'var(--bg-secondary)', cursor: 'pointer', padding: 0, fontSize: 9, lineHeight: '14px', textAlign: 'center', color: 'var(--text-muted)', flexShrink: 0,
-                }}
-                title="No overlay"
-              >
-                ✕
-              </button>
+              />
             </div>
           )}
         </div>

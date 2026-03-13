@@ -307,6 +307,7 @@ vi.mock('../../lib/graphComputeClient', () => ({
   graphComputeClient: {
     analyzeSelection: mockAnalyzeSelection,
     analyzeMultipleScenarios: mockAnalyzeMultipleScenarios,
+    clearCache: vi.fn(),
   },
 }));
 

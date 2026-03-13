@@ -79,6 +79,10 @@ export interface ChartFloatingIconProps {
   defaultAnchor?: Anchor;
 }
 
+// Minimum screen-pixel width for the chart container before the toolbar is shown.
+// Below this the toolbar would dominate or overflow the visible chart area.
+const MIN_SCREEN_PX_FOR_TOOLBAR = 100;
+
 export function ChartFloatingIcon({ containerRef, tray, canvasZoom, defaultAnchor = 'top-right' }: ChartFloatingIconProps) {
   const [anchor, setAnchor] = useState<Anchor>(defaultAnchor);
   const [drag, setDrag] = useState<{ x: number; y: number; snap: Anchor } | null>(null);
@@ -139,7 +143,9 @@ export function ChartFloatingIcon({ containerRef, tray, canvasZoom, defaultAncho
     setHovered(false);
     setDrag({ x: startX, y: startY, snap: nearestAnchor(startX, startY, cw, ch) });
 
+    let moved = false;
     const onMove = (ev: MouseEvent) => {
+      moved = true;
       const dx = (ev.clientX - startClientX) / scaleX;
       const dy = (ev.clientY - startClientY) / scaleY;
       const nx = Math.max(0, Math.min(cw - HANDLE_W, startX + dx));
@@ -150,10 +156,15 @@ export function ChartFloatingIcon({ containerRef, tray, canvasZoom, defaultAncho
 
     const onUp = () => {
       td();
-      const el = containerRef.current;
-      const w = el?.offsetWidth ?? box.w;
-      const h = el?.offsetHeight ?? box.h;
-      setAnchor(nearestAnchor(posRef.current.x, posRef.current.y, w, h));
+      if (!moved) {
+        // Click (no drag) — toggle between current anchor and 'top'
+        setAnchor(anchor === 'top' ? 'top-right' : 'top');
+      } else {
+        const el = containerRef.current;
+        const w = el?.offsetWidth ?? box.w;
+        const h = el?.offsetHeight ?? box.h;
+        setAnchor(nearestAnchor(posRef.current.x, posRef.current.y, w, h));
+      }
       setDrag(null);
     };
 
@@ -181,6 +192,12 @@ export function ChartFloatingIcon({ containerRef, tray, canvasZoom, defaultAncho
   // Use CSS `zoom` instead of `transform: scale()` so that layout (flex-wrap, width)
   // recalculates at the scaled size — transform is visual-only and doesn't affect layout.
   const invScale = computeToolbarInvScale(canvasZoom, box.w);
+
+  // Suppress toolbar when the chart is too small on screen (zoom × size).
+  if (canvasZoom !== undefined) {
+    const screenW = box.w * canvasZoom;
+    if (screenW < MIN_SCREEN_PX_FOR_TOOLBAR) return null;
+  }
 
   const zoomDiv = invScale ?? 1;
   const positionStyle: React.CSSProperties = drag

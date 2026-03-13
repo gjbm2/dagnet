@@ -69,7 +69,7 @@ interface ConversionNodeData {
     top: 'flat' | 'convex' | 'concave';
     bottom: 'flat' | 'convex' | 'concave';
   };
-  containerColour?: string;
+  containerColours?: string[];
   selectionHighlightColour?: string;
   onUpdate: (id: string, data: Partial<ConversionNodeData>) => void;
   onDelete: (id: string) => void;
@@ -96,10 +96,12 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
   };
   const canvasBg = (() => {
     let bg = baseCanvasBg;
-    if (data.containerColour) bg = blendColour(bg, data.containerColour, 0.08);
+    if (data.containerColours) {
+      for (const cc of data.containerColours) bg = blendColour(bg, cc, 0.08);
+    }
     if (data.selectionHighlightColour) {
-      const count = (data as any).selectionHighlightCount || 1;
-      bg = blendColour(bg, data.selectionHighlightColour, Math.min(0.25, 0.06 * count));
+      const opacity = (data as any).selectionHighlightOpacity ?? 0.08;
+      bg = blendColour(bg, data.selectionHighlightColour, opacity);
     }
     return bg;
   })();

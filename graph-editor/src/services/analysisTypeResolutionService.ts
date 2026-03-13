@@ -13,6 +13,48 @@
 
 import { graphComputeClient, type AvailableAnalysis } from '../lib/graphComputeClient';
 import { parseDSL } from '../lib/queryDSL';
+import { augmentChartKindOptionsForAnalysisType } from './chartDisplayPlanningService';
+
+// -------------------------------------------------------------------
+// Static chart-kind mapping — derived from runner output + FE augmentation
+// -------------------------------------------------------------------
+
+/** Known chart kinds per analysis type, based on backend runner semantics.chart
+ *  and FE augmentation (augmentChartKindOptionsForAnalysisType). */
+const CHART_KINDS_BY_ANALYSIS_TYPE: Record<string, string[]> = {
+  graph_overview:           ['bar_grouped', 'pie', 'table'],
+  from_node_outcomes:       ['bar_grouped', 'table'],
+  to_node_reach:            ['bar', 'table'],
+  bridge_view:              ['bridge', 'bridge_horizontal', 'table'],
+  path_through:             ['bar', 'table'],
+  branch_comparison:        ['bar_grouped', 'pie', 'table'],
+  path_between:             ['funnel', 'bridge', 'bar_grouped', 'table'],
+  outcome_comparison:       ['bar_grouped', 'pie', 'table'],
+  conversion_funnel:        ['funnel', 'bridge', 'bar_grouped', 'table'],
+  constrained_path:         ['funnel', 'bridge', 'bar_grouped', 'table'],
+  branches_from_start:      ['bar_grouped', 'pie', 'table', 'time_series'],
+  multi_outcome_comparison: ['bar_grouped', 'pie', 'table'],
+  multi_branch_comparison:  ['bar_grouped', 'pie', 'table'],
+  multi_waypoint:           ['bar_grouped', 'table'],
+  general_selection:        ['bar_grouped', 'table'],
+  node_info:                ['info'],
+  edge_info:                ['info'],
+  // Snapshot-based types have their own dedicated chart kinds + builders.
+  // The chart kind matches the analysis type ID (or 'histogram' for lag_histogram).
+  // The standard pipeline (useCanvasAnalysisCompute) resolves snapshot data
+  // when needsSnapshots=true — no special-casing needed at the satellite level.
+  cohort_maturity:          ['cohort_maturity', 'table'],
+  daily_conversions:        ['daily_conversions', 'table'],
+  lag_histogram:            ['histogram', 'table'],
+  lag_fit:                  ['lag_fit', 'table'],
+};
+
+/** Get known chart kinds for an analysis type, including FE augmentation. */
+export function getChartKindsForAnalysisType(analysisTypeId: string): string[] {
+  const base = CHART_KINDS_BY_ANALYSIS_TYPE[analysisTypeId];
+  if (!base) return [];
+  return augmentChartKindOptionsForAnalysisType(analysisTypeId, base);
+}
 
 function normalizeAnalysisId(id: string): string {
   return id === 'graph_overview_empty' ? 'graph_overview' : id;
@@ -57,6 +99,7 @@ function injectLocalAnalysisTypes(
           name: 'Edge Info',
           description: 'Curated summary of a single edge',
           is_primary: false,
+          chart_kinds: getChartKindsForAnalysisType('edge_info'),
         });
       }
     }
@@ -70,6 +113,7 @@ function injectLocalAnalysisTypes(
       name: 'Node Info',
       description: 'Curated summary of a single node',
       is_primary: false,
+      chart_kinds: getChartKindsForAnalysisType('node_info'),
     });
   }
 }
@@ -107,6 +151,13 @@ export async function resolveAnalysisType(
       }
     }
     const normalised = Array.from(dedupedById.values());
+
+    // Populate chart_kinds from static FE mapping
+    for (const a of normalised) {
+      if (!a.chart_kinds) {
+        a.chart_kinds = getChartKindsForAnalysisType(a.id);
+      }
+    }
 
     // Inject FE-computable analysis types based on DSL pattern
     injectLocalAnalysisTypes(normalised, analyticsDsl, graph);

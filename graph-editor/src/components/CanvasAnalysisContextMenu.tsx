@@ -6,15 +6,75 @@ import type { ChartRecipeScenario } from '../types/chartRecipe';
 import type { AvailableAnalysis } from '../lib/graphComputeClient';
 import { buildContextMenuSettingItems } from '../lib/analysisDisplaySettingsRegistry';
 import { getAnalysisTypeMeta } from './panels/analysisTypes';
+import { OVERLAY_PRESET_COLOURS } from './ColourSelector';
 
-const OVERLAY_COLOURS: Array<{ hex: string; label: string }> = [
-  { hex: '#f59e0b', label: 'Amber' },
-  { hex: '#3b82f6', label: 'Blue' },
-  { hex: '#22c55e', label: 'Green' },
-  { hex: '#ef4444', label: 'Red' },
-  { hex: '#8b5cf6', label: 'Purple' },
-  { hex: '#ec4899', label: 'Pink' },
-];
+/**
+ * Open a floating colour picker popup at the given screen position.
+ * Uses the same CSS classes as ColourSelector for consistent look.
+ * Calls `onChange` with the chosen hex, then removes itself.
+ */
+function openFloatingColourPicker(
+  screenX: number,
+  screenY: number,
+  currentColour: string,
+  onChange: (hex: string) => void,
+) {
+  // Backdrop to catch outside clicks
+  const backdrop = document.createElement('div');
+  backdrop.style.cssText = 'position:fixed;inset:0;z-index:9999;';
+  const popup = document.createElement('div');
+  popup.className = 'colour-selector-compact-popup';
+  popup.style.cssText = `position:fixed;left:${screenX}px;top:${screenY}px;z-index:10000;`;
+
+  const presets = document.createElement('div');
+  presets.className = 'colour-selector-presets';
+
+  const close = () => { backdrop.remove(); popup.remove(); };
+
+  for (const { name, value: hex } of OVERLAY_PRESET_COLOURS) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = `colour-selector-preset${currentColour === hex ? ' selected' : ''}`;
+    btn.style.backgroundColor = hex;
+    btn.title = name;
+    if (currentColour === hex) btn.innerHTML = '<span class="colour-selector-checkmark">✓</span>';
+    btn.addEventListener('click', () => { onChange(hex); close(); });
+    presets.appendChild(btn);
+  }
+
+  // Custom colour button (dashed border, opens native picker)
+  const customBtn = document.createElement('button');
+  customBtn.type = 'button';
+  const isPreset = OVERLAY_PRESET_COLOURS.some(p => p.value === currentColour);
+  customBtn.className = `colour-selector-preset custom${!isPreset ? ' selected' : ''}`;
+  customBtn.style.cssText = `background-color:${!isPreset ? currentColour : '#fff'};border:2px dashed #9CA3AF;`;
+  customBtn.title = 'Custom colour';
+  customBtn.innerHTML = !isPreset
+    ? '<span class="colour-selector-checkmark">✓</span>'
+    : '<span style="font-size:16px">+</span>';
+
+  const colourInput = document.createElement('input');
+  colourInput.type = 'color';
+  colourInput.value = currentColour || '#3b82f6';
+  colourInput.style.cssText = 'position:absolute;bottom:0;left:0;width:1px;height:1px;opacity:0;pointer-events:none;';
+  colourInput.addEventListener('input', (e) => {
+    const hex = (e.target as HTMLInputElement).value;
+    onChange(hex);
+    customBtn.style.backgroundColor = hex;
+  });
+  colourInput.addEventListener('change', close);
+
+  customBtn.addEventListener('click', () => colourInput.click());
+  presets.appendChild(customBtn);
+  presets.appendChild(colourInput);
+  popup.appendChild(presets);
+
+  backdrop.addEventListener('mousedown', close);
+  popup.addEventListener('mousedown', (e) => e.stopPropagation());
+
+  document.body.appendChild(backdrop);
+  document.body.appendChild(popup);
+}
 
 interface CanvasAnalysisContextMenuProps {
   x: number;
@@ -105,13 +165,21 @@ export function CanvasAnalysisContextMenu({
       ];
       if (onOverlayColourChange) {
         connectorItems.push({ label: '', onClick: () => {}, divider: true });
-        for (const { hex, label } of OVERLAY_COLOURS) {
+        const isPreset = OVERLAY_PRESET_COLOURS.some(p => p.value === overlayColour);
+        for (const { name, value: hex } of OVERLAY_PRESET_COLOURS) {
           connectorItems.push({
-            label,
+            label: name,
             checked: !!overlayActive && overlayColour === hex,
             onClick: () => onOverlayColourChange(hex),
           });
         }
+        connectorItems.push({
+          label: 'Custom…',
+          checked: !!overlayActive && !!overlayColour && !isPreset,
+          onClick: () => {
+            openFloatingColourPicker(x, y, overlayColour || '#3b82f6', onOverlayColourChange);
+          },
+        });
       }
       result.push({ label: 'Connectors', icon: React.createElement(Crosshair, { size: 14 }), onClick: () => {}, submenu: connectorItems });
     }
@@ -226,7 +294,7 @@ export function CanvasAnalysisContextMenu({
     );
 
     return result;
-  }, [analysisId, analysis, analysisCount, onUpdate, onCaptureFromTab, onUseAsCurrent, onEditScenarioDsl, onBringToFront, onBringForward, onSendBackward, onSendToBack, onCopy, onCut, onDelete, effectiveChartKind, display, onDisplayChange, onOpenAsTab, onRefresh, hasCachedResult, availableAnalyses, onAnalysisTypeChange, currentTypeId, overlayActive, overlayColour, onOverlayToggle, onOverlayColourChange]);
+  }, [x, y, analysisId, analysis, analysisCount, onUpdate, onCaptureFromTab, onUseAsCurrent, onEditScenarioDsl, onBringToFront, onBringForward, onSendBackward, onSendToBack, onCopy, onCut, onDelete, effectiveChartKind, display, onDisplayChange, onOpenAsTab, onRefresh, hasCachedResult, availableAnalyses, onAnalysisTypeChange, currentTypeId, overlayActive, overlayColour, onOverlayToggle, onOverlayColourChange]);
 
   return <ContextMenu x={x} y={y} items={items} onClose={onClose} />;
 }

@@ -153,10 +153,28 @@ export function buildChartOption(
       break;
 
     default:
+      if (import.meta.env.DEV) {
+        console.warn(`[buildChartOption] Unsupported chartKind: "${chartKind}"`, {
+          analysisType: result?.analysis_type,
+          hasData: Array.isArray(result?.data) && result.data.length > 0,
+          dataLength: result?.data?.length,
+        });
+      }
       return null;
   }
 
-  if (!opt) return null;
+  if (!opt) {
+    if (import.meta.env.DEV) {
+      console.warn(`[buildChartOption] Builder returned null for chartKind="${chartKind}"`, {
+        analysisType: result?.analysis_type,
+        hasData: Array.isArray(result?.data) && result.data.length > 0,
+        dataLength: result?.data?.length,
+        scenarioCount: result?.data ? new Set(result.data.map((r: any) => r?.scenario_id)).size : 0,
+        source: result?.metadata?.source,
+      });
+    }
+    return null;
+  }
 
   // ── Time grouping (re-bucket time-series data into week/month bins) ──
   const grouping = resolvedSettings.time_grouping;

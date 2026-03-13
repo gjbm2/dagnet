@@ -44,7 +44,7 @@ function cleanup(): void {
  * - Registers a 'countdown' operation in the registry.
  * - Countdown ticks appear in the OperationsToast automatically.
  * - Supports pause/resume via the toast UI.
- * - On expiry: pulls using `pullLatestRemoteWins` (auto-resolves conflicts).
+ * - On expiry: pulls using `pullLatest` (3-way merge; surfaces conflicts as warnings).
  * - On cancel: marks operation cancelled, calls onDismiss.
  *
  * Returns the operation ID, or undefined if a pull is already active.
@@ -179,32 +179,41 @@ async function executePull(opId: string, opts: NonBlockingPullOptions): Promise<
   operationRegistryService.setLabel(opId, 'Pulling latest changes…');
 
   try {
-    const result = await repositoryOperationsService.pullLatestRemoteWins(
+    // IMPORTANT: Use pullLatest (3-way merge) instead of pullLatestRemoteWins.
+    // In an interactive session, the user may have dirty local files. Auto-resolving
+    // as "remote wins" silently destroys their work. Instead, merge and surface
+    // conflicts as a warning so the user can resolve at their convenience.
+    const result = await repositoryOperationsService.pullLatest(
       opts.repository,
       opts.branch
     );
 
-    if (result.conflictsResolved > 0) {
-      operationRegistryService.setLabel(opId, 'Pull complete');
+    const conflicts = result.conflicts || [];
+    if (conflicts.length > 0) {
+      const fileNames = conflicts.map((c: any) => c.fileName || c.fileId).join(', ');
+      operationRegistryService.setLabel(opId, `Pull complete — ${conflicts.length} conflict${conflicts.length !== 1 ? 's' : ''} need resolution`);
       operationRegistryService.complete(
         opId,
-        'complete',
-        `${result.conflictsResolved} conflict${result.conflictsResolved !== 1 ? 's' : ''} auto-resolved (remote wins)`
+        'error',
+        `Merge conflicts in: ${fileNames}. Use Repository → Pull All Latest to resolve.`
       );
 
       sessionLogService.warning(
         'session',
-        'AUTO_PULL_CONFLICTS_RESOLVED',
-        `Auto-pull completed with ${result.conflictsResolved} auto-resolved conflicts`,
-        undefined,
-        { repository: opts.repository, branch: opts.branch, conflictsResolved: result.conflictsResolved }
+        'AUTO_PULL_CONFLICTS_DETECTED',
+        `Auto-pull completed with ${conflicts.length} unresolved conflict(s) — user action required`,
+        fileNames,
+        { repository: opts.repository, branch: opts.branch, conflictCount: conflicts.length, files: fileNames }
       );
     } else {
       operationRegistryService.setLabel(opId, 'Pull complete');
       operationRegistryService.complete(opId, 'complete');
     }
 
-    opts.onComplete?.();
+    // Only cascade (e.g. retrieve-all) when there are no unresolved conflicts.
+    if (conflicts.length === 0) {
+      opts.onComplete?.();
+    }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     operationRegistryService.complete(opId, 'error', `Pull failed: ${message}`);

@@ -13,7 +13,7 @@
  */
 
 import toast from 'react-hot-toast';
-import { dataOperationsService, setBatchMode } from './dataOperationsService';
+import { dataOperationsService, setBatchMode, discardBatchMode } from './dataOperationsService';
 import { isBatchMode } from './dataOperationsService';
 import { 
   calculateIncrementalFetch, 
@@ -1115,22 +1115,27 @@ export async function fetchItems(
   const results: FetchResult[] = [];
   const { onProgress, ...itemOptions } = options || {};
   
-  // For multiple items: use batch mode with visual progress toast
-  const shouldUseBatchMode = effectiveItems.length > 1 && !itemOptions?.suppressBatchToast;
+  // For multiple items: always suppress individual per-item toasts via batch mode.
+  // When suppressBatchToast is false (default), also show a visual progress toast in the operation registry.
+  // When suppressBatchToast is true, the caller owns the progress UI — we still need batch mode
+  // to prevent individual "✓ Updated from X.yaml" toasts from spamming the user.
+  const hasMultipleItems = effectiveItems.length > 1;
+  const shouldShowBatchProgress = hasMultipleItems && !itemOptions?.suppressBatchToast;
+  const shouldSuppressToasts = hasMultipleItems && !!itemOptions?.suppressBatchToast;
   const progressToastId = 'batch-fetch-progress';
-  
-  // SESSION LOG: Start batch fetch operation (only for batch mode)
+
+  // SESSION LOG: Start batch fetch operation (only for visible batch mode)
   // If parentLogId is provided, add children to that instead of creating new operation
   const useParentLog = !!itemOptions?.parentLogId;
   const batchLogId = useParentLog
     ? itemOptions.parentLogId
-    : shouldUseBatchMode 
+    : shouldShowBatchProgress
       ? sessionLogService.startOperation('info', 'data-fetch', 'BATCH_FETCH',
           `Batch fetch: ${effectiveItems.length} items`,
           { dsl: effectiveDSL, itemCount: effectiveItems.length, mode: itemOptions?.mode || 'versioned' })
       : undefined;
-  
-  if (shouldUseBatchMode) {
+
+  if (shouldShowBatchProgress) {
     setBatchMode(true);
     operationRegistryService.register({
       id: progressToastId,
@@ -1139,6 +1144,9 @@ export async function fetchItems(
       status: 'running',
       progress: { current: 0, total: effectiveItems.length },
     });
+  } else if (shouldSuppressToasts) {
+    // Caller owns progress UI but we still need batch mode to suppress per-item toasts.
+    setBatchMode(true);
   }
   
   let successCount = 0;
@@ -1148,7 +1156,7 @@ export async function fetchItems(
     for (let i = 0; i < effectiveItems.length; i++) {
       onProgress?.(i + 1, effectiveItems.length, effectiveItems[i]);
       
-      if (shouldUseBatchMode) {
+      if (shouldShowBatchProgress) {
         operationRegistryService.setProgress(progressToastId, { current: i, total: effectiveItems.length });
       }
       
@@ -1174,7 +1182,7 @@ export async function fetchItems(
       }
     }
     
-    if (shouldUseBatchMode) {
+    if (shouldShowBatchProgress) {
       operationRegistryService.setProgress(progressToastId, { current: effectiveItems.length, total: effectiveItems.length });
       if (errorCount > 0) {
         operationRegistryService.complete(progressToastId, 'error', `Fetched ${successCount}/${effectiveItems.length} (${errorCount} failed)`);
@@ -1200,8 +1208,10 @@ export async function fetchItems(
     }
   } finally {
     // Always reset batch mode
-    if (shouldUseBatchMode) {
-      setBatchMode(false);
+    if (shouldShowBatchProgress) {
+      setBatchMode(false);  // flushes summary toast
+    } else if (shouldSuppressToasts) {
+      discardBatchMode();   // clears buffer without showing any toast
     }
     
     // Log batch timing

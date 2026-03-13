@@ -15,12 +15,12 @@ vi.mock('../sessionLogService', () => ({
 }));
 
 // repositoryOperationsService: network/git boundary — the ONE thing we mock.
-// Mock assumes pullLatestRemoteWins returns { conflictsResolved: number } or throws.
-// Validated by the service's TypeScript type contract.
-const mockPullLatestRemoteWins = vi.fn();
+// After the regression fix, nonBlockingPullService uses pullLatest (3-way merge)
+// instead of pullLatestRemoteWins (which silently overwrote dirty files).
+const mockPullLatest = vi.fn();
 vi.mock('../repositoryOperationsService', () => ({
   repositoryOperationsService: {
-    pullLatestRemoteWins: (...args: any[]) => mockPullLatestRemoteWins(...args),
+    pullLatest: (...args: any[]) => mockPullLatest(...args),
   },
 }));
 
@@ -52,9 +52,9 @@ describe('nonBlockingPullService', () => {
   beforeEach(() => {
     vi.resetModules();
     vi.useFakeTimers();
-    mockPullLatestRemoteWins.mockReset();
+    mockPullLatest.mockReset();
     // Default: successful pull with no conflicts.
-    mockPullLatestRemoteWins.mockResolvedValue({ conflictsResolved: 0 });
+    mockPullLatest.mockResolvedValue({ success: true, conflicts: [] });
   });
 
   afterEach(() => {
@@ -114,7 +114,7 @@ describe('nonBlockingPullService', () => {
 
   // ---------- Countdown expiry triggers pull ----------
 
-  it('should call pullLatestRemoteWins with correct repo and branch when countdown expires', async () => {
+  it('should call pullLatest (3-way merge) with correct repo and branch when countdown expires', async () => {
     const { startNonBlockingPull } = await freshModules();
 
     startNonBlockingPull({ repository: 'my-repo', branch: 'main', countdownSeconds: 5 });
@@ -123,7 +123,7 @@ describe('nonBlockingPullService', () => {
     vi.advanceTimersByTime(5000);
     await vi.advanceTimersByTimeAsync(0);
 
-    expect(mockPullLatestRemoteWins).toHaveBeenCalledWith('my-repo', 'main');
+    expect(mockPullLatest).toHaveBeenCalledWith('my-repo', 'main');
   });
 
   // ---------- Successful pull ----------
@@ -151,8 +151,15 @@ describe('nonBlockingPullService', () => {
 
   // ---------- Pull with conflicts ----------
 
-  it('should complete with conflict info when pull auto-resolves conflicts', async () => {
-    mockPullLatestRemoteWins.mockResolvedValue({ conflictsResolved: 3 });
+  it('should surface unresolved conflicts as an error status (not auto-resolve them)', async () => {
+    mockPullLatest.mockResolvedValue({
+      success: true,
+      conflicts: [
+        { fileId: 'parameter-a', fileName: 'a.yaml' },
+        { fileId: 'parameter-b', fileName: 'b.yaml' },
+        { fileId: 'parameter-c', fileName: 'c.yaml' },
+      ],
+    });
     const { registry, startNonBlockingPull } = await freshModules();
 
     const opId = startNonBlockingPull({ repository: 'r', branch: 'b', countdownSeconds: 1 })!;
@@ -162,14 +169,40 @@ describe('nonBlockingPullService', () => {
     await vi.advanceTimersByTimeAsync(0);
 
     const op = registry.get(opId);
-    expect(op!.status).toBe('complete');
-    expect(op!.error).toContain('3 conflicts auto-resolved');
+    // Conflicts must be surfaced as an error so the user notices and resolves manually.
+    expect(op!.status).toBe('error');
+    expect(op!.error).toContain('Merge conflicts');
+    expect(op!.error).toContain('a.yaml');
+  });
+
+  it('should NOT fire onComplete when there are unresolved conflicts', async () => {
+    mockPullLatest.mockResolvedValue({
+      success: true,
+      conflicts: [{ fileId: 'parameter-x', fileName: 'x.yaml' }],
+    });
+    const { startNonBlockingPull } = await freshModules();
+    const onComplete = vi.fn();
+
+    startNonBlockingPull({
+      repository: 'r',
+      branch: 'b',
+      countdownSeconds: 1,
+      onComplete,
+    });
+
+    vi.advanceTimersByTime(1000);
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(0);
+
+    // onComplete must NOT fire — cascaded operations (retrieve-all) must not
+    // run on top of unresolved conflicts.
+    expect(onComplete).not.toHaveBeenCalled();
   });
 
   // ---------- Pull failure ----------
 
   it('should transition to error with message when pull fails', async () => {
-    mockPullLatestRemoteWins.mockRejectedValue(new Error('Auth expired'));
+    mockPullLatest.mockRejectedValue(new Error('Auth expired'));
     const { registry, startNonBlockingPull } = await freshModules();
 
     const opId = startNonBlockingPull({ repository: 'r', branch: 'b', countdownSeconds: 1 })!;
@@ -207,7 +240,7 @@ describe('nonBlockingPullService', () => {
     // Pull should never execute.
     vi.advanceTimersByTime(15000);
     await vi.advanceTimersByTimeAsync(0);
-    expect(mockPullLatestRemoteWins).not.toHaveBeenCalled();
+    expect(mockPullLatest).not.toHaveBeenCalled();
   });
 
   it('should safely no-op when cancelNonBlockingPull is called with nothing active', async () => {
