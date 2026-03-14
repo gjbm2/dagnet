@@ -71,19 +71,26 @@ export function toFlow(graph: any, callbacks?: { onUpdateNode?: (id: string, dat
   }));
 
   const postitCount = (graph.postits || []).length;
-  const analysisNodes: Node[] = (graph.canvasAnalyses || []).map((a: any, i: number) => ({
-    id: `analysis-${a.id}`,
-    type: 'canvasAnalysis',
-    position: { x: a.x ?? 0, y: a.y ?? 0 },
-    zIndex: 5000 + postitCount + i,
-    style: { width: a.width, height: a.height },
-    data: {
-      analysis: a,
-      tabId: callbacks?.tabId,
-      onUpdate: callbacks?.onUpdateAnalysis,
-      onDelete: callbacks?.onDeleteAnalysis,
-    },
-  }));
+  const analysisNodes: Node[] = (graph.canvasAnalyses || []).map((a: any, i: number) => {
+    // Migration: legacy graphs have `live: boolean` — map to `mode` enum
+    if ('live' in a && !('mode' in a)) {
+      a.mode = a.live ? 'live' : 'fixed';
+      delete a.live;
+    }
+    return {
+      id: `analysis-${a.id}`,
+      type: 'canvasAnalysis',
+      position: { x: a.x ?? 0, y: a.y ?? 0 },
+      zIndex: 5000 + postitCount + i,
+      style: { width: a.width, height: a.height },
+      data: {
+        analysis: a,
+        tabId: callbacks?.tabId,
+        onUpdate: callbacks?.onUpdateAnalysis,
+        onDelete: callbacks?.onDeleteAnalysis,
+      },
+    };
+  });
 
   const snapshotCharts = summariseSnapshotCharts(graph);
   if (snapshotCharts.length > 0) {
@@ -97,7 +104,7 @@ export function toFlow(graph: any, callbacks?: { onUpdateNode?: (id: string, dat
           analysisId: chart.id,
           analysisType: chart.analysisType,
           chartKind: chart.chartKind,
-          live: chart.live,
+          mode: chart.mode,
           source: 'toFlow',
         });
       }

@@ -10,7 +10,7 @@ of all Python graph operations.
 
 from typing import List, Dict, Any, Optional, Literal, Union
 from datetime import datetime
-from pydantic import BaseModel, Field, ConfigDict, field_validator
+from pydantic import BaseModel, Field, ConfigDict, field_validator, model_validator
 
 
 # ============================================================================
@@ -380,8 +380,16 @@ class CanvasAnalysis(BaseModel):
     height: float = Field(..., gt=0)
     view_mode: str = Field(..., pattern=r"^(chart|cards|table)$")
     chart_kind: Optional[str] = None
-    live: bool = True
+    mode: str = Field('live', pattern=r"^(live|custom|fixed)$")
     title: Optional[str] = None
+
+    @model_validator(mode='before')
+    @classmethod
+    def migrate_live_to_mode(cls, data: Any) -> Any:
+        """Backward compat: map legacy `live: bool` to `mode` enum."""
+        if isinstance(data, dict) and 'live' in data and 'mode' not in data:
+            data['mode'] = 'live' if data.pop('live') else 'fixed'
+        return data
     chart_current_layer_dsl: Optional[str] = Field(None, description="Current layer DSL composed onto all scenarios via augmentDSLWithConstraint (both Live and Custom mode)")
     analysis_type_overridden: Optional[bool] = Field(None, description="True when user explicitly selected an analysis type (vs auto-assigned at creation)")
     recipe: ChartRecipeCore

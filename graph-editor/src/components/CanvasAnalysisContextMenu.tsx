@@ -186,7 +186,7 @@ export function CanvasAnalysisContextMenu({
 
     result.push(
       { label: '', onClick: () => {}, divider: true },
-      analysis.live
+      analysis.mode === 'live'
         ? {
             label: 'Switch to Custom scenarios',
             icon: <Lock size={14} />,
@@ -194,7 +194,7 @@ export function CanvasAnalysisContextMenu({
               const captured = onCaptureFromTab?.();
               if (captured) {
                 onUpdate(analysisId, {
-                  live: false,
+                  mode: 'custom' as const,
                   recipe: {
                     ...analysis.recipe,
                     scenarios: captured.scenarios,
@@ -202,7 +202,7 @@ export function CanvasAnalysisContextMenu({
                   },
                 } as any);
               } else {
-                onUpdate(analysisId, { live: false } as any);
+                onUpdate(analysisId, { mode: 'custom' as const } as any);
               }
             },
           }
@@ -210,7 +210,7 @@ export function CanvasAnalysisContextMenu({
             label: 'Return to Live scenarios',
             icon: <Zap size={14} />,
             onClick: () => onUpdate(analysisId, {
-              live: true,
+              mode: 'live' as const,
               recipe: {
                 ...analysis.recipe,
                 scenarios: undefined,
@@ -220,7 +220,7 @@ export function CanvasAnalysisContextMenu({
           },
     );
 
-    if (!analysis.live && onEditScenarioDsl) {
+    if (analysis.mode !== 'live' && onEditScenarioDsl) {
       const scenarios = analysis.recipe?.scenarios || [];
       if (scenarios.length > 0) {
         const editItems: ContextMenuItem[] = scenarios.map((s: any) => ({
@@ -231,7 +231,7 @@ export function CanvasAnalysisContextMenu({
       }
     }
 
-    if (!analysis.live && onUseAsCurrent) {
+    if (analysis.mode !== 'live' && onUseAsCurrent) {
       const scenarios = analysis.recipe?.scenarios || [];
       const currentScenario = scenarios.find((s: any) => s.scenario_id === 'current');
       const dsl = currentScenario?.effective_dsl;

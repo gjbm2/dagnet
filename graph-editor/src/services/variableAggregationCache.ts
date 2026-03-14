@@ -43,7 +43,7 @@ export class VariableAggregationCache {
       const combo: ContextCombination = {};
       
       for (const ctx of parsed.context) {
-        combo[ctx.key] = ctx.value;
+        combo[ctx.key] = ctx.value ?? '';
       }
       
       const key = this.contextComboToKey(combo);

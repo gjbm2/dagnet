@@ -146,7 +146,7 @@
     "CanvasAnalysis": {
       "type": "object",
       "description": "Canvas annotation: live analysis pinned to the canvas",
-      "required": ["id", "x", "y", "width", "height", "view_mode", "live", "recipe"],
+      "required": ["id", "x", "y", "width", "height", "view_mode", "mode", "recipe"],
       "additionalProperties": false,
       "properties": {
         "id": { "type": "string" },
@@ -156,7 +156,7 @@
         "height": { "type": "number", "exclusiveMinimum": 0 },
         "view_mode": { "type": "string", "enum": ["chart", "cards", "table"] },
         "chart_kind": { "type": "string" },
-        "live": { "type": "boolean" },
+        "mode": { "type": "string", "enum": ["live", "custom", "fixed"], "default": "live" },
         "title": { "type": "string" },
         "chart_current_layer_dsl": { "type": "string", "description": "Current layer DSL composed onto all scenarios via augmentDSLWithConstraint (both Live and Custom mode)" },
         "analysis_type_overridden": { "type": "boolean", "description": "True when user explicitly selected an analysis type (vs auto-assigned at creation)" },

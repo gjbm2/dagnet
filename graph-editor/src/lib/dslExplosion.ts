@@ -238,7 +238,7 @@ function smartSplit(str: string, sep: string): string[] {
  */
 async function expandBareKeys(clause: string): Promise<string[]> {
   const parsed = parseConstraints(clause);
-  const bareKeys = parsed.context.filter(ctx => !ctx.value);
+  const bareKeys = parsed.context.filter(ctx => ctx.value === undefined);
   
   if (bareKeys.length === 0) {
     return [clause];

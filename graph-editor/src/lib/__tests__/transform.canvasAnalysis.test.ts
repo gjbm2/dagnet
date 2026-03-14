@@ -20,7 +20,7 @@ describe('Canvas analysis transform round-trip', () => {
           x: 100, y: 200, width: 400, height: 300,
           view_mode: 'chart',
           chart_kind: 'funnel',
-          live: true,
+          mode: 'live' as const,
           recipe: { analysis: { analysis_type: 'conversion_funnel', analytics_dsl: 'from(a).to(b)' } },
         },
       ],
@@ -44,7 +44,7 @@ describe('Canvas analysis transform round-trip', () => {
       containers: [{ id: 'c1', label: 'Group', colour: '#94A3B8', width: 300, height: 200, x: 0, y: 0 }],
       canvasAnalyses: [{
         id: 'a1', x: 0, y: 0, width: 400, height: 300,
-        view_mode: 'chart', live: true,
+        view_mode: 'chart', mode: 'live' as const,
         recipe: { analysis: { analysis_type: 'graph_overview' } },
       }],
     };
@@ -65,7 +65,7 @@ describe('Canvas analysis transform round-trip', () => {
       ...baseGraph,
       canvasAnalyses: [{
         id: 'a1', x: 100, y: 200, width: 400, height: 300,
-        view_mode: 'cards', live: false,
+        view_mode: 'cards', mode: 'fixed' as const,
         recipe: { analysis: { analysis_type: 'from_node_outcomes' } },
       }],
     };
@@ -104,7 +104,7 @@ describe('Canvas analysis transform round-trip', () => {
       containers: [{ id: 'c1', label: '', colour: '#94A3B8', width: 300, height: 200, x: 0, y: 0 }],
       canvasAnalyses: [{
         id: 'a1', x: 0, y: 0, width: 400, height: 300,
-        view_mode: 'chart', live: true,
+        view_mode: 'chart', mode: 'live' as const,
         recipe: { analysis: { analysis_type: 'graph_overview' } },
       }],
     };
@@ -127,7 +127,7 @@ describe('Canvas analysis view_mode semantics', () => {
       ...baseGraph,
       canvasAnalyses: [{
         id: 'a1', x: 0, y: 0, width: 400, height: 300,
-        view_mode: 'cards', live: true,
+        view_mode: 'cards', mode: 'live' as const,
         recipe: { analysis: { analysis_type: 'graph_overview' } },
       }],
     };
@@ -142,7 +142,7 @@ describe('Canvas analysis view_mode semantics', () => {
       ...baseGraph,
       canvasAnalyses: [{
         id: 'a1', x: 0, y: 0, width: 400, height: 300,
-        view_mode: 'chart', chart_kind: 'funnel', live: true,
+        view_mode: 'chart', chart_kind: 'funnel', mode: 'live' as const,
         recipe: { analysis: { analysis_type: 'conversion_funnel', analytics_dsl: 'from(a).to(b)' } },
       }],
     };
@@ -158,7 +158,7 @@ describe('Canvas analysis view_mode semantics', () => {
       ...baseGraph,
       canvasAnalyses: [{
         id: 'a1', x: 0, y: 0, width: 400, height: 300,
-        view_mode: 'chart', live: true,
+        view_mode: 'chart', mode: 'live' as const,
         chart_current_layer_dsl: 'context(channel:influencer)',
         recipe: { analysis: { analysis_type: 'graph_overview' } },
       }],
@@ -180,7 +180,7 @@ describe('Canvas analysis full structural round-trip', () => {
           x: 100, y: 200, width: 500, height: 350,
           view_mode: 'chart' as const,
           chart_kind: 'funnel',
-          live: true,
+          mode: 'live' as const,
           title: 'Live Funnel',
           analysis_type_overridden: false,
           chart_current_layer_dsl: 'context(channel:organic)',
@@ -193,7 +193,7 @@ describe('Canvas analysis full structural round-trip', () => {
           id: 'custom-chart',
           x: 600, y: 100, width: 400, height: 300,
           view_mode: 'cards' as const,
-          live: false,
+          mode: 'fixed' as const,
           title: 'Custom Bridge',
           analysis_type_overridden: true,
           display: { show_labels: false },
@@ -228,7 +228,7 @@ describe('Canvas analysis full structural round-trip', () => {
     expect(live.height).toBe(350);
     expect(live.view_mode).toBe('chart');
     expect(live.chart_kind).toBe('funnel');
-    expect(live.live).toBe(true);
+    expect(live.mode).toBe('live');
     expect(live.title).toBe('Live Funnel');
     expect(live.analysis_type_overridden).toBe(false);
     expect(live.chart_current_layer_dsl).toBe('context(channel:organic)');
@@ -242,7 +242,7 @@ describe('Canvas analysis full structural round-trip', () => {
     expect(custom.x).toBe(600);
     expect(custom.y).toBe(100);
     expect(custom.view_mode).toBe('cards');
-    expect(custom.live).toBe(false);
+    expect(custom.mode).toBe('fixed');
     expect(custom.title).toBe('Custom Bridge');
     expect(custom.analysis_type_overridden).toBe(true);
     expect(custom.display).toEqual({ show_labels: false });

@@ -316,7 +316,7 @@ describe('Pipeline uniformity — satellite ↔ CanvasAnalysisNode invariant', (
           },
           view_mode: 'chart',
           chart_kind: kind,
-          live: true,
+          mode: 'live' as const,
           x: 0, y: 0, width: 300, height: 200,
         };
         // The shape must have all required fields
@@ -324,7 +324,7 @@ describe('Pipeline uniformity — satellite ↔ CanvasAnalysisNode invariant', (
         expect(synthetic.recipe.analysis.analysis_type).toBe(typeId);
         expect(synthetic.chart_kind).toBe(kind);
         expect(synthetic.view_mode).toBe('chart');
-        expect(synthetic.live).toBe(true);
+        expect(synthetic.mode).toBe('live');
       }
     }
   });

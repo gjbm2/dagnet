@@ -93,7 +93,7 @@ function isEligibleContextOnlySlice(value: ParameterValue): { key: string; value
   const parsed = parseConstraints(dims);
   if (parsed.contextAny.length > 0) return null;
   if (parsed.context.length !== 1) return null;
-  return { key: parsed.context[0].key, value: parsed.context[0].value };
+  return { key: parsed.context[0].key, value: parsed.context[0].value ?? '' };
 }
 
 export type MECEPartitionCandidate = {

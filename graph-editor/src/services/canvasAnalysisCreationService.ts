@@ -85,7 +85,7 @@ export function buildCanvasAnalysisObject(
     height: size.height,
     view_mode: payload.viewMode,
     chart_kind: payload.chartKind,
-    live: true,
+    mode: 'live' as const,
     analysis_type_overridden: payload.analysisTypeOverridden || undefined,
     recipe: payload.recipe,
     ...(payload.display ? { display: payload.display } : {}),

@@ -9952,9 +9952,10 @@ class DataOperationsService {
           if (!ctx || ctx.key !== meceKey) continue;
           const acc = buildDailyAccessor(pv);
           if (!acc) continue;
-          const arr = meceByValue.get(ctx.value) ?? [];
+          const ctxVal = ctx.value ?? '';
+          const arr = meceByValue.get(ctxVal) ?? [];
           arr.push(acc);
-          meceByValue.set(ctx.value, arr);
+          meceByValue.set(ctxVal, arr);
         }
       }
 

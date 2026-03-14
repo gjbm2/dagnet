@@ -902,13 +902,15 @@ export interface CanvasAnalysisDisplay {
   [key: string]: unknown;
 }
 
+export type CanvasAnalysisMode = 'live' | 'custom' | 'fixed';
+
 export interface CanvasAnalysis extends ChartDefinition {
   id: string;
   x: number;
   y: number;
   width: number;
   height: number;
-  live: boolean;
+  mode: CanvasAnalysisMode;
   chart_current_layer_dsl?: string;
   analysis_type_overridden?: boolean;
   display?: CanvasAnalysisDisplay;

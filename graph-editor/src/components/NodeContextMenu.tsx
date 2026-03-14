@@ -25,6 +25,7 @@ import { useOpenFile } from '../hooks/useOpenFile';
 import { useGraphStore } from '../contexts/GraphStoreContext';
 import { useCopyPaste } from '../hooks/useCopyPaste';
 import { updateManager } from '../services/UpdateManager';
+import type { AlignCommand, DistributeCommand, EqualSizeCommand } from '../services/alignmentService';
 
 interface NodeContextMenuProps {
   x: number;
@@ -40,6 +41,12 @@ interface NodeContextMenuProps {
   onAddChart: (detail?: { contextNodeIds?: string[]; contextEdgeIds?: string[] }) => void;
   onSelectNode: (nodeId: string) => void;
   onDeleteNode: (nodeId: string) => void;
+  /** Alignment callbacks — provided when useAlignSelection is wired in GraphCanvas */
+  onAlign?: (command: AlignCommand) => void;
+  onDistribute?: (command: DistributeCommand) => void;
+  onEqualSize?: (command: EqualSizeCommand) => void;
+  canAlign?: boolean;
+  canDistribute?: boolean;
 }
 
 export const NodeContextMenu: React.FC<NodeContextMenuProps> = ({
@@ -56,6 +63,11 @@ export const NodeContextMenu: React.FC<NodeContextMenuProps> = ({
   onAddChart,
   onSelectNode,
   onDeleteNode,
+  onAlign,
+  onDistribute,
+  onEqualSize,
+  canAlign,
+  canDistribute,
 }) => {
   const [openSubmenu, setOpenSubmenu] = useState<string | null>(null);
   const submenuTimeoutRef = useRef<NodeJS.Timeout | null>(null);
@@ -911,6 +923,72 @@ export const NodeContextMenu: React.FC<NodeContextMenuProps> = ({
         <Settings size={14} />
         Properties
       </div>
+
+      {/* Alignment (nodes-only multi-select) */}
+      {isMultiSelect && canAlign && onAlign && (
+        <>
+          <div className="dagnet-popup-divider" />
+          <div
+            className={`dagnet-popup-item${openSubmenu === 'align' ? ' dagnet-popup-item--active' : ''}`}
+            onMouseEnter={() => handleSubmenuEnter('align')}
+            onMouseLeave={handleSubmenuLeave}
+            style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'default' }}
+          >
+            Align
+            <span className="dagnet-popup-arrow">›</span>
+          </div>
+          {openSubmenu === 'align' && (
+            <div
+              className="dagnet-popup dagnet-popup--submenu"
+              style={{ position: 'absolute', left: '100%', top: 'auto', marginTop: -30, zIndex: 10001 }}
+              onMouseEnter={handleSubmenuContentEnter}
+              onMouseLeave={handleSubmenuContentLeave}
+            >
+              <div className="dagnet-popup-item" onClick={(e) => { e.stopPropagation(); onAlign('align-left'); onClose(); }} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                Align Left Edges
+              </div>
+              <div className="dagnet-popup-item" onClick={(e) => { e.stopPropagation(); onAlign('align-right'); onClose(); }} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                Align Right Edges
+              </div>
+              <div className="dagnet-popup-item" onClick={(e) => { e.stopPropagation(); onAlign('align-top'); onClose(); }} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                Align Top Edges
+              </div>
+              <div className="dagnet-popup-item" onClick={(e) => { e.stopPropagation(); onAlign('align-bottom'); onClose(); }} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                Align Bottom Edges
+              </div>
+              <div className="dagnet-popup-divider" />
+              <div className="dagnet-popup-item" onClick={(e) => { e.stopPropagation(); onAlign('align-centre-horizontal'); onClose(); }} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                Align Centre Horizontally
+              </div>
+              <div className="dagnet-popup-item" onClick={(e) => { e.stopPropagation(); onAlign('align-centre-vertical'); onClose(); }} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                Align Centre Vertically
+              </div>
+              {canDistribute && onDistribute && (
+                <>
+                  <div className="dagnet-popup-divider" />
+                  <div className="dagnet-popup-item" onClick={(e) => { e.stopPropagation(); onDistribute('distribute-horizontal'); onClose(); }} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    Distribute Horizontally
+                  </div>
+                  <div className="dagnet-popup-item" onClick={(e) => { e.stopPropagation(); onDistribute('distribute-vertical'); onClose(); }} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    Distribute Vertically
+                  </div>
+                </>
+              )}
+              {onEqualSize && (
+                <>
+                  <div className="dagnet-popup-divider" />
+                  <div className="dagnet-popup-item" onClick={(e) => { e.stopPropagation(); onEqualSize('equal-width'); onClose(); }} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    Make Equal Width
+                  </div>
+                  <div className="dagnet-popup-item" onClick={(e) => { e.stopPropagation(); onEqualSize('equal-height'); onClose(); }} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    Make Equal Height
+                  </div>
+                </>
+              )}
+            </div>
+          )}
+        </>
+      )}
 
       {/* Delete */}
       <div

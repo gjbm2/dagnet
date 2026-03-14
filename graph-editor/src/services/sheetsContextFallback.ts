@@ -113,7 +113,7 @@ export function extractContextsFromHRN(hrn: string): {
   try {
     const parsed = parseConstraints(conditionString);
     return {
-      contexts: parsed.context,
+      contexts: parsed.context.filter((c): c is { key: string; value: string } => c.value !== undefined),
       contextAnys: parsed.contextAny,
       window: parsed.window
     };

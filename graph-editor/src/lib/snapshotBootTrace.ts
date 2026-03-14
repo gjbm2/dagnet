@@ -2,7 +2,7 @@ type SnapshotChartSummary = {
   id: string;
   analysisType: string;
   chartKind?: string;
-  live?: boolean;
+  mode?: string;
 };
 
 type SnapshotBootLedgerStage =
@@ -24,7 +24,7 @@ type SnapshotBootLedgerEntry = {
   analysisId: string;
   analysisType?: string;
   chartKind?: string;
-  live?: boolean;
+  mode?: string;
   stages: Partial<Record<SnapshotBootLedgerStage, number>>;
   lastPayloadByStage: Partial<Record<SnapshotBootLedgerStage, Record<string, unknown>>>;
 };
@@ -79,7 +79,7 @@ function upsertLedgerEntry(
   };
   entry.analysisType = safeString(payload.analysisType) || entry.analysisType;
   entry.chartKind = safeString(payload.chartKind) || entry.chartKind;
-  if (typeof payload.live === 'boolean') entry.live = payload.live;
+  if (typeof payload.mode === 'string') entry.mode = payload.mode;
   state.entries.set(entryKey, entry);
   return entry;
 }
@@ -90,7 +90,7 @@ function summariseLedgerEntry(entry: SnapshotBootLedgerEntry) {
     analysisId: entry.analysisId,
     analysisType: entry.analysisType,
     chartKind: entry.chartKind,
-    live: entry.live,
+    mode: entry.mode,
     seenStages: Object.keys(entry.stages),
     lastBlockedReason: entry.lastPayloadByStage['prepared-blocked']?.reason ?? null,
   };
@@ -113,7 +113,7 @@ export function summariseSnapshotCharts(graph: any): SnapshotChartSummary[] {
       id: safeString(analysis?.id),
       analysisType: safeString(analysis?.recipe?.analysis?.analysis_type),
       chartKind: safeString(analysis?.chart_kind) || undefined,
-      live: analysis?.live === true,
+      mode: analysis?.mode,
     }));
 }
 
@@ -163,7 +163,7 @@ export function registerSnapshotBootExpectations(
       analysisId: chart.id,
       analysisType: chart.analysisType,
       chartKind: chart.chartKind,
-      live: chart.live,
+      mode: chart.mode,
       ...context,
     };
     recordSnapshotBootLedgerStage('graph-discovered', payload);

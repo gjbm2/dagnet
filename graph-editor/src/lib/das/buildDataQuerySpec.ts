@@ -33,11 +33,11 @@ export async function buildDataQuerySpec(
   if (constraints) {
     // Process context(...) constraints
     for (const ctx of constraints.context) {
-      const mapping = await contextRegistry.getSourceMapping(ctx.key, ctx.value, connectionType);
+      const mapping = await contextRegistry.getSourceMapping(ctx.key, ctx.value ?? '', connectionType);
       if (mapping) {
         contextFilters.push({
           key: ctx.key,
-          value: ctx.value,
+          value: ctx.value ?? '',
           sourceField: mapping.field || ctx.key,
           sourcePredicate: mapping.filter || mapping.pattern || ''
         });

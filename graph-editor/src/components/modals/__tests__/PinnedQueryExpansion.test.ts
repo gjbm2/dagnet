@@ -64,7 +64,7 @@ describe('Pinned Query Expansion', () => {
       // Bare key (no value specified)
       expect(parsed.context).toHaveLength(1);
       expect(parsed.context[0].key).toBe('channel');
-      expect(parsed.context[0].value).toBe('');
+      expect(parsed.context[0].value).toBeUndefined();
       
       // Should expand to multiple slices
       const values = await contextRegistry.getValuesForContext('channel');
@@ -84,7 +84,7 @@ describe('Pinned Query Expansion', () => {
       
       expect(parsed.context).toHaveLength(2);
       expect(parsed.context[0]).toEqual({ key: 'channel', value: 'google' }); // Specific
-      expect(parsed.context[1]).toEqual({ key: 'browser-type', value: '' }); // Bare
+      expect(parsed.context[1]).toEqual({ key: 'browser-type', value: undefined }); // Bare (enumerate)
     });
   });
   
@@ -95,8 +95,8 @@ describe('Pinned Query Expansion', () => {
       
       // Parser extracts contexts from inside or()
       expect(parsed.context).toHaveLength(2);
-      expect(parsed.context[0]).toEqual({ key: 'channel', value: '' });
-      expect(parsed.context[1]).toEqual({ key: 'browser-type', value: '' });
+      expect(parsed.context[0]).toEqual({ key: 'channel', value: undefined });
+      expect(parsed.context[1]).toEqual({ key: 'browser-type', value: undefined });
     });
     
     it('should handle or() with window', () => {

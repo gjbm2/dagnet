@@ -208,7 +208,7 @@ function parseContextMap(dsl: string): Map<string, string> {
   try {
     const parsed = parseConstraints(dsl || '');
     for (const c of parsed.context || []) {
-      out.set(c.key, c.value);
+      out.set(c.key, c.value ?? '');
     }
   } catch {
     // ignore parse failures (treat as no dims)

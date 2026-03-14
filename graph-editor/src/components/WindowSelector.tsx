@@ -504,11 +504,11 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
     
     const valueIds: string[] = [];
     for (const ctx of parsed.context) {
-      valueIds.push(ctx.value);
+      if (ctx.value !== undefined) valueIds.push(ctx.value);
     }
     for (const ctxAny of parsed.contextAny) {
       for (const pair of ctxAny.pairs) {
-        valueIds.push(pair.value);
+        if (pair.value !== undefined) valueIds.push(pair.value);
       }
     }
     return valueIds;

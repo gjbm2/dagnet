@@ -106,7 +106,7 @@ function CanvasAnalysisNodeInner({ data, selected }: NodeProps<CanvasAnalysisNod
       analysisId: analysisProp.id,
       analysisType: propAnalysisType,
       chartKind: analysisProp.chart_kind,
-      live: analysisProp.live,
+      mode: analysisProp.mode,
       tabId,
       source: 'CanvasAnalysisNode',
     });
@@ -114,7 +114,7 @@ function CanvasAnalysisNodeInner({ data, selected }: NodeProps<CanvasAnalysisNod
       analysisId: analysisProp.id,
       analysisType: propAnalysisType,
       chartKind: analysisProp.chart_kind,
-      live: analysisProp.live,
+      mode: analysisProp.mode,
       tabId,
     });
     return () => {
@@ -122,7 +122,7 @@ function CanvasAnalysisNodeInner({ data, selected }: NodeProps<CanvasAnalysisNod
         analysisId: analysisProp.id,
         analysisType: propAnalysisType,
         chartKind: analysisProp.chart_kind,
-        live: analysisProp.live,
+        mode: analysisProp.mode,
         tabId,
         source: 'CanvasAnalysisNode',
       });
@@ -130,7 +130,7 @@ function CanvasAnalysisNodeInner({ data, selected }: NodeProps<CanvasAnalysisNod
         analysisId: analysisProp.id,
         analysisType: propAnalysisType,
         chartKind: analysisProp.chart_kind,
-        live: analysisProp.live,
+        mode: analysisProp.mode,
         tabId,
       });
     };
@@ -191,7 +191,7 @@ function CanvasAnalysisNodeInner({ data, selected }: NodeProps<CanvasAnalysisNod
   const analyticsDsl = analysis.recipe?.analysis?.analytics_dsl;
 
   const visibleScenarioIds = useMemo(() => {
-    if (!analysis.live && analysis.recipe.scenarios) {
+    if (analysis.mode !== 'live' && analysis.recipe.scenarios) {
       const hidden = new Set<string>((((analysis.display as any)?.hidden_scenarios) || []) as string[]);
       return analysis.recipe.scenarios
         .map(s => s.scenario_id)
@@ -202,7 +202,7 @@ function CanvasAnalysisNodeInner({ data, selected }: NodeProps<CanvasAnalysisNod
       return state?.visibleScenarioIds || ['current'];
     }
     return ['current'];
-  }, [analysis.live, analysis.recipe.scenarios, analysis.display, tabId]);
+  }, [analysis.mode, analysis.recipe.scenarios, analysis.display, tabId]);
 
   const scenarioCount = visibleScenarioIds.length || 1;
   // Resolve available analysis types when graph structure changes.
@@ -240,7 +240,7 @@ function CanvasAnalysisNodeInner({ data, selected }: NodeProps<CanvasAnalysisNod
   const scenarioVisibilityModes = useMemo(() => {
     const m: Record<string, 'f+e' | 'f' | 'e'> = {};
     for (const id of visibleScenarioIds) {
-      if (!analysis.live && analysis.recipe.scenarios) {
+      if (analysis.mode !== 'live' && analysis.recipe.scenarios) {
         const s = analysis.recipe.scenarios.find(s => s.scenario_id === id);
         m[id] = (s?.visibility_mode as any) || 'f+e';
       } else {
@@ -253,7 +253,7 @@ function CanvasAnalysisNodeInner({ data, selected }: NodeProps<CanvasAnalysisNod
   const scenarioMetaById = useMemo(() => {
     const m: Record<string, { name?: string; colour?: string; visibility_mode?: 'f+e' | 'f' | 'e' }> = {};
     for (const id of visibleScenarioIds) {
-      if (!analysis.live && analysis.recipe.scenarios) {
+      if (analysis.mode !== 'live' && analysis.recipe.scenarios) {
         const s = analysis.recipe.scenarios.find(s => s.scenario_id === id);
         if (s) {
           m[id] = {
@@ -286,12 +286,12 @@ function CanvasAnalysisNodeInner({ data, selected }: NodeProps<CanvasAnalysisNod
       }
     }
     return m;
-  }, [visibleScenarioIds, analysis.live, analysis.recipe.scenarios, scenarioVisibilityModes]);
+  }, [visibleScenarioIds, analysis.mode, analysis.recipe.scenarios, scenarioVisibilityModes]);
 
   // Build scenario layer items for the toolbar popover
   const allScenarioLayerItems = useMemo((): ScenarioLayerItem[] => {
     const hiddenSet = new Set<string>(((analysis.display as any)?.hidden_scenarios || []) as string[]);
-    if (analysis.live) {
+    if (analysis.mode === 'live') {
       // Live mode: show tab's scenarios, all visible
       return visibleScenarioIds.map(sid => {
         const meta = scenarioMetaById[sid];
@@ -315,7 +315,7 @@ function CanvasAnalysisNodeInner({ data, selected }: NodeProps<CanvasAnalysisNod
       visibilityMode: (fs.visibility_mode || 'f+e') as 'f+e' | 'f' | 'e',
       kind: 'user' as const,
     }));
-  }, [analysis.live, analysis.recipe?.scenarios, analysis.display, visibleScenarioIds, scenarioMetaById]);
+  }, [analysis.mode, analysis.recipe?.scenarios, analysis.display, visibleScenarioIds, scenarioMetaById]);
 
   // DSL subtitles for scenario cards
   const scenarioDslSubtitleById = useMemo(() => {
@@ -336,7 +336,7 @@ function CanvasAnalysisNodeInner({ data, selected }: NodeProps<CanvasAnalysisNod
 
   // Mutate recipe scenarios with auto-promotion from live → custom
   const mutateScenarios = useCallback((mutator: (scenarios: any[], display: any) => { scenarios?: any[]; display?: any }) => {
-    if (analysis.live) {
+    if (analysis.mode === 'live') {
       const liveTabId = tabId || tabsRef.current[0]?.id;
       if (!liveTabId || !scenariosContextRef.current) return;
       const currentTab = tabsRef.current.find(t => t.id === liveTabId);
@@ -350,7 +350,7 @@ function CanvasAnalysisNodeInner({ data, selected }: NodeProps<CanvasAnalysisNod
       });
       const result = mutator(captured, analysis.display || {});
       onUpdate(analysis.id, {
-        live: false,
+        mode: 'custom' as const,
         recipe: { ...analysis.recipe, scenarios: result.scenarios ?? captured, analysis: { ...analysis.recipe.analysis, what_if_dsl } },
         display: result.display !== undefined ? result.display : analysis.display,
       } as any);
@@ -439,12 +439,12 @@ function CanvasAnalysisNodeInner({ data, selected }: NodeProps<CanvasAnalysisNod
 
 
   const handleLiveToggle = useCallback((live: boolean) => {
-    if (live && !analysis.live) {
+    if (live && analysis.mode !== 'live') {
       onUpdate(analysis.id, {
-        live: true,
+        mode: 'live' as const,
         recipe: { ...analysis.recipe, scenarios: undefined, analysis: { ...analysis.recipe.analysis, what_if_dsl: undefined } },
       } as any);
-    } else if (!live && analysis.live) {
+    } else if (!live && analysis.mode === 'live') {
       const liveTabId = tabId || tabsRef.current[0]?.id;
       if (liveTabId && scenariosContextRef.current) {
         const currentTab = tabsRef.current.find(t => t.id === liveTabId);
@@ -457,7 +457,7 @@ function CanvasAnalysisNodeInner({ data, selected }: NodeProps<CanvasAnalysisNod
           whatIfDSL,
         });
         onUpdate(analysis.id, {
-          live: false,
+          mode: 'custom' as const,
           recipe: { ...analysis.recipe, scenarios: captured, analysis: { ...analysis.recipe.analysis, what_if_dsl } },
         } as any);
       }
@@ -659,8 +659,8 @@ function CanvasAnalysisNodeInner({ data, selected }: NodeProps<CanvasAnalysisNod
           displayStyle={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}
           editStyle={{ minWidth: 0 }}
         />
-        <span className={`canvas-analysis-mode-badge${analysis.live && !analysis.chart_current_layer_dsl ? '' : ' custom'}`}>
-          {analysis.live && !analysis.chart_current_layer_dsl ? 'LIVE' : 'CUSTOM'}
+        <span className={`canvas-analysis-mode-badge${analysis.mode === 'live' && !analysis.chart_current_layer_dsl ? '' : ' custom'}`}>
+          {analysis.mode === 'live' && !analysis.chart_current_layer_dsl ? 'LIVE' : 'CUSTOM'}
         </span>
         {hasAnalysisType && (loading || waitingForDeps) && <Loader2 size={12} style={{ animation: 'spin 1s linear infinite', flexShrink: 0 }} />}
         <span style={{ flex: 1 }} />
@@ -756,11 +756,11 @@ function CanvasAnalysisNodeInner({ data, selected }: NodeProps<CanvasAnalysisNod
             fillHeight
             chartContext="canvas"
             canvasZoom={toolbarCanvasZoom}
-            hideScenarioLegend={analysis.live && analysis.display?.show_legend !== true}
+            hideScenarioLegend={analysis.mode === 'live' && analysis.display?.show_legend !== true}
             analysisTypeId={analysis.recipe?.analysis?.analysis_type}
             availableAnalyses={availableAnalyses}
             onAnalysisTypeChange={handleAnalysisTypeChange}
-            analysisLive={!!analysis.live}
+            analysisLive={analysis.mode === 'live'}
             onLiveToggle={handleLiveToggle}
             scenarioLayerItems={allScenarioLayerItems}
             onScenarioToggleVisibility={handleScenarioToggleVisibility}

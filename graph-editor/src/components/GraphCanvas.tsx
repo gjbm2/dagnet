@@ -102,6 +102,9 @@ import { getCaseEdgeVariantInfo } from './edges/edgeLabelHelpers';
 import { MAX_EDGE_WIDTH, MIN_EDGE_WIDTH, DEFAULT_NODE_WIDTH, DEFAULT_NODE_HEIGHT, MIN_NODE_HEIGHT, MAX_NODE_HEIGHT, IMAGE_VIEW_NODE_WIDTH, IMAGE_VIEW_NODE_HEIGHT } from '@/lib/nodeEdgeConstants';
 import { getSeverityIcon } from './issues/issueIcons';
 import { Monitor, MonitorOff, X, Plus, StickyNote, Square, BarChart3, Clipboard, CheckSquare } from 'lucide-react';
+import { useAlignSelection } from '../hooks/useAlignSelection';
+import { toNodeRect } from '../services/alignmentService';
+import { MultiSelectContextMenu } from './MultiSelectContextMenu';
 
 const nodeTypes: NodeTypes = {
   conversion: ConversionNode,
@@ -476,6 +479,9 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
   const [nodes, setNodes, onNodesChangeBase] = useNodesState([]);
   const [edges, setEdges, onEdgesChangeBase] = useEdgesState([]);
 
+  // Alignment & distribution commands for selected objects
+  const { align, distribute, equalSize, canAlign, canDistribute } = useAlignSelection(nodes, setNodes, graphRef, setGraphDirect, saveHistoryState);
+
   const fitView = useCallback((options?: any) => {
     rfFitView({ ...options });
   }, [rfFitView]);
@@ -526,6 +532,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
   const [analysisContextMenu, setAnalysisContextMenu] = useState<{ x: number; y: number; analysisId: string } | null>(null);
   const [analysisCtxAvailableTypes, setAnalysisCtxAvailableTypes] = useState<import('../lib/graphComputeClient').AvailableAnalysis[]>([]);
   const [ctxDslEditState, setCtxDslEditState] = useState<{ analysisId: string; scenarioId: string } | null>(null);
+  const [multiSelectContextMenu, setMultiSelectContextMenu] = useState<{ x: number; y: number } | null>(null);
   const [edgeContextMenu, setEdgeContextMenu] = useState<{ x: number; y: number; edgeId: string } | null>(null);
   const [contextMenuLocalData, setContextMenuLocalData] = useState<{
     probability: number;
@@ -1898,7 +1905,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
             analysisId: chart.id,
             analysisType: chart.analysisType,
             chartKind: chart.chartKind,
-            live: chart.live,
+            mode: chart.mode,
             cycleId: snapshotBootCycleId,
             tabId,
             source: 'GraphCanvas:sync-start',
@@ -4088,20 +4095,18 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
         };
 
         const selectedNodes = nodes.filter(node => {
+          const rect = toNodeRect(node, DEFAULT_NODE_WIDTH, DEFAULT_NODE_HEIGHT);
           const nodeRect = {
-            left: node.position.x,
-            top: node.position.y,
-            right: node.position.x + DEFAULT_NODE_WIDTH, // Approximate node width
-            bottom: node.position.y + 60  // Approximate node height
+            left: rect.x,
+            top: rect.y,
+            right: rect.x + rect.width,
+            bottom: rect.y + rect.height,
           };
 
-          const intersects = !(nodeRect.right < lassoRect.left || 
-                             nodeRect.left > lassoRect.right || 
-                             nodeRect.bottom < lassoRect.top || 
-                             nodeRect.top > lassoRect.bottom);
-          
-
-          return intersects;
+          return !(nodeRect.right < lassoRect.left ||
+                   nodeRect.left > lassoRect.right ||
+                   nodeRect.bottom < lassoRect.top ||
+                   nodeRect.top > lassoRect.bottom);
         });
 
 
@@ -5186,7 +5191,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
     if (!analysis) return;
     let cancelled = false;
     const dsl = analysis.recipe?.analysis?.analytics_dsl;
-    const scenarioCount = analysis.live
+    const scenarioCount = analysis.mode === 'live'
       ? (tabId ? tabOperations.getScenarioState(tabId)?.visibleScenarioIds?.length : null) || 1
       : (analysis.recipe?.scenarios?.length || 1);
     resolveAnalysisType(graph, dsl || undefined, scenarioCount).then(({ availableAnalyses }) => {
@@ -5197,13 +5202,14 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
 
   // Close context menus on any click
   useEffect(() => {
-    if (contextMenu || nodeContextMenu || postitContextMenu || containerContextMenu || analysisContextMenu || edgeContextMenu) {
+    if (contextMenu || nodeContextMenu || postitContextMenu || containerContextMenu || analysisContextMenu || multiSelectContextMenu || edgeContextMenu) {
       const handleClick = () => {
         setContextMenu(null);
         setNodeContextMenu(null);
         setPostitContextMenu(null);
         setContainerContextMenu(null);
         setAnalysisContextMenu(null);
+        setMultiSelectContextMenu(null);
         setEdgeContextMenu(null);
         setContextMenuLocalData(null);
       };
@@ -5211,13 +5217,13 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
       const timeoutId = setTimeout(() => {
         document.addEventListener('click', handleClick);
       }, 0);
-      
+
       return () => {
         clearTimeout(timeoutId);
         document.removeEventListener('click', handleClick);
       };
     }
-  }, [contextMenu, nodeContextMenu, edgeContextMenu]);
+  }, [contextMenu, nodeContextMenu, multiSelectContextMenu, edgeContextMenu]);
 
   // Add node at specific position
   const addNodeAtPosition = useCallback((x: number, y: number) => {
@@ -5810,7 +5816,18 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
   const onNodeContextMenu = useCallback((event: React.MouseEvent, node: any) => {
     event.preventDefault();
     event.stopPropagation();
-    
+
+    // Check if this is a multi-select with canvas objects (mixed-type or canvas-only)
+    const selectedNodes = nodes.filter(n => n.selected);
+    const hasCanvasObjects = selectedNodes.some(n => isCanvasObjectNode(n.id));
+
+    if (selectedNodes.length >= 2 && hasCanvasObjects) {
+      // Mixed-type or canvas-object multi-select → multi-select context menu
+      setMultiSelectContextMenu({ x: event.clientX, y: event.clientY });
+      return;
+    }
+
+    // Single-object or nodes-only multi-select → per-type context menu
     if (node.id?.startsWith('postit-')) {
       setPostitContextMenu({
         x: event.clientX,
@@ -5836,7 +5853,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
         nodeId: node.id,
       });
     }
-  }, []);
+  }, [nodes, isCanvasObjectNode]);
 
   // Shared: open edge context menu by edge ID (used by real right-click and E2E hooks)
   const openEdgeContextMenuById = useCallback((edgeId: string, clientX: number, clientY: number) => {
@@ -6663,7 +6680,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
         const cachedResult = canvasAnalysisResultCache.get(analysisContextMenu.analysisId);
         const effectiveChartKind = analysis.chart_kind || cachedResult?.semantics?.chart?.recommended || cachedResult?.analysis_type || undefined;
         const hiddenScenarios = new Set<string>((((analysis.display as any)?.hidden_scenarios) || []) as string[]);
-        const visibleScenarioIds = analysis.live
+        const visibleScenarioIds = analysis.mode === 'live'
           ? (tabId ? tabOperations.getScenarioState(tabId)?.visibleScenarioIds : null) || ['current']
           : (analysis.recipe?.scenarios || []).filter((s: any) => !hiddenScenarios.has(s.scenario_id)).map((s: any) => s.scenario_id);
         const currentTab = tabId ? tabs.find(t => t.id === tabId) : undefined;
@@ -6867,6 +6884,23 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
         );
       })()}
 
+      {/* Multi-Select Context Menu (mixed-type or canvas-object selections) */}
+      {multiSelectContextMenu && (
+        <MultiSelectContextMenu
+          x={multiSelectContextMenu.x}
+          y={multiSelectContextMenu.y}
+          selectedCount={nodes.filter(n => n.selected).length}
+          onAlign={align}
+          onDistribute={distribute}
+          onEqualSize={equalSize}
+          onDeleteSelected={() => {
+            window.dispatchEvent(new CustomEvent('dagnet:deleteSelected'));
+            setMultiSelectContextMenu(null);
+          }}
+          onClose={() => setMultiSelectContextMenu(null)}
+        />
+      )}
+
       {/* Node Context Menu */}
       {nodeContextMenu && (
         <NodeContextMenu
@@ -6881,6 +6915,11 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
           setGraph={setGraph}
           onClose={() => setNodeContextMenu(null)}
           onAddChart={startAddChart}
+          onAlign={align}
+          onDistribute={distribute}
+          onEqualSize={equalSize}
+          canAlign={canAlign}
+          canDistribute={canDistribute}
           onSelectNode={onSelectedNodeChange}
           onDeleteNode={deleteNode}
         />

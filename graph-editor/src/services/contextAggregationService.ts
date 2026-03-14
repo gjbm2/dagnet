@@ -73,7 +73,7 @@ export function determineContextCombinations(constraints: ParsedConstraints): Co
     
     // Add each context(key:value)
     for (const ctx of constraints.context) {
-      combo[ctx.key] = ctx.value;
+      combo[ctx.key] = ctx.value ?? '';
     }
     
     // For contextAny: for v1, just take first value of each key
@@ -330,7 +330,7 @@ export async function aggregateWindowsWithContexts(
       const parsed = parseConstraints(value.sliceDSL || '');
       const combo: ContextCombination = {};
       for (const ctx of parsed.context) {
-        combo[ctx.key] = ctx.value;
+        combo[ctx.key] = ctx.value ?? '';
       }
       
       const comboKey = JSON.stringify(combo);

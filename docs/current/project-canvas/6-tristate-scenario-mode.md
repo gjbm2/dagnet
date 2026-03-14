@@ -372,8 +372,7 @@ Examples:
 
 | File | Change |
 |---|---|
-| `src/lib/queryDSL.ts` | Phase 0: per-key clear parsing, augment, serialisation |
-| `src/services/scenarioRegenerationService.ts` | Phase 0: new `computeRebaseDelta()` function |
+| `src/lib/queryDSL.ts` | Phase 0: per-key clear parsing, augment, serialisation, `computeRebaseDelta()` |
 | `src/types/index.ts` | Add `CanvasAnalysisMode`, replace `live` with `mode` on `CanvasAnalysis` |
 | `src/types/chartRecipe.ts` | No structural change (interpretation changes) |
 | `lib/graph_types.py` | Replace `live: bool` with `mode: str`, add migration |
@@ -388,9 +387,41 @@ Examples:
 | `src/services/captureTabScenariosService.ts` | Delta DSL capture via `computeRebaseDelta` |
 | `src/styles/components-dark.css` | Tristate toggle styles, mode badge colours |
 | `src/services/__tests__/canvasAnalysisFreezeUnfreeze.test.ts` | Extended for tristate |
-| `src/lib/__tests__/queryDSL.test.ts` | Phase 0 per-key clear tests |
-| `src/services/__tests__/rebaseDelta.test.ts` | `computeRebaseDelta` round-trip tests |
-| Graph loading/normalisation path | Backward-compat migration `live` → `mode` |
+| `src/lib/__tests__/queryDSL.test.ts` | Phase 0 per-key clear tests + `computeRebaseDelta` round-trip tests |
+| `src/lib/transform.ts` | Phase 1 backward-compat migration `live` → `mode` in `toFlow` |
+| `src/lib/dslExplosion.ts` | Phase 0 bare-key filter fix |
+
+---
+
+## Implementation Progress
+
+### Phase 0: DSL Per-Key Clear Semantics — DONE (14-Mar-26)
+
+**`src/lib/queryDSL.ts`:**
+- `ParsedConstraints.context` type: `value: string` → `value: string | undefined` (undefined = enumerate, '' = per-key clear, non-empty = set)
+- Context regex updated: `/context\(([^:)]+)(?::([^)]*))?\)/g` — captures `context(key:)` distinctly from `context(key)`
+- Serialisation updated in `normalizeConstraintString` and `augmentDSLWithConstraint` rebuild (3-way: bare key, colon-only, colon+value)
+- `augmentDSLWithConstraint`: per-key clear (`value: ''`) deletes that key from merged context map. Uses `contextMergeResult` pattern to track clause presence correctly (per-key clears that empty the map → no context clause emitted, vs explicit `context()` whole clear → `context()` emitted)
+- New `computeRebaseDelta(base, target)`: computes minimal delta for all clause types. Placed in `queryDSL.ts` (pure DSL function) rather than `scenarioRegenerationService.ts` as originally planned — better cohesion with parsing/augment
+- Downstream type fixes: 11 files updated with `?? ''`, `.filter()`, or `!== undefined` guards
+
+**`src/lib/dslExplosion.ts`:** Bare-key filter tightened from `!ctx.value` to `ctx.value === undefined` (prevents per-key clear entries being treated as enumerate)
+
+**Tests:** 27 new tests in `src/lib/__tests__/queryDSL.test.ts` — per-key clear parsing, round-trip serialisation, augment behaviour, `computeRebaseDelta` common cases and edge cases. All round-trip verified via `augment(base, delta) = target`.
+
+### Phase 1: Type and Schema Changes — DONE (14-Mar-26)
+
+**`src/types/index.ts`:** Added `CanvasAnalysisMode = 'live' | 'custom' | 'fixed'`. Replaced `live: boolean` → `mode: CanvasAnalysisMode` on `CanvasAnalysis`. No compat shim.
+
+**`lib/graph_types.py`:** `live: bool = True` → `mode: str = Field('live', pattern=...)`. Added `@model_validator(mode='before')` for backward compat: `live: true` → `mode: 'live'`, `live: false` → `mode: 'fixed'`.
+
+**`public/schemas/conversion-graph-1.1.0.json`:** `live` boolean → `mode` enum `["live", "custom", "fixed"]` with default `"live"`.
+
+**`src/lib/transform.ts`:** Migration in `toFlow`: if analysis has `live` but no `mode`, maps to appropriate mode value and deletes the legacy field.
+
+**References updated (17 files):** All `.live` → `.mode` across components, hooks, services, and tests. Boolean checks → string comparisons. Object literals: `live: true` → `mode: 'live'`, `live: false` → `mode: 'fixed'` or `mode: 'custom'` depending on context.
+
+### Phase 2–7: Not yet started
 
 ---
 

@@ -207,7 +207,7 @@ function CanvasAnalysisPropertiesSection({ analysisId, graph, setGraph, saveHist
   );
 
   const scenarioLayerItems = useMemo((): ScenarioLayerItem[] => {
-    if (analysis?.live) {
+    if (analysis?.mode === 'live') {
       const scenarioState = liveTabId ? operations.getScenarioState(liveTabId) : null;
       const visibleIds: string[] = scenarioState?.visibleScenarioIds || ['current'];
       return visibleIds.map((sid: string) => {
@@ -297,7 +297,7 @@ function CanvasAnalysisPropertiesSection({ analysisId, graph, setGraph, saveHist
     const id = `scenario_${Date.now()}`;
     const name = new Date().toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
     const newScenario = { scenario_id: id, name, colour, effective_dsl: '', visibility_mode: 'f+e' as const };
-    if (analysis.live) {
+    if (analysis.mode === 'live') {
       // Auto-promote to custom first
       if (liveTabId && scenariosContext) {
         const currentTab = tabs.find(t => t.id === liveTabId);
@@ -310,7 +310,7 @@ function CanvasAnalysisPropertiesSection({ analysisId, graph, setGraph, saveHist
           whatIfDSL,
         });
         const nextGraph = mutateCanvasAnalysisGraph(graph, analysisId, (a) => {
-          a.live = false;
+          a.mode = 'custom';
           a.recipe = {
             ...a.recipe,
             scenarios: [...captured, newScenario],
@@ -331,7 +331,7 @@ function CanvasAnalysisPropertiesSection({ analysisId, graph, setGraph, saveHist
   const editingScenario = editingScenarioId
     ? analysis?.recipe?.scenarios?.find((s: any) => s.scenario_id === editingScenarioId)
     : null;
-  const isEditingCurrentLayerDsl = editingScenarioId === 'current' && analysis?.live;
+  const isEditingCurrentLayerDsl = editingScenarioId === 'current' && analysis?.mode === 'live';
   const { currentDSL: graphCurrentDSL } = useGraphStore();
 
   if (!analysis) return <div style={{ textAlign: 'center', color: '#666', padding: '20px' }}>Canvas analysis not found</div>;
@@ -378,12 +378,12 @@ function CanvasAnalysisPropertiesSection({ analysisId, graph, setGraph, saveHist
       {/* ── Section 2: Data Source ── */}
       <CollapsibleSection
         title="Data Source"
-        defaultOpen={!analysis.live}
+        defaultOpen={analysis.mode !== 'live'}
         withCheckbox={true}
-        checkboxChecked={!analysis.live}
+        checkboxChecked={analysis.mode !== 'live'}
         toggleLabels={{ off: 'Live', on: 'Custom' }}
         onCheckboxChange={(checked) => {
-          if (checked && analysis.live) {
+          if (checked && analysis.mode === 'live') {
             if (liveTabId && scenariosContext) {
               const currentTab = tabs.find(t => t.id === liveTabId);
               const whatIfDSL = currentTab?.editorState?.whatIfDSL || null;
@@ -395,13 +395,13 @@ function CanvasAnalysisPropertiesSection({ analysisId, graph, setGraph, saveHist
                 whatIfDSL,
               });
               updateAnalysis({
-                live: false,
+                mode: 'custom' as const,
                 recipe: { ...analysis.recipe, scenarios: captured, analysis: { ...analysis.recipe.analysis, what_if_dsl } },
               });
             }
-          } else if (!checked && !analysis.live) {
+          } else if (!checked && analysis.mode !== 'live') {
             updateAnalysis({
-              live: true,
+              mode: 'live' as const,
               recipe: { ...analysis.recipe, scenarios: undefined, analysis: { ...analysis.recipe.analysis, what_if_dsl: undefined } },
             });
           }

@@ -33,7 +33,7 @@ function makeLiveAnalysis(): CanvasAnalysis {
     id: 'a-1',
     x: 0, y: 0, width: 400, height: 300,
     view_mode: 'chart',
-    live: true,
+    mode: 'live' as const,
     chart_current_layer_dsl: 'context(device:mobile)',
     recipe: { analysis: { analysis_type: 'conversion_funnel', analytics_dsl: 'from(a).to(b)' } },
   };
@@ -75,19 +75,19 @@ describe('Canvas analysis freeze/unfreeze', () => {
 
     const frozen: CanvasAnalysis = {
       ...analysis,
-      live: false,
+      mode: 'fixed',
       recipe: { ...analysis.recipe, scenarios },
     };
 
     expect(frozen.chart_current_layer_dsl).toBe('context(device:mobile)');
     expect(frozen.recipe.scenarios).toHaveLength(1);
-    expect(frozen.live).toBe(false);
+    expect(frozen.mode).toBe('fixed');
   });
 
   it('should clear scenarios and what_if_dsl on unfreeze (return to tab)', () => {
     const frozen: CanvasAnalysis = {
       ...makeLiveAnalysis(),
-      live: false,
+      mode: 'fixed',
       recipe: {
         analysis: { analysis_type: 'conversion_funnel', analytics_dsl: 'from(a).to(b)', what_if_dsl: 'case(test:treatment)' },
         scenarios: [
@@ -98,7 +98,7 @@ describe('Canvas analysis freeze/unfreeze', () => {
 
     const unfrozen: CanvasAnalysis = {
       ...frozen,
-      live: true,
+      mode: 'live',
       recipe: {
         ...frozen.recipe,
         scenarios: undefined,
@@ -106,7 +106,7 @@ describe('Canvas analysis freeze/unfreeze', () => {
       },
     };
 
-    expect(unfrozen.live).toBe(true);
+    expect(unfrozen.mode).toBe('live');
     expect(unfrozen.recipe.scenarios).toBeUndefined();
     expect(unfrozen.recipe.analysis.what_if_dsl).toBeUndefined();
     expect(unfrozen.chart_current_layer_dsl).toBe('context(device:mobile)');
@@ -117,7 +117,7 @@ describe('Canvas analysis chart-owned scenario CRUD', () => {
   function makeFrozenAnalysis(): CanvasAnalysis {
     return {
       ...makeLiveAnalysis(),
-      live: false,
+      mode: 'fixed' as const,
       recipe: {
         analysis: { analysis_type: 'conversion_funnel', analytics_dsl: 'from(a).to(b)' },
         scenarios: [

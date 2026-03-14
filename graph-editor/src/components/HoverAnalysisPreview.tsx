@@ -182,7 +182,7 @@ function DraggableAnalysisCard({
     },
     view_mode: 'chart',
     chart_kind: chartKind,
-    live: true,
+    mode: 'live' as const,
     x: 0, y: 0, width: 300, height: 200,
   }), [stableId, analysisType, dsl, chartKind, deferred]);
 
