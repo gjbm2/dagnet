@@ -84,7 +84,7 @@ export function AnalysisTypeCardList({
           const isSelected = selectedAnalysisId === typeMeta.id;
           const availableInfo = availableById.get(typeMeta.id);
           const Icon = typeMeta.icon;
-          const isDraggable = Boolean(draggableAvailableCards && onCardDragStart);
+          const isDraggable = Boolean(draggableAvailableCards && isAvailable && onCardDragStart);
 
           if (isIconMode) {
             return (

@@ -545,7 +545,7 @@
       "height": 350,
       "view_mode": "chart",
       "chart_kind": "funnel",
-      "live": true,
+      "mode": "live",
       "title": "Checkout Funnel",
       "recipe": {
         "analysis": {
@@ -562,7 +562,7 @@
       "height": 350,
       "view_mode": "chart",
       "chart_kind": "bar_grouped",
-      "live": true,
+      "mode": "live",
       "title": "Checkout Outcomes",
       "recipe": {
         "analysis": {
@@ -579,7 +579,7 @@
       "height": 350,
       "view_mode": "chart",
       "chart_kind": "bridge",
-      "live": false,
+      "mode": "fixed",
       "title": "Order Reach: Classic vs Quick Cart",
       "recipe": {
         "analysis": {

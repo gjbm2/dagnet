@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useCallback } from 'react';
+import React, { createContext, useContext, useState, useCallback, useRef } from 'react';
 import { LayoutData } from 'rc-dock';
 
 /**
@@ -103,14 +103,19 @@ function extractVisibleTabs(layout: LayoutData | null): Set<string> {
  */
 export function VisibleTabsProvider({ children }: { children: React.ReactNode }) {
   const [visibleTabIds, setVisibleTabIds] = useState<Set<string>>(new Set());
-  
+  // Track whether updateFromLayout has been called at least once.
+  // Before initialisation, all tabs are assumed visible to avoid a blank-canvas
+  // race on boot (the async layout load can lag behind the first render).
+  const initialisedRef = useRef(false);
+
   /**
    * Update visible tabs from layout
    * Called from AppShell's onLayoutChange handler
    */
   const updateFromLayout = useCallback((layout: LayoutData | null) => {
+    initialisedRef.current = true;
     const newVisible = extractVisibleTabs(layout);
-    
+
     // Only update if changed (avoid unnecessary re-renders)
     setVisibleTabIds(prev => {
       // Quick size check
@@ -118,7 +123,7 @@ export function VisibleTabsProvider({ children }: { children: React.ReactNode })
         console.log(`[VisibleTabs] Visibility changed: ${prev.size} -> ${newVisible.size} tabs`);
         return newVisible;
       }
-      
+
       // Deep equality check
       for (const id of prev) {
         if (!newVisible.has(id)) {
@@ -132,15 +137,18 @@ export function VisibleTabsProvider({ children }: { children: React.ReactNode })
           return newVisible;
         }
       }
-      
+
       return prev; // No change
     });
   }, []);
-  
+
   /**
-   * Check if a tab is visible
+   * Check if a tab is visible.
+   * Before the layout has been loaded (initialisedRef is false), assume all
+   * tabs are visible so the canvas renders immediately on boot.
    */
   const isTabVisible = useCallback((tabId: string): boolean => {
+    if (!initialisedRef.current) return true;
     return visibleTabIds.has(tabId);
   }, [visibleTabIds]);
   

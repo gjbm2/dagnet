@@ -1,6 +1,6 @@
 import { graphComputeClient, type AnalysisResponse, type SnapshotSubjectPayload } from '../lib/graphComputeClient';
 import { hasLocalCompute, computeLocalResultMultiScenario, mergeBackendAugmentation } from './localAnalysisComputeService';
-import { buildGraphForAnalysisLayer, applyProbabilityVisibilityModeToGraph, applyWhatIfToGraph } from './CompositionService';
+import { buildGraphForAnalysisLayer, applyProbabilityVisibilityModeToGraph, applyWhatIfToGraph, applyComposedParamsToGraph } from './CompositionService';
 import { computeInheritedDSL, computeEffectiveFetchDSL } from './scenarioRegenerationService';
 import { augmentDSLWithConstraint } from '../lib/queryDSL';
 import { logChartReadinessTrace } from '../lib/snapshotBootTrace';
@@ -29,6 +29,7 @@ type ChartRecipeScenarioLike = {
   name?: string;
   colour?: string;
   visibility_mode?: ScenarioVisibilityMode;
+  params?: Record<string, any>;
 };
 
 type ScenarioContextLike = {
@@ -346,6 +347,12 @@ export async function prepareAnalysisComputeInputs(
     scenarios = customScenarios.map((scenario) => {
       const visibilityMode = scenario.visibility_mode || 'f+e';
       let scenarioGraph: Graph = graph;
+      // Apply captured graph parameter overrides (from Live-mode composition).
+      // Without this, Custom mode would use the base graph and produce different
+      // outcomes than Live mode for scenarios with parameter overlays.
+      if (scenario.params && (scenario.params.edges || scenario.params.nodes)) {
+        scenarioGraph = applyComposedParamsToGraph(scenarioGraph, scenario.params as any);
+      }
       if (scenario.scenario_id === 'current' && params.frozenWhatIfDsl) {
         scenarioGraph = applyWhatIfToGraph(scenarioGraph, params.frozenWhatIfDsl) as Graph;
       }
@@ -357,7 +364,10 @@ export async function prepareAnalysisComputeInputs(
         colour: scenario.colour || '#808080',
         visibility_mode: visibilityMode,
         graph: scenarioGraph,
-        effective_query_dsl: composeScenarioDsl(scenario.effective_dsl || '', params.chartCurrentLayerDsl),
+        effective_query_dsl: composeScenarioDsl(
+          augmentDSLWithConstraint(params.currentDSL || '', scenario.effective_dsl || ''),
+          params.chartCurrentLayerDsl,
+        ),
       };
     });
   }

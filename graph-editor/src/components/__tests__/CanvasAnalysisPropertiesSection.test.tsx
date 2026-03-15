@@ -238,8 +238,8 @@ describe('CanvasAnalysisPropertiesSection smoke tests', () => {
       />
     );
 
-    const liveLabel = container.querySelector('.collapsible-section-toggle');
-    expect(liveLabel).toBeTruthy();
+    const modeTrack = container.querySelector('.cfp-mode-track');
+    expect(modeTrack).toBeTruthy();
   });
 
   it('should not crash when analysis has no recipe scenarios (live mode)', () => {

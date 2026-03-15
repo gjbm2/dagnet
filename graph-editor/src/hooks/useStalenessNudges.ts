@@ -2,13 +2,10 @@ import React, { useCallback, useEffect, useMemo, useRef, useState, type ReactNod
 import { useNavigatorContext } from '../contexts/NavigatorContext';
 import { useTabContext, useFileRegistry } from '../contexts/TabContext';
 import { stalenessNudgeService } from '../services/stalenessNudgeService';
-import { requestRetrieveAllSlices } from './useRetrieveAllSlicesRequestListener';
 import { usePullAll } from './usePullAll';
-import { StalenessUpdateModal, type StalenessUpdateAction, type StalenessUpdateActionKey } from '../components/modals/StalenessUpdateModal';
-import { executeRetrieveAllSlicesWithProgressToast, retrieveAllSlicesService } from '../services/retrieveAllSlicesService';
+import { executeRetrieveAllSlicesWithProgressToast } from '../services/retrieveAllSlicesService';
 import { sessionLogService } from '../services/sessionLogService';
 import { STALENESS_NUDGE_COUNTDOWN_SECONDS, STALENESS_NUDGE_VISIBLE_POLL_MS } from '../constants/staleness';
-import { db } from '../db/appDatabase';
 import { useShareModeOptional } from '../contexts/ShareModeContext';
 import { countdownService } from '../services/countdownService';
 import { useCountdown } from './useCountdown';
@@ -27,9 +24,11 @@ export interface UseStalenessNudgesResult {
 
 /**
  * Global safety nudges:
- * - stale page (reload)
- * - stale git pull (check remote HEAD, nudge pull-all)
- * - stale "retrieve all slices" for the focused graph tab
+ * - stale page (reload) → persistent banner
+ * - stale git pull (check remote HEAD) → non-blocking pull toast
+ * - stale "retrieve all slices" for the focused graph tab → progress toast
+ *
+ * All nudges are non-blocking. No modal is ever shown.
  *
  * IMPORTANT:
  * - This hook centralises the nudging logic so UI entry points stay access-only.
@@ -79,22 +78,13 @@ export function useStalenessNudges(): UseStalenessNudgesResult {
 
   const inFlightRef = useRef(false);
   const lastGraphTriggerKeyRef = useRef<string>('');
-  const [isModalOpen, setIsModalOpen] = useState(false);
-  const isModalOpenRef = useRef<boolean>(false);
-  // Safety: "automatic mode" must NEVER persist across refresh. It only applies to a workflow
-  // the user explicitly initiates via the staleness nudge modal.
-  const [automaticMode, setAutomaticMode] = useState<boolean>(false);
-  const [modalActions, setModalActions] = useState<StalenessUpdateAction[]>([]);
 
-  // Countdown timer state for auto-pull when remote is ahead
+  // Countdown timer state — used only for the share-live dashboard banner path.
   const [countdownKey, setCountdownKey] = useState<string | undefined>(undefined);
   const countdownKeyRef = useRef<string | undefined>(undefined);
   const countdownCancelTokenRef = useRef<number>(0);
   const countdownState = useCountdown(countdownKey);
   const countdownSeconds = countdownState?.secondsRemaining;
-  // Track the remote SHA that triggered this modal (for dismiss logic)
-  const currentRemoteShaRef = useRef<string | null>(null);
-  // Share-live dashboard mode: refresh without a blocking modal.
   const [shareAutoRefreshPending, setShareAutoRefreshPending] = useState<boolean>(false);
   const shareAutoRefreshPendingRef = useRef<boolean>(false);
 
@@ -103,7 +93,7 @@ export function useStalenessNudges(): UseStalenessNudgesResult {
   //
   // IMPORTANT: We do NOT rewrite the URL to remove ?nonudge.
   // - Notion embeds and share links often rely on the URL being stable across reloads.
-  // - Rewriting can make behaviour seem “brittle” when an embed cold-starts and the param is gone.
+  // - Rewriting can make behaviour seem "brittle" when an embed cold-starts and the param is gone.
   const suppressStalenessNudges = useMemo(() => {
     // Static share mode is a read-only snapshot — there is no repo to pull,
     // no running workspace to reload, and no slices to retrieve.
@@ -136,7 +126,7 @@ export function useStalenessNudges(): UseStalenessNudgesResult {
     return false;
   }, [shareMode?.isStaticMode]);
 
-  // Stop countdown timer
+  // Stop countdown timer (share-live banner only)
   const stopCountdown = useCallback(() => {
     // Cancel by prefix to guarantee we kill the correct timer even if the key changes mid-flight.
     countdownService.cancelCountdownsByPrefix('staleness:auto-pull:');
@@ -147,168 +137,13 @@ export function useStalenessNudges(): UseStalenessNudgesResult {
     setShareAutoRefreshPending(false);
   }, []);
 
-  const closeModal = useCallback(() => {
-    stopCountdown();
-    isModalOpenRef.current = false;
-    setIsModalOpen(false);
-  }, [stopCountdown]);
-
-  const toggleAction = useCallback((key: StalenessUpdateActionKey) => {
-    setModalActions(prev => prev.map(a => (a.key === key ? { ...a, checked: !a.checked } : a)));
-  }, []);
-
-  const toggleAutomaticMode = useCallback((enabled: boolean) => {
-    setAutomaticMode(enabled);
-  }, []);
-
   // Clear any persisted nudge state on mount so it can never survive a refresh (F5).
   useEffect(() => {
     stalenessNudgeService.clearVolatileFlags(window.localStorage);
   }, []);
 
-  const runSelectedKeys = useCallback(async (selected: Set<StalenessUpdateActionKey>) => {
-    const now = Date.now();
-    const storage = window.localStorage;
-
-    const isShareLive = shareMode?.isLiveMode ?? false;
-    const repo = isShareLive ? shareMode?.identity.repo : navState.selectedRepo;
-    const branch = (isShareLive ? shareMode?.identity.branch : navState.selectedBranch) || 'main';
-    const shareGraph = isShareLive ? shareMode?.identity.graph : undefined;
-
-    // NOTE: execution orchestration is centralised in the service; the hook only supplies callbacks.
-    await stalenessNudgeService.runSelectedStalenessActions({
-      selected: selected as any,
-      nowMs: now,
-      storage,
-      localAppVersion: APP_VERSION,
-      repository: repo || undefined,
-      branch,
-      shareGraph,
-      graphFileId: retrieveTargetGraphFileId,
-      isShareLive,
-      automaticMode,
-
-      pullAll: async () => {
-        await pullAll();
-      },
-      refreshLiveShareToLatest: async () => {
-        return await liveShareSyncService.refreshToLatest();
-      },
-      pullLatestRemoteWins: async () => {
-        if (!repo) return;
-        await repositoryOperationsService.pullLatestRemoteWins(repo, branch);
-      },
-
-      requestRetrieveAllSlices,
-      executeRetrieveAllSlicesHeadless: async ({ toastId, toastLabel }) => {
-        if (!retrieveTargetGraphFileId) return;
-        const graphFile = fileRegistry.getFile(retrieveTargetGraphFileId) as any;
-        if (!graphFile?.data || graphFile?.type !== 'graph') return;
-        if (!tabOperations?.updateTabData) return;
-
-        await executeRetrieveAllSlicesWithProgressToast({
-          getGraph: () => (fileRegistry.getFile(retrieveTargetGraphFileId) as any)?.data || null,
-          setGraph: (g) => tabOperations.updateTabData(retrieveTargetGraphFileId, g),
-          toastId,
-          toastLabel,
-        });
-      },
-      openSessionLogTab: () => {
-        void sessionLogService.openLogTab();
-      },
-      getGraphData: () => {
-        if (!retrieveTargetGraphFileId) return null;
-        const graphAfterPull = (fileRegistry.getFile(retrieveTargetGraphFileId) as any)?.data || null;
-        return graphAfterPull as any;
-      },
-      setGraphData: (g) => {
-        if (!retrieveTargetGraphFileId) return;
-        if (!tabOperations?.updateTabData) return;
-        tabOperations.updateTabData(retrieveTargetGraphFileId, g);
-      },
-
-      reloadPage: () => window.location.reload(),
-      notify: (kind, message) => {
-        if (kind === 'success') toast.success(message);
-        else toast.error(message);
-      },
-    });
-  }, [navState.selectedRepo, navState.selectedBranch, activeFileId, pullAll, fileRegistry, tabOperations, automaticMode, shareMode]);
-
-  const onRunSelected = useCallback(async () => {
-    const selected = new Set(modalActions.filter(a => a.checked && !a.disabled).map(a => a.key));
-
-    stopCountdown();
-    isModalOpenRef.current = false;
-    setIsModalOpen(false);
-    await runSelectedKeys(selected);
-    // "Automatic mode" only applies to the workflow the user just initiated.
-    setAutomaticMode(false);
-  }, [modalActions, stopCountdown, runSelectedKeys]);
-
-  const onSnoozeAll = useCallback(() => {
-    const now = Date.now();
-    const storage = window.localStorage;
-
-    const isShareLive = shareMode?.isLiveMode ?? false;
-    const repo = isShareLive ? shareMode?.identity.repo : navState.selectedRepo;
-    const branch = (isShareLive ? shareMode?.identity.branch : navState.selectedBranch) || 'main';
-    const graph = isShareLive ? shareMode?.identity.graph : undefined;
-    const pullScope = repo ? (isShareLive && graph ? `${repo}-${branch}-${graph}` : `${repo}-${branch}`) : undefined;
-
-    for (const a of modalActions) {
-      if (!a.due) continue;
-      if (a.key === 'reload') {
-        stalenessNudgeService.snooze('reload', undefined, now, storage);
-      } else if (a.key === 'git-pull') {
-        if (pullScope) stalenessNudgeService.snooze('git-pull', pullScope, now, storage);
-      } else if (a.key === 'retrieve-all-slices') {
-        if (retrieveTargetGraphFileId) stalenessNudgeService.snooze('retrieve-all-slices', retrieveTargetGraphFileId, now, storage);
-      }
-    }
-
-    // Safety: if a non-blocking pull countdown is also running, kill it.
-    cancelNonBlockingPull();
-
-    closeModal();
-  }, [modalActions, navState.selectedRepo, navState.selectedBranch, retrieveTargetGraphFileId, closeModal, shareMode]);
-
   /**
-   * Dismiss: records the current remote SHA so user won't be nudged again
-   * until the next cron cycle (when remote SHA changes).
-   */
-  const onDismiss = useCallback(() => {
-    const storage = window.localStorage;
-    const isShareLive = shareMode?.isLiveMode ?? false;
-    const repo = isShareLive ? shareMode?.identity.repo : navState.selectedRepo;
-    const branch = (isShareLive ? shareMode?.identity.branch : navState.selectedBranch) || 'main';
-    const graph = isShareLive ? shareMode?.identity.graph : undefined;
-    const remoteSha = currentRemoteShaRef.current;
-
-    // Record this SHA as dismissed - won't prompt again until new commit appears
-    if (repo && remoteSha) {
-      if (isShareLive && graph) {
-        stalenessNudgeService.dismissShareRemoteSha({ repository: repo, branch, graph }, remoteSha, storage);
-      } else {
-        stalenessNudgeService.dismissRemoteSha(repo, branch, remoteSha, storage);
-      }
-      sessionLogService.info(
-        'session',
-        'STALENESS_DISMISS',
-        `Dismissed git-pull nudge for SHA ${remoteSha.slice(0, 7)}; won't prompt again until next remote commit`,
-        undefined,
-        { repository: repo, branch, remoteSha }
-      );
-    }
-
-    // Safety: if a non-blocking pull countdown is also running, kill it.
-    cancelNonBlockingPull();
-
-    closeModal();
-  }, [navState.selectedRepo, navState.selectedBranch, closeModal, shareMode]);
-
-  /**
-   * Auto-pull: called when countdown expires. Pulls from git ONLY (no retrieve-all).
+   * Auto-pull: called when share-live countdown expires. Pulls from git ONLY (no retrieve-all).
    */
   const onCountdownExpire = useCallback(async () => {
     const isShareLive = shareMode?.isLiveMode ?? false;
@@ -318,8 +153,6 @@ export function useStalenessNudges(): UseStalenessNudgesResult {
     const storage = window.localStorage;
 
     stopCountdown();
-    isModalOpenRef.current = false;
-    setIsModalOpen(false);
 
     await stalenessNudgeService.handleStalenessAutoPull({
       nowMs: Date.now(),
@@ -358,7 +191,7 @@ export function useStalenessNudges(): UseStalenessNudgesResult {
         onExpire: async () => {
           // Extra cancellation safety: even if an expiry callback somehow runs after cancel,
           // never execute if the key is no longer the active countdown for this hook.
-          if (!isModalOpenRef.current && !shareAutoRefreshPendingRef.current) return;
+          if (!shareAutoRefreshPendingRef.current) return;
           if (countdownCancelTokenRef.current !== tokenAtStart) return;
           if (countdownKeyRef.current !== opts.key) return;
           await onCountdownExpire();
@@ -376,11 +209,87 @@ export function useStalenessNudges(): UseStalenessNudgesResult {
     [stopCountdown, onCountdownExpire]
   );
 
+  /**
+   * Show a persistent banner when a newer app version is deployed.
+   * The banner stays until the user clicks "Reload now" or it's cleared.
+   */
+  const showReloadBanner = useCallback((remoteAppVersion?: string) => {
+    const versionDetail = remoteAppVersion
+      ? `Current: ${APP_VERSION} → Available: ${remoteAppVersion}`
+      : undefined;
+
+    bannerManagerService.setBanner({
+      id: 'app-update',
+      priority: 60,
+      label: 'New version available — reload to update',
+      detail: versionDetail,
+      actionLabel: 'Reload now',
+      onAction: () => window.location.reload(),
+      actionTitle: 'Reload to pick up the latest version',
+    });
+  }, []);
+
+  /**
+   * Fire retrieve-all-slices directly via progress toast (no user consent needed).
+   */
+  const fireRetrieveAllDirect = useCallback(() => {
+    if (!retrieveTargetGraphFileId) return;
+    if (!tabOperations?.updateTabData) return;
+    const graphFile = fileRegistry.getFile(retrieveTargetGraphFileId) as any;
+    if (!graphFile?.data || graphFile?.type !== 'graph') return;
+
+    void executeRetrieveAllSlicesWithProgressToast({
+      getGraph: () => (fileRegistry.getFile(retrieveTargetGraphFileId) as any)?.data || null,
+      setGraph: (g) => tabOperations.updateTabData(retrieveTargetGraphFileId, g),
+      toastId: `nudge-retrieve:${retrieveTargetGraphFileId}`,
+      toastLabel: 'Retrieve All (stale data)',
+    });
+  }, [retrieveTargetGraphFileId, fileRegistry, tabOperations]);
+
+  /**
+   * Start a non-blocking pull with standard callbacks (dismiss, conflicts, cascade).
+   */
+  const fireNonBlockingPull = useCallback((opts: {
+    repository: string;
+    branch: string;
+    detectedRemoteSha: string;
+    retrieveDue: boolean;
+    storage: Storage;
+  }) => {
+    const { repository, branch, detectedRemoteSha, retrieveDue, storage } = opts;
+    const pullScope = `${repository}-${branch}`;
+    if (stalenessNudgeService.isSnoozed('git-pull', pullScope, Date.now(), storage)) return;
+    if (isNonBlockingPullActive()) return;
+
+    startNonBlockingPull({
+      repository,
+      branch,
+      remoteSha: detectedRemoteSha,
+      onConflicts: (conflicts) => openConflictModal(conflicts),
+      onDismiss: () => {
+        if (detectedRemoteSha) {
+          stalenessNudgeService.dismissRemoteSha(repository, branch, detectedRemoteSha, storage);
+        }
+      },
+      onComplete: () => {
+        stalenessNudgeService.clearDismissedRemoteSha(repository, branch, storage);
+        // Cascade: if retrieve-all is also due, run it non-blocking via progress toast.
+        if (retrieveDue && retrieveTargetGraphFileId && tabOperations?.updateTabData) {
+          void executeRetrieveAllSlicesWithProgressToast({
+            getGraph: () => (fileRegistry.getFile(retrieveTargetGraphFileId) as any)?.data || null,
+            setGraph: (g) => tabOperations.updateTabData(retrieveTargetGraphFileId, g),
+            toastId: `cascade-retrieve:${retrieveTargetGraphFileId}`,
+            toastLabel: 'Retrieve All (post-pull)',
+          });
+        }
+      },
+    });
+  }, [openConflictModal, retrieveTargetGraphFileId, fileRegistry, tabOperations]);
+
   const maybePrompt = useCallback(async () => {
     if (suppressStalenessNudges) return;
     if (inFlightRef.current) return;
     if (!isVisible()) return;
-    if (isModalOpen) return;
 
     inFlightRef.current = true;
     try {
@@ -390,16 +299,9 @@ export function useStalenessNudges(): UseStalenessNudgesResult {
       // Boot readiness gate:
       // Nudges should NOT evaluate while app boot is incomplete, otherwise we get noisy "unknown/blocked"
       // states while Navigator/TabContext/file registry are still initialising.
-      //
-      // We wait for:
-      // - TabContext boot completion (credentials/settings loaded + URL tabs opened)
-      // - A stable repo/branch identity (workspace mode) OR share identity (share-live)
       if (!isTabContextInitDone()) return;
 
       // Always stamp this page load (the "last refresh" baseline).
-      // We do this in maybePrompt rather than only once so hot reload / re-mounts
-      // don't accidentally erase the signal.
-      // (It is safe because in a real reload, the value should update anyway.)
       if (!storage.getItem('dagnet:staleness:lastPageLoadAtMs')) {
         stalenessNudgeService.recordPageLoad(now, storage);
       }
@@ -416,7 +318,6 @@ export function useStalenessNudges(): UseStalenessNudgesResult {
       const isOutdated = updateSignal.isOutdated;
 
       // Unattended terminals (dashboard mode): auto-reload when a new client is deployed.
-      // This avoids a modal that nobody can click, and keeps kiosk consoles fresh.
       if (isDashboardMode && isOutdated) {
         const autoFn = (stalenessNudgeService as any).maybeAutoReloadForUpdate;
         if (typeof autoFn === 'function') {
@@ -425,8 +326,6 @@ export function useStalenessNudges(): UseStalenessNudgesResult {
         }
       }
 
-      // Reload nudge is version-delta driven ONLY.
-      // Time-based reload prompts are intentionally not used (they were confusing and error-prone).
       const reloadDue = updateSignal.reloadDue;
 
       const isShareLive = shareMode?.isLiveMode ?? false;
@@ -436,10 +335,8 @@ export function useStalenessNudges(): UseStalenessNudgesResult {
       const graph: string | undefined = isShareLive ? shareMode?.identity.graph : undefined;
 
       if (isShareLive) {
-        // Share-live boot must provide identity before nudges run.
         if (!repository || !selectedBranch) return;
       } else {
-        // Workspace mode: wait for NavigatorContext to finish initialising repo/branch (and stop loading).
         if (!navState.selectedRepo || !navState.selectedBranch) return;
         if (navigatorIsLoading) return;
       }
@@ -454,9 +351,6 @@ export function useStalenessNudges(): UseStalenessNudgesResult {
       });
       const gitPullDue = gitCollected.gitPullDue;
       const detectedRemoteSha = gitCollected.detectedRemoteSha;
-      const gitLocalSha = gitCollected.localSha;
-      const gitRemoteHeadSha = gitCollected.remoteHeadSha;
-      const gitRemoteCheckedAtMs = gitCollected.lastRemoteCheckedAtMs;
 
       const retrieveSignalCollected = await stalenessNudgeService.collectRetrieveSignal({
         nowMs: now,
@@ -467,146 +361,18 @@ export function useStalenessNudges(): UseStalenessNudgesResult {
         targetSliceDsl: activeFileType === 'chart' ? activeChartEffectiveDsl : undefined,
       });
       const retrieveDue = retrieveSignalCollected.retrieveDue;
-      const retrieveMostRecentRetrievedAtMs = retrieveSignalCollected.retrieveMostRecentRetrievedAtMs;
 
       if (!reloadDue && !gitPullDue && !retrieveDue) return;
 
-      // Mark prompted for due items so focus/visibility doesn't keep re-opening.
+      // Mark prompted for due items so focus/visibility doesn't keep re-triggering.
       if (reloadDue) stalenessNudgeService.markPrompted('reload', now, storage);
       if (gitPullDue) stalenessNudgeService.markPrompted('git-pull', now, storage);
       if (retrieveDue) stalenessNudgeService.markPrompted('retrieve-all-slices', now, storage);
 
-      // "Last done" values must be derived from sources of truth:
-      // - git pull: IDB workspace metadata (workspace.lastSynced)
-      // - retrieve all: data freshness (connected parameters' retrieved_at)
-      //
-      // Avoid localStorage UI stamps; they lie when actions run via other entry points (scheduler, menus).
-      const gitPullLastDoneAtMs = gitCollected.gitPullLastDoneAtMs;
-
-      // Build a deterministic cascade plan from the signals we already gathered.
-      // NOTE: prompting/snooze/rate-limit decisions still live here for now; Phase 3+ centralises them.
-      const remoteAppVersion = updateSignal.remoteAppVersion;
-      const scope =
-        repository
-          ? isShareLive && graph
-            ? ({ type: 'share-live', repository, branch, graph } as const)
-            : ({ type: 'workspace', repository, branch } as const)
-          : undefined;
-
-      // Only include git signal if we actually performed a check in this run (otherwise treat as unknown).
-      const gitSignal =
-        detectedRemoteSha !== null
-          ? ({
-              isRemoteAhead: gitPullDue,
-              localSha: gitLocalSha,
-              remoteHeadSha: detectedRemoteSha,
-            } as const)
-          : undefined;
-
-      const retrieveSignal = retrieveTargetGraphFileId
-        ? ({
-            isStale: retrieveDue,
-            parameterCount: 0,
-            staleParameterCount: 0,
-            mostRecentRetrievedAtMs: retrieveMostRecentRetrievedAtMs,
-          } as const)
-        : undefined;
-
-      const planFn = (stalenessNudgeService as any).computeNudgingPlanFromSignals;
-      const plan =
-        typeof planFn === 'function'
-          ? planFn.call(stalenessNudgeService, {
-              nowMs: now,
-              entity:
-                activeFileType === 'chart'
-                  ? {
-                      type: 'chart',
-                      chartFileId: activeFileId,
-                      parentGraphFileId: retrieveTargetGraphFileId,
-                      effectiveQueryDsl: activeChartEffectiveDsl,
-                    }
-                  : { type: 'graph', graphFileId: activeFileId },
-              scope,
-              signals: {
-                localAppVersion: APP_VERSION,
-                remoteAppVersion,
-                git: gitSignal,
-                retrieve: retrieveSignal,
-              },
-            })
-          : null;
-
-      const actions: StalenessUpdateAction[] = [
-        {
-          key: 'reload',
-          label: 'Reload page',
-          description: (() => {
-            const s = plan?.steps?.reload;
-            if (s?.status === 'due') return `${s.reason}. Reload to update and clear stale in-memory state.`;
-            if (s?.status === 'not_due' && s.reason) return s.reason;
-            return 'Reload to clear stale in-memory state.';
-          })(),
-          due: reloadDue,
-          checked: plan?.recommendedChecked?.reload ?? reloadDue,
-          status: plan?.steps?.reload?.status,
-          lastDoneAtMs: stalenessNudgeService.getLastPageLoadAtMs(storage),
-        },
-        {
-          key: 'git-pull',
-          label: 'Pull latest from git',
-          description: (() => {
-            const base =
-              plan?.steps?.['git-pull']?.reason ||
-              'Compares remote HEAD SHA vs your local workspace SHA (recommended if remote has new commits).';
-            // If we have both SHAs, surface them in the description so "Due" is clearly SHA-driven.
-            if (gitLocalSha && detectedRemoteSha) {
-              const localShort = gitLocalSha.slice(0, 7);
-              const remoteShort = detectedRemoteSha.slice(0, 7);
-              return `${base} (Local: ${localShort}, Remote: ${remoteShort})`;
-            }
-            return base;
-          })(),
-          due: gitPullDue,
-          checked: plan?.recommendedChecked?.['git-pull'] ?? gitPullDue,
-          status: plan?.steps?.['git-pull']?.status,
-          disabled: !repository,
-          lastDoneAtMs: gitPullLastDoneAtMs,
-          lastCheckedAtMs: gitRemoteCheckedAtMs,
-          localSha: gitLocalSha,
-          remoteSha: gitRemoteHeadSha ?? detectedRemoteSha ?? undefined,
-        },
-        {
-          key: 'retrieve-all-slices',
-          label: activeFileType === 'chart' ? 'Retrieve all slices (parent graph)' : 'Retrieve all slices (active graph)',
-          description: (() => {
-            const base = 'Runs the Retrieve All Slices flow for the currently focused graph. Usually handled by daily cron; only due if >24h stale.';
-            const s = plan?.steps?.['retrieve-all-slices'];
-            if (s?.retrieveWithoutPull) return `${base} (Proceeding without pull: git state unknown.)`;
-            if (s?.status === 'blocked' && s.blockedBy === 'git-pull') return `${base} (Blocked until pull completes.)`;
-            if (activeFileType === 'chart') return `${base} (From a chart tab: uses the parent graph and this chart’s effective DSL for freshness.)`;
-            return base;
-          })(),
-          due: retrieveDue,
-          checked: plan?.recommendedChecked?.['retrieve-all-slices'] ?? false,
-          status: plan?.steps?.['retrieve-all-slices']?.status,
-          disabled: !retrieveTargetGraphFileId,
-          lastDoneAtMs: retrieveMostRecentRetrievedAtMs,
-        },
-      ];
-
-      setModalActions(actions);
-
-      // Store the remote SHA for dismiss logic
-      currentRemoteShaRef.current = detectedRemoteSha;
-
-      // Share-live dashboard mode: non-blocking refresh UX (no modal).
+      // ---- Share-live dashboard mode: non-blocking refresh via banner ----
       if (isShareLive && isDashboardMode && gitPullDue && detectedRemoteSha) {
-        // If the user snoozed git-pull during this run, do not start a countdown afterwards.
-        // (Prevents a race where the modal closes while this async function is still finishing.)
         const pullScope = repository ? `${repository}-${branch}-${graph}` : undefined;
         if (pullScope && stalenessNudgeService.isSnoozed('git-pull', pullScope, Date.now(), storage)) return;
-        // Strict cascade: do not auto-pull in unattended mode when an update is due.
-        if (plan?.steps?.reload?.status === 'due') return;
         shareAutoRefreshPendingRef.current = true;
         setShareAutoRefreshPending(true);
         const id = shareMode?.identity;
@@ -616,64 +382,34 @@ export function useStalenessNudges(): UseStalenessNudgesResult {
         return;
       }
 
-      // ---- Non-blocking path: git-pull without reload ----
-      // When only git-pull is due (no reload), skip the modal entirely.
-      // Show a countdown in the OperationsToast; auto-pull on expiry.
-      if (gitPullDue && !reloadDue && detectedRemoteSha && repository) {
-        if (plan?.steps?.reload?.status === 'due') {
-          // Strict cascade: reload trumps pull.
-        } else {
-          const pullScope = `${repository}-${branch}`;
-          if (!stalenessNudgeService.isSnoozed('git-pull', pullScope, Date.now(), storage) && !isNonBlockingPullActive()) {
-            startNonBlockingPull({
-              repository,
-              branch,
-              remoteSha: detectedRemoteSha,
-              onConflicts: (conflicts) => openConflictModal(conflicts),
-              onDismiss: () => {
-                // Record SHA as dismissed so we don't re-prompt until next commit.
-                if (detectedRemoteSha) {
-                  stalenessNudgeService.dismissRemoteSha(repository, branch, detectedRemoteSha, storage);
-                }
-              },
-              onComplete: () => {
-                // Clear dismissed SHA so next remote commit triggers a new nudge.
-                stalenessNudgeService.clearDismissedRemoteSha(repository, branch, storage);
-                // Cascade: if retrieve-all is also due, run it non-blocking via operation registry.
-                if (retrieveDue && retrieveTargetGraphFileId && tabOperations?.updateTabData) {
-                  void executeRetrieveAllSlicesWithProgressToast({
-                    getGraph: () => (fileRegistry.getFile(retrieveTargetGraphFileId) as any)?.data || null,
-                    setGraph: (g) => tabOperations.updateTabData(retrieveTargetGraphFileId, g),
-                    toastId: `cascade-retrieve:${retrieveTargetGraphFileId}`,
-                    toastLabel: 'Retrieve All (post-pull)',
-                  });
-                }
-              },
-            });
-          }
-          // Non-blocking path handles pull and cascaded retrieve — no modal needed.
-          return;
-        }
+      // ---- All paths below are non-blocking ----
+
+      // Reload due → persistent banner (user clicks when ready).
+      if (reloadDue) {
+        showReloadBanner(updateSignal.remoteAppVersion);
       }
 
-      // ---- Modal path: reload needed, or retrieve-only ----
-      isModalOpenRef.current = true;
-      setIsModalOpen(true);
+      // Git pull due → non-blocking pull toast with countdown.
+      // Unlike before, this runs even when reload is also due — they coexist.
+      // Pull runs in the background; reload banner persists until user clicks it.
+      if (gitPullDue && detectedRemoteSha && repository) {
+        fireNonBlockingPull({
+          repository,
+          branch,
+          detectedRemoteSha,
+          retrieveDue,
+          storage,
+        });
+      }
 
-      // Start countdown if git-pull is due (remote is ahead) — modal-based fallback
-      if (gitPullDue && detectedRemoteSha) {
-        if (plan?.steps?.reload?.status === 'due') return;
-        const pullScope = repository
-          ? (isShareLive && graph ? `${repository}-${branch}-${graph}` : `${repository}-${branch}`)
-          : undefined;
-        if (pullScope && stalenessNudgeService.isSnoozed('git-pull', pullScope, Date.now(), storage)) return;
-        if (!isModalOpenRef.current) return;
-        startCountdown({ key: `staleness:auto-pull:workspace:${navState.selectedRepo}:${navState.selectedBranch}:${activeFileId ?? 'unknown-graph'}` });
+      // Retrieve due standalone (no pull cascading into it) → fire directly.
+      if (retrieveDue && !gitPullDue) {
+        fireRetrieveAllDirect();
       }
     } finally {
       inFlightRef.current = false;
     }
-  }, [suppressStalenessNudges, navState.selectedRepo, navState.selectedBranch, activeFileId, fileRegistry, isModalOpen, shareMode, isDashboardMode]);
+  }, [suppressStalenessNudges, navState.selectedRepo, navState.selectedBranch, activeFileId, fileRegistry, shareMode, isDashboardMode, showReloadBanner, fireNonBlockingPull, fireRetrieveAllDirect, startCountdown, retrieveTargetGraphFileId, activeFileType, activeChartEffectiveDsl, isTabContextInitDone, navigatorIsLoading]);
 
   // Boot completion: when TabContext signals init done, re-run prompt evaluation once.
   useEffect(() => {
@@ -693,6 +429,11 @@ export function useStalenessNudges(): UseStalenessNudgesResult {
   // Cleanup: ensure countdown timer is cancelled on unmount.
   useEffect(() => stopCountdown, [stopCountdown]);
   useEffect(() => cancelNonBlockingPull, []);
+
+  // Clear reload banner on unmount.
+  useEffect(() => {
+    return () => bannerManagerService.clearBanner('app-update');
+  }, []);
 
   // Run on key "user is back" moments.
   useEffect(() => {
@@ -714,11 +455,8 @@ export function useStalenessNudges(): UseStalenessNudgesResult {
   }, [maybePrompt]);
 
   // Background polling interval for unattended terminals (e.g. dashboard mode).
-  // Runs maybePrompt every 30 minutes, but only if tab is visible.
-  // This supports dashboards left open but avoids wasting resources on background tabs.
   useEffect(() => {
     const intervalId = window.setInterval(() => {
-      // Only poll if tab is visible (respects browser power management)
       if (!document.hidden) {
         void maybePrompt();
       }
@@ -730,7 +468,6 @@ export function useStalenessNudges(): UseStalenessNudgesResult {
   }, [maybePrompt]);
 
   // Also re-check when the active graph file actually loads/changes (not just on focus).
-  // This matters because staleness checks depend on graph content + connected parameter files.
   useEffect(() => {
     const subscribeFileId = retrieveTargetGraphFileId;
     if (!subscribeFileId) return;
@@ -742,35 +479,18 @@ export function useStalenessNudges(): UseStalenessNudgesResult {
       if (updatedFile.type !== 'graph') return;
       if (!updatedFile.data) return;
 
-      // Debounce/re-trigger guard: only nudge-check when something meaningful changes.
       const lm = updatedFile.lastModified ?? 0;
       const key = `${subscribeFileId}:${lm}:${updatedFile.isLoaded ? 1 : 0}`;
       if (key === lastGraphTriggerKeyRef.current) return;
       lastGraphTriggerKeyRef.current = key;
 
-      // Fire-and-forget: maybePrompt already rate-limits and won't open multiple modals at once.
       void maybePrompt();
     });
 
     return unsubscribe;
   }, [retrieveTargetGraphFileId, fileRegistry, maybePrompt]);
 
-  const modal = React.createElement(StalenessUpdateModal, {
-    isOpen: isModalOpen,
-    actions: modalActions,
-    automaticMode,
-    onToggleAutomaticMode: toggleAutomaticMode,
-    onToggle: toggleAction,
-    onRun: onRunSelected,
-    onSnooze: onSnoozeAll,
-    // Backdrop/× close should behave like Snooze (avoid accidental long-lived dismissal).
-    onClose: onSnoozeAll,
-    // Explicit Dismiss button records SHA; won't prompt until next remote commit.
-    onDismiss,
-    countdownSeconds,
-  });
-
-  // Share-live countdown banner is owned by the central banner manager (not ad-hoc rendering here).
+  // Share-live countdown banner is owned by the central banner manager.
   useEffect(() => {
     const shouldShow = shareAutoRefreshPending && typeof countdownSeconds === 'number';
     if (!shouldShow) {
@@ -809,15 +529,7 @@ export function useStalenessNudges(): UseStalenessNudgesResult {
     return () => bannerManagerService.clearBanner('share-live-refresh');
   }, [shareAutoRefreshPending, countdownSeconds, shareMode, stopCountdown]);
 
-  if (suppressStalenessNudges) {
-    return {
-      modals: React.createElement(React.Fragment, null, conflictModal as any),
-    };
-  }
-
   return {
-    modals: React.createElement(React.Fragment, null, conflictModal as any, modal),
+    modals: React.createElement(React.Fragment, null, conflictModal as any),
   };
 }
-
-

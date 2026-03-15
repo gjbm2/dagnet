@@ -5,6 +5,8 @@
 **Purpose**: Define the high-level engineering blocks for graph-specific nightly
 Bayesian fitting, with detailed reasoning on the graph-to-hierarchy compiler.
 
+**Related**: `../codebase/APP_ARCHITECTURE.md` (existing app architecture), `../project-db/` (snapshot DB)
+
 ---
 
 ## Scope

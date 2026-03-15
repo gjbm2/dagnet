@@ -2,6 +2,7 @@ import React, { useRef, useEffect, useCallback } from 'react';
 import { NodeProps, NodeResizer, useViewport } from 'reactflow';
 import type { Container } from '@/types';
 import { InlineEditableLabel } from '../InlineEditableLabel';
+import { getLastSnappedResize, clearLastSnappedResize } from '../../services/snapService';
 
 export const CONTAINER_COLOURS = [
   '#94A3B8', '#86EFAC', '#7DD3FC', '#FCD34D', '#FDA4AF', '#C4B5FD',
@@ -57,19 +58,31 @@ export default function ContainerNode({ data, selected }: NodeProps<ContainerNod
   const handleResize = useCallback((_event: any, params: { x: number; y: number; width: number; height: number }) => {
     if (resizeTimeoutRef.current) clearTimeout(resizeTimeoutRef.current);
     resizeTimeoutRef.current = setTimeout(() => {
+      // Use snapped dimensions if available, otherwise d3-drag params
+      const snap = getLastSnappedResize();
+      const useSnap = snap && snap.nodeId === `container-${containerIdRef.current}`;
       onUpdateRef.current(containerIdRef.current, {
-        x: Math.round(params.x), y: Math.round(params.y),
-        width: Math.round(params.width), height: Math.round(params.height),
+        x: Math.round(useSnap ? snap.x : params.x),
+        y: Math.round(useSnap ? snap.y : params.y),
+        width: Math.round(useSnap ? snap.width : params.width),
+        height: Math.round(useSnap ? snap.height : params.height),
       });
     }, 50);
   }, []);
 
   const handleResizeEnd = useCallback((_event: any, params: { x: number; y: number; width: number; height: number }) => {
     if (resizeTimeoutRef.current) clearTimeout(resizeTimeoutRef.current);
+    // Use snapped dimensions if available — d3-drag doesn't know about
+    // snap adjustments, so its params would cause a "bounce" on release.
+    const snap = getLastSnappedResize();
+    const useSnap = snap && snap.nodeId === `container-${containerIdRef.current}`;
     onUpdateRef.current(containerIdRef.current, {
-      x: Math.round(params.x), y: Math.round(params.y),
-      width: Math.round(params.width), height: Math.round(params.height),
+      x: Math.round(useSnap ? snap.x : params.x),
+      y: Math.round(useSnap ? snap.y : params.y),
+      width: Math.round(useSnap ? snap.width : params.width),
+      height: Math.round(useSnap ? snap.height : params.height),
     });
+    clearLastSnappedResize();
     onResizeEndRef.current?.();
   }, []);
 

@@ -39,6 +39,7 @@ export function ViewMenu() {
   const useUniformScaling = viewPrefsCtx?.useUniformScaling ?? (activeTab?.editorState?.useUniformScaling ?? false);
   const massGenerosity = viewPrefsCtx?.massGenerosity ?? (activeTab?.editorState?.massGenerosity ?? 0.5);
   const autoReroute = viewPrefsCtx?.autoReroute ?? (activeTab?.editorState?.autoReroute ?? true);
+  const snapToGuides = viewPrefsCtx?.snapToGuides ?? (activeTab?.editorState?.snapToGuides ?? true);
   const confidenceIntervalLevel = viewPrefsCtx?.confidenceIntervalLevel ?? (activeTab?.editorState?.confidenceIntervalLevel as 'none' | '80' | '90' | '95' | '99' ?? 'none');
   const animateFlow = viewPrefsCtx?.animateFlow ?? (activeTab?.editorState?.animateFlow ?? true);
   
@@ -94,6 +95,15 @@ export function ViewMenu() {
       viewPrefsCtx.setAutoReroute(newValue);
     } else if (activeTabId) {
       operations.updateTabState(activeTabId, { autoReroute: newValue });
+    }
+  };
+
+  const handleToggleSnapToGuides = () => {
+    const newValue = !snapToGuides;
+    if (viewPrefsCtx) {
+      viewPrefsCtx.setSnapToGuides(newValue);
+    } else if (activeTabId) {
+      operations.updateTabState(activeTabId, { snapToGuides: newValue });
     }
   };
 
@@ -207,11 +217,18 @@ export function ViewMenu() {
                 Re-route
               </Menubar.Item>
 
-              <Menubar.Item 
-                className="menubar-item" 
+              <Menubar.Item
+                className="menubar-item"
                 onSelect={handleToggleAutoReroute}
               >
                 {autoReroute ? '✓ ' : ''}Auto Re-route
+              </Menubar.Item>
+
+              <Menubar.Item
+                className="menubar-item"
+                onSelect={handleToggleSnapToGuides}
+              >
+                {snapToGuides ? '✓ ' : ''}Snap to Guides
               </Menubar.Item>
 
               <Menubar.Separator className="menubar-separator" />

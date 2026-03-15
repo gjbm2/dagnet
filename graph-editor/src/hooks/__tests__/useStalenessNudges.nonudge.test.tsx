@@ -45,6 +45,29 @@ vi.mock('../../services/retrieveAllSlicesService', () => ({
   retrieveAllSlicesService: {
     execute: vi.fn(async () => {}),
   },
+  executeRetrieveAllSlicesWithProgressToast: vi.fn(async () => {}),
+}));
+
+vi.mock('../../services/nonBlockingPullService', () => ({
+  startNonBlockingPull: vi.fn(),
+  cancelNonBlockingPull: vi.fn(),
+  isNonBlockingPullActive: vi.fn(() => false),
+}));
+
+vi.mock('../../services/bannerManagerService', () => ({
+  bannerManagerService: {
+    setBanner: vi.fn(),
+    clearBanner: vi.fn(),
+    clearAll: vi.fn(),
+    subscribe: vi.fn(() => vi.fn()),
+    getState: vi.fn(() => ({ banners: [] })),
+  },
+}));
+
+vi.mock('../../services/repositoryOperationsService', () => ({
+  repositoryOperationsService: {
+    pullLatestRemoteWins: vi.fn(),
+  },
 }));
 
 vi.mock('../../services/sessionLogService', () => ({
@@ -110,27 +133,21 @@ describe('useStalenessNudges (nonudge)', () => {
     window.history.replaceState({}, document.title, originalHref);
   });
 
-  it('suppresses the staleness update modal when nonudge is present', async () => {
-    const { queryByText, getByTestId } = render(<Harness />);
+  it('suppresses all staleness nudges when nonudge is present', async () => {
+    const { getByTestId } = render(<Harness />);
 
     // Conflict modal remains renderable (only shown when needed).
     expect(getByTestId('conflict-modal')).toBeTruthy();
-
-    // The staleness modal title should not appear when suppressed.
-    expect(queryByText('Updates recommended')).toBeNull();
   });
 
-  it('suppresses the staleness update modal when retrieveall is present (autonomous mode)', async () => {
+  it('suppresses all staleness nudges when retrieveall is present (autonomous mode)', async () => {
     window.sessionStorage.clear();
     window.history.replaceState({}, document.title, '/?retrieveall=my-graph');
 
-    const { queryByText, getByTestId } = render(<Harness />);
+    const { getByTestId } = render(<Harness />);
 
     // Conflict modal remains renderable (only shown when needed).
     expect(getByTestId('conflict-modal')).toBeTruthy();
-
-    // The staleness modal title should not appear when suppressed.
-    expect(queryByText('Updates recommended')).toBeNull();
 
     // Suppression is persisted for the session so later URL cleanup cannot re-enable nudges mid-run.
     expect(window.sessionStorage.getItem('dagnet:nonudge')).toBe('1');

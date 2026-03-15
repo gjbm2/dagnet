@@ -253,7 +253,8 @@ describe('Canvas analysis CRUD: Live ↔ Custom toggle', () => {
     expect(updated.mode).toBe('custom');
     expect(updated.recipe.scenarios).toBeDefined();
     expect(updated.recipe.scenarios!.length).toBeGreaterThan(0);
-    expect(updated.recipe.scenarios![0].scenario_id).toBe('current');
+    // deriveOrderedVisibleIds puts base before current
+    expect(updated.recipe.scenarios![0].scenario_id).toBe('base');
   });
 
   it('should toggle Custom → Live: clear scenarios', () => {

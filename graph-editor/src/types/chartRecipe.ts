@@ -22,6 +22,10 @@ export interface ChartRecipeScenario {
   colour?: string;
   visibility_mode?: ChartVisibilityMode;
   is_live?: boolean;
+  /** Composed graph parameter overrides captured from the live scenario layer.
+   *  Applied in Custom/Fixed mode so that the graph used for compute matches
+   *  the Live-mode composed graph for this layer. */
+  params?: Record<string, any>;
 }
 
 export interface ChartRecipeAnalysis {

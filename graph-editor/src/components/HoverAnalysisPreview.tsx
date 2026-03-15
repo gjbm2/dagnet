@@ -863,7 +863,9 @@ export function useHoverPreview(delay = 500, gracePeriod = 300) {
     }, gracePeriod);
   }, [gracePeriod]);
 
-  const handleTriggerEnter = useCallback((e: { currentTarget?: Element | null; clientX: number; clientY: number }) => {
+  const handleTriggerEnter = useCallback((e: { currentTarget?: Element | null; clientX: number; clientY: number; buttons?: number }) => {
+    // Suppress hover preview during drag (any mouse button held)
+    if ((e as any).buttons > 0) return;
     isHoveringTriggerRef.current = true;
     if (graceTimerRef.current) { clearTimeout(graceTimerRef.current); graceTimerRef.current = null; }
     if (previewState) return;
@@ -913,9 +915,12 @@ export function useHoverPreview(delay = 500, gracePeriod = 300) {
 
   useEffect(() => {
     const onMouseDown = () => {
+      // Always cancel pending timers on mousedown (prevents hover preview
+      // from appearing during drag — the show timer may have been set just
+      // before the user clicked to start dragging)
+      clearAllTimers();
+      isHoveringTriggerRef.current = false;
       if (cardActiveRef.current && !isHoveringCardRef.current) {
-        clearAllTimers();
-        isHoveringTriggerRef.current = false;
         isHoveringCardRef.current = false;
         setPreviewState(null);
       }

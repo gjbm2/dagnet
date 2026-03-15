@@ -8,6 +8,7 @@
  * - Scenario delete removes entry from recipe.scenarios
  * - Scenario reorder changes recipe.scenarios order
  * - Scenario colour edit persists to recipe.scenarios
+ * - Custom mode compute DSLs must equal the Live mode DSLs that were captured
  */
 
 import { describe, it, expect } from 'vitest';
@@ -15,6 +16,7 @@ import { captureTabScenariosToRecipe } from '../captureTabScenariosService';
 import { advanceMode, nextMode } from '../canvasAnalysisMutationService';
 import { augmentDSLWithConstraint, normalizeConstraintString } from '../../lib/queryDSL';
 import type { CanvasAnalysis } from '../../types';
+import type { ChartRecipeScenario } from '../../types/chartRecipe';
 
 const makeOperations = (visibleIds: string[], modes: Record<string, 'f+e' | 'f' | 'e'> = {}) => ({
   getScenarioState: () => ({ visibleScenarioIds: visibleIds }),
@@ -322,4 +324,177 @@ describe('advanceMode — tristate transitions', () => {
       expect(analysis.recipe.scenarios).toBeUndefined();
     });
   });
+});
+
+// ============================================================
+// Custom mode effective DSL reconstruction — outcome preservation
+// ============================================================
+//
+// Core invariant: after Live → Custom, every scenario's effective DSL
+// used for compute must be identical to the absolute DSL it had in Live
+// mode. advanceMode stores DELTAS (via computeRebaseDelta), so the
+// compute path must reconstruct absolutes via augmentDSLWithConstraint.
+//
+// These tests simulate the full capture → advance → reconstruct pipeline
+// and assert that reconstruction produces the original absolute DSLs.
+// They are intentionally RED against the current compute path, which
+// feeds the delta directly to the compute engine without reconstruction.
+// ============================================================
+
+/**
+ * Simulate what the compute path (analysisComputePreparationService)
+ * does with a Custom mode scenario's effective_dsl.
+ *
+ * Mirrors analysisComputePreparationService.ts Custom mode path:
+ * reconstruct absolute DSL from currentDSL + stored delta, then
+ * compose with chartCurrentLayerDsl.
+ */
+function simulateCustomModeComputeDsl(
+  currentDSL: string,
+  recipeScenario: ChartRecipeScenario,
+  chartCurrentLayerDsl?: string,
+): string {
+  const absoluteDsl = augmentDSLWithConstraint(currentDSL, recipeScenario.effective_dsl || '');
+  if (chartCurrentLayerDsl && chartCurrentLayerDsl.trim()) {
+    return augmentDSLWithConstraint(absoluteDsl, chartCurrentLayerDsl);
+  }
+  return absoluteDsl;
+}
+
+describe('Live → Custom outcome preservation', () => {
+  it('should produce identical compute DSLs for the current scenario after transition', () => {
+    const currentDSL = 'window(-7d:).context(channel:google)';
+    const analysis = makeLiveAnalysis();
+
+    // In Live mode, current scenario's effective DSL = currentDSL
+    const liveCurrentDsl = currentDSL;
+
+    // Capture and advance
+    const captured = captureTabScenariosToRecipe({
+      tabId: 'tab-1',
+      currentDSL,
+      operations: makeOperations(['current']),
+      scenariosContext: { scenarios: [], currentColour: '#3b82f6' },
+    });
+    advanceMode(analysis, currentDSL, captured);
+
+    // In Custom mode, what compute would use for 'current':
+    const currentScenario = analysis.recipe.scenarios!.find(s => s.scenario_id === 'current')!;
+    const customCurrentDsl = simulateCustomModeComputeDsl(currentDSL, currentScenario);
+
+    // The compute DSL in custom mode must equal the live mode DSL
+    expect(customCurrentDsl).toBe(normalizeConstraintString(liveCurrentDsl));
+  });
+
+  it('should produce identical compute DSLs for user scenarios after transition', () => {
+    const currentDSL = 'window(-7d:).context(channel:google)';
+    const analysis = makeLiveAnalysis();
+
+    const scenarioAbsoluteDsls: Record<string, string> = {
+      'current': currentDSL,
+      'sc-1': 'window(-30d:).context(channel:google)',
+      'sc-2': 'window(-7d:).context(channel:meta)',
+      'sc-3': 'window(-7d:).context(channel:google).visited(step-x)',
+    };
+
+    const captured = captureTabScenariosToRecipe({
+      tabId: 'tab-1',
+      currentDSL,
+      operations: makeOperations(['current', 'sc-1', 'sc-2', 'sc-3']),
+      scenariosContext: {
+        scenarios: [
+          { id: 'sc-1', name: 'Google 30d', colour: '#EC4899', meta: { isLive: true, lastEffectiveDSL: scenarioAbsoluteDsls['sc-1'] } },
+          { id: 'sc-2', name: 'Meta', colour: '#10B981', meta: { isLive: true, lastEffectiveDSL: scenarioAbsoluteDsls['sc-2'] } },
+          { id: 'sc-3', name: 'With Step', colour: '#6366F1', meta: { isLive: true, lastEffectiveDSL: scenarioAbsoluteDsls['sc-3'] } },
+        ],
+        currentColour: '#3b82f6',
+      },
+    });
+
+    advanceMode(analysis, currentDSL, captured);
+    expect(analysis.mode).toBe('custom');
+
+    // For every scenario, the compute DSL in custom mode must equal its original absolute DSL
+    for (const [scenarioId, originalAbsolute] of Object.entries(scenarioAbsoluteDsls)) {
+      const recipeScenario = analysis.recipe.scenarios!.find(s => s.scenario_id === scenarioId)!;
+      const customComputeDsl = simulateCustomModeComputeDsl(currentDSL, recipeScenario);
+      expect(customComputeDsl).toBe(
+        normalizeConstraintString(originalAbsolute),
+      );
+    }
+  });
+
+  it('should produce identical compute DSLs when chartCurrentLayerDsl is present', () => {
+    const currentDSL = 'window(-7d:).context(channel:google)';
+    const chartLayerDsl = 'context(device:mobile)';
+    const analysis = makeLiveAnalysis();
+
+    const scenarioAbsoluteDsls: Record<string, string> = {
+      'current': currentDSL,
+      'sc-1': 'window(-30d:).context(channel:google)',
+    };
+
+    const captured = captureTabScenariosToRecipe({
+      tabId: 'tab-1',
+      currentDSL,
+      operations: makeOperations(['current', 'sc-1']),
+      scenariosContext: {
+        scenarios: [
+          { id: 'sc-1', name: 'Google 30d', colour: '#EC4899', meta: { isLive: true, lastEffectiveDSL: scenarioAbsoluteDsls['sc-1'] } },
+        ],
+        currentColour: '#3b82f6',
+      },
+    });
+
+    advanceMode(analysis, currentDSL, captured);
+
+    // In Live mode, compute DSL = augmentDSLWithConstraint(absoluteDsl, chartLayerDsl)
+    // In Custom mode, same must hold: reconstruct absolute from delta, then compose with chartLayerDsl
+    for (const [scenarioId, originalAbsolute] of Object.entries(scenarioAbsoluteDsls)) {
+      const recipeScenario = analysis.recipe.scenarios!.find(s => s.scenario_id === scenarioId)!;
+
+      const liveComputeDsl = augmentDSLWithConstraint(originalAbsolute, chartLayerDsl);
+      const customComputeDsl = simulateCustomModeComputeDsl(currentDSL, recipeScenario, chartLayerDsl);
+
+      expect(customComputeDsl).toBe(liveComputeDsl);
+    }
+  });
+
+  it('should produce identical compute DSLs with visited, context, and window mixed', () => {
+    const currentDSL = 'window(-7d:).context(channel:google).visited(step-c)';
+    const analysis = makeLiveAnalysis();
+
+    const scenarioAbsoluteDsls: Record<string, string> = {
+      'current': currentDSL,
+      'sc-1': 'window(-30d:).context(channel:google).visited(step-c,step-d)',
+      'sc-2': 'window(-7d:).context(channel:meta).visited(step-c)',
+    };
+
+    const captured = captureTabScenariosToRecipe({
+      tabId: 'tab-1',
+      currentDSL,
+      operations: makeOperations(['current', 'sc-1', 'sc-2']),
+      scenariosContext: {
+        scenarios: [
+          { id: 'sc-1', name: 'Extra step 30d', colour: '#EC4899', meta: { isLive: true, lastEffectiveDSL: scenarioAbsoluteDsls['sc-1'] } },
+          { id: 'sc-2', name: 'Meta channel', colour: '#10B981', meta: { isLive: true, lastEffectiveDSL: scenarioAbsoluteDsls['sc-2'] } },
+        ],
+        currentColour: '#3b82f6',
+      },
+    });
+
+    advanceMode(analysis, currentDSL, captured);
+
+    for (const [scenarioId, originalAbsolute] of Object.entries(scenarioAbsoluteDsls)) {
+      const recipeScenario = analysis.recipe.scenarios!.find(s => s.scenario_id === scenarioId)!;
+      const customComputeDsl = simulateCustomModeComputeDsl(currentDSL, recipeScenario);
+      expect(customComputeDsl).toBe(
+        normalizeConstraintString(originalAbsolute),
+      );
+    }
+  });
+
+  // Known gap: computeRebaseDelta does not handle visitedAny deltas.
+  // This test documents the limitation — visitedAny additions are lost during rebase.
+  it.todo('should preserve visitedAny additions through Live → Custom rebase (computeRebaseDelta gap)');
 });

@@ -4,6 +4,10 @@
 
 **NEVER run any git command that writes** — `git add`, `git commit`, `git push`, `git checkout`, `git reset`, `git stash`, `git rebase`, `git merge`, `git pull`, `git branch`, or ANY other `git` subcommand — **unless the user has given unmistakable, explicit, unambiguous instruction to do so in the current message**.
 
+## ABSOLUTE BAN: Memory System
+
+**NEVER write to the Claude Code memory system** (`~/.claude/projects/*/memory/`, `MEMORY.md`, or any memory files). All shared context belongs in the repo (CLAUDE.md, docs/, code comments). The memory system is not used in this project.
+
 ## ABSOLUTE BAN: Destructive Terminal Commands
 
 **NEVER run OR ADVISE any operation that deletes, truncates, overwrites, or destroys data** without unmistakable, explicit, unambiguous instruction from the user **in the current message**. This applies equally to terminal commands, code changes, AND instructions/advice for the user to execute (e.g. browser console commands, IDB operations).

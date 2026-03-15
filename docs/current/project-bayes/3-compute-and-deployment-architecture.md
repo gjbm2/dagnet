@@ -5,7 +5,7 @@
 **Purpose**: Document the compute provider decision and deployment topology for
 nightly Bayesian inference, and its relationship to the existing Python backend.
 
-**Related**: `0-high-level-logical-blocks.md` (Blocks 1–6), `../project-db/` (snapshot DB)
+**Related**: `0-high-level-logical-blocks.md` (Blocks 1–6), `../project-db/` (snapshot DB), `../codebase/APP_ARCHITECTURE.md` (existing app architecture)
 
 ---
 
@@ -159,8 +159,12 @@ internal package later. Start simple.
 ## 6. DB access pattern
 
 Both services connect to the same Neon PostgreSQL instance via
-`DB_CONNECTION`. The database is the integration point, not shared runtime
-or shared process memory.
+`DB_CONNECTION`. The DB exists for one purpose: time-series evidence that needs SQL
+aggregation (multi-day ΔY, cohort histograms, signature lookup). Everything
+else in the app is git/YAML files — that's the architecture, not a policy
+choice. The MCMC worker reads evidence from the DB; results flow to
+git/YAML via the webhook (section 8), same as every other output in the
+system.
 
 ### MCMC worker's DB interactions
 
@@ -169,11 +173,10 @@ or shared process memory.
 | Block 2 (subject discovery) | Query snapshot inventory: which `(param_id, core_hash, slice_key)` tuples exist, row counts, anchor day coverage | Read |
 | Block 3 (compiler) | Evidence inventory shapes hierarchy: which slices exist, signal sufficiency per edge, fallback decisions | Read (via Block 2 output) |
 | Block 4 (inference) | Fetch actual snapshot rows as observed data for likelihoods | Read |
-| Block 6 (persistence) | Write posterior summaries, quality gates, provenance flags, model fingerprints | Write |
 
 All reads go through `snapshot_service.py` functions that already exist.
-Block 6 writes will require new functions in the same module (posterior
-artefact tables — schema TBD).
+Block 6 (persistence) writes posterior summaries to git/YAML via the
+webhook result flow — not to the DB.
 
 ### Why fat-payload doesn't work
 
@@ -185,8 +188,6 @@ time. This fails because:
   a DB-dependent decision, not a static input.
 - Evidence volume per graph can be substantial: many edges x many slices x
   many anchor days x multiple retrieval timestamps.
-- The job would also need to write results back, so DB access is needed
-  regardless.
 
 The MCMC worker needs a direct DB connection. This is standard — just a
 connection string in an environment variable, same as the existing API.
@@ -207,13 +208,13 @@ Cron trigger (compute vendor scheduler or external)
   │   ├─ Block 3.5: Validate IR, apply fallbacks for thin-signal groups
   │   ├─ Block 4: Materialise PyMC model from IR, bind evidence, sample
   │   ├─ Block 5: Summarise posteriors, run quality gates (r-hat, ESS)
-  │   └─ Block 6: Persist artefacts to DB with provenance + fingerprint
+  │   └─ Block 6: Fire webhook with posterior payload → Vercel → git commit
   │
-  └─ Emit run summary (graphs fitted, failures, quality flags)
+  └─ Emit run summary via commit message (graphs fitted, failures, quality)
 ```
 
-The existing Vercel API then serves artefacts to the frontend via new
-read-only endpoints (or extends existing snapshot query endpoints).
+The FE picks up results via its existing git pull path. No new API
+endpoints needed for serving artefacts — they're in the YAML files.
 
 ---
 
@@ -268,10 +269,8 @@ Key feasibility points confirmed:
 - **GitHub Contents API** (`repos.createOrUpdateFileContents`) is the
   right call for committing file updates server-side. ~10 lines of code.
   Requires the current file SHA (fetched via `repos.getContent` first).
-- **Neon access from TS routes** is a first-class Vercel integration.
-  `@neondatabase/serverless` or standard `pg` with connection pooling.
-- **Execution time**: parsing JSON + GitHub API call + Neon write is
-  comfortably under 60s. Pro plan with Fluid Compute allows up to 800s.
+- **Execution time**: parsing JSON + GitHub API call is comfortably under
+  60s. Pro plan with Fluid Compute allows up to 800s.
 - **Payload size**: 4.5 MB limit per request. Posterior summaries will be
   a few KB to a few hundred KB. Not a concern.
 - **`gitService.ts` is browser-only** (`btoa()`, `window`, `CustomEvent`).
@@ -311,9 +310,6 @@ Compute vendor                 Vercel TS route                    GitHub
     │                               ├─ commit to repo ─────────────>│
     │                               │  (Octokit server-side)        │
     │                               │                               │
-    │                               ├─ persist run summary to DB    │
-    │                               │  (legitimate result record)   │
-    │                               │                               │
     │                               ├─ return 200 to compute vendor │
 ```
 
@@ -334,20 +330,20 @@ git pull → file changes → IDB update → FileRegistry → GraphStore → UI
   completion; the Vercel route handles it in a single request/response
   (well within 800s — it's just formatting + a git API call). No polling,
   no long-held connections.
-- **DB stores results, not process state.** The run summary persisted to
-  PostgreSQL is a legitimate data record (when did the fit run, what was
-  the quality, which edges converged). Not ephemeral process state.
+- **The DB stays a pure evidence store.** The MCMC pipeline reads evidence
+  from the snapshot DB and writes results to git — the same directional
+  flow as every other analysis path.
 - **Nightly runs work with zero FE involvement.** The webhook fires, the
-  commit lands, the run summary is stored. When the user opens the app,
-  they pull and see updated posteriors.
+  commit lands. When the user opens the app, they pull and see updated
+  posteriors. Audit trail is git history.
 
 ### Use cases
 
 | Scenario | How results arrive | FE involvement |
 |---|---|---|
-| **Nightly batch** | Webhook → Vercel commits to git → run summary to DB. | None during execution. User pulls on next session. |
-| **On-demand fit** | Same webhook path. FE initiated the job, so it knows to check for completion. | FE triggers, then watches for the commit (or polls run summary). Pulls when ready. |
-| **Failure** | Webhook fires with error payload. Vercel persists failure record to DB. No git commit. | FE reads failure from DB on next check. |
+| **Nightly batch** | Webhook → Vercel commits to git. Commit message carries run summary. | None during execution. User pulls on next session. |
+| **On-demand fit** | Same webhook path. FE initiated the job, so it knows to check for completion. | FE triggers, then watches for the commit. Pulls when ready. |
+| **Failure** | Webhook fires with error payload. Vercel commits no files but can log to compute vendor. | FE detects no new commit. Retry next night or on-demand. |
 
 ### What the Vercel TS webhook route does
 
@@ -355,47 +351,21 @@ git pull → file changes → IDB update → FileRegistry → GraphStore → UI
    vendor).
 2. **Validate** the result payload (posteriors, quality gates, provenance).
 3. **Format** posterior summaries into parameter YAML updates. For each edge:
-   update `p.mean`, `p.stdev`, `p.distribution`, confidence intervals,
+   update `p.mean`, `p.stdev`, `p.distribution`, posterior summary fields,
    provenance flag (`bayesian` / `pooled-fallback` / `point-estimate`).
 4. **Commit** updated files to the repo via GitHub Contents API. Use a
-   dedicated commit message format (e.g. `[bayes] Nightly fit: 14 edges,
-   r-hat 1.02, fingerprint abc123`).
-5. **Persist** run summary to PostgreSQL `bayes_runs` table (see below).
-6. **Return 200** to the compute vendor.
+   dedicated commit message format that carries the run summary (e.g.
+   `[bayes] Nightly fit: 14 edges, r-hat 1.02, fingerprint abc123`).
+5. **Return 200** to the compute vendor.
 
 This route is TypeScript (not Python) because git operations are already
 handled in TS (`gitService.ts` patterns) and the webhook is pure
 formatting + API calls — no statistical computation.
 
-### Run summary table
-
-This is a **result record**, not process state. It captures what happened
-for audit, debugging, and FE display.
-
-```sql
-CREATE TABLE bayes_runs (
-  run_id        TEXT PRIMARY KEY,
-  graph_id      TEXT NOT NULL,
-  workspace_id  TEXT NOT NULL,
-  trigger       TEXT NOT NULL,            -- 'nightly' | 'on-demand'
-  status        TEXT NOT NULL,            -- 'complete' | 'failed'
-  summary       JSONB,                   -- result payload (on complete)
-  error         TEXT,                    -- error detail (on failure)
-  started_at    TIMESTAMPTZ NOT NULL,
-  completed_at  TIMESTAMPTZ NOT NULL,
-  commit_sha    TEXT                     -- git commit created (on complete)
-);
-
-CREATE INDEX idx_bayes_runs_graph
-  ON bayes_runs (workspace_id, graph_id, completed_at DESC);
-```
-
-Summary payload example:
-```json
-{"edges_fitted": 14, "edges_fallback": 1, "edges_skipped": 0,
- "max_rhat": 1.02, "min_ess": 2400, "converged": true,
- "fingerprint": "abc123...", "duration_s": 342}
-```
+The commit message is the run-level audit record. Per-edge quality
+metrics (`rhat`, `ess`, `provenance`, `fitted_at`) live in the YAML files
+themselves. Git history provides the time-series of fits. No DB table
+needed.
 
 ### Job submission flow
 
@@ -501,11 +471,9 @@ operation ran locally (git, file ops) or remotely (MCMC).
 - **Is Octokit available for server-side git commits?** Yes. Already a
   dependency (`@octokit/rest` v22.0.0). `repos.createOrUpdateFileContents`
   is the right call. Server-side uses `Buffer` instead of `btoa()`.
-- **Can the webhook route access Neon?** Yes. First-class Vercel
-  integration via `@neondatabase/serverless` or `pg` with pooling.
 - **Execution time for the webhook handler?** Comfortably under limits.
-  Parse JSON + GitHub API commit + Neon write is seconds, not minutes.
-  Pro plan allows up to 800s with Fluid Compute.
+  Parse JSON + GitHub API commit is seconds, not minutes. Pro plan allows
+  up to 800s with Fluid Compute.
 
 ### Still open
 
@@ -517,9 +485,9 @@ operation ran locally (git, file ops) or remotely (MCMC).
 - **Webhook reliability**: Vercel provides no built-in retry. Handler must
   be idempotent. Need to verify compute vendor's webhook retry semantics.
   May need a webhook gateway (Hookdeck) if vendor doesn't retry.
-- **Artefact schema**: what exactly gets persisted in Block 6? Posterior
-  summaries (HDI, mean, win probabilities), convergence diagnostics, model
-  fingerprint — but the table schema is TBD.
+- **Artefact schema**: what exactly gets persisted in the YAML files?
+  Posterior summaries (HDI, mean, sufficient statistics), convergence
+  diagnostics, model fingerprint — the field mapping is TBD.
 - **Conflict with dirty files**: if the user has local edits and the webhook
   commits new posteriors to the same parameter file, the next pull conflicts.
   Options: dedicated branch, posterior-only field updates, FE merge logic.
@@ -536,5 +504,5 @@ operation ran locally (git, file ops) or remotely (MCMC).
   MCMC worker needs its own build context.
 - **Warm-start storage**: doc 0 specifies warm-start from previous posterior
   when fingerprint matches. Where are previous posterior samples stored?
-  DB (as compressed blobs), object storage (S3/R2), or the compute vendor's
-  ephemeral storage?
+  Object storage (S3/R2), compute vendor's persistent volumes, or
+  reconstructed from the sufficient statistics in YAML?

@@ -115,6 +115,7 @@ export interface TabState {
     // ReactFlow viewport persistence (per tab)
     rfViewport?: { x: number; y: number; zoom: number };
     autoReroute?: boolean;
+    snapToGuides?: boolean;
     useSankeyView?: boolean;
     showNodeImages?: boolean;
     confidenceIntervalLevel?: 'none' | '80' | '90' | '95' | '99';

@@ -3,6 +3,8 @@
 **Date**: 13-Mar-26
 **Status**: Documents the CURRENT system as-built, including a critical instability in the FileRegistry pending update mechanism.
 
+**Related**: `codebase/APP_ARCHITECTURE.md` (app-level architecture overview)
+
 ---
 
 ## Overview

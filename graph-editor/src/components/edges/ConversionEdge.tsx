@@ -297,6 +297,8 @@ export default function ConversionEdge({
   const handleTooltipMouseEnter = useCallback((e: React.MouseEvent<Element>) => {
     // Only show previews for current edges (not scenario overlays)
     if (data?.scenarioOverlay) return;
+    // Suppress during node drag — beads are hidden but mouse can still enter the SVG group
+    if (isDraggingNode) return;
 
     // Trigger snapshot inventory fetch (hook handles caching)
     void snapshots.refresh();
@@ -304,8 +306,8 @@ export default function ConversionEdge({
     // Trigger hover preview — pass mouse coordinates only.
     // Edge bead <g> elements span the entire edge path, so
     // getBoundingClientRect() returns the full path extent (too high).
-    hoverPreview.handleTriggerEnter({ clientX: e.clientX, clientY: e.clientY });
-  }, [data?.scenarioOverlay, snapshots.refresh, hoverPreview.handleTriggerEnter]);
+    hoverPreview.handleTriggerEnter({ clientX: e.clientX, clientY: e.clientY, buttons: e.buttons });
+  }, [data?.scenarioOverlay, isDraggingNode, snapshots.refresh, hoverPreview.handleTriggerEnter]);
 
   // Handle mouse move (no-op now, preview position is set on enter)
   const handleTooltipMouseMove = useCallback((_e: React.MouseEvent<Element>) => {

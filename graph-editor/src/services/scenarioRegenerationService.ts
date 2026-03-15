@@ -116,7 +116,7 @@ export function splitDSLParts(queryDSL: string | null | undefined): SplitDSLResu
       contextClause: parsed.contextClausePresent
         ? (parsed.context.length > 0 ? 'set' : 'clear')
         : 'inherit',
-      context: parsed.context.filter((c): c is { key: string; value: string } => c.value !== undefined),
+      context: parsed.context.map(c => ({ key: c.key, value: c.value ?? '' })),
       contextAnyClause: parsed.contextAnyClausePresent
         ? (parsed.contextAny.length > 0 ? 'set' : 'clear')
         : 'inherit',

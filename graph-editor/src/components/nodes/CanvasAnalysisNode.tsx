@@ -12,6 +12,7 @@ import { resolveAnalysisType } from '@/services/analysisTypeResolutionService';
 import { captureTabScenariosToRecipe } from '@/services/captureTabScenariosService';
 import { advanceMode } from '@/services/canvasAnalysisMutationService';
 import { isSnapshotBootChart, logSnapshotBoot, recordSnapshotBootLedgerStage } from '@/lib/snapshotBootTrace';
+import { getLastSnappedResize, clearLastSnappedResize } from '@/services/snapService';
 import { Loader2, AlertCircle, ServerOff, ExternalLink, Settings2 } from 'lucide-react';
 import { chartOperationsService } from '@/services/chartOperationsService';
 import { InlineEditableLabel } from '../InlineEditableLabel';
@@ -62,6 +63,9 @@ function CanvasAnalysisNodeInner({ data, selected }: NodeProps<CanvasAnalysisNod
   const scenariosContext = useScenariosContextOptional();
   const scenariosContextRef = useRef(scenariosContext);
   scenariosContextRef.current = scenariosContext;
+  // Reactive flag: only changes once (false→true) per file load, so adding it as a
+  // memo dep doesn't cause churn the way the full context value would.
+  const scenariosReady = scenariosContext ? Boolean((scenariosContext as any).scenariosReady) : false;
   const tabContext = useTabContext();
   const tabsRef = useRef(tabContext.tabs);
   tabsRef.current = tabContext.tabs;
@@ -200,12 +204,30 @@ function CanvasAnalysisNodeInner({ data, selected }: NodeProps<CanvasAnalysisNod
     }
     if (tabId) {
       const state = operationsRef.current.getScenarioState(tabId);
-      return state?.visibleScenarioIds || ['current'];
+      // Derive order from scenarioOrder (same source the panel uses) so chart
+      // left-to-right matches panel bottom-to-top.  scenarioOrder is newest-first
+      // (prepended), so reversing gives composition order (bottom-to-top).
+      const visibleSet = new Set(state?.visibleScenarioIds || ['current']);
+      const order = state?.scenarioOrder || [];
+      const userItems = [...order]
+        .reverse()
+        .filter(id => id !== 'current' && id !== 'base' && visibleSet.has(id));
+      const result: string[] = [];
+      if (visibleSet.has('base')) result.push('base');
+      result.push(...userItems);
+      if (visibleSet.has('current')) result.push('current');
+      return result.length > 0 ? result : ['current'];
     }
     return ['current'];
   }, [analysis.mode, analysis.recipe.scenarios, analysis.display, tabId]);
 
   const scenarioCount = visibleScenarioIds.length || 1;
+  // True when Live mode has user scenarios but ScenariosContext hasn't hydrated yet.
+  // Used to gate chart/expression rendering so cached results aren't shown with
+  // fallback colours before real scenario metadata is available.
+  const awaitingScenariosHydration = analysis.mode === 'live'
+    && !scenariosReady
+    && visibleScenarioIds.some(id => id !== 'current' && id !== 'base');
   // Resolve available analysis types when graph structure changes.
   // Uses store.subscribe() to react to graph changes WITHOUT causing component re-renders.
   const analyticsDslRef = useRef(analyticsDsl);
@@ -287,7 +309,9 @@ function CanvasAnalysisNodeInner({ data, selected }: NodeProps<CanvasAnalysisNod
       }
     }
     return m;
-  }, [visibleScenarioIds, analysis.mode, analysis.recipe.scenarios, scenarioVisibilityModes]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- scenariosReady triggers recompute
+  // when context hydrates so we read correct colours from the ref instead of fallbacks.
+  }, [visibleScenarioIds, analysis.mode, analysis.recipe.scenarios, scenarioVisibilityModes, scenariosReady]);
 
   // Build scenario layer items for the toolbar popover
   const allScenarioLayerItems = useMemo((): ScenarioLayerItem[] => {
@@ -423,18 +447,30 @@ function CanvasAnalysisNodeInner({ data, selected }: NodeProps<CanvasAnalysisNod
   const handleResize = useCallback((_event: any, params: { x: number; y: number; width: number; height: number }) => {
     if (resizeTimeoutRef.current) clearTimeout(resizeTimeoutRef.current);
     resizeTimeoutRef.current = setTimeout(() => {
+      // Use snapped dimensions if available, otherwise d3-drag params
+      const snap = getLastSnappedResize();
+      const useSnap = snap && snap.nodeId === `analysis-${analysisIdRef.current}`;
       onUpdateRef.current(analysisIdRef.current, {
-        x: Math.round(params.x), y: Math.round(params.y),
-        width: Math.round(params.width), height: Math.round(params.height),
+        x: Math.round(useSnap ? snap.x : params.x),
+        y: Math.round(useSnap ? snap.y : params.y),
+        width: Math.round(useSnap ? snap.width : params.width),
+        height: Math.round(useSnap ? snap.height : params.height),
       });
     }, 200);
   }, []);
   const handleResizeEnd = useCallback((_event: any, params: { x: number; y: number; width: number; height: number }) => {
     if (resizeTimeoutRef.current) clearTimeout(resizeTimeoutRef.current);
+    // Use snapped dimensions if available — d3-drag doesn't know about
+    // snap adjustments, so its params would cause a "bounce" on release.
+    const snap = getLastSnappedResize();
+    const useSnap = snap && snap.nodeId === `analysis-${analysisIdRef.current}`;
     onUpdateRef.current(analysisIdRef.current, {
-      x: Math.round(params.x), y: Math.round(params.y),
-      width: Math.round(params.width), height: Math.round(params.height),
+      x: Math.round(useSnap ? snap.x : params.x),
+      y: Math.round(useSnap ? snap.y : params.y),
+      width: Math.round(useSnap ? snap.width : params.width),
+      height: Math.round(useSnap ? snap.height : params.height),
     });
+    clearLastSnappedResize();
     onResizeEndRef.current?.();
   }, []);
 
@@ -752,7 +788,17 @@ function CanvasAnalysisNodeInner({ data, selected }: NodeProps<CanvasAnalysisNod
           </div>
         )}
 
-        {analysis.view_mode === 'chart' && (result || !hasAnalysisType) && (
+        {/* Gate: don't render chart until scenarios are hydrated (Live mode with user scenarios).
+            Without this, a cached result renders with fallback '#808080' colours before
+            ScenariosContext has loaded the real scenario metadata from IDB. */}
+        {awaitingScenariosHydration && result && (
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', gap: 8, color: 'var(--text-muted)' }}>
+            <Loader2 size={28} style={{ animation: 'spin 1s linear infinite' }} />
+            <span style={{ fontSize: 12 }}>Loading scenarios...</span>
+          </div>
+        )}
+
+        {analysis.view_mode === 'chart' && (result || !hasAnalysisType) && !(awaitingScenariosHydration) && (
           <AnalysisChartContainer
             result={result}
             chartKindOverride={analysis.chart_kind}
@@ -791,7 +837,7 @@ function CanvasAnalysisNodeInner({ data, selected }: NodeProps<CanvasAnalysisNod
           />
         )}
 
-        {expressionResult && expressionViewMode && resolvedExpressionDisplay && (
+        {expressionResult && expressionViewMode && resolvedExpressionDisplay && !(awaitingScenariosHydration) && (
           <div
             ref={expressionViewportRef}
             style={{ position: 'relative', overflow: 'auto', height: '100%' }}

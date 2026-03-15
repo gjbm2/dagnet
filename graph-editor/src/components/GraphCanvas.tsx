@@ -103,6 +103,7 @@ import { MAX_EDGE_WIDTH, MIN_EDGE_WIDTH, DEFAULT_NODE_WIDTH, DEFAULT_NODE_HEIGHT
 import { getSeverityIcon } from './issues/issueIcons';
 import { Monitor, MonitorOff, X, Plus, StickyNote, Square, BarChart3, Clipboard, CheckSquare } from 'lucide-react';
 import { useAlignSelection } from '../hooks/useAlignSelection';
+import { useSnapToGuides } from '../hooks/useSnapToGuides';
 import { toNodeRect } from '../services/alignmentService';
 import { MultiSelectContextMenu } from './MultiSelectContextMenu';
 
@@ -428,6 +429,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
   const useUniformScaling = viewPrefs?.useUniformScaling ?? false;
   const massGenerosity = viewPrefs?.massGenerosity ?? 0.5;
   const autoReroute = viewPrefs?.autoReroute ?? true;
+  const snapToGuides = viewPrefs?.snapToGuides ?? true;
   const useSankeyView = viewPrefs?.useSankeyView ?? false;
   const showNodeImages = viewPrefs?.showNodeImages ?? false;
   const ts = () => new Date().toISOString();
@@ -481,6 +483,27 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
 
   // Alignment & distribution commands for selected objects
   const { align, distribute, equalSize, canAlign, canDistribute } = useAlignSelection(nodes, setNodes, graphRef, setGraphDirect, saveHistoryState);
+
+  // Snap-to-guide lines during drag
+  const { rebuildIndex: rebuildSnapIndex, applySnapToChanges, resetHelperLines, HelperLines } = useSnapToGuides();
+  const altKeyPressedRef = useRef(false);
+
+  // Alt key tracking for snap-to-guide override.
+  // Reset on blur/focus to prevent stuck-Alt when Alt+Tab switches windows
+  // (keyup fires in the other window, never reaching our handler).
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => { if (e.key === 'Alt') altKeyPressedRef.current = true; };
+    const handleKeyUp = (e: KeyboardEvent) => { if (e.key === 'Alt') altKeyPressedRef.current = false; };
+    const handleBlur = () => { altKeyPressedRef.current = false; };
+    window.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('keyup', handleKeyUp);
+    window.addEventListener('blur', handleBlur);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('keyup', handleKeyUp);
+      window.removeEventListener('blur', handleBlur);
+    };
+  }, []);
 
   const fitView = useCallback((options?: any) => {
     rfFitView({ ...options });
@@ -540,13 +563,33 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
     variantWeight: number;
   } | null>(null);
   
-  // Custom onNodesChange handler to detect position changes for auto re-routing
+  // Ref to access latest nodes inside onNodesChange without adding `nodes` to deps
+  // (adding `nodes` would recreate the callback on every position change → render loop)
+  const nodesForSnapRef = useRef(nodes);
+  nodesForSnapRef.current = nodes;
+
+  // Custom onNodesChange handler — snap-to-guide interception + auto re-routing
   const onNodesChange = useCallback((changes: any[]) => {
     const filtered = activeElementTool === 'pan'
       ? changes.filter((c: any) => c.type !== 'select')
       : changes;
-    onNodesChangeBase(filtered);
-    
+
+    // Apply snap-to-guide lines before committing position changes
+    if (import.meta.env.DEV) {
+      const posDrag = filtered.filter((c: any) => c.type === 'position' && c.dragging === true);
+      if (posDrag.length > 0) {
+        console.log('[GraphCanvas] onNodesChange DRAG:', {
+          snapToGuides,
+          altKey: altKeyPressedRef.current,
+          dragCount: posDrag.length,
+          nodeId: posDrag[0].id,
+          hasPosition: !!posDrag[0].position,
+        });
+      }
+    }
+    const snapped = applySnapToChanges(filtered, nodesForSnapRef.current, snapToGuides, altKeyPressedRef.current);
+    onNodesChangeBase(snapped);
+
     if (autoReroute && !isSyncingRef.current) {
       if (sankeyLayoutInProgressRef.current || isEffectsCooldownActive()) {
         console.log(`[${ts()}] [GraphCanvas] Reroute suppressed (layout/cooldown active)`);
@@ -560,7 +603,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
         setShouldReroute((v) => v + 1);
       }
     }
-  }, [autoReroute, onNodesChangeBase, activeElementTool]);
+  }, [autoReroute, snapToGuides, onNodesChangeBase, activeElementTool, applySnapToChanges]);
 
   // Handle external selection (for deep linking from issues viewer, etc.)
   // Track the last external selection to avoid re-processing
@@ -2238,6 +2281,20 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
               const gpIndex = gpArray.findIndex((p: any) => p.id === postitId);
               const graphPostit = gpIndex >= 0 ? gpArray[gpIndex] : null;
               if (!graphPostit) return prevNode;
+              if (import.meta.env.DEV) {
+                const prevStyle = prevNode.style as any;
+                if (!isResizingNodeRef.current && (prevStyle?.width !== graphPostit.width || prevStyle?.height !== graphPostit.height)) {
+                  console.log('[reconcile] postit style WILL CHANGE', {
+                    id: prevNode.id,
+                    isResizing: isResizingNodeRef.current,
+                    isInteracting,
+                    prevW: prevStyle?.width, prevH: prevStyle?.height,
+                    graphW: graphPostit.width, graphH: graphPostit.height,
+                    prevPos: prevNode.position,
+                    graphPos: { x: graphPostit.x, y: graphPostit.y },
+                  });
+                }
+              }
               return {
                 ...prevNode,
                 zIndex: 5000 + gpIndex,
@@ -4540,6 +4597,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
   // Handle node drag start - set flag and start failsafe timeout
   const onNodeDragStart = useCallback((_event: any, _node: any) => {
     hasNodeMovedRef.current = false;
+    resetHelperLines();
 
     // Block Graph→ReactFlow sync during drag to prevent interruption
     isDraggingNodeRef.current = true;
@@ -4615,7 +4673,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
       }
       dragTimeoutRef.current = null;
     }, 5000);
-  }, [nodes]);
+  }, [nodes, resetHelperLines]);
 
   // Mark drag as "moved" and apply group drag delta for containers
   const onNodeDrag = useCallback((_event: any, draggedNode: any) => {
@@ -4643,6 +4701,10 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
 
   // Handle node drag stop - save final position to history
   const onNodeDragStop = useCallback(() => {
+    // Clear snap-to-guide state and rebuild index with final positions
+    resetHelperLines();
+    rebuildSnapIndex(nodes);
+
     // Clear container group drag state
     containerDragContainedRef.current = null;
     containerDragLastPosRef.current = null;
@@ -4651,9 +4713,8 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
     // and React has re-rendered before we sync to graph store and trigger edge recalculation
     requestAnimationFrame(() => {
       requestAnimationFrame(() => {
-        setIsDraggingNode(false);
         setDraggedAnalysisId(null);
-        
+
         // Only sync positions & save history if the node actually moved.
         if (hasNodeMovedRef.current && graph && nodes.length > 0) {
           const updatedGraph = fromFlow(nodes, edges, graph);
@@ -4666,19 +4727,23 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
               lastSyncedReactFlowRef.current = updatedJson;
               // Keep isDraggingNodeRef.current = true - sync effect will clear it after taking fast path
               setGraph(updatedGraph);
-              // Clear syncing flag after a brief delay
+              // Clear syncing flag and drag state AFTER the sync render settles,
+              // so edge components still see isDraggingNode=true and suppress hover previews
               setTimeout(() => {
                 isSyncingRef.current = false;
+                setIsDraggingNode(false);
               }, 0);
             } else {
-              // No position change, clear flag immediately
+              // No position change, clear flags immediately
               isDraggingNodeRef.current = false;
+              setIsDraggingNode(false);
             }
           } else {
-            // No graph update, clear flag immediately
+            // No graph update, clear flags immediately
             isDraggingNodeRef.current = false;
+            setIsDraggingNode(false);
           }
-          
+
           // Save the FINAL position to history after the ReactFlow→Store sync completes
           // Use setTimeout to ensure sync completes first
           setTimeout(() => {
@@ -4687,10 +4752,11 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
         } else {
           // Click-only (no movement) - just clear drag flag, no graph update or history entry
           isDraggingNodeRef.current = false;
+          setIsDraggingNode(false);
         }
       });
     });
-  }, [saveHistoryState, graph, nodes, edges, setGraph]);
+  }, [saveHistoryState, graph, nodes, edges, setGraph, resetHelperLines, rebuildSnapIndex]);
 
   // Cleanup drag timeout on unmount
   useEffect(() => {
@@ -6277,6 +6343,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
         }}
       >
         <Background variant={BackgroundVariant.Dots} gap={16} size={1} color={dark ? '#363636' : '#ddd'} />
+        <HelperLines />
         <Controls />
         <MiniMap
           maskColor={dark ? 'rgba(30,30,30,0.8)' : undefined}

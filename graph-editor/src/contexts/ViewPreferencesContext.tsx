@@ -5,6 +5,7 @@ export interface ViewPreferencesState {
   useUniformScaling: boolean;
   massGenerosity: number;
   autoReroute: boolean;
+  snapToGuides: boolean;
   useSankeyView: boolean;
   showNodeImages: boolean;
   confidenceIntervalLevel: 'none' | '80' | '90' | '95' | '99';
@@ -15,6 +16,7 @@ interface ViewPreferencesContextValue extends ViewPreferencesState {
   setUseUniformScaling: (value: boolean) => void;
   setMassGenerosity: (value: number) => void;
   setAutoReroute: (value: boolean) => void;
+  setSnapToGuides: (value: boolean) => void;
   setUseSankeyView: (value: boolean) => void;
   setShowNodeImages: (value: boolean) => void;
   setConfidenceIntervalLevel: (value: 'none' | '80' | '90' | '95' | '99') => void;
@@ -37,6 +39,7 @@ export function ViewPreferencesProvider({ tabId, children }: { tabId?: string; c
   const [useUniformScaling, setUseUniformScalingLocal] = useState<boolean>(editorState.useUniformScaling ?? false);
   const [massGenerosity, setMassGenerosityLocal] = useState<number>(editorState.massGenerosity ?? 0.5);
   const [autoReroute, setAutoRerouteLocal] = useState<boolean>(editorState.autoReroute ?? true);
+  const [snapToGuides, setSnapToGuidesLocal] = useState<boolean>(editorState.snapToGuides ?? true);
   const [useSankeyView, setUseSankeyViewLocal] = useState<boolean>(editorState.useSankeyView ?? false);
   const [showNodeImages, setShowNodeImagesLocal] = useState<boolean>(editorState.showNodeImages ?? true);
   const [confidenceIntervalLevel, setConfidenceIntervalLevelLocal] = useState<'none' | '80' | '90' | '95' | '99'>(
@@ -54,6 +57,9 @@ export function ViewPreferencesProvider({ tabId, children }: { tabId?: string; c
   useEffect(() => {
     if (editorState.autoReroute !== undefined) setAutoRerouteLocal(editorState.autoReroute);
   }, [editorState.autoReroute]);
+  useEffect(() => {
+    if (editorState.snapToGuides !== undefined) setSnapToGuidesLocal(editorState.snapToGuides);
+  }, [editorState.snapToGuides]);
   useEffect(() => {
     if (editorState.useSankeyView !== undefined) setUseSankeyViewLocal(editorState.useSankeyView);
   }, [editorState.useSankeyView]);
@@ -82,6 +88,10 @@ export function ViewPreferencesProvider({ tabId, children }: { tabId?: string; c
     setAutoRerouteLocal(value);
     if (tabId) tabOps.updateTabState(tabId, { autoReroute: value });
   };
+  const setSnapToGuides = (value: boolean) => {
+    setSnapToGuidesLocal(value);
+    if (tabId) tabOps.updateTabState(tabId, { snapToGuides: value });
+  };
   const setUseSankeyView = (value: boolean) => {
     setUseSankeyViewLocal(value);
     if (tabId) tabOps.updateTabState(tabId, { useSankeyView: value });
@@ -103,6 +113,7 @@ export function ViewPreferencesProvider({ tabId, children }: { tabId?: string; c
     useUniformScaling,
     massGenerosity,
     autoReroute,
+    snapToGuides,
     useSankeyView,
     showNodeImages,
     confidenceIntervalLevel,
@@ -110,11 +121,12 @@ export function ViewPreferencesProvider({ tabId, children }: { tabId?: string; c
     setUseUniformScaling,
     setMassGenerosity,
     setAutoReroute,
+    setSnapToGuides,
     setUseSankeyView,
     setShowNodeImages,
     setConfidenceIntervalLevel,
     setAnimateFlow
-  }), [useUniformScaling, massGenerosity, autoReroute, useSankeyView, showNodeImages, confidenceIntervalLevel, animateFlow]);
+  }), [useUniformScaling, massGenerosity, autoReroute, snapToGuides, useSankeyView, showNodeImages, confidenceIntervalLevel, animateFlow]);
 
   return (
     <ViewPreferencesContext.Provider value={value}>
