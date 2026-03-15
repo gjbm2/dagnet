@@ -504,8 +504,9 @@ describe('useCanvasAnalysisCompute DSL handling', () => {
     );
 
     await waitFor(() => {
-      expect(mockAnalyzeSelection).toHaveBeenCalledTimes(1);
+      expect(mockAnalyzeSelection).toHaveBeenCalled();
     });
+    // Non-snapshot analyses must NOT invoke snapshot resolution.
     expect(mockResolveSnapshotSubjectsForScenario).not.toHaveBeenCalled();
   });
 

@@ -11,7 +11,7 @@
  */
 import { test, expect, Page } from '@playwright/test';
 
-test.describe.configure({ timeout: 10_000 });
+test.describe.configure({ timeout: 30_000 });
 
 const TEST_GRAPH = {
   nodes: [
@@ -32,6 +32,10 @@ async function installComputeStubs(page: Page) {
   // Prevent failures if the app tries to call the compute backend during boot.
   await page.route('http://127.0.0.1:9000/**', (route) => {
     return route.fulfill({ status: 200, body: JSON.stringify({ success: true }) });
+  });
+  // Stub GitHub API to avoid rate limiting under parallel worker load.
+  await page.route('https://api.github.com/**', (route) => {
+    return route.fulfill({ status: 200, contentType: 'application/json', body: '{}' });
   });
 }
 

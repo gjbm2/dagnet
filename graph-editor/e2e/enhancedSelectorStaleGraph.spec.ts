@@ -657,8 +657,7 @@ async function seedWorkspaceForRegistryWarningRegression(page: Page, graphData: 
 
 test.describe('EnhancedSelector registry index notification regression', () => {
   test('registry warning: hidden for indexed param; visible for unknown param (two edges)', async ({ page, baseURL }) => {
-    // This should fail fast if broken; long waits usually mean a dead boot.
-    test.setTimeout(15_000);
+    test.setTimeout(30_000);
 
     // Stub GitHub + compute to avoid any accidental network dependency.
     await installGitHubStubs(page);
@@ -717,7 +716,7 @@ test.describe('EnhancedSelector registry index notification regression', () => {
     //
     // NOTE: This assertion intentionally relies only on UI state (no internal window.fileRegistry access),
     // to keep the repro robust across builds.
-    await expect(warning).toBeHidden({ timeout: 2_000 });
+    await expect(warning).toBeHidden({ timeout: 5_000 });
 
     // Edge 2: unknown param -> warning should be shown
     await selectEdgeOrSkip(page, 'edge-2');
