@@ -55,6 +55,11 @@ export interface Operation {
   completedAtMs?: number;
   cancellable: boolean;
   /**
+   * Optional action button shown on terminal operations.
+   * Used when the user needs to take a next step (e.g. resolve merge conflicts).
+   */
+  action?: { label: string; onClick: () => void };
+  /**
    * Transport-agnostic cancel callback.
    * Local ops set a boolean flag; remote ops hit an API endpoint.
    * The registry just calls it — the caller is responsible for
@@ -320,11 +325,16 @@ class OperationRegistryService {
    * Transition an operation to a terminal state.
    * Convenience wrapper around setStatus that also sets the error message.
    */
-  complete(id: string, outcome: 'complete' | 'error' | 'cancelled', error?: string): void {
+  complete(
+    id: string,
+    outcome: 'complete' | 'error' | 'cancelled',
+    error?: string,
+    action?: { label: string; onClick: () => void },
+  ): void {
     const op = this.opsById.get(id);
     if (!op) return;
 
-    this.moveToRecent(id, outcome, error);
+    this.moveToRecent(id, outcome, error, action);
   }
 
   remove(id: string): void {
@@ -350,7 +360,12 @@ class OperationRegistryService {
     return this.opsById.get(id) ?? this.recentOps.find((o) => o.id === id);
   }
 
-  private moveToRecent(id: string, status: OperationStatus, error?: string): void {
+  private moveToRecent(
+    id: string,
+    status: OperationStatus,
+    error?: string,
+    action?: { label: string; onClick: () => void },
+  ): void {
     const op = this.opsById.get(id);
     if (!op) return;
 
@@ -361,6 +376,7 @@ class OperationRegistryService {
       status,
       error: error ?? op.error,
       completedAtMs: Date.now(),
+      action: action ?? op.action,
     };
 
     // Prepend (most recent first); evict oldest if over capacity.

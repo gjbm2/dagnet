@@ -10,6 +10,7 @@ import { AnalysisResultCards } from '../analytics/AnalysisResultCards';
 import { AnalysisResultTable } from '../analytics/AnalysisResultTable';
 import { resolveAnalysisType } from '@/services/analysisTypeResolutionService';
 import { captureTabScenariosToRecipe } from '@/services/captureTabScenariosService';
+import { advanceMode } from '@/services/canvasAnalysisMutationService';
 import { isSnapshotBootChart, logSnapshotBoot, recordSnapshotBootLedgerStage } from '@/lib/snapshotBootTrace';
 import { Loader2, AlertCircle, ServerOff, ExternalLink, Settings2 } from 'lucide-react';
 import { chartOperationsService } from '@/services/chartOperationsService';
@@ -438,30 +439,30 @@ function CanvasAnalysisNodeInner({ data, selected }: NodeProps<CanvasAnalysisNod
   }, []);
 
 
-  const handleLiveToggle = useCallback((live: boolean) => {
-    if (live && analysis.mode !== 'live') {
-      onUpdate(analysis.id, {
-        mode: 'live' as const,
-        recipe: { ...analysis.recipe, scenarios: undefined, analysis: { ...analysis.recipe.analysis, what_if_dsl: undefined } },
-      } as any);
-    } else if (!live && analysis.mode === 'live') {
+  const handleModeCycle = useCallback(() => {
+    // Live → Custom: capture tab scenarios and rebase to delta DSLs
+    // Custom → Fixed: bake deltas into absolute DSLs
+    // Fixed → Live: clear scenarios
+    const clone = structuredClone(analysis);
+    let captured: { scenarios: any[]; what_if_dsl?: string } | null = null;
+    if (analysis.mode === 'live') {
       const liveTabId = tabId || tabsRef.current[0]?.id;
-      if (liveTabId && scenariosContextRef.current) {
-        const currentTab = tabsRef.current.find(t => t.id === liveTabId);
-        const whatIfDSL = currentTab?.editorState?.whatIfDSL || null;
-        const { scenarios: captured, what_if_dsl } = captureTabScenariosToRecipe({
-          tabId: liveTabId,
-          currentDSL: currentDSL || '',
-          operations: operationsRef.current,
-          scenariosContext: scenariosContextRef.current as any,
-          whatIfDSL,
-        });
-        onUpdate(analysis.id, {
-          mode: 'custom' as const,
-          recipe: { ...analysis.recipe, scenarios: captured, analysis: { ...analysis.recipe.analysis, what_if_dsl } },
-        } as any);
-      }
+      if (!liveTabId || !scenariosContextRef.current) return;
+      const currentTab = tabsRef.current.find(t => t.id === liveTabId);
+      const whatIfDSL = currentTab?.editorState?.whatIfDSL || null;
+      captured = captureTabScenariosToRecipe({
+        tabId: liveTabId,
+        currentDSL: currentDSL || '',
+        operations: operationsRef.current,
+        scenariosContext: scenariosContextRef.current as any,
+        whatIfDSL,
+      });
     }
+    advanceMode(clone, currentDSL || '', captured);
+    onUpdate(analysis.id, {
+      mode: clone.mode,
+      recipe: clone.recipe,
+    } as any);
   }, [analysis, onUpdate, tabId, currentDSL]);
 
   const handleOverlayToggle = useCallback((active: boolean) => {
@@ -494,6 +495,15 @@ function CanvasAnalysisNodeInner({ data, selected }: NodeProps<CanvasAnalysisNod
   }, [tabId, analysis.recipe?.analysis?.analytics_dsl, analysis.recipe?.analysis?.analysis_type]);
 
   const displayTitle = analysis.title || result?.analysis_name || analysis.recipe.analysis.analysis_type || 'Analysis';
+
+  // Graph for DSL editor in toolbar badge popover (autocomplete suggestions)
+  const graphForDsl = useGraphStore(s => s.graph);
+
+  const handleDslChange = useCallback((dsl: string) => {
+    onUpdate(analysis.id, {
+      recipe: { ...analysis.recipe, analysis: { ...analysis.recipe.analysis, analytics_dsl: dsl || undefined } },
+    });
+  }, [analysis.id, analysis.recipe, onUpdate]);
 
   // ── Stable callbacks for table/cards view (prevent re-renders from inline closures) ──
   const handleDisplayChangeBatch = useCallback((keyOrBatch: string | Record<string, any>, value?: any) => {
@@ -659,8 +669,8 @@ function CanvasAnalysisNodeInner({ data, selected }: NodeProps<CanvasAnalysisNod
           displayStyle={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}
           editStyle={{ minWidth: 0 }}
         />
-        <span className={`canvas-analysis-mode-badge${analysis.mode === 'live' && !analysis.chart_current_layer_dsl ? '' : ' custom'}`}>
-          {analysis.mode === 'live' && !analysis.chart_current_layer_dsl ? 'LIVE' : 'CUSTOM'}
+        <span className={`canvas-analysis-mode-badge canvas-analysis-mode-badge--${analysis.mode === 'live' && !analysis.chart_current_layer_dsl ? 'live' : analysis.mode}`}>
+          {analysis.mode === 'live' && !analysis.chart_current_layer_dsl ? 'LIVE' : analysis.mode === 'custom' ? 'CUSTOM' : 'FIXED'}
         </span>
         {hasAnalysisType && (loading || waitingForDeps) && <Loader2 size={12} style={{ animation: 'spin 1s linear infinite', flexShrink: 0 }} />}
         <span style={{ flex: 1 }} />
@@ -760,8 +770,8 @@ function CanvasAnalysisNodeInner({ data, selected }: NodeProps<CanvasAnalysisNod
             analysisTypeId={analysis.recipe?.analysis?.analysis_type}
             availableAnalyses={availableAnalyses}
             onAnalysisTypeChange={handleAnalysisTypeChange}
-            analysisLive={analysis.mode === 'live'}
-            onLiveToggle={handleLiveToggle}
+            analysisMode={analysis.mode}
+            onModeCycle={handleModeCycle}
             scenarioLayerItems={allScenarioLayerItems}
             onScenarioToggleVisibility={handleScenarioToggleVisibility}
             onScenarioCycleMode={handleScenarioCycleMode}
@@ -772,6 +782,8 @@ function CanvasAnalysisNodeInner({ data, selected }: NodeProps<CanvasAnalysisNod
             overlayColour={analysis.display?.subject_overlay_colour as string | undefined}
             onOverlayToggle={handleOverlayToggle}
             onOverlayColourChange={handleOverlayColourChange}
+            graph={graphForDsl}
+            onDslChange={handleDslChange}
             analysisId={analysis.id}
             onDelete={handleDeleteSelf}
             viewMode={analysis.view_mode as ViewMode | undefined}

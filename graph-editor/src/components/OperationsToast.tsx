@@ -263,6 +263,11 @@ function ListItem({ op, fade }: { op: Operation; fade: string }) {
           {op.error && (
             <span style={{ color: '#ef4444', marginLeft: 6 }}>{op.error}</span>
           )}
+          {isTerminal && op.action && (
+            <button className="ops-toast-action-btn" onClick={op.action.onClick}>
+              {op.action.label}
+            </button>
+          )}
         </div>
         {op.progress && op.progress.total > 0 && !isTerminal && (
           <div className="ops-toast-item-bar">
@@ -421,6 +426,11 @@ function CompletionRow({ op }: { op: Operation }) {
           <div key={i} className="ops-toast-completion-detail">{line}</div>
         ))}
         {op.error && <div className="ops-toast-completion-detail">{op.error}</div>}
+        {op.action && (
+          <button className="ops-toast-action-btn" onClick={op.action.onClick}>
+            {op.action.label}
+          </button>
+        )}
       </div>
     </div>
   );

@@ -1574,37 +1574,6 @@
 
 /* --- Colour swatches (overlay picker) --- */
 
-.cfp-colour-swatch {
-  width: 16px;
-  height: 16px;
-  border-radius: 3px;
-  border: 1px solid rgba(0, 0, 0, 0.12);
-  cursor: pointer;
-  padding: 0;
-  flex-shrink: 0;
-}
-
-.cfp-colour-swatch:hover {
-  transform: scale(1.15);
-}
-
-.cfp-colour-swatch--none {
-  background: var(--bg-secondary, #f3f4f6);
-  font-size: 8px;
-  line-height: 14px;
-  text-align: center;
-  color: var(--text-muted, #9ca3af);
-}
-
-[data-theme="dark"] .cfp-colour-swatch {
-  border-color: rgba(255, 255, 255, 0.12);
-}
-
-[data-theme="dark"] .cfp-colour-swatch--none {
-  background: rgba(255, 255, 255, 0.08);
-  color: #777;
-}
-
 .cfp-pill--danger {
   color: #dc2626;
 }
@@ -1823,6 +1792,11 @@
   font-weight: 600;
 }
 
+/* Colour swatch dot inside menu items */
+.cfp-menu-swatch {
+  display: inline-block; width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0;
+}
+
 .cfp-menu-item--danger {
   color: #dc2626;
 }
@@ -1832,6 +1806,20 @@
 }
 
 /* --- DSL preview (query context badge popover) --- */
+
+.cfp-popover--dsl {
+  min-width: 340px;
+  max-width: 480px;
+  padding: 0;
+  /* backdrop-filter creates a new containing block, which breaks Monaco's
+     fixedOverflowWidgets positioning for the suggest widget. Disable it here. */
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  background: rgba(255, 255, 255, 1);
+}
+[data-theme="dark"] .cfp-popover--dsl {
+  background: rgba(38, 38, 38, 1);
+}
 
 .cfp-popover:has(.cfp-dsl-preview) {
   max-width: 420px;
@@ -1915,75 +1903,7 @@
   color: #aaa;
 }
 
-/* --- Live/Custom toggle (shared between toolbar popover and props panel) --- */
-/* ON = Custom (matches CollapsibleSection toggle convention) */
-
-.cfp-lc-toggle {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  cursor: pointer;
-  user-select: none;
-}
-
-.cfp-lc-toggle__track {
-  position: relative;
-  width: 28px;
-  height: 16px;
-  border-radius: 8px;
-  background: #d1d5db;
-  transition: background 0.15s ease;
-  flex-shrink: 0;
-}
-
-.cfp-lc-toggle__track.on {
-  background: var(--accent-colour, #3b82f6);
-}
-
-.cfp-lc-toggle__thumb {
-  position: absolute;
-  top: 2px;
-  left: 2px;
-  width: 12px;
-  height: 12px;
-  border-radius: 50%;
-  background: #fff;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
-  transition: left 0.15s ease;
-}
-
-.cfp-lc-toggle__track.on .cfp-lc-toggle__thumb {
-  left: 14px;
-}
-
-.cfp-lc-toggle__label {
-  font-size: 10px;
-  color: var(--text-muted, #9ca3af);
-  line-height: 1;
-  white-space: nowrap;
-  transition: color 0.15s ease, font-weight 0.15s ease;
-}
-
-.cfp-lc-toggle__label.active {
-  font-weight: 600;
-  color: var(--text-primary, #374151);
-}
-
-[data-theme="dark"] .cfp-lc-toggle__track {
-  background: #555;
-}
-
-[data-theme="dark"] .cfp-lc-toggle__thumb {
-  background: #e0e0e0;
-}
-
-[data-theme="dark"] .cfp-lc-toggle__label {
-  color: #777;
-}
-
-[data-theme="dark"] .cfp-lc-toggle__label.active {
-  color: #e0e0e0;
-}
+/* (Old cfp-lc-toggle binary switch removed — replaced by cfp-mode-cycle tristate button) */
 
 [data-theme="dark"] .cfp-pill--danger {
   color: #f87171;
@@ -2221,20 +2141,112 @@
   box-shadow: 0 1px 3px rgba(0,0,0,0.3), 0 4px 12px rgba(0,0,0,0.25) !important;
 }
 
-/* LIVE / CUSTOM mode badge in title bar */
+/* LIVE / CUSTOM / FIXED mode badge in title bar — matches ModeTrack active stop style */
 .canvas-analysis-mode-badge {
-  font-size: 7px;
-  padding: 1px 4px;
-  border-radius: 2px;
-  font-weight: 500;
+  font-size: 8px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  padding: 1px 6px;
+  border-radius: 6px;
   flex-shrink: 0;
-  color: var(--text-muted, #9ca3af);
-  background: transparent;
-  border: 1px solid var(--border-primary, #e5e7eb);
+  background: rgba(75, 85, 99, 0.15);
+  color: #6b7280;
+  border: none;
 }
-.canvas-analysis-mode-badge.custom {
-  border-style: dashed;
-  color: var(--text-secondary, #6b7280);
+[data-theme="dark"] .canvas-analysis-mode-badge {
+  background: rgba(156, 163, 175, 0.25);
+  color: #ccc;
+}
+
+/* --- Mode track (shift-stick tristate indicator) --- */
+.cfp-mode-track {
+  display: inline-flex;
+  align-items: center;
+  width: 90px;
+  height: 18px;
+  gap: 0;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  user-select: none;
+  line-height: 1;
+  outline: none;
+  justify-content: center;
+}
+/* Line connecting stops */
+.cfp-mode-track__line {
+  width: 10px;
+  height: 2px;
+  background: #d1d5db;
+  flex-shrink: 0;
+}
+/* Stop: all labels always in DOM, hidden via max-width when inactive */
+.cfp-mode-track__stop {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  border-radius: 9px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  transition: max-width 0.2s ease, padding 0.2s ease, background 0.2s ease, color 0.2s ease, height 0.2s ease;
+}
+/* Inactive: collapse to dot */
+.cfp-mode-track__stop--inactive {
+  max-width: 7px;
+  height: 7px;
+  padding: 0;
+  background: #d1d5db;
+  color: transparent;
+}
+/* Active: expand to pill — light grey fill */
+.cfp-mode-track__stop--active {
+  max-width: 70px;
+  height: 18px;
+  padding: 3px 10px;
+  background: rgba(75, 85, 99, 0.2);
+  color: #4b5563;
+}
+
+/* ── Hover preview (JS-managed .cfp-mode-track--previewing class) ── */
+/* Collapse current active pill to dot */
+.cfp-mode-track--previewing .cfp-mode-track__stop--active {
+  max-width: 7px; height: 7px; padding: 0; color: transparent; background: #d1d5db;
+}
+/* Live → preview Custom */
+.cfp-mode-track--live.cfp-mode-track--previewing .cfp-mode-track__stop--pos-custom {
+  max-width: 70px; height: 18px; padding: 3px 10px; background: transparent; color: #9ca3af; border: 1px solid #9ca3af;
+}
+/* Custom → preview Fixed */
+.cfp-mode-track--custom.cfp-mode-track--previewing .cfp-mode-track__stop--pos-fixed {
+  max-width: 70px; height: 18px; padding: 3px 10px; background: transparent; color: #9ca3af; border: 1px solid #9ca3af;
+}
+/* Fixed → preview Live */
+.cfp-mode-track--fixed.cfp-mode-track--previewing .cfp-mode-track__stop--pos-live {
+  max-width: 70px; height: 18px; padding: 3px 10px; background: transparent; color: #9ca3af; border: 1px solid #9ca3af;
+}
+
+/* Dark theme */
+[data-theme="dark"] .cfp-mode-track__stop--inactive { background: #555; }
+[data-theme="dark"] .cfp-mode-track__line { background: #444; }
+[data-theme="dark"] .cfp-mode-track__stop--active { background: rgba(156, 163, 175, 0.25); color: #ccc; }
+[data-theme="dark"] .cfp-mode-track--previewing .cfp-mode-track__stop--active { background: #555; }
+/* Dark hover previews */
+[data-theme="dark"] .cfp-mode-track--live.cfp-mode-track--previewing .cfp-mode-track__stop--pos-custom,
+[data-theme="dark"] .cfp-mode-track--custom.cfp-mode-track--previewing .cfp-mode-track__stop--pos-fixed,
+[data-theme="dark"] .cfp-mode-track--fixed.cfp-mode-track--previewing .cfp-mode-track__stop--pos-live {
+  background: transparent; color: #888; border: 1px solid #666;
+}
+
+/* CollapsibleSection headerRight container */
+.collapsible-section-header-right {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
 }
 
 /* Title bar action buttons — nearly invisible until node hover */

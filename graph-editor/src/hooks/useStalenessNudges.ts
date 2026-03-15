@@ -37,7 +37,7 @@ export interface UseStalenessNudgesResult {
 export function useStalenessNudges(): UseStalenessNudgesResult {
   const { state: navState, isLoading: navigatorIsLoading } = useNavigatorContext();
   const tabContext = useTabContext() as any;
-  const { pullAll, conflictModal } = usePullAll();
+  const { pullAll, conflictModal, openConflictModal } = usePullAll();
   const fileRegistry = useFileRegistry();
   const tabOperations = tabContext.operations;
   const shareMode = useShareModeOptional();
@@ -629,6 +629,7 @@ export function useStalenessNudges(): UseStalenessNudgesResult {
               repository,
               branch,
               remoteSha: detectedRemoteSha,
+              onConflicts: (conflicts) => openConflictModal(conflicts),
               onDismiss: () => {
                 // Record SHA as dismissed so we don't re-prompt until next commit.
                 if (detectedRemoteSha) {

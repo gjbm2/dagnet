@@ -8,7 +8,7 @@
 import React, { useState, useRef, useCallback, useEffect, useLayoutEffect } from 'react';
 import { createPortal } from 'react-dom';
 
-export function CfpPopover({ icon, title, label, children, active, activeColour, onClick }: {
+export function CfpPopover({ icon, title, label, children, active, activeColour, onClick, trigger, sticky, popoverClassName }: {
   icon: React.ReactNode;
   title: string;
   label?: string;
@@ -16,8 +16,15 @@ export function CfpPopover({ icon, title, label, children, active, activeColour,
   active?: boolean;
   activeColour?: string;
   onClick?: () => void;
+  /** Custom trigger element — replaces the default pill button entirely. */
+  trigger?: React.ReactNode;
+  /** When true, clicking inside the popover pins it open; closes on outside click or Escape. */
+  sticky?: boolean;
+  /** Extra class(es) appended to the popover container div. */
+  popoverClassName?: string;
 }) {
   const [open, setOpen] = useState(false);
+  const [pinned, setPinned] = useState(false);
   const wrapRef = useRef<HTMLSpanElement>(null);
   const popRef = useRef<HTMLDivElement>(null);
   const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -29,10 +36,32 @@ export function CfpPopover({ icon, title, label, children, active, activeColour,
   }, []);
 
   const scheduleHide = useCallback(() => {
+    if (pinned) return;
     hideTimer.current = setTimeout(() => setOpen(false), 200);
+  }, [pinned]);
+
+  const close = useCallback(() => {
+    setPinned(false);
+    setOpen(false);
+    if (hideTimer.current) { clearTimeout(hideTimer.current); hideTimer.current = null; }
   }, []);
 
   useEffect(() => () => { if (hideTimer.current) clearTimeout(hideTimer.current); }, []);
+
+  // Close on outside click or Escape when pinned
+  useEffect(() => {
+    if (!pinned) return;
+    const handleKey = (e: KeyboardEvent) => { if (e.key === 'Escape') close(); };
+    const handleClick = (e: MouseEvent) => {
+      if (popRef.current && !popRef.current.contains(e.target as Node) &&
+          wrapRef.current && !wrapRef.current.contains(e.target as Node)) {
+        close();
+      }
+    };
+    document.addEventListener('keydown', handleKey);
+    document.addEventListener('mousedown', handleClick);
+    return () => { document.removeEventListener('keydown', handleKey); document.removeEventListener('mousedown', handleClick); };
+  }, [pinned, close]);
 
   useLayoutEffect(() => {
     if (!open || !wrapRef.current) return;
@@ -49,6 +78,7 @@ export function CfpPopover({ icon, title, label, children, active, activeColour,
   }, [open]);
 
   const isActive = active || open;
+  const popCls = ['cfp-popover', popoverClassName].filter(Boolean).join(' ');
 
   return (
     <span
@@ -57,25 +87,27 @@ export function CfpPopover({ icon, title, label, children, active, activeColour,
       onMouseEnter={show}
       onMouseLeave={scheduleHide}
     >
-      <button
-        type="button"
-        className={`cfp-pill${isActive ? ' active' : ''}`}
-        style={activeColour ? { color: activeColour } : undefined}
-        title={title}
-        onClick={onClick}
-      >
-        {icon}
-        {label && <span className="cfp-group-label" style={{ padding: '0 0 0 2px' }}>{label}</span>}
-      </button>
+      {trigger || (
+        <button
+          type="button"
+          className={`cfp-pill${isActive ? ' active' : ''}`}
+          style={activeColour ? { color: activeColour } : undefined}
+          title={title}
+          onClick={onClick}
+        >
+          {icon}
+          {label && <span className="cfp-group-label" style={{ padding: '0 0 0 2px' }}>{label}</span>}
+        </button>
+      )}
       {open && createPortal(
         <div
           ref={popRef}
-          className="cfp-popover"
+          className={popCls}
           style={pos}
           onMouseEnter={show}
           onMouseLeave={scheduleHide}
           onClick={(e) => e.stopPropagation()}
-          onPointerDown={(e) => e.stopPropagation()}
+          onPointerDown={(e) => { e.stopPropagation(); if (sticky && !pinned) setPinned(true); }}
         >
           {children}
         </div>,

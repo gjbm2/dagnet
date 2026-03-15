@@ -14,7 +14,7 @@ import { useTabContext } from '../contexts/TabContext';
 import { useGraphStore } from '../contexts/GraphStoreContext';
 import { useScenariosContextOptional } from '../contexts/ScenariosContext';
 import { captureTabScenariosToRecipe } from '../services/captureTabScenariosService';
-import { mutateCanvasAnalysisGraph } from '../services/canvasAnalysisMutationService';
+import { mutateCanvasAnalysisGraph, advanceMode } from '../services/canvasAnalysisMutationService';
 import type { CanvasAnalysis } from '../types';
 import type { ScenarioLayerListProps } from '../components/panels/ScenarioLayerList';
 
@@ -65,17 +65,12 @@ export function useCanvasAnalysisScenarioCallbacks({
     const captured = captureScenarios();
     if (!captured) return null;
     const nextGraph = mutateCanvasAnalysisGraph(graph, analysisId, (a) => {
-      a.mode = 'custom';
-      a.recipe = {
-        ...a.recipe,
-        scenarios: captured.scenarios,
-        analysis: { ...a.recipe.analysis, what_if_dsl: captured.what_if_dsl },
-      };
+      advanceMode(a, graphStore.currentDSL || '', captured);
     });
     if (!nextGraph) return null;
     setGraph(nextGraph);
-    return captured.scenarios;
-  }, [analysis?.mode, analysisId, graph, setGraph, captureScenarios]);
+    return nextGraph.canvasAnalyses?.find((a: any) => a.id === analysisId)?.recipe?.scenarios || null;
+  }, [analysis?.mode, analysisId, graph, setGraph, captureScenarios, graphStore]);
 
   const mutateRecipeScenarios = useCallback((mutator: (a: any) => void, label: string) => {
     if (!analysis) return;
@@ -83,19 +78,14 @@ export function useCanvasAnalysisScenarioCallbacks({
       if (analysis.mode === 'live') {
         const captured = captureScenarios();
         if (!captured) return;
-        a.mode = 'custom';
-        a.recipe = {
-          ...a.recipe,
-          scenarios: captured.scenarios,
-          analysis: { ...a.recipe.analysis, what_if_dsl: captured.what_if_dsl },
-        };
+        advanceMode(a, graphStore.currentDSL || '', captured);
       }
       mutator(a);
     });
     if (!nextGraph) return;
     setGraph(nextGraph);
     saveHistoryState(label);
-  }, [analysis?.mode, analysis, analysisId, graph, setGraph, saveHistoryState, captureScenarios]);
+  }, [analysis?.mode, analysis, analysisId, graph, setGraph, saveHistoryState, captureScenarios, graphStore]);
 
   const onRename = useCallback((id: string, newName: string) => {
     mutateRecipeScenarios((a) => {

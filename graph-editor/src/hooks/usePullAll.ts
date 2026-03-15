@@ -29,6 +29,8 @@ interface UsePullAllResult {
   pullAll: () => Promise<{ success: boolean; conflicts?: ConflictFile[] }>;
   /** Render this in your component to show conflict modal when needed */
   conflictModal: React.ReactNode;
+  /** Open the conflict resolution modal with externally-supplied conflicts (e.g. from auto-pull). */
+  openConflictModal: (conflicts: ConflictFile[]) => void;
 }
 
 /**
@@ -189,8 +191,13 @@ export function usePullAll(): UsePullAllResult {
 
       if (result.conflicts && result.conflicts.length > 0) {
         operationRegistryService.setLabel(opId, `Pull completed with ${result.conflicts.length} conflict(s)`);
-        operationRegistryService.complete(opId, 'error', `${result.conflicts.length} conflict(s) need resolution`);
         const typedConflicts = result.conflicts as ConflictFile[];
+        operationRegistryService.complete(
+          opId,
+          'error',
+          `${result.conflicts.length} conflict(s) need resolution`,
+          { label: 'Resolve conflicts', onClick: () => openConflictModal(typedConflicts) },
+        );
         setConflicts(typedConflicts);
         setIsConflictModalOpen(true);
         return { success: true, conflicts: typedConflicts };
@@ -201,7 +208,12 @@ export function usePullAll(): UsePullAllResult {
       }
     } catch (error) {
       if ((error as any)?.name === 'GitAuthError') {
-        operationRegistryService.complete(opId, 'error', 'Authentication expired');
+        operationRegistryService.complete(
+          opId,
+          'error',
+          'Authentication expired',
+          { label: 'Sign in', onClick: () => dispatchGitAuthExpired() },
+        );
         dispatchGitAuthExpired();
         return { success: false };
       }
@@ -232,5 +244,15 @@ export function usePullAll(): UsePullAllResult {
     onCancel: () => resolveForceReplace(false),
   });
   
-  return { isPulling, pullAll, conflictModal: React.createElement(React.Fragment, null, conflictModal as any, forceReplaceModal) };
+  const openConflictModal = useCallback((externalConflicts: ConflictFile[]) => {
+    setConflicts(externalConflicts);
+    setIsConflictModalOpen(true);
+  }, []);
+
+  return {
+    isPulling,
+    pullAll,
+    conflictModal: React.createElement(React.Fragment, null, conflictModal as any, forceReplaceModal),
+    openConflictModal,
+  };
 }

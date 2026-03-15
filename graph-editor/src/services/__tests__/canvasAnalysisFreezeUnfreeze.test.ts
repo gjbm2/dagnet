@@ -12,6 +12,8 @@
 
 import { describe, it, expect } from 'vitest';
 import { captureTabScenariosToRecipe } from '../captureTabScenariosService';
+import { advanceMode, nextMode } from '../canvasAnalysisMutationService';
+import { augmentDSLWithConstraint, normalizeConstraintString } from '../../lib/queryDSL';
 import type { CanvasAnalysis } from '../../types';
 
 const makeOperations = (visibleIds: string[], modes: Record<string, 'f+e' | 'f' | 'e'> = {}) => ({
@@ -165,5 +167,159 @@ describe('Canvas analysis chart-owned scenario CRUD', () => {
       s.scenario_id === 'sc-1' ? { ...s, effective_dsl: 'window(-7d:).context(channel:meta)' } : s
     );
     expect(updated.find(s => s.scenario_id === 'sc-1')!.effective_dsl).toBe('window(-7d:).context(channel:meta)');
+  });
+});
+
+// ============================================================
+// advanceMode — tristate transition logic (Phase 2)
+// ============================================================
+
+describe('advanceMode — tristate transitions', () => {
+  describe('nextMode helper', () => {
+    it('should cycle live → custom → fixed → live', () => {
+      expect(nextMode('live')).toBe('custom');
+      expect(nextMode('custom')).toBe('fixed');
+      expect(nextMode('fixed')).toBe('live');
+    });
+  });
+
+  describe('Live → Custom (rebase to delta DSLs)', () => {
+    it('should set mode to custom and rebase captured scenarios to deltas', () => {
+      const analysis = makeLiveAnalysis();
+      const currentDSL = 'window(-7d:).context(channel:google)';
+      const captured = {
+        scenarios: [
+          { scenario_id: 'current', effective_dsl: currentDSL, name: 'Current', colour: '#3b82f6', is_live: true },
+          { scenario_id: 'sc-1', effective_dsl: 'window(-30d:).context(channel:google)', name: 'Google 30d', colour: '#EC4899', is_live: true },
+        ],
+        what_if_dsl: 'case(test:treatment)',
+      };
+
+      advanceMode(analysis, currentDSL, captured);
+
+      expect(analysis.mode).toBe('custom');
+      expect(analysis.recipe.analysis.what_if_dsl).toBe('case(test:treatment)');
+
+      const currentScenario = analysis.recipe.scenarios!.find(s => s.scenario_id === 'current')!;
+      // Current scenario's absolute DSL equals currentDSL → empty delta
+      expect(currentScenario.effective_dsl).toBeUndefined(); // empty delta stored as undefined
+      expect(currentScenario.is_live).toBe(false);
+
+      const sc1 = analysis.recipe.scenarios!.find(s => s.scenario_id === 'sc-1')!;
+      // sc-1 differs from currentDSL in window: -30d vs -7d → delta should contain window(-30d:)
+      expect(sc1.effective_dsl).toBe('window(-30d:)');
+      expect(sc1.is_live).toBe(false);
+
+      // Round-trip: augment(currentDSL, delta) should reproduce the original absolute DSL
+      const reconstructed = augmentDSLWithConstraint(currentDSL, sc1.effective_dsl!);
+      expect(reconstructed).toBe(normalizeConstraintString('window(-30d:).context(channel:google)'));
+    });
+
+    it('should be a no-op if captured is null', () => {
+      const analysis = makeLiveAnalysis();
+      advanceMode(analysis, 'window(-7d:)', null);
+      expect(analysis.mode).toBe('live');
+    });
+
+    it('should handle scenario with context key removal during rebase', () => {
+      const analysis = makeLiveAnalysis();
+      const currentDSL = 'window(-7d:).context(channel:google).context(region:uk)';
+      const captured = {
+        scenarios: [
+          { scenario_id: 'sc-1', effective_dsl: 'window(-7d:).context(channel:google)', name: 'No region', colour: '#f00', is_live: true },
+        ],
+      };
+
+      advanceMode(analysis, currentDSL, captured);
+
+      const sc1 = analysis.recipe.scenarios!.find(s => s.scenario_id === 'sc-1')!;
+      // Delta should contain context(region:) — per-key clear for the removed key
+      expect(sc1.effective_dsl).toBe('context(region:)');
+
+      // Round-trip
+      const reconstructed = augmentDSLWithConstraint(currentDSL, sc1.effective_dsl!);
+      expect(reconstructed).toBe(normalizeConstraintString('window(-7d:).context(channel:google)'));
+    });
+  });
+
+  describe('Custom → Fixed (bake deltas into absolute DSLs)', () => {
+    it('should set mode to fixed and compose deltas into absolutes', () => {
+      const analysis: CanvasAnalysis = {
+        ...makeLiveAnalysis(),
+        mode: 'custom',
+        recipe: {
+          analysis: { analysis_type: 'conversion_funnel', analytics_dsl: 'from(a).to(b)' },
+          scenarios: [
+            { scenario_id: 'current', name: 'Current', colour: '#3b82f6', effective_dsl: undefined }, // empty delta
+            { scenario_id: 'sc-1', name: '30d', colour: '#EC4899', effective_dsl: 'window(-30d:)' }, // delta: change window
+          ],
+        },
+      };
+
+      const currentDSL = 'window(-7d:).context(channel:google)';
+      advanceMode(analysis, currentDSL, null);
+
+      expect(analysis.mode).toBe('fixed');
+
+      const currentScenario = analysis.recipe.scenarios!.find(s => s.scenario_id === 'current')!;
+      // Empty delta → baked to normalised currentDSL
+      expect(currentScenario.effective_dsl).toBe(normalizeConstraintString(currentDSL));
+
+      const sc1 = analysis.recipe.scenarios!.find(s => s.scenario_id === 'sc-1')!;
+      // delta window(-30d:) on base window(-7d:).context(channel:google) → window(-30d:).context(channel:google)
+      expect(sc1.effective_dsl).toBe(normalizeConstraintString('window(-30d:).context(channel:google)'));
+    });
+  });
+
+  describe('Fixed → Live (clear scenarios)', () => {
+    it('should set mode to live and clear scenarios and what_if_dsl', () => {
+      const analysis: CanvasAnalysis = {
+        ...makeLiveAnalysis(),
+        mode: 'fixed',
+        recipe: {
+          analysis: { analysis_type: 'conversion_funnel', analytics_dsl: 'from(a).to(b)', what_if_dsl: 'case(test:treatment)' },
+          scenarios: [
+            { scenario_id: 'current', effective_dsl: 'window(-7d:)', name: 'Current', colour: '#3b82f6' },
+          ],
+        },
+      };
+
+      advanceMode(analysis, 'window(-7d:)', null);
+
+      expect(analysis.mode).toBe('live');
+      expect(analysis.recipe.scenarios).toBeUndefined();
+      expect(analysis.recipe.analysis.what_if_dsl).toBeUndefined();
+      // chart_current_layer_dsl should be preserved (advanceMode doesn't touch it)
+      expect(analysis.chart_current_layer_dsl).toBe('context(device:mobile)');
+    });
+  });
+
+  describe('Full cycle round-trip', () => {
+    it('should preserve scenario semantics through Live → Custom → Fixed → Live', () => {
+      const analysis = makeLiveAnalysis();
+      const currentDSL = 'window(-7d:).context(channel:google)';
+
+      // Step 1: Live → Custom
+      const captured = {
+        scenarios: [
+          { scenario_id: 'current', effective_dsl: currentDSL, name: 'Current', colour: '#3b82f6', is_live: true },
+          { scenario_id: 'sc-1', effective_dsl: 'window(-30d:).context(channel:meta)', name: 'Meta 30d', colour: '#EC4899', is_live: true },
+        ],
+      };
+      advanceMode(analysis, currentDSL, captured);
+      expect(analysis.mode).toBe('custom');
+      const sc1Delta = analysis.recipe.scenarios!.find(s => s.scenario_id === 'sc-1')!.effective_dsl;
+
+      // Step 2: Custom → Fixed
+      advanceMode(analysis, currentDSL, null);
+      expect(analysis.mode).toBe('fixed');
+      const sc1Absolute = analysis.recipe.scenarios!.find(s => s.scenario_id === 'sc-1')!.effective_dsl;
+      expect(sc1Absolute).toBe(normalizeConstraintString('window(-30d:).context(channel:meta)'));
+
+      // Step 3: Fixed → Live
+      advanceMode(analysis, currentDSL, null);
+      expect(analysis.mode).toBe('live');
+      expect(analysis.recipe.scenarios).toBeUndefined();
+    });
   });
 });

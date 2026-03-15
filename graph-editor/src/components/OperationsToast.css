@@ -133,6 +133,24 @@
   color: var(--text-primary, #e0e0e0);
 }
 
+/* Action button — shown on terminal operations that need user engagement */
+.ops-toast-action-btn {
+  background: none;
+  border: 1px solid #f59e0b;
+  color: #f59e0b;
+  font-size: 11px;
+  cursor: pointer;
+  padding: 1px 8px;
+  border-radius: 3px;
+  margin-left: 8px;
+  white-space: nowrap;
+}
+
+.ops-toast-action-btn:hover {
+  background: rgba(245, 158, 11, 0.15);
+  color: #fbbf24;
+}
+
 /* Detail lines (below label, monospace) */
 .ops-toast-details {
   margin-bottom: 6px;

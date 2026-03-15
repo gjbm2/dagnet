@@ -421,7 +421,23 @@ Examples:
 
 **References updated (17 files):** All `.live` → `.mode` across components, hooks, services, and tests. Boolean checks → string comparisons. Object literals: `live: true` → `mode: 'live'`, `live: false` → `mode: 'fixed'` or `mode: 'custom'` depending on context.
 
-### Phase 2–7: Not yet started
+### Phase 2: Transition Logic — DONE (14-Mar-26)
+
+**`src/services/canvasAnalysisMutationService.ts`:** Added `nextMode()` (cycle helper) and `advanceMode()` (centralised transition logic). Live→Custom: rebases captured absolute DSLs to deltas via `computeRebaseDelta`, sets `is_live: false`. Custom→Fixed: bakes deltas into absolutes via `augmentDSLWithConstraint`. Fixed→Live: clears `recipe.scenarios` and `recipe.analysis.what_if_dsl`.
+
+**`src/components/nodes/CanvasAnalysisNode.tsx`:** Replaced `handleLiveToggle(boolean)` with `handleModeCycle()` calling `advanceMode`. Mode badge updated to 3 states (LIVE/CUSTOM/FIXED). Props changed: `analysisLive`/`onLiveToggle` → `analysisMode`/`onModeCycle`.
+
+**`src/components/charts/AnalysisChartContainer.tsx`:** Binary slider replaced with cycling button (Zap/Layers/Lock icons). Props: `analysisLive`/`onLiveToggle` → `analysisMode`/`onModeCycle`.
+
+**`src/components/PropertiesPanel.tsx`:** Data Source section: binary checkbox removed, replaced with `badge` prop showing mode name and cycling button inside section content. "Add scenario" auto-promotion uses `advanceMode`.
+
+**`src/hooks/useCanvasAnalysisScenarioCallbacks.ts`:** `promoteToCustom` and `mutateRecipeScenarios` auto-promotion now delegate to `advanceMode` instead of inline mode/recipe mutation.
+
+**`src/styles/components-dark.css`:** Removed `.cfp-lc-toggle` binary slider styles. Added `.cfp-mode-cycle` button with `--live`/`--custom`/`--fixed` variants. Updated `.canvas-analysis-mode-badge` with per-mode modifier classes.
+
+**Tests:** 8 new tests in `canvasAnalysisFreezeUnfreeze.test.ts` — `nextMode` cycle, Live→Custom rebase (with round-trip), no-op on null captured, context key removal during rebase, Custom→Fixed bake, Fixed→Live clear, full cycle round-trip. All passing (14 tests in file, 134 total).
+
+### Phase 3–7: Not yet started
 
 ---
 

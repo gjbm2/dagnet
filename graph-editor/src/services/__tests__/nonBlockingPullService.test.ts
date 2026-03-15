@@ -24,6 +24,13 @@ vi.mock('../repositoryOperationsService', () => ({
   },
 }));
 
+// gitService: external boundary. We mock dispatchGitAuthExpired to verify it's
+// called on auth errors without triggering real CustomEvents.
+const mockDispatchGitAuthExpired = vi.fn();
+vi.mock('../gitService', () => ({
+  dispatchGitAuthExpired: (...args: any[]) => mockDispatchGitAuthExpired(...args),
+}));
+
 // operationRegistryService and countdownService: REAL.
 // The integration between pull, registry, and countdown is where bugs live.
 
@@ -53,6 +60,7 @@ describe('nonBlockingPullService', () => {
     vi.resetModules();
     vi.useFakeTimers();
     mockPullLatest.mockReset();
+    mockDispatchGitAuthExpired.mockReset();
     // Default: successful pull with no conflicts.
     mockPullLatest.mockResolvedValue({ success: true, conflicts: [] });
   });
@@ -290,6 +298,131 @@ describe('nonBlockingPullService', () => {
     // Should have ticked down from 10 to ~7.
     expect(op!.countdownSecondsRemaining).toBeLessThanOrEqual(7);
     expect(op!.countdownSecondsRemaining).toBeGreaterThanOrEqual(6);
+  });
+
+  // ---------- Conflict action: onConflicts callback and toast action ----------
+
+  it('should call onConflicts callback immediately with conflict data when conflicts are detected', async () => {
+    const conflictData = [
+      { fileId: 'param-a', fileName: 'a.yaml', hasConflicts: true },
+      { fileId: 'param-b', fileName: 'b.yaml', hasConflicts: true },
+    ];
+    mockPullLatest.mockResolvedValue({ success: true, conflicts: conflictData });
+
+    const { startNonBlockingPull } = await freshModules();
+    const onConflicts = vi.fn();
+
+    startNonBlockingPull({
+      repository: 'r', branch: 'b', countdownSeconds: 1,
+      onConflicts,
+    });
+
+    vi.advanceTimersByTime(1000);
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(0);
+
+    // Callback must fire with the exact conflict array — this is what opens the modal.
+    expect(onConflicts).toHaveBeenCalledTimes(1);
+    expect(onConflicts).toHaveBeenCalledWith(conflictData);
+  });
+
+  it('should attach a "Resolve conflicts" action to the operation when onConflicts is provided', async () => {
+    mockPullLatest.mockResolvedValue({
+      success: true,
+      conflicts: [{ fileId: 'param-x', fileName: 'x.yaml' }],
+    });
+
+    const { registry, startNonBlockingPull } = await freshModules();
+    const onConflicts = vi.fn();
+
+    const opId = startNonBlockingPull({
+      repository: 'r', branch: 'b', countdownSeconds: 1,
+      onConflicts,
+    })!;
+
+    vi.advanceTimersByTime(1000);
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(0);
+
+    const op = registry.get(opId);
+    expect(op!.action).toBeDefined();
+    expect(op!.action!.label).toBe('Resolve conflicts');
+
+    // Clicking the action should re-invoke onConflicts (re-opens modal after dismiss).
+    onConflicts.mockClear();
+    op!.action!.onClick();
+    expect(onConflicts).toHaveBeenCalledTimes(1);
+    expect(onConflicts).toHaveBeenCalledWith([{ fileId: 'param-x', fileName: 'x.yaml' }]);
+  });
+
+  it('should NOT attach an action when onConflicts is not provided (backward compat)', async () => {
+    mockPullLatest.mockResolvedValue({
+      success: true,
+      conflicts: [{ fileId: 'param-x', fileName: 'x.yaml' }],
+    });
+
+    const { registry, startNonBlockingPull } = await freshModules();
+
+    const opId = startNonBlockingPull({ repository: 'r', branch: 'b', countdownSeconds: 1 })!;
+
+    vi.advanceTimersByTime(1000);
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(0);
+
+    const op = registry.get(opId);
+    expect(op!.status).toBe('error');
+    expect(op!.action).toBeUndefined();
+  });
+
+  // ---------- GitAuthError handling ----------
+
+  it('should dispatch auth expired and attach "Sign in" action on GitAuthError', async () => {
+    const authError = new Error('Token expired');
+    (authError as any).name = 'GitAuthError';
+    mockPullLatest.mockRejectedValue(authError);
+
+    const { registry, startNonBlockingPull } = await freshModules();
+
+    const opId = startNonBlockingPull({ repository: 'r', branch: 'b', countdownSeconds: 1 })!;
+
+    vi.advanceTimersByTime(1000);
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(0);
+
+    const op = registry.get(opId);
+    expect(op!.status).toBe('error');
+    expect(op!.error).toBe('Authentication expired');
+
+    // dispatchGitAuthExpired must have been called immediately.
+    expect(mockDispatchGitAuthExpired).toHaveBeenCalledTimes(1);
+
+    // Action button must allow re-triggering auth modal.
+    expect(op!.action).toBeDefined();
+    expect(op!.action!.label).toBe('Sign in');
+
+    mockDispatchGitAuthExpired.mockClear();
+    op!.action!.onClick();
+    expect(mockDispatchGitAuthExpired).toHaveBeenCalledTimes(1);
+  });
+
+  it('should distinguish GitAuthError from generic pull errors', async () => {
+    const genericError = new Error('Network timeout');
+    mockPullLatest.mockRejectedValue(genericError);
+
+    const { registry, startNonBlockingPull } = await freshModules();
+
+    const opId = startNonBlockingPull({ repository: 'r', branch: 'b', countdownSeconds: 1 })!;
+
+    vi.advanceTimersByTime(1000);
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(0);
+
+    const op = registry.get(opId);
+    expect(op!.status).toBe('error');
+    expect(op!.error).toContain('Network timeout');
+    // Generic errors should NOT have an action or trigger auth flow.
+    expect(op!.action).toBeUndefined();
+    expect(mockDispatchGitAuthExpired).not.toHaveBeenCalled();
   });
 
   // ---------- Status transitions during pull ----------

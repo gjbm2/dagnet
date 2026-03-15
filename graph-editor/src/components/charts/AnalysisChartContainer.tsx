@@ -3,8 +3,10 @@ import ReactECharts from 'echarts-for-react';
 import {
   Download, RefreshCcw, Trash2, MoreHorizontal, Sliders,
   BarChart3, Code, ExternalLink, ClipboardCopy,
-  Zap, Lock, Crosshair, ChevronDown, Plus, Eye, EyeOff,
+  Layers, Crosshair, ChevronDown, Plus, Eye, EyeOff,
 } from 'lucide-react';
+import { ModeTrack } from '../ModeTrack';
+import { QueryExpressionEditor } from '../QueryExpressionEditor';
 
 import type { AnalysisResult, AvailableAnalysis } from '../../lib/graphComputeClient';
 import { getDisplaySettings, getDisplaySettingsForSurface, resolveDisplaySetting, buildContextMenuSettingItems } from '../../lib/analysisDisplaySettingsRegistry';
@@ -28,7 +30,7 @@ import { LayoutGrid, Table2 } from 'lucide-react';
 import { AnalysisInfoCard } from '../analytics/AnalysisInfoCard';
 import { renderTraySettings } from './settingPillRenderer';
 import { CfpPopover } from './CfpPopover';
-import { ColourSelector, OVERLAY_PRESET_COLOURS } from '../ColourSelector';
+import { OVERLAY_PRESET_COLOURS } from '../ColourSelector';
 
 type ChartKind = 'funnel' | 'bridge' | 'histogram' | 'daily_conversions' | 'cohort_maturity' | 'lag_fit' | 'bar_grouped' | 'pie' | 'time_series' | 'info';
 
@@ -110,10 +112,10 @@ export function AnalysisChartContainer(props: {
   availableAnalyses?: AvailableAnalysis[];
   /** Callback when user changes analysis type via the header dropdown */
   onAnalysisTypeChange?: (analysisTypeId: string) => void;
-  /** Whether the analysis is in live mode (vs custom/frozen) */
-  analysisLive?: boolean;
-  /** Toggle live/custom mode */
-  onLiveToggle?: (live: boolean) => void;
+  /** Current analysis mode (live/custom/fixed) */
+  analysisMode?: 'live' | 'custom' | 'fixed';
+  /** Cycle to the next mode: Live → Custom → Fixed → Live */
+  onModeCycle?: () => void;
   /** Scenario layer items for the toolbar scenarios popover */
   scenarioLayerItems?: ScenarioLayerItem[];
   /** Toggle scenario visibility in the toolbar popover */
@@ -156,6 +158,10 @@ export function AnalysisChartContainer(props: {
   onOpenAsTab?: () => void;
   /** Dump debug JSON to clipboard */
   onDumpDebug?: () => void;
+  /** Graph object for the QueryExpressionEditor in the DSL badge popover */
+  graph?: any;
+  /** Callback when the user edits the DSL in the toolbar badge popover */
+  onDslChange?: (dsl: string) => void;
   /** When provided, replaces the default chart/info content area (used for cards/table views). */
   children?: React.ReactNode;
   /** Force-disable ECharts load animations (e.g. hover preview satellites). */
@@ -440,6 +446,7 @@ export function AnalysisChartContainer(props: {
   }, [isDebugDailyConversions, echartsOption, props.analysisId]);
 
   const renderedCallbackFiredRef = useRef(false);
+  const overlayColourInputRef = useRef<HTMLInputElement>(null);
   const handleChartReady = useCallback((instance: any) => {
     // Fire onRendered once the ECharts instance has finished its first paint.
     // With suppressAnimation, 'finished' fires synchronously during setOption —
@@ -788,83 +795,92 @@ export function AnalysisChartContainer(props: {
           )
       )}
 
-      {/* --- Overlay toggle with colour picker (canvas only, guarded by prop) --- */}
+      {/* --- Overlay group --- */}
       {props.onOverlayToggle && (
-        <CfpPopover
-          icon={<Crosshair size={13} />}
-          title="Overlay connectors"
-          active={!!props.overlayActive}
-          activeColour={props.overlayActive ? props.overlayColour : undefined}
-          onClick={() => props.onOverlayToggle!(!props.overlayActive)}
-        >
-          <div style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '2px 0' }}>
-            <span className="cfp-group-label">Overlay</span>
-            <ColourSelector
-              compact
-              value={props.overlayActive ? (props.overlayColour || '#3b82f6') : ''}
-              presetColours={OVERLAY_PRESET_COLOURS}
-              showClear
-              onChange={(c) => props.onOverlayColourChange?.(c)}
-              onClear={() => props.onOverlayColourChange?.(null)}
+        <span className="cfp-pill-group">
+          <span className="cfp-group-label">Overlay</span>
+          <button
+            type="button"
+            className={`cfp-pill${props.overlayActive ? ' active' : ''}`}
+            style={props.overlayColour ? { color: props.overlayColour } : undefined}
+            title="Toggle overlay connectors"
+            onClick={() => props.onOverlayToggle!(!props.overlayActive)}
+          >
+            <Crosshair size={13} />
+          </button>
+          <CfpPopover
+            icon={<span className="cfp-menu-swatch" style={{ background: props.overlayColour || '#3b82f6' }} />}
+            title="Overlay colour"
+          >
+            {OVERLAY_PRESET_COLOURS.map(p => (
+              <button
+                key={p.value}
+                type="button"
+                className={`cfp-menu-item${props.overlayColour === p.value ? ' active' : ''}`}
+                onClick={() => props.onOverlayColourChange?.(p.value)}
+              >
+                <span className="cfp-menu-swatch" style={{ background: p.value }} />
+                {p.name}
+              </button>
+            ))}
+            <button
+              type="button"
+              className={`cfp-menu-item${props.overlayColour && !OVERLAY_PRESET_COLOURS.some(p => p.value === props.overlayColour) ? ' active' : ''}`}
+              onClick={() => overlayColourInputRef.current?.click()}
+            >
+              <span className="cfp-menu-swatch" style={{ background: props.overlayColour || '#888', border: '1px dashed #9CA3AF' }} />
+              Custom...
+            </button>
+            <input
+              ref={overlayColourInputRef}
+              type="color"
+              value={props.overlayColour || '#3b82f6'}
+              onChange={(e) => props.onOverlayColourChange?.(e.target.value)}
+              style={{ position: 'absolute', width: 1, height: 1, opacity: 0, pointerEvents: 'none' }}
             />
-          </div>
-        </CfpPopover>
+          </CfpPopover>
+        </span>
       )}
 
-      {/* --- Scenarios popover (shows when scenarios exist or live/custom toggle is available) --- */}
-      {(props.onLiveToggle || (props.scenarioLayerItems && props.scenarioLayerItems.length > 0)) && (
-        <CfpPopover
-          icon={<>{props.analysisLive ? <Zap size={13} /> : <Lock size={13} />}<ChevronDown size={9} /></>}
-          label={props.onLiveToggle ? (props.analysisLive ? 'Live' : 'Custom') : 'Scenarios'}
-          title={props.onLiveToggle
-            ? (props.analysisLive ? 'Live — tracking tab scenarios' : 'Custom — frozen scenarios')
-            : 'Scenarios'}
-        >
-          <div className="cfp-scenario-popover">
-            {/* Live/Custom toggle row (only on canvas) */}
-            {props.onLiveToggle && (
-              <div className="cfp-scenario-popover__toggle-row">
-                <div
-                  className="cfp-lc-toggle"
-                  onClick={() => props.onLiveToggle!(!props.analysisLive)}
-                  title={props.analysisLive ? 'Live — click for Custom' : 'Custom — click for Live'}
+      {/* --- Mode / Scenarios group --- */}
+      {(props.onModeCycle || (props.scenarioLayerItems && props.scenarioLayerItems.length > 0)) && (
+        <span className="cfp-pill-group">
+          <span className="cfp-group-label">{props.onModeCycle ? 'Mode' : 'Scenarios'}</span>
+          <CfpPopover
+            icon={<><Layers size={13} /><ChevronDown size={9} /></>}
+            title="Scenarios"
+            trigger={props.onModeCycle
+              ? <ModeTrack mode={props.analysisMode || 'live'} onClick={props.onModeCycle} />
+              : undefined}
+          >
+            <div className="cfp-scenario-popover">
+              {props.scenarioLayerItems && props.scenarioLayerItems.length > 0 && (
+                <ScenarioLayerList
+                  items={props.scenarioLayerItems}
+                  containerClassName="cfp-scenario-popover__list"
+                  onToggleVisibility={props.onScenarioToggleVisibility}
+                  onCycleMode={props.onScenarioCycleMode}
+                  onColourChange={props.onScenarioColourChange}
+                  onReorder={props.onScenarioReorder}
+                  onDelete={props.onScenarioDelete}
+                  onEdit={props.onScenarioEdit}
+                  getEditTooltip={props.getScenarioEditTooltip}
+                  getSwatchOverlayStyle={props.getScenarioSwatchOverlayStyle}
+                />
+              )}
+              {props.onAddScenario && (
+                <button
+                  type="button"
+                  className="cfp-scenario-popover__add-btn"
+                  onClick={props.onAddScenario}
+                  title="Add a blank scenario"
                 >
-                  <span className={`cfp-lc-toggle__label${props.analysisLive ? ' active' : ''}`}>Live</span>
-                  <span className={`cfp-lc-toggle__track${!props.analysisLive ? ' on' : ''}`}>
-                    <span className="cfp-lc-toggle__thumb" />
-                  </span>
-                  <span className={`cfp-lc-toggle__label${!props.analysisLive ? ' active' : ''}`}>Custom</span>
-                </div>
-              </div>
-            )}
-            {/* Scenario layers */}
-            {props.scenarioLayerItems && props.scenarioLayerItems.length > 0 && (
-              <ScenarioLayerList
-                items={props.scenarioLayerItems}
-                containerClassName="cfp-scenario-popover__list"
-                onToggleVisibility={props.onScenarioToggleVisibility}
-                onCycleMode={props.onScenarioCycleMode}
-                onColourChange={props.onScenarioColourChange}
-                onReorder={props.onScenarioReorder}
-                onDelete={props.onScenarioDelete}
-                onEdit={props.onScenarioEdit}
-                getEditTooltip={props.getScenarioEditTooltip}
-                getSwatchOverlayStyle={props.getScenarioSwatchOverlayStyle}
-              />
-            )}
-            {/* Add scenario button */}
-            {props.onAddScenario && (
-              <button
-                type="button"
-                className="cfp-scenario-popover__add-btn"
-                onClick={props.onAddScenario}
-                title="Add a blank scenario"
-              >
-                <Plus size={12} /> Add scenario
-              </button>
-            )}
-          </div>
-        </CfpPopover>
+                  <Plus size={12} /> Add scenario
+                </button>
+              )}
+            </div>
+          </CfpPopover>
+        </span>
       )}
 
       {/* --- DSL badge (canvas only — tab shows DSL in panel above) --- */}
@@ -872,8 +888,21 @@ export function AnalysisChartContainer(props: {
         <CfpPopover
           icon={<Code size={13} />}
           title="Query DSL"
+          sticky
+          popoverClassName="cfp-popover--dsl"
         >
-          <pre className="cfp-dsl-preview">{source.query_dsl}</pre>
+          {props.graph && props.onDslChange ? (
+            <QueryExpressionEditor
+              value={source.query_dsl}
+              onChange={() => {}}
+              onBlur={props.onDslChange}
+              graph={props.graph}
+              height="120px"
+              placeholder="from(node).to(node)"
+            />
+          ) : (
+            <pre className="cfp-dsl-preview">{source.query_dsl}</pre>
+          )}
         </CfpPopover>
       )}
 

@@ -12,6 +12,7 @@ import { operationRegistryService } from './operationRegistryService';
 import { countdownService } from './countdownService';
 import { repositoryOperationsService } from './repositoryOperationsService';
 import { sessionLogService } from './sessionLogService';
+import { dispatchGitAuthExpired } from './gitService';
 
 const AUTO_PULL_COUNTDOWN_SECONDS = 15;
 
@@ -26,6 +27,8 @@ export interface NonBlockingPullOptions {
   onComplete?: () => void;
   /** Called when user cancels the countdown (e.g. to dismiss the remote SHA). */
   onDismiss?: () => void;
+  /** Called when pull completes with merge conflicts, passing the conflict data for modal display. */
+  onConflicts?: (conflicts: any[]) => void;
 }
 
 /** Active pull state — prevents duplicate triggers. */
@@ -192,11 +195,21 @@ async function executePull(opId: string, opts: NonBlockingPullOptions): Promise<
     if (conflicts.length > 0) {
       const fileNames = conflicts.map((c: any) => c.fileName || c.fileId).join(', ');
       operationRegistryService.setLabel(opId, `Pull complete — ${conflicts.length} conflict${conflicts.length !== 1 ? 's' : ''} need resolution`);
+
+      // Build action button for the toast — opens the conflict resolution modal.
+      const action = opts.onConflicts
+        ? { label: 'Resolve conflicts', onClick: () => opts.onConflicts!(conflicts) }
+        : undefined;
+
       operationRegistryService.complete(
         opId,
         'error',
-        `Merge conflicts in: ${fileNames}. Use Repository → Pull All Latest to resolve.`
+        `Merge conflicts in: ${fileNames}`,
+        action,
       );
+
+      // Also call the callback immediately so the modal opens without waiting for user click.
+      opts.onConflicts?.(conflicts);
 
       sessionLogService.warning(
         'session',
@@ -215,6 +228,25 @@ async function executePull(opId: string, opts: NonBlockingPullOptions): Promise<
       opts.onComplete?.();
     }
   } catch (error) {
+    if ((error as any)?.name === 'GitAuthError') {
+      operationRegistryService.complete(
+        opId,
+        'error',
+        'Authentication expired',
+        { label: 'Sign in', onClick: () => dispatchGitAuthExpired() },
+      );
+      dispatchGitAuthExpired();
+
+      sessionLogService.error(
+        'session',
+        'AUTO_PULL_AUTH_EXPIRED',
+        'Auto-pull failed: authentication expired',
+        undefined,
+        { repository: opts.repository, branch: opts.branch }
+      );
+      return;
+    }
+
     const message = error instanceof Error ? error.message : String(error);
     operationRegistryService.complete(opId, 'error', `Pull failed: ${message}`);
 

@@ -44,7 +44,8 @@ import { analysisResultToCsv } from '../services/analysisExportService';
 import { downloadTextFile } from '../services/downloadService';
 import { getDisplaySettingsForSurface } from '../lib/analysisDisplaySettingsRegistry';
 import { getScenarioVisibilityOverlayStyle } from '../lib/scenarioVisibilityModeStyles';
-import { mutateCanvasAnalysisGraph, deleteCanvasAnalysisFromGraph } from '../services/canvasAnalysisMutationService';
+import { mutateCanvasAnalysisGraph, deleteCanvasAnalysisFromGraph, advanceMode } from '../services/canvasAnalysisMutationService';
+import { ModeTrack } from './ModeTrack';
 import { ScenarioLayerList } from './panels/ScenarioLayerList';
 import type { ScenarioLayerItem } from '../types/scenarioLayerList';
 import { useScenariosContextOptional, SCENARIO_PALETTE } from '../contexts/ScenariosContext';
@@ -298,11 +299,11 @@ function CanvasAnalysisPropertiesSection({ analysisId, graph, setGraph, saveHist
     const name = new Date().toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
     const newScenario = { scenario_id: id, name, colour, effective_dsl: '', visibility_mode: 'f+e' as const };
     if (analysis.mode === 'live') {
-      // Auto-promote to custom first
+      // Auto-promote to custom first (rebase to delta DSLs)
       if (liveTabId && scenariosContext) {
         const currentTab = tabs.find(t => t.id === liveTabId);
         const whatIfDSL = currentTab?.editorState?.whatIfDSL || null;
-        const { scenarios: captured, what_if_dsl } = captureTabScenariosToRecipe({
+        const captured = captureTabScenariosToRecipe({
           tabId: liveTabId,
           currentDSL: graphStore.currentDSL || '',
           operations,
@@ -310,12 +311,8 @@ function CanvasAnalysisPropertiesSection({ analysisId, graph, setGraph, saveHist
           whatIfDSL,
         });
         const nextGraph = mutateCanvasAnalysisGraph(graph, analysisId, (a) => {
-          a.mode = 'custom';
-          a.recipe = {
-            ...a.recipe,
-            scenarios: [...captured, newScenario],
-            analysis: { ...a.recipe.analysis, what_if_dsl },
-          };
+          advanceMode(a, graphStore.currentDSL || '', captured);
+          a.recipe.scenarios = [...(a.recipe.scenarios || []), newScenario];
         });
         if (nextGraph) { setGraph(nextGraph); saveHistoryState('Add chart scenario'); }
       }
@@ -379,33 +376,25 @@ function CanvasAnalysisPropertiesSection({ analysisId, graph, setGraph, saveHist
       <CollapsibleSection
         title="Data Source"
         defaultOpen={analysis.mode !== 'live'}
-        withCheckbox={true}
-        checkboxChecked={analysis.mode !== 'live'}
-        toggleLabels={{ off: 'Live', on: 'Custom' }}
-        onCheckboxChange={(checked) => {
-          if (checked && analysis.mode === 'live') {
-            if (liveTabId && scenariosContext) {
+        headerRight={
+          <ModeTrack mode={analysis.mode} onClick={() => {
+            const clone = structuredClone(analysis);
+            let captured: { scenarios: any[]; what_if_dsl?: string } | null = null;
+            if (analysis.mode === 'live' && liveTabId && scenariosContext) {
               const currentTab = tabs.find(t => t.id === liveTabId);
               const whatIfDSL = currentTab?.editorState?.whatIfDSL || null;
-              const { scenarios: captured, what_if_dsl } = captureTabScenariosToRecipe({
+              captured = captureTabScenariosToRecipe({
                 tabId: liveTabId,
                 currentDSL: graphStore.currentDSL || '',
                 operations,
                 scenariosContext: scenariosContext as any,
                 whatIfDSL,
               });
-              updateAnalysis({
-                mode: 'custom' as const,
-                recipe: { ...analysis.recipe, scenarios: captured, analysis: { ...analysis.recipe.analysis, what_if_dsl } },
-              });
             }
-          } else if (!checked && analysis.mode !== 'live') {
-            updateAnalysis({
-              mode: 'live' as const,
-              recipe: { ...analysis.recipe, scenarios: undefined, analysis: { ...analysis.recipe.analysis, what_if_dsl: undefined } },
-            });
-          }
-        }}
+            advanceMode(clone, graphStore.currentDSL || '', captured);
+            updateAnalysis({ mode: clone.mode, recipe: clone.recipe });
+          }} />
+        }
       >
         <div className="property-group">
           <ScenarioLayerList
