@@ -1,4 +1,11 @@
 # DagNet Release Notes
+## Version 1.7.13b
+**Released:** 15-Mar-26
+
+SNap to working properly. Added tristate handling to chart sceanrios
+
+---
+
 ## Version 1.7.12b
 **Released:** 13-Mar-26
 
