@@ -12,7 +12,12 @@
       "WebFetch(domain:vitest.dev)",
       "WebFetch(domain:deepwiki.com)",
       "Bash(node -e \"const pkg = require\\(''./node_modules/vitest/package.json''\\); console.log\\(pkg.version\\)\")",
-      "Bash(wc -l /home/reg/dev/dagnet/graph-editor/src/**/*.ts /home/reg/dev/dagnet/graph-editor/src/**/*.tsx)"
+      "Bash(wc -l /home/reg/dev/dagnet/graph-editor/src/**/*.ts /home/reg/dev/dagnet/graph-editor/src/**/*.tsx)",
+      "Bash(git ls-tree:*)",
+      "Bash(git filter-branch:*)",
+      "Bash(git stash:*)",
+      "Bash(FILTER_BRANCH_SQUELCH_WARNING=1 git filter-branch --force --index-filter 'git rm --cached --ignore-unmatch graph-editor/.env.vercel' --prune-empty -- 6527541c..HEAD)",
+      "Bash(git tag:*)"
     ]
   }
 }

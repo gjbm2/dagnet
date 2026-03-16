@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 # Interactive version bumper for DagNet
-# Usage: ./release.sh [--notests] [--nobuild] [--workers=N] [--auto]
+# Usage: ./release.sh [--notests] [--nobuild] [--workers=N] [--auto] [--force]
 #
 # By default, runs all tests and build checks (each with a 3s skip countdown).
 # Options:
@@ -9,6 +9,7 @@
 #   --nobuild     Skip TypeScript build verification
 #   --workers=N   Playwright worker count (default: 5)
 #   --auto        Non-interactive micro (patch) release → merge to main, no changelog
+#   --force       Force-push (use after history rewrite)
 
 set -e
 
@@ -56,6 +57,7 @@ print_git_add_dot_preview() {
 RUN_TESTS=true
 RUN_BUILD=true
 AUTO_MODE=false
+FORCE_PUSH=false
 PW_WORKERS=5
 for arg in "$@"; do
   case $arg in
@@ -75,9 +77,13 @@ for arg in "$@"; do
       AUTO_MODE=true
       shift
       ;;
+    --force)
+      FORCE_PUSH=true
+      shift
+      ;;
     *)
       print_red "Unknown option: $arg"
-      echo "Usage: ./release.sh [--notests] [--nobuild] [--workers=N] [--auto]"
+      echo "Usage: ./release.sh [--notests] [--nobuild] [--workers=N] [--auto] [--force]"
       exit 1
       ;;
   esac
@@ -561,7 +567,12 @@ git tag "v${NEW_VERSION}"
 
 # Push changes and the new tag (only the new tag, not all local tags)
 print_blue "[7/7] Pushing ${CURRENT_BRANCH} to remote..."
-git push origin "$CURRENT_BRANCH" "v${NEW_VERSION}"
+if [[ "$FORCE_PUSH" == true ]]; then
+  print_yellow "  ⚠ Force-pushing (--force)"
+  git push --force origin "$CURRENT_BRANCH" "v${NEW_VERSION}"
+else
+  git push origin "$CURRENT_BRANCH" "v${NEW_VERSION}"
+fi
 
 # Merge to main if requested
 if [[ "$MERGE_TO_MAIN" == true ]]; then
@@ -569,7 +580,11 @@ if [[ "$MERGE_TO_MAIN" == true ]]; then
   print_blue "[8/8] Pushing to main..."
   
   # Push current branch directly to main without checking it out
-  git push origin "${CURRENT_BRANCH}:main"
+  if [[ "$FORCE_PUSH" == true ]]; then
+    git push --force origin "${CURRENT_BRANCH}:main"
+  else
+    git push origin "${CURRENT_BRANCH}:main"
+  fi
   
   echo ""
   print_green "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
