@@ -1,4 +1,11 @@
 # DagNet Release Notes
+## Version 1.7.19b
+**Released:** 16-Mar-26
+
+Bayes harness is in...
+
+---
+
 ## Version 1.7.18b
 **Released:** 16-Mar-26
 
