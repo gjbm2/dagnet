@@ -474,12 +474,38 @@ connections:
           }
           
           // Funnel query (default)
+          // The /funnels endpoint also rejects user property filters (subprop_type: "user")
+          // in event definitions. Move them to segment filters, same as segmentation path.
+          const funnelUserPropSegments = [];
+          for (const ev of events) {
+            if (ev.filters && ev.filters.length > 0) {
+              ev.filters = ev.filters.filter(f => {
+                if (f.subprop_type === 'user') {
+                  funnelUserPropSegments.push({
+                    prop: 'gp:' + f.subprop_key,
+                    op: f.subprop_op,
+                    values: f.subprop_value
+                  });
+                  return false;
+                }
+                return true;
+              });
+            }
+          }
+          let funnelSegParam = segmentParam;
+          if (funnelUserPropSegments.length > 0) {
+            const existingSegs = segments.length > 0 ? segments : [];
+            const allSegs = [...existingSegs, ...funnelUserPropSegments];
+            funnelSegParam = 's=' + encodeURIComponent(JSON.stringify(allSegs));
+            console.log('[Amplitude Adapter] Moved ' + funnelUserPropSegments.length + ' user property filter(s) to segment param for funnel endpoint');
+          }
+
           const eventParams = events.map(e => 'e=' + encodeURIComponent(JSON.stringify(e))).join('&');
           const otherParams = [
             'start=' + startDate,
             'end=' + endDate,
             intervalParam,
-            segmentParam,
+            funnelSegParam,
             csParam  // Conversion window (cohort or default 30 days)
           ].filter(p => p).join('&');  // Filter out empty strings
           
