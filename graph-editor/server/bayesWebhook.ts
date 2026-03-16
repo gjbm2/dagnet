@@ -1,26 +1,31 @@
-import { VercelRequest, VercelResponse } from '@vercel/node';
-import yaml from 'js-yaml';
-
 /**
- * POST /api/bayes-webhook
+ * Bayes Webhook — Vite dev server middleware.
  *
- * Receives posterior results from the Modal worker and commits them to git.
- *
- * Authentication: the worker sends an encrypted callback token in the
- * x-bayes-callback header. This handler decrypts it using BAYES_WEBHOOK_SECRET
- * (AES-GCM) to recover the user's git credentials, repo, branch, and graph
- * file path. No SHARE_JSON dependency.
- *
- * Flow:
- *   1. Decrypt callback token → git credentials
- *   2. Read graph YAML from GitHub (Contents API)
- *   3. Add/update _bayes metadata block
- *   4. Commit updated file back to GitHub
+ * Local dev equivalent of the Vercel serverless function `api/bayes-webhook.ts`.
+ * Decrypts the callback token, reads the graph YAML from GitHub, adds a _bayes
+ * metadata block, and commits the updated file back.
  */
 
-export const maxDuration = 60;
+import type { IncomingMessage, ServerResponse } from 'node:http';
+import yaml from 'js-yaml';
 
-// --- AES-GCM decryption (mirrors the FE encryption in bayesService.ts) ---
+// ---------- helpers ----------
+
+function readBody(req: IncomingMessage): Promise<string> {
+  return new Promise((resolve, reject) => {
+    let data = '';
+    req.setEncoding('utf8');
+    req.on('data', (chunk) => {
+      data += chunk;
+      if (data.length > 5_000_000) {
+        reject(new Error('payload too large'));
+        req.destroy();
+      }
+    });
+    req.on('end', () => resolve(data));
+    req.on('error', reject);
+  });
+}
 
 async function deriveKey(secret: string): Promise<CryptoKey> {
   const enc = new TextEncoder();
@@ -34,7 +39,6 @@ async function deriveKey(secret: string): Promise<CryptoKey> {
   return crypto.subtle.deriveKey(
     {
       name: 'PBKDF2',
-      // Static salt is acceptable here — the secret itself is high-entropy
       salt: enc.encode('dagnet-bayes-callback-token'),
       iterations: 100_000,
       hash: 'SHA-256',
@@ -62,58 +66,73 @@ async function decryptCallbackToken(
   secret: string,
 ): Promise<CallbackTokenPayload> {
   const raw = Buffer.from(encryptedB64, 'base64');
-  // First 12 bytes = IV, rest = ciphertext (AES-GCM)
   const iv = raw.subarray(0, 12);
   const ciphertext = raw.subarray(12);
-
   const key = await deriveKey(secret);
   const decrypted = await crypto.subtle.decrypt(
     { name: 'AES-GCM', iv },
     key,
     ciphertext,
   );
-
-  const json = new TextDecoder().decode(decrypted);
-  return JSON.parse(json);
+  return JSON.parse(new TextDecoder().decode(decrypted));
 }
 
-// --- Handler ---
+function jsonResponse(res: ServerResponse, status: number, body: unknown): void {
+  res.statusCode = status;
+  res.setHeader('Content-Type', 'application/json');
+  res.end(JSON.stringify(body));
+}
 
-export default async function handler(req: VercelRequest, res: VercelResponse) {
+// ---------- handler ----------
+
+export async function handleBayesWebhook(
+  req: IncomingMessage,
+  res: ServerResponse,
+  env: Record<string, string>,
+): Promise<void> {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, x-bayes-callback');
 
-  if (req.method === 'OPTIONS') return res.status(200).end();
-  if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
+  if (req.method === 'OPTIONS') { res.statusCode = 200; res.end(); return; }
+  if (req.method !== 'POST') { jsonResponse(res, 405, { error: 'Method not allowed' }); return; }
 
-  const secret = process.env.BAYES_WEBHOOK_SECRET;
-  if (!secret) {
-    return res.status(500).json({ error: 'BAYES_WEBHOOK_SECRET not configured' });
-  }
+  const secret = env.BAYES_WEBHOOK_SECRET;
+  if (!secret) { jsonResponse(res, 500, { error: 'BAYES_WEBHOOK_SECRET not configured' }); return; }
 
-  // 1. Extract and decrypt callback token
+  // 1. Decrypt callback token
   const callbackHeader = req.headers['x-bayes-callback'];
   if (!callbackHeader || typeof callbackHeader !== 'string') {
-    return res.status(401).json({ error: 'Missing x-bayes-callback header' });
+    jsonResponse(res, 401, { error: 'Missing x-bayes-callback header' });
+    return;
   }
 
   let tokenPayload: CallbackTokenPayload;
   try {
     tokenPayload = await decryptCallbackToken(callbackHeader, secret);
-  } catch (e) {
-    return res.status(401).json({ error: 'Failed to decrypt callback token' });
+  } catch {
+    jsonResponse(res, 401, { error: 'Failed to decrypt callback token' });
+    return;
   }
 
-  // 2. Check expiry
   if (Date.now() > tokenPayload.expires_at) {
-    return res.status(401).json({ error: 'Callback token expired' });
+    jsonResponse(res, 401, { error: 'Callback token expired' });
+    return;
   }
 
-  // 3. Parse request body
-  const body = req.body;
-  if (!body || !body.job_id || !body.graph_id) {
-    return res.status(400).json({ error: 'Invalid webhook payload' });
+  // 2. Parse body
+  let body: any;
+  try {
+    const raw = await readBody(req);
+    body = JSON.parse(raw);
+  } catch {
+    jsonResponse(res, 400, { error: 'Invalid JSON body' });
+    return;
+  }
+
+  if (!body.job_id || !body.graph_id) {
+    jsonResponse(res, 400, { error: 'Invalid webhook payload' });
+    return;
   }
 
   const { owner, repo, token, branch, graph_file_path } = tokenPayload;
@@ -124,7 +143,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     `repo=${owner}/${repo} branch=${branch} edges=${edgeCount}`,
   );
 
-  // 4. Read current graph file from GitHub
+  // 3. Read graph file from GitHub
   const ghHeaders = {
     Authorization: `token ${token}`,
     Accept: 'application/vnd.github.v3+json',
@@ -139,25 +158,30 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const fileResp = await fetch(fileUrl, { headers: ghHeaders });
     if (!fileResp.ok) {
       const errText = await fileResp.text();
-      return res.status(502).json({
+      console.error(`[bayes-webhook] GitHub read failed: ${fileResp.status}`, errText);
+      jsonResponse(res, 502, {
         error: `Failed to read graph file from GitHub: ${fileResp.status}`,
         detail: errText,
       });
+      return;
     }
-    const fileData = await fileResp.json();
+    const fileData = await fileResp.json() as any;
     fileSha = fileData.sha;
     graphContent = Buffer.from(fileData.content, 'base64').toString('utf-8');
   } catch (e: any) {
-    return res.status(502).json({ error: `GitHub read failed: ${e.message}` });
+    console.error(`[bayes-webhook] GitHub read error:`, e);
+    jsonResponse(res, 502, { error: `GitHub read failed: ${e.message}` });
+    return;
   }
 
-  // 5. Parse graph content (JSON or YAML), add _bayes metadata
+  // 4. Parse graph content (JSON or YAML), add _bayes metadata
   const isJson = graph_file_path.endsWith('.json');
   let graphDoc: any;
   try {
     graphDoc = isJson ? JSON.parse(graphContent) : yaml.load(graphContent);
   } catch (e: any) {
-    return res.status(422).json({ error: `Failed to parse graph file: ${e.message}` });
+    jsonResponse(res, 422, { error: `Failed to parse graph file: ${e.message}` });
+    return;
   }
 
   graphDoc._bayes = {
@@ -169,7 +193,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     note: `Bayes posteriors computed for ${edgeCount} edges`,
   };
 
-  // 6. Commit updated file back to GitHub (preserve original format)
+  // 5. Commit back to GitHub (preserve original format)
   const updatedContent = isJson
     ? JSON.stringify(graphDoc, null, 2) + '\n'
     : yaml.dump(graphDoc, { lineWidth: -1, noRefs: true, sortKeys: false });
@@ -196,26 +220,29 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     if (!putResp.ok) {
       const errText = await putResp.text();
-      return res.status(502).json({
+      console.error(`[bayes-webhook] GitHub commit failed: ${putResp.status}`, errText);
+      jsonResponse(res, 502, {
         error: `GitHub commit failed: ${putResp.status}`,
         detail: errText,
       });
+      return;
     }
 
-    const putData = await putResp.json();
+    const putData = await putResp.json() as any;
     const commitSha = putData.commit?.sha ?? 'unknown';
 
     console.log(
-      `[bayes-webhook] Committed ${graph_file_path} → ${commitSha.slice(0, 8)}`,
+      `[bayes-webhook] Committed ${graph_file_path} -> ${commitSha.slice(0, 8)}`,
     );
 
-    return res.status(200).json({
+    jsonResponse(res, 200, {
       status: 'committed',
       graph_id: tokenPayload.graph_id,
       edges_received: edgeCount,
       commit_sha: commitSha,
     });
   } catch (e: any) {
-    return res.status(502).json({ error: `GitHub commit failed: ${e.message}` });
+    console.error(`[bayes-webhook] GitHub commit error:`, e);
+    jsonResponse(res, 502, { error: `GitHub commit failed: ${e.message}` });
   }
 }

@@ -4,6 +4,7 @@ import path from 'path';
 import { handleProxyRequest } from './server/proxy';
 import { handleGithubProxyRequest } from './server/githubProxy';
 import { handleAuthCallback, configureAuthCallback } from './server/authCallback';
+import { handleBayesWebhook } from './server/bayesWebhook';
 import { execSync } from 'child_process';
 import fs from 'fs';
 
@@ -60,6 +61,8 @@ export default defineConfig(({ mode }) => {
               await handleGithubProxyRequest(req, res);
             } else if (req.url?.startsWith('/api/auth-callback')) {
               await handleAuthCallback(req, res);
+            } else if (req.url?.startsWith('/api/bayes-webhook')) {
+              await handleBayesWebhook(req, res, env);
             } else if (req.url?.startsWith('/api/bayes/config') || req.url?.startsWith('/api/bayes-config')) {
               // Dev-only: serve Bayes config from .env.local (mirrors api/bayes-config.ts)
               const modal_submit_url = env.BAYES_MODAL_SUBMIT_URL || '';

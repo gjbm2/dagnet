@@ -16,6 +16,7 @@ design docs contain the detail.
 | **Reference impl** | `2-reference-implementation-notes.md` | PyMC patterns, prior art review |
 | **Compute arch** | `3-compute-and-deployment-architecture.md` | Compute vendor, deployment topology, shared code, DB access |
 | **Async infra** | `4-async-roundtrip-infrastructure.md` | Async roundtrip: submission, webhook, git commit, schema |
+| **Local dev setup** | `5-local-dev-setup.md` | Local dev environment, tunnel, deployment |
 
 **Context**: `../codebase/APP_ARCHITECTURE.md` (app architecture),
 `../project-db/` (snapshot DB)

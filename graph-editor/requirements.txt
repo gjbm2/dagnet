@@ -5,18 +5,25 @@
 networkx>=3.2
 pydantic>=2.0.0
 psycopg2-binary>=2.9.0  # Postgres driver for snapshot DB
+requests>=2.31.0        # HTTP client for Bayes webhook callbacks
+pyyaml>=6.0             # YAML parsing (runner adaptor, Modal worker)
 
 # Development dependencies (local only, not deployed to Vercel)
 # Install with: pip install -r requirements.txt
 fastapi>=0.104.0
 uvicorn[standard]>=0.24.0
+python-dotenv>=1.0.0    # .env.local loading in tests and dev server
 pytest>=7.4.0
 pytest-cov>=4.1.0
 pytest-asyncio>=0.21.0
+
+# Bayes deployment (Modal remote compute)
+# Install with: pip install modal && modal token set
+# Not listed as a pip dependency — installed and authenticated separately.
+# See: deploy-modal.sh, docs/current/project-bayes/5-local-dev-setup.md
 
 # Optional: Statistical enhancement (heavy - for local dev only)
 # Note: numpy/scipy are too large for Vercel deployment
 # Install with: pip install numpy scipy
 # numpy>=1.24.0
 # scipy>=1.10.0
-

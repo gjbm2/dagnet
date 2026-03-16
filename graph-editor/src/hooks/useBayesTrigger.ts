@@ -10,6 +10,7 @@ import { useNavigatorContext } from '../contexts/NavigatorContext';
 import { useTabContext, fileRegistry } from '../contexts/TabContext';
 import { credentialsManager } from '../lib/credentials';
 import { operationRegistryService } from '../services/operationRegistryService';
+import { repositoryOperationsService } from '../services/repositoryOperationsService';
 import { sessionLogService } from '../services/sessionLogService';
 import {
   fetchBayesConfig,
@@ -20,6 +21,14 @@ import {
 import type { BayesJobRecord } from '../services/bayesService';
 
 export type BayesTriggerStatus = 'idle' | 'submitting' | 'running' | 'complete' | 'failed';
+export type BayesComputeMode = 'local' | 'modal';
+
+/** URLs for local dev mode (Python server on :9000, webhook on :5173). */
+const LOCAL_SUBMIT_URL = 'http://localhost:9000/api/bayes/submit';
+const LOCAL_STATUS_URL = 'http://localhost:9000/api/bayes/status';
+const LOCAL_WEBHOOK_URL = 'http://localhost:5173/api/bayes-webhook';
+const TUNNEL_START_URL = 'http://localhost:9000/api/bayes/tunnel/start';
+const TUNNEL_STATUS_URL = 'http://localhost:9000/api/bayes/tunnel/status';
 
 interface BayesTriggerState {
   status: BayesTriggerStatus;
@@ -28,7 +37,7 @@ interface BayesTriggerState {
   lastResult: BayesJobRecord | null;
 }
 
-export function useBayesTrigger() {
+export function useBayesTrigger(computeMode: BayesComputeMode = 'local') {
   const { state: navState } = useNavigatorContext();
   const { tabs, activeTabId } = useTabContext();
 
@@ -72,6 +81,10 @@ export function useBayesTrigger() {
       if (!graphFile || graphFile.type !== 'graph') {
         throw new Error('Active tab is not a graph file');
       }
+      const graphFilePath = graphFile.source?.path;
+      if (!graphFilePath) {
+        throw new Error('Graph file has no source path — is it saved to a repo?');
+      }
 
       // 4. Gather parameter files
       const parametersIndex = fileRegistry.getFile('parameter-index');
@@ -91,22 +104,46 @@ export function useBayesTrigger() {
           token: gitCred.token,
           branch: navState.selectedBranch || 'main',
           graph_id: activeTab.fileId,
-          graph_file_path: `${activeTab.fileId}.yaml`,
+          graph_file_path: graphFilePath,
         },
         config.webhook_secret,
       );
 
-      // 6. Register operation for progress toast
+      // 6. Resolve URLs based on compute mode
+      const isLocal = computeMode === 'local';
+      let webhookUrl: string;
+      const submitUrl = isLocal ? LOCAL_SUBMIT_URL : undefined; // undefined = use config
+      const statusUrl = isLocal ? LOCAL_STATUS_URL : undefined;
+
+      if (isLocal) {
+        webhookUrl = LOCAL_WEBHOOK_URL;
+      } else {
+        // Modal mode: start cloudflared tunnel so Modal can reach our local webhook
+        sessionLogService.info('bayes', 'BAYES_TUNNEL_START', 'Starting cloudflared tunnel for Modal callback…');
+        const tunnelResp = await fetch(TUNNEL_START_URL, { method: 'POST' });
+        const tunnelData = await tunnelResp.json();
+        if (tunnelData.tunnel_url) {
+          webhookUrl = `${tunnelData.tunnel_url}/api/bayes-webhook`;
+          sessionLogService.info('bayes', 'BAYES_TUNNEL_READY', `Tunnel ready: ${webhookUrl}`);
+        } else {
+          throw new Error(`Failed to start cloudflared tunnel: ${tunnelData.error || 'no URL returned'}`);
+        }
+      }
+
+      sessionLogService.info('bayes', 'BAYES_DEV_TRIGGER', `Mode: ${computeMode}, webhook: ${webhookUrl}`);
+
+      // 7. Register operation for progress toast
+      const graphLabel = activeTab.fileId.replace(/^graph-/, '');
       operationRegistryService.register({
         id: opId,
         kind: 'bayes-fit',
-        label: `Bayes fit: ${activeTab.fileId}`,
+        label: `Bayes ${computeMode === 'modal' ? '(Modal)' : '(local)'}: submitting ${graphLabel}…`,
         status: 'running',
         cancellable: true,
         onCancel: () => { abortRef.current = true; },
       });
 
-      // 7. Submit
+      // 8. Submit
       const jobId = await submitBayesFit({
         graph_id: activeTab.fileId,
         repo: `${gitCred.owner}/${gitCred.name}`,
@@ -118,18 +155,24 @@ export function useBayesTrigger() {
         settings: {},
         callback_token: callbackToken,
         db_connection: config.db_connection,
-        webhook_url: config.webhook_url,
-      });
+        webhook_url: webhookUrl,
+      }, submitUrl);
 
+      const modeTag = computeMode === 'modal' ? '(Modal)' : '(local)';
+      const fitStartedAt = Date.now();
       setState(s => ({ ...s, status: 'running', jobId }));
-      operationRegistryService.setLabel(opId, `Bayes fit: polling ${jobId.slice(0, 8)}…`);
+      operationRegistryService.setLabel(opId, `Bayes ${modeTag}: fitting ${graphLabel}…`);
       sessionLogService.info('bayes', 'BAYES_DEV_SUBMITTED', `Job submitted: ${jobId}`, undefined, { jobId });
 
-      // 8. Poll until done
-      const finalStatus = await pollUntilDone(jobId, (status) => {
-        if (abortRef.current) return; // won't stop the poll, but stops UI updates
-        operationRegistryService.setLabel(opId, `Bayes fit: ${status.status} — ${jobId.slice(0, 8)}`);
-      });
+      // 9. Poll until done
+      const finalStatus = await pollUntilDone(jobId, (pollStatus) => {
+        if (abortRef.current) return;
+        const elapsedSec = Math.round((Date.now() - fitStartedAt) / 1000);
+        const label = pollStatus.status === 'running'
+          ? `Bayes ${modeTag}: fitting ${graphLabel} (${elapsedSec}s)…`
+          : `Bayes ${modeTag}: ${pollStatus.status} — ${graphLabel}`;
+        operationRegistryService.setLabel(opId, label);
+      }, isLocal ? 2_000 : 10_000, 10 * 60 * 1000, statusUrl);
 
       // 9. Done
       const record: BayesJobRecord = {
@@ -147,6 +190,26 @@ export function useBayesTrigger() {
 
       if (finalStatus.status === 'complete') {
         sessionLogService.success('bayes', 'BAYES_DEV_COMPLETE', `Job ${jobId} complete`, JSON.stringify(finalStatus.result, null, 2), { jobId });
+
+        // 10. Auto-pull the updated graph file so FE reflects the committed changes
+        try {
+          operationRegistryService.setLabel(opId, `Bayes ${modeTag}: pulling updated ${graphLabel}…`);
+          // Re-set status to 'complete' before completing the operation below
+          const repoName = gitCred.name;
+          const branchName = navState.selectedBranch || 'main';
+          const pullResult = await repositoryOperationsService.pullFile(
+            activeTab.fileId,
+            repoName,
+            branchName,
+          );
+          if (pullResult.success) {
+            sessionLogService.success('bayes', 'BAYES_PULL_COMPLETE', `Pulled updated ${graphLabel} after Bayes fit`);
+          } else {
+            sessionLogService.warning('bayes', 'BAYES_PULL_WARNING', `Pull after Bayes fit: ${pullResult.message}`);
+          }
+        } catch (pullErr: any) {
+          sessionLogService.warning('bayes', 'BAYES_PULL_ERROR', `Auto-pull failed: ${pullErr.message}. Manual pull needed.`);
+        }
       } else {
         sessionLogService.error('bayes', 'BAYES_DEV_FAILED', `Job ${jobId} failed: ${finalStatus.error}`, undefined, { jobId });
       }
@@ -157,7 +220,7 @@ export function useBayesTrigger() {
       operationRegistryService.complete(opId, 'error', msg);
       sessionLogService.error('bayes', 'BAYES_DEV_ERROR', `Dev trigger error: ${msg}`);
     }
-  }, [navState, tabs, activeTabId]);
+  }, [navState, tabs, activeTabId, computeMode]);
 
   return {
     ...state,

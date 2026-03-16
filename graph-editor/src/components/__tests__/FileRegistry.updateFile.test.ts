@@ -139,14 +139,16 @@ function flushMicrotasks(): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, 0));
 }
 
-// Helper: flush microtasks AND one round of setTimeout(0) callbacks (pending replays)
+// Helper: flush microtasks until all pending IDB writes and replays settle.
+//
+// Under isolate: false (local dev), multiple test files share a thread and their
+// microtasks can interleave. 3 rounds is not always enough — each updateFile has
+// 1-2 IDB writes and may trigger a pending replay that starts another chain.
+// 8 rounds handles worst-case interleaving with comfortable margin.
 async function flushAll(): Promise<void> {
-  // Drain microtasks (IDB writes)
-  await flushMicrotasks();
-  // Drain setTimeout(0) callbacks (pending replays)
-  await flushMicrotasks();
-  // One more round in case the replay itself triggered another async chain
-  await flushMicrotasks();
+  for (let i = 0; i < 8; i++) {
+    await flushMicrotasks();
+  }
 }
 
 function makeGraphData(label: string) {

@@ -425,6 +425,99 @@ describe('nonBlockingPullService', () => {
     expect(mockDispatchGitAuthExpired).not.toHaveBeenCalled();
   });
 
+  // ---------- Conflict loop prevention (regression: infinite pull → conflicts → pull) ----------
+
+  it('should call onDismiss after conflicts to dismiss the remote SHA and prevent re-trigger loop', async () => {
+    mockPullLatest.mockResolvedValue({
+      success: true,
+      conflicts: [{ fileId: 'param-a', fileName: 'a.yaml' }],
+    });
+    const { startNonBlockingPull } = await freshModules();
+    const onDismiss = vi.fn();
+    const onConflicts = vi.fn();
+
+    startNonBlockingPull({
+      repository: 'r', branch: 'b', countdownSeconds: 1,
+      onDismiss,
+      onConflicts,
+    });
+
+    vi.advanceTimersByTime(1000);
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(0);
+
+    // onDismiss must fire so the remote SHA is dismissed in staleness detection.
+    // Without this, maybePrompt() sees gitPullDue=true again and starts another pull.
+    expect(onDismiss).toHaveBeenCalledTimes(1);
+    // onConflicts must also fire (opens modal).
+    expect(onConflicts).toHaveBeenCalledTimes(1);
+  });
+
+  it('should NOT call onDismiss on successful pull (SHA is naturally cleared by onComplete)', async () => {
+    mockPullLatest.mockResolvedValue({ success: true, conflicts: [] });
+    const { startNonBlockingPull } = await freshModules();
+    const onDismiss = vi.fn();
+    const onComplete = vi.fn();
+
+    startNonBlockingPull({
+      repository: 'r', branch: 'b', countdownSeconds: 1,
+      onDismiss,
+      onComplete,
+    });
+
+    vi.advanceTimersByTime(1000);
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(onDismiss).not.toHaveBeenCalled();
+    expect(onComplete).toHaveBeenCalledTimes(1);
+  });
+
+  it('should report isNonBlockingPullActive=true during the async pull execution', async () => {
+    // Make pullLatest hang until we resolve it manually.
+    let resolvePull!: (v: any) => void;
+    mockPullLatest.mockReturnValue(new Promise((r) => { resolvePull = r; }));
+
+    const { startNonBlockingPull, isNonBlockingPullActive } = await freshModules();
+
+    startNonBlockingPull({ repository: 'r', branch: 'b', countdownSeconds: 1 });
+
+    // Expire countdown to start the pull.
+    vi.advanceTimersByTime(1000);
+    await vi.advanceTimersByTimeAsync(0);
+
+    // Pull is in-flight — must block re-entry.
+    expect(isNonBlockingPullActive()).toBe(true);
+
+    // Resolve the pull.
+    resolvePull({ success: true, conflicts: [] });
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(isNonBlockingPullActive()).toBe(false);
+  });
+
+  it('should allow a new pull after previous one completed with conflicts', async () => {
+    mockPullLatest.mockResolvedValue({
+      success: true,
+      conflicts: [{ fileId: 'param-a', fileName: 'a.yaml' }],
+    });
+
+    const { startNonBlockingPull } = await freshModules();
+
+    startNonBlockingPull({ repository: 'r', branch: 'b', countdownSeconds: 1 });
+
+    vi.advanceTimersByTime(1000);
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(0);
+
+    // Now start a new pull (e.g. user resolved conflicts, new SHA detected).
+    mockPullLatest.mockResolvedValue({ success: true, conflicts: [] });
+    const second = startNonBlockingPull({ repository: 'r', branch: 'b', countdownSeconds: 1 });
+
+    // Must succeed — terminal 'error' state should not permanently block.
+    expect(second).toBe('auto-pull:r:b');
+  });
+
   // ---------- Status transitions during pull ----------
 
   it('should transition through countdown → running → complete lifecycle', async () => {

@@ -735,6 +735,44 @@ consistent.
 - `_overridden` flags — user-controlled
 - `values[]` history entries (only the latest/top entry is updated)
 
+### Current prototype status (16-Mar-26)
+
+The dev harness roundtrip is working end-to-end: FE → Modal submit → worker →
+webhook → git commit → FE auto-pull. Both Local and Modal modes complete
+successfully with correct progress indicators and overlapping submissions.
+
+**However, the current webhook is a bespoke hack.** It reads the graph file
+from GitHub, does a dumb `graphDoc._bayes = { ... }` mutation, re-serialises,
+and commits — bypassing all established update pathways. This caused two bugs
+during development:
+
+1. **Format corruption.** The webhook originally used `yaml.dump()` on `.json`
+   graph files, writing YAML into JSON and corrupting committed files. Required
+   manual restoration from git history. Fixed by adding JSON/YAML detection, but
+   the root cause is that the webhook reimplements serialisation logic that the
+   app already handles correctly.
+
+2. **Fragile round-tripping.** `JSON.parse` → mutate → `JSON.stringify` drops
+   formatting, reorders keys, and risks subtle data loss on types that don't
+   round-trip cleanly through JSON. The established UpdateManager pathways
+   handle these concerns; the bespoke webhook does not.
+
+**The prototype is useful for proving the infrastructure plumbing** (tunnel,
+encryption, Modal spawn/poll, webhook auth, auto-pull). But the mutation logic
+must be replaced with the shared isomorphic cascade module (Step 2) before any
+real posterior data flows through the system. The webhook must not contain its
+own update logic — it must call the same code that the browser uses.
+
+**What stays:** tunnel management, callback token encryption/decryption, Modal
+submission and polling, auto-pull after completion, progress indicators,
+overlapping submission support.
+
+**What gets replaced:** the entire "read file → mutate → serialise → commit"
+block in both `server/bayesWebhook.ts` and `api/bayes-webhook.ts`. This is
+replaced by: read files → apply posteriors to parameter files → call
+`applyMappings()` from the shared cascade module for graph file cascade →
+atomic multi-file commit via Git Data API.
+
 ### Server-side GitHub auth
 
 **Answer: credentials and simple API calls are proven. Atomic multi-file

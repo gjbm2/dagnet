@@ -690,6 +690,16 @@ When asked to "run tests":
 - **Python**: Run `pytest tests/specific_test.py` or `pytest -k "pattern"` (activate venv first)
 - Run BOTH only if changes affect both frontend and Python
 
+### Investigating Test Failures
+**CRITICAL**: If a test failure appears unrelated to your recent change, **do NOT dismiss it as "pre-existing"**. The user is asking you to investigate what caused the failure. Your job:
+
+1. **Read the failing test** — understand what invariant it protects.
+2. **Check recent changes** — use `git log` and `git diff` to identify what changed in the file under test or its dependencies.
+3. **Trace the root cause** — determine whether the failure is from your change (indirect coupling), a recent commit on the branch, or a genuinely flaky test.
+4. **Report findings** — tell the user exactly what broke and why, with file paths and line numbers.
+
+Never say "unrelated, pre-existing" without evidence. If you haven't checked the git history and the test's dependencies, you don't know whether it's pre-existing.
+
 ### Running Playwright E2E Tests (DagNet)
 **CRITICAL: Playwright tests MUST be brisk. If a single Playwright spec does not complete in ~10–15s, treat that as a PROBLEM WITH THE TEST (or environment), not a cue to increase timeouts.**
 

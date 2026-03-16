@@ -1455,38 +1455,35 @@ function MainAppShellContent() {
       console.log(`[${new Date().toISOString()}] [AppShell] Ignoring: currentTabId ${currentTabId} already matches activeTabId`);
     }
 
-    if (!prevLayoutRef.current) {
-      console.log('AppShell: First layout change, setting prevLayoutRef');
-      prevLayoutRef.current = newLayout;
-      return;
-    }
-
+    // Detect closed tabs (only possible when we have a previous layout to diff against)
+    if (prevLayoutRef.current) {
       const prevTabIds = extractTabIds(prevLayoutRef.current);
       const newTabIds = extractTabIds(newLayout);
-    
+
       console.log('AppShell: Previous tab IDs:', prevTabIds);
       console.log('AppShell: New tab IDs:', newTabIds);
-      
-    // Find tabs that were closed (in prev but not in new)
+
+      // Find tabs that were closed (in prev but not in new)
       const closedTabIds = prevTabIds.filter(id => !newTabIds.includes(id));
-      
+
       if (closedTabIds.length > 0) {
-      console.log('AppShell: Tabs removed from rc-dock:', closedTabIds);
-      // Mark as recently closed to prevent re-adding
-      closedTabIds.forEach(id => recentlyClosedRef.current.add(id));
-      // Clear after a short delay (after TabContext has updated)
-      setTimeout(() => {
-        closedTabIds.forEach(id => recentlyClosedRef.current.delete(id));
-      }, 100);
-      
-      // Just clean up tracking
-      setAddedTabs(prev => {
-        const next = new Set(prev);
-        closedTabIds.forEach(id => next.delete(id));
-        return next;
-      });
-    } else {
-      console.log('AppShell: No tabs closed');
+        console.log('AppShell: Tabs removed from rc-dock:', closedTabIds);
+        // Mark as recently closed to prevent re-adding
+        closedTabIds.forEach(id => recentlyClosedRef.current.add(id));
+        // Clear after a short delay (after TabContext has updated)
+        setTimeout(() => {
+          closedTabIds.forEach(id => recentlyClosedRef.current.delete(id));
+        }, 100);
+
+        // Just clean up tracking
+        setAddedTabs(prev => {
+          const next = new Set(prev);
+          closedTabIds.forEach(id => next.delete(id));
+          return next;
+        });
+      } else {
+        console.log('AppShell: No tabs closed');
+      }
     }
 
     prevLayoutRef.current = newLayout;

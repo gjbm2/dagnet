@@ -37,6 +37,8 @@ export function useStalenessNudges(): UseStalenessNudgesResult {
   const { state: navState, isLoading: navigatorIsLoading } = useNavigatorContext();
   const tabContext = useTabContext() as any;
   const { pullAll, conflictModal, openConflictModal } = usePullAll();
+  const openConflictModalRef = useRef(openConflictModal);
+  useEffect(() => { openConflictModalRef.current = openConflictModal; });
   const fileRegistry = useFileRegistry();
   const tabOperations = tabContext.operations;
   const shareMode = useShareModeOptional();
@@ -265,7 +267,7 @@ export function useStalenessNudges(): UseStalenessNudgesResult {
       repository,
       branch,
       remoteSha: detectedRemoteSha,
-      onConflicts: (conflicts) => openConflictModal(conflicts),
+      onConflicts: (conflicts) => openConflictModalRef.current(conflicts),
       onDismiss: () => {
         if (detectedRemoteSha) {
           stalenessNudgeService.dismissRemoteSha(repository, branch, detectedRemoteSha, storage);
@@ -284,7 +286,7 @@ export function useStalenessNudges(): UseStalenessNudgesResult {
         }
       },
     });
-  }, [openConflictModal, retrieveTargetGraphFileId, fileRegistry, tabOperations]);
+  }, [retrieveTargetGraphFileId, fileRegistry, tabOperations]);
 
   const maybePrompt = useCallback(async () => {
     if (suppressStalenessNudges) return;

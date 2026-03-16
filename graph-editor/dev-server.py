@@ -689,10 +689,149 @@ async def runner_available_analyses_endpoint(request: Request):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# =============================================================================
+# Bayes local dev routes — mirrors Modal's submit/status endpoints
+# =============================================================================
+
+
+@app.post("/api/bayes/submit")
+async def bayes_submit_endpoint(request: Request):
+    """Local equivalent of Modal's /submit endpoint.
+    Spawns fit_graph in a background thread, returns job_id immediately."""
+    try:
+        data = await request.json()
+        from bayes_local import submit
+        job_id = submit(data)
+        print(f"[bayes/submit] Spawned local job {job_id} for graph={data.get('graph_id', '?')}")
+        return {"job_id": job_id}
+    except Exception as e:
+        import traceback
+        print(f"[bayes/submit] Error: {e}")
+        print(f"[bayes/submit] Traceback: {traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/bayes/status")
+async def bayes_status_endpoint(call_id: str = ""):
+    """Local equivalent of Modal's /status endpoint.
+    Polls job result from in-memory store."""
+    if not call_id:
+        return {"status": "error", "error": "call_id parameter required"}
+    from bayes_local import get_status
+    result = get_status(call_id)
+    if result['status'] == 'complete':
+        print(f"[bayes/status] Job {call_id} complete")
+    elif result['status'] == 'failed':
+        print(f"[bayes/status] Job {call_id} failed: {result.get('error')}")
+    return result
+
+
+# =============================================================================
+# Cloudflared tunnel management — allows Modal to call back to local webhook
+# =============================================================================
+
+import subprocess
+import threading
+import re
+
+_tunnel_process: subprocess.Popen | None = None
+_tunnel_url: str | None = None
+_tunnel_lock = threading.Lock()
+
+
+def _read_tunnel_url(proc: subprocess.Popen) -> None:
+    """Background thread: read cloudflared stderr until we find the tunnel URL."""
+    global _tunnel_url
+    assert proc.stderr is not None
+    for raw_line in proc.stderr:
+        line = raw_line.decode("utf-8", errors="replace")
+        # cloudflared prints the URL in a table row like:
+        #   INF |  https://xxx.trycloudflare.com  |
+        match = re.search(r"(https://[^\s|]+\.trycloudflare\.com)", line)
+        if match:
+            with _tunnel_lock:
+                _tunnel_url = match.group(1)
+            print(f"[tunnel] URL ready: {_tunnel_url}")
+            break
+    # Keep draining stderr so the subprocess doesn't block
+    for _ in proc.stderr:
+        pass
+
+
+@app.post("/api/bayes/tunnel/start")
+async def tunnel_start():
+    """Spawn a cloudflared quick-tunnel proxying to the Vite dev server."""
+    global _tunnel_process, _tunnel_url
+
+    with _tunnel_lock:
+        if _tunnel_process is not None and _tunnel_process.poll() is None:
+            # Already running
+            return {"tunnel_url": _tunnel_url, "already_running": True}
+
+    target = f"http://localhost:{FRONTEND_PORT}"
+    print(f"[tunnel] Starting cloudflared tunnel --url {target}")
+
+    proc = subprocess.Popen(
+        ["cloudflared", "tunnel", "--url", target],
+        stderr=subprocess.PIPE,
+        stdout=subprocess.DEVNULL,
+    )
+
+    with _tunnel_lock:
+        _tunnel_process = proc
+        _tunnel_url = None
+
+    reader = threading.Thread(target=_read_tunnel_url, args=(proc,), daemon=True)
+    reader.start()
+
+    # Wait up to 15 s for the URL to appear
+    import time
+    for _ in range(150):
+        time.sleep(0.1)
+        with _tunnel_lock:
+            if _tunnel_url is not None:
+                return {"tunnel_url": _tunnel_url}
+
+    return {"tunnel_url": None, "error": "Timed out waiting for cloudflared URL"}
+
+
+@app.post("/api/bayes/tunnel/stop")
+async def tunnel_stop():
+    """Kill the running cloudflared subprocess."""
+    global _tunnel_process, _tunnel_url
+
+    with _tunnel_lock:
+        proc = _tunnel_process
+        _tunnel_process = None
+        _tunnel_url = None
+
+    if proc is None:
+        return {"stopped": True, "was_running": False}
+
+    proc.terminate()
+    try:
+        proc.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait(timeout=2)
+
+    print("[tunnel] Stopped cloudflared tunnel")
+    return {"stopped": True, "was_running": True}
+
+
+@app.get("/api/bayes/tunnel/status")
+async def tunnel_status():
+    """Return current tunnel URL (or null if not running)."""
+    with _tunnel_lock:
+        url = _tunnel_url
+        running = _tunnel_process is not None and _tunnel_process.poll() is None
+    return {"tunnel_url": url, "running": running}
+
+
 if __name__ == "__main__":
     import uvicorn
     import os
-    
+
     # Read port from environment variable, default to 9000
     port = int(os.environ.get("PYTHON_API_PORT", "9000"))
     
@@ -713,6 +852,11 @@ if __name__ == "__main__":
     print("  POST /api/stats-enhance           - Statistical enhancement")
     print("  POST /api/runner/analyze          - Run analytics on selection")
     print("  POST /api/runner/available-analyses - Get available analyses")
+    print("  POST /api/bayes/submit            - Local Bayes submit (async)")
+    print("  GET  /api/bayes/status             - Local Bayes poll")
+    print("  POST /api/bayes/tunnel/start       - Start cloudflared tunnel")
+    print("  POST /api/bayes/tunnel/stop        - Stop cloudflared tunnel")
+    print("  GET  /api/bayes/tunnel/status      - Tunnel URL status")
     print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
     print(f"💡 Port: {port} (set via PYTHON_API_PORT env var)")
     print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")

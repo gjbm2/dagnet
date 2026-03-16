@@ -589,6 +589,28 @@ echo "  Playwright: installing browsers"
   fi
 )
 
+# cloudflared (optional, for Bayes Modal → local webhook tunnel)
+echo ""
+if command -v cloudflared &>/dev/null; then
+  CF_VER="$(cloudflared --version 2>&1 | head -1 || echo "installed")"
+  echo -e "  cloudflared:      ${GREEN}${CF_VER}${NC}"
+else
+  echo -e "  ${YELLOW}cloudflared not found (optional — needed for Bayes Modal mode).${NC}"
+  echo "  Install: https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/"
+  if [[ "$(uname -s)" == "Linux" ]]; then
+    prompt_yn INSTALL_CF "Install cloudflared now?" "y"
+    if [[ "$INSTALL_CF" == "y" ]]; then
+      ARCH="$(dpkg --print-architecture 2>/dev/null || echo "amd64")"
+      CF_URL="https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${ARCH}.deb"
+      echo "  Downloading ${CF_URL}..."
+      curl -sL "$CF_URL" -o /tmp/cloudflared.deb
+      sudo dpkg -i /tmp/cloudflared.deb
+      rm -f /tmp/cloudflared.deb
+      echo -e "  ${GREEN}cloudflared installed.${NC}"
+    fi
+  fi
+fi
+
 echo ""
 
 # ═════════════════════════════════════════════════════════════════════════════

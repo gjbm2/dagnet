@@ -176,7 +176,10 @@ export function isNonBlockingPullActive(): boolean {
 // ---------------------------------------------------------------------------
 
 async function executePull(opId: string, opts: NonBlockingPullOptions): Promise<void> {
-  cleanup();
+  // Clean up countdown subscriptions (no longer needed), but keep activePullOpId
+  // so isNonBlockingPullActive() blocks re-entry during the async pull.
+  for (const unsub of activeUnsubs) unsub();
+  activeUnsubs = [];
 
   operationRegistryService.setStatus(opId, 'running');
   operationRegistryService.setLabel(opId, 'Pulling latest changes…');
@@ -208,6 +211,13 @@ async function executePull(opId: string, opts: NonBlockingPullOptions): Promise<
         action,
       );
 
+      // Dismiss the remote SHA so staleness detection won't re-trigger a pull
+      // for this SHA. The pull was attempted; conflicts need manual resolution.
+      // Without this, maybePrompt() sees gitPullDue=true again immediately
+      // (FileRegistry subscriptions fire from the pull's file updates) and
+      // starts another pull → conflicts → pull → infinite loop.
+      opts.onDismiss?.();
+
       // Also call the callback immediately so the modal opens without waiting for user click.
       opts.onConflicts?.(conflicts);
 
@@ -221,6 +231,8 @@ async function executePull(opId: string, opts: NonBlockingPullOptions): Promise<
     } else {
       operationRegistryService.setLabel(opId, 'Pull complete');
       operationRegistryService.complete(opId, 'complete');
+      // Successful pull: allow future pulls for new remote SHAs.
+      cleanup();
     }
 
     // Only cascade (e.g. retrieve-all) when there are no unresolved conflicts.
@@ -228,6 +240,9 @@ async function executePull(opId: string, opts: NonBlockingPullOptions): Promise<
       opts.onComplete?.();
     }
   } catch (error) {
+    // Always clean up on error so the next pull attempt isn't blocked forever.
+    cleanup();
+
     if ((error as any)?.name === 'GitAuthError') {
       operationRegistryService.complete(
         opId,

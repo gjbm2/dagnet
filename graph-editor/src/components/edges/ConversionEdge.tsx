@@ -1065,51 +1065,54 @@ export default function ConversionEdge({
     if (!nums || nums.length < 8) return [edgePath, -1];
     
     let [sx, sy, c1x, c1y, c2x, c2y, ex, ey] = nums.slice(0, 8).map(Number);
-    
+
     // Determine edge direction: if going right-to-left, we need to reverse the path
     // so text always reads left-to-right
     const isRightToLeft = ex < sx;
-    
+
     // If right-to-left, reverse the path by swapping start/end and control points
     if (isRightToLeft) {
       [sx, sy, c1x, c1y, c2x, c2y, ex, ey] = [ex, ey, c2x, c2y, c1x, c1y, sx, sy];
     }
-    
-    // Determine offset direction based on position in Sankey stack
-    // Goal: offset away from the node centerline
-    let offsetDirection = -1; // Default: upward for L-R edges
-    
-    if (graph && source) {
-      // Get all edges from the same source node
-      const sourceEdges = graph.edges.filter((e: any) => e.from === source);
-      
-      if (sourceEdges.length > 1) {
-        // Find the vertical center of all outgoing edges
-        const edgeYPositions = sourceEdges.map((e: any) => {
-          const edgeId = e.id || `${e.from}->${e.to}`;
-          // Get the start Y position of each edge (approximate from source node)
-          return sourceY;
-        });
-        
-        // Calculate this edge's relative position
-        // Use the current edge's Y position at start
-        const thisEdgeY = sy;
-        
-        // Get source node center Y
-        const sourceNodeCenterY = sourceY;
-        
-        // If this edge is below the source node center, offset downward (away from center)
-        // If above, offset upward (away from center)
-        if (thisEdgeY > sourceNodeCenterY) {
-          offsetDirection = 1; // Downward
-        } else {
-          offsetDirection = -1; // Upward
-        }
-      }
+
+    // Offset text to the "outside" — the side furthest from the node face
+    // centre, i.e. further in the direction of the Sankey offset.
+    //
+    // The Sankey offset (sourceOffsetX, sourceOffsetY) pushes the edge start
+    // away from the face centre.  We want text on that same side.
+    //
+    // The offset is applied via the path normal (-tangentY, tangentX).
+    // Dot-producting the normal with the desired screen direction
+    // (sourceOffset) gives the correct sign of offsetDirection regardless
+    // of face orientation or path reversal — no special-casing needed.
+    const sOffX = data?.sourceOffsetX || 0;
+    const sOffY = data?.sourceOffsetY || 0;
+
+    let offsetDirection: number;
+    if (sOffX === 0 && sOffY === 0) {
+      // Single edge (no Sankey offset) — default to left-hand side
+      offsetDirection = isRightToLeft ? 1 : -1;
+    } else {
+      // Overall tangent of the (possibly reversed) path
+      const tdx = ex - sx;
+      const tdy = ey - sy;
+      // Path normal (perpendicular, used for offset)
+      const nx = -tdy;
+      const ny = tdx;
+      // Dot with Sankey offset: positive ⇒ normal points same way as offset
+      const dot = nx * sOffX + ny * sOffY;
+      offsetDirection = dot >= 0 ? 1 : -1;
     }
     
-    // Calculate offset distance with direction
-    const offsetDistance = offsetDirection * (strokeWidth / 2 + 10);
+    // Calculate offset distance with direction.
+    // When text is pushed BELOW the edge (downward on screen), tight curves
+    // cause the control-point offset to under-track the ribbon edge, so we
+    // need a larger gap.  "Above" positioning tracks well with the original gap.
+    // The Y-component of the offset vector = offsetDirection * (ex - sx)
+    // (from the overall normal); positive ⇒ text moves downward on screen.
+    const pushesDown = offsetDirection * (ex - sx) > 0;
+    const gap = pushesDown ? Math.max(16, strokeWidth * 0.3) : 10;
+    const offsetDistance = offsetDirection * (strokeWidth / 2 + gap);
     
     // For a Bezier curve, we need to offset all points perpendicular to the tangent
     // Calculate tangent at start point
@@ -1151,7 +1154,7 @@ export default function ConversionEdge({
     const oey = ey + endNormalY * offsetDistance;
     
     return [`M ${osx},${osy} C ${oc1x},${oc1y} ${oc2x},${oc2y} ${oex},${oey}`, offsetDirection];
-  }, [edgePath, strokeWidth, data?.description, graph, source]);
+  }, [edgePath, strokeWidth, data?.description, data?.sourceOffsetX, data?.sourceOffsetY]);
 
   // Calculate startOffset and anchor - ensure text starts 15% from topological source
   const textAlignment = React.useMemo<{ offset: string; anchor: 'start' | 'end' }>(() => {
@@ -2903,7 +2906,7 @@ export default function ConversionEdge({
       
       {/* Description text - rendered last to appear on top of all other edge elements */}
       <g className="edge-description-text" style={{ isolation: 'isolate' }}>
-        {data?.description && wrappedDescriptionLines.map((line, index) => {
+        {data?.description && !data?.scenarioOverlay && wrappedDescriptionLines.map((line, index) => {
           // Reverse line order so first line is closest to edge
           const reversedIndex = wrappedDescriptionLines.length - 1 - index;
           const lineOffset = reversedIndex * 11; // 11px vertical spacing between lines

@@ -176,6 +176,47 @@ python dev-server.py
 
 ---
 
+## Bayes (Remote Compute)
+
+DagNet supports remote Bayesian inference via Modal. The Bayes pipeline submits jobs from the FE, computes posteriors on Modal (or locally), and commits results back to git via a webhook.
+
+### Local development
+
+Two compute modes, toggled via the **L/M** button in the dev menu bar:
+
+| Mode | Compute | Webhook | Tunnel needed? |
+|------|---------|---------|----------------|
+| **Local** (default) | Python dev server :9000 | Vite middleware :5173 | No |
+| **Modal** | Modal (remote) | Vite middleware :5173 via cloudflared tunnel | Auto-managed |
+
+Both modes run the webhook handler locally with full terminal logs. The toggle automatically starts/stops the cloudflared tunnel when switching to Modal mode.
+
+**Additional requirements for Bayes dev:**
+
+| Tool | Install | Purpose |
+|------|---------|---------|
+| `cloudflared` | `sudo dpkg -i cloudflared-linux-amd64.deb` or `brew install cloudflare/cloudflare/cloudflared` | Tunnel for Modal → local webhook (no account needed) |
+| `modal` | `pip install modal && modal token set` | Deploying to Modal (not needed for local-only dev) |
+
+**Bayes env vars (in `.env.local`):**
+
+| Variable | Purpose |
+|----------|---------|
+| `BAYES_MODAL_SUBMIT_URL` | Modal /submit endpoint |
+| `BAYES_MODAL_STATUS_URL` | Modal /status endpoint |
+| `BAYES_WEBHOOK_SECRET` | AES-GCM key for callback token encryption |
+| `BAYES_WEBHOOK_URL` | Production webhook URL (Vercel) |
+
+### Deploying Modal
+
+```bash
+./deploy-modal.sh    # Deploys bayes/app.py to Modal
+```
+
+This is separate from the Vercel release — only needed when `bayes/` code changes. See [`docs/current/project-bayes/5-local-dev-setup.md`](docs/current/project-bayes/5-local-dev-setup.md) for the full architecture diagram and troubleshooting.
+
+---
+
 ## Project Structure
 
 ```
@@ -218,7 +259,10 @@ dagnet/
 │   └── archive/                # Historical documentation and completed work
 ├── param-registry/             # Dev testing: sample graph/parameter files
 ├── apps-script/                # Google Apps Script integrations
+├── bayes/                      # Modal compute worker (Bayesian inference)
+│   └── app.py                  # Modal app: /submit, /status endpoints + fit_graph worker
 ├── scripts/                    # Workspace-level scripts (setup-workspace, extract-mark-logs)
+├── deploy-modal.sh             # Deploy bayes/app.py to Modal
 ├── dev-start.sh                # Quick-start (frontend + backend in tmux)
 ├── dev-stop.sh                 # Stop all dev servers
 └── dev-restart.sh              # Restart dev servers
@@ -256,7 +300,8 @@ dagnet/
 
 **Deployment:**
 
-- Vercel (CDN + serverless Python)
+- Vercel (CDN + serverless Python + serverless TS)
+- Modal (remote Bayesian inference compute)
 
 ---
 

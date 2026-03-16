@@ -163,14 +163,18 @@ interface SubmitBayesFitInput {
 }
 
 /**
- * Submit a Bayes fit directly to Modal's /submit endpoint.
+ * Submit a Bayes fit to the submit endpoint (Modal or local dev server).
+ * Pass submitUrl to override the config value (used by local dev mode).
  * Returns the job_id for status polling.
  */
-export async function submitBayesFit(input: SubmitBayesFitInput): Promise<string> {
+export async function submitBayesFit(
+  input: SubmitBayesFitInput,
+  submitUrl?: string,
+): Promise<string> {
   sessionLogService.info('bayes', 'BAYES_FIT_SUBMITTING', `Submitting fit for ${input.graph_id}`);
 
   const config = await fetchBayesConfig();
-  const resp = await fetch(config.modal_submit_url, {
+  const resp = await fetch(submitUrl || config.modal_submit_url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(input),
@@ -194,12 +198,13 @@ export async function submitBayesFit(input: SubmitBayesFitInput): Promise<string
 // ---------------------------------------------------------------------------
 
 /**
- * Poll Modal's /status endpoint for a single job.
- * Returns the enriched status response (includes full worker result on completion).
+ * Poll the status endpoint for a single job (Modal or local dev server).
+ * Pass statusUrl to override the config value (used by local dev mode).
  */
-export async function pollBayesStatus(jobId: string): Promise<BayesStatusResult> {
+export async function pollBayesStatus(jobId: string, statusUrl?: string): Promise<BayesStatusResult> {
   const config = await fetchBayesConfig();
-  const url = `${config.modal_status_url}?call_id=${encodeURIComponent(jobId)}`;
+  const baseUrl = statusUrl || config.modal_status_url;
+  const url = `${baseUrl}?call_id=${encodeURIComponent(jobId)}`;
   const resp = await fetch(url);
 
   if (!resp.ok) {
@@ -218,11 +223,12 @@ export async function pollUntilDone(
   onUpdate?: (status: BayesStatusResult) => void,
   intervalMs = 10_000,
   timeoutMs = 10 * 60 * 1000,
+  statusUrl?: string,
 ): Promise<BayesStatusResult> {
   const deadline = Date.now() + timeoutMs;
 
   while (Date.now() < deadline) {
-    const status = await pollBayesStatus(jobId);
+    const status = await pollBayesStatus(jobId, statusUrl);
     onUpdate?.(status);
 
     if (status.status === 'complete' || status.status === 'failed') {

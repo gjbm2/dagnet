@@ -61,6 +61,9 @@ const hoisted = vi.hoisted(() => ({
 
   // db fakes
   dbWorkspacesGet: vi.fn(),
+
+  // Track openConflictModal instances across renders (for stale-closure test)
+  openConflictModalInstances: [] as ReturnType<typeof vi.fn>[],
 }));
 
 vi.mock('../../contexts/NavigatorContext', () => ({
@@ -87,12 +90,16 @@ vi.mock('../../contexts/TabContext', () => ({
 }));
 
 vi.mock('../usePullAll', () => ({
-  usePullAll: () => ({
-    isPulling: false,
-    pullAll: hoisted.pullAll,
-    conflictModal: null,
-    openConflictModal: vi.fn(),
-  }),
+  usePullAll: () => {
+    const fn = vi.fn();
+    hoisted.openConflictModalInstances.push(fn);
+    return {
+      isPulling: false,
+      pullAll: hoisted.pullAll,
+      conflictModal: null,
+      openConflictModal: fn,
+    };
+  },
 }));
 
 vi.mock('../useRetrieveAllSlicesRequestListener', () => ({
@@ -223,6 +230,9 @@ describe('useStalenessNudges', () => {
     for (const fn of Object.values(hoisted)) {
       if (typeof fn === 'function' && 'mockReset' in fn) (fn as any).mockReset();
     }
+
+    // Reset stale-closure tracking.
+    hoisted.openConflictModalInstances.length = 0;
 
     // Boot readiness gate in useStalenessNudges waits for TabContext init completion.
     (window as any).__dagnetTabContextInitDone = true;
@@ -556,5 +566,55 @@ describe('useStalenessNudges', () => {
     expect(hoisted.setBanner).not.toHaveBeenCalledWith(
       expect.objectContaining({ id: 'app-update' })
     );
+  });
+
+  it('should call the latest openConflictModal when onConflicts fires after re-render (stale closure guard)', async () => {
+    // This test protects against the bug where startNonBlockingPull captures
+    // onConflicts in a closure at call time, but after a re-render (e.g. React
+    // Strict Mode double-mount, or any state change) the captured callback
+    // still references the OLD openConflictModal — whose setState calls target
+    // an unmounted component instance and silently do nothing.
+    //
+    // The fix is to use a ref so the closure always dereferences the latest
+    // openConflictModal. This test verifies that invariant.
+
+    hoisted.shouldCheckRemoteHead.mockReturnValue(true);
+    hoisted.getRemoteAheadStatus.mockResolvedValue({
+      isRemoteAhead: true, localSha: 'a', remoteHeadSha: 'b',
+    });
+    hoisted.isRemoteShaDismissed.mockReturnValue(false);
+
+    const { rerender } = render(<Harness />);
+
+    await waitFor(() => {
+      expect(hoisted.startNonBlockingPull).toHaveBeenCalledTimes(1);
+    });
+
+    // Record which instances existed when startNonBlockingPull was called.
+    const instanceCountAfterPull = hoisted.openConflictModalInstances.length;
+    expect(instanceCountAfterPull).toBeGreaterThan(0);
+
+    // Force a re-render — usePullAll() returns a new openConflictModal identity.
+    rerender(<Harness />);
+
+    const instanceCountAfterRerender = hoisted.openConflictModalInstances.length;
+    expect(instanceCountAfterRerender).toBeGreaterThan(instanceCountAfterPull);
+
+    // Simulate the pull completing with conflicts by invoking the captured onConflicts.
+    const opts = hoisted.startNonBlockingPull.mock.calls[0][0];
+    const fakeConflicts = [{ fileId: 'f1', fileName: 'test.yaml' }];
+    opts.onConflicts(fakeConflicts);
+
+    // The LATEST openConflictModal instance (from after re-render) must be called.
+    const latestInstance = hoisted.openConflictModalInstances[hoisted.openConflictModalInstances.length - 1];
+    expect(latestInstance).toHaveBeenCalledTimes(1);
+    expect(latestInstance).toHaveBeenCalledWith(fakeConflicts);
+
+    // If a different (earlier) instance exists, it must NOT have been called —
+    // that would mean we're calling a stale closure.
+    const firstInstance = hoisted.openConflictModalInstances[0];
+    if (firstInstance !== latestInstance) {
+      expect(firstInstance).not.toHaveBeenCalled();
+    }
   });
 });

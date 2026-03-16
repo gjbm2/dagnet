@@ -126,8 +126,13 @@ if [ "$CLEAN_MODE" = true ]; then
     
     echo -e "${GREEN}🧹 Cleaning npm cache and node_modules...${NC}"
     cd graph-editor
-    npm cache clean --force 2>/dev/null || true
-    rm -rf node_modules package-lock.json
+    rm -rf node_modules .vite
+    # NOTE: package-lock.json is deliberately preserved — deleting it
+    # allows semver ranges to resolve to broken newer releases (e.g.
+    # tiptap 3.20.3 ships without dist/).
+    npm cache verify 2>/dev/null || true
+    # Also nuke the npm cache store to prevent corrupted packages surviving reinstall
+    rm -rf "$(npm config get cache 2>/dev/null || echo "${HOME}/.npm")/_cacache" 2>/dev/null || true
     cd ..
     
     echo -e "${GREEN}🧹 Cleaning Python environment and cache...${NC}"
@@ -173,9 +178,15 @@ if [[ "${NODE_MAJOR}" != "${REQUIRED_NODE_MAJOR}" ]]; then
 fi
 
 # Install frontend dependencies
+# Use npm ci (clean install from lock file) after --clean to prevent version drift.
+# Use npm install for normal starts to allow incremental updates.
 echo -e "${GREEN}📦 Installing frontend dependencies...${NC}"
 cd graph-editor
-npm install
+if [ "$CLEAN_MODE" = true ]; then
+    npm ci
+else
+    npm install
+fi
 cd ..
 
 # Setup Python environment
