@@ -453,7 +453,7 @@ def find_absorbing_nodes(G: nx.DiGraph) -> list[str]:
     return [n for n in G.nodes() if G.out_degree(n) == 0]
 
 
-def resolve_node_id(G: nx.DiGraph, node_ref: str) -> str | None:
+def resolve_node_id(G: nx.DiGraph, node_ref: str) -> Optional[str]:
     """
     Resolve a node reference (UUID or human-readable ID) to the graph's node key.
     

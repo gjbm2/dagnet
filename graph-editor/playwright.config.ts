@@ -28,6 +28,8 @@ export default defineConfig({
     url: 'http://127.0.0.1:4173',
     reuseExistingServer: !process.env.CI,
     env: {
+      // OAuth chip tests require this to be set so isOAuthEnabled() returns true.
+      VITE_GITHUB_OAUTH_CLIENT_ID: 'test-oauth-client-id',
       // CredentialsManager: validate ?secret= against this value and provide credentials JSON.
       VITE_CREDENTIALS_SECRET: 'test-secret',
       VITE_CREDENTIALS_JSON: JSON.stringify({
