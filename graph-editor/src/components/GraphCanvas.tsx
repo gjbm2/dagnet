@@ -17,15 +17,12 @@ import ReactFlow, {
   NodeTypes,
   EdgeTypes,
   useReactFlow,
-  Panel,
   ConnectionMode,
 } from 'reactflow';
 import 'reactflow/dist/style.css';
 import '../custom-reactflow.css';
 import { useTheme } from '../contexts/ThemeContext';
 import { useElementTool } from '../contexts/ElementToolContext';
-import dagre from 'dagre';
-import { sankey, sankeyLinkHorizontal, sankeyCenter, sankeyJustify } from 'd3-sankey';
 
 import ConversionNode from './nodes/ConversionNode';
 import PostItNode from './nodes/PostItNode';
@@ -68,8 +65,6 @@ import { ContainerContextMenu } from './ContainerContextMenu';
 import { CanvasAnalysisContextMenu } from './CanvasAnalysisContextMenu';
 import { SelectionConnectors } from './SelectionConnectors';
 import { captureTabScenariosToRecipe } from '../services/captureTabScenariosService';
-import { constructDSLFromSelection } from '../lib/dslConstruction';
-import { buildCanvasAnalysisObject } from '../services/canvasAnalysisCreationService';
 import { resolveAnalysisType } from '../services/analysisTypeResolutionService';
 import { mutateCanvasAnalysisGraph, deleteCanvasAnalysisFromGraph } from '../services/canvasAnalysisMutationService';
 import { ScenarioQueryEditModal } from './modals/ScenarioQueryEditModal';
@@ -85,7 +80,7 @@ import { useTabContext } from '../contexts/TabContext';
 import { useViewPreferencesContext } from '../contexts/ViewPreferencesContext';
 import { useScenariosContextOptional } from '../contexts/ScenariosContext';
 import { getComposedParamsForLayer } from '../services/CompositionService';
-import { graphIssuesService } from '../services/graphIssuesService';
+import { GraphIssuesIndicatorOverlay } from './canvas/GraphIssuesIndicatorOverlay';
 import { toFlow, fromFlow } from '@/lib/transform';
 import {
   logSnapshotBoot,
@@ -98,9 +93,12 @@ import { computeEffectiveEdgeProbability } from '@/lib/whatIf';
 import { getOptimalFace, assignFacesForNode } from '@/lib/faceSelection';
 import { computeFaceDirectionsFromEdges } from '@/lib/faceDirections';
 import { buildScenarioRenderEdges } from './canvas/buildScenarioRenderEdges';
+import { calculateEdgeOffsets as calculateEdgeOffsetsCore } from './canvas/edgeGeometry';
+import { computeDagreLayout as computeDagreLayoutCore, computeSankeyLayout as computeSankeyLayoutCore } from './canvas/layoutAlgorithms';
+import { createNodeInGraph, createNodeFromFileInGraph, createPostitInGraph, createContainerInGraph, createCanvasAnalysisInGraph, buildAddChartPayload } from './canvas/creationTools';
+import { wouldCreateCycle as wouldCreateCycleCore, computeHighlightMetadata } from './canvas/pathHighlighting';
 import { getCaseEdgeVariantInfo } from './edges/edgeLabelHelpers';
 import { MAX_EDGE_WIDTH, MIN_EDGE_WIDTH, DEFAULT_NODE_WIDTH, DEFAULT_NODE_HEIGHT, MIN_NODE_HEIGHT, MAX_NODE_HEIGHT, IMAGE_VIEW_NODE_WIDTH, IMAGE_VIEW_NODE_HEIGHT } from '@/lib/nodeEdgeConstants';
-import { getSeverityIcon } from './issues/issueIcons';
 import { Monitor, MonitorOff, X, Plus, StickyNote, Square, BarChart3, Clipboard, CheckSquare } from 'lucide-react';
 import { useAlignSelection } from '../hooks/useAlignSelection';
 import { useSnapToGuides } from '../hooks/useSnapToGuides';
@@ -134,147 +132,6 @@ function getContainedConversionNodeIds(
       (nx + nw) <= (container.x + container.width + tolerance) &&
       (ny + nh) <= (container.y + container.height + tolerance);
   }).map(n => n.id);
-}
-
-function GraphIssuesIndicatorOverlay({ tabId }: { tabId?: string }) {
-  const { theme } = useTheme();
-  const dark = theme === 'dark';
-  const { tabs } = useTabContext();
-  const { graph } = useGraphStore();
-
-  const debuggingEnabled = !!(graph as any)?.debugging;
-
-  const graphFileId = useMemo(() => {
-    if (!tabId) return null;
-    return tabs.find(t => t.id === tabId)?.fileId ?? null;
-  }, [tabId, tabs]);
-
-  const graphName = useMemo(() => {
-    if (!graphFileId) return null;
-    return graphIssuesService.getGraphNameFromFileId(graphFileId);
-  }, [graphFileId]);
-
-  const [counts, setCounts] = useState(() => {
-    if (!graphName) return { errors: 0, warnings: 0, info: 0, total: 0 };
-    return graphIssuesService.getSeverityCountsForGraph({ graphName, includeReferencedFiles: true });
-  });
-
-  useEffect(() => {
-    if (!debuggingEnabled || !graphName) return;
-
-    const updateCounts = () => {
-      setCounts(graphIssuesService.getSeverityCountsForGraph({ graphName, includeReferencedFiles: true }));
-    };
-
-    const unsubscribe = graphIssuesService.subscribe(() => {
-      updateCounts();
-    });
-
-    // Kick off a check promptly when a debugging graph is opened.
-    graphIssuesService.scheduleCheck();
-    updateCounts();
-
-    return unsubscribe;
-  }, [debuggingEnabled, graphName]);
-
-  if (!debuggingEnabled || !graphName) return null;
-
-  const openIssues = () => {
-    void graphIssuesService.openIssuesTabForGraph(graphName);
-  };
-
-  // Suppress individual severities with zero count, and suppress the whole indicator when empty.
-  if (counts.total === 0) return null;
-
-  return (
-    <Panel position="top-right" style={{ margin: '10px' }}>
-      <div
-        style={{
-          display: 'flex',
-          gap: '6px',
-          alignItems: 'center',
-          background: dark ? 'rgba(45,45,45,0.95)' : 'rgba(255,255,255,0.92)',
-          border: `1px solid ${dark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.08)'}`,
-          borderRadius: '10px',
-          padding: '6px 8px',
-          boxShadow: dark ? '0 2px 10px rgba(0,0,0,0.3)' : '0 2px 10px rgba(0,0,0,0.06)',
-          color: dark ? '#e0e0e0' : 'inherit',
-          userSelect: 'none',
-        }}
-        aria-label={`Graph issues for ${graphName}: ${counts.errors} errors, ${counts.warnings} warnings, ${counts.info} info`}
-      >
-        {counts.errors > 0 && (
-          <button
-            type="button"
-            onClick={openIssues}
-            title={graphIssuesService.getSeverityTooltipText({ graphName, severity: 'error', includeReferencedFiles: true })}
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: '4px',
-              border: 'none',
-              background: 'transparent',
-              cursor: 'pointer',
-              padding: '2px 4px',
-              borderRadius: '6px',
-              color: '#b91c1c',
-              fontSize: '12px',
-              fontWeight: 600,
-            }}
-            aria-label={`Open Graph Issues (${counts.errors} errors)`}
-          >
-            {getSeverityIcon('error')} {counts.errors}
-          </button>
-        )}
-        {counts.warnings > 0 && (
-          <button
-            type="button"
-            onClick={openIssues}
-            title={graphIssuesService.getSeverityTooltipText({ graphName, severity: 'warning', includeReferencedFiles: true })}
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: '4px',
-              border: 'none',
-              background: 'transparent',
-              cursor: 'pointer',
-              padding: '2px 4px',
-              borderRadius: '6px',
-              color: '#b45309',
-              fontSize: '12px',
-              fontWeight: 600,
-            }}
-            aria-label={`Open Graph Issues (${counts.warnings} warnings)`}
-          >
-            {getSeverityIcon('warning')} {counts.warnings}
-          </button>
-        )}
-        {counts.info > 0 && (
-          <button
-            type="button"
-            onClick={openIssues}
-            title={graphIssuesService.getSeverityTooltipText({ graphName, severity: 'info', includeReferencedFiles: true })}
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: '4px',
-              border: 'none',
-              background: 'transparent',
-              cursor: 'pointer',
-              padding: '2px 4px',
-              borderRadius: '6px',
-              color: '#1d4ed8',
-              fontSize: '12px',
-              fontWeight: 600,
-            }}
-            aria-label={`Open Graph Issues (${counts.info} info)`}
-          >
-            {getSeverityIcon('info')} {counts.info}
-          </button>
-        )}
-      </div>
-    </Panel>
-  );
 }
 
 interface GraphCanvasProps {
@@ -647,442 +504,14 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
   // Use shared constants from nodeEdgeConstants.ts
   const MAX_WIDTH = MAX_EDGE_WIDTH;
   const MIN_WIDTH = MIN_EDGE_WIDTH;
-  
+
   // NOTE: Edge width calculation moved to buildScenarioRenderEdges.ts (unified scenario pipeline)
   // GraphCanvas only provides calculateEdgeOffsets for bundling/spacing logic
+  // Core computation extracted to canvas/edgeGeometry.ts
 
-  // Calculate edge sort keys for curved edge stacking
-  // For Bézier curves, sort by the angle/direction at which edges leave/enter the face
-  const getEdgeSortKey = useCallback((sourceNode: any, targetNode: any, face: string, isSourceFace: boolean = true, edgeId?: string) => {
-    if (!sourceNode || !targetNode) return [0, 0];
-
-    const sourceX = sourceNode.position?.x || 0;
-    const sourceY = sourceNode.position?.y || 0;
-    const targetX = targetNode.position?.x || 0;
-    const targetY = targetNode.position?.y || 0;
-
-    // Calculate vector from source to target
-    const dx = targetX - sourceX;
-    const dy = targetY - sourceY;
-
-    // Angle-based sorting (preferred). Use abs(dy) to mirror top/bottom behavior
-    // so tiny vertical shifts don't flip ordering on left/right faces.
-    let directionAngle: number;
-    if (isSourceFace) {
-      // Edge leaves the source
-      if (face === 'right') {
-        directionAngle = Math.atan2(Math.abs(dx), -dy); // rotate top/bottom by 90°: swap x↔y
-      } else if (face === 'left') {
-        directionAngle = -Math.atan2(Math.abs(dx), dy); // rotate top/bottom by 90°: swap x↔y
-      } else if (face === 'bottom') {
-        directionAngle = Math.atan2(Math.abs(dy), -dx);
-      } else { // top
-        directionAngle = -Math.atan2(Math.abs(dy), dx);
-      }
-    } else {
-      // Edge enters the target
-      if (face === 'left') {
-        directionAngle = Math.atan2(-Math.abs(dx), -dy); // rotate top/bottom by 90°: swap x↔y
-      } else if (face === 'right') {
-        directionAngle = -Math.atan2(Math.abs(dx), -dy); // rotate top/bottom by 90°: swap x↔y
-      } else if (face === 'top') {
-        directionAngle = Math.atan2(-Math.abs(dy), -dx);
-      } else { // bottom
-        directionAngle = -Math.atan2(Math.abs(dy), -dx);
-      }
-    }
-
-    // Secondary sort by span for stability when angles are very close
-    const span = Math.sqrt(dx * dx + dy * dy);
-
-    // Final tie-breaker to keep order stable under tiny movements
-    const edgeIdHash = edgeId ? edgeId.split('').reduce((a, b) => a + b.charCodeAt(0), 0) : 0;
-
-    return [directionAngle, -span, edgeIdHash];
-  }, []);
-
-  // Calculate edge offsets for Sankey-style visualization
   const calculateEdgeOffsets = useCallback((edgesWithWidth: any[], allNodes: any[], maxWidth: number) => {
-    
-    // Group edges by source node (for source offsets)
-    const edgesBySource: { [sourceId: string]: any[] } = {};
-    edgesWithWidth.forEach(edge => {
-      if (!edgesBySource[edge.source]) {
-        edgesBySource[edge.source] = [];
-      }
-      edgesBySource[edge.source].push(edge);
-    });
-
-    // Group edges by target node (for target offsets)
-    const edgesByTarget: { [targetId: string]: any[] } = {};
-    edgesWithWidth.forEach(edge => {
-      if (!edgesByTarget[edge.target]) {
-        edgesByTarget[edge.target] = [];
-      }
-      edgesByTarget[edge.target].push(edge);
-    });
-
-    // Pre-calculate scale factors per face to ensure consistency
-    // Scale factors always apply to keep bundles within MAX_WIDTH, regardless of scaling mode
-    const faceScaleFactors: { [faceKey: string]: number } = {};
-    
-    // Calculate scale factors for each source face
-    Object.keys(edgesBySource).forEach(sourceId => {
-        const sourceEdges = edgesBySource[sourceId];
-        // allNodes are ReactFlow nodes: n.id = uuid, n.data.id = human-readable id
-        const sourceNode = allNodes.find(n => n.id === sourceId || n.data?.id === sourceId);
-        if (!sourceNode) return;
-        
-        // Group by face
-        const edgesByFace: { [face: string]: any[] } = {};
-        sourceEdges.forEach(edge => {
-          const sourceHandle = edge.sourceHandle || 'right-out';
-          const sourceFace = sourceHandle.split('-')[0];
-          if (!edgesByFace[sourceFace]) {
-            edgesByFace[sourceFace] = [];
-          }
-          edgesByFace[sourceFace].push(edge);
-        });
-        
-        // Calculate scale factor for each face
-        Object.keys(edgesByFace).forEach(face => {
-          const faceEdges = edgesByFace[face];
-          const totalWidth = faceEdges.reduce((sum, e) => {
-            return sum + (e.data?.calculateWidth ? e.data.calculateWidth() : 2);
-          }, 0);
-          
-          const faceKey = `source-${sourceId}-${face}`;
-          faceScaleFactors[faceKey] = totalWidth > maxWidth ? maxWidth / totalWidth : 1.0;
-        });
-      });
-      
-    // Calculate scale factors for each target face
-    Object.keys(edgesByTarget).forEach(targetId => {
-        const targetEdges = edgesByTarget[targetId];
-        // allNodes are ReactFlow nodes: n.id = uuid, n.data.id = human-readable id
-        const targetNode = allNodes.find(n => n.id === targetId || n.data?.id === targetId);
-        if (!targetNode) return;
-        
-        // Group by face
-        const edgesByFace: { [face: string]: any[] } = {};
-        targetEdges.forEach(edge => {
-          const targetHandle = edge.targetHandle || 'left';
-          const targetFace = targetHandle.split('-')[0];
-          if (!edgesByFace[targetFace]) {
-            edgesByFace[targetFace] = [];
-          }
-          edgesByFace[targetFace].push(edge);
-        });
-        
-        // Calculate scale factor for each face
-        Object.keys(edgesByFace).forEach(face => {
-          const faceEdges = edgesByFace[face];
-          const totalWidth = faceEdges.reduce((sum, e) => {
-            return sum + (e.data?.calculateWidth ? e.data.calculateWidth() : 2);
-          }, 0);
-          
-          const faceKey = `target-${targetId}-${face}`;
-          faceScaleFactors[faceKey] = totalWidth > maxWidth ? maxWidth / totalWidth : 1.0;
-        });
-      });
-      
-    // Calculate scale factors for incident faces (faces with edges from multiple sources)
-    // This handles cases where multiple source nodes connect to the same target face
-    const incidentFaces: { [faceKey: string]: any[] } = {};
-      
-      // Group all edges by target node and face
-      edgesWithWidth.forEach(edge => {
-        const targetHandle = edge.targetHandle || 'left';
-        const targetFace = targetHandle.split('-')[0];
-        const faceKey = `incident-${edge.target}-${targetFace}`;
-        
-        if (!incidentFaces[faceKey]) {
-          incidentFaces[faceKey] = [];
-        }
-        incidentFaces[faceKey].push(edge);
-      });
-      
-      // Calculate scale factors for incident faces
-      Object.keys(incidentFaces).forEach(faceKey => {
-        const faceEdges = incidentFaces[faceKey];
-        const totalWidth = faceEdges.reduce((sum, e) => {
-          return sum + (e.data?.calculateWidth ? e.data.calculateWidth() : 2);
-        }, 0);
-        
-        faceScaleFactors[faceKey] = totalWidth > maxWidth ? maxWidth / totalWidth : 1.0;
-      });
-
-    // Calculate offsets for each edge (both source and target)
-    const edgesWithOffsets = edgesWithWidth.map(edge => {
-      // Apply offsets for all modes including uniform (for Sankey-style visualization)
-      // (Skip offsets only for modes that explicitly don't need them - currently none)
-
-      const sourceEdges = edgesBySource[edge.source] || [];
-      const targetEdges = edgesByTarget[edge.target] || [];
-
-      // Find the source and target nodes to determine edge direction
-      // allNodes are ReactFlow nodes: n.id = uuid, n.data.id = human-readable id
-      const sourceNode = allNodes.find(n => n.id === edge.source || n.data?.id === edge.source);
-      const targetNode = allNodes.find(n => n.id === edge.target || n.data?.id === edge.target);
-      
-      if (!sourceNode || !targetNode) {
-        return { 
-          ...edge, 
-          sourceOffsetX: 0, 
-          sourceOffsetY: 0,
-          targetOffsetX: 0,
-          targetOffsetY: 0
-        };
-      }
-
-      // Get the actual connection handles from the edge data
-      // These tell us which face of each node the edge connects to
-      const sourceHandle = edge.sourceHandle || 'right-out';
-      const targetHandle = edge.targetHandle || 'left';
-      
-      // Extract face from handle (e.g., 'right-out' → 'right', 'left' → 'left')
-      const sourceFace = sourceHandle.split('-')[0]; // 'right', 'left', 'top', 'bottom'
-      const targetFace = targetHandle.split('-')[0]; // 'right', 'left', 'top', 'bottom'
-
-      // ===== Calculate SOURCE offsets =====
-      // Filter to only edges exiting from the SAME FACE of this source node
-      const sameFaceSourceEdges = sourceEdges.filter(e => {
-        const eSourceHandle = e.sourceHandle || 'right-out';
-        const eSourceFace = eSourceHandle.split('-')[0];
-        return eSourceFace === sourceFace;
-      });
-
-      // Sort by departure angle from this face (accounts for curve trajectory)
-      const sortedSourceEdges = [...sameFaceSourceEdges].sort((a, b) => {
-        // allNodes are ReactFlow nodes: n.id = uuid, n.data.id = human-readable id
-        const aTarget = allNodes.find(n => n.id === a.target || n.data?.id === a.target);
-        const bTarget = allNodes.find(n => n.id === b.target || n.data?.id === b.target);
-        if (!aTarget || !bTarget) return 0;
-        
-        const aKey = getEdgeSortKey(sourceNode, aTarget, sourceFace, true, a.id);
-        const bKey = getEdgeSortKey(sourceNode, bTarget, sourceFace, true, b.id);
-        
-        // Compare [angle, span, edgeIdHash]
-        if (aKey[0] !== bKey[0]) return aKey[0] - bKey[0];
-        if (aKey[1] !== bKey[1]) return aKey[1] - bKey[1];
-        return aKey[2] - bKey[2];
-      });
-
-      // Get the scale factor for this source face
-      const sourceFaceKey = `source-${edge.source}-${sourceFace}`;
-      const sourceScaleFactor = faceScaleFactors[sourceFaceKey] || 1.0;
-
-      // Calculate source offsets using the pre-calculated scale factor
-      let sourceOffsetX = 0;
-      let sourceOffsetY = 0;
-
-      if (sortedSourceEdges.length > 0) {
-        const sourceEdgeIndex = sortedSourceEdges.findIndex(e => e.id === edge.id); // ReactFlow edge IDs match
-        if (sourceEdgeIndex !== -1) {
-          // Calculate cumulative width using per-edge scale = min(source-face, incident target-face)
-          const sourceCumulativeWidth = sortedSourceEdges.slice(0, sourceEdgeIndex).reduce((sum, e) => {
-            const width = e.data?.calculateWidth ? e.data.calculateWidth() : 2;
-            const eSourceHandle = e.sourceHandle || 'right-out';
-            const eSourceFace = eSourceHandle.split('-')[0];
-            const eTargetHandle = e.targetHandle || 'left';
-            const eTargetFace = eTargetHandle.split('-')[0];
-            const eSourceKey = `source-${e.source}-${eSourceFace}`;
-            const eIncidentKey = `incident-${e.target}-${eTargetFace}`;
-            const eSourceScale = faceScaleFactors[eSourceKey] || 1.0;
-            const eIncidentScale = faceScaleFactors[eIncidentKey] || 1.0;
-            // Always apply scale factors to enforce MAX_WIDTH constraint
-            const eScale = Math.min(eSourceScale, eIncidentScale);
-            return sum + (width * eScale);
-          }, 0);
-
-          const edgeWidth = edge.data?.calculateWidth ? edge.data.calculateWidth() : 2;
-          const incidentFaceKeyForThis = `incident-${edge.target}-${targetFace}`;
-          const incidentScaleForThis = faceScaleFactors[incidentFaceKeyForThis] || 1.0;
-          // Always apply scale factors to enforce MAX_WIDTH constraint
-          const thisEdgeScale = Math.min(sourceScaleFactor, incidentScaleForThis);
-          const scaledEdgeWidth = edgeWidth * thisEdgeScale;
-          
-          const sourceCenterInStack = sourceCumulativeWidth + (scaledEdgeWidth / 2);
-          
-          // Calculate total scaled width for centering using per-edge scales
-          const totalScaledWidth = sortedSourceEdges.reduce((sum, e) => {
-            const width = e.data?.calculateWidth ? e.data.calculateWidth() : 2;
-            const eSourceHandle = e.sourceHandle || 'right-out';
-            const eSourceFace = eSourceHandle.split('-')[0];
-            const eTargetHandle = e.targetHandle || 'left';
-            const eTargetFace = eTargetHandle.split('-')[0];
-            const eSourceKey = `source-${e.source}-${eSourceFace}`;
-            const eIncidentKey = `incident-${e.target}-${eTargetFace}`;
-            const eSourceScale = faceScaleFactors[eSourceKey] || 1.0;
-            const eIncidentScale = faceScaleFactors[eIncidentKey] || 1.0;
-            // Always apply scale factors to enforce MAX_WIDTH constraint
-            const eScale = Math.min(eSourceScale, eIncidentScale);
-            return sum + (width * eScale);
-          }, 0);
-          
-          const sourceStackCenter = totalScaledWidth / 2;
-          const sourceOffsetFromCenter = sourceCenterInStack - sourceStackCenter;
-
-          // Apply offset to the correct axis based on face
-          if (sourceFace === 'left' || sourceFace === 'right') {
-            // Left/right faces: offset vertically (Y)
-            sourceOffsetY = sourceOffsetFromCenter;
-          } else {
-            // Top/bottom faces: offset horizontally (X)
-            sourceOffsetX = sourceOffsetFromCenter;
-          }
-        }
-      }
-
-      // ===== Calculate TARGET offsets =====
-      // Filter to only edges entering from the SAME FACE of this target node
-      const sameFaceTargetEdges = targetEdges.filter(e => {
-        const eTargetHandle = e.targetHandle || 'left';
-        const eTargetFace = eTargetHandle.split('-')[0];
-        return eTargetFace === targetFace;
-      });
-
-      // Sort by arrival angle at this face (accounts for curve trajectory)
-      const sortedTargetEdges = [...sameFaceTargetEdges].sort((a, b) => {
-        // allNodes are ReactFlow nodes: n.id = uuid, n.data.id = human-readable id
-        const aSource = allNodes.find(n => n.id === a.source || n.data?.id === a.source);
-        const bSource = allNodes.find(n => n.id === b.source || n.data?.id === b.source);
-        if (!aSource || !bSource) return 0;
-        
-        const aKey = getEdgeSortKey(aSource, targetNode, targetFace, false, a.id);
-        const bKey = getEdgeSortKey(bSource, targetNode, targetFace, false, b.id);
-        
-        // Compare [angle, span, edgeIdHash]
-        if (aKey[0] !== bKey[0]) return aKey[0] - bKey[0];
-        if (aKey[1] !== bKey[1]) return aKey[1] - bKey[1];
-        return aKey[2] - bKey[2];
-      });
-
-      // Get the scale factor for this target incident face (ALL incoming edges)
-      const incidentFaceKey = `incident-${edge.target}-${targetFace}`;
-      const targetScaleFactor = faceScaleFactors[incidentFaceKey] || 1.0;
-
-      let targetOffsetX = 0;
-      let targetOffsetY = 0;
-
-      if (sortedTargetEdges.length > 0) {
-        const targetEdgeIndex = sortedTargetEdges.findIndex(e => e.id === edge.id); // ReactFlow edge IDs match
-        if (targetEdgeIndex !== -1) {
-          // Calculate cumulative width using per-edge scale = min(source-face, incident target-face)
-          const targetCumulativeWidth = sortedTargetEdges.slice(0, targetEdgeIndex).reduce((sum, e) => {
-            const width = e.data?.calculateWidth ? e.data.calculateWidth() : 2;
-            const eSourceHandle = e.sourceHandle || 'right-out';
-            const eSourceFace = eSourceHandle.split('-')[0];
-            const eTargetHandle = e.targetHandle || 'left';
-            const eTargetFace = eTargetHandle.split('-')[0];
-            const eSourceKey = `source-${e.source}-${eSourceFace}`;
-            const eIncidentKey = `incident-${e.target}-${eTargetFace}`;
-            const eSourceScale = faceScaleFactors[eSourceKey] || 1.0;
-            const eIncidentScale = faceScaleFactors[eIncidentKey] || 1.0;
-            // Always apply scale factors to enforce MAX_WIDTH constraint
-            const eScale = Math.min(eSourceScale, eIncidentScale);
-            return sum + (width * eScale);
-          }, 0);
-
-          const edgeWidth = edge.data?.calculateWidth ? edge.data.calculateWidth() : 2;
-          const thisEdgeScaleAtTarget = !useUniformScaling ? Math.min(sourceScaleFactor, targetScaleFactor) : 1.0;
-          const scaledEdgeWidth = edgeWidth * thisEdgeScaleAtTarget;
-          
-          const targetCenterInStack = targetCumulativeWidth + (scaledEdgeWidth / 2);
-          
-          // Calculate total scaled width for centering using per-edge scales
-          const totalScaledWidth = sortedTargetEdges.reduce((sum, e) => {
-            const width = e.data?.calculateWidth ? e.data.calculateWidth() : 2;
-            const eSourceHandle = e.sourceHandle || 'right-out';
-            const eSourceFace = eSourceHandle.split('-')[0];
-            const eTargetHandle = e.targetHandle || 'left';
-            const eTargetFace = eTargetHandle.split('-')[0];
-            const eSourceKey = `source-${e.source}-${eSourceFace}`;
-            const eIncidentKey = `incident-${e.target}-${eTargetFace}`;
-            const eSourceScale = faceScaleFactors[eSourceKey] || 1.0;
-            const eIncidentScale = faceScaleFactors[eIncidentKey] || 1.0;
-            // Always apply scale factors to enforce MAX_WIDTH constraint
-            const eScale = Math.min(eSourceScale, eIncidentScale);
-            return sum + (width * eScale);
-          }, 0);
-          
-          const targetStackCenter = totalScaledWidth / 2;
-          const targetOffsetFromCenter = targetCenterInStack - targetStackCenter;
-
-          // Apply offset to the correct axis based on face
-          if (targetFace === 'left' || targetFace === 'right') {
-            // Left/right faces: offset vertically (Y)
-            targetOffsetY = targetOffsetFromCenter;
-          } else {
-            // Top/bottom faces: offset horizontally (X)
-            targetOffsetX = targetOffsetFromCenter;
-          }
-        }
-      }
-
-      // Get the final edge width using the per-edge scale factor = min(source-face, incident target-face)
-      // Always apply scale factors to enforce MAX_WIDTH constraint
-      let scaledWidth = edge.data?.calculateWidth ? edge.data.calculateWidth() : 2;
-      const thisIncidentScale = faceScaleFactors[`incident-${edge.target}-${targetFace}`] || 1.0;
-      const thisEdgeScale = Math.min(sourceScaleFactor, thisIncidentScale);
-      scaledWidth = scaledWidth * thisEdgeScale;
-
-      // Calculate bundle metadata
-      const sourceEdgeIndex = sortedSourceEdges.findIndex(e => e.id === edge.id);
-      const targetEdgeIndex = sortedTargetEdges.findIndex(e => e.id === edge.id);
-      
-      // Calculate total bundle widths (already calculated above, but extract for clarity)
-      const sourceBundleWidth = sortedSourceEdges.reduce((sum, e) => {
-        const width = e.data?.calculateWidth ? e.data.calculateWidth() : 2;
-        const eSourceHandle = e.sourceHandle || 'right-out';
-        const eSourceFace = eSourceHandle.split('-')[0];
-        const eTargetHandle = e.targetHandle || 'left';
-        const eTargetFace = eTargetHandle.split('-')[0];
-        const eSourceKey = `source-${e.source}-${eSourceFace}`;
-        const eIncidentKey = `incident-${e.target}-${eTargetFace}`;
-        const eSourceScale = faceScaleFactors[eSourceKey] || 1.0;
-        const eIncidentScale = faceScaleFactors[eIncidentKey] || 1.0;
-        const eScale = !useUniformScaling ? Math.min(eSourceScale, eIncidentScale) : 1.0;
-        return sum + (width * eScale);
-      }, 0);
-      
-      const targetBundleWidth = sortedTargetEdges.reduce((sum, e) => {
-        const width = e.data?.calculateWidth ? e.data.calculateWidth() : 2;
-        const eSourceHandle = e.sourceHandle || 'right-out';
-        const eSourceFace = eSourceHandle.split('-')[0];
-        const eTargetHandle = e.targetHandle || 'left';
-        const eTargetFace = eTargetHandle.split('-')[0];
-        const eSourceKey = `source-${e.source}-${eSourceFace}`;
-        const eIncidentKey = `incident-${e.target}-${eTargetFace}`;
-        const eSourceScale = faceScaleFactors[eSourceKey] || 1.0;
-        const eIncidentScale = faceScaleFactors[eIncidentKey] || 1.0;
-        const eScale = !useUniformScaling ? Math.min(eSourceScale, eIncidentScale) : 1.0;
-        return sum + (width * eScale);
-      }, 0);
-
-      return { 
-        ...edge, 
-        sourceOffsetX: sourceOffsetX,
-        sourceOffsetY: sourceOffsetY,
-        targetOffsetX: targetOffsetX,
-        targetOffsetY: targetOffsetY,
-        scaledWidth: scaledWidth,
-        // Bundle metadata
-        sourceBundleWidth: sourceBundleWidth,
-        targetBundleWidth: targetBundleWidth,
-        sourceBundleSize: sortedSourceEdges.length,
-        targetBundleSize: sortedTargetEdges.length,
-        isFirstInSourceBundle: sourceEdgeIndex === 0,
-        isLastInSourceBundle: sourceEdgeIndex === sortedSourceEdges.length - 1,
-        isFirstInTargetBundle: targetEdgeIndex === 0,
-        isLastInTargetBundle: targetEdgeIndex === sortedTargetEdges.length - 1,
-        sourceFace: sourceFace,
-        targetFace: targetFace,
-      };
-    });
-
-    return edgesWithOffsets;
-  }, [useUniformScaling, getEdgeSortKey, graphStoreHook]);
+    return calculateEdgeOffsetsCore(edgesWithWidth, allNodes, maxWidth, useUniformScaling);
+  }, [useUniformScaling, graphStoreHook]);
 
   // Track the last synced graph to detect real changes
   const lastSyncedGraphRef = useRef<string>('');
@@ -3671,65 +3100,9 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
     }
   }, [nodes, edges]); // Removed 'graph' and 'setGraph' from dependencies
 
-  // Function to check if adding an edge would create a cycle
+  // Cycle detection (core algorithm in canvas/pathHighlighting.ts)
   const wouldCreateCycle = useCallback((source: string, target: string, currentEdges: any[]) => {
-    // Create a directed graph representation
-    const graph: { [key: string]: string[] } = {};
-    
-    // Initialize all nodes
-    nodes.forEach(node => {
-      graph[node.id] = [];
-    });
-    
-    // Add existing edges
-    currentEdges.forEach(edge => {
-      if (graph[edge.source]) {
-        graph[edge.source].push(edge.target);
-      }
-    });
-    
-    // Add the proposed new edge
-    if (graph[source]) {
-      graph[source].push(target);
-    }
-    
-    // DFS to detect cycles
-    const visited = new Set<string>();
-    const recursionStack = new Set<string>();
-    
-    const hasCycleDFS = (node: string): boolean => {
-      if (recursionStack.has(node)) {
-        return true; // Cycle detected
-      }
-      
-      if (visited.has(node)) {
-        return false; // Already processed
-      }
-      
-      visited.add(node);
-      recursionStack.add(node);
-      
-      const neighbors = graph[node] || [];
-      for (const neighbor of neighbors) {
-        if (hasCycleDFS(neighbor)) {
-          return true;
-        }
-      }
-      
-      recursionStack.delete(node);
-      return false;
-    };
-    
-    // Check all nodes for cycles
-    for (const nodeId of Object.keys(graph)) {
-      if (!visited.has(nodeId)) {
-        if (hasCycleDFS(nodeId)) {
-          return true;
-        }
-      }
-    }
-    
-    return false;
+    return wouldCreateCycleCore(source, target, currentEdges, nodes.map(n => n.id));
   }, [nodes]);
 
   // Track pending reconnections to prevent race conditions
@@ -4213,312 +3586,18 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
   // Track selected nodes for probability calculation
   const [selectedNodesForAnalysis, setSelectedNodesForAnalysis] = useState<any[]>([]);
 
-  // Helper function to find start nodes (nodes with no incoming edges)
-  const findStartNodes = useCallback((allNodes: any[], allEdges: any[]): any[] => {
-    const nodesWithIncoming = new Set(allEdges.map(edge => edge.target));
-    return allNodes.filter(node => !nodesWithIncoming.has(node.id));
-  }, []);
-
-  // DFS function to find all paths between two nodes (with depth limit to prevent infinite loops)
-  const findAllPaths = useCallback((sourceId: string, targetId: string, allEdges: any[], maxDepth: number = 10) => {
-    const paths: string[][] = [];
-    const visited = new Set<string>();
-    
-    const dfs = (currentNodeId: string, currentPath: string[], depth: number) => {
-      // Limit depth to prevent infinite loops in complex graphs
-      if (depth > maxDepth) return;
-      
-      if (currentNodeId === targetId) {
-        paths.push([...currentPath]);
-        return;
-      }
-      
-      if (visited.has(currentNodeId)) return;
-      visited.add(currentNodeId);
-      
-      // Find all outgoing edges from current node
-      const outgoingEdges = allEdges.filter(edge => edge.source === currentNodeId);
-      
-      for (const edge of outgoingEdges) {
-        if (!currentPath.includes(edge.id)) { // Avoid cycles
-          currentPath.push(edge.id);
-          dfs(edge.target, currentPath, depth + 1);
-          currentPath.pop(); // Backtrack
-        }
-      }
-      
-      visited.delete(currentNodeId); // Allow revisiting for other paths
-    };
-    
-    dfs(sourceId, [], 0);
-    return paths;
-  }, []);
-
-  // Helper function to topologically sort nodes
-  const topologicalSort = useCallback((nodeIds: string[], allEdges: any[]): string[] => {
-    // Build adjacency list and in-degree map for selected nodes
-    // But consider ALL edges in the graph to determine reachability
-    const adjList = new Map<string, string[]>();
-    const inDegree = new Map<string, number>();
-    
-    // Initialize
-    nodeIds.forEach(id => {
-      adjList.set(id, []);
-      inDegree.set(id, 0);
-    });
-    
-    // For each pair of selected nodes, check if one can reach the other
-    // and build the dependency graph accordingly
-    const selectedNodeSet = new Set(nodeIds);
-    
-    for (let i = 0; i < nodeIds.length; i++) {
-      for (let j = 0; j < nodeIds.length; j++) {
-        if (i !== j) {
-          const sourceId = nodeIds[i];
-          const targetId = nodeIds[j];
-          
-          // Check if there's ANY path from sourceId to targetId using ALL graph edges
-          const hasPath = findAllPaths(sourceId, targetId, allEdges).length > 0;
-          
-          if (hasPath) {
-            // Add edge in our dependency graph
-            if (!adjList.get(sourceId)!.includes(targetId)) {
-              adjList.get(sourceId)!.push(targetId);
-              inDegree.set(targetId, inDegree.get(targetId)! + 1);
-            }
-          }
-        }
-      }
-    }
-    
-    // Kahn's algorithm
-    const queue: string[] = [];
-    const sorted: string[] = [];
-    
-    // Add nodes with no incoming edges to queue
-    inDegree.forEach((degree, nodeId) => {
-      if (degree === 0) queue.push(nodeId);
-    });
-    
-    while (queue.length > 0) {
-      const current = queue.shift()!;
-      sorted.push(current);
-      
-      // Reduce in-degree for neighbors
-      adjList.get(current)!.forEach(neighbor => {
-        const newDegree = inDegree.get(neighbor)! - 1;
-        inDegree.set(neighbor, newDegree);
-        if (newDegree === 0) {
-          queue.push(neighbor);
-        }
-      });
-    }
-    
-    // If not all nodes were sorted, there's a cycle - return original order
-    return sorted.length === nodeIds.length ? sorted : nodeIds;
-  }, [findAllPaths]);
-
-  // Helper function to check if nodes are topologically sequential
-  const areNodesTopologicallySequential = useCallback((sortedNodeIds: string[], allEdges: any[]): boolean => {
-    // Check if there's a path connecting consecutive nodes in the sorted order
-    for (let i = 0; i < sortedNodeIds.length - 1; i++) {
-      const paths = findAllPaths(sortedNodeIds[i], sortedNodeIds[i + 1], allEdges);
-      if (paths.length === 0) {
-        return false; // No path between consecutive nodes
-      }
-    }
-    return true;
-  }, [findAllPaths]);
-
-  // Function to find all edges that are part of paths between selected nodes
-  const findPathEdges = useCallback((selectedNodes: any[], allEdges: any[]): Set<string> => {
-    if (selectedNodes.length === 0) return new Set<string>();
-    
-    // Special case: 1 node - highlight upstream and downstream edges with depth-based fading
-    if (selectedNodes.length === 1) {
-      const selectedId = selectedNodes[0].id;
-      const pathEdges = new Set<string>();
-      
-      // Helper to recursively find upstream edges with depth
-      const findUpstreamEdges = (nodeId: string, depth: number, visited = new Set<string>()) => {
-        if (visited.has(nodeId) || depth > 5) return;
-        visited.add(nodeId);
-        
-        allEdges.forEach(edge => {
-          if (edge.target === nodeId) {
-            pathEdges.add(edge.id);
-            findUpstreamEdges(edge.source, depth + 1, visited);
-          }
-        });
-      };
-      
-      // Helper to recursively find downstream edges with depth
-      const findDownstreamEdges = (nodeId: string, depth: number, visited = new Set<string>()) => {
-        if (visited.has(nodeId) || depth > 5) return;
-        visited.add(nodeId);
-        
-        allEdges.forEach(edge => {
-          if (edge.source === nodeId) {
-            pathEdges.add(edge.id);
-            findDownstreamEdges(edge.target, depth + 1, visited);
-          }
-        });
-      };
-      
-      // Find both upstream and downstream edges
-      findUpstreamEdges(selectedId, 0);
-      findDownstreamEdges(selectedId, 0);
-      
-      return pathEdges;
-    }
-    
-    if (selectedNodes.length < 2) return new Set<string>();
-    
-    const selectedNodeIds = selectedNodes.map(node => node.id);
-    const pathEdges = new Set<string>();
-    
-    // Special case: 3+ nodes - check if topologically sequential
-    if (selectedNodes.length >= 3) {
-      const sortedNodeIds = topologicalSort(selectedNodeIds, allEdges);
-      const isSequential = areNodesTopologicallySequential(sortedNodeIds, allEdges);
-      
-      if (isSequential) {
-        // Find path from first to last node, given intermediate nodes
-        const firstNodeId = sortedNodeIds[0];
-        const lastNodeId = sortedNodeIds[sortedNodeIds.length - 1];
-        const intermediateIds = sortedNodeIds.slice(1, -1);
-        
-        // Find all paths from first to last that go through all intermediates
-        const findPathsThroughNodes = (
-          currentId: string,
-          remainingNodes: string[],
-          currentPath: string[]
-        ): string[][] => {
-          if (remainingNodes.length === 0) {
-            // Reached the end, return the path
-            return [currentPath];
-          }
-          
-          const nextNode = remainingNodes[0];
-          const restNodes = remainingNodes.slice(1);
-          const allPaths: string[][] = [];
-          
-          // Find all paths from current to next node
-          const paths = findAllPaths(currentId, nextNode, allEdges);
-          paths.forEach(path => {
-            allPaths.push(...findPathsThroughNodes(nextNode, restNodes, [...currentPath, ...path]));
-          });
-          
-          return allPaths;
-        };
-        
-        const paths = findPathsThroughNodes(firstNodeId, [...intermediateIds, lastNodeId], []);
-        paths.forEach(path => {
-          path.forEach(edgeId => pathEdges.add(edgeId));
-        });
-        
-        return pathEdges;
-      }
-    }
-    
-    // Default case: For each pair of selected nodes, find all paths between them
-    for (let i = 0; i < selectedNodeIds.length; i++) {
-      for (let j = i + 1; j < selectedNodeIds.length; j++) {
-        const sourceId = selectedNodeIds[i];
-        const targetId = selectedNodeIds[j];
-        
-        // Find all paths from source to target
-        const paths = findAllPaths(sourceId, targetId, allEdges);
-        
-        // Add all edges from all paths to the set
-        paths.forEach(path => {
-          path.forEach(edgeId => pathEdges.add(edgeId));
-        });
-        
-        // Also find paths in reverse direction (target to source)
-        const reversePaths = findAllPaths(targetId, sourceId, allEdges);
-        reversePaths.forEach(path => {
-          path.forEach(edgeId => pathEdges.add(edgeId));
-        });
-      }
-    }
-    
-    return pathEdges;
-  }, [nodes, findStartNodes, topologicalSort, areNodesTopologicallySequential, findAllPaths]);
-
-  // STEP 4: Compute highlight metadata (don't mutate edges state)
-  // This will be passed into buildScenarioRenderEdges to apply to 'current' layer only
-  // OPTIMIZATION: Use stable edge IDs array to avoid unnecessary recalculations
+  // STEP 4: Compute highlight metadata (pure algorithms in canvas/pathHighlighting.ts)
   const edgeIdsRef = React.useRef<string>('');
   const currentEdgeIds = edges.map(e => e.id).sort().join(',');
   const edgesChanged = edgeIdsRef.current !== currentEdgeIds;
   if (edgesChanged) {
     edgeIdsRef.current = currentEdgeIds;
   }
-  
-  // Only recalculate highlight metadata when node selection changes OR edges topology changes
-  // This prevents recalculation when only edges are selected
+
   const nodeSelectionKey = selectedNodesForAnalysis.map(n => n.id).sort().join(',');
   const highlightMetadata = React.useMemo(() => {
-    if (selectedNodesForAnalysis.length === 0) {
-      return {
-        highlightedEdgeIds: new Set<string>(),
-        edgeDepthMap: new Map<string, number>(),
-        isSingleNodeSelection: false
-      };
-    }
-    
-    // Calculate highlight depths for single node selection
-    const edgeDepthMap = new Map<string, number>();
-    
-    if (selectedNodesForAnalysis.length === 1) {
-      const selectedId = selectedNodesForAnalysis[0].id;
-      
-      // Calculate upstream depths
-      const calculateUpstreamDepths = (nodeId: string, depth: number, visited = new Set<string>()) => {
-        if (visited.has(nodeId) || depth > 5) return;
-        visited.add(nodeId);
-        
-        edges.forEach(edge => {
-          if (edge.target === nodeId) {
-            const existingDepth = edgeDepthMap.get(edge.id);
-            if (existingDepth === undefined || depth < existingDepth) {
-              edgeDepthMap.set(edge.id, depth);
-            }
-            calculateUpstreamDepths(edge.source, depth + 1, visited);
-          }
-        });
-      };
-      
-      // Calculate downstream depths
-      const calculateDownstreamDepths = (nodeId: string, depth: number, visited = new Set<string>()) => {
-        if (visited.has(nodeId) || depth > 5) return;
-        visited.add(nodeId);
-        
-        edges.forEach(edge => {
-          if (edge.source === nodeId) {
-            const existingDepth = edgeDepthMap.get(edge.id);
-            if (existingDepth === undefined || depth < existingDepth) {
-              edgeDepthMap.set(edge.id, depth);
-            }
-            calculateDownstreamDepths(edge.target, depth + 1, visited);
-          }
-        });
-      };
-      
-      calculateUpstreamDepths(selectedId, 0);
-      calculateDownstreamDepths(selectedId, 0);
-    }
-    
-    const pathEdges = findPathEdges(selectedNodesForAnalysis, edges);
-    const isSingleNodeSelection = selectedNodesForAnalysis.length === 1;
-    
-    return {
-      highlightedEdgeIds: pathEdges,
-      edgeDepthMap,
-      isSingleNodeSelection
-    };
-  }, [selectedNodesForAnalysis, nodeSelectionKey, edges, findPathEdges, edgesChanged]); 
+    return computeHighlightMetadata(selectedNodesForAnalysis, edges);
+  }, [selectedNodesForAnalysis, nodeSelectionKey, edges, edgesChanged]);
 
   // Handle selection changes
   const onSelectionChange = useCallback(({ nodes: selectedNodes, edges: selectedEdges }: any) => {
@@ -4770,59 +3849,18 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
     };
   }, []);
 
-  // Add new node
+  // Add new node (core mutation in canvas/creationTools.ts)
   const addNode = useCallback(() => {
-    console.log('addNode function called');
     if (!graph) return;
-    
-    const newId = crypto.randomUUID();
-    
-    // Generate initial label (but no id - user should pick from registry)
-    const label = `Node ${graph.nodes.length + 1}`;
-    
-    // Place node at center of current viewport
-    const viewportCenter = screenToFlowPosition({ 
-      x: window.innerWidth / 2, 
-      y: window.innerHeight / 2 
-    });
-    
-    // Add node directly to graph state (not ReactFlow state)
-    const nextGraph = structuredClone(graph);
-    nextGraph.nodes.push({
-      uuid: newId,
-      id: '', // Empty ID - user should assign a node_id from registry
-      label: label,
-      absorbing: false,
-      layout: {
-        x: viewportCenter.x,
-        y: viewportCenter.y
-      }
-    });
-    
-    if (nextGraph.metadata) {
-      nextGraph.metadata.updated_at = new Date().toISOString();
-    }
-    
+    const viewportCenter = screenToFlowPosition({ x: window.innerWidth / 2, y: window.innerHeight / 2 });
+    const { graph: nextGraph, newUuid } = createNodeInGraph(graph, viewportCenter);
     setGraph(nextGraph);
-    
-    console.log('saveHistoryState function:', typeof saveHistoryState);
     if (typeof saveHistoryState === 'function') {
-      saveHistoryState('Add node', newId);
-    } else {
-      console.error('saveHistoryState is not a function:', saveHistoryState);
+      saveHistoryState('Add node', newUuid);
     }
-    
-    // Select the new node after a brief delay to allow sync to complete
     setTimeout(() => {
-      // Select in ReactFlow (visual selection)
-      setNodes((nodes) => 
-        nodes.map((node) => ({
-          ...node,
-          selected: node.id === newId
-        }))
-      );
-      // Notify parent (PropertiesPanel)
-      onSelectedNodeChange(newId);
+      setNodes((nodes) => nodes.map((node) => ({ ...node, selected: node.id === newUuid })));
+      onSelectedNodeChange(newUuid);
     }, 50);
   }, [graph, setGraph, onSelectedNodeChange, screenToFlowPosition, saveHistoryState, setNodes]);
 
@@ -4841,116 +3879,36 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
     }
   }, [deleteSelected, onDeleteSelectedRef]);
 
-  // Auto-layout function using dagre
+  // Auto-layout function using dagre (core computation in canvas/layoutAlgorithms.ts)
   const performAutoLayout = useCallback((direction?: 'LR' | 'RL' | 'TB' | 'BT') => {
     if (!graph) return;
-    
-    // Use provided direction or fall back to state
+
     const effectiveDirection = direction || layoutDirection;
-    
-    // Determine which nodes to layout
-    const selectedNodes = nodes.filter(n => n.selected);
-    const nodesToLayout = selectedNodes.length > 0 ? selectedNodes : nodes;
-    const nodeIdsToLayout = new Set(nodesToLayout.map(n => n.id));
-    
-    if (nodesToLayout.length === 0) return;
-    
-    // Create a new dagre graph
-    const dagreGraph = new dagre.graphlib.Graph();
-    dagreGraph.setDefaultEdgeLabel(() => ({}));
-    
-    // Configure layout direction and spacing
-    // In Sankey mode, reduce vertical spacing for tighter packing
-    // nodesep is the minimum gap between node EDGES (not centers) in the same rank
-    const nodeSpacing = useSankeyView ? 20 : 60;  // Vertical spacing between nodes in same rank (tight in Sankey)
-    const rankSpacing = useSankeyView ? 250 : 150; // Horizontal spacing between ranks
-    
-    dagreGraph.setGraph({ 
-      rankdir: effectiveDirection, // User-selected direction
-      nodesep: nodeSpacing,   // Spacing between nodes in same rank (vertical in LR mode)
-      ranksep: rankSpacing,   // Spacing between ranks (horizontal in LR mode)
-      edgesep: 20,   // Minimum separation between edges (encourages straighter edges)
-      marginx: 40,   // Midpoint margins
-      marginy: 40,
-      // ranker: 'tight-tree' // Try tight-tree ranker for better Sankey layouts
-    });
-    
-    // Add nodes to dagre graph
-    nodesToLayout.forEach((node) => {
-      // Node dimensions - in Sankey mode, height is set via style.height or data.sankeyHeight
-      let width = node.width || (node.data?.type === 'case' ? 96 : DEFAULT_NODE_WIDTH);
-      let height = node.height || (node.data?.type === 'case' ? 96 : DEFAULT_NODE_HEIGHT);
-      
-      // In Sankey mode, use the calculated Sankey height
-      if (useSankeyView && node.data?.sankeyHeight) {
-        height = node.data.sankeyHeight;
-        width = node.data.sankeyWidth || DEFAULT_NODE_WIDTH;
-        console.log(`[Dagre] Sankey node ${node.data?.label}: using sankeyHeight=${height}, sankeyWidth=${width}, node.width=${node.width}, node.height=${node.height}, style.height=${(node as any).style?.height}`);
-      } else {
-        console.log(`[Dagre] Normal node ${node.data?.label}: using width=${width}, height=${height}`);
-      }
-      
-      dagreGraph.setNode(node.id, { width, height });
-    });
-    
-    // Add edges to dagre graph (only edges between nodes being laid out)
-    edges.forEach((edge) => {
-      if (nodeIdsToLayout.has(edge.source) && nodeIdsToLayout.has(edge.target)) {
-        dagreGraph.setEdge(edge.source, edge.target);
-      }
-    });
-    
-    // Verify node dimensions before layout
-    if (useSankeyView) {
-      console.log('[Dagre] Node dimensions BEFORE layout:');
-      dagreGraph.nodes().forEach((nodeId) => {
-        const node = dagreGraph.node(nodeId);
-        console.log(`  ${nodeId}: width=${node.width}, height=${node.height}`);
-      });
-    }
-    
-    // Run the layout algorithm
-    dagre.layout(dagreGraph);
-    
-    // Verify positions after layout
-    if (useSankeyView) {
-      console.log('[Dagre] Node positions AFTER layout:');
-      dagreGraph.nodes().forEach((nodeId) => {
-        const node = dagreGraph.node(nodeId);
-        console.log(`  ${nodeId}: x=${node.x}, y=${node.y}, width=${node.width}, height=${node.height}`);
-      });
-    }
-    
-    // Apply the layout to the graph
+    const { positions } = computeDagreLayoutCore(nodes, edges, effectiveDirection, useSankeyView);
+    if (positions.size === 0) return;
+
+    // Apply positions to graph
     const nextGraph = structuredClone(graph);
-    dagreGraph.nodes().forEach((nodeId) => {
-      const dagreNode = dagreGraph.node(nodeId);
+    positions.forEach(({ x, y }, nodeId) => {
       const graphNode = nextGraph.nodes.find((n: any) => n.uuid === nodeId || n.id === nodeId);
-      
       if (graphNode) {
         if (!graphNode.layout) graphNode.layout = { x: 0, y: 0 };
-        // Dagre gives us center coordinates, so no need to adjust
-        graphNode.layout.x = dagreNode.x;
-        graphNode.layout.y = dagreNode.y;
+        graphNode.layout.x = x;
+        graphNode.layout.y = y;
       }
     });
-    
+
     if (nextGraph.metadata) {
       nextGraph.metadata.updated_at = new Date().toISOString();
     }
-    
-    // Update graph - this will trigger sync
+
     setGraph(nextGraph);
-    
-    // Save history state for auto-layout
     saveHistoryState('Auto-layout', undefined, undefined);
-    
+
     // ALWAYS trigger re-route after layout (regardless of autoReroute setting)
     setTimeout(() => {
       console.log('Triggering FORCED re-route after auto-layout');
-      setForceReroute(true); // Force re-route even if autoReroute is off
-      
-      // Fit view after re-route completes
+      setForceReroute(true);
       setTimeout(() => {
         fitView({ padding: 0.1, duration: 400 });
       }, 200);
@@ -4964,229 +3922,46 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
     performAutoLayout(direction);
   }, [performAutoLayout]);
 
-  // Sankey auto-layout using d3-sankey
+  // Sankey auto-layout using d3-sankey (core computation in canvas/layoutAlgorithms.ts)
   const performSankeyLayout = useCallback(() => {
     if (!graph) return;
-    
+
     // Begin layout transaction: block effects and start cooldown window
     sankeyLayoutInProgressRef.current = true;
-    effectsCooldownUntilRef.current = performance.now() + 800; // 0.8s settle window
-    
-    // Determine which nodes to layout
-    const selectedNodes = nodes.filter(n => n.selected);
-    const nodesToLayout = selectedNodes.length > 0 ? selectedNodes : nodes;
-    const nodeIdsToLayout = new Set(nodesToLayout.map(n => n.id));
-    
-    if (nodesToLayout.length === 0) return;
-    
-    // Build d3-sankey compatible data structure
-    const sankeyNodes: any[] = [];
-    const sankeyLinks: any[] = [];
-    
-    // Add nodes with their current heights
-    nodesToLayout.forEach((node) => {
-      const height = node.data?.sankeyHeight || (node.data?.type === 'case' ? 96 : DEFAULT_NODE_HEIGHT);
-      sankeyNodes.push({
-        id: node.id,
-        name: node.data?.label || node.id,
-        fixedValue: height, // Force node height: d3-sankey will respect fixedValue
-        height: height,     // Keep for our internal extent and spacing calculations
-      });
-    });
-    
-    // Add edges (only between nodes being laid out)
-    // d3-sankey with .nodeId() set expects source/target to be the node IDs (strings)
-    edges.forEach((edge) => {
-      if (nodeIdsToLayout.has(edge.source) && nodeIdsToLayout.has(edge.target)) {
-        // Use edge visual width for link value; ensure non-trivial magnitude
-        const raw = edge.data?.scaledWidth ?? 1;
-        const linkValue = Math.max(1, raw); // clamp min 1 to avoid degenerate links
-        sankeyLinks.push({
-          source: edge.source,  // Use node ID directly, not index
-          target: edge.target,  // Use node ID directly, not index
-          value: linkValue,
-        });
-      }
-    });
-    
-    console.log('[Sankey Layout] Nodes:', sankeyNodes.length, 'Links:', sankeyLinks.length);
-    
-    // ===== ADAPTIVE SANKEY LAYOUT POLICY =====
-    // Constants
-    const nodeWidth = DEFAULT_NODE_WIDTH;
-    const margin = 40;
-    const viewportWidth = 1800; // Approximate available canvas width
-    
-    // Calculate number of columns (depth) by doing a simple rank assignment
-    const nodeDepths = new Map<string, number>();
-    const visited = new Set<string>();
-    const calculateDepth = (nodeId: string, depth: number = 0) => {
-      if (visited.has(nodeId)) return;
-      visited.add(nodeId);
-      nodeDepths.set(nodeId, Math.max(nodeDepths.get(nodeId) || 0, depth));
-      
-      // Find all outgoing edges
-      sankeyLinks.forEach(link => {
-        if (link.source === nodeId) {
-          calculateDepth(link.target, depth + 1);
-        }
-      });
-    };
-    
-    // Start from nodes with no incoming edges
-    const nodesWithIncoming = new Set(sankeyLinks.map(l => l.target));
-    sankeyNodes.forEach(node => {
-      if (!nodesWithIncoming.has(node.id)) {
-        calculateDepth(node.id, 0);
-      }
-    });
-    
-    const maxDepth = Math.max(...Array.from(nodeDepths.values()), 0);
-    const D = maxDepth + 1; // Number of columns
-    
-    // Calculate nodes per column and heights per column
-    const countsPerColumn = new Array(D).fill(0);
-    const heightsPerColumn = new Array(D).fill(0);
-    sankeyNodes.forEach(node => {
-      const depth = nodeDepths.get(node.id) || 0;
-      countsPerColumn[depth]++;
-      heightsPerColumn[depth] += node.height;
-    });
-    const countsMax = Math.max(...countsPerColumn);
-    const HcolMax = Math.max(...heightsPerColumn);
-    
-    // Calculate node height stats
-    const Havg = sankeyNodes.reduce((sum, n) => sum + n.height, 0) / sankeyNodes.length;
-    const Hmax = Math.max(...sankeyNodes.map(n => n.height));
-    
-    // Calculate max link value
-    const Lmax = sankeyLinks.length > 0 ? Math.max(...sankeyLinks.map(l => l.value)) : 1;
-    const E = sankeyLinks.length;
-    
-    // === Horizontal spacing G (column gap) ===
-    // Use simpler, more generous spacing to give d3-sankey freedom
-    let G: number;
-    if (D <= 3) G = 250;
-    else if (D <= 6) G = 200;
-    else G = 150;
-    
-    // === Vertical node padding P ===
-    // Adaptive padding: balance density vs. graph depth
-    // Deep graphs need more padding even when dense
-    let P: number;
-    if (countsMax >= 6) {
-      // Dense columns: scale padding with depth to avoid cramming in deep graphs
-      P = D >= 8 ? 25 : D >= 6 ? 20 : 15;
-    } else if (countsMax >= 4) {
-      P = 25;
-    } else {
-      P = 35; // Sparse columns get more breathing room
-    }
-    
-    // === Calculate extent ===
-    let W = margin * 2 + D * nodeWidth + (D - 1) * G;
-    // Force extra vertical space to ensure padding is respected
-    // Add 50% more to the calculated padding space to prevent compression
-    let H = margin * 2 + Math.max(...heightsPerColumn.map((h, i) => 
-      h + (countsPerColumn[i] - 1) * P * 1.5
-    ));
-    // Ensure minimum height to prevent vertical cramming
-    H = Math.max(H, 600);
-    
-    // Viewport fit pass (scale G only)
-    if (W > 1.25 * viewportWidth) {
-      const scale = Math.max(0.7, Math.min(1.0, (1.25 * viewportWidth) / W));
-      G = G * scale;
-      W = margin * 2 + D * nodeWidth + (D - 1) * G;
-    } else if (W < 0.8 * viewportWidth) {
-      const scale = Math.max(1.0, Math.min(1.2, (0.8 * viewportWidth) / W));
-      G = G * scale;
-      W = margin * 2 + D * nodeWidth + (D - 1) * G;
-    }
-    
-    // === Alignment ===
-    const alignment = countsMax >= 4 ? sankeyJustify : sankeyCenter;
-    
-    // === Iterations ===
-    let iterations: number;
-    if (E <= 150) iterations = 32;
-    else if (E <= 300) iterations = 48;
-    else iterations = 64;
-    
-    console.log(`[Sankey Layout] Adaptive settings: D=${D}, countsMax=${countsMax}, G=${G.toFixed(0)}, P=${P}, W=${W.toFixed(0)}, H=${H.toFixed(0)}, iterations=${iterations}`);
-    
-    // Create and configure the sankey layout
-    const sankeyGenerator = sankey()
-      .nodeId((d: any) => d.id)
-      .nodeWidth(nodeWidth)
-      .nodePadding(P)
-      .extent([[margin, margin], [W - margin, H - margin]])
-      .nodeAlign(alignment)
-      .iterations(iterations);
-    
-    // Run the layout
-    const sankeyGraph = sankeyGenerator({
-      nodes: sankeyNodes,
-      links: sankeyLinks,
-    });
-    
-    console.log('[Sankey Layout] Layout computed, applying positions');
-    console.log('[Sankey Layout] Sample sankeyNode:', sankeyGraph.nodes[0]);
+    effectsCooldownUntilRef.current = performance.now() + 800;
+
+    const { positions } = computeSankeyLayoutCore(nodes, edges);
+    if (positions.size === 0) return;
 
     // Flag: layout in progress to suppress cascading side-effects
     sankeyLayoutInProgressRef.current = true;
 
-    // Note: we will not touch ReactFlow node state here; we only update graph layout
-    
-    // Apply the layout to the graph
+    // Apply positions to graph
     const nextGraph = structuredClone(graph);
-    sankeyGraph.nodes.forEach((sankeyNode: any) => {
-      const graphNode = nextGraph.nodes.find((n: any) => n.uuid === sankeyNode.id || n.id === sankeyNode.id);
-      
+    positions.forEach(({ x, y, sankeyHeight }, nodeId) => {
+      const graphNode = nextGraph.nodes.find((n: any) => n.uuid === nodeId || n.id === nodeId);
       if (graphNode) {
         if (!graphNode.layout) graphNode.layout = { x: 0, y: 0 };
-        
-        // Check if d3-sankey actually computed positions
-        if (sankeyNode.x0 === undefined || sankeyNode.y0 === undefined) {
-          console.error(`[Sankey Layout] Node ${graphNode.label} has no x0/y0! Node:`, sankeyNode);
-          return;
-        }
-        
-        // d3-sankey gives us x0,y0 (top-left) coordinates
-        // Store these as TOP-LEFT in graph.layout for Sankey mode
-        // toFlow will convert them to ReactFlow positions appropriately
-        const topLeftX = sankeyNode.x0;
-        const topLeftY = sankeyNode.y0;
-        
-        // Store the height as a temporary property for toFlow conversion
-        const sankeyHeight = sankeyNode.y1 - sankeyNode.y0;
-        // Use a temporary property on the layout object (not .data which doesn't exist on graph schema)
         (graphNode.layout as any).sankeyHeight = sankeyHeight;
-        
-        console.log(`[Sankey Layout] Node ${graphNode.label}: OLD x=${graphNode.layout.x}, y=${graphNode.layout.y} → NEW x=${topLeftX.toFixed(0)}, y=${topLeftY.toFixed(0)} (top-left), height=${sankeyHeight.toFixed(0)}`);
-        
-        graphNode.layout.x = topLeftX;
-        graphNode.layout.y = topLeftY;
+        graphNode.layout.x = x;
+        graphNode.layout.y = y;
       }
     });
-    
+
     if (nextGraph.metadata) {
       nextGraph.metadata.updated_at = new Date().toISOString();
     }
-    
+
     // Skip node sizing effect after layout (heights are already set upstream)
     skipSankeyNodeSizingRef.current = true;
-    
-    // Update graph - this will trigger sync
+
     setGraph(nextGraph);
-    
-    // Save history state for auto-layout
     saveHistoryState('Sankey auto-layout', undefined, undefined);
-    
+
     // End layout without forcing reroute; clear flag after a short delay + cooldown
     setTimeout(() => {
       sankeyLayoutInProgressRef.current = false;
-      effectsCooldownUntilRef.current = performance.now() + 500; // post-layout cooldown
+      effectsCooldownUntilRef.current = performance.now() + 500;
       console.log('[Sankey Layout] Completed');
     }, 150);
   }, [graph, nodes, edges, setGraph, saveHistoryState, setForceReroute, fitView]);
@@ -5293,79 +4068,28 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
     }
   }, [contextMenu, nodeContextMenu, multiSelectContextMenu, edgeContextMenu]);
 
-  // Add node at specific position
+  // Add node at specific position (core mutation in canvas/creationTools.ts)
   const addNodeAtPosition = useCallback((x: number, y: number) => {
     if (!graph) return;
-    
-    const newId = crypto.randomUUID();
-    const label = `Node ${graph.nodes.length + 1}`;
-    
-    const newNode = {
-      uuid: newId,
-      id: '', // Empty ID - user should assign a node_id from registry
-      label: label,
-      absorbing: false,
-      layout: {
-        x: x,
-        y: y
-      }
-    };
-    
-    const nextGraph = structuredClone(graph);
-    nextGraph.nodes.push(newNode);
-    
-    if (nextGraph.metadata) {
-      nextGraph.metadata.updated_at = new Date().toISOString();
-    }
-    
+    const { graph: nextGraph, newUuid } = createNodeInGraph(graph, { x, y });
     setGraph(nextGraph);
-    
-    console.log('saveHistoryState in addNodeAtPosition:', typeof saveHistoryState, saveHistoryState);
     if (typeof saveHistoryState === 'function') {
-      saveHistoryState('Add node', newId);
-    } else {
-      console.error('saveHistoryState is not a function in addNodeAtPosition:', saveHistoryState);
+      saveHistoryState('Add node', newUuid);
     }
     setContextMenu(null);
-    
-    // Select the new node after a brief delay to allow sync to complete
     setTimeout(() => {
-      // Select in ReactFlow (visual selection)
-      setNodes((nodes) => 
-        nodes.map((node) => ({
-          ...node,
-          selected: node.id === newId
-        }))
-      );
-      // Notify parent (PropertiesPanel)
-      onSelectedNodeChange(newId);
+      setNodes((nodes) => nodes.map((node) => ({ ...node, selected: node.id === newUuid })));
+      onSelectedNodeChange(newUuid);
     }, 50);
   }, [graph, setGraph, saveHistoryState, setNodes, onSelectedNodeChange]);
 
+  // Add post-it (core mutation in canvas/creationTools.ts)
   const addPostitAtPosition = useCallback((x: number, y: number, w?: number, h?: number) => {
     if (!graph) return;
-
-    const newId = crypto.randomUUID();
-    const nextGraph = structuredClone(graph);
-    if (!nextGraph.postits) nextGraph.postits = [];
-    nextGraph.postits.push({
-      id: newId,
-      text: '',
-      colour: '#FFF475',
-      width: w && w >= 50 ? Math.round(w) : 200,
-      height: h && h >= 50 ? Math.round(h) : 150,
-      x: Math.round(x),
-      y: Math.round(y),
-    });
-    if (nextGraph.metadata) {
-      nextGraph.metadata.updated_at = new Date().toISOString();
-    }
-    // Use setGraphDirect (synchronous) — postits don't change graph topology,
-    // and saveHistoryState must snapshot the graph AFTER the mutation lands.
+    const { graph: nextGraph, newId } = createPostitInGraph(graph, { x, y }, { width: w, height: h });
     setGraphDirect(nextGraph);
     saveHistoryState('Add post-it');
     setContextMenu(null);
-
     autoEditPostitIdRef.current = newId;
     onSelectedNodeChange(null);
     onSelectedEdgeChange(null);
@@ -5377,23 +4101,10 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
     addPostitAtPosition(centre.x, centre.y);
   }, [screenToFlowPosition, addPostitAtPosition]);
 
+  // Add container (core mutation in canvas/creationTools.ts)
   const addContainerAtPosition = useCallback((x: number, y: number, w?: number, h?: number) => {
     if (!graph) return;
-    const newId = crypto.randomUUID();
-    const nextGraph = structuredClone(graph);
-    if (!nextGraph.containers) nextGraph.containers = [];
-    nextGraph.containers.push({
-      id: newId,
-      label: 'Group',
-      colour: '#94A3B8',
-      width: w && w >= 100 ? Math.round(w) : 400,
-      height: h && h >= 80 ? Math.round(h) : 300,
-      x: Math.round(x),
-      y: Math.round(y),
-    });
-    if (nextGraph.metadata) nextGraph.metadata.updated_at = new Date().toISOString();
-    // Use setGraphDirect (synchronous) — containers don't change graph topology,
-    // and saveHistoryState must snapshot the graph AFTER the mutation lands.
+    const { graph: nextGraph, newId } = createContainerInGraph(graph, { x, y }, { width: w, height: h });
     setGraphDirect(nextGraph);
     saveHistoryState('Add container');
     setContextMenu(null);
@@ -5419,41 +4130,20 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
     }
   }, [addContainer, onAddContainerRef]);
 
+  // Add canvas analysis (core mutation in canvas/creationTools.ts)
   const addCanvasAnalysisAtPosition = useCallback((x: number, y: number, dragData: any) => {
     if (!graph) return;
-    const nextGraph = structuredClone(graph);
-    if (!nextGraph.canvasAnalyses) nextGraph.canvasAnalyses = [];
-
-    const w = dragData.drawWidth && dragData.drawWidth >= 100 ? Math.round(dragData.drawWidth) : 400;
-    const h = dragData.drawHeight && dragData.drawHeight >= 80 ? Math.round(dragData.drawHeight) : 300;
-
-    const analysis = buildCanvasAnalysisObject(
-      {
-        recipe: dragData.recipe || { analysis: { analysis_type: dragData.analysisType || '' } },
-        viewMode: dragData.viewMode || 'chart',
-        chartKind: dragData.chartKind,
-        analysisResult: dragData.analysisResult,
-        analysisTypeOverridden: dragData.analysisTypeOverridden ?? false,
-        display: dragData.display,
-      },
-      { x, y },
-      { width: w, height: h },
-    );
-
-    nextGraph.canvasAnalyses.push(analysis);
-    if (nextGraph.metadata) nextGraph.metadata.updated_at = new Date().toISOString();
-
+    const { graph: nextGraph, analysisId, analysis } = createCanvasAnalysisInGraph(graph, { x, y }, dragData);
     if (dragData.analysisResult) {
-      canvasAnalysisTransientCache.set(analysis.id, dragData.analysisResult);
+      canvasAnalysisTransientCache.set(analysisId, dragData.analysisResult);
     }
-
-    autoSelectAnalysisIdRef.current = analysis.id;
+    autoSelectAnalysisIdRef.current = analysisId;
     setGraphDirect(nextGraph as any);
     saveHistoryState('Pin analysis to canvas');
     setContextMenu(null);
     onSelectedNodeChange(null);
     onSelectedEdgeChange(null);
-    onSelectedAnnotationChange?.(analysis.id, 'canvasAnalysis');
+    onSelectedAnnotationChange?.(analysisId, 'canvasAnalysis');
   }, [graph, setGraphDirect, saveHistoryState, onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnnotationChange]);
 
   const startPinnedCanvasAnalysis = useCallback((payload?: any) => {
@@ -5461,71 +4151,13 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
     setActiveElementTool('new-analysis');
   }, [setActiveElementTool]);
 
+  // Start "Add chart" flow (DSL construction in canvas/creationTools.ts)
   const startAddChart = useCallback((detail?: { contextNodeIds?: string[]; contextEdgeIds?: string[] }) => {
     const ctxNodeIds: string[] = detail?.contextNodeIds || [];
     const ctxEdgeIds: string[] = detail?.contextEdgeIds || [];
-
-    let selectedConversionNodes = nodes
-      .filter(n => n.selected && !isCanvasObjectNode(n.id))
-      .map(n => n.data?.id || n.id);
-
-    // Expand selected containers to their contained nodes when no conversion nodes are selected
-    if (selectedConversionNodes.length === 0 && graph?.containers) {
-      const selectedContainers = nodes.filter(n => n.selected && n.id?.startsWith('container-'));
-      for (const cn of selectedContainers) {
-        const cid = cn.id.replace('container-', '');
-        const c = graph.containers.find((ci: any) => ci.id === cid);
-        if (c) {
-          const contained = getContainedConversionNodeIds(c, nodes);
-          selectedConversionNodes.push(...contained.map(rfId => {
-            const n = nodes.find(nd => nd.id === rfId);
-            return n?.data?.id || rfId;
-          }));
-        }
-      }
-    }
-
-    const selectedEdgeUuids = edges
-      .filter(e => e.selected)
-      .map(e => e.id);
-
-    const mergedNodeIds = [...new Set([...selectedConversionNodes, ...ctxNodeIds])];
-    const mergedEdgeIds = [...new Set([...selectedEdgeUuids, ...ctxEdgeIds])];
-
-    let analyticsDsl = constructDSLFromSelection(
-      mergedNodeIds, mergedEdgeIds, nodes as any[], (graph?.edges || []) as any[],
+    pendingAnalysisPayload = buildAddChartPayload(
+      graph, nodes, edges, ctxNodeIds, ctxEdgeIds, isCanvasObjectNode, getContainedConversionNodeIds,
     );
-
-    console.log('[startAddChart]', {
-      ctxNodeIds,
-      ctxEdgeIds,
-      selectedConversionNodes,
-      mergedNodeIds,
-      mergedEdgeIds,
-      analyticsDsl,
-      rfNodeCount: nodes.length,
-      graphEdgeCount: graph?.edges?.length || 0,
-    });
-
-    if (!analyticsDsl && ctxEdgeIds.length > 0 && graph?.edges) {
-      const ge = graph.edges.find((ed: any) => ed.uuid === ctxEdgeIds[0] || ed.id === ctxEdgeIds[0]);
-      if (ge) {
-        const fromRaw: string = ge.from || (ge as any).source || '';
-        const toRaw: string = ge.to || (ge as any).target || '';
-        const fromNode = graph.nodes?.find((n: any) => n.uuid === fromRaw || n.id === fromRaw);
-        const toNode = graph.nodes?.find((n: any) => n.uuid === toRaw || n.id === toRaw);
-        const fromId = fromNode?.id || fromRaw;
-        const toId = toNode?.id || toRaw;
-        if (fromId && toId) {
-          analyticsDsl = `from(${fromId}).to(${toId})`;
-        }
-      }
-    }
-
-    pendingAnalysisPayload = {
-      recipe: { analysis: { analysis_type: '', analytics_dsl: analyticsDsl || undefined } },
-      analysisTypeOverridden: false,
-    };
     setActiveElementTool('new-analysis');
   }, [nodes, edges, isCanvasObjectNode, graph, setActiveElementTool]);
 
@@ -5631,76 +4263,26 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
     }
   }, [activeElementTool, screenToFlowPosition, addNodeAtPosition, addContainerAtPosition, onClearElementTool]);
 
-  // Paste node at specific position (from copy-paste clipboard)
+  // Paste node at specific position (core mutation in canvas/creationTools.ts)
   const pasteNodeAtPosition = useCallback(async (x: number, y: number) => {
     if (!graph) return;
-    
-    if (!copiedNode) {
-      toast.error('No node copied');
-      return;
-    }
-    
+    if (!copiedNode) { toast.error('No node copied'); return; }
     const nodeId = copiedNode.objectId;
-    const fileId = `node-${nodeId}`;
-    
-    // Check if the node file exists
-    const file = fileRegistry.getFile(fileId);
-    if (!file) {
-      toast.error(`Node file not found: ${nodeId}`);
-      return;
-    }
-    
-    const newUuid = crypto.randomUUID();
-    
-    // Create new node with the copied node ID attached
-    const newNode = {
-      uuid: newUuid,
-      id: nodeId, // Attach the copied node file
-      label: file.data?.label || nodeId, // Use label from file if available
-      absorbing: false,
-      layout: {
-        x: x,
-        y: y
-      }
-    };
-    
-    const nextGraph = structuredClone(graph);
-    nextGraph.nodes.push(newNode);
-    
-    if (nextGraph.metadata) {
-      nextGraph.metadata.updated_at = new Date().toISOString();
-    }
-    
+    const file = fileRegistry.getFile(`node-${nodeId}`);
+    if (!file) { toast.error(`Node file not found: ${nodeId}`); return; }
+    const { graph: nextGraph, newUuid } = createNodeFromFileInGraph(graph, nodeId, file.data?.label || nodeId, { x, y });
     setGraph(nextGraph);
-    
-    if (typeof saveHistoryState === 'function') {
-      saveHistoryState('Paste node', newUuid);
-    }
+    if (typeof saveHistoryState === 'function') { saveHistoryState('Paste node', newUuid); }
     setContextMenu(null);
-    
-    // Trigger "Get from file" to populate full node data
-    // Wait for graph update to complete first
     setTimeout(async () => {
       try {
-        await dataOperationsService.getNodeFromFile({
-          nodeId: nodeId,
-          graph: nextGraph,
-          setGraph: setGraph as any,
-          targetNodeUuid: newUuid,
-        });
+        await dataOperationsService.getNodeFromFile({ nodeId, graph: nextGraph, setGraph: setGraph as any, targetNodeUuid: newUuid });
         toast.success(`Pasted node: ${nodeId}`);
       } catch (error) {
         console.error('[GraphCanvas] Failed to get node from file:', error);
         toast.error('Failed to load node data from file');
       }
-      
-      // Select the new node
-      setNodes((nodes) => 
-        nodes.map((node) => ({
-          ...node,
-          selected: node.id === newUuid
-        }))
-      );
+      setNodes((nodes) => nodes.map((node) => ({ ...node, selected: node.id === newUuid })));
       onSelectedNodeChange(newUuid);
     }, 100);
   }, [graph, setGraph, copiedNode, saveHistoryState, setNodes, onSelectedNodeChange]);
@@ -5776,68 +4358,23 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
     }, 100);
   }, [graph, setGraph, copiedSubgraph, saveHistoryState, setNodes, onSelectedNodeChange, onSelectedAnnotationChange]);
 
-  // Drop node at specific position (from drag & drop)
+  // Drop node at specific position (core mutation in canvas/creationTools.ts)
   const dropNodeAtPosition = useCallback(async (nodeId: string, x: number, y: number) => {
     if (!graph) return;
-    
-    const fileId = `node-${nodeId}`;
-    
-    // Check if the node file exists
-    const file = fileRegistry.getFile(fileId);
-    if (!file) {
-      toast.error(`Node file not found: ${nodeId}`);
-      return;
-    }
-    
-    const newUuid = crypto.randomUUID();
-    
-    // Create new node with the dropped node ID attached
-    const newNode = {
-      uuid: newUuid,
-      id: nodeId,
-      label: file.data?.label || nodeId,
-      absorbing: false,
-      layout: {
-        x: x,
-        y: y
-      }
-    };
-    
-    const nextGraph = structuredClone(graph);
-    nextGraph.nodes.push(newNode);
-    
-    if (nextGraph.metadata) {
-      nextGraph.metadata.updated_at = new Date().toISOString();
-    }
-    
+    const file = fileRegistry.getFile(`node-${nodeId}`);
+    if (!file) { toast.error(`Node file not found: ${nodeId}`); return; }
+    const { graph: nextGraph, newUuid } = createNodeFromFileInGraph(graph, nodeId, file.data?.label || nodeId, { x, y });
     setGraph(nextGraph);
-    
-    if (typeof saveHistoryState === 'function') {
-      saveHistoryState('Drop node', newUuid);
-    }
-    
-    // Trigger "Get from file" to populate full node data
+    if (typeof saveHistoryState === 'function') { saveHistoryState('Drop node', newUuid); }
     setTimeout(async () => {
       try {
-        await dataOperationsService.getNodeFromFile({
-          nodeId: nodeId,
-          graph: nextGraph,
-          setGraph: setGraph as any,
-          targetNodeUuid: newUuid,
-        });
+        await dataOperationsService.getNodeFromFile({ nodeId, graph: nextGraph, setGraph: setGraph as any, targetNodeUuid: newUuid });
         toast.success(`Added node: ${nodeId}`);
       } catch (error) {
         console.error('[GraphCanvas] Failed to get node from file:', error);
         toast.error('Failed to load node data from file');
       }
-      
-      // Select the new node
-      setNodes((nodes) => 
-        nodes.map((node) => ({
-          ...node,
-          selected: node.id === newUuid
-        }))
-      );
+      setNodes((nodes) => nodes.map((node) => ({ ...node, selected: node.id === newUuid })));
       onSelectedNodeChange(newUuid);
     }, 100);
   }, [graph, setGraph, saveHistoryState, setNodes, onSelectedNodeChange]);

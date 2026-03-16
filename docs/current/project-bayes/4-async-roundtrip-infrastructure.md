@@ -70,15 +70,20 @@ FE                     Vercel                    Compute vendor         GitHub
 │                       │                          │                     │
 │<── {job_id} ─────────┤                          │                     │
 │                       │                          ├─ connect to DB      │
-│                       │                          ├─ read evidence      │
-│                       │                          ├─ compute (trivial)  │
+│  (poll loop)          │                          ├─ read evidence      │
+├─ GET /api/bayes/status?job_id=...               ├─ compute            │
+│<── {status: running} ─┤                          │                     │
 │                       │                          │                     │
 │                       │<── webhook ──────────────┤                     │
-│                       │  {posteriors, quality}   │                     │
+│                       │  {posteriors, quality}   ├─ exit               │
 │                       ├─ format YAML updates      │                     │
 │                       ├─ atomic commit ──────────────────────────────>│
+│                       │    (retry-with-rebase     │                     │
+│                       │     if concurrent)        │                     │
 │                       │                          │                     │
-│  (next pull)          │                          │                     │
+├─ GET /api/bayes/status?job_id=...               │                     │
+│<── {status: complete} ┤                          │                     │
+│                       │                          │                     │
 ├─ git pull ───────────────────────────────────────────────────────────>│
 │<── updated files ────────────────────────────────────────────────────┤
 │                       │                          │                     │
@@ -252,21 +257,135 @@ edges: {edge_count}
 quality: r-hat {max_rhat}, min ESS {min_ess}
 ```
 
-### 4. FE job tracking
+### 4. FE job tracking and operational model
 
-Minimal for this workstream — just enough to close the loop:
+#### Status model
 
-- Store `{ job_id, graph_id, submitted_at }` in IDB or session state.
-- On next pull, detect the `[bayes]` commit message and match to job_id.
-- Log to `sessionLogService`:
-  ```
-  sessionLogService.success('bayes', 'BAYES_FIT_COMPLETE',
-    `Fitted ${n} edges for ${graphId}`, summary, metadata);
-  ```
-- Clear the pending job record.
+The compute vendor (Modal) is the status store — not the snapshot DB (which is
+archival only), not IDB, not any DagNet-owned database. The FE polls the vendor
+for job lifecycle status. The vendor retains function call results for 7 days
+after exit, so the worker does not need to stay alive post-webhook for the FE
+to observe completion.
 
-No real-time progress in this workstream. The FE shows "fit running" until the
-commit appears. Progress visibility can be layered on later.
+**Job states (FE perspective):**
+
+| State | Meaning | How detected |
+|---|---|---|
+| `submitted` | `/api/bayes/fit` returned `job_id` | Immediate, from submission response |
+| `running` | Vendor says function is still executing | Vendor poll returns timeout / in-progress |
+| `vendor-complete` | Vendor says function exited successfully | Vendor poll returns result |
+| `committed` | FE pulled and found `[bayes]` commit matching `job_id` | Commit message scan after pull |
+| `failed` | Vendor says function failed, or FE timeout exceeded | Vendor poll returns error, or wall-clock timeout |
+
+The `vendor-complete` → `committed` transition happens when the FE pulls and
+finds the webhook's git commit. Between these two states, the webhook may still
+be in flight or may have already committed — the FE does not distinguish. It
+simply pulls and checks.
+
+#### Job record
+
+Each pending fit is tracked in session state (not persisted to IDB — these are
+ephemeral within a single automation run):
+
+```
+{ job_id, graph_id, submitted_at, status, last_polled_at }
+```
+
+#### Vendor polling
+
+The FE polls the vendor via a lightweight Vercel proxy route
+(`/api/bayes/status`) that wraps `FunctionCall.from_id(job_id).get(timeout=0)`.
+This avoids exposing vendor credentials to the browser.
+
+- **Poll interval**: ~15–30s during automation, configurable.
+- **Per-job polling**: Modal does not support batch status queries. The FE
+  polls each pending job individually — acceptable for the expected concurrency
+  (<20 concurrent fits).
+- **Timeout**: if a job remains `running` beyond a configurable wall-clock
+  limit (e.g. 10 minutes), the FE marks it `failed` with reason `timeout`.
+  The worker may still be executing — this is a FE-side safety net, not a
+  vendor cancellation.
+
+#### Concurrent dispatch pattern
+
+The FE dispatches fits concurrently as part of the automation cycle, integrated
+with the existing cron mechanism (`useURLDailyRetrieveAllQueue`):
+
+```
+pending_fits = []
+for each graph with dailyFetch:
+  pull (remote-wins merge)
+  retrieve all slices (existing fetch+commit cycle)
+  commit fetched data
+  submit bayes fit → job_id
+  pending_fits.push({ job_id, graph_id, status: 'submitted' })
+
+// all fetches complete — now poll for fit results
+poll pending_fits every ~15s:
+  for each pending job:
+    query vendor status via /api/bayes/status
+    update job.status
+  until all jobs are committed/failed/timed-out
+
+// all fits resolved
+pull once (picks up all bayes webhook commits)
+scan commit messages for [bayes] markers → match to job_ids
+log results via sessionLogService
+```
+
+Fits run concurrently in the cloud. The FE's sequential graph loop
+(pull→fetch→commit→submit) means submissions are staggered by seconds, but
+workers execute in parallel. The post-loop polling phase waits for all workers
+to complete.
+
+#### Worker lifecycle
+
+The worker's lifecycle is simple because Modal retains results post-exit:
+
+1. Worker starts (cold start + execution).
+2. Worker reads evidence from snapshot DB, computes posteriors.
+3. Worker fires webhook to `/api/bayes-webhook` with results.
+4. Worker exits.
+
+The worker does **not** need to wait for the FE to poll, because Modal retains
+the function call result for 7 days. The FE can poll
+`FunctionCall.from_id(job_id)` at any point after exit and observe the result.
+
+#### Failure taxonomy
+
+| Failure | Detection | FE behaviour |
+|---|---|---|
+| Worker crashes | Vendor poll returns error/exception | Mark `failed`, log error, continue other jobs |
+| Worker timeout (vendor-side) | Vendor returns timeout status | Mark `failed`, log |
+| Webhook auth failure | Worker logs error; vendor shows success (worker exited OK) but no commit appears | FE times out waiting for commit; logs as `failed (no commit)` |
+| Webhook git commit failure | Webhook returns error to worker; worker can retry or report | Vendor poll may show error if worker propagates it |
+| Webhook concurrency conflict | See "Webhook concurrency" below — handled by retry-with-rebase | Transparent to FE |
+| FE wall-clock timeout | Poll loop exceeds configured limit | Mark `failed (timeout)`, log, continue |
+| Network failure during poll | Vendor proxy returns error | Retry on next poll cycle; mark `failed` after N consecutive failures |
+
+#### Session logging
+
+All job lifecycle events are logged via `sessionLogService`:
+
+- `BAYES_FIT_SUBMITTED` — job dispatched, includes `job_id` and `graph_id`
+- `BAYES_FIT_RUNNING` — first poll confirms worker is executing
+- `BAYES_FIT_COMPLETE` — commit detected after pull
+- `BAYES_FIT_FAILED` — failure with reason
+- `BAYES_FIT_SUMMARY` — end-of-cycle summary: N fits, N succeeded, N failed
+
+#### Progress visibility
+
+Modal provides only coarse lifecycle status (running/complete/failed) — no
+native mechanism for the worker to report intermediate progress ("iteration
+50/200"). Granular progress would require an external channel (e.g. worker
+writes to a shared KV store, FE polls it). This is not needed for the initial
+workstream. Coarse status is sufficient: the FE shows "fit running" until
+complete.
+
+If granular progress is needed later, the simplest approach is a lightweight
+progress endpoint backed by Modal's `Dict` (shared in-memory dictionary) or
+an external Redis instance. The worker writes `{ iteration, total, phase }`;
+the FE polls via a `/api/bayes/progress` proxy route.
 
 ---
 
@@ -295,6 +414,18 @@ commit appears. Progress visibility can be layered on later.
   "YAML formatting" below.
 - **Worker reads graph from git.** FE sends graph in submission payload for
   on-demand fits. See "Graph discovery" below.
+- **Operational model.** Vendor (Modal) is the status store, not the snapshot
+  DB. FE polls vendor for coarse lifecycle status. Worker exits after webhook
+  — no TTL hold needed (vendor retains results 7 days). Concurrent dispatch
+  integrated with existing FE cron mechanism. See "FE job tracking and
+  operational model" above.
+- **Webhook concurrency.** Concurrent webhook commits cause `updateRef` race.
+  Solved by retry-with-rebase (~15 lines). See "Webhook concurrency" above.
+- **Vendor status API evaluation.** Modal meets all minimum requirements
+  (queryable status, 7-day retention, async spawn, application-level webhook).
+  Does not support custom progress metadata or batch status queries — both
+  are nice-to-haves with known workarounds. See "Vendor status API
+  requirements" above.
 
 ### Still open
 
@@ -313,10 +444,20 @@ commit appears. Progress visibility can be layered on later.
   serverless function, including Octokit instantiation, execution time within
   Vercel timeout limits, and correct commit output. See "Server-side GitHub
   auth" below for details.
-- **Compute vendor selection.** Modal is the leading candidate (see Compute
-  arch, section 3). This workstream's prototyping should resolve it — the worker
-  logic is trivial, so the evaluation is purely about DX, cold start, DB
-  connectivity, and webhook support.
+- **Compute vendor final selection.** Modal meets minimum requirements (see
+  "Vendor status API requirements" above). Final selection depends on
+  prototyping: DX, cold start latency, Neon DB connectivity from Modal
+  workers, and webhook delivery reliability. The worker logic is trivial, so
+  the evaluation is purely operational.
+- **Vendor status proxy route.** `/api/bayes/status` needs implementing — a
+  thin Python route that calls `FunctionCall.from_id(job_id).get(timeout=0)`
+  and returns `{ status, result? }`. Pairs with the submission route in
+  `python-api.py`.
+- **Automation integration.** The existing `useURLDailyRetrieveAllQueue`
+  hook needs extending: after each graph's fetch+commit, submit a fit; after
+  all fetches, poll pending fits; after all fits resolve, pull once and log.
+  The hook's existing progress tracking, abort, and session logging patterns
+  provide the scaffolding.
 - **Conflict with dirty files.** If the user has local edits to a parameter
   file and the webhook commits to the same file, the next pull conflicts.
   Accepted as a known limitation — the existing pull/merge flow handles
@@ -651,6 +792,97 @@ worker will need to read graphs directly from git. This requires GitHub API
 access from the worker environment — a separate concern to be addressed when
 nightly scheduling is implemented.
 
+### Webhook concurrency (retry-with-rebase)
+
+**Problem**: When the FE dispatches fits concurrently (one per graph), multiple
+workers may complete near-simultaneously. Each fires its webhook to the Vercel
+handler. The handler's atomic commit sequence reads the current branch HEAD,
+builds a tree, and calls `updateRef` to advance the branch. If two webhooks
+overlap, the second one fails:
+
+1. **Webhook A** reads HEAD at SHA `aaa`. Builds blobs, tree, commit `bbb`.
+   Calls `updateRef(aaa → bbb)`. Succeeds.
+2. **Webhook B** also read HEAD at `aaa` (before A committed). Builds its own
+   blobs, tree, commit `ccc` (parent = `aaa`). Calls `updateRef(aaa → ccc)`.
+   **Fails with HTTP 422 (not fast-forward)** because HEAD is now `bbb`.
+
+This is a classic optimistic-concurrency conflict. Both writers read the same
+base; the second one's `updateRef` is rejected because the ref moved.
+
+**Solution**: The webhook handler wraps the commit sequence in a short retry
+loop (2–3 attempts):
+
+```
+for attempt in 1..max_retries:
+  head_sha = getRef(branch)
+  tree_sha = getCommit(head_sha).tree
+  read files from tree_sha
+  update file contents (merge posteriors, cascade)
+  create blobs, tree, commit (parent = head_sha)
+  try updateRef(head_sha → new_sha)
+  if success: return
+  if 422 (not fast-forward): continue  // retry from top
+  else: raise  // unexpected error
+```
+
+On retry, the handler re-reads HEAD (which now includes the other webhook's
+commit), re-reads files from the new tree, and builds on top. The result is
+clean linear history: A's commit, then B's commit. No merge commits, no
+conflicts, no data loss.
+
+**Why this is safe**: Each webhook modifies its own parameter files and graph
+edges. Two fits for different graphs touch different parameter files, so the
+retry never encounters a content conflict — only a ref pointer conflict.
+Re-reading files from the updated tree automatically incorporates the other
+webhook's changes to other files.
+
+**Same-graph fits** (shouldn't occur in normal operation): if two webhooks
+write to the same parameter files, the retry re-reads the file with the first
+webhook's changes applied. Since both are writing to distinct edges (different
+`p.id` values), the second write merges cleanly alongside the first. If they
+somehow write to the same edge with the same fingerprint, idempotency catches
+it. Different fingerprints for the same edge would mean the evidence changed
+between submissions — the later result wins, which is the correct behaviour.
+
+**Implementation cost**: ~15 lines of retry logic wrapping the existing
+`updateRef` call. The rest of the commit sequence (blob creation, tree
+building, YAML merging) is re-executed on retry but is cheap (<1s per attempt).
+
+### Vendor status API requirements
+
+Based on the operational model above, the compute vendor must support:
+
+| Requirement | Needed for | Minimum | Ideal |
+|---|---|---|---|
+| Queryable status by job_id while running | FE poll loop | Running/complete/failed | Granular progress |
+| Status retention after worker exit | FE polls after worker finishes | ≥30 minutes | Hours/days |
+| Async invocation returning job_id | Fire-and-forget dispatch | `spawn()` or equivalent | — |
+| Webhook/callback on completion | Git commit trigger | HTTP POST with payload | — |
+
+**Nice-to-have** (not blocking):
+
+| Requirement | Needed for | Workaround if absent |
+|---|---|---|
+| Custom status metadata from worker | Iteration-level progress | External KV store (Redis, vendor Dict) |
+| Batch status query | Efficient polling of N jobs | Sequential per-job polling |
+
+**Modal evaluation (16-Mar-26)**:
+
+Modal meets all minimum requirements:
+
+- **Queryable status**: `FunctionCall.from_id(job_id).get(timeout=0)` —
+  returns result if complete, raises `TimeoutError` if running.
+- **Status retention**: 7 days post-exit. The worker does not need to stay
+  alive for the FE to observe completion.
+- **Async invocation**: `Function.spawn()` returns a `FunctionCall` with a
+  retrievable ID (`function_call.object_id`).
+- **Webhook**: not built-in as a platform feature, but the worker simply
+  makes an HTTP POST before exiting — standard application-level webhook.
+
+Modal does **not** natively support custom status metadata from a running
+worker or batch status queries. These are nice-to-haves — coarse status
+and per-job polling are sufficient for the initial workstream.
+
 ---
 
 ## Acceptance criteria
@@ -676,15 +908,27 @@ This workstream is complete when:
    continue to load without errors.
 7. **Idempotency holds.** Firing the same webhook twice does not create
    duplicate commits.
-8. **Session log records the event.** The FE logs a `BAYES_FIT_COMPLETE`
-   entry when it detects the committed result.
+8. **Session log records the event.** The FE logs lifecycle events
+   (`BAYES_FIT_SUBMITTED`, `BAYES_FIT_COMPLETE`, `BAYES_FIT_FAILED`,
+   `BAYES_FIT_SUMMARY`) throughout the automation cycle.
+9. **Vendor polling works.** The FE can poll `/api/bayes/status` with a
+   `job_id` and receive running/complete/failed status. The proxy route
+   correctly wraps the vendor SDK call.
+10. **Concurrent webhooks don't collide.** When two webhook handlers fire
+    near-simultaneously for different graphs, the retry-with-rebase logic
+    produces two clean sequential commits, not a 422 failure.
+11. **Automation integration works.** The cron mechanism
+    (`useURLDailyRetrieveAllQueue`) can dispatch fits after each graph's
+    fetch+commit, poll for completion, and pull the results — end-to-end
+    within a single automation cycle.
 
 What is explicitly **not** required:
 - Real Bayesian inference (placeholder values are fine)
 - FE display of posterior data (reading + type-checking is enough)
-- Real-time progress during execution
+- Granular real-time progress during execution (coarse status is sufficient)
 - Fan charts or confidence band changes
 - Nightly scheduling (on-demand trigger only)
+- Batch vendor status queries (per-job polling is acceptable)
 
 ---
 
@@ -930,11 +1174,16 @@ full webhook handler.
       definitions in Step 2, or handle it as a direct field set in the
       webhook handler).
 
-8. **Atomic commit.** Using the extracted Git Data API utility:
+8. **Atomic commit with retry-with-rebase.** Using the extracted Git Data
+   API utility, wrapped in a retry loop (max 3 attempts):
    a. Create blobs for all updated parameter files + the graph file.
    b. Create tree, commit, update ref — single commit.
    c. Use the commit message format defined in "Infrastructure components,
       §3" above.
+   d. If `updateRef` returns HTTP 422 (not fast-forward), another webhook
+      committed concurrently. Retry from step 5 (re-read files from the
+      new HEAD, re-apply changes, re-commit). See "Webhook concurrency"
+      above for full rationale.
 
 9. **Return.** `{ status: 'committed', sha, files_updated, edges_fitted }`.
 
@@ -944,6 +1193,7 @@ full webhook handler.
 - YAML parse failure → 500 with the file path that failed.
 - Credential loading failure → 500 (not 401 — this is a server config
   issue, not a client auth issue).
+- Concurrent commit retry exhausted (3 attempts) → 409 with detail.
 - All errors include `job_id` in the response for correlation.
 
 **What the webhook handler needs in the payload that isn't there yet:**
@@ -972,15 +1222,199 @@ Recommendation: add `graph_file_path` to the webhook payload contract.
 
 ### Step 4: Compute vendor setup
 Set up Modal (or chosen vendor). Deploy the trivial worker. Verify DB
-connectivity, webhook delivery, and cold start behaviour.
+connectivity, webhook delivery, and cold start behaviour. Also build the
+vendor status proxy route (`/api/bayes/status`) that wraps
+`FunctionCall.from_id(job_id).get(timeout=0)` and returns coarse lifecycle
+status to the FE.
 
 ### Step 5: Submission route
-Build `/api/bayes/fit`. Wire FE trigger (button or dev-only command). Verify
+Build `/api/bayes/fit` (Python route in `python-api.py`). Returns `job_id`
+from `Function.spawn()`. Wire FE trigger (button or dev-only command). Verify
 end-to-end: trigger → worker → webhook → commit → pull → read back.
 
 ### Step 6: FE integration
-Add job tracking (minimal). Add session log integration. Verify the full
-circuit from the user's perspective.
+Extend `useURLDailyRetrieveAllQueue` (or a parallel hook) to:
+
+1. After each graph's fetch+commit, submit a Bayes fit via `/api/bayes/fit`.
+2. Collect `{ job_id, graph_id }` for all dispatched fits.
+3. After all fetches complete, enter a poll loop: query `/api/bayes/status`
+   for each pending job every ~15s.
+4. When all jobs are complete/failed/timed-out, pull once to pick up all
+   webhook commits.
+5. Scan commit messages for `[bayes]` markers, match to job_ids, transition
+   to `committed` state.
+6. Log lifecycle events via `sessionLogService` (submitted, running, complete,
+   failed, summary).
+
+The existing hook's progress tracking, abort handling, cross-tab locking, and
+wall-clock-aware timing provide the scaffolding. The Bayes polling phase
+slots in after the existing fetch loop and before auto-close.
+
+---
+
+## Future data channels (design reasoning)
+
+**Status**: Reasoned through, not part of initial phasing. Documented here to
+ensure the data architecture is resilient to these needs when they arise.
+
+Neither channel below requires infrastructure changes — the submission payload
+is a JSON object with optional fields, so adding new data is
+backward-compatible. The webhook already writes to parameter files and commits
+them. These designs exploit existing mechanisms rather than introducing new ones.
+
+### Per-parameter fit guidance (`fit_guidance`)
+
+**Problem**: Users will need to guide the Bayes engine — exclude anomalous
+periods (production incidents, holiday traffic), signal expected regime changes,
+or override the default halflife per parameter. Today `settings.yaml` has a
+global halflife, but that's insufficient for per-parameter or per-period control.
+
+**Design**: Guidance lives in the parameter file itself, in a `fit_guidance`
+section. No new file types are introduced.
+
+```yaml
+# In a parameter file, e.g. parameters/conversion-rate.yaml
+fit_guidance:
+  halflife_days: 30                    # override global default for this param
+  exclusion_windows:
+    - label: "Christmas 2025"
+      from: 20-Dec-25
+      to: 3-Jan-26
+      reason: "Seasonal anomaly — non-representative traffic patterns"
+    - label: "Checkout outage"
+      from: 7-Mar-26
+      to: 9-Mar-26
+      reason: "Production incident — conversion dropped to near zero"
+  regime_changes:
+    - at: 1-Feb-26
+      description: "New checkout flow launched — expect distribution shift"
+  notes: "High-variance parameter; consider wider priors"
+```
+
+**Key properties**:
+
+- **Per-parameter**: Each parameter file carries its own guidance. The Bayes
+  engine reads it alongside the evidence data it already consumes from the same
+  file.
+
+- **Graph-wide guidance via cascade**: Graph-level guidance (e.g. "exclude
+  Christmas across all parameters") is expressed on the graph file and cascaded
+  to parameter files via the existing graph→parameter cascade machinery. This
+  avoids duplicating exclusion windows across dozens of parameter files manually.
+
+- **No infra changes**: Guidance is already part of the parameter file, which is
+  already in the submission payload (parameter files are committed to git and
+  referenced from the parameters index). The Bayes engine receives it
+  automatically.
+
+- **Exclusion windows**: Defined as date ranges with labels and reasons. The
+  engine treats data points within these windows as missing/excluded when
+  fitting. The `from`/`to` dates use the standard `d-MMM-yy` format.
+
+- **Regime changes**: Signal that the underlying distribution is expected to
+  shift at a given date. The engine may use this to reset or widen priors, or
+  to weight post-change data more heavily. Exact engine behaviour is a modelling
+  decision, not an infrastructure one.
+
+- **UI**: Users manage guidance through the existing parameter properties panel.
+  For graph-wide guidance, the graph properties panel provides bulk controls
+  that cascade down. Iteration over parameters where guidance is set/unset is
+  handled via the existing navigator UI.
+
+- **Validation**: The webhook handler (or the Bayes engine itself) validates
+  guidance structure. Malformed guidance produces a clear error in the job
+  result rather than a silent misfit.
+
+### Historic model parameter trajectories (`fit_history`)
+
+**Problem**: The Bayes engine (and users reviewing fit quality) may need to see
+how fitted model parameters have varied over time — e.g. whether a distribution
+is stable, drifting, or volatile. This trajectory data helps the engine
+calibrate prior widths and detect regime changes automatically.
+
+**Why git archaeology is impractical**: Parameter files are not trivially small.
+Files with daily evidence arrays (n_daily, k_daily, dates, lag arrays, anchor
+arrays — ~120 data points × 8 arrays per value entry) reach 4,000–7,100 lines
+/ up to ~250 KB. Fetching historical versions via the GitHub API requires
+downloading the full blob for each file at each commit. For 90 days of history
+across 30 parameters, that's potentially ~22 MB+ of YAML to download and parse
+per parameter — even with GraphQL batching (which batches call count, not blob
+size). This is not viable as a routine pre-fit operation.
+
+**Design**: The webhook appends a compact summary entry to a `fit_history`
+array in each parameter file as part of the same write-and-commit operation it
+already performs after each fit.
+
+```yaml
+# Appended to each parameter file by the webhook after fitting
+fit_history:
+  - fitted_at: 16-Mar-26
+    fingerprint: "sha256:abc123..."     # hash of input evidence used
+    mean: 0.42
+    stdev: 0.08
+    mu: 2.1
+    sigma: 0.4
+  - fitted_at: 15-Mar-26
+    fingerprint: "sha256:def456..."
+    mean: 0.41
+    stdev: 0.09
+    mu: 2.0
+    sigma: 0.42
+  # ... trimmed to last N entries (e.g. 90 days)
+```
+
+**Key properties**:
+
+- **Zero extra API calls**: The FE already loads current parameter files before
+  submission. `fit_history` is right there in the file — no additional fetches,
+  no git API calls, no separate storage system.
+
+- **Webhook writes it for free**: The webhook already reads the parameter file,
+  updates fitted values, and commits. Appending a ~5-line summary entry to
+  `fit_history` is trivial additional work in the same write operation.
+
+- **Compact**: ~5 lines per entry × 90 days = ~450 lines. On a 7,000-line
+  parameter file, that's roughly a 6% size increase — negligible.
+
+- **Self-trimming**: The webhook trims entries older than N days (configurable,
+  default 90) on each write. History doesn't grow unboundedly.
+
+- **Fingerprint for cache/skip logic**: The `fingerprint` field (hash of the
+  evidence data that was input to the fit) lets the engine detect when input
+  data hasn't changed and skip unnecessary refitting.
+
+- **Submission payload carries it automatically**: Because `fit_history` lives
+  in the parameter file, and parameter files are already part of the submission
+  payload, the Bayes engine receives the full trajectory without any payload
+  schema changes.
+
+**Fallback — git archaeology utility**: For backfill (populating `fit_history`
+for the first time from existing git history) or diagnostic purposes, a
+`getFieldHistory` utility can retrieve a specific YAML field from the N most
+recent commits of a parameter file via the GitHub Contents API. This is a
+one-off or occasional operation, not a routine pre-fit step:
+
+- Fetches blob SHAs from commit history (lightweight — metadata only)
+- Downloads and parses only the target field from each blob
+- Expensive (full blob download per commit) but acceptable as an infrequent
+  backfill tool
+
+This utility is not part of the initial implementation. `fit_history` is
+populated going forward by the webhook; backfill is a convenience for
+bootstrapping history from the pre-`fit_history` era.
+
+### Extensibility summary
+
+| Future need | Where it lives | Infra changes required |
+|---|---|---|
+| Per-parameter fit guidance | `fit_guidance` in parameter file | None — already in payload |
+| Graph-wide guidance | Graph file, cascaded to params | None — existing cascade machinery |
+| Historic model trajectories | `fit_history` in parameter file | None — webhook appends on write |
+| Backfill from git history | One-off `getFieldHistory` utility | None — FE-side helper, not infra |
+
+The async infrastructure built in this document is resilient to all four needs.
+No schema changes, no new API routes, no new storage systems. The parameter
+file is the single location for both guidance input and trajectory output.
 
 ---
 
