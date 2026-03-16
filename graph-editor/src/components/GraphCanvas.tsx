@@ -28,8 +28,7 @@ import ConversionNode from './nodes/ConversionNode';
 import PostItNode from './nodes/PostItNode';
 import ContainerNode from './nodes/ContainerNode';
 import CanvasAnalysisNode from './nodes/CanvasAnalysisNode';
-import { canvasAnalysisTransientCache, canvasAnalysisResultCache } from '../hooks/useCanvasAnalysisCompute';
-import { chartOperationsService } from '../services/chartOperationsService';
+import { canvasAnalysisTransientCache } from '../hooks/useCanvasAnalysisCompute';
 
 /**
  * Pending payload for the draw-to-create analysis tool.
@@ -59,17 +58,10 @@ const DecorationVisibilityContext = createContext<DecorationVisibilityContextTyp
 export const useDecorationVisibility = () => useContext(DecorationVisibilityContext);
 import ProbabilityInput from './ProbabilityInput';
 import VariantWeightInput from './VariantWeightInput';
-import { NodeContextMenu } from './NodeContextMenu';
-import { PostItContextMenu } from './PostItContextMenu';
-import { ContainerContextMenu } from './ContainerContextMenu';
-import { CanvasAnalysisContextMenu } from './CanvasAnalysisContextMenu';
 import { SelectionConnectors } from './SelectionConnectors';
 import { captureTabScenariosToRecipe } from '../services/captureTabScenariosService';
 import { resolveAnalysisType } from '../services/analysisTypeResolutionService';
 import { mutateCanvasAnalysisGraph, deleteCanvasAnalysisFromGraph } from '../services/canvasAnalysisMutationService';
-import { ScenarioQueryEditModal } from './modals/ScenarioQueryEditModal';
-import { EdgeContextMenu } from './EdgeContextMenu';
-import { extractSubgraph } from '../lib/subgraphExtractor';
 import { useDashboardMode } from '../hooks/useDashboardMode';
 import { useCopyPaste } from '../hooks/useCopyPaste';
 import { dataOperationsService } from '../services/dataOperationsService';
@@ -92,6 +84,7 @@ import { computeEffectiveEdgeProbability } from '@/lib/whatIf';
 import { getOptimalFace } from '@/lib/faceSelection';
 import { useEdgeRouting } from './canvas/useEdgeRouting';
 import { useEdgeConnection } from './canvas/useEdgeConnection';
+import { CanvasContextMenus } from './canvas/CanvasContextMenus';
 import { computeFaceDirectionsFromEdges } from '@/lib/faceDirections';
 import { buildScenarioRenderEdges } from './canvas/buildScenarioRenderEdges';
 import { calculateEdgeOffsets as calculateEdgeOffsetsCore } from './canvas/edgeGeometry';
@@ -100,11 +93,9 @@ import { createNodeInGraph, createNodeFromFileInGraph, createPostitInGraph, crea
 import { computeHighlightMetadata } from './canvas/pathHighlighting';
 import { getCaseEdgeVariantInfo } from './edges/edgeLabelHelpers';
 import { MAX_EDGE_WIDTH, MIN_EDGE_WIDTH, DEFAULT_NODE_WIDTH, DEFAULT_NODE_HEIGHT, MIN_NODE_HEIGHT, MAX_NODE_HEIGHT, IMAGE_VIEW_NODE_WIDTH, IMAGE_VIEW_NODE_HEIGHT } from '@/lib/nodeEdgeConstants';
-import { Monitor, MonitorOff, X, Plus, StickyNote, Square, BarChart3, Clipboard, CheckSquare } from 'lucide-react';
 import { useAlignSelection } from '../hooks/useAlignSelection';
 import { useSnapToGuides } from '../hooks/useSnapToGuides';
 import { toNodeRect } from '../services/alignmentService';
-import { MultiSelectContextMenu } from './MultiSelectContextMenu';
 
 const nodeTypes: NodeTypes = {
   conversion: ConversionNode,
@@ -4378,722 +4369,71 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
         
       </ReactFlow>
       
-      {/* Context Menu */}
-      {contextMenu && (
-        <div
-          className="dagnet-popup"
-          style={{ position: 'fixed', left: contextMenu.x, top: contextMenu.y }}
-        >
-          <div className="dagnet-popup-item" onClick={(e) => { e.stopPropagation(); addNodeAtPosition(contextMenu.flowX, contextMenu.flowY); setContextMenu(null); }} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <Plus size={14} />
-            Add node
-          </div>
-          <div className="dagnet-popup-item" onClick={(e) => { e.stopPropagation(); setActiveElementTool('new-postit'); setContextMenu(null); }} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <StickyNote size={14} />
-            Add post-it
-          </div>
-          <div className="dagnet-popup-item" onClick={(e) => { e.stopPropagation(); setActiveElementTool('new-container'); setContextMenu(null); }} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <Square size={14} />
-            Add container
-          </div>
-          <div className="dagnet-popup-item" onClick={(e) => { e.stopPropagation(); startAddChart(); setContextMenu(null); }} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <BarChart3 size={14} />
-            Add chart
-          </div>
-          <div className="dagnet-popup-divider" />
-          {copiedNode && (
-            <div className="dagnet-popup-item" onClick={(e) => { e.stopPropagation(); pasteNodeAtPosition(contextMenu.flowX, contextMenu.flowY); setContextMenu(null); }} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <Clipboard size={14} />
-              Paste node: {copiedNode.objectId}
-            </div>
-          )}
-          {copiedSubgraph && (
-            <div className="dagnet-popup-item" onClick={(e) => { e.stopPropagation(); pasteSubgraphAtPosition(contextMenu.flowX, contextMenu.flowY); setContextMenu(null); }} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <Clipboard size={14} />
-              Paste ({[
-                copiedSubgraph.nodes.length > 0 && `${copiedSubgraph.nodes.length} node${copiedSubgraph.nodes.length !== 1 ? 's' : ''}`,
-                copiedSubgraph.edges.length > 0 && `${copiedSubgraph.edges.length} edge${copiedSubgraph.edges.length !== 1 ? 's' : ''}`,
-                (copiedSubgraph.postits?.length ?? 0) > 0 && `${copiedSubgraph.postits!.length} post-it${copiedSubgraph.postits!.length !== 1 ? 's' : ''}`,
-              ].filter(Boolean).join(', ')})
-            </div>
-          )}
-          {nodes.length > 0 && (
-            <div className="dagnet-popup-item" onClick={(e) => { e.stopPropagation(); window.dispatchEvent(new CustomEvent('dagnet:selectAllNodes')); setContextMenu(null); }} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <CheckSquare size={14} />
-              Select All
-            </div>
-          )}
-          {(copiedNode || copiedSubgraph || nodes.length > 0) && <div className="dagnet-popup-divider" />}
-          <div className="dagnet-popup-item" onClick={(e) => { e.stopPropagation(); setContextMenu(null); toggleDashboardMode({ updateUrl: true }); }} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            {isDashboardMode ? <MonitorOff size={14} /> : <Monitor size={14} />}
-            {isDashboardMode ? 'Exit dashboard mode' : 'Enter dashboard mode'}
-          </div>
-          {tabId && (
-            <div className="dagnet-popup-item" onClick={async (e) => { e.stopPropagation(); setContextMenu(null); await tabOperations.closeTab(tabId); }} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <X size={14} />
-              Close tab
-            </div>
-          )}
-        </div>
-      )}
-      
-      {/* Post-It Context Menu */}
-      {postitContextMenu && graph && (() => {
-        const postit = graph.postits?.find((p: any) => p.id === postitContextMenu.postitId);
-        if (!postit) return null;
-        const postitCount = (graph.postits?.length ?? 0) + (graph.canvasAnalyses?.length ?? 0);
-        return (
-          <PostItContextMenu
-            x={postitContextMenu.x}
-            y={postitContextMenu.y}
-            postitId={postitContextMenu.postitId}
-            currentColour={postit.colour}
-            currentFontSize={postit.fontSize || 'M'}
-            postitCount={postitCount}
-            onUpdateColour={(id, colour) => {
-              const nextGraph = structuredClone(graph);
-              const p = nextGraph.postits?.find((p: any) => p.id === id);
-              if (p) {
-                p.colour = colour;
-                if (nextGraph.metadata) nextGraph.metadata.updated_at = new Date().toISOString();
-                setGraph(nextGraph);
-                saveHistoryState('Update post-it colour');
-              }
-            }}
-            onUpdateFontSize={(id, fs) => {
-              const nextGraph = structuredClone(graph);
-              const p = nextGraph.postits?.find((p: any) => p.id === id);
-              if (p) {
-                p.fontSize = fs as 'S' | 'M' | 'L' | 'XL';
-                if (nextGraph.metadata) nextGraph.metadata.updated_at = new Date().toISOString();
-                setGraph(nextGraph);
-                saveHistoryState('Update post-it font size');
-              }
-            }}
-            onBringToFront={(id) => {
-              const nextGraph = structuredClone(graph);
-              if (nextGraph.postits) {
-                const idx = nextGraph.postits.findIndex((p: any) => p.id === id);
-                if (idx >= 0) {
-                  const [item] = nextGraph.postits.splice(idx, 1);
-                  nextGraph.postits.push(item);
-                  if (nextGraph.metadata) nextGraph.metadata.updated_at = new Date().toISOString();
-                  setGraph(nextGraph);
-                  saveHistoryState('Bring post-it to front');
-                  reorderCanvasNodes('postit-', nextGraph.postits);
-                }
-              }
-            }}
-            onBringForward={(id) => {
-              const nextGraph = structuredClone(graph);
-              if (nextGraph.postits) {
-                const idx = nextGraph.postits.findIndex((p: any) => p.id === id);
-                if (idx >= 0 && idx < nextGraph.postits.length - 1) {
-                  [nextGraph.postits[idx], nextGraph.postits[idx + 1]] = [nextGraph.postits[idx + 1], nextGraph.postits[idx]];
-                  if (nextGraph.metadata) nextGraph.metadata.updated_at = new Date().toISOString();
-                  setGraph(nextGraph);
-                  saveHistoryState('Bring post-it forward');
-                  reorderCanvasNodes('postit-', nextGraph.postits);
-                }
-              }
-            }}
-            onSendBackward={(id) => {
-              const nextGraph = structuredClone(graph);
-              if (nextGraph.postits) {
-                const idx = nextGraph.postits.findIndex((p: any) => p.id === id);
-                if (idx > 0) {
-                  [nextGraph.postits[idx], nextGraph.postits[idx - 1]] = [nextGraph.postits[idx - 1], nextGraph.postits[idx]];
-                  if (nextGraph.metadata) nextGraph.metadata.updated_at = new Date().toISOString();
-                  setGraph(nextGraph);
-                  saveHistoryState('Send post-it backward');
-                  reorderCanvasNodes('postit-', nextGraph.postits);
-                }
-              }
-            }}
-            onSendToBack={(id) => {
-              const nextGraph = structuredClone(graph);
-              if (nextGraph.postits) {
-                const idx = nextGraph.postits.findIndex((p: any) => p.id === id);
-                if (idx >= 0) {
-                  const [item] = nextGraph.postits.splice(idx, 1);
-                  nextGraph.postits.unshift(item);
-                  if (nextGraph.metadata) nextGraph.metadata.updated_at = new Date().toISOString();
-                  setGraph(nextGraph);
-                  saveHistoryState('Send post-it to back');
-                  reorderCanvasNodes('postit-', nextGraph.postits);
-                }
-              }
-            }}
-            onCopy={(id) => {
-              const p = graph.postits?.find((pi: any) => pi.id === id);
-              if (p) {
-                copySubgraph([], [], undefined, [p]);
-              }
-              setPostitContextMenu(null);
-            }}
-            onCut={(id) => {
-              const p = graph.postits?.find((pi: any) => pi.id === id);
-              if (p) {
-                copySubgraph([], [], undefined, [p]);
-                const nextGraph = structuredClone(graph);
-                if (nextGraph.postits) {
-                  nextGraph.postits = nextGraph.postits.filter((pi: any) => pi.id !== id);
-                  if (nextGraph.metadata) nextGraph.metadata.updated_at = new Date().toISOString();
-                  setGraph(nextGraph);
-                  saveHistoryState('Cut post-it');
-                  onSelectedAnnotationChange?.(null, null);
-                }
-              }
-              setPostitContextMenu(null);
-            }}
-            onDelete={(id) => {
-              const nextGraph = structuredClone(graph);
-              if (nextGraph.postits) {
-                nextGraph.postits = nextGraph.postits.filter((p: any) => p.id !== id);
-                if (nextGraph.metadata) nextGraph.metadata.updated_at = new Date().toISOString();
-                setGraph(nextGraph);
-                saveHistoryState('Delete post-it');
-                onSelectedAnnotationChange?.(null, null);
-              }
-            }}
-            onClose={() => setPostitContextMenu(null)}
-          />
-        );
-      })()}
-
-      {/* Container Context Menu */}
-      {containerContextMenu && graph && (() => {
-        const container = graph.containers?.find((c: any) => c.id === containerContextMenu.containerId);
-        if (!container) return null;
-        const containerCount = graph.containers?.length ?? 0;
-        return (
-          <ContainerContextMenu
-            x={containerContextMenu.x}
-            y={containerContextMenu.y}
-            containerId={containerContextMenu.containerId}
-            currentColour={container.colour}
-            containerCount={containerCount}
-            onUpdateColour={(id, colour) => {
-              const nextGraph = structuredClone(graph);
-              const c = nextGraph.containers?.find((c: any) => c.id === id);
-              if (c) {
-                c.colour = colour;
-                if (nextGraph.metadata) nextGraph.metadata.updated_at = new Date().toISOString();
-                setGraph(nextGraph);
-                saveHistoryState('Update container colour');
-              }
-              setContainerContextMenu(null);
-            }}
-            onBringToFront={(id) => {
-              const nextGraph = structuredClone(graph);
-              if (nextGraph.containers) {
-                const idx = nextGraph.containers.findIndex((c: any) => c.id === id);
-                if (idx >= 0 && idx < nextGraph.containers.length - 1) {
-                  const [removed] = nextGraph.containers.splice(idx, 1);
-                  nextGraph.containers.push(removed);
-                  if (nextGraph.metadata) nextGraph.metadata.updated_at = new Date().toISOString();
-                  setGraph(nextGraph);
-                  saveHistoryState('Bring container to front');
-                  reorderCanvasNodes('container-', nextGraph.containers);
-                }
-              }
-              setContainerContextMenu(null);
-            }}
-            onBringForward={(id) => {
-              const nextGraph = structuredClone(graph);
-              if (nextGraph.containers) {
-                const idx = nextGraph.containers.findIndex((c: any) => c.id === id);
-                if (idx >= 0 && idx < nextGraph.containers.length - 1) {
-                  [nextGraph.containers[idx], nextGraph.containers[idx + 1]] = [nextGraph.containers[idx + 1], nextGraph.containers[idx]];
-                  if (nextGraph.metadata) nextGraph.metadata.updated_at = new Date().toISOString();
-                  setGraph(nextGraph);
-                  saveHistoryState('Bring container forward');
-                  reorderCanvasNodes('container-', nextGraph.containers);
-                }
-              }
-              setContainerContextMenu(null);
-            }}
-            onSendBackward={(id) => {
-              const nextGraph = structuredClone(graph);
-              if (nextGraph.containers) {
-                const idx = nextGraph.containers.findIndex((c: any) => c.id === id);
-                if (idx > 0) {
-                  [nextGraph.containers[idx], nextGraph.containers[idx - 1]] = [nextGraph.containers[idx - 1], nextGraph.containers[idx]];
-                  if (nextGraph.metadata) nextGraph.metadata.updated_at = new Date().toISOString();
-                  setGraph(nextGraph);
-                  saveHistoryState('Send container backward');
-                  reorderCanvasNodes('container-', nextGraph.containers);
-                }
-              }
-              setContainerContextMenu(null);
-            }}
-            onSendToBack={(id) => {
-              const nextGraph = structuredClone(graph);
-              if (nextGraph.containers) {
-                const idx = nextGraph.containers.findIndex((c: any) => c.id === id);
-                if (idx > 0) {
-                  const [removed] = nextGraph.containers.splice(idx, 1);
-                  nextGraph.containers.unshift(removed);
-                  if (nextGraph.metadata) nextGraph.metadata.updated_at = new Date().toISOString();
-                  setGraph(nextGraph);
-                  saveHistoryState('Send container to back');
-                  reorderCanvasNodes('container-', nextGraph.containers);
-                }
-              }
-              setContainerContextMenu(null);
-            }}
-            onAddChart={(id) => {
-              const c = graph.containers?.find((ci: any) => ci.id === id);
-              if (c) {
-                const containedIds = getContainedConversionNodeIds(c, nodes);
-                const humanIds = containedIds.map(rfId => {
-                  const n = nodes.find(nd => nd.id === rfId);
-                  return n?.data?.id || rfId;
-                });
-                startAddChart({ contextNodeIds: humanIds });
-              }
-              setContainerContextMenu(null);
-            }}
-            onCopy={(id) => {
-              const c = graph.containers?.find((ci: any) => ci.id === id);
-              if (c && graph) {
-                const contained = extractSubgraph({
-                  selectedNodeIds: getContainedConversionNodeIds(c, nodes),
-                  selectedCanvasObjectIds: {
-                    containers: [id],
-                    postits: (graph.postits || []).filter((p: any) =>
-                      p.x >= c.x - 10 && p.y >= c.y - 10 && (p.x + p.width) <= (c.x + c.width + 10) && (p.y + p.height) <= (c.y + c.height + 10)
-                    ).map((p: any) => p.id),
-                  },
-                  graph,
-                  includeConnectedEdges: true,
-                });
-                copySubgraph(contained.nodes, contained.edges, undefined, contained.postits, { containers: contained.containers });
-              }
-              setContainerContextMenu(null);
-            }}
-            onCut={(id) => {
-              const c = graph.containers?.find((ci: any) => ci.id === id);
-              if (c && graph) {
-                const containedNodeIds = getContainedConversionNodeIds(c, nodes);
-                const containedPostitIds = (graph.postits || []).filter((p: any) =>
-                  p.x >= c.x - 10 && p.y >= c.y - 10 && (p.x + p.width) <= (c.x + c.width + 10) && (p.y + p.height) <= (c.y + c.height + 10)
-                ).map((p: any) => p.id);
-
-                const contained = extractSubgraph({
-                  selectedNodeIds: containedNodeIds,
-                  selectedCanvasObjectIds: { containers: [id], postits: containedPostitIds },
-                  graph,
-                  includeConnectedEdges: true,
-                });
-                copySubgraph(contained.nodes, contained.edges, undefined, contained.postits, { containers: contained.containers });
-
-                // Delete container + contained objects
-                let nextGraph = structuredClone(graph);
-                if (nextGraph.containers) nextGraph.containers = nextGraph.containers.filter((ci: any) => ci.id !== id);
-                if (containedNodeIds.length > 0) {
-                  const nodeSet = new Set(containedNodeIds);
-                  nextGraph.nodes = nextGraph.nodes.filter((n: any) => !nodeSet.has(n.uuid));
-                  nextGraph.edges = nextGraph.edges.filter((e: any) => !nodeSet.has(e.from) && !nodeSet.has(e.to));
-                }
-                if (containedPostitIds.length > 0) {
-                  const pSet = new Set(containedPostitIds);
-                  nextGraph.postits = (nextGraph.postits || []).filter((p: any) => !pSet.has(p.id));
-                }
-                if (nextGraph.metadata) nextGraph.metadata.updated_at = new Date().toISOString();
-                setGraph(nextGraph);
-                saveHistoryState('Cut container');
-                onSelectedAnnotationChange?.(null, null);
-              }
-              setContainerContextMenu(null);
-            }}
-            onDelete={(id) => {
-              handleDeleteContainer(id);
-            }}
-            onClose={() => setContainerContextMenu(null)}
-          />
-        );
-      })()}
-
-      {/* Canvas Analysis Context Menu */}
-      {analysisContextMenu && graph && (() => {
-        const analysis = graph.canvasAnalyses?.find((a: any) => a.id === analysisContextMenu.analysisId);
-        if (!analysis) return null;
-        const analysisCount = (graph.canvasAnalyses?.length ?? 0) + (graph.postits?.length ?? 0);
-        const cachedResult = canvasAnalysisResultCache.get(analysisContextMenu.analysisId);
-        const effectiveChartKind = analysis.chart_kind || cachedResult?.semantics?.chart?.recommended || cachedResult?.analysis_type || undefined;
-        const hiddenScenarios = new Set<string>((((analysis.display as any)?.hidden_scenarios) || []) as string[]);
-        const visibleScenarioIds = analysis.mode === 'live'
-          ? (tabId ? tabOperations.getScenarioState(tabId)?.visibleScenarioIds : null) || ['current']
-          : (analysis.recipe?.scenarios || []).filter((s: any) => !hiddenScenarios.has(s.scenario_id)).map((s: any) => s.scenario_id);
-        const currentTab = tabId ? tabs.find(t => t.id === tabId) : undefined;
-        return (
-          <CanvasAnalysisContextMenu
-            x={analysisContextMenu.x}
-            y={analysisContextMenu.y}
-            analysisId={analysisContextMenu.analysisId}
-            analysis={analysis}
-            analysisCount={analysisCount}
-            onUpdate={(id, updates) => {
-              handleUpdateAnalysis(id, updates);
-              setAnalysisContextMenu(null);
-            }}
-            effectiveChartKind={effectiveChartKind}
-            display={analysis.display as Record<string, unknown> | undefined}
-            onDisplayChange={(key, value) => {
-              handleUpdateAnalysis(analysisContextMenu.analysisId, {
-                display: { ...(analysis.display as Record<string, unknown> || {}), [key]: value },
-              });
-              setAnalysisContextMenu(null);
-            }}
-            hasCachedResult={!!cachedResult}
-            availableAnalyses={analysisCtxAvailableTypes}
-            onAnalysisTypeChange={(typeId) => {
-              handleUpdateAnalysis(analysisContextMenu.analysisId, {
-                recipe: { ...analysis.recipe, analysis: { ...analysis.recipe.analysis, analysis_type: typeId } },
-                analysis_type_overridden: true,
-              } as any);
-              setAnalysisContextMenu(null);
-            }}
-            overlayActive={!!analysis.display?.show_subject_overlay}
-            overlayColour={analysis.display?.subject_overlay_colour as string | undefined}
-            onOverlayToggle={(active) => {
-              const colour = analysis.display?.subject_overlay_colour || '#3b82f6';
-              handleUpdateAnalysis(analysisContextMenu.analysisId, {
-                display: { ...(analysis.display as Record<string, unknown> || {}), show_subject_overlay: active, ...(active ? { subject_overlay_colour: colour } : {}) },
-              });
-              setAnalysisContextMenu(null);
-            }}
-            onOverlayColourChange={(colour) => {
-              if (colour) {
-                handleUpdateAnalysis(analysisContextMenu.analysisId, {
-                  display: { ...(analysis.display as Record<string, unknown> || {}), show_subject_overlay: true, subject_overlay_colour: colour },
-                });
-              } else {
-                handleUpdateAnalysis(analysisContextMenu.analysisId, {
-                  display: { ...(analysis.display as Record<string, unknown> || {}), show_subject_overlay: false, subject_overlay_colour: undefined },
-                });
-              }
-              setAnalysisContextMenu(null);
-            }}
-            onOpenAsTab={cachedResult ? () => {
-              chartOperationsService.openAnalysisChartTabFromAnalysis({
-                chartKind: effectiveChartKind as any,
-                analysisResult: cachedResult,
-                scenarioIds: visibleScenarioIds,
-                title: analysis.title || undefined,
-                source: {
-                  parent_tab_id: tabId,
-                  parent_file_id: currentTab?.fileId,
-                  query_dsl: analysis.recipe?.analysis?.analytics_dsl || undefined,
-                  analysis_type: analysis.recipe?.analysis?.analysis_type || undefined,
-                },
-                render: {
-                  chart_kind: analysis.chart_kind || undefined,
-                  view_mode: analysis.view_mode || 'chart',
-                  display: (analysis.display || {}) as Record<string, unknown>,
-                },
-              });
-              setAnalysisContextMenu(null);
-            } : undefined}
-            onRefresh={() => {
-              window.dispatchEvent(new CustomEvent('dagnet:canvasAnalysisRefresh', { detail: { analysisId: analysisContextMenu.analysisId } }));
-              setAnalysisContextMenu(null);
-            }}
-            onCaptureFromTab={tabId && scenariosContext ? () => {
-              const currentTab = tabs.find(t => t.id === tabId);
-              const whatIfDSL = currentTab?.editorState?.whatIfDSL || null;
-              return captureTabScenariosToRecipe({
-                tabId,
-                currentDSL: store.currentDSL || '',
-                operations: tabOperations,
-                scenariosContext: scenariosContext as any,
-                whatIfDSL,
-              });
-            } : undefined}
-            onUseAsCurrent={(dsl) => {
-              store.setCurrentDSL(dsl);
-              setAnalysisContextMenu(null);
-            }}
-            onEditScenarioDsl={(scenarioId) => {
-              setCtxDslEditState({ analysisId: analysisContextMenu.analysisId, scenarioId });
-              setAnalysisContextMenu(null);
-            }}
-            onBringToFront={(id) => {
-              const nextGraph = structuredClone(graph);
-              if (nextGraph.canvasAnalyses) {
-                const idx = nextGraph.canvasAnalyses.findIndex((a: any) => a.id === id);
-                if (idx >= 0 && idx < nextGraph.canvasAnalyses.length - 1) {
-                  const [item] = nextGraph.canvasAnalyses.splice(idx, 1);
-                  nextGraph.canvasAnalyses.push(item);
-                  if (nextGraph.metadata) nextGraph.metadata.updated_at = new Date().toISOString();
-                  setGraph(nextGraph);
-                  saveHistoryState('Bring analysis to front');
-                  reorderCanvasNodes('analysis-', nextGraph.canvasAnalyses);
-                }
-              }
-              setAnalysisContextMenu(null);
-            }}
-            onBringForward={(id) => {
-              const nextGraph = structuredClone(graph);
-              if (nextGraph.canvasAnalyses) {
-                const idx = nextGraph.canvasAnalyses.findIndex((a: any) => a.id === id);
-                if (idx >= 0 && idx < nextGraph.canvasAnalyses.length - 1) {
-                  [nextGraph.canvasAnalyses[idx], nextGraph.canvasAnalyses[idx + 1]] = [nextGraph.canvasAnalyses[idx + 1], nextGraph.canvasAnalyses[idx]];
-                  if (nextGraph.metadata) nextGraph.metadata.updated_at = new Date().toISOString();
-                  setGraph(nextGraph);
-                  saveHistoryState('Bring analysis forward');
-                  reorderCanvasNodes('analysis-', nextGraph.canvasAnalyses);
-                }
-              }
-              setAnalysisContextMenu(null);
-            }}
-            onSendBackward={(id) => {
-              const nextGraph = structuredClone(graph);
-              if (nextGraph.canvasAnalyses) {
-                const idx = nextGraph.canvasAnalyses.findIndex((a: any) => a.id === id);
-                if (idx > 0) {
-                  [nextGraph.canvasAnalyses[idx], nextGraph.canvasAnalyses[idx - 1]] = [nextGraph.canvasAnalyses[idx - 1], nextGraph.canvasAnalyses[idx]];
-                  if (nextGraph.metadata) nextGraph.metadata.updated_at = new Date().toISOString();
-                  setGraph(nextGraph);
-                  saveHistoryState('Send analysis backward');
-                  reorderCanvasNodes('analysis-', nextGraph.canvasAnalyses);
-                }
-              }
-              setAnalysisContextMenu(null);
-            }}
-            onSendToBack={(id) => {
-              const nextGraph = structuredClone(graph);
-              if (nextGraph.canvasAnalyses) {
-                const idx = nextGraph.canvasAnalyses.findIndex((a: any) => a.id === id);
-                if (idx > 0) {
-                  const [item] = nextGraph.canvasAnalyses.splice(idx, 1);
-                  nextGraph.canvasAnalyses.unshift(item);
-                  if (nextGraph.metadata) nextGraph.metadata.updated_at = new Date().toISOString();
-                  setGraph(nextGraph);
-                  saveHistoryState('Send analysis to back');
-                  reorderCanvasNodes('analysis-', nextGraph.canvasAnalyses);
-                }
-              }
-              setAnalysisContextMenu(null);
-            }}
-            onCopy={(id) => {
-              const a = graph.canvasAnalyses?.find((ai: any) => ai.id === id);
-              if (a) {
-                copySubgraph([], [], undefined, undefined, { canvasAnalyses: [a] });
-              }
-              setAnalysisContextMenu(null);
-            }}
-            onCut={(id) => {
-              const a = graph.canvasAnalyses?.find((ai: any) => ai.id === id);
-              if (a) {
-                copySubgraph([], [], undefined, undefined, { canvasAnalyses: [a] });
-                handleDeleteAnalysis(id);
-              }
-              setAnalysisContextMenu(null);
-            }}
-            onDelete={(id) => {
-              handleDeleteAnalysis(id);
-            }}
-            onClose={() => setAnalysisContextMenu(null)}
-          />
-        );
-      })()}
-
-      {/* Scenario DSL Edit Modal (opened from canvas analysis context menu) */}
-      {ctxDslEditState && (() => {
-        const a = graph?.canvasAnalyses?.find((ai: any) => ai.id === ctxDslEditState.analysisId);
-        const s = a?.recipe?.scenarios?.find((sc: any) => sc.scenario_id === ctxDslEditState.scenarioId);
-        if (!a || !s) return null;
-        return (
-          <ScenarioQueryEditModal
-            isOpen={true}
-            scenarioName={s.name || s.scenario_id || ''}
-            currentDSL={s.effective_dsl || ''}
-            inheritedDSL={store.currentDSL || ''}
-            onSave={(newDSL) => {
-              if (!graph) return;
-              const nextGraph = structuredClone(graph);
-              const target = nextGraph?.canvasAnalyses?.find((ai: any) => ai.id === ctxDslEditState.analysisId);
-              const scenario = target?.recipe?.scenarios?.find((sc: any) => sc.scenario_id === ctxDslEditState.scenarioId);
-              if (scenario) scenario.effective_dsl = newDSL;
-              if (nextGraph?.metadata) nextGraph.metadata.updated_at = new Date().toISOString();
-              setGraphDirect(nextGraph as any);
-              saveHistoryState('Edit chart scenario DSL');
-              setCtxDslEditState(null);
-            }}
-            onClose={() => setCtxDslEditState(null)}
-          />
-        );
-      })()}
-
-      {/* Multi-Select Context Menu (mixed-type or canvas-object selections) */}
-      {multiSelectContextMenu && (
-        <MultiSelectContextMenu
-          x={multiSelectContextMenu.x}
-          y={multiSelectContextMenu.y}
-          selectedCount={nodes.filter(n => n.selected).length}
-          onAlign={align}
-          onDistribute={distribute}
-          onEqualSize={equalSize}
-          onDeleteSelected={() => {
-            window.dispatchEvent(new CustomEvent('dagnet:deleteSelected'));
-            setMultiSelectContextMenu(null);
-          }}
-          onClose={() => setMultiSelectContextMenu(null)}
-        />
-      )}
-
-      {/* Node Context Menu */}
-      {nodeContextMenu && (
-        <NodeContextMenu
-          x={nodeContextMenu.x}
-          y={nodeContextMenu.y}
-          nodeId={nodeContextMenu.nodeId}
-          nodeData={nodes.find(n => n.id === nodeContextMenu.nodeId)?.data}
-          nodes={nodes}
-          activeTabId={effectiveActiveTabId}
-          tabOperations={tabOperations}
-          graph={graph}
-          setGraph={setGraph}
-          onClose={() => setNodeContextMenu(null)}
-          onAddChart={startAddChart}
-          onAlign={align}
-          onDistribute={distribute}
-          onEqualSize={equalSize}
-          canAlign={canAlign}
-          canDistribute={canDistribute}
-          onSelectNode={onSelectedNodeChange}
-          onDeleteNode={deleteNode}
-        />
-      )}
-      
-      {/* Edge Context Menu */}
-      {edgeContextMenu && (
-        <EdgeContextMenu
-          x={edgeContextMenu.x}
-          y={edgeContextMenu.y}
-          edgeId={edgeContextMenu.edgeId}
-          edgeData={contextMenuLocalData}
-          edges={edges}
-          graph={graph}
-          graphFileId={graphFileId}
-          onAddChart={startAddChart}
-              onClose={() => {
-                setEdgeContextMenu(null);
-                setContextMenuLocalData(null);
-              }}
-          onUpdateGraph={(nextGraph, historyLabel, nodeId) => {
-                              setGraph(nextGraph);
-            if (historyLabel) {
-              saveHistoryState(historyLabel, nodeId, edgeContextMenu.edgeId);
-            }
-          }}
-          onDeleteEdge={deleteEdge}
-        />
-      )}
-      
-      {/* Variant Selection Modal */}
-      {showVariantModal && (
-        <div style={{
-          position: 'fixed',
-          top: 0,
-          left: 0,
-          right: 0,
-          bottom: 0,
-          background: 'rgba(0, 0, 0, 0.5)',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          zIndex: 1000
-        }}>
-          <div style={{
-            background: 'white',
-            padding: '24px',
-            borderRadius: '8px',
-            boxShadow: '0 4px 12px rgba(0, 0, 0, 0.15)',
-            maxWidth: '400px',
-            width: '90%'
-          }}>
-            <h3 style={{ margin: '0 0 16px 0', fontSize: '18px', fontWeight: '600' }}>
-              Select Variant for Case Edge
-            </h3>
-            <p style={{ margin: '0 0 16px 0', color: '#666', fontSize: '14px' }}>
-              Choose which variant this edge represents:
-            </p>
-            
-            <div style={{ marginBottom: '16px' }}>
-              {caseNodeVariants.map((variant, index) => {
-                // Check if this variant already has an edge to the target
-                const sourceNode = graph?.nodes.find(n => n.uuid === pendingConnection?.source || n.id === pendingConnection?.source);
-                const hasExistingEdge = graph?.edges.some(edge => 
-                  edge.from === pendingConnection?.source && 
-                  edge.to === pendingConnection?.target &&
-                  edge.case_id === sourceNode?.case?.id &&
-                  edge.case_variant === variant.name
-                );
-                
-                return (
-                  <button
-                    key={index}
-                    onClick={() => handleVariantSelection(variant)}
-                    disabled={hasExistingEdge}
-                    style={{
-                      width: '100%',
-                      padding: '12px 16px',
-                      marginBottom: '8px',
-                      border: hasExistingEdge ? '1px solid #ccc' : '1px solid #ddd',
-                      borderRadius: '4px',
-                      background: hasExistingEdge ? '#e9ecef' : '#f8f9fa',
-                      cursor: hasExistingEdge ? 'not-allowed' : 'pointer',
-                      textAlign: 'left',
-                      fontSize: '14px',
-                      transition: 'all 0.2s ease',
-                      opacity: hasExistingEdge ? 0.6 : 1
-                    }}
-                    onMouseEnter={(e) => {
-                      if (!hasExistingEdge) {
-                        e.currentTarget.style.background = '#e9ecef';
-                        e.currentTarget.style.borderColor = '#8B5CF6';
-                      }
-                    }}
-                    onMouseLeave={(e) => {
-                      if (!hasExistingEdge) {
-                        e.currentTarget.style.background = '#f8f9fa';
-                        e.currentTarget.style.borderColor = '#ddd';
-                      }
-                    }}
-                  >
-                    <div style={{ fontWeight: '600', marginBottom: '4px' }}>
-                      {variant.name}
-                      {hasExistingEdge && <span style={{ color: '#666', fontWeight: 'normal', marginLeft: '8px' }}>✓ Already connected</span>}
-                    </div>
-                    <div style={{ color: '#666', fontSize: '12px' }}>
-                      Weight: {(variant.weight * 100).toFixed(0)}%
-                      {variant.description && ` • ${variant.description}`}
-                    </div>
-                  </button>
-                );
-              })}
-            </div>
-            
-            <button
-              onClick={dismissVariantModal}
-              style={{
-                padding: '8px 16px',
-                background: '#6c757d',
-                color: 'white',
-                border: 'none',
-                borderRadius: '4px',
-                cursor: 'pointer',
-                fontSize: '14px'
-              }}
-            >
-              Cancel
-            </button>
-          </div>
-        </div>
-      )}
+      <CanvasContextMenus
+        graph={graph}
+        setGraph={setGraph}
+        setGraphDirect={setGraphDirect}
+        saveHistoryState={saveHistoryState}
+        nodes={nodes}
+        edges={edges}
+        graphFileId={graphFileId}
+        contextMenu={contextMenu}
+        setContextMenu={setContextMenu}
+        nodeContextMenu={nodeContextMenu}
+        setNodeContextMenu={setNodeContextMenu}
+        postitContextMenu={postitContextMenu}
+        setPostitContextMenu={setPostitContextMenu}
+        containerContextMenu={containerContextMenu}
+        setContainerContextMenu={setContainerContextMenu}
+        analysisContextMenu={analysisContextMenu}
+        setAnalysisContextMenu={setAnalysisContextMenu}
+        multiSelectContextMenu={multiSelectContextMenu}
+        setMultiSelectContextMenu={setMultiSelectContextMenu}
+        edgeContextMenu={edgeContextMenu}
+        setEdgeContextMenu={setEdgeContextMenu}
+        contextMenuLocalData={contextMenuLocalData}
+        setContextMenuLocalData={setContextMenuLocalData}
+        ctxDslEditState={ctxDslEditState}
+        setCtxDslEditState={setCtxDslEditState}
+        analysisCtxAvailableTypes={analysisCtxAvailableTypes}
+        addNodeAtPosition={addNodeAtPosition}
+        pasteNodeAtPosition={pasteNodeAtPosition}
+        pasteSubgraphAtPosition={pasteSubgraphAtPosition}
+        setActiveElementTool={setActiveElementTool}
+        startAddChart={startAddChart}
+        copiedNode={copiedNode}
+        copiedSubgraph={copiedSubgraph}
+        copySubgraph={copySubgraph}
+        isDashboardMode={isDashboardMode}
+        toggleDashboardMode={toggleDashboardMode}
+        tabId={tabId}
+        tabs={tabs}
+        tabOperations={tabOperations}
+        effectiveActiveTabId={effectiveActiveTabId}
+        handleUpdateAnalysis={handleUpdateAnalysis}
+        handleDeleteAnalysis={handleDeleteAnalysis}
+        handleDeleteContainer={handleDeleteContainer}
+        deleteNode={deleteNode}
+        deleteEdge={deleteEdge}
+        reorderCanvasNodes={reorderCanvasNodes}
+        onSelectedNodeChange={onSelectedNodeChange}
+        onSelectedEdgeChange={onSelectedEdgeChange}
+        onSelectedAnnotationChange={onSelectedAnnotationChange}
+        getContainedConversionNodeIds={getContainedConversionNodeIds}
+        align={align}
+        distribute={distribute}
+        equalSize={equalSize}
+        canAlign={canAlign}
+        canDistribute={canDistribute}
+        store={store}
+        scenariosContext={scenariosContext}
+        captureTabScenariosToRecipe={captureTabScenariosToRecipe}
+        showVariantModal={showVariantModal}
+        pendingConnection={pendingConnection}
+        caseNodeVariants={caseNodeVariants}
+        handleVariantSelection={handleVariantSelection}
+        dismissVariantModal={dismissVariantModal}
+      />
       </div>
     </DecorationVisibilityContext.Provider>
   );

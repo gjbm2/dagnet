@@ -34,7 +34,6 @@ import type { Graph, DateRange } from '../types';
 import type { CombinedResult } from '../lib/das/compositeQueryExecutor';
 import {
   WindowAggregationService,
-  parameterToTimeSeries,
   calculateIncrementalFetch,
   mergeTimeSeriesIntoParameter,
   normalizeDate,
@@ -44,13 +43,9 @@ import {
   aggregateWindowData,
   aggregateLatencyStats,
   isCohortModeValue,
-  type TimeSeriesPointWithLatency,
 } from './windowAggregationService';
 import {
   shouldRefetch,
-  analyzeSliceCoverage,
-  computeFetchWindow,
-  computeEffectiveMaturity,
   type RefetchDecision,
   type LatencyConfig,
 } from './fetchRefetchPolicy';
@@ -62,7 +57,6 @@ import { approximateLogNormalSumPercentileDays, fitLagDistribution, toModelSpace
 import type { ParameterValue } from '../types/parameterData';
 import { buildScopedParamsFromFlatPack, ParamSlot } from './ParamPackDSLService';
 import { isolateSlice, extractSliceDimensions, hasContextAny } from './sliceIsolation';
-import { resolveMECEPartitionForImplicitUncontexted, resolveMECEPartitionForImplicitUncontextedSync } from './meceSliceService';
 import { parameterValueRecencyMs, selectImplicitUncontextedSliceSetSync } from './meceSliceService';
 import { sessionLogService } from './sessionLogService';
 
@@ -80,15 +74,11 @@ import { createDASRunner } from '../lib/das';
 import { db } from '../db/appDatabase';
 import { querySnapshotsVirtual } from './snapshotWriteService';
 import { RECENCY_HALF_LIFE_DAYS, DEFAULT_T95_DAYS } from '../constants/latency';
-import { normalizeWindow } from './fetchDataService';
-import { LATENCY_T95_PERCENTILE, LATENCY_PATH_T95_PERCENTILE } from '../constants/latency';
+import { LATENCY_PATH_T95_PERCENTILE } from '../constants/latency';
 
 // ── Extracted modules (slimdown DOS-PR1) ──────────────────────────────────────
 import {
-  setBatchMode,
   isBatchMode,
-  discardBatchMode,
-  batchableToast,
   batchableToastSuccess,
   batchableToastError,
 } from './dataOperations/batchMode';
@@ -198,15 +188,6 @@ export interface GetFromSourceResult {
   daysFromCache: number;
 }
 
-// Cached DAS runner instance for connection lookups (avoid recreating per-call)
-let cachedDASRunner: ReturnType<typeof createDASRunner> | null = null;
-function getCachedDASRunner() {
-  if (!cachedDASRunner) {
-    cachedDASRunner = createDASRunner();
-  }
-  return cachedDASRunner;
-}
-
 function toISOWindowForDAS(window: DateRange): { start?: string; end?: string; [key: string]: unknown } {
   // CRITICAL: keep UK dates internally/logging, but DAS adapters expect ISO strings here.
   // If we pass "6-Dec-25", the Amplitude adapter will produce "6Dec25" (invalid).
@@ -214,10 +195,6 @@ function toISOWindowForDAS(window: DateRange): { start?: string; end?: string; [
   const end = window.end ? parseDate(window.end).toISOString() : undefined;
   return { start, end };
 }
-
-// ── Cluster A (batch mode) extracted to dataOperations/batchMode.ts ───────────
-// ── Cluster B/C (log helpers) extracted to dataOperations/logHelpers.ts ───────
-
 
 // Shared UpdateManager instance
 const updateManager = new UpdateManager();
@@ -407,14 +384,7 @@ export function extractSheetsUpdateData(
   return extractSheetsUpdateDataForEdge(raw, connectionString, paramSlot, undefined, graph, edgeId);
 }
 
-// ── Cluster D (query signature) extracted to dataOperations/querySignature.ts ─
-
-// ── applyChanges extracted to dataOperations/applyChanges.ts ─
-
-// ── Cluster E (asat query support) extracted to dataOperations/asatQuerySupport.ts ─
-
 class DataOperationsService {
-  // ── Clusters F, G (file↔graph sync) extracted to dataOperations/fileToGraphSync.ts and graphToFileSync.ts ─
   // Delegate methods for backward compatibility (callers use dataOperationsService.method()).
   getParameterFromFile = getParameterFromFile;
   getCaseFromFile = getCaseFromFile;
@@ -5645,15 +5615,6 @@ class DataOperationsService {
     }
   }
   
-  // ── Cluster L (cache & settings) extracted to dataOperations/cacheManagement.ts ─
-  /**
-   * (Removed) Sync status modal entry-point.
-   *
-   * This was a Phase-2 stub that only showed a toast, and was wired into the ⚡ menu.
-   * Placeholder menu items should not ship; reintroduce only when the modal is implemented.
-   */
-  // async openSyncStatus(...) { ... }  // Intentionally removed.
-  
   /**
    * Batch get from source - fetches multiple items and updates graph correctly.
    * 
@@ -5760,18 +5721,6 @@ class DataOperationsService {
     return { success: successCount, errors: errorCount, items: results };
   }
 
-  // ===========================================================================
-  // ===========================================================================
-  // DRY RUN / SIMULATION
-  //
-  // Simulation is implemented by running the REAL retrieval codepaths (e.g. Retrieve All)
-  // with dontExecuteHttp=true, which produces DRY_RUN_HTTP session log entries.
-  // There is intentionally no bespoke "markdown narrative" pathway.
-  // ===========================================================================
-
-
-  // ── Cluster J (evidence + forecast scalars) extracted to dataOperations/evidenceForecastScalars.ts ─
-  // (method body removed — now standalone in evidenceForecastScalars.ts)
 }
 
 // Singleton instance
