@@ -1,4 +1,11 @@
 # DagNet Release Notes
+## Version 1.7.16b
+**Released:** 16-Mar-26
+
+updated to adapt for the user property filter in amplitude
+
+---
+
 ## Version 1.7.14b
 **Released:** 16-Mar-26
 

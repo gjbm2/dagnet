@@ -114,11 +114,14 @@ read_env_key() {
 
 set_env_key() {
   # set_env_key <file> <KEY> <VALUE> — upsert a key in a key=value file
+  # Uses awk to avoid sed delimiter/special-char issues with URLs and connection strings
   local file="$1" key="$2" value="$3"
   if [[ -f "$file" ]] && grep -q "^${key}=" "$file" 2>/dev/null; then
-    # Replace existing line (portable sed -i)
     local tmp="${file}.tmp.$$"
-    sed "s|^${key}=.*|${key}=${value}|" "$file" > "$tmp" && mv "$tmp" "$file"
+    awk -v key="$key" -v val="$value" '{
+      if (index($0, key "=") == 1) print key "=" val
+      else print
+    }' "$file" > "$tmp" && mv "$tmp" "$file"
   else
     echo "${key}=${value}" >> "$file"
   fi
@@ -167,7 +170,7 @@ if [[ -n "$EXISTING_TOKEN" && "$EXISTING_TOKEN" != "your_github_token_here" ]]; 
   USER_JSON="$(curl -sf -H "Authorization: token ${EXISTING_TOKEN}" \
                     -H "Accept: application/vnd.github.v3+json" \
                     "https://api.github.com/user" 2>/dev/null || true)"
-  EXISTING_LOGIN="$(echo "$USER_JSON" | grep '"login"' | head -1 | sed 's/.*: *"//;s/".*//')"
+  EXISTING_LOGIN="$(echo "$USER_JSON" | grep '"login"' | head -1 | sed 's/.*: *"//;s/".*//' || true)"
 
   if [[ -n "$EXISTING_LOGIN" ]]; then
     echo -e "  ${GREEN}Token found${NC} — authenticated as ${BOLD}${EXISTING_LOGIN}${NC}"
@@ -205,7 +208,7 @@ if [[ -z "$GITHUB_TOKEN" ]]; then
     fi
     # Verify
     USER_JSON="$(github_api /user)"
-    GH_LOGIN="$(echo "$USER_JSON" | grep '"login"' | head -1 | sed 's/.*: *"//;s/".*//')"
+    GH_LOGIN="$(echo "$USER_JSON" | grep '"login"' | head -1 | sed 's/.*: *"//;s/".*//' || true)"
     if [[ -n "$GH_LOGIN" ]]; then
       echo -e "  ${GREEN}Authenticated as ${BOLD}${GH_LOGIN}${NC}"
       break
@@ -275,7 +278,7 @@ if [[ -z "$DATA_REPO_DIR" ]]; then
       echo -e "  ${RED}Repo not found or no access. Check the URL and ensure you have collaborator access.${NC}"
       continue
     fi
-    HAS_PUSH="$(echo "$REPO_JSON" | grep '"push"' | head -1 | sed -E 's/.*: *//;s/[ ,]//g')"
+    HAS_PUSH="$(echo "$REPO_JSON" | grep '"push"' | head -1 | sed -E 's/.*: *//;s/[ ,]//g' || true)"
     if [[ "$HAS_PUSH" != "true" ]]; then
       echo -e "  ${RED}You don't have push access to this repo. Ask the repo owner to add you as a collaborator.${NC}"
       continue

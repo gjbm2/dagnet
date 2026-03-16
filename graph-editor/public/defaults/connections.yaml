@@ -427,13 +427,40 @@ connections:
           
           if (wantSegmentation) {
             const single = buildEventStepFromId(queryPayload.from);
+
+            // The /events/segmentation endpoint doesn't support user property filters
+            // in the event definition (subprop_type: "user"). Move them to segment filters.
+            const userPropSegments = [];
+            if (single.filters && single.filters.length > 0) {
+              single.filters = single.filters.filter(f => {
+                if (f.subprop_type === 'user') {
+                  userPropSegments.push({
+                    prop: 'gp:' + f.subprop_key,
+                    op: f.subprop_op,
+                    values: f.subprop_value
+                  });
+                  return false;  // Remove from event filters
+                }
+                return true;  // Keep event-type filters
+              });
+            }
+
+            // Merge user property segments into existing segments
+            let segParamForSeg = segmentParam;
+            if (userPropSegments.length > 0) {
+              const existingSegs = segments.length > 0 ? segments : [];
+              const allSegs = [...existingSegs, ...userPropSegments];
+              segParamForSeg = 's=' + encodeURIComponent(JSON.stringify(allSegs));
+              console.log('[Amplitude Adapter] Moved ' + userPropSegments.length + ' user property filter(s) to segment param for segmentation endpoint');
+            }
+
             const eventParams = 'e=' + encodeURIComponent(JSON.stringify(single));
             const otherParams = [
               'start=' + startDate,
               'end=' + endDate,
               intervalParam,      // i=1 for daily
               'm=uniques',        // unique users
-              segmentParam
+              segParamForSeg
             ].filter(p => p).join('&');
             
             queryPayload.query_params = eventParams + '&' + otherParams;

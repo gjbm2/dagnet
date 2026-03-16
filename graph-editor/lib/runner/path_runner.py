@@ -38,7 +38,7 @@ class PruningResult:
     renorm_factors: dict[tuple[str, str], float]  # edge -> renorm factor
 
 
-def _extract_tracked_human_ids(condition: str | None) -> set[str]:
+def _extract_tracked_human_ids(condition: Optional[str]) -> set[str]:
     """
     Extract all node IDs referenced by a conditional_p condition string that require visit-state tracking.
     This includes:

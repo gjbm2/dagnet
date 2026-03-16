@@ -821,7 +821,7 @@ uses this to update parameter files and commit to git.
 {
   "job_id": "fit-abc123",
   "graph_id": "conversion-flow-v0",
-  "repo": "nous-conversion",
+  "repo": "data-repo",
   "branch": "main",
   "graph_file_path": "graphs/conversion-flow-v0.yaml",
   "fingerprint": "sha256:abc123...",
