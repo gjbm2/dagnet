@@ -1,4 +1,11 @@
 # DagNet Release Notes
+## Version 1.7.20b
+**Released:** 16-Mar-26
+
+Bayes infra working; next up...compiler
+
+---
+
 ## Version 1.7.19b
 **Released:** 16-Mar-26
 
