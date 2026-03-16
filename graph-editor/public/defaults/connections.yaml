@@ -435,7 +435,7 @@ connections:
               single.filters = single.filters.filter(f => {
                 if (f.subprop_type === 'user') {
                   userPropSegments.push({
-                    prop: 'userdata_' + f.subprop_key,
+                    prop: 'gp:' + f.subprop_key,
                     op: f.subprop_op,
                     values: f.subprop_value
                   });
