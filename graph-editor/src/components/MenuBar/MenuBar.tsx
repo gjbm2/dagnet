@@ -14,6 +14,7 @@ import { useTabContext } from '../../contexts/TabContext';
 import { useNavigatorContext } from '../../contexts/NavigatorContext';
 import { useDashboardMode } from '../../hooks/useDashboardMode';
 import { DevConsoleMirrorControls } from './DevConsoleMirrorControls';
+import { DevBayesTrigger } from './DevBayesTrigger';
 import { ShareLinkModal } from '../modals/ShareLinkModal';
 import { SwitchBranchModal } from '../modals/SwitchBranchModal';
 import { APP_VERSION } from '../../version';
@@ -52,6 +53,7 @@ export function MenuBarComponent() {
         <AppUpdateBadge />
       </Menubar.Root>
       <div className="dagnet-right-controls">
+        <DevBayesTrigger />
         <DevConsoleMirrorControls />
         <GitHubOAuthChip />
         <div

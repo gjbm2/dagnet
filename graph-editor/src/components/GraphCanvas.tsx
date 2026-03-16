@@ -28,14 +28,6 @@ import ConversionNode from './nodes/ConversionNode';
 import PostItNode from './nodes/PostItNode';
 import ContainerNode from './nodes/ContainerNode';
 import CanvasAnalysisNode from './nodes/CanvasAnalysisNode';
-import { canvasAnalysisTransientCache } from '../hooks/useCanvasAnalysisCompute';
-
-/**
- * Pending payload for the draw-to-create analysis tool.
- * Set by the pin button, consumed on mouse-up after draw.
- */
-let pendingAnalysisPayload: any = null;
-export function setPendingAnalysisPayload(payload: any) { pendingAnalysisPayload = payload; }
 import ConversionEdge from './edges/ConversionEdge';
 import ScenarioOverlayRenderer from './ScenarioOverlayRenderer';
 
@@ -64,9 +56,6 @@ import { resolveAnalysisType } from '../services/analysisTypeResolutionService';
 import { mutateCanvasAnalysisGraph, deleteCanvasAnalysisFromGraph } from '../services/canvasAnalysisMutationService';
 import { useDashboardMode } from '../hooks/useDashboardMode';
 import { useCopyPaste } from '../hooks/useCopyPaste';
-import { dataOperationsService } from '../services/dataOperationsService';
-import { fileRegistry } from '../contexts/TabContext';
-import toast from 'react-hot-toast';
 import { useGraphStore } from '../contexts/GraphStoreContext';
 import { useTabContext } from '../contexts/TabContext';
 import { useViewPreferencesContext } from '../contexts/ViewPreferencesContext';
@@ -89,13 +78,15 @@ import { computeFaceDirectionsFromEdges } from '@/lib/faceDirections';
 import { buildScenarioRenderEdges } from './canvas/buildScenarioRenderEdges';
 import { calculateEdgeOffsets as calculateEdgeOffsetsCore } from './canvas/edgeGeometry';
 import { computeDagreLayout as computeDagreLayoutCore, computeSankeyLayout as computeSankeyLayoutCore } from './canvas/layoutAlgorithms';
-import { createNodeInGraph, createNodeFromFileInGraph, createPostitInGraph, createContainerInGraph, createCanvasAnalysisInGraph, buildAddChartPayload } from './canvas/creationTools';
+import { useCanvasCreation } from './canvas/useCanvasCreation';
+import { useLassoSelection } from './canvas/useLassoSelection';
+import { useNodeDrag } from './canvas/useNodeDrag';
 import { computeHighlightMetadata } from './canvas/pathHighlighting';
 import { getCaseEdgeVariantInfo } from './edges/edgeLabelHelpers';
 import { MAX_EDGE_WIDTH, MIN_EDGE_WIDTH, DEFAULT_NODE_WIDTH, DEFAULT_NODE_HEIGHT, MIN_NODE_HEIGHT, MAX_NODE_HEIGHT, IMAGE_VIEW_NODE_WIDTH, IMAGE_VIEW_NODE_HEIGHT } from '@/lib/nodeEdgeConstants';
 import { useAlignSelection } from '../hooks/useAlignSelection';
 import { useSnapToGuides } from '../hooks/useSnapToGuides';
-import { toNodeRect } from '../services/alignmentService';
+
 
 const nodeTypes: NodeTypes = {
   conversion: ConversionNode,
@@ -507,7 +498,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
   const isSyncingRef = useRef(false); // Prevents ReactFlow->Graph sync loops, but NOT Graph->ReactFlow sync
   const isDraggingNodeRef = useRef(false); // Prevents Graph->ReactFlow sync during node dragging
   const isResizingNodeRef = useRef(false); // Prevents Graph->ReactFlow style sync during node resizing
-  const dragTimeoutRef = useRef<number | null>(null); // Failsafe to clear drag flag if it gets stuck
+  // dragTimeoutRef moved to useNodeDrag hook
   const prevSankeyViewRef = useRef(useSankeyView); // Track Sankey mode changes to force slow path rebuild
   const prevShowNodeImagesRef = useRef(showNodeImages); // Track image view changes to force slow path rebuild
   const reactFlowWrapperRef = useRef<HTMLDivElement>(null); // For lasso coordinate calculations
@@ -2840,171 +2831,60 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
     getAllExistingIds,
   });
 
-  // Handle Shift+Drag lasso selection
-  const [isLassoSelecting, setIsLassoSelecting] = useState(false);
-  const [lassoStart, setLassoStart] = useState<{ x: number; y: number } | null>(null);
-  const [lassoEnd, setLassoEnd] = useState<{ x: number; y: number } | null>(null);
-  const [isShiftHeld, setIsShiftHeld] = useState(false);
-  const lassoCompletedRef = useRef(false); // Prevent double completion
+  // Canvas creation hook (extracted from GraphCanvas Phase B4a)
+  const {
+    addNodeAtPosition,
+    pasteNodeAtPosition,
+    pasteSubgraphAtPosition,
+    startAddChart,
+    handleDragOver,
+    handleDrop,
+    onPaneMouseDown,
+    onPaneMouseMove,
+    onPaneMouseUp,
+    onPaneClick,
+    drawRect,
+    drawStartRef,
+  } = useCanvasCreation({
+    graph,
+    nodes,
+    edges,
+    setGraph,
+    setGraphDirect,
+    saveHistoryState,
+    setNodes,
+    screenToFlowPosition,
+    onSelectedNodeChange,
+    onSelectedEdgeChange,
+    onSelectedAnnotationChange,
+    setContextMenu,
+    activeElementTool,
+    setActiveElementTool,
+    onClearElementTool,
+    copiedNode,
+    copiedSubgraph,
+    isCanvasObjectNode,
+    getContainedConversionNodeIds,
+    autoEditPostitIdRef,
+    autoSelectAnalysisIdRef,
+    tabId,
+    effectiveActiveTabId,
+    onAddNodeRef,
+    onAddPostitRef,
+    onAddContainerRef,
+  });
 
-  // Track Shift key state and handle mouse events globally
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Shift') {
-        setIsShiftHeld(true);
-      }
-      
-      // Escape: revert to pointer mode when a non-pointer tool is active
-      if (e.key === 'Escape') {
-        const target = e.target as HTMLElement;
-        const inInput = target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable || target.closest('.monaco-editor');
-        if (!inInput && activeElementTool && activeElementTool !== 'select') {
-          e.preventDefault();
-          onClearElementTool?.();
-          return;
-        }
-      }
-
-      // Handle Delete key for selected elements
-      if (e.key === 'Delete' || e.key === 'Backspace') {
-        console.log(`[GraphCanvas ${tabId}] Delete key detected`);
-        
-        // FIRST: Check if user is typing in a form field or Monaco editor
-        // (Exception: inputs with data-allow-global-shortcuts="true" should pass through for CTRL+Z/CTRL+Y only)
-        const target = e.target as HTMLElement;
-        const allowGlobalShortcuts = target.getAttribute?.('data-allow-global-shortcuts') === 'true';
-        
-        if (!allowGlobalShortcuts && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable || target.closest('.monaco-editor'))) {
-          console.log(`[GraphCanvas ${tabId}] Delete ignored - focus in input field without global shortcuts flag`);
-          return; // Let the input field handle the Delete/Backspace
-        }
-        
-        // SECOND: If not in an input, check for selected elements
-        const selectedNodes = nodes.filter(n => n.selected);
-        const selectedEdges = edges.filter(e => e.selected);
-        
-        console.log(`[GraphCanvas ${tabId}] Delete key pressed, selected nodes:`, selectedNodes.length, 'selected edges:', selectedEdges.length);
-        
-        // If there are selected nodes or edges, delete them
-        if (selectedNodes.length > 0 || selectedEdges.length > 0) {
-          e.preventDefault();
-          console.log(`[GraphCanvas ${tabId}] Calling deleteSelected`);
-          deleteSelected();
-          return;
-        }
-        
-        console.log(`[GraphCanvas ${tabId}] No selected elements to delete`);
-      }
-    };
-
-    const handleKeyUp = (e: KeyboardEvent) => {
-      if (e.key === 'Shift') {
-        setIsShiftHeld(false);
-        setIsLassoSelecting(false);
-        setLassoStart(null);
-        setLassoEnd(null);
-      }
-    };
-
-    const handleMouseDown = (e: MouseEvent) => {
-      if (isShiftHeld && e.target && (e.target as Element).closest('.react-flow')) {
-        e.preventDefault();
-        e.stopPropagation();
-        
-        // Store viewport coordinates (for screenToFlowPosition conversion)
-        setIsLassoSelecting(true);
-        setLassoStart({ x: e.clientX, y: e.clientY });
-        setLassoEnd({ x: e.clientX, y: e.clientY });
-      }
-    };
-
-    const handleMouseMove = (e: MouseEvent) => {
-      if (isLassoSelecting && lassoStart) {
-        e.preventDefault();
-        e.stopPropagation();
-        
-        // Store viewport coordinates (for screenToFlowPosition conversion)
-        setLassoEnd({ x: e.clientX, y: e.clientY });
-      }
-    };
-
-    const handleMouseUp = (e: MouseEvent) => {
-      if (isLassoSelecting && lassoStart && lassoEnd && !lassoCompletedRef.current) {
-        lassoCompletedRef.current = true; // Prevent double execution
-        e.preventDefault();
-        e.stopPropagation();
-        
-        // Use ReactFlow's built-in coordinate conversion
-        const flowStart = screenToFlowPosition({ x: lassoStart.x, y: lassoStart.y });
-        const flowEnd = screenToFlowPosition({ x: lassoEnd.x, y: lassoEnd.y });
-        
-        const flowStartX = flowStart.x;
-        const flowStartY = flowStart.y;
-        const flowEndX = flowEnd.x;
-        const flowEndY = flowEnd.y;
-        
-        const lassoRect = {
-          left: Math.min(flowStartX, flowEndX),
-          top: Math.min(flowStartY, flowEndY),
-          right: Math.max(flowStartX, flowEndX),
-          bottom: Math.max(flowStartY, flowEndY)
-        };
-
-        const selectedNodes = nodes.filter(node => {
-          const rect = toNodeRect(node, DEFAULT_NODE_WIDTH, DEFAULT_NODE_HEIGHT);
-          const nodeRect = {
-            left: rect.x,
-            top: rect.y,
-            right: rect.x + rect.width,
-            bottom: rect.y + rect.height,
-          };
-
-          return !(nodeRect.right < lassoRect.left ||
-                   nodeRect.left > lassoRect.right ||
-                   nodeRect.bottom < lassoRect.top ||
-                   nodeRect.top > lassoRect.bottom);
-        });
-
-
-        const selectedNodeIds = new Set(selectedNodes.map(n => n.id));
-        const addToExisting = e.ctrlKey || e.metaKey;
-        
-        setNodes(prevNodes => 
-          prevNodes.map(n => ({ 
-            ...n, 
-            selected: selectedNodeIds.has(n.id) || (addToExisting && !!n.selected)
-          }))
-        );
-        
-        // Reset lasso state after a delay to allow selection to settle
-        setTimeout(() => {
-          setIsLassoSelecting(false);
-          setLassoStart(null);
-          setLassoEnd(null);
-          lassoCompletedRef.current = false; // Reset for next lasso
-        }, 100);
-      } else {
-        setIsLassoSelecting(false);
-        setLassoStart(null);
-        setLassoEnd(null);
-        lassoCompletedRef.current = false;
-      }
-    };
-
-    window.addEventListener('keydown', handleKeyDown);
-    window.addEventListener('keyup', handleKeyUp);
-    window.addEventListener('mousedown', handleMouseDown, true);
-    window.addEventListener('mousemove', handleMouseMove, true);
-    window.addEventListener('mouseup', handleMouseUp, true);
-
-    return () => {
-      window.removeEventListener('keydown', handleKeyDown);
-      window.removeEventListener('keyup', handleKeyUp);
-      window.removeEventListener('mousedown', handleMouseDown, true);
-      window.removeEventListener('mousemove', handleMouseMove, true);
-      window.removeEventListener('mouseup', handleMouseUp, true);
-    };
-  }, [isShiftHeld, isLassoSelecting, lassoStart, lassoEnd, nodes, setNodes, edges, deleteSelected, tabId, activeElementTool, onClearElementTool]);
+  // Lasso selection + keyboard delete hook (extracted from GraphCanvas Phase B4b)
+  const { isLassoSelecting, lassoStart, lassoEnd } = useLassoSelection({
+    nodes,
+    edges,
+    setNodes,
+    deleteSelected,
+    screenToFlowPosition,
+    activeElementTool,
+    onClearElementTool,
+    tabId,
+  });
 
 
   // Track selected nodes for probability calculation
@@ -3092,209 +2972,22 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
     }
   }, [onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnnotationChange, isLassoSelecting, setSelectedNodesForAnalysis, activeElementTool, isCanvasObjectNode]);
 
-  // Track whether the current drag actually moved the node (vs. a simple click)
-  const hasNodeMovedRef = useRef(false);
-
-  // Group drag state for containers
-  const containerDragContainedRef = useRef<Set<string> | null>(null);
-  const containerDragLastPosRef = useRef<{ x: number; y: number } | null>(null);
-
-  // Handle node drag start - set flag and start failsafe timeout
-  const onNodeDragStart = useCallback((_event: any, _node: any) => {
-    hasNodeMovedRef.current = false;
-    resetHelperLines();
-
-    // Block Graph→ReactFlow sync during drag to prevent interruption
-    isDraggingNodeRef.current = true;
-    setIsDraggingNode(true);
-
-    // Track the specific analysis being dragged so SelectionConnectors
-    // can show connectors/shapes/halos for it (same codepath as selection)
-    if (_node.id?.startsWith('analysis-')) {
-      setDraggedAnalysisId(_node.id.replace('analysis-', ''));
-    } else {
-      setDraggedAnalysisId(null);
-    }
-
-    // Container group drag: snapshot contained objects
-    if (_node.id?.startsWith('container-')) {
-      const containerPos = _node.position || { x: 0, y: 0 };
-      const containerW = (_node as any).measured?.width ?? _node.width ?? (typeof _node.style?.width === 'number' ? _node.style.width : 400);
-      const containerH = (_node as any).measured?.height ?? _node.height ?? (typeof _node.style?.height === 'number' ? _node.style.height : 300);
-
-      console.log(`[GroupDrag] Container ${_node.id}: pos=(${containerPos.x},${containerPos.y}) size=(${containerW}x${containerH}) measured=${JSON.stringify((_node as any).measured)} style.w=${_node.style?.width} style.h=${_node.style?.height} width=${_node.width} height=${_node.height}`);
-
-      const CONTAIN_TOLERANCE = 10;
-      const isFullyInside = (n: any, px: number, py: number, pw: number, ph: number) => {
-        const nw = (n as any).measured?.width ?? n.width ?? (typeof n.style?.width === 'number' ? n.style.width : (n.id?.startsWith('container-') ? 400 : n.id?.startsWith('postit-') ? 200 : DEFAULT_NODE_WIDTH));
-        const nh = (n as any).measured?.height ?? n.height ?? (typeof n.style?.height === 'number' ? n.style.height : (n.id?.startsWith('container-') ? 300 : n.id?.startsWith('postit-') ? 150 : DEFAULT_NODE_HEIGHT));
-        const nx = n.position?.x ?? 0;
-        const ny = n.position?.y ?? 0;
-        const inside = nx >= (px - CONTAIN_TOLERANCE) && ny >= (py - CONTAIN_TOLERANCE) &&
-               (nx + nw) <= (px + pw + CONTAIN_TOLERANCE) && (ny + nh) <= (py + ph + CONTAIN_TOLERANCE);
-        if (!n.id?.startsWith('container-') && !n.id?.startsWith('postit-') && !n.id?.startsWith('analysis-')) {
-          console.log(`[GroupDrag]   Node ${n.id}: pos=(${nx},${ny}) size=(${nw}x${nh}) endAt=(${nx+nw},${ny+nh}) inside=${inside} measured=${JSON.stringify((n as any).measured)} width=${n.width}`);
-        }
-        return inside;
-      };
-
-      // Recursively collect all contained objects (nodes, postits, nested containers)
-      const contained = new Set<string>();
-      const selectedIds = new Set(nodes.filter(n => n.selected).map(n => n.id));
-
-      const collectContained = (parentId: string, px: number, py: number, pw: number, ph: number) => {
-        for (const n of nodes) {
-          if (n.id === parentId || contained.has(n.id) || selectedIds.has(n.id)) continue;
-          if (isFullyInside(n, px, py, pw, ph)) {
-            contained.add(n.id);
-            // Recurse into nested containers
-            if (n.id?.startsWith('container-')) {
-              const nw = (n as any).measured?.width ?? n.style?.width ?? 400;
-              const nh = (n as any).measured?.height ?? n.style?.height ?? 300;
-              collectContained(n.id, n.position?.x ?? 0, n.position?.y ?? 0, nw, nh);
-            }
-          }
-        }
-      };
-
-      collectContained(_node.id, containerPos.x, containerPos.y, containerW, containerH);
-      containerDragContainedRef.current = contained.size > 0 ? contained : null;
-      containerDragLastPosRef.current = { x: containerPos.x, y: containerPos.y };
-    } else {
-      containerDragContainedRef.current = null;
-      containerDragLastPosRef.current = null;
-    }
-
-    // Failsafe: clear drag flag if it somehow gets stuck
-    if (dragTimeoutRef.current) {
-      clearTimeout(dragTimeoutRef.current);
-    }
-    dragTimeoutRef.current = window.setTimeout(() => {
-      if (isDraggingNodeRef.current) {
-        console.log('[GraphCanvas] Drag timeout elapsed, clearing drag flag (failsafe)');
-        isDraggingNodeRef.current = false;
-        setIsDraggingNode(false);
-        setDraggedAnalysisId(null);
-      }
-      dragTimeoutRef.current = null;
-    }, 5000);
-  }, [nodes, resetHelperLines]);
-
-  // Mark drag as "moved" and apply group drag delta for containers
-  const onNodeDrag = useCallback((_event: any, draggedNode: any) => {
-    if (!hasNodeMovedRef.current) {
-      hasNodeMovedRef.current = true;
-    }
-
-    // Container group drag: move contained objects by delta
-    if (containerDragContainedRef.current && containerDragLastPosRef.current) {
-      const dx = (draggedNode.position?.x ?? 0) - containerDragLastPosRef.current.x;
-      const dy = (draggedNode.position?.y ?? 0) - containerDragLastPosRef.current.y;
-      containerDragLastPosRef.current = { x: draggedNode.position?.x ?? 0, y: draggedNode.position?.y ?? 0 };
-
-      if (dx !== 0 || dy !== 0) {
-        const containedIds = containerDragContainedRef.current;
-        setNodes(nds => nds.map(n => {
-          if (containedIds.has(n.id)) {
-            return { ...n, position: { x: n.position.x + dx, y: n.position.y + dy } };
-          }
-          return n;
-        }));
-      }
-    }
-  }, [setNodes]);
-
-  // Handle node drag stop - save final position to history
-  const onNodeDragStop = useCallback(() => {
-    // Clear snap-to-guide state and rebuild index with final positions
-    resetHelperLines();
-    rebuildSnapIndex(nodes);
-
-    // Clear container group drag state
-    containerDragContainedRef.current = null;
-    containerDragLastPosRef.current = null;
-    // Keep drag flag set - it will be cleared by the sync effect when it takes the fast path
-    // Use double requestAnimationFrame to ensure ReactFlow has finished updating node positions
-    // and React has re-rendered before we sync to graph store and trigger edge recalculation
-    requestAnimationFrame(() => {
-      requestAnimationFrame(() => {
-        setDraggedAnalysisId(null);
-
-        // Only sync positions & save history if the node actually moved.
-        if (hasNodeMovedRef.current && graph && nodes.length > 0) {
-          const updatedGraph = fromFlow(nodes, edges, graph);
-          if (updatedGraph) {
-            const updatedJson = JSON.stringify(updatedGraph);
-            // Only update if positions actually changed
-            if (updatedJson !== lastSyncedReactFlowRef.current) {
-              console.log(`🎯 Syncing node positions to graph store after drag`);
-              isSyncingRef.current = true;
-              lastSyncedReactFlowRef.current = updatedJson;
-              // Keep isDraggingNodeRef.current = true - sync effect will clear it after taking fast path
-              setGraph(updatedGraph);
-              // Clear syncing flag and drag state AFTER the sync render settles,
-              // so edge components still see isDraggingNode=true and suppress hover previews
-              setTimeout(() => {
-                isSyncingRef.current = false;
-                setIsDraggingNode(false);
-              }, 0);
-            } else {
-              // No position change, clear flags immediately
-              isDraggingNodeRef.current = false;
-              setIsDraggingNode(false);
-            }
-          } else {
-            // No graph update, clear flags immediately
-            isDraggingNodeRef.current = false;
-            setIsDraggingNode(false);
-          }
-
-          // Save the FINAL position to history after the ReactFlow→Store sync completes
-          // Use setTimeout to ensure sync completes first
-          setTimeout(() => {
-            saveHistoryState('Move node');
-          }, 0);
-        } else {
-          // Click-only (no movement) - just clear drag flag, no graph update or history entry
-          isDraggingNodeRef.current = false;
-          setIsDraggingNode(false);
-        }
-      });
-    });
-  }, [saveHistoryState, graph, nodes, edges, setGraph, resetHelperLines, rebuildSnapIndex]);
-
-  // Cleanup drag timeout on unmount
-  useEffect(() => {
-    return () => {
-      if (dragTimeoutRef.current) {
-        clearTimeout(dragTimeoutRef.current);
-        dragTimeoutRef.current = null;
-      }
-    };
-  }, []);
-
-  // Add new node (core mutation in canvas/creationTools.ts)
-  const addNode = useCallback(() => {
-    if (!graph) return;
-    const viewportCenter = screenToFlowPosition({ x: window.innerWidth / 2, y: window.innerHeight / 2 });
-    const { graph: nextGraph, newUuid } = createNodeInGraph(graph, viewportCenter);
-    setGraph(nextGraph);
-    if (typeof saveHistoryState === 'function') {
-      saveHistoryState('Add node', newUuid);
-    }
-    setTimeout(() => {
-      setNodes((nodes) => nodes.map((node) => ({ ...node, selected: node.id === newUuid })));
-      onSelectedNodeChange(newUuid);
-    }, 50);
-  }, [graph, setGraph, onSelectedNodeChange, screenToFlowPosition, saveHistoryState, setNodes]);
-
-  // Expose addNode function to parent component via ref
-  useEffect(() => {
-    if (onAddNodeRef) {
-      onAddNodeRef.current = addNode;
-    }
-  }, [addNode, onAddNodeRef]);
-
+  // Node drag hook (extracted from GraphCanvas Phase B4c)
+  const { onNodeDragStart, onNodeDrag, onNodeDragStop } = useNodeDrag({
+    graph,
+    nodes,
+    edges,
+    setGraph,
+    setNodes,
+    saveHistoryState,
+    resetHelperLines,
+    rebuildSnapIndex,
+    isDraggingNodeRef,
+    setIsDraggingNode,
+    setDraggedAnalysisId,
+    isSyncingRef,
+    lastSyncedReactFlowRef,
+  });
 
   // Expose deleteSelected function to parent component via ref
   useEffect(() => {
@@ -3491,360 +3184,6 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
       };
     }
   }, [contextMenu, nodeContextMenu, multiSelectContextMenu, edgeContextMenu]);
-
-  // Add node at specific position (core mutation in canvas/creationTools.ts)
-  const addNodeAtPosition = useCallback((x: number, y: number) => {
-    if (!graph) return;
-    const { graph: nextGraph, newUuid } = createNodeInGraph(graph, { x, y });
-    setGraph(nextGraph);
-    if (typeof saveHistoryState === 'function') {
-      saveHistoryState('Add node', newUuid);
-    }
-    setContextMenu(null);
-    setTimeout(() => {
-      setNodes((nodes) => nodes.map((node) => ({ ...node, selected: node.id === newUuid })));
-      onSelectedNodeChange(newUuid);
-    }, 50);
-  }, [graph, setGraph, saveHistoryState, setNodes, onSelectedNodeChange]);
-
-  // Add post-it (core mutation in canvas/creationTools.ts)
-  const addPostitAtPosition = useCallback((x: number, y: number, w?: number, h?: number) => {
-    if (!graph) return;
-    const { graph: nextGraph, newId } = createPostitInGraph(graph, { x, y }, { width: w, height: h });
-    setGraphDirect(nextGraph);
-    saveHistoryState('Add post-it');
-    setContextMenu(null);
-    autoEditPostitIdRef.current = newId;
-    onSelectedNodeChange(null);
-    onSelectedEdgeChange(null);
-    onSelectedAnnotationChange?.(newId, 'postit');
-  }, [graph, setGraphDirect, saveHistoryState, onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnnotationChange]);
-
-  const addPostit = useCallback(() => {
-    const centre = screenToFlowPosition({ x: window.innerWidth / 2, y: window.innerHeight / 2 });
-    addPostitAtPosition(centre.x, centre.y);
-  }, [screenToFlowPosition, addPostitAtPosition]);
-
-  // Add container (core mutation in canvas/creationTools.ts)
-  const addContainerAtPosition = useCallback((x: number, y: number, w?: number, h?: number) => {
-    if (!graph) return;
-    const { graph: nextGraph, newId } = createContainerInGraph(graph, { x, y }, { width: w, height: h });
-    setGraphDirect(nextGraph);
-    saveHistoryState('Add container');
-    setContextMenu(null);
-    onSelectedNodeChange(null);
-    onSelectedEdgeChange(null);
-    onSelectedAnnotationChange?.(newId, 'container');
-  }, [graph, setGraphDirect, saveHistoryState, onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnnotationChange]);
-
-  useEffect(() => {
-    if (onAddPostitRef) {
-      onAddPostitRef.current = addPostit;
-    }
-  }, [addPostit, onAddPostitRef]);
-
-  const addContainer = useCallback(() => {
-    const centre = screenToFlowPosition({ x: window.innerWidth / 2, y: window.innerHeight / 2 });
-    addContainerAtPosition(centre.x, centre.y);
-  }, [screenToFlowPosition, addContainerAtPosition]);
-
-  useEffect(() => {
-    if (onAddContainerRef) {
-      onAddContainerRef.current = addContainer;
-    }
-  }, [addContainer, onAddContainerRef]);
-
-  // Add canvas analysis (core mutation in canvas/creationTools.ts)
-  const addCanvasAnalysisAtPosition = useCallback((x: number, y: number, dragData: any) => {
-    if (!graph) return;
-    const { graph: nextGraph, analysisId, analysis } = createCanvasAnalysisInGraph(graph, { x, y }, dragData);
-    if (dragData.analysisResult) {
-      canvasAnalysisTransientCache.set(analysisId, dragData.analysisResult);
-    }
-    autoSelectAnalysisIdRef.current = analysisId;
-    setGraphDirect(nextGraph as any);
-    saveHistoryState('Pin analysis to canvas');
-    setContextMenu(null);
-    onSelectedNodeChange(null);
-    onSelectedEdgeChange(null);
-    onSelectedAnnotationChange?.(analysisId, 'canvasAnalysis');
-  }, [graph, setGraphDirect, saveHistoryState, onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnnotationChange]);
-
-  const startPinnedCanvasAnalysis = useCallback((payload?: any) => {
-    pendingAnalysisPayload = payload || {};
-    setActiveElementTool('new-analysis');
-  }, [setActiveElementTool]);
-
-  // Start "Add chart" flow (DSL construction in canvas/creationTools.ts)
-  const startAddChart = useCallback((detail?: { contextNodeIds?: string[]; contextEdgeIds?: string[] }) => {
-    const ctxNodeIds: string[] = detail?.contextNodeIds || [];
-    const ctxEdgeIds: string[] = detail?.contextEdgeIds || [];
-    pendingAnalysisPayload = buildAddChartPayload(
-      graph, nodes, edges, ctxNodeIds, ctxEdgeIds, isCanvasObjectNode, getContainedConversionNodeIds,
-    );
-    setActiveElementTool('new-analysis');
-  }, [nodes, edges, isCanvasObjectNode, graph, setActiveElementTool]);
-
-  // Listen for 'dagnet:pinAnalysisToCanvas' event — enters draw mode with a pre-filled recipe
-  useEffect(() => {
-    const handler = (e: CustomEvent) => {
-      if (tabId !== effectiveActiveTabId) return;
-      startPinnedCanvasAnalysis(e.detail);
-    };
-    window.addEventListener('dagnet:pinAnalysisToCanvas', handler as any);
-    return () => window.removeEventListener('dagnet:pinAnalysisToCanvas', handler as any);
-  }, [startPinnedCanvasAnalysis, tabId, effectiveActiveTabId]);
-
-  // Listen for 'dagnet:pinAnalysisAtScreenPosition' — instantly pins at a given screen position
-  // Used by HoverAnalysisPreview to persist the preview card as a canvas object in-place.
-  useEffect(() => {
-    const handler = (e: CustomEvent) => {
-      if (tabId !== effectiveActiveTabId) return;
-      const { screenX, screenY, dragData } = e.detail;
-      const flowPos = screenToFlowPosition({ x: screenX, y: screenY });
-      addCanvasAnalysisAtPosition(flowPos.x, flowPos.y, dragData);
-    };
-    window.addEventListener('dagnet:pinAnalysisAtScreenPosition', handler as any);
-    return () => window.removeEventListener('dagnet:pinAnalysisAtScreenPosition', handler as any);
-  }, [addCanvasAnalysisAtPosition, screenToFlowPosition, tabId, effectiveActiveTabId]);
-
-  // Listen for 'dagnet:addAnalysis' event — captures selection DSL, then enters draw mode.
-  // Analysis type is always left empty so the canvas node shows the icon picker.
-  // The user explicitly chooses the analysis type after placing the chart on canvas.
-  //
-  // Context menus pass detail.contextNodeIds (human-readable) / detail.contextEdgeIds (UUIDs)
-  // so right-clicking a node/edge and choosing "Add chart" works even without a prior selection.
-  useEffect(() => {
-    const handler = (e: Event) => {
-      if (tabId !== effectiveActiveTabId) return;
-      startAddChart((e as CustomEvent).detail || {});
-    };
-    window.addEventListener('dagnet:addAnalysis', handler as any);
-    return () => window.removeEventListener('dagnet:addAnalysis', handler as any);
-  }, [startAddChart, tabId, effectiveActiveTabId]);
-
-  // Drag-to-draw state for creation modes (new-postit, new-container)
-  const drawStartRef = useRef<{ screenX: number; screenY: number; flowX: number; flowY: number; tool: string } | null>(null);
-  const [drawRect, setDrawRect] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
-
-  const DRAW_TOOLS = new Set(['new-postit', 'new-container', 'new-analysis']);
-
-  const onPaneMouseDown = useCallback((event: React.PointerEvent) => {
-    if (!activeElementTool || !DRAW_TOOLS.has(activeElementTool)) return;
-    const target = event.target as HTMLElement;
-    if (target.closest('.react-flow__node') || target.closest('.react-flow__edge')) return;
-    const flowPos = screenToFlowPosition({ x: event.clientX, y: event.clientY });
-    drawStartRef.current = { screenX: event.clientX, screenY: event.clientY, flowX: flowPos.x, flowY: flowPos.y, tool: activeElementTool };
-    setDrawRect(null);
-  }, [activeElementTool, screenToFlowPosition]);
-
-  const onPaneMouseMove = useCallback((event: React.PointerEvent) => {
-    if (!drawStartRef.current) return;
-    const flowPos = screenToFlowPosition({ x: event.clientX, y: event.clientY });
-    const sx = drawStartRef.current.flowX;
-    const sy = drawStartRef.current.flowY;
-    setDrawRect({
-      x: Math.min(sx, flowPos.x),
-      y: Math.min(sy, flowPos.y),
-      w: Math.abs(flowPos.x - sx),
-      h: Math.abs(flowPos.y - sy),
-    });
-  }, [screenToFlowPosition]);
-
-  const onPaneMouseUp = useCallback((event: React.PointerEvent) => {
-    if (!drawStartRef.current) return;
-    const tool = drawStartRef.current.tool;
-    const flowPos = screenToFlowPosition({ x: event.clientX, y: event.clientY });
-    const sx = drawStartRef.current.flowX;
-    const sy = drawStartRef.current.flowY;
-    const w = Math.abs(flowPos.x - sx);
-    const h = Math.abs(flowPos.y - sy);
-    const x = Math.min(sx, flowPos.x);
-    const y = Math.min(sy, flowPos.y);
-    drawStartRef.current = null;
-    setDrawRect(null);
-    if (tool === 'new-postit') {
-      addPostitAtPosition(x, y, w, h);
-    } else if (tool === 'new-container') {
-      addContainerAtPosition(x, y, w, h);
-    } else if (tool === 'new-analysis') {
-      const payload = pendingAnalysisPayload;
-      pendingAnalysisPayload = null;
-      addCanvasAnalysisAtPosition(x, y, { ...(payload || {}), drawWidth: w, drawHeight: h });
-    }
-    onClearElementTool?.();
-  }, [screenToFlowPosition, addPostitAtPosition, addContainerAtPosition, addCanvasAnalysisAtPosition, onClearElementTool]);
-
-  const onPaneClick = useCallback((event: React.MouseEvent) => {
-    if (activeElementTool === 'new-node') {
-      const flowPosition = screenToFlowPosition({ x: event.clientX, y: event.clientY });
-      addNodeAtPosition(flowPosition.x, flowPosition.y);
-      onClearElementTool?.();
-    } else if (activeElementTool === 'new-container') {
-      const flowPosition = screenToFlowPosition({ x: event.clientX, y: event.clientY });
-      addContainerAtPosition(flowPosition.x, flowPosition.y);
-      onClearElementTool?.();
-    }
-  }, [activeElementTool, screenToFlowPosition, addNodeAtPosition, addContainerAtPosition, onClearElementTool]);
-
-  // Paste node at specific position (core mutation in canvas/creationTools.ts)
-  const pasteNodeAtPosition = useCallback(async (x: number, y: number) => {
-    if (!graph) return;
-    if (!copiedNode) { toast.error('No node copied'); return; }
-    const nodeId = copiedNode.objectId;
-    const file = fileRegistry.getFile(`node-${nodeId}`);
-    if (!file) { toast.error(`Node file not found: ${nodeId}`); return; }
-    const { graph: nextGraph, newUuid } = createNodeFromFileInGraph(graph, nodeId, file.data?.label || nodeId, { x, y });
-    setGraph(nextGraph);
-    if (typeof saveHistoryState === 'function') { saveHistoryState('Paste node', newUuid); }
-    setContextMenu(null);
-    setTimeout(async () => {
-      try {
-        await dataOperationsService.getNodeFromFile({ nodeId, graph: nextGraph, setGraph: setGraph as any, targetNodeUuid: newUuid });
-        toast.success(`Pasted node: ${nodeId}`);
-      } catch (error) {
-        console.error('[GraphCanvas] Failed to get node from file:', error);
-        toast.error('Failed to load node data from file');
-      }
-      setNodes((nodes) => nodes.map((node) => ({ ...node, selected: node.id === newUuid })));
-      onSelectedNodeChange(newUuid);
-    }, 100);
-  }, [graph, setGraph, copiedNode, saveHistoryState, setNodes, onSelectedNodeChange]);
-
-  // Paste subgraph at specific position (from copy-paste clipboard)
-  const pasteSubgraphAtPosition = useCallback(async (x: number, y: number) => {
-    if (!graph) return;
-    
-    if (!copiedSubgraph) {
-      toast.error('No subgraph copied');
-      return;
-    }
-    
-    // Calculate offset from first item's position to target position
-    const firstNode = copiedSubgraph.nodes[0];
-    const firstPostit = copiedSubgraph.postits?.[0];
-    const firstContainer = copiedSubgraph.containers?.[0];
-    const refX = firstNode?.layout?.x ?? firstPostit?.x ?? firstContainer?.x ?? 0;
-    const refY = firstNode?.layout?.y ?? firstPostit?.y ?? firstContainer?.y ?? 0;
-    const offsetX = x - refX;
-    const offsetY = y - refY;
-    
-    // Import updateManager dynamically to avoid circular dependencies
-    const { updateManager } = await import('../services/UpdateManager');
-    
-    const result = updateManager.pasteSubgraph(
-      graph,
-      copiedSubgraph.nodes,
-      copiedSubgraph.edges,
-      { x: offsetX, y: offsetY },
-      copiedSubgraph.postits,
-      { containers: copiedSubgraph.containers, canvasAnalyses: copiedSubgraph.canvasAnalyses }
-    );
-    
-    setGraph(result.graph);
-    
-    if (typeof saveHistoryState === 'function') {
-      saveHistoryState('Paste subgraph');
-    }
-    setContextMenu(null);
-    
-    const parts: string[] = [];
-    if (result.pastedNodeUuids.length > 0) {
-      parts.push(`${result.pastedNodeUuids.length} node${result.pastedNodeUuids.length !== 1 ? 's' : ''}`);
-    }
-    if (result.pastedEdgeUuids.length > 0) {
-      parts.push(`${result.pastedEdgeUuids.length} edge${result.pastedEdgeUuids.length !== 1 ? 's' : ''}`);
-    }
-    const totalCanvasObjects = Object.values(result.pastedCanvasObjectIds).reduce((s, a) => s + a.length, 0);
-    if (totalCanvasObjects > 0) {
-      parts.push(`${totalCanvasObjects} canvas object${totalCanvasObjects !== 1 ? 's' : ''}`);
-    }
-    toast.success(`Pasted ${parts.join(' and ')}`);
-    
-    // Select the pasted items (nodes, postits, containers)
-    setTimeout(() => {
-      const pastedUuidSet = new Set(result.pastedNodeUuids);
-      const pastedCanvasRfIds = new Set([
-        ...result.pastedPostitIds.map(id => `postit-${id}`),
-        ...(result.pastedCanvasObjectIds['containers'] || []).map(id => `container-${id}`),
-      ]);
-      setNodes((nodes) => 
-        nodes.map((node) => ({
-          ...node,
-          selected: pastedUuidSet.has(node.id) || pastedCanvasRfIds.has(node.id)
-        }))
-      );
-      if (result.pastedNodeUuids.length > 0) {
-        onSelectedNodeChange(result.pastedNodeUuids[0]);
-      } else if (result.pastedPostitIds.length > 0) {
-        onSelectedAnnotationChange?.(result.pastedPostitIds[0], 'postit');
-      }
-    }, 100);
-  }, [graph, setGraph, copiedSubgraph, saveHistoryState, setNodes, onSelectedNodeChange, onSelectedAnnotationChange]);
-
-  // Drop node at specific position (core mutation in canvas/creationTools.ts)
-  const dropNodeAtPosition = useCallback(async (nodeId: string, x: number, y: number) => {
-    if (!graph) return;
-    const file = fileRegistry.getFile(`node-${nodeId}`);
-    if (!file) { toast.error(`Node file not found: ${nodeId}`); return; }
-    const { graph: nextGraph, newUuid } = createNodeFromFileInGraph(graph, nodeId, file.data?.label || nodeId, { x, y });
-    setGraph(nextGraph);
-    if (typeof saveHistoryState === 'function') { saveHistoryState('Drop node', newUuid); }
-    setTimeout(async () => {
-      try {
-        await dataOperationsService.getNodeFromFile({ nodeId, graph: nextGraph, setGraph: setGraph as any, targetNodeUuid: newUuid });
-        toast.success(`Added node: ${nodeId}`);
-      } catch (error) {
-        console.error('[GraphCanvas] Failed to get node from file:', error);
-        toast.error('Failed to load node data from file');
-      }
-      setNodes((nodes) => nodes.map((node) => ({ ...node, selected: node.id === newUuid })));
-      onSelectedNodeChange(newUuid);
-    }, 100);
-  }, [graph, setGraph, saveHistoryState, setNodes, onSelectedNodeChange]);
-
-  // Handle drag over for drop zone
-  const handleDragOver = useCallback((e: React.DragEvent) => {
-    e.preventDefault();
-    e.dataTransfer.dropEffect = 'copy';
-  }, []);
-
-  // Handle drop from Navigator
-  const handleDrop = useCallback((e: React.DragEvent) => {
-    e.preventDefault();
-    
-    try {
-      const jsonData = e.dataTransfer.getData('application/json');
-      if (!jsonData) return;
-      
-      const dragData = JSON.parse(jsonData);
-      if (dragData.type !== 'dagnet-drag') return;
-      
-      // Get drop position in flow coordinates
-      const position = screenToFlowPosition({
-        x: e.clientX,
-        y: e.clientY,
-      });
-      
-      if (dragData.objectType === 'node') {
-        dropNodeAtPosition(dragData.objectId, position.x, position.y);
-      } else if (dragData.objectType === 'new-node') {
-        addNodeAtPosition(position.x, position.y);
-      } else if (dragData.objectType === 'new-postit') {
-        addPostitAtPosition(position.x, position.y);
-      } else if (dragData.objectType === 'new-container') {
-        addContainerAtPosition(position.x, position.y);
-      } else if (dragData.objectType === 'canvas-analysis') {
-        addCanvasAnalysisAtPosition(position.x, position.y, dragData);
-      } else if (dragData.objectType === 'new-analysis') {
-        addCanvasAnalysisAtPosition(position.x, position.y, {});
-      } else if (dragData.objectType === 'parameter') {
-        toast('Drop parameters onto an edge to attach them');
-      }
-    } catch (error) {
-      console.error('[GraphCanvas] Drop error:', error);
-    }
-  }, [screenToFlowPosition, dropNodeAtPosition, addNodeAtPosition, addPostitAtPosition, addContainerAtPosition, addCanvasAnalysisAtPosition]);
 
   const onNodeContextMenu = useCallback((event: React.MouseEvent, node: any) => {
     event.preventDefault();

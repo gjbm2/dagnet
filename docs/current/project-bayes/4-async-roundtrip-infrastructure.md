@@ -213,13 +213,13 @@ computation, no data processing — just a config lookup.
 **Input**: none (GET request, authenticated via existing FE→Vercel
 mechanism).
 
-**Output**: `{ webhook_url, webhook_secret, neon_database_url }`.
+**Output**: `{ webhook_url, webhook_secret, db_connection }`.
 
 The FE calls this once (on first Bayes trigger or app init) and caches
 the values in session memory. These values are needed for two purposes:
 - `webhook_secret` is used by the FE to encrypt the user's git
   credentials into an opaque callback token (see §4 below).
-- `neon_database_url` and `webhook_url` are passed through to Modal
+- `db_connection` and `webhook_url` are passed through to Modal
   in the submission payload.
 
 ### 2. Modal app (`bayes/app.py`)
@@ -236,7 +236,7 @@ that receives the FE's submission payload and spawns the worker.
 ```
 { graph_id, repo, branch, graph_file_path,
   graph_snapshot, parameters_index, parameter_files, settings,
-  callback_token, neon_database_url, webhook_url }
+  callback_token, db_connection, webhook_url }
 ```
 
 The endpoint calls `fit_graph.spawn(payload)` and returns
@@ -251,7 +251,7 @@ hardcoded config.
 
 For this workstream, the logic is trivial:
 
-1. Connect to Neon PostgreSQL (connection string from `neon_database_url`
+1. Connect to Neon PostgreSQL (connection string from `db_connection`
    in the payload).
 2. Read evidence inventory for the submitted graph (proves DB access works).
 3. Build placeholder posterior payload (proves schema formatting works).
@@ -297,9 +297,26 @@ same webhook fires twice (vendor retry), the second call is a no-op. Check:
 does a commit with this fingerprint already exist? (Search recent commit
 messages, or maintain a short-lived in-memory/KV dedup window.)
 
-**Webhook authentication.** Shared secret in a header, verified against
-`process.env.BAYES_WEBHOOK_SECRET`. Compute vendor includes the secret in
-webhook configuration.
+**Webhook authentication.** Encrypted callback token in `x-bayes-callback`
+header, decrypted with `process.env.BAYES_WEBHOOK_SECRET`. Git credentials
+extracted from the decrypted token. See "Modal integration design" below.
+
+**Execution timeout.** The webhook handler makes ~6 sequential GitHub API
+calls (getRef, getCommit, createBlob × N, createTree, createCommit,
+updateRef), each ~200–500ms. Expected total: 3–8s typical, 10–20s with
+retry-with-rebase. Vercel Fluid Compute (enabled on the DagNet deployment)
+gives 300s on Hobby — comfortably sufficient. The webhook route should
+declare `maxDuration` explicitly in `vercel.json` for self-documentation:
+
+```json
+"functions": {
+  "api/bayes-webhook.ts": { "maxDuration": 60 }
+}
+```
+
+(Fluid Compute duration limits: Hobby default/max 300s; Pro default 300s,
+max 800s. Without Fluid Compute the Hobby default drops to 10s — but Fluid
+Compute is enabled and should remain so.)
 
 **Commit message format:**
 ```
@@ -325,7 +342,7 @@ to observe completion.
 
 | State | Meaning | How detected |
 |---|---|---|
-| `submitted` | `/api/bayes/fit` returned `job_id` | Immediate, from submission response |
+| `submitted` | Modal `/submit` endpoint returned `job_id` | Immediate, from submission response |
 | `running` | Vendor says function is still executing | Vendor poll returns timeout / in-progress |
 | `vendor-complete` | Vendor says function exited successfully | Vendor poll returns result |
 | `committed` | FE pulled and found `[bayes]` commit matching `job_id` | Commit message scan after pull |
@@ -338,12 +355,14 @@ simply pulls and checks.
 
 #### Job record
 
-Each pending fit is tracked in session state (not persisted to IDB — these are
-ephemeral within a single automation run):
+Each pending fit is tracked in session state during the automation run:
 
 ```
 { job_id, graph_id, submitted_at, status, last_polled_at }
 ```
+
+Initially ephemeral (in-memory). Step 7 adds IDB persistence so jobs
+survive browser close and can be reconciled on boot.
 
 #### Vendor polling
 
@@ -378,7 +397,7 @@ for each graph with dailyFetch:
 // all fetches complete — now poll for fit results
 poll pending_fits every ~15s:
   for each pending job:
-    query vendor status via /api/bayes/status
+    query vendor status via Modal /status endpoint
     update job.status
   until all jobs are committed/failed/timed-out
 
@@ -416,7 +435,8 @@ the function call result for 7 days. The FE can poll
 | Webhook git commit failure | Webhook returns error to worker; worker can retry or report | Vendor poll may show error if worker propagates it |
 | Webhook concurrency conflict | See "Webhook concurrency" below — handled by retry-with-rebase | Transparent to FE |
 | FE wall-clock timeout | Poll loop exceeds configured limit | Mark `failed (timeout)`, log, continue |
-| Network failure during poll | Vendor proxy returns error | Retry on next poll cycle; mark `failed` after N consecutive failures |
+| Network failure during poll | Vendor endpoint returns error | Retry on next poll cycle; mark `failed` after N consecutive failures |
+| FE session closes mid-fit | No detection (browser gone) | **Write still succeeds** — webhook is server-side Vercel, independent of browser. Results land in git. User sees them on next pull. With IDB persistence (Step 7), boot reconciliation resumes polling and surfaces outcome. |
 
 #### Session logging
 
@@ -428,7 +448,7 @@ All job lifecycle events are logged via `sessionLogService`:
 - `BAYES_FIT_FAILED` — failure with reason
 - `BAYES_FIT_SUMMARY` — end-of-cycle summary: N fits, N succeeded, N failed
 
-#### Progress visibility
+#### Progress visibility and worker diagnostics
 
 Modal provides only coarse lifecycle status (running/complete/failed) — no
 native mechanism for the worker to report intermediate progress ("iteration
@@ -440,7 +460,100 @@ complete.
 If granular progress is needed later, the simplest approach is a lightweight
 progress endpoint backed by Modal's `Dict` (shared in-memory dictionary) or
 an external Redis instance. The worker writes `{ iteration, total, phase }`;
-the FE polls via a `/api/bayes/progress` proxy route.
+the FE polls via a progress endpoint.
+
+**Logging channels (three tiers):**
+
+Modal's `FunctionCall` API has **no programmatic access to stdout/stderr**.
+The available methods are `get()` (return value only), `get_call_graph()`,
+`cancel()`, `from_id()`, `gather()`. The `io_streams` module is for
+Sandboxes only — not for spawned function calls. So we cannot pull worker
+console logs via API.
+
+Three channels for getting diagnostics out of Modal workers:
+
+**Tier 1: Worker return value (primary, zero-infrastructure).** The worker
+returns a rich diagnostic object. `FunctionCall.get()` returns whatever the
+function returned — we control the shape. The status endpoint returns this
+to the FE on the final poll. The FE logs it via `sessionLogService`.
+
+```
+{
+  "status": "complete",
+  "duration_ms": 12345,
+  "edges_fitted": 14,
+  "edges_skipped": 2,
+  "skip_reasons": { "edge-x": "insufficient evidence (< 7 days)" },
+  "quality": { "max_rhat": 1.02, "min_ess": 400 },
+  "warnings": ["edge-y: r-hat 1.08, may not have converged"],
+  "log": [
+    "connected to Neon (45ms)",
+    "read evidence for 14 edges (210ms)",
+    "fitting edge-a (1.2s)",
+    "fitting edge-b (0.8s)",
+    ...
+  ],
+  "webhook_response": { "status": 200, "sha": "abc123" },
+  "error": null
+}
+```
+
+On failure, the return value carries the error context:
+
+```
+{
+  "status": "failed",
+  "duration_ms": 3200,
+  "error": "Neon connection refused after 3 retries",
+  "phase": "evidence_read",
+  "log": ["connected to Neon (45ms)", "query failed: connection reset", ...]
+}
+```
+
+The FE reads this on the final status poll and feeds it into
+`sessionLogService` as child entries under the `BAYES_FIT_COMPLETE` or
+`BAYES_FIT_FAILED` operation. For automation runs, `automationLogService`
+persists these to IDB (survives window close, available via
+`dagnetAutomationLogEntries(runId)` in the console).
+
+**Tier 2: Modal dashboard (development and debugging).** The Modal web UI
+shows stdout/stderr for all function invocations, searchable by function
+name and time range. For development and debugging, this is where you look.
+Not programmatically accessible, but sufficient for the human debugging use
+case. Deployed function logs do not stream back to the local client — they
+are only visible in the dashboard.
+
+**Tier 3: Structured log table in Neon (future, if needed).** If searchable
+historical logs or real-time streaming during execution are needed, the
+worker writes log rows to a `bayes_run_logs` table in Neon during execution.
+A dedicated endpoint queries it. Only build this if Tier 1 + Tier 2 prove
+insufficient.
+
+**Status endpoint enrichment.** The status endpoint should return the full
+worker result when available, not just the lifecycle state:
+
+```
+// Running — no result yet
+{ "status": "running" }
+
+// Complete — includes full diagnostic return value
+{ "status": "complete", "result": { ...worker return value... } }
+
+// Failed — includes error context from worker
+{ "status": "failed", "error": "...", "result": { ...partial if available... } }
+```
+
+The FE's final poll picks this up and logs the diagnostic detail. The
+`BAYES_FIT_COMPLETE` session log entry includes edges fitted, quality
+metrics, warnings, and the commit SHA (from `webhook_response`). The
+`BAYES_FIT_FAILED` entry includes the error, the phase where it failed,
+and whatever log lines were captured before failure.
+
+**Commit SHA correlation.** The worker waits for the webhook HTTP response
+(synchronous POST, not fire-and-forget) and includes the commit SHA in its
+return value. This gives the FE a direct correlation: "job X → commit
+abc123" — visible in the session log without needing to scan commit
+messages.
 
 ---
 
@@ -459,7 +572,8 @@ the FE polls via a `/api/bayes/progress` proxy route.
 - **Webhook route GitHub auth (partial).** Credentials and simple API calls
   are proven. Atomic multi-file commits via Git Data API are NOT proven
   server-side — needs a spike. See "Server-side GitHub auth" below.
-- **Submission route runtime.** See "Submission route" below.
+- **Submission route runtime.** No Vercel submission route — FE calls
+  Modal directly. See "Submission and status routes" below.
 
 ### Resolved (16-Mar-26, continued)
 
@@ -483,6 +597,24 @@ the FE polls via a `/api/bayes/progress` proxy route.
 - **Shared parameter file conflict.** Last-writer-wins. Acceptable because
   fitted values are near-identical and `fit_history` preserves the trail.
   See "Shared parameter file conflict" in Modal integration design.
+- **Worker diagnostics and logging.** Modal has no API for programmatic
+  stdout/stderr access from `FunctionCall`. Three-tier approach: (1) rich
+  worker return value via `fc.get()` — primary channel, zero infra; (2)
+  Modal dashboard for dev debugging; (3) Neon log table if needed later.
+  Status endpoint returns full worker result including execution log,
+  quality metrics, and commit SHA. See "Progress visibility and worker
+  diagnostics" above.
+- **Vercel webhook timeout.** Fluid Compute is enabled on the DagNet
+  deployment. Hobby plan gives 300s default (not the legacy 10s). Webhook
+  handler expected to complete in 3–20s. `maxDuration: 60` configured in
+  `vercel.json` for self-documentation. See webhook handler §3 above.
+- **FE session closes mid-fit.** Write still succeeds (webhook is
+  server-side, independent of browser). User sees results on next pull.
+  IDB job persistence (Step 7) adds boot reconciliation for full
+  observability. See failure taxonomy above.
+- **FE job persistence.** Ephemeral in-memory records for Steps 4–6.
+  Step 7 adds IDB persistence and boot reconciliation (poll Modal for
+  pending jobs on app restart). See "Step 7: IDB job persistence" below.
 
 ### Still open
 
@@ -504,8 +636,9 @@ the FE polls via a `/api/bayes/progress` proxy route.
 - **Modal spike (cold start + DB + scientific stack).** Modal is the
   chosen vendor. The spike must verify: sub-second cold start with the
   scientific Python image (numpy/scipy/pymc), Neon DB connectivity from
-  Modal workers, and webhook delivery to Vercel. See "Modal integration
-  design" above for the full architecture.
+  the worker (connection string passed in the spawn payload — no Modal
+  Secrets), and webhook delivery to Vercel. See "Modal integration
+  design" above for the full architecture and zero-Modal-Secrets design.
 - **Automation integration.** The existing `useURLDailyRetrieveAllQueue`
   hook needs extending: after each graph's fetch+commit, submit a fit; after
   all fetches, poll pending fits; after all fits resolve, pull once and log.
@@ -631,8 +764,10 @@ commits are NOT — they need a spike.**
 
 **What the spike must verify:**
 
-1. Instantiate Octokit in a Vercel TS serverless function with credentials
-   from `SHARE_JSON`.
+1. Instantiate Octokit in a Vercel TS serverless function with a git token.
+   (For the spike, use `SHARE_JSON` credentials. In production, the webhook
+   handler will use the user's git token from the decrypted callback token —
+   same mechanism, different credential source.)
 2. Execute the full Git Data API sequence: read current ref → create blobs for
    2–3 test files → create tree → create commit → update ref.
 3. Confirm the commit appears correctly in the repo.
@@ -643,36 +778,31 @@ commits are NOT — they need a spike.**
 Data API (same as `auth-callback.ts` pattern). This avoids any Octokit
 browser-assumption risk but requires manual JSON handling for each API call.
 
-**The webhook handler authenticates in two directions:**
+**The webhook handler authenticates via the encrypted callback token:**
 
-1. **Inbound (compute vendor → webhook):** validate shared secret from request
-   against `process.env.BAYES_WEBHOOK_SECRET` (or reuse existing
-   `SHARE_SECRET`).
-2. **Outbound (webhook → GitHub):** load git credentials from
-   `process.env.SHARE_JSON`, extract token, use for Git Data API calls.
+1. **Inbound (compute vendor → webhook):** extract `x-bayes-callback`
+   header. Decrypt with `process.env.BAYES_WEBHOOK_SECRET` (AES-GCM).
+   Decryption failure → 401. Expired token → 401.
+2. **Outbound (webhook → GitHub):** use git credentials (owner, repo,
+   token, branch) from the **decrypted callback token**. No `SHARE_JSON`
+   dependency — the user's own git credentials flow through encrypted.
 
-**Existing env vars that can be reused:**
+See "Modal integration design" above for the full credential flow, secrets
+inventory, and security properties.
 
-| Var | Purpose | Already configured? |
-|---|---|---|
-| `SHARE_JSON` / `VITE_CREDENTIALS_JSON` | Git credentials (owner, repo, token) | Yes (used by `graph.ts`) |
-| `SHARE_SECRET` / `VITE_CREDENTIALS_SECRET` | Webhook validation | Yes (used by `graph.ts`, `init-credentials.ts`) |
+### Submission and status routes
 
-A dedicated `BAYES_WEBHOOK_SECRET` may be preferable to reusing `SHARE_SECRET`
-(separation of concerns), but the mechanism is identical.
+**There is no Vercel submission route.** The FE calls Modal's `/submit` web
+endpoint directly — the large payload (graph data, parameter files) never
+passes through Vercel.
 
-### Submission route runtime
+**There is no Vercel status proxy.** The FE polls Modal's `/status` web
+endpoint directly using the `call_id` as a capability token.
 
-**The submission route (`/api/bayes/fit`) is a Python route** in
-`python-api.py`, using Modal's Python SDK for `Function.spawn()`.
-
-**The status route (`/api/bayes/status`) is a TS route** that proxies to a
-Modal-hosted web endpoint via `fetch()`. This avoids importing Modal's SDK
-on the Vercel Python side for status checks (cold-start overhead) and keeps
-the route in TS, matching the rest of the Vercel TS API surface.
-
-See "Modal integration design" above for the full architecture, auth chain,
-and route signatures.
+**The only Vercel route in the Bayes flow is `/api/bayes/config`** (a
+lightweight TS GET route returning three env-var strings) and
+`/api/bayes-webhook` (the callback handler). See "Infrastructure
+components, §1" and "Modal integration design" above.
 
 ### FE sync gap (resolved)
 
@@ -821,7 +951,7 @@ Why this approach:
 
 **For on-demand fits (FE trigger), the graph is sent in the submission payload.**
 
-The `/api/bayes/fit` submission includes:
+The Modal `/submit` endpoint receives:
 
 - `graph_id`: identifies the graph
 - `repo`, `branch`: target repository
@@ -903,81 +1033,223 @@ building, YAML merging) is re-executed on retry but is cheap (<1s per attempt).
 ### Modal integration design
 
 **Vendor**: Modal (modal.com). No Docker — Python-decorator deployment via
-`modal deploy`. Git-push-like DX. Meets all requirements: async spawn with
-job_id, queryable status with 7-day retention, no infrastructure to manage.
+`modal deploy`. Meets all requirements: async spawn with job_id, queryable
+status with 7-day retention, web endpoints for direct FE access.
+
+**Design principles**:
+
+- **FE calls Modal directly** for submission and status polling. No Vercel
+  proxy in the hot path. The large payload (graph data, parameter files)
+  never passes through Vercel.
+- **All secrets managed in Vercel env.** Zero Modal Secrets. The FE fetches
+  config from one lightweight Vercel endpoint, then operates independently.
+- **Git write credentials are encrypted.** The FE encrypts the user's git
+  token into an opaque callback token using the webhook secret. Modal never
+  sees git credentials in cleartext. Only the Vercel webhook handler can
+  decrypt them.
+- **The worker is a pure function.** It receives data + DB URL + an opaque
+  callback token. It has no hardcoded config, no secrets, no knowledge of
+  Vercel or GitHub. The same deployment serves any environment.
 
 #### Architecture overview
 
 ```
 FE (browser)
   │
-  ├─ POST /api/bayes/fit ──────> Vercel (Python route in python-api.py)
-  │                                 │
-  │                                 ├─ loads BAYES_WEBHOOK_SECRET, BAYES_WEBHOOK_URL from env
-  │                                 ├─ calls Function.from_name("dagnet-bayes", "fit_graph").spawn(payload)
-  │                                 │     payload includes: graph data + webhook_url + webhook_secret
-  │                                 │
-  │  <── { job_id } ───────────────┘
+  │  (one-time config fetch)
+  ├─ GET /api/bayes/config ──> Vercel (TS route, returns 3 strings from env)
+  │<── { webhook_url,
+  │      webhook_secret,
+  │      db_connection }
   │
-  ├─ GET /api/bayes/status ─────> Vercel (TS route)
-  │    ?job_id=fc-abc123             │
-  │                                 ├─ fetch() to Modal status web endpoint
-  │                                 │     https://dagnet-bayes--status.modal.run/{job_id}
-  │                                 │     header: x-modal-secret = MODAL_STATUS_SECRET
-  │                                 │
-  │  <── { status, result? } ──────┘
+  │  (FE encrypts git creds locally)
+  │  callback_token = encrypt(webhook_secret, {
+  │    owner, repo, token, branch,
+  │    graph_id, graph_file_path,
+  │    job_id_placeholder, issued_at, expires_at
+  │  })
   │
-  │                              Modal (worker, running in cloud)
-  │                                 │
-  │                                 ├─ reads Neon DB (conn string from Modal Secret)
-  │                                 ├─ computes posteriors
-  │                                 ├─ POST webhook_url (from input payload)
-  │                                 │     header: x-bayes-secret = webhook_secret (from input payload)
-  │                                 │     body: posterior results JSON
-  │                                 │
-  │                              Vercel (TS webhook handler)
-  │                                 │
-  │                                 ├─ validates x-bayes-secret against BAYES_WEBHOOK_SECRET env
-  │                                 ├─ loads SHARE_JSON for GitHub credentials
-  │                                 ├─ atomic git commit (parameter files + graph cascade)
-  │                                 │
-  │                              GitHub
-  │                                 │
-  ├─ git pull ─────────────────────>│
-  │  <── updated files ────────────┘
+  │  (submission — large payload goes direct to Modal)
+  ├─ POST Modal /submit ──────────────────────────> Modal (web endpoint)
+  │  { graph_data, parameter_files, settings,         ├─ spawn worker
+  │    callback_token, db_connection,              │
+  │    webhook_url }                                   │
+  │<── { job_id } ────────────────────────────────────┤
+  │                                                    │
+  │                                                    │ (worker runs)
+  │  (poll loop — direct to Modal)                     ├─ connect to Neon DB
+  ├─ GET Modal /status?call_id={job_id} ──────────────>├─ read evidence
+  │<── { status: running } ───────────────────────────┤├─ compute
+  │                                                    │
+  │                              Vercel                │
+  │                              (webhook handler)     │
+  │                              │<── POST webhook_url─┤ (worker)
+  │                              │  x-bayes-callback   ├─ exit
+  │                              │  {posteriors}        │
+  │                              ├─ decrypt callback    │
+  │                              │  → git creds         │           GitHub
+  │                              ├─ atomic commit ─────────────────>│
+  │                              │  (retry-with-rebase) │           │
+  │                                                                 │
+  ├─ GET Modal /status ───────────────────────────────>│            │
+  │<── { status: complete } ──────────────────────────┤            │
+  │                                                                 │
+  ├─ git pull ─────────────────────────────────────────────────────>│
+  │<── updated files ──────────────────────────────────────────────┤
+  │
+  ├─ IDB → FileRegistry → GraphStore → UI
 ```
 
-#### Auth chain (end-to-end)
+#### Credential and data flow (end-to-end)
 
-Six trust boundaries, each with its own credential:
+**Step 1: FE fetches config from Vercel (once per session).**
 
-| Hop | From → To | Credential | Where stored | How used |
-|---|---|---|---|---|
-| 1 | FE → Vercel submission | Existing app auth | (existing mechanism) | Same as all other FE→Vercel calls |
-| 2 | Vercel → Modal spawn | Modal API token | Vercel env: `MODAL_TOKEN_ID` + `MODAL_TOKEN_SECRET` | Modal SDK reads from env automatically |
-| 3 | Vercel → Modal status endpoint | Shared secret | Vercel env: `MODAL_STATUS_SECRET` | Sent as `x-modal-secret` header in fetch() |
-| 4 | Modal status endpoint validates | Same shared secret | Modal Secret: `modal-status-secret` | Compared against incoming header |
-| 5 | Worker → Vercel webhook | Webhook secret | Passed in spawn payload (originates from Vercel env `BAYES_WEBHOOK_SECRET`) | Sent as `x-bayes-secret` header |
-| 6 | Webhook → GitHub | Git token | Vercel env: `SHARE_JSON` | Loaded by webhook handler (existing pattern from `api/graph.ts`) |
-| 7 | Worker → Neon DB | Connection string | Modal Secret: `neon-connection-string` | Read by worker from `modal.Secret` |
-
-**Key design principle**: the worker receives `webhook_url` and
-`webhook_secret` in its spawn payload. It has zero hardcoded knowledge of
-Vercel URLs or secrets. The same Modal deployment serves any environment
-(staging, production, local dev) — the caller controls where results go.
-
-**Credential flow for the webhook secret**:
 ```
-Vercel env (BAYES_WEBHOOK_SECRET)
-  → submission route reads it
-  → passes it in spawn payload as webhook_secret
-  → worker receives it in input
-  → worker sends it as x-bayes-secret header in webhook POST
-  → webhook handler validates against its own BAYES_WEBHOOK_SECRET env var
+GET /api/bayes/config
+→ Vercel reads from env:
+    BAYES_WEBHOOK_SECRET, DB_CONNECTION, BAYES_WEBHOOK_URL
+→ returns { webhook_secret, db_connection, webhook_url }
 ```
 
-Single source of truth: the Vercel env var. Rotating the secret only
-requires updating the Vercel env var — no Modal redeployment.
+FE caches these in session memory.
+
+**Step 2: FE builds the encrypted callback token.**
+
+The FE has the user's git credentials (from IDB, same as every other write
+operation). It encrypts them using the `webhook_secret` as the key:
+
+```
+callback_token = AES-GCM-encrypt(webhook_secret, {
+  owner,               // git repo owner
+  repo,                // git repo name
+  token,               // user's git write token
+  branch,              // target branch
+  graph_id,            // which graph was fitted
+  graph_file_path,     // repo-relative path to graph file
+  issued_at,           // timestamp
+  expires_at           // issued_at + 30 minutes
+})
+```
+
+This token is opaque — Modal cannot read it. Only the Vercel webhook
+handler (which has `BAYES_WEBHOOK_SECRET`) can decrypt it.
+
+Using the Web Crypto API (AES-GCM, available in all modern browsers).
+
+**Step 3: FE submits directly to Modal.**
+
+```
+POST https://dagnet-bayes--submit.modal.run/
+{
+  // Graph data (FE has locally — never passes through Vercel)
+  graph_id, repo, branch, graph_file_path,
+  graph_snapshot, parameters_index,
+  parameter_files: {
+    "param-id": { fit_guidance, fit_history, values_latest }, ...
+  },
+  settings: { halflife_days, hdi_level, ... },
+
+  // Config (from Vercel config endpoint)
+  db_connection, webhook_url,
+
+  // Encrypted git credentials (FE built this)
+  callback_token
+}
+→ Modal /submit endpoint calls fit_graph.spawn(payload)
+→ returns { job_id: call.object_id }
+```
+
+**Step 4: Worker executes on Modal.**
+
+The worker receives the spawn payload. It can read the graph data,
+DB connection string, and webhook URL. It **cannot** read the
+`callback_token` (encrypted, it doesn't have the key).
+
+1. Connect to Neon using `db_connection` from payload.
+2. Query evidence for each parameter.
+3. Compute posteriors (or placeholders for skeleton).
+4. POST to `webhook_url`:
+   ```
+   Header: x-bayes-callback: {callback_token}
+   Body: { job_id, graph_id, fingerprint, fitted_at,
+           quality, edges, skipped }
+   ```
+5. Exit. (Modal retains the function call result for 7 days.)
+
+**Step 5: Webhook handler commits to git.**
+
+```
+POST /api/bayes-webhook (Vercel TS)
+1. Extract x-bayes-callback header.
+2. Decrypt with BAYES_WEBHOOK_SECRET (AES-GCM).
+   → If decryption fails → 401 (tampered or invalid token).
+3. Check expires_at → if expired → 401 (stale token).
+4. Check job_id in decrypted token matches job_id in body → if
+   mismatch → 400.
+5. Extract git credentials: owner, repo, token, branch,
+   graph_file_path.
+6. Idempotency: search recent commits for fingerprint → if found
+   → 200 (already committed).
+7. Read parameter files + graph file from GitHub using decrypted
+   git token.
+8. Merge posteriors into parameter files, cascade to graph edges.
+9. Atomic commit with retry-with-rebase (see "Webhook concurrency").
+10. Return { status: 'committed', sha }.
+```
+
+The webhook handler needs only **one env var**: `BAYES_WEBHOOK_SECRET`.
+Everything else — git credentials, repo, branch, graph path — comes
+from the decrypted callback token. No `SHARE_JSON` dependency.
+
+**Step 6: FE polls status and pulls.**
+
+FE polls Modal's status endpoint directly:
+`GET https://dagnet-bayes--status.modal.run/?call_id={job_id}`.
+The `call_id` is an unguessable Modal-generated UUID — it serves as
+a capability token. No additional auth on this endpoint.
+
+When status shows `complete`, FE pulls git, finds the `[bayes]` commit,
+matches `job_id` in the commit message.
+
+#### Security properties
+
+- **Git write credentials**: in cleartext only in the browser (where they
+  already live) and in the Vercel webhook handler (which already handles
+  credentials via `SHARE_JSON` pattern). Encrypted everywhere else —
+  inside the callback token, opaque to Modal.
+- **`BAYES_WEBHOOK_SECRET`**: in Vercel env (server-side) and in browser
+  session memory (fetched via config endpoint). The browser already holds
+  credentials of equivalent sensitivity (git tokens). This secret is used
+  for AES-GCM encryption/decryption only.
+- **`DB_CONNECTION`**: in Vercel env and in browser session memory
+  (fetched via config endpoint). Passed to Modal in the submission
+  payload (HTTPS). In cleartext in the Modal worker's memory during
+  execution — necessary for DB access. Same trust model as any compute
+  vendor.
+- **Callback token**: tamper-proof (AES-GCM authenticated encryption).
+  Time-limited (30-minute expiry). Correlated to specific `job_id`.
+  Replay → caught by idempotency check (fingerprint-based dedup).
+- **Status endpoint**: capability-based. The `call_id` is unguessable.
+  Returns only lifecycle state (running/complete/failed) — no sensitive
+  data.
+
+#### Secrets inventory
+
+All secrets managed in Vercel env. Zero Modal Secrets.
+
+| Secret | Where | Used by | Purpose |
+|---|---|---|---|
+| `BAYES_WEBHOOK_SECRET` | Vercel env | Config route (returns to FE); FE (encrypts callback token); webhook handler (decrypts callback token) | Symmetric key for callback token encryption |
+| `DB_CONNECTION` | Vercel env | Config route (returns to FE); worker (DB access via payload) | Neon PostgreSQL connection string |
+| `BAYES_WEBHOOK_URL` | Vercel env | Config route (returns to FE); worker (callback target) | Full URL of `/api/bayes-webhook` |
+
+**One new secret**: `BAYES_WEBHOOK_SECRET`. `DB_CONNECTION` already
+exists (used by snapshot routes). `BAYES_WEBHOOK_URL` is config, not a
+secret (it's just the public URL of the webhook endpoint).
+
+No `SHARE_JSON` dependency in the Bayes flow — git credentials come from
+the user via the encrypted callback token. No Modal tokens on Vercel —
+the FE calls Modal web endpoints directly via HTTPS.
 
 #### Modal deployment structure
 
@@ -985,6 +1257,7 @@ requires updating the Vercel env var — no Modal redeployment.
 # bayes/app.py — deployed to Modal via `modal deploy bayes/app.py`
 
 import modal
+import fastapi
 
 app = modal.App("dagnet-bayes")
 
@@ -993,28 +1266,51 @@ image = modal.Image.debian_slim(python_version="3.12").pip_install(
     "numpy", "scipy", "pymc", "arviz", "requests", "pyyaml", "psycopg2-binary"
 )
 
-# The worker function
-@app.function(
-    image=image,
-    secrets=[modal.Secret.from_name("neon-connection-string")],
-    timeout=600,   # 10-minute hard limit
-)
-def fit_graph(payload: dict) -> dict:
-    """Fit posteriors for a single graph. Fires webhook on completion."""
-    # ... worker logic ...
-    # POST to payload["webhook_url"] with payload["webhook_secret"]
-    return {"status": "complete", "job_id": payload["job_id"]}
+# Submit web endpoint — called directly by FE
+@app.function(image=modal.Image.debian_slim())
+@modal.web_endpoint(method="POST")
+def submit(request: fastapi.Request):
+    """Receive submission from FE, spawn worker, return job_id."""
+    payload = await request.json()
+    fn = modal.Function.from_name("dagnet-bayes", "fit_graph")
+    call = fn.spawn(payload)
+    return {"job_id": call.object_id}
 
-# Status web endpoint — called by Vercel TS route via fetch()
+# Worker function — no secrets, no config, pure function
+@app.function(image=image, timeout=600)
+def fit_graph(payload: dict) -> dict:
+    """Fit posteriors for a single graph. Fires webhook on completion.
+    Returns rich diagnostic object (see 'Worker diagnostics and logging')."""
+    import requests as http
+    import time
+    log = []
+    t0 = time.time()
+    # 1. Connect to Neon using payload["db_connection"]
+    # 2. Read evidence, compute posteriors (appending to log[])
+    # 3. POST results to webhook (synchronous — wait for response)
+    resp = http.post(
+        payload["webhook_url"],
+        headers={"x-bayes-callback": payload["callback_token"]},
+        json={"job_id": "...", "edges": [...], ...}
+    )
+    return {
+        "status": "complete",
+        "duration_ms": int((time.time() - t0) * 1000),
+        "edges_fitted": 14,
+        "edges_skipped": 0,
+        "quality": { "max_rhat": 1.0, "min_ess": 0 },
+        "warnings": [],
+        "log": log,
+        "webhook_response": { "status": resp.status_code,
+                              "sha": resp.json().get("sha") },
+    }
+
+# Status web endpoint — called directly by FE
 @app.function(image=modal.Image.debian_slim())
 @modal.web_endpoint(method="GET")
-def status(call_id: str, secret: str = modal.web_endpoint.Query(...)):
-    """Poll job status. Returns running/complete/failed."""
-    import os
-    expected = os.environ.get("MODAL_STATUS_SECRET", "")
-    if secret != expected:
-        return {"error": "unauthorized"}, 401
-
+def status(call_id: str):
+    """Poll job status. No auth — call_id is capability token.
+    Returns full worker result when available (diagnostics, quality, log)."""
     from modal.functions import FunctionCall
     fc = FunctionCall.from_id(call_id)
     try:
@@ -1027,55 +1323,7 @@ def status(call_id: str, secret: str = modal.web_endpoint.Query(...)):
 ```
 
 Note: the exact Modal decorator API may differ slightly — this is the
-design intent, to be verified during the vendor spike (Step 4).
-
-#### Vercel routes
-
-**Submission** (`python-api.py`, new endpoint `bayes-fit`):
-
-```
-POST /api/bayes/fit
-  → python-api.py routes to handle_bayes_fit(data)
-  → import modal
-  → fn = modal.Function.from_name("dagnet-bayes", "fit_graph")
-  → call = fn.spawn({
-      ...data,
-      webhook_url: os.environ["BAYES_WEBHOOK_URL"],
-      webhook_secret: os.environ["BAYES_WEBHOOK_SECRET"],
-    })
-  → return { job_id: call.object_id }
-```
-
-**Status** (`api/bayes-status.ts`, new TS route):
-
-```
-GET /api/bayes/status?job_id=fc-abc123
-  → fetch(`https://dagnet-bayes--status.modal.run/?call_id=${jobId}&secret=${MODAL_STATUS_SECRET}`)
-  → return response JSON to FE
-```
-
-This keeps the status route in TS (matching all other Vercel TS routes).
-The Vercel route is a thin proxy — the actual `FunctionCall.from_id()`
-call happens on Modal's infrastructure, avoiding Modal SDK cold-start
-overhead on Vercel.
-
-**Webhook** (`api/bayes-webhook.ts`, existing design — unchanged).
-
-#### Secrets inventory
-
-| Secret name | Where configured | Used by | Purpose |
-|---|---|---|---|
-| `MODAL_TOKEN_ID` | Vercel env | Submission route | Authenticate Vercel→Modal SDK calls |
-| `MODAL_TOKEN_SECRET` | Vercel env | Submission route | (paired with TOKEN_ID) |
-| `BAYES_WEBHOOK_URL` | Vercel env | Submission route | Full URL of `/api/bayes-webhook` |
-| `BAYES_WEBHOOK_SECRET` | Vercel env | Submission route + webhook handler | Authenticate worker→webhook calls |
-| `MODAL_STATUS_SECRET` | Vercel env + Modal Secret | Status route + Modal status endpoint | Authenticate Vercel→Modal status polls |
-| `SHARE_JSON` | Vercel env | Webhook handler | GitHub credentials for atomic commits |
-| `neon-connection-string` | Modal Secret | Worker | Neon PostgreSQL access |
-
-Total new secrets: 5 (MODAL_TOKEN_ID, MODAL_TOKEN_SECRET, BAYES_WEBHOOK_URL,
-BAYES_WEBHOOK_SECRET, MODAL_STATUS_SECRET). Plus one Modal Secret for DB
-access. `SHARE_JSON` is existing.
+design intent, to be verified during the spike (Step 4).
 
 #### Shared parameter file conflict (last-writer-wins)
 
@@ -1109,10 +1357,10 @@ This is acceptable because:
 | Status retention | 7 days post-exit | Docs confirmed |
 | Web endpoints | `@modal.web_endpoint` decorator → stable HTTPS URL | Docs confirmed |
 | No Docker | `modal.Image.debian_slim().pip_install(...)` | Docs confirmed |
-| Secrets | `modal.Secret.from_name()` → env vars in worker | Docs confirmed |
 | Cold start | Sub-second (advertised) | Needs spike verification |
 | Neon DB connectivity | Standard `psycopg2` from Modal worker | Needs spike verification |
 | Scientific Python stack | numpy, scipy, pymc via pip_install | Needs spike verification |
+| Worker log access | **No API for stdout/stderr.** `FunctionCall` has no `.logs()` method; `io_streams` is Sandbox-only. Use worker return value for diagnostics, Modal dashboard for dev debugging. | Docs confirmed (gap) |
 
 ---
 
@@ -1120,7 +1368,8 @@ This is acceptable because:
 
 This workstream is complete when:
 
-1. **Submission works.** FE can call `/api/bayes/fit` and receive a `job_id`.
+1. **Submission works.** FE can fetch config from Vercel, encrypt git creds,
+   submit directly to Modal `/submit`, and receive a `job_id`.
 2. **Worker executes.** The compute vendor runs the worker, connects to the
    snapshot DB, reads evidence inventory, and fires the webhook.
 3. **Webhook commits.** The Vercel handler receives the payload, updates
@@ -1142,9 +1391,11 @@ This workstream is complete when:
 8. **Session log records the event.** The FE logs lifecycle events
    (`BAYES_FIT_SUBMITTED`, `BAYES_FIT_COMPLETE`, `BAYES_FIT_FAILED`,
    `BAYES_FIT_SUMMARY`) throughout the automation cycle.
-9. **Vendor polling works.** The FE can poll `/api/bayes/status` with a
-   `job_id` and receive running/complete/failed status. The proxy route
-   correctly wraps the vendor SDK call.
+9. **Vendor polling works with diagnostics.** The FE can poll Modal's
+   `/status` endpoint directly with a `call_id`. On completion, the
+   response includes the full worker return value (duration, edges
+   fitted/skipped, quality metrics, warnings, execution log, commit SHA).
+   This is logged via `sessionLogService`.
 10. **Concurrent webhooks don't collide.** When two webhook handlers fire
     near-simultaneously for different graphs, the retry-with-rebase logic
     produces two clean sequential commits, not a 422 failure.
@@ -1152,6 +1403,10 @@ This workstream is complete when:
     (`useURLDailyRetrieveAllQueue`) can dispatch fits after each graph's
     fetch+commit, poll for completion, and pull the results — end-to-end
     within a single automation cycle.
+12. **Worker diagnostics are surfaced.** The worker return value includes
+    an execution log, quality metrics, and warnings. These appear in the
+    FE session log. For automation runs, `automationLogService` persists
+    them to IDB (survives window close).
 
 What is explicitly **not** required:
 - Real Bayesian inference (placeholder values are fine)
@@ -1160,6 +1415,8 @@ What is explicitly **not** required:
 - Fan charts or confidence band changes
 - Nightly scheduling (on-demand trigger only)
 - Batch vendor status queries (per-job polling is acceptable)
+- IDB job persistence (Step 7 — hardening phase, not required for initial
+  acceptance)
 
 ---
 
@@ -1309,7 +1566,8 @@ that it works in the Vercel Node.js runtime.
 A temporary route `api/bayes-spike.ts` (deleted after the spike) that:
 
 1. Loads credentials from `SHARE_JSON` env var using the existing pattern
-   from `api/graph.ts` (lines 58–83).
+   from `api/graph.ts` (lines 58–83). (Spike uses SHARE_JSON for
+   convenience; production webhook uses decrypted callback token.)
 2. Instantiates Octokit server-side. Two approaches to evaluate:
    - **Octokit:** `new Octokit({ auth: token })` — likely works in Node.js
      (Octokit is designed for both environments) but unproven in this
@@ -1364,20 +1622,25 @@ full webhook handler.
 
 **Request flow:**
 
-1. **Authenticate.** Validate `x-bayes-secret` header against
-   `process.env.BAYES_WEBHOOK_SECRET`. Reject with 401 if missing/wrong.
+1. **Decrypt callback token.** Extract `x-bayes-callback` header.
+   Decrypt with `process.env.BAYES_WEBHOOK_SECRET` (AES-GCM). If
+   decryption fails → 401 (tampered or invalid). If `expires_at` is
+   past → 401 (stale token). Extract git credentials (owner, repo,
+   token, branch, graph_file_path) from the decrypted payload.
 
 2. **Parse payload.** Validate the JSON body against the webhook payload
    contract (see "Webhook payload contract" above). Reject with 400 if
-   malformed.
+   malformed. Verify `job_id` in body matches `job_id` in decrypted
+   token.
 
 3. **Idempotency check.** Search recent commits on the target branch for
    a commit message containing the `fingerprint`. If found, return 200
    with `{ status: 'already_committed', sha }`. This prevents duplicate
    commits from vendor retries.
 
-4. **Load credentials.** Extract GitHub token from `SHARE_JSON` env var
-   using the existing pattern from `api/graph.ts`.
+4. **Authenticate to GitHub.** Use the git token from the decrypted
+   callback token. No `SHARE_JSON` dependency — the user's own
+   credentials are used, same as every other FE-initiated write.
 
 5. **Read current files from git.** For each edge in the payload:
    a. Read the parameter file at `file_path` from the current branch HEAD
@@ -1422,21 +1685,14 @@ full webhook handler.
 
 - GitHub API errors → 502 with error detail.
 - YAML parse failure → 500 with the file path that failed.
-- Credential loading failure → 500 (not 401 — this is a server config
-  issue, not a client auth issue).
+- Callback token decryption failure → 401 (tampered or expired token).
 - Concurrent commit retry exhausted (3 attempts) → 409 with detail.
 - All errors include `job_id` in the response for correlation.
 
-**What the webhook handler needs in the payload that isn't there yet:**
-
-The current payload contract includes `graph_id` but not the **graph file
-path** in the repo. The handler needs to know which file to read and update.
-Options:
-- Add `graph_file_path` to the payload (e.g. `graphs/conversion-flow-v0.yaml`).
-- Derive it from a convention (`graphs/{graph_id}.yaml`).
-- Include it in the submission payload and pass through.
-
-Recommendation: add `graph_file_path` to the webhook payload contract.
+**Graph file path**: The webhook handler gets `graph_file_path` from the
+decrypted callback token (the FE includes it when building the token). The
+worker's POST body carries `graph_id` for correlation but does not need to
+include the file path — it's already in the encrypted token.
 
 **Testing the webhook handler:**
 
@@ -1451,61 +1707,119 @@ Recommendation: add `graph_file_path` to the webhook payload contract.
 - **Malformed payload test:** POST invalid JSON, missing fields, wrong
   secret. Verify correct error codes.
 
-### Step 4: Modal setup + spike
+### Step 4: Modal setup + dev harness + end-to-end spike
 
-Deploy to Modal. Three things to build and verify:
+Deploy to Modal, build the FE dev harness, and prove the full roundtrip.
 
 **4a. Modal app + trivial worker.**
-- Create `bayes/app.py` with `@app.function` decorator (see "Modal
-  deployment structure" in the integration design above).
+- Create `bayes/app.py` with the three-component structure (see "Modal
+  deployment structure" in the integration design above): submit web
+  endpoint, fit_graph worker, status web endpoint.
 - Image: `debian_slim(python_version="3.12").pip_install("numpy", "scipy",
   "pymc", "arviz", "requests", "pyyaml", "psycopg2-binary")`.
-- Configure Modal Secret for Neon connection string:
-  `modal secret create neon-connection-string NEON_DATABASE_URL=<url>`.
+- No Modal Secrets needed. The worker receives `db_connection` in its
+  spawn payload (passed through from the FE, which got it from the Vercel
+  config endpoint).
 - Deploy: `modal deploy bayes/app.py`.
-- Verify: cold start time, Neon DB connectivity from worker, scientific
-  stack imports.
+- Verify: cold start time, Neon DB connectivity from worker (connection
+  string via payload), scientific stack imports.
 
 **4b. Modal status web endpoint.**
 - `@modal.web_endpoint` on a function that calls
   `FunctionCall.from_id(call_id).get(timeout=0)`.
-- Authenticated via `MODAL_STATUS_SECRET` query parameter (see auth chain).
-- Returns `{ status: "running" | "complete" | "failed", result? }`.
+- No additional auth needed — `call_id` is an unguessable UUID that
+  serves as a capability token. Called directly by the FE.
+- Returns enriched response: `{ status, result? }` where `result` is the
+  full worker return value (diagnostics, quality, log, webhook response).
+  See "Progress visibility and worker diagnostics" above.
 - Deployed as part of the same `bayes/app.py`.
 
-**4c. Vercel routes.**
-- Submission: add `bayes-fit` endpoint to `python-api.py` + rewrite in
-  `vercel.json`. Calls `Function.from_name("dagnet-bayes", "fit_graph")
-  .spawn(payload)`. Payload includes `webhook_url` and `webhook_secret`
-  from Vercel env. Returns `{ job_id: call.object_id }`.
-- Status: new `api/bayes-status.ts` (TS). Proxies to Modal web endpoint
-  via `fetch()`. Passes `MODAL_STATUS_SECRET` in request.
-- Configure Vercel env vars: `MODAL_TOKEN_ID`, `MODAL_TOKEN_SECRET`,
-  `BAYES_WEBHOOK_URL`, `BAYES_WEBHOOK_SECRET`, `MODAL_STATUS_SECRET`.
+**4c. Vercel routes and config.**
+- New `api/bayes-config.ts` (TS GET route). Returns three values from
+  env: `{ webhook_url, webhook_secret, db_connection }`.
+- New `api/bayes-webhook.ts` (TS POST route). Minimal initial version:
+  decrypt callback token, validate, commit a placeholder file to git via
+  Git Data API (proves the full auth chain). Full parameter file merging
+  and cascade logic added in Step 5.
+- Add rewrites in `vercel.json`:
+  `/api/bayes/config` → `api/bayes-config`,
+  `/api/bayes-webhook` → `api/bayes-webhook`.
+- Add `maxDuration` for the webhook handler in `vercel.json`:
+  `"functions": { "api/bayes-webhook.ts": { "maxDuration": 60 } }`.
+  (Fluid Compute is enabled on the DagNet deployment — Hobby plan gives
+  300s default. The explicit `maxDuration: 60` is self-documenting and
+  prevents accidental timeout if Fluid Compute were ever disabled.)
+- Configure Vercel env vars: `BAYES_WEBHOOK_SECRET`, `BAYES_WEBHOOK_URL`,
+  `DB_CONNECTION` (already exists for snapshot routes).
+- No Vercel submission route — the FE calls Modal directly.
 
-**4d. End-to-end spike.**
-- FE (or cURL) → `/api/bayes/fit` → Modal spawns worker → worker
+**4d. Dev harness (FE test button).**
+
+A dev-only UI for triggering and monitoring Bayes roundtrips during
+development. Lives in the menu bar's `dagnet-right-controls` container,
+next to the existing `DevConsoleMirrorControls` — same `import.meta.env.DEV`
+guard pattern.
+
+Components:
+- `DevBayesTrigger.tsx` — rendered in `MenuBar.tsx` inside
+  `dagnet-right-controls`, guarded by `import.meta.env.DEV`.
+- A button labelled "Bayes" (or similar). On click:
+  1. Fetch config from `/api/bayes/config` (cache in session memory).
+  2. Encrypt the current user's git creds into a callback token.
+  3. Build a submission payload from the currently open graph (graph
+     snapshot, parameters index, parameter files — all available locally).
+  4. POST to Modal `/submit`. Log `BAYES_FIT_SUBMITTED` via
+     `sessionLogService`.
+  5. Start polling Modal `/status` every ~10s. Update button state
+     (submitted → running → complete/failed). Register an operation via
+     `operationRegistryService` so the OperationsToast shows progress.
+  6. On `vendor-complete`: auto-pull, log result diagnostics from the
+     enriched status response.
+- Status indicator: the button shows current state (idle / submitted /
+  running / complete / failed) via colour or icon. Clicking while a job
+  is running shows the job_id and elapsed time.
+- Requires: a graph must be open and the user must have git credentials
+  in IDB. Button disabled otherwise.
+
+This harness is the primary testing tool for Steps 4–5. It exercises the
+full roundtrip: FE → config fetch → encrypt → Modal submit → worker →
+webhook → git commit → FE poll → pull. It becomes the basis for the
+production on-demand fit trigger later (Step 6).
+
+**4e. End-to-end spike.**
+- Use the dev harness button to trigger a roundtrip against the currently
+  open graph.
+- FE fetches config from `/api/bayes/config` → encrypts git creds →
+  POSTs directly to Modal `/submit` → Modal spawns worker → worker
   connects to Neon, builds placeholder payload → POSTs to
-  `/api/bayes-webhook` → webhook commits to git → FE polls
-  `/api/bayes/status` and sees `complete` → FE pulls and sees commit.
+  `/api/bayes-webhook` with encrypted callback token → webhook decrypts,
+  commits to git → FE polls Modal `/status` and sees `complete` → FE
+  pulls and sees commit.
+- Verify in the session log: full lifecycle events with worker
+  diagnostics (duration, edges, quality, log, commit SHA).
+- Verify in the Modal dashboard: worker stdout/stderr visible.
 - This is the full roundtrip. If this works, the infrastructure is proven.
 
-### Step 5: Submission route hardening
-After the spike proves the roundtrip, harden the submission route:
-- Input validation (graph_id, repo, branch required; graph_snapshot size
-  limits).
-- Error handling (Modal SDK exceptions, credential loading failures).
-- Wire FE trigger (button or dev-only command) for on-demand fits.
-- `modal` added to `requirements.txt` (verify Vercel bundle size stays
-  within 500 MB limit; Modal SDK is lightweight).
+### Step 5: Webhook hardening + full parameter writes
+After the spike proves the roundtrip with placeholder commits:
+- Upgrade the webhook handler to do real parameter file merging (read
+  YAML, merge posteriors, update point estimates).
+- Add cascade to graph file via the shared isomorphic cascade module
+  (from Step 2).
+- Add retry-with-rebase for concurrent webhooks.
+- Harden the FE submission path: input validation on Modal's `/submit`,
+  error handling for Modal failures, Vercel config endpoint validation.
 
-### Step 6: FE integration
+### Step 6: Automation integration
 Extend `useURLDailyRetrieveAllQueue` (or a parallel hook) to:
 
-1. After each graph's fetch+commit, submit a Bayes fit via `/api/bayes/fit`.
-2. Collect `{ job_id, graph_id }` for all dispatched fits.
-3. After all fetches complete, enter a poll loop: query `/api/bayes/status`
-   for each pending job every ~15s.
+1. On first Bayes trigger, fetch config from `/api/bayes/config` (cache
+   in session memory).
+2. After each graph's fetch+commit, encrypt the user's git creds into a
+   callback token (using `webhook_secret` from config), then submit
+   directly to Modal `/submit`. Collect `{ job_id, graph_id }`.
+3. After all fetches complete, enter a poll loop: query Modal `/status`
+   for each pending job every ~15s (direct calls, no Vercel proxy).
 4. When all jobs are complete/failed/timed-out, pull once to pick up all
    webhook commits.
 5. Scan commit messages for `[bayes]` markers, match to job_ids, transition
@@ -1513,9 +1827,76 @@ Extend `useURLDailyRetrieveAllQueue` (or a parallel hook) to:
 6. Log lifecycle events via `sessionLogService` (submitted, running, complete,
    failed, summary).
 
+The dev harness (Step 4d) already exercises the core submission + polling +
+logging flow. Step 6 wires the same logic into the automation cycle with
+concurrent dispatch and batch polling.
+
 The existing hook's progress tracking, abort handling, cross-tab locking, and
 wall-clock-aware timing provide the scaffolding. The Bayes polling phase
 slots in after the existing fetch loop and before auto-close.
+
+### Step 7: IDB job persistence and boot reconciliation
+
+**After the core roundtrip is proven and FE integration works with ephemeral
+job records (Steps 4–6)**, harden job tracking by persisting to IDB.
+
+**Why this is a separate step:** Steps 4–6 use in-memory job records. This
+is sufficient for the primary use case (nightly automation, window stays
+open). IDB persistence handles the edge cases: browser closes mid-fit, page
+refresh, app reopened before fits complete.
+
+**7a. IDB table `bayesFitJobs`.**
+
+Add a new table to `appDatabase.ts`:
+
+```
+{
+  jobId,               // Modal call_id (primary key)
+  graphId,             // which graph was fitted
+  graphFileId,         // workspace-prefixed file ID
+  repo, branch,        // target
+  submittedAtMs,       // epoch ms
+  status,              // submitted | running | vendor-complete | committed | failed
+  lastPolledAtMs,      // epoch ms
+  result?,             // worker return value (diagnostics, quality, log)
+  commitSha?,          // from webhook_response in result
+  error?,              // error string if failed
+}
+```
+
+**7b. Persistence lifecycle.**
+
+- On submission: write record with `status: submitted`.
+- On each status poll: update `status` and `lastPolledAtMs`.
+- On `vendor-complete`: store `result` from the enriched status response.
+- On `committed` (commit SHA matched after pull): update `status`, store
+  `commitSha`.
+- On failure: store `error`, update `status`.
+- Prune records older than 7 days (matches Modal's result retention).
+
+**7c. Boot reconciliation.**
+
+On app boot (or page refresh), query IDB for records with `status` in
+`[submitted, running]`. For each:
+
+1. Poll Modal `/status` using the stored `jobId` (call_id). Modal retains
+   results for 7 days, so this works even if the browser was closed for
+   hours.
+2. If `complete`: trigger a pull to pick up the webhook commit. Transition
+   to `committed` if commit found, or `failed (no commit)` if not.
+3. If `running`: resume polling loop.
+4. If Modal returns an expired/unknown result (>7 days old): mark
+   `failed (expired)`.
+
+This means a user who closes the browser and reopens it the next morning
+sees: "Bayes fit for graph X completed at 02:15, commit abc123" — not
+silence.
+
+**7d. operationRegistryService integration.**
+
+On boot, if reconciliation finds pending or recently completed jobs, surface
+them via `operationRegistryService` so the OperationsToast shows status
+without the user needing to check the session log.
 
 ---
 
