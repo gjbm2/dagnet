@@ -11,6 +11,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import toast from 'react-hot-toast';
 import { useNavigatorContext } from '../contexts/NavigatorContext';
+import { operationRegistryService } from '../services/operationRegistryService';
 import { repositoryOperationsService } from '../services/repositoryOperationsService';
 import { gitConfig } from '../config/gitConfig';
 import { MergeConflictModal, ConflictFile } from '../components/modals/MergeConflictModal';
@@ -28,6 +29,8 @@ interface UsePullAllResult {
   pullAll: () => Promise<{ success: boolean; conflicts?: ConflictFile[] }>;
   /** Render this in your component to show conflict modal when needed */
   conflictModal: React.ReactNode;
+  /** Open the conflict resolution modal with externally-supplied conflicts (e.g. from auto-pull). */
+  openConflictModal: (conflicts: ConflictFile[]) => void;
 }
 
 /**
@@ -156,9 +159,9 @@ export function usePullAll(): UsePullAllResult {
     }
     
     setIsPulling(true);
-    const toastId = toast.loading('Pulling latest changes...');
-    let applyToastId: string | undefined;
-    
+    const opId = `git-pull:${selectedRepo}:${Date.now()}`;
+    operationRegistryService.register({ id: opId, kind: 'git-pull', label: 'Pulling latest changes…', status: 'running' });
+
     try {
       // Step A: detect force-replace requests (may still apply non-flagged updates).
       const preflight = await repositoryOperationsService.pullLatest(selectedRepo, selectedBranch, {
@@ -169,7 +172,8 @@ export function usePullAll(): UsePullAllResult {
       let result = preflight;
 
       if (requested.length > 0) {
-        toast.dismiss(toastId);
+        // Pause operation while user decides on force-replace
+        operationRegistryService.setLabel(opId, 'Awaiting force-replace decision…');
         const uiRequests: ForceReplaceOnPullRequest[] = requested.map((r: any) => ({
           fileId: r.fileId,
           fileName: r.fileName,
@@ -179,35 +183,42 @@ export function usePullAll(): UsePullAllResult {
         const ok = await promptForceReplace(uiRequests);
         const allowFileIds = ok ? uiRequests.map(r => r.fileId) : [];
 
-        applyToastId = toast.loading('Finalising pull...');
+        operationRegistryService.setLabel(opId, 'Finalising pull…');
         result = await repositoryOperationsService.pullLatest(selectedRepo, selectedBranch, {
           forceReplace: { mode: 'apply', allowFileIds },
         });
-        toast.dismiss(applyToastId);
-        applyToastId = undefined;
-      } else {
-        toast.dismiss(toastId);
       }
 
       if (result.conflicts && result.conflicts.length > 0) {
-        toast.error(`Pull completed with ${result.conflicts.length} conflict(s)`, { duration: 5000 });
+        operationRegistryService.setLabel(opId, `Pull completed with ${result.conflicts.length} conflict(s)`);
         const typedConflicts = result.conflicts as ConflictFile[];
+        operationRegistryService.complete(
+          opId,
+          'error',
+          `${result.conflicts.length} conflict(s) need resolution`,
+          { label: 'Resolve conflicts', onClick: () => openConflictModal(typedConflicts) },
+        );
         setConflicts(typedConflicts);
         setIsConflictModalOpen(true);
         return { success: true, conflicts: typedConflicts };
       } else {
-        toast.success('Successfully pulled latest changes');
+        operationRegistryService.setLabel(opId, 'Successfully pulled latest changes');
+        operationRegistryService.complete(opId, 'complete');
         return { success: true };
       }
     } catch (error) {
-      toast.dismiss(toastId);
-      if (applyToastId) toast.dismiss(applyToastId);
       if ((error as any)?.name === 'GitAuthError') {
+        operationRegistryService.complete(
+          opId,
+          'error',
+          'Authentication expired',
+          { label: 'Sign in', onClick: () => dispatchGitAuthExpired() },
+        );
         dispatchGitAuthExpired();
         return { success: false };
       }
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      toast.error(`Pull failed: ${errorMessage}`);
+      operationRegistryService.complete(opId, 'error', `Pull failed: ${errorMessage}`);
       return { success: false };
     } finally {
       setIsPulling(false);
@@ -233,5 +244,15 @@ export function usePullAll(): UsePullAllResult {
     onCancel: () => resolveForceReplace(false),
   });
   
-  return { isPulling, pullAll, conflictModal: React.createElement(React.Fragment, null, conflictModal as any, forceReplaceModal) };
+  const openConflictModal = useCallback((externalConflicts: ConflictFile[]) => {
+    setConflicts(externalConflicts);
+    setIsConflictModalOpen(true);
+  }, []);
+
+  return {
+    isPulling,
+    pullAll,
+    conflictModal: React.createElement(React.Fragment, null, conflictModal as any, forceReplaceModal),
+    openConflictModal,
+  };
 }

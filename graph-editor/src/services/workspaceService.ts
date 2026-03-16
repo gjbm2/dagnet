@@ -1215,10 +1215,23 @@ class WorkspaceService {
                 ? dirConfig.type
                 : `${dirConfig.type}-${fileNameWithoutExt}`;
 
-            // Check if local file exists and is dirty
+            // Check if local file exists and has changes (flagged dirty OR actual content drift).
+            // Defence-in-depth: isDirty flag may be false even when content differs from originalData
+            // (e.g. race conditions, editor focus loss, programmatic changes). Comparing serialised
+            // content catches these cases and routes them through the 3-way merge path instead of
+            // silently overwriting local work.
             const localFileState = localFileMap.get(treeItem.path);
-            
-            if (localFileState && localFileState.isDirty) {
+            const hasActualChanges = localFileState && localFileState.originalData && (() => {
+              try {
+                const localStr = JSON.stringify(localFileState.data);
+                const baseStr = JSON.stringify(localFileState.originalData);
+                return localStr !== baseStr;
+              } catch {
+                return false;
+              }
+            })();
+
+            if (localFileState && (localFileState.isDirty || hasActualChanges)) {
               // One-shot force-replace (per file) for derived-data files only (parameters/cases).
               // This is designed to prevent stale data resurrection via 3-way merge after a "Clear Data" commit.
               const isDerivedDataFile =

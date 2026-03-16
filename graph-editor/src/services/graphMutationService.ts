@@ -17,6 +17,7 @@
 import toast from 'react-hot-toast';
 import { queryRegenerationService } from './queryRegenerationService';
 import { sessionLogService } from './sessionLogService';
+import { operationRegistryService } from './operationRegistryService';
 import type { Graph } from '../types';
 
 type GraphMasteredAnchorComparison = {
@@ -731,17 +732,19 @@ class GraphMutationService {
       literalWeights?: { visited: number; exclude: number };
     }
   ): Promise<void> {
-    toast.loading('Regenerating all queries...', { id: 'query-regen' });
-    
+    const opId = `query-regen:${Date.now()}`;
+    operationRegistryService.register({ id: opId, kind: 'query-regen', label: 'Regenerating all queries…', status: 'running' });
+
     try {
       await this.regenerateQueriesAsync(graph, setGraph, {
         downstreamOf: undefined,  // Regenerate ALL
         literalWeights: options?.literalWeights
       });
-      
-      toast.success('All queries regenerated', { id: 'query-regen' });
+
+      operationRegistryService.setLabel(opId, 'All queries regenerated');
+      operationRegistryService.complete(opId, 'complete');
     } catch (error) {
-      toast.error('Failed to regenerate queries', { id: 'query-regen' });
+      operationRegistryService.complete(opId, 'error', 'Failed to regenerate queries');
       throw error;
     }
   }

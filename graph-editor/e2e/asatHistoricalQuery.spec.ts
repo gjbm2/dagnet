@@ -363,6 +363,11 @@ test.describe('asat() Historical Query - Real E2E', () => {
   );
 
   test('asat query retrieves real data from production snapshot database', async ({ page, baseURL }) => {
+    // Stub GitHub API to avoid rate limiting under parallel worker load.
+    await page.route('https://api.github.com/**', (route) => {
+      return route.fulfill({ status: 200, contentType: 'application/json', body: '{}' });
+    });
+
     // Navigate to app
     await page.goto(new URL('/?e2e=1', baseURL!).toString(), { waitUntil: 'domcontentloaded' });
     

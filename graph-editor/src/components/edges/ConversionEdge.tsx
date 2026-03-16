@@ -1,6 +1,5 @@
 import React, { useState, useCallback, useMemo, useEffect } from 'react';
-import ReactDOM from 'react-dom';
-import { EdgeProps, getBezierPath, EdgeLabelRenderer, useReactFlow, MarkerType, Handle, Position, getSmoothStepPath } from 'reactflow';
+import { EdgeProps, getBezierPath, EdgeLabelRenderer, useReactFlow, useStore, MarkerType, Handle, Position, getSmoothStepPath } from 'reactflow';
 import { useGraphStore } from '../../contexts/GraphStoreContext';
 import { useViewPreferencesContext } from '../../contexts/ViewPreferencesContext';
 import { useScenariosContextOptional } from '../../contexts/ScenariosContext';
@@ -8,7 +7,7 @@ import { useTabContext, fileRegistry } from '../../contexts/TabContext';
 import { dataOperationsService } from '../../services/dataOperationsService';
 import { useSnapshotsMenu } from '../../hooks/useSnapshotsMenu';
 import toast from 'react-hot-toast';
-import Tooltip from '@/components/Tooltip';
+import { HoverAnalysisPreview, useHoverPreview, useHoverScenarios } from '@/components/HoverAnalysisPreview';
 import { getConditionalColour, getConditionalProbabilityColour, isConditionalEdge } from '@/lib/conditionalColours';
 import { computeEffectiveEdgeProbability, getEdgeWhatIfDisplay } from '@/lib/whatIf';
 import { getVisitedNodeIds } from '@/lib/queryDSL';
@@ -277,236 +276,56 @@ export default function ConversionEdge({
   const [isDraggingSource, setIsDraggingSource] = useState(false);
   const [isDraggingTarget, setIsDraggingTarget] = useState(false);
   const [dragPosition, setDragPosition] = useState<{ x: number; y: number } | null>(null);
-  const [showTooltip, setShowTooltip] = useState(false);
-  const [tooltipPos, setTooltipPos] = useState({ x: 0, y: 0 });
   const pathRef = React.useRef<SVGPathElement>(null);
   const textPathRef = React.useRef<SVGPathElement>(null);
-  const tooltipTimeoutRef = React.useRef<NodeJS.Timeout | null>(null);
 
-  // Handle mouse enter to show tooltip (with delay)
-  const handleTooltipMouseEnter = useCallback((e: React.MouseEvent<SVGPathElement>) => {
-    // Only show tooltips for current edges (not scenario overlays)
+  // Hover analysis preview (replaces plain-text tooltip)
+  const hoverPreview = useHoverPreview(500);
+  const hoverScenarios = useHoverScenarios(graph);
+
+  // Resolve source/target node IDs for edge_info DSL
+  const edgeSourceNodeId = useMemo(() => {
+    const n = graph?.nodes.find((nd: any) => nd.uuid === source || nd.id === source);
+    return n?.id || source;
+  }, [graph, source]);
+  const edgeTargetNodeId = useMemo(() => {
+    const n = graph?.nodes.find((nd: any) => nd.uuid === target || nd.id === target);
+    return n?.id || target;
+  }, [graph, target]);
+
+  // Handle mouse enter to show hover analysis preview (with delay)
+  const handleTooltipMouseEnter = useCallback((e: React.MouseEvent<Element>) => {
+    // Only show previews for current edges (not scenario overlays)
     if (data?.scenarioOverlay) return;
-    
-    // Clear any existing timeout
-    if (tooltipTimeoutRef.current) {
-      clearTimeout(tooltipTimeoutRef.current);
-    }
-    
-    // Set initial position
-    setTooltipPos({ x: e.clientX, y: e.clientY });
-    
+    // Suppress during node drag — beads are hidden but mouse can still enter the SVG group
+    if (isDraggingNode) return;
+
     // Trigger snapshot inventory fetch (hook handles caching)
     void snapshots.refresh();
-    
-    // Show tooltip after delay (500ms)
-    tooltipTimeoutRef.current = setTimeout(() => {
-      setShowTooltip(true);
-    }, 500);
-  }, [data?.scenarioOverlay, snapshots.refresh]);
 
-  // Handle mouse move to update tooltip position
-  const handleTooltipMouseMove = useCallback((e: React.MouseEvent<SVGPathElement>) => {
-    if (data?.scenarioOverlay) return;
-    
-    // Update position immediately
-    setTooltipPos({ x: e.clientX, y: e.clientY });
-    
-    // If tooltip is already showing, keep it showing
-    // If not showing yet, the timeout will show it
-  }, [data?.scenarioOverlay]);
+    // Trigger hover preview — pass mouse coordinates only.
+    // Edge bead <g> elements span the entire edge path, so
+    // getBoundingClientRect() returns the full path extent (too high).
+    hoverPreview.handleTriggerEnter({ clientX: e.clientX, clientY: e.clientY, buttons: e.buttons });
+  }, [data?.scenarioOverlay, isDraggingNode, snapshots.refresh, hoverPreview.handleTriggerEnter]);
 
-  // Handle mouse leave to hide tooltip
+  // Handle mouse move (no-op now, preview position is set on enter)
+  const handleTooltipMouseMove = useCallback((_e: React.MouseEvent<Element>) => {
+    // Position is set once on enter; preview auto-positions itself
+  }, []);
+
+  // Handle mouse leave to dismiss hover preview
   const handleTooltipMouseLeave = useCallback(() => {
-    // Clear any pending timeout
-    if (tooltipTimeoutRef.current) {
-      clearTimeout(tooltipTimeoutRef.current);
-      tooltipTimeoutRef.current = null;
-    }
-    
-    setShowTooltip(false);
-  }, []);
+    hoverPreview.handleTriggerLeave();
+  }, [hoverPreview.handleTriggerLeave]);
 
-  // Cleanup timeout on unmount
-  React.useEffect(() => {
-    return () => {
-      if (tooltipTimeoutRef.current) {
-        clearTimeout(tooltipTimeoutRef.current);
-      }
-    };
-  }, []);
+  // Dismiss hover preview on click (selection intent)
+  const handleEdgeMouseDown = useCallback(() => {
+    hoverPreview.handleDismiss();
+  }, [hoverPreview.handleDismiss]);
 
-  // Generate tooltip content
-  const getTooltipContent = () => {
-    if (!data) return 'No data available';
-    
-    const edgeId = data.id || id;
-    const lines: string[] = [];
-    
-    // Case edge info
-    const isCaseEdge = fullEdge?.case_variant && (
-      fullEdge?.case_id || 
-      (graph?.nodes?.find((n: any) => n.uuid === fullEdge?.from || n.id === fullEdge?.from)?.type === 'case')
-    );
-    if (isCaseEdge) {
-      lines.push(`case: ${data.case_variant}`);
-      const sourceNode = graph?.nodes.find((n: any) => n.uuid === source || n.id === source);
-      if (sourceNode?.type === 'case' && sourceNode?.case?.id === data.case_id) {
-        const variant = sourceNode?.case?.variants?.find((v: any) => v.name === data.case_variant);
-        if (variant) {
-          lines.push(`  weight ${(variant.weight * 100).toFixed(0)}% × sub ${(data.probability * 100).toFixed(0)}%`);
-        }
-      }
-    }
-    
-    // === PARAM: e.<edgeId>.p (BLENDED) ===
-    lines.push(`e.${edgeId}.p`);
-    
-    // Mean ± stdev (blended probability)
-    const pVal = (effectiveProbability * 100).toFixed(1);
-    const pStd = data.stdev ? ` ±${(data.stdev * 100).toFixed(1)}` : '';
-    lines.push(`  ${pVal}%${pStd}`);
-    
-    // Forecast population (p.n) - from inbound-n convolution
-    const pN = fullEdge?.p?.n;
-    if (pN !== undefined && pN > 0) {
-      lines.push(`  p.n=${pN.toFixed(0)} (forecast population)`);
-    }
-    
-    // === PARAM: e.<edgeId>.p.evidence (RAW) ===
-    const pEvidence = fullEdge?.p?.evidence as any;
-    lines.push('');
-    lines.push(`e.${edgeId}.p.evidence`);
-    
-    if (pEvidence) {
-      const evMean = typeof pEvidence.mean === 'number'
-        ? pEvidence.mean
-        : (typeof pEvidence.n === 'number' && typeof pEvidence.k === 'number' && pEvidence.n > 0
-            ? pEvidence.k / pEvidence.n
-            : undefined);
-      const evStdev = typeof pEvidence.stdev === 'number' ? pEvidence.stdev : undefined;
-      
-      if (evMean !== undefined) {
-        const evVal = (evMean * 100).toFixed(1);
-        const evStd = evStdev ? ` ±${(evStdev * 100).toFixed(1)}` : '';
-        lines.push(`  ${evVal}%${evStd}`);
-      }
-      
-      if (pEvidence.n !== undefined && pEvidence.k !== undefined) {
-        lines.push(`  n=${pEvidence.n} k=${pEvidence.k}`);
-      }
-      if (pEvidence.window_from && pEvidence.window_to) {
-        const fmtDate = (d: Date) =>
-          `${d.getDate()}-${['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][d.getMonth()]}`;
-        lines.push(`  ${fmtDate(new Date(pEvidence.window_from))} to ${fmtDate(new Date(pEvidence.window_to))}`);
-      }
-      if (pEvidence.source) lines.push(`  source: ${pEvidence.source}`);
-      // Query only if we have evidence (actual fetch happened)
-      if (fullEdge?.query) {
-        lines.push(`  query: ${fullEdge.query}`);
-      }
-    } else {
-      lines.push(`  (rebalanced)`);
-    }
-    
-    // Latency information (if tracking enabled)
-    const latency = fullEdge?.p?.latency;
-    if (latency && latency.latency_parameter === true) {
-      lines.push('');
-      lines.push(`latency:`);
-      if (latency.median_lag_days !== undefined) {
-        lines.push(`  median lag: ${latency.median_lag_days.toFixed(1)}d`);
-      }
-      if (latency.completeness !== undefined) {
-        lines.push(`  completeness: ${(latency.completeness * 100).toFixed(0)}%`);
-      }
-      if (latency.t95 !== undefined) {
-        lines.push(`  t95: ${latency.t95.toFixed(1)}d`);
-      }
-      if (latency.anchor_node_id) {
-        lines.push(`  anchor: ${latency.anchor_node_id}`);
-      }
-    }
-    
-    // Forecast information (if available)
-    const forecast = fullEdge?.p?.forecast;
-    if (forecast && forecast.mean !== undefined) {
-      lines.push('');
-      lines.push(`forecast (p∞): ${(forecast.mean * 100).toFixed(1)}%`);
-      if (forecast.stdev !== undefined) {
-        lines.push(`  ±${(forecast.stdev * 100).toFixed(1)}%`);
-      }
-    }
-    
-    // === PARAMS: e.<edgeId>.<condition>.p ===
-    if (fullEdge?.conditional_p && fullEdge.conditional_p.length > 0) {
-      for (const cond of fullEdge.conditional_p) {
-        lines.push('');
-        lines.push(`e.${edgeId}.${cond.condition}.p`);
-        
-        // Mean ± stdev
-        const condVal = ((cond.p.mean ?? 0) * 100).toFixed(1);
-        const condStd = cond.p.stdev ? ` ±${(cond.p.stdev * 100).toFixed(1)}` : '';
-        lines.push(`  ${condVal}%${condStd}`);
-        
-        // Evidence or rebalanced indicator
-        const condEvidence = cond.p.evidence;
-        const condHasEvidence = condEvidence && (condEvidence.n !== undefined || condEvidence.k !== undefined);
-        
-        if (condHasEvidence && condEvidence) {
-          if (condEvidence.n !== undefined && condEvidence.k !== undefined) {
-            lines.push(`  n=${condEvidence.n} k=${condEvidence.k}`);
-          }
-          if (condEvidence.window_from && condEvidence.window_to) {
-            const fmtDate = (d: Date) => `${d.getDate()}-${['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][d.getMonth()]}`;
-            lines.push(`  ${fmtDate(new Date(condEvidence.window_from))} to ${fmtDate(new Date(condEvidence.window_to))}`);
-          }
-          if (condEvidence.source) lines.push(`  source: ${condEvidence.source}`);
-          // Query only if we have evidence (actual fetch happened)
-          if (fullEdge?.query) {
-            lines.push(`  query: ${fullEdge.query}.${cond.condition}`);
-          }
-        } else {
-          lines.push(`  (rebalanced)`);
-        }
-      }
-    }
-    
-    // Description
-    if (data.description) {
-      lines.push('');
-      lines.push(data.description);
-    }
-    
-    // Costs
-    if (data.cost_gbp?.mean || data.labour_cost?.mean) {
-      lines.push('');
-      if (data.cost_gbp?.mean) lines.push(`cost_gbp: £${data.cost_gbp.mean.toFixed(0)}`);
-      if (data.labour_cost?.mean) lines.push(`labour_cost: ${data.labour_cost.mean.toFixed(0)}d`);
-    }
-    
-    // Snapshot availability (any param on this edge)
-    const fmtDate = (d: string) => {
-      const date = new Date(d);
-      return `${date.getDate()}-${['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][date.getMonth()]}-${date.getFullYear().toString().slice(-2)}`;
-    };
-    const snapshotParamsWithData = snapshotParamIds.filter((pid) => (snapshots.inventories[pid]?.row_count ?? 0) > 0);
-    if (snapshotParamsWithData.length > 0) {
-      lines.push('');
-      lines.push('snapshots (retrieved):');
-      for (const pid of snapshotParamsWithData) {
-        const inv = snapshots.inventories[pid];
-        if (!inv) continue;
-        const count = snapshots.snapshotCounts[pid] ?? 0;
-        const range = inv.earliest && inv.latest ? `${fmtDate(inv.earliest)} — ${fmtDate(inv.latest)}` : '(range unknown)';
-        const countSuffix = count > 0 ? ` (${count}d)` : '';
-        lines.push(`  ${pid}: ${range}${countSuffix}`);
-      }
-    }
-    
-    return lines.join('\n');
-  };
   const { deleteElements, setEdges, getNodes, getEdges, screenToFlowPosition } = useReactFlow();
+  const canvasZoom = useStore((state: any) => state.transform[2]);
   const viewPrefs = useViewPreferencesContext();
   
   // Handle drag over for drop target (added to existing path elements)
@@ -2378,7 +2197,27 @@ export default function ConversionEdge({
           />
         )}
       </defs>
-      
+
+      {/* Invisible wider hit-area path — makes thin edges (e.g. p=0) easier to select */}
+      {edgePath && !data?.scenarioOverlay && (
+        <path
+          d={edgePath}
+          fill="none"
+          stroke="transparent"
+          strokeWidth={Math.max(20, strokeWidth)}
+          strokeLinecap="round"
+          pointerEvents="auto"
+          onContextMenu={handleContextMenu}
+          onDoubleClick={handleDoubleClick}
+          onMouseEnter={handleTooltipMouseEnter}
+          onMouseMove={handleTooltipMouseMove}
+          onMouseLeave={handleTooltipMouseLeave}
+          onMouseDown={handleEdgeMouseDown}
+          onDragOver={handleDragOver}
+          onDrop={handleDrop}
+        />
+      )}
+
       {/* Edge rendering */}
           {data?.useSankeyView && ribbonPath && sankeyFERibbons ? (
             // Sankey mode: render as filled ribbon (SPECIALISATION of unified LAG semantics)
@@ -2418,6 +2257,7 @@ export default function ConversionEdge({
                 onMouseEnter={data?.scenarioOverlay ? undefined : handleTooltipMouseEnter}
                 onMouseMove={data?.scenarioOverlay ? undefined : handleTooltipMouseMove}
                 onMouseLeave={data?.scenarioOverlay ? undefined : handleTooltipMouseLeave}
+                onMouseDown={data?.scenarioOverlay ? undefined : handleEdgeMouseDown}
                 onDragOver={data?.scenarioOverlay ? undefined : handleDragOver}
                 onDrop={data?.scenarioOverlay ? undefined : handleDrop}
               />
@@ -2531,6 +2371,7 @@ export default function ConversionEdge({
                 onMouseEnter={data?.scenarioOverlay ? undefined : handleTooltipMouseEnter}
                 onMouseMove={data?.scenarioOverlay ? undefined : handleTooltipMouseMove}
                 onMouseLeave={data?.scenarioOverlay ? undefined : handleTooltipMouseLeave}
+                onMouseDown={data?.scenarioOverlay ? undefined : handleEdgeMouseDown}
                 onDragOver={data?.scenarioOverlay ? undefined : handleDragOver}
                 onDrop={data?.scenarioOverlay ? undefined : handleDrop}
               />
@@ -2559,6 +2400,7 @@ export default function ConversionEdge({
                 onMouseEnter={data?.scenarioOverlay ? undefined : handleTooltipMouseEnter}
                 onMouseMove={data?.scenarioOverlay ? undefined : handleTooltipMouseMove}
                 onMouseLeave={data?.scenarioOverlay ? undefined : handleTooltipMouseLeave}
+                onMouseDown={data?.scenarioOverlay ? undefined : handleEdgeMouseDown}
                 onDragOver={data?.scenarioOverlay ? undefined : handleDragOver}
                 onDrop={data?.scenarioOverlay ? undefined : handleDrop}
               />
@@ -2589,6 +2431,7 @@ export default function ConversionEdge({
                 onMouseEnter={data?.scenarioOverlay ? undefined : handleTooltipMouseEnter}
                 onMouseMove={data?.scenarioOverlay ? undefined : handleTooltipMouseMove}
                 onMouseLeave={data?.scenarioOverlay ? undefined : handleTooltipMouseLeave}
+                onMouseDown={data?.scenarioOverlay ? undefined : handleEdgeMouseDown}
                 onDragOver={data?.scenarioOverlay ? undefined : handleDragOver}
                 onDrop={data?.scenarioOverlay ? undefined : handleDrop}
               />
@@ -2636,6 +2479,7 @@ export default function ConversionEdge({
                     onMouseEnter={data?.scenarioOverlay ? undefined : handleTooltipMouseEnter}
                     onMouseMove={data?.scenarioOverlay ? undefined : handleTooltipMouseMove}
                     onMouseLeave={data?.scenarioOverlay ? undefined : handleTooltipMouseLeave}
+                    onMouseDown={data?.scenarioOverlay ? undefined : handleEdgeMouseDown}
                     onDragOver={data?.scenarioOverlay ? undefined : handleDragOver}
                     onDrop={data?.scenarioOverlay ? undefined : handleDrop}
                   />
@@ -2704,6 +2548,7 @@ export default function ConversionEdge({
                   onMouseEnter={data?.scenarioOverlay ? undefined : handleTooltipMouseEnter}
                   onMouseMove={data?.scenarioOverlay ? undefined : handleTooltipMouseMove}
                   onMouseLeave={data?.scenarioOverlay ? undefined : handleTooltipMouseLeave}
+                onMouseDown={data?.scenarioOverlay ? undefined : handleEdgeMouseDown}
                 onDragOver={data?.scenarioOverlay ? undefined : handleDragOver}
                 onDrop={data?.scenarioOverlay ? undefined : handleDrop}
                 />
@@ -2741,6 +2586,7 @@ export default function ConversionEdge({
                   onMouseEnter={data?.scenarioOverlay ? undefined : handleTooltipMouseEnter}
                   onMouseMove={data?.scenarioOverlay ? undefined : handleTooltipMouseMove}
                   onMouseLeave={data?.scenarioOverlay ? undefined : handleTooltipMouseLeave}
+                onMouseDown={data?.scenarioOverlay ? undefined : handleEdgeMouseDown}
                 onDragOver={data?.scenarioOverlay ? undefined : handleDragOver}
                 onDrop={data?.scenarioOverlay ? undefined : handleDrop}
                 />
@@ -2770,6 +2616,7 @@ export default function ConversionEdge({
                     onMouseEnter={data?.scenarioOverlay ? undefined : handleTooltipMouseEnter}
                     onMouseMove={data?.scenarioOverlay ? undefined : handleTooltipMouseMove}
                     onMouseLeave={data?.scenarioOverlay ? undefined : handleTooltipMouseLeave}
+                onMouseDown={data?.scenarioOverlay ? undefined : handleEdgeMouseDown}
                 onDragOver={data?.scenarioOverlay ? undefined : handleDragOver}
                 onDrop={data?.scenarioOverlay ? undefined : handleDrop}
                   />
@@ -2798,6 +2645,7 @@ export default function ConversionEdge({
                       onMouseEnter={data?.scenarioOverlay ? undefined : handleTooltipMouseEnter}
                       onMouseMove={data?.scenarioOverlay ? undefined : handleTooltipMouseMove}
                       onMouseLeave={data?.scenarioOverlay ? undefined : handleTooltipMouseLeave}
+                onMouseDown={data?.scenarioOverlay ? undefined : handleEdgeMouseDown}
                 onDragOver={data?.scenarioOverlay ? undefined : handleDragOver}
                 onDrop={data?.scenarioOverlay ? undefined : handleDrop}
                     />
@@ -2999,36 +2847,27 @@ export default function ConversionEdge({
                 onDoubleClick={handleDoubleClick}
                 useSankeyView={data?.useSankeyView}
                 edgeWidth={strokeWidth}
+                onMouseEnter={data?.scenarioOverlay ? undefined : handleTooltipMouseEnter}
+                onMouseLeave={data?.scenarioOverlay ? undefined : handleTooltipMouseLeave}
+                onMouseDown={data?.scenarioOverlay ? undefined : handleEdgeMouseDown}
               />
             );
           })()}
 
-      {/* Edge tooltip - rendered as portal */}
-      {showTooltip && ReactDOM.createPortal(
-        <div
-          style={{
-            position: 'fixed',
-            left: `${tooltipPos.x}px`,
-            top: `${tooltipPos.y}px`,
-            transform: 'translate(-50%, -100%)',
-            marginTop: '-8px',
-            background: '#1a1a1a',
-            color: '#ffffff',
-            padding: '8px 12px',
-            borderRadius: '6px',
-            fontSize: `${EDGE_LABEL_FONT_SIZE}px`,
-            lineHeight: '1.4',
-            boxShadow: '0 4px 12px rgba(0, 0, 0, 0.3)',
-            border: '1px solid #333',
-            whiteSpace: 'pre',
-            maxWidth: '600px',
-            zIndex: 10000,
-            pointerEvents: 'none',
-          }}
-        >
-          {getTooltipContent()}
-        </div>,
-        document.body
+      {/* Edge hover analysis preview */}
+      {hoverPreview.previewState && graph && (
+        <HoverAnalysisPreview
+          graph={graph}
+          edgeSource={edgeSourceNodeId}
+          edgeTarget={edgeTargetNodeId}
+          position={hoverPreview.previewState.position}
+          triggerBottom={hoverPreview.previewState.triggerBottom}
+          scenarios={hoverScenarios}
+          canvasZoom={canvasZoom}
+          onCardEnter={hoverPreview.handleCardEnter}
+          onCardLeave={hoverPreview.handleCardLeave}
+          onDismiss={hoverPreview.handleDismiss}
+        />
       )}
 
       {/* Context Menu */}
@@ -3082,10 +2921,13 @@ export default function ConversionEdge({
                 fill: selected ? (dark ? '#fff' : '#000') : (dark ? '#aaa' : '#666'),
                 fontStyle: 'italic',
                 fontWeight: selected ? '600' : 'normal',
-                pointerEvents: 'painted', // Only capture events over painted (visible) text, not the entire path
+                pointerEvents: 'painted',
                 cursor: 'pointer',
                 userSelect: 'none',
               }}
+              onMouseEnter={data?.scenarioOverlay ? undefined : handleTooltipMouseEnter}
+              onMouseLeave={data?.scenarioOverlay ? undefined : handleTooltipMouseLeave}
+              onMouseDown={data?.scenarioOverlay ? undefined : handleEdgeMouseDown}
               onDoubleClick={(e) => {
                 e.stopPropagation();
                 // Select the edge first

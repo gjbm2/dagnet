@@ -70,7 +70,7 @@ export interface ParsedQuery {
 export interface ParsedConstraints {
   visited: string[];
   exclude: string[];
-  context: Array<{key: string; value: string}>;
+  context: Array<{key: string; value: string | undefined}>;  // undefined = enumerate, '' = per-key clear, non-empty = set
   cases: Array<{key: string; value: string}>;
   visitedAny: string[][];
   contextAny: Array<{ pairs: Array<{key: string; value: string}> }>;  // OR over values within/across keys
@@ -204,7 +204,7 @@ export function parseConstraints(constraint: string | null | undefined): ParsedC
   // Extract all constraint types using regex (similar to Python _parse_condition)
   const visited: string[] = [];
   const exclude: string[] = [];
-  const context: Array<{key: string; value: string}> = [];
+  const context: Array<{key: string; value: string | undefined}> = [];
   const cases: Array<{key: string; value: string}> = [];
   const visitedAny: string[][] = [];
   const contextAny: Array<{ pairs: Array<{key: string; value: string}> }> = [];
@@ -232,12 +232,15 @@ export function parseConstraints(constraint: string | null | undefined): ParsedC
     exclude.push(...nodes);
   }
   
-  // Match context(key:value) or context(key) - bare key allowed
-  const contextMatches = constraint.matchAll(/context\(([^:)]+)(?::([^)]+))?\)/g);
+  // Match context(key:value), context(key:) or context(key) - three forms:
+  //   context(key)       → enumerate (value: undefined) — iterate over all values of this axis
+  //   context(key:)      → per-key clear (value: '')    — remove this key from inherited context
+  //   context(key:value) → set (value: 'value')         — constrain this key to a specific value
+  const contextMatches = constraint.matchAll(/context\(([^:)]+)(?::([^)]*))?\)/g);
   for (const match of contextMatches) {
-    context.push({ 
-      key: match[1].trim(), 
-      value: match[2] ? match[2].trim() : '' // Empty string if no value (bare key)
+    context.push({
+      key: match[1].trim(),
+      value: match[2] !== undefined ? match[2].trim() : undefined
     });
   }
   
@@ -357,12 +360,13 @@ export function parseConstraints(constraint: string | null | undefined): ParsedC
   }
   
   // Deduplicate context/cases (by key-value pair)
-  const contextDeduped: Array<{key: string; value: string}> = [];
+  // Use distinct prefixes so enumerate (undefined) and clear ('') don't collide
+  const contextDeduped: Array<{key: string; value: string | undefined}> = [];
   const contextSeen = new Set<string>();
   for (const kv of context) {
-    const key = `${kv.key}:${kv.value}`;
-    if (!contextSeen.has(key)) {
-      contextSeen.add(key);
+    const dedupKey = kv.value === undefined ? `enum:${kv.key}` : `${kv.key}:${kv.value}`;
+    if (!contextSeen.has(dedupKey)) {
+      contextSeen.add(dedupKey);
       contextDeduped.push(kv);
     }
   }
@@ -533,7 +537,11 @@ export function normalizeConstraintString(constraint: string): string {
     } else {
       const contextParts = parsed.context
         .sort((a, b) => a.key.localeCompare(b.key))
-        .map(({key, value}) => value ? `context(${key}:${value})` : `context(${key})`);
+        .map(({key, value}) => {
+          if (value === undefined) return `context(${key})`;       // enumerate
+          if (value === '') return `context(${key}:)`;             // per-key clear
+          return `context(${key}:${value})`;                       // set
+        });
       parts.push(...contextParts);
     }
   }
@@ -651,20 +659,33 @@ export function augmentDSLWithConstraint(existingDSL: string | null, newConstrai
   // - Context keys can build up across layers.
   // - A context with the SAME key overrides the inherited value for that key.
   // - An explicit empty `context()` is a whole-axis clear (remove all context keys).
+  // - A per-key clear `context(key:)` (value === '') removes that specific key from inherited context.
   // - If the new constraint contains no context() clause, we inherit existing context unchanged.
-  const mergedContext = (() => {
-    if (!newParsed.contextClausePresent) return existing.context;
-    if (newParsed.context.length === 0) return []; // explicit clear
+  const contextMergeResult = (() => {
+    if (!newParsed.contextClausePresent) {
+      return { entries: existing.context, clausePresent: !!existing.contextClausePresent };
+    }
+    if (newParsed.context.length === 0) {
+      return { entries: [] as Array<{key: string; value: string | undefined}>, clausePresent: true }; // explicit whole clear
+    }
 
-    const map = new Map<string, { key: string; value: string }>();
+    // Per-key merge with clear support
+    const map = new Map<string, { key: string; value: string | undefined }>();
     for (const kv of existing.context) {
       map.set(kv.key, { key: kv.key, value: kv.value });
     }
     for (const kv of newParsed.context) {
-      map.set(kv.key, { key: kv.key, value: kv.value });
+      if (kv.value === '') {
+        map.delete(kv.key); // per-key clear: remove this key entirely
+      } else {
+        map.set(kv.key, { key: kv.key, value: kv.value }); // set or enumerate
+      }
     }
-    return Array.from(map.values());
+    const entries = Array.from(map.values());
+    // clausePresent if entries survive, OR if existing had a whole clear we're inheriting through
+    return { entries, clausePresent: entries.length > 0 };
   })();
+  const mergedContext = contextMergeResult.entries;
   
   // For cases: new KEY replaces existing KEY (only one case value per case key)
   const casesMap = new Map<string, string>();
@@ -704,7 +725,7 @@ export function augmentDSLWithConstraint(existingDSL: string | null, newConstrai
     newParsed.asatClausePresent ? true : !!existing.asatClausePresent;
 
   // Carry clause presence flags through so we can emit explicit clears (context()/contextAny()).
-  const mergedContextClausePresent = newParsed.contextClausePresent ? true : !!existing.contextClausePresent;
+  const mergedContextClausePresent = contextMergeResult.clausePresent;
   const mergedContextAnyClausePresent = newParsed.contextAnyClausePresent ? true : !!existing.contextAnyClausePresent;
   
   // Rebuild DSL using normalize (ensures canonical order)
@@ -742,7 +763,11 @@ export function augmentDSLWithConstraint(existingDSL: string | null, newConstrai
     if (merged.context.length === 0) {
       parts.push('context()');
     } else {
-      parts.push(...merged.context.sort((a,b) => a.key.localeCompare(b.key)).map(c => c.value ? `context(${c.key}:${c.value})` : `context(${c.key})`));
+      parts.push(...merged.context.sort((a,b) => a.key.localeCompare(b.key)).map(c => {
+        if (c.value === undefined) return `context(${c.key})`;       // enumerate
+        if (c.value === '') return `context(${c.key}:)`;             // per-key clear
+        return `context(${c.key}:${c.value})`;                       // set
+      }));
     }
   }
   if (merged.contextAnyClausePresent) {
@@ -816,7 +841,139 @@ export function removeConstraintFromDSL(dsl: string | null, constraintToRemove: 
       .map(({key, value}) => `context(${key}:${value})`);
     parts.push(...contextParts);
   }
-  
+
+  return parts.join('.');
+}
+
+/**
+ * Compute the minimal delta DSL such that `augmentDSLWithConstraint(base, delta) = target`.
+ *
+ * This is the inverse of augment — it computes what constraint fragment, when composed onto
+ * base, reproduces target. Used for the Live → Custom transition (rebasing scenarios onto
+ * a new base DSL).
+ *
+ * Per-clause rules:
+ * - context: keys in base but absent from target → emit `context(key:)` (per-key clear).
+ *   Keys in target with different value from base → emit `context(key:value)`.
+ *   Keys in target but absent from base → emit `context(key:value)`.
+ *   Keys unchanged → omit.
+ * - window/cohort: if target differs from base → emit target's clause.
+ *   If target has cohort instead of window, the cohort clause in the delta will clear
+ *   inherited window via augment's exclusivity rule.
+ * - asat: if target asat differs → emit `asat(value)`. If base has asat but target doesn't
+ *   → emit `asat()` (clear).
+ * - visited/exclude: additive in augment (union), so delta contains only nodes in target
+ *   but not in base. Removal of visited/exclude nodes is not expressible via augment.
+ * - cases: key-replacement in augment, so delta contains keys that differ.
+ *
+ * @param base - The base DSL string
+ * @param target - The target DSL string to reproduce
+ * @returns The minimal delta DSL such that augment(base, delta) ≈ target
+ */
+export function computeRebaseDelta(base: string, target: string): string {
+  const baseParsed = parseConstraints(base);
+  const targetParsed = parseConstraints(target);
+
+  const parts: string[] = [];
+
+  // --- visited: nodes in target but not in base (additive only) ---
+  const baseVisitedSet = new Set(baseParsed.visited);
+  const newVisited = targetParsed.visited.filter(v => !baseVisitedSet.has(v));
+  if (newVisited.length > 0) {
+    parts.push(`visited(${newVisited.sort().join(', ')})`);
+  }
+
+  // --- exclude: same additive logic ---
+  const baseExcludeSet = new Set(baseParsed.exclude);
+  const newExclude = targetParsed.exclude.filter(e => !baseExcludeSet.has(e));
+  if (newExclude.length > 0) {
+    parts.push(`exclude(${newExclude.sort().join(', ')})`);
+  }
+
+  // --- cases: key-replacement; emit keys that differ ---
+  const baseCaseMap = new Map(baseParsed.cases.map(c => [c.key, c.value]));
+  const targetCaseMap = new Map(targetParsed.cases.map(c => [c.key, c.value]));
+  const deltaCases: Array<{key: string; value: string}> = [];
+  for (const [key, value] of targetCaseMap) {
+    if (baseCaseMap.get(key) !== value) {
+      deltaCases.push({ key, value });
+    }
+  }
+  if (deltaCases.length > 0) {
+    parts.push(...deltaCases.sort((a, b) => a.key.localeCompare(b.key)).map(c => `case(${c.key}:${c.value})`));
+  }
+
+  // --- context: per-key diff with clear support ---
+  const baseCtxMap = new Map(baseParsed.context.map(c => [c.key, c.value]));
+  const targetCtxMap = new Map(targetParsed.context.map(c => [c.key, c.value]));
+  const deltaContext: Array<{key: string; value: string | undefined}> = [];
+  let hasContextDelta = false;
+
+  // Keys in target that differ from base (additions + replacements)
+  for (const [key, value] of targetCtxMap) {
+    if (!baseCtxMap.has(key) || baseCtxMap.get(key) !== value) {
+      deltaContext.push({ key, value });
+      hasContextDelta = true;
+    }
+  }
+  // Keys in base but absent from target → per-key clear
+  for (const [key] of baseCtxMap) {
+    if (!targetCtxMap.has(key)) {
+      deltaContext.push({ key, value: '' }); // per-key clear
+      hasContextDelta = true;
+    }
+  }
+
+  if (hasContextDelta) {
+    parts.push(...deltaContext.sort((a, b) => a.key.localeCompare(b.key)).map(c => {
+      if (c.value === undefined) return `context(${c.key})`;
+      if (c.value === '') return `context(${c.key}:)`;
+      return `context(${c.key}:${c.value})`;
+    }));
+  }
+
+  // --- window: emit if different ---
+  const windowsDiffer = (() => {
+    if (!baseParsed.window && !targetParsed.window) return false;
+    if (!baseParsed.window || !targetParsed.window) return true;
+    return baseParsed.window.start !== targetParsed.window.start ||
+           baseParsed.window.end !== targetParsed.window.end;
+  })();
+
+  // --- cohort: emit if different ---
+  const cohortsDiffer = (() => {
+    if (!baseParsed.cohort && !targetParsed.cohort) return false;
+    if (!baseParsed.cohort || !targetParsed.cohort) return true;
+    return baseParsed.cohort.anchor !== targetParsed.cohort.anchor ||
+           baseParsed.cohort.start !== targetParsed.cohort.start ||
+           baseParsed.cohort.end !== targetParsed.cohort.end;
+  })();
+
+  // Window/cohort are mutually exclusive in augment. If target has cohort instead of
+  // window (or vice versa), emitting the target's clause is sufficient — augment's
+  // exclusivity rule will clear the other.
+  if (targetParsed.window && windowsDiffer) {
+    parts.push(`window(${targetParsed.window.start || ''}:${targetParsed.window.end || ''})`);
+  }
+
+  if (targetParsed.cohort && cohortsDiffer) {
+    if (targetParsed.cohort.anchor) {
+      parts.push(`cohort(${targetParsed.cohort.anchor},${targetParsed.cohort.start || ''}:${targetParsed.cohort.end || ''})`);
+    } else {
+      parts.push(`cohort(${targetParsed.cohort.start || ''}:${targetParsed.cohort.end || ''})`);
+    }
+  }
+
+  // --- asat: emit if different or needs clearing ---
+  const baseHasAsat = baseParsed.asatClausePresent || baseParsed.asat !== null;
+  const targetHasAsat = targetParsed.asatClausePresent || targetParsed.asat !== null;
+
+  if (targetParsed.asat && targetParsed.asat !== baseParsed.asat) {
+    parts.push(`asat(${targetParsed.asat})`);
+  } else if (baseHasAsat && !targetHasAsat) {
+    parts.push('asat()'); // clear inherited asat
+  }
+
   return parts.join('.');
 }
 

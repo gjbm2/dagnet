@@ -1,11 +1,29 @@
 # DagNet Release Notes
-## Version 1.7.9b
+## Version 1.7.14b
 **Released:** 16-Mar-26
 
+various refactoring, bassic bayes infra
 
-Preview: git add .
+---
 
-  - .gitignore  (+7 / -0)
+## Version 1.7.13b
+**Released:** 15-Mar-26
+
+SNap to working properly. Added tristate handling to chart sceanrios
+
+---
+
+## Version 1.7.12b
+**Released:** 13-Mar-26
+
+Fixed nasty pit pull bug, amonth other chart polishing
+
+---
+
+## Version 1.7.10b
+**Released:** 12-Mar-26
+
+Squeak, squeak -- a LOT of polishing. Also proper progress reporting in app and a number of canvas stability fixes. Charting v1.0??
 
 ---
 

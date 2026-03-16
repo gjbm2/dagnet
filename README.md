@@ -378,6 +378,7 @@ curl http://localhost:9000/api/snapshots/health
 
 **Location:** [`docs/`](docs/) — developer and architecture docs.
 
+- [`docs/current/codebase/APP_ARCHITECTURE.md`](docs/current/codebase/APP_ARCHITECTURE.md) — app-level architecture overview (data flow, state ownership, orchestration model)
 - `docs/current/` — active technical specs and architecture decisions
 - `docs/current/project-contexts/` — current project status and work plans
 - `docs/archive/` — historical documentation (useful for understanding past design decisions)

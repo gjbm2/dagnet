@@ -674,11 +674,12 @@ def run_end_comparison(
     all_scenarios: Optional[list] = None,
 ) -> dict[str, Any]:
     """
-    Compare probabilities of reaching multiple absorbing nodes.
+    Compare probabilities of reaching multiple nodes (any type, not just absorbing).
     New declarative schema: node-first with scenario secondary.
-    
+
     LAG support: includes visibility_mode per scenario for UI adaptors.
     """
+    from .graph_builder import resolve_node_id
     # Build node dimension values
     node_dimension_values = {}
     for i, node_id in enumerate(node_ids):
@@ -708,7 +709,30 @@ def run_end_comparison(
 
         for node_id in node_ids:
             result = calculate_path_to_absorbing(scenario_G, node_id, pruning)
-            data_rows.append({
+            # Get LAG data from incoming edge(s)
+            forecast_mean = None
+            evidence_mean = None
+            completeness = None
+            evidence_k = None
+            evidence_n = None
+            forecast_k = None
+            resolved = resolve_node_id(scenario_G, node_id)
+            target = resolved or node_id
+            parents = list(scenario_G.predecessors(target)) if target in scenario_G else []
+            if parents:
+                parent = parents[0]
+                edge_data = scenario_G.edges.get((parent, target), {})
+                forecast = edge_data.get('forecast') or {}
+                forecast_mean = forecast.get('mean')
+                forecast_k = forecast.get('k')
+                evidence = edge_data.get('evidence') or {}
+                evidence_mean = evidence.get('mean')
+                evidence_k = evidence.get('k')
+                evidence_n = evidence.get('n')
+                latency = edge_data.get('latency') or {}
+                completeness = latency.get('completeness')
+
+            row = {
                 'node': node_id,
                 'scenario_id': scenario_id,
                 'scenario_name': scenario_name,
@@ -716,7 +740,22 @@ def run_end_comparison(
                 'probability': result.probability,
                 'expected_cost_gbp': result.expected_cost_gbp,
                 'expected_labour_cost': result.expected_labour_cost,
-            })
+            }
+            # LAG fields: include if available
+            if forecast_mean is not None:
+                row['forecast_mean'] = forecast_mean
+            if evidence_mean is not None:
+                row['evidence_mean'] = evidence_mean
+            if completeness is not None:
+                row['completeness'] = completeness
+            if evidence_k is not None:
+                row['evidence_k'] = evidence_k
+            if evidence_n is not None:
+                row['evidence_n'] = evidence_n
+            if forecast_k is not None:
+                row['forecast_k'] = forecast_k
+
+            data_rows.append(row)
     
     return {
         'metadata': {
@@ -729,12 +768,18 @@ def run_end_comparison(
             ],
             'metrics': [
                 {'id': 'probability', 'name': 'Probability', 'type': 'probability', 'format': 'percent', 'role': 'primary'},
+                {'id': 'forecast_mean', 'name': 'Forecast', 'type': 'probability', 'format': 'percent'},
+                {'id': 'evidence_mean', 'name': 'Evidence', 'type': 'probability', 'format': 'percent'},
+                {'id': 'completeness', 'name': 'Completeness', 'type': 'ratio', 'format': 'percent'},
+                {'id': 'evidence_k', 'name': 'Observed k', 'type': 'count', 'format': 'number'},
+                {'id': 'evidence_n', 'name': 'Population n', 'type': 'count', 'format': 'number'},
+                {'id': 'forecast_k', 'name': 'Forecast k', 'type': 'count', 'format': 'number'},
                 {'id': 'expected_cost_gbp', 'name': 'Expected Cost (£)', 'type': 'currency', 'format': 'currency_gbp'},
                 {'id': 'expected_labour_cost', 'name': 'Expected Cost (Labour)', 'type': 'duration', 'format': 'number'},
             ],
             'chart': {
                 'recommended': 'bar_grouped',
-                'alternatives': ['table'],
+                'alternatives': ['pie', 'table'],
                 'hints': {
                     'sort': {'by': 'probability', 'order': 'desc'}  # Highest first
                 }

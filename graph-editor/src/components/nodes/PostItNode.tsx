@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { NodeProps, NodeResizer } from 'reactflow';
+import { NodeProps, NodeResizer, useViewport } from 'reactflow';
+import { getLastSnappedResize, clearLastSnappedResize } from '../../services/snapService';
 import type { GraphData } from '@/types';
 import { PostItEditor } from './PostItEditor';
 import { useElementTool } from '../../contexts/ElementToolContext';
@@ -27,11 +28,14 @@ interface PostItNodeData {
   onUpdate: (id: string, updates: Partial<PostItType>) => void;
   onDelete: (id: string) => void;
   onSelect: (id: string) => void;
+  onResizeStart?: () => void;
+  onResizeEnd?: () => void;
   autoEdit?: boolean;
 }
 
 export default function PostItNode({ data, selected }: NodeProps<PostItNodeData>) {
-  const { postit, onUpdate, onDelete } = data;
+  const { postit, onUpdate, onDelete, onResizeStart, onResizeEnd } = data;
+  const { zoom } = useViewport();
   const { activeElementTool } = useElementTool();
   const { theme } = useTheme();
   const dark = theme === 'dark';
@@ -43,8 +47,63 @@ export default function PostItNode({ data, selected }: NodeProps<PostItNodeData>
   const didMoveRef = useRef(false);
   const fontSize = FONT_SIZES[postit.fontSize || 'M'];
 
+  // Store callbacks in refs so NodeResizer's d3-drag useEffect deps stay stable.
+  // Without this, every parent re-render creates new inline closures →
+  // NodeResizer's useEffect re-runs → d3-drag is torn down mid-resize.
+  const onUpdateRef = useRef(onUpdate);
+  onUpdateRef.current = onUpdate;
+  const onResizeStartRef = useRef(onResizeStart);
+  onResizeStartRef.current = onResizeStart;
+  const onResizeEndRef = useRef(onResizeEnd);
+  onResizeEndRef.current = onResizeEnd;
+  const postitIdRef = useRef(postit.id);
+  postitIdRef.current = postit.id;
+
   useEffect(() => {
     return () => { if (resizeTimeoutRef.current) clearTimeout(resizeTimeoutRef.current); };
+  }, []);
+
+  const stableResizeStart = useCallback(() => { onResizeStartRef.current?.(); }, []);
+  const stableResize = useCallback((_event: any, params: { x: number; y: number; width: number; height: number }) => {
+    if (resizeTimeoutRef.current) clearTimeout(resizeTimeoutRef.current);
+    resizeTimeoutRef.current = setTimeout(() => {
+      // Use snapped dimensions if available, otherwise d3-drag params
+      const snap = getLastSnappedResize();
+      const useSnap = snap && snap.nodeId === `postit-${postitIdRef.current}`;
+      onUpdateRef.current(postitIdRef.current, {
+        x: Math.round(useSnap ? snap.x : params.x),
+        y: Math.round(useSnap ? snap.y : params.y),
+        width: Math.round(useSnap ? snap.width : params.width),
+        height: Math.round(useSnap ? snap.height : params.height),
+      });
+    }, 50);
+  }, []);
+  const stableResizeEnd = useCallback((_event: any, params: { x: number; y: number; width: number; height: number }) => {
+    if (resizeTimeoutRef.current) clearTimeout(resizeTimeoutRef.current);
+    // Use snapped dimensions if available — d3-drag doesn't know about
+    // snap adjustments, so its params would cause a "bounce" on release.
+    const snap = getLastSnappedResize();
+    const rfNodeId = `postit-${postitIdRef.current}`;
+    const useSnap = snap && snap.nodeId === rfNodeId;
+    if (import.meta.env.DEV) {
+      console.log('[PostIt] stableResizeEnd', {
+        nodeId: postitIdRef.current,
+        snap,
+        useSnap,
+        d3Params: params,
+        willWrite: useSnap
+          ? { x: Math.round(snap!.x), y: Math.round(snap!.y), w: Math.round(snap!.width), h: Math.round(snap!.height) }
+          : { x: Math.round(params.x), y: Math.round(params.y), w: Math.round(params.width), h: Math.round(params.height) },
+      });
+    }
+    onUpdateRef.current(postitIdRef.current, {
+      x: Math.round(useSnap ? snap!.x : params.x),
+      y: Math.round(useSnap ? snap!.y : params.y),
+      width: Math.round(useSnap ? snap!.width : params.width),
+      height: Math.round(useSnap ? snap!.height : params.height),
+    });
+    clearLastSnappedResize();
+    onResizeEndRef.current?.();
   }, []);
 
   const pendingAutoEditRef = useRef(false);
@@ -126,15 +185,12 @@ export default function PostItNode({ data, selected }: NodeProps<PostItNodeData>
         minHeight={80}
         lineStyle={{ display: 'none' }}
         handleStyle={{
-          width: '8px', height: '8px', borderRadius: '2px',
+          width: 8 / zoom, height: 8 / zoom, borderRadius: '2px',
           backgroundColor: '#3b82f6', border: '1px solid var(--bg-primary)',
         }}
-        onResize={(_event, params) => {
-          if (resizeTimeoutRef.current) clearTimeout(resizeTimeoutRef.current);
-          resizeTimeoutRef.current = setTimeout(() => {
-            onUpdate(postit.id, { width: Math.round(params.width), height: Math.round(params.height) });
-          }, 50);
-        }}
+        onResizeStart={stableResizeStart}
+        onResize={stableResize}
+        onResizeEnd={stableResizeEnd}
       />
 
       {selected && (
@@ -143,9 +199,9 @@ export default function PostItNode({ data, selected }: NodeProps<PostItNodeData>
           onClick={(e) => { e.stopPropagation(); onDelete(postit.id); }}
           title="Delete post-it"
           style={{
-            position: 'absolute', top: -10, right: -10, width: '20px', height: '20px',
+            position: 'absolute', top: -24 / zoom, right: -24 / zoom, width: 20 / zoom, height: 20 / zoom,
             borderRadius: '50%', border: '1px solid var(--border-primary)', background: 'var(--bg-primary)',
-            color: 'var(--color-danger)', fontSize: '12px', lineHeight: '18px', textAlign: 'center',
+            color: 'var(--color-danger)', fontSize: 12 / zoom, lineHeight: `${18 / zoom}px`, textAlign: 'center',
             cursor: 'pointer', zIndex: 10, padding: 0, boxShadow: '0 1px 3px rgba(0,0,0,0.15)',
           }}
         >

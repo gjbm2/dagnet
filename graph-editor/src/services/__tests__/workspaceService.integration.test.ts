@@ -714,5 +714,320 @@ describe('workspaceService.pullLatest() - Integration Tests', () => {
     const file = await db.files.get('parameter-deleted');
     expect(file).toBeUndefined();
   });
+
+  // ---------------------------------------------------------------------------
+  // REGRESSION TESTS: isDirty=false but actual content changes
+  //
+  // These tests protect against the critical regression where pullLatest
+  // unconditionally overwrote files when isDirty was false, even if the file
+  // had real content changes (data !== originalData).
+  // ---------------------------------------------------------------------------
+
+  it('should merge (not overwrite) when isDirty is false but data differs from originalData', async () => {
+    // This is the EXACT regression scenario: the file has been modified
+    // (data !== originalData) but isDirty was not set (e.g. race condition,
+    // editor focus loss, programmatic change). Without the defence-in-depth
+    // content comparison, the pull silently overwrites local changes.
+
+    const workspaceId = 'test-repo-main';
+    await db.workspaces.add({
+      id: workspaceId,
+      repository: 'test-repo',
+      branch: 'main',
+      fileIds: ['parameter-drifted'],
+      lastSynced: Date.now()
+    });
+
+    await db.files.add({
+      fileId: 'parameter-drifted',
+      type: 'parameter',
+      name: 'drifted.yaml',
+      path: 'parameters/drifted.yaml',
+      data: { id: 'drifted', value: 999, localEdit: 'unsaved work' },         // MODIFIED
+      originalData: { id: 'drifted', value: 100 },                             // Original from last sync
+      isDirty: false,  // BUG SCENARIO: flag is false despite actual changes
+      source: {
+        repository: 'test-repo',
+        path: 'parameters/drifted.yaml',
+        branch: 'main',
+        commitHash: 'abc123'
+      },
+      isLoaded: true,
+      isLocal: false,
+      viewTabs: [],
+      lastModified: Date.now(),
+      sha: 'sha-old',
+      lastSynced: Date.now()
+    });
+
+    // Remote has a different change
+    vi.mocked(gitService.setCredentials).mockImplementation(() => {});
+    vi.mocked(gitService.getRepositoryTree).mockResolvedValue({
+      success: true,
+      data: {
+        tree: [
+          { path: 'parameters/drifted.yaml', type: 'blob', sha: 'sha-new', size: 120 }
+        ],
+        commitSha: 'commit-new'
+      }
+    });
+
+    vi.mocked(gitService.getBlobContent).mockResolvedValue({
+      success: true,
+      data: {
+        content: 'id: drifted\nvalue: 200\nremoteField: added remotely\n',
+        sha: 'sha-new'
+      }
+    });
+
+    // Mock merge3Way — the critical assertion is that merge IS called (not skipped)
+    const mergeSpy = vi.spyOn(mergeServiceModule, 'merge3Way').mockReturnValue({
+      success: true,
+      hasConflicts: false,
+      merged: 'id: drifted\nvalue: 999\nlocalEdit: unsaved work\nremoteField: added remotely\n',
+      conflicts: []
+    });
+
+    const gitCreds = {
+      name: 'test-repo', owner: 'test-owner', token: 'test-token', basePath: '',
+      paramsPath: 'parameters', graphsPath: 'graphs', nodesPath: 'nodes',
+      eventsPath: 'events', contextsPath: 'contexts', casesPath: 'cases'
+    };
+
+    const result = await workspaceService.pullLatest('test-repo', 'main', gitCreds);
+
+    // CRITICAL: merge3Way MUST have been called — the old code skipped it when isDirty=false
+    expect(mergeSpy).toHaveBeenCalled();
+    expect(result.success).toBe(true);
+
+    // Verify local work was preserved via merge (not overwritten with remote)
+    const file = await db.files.get('parameter-drifted');
+    expect(file?.data).toHaveProperty('localEdit', 'unsaved work');
+    expect(file?.data).toHaveProperty('remoteField', 'added remotely');
+  });
+
+  it('should detect conflict when isDirty is false but data has conflicting changes with remote', async () => {
+    // Same drift scenario, but this time local and remote changed the same field.
+
+    const workspaceId = 'test-repo-main';
+    await db.workspaces.add({
+      id: workspaceId,
+      repository: 'test-repo',
+      branch: 'main',
+      fileIds: ['parameter-conflict-drift'],
+      lastSynced: Date.now()
+    });
+
+    await db.files.add({
+      fileId: 'parameter-conflict-drift',
+      type: 'parameter',
+      name: 'conflict-drift.yaml',
+      path: 'parameters/conflict-drift.yaml',
+      data: { id: 'conflict-drift', value: 999 },       // Local changed value
+      originalData: { id: 'conflict-drift', value: 100 }, // Base
+      isDirty: false,  // Flag not set
+      source: {
+        repository: 'test-repo',
+        path: 'parameters/conflict-drift.yaml',
+        branch: 'main',
+        commitHash: 'abc123'
+      },
+      isLoaded: true,
+      isLocal: false,
+      viewTabs: [],
+      lastModified: Date.now(),
+      sha: 'sha-old',
+      lastSynced: Date.now()
+    });
+
+    vi.mocked(gitService.setCredentials).mockImplementation(() => {});
+    vi.mocked(gitService.getRepositoryTree).mockResolvedValue({
+      success: true,
+      data: {
+        tree: [
+          { path: 'parameters/conflict-drift.yaml', type: 'blob', sha: 'sha-new', size: 120 }
+        ],
+        commitSha: 'commit-new'
+      }
+    });
+
+    vi.mocked(gitService.getBlobContent).mockResolvedValue({
+      success: true,
+      data: {
+        content: 'id: conflict-drift\nvalue: 500\n', // Remote also changed value
+        sha: 'sha-new'
+      }
+    });
+
+    // Mock merge3Way to report a conflict
+    vi.spyOn(mergeServiceModule, 'merge3Way').mockReturnValue({
+      success: true,
+      hasConflicts: true,
+      merged: 'id: conflict-drift\n<<<<<<< LOCAL\nvalue: 999\n=======\nvalue: 500\n>>>>>>> REMOTE\n',
+      conflicts: [{
+        startLine: 1,
+        endLine: 1,
+        base: ['value: 100'],
+        local: ['value: 999'],
+        remote: ['value: 500']
+      }]
+    });
+
+    const gitCreds = {
+      name: 'test-repo', owner: 'test-owner', token: 'test-token', basePath: '',
+      paramsPath: 'parameters', graphsPath: 'graphs', nodesPath: 'nodes',
+      eventsPath: 'events', contextsPath: 'contexts', casesPath: 'cases'
+    };
+
+    const result = await workspaceService.pullLatest('test-repo', 'main', gitCreds);
+
+    // CRITICAL: conflict must be detected, not silently overwritten
+    expect(result.conflicts).toHaveLength(1);
+    expect(result.conflicts[0].fileId).toBe('parameter-conflict-drift');
+    expect(result.conflicts[0].hasConflicts).toBe(true);
+
+    // Local data must be preserved (not overwritten with remote)
+    const file = await db.files.get('parameter-conflict-drift');
+    expect(file?.data.value).toBe(999);
+  });
+
+  it('should safely overwrite when isDirty is false AND data matches originalData (no real changes)', async () => {
+    // Control case: when isDirty is false and data truly matches originalData,
+    // the file should be updated from remote without merge (fast path).
+
+    const workspaceId = 'test-repo-main';
+    await db.workspaces.add({
+      id: workspaceId,
+      repository: 'test-repo',
+      branch: 'main',
+      fileIds: ['parameter-clean'],
+      lastSynced: Date.now()
+    });
+
+    await db.files.add({
+      fileId: 'parameter-clean',
+      type: 'parameter',
+      name: 'clean.yaml',
+      path: 'parameters/clean.yaml',
+      data: { id: 'clean', value: 100 },
+      originalData: { id: 'clean', value: 100 },  // Matches data — truly clean
+      isDirty: false,
+      source: {
+        repository: 'test-repo',
+        path: 'parameters/clean.yaml',
+        branch: 'main',
+        commitHash: 'abc123'
+      },
+      isLoaded: true,
+      isLocal: false,
+      viewTabs: [],
+      lastModified: Date.now(),
+      sha: 'sha-old',
+      lastSynced: Date.now()
+    });
+
+    vi.mocked(gitService.setCredentials).mockImplementation(() => {});
+    vi.mocked(gitService.getRepositoryTree).mockResolvedValue({
+      success: true,
+      data: {
+        tree: [
+          { path: 'parameters/clean.yaml', type: 'blob', sha: 'sha-new', size: 120 }
+        ],
+        commitSha: 'commit-new'
+      }
+    });
+
+    vi.mocked(gitService.getBlobContent).mockResolvedValue({
+      success: true,
+      data: {
+        content: 'id: clean\nvalue: 300\n',
+        sha: 'sha-new'
+      }
+    });
+
+    // merge3Way should NOT be called — file is genuinely clean
+    const mergeSpy = vi.spyOn(mergeServiceModule, 'merge3Way');
+
+    const gitCreds = {
+      name: 'test-repo', owner: 'test-owner', token: 'test-token', basePath: '',
+      paramsPath: 'parameters', graphsPath: 'graphs', nodesPath: 'nodes',
+      eventsPath: 'events', contextsPath: 'contexts', casesPath: 'cases'
+    };
+
+    const result = await workspaceService.pullLatest('test-repo', 'main', gitCreds);
+
+    expect(result.success).toBe(true);
+    expect(mergeSpy).not.toHaveBeenCalled();
+
+    // File should be updated to remote value (fast path overwrite is safe here)
+    const file = await db.files.get('parameter-clean');
+    expect(file?.data.value).toBe(300);
+    expect(file?.sha).toBe('sha-new');
+    expect(file?.isDirty).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// POLICY INVARIANT: pullLatestRemoteWins must NEVER be called from interactive paths
+//
+// This static analysis test ensures that pullLatestRemoteWins is only called from
+// explicitly headless/unattended contexts. If someone adds a new caller, this test
+// fails and forces them to justify the decision.
+//
+// Background: a critical regression occurred when nonBlockingPullService (interactive
+// auto-pull with countdown) used pullLatestRemoteWins, silently overwriting dirty
+// local files. The fix was to use pullLatest (3-way merge) in all interactive paths.
+// ---------------------------------------------------------------------------
+
+describe('POLICY: pullLatestRemoteWins usage is restricted to headless contexts', () => {
+  // Exhaustive allowlist of files permitted to call pullLatestRemoteWins.
+  // Any file NOT in this list that calls pullLatestRemoteWins will fail this test.
+  const ALLOWED_CALLERS = new Set([
+    // The method definition itself
+    'repositoryOperationsService.ts',
+    // Headless nightly automation
+    'dailyRetrieveAllAutomationService.ts',
+    // Headless URL-triggered automation
+    'useURLDailyRetrieveAllQueue.ts',
+    // Staleness nudge service — only calls it behind isDashboardMode guard
+    'stalenessNudgeService.ts',
+    // useStalenessNudges wires the callback but stalenessNudgeService gates it
+    'useStalenessNudges.ts',
+  ]);
+
+  it('should only be called from explicitly headless/unattended code paths', async () => {
+    const fs = await import('fs');
+    const path = await import('path');
+    const glob = await import('glob');
+
+    const srcRoot = path.resolve(__dirname, '../..');
+    const allTsFiles = glob.sync('**/*.{ts,tsx}', {
+      cwd: srcRoot,
+      ignore: ['**/__tests__/**', '**/node_modules/**', '**/*.test.*', '**/*.spec.*'],
+    });
+
+    const violations: string[] = [];
+    for (const relPath of allTsFiles) {
+      const fullPath = path.join(srcRoot, relPath);
+      const content = fs.readFileSync(fullPath, 'utf-8');
+
+      // Check each non-comment line for actual calls to pullLatestRemoteWins.
+      // Lines that are purely comments (// or * prefix) are excluded —
+      // we care about real invocations, not explanatory references.
+      const hasRealCall = content.split('\n').some(line => {
+        const trimmed = line.trim();
+        if (trimmed.startsWith('//') || trimmed.startsWith('*') || trimmed.startsWith('/*')) return false;
+        return trimmed.includes('pullLatestRemoteWins');
+      });
+      if (!hasRealCall) continue;
+
+      const fileName = path.basename(relPath);
+      if (!ALLOWED_CALLERS.has(fileName)) {
+        violations.push(relPath);
+      }
+    }
+
+    expect(violations).toEqual([]);
+  });
 });
 

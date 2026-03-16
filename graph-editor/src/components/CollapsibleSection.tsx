@@ -17,6 +17,8 @@ interface CollapsibleSectionProps {
   toggleLabels?: { off: string; on: string };
   /** When true, forces the section open regardless of user collapse state */
   forceOpen?: boolean;
+  /** Arbitrary content rendered on the right side of the header (e.g. mode track) */
+  headerRight?: React.ReactNode;
 }
 
 export default function CollapsibleSection({ 
@@ -32,6 +34,7 @@ export default function CollapsibleSection({
   onCheckboxChange,
   toggleLabels,
   forceOpen = false,
+  headerRight,
 }: CollapsibleSectionProps) {
   const [internalIsOpen, setInternalIsOpen] = useState(defaultOpen);
   const contentRef = useRef<HTMLDivElement>(null);
@@ -164,6 +167,11 @@ export default function CollapsibleSection({
             onClick={handleCheckboxClick}
             title={checkboxChecked ? "Disable" : "Enable"}
           />
+        )}
+        {headerRight && (
+          <div className="collapsible-section-header-right" onClick={(e) => e.stopPropagation()}>
+            {headerRight}
+          </div>
         )}
       </div>
 

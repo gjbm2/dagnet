@@ -74,7 +74,7 @@ export function extractContextMap(sliceDSL: string): Map<string, string> {
     const parsed = parseConstraints(dims);
     const map = new Map<string, string>();
     for (const ctx of parsed.context) {
-      map.set(ctx.key, ctx.value);
+      map.set(ctx.key, ctx.value ?? '');
     }
 
     contextMapCache.set(key, map);
@@ -375,7 +375,7 @@ export function tryDimensionalReduction(
     try {
       const queryParsed = parseConstraints(queryDims);
       for (const ctx of queryParsed.context) {
-        queryContextMap.set(ctx.key, ctx.value);
+        queryContextMap.set(ctx.key, ctx.value ?? '');
       }
     } catch {
       // Query parsing failed - treat as uncontexted

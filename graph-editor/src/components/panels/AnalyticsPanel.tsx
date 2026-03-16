@@ -19,10 +19,16 @@ import { useScenariosContextOptional } from '../../contexts/ScenariosContext';
 import { useAnalysisBootContext } from '../../contexts/AnalysisBootContext';
 import { graphComputeClient, AnalysisResponse, AvailableAnalysis } from '../../lib/graphComputeClient';
 import { constructDSLFromSelection } from '../../lib/dslConstruction';
-import { AnalysisChartContainer } from '../charts/AnalysisChartContainer';
+import { AnalysisChartContainer, normaliseChartKind } from '../charts/AnalysisChartContainer';
+import { ChartFloatingIcon } from '../charts/ChartInlineSettingsFloating';
+import { ExpressionToolbarTray } from '../charts/ExpressionToolbarTray';
 import { AutomatableField } from '../AutomatableField';
 import { QueryExpressionEditor } from '../QueryExpressionEditor';
-import { BarChart3, AlertCircle, CheckCircle2, Loader2, Eye, EyeOff, Info, Lightbulb, List, Code, RefreshCw, ExternalLink, GripVertical, PinIcon } from 'lucide-react';
+import { BarChart3, AlertCircle, CheckCircle2, Loader2, Eye, EyeOff, Info, Lightbulb, List, RefreshCw, ExternalLink, GripVertical, PinIcon, ChevronsDown } from 'lucide-react';
+import { chartOperationsService } from '../../services/chartOperationsService';
+import {
+  resolveDisplaySetting,
+} from '../../lib/analysisDisplaySettingsRegistry';
 import { ANALYSIS_TYPES, getAnalysisTypeMeta } from './analysisTypes';
 import { AnalysisTypeCardList } from './AnalysisTypeCardList';
 import { AnalysisTypeSection } from './AnalysisTypeSection';
@@ -31,6 +37,7 @@ import { hydrateSnapshotPlannerInputs } from '../../services/snapshotSubjectReso
 import { fileRegistry } from '../../contexts/TabContext';
 import CollapsibleSection from '../CollapsibleSection';
 import { AnalysisResultCards } from '../analytics/AnalysisResultCards';
+import { AnalysisResultTable } from '../analytics/AnalysisResultTable';
 import { checkBridgeStatus, createAmplitudeDraft } from '../../services/amplitudeBridgeService';
 import { buildAmplitudeFunnelDefinition } from '../../services/amplitudeFunnelBuilderService';
 import { parseDSL } from '../../lib/queryDSL';
@@ -40,7 +47,81 @@ import { IndexedDBConnectionProvider } from '../../lib/das/IndexedDBConnectionPr
 import { prepareAnalysisComputeInputs, runPreparedAnalysis } from '../../services/analysisComputePreparationService';
 import { logChartReadinessTrace } from '../../lib/snapshotBootTrace';
 import toast from 'react-hot-toast';
+import type { ViewMode } from '../../types/chartRecipe';
 import './AnalyticsPanel.css';
+
+/**
+ * Draggable expression section — wraps a single expression (chart/cards/table)
+ * with a grip handle, pin-to-canvas button, and collapsible body.
+ */
+function ExpressionSection(props: {
+  viewMode: ViewMode;
+  label: string;
+  collapsed: boolean;
+  onToggle: () => void;
+  dragPayload: any;
+  onPin: () => void;
+  onOpenAsTab?: () => void;
+  toolbar?: React.ReactNode;
+  children: React.ReactNode;
+}) {
+  const { label, collapsed, onToggle, dragPayload, onPin, onOpenAsTab, toolbar, children } = props;
+  const contentRef = useRef<HTMLDivElement>(null);
+
+  const titleContent = (
+    <span style={{ display: 'flex', alignItems: 'center', gap: 6, width: '100%' }}>
+      <GripVertical size={12} style={{ color: 'var(--text-muted, #9ca3af)', flexShrink: 0 }} />
+      <span>{label}</span>
+      <span style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 2 }}>
+        {onOpenAsTab && (
+          <button
+            title="Open as tab"
+            className="expression-section-pin"
+            onClick={(e) => { e.stopPropagation(); onOpenAsTab(); }}
+          >
+            <ExternalLink size={12} />
+          </button>
+        )}
+        <button
+          title={`Pin ${label.toLowerCase()} to canvas`}
+          className="expression-section-pin"
+          onClick={(e) => { e.stopPropagation(); onPin(); }}
+        >
+          <PinIcon size={12} />
+        </button>
+      </span>
+    </span>
+  );
+
+  return (
+    <div
+      draggable
+      onDragStart={(e) => {
+        e.dataTransfer.setData('application/json', JSON.stringify(dragPayload));
+        e.dataTransfer.effectAllowed = 'copy';
+        const target = e.currentTarget as HTMLElement;
+        if (target) e.dataTransfer.setDragImage(target, target.offsetWidth / 2, 20);
+      }}
+    >
+      <CollapsibleSection
+        title={titleContent}
+        isOpen={!collapsed}
+        onToggle={onToggle}
+      >
+        <div ref={contentRef} style={{ position: 'relative' }}>
+          {toolbar && (
+            <ChartFloatingIcon
+              containerRef={contentRef}
+              tray={toolbar}
+              defaultAnchor="top-right"
+            />
+          )}
+          {children}
+        </div>
+      </CollapsibleSection>
+    </div>
+  );
+}
 
 interface AnalyticsPanelProps {
   tabId?: string;
@@ -178,6 +259,17 @@ export default function AnalyticsPanel({ tabId, hideHeader = false }: AnalyticsP
   const [plannerFileIds, setPlannerFileIds] = useState<string[]>([]);
   const [plannerRegistryVersion, setPlannerRegistryVersion] = useState(0);
   
+  // ---- Local display settings for panel expressions (not persisted to chart file) ----
+  const [tableDisplay, setTableDisplay] = useState<Record<string, any>>({});
+  const [cardsDisplay, setCardsDisplay] = useState<Record<string, any>>({});
+
+  const updateTableDisplay = useCallback((key: string, value: any) => {
+    setTableDisplay(prev => ({ ...prev, [key]: value }));
+  }, []);
+  const updateCardsDisplay = useCallback((key: string, value: any) => {
+    setCardsDisplay(prev => ({ ...prev, [key]: value }));
+  }, []);
+
   // Refs for debouncing and request tracking
   const analysisRequestRef = useRef<number>(0);
   const spinnerTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -263,9 +355,13 @@ export default function AnalyticsPanel({ tabId, hideHeader = false }: AnalyticsP
   }, [querySelection]);
   
   // Compute auto-generated DSL (shared codepath with element palette chart creation)
-  const autoGeneratedDSL = useMemo(() =>
-    constructDSLFromSelection(selectedNodeIds, selectedEdgeUuids, nodes as any[], edges as any[]),
-  [selectedNodeIds, selectedEdgeUuids, nodes, edges]);
+  const autoGeneratedDSL = useMemo(() => {
+    const dsl = constructDSLFromSelection(selectedNodeIds, selectedEdgeUuids, nodes as any[], edges as any[]);
+    if (selectedNodeIds.length > 0 || selectedEdgeUuids.length > 0) {
+      console.log('[AnalyticsPanel] autoGeneratedDSL', { selectedNodeIds, selectedEdgeUuids, dsl, nodeCount: nodes.length, edgeCount: edges.length });
+    }
+    return dsl;
+  }, [selectedNodeIds, selectedEdgeUuids, nodes, edges]);
   
   // Auto-construct DSL when selection changes (only if not overridden)
   useEffect(() => {
@@ -329,13 +425,15 @@ export default function AnalyticsPanel({ tabId, hideHeader = false }: AnalyticsP
     const fetchAvailable = async () => {
       try {
         lastFetchKeyRef.current = fetchKey;
+        console.log('[AnalyticsPanel] resolveAnalysisType', { fetchKey, queryDSL, graphNodeCount: graph.nodes?.length, scenarioCount: visibleScenarioIds.length });
         const { availableAnalyses: resolved, primaryAnalysisType } = await resolveAnalysisType(
           graph, queryDSL || undefined, visibleScenarioIds.length
         );
+        console.log('[AnalyticsPanel] resolved', { availableAnalyses: resolved.map(a => a.id), primaryAnalysisType });
         setAvailableAnalyses(resolved);
         setSelectedAnalysisId(primaryAnalysisType);
       } catch (err) {
-        console.warn('Failed to fetch available analyses:', err);
+        console.warn('[AnalyticsPanel] Failed to fetch available analyses:', err);
         setAvailableAnalyses([]);
       }
     };
@@ -600,12 +698,7 @@ export default function AnalyticsPanel({ tabId, hideHeader = false }: AnalyticsP
       unsubscribers.forEach((unsubscribe) => unsubscribe());
     };
   }, [bootContext, plannerFileIds]);
-  
-  // Format full result as JSON for debug display
-  const formattedResult = useMemo(() => {
-    if (!results?.result) return null;
-    return JSON.stringify(results.result, null, 2);
-  }, [results]);
+
 
   // For live scenarios, show the effective (composited) query DSL that produced the scenario.
   // This is display-only metadata (computed/stored by the scenarios system).
@@ -640,15 +733,6 @@ export default function AnalyticsPanel({ tabId, hideHeader = false }: AnalyticsP
 
   // Add a context suffix to the analysis name when the backend provides metadata,
   // e.g. "Reach Probability — Switch success".
-  const analysisTitleSuffix = useMemo((): string => {
-    const meta: any = results?.result?.metadata;
-    const nodeLabel = meta?.node_label;
-    if (typeof nodeLabel === 'string' && nodeLabel.trim()) {
-      return ` — ${nodeLabel}`;
-    }
-    return '';
-  }, [results]);
-
   const scenarioDslSubtitleByIdObject = useMemo(() => {
     const obj: Record<string, string> = {};
     for (const [k, v] of scenarioDslSubtitleById.entries()) obj[k] = v;
@@ -876,7 +960,52 @@ export default function AnalyticsPanel({ tabId, hideHeader = false }: AnalyticsP
   }, [handleOpenInAmplitude]);
 
   const showAmplitudeButton = selectedNodeIds.length > 0 || queryDSL.trim().length > 0;
-  
+
+  // ── Expression section collapsed state ──
+  // Driven by renderability: open what can render, close what can't.
+  const canRenderChart = !!normaliseChartKind(results?.result?.semantics?.chart?.recommended);
+  const canRenderCards = !!results?.result?.semantics?.dimensions?.some((d: any) => d.role === 'primary');
+  const canRenderTable = (results?.result?.data?.length ?? 0) > 0;
+
+  // Track which sections the user has manually toggled (null = follow auto logic)
+  const [userToggles, setUserToggles] = useState<Record<string, boolean | null>>({ chart: null, cards: null, table: null });
+  // Reset user toggles when results change (new analysis type / DSL)
+  const resultKey = `${selectedAnalysisId}::${queryDSL}`;
+  const prevResultKeyRef = useRef(resultKey);
+  if (resultKey !== prevResultKeyRef.current) {
+    prevResultKeyRef.current = resultKey;
+    setUserToggles({ chart: null, cards: null, table: null });
+  }
+
+  const chartCollapsed = userToggles.chart ?? !canRenderChart;
+  const cardsCollapsed = userToggles.cards ?? (canRenderChart ? true : !canRenderCards);
+  const tableCollapsed = userToggles.table ?? (canRenderChart || canRenderCards ? true : !canRenderTable);
+
+  const handleOpenAsTab = useCallback((viewMode: ViewMode) => {
+    const result = results?.result;
+    if (!result) return;
+    chartOperationsService.openAnalysisChartTabFromAnalysis({
+      chartKind: result.semantics?.chart?.recommended as any,
+      analysisResult: result,
+      scenarioIds: orderedVisibleScenarios,
+      source: {
+        parent_tab_id: tabId,
+        parent_file_id: currentTab?.fileId,
+        query_dsl: snapshotChartDsl || results.query_dsl,
+        analysis_type: result.analysis_type,
+      },
+      render: { view_mode: viewMode, display: {} },
+    });
+  }, [results, orderedVisibleScenarios, tabId, currentTab?.fileId, snapshotChartDsl]);
+
+  const handleDumpDebug = useCallback((viewMode: ViewMode) => {
+    const result = results?.result;
+    if (!result) return;
+    const payload = { analysisType: selectedAnalysisId, queryDSL, result, viewMode };
+    navigator.clipboard.writeText(JSON.stringify(payload, null, 2));
+    toast.success('Debug JSON copied to clipboard');
+  }, [results, selectedAnalysisId, queryDSL]);
+
   return (
     <div className="analytics-panel">
       {/* Header */}
@@ -975,6 +1104,11 @@ export default function AnalyticsPanel({ tabId, hideHeader = false }: AnalyticsP
           />
         </div>
         
+        {/* Results divider */}
+        <div className="analytics-results-divider">
+          <ChevronsDown size={16} strokeWidth={2.5} />
+        </div>
+
         {/* Results column */}
         <div className="analytics-output">
           {/* Loading Spinner (delayed) */}
@@ -993,59 +1127,38 @@ export default function AnalyticsPanel({ tabId, hideHeader = false }: AnalyticsP
             </div>
           )}
           
-          {/* Results */}
-          {results && results.success && results.result?.data && (
-            <div className="analytics-section analytics-results">
-              <div className="analytics-section-header">
-                <span className="analytics-section-label">Results</span>
-                {results.result?.analysis_name && (
-                  <span className="analytics-section-subtitle">{results.result.analysis_name}{analysisTitleSuffix}</span>
-                )}
-                <div style={{ marginLeft: 'auto', display: 'flex', gap: 4 }}>
-                  <button
-                    title="Draw on canvas — click then drag a rectangle on the canvas"
-                    style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 2, color: '#6b7280', display: 'flex', alignItems: 'center' }}
-                    onClick={() => {
-                      window.dispatchEvent(new CustomEvent('dagnet:pinAnalysisToCanvas', {
-                        detail: {
-                          objectType: 'canvas-analysis',
-                          chartKind: results.result?.semantics?.chart?.recommended,
-                          recipe: { analysis: { analysis_type: selectedAnalysisId, analytics_dsl: queryDSL || undefined } },
-                          analysisResult: results.result,
-                          analysisTypeOverridden: true,
-                          viewMode: 'chart',
-                        },
-                      }));
-                    }}
-                  >
-                    <PinIcon size={14} />
-                  </button>
-                </div>
-              </div>
-              <div
-                style={{ padding: '8px 8px 0 8px', position: 'relative', cursor: 'grab' }}
-                draggable
-                onDragStart={(e) => {
-                  const payload = {
-                    type: 'dagnet-drag',
-                    objectType: 'canvas-analysis',
-                    chartKind: results.result?.semantics?.chart?.recommended,
-                    recipe: { analysis: { analysis_type: selectedAnalysisId, analytics_dsl: queryDSL || undefined } },
-                    analysisResult: results.result,
-                    analysisTypeOverridden: true,
-                    viewMode: 'chart',
-                  };
-                  e.dataTransfer.setData('application/json', JSON.stringify(payload));
-                  e.dataTransfer.effectAllowed = 'copy';
-                  const target = e.currentTarget as HTMLElement;
-                  if (target) {
-                    e.dataTransfer.setDragImage(target, target.offsetWidth / 2, 20);
-                  }
+          {/* Results — each expression is independently draggable to canvas */}
+          {results && results.success && results.result?.data && (<>
+
+            {/* Chart expression */}
+            <ExpressionSection
+                viewMode="chart"
+                label="Chart"
+                collapsed={chartCollapsed}
+                onToggle={() => setUserToggles(t => ({ ...t, chart: !chartCollapsed }))}
+                dragPayload={{
+                  type: 'dagnet-drag',
+                  objectType: 'canvas-analysis',
+                  chartKind: results.result?.semantics?.chart?.recommended,
+                  recipe: { analysis: { analysis_type: selectedAnalysisId, analytics_dsl: queryDSL || undefined } },
+                  analysisResult: results.result,
+                  analysisTypeOverridden: true,
+                  viewMode: 'chart',
                 }}
+                onPin={() => {
+                  window.dispatchEvent(new CustomEvent('dagnet:pinAnalysisToCanvas', {
+                    detail: {
+                      objectType: 'canvas-analysis',
+                      chartKind: results.result?.semantics?.chart?.recommended,
+                      recipe: { analysis: { analysis_type: selectedAnalysisId, analytics_dsl: queryDSL || undefined } },
+                      analysisResult: results.result,
+                      analysisTypeOverridden: true,
+                      viewMode: 'chart',
+                    },
+                  }));
+                }}
+                onOpenAsTab={() => handleOpenAsTab('chart')}
               >
-                <div style={{ position: 'absolute', top: 12, right: 12, zIndex: 1, color: '#9ca3af', pointerEvents: 'none' }}>
-                  <GripVertical size={14} />
-                </div>
                 <AnalysisChartContainer
                   result={results.result}
                   visibleScenarioIds={orderedVisibleScenarios}
@@ -1057,7 +1170,7 @@ export default function AnalyticsPanel({ tabId, hideHeader = false }: AnalyticsP
                     return m;
                   })()}
                   height={results.result?.semantics?.chart?.recommended === 'bridge' ? 280 : 420}
-                  compactControls={true}
+                  chartContext="tab"
                   scenarioDslSubtitleById={scenarioDslSubtitleByIdObject}
                   source={{
                     parent_tab_id: tabId,
@@ -1065,73 +1178,119 @@ export default function AnalyticsPanel({ tabId, hideHeader = false }: AnalyticsP
                     query_dsl: snapshotChartDsl || results.query_dsl,
                     analysis_type: results.result.analysis_type,
                   }}
+                  onOpenAsTab={() => handleOpenAsTab('chart')}
+                  onDumpDebug={() => handleDumpDebug('chart')}
                 />
-              </div>
-              <div
-                style={{ position: 'relative', cursor: 'grab' }}
-                draggable
-                onDragStart={(e) => {
-                  const payload = {
-                    type: 'dagnet-drag',
-                    objectType: 'canvas-analysis',
-                    chartKind: results.result?.semantics?.chart?.recommended,
-                    recipe: { analysis: { analysis_type: selectedAnalysisId, analytics_dsl: queryDSL || undefined } },
-                    analysisResult: results.result,
-                    analysisTypeOverridden: true,
-                    viewMode: 'cards',
-                  };
-                  e.dataTransfer.setData('application/json', JSON.stringify(payload));
-                  e.dataTransfer.effectAllowed = 'copy';
-                  const target = e.currentTarget as HTMLElement;
-                  if (target) {
-                    e.dataTransfer.setDragImage(target, target.offsetWidth / 2, 20);
-                  }
+            </ExpressionSection>
+
+            {/* Cards expression */}
+            <ExpressionSection
+                viewMode="cards"
+                label="Cards"
+                collapsed={cardsCollapsed}
+                onToggle={() => setUserToggles(t => ({ ...t, cards: !cardsCollapsed }))}
+                dragPayload={{
+                  type: 'dagnet-drag',
+                  objectType: 'canvas-analysis',
+                  chartKind: results.result?.semantics?.chart?.recommended,
+                  recipe: { analysis: { analysis_type: selectedAnalysisId, analytics_dsl: queryDSL || undefined } },
+                  analysisResult: results.result,
+                  analysisTypeOverridden: true,
+                  viewMode: 'cards',
                 }}
+                onPin={() => {
+                  window.dispatchEvent(new CustomEvent('dagnet:pinAnalysisToCanvas', {
+                    detail: {
+                      objectType: 'canvas-analysis',
+                      chartKind: results.result?.semantics?.chart?.recommended,
+                      recipe: { analysis: { analysis_type: selectedAnalysisId, analytics_dsl: queryDSL || undefined } },
+                      analysisResult: results.result,
+                      analysisTypeOverridden: true,
+                      viewMode: 'cards',
+                    },
+                  }));
+                }}
+                onOpenAsTab={() => handleOpenAsTab('cards')}
+                toolbar={
+                  <ExpressionToolbarTray
+                    viewMode="cards"
+                    result={results.result}
+                    display={cardsDisplay}
+                    onDisplayChange={(k, v) => { if (typeof k === 'string') updateCardsDisplay(k, v); }}
+                    onDumpDebug={() => handleDumpDebug('cards')}
+                  />
+                }
               >
-                <div style={{ position: 'absolute', top: 8, right: 8, zIndex: 1, color: '#9ca3af', pointerEvents: 'none' }}>
-                  <GripVertical size={14} />
+                <AnalysisResultCards
+                  result={results.result}
+                  scenarioDslSubtitleById={scenarioDslSubtitleByIdObject}
+                  fontSize={resolveDisplaySetting(cardsDisplay, { key: 'font_size', defaultValue: 10 } as any)}
+                  collapsedCards={resolveDisplaySetting(cardsDisplay, { key: 'cards_collapsed', defaultValue: [] } as any) as string[]}
+                  onCollapsedCardsChange={(collapsed) => updateCardsDisplay('cards_collapsed', collapsed)}
+                />
+            </ExpressionSection>
+
+            {/* Table expression */}
+            <ExpressionSection
+                viewMode="table"
+                label="Table"
+
+                collapsed={tableCollapsed}
+                onToggle={() => setUserToggles(t => ({ ...t, table: !tableCollapsed }))}
+                dragPayload={{
+                  type: 'dagnet-drag',
+                  objectType: 'canvas-analysis',
+                  chartKind: results.result?.semantics?.chart?.recommended,
+                  recipe: { analysis: { analysis_type: selectedAnalysisId, analytics_dsl: queryDSL || undefined } },
+                  analysisResult: results.result,
+                  analysisTypeOverridden: true,
+                  viewMode: 'table',
+                }}
+                onPin={() => {
+                  window.dispatchEvent(new CustomEvent('dagnet:pinAnalysisToCanvas', {
+                    detail: {
+                      objectType: 'canvas-analysis',
+                      chartKind: results.result?.semantics?.chart?.recommended,
+                      recipe: { analysis: { analysis_type: selectedAnalysisId, analytics_dsl: queryDSL || undefined } },
+                      analysisResult: results.result,
+                      analysisTypeOverridden: true,
+                      viewMode: 'table',
+                    },
+                  }));
+                }}
+                onOpenAsTab={() => handleOpenAsTab('table')}
+                toolbar={
+                  <ExpressionToolbarTray
+                    viewMode="table"
+                    result={results.result}
+                    display={tableDisplay}
+                    onDisplayChange={(k, v) => { if (typeof k === 'string') updateTableDisplay(k, v); }}
+                    onDumpDebug={() => handleDumpDebug('table')}
+                  />
+                }
+              >
+                <div style={{ height: 320 }}>
+                  <AnalysisResultTable
+                    result={results.result}
+                    fontSize={resolveDisplaySetting(tableDisplay, { key: 'font_size', defaultValue: 10 } as any)}
+                    striped={resolveDisplaySetting(tableDisplay, { key: 'table_striped', defaultValue: true } as any) as boolean}
+                    sortColumn={resolveDisplaySetting(tableDisplay, { key: 'table_sort_column', defaultValue: '' } as any) as string || undefined}
+                    sortDirection={resolveDisplaySetting(tableDisplay, { key: 'table_sort_direction', defaultValue: 'asc' } as any) as 'asc' | 'desc'}
+                    onSortChange={(col, dir) => { updateTableDisplay('table_sort_column', col); updateTableDisplay('table_sort_direction', dir); }}
+                    hiddenColumns={resolveDisplaySetting(tableDisplay, { key: 'table_hidden_columns', defaultValue: [] } as any) as string[]}
+                    onHiddenColumnsChange={(h) => updateTableDisplay('table_hidden_columns', h)}
+                    columnOrder={resolveDisplaySetting(tableDisplay, { key: 'table_column_order', defaultValue: [] } as any) as string[]}
+                    onColumnOrderChange={(o) => updateTableDisplay('table_column_order', o)}
+                    columnWidths={resolveDisplaySetting(tableDisplay, { key: 'table_column_widths', defaultValue: '' } as any) as string || undefined}
+                    onColumnWidthsChange={(w) => updateTableDisplay('table_column_widths', w)}
+                  />
                 </div>
-                <AnalysisResultCards result={results.result} scenarioDslSubtitleById={scenarioDslSubtitleByIdObject} />
-              </div>
-            </div>
-          )}
-          
-          {/* Fallback: show raw data if we have results but couldn't render cards */}
-          {results && results.success && results.result?.data && !results.result?.semantics?.dimensions && (
-            <div className="analytics-section analytics-results">
-              <div className="analytics-section-label">Results (Raw)</div>
-              <div className="analytics-cards-container">
-                <div className="analytics-card">
-                  <div className="analytics-card-header">
-                    <span className="analytics-card-title">
-                      {(results.result.analysis_name || 'Analysis Results')}{analysisTitleSuffix}
-                    </span>
-                  </div>
-                  <div className="analytics-card-content">
-                    <pre style={{ fontSize: '10px', margin: 0, whiteSpace: 'pre-wrap' }}>
-                      {JSON.stringify(results.result.data, null, 2)}
-                    </pre>
-                  </div>
-                </div>
-              </div>
-            </div>
-          )}
+            </ExpressionSection>
+
+          </>)}
         </div>
         
-        {/* Results JSON - grid positions this */}
-        {results && results.success && formattedResult && (
-          <div className="analytics-debug-section">
-            <CollapsibleSection 
-              title="Results JSON"
-              defaultOpen={false}
-              icon={Code}
-            >
-              <pre className="analytics-json analytics-debug-json">
-                {formattedResult}
-              </pre>
-            </CollapsibleSection>
-          </div>
-        )}
+        {/* Debug JSON — use "Dump debug JSON" from context menu for full diagnostics */}
       </div>
 
       {/* Amplitude Bridge install modal */}

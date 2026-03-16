@@ -1208,6 +1208,24 @@ export async function installShareLiveStubs(page: Page, state: ShareLiveStubStat
       });
     }
 
+    if (url.endsWith('/api/runner/available-analyses')) {
+      inc(state, 'compute:available-analyses');
+      return route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          analyses: [
+            { id: 'graph_overview', name: 'Graph Overview', description: 'Overview of the graph', is_primary: true },
+            { id: 'analysis_funnel', name: 'Funnel', description: 'Funnel analysis', is_primary: false },
+            { id: 'analysis_bridge', name: 'Bridge', description: 'Bridge analysis', is_primary: false },
+            { id: 'bridge_view', name: 'Bridge View', description: 'Bridge view analysis', is_primary: false },
+            { id: 'daily_conversions', name: 'Daily Conversions', description: 'Daily conversions analysis', is_primary: false },
+            { id: 'cohort_maturity', name: 'Cohort Maturity', description: 'Cohort maturity analysis', is_primary: false },
+          ],
+        }),
+      });
+    }
+
     if (url.endsWith('/api/runner/analyze')) {
       inc(state, 'compute:analyze');
       inc(state, `compute:analyze:${state.version}`);

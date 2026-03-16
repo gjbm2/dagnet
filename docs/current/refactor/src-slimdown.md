@@ -1,20 +1,31 @@
 ## Src Slimdown Plan (Large File Modularisation)
 
-**Created:** 15-Dec-25  
-**Last reviewed:** 14-Jan-26  
-**Status:** Ready for implementation (structural refactor only; no intended behavioural changes)
+**Created:** 15-Dec-25
+**Last reviewed:** 13-Mar-26
+**Status:** In progress — Target 2 UM-PR1–PR3 completed 16-Mar-26 (Target 1 completed 13-Mar-26)
 
 ---
 
 ### Purpose
 
-Several files under `graph-editor/src/` remain too large and mix multiple responsibilities. This plan defines a safe, test-guided approach to split those files into smaller, navigable modules **without creating duplicate code paths** and while preserving DagNet’s architectural constraints (services own logic; UI owns composition).
+Several files under `graph-editor/src/` remain too large and mix multiple responsibilities. This plan defines a safe, test-guided approach to split those files into smaller, navigable modules **without creating duplicate code paths** and while preserving DagNet's architectural constraints (services own logic; UI owns composition).
 
-This document is intended to be the **single source of truth** for the slimdown work. Earlier refactor proposals for the same surface area have been archived under `docs/archive/refactor/` (see “Related documents”).
+This document is intended to be the **single source of truth** for the slimdown work. Earlier refactor proposals for the same surface area have been archived under `docs/archive/refactor/` (see "Related documents").
 
 ---
 
-### Scope (What This Plan Is / Isn’t)
+### Revision History
+
+- **15-Dec-25**: Initial plan created.
+- **14-Jan-26**: Up-front decisions agreed; programme order and PR sequences defined.
+- **13-Mar-26**: Full re-analysis. All targets re-inventoried (significant growth since Jan). New target added (`analysisEChartsService`). Responsibility clusters re-mapped against current code. Test runlists updated. Programme order revised.
+- **13-Mar-26**: Target 1 (`analysisEChartsService`) completed. 3,378-line god file split into 5 modules + 452-line facade. All 47 tests pass. Committed as `4f7536db` on `slimdown/src-modularisation`, merged to `feature/snapshot-db-phase0`.
+- **16-Mar-26**: Target 2 UM-PR1–PR3 (`UpdateManager.ts`) completed. Clusters A, B, G, H, I, J extracted into 6 modules under `updateManager/`. 5,136-line file reduced to 3,621-line facade + 1,706 lines in modules (5,327 total). All 8 mandated test files pass (169 tests). Full suite green (319 files, 4,215 tests, 0 failures). Isomorphic verification gate passed (no browser imports, no `this` captures, Node.js import test OK). UM-PR4–PR6 remain.
+- **16-Mar-26**: Re-verification of Targets 5 and 6 against current file state. Target 5 (`dataOperationsService`) trivial drift (+13 lines, 10,346 actual). Target 6 (`GraphCanvas`) significant drift (+199 lines, 7,134 actual): new `GraphIssuesIndicatorOverlay` sub-component (~140 lines), sync engine grew to ~1,786 lines, creation tools grew to ~796 lines, edge geometry grew to ~440 lines. Cluster line counts updated. GC-PR0 added for overlay extraction.
+
+---
+
+### Scope (What This Plan Is / Isn't)
 
 - **In scope**
   - Structural extraction and file modularisation
@@ -22,11 +33,11 @@ This document is intended to be the **single source of truth** for the slimdown 
   - Deleting clearly-dead code only when it is obviously unused and protected by existing tests
 - **Out of scope (unless explicitly approved later)**
   - Changes to caching semantics, query semantics, persistence formats, or data shape
-  - “While we’re here” feature work or large behavioural clean-ups
+  - "While we're here" feature work or large behavioural clean-ups
 
 ---
 
-### Goals (What “Good” Looks Like)
+### Goals (What "Good" Looks Like)
 
 - **Maintainability**: Each module has a single, clearly named responsibility and is small enough to be navigable.
 - **Stable public surface**: Call sites keep importing from the same existing file paths unless there is an explicit, agreed migration.
@@ -39,55 +50,41 @@ This document is intended to be the **single source of truth** for the slimdown 
 ### Non‑Negotiables (Repo Rules to Preserve)
 
 - **No logic in UI/menu files**: UI components and menus remain access points only; business logic stays in services/hooks.
-- **IndexedDB is source of truth for git/data ops**: Avoid introducing new in-memory “truths” while moving code around.
+- **IndexedDB is source of truth for git/data ops**: Avoid introducing new in-memory "truths" while moving code around.
 - **Session logging**: External/data operations must keep `sessionLogService` coverage; do not lose log events during extraction.
 - **UK date format**: Internal/UI/logging stays `d-MMM-yy` unless at an external API boundary.
-- **Minimise surface area**: Avoid temporary compatibility shims and parallel entry points; keep one “canonical” import per domain.
+- **Minimise surface area**: Avoid temporary compatibility shims and parallel entry points; keep one "canonical" import per domain.
 
 ---
 
-### Current Inventory (as of 14-Jan-26)
+### Current Inventory (as of 16-Mar-26)
 
-Primary targets (current line counts):
+Primary targets (current line counts, with delta from 14-Jan-26 plan):
 
 - **Services**
-  - `graph-editor/src/services/dataOperationsService.ts` (~8,874)
-  - `graph-editor/src/services/UpdateManager.ts` (~4,915)
-  - `graph-editor/src/services/statisticalEnhancementService.ts` (~3,106)
-  - `graph-editor/src/services/integrityCheckService.ts` (~3,072)
+  - `graph-editor/src/services/dataOperationsService.ts` — **10,346** (+1,472 / +17%)
+  - `graph-editor/src/services/UpdateManager.ts` — **5,136** (+221 / +4%)
+  - `graph-editor/src/services/statisticalEnhancementService.ts` — **3,434** (+328 / +11%)
+  - `graph-editor/src/services/integrityCheckService.ts` — **3,589** (+517 / +17%)
+  - `graph-editor/src/services/analysisEChartsService.ts` — **452** (facade; was 3,378; modularised 13-Mar-26)
 - **UI**
-  - `graph-editor/src/components/GraphCanvas.tsx` (~5,500)
-  - `graph-editor/src/components/edges/ConversionEdge.tsx` (~3,092)
-  - `graph-editor/src/components/PropertiesPanel.tsx` (~2,818)
+  - `graph-editor/src/components/GraphCanvas.tsx` — **7,134** (+1,634 / +30%)
+  - `graph-editor/src/components/PropertiesPanel.tsx` — **3,667** (+849 / +30%)
+  - `graph-editor/src/components/edges/ConversionEdge.tsx` — **2,955** (−137 / −4%)
 
 Secondary candidates (only after the above are stable):
 
-- `graph-editor/src/contexts/TabContext.tsx` (~2,715)
-- `graph-editor/src/components/editors/GraphEditor.tsx` (~2,244)
-- `graph-editor/src/components/QueryExpressionEditor.tsx` (~2,132)
+- `graph-editor/src/contexts/TabContext.tsx` — **3,043** (+328 / +12%)
+- `graph-editor/src/components/editors/GraphEditor.tsx` — **2,451** (+207 / +9%)
+- `graph-editor/src/components/QueryExpressionEditor.tsx` — **2,318** (+186 / +9%)
+
+**Total primary target surface area: ~36,501 lines** (down from ~39,427 after Target 1 completion; originally ~30,469 in Jan).
 
 ---
 
-### Key Invariants to Preserve (Newer / Easy to Break)
+### Up-Front Decisions (Unchanged from 14-Jan-26 Unless Noted)
 
-These couplings exist today and must not be altered accidentally during extraction:
-
-- **Contexts and slice semantics**
-  - Slice/context/window behaviour flows through DSL and the slice-aware services (for example `sliceIsolation`, `querySignatureService`, `contextRegistry`).
-  - Signature mechanisms are used for integrity/staleness signalling; do not accidentally reintroduce signature-as-indexing patterns.
-- **Date format**
-  - UK date format (`d-MMM-yy`) is expected internally; ISO is for external API boundaries only.
-  - Do not change date comparison/normalisation behaviours while moving code (move first; change later only with explicit approval).
-- **Single-path behaviour**
-  - Avoid “special” code paths for auto-aggregation vs manual fetch, scenario overlays vs current layer, or menu vs toolbar actions. If a single path exists today, keep it single.
-
----
-
-### Up-Front Decisions (So Implementation Can Be Procedural)
-
-This section enumerates the areas where subtle judgement is typically required during large-file modularisation. The goal is to make these decisions **once, up front**, so the implementation work can be executed as a mostly mechanical sequence of safe extractions.
-
-**Decision status:** Agreed (14-Jan-26)
+All 8 decisions from the Jan review remain in force. They are reproduced here with amendments marked.
 
 **Decision 1 — Behavioural freeze (what we will not change during slimdown)**
 
@@ -98,35 +95,20 @@ During the slimdown phases, we treat the following as **frozen semantics**:
 - UK date handling behaviour (normalisation rules, boundary conversion, comparison semantics)
 - Override gating, permission-flag propagation, and rebalancing triggers
 - Session log event coverage and event identity (event names/categories/shape)
-- “Single code path” guarantees (do not introduce alternate pathways during extraction)
+- "Single code path" guarantees (do not introduce alternate pathways during extraction)
+- **[ADDED Mar-26]** Snapshot DB read/write semantics (asat() routing, dense row construction, signature-based filtering)
+- **[ADDED Mar-26]** Forecasting blend logic (`computeBlendedMean` single path), evidence/forecast scalar computation
+- **[ADDED Mar-26]** Fenton–Wilkinson path horizon estimation and cohort-mode path-anchored completeness
+- **[ADDED Mar-26]** Canvas analysis result caching and chart boot tracing semantics
+- **[ADDED Mar-26]** Atomic decoration restoration (pan/zoom bead suppression and `flushSync` restore)
 
 If a proposed extraction *forces* a change to any of the above, the correct response is to **stop** and resolve that issue explicitly before proceeding.
 
-**Decision 2 — Public surface and entrypoints**
+**Decision 2 — Public surface and entrypoints** — Unchanged.
 
-To minimise churn and avoid accidental “parallel entrypoints”:
+**Decision 3 — Standard extraction template** — Unchanged.
 
-- The existing file paths remain the only public entrypoints during slimdown.
-- We do not add new public barrel entrypoints (for example `services/foo/index.ts`) as part of slimdown.
-- We do not add “temporary compatibility shims” or alias exports; if something must change, do it deliberately and in one sweep.
-
-**Decision 3 — A standard extraction template (repeatable per PR)**
-
-Each slimdown PR should follow the same procedural shape:
-
-- Identify one coherent cluster to extract (types/constants, pure helpers, or one subsystem).
-- Extract into an internal directory adjacent to the facade file.
-- Keep dependency direction one-way (facade imports module; module does not import facade).
-- Keep runtime order stable (no re-ordering “for tidiness”).
-- Run the agreed narrow set of tests for that target (by explicit file paths).
-
-**Decision 4 — Module-boundary rubric (how we choose seams)**
-
-To avoid circular dependencies and “grab-bag” modules:
-
-- A module should tell one story (for example “Get-from-file”, “Put-to-file”, “Mapping config”, “Rebalance logic”, “Sankey layout”).
-- Modules should not cross-import siblings; if two modules need shared types/helpers, factor a tiny shared module.
-- Prefer extracting pure helpers first; avoid moving orchestration until the end.
+**Decision 4 — Module-boundary rubric** — Unchanged.
 
 **Decision 5 — Explicit stop-list (areas requiring extra care / review)**
 
@@ -137,127 +119,283 @@ Before extracting code that touches any of these areas, pause and explicitly con
 - `UpdateManager` rebalancing and override gating
 - `dataOperationsService` slice/DSL flows (`targetSlice`, `currentDSL`) and signature warnings
 - External→file append + file→graph update orchestration (versioned fetch)
-- Fetch/refetch policy boundaries and “bust cache” semantics
+- Fetch/refetch policy boundaries and "bust cache" semantics
 - `GraphCanvas` / `ConversionEdge` scenario overlay rules (selection, suppression during pan/drag) and what-if propagation
+- **[ADDED Mar-26]** `dataOperationsService.getFromSourceDirect()` closure state (DAS runner, fetch windows, time-series accumulator) — this 900-line closure is the highest-risk extraction target in the codebase
+- **[ADDED Mar-26]** `statisticalEnhancementService.enhanceGraphLatencies()` DP state (nodePathT95, edgeFlowMass, nodeMedianLagPrior, nodePathMu/Sigma) — 1,454-line orchestrator
+- **[ADDED Mar-26]** `integrityCheckService.validateGraph()` reference tracking sets (referencedParams etc.) — mutated during iteration, consumed by orphan detection
+- **[ADDED Mar-26]** `GraphCanvas` Graph↔ReactFlow sync (fast path vs slow path, `lastSyncedGraphRef`, `isSyncingRef`) — ~1,300 lines of bidirectional sync
+- **[ADDED Mar-26]** `TabContext` FileRegistry dual-ID handling (prefixed + unprefixed IDB records)
 
-**Decision 6 — Deletion policy (avoid accidental semantic change)**
+**Decision 6 — Deletion policy** — Unchanged.
 
-- Default is **no deletion** during Phase 1–2; prefer move-and-isolate.
-- Deletion is allowed only in the final clean-up phase, and only for code that is obviously unused and protected by existing tests.
+**Decision 7 — Performance guardrails** — Unchanged.
 
-**Decision 7 — Performance guardrails (UI refactors)**
-
-- Avoid introducing new React state layers or broad dependency-array changes as part of extraction.
-- Avoid changing prop shapes that would increase render frequency unless there is a measured reason (slimdown is not a performance project).
-
-**Decision 8 — Tests and authorisation gates**
-
-- We run tests by explicit file path only (no suite-wide scanning).
-- If a refactor step requires modifying an existing test file, obtain explicit approval before doing so.
-- If tests fail due to brittle coupling, prefer adjusting the refactor to preserve behaviour over weakening test expectations.
+**Decision 8 — Tests and authorisation gates** — Unchanged.
 
 ---
 
-### Implementation Kick-Off Checklist (First PR)
+### Key Invariants to Preserve (Newer / Easy to Break)
 
-Before starting the first code-change PR under this plan:
+These couplings exist today and must not be altered accidentally during extraction:
 
-- Confirm no other active branches/PRs are refactoring the same “mega files”.
-- Confirm the first target in the fixed programme order and pick the first coherent extractable cluster (types/constants or pure helpers).
-- Document the exact test file paths that will be run for that target in the PR description (Core always; Safety net only at target gates).
-- Confirm whether any test-file edits might be required; if yes, obtain explicit approval first.
+- **Contexts and slice semantics** — Slice/context/window behaviour flows through DSL and the slice-aware services. Signature mechanisms are used for integrity/staleness signalling.
+- **Date format** — UK date format (`d-MMM-yy`) is expected internally; ISO is for external API boundaries only.
+- **Single-path behaviour** — Avoid "special" code paths for auto-aggregation vs manual fetch, scenario overlays vs current layer, or menu vs toolbar actions.
+- **[ADDED Mar-26] Snapshot DB + asat()** — Signature-based row filtering, dense row construction, virtual snapshot queries. These paths exist in both `dataOperationsService` (getParameterFromFile asat fork, getFromSourceDirect asat fork, snapshot write after DAS fetch) and `statisticalEnhancementService` (path-anchored completeness). Do not split them in ways that break the signature→DB→timeseries pipeline.
+- **[ADDED Mar-26] Forecasting pipeline** — `computeBlendedMean()` is the single source of truth for blending evidence + forecast. It is called from `enhanceGraphLatencies()`. The evidence/forecast scalar computation in `dataOperationsService.addEvidenceAndForecastScalars()` feeds this. These must remain a single path.
+- **[ADDED Mar-26] Canvas object lifecycle** — Post-its, containers, and canvas analyses follow a consistent create/update/delete/z-order pattern in GraphCanvas. Do not extract them into separate subsystems that diverge.
 
 ---
 
-### Single Implementation Plan (Whole Programme)
+### Strategy: How We Split Without Breaking Things
 
-This section is the **single implementation plan** for the entire slimdown programme. Once agreed, the execution should be essentially procedural: follow the order, apply the standard extraction template, run the fixed test set, and stop only at the explicit stop/gate points.
+Unchanged from the Jan plan. Summarised:
 
-#### Programme Principles (Execution Discipline)
+- Keep the existing file path as the facade (public entry point).
+- Extract into sibling modules under a dedicated internal directory.
+- Extract by dependency direction: pure utilities/types first, then domain logic, then orchestration.
+- Prefer one-way module dependencies; create small shared modules rather than cycles.
+- Avoid re-ordering side effects.
 
-- Each PR extracts **one coherent cluster** only.
-- Each PR must be reversible (small diff, no broad reformatting).
-- Each PR must keep the existing public entrypoints stable (Decision 2).
-- Each PR runs only the agreed relevant tests for that target (Decision 8), following the Core/Safety net policy below.
-- If any stop-list area is touched, the PR must include an explicit “invariants check” note in its description.
+---
 
-#### Test Policy (Core vs Safety Net; Offline by Default)
+### Programme Order (Revised 13-Mar-26)
 
-To keep execution procedural and low-friction:
+Execute in this order. Rationale for changes from Jan noted in brackets.
 
-- **Core tests** run on **every PR** for that target.
-- **Safety net tests** run at the **target gates** (for example UM-PR2/UM-PR4/UM-PR6) and at the end of the target.
-- **Offline by default**: tests in the standard runlists must not require external credentials, real network calls, or human interaction.
+1. `analysisEChartsService.ts` — **NEW TARGET, moved to #1** [cleanest seams; low coupling between clusters; excellent first-win to build confidence]
+2. `UpdateManager.ts` [unchanged priority; moderate growth, well-understood clusters]
+3. `integrityCheckService.ts` [moved up from #4; new check categories are self-contained; validateGraph() monolith is a clear extraction target]
+4. `statisticalEnhancementService.ts` [unchanged priority; topology helpers extractable, but 1,454-line orchestrator is high risk]
+5. `dataOperationsService.ts` [moved from #2 to #5; grew by 1,459 lines; 900-line closure makes extraction hardest; benefits from earlier targets reducing cognitive load]
+6. `GraphCanvas.tsx` [moved from #5 to #6; grew 26% but many clusters are already in canvas/ directory]
+7. `PropertiesPanel.tsx` [unchanged priority; grew 30% but CanvasAnalysisPropertiesSection is already self-contained]
+8. `ConversionEdge.tsx` [unchanged; shrank slightly; existing helpers already extracted]
+9. Secondary candidates (only after the above are stable)
 
-Explicitly excluded from routine slimdown PRs unless deliberately requested:
+---
 
-- Playwright specs under `graph-editor/e2e/`
-- “Real API” tests (for example files under `graph-editor/tests/phase4-e2e/` such as `amplitude-real-api.test.ts`)
+### Work Breakdown by Target (Procedural PR Sequence)
 
-#### Programme Order (Fixed)
+For each target below, follow the same internal sequencing per Decision 3.
 
-Execute in this order, because it reduces risk and avoids rework:
+---
 
-1. `graph-editor/src/services/UpdateManager.ts`
-2. `graph-editor/src/services/dataOperationsService.ts`
-3. `graph-editor/src/services/statisticalEnhancementService.ts`
-4. `graph-editor/src/services/integrityCheckService.ts`
-5. `graph-editor/src/components/GraphCanvas.tsx`
-6. `graph-editor/src/components/PropertiesPanel.tsx`
-7. `graph-editor/src/components/edges/ConversionEdge.tsx`
-8. Secondary candidates (only after the above are stable)
+#### Target 1 — `analysisEChartsService.ts` (3,378 → 452 lines) — COMPLETED 13-Mar-26
 
-#### Work Breakdown by Target (Procedural PR Sequence)
+**Current clusters:**
+- A: Theming & common display settings (~220 lines)
+- B: Dimension & metadata helpers (~150 lines)
+- C: Funnel builders (~550 lines)
+- D: Bridge/waterfall builder (~650 lines)
+- E: Snapshot-based builders — histogram, daily conversions, lag fit (~650 lines)
+- F: Cohort maturity builder (~330 lines)
+- G: Comparison builders with shared state helper (~620 lines)
+- H: Chart option dispatcher & post-processing (~400 lines)
 
-For each target file below, follow the same internal sequencing. The intent is to avoid “where do we start?” decisions during execution.
+**Extraction directory:** `graph-editor/src/services/analysisECharts/`
 
-##### Target A — `UpdateManager.ts`
+**PR sequence:**
 
-PR sequence:
+- **AEC-PR1 (theming + metadata helpers)**: Extract Clusters A+B into `analysisECharts/echartsCommon.ts`. These are the highest-traffic internal helpers (called by every builder). Pure functions, zero risk.
+- **AEC-PR2 (funnel builders)**: Extract Cluster C into `analysisECharts/funnelBuilders.ts`. Self-contained; depends only on common helpers.
+- **AEC-PR3 (bridge builder)**: Extract Cluster D into `analysisECharts/bridgeBuilder.ts`. Self-contained.
+- **AEC-PR4 (snapshot builders)**: Extract Cluster E into `analysisECharts/snapshotBuilders.ts`. Histogram, daily conversions, lag fit grouped by data provenance.
+- **AEC-PR5 (cohort maturity + comparison builders)**: Extract Clusters F+G into `analysisECharts/cohortMaturityBuilder.ts` and `analysisECharts/comparisonBuilders.ts`. Comparison builders share `buildComparisonChartState()` — keep it with them.
+- **AEC-PR6 (facade tidy-up)**: Reduce `analysisEChartsService.ts` to dispatcher (Cluster H) + re-exports.
 
-- **UM-PR1 (types + small pure helpers)**: Extract public types/contracts and clearly-pure helpers into `graph-editor/src/services/updateManager/`.
-- **UM-PR2 (mapping configuration declaration)**: Extract mapping table declarations and related data-only configuration into `graph-editor/src/services/updateManager/`.
-- **UM-PR3 (mapping application engine)**: Extract the apply/engine routines (override gating, transforms, change tracking) into `graph-editor/src/services/updateManager/`.
-- **UM-PR4 (graph-specific behaviours)**: Extract rebalancing, topology lookups, and evidence/window/date handling into `graph-editor/src/services/updateManager/`.
-- **UM-PR5 (audit + logging helpers)**: Extract audit record construction and logging helpers into `graph-editor/src/services/updateManager/`.
-- **UM-PR6 (facade tidy-up)**: Reduce `UpdateManager.ts` to a thin facade that composes the extracted modules and preserves initialisation order.
+**Stop/gates:** After AEC-PR2: confirm chart output is pixel-identical (run visual diff or manual spot-check).
 
-Stop/gates:
+**Core tests:**
+- `graph-editor/src/services/__tests__/analysisEChartsService.bridge.test.ts`
+- `graph-editor/src/services/__tests__/analysisEChartsService.dispatch.test.ts`
+- `graph-editor/src/services/__tests__/analysisEChartsService.funnel.test.ts`
+- `graph-editor/src/services/__tests__/analysisEChartsService.funnelBar.stepChange.test.ts`
+- `graph-editor/src/services/__tests__/analysisEChartsService.funnelBar.test.ts`
+- `graph-editor/src/services/__tests__/analysisEChartsService.funnelBridge.test.ts`
 
+**Safety net tests:**
+- `graph-editor/src/services/__tests__/chartDisplayPlanningService.test.ts`
+- `graph-editor/src/services/__tests__/chartOperationsService.bridgeDslInjection.test.ts`
+
+---
+
+#### Target 2 — `UpdateManager.ts` (5,136 → 3,621 lines after UM-PR1–PR3)
+
+**Current clusters (updated):**
+- A: Types & contracts (~115 lines)
+- B: Rounding utilities (~15 lines)
+- C: Edge parameter locking (~15 lines)
+- D: Edge rebalancing (~170 lines)
+- E: Direct edge probability updates (~210 lines)
+- F: Direction handlers (~230 lines)
+- G: Operation implementations (~400 lines) including core `applyMappings()` engine
+- H: Mapping configuration (~1,200 lines) — 18 configs across 5 directions
+- I: Nested value access utilities (~80 lines)
+- J: Audit trail & logging (~30 lines)
+- K: Conditional probability management (~230 lines)
+- L: Graph mutation operations (delete, rebalance, colour propagation) (~400 lines)
+- M: Copy/paste & bulk operations (~800 lines)
+- N: Graph helper methods (~20 lines)
+
+**Extraction directory:** `graph-editor/src/services/updateManager/`
+
+**PR sequence:**
+
+- **UM-PR1 (types + pure helpers)**: Extract Clusters A, B, I, J into `updateManager/types.ts` (122 lines), `updateManager/roundingUtils.ts` (27 lines), `updateManager/nestedValueAccess.ts` (104 lines), `updateManager/auditLog.ts` (43 lines). **DONE 16-Mar-26** — 169/169 tests pass. `getNestedValue`/`setNestedValue` confirmed stateless.
+- **UM-PR2 (mapping configuration)**: Extract Cluster H into `updateManager/mappingConfigurations.ts` (1,265 lines). Module-level `MAPPING_CONFIGURATIONS` constant replaces class-level lazy-init static cache. Also exports `getMappingKey()`. **DONE 16-Mar-26** — 169/169 tests pass. Mapping init/caching semantics confirmed equivalent (eager-init singleton vs lazy-init static).
+- **UM-PR3 (mapping engine)**: Extract Cluster G (`applyMappings()`) into `updateManager/mappingEngine.ts` (145 lines). Direction handlers remain in `UpdateManager.ts` and call the import. **DONE 16-Mar-26** — 169/169 tests pass. Isomorphic verification gate passed: no browser imports, no `this` captures, Node.js import test OK (applyMappings runs in plain Node with correct results).
+- **UM-PR4 (edge rebalancing + conditional probability)**: Extract Clusters D, E, K into `updateManager/edgeRebalancing.ts` and `updateManager/conditionalProbability.ts`.
+- **UM-PR5 (graph mutations + copy/paste)**: Extract Clusters L, M into `updateManager/graphMutations.ts` and `updateManager/clipboardOperations.ts`.
+- **UM-PR6 (facade tidy-up)**: Reduce `UpdateManager.ts` to direction handlers (Cluster F) + class shell that composes extracted modules.
+
+**Stop/gates:**
 - After UM-PR2: explicitly confirm shared mapping initialisation and caching behaviour is unchanged.
-- After UM-PR4: explicitly confirm evidence/window/date handling semantics remain unchanged.
+- After UM-PR4: explicitly confirm evidence/window/date handling and rebalancing semantics are unchanged.
 
-Core tests (run for every UM PR, unless the PR explicitly does not touch the covered surface area):
-
+**Core tests:**
 - `graph-editor/src/services/UpdateManager.test.ts`
 - `graph-editor/src/services/__tests__/UpdateManager.rebalance.test.ts`
 - `graph-editor/src/services/__tests__/UpdateManager.graphToGraph.test.ts`
 - `graph-editor/src/services/__tests__/updateManager.externalToGraphEvidenceFields.test.ts`
 - `graph-editor/src/services/__tests__/updateManager.updateConditionalProbabilityEvidenceWindow.test.ts`
+- `graph-editor/src/services/__tests__/updateManager.applyBatchLAGValues.pStdevFallback.test.ts` **(NEW)**
 
-Safety net tests (run at UM gates and UM end-state):
-
+**Safety net tests:**
 - `graph-editor/tests/unit/update-manager-uuids.test.ts`
 - `graph-editor/tests/state-sync/multi-source-truth.test.ts`
 
-##### Target B — `dataOperationsService.ts`
+---
 
-PR sequence:
+#### Target 3 — `integrityCheckService.ts` (3,589 lines)
 
-- **DOS-PR1 (types + small pure helpers)**: Extract local options/result types and clearly-pure helpers into `graph-editor/src/services/dataOperations/`.
-- **DOS-PR2 (notifications boundary)**: Extract toast/notification helpers into `graph-editor/src/services/dataOperations/` so other modules can stay UI-agnostic.
-- **DOS-PR3 (get-from-file subsystem)**: Extract “Get from file” orchestration into `graph-editor/src/services/dataOperations/`.
-- **DOS-PR4 (put-to-file subsystem)**: Extract “Put to file” orchestration into `graph-editor/src/services/dataOperations/`.
-- **DOS-PR5 (get-from-source subsystem)**: Extract “Get from source (versioned)” orchestration into `graph-editor/src/services/dataOperations/`.
-- **DOS-PR6 (facade tidy-up)**: Reduce `dataOperationsService.ts` to a thin facade.
+**Current clusters (updated):**
+- A: Entry point & data preparation (~70 lines)
+- B: File ID manipulation & utilities (~100 lines)
+- C: ID format validation (~80 lines)
+- D: Type-specific file validators (~310 lines)
+- E: Graph validation core (~1,020 lines) — **monolith; 29% of file**
+- F: Graph semantic validation (~210 lines) — NEW since Jan
+- G: Drift detection (direct vs versioned) (~180 lines) — NEW since Jan
+- H: Registry/index validation (~170 lines)
+- I: Orphan detection (~60 lines)
+- J: Duplicate detection (~65 lines)
+- K: Cross-graph consistency (~30 lines)
+- L: External system validation — credentials + images (~310 lines)
+- M: Face alignment validation (~230 lines) — NEW since Jan
+- N: Logging & output (~240 lines)
 
-Stop/gates:
+**Extraction directory:** `graph-editor/src/services/integrityCheck/`
 
-- After DOS-PR3: explicitly confirm slice/DSL flows and signature warning behaviour are unchanged.
-- After DOS-PR5: explicitly confirm external→file append + file→graph update orchestration semantics and logging remain unchanged.
+**PR sequence:**
 
-Core tests (run for every DOS PR, unless the PR explicitly does not touch the covered surface area):
+- **ICS-PR1 (types + utilities)**: Extract Clusters B, C, N into `integrityCheck/types.ts`, `integrityCheck/fileIdUtils.ts`, `integrityCheck/reportGenerator.ts`.
+- **ICS-PR2 (file validators)**: Extract Cluster D into `integrityCheck/fileValidators.ts` (parameter, case, node, event, context validators).
+- **ICS-PR3 (graph validation split)**: Split Cluster E into sub-methods within `integrityCheck/graphValidator.ts`: `validateGraphNodes()`, `validateGraphEdges()`, `validateGraphSiblingConstraints()`, `validateGraphTopology()`. Keep reference tracking sets as shared state passed between sub-methods.
+- **ICS-PR4 (semantic + drift + face alignment)**: Extract Clusters F, G, M into `integrityCheck/semanticValidator.ts`, `integrityCheck/driftValidator.ts`, `integrityCheck/faceAlignmentValidator.ts`.
+- **ICS-PR5 (registry + orphan + external)**: Extract Clusters H, I, J, K, L into `integrityCheck/registryValidator.ts`, `integrityCheck/externalValidator.ts`.
+- **ICS-PR6 (facade tidy-up)**: Reduce `integrityCheckService.ts` to orchestrator (Cluster A) that calls extracted validators in sequence.
 
+**Stop/gates:**
+- After ICS-PR3: confirm reference tracking sets are built correctly (no dropped references → orphan false positives).
+- After ICS-PR4: confirm check coverage is unchanged (no dropped checks).
+
+**Core tests:**
+- `graph-editor/src/services/__tests__/integrityCheckService.fileId.test.ts`
+- `graph-editor/src/services/__tests__/integrityCheckService.blankStringEqualsUndefined.test.ts`
+- `graph-editor/src/services/__tests__/integrityCheckService.graphParameterDrift.test.ts`
+- `graph-editor/src/services/__tests__/integrityCheckService.graphCaseDrift.test.ts`
+- `graph-editor/src/services/__tests__/integrityCheckService.conditionalSiblingAlignment.test.ts`
+- `graph-editor/src/services/__tests__/integrityCheckService.semanticEvidenceIssues.test.ts`
+- `graph-editor/src/services/__tests__/integrityCheckService.faceAlignment.test.ts` **(NEW)**
+
+**Safety net tests:**
+- `graph-editor/src/services/__tests__/sampleFilesIntegrity.test.ts`
+
+---
+
+#### Target 4 — `statisticalEnhancementService.ts` (3,434 lines)
+
+**Current clusters (updated):**
+- A: Statistical enhancement plugin system (~335 lines) including `computeBlendedMean()`
+- B: Mathematical utilities — log-normal, Fenton–Wilkinson, recency weighting (~170 lines)
+- C: Completeness calculation with tail constraint (~210 lines)
+- D: Edge latency statistics — `computeEdgeLatencyStats()` (~200 lines)
+- E: Graph topology & active edges — adjacency, path_t95 DP (~370 lines)
+- F: Master batch enhancement — `enhanceGraphLatencies()` (~1,454 lines) — **42% of file, highest-risk cluster**
+- G: Inbound-N forecast population DP (~160 lines)
+- H: Topology sort utilities (~47 lines)
+
+**Extraction directory:** `graph-editor/src/services/statisticalEnhancement/`
+
+**PR sequence:**
+
+- **SES-PR1 (topology + inbound-N)**: Extract Clusters E, G, H into `statisticalEnhancement/graphTopology.ts` and `statisticalEnhancement/inboundN.ts`. These are pure graph algorithms with no LAG-specific coupling.
+- **SES-PR2 (math + completeness)**: Extract Clusters B, C into `statisticalEnhancement/lagMathUtils.ts`. Pure functions; high reuse value.
+- **SES-PR3 (edge stats + enhancement plugin)**: Extract Clusters A, D into `statisticalEnhancement/enhancementPlugins.ts` and `statisticalEnhancement/edgeLatencyStats.ts`.
+- **SES-PR4 (facade tidy-up)**: Reduce the main file to Cluster F (`enhanceGraphLatencies()` orchestrator) + re-exports. Do NOT attempt to split the 1,454-line orchestrator — it contains tightly-coupled DP state that would be dangerous to separate.
+
+**Stop/gates:**
+- After SES-PR2: confirm no changes to numeric output behaviour, rounding, or default assumptions. Run golden test.
+- After SES-PR3: confirm `computeBlendedMean()` single-path guarantee preserved.
+
+**Core tests:**
+- `graph-editor/src/services/__tests__/statisticalEnhancementService.test.ts`
+- `graph-editor/src/services/__tests__/lagDistribution.golden.test.ts`
+- `graph-editor/src/services/__tests__/lagStatsFlow.integration.test.ts`
+- `graph-editor/src/services/__tests__/pathT95Computation.test.ts`
+- `graph-editor/src/services/__tests__/pathT95CompletenessConstraint.test.ts`
+- `graph-editor/src/services/__tests__/pathT95JoinWeightedConstraint.test.ts`
+- `graph-editor/src/services/__tests__/addEvidenceAndForecastScalars.test.ts`
+- `graph-editor/src/services/__tests__/cohortHorizonIntegration.test.ts`
+- `graph-editor/src/services/__tests__/fetchMergeEndToEnd.test.ts`
+- `graph-editor/src/services/__tests__/selectLatencyToApplyForTopoPass.test.ts` **(NEW)**
+- `graph-editor/src/services/__tests__/onset_aggregation.test.ts` **(NEW)**
+- `graph-editor/src/services/__tests__/onset_cohort_excluded.test.ts` **(NEW)**
+- `graph-editor/src/services/__tests__/onset_override_flow.test.ts` **(NEW)**
+- `graph-editor/src/services/__tests__/onset_shifted_completeness.test.ts` **(NEW)**
+
+**Safety net tests:**
+- `graph-editor/src/services/__tests__/cohortEvidenceDebiasing.e2e.test.ts`
+- `graph-editor/src/services/__tests__/windowCohortSemantics.paramPack.e2e.test.ts`
+- `graph-editor/src/services/__tests__/paramPackCsvRunner.csvDriven.tool.test.ts`
+
+---
+
+#### Target 5 — `dataOperationsService.ts` (10,346 lines)
+
+**Current clusters (updated):**
+- A: Batch mode & toast management (~110 lines)
+- B: Logging & formatting helpers (~55 lines)
+- C: Query compilation & DSL processing (~50 lines)
+- D: Query signature computation & validation (~295 lines)
+- E: As-at (asat) historical query support (~570 lines) — NEW since Jan
+- F: File→graph sync (GET paths) — getParameterFromFile, getCaseFromFile, getNodeFromFile (~2,600 lines)
+- G: Graph→file sync (PUT paths) — putParameterToFile, putCaseToFile, putNodeToFile (~830 lines)
+- H: Source data fetching (versioned path) — getFromSource orchestrator (~280 lines)
+- I: Core data fetch — `getFromSourceDirect()` (~4,700 lines) — **45% of file, 900-line closure, highest-risk extraction in the codebase**
+- J: Evidence & forecast scalar computation (~835 lines) — NEW since Jan
+- K: Batch operations (~95 lines)
+- L: Cache & settings UI (~150 lines)
+
+**Extraction directory:** `graph-editor/src/services/dataOperations/`
+
+**PR sequence:**
+
+- **DOS-PR1 (types + small helpers)**: Extract Clusters A, B, C into `dataOperations/batchMode.ts`, `dataOperations/logHelpers.ts`, `dataOperations/queryCompiler.ts`.
+- **DOS-PR2 (signature computation)**: Extract Cluster D into `dataOperations/querySignature.ts`. `computeQuerySignature()` is already a standalone exported function.
+- **DOS-PR3 (asat query support)**: Extract Cluster E into `dataOperations/asatQuerySupport.ts`. Includes `selectQuerySignatureForAsat()`, `convertVirtualSnapshotToTimeSeries()`, `fireAsatWarnings()`, `buildDenseSnapshotRowsForDbWrite()`.
+- **DOS-PR4 (evidence + forecast scalars)**: Extract Cluster J into `dataOperations/evidenceForecastScalars.ts`. `addEvidenceAndForecastScalars()` is already test-exposed.
+- **DOS-PR5 (file↔graph sync)**: Extract Clusters F, G into `dataOperations/fileToGraphSync.ts` and `dataOperations/graphToFileSync.ts`.
+- **DOS-PR6 (cache & settings)**: Extract Cluster L into `dataOperations/cacheManagement.ts`.
+- **DOS-PR7 (facade tidy-up)**: Reduce `dataOperationsService.ts` to Clusters H, I, K (versioned fetch orchestration, core DAS execution, batch operations) + re-exports. Do NOT attempt to split the `getFromSourceDirect()` closure — the state management risk outweighs the readability benefit at this stage.
+
+**Stop/gates:**
+- After DOS-PR3: explicitly confirm asat() routing, signature selection, and snapshot DB write semantics are unchanged.
+- After DOS-PR5: explicitly confirm slice/DSL flows, permission copy modes, and signature warning behaviour are unchanged.
+
+**Core tests:**
 - `graph-editor/src/services/__tests__/dataOperationsService.test.ts`
 - `graph-editor/src/services/__tests__/dataOperationsService.integration.test.ts`
 - `graph-editor/src/services/__tests__/dataOperationsService.incrementalGapPersistence.test.ts`
@@ -268,90 +406,64 @@ Core tests (run for every DOS PR, unless the PR explicitly does not touch the co
 - `graph-editor/src/services/__tests__/dataOperationsService.casePersistedConfigByMode.test.ts`
 - `graph-editor/src/services/__tests__/dataOperationsService.putParameterToFile.metadataOnly.test.ts`
 - `graph-editor/src/services/__tests__/dataOperationsService.putParameterToFile.forceCopyClearsNQuery.test.ts`
+- `graph-editor/src/services/__tests__/dataOperationsService.asatSignatureSelection.test.ts` **(NEW)**
+- `graph-editor/src/services/__tests__/dataOperationsService.asatSliceMatching.test.ts` **(NEW)**
 - `graph-editor/src/services/__tests__/versionedFetch.integration.test.ts`
 - `graph-editor/src/services/__tests__/fetchPolicyIntegration.test.ts`
 - `graph-editor/src/services/__tests__/fetchDataService.test.ts`
 - `graph-editor/src/services/__tests__/fetchDataService.fromFile.permissionsDefault.test.ts`
 - `graph-editor/src/services/__tests__/fetchDataService.conditionalFetchPlanning.test.ts`
+- `graph-editor/src/services/__tests__/addEvidenceAndForecastScalars.test.ts`
 
-Safety net tests (run at DOS gates and DOS end-state):
-
+**Safety net tests:**
 - `graph-editor/tests/pipeline-integrity/simple-query-flow.test.ts`
 - `graph-editor/tests/pipeline-integrity/composite-query-flow.test.ts`
 - `graph-editor/tests/identity/signature-consistency.test.ts`
+- `graph-editor/src/services/__tests__/versionedFetchFlow.e2e.test.ts` **(NEW)**
 
-##### Target C — `statisticalEnhancementService.ts`
+---
 
-PR sequence:
+#### Target 6 — `GraphCanvas.tsx` (7,134 lines)
 
-- **SES-PR1 (types + constants + small helpers)**: Extract pure helpers/constants into `graph-editor/src/services/statisticalEnhancement/`.
-- **SES-PR2 (core algorithms split)**: Group related computation routines into a small number of focused modules (no behavioural changes).
-- **SES-PR3 (facade tidy-up)**: Reduce the main file to orchestration + re-exports.
+**Current clusters (re-verified 16-Mar-26):**
+- GraphIssuesIndicatorOverlay (~140 lines) — NEW; self-contained sub-component with own state, effects, JSX (lines 139–278)
+- Core state management (~273 lines)
+- Edge geometry & bundling — `calculateEdgeOffsets()`, `getEdgeSortKey()` (~440 lines)
+- Edge connection & routing — optimal handles, reroute, reconnect (~345 lines)
+- Node & edge CRUD (~206 lines)
+- Canvas objects CRUD — post-its, containers, canvas analyses (~113 lines)
+- Selection & events (~180 lines)
+- Graph↔ReactFlow sync — fast path + slow path (~1,786 lines) — **largest cluster, highest risk, grew significantly**
+- View mode effects, Sankey sizing, what-if recompute (~400 lines)
+- Creation tools — addNode, addPostit, addContainer, addAnalysis (~796 lines)
+- Copy/paste/drag-drop (~253 lines)
+- Context menus (~120 lines)
+- Edge connection handlers — wouldCreateCycle, onEdgeUpdate, onConnect (~314 lines)
+- Shift+Drag lasso selection (~165 lines)
+- Path highlighting + onSelectionChange (~378 lines)
+- Node drag handlers — onNodeDragStart, onNodeDrag, onNodeDragStop (~170 lines)
+- Pan/zoom & decoration management (~135 lines) — atomic restore
+- Snapshot boot tracing (~90 lines)
+- renderEdges useMemo (~64 lines)
+- JSX render tree (~1,015 lines)
 
-Stop/gates:
+**Extraction directory:** `graph-editor/src/components/canvas/` (existing directory)
 
-- After SES-PR2: confirm no changes to numeric output behaviour, rounding, or default assumptions.
+**PR sequence:**
 
-Core tests:
+- **GC-PR0 (overlay extraction)**: Extract `GraphIssuesIndicatorOverlay` into `canvas/GraphIssuesIndicatorOverlay.tsx`. Self-contained sub-component, zero coupling to CanvasInner state — lowest-risk warm-up.
+- **GC-PR1 (edge geometry)**: Extract edge geometry & bundling into `canvas/edgeGeometry.ts`. Pure computations.
+- **GC-PR2 (layout algorithms)**: Extract view mode effects + Sankey sizing into `canvas/layoutAlgorithms.ts`.
+- **GC-PR3 (canvas object CRUD)**: Extract post-it, container, analysis handlers into `canvas/canvasObjectHandlers.ts`. These follow a consistent pattern and are self-contained.
+- **GC-PR4 (creation tools + copy/paste)**: Extract creation tools and clipboard operations into `canvas/creationTools.ts` and `canvas/clipboardOperations.ts`.
+- **GC-PR5 (context menus + edge connection handlers)**: Extract context menu handlers and edge connection handlers into `canvas/contextMenuHandlers.ts` and `canvas/edgeConnectionHandlers.ts`.
+- **GC-PR6 (facade tidy-up)**: Reduce GraphCanvas to core state, Graph↔ReactFlow sync, selection, path highlighting, node drag, pan/zoom, and JSX render. Do NOT extract the sync engine — it is too tightly coupled to React state and refs (and has grown to ~1,786 lines, reinforcing this decision).
 
-- `graph-editor/src/services/__tests__/statisticalEnhancementService.test.ts`
-- `graph-editor/src/services/__tests__/lagDistribution.golden.test.ts`
-- `graph-editor/src/services/__tests__/lagStatsFlow.integration.test.ts`
-- `graph-editor/src/services/__tests__/pathT95Computation.test.ts`
-- `graph-editor/src/services/__tests__/pathT95CompletenessConstraint.test.ts`
-- `graph-editor/src/services/__tests__/pathT95JoinWeightedConstraint.test.ts`
-- `graph-editor/src/services/__tests__/addEvidenceAndForecastScalars.test.ts`
-- `graph-editor/src/services/__tests__/cohortHorizonIntegration.test.ts`
-- `graph-editor/src/services/__tests__/fetchMergeEndToEnd.test.ts`
-- `graph-editor/src/services/__tests__/paramPackCsvRunner.csvDriven.tool.test.ts`
+**Stop/gates:**
+- After GC-PR2: explicitly confirm no render-loop or reactivity changes (dependency arrays and state ownership preserved).
+- After GC-PR4: explicitly confirm canvas object creation flows are unchanged (node, post-it, container, analysis).
 
-Safety net tests (run at SES gates and SES end-state):
-
-- `graph-editor/src/services/__tests__/cohortEvidenceDebiasing.e2e.test.ts`
-- `graph-editor/src/services/__tests__/windowCohortSemantics.paramPack.e2e.test.ts`
-- `graph-editor/src/services/__tests__/sampleFileQueryFlow.e2e.test.ts`
-
-##### Target D — `integrityCheckService.ts`
-
-PR sequence:
-
-- **ICS-PR1 (types + constants + pure helpers)**: Extract pure helpers/constants into `graph-editor/src/services/integrityCheck/`.
-- **ICS-PR2 (check orchestration split)**: Group checks into focused modules (for example: graph invariants, file invariants, index invariants).
-- **ICS-PR3 (facade tidy-up)**: Reduce the main file to orchestration + re-exports.
-
-Stop/gates:
-
-- After ICS-PR2: confirm check coverage is unchanged (no dropped checks).
-
-Core tests:
-
-- `graph-editor/src/services/__tests__/integrityCheckService.fileId.test.ts`
-- `graph-editor/src/services/__tests__/integrityCheckService.blankStringEqualsUndefined.test.ts`
-- `graph-editor/src/services/__tests__/integrityCheckService.graphParameterDrift.test.ts`
-- `graph-editor/src/services/__tests__/integrityCheckService.graphCaseDrift.test.ts`
-- `graph-editor/src/services/__tests__/integrityCheckService.conditionalSiblingAlignment.test.ts`
-- `graph-editor/src/services/__tests__/integrityCheckService.semanticEvidenceIssues.test.ts`
-
-Safety net tests (run at ICS gates and ICS end-state):
-
-- `graph-editor/src/services/__tests__/sampleFilesIntegrity.test.ts`
-
-##### Target E — `GraphCanvas.tsx`
-
-PR sequence:
-
-- **GC-PR1 (pure helpers first)**: Extract pure helpers into `graph-editor/src/components/canvas/` (prefer existing directory).
-- **GC-PR2 (interaction suppression hooks)**: Extract panning/dragging suppression and related state coordination to `components/canvas/`.
-- **GC-PR3 (layout clusters)**: Extract dagre and Sankey layout orchestration into `components/canvas/`.
-- **GC-PR4 (diagnostics control)**: Consolidate debug logging behind a single toggle mechanism (no behaviour changes unless explicitly approved).
-- **GC-PR5 (facade tidy-up)**: Reduce the main file size while keeping ReactFlow wiring and render structure stable.
-
-Stop/gates:
-
-- After GC-PR3: explicitly confirm no render-loop or reactivity changes were introduced (dependency arrays and state ownership preserved).
-
-Core tests:
-
+**Core tests:**
 - `graph-editor/src/components/canvas/__tests__/buildScenarioRenderEdges.test.ts`
 - `graph-editor/src/components/canvas/__tests__/buildScenarioRenderEdges.efGeometry.test.ts`
 - `graph-editor/src/components/edges/__tests__/EdgeBeads.test.tsx`
@@ -363,55 +475,125 @@ Core tests:
 - `graph-editor/src/services/__tests__/graphStoreSyncIntegration.test.ts`
 - `graph-editor/src/services/__tests__/edgeReconnection.test.ts`
 
-Safety net tests (run at GC gates and GC end-state):
-
+**Safety net tests:**
 - `graph-editor/tests/smoke.test.ts`
 
-##### Target F — `PropertiesPanel.tsx`
+---
 
-PR sequence:
+#### Target 7 — `PropertiesPanel.tsx` (3,667 lines)
 
-- **PP-PR1 (validation + formatting helpers)**: Extract pure-ish UI helpers into `graph-editor/src/components/panels/properties/`.
-- **PP-PR2 (section components)**: Extract major UI sections into `components/panels/properties/` (no business logic).
-- **PP-PR3 (panel-specific hooks)**: Extract panel coordination hooks (local buffers, commit-on-blur/apply patterns) into `components/panels/properties/`.
-- **PP-PR4 (facade tidy-up)**: Reduce `PropertiesPanel.tsx` to composition and wiring.
+**Current clusters (updated):**
+- A: Validation & formatting helpers (~65 lines)
+- B: CanvasAnalysisPropertiesSection sub-component (~480 lines) — NEW since Jan, already self-contained
+- C: Main component state management (~120 lines)
+- D: Effect hooks for data sync (~355 lines)
+- E: Graph mutation helpers (~290 lines)
+- F: Probability & conditional probability management (~185 lines)
+- G: Query regeneration (~120 lines)
+- H: Main render logic (JSX) (~2,055 lines) — includes graph metadata, node/edge/container/postit/analysis sections
 
-Stop/gates:
+**Extraction directory:** `graph-editor/src/components/panels/properties/`
 
-- After PP-PR3: confirm persistence wiring and “authoritative DSL” behaviour is unchanged.
+**PR sequence:**
 
-Core tests (run for every PP PR, unless the PR explicitly does not touch the covered surface area):
+- **PP-PR1 (validation + formatting helpers)**: Extract Cluster A into `panels/properties/validationHelpers.ts`.
+- **PP-PR2 (canvas analysis section)**: Extract Cluster B into `panels/properties/CanvasAnalysisPropertiesSection.tsx`. This is already a self-contained sub-component with its own state, effects, and render tree — the easiest extraction in this target.
+- **PP-PR3 (graph mutation helpers)**: Extract Clusters E, F, G into `panels/properties/graphMutationHelpers.ts`. These are callback factories that delegate to services.
+- **PP-PR4 (section components)**: Extract major render sections from Cluster H into dedicated components: `panels/properties/NodePropertiesSection.tsx`, `panels/properties/EdgePropertiesSection.tsx`, `panels/properties/GraphMetadataSection.tsx`.
+- **PP-PR5 (facade tidy-up)**: Reduce `PropertiesPanel.tsx` to state setup (C), effects (D), and composition/wiring.
 
+**Stop/gates:**
+- After PP-PR3: confirm persistence wiring and "authoritative DSL" behaviour unchanged.
+
+**Core tests:**
 - `graph-editor/src/components/__tests__/PropertiesPanel.hooks.test.tsx`
 - `graph-editor/src/components/__tests__/PropertiesPanel.latencyToggleTriggersGraphMutation.test.tsx`
+- `graph-editor/src/components/__tests__/CanvasAnalysisPropertiesSection.test.tsx` **(NEW)**
 
-Safety net tests (run at PP gates and PP end-state):
-
+**Safety net tests:**
 - `graph-editor/src/components/__tests__/QueryExpressionEditor.test.tsx`
 
-##### Target G — `ConversionEdge.tsx`
+---
 
-PR sequence:
+#### Target 8 — `ConversionEdge.tsx` (2,955 lines)
 
-- **CE-PR1 (pure helpers)**: Move additional pure computations into existing `edges/*helpers*` modules (or new siblings next to them).
-- **CE-PR2 (render subcomponents)**: Extract render-only subcomponents (labels/decorations) into siblings within `graph-editor/src/components/edges/`.
-- **CE-PR3 (interaction handlers)**: Extract interaction handlers into a focused module that delegates to existing services/menus (no business rules).
+**Current clusters (updated):**
+- Constants & configuration (~15 lines)
+- Edge rendering pipeline including lag layer data (~85 lines)
+- Path & geometry computation — Bezier, smooth-step, face direction (~610 lines)
+- Offset path & text rendering (~45 lines)
+- Completeness chevron rendering (~110 lines) — NEW since Jan
+- Interaction handlers (~195 lines)
+- Parameter attachment drag-drop (~100 lines) — NEW since Jan
+- Hover & tooltip management (~75 lines)
+- Scenario overlay rendering (~60 lines)
+- Main render function (JSX) (~855 lines)
+
+**Extraction directory:** `graph-editor/src/components/edges/` (existing directory)
+
+**PR sequence:**
+
+- **CE-PR1 (path geometry)**: Extract path & geometry computation into `edges/edgePathGeometry.ts` (Bezier curves, smooth-step, face direction, offset paths). Pure computations.
+- **CE-PR2 (completeness chevron)**: Extract chevron rendering into `edges/CompletenessChevron.tsx` as a sub-component.
+- **CE-PR3 (interaction handlers)**: Extract interaction handlers + parameter drag-drop into `edges/edgeInteractionHandlers.ts`.
 - **CE-PR4 (facade tidy-up)**: Reduce `ConversionEdge.tsx` to composition and wiring.
 
-Stop/gates:
-
+**Stop/gates:**
 - After CE-PR3: confirm scenario overlay selection rules and bead suppression semantics are unchanged.
 
-Core tests:
-
+**Core tests:**
 - `graph-editor/src/components/edges/__tests__/ConversionEdge.sankeyParity.test.tsx`
 
-Safety net tests (run at CE gates and CE end-state):
-
+**Safety net tests:**
 - `graph-editor/src/components/edges/__tests__/EdgeBeads.test.tsx`
 - `graph-editor/src/components/edges/__tests__/EdgeBeads.probabilityMode.test.tsx`
 
-#### Programme-Level Gates (When to Stop and Reassess)
+---
+
+#### Secondary Candidates (Only After Primary Targets Stabilise)
+
+Apply the same procedural approach. PR sequences defined here for completeness.
+
+##### Secondary 1 — `TabContext.tsx` (3,043 lines)
+
+Key observation: FileRegistry class is ~950 lines and could be its own module.
+
+- **TC-PR1 (serialization + types)**: Extract serialization helpers and type definitions.
+- **TC-PR2 (FileRegistry extraction)**: Extract FileRegistry class into `contexts/tabContext/FileRegistry.ts`. This is the single largest self-contained unit.
+- **TC-PR3 (live share & URL boot)**: Extract live share bootstrap logic into `contexts/tabContext/liveShareBoot.ts`.
+- **TC-PR4 (tab operations)**: Extract tab CRUD operations into `contexts/tabContext/tabOperations.ts`.
+- **TC-PR5 (facade tidy-up)**: Reduce `TabContext.tsx` to provider composition + hooks.
+
+Tests:
+- `graph-editor/tests/state-sync/multi-source-truth.test.ts`
+- `graph-editor/src/services/__tests__/graphStoreSyncIntegration.test.ts`
+
+##### Secondary 2 — `GraphEditor.tsx` (2,451 lines)
+
+- **GE-PR1 (processors & wrappers)**: Extract URL processors and ScenarioLegendWrapper into dedicated files.
+- **GE-PR2 (sidebar state)**: Extract sidebar state machine into `editors/graphEditor/useSidebarState.ts`.
+- **GE-PR3 (selection context)**: Extract selection handlers and context into `editors/graphEditor/useSelectionHandlers.ts`.
+- **GE-PR4 (facade tidy-up)**: Reduce `GraphEditor.tsx` to composition + context providers.
+
+Tests:
+- `graph-editor/tests/smoke.test.ts`
+- `graph-editor/src/services/__tests__/graphStoreSyncIntegration.test.ts`
+
+##### Secondary 3 — `QueryExpressionEditor.tsx` (2,318 lines)
+
+- **QEE-PR1 (parsing)**: Extract chip parsing logic into `editors/queryExpression/parseQueryToChips.ts`.
+- **QEE-PR2 (Monaco setup)**: Extract language registration and autocomplete provider into `editors/queryExpression/monacoSetup.ts`.
+- **QEE-PR3 (chip rendering)**: Extract chip UI components into `editors/queryExpression/ChipDisplay.tsx`.
+- **QEE-PR4 (facade tidy-up)**: Reduce editor to composition + state coordination.
+
+Tests:
+- `graph-editor/src/components/__tests__/QueryExpressionEditor.test.tsx`
+- `graph-editor/tests/unit/query-dsl.test.ts`
+- `graph-editor/tests/unit/composite-query-parser.test.ts`
+
+---
+
+### Programme-Level Gates (When to Stop and Reassess)
 
 Stop and reassess before continuing if any of the following occur:
 
@@ -420,188 +602,6 @@ Stop and reassess before continuing if any of the following occur:
 - A circular dependency emerges that cannot be resolved by a small shared types/helpers module.
 - A UI refactor introduces a render loop or performance regression that cannot be resolved without behavioural change.
 
-#### Secondary Candidates (Only After Primary Targets Stabilise)
-
-After the primary targets are stable and the programme gates are satisfied, apply the same procedural approach to:
-
-- `graph-editor/src/contexts/TabContext.tsx`
-- `graph-editor/src/components/editors/GraphEditor.tsx`
-- `graph-editor/src/components/QueryExpressionEditor.tsx`
-
-Each secondary candidate uses the same extraction discipline, with fixed PR sequences defined here (so execution remains procedural).
-
-##### Secondary 1 — `TabContext.tsx`
-
-PR sequence:
-
-- **TC-PR1 (types + pure helpers)**: Extract pure types and helpers into `graph-editor/src/contexts/tabContext/`.
-- **TC-PR2 (registry/cache boundaries)**: Extract internal data structures and caching helpers into `contexts/tabContext/` without changing semantics.
-- **TC-PR3 (operations split)**: Extract tab operations into `contexts/tabContext/` (facade retains the exported context/hook surface).
-- **TC-PR4 (facade tidy-up)**: Reduce `TabContext.tsx` to composition + exports.
-
-Stop/gates:
-
-- After TC-PR3: explicitly confirm “source of truth” rules remain unchanged (IndexedDB vs in-memory caches, and any fileRegistry boundaries).
-
-Tests:
-
-- `graph-editor/tests/state-sync/multi-source-truth.test.ts`
-- `graph-editor/src/services/__tests__/graphStoreSyncIntegration.test.ts`
-
-##### Secondary 2 — `GraphEditor.tsx`
-
-PR sequence:
-
-- **GE-PR1 (local contexts and small components)**: Extract embedded local contexts/components into dedicated files under `graph-editor/src/components/editors/` (no behavioural changes).
-- **GE-PR2 (layout orchestration split)**: Extract rc-dock layout orchestration into a hook under `graph-editor/src/components/editors/`.
-- **GE-PR3 (event wiring split)**: Extract event/listener wiring into a focused module/hook.
-- **GE-PR4 (facade tidy-up)**: Reduce `GraphEditor.tsx` to composition + exports.
-
-Stop/gates:
-
-- After GE-PR2: explicitly confirm layout persistence and panel selection behaviours remain unchanged.
-
-Tests:
-
-- `graph-editor/tests/smoke.test.ts`
-- `graph-editor/src/services/__tests__/graphStoreSyncIntegration.test.ts`
-
-##### Secondary 3 — `QueryExpressionEditor.tsx`
-
-PR sequence:
-
-- **QEE-PR1 (pure parsing/render helpers)**: Extract chip parsing and deterministic helpers into `graph-editor/src/components/editors/queryExpression/`.
-- **QEE-PR2 (UI subcomponents)**: Extract chip UI subcomponents into `components/editors/queryExpression/`.
-- **QEE-PR3 (facade tidy-up)**: Reduce the editor file to composition + exports.
-
-Stop/gates:
-
-- After QEE-PR2: explicitly confirm normalisation behaviour and chip rendering semantics remain unchanged.
-
-Tests:
-
-- `graph-editor/src/components/__tests__/QueryExpressionEditor.test.tsx`
-- `graph-editor/tests/unit/query-dsl.test.ts`
-- `graph-editor/tests/unit/composite-query-parser.test.ts`
-
----
-
-### Strategy: How We Split Without Breaking Things
-
-This work should be executed as a sequence of small, reversible steps:
-
-- **Keep the existing file path as the facade**
-  - The existing file remains the public entry point used by callers.
-  - Internals move into sibling modules under a dedicated directory and are imported by the facade.
-  - We do **not** introduce new public “replacement” entrypoints (for example `services/dataOperations/index.ts`) during the slimdown itself.
-
-- **Extract by dependency direction**
-  - Start with **pure utilities/types** (no imports from app state or UI).
-  - Then extract **domain logic** (deterministic transforms, parsing, derivations).
-  - Finally extract **orchestration** (calls to services, DB, network, toasts, logging).
-
-- **Prefer one-way module dependencies**
-  - Avoid cross-imports between new modules that used to be “free” inside one giant file.
-  - If two parts need shared types/utilities, create a small shared module rather than a cycle.
-
-- **Avoid re-ordering side effects**
-  - Keep initialisation order stable while splitting. Re-ordering “just for tidiness” is a frequent source of regressions.
-
----
-
-### Proposed Module Boundaries (Updated for Current Code)
-
-#### 1) `dataOperationsService.ts` → internal modules under `graph-editor/src/services/dataOperations/…`
-
-Current reality (as of 14-Jan-26):
-
-- It coordinates window aggregation, fetch/refetch policy, contexts/slice isolation, UpdateManager application, statistical enhancements, session logging, and user notifications.
-- There is real coupling to contexts + target slices, and to UK date conversion utilities.
-
-Proposed internal split:
-
-- **Core types and small helpers**
-  - Local types for “options” and “results”, plus small pure helper functions.
-- **Get-from-file**
-  - File→graph orchestration and related transforms (keeping override/permission semantics unchanged).
-- **Get-from-source (versioned)**
-  - External→file append + file→graph update orchestration, including session logging.
-- **Put-to-file**
-  - Graph→file persistence orchestration (keeping IndexedDB/gitrepo invariants intact).
-- **Fetch planning and policy**
-  - Fetch/refetch decision helpers and window computations (most of which already exist as services; extraction here is mainly about readability and call-site shape).
-- **Notifications boundary**
-  - Keep toast usage centralised so other modules can stay UI-agnostic.
-
-Guardrails:
-
-- No changes to slice isolation logic, signature warning behaviour, or date format conversions during extraction.
-- Do not introduce alternative fetching paths; keep the existing service API stable.
-
-#### 2) `UpdateManager.ts` → internal modules under `graph-editor/src/services/updateManager/…`
-
-Current reality (as of 14-Jan-26):
-
-- It includes public types, mapping table initialisation (with shared static caching), mapping application engine, conflict strategies, audit, logging, and graph-specific behaviours (including rebalancing and evidence/window field handling).
-
-Proposed internal split:
-
-- **Public types and contracts**
-- **Mapping configuration declaration**
-- **Mapping application engine (override gating + transforms + change tracking)**
-- **Graph-specific behaviours**
-  - Rebalancing, conditional-edge sibling logic, evidence/window field updates, and any topology lookups.
-- **Audit + session logging utilities**
-
-Guardrails:
-
-- Preserve the “single code path” rule for rebalancing and override gating.
-- Preserve shared mapping configuration caching behaviour (it exists for test performance and CI stability).
-
-#### 3) `GraphCanvas.tsx` → continue extracting into existing `graph-editor/src/components/canvas/…`
-
-Current reality (as of 14-Jan-26):
-
-- `graph-editor/src/components/canvas/` already exists (for example `buildScenarioRenderEdges.ts`).
-- `GraphCanvas.tsx` still mixes ReactFlow wiring, interaction suppression, routing/bundling, Sankey layout, scenario rendering, diagnostics, and event plumbing.
-
-Plan for this area:
-
-- Prefer to extract into the **existing** `components/canvas/` directory, rather than inventing a new layout.
-- Treat probability/what-if behaviour as a high-risk invariant: reduce duplication by centralising where appropriate, but do not change semantics.
-
-#### 4) `PropertiesPanel.tsx` → internal modules under `graph-editor/src/components/panels/properties/…` (preferred)
-
-Current reality (as of 14-Jan-26):
-
-- There is already a wrapper: `graph-editor/src/components/panels/PropertiesPanelWrapper.tsx`.
-- The panel mixes UI sections, local edit buffering, validation helpers, and service/hook wiring.
-
-Proposed split:
-
-- **Panel section components**
-  - Extract major sections into dedicated components under `components/panels/properties/`.
-- **Validation and formatting helpers**
-  - Keep UI-only validation local; promote shared validation to `lib/` or an appropriate service only if it’s used elsewhere.
-- **State coordination hooks**
-  - Panel-specific hooks for local buffers and commit-on-blur/apply patterns (UI boundary only).
-
-Guardrails:
-
-- Do not introduce business logic into the panel; delegate to existing services/hooks.
-- Keep the “authoritative DSL” and persistence behaviours unchanged.
-
-#### 5) `ConversionEdge.tsx` → finish consolidation within existing `graph-editor/src/components/edges/…`
-
-Current reality (as of 14-Jan-26):
-
-- Significant extraction already exists: `EdgeBeads.tsx`, `edgeBeadHelpers.tsx`, `edgeLabelHelpers.tsx`, `BeadLabelBuilder.tsx`.
-
-Plan for this area:
-
-- Consolidate remaining mixed responsibilities into the existing helper modules (or new siblings next to them), rather than creating a parallel `edges/conversion/` subtree.
-- Keep overlay/scenario rendering rules stable (especially selection rules and bead suppression during pan/drag).
-
 ---
 
 ### Execution Plan (Phased, Safe, and Test-Guided)
@@ -609,80 +609,70 @@ Plan for this area:
 #### Phase 0 — Readiness and Guardrails (must be true before the first implementation PR)
 
 - Confirm there are no other active refactors touching the same mega files (to avoid merge-conflict churn).
-- Confirm and document (in this file) the invariants we are preserving for:
-  - contexts/slice isolation
-  - date format handling
-  - rebalancing and override gating
-- Agree the entrypoint rule: existing file paths remain the only public entry points during slimdown.
-- Identify the specific existing test files to run per target (by file path).
-  - Note: modifying existing tests requires explicit authorisation.
+- Confirm the first target in the programme order (analysisEChartsService) and pick the first extractable cluster (theming + metadata helpers).
+- Document the exact test file paths in the PR description.
+- Confirm whether any test-file edits might be required; if yes, obtain explicit approval first.
 
-#### Phase 1 — Extract “Pure” Modules (Low Risk)
+#### Phase 1 — Extract "Pure" Modules (Low Risk)
 
 For each target file:
-
 - Extract constants, types, and pure helper functions into a dedicated internal directory.
 - Keep imports one-directional (facade imports helpers).
 - Keep behaviour unchanged.
 
 #### Phase 2 — Extract Subsystems (Medium Risk)
 
-- Move coherent clusters into dedicated modules (for example: mapping config vs engine; Sankey vs routing; get-from-file vs get-from-source).
-- Keep orchestration in the facade until the end of this phase to avoid accidental initialisation re-ordering.
+- Move coherent clusters into dedicated modules.
+- Keep orchestration in the facade until the end of this phase.
 
 #### Phase 3 — Clean-up and Documentation (Controlled)
 
-- Delete clearly dead code only when it is obviously unused and protected by existing tests.
-- Add brief module-level responsibility notes so future contributors know where to add new behaviour.
+- Delete clearly dead code only when obviously unused and protected by existing tests.
+- Add brief module-level responsibility notes.
 
 ---
 
-### Testing Plan (Relevant Tests Only)
+### Testing Plan
 
 Principles:
-
 - Run tests by **explicit file paths** only.
-- Do not run the full suite unless explicitly requested or the change is genuinely pervasive.
+- Do not run the full suite unless explicitly requested.
 - If a refactor step requires updating an existing test file, obtain explicit approval first.
-
-Plan:
-
-- For each refactor PR, list the specific test file paths that cover the touched area and run only those.
-- If a failure reveals an untested coupling, propose a test improvement separately (with explicit approval).
 
 ---
 
-### Risk Register (Updated)
+### Risk Register (Updated 13-Mar-26)
 
-- **Circular dependencies after splitting**
-  - Mitigation: extract shared types/utilities into small shared modules; keep dependencies one-way.
-- **Behavioural drift from “small” refactor**
-  - Mitigation: small PRs; stable entrypoints; run the same narrow test set per PR; revert quickly on unexpected changes.
-- **Loss of session logging coverage**
-  - Mitigation: treat logging calls as part of orchestration boundaries; keep log event names stable.
-- **UI performance regressions (GraphCanvas / ConversionEdge)**
-  - Mitigation: preserve memoisation boundaries; avoid new state layers; avoid broad dependency-array changes as part of extraction.
-- **Accidental slice/date semantic changes**
-  - Mitigation: treat contexts/date logic as invariants; move code first, change behaviour later only with explicit approval.
+- **Circular dependencies after splitting** — Mitigation: extract shared types/utilities; keep one-way dependencies.
+- **Behavioural drift from "small" refactor** — Mitigation: small PRs; stable entrypoints; revert quickly.
+- **Loss of session logging coverage** — Mitigation: treat logging as part of orchestration boundaries.
+- **UI performance regressions** — Mitigation: preserve memoisation; avoid new state layers.
+- **Accidental slice/date semantic changes** — Mitigation: treat as invariants; move code first.
+- **[NEW] getFromSourceDirect closure extraction** — Mitigation: do NOT extract this closure during slimdown. Flag for future consideration only after surrounding modules are stable.
+- **[NEW] enhanceGraphLatencies DP state** — Mitigation: do NOT split this orchestrator. Extract its dependencies (topology, math, edge stats) but leave the 1,454-line traversal intact.
+- **[NEW] integrityCheckService reference tracking** — Mitigation: pass reference sets explicitly between extracted sub-validators; do not convert to class state.
+- **[NEW] Graph↔ReactFlow sync engine** — Mitigation: do NOT extract. Leave fast/slow path in GraphCanvas; extract everything else around it.
 
 ---
 
 ### Definition of Done
 
-This slimdown effort is “done” when:
+This slimdown effort is "done" when:
 
 - Each primary target file is reduced to a maintainable size, or replaced by a thin facade that delegates to internal modules.
 - Each new module has a single responsibility and a clear name aligned with existing directory structure.
-- No duplicate code paths exist for the same operation (especially in update/rebalance/data ops and scenario rendering).
+- No duplicate code paths exist for the same operation.
 - Relevant existing tests for the touched domains pass.
 - Session logging for external/data operations remains intact.
+- Snapshot DB, forecasting, and canvas analysis semantics remain unchanged.
 
 ---
 
 ### Related Documents
 
 - **Primary plan**: this file.
-- **Archived (superseded) refactor proposals and analyses** (archived during the 14-Jan-26 update of this plan):
+- **Complexity analysis**: `docs/current/codebase/COMPLEXITY_ANALYSIS.md`
+- **Archived (superseded) refactor proposals**:
   - `docs/archive/refactor/REFACTORING_PLAN_GRAPH_COMPONENTS.md`
   - `docs/archive/refactor/GRAPH_CANVAS_ARCHITECTURE.md`
   - `docs/archive/refactor/GRAPH_EDITOR_ARCHITECTURE.md`

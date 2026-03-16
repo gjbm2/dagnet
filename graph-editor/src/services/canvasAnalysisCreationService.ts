@@ -14,6 +14,7 @@
  */
 
 import type { CanvasAnalysis } from '../types';
+import type { ViewMode } from '../types/chartRecipe';
 
 export interface CanvasAnalysisCreationPayload {
   recipe: {
@@ -23,10 +24,12 @@ export interface CanvasAnalysisCreationPayload {
       what_if_dsl?: string;
     };
   };
-  viewMode: 'chart' | 'cards';
+  viewMode: ViewMode;
   chartKind?: string;
   analysisResult?: any;
   analysisTypeOverridden: boolean;
+  /** Display settings to persist (e.g. font_size, scale_with_canvas). */
+  display?: Record<string, unknown>;
 }
 
 export interface BuildCanvasAnalysisPayloadArgs {
@@ -35,7 +38,7 @@ export interface BuildCanvasAnalysisPayloadArgs {
   analysisTypeOverridden?: boolean;
   chartKind?: string;
   analysisResult?: any;
-  viewMode?: 'chart' | 'cards';
+  viewMode?: ViewMode;
 }
 
 /**
@@ -82,8 +85,9 @@ export function buildCanvasAnalysisObject(
     height: size.height,
     view_mode: payload.viewMode,
     chart_kind: payload.chartKind,
-    live: true,
+    mode: 'live' as const,
     analysis_type_overridden: payload.analysisTypeOverridden || undefined,
     recipe: payload.recipe,
+    ...(payload.display ? { display: payload.display } : {}),
   } as CanvasAnalysis;
 }

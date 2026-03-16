@@ -1,4 +1,5 @@
 import React from 'react';
+import type { ViewMode } from '../types/chartRecipe';
 
 /**
  * Analysis Display Settings Registry
@@ -33,7 +34,7 @@ import React from 'react';
 export type DisplaySettingType = 'radio' | 'checkbox' | 'select' | 'slider' | 'number-range' | 'list' | 'text';
 
 export interface DisplaySettingOption {
-  value: string;
+  value: string | number;
   label: string;
 }
 
@@ -75,6 +76,11 @@ export interface DisplaySettingDef {
   overridable?: boolean;
   /** For type='list': schema for each item in the list */
   itemFields?: ListItemFieldDef[];
+  /**
+   * Optional toolbar group key. Settings with the same `group` are rendered
+   * together inside a single `cfp-pill-group` wrapper in the inline toolbar.
+   */
+  group?: string;
 }
 
 // ============================================================
@@ -206,21 +212,24 @@ const COMMON_LEGEND_SETTINGS: DisplaySettingDef[] = [
     propsPanel: true,
     inline: 'brief',
     contextMenu: true,
+    group: 'legend',
   },
   {
     key: 'legend_position',
     label: 'Legend position',
+    shortLabel: 'Legend',
     type: 'radio',
     options: [
       { value: 'top', label: 'Top' },
       { value: 'bottom', label: 'Bottom' },
+      { value: 'left', label: 'Left' },
       { value: 'right', label: 'Right' },
-      { value: 'none', label: 'None' },
     ],
     defaultValue: 'top',
     propsPanel: true,
-    inline: false,
-    contextMenu: false,
+    inline: 'full',
+    contextMenu: true,
+    group: 'legend',
   },
 ];
 
@@ -423,6 +432,99 @@ const COMMON_TOOLTIP_SETTINGS: DisplaySettingDef[] = [
     contextMenu: false,
   },
 ];
+
+/**
+ * Font size presets — numeric px values for S/M/L/XL.
+ * Custom numeric values (e.g. from drag-to-canvas capture) are also valid.
+ */
+export const FONT_SIZE_PRESETS = { S: 8, M: 10, L: 13, XL: 16 } as const;
+export const FONT_SIZE_DEFAULT = FONT_SIZE_PRESETS.M;
+
+/**
+ * Resolve a font_size display value to numeric px.
+ * Accepts: number (pass-through), legacy string 'S'/'M'/'L'/'XL', or nullish (→ default).
+ */
+export function resolveFontSizePx(value: unknown): number {
+  if (typeof value === 'number' && value > 0) return value;
+  if (typeof value === 'string' && value in FONT_SIZE_PRESETS) {
+    return FONT_SIZE_PRESETS[value as keyof typeof FONT_SIZE_PRESETS];
+  }
+  return FONT_SIZE_DEFAULT;
+}
+
+/**
+ * Compute a CSS zoom factor from a font_size value.
+ * Scales the ENTIRE element proportionally (padding, borders, icons, gaps)
+ * rather than only text. Returns 1 at default (M/10px), <1 for S, >1 for L/XL.
+ */
+export function fontSizeZoom(value: unknown): number {
+  return resolveFontSizePx(value) / FONT_SIZE_DEFAULT;
+}
+
+/**
+ * Shared font size setting — ONE definition used by charts, cards, and tables.
+ * Stores numeric px. Radio options map to FONT_SIZE_PRESETS.
+ */
+export const FONT_SIZE_SETTING: DisplaySettingDef = {
+  key: 'font_size',
+  label: 'Font size',
+  shortLabel: 'Font',
+  type: 'radio',
+  options: [
+    { value: FONT_SIZE_PRESETS.S, label: 'S' },
+    { value: FONT_SIZE_PRESETS.M, label: 'M' },
+    { value: FONT_SIZE_PRESETS.L, label: 'L' },
+    { value: FONT_SIZE_PRESETS.XL, label: 'XL' },
+  ],
+  defaultValue: FONT_SIZE_DEFAULT,
+  propsPanel: true,
+  inline: 'brief',
+  contextMenu: true,
+};
+
+/**
+ * Scale-with-canvas toggle. When false, content maintains constant screen size
+ * via CSS zoom compensation (zoom: 1/canvasZoom).
+ */
+export const SCALE_WITH_CANVAS_SETTING: DisplaySettingDef = {
+  key: 'scale_with_canvas',
+  label: 'Scale with canvas',
+  shortLabel: 'Scale',
+  type: 'checkbox',
+  defaultValue: true,
+  propsPanel: true,
+  inline: 'brief',
+  contextMenu: true,
+};
+
+/** Common settings included in every chart kind + cards + table. */
+const COMMON_FONT_SIZE_SETTINGS: DisplaySettingDef[] = [FONT_SIZE_SETTING, SCALE_WITH_CANVAS_SETTING];
+
+/**
+ * Derive concrete font sizes from a numeric base font_size px (used by charts via ECharts).
+ * Accepts numeric px or legacy string 'S'/'M'/'L'/'XL'.
+ */
+export function chartFontScale(size: number | string | null | undefined): {
+  axisTitlePx: number;
+  axisLabelPx: number;
+  legendPx: number;
+  dataLabelPx: number;
+  tooltipPx: number;
+  markLabelPx: number;
+} {
+  const base = resolveFontSizePx(size);
+  // Scale all roles proportionally from the base.
+  // At base=10 (M): axis=8, label=9, legend=9, data=7, tooltip=10, mark=8.
+  const scale = base / FONT_SIZE_DEFAULT;
+  return {
+    axisTitlePx: Math.round(8 * scale),
+    axisLabelPx: Math.round(9 * scale),
+    legendPx: Math.round(9 * scale),
+    dataLabelPx: Math.round(7 * scale),
+    tooltipPx: Math.round(10 * scale),
+    markLabelPx: Math.round(8 * scale),
+  };
+}
 
 /** Animation controls */
 const COMMON_ANIMATION_SETTINGS: DisplaySettingDef[] = [
@@ -723,7 +825,12 @@ const FUNNEL_SPECIFIC_SETTINGS: DisplaySettingDef[] = [
  * Grows organically as charting features mature.
  */
 export const CHART_DISPLAY_SETTINGS: Record<string, DisplaySettingDef[]> = {
+  info: [
+    ...COMMON_FONT_SIZE_SETTINGS,
+  ],
+
   bridge: [
+    ...COMMON_FONT_SIZE_SETTINGS,
     ...BRIDGE_SPECIFIC_SETTINGS,
     ...COMMON_AXIS_SETTINGS,
     ...COMMON_LEGEND_SETTINGS,
@@ -737,6 +844,7 @@ export const CHART_DISPLAY_SETTINGS: Record<string, DisplaySettingDef[]> = {
   ],
 
   funnel: [
+    ...COMMON_FONT_SIZE_SETTINGS,
     ...FUNNEL_SPECIFIC_SETTINGS,
     ...COMMON_AXIS_SETTINGS,
     ...COMMON_LEGEND_SETTINGS,
@@ -749,6 +857,7 @@ export const CHART_DISPLAY_SETTINGS: Record<string, DisplaySettingDef[]> = {
   ],
 
   histogram: [
+    ...COMMON_FONT_SIZE_SETTINGS,
     ...COMMON_AXIS_SETTINGS,
     ...COMMON_LEGEND_SETTINGS,
     ...COMMON_LABEL_SETTINGS,
@@ -760,6 +869,7 @@ export const CHART_DISPLAY_SETTINGS: Record<string, DisplaySettingDef[]> = {
   ],
 
   bar_grouped: [
+    ...COMMON_FONT_SIZE_SETTINGS,
     ...COMMON_AXIS_SETTINGS,
     ...COMMON_LEGEND_SETTINGS,
     ...COMMON_LABEL_SETTINGS,
@@ -774,6 +884,7 @@ export const CHART_DISPLAY_SETTINGS: Record<string, DisplaySettingDef[]> = {
   ],
 
   pie: [
+    ...COMMON_FONT_SIZE_SETTINGS,
     ...COMMON_AXIS_SETTINGS,
     ...COMMON_LEGEND_SETTINGS,
     ...COMMON_LABEL_SETTINGS,
@@ -783,6 +894,7 @@ export const CHART_DISPLAY_SETTINGS: Record<string, DisplaySettingDef[]> = {
   ],
 
   time_series: [
+    ...COMMON_FONT_SIZE_SETTINGS,
     ...COMMON_SERIES_TYPE_SETTINGS,
     ...COMMON_AXIS_SETTINGS,
     ...COMMON_LEGEND_SETTINGS,
@@ -800,6 +912,7 @@ export const CHART_DISPLAY_SETTINGS: Record<string, DisplaySettingDef[]> = {
   ],
 
   daily_conversions: [
+    ...COMMON_FONT_SIZE_SETTINGS,
     ...COMMON_SERIES_TYPE_SETTINGS,
     ...COMMON_AXIS_SETTINGS,
     ...COMMON_LEGEND_SETTINGS,
@@ -821,6 +934,7 @@ export const CHART_DISPLAY_SETTINGS: Record<string, DisplaySettingDef[]> = {
   ],
 
   cohort_maturity: [
+    ...COMMON_FONT_SIZE_SETTINGS,
     ...COMMON_AXIS_SETTINGS,
     ...COMMON_LEGEND_SETTINGS,
     ...COMMON_LABEL_SETTINGS,
@@ -841,28 +955,94 @@ export const CHART_DISPLAY_SETTINGS: Record<string, DisplaySettingDef[]> = {
  * Cross-chart-kind settings that apply when view_mode === 'cards'.
  */
 export const CARDS_DISPLAY_SETTINGS: DisplaySettingDef[] = [
+  FONT_SIZE_SETTING,
+  SCALE_WITH_CANVAS_SETTING,
   {
-    key: 'cards_font_size',
-    label: 'Font size',
-    type: 'radio',
-    options: [
-      { value: 'S', label: 'S' },
-      { value: 'M', label: 'M' },
-      { value: 'L', label: 'L' },
-      { value: 'XL', label: 'XL' },
-    ],
-    defaultValue: 'M',
-    propsPanel: true,
+    key: 'cards_collapsed',
+    label: 'Collapsed cards',
+    type: 'list',
+    defaultValue: [],
+    propsPanel: false,
     inline: false,
-    contextMenu: true,
+    contextMenu: false,
   },
 ];
 
 /**
- * Get display settings for a given chart kind (or cards mode).
+ * Cross-chart-kind settings that apply when view_mode === 'table'.
  */
-export function getDisplaySettings(chartKind: string | undefined, viewMode: 'chart' | 'cards'): DisplaySettingDef[] {
+export const TABLE_DISPLAY_SETTINGS: DisplaySettingDef[] = [
+  FONT_SIZE_SETTING,
+  SCALE_WITH_CANVAS_SETTING,
+  {
+    key: 'table_striped',
+    label: 'Striped',
+    shortLabel: 'Striped',
+    type: 'checkbox',
+    defaultValue: true,
+    propsPanel: true,
+    inline: 'brief',
+    contextMenu: true,
+  },
+  {
+    key: 'table_sort_column',
+    label: 'Sort column',
+    type: 'text',
+    defaultValue: '',
+    propsPanel: false,
+    inline: false,
+    contextMenu: false,
+  },
+  {
+    key: 'table_sort_direction',
+    label: 'Sort direction',
+    type: 'radio',
+    options: [
+      { value: 'asc', label: 'Ascending' },
+      { value: 'desc', label: 'Descending' },
+    ],
+    defaultValue: 'asc',
+    propsPanel: false,
+    inline: false,
+    contextMenu: false,
+  },
+  // Column management — persisted but not shown in props panel or inline toolbar.
+  // Managed directly via the table's column header context menu.
+  {
+    key: 'table_hidden_columns',
+    label: 'Hidden columns',
+    type: 'list',
+    defaultValue: [],
+    propsPanel: false,
+    inline: false,
+    contextMenu: false,
+  },
+  {
+    key: 'table_column_order',
+    label: 'Column order',
+    type: 'list',
+    defaultValue: [],
+    propsPanel: false,
+    inline: false,
+    contextMenu: false,
+  },
+  {
+    key: 'table_column_widths',
+    label: 'Column widths',
+    type: 'text',
+    defaultValue: '',
+    propsPanel: false,
+    inline: false,
+    contextMenu: false,
+  },
+];
+
+/**
+ * Get display settings for a given chart kind (or cards/table mode).
+ */
+export function getDisplaySettings(chartKind: string | undefined, viewMode: ViewMode): DisplaySettingDef[] {
   if (viewMode === 'cards') return CARDS_DISPLAY_SETTINGS;
+  if (viewMode === 'table') return TABLE_DISPLAY_SETTINGS;
   if (!chartKind) return [];
   return CHART_DISPLAY_SETTINGS[chartKind] || [];
 }
@@ -877,7 +1057,7 @@ export function getDisplaySettings(chartKind: string | undefined, viewMode: 'cha
  */
 export function getDisplaySettingsForSurface(
   chartKind: string | undefined,
-  viewMode: 'chart' | 'cards',
+  viewMode: ViewMode,
   surface: 'propsPanel' | 'inline' | 'contextMenu',
   context?: 'canvas' | 'tab',
 ): DisplaySettingDef[] {
@@ -918,7 +1098,7 @@ export interface ContextMenuSettingItem {
  */
 export function buildContextMenuSettingItems(
   chartKind: string | undefined,
-  viewMode: 'chart' | 'cards',
+  viewMode: ViewMode,
   display: Record<string, unknown> | undefined,
   onChange: (key: string, value: any) => void,
 ): ContextMenuSettingItem[] {
@@ -939,7 +1119,7 @@ export function buildContextMenuSettingItems(
     } else if ((setting.type === 'radio' || setting.type === 'select') && setting.options) {
       const submenu = setting.options.map((opt) => ({
         label: opt.label,
-        checked: value === opt.value,
+        checked: value == opt.value,
         onClick: () => onChange(setting.key, opt.value),
       }));
       result.push({ label: setting.label, onClick: () => {}, submenu });

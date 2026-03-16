@@ -71,7 +71,7 @@ describe('Canvas analysis CRUD: Create', () => {
     expect(a.width).toBe(400);
     expect(a.height).toBe(300);
     expect(a.analysis_type_overridden).toBeFalsy();
-    expect(a.live).toBe(true);
+    expect(a.mode).toBe('live');
     expect(a.view_mode).toBe('chart');
   });
 
@@ -245,15 +245,16 @@ describe('Canvas analysis CRUD: Live ↔ Custom toggle', () => {
     });
 
     const result = mutateCanvasAnalysisGraph(graph, analysis.id, (a) => {
-      a.live = false;
+      a.mode = 'custom';
       a.recipe = { ...a.recipe, scenarios: captured };
     });
 
     const updated = result!.canvasAnalyses[0];
-    expect(updated.live).toBe(false);
+    expect(updated.mode).toBe('custom');
     expect(updated.recipe.scenarios).toBeDefined();
     expect(updated.recipe.scenarios!.length).toBeGreaterThan(0);
-    expect(updated.recipe.scenarios![0].scenario_id).toBe('current');
+    // deriveOrderedVisibleIds puts base before current
+    expect(updated.recipe.scenarios![0].scenario_id).toBe('base');
   });
 
   it('should toggle Custom → Live: clear scenarios', () => {
@@ -261,19 +262,19 @@ describe('Canvas analysis CRUD: Live ↔ Custom toggle', () => {
       buildCanvasAnalysisPayload({ analysisType: 'conversion_funnel' }),
       { x: 0, y: 0 }, { width: 400, height: 300 },
     );
-    analysis.live = false;
+    analysis.mode = 'custom';
     analysis.recipe.scenarios = [
       { scenario_id: 'current', name: 'Current', effective_dsl: 'window(-30d:)', colour: '#3b82f6' },
     ] as any;
     let graph = addAnalysisToGraph(makeGraph(), analysis);
 
     const result = mutateCanvasAnalysisGraph(graph, analysis.id, (a) => {
-      a.live = true;
+      a.mode = 'live';
       a.recipe = { ...a.recipe, scenarios: undefined };
     });
 
     const updated = result!.canvasAnalyses[0];
-    expect(updated.live).toBe(true);
+    expect(updated.mode).toBe('live');
     expect(updated.recipe.scenarios).toBeUndefined();
   });
 });
@@ -284,7 +285,7 @@ describe('Canvas analysis CRUD: Scenario edits in Custom mode', () => {
       buildCanvasAnalysisPayload({ analysisType: 'conversion_funnel' }),
       { x: 0, y: 0 }, { width: 400, height: 300 },
     );
-    analysis.live = false;
+    analysis.mode = 'custom';
     analysis.recipe.scenarios = [
       { scenario_id: 'sc-1', name: 'Original', effective_dsl: 'window(-30d:)', colour: '#3b82f6' },
       { scenario_id: 'sc-2', name: 'Second', effective_dsl: 'window(-7d:)', colour: '#ec4899' },

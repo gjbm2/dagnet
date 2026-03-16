@@ -14,7 +14,7 @@ import { useTabContext } from '../contexts/TabContext';
 import { useGraphStore } from '../contexts/GraphStoreContext';
 import { useScenariosContextOptional } from '../contexts/ScenariosContext';
 import { captureTabScenariosToRecipe } from '../services/captureTabScenariosService';
-import { mutateCanvasAnalysisGraph } from '../services/canvasAnalysisMutationService';
+import { mutateCanvasAnalysisGraph, advanceMode } from '../services/canvasAnalysisMutationService';
 import type { CanvasAnalysis } from '../types';
 import type { ScenarioLayerListProps } from '../components/panels/ScenarioLayerList';
 
@@ -61,41 +61,31 @@ export function useCanvasAnalysisScenarioCallbacks({
   }, [liveTabId, scenariosContext, tabs, operations, graphStore]);
 
   const promoteToCustom = useCallback((): any[] | null => {
-    if (!analysis?.live) return null;
+    if (analysis?.mode !== 'live') return null;
     const captured = captureScenarios();
     if (!captured) return null;
     const nextGraph = mutateCanvasAnalysisGraph(graph, analysisId, (a) => {
-      a.live = false;
-      a.recipe = {
-        ...a.recipe,
-        scenarios: captured.scenarios,
-        analysis: { ...a.recipe.analysis, what_if_dsl: captured.what_if_dsl },
-      };
+      advanceMode(a, graphStore.currentDSL || '', captured);
     });
     if (!nextGraph) return null;
     setGraph(nextGraph);
-    return captured.scenarios;
-  }, [analysis?.live, analysisId, graph, setGraph, captureScenarios]);
+    return nextGraph.canvasAnalyses?.find((a: any) => a.id === analysisId)?.recipe?.scenarios || null;
+  }, [analysis?.mode, analysisId, graph, setGraph, captureScenarios, graphStore]);
 
   const mutateRecipeScenarios = useCallback((mutator: (a: any) => void, label: string) => {
     if (!analysis) return;
     const nextGraph = mutateCanvasAnalysisGraph(graph, analysisId, (a) => {
-      if (analysis.live) {
+      if (analysis.mode === 'live') {
         const captured = captureScenarios();
         if (!captured) return;
-        a.live = false;
-        a.recipe = {
-          ...a.recipe,
-          scenarios: captured.scenarios,
-          analysis: { ...a.recipe.analysis, what_if_dsl: captured.what_if_dsl },
-        };
+        advanceMode(a, graphStore.currentDSL || '', captured);
       }
       mutator(a);
     });
     if (!nextGraph) return;
     setGraph(nextGraph);
     saveHistoryState(label);
-  }, [analysis?.live, analysis, analysisId, graph, setGraph, saveHistoryState, captureScenarios]);
+  }, [analysis?.mode, analysis, analysisId, graph, setGraph, saveHistoryState, captureScenarios, graphStore]);
 
   const onRename = useCallback((id: string, newName: string) => {
     mutateRecipeScenarios((a) => {
@@ -148,7 +138,7 @@ export function useCanvasAnalysisScenarioCallbacks({
     mutateRecipeScenarios((a) => {
       if (!a?.recipe?.scenarios) return;
       const arr = [...a.recipe.scenarios];
-      if (!analysis?.live) {
+      if (analysis?.mode !== 'live') {
         if (fromIndex < 0 || toIndex < 0 || fromIndex >= arr.length || toIndex >= arr.length || fromIndex === toIndex) return;
         const [moved] = arr.splice(fromIndex, 1);
         arr.splice(toIndex, 0, moved);
@@ -172,15 +162,15 @@ export function useCanvasAnalysisScenarioCallbacks({
   }, [mutateRecipeScenarios]);
 
   const onEdit = useCallback((id: string) => {
-    if (analysis?.live && id === 'current') {
+    if (analysis?.mode === 'live' && id === 'current') {
       onEditScenarioDsl(id);
       return;
     }
-    if (analysis?.live) {
+    if (analysis?.mode === 'live') {
       promoteToCustom();
     }
     onEditScenarioDsl(id);
-  }, [analysis?.live, promoteToCustom, onEditScenarioDsl]);
+  }, [analysis?.mode, promoteToCustom, onEditScenarioDsl]);
 
   const shouldShowRefresh = useCallback(() => false, []);
 

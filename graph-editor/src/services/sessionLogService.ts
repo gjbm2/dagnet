@@ -35,7 +35,8 @@ export type OperationType =
   | 'index'
   | 'merge'
   | 'integrity'
-  | 'amplitude';
+  | 'amplitude'
+  | 'bayes';
 
 /**
  * Structured context for different operation types

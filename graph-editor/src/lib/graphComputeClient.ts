@@ -1786,11 +1786,17 @@ export class GraphComputeClient {
       console.log('[DagNet][Compute] /api/runner/analyze response payload (copy window.__dagnetLastAnalyzeResponse):', result);
     }
     
-    // Cache the result unless bypassed.
+    // Cache the result unless bypassed. Never cache empty/null results — they
+    // produce stale cache hits that prevent subsequent retries from reaching
+    // the backend (e.g. lag_histogram returning no result on first attempt).
     if (!bypassCache) {
-      this.analysisCache.set(cacheKey, { data: result, timestamp: Date.now() });
-      this.pruneCache(this.analysisCache);
-      console.log('[GraphComputeClient] Cached analyzeMultipleScenarios result');
+      if (result?.result) {
+        this.analysisCache.set(cacheKey, { data: result, timestamp: Date.now() });
+        this.pruneCache(this.analysisCache);
+        console.log('[GraphComputeClient] Cached analyzeMultipleScenarios result');
+      } else {
+        console.log('[GraphComputeClient] NOT caching analyzeMultipleScenarios — no result in response');
+      }
     } else {
       console.log('[GraphComputeClient] Skipped caching analyzeMultipleScenarios result (nocache=1)');
     }
@@ -2037,6 +2043,8 @@ export interface AvailableAnalysis {
   name: string;
   description: string;
   is_primary: boolean;
+  /** Known chart kinds for this analysis type (populated FE-side from static mapping). */
+  chart_kinds?: string[];
 }
 
 export interface AvailableAnalysesResponse {

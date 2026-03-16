@@ -1,0 +1,444 @@
+/**
+ * Operations Toast — unified floating progress indicator.
+ *
+ * Fixed bottom-centre. Shows primary operation collapsed;
+ * expands on hover to list all active + recently completed operations.
+ */
+
+/* ---- Container --------------------------------------------------------- */
+
+.ops-toast {
+  position: fixed;
+  bottom: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 1900;
+  min-width: 320px;
+  max-width: 480px;
+  background: var(--bg-secondary, #1e1e1e);
+  border: 1px solid var(--border-color, #3c3c3c);
+  border-radius: 8px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  overflow: hidden;
+  font-size: 13px;
+  transition: opacity 2s ease-out;
+
+  /* Slide up on mount */
+  animation: ops-toast-slide-up 0.15s ease-out;
+}
+
+.ops-toast:hover {
+  /* Reset any container-level fading on hover */
+  opacity: 1 !important;
+  transition: opacity 0.15s ease-out;
+}
+
+.ops-toast-container-fading {
+  opacity: 0.4;
+}
+
+@keyframes ops-toast-slide-up {
+  from { opacity: 0; transform: translateX(-50%) translateY(8px); }
+  to   { opacity: 1; transform: translateX(-50%) translateY(0); }
+}
+
+/* ---- Close button (top-right, visible on hover) ----------------------- */
+
+.ops-toast-close {
+  position: absolute;
+  top: 6px;
+  right: 8px;
+  background: none;
+  border: none;
+  color: var(--text-secondary, #a0a0a0);
+  font-size: 12px;
+  cursor: pointer;
+  padding: 2px 4px;
+  line-height: 1;
+  border-radius: 3px;
+  opacity: 0;
+  transition: opacity 0.1s ease-out;
+  z-index: 1;
+}
+
+.ops-toast:hover .ops-toast-close {
+  opacity: 1;
+}
+
+.ops-toast-close:hover {
+  color: var(--text-primary, #e0e0e0);
+  background: rgba(255, 255, 255, 0.08);
+}
+
+/* ---- Primary (always-visible) row -------------------------------------- */
+
+.ops-toast-primary {
+  padding: 12px 16px;
+}
+
+.ops-toast-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 4px;
+}
+
+.ops-toast-label {
+  color: var(--text-primary, #e0e0e0);
+  font-size: 13px;
+  font-weight: 500;
+  flex: 1;
+  margin-right: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ops-toast-paused-badge {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 1px 5px;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  color: #f59e0b;
+  border: 1px solid rgba(245, 158, 11, 0.4);
+  border-radius: 3px;
+  vertical-align: middle;
+}
+
+.ops-toast-meta {
+  color: var(--text-secondary, #a0a0a0);
+  font-size: 12px;
+  font-family: 'JetBrains Mono', monospace;
+  white-space: nowrap;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.ops-toast-cancel {
+  background: none;
+  border: none;
+  color: var(--text-secondary, #a0a0a0);
+  font-size: 12px;
+  cursor: pointer;
+  padding: 0;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.ops-toast-cancel:hover {
+  color: var(--text-primary, #e0e0e0);
+}
+
+/* Action button — shown on terminal operations that need user engagement */
+.ops-toast-action-btn {
+  background: none;
+  border: 1px solid #f59e0b;
+  color: #f59e0b;
+  font-size: 11px;
+  cursor: pointer;
+  padding: 1px 8px;
+  border-radius: 3px;
+  margin-left: 8px;
+  white-space: nowrap;
+}
+
+.ops-toast-action-btn:hover {
+  background: rgba(245, 158, 11, 0.15);
+  color: #fbbf24;
+}
+
+/* Detail lines (below label, monospace) */
+.ops-toast-details {
+  margin-bottom: 6px;
+}
+
+.ops-toast-detail-line {
+  color: var(--text-secondary, #a0a0a0);
+  font-size: 11px;
+  font-family: 'JetBrains Mono', monospace;
+  line-height: 1.4;
+  padding-left: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---- Progress bar ------------------------------------------------------ */
+
+.ops-toast-bar-container {
+  height: 6px;
+  background: var(--bg-tertiary, #2d2d2d);
+  border-radius: 3px;
+  overflow: hidden;
+  margin-top: 8px;
+}
+
+.ops-toast-bar {
+  height: 100%;
+  background: linear-gradient(90deg, #4a9eff, #6bb3ff);
+  border-radius: 3px;
+  transition: width 1s linear;
+}
+
+.ops-toast-bar.countdown {
+  background: linear-gradient(90deg, #f59e0b, #fbbf24);
+  transition: width 1s linear;
+}
+
+.ops-toast-bar.complete {
+  background: linear-gradient(90deg, #4caf50, #66bb6a);
+  transition: width 0.2s ease-out;
+}
+
+.ops-toast-bar.error {
+  background: linear-gradient(90deg, #ef4444, #f87171);
+  transition: width 0.2s ease-out;
+}
+
+.ops-toast-bar.indeterminate {
+  width: 30% !important;
+  animation: ops-toast-indeterminate 1.4s ease-in-out infinite;
+}
+
+@keyframes ops-toast-indeterminate {
+  0%   { transform: translateX(-100%); }
+  100% { transform: translateX(430%); }
+}
+
+/* ---- Expanded list (on hover) ------------------------------------------ */
+
+.ops-toast-list {
+  max-height: 0;
+  overflow: hidden;
+  transition: max-height 0.2s ease-out, opacity 0.15s ease-out;
+  opacity: 0;
+  border-bottom: 1px solid transparent;
+}
+
+.ops-toast:hover .ops-toast-list,
+.ops-toast.pinned .ops-toast-list {
+  max-height: 320px;
+  overflow-y: auto;
+  opacity: 1;
+  border-bottom-color: var(--border-color, #3c3c3c);
+}
+
+.ops-toast-list-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 16px 4px;
+  color: var(--text-secondary, #a0a0a0);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+/* ---- List item --------------------------------------------------------- */
+
+.ops-toast-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 16px;
+  transition: opacity 2s ease-out;
+}
+
+.ops-toast-item:last-child {
+  padding-bottom: 10px;
+}
+
+.ops-toast-item.fading {
+  opacity: 0.45;
+  transition: opacity 2s ease-out;
+}
+
+.ops-toast-item.faded {
+  opacity: 0.25;
+}
+
+/* Reset fade on hover — items snap back to full opacity */
+.ops-toast:hover .ops-toast-item.fading,
+.ops-toast:hover .ops-toast-item.faded {
+  opacity: 1;
+  transition: opacity 0.15s ease-out;
+}
+
+.ops-toast-item-icon {
+  flex-shrink: 0;
+  width: 16px;
+  text-align: center;
+  font-size: 12px;
+}
+
+.ops-toast-item-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.ops-toast-item-label {
+  color: var(--text-primary, #e0e0e0);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Session log icon button (per-item, top-right area) */
+.ops-toast-log-btn {
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  color: var(--text-secondary, #a0a0a0);
+  font-size: 12px;
+  cursor: pointer;
+  padding: 2px 4px;
+  line-height: 1;
+  border-radius: 3px;
+  opacity: 0;
+  transition: opacity 0.1s ease-out;
+}
+
+.ops-toast:hover .ops-toast-log-btn {
+  opacity: 0.6;
+}
+
+.ops-toast-log-btn:hover {
+  opacity: 1 !important;
+  color: var(--text-primary, #e0e0e0);
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.ops-toast-item-detail {
+  color: var(--text-secondary, #a0a0a0);
+  font-size: 11px;
+  font-family: 'JetBrains Mono', monospace;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Mini inline progress bar for list items */
+.ops-toast-item-bar {
+  height: 3px;
+  background: var(--bg-tertiary, #2d2d2d);
+  border-radius: 2px;
+  overflow: hidden;
+  margin-top: 3px;
+}
+
+.ops-toast-item-bar-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #4a9eff, #6bb3ff);
+  border-radius: 2px;
+  transition: width 0.2s ease-out;
+}
+
+.ops-toast-item-bar-fill.complete {
+  background: linear-gradient(90deg, #4caf50, #66bb6a);
+}
+
+.ops-toast-item-bar-fill.error {
+  background: linear-gradient(90deg, #ef4444, #f87171);
+}
+
+/* ---- Sub-steps --------------------------------------------------------- */
+
+.ops-toast-substeps {
+  padding-left: 24px;
+}
+
+.ops-toast-substep {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 16px 2px 0;
+}
+
+.ops-toast-substep-icon {
+  flex-shrink: 0;
+  width: 12px;
+  text-align: center;
+  font-size: 10px;
+}
+
+.ops-toast-substep-label {
+  color: var(--text-secondary, #a0a0a0);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---- Spinner animation ------------------------------------------------- */
+
+@keyframes ops-toast-spin {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+
+.ops-toast-spinner {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border: 2px solid var(--text-secondary, #a0a0a0);
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: ops-toast-spin 0.8s linear infinite;
+}
+
+.ops-toast-spinner.small {
+  width: 10px;
+  height: 10px;
+  border-width: 1.5px;
+}
+
+/* ---- Completion toast (brief flash for terminal operations) ------------ */
+
+.ops-toast-completion {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px 16px;
+}
+
+.ops-toast-completion.success {
+  border-left: 3px solid var(--success-color, #4caf50);
+}
+
+.ops-toast-completion.has-errors {
+  border-left: 3px solid var(--warning-color, #ff9800);
+}
+
+.ops-toast-completion.cancelled {
+  border-left: 3px solid var(--text-secondary, #a0a0a0);
+}
+
+.ops-toast-completion-icon {
+  font-size: 18px;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.ops-toast-completion-content {
+  flex: 1;
+}
+
+.ops-toast-completion-main {
+  color: var(--text-primary, #e0e0e0);
+  font-size: 13px;
+  font-weight: 500;
+  margin-bottom: 2px;
+}
+
+.ops-toast-completion-detail {
+  color: var(--text-secondary, #a0a0a0);
+  font-size: 12px;
+  font-family: 'JetBrains Mono', monospace;
+  line-height: 1.4;
+}

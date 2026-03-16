@@ -22,6 +22,14 @@
 
 - Do we need a 'live()' view type (alongside window() and cohort() which shows ACTUAL arrives in period, regardless of latency?)
 
+- **Window preset redesign: `[ N ] unit` compound control** (13-Mar-26)
+  - Replace `Today | 7d | 30d | 90d` preset buttons with `[ N ▲▼ ] months ▾` — editable number input + unit dropdown (days/weeks/months/quarters)
+  - Uses relative DSL directly: `window(-3m:)` / `cohort(-1w:)` instead of computing absolute dates
+  - DSL units `d`, `w`, `m`, `y` already supported in parser and `resolveRelativeDate()`
+  - **Needs design work before implementation**: interactions between this control and `DateRangePicker`, `updateWindowAndDSL` (currently takes absolute dates), `window` state hydration in `GraphStoreContext`, and `getActivePreset` detection. The `window` store state holds `{ start, end }` as absolute UK dates — a relative DSL like `-3m:` needs either (a) resolving to absolute before storing, or (b) rethinking what `window` state means.
+  - Right-click scenario creation adapts: unit determines chunk size (monthly → 4 × 1-month scenarios)
+  - See discussion in tristate scenario mode design session, 13-Mar-26
+
 ## Case management
 
 - **Upstream selecting properties don't propagate to downstream fetches** (11-Feb-26)

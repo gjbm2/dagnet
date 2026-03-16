@@ -39,20 +39,63 @@ function nearestAnchor(x: number, y: number, cw: number, ch: number): Anchor {
   return midX < cw / 2 ? 'bottom-left' : 'bottom-right';
 }
 
+// Minimum VISUAL scale — toolbar never appears below 80% of its natural
+// screen-pixel size, regardless of canvas zoom direction.
+// Visual scale = cssZoom × canvasZoom, so we enforce:
+//   cssZoom >= MIN_VISUAL_SCALE / canvasZoom
+const MIN_VISUAL_SCALE = 0.8;
+
+/**
+ * Pure function: compute the CSS `zoom` inverse-scale for the floating toolbar.
+ *
+ * Goal: toolbar stays at constant screen-pixel size (cssZoom = 1/canvasZoom).
+ * Two clamps:
+ *  - maxScale: prevent toolbar from overflowing its container (zoomed out)
+ *  - MIN_VISUAL_SCALE: toolbar never appears below 50% of natural size on screen,
+ *    even if that means it overflows slightly (readability > layout).
+ *
+ * Exported for unit testing.
+ */
+export function computeToolbarInvScale(
+  canvasZoom: number | undefined,
+  containerWidth: number,
+): number | undefined {
+  if (!canvasZoom || canvasZoom === 1) return undefined;
+  const rawInvScale = 1 / canvasZoom;
+  const maxScale = containerWidth > 0 ? Math.max(1, containerWidth / (HANDLE_W + 200)) : 2;
+  // First clamp to prevent overflow, then enforce minimum visual size.
+  // min-visual wins over max-scale because an unreadable toolbar is worse than overflow.
+  const overflowClamped = Math.min(rawInvScale, maxScale);
+  const minCssZoom = MIN_VISUAL_SCALE / canvasZoom;
+  return Math.max(minCssZoom, overflowClamped);
+}
+
 export interface ChartFloatingIconProps {
   containerRef: React.RefObject<HTMLDivElement | null>;
   tray?: React.ReactNode;
+  /** Current canvas zoom level; toolbar scales at 1/zoom so it stays constant screen size. */
+  canvasZoom?: number;
+  /** Initial anchor position. Defaults to 'top-right'. Use 'top' for always-visible pinned toolbar. */
+  defaultAnchor?: Anchor;
 }
 
-export function ChartFloatingIcon({ containerRef, tray }: ChartFloatingIconProps) {
-  const [anchor, setAnchor] = useState<Anchor>('top-right');
+// Minimum screen-pixel width for the chart container before the toolbar is shown.
+// Below this the toolbar would dominate or overflow the visible chart area.
+const MIN_SCREEN_PX_FOR_TOOLBAR = 100;
+
+export function ChartFloatingIcon({ containerRef, tray, canvasZoom, defaultAnchor = 'top-right' }: ChartFloatingIconProps) {
+  const [anchor, setAnchor] = useState<Anchor>(defaultAnchor);
   const [drag, setDrag] = useState<{ x: number; y: number; snap: Anchor } | null>(null);
   const [hovered, setHovered] = useState(false);
   const [box, setBox] = useState({ w: 200, h: 200 });
   const posRef = useRef({ x: 0, y: 0 });
   const teardownRef = useRef<(() => void) | null>(null);
+  const hoverTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  useEffect(() => () => { teardownRef.current?.(); }, []);
+  useEffect(() => () => {
+    teardownRef.current?.();
+    if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
+  }, []);
 
   useLayoutEffect(() => {
     const el = containerRef.current;
@@ -66,15 +109,18 @@ export function ChartFloatingIcon({ containerRef, tray }: ChartFloatingIconProps
 
   const block = useCallback((e: React.SyntheticEvent) => { e.stopPropagation(); }, []);
 
+  // Suppress chart pointer-events while the tray is expanded or dragging,
+  // so ECharts tooltips don't appear underneath the toolbar.
+  const suppressChart = !!drag || (hovered && anchor !== 'top');
   useEffect(() => {
-    if (!drag) return;
+    if (!suppressChart) return;
     const ct = containerRef.current;
     if (!ct) return;
     const chart = ct.querySelector('.echarts-for-react') as HTMLElement | null;
     if (!chart) return;
     chart.style.pointerEvents = 'none';
     return () => { chart.style.pointerEvents = ''; };
-  }, [drag, containerRef]);
+  }, [suppressChart, containerRef]);
 
   const onMouseDown = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
@@ -97,7 +143,9 @@ export function ChartFloatingIcon({ containerRef, tray }: ChartFloatingIconProps
     setHovered(false);
     setDrag({ x: startX, y: startY, snap: nearestAnchor(startX, startY, cw, ch) });
 
+    let moved = false;
     const onMove = (ev: MouseEvent) => {
+      moved = true;
       const dx = (ev.clientX - startClientX) / scaleX;
       const dy = (ev.clientY - startClientY) / scaleY;
       const nx = Math.max(0, Math.min(cw - HANDLE_W, startX + dx));
@@ -108,10 +156,15 @@ export function ChartFloatingIcon({ containerRef, tray }: ChartFloatingIconProps
 
     const onUp = () => {
       td();
-      const el = containerRef.current;
-      const w = el?.offsetWidth ?? box.w;
-      const h = el?.offsetHeight ?? box.h;
-      setAnchor(nearestAnchor(posRef.current.x, posRef.current.y, w, h));
+      if (!moved) {
+        // Click (no drag) — toggle between current anchor and 'top'
+        setAnchor(anchor === 'top' ? 'top-right' : 'top');
+      } else {
+        const el = containerRef.current;
+        const w = el?.offsetWidth ?? box.w;
+        const h = el?.offsetHeight ?? box.h;
+        setAnchor(nearestAnchor(posRef.current.x, posRef.current.y, w, h));
+      }
       setDrag(null);
     };
 
@@ -133,8 +186,22 @@ export function ChartFloatingIcon({ containerRef, tray }: ChartFloatingIconProps
 
   const isGhostTop = drag?.snap === 'top';
 
+  // Inverse-scale so the toolbar stays at constant screen-pixel size regardless of canvas zoom.
+  // Skip in 'top' mode where the palette is position:relative and acts as a layout element.
+  // Clamp: don't scale beyond what the container can fit (max 50% of container width for the tray).
+  // Use CSS `zoom` instead of `transform: scale()` so that layout (flex-wrap, width)
+  // recalculates at the scaled size — transform is visual-only and doesn't affect layout.
+  const invScale = computeToolbarInvScale(canvasZoom, box.w);
+
+  // Suppress toolbar when the chart is too small on screen (zoom × size).
+  if (canvasZoom !== undefined) {
+    const screenW = box.w * canvasZoom;
+    if (screenW < MIN_SCREEN_PX_FOR_TOOLBAR) return null;
+  }
+
+  const zoomDiv = invScale ?? 1;
   const positionStyle: React.CSSProperties = drag
-    ? { position: 'absolute', left: drag.x, top: drag.y }
+    ? { position: 'absolute', left: drag.x / zoomDiv, top: drag.y / zoomDiv }
     : anchorCSS(anchor);
 
   return (
@@ -150,6 +217,7 @@ export function ChartFloatingIcon({ containerRef, tray }: ChartFloatingIconProps
             zIndex: 9,
             transition: 'left 150ms ease, top 150ms ease, right 150ms ease, bottom 150ms ease, width 150ms ease',
             pointerEvents: 'none',
+            ...(invScale && !isGhostTop ? { zoom: invScale } : undefined),
           }}
         />
       )}
@@ -163,9 +231,19 @@ export function ChartFloatingIcon({ containerRef, tray }: ChartFloatingIconProps
           + (!isDragging && !isTop && !isRight ? ' anchor-left' : '')
           + (isBottom ? ' anchor-bottom' : '')
         }
-        style={{ ...positionStyle, zIndex: drag ? 20 : 10 }}
-        onMouseEnter={() => { if (!isDragging) setHovered(true); }}
-        onMouseLeave={() => setHovered(false)}
+        style={{
+          ...positionStyle,
+          zIndex: drag ? 20 : 10,
+          ...(invScale ? { zoom: invScale } : undefined),
+        }}
+        onMouseEnter={() => {
+          if (hoverTimerRef.current) { clearTimeout(hoverTimerRef.current); hoverTimerRef.current = null; }
+          if (!isDragging) setHovered(true);
+        }}
+        onMouseLeave={() => {
+          if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
+          hoverTimerRef.current = setTimeout(() => { setHovered(false); hoverTimerRef.current = null; }, 320);
+        }}
         onPointerDown={block}
         onClick={block}
       >

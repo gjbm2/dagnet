@@ -14,7 +14,7 @@ function makeGraph(title: string): GraphData {
     canvasAnalyses: [{
       id: 'a-1',
       x: 0, y: 0, width: 400, height: 300,
-      live: false,
+      mode: 'fixed' as const,
       view_mode: 'chart',
       recipe: {
         analysis: { analysis_type: 'graph_overview', analytics_dsl: '' },

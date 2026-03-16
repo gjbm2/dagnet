@@ -64,21 +64,23 @@ export function AnalysisTypeSection({
                 <ZapOff size={12} />
               </button>
             )}
-            <button
-              className="analytics-show-all-toggle"
-              onClick={(e) => { e.stopPropagation(); setViewMode(viewMode === 'icons' ? 'list' : 'icons'); }}
-              title={viewMode === 'icons' ? 'Switch to list view' : 'Switch to icon view'}
-            >
-              {viewMode === 'icons' ? <List size={12} /> : <Grid3X3 size={12} />}
-            </button>
-            <button
-              className="analytics-show-all-toggle"
-              onClick={(e) => { e.stopPropagation(); setShowAll(!showAll); }}
-              title={showAll ? 'Show only available' : 'Show all analysis types'}
-            >
-              {showAll ? <EyeOff size={12} /> : <Eye size={12} />}
-              <span>{showAll ? 'Available only' : 'Show all'}</span>
-            </button>
+            <span style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 4 }}>
+              <button
+                className="analytics-show-all-toggle"
+                onClick={(e) => { e.stopPropagation(); setViewMode(viewMode === 'icons' ? 'list' : 'icons'); }}
+                title={viewMode === 'icons' ? 'Switch to list view' : 'Switch to icon view'}
+              >
+                {viewMode === 'icons' ? <List size={12} /> : <Grid3X3 size={12} />}
+              </button>
+              <button
+                className="analytics-show-all-toggle"
+                onClick={(e) => { e.stopPropagation(); setShowAll(!showAll); }}
+                title={showAll ? 'Show only available' : 'Show all analysis types'}
+              >
+                {showAll ? <EyeOff size={12} /> : <Eye size={12} />}
+                <span>{showAll ? 'Available only' : 'Show all'}</span>
+              </button>
+            </span>
           </span>
         }
         defaultOpen={defaultOpen}
@@ -93,6 +95,7 @@ export function AnalysisTypeSection({
           viewMode={viewMode}
           draggableAvailableCards={draggableAvailableCards}
           onCardDragStart={onCardDragStart}
+          searchable
         />
       </CollapsibleSection>
 

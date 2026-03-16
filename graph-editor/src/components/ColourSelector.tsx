@@ -21,6 +21,16 @@ interface ColourSelectorProps {
   showClear?: boolean;
 }
 
+/** Overlay connector preset colours — shared across toolbar, props panel, and context menu. */
+export const OVERLAY_PRESET_COLOURS: Array<{ name: string; value: string }> = [
+  { name: 'Amber', value: '#f59e0b' },
+  { name: 'Blue', value: '#3b82f6' },
+  { name: 'Green', value: '#22c55e' },
+  { name: 'Red', value: '#ef4444' },
+  { name: 'Purple', value: '#8b5cf6' },
+  { name: 'Pink', value: '#ec4899' },
+];
+
 // Standard preset colours (9 options)
 const PRESET_COLOURS = [
   { name: 'Blue', value: '#3B82F6' },

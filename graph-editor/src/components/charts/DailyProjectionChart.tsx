@@ -72,7 +72,7 @@ export function DailyProjectionChart({ points, edgeLabel, pInfinity, t95, height
       markLines.push({
         xAxis: todayDate,
         lineStyle: { color: '#3b82f6', type: 'dashed', width: 1.5 },
-        label: { show: true, formatter: 'Today', color: '#3b82f6', fontSize: 11 },
+        label: { show: true, formatter: 'Today', color: '#3b82f6', fontSize: 10 },
       });
     }
 
@@ -84,7 +84,7 @@ export function DailyProjectionChart({ points, edgeLabel, pInfinity, t95, height
         data: dates,
         axisLabel: {
           color: textColour,
-          fontSize: 11,
+          fontSize: 10,
           interval: Math.max(0, Math.floor(dates.length / 10) - 1),
           rotate: 30,
         },
@@ -94,8 +94,8 @@ export function DailyProjectionChart({ points, edgeLabel, pInfinity, t95, height
       yAxis: {
         type: 'value',
         name: 'k / day',
-        nameTextStyle: { color: textColour, fontSize: 11 },
-        axisLabel: { color: textColour, fontSize: 11, formatter: (v: number) => fmt1(v) },
+        nameTextStyle: { color: textColour, fontSize: 8 },
+        axisLabel: { color: textColour, fontSize: 10, formatter: (v: number) => fmt1(v) },
         axisLine: { show: false },
         splitLine: { lineStyle: { color: gridColour } },
         min: 0,
@@ -104,7 +104,7 @@ export function DailyProjectionChart({ points, edgeLabel, pInfinity, t95, height
         trigger: 'axis',
         backgroundColor: tooltipBg,
         borderColor: gridColour,
-        textStyle: { color: textColour, fontSize: 12 },
+        textStyle: { color: textColour, fontSize: 11 },
         formatter: (params: any[]) => {
           const date = params[0]?.axisValue ?? '';
           let html = `<div style="font-weight:600;margin-bottom:4px">${date}</div>`;
@@ -118,7 +118,7 @@ export function DailyProjectionChart({ points, edgeLabel, pInfinity, t95, height
       },
       legend: {
         bottom: 0,
-        textStyle: { color: textColour, fontSize: 11 },
+        textStyle: { color: textColour, fontSize: 10 },
         data: ['Observed', 'Expected (historical)', 'Expected (projection)'],
       },
       series: [

@@ -69,14 +69,16 @@ export const INITIAL_BOOT_STATE: AnalysisBootState = {
  *
  * Mirrors the logic previously inlined in useCanvasAnalysisCompute:
  *   - the analysis type must declare a snapshotContract
- *   - branch_comparison only needs snapshots when chart_kind is time_series
+ *   - comparison types only need snapshots when chart_kind is time_series
  */
+const COMPARISON_TYPES = new Set(['branch_comparison', 'outcome_comparison', 'multi_branch_comparison', 'multi_outcome_comparison']);
+
 export function analysisNeedsSnapshots(analysis: CanvasAnalysis): boolean {
   const analysisType = analysis.recipe?.analysis?.analysis_type;
   if (!analysisType) return false;
   const meta = ANALYSIS_TYPES.find(t => t.id === analysisType);
   if (!meta?.snapshotContract) return false;
-  if (analysisType === 'branch_comparison' && analysis.chart_kind !== 'time_series') return false;
+  if (COMPARISON_TYPES.has(analysisType) && analysis.chart_kind !== 'time_series') return false;
   return true;
 }
 

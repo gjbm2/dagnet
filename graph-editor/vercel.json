@@ -1,5 +1,12 @@
 {
+  "functions": {
+    "api/bayes-webhook.ts": { "maxDuration": 60 }
+  },
   "rewrites": [
+    {
+      "source": "/api/bayes/config",
+      "destination": "/api/bayes-config"
+    },
     {
       "source": "/api/parse-query",
       "destination": "/api/python-api"

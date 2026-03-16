@@ -17,7 +17,7 @@ import { getNextAvailableColour } from '@/lib/conditionalColours';
 import { useSnapToSlider } from '@/hooks/useSnapToSlider';
 import { ParameterSelector } from './ParameterSelector';
 import { EnhancedSelector } from './EnhancedSelector';
-import { ColourSelector } from './ColourSelector';
+import { ColourSelector, OVERLAY_PRESET_COLOURS } from './ColourSelector';
 import { ConditionalProbabilityEditor } from './ConditionalProbabilityEditor';
 import { QueryExpressionEditor } from './QueryExpressionEditor';
 import { AutomatableField } from './AutomatableField';
@@ -30,7 +30,7 @@ import { ImageLoupeView } from './ImageLoupeView';
 import { ChipInput } from './ChipInput';
 import { imageOperationsService } from '../services/imageOperationsService';
 import { getObjectTypeTheme } from '../theme/objectTypeTheme';
-import { Box, Settings, Layers, Edit3, ChevronDown, ChevronRight, X, Sliders, Info, TrendingUp, Coins, Clock, FileJson, ZapOff, RefreshCcw, ExternalLink, Zap } from 'lucide-react';
+import { Box, Settings, Layers, Edit3, ChevronDown, ChevronRight, X, Sliders, Info, TrendingUp, Coins, Clock, FileJson, ZapOff, RefreshCcw, ExternalLink, Zap, Plus } from 'lucide-react';
 import { ANALYSIS_TYPES } from './panels/analysisTypes';
 import { AnalysisTypeSection } from './panels/AnalysisTypeSection';
 import { ChartSettingsSection } from './panels/ChartSettingsSection';
@@ -44,10 +44,11 @@ import { analysisResultToCsv } from '../services/analysisExportService';
 import { downloadTextFile } from '../services/downloadService';
 import { getDisplaySettingsForSurface } from '../lib/analysisDisplaySettingsRegistry';
 import { getScenarioVisibilityOverlayStyle } from '../lib/scenarioVisibilityModeStyles';
-import { mutateCanvasAnalysisGraph, deleteCanvasAnalysisFromGraph } from '../services/canvasAnalysisMutationService';
+import { mutateCanvasAnalysisGraph, deleteCanvasAnalysisFromGraph, advanceMode } from '../services/canvasAnalysisMutationService';
+import { ModeTrack } from './ModeTrack';
 import { ScenarioLayerList } from './panels/ScenarioLayerList';
 import type { ScenarioLayerItem } from '../types/scenarioLayerList';
-import { useScenariosContextOptional } from '../contexts/ScenariosContext';
+import { useScenariosContextOptional, SCENARIO_PALETTE } from '../contexts/ScenariosContext';
 import { ScenarioQueryEditModal } from './modals/ScenarioQueryEditModal';
 import { captureTabScenariosToRecipe } from '../services/captureTabScenariosService';
 import './panels/AnalyticsPanel.css';
@@ -173,10 +174,14 @@ function CanvasAnalysisPropertiesSection({ analysisId, graph, setGraph, saveHist
     setGraph(nextGraph);
   }, [graph, setGraph, analysisId]);
 
-  const updateDisplaySetting = useCallback((key: string, value: any) => {
+  const updateDisplaySetting = useCallback((keyOrBatch: string | Record<string, any>, value?: any) => {
     const nextGraph = mutateCanvasAnalysisGraph(graph, analysisId, (a) => {
       if (!a.display) a.display = {};
-      (a.display as any)[key] = value;
+      if (typeof keyOrBatch === 'object') {
+        Object.assign(a.display as any, keyOrBatch);
+      } else {
+        (a.display as any)[keyOrBatch] = value;
+      }
     });
     if (!nextGraph) return;
     setGraph(nextGraph);
@@ -203,7 +208,7 @@ function CanvasAnalysisPropertiesSection({ analysisId, graph, setGraph, saveHist
   );
 
   const scenarioLayerItems = useMemo((): ScenarioLayerItem[] => {
-    if (analysis?.live) {
+    if (analysis?.mode === 'live') {
       const scenarioState = liveTabId ? operations.getScenarioState(liveTabId) : null;
       const visibleIds: string[] = scenarioState?.visibleScenarioIds || ['current'];
       return visibleIds.map((sid: string) => {
@@ -285,10 +290,45 @@ function CanvasAnalysisPropertiesSection({ analysisId, graph, setGraph, saveHist
     onEditScenarioDsl: (id) => setEditingScenarioId(id),
   });
 
+  const handleAddScenario = useCallback(() => {
+    if (!analysis) return;
+    const existing = analysis.recipe?.scenarios || [];
+    const usedColours = new Set(existing.map((s: any) => s.colour));
+    const colour = SCENARIO_PALETTE.find(c => !usedColours.has(c)) || SCENARIO_PALETTE[existing.length % SCENARIO_PALETTE.length];
+    const id = `scenario_${Date.now()}`;
+    const name = new Date().toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+    const newScenario = { scenario_id: id, name, colour, effective_dsl: '', visibility_mode: 'f+e' as const };
+    if (analysis.mode === 'live') {
+      // Auto-promote to custom first (rebase to delta DSLs)
+      if (liveTabId && scenariosContext) {
+        const currentTab = tabs.find(t => t.id === liveTabId);
+        const whatIfDSL = currentTab?.editorState?.whatIfDSL || null;
+        const captured = captureTabScenariosToRecipe({
+          tabId: liveTabId,
+          currentDSL: graphStore.currentDSL || '',
+          operations,
+          scenariosContext: scenariosContext as any,
+          whatIfDSL,
+        });
+        const nextGraph = mutateCanvasAnalysisGraph(graph, analysisId, (a) => {
+          advanceMode(a, graphStore.currentDSL || '', captured);
+          a.recipe.scenarios = [...(a.recipe.scenarios || []), newScenario];
+        });
+        if (nextGraph) { setGraph(nextGraph); saveHistoryState('Add chart scenario'); }
+      }
+    } else {
+      const nextGraph = mutateCanvasAnalysisGraph(graph, analysisId, (a) => {
+        if (!a.recipe.scenarios) a.recipe.scenarios = [];
+        a.recipe.scenarios.push(newScenario);
+      });
+      if (nextGraph) { setGraph(nextGraph); saveHistoryState('Add chart scenario'); }
+    }
+  }, [analysis, analysisId, graph, setGraph, saveHistoryState, liveTabId, scenariosContext, tabs, operations, graphStore]);
+
   const editingScenario = editingScenarioId
     ? analysis?.recipe?.scenarios?.find((s: any) => s.scenario_id === editingScenarioId)
     : null;
-  const isEditingCurrentLayerDsl = editingScenarioId === 'current' && analysis?.live;
+  const isEditingCurrentLayerDsl = editingScenarioId === 'current' && analysis?.mode === 'live';
   const { currentDSL: graphCurrentDSL } = useGraphStore();
 
   if (!analysis) return <div style={{ textAlign: 'center', color: '#666', padding: '20px' }}>Canvas analysis not found</div>;
@@ -313,35 +353,20 @@ function CanvasAnalysisPropertiesSection({ analysisId, graph, setGraph, saveHist
           {analyticsDsl && (
             <div style={{ marginTop: 8, display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: 'var(--text-secondary)' }}>
               <span>Overlay</span>
-              {['#f59e0b', '#3b82f6', '#22c55e', '#ef4444', '#8b5cf6', '#ec4899'].map(c => (
-                <button
-                  key={c}
-                  type="button"
-                  onClick={() => {
-                    updateAnalysis({ display: { ...analysis.display, show_subject_overlay: true, subject_overlay_colour: c } });
-                    saveHistoryState('Set overlay colour');
-                  }}
-                  style={{
-                    width: 16, height: 16, borderRadius: 3, border: analysis.display?.subject_overlay_colour === c && analysis.display?.show_subject_overlay ? '2px solid var(--text-primary)' : '1px solid var(--border-primary)',
-                    background: c, cursor: 'pointer', padding: 0, flexShrink: 0,
-                  }}
-                  title={`Show subject overlay (${c})`}
-                />
-              ))}
-              <button
-                type="button"
-                onClick={() => {
+              <ColourSelector
+                compact
+                value={analysis.display?.show_subject_overlay ? (analysis.display?.subject_overlay_colour as string || '#3b82f6') : ''}
+                presetColours={OVERLAY_PRESET_COLOURS}
+                showClear
+                onChange={(c) => {
+                  updateAnalysis({ display: { ...analysis.display, show_subject_overlay: true, subject_overlay_colour: c } });
+                  saveHistoryState('Set overlay colour');
+                }}
+                onClear={() => {
                   updateAnalysis({ display: { ...analysis.display, show_subject_overlay: false, subject_overlay_colour: undefined } });
                   saveHistoryState('Hide overlay');
                 }}
-                style={{
-                  width: 16, height: 16, borderRadius: 3, border: !analysis.display?.show_subject_overlay ? '2px solid var(--text-primary)' : '1px solid var(--border-primary)',
-                  background: 'var(--bg-secondary)', cursor: 'pointer', padding: 0, fontSize: 9, lineHeight: '14px', textAlign: 'center', color: 'var(--text-muted)', flexShrink: 0,
-                }}
-                title="No overlay"
-              >
-                ✕
-              </button>
+              />
             </div>
           )}
         </div>
@@ -350,34 +375,26 @@ function CanvasAnalysisPropertiesSection({ analysisId, graph, setGraph, saveHist
       {/* ── Section 2: Data Source ── */}
       <CollapsibleSection
         title="Data Source"
-        defaultOpen={!analysis.live}
-        withCheckbox={true}
-        checkboxChecked={!analysis.live}
-        toggleLabels={{ off: 'Live', on: 'Custom' }}
-        onCheckboxChange={(checked) => {
-          if (checked && analysis.live) {
-            if (liveTabId && scenariosContext) {
+        defaultOpen={analysis.mode !== 'live'}
+        headerRight={
+          <ModeTrack mode={analysis.mode} onClick={() => {
+            const clone = structuredClone(analysis);
+            let captured: { scenarios: any[]; what_if_dsl?: string } | null = null;
+            if (analysis.mode === 'live' && liveTabId && scenariosContext) {
               const currentTab = tabs.find(t => t.id === liveTabId);
               const whatIfDSL = currentTab?.editorState?.whatIfDSL || null;
-              const { scenarios: captured, what_if_dsl } = captureTabScenariosToRecipe({
+              captured = captureTabScenariosToRecipe({
                 tabId: liveTabId,
                 currentDSL: graphStore.currentDSL || '',
                 operations,
                 scenariosContext: scenariosContext as any,
                 whatIfDSL,
               });
-              updateAnalysis({
-                live: false,
-                recipe: { ...analysis.recipe, scenarios: captured, analysis: { ...analysis.recipe.analysis, what_if_dsl } },
-              });
             }
-          } else if (!checked && !analysis.live) {
-            updateAnalysis({
-              live: true,
-              recipe: { ...analysis.recipe, scenarios: undefined, analysis: { ...analysis.recipe.analysis, what_if_dsl: undefined } },
-            });
-          }
-        }}
+            advanceMode(clone, graphStore.currentDSL || '', captured);
+            updateAnalysis({ mode: clone.mode, recipe: clone.recipe });
+          }} />
+        }
       >
         <div className="property-group">
           <ScenarioLayerList
@@ -387,6 +404,15 @@ function CanvasAnalysisPropertiesSection({ analysisId, graph, setGraph, saveHist
             getSwatchOverlayStyle={getScenarioSwatchOverlayStyle}
             {...scenarioCallbacks}
           />
+          <button
+            type="button"
+            className="scenarios-control-btn"
+            onClick={handleAddScenario}
+            style={{ marginTop: 4, width: '100%' }}
+            title="Add a blank scenario"
+          >
+            <Plus size={12} /> Add scenario
+          </button>
         </div>
       </CollapsibleSection>
 
@@ -426,6 +452,7 @@ function CanvasAnalysisPropertiesSection({ analysisId, graph, setGraph, saveHist
           if (a) {
             if (a.recipe?.analysis) a.recipe.analysis.analysis_type = analysisType;
             a.analysis_type_overridden = true;
+            a.chart_kind = undefined;
             if (nextGraph.metadata) nextGraph.metadata.updated_at = new Date().toISOString();
             setGraph(nextGraph);
             saveHistoryState('Update analysis type');

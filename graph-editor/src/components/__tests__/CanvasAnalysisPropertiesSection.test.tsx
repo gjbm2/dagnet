@@ -21,7 +21,7 @@ let currentGraph: any = {
       id: 'ca-1',
       x: 0, y: 0, width: 400, height: 300,
       view_mode: 'chart',
-      live: true,
+      mode: 'live' as const,
       recipe: { analysis: { analysis_type: 'conversion_funnel', analytics_dsl: 'from(node-a).to(node-b)' } },
     },
   ],
@@ -162,7 +162,7 @@ describe('CanvasAnalysisPropertiesSection smoke tests', () => {
           id: 'ca-1',
           x: 0, y: 0, width: 400, height: 300,
           view_mode: 'chart',
-          live: true,
+          mode: 'live' as const,
           recipe: { analysis: { analysis_type: 'conversion_funnel', analytics_dsl: 'from(node-a).to(node-b)' } },
         },
       ],
@@ -226,7 +226,7 @@ describe('CanvasAnalysisPropertiesSection smoke tests', () => {
     if (atIdx >= 0 && csIdx >= 0) expect(atIdx).toBeLessThan(csIdx);
   });
 
-  it('should show Live label when analysis.live is true', () => {
+  it('should show Live label when analysis.mode is live', () => {
     const { container } = render(
       <PropertiesPanel
         selectedNodeId={null}
@@ -238,12 +238,12 @@ describe('CanvasAnalysisPropertiesSection smoke tests', () => {
       />
     );
 
-    const liveLabel = container.querySelector('.collapsible-section-toggle');
-    expect(liveLabel).toBeTruthy();
+    const modeTrack = container.querySelector('.cfp-mode-track');
+    expect(modeTrack).toBeTruthy();
   });
 
   it('should not crash when analysis has no recipe scenarios (live mode)', () => {
-    currentGraph.canvasAnalyses[0].live = true;
+    currentGraph.canvasAnalyses[0].mode = 'live';
     currentGraph.canvasAnalyses[0].recipe.scenarios = undefined;
 
     expect(() => {
@@ -261,7 +261,7 @@ describe('CanvasAnalysisPropertiesSection smoke tests', () => {
   });
 
   it('should not crash when analysis has custom scenarios', () => {
-    currentGraph.canvasAnalyses[0].live = false;
+    currentGraph.canvasAnalyses[0].mode = 'custom';
     currentGraph.canvasAnalyses[0].recipe.scenarios = [
       { scenario_id: 'current', name: 'Current', colour: '#3b82f6', effective_dsl: 'window(-30d:)', visibility_mode: 'f+e' },
       { scenario_id: 'sc-1', name: 'Google', colour: '#ec4899', effective_dsl: 'window(-30d:).context(channel:google)', visibility_mode: 'f+e' },
@@ -282,7 +282,7 @@ describe('CanvasAnalysisPropertiesSection smoke tests', () => {
   });
 
   it('should render visibility-mode swatch overlays in custom chart props', () => {
-    currentGraph.canvasAnalyses[0].live = false;
+    currentGraph.canvasAnalyses[0].mode = 'custom';
     currentGraph.canvasAnalyses[0].recipe.scenarios = [
       { scenario_id: 'current', name: 'Current', colour: '#3b82f6', effective_dsl: 'window(-30d:)', visibility_mode: 'f' },
       { scenario_id: 'sc-1', name: 'Google', colour: '#ec4899', effective_dsl: 'window(-30d:).context(channel:google)', visibility_mode: 'e' },
@@ -305,7 +305,7 @@ describe('CanvasAnalysisPropertiesSection smoke tests', () => {
   });
 
   it('should reorder the full stored scenario list in custom mode', () => {
-    currentGraph.canvasAnalyses[0].live = false;
+    currentGraph.canvasAnalyses[0].mode = 'custom';
     currentGraph.canvasAnalyses[0].recipe.scenarios = [
       { scenario_id: 'current', name: 'Current', colour: '#3b82f6', effective_dsl: 'window(-30d:)', visibility_mode: 'f+e' },
       { scenario_id: 'sc-1', name: 'Google', colour: '#ec4899', effective_dsl: 'window(-30d:).context(channel:google)', visibility_mode: 'f+e' },
@@ -370,7 +370,7 @@ describe('CanvasAnalysisPropertiesSection smoke tests', () => {
     fireEvent.dragOver(metaRow!, { dataTransfer });
     fireEvent.dragEnd(draggableRows[0], { dataTransfer });
 
-    expect(currentGraph.canvasAnalyses[0].live).toBe(false);
+    expect(currentGraph.canvasAnalyses[0].mode).toBe('custom');
     expect(currentGraph.canvasAnalyses[0].recipe.scenarios.map((s: any) => s.scenario_id)).toEqual(['current', 'sc-2', 'sc-1', 'base']);
     expect(saveHistoryStateMock).toHaveBeenCalledWith('Reorder chart scenarios');
   });

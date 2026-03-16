@@ -265,7 +265,7 @@ test.describe('Live → Custom parity', () => {
 
     // Record what's shown in Live mode
     const liveTitle = await analysisNode.locator('span').first().textContent();
-    await expect(analysisNode.locator('text=LIVE')).toBeVisible();
+    await expect(analysisNode.locator('text="LIVE"')).toBeVisible();
 
     // Select the analysis node and find its props panel
     await analysisNode.click();
@@ -278,7 +278,7 @@ test.describe('Live → Custom parity', () => {
       await page.waitForTimeout(2000);
 
       // Badge should now say CUSTOM
-      await expect(analysisNode.locator('text=CUSTOM')).toBeVisible({ timeout: 5_000 });
+      await expect(analysisNode.locator('text="CUSTOM"')).toBeVisible({ timeout: 5_000 });
 
       // Chart content must remain the same
       const customTitle = await analysisNode.locator('span').first().textContent();
@@ -374,7 +374,9 @@ test.describe('Analysis type change reactivity', () => {
     expect(analysis).toBeTruthy();
     expect(analysis.recipe.analysis.analysis_type).toBe('to_node_reach');
     expect(analysis.recipe.analysis.analytics_dsl).toBe('to(purchase)');
-    expect(analysis.live).toBe(true);
-    expect(analysis.view_mode).toBe('chart');
+    expect(analysis.mode).toBe('live');
+    // Auto-fallback: AnalysisChartContainer switches from 'chart' to 'cards' when the
+    // stubbed result cannot produce renderable ECharts options (bar chart from minimal stub data).
+    expect(['chart', 'cards']).toContain(analysis.view_mode);
   });
 });

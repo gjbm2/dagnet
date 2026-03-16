@@ -26,6 +26,9 @@ import { useStalenessNudges } from './hooks/useStalenessNudges';
 import { useURLDailyRetrieveAllQueue } from './hooks/useURLDailyRetrieveAllQueue';
 import { AutomationBanner } from './components/AutomationBanner';
 import { BannerHost } from './components/BannerHost';
+import { OperationsToast } from './components/OperationsToast';
+import { useOpsDemoMode } from './hooks/useOpsDemoMode';
+import { useBootProgress } from './hooks/useBootProgress';
 import { layoutService } from './services/layoutService';
 import { dockGroups } from './layouts/defaultLayout';
 import { db } from './db/appDatabase';
@@ -2160,12 +2163,15 @@ function MainAppShellContent() {
 function AppShellContent() {
   const { isDashboardMode } = useDashboardMode();
   const { isProjectionMode } = useProjectionMode();
+  useBootProgress();
+  useOpsDemoMode();
   if (isDashboardMode) {
     return (
       <>
         <BannerHost />
         <ShareModeBanner />
         <AutomationBanner />
+        <OperationsToast />
         <ShareChartBootstrapper />
         <ShareBundleBootstrapper />
         <DashboardShell />
@@ -2180,6 +2186,7 @@ function AppShellContent() {
       <BannerHost />
       <ShareModeBanner />
       <AutomationBanner />
+      <OperationsToast />
       <ShareChartBootstrapper />
       <ShareBundleBootstrapper />
       <MainAppShellContent />

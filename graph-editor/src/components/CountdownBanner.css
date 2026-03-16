@@ -1,0 +1,161 @@
+/**
+ * Countdown Banner — full-width top-of-app notification bar.
+ *
+ * Styled consistently with OperationsToast but more prominent:
+ * full-width, slightly taller, bolder type. Shares CSS variable palette.
+ */
+
+/* ---- Container --------------------------------------------------------- */
+
+.countdown-banner {
+  position: fixed;
+  left: 0;
+  right: 0;
+  z-index: 2000;
+  background: var(--bg-secondary, #1e1e1e);
+  border-bottom: 1px solid var(--border-color, #3c3c3c);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 16px;
+  font-size: 13px;
+  animation: countdown-banner-slide-down 0.15s ease-out;
+}
+
+@keyframes countdown-banner-slide-down {
+  from { opacity: 0; transform: translateY(-100%); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* ---- Content area ------------------------------------------------------ */
+
+.countdown-banner-content {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+
+.countdown-banner-label {
+  color: var(--text-primary, #e0e0e0);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.3;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.countdown-banner-detail {
+  color: var(--text-secondary, #a0a0a0);
+  font-size: 12px;
+  font-family: 'JetBrains Mono', monospace;
+  line-height: 1.3;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---- Paused badge ------------------------------------------------------ */
+
+.countdown-banner-paused-badge {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 1px 6px;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  color: #f59e0b;
+  border: 1px solid rgba(245, 158, 11, 0.4);
+  border-radius: 3px;
+  vertical-align: middle;
+}
+
+/* ---- Countdown seconds display ----------------------------------------- */
+
+.countdown-banner-seconds {
+  color: var(--text-secondary, #a0a0a0);
+  font-size: 13px;
+  font-family: 'JetBrains Mono', monospace;
+  white-space: nowrap;
+  min-width: 28px;
+  text-align: right;
+}
+
+/* ---- Progress bar (amber countdown, full-width beneath content) -------- */
+
+.countdown-banner-bar-container {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 3px;
+  background: var(--bg-tertiary, #2d2d2d);
+  overflow: hidden;
+}
+
+.countdown-banner-bar {
+  height: 100%;
+  background: linear-gradient(90deg, #f59e0b, #fbbf24);
+  border-radius: 0;
+  transition: width 1s linear;
+}
+
+.countdown-banner-bar.paused {
+  transition: none;
+}
+
+/* ---- Action buttons ---------------------------------------------------- */
+
+.countdown-banner-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+.countdown-banner-btn {
+  border: 1px solid var(--border-color, #3c3c3c);
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-primary, #e0e0e0);
+  border-radius: 4px;
+  padding: 4px 10px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.1s ease-out;
+}
+
+.countdown-banner-btn:hover {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.countdown-banner-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.countdown-banner-btn.primary {
+  background: #ef4444;
+  border-color: rgba(239, 68, 68, 0.5);
+  font-weight: 600;
+}
+
+.countdown-banner-btn.primary:hover {
+  background: #dc2626;
+}
+
+.countdown-banner-btn.primary:disabled {
+  background: rgba(239, 68, 68, 0.3);
+}
+
+/* Separator dot between button groups */
+.countdown-banner-sep {
+  color: var(--text-secondary, #a0a0a0);
+  font-size: 11px;
+  user-select: none;
+}

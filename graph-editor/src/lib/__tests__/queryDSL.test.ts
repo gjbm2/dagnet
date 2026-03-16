@@ -875,3 +875,234 @@ describe('DSL Parsing Functions', () => {
   });
 });
 
+// ============================================================
+// TEST SUITE 10: Per-Key Clear Semantics (Phase 0 — Tristate)
+// ============================================================
+
+describe('Per-key clear semantics', () => {
+  describe('parseConstraints — three forms of context', () => {
+    it('should parse context(key) as enumerate (value: undefined)', () => {
+      const result = parseConstraints('context(channel)');
+      expect(result.context).toEqual([{ key: 'channel', value: undefined }]);
+    });
+
+    it('should parse context(key:) as per-key clear (value: empty string)', () => {
+      const result = parseConstraints('context(channel:)');
+      expect(result.context).toEqual([{ key: 'channel', value: '' }]);
+    });
+
+    it('should parse context(key:value) as set', () => {
+      const result = parseConstraints('context(channel:google)');
+      expect(result.context).toEqual([{ key: 'channel', value: 'google' }]);
+    });
+
+    it('should distinguish all three forms in a single DSL', () => {
+      const result = parseConstraints('context(channel:google).context(region:).context(browser)');
+      expect(result.context).toHaveLength(3);
+      const byKey = new Map(result.context.map(c => [c.key, c.value]));
+      expect(byKey.get('channel')).toBe('google');   // set
+      expect(byKey.get('region')).toBe('');           // clear
+      expect(byKey.get('browser')).toBeUndefined();   // enumerate
+    });
+  });
+
+  describe('normalizeConstraintString — round-trip', () => {
+    it('should round-trip context(key) as enumerate', () => {
+      expect(normalizeConstraintString('context(channel)')).toBe('context(channel)');
+    });
+
+    it('should round-trip context(key:) as per-key clear', () => {
+      expect(normalizeConstraintString('context(channel:)')).toBe('context(channel:)');
+    });
+
+    it('should round-trip context(key:value) as set', () => {
+      expect(normalizeConstraintString('context(channel:google)')).toBe('context(channel:google)');
+    });
+
+    it('should round-trip all three forms without confusion', () => {
+      const input = 'context(channel:google).context(region:).context(browser)';
+      const normalised = normalizeConstraintString(input);
+      // Canonical order is alphabetical by key
+      expect(normalised).toBe('context(browser).context(channel:google).context(region:)');
+      // Round-trip: normalise again should be stable
+      expect(normalizeConstraintString(normalised)).toBe(normalised);
+    });
+  });
+
+  describe('augmentDSLWithConstraint — per-key clear behaviour', () => {
+    it('should remove a specific key when per-key clear is applied', () => {
+      const result = augmentDSLWithConstraint(
+        'context(channel:google).context(region:uk)',
+        'context(channel:)'
+      );
+      expect(result).toBe('context(region:uk)');
+    });
+
+    it('should produce empty output when per-key clear removes the only key', () => {
+      const result = augmentDSLWithConstraint(
+        'context(channel:google)',
+        'context(channel:)'
+      );
+      expect(result).toBe('');
+    });
+
+    it('should handle replacement and clear in the same delta', () => {
+      const result = augmentDSLWithConstraint(
+        'context(channel:google).context(region:uk)',
+        'context(channel:meta).context(region:)'
+      );
+      expect(result).toBe('context(channel:meta)');
+    });
+
+    it('should not affect keys not mentioned in the per-key clear', () => {
+      const result = augmentDSLWithConstraint(
+        'context(a:1).context(b:2).context(c:3)',
+        'context(b:)'
+      );
+      expect(result).toBe('context(a:1).context(c:3)');
+    });
+
+    it('should preserve enumerate entries through augmentation', () => {
+      const result = augmentDSLWithConstraint(
+        'context(channel:google)',
+        'context(browser)'
+      );
+      expect(result).toBe('context(browser).context(channel:google)');
+    });
+
+    it('should still support whole-axis clear via context()', () => {
+      const result = augmentDSLWithConstraint(
+        'context(channel:google).context(region:uk)',
+        'context()'
+      );
+      expect(result).toBe('context()');
+    });
+  });
+});
+
+// ============================================================
+// TEST SUITE 11: computeRebaseDelta (Phase 0 — Tristate)
+// ============================================================
+
+import { computeRebaseDelta } from '../queryDSL';
+
+describe('computeRebaseDelta', () => {
+  /**
+   * Helper: verify round-trip — augment(base, delta) should reproduce target.
+   */
+  function verifyRoundTrip(base: string, target: string) {
+    const delta = computeRebaseDelta(base, target);
+    const reconstructed = delta
+      ? augmentDSLWithConstraint(base, delta)
+      : normalizeConstraintString(base);
+    const normTarget = normalizeConstraintString(target);
+    expect(reconstructed).toBe(normTarget);
+    return delta;
+  }
+
+  describe('common cases', () => {
+    it('should compute delta for context key replacement', () => {
+      const delta = verifyRoundTrip(
+        'window(-7d:).context(channel:google)',
+        'window(-7d:).context(channel:meta)'
+      );
+      expect(delta).toBe('context(channel:meta)');
+    });
+
+    it('should compute delta for window change', () => {
+      const delta = verifyRoundTrip(
+        'window(-7d:).context(channel:google)',
+        'window(-30d:).context(channel:google)'
+      );
+      expect(delta).toBe('window(-30d:)');
+    });
+
+    it('should compute delta for context addition', () => {
+      const delta = verifyRoundTrip(
+        'window(-7d:)',
+        'window(-7d:).context(region:uk)'
+      );
+      expect(delta).toBe('context(region:uk)');
+    });
+
+    it('should compute delta for context key removal', () => {
+      const delta = verifyRoundTrip(
+        'window(-7d:).context(channel:google)',
+        'window(-7d:)'
+      );
+      expect(delta).toBe('context(channel:)');
+    });
+
+    it('should compute delta for selective key removal', () => {
+      const delta = verifyRoundTrip(
+        'context(channel:google).context(region:uk)',
+        'context(channel:meta)'
+      );
+      expect(delta).toBe('context(channel:meta).context(region:)');
+    });
+
+    it('should compute delta for window change + context replacement', () => {
+      const delta = verifyRoundTrip(
+        'window(-7d:).context(channel:google)',
+        'window(-30d:).context(channel:organic).context(region:uk)'
+      );
+      expect(delta).toBe('context(channel:organic).context(region:uk).window(-30d:)');
+    });
+
+    it('should return empty string when base equals target', () => {
+      const delta = verifyRoundTrip(
+        'window(-7d:).context(channel:google)',
+        'window(-7d:).context(channel:google)'
+      );
+      expect(delta).toBe('');
+    });
+
+    it('should compute delta for window→cohort switch', () => {
+      const delta = verifyRoundTrip(
+        'window(-7d:)',
+        'cohort(-30d:)'
+      );
+      expect(delta).toBe('cohort(-30d:)');
+    });
+
+    it('should compute delta for asat removal', () => {
+      const base = 'window(-7d:).asat(1-Jan-25)';
+      const target = 'window(-7d:)';
+      const delta = computeRebaseDelta(base, target);
+      expect(delta).toBe('asat()');
+      // Round-trip: augment emits asat() (explicit clear marker) which is semantically
+      // equivalent to no asat clause — both mean "no asat constraint"
+      const reconstructed = augmentDSLWithConstraint(base, delta);
+      expect(reconstructed).toBe('window(-7d:).asat()');
+    });
+  });
+
+  describe('edge cases', () => {
+    it('should return target when base is empty', () => {
+      const delta = computeRebaseDelta('', 'window(-7d:).context(channel:google)');
+      expect(delta).toBe('context(channel:google).window(-7d:)');
+      // Round-trip: augment('', delta) = normalise(target)
+      expect(augmentDSLWithConstraint('', delta))
+        .toBe(normalizeConstraintString('window(-7d:).context(channel:google)'));
+    });
+
+    it('should produce clears for every axis when target is empty and base is non-empty', () => {
+      const delta = computeRebaseDelta('context(channel:google)', '');
+      expect(delta).toBe('context(channel:)');
+    });
+
+    it('should return empty string when both are empty', () => {
+      expect(computeRebaseDelta('', '')).toBe('');
+    });
+
+    it('should preserve enumerate context through rebase', () => {
+      // Enumerate (bare key) is a different use class and should pass through
+      const delta = verifyRoundTrip(
+        'context(channel:google)',
+        'context(channel:google).context(browser)'
+      );
+      expect(delta).toBe('context(browser)');
+    });
+  });
+});
+

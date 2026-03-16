@@ -9,6 +9,11 @@ export interface BannerSpec {
   onAction?: () => void;
   actionDisabled?: boolean;
   actionTitle?: string;
+  /**
+   * Optional link to an operation in the registry. When provided,
+   * CountdownBanner derives countdown bar + pause/resume state automatically.
+   */
+  operationId?: string;
 }
 
 export interface BannerManagerState {

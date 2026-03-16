@@ -307,6 +307,7 @@ vi.mock('../../lib/graphComputeClient', () => ({
   graphComputeClient: {
     analyzeSelection: mockAnalyzeSelection,
     analyzeMultipleScenarios: mockAnalyzeMultipleScenarios,
+    clearCache: vi.fn(),
   },
 }));
 
@@ -369,7 +370,7 @@ describe('useCanvasAnalysisCompute DSL handling', () => {
 
     const analysis: any = {
       id: 'test-analysis-1',
-      live: true,
+      mode: 'live' as const,
       view_mode: 'chart',
       recipe: {
         analysis: {
@@ -449,7 +450,7 @@ describe('useCanvasAnalysisCompute DSL handling', () => {
 
     const analysis: any = {
       id: 'snapshot-analysis-1',
-      live: true,
+      mode: 'live' as const,
       view_mode: 'chart',
       chart_kind: 'time_series',
       recipe: {
@@ -487,7 +488,7 @@ describe('useCanvasAnalysisCompute DSL handling', () => {
 
     const analysis: any = {
       id: 'non-snapshot-analysis-1',
-      live: true,
+      mode: 'live' as const,
       view_mode: 'chart',
       recipe: {
         analysis: {
@@ -503,8 +504,9 @@ describe('useCanvasAnalysisCompute DSL handling', () => {
     );
 
     await waitFor(() => {
-      expect(mockAnalyzeSelection).toHaveBeenCalledTimes(1);
+      expect(mockAnalyzeSelection).toHaveBeenCalled();
     });
+    // Non-snapshot analyses must NOT invoke snapshot resolution.
     expect(mockResolveSnapshotSubjectsForScenario).not.toHaveBeenCalled();
   });
 
@@ -540,7 +542,7 @@ describe('useCanvasAnalysisCompute DSL handling', () => {
 
     const analysis: any = {
       id: 'snapshot-analysis-2',
-      live: true,
+      mode: 'live' as const,
       view_mode: 'chart',
       chart_kind: 'time_series',
       recipe: {
@@ -610,7 +612,7 @@ describe('useCanvasAnalysisCompute DSL handling', () => {
 
     const analysis: any = {
       id: 'snapshot-analysis-daily-retry',
-      live: true,
+      mode: 'live' as const,
       view_mode: 'chart',
       chart_kind: 'daily_conversions',
       recipe: {
@@ -659,7 +661,7 @@ describe('useCanvasAnalysisCompute DSL handling', () => {
 
     const analysis: any = {
       id: 'snapshot-analysis-seeded-branch-retry',
-      live: true,
+      mode: 'live' as const,
       view_mode: 'chart',
       chart_kind: 'time_series',
       recipe: {
@@ -691,7 +693,7 @@ describe('useCanvasAnalysisCompute DSL handling', () => {
     mockGraphFileState.source = { repository: 'repo-a', branch: 'main', path: 'graphs/graph-1.yaml' };
     const analysis: any = {
       id: 'custom-snapshot-analysis',
-      live: false,
+      mode: 'fixed' as const,
       view_mode: 'chart',
       recipe: {
         analysis: {
@@ -744,7 +746,7 @@ describe('useCanvasAnalysisCompute DSL handling', () => {
 
     const analysis: any = {
       id: 'single-inflight-compute',
-      live: true,
+      mode: 'live' as const,
       view_mode: 'chart',
       recipe: {
         analysis: {

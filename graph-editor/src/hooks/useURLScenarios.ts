@@ -19,6 +19,7 @@ import { explodeDSL } from '../lib/dslExplosion';
 import { useScenariosContextOptional } from '../contexts/ScenariosContext';
 import { useTabContext } from '../contexts/TabContext';
 import toast from 'react-hot-toast';
+import { operationRegistryService } from '../services/operationRegistryService';
 
 interface URLScenariosParams {
   scenariosParam: string | null;
@@ -195,14 +196,19 @@ export function useURLScenarios(graphLoaded: boolean, fileId: string | undefined
               const skipped = slices.length - newSlices.length;
               console.log(`[useURLScenarios] Creating ${newSlices.length} scenarios from URL (${skipped} already exist)`);
               
-              const toastId = toast.loading(`Creating ${newSlices.length} scenarios from URL...`);
-              
+              const opId = `url-scenarios:${Date.now()}`;
+              operationRegistryService.register({
+                id: opId, kind: 'url-scenarios', label: `Creating ${newSlices.length} scenarios from URL…`,
+                status: 'running', progress: { current: 0, total: newSlices.length },
+              });
+
               try {
                 // Create scenarios sequentially (for proper compositing)
                 for (let i = 0; i < newSlices.length; i++) {
                   const slice = newSlices[i];
-                  toast.loading(`Creating scenario ${i + 1}/${newSlices.length}...`, { id: toastId });
-                  
+                  operationRegistryService.setLabel(opId, `Creating scenario ${i + 1}/${newSlices.length}…`);
+                  operationRegistryService.setProgress(opId, { current: i + 1, total: newSlices.length });
+
                   try {
                     const scenario = await scenariosContext.createLiveScenario(
                       slice,
@@ -210,7 +216,7 @@ export function useURLScenarios(graphLoaded: boolean, fileId: string | undefined
                       activeTabId
                     );
                     createdIds.push(scenario.id);
-                    
+
                     // Regenerate the scenario
                     await scenariosContext.regenerateScenario(scenario.id, scenario);
                   } catch (err) {
@@ -218,16 +224,17 @@ export function useURLScenarios(graphLoaded: boolean, fileId: string | undefined
                     // Continue with other scenarios
                   }
                 }
-                
+
                 // Make all created scenarios visible
                 if (createdIds.length > 0) {
                   await operations.addVisibleScenarios(activeTabId, createdIds);
                 }
-                
-                toast.success(`Created ${createdIds.length} scenarios from URL`, { id: toastId });
+
+                operationRegistryService.setLabel(opId, `Created ${createdIds.length} scenarios from URL`);
+                operationRegistryService.complete(opId, 'complete');
               } catch (err) {
                 console.error('[useURLScenarios] Failed to create scenarios:', err);
-                toast.error('Failed to create scenarios from URL', { id: toastId });
+                operationRegistryService.complete(opId, 'error', 'Failed to create scenarios from URL');
               }
             }
           }

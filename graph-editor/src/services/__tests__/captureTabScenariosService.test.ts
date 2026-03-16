@@ -19,12 +19,14 @@ const baseScenariosContext = {
       id: 'sc-1',
       name: 'Google Channel',
       colour: '#EC4899',
+      params: {},
       meta: { isLive: true, queryDSL: 'context(channel:google)', lastEffectiveDSL: 'window(-30d:).context(channel:google)' },
     },
     {
       id: 'sc-2',
       name: 'Static Snapshot',
       colour: '#F59E0B',
+      params: {},
       meta: { isLive: false },
     },
   ],
@@ -136,7 +138,9 @@ describe('captureTabScenariosToRecipe', () => {
     expect(result.what_if_dsl).toBeUndefined();
   });
 
-  it('should preserve exact visibleScenarioIds order (scenario legend order)', () => {
+  it('should derive order from scenarioOrder reversed: base first, user items, current last', () => {
+    // visibleIds = ['sc-1', 'current', 'base'], scenarioOrder defaults to ['sc-1']
+    // deriveOrderedVisibleIds reverses scenarioOrder → ['sc-1'], pins base first, current last
     const result = captureTabScenariosToRecipe({
       tabId: 'tab-1',
       currentDSL: 'window(-30d:)',
@@ -145,12 +149,14 @@ describe('captureTabScenariosToRecipe', () => {
     });
 
     expect(result.scenarios).toHaveLength(3);
-    expect(result.scenarios[0].scenario_id).toBe('sc-1');
-    expect(result.scenarios[1].scenario_id).toBe('current');
-    expect(result.scenarios[2].scenario_id).toBe('base');
+    expect(result.scenarios[0].scenario_id).toBe('base');
+    expect(result.scenarios[1].scenario_id).toBe('sc-1');
+    expect(result.scenarios[2].scenario_id).toBe('current');
   });
 
-  it('should preserve order when current is last (matching scenario legend)', () => {
+  it('should reverse scenarioOrder for multi-user-scenario ordering', () => {
+    // visibleIds = ['sc-1', 'sc-2', 'current'], scenarioOrder defaults to ['sc-1', 'sc-2']
+    // deriveOrderedVisibleIds reverses → ['sc-2', 'sc-1'], no base visible, current last
     const result = captureTabScenariosToRecipe({
       tabId: 'tab-1',
       currentDSL: 'window(-30d:)',
@@ -159,8 +165,8 @@ describe('captureTabScenariosToRecipe', () => {
     });
 
     expect(result.scenarios).toHaveLength(3);
-    expect(result.scenarios[0].scenario_id).toBe('sc-1');
-    expect(result.scenarios[1].scenario_id).toBe('sc-2');
+    expect(result.scenarios[0].scenario_id).toBe('sc-2');
+    expect(result.scenarios[1].scenario_id).toBe('sc-1');
     expect(result.scenarios[2].scenario_id).toBe('current');
   });
 

@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, startTransition, createContext, useContext } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState, startTransition, createContext, useContext } from 'react';
 import { flushSync } from 'react-dom';
 import { useSnapToSlider } from '@/hooks/useSnapToSlider';
 import { roundTo4DP } from '@/utils/rounding';
@@ -17,29 +17,17 @@ import ReactFlow, {
   NodeTypes,
   EdgeTypes,
   useReactFlow,
-  Panel,
   ConnectionMode,
 } from 'reactflow';
 import 'reactflow/dist/style.css';
 import '../custom-reactflow.css';
 import { useTheme } from '../contexts/ThemeContext';
 import { useElementTool } from '../contexts/ElementToolContext';
-import dagre from 'dagre';
-import { sankey, sankeyLinkHorizontal, sankeyCenter, sankeyJustify } from 'd3-sankey';
 
 import ConversionNode from './nodes/ConversionNode';
 import PostItNode from './nodes/PostItNode';
 import ContainerNode from './nodes/ContainerNode';
 import CanvasAnalysisNode from './nodes/CanvasAnalysisNode';
-import { canvasAnalysisTransientCache, canvasAnalysisResultCache } from '../hooks/useCanvasAnalysisCompute';
-import { chartOperationsService } from '../services/chartOperationsService';
-
-/**
- * Pending payload for the draw-to-create analysis tool.
- * Set by the pin button, consumed on mouse-up after draw.
- */
-let pendingAnalysisPayload: any = null;
-export function setPendingAnalysisPayload(payload: any) { pendingAnalysisPayload = payload; }
 import ConversionEdge from './edges/ConversionEdge';
 import ScenarioOverlayRenderer from './ScenarioOverlayRenderer';
 
@@ -48,41 +36,32 @@ interface DecorationVisibilityContextType {
   beadsVisible: boolean;
   isPanning: boolean;
   isDraggingNode: boolean;
+  /** The analysis ID (without 'analysis-' prefix) currently being dragged, or null. */
+  draggedAnalysisId: string | null;
 }
 
-const DecorationVisibilityContext = createContext<DecorationVisibilityContextType>({ 
+const DecorationVisibilityContext = createContext<DecorationVisibilityContextType>({
   beadsVisible: true,
   isPanning: false,
-  isDraggingNode: false
+  isDraggingNode: false,
+  draggedAnalysisId: null,
 });
 
 export const useDecorationVisibility = () => useContext(DecorationVisibilityContext);
 import ProbabilityInput from './ProbabilityInput';
 import VariantWeightInput from './VariantWeightInput';
-import { NodeContextMenu } from './NodeContextMenu';
-import { PostItContextMenu } from './PostItContextMenu';
-import { ContainerContextMenu } from './ContainerContextMenu';
-import { CanvasAnalysisContextMenu } from './CanvasAnalysisContextMenu';
 import { SelectionConnectors } from './SelectionConnectors';
 import { captureTabScenariosToRecipe } from '../services/captureTabScenariosService';
-import { constructDSLFromSelection } from '../lib/dslConstruction';
-import { buildCanvasAnalysisObject } from '../services/canvasAnalysisCreationService';
 import { resolveAnalysisType } from '../services/analysisTypeResolutionService';
 import { mutateCanvasAnalysisGraph, deleteCanvasAnalysisFromGraph } from '../services/canvasAnalysisMutationService';
-import { ScenarioQueryEditModal } from './modals/ScenarioQueryEditModal';
-import { EdgeContextMenu } from './EdgeContextMenu';
-import { extractSubgraph } from '../lib/subgraphExtractor';
 import { useDashboardMode } from '../hooks/useDashboardMode';
 import { useCopyPaste } from '../hooks/useCopyPaste';
-import { dataOperationsService } from '../services/dataOperationsService';
-import { fileRegistry } from '../contexts/TabContext';
-import toast from 'react-hot-toast';
 import { useGraphStore } from '../contexts/GraphStoreContext';
 import { useTabContext } from '../contexts/TabContext';
 import { useViewPreferencesContext } from '../contexts/ViewPreferencesContext';
 import { useScenariosContextOptional } from '../contexts/ScenariosContext';
 import { getComposedParamsForLayer } from '../services/CompositionService';
-import { graphIssuesService } from '../services/graphIssuesService';
+import { GraphIssuesIndicatorOverlay } from './canvas/GraphIssuesIndicatorOverlay';
 import { toFlow, fromFlow } from '@/lib/transform';
 import {
   logSnapshotBoot,
@@ -90,14 +69,24 @@ import {
   registerSnapshotBootExpectations,
   summariseSnapshotCharts,
 } from '@/lib/snapshotBootTrace';
-import { generateIdFromLabel, generateUniqueId } from '@/lib/idUtils';
 import { computeEffectiveEdgeProbability } from '@/lib/whatIf';
-import { getOptimalFace, assignFacesForNode } from '@/lib/faceSelection';
+import { getOptimalFace } from '@/lib/faceSelection';
+import { useEdgeRouting } from './canvas/useEdgeRouting';
+import { useEdgeConnection } from './canvas/useEdgeConnection';
+import { CanvasContextMenus } from './canvas/CanvasContextMenus';
+import { computeFaceDirectionsFromEdges } from '@/lib/faceDirections';
 import { buildScenarioRenderEdges } from './canvas/buildScenarioRenderEdges';
+import { calculateEdgeOffsets as calculateEdgeOffsetsCore } from './canvas/edgeGeometry';
+import { computeDagreLayout as computeDagreLayoutCore, computeSankeyLayout as computeSankeyLayoutCore } from './canvas/layoutAlgorithms';
+import { useCanvasCreation } from './canvas/useCanvasCreation';
+import { useLassoSelection } from './canvas/useLassoSelection';
+import { useNodeDrag } from './canvas/useNodeDrag';
+import { computeHighlightMetadata } from './canvas/pathHighlighting';
 import { getCaseEdgeVariantInfo } from './edges/edgeLabelHelpers';
 import { MAX_EDGE_WIDTH, MIN_EDGE_WIDTH, DEFAULT_NODE_WIDTH, DEFAULT_NODE_HEIGHT, MIN_NODE_HEIGHT, MAX_NODE_HEIGHT, IMAGE_VIEW_NODE_WIDTH, IMAGE_VIEW_NODE_HEIGHT } from '@/lib/nodeEdgeConstants';
-import { getSeverityIcon } from './issues/issueIcons';
-import { Monitor, MonitorOff, X, Plus, StickyNote, Square, BarChart3, Clipboard, CheckSquare } from 'lucide-react';
+import { useAlignSelection } from '../hooks/useAlignSelection';
+import { useSnapToGuides } from '../hooks/useSnapToGuides';
+
 
 const nodeTypes: NodeTypes = {
   conversion: ConversionNode,
@@ -110,145 +99,22 @@ const edgeTypes: EdgeTypes = {
   conversion: ConversionEdge,
 };
 
-function GraphIssuesIndicatorOverlay({ tabId }: { tabId?: string }) {
-  const { theme } = useTheme();
-  const dark = theme === 'dark';
-  const { tabs } = useTabContext();
-  const { graph } = useGraphStore();
-
-  const debuggingEnabled = !!(graph as any)?.debugging;
-
-  const graphFileId = useMemo(() => {
-    if (!tabId) return null;
-    return tabs.find(t => t.id === tabId)?.fileId ?? null;
-  }, [tabId, tabs]);
-
-  const graphName = useMemo(() => {
-    if (!graphFileId) return null;
-    return graphIssuesService.getGraphNameFromFileId(graphFileId);
-  }, [graphFileId]);
-
-  const [counts, setCounts] = useState(() => {
-    if (!graphName) return { errors: 0, warnings: 0, info: 0, total: 0 };
-    return graphIssuesService.getSeverityCountsForGraph({ graphName, includeReferencedFiles: true });
-  });
-
-  useEffect(() => {
-    if (!debuggingEnabled || !graphName) return;
-
-    const updateCounts = () => {
-      setCounts(graphIssuesService.getSeverityCountsForGraph({ graphName, includeReferencedFiles: true }));
-    };
-
-    const unsubscribe = graphIssuesService.subscribe(() => {
-      updateCounts();
-    });
-
-    // Kick off a check promptly when a debugging graph is opened.
-    graphIssuesService.scheduleCheck();
-    updateCounts();
-
-    return unsubscribe;
-  }, [debuggingEnabled, graphName]);
-
-  if (!debuggingEnabled || !graphName) return null;
-
-  const openIssues = () => {
-    void graphIssuesService.openIssuesTabForGraph(graphName);
-  };
-
-  // Suppress individual severities with zero count, and suppress the whole indicator when empty.
-  if (counts.total === 0) return null;
-
-  return (
-    <Panel position="top-right" style={{ margin: '10px' }}>
-      <div
-        style={{
-          display: 'flex',
-          gap: '6px',
-          alignItems: 'center',
-          background: dark ? 'rgba(45,45,45,0.95)' : 'rgba(255,255,255,0.92)',
-          border: `1px solid ${dark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.08)'}`,
-          borderRadius: '10px',
-          padding: '6px 8px',
-          boxShadow: dark ? '0 2px 10px rgba(0,0,0,0.3)' : '0 2px 10px rgba(0,0,0,0.06)',
-          color: dark ? '#e0e0e0' : 'inherit',
-          userSelect: 'none',
-        }}
-        aria-label={`Graph issues for ${graphName}: ${counts.errors} errors, ${counts.warnings} warnings, ${counts.info} info`}
-      >
-        {counts.errors > 0 && (
-          <button
-            type="button"
-            onClick={openIssues}
-            title={graphIssuesService.getSeverityTooltipText({ graphName, severity: 'error', includeReferencedFiles: true })}
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: '4px',
-              border: 'none',
-              background: 'transparent',
-              cursor: 'pointer',
-              padding: '2px 4px',
-              borderRadius: '6px',
-              color: '#b91c1c',
-              fontSize: '12px',
-              fontWeight: 600,
-            }}
-            aria-label={`Open Graph Issues (${counts.errors} errors)`}
-          >
-            {getSeverityIcon('error')} {counts.errors}
-          </button>
-        )}
-        {counts.warnings > 0 && (
-          <button
-            type="button"
-            onClick={openIssues}
-            title={graphIssuesService.getSeverityTooltipText({ graphName, severity: 'warning', includeReferencedFiles: true })}
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: '4px',
-              border: 'none',
-              background: 'transparent',
-              cursor: 'pointer',
-              padding: '2px 4px',
-              borderRadius: '6px',
-              color: '#b45309',
-              fontSize: '12px',
-              fontWeight: 600,
-            }}
-            aria-label={`Open Graph Issues (${counts.warnings} warnings)`}
-          >
-            {getSeverityIcon('warning')} {counts.warnings}
-          </button>
-        )}
-        {counts.info > 0 && (
-          <button
-            type="button"
-            onClick={openIssues}
-            title={graphIssuesService.getSeverityTooltipText({ graphName, severity: 'info', includeReferencedFiles: true })}
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: '4px',
-              border: 'none',
-              background: 'transparent',
-              cursor: 'pointer',
-              padding: '2px 4px',
-              borderRadius: '6px',
-              color: '#1d4ed8',
-              fontSize: '12px',
-              fontWeight: 600,
-            }}
-            aria-label={`Open Graph Issues (${counts.info} info)`}
-          >
-            {getSeverityIcon('info')} {counts.info}
-          </button>
-        )}
-      </div>
-    </Panel>
-  );
+/** Resolve conversion node IDs spatially contained within a container. */
+function getContainedConversionNodeIds(
+  container: { x: number; y: number; width: number; height: number },
+  rfNodes: any[],
+  tolerance = 10,
+): string[] {
+  return rfNodes.filter(n => {
+    if (n.id?.startsWith('postit-') || n.id?.startsWith('container-') || n.id?.startsWith('analysis-')) return false;
+    const nw = (n as any).measured?.width ?? n.width ?? DEFAULT_NODE_WIDTH;
+    const nh = (n as any).measured?.height ?? n.height ?? DEFAULT_NODE_HEIGHT;
+    const nx = n.position?.x ?? 0;
+    const ny = n.position?.y ?? 0;
+    return nx >= (container.x - tolerance) && ny >= (container.y - tolerance) &&
+      (nx + nw) <= (container.x + container.width + tolerance) &&
+      (ny + nh) <= (container.y + container.height + tolerance);
+  }).map(n => n.id);
 }
 
 interface GraphCanvasProps {
@@ -320,6 +186,8 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
   
   // Track if user is dragging a node to disable beads during drag
   const [isDraggingNode, setIsDraggingNode] = React.useState(false);
+  // Track which specific analysis is being dragged (for SelectionConnectors)
+  const [draggedAnalysisId, setDraggedAnalysisId] = React.useState<string | null>(null);
   
   // ATOMIC RESTORATION: Decoration overlay state (independent of ReactFlow graph state)
   // This flag controls ONLY our overlay components (EdgeBeadsRenderer)
@@ -401,6 +269,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
   const useUniformScaling = viewPrefs?.useUniformScaling ?? false;
   const massGenerosity = viewPrefs?.massGenerosity ?? 0.5;
   const autoReroute = viewPrefs?.autoReroute ?? true;
+  const snapToGuides = viewPrefs?.snapToGuides ?? true;
   const useSankeyView = viewPrefs?.useSankeyView ?? false;
   const showNodeImages = viewPrefs?.showNodeImages ?? false;
   const ts = () => new Date().toISOString();
@@ -452,6 +321,30 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
   const [nodes, setNodes, onNodesChangeBase] = useNodesState([]);
   const [edges, setEdges, onEdgesChangeBase] = useEdgesState([]);
 
+  // Alignment & distribution commands for selected objects
+  const { align, distribute, equalSize, canAlign, canDistribute } = useAlignSelection(nodes, setNodes, graphRef, setGraphDirect, saveHistoryState);
+
+  // Snap-to-guide lines during drag
+  const { rebuildIndex: rebuildSnapIndex, applySnapToChanges, resetHelperLines, HelperLines } = useSnapToGuides();
+  const altKeyPressedRef = useRef(false);
+
+  // Alt key tracking for snap-to-guide override.
+  // Reset on blur/focus to prevent stuck-Alt when Alt+Tab switches windows
+  // (keyup fires in the other window, never reaching our handler).
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => { if (e.key === 'Alt') altKeyPressedRef.current = true; };
+    const handleKeyUp = (e: KeyboardEvent) => { if (e.key === 'Alt') altKeyPressedRef.current = false; };
+    const handleBlur = () => { altKeyPressedRef.current = false; };
+    window.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('keyup', handleKeyUp);
+    window.addEventListener('blur', handleBlur);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('keyup', handleKeyUp);
+      window.removeEventListener('blur', handleBlur);
+    };
+  }, []);
+
   const fitView = useCallback((options?: any) => {
     rfFitView({ ...options });
   }, [rfFitView]);
@@ -485,12 +378,6 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
     onEdgesChangeBase(filteredChanges);
   }, [onEdgesChangeBase, activeElementTool]);
   
-  // Trigger flag for re-routing
-  const [shouldReroute, setShouldReroute] = useState(0);
-  const [forceReroute, setForceReroute] = useState(false); // Force re-route once (for layout)
-  const skipNextRerouteRef = useRef(false); // Skip next auto-reroute after manual reconnection
-  const prevAutoRerouteRef = useRef<boolean | undefined>(undefined); // Track previous autoReroute state to detect actual changes
-  
   // Auto-layout state
   const [layoutDirection, setLayoutDirection] = useState<'LR' | 'RL' | 'TB' | 'BT'>('LR');
   
@@ -502,6 +389,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
   const [analysisContextMenu, setAnalysisContextMenu] = useState<{ x: number; y: number; analysisId: string } | null>(null);
   const [analysisCtxAvailableTypes, setAnalysisCtxAvailableTypes] = useState<import('../lib/graphComputeClient').AvailableAnalysis[]>([]);
   const [ctxDslEditState, setCtxDslEditState] = useState<{ analysisId: string; scenarioId: string } | null>(null);
+  const [multiSelectContextMenu, setMultiSelectContextMenu] = useState<{ x: number; y: number } | null>(null);
   const [edgeContextMenu, setEdgeContextMenu] = useState<{ x: number; y: number; edgeId: string } | null>(null);
   const [contextMenuLocalData, setContextMenuLocalData] = useState<{
     probability: number;
@@ -509,13 +397,33 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
     variantWeight: number;
   } | null>(null);
   
-  // Custom onNodesChange handler to detect position changes for auto re-routing
+  // Ref to access latest nodes inside onNodesChange without adding `nodes` to deps
+  // (adding `nodes` would recreate the callback on every position change → render loop)
+  const nodesForSnapRef = useRef(nodes);
+  nodesForSnapRef.current = nodes;
+
+  // Custom onNodesChange handler — snap-to-guide interception + auto re-routing
   const onNodesChange = useCallback((changes: any[]) => {
     const filtered = activeElementTool === 'pan'
       ? changes.filter((c: any) => c.type !== 'select')
       : changes;
-    onNodesChangeBase(filtered);
-    
+
+    // Apply snap-to-guide lines before committing position changes
+    if (import.meta.env.DEV) {
+      const posDrag = filtered.filter((c: any) => c.type === 'position' && c.dragging === true);
+      if (posDrag.length > 0) {
+        console.log('[GraphCanvas] onNodesChange DRAG:', {
+          snapToGuides,
+          altKey: altKeyPressedRef.current,
+          dragCount: posDrag.length,
+          nodeId: posDrag[0].id,
+          hasPosition: !!posDrag[0].position,
+        });
+      }
+    }
+    const snapped = applySnapToChanges(filtered, nodesForSnapRef.current, snapToGuides, altKeyPressedRef.current);
+    onNodesChangeBase(snapped);
+
     if (autoReroute && !isSyncingRef.current) {
       if (sankeyLayoutInProgressRef.current || isEffectsCooldownActive()) {
         console.log(`[${ts()}] [GraphCanvas] Reroute suppressed (layout/cooldown active)`);
@@ -526,10 +434,10 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
         console.log(`[${new Date().toISOString()}] [GraphCanvas] Position changes detected, triggering reroute`);
         // Trigger re-routing by incrementing the flag
         // This will run during drag (for visual feedback) and won't save history
-        setShouldReroute((v) => v + 1);
+        triggerReroute();
       }
     }
-  }, [autoReroute, onNodesChangeBase, activeElementTool]);
+  }, [autoReroute, snapToGuides, onNodesChangeBase, activeElementTool, applySnapToChanges]);
 
   // Handle external selection (for deep linking from issues viewer, etc.)
   // Track the last external selection to avoid re-processing
@@ -573,442 +481,14 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
   // Use shared constants from nodeEdgeConstants.ts
   const MAX_WIDTH = MAX_EDGE_WIDTH;
   const MIN_WIDTH = MIN_EDGE_WIDTH;
-  
+
   // NOTE: Edge width calculation moved to buildScenarioRenderEdges.ts (unified scenario pipeline)
   // GraphCanvas only provides calculateEdgeOffsets for bundling/spacing logic
+  // Core computation extracted to canvas/edgeGeometry.ts
 
-  // Calculate edge sort keys for curved edge stacking
-  // For Bézier curves, sort by the angle/direction at which edges leave/enter the face
-  const getEdgeSortKey = useCallback((sourceNode: any, targetNode: any, face: string, isSourceFace: boolean = true, edgeId?: string) => {
-    if (!sourceNode || !targetNode) return [0, 0];
-
-    const sourceX = sourceNode.position?.x || 0;
-    const sourceY = sourceNode.position?.y || 0;
-    const targetX = targetNode.position?.x || 0;
-    const targetY = targetNode.position?.y || 0;
-
-    // Calculate vector from source to target
-    const dx = targetX - sourceX;
-    const dy = targetY - sourceY;
-
-    // Angle-based sorting (preferred). Use abs(dy) to mirror top/bottom behavior
-    // so tiny vertical shifts don't flip ordering on left/right faces.
-    let directionAngle: number;
-    if (isSourceFace) {
-      // Edge leaves the source
-      if (face === 'right') {
-        directionAngle = Math.atan2(Math.abs(dx), -dy); // rotate top/bottom by 90°: swap x↔y
-      } else if (face === 'left') {
-        directionAngle = -Math.atan2(Math.abs(dx), dy); // rotate top/bottom by 90°: swap x↔y
-      } else if (face === 'bottom') {
-        directionAngle = Math.atan2(Math.abs(dy), -dx);
-      } else { // top
-        directionAngle = -Math.atan2(Math.abs(dy), dx);
-      }
-    } else {
-      // Edge enters the target
-      if (face === 'left') {
-        directionAngle = Math.atan2(-Math.abs(dx), -dy); // rotate top/bottom by 90°: swap x↔y
-      } else if (face === 'right') {
-        directionAngle = -Math.atan2(Math.abs(dx), -dy); // rotate top/bottom by 90°: swap x↔y
-      } else if (face === 'top') {
-        directionAngle = Math.atan2(-Math.abs(dy), -dx);
-      } else { // bottom
-        directionAngle = -Math.atan2(Math.abs(dy), -dx);
-      }
-    }
-
-    // Secondary sort by span for stability when angles are very close
-    const span = Math.sqrt(dx * dx + dy * dy);
-
-    // Final tie-breaker to keep order stable under tiny movements
-    const edgeIdHash = edgeId ? edgeId.split('').reduce((a, b) => a + b.charCodeAt(0), 0) : 0;
-
-    return [directionAngle, -span, edgeIdHash];
-  }, []);
-
-  // Calculate edge offsets for Sankey-style visualization
   const calculateEdgeOffsets = useCallback((edgesWithWidth: any[], allNodes: any[], maxWidth: number) => {
-    
-    // Group edges by source node (for source offsets)
-    const edgesBySource: { [sourceId: string]: any[] } = {};
-    edgesWithWidth.forEach(edge => {
-      if (!edgesBySource[edge.source]) {
-        edgesBySource[edge.source] = [];
-      }
-      edgesBySource[edge.source].push(edge);
-    });
-
-    // Group edges by target node (for target offsets)
-    const edgesByTarget: { [targetId: string]: any[] } = {};
-    edgesWithWidth.forEach(edge => {
-      if (!edgesByTarget[edge.target]) {
-        edgesByTarget[edge.target] = [];
-      }
-      edgesByTarget[edge.target].push(edge);
-    });
-
-    // Pre-calculate scale factors per face to ensure consistency
-    // Scale factors always apply to keep bundles within MAX_WIDTH, regardless of scaling mode
-    const faceScaleFactors: { [faceKey: string]: number } = {};
-    
-    // Calculate scale factors for each source face
-    Object.keys(edgesBySource).forEach(sourceId => {
-        const sourceEdges = edgesBySource[sourceId];
-        // allNodes are ReactFlow nodes: n.id = uuid, n.data.id = human-readable id
-        const sourceNode = allNodes.find(n => n.id === sourceId || n.data?.id === sourceId);
-        if (!sourceNode) return;
-        
-        // Group by face
-        const edgesByFace: { [face: string]: any[] } = {};
-        sourceEdges.forEach(edge => {
-          const sourceHandle = edge.sourceHandle || 'right-out';
-          const sourceFace = sourceHandle.split('-')[0];
-          if (!edgesByFace[sourceFace]) {
-            edgesByFace[sourceFace] = [];
-          }
-          edgesByFace[sourceFace].push(edge);
-        });
-        
-        // Calculate scale factor for each face
-        Object.keys(edgesByFace).forEach(face => {
-          const faceEdges = edgesByFace[face];
-          const totalWidth = faceEdges.reduce((sum, e) => {
-            return sum + (e.data?.calculateWidth ? e.data.calculateWidth() : 2);
-          }, 0);
-          
-          const faceKey = `source-${sourceId}-${face}`;
-          faceScaleFactors[faceKey] = totalWidth > maxWidth ? maxWidth / totalWidth : 1.0;
-        });
-      });
-      
-    // Calculate scale factors for each target face
-    Object.keys(edgesByTarget).forEach(targetId => {
-        const targetEdges = edgesByTarget[targetId];
-        // allNodes are ReactFlow nodes: n.id = uuid, n.data.id = human-readable id
-        const targetNode = allNodes.find(n => n.id === targetId || n.data?.id === targetId);
-        if (!targetNode) return;
-        
-        // Group by face
-        const edgesByFace: { [face: string]: any[] } = {};
-        targetEdges.forEach(edge => {
-          const targetHandle = edge.targetHandle || 'left';
-          const targetFace = targetHandle.split('-')[0];
-          if (!edgesByFace[targetFace]) {
-            edgesByFace[targetFace] = [];
-          }
-          edgesByFace[targetFace].push(edge);
-        });
-        
-        // Calculate scale factor for each face
-        Object.keys(edgesByFace).forEach(face => {
-          const faceEdges = edgesByFace[face];
-          const totalWidth = faceEdges.reduce((sum, e) => {
-            return sum + (e.data?.calculateWidth ? e.data.calculateWidth() : 2);
-          }, 0);
-          
-          const faceKey = `target-${targetId}-${face}`;
-          faceScaleFactors[faceKey] = totalWidth > maxWidth ? maxWidth / totalWidth : 1.0;
-        });
-      });
-      
-    // Calculate scale factors for incident faces (faces with edges from multiple sources)
-    // This handles cases where multiple source nodes connect to the same target face
-    const incidentFaces: { [faceKey: string]: any[] } = {};
-      
-      // Group all edges by target node and face
-      edgesWithWidth.forEach(edge => {
-        const targetHandle = edge.targetHandle || 'left';
-        const targetFace = targetHandle.split('-')[0];
-        const faceKey = `incident-${edge.target}-${targetFace}`;
-        
-        if (!incidentFaces[faceKey]) {
-          incidentFaces[faceKey] = [];
-        }
-        incidentFaces[faceKey].push(edge);
-      });
-      
-      // Calculate scale factors for incident faces
-      Object.keys(incidentFaces).forEach(faceKey => {
-        const faceEdges = incidentFaces[faceKey];
-        const totalWidth = faceEdges.reduce((sum, e) => {
-          return sum + (e.data?.calculateWidth ? e.data.calculateWidth() : 2);
-        }, 0);
-        
-        faceScaleFactors[faceKey] = totalWidth > maxWidth ? maxWidth / totalWidth : 1.0;
-      });
-
-    // Calculate offsets for each edge (both source and target)
-    const edgesWithOffsets = edgesWithWidth.map(edge => {
-      // Apply offsets for all modes including uniform (for Sankey-style visualization)
-      // (Skip offsets only for modes that explicitly don't need them - currently none)
-
-      const sourceEdges = edgesBySource[edge.source] || [];
-      const targetEdges = edgesByTarget[edge.target] || [];
-
-      // Find the source and target nodes to determine edge direction
-      // allNodes are ReactFlow nodes: n.id = uuid, n.data.id = human-readable id
-      const sourceNode = allNodes.find(n => n.id === edge.source || n.data?.id === edge.source);
-      const targetNode = allNodes.find(n => n.id === edge.target || n.data?.id === edge.target);
-      
-      if (!sourceNode || !targetNode) {
-        return { 
-          ...edge, 
-          sourceOffsetX: 0, 
-          sourceOffsetY: 0,
-          targetOffsetX: 0,
-          targetOffsetY: 0
-        };
-      }
-
-      // Get the actual connection handles from the edge data
-      // These tell us which face of each node the edge connects to
-      const sourceHandle = edge.sourceHandle || 'right-out';
-      const targetHandle = edge.targetHandle || 'left';
-      
-      // Extract face from handle (e.g., 'right-out' → 'right', 'left' → 'left')
-      const sourceFace = sourceHandle.split('-')[0]; // 'right', 'left', 'top', 'bottom'
-      const targetFace = targetHandle.split('-')[0]; // 'right', 'left', 'top', 'bottom'
-
-      // ===== Calculate SOURCE offsets =====
-      // Filter to only edges exiting from the SAME FACE of this source node
-      const sameFaceSourceEdges = sourceEdges.filter(e => {
-        const eSourceHandle = e.sourceHandle || 'right-out';
-        const eSourceFace = eSourceHandle.split('-')[0];
-        return eSourceFace === sourceFace;
-      });
-
-      // Sort by departure angle from this face (accounts for curve trajectory)
-      const sortedSourceEdges = [...sameFaceSourceEdges].sort((a, b) => {
-        // allNodes are ReactFlow nodes: n.id = uuid, n.data.id = human-readable id
-        const aTarget = allNodes.find(n => n.id === a.target || n.data?.id === a.target);
-        const bTarget = allNodes.find(n => n.id === b.target || n.data?.id === b.target);
-        if (!aTarget || !bTarget) return 0;
-        
-        const aKey = getEdgeSortKey(sourceNode, aTarget, sourceFace, true, a.id);
-        const bKey = getEdgeSortKey(sourceNode, bTarget, sourceFace, true, b.id);
-        
-        // Compare [angle, span, edgeIdHash]
-        if (aKey[0] !== bKey[0]) return aKey[0] - bKey[0];
-        if (aKey[1] !== bKey[1]) return aKey[1] - bKey[1];
-        return aKey[2] - bKey[2];
-      });
-
-      // Get the scale factor for this source face
-      const sourceFaceKey = `source-${edge.source}-${sourceFace}`;
-      const sourceScaleFactor = faceScaleFactors[sourceFaceKey] || 1.0;
-
-      // Calculate source offsets using the pre-calculated scale factor
-      let sourceOffsetX = 0;
-      let sourceOffsetY = 0;
-
-      if (sortedSourceEdges.length > 0) {
-        const sourceEdgeIndex = sortedSourceEdges.findIndex(e => e.id === edge.id); // ReactFlow edge IDs match
-        if (sourceEdgeIndex !== -1) {
-          // Calculate cumulative width using per-edge scale = min(source-face, incident target-face)
-          const sourceCumulativeWidth = sortedSourceEdges.slice(0, sourceEdgeIndex).reduce((sum, e) => {
-            const width = e.data?.calculateWidth ? e.data.calculateWidth() : 2;
-            const eSourceHandle = e.sourceHandle || 'right-out';
-            const eSourceFace = eSourceHandle.split('-')[0];
-            const eTargetHandle = e.targetHandle || 'left';
-            const eTargetFace = eTargetHandle.split('-')[0];
-            const eSourceKey = `source-${e.source}-${eSourceFace}`;
-            const eIncidentKey = `incident-${e.target}-${eTargetFace}`;
-            const eSourceScale = faceScaleFactors[eSourceKey] || 1.0;
-            const eIncidentScale = faceScaleFactors[eIncidentKey] || 1.0;
-            // Always apply scale factors to enforce MAX_WIDTH constraint
-            const eScale = Math.min(eSourceScale, eIncidentScale);
-            return sum + (width * eScale);
-          }, 0);
-
-          const edgeWidth = edge.data?.calculateWidth ? edge.data.calculateWidth() : 2;
-          const incidentFaceKeyForThis = `incident-${edge.target}-${targetFace}`;
-          const incidentScaleForThis = faceScaleFactors[incidentFaceKeyForThis] || 1.0;
-          // Always apply scale factors to enforce MAX_WIDTH constraint
-          const thisEdgeScale = Math.min(sourceScaleFactor, incidentScaleForThis);
-          const scaledEdgeWidth = edgeWidth * thisEdgeScale;
-          
-          const sourceCenterInStack = sourceCumulativeWidth + (scaledEdgeWidth / 2);
-          
-          // Calculate total scaled width for centering using per-edge scales
-          const totalScaledWidth = sortedSourceEdges.reduce((sum, e) => {
-            const width = e.data?.calculateWidth ? e.data.calculateWidth() : 2;
-            const eSourceHandle = e.sourceHandle || 'right-out';
-            const eSourceFace = eSourceHandle.split('-')[0];
-            const eTargetHandle = e.targetHandle || 'left';
-            const eTargetFace = eTargetHandle.split('-')[0];
-            const eSourceKey = `source-${e.source}-${eSourceFace}`;
-            const eIncidentKey = `incident-${e.target}-${eTargetFace}`;
-            const eSourceScale = faceScaleFactors[eSourceKey] || 1.0;
-            const eIncidentScale = faceScaleFactors[eIncidentKey] || 1.0;
-            // Always apply scale factors to enforce MAX_WIDTH constraint
-            const eScale = Math.min(eSourceScale, eIncidentScale);
-            return sum + (width * eScale);
-          }, 0);
-          
-          const sourceStackCenter = totalScaledWidth / 2;
-          const sourceOffsetFromCenter = sourceCenterInStack - sourceStackCenter;
-
-          // Apply offset to the correct axis based on face
-          if (sourceFace === 'left' || sourceFace === 'right') {
-            // Left/right faces: offset vertically (Y)
-            sourceOffsetY = sourceOffsetFromCenter;
-          } else {
-            // Top/bottom faces: offset horizontally (X)
-            sourceOffsetX = sourceOffsetFromCenter;
-          }
-        }
-      }
-
-      // ===== Calculate TARGET offsets =====
-      // Filter to only edges entering from the SAME FACE of this target node
-      const sameFaceTargetEdges = targetEdges.filter(e => {
-        const eTargetHandle = e.targetHandle || 'left';
-        const eTargetFace = eTargetHandle.split('-')[0];
-        return eTargetFace === targetFace;
-      });
-
-      // Sort by arrival angle at this face (accounts for curve trajectory)
-      const sortedTargetEdges = [...sameFaceTargetEdges].sort((a, b) => {
-        // allNodes are ReactFlow nodes: n.id = uuid, n.data.id = human-readable id
-        const aSource = allNodes.find(n => n.id === a.source || n.data?.id === a.source);
-        const bSource = allNodes.find(n => n.id === b.source || n.data?.id === b.source);
-        if (!aSource || !bSource) return 0;
-        
-        const aKey = getEdgeSortKey(aSource, targetNode, targetFace, false, a.id);
-        const bKey = getEdgeSortKey(bSource, targetNode, targetFace, false, b.id);
-        
-        // Compare [angle, span, edgeIdHash]
-        if (aKey[0] !== bKey[0]) return aKey[0] - bKey[0];
-        if (aKey[1] !== bKey[1]) return aKey[1] - bKey[1];
-        return aKey[2] - bKey[2];
-      });
-
-      // Get the scale factor for this target incident face (ALL incoming edges)
-      const incidentFaceKey = `incident-${edge.target}-${targetFace}`;
-      const targetScaleFactor = faceScaleFactors[incidentFaceKey] || 1.0;
-
-      let targetOffsetX = 0;
-      let targetOffsetY = 0;
-
-      if (sortedTargetEdges.length > 0) {
-        const targetEdgeIndex = sortedTargetEdges.findIndex(e => e.id === edge.id); // ReactFlow edge IDs match
-        if (targetEdgeIndex !== -1) {
-          // Calculate cumulative width using per-edge scale = min(source-face, incident target-face)
-          const targetCumulativeWidth = sortedTargetEdges.slice(0, targetEdgeIndex).reduce((sum, e) => {
-            const width = e.data?.calculateWidth ? e.data.calculateWidth() : 2;
-            const eSourceHandle = e.sourceHandle || 'right-out';
-            const eSourceFace = eSourceHandle.split('-')[0];
-            const eTargetHandle = e.targetHandle || 'left';
-            const eTargetFace = eTargetHandle.split('-')[0];
-            const eSourceKey = `source-${e.source}-${eSourceFace}`;
-            const eIncidentKey = `incident-${e.target}-${eTargetFace}`;
-            const eSourceScale = faceScaleFactors[eSourceKey] || 1.0;
-            const eIncidentScale = faceScaleFactors[eIncidentKey] || 1.0;
-            // Always apply scale factors to enforce MAX_WIDTH constraint
-            const eScale = Math.min(eSourceScale, eIncidentScale);
-            return sum + (width * eScale);
-          }, 0);
-
-          const edgeWidth = edge.data?.calculateWidth ? edge.data.calculateWidth() : 2;
-          const thisEdgeScaleAtTarget = !useUniformScaling ? Math.min(sourceScaleFactor, targetScaleFactor) : 1.0;
-          const scaledEdgeWidth = edgeWidth * thisEdgeScaleAtTarget;
-          
-          const targetCenterInStack = targetCumulativeWidth + (scaledEdgeWidth / 2);
-          
-          // Calculate total scaled width for centering using per-edge scales
-          const totalScaledWidth = sortedTargetEdges.reduce((sum, e) => {
-            const width = e.data?.calculateWidth ? e.data.calculateWidth() : 2;
-            const eSourceHandle = e.sourceHandle || 'right-out';
-            const eSourceFace = eSourceHandle.split('-')[0];
-            const eTargetHandle = e.targetHandle || 'left';
-            const eTargetFace = eTargetHandle.split('-')[0];
-            const eSourceKey = `source-${e.source}-${eSourceFace}`;
-            const eIncidentKey = `incident-${e.target}-${eTargetFace}`;
-            const eSourceScale = faceScaleFactors[eSourceKey] || 1.0;
-            const eIncidentScale = faceScaleFactors[eIncidentKey] || 1.0;
-            // Always apply scale factors to enforce MAX_WIDTH constraint
-            const eScale = Math.min(eSourceScale, eIncidentScale);
-            return sum + (width * eScale);
-          }, 0);
-          
-          const targetStackCenter = totalScaledWidth / 2;
-          const targetOffsetFromCenter = targetCenterInStack - targetStackCenter;
-
-          // Apply offset to the correct axis based on face
-          if (targetFace === 'left' || targetFace === 'right') {
-            // Left/right faces: offset vertically (Y)
-            targetOffsetY = targetOffsetFromCenter;
-          } else {
-            // Top/bottom faces: offset horizontally (X)
-            targetOffsetX = targetOffsetFromCenter;
-          }
-        }
-      }
-
-      // Get the final edge width using the per-edge scale factor = min(source-face, incident target-face)
-      // Always apply scale factors to enforce MAX_WIDTH constraint
-      let scaledWidth = edge.data?.calculateWidth ? edge.data.calculateWidth() : 2;
-      const thisIncidentScale = faceScaleFactors[`incident-${edge.target}-${targetFace}`] || 1.0;
-      const thisEdgeScale = Math.min(sourceScaleFactor, thisIncidentScale);
-      scaledWidth = scaledWidth * thisEdgeScale;
-
-      // Calculate bundle metadata
-      const sourceEdgeIndex = sortedSourceEdges.findIndex(e => e.id === edge.id);
-      const targetEdgeIndex = sortedTargetEdges.findIndex(e => e.id === edge.id);
-      
-      // Calculate total bundle widths (already calculated above, but extract for clarity)
-      const sourceBundleWidth = sortedSourceEdges.reduce((sum, e) => {
-        const width = e.data?.calculateWidth ? e.data.calculateWidth() : 2;
-        const eSourceHandle = e.sourceHandle || 'right-out';
-        const eSourceFace = eSourceHandle.split('-')[0];
-        const eTargetHandle = e.targetHandle || 'left';
-        const eTargetFace = eTargetHandle.split('-')[0];
-        const eSourceKey = `source-${e.source}-${eSourceFace}`;
-        const eIncidentKey = `incident-${e.target}-${eTargetFace}`;
-        const eSourceScale = faceScaleFactors[eSourceKey] || 1.0;
-        const eIncidentScale = faceScaleFactors[eIncidentKey] || 1.0;
-        const eScale = !useUniformScaling ? Math.min(eSourceScale, eIncidentScale) : 1.0;
-        return sum + (width * eScale);
-      }, 0);
-      
-      const targetBundleWidth = sortedTargetEdges.reduce((sum, e) => {
-        const width = e.data?.calculateWidth ? e.data.calculateWidth() : 2;
-        const eSourceHandle = e.sourceHandle || 'right-out';
-        const eSourceFace = eSourceHandle.split('-')[0];
-        const eTargetHandle = e.targetHandle || 'left';
-        const eTargetFace = eTargetHandle.split('-')[0];
-        const eSourceKey = `source-${e.source}-${eSourceFace}`;
-        const eIncidentKey = `incident-${e.target}-${eTargetFace}`;
-        const eSourceScale = faceScaleFactors[eSourceKey] || 1.0;
-        const eIncidentScale = faceScaleFactors[eIncidentKey] || 1.0;
-        const eScale = !useUniformScaling ? Math.min(eSourceScale, eIncidentScale) : 1.0;
-        return sum + (width * eScale);
-      }, 0);
-
-      return { 
-        ...edge, 
-        sourceOffsetX: sourceOffsetX,
-        sourceOffsetY: sourceOffsetY,
-        targetOffsetX: targetOffsetX,
-        targetOffsetY: targetOffsetY,
-        scaledWidth: scaledWidth,
-        // Bundle metadata
-        sourceBundleWidth: sourceBundleWidth,
-        targetBundleWidth: targetBundleWidth,
-        sourceBundleSize: sortedSourceEdges.length,
-        targetBundleSize: sortedTargetEdges.length,
-        isFirstInSourceBundle: sourceEdgeIndex === 0,
-        isLastInSourceBundle: sourceEdgeIndex === sortedSourceEdges.length - 1,
-        isFirstInTargetBundle: targetEdgeIndex === 0,
-        isLastInTargetBundle: targetEdgeIndex === sortedTargetEdges.length - 1,
-        sourceFace: sourceFace,
-        targetFace: targetFace,
-      };
-    });
-
-    return edgesWithOffsets;
-  }, [useUniformScaling, getEdgeSortKey, graphStoreHook]);
+    return calculateEdgeOffsetsCore(edgesWithWidth, allNodes, maxWidth, useUniformScaling);
+  }, [useUniformScaling, graphStoreHook]);
 
   // Track the last synced graph to detect real changes
   const lastSyncedGraphRef = useRef<string>('');
@@ -1017,20 +497,21 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
   const snapshotBootCycleIdRef = useRef<string>('');
   const isSyncingRef = useRef(false); // Prevents ReactFlow->Graph sync loops, but NOT Graph->ReactFlow sync
   const isDraggingNodeRef = useRef(false); // Prevents Graph->ReactFlow sync during node dragging
-  const dragTimeoutRef = useRef<number | null>(null); // Failsafe to clear drag flag if it gets stuck
+  const isResizingNodeRef = useRef(false); // Prevents Graph->ReactFlow style sync during node resizing
+  // dragTimeoutRef moved to useNodeDrag hook
   const prevSankeyViewRef = useRef(useSankeyView); // Track Sankey mode changes to force slow path rebuild
   const prevShowNodeImagesRef = useRef(showNodeImages); // Track image view changes to force slow path rebuild
   const reactFlowWrapperRef = useRef<HTMLDivElement>(null); // For lasso coordinate calculations
   const hasInitialFitViewRef = useRef(false);
   const currentGraphIdRef = useRef<string>('');
-  
+  const sankeyLayoutInProgressRef = useRef(false); // Gate reroutes/slow-path during Sankey layout
+  const effectsCooldownUntilRef = useRef<number>(0); // Suppress effects until this timestamp (ms)
+  const isEffectsCooldownActive = () => performance.now() < effectsCooldownUntilRef.current;
+
   // Track last committed RENDER edges (not base edges) for geometry field merge during slow-path rebuilds
   const lastRenderEdgesRef = useRef<Edge[]>([]);
   const isInSlowPathRebuildRef = useRef(false);
   
-  // Re-route feature state
-  const lastNodePositionsRef = useRef<{ [nodeId: string]: { x: number; y: number } }>({});
-
   // Ref to autofocus edge probability input in context menu
   const edgeProbabilityInputRef = useRef<HTMLInputElement | null>(null);
   
@@ -1068,262 +549,26 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
     
     return { sourceHandle, targetHandle };
   }, [edges, useSankeyView]);
-  
-  // Perform immediate re-route of ALL edges (used when toggling on)
-  const performImmediateReroute = useCallback(() => {
-    if (!graph) {
-      console.log('No graph, skipping immediate re-route');
-      return;
-    }
-    
-    console.log('Performing immediate re-route of ALL edges');
-    
-    const nextGraph = structuredClone(graph);
-    let updatedCount = 0;
-    
-    // Re-route ALL edges
-    nextGraph.edges.forEach((graphEdge: any) => {
-      // For ReactFlow nodes, n.id IS the uuid, but graphEdge.from/to could be either uuid or human-readable id
-      const sourceNode = nodes.find(n => n.id === graphEdge.from || n.data?.id === graphEdge.from);
-      const targetNode = nodes.find(n => n.id === graphEdge.to || n.data?.id === graphEdge.to);
-      
-      if (sourceNode && targetNode) {
-        const { sourceHandle, targetHandle } = calculateOptimalHandles(sourceNode, targetNode);
-        
-        // Only count as updated if handles actually changed
-        const handleChanged = graphEdge.fromHandle !== sourceHandle || graphEdge.toHandle !== targetHandle;
-        
-        if (handleChanged) {
-          console.log(`Re-routing edge ${graphEdge.id}:`, {
-            from: graphEdge.from,
-            to: graphEdge.to,
-            oldFromHandle: graphEdge.fromHandle,
-            newFromHandle: sourceHandle,
-            oldToHandle: graphEdge.toHandle,
-            newToHandle: targetHandle
-          });
-          
-          graphEdge.fromHandle = sourceHandle;
-          graphEdge.toHandle = targetHandle;
-          updatedCount++;
-        }
-      }
-    });
-    
-    console.log(`Updated ${updatedCount} edges`);
-    
-    if (updatedCount > 0) {
-      if (nextGraph.metadata) {
-        nextGraph.metadata.updated_at = new Date().toISOString();
-      }
-      
-      console.log('Updating graph with immediate re-route changes');
-      setGraph(nextGraph);
-    }
-  }, [graph, nodes, calculateOptimalHandles, setGraph]);
-  
-  // Auto re-route edges when nodes move
-  const performAutoReroute = useCallback(() => {
-    // Skip if we just did a manual reconnection
-    if (skipNextRerouteRef.current) {
-      console.log('Auto re-route skipped: manual reconnection just occurred');
-      skipNextRerouteRef.current = false;
-      return;
-    }
-    
-    // Allow execution if autoReroute is enabled OR if forceReroute is true
-    if ((!autoReroute && !forceReroute) || !graph) {
-      console.log('Auto re-route skipped:', { autoReroute, forceReroute, hasGraph: !!graph });
-      return;
-    }
-    
-    const isDragging = isDraggingNodeRef.current;
-    console.log('performAutoReroute executing:', { autoReroute, forceReroute, isDragging });
-    
-    const currentPositions: { [nodeId: string]: { x: number; y: number } } = {};
-    let movedNodes: string[] = [];
-    
-    // If forceReroute, re-route ALL edges
-    if (forceReroute) {
-      console.log('Force re-route: processing all nodes');
-      movedNodes = nodes.map(n => n.id);
-      nodes.forEach(node => {
-        currentPositions[node.id] = { x: node.position.x, y: node.position.y };
-      });
-    } else {
-      // Check which nodes have moved
-      nodes.forEach(node => {
-        const currentPos = { x: node.position.x, y: node.position.y };
-        const lastPos = lastNodePositionsRef.current[node.id];
-        
-        currentPositions[node.id] = currentPos;
-        
-        if (lastPos && (Math.abs(currentPos.x - lastPos.x) > 5 || Math.abs(currentPos.y - lastPos.y) > 5)) {
-          movedNodes.push(node.id);
-          console.log(`Node ${node.id} moved:`, { 
-            from: lastPos, 
-            to: currentPos, 
-            deltaX: currentPos.x - lastPos.x, 
-            deltaY: currentPos.y - lastPos.y 
-          });
-        }
-      });
-      
-      if (movedNodes.length === 0) {
-        console.log('No nodes moved, skipping re-route');
-        return;
-      }
-    }
-    
-    console.log('Moved nodes:', movedNodes);
-    
-    // Update last positions
-    lastNodePositionsRef.current = currentPositions;
-    
-    // Find edges that need re-routing
-    const edgesToReroute = edges.filter(edge => 
-      movedNodes.includes(edge.source) || movedNodes.includes(edge.target)
-    );
-    
-    console.log('Edges to re-route:', edgesToReroute.map(e => e.id));
-    
-    if (edgesToReroute.length === 0) return;
-    
-    // Update graph with new handle positions
-    const nextGraph = structuredClone(graph);
-    
-    // Build quick position map
-    const pos: Record<string, { x: number; y: number }> = {};
-    nodes.forEach(n => { pos[n.id] = { x: n.position.x, y: n.position.y }; });
 
-    // Track which edges changed to identify nodes that need re-evaluation
-    const changedEdges = new Set<string>();
-    const processedNodes = new Set<string>();
-    const nodesToProcess = [...movedNodes];
-    
-    // Process nodes in waves, using original edge state for decisions
-    while (nodesToProcess.length > 0) {
-      const nodeId = nodesToProcess.shift()!;
-      if (processedNodes.has(nodeId)) continue;
-      
-      processedNodes.add(nodeId);
-      
-      // Use original edges for face assignment decisions
-      const assignments = assignFacesForNode(nodeId, pos, edges as any);
-      
-      // Apply assignments and track changes
-      Object.entries(assignments).forEach(([edgeId, face]) => {
-        const originalEdge = edges.find(e => e.id === edgeId); // ReactFlow edge IDs match
-        const graphEdge = nextGraph.edges.find(e => e.uuid === edgeId || e.id === edgeId);
-        if (!originalEdge || !graphEdge) return;
-        
-        const newFromHandle = graphEdge.from === nodeId ? face + '-out' : graphEdge.fromHandle;
-        const newToHandle = graphEdge.to === nodeId ? face : graphEdge.toHandle;
-        
-        
-        // Check if this edge's face actually changed
-        const fromChanged = graphEdge.from === nodeId && originalEdge.sourceHandle !== newFromHandle;
-        const toChanged = graphEdge.to === nodeId && originalEdge.targetHandle !== newToHandle;
-        
-        if (fromChanged || toChanged) {
-          changedEdges.add(edgeId);
-          
-          // Add connected nodes for next wave (avoid duplicates)
-          if (!processedNodes.has(originalEdge.source) && !nodesToProcess.includes(originalEdge.source)) {
-            nodesToProcess.push(originalEdge.source);
-          }
-          if (!processedNodes.has(originalEdge.target) && !nodesToProcess.includes(originalEdge.target)) {
-            nodesToProcess.push(originalEdge.target);
-          }
-        }
-        
-        // Apply the changes
-        if (graphEdge.from === nodeId) {
-          graphEdge.fromHandle = face + '-out';
-        }
-        if (graphEdge.to === nodeId) {
-          graphEdge.toHandle = face;
-        }
-      });
-    }
-    
-    // Only update if edges actually changed
-    if (changedEdges.size === 0) {
-      console.log('No edges changed, skipping graph update');
-      return;
-    }
-    
-    // Preserve current ReactFlow node positions in the graph
-    // This prevents nodes from jumping back to old positions when graph is synced
-    nextGraph.nodes.forEach((node: any) => {
-      const reactFlowNode = nodes.find(n => n.id === node.uuid || n.id === node.id);
-      if (reactFlowNode && node.layout) {
-        node.layout.x = reactFlowNode.position.x;
-        node.layout.y = reactFlowNode.position.y;
-      }
-    });
-    
-    if (nextGraph.metadata) {
-      nextGraph.metadata.updated_at = new Date().toISOString();
-    }
-    
-    console.log(`Updating graph with ${changedEdges.size} changed edge handle positions`);
-    setGraph(nextGraph);
-    // Graph→ReactFlow sync will pick up the edge handle changes via the fast path
-  }, [autoReroute, forceReroute, graph, nodes, edges, calculateOptimalHandles, setGraph]);
-  
-  // Reset position tracking and perform immediate re-route when autoReroute is actually toggled ON
-  // Only react when the value actually changes, not on initial load
-  useEffect(() => {
-    const prev = prevAutoRerouteRef.current;
-    prevAutoRerouteRef.current = autoReroute;
-    
-    console.log(`[${new Date().toISOString()}] [GraphCanvas] useEffect#GC4: Auto re-route:`, autoReroute, `(prev: ${prev})`);
-    
-    if (autoReroute) {
-      // Initialize position tracking when enabling
-      const initialPositions: { [nodeId: string]: { x: number; y: number } } = {};
-      nodes.forEach(node => {
-        initialPositions[node.id] = { x: node.position.x, y: node.position.y };
-      });
-      lastNodePositionsRef.current = initialPositions;
-      
-      // Only perform immediate re-route if this is an actual toggle (not initial load)
-      if (prev !== undefined && prev !== autoReroute && graph && nodes.length > 0 && edges.length > 0) {
-        console.log('Triggering immediate re-route on toggle');
-        setTimeout(() => {
-          performImmediateReroute();
-        }, 50);
-      }
-    } else {
-      // Clear position tracking when disabling
-      lastNodePositionsRef.current = {};
-    }
-  }, [autoReroute]); // ONLY depend on autoReroute, not nodes/edges/graph!
-  
-  // Perform re-routing when shouldReroute flag changes (with small delay after node movement)
-  useEffect(() => {
-    if (sankeyLayoutInProgressRef.current || isEffectsCooldownActive()) {
-      console.log(`[${ts()}] [GraphCanvas] Re-route skipped (layout/cooldown active)`);
-      return;
-    }
-    if ((shouldReroute > 0 && autoReroute) || forceReroute) {
-      console.log('Re-route triggered:', { shouldReroute, autoReroute, forceReroute });
-      // Add a small delay to ensure node positions are fully updated
-      const timeoutId = setTimeout(() => {
-        console.log('Executing delayed re-route after node movement');
-        performAutoReroute();
-        if (forceReroute) {
-          setForceReroute(false); // Reset force flag after execution
-        }
-        // Reset the shouldReroute flag to prevent infinite loops
-        setShouldReroute(0);
-      }, 100); // 100ms delay after user finishes dragging
-      
-      return () => clearTimeout(timeoutId);
-    }
-  }, [shouldReroute, autoReroute, forceReroute, performAutoReroute]);
-  
+  // Edge routing hook (extracted from GraphCanvas Phase B2)
+  const {
+    triggerReroute,
+    setForceReroute,
+    skipNextRerouteRef,
+    performImmediateReroute,
+  } = useEdgeRouting({
+    graph,
+    nodes,
+    edges,
+    setGraph,
+    autoReroute,
+    useSankeyView,
+    calculateOptimalHandles,
+    isDraggingNodeRef,
+    sankeyLayoutInProgressRef,
+    isEffectsCooldownActive,
+  });
+
   // Get all existing ids (nodes and edges) for uniqueness checking
   const getAllExistingIds = useCallback((excludeId?: string) => {
     if (!graph) return [];
@@ -1549,23 +794,32 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
 
   const autoEditPostitIdRef = useRef<string | null>(null);
   const autoSelectAnalysisIdRef = useRef<string | null>(null);
+
+  // Resize guard callbacks — passed to canvas object nodes to prevent graph→RF style overwrites mid-resize
+  const handleResizeStart = useCallback(() => { isResizingNodeRef.current = true; }, []);
+  const handleResizeEnd = useCallback(() => { isResizingNodeRef.current = false; }, []);
+
   const postitHistoryTimerRef = useRef<NodeJS.Timeout | null>(null);
   const handleUpdatePostit = useCallback((id: string, updates: any) => {
-    if (!graph) return;
-    const nextGraph = structuredClone(graph);
+    const current = graphRef.current;
+    if (!current) return;
+    const nextGraph = structuredClone(current);
     if (!nextGraph.postits) return;
     const p = nextGraph.postits.find((p: any) => p.id === id);
     if (!p) return;
     Object.assign(p, updates);
     if (nextGraph.metadata) nextGraph.metadata.updated_at = new Date().toISOString();
-    setGraph(nextGraph);
+    // Use setGraphDirect (synchronous) — postit updates are never topology changes
+    // and the async setGraph wrapper causes stale graphRef during rapid resize/typing
+    setGraphDirect(nextGraph);
+    graphRef.current = nextGraph; // Keep ref in sync for rapid successive calls (e.g. resize)
     // Debounce history: coalesce rapid changes (typing, resizing) into one undo step
     if (postitHistoryTimerRef.current) clearTimeout(postitHistoryTimerRef.current);
     postitHistoryTimerRef.current = setTimeout(() => {
       saveHistoryState('Update post-it');
       postitHistoryTimerRef.current = null;
     }, 800);
-  }, [graph, setGraph, saveHistoryState]);
+  }, [setGraphDirect, saveHistoryState]);
 
   const handleDeletePostit = useCallback((id: string) => {
     if (!graph) return;
@@ -1573,27 +827,32 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
     if (!nextGraph.postits) return;
     nextGraph.postits = nextGraph.postits.filter((p: any) => p.id !== id);
     if (nextGraph.metadata) nextGraph.metadata.updated_at = new Date().toISOString();
-    setGraph(nextGraph);
+    // Use setGraphDirect — deleting a postit doesn't change graph topology.
+    setGraphDirect(nextGraph);
     saveHistoryState('Delete post-it');
     onSelectedAnnotationChange?.(null, null);
-  }, [graph, setGraph, saveHistoryState, onSelectedAnnotationChange]);
+  }, [graph, setGraphDirect, saveHistoryState, onSelectedAnnotationChange]);
 
   const containerHistoryTimerRef = useRef<NodeJS.Timeout | null>(null);
   const handleUpdateContainer = useCallback((id: string, updates: any) => {
-    if (!graph) return;
-    const nextGraph = structuredClone(graph);
-    if (!nextGraph.containers) return;
+    const current = graphRef.current;
+    if (!current) { console.warn(`[handleUpdateContainer] graphRef.current is null!`); return; }
+    const nextGraph = structuredClone(current);
+    if (!nextGraph.containers) { console.warn(`[handleUpdateContainer] no containers array!`); return; }
     const c = nextGraph.containers.find((c: any) => c.id === id);
-    if (!c) return;
+    if (!c) { console.warn(`[handleUpdateContainer] container ${id.slice(0,8)} not found!`); return; }
+    const prevW = c.width, prevH = c.height;
     Object.assign(c, updates);
+    console.log(`[handleUpdateContainer] ${id.slice(0,8)}: ${prevW}x${prevH} → ${c.width}x${c.height}`);
     if (nextGraph.metadata) nextGraph.metadata.updated_at = new Date().toISOString();
-    setGraph(nextGraph);
+    setGraphDirect(nextGraph);
+    graphRef.current = nextGraph; // Keep ref in sync for rapid successive calls (e.g. resize)
     if (containerHistoryTimerRef.current) clearTimeout(containerHistoryTimerRef.current);
     containerHistoryTimerRef.current = setTimeout(() => {
       saveHistoryState('Update container');
       containerHistoryTimerRef.current = null;
     }, 800);
-  }, [graph, setGraph, saveHistoryState]);
+  }, [setGraphDirect, saveHistoryState]);
 
   const handleDeleteContainer = useCallback((id: string) => {
     if (!graph) return;
@@ -1601,10 +860,11 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
     if (!nextGraph.containers) return;
     nextGraph.containers = nextGraph.containers.filter((c: any) => c.id !== id);
     if (nextGraph.metadata) nextGraph.metadata.updated_at = new Date().toISOString();
-    setGraph(nextGraph);
+    // Use setGraphDirect — deleting a container doesn't change graph topology.
+    setGraphDirect(nextGraph);
     saveHistoryState('Delete container');
     onSelectedAnnotationChange?.(null, null);
-  }, [graph, setGraph, saveHistoryState, onSelectedAnnotationChange]);
+  }, [graph, setGraphDirect, saveHistoryState, onSelectedAnnotationChange]);
 
   const analysisHistoryTimerRef = useRef<NodeJS.Timeout | null>(null);
   const handleUpdateAnalysis = useCallback((id: string, updates: any) => {
@@ -1612,13 +872,14 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
       Object.assign(a, updates);
     });
     if (!nextGraph) return;
-    setGraph(nextGraph);
+    setGraphDirect(nextGraph);
+    graphRef.current = nextGraph; // Keep ref in sync for rapid successive calls (e.g. resize)
     if (analysisHistoryTimerRef.current) clearTimeout(analysisHistoryTimerRef.current);
     analysisHistoryTimerRef.current = setTimeout(() => {
       saveHistoryState('Update canvas analysis');
       analysisHistoryTimerRef.current = null;
     }, 800);
-  }, [setGraph, saveHistoryState]);
+  }, [setGraphDirect, saveHistoryState]);
 
   const handleDeleteAnalysis = useCallback((id: string) => {
     const nextGraph = deleteCanvasAnalysisFromGraph(graph, id);
@@ -1724,15 +985,27 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
       const selectedNodes = nodes.filter(n => n.selected);
       const selectedEdges = edges.filter(e => e.selected);
       
-      e.detail.selectedNodeUuids = selectedNodes.filter(n => !isCanvasObjectNode(n.id)).map(n => n.id);
+      let conversionNodeUuids = selectedNodes.filter(n => !isCanvasObjectNode(n.id)).map(n => n.id);
       e.detail.selectedEdgeUuids = selectedEdges.map(e => e.id);
       e.detail.selectedPostitIds = selectedNodes.filter(n => n.id?.startsWith('postit-')).map(n => n.id.replace('postit-', ''));
-      e.detail.selectedContainerIds = selectedNodes.filter(n => n.id?.startsWith('container-')).map(n => n.id.replace('container-', ''));
+      const containerIds = selectedNodes.filter(n => n.id?.startsWith('container-')).map(n => n.id.replace('container-', ''));
+      e.detail.selectedContainerIds = containerIds;
       e.detail.selectedAnalysisIds = selectedNodes.filter(n => n.id?.startsWith('analysis-')).map(n => n.id.replace('analysis-', ''));
+
+      // When a container is selected and no conversion nodes are, expand to contained nodes
+      if (conversionNodeUuids.length === 0 && containerIds.length > 0 && graph?.containers) {
+        for (const cid of containerIds) {
+          const c = graph.containers.find((ci: any) => ci.id === cid);
+          if (c) {
+            conversionNodeUuids.push(...getContainedConversionNodeIds(c, nodes));
+          }
+        }
+      }
+      e.detail.selectedNodeUuids = conversionNodeUuids;
     };
     window.addEventListener('dagnet:querySelection', handler as any);
     return () => window.removeEventListener('dagnet:querySelection', handler as any);
-  }, [nodes, edges, isCanvasObjectNode]);
+  }, [nodes, edges, graph, isCanvasObjectNode]);
 
   // Listen for select all nodes request (from Edit menu)
   useEffect(() => {
@@ -1817,7 +1090,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
             analysisId: chart.id,
             analysisType: chart.analysisType,
             chartKind: chart.chartKind,
-            live: chart.live,
+            mode: chart.mode,
             cycleId: snapshotBootCycleId,
             tabId,
             source: 'GraphCanvas:sync-start',
@@ -1983,15 +1256,20 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
     });
 
     // Fast path: If only edge data changed (no topology, position, or handle changes), update in place
-    // CRITICAL: During drag or immediately after drag, ALWAYS take fast path to prevent node position overwrites
-    // We ignore nodePositionsChanged during/after drag because ReactFlow has the current drag positions
-    // Handle changes require full recalculation because they affect edge bundling, offsets, and widths
-    // After drag, we keep isDraggingNodeRef.current true until sync completes to force fast path
+    // CRITICAL: During drag or resize, ALWAYS take fast path to prevent node position/size overwrites.
+    // The fast path already updates edge handles (sourceHandle/targetHandle) and recalculates offsets,
+    // and it has guards that preserve RF positions (isDraggingNodeRef) and styles (isResizingNodeRef)
+    // for container/postit/analysis nodes. The slow path rebuilds ALL nodes from graph data, which
+    // has stale positions during drag (store not updated until onNodeDragStop) and stale dimensions
+    // during resize (store updated by setGraphDirect but slow path would overwrite RF visual state).
     // View mode changes (Sankey, image view) require slow path because node sizes change
     // Image boundary changes (0↔1 images) also require slow path for node resizing
-    const shouldTakeFastPath = !edgeCountChanged && !nodeCountChanged && !edgeIdsChanged && !edgeHandlesChanged &&
-                               !analysisNodePayloadChanged &&
-                               !viewModeChanged && !imageBoundaryChanged && edges.length > 0 && (isDraggingNodeRef.current || !nodePositionsChanged);
+    const isInteracting = isDraggingNodeRef.current || isResizingNodeRef.current;
+    const shouldTakeFastPath = !edgeCountChanged && !nodeCountChanged && !edgeIdsChanged &&
+                               (isInteracting || !edgeHandlesChanged) &&
+                               (isInteracting || !analysisNodePayloadChanged) &&
+                               !viewModeChanged && !imageBoundaryChanged && edges.length > 0 &&
+                               (isInteracting || !nodePositionsChanged);
 
     if (snapshotCharts.length > 0) {
       logSnapshotBoot('GraphCanvas:sync-path-decision', {
@@ -2145,11 +1423,27 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
               const gpIndex = gpArray.findIndex((p: any) => p.id === postitId);
               const graphPostit = gpIndex >= 0 ? gpArray[gpIndex] : null;
               if (!graphPostit) return prevNode;
+              if (import.meta.env.DEV) {
+                const prevStyle = prevNode.style as any;
+                if (!isResizingNodeRef.current && (prevStyle?.width !== graphPostit.width || prevStyle?.height !== graphPostit.height)) {
+                  console.log('[reconcile] postit style WILL CHANGE', {
+                    id: prevNode.id,
+                    isResizing: isResizingNodeRef.current,
+                    isInteracting,
+                    prevW: prevStyle?.width, prevH: prevStyle?.height,
+                    graphW: graphPostit.width, graphH: graphPostit.height,
+                    prevPos: prevNode.position,
+                    graphPos: { x: graphPostit.x, y: graphPostit.y },
+                  });
+                }
+              }
               return {
                 ...prevNode,
                 zIndex: 5000 + gpIndex,
-                position: { x: graphPostit.x ?? 0, y: graphPostit.y ?? 0 },
-                style: { ...prevNode.style, width: graphPostit.width, height: graphPostit.height },
+                // During drag/resize, preserve ReactFlow's current position/size — graph model may not have synced yet
+                // Resize from left/top edge changes position too, so guard position with BOTH refs
+                ...(isInteracting ? {} : { position: { x: graphPostit.x ?? 0, y: graphPostit.y ?? 0 } }),
+                ...(isResizingNodeRef.current ? {} : { style: { ...prevNode.style, width: graphPostit.width, height: graphPostit.height } }),
                 selected: autoEditNodeId ? prevNode.id === autoEditNodeId : prevNode.selected,
                 data: {
                   ...prevNode.data,
@@ -2157,6 +1451,8 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
                   onUpdate: handleUpdatePostit,
                   onDelete: handleDeletePostit,
                   onSelect: onSelectedAnnotationChange ? (id: string) => onSelectedAnnotationChange(id, 'postit') : undefined,
+                  onResizeStart: handleResizeStart,
+                  onResizeEnd: handleResizeEnd,
                 },
               };
             }
@@ -2169,13 +1465,28 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
               return {
                 ...prevNode,
                 zIndex: 1000 + gcIndex,
-                position: { x: graphContainer.x ?? 0, y: graphContainer.y ?? 0 },
-                style: { ...prevNode.style, width: graphContainer.width, height: graphContainer.height },
+                // During drag/resize, preserve ReactFlow's current position/size — graph model may not have synced yet
+                // Resize from left/top edge changes position too, so guard position with BOTH refs
+                ...(isInteracting ? {} : { position: { x: graphContainer.x ?? 0, y: graphContainer.y ?? 0 } }),
+                ...(() => {
+                  if (isResizingNodeRef.current) {
+                    console.log(`[SyncGuard] container ${containerId.slice(0,8)}: RESIZE guard active, keeping RF style ${prevNode.style?.width}x${prevNode.style?.height}`);
+                    return {};
+                  }
+                  const gw = graphContainer.width, gh = graphContainer.height;
+                  const rw = prevNode.style?.width, rh = prevNode.style?.height;
+                  if (gw !== rw || gh !== rh) {
+                    console.log(`[SyncGuard] container ${containerId.slice(0,8)}: applying graph ${gw}x${gh} (was RF ${rw}x${rh})`);
+                  }
+                  return { style: { ...prevNode.style, width: gw, height: gh } };
+                })(),
                 data: {
                   ...prevNode.data,
                   container: graphContainer,
                   onUpdate: handleUpdateContainer,
                   onDelete: handleDeleteContainer,
+                  onResizeStart: handleResizeStart,
+                  onResizeEnd: handleResizeEnd,
                 },
               };
             }
@@ -2184,51 +1495,47 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
               const graphAnalysis = graphAnalysesById.get(analysisId);
               if (!graphAnalysis) return prevNode;
               const gaIndex = (graph.canvasAnalyses || []).findIndex((a: any) => a.id === analysisId);
+              // Stabilise data.analysis reference: only replace when content actually changed.
+              // This prevents cascading re-renders in CanvasAnalysisNode (table/chart flicker)
+              // when unrelated graph mutations (e.g. dragging a conversion node) trigger the slow path.
+              const prevAnalysis = prevNode.data?.analysis;
+              const analysisChanged = !prevAnalysis || JSON.stringify(prevAnalysis) !== JSON.stringify(graphAnalysis);
+              const stableAnalysis = analysisChanged ? graphAnalysis : prevAnalysis;
+              const prevData = prevNode.data;
+              const dataChanged = analysisChanged || prevData?.tabId !== tabId
+                || prevData?.onUpdate !== handleUpdateAnalysis || prevData?.onDelete !== handleDeleteAnalysis;
               return {
                 ...prevNode,
                 type: 'canvasAnalysis',
                 zIndex: 5000 + (graph.postits || []).length + (gaIndex >= 0 ? gaIndex : 0),
-                position: { x: graphAnalysis.x ?? 0, y: graphAnalysis.y ?? 0 },
-                style: { ...prevNode.style, width: graphAnalysis.width, height: graphAnalysis.height },
-                data: {
-                  ...prevNode.data,
-                  analysis: graphAnalysis,
+                // During drag/resize, preserve ReactFlow's current position/size — graph model may not have synced yet
+                // Resize from left/top edge changes position too, so guard position with BOTH refs
+                ...(isInteracting ? {} : { position: { x: graphAnalysis.x ?? 0, y: graphAnalysis.y ?? 0 } }),
+                ...(isResizingNodeRef.current ? {} : { style: { ...prevNode.style, width: graphAnalysis.width, height: graphAnalysis.height } }),
+                data: dataChanged ? {
+                  ...prevData,
+                  analysis: stableAnalysis,
                   tabId,
                   onUpdate: handleUpdateAnalysis,
                   onDelete: handleDeleteAnalysis,
-                },
+                  onResizeStart: handleResizeStart,
+                  onResizeEnd: handleResizeEnd,
+                } : prevData,
               };
             }
             const graphNode = graph.nodes.find((n: any) => n.uuid === prevNode.id || n.id === prevNode.id);
             if (!graphNode) return prevNode;
             
-            // Compute containerColour using actual ReactFlow positions of containers in this batch
-            const CONTAIN_TOL = 10;
-            const nw = (prevNode as any).measured?.width ?? prevNode.width ?? DEFAULT_NODE_WIDTH;
-            const nh = (prevNode as any).measured?.height ?? prevNode.height ?? DEFAULT_NODE_HEIGHT;
-            const nx = prevNode.position?.x ?? 0;
-            const ny = prevNode.position?.y ?? 0;
-            let containerColour: string | undefined;
-            const containerArray = graph.containers || [];
-            for (let ci = containerArray.length - 1; ci >= 0; ci--) {
-              const cont = updatedNodes.find(cn => cn.id === `container-${containerArray[ci].id}`);
-              if (!cont) continue;
-              const cx = cont.position?.x ?? 0;
-              const cy = cont.position?.y ?? 0;
-              const cw = (cont as any).measured?.width ?? cont.width ?? (typeof cont.style?.width === 'number' ? cont.style.width : 400);
-              const ch = (cont as any).measured?.height ?? cont.height ?? (typeof cont.style?.height === 'number' ? cont.style.height : 300);
-              if (nx >= (cx - CONTAIN_TOL) && ny >= (cy - CONTAIN_TOL) && (nx + nw) <= (cx + cw + CONTAIN_TOL) && (ny + nh) <= (cy + ch + CONTAIN_TOL)) {
-                containerColour = containerArray[ci].colour;
-                break;
-              }
-            }
-
             const hasImages = showNodeImages && (graphNode.images?.length || 0) > 0;
             return {
               ...prevNode,
               data: {
                 ...prevNode.data,
-                ...(containerColour !== prevNode.data?.containerColour ? { containerColour } : {}),
+                // Preserve containerColours from slow path — the fast path only runs when
+                // topology is unchanged, so container membership can't have changed.
+                // Re-computing it here risks overwriting with undefined when container
+                // RF nodes haven't been measured yet.
+                ...(prevNode.data?.containerColours ? { containerColours: prevNode.data.containerColours } : {}),
                 label: graphNode.label,
                 id: graphNode.id,
                 description: graphNode.description,
@@ -2421,7 +1728,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
                 position: { x: c.x ?? 0, y: c.y ?? 0 },
                 zIndex: 1000 + ci,
                 style: { width: c.width, height: c.height },
-                data: { container: c, onUpdate: handleUpdateContainer, onDelete: handleDeleteContainer },
+                data: { container: c, onUpdate: handleUpdateContainer, onDelete: handleDeleteContainer, onResizeStart: handleResizeStart, onResizeEnd: handleResizeEnd },
               });
             }
           }
@@ -2445,6 +1752,8 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
                   onUpdate: handleUpdatePostit,
                   onDelete: handleDeletePostit,
                   onSelect: onSelectedAnnotationChange ? (id: string) => onSelectedAnnotationChange(id, 'postit') : undefined,
+                  onResizeStart: handleResizeStart,
+                  onResizeEnd: handleResizeEnd,
                   ...(shouldAutoEdit ? { autoEdit: true } : {}),
                 },
               });
@@ -2467,6 +1776,8 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
                   tabId,
                   onUpdate: handleUpdateAnalysis,
                   onDelete: handleDeleteAnalysis,
+                  onResizeStart: handleResizeStart,
+                  onResizeEnd: handleResizeEnd,
                 },
               });
             }
@@ -2578,7 +1889,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
       });
     }
     
-    // Inject containerColour for conversion nodes inside containers (using positions from the rebuild)
+    // Inject containerColours for conversion nodes inside containers (using positions from the rebuild)
     const containerArray = graph.containers || [];
     const containerRfNodes = newNodes.filter(n => n.id?.startsWith('container-'));
     const CONTAIN_TOL_SLOW = 10;
@@ -2588,7 +1899,9 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
       const nh = DEFAULT_NODE_HEIGHT;
       const nx = node.position?.x ?? 0;
       const ny = node.position?.y ?? 0;
-      for (let ci = containerArray.length - 1; ci >= 0; ci--) {
+      // Collect ALL containers that enclose this node (there may be overlapping ones)
+      const enclosingColours: string[] = [];
+      for (let ci = 0; ci < containerArray.length; ci++) {
         const cont = containerRfNodes.find(cn => cn.id === `container-${containerArray[ci].id}`);
         if (!cont) continue;
         const cx = cont.position?.x ?? 0;
@@ -2596,11 +1909,14 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
         const cw = typeof cont.style?.width === 'number' ? cont.style.width : 400;
         const ch = typeof cont.style?.height === 'number' ? cont.style.height : 300;
         if (nx >= (cx - CONTAIN_TOL_SLOW) && ny >= (cy - CONTAIN_TOL_SLOW) && (nx + nw) <= (cx + cw + CONTAIN_TOL_SLOW) && (ny + nh) <= (cy + ch + CONTAIN_TOL_SLOW)) {
-          return { ...node, data: { ...node.data, containerColour: containerArray[ci].colour } };
+          if (containerArray[ci].colour) enclosingColours.push(containerArray[ci].colour);
         }
       }
-      if (node.data?.containerColour) {
-        const { containerColour: _, ...rest } = node.data;
+      if (enclosingColours.length > 0) {
+        return { ...node, data: { ...node.data, containerColours: enclosingColours } };
+      }
+      if (node.data?.containerColours) {
+        const { containerColours: _, ...rest } = node.data;
         return { ...node, data: rest };
       }
       return node;
@@ -2945,6 +2261,17 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
     };
   });
     
+    // Compute face directions eagerly so the first paint has correct curved outlines.
+    // edgesWithOffsets already carry .sourceFace/.targetFace from calculateEdgeOffsets.
+    if (!useSankeyView && edgesWithOffsets.length > 0) {
+      const faceMap = computeFaceDirectionsFromEdges(edgesWithOffsets);
+      nodesWithSelection = nodesWithSelection.map((node: any) => {
+        const fd = faceMap.get(node.id);
+        if (!fd) return node;
+        return { ...node, data: { ...node.data, faceDirections: fd } };
+      });
+    }
+
     setNodes(nodesWithSelection);
     // Sort edges so selected edges render last (on top)
     const sortedEdges = [...edgesWithAnchors].sort((a, b) => {
@@ -3039,117 +2366,9 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
     }));
   }, [activeElementTool, setNodes]);
 
-  // Compute face directions based on edge connections (for curved node outlines)
-  // Runs after edges have been auto-routed and have sourceFace/targetFace assigned
-  // Use useLayoutEffect + double-RAF for synchronous update after layout settles
-  const faceDirectionRaf1Ref = useRef<number | null>(null);
-  const faceDirectionRaf2Ref = useRef<number | null>(null);
-  
-  useLayoutEffect(() => {
-    if (useSankeyView) return; // Skip in Sankey view - nodes stay flat
-    if (edges.length === 0) return;
-    
-    // Cancel pending RAFs to coalesce updates
-    if (faceDirectionRaf1Ref.current) cancelAnimationFrame(faceDirectionRaf1Ref.current);
-    if (faceDirectionRaf2Ref.current) cancelAnimationFrame(faceDirectionRaf2Ref.current);
-    
-    faceDirectionRaf1Ref.current = requestAnimationFrame(() => {
-      faceDirectionRaf2Ref.current = requestAnimationFrame(() => {
-        // Count inbound/outbound edges per face for each node
-        const faceStatsPerNode = new Map<string, Record<string, { in: number; out: number }>>();
-    
-    edges.forEach(edge => {
-      const srcId = edge.source;
-      const tgtId = edge.target;
-      const srcFace = edge.data?.sourceFace;
-      const tgtFace = edge.data?.targetFace;
-      
-      // Initialize stats for source node
-      if (srcId && srcFace) {
-        if (!faceStatsPerNode.has(srcId)) {
-          faceStatsPerNode.set(srcId, {
-            left: { in: 0, out: 0 },
-            right: { in: 0, out: 0 },
-            top: { in: 0, out: 0 },
-            bottom: { in: 0, out: 0 },
-          });
-        }
-        faceStatsPerNode.get(srcId)![srcFace].out += 1;
-      }
-      
-      // Initialize stats for target node
-      if (tgtId && tgtFace) {
-        if (!faceStatsPerNode.has(tgtId)) {
-          faceStatsPerNode.set(tgtId, {
-            left: { in: 0, out: 0 },
-            right: { in: 0, out: 0 },
-            top: { in: 0, out: 0 },
-            bottom: { in: 0, out: 0 },
-          });
-        }
-        faceStatsPerNode.get(tgtId)![tgtFace].in += 1;
-      }
-    });
-    
-    // Classify each face direction and attach to nodes
-    // Guard: only update if faceDirections actually changed
-    setNodes(prevNodes => {
-      let hasChanges = false;
-      const newNodes = prevNodes.map(node => {
-        const stats = faceStatsPerNode.get(node.id);
-        
-        const classifyFace = (face: 'left' | 'right' | 'top' | 'bottom'): 'flat' | 'convex' | 'concave' => {
-          if (!stats) return 'flat';
-          const s = stats[face];
-          if (!s || (s.in === 0 && s.out === 0)) return 'flat';
-          if (s.in > 0 && s.out === 0) return 'concave';
-          if (s.out > 0 && s.in === 0) return 'convex';
-          if (s.out > s.in) return 'convex';
-          if (s.in > s.out) return 'concave';
-          return 'flat'; // Tied
-        };
-        
-        const newFaceDirections = {
-          left: classifyFace('left'),
-          right: classifyFace('right'),
-          top: classifyFace('top'),
-          bottom: classifyFace('bottom'),
-        };
-        
-        // Check if this node's faceDirections actually changed
-        const oldFaceDirections = node.data?.faceDirections;
-        if (oldFaceDirections &&
-            oldFaceDirections.left === newFaceDirections.left &&
-            oldFaceDirections.right === newFaceDirections.right &&
-            oldFaceDirections.top === newFaceDirections.top &&
-            oldFaceDirections.bottom === newFaceDirections.bottom) {
-          // No change
-          return node;
-        }
-        
-        hasChanges = true;
-        return {
-          ...node,
-          data: {
-            ...node.data,
-            faceDirections: newFaceDirections
-          }
-        };
-      });
-      
-      // Only return new array if there were actual changes
-      return hasChanges ? newNodes : prevNodes;
-    });
-      });
-    });
-    
-    return () => {
-      if (faceDirectionRaf1Ref.current) cancelAnimationFrame(faceDirectionRaf1Ref.current);
-      if (faceDirectionRaf2Ref.current) cancelAnimationFrame(faceDirectionRaf2Ref.current);
-      faceDirectionRaf1Ref.current = null;
-      faceDirectionRaf2Ref.current = null;
-    };
-  }, [edges, useSankeyView, setNodes]);
+  // Face directions are computed eagerly in the slow path (before setNodes) using
+  // computeFaceDirectionsFromEdges. The fast path preserves them via ...prevNode.data spread.
+  // All topology/handle changes route through the slow path, so no safety-net effect is needed.
 
   // Force re-route when Sankey view is actually toggled (to re-assign faces for L/R only constraint)
   // Only react when the value actually changes, not on initial load
@@ -3419,9 +2638,6 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
   const lastWhatIfVersionRef = useRef<string>('');
   const sankeyUpdatingRef = useRef(false);
   const skipSankeyNodeSizingRef = useRef(false); // Set by Sankey layout to skip sizing after layout
-  const sankeyLayoutInProgressRef = useRef(false); // Gate reroutes/slow-path during Sankey layout
-  const effectsCooldownUntilRef = useRef<number>(0); // Suppress effects until this timestamp (ms)
-  const isEffectsCooldownActive = () => performance.now() < effectsCooldownUntilRef.current;
   useEffect(() => {
     if (!useSankeyView || sankeyUpdatingRef.current || skipSankeyNodeSizingRef.current) {
       if (skipSankeyNodeSizingRef.current) {
@@ -3556,8 +2772,8 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
       return;
     }
     
-    // BLOCK ReactFlow→Graph sync during node dragging to prevent multiple graph updates
-    if (isDraggingNodeRef.current) {
+    // BLOCK ReactFlow→Graph sync during node dragging or resizing to prevent multiple graph updates
+    if (isDraggingNodeRef.current || isResizingNodeRef.current) {
       return;
     }
     
@@ -3592,856 +2808,100 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
     }
   }, [nodes, edges]); // Removed 'graph' and 'setGraph' from dependencies
 
-  // Function to check if adding an edge would create a cycle
-  const wouldCreateCycle = useCallback((source: string, target: string, currentEdges: any[]) => {
-    // Create a directed graph representation
-    const graph: { [key: string]: string[] } = {};
-    
-    // Initialize all nodes
-    nodes.forEach(node => {
-      graph[node.id] = [];
-    });
-    
-    // Add existing edges
-    currentEdges.forEach(edge => {
-      if (graph[edge.source]) {
-        graph[edge.source].push(edge.target);
-      }
-    });
-    
-    // Add the proposed new edge
-    if (graph[source]) {
-      graph[source].push(target);
-    }
-    
-    // DFS to detect cycles
-    const visited = new Set<string>();
-    const recursionStack = new Set<string>();
-    
-    const hasCycleDFS = (node: string): boolean => {
-      if (recursionStack.has(node)) {
-        return true; // Cycle detected
-      }
-      
-      if (visited.has(node)) {
-        return false; // Already processed
-      }
-      
-      visited.add(node);
-      recursionStack.add(node);
-      
-      const neighbors = graph[node] || [];
-      for (const neighbor of neighbors) {
-        if (hasCycleDFS(neighbor)) {
-          return true;
-        }
-      }
-      
-      recursionStack.delete(node);
-      return false;
-    };
-    
-    // Check all nodes for cycles
-    for (const nodeId of Object.keys(graph)) {
-      if (!visited.has(nodeId)) {
-        if (hasCycleDFS(nodeId)) {
-          return true;
-        }
-      }
-    }
-    
-    return false;
-  }, [nodes]);
+  // Edge connection hook (extracted from GraphCanvas Phase B3)
+  const {
+    onEdgeUpdate,
+    onConnect,
+    generateEdgeId,
+    handleVariantSelection,
+    wouldCreateCycle,
+    showVariantModal,
+    pendingConnection,
+    caseNodeVariants,
+    dismissVariantModal,
+  } = useEdgeConnection({
+    graph,
+    nodes,
+    edges,
+    setGraph,
+    saveHistoryState,
+    onSelectedEdgeChange,
+    isSyncingRef,
+    skipNextRerouteRef,
+    getAllExistingIds,
+  });
 
-  // Track pending reconnections to prevent race conditions
-  const pendingReconnectionRef = useRef<string | null>(null);
-  const reconnectionTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  // Canvas creation hook (extracted from GraphCanvas Phase B4a)
+  const {
+    addNodeAtPosition,
+    pasteNodeAtPosition,
+    pasteSubgraphAtPosition,
+    startAddChart,
+    handleDragOver,
+    handleDrop,
+    onPaneMouseDown,
+    onPaneMouseMove,
+    onPaneMouseUp,
+    onPaneClick,
+    drawRect,
+    drawStartRef,
+  } = useCanvasCreation({
+    graph,
+    nodes,
+    edges,
+    setGraph,
+    setGraphDirect,
+    saveHistoryState,
+    setNodes,
+    screenToFlowPosition,
+    onSelectedNodeChange,
+    onSelectedEdgeChange,
+    onSelectedAnnotationChange,
+    setContextMenu,
+    activeElementTool,
+    setActiveElementTool,
+    onClearElementTool,
+    copiedNode,
+    copiedSubgraph,
+    isCanvasObjectNode,
+    getContainedConversionNodeIds,
+    autoEditPostitIdRef,
+    autoSelectAnalysisIdRef,
+    tabId,
+    effectiveActiveTabId,
+    onAddNodeRef,
+    onAddPostitRef,
+    onAddContainerRef,
+  });
 
-  // Handle edge reconnection (dragging edge to new source/target)
-  // ReactFlow v11 uses onReconnect with signature: (oldEdge, newConnection)
-  const onEdgeUpdate = useCallback((oldEdge: Edge, newConnection: Connection) => {
-    
-    // Clear any existing timeout for this edge
-    if (reconnectionTimeoutRef.current) {
-      clearTimeout(reconnectionTimeoutRef.current);
-      reconnectionTimeoutRef.current = null;
-    }
-    
-    // If this is an invalid connection, ignore it
-    if (!newConnection.source || !newConnection.target) {
-      console.log('❌ REJECTED: Invalid connection (missing source/target)');
-      return;
-    }
-    
-    // CRITICAL: Only allow reconnection if edge is selected
-    if (!oldEdge.selected) {
-      console.log('❌ REJECTED: Edge not selected');
-      return;
-    }
-    
-    if (!graph) {
-      console.log('❌ REJECTED: No graph available');
-      return;
-    }
-    
-    // Check for valid connection
-    if (!newConnection.source || !newConnection.target) {
-      console.log('❌ REJECTED: Missing source or target');
-      console.log('╚════════════════════════════════════════════════════╝');
-      return;
-    }
-    
-    // Additional check: if this is an invalid connection (no target), ignore it
-    // This prevents ReactFlow from calling us with invalid connections when mouseup happens outside nodes
-    if (newConnection.target === null || newConnection.target === undefined) {
-      console.log('❌ REJECTED: Invalid target (null/undefined)');
-      return;
-    }
-    
-    // Prevent self-referencing edges (but allow changing the handle on same nodes)
-    if (newConnection.source === newConnection.target && 
-        oldEdge.source === oldEdge.target) {
-      console.log('❌ REJECTED: Cannot connect node to itself');
-      return;
-    }
-    
-    // Check for circular dependencies ONLY if source or target changed
-    const nodesChanged = oldEdge.source !== newConnection.source || oldEdge.target !== newConnection.target;
-    if (nodesChanged) {
-      const reactFlowEdges = graph.edges
-        .filter(e => e.uuid !== oldEdge.id) // oldEdge.id from ReactFlow is the edge UUID
-        .map(e => ({ source: e.from, target: e.to }));
-      if (wouldCreateCycle(newConnection.source, newConnection.target, reactFlowEdges)) {
-        console.log('❌ REJECTED: Would create cycle');
-        alert('Cannot create this connection as it would create a circular dependency.');
-        return;
-      }
-    }
-    
-    console.log('✅ VALIDATION PASSED - Debouncing reconnection...');
-    
-    // Debounce the reconnection to handle multiple rapid calls
-    reconnectionTimeoutRef.current = setTimeout(() => {
-      console.log('🔄 Processing debounced reconnection...');
-      
-      // Update the edge in graph state
-      const nextGraph = structuredClone(graph);
-      
-      // Try multiple ways to find the edge
-      let edgeIndex = nextGraph.edges.findIndex((e: any) => e.uuid === oldEdge.id || e.id === oldEdge.id);
-      
-      if (edgeIndex === -1) {
-        // Try finding by source->target format
-        const sourceTargetId = `${oldEdge.source}->${oldEdge.target}`;
-        edgeIndex = nextGraph.edges.findIndex((e: any) => e.uuid === sourceTargetId || e.id === sourceTargetId);
-      }
-      
-      if (edgeIndex === -1) {
-        // Try finding by from->to format (from/to could be uuid or id)
-        edgeIndex = nextGraph.edges.findIndex((e: any) => 
-          (e.from === oldEdge.source || e.from === oldEdge.source) && 
-          (e.to === oldEdge.target || e.to === oldEdge.target)
-        );
-      }
-      
-      if (edgeIndex === -1) {
-        console.log('❌ ERROR: Edge not found in graph:', oldEdge.id);
-        console.log('Available edges:', nextGraph.edges.map((e: any) => e.id));
-        return;
-      }
-      
-      const originalEdge = { ...nextGraph.edges[edgeIndex] };
-      
-      console.log('');
-      console.log('📊 PROBABILITY CHECK:');
-      console.log('  Original edge probability:', originalEdge.p);
-      
-      // Update edge source/target and handles (source and target are guaranteed non-null by earlier check)
-      nextGraph.edges[edgeIndex].from = newConnection.source!;
-      nextGraph.edges[edgeIndex].to = newConnection.target!;
-      
-      // Map handle IDs to match our node component
-      // Source handles: "top" -> "top-out", "left" -> "left-out", etc.
-      // Target handles: keep as-is ("top", "left", "right", "bottom")
-      const sourceHandle = newConnection.sourceHandle ? 
-        (newConnection.sourceHandle.endsWith('-out') ? newConnection.sourceHandle : `${newConnection.sourceHandle}-out`) : 
-        undefined;
-      const targetHandle = newConnection.targetHandle || undefined;
-      
-      nextGraph.edges[edgeIndex].fromHandle = sourceHandle;
-      nextGraph.edges[edgeIndex].toHandle = targetHandle;
-      
-      if (nextGraph.metadata) {
-        nextGraph.metadata.updated_at = new Date().toISOString();
-      }
-      
-      console.log('Updated edge:');
-      console.log('  from:', originalEdge.from, '→', nextGraph.edges[edgeIndex].from);
-      console.log('  to:', originalEdge.to, '→', nextGraph.edges[edgeIndex].to);
-      console.log('  fromHandle:', originalEdge.fromHandle, '→', nextGraph.edges[edgeIndex].fromHandle);
-      console.log('  toHandle:', originalEdge.toHandle, '→', nextGraph.edges[edgeIndex].toHandle);
-      console.log('  probability (p):', originalEdge.p, '→', nextGraph.edges[edgeIndex].p);
-      console.log('✅ SUCCESS - Edge reconnected!');
-      console.log('📊 Final edge object:', JSON.stringify(nextGraph.edges[edgeIndex], null, 2));
-      
-      // Prevent ReactFlow->Graph sync from overwriting this manual reconnection
-      isSyncingRef.current = true;
-      setGraph(nextGraph);
-      
-      // Prevent auto-reroute from overwriting manual handle selection
-      skipNextRerouteRef.current = true;
-      
-      // Save history state for edge reconnection
-      saveHistoryState('Reconnect edge', undefined, nextGraph.edges[edgeIndex].uuid || undefined);
-      
-      // Reset isSyncingRef after a short delay to allow Graph->ReactFlow sync to complete
-      setTimeout(() => {
-        isSyncingRef.current = false;
-      }, 100);
-    }, 50); // 50ms debounce
-  }, [graph, setGraph, wouldCreateCycle, saveHistoryState]);
-
-  // Generate a unique id for an edge based on node ids
-  const generateEdgeId = useCallback((sourceId: string, targetId: string) => {
-    if (!graph?.nodes) return `${sourceId}-to-${targetId}`;
-    
-    // Find source and target nodes to get their ids
-    const sourceNode = graph.nodes.find((n: any) => n.uuid === sourceId || n.id === sourceId);
-    const targetNode = graph.nodes.find((n: any) => n.uuid === targetId || n.id === targetId);
-    
-    const sourceId_ = sourceNode?.id || sourceNode?.uuid || sourceId;
-    const targetId_ = targetNode?.id || targetNode?.uuid || targetId;
-    
-    let baseId = `${sourceId_}-to-${targetId_}`;
-    let edgeId = baseId;
-    let counter = 1;
-    
-    // Ensure uniqueness by appending a number if needed
-    const existingIds = getAllExistingIds();
-    const uniqueId = generateUniqueId(baseId, existingIds);
-    
-    return uniqueId;
-  }, [graph, getAllExistingIds]);
-
-  // Handle new connections
-  const onConnect = useCallback(async (connection: Connection) => {
-    if (!graph) return;
-    
-    // Capture the current graph at the start of this callback
-    const currentGraph = graph;
-    
-    // Check for valid connection
-    if (!connection.source || !connection.target) {
-      return;
-    }
-    
-    // Prevent self-referencing edges
-    if (connection.source === connection.target) {
-      alert('Cannot create an edge from a node to itself.');
-      return;
-    }
-
-    // Check if source is a case node (do this check early)
-    // connection.source is ReactFlow ID (uuid)
-    const sourceNode = currentGraph.nodes.find(n => n.uuid === connection.source || n.id === connection.source);
-    const isCaseNode = sourceNode && sourceNode.type === 'case' && sourceNode.case;
-    
-    // Prevent duplicate edges (but allow multiple edges from case nodes with different variants)
-    if (!isCaseNode) {
-      // For normal nodes, prevent any duplicate edges
-      const existingEdge = currentGraph.edges.find(edge => 
-        edge.from === connection.source && edge.to === connection.target
-      );
-      if (existingEdge) {
-        alert('An edge already exists between these nodes.');
-        return;
-      }
-    }
-    // For case nodes, duplication check will happen after variant selection
-
-    // Check for circular dependencies (convert graph edges to ReactFlow format for check)
-    const reactFlowEdges = currentGraph.edges.map(e => ({ source: e.from, target: e.to }));
-    if (wouldCreateCycle(connection.source, connection.target, reactFlowEdges)) {
-      alert('Cannot create this connection as it would create a circular dependency.');
-      return;
-    }
-
-    // If source is a case node with multiple variants, show variant selection modal
-    if (isCaseNode && sourceNode.case && sourceNode.case.variants.length > 1) {
-      setPendingConnection(connection);
-      setCaseNodeVariants(sourceNode.case.variants);
-      setShowVariantModal(true);
-      return; // Don't create the edge yet, wait for variant selection
-    }
-    
-    // Use UpdateManager to create edge with proper ID generation and probability calculation
-    const { updateManager } = await import('../services/UpdateManager');
-    const options: any = {};
-    
-    // If source is a case node with single variant, automatically assign variant properties
-    if (isCaseNode && sourceNode.case && sourceNode.case.variants.length === 1) {
-      const variant = sourceNode.case.variants[0];
-      options.case_id = sourceNode.case.id;
-      options.case_variant = variant.name;
-    }
-    
-    const { graph: nextGraph, edgeId } = updateManager.createEdge(
-      currentGraph,
-      {
-        source: connection.source!,
-        target: connection.target!,
-        sourceHandle: connection.sourceHandle || null,
-        targetHandle: connection.targetHandle || null
-      },
-      options
-    );
-    
-    // Single path: route through GraphCanvas setGraph wrapper (avoids nested updateGraph calls)
-    await setGraph(nextGraph, currentGraph, 'add-edge');
-    saveHistoryState('Add edge', undefined, edgeId);
-    
-    // Select the new edge after a brief delay to allow sync to complete
-    setTimeout(() => {
-      onSelectedEdgeChange(edgeId);
-    }, 50);
-  }, [graph, setGraph, wouldCreateCycle, onSelectedEdgeChange, saveHistoryState]);
-
-  // Variant selection modal state
-  const [showVariantModal, setShowVariantModal] = useState(false);
-  const [pendingConnection, setPendingConnection] = useState<Connection | null>(null);
-  const [caseNodeVariants, setCaseNodeVariants] = useState<any[]>([]);
-
-  // Handle variant selection for case edges
-  const handleVariantSelection = useCallback(async (variant: any) => {
-    if (!pendingConnection || !graph) return;
-    
-    // Capture the current graph at the start of this callback
-    const currentGraph = graph;
-    
-    // pendingConnection.source is ReactFlow ID (uuid)
-    const sourceNode = currentGraph.nodes.find(n => n.uuid === pendingConnection.source || n.id === pendingConnection.source);
-    if (!sourceNode || !sourceNode.case) return;
-    
-    // Check if an edge with this variant already exists between these nodes
-    const existingVariantEdge = currentGraph.edges.find(edge => 
-      edge.from === pendingConnection.source && 
-      edge.to === pendingConnection.target &&
-      edge.case_id === sourceNode.case?.id &&
-      edge.case_variant === variant.name
-    );
-    
-    if (existingVariantEdge) {
-      alert(`An edge for variant "${variant.name}" already exists between these nodes.`);
-      setShowVariantModal(false);
-      setPendingConnection(null);
-      setCaseNodeVariants([]);
-      return;
-    }
-    
-    // Use UpdateManager to create edge with variant properties
-    const { updateManager } = await import('../services/UpdateManager');
-    const { graph: nextGraph, edgeId } = updateManager.createEdge(
-      currentGraph,
-      {
-        source: pendingConnection.source!,
-        target: pendingConnection.target!,
-        sourceHandle: pendingConnection.sourceHandle || null,
-        targetHandle: pendingConnection.targetHandle || null
-      },
-      {
-        case_variant: variant.name
-        // case_id will be automatically inferred from source node by UpdateManager
-      }
-    );
-    
-    // Single path: route through GraphCanvas setGraph wrapper (avoids nested updateGraph calls)
-    await setGraph(nextGraph, currentGraph, 'add-edge-variant');
-    saveHistoryState('Add edge', undefined, edgeId);
-    
-    // Close modal and clear state
-    setShowVariantModal(false);
-    setPendingConnection(null);
-    setCaseNodeVariants([]);
-  }, [pendingConnection, graph, setGraph, saveHistoryState]);
-  
-  // Handle Shift+Drag lasso selection
-  const [isLassoSelecting, setIsLassoSelecting] = useState(false);
-  const [lassoStart, setLassoStart] = useState<{ x: number; y: number } | null>(null);
-  const [lassoEnd, setLassoEnd] = useState<{ x: number; y: number } | null>(null);
-  const [isShiftHeld, setIsShiftHeld] = useState(false);
-  const lassoCompletedRef = useRef(false); // Prevent double completion
-
-  // Track Shift key state and handle mouse events globally
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Shift') {
-        setIsShiftHeld(true);
-      }
-      
-      // Escape: revert to pointer mode when a non-pointer tool is active
-      if (e.key === 'Escape') {
-        const target = e.target as HTMLElement;
-        const inInput = target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable || target.closest('.monaco-editor');
-        if (!inInput && activeElementTool && activeElementTool !== 'select') {
-          e.preventDefault();
-          onClearElementTool?.();
-          return;
-        }
-      }
-
-      // Handle Delete key for selected elements
-      if (e.key === 'Delete' || e.key === 'Backspace') {
-        console.log(`[GraphCanvas ${tabId}] Delete key detected`);
-        
-        // FIRST: Check if user is typing in a form field or Monaco editor
-        // (Exception: inputs with data-allow-global-shortcuts="true" should pass through for CTRL+Z/CTRL+Y only)
-        const target = e.target as HTMLElement;
-        const allowGlobalShortcuts = target.getAttribute?.('data-allow-global-shortcuts') === 'true';
-        
-        if (!allowGlobalShortcuts && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable || target.closest('.monaco-editor'))) {
-          console.log(`[GraphCanvas ${tabId}] Delete ignored - focus in input field without global shortcuts flag`);
-          return; // Let the input field handle the Delete/Backspace
-        }
-        
-        // SECOND: If not in an input, check for selected elements
-        const selectedNodes = nodes.filter(n => n.selected);
-        const selectedEdges = edges.filter(e => e.selected);
-        
-        console.log(`[GraphCanvas ${tabId}] Delete key pressed, selected nodes:`, selectedNodes.length, 'selected edges:', selectedEdges.length);
-        
-        // If there are selected nodes or edges, delete them
-        if (selectedNodes.length > 0 || selectedEdges.length > 0) {
-          e.preventDefault();
-          console.log(`[GraphCanvas ${tabId}] Calling deleteSelected`);
-          deleteSelected();
-          return;
-        }
-        
-        console.log(`[GraphCanvas ${tabId}] No selected elements to delete`);
-      }
-    };
-
-    const handleKeyUp = (e: KeyboardEvent) => {
-      if (e.key === 'Shift') {
-        setIsShiftHeld(false);
-        setIsLassoSelecting(false);
-        setLassoStart(null);
-        setLassoEnd(null);
-      }
-    };
-
-    const handleMouseDown = (e: MouseEvent) => {
-      if (isShiftHeld && e.target && (e.target as Element).closest('.react-flow')) {
-        e.preventDefault();
-        e.stopPropagation();
-        
-        // Store viewport coordinates (for screenToFlowPosition conversion)
-        setIsLassoSelecting(true);
-        setLassoStart({ x: e.clientX, y: e.clientY });
-        setLassoEnd({ x: e.clientX, y: e.clientY });
-      }
-    };
-
-    const handleMouseMove = (e: MouseEvent) => {
-      if (isLassoSelecting && lassoStart) {
-        e.preventDefault();
-        e.stopPropagation();
-        
-        // Store viewport coordinates (for screenToFlowPosition conversion)
-        setLassoEnd({ x: e.clientX, y: e.clientY });
-      }
-    };
-
-    const handleMouseUp = (e: MouseEvent) => {
-      if (isLassoSelecting && lassoStart && lassoEnd && !lassoCompletedRef.current) {
-        lassoCompletedRef.current = true; // Prevent double execution
-        e.preventDefault();
-        e.stopPropagation();
-        
-        // Use ReactFlow's built-in coordinate conversion
-        const flowStart = screenToFlowPosition({ x: lassoStart.x, y: lassoStart.y });
-        const flowEnd = screenToFlowPosition({ x: lassoEnd.x, y: lassoEnd.y });
-        
-        const flowStartX = flowStart.x;
-        const flowStartY = flowStart.y;
-        const flowEndX = flowEnd.x;
-        const flowEndY = flowEnd.y;
-        
-        const lassoRect = {
-          left: Math.min(flowStartX, flowEndX),
-          top: Math.min(flowStartY, flowEndY),
-          right: Math.max(flowStartX, flowEndX),
-          bottom: Math.max(flowStartY, flowEndY)
-        };
-
-        const selectedNodes = nodes.filter(node => {
-          const nodeRect = {
-            left: node.position.x,
-            top: node.position.y,
-            right: node.position.x + DEFAULT_NODE_WIDTH, // Approximate node width
-            bottom: node.position.y + 60  // Approximate node height
-          };
-
-          const intersects = !(nodeRect.right < lassoRect.left || 
-                             nodeRect.left > lassoRect.right || 
-                             nodeRect.bottom < lassoRect.top || 
-                             nodeRect.top > lassoRect.bottom);
-          
-
-          return intersects;
-        });
-
-
-        const selectedNodeIds = new Set(selectedNodes.map(n => n.id));
-        const addToExisting = e.ctrlKey || e.metaKey;
-        
-        setNodes(prevNodes => 
-          prevNodes.map(n => ({ 
-            ...n, 
-            selected: selectedNodeIds.has(n.id) || (addToExisting && !!n.selected)
-          }))
-        );
-        
-        // Reset lasso state after a delay to allow selection to settle
-        setTimeout(() => {
-          setIsLassoSelecting(false);
-          setLassoStart(null);
-          setLassoEnd(null);
-          lassoCompletedRef.current = false; // Reset for next lasso
-        }, 100);
-      } else {
-        setIsLassoSelecting(false);
-        setLassoStart(null);
-        setLassoEnd(null);
-        lassoCompletedRef.current = false;
-      }
-    };
-
-    window.addEventListener('keydown', handleKeyDown);
-    window.addEventListener('keyup', handleKeyUp);
-    window.addEventListener('mousedown', handleMouseDown, true);
-    window.addEventListener('mousemove', handleMouseMove, true);
-    window.addEventListener('mouseup', handleMouseUp, true);
-
-    return () => {
-      window.removeEventListener('keydown', handleKeyDown);
-      window.removeEventListener('keyup', handleKeyUp);
-      window.removeEventListener('mousedown', handleMouseDown, true);
-      window.removeEventListener('mousemove', handleMouseMove, true);
-      window.removeEventListener('mouseup', handleMouseUp, true);
-    };
-  }, [isShiftHeld, isLassoSelecting, lassoStart, lassoEnd, nodes, setNodes, edges, deleteSelected, tabId, activeElementTool, onClearElementTool]);
+  // Lasso selection + keyboard delete hook (extracted from GraphCanvas Phase B4b)
+  const { isLassoSelecting, lassoStart, lassoEnd } = useLassoSelection({
+    nodes,
+    edges,
+    setNodes,
+    deleteSelected,
+    screenToFlowPosition,
+    activeElementTool,
+    onClearElementTool,
+    tabId,
+  });
 
 
   // Track selected nodes for probability calculation
   const [selectedNodesForAnalysis, setSelectedNodesForAnalysis] = useState<any[]>([]);
 
-  // Helper function to find start nodes (nodes with no incoming edges)
-  const findStartNodes = useCallback((allNodes: any[], allEdges: any[]): any[] => {
-    const nodesWithIncoming = new Set(allEdges.map(edge => edge.target));
-    return allNodes.filter(node => !nodesWithIncoming.has(node.id));
-  }, []);
-
-  // DFS function to find all paths between two nodes (with depth limit to prevent infinite loops)
-  const findAllPaths = useCallback((sourceId: string, targetId: string, allEdges: any[], maxDepth: number = 10) => {
-    const paths: string[][] = [];
-    const visited = new Set<string>();
-    
-    const dfs = (currentNodeId: string, currentPath: string[], depth: number) => {
-      // Limit depth to prevent infinite loops in complex graphs
-      if (depth > maxDepth) return;
-      
-      if (currentNodeId === targetId) {
-        paths.push([...currentPath]);
-        return;
-      }
-      
-      if (visited.has(currentNodeId)) return;
-      visited.add(currentNodeId);
-      
-      // Find all outgoing edges from current node
-      const outgoingEdges = allEdges.filter(edge => edge.source === currentNodeId);
-      
-      for (const edge of outgoingEdges) {
-        if (!currentPath.includes(edge.id)) { // Avoid cycles
-          currentPath.push(edge.id);
-          dfs(edge.target, currentPath, depth + 1);
-          currentPath.pop(); // Backtrack
-        }
-      }
-      
-      visited.delete(currentNodeId); // Allow revisiting for other paths
-    };
-    
-    dfs(sourceId, [], 0);
-    return paths;
-  }, []);
-
-  // Helper function to topologically sort nodes
-  const topologicalSort = useCallback((nodeIds: string[], allEdges: any[]): string[] => {
-    // Build adjacency list and in-degree map for selected nodes
-    // But consider ALL edges in the graph to determine reachability
-    const adjList = new Map<string, string[]>();
-    const inDegree = new Map<string, number>();
-    
-    // Initialize
-    nodeIds.forEach(id => {
-      adjList.set(id, []);
-      inDegree.set(id, 0);
-    });
-    
-    // For each pair of selected nodes, check if one can reach the other
-    // and build the dependency graph accordingly
-    const selectedNodeSet = new Set(nodeIds);
-    
-    for (let i = 0; i < nodeIds.length; i++) {
-      for (let j = 0; j < nodeIds.length; j++) {
-        if (i !== j) {
-          const sourceId = nodeIds[i];
-          const targetId = nodeIds[j];
-          
-          // Check if there's ANY path from sourceId to targetId using ALL graph edges
-          const hasPath = findAllPaths(sourceId, targetId, allEdges).length > 0;
-          
-          if (hasPath) {
-            // Add edge in our dependency graph
-            if (!adjList.get(sourceId)!.includes(targetId)) {
-              adjList.get(sourceId)!.push(targetId);
-              inDegree.set(targetId, inDegree.get(targetId)! + 1);
-            }
-          }
-        }
-      }
-    }
-    
-    // Kahn's algorithm
-    const queue: string[] = [];
-    const sorted: string[] = [];
-    
-    // Add nodes with no incoming edges to queue
-    inDegree.forEach((degree, nodeId) => {
-      if (degree === 0) queue.push(nodeId);
-    });
-    
-    while (queue.length > 0) {
-      const current = queue.shift()!;
-      sorted.push(current);
-      
-      // Reduce in-degree for neighbors
-      adjList.get(current)!.forEach(neighbor => {
-        const newDegree = inDegree.get(neighbor)! - 1;
-        inDegree.set(neighbor, newDegree);
-        if (newDegree === 0) {
-          queue.push(neighbor);
-        }
-      });
-    }
-    
-    // If not all nodes were sorted, there's a cycle - return original order
-    return sorted.length === nodeIds.length ? sorted : nodeIds;
-  }, [findAllPaths]);
-
-  // Helper function to check if nodes are topologically sequential
-  const areNodesTopologicallySequential = useCallback((sortedNodeIds: string[], allEdges: any[]): boolean => {
-    // Check if there's a path connecting consecutive nodes in the sorted order
-    for (let i = 0; i < sortedNodeIds.length - 1; i++) {
-      const paths = findAllPaths(sortedNodeIds[i], sortedNodeIds[i + 1], allEdges);
-      if (paths.length === 0) {
-        return false; // No path between consecutive nodes
-      }
-    }
-    return true;
-  }, [findAllPaths]);
-
-  // Function to find all edges that are part of paths between selected nodes
-  const findPathEdges = useCallback((selectedNodes: any[], allEdges: any[]): Set<string> => {
-    if (selectedNodes.length === 0) return new Set<string>();
-    
-    // Special case: 1 node - highlight upstream and downstream edges with depth-based fading
-    if (selectedNodes.length === 1) {
-      const selectedId = selectedNodes[0].id;
-      const pathEdges = new Set<string>();
-      
-      // Helper to recursively find upstream edges with depth
-      const findUpstreamEdges = (nodeId: string, depth: number, visited = new Set<string>()) => {
-        if (visited.has(nodeId) || depth > 5) return;
-        visited.add(nodeId);
-        
-        allEdges.forEach(edge => {
-          if (edge.target === nodeId) {
-            pathEdges.add(edge.id);
-            findUpstreamEdges(edge.source, depth + 1, visited);
-          }
-        });
-      };
-      
-      // Helper to recursively find downstream edges with depth
-      const findDownstreamEdges = (nodeId: string, depth: number, visited = new Set<string>()) => {
-        if (visited.has(nodeId) || depth > 5) return;
-        visited.add(nodeId);
-        
-        allEdges.forEach(edge => {
-          if (edge.source === nodeId) {
-            pathEdges.add(edge.id);
-            findDownstreamEdges(edge.target, depth + 1, visited);
-          }
-        });
-      };
-      
-      // Find both upstream and downstream edges
-      findUpstreamEdges(selectedId, 0);
-      findDownstreamEdges(selectedId, 0);
-      
-      return pathEdges;
-    }
-    
-    if (selectedNodes.length < 2) return new Set<string>();
-    
-    const selectedNodeIds = selectedNodes.map(node => node.id);
-    const pathEdges = new Set<string>();
-    
-    // Special case: 3+ nodes - check if topologically sequential
-    if (selectedNodes.length >= 3) {
-      const sortedNodeIds = topologicalSort(selectedNodeIds, allEdges);
-      const isSequential = areNodesTopologicallySequential(sortedNodeIds, allEdges);
-      
-      if (isSequential) {
-        // Find path from first to last node, given intermediate nodes
-        const firstNodeId = sortedNodeIds[0];
-        const lastNodeId = sortedNodeIds[sortedNodeIds.length - 1];
-        const intermediateIds = sortedNodeIds.slice(1, -1);
-        
-        // Find all paths from first to last that go through all intermediates
-        const findPathsThroughNodes = (
-          currentId: string,
-          remainingNodes: string[],
-          currentPath: string[]
-        ): string[][] => {
-          if (remainingNodes.length === 0) {
-            // Reached the end, return the path
-            return [currentPath];
-          }
-          
-          const nextNode = remainingNodes[0];
-          const restNodes = remainingNodes.slice(1);
-          const allPaths: string[][] = [];
-          
-          // Find all paths from current to next node
-          const paths = findAllPaths(currentId, nextNode, allEdges);
-          paths.forEach(path => {
-            allPaths.push(...findPathsThroughNodes(nextNode, restNodes, [...currentPath, ...path]));
-          });
-          
-          return allPaths;
-        };
-        
-        const paths = findPathsThroughNodes(firstNodeId, [...intermediateIds, lastNodeId], []);
-        paths.forEach(path => {
-          path.forEach(edgeId => pathEdges.add(edgeId));
-        });
-        
-        return pathEdges;
-      }
-    }
-    
-    // Default case: For each pair of selected nodes, find all paths between them
-    for (let i = 0; i < selectedNodeIds.length; i++) {
-      for (let j = i + 1; j < selectedNodeIds.length; j++) {
-        const sourceId = selectedNodeIds[i];
-        const targetId = selectedNodeIds[j];
-        
-        // Find all paths from source to target
-        const paths = findAllPaths(sourceId, targetId, allEdges);
-        
-        // Add all edges from all paths to the set
-        paths.forEach(path => {
-          path.forEach(edgeId => pathEdges.add(edgeId));
-        });
-        
-        // Also find paths in reverse direction (target to source)
-        const reversePaths = findAllPaths(targetId, sourceId, allEdges);
-        reversePaths.forEach(path => {
-          path.forEach(edgeId => pathEdges.add(edgeId));
-        });
-      }
-    }
-    
-    return pathEdges;
-  }, [nodes, findStartNodes, topologicalSort, areNodesTopologicallySequential, findAllPaths]);
-
-  // STEP 4: Compute highlight metadata (don't mutate edges state)
-  // This will be passed into buildScenarioRenderEdges to apply to 'current' layer only
-  // OPTIMIZATION: Use stable edge IDs array to avoid unnecessary recalculations
+  // STEP 4: Compute highlight metadata (pure algorithms in canvas/pathHighlighting.ts)
   const edgeIdsRef = React.useRef<string>('');
   const currentEdgeIds = edges.map(e => e.id).sort().join(',');
   const edgesChanged = edgeIdsRef.current !== currentEdgeIds;
   if (edgesChanged) {
     edgeIdsRef.current = currentEdgeIds;
   }
-  
-  // Only recalculate highlight metadata when node selection changes OR edges topology changes
-  // This prevents recalculation when only edges are selected
+
   const nodeSelectionKey = selectedNodesForAnalysis.map(n => n.id).sort().join(',');
   const highlightMetadata = React.useMemo(() => {
-    if (selectedNodesForAnalysis.length === 0) {
-      return {
-        highlightedEdgeIds: new Set<string>(),
-        edgeDepthMap: new Map<string, number>(),
-        isSingleNodeSelection: false
-      };
-    }
-    
-    // Calculate highlight depths for single node selection
-    const edgeDepthMap = new Map<string, number>();
-    
-    if (selectedNodesForAnalysis.length === 1) {
-      const selectedId = selectedNodesForAnalysis[0].id;
-      
-      // Calculate upstream depths
-      const calculateUpstreamDepths = (nodeId: string, depth: number, visited = new Set<string>()) => {
-        if (visited.has(nodeId) || depth > 5) return;
-        visited.add(nodeId);
-        
-        edges.forEach(edge => {
-          if (edge.target === nodeId) {
-            const existingDepth = edgeDepthMap.get(edge.id);
-            if (existingDepth === undefined || depth < existingDepth) {
-              edgeDepthMap.set(edge.id, depth);
-            }
-            calculateUpstreamDepths(edge.source, depth + 1, visited);
-          }
-        });
-      };
-      
-      // Calculate downstream depths
-      const calculateDownstreamDepths = (nodeId: string, depth: number, visited = new Set<string>()) => {
-        if (visited.has(nodeId) || depth > 5) return;
-        visited.add(nodeId);
-        
-        edges.forEach(edge => {
-          if (edge.source === nodeId) {
-            const existingDepth = edgeDepthMap.get(edge.id);
-            if (existingDepth === undefined || depth < existingDepth) {
-              edgeDepthMap.set(edge.id, depth);
-            }
-            calculateDownstreamDepths(edge.target, depth + 1, visited);
-          }
-        });
-      };
-      
-      calculateUpstreamDepths(selectedId, 0);
-      calculateDownstreamDepths(selectedId, 0);
-    }
-    
-    const pathEdges = findPathEdges(selectedNodesForAnalysis, edges);
-    const isSingleNodeSelection = selectedNodesForAnalysis.length === 1;
-    
-    return {
-      highlightedEdgeIds: pathEdges,
-      edgeDepthMap,
-      isSingleNodeSelection
-    };
-  }, [selectedNodesForAnalysis, nodeSelectionKey, edges, findPathEdges, edgesChanged]); 
+    return computeHighlightMetadata(selectedNodesForAnalysis, edges);
+  }, [selectedNodesForAnalysis, nodeSelectionKey, edges, edgesChanged]);
 
   // Handle selection changes
   const onSelectionChange = useCallback(({ nodes: selectedNodes, edges: selectedEdges }: any) => {
@@ -4451,8 +2911,16 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
       return;
     }
     
-    // Update selected nodes for analysis
-    setSelectedNodesForAnalysis(selectedNodes);
+    // Update selected nodes for analysis — only conversion nodes affect highlighting
+    const conversionNodes = selectedNodes.filter((n: any) => !isCanvasObjectNode(n.id));
+    if (selectedNodes.length > 0) {
+      console.log('[GraphCanvas] onSelectionChange', {
+        allSelectedNodeIds: selectedNodes.map((n: any) => n.id),
+        conversionNodeIds: conversionNodes.map((n: any) => n.id),
+        canvasObjectNodeIds: selectedNodes.filter((n: any) => isCanvasObjectNode(n.id)).map((n: any) => n.id),
+      });
+    }
+    setSelectedNodesForAnalysis(conversionNodes);
     
     // Don't clear selection if we're currently lasso selecting
     if (isLassoSelecting) {
@@ -4502,233 +2970,24 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
       onSelectedEdgeChange(null);
       onSelectedAnnotationChange?.(null, null);
     }
-  }, [onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnnotationChange, isLassoSelecting, setSelectedNodesForAnalysis, activeElementTool]);
+  }, [onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnnotationChange, isLassoSelecting, setSelectedNodesForAnalysis, activeElementTool, isCanvasObjectNode]);
 
-  // Track whether the current drag actually moved the node (vs. a simple click)
-  const hasNodeMovedRef = useRef(false);
-
-  // Group drag state for containers
-  const containerDragContainedRef = useRef<Set<string> | null>(null);
-  const containerDragLastPosRef = useRef<{ x: number; y: number } | null>(null);
-
-  // Handle node drag start - set flag and start failsafe timeout
-  const onNodeDragStart = useCallback((_event: any, _node: any) => {
-    hasNodeMovedRef.current = false;
-
-    // Block Graph→ReactFlow sync during drag to prevent interruption
-    isDraggingNodeRef.current = true;
-    setIsDraggingNode(true);
-
-    // Container group drag: snapshot contained objects
-    if (_node.id?.startsWith('container-')) {
-      const containerPos = _node.position || { x: 0, y: 0 };
-      const containerW = (_node as any).measured?.width ?? _node.width ?? (typeof _node.style?.width === 'number' ? _node.style.width : 400);
-      const containerH = (_node as any).measured?.height ?? _node.height ?? (typeof _node.style?.height === 'number' ? _node.style.height : 300);
-
-      console.log(`[GroupDrag] Container ${_node.id}: pos=(${containerPos.x},${containerPos.y}) size=(${containerW}x${containerH}) measured=${JSON.stringify((_node as any).measured)} style.w=${_node.style?.width} style.h=${_node.style?.height} width=${_node.width} height=${_node.height}`);
-
-      const CONTAIN_TOLERANCE = 10;
-      const isFullyInside = (n: any, px: number, py: number, pw: number, ph: number) => {
-        const nw = (n as any).measured?.width ?? n.width ?? (typeof n.style?.width === 'number' ? n.style.width : (n.id?.startsWith('container-') ? 400 : n.id?.startsWith('postit-') ? 200 : DEFAULT_NODE_WIDTH));
-        const nh = (n as any).measured?.height ?? n.height ?? (typeof n.style?.height === 'number' ? n.style.height : (n.id?.startsWith('container-') ? 300 : n.id?.startsWith('postit-') ? 150 : DEFAULT_NODE_HEIGHT));
-        const nx = n.position?.x ?? 0;
-        const ny = n.position?.y ?? 0;
-        const inside = nx >= (px - CONTAIN_TOLERANCE) && ny >= (py - CONTAIN_TOLERANCE) &&
-               (nx + nw) <= (px + pw + CONTAIN_TOLERANCE) && (ny + nh) <= (py + ph + CONTAIN_TOLERANCE);
-        if (!n.id?.startsWith('container-') && !n.id?.startsWith('postit-') && !n.id?.startsWith('analysis-')) {
-          console.log(`[GroupDrag]   Node ${n.id}: pos=(${nx},${ny}) size=(${nw}x${nh}) endAt=(${nx+nw},${ny+nh}) inside=${inside} measured=${JSON.stringify((n as any).measured)} width=${n.width}`);
-        }
-        return inside;
-      };
-
-      // Recursively collect all contained objects (nodes, postits, nested containers)
-      const contained = new Set<string>();
-      const selectedIds = new Set(nodes.filter(n => n.selected).map(n => n.id));
-
-      const collectContained = (parentId: string, px: number, py: number, pw: number, ph: number) => {
-        for (const n of nodes) {
-          if (n.id === parentId || contained.has(n.id) || selectedIds.has(n.id)) continue;
-          if (isFullyInside(n, px, py, pw, ph)) {
-            contained.add(n.id);
-            // Recurse into nested containers
-            if (n.id?.startsWith('container-')) {
-              const nw = (n as any).measured?.width ?? n.style?.width ?? 400;
-              const nh = (n as any).measured?.height ?? n.style?.height ?? 300;
-              collectContained(n.id, n.position?.x ?? 0, n.position?.y ?? 0, nw, nh);
-            }
-          }
-        }
-      };
-
-      collectContained(_node.id, containerPos.x, containerPos.y, containerW, containerH);
-      containerDragContainedRef.current = contained.size > 0 ? contained : null;
-      containerDragLastPosRef.current = { x: containerPos.x, y: containerPos.y };
-    } else {
-      containerDragContainedRef.current = null;
-      containerDragLastPosRef.current = null;
-    }
-
-    // Failsafe: clear drag flag if it somehow gets stuck
-    if (dragTimeoutRef.current) {
-      clearTimeout(dragTimeoutRef.current);
-    }
-    dragTimeoutRef.current = window.setTimeout(() => {
-      if (isDraggingNodeRef.current) {
-        console.log('[GraphCanvas] Drag timeout elapsed, clearing drag flag (failsafe)');
-        isDraggingNodeRef.current = false;
-        setIsDraggingNode(false);
-      }
-      dragTimeoutRef.current = null;
-    }, 5000);
-  }, [nodes]);
-
-  // Mark drag as "moved" and apply group drag delta for containers
-  const onNodeDrag = useCallback((_event: any, draggedNode: any) => {
-    if (!hasNodeMovedRef.current) {
-      hasNodeMovedRef.current = true;
-    }
-
-    // Container group drag: move contained objects by delta
-    if (containerDragContainedRef.current && containerDragLastPosRef.current) {
-      const dx = (draggedNode.position?.x ?? 0) - containerDragLastPosRef.current.x;
-      const dy = (draggedNode.position?.y ?? 0) - containerDragLastPosRef.current.y;
-      containerDragLastPosRef.current = { x: draggedNode.position?.x ?? 0, y: draggedNode.position?.y ?? 0 };
-
-      if (dx !== 0 || dy !== 0) {
-        const containedIds = containerDragContainedRef.current;
-        setNodes(nds => nds.map(n => {
-          if (containedIds.has(n.id)) {
-            return { ...n, position: { x: n.position.x + dx, y: n.position.y + dy } };
-          }
-          return n;
-        }));
-      }
-    }
-  }, [setNodes]);
-
-  // Handle node drag stop - save final position to history
-  const onNodeDragStop = useCallback(() => {
-    // Clear container group drag state
-    containerDragContainedRef.current = null;
-    containerDragLastPosRef.current = null;
-    // Keep drag flag set - it will be cleared by the sync effect when it takes the fast path
-    // Use double requestAnimationFrame to ensure ReactFlow has finished updating node positions
-    // and React has re-rendered before we sync to graph store and trigger edge recalculation
-    requestAnimationFrame(() => {
-      requestAnimationFrame(() => {
-        setIsDraggingNode(false);
-        
-        // Only sync positions & save history if the node actually moved.
-        if (hasNodeMovedRef.current && graph && nodes.length > 0) {
-          const updatedGraph = fromFlow(nodes, edges, graph);
-          if (updatedGraph) {
-            const updatedJson = JSON.stringify(updatedGraph);
-            // Only update if positions actually changed
-            if (updatedJson !== lastSyncedReactFlowRef.current) {
-              console.log(`🎯 Syncing node positions to graph store after drag`);
-              isSyncingRef.current = true;
-              lastSyncedReactFlowRef.current = updatedJson;
-              // Keep isDraggingNodeRef.current = true - sync effect will clear it after taking fast path
-              setGraph(updatedGraph);
-              // Clear syncing flag after a brief delay
-              setTimeout(() => {
-                isSyncingRef.current = false;
-              }, 0);
-            } else {
-              // No position change, clear flag immediately
-              isDraggingNodeRef.current = false;
-            }
-          } else {
-            // No graph update, clear flag immediately
-            isDraggingNodeRef.current = false;
-          }
-          
-          // Save the FINAL position to history after the ReactFlow→Store sync completes
-          // Use setTimeout to ensure sync completes first
-          setTimeout(() => {
-            saveHistoryState('Move node');
-          }, 0);
-        } else {
-          // Click-only (no movement) - just clear drag flag, no graph update or history entry
-          isDraggingNodeRef.current = false;
-        }
-      });
-    });
-  }, [saveHistoryState, graph, nodes, edges, setGraph]);
-
-  // Cleanup drag timeout on unmount
-  useEffect(() => {
-    return () => {
-      if (dragTimeoutRef.current) {
-        clearTimeout(dragTimeoutRef.current);
-        dragTimeoutRef.current = null;
-      }
-    };
-  }, []);
-
-  // Add new node
-  const addNode = useCallback(() => {
-    console.log('addNode function called');
-    if (!graph) return;
-    
-    const newId = crypto.randomUUID();
-    
-    // Generate initial label (but no id - user should pick from registry)
-    const label = `Node ${graph.nodes.length + 1}`;
-    
-    // Place node at center of current viewport
-    const viewportCenter = screenToFlowPosition({ 
-      x: window.innerWidth / 2, 
-      y: window.innerHeight / 2 
-    });
-    
-    // Add node directly to graph state (not ReactFlow state)
-    const nextGraph = structuredClone(graph);
-    nextGraph.nodes.push({
-      uuid: newId,
-      id: '', // Empty ID - user should assign a node_id from registry
-      label: label,
-      absorbing: false,
-      layout: {
-        x: viewportCenter.x,
-        y: viewportCenter.y
-      }
-    });
-    
-    if (nextGraph.metadata) {
-      nextGraph.metadata.updated_at = new Date().toISOString();
-    }
-    
-    setGraph(nextGraph);
-    
-    console.log('saveHistoryState function:', typeof saveHistoryState);
-    if (typeof saveHistoryState === 'function') {
-      saveHistoryState('Add node', newId);
-    } else {
-      console.error('saveHistoryState is not a function:', saveHistoryState);
-    }
-    
-    // Select the new node after a brief delay to allow sync to complete
-    setTimeout(() => {
-      // Select in ReactFlow (visual selection)
-      setNodes((nodes) => 
-        nodes.map((node) => ({
-          ...node,
-          selected: node.id === newId
-        }))
-      );
-      // Notify parent (PropertiesPanel)
-      onSelectedNodeChange(newId);
-    }, 50);
-  }, [graph, setGraph, onSelectedNodeChange, screenToFlowPosition, saveHistoryState, setNodes]);
-
-  // Expose addNode function to parent component via ref
-  useEffect(() => {
-    if (onAddNodeRef) {
-      onAddNodeRef.current = addNode;
-    }
-  }, [addNode, onAddNodeRef]);
-
+  // Node drag hook (extracted from GraphCanvas Phase B4c)
+  const { onNodeDragStart, onNodeDrag, onNodeDragStop } = useNodeDrag({
+    graph,
+    nodes,
+    edges,
+    setGraph,
+    setNodes,
+    saveHistoryState,
+    resetHelperLines,
+    rebuildSnapIndex,
+    isDraggingNodeRef,
+    setIsDraggingNode,
+    setDraggedAnalysisId,
+    isSyncingRef,
+    lastSyncedReactFlowRef,
+  });
 
   // Expose deleteSelected function to parent component via ref
   useEffect(() => {
@@ -4737,116 +2996,36 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
     }
   }, [deleteSelected, onDeleteSelectedRef]);
 
-  // Auto-layout function using dagre
+  // Auto-layout function using dagre (core computation in canvas/layoutAlgorithms.ts)
   const performAutoLayout = useCallback((direction?: 'LR' | 'RL' | 'TB' | 'BT') => {
     if (!graph) return;
-    
-    // Use provided direction or fall back to state
+
     const effectiveDirection = direction || layoutDirection;
-    
-    // Determine which nodes to layout
-    const selectedNodes = nodes.filter(n => n.selected);
-    const nodesToLayout = selectedNodes.length > 0 ? selectedNodes : nodes;
-    const nodeIdsToLayout = new Set(nodesToLayout.map(n => n.id));
-    
-    if (nodesToLayout.length === 0) return;
-    
-    // Create a new dagre graph
-    const dagreGraph = new dagre.graphlib.Graph();
-    dagreGraph.setDefaultEdgeLabel(() => ({}));
-    
-    // Configure layout direction and spacing
-    // In Sankey mode, reduce vertical spacing for tighter packing
-    // nodesep is the minimum gap between node EDGES (not centers) in the same rank
-    const nodeSpacing = useSankeyView ? 20 : 60;  // Vertical spacing between nodes in same rank (tight in Sankey)
-    const rankSpacing = useSankeyView ? 250 : 150; // Horizontal spacing between ranks
-    
-    dagreGraph.setGraph({ 
-      rankdir: effectiveDirection, // User-selected direction
-      nodesep: nodeSpacing,   // Spacing between nodes in same rank (vertical in LR mode)
-      ranksep: rankSpacing,   // Spacing between ranks (horizontal in LR mode)
-      edgesep: 20,   // Minimum separation between edges (encourages straighter edges)
-      marginx: 40,   // Midpoint margins
-      marginy: 40,
-      // ranker: 'tight-tree' // Try tight-tree ranker for better Sankey layouts
-    });
-    
-    // Add nodes to dagre graph
-    nodesToLayout.forEach((node) => {
-      // Node dimensions - in Sankey mode, height is set via style.height or data.sankeyHeight
-      let width = node.width || (node.data?.type === 'case' ? 96 : DEFAULT_NODE_WIDTH);
-      let height = node.height || (node.data?.type === 'case' ? 96 : DEFAULT_NODE_HEIGHT);
-      
-      // In Sankey mode, use the calculated Sankey height
-      if (useSankeyView && node.data?.sankeyHeight) {
-        height = node.data.sankeyHeight;
-        width = node.data.sankeyWidth || DEFAULT_NODE_WIDTH;
-        console.log(`[Dagre] Sankey node ${node.data?.label}: using sankeyHeight=${height}, sankeyWidth=${width}, node.width=${node.width}, node.height=${node.height}, style.height=${(node as any).style?.height}`);
-      } else {
-        console.log(`[Dagre] Normal node ${node.data?.label}: using width=${width}, height=${height}`);
-      }
-      
-      dagreGraph.setNode(node.id, { width, height });
-    });
-    
-    // Add edges to dagre graph (only edges between nodes being laid out)
-    edges.forEach((edge) => {
-      if (nodeIdsToLayout.has(edge.source) && nodeIdsToLayout.has(edge.target)) {
-        dagreGraph.setEdge(edge.source, edge.target);
-      }
-    });
-    
-    // Verify node dimensions before layout
-    if (useSankeyView) {
-      console.log('[Dagre] Node dimensions BEFORE layout:');
-      dagreGraph.nodes().forEach((nodeId) => {
-        const node = dagreGraph.node(nodeId);
-        console.log(`  ${nodeId}: width=${node.width}, height=${node.height}`);
-      });
-    }
-    
-    // Run the layout algorithm
-    dagre.layout(dagreGraph);
-    
-    // Verify positions after layout
-    if (useSankeyView) {
-      console.log('[Dagre] Node positions AFTER layout:');
-      dagreGraph.nodes().forEach((nodeId) => {
-        const node = dagreGraph.node(nodeId);
-        console.log(`  ${nodeId}: x=${node.x}, y=${node.y}, width=${node.width}, height=${node.height}`);
-      });
-    }
-    
-    // Apply the layout to the graph
+    const { positions } = computeDagreLayoutCore(nodes, edges, effectiveDirection, useSankeyView);
+    if (positions.size === 0) return;
+
+    // Apply positions to graph
     const nextGraph = structuredClone(graph);
-    dagreGraph.nodes().forEach((nodeId) => {
-      const dagreNode = dagreGraph.node(nodeId);
+    positions.forEach(({ x, y }, nodeId) => {
       const graphNode = nextGraph.nodes.find((n: any) => n.uuid === nodeId || n.id === nodeId);
-      
       if (graphNode) {
         if (!graphNode.layout) graphNode.layout = { x: 0, y: 0 };
-        // Dagre gives us center coordinates, so no need to adjust
-        graphNode.layout.x = dagreNode.x;
-        graphNode.layout.y = dagreNode.y;
+        graphNode.layout.x = x;
+        graphNode.layout.y = y;
       }
     });
-    
+
     if (nextGraph.metadata) {
       nextGraph.metadata.updated_at = new Date().toISOString();
     }
-    
-    // Update graph - this will trigger sync
+
     setGraph(nextGraph);
-    
-    // Save history state for auto-layout
     saveHistoryState('Auto-layout', undefined, undefined);
-    
+
     // ALWAYS trigger re-route after layout (regardless of autoReroute setting)
     setTimeout(() => {
       console.log('Triggering FORCED re-route after auto-layout');
-      setForceReroute(true); // Force re-route even if autoReroute is off
-      
-      // Fit view after re-route completes
+      setForceReroute(true);
       setTimeout(() => {
         fitView({ padding: 0.1, duration: 400 });
       }, 200);
@@ -4860,229 +3039,46 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
     performAutoLayout(direction);
   }, [performAutoLayout]);
 
-  // Sankey auto-layout using d3-sankey
+  // Sankey auto-layout using d3-sankey (core computation in canvas/layoutAlgorithms.ts)
   const performSankeyLayout = useCallback(() => {
     if (!graph) return;
-    
+
     // Begin layout transaction: block effects and start cooldown window
     sankeyLayoutInProgressRef.current = true;
-    effectsCooldownUntilRef.current = performance.now() + 800; // 0.8s settle window
-    
-    // Determine which nodes to layout
-    const selectedNodes = nodes.filter(n => n.selected);
-    const nodesToLayout = selectedNodes.length > 0 ? selectedNodes : nodes;
-    const nodeIdsToLayout = new Set(nodesToLayout.map(n => n.id));
-    
-    if (nodesToLayout.length === 0) return;
-    
-    // Build d3-sankey compatible data structure
-    const sankeyNodes: any[] = [];
-    const sankeyLinks: any[] = [];
-    
-    // Add nodes with their current heights
-    nodesToLayout.forEach((node) => {
-      const height = node.data?.sankeyHeight || (node.data?.type === 'case' ? 96 : DEFAULT_NODE_HEIGHT);
-      sankeyNodes.push({
-        id: node.id,
-        name: node.data?.label || node.id,
-        fixedValue: height, // Force node height: d3-sankey will respect fixedValue
-        height: height,     // Keep for our internal extent and spacing calculations
-      });
-    });
-    
-    // Add edges (only between nodes being laid out)
-    // d3-sankey with .nodeId() set expects source/target to be the node IDs (strings)
-    edges.forEach((edge) => {
-      if (nodeIdsToLayout.has(edge.source) && nodeIdsToLayout.has(edge.target)) {
-        // Use edge visual width for link value; ensure non-trivial magnitude
-        const raw = edge.data?.scaledWidth ?? 1;
-        const linkValue = Math.max(1, raw); // clamp min 1 to avoid degenerate links
-        sankeyLinks.push({
-          source: edge.source,  // Use node ID directly, not index
-          target: edge.target,  // Use node ID directly, not index
-          value: linkValue,
-        });
-      }
-    });
-    
-    console.log('[Sankey Layout] Nodes:', sankeyNodes.length, 'Links:', sankeyLinks.length);
-    
-    // ===== ADAPTIVE SANKEY LAYOUT POLICY =====
-    // Constants
-    const nodeWidth = DEFAULT_NODE_WIDTH;
-    const margin = 40;
-    const viewportWidth = 1800; // Approximate available canvas width
-    
-    // Calculate number of columns (depth) by doing a simple rank assignment
-    const nodeDepths = new Map<string, number>();
-    const visited = new Set<string>();
-    const calculateDepth = (nodeId: string, depth: number = 0) => {
-      if (visited.has(nodeId)) return;
-      visited.add(nodeId);
-      nodeDepths.set(nodeId, Math.max(nodeDepths.get(nodeId) || 0, depth));
-      
-      // Find all outgoing edges
-      sankeyLinks.forEach(link => {
-        if (link.source === nodeId) {
-          calculateDepth(link.target, depth + 1);
-        }
-      });
-    };
-    
-    // Start from nodes with no incoming edges
-    const nodesWithIncoming = new Set(sankeyLinks.map(l => l.target));
-    sankeyNodes.forEach(node => {
-      if (!nodesWithIncoming.has(node.id)) {
-        calculateDepth(node.id, 0);
-      }
-    });
-    
-    const maxDepth = Math.max(...Array.from(nodeDepths.values()), 0);
-    const D = maxDepth + 1; // Number of columns
-    
-    // Calculate nodes per column and heights per column
-    const countsPerColumn = new Array(D).fill(0);
-    const heightsPerColumn = new Array(D).fill(0);
-    sankeyNodes.forEach(node => {
-      const depth = nodeDepths.get(node.id) || 0;
-      countsPerColumn[depth]++;
-      heightsPerColumn[depth] += node.height;
-    });
-    const countsMax = Math.max(...countsPerColumn);
-    const HcolMax = Math.max(...heightsPerColumn);
-    
-    // Calculate node height stats
-    const Havg = sankeyNodes.reduce((sum, n) => sum + n.height, 0) / sankeyNodes.length;
-    const Hmax = Math.max(...sankeyNodes.map(n => n.height));
-    
-    // Calculate max link value
-    const Lmax = sankeyLinks.length > 0 ? Math.max(...sankeyLinks.map(l => l.value)) : 1;
-    const E = sankeyLinks.length;
-    
-    // === Horizontal spacing G (column gap) ===
-    // Use simpler, more generous spacing to give d3-sankey freedom
-    let G: number;
-    if (D <= 3) G = 250;
-    else if (D <= 6) G = 200;
-    else G = 150;
-    
-    // === Vertical node padding P ===
-    // Adaptive padding: balance density vs. graph depth
-    // Deep graphs need more padding even when dense
-    let P: number;
-    if (countsMax >= 6) {
-      // Dense columns: scale padding with depth to avoid cramming in deep graphs
-      P = D >= 8 ? 25 : D >= 6 ? 20 : 15;
-    } else if (countsMax >= 4) {
-      P = 25;
-    } else {
-      P = 35; // Sparse columns get more breathing room
-    }
-    
-    // === Calculate extent ===
-    let W = margin * 2 + D * nodeWidth + (D - 1) * G;
-    // Force extra vertical space to ensure padding is respected
-    // Add 50% more to the calculated padding space to prevent compression
-    let H = margin * 2 + Math.max(...heightsPerColumn.map((h, i) => 
-      h + (countsPerColumn[i] - 1) * P * 1.5
-    ));
-    // Ensure minimum height to prevent vertical cramming
-    H = Math.max(H, 600);
-    
-    // Viewport fit pass (scale G only)
-    if (W > 1.25 * viewportWidth) {
-      const scale = Math.max(0.7, Math.min(1.0, (1.25 * viewportWidth) / W));
-      G = G * scale;
-      W = margin * 2 + D * nodeWidth + (D - 1) * G;
-    } else if (W < 0.8 * viewportWidth) {
-      const scale = Math.max(1.0, Math.min(1.2, (0.8 * viewportWidth) / W));
-      G = G * scale;
-      W = margin * 2 + D * nodeWidth + (D - 1) * G;
-    }
-    
-    // === Alignment ===
-    const alignment = countsMax >= 4 ? sankeyJustify : sankeyCenter;
-    
-    // === Iterations ===
-    let iterations: number;
-    if (E <= 150) iterations = 32;
-    else if (E <= 300) iterations = 48;
-    else iterations = 64;
-    
-    console.log(`[Sankey Layout] Adaptive settings: D=${D}, countsMax=${countsMax}, G=${G.toFixed(0)}, P=${P}, W=${W.toFixed(0)}, H=${H.toFixed(0)}, iterations=${iterations}`);
-    
-    // Create and configure the sankey layout
-    const sankeyGenerator = sankey()
-      .nodeId((d: any) => d.id)
-      .nodeWidth(nodeWidth)
-      .nodePadding(P)
-      .extent([[margin, margin], [W - margin, H - margin]])
-      .nodeAlign(alignment)
-      .iterations(iterations);
-    
-    // Run the layout
-    const sankeyGraph = sankeyGenerator({
-      nodes: sankeyNodes,
-      links: sankeyLinks,
-    });
-    
-    console.log('[Sankey Layout] Layout computed, applying positions');
-    console.log('[Sankey Layout] Sample sankeyNode:', sankeyGraph.nodes[0]);
+    effectsCooldownUntilRef.current = performance.now() + 800;
+
+    const { positions } = computeSankeyLayoutCore(nodes, edges);
+    if (positions.size === 0) return;
 
     // Flag: layout in progress to suppress cascading side-effects
     sankeyLayoutInProgressRef.current = true;
 
-    // Note: we will not touch ReactFlow node state here; we only update graph layout
-    
-    // Apply the layout to the graph
+    // Apply positions to graph
     const nextGraph = structuredClone(graph);
-    sankeyGraph.nodes.forEach((sankeyNode: any) => {
-      const graphNode = nextGraph.nodes.find((n: any) => n.uuid === sankeyNode.id || n.id === sankeyNode.id);
-      
+    positions.forEach(({ x, y, sankeyHeight }, nodeId) => {
+      const graphNode = nextGraph.nodes.find((n: any) => n.uuid === nodeId || n.id === nodeId);
       if (graphNode) {
         if (!graphNode.layout) graphNode.layout = { x: 0, y: 0 };
-        
-        // Check if d3-sankey actually computed positions
-        if (sankeyNode.x0 === undefined || sankeyNode.y0 === undefined) {
-          console.error(`[Sankey Layout] Node ${graphNode.label} has no x0/y0! Node:`, sankeyNode);
-          return;
-        }
-        
-        // d3-sankey gives us x0,y0 (top-left) coordinates
-        // Store these as TOP-LEFT in graph.layout for Sankey mode
-        // toFlow will convert them to ReactFlow positions appropriately
-        const topLeftX = sankeyNode.x0;
-        const topLeftY = sankeyNode.y0;
-        
-        // Store the height as a temporary property for toFlow conversion
-        const sankeyHeight = sankeyNode.y1 - sankeyNode.y0;
-        // Use a temporary property on the layout object (not .data which doesn't exist on graph schema)
         (graphNode.layout as any).sankeyHeight = sankeyHeight;
-        
-        console.log(`[Sankey Layout] Node ${graphNode.label}: OLD x=${graphNode.layout.x}, y=${graphNode.layout.y} → NEW x=${topLeftX.toFixed(0)}, y=${topLeftY.toFixed(0)} (top-left), height=${sankeyHeight.toFixed(0)}`);
-        
-        graphNode.layout.x = topLeftX;
-        graphNode.layout.y = topLeftY;
+        graphNode.layout.x = x;
+        graphNode.layout.y = y;
       }
     });
-    
+
     if (nextGraph.metadata) {
       nextGraph.metadata.updated_at = new Date().toISOString();
     }
-    
+
     // Skip node sizing effect after layout (heights are already set upstream)
     skipSankeyNodeSizingRef.current = true;
-    
-    // Update graph - this will trigger sync
+
     setGraph(nextGraph);
-    
-    // Save history state for auto-layout
     saveHistoryState('Sankey auto-layout', undefined, undefined);
-    
+
     // End layout without forcing reroute; clear flag after a short delay + cooldown
     setTimeout(() => {
       sankeyLayoutInProgressRef.current = false;
-      effectsCooldownUntilRef.current = performance.now() + 500; // post-layout cooldown
+      effectsCooldownUntilRef.current = performance.now() + 500;
       console.log('[Sankey Layout] Completed');
     }, 150);
   }, [graph, nodes, edges, setGraph, saveHistoryState, setForceReroute, fitView]);
@@ -5155,7 +3151,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
     if (!analysis) return;
     let cancelled = false;
     const dsl = analysis.recipe?.analysis?.analytics_dsl;
-    const scenarioCount = analysis.live
+    const scenarioCount = analysis.mode === 'live'
       ? (tabId ? tabOperations.getScenarioState(tabId)?.visibleScenarioIds?.length : null) || 1
       : (analysis.recipe?.scenarios?.length || 1);
     resolveAnalysisType(graph, dsl || undefined, scenarioCount).then(({ availableAnalyses }) => {
@@ -5166,13 +3162,14 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
 
   // Close context menus on any click
   useEffect(() => {
-    if (contextMenu || nodeContextMenu || postitContextMenu || containerContextMenu || analysisContextMenu || edgeContextMenu) {
+    if (contextMenu || nodeContextMenu || postitContextMenu || containerContextMenu || analysisContextMenu || multiSelectContextMenu || edgeContextMenu) {
       const handleClick = () => {
         setContextMenu(null);
         setNodeContextMenu(null);
         setPostitContextMenu(null);
         setContainerContextMenu(null);
         setAnalysisContextMenu(null);
+        setMultiSelectContextMenu(null);
         setEdgeContextMenu(null);
         setContextMenuLocalData(null);
       };
@@ -5180,565 +3177,29 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
       const timeoutId = setTimeout(() => {
         document.addEventListener('click', handleClick);
       }, 0);
-      
+
       return () => {
         clearTimeout(timeoutId);
         document.removeEventListener('click', handleClick);
       };
     }
-  }, [contextMenu, nodeContextMenu, edgeContextMenu]);
-
-  // Add node at specific position
-  const addNodeAtPosition = useCallback((x: number, y: number) => {
-    if (!graph) return;
-    
-    const newId = crypto.randomUUID();
-    const label = `Node ${graph.nodes.length + 1}`;
-    
-    const newNode = {
-      uuid: newId,
-      id: '', // Empty ID - user should assign a node_id from registry
-      label: label,
-      absorbing: false,
-      layout: {
-        x: x,
-        y: y
-      }
-    };
-    
-    const nextGraph = structuredClone(graph);
-    nextGraph.nodes.push(newNode);
-    
-    if (nextGraph.metadata) {
-      nextGraph.metadata.updated_at = new Date().toISOString();
-    }
-    
-    setGraph(nextGraph);
-    
-    console.log('saveHistoryState in addNodeAtPosition:', typeof saveHistoryState, saveHistoryState);
-    if (typeof saveHistoryState === 'function') {
-      saveHistoryState('Add node', newId);
-    } else {
-      console.error('saveHistoryState is not a function in addNodeAtPosition:', saveHistoryState);
-    }
-    setContextMenu(null);
-    
-    // Select the new node after a brief delay to allow sync to complete
-    setTimeout(() => {
-      // Select in ReactFlow (visual selection)
-      setNodes((nodes) => 
-        nodes.map((node) => ({
-          ...node,
-          selected: node.id === newId
-        }))
-      );
-      // Notify parent (PropertiesPanel)
-      onSelectedNodeChange(newId);
-    }, 50);
-  }, [graph, setGraph, saveHistoryState, setNodes, onSelectedNodeChange]);
-
-  const addPostitAtPosition = useCallback((x: number, y: number, w?: number, h?: number) => {
-    if (!graph) return;
-    
-    const newId = crypto.randomUUID();
-    const nextGraph = structuredClone(graph);
-    if (!nextGraph.postits) nextGraph.postits = [];
-    nextGraph.postits.push({
-      id: newId,
-      text: '',
-      colour: '#FFF475',
-      width: w && w >= 50 ? Math.round(w) : 200,
-      height: h && h >= 50 ? Math.round(h) : 150,
-      x: Math.round(x),
-      y: Math.round(y),
-    });
-    if (nextGraph.metadata) {
-      nextGraph.metadata.updated_at = new Date().toISOString();
-    }
-    setGraph(nextGraph);
-    saveHistoryState('Add post-it');
-    setContextMenu(null);
-    
-    autoEditPostitIdRef.current = newId;
-    onSelectedNodeChange(null);
-    onSelectedEdgeChange(null);
-    onSelectedAnnotationChange?.(newId, 'postit');
-  }, [graph, setGraph, saveHistoryState, onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnnotationChange]);
-
-  const addPostit = useCallback(() => {
-    const centre = screenToFlowPosition({ x: window.innerWidth / 2, y: window.innerHeight / 2 });
-    addPostitAtPosition(centre.x, centre.y);
-  }, [screenToFlowPosition, addPostitAtPosition]);
-
-  const addContainerAtPosition = useCallback((x: number, y: number, w?: number, h?: number) => {
-    if (!graph) return;
-    const newId = crypto.randomUUID();
-    const nextGraph = structuredClone(graph);
-    if (!nextGraph.containers) nextGraph.containers = [];
-    nextGraph.containers.push({
-      id: newId,
-      label: 'Group',
-      colour: '#94A3B8',
-      width: w && w >= 100 ? Math.round(w) : 400,
-      height: h && h >= 80 ? Math.round(h) : 300,
-      x: Math.round(x),
-      y: Math.round(y),
-    });
-    if (nextGraph.metadata) nextGraph.metadata.updated_at = new Date().toISOString();
-    setGraph(nextGraph);
-    saveHistoryState('Add container');
-    setContextMenu(null);
-    onSelectedNodeChange(null);
-    onSelectedEdgeChange(null);
-    onSelectedAnnotationChange?.(newId, 'container');
-  }, [graph, setGraph, saveHistoryState, onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnnotationChange]);
-
-  useEffect(() => {
-    if (onAddPostitRef) {
-      onAddPostitRef.current = addPostit;
-    }
-  }, [addPostit, onAddPostitRef]);
-
-  const addContainer = useCallback(() => {
-    const centre = screenToFlowPosition({ x: window.innerWidth / 2, y: window.innerHeight / 2 });
-    addContainerAtPosition(centre.x, centre.y);
-  }, [screenToFlowPosition, addContainerAtPosition]);
-
-  useEffect(() => {
-    if (onAddContainerRef) {
-      onAddContainerRef.current = addContainer;
-    }
-  }, [addContainer, onAddContainerRef]);
-
-  const addCanvasAnalysisAtPosition = useCallback((x: number, y: number, dragData: any) => {
-    if (!graph) return;
-    const nextGraph = structuredClone(graph);
-    if (!nextGraph.canvasAnalyses) nextGraph.canvasAnalyses = [];
-
-    const w = dragData.drawWidth && dragData.drawWidth >= 100 ? Math.round(dragData.drawWidth) : 400;
-    const h = dragData.drawHeight && dragData.drawHeight >= 80 ? Math.round(dragData.drawHeight) : 300;
-
-    const analysis = buildCanvasAnalysisObject(
-      {
-        recipe: dragData.recipe || { analysis: { analysis_type: dragData.analysisType || '' } },
-        viewMode: dragData.viewMode || 'chart',
-        chartKind: dragData.chartKind,
-        analysisResult: dragData.analysisResult,
-        analysisTypeOverridden: dragData.analysisTypeOverridden ?? false,
-      },
-      { x, y },
-      { width: w, height: h },
-    );
-
-    nextGraph.canvasAnalyses.push(analysis);
-    if (nextGraph.metadata) nextGraph.metadata.updated_at = new Date().toISOString();
-
-    if (dragData.analysisResult) {
-      canvasAnalysisTransientCache.set(analysis.id, dragData.analysisResult);
-    }
-
-    autoSelectAnalysisIdRef.current = analysis.id;
-    setGraphDirect(nextGraph as any);
-    saveHistoryState('Pin analysis to canvas');
-    setContextMenu(null);
-    onSelectedNodeChange(null);
-    onSelectedEdgeChange(null);
-    onSelectedAnnotationChange?.(analysis.id, 'canvasAnalysis');
-  }, [graph, setGraphDirect, saveHistoryState, onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnnotationChange]);
-
-  const startPinnedCanvasAnalysis = useCallback((payload?: any) => {
-    pendingAnalysisPayload = payload || {};
-    setActiveElementTool('new-analysis');
-  }, [setActiveElementTool]);
-
-  const startAddChart = useCallback((detail?: { contextNodeIds?: string[]; contextEdgeIds?: string[] }) => {
-    const ctxNodeIds: string[] = detail?.contextNodeIds || [];
-    const ctxEdgeIds: string[] = detail?.contextEdgeIds || [];
-
-    const selectedConversionNodes = nodes
-      .filter(n => n.selected && !isCanvasObjectNode(n.id))
-      .map(n => n.data?.id || n.id);
-
-    const selectedEdgeUuids = edges
-      .filter(e => e.selected)
-      .map(e => e.id);
-
-    const mergedNodeIds = [...new Set([...selectedConversionNodes, ...ctxNodeIds])];
-    const mergedEdgeIds = [...new Set([...selectedEdgeUuids, ...ctxEdgeIds])];
-
-    let analyticsDsl = constructDSLFromSelection(
-      mergedNodeIds, mergedEdgeIds, nodes as any[], (graph?.edges || []) as any[],
-    );
-
-    if (!analyticsDsl && ctxEdgeIds.length > 0 && graph?.edges) {
-      const ge = graph.edges.find((ed: any) => ed.uuid === ctxEdgeIds[0] || ed.id === ctxEdgeIds[0]);
-      if (ge) {
-        const fromRaw: string = ge.from || (ge as any).source || '';
-        const toRaw: string = ge.to || (ge as any).target || '';
-        const fromNode = graph.nodes?.find((n: any) => n.uuid === fromRaw || n.id === fromRaw);
-        const toNode = graph.nodes?.find((n: any) => n.uuid === toRaw || n.id === toRaw);
-        const fromId = fromNode?.id || fromRaw;
-        const toId = toNode?.id || toRaw;
-        if (fromId && toId) {
-          analyticsDsl = `from(${fromId}).to(${toId})`;
-        }
-      }
-    }
-
-    pendingAnalysisPayload = {
-      recipe: { analysis: { analysis_type: '', analytics_dsl: analyticsDsl || undefined } },
-      analysisTypeOverridden: false,
-    };
-    setActiveElementTool('new-analysis');
-  }, [nodes, edges, isCanvasObjectNode, graph, setActiveElementTool]);
-
-  // Listen for 'dagnet:pinAnalysisToCanvas' event — enters draw mode with a pre-filled recipe
-  useEffect(() => {
-    const handler = (e: CustomEvent) => {
-      if (tabId !== effectiveActiveTabId) return;
-      startPinnedCanvasAnalysis(e.detail);
-    };
-    window.addEventListener('dagnet:pinAnalysisToCanvas', handler as any);
-    return () => window.removeEventListener('dagnet:pinAnalysisToCanvas', handler as any);
-  }, [startPinnedCanvasAnalysis, tabId, effectiveActiveTabId]);
-
-  // Listen for 'dagnet:addAnalysis' event — captures selection DSL, then enters draw mode.
-  // Analysis type is always left empty so the canvas node shows the icon picker.
-  // The user explicitly chooses the analysis type after placing the chart on canvas.
-  //
-  // Context menus pass detail.contextNodeIds (human-readable) / detail.contextEdgeIds (UUIDs)
-  // so right-clicking a node/edge and choosing "Add chart" works even without a prior selection.
-  useEffect(() => {
-    const handler = (e: Event) => {
-      if (tabId !== effectiveActiveTabId) return;
-      startAddChart((e as CustomEvent).detail || {});
-    };
-    window.addEventListener('dagnet:addAnalysis', handler as any);
-    return () => window.removeEventListener('dagnet:addAnalysis', handler as any);
-  }, [startAddChart, tabId, effectiveActiveTabId]);
-
-  // Drag-to-draw state for creation modes (new-postit, new-container)
-  const drawStartRef = useRef<{ screenX: number; screenY: number; flowX: number; flowY: number; tool: string } | null>(null);
-  const [drawRect, setDrawRect] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
-
-  const DRAW_TOOLS = new Set(['new-postit', 'new-container', 'new-analysis']);
-
-  const onPaneMouseDown = useCallback((event: React.PointerEvent) => {
-    if (!activeElementTool || !DRAW_TOOLS.has(activeElementTool)) return;
-    const target = event.target as HTMLElement;
-    if (target.closest('.react-flow__node') || target.closest('.react-flow__edge')) return;
-    const flowPos = screenToFlowPosition({ x: event.clientX, y: event.clientY });
-    drawStartRef.current = { screenX: event.clientX, screenY: event.clientY, flowX: flowPos.x, flowY: flowPos.y, tool: activeElementTool };
-    setDrawRect(null);
-  }, [activeElementTool, screenToFlowPosition]);
-
-  const onPaneMouseMove = useCallback((event: React.PointerEvent) => {
-    if (!drawStartRef.current) return;
-    const flowPos = screenToFlowPosition({ x: event.clientX, y: event.clientY });
-    const sx = drawStartRef.current.flowX;
-    const sy = drawStartRef.current.flowY;
-    setDrawRect({
-      x: Math.min(sx, flowPos.x),
-      y: Math.min(sy, flowPos.y),
-      w: Math.abs(flowPos.x - sx),
-      h: Math.abs(flowPos.y - sy),
-    });
-  }, [screenToFlowPosition]);
-
-  const onPaneMouseUp = useCallback((event: React.PointerEvent) => {
-    if (!drawStartRef.current) return;
-    const tool = drawStartRef.current.tool;
-    const flowPos = screenToFlowPosition({ x: event.clientX, y: event.clientY });
-    const sx = drawStartRef.current.flowX;
-    const sy = drawStartRef.current.flowY;
-    const w = Math.abs(flowPos.x - sx);
-    const h = Math.abs(flowPos.y - sy);
-    const x = Math.min(sx, flowPos.x);
-    const y = Math.min(sy, flowPos.y);
-    drawStartRef.current = null;
-    setDrawRect(null);
-    if (tool === 'new-postit') {
-      addPostitAtPosition(x, y, w, h);
-    } else if (tool === 'new-container') {
-      addContainerAtPosition(x, y, w, h);
-    } else if (tool === 'new-analysis') {
-      const payload = pendingAnalysisPayload;
-      pendingAnalysisPayload = null;
-      addCanvasAnalysisAtPosition(x, y, { ...(payload || {}), drawWidth: w, drawHeight: h });
-    }
-    onClearElementTool?.();
-  }, [screenToFlowPosition, addPostitAtPosition, addContainerAtPosition, addCanvasAnalysisAtPosition, onClearElementTool]);
-
-  const onPaneClick = useCallback((event: React.MouseEvent) => {
-    if (activeElementTool === 'new-node') {
-      const flowPosition = screenToFlowPosition({ x: event.clientX, y: event.clientY });
-      addNodeAtPosition(flowPosition.x, flowPosition.y);
-      onClearElementTool?.();
-    } else if (activeElementTool === 'new-container') {
-      const flowPosition = screenToFlowPosition({ x: event.clientX, y: event.clientY });
-      addContainerAtPosition(flowPosition.x, flowPosition.y);
-      onClearElementTool?.();
-    }
-  }, [activeElementTool, screenToFlowPosition, addNodeAtPosition, addContainerAtPosition, onClearElementTool]);
-
-  // Paste node at specific position (from copy-paste clipboard)
-  const pasteNodeAtPosition = useCallback(async (x: number, y: number) => {
-    if (!graph) return;
-    
-    if (!copiedNode) {
-      toast.error('No node copied');
-      return;
-    }
-    
-    const nodeId = copiedNode.objectId;
-    const fileId = `node-${nodeId}`;
-    
-    // Check if the node file exists
-    const file = fileRegistry.getFile(fileId);
-    if (!file) {
-      toast.error(`Node file not found: ${nodeId}`);
-      return;
-    }
-    
-    const newUuid = crypto.randomUUID();
-    
-    // Create new node with the copied node ID attached
-    const newNode = {
-      uuid: newUuid,
-      id: nodeId, // Attach the copied node file
-      label: file.data?.label || nodeId, // Use label from file if available
-      absorbing: false,
-      layout: {
-        x: x,
-        y: y
-      }
-    };
-    
-    const nextGraph = structuredClone(graph);
-    nextGraph.nodes.push(newNode);
-    
-    if (nextGraph.metadata) {
-      nextGraph.metadata.updated_at = new Date().toISOString();
-    }
-    
-    setGraph(nextGraph);
-    
-    if (typeof saveHistoryState === 'function') {
-      saveHistoryState('Paste node', newUuid);
-    }
-    setContextMenu(null);
-    
-    // Trigger "Get from file" to populate full node data
-    // Wait for graph update to complete first
-    setTimeout(async () => {
-      try {
-        await dataOperationsService.getNodeFromFile({
-          nodeId: nodeId,
-          graph: nextGraph,
-          setGraph: setGraph as any,
-          targetNodeUuid: newUuid,
-        });
-        toast.success(`Pasted node: ${nodeId}`);
-      } catch (error) {
-        console.error('[GraphCanvas] Failed to get node from file:', error);
-        toast.error('Failed to load node data from file');
-      }
-      
-      // Select the new node
-      setNodes((nodes) => 
-        nodes.map((node) => ({
-          ...node,
-          selected: node.id === newUuid
-        }))
-      );
-      onSelectedNodeChange(newUuid);
-    }, 100);
-  }, [graph, setGraph, copiedNode, saveHistoryState, setNodes, onSelectedNodeChange]);
-
-  // Paste subgraph at specific position (from copy-paste clipboard)
-  const pasteSubgraphAtPosition = useCallback(async (x: number, y: number) => {
-    if (!graph) return;
-    
-    if (!copiedSubgraph) {
-      toast.error('No subgraph copied');
-      return;
-    }
-    
-    // Calculate offset from first item's position to target position
-    const firstNode = copiedSubgraph.nodes[0];
-    const firstPostit = copiedSubgraph.postits?.[0];
-    const firstContainer = copiedSubgraph.containers?.[0];
-    const refX = firstNode?.layout?.x ?? firstPostit?.x ?? firstContainer?.x ?? 0;
-    const refY = firstNode?.layout?.y ?? firstPostit?.y ?? firstContainer?.y ?? 0;
-    const offsetX = x - refX;
-    const offsetY = y - refY;
-    
-    // Import updateManager dynamically to avoid circular dependencies
-    const { updateManager } = await import('../services/UpdateManager');
-    
-    const result = updateManager.pasteSubgraph(
-      graph,
-      copiedSubgraph.nodes,
-      copiedSubgraph.edges,
-      { x: offsetX, y: offsetY },
-      copiedSubgraph.postits,
-      { containers: copiedSubgraph.containers, canvasAnalyses: copiedSubgraph.canvasAnalyses }
-    );
-    
-    setGraph(result.graph);
-    
-    if (typeof saveHistoryState === 'function') {
-      saveHistoryState('Paste subgraph');
-    }
-    setContextMenu(null);
-    
-    const parts: string[] = [];
-    if (result.pastedNodeUuids.length > 0) {
-      parts.push(`${result.pastedNodeUuids.length} node${result.pastedNodeUuids.length !== 1 ? 's' : ''}`);
-    }
-    if (result.pastedEdgeUuids.length > 0) {
-      parts.push(`${result.pastedEdgeUuids.length} edge${result.pastedEdgeUuids.length !== 1 ? 's' : ''}`);
-    }
-    const totalCanvasObjects = Object.values(result.pastedCanvasObjectIds).reduce((s, a) => s + a.length, 0);
-    if (totalCanvasObjects > 0) {
-      parts.push(`${totalCanvasObjects} canvas object${totalCanvasObjects !== 1 ? 's' : ''}`);
-    }
-    toast.success(`Pasted ${parts.join(' and ')}`);
-    
-    // Select the pasted items (nodes, postits, containers)
-    setTimeout(() => {
-      const pastedUuidSet = new Set(result.pastedNodeUuids);
-      const pastedCanvasRfIds = new Set([
-        ...result.pastedPostitIds.map(id => `postit-${id}`),
-        ...(result.pastedCanvasObjectIds['containers'] || []).map(id => `container-${id}`),
-      ]);
-      setNodes((nodes) => 
-        nodes.map((node) => ({
-          ...node,
-          selected: pastedUuidSet.has(node.id) || pastedCanvasRfIds.has(node.id)
-        }))
-      );
-      if (result.pastedNodeUuids.length > 0) {
-        onSelectedNodeChange(result.pastedNodeUuids[0]);
-      } else if (result.pastedPostitIds.length > 0) {
-        onSelectedAnnotationChange?.(result.pastedPostitIds[0], 'postit');
-      }
-    }, 100);
-  }, [graph, setGraph, copiedSubgraph, saveHistoryState, setNodes, onSelectedNodeChange, onSelectedAnnotationChange]);
-
-  // Drop node at specific position (from drag & drop)
-  const dropNodeAtPosition = useCallback(async (nodeId: string, x: number, y: number) => {
-    if (!graph) return;
-    
-    const fileId = `node-${nodeId}`;
-    
-    // Check if the node file exists
-    const file = fileRegistry.getFile(fileId);
-    if (!file) {
-      toast.error(`Node file not found: ${nodeId}`);
-      return;
-    }
-    
-    const newUuid = crypto.randomUUID();
-    
-    // Create new node with the dropped node ID attached
-    const newNode = {
-      uuid: newUuid,
-      id: nodeId,
-      label: file.data?.label || nodeId,
-      absorbing: false,
-      layout: {
-        x: x,
-        y: y
-      }
-    };
-    
-    const nextGraph = structuredClone(graph);
-    nextGraph.nodes.push(newNode);
-    
-    if (nextGraph.metadata) {
-      nextGraph.metadata.updated_at = new Date().toISOString();
-    }
-    
-    setGraph(nextGraph);
-    
-    if (typeof saveHistoryState === 'function') {
-      saveHistoryState('Drop node', newUuid);
-    }
-    
-    // Trigger "Get from file" to populate full node data
-    setTimeout(async () => {
-      try {
-        await dataOperationsService.getNodeFromFile({
-          nodeId: nodeId,
-          graph: nextGraph,
-          setGraph: setGraph as any,
-          targetNodeUuid: newUuid,
-        });
-        toast.success(`Added node: ${nodeId}`);
-      } catch (error) {
-        console.error('[GraphCanvas] Failed to get node from file:', error);
-        toast.error('Failed to load node data from file');
-      }
-      
-      // Select the new node
-      setNodes((nodes) => 
-        nodes.map((node) => ({
-          ...node,
-          selected: node.id === newUuid
-        }))
-      );
-      onSelectedNodeChange(newUuid);
-    }, 100);
-  }, [graph, setGraph, saveHistoryState, setNodes, onSelectedNodeChange]);
-
-  // Handle drag over for drop zone
-  const handleDragOver = useCallback((e: React.DragEvent) => {
-    e.preventDefault();
-    e.dataTransfer.dropEffect = 'copy';
-  }, []);
-
-  // Handle drop from Navigator
-  const handleDrop = useCallback((e: React.DragEvent) => {
-    e.preventDefault();
-    
-    try {
-      const jsonData = e.dataTransfer.getData('application/json');
-      if (!jsonData) return;
-      
-      const dragData = JSON.parse(jsonData);
-      if (dragData.type !== 'dagnet-drag') return;
-      
-      // Get drop position in flow coordinates
-      const position = screenToFlowPosition({
-        x: e.clientX,
-        y: e.clientY,
-      });
-      
-      if (dragData.objectType === 'node') {
-        dropNodeAtPosition(dragData.objectId, position.x, position.y);
-      } else if (dragData.objectType === 'new-node') {
-        addNodeAtPosition(position.x, position.y);
-      } else if (dragData.objectType === 'new-postit') {
-        addPostitAtPosition(position.x, position.y);
-      } else if (dragData.objectType === 'new-container') {
-        addContainerAtPosition(position.x, position.y);
-      } else if (dragData.objectType === 'canvas-analysis') {
-        addCanvasAnalysisAtPosition(position.x, position.y, dragData);
-      } else if (dragData.objectType === 'new-analysis') {
-        addCanvasAnalysisAtPosition(position.x, position.y, {});
-      } else if (dragData.objectType === 'parameter') {
-        toast('Drop parameters onto an edge to attach them');
-      }
-    } catch (error) {
-      console.error('[GraphCanvas] Drop error:', error);
-    }
-  }, [screenToFlowPosition, dropNodeAtPosition, addNodeAtPosition, addPostitAtPosition, addContainerAtPosition, addCanvasAnalysisAtPosition]);
+  }, [contextMenu, nodeContextMenu, multiSelectContextMenu, edgeContextMenu]);
 
   const onNodeContextMenu = useCallback((event: React.MouseEvent, node: any) => {
     event.preventDefault();
     event.stopPropagation();
-    
+
+    // Check if this is a multi-select with canvas objects (mixed-type or canvas-only)
+    const selectedNodes = nodes.filter(n => n.selected);
+    const hasCanvasObjects = selectedNodes.some(n => isCanvasObjectNode(n.id));
+
+    if (selectedNodes.length >= 2 && hasCanvasObjects) {
+      // Mixed-type or canvas-object multi-select → multi-select context menu
+      setMultiSelectContextMenu({ x: event.clientX, y: event.clientY });
+      return;
+    }
+
+    // Single-object or nodes-only multi-select → per-type context menu
     if (node.id?.startsWith('postit-')) {
       setPostitContextMenu({
         x: event.clientX,
@@ -5764,7 +3225,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
         nodeId: node.id,
       });
     }
-  }, []);
+  }, [nodes, isCanvasObjectNode]);
 
   // Shared: open edge context menu by edge ID (used by real right-click and E2E hooks)
   const openEdgeContextMenuById = useCallback((edgeId: string, clientX: number, clientY: number) => {
@@ -5952,8 +3413,8 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
 
   // ATOMIC RESTORATION: Memoize decoration visibility context value for stability
   const decorationVisibilityValue = React.useMemo(
-    () => ({ beadsVisible, isPanning: isPanningOrZooming, isDraggingNode }),
-    [beadsVisible, isPanningOrZooming, isDraggingNode]
+    () => ({ beadsVisible, isPanning: isPanningOrZooming, isDraggingNode, draggedAnalysisId }),
+    [beadsVisible, isPanningOrZooming, isDraggingNode, draggedAnalysisId]
   );
 
   return (
@@ -6188,6 +3649,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
         }}
       >
         <Background variant={BackgroundVariant.Dots} gap={16} size={1} color={dark ? '#363636' : '#ddd'} />
+        <HelperLines />
         <Controls />
         <MiniMap
           maskColor={dark ? 'rgba(30,30,30,0.8)' : undefined}
@@ -6246,706 +3708,71 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
         
       </ReactFlow>
       
-      {/* Context Menu */}
-      {contextMenu && (
-        <div
-          className="dagnet-popup"
-          style={{ position: 'fixed', left: contextMenu.x, top: contextMenu.y }}
-        >
-          <div className="dagnet-popup-item" onClick={(e) => { e.stopPropagation(); addNodeAtPosition(contextMenu.flowX, contextMenu.flowY); setContextMenu(null); }} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <Plus size={14} />
-            Add node
-          </div>
-          <div className="dagnet-popup-item" onClick={(e) => { e.stopPropagation(); setActiveElementTool('new-postit'); setContextMenu(null); }} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <StickyNote size={14} />
-            Add post-it
-          </div>
-          <div className="dagnet-popup-item" onClick={(e) => { e.stopPropagation(); setActiveElementTool('new-container'); setContextMenu(null); }} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <Square size={14} />
-            Add container
-          </div>
-          <div className="dagnet-popup-item" onClick={(e) => { e.stopPropagation(); startAddChart(); setContextMenu(null); }} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <BarChart3 size={14} />
-            Add chart
-          </div>
-          <div className="dagnet-popup-divider" />
-          {copiedNode && (
-            <div className="dagnet-popup-item" onClick={(e) => { e.stopPropagation(); pasteNodeAtPosition(contextMenu.flowX, contextMenu.flowY); setContextMenu(null); }} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <Clipboard size={14} />
-              Paste node: {copiedNode.objectId}
-            </div>
-          )}
-          {copiedSubgraph && (
-            <div className="dagnet-popup-item" onClick={(e) => { e.stopPropagation(); pasteSubgraphAtPosition(contextMenu.flowX, contextMenu.flowY); setContextMenu(null); }} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <Clipboard size={14} />
-              Paste ({[
-                copiedSubgraph.nodes.length > 0 && `${copiedSubgraph.nodes.length} node${copiedSubgraph.nodes.length !== 1 ? 's' : ''}`,
-                copiedSubgraph.edges.length > 0 && `${copiedSubgraph.edges.length} edge${copiedSubgraph.edges.length !== 1 ? 's' : ''}`,
-                (copiedSubgraph.postits?.length ?? 0) > 0 && `${copiedSubgraph.postits!.length} post-it${copiedSubgraph.postits!.length !== 1 ? 's' : ''}`,
-              ].filter(Boolean).join(', ')})
-            </div>
-          )}
-          {nodes.length > 0 && (
-            <div className="dagnet-popup-item" onClick={(e) => { e.stopPropagation(); window.dispatchEvent(new CustomEvent('dagnet:selectAllNodes')); setContextMenu(null); }} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <CheckSquare size={14} />
-              Select All
-            </div>
-          )}
-          {(copiedNode || copiedSubgraph || nodes.length > 0) && <div className="dagnet-popup-divider" />}
-          <div className="dagnet-popup-item" onClick={(e) => { e.stopPropagation(); setContextMenu(null); toggleDashboardMode({ updateUrl: true }); }} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            {isDashboardMode ? <MonitorOff size={14} /> : <Monitor size={14} />}
-            {isDashboardMode ? 'Exit dashboard mode' : 'Enter dashboard mode'}
-          </div>
-          {tabId && (
-            <div className="dagnet-popup-item" onClick={async (e) => { e.stopPropagation(); setContextMenu(null); await tabOperations.closeTab(tabId); }} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <X size={14} />
-              Close tab
-            </div>
-          )}
-        </div>
-      )}
-      
-      {/* Post-It Context Menu */}
-      {postitContextMenu && graph && (() => {
-        const postit = graph.postits?.find((p: any) => p.id === postitContextMenu.postitId);
-        if (!postit) return null;
-        const postitCount = (graph.postits?.length ?? 0) + (graph.canvasAnalyses?.length ?? 0);
-        return (
-          <PostItContextMenu
-            x={postitContextMenu.x}
-            y={postitContextMenu.y}
-            postitId={postitContextMenu.postitId}
-            currentColour={postit.colour}
-            currentFontSize={postit.fontSize || 'M'}
-            postitCount={postitCount}
-            onUpdateColour={(id, colour) => {
-              const nextGraph = structuredClone(graph);
-              const p = nextGraph.postits?.find((p: any) => p.id === id);
-              if (p) {
-                p.colour = colour;
-                if (nextGraph.metadata) nextGraph.metadata.updated_at = new Date().toISOString();
-                setGraph(nextGraph);
-                saveHistoryState('Update post-it colour');
-              }
-            }}
-            onUpdateFontSize={(id, fs) => {
-              const nextGraph = structuredClone(graph);
-              const p = nextGraph.postits?.find((p: any) => p.id === id);
-              if (p) {
-                p.fontSize = fs as 'S' | 'M' | 'L' | 'XL';
-                if (nextGraph.metadata) nextGraph.metadata.updated_at = new Date().toISOString();
-                setGraph(nextGraph);
-                saveHistoryState('Update post-it font size');
-              }
-            }}
-            onBringToFront={(id) => {
-              const nextGraph = structuredClone(graph);
-              if (nextGraph.postits) {
-                const idx = nextGraph.postits.findIndex((p: any) => p.id === id);
-                if (idx >= 0) {
-                  const [item] = nextGraph.postits.splice(idx, 1);
-                  nextGraph.postits.push(item);
-                  if (nextGraph.metadata) nextGraph.metadata.updated_at = new Date().toISOString();
-                  setGraph(nextGraph);
-                  saveHistoryState('Bring post-it to front');
-                  reorderCanvasNodes('postit-', nextGraph.postits);
-                }
-              }
-            }}
-            onBringForward={(id) => {
-              const nextGraph = structuredClone(graph);
-              if (nextGraph.postits) {
-                const idx = nextGraph.postits.findIndex((p: any) => p.id === id);
-                if (idx >= 0 && idx < nextGraph.postits.length - 1) {
-                  [nextGraph.postits[idx], nextGraph.postits[idx + 1]] = [nextGraph.postits[idx + 1], nextGraph.postits[idx]];
-                  if (nextGraph.metadata) nextGraph.metadata.updated_at = new Date().toISOString();
-                  setGraph(nextGraph);
-                  saveHistoryState('Bring post-it forward');
-                  reorderCanvasNodes('postit-', nextGraph.postits);
-                }
-              }
-            }}
-            onSendBackward={(id) => {
-              const nextGraph = structuredClone(graph);
-              if (nextGraph.postits) {
-                const idx = nextGraph.postits.findIndex((p: any) => p.id === id);
-                if (idx > 0) {
-                  [nextGraph.postits[idx], nextGraph.postits[idx - 1]] = [nextGraph.postits[idx - 1], nextGraph.postits[idx]];
-                  if (nextGraph.metadata) nextGraph.metadata.updated_at = new Date().toISOString();
-                  setGraph(nextGraph);
-                  saveHistoryState('Send post-it backward');
-                  reorderCanvasNodes('postit-', nextGraph.postits);
-                }
-              }
-            }}
-            onSendToBack={(id) => {
-              const nextGraph = structuredClone(graph);
-              if (nextGraph.postits) {
-                const idx = nextGraph.postits.findIndex((p: any) => p.id === id);
-                if (idx >= 0) {
-                  const [item] = nextGraph.postits.splice(idx, 1);
-                  nextGraph.postits.unshift(item);
-                  if (nextGraph.metadata) nextGraph.metadata.updated_at = new Date().toISOString();
-                  setGraph(nextGraph);
-                  saveHistoryState('Send post-it to back');
-                  reorderCanvasNodes('postit-', nextGraph.postits);
-                }
-              }
-            }}
-            onCopy={(id) => {
-              const p = graph.postits?.find((pi: any) => pi.id === id);
-              if (p) {
-                copySubgraph([], [], undefined, [p]);
-              }
-              setPostitContextMenu(null);
-            }}
-            onCut={(id) => {
-              const p = graph.postits?.find((pi: any) => pi.id === id);
-              if (p) {
-                copySubgraph([], [], undefined, [p]);
-                const nextGraph = structuredClone(graph);
-                if (nextGraph.postits) {
-                  nextGraph.postits = nextGraph.postits.filter((pi: any) => pi.id !== id);
-                  if (nextGraph.metadata) nextGraph.metadata.updated_at = new Date().toISOString();
-                  setGraph(nextGraph);
-                  saveHistoryState('Cut post-it');
-                  onSelectedAnnotationChange?.(null, null);
-                }
-              }
-              setPostitContextMenu(null);
-            }}
-            onDelete={(id) => {
-              const nextGraph = structuredClone(graph);
-              if (nextGraph.postits) {
-                nextGraph.postits = nextGraph.postits.filter((p: any) => p.id !== id);
-                if (nextGraph.metadata) nextGraph.metadata.updated_at = new Date().toISOString();
-                setGraph(nextGraph);
-                saveHistoryState('Delete post-it');
-                onSelectedAnnotationChange?.(null, null);
-              }
-            }}
-            onClose={() => setPostitContextMenu(null)}
-          />
-        );
-      })()}
-
-      {/* Container Context Menu */}
-      {containerContextMenu && graph && (() => {
-        const container = graph.containers?.find((c: any) => c.id === containerContextMenu.containerId);
-        if (!container) return null;
-        const containerCount = graph.containers?.length ?? 0;
-        return (
-          <ContainerContextMenu
-            x={containerContextMenu.x}
-            y={containerContextMenu.y}
-            containerId={containerContextMenu.containerId}
-            currentColour={container.colour}
-            containerCount={containerCount}
-            onUpdateColour={(id, colour) => {
-              const nextGraph = structuredClone(graph);
-              const c = nextGraph.containers?.find((c: any) => c.id === id);
-              if (c) {
-                c.colour = colour;
-                if (nextGraph.metadata) nextGraph.metadata.updated_at = new Date().toISOString();
-                setGraph(nextGraph);
-                saveHistoryState('Update container colour');
-              }
-              setContainerContextMenu(null);
-            }}
-            onBringToFront={(id) => {
-              const nextGraph = structuredClone(graph);
-              if (nextGraph.containers) {
-                const idx = nextGraph.containers.findIndex((c: any) => c.id === id);
-                if (idx >= 0 && idx < nextGraph.containers.length - 1) {
-                  const [removed] = nextGraph.containers.splice(idx, 1);
-                  nextGraph.containers.push(removed);
-                  if (nextGraph.metadata) nextGraph.metadata.updated_at = new Date().toISOString();
-                  setGraph(nextGraph);
-                  saveHistoryState('Bring container to front');
-                  reorderCanvasNodes('container-', nextGraph.containers);
-                }
-              }
-              setContainerContextMenu(null);
-            }}
-            onBringForward={(id) => {
-              const nextGraph = structuredClone(graph);
-              if (nextGraph.containers) {
-                const idx = nextGraph.containers.findIndex((c: any) => c.id === id);
-                if (idx >= 0 && idx < nextGraph.containers.length - 1) {
-                  [nextGraph.containers[idx], nextGraph.containers[idx + 1]] = [nextGraph.containers[idx + 1], nextGraph.containers[idx]];
-                  if (nextGraph.metadata) nextGraph.metadata.updated_at = new Date().toISOString();
-                  setGraph(nextGraph);
-                  saveHistoryState('Bring container forward');
-                  reorderCanvasNodes('container-', nextGraph.containers);
-                }
-              }
-              setContainerContextMenu(null);
-            }}
-            onSendBackward={(id) => {
-              const nextGraph = structuredClone(graph);
-              if (nextGraph.containers) {
-                const idx = nextGraph.containers.findIndex((c: any) => c.id === id);
-                if (idx > 0) {
-                  [nextGraph.containers[idx], nextGraph.containers[idx - 1]] = [nextGraph.containers[idx - 1], nextGraph.containers[idx]];
-                  if (nextGraph.metadata) nextGraph.metadata.updated_at = new Date().toISOString();
-                  setGraph(nextGraph);
-                  saveHistoryState('Send container backward');
-                  reorderCanvasNodes('container-', nextGraph.containers);
-                }
-              }
-              setContainerContextMenu(null);
-            }}
-            onSendToBack={(id) => {
-              const nextGraph = structuredClone(graph);
-              if (nextGraph.containers) {
-                const idx = nextGraph.containers.findIndex((c: any) => c.id === id);
-                if (idx > 0) {
-                  const [removed] = nextGraph.containers.splice(idx, 1);
-                  nextGraph.containers.unshift(removed);
-                  if (nextGraph.metadata) nextGraph.metadata.updated_at = new Date().toISOString();
-                  setGraph(nextGraph);
-                  saveHistoryState('Send container to back');
-                  reorderCanvasNodes('container-', nextGraph.containers);
-                }
-              }
-              setContainerContextMenu(null);
-            }}
-            onCopy={(id) => {
-              const c = graph.containers?.find((ci: any) => ci.id === id);
-              if (c && graph) {
-                const contained = extractSubgraph({
-                  selectedNodeIds: nodes.filter(n => {
-                    if (isCanvasObjectNode(n.id)) return false;
-                    const nw = (n as any).measured?.width ?? n.width ?? DEFAULT_NODE_WIDTH;
-                    const nh = (n as any).measured?.height ?? n.height ?? DEFAULT_NODE_HEIGHT;
-                    const nx = n.position?.x ?? 0;
-                    const ny = n.position?.y ?? 0;
-                    return nx >= c.x - 10 && ny >= c.y - 10 && (nx + nw) <= (c.x + c.width + 10) && (ny + nh) <= (c.y + c.height + 10);
-                  }).map(n => n.id),
-                  selectedCanvasObjectIds: {
-                    containers: [id],
-                    postits: (graph.postits || []).filter((p: any) =>
-                      p.x >= c.x - 10 && p.y >= c.y - 10 && (p.x + p.width) <= (c.x + c.width + 10) && (p.y + p.height) <= (c.y + c.height + 10)
-                    ).map((p: any) => p.id),
-                  },
-                  graph,
-                  includeConnectedEdges: true,
-                });
-                copySubgraph(contained.nodes, contained.edges, undefined, contained.postits, { containers: contained.containers });
-              }
-              setContainerContextMenu(null);
-            }}
-            onCut={(id) => {
-              const c = graph.containers?.find((ci: any) => ci.id === id);
-              if (c && graph) {
-                const containedNodeIds = nodes.filter(n => {
-                  if (isCanvasObjectNode(n.id)) return false;
-                  const nw = (n as any).measured?.width ?? n.width ?? DEFAULT_NODE_WIDTH;
-                  const nh = (n as any).measured?.height ?? n.height ?? DEFAULT_NODE_HEIGHT;
-                  const nx = n.position?.x ?? 0;
-                  const ny = n.position?.y ?? 0;
-                  return nx >= c.x - 10 && ny >= c.y - 10 && (nx + nw) <= (c.x + c.width + 10) && (ny + nh) <= (c.y + c.height + 10);
-                }).map(n => n.id);
-                const containedPostitIds = (graph.postits || []).filter((p: any) =>
-                  p.x >= c.x - 10 && p.y >= c.y - 10 && (p.x + p.width) <= (c.x + c.width + 10) && (p.y + p.height) <= (c.y + c.height + 10)
-                ).map((p: any) => p.id);
-
-                const contained = extractSubgraph({
-                  selectedNodeIds: containedNodeIds,
-                  selectedCanvasObjectIds: { containers: [id], postits: containedPostitIds },
-                  graph,
-                  includeConnectedEdges: true,
-                });
-                copySubgraph(contained.nodes, contained.edges, undefined, contained.postits, { containers: contained.containers });
-
-                // Delete container + contained objects
-                let nextGraph = structuredClone(graph);
-                if (nextGraph.containers) nextGraph.containers = nextGraph.containers.filter((ci: any) => ci.id !== id);
-                if (containedNodeIds.length > 0) {
-                  const nodeSet = new Set(containedNodeIds);
-                  nextGraph.nodes = nextGraph.nodes.filter((n: any) => !nodeSet.has(n.uuid));
-                  nextGraph.edges = nextGraph.edges.filter((e: any) => !nodeSet.has(e.from) && !nodeSet.has(e.to));
-                }
-                if (containedPostitIds.length > 0) {
-                  const pSet = new Set(containedPostitIds);
-                  nextGraph.postits = (nextGraph.postits || []).filter((p: any) => !pSet.has(p.id));
-                }
-                if (nextGraph.metadata) nextGraph.metadata.updated_at = new Date().toISOString();
-                setGraph(nextGraph);
-                saveHistoryState('Cut container');
-                onSelectedAnnotationChange?.(null, null);
-              }
-              setContainerContextMenu(null);
-            }}
-            onDelete={(id) => {
-              handleDeleteContainer(id);
-            }}
-            onClose={() => setContainerContextMenu(null)}
-          />
-        );
-      })()}
-
-      {/* Canvas Analysis Context Menu */}
-      {analysisContextMenu && graph && (() => {
-        const analysis = graph.canvasAnalyses?.find((a: any) => a.id === analysisContextMenu.analysisId);
-        if (!analysis) return null;
-        const analysisCount = (graph.canvasAnalyses?.length ?? 0) + (graph.postits?.length ?? 0);
-        const cachedResult = canvasAnalysisResultCache.get(analysisContextMenu.analysisId);
-        const effectiveChartKind = analysis.chart_kind || cachedResult?.semantics?.chart?.recommended || cachedResult?.analysis_type || undefined;
-        const hiddenScenarios = new Set<string>((((analysis.display as any)?.hidden_scenarios) || []) as string[]);
-        const visibleScenarioIds = analysis.live
-          ? (tabId ? tabOperations.getScenarioState(tabId)?.visibleScenarioIds : null) || ['current']
-          : (analysis.recipe?.scenarios || []).filter((s: any) => !hiddenScenarios.has(s.scenario_id)).map((s: any) => s.scenario_id);
-        const currentTab = tabId ? tabs.find(t => t.id === tabId) : undefined;
-        return (
-          <CanvasAnalysisContextMenu
-            x={analysisContextMenu.x}
-            y={analysisContextMenu.y}
-            analysisId={analysisContextMenu.analysisId}
-            analysis={analysis}
-            analysisCount={analysisCount}
-            onUpdate={(id, updates) => {
-              handleUpdateAnalysis(id, updates);
-              setAnalysisContextMenu(null);
-            }}
-            effectiveChartKind={effectiveChartKind}
-            display={analysis.display as Record<string, unknown> | undefined}
-            onDisplayChange={(key, value) => {
-              handleUpdateAnalysis(analysisContextMenu.analysisId, {
-                display: { ...(analysis.display as Record<string, unknown> || {}), [key]: value },
-              });
-              setAnalysisContextMenu(null);
-            }}
-            hasCachedResult={!!cachedResult}
-            availableAnalyses={analysisCtxAvailableTypes}
-            onAnalysisTypeChange={(typeId) => {
-              handleUpdateAnalysis(analysisContextMenu.analysisId, {
-                recipe: { ...analysis.recipe, analysis: { ...analysis.recipe.analysis, analysis_type: typeId } },
-                analysis_type_overridden: true,
-              } as any);
-              setAnalysisContextMenu(null);
-            }}
-            overlayActive={!!analysis.display?.show_subject_overlay}
-            overlayColour={analysis.display?.subject_overlay_colour as string | undefined}
-            onOverlayToggle={(active) => {
-              const colour = analysis.display?.subject_overlay_colour || '#3b82f6';
-              handleUpdateAnalysis(analysisContextMenu.analysisId, {
-                display: { ...(analysis.display as Record<string, unknown> || {}), show_subject_overlay: active, ...(active ? { subject_overlay_colour: colour } : {}) },
-              });
-              setAnalysisContextMenu(null);
-            }}
-            onOverlayColourChange={(colour) => {
-              if (colour) {
-                handleUpdateAnalysis(analysisContextMenu.analysisId, {
-                  display: { ...(analysis.display as Record<string, unknown> || {}), show_subject_overlay: true, subject_overlay_colour: colour },
-                });
-              } else {
-                handleUpdateAnalysis(analysisContextMenu.analysisId, {
-                  display: { ...(analysis.display as Record<string, unknown> || {}), show_subject_overlay: false, subject_overlay_colour: undefined },
-                });
-              }
-              setAnalysisContextMenu(null);
-            }}
-            onOpenAsTab={cachedResult ? () => {
-              chartOperationsService.openAnalysisChartTabFromAnalysis({
-                chartKind: effectiveChartKind as any,
-                analysisResult: cachedResult,
-                scenarioIds: visibleScenarioIds,
-                title: analysis.title || undefined,
-                source: {
-                  parent_tab_id: tabId,
-                  parent_file_id: currentTab?.fileId,
-                  query_dsl: analysis.recipe?.analysis?.analytics_dsl || undefined,
-                  analysis_type: analysis.recipe?.analysis?.analysis_type || undefined,
-                },
-                render: {
-                  chart_kind: analysis.chart_kind || undefined,
-                  view_mode: analysis.view_mode || 'chart',
-                  display: (analysis.display || {}) as Record<string, unknown>,
-                },
-              });
-              setAnalysisContextMenu(null);
-            } : undefined}
-            onRefresh={() => {
-              window.dispatchEvent(new CustomEvent('dagnet:canvasAnalysisRefresh', { detail: { analysisId: analysisContextMenu.analysisId } }));
-              setAnalysisContextMenu(null);
-            }}
-            onCaptureFromTab={tabId && scenariosContext ? () => {
-              const currentTab = tabs.find(t => t.id === tabId);
-              const whatIfDSL = currentTab?.editorState?.whatIfDSL || null;
-              return captureTabScenariosToRecipe({
-                tabId,
-                currentDSL: store.currentDSL || '',
-                operations: tabOperations,
-                scenariosContext: scenariosContext as any,
-                whatIfDSL,
-              });
-            } : undefined}
-            onUseAsCurrent={(dsl) => {
-              store.setCurrentDSL(dsl);
-              setAnalysisContextMenu(null);
-            }}
-            onEditScenarioDsl={(scenarioId) => {
-              setCtxDslEditState({ analysisId: analysisContextMenu.analysisId, scenarioId });
-              setAnalysisContextMenu(null);
-            }}
-            onBringToFront={(id) => {
-              const nextGraph = structuredClone(graph);
-              if (nextGraph.canvasAnalyses) {
-                const idx = nextGraph.canvasAnalyses.findIndex((a: any) => a.id === id);
-                if (idx >= 0 && idx < nextGraph.canvasAnalyses.length - 1) {
-                  const [item] = nextGraph.canvasAnalyses.splice(idx, 1);
-                  nextGraph.canvasAnalyses.push(item);
-                  if (nextGraph.metadata) nextGraph.metadata.updated_at = new Date().toISOString();
-                  setGraph(nextGraph);
-                  saveHistoryState('Bring analysis to front');
-                  reorderCanvasNodes('analysis-', nextGraph.canvasAnalyses);
-                }
-              }
-              setAnalysisContextMenu(null);
-            }}
-            onBringForward={(id) => {
-              const nextGraph = structuredClone(graph);
-              if (nextGraph.canvasAnalyses) {
-                const idx = nextGraph.canvasAnalyses.findIndex((a: any) => a.id === id);
-                if (idx >= 0 && idx < nextGraph.canvasAnalyses.length - 1) {
-                  [nextGraph.canvasAnalyses[idx], nextGraph.canvasAnalyses[idx + 1]] = [nextGraph.canvasAnalyses[idx + 1], nextGraph.canvasAnalyses[idx]];
-                  if (nextGraph.metadata) nextGraph.metadata.updated_at = new Date().toISOString();
-                  setGraph(nextGraph);
-                  saveHistoryState('Bring analysis forward');
-                  reorderCanvasNodes('analysis-', nextGraph.canvasAnalyses);
-                }
-              }
-              setAnalysisContextMenu(null);
-            }}
-            onSendBackward={(id) => {
-              const nextGraph = structuredClone(graph);
-              if (nextGraph.canvasAnalyses) {
-                const idx = nextGraph.canvasAnalyses.findIndex((a: any) => a.id === id);
-                if (idx > 0) {
-                  [nextGraph.canvasAnalyses[idx], nextGraph.canvasAnalyses[idx - 1]] = [nextGraph.canvasAnalyses[idx - 1], nextGraph.canvasAnalyses[idx]];
-                  if (nextGraph.metadata) nextGraph.metadata.updated_at = new Date().toISOString();
-                  setGraph(nextGraph);
-                  saveHistoryState('Send analysis backward');
-                  reorderCanvasNodes('analysis-', nextGraph.canvasAnalyses);
-                }
-              }
-              setAnalysisContextMenu(null);
-            }}
-            onSendToBack={(id) => {
-              const nextGraph = structuredClone(graph);
-              if (nextGraph.canvasAnalyses) {
-                const idx = nextGraph.canvasAnalyses.findIndex((a: any) => a.id === id);
-                if (idx > 0) {
-                  const [item] = nextGraph.canvasAnalyses.splice(idx, 1);
-                  nextGraph.canvasAnalyses.unshift(item);
-                  if (nextGraph.metadata) nextGraph.metadata.updated_at = new Date().toISOString();
-                  setGraph(nextGraph);
-                  saveHistoryState('Send analysis to back');
-                  reorderCanvasNodes('analysis-', nextGraph.canvasAnalyses);
-                }
-              }
-              setAnalysisContextMenu(null);
-            }}
-            onCopy={(id) => {
-              const a = graph.canvasAnalyses?.find((ai: any) => ai.id === id);
-              if (a) {
-                copySubgraph([], [], undefined, undefined, { canvasAnalyses: [a] });
-              }
-              setAnalysisContextMenu(null);
-            }}
-            onCut={(id) => {
-              const a = graph.canvasAnalyses?.find((ai: any) => ai.id === id);
-              if (a) {
-                copySubgraph([], [], undefined, undefined, { canvasAnalyses: [a] });
-                handleDeleteAnalysis(id);
-              }
-              setAnalysisContextMenu(null);
-            }}
-            onDelete={(id) => {
-              handleDeleteAnalysis(id);
-            }}
-            onClose={() => setAnalysisContextMenu(null)}
-          />
-        );
-      })()}
-
-      {/* Scenario DSL Edit Modal (opened from canvas analysis context menu) */}
-      {ctxDslEditState && (() => {
-        const a = graph?.canvasAnalyses?.find((ai: any) => ai.id === ctxDslEditState.analysisId);
-        const s = a?.recipe?.scenarios?.find((sc: any) => sc.scenario_id === ctxDslEditState.scenarioId);
-        if (!a || !s) return null;
-        return (
-          <ScenarioQueryEditModal
-            isOpen={true}
-            scenarioName={s.name || s.scenario_id || ''}
-            currentDSL={s.effective_dsl || ''}
-            inheritedDSL={store.currentDSL || ''}
-            onSave={(newDSL) => {
-              if (!graph) return;
-              const nextGraph = structuredClone(graph);
-              const target = nextGraph?.canvasAnalyses?.find((ai: any) => ai.id === ctxDslEditState.analysisId);
-              const scenario = target?.recipe?.scenarios?.find((sc: any) => sc.scenario_id === ctxDslEditState.scenarioId);
-              if (scenario) scenario.effective_dsl = newDSL;
-              if (nextGraph?.metadata) nextGraph.metadata.updated_at = new Date().toISOString();
-              setGraphDirect(nextGraph as any);
-              saveHistoryState('Edit chart scenario DSL');
-              setCtxDslEditState(null);
-            }}
-            onClose={() => setCtxDslEditState(null)}
-          />
-        );
-      })()}
-
-      {/* Node Context Menu */}
-      {nodeContextMenu && (
-        <NodeContextMenu
-          x={nodeContextMenu.x}
-          y={nodeContextMenu.y}
-          nodeId={nodeContextMenu.nodeId}
-          nodeData={nodes.find(n => n.id === nodeContextMenu.nodeId)?.data}
-          nodes={nodes}
-          activeTabId={effectiveActiveTabId}
-          tabOperations={tabOperations}
-          graph={graph}
-          setGraph={setGraph}
-          onClose={() => setNodeContextMenu(null)}
-          onAddChart={startAddChart}
-          onSelectNode={onSelectedNodeChange}
-          onDeleteNode={deleteNode}
-        />
-      )}
-      
-      {/* Edge Context Menu */}
-      {edgeContextMenu && (
-        <EdgeContextMenu
-          x={edgeContextMenu.x}
-          y={edgeContextMenu.y}
-          edgeId={edgeContextMenu.edgeId}
-          edgeData={contextMenuLocalData}
-          edges={edges}
-          graph={graph}
-          graphFileId={graphFileId}
-          onAddChart={startAddChart}
-              onClose={() => {
-                setEdgeContextMenu(null);
-                setContextMenuLocalData(null);
-              }}
-          onUpdateGraph={(nextGraph, historyLabel, nodeId) => {
-                              setGraph(nextGraph);
-            if (historyLabel) {
-              saveHistoryState(historyLabel, nodeId, edgeContextMenu.edgeId);
-            }
-          }}
-          onDeleteEdge={deleteEdge}
-        />
-      )}
-      
-      {/* Variant Selection Modal */}
-      {showVariantModal && (
-        <div style={{
-          position: 'fixed',
-          top: 0,
-          left: 0,
-          right: 0,
-          bottom: 0,
-          background: 'rgba(0, 0, 0, 0.5)',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          zIndex: 1000
-        }}>
-          <div style={{
-            background: 'white',
-            padding: '24px',
-            borderRadius: '8px',
-            boxShadow: '0 4px 12px rgba(0, 0, 0, 0.15)',
-            maxWidth: '400px',
-            width: '90%'
-          }}>
-            <h3 style={{ margin: '0 0 16px 0', fontSize: '18px', fontWeight: '600' }}>
-              Select Variant for Case Edge
-            </h3>
-            <p style={{ margin: '0 0 16px 0', color: '#666', fontSize: '14px' }}>
-              Choose which variant this edge represents:
-            </p>
-            
-            <div style={{ marginBottom: '16px' }}>
-              {caseNodeVariants.map((variant, index) => {
-                // Check if this variant already has an edge to the target
-                const sourceNode = graph?.nodes.find(n => n.uuid === pendingConnection?.source || n.id === pendingConnection?.source);
-                const hasExistingEdge = graph?.edges.some(edge => 
-                  edge.from === pendingConnection?.source && 
-                  edge.to === pendingConnection?.target &&
-                  edge.case_id === sourceNode?.case?.id &&
-                  edge.case_variant === variant.name
-                );
-                
-                return (
-                  <button
-                    key={index}
-                    onClick={() => handleVariantSelection(variant)}
-                    disabled={hasExistingEdge}
-                    style={{
-                      width: '100%',
-                      padding: '12px 16px',
-                      marginBottom: '8px',
-                      border: hasExistingEdge ? '1px solid #ccc' : '1px solid #ddd',
-                      borderRadius: '4px',
-                      background: hasExistingEdge ? '#e9ecef' : '#f8f9fa',
-                      cursor: hasExistingEdge ? 'not-allowed' : 'pointer',
-                      textAlign: 'left',
-                      fontSize: '14px',
-                      transition: 'all 0.2s ease',
-                      opacity: hasExistingEdge ? 0.6 : 1
-                    }}
-                    onMouseEnter={(e) => {
-                      if (!hasExistingEdge) {
-                        e.currentTarget.style.background = '#e9ecef';
-                        e.currentTarget.style.borderColor = '#8B5CF6';
-                      }
-                    }}
-                    onMouseLeave={(e) => {
-                      if (!hasExistingEdge) {
-                        e.currentTarget.style.background = '#f8f9fa';
-                        e.currentTarget.style.borderColor = '#ddd';
-                      }
-                    }}
-                  >
-                    <div style={{ fontWeight: '600', marginBottom: '4px' }}>
-                      {variant.name}
-                      {hasExistingEdge && <span style={{ color: '#666', fontWeight: 'normal', marginLeft: '8px' }}>✓ Already connected</span>}
-                    </div>
-                    <div style={{ color: '#666', fontSize: '12px' }}>
-                      Weight: {(variant.weight * 100).toFixed(0)}%
-                      {variant.description && ` • ${variant.description}`}
-                    </div>
-                  </button>
-                );
-              })}
-            </div>
-            
-            <button
-              onClick={() => {
-                setShowVariantModal(false);
-                setPendingConnection(null);
-                setCaseNodeVariants([]);
-              }}
-              style={{
-                padding: '8px 16px',
-                background: '#6c757d',
-                color: 'white',
-                border: 'none',
-                borderRadius: '4px',
-                cursor: 'pointer',
-                fontSize: '14px'
-              }}
-            >
-              Cancel
-            </button>
-          </div>
-        </div>
-      )}
+      <CanvasContextMenus
+        graph={graph}
+        setGraph={setGraph}
+        setGraphDirect={setGraphDirect}
+        saveHistoryState={saveHistoryState}
+        nodes={nodes}
+        edges={edges}
+        graphFileId={graphFileId}
+        contextMenu={contextMenu}
+        setContextMenu={setContextMenu}
+        nodeContextMenu={nodeContextMenu}
+        setNodeContextMenu={setNodeContextMenu}
+        postitContextMenu={postitContextMenu}
+        setPostitContextMenu={setPostitContextMenu}
+        containerContextMenu={containerContextMenu}
+        setContainerContextMenu={setContainerContextMenu}
+        analysisContextMenu={analysisContextMenu}
+        setAnalysisContextMenu={setAnalysisContextMenu}
+        multiSelectContextMenu={multiSelectContextMenu}
+        setMultiSelectContextMenu={setMultiSelectContextMenu}
+        edgeContextMenu={edgeContextMenu}
+        setEdgeContextMenu={setEdgeContextMenu}
+        contextMenuLocalData={contextMenuLocalData}
+        setContextMenuLocalData={setContextMenuLocalData}
+        ctxDslEditState={ctxDslEditState}
+        setCtxDslEditState={setCtxDslEditState}
+        analysisCtxAvailableTypes={analysisCtxAvailableTypes}
+        addNodeAtPosition={addNodeAtPosition}
+        pasteNodeAtPosition={pasteNodeAtPosition}
+        pasteSubgraphAtPosition={pasteSubgraphAtPosition}
+        setActiveElementTool={setActiveElementTool}
+        startAddChart={startAddChart}
+        copiedNode={copiedNode}
+        copiedSubgraph={copiedSubgraph}
+        copySubgraph={copySubgraph}
+        isDashboardMode={isDashboardMode}
+        toggleDashboardMode={toggleDashboardMode}
+        tabId={tabId}
+        tabs={tabs}
+        tabOperations={tabOperations}
+        effectiveActiveTabId={effectiveActiveTabId}
+        handleUpdateAnalysis={handleUpdateAnalysis}
+        handleDeleteAnalysis={handleDeleteAnalysis}
+        handleDeleteContainer={handleDeleteContainer}
+        deleteNode={deleteNode}
+        deleteEdge={deleteEdge}
+        reorderCanvasNodes={reorderCanvasNodes}
+        onSelectedNodeChange={onSelectedNodeChange}
+        onSelectedEdgeChange={onSelectedEdgeChange}
+        onSelectedAnnotationChange={onSelectedAnnotationChange}
+        getContainedConversionNodeIds={getContainedConversionNodeIds}
+        align={align}
+        distribute={distribute}
+        equalSize={equalSize}
+        canAlign={canAlign}
+        canDistribute={canDistribute}
+        store={store}
+        scenariosContext={scenariosContext}
+        captureTabScenariosToRecipe={captureTabScenariosToRecipe}
+        showVariantModal={showVariantModal}
+        pendingConnection={pendingConnection}
+        caseNodeVariants={caseNodeVariants}
+        handleVariantSelection={handleVariantSelection}
+        dismissVariantModal={dismissVariantModal}
+      />
       </div>
     </DecorationVisibilityContext.Provider>
   );

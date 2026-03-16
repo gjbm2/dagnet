@@ -115,6 +115,7 @@ export interface TabState {
     // ReactFlow viewport persistence (per tab)
     rfViewport?: { x: number; y: number; zoom: number };
     autoReroute?: boolean;
+    snapToGuides?: boolean;
     useSankeyView?: boolean;
     showNodeImages?: boolean;
     confidenceIntervalLevel?: 'none' | '80' | '90' | '95' | '99';
@@ -902,13 +903,15 @@ export interface CanvasAnalysisDisplay {
   [key: string]: unknown;
 }
 
+export type CanvasAnalysisMode = 'live' | 'custom' | 'fixed';
+
 export interface CanvasAnalysis extends ChartDefinition {
   id: string;
   x: number;
   y: number;
   width: number;
   height: number;
-  live: boolean;
+  mode: CanvasAnalysisMode;
   chart_current_layer_dsl?: string;
   analysis_type_overridden?: boolean;
   display?: CanvasAnalysisDisplay;

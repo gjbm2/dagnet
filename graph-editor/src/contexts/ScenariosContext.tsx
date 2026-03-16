@@ -738,7 +738,7 @@ export function ScenariosProvider({ children, fileId, tabId }: ScenariosProvider
     // 2. Bulk creation would spam the API if we auto-regenerated each scenario
     
     return scenario;
-  }, [generateId, scenarios, baseParams, currentParams]);
+  }, [generateId, scenarios, baseParams, currentParams, baseDSL, graphStore]);
 
   /**
    * Create a live scenario from Current as a MECE delta vs the VISIBLE stack (excluding Current).
@@ -755,6 +755,15 @@ export function ScenariosProvider({ children, fileId, tabId }: ScenariosProvider
 
     const effectiveBaseDSL = baseDSL || graph?.baseDSL || '';
 
+    // DIAGNOSTIC — remove after debugging baseDSL hydration
+    console.log('[createLiveScenarioFromCurrentDelta] INPUTS:', {
+      baseDSL_state: baseDSL || '(empty)',
+      graphBaseDSL: graph?.baseDSL ?? '(absent)',
+      effectiveBaseDSL: effectiveBaseDSL || '(empty)',
+      currentDSL,
+      visibleOrder,
+    });
+
     // Compute S: effective fetch DSL of the currently-visible stack (excluding Current).
     // visibleOrder is in visual order (top → bottom). Apply bottom → top for stacking.
     let stackEffective = effectiveBaseDSL;
@@ -769,6 +778,13 @@ export function ScenariosProvider({ children, fileId, tabId }: ScenariosProvider
     // Δ(S → C)
     const deltaDSL = deriveScenarioCreateDeltaDSL(stackEffective, currentDSL);
     const scenarioQueryDSL = (deltaDSL && deltaDSL.trim()) ? deltaDSL : LIVE_EMPTY_DIFF_DSL;
+
+    // DIAGNOSTIC — remove after debugging baseDSL hydration
+    console.log('[createLiveScenarioFromCurrentDelta] RESULT:', {
+      stackEffective: stackEffective || '(empty)',
+      deltaDSL: deltaDSL || '(empty)',
+      scenarioQueryDSL,
+    });
 
     return await createLiveScenario(scenarioQueryDSL, undefined, tabId);
   }, [graphStore, baseDSL, graph, scenarios, createLiveScenario]);

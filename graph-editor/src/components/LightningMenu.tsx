@@ -64,11 +64,11 @@ export const LightningMenu: React.FC<LightningMenuProps> = ({
         const menuWidth = menuRect.width;
         const menuHeight = menuRect.height;
 
-        // Constrain horizontally
+        // Constrain horizontally — keep near the button
         if (left + menuWidth > globalThis.innerWidth - 20) {
-          left = Math.max(20, globalThis.innerWidth - menuWidth - 20);
+          left = rect.right - menuWidth;
+          if (left < 20) left = 20;
         }
-        if (left < 20) left = 20;
         
         // Constrain vertically
         if (top + menuHeight > globalThis.innerHeight - 20) {
@@ -105,9 +105,9 @@ export const LightningMenu: React.FC<LightningMenuProps> = ({
         left = rect.left;
       }
       if (left + menuWidth > globalThis.innerWidth - 20) {
-        left = Math.max(20, globalThis.innerWidth - menuWidth - 20);
+        left = rect.right - menuWidth;
+        if (left < 20) left = 20;
       }
-      if (left < 20) left = 20;
       
       // Constrain vertically
       if (top + menuHeight > globalThis.innerHeight - 20) {

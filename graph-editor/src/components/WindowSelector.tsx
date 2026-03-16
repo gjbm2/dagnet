@@ -451,15 +451,26 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
   // Also detects existing query mode (cohort vs window) from existing DSL.
   const isInitializedRef = useRef(false);
   useEffect(() => {
+    // DIAGNOSTIC — remove after debugging DSL-null-on-boot issue
+    const authoritativeDSL_diag = (graphStore as any).getState?.()?.currentDSL || '';
+    console.log('[WindowSelector] DSL INIT EFFECT:', {
+      isInitialized: isInitializedRef.current,
+      authoritativeDSL: authoritativeDSL_diag || '(empty)',
+      graphCurrentQueryDSL: graph?.currentQueryDSL ?? '(absent)',
+      hasGraph: !!graph,
+      window,
+    });
+
     if (isInitializedRef.current) return;
 
     const authoritativeDSL = (graphStore as any).getState?.()?.currentDSL || '';
-    
+
     // 1) If store already has a DSL (e.g. scenarios/other code set it), just derive mode
     if (authoritativeDSL) {
       const existingMode = authoritativeDSL.includes('cohort(') ? 'cohort' : 'window';
       setQueryMode(existingMode);
       isInitializedRef.current = true;
+      console.log('[WindowSelector] DSL INIT: path 1 (store already has DSL):', authoritativeDSL);
       return;
     }
 
@@ -468,7 +479,7 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
       const graphDSL = graph.currentQueryDSL;
       const existingMode = graphDSL.includes('cohort(') ? 'cohort' : 'window';
       setQueryMode(existingMode);
-      console.log('[WindowSelector] Initializing AUTHORITATIVE DSL from graph.currentQueryDSL:', graphDSL);
+      console.log('[WindowSelector] DSL INIT: path 2 (from graph.currentQueryDSL):', graphDSL);
       setCurrentDSL(graphDSL);
       isInitializedRef.current = true;
       return;
@@ -478,9 +489,11 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
     if (graph) {
       const windowToUse = window || defaultWindowDates;
       const defaultDSL = `${queryMode}(${formatDateUK(windowToUse.start)}:${formatDateUK(windowToUse.end)})`;
-      console.log('[WindowSelector] Initializing AUTHORITATIVE DSL from window:', defaultDSL);
+      console.log('[WindowSelector] DSL INIT: path 3 (FALLBACK from window):', defaultDSL);
       setCurrentDSL(defaultDSL);
       isInitializedRef.current = true;
+    } else {
+      console.log('[WindowSelector] DSL INIT: NO PATH TAKEN (graph is null, waiting...)');
     }
   }, [graph, window, setGraph, setCurrentDSL, defaultWindowDates, graphStore, queryMode]); // Dependencies
   
@@ -491,11 +504,11 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
     
     const valueIds: string[] = [];
     for (const ctx of parsed.context) {
-      valueIds.push(ctx.value);
+      if (ctx.value !== undefined) valueIds.push(ctx.value);
     }
     for (const ctxAny of parsed.contextAny) {
       for (const pair of ctxAny.pairs) {
-        valueIds.push(pair.value);
+        if (pair.value !== undefined) valueIds.push(pair.value);
       }
     }
     return valueIds;
@@ -704,8 +717,11 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
         setPlannerResult(result);
         isInitialMountRef.current = false;
         
-        // Show toast if planner says to
-        if (result.summaries.showToast && result.summaries.toastMessage) {
+        // Show toast if planner says to — but NOT on initial_load, where parameter
+        // files may not yet be in FileRegistry (race with workspace hydration),
+        // causing false "needs fetch" alerts that disappear moments later.
+        if (result.summaries.showToast && result.summaries.toastMessage
+            && result.analysisContext?.trigger !== 'initial_load') {
           toast(result.summaries.toastMessage, { icon: '⚠️', duration: 4000 });
         }
       })

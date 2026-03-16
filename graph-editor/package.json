@@ -1,7 +1,7 @@
 {
   "name": "graph-editor",
   "private": true,
-  "version": "1.7.9-beta",
+  "version": "1.7.15-beta",
   "type": "module",
   "scripts": {
     "dev": "npm run generate-docs && npm run bundle-sample-data && vite",
@@ -47,6 +47,8 @@
     "@tiptap/starter-kit": "^3.20.0",
     "@types/d3-sankey": "^0.12.4",
     "@types/js-yaml": "^4.0.9",
+    "ag-grid-community": "^35.1.0",
+    "ag-grid-react": "^35.1.0",
     "ajv": "^8.17.1",
     "d3-sankey": "^0.12.3",
     "dagre": "^0.8.5",

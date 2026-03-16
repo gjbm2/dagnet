@@ -60,6 +60,28 @@ export default defineConfig(({ mode }) => {
               await handleGithubProxyRequest(req, res);
             } else if (req.url?.startsWith('/api/auth-callback')) {
               await handleAuthCallback(req, res);
+            } else if (req.url?.startsWith('/api/bayes/config') || req.url?.startsWith('/api/bayes-config')) {
+              // Dev-only: serve Bayes config from .env.local (mirrors api/bayes-config.ts)
+              const modal_submit_url = env.BAYES_MODAL_SUBMIT_URL || '';
+              const modal_status_url = env.BAYES_MODAL_STATUS_URL || '';
+              const webhook_url = env.BAYES_WEBHOOK_URL || '';
+              const webhook_secret = env.BAYES_WEBHOOK_SECRET || '';
+              const db_connection = env.DB_CONNECTION || '';
+              const missing = [
+                !modal_submit_url && 'BAYES_MODAL_SUBMIT_URL',
+                !modal_status_url && 'BAYES_MODAL_STATUS_URL',
+                !webhook_url && 'BAYES_WEBHOOK_URL',
+                !webhook_secret && 'BAYES_WEBHOOK_SECRET',
+                !db_connection && 'DB_CONNECTION',
+              ].filter(Boolean);
+              res.setHeader('Content-Type', 'application/json');
+              if (missing.length) {
+                res.statusCode = 500;
+                res.end(JSON.stringify({ error: 'Bayes config not fully configured', missing }));
+              } else {
+                res.statusCode = 200;
+                res.end(JSON.stringify({ modal_submit_url, modal_status_url, webhook_url, webhook_secret, db_connection }));
+              }
             } else {
               next();
             }

@@ -6,12 +6,6 @@
 export const STALENESS_NUDGE_RETRIEVE_ALL_SLICES_AFTER_MS = 24 * 60 * 60 * 1000; // 24h (cron handles daily retrieves)
 
 /**
- * UI-only: "last done" recency thresholds used by the staleness update modal.
- * These are intentionally conservative and should not change behaviour (only colouring / display).
- */
-export const STALENESS_NUDGE_GIT_PULL_LAST_DONE_RED_AFTER_MS = 24 * 60 * 60 * 1000; // 24h
-
-/**
  * How often to check if remote is ahead of local (for git-pull nudge).
  * The actual nudge is triggered by SHA mismatch, not by time elapsed.
  * This just gates how frequently we make the network call to check remote HEAD.

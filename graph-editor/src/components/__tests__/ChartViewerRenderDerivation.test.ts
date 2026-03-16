@@ -57,7 +57,7 @@ function deriveChartViewerState(data: any) {
 
   const chartDef = {
     title: def?.title || '',
-    view_mode: (def?.view_mode || 'chart') as 'chart' | 'cards',
+    view_mode: (def?.view_mode || 'chart') as import('../../types/chartRecipe').ViewMode,
     chart_kind: def?.chart_kind,
     display: (def?.display || {}) as Record<string, unknown>,
   };

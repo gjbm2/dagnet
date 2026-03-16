@@ -23,6 +23,7 @@ vi.mock('reactflow', () => {
       getEdges: () => [],
       screenToFlowPosition: (p: any) => p,
     }),
+    useStore: (selector: any) => selector({ transform: [0, 0, 1] }),
   };
 });
 
@@ -231,6 +232,20 @@ vi.mock('@/lib/whatIf', () => ({
 
 vi.mock('@/lib/queryDSL', () => ({
   getVisitedNodeIds: vi.fn(() => new Set<string>()),
+  parseDSL: vi.fn(() => ({
+    visited: [],
+    exclude: [],
+    context: [],
+    cases: [],
+    visitedAny: [],
+    contextAny: [],
+    window: null,
+    cohort: null,
+    asat: null,
+    raw: '',
+    from: null,
+    to: null,
+  })),
 }));
 
 vi.mock('@/utils/confidenceIntervals', () => ({
@@ -244,6 +259,19 @@ vi.mock('../EdgeBeads', () => ({
 
 vi.mock('../../GraphCanvas', () => ({
   useDecorationVisibility: () => ({ beadsVisible: false, isPanning: false, isDraggingNode: false }),
+}));
+
+vi.mock('../../HoverAnalysisPreview', () => ({
+  HoverAnalysisPreview: () => null,
+  useHoverPreview: () => ({
+    previewState: null,
+    handleTriggerEnter: vi.fn(),
+    handleTriggerLeave: vi.fn(),
+    handleCardEnter: vi.fn(),
+    handleCardLeave: vi.fn(),
+    handleDismiss: vi.fn(),
+  }),
+  useHoverScenarios: () => undefined,
 }));
 
 // ============================================================================
@@ -313,69 +341,10 @@ describe('ConversionEdge Sankey parity', () => {
     expect(sankeyAnchor!.style.strokeOpacity).toBe(String(LAG_ANCHOR_SELECTED_OPACITY));
   });
 
-  it('includes snapshot date range in edge tooltip when DB inventory exists', async () => {
-    vi.useFakeTimers();
-    const { default: ConversionEdge } = await import('../ConversionEdge');
-
-    const rendered = render(
-      <svg>
-        <ConversionEdge
-          id="edge-id"
-          source="from"
-          target="to"
-          sourceX={0}
-          sourceY={0}
-          targetX={100}
-          targetY={0}
-          sourcePosition={'Right' as any}
-          targetPosition={'Left' as any}
-          selected={false}
-          data={{
-            scenarioOverlay: false,
-            useSankeyView: false,
-            strokeOpacity: 1,
-            scenarioColour: '#10B981',
-            edgeLatencyDisplay: {
-              enabled: true,
-              mode: 'f+e',
-              p_mean: 0.5,
-              p_evidence: 0.2,
-              p_forecast: 0.7,
-              completeness_pct: 100,
-              median_days: 2.5,
-              isDashed: false,
-              useNoEvidenceOpacity: false,
-              showLatencyBead: false,
-              showCompletenessOnly: false,
-              evidenceIsDerived: false,
-              forecastIsDerived: false,
-            },
-            // Ensure tooltip builds edgeId consistently
-            id: 'edge-id',
-          }}
-        />
-      </svg>
-    );
-
-    const edgePath = rendered.container.querySelector('path.react-flow__edge-path') as SVGPathElement | null;
-    expect(edgePath).toBeTruthy();
-
-    // Trigger hover, then advance the tooltip delay.
-    await act(async () => {
-      fireEvent.mouseEnter(edgePath!, { clientX: 10, clientY: 10 });
-      vi.advanceTimersByTime(550);
-      // Allow async inventory fetch + state updates to settle
-      await Promise.resolve();
-      await Promise.resolve();
-    });
-
-    // Tooltip is rendered as a portal; assert the snapshot label exists.
-    expect(document.body.textContent || '').toContain('snapshots (retrieved):');
-    // Date format: d-MMM-yy (from retrieved_at timestamps)
-    expect(document.body.textContent || '').toContain('1-Dec-25 — 10-Dec-25');
-
-    vi.useRealTimers();
-  });
+  // NOTE: The old "snapshot date range in edge tooltip" test was removed here.
+  // Tooltips are now analysis objects rendered via HoverAnalysisPreview → localAnalysisComputeService.
+  // Snapshot date display should be tested at the localAnalysisComputeService / AnalysisInfoCard level,
+  // not via a ConversionEdge rendering test with 15 context mocks.
 });
 
 

@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
 
 # Interactive version bumper for DagNet
-# Usage: ./release.sh [--notests] [--nobuild] [--workers=N]
+# Usage: ./release.sh [--notests] [--nobuild] [--workers=N] [--auto]
 #
 # By default, runs all tests and build checks (each with a 3s skip countdown).
 # Options:
 #   --notests     Skip all test suites entirely
 #   --nobuild     Skip TypeScript build verification
 #   --workers=N   Playwright worker count (default: 5)
+#   --auto        Non-interactive micro (patch) release → merge to main, no changelog
 
 set -e
 
@@ -54,6 +55,7 @@ print_git_add_dot_preview() {
 # Parse command line arguments
 RUN_TESTS=true
 RUN_BUILD=true
+AUTO_MODE=false
 PW_WORKERS=5
 for arg in "$@"; do
   case $arg in
@@ -69,9 +71,13 @@ for arg in "$@"; do
       PW_WORKERS="${arg#*=}"
       shift
       ;;
+    --auto)
+      AUTO_MODE=true
+      shift
+      ;;
     *)
       print_red "Unknown option: $arg"
-      echo "Usage: ./release.sh [--notests] [--nobuild] [--workers=N]"
+      echo "Usage: ./release.sh [--notests] [--nobuild] [--workers=N] [--auto]"
       exit 1
       ;;
   esac
@@ -85,7 +91,9 @@ if [[ -n $(git status --porcelain) ]]; then
   print_yellow "⚠ You have uncommitted changes."
   print_yellow "These will be committed before proceeding with the release."
   echo ""
-  read -p "Press Enter to continue or Ctrl+C to cancel..."
+  if [[ "$AUTO_MODE" != true ]]; then
+    read -p "Press Enter to continue or Ctrl+C to cancel..."
+  fi
   echo ""
 fi
 
@@ -109,15 +117,17 @@ if [[ "$RUN_TESTS" == true ]]; then
   
   # Run all npm tests (unit + integration) (with skip-on-keypress countdown)
   SKIP_NPM=false
-  print_yellow "[1/3] npm tests — press any key within 3s to skip..."
-  for i in 3 2 1; do
-    printf "\r  Starting in %d... " "$i"
-    if read -r -s -n 1 -t 1 _key 2>/dev/null; then
-      SKIP_NPM=true
-      break
-    fi
-  done
-  printf "\r                              \r"
+  if [[ "$AUTO_MODE" != true ]]; then
+    print_yellow "[1/3] npm tests — press any key within 3s to skip..."
+    for i in 3 2 1; do
+      printf "\r  Starting in %d... " "$i"
+      if read -r -s -n 1 -t 1 _key 2>/dev/null; then
+        SKIP_NPM=true
+        break
+      fi
+    done
+    printf "\r                              \r"
+  fi
 
   if [[ "$SKIP_NPM" == true ]]; then
     print_yellow "  ⊘ npm tests skipped (user interrupt)"
@@ -135,15 +145,17 @@ if [[ "$RUN_TESTS" == true ]]; then
 
   # Run Playwright E2E tests (with skip-on-keypress countdown)
   SKIP_PLAYWRIGHT=false
-  print_yellow "[2/3] Playwright E2E tests — press any key within 3s to skip..."
-  for i in 3 2 1; do
-    printf "\r  Starting in %d... " "$i"
-    if read -r -s -n 1 -t 1 _key 2>/dev/null; then
-      SKIP_PLAYWRIGHT=true
-      break
-    fi
-  done
-  printf "\r                              \r"
+  if [[ "$AUTO_MODE" != true ]]; then
+    print_yellow "[2/3] Playwright E2E tests — press any key within 3s to skip..."
+    for i in 3 2 1; do
+      printf "\r  Starting in %d... " "$i"
+      if read -r -s -n 1 -t 1 _key 2>/dev/null; then
+        SKIP_PLAYWRIGHT=true
+        break
+      fi
+    done
+    printf "\r                              \r"
+  fi
 
   if [[ "$SKIP_PLAYWRIGHT" == true ]]; then
     print_yellow "  ⊘ Playwright tests skipped (user interrupt)"
@@ -163,15 +175,17 @@ if [[ "$RUN_TESTS" == true ]]; then
   
   # Run Python tests (with skip-on-keypress countdown)
   SKIP_PYTHON=false
-  print_yellow "[3/3] Python tests — press any key within 3s to skip..."
-  for i in 3 2 1; do
-    printf "\r  Starting in %d... " "$i"
-    if read -r -s -n 1 -t 1 _key 2>/dev/null; then
-      SKIP_PYTHON=true
-      break
-    fi
-  done
-  printf "\r                              \r"
+  if [[ "$AUTO_MODE" != true ]]; then
+    print_yellow "[3/3] Python tests — press any key within 3s to skip..."
+    for i in 3 2 1; do
+      printf "\r  Starting in %d... " "$i"
+      if read -r -s -n 1 -t 1 _key 2>/dev/null; then
+        SKIP_PYTHON=true
+        break
+      fi
+    done
+    printf "\r                              \r"
+  fi
 
   if [[ "$SKIP_PYTHON" == true ]]; then
     print_yellow "  ⊘ Python tests skipped (user interrupt)"
@@ -202,15 +216,17 @@ if [[ "$RUN_BUILD" == true ]]; then
   echo ""
 
   SKIP_TSC=false
-  print_yellow "TypeScript type check — press any key within 3s to skip..."
-  for i in 3 2 1; do
-    printf "\r  Starting in %d... " "$i"
-    if read -r -s -n 1 -t 1 _key 2>/dev/null; then
-      SKIP_TSC=true
-      break
-    fi
-  done
-  printf "\r                              \r"
+  if [[ "$AUTO_MODE" != true ]]; then
+    print_yellow "TypeScript type check — press any key within 3s to skip..."
+    for i in 3 2 1; do
+      printf "\r  Starting in %d... " "$i"
+      if read -r -s -n 1 -t 1 _key 2>/dev/null; then
+        SKIP_TSC=true
+        break
+      fi
+    done
+    printf "\r                              \r"
+  fi
 
   if [[ "$SKIP_TSC" == true ]]; then
     print_yellow "  ⊘ TypeScript check skipped (user interrupt)"
@@ -239,14 +255,19 @@ IFS='.' read -r MAJOR MINOR PATCH_BETA <<< "$CURRENT_VERSION"
 PATCH=$(echo "$PATCH_BETA" | sed 's/-beta//')
 
 # Show menu
-print_yellow "Select increment type:"
-echo ""
-printf "  \033[0;32mB\033[0m - Big increment     (major)    → %d.0.0-beta  (e.g., %d.0b)\n" $(($MAJOR + 1)) $(($MAJOR + 1))
-printf "  \033[0;32mS\033[0m - Small increment   (minor)    → %s.%d.0-beta  (e.g., %s.%db)\n" "$MAJOR" $(($MINOR + 1)) "$MAJOR" $(($MINOR + 1))
-printf "  \033[0;32mM\033[0m - Micro increment   (patch)    → %s.%s.%d-beta  (e.g., %s.%s.%db)\n" "$MAJOR" "$MINOR" $(($PATCH + 1)) "$MAJOR" "$MINOR" $(($PATCH + 1))
-printf "  \033[0;31mQ\033[0m - Quit\n"
-echo ""
-read -p "Choose [B/S/M/Q]: " CHOICE
+if [[ "$AUTO_MODE" == true ]]; then
+  CHOICE="M"
+  print_blue "Auto mode: selecting micro (patch) increment"
+else
+  print_yellow "Select increment type:"
+  echo ""
+  printf "  \033[0;32mB\033[0m - Big increment     (major)    → %d.0.0-beta  (e.g., %d.0b)\n" $(($MAJOR + 1)) $(($MAJOR + 1))
+  printf "  \033[0;32mS\033[0m - Small increment   (minor)    → %s.%d.0-beta  (e.g., %s.%db)\n" "$MAJOR" $(($MINOR + 1)) "$MAJOR" $(($MINOR + 1))
+  printf "  \033[0;32mM\033[0m - Micro increment   (patch)    → %s.%s.%d-beta  (e.g., %s.%s.%db)\n" "$MAJOR" "$MINOR" $(($PATCH + 1)) "$MAJOR" "$MINOR" $(($PATCH + 1))
+  printf "  \033[0;31mQ\033[0m - Quit\n"
+  echo ""
+  read -p "Choose [B/S/M/Q]: " CHOICE
+fi
 
 case "${CHOICE^^}" in
   B)
@@ -286,11 +307,16 @@ echo ""
 printf "Current branch: \033[0;34m%s\033[0m\n" "$CURRENT_BRANCH"
 echo ""
 echo "Release scope:"
-printf "  \033[0;32mB\033[0m - Branch only (%s)\n" "$CURRENT_BRANCH"
-printf "  \033[0;32mM\033[0m - Merge to main (%s → main)\n" "$CURRENT_BRANCH"
-printf "  \033[0;31mC\033[0m - Cancel\n"
-echo ""
-read -p "Choose [B/M/C]: " SCOPE_CHOICE
+if [[ "$AUTO_MODE" == true ]]; then
+  SCOPE_CHOICE="M"
+  print_blue "Auto mode: merge to main"
+else
+  printf "  \033[0;32mB\033[0m - Branch only (%s)\n" "$CURRENT_BRANCH"
+  printf "  \033[0;32mM\033[0m - Merge to main (%s → main)\n" "$CURRENT_BRANCH"
+  printf "  \033[0;31mC\033[0m - Cancel\n"
+  echo ""
+  read -p "Choose [B/M/C]: " SCOPE_CHOICE
+fi
 
 case "${SCOPE_CHOICE^^}" in
   B)
@@ -353,30 +379,33 @@ if [[ "$MERGE_TO_MAIN" == true ]]; then
   echo ""
 fi
 
-read -p "Confirm release [Y/N]: " CONFIRM
-
-if [[ ! "${CONFIRM^^}" == "Y" ]]; then
-  print_yellow "Cancelled."
-  exit 0
+if [[ "$AUTO_MODE" != true ]]; then
+  read -p "Confirm release [Y/N]: " CONFIRM
+  if [[ ! "${CONFIRM^^}" == "Y" ]]; then
+    print_yellow "Cancelled."
+    exit 0
+  fi
 fi
 
-# Prompt for release notes
-echo ""
-print_yellow "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-print_yellow "Enter release notes (optional, press Ctrl+D when done):"
-print_yellow "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo ""
-echo "Describe what's new in this release:"
-echo "(This will be used as your commit message and added to CHANGELOG)"
-echo ""
-
-# Read multi-line input
+# Prompt for release notes (skipped in auto mode — no changelog)
 RELEASE_NOTES=""
-while IFS= read -r line; do
-  RELEASE_NOTES="${RELEASE_NOTES}${line}"$'\n'
-done
+if [[ "$AUTO_MODE" != true ]]; then
+  echo ""
+  print_yellow "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  print_yellow "Enter release notes (optional, press Ctrl+D when done):"
+  print_yellow "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  echo ""
+  echo "Describe what's new in this release:"
+  echo "(This will be used as your commit message and added to CHANGELOG)"
+  echo ""
 
-echo ""
+  # Read multi-line input
+  while IFS= read -r line; do
+    RELEASE_NOTES="${RELEASE_NOTES}${line}"$'\n'
+  done
+
+  echo ""
+fi
 
 # Commit any uncommitted changes BEFORE proceeding (guarded by preview)
 HAS_UNCOMMITTED=$(git status --porcelain)
@@ -384,11 +413,12 @@ if [[ -n "$HAS_UNCOMMITTED" ]]; then
   print_blue "Committing current changes..."
   echo ""
   print_git_add_dot_preview
-  read -p "Stage and commit ALL of the above changes? [Y/N]: " STAGE_CONFIRM
-
-  if [[ ! "${STAGE_CONFIRM^^}" == "Y" ]]; then
-    print_yellow "Cancelled."
-    exit 0
+  if [[ "$AUTO_MODE" != true ]]; then
+    read -p "Stage and commit ALL of the above changes? [Y/N]: " STAGE_CONFIRM
+    if [[ ! "${STAGE_CONFIRM^^}" == "Y" ]]; then
+      print_yellow "Cancelled."
+      exit 0
+    fi
   fi
 
   git add .

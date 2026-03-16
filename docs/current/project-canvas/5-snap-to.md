@@ -1,7 +1,7 @@
 # Phase 5: Snap-to Alignment Guides
 
-**Status**: High-level design  
-**Date**: 5-Mar-26  
+**Status**: 5a (Alignment commands) complete; 5b (Snap-to guides) not started
+**Date**: 14-Mar-26
 **Prerequisite**: Phases 1-3 complete (canvas objects exist and are draggable)
 
 ---
@@ -116,28 +116,28 @@ applySnapToChanges(changes, allNodes, threshold):
   for each change where type === 'position' && dragging:
     draggedNode = find node by change.id in allNodes
     draggedRect = { x: change.position.x, y: change.position.y, w: draggedNode.width, h: draggedNode.height }
-    
+
     targetNodes = allNodes.filter(n => n.id !== change.id)
-    
+
     bestSnapX = null, bestSnapY = null
-    
+
     for each targetNode in targetNodes:
       targetRect = { x, y, w, h } from targetNode
-      
+
       // Check all edge + centre alignments on X axis
       for each (draggedEdge, targetEdge) in X-axis alignment pairs:
         delta = targetEdge - draggedEdge
         if |delta| < threshold && (bestSnapX === null || |delta| < |bestSnapX.delta|):
           bestSnapX = { delta, guidePosition, guideExtent }
-      
+
       // Same for Y axis
       ...
-    
+
     if bestSnapX: change.position.x += bestSnapX.delta
     if bestSnapY: change.position.y += bestSnapY.delta
-    
+
     record guide lines from bestSnapX, bestSnapY
-  
+
   return snappedChanges
 ```
 
@@ -237,7 +237,100 @@ If future graphs exceed ~500 nodes, spatial indexing (quadtree or simple grid) c
 
 ---
 
-## 9. Implementation Steps
+## 9. Explicit Alignment, Distribution & Equal-Size Commands
+
+**Status**: COMPLETE (14-Mar-26)
+
+Complementary to drag-time snapping: explicit commands that align, distribute, or equalise the size of selected objects on demand. Standard in Figma, Sketch, PowerPoint, Illustrator.
+
+### 9.1 Commands
+
+**Alignment commands** (require 2+ selected objects):
+
+| Command | Behaviour |
+|---------|-----------|
+| Align left edges | Set all selected objects' left edge to the minimum left edge in the selection |
+| Align right edges | Set all selected objects' right edge to the maximum right edge in the selection |
+| Align top edges | Set all selected objects' top edge to the minimum top edge in the selection |
+| Align bottom edges | Set all selected objects' bottom edge to the maximum bottom edge in the selection |
+| Align centre horizontally | Set all selected objects' horizontal centre to the horizontal centre of the selection bounding box |
+| Align centre vertically | Set all selected objects' vertical centre to the vertical centre of the selection bounding box |
+
+**Distribution commands** (require 3+ selected objects):
+
+| Command | Behaviour |
+|---------|-----------|
+| Distribute horizontally | Space objects evenly along the X axis (equal gaps between bounding boxes, preserving leftmost and rightmost positions) |
+| Distribute vertically | Space objects evenly along the Y axis (equal gaps between bounding boxes, preserving topmost and bottommost positions) |
+
+**Equal-size commands** (require 2+ selected objects):
+
+| Command | Behaviour |
+|---------|-----------|
+| Make equal width | Set all selected objects' width to the average width of the selection |
+| Make equal height | Set all selected objects' height to the average height of the selection |
+
+### 9.2 Anchor Behaviour
+
+Following Figma's default: alignment is relative to the **selection bounding box**, not to any single object. E.g., "Align left" moves all objects to the leftmost edge already present in the selection — no object moves further left than the current leftmost.
+
+Distribution preserves the positions of the two outermost objects and redistributes the interior objects to achieve equal spacing.
+
+Equal-size uses the arithmetic mean of the selection's dimensions.
+
+### 9.3 Access Points
+
+All command sets appear in three places (per the "menus are access points" principle — no logic in menu files):
+
+1. **MultiSelectContextMenu** — shown when right-clicking with 2+ objects selected and the selection includes any canvas objects (post-its, containers, analyses) or is mixed-type. "Align" submenu with all commands.
+2. **NodeContextMenu** — shown when right-clicking with 2+ conversion nodes selected (nodes-only multi-select). "Align" submenu appended to existing node context menu items.
+3. **Elements menu** (top menu bar) — "Align" submenu, available when a graph tab is active. Commands dispatched via `dagnet:align` / `dagnet:distribute` / `dagnet:equalSize` CustomEvents.
+
+Commands are greyed out (not hidden) when the selection count is insufficient — this makes the feature discoverable.
+
+### 9.4 Service Layer
+
+All alignment/distribution/equal-size logic lives in `alignmentService.ts` (pure geometry, no side effects). The service:
+
+- `computeAlignment(nodes, command)` → array of `PositionUpdate` (only moved nodes)
+- `computeDistribution(nodes, command)` → array of `PositionUpdate` (only moved nodes)
+- `computeEqualSize(nodes, command)` → array of `SizeUpdate` (only changed nodes)
+- `toNodeRect(node)` → extracts `NodeRect` from a ReactFlow node (style → measured → defaults)
+
+### 9.5 Graph Store Write-back
+
+ReactFlow state is NOT the source of truth. The graph store is. The graph→ReactFlow sync overwrites any ReactFlow-only changes on the next cycle (e.g. on deselection).
+
+`useAlignSelection` handles both layers:
+1. Updates ReactFlow nodes via `setNodes` (immediate visual feedback)
+2. Updates the graph store via `setGraphDirect` (persistence):
+   - Conversion nodes: `layout.x/y` (keyed by uuid)
+   - Post-its: `x/y`, `width/height` (keyed by `postit-{id}`)
+   - Containers: `x/y`, `width/height` (keyed by `container-{id}`)
+   - Canvas analyses: `x/y`, `width/height` (keyed by `analysis-{id}`)
+3. Saves undo history via `saveHistoryState`
+
+### 9.6 Implementation Artefacts
+
+| File | Role |
+|------|------|
+| `src/services/alignmentService.ts` | Pure geometry: `computeAlignment`, `computeDistribution`, `computeEqualSize`, `toNodeRect` |
+| `src/services/__tests__/alignmentService.test.ts` | 32 tests: all alignment commands, distribution, equal-size, edge cases, `toNodeRect` |
+| `src/hooks/useAlignSelection.ts` | Hook wiring: selection → service → `setNodes` + graph store write-back + undo history |
+| `src/components/MultiSelectContextMenu.tsx` | Context menu for mixed/canvas-object multi-select (Align submenu) |
+| `src/components/NodeContextMenu.tsx` | Added optional Align submenu for nodes-only multi-select |
+| `src/components/MenuBar/ElementsMenu.tsx` | Added Align submenu dispatching CustomEvents |
+| `src/components/GraphCanvas.tsx` | Routing: `onNodeContextMenu` routes to correct context menu; lasso fix using `toNodeRect` |
+
+### 9.7 Lasso Selection Fix
+
+Fixed lasso selection to use actual node dimensions (via `toNodeRect`) instead of hardcoded `DEFAULT_NODE_WIDTH × 60`. Large canvas objects (charts at ~400×300) were nearly impossible to lasso-select with hardcoded dimensions.
+
+---
+
+## 10. Implementation Steps
+
+### 10.1 Snap-to Guides (drag-time) — NOT STARTED
 
 - Create `useSnapToGuides` hook:
   - Accepts snap threshold, enabled flag, Alt-key state
@@ -255,15 +348,37 @@ If future graphs exceed ~500 nodes, spatial indexing (quadtree or simple grid) c
 - Add "Snap to guides" toggle to View menu
 - Persist snap preference in `editorState`
 
+### 10.2 Alignment, Distribution & Equal-Size Commands — COMPLETE (14-Mar-26)
+
+- ✅ Created `alignmentService.ts` (pure geometry functions)
+- ✅ Created `useAlignSelection` hook with graph store write-back and undo history
+- ✅ Added "Align" submenu to MultiSelectContextMenu, NodeContextMenu, and ElementsMenu
+- ✅ Context menu routing in `onNodeContextMenu`: canvas objects → MultiSelectContextMenu; nodes only → NodeContextMenu with alignment appended
+- ✅ Added `computeEqualSize` for Make Equal Width / Make Equal Height
+- ✅ Fixed lasso selection to use actual node dimensions
+- ✅ 32 tests passing in `alignmentService.test.ts`
+
 ---
 
-## 10. Test Plan
+## 11. Test Plan
 
-### Integration tests
+### Integration tests — Snap-to guides
 - Position change with snap enabled → position snaps to aligned target within threshold
 - Position change with snap enabled, no nearby targets → position unchanged
 - Position change with snap disabled (Alt held) → position unchanged
 - Multi-select snap uses selection bounding box, not individual nodes
 
+### Integration tests — Alignment, distribution & equal-size (covered)
+- ✅ Align left with 3 objects → all left edges equal the minimum left edge
+- ✅ Align centre horizontally → all horizontal centres equal the selection bbox centre
+- ✅ Distribute horizontally with 4 objects → equal gaps between bounding boxes, outermost objects unmoved
+- ✅ Distribute with exactly 2 objects → no-op (command disabled)
+- ✅ Align with 1 object → no-op (command disabled)
+- ✅ Mixed object types (node, post-it, container) → alignment works on bounding boxes regardless of type
+- ✅ Equal width → all widths set to average, heights preserved
+- ✅ Equal height → all heights set to average, widths preserved
+- ✅ Already equal → no-op (no updates returned)
+
 ### Playwright
 - `snap-alignment-guides.spec.ts` — drag node near another node → guide line appears → node snaps to alignment; release → guide line disappears
+- `alignment-commands.spec.ts` — select 3 nodes → context menu → Align left → verify positions; select 4 nodes → Distribute horizontally → verify equal spacing

@@ -73,14 +73,14 @@ export function LagFitChart({ result, height = 380 }: Props): JSX.Element {
       markLines.push({
         xAxis: Math.round(median),
         lineStyle: { color: ORANGE, type: 'dashed', width: 1, opacity: 0.7 },
-        label: { show: true, formatter: `med ${median.toFixed(1)}d`, color: ORANGE, fontSize: 10, position: 'start' },
+        label: { show: true, formatter: `med ${median.toFixed(1)}d`, color: ORANGE, fontSize: 9, position: 'start' },
       });
     }
     if (Number.isFinite(t95) && t95 > 0) {
       markLines.push({
         xAxis: Math.round(t95),
         lineStyle: { color: '#6b7280', type: 'dashed', width: 1, opacity: 0.6 },
-        label: { show: true, formatter: `t95 ${t95.toFixed(1)}d`, color: '#6b7280', fontSize: 10, position: 'end' },
+        label: { show: true, formatter: `t95 ${t95.toFixed(1)}d`, color: '#6b7280', fontSize: 9, position: 'end' },
       });
     }
 
@@ -90,10 +90,10 @@ export function LagFitChart({ result, height = 380 }: Props): JSX.Element {
       xAxis: {
         type: 'value',
         name: 'Lag (days)',
-        nameTextStyle: { color: textColour, fontSize: 11 },
+        nameTextStyle: { color: textColour, fontSize: 8 },
         min: 0,
         max: tValues[tValues.length - 1] ?? 100,
-        axisLabel: { color: textColour, fontSize: 11 },
+        axisLabel: { color: textColour, fontSize: 10 },
         axisLine: { lineStyle: { color: gridColour } },
         splitLine: { lineStyle: { color: gridColour } },
       },
@@ -102,12 +102,12 @@ export function LagFitChart({ result, height = 380 }: Props): JSX.Element {
           // Left: CDF / observed (0–1)
           type: 'value',
           name: 'Cumulative fraction',
-          nameTextStyle: { color: textColour, fontSize: 11 },
+          nameTextStyle: { color: textColour, fontSize: 8 },
           min: 0,
           max: 1,
           axisLabel: {
             color: textColour,
-            fontSize: 11,
+            fontSize: 10,
             formatter: (v: number) => fmtPct(v),
           },
           axisLine: { show: false },
@@ -117,11 +117,11 @@ export function LagFitChart({ result, height = 380 }: Props): JSX.Element {
           // Right: PDF (daily probability mass)
           type: 'value',
           name: 'Daily PDF',
-          nameTextStyle: { color: GREY_BAR, fontSize: 11 },
+          nameTextStyle: { color: GREY_BAR, fontSize: 8 },
           position: 'right',
           axisLabel: {
             color: GREY_BAR,
-            fontSize: 11,
+            fontSize: 10,
             formatter: (v: number) => v.toFixed(3),
           },
           axisLine: { show: false },
@@ -133,7 +133,7 @@ export function LagFitChart({ result, height = 380 }: Props): JSX.Element {
         axisPointer: { type: 'line' },
         backgroundColor: tooltipBg,
         borderColor: gridColour,
-        textStyle: { color: textColour, fontSize: 12 },
+        textStyle: { color: textColour, fontSize: 11 },
         formatter: (params: any[]) => {
           if (!params?.length) return '';
           const t = params[0]?.axisValue ?? '';
@@ -152,7 +152,7 @@ export function LagFitChart({ result, height = 380 }: Props): JSX.Element {
       },
       legend: {
         bottom: 0,
-        textStyle: { color: textColour, fontSize: 11 },
+        textStyle: { color: textColour, fontSize: 10 },
         data: ['PDF (daily)', 'Fitted CDF', 'Observed completeness'],
       },
       series: [

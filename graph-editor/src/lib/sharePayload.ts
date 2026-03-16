@@ -1,4 +1,5 @@
 import { compressToEncodedURIComponent, decompressFromEncodedURIComponent } from 'lz-string';
+import type { ViewMode } from '../types/chartRecipe';
 
 export type SharePayloadV1 =
   | {
@@ -20,7 +21,7 @@ export type SharePayloadV1 =
         title?: string;
         /** User-pinned chart kind override (distinct from inferred `kind`) */
         chart_kind_override?: string;
-        view_mode?: 'chart' | 'cards';
+        view_mode?: ViewMode;
         display?: Record<string, unknown>;
       };
       analysis: {

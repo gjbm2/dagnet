@@ -115,6 +115,16 @@ export function createGraphStore(): GraphStoreHook {
       const { currentDSL, window: currentWindow } = get();
       const isBootstrap = !currentDSL && !!graph?.currentQueryDSL;
 
+      // DIAGNOSTIC — remove after debugging DSL-null-on-boot issue
+      console.log('[GraphStore.setGraph] BOOTSTRAP CHECK:', {
+        currentDSL,
+        graphCurrentQueryDSL: graph?.currentQueryDSL ?? '(absent)',
+        isBootstrap,
+        graphRevision: get().graphRevision,
+        hasNodes: !!graph?.nodes?.length,
+        stackTrace: new Error().stack?.split('\n').slice(1, 5).map(s => s.trim()),
+      });
+
       if (!isBootstrap) {
         set((state) => ({ graph, graphRevision: state.graphRevision + 1 }));
         return;
@@ -159,6 +169,17 @@ export function createGraphStore(): GraphStoreHook {
     // This is the SINGLE source of truth for all fetch operations
     currentDSL: '',
     setCurrentDSL: (currentDSL: string) => {
+      // DIAGNOSTIC — remove after debugging DSL-null-on-boot issue
+      const prev = get().currentDSL;
+      if (!currentDSL && prev) {
+        console.warn('[GraphStore.setCurrentDSL] DSL BEING CLEARED!', {
+          prev,
+          next: currentDSL,
+          stack: new Error().stack?.split('\n').slice(1, 5).map(s => s.trim()),
+        });
+      } else {
+        console.log('[GraphStore.setCurrentDSL]', { prev: prev || '(empty)', next: currentDSL || '(empty)' });
+      }
       set({ currentDSL });
     },
     
@@ -648,6 +669,22 @@ export function useGraphStore<T = GraphStore>(
   extendedState.destroy = store.destroy;
   
   return extendedState;
+}
+
+/**
+ * Imperative store API hook — returns the raw Zustand store handle.
+ *
+ * Use this when you need `.getState()` or `.subscribe()` for imperative
+ * access without causing reactive re-renders. Unlike `useGraphStore(selector)`,
+ * this never subscribes to state changes — calling `.getState()` reads the
+ * latest snapshot on demand.
+ */
+export function useGraphStoreApi() {
+  const store = useContext(GraphStoreContext);
+  if (!store) {
+    throw new Error('useGraphStoreApi must be used within GraphStoreProvider');
+  }
+  return store;
 }
 
 /**

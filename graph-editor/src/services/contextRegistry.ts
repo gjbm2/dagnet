@@ -364,7 +364,7 @@ export class ContextRegistry {
     for (const window of windows) {
       const parsed = parseConstraints(window.sliceDSL || '');
       const contextConstraint = parsed.context.find(c => c.key === contextKey);
-      if (contextConstraint) {
+      if (contextConstraint && contextConstraint.value !== undefined) {
         windowValues.add(contextConstraint.value);
       }
     }
@@ -459,7 +459,7 @@ export class ContextRegistry {
     for (const window of windows) {
       const parsed = parseConstraints(window.sliceDSL || '');
       const contextConstraint = parsed.context.find((c) => c.key === contextKey);
-      if (contextConstraint) windowValues.add(contextConstraint.value);
+      if (contextConstraint && contextConstraint.value !== undefined) windowValues.add(contextConstraint.value);
     }
 
     // Duplicates (non-MECE)

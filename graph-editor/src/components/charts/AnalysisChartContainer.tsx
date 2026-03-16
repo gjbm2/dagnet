@@ -1,204 +1,40 @@
-import React, { useMemo, useState, useCallback, useRef, useEffect, useLayoutEffect } from 'react';
-import { createPortal } from 'react-dom';
+import React, { useMemo, useState, useCallback, useRef, useEffect } from 'react';
 import ReactECharts from 'echarts-for-react';
 import {
-  ExternalLink, Download, RefreshCcw, Trash2, MoreHorizontal, Sliders,
-  BarChart3, LineChart, TrendingUp, Percent, Hash,
-  List, Layers, ArrowUpDown, ArrowLeftRight, Sigma,
-  Zap, Lock, Crosshair, Settings2,
+  Download, RefreshCcw, Trash2, MoreHorizontal, Sliders,
+  BarChart3, Code, ExternalLink, ClipboardCopy,
+  Layers, Crosshair, ChevronDown, Plus, Eye, EyeOff,
 } from 'lucide-react';
+import { ModeTrack } from '../ModeTrack';
+import { QueryExpressionEditor } from '../QueryExpressionEditor';
 
 import type { AnalysisResult, AvailableAnalysis } from '../../lib/graphComputeClient';
-import { getDisplaySettings, getDisplaySettingsForSurface, resolveDisplaySetting } from '../../lib/analysisDisplaySettingsRegistry';
+import { getDisplaySettings, getDisplaySettingsForSurface, resolveDisplaySetting, buildContextMenuSettingItems } from '../../lib/analysisDisplaySettingsRegistry';
 import type { DisplaySettingDef } from '../../lib/analysisDisplaySettingsRegistry';
+import { ContextMenu } from '../ContextMenu';
+import type { ContextMenuItem } from '../ContextMenu';
 import { buildChartOption } from '../../services/analysisEChartsService';
 import { augmentChartKindOptionsForAnalysisType, planChartDisplay } from '../../services/chartDisplayPlanningService';
-import { chartOperationsService } from '../../services/chartOperationsService';
 import { analysisResultToCsv } from '../../services/analysisExportService';
 import { downloadTextFile } from '../../services/downloadService';
 import { useElementSize } from '../../hooks/useElementSize';
-import { getAnalysisTypeMeta } from '../panels/analysisTypes';
+import { getAnalysisTypeMeta, ANALYSIS_TYPES } from '../panels/analysisTypes';
 import { AnalysisTypeCardList } from '../panels/AnalysisTypeCardList';
+import { ScenarioLayerList } from '../panels/ScenarioLayerList';
+import type { ScenarioLayerItem } from '../../types/scenarioLayerList';
 import { ChartFloatingIcon } from './ChartInlineSettingsFloating';
 import { logChartReadinessTrace } from '../../lib/snapshotBootTrace';
+import type { ViewMode } from '../../types/chartRecipe';
+import { getAvailableExpressions } from '../../types/chartRecipe';
+import { LayoutGrid, Table2 } from 'lucide-react';
+import { AnalysisInfoCard } from '../analytics/AnalysisInfoCard';
+import { renderTraySettings } from './settingPillRenderer';
+import { CfpPopover } from './CfpPopover';
+import { OVERLAY_PRESET_COLOURS } from '../ColourSelector';
 
-const CHECKBOX_ICONS: Record<string, React.ComponentType<{ size?: number | string }>> = {
-  show_legend: List,
-  show_trend_line: TrendingUp,
-  cumulative: Sigma,
-};
+type ChartKind = 'funnel' | 'bridge' | 'histogram' | 'daily_conversions' | 'cohort_maturity' | 'lag_fit' | 'bar_grouped' | 'pie' | 'time_series' | 'info';
 
-const OPTION_ICONS: Record<string, Record<string, React.ComponentType<{ size?: number | string }>>> = {
-  series_type: { bar: BarChart3, line: LineChart },
-  metric_mode: { proportional: Percent, absolute: Hash },
-  orientation: { vertical: ArrowUpDown, horizontal: ArrowLeftRight },
-};
-
-const OPTION_SHORT_LABELS: Record<string, Record<string, string>> = {
-  time_grouping: { day: 'D', week: 'W', month: 'M' },
-  stack_mode: { grouped: 'Grp', stacked: 'Stk', stacked_100: '100%' },
-  funnel_metric: { cumulative_probability: 'Cum', step_probability: 'Step' },
-  metric: { cumulative_probability: 'Cum', step_probability: 'Step' },
-};
-
-function renderTrayCheckbox(
-  setting: DisplaySettingDef,
-  value: any,
-  onChange: (key: string, val: any) => void,
-) {
-  const Icon = CHECKBOX_ICONS[setting.key];
-  return (
-    <button
-      key={setting.key}
-      type="button"
-      className={`cfp-pill${value ? ' active' : ''}`}
-      onClick={() => onChange(setting.key, !value)}
-      title={setting.label}
-    >
-      {Icon ? <Icon size={13} /> : setting.label}
-    </button>
-  );
-}
-
-function renderTrayRadio(
-  setting: DisplaySettingDef,
-  value: any,
-  onChange: (key: string, val: any) => void,
-) {
-  if (!setting.options) return null;
-  const icons = OPTION_ICONS[setting.key];
-  const shorts = OPTION_SHORT_LABELS[setting.key];
-
-  if (setting.options.length > 3 && !icons && !shorts) {
-    return (
-      <select
-        key={setting.key}
-        value={value ?? ''}
-        onChange={e => onChange(setting.key, e.target.value)}
-        className="cfp-select"
-        title={setting.label}
-      >
-        {setting.options.map(o => (
-          <option key={o.value} value={o.value}>{o.label}</option>
-        ))}
-      </select>
-    );
-  }
-
-  const groupLabel = setting.shortLabel || setting.label;
-  return (
-    <span key={setting.key} className="cfp-pill-group" title={setting.label}>
-      <span className="cfp-group-label">{groupLabel}</span>
-      {setting.options.map(opt => {
-        const Icon = icons?.[opt.value];
-        const short = shorts?.[opt.value];
-        return (
-          <button
-            key={opt.value}
-            type="button"
-            className={`cfp-pill${value === opt.value ? ' active' : ''}`}
-            onClick={() => onChange(setting.key, opt.value)}
-            title={`${setting.label}: ${opt.label}`}
-          >
-            {Icon ? <Icon size={13} /> : (short || opt.label)}
-          </button>
-        );
-      })}
-    </span>
-  );
-}
-
-function renderTraySetting(
-  setting: DisplaySettingDef,
-  display: Record<string, unknown> | undefined,
-  onChange: (key: string, val: any) => void,
-) {
-  const value = resolveDisplaySetting(display, setting);
-  if (setting.type === 'checkbox') return renderTrayCheckbox(setting, value, onChange);
-  if (setting.type === 'radio') return renderTrayRadio(setting, value, onChange);
-  return null;
-}
-
-function CfpPopover({ icon, title, label, children, active, activeColour, onClick }: {
-  icon: React.ReactNode;
-  title: string;
-  label?: string;
-  children: React.ReactNode;
-  active?: boolean;
-  activeColour?: string;
-  onClick?: () => void;
-}) {
-  const [open, setOpen] = useState(false);
-  const wrapRef = useRef<HTMLSpanElement>(null);
-  const popRef = useRef<HTMLDivElement>(null);
-  const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const [pos, setPos] = useState<React.CSSProperties>({});
-
-  const show = useCallback(() => {
-    if (hideTimer.current) { clearTimeout(hideTimer.current); hideTimer.current = null; }
-    setOpen(true);
-  }, []);
-
-  const scheduleHide = useCallback(() => {
-    hideTimer.current = setTimeout(() => setOpen(false), 200);
-  }, []);
-
-  useEffect(() => () => { if (hideTimer.current) clearTimeout(hideTimer.current); }, []);
-
-  useLayoutEffect(() => {
-    if (!open || !wrapRef.current) return;
-    const anchor = wrapRef.current.getBoundingClientRect();
-    const GAP = 4;
-    const popH = popRef.current?.offsetHeight ?? 180;
-    const popW = popRef.current?.offsetWidth ?? 180;
-    const flipY = anchor.bottom + GAP + popH > window.innerHeight && anchor.top - GAP - popH > 0;
-    const top = flipY ? anchor.top - GAP - popH : anchor.bottom + GAP;
-    let left = anchor.right - popW;
-    if (left < 4) left = 4;
-    if (left + popW > window.innerWidth - 4) left = window.innerWidth - 4 - popW;
-    setPos({ position: 'fixed', top, left, right: undefined, bottom: undefined });
-  }, [open]);
-
-  const isActive = active || open;
-
-  return (
-    <span
-      ref={wrapRef}
-      className="cfp-popover-anchor"
-      onMouseEnter={show}
-      onMouseLeave={scheduleHide}
-    >
-      <button
-        type="button"
-        className={`cfp-pill${isActive ? ' active' : ''}`}
-        style={activeColour ? { color: activeColour } : undefined}
-        title={title}
-        onClick={onClick}
-      >
-        {icon}
-        {label && <span className="cfp-group-label" style={{ padding: '0 0 0 2px' }}>{label}</span>}
-      </button>
-      {open && createPortal(
-        <div
-          ref={popRef}
-          className="cfp-popover"
-          style={pos}
-          onMouseEnter={show}
-          onMouseLeave={scheduleHide}
-          onClick={(e) => e.stopPropagation()}
-          onPointerDown={(e) => e.stopPropagation()}
-        >
-          {children}
-        </div>,
-        document.body,
-      )}
-    </span>
-  );
-}
-
-type ChartKind = 'funnel' | 'bridge' | 'histogram' | 'daily_conversions' | 'cohort_maturity' | 'lag_fit' | 'bar_grouped' | 'pie' | 'time_series';
-
-function normaliseChartKind(kind: string | undefined | null): ChartKind | null {
+export function normaliseChartKind(kind: string | undefined | null): ChartKind | null {
   if (!kind) return null;
   if (kind === 'funnel') return 'funnel';
   if (kind === 'bridge' || kind === 'bridge_horizontal') return 'bridge';
@@ -209,6 +45,7 @@ function normaliseChartKind(kind: string | undefined | null): ChartKind | null {
   if (kind === 'bar_grouped') return 'bar_grouped';
   if (kind === 'pie') return 'pie';
   if (kind === 'time_series') return 'time_series';
+  if (kind === 'info') return 'info';
   return null;
 }
 
@@ -256,10 +93,9 @@ export function AnalysisChartContainer(props: {
   scenarioDslSubtitleById?: Record<string, string>;
   height?: number;
   fillHeight?: boolean;
-  compactControls?: boolean;
   onChartKindChange?: (chartKind: string | undefined) => void;
   display?: Record<string, unknown>;
-  onDisplayChange?: (key: string, value: any) => void;
+  onDisplayChange?: (keyOrBatch: string | Record<string, any>, value?: any) => void;
   source?: {
     parent_file_id?: string;
     parent_tab_id?: string;
@@ -268,18 +104,38 @@ export function AnalysisChartContainer(props: {
   };
   hideChrome?: boolean;
   hideScenarioLegend?: boolean;
-  /** Controls which inline settings and actions are shown. 'tab' shows full inline settings + action chrome; 'canvas' shows brief inline settings only. */
+  /** Rendering mode: 'canvas' = floating palette over chart; 'tab' = static toolbar bar. */
   chartContext?: 'canvas' | 'tab';
-  /** Current analysis type ID (for canvas header dropdown) */
+  /** Current analysis type ID (for toolbar dropdown) */
   analysisTypeId?: string;
   /** Available analyses for the dropdown */
   availableAnalyses?: AvailableAnalysis[];
   /** Callback when user changes analysis type via the header dropdown */
   onAnalysisTypeChange?: (analysisTypeId: string) => void;
-  /** Whether the analysis is in live mode (vs custom/frozen) */
-  analysisLive?: boolean;
-  /** Toggle live/custom mode */
-  onLiveToggle?: (live: boolean) => void;
+  /** Current analysis mode (live/custom/fixed) */
+  analysisMode?: 'live' | 'custom' | 'fixed';
+  /** Cycle to the next mode: Live → Custom → Fixed → Live */
+  onModeCycle?: () => void;
+  /** Scenario layer items for the toolbar scenarios popover */
+  scenarioLayerItems?: ScenarioLayerItem[];
+  /** Toggle scenario visibility in the toolbar popover */
+  onScenarioToggleVisibility?: (id: string) => void;
+  /** Cycle scenario visibility mode (f+e → f → e) */
+  onScenarioCycleMode?: (id: string) => void;
+  /** Change scenario colour */
+  onScenarioColourChange?: (id: string, colour: string) => void;
+  /** Swatch overlay style for visibility mode indicators */
+  getScenarioSwatchOverlayStyle?: (id: string) => React.CSSProperties | null;
+  /** Delete a scenario */
+  onScenarioDelete?: (id: string) => void;
+  /** Edit a scenario (open DSL editor) */
+  onScenarioEdit?: (id: string) => void;
+  /** Tooltip for the edit button */
+  getScenarioEditTooltip?: () => string;
+  /** Reorder scenarios */
+  onScenarioReorder?: (fromIndex: number, toIndex: number) => void;
+  /** Add a new blank scenario (auto-promotes to custom if live) */
+  onAddScenario?: () => void;
   /** Whether the subject overlay connectors are active */
   overlayActive?: boolean;
   /** Current overlay colour */
@@ -292,12 +148,46 @@ export function AnalysisChartContainer(props: {
   analysisId?: string;
   /** Delete the canvas analysis */
   onDelete?: () => void;
+  /** Current canvas zoom level (for inverse-scaling UI chrome) */
+  canvasZoom?: number;
+  /** Current view mode — enables view mode switcher in the toolbar */
+  viewMode?: ViewMode;
+  /** Callback to switch view mode (chart → cards → table) */
+  onViewModeChange?: (mode: ViewMode) => void;
+  /** Open the current result in a dedicated tab */
+  onOpenAsTab?: () => void;
+  /** Dump debug JSON to clipboard */
+  onDumpDebug?: () => void;
+  /** Graph object for the QueryExpressionEditor in the DSL badge popover */
+  graph?: any;
+  /** Callback when the user edits the DSL in the toolbar badge popover */
+  onDslChange?: (dsl: string) => void;
+  /** When provided, replaces the default chart/info content area (used for cards/table views). */
+  children?: React.ReactNode;
+  /** Force-disable ECharts load animations (e.g. hover preview satellites). */
+  suppressAnimation?: boolean;
+  /** Called once the chart reaches a terminal visual state.
+   *  'rendered' = ECharts painted real data; 'failed' = null option / info / no chart. */
+  onRendered?: (outcome: 'rendered' | 'failed') => void;
 }): JSX.Element | null {
-  const { result, chartKindOverride, visibleScenarioIds, scenarioVisibilityModes, scenarioMetaById, scenarioDslSubtitleById, height = 420, fillHeight = false, compactControls = false, display, onDisplayChange, source, hideChrome = false } = props;
-  const chartContext = props.chartContext || (compactControls ? 'canvas' : 'tab');
-  const showActionChrome = chartContext === 'tab' && !hideChrome;
+  const { result, chartKindOverride, visibleScenarioIds, scenarioVisibilityModes, scenarioMetaById, scenarioDslSubtitleById, height = 420, fillHeight = false, display, onDisplayChange, source, hideChrome = false } = props;
+  const defaultContext = props.chartContext || 'tab';
   const hideScenarioLegend = props.hideScenarioLegend ?? false;
-  const showInlineAnalysisTypePicker = chartContext === 'canvas' && !props.analysisTypeId && !!props.onAnalysisTypeChange;
+
+  // Local display state fallback: when the parent doesn't provide onDisplayChange
+  // (e.g. analytics panel tab), display settings still work via local state.
+  const [localDisplay, setLocalDisplay] = useState<Record<string, unknown>>({});
+  const effectiveDisplay = display ?? localDisplay;
+  const handleDisplayChange = useCallback((keyOrBatch: string | Record<string, any>, value?: any) => {
+    if (onDisplayChange) {
+      onDisplayChange(keyOrBatch, value);
+    } else if (typeof keyOrBatch === 'object') {
+      setLocalDisplay(prev => ({ ...prev, ...keyOrBatch }));
+    } else {
+      setLocalDisplay(prev => ({ ...prev, [keyOrBatch]: value }));
+    }
+  }, [onDisplayChange]);
+  const showInlineAnalysisTypePicker = defaultContext === 'canvas' && !props.analysisTypeId && !!props.onAnalysisTypeChange;
   const isDebugDailyConversions = import.meta.env.DEV && result?.analysis_type === 'daily_conversions';
 
   const patchedResult = useMemo(() => {
@@ -374,8 +264,8 @@ export function AnalysisChartContainer(props: {
     requestedChartKind: kind || chartKindOverride || patchedResult?.semantics?.chart?.recommended,
     visibleScenarioIds,
     scenarioVisibilityModes,
-    display,
-  }), [patchedResult, kind, chartKindOverride, visibleScenarioIds, scenarioVisibilityModes, display]);
+    display: effectiveDisplay,
+  }), [patchedResult, kind, chartKindOverride, visibleScenarioIds, scenarioVisibilityModes, effectiveDisplay]);
   const effectiveKind = normaliseChartKind(displayPlan.effectiveChartKind || kind);
 
   const resolvedSettings = useMemo(() => {
@@ -383,20 +273,18 @@ export function AnalysisChartContainer(props: {
     const settings = getDisplaySettings(effectiveKind, 'chart');
     const resolved: Record<string, any> = {};
     for (const s of settings) {
-      resolved[s.key] = resolveDisplaySetting(display, s);
+      resolved[s.key] = resolveDisplaySetting(effectiveDisplay, s);
     }
     return resolved;
-  }, [effectiveKind, display]);
+  }, [effectiveKind, effectiveDisplay]);
 
-  const inlineSettings = useMemo((): DisplaySettingDef[] => {
-    if (!effectiveKind || !onDisplayChange) return [];
-    return getDisplaySettingsForSurface(effectiveKind, 'chart', 'inline', chartContext);
-  }, [effectiveKind, chartContext, onDisplayChange]);
-
-  const floatingSettings = useMemo((): DisplaySettingDef[] => {
-    if (!effectiveKind || !onDisplayChange || chartContext !== 'canvas') return [];
+  // Single list of display settings for the unified toolbar.
+  // Always fetch the 'tab' surface set — it's the full set.
+  // When wide, these render inline as pills; when narrow, they collapse into a popover.
+  const toolbarSettings = useMemo((): DisplaySettingDef[] => {
+    if (!effectiveKind) return [];
     return getDisplaySettingsForSurface(effectiveKind, 'chart', 'inline', 'tab');
-  }, [effectiveKind, chartContext, onDisplayChange]);
+  }, [effectiveKind]);
 
   // Subject selector state for daily_conversions / cohort_maturity
   const subjectIds = useMemo(() => extractSubjectIds(result), [result]);
@@ -413,7 +301,7 @@ export function AnalysisChartContainer(props: {
     const finalSettings = hideScenarioLegend
       ? { ...resolvedSettings, show_legend: false }
       : resolvedSettings;
-    return buildChartOption(effectiveKind, patchedResult, finalSettings, {
+    const opt = buildChartOption(effectiveKind, patchedResult, finalSettings, {
       visibleScenarioIds: displayPlan.scenarioIdsToRender,
       scenarioVisibilityModes,
       scenarioDslSubtitleById,
@@ -423,7 +311,64 @@ export function AnalysisChartContainer(props: {
         heightPx: chartHeightPx > 0 ? chartHeightPx : (fillHeight ? undefined : height),
       },
     });
-  }, [effectiveKind, patchedResult, resolvedSettings, hideScenarioLegend, displayPlan.scenarioIdsToRender, scenarioVisibilityModes, scenarioDslSubtitleById, effectiveSubjectId, chartWidthPx, chartHeightPx, fillHeight, height]);
+    if (props.suppressAnimation && opt) opt.animation = false;
+    return opt;
+  }, [effectiveKind, patchedResult, resolvedSettings, hideScenarioLegend, displayPlan.scenarioIdsToRender, scenarioVisibilityModes, scenarioDslSubtitleById, effectiveSubjectId, chartWidthPx, chartHeightPx, fillHeight, height, props.suppressAnimation]);
+
+  // Diagnostic: log when we have a result but no chart option
+  useEffect(() => {
+    if (!import.meta.env.DEV) return;
+    if (!patchedResult) return; // still loading — nothing to log
+    if (effectiveKind === 'info') return; // info cards don't need echarts
+    if (echartsOption) {
+      console.log(`[ChartRender] OK ${patchedResult.analysis_type}×${effectiveKind}`, {
+        analysisId: props.analysisId,
+        dataRows: patchedResult.data?.length,
+        seriesCount: echartsOption?.series?.length,
+        source: patchedResult.metadata?.source,
+      });
+      return;
+    }
+    console.warn(`[ChartRender] NULL echartsOption — chart will be invisible`, {
+      analysisId: props.analysisId,
+      analysisType: patchedResult.analysis_type,
+      effectiveKind,
+      hasResult: true,
+      dataRows: patchedResult.data?.length,
+      dimensions: patchedResult.semantics?.dimensions?.map((d: any) => d?.id),
+      metrics: patchedResult.semantics?.metrics?.map((m: any) => m?.id),
+      source: patchedResult.metadata?.source,
+      empty: patchedResult.metadata?.empty,
+      hasOnViewModeChange: !!props.onViewModeChange,
+    });
+  }, [patchedResult, effectiveKind, echartsOption]);
+
+  // Fire onRendered for non-ECharts paths (info card, null option) — these are
+  // already at their final visual state, no ECharts 'finished' event will come.
+  useEffect(() => {
+    if (renderedCallbackFiredRef.current) return;
+    if (!patchedResult) return; // still loading
+    if (echartsOption) return;  // ECharts path — handled by handleChartReady
+    renderedCallbackFiredRef.current = true;
+    props.onRendered?.('failed');
+  }, [patchedResult, echartsOption, props.onRendered]);
+
+  // Auto-fallback: when chart view can't render (no echarts option and not info),
+  // switch to the next available view mode instead of showing "No data available".
+  const chartCanRender = (effectiveKind === 'info' && !!patchedResult) || !!echartsOption;
+  useEffect(() => {
+    if (chartCanRender) return;            // chart renders fine
+    if (props.children) return;            // parent supplies content (cards/table)
+    if (!patchedResult) return;            // no result yet — still loading
+    if (!props.onViewModeChange) return;   // can't switch view mode
+    if (props.viewMode && props.viewMode !== 'chart') return; // already not chart
+
+    const available = getAvailableExpressions(patchedResult);
+    const fallback = available.find(m => m !== 'chart');
+    if (fallback) {
+      props.onViewModeChange(fallback);
+    }
+  }, [chartCanRender, patchedResult, props.children, props.onViewModeChange, props.viewMode]);
 
   const onEvents = useMemo(() => ({}), []);
   const echartsRef = useRef<any>(null);
@@ -440,11 +385,20 @@ export function AnalysisChartContainer(props: {
     props.onChartKindChange?.(nextKind);
   }, [props]);
 
+  // Right-click context menu (non-canvas contexts only — canvas has its own node-level menu)
+  const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number } | null>(null);
+  const [showAllAnalysisTypes, setShowAllAnalysisTypes] = useState(false);
+  const handleContextMenu = useCallback((e: React.MouseEvent) => {
+    if (defaultContext === 'canvas') return; // canvas uses CanvasAnalysisContextMenu
+    e.preventDefault();
+    setCtxMenu({ x: e.clientX, y: e.clientY });
+  }, [defaultContext]);
+
   const dailyChartStateKey = useMemo(() => {
     if (!isDebugDailyConversions) return null;
     return JSON.stringify({
       analysisId: props.analysisId || null,
-      chartContext,
+      chartContext: defaultContext,
       effectiveKind,
       visibleScenarioIds,
       subjectIds,
@@ -459,7 +413,7 @@ export function AnalysisChartContainer(props: {
   }, [
     isDebugDailyConversions,
     props.analysisId,
-    chartContext,
+    defaultContext,
     effectiveKind,
     visibleScenarioIds,
     subjectIds,
@@ -491,7 +445,24 @@ export function AnalysisChartContainer(props: {
     });
   }, [isDebugDailyConversions, echartsOption, props.analysisId]);
 
+  const renderedCallbackFiredRef = useRef(false);
+  const overlayColourInputRef = useRef<HTMLInputElement>(null);
   const handleChartReady = useCallback((instance: any) => {
+    // Fire onRendered once the ECharts instance has finished its first paint.
+    // With suppressAnimation, 'finished' fires synchronously during setOption —
+    // BEFORE onChartReady is called — so attaching the listener here is too late.
+    // Fallback: schedule on the next animation frame (chart is already painted).
+    if (!renderedCallbackFiredRef.current && props.onRendered) {
+      const fireOnce = () => {
+        if (renderedCallbackFiredRef.current) return;
+        renderedCallbackFiredRef.current = true;
+        props.onRendered!('rendered');
+      };
+      instance?.on?.('finished', fireOnce);
+      // Fallback for suppressed animation or already-fired finished event
+      requestAnimationFrame(() => fireOnce());
+    }
+
     if (!isDebugDailyConversions) return;
     dailyEchartsReadyCountRef.current += 1;
     logChartReadinessTrace('DailyConversionsChart:echarts-ready', {
@@ -522,7 +493,7 @@ export function AnalysisChartContainer(props: {
     instance?.off?.('finished');
     instance?.on?.('rendered', onRendered);
     instance?.on?.('finished', onFinished);
-  }, [isDebugDailyConversions, props.analysisId]);
+  }, [isDebugDailyConversions, props.analysisId, props.onRendered]);
 
   if (showInlineAnalysisTypePicker) {
     return (
@@ -561,50 +532,234 @@ export function AnalysisChartContainer(props: {
   const showChooser = availableChartKinds.length > 1;
   const showAnalysisTypeDropdown = !!props.analysisTypeId && !!props.onAnalysisTypeChange && (props.availableAnalyses?.length ?? 0) > 0;
 
-  const canvasTray = chartContext === 'canvas' ? (
+  // Context menu items for non-canvas right-click
+  const ctxMenuItems = useMemo((): ContextMenuItem[] => {
+    if (defaultContext === 'canvas') return [];
+    const items: ContextMenuItem[] = [];
+
+    // Analysis type submenu
+    if (props.analysisTypeId && props.onAnalysisTypeChange && props.availableAnalyses && props.availableAnalyses.length > 0) {
+      items.push({
+        label: 'Analysis Type',
+        onClick: () => {},
+        submenu: props.availableAnalyses.map(a => {
+          const meta = getAnalysisTypeMeta(a.id);
+          const Icon = meta?.icon;
+          return {
+            label: meta?.name || a.name || a.id,
+            icon: Icon ? <Icon size={14} /> : undefined,
+            checked: a.id === props.analysisTypeId,
+            onClick: () => props.onAnalysisTypeChange!(a.id),
+          };
+        }),
+      });
+    }
+
+    // Chart kind submenu
+    if (availableChartKinds.length > 1) {
+      items.push({
+        label: 'Chart Type',
+        onClick: () => {},
+        submenu: availableChartKinds.map(k => ({
+          label: labelForChartKind(k),
+          checked: k === kind,
+          onClick: () => handleChartKindChange(k),
+        })),
+      });
+    }
+
+    // Display settings submenu
+    if (effectiveKind && handleDisplayChange) {
+      const displayItems = buildContextMenuSettingItems(
+        effectiveKind,
+        'chart',
+        effectiveDisplay,
+        handleDisplayChange,
+      );
+      if (displayItems.length > 0) {
+        items.push(
+          { label: '', onClick: () => {}, divider: true },
+          { label: 'Display', icon: <Sliders size={14} />, onClick: () => {}, submenu: displayItems as ContextMenuItem[] },
+        );
+      }
+    }
+
+    // Scenario visibility submenu
+    if (props.scenarioLayerItems && props.scenarioLayerItems.length > 1 && props.onScenarioToggleVisibility) {
+      const scenarioItems: ContextMenuItem[] = props.scenarioLayerItems.map(s => ({
+        label: s.name,
+        checked: s.visible,
+        onClick: () => props.onScenarioToggleVisibility!(s.id),
+        keepMenuOpen: true,
+      }));
+      items.push(
+        { label: '', onClick: () => {}, divider: true },
+        { label: 'Scenarios', onClick: () => {}, submenu: scenarioItems },
+      );
+    }
+
+    // Actions
+    const hasActions = result || props.onOpenAsTab || props.onDumpDebug;
+    if (hasActions) {
+      items.push({ label: '', onClick: () => {}, divider: true });
+    }
+    if (props.onOpenAsTab) {
+      items.push({
+        label: 'Open as Tab',
+        icon: <ExternalLink size={14} />,
+        onClick: props.onOpenAsTab,
+      });
+    }
+    if (result) {
+      items.push({
+        label: 'Download CSV',
+        icon: <Download size={14} />,
+        onClick: () => {
+          const { filename, csv } = analysisResultToCsv(result);
+          if (csv) downloadTextFile({ filename, content: csv, mimeType: 'text/csv' });
+        },
+      });
+    }
+    if (props.onDumpDebug) {
+      items.push({
+        label: 'Dump Debug JSON',
+        icon: <ClipboardCopy size={14} />,
+        onClick: props.onDumpDebug,
+      });
+    }
+
+    return items;
+  }, [defaultContext, props.analysisTypeId, props.onAnalysisTypeChange, props.availableAnalyses, availableChartKinds, kind, handleChartKindChange, effectiveKind, effectiveDisplay, handleDisplayChange, props.scenarioLayerItems, props.onScenarioToggleVisibility, result, props.onOpenAsTab, props.onDumpDebug]);
+
+  // Whether chart is wide enough to auto-expand popovers into inline pills.
+  const wideToolbar = chartWidthPx > 480;
+
+  const VIEW_MODE_ICONS: Record<ViewMode, React.ComponentType<{ size?: number | string }>> = {
+    chart: BarChart3,
+    cards: LayoutGrid,
+    table: Table2,
+  };
+  const VIEW_MODE_LABELS: Record<ViewMode, string> = { chart: 'Chart', cards: 'Cards', table: 'Table' };
+
+  const toolbarTray = (
     <>
-      {/* --- Analysis type: icon pills --- */}
-      {showAnalysisTypeDropdown && (
-        <span className="cfp-pill-group" title="Analysis type">
-          <span className="cfp-group-label">Type</span>
-          {(props.availableAnalyses || []).map(a => {
-            const meta = getAnalysisTypeMeta(a.id);
-            const Icon = meta?.icon;
-            const active = a.id === props.analysisTypeId;
-            return (
+      {/* --- Analysis type: popover palette (most fundamental choice) --- */}
+      {showAnalysisTypeDropdown && (() => {
+        const activeMeta = getAnalysisTypeMeta(props.analysisTypeId!);
+        const ActiveIcon = activeMeta?.icon;
+        return (
+          <CfpPopover
+            icon={<>{ActiveIcon && <ActiveIcon size={13} />}<ChevronDown size={9} /></>}
+            label={activeMeta?.name}
+            title="Analysis type"
+          >
+            <div style={{ display: 'flex', justifyContent: 'flex-end', padding: '0 4px 4px' }}>
               <button
-                key={a.id}
                 type="button"
-                className={`cfp-pill${active ? ' active' : ''}`}
-                onClick={() => props.onAnalysisTypeChange?.(a.id)}
-                title={meta?.name || a.name || a.id}
+                className="cfp-show-all-toggle"
+                onClick={() => setShowAllAnalysisTypes(prev => !prev)}
+                title={showAllAnalysisTypes ? 'Available only' : 'Show all'}
+                style={{ display: 'flex', alignItems: 'center', gap: 3, background: 'none', border: 'none', cursor: 'pointer', fontSize: 10, color: 'var(--text-muted, #9ca3af)', padding: '2px 4px' }}
               >
-                {Icon ? <Icon size={13} /> : (meta?.name || a.name || a.id)}
+                {showAllAnalysisTypes ? <EyeOff size={11} /> : <Eye size={11} />}
+                {showAllAnalysisTypes ? 'Available only' : 'Show all'}
               </button>
-            );
-          })}
-        </span>
-      )}
+            </div>
+            <div className="cfp-type-palette">
+              {(() => {
+                const availableIds = new Set((props.availableAnalyses || []).map(a => a.id));
+                const types = showAllAnalysisTypes
+                  ? ANALYSIS_TYPES.map(tm => ({ id: tm.id, meta: tm, available: availableIds.has(tm.id) }))
+                  : (props.availableAnalyses || []).map(a => ({ id: a.id, meta: getAnalysisTypeMeta(a.id), available: true }));
+                return types.map(({ id, meta, available }) => {
+                  const Icon = meta?.icon;
+                  const active = id === props.analysisTypeId;
+                  return (
+                    <button
+                      key={id}
+                      type="button"
+                      className={`cfp-type-palette-item${active ? ' active' : ''}${!available ? ' unavailable' : ''}`}
+                      onClick={() => props.onAnalysisTypeChange?.(id)}
+                      title={meta?.shortDescription || meta?.name || id}
+                    >
+                      {Icon && <Icon size={22} />}
+                      <span className="cfp-type-palette-label">{meta?.name || id}</span>
+                    </button>
+                  );
+                });
+              })()}
+            </div>
+          </CfpPopover>
+        );
+      })()}
+
+      {/* --- View mode switcher --- */}
+      {props.onViewModeChange && (() => {
+        const available = getAvailableExpressions(result);
+        if (available.length <= 1) return null;
+        const current = props.viewMode || 'chart';
+        return (
+          <>
+            {showAnalysisTypeDropdown && <span className="cfp-sep" />}
+            <span className="cfp-pill-group" title="View">
+              <span className="cfp-group-label">View</span>
+              {available.map(mode => {
+                const Icon = VIEW_MODE_ICONS[mode];
+                return (
+                  <button
+                    key={mode}
+                    type="button"
+                    className={`cfp-pill${mode === current ? ' active' : ''}`}
+                    onClick={() => props.onViewModeChange!(mode)}
+                    title={VIEW_MODE_LABELS[mode]}
+                  >
+                    <Icon size={13} />
+                  </button>
+                );
+              })}
+            </span>
+          </>
+        );
+      })()}
 
       {/* --- Separator --- */}
-      {showAnalysisTypeDropdown && (showChooser || showSubjectSelector) && <span className="cfp-sep" />}
+      {(showChooser || showSubjectSelector) && <span className="cfp-sep" />}
 
-      {/* --- Chart kind pills --- */}
+      {/* --- Chart kind: inline pills (wide) or popover (narrow) --- */}
       {showChooser && (
-        <span className="cfp-pill-group" title="Chart type">
-          <span className="cfp-group-label">Chart</span>
-          {availableChartKinds.map(k => (
-            <button
-              key={k}
-              type="button"
-              className={`cfp-pill${k === kind ? ' active' : ''}`}
-              onClick={() => handleChartKindChange(k)}
-              title={labelForChartKind(k)}
-            >
-              {labelForChartKind(k)}
-            </button>
-          ))}
-        </span>
+        wideToolbar ? (
+          <span className="cfp-pill-group" title="Chart type">
+            <span className="cfp-group-label">Chart</span>
+            {availableChartKinds.map(k => (
+              <button
+                key={k}
+                type="button"
+                className={`cfp-pill${k === kind ? ' active' : ''}`}
+                onClick={() => handleChartKindChange(k)}
+                title={labelForChartKind(k)}
+              >
+                {labelForChartKind(k)}
+              </button>
+            ))}
+          </span>
+        ) : (
+          <CfpPopover
+            icon={<><BarChart3 size={13} /><ChevronDown size={9} /></>}
+            label={kind ? labelForChartKind(kind) : 'Chart'}
+            title="Chart type"
+          >
+            {availableChartKinds.map(k => (
+              <button
+                key={k}
+                type="button"
+                className={`cfp-menu-item${k === kind ? ' active' : ''}`}
+                onClick={() => handleChartKindChange(k)}
+              >
+                {labelForChartKind(k)}
+              </button>
+            ))}
+          </CfpPopover>
+        )
       )}
 
       {/* --- Subject selector --- */}
@@ -625,87 +780,131 @@ export function AnalysisChartContainer(props: {
       {/* --- Separator --- */}
       <span className="cfp-sep" />
 
-      {/* --- Overlay toggle with colour picker --- */}
+      {/* --- Display settings: inline (wide) or popover (narrow) --- */}
+      {toolbarSettings.length > 0 && (
+        wideToolbar
+          ? renderTraySettings(toolbarSettings, effectiveDisplay, handleDisplayChange)
+          : (
+            <CfpPopover
+              icon={<Sliders size={13} />}
+              title="Display"
+              label="Display"
+            >
+              {renderTraySettings(toolbarSettings, effectiveDisplay, handleDisplayChange)}
+            </CfpPopover>
+          )
+      )}
+
+      {/* --- Overlay group --- */}
       {props.onOverlayToggle && (
-        <CfpPopover
-          icon={<Crosshair size={13} />}
-          title="Overlay connectors"
-          active={!!props.overlayActive}
-          activeColour={props.overlayActive ? props.overlayColour : undefined}
-          onClick={() => props.onOverlayToggle!(!props.overlayActive)}
-        >
-          <div style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '2px 0' }}>
-            <span className="cfp-group-label">Overlay</span>
-            {['#f59e0b', '#3b82f6', '#22c55e', '#ef4444', '#8b5cf6', '#ec4899'].map(c => (
+        <span className="cfp-pill-group">
+          <span className="cfp-group-label">Overlay</span>
+          <button
+            type="button"
+            className={`cfp-pill${props.overlayActive ? ' active' : ''}`}
+            style={props.overlayColour ? { color: props.overlayColour } : undefined}
+            title="Toggle overlay connectors"
+            onClick={() => props.onOverlayToggle!(!props.overlayActive)}
+          >
+            <Crosshair size={13} />
+          </button>
+          <CfpPopover
+            icon={<span className="cfp-menu-swatch" style={{ background: props.overlayColour || '#3b82f6' }} />}
+            title="Overlay colour"
+          >
+            {OVERLAY_PRESET_COLOURS.map(p => (
               <button
-                key={c}
+                key={p.value}
                 type="button"
-                className="cfp-colour-swatch"
-                style={{
-                  background: c,
-                  outline: props.overlayActive && props.overlayColour === c ? '2px solid var(--text-primary)' : undefined,
-                  outlineOffset: 1,
-                }}
-                onClick={() => props.onOverlayColourChange?.(c)}
-                title={`Overlay: ${c}`}
-              />
+                className={`cfp-menu-item${props.overlayColour === p.value ? ' active' : ''}`}
+                onClick={() => props.onOverlayColourChange?.(p.value)}
+              >
+                <span className="cfp-menu-swatch" style={{ background: p.value }} />
+                {p.name}
+              </button>
             ))}
             <button
               type="button"
-              className="cfp-colour-swatch cfp-colour-swatch--none"
-              style={{
-                outline: !props.overlayActive ? '2px solid var(--text-primary)' : undefined,
-                outlineOffset: 1,
-              }}
-              onClick={() => props.onOverlayColourChange?.(null)}
-              title="No overlay"
+              className={`cfp-menu-item${props.overlayColour && !OVERLAY_PRESET_COLOURS.some(p => p.value === props.overlayColour) ? ' active' : ''}`}
+              onClick={() => overlayColourInputRef.current?.click()}
             >
-              ✕
+              <span className="cfp-menu-swatch" style={{ background: props.overlayColour || '#888', border: '1px dashed #9CA3AF' }} />
+              Custom...
             </button>
-          </div>
-        </CfpPopover>
-      )}
-
-      {/* --- Live/Custom toggle --- */}
-      {props.onLiveToggle && (
-        <span
-          className="cfp-toggle"
-          title={props.analysisLive ? 'Live — click for Custom' : 'Custom — click for Live'}
-          onClick={() => props.onLiveToggle!(!props.analysisLive)}
-        >
-          <span className={`cfp-toggle__track${props.analysisLive ? ' on' : ''}`}>
-            <span className="cfp-toggle__thumb" />
-          </span>
-          <span className="cfp-toggle__label">{props.analysisLive ? 'Live' : 'Custom'}</span>
+            <input
+              ref={overlayColourInputRef}
+              type="color"
+              value={props.overlayColour || '#3b82f6'}
+              onChange={(e) => props.onOverlayColourChange?.(e.target.value)}
+              style={{ position: 'absolute', width: 1, height: 1, opacity: 0, pointerEvents: 'none' }}
+            />
+          </CfpPopover>
         </span>
       )}
 
-      {/* --- Display settings popover --- */}
-      {onDisplayChange && floatingSettings.length > 0 && (
-        <CfpPopover
-          icon={<Sliders size={13} />}
-          title="Display"
-          label="Display"
-        >
-          {floatingSettings.map(s => renderTraySetting(s, display, onDisplayChange))}
-        </CfpPopover>
+      {/* --- Mode / Scenarios group --- */}
+      {(props.onModeCycle || (props.scenarioLayerItems && props.scenarioLayerItems.length > 0)) && (
+        <span className="cfp-pill-group">
+          <span className="cfp-group-label">{props.onModeCycle ? 'Mode' : 'Scenarios'}</span>
+          <CfpPopover
+            icon={<><Layers size={13} /><ChevronDown size={9} /></>}
+            title="Scenarios"
+            trigger={props.onModeCycle
+              ? <ModeTrack mode={props.analysisMode || 'live'} onClick={props.onModeCycle} />
+              : undefined}
+          >
+            <div className="cfp-scenario-popover">
+              {props.scenarioLayerItems && props.scenarioLayerItems.length > 0 && (
+                <ScenarioLayerList
+                  items={props.scenarioLayerItems}
+                  containerClassName="cfp-scenario-popover__list"
+                  onToggleVisibility={props.onScenarioToggleVisibility}
+                  onCycleMode={props.onScenarioCycleMode}
+                  onColourChange={props.onScenarioColourChange}
+                  onReorder={props.onScenarioReorder}
+                  onDelete={props.onScenarioDelete}
+                  onEdit={props.onScenarioEdit}
+                  getEditTooltip={props.getScenarioEditTooltip}
+                  getSwatchOverlayStyle={props.getScenarioSwatchOverlayStyle}
+                />
+              )}
+              {props.onAddScenario && (
+                <button
+                  type="button"
+                  className="cfp-scenario-popover__add-btn"
+                  onClick={props.onAddScenario}
+                  title="Add a blank scenario"
+                >
+                  <Plus size={12} /> Add scenario
+                </button>
+              )}
+            </div>
+          </CfpPopover>
+        </span>
       )}
 
-      {/* --- Open Properties (direct) --- */}
-      <button
-        type="button"
-        className="cfp-pill"
-        onClick={() => {
-          if (props.analysisId) {
-            window.dispatchEvent(new CustomEvent('dagnet:openAnalysisProperties', { detail: { analysisId: props.analysisId } }));
-          } else {
-            window.dispatchEvent(new CustomEvent('dagnet:openPropertiesPanel'));
-          }
-        }}
-        title="Open Properties"
-      >
-        <Settings2 size={13} />
-      </button>
+      {/* --- DSL badge (canvas only — tab shows DSL in panel above) --- */}
+      {defaultContext === 'canvas' && source?.query_dsl && (
+        <CfpPopover
+          icon={<Code size={13} />}
+          title="Query DSL"
+          sticky
+          popoverClassName="cfp-popover--dsl"
+        >
+          {props.graph && props.onDslChange ? (
+            <QueryExpressionEditor
+              value={source.query_dsl}
+              onChange={() => {}}
+              onBlur={props.onDslChange}
+              graph={props.graph}
+              height="120px"
+              placeholder="from(node).to(node)"
+            />
+          ) : (
+            <pre className="cfp-dsl-preview">{source.query_dsl}</pre>
+          )}
+        </CfpPopover>
+      )}
 
       {/* --- More actions dropdown --- */}
       <CfpPopover
@@ -721,18 +920,11 @@ export function AnalysisChartContainer(props: {
             <RefreshCcw size={12} /> Refresh
           </button>
         )}
-        {kind && result && (
+        {props.onOpenAsTab && (
           <button
             type="button"
             className="cfp-menu-item"
-            onClick={() => {
-              chartOperationsService.openAnalysisChartTabFromAnalysis({
-                chartKind: kind as any,
-                analysisResult: result,
-                scenarioIds: visibleScenarioIds,
-                source,
-              });
-            }}
+            onClick={props.onOpenAsTab}
           >
             <ExternalLink size={12} /> Open as Tab
           </button>
@@ -749,6 +941,15 @@ export function AnalysisChartContainer(props: {
             <Download size={12} /> Download CSV
           </button>
         )}
+        {props.onDumpDebug && (
+          <button
+            type="button"
+            className="cfp-menu-item"
+            onClick={props.onDumpDebug}
+          >
+            <ClipboardCopy size={12} /> Dump Debug JSON
+          </button>
+        )}
         {props.onDelete && (
           <button
             type="button"
@@ -760,7 +961,7 @@ export function AnalysisChartContainer(props: {
         )}
       </CfpPopover>
     </>
-  ) : null;
+  );
 
   return (
     <div
@@ -771,172 +972,28 @@ export function AnalysisChartContainer(props: {
         height: fillHeight ? '100%' : undefined,
       }}
     >
-      {/* Toolbar (tab only; canvas uses floating panel) */}
-      {chartContext !== 'canvas' && (showChooser || showSubjectSelector || showAnalysisTypeDropdown) ? (
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', flexShrink: 0, padding: '4px 4px 0' }}>
-          {showAnalysisTypeDropdown ? (
-            <select
-              value={props.analysisTypeId || ''}
-              onChange={e => props.onAnalysisTypeChange?.(e.target.value)}
-              className="chart-container-select"
-              aria-label="Analysis type"
-              style={{ fontSize: 10, maxWidth: 140 }}
-            >
-              {(props.availableAnalyses || []).map(a => {
-                const meta = getAnalysisTypeMeta(a.id);
-                return (
-                  <option key={a.id} value={a.id}>
-                    {meta?.name || a.name || a.id}
-                  </option>
-                );
-              })}
-            </select>
-          ) : null}
-          {showChooser ? (
-            <>
-              {!compactControls ? <span style={{ fontSize: 11, color: 'var(--text-secondary)' }}>Chart</span> : null}
-              {availableChartKinds.length <= 2 ? (
-                availableChartKinds.map(k => (
-                  <button
-                    key={k}
-                    type="button"
-                    className="chart-container-btn"
-                    onClick={() => handleChartKindChange(k)}
-                    style={k === kind ? { background: 'var(--bg-tertiary)' } : undefined}
-                    title={labelForChartKind(k)}
-                  >
-                    {labelForChartKind(k)}
-                  </button>
-                ))
-              ) : (
-                <select
-                  value={kind}
-                  onChange={e => handleChartKindChange(e.target.value as ChartKind)}
-                  className="chart-container-select"
-                  aria-label="Chart type"
-                >
-                  {availableChartKinds.map(k => (
-                    <option key={k} value={k}>
-                      {labelForChartKind(k)}
-                    </option>
-                  ))}
-                </select>
-              )}
-            </>
-          ) : null}
-          {showSubjectSelector ? (
-            <>
-              {!compactControls ? <span style={{ fontSize: 11, color: 'var(--text-secondary)', marginLeft: showChooser ? 8 : 0 }}>Subject</span> : null}
-              <select
-                value={effectiveSubjectId || ''}
-                onChange={handleSubjectChange}
-                className="chart-container-select"
-                aria-label="Subject"
-              >
-                {subjectIds.map(sid => {
-                  const meta = (result?.dimension_values as any)?.subject_id?.[sid];
-                  return (
-                    <option key={sid} value={sid}>
-                      {meta?.name || sid}
-                    </option>
-                  );
-                })}
-              </select>
-            </>
-          ) : null}
-        </div>
-      ) : null}
-
-      {/* Inline settings + action chrome (tab only; canvas uses floating panel) */}
-      {echartsOption && chartContext !== 'canvas' && (inlineSettings.length > 0 || showActionChrome) && (
-        <div style={{ display: 'flex', gap: 6, alignItems: 'center', padding: '4px 4px 0', flexWrap: 'wrap', flexShrink: 0 }}>
-          {/* Inline settings from registry */}
-          {inlineSettings.map(setting => {
-            const currentValue = resolveDisplaySetting(display, setting);
-            if (setting.type === 'checkbox') {
-              return (
-                <button
-                  key={setting.key}
-                  type="button"
-                  className={`chart-container-btn${currentValue ? ' active' : ''}`}
-                  onClick={() => onDisplayChange?.(setting.key, !currentValue)}
-                  title={setting.label}
-                >
-                  {setting.label}
-                </button>
-              );
-            }
-            if (setting.type === 'radio' && setting.options) {
-              return (
-                <span key={setting.key} style={{ display: 'inline-flex', gap: 1 }}>
-                  {setting.options.map(opt => (
-                    <button
-                      key={opt.value}
-                      type="button"
-                      className={`chart-container-btn${currentValue === opt.value ? ' active' : ''}`}
-                      onClick={() => onDisplayChange?.(setting.key, opt.value)}
-                      title={`${setting.label}: ${opt.label}`}
-                    >
-                      {opt.label}
-                    </button>
-                  ))}
-                </span>
-              );
-            }
-            return null;
-          })}
-
-          {/* Spacer to push actions to the right */}
-          {showActionChrome && <span style={{ flex: 1 }} />}
-
-          {/* Action chrome (tab mode only) */}
-          {showActionChrome && (
-            <>
-              <button
-                type="button"
-                onClick={() => {
-                  if (!result) return;
-                  const { filename, csv } = analysisResultToCsv(result);
-                  if (csv) downloadTextFile({ filename, content: csv, mimeType: 'text/csv' });
-                }}
-                className="chart-container-link-btn"
-                title="Download CSV"
-              >
-                <Download size={12} /> CSV
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  if (!kind || !result) return;
-                  chartOperationsService.openAnalysisChartTabFromAnalysis({
-                    chartKind: kind as any,
-                    analysisResult: result,
-                    scenarioIds: visibleScenarioIds,
-                    source,
-                  });
-                }}
-                className="chart-container-link-btn"
-                title="Open as Tab"
-              >
-                <ExternalLink size={12} /> Open as Tab
-              </button>
-            </>
-          )}
-        </div>
-      )}
-
-      <div
-        ref={chartViewportRef}
-        data-chart-viewport
-        style={{ flex: fillHeight ? 1 : undefined, minHeight: 0, position: 'relative', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}
-      >
-        {echartsOption && chartContext === 'canvas' && (
+      <div style={{ flex: fillHeight ? 1 : undefined, minHeight: 0, position: 'relative', display: 'flex', flexDirection: 'column' }}>
+        {!hideChrome && (
           <ChartFloatingIcon
             containerRef={chartViewportRef}
-            tray={canvasTray}
+            tray={toolbarTray}
+            canvasZoom={props.canvasZoom}
+            defaultAnchor={defaultContext === 'tab' ? 'top' : 'top-right'}
           />
         )}
-        {echartsOption ? (
+        <div
+          ref={chartViewportRef}
+          data-chart-viewport
+          onContextMenu={handleContextMenu}
+          style={{ flex: 1, minHeight: 0, position: 'relative', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}
+        >
+        {props.children ? (
+          props.children
+        ) : effectiveKind === 'info' && patchedResult ? (
+          <div style={{ flex: fillHeight ? 1 : undefined, minHeight: 0, overflow: 'auto' }}>
+            <AnalysisInfoCard result={patchedResult} fontSize={resolvedSettings.font_size} />
+          </div>
+        ) : echartsOption ? (
           <div style={{ flex: fillHeight ? 1 : undefined, minHeight: 0, position: 'relative' }}>
             <ReactECharts
               ref={echartsRef}
@@ -947,16 +1004,12 @@ export function AnalysisChartContainer(props: {
               onChartReady={handleChartReady}
             />
           </div>
-        ) : (
-          <div style={{ padding: '24px 16px', color: 'var(--text-secondary)', fontSize: 13, textAlign: 'center' }}>
-            <p style={{ marginBottom: 8, fontWeight: 600, color: 'var(--text-primary)' }}>No data available</p>
-            <p style={{ margin: 0 }}>
-              {(result as any)?.metadata?.empty_reason
-                || 'The analysis returned no data for the current selection. Check query DSL, scenario visibility, and date range.'}
-            </p>
-          </div>
-        )}
+        ) : null}
+        </div>
       </div>
+      {ctxMenu && ctxMenuItems.length > 0 && (
+        <ContextMenu x={ctxMenu.x} y={ctxMenu.y} items={ctxMenuItems} onClose={() => setCtxMenu(null)} />
+      )}
     </div>
   );
 }

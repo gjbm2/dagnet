@@ -12,6 +12,7 @@ import { useState, useCallback } from 'react';
 import toast from 'react-hot-toast';
 import { fileRegistry } from '../contexts/TabContext';
 import { fileOperationsService } from '../services/fileOperationsService';
+import { operationRegistryService } from '../services/operationRegistryService';
 
 interface UseRenameFileResult {
   /** Whether the file can be renamed (file exists) */
@@ -72,29 +73,31 @@ export function useRenameFile(fileId: string | undefined): UseRenameFileResult {
     }
     
     setIsRenaming(true);
-    const toastId = toast.loading(`Renaming ${currentName} to ${newName}...`);
-    
+    const opId = `file-rename:${fileId}:${Date.now()}`;
+    operationRegistryService.register({ id: opId, kind: 'file-rename', label: `Renaming ${currentName} to ${newName}…`, status: 'running' });
+
     try {
       const result = await fileOperationsService.renameFile(fileId, newName, {
         showProgress: (message) => {
-          toast.loading(message, { id: toastId });
+          operationRegistryService.setLabel(opId, message);
         }
       });
-      
+
       if (result.success) {
         let successMessage = `Renamed to ${newName}`;
         if (result.updatedReferences > 0) {
           successMessage += ` (updated ${result.updatedReferences} reference${result.updatedReferences > 1 ? 's' : ''})`;
         }
-        toast.success(successMessage, { id: toastId });
+        operationRegistryService.setLabel(opId, successMessage);
+        operationRegistryService.complete(opId, 'complete');
         setIsRenameModalOpen(false);
         return true;
       } else {
-        toast.error(result.error || 'Failed to rename file', { id: toastId });
+        operationRegistryService.complete(opId, 'error', result.error || 'Failed to rename file');
         return false;
       }
     } catch (error) {
-      toast.error(`Failed to rename: ${error instanceof Error ? error.message : 'Unknown error'}`, { id: toastId });
+      operationRegistryService.complete(opId, 'error', `Failed to rename: ${error instanceof Error ? error.message : 'Unknown error'}`);
       return false;
     } finally {
       setIsRenaming(false);

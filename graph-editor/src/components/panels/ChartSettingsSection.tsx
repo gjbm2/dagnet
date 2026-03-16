@@ -14,6 +14,7 @@ import CollapsibleSection from '../CollapsibleSection';
 import { AutomatableField } from '../AutomatableField';
 import { getDisplaySettingsForSurface } from '../../lib/analysisDisplaySettingsRegistry';
 import type { DisplaySettingDef } from '../../lib/analysisDisplaySettingsRegistry';
+import type { ViewMode } from '../../types/chartRecipe';
 
 const CHART_KIND_LABELS: Record<string, string> = {
   funnel: 'Funnel',
@@ -78,14 +79,14 @@ const SETTING_GROUP: Record<string, string> = {
 interface ChartSettingsSectionProps {
   title?: string;
   onTitleChange?: (title: string) => void;
-  viewMode: 'chart' | 'cards';
-  onViewModeChange: (mode: 'chart' | 'cards') => void;
+  viewMode: ViewMode;
+  onViewModeChange: (mode: ViewMode) => void;
   chartKind?: string;
   effectiveChartKind?: string;
   onChartKindChange: (kind: string | undefined) => void;
   chartKindOptions: string[];
   display?: Record<string, unknown>;
-  onDisplayChange: (key: string, value: any) => void;
+  onDisplayChange: (keyOrBatch: string | Record<string, any>, value?: any) => void;
   onClearAllOverrides?: () => void;
   defaultOpen?: boolean;
 }
@@ -93,7 +94,7 @@ interface ChartSettingsSectionProps {
 function renderSettingControl(
   setting: DisplaySettingDef,
   currentValue: any,
-  onDisplayChange: (key: string, value: any) => void,
+  onDisplayChange: (keyOrBatch: string | Record<string, any>, value?: any) => void,
 ) {
   if (setting.type === 'checkbox') {
     return (
@@ -237,7 +238,7 @@ export function ChartSettingsSection({
         <div className="chart-settings-row">
           <label className="chart-settings-label">View</label>
           <div className="chart-settings-chips" style={{ flex: 1 }}>
-            {(['chart', 'cards'] as const).map(mode => (
+            {(['chart', 'cards', 'table'] as const).map(mode => (
               <button
                 key={mode}
                 className="chart-settings-toggle-btn"

@@ -1,7 +1,8 @@
-import React, { useRef, useEffect } from 'react';
-import { NodeProps, NodeResizer } from 'reactflow';
+import React, { useRef, useEffect, useCallback } from 'react';
+import { NodeProps, NodeResizer, useViewport } from 'reactflow';
 import type { Container } from '@/types';
 import { InlineEditableLabel } from '../InlineEditableLabel';
+import { getLastSnappedResize, clearLastSnappedResize } from '../../services/snapService';
 
 export const CONTAINER_COLOURS = [
   '#94A3B8', '#86EFAC', '#7DD3FC', '#FCD34D', '#FDA4AF', '#C4B5FD',
@@ -20,6 +21,8 @@ interface ContainerNodeData {
   container: Container;
   onUpdate: (id: string, updates: Partial<Container>) => void;
   onDelete: (id: string) => void;
+  onResizeStart?: () => void;
+  onResizeEnd?: () => void;
 }
 
 function hexToRgb(hex: string): [number, number, number] {
@@ -28,11 +31,59 @@ function hexToRgb(hex: string): [number, number, number] {
 }
 
 export default function ContainerNode({ data, selected }: NodeProps<ContainerNodeData>) {
-  const { container, onUpdate, onDelete } = data;
+  const { container, onUpdate, onDelete, onResizeStart, onResizeEnd } = data;
+  const { zoom } = useViewport();
   const resizeTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  // Store callbacks in refs so NodeResizer's d3-drag useEffect deps stay stable.
+  // Without this, every parent re-render creates new inline closures →
+  // NodeResizer's useEffect re-runs → d3-drag is torn down mid-resize.
+  const onUpdateRef = useRef(onUpdate);
+  onUpdateRef.current = onUpdate;
+  const onResizeStartRef = useRef(onResizeStart);
+  onResizeStartRef.current = onResizeStart;
+  const onResizeEndRef = useRef(onResizeEnd);
+  onResizeEndRef.current = onResizeEnd;
+  const containerIdRef = useRef(container.id);
+  containerIdRef.current = container.id;
 
   useEffect(() => {
     return () => { if (resizeTimeoutRef.current) clearTimeout(resizeTimeoutRef.current); };
+  }, []);
+
+  const handleResizeStart = useCallback(() => {
+    onResizeStartRef.current?.();
+  }, []);
+
+  const handleResize = useCallback((_event: any, params: { x: number; y: number; width: number; height: number }) => {
+    if (resizeTimeoutRef.current) clearTimeout(resizeTimeoutRef.current);
+    resizeTimeoutRef.current = setTimeout(() => {
+      // Use snapped dimensions if available, otherwise d3-drag params
+      const snap = getLastSnappedResize();
+      const useSnap = snap && snap.nodeId === `container-${containerIdRef.current}`;
+      onUpdateRef.current(containerIdRef.current, {
+        x: Math.round(useSnap ? snap.x : params.x),
+        y: Math.round(useSnap ? snap.y : params.y),
+        width: Math.round(useSnap ? snap.width : params.width),
+        height: Math.round(useSnap ? snap.height : params.height),
+      });
+    }, 50);
+  }, []);
+
+  const handleResizeEnd = useCallback((_event: any, params: { x: number; y: number; width: number; height: number }) => {
+    if (resizeTimeoutRef.current) clearTimeout(resizeTimeoutRef.current);
+    // Use snapped dimensions if available — d3-drag doesn't know about
+    // snap adjustments, so its params would cause a "bounce" on release.
+    const snap = getLastSnappedResize();
+    const useSnap = snap && snap.nodeId === `container-${containerIdRef.current}`;
+    onUpdateRef.current(containerIdRef.current, {
+      x: Math.round(useSnap ? snap.x : params.x),
+      y: Math.round(useSnap ? snap.y : params.y),
+      width: Math.round(useSnap ? snap.width : params.width),
+      height: Math.round(useSnap ? snap.height : params.height),
+    });
+    clearLastSnappedResize();
+    onResizeEndRef.current?.();
   }, []);
 
   const [r, g, b] = hexToRgb(container.colour);
@@ -48,15 +99,12 @@ export default function ContainerNode({ data, selected }: NodeProps<ContainerNod
         minHeight={120}
         lineStyle={{ display: 'none' }}
         handleStyle={{
-          width: '8px', height: '8px', borderRadius: '2px',
+          width: 8 / zoom, height: 8 / zoom, borderRadius: '2px',
           backgroundColor: container.colour, border: '1px solid var(--bg-primary)',
         }}
-        onResize={(_event, params) => {
-          if (resizeTimeoutRef.current) clearTimeout(resizeTimeoutRef.current);
-          resizeTimeoutRef.current = setTimeout(() => {
-            onUpdate(container.id, { width: Math.round(params.width), height: Math.round(params.height) });
-          }, 50);
-        }}
+        onResizeStart={handleResizeStart}
+        onResize={handleResize}
+        onResizeEnd={handleResizeEnd}
       />
 
       {selected && (
@@ -65,9 +113,9 @@ export default function ContainerNode({ data, selected }: NodeProps<ContainerNod
           onClick={(e) => { e.stopPropagation(); onDelete(container.id); }}
           title="Delete container"
           style={{
-            position: 'absolute', top: -10, right: -10, width: '20px', height: '20px',
+            position: 'absolute', top: -24 / zoom, right: -24 / zoom, width: 20 / zoom, height: 20 / zoom,
             borderRadius: '50%', border: '1px solid var(--border-primary)', background: 'var(--bg-primary)',
-            color: 'var(--color-danger)', fontSize: '12px', lineHeight: '18px', textAlign: 'center',
+            color: 'var(--color-danger)', fontSize: 12 / zoom, lineHeight: `${18 / zoom}px`, textAlign: 'center',
             cursor: 'pointer', zIndex: 10, padding: 0, boxShadow: '0 1px 3px rgba(0,0,0,0.15)',
             pointerEvents: 'auto',
           }}

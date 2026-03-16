@@ -1,5 +1,6 @@
 import { graphComputeClient, type AnalysisResponse, type SnapshotSubjectPayload } from '../lib/graphComputeClient';
-import { buildGraphForAnalysisLayer, applyProbabilityVisibilityModeToGraph, applyWhatIfToGraph } from './CompositionService';
+import { hasLocalCompute, computeLocalResultMultiScenario, mergeBackendAugmentation } from './localAnalysisComputeService';
+import { buildGraphForAnalysisLayer, applyProbabilityVisibilityModeToGraph, applyWhatIfToGraph, applyComposedParamsToGraph } from './CompositionService';
 import { computeInheritedDSL, computeEffectiveFetchDSL } from './scenarioRegenerationService';
 import { augmentDSLWithConstraint } from '../lib/queryDSL';
 import { logChartReadinessTrace } from '../lib/snapshotBootTrace';
@@ -28,6 +29,7 @@ type ChartRecipeScenarioLike = {
   name?: string;
   colour?: string;
   visibility_mode?: ScenarioVisibilityMode;
+  params?: Record<string, any>;
 };
 
 type ScenarioContextLike = {
@@ -189,7 +191,7 @@ function snapshotSubjectsSignature(subjects?: SnapshotSubjectPayload[]): string 
     .join('||');
 }
 
-function createPreparedSignature(
+export function createPreparedSignature(
   analysisType: string,
   queryDsl: string,
   scenarios: PreparedAnalysisScenario[],
@@ -345,6 +347,12 @@ export async function prepareAnalysisComputeInputs(
     scenarios = customScenarios.map((scenario) => {
       const visibilityMode = scenario.visibility_mode || 'f+e';
       let scenarioGraph: Graph = graph;
+      // Apply captured graph parameter overrides (from Live-mode composition).
+      // Without this, Custom mode would use the base graph and produce different
+      // outcomes than Live mode for scenarios with parameter overlays.
+      if (scenario.params && (scenario.params.edges || scenario.params.nodes)) {
+        scenarioGraph = applyComposedParamsToGraph(scenarioGraph, scenario.params as any);
+      }
       if (scenario.scenario_id === 'current' && params.frozenWhatIfDsl) {
         scenarioGraph = applyWhatIfToGraph(scenarioGraph, params.frozenWhatIfDsl) as Graph;
       }
@@ -356,7 +364,10 @@ export async function prepareAnalysisComputeInputs(
         colour: scenario.colour || '#808080',
         visibility_mode: visibilityMode,
         graph: scenarioGraph,
-        effective_query_dsl: composeScenarioDsl(scenario.effective_dsl || '', params.chartCurrentLayerDsl),
+        effective_query_dsl: composeScenarioDsl(
+          augmentDSLWithConstraint(params.currentDSL || '', scenario.effective_dsl || ''),
+          params.chartCurrentLayerDsl,
+        ),
       };
     });
   }
@@ -438,8 +449,19 @@ export async function prepareAnalysisComputeInputs(
   return ready;
 }
 
+/**
+ * Run a prepared analysis, with progressive FE-first compute for supported types.
+ *
+ * For types with local compute (node_info, edge_info):
+ *   1. Return an FE-computed result immediately
+ *   2. Fire a backend call in the background
+ *   3. When BE responds, merge augmentation into the result via onAugment callback
+ *
+ * For all other types: delegate to the backend as before.
+ */
 export async function runPreparedAnalysis(
   prepared: PreparedAnalysisComputeReady,
+  onAugment?: (merged: AnalysisResponse) => void,
 ): Promise<AnalysisResponse> {
   logChartReadinessTrace('AnalysisPrepare:dispatch-compute', {
     analysisType: prepared.analysisType,
@@ -453,6 +475,42 @@ export async function runPreparedAnalysis(
     })),
   });
 
+  // Progressive FE-first compute for locally-computable types
+  if (hasLocalCompute(prepared.analysisType) && prepared.scenarios.length >= 1) {
+    const localScenarios = prepared.scenarios.map((s) => ({
+      scenario_id: s.scenario_id,
+      name: s.name,
+      colour: s.colour,
+      graph: s.graph as any,
+    }));
+    const localResponse = computeLocalResultMultiScenario(localScenarios, prepared.analysisType, prepared.queryDsl);
+
+    // For info-type analyses (node_info, edge_info), the FE result is authoritative
+    // and complete. The backend computes a different analysis shape (funnel data)
+    // that would overwrite the info-card-shaped data, so skip augmentation entirely.
+    // For other locally-computable types, fire BE call in background and merge.
+    const isInfoType = prepared.analysisType === 'node_info' || prepared.analysisType === 'edge_info';
+    if (onAugment && !isInfoType) {
+      runBackendAnalysis(prepared).then((beResponse) => {
+        if (beResponse.success && beResponse.result && localResponse.result) {
+          const merged = mergeBackendAugmentation(localResponse.result, beResponse.result);
+          onAugment({ success: true, result: merged });
+        }
+      }).catch(() => {
+        // BE unavailable — FE result stands on its own
+      });
+    }
+
+    return localResponse;
+  }
+
+  return runBackendAnalysis(prepared);
+}
+
+/** Dispatch to backend (single or multi-scenario). */
+async function runBackendAnalysis(
+  prepared: PreparedAnalysisComputeReady,
+): Promise<AnalysisResponse> {
   if (prepared.scenarios.length > 1) {
     return graphComputeClient.analyzeMultipleScenarios(
       prepared.scenarios.map((scenario) => ({

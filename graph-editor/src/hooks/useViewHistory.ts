@@ -15,6 +15,7 @@ import { sessionLogService } from '../services/sessionLogService';
 import { historicalFileService } from '../services/historicalFileService';
 import type { HistoricalCommit } from '../services/historicalFileService';
 import { formatDateUK } from '../lib/dateFormat';
+import { operationRegistryService } from '../services/operationRegistryService';
 
 export interface HistoryCommit {
   sha: string;
@@ -208,18 +209,17 @@ export function useViewHistory(fileId: string | undefined): UseViewHistoryResult
     sessionLogService.info('git', 'FILE_ROLLBACK', `Rolling back ${fileId} to ${commitSha.substring(0, 7)}`, undefined,
       { fileId, filePath, commitSha });
     
-    const toastId = toast.loading('Loading version...');
-    
+    const opId = `file-rollback:${fileId}:${commitSha.substring(0, 7)}`;
+    operationRegistryService.register({ id: opId, kind: 'file-rollback', label: 'Loading version…', status: 'running' });
+
     try {
-      // Get content at the target commit
       const content = await getContentAtCommit(commitSha);
       if (!content) {
         sessionLogService.error('git', 'FILE_ROLLBACK_ERROR', `Failed to load content at commit ${commitSha.substring(0, 7)}`);
-        toast.error('Failed to load version content', { id: toastId });
+        operationRegistryService.complete(opId, 'error', 'Failed to load version content');
         return false;
       }
-      
-      // Parse content
+
       let data: any;
       if (file?.type === 'graph') {
         data = JSON.parse(content);
@@ -227,20 +227,20 @@ export function useViewHistory(fileId: string | undefined): UseViewHistoryResult
         const yaml = await import('yaml');
         data = yaml.parse(content);
       }
-      
-      // Update file in registry (this marks it dirty)
+
       await fileRegistry.updateFile(fileId, data);
-      
+
       sessionLogService.success('git', 'FILE_ROLLBACK_SUCCESS', `Rolled back ${fileId} to ${commitSha.substring(0, 7)}`,
         'File marked dirty - commit to persist',
         { fileId, filePath, commitSha });
-      
-      toast.success('Rolled back to selected version (commit to save)', { id: toastId });
+
+      operationRegistryService.setLabel(opId, 'Rolled back to selected version');
+      operationRegistryService.complete(opId, 'complete', 'Commit to save');
       return true;
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
       sessionLogService.error('git', 'FILE_ROLLBACK_ERROR', `Rollback failed for ${fileId}: ${errorMessage}`);
-      toast.error(`Rollback failed: ${errorMessage}`, { id: toastId });
+      operationRegistryService.complete(opId, 'error', `Rollback failed: ${errorMessage}`);
       return false;
     }
   }, [fileId, filePath, file?.type, getContentAtCommit]);
@@ -271,7 +271,8 @@ export function useViewHistory(fileId: string | undefined): UseViewHistoryResult
       dateUK,
     };
 
-    const toastId = toast.loading(`Opening at ${dateUK}…`);
+    const opId = `view-at-commit:${fileId}:${commit.shortSha}`;
+    operationRegistryService.register({ id: opId, kind: 'open-historical', label: `Opening at ${dateUK}…`, status: 'running' });
     try {
       const tabId = await historicalFileService.openHistoricalVersion(
         fileId,
@@ -279,12 +280,13 @@ export function useViewHistory(fileId: string | undefined): UseViewHistoryResult
         navState.selectedRepo,
       );
       if (tabId) {
-        toast.success(`Opened historical version (${dateUK})`, { id: toastId });
+        operationRegistryService.setLabel(opId, `Opened historical version (${dateUK})`);
+        operationRegistryService.complete(opId, 'complete');
       } else {
-        toast.error('Failed to open historical version', { id: toastId });
+        operationRegistryService.complete(opId, 'error', 'Failed to open historical version');
       }
     } catch (error) {
-      toast.error(`Failed: ${error instanceof Error ? error.message : 'Unknown error'}`, { id: toastId });
+      operationRegistryService.complete(opId, 'error', `Failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
   }, [fileId, history, navState.selectedRepo]);
 

@@ -114,6 +114,49 @@
   border-color: #ccc;
 }
 
+/* Dev Bayes trigger button */
+.dagnet-dev-bayes-btn {
+  height: 24px;
+  padding: 0 10px;
+  font-size: 12px;
+  font-weight: 600;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  background: #f0f0f0;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.dagnet-dev-bayes-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.7;
+}
+
+.dagnet-dev-bayes-btn:not(:disabled):hover {
+  background: #e8e8e8;
+  border-color: #ccc;
+}
+
+.dagnet-dev-bayes-btn--submitting,
+.dagnet-dev-bayes-btn--running {
+  background: #fff3cd;
+  border-color: #ffc107;
+  color: #7a5b00;
+}
+
+.dagnet-dev-bayes-btn--complete {
+  background: #d1e7dd;
+  border-color: #0f5132;
+  color: #0f5132;
+}
+
+.dagnet-dev-bayes-btn--failed {
+  background: #f8d7da;
+  border-color: #842029;
+  color: #842029;
+}
+
+
 .dagnet-logo {
   width: 16px;
   height: 16px;
@@ -379,6 +422,17 @@
   }
 
   .dagnet-dev-console-mark-btn:not(:disabled):hover {
+    background: #454545;
+    border-color: #666;
+  }
+
+  .dagnet-dev-bayes-btn {
+    background: #3d3d3d;
+    border-color: #555;
+    color: #e0e0e0;
+  }
+
+  .dagnet-dev-bayes-btn:not(:disabled):hover {
     background: #454545;
     border-color: #666;
   }

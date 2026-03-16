@@ -11,7 +11,7 @@ import { useCallback } from 'react';
 import { useNavigatorContext } from '../contexts/NavigatorContext';
 import { useDialog } from '../contexts/DialogContext';
 import { repositoryOperationsService } from '../services/repositoryOperationsService';
-import toast from 'react-hot-toast';
+import { operationRegistryService } from '../services/operationRegistryService';
 
 export function useCommitHandler() {
   const { state: navState } = useNavigatorContext();
@@ -27,14 +27,14 @@ export function useCommitHandler() {
     const repo = repository || navState.selectedRepo;
     
     const handlePull = async () => {
-      const toastId = toast.loading('Pulling latest changes...');
+      const opId = `pre-commit-pull:${Date.now()}`;
+      operationRegistryService.register({ id: opId, kind: 'git-pull', label: 'Pulling latest changes…', status: 'running' });
       try {
         await repositoryOperationsService.pullLatest(repo, branch);
-        toast.dismiss(toastId);
-        toast.success('Pull complete! Please commit again.');
+        operationRegistryService.setLabel(opId, 'Pull complete — please commit again');
+        operationRegistryService.complete(opId, 'complete');
       } catch (error) {
-        toast.dismiss(toastId);
-        toast.error(`Pull failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+        operationRegistryService.complete(opId, 'error', `Pull failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
         throw error;
       }
     };

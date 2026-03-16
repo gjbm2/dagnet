@@ -9,9 +9,12 @@
  * buildGraphForAnalysisLayer functions — not mocks.
  */
 
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { captureTabScenariosToRecipe } from '../../services/captureTabScenariosService';
 import { buildGraphForAnalysisLayer } from '../../services/CompositionService';
+import { advanceMode } from '../../services/canvasAnalysisMutationService';
+import { augmentDSLWithConstraint, normalizeConstraintString } from '../../lib/queryDSL';
+import type { CanvasAnalysis } from '../../types';
 
 vi.mock('../../services/CompositionService', () => ({
   buildGraphForAnalysisLayer: vi.fn(
@@ -19,6 +22,9 @@ vi.mock('../../services/CompositionService', () => ({
       ...graph,
       __composedFor: layerId,
     }),
+  ),
+  getComposedParamsForLayer: vi.fn(
+    (_layerId: string, _baseParams: any, _currentParams: any, _scenarios: any[], _visibleIds: string[]) => ({}),
   ),
 }));
 
@@ -46,13 +52,31 @@ const scenariosContext = {
 const currentDSL = 'window(-30d:)';
 
 function makeOps(visibleIds: string[], modes: Record<string, 'f+e' | 'f' | 'e'> = {}, scenarioOrder?: string[]) {
+  const effectiveOrder = scenarioOrder || visibleIds.filter(id => id !== 'current' && id !== 'base');
   return {
     getScenarioState: () => ({
       visibleScenarioIds: visibleIds,
-      scenarioOrder: scenarioOrder || visibleIds.filter(id => id !== 'current' && id !== 'base'),
+      scenarioOrder: effectiveOrder,
     }),
     getScenarioVisibilityMode: (_tabId: string, sid: string) => modes[sid] || ('f+e' as const),
   };
+}
+
+/**
+ * Mirrors deriveOrderedVisibleIds from captureTabScenariosService.
+ * Used to compute the expected rendering order for live-mode descriptors.
+ */
+function deriveExpectedOrder(visibleIds: string[], scenarioOrder?: string[]): string[] {
+  const visibleSet = new Set(visibleIds);
+  const order = scenarioOrder || visibleIds.filter(id => id !== 'current' && id !== 'base');
+  const userItems = [...order]
+    .reverse()
+    .filter(id => id !== 'current' && id !== 'base' && visibleSet.has(id));
+  const result: string[] = [];
+  if (visibleSet.has('base')) result.push('base');
+  result.push(...userItems);
+  if (visibleSet.has('current')) result.push('current');
+  return result.length > 0 ? result : ['current'];
 }
 
 function buildLiveScenarioDescriptors(
@@ -135,7 +159,8 @@ describe('Live → Custom compute parity', () => {
       tabId: 'tab-1', currentDSL, operations: ops, scenariosContext: scenariosContext as any,
     });
 
-    const liveDescs = buildLiveScenarioDescriptors(visibleIds, {});
+    const derivedOrder = deriveExpectedOrder(visibleIds);
+    const liveDescs = buildLiveScenarioDescriptors(derivedOrder, {});
     const frozenDescs = buildFrozenScenarioDescriptors(captured);
 
     assertScenarioDescriptorsParity(liveDescs, frozenDescs);
@@ -148,13 +173,14 @@ describe('Live → Custom compute parity', () => {
       tabId: 'tab-1', currentDSL, operations: ops, scenariosContext: scenariosContext as any,
     });
 
-    const liveDescs = buildLiveScenarioDescriptors(visibleIds, {});
+    const derivedOrder = deriveExpectedOrder(visibleIds);
+    const liveDescs = buildLiveScenarioDescriptors(derivedOrder, {});
     const frozenDescs = buildFrozenScenarioDescriptors(captured);
 
     assertScenarioDescriptorsParity(liveDescs, frozenDescs);
   });
 
-  it('4. ordering preserved: user scenarios follow scenarioOrder', () => {
+  it('4. ordering preserved: user scenarios follow scenarioOrder reversed', () => {
     const visibleIds = ['current', 'sc-paid', 'sc-mobile', 'base'];
     const scenarioOrder = ['sc-paid', 'sc-mobile'];
     const ops = makeOps(visibleIds, {}, scenarioOrder);
@@ -162,9 +188,11 @@ describe('Live → Custom compute parity', () => {
       tabId: 'tab-1', currentDSL, operations: ops, scenariosContext: scenariosContext as any,
     });
 
-    expect(captured.map(s => s.scenario_id)).toEqual(['current', 'sc-paid', 'sc-mobile', 'base']);
+    // scenarioOrder reversed = ['sc-mobile', 'sc-paid'], with base first and current last
+    const derivedOrder = deriveExpectedOrder(visibleIds, scenarioOrder);
+    expect(captured.map(s => s.scenario_id)).toEqual(derivedOrder);
 
-    const liveDescs = buildLiveScenarioDescriptors(['current', 'sc-paid', 'sc-mobile', 'base'], {});
+    const liveDescs = buildLiveScenarioDescriptors(derivedOrder, {});
     const frozenDescs = buildFrozenScenarioDescriptors(captured);
 
     assertScenarioDescriptorsParity(liveDescs, frozenDescs);
@@ -178,10 +206,14 @@ describe('Live → Custom compute parity', () => {
       tabId: 'tab-1', currentDSL, operations: ops, scenariosContext: scenariosContext as any,
     });
 
-    expect(captured[0].visibility_mode).toBe('f');
-    expect(captured[1].visibility_mode).toBe('e');
+    const derivedOrder = deriveExpectedOrder(visibleIds);
+    // derived order: ['sc-mobile', 'current'] — sc-mobile first, current last
+    const scMobile = captured.find(s => s.scenario_id === 'sc-mobile');
+    const current = captured.find(s => s.scenario_id === 'current');
+    expect(scMobile?.visibility_mode).toBe('e');
+    expect(current?.visibility_mode).toBe('f');
 
-    const liveDescs = buildLiveScenarioDescriptors(visibleIds, modes);
+    const liveDescs = buildLiveScenarioDescriptors(derivedOrder, modes);
     const frozenDescs = buildFrozenScenarioDescriptors(captured);
 
     assertScenarioDescriptorsParity(liveDescs, frozenDescs);
@@ -197,7 +229,8 @@ describe('Live → Custom compute parity', () => {
 
     expect(what_if_dsl).toBe(whatIf);
 
-    const liveDescs = buildLiveScenarioDescriptors(visibleIds, {}, whatIf);
+    const derivedOrder = deriveExpectedOrder(visibleIds);
+    const liveDescs = buildLiveScenarioDescriptors(derivedOrder, {}, whatIf);
     const frozenDescs = buildFrozenScenarioDescriptors(captured, what_if_dsl);
 
     assertScenarioDescriptorsParity(liveDescs, frozenDescs);
@@ -215,7 +248,8 @@ describe('Live → Custom compute parity', () => {
       tabId: 'tab-1', currentDSL, operations: ops, scenariosContext: scenariosContext as any,
     });
 
-    const liveDescs = buildLiveScenarioDescriptors(visibleIds, {});
+    const derivedOrder = deriveExpectedOrder(visibleIds);
+    const liveDescs = buildLiveScenarioDescriptors(derivedOrder, {});
     const frozenDescs = buildFrozenScenarioDescriptors(captured);
 
     assertScenarioDescriptorsParity(liveDescs, frozenDescs);
@@ -232,9 +266,9 @@ describe('Live → Custom compute parity', () => {
     const frozenVisible = captured.filter(s => !hiddenSet.has(s.scenario_id));
 
     expect(frozenVisible).toHaveLength(2);
-    expect(frozenVisible.map(s => s.scenario_id)).toEqual(['current', 'sc-mobile']);
+    expect(frozenVisible.map(s => s.scenario_id)).toEqual(['sc-mobile', 'current']);
 
-    const liveDescs = buildLiveScenarioDescriptors(['current', 'sc-mobile'], {});
+    const liveDescs = buildLiveScenarioDescriptors(['sc-mobile', 'current'], {});
     const frozenDescs = buildFrozenScenarioDescriptors(frozenVisible);
 
     assertScenarioDescriptorsParity(liveDescs, frozenDescs);
@@ -252,5 +286,319 @@ describe('Live → Custom compute parity', () => {
 
     const currentScenario = captured.find(s => s.scenario_id === 'current');
     expect(currentScenario?.effective_dsl).toBe(currentDSL);
+  });
+});
+
+/**
+ * End-to-end Live → Custom rendering parity tests.
+ *
+ * These exercise the FULL transition path:
+ *   1. captureTabScenariosToRecipe (captures live tab state into recipe)
+ *   2. advanceMode (rebases DSLs from absolute to delta)
+ *   3. Custom compute path (re-expands delta DSLs to absolute)
+ *
+ * The invariant: after this round-trip, Custom mode must produce
+ * identical rendering inputs (scenario IDs, order, colours, names,
+ * visibility modes, and effective DSLs) to what Live mode produced.
+ *
+ * Uses REAL queryDSL functions (computeRebaseDelta, augmentDSLWithConstraint)
+ * — no mocks for the DSL round-trip.
+ */
+describe('Live → Custom full transition parity (capture + advanceMode + custom compute)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  // Realistic 3-scenario state matching the user's bug report:
+  //   - "No overrides" (yellow) — no queryDSL, just base window
+  //   - "Cohort: 11-Feb – 12-Mar" (pink) — context filter
+  //   - "Current" (blue) — live current layer
+  const realisticContext = {
+    scenarios: [
+      {
+        id: 'sc-no-overrides',
+        name: 'No overrides',
+        colour: '#EAB308',
+        params: {},
+        meta: { isLive: true, queryDSL: '', lastEffectiveDSL: 'window(-30d:)' },
+      },
+      {
+        id: 'sc-cohort',
+        name: 'Cohort: 11-Feb – 12-Mar',
+        colour: '#EC4899',
+        params: {},
+        meta: { isLive: true, queryDSL: 'context(cohort:11feb-12mar)', lastEffectiveDSL: 'window(-30d:).context(cohort:11feb-12mar)' },
+      },
+    ],
+    currentColour: '#3b82f6',
+    baseColour: '#6b7280',
+    baseDSL: 'window(-30d:)',
+    baseParams: {},
+    currentParams: {},
+  };
+
+  const realisticCurrentDSL = 'window(-30d:)';
+
+  function makeLiveAnalysis(): CanvasAnalysis {
+    return {
+      id: 'ca-test',
+      mode: 'live',
+      x: 0,
+      y: 0,
+      width: 400,
+      height: 300,
+      recipe: {
+        analysis: { analysis_type: 'pit', analytics_dsl: 'pit_pull(start)' },
+      },
+    } as CanvasAnalysis;
+  }
+
+  /**
+   * Simulate what the Custom compute path does: for each recipe scenario,
+   * re-expand its delta DSL via augmentDSLWithConstraint(currentDSL, delta).
+   */
+  function computeCustomEffectiveDSLs(
+    analysis: CanvasAnalysis,
+    baseDSL: string,
+  ): Array<{ scenario_id: string; name: string; colour: string; visibility_mode: string; effective_dsl: string }> {
+    const customScenarios = analysis.recipe.scenarios || [];
+    return customScenarios.map((s) => {
+      const delta = s.effective_dsl || '';
+      const absolute = delta
+        ? augmentDSLWithConstraint(baseDSL, delta)
+        : baseDSL;
+      return {
+        scenario_id: s.scenario_id,
+        name: s.name || s.scenario_id,
+        colour: s.colour || '#808080',
+        visibility_mode: s.visibility_mode || 'f+e',
+        effective_dsl: absolute,
+      };
+    });
+  }
+
+  it('should preserve scenario order through capture → advanceMode round-trip', () => {
+    // scenarioOrder: newest first (prepended). User added sc-no-overrides then sc-cohort.
+    const scenarioOrder = ['sc-cohort', 'sc-no-overrides'];
+    const visibleIds = ['current', 'sc-no-overrides', 'sc-cohort'];
+    const ops = makeOps(visibleIds, {}, scenarioOrder);
+
+    // Step 1: capture
+    const captured = captureTabScenariosToRecipe({
+      tabId: 'tab-1',
+      currentDSL: realisticCurrentDSL,
+      operations: ops,
+      scenariosContext: realisticContext as any,
+    });
+
+    // Derived order: scenarioOrder reversed = ['sc-no-overrides', 'sc-cohort'], current last
+    const expectedOrder = deriveExpectedOrder(visibleIds, scenarioOrder);
+    expect(captured.scenarios.map(s => s.scenario_id)).toEqual(expectedOrder);
+
+    // Step 2: advanceMode (Live → Custom)
+    const analysis = makeLiveAnalysis();
+    advanceMode(analysis, realisticCurrentDSL, captured);
+
+    expect(analysis.mode).toBe('custom');
+    // Order must be preserved after advanceMode
+    expect(analysis.recipe.scenarios!.map(s => s.scenario_id)).toEqual(expectedOrder);
+  });
+
+  it('should preserve colours, names, and visibility modes through the full transition', () => {
+    const scenarioOrder = ['sc-cohort', 'sc-no-overrides'];
+    const visibleIds = ['current', 'sc-no-overrides', 'sc-cohort'];
+    const modes: Record<string, 'f+e' | 'f' | 'e'> = {
+      'current': 'f+e',
+      'sc-no-overrides': 'f',
+      'sc-cohort': 'e',
+    };
+    const ops = makeOps(visibleIds, modes, scenarioOrder);
+
+    const captured = captureTabScenariosToRecipe({
+      tabId: 'tab-1',
+      currentDSL: realisticCurrentDSL,
+      operations: ops,
+      scenariosContext: realisticContext as any,
+    });
+
+    const analysis = makeLiveAnalysis();
+    advanceMode(analysis, realisticCurrentDSL, captured);
+
+    const customScenarios = analysis.recipe.scenarios!;
+
+    // Colours preserved exactly
+    const noOverrides = customScenarios.find(s => s.scenario_id === 'sc-no-overrides');
+    expect(noOverrides?.colour).toBe('#EAB308');
+    expect(noOverrides?.name).toBe('No overrides');
+    expect(noOverrides?.visibility_mode).toBe('f');
+
+    const cohort = customScenarios.find(s => s.scenario_id === 'sc-cohort');
+    expect(cohort?.colour).toBe('#EC4899');
+    expect(cohort?.name).toBe('Cohort: 11-Feb – 12-Mar');
+    expect(cohort?.visibility_mode).toBe('e');
+
+    const current = customScenarios.find(s => s.scenario_id === 'current');
+    expect(current?.colour).toBe('#3b82f6');
+    expect(current?.name).toBe('Current');
+    expect(current?.visibility_mode).toBe('f+e');
+  });
+
+  it('should produce identical effective DSLs after rebase round-trip (absolute → delta → absolute)', () => {
+    const scenarioOrder = ['sc-cohort', 'sc-no-overrides'];
+    const visibleIds = ['current', 'sc-no-overrides', 'sc-cohort'];
+    const ops = makeOps(visibleIds, {}, scenarioOrder);
+
+    // Capture (absolute DSLs)
+    const captured = captureTabScenariosToRecipe({
+      tabId: 'tab-1',
+      currentDSL: realisticCurrentDSL,
+      operations: ops,
+      scenariosContext: realisticContext as any,
+    });
+
+    // Record the absolute DSLs from capture (what Live mode sees)
+    const liveAbsoluteDSLs = new Map<string, string>();
+    for (const s of captured.scenarios) {
+      liveAbsoluteDSLs.set(s.scenario_id, s.effective_dsl || realisticCurrentDSL);
+    }
+
+    // advanceMode: absolute → delta
+    const analysis = makeLiveAnalysis();
+    advanceMode(analysis, realisticCurrentDSL, captured);
+
+    // Custom compute: delta → absolute (same as analysisComputePreparationService)
+    const customResults = computeCustomEffectiveDSLs(analysis, realisticCurrentDSL);
+
+    // The round-trip must produce semantically identical absolute DSLs.
+    // Clause order may differ (context before window vs after) but normalised form must match.
+    for (const customResult of customResults) {
+      const liveAbsolute = liveAbsoluteDSLs.get(customResult.scenario_id);
+      expect(normalizeConstraintString(customResult.effective_dsl)).toBe(normalizeConstraintString(liveAbsolute!));
+    }
+  });
+
+  it('should produce rendering-identical output for realistic 3-scenario state', () => {
+    // This test simulates the exact user flow:
+    // 1. User has 3 scenarios visible in Live mode
+    // 2. User clicks mode toggle → Live→Custom
+    // 3. Chart must render identically
+
+    const scenarioOrder = ['sc-cohort', 'sc-no-overrides'];
+    const visibleIds = ['current', 'sc-no-overrides', 'sc-cohort'];
+    const ops = makeOps(visibleIds, {}, scenarioOrder);
+
+    // --- Live side: what the chart currently renders ---
+    const derivedOrder = deriveExpectedOrder(visibleIds, scenarioOrder);
+
+    const liveRenderingState = derivedOrder.map((sid) => {
+      const colour = sid === 'current' ? '#3b82f6'
+        : realisticContext.scenarios.find(s => s.id === sid)?.colour || '#808080';
+      const name = sid === 'current' ? 'Current'
+        : realisticContext.scenarios.find(s => s.id === sid)?.name || sid;
+      const effectiveDsl = sid === 'current' ? realisticCurrentDSL
+        : realisticContext.scenarios.find(s => s.id === sid)?.meta?.lastEffectiveDSL || realisticCurrentDSL;
+      return { scenario_id: sid, colour, name, effective_dsl: effectiveDsl, visibility_mode: 'f+e' };
+    });
+
+    // --- Custom side: capture + advanceMode + re-expand ---
+    const captured = captureTabScenariosToRecipe({
+      tabId: 'tab-1',
+      currentDSL: realisticCurrentDSL,
+      operations: ops,
+      scenariosContext: realisticContext as any,
+    });
+
+    const analysis = makeLiveAnalysis();
+    advanceMode(analysis, realisticCurrentDSL, captured);
+
+    const customRenderingState = computeCustomEffectiveDSLs(analysis, realisticCurrentDSL);
+
+    // Assert FULL parity
+    expect(customRenderingState).toHaveLength(liveRenderingState.length);
+    for (let i = 0; i < liveRenderingState.length; i++) {
+      expect(customRenderingState[i].scenario_id).toBe(liveRenderingState[i].scenario_id);
+      expect(customRenderingState[i].colour).toBe(liveRenderingState[i].colour);
+      expect(customRenderingState[i].name).toBe(liveRenderingState[i].name);
+      expect(normalizeConstraintString(customRenderingState[i].effective_dsl)).toBe(normalizeConstraintString(liveRenderingState[i].effective_dsl));
+      expect(customRenderingState[i].visibility_mode).toBe(liveRenderingState[i].visibility_mode);
+    }
+  });
+
+  it('should handle scenario with context filter DSL through rebase round-trip', () => {
+    // Specific regression test: context(cohort:X) must survive the
+    // absolute → delta → absolute round-trip via computeRebaseDelta + augmentDSLWithConstraint
+    const visibleIds = ['current', 'sc-cohort'];
+    const ops = makeOps(visibleIds, {}, ['sc-cohort']);
+
+    const captured = captureTabScenariosToRecipe({
+      tabId: 'tab-1',
+      currentDSL: realisticCurrentDSL,
+      operations: ops,
+      scenariosContext: realisticContext as any,
+    });
+
+    const cohortCaptured = captured.scenarios.find(s => s.scenario_id === 'sc-cohort');
+    expect(cohortCaptured?.effective_dsl).toBe('window(-30d:).context(cohort:11feb-12mar)');
+
+    const analysis = makeLiveAnalysis();
+    advanceMode(analysis, realisticCurrentDSL, captured);
+
+    const customResults = computeCustomEffectiveDSLs(analysis, realisticCurrentDSL);
+    const cohortCustom = customResults.find(s => s.scenario_id === 'sc-cohort');
+
+    // The context filter must survive the round-trip (normalised for clause order)
+    expect(normalizeConstraintString(cohortCustom?.effective_dsl || '')).toBe(normalizeConstraintString('window(-30d:).context(cohort:11feb-12mar)'));
+  });
+
+  it('should handle what_if_dsl through the full transition', () => {
+    const visibleIds = ['current', 'sc-no-overrides'];
+    const ops = makeOps(visibleIds, {}, ['sc-no-overrides']);
+    const whatIf = 'case(test-case:treatment)';
+
+    const captured = captureTabScenariosToRecipe({
+      tabId: 'tab-1',
+      currentDSL: realisticCurrentDSL,
+      operations: ops,
+      scenariosContext: realisticContext as any,
+      whatIfDSL: whatIf,
+    });
+
+    expect(captured.what_if_dsl).toBe(whatIf);
+
+    const analysis = makeLiveAnalysis();
+    advanceMode(analysis, realisticCurrentDSL, captured);
+
+    // what_if_dsl must be preserved in the recipe analysis
+    expect(analysis.recipe.analysis.what_if_dsl).toBe(whatIf);
+  });
+
+  it('should handle base scenario through the full transition', () => {
+    const scenarioOrder = ['sc-no-overrides'];
+    const visibleIds = ['current', 'sc-no-overrides', 'base'];
+    const ops = makeOps(visibleIds, {}, scenarioOrder);
+
+    const captured = captureTabScenariosToRecipe({
+      tabId: 'tab-1',
+      currentDSL: realisticCurrentDSL,
+      operations: ops,
+      scenariosContext: realisticContext as any,
+    });
+
+    // Base must be first, current must be last
+    const derivedOrder = deriveExpectedOrder(visibleIds, scenarioOrder);
+    expect(derivedOrder[0]).toBe('base');
+    expect(derivedOrder[derivedOrder.length - 1]).toBe('current');
+    expect(captured.scenarios.map(s => s.scenario_id)).toEqual(derivedOrder);
+
+    const analysis = makeLiveAnalysis();
+    advanceMode(analysis, realisticCurrentDSL, captured);
+
+    const customResults = computeCustomEffectiveDSLs(analysis, realisticCurrentDSL);
+
+    // Base scenario should have the base DSL
+    const baseDsl = customResults.find(s => s.scenario_id === 'base');
+    expect(baseDsl?.effective_dsl).toBe('window(-30d:)');
+    expect(baseDsl?.colour).toBe('#6b7280');
+    expect(baseDsl?.name).toBe('Base');
   });
 });

@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import '../styles/popup-menu.css';
 
 export interface ContextMenuItem {
@@ -47,6 +47,8 @@ interface MenuLevelProps {
   openPath: number[];
   setOpenPath: React.Dispatch<React.SetStateAction<number[]>>;
   onClose: () => void;
+  /** For submenus: the parent item rect, so we can flip to its left side */
+  parentAnchorRect?: DOMRect | null;
 }
 
 const MenuLevel: React.FC<MenuLevelProps> = ({
@@ -58,8 +60,44 @@ const MenuLevel: React.FC<MenuLevelProps> = ({
   openPath,
   setOpenPath,
   onClose,
+  parentAnchorRect,
 }) => {
   const itemRefs = useRef<Array<HTMLDivElement | null>>([]);
+  const localRef = useRef<HTMLDivElement>(null);
+  const effectiveRef = menuRef || localRef;
+
+  // Self-correct position after render (useLayoutEffect = before paint, no flash)
+  const [adjustedPos, setAdjustedPos] = useState(position);
+  useLayoutEffect(() => {
+    const el = effectiveRef.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    let { left, top } = position;
+
+    // Horizontal: if right edge overflows, flip to left of parent anchor
+    if (rect.right > vw - 20) {
+      if (parentAnchorRect) {
+        left = parentAnchorRect.left - rect.width - 4;
+      } else {
+        left -= (rect.right - (vw - 20));
+      }
+      if (left < 20) left = 20;
+    }
+
+    // Vertical: nudge up if bottom overflows
+    if (rect.bottom > vh - 20) {
+      top -= (rect.bottom - (vh - 20));
+      if (top < 20) top = 20;
+    }
+
+    if (left !== position.left || top !== position.top) {
+      setAdjustedPos({ left, top });
+    } else {
+      setAdjustedPos(position);
+    }
+  }, [position.left, position.top]);
 
   const prefixKey = prefix.join(',');
   const pathKey = openPath.join(',');
@@ -81,17 +119,14 @@ const MenuLevel: React.FC<MenuLevelProps> = ({
     return el.getBoundingClientRect();
   }, [activeIndex, levelItems.length, pathKey]);
 
+  // Unconstrained submenu position — child will self-correct via useLayoutEffect
   const submenuPosition = useMemo(() => {
     if (!activeSubmenu || !activeAnchorRect) return null;
-    const viewportWidth = window.innerWidth;
     const viewportHeight = window.innerHeight;
     const estHeight = estimateMenuHeight(activeSubmenu);
-    let left = activeAnchorRect.right + 4;
+    const left = activeAnchorRect.right + 4;
     let top = activeAnchorRect.top;
 
-    if (left + MAX_WIDTH_PX > viewportWidth - 20) {
-      left = Math.max(20, activeAnchorRect.left - MAX_WIDTH_PX - 4);
-    }
     if (top + estHeight > viewportHeight - 20) {
       top = Math.max(20, viewportHeight - estHeight - 20);
     }
@@ -104,12 +139,12 @@ const MenuLevel: React.FC<MenuLevelProps> = ({
   return (
     <>
       <div
-        ref={menuRef}
+        ref={effectiveRef}
         className="dagnet-popup"
         style={{
           position: 'fixed',
-          left: position.left,
-          top: position.top,
+          left: adjustedPos.left,
+          top: adjustedPos.top,
           minWidth: `${MIN_WIDTH_PX}px`,
           maxWidth: `min(${MAX_WIDTH_PX}px, calc(100vw - 40px))`,
           zIndex: 10000 + level,
@@ -191,6 +226,7 @@ const MenuLevel: React.FC<MenuLevelProps> = ({
           prefix={[...prefix, activeIndex!]}
           levelItems={activeSubmenu}
           position={submenuPosition}
+          parentAnchorRect={activeAnchorRect}
           openPath={openPath}
           setOpenPath={setOpenPath}
           onClose={onClose}
@@ -228,9 +264,10 @@ export function ContextMenu({ x, y, items, onClose }: ContextMenuProps) {
 
       const viewportWidth = window.innerWidth;
       if (left + menuWidth > viewportWidth - 20) {
-        left = Math.max(20, viewportWidth - menuWidth - 20);
+        // Show to the left of the cursor (standard OS behaviour)
+        left = x - menuWidth;
+        if (left < 20) left = 20;
       }
-      if (left < 20) left = 20;
 
       const viewportHeight = window.innerHeight;
       if (top + menuHeight > viewportHeight - 20) {

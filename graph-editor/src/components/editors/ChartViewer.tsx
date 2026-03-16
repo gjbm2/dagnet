@@ -1,10 +1,12 @@
 import React, { useState, useCallback, useMemo } from 'react';
 
 import type { EditorProps } from '../../types';
+import type { ViewMode } from '../../types/chartRecipe';
 import type { ScenarioLayerItem } from '../../types/scenarioLayerList';
 import { useFileState } from '../../contexts/TabContext';
 import { AnalysisChartContainer } from '../charts/AnalysisChartContainer';
 import { AnalysisResultCards } from '../analytics/AnalysisResultCards';
+import { AnalysisResultTable } from '../analytics/AnalysisResultTable';
 import { ChartSettingsSection } from '../panels/ChartSettingsSection';
 import CollapsibleSection from '../CollapsibleSection';
 import { ScenarioLayerList } from '../panels/ScenarioLayerList';
@@ -13,7 +15,10 @@ import { QueryExpressionEditor } from '../QueryExpressionEditor';
 import { useElementSize } from '../../hooks/useElementSize';
 import { analysisResultToCsv } from '../../services/analysisExportService';
 import { downloadTextFile } from '../../services/downloadService';
-import { Download, Eye, EyeOff, Table, RefreshCw, Link2, Pin, Unlink2, Settings, FileText } from 'lucide-react';
+import { Link2, Pin, Settings, FileText, BarChart3, LayoutGrid, Table2, Download, RefreshCw } from 'lucide-react';
+import { getAvailableExpressions } from '../../types/chartRecipe';
+import { resolveDisplaySetting } from '../../lib/analysisDisplaySettingsRegistry';
+import { filterResultForScenarios } from '../../lib/analysisResultUtils';
 import { refreshChartByFileId } from '../../services/chartRefreshService';
 import { chartOperationsService } from '../../services/chartOperationsService';
 import { useAutoUpdateCharts } from '../../hooks/useAutoUpdateCharts';
@@ -21,6 +26,7 @@ import { chartDepsSignatureV1 } from '../../lib/chartDeps';
 import { dslDependsOnReferenceDay } from '../../lib/dslDynamics';
 import { ukReferenceDayService } from '../../services/ukReferenceDayService';
 import { getScenarioVisibilityOverlayStyle } from '../../lib/scenarioVisibilityModeStyles';
+import { SCENARIO_PALETTE } from '../../contexts/ScenariosContext';
 import { ScenarioQueryEditModal } from '../modals/ScenarioQueryEditModal';
 import { resolveAnalysisType } from '../../services/analysisTypeResolutionService';
 import { augmentChartKindOptionsForAnalysisType } from '../../services/chartDisplayPlanningService';
@@ -49,7 +55,7 @@ type ChartFileDataV1 = {
    */
   definition?: {
     title?: string;
-    view_mode?: 'chart' | 'cards';
+    view_mode?: ViewMode;
     chart_kind?: string;
     display?: Record<string, unknown>;
     recipe?: {
@@ -95,7 +101,7 @@ export function ChartViewer({ fileId }: EditorProps): JSX.Element {
 
   const chartDef = {
     title: def?.title || '',
-    view_mode: (def?.view_mode || 'chart') as 'chart' | 'cards',
+    view_mode: (def?.view_mode || 'chart') as ViewMode,
     chart_kind: def?.chart_kind,
     display: (def?.display || {}) as Record<string, unknown>,
   };
@@ -144,8 +150,6 @@ export function ChartViewer({ fileId }: EditorProps): JSX.Element {
     return Object.keys(m).length ? m : undefined;
   })();
 
-  const [showChart, setShowChart] = useState(true);
-  const [showResults, setShowResults] = useState(false);
   const isLinked = Boolean(chart?.recipe?.parent?.parent_tab_id ?? chart?.source?.parent_tab_id);
   const isStale = (() => {
     if (!chart) return false;
@@ -185,11 +189,35 @@ export function ChartViewer({ fileId }: EditorProps): JSX.Element {
     }
   }, [data, fileId]);
 
-  const handleDisplayChange = useCallback((key: string, value: any) => {
+  // Primary expression — driven by definition.view_mode, falls back to 'chart'.
+  const [viewMode, setViewMode] = useState<ViewMode>(chartDef.view_mode);
+  // Sync when chartDef.view_mode changes externally (e.g. settings modal).
+  React.useEffect(() => { setViewMode(chartDef.view_mode); }, [chartDef.view_mode]);
+  const availableExpressions = useMemo(() => getAvailableExpressions(analysisResult), [analysisResult]);
+
+  const handleViewModeChange = useCallback((mode: ViewMode) => {
+    setViewMode(mode);
+    void updateChartFile((d) => {
+      if (!d.definition) d.definition = {};
+      d.definition.view_mode = mode;
+    });
+  }, [updateChartFile]);
+
+  // Filtered result for cards/table: only visible scenarios, patched metadata
+  const expressionResult = useMemo(
+    () => filterResultForScenarios(analysisResult, scenarioIds, scenarioMetaById),
+    [analysisResult, scenarioIds, scenarioMetaById],
+  );
+
+  const handleDisplayChange = useCallback((keyOrBatch: string | Record<string, any>, value?: any) => {
     void updateChartFile((d) => {
       if (!d.definition) d.definition = {};
       if (!d.definition.display) d.definition.display = {};
-      d.definition.display[key] = value;
+      if (typeof keyOrBatch === 'object') {
+        Object.assign(d.definition.display, keyOrBatch);
+      } else {
+        d.definition.display[keyOrBatch] = value;
+      }
     });
   }, [updateChartFile]);
 
@@ -203,6 +231,20 @@ export function ChartViewer({ fileId }: EditorProps): JSX.Element {
       }
     });
   }, [updateChartFile, effectiveChartKind, chartDef.view_mode]);
+
+  const handleChartKindChange = useCallback((kind: string | undefined) => {
+    void updateChartFile((d) => {
+      if (!d.definition) d.definition = {};
+      d.definition.chart_kind = kind;
+    });
+  }, [updateChartFile]);
+
+  const handleAnalysisTypeChange = useCallback((typeId: string) => {
+    void updateChartFile((d) => {
+      const recipe = d.definition?.recipe || d.recipe;
+      if (recipe?.analysis) recipe.analysis.analysis_type = typeId;
+    }, { recompute: true });
+  }, [updateChartFile]);
 
   const analyticsDsl = defRecipe?.analysis?.analytics_dsl || defRecipe?.analysis?.query_dsl || '';
   const analysisType = defRecipe?.analysis?.analysis_type || '';
@@ -223,6 +265,19 @@ export function ChartViewer({ fileId }: EditorProps): JSX.Element {
     const item = scenarioLayerItems.find((entry) => entry.id === id);
     return getScenarioVisibilityOverlayStyle(item?.visibilityMode);
   }, [scenarioLayerItems]);
+
+  const handleAddScenario = useCallback(() => {
+    void updateChartFile((d) => {
+      const recipe = d.definition?.recipe || d.recipe;
+      if (!recipe) return;
+      if (!recipe.scenarios) recipe.scenarios = [];
+      const usedColours = new Set(recipe.scenarios.map((s: any) => s.colour));
+      const colour = SCENARIO_PALETTE.find(c => !usedColours.has(c)) || SCENARIO_PALETTE[recipe.scenarios.length % SCENARIO_PALETTE.length];
+      const id = `scenario_${Date.now()}`;
+      const name = new Date().toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+      recipe.scenarios.push({ scenario_id: id, name, colour, effective_dsl: '', visibility_mode: 'f+e' });
+    }, { recompute: true });
+  }, [updateChartFile]);
 
   const [editingScenarioId, setEditingScenarioId] = useState<string | null>(null);
 
@@ -258,7 +313,7 @@ export function ChartViewer({ fileId }: EditorProps): JSX.Element {
         } else {
           disp.hidden_scenarios = [...hidden, id];
         }
-      }, { recompute: true }),
+      }),
       onCycleMode: (id: string) => void updateChartFile((d) => {
         const s = getRecipeScenarios(d).find((s: any) => s.scenario_id === id);
         if (s) s.visibility_mode = s.visibility_mode === 'f+e' ? 'f' : s.visibility_mode === 'f' ? 'e' : 'f+e';
@@ -292,13 +347,48 @@ export function ChartViewer({ fileId }: EditorProps): JSX.Element {
     db.files.get(parentFileId).then((f: any) => { if (f?.data) setParentGraph(f.data); });
   }, [parentFileId]);
 
-  // Resolve available analyses from parent graph
+  // Resolve available analyses from parent graph (eagerly, for toolbar dropdown)
   const visibleScenarioCount = scenarioLayerItems.filter(i => i.visible).length || 1;
   React.useEffect(() => {
-    if (!parentGraph || !showSettings) return;
+    if (!parentGraph) return;
     resolveAnalysisType(parentGraph, analyticsDsl || undefined, visibleScenarioCount)
       .then(({ availableAnalyses: resolved }) => setAvailableAnalyses(resolved));
-  }, [parentGraph, analyticsDsl, visibleScenarioCount, showSettings]);
+  }, [parentGraph, analyticsDsl, visibleScenarioCount]);
+
+  // Auto-switch analysis type when the current one becomes unavailable
+  // (e.g. bridge requires 2 visible scenarios — hiding one invalidates it).
+  // Tracks what we switched away from so we can restore when it becomes valid again.
+  const autoSwitchRef = React.useRef<{ from: string; to: string } | null>(null);
+  React.useEffect(() => {
+    if (!availableAnalyses.length || !analysisType) return;
+
+    // If user manually changed the type after an auto-switch, clear the restore state
+    if (autoSwitchRef.current && analysisType !== autoSwitchRef.current.to) {
+      autoSwitchRef.current = null;
+    }
+
+    const stillValid = availableAnalyses.some(a => a.id === analysisType);
+
+    if (stillValid) {
+      // Restore the original type if it's available again (e.g. re-showing a hidden scenario)
+      if (autoSwitchRef.current) {
+        const canRestore = availableAnalyses.some(a => a.id === autoSwitchRef.current!.from);
+        if (canRestore) {
+          const restoreId = autoSwitchRef.current.from;
+          autoSwitchRef.current = null;
+          handleAnalysisTypeChange(restoreId);
+        }
+      }
+      return;
+    }
+
+    // Current type no longer valid — auto-switch to primary
+    const primary = availableAnalyses.find(a => a.is_primary) || availableAnalyses[0];
+    if (primary) {
+      autoSwitchRef.current = { from: analysisType, to: primary.id };
+      handleAnalysisTypeChange(primary.id);
+    }
+  }, [availableAnalyses, analysisType, handleAnalysisTypeChange]);
 
   // IMPORTANT: measure a container whose height is driven by the tab viewport (fixed),
   // not by the content we render inside it. Measuring a content-sized element can create
@@ -333,104 +423,74 @@ export function ChartViewer({ fileId }: EditorProps): JSX.Element {
         background: 'var(--bg-secondary)',
       }}
     >
-      <div style={{ padding: 12, paddingBottom: 8 }}>
-        <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, flexWrap: 'wrap', minWidth: 0 }}>
-          <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--text-primary)' }}>{chartDef.title}</div>
-          <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{chart.created_at_uk}</div>
-          <div style={{ fontSize: 11, padding: '2px 6px', borderRadius: 999, border: '1px solid var(--border-primary)', background: 'var(--bg-primary)', color: 'var(--text-primary)', display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-            {isLinked ? <><Link2 size={12} /> Linked</> : <><Pin size={12} /> Pinned</>}
-          </div>
-          {!autoUpdatePolicy.enabled && isStale ? (
-            <div style={{ fontSize: 11, padding: '2px 6px', borderRadius: 999, border: '1px solid var(--color-warning)', background: 'var(--color-warning-bg)', color: 'var(--color-warning)' }}>
-              Stale
-            </div>
-          ) : null}
-          <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-            {chart.source?.query_dsl ? (
-              <div style={{ fontSize: 12, color: 'var(--text-secondary)', maxWidth: 520, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 120, flex: '1 1 320px' }} title={chart.source.query_dsl}>
-                {chart.source.query_dsl}
-              </div>
-            ) : null}
-            <button
-              type="button"
-              className="chart-viewer-btn"
-              onClick={() => {
-                void refreshChartByFileId({ chartFileId: fileId });
-              }}
-              title="Refresh chart"
-            >
-              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-                <RefreshCw size={14} />
-                Refresh
-              </span>
-            </button>
-            <button
-              type="button"
-              className="chart-viewer-btn"
-              onClick={() => {
-                void chartOperationsService.disconnectChart({ chartFileId: fileId });
-              }}
-              disabled={!isLinked}
-              style={!isLinked ? { opacity: 0.5, cursor: 'not-allowed' } : undefined}
-              title={isLinked ? 'Disconnect (pin) this chart' : 'Already pinned'}
-            >
-              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-                <Unlink2 size={14} />
-                Disconnect
-              </span>
-            </button>
-            <button
-              type="button"
-              className={`chart-viewer-btn${showChart ? ' active' : ''}`}
-              onClick={() => setShowChart(v => !v)}
-              title={showChart ? 'Hide chart' : 'Show chart'}
-            >
-              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-                {showChart ? <EyeOff size={14} /> : <Eye size={14} />}
-                {showChart ? 'Hide chart' : 'Show chart'}
-              </span>
-            </button>
-            <button
-              type="button"
-              className={`chart-viewer-btn${showResults ? ' active' : ''}`}
-              onClick={() => setShowResults(v => !v)}
-              title={showResults ? 'Hide results' : 'Show results'}
-            >
-              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-                <Table size={14} />
-                {showResults ? 'Hide results' : 'Show results'}
-              </span>
-            </button>
-            <button
-              type="button"
-              className="chart-viewer-btn"
-              onClick={() => {
-                const { filename, csv } = analysisResultToCsv(analysisResult);
-                downloadTextFile({ filename, content: csv, mimeType: 'text/csv' });
-              }}
-              title="Download CSV"
-            >
-              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-                <Download size={14} />
-                Download CSV
-              </span>
-            </button>
-            <button
-              type="button"
-              className="chart-viewer-btn"
-              onClick={() => setShowSettings(true)}
-              title="Chart settings"
-            >
-              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-                <Settings size={14} />
-                Settings
-              </span>
-            </button>
-          </div>
+      {/* Minimal header: title, metadata badges, view toggles, settings */}
+      <div style={{ padding: '8px 12px', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', flexShrink: 0 }}>
+        <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--text-primary)' }}>{chartDef.title}</div>
+        <div style={{ fontSize: 11, color: 'var(--text-secondary)' }}>{chart.created_at_uk}</div>
+        <div style={{ fontSize: 11, padding: '1px 6px', borderRadius: 999, border: '1px solid var(--border-primary)', background: 'var(--bg-primary)', color: 'var(--text-primary)', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+          {isLinked ? <><Link2 size={11} /> Linked</> : <><Pin size={11} /> Pinned</>}
         </div>
+        {analyticsDsl && (
+          <div style={{ fontSize: 11, padding: '1px 6px', borderRadius: 999, border: '1px solid var(--border-primary)', background: 'var(--bg-primary)', color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 300 }} title={analyticsDsl}>
+            {analyticsDsl}
+          </div>
+        )}
+        {!autoUpdatePolicy.enabled && isStale ? (
+          <div style={{ fontSize: 11, padding: '1px 6px', borderRadius: 999, border: '1px solid var(--color-warning)', background: 'var(--color-warning-bg)', color: 'var(--color-warning)' }}>
+            Stale
+          </div>
+        ) : null}
+        {/* Refresh: manual recompute for pinned charts */}
+        <button
+          type="button"
+          className="chart-viewer-btn"
+          onClick={() => refreshChartByFileId({ chartFileId: fileId })}
+          title="Refresh"
+        >
+          <RefreshCw size={13} />
+        </button>
+        <span style={{ flex: 1 }} />
+        {/* View mode switcher */}
+        <span style={{ display: 'inline-flex', gap: 2 }}>
+          {availableExpressions.map(mode => {
+            const Icon = mode === 'chart' ? BarChart3 : mode === 'cards' ? LayoutGrid : Table2;
+            const label = mode === 'chart' ? 'Chart' : mode === 'cards' ? 'Cards' : 'Table';
+            return (
+              <button
+                key={mode}
+                type="button"
+                className={`chart-viewer-btn${mode === viewMode ? ' active' : ''}`}
+                onClick={() => handleViewModeChange(mode)}
+                title={label}
+              >
+                <Icon size={13} />
+              </button>
+            );
+          })}
+        </span>
+        {/* Download CSV */}
+        <button
+          type="button"
+          className="chart-viewer-btn"
+          onClick={() => {
+            const { filename, csv } = analysisResultToCsv(analysisResult);
+            downloadTextFile({ content: csv, filename, mimeType: 'text/csv' });
+          }}
+          title="Download CSV"
+        >
+          <Download size={13} />
+        </button>
+        <button
+          type="button"
+          className="chart-viewer-btn"
+          onClick={() => setShowSettings(true)}
+          title="Advanced settings"
+        >
+          <Settings size={13} />
+        </button>
       </div>
 
-      {/* Chart properties modal -- mirrors canvas analysis properties panel (Custom mode) */}
+      {/* Advanced settings modal (DSL editing, scenario management, analysis type) */}
       {showSettings && (
         <div className="modal-overlay" onClick={() => setShowSettings(false)}>
           <div className="modal-container" style={{ maxWidth: 520, maxHeight: '85vh', overflow: 'auto' }} onClick={e => e.stopPropagation()}>
@@ -497,7 +557,7 @@ export function ChartViewer({ fileId }: EditorProps): JSX.Element {
                 </div>
               </CollapsibleSection>
 
-              {/* Section 2: Scenarios (Custom mode -- chart tab always owns its scenarios) */}
+              {/* Section 2: Scenarios */}
               <CollapsibleSection title="Scenarios" defaultOpen={scenarioLayerItems.length > 0}>
                 <div className="property-group" style={{ padding: '4px 12px 8px' }}>
                   {scenarioLayerItems.length > 0 ? (
@@ -514,35 +574,11 @@ export function ChartViewer({ fileId }: EditorProps): JSX.Element {
                 </div>
               </CollapsibleSection>
 
-              {/* Scenario DSL edit modal */}
-              {editingScenarioId && editingScenario && (
-                <ScenarioQueryEditModal
-                  isOpen={true}
-                  scenarioName={editingScenario.name || editingScenarioId}
-                  currentDSL={editingScenario.effective_dsl || ''}
-                  inheritedDSL={analyticsDsl}
-                  onSave={(newDSL) => {
-                    void updateChartFile((d) => {
-                      const recipe = d.definition?.recipe || d.recipe;
-                      const s = recipe?.scenarios?.find((s: any) => s.scenario_id === editingScenarioId);
-                      if (s) s.effective_dsl = newDSL;
-                    }, { recompute: true });
-                    setEditingScenarioId(null);
-                  }}
-                  onClose={() => setEditingScenarioId(null)}
-                />
-              )}
-
               {/* Section 3: Analysis Type */}
               <AnalysisTypeSection
                 availableAnalyses={availableAnalyses}
                 selectedAnalysisId={analysisType || null}
-                onSelect={(typeId) => {
-                  void updateChartFile((d) => {
-                    const recipe = d.definition?.recipe || d.recipe;
-                    if (recipe?.analysis) recipe.analysis.analysis_type = typeId;
-                  }, { recompute: true });
-                }}
+                onSelect={handleAnalysisTypeChange}
                 defaultOpen={false}
               />
 
@@ -575,42 +611,31 @@ export function ChartViewer({ fileId }: EditorProps): JSX.Element {
                 onDisplayChange={handleDisplayChange}
                 onClearAllOverrides={handleClearAllDisplayOverrides}
               />
-
-              {/* Section 5: Actions */}
-              <CollapsibleSection title="Actions" defaultOpen={true}>
-                <div className="property-group" style={{ display: 'flex', flexDirection: 'column', gap: 4, padding: '4px 12px 8px' }}>
-                  <button
-                    className="property-action-button"
-                    style={{ padding: '6px 12px', fontSize: 12, cursor: 'pointer', border: '1px solid var(--border-primary)', borderRadius: 4, background: 'transparent' }}
-                    onClick={() => { void refreshChartByFileId({ chartFileId: fileId }); setShowSettings(false); }}
-                  >
-                    Refresh
-                  </button>
-                  <button
-                    className="property-action-button"
-                    style={{ padding: '6px 12px', fontSize: 12, cursor: 'pointer', border: '1px solid var(--border-primary)', borderRadius: 4, background: 'transparent' }}
-                    onClick={() => {
-                      const { filename, csv } = analysisResultToCsv(analysisResult);
-                      if (csv) downloadTextFile({ filename, content: csv, mimeType: 'text/csv' });
-                    }}
-                  >
-                    Download CSV
-                  </button>
-                  <button
-                    className="property-action-button"
-                    style={{ padding: '6px 12px', fontSize: 12, cursor: 'pointer', border: '1px solid var(--border-primary)', borderRadius: 4, background: 'transparent' }}
-                    disabled={!isLinked}
-                    onClick={() => { void chartOperationsService.disconnectChart({ chartFileId: fileId }); }}
-                  >
-                    Disconnect
-                  </button>
-                </div>
-              </CollapsibleSection>
             </div>
           </div>
         </div>
       )}
 
+      {/* Scenario DSL edit modal (top-level so it works from both toolbar popover and settings modal) */}
+      {editingScenarioId && editingScenario && (
+        <ScenarioQueryEditModal
+          isOpen={true}
+          scenarioName={editingScenario.name || editingScenarioId}
+          currentDSL={editingScenario.effective_dsl || ''}
+          inheritedDSL={analyticsDsl}
+          onSave={(newDSL) => {
+            void updateChartFile((d) => {
+              const recipe = d.definition?.recipe || d.recipe;
+              const s = recipe?.scenarios?.find((s: any) => s.scenario_id === editingScenarioId);
+              if (s) s.effective_dsl = newDSL;
+            }, { recompute: true });
+            setEditingScenarioId(null);
+          }}
+          onClose={() => setEditingScenarioId(null)}
+        />
+      )}
+
+      {/* Chart + results area */}
       <div style={{ flex: 1, minHeight: 0, padding: '0 12px 12px 12px', position: 'relative' }}>
         <div
           className="chart-viewer-content"
@@ -625,40 +650,73 @@ export function ChartViewer({ fileId }: EditorProps): JSX.Element {
             overflow: 'hidden',
           }}
         >
-          {showChart && (
-            <div style={{ flex: showResults ? 3 : 1, minHeight: 0, position: 'relative' }}>
-              <div style={{ position: 'absolute', inset: 0, padding: 10 }}>
-                <AnalysisChartContainer
-                  result={analysisResult}
-                  chartKindOverride={chartDef.chart_kind}
-                  visibleScenarioIds={scenarioIds}
-                  scenarioVisibilityModes={scenarioVisibilityModes}
-                  scenarioMetaById={scenarioMetaById}
-                  height={420}
-                  fillHeight={true}
-                  chartContext="tab"
-                  source={chart.source}
-                  scenarioDslSubtitleById={scenarioDslSubtitleById}
-                  display={chartDef.display}
-                  onDisplayChange={handleDisplayChange}
-                />
-              </div>
+          {/* All view modes go through AnalysisChartContainer — ONE CODEPATH for toolbar */}
+          <div style={{ flex: 1, minHeight: 0, position: 'relative' }}>
+            <div style={{ position: 'absolute', inset: 0 }}>
+              <AnalysisChartContainer
+                result={analysisResult}
+                chartKindOverride={chartDef.chart_kind}
+                visibleScenarioIds={scenarioIds}
+                scenarioVisibilityModes={scenarioVisibilityModes}
+                scenarioMetaById={scenarioMetaById}
+                scenarioDslSubtitleById={scenarioDslSubtitleById}
+                fillHeight
+                chartContext="tab"
+                source={chart.source}
+                display={chartDef.display}
+                onDisplayChange={handleDisplayChange}
+                onChartKindChange={handleChartKindChange}
+                analysisTypeId={analysisType || undefined}
+                availableAnalyses={availableAnalyses}
+                onAnalysisTypeChange={handleAnalysisTypeChange}
+                scenarioLayerItems={scenarioLayerItems}
+                onScenarioToggleVisibility={scenarioCallbacks.onToggleVisibility}
+                onScenarioCycleMode={scenarioCallbacks.onCycleMode}
+                onScenarioColourChange={scenarioCallbacks.onColourChange}
+                onScenarioReorder={scenarioCallbacks.onReorder}
+                onScenarioDelete={scenarioCallbacks.onDelete}
+                onScenarioEdit={scenarioCallbacks.onEdit}
+                getScenarioEditTooltip={scenarioCallbacks.getEditTooltip}
+                getScenarioSwatchOverlayStyle={getSwatchOverlayStyle}
+                onAddScenario={handleAddScenario}
+                viewMode={viewMode}
+                onViewModeChange={handleViewModeChange}
+              >
+                {viewMode === 'cards' ? (
+                  <div style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: 12 }}>
+                    <AnalysisResultCards
+                      result={expressionResult!}
+                      scenarioDslSubtitleById={scenarioDslSubtitleById}
+                      collapsedCards={resolveDisplaySetting(chartDef.display, { key: 'cards_collapsed', defaultValue: [] } as any)}
+                      onCollapsedCardsChange={(collapsed) => handleDisplayChange('cards_collapsed', collapsed)}
+                    />
+                  </div>
+                ) : viewMode === 'table' ? (
+                  <div style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: 12 }}>
+                    <AnalysisResultTable
+                      result={expressionResult!}
+                      fontSize={resolveDisplaySetting(chartDef.display, { key: 'font_size', defaultValue: 'M' } as any)}
+                      striped={resolveDisplaySetting(chartDef.display, { key: 'table_striped', defaultValue: true } as any)}
+                      sortColumn={resolveDisplaySetting(chartDef.display, { key: 'table_sort_column', defaultValue: undefined } as any)}
+                      sortDirection={resolveDisplaySetting(chartDef.display, { key: 'table_sort_direction', defaultValue: 'asc' } as any)}
+                      onSortChange={(col, dir) => {
+                        handleDisplayChange('table_sort_column', col);
+                        handleDisplayChange('table_sort_direction', dir);
+                      }}
+                      hiddenColumns={resolveDisplaySetting(chartDef.display, { key: 'table_hidden_columns', defaultValue: [] } as any)}
+                      onHiddenColumnsChange={(hidden) => handleDisplayChange('table_hidden_columns', hidden)}
+                      columnOrder={resolveDisplaySetting(chartDef.display, { key: 'table_column_order', defaultValue: [] } as any)}
+                      onColumnOrderChange={(order) => handleDisplayChange('table_column_order', order)}
+                      columnWidths={resolveDisplaySetting(chartDef.display, { key: 'table_column_widths', defaultValue: '' } as any)}
+                      onColumnWidthsChange={(widths) => handleDisplayChange('table_column_widths', widths)}
+                    />
+                  </div>
+                ) : undefined}
+              </AnalysisChartContainer>
             </div>
-          )}
-
-          {showResults && (
-            <div style={{ flex: 2, minHeight: 0, overflow: 'auto', padding: 10, borderTop: '1px solid var(--border-primary)' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-                <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-primary)' }}>Results</div>
-                <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>({analysisResult.analysis_name || 'Analysis'})</div>
-              </div>
-              <AnalysisResultCards result={analysisResult} scenarioDslSubtitleById={scenarioDslSubtitleById} />
-            </div>
-          )}
+          </div>
         </div>
       </div>
     </div>
   );
 }
-
-

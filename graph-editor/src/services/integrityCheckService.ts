@@ -44,7 +44,8 @@ type IssueCategory =
   | 'naming'           // Naming inconsistencies
   | 'metadata'         // Metadata issues
   | 'sync'             // Registry vs file content mismatch
-  | 'image';           // Image file issues (missing, orphaned)
+  | 'image'            // Image file issues (missing, orphaned)
+  | 'face-alignment';  // Handle/face validity, direction consistency, geometric plausibility
 
 interface IntegrityIssue {
   fileId: string;
@@ -490,7 +491,8 @@ export class IntegrityCheckService {
         'naming': 0,
         'metadata': 0,
         'sync': 0,
-        'image': 0
+        'image': 0,
+        'face-alignment': 0
       };
       
       for (const issue of issues) {
@@ -2049,6 +2051,249 @@ export class IntegrityCheckService {
         });
       }
     }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Face / Handle Alignment Checks
+    // ─────────────────────────────────────────────────────────────────────────
+
+    this.validateFaceAlignment(graphFileId, nodes, edges, issues);
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Face-alignment validation
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  private static readonly VALID_FACES = new Set(['left', 'right', 'top', 'bottom']);
+  private static readonly VALID_SUFFIXES = new Set(['', 'in', 'out']);
+
+  /**
+   * Parse a handle string into face and direction suffix.
+   * Returns null if the handle is invalid.
+   */
+  private static parseHandle(handle: string): { face: string; suffix: string } | null {
+    const parts = handle.split('-');
+    if (parts.length === 1) {
+      return this.VALID_FACES.has(parts[0]) ? { face: parts[0], suffix: '' } : null;
+    }
+    if (parts.length === 2) {
+      return this.VALID_FACES.has(parts[0]) && this.VALID_SUFFIXES.has(parts[1])
+        ? { face: parts[0], suffix: parts[1] }
+        : null;
+    }
+    return null;
+  }
+
+  /**
+   * Determine the geometrically expected face given the direction vector from source to target.
+   * Returns the primary face (dominant axis).
+   */
+  private static expectedFace(dx: number, dy: number): string {
+    if (Math.abs(dx) > Math.abs(dy)) {
+      return dx > 0 ? 'right' : 'left';
+    }
+    return dy > 0 ? 'bottom' : 'top';
+  }
+
+  /**
+   * Validate face/handle assignments on all edges in a graph.
+   *
+   * Check 1: Handle value validity (error)
+   * Check 2: Handle direction consistency — source handle shouldn't be '-in', target shouldn't be '-out' (warning)
+   * Check 3: Geometric plausibility — handle face should roughly point toward connected node (info)
+   * Check 4: Mixed-direction faces — a single face shouldn't carry both inputs and outputs (info)
+   */
+  private static validateFaceAlignment(
+    graphFileId: string,
+    nodes: any[],
+    edges: any[],
+    issues: IntegrityIssue[]
+  ): void {
+    const nodeByUuid = new Map<string, any>();
+    const nodeByHumanId = new Map<string, any>();
+    for (const node of nodes) {
+      if (node.uuid) nodeByUuid.set(node.uuid, node);
+      if (node.id) nodeByHumanId.set(node.id, node);
+    }
+
+    const resolveNode = (ref: string) => nodeByUuid.get(ref) || nodeByHumanId.get(ref);
+
+    // Track per-node face directions for check 4
+    const faceDirs = new Map<string, Record<string, Set<'in' | 'out'>>>();
+
+    const ensureFaceDirs = (nodeUuid: string) => {
+      if (!faceDirs.has(nodeUuid)) {
+        faceDirs.set(nodeUuid, {
+          left: new Set(), right: new Set(), top: new Set(), bottom: new Set()
+        });
+      }
+      return faceDirs.get(nodeUuid)!;
+    };
+
+    for (let i = 0; i < edges.length; i++) {
+      const edge = edges[i];
+      const edgeLabel = edge.id || edge.uuid?.substring(0, 8) || `edges[${i}]`;
+      const fromHandle: string | undefined = edge.fromHandle;
+      const toHandle: string | undefined = edge.toHandle;
+
+      // ── Check 1 & 2: fromHandle ──
+      if (fromHandle) {
+        const parsed = this.parseHandle(fromHandle);
+        if (!parsed) {
+          issues.push({
+            fileId: graphFileId,
+            type: 'graph',
+            severity: 'error',
+            category: 'face-alignment',
+            field: `edges[${i}].fromHandle`,
+            message: `Edge "${edgeLabel}" has invalid source handle: "${fromHandle}"`,
+            suggestion: 'Use format: "face" or "face-out" (e.g. "right-out", "bottom")',
+            edgeUuid: edge.uuid
+          });
+        } else {
+          // Check 2: source handle should not be '-in'
+          if (parsed.suffix === 'in') {
+            issues.push({
+              fileId: graphFileId,
+              type: 'graph',
+              severity: 'warning',
+              category: 'face-alignment',
+              field: `edges[${i}].fromHandle`,
+              message: `Edge "${edgeLabel}" source handle "${fromHandle}" is marked as input — source handles should be output`,
+              suggestion: `Change to "${parsed.face}-out" or "${parsed.face}"`,
+              edgeUuid: edge.uuid
+            });
+          }
+
+          // Record direction for check 4
+          const fromNode = resolveNode(edge.from);
+          if (fromNode?.uuid) {
+            ensureFaceDirs(fromNode.uuid)[parsed.face].add('out');
+          }
+        }
+      }
+
+      // ── Check 1 & 2: toHandle ──
+      if (toHandle) {
+        const parsed = this.parseHandle(toHandle);
+        if (!parsed) {
+          issues.push({
+            fileId: graphFileId,
+            type: 'graph',
+            severity: 'error',
+            category: 'face-alignment',
+            field: `edges[${i}].toHandle`,
+            message: `Edge "${edgeLabel}" has invalid target handle: "${toHandle}"`,
+            suggestion: 'Use format: "face" or "face-in" (e.g. "left", "top-in")',
+            edgeUuid: edge.uuid
+          });
+        } else {
+          // Check 2: target handle should not be '-out'
+          if (parsed.suffix === 'out') {
+            issues.push({
+              fileId: graphFileId,
+              type: 'graph',
+              severity: 'warning',
+              category: 'face-alignment',
+              field: `edges[${i}].toHandle`,
+              message: `Edge "${edgeLabel}" target handle "${toHandle}" is marked as output — target handles should be input`,
+              suggestion: `Change to "${parsed.face}" or "${parsed.face}-in"`,
+              edgeUuid: edge.uuid
+            });
+          }
+
+          // Record direction for check 4
+          const toNode = resolveNode(edge.to);
+          if (toNode?.uuid) {
+            ensureFaceDirs(toNode.uuid)[parsed.face].add('in');
+          }
+        }
+      }
+
+      // ── Check 3: Geometric plausibility ──
+      if (fromHandle && toHandle) {
+        const fromParsed = this.parseHandle(fromHandle);
+        const toParsed = this.parseHandle(toHandle);
+        const fromNode = resolveNode(edge.from);
+        const toNode = resolveNode(edge.to);
+
+        if (fromParsed && toParsed && fromNode?.layout && toNode?.layout) {
+          const dx = (toNode.layout.x ?? 0) - (fromNode.layout.x ?? 0);
+          const dy = (toNode.layout.y ?? 0) - (fromNode.layout.y ?? 0);
+
+          // Only flag if there's meaningful spatial separation
+          if (Math.abs(dx) > 10 || Math.abs(dy) > 10) {
+            const expectedSource = this.expectedFace(dx, dy);
+            const expectedTarget = this.expectedFace(-dx, -dy);
+
+            // Source face: should roughly face toward target
+            if (fromParsed.face !== expectedSource) {
+              // Check if the face is at least on the correct axis
+              const sameAxis =
+                (['left', 'right'].includes(fromParsed.face) && ['left', 'right'].includes(expectedSource)) ||
+                (['top', 'bottom'].includes(fromParsed.face) && ['top', 'bottom'].includes(expectedSource));
+
+              if (!sameAxis) {
+                const fromLabel = fromNode.id || fromNode.uuid?.substring(0, 8);
+                const toLabel = toNode.id || toNode.uuid?.substring(0, 8);
+                issues.push({
+                  fileId: graphFileId,
+                  type: 'graph',
+                  severity: 'info',
+                  category: 'face-alignment',
+                  field: `edges[${i}].fromHandle`,
+                  message: `Edge "${edgeLabel}" (${fromLabel} → ${toLabel}): source face "${fromParsed.face}" points away from target (expected "${expectedSource}" based on node positions)`,
+                  edgeUuid: edge.uuid,
+                  nodeUuid: fromNode.uuid
+                });
+              }
+            }
+
+            // Target face: should roughly face toward source
+            if (toParsed.face !== expectedTarget) {
+              const sameAxis =
+                (['left', 'right'].includes(toParsed.face) && ['left', 'right'].includes(expectedTarget)) ||
+                (['top', 'bottom'].includes(toParsed.face) && ['top', 'bottom'].includes(expectedTarget));
+
+              if (!sameAxis) {
+                const fromLabel = fromNode.id || fromNode.uuid?.substring(0, 8);
+                const toLabel = toNode.id || toNode.uuid?.substring(0, 8);
+                issues.push({
+                  fileId: graphFileId,
+                  type: 'graph',
+                  severity: 'info',
+                  category: 'face-alignment',
+                  field: `edges[${i}].toHandle`,
+                  message: `Edge "${edgeLabel}" (${fromLabel} → ${toLabel}): target face "${toParsed.face}" points away from source (expected "${expectedTarget}" based on node positions)`,
+                  edgeUuid: edge.uuid,
+                  nodeUuid: toNode.uuid
+                });
+              }
+            }
+          }
+        }
+      }
+    }
+
+    // ── Check 4: Mixed-direction faces ──
+    for (const [nodeUuid, faces] of faceDirs) {
+      const node = nodeByUuid.get(nodeUuid);
+      const nodeLabel = node?.id || nodeUuid.substring(0, 8);
+
+      for (const [face, dirs] of Object.entries(faces)) {
+        if (dirs.has('in') && dirs.has('out')) {
+          issues.push({
+            fileId: graphFileId,
+            type: 'graph',
+            severity: 'info',
+            category: 'face-alignment',
+            field: `node: ${nodeLabel}, face: ${face}`,
+            message: `Node "${nodeLabel}" has both incoming and outgoing edges on "${face}" face`,
+            suggestion: 'Consider separating inputs and outputs to different faces for visual clarity',
+            nodeUuid
+          });
+        }
+      }
+    }
   }
 
   private static validateGraphSemanticEvidence(args: {
@@ -3336,7 +3581,8 @@ export class IntegrityCheckService {
       'naming': '🏷️',
       'metadata': '📎',
       'sync': '🔄',
-      'image': '🖼️'
+      'image': '🖼️',
+      'face-alignment': '🧭'
     };
     return icons[category] || '•';
   }

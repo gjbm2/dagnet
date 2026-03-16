@@ -319,8 +319,11 @@ test.describe('Group C: Post-connect reload', () => {
     await page.waitForTimeout(2000);
     await expect(page.locator(MODAL_SELECTOR)).not.toBeVisible();
 
-    // Now revoke: switch stub to 401 and reload
+    // Now revoke: switch stub to 401 and reload.
+    // Small wait between unroute and re-stub to ensure Playwright fully deregisters
+    // the old handler before the new one is established.
     await page.unroute('https://api.github.com/**');
+    await page.waitForTimeout(200);
     await stubGitHubAPI(page, { authStatus: 401 });
     await page.reload();
 
