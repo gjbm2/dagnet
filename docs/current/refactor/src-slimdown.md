@@ -1,8 +1,8 @@
 ## Src Slimdown Plan (Large File Modularisation)
 
 **Created:** 15-Dec-25
-**Last reviewed:** 13-Mar-26
-**Status:** In progress — Target 2 UM-PR1–PR3 completed 16-Mar-26 (Target 1 completed 13-Mar-26)
+**Last reviewed:** 16-Mar-26
+**Status:** In progress — Phases A, B2–B4, C1 complete; B1 (sync engine) designed and ready for implementation
 
 ---
 
@@ -19,9 +19,9 @@ This document is intended to be the **single source of truth** for the slimdown 
 - **15-Dec-25**: Initial plan created.
 - **14-Jan-26**: Up-front decisions agreed; programme order and PR sequences defined.
 - **13-Mar-26**: Full re-analysis. All targets re-inventoried (significant growth since Jan). New target added (`analysisEChartsService`). Responsibility clusters re-mapped against current code. Test runlists updated. Programme order revised.
-- **13-Mar-26**: Target 1 (`analysisEChartsService`) completed. 3,378-line god file split into 5 modules + 452-line facade. All 47 tests pass. Committed as `4f7536db` on `slimdown/src-modularisation`, merged to `feature/snapshot-db-phase0`.
-- **16-Mar-26**: Target 2 UM-PR1–PR3 (`UpdateManager.ts`) completed. Clusters A, B, G, H, I, J extracted into 6 modules under `updateManager/`. 5,136-line file reduced to 3,621-line facade + 1,706 lines in modules (5,327 total). All 8 mandated test files pass (169 tests). Full suite green (319 files, 4,215 tests, 0 failures). Isomorphic verification gate passed (no browser imports, no `this` captures, Node.js import test OK). UM-PR4–PR6 remain.
-- **16-Mar-26**: Re-verification of Targets 5 and 6 against current file state. Target 5 (`dataOperationsService`) trivial drift (+13 lines, 10,346 actual). Target 6 (`GraphCanvas`) significant drift (+199 lines, 7,134 actual): new `GraphIssuesIndicatorOverlay` sub-component (~140 lines), sync engine grew to ~1,786 lines, creation tools grew to ~796 lines, edge geometry grew to ~440 lines. Cluster line counts updated. GC-PR0 added for overlay extraction.
+- **16-Mar-26**: Target 6 (GraphCanvas) Phase A complete — 5 modules extracted (~1,399 lines), file reduced from 7,134 to 5,671 lines. Target 6 section rewritten with 4-phase decomposition plan: Phase A (pure function extraction, DONE), Phase B (custom hook extraction), Phase C (context menu consolidation + JSX sub-components), Phase D (explicit state machine, deferred). Full ref inventory (27 refs, 4 categories) and architectural constraints documented.
+- **16-Mar-26**: Target 5 `getFromSourceDirect` decomposition proposal added. Typed intermediate representations (compiler-pass architecture) with 6 implementation phases. Structural analysis of why the 5K-line function resists normal decomposition (83 mutable locals, forking control flow, partial-success accumulation). Alternatives considered: FetchContext bag, strategy pattern, event sourcing, mechanical sub-extraction.
+- **16-Mar-26**: Target 6 Phases B2–B4 and C1 completed, reducing GraphCanvas from 5,671 to 3,779 lines. Extracted hooks: `useEdgeRouting` (B2), `useEdgeConnection` (B3), `useCanvasCreation` (B4a), `useLassoSelection` (B4b), `useNodeDrag` (B4c). Extracted component: `CanvasContextMenus` (C1). Phase B4 was split into three focused hooks rather than the originally planned single `useCanvasInteraction`. Phase B1 (sync engine) investigation revealed an implicit state machine across ~10 guard refs; comprehensive design document produced at `docs/current/refactor/b1-sync-engine-design.md` merging original Phase B1 (extraction) and Phase D (state machine formalisation) into a guard API approach. Pre-work investigations resolved 5 open questions: confirmed 1 dead ref (`isInSlowPathRebuildRef`), 1 latent race condition bug (`isDraggingNodeRef` fast-path clear), 2 unnecessary defensive clears, and 1 redundant safety valve. 75-test baseline recorded green. Preparatory cleanup (5 spurious mutation removals) ready for implementation.
 
 ---
 
@@ -57,18 +57,18 @@ This document is intended to be the **single source of truth** for the slimdown 
 
 ---
 
-### Current Inventory (as of 16-Mar-26)
+### Current Inventory (as of 13-Mar-26)
 
 Primary targets (current line counts, with delta from 14-Jan-26 plan):
 
 - **Services**
-  - `graph-editor/src/services/dataOperationsService.ts` — **10,346** (+1,472 / +17%)
+  - `graph-editor/src/services/dataOperationsService.ts` — **10,333** (+1,459 / +16%)
   - `graph-editor/src/services/UpdateManager.ts` — **5,136** (+221 / +4%)
   - `graph-editor/src/services/statisticalEnhancementService.ts` — **3,434** (+328 / +11%)
   - `graph-editor/src/services/integrityCheckService.ts` — **3,589** (+517 / +17%)
-  - `graph-editor/src/services/analysisEChartsService.ts` — **452** (facade; was 3,378; modularised 13-Mar-26)
+  - `graph-editor/src/services/analysisEChartsService.ts` — **3,378** (NEW — did not exist in Jan plan)
 - **UI**
-  - `graph-editor/src/components/GraphCanvas.tsx` — **7,134** (+1,634 / +30%)
+  - `graph-editor/src/components/GraphCanvas.tsx` — **5,671** (down from 7,134 after Phase A extraction; originally 5,500 in Jan)
   - `graph-editor/src/components/PropertiesPanel.tsx` — **3,667** (+849 / +30%)
   - `graph-editor/src/components/edges/ConversionEdge.tsx` — **2,955** (−137 / −4%)
 
@@ -78,7 +78,7 @@ Secondary candidates (only after the above are stable):
 - `graph-editor/src/components/editors/GraphEditor.tsx` — **2,451** (+207 / +9%)
 - `graph-editor/src/components/QueryExpressionEditor.tsx` — **2,318** (+186 / +9%)
 
-**Total primary target surface area: ~36,501 lines** (down from ~39,427 after Target 1 completion; originally ~30,469 in Jan).
+**Total primary target surface area: ~39,427 lines** (up from ~30,469 in Jan).
 
 ---
 
@@ -169,7 +169,7 @@ Execute in this order. Rationale for changes from Jan noted in brackets.
 3. `integrityCheckService.ts` [moved up from #4; new check categories are self-contained; validateGraph() monolith is a clear extraction target]
 4. `statisticalEnhancementService.ts` [unchanged priority; topology helpers extractable, but 1,454-line orchestrator is high risk]
 5. `dataOperationsService.ts` [moved from #2 to #5; grew by 1,459 lines; 900-line closure makes extraction hardest; benefits from earlier targets reducing cognitive load]
-6. `GraphCanvas.tsx` [moved from #5 to #6; grew 26% but many clusters are already in canvas/ directory]
+6. `GraphCanvas.tsx` [IN PROGRESS — reduced from 7,134 to 3,779 lines; Phases A, B2–B4, C1 complete; B1 (sync engine, ~1,790 lines) designed and ready for implementation]
 7. `PropertiesPanel.tsx` [unchanged priority; grew 30% but CanvasAnalysisPropertiesSection is already self-contained]
 8. `ConversionEdge.tsx` [unchanged; shrank slightly; existing helpers already extracted]
 9. Secondary candidates (only after the above are stable)
@@ -182,7 +182,7 @@ For each target below, follow the same internal sequencing per Decision 3.
 
 ---
 
-#### Target 1 — `analysisEChartsService.ts` (3,378 → 452 lines) — COMPLETED 13-Mar-26
+#### Target 1 — `analysisEChartsService.ts` (3,378 lines) — NEW
 
 **Current clusters:**
 - A: Theming & common display settings (~220 lines)
@@ -221,7 +221,7 @@ For each target below, follow the same internal sequencing per Decision 3.
 
 ---
 
-#### Target 2 — `UpdateManager.ts` (5,136 → 3,621 lines after UM-PR1–PR3)
+#### Target 2 — `UpdateManager.ts` (5,136 lines)
 
 **Current clusters (updated):**
 - A: Types & contracts (~115 lines)
@@ -243,9 +243,9 @@ For each target below, follow the same internal sequencing per Decision 3.
 
 **PR sequence:**
 
-- **UM-PR1 (types + pure helpers)**: Extract Clusters A, B, I, J into `updateManager/types.ts` (122 lines), `updateManager/roundingUtils.ts` (27 lines), `updateManager/nestedValueAccess.ts` (104 lines), `updateManager/auditLog.ts` (43 lines). **DONE 16-Mar-26** — 169/169 tests pass. `getNestedValue`/`setNestedValue` confirmed stateless.
-- **UM-PR2 (mapping configuration)**: Extract Cluster H into `updateManager/mappingConfigurations.ts` (1,265 lines). Module-level `MAPPING_CONFIGURATIONS` constant replaces class-level lazy-init static cache. Also exports `getMappingKey()`. **DONE 16-Mar-26** — 169/169 tests pass. Mapping init/caching semantics confirmed equivalent (eager-init singleton vs lazy-init static).
-- **UM-PR3 (mapping engine)**: Extract Cluster G (`applyMappings()`) into `updateManager/mappingEngine.ts` (145 lines). Direction handlers remain in `UpdateManager.ts` and call the import. **DONE 16-Mar-26** — 169/169 tests pass. Isomorphic verification gate passed: no browser imports, no `this` captures, Node.js import test OK (applyMappings runs in plain Node with correct results).
+- **UM-PR1 (types + pure helpers)**: Extract Clusters A, B, C, I, J, N into `updateManager/types.ts`, `updateManager/roundingUtils.ts`, `updateManager/nestedValueAccess.ts`, `updateManager/auditLog.ts`.
+- **UM-PR2 (mapping configuration)**: Extract Cluster H into `updateManager/mappingConfigurations.ts`. This is the largest single cluster (~1,200 lines) and is purely declarative.
+- **UM-PR3 (mapping engine + operations)**: Extract Cluster G (`applyMappings()` and all operation implementations) into `updateManager/mappingEngine.ts`.
 - **UM-PR4 (edge rebalancing + conditional probability)**: Extract Clusters D, E, K into `updateManager/edgeRebalancing.ts` and `updateManager/conditionalProbability.ts`.
 - **UM-PR5 (graph mutations + copy/paste)**: Extract Clusters L, M into `updateManager/graphMutations.ts` and `updateManager/clipboardOperations.ts`.
 - **UM-PR6 (facade tidy-up)**: Reduce `UpdateManager.ts` to direction handlers (Cluster F) + class shell that composes extracted modules.
@@ -363,37 +363,158 @@ For each target below, follow the same internal sequencing per Decision 3.
 
 ---
 
-#### Target 5 — `dataOperationsService.ts` (10,346 lines)
+#### Target 5 — `dataOperationsService.ts` (10,333 → 713 lines — 93% reduction)
 
-**Current clusters (updated):**
-- A: Batch mode & toast management (~110 lines)
-- B: Logging & formatting helpers (~55 lines)
-- C: Query compilation & DSL processing (~50 lines)
-- D: Query signature computation & validation (~295 lines)
-- E: As-at (asat) historical query support (~570 lines) — NEW since Jan
-- F: File→graph sync (GET paths) — getParameterFromFile, getCaseFromFile, getNodeFromFile (~2,600 lines)
-- G: Graph→file sync (PUT paths) — putParameterToFile, putCaseToFile, putNodeToFile (~830 lines)
-- H: Source data fetching (versioned path) — getFromSource orchestrator (~280 lines)
-- I: Core data fetch — `getFromSourceDirect()` (~4,700 lines) — **45% of file, 900-line closure, highest-risk extraction in the codebase**
-- J: Evidence & forecast scalar computation (~835 lines) — NEW since Jan
-- K: Batch operations (~95 lines)
-- L: Cache & settings UI (~150 lines)
+**Status: DOS-PR1 through DOS-PR8 COMPLETE (16-Mar-26)**
 
-**Extraction directory:** `graph-editor/src/services/dataOperations/`
+All planned extractions are done. The facade is now 713 lines containing only `getFromSource` (versioned orchestrator, ~280 lines), `batchGetFromSource` (~95 lines), `extractSheetsUpdateDataForEdge` (~165 lines), delegate properties, re-exports, and the singleton. Zero TypeScript errors.
 
-**PR sequence:**
+**Extracted modules** (in `graph-editor/src/services/dataOperations/`):
 
-- **DOS-PR1 (types + small helpers)**: Extract Clusters A, B, C into `dataOperations/batchMode.ts`, `dataOperations/logHelpers.ts`, `dataOperations/queryCompiler.ts`.
-- **DOS-PR2 (signature computation)**: Extract Cluster D into `dataOperations/querySignature.ts`. `computeQuerySignature()` is already a standalone exported function.
-- **DOS-PR3 (asat query support)**: Extract Cluster E into `dataOperations/asatQuerySupport.ts`. Includes `selectQuerySignatureForAsat()`, `convertVirtualSnapshotToTimeSeries()`, `fireAsatWarnings()`, `buildDenseSnapshotRowsForDbWrite()`.
-- **DOS-PR4 (evidence + forecast scalars)**: Extract Cluster J into `dataOperations/evidenceForecastScalars.ts`. `addEvidenceAndForecastScalars()` is already test-exposed.
-- **DOS-PR5 (file↔graph sync)**: Extract Clusters F, G into `dataOperations/fileToGraphSync.ts` and `dataOperations/graphToFileSync.ts`.
-- **DOS-PR6 (cache & settings)**: Extract Cluster L into `dataOperations/cacheManagement.ts`.
-- **DOS-PR7 (facade tidy-up)**: Reduce `dataOperationsService.ts` to Clusters H, I, K (versioned fetch orchestration, core DAS execution, batch operations) + re-exports. Do NOT attempt to split the `getFromSourceDirect()` closure — the state management risk outweighs the readability benefit at this stage.
+| Module | Lines | Contents | PR |
+|--------|-------|----------|----|
+| `getFromSourceDirect.ts` | 5,025 | Core DAS fetch — the single largest function in the codebase | DOS-PR8 |
+| `fileToGraphSync.ts` | 2,242 | GET paths: `getParameterFromFile`, `getCaseFromFile`, `getNodeFromFile` | DOS-PR5 |
+| `evidenceForecastScalars.ts` | 861 | `addEvidenceAndForecastScalars` | DOS-PR4 |
+| `graphToFileSync.ts` | 525 | PUT paths: `putParameterToFile`, `putCaseToFile`, `putNodeToFile` | DOS-PR5 |
+| `querySignature.ts` | 351 | `computeQuerySignature`, `extractContextKeysFromConstraints` | DOS-PR2 |
+| `asatQuerySupport.ts` | 281 | asat() historical query support | DOS-PR3 |
+| `cacheManagement.ts` | 158 | `openConnectionSettings`, `openForecastingSettings`, `clearCache` | DOS-PR6 |
+| `batchMode.ts` | 137 | Batch mode & toast management | DOS-PR1 |
+| `logHelpers.ts` | 126 | Formatting helpers, `compileExcludeQuery` | DOS-PR1 |
+| `types.ts` | 89 | Shared types (`CacheAnalysisResult`, `GetFromSourceResult`, etc.) | DOS-PR5/8 |
+| `applyChanges.ts` | 86 | Field-path change applicator | DOS-PR5 |
 
-**Stop/gates:**
-- After DOS-PR3: explicitly confirm asat() routing, signature selection, and snapshot DB write semantics are unchanged.
-- After DOS-PR5: explicitly confirm slice/DSL flows, permission copy modes, and signature warning behaviour are unchanged.
+##### Why `getFromSourceDirect` resists decomposition
+
+The function is a single 5,025-line scope with **83 mutable `let` declarations** that thread through sequential phases. Each phase reads and mutates variables declared in earlier phases, creating an implicit dataflow graph invisible to the type system.
+
+Three structural forces lock the code together:
+
+1. **Sequential mutation of shared locals.** Variables like `queryPayload` (line 689, built across ~600 lines), `querySignature` (line 1751, consumed 2,000 lines later during cache write), and `updateData` (line 2442, accumulated across the entire DAS response) are written in one phase and read in a distant later phase. Extracting any single phase requires passing 10–15 inputs and producing 5–10 outputs — the extracted function signature becomes as hard to understand as the inline code.
+
+2. **Forking control flow.** The function forks at line 310 into an `asat()` path (snapshot queries) vs the main window/cohort path. These share setup (connection resolution, edge lookup, DSL parsing) and teardown (graph update, file write, toast). Extracting one fork still requires passing the entire shared context.
+
+3. **Partial-success accumulation.** Variables like `didPersistAnyGap`, `hadGapFailureAfterSomeSuccess`, `failedGapIndex` (lines 2584–2587) track partial success across a gap-fill loop. The error handling at the end needs to know what happened in every prior phase, creating long-range data dependencies.
+
+**Why normal refactoring patterns fail here:**
+
+- **Extract method**: each phase reads/writes 10–20 locals from the enclosing scope — massive parameter lists or a god-object
+- **Strategy pattern**: the three modes (asat / window / cohort) share 80% of setup and teardown — separate strategies would duplicate more than they save
+- **Pipeline/chain**: phases are not independent transforms — phase N mutates state that phase N+2 reads, skipping N+1 — it is a DAG, not a pipeline
+
+##### Proposal: typed intermediate representations (compiler-pass architecture)
+
+**Core insight**: the coupling between phases is *data*, not *control*. The 83 mutable `let` variables are really a set of intermediate representations being built up sequentially. Making them explicit as typed structs is the fundamental unlock.
+
+A compiler does not have one function that lexes, parses, type-checks, and emits. Each pass produces a well-defined IR that the next pass consumes. The same architecture applies here.
+
+**Proposed stage IRs and their contents:**
+
+| Stage | IR name | Produced by | Consumed by | Approximate lines |
+|-------|---------|-------------|-------------|-------------------|
+| 0. Preamble | `FetchIntent` | Destructured from `options` + graph lookup | All subsequent stages | ~180 (lines 157–340) |
+| 1. asat() fork | Early return (no IR) | — | — | ~195 (lines 308–505) |
+| 2. Connection | `ResolvedConnection` | Connection resolution | Query building, DAS execution | ~175 (lines 506–680) |
+| 3. Query | `QueryPlan` | DSL parsing, `buildDslFromEdge`, n_query construction | Cache analysis, DAS execution, signature | ~870 (lines 688–1560) |
+| 4. Window/cache | `FetchPlan` | Incremental fetch, refetch policy, cache analysis | DAS execution loop | ~680 (lines 1620–2300) |
+| 5. Execution | `ExecutionResult` | DAS runner, gap loop, per-gap persistence | Landing | ~1,500 (lines 2430–3930) |
+| 6. Landing | `GetFromSourceResult` | Graph update, file write, toast, session log | Caller | ~1,095 (lines 3930–5025) |
+
+**What each IR contains** (the mutable locals it replaces):
+
+- **`FetchIntent`** — Immutable. The original request plus resolved entity references: `objectType`, `objectId`, `targetId`, `graph`, `setGraph`, `paramSlot`, `conditionalIndex`, `writeToFile`, `bustCache`, `currentDSL`, `targetSlice`, `logOpId`, `retrievalBatchAt`, `retrievalBatchAtISO`, `sliceDSLForLog`, `sliceDimensionsForLog`, `sliceLabelForLog`, `entityLabel`, `targetEntity`, `errorResult`, `fetchStats` (initial), `warnIfQueryIntentDropped`, `shouldThrowForAtomicityRateLimit`.
+
+- **`ResolvedConnection`** — `connectionName`, `connectionString`. Plus the resolved persisted config source (graph vs file) so downstream phases know provenance.
+
+- **`QueryPlan`** — `queryPayload`, `eventDefinitions`, `connectionProvider`, `supportsDailyTimeSeries`, `signatureContextKeys`, `edgeForQuerySignature`, `baseQueryPayload` (for dual-query / n_query), `needsDualQuery`, `explicitNQuery`, `nQueryString`, `nQueryIsComposite`, `explicitNQueryWasToOnlyNormalForm`, `explicitNQueryWindowDenomUsesFromCount`, `connectionSupportsNativeVisited`. This is the densest IR — it replaces 15+ mutable locals from the query-building phase.
+
+- **`FetchPlan`** — `requestedWindow`, `requestedCohort`, `actualFetchWindows`, `querySignature`, `shouldSkipFetch`, `refetchPolicy`, `isCohortQuery`, `shouldCheckIncrementalFetch`, `hasOverrideWindows`. Plus the cache analysis callback result.
+
+- **`ExecutionResult`** — `allTimeSeriesData`, `updateData`, `lastResultRaw`, `lastOnsetDeltaDays`, `queryParamsForStorage`, `fullQueryForStorage`, `isComposite`, `queryString`, `didAttemptExternalFetch`, `expectedDaysAttempted`, `didPersistAnyGap`, `hadGapFailureAfterSomeSuccess`, `gapFailureMessage`, `failedGapIndex`, `fetchStats` (final).
+
+- **`GetFromSourceResult`** — Already exists as the return type. No new IR needed.
+
+**The orchestrator becomes ~80 lines:**
+
+The top-level `getFromSourceDirect` function becomes a thin sequencer: construct `FetchIntent`, call each stage function, pass the IR forward, return the result. Each stage function lives in its own file under `dataOperations/pipeline/`. The orchestrator is small enough to read in one screen — you can see the full pipeline at a glance.
+
+**What this approach preserves:**
+
+- **Frozen semantics**: each stage function contains the exact same code that exists today, just wrapped in a function that receives the previous IR and returns the next IR. No logic changes.
+- **Error handling**: the top-level try/catch remains in the orchestrator. Stage functions throw on error (same as today). Partial-success state lives in `ExecutionResult`, not in function-scoped `let` variables.
+- **Session logging**: `logOpId` travels through `FetchIntent`, so all stages can log children to the same operation.
+- **Dynamic imports**: remain where they are (inside stage functions), not hoisted.
+
+**What this approach changes:**
+
+- The 83 mutable `let` declarations become fields on 5 typed interfaces. This is a structural change, not a behavioural one, but it touches nearly every line.
+- Each stage function has a clearly typed input and output. You cannot accidentally read `querySignature` before it has been computed — the type system enforces stage ordering.
+- Individual stages become independently testable: construct a `QueryPlan` directly and test execution without running the entire pipeline.
+
+**Advantages over the `FetchContext` bag:**
+
+The earlier slimdown doc proposed a single `FetchContext` state object to replace the mutable locals. Per-stage IRs are strictly better because:
+
+- A single bag does not enforce ordering — any field is accessible at any point, so you lose the compiler-pass guarantee that data flows forward only
+- Per-stage IRs are self-documenting — reading `FetchPlan` tells you exactly what cache analysis produces, without reading 700 lines
+- Stage boundaries become natural file boundaries, which is the goal of the slimdown
+
+##### Risks and mitigations
+
+| Risk | Severity | Mitigation |
+|------|----------|------------|
+| Large blast radius — touching every line in a 5K-line function | High | Incremental approach: extract one stage at a time, starting from the edges (asat fork, then landing, then connection resolution). Each extraction is a self-contained PR. |
+| Regression in DAS fetch behaviour | High | 18 existing test files (listed below) provide dense coverage of the pipeline. Run the full test list after each stage extraction. |
+| IR types become stale or drift from reality | Medium | IRs are derived mechanically from the current `let` declarations — no invention required. Each field maps 1:1 to an existing mutable local. |
+| Over-abstraction — premature generalisation of stages | Low | Rule: each IR field must correspond to an existing variable. No new fields, no computed properties, no methods on IRs. IRs are plain data objects. |
+| `asat()` fork shares too much context with main path | Low | The asat fork (lines 308–505) is already a self-contained early return. It only reads from `FetchIntent` — it does not need any downstream IR. This is the safest first extraction. |
+
+##### Implementation sequence
+
+**Phase 1 — Define IR types + extract asat fork** (lowest risk)
+- Create `dataOperations/pipeline/types.ts` with `FetchIntent`, `ResolvedConnection`, `QueryPlan`, `FetchPlan`, `ExecutionResult` interfaces
+- Extract asat fork (lines 308–505) into `dataOperations/pipeline/asatFork.ts` — takes `FetchIntent`, returns `GetFromSourceResult | null` (null = continue to main path)
+- Orchestrator calls `asatFork(intent)` and returns early if non-null
+- Run full test list
+
+**Phase 2 — Extract connection resolution + query building**
+- Extract lines 506–680 into `resolveConnection.ts` — takes `FetchIntent`, returns `ResolvedConnection`
+- Extract lines 688–1560 into `buildQueryPlan.ts` — takes `FetchIntent` + `ResolvedConnection`, returns `QueryPlan`
+- Orchestrator now reads: `intent → asatFork → resolveConnection → buildQueryPlan`
+- Run full test list
+
+**Phase 3 — Extract window/cache analysis**
+- Extract lines 1620–2300 into `buildFetchPlan.ts` — takes `FetchIntent` + `QueryPlan`, returns `FetchPlan`
+- This includes incremental fetch calculation, refetch policy, cache analysis callback, query signature computation
+- Run full test list
+
+**Phase 4 — Extract DAS execution loop**
+- Extract lines 2430–3930 into `executeFetch.ts` — takes `FetchIntent` + `ResolvedConnection` + `QueryPlan` + `FetchPlan`, returns `ExecutionResult`
+- This is the largest and most complex stage — includes the gap loop, per-gap persistence, composite query detection, DAS runner invocation
+- Run full test list
+
+**Phase 5 — Extract landing (graph update + file write)**
+- Extract lines 3930–5025 into `landResult.ts` — takes `FetchIntent` + `ExecutionResult` + `QueryPlan`, returns `GetFromSourceResult`
+- This includes the parameter graph update path, case graph update path, conditional_p handling, final toast/logging
+- Run full test list
+
+**Phase 6 — Collapse orchestrator**
+- At this point `getFromSourceDirect.ts` should be ~80–120 lines: destructure options into `FetchIntent`, call each stage, return result
+- Delete the original 5K-line function body
+- Final full test run
+
+Each phase is a single PR. Each PR can be reviewed independently. If any phase reveals unexpected coupling, the work can be paused without leaving the codebase in an inconsistent state — the orchestrator always delegates to the same code, whether it lives inline or in a stage file.
+
+##### Alternatives considered and rejected
+
+**Single `FetchContext` bag** — does not enforce stage ordering; any field accessible at any point; does not create natural file boundaries. This is the degenerate case of the pipeline approach with all IRs collapsed into one type.
+
+**Strategy pattern (mode-first dispatch)** — three mode executors (asat / window / cohort) sharing preparation and teardown. This separates the mode dimension but not the phase dimension. The window and cohort paths share 90%+ of their code (query building, cache analysis, DAS execution); splitting by mode would duplicate 4,000+ lines.
+
+**Event-sourced fetch** — model the pipeline as a sequence of domain events with a reducer. Elegant for partial-success tracking but over-engineered for a graph editor. The existing try/catch + error propagation pattern is simpler and well-tested.
+
+**Mechanical sub-extraction only** (asat fork + connection resolution + n_query construction as standalone functions) — this was the "low-risk" option in the previous plan. It removes ~920 lines but leaves a 4,100-line function with 60+ mutable locals. The structural problem remains unsolved — it just gets marginally smaller.
 
 **Core tests:**
 - `graph-editor/src/services/__tests__/dataOperationsService.test.ts`
@@ -406,8 +527,8 @@ For each target below, follow the same internal sequencing per Decision 3.
 - `graph-editor/src/services/__tests__/dataOperationsService.casePersistedConfigByMode.test.ts`
 - `graph-editor/src/services/__tests__/dataOperationsService.putParameterToFile.metadataOnly.test.ts`
 - `graph-editor/src/services/__tests__/dataOperationsService.putParameterToFile.forceCopyClearsNQuery.test.ts`
-- `graph-editor/src/services/__tests__/dataOperationsService.asatSignatureSelection.test.ts` **(NEW)**
-- `graph-editor/src/services/__tests__/dataOperationsService.asatSliceMatching.test.ts` **(NEW)**
+- `graph-editor/src/services/__tests__/dataOperationsService.asatSignatureSelection.test.ts`
+- `graph-editor/src/services/__tests__/dataOperationsService.asatSliceMatching.test.ts`
 - `graph-editor/src/services/__tests__/versionedFetch.integration.test.ts`
 - `graph-editor/src/services/__tests__/fetchPolicyIntegration.test.ts`
 - `graph-editor/src/services/__tests__/fetchDataService.test.ts`
@@ -419,51 +540,99 @@ For each target below, follow the same internal sequencing per Decision 3.
 - `graph-editor/tests/pipeline-integrity/simple-query-flow.test.ts`
 - `graph-editor/tests/pipeline-integrity/composite-query-flow.test.ts`
 - `graph-editor/tests/identity/signature-consistency.test.ts`
-- `graph-editor/src/services/__tests__/versionedFetchFlow.e2e.test.ts` **(NEW)**
+- `graph-editor/src/services/__tests__/versionedFetchFlow.e2e.test.ts`
 
 ---
 
-#### Target 6 — `GraphCanvas.tsx` (7,134 lines)
+#### Target 6 — `GraphCanvas.tsx` (3,779 lines; originally 7,134 lines)
 
-**Current clusters (re-verified 16-Mar-26):**
-- GraphIssuesIndicatorOverlay (~140 lines) — NEW; self-contained sub-component with own state, effects, JSX (lines 139–278)
-- Core state management (~273 lines)
-- Edge geometry & bundling — `calculateEdgeOffsets()`, `getEdgeSortKey()` (~440 lines)
-- Edge connection & routing — optimal handles, reroute, reconnect (~345 lines)
-- Node & edge CRUD (~206 lines)
-- Canvas objects CRUD — post-its, containers, canvas analyses (~113 lines)
-- Selection & events (~180 lines)
-- Graph↔ReactFlow sync — fast path + slow path (~1,786 lines) — **largest cluster, highest risk, grew significantly**
-- View mode effects, Sankey sizing, what-if recompute (~400 lines)
-- Creation tools — addNode, addPostit, addContainer, addAnalysis (~796 lines)
-- Copy/paste/drag-drop (~253 lines)
-- Context menus (~120 lines)
-- Edge connection handlers — wouldCreateCycle, onEdgeUpdate, onConnect (~314 lines)
-- Shift+Drag lasso selection (~165 lines)
-- Path highlighting + onSelectionChange (~378 lines)
-- Node drag handlers — onNodeDragStart, onNodeDrag, onNodeDragStop (~170 lines)
-- Pan/zoom & decoration management (~135 lines) — atomic restore
-- Snapshot boot tracing (~90 lines)
-- renderEdges useMemo (~64 lines)
-- JSX render tree (~1,015 lines)
+**Architectural context:**
+
+GraphCanvas is a monolithic React component that owns the ReactFlow canvas, bidirectional graph↔ReactFlow sync, all canvas interaction handlers, and the JSX render tree.
+
+The bidirectional sync engine (graph→ReactFlow and ReactFlow→graph reconciliation) is essential complexity, not accidental — graph mutations originate from many locations outside the canvas (PropertiesPanel, data operations, UpdateManager, clipboard, etc.), so the sync must exist. This constraint rules out "controlled ReactFlow" as a simplification strategy.
+
+The decomposition is structured as **encapsulation without architectural change**: custom hooks, JSX sub-components, state consolidation, and a guard API for the sync engine state machine.
 
 **Extraction directory:** `graph-editor/src/components/canvas/` (existing directory)
 
-**PR sequence:**
+**Phase A — Pure function extraction (COMPLETE, 16-Mar-26)**
 
-- **GC-PR0 (overlay extraction)**: Extract `GraphIssuesIndicatorOverlay` into `canvas/GraphIssuesIndicatorOverlay.tsx`. Self-contained sub-component, zero coupling to CanvasInner state — lowest-risk warm-up.
-- **GC-PR1 (edge geometry)**: Extract edge geometry & bundling into `canvas/edgeGeometry.ts`. Pure computations.
-- **GC-PR2 (layout algorithms)**: Extract view mode effects + Sankey sizing into `canvas/layoutAlgorithms.ts`.
-- **GC-PR3 (canvas object CRUD)**: Extract post-it, container, analysis handlers into `canvas/canvasObjectHandlers.ts`. These follow a consistent pattern and are self-contained.
-- **GC-PR4 (creation tools + copy/paste)**: Extract creation tools and clipboard operations into `canvas/creationTools.ts` and `canvas/clipboardOperations.ts`.
-- **GC-PR5 (context menus + edge connection handlers)**: Extract context menu handlers and edge connection handlers into `canvas/contextMenuHandlers.ts` and `canvas/edgeConnectionHandlers.ts`.
-- **GC-PR6 (facade tidy-up)**: Reduce GraphCanvas to core state, Graph↔ReactFlow sync, selection, path highlighting, node drag, pan/zoom, and JSX render. Do NOT extract the sync engine — it is too tightly coupled to React state and refs (and has grown to ~1,786 lines, reinforcing this decision).
+Extracted into standalone modules:
+- `canvas/GraphIssuesIndicatorOverlay.tsx` (148 lines) — self-contained sub-component
+- `canvas/edgeGeometry.ts` (388 lines) — `getEdgeSortKey()`, `calculateEdgeOffsets()`
+- `canvas/layoutAlgorithms.ts` (282 lines) — `computeDagreLayout()`, `computeSankeyLayout()`
+- `canvas/creationTools.ts` (269 lines) — `createNodeInGraph()`, `createNodeFromFileInGraph()`, `createPostitInGraph()`, `createContainerInGraph()`, `createCanvasAnalysisInGraph()`, `buildAddChartPayload()`
+- `canvas/pathHighlighting.ts` (312 lines) — `findAllPaths()`, `topologicalSort()`, `findPathEdges()`, `computeHighlightMetadata()`, `wouldCreateCycle()`
 
-**Stop/gates:**
-- After GC-PR2: explicitly confirm no render-loop or reactivity changes (dependency arrays and state ownership preserved).
-- After GC-PR4: explicitly confirm canvas object creation flows are unchanged (node, post-it, container, analysis).
+Total extracted: ~1,399 lines. GraphCanvas reduced from 7,134 to 5,671 lines. All 18 relevant tests passing. TypeScript clean.
 
-**Core tests:**
+**Phase B — Custom hook extraction (MOSTLY COMPLETE)**
+
+Extract cohesive groups of state + effects + callbacks into custom hooks. Each hook encapsulates its own refs, state, and effects. GraphCanvas becomes a composition root that wires hooks together.
+
+- **GC-B1 (sync engine hook)**: IN PROGRESS — see below. This is the single biggest remaining extraction (~1,790 lines). Full design document at `docs/current/refactor/b1-sync-engine-design.md`.
+
+- **GC-B2 (edge routing hook)**: COMPLETE. Extracted into `canvas/useEdgeRouting.ts`. Owns: `skipNextRerouteRef`, reroute scheduling/debouncing, `performReroute()` logic, Sankey offset application. Returns `{ scheduleReroute, performReroute, setForceReroute }`.
+
+- **GC-B3 (edge connection hook)**: COMPLETE. Extracted into `canvas/useEdgeConnection.ts`. Owns: `onConnect`, `onConnectStart`, `onConnectEnd`, connection validation, cycle detection (calls `wouldCreateCycle` from pathHighlighting). Returns the three ReactFlow connection handler callbacks.
+
+- **GC-B4a (canvas creation hook)**: COMPLETE. Extracted into `canvas/useCanvasCreation.ts`. Owns creation tool wrappers over the extracted pure functions in `creationTools.ts`.
+
+- **GC-B4b (lasso selection hook)**: COMPLETE. Extracted into `canvas/useLassoSelection.ts`. Owns lasso selection state and DOM event handling.
+
+- **GC-B4c (node drag hook)**: COMPLETE. Extracted into `canvas/useNodeDrag.ts`. Owns `isDraggingNodeRef`, `hasNodeMovedRef`, drag start/stop handlers, and snap-to-guide integration.
+
+Note: The originally planned single "GC-B4 (useCanvasInteraction)" hook was split into three focused hooks (B4a–c) during implementation, as the responsibilities were sufficiently distinct.
+
+**Phase B1 — Sync engine extraction + guard formalisation (HIGH RISK, DESIGNED)**
+
+**Design document:** `docs/current/refactor/b1-sync-engine-design.md`
+
+This phase merges the original Phase B1 (sync engine extraction) and Phase D (state machine formalisation). A mechanical extraction without formalisation would just relocate the problem — the implicit state machine would be equally opaque in a new file.
+
+**Current state:** Pre-work investigations complete. The ~10 guard refs form an implicit mutual exclusion protocol with no documented transition table and 5 different setTimeout delay values. Investigation confirmed:
+- `isInSlowPathRebuildRef` is **dead code** (never set to true)
+- Fast-path `isDraggingNodeRef` setTimeout(0) clear is a **latent race condition bug**
+- Edge scaling `isSyncingRef` defensive clear is **unnecessary**
+- `handleDeleteNode`/`handleDeleteEdge` `isSyncingRef` clears are **redundant**
+
+**Proposed approach:** Guard API — named transition functions (`guards.beginSync()`, `guards.endInteraction('drag')`, etc.) that centralise all guard state in one place with single-owner semantics. This replaces the original Phase D proposal (discriminated union for all flags) with a more incremental approach that preserves the existing independent-flag semantics while adding a formal API boundary. The discriminated union remains a possible future refinement once the guard API is stable.
+
+**Implementation sequence:**
+1. Preparatory cleanup — remove 5 spurious mutations (dead code, latent bug, redundant clears), tested individually
+2. Sub-phase 1 — create guard API module (`canvas/syncGuards.ts`), replace raw ref mutations one by one
+3. Sub-phase 2 — extract 9 effects + refs into `canvas/useGraphSync.ts`
+4. Sub-phase 3 — clean up cross-boundary ref access, wire external callers to guard API
+
+**Estimated result after B1:** GraphCanvas drops from ~3,779 to ~1,989 lines.
+
+**Stop/gates for B1:**
+- After preparatory cleanup: user performs manual smoke test (section 4.7 of design doc)
+- After Sub-phase 1: every guard ref mutated only through guard API; dev-mode warnings for illegal transitions
+- After Sub-phase 2: dependency arrays verified unchanged; no render loops; core tests green
+- After Sub-phase 3: no code outside hook directly reads/writes guard refs
+
+**Phase C — Context menu consolidation + JSX sub-components (PARTIALLY COMPLETE)**
+
+- **GC-C1 (context menus)**: COMPLETE. Context menu state consolidated and JSX rendering extracted into `canvas/CanvasContextMenus.tsx`.
+
+- **GC-C2 (JSX sub-components)**: NOT STARTED. Extract distinct regions of the render tree into sub-components that receive props from GraphCanvas:
+  - `canvas/CanvasToolbar.tsx` — toolbar region
+  - `canvas/CanvasMinimap.tsx` — minimap + panel overlays
+  - `canvas/CanvasDialogs.tsx` — modal dialogs (add chart, confirmations)
+  These are presentational extractions — they receive props/callbacks and render JSX. No state ownership changes.
+
+**Stop/gates for C2:**
+- After GC-C2: confirm toolbar, minimap, and dialog rendering is visually identical.
+
+**Estimated result after all phases:** GraphCanvas drops to ~1,200–1,500 lines — essentially a composition root that instantiates hooks, wires them together, and renders ReactFlow with sub-components.
+
+**Phase D — MERGED INTO B1 (see above)**
+
+The original Phase D (explicit state machine for sync guards) has been merged into Phase B1. The investigation work that was originally deferred "until Phase B is stable" was completed during B1 design. The guard API approach is more incremental than the originally proposed discriminated union and serves as a prerequisite for any future state machine refinement.
+
+**Core tests (all phases):**
 - `graph-editor/src/components/canvas/__tests__/buildScenarioRenderEdges.test.ts`
 - `graph-editor/src/components/canvas/__tests__/buildScenarioRenderEdges.efGeometry.test.ts`
 - `graph-editor/src/components/edges/__tests__/EdgeBeads.test.tsx`
@@ -651,7 +820,8 @@ Principles:
 - **[NEW] getFromSourceDirect closure extraction** — Mitigation: do NOT extract this closure during slimdown. Flag for future consideration only after surrounding modules are stable.
 - **[NEW] enhanceGraphLatencies DP state** — Mitigation: do NOT split this orchestrator. Extract its dependencies (topology, math, edge stats) but leave the 1,454-line traversal intact.
 - **[NEW] integrityCheckService reference tracking** — Mitigation: pass reference sets explicitly between extracted sub-validators; do not convert to class state.
-- **[NEW] Graph↔ReactFlow sync engine** — Mitigation: do NOT extract. Leave fast/slow path in GraphCanvas; extract everything else around it.
+- **[UPDATED] Graph↔ReactFlow sync engine** — Mitigation: extract into `useGraphSync` hook with guard API (`syncGuards.ts`). Phases B1 and D merged — guard formalisation happens during extraction, not after. Pre-work investigations complete: 1 dead ref, 1 latent bug, 2 unnecessary defensive clears identified and queued for removal before extraction begins. Full design at `docs/current/refactor/b1-sync-engine-design.md`. 75-test baseline green.
+- **[NEW] Implicit sync guard state machine** — 8 boolean refs form an undeclared mutual exclusion protocol. Converting to an explicit typed state machine (Phase D) requires mapping all transitions and confirming interleaved effects are handled. Deferred until the refs are co-located within `useGraphToReactFlowSync` (Phase B).
 
 ---
 
