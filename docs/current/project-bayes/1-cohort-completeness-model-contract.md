@@ -7,7 +7,17 @@ chart inspection so that current runtime analysis, pre-Bayes model fitting, and
 future Bayes artefacts all use congruent semantics grounded in the data we
 actually have.
 
-**Related**: `0-high-level-logical-blocks.md`, `../project-db/analysis-forecasting.md`, `../cohort_latency_params.md`
+**Related**: `programme.md` (programme), `0-high-level-logical-blocks.md` (Logical blocks), `../project-db/analysis-forecasting.md`, `../cohort_latency_params.md`
+
+**Phase naming**: this doc uses internal numbering (Phase 1, 2, 2.5, 3).
+The programme doc uses descriptive names. Mapping:
+
+| This doc | Programme |
+|---|---|
+| Phase 1 | Evaluator unification |
+| Phase 2 | Python model ownership |
+| Phase 2.5 | FE stats deletion |
+| Phase 3 | Bayesian inference |
 
 ---
 

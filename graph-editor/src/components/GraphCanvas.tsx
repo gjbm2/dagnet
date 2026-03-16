@@ -1687,10 +1687,11 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
     if (!nextGraph.postits) return;
     nextGraph.postits = nextGraph.postits.filter((p: any) => p.id !== id);
     if (nextGraph.metadata) nextGraph.metadata.updated_at = new Date().toISOString();
-    setGraph(nextGraph);
+    // Use setGraphDirect — deleting a postit doesn't change graph topology.
+    setGraphDirect(nextGraph);
     saveHistoryState('Delete post-it');
     onSelectedAnnotationChange?.(null, null);
-  }, [graph, setGraph, saveHistoryState, onSelectedAnnotationChange]);
+  }, [graph, setGraphDirect, saveHistoryState, onSelectedAnnotationChange]);
 
   const containerHistoryTimerRef = useRef<NodeJS.Timeout | null>(null);
   const handleUpdateContainer = useCallback((id: string, updates: any) => {
@@ -1719,10 +1720,11 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
     if (!nextGraph.containers) return;
     nextGraph.containers = nextGraph.containers.filter((c: any) => c.id !== id);
     if (nextGraph.metadata) nextGraph.metadata.updated_at = new Date().toISOString();
-    setGraph(nextGraph);
+    // Use setGraphDirect — deleting a container doesn't change graph topology.
+    setGraphDirect(nextGraph);
     saveHistoryState('Delete container');
     onSelectedAnnotationChange?.(null, null);
-  }, [graph, setGraph, saveHistoryState, onSelectedAnnotationChange]);
+  }, [graph, setGraphDirect, saveHistoryState, onSelectedAnnotationChange]);
 
   const analysisHistoryTimerRef = useRef<NodeJS.Timeout | null>(null);
   const handleUpdateAnalysis = useCallback((id: string, updates: any) => {
@@ -3633,8 +3635,8 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
       return;
     }
     
-    // BLOCK ReactFlow→Graph sync during node dragging to prevent multiple graph updates
-    if (isDraggingNodeRef.current) {
+    // BLOCK ReactFlow→Graph sync during node dragging or resizing to prevent multiple graph updates
+    if (isDraggingNodeRef.current || isResizingNodeRef.current) {
       return;
     }
     
@@ -5342,7 +5344,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
 
   const addPostitAtPosition = useCallback((x: number, y: number, w?: number, h?: number) => {
     if (!graph) return;
-    
+
     const newId = crypto.randomUUID();
     const nextGraph = structuredClone(graph);
     if (!nextGraph.postits) nextGraph.postits = [];
@@ -5358,15 +5360,17 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
     if (nextGraph.metadata) {
       nextGraph.metadata.updated_at = new Date().toISOString();
     }
-    setGraph(nextGraph);
+    // Use setGraphDirect (synchronous) — postits don't change graph topology,
+    // and saveHistoryState must snapshot the graph AFTER the mutation lands.
+    setGraphDirect(nextGraph);
     saveHistoryState('Add post-it');
     setContextMenu(null);
-    
+
     autoEditPostitIdRef.current = newId;
     onSelectedNodeChange(null);
     onSelectedEdgeChange(null);
     onSelectedAnnotationChange?.(newId, 'postit');
-  }, [graph, setGraph, saveHistoryState, onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnnotationChange]);
+  }, [graph, setGraphDirect, saveHistoryState, onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnnotationChange]);
 
   const addPostit = useCallback(() => {
     const centre = screenToFlowPosition({ x: window.innerWidth / 2, y: window.innerHeight / 2 });
@@ -5388,13 +5392,15 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
       y: Math.round(y),
     });
     if (nextGraph.metadata) nextGraph.metadata.updated_at = new Date().toISOString();
-    setGraph(nextGraph);
+    // Use setGraphDirect (synchronous) — containers don't change graph topology,
+    // and saveHistoryState must snapshot the graph AFTER the mutation lands.
+    setGraphDirect(nextGraph);
     saveHistoryState('Add container');
     setContextMenu(null);
     onSelectedNodeChange(null);
     onSelectedEdgeChange(null);
     onSelectedAnnotationChange?.(newId, 'container');
-  }, [graph, setGraph, saveHistoryState, onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnnotationChange]);
+  }, [graph, setGraphDirect, saveHistoryState, onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnnotationChange]);
 
   useEffect(() => {
     if (onAddPostitRef) {

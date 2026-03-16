@@ -5,7 +5,10 @@
 **Purpose**: Document the compute provider decision and deployment topology for
 nightly Bayesian inference, and its relationship to the existing Python backend.
 
-**Related**: `0-high-level-logical-blocks.md` (Blocks 1–6), `../project-db/` (snapshot DB), `../codebase/APP_ARCHITECTURE.md` (existing app architecture)
+**Related**: `programme.md` (programme),
+`4-async-roundtrip-infrastructure.md` (Async infra),
+`0-high-level-logical-blocks.md` (Logical blocks), `../project-db/` (snapshot DB),
+`../codebase/APP_ARCHITECTURE.md` (app architecture)
 
 ---
 
@@ -44,13 +47,13 @@ Project Bayes ships:
 | GPU | None | Useful for JAX/NumPyro |
 
 The 800s hard limit is the dealbreaker. Complex models with many edges, slices,
-and the probability-latency coupling (doc 0, step 5) can exceed this
+and the probability-latency coupling (Logical blocks, step 5) can exceed this
 comfortably. A hard timeout mid-sampling wastes all compute and produces no
 usable output.
 
 Google Cloud Run (60-min cap) and AWS Lambda (15-min cap) carry the same risk
 at different thresholds. For a workload where "runtime budget is generous (hours
-available overnight, compute is cheap)" (doc 0, first practical implementation
+available overnight, compute is cheap)" (Logical blocks, first practical implementation
 slice), a hard ceiling of any kind is an unnecessary constraint.
 
 ---
@@ -402,7 +405,7 @@ These are not yet resolved:
 - **Which files get updated.** Posterior results need to flow into parameter
   YAML files. The exact field mapping (which YAML fields carry Bayesian
   estimates vs point estimates vs overrides) needs to be defined in
-  conjunction with the artefact schema (doc 0, Block 6).
+  conjunction with the artefact schema (Logical blocks, Block 6).
 - **Webhook authentication.** Shared secret, signed payload, or IP
   allowlist? Depends on compute vendor capabilities.
 - **Graph snapshot at submission time.** The MCMC job needs the graph
@@ -502,7 +505,7 @@ operation ran locally (git, file ops) or remotely (MCMC).
 - **Shared package evolution**: at what point does `lib/` need to become a
   proper pip package vs just a shared directory? Likely when CI/CD for the
   MCMC worker needs its own build context.
-- **Warm-start storage**: doc 0 specifies warm-start from previous posterior
+- **Warm-start storage**: Logical blocks specifies warm-start from previous posterior
   when fingerprint matches. Where are previous posterior samples stored?
   Object storage (S3/R2), compute vendor's persistent volumes, or
   reconstructed from the sufficient statistics in YAML?

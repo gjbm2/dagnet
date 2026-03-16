@@ -18,6 +18,7 @@ import { sessionLogService } from '../services/sessionLogService';
 import { graphComputeClient } from '../lib/graphComputeClient';
 import { db } from '../db/appDatabase';
 import { fileRegistry } from '../contexts/TabContext';
+import { getGraphStore } from '../contexts/GraphStoreContext';
 
 export function installE2eHooks(): void {
   if (!import.meta.env.DEV) return;
@@ -141,8 +142,9 @@ export function installE2eHooks(): void {
     // Install E2E-only hooks only when explicitly requested.
     if (!url.searchParams.has('e2e')) return;
 
-    // Expose fileRegistry for E2E tests to seed data
+    // Expose fileRegistry and getGraphStore for E2E tests
     (window as any).fileRegistry = fileRegistry;
+    (window as any).__dagnet_getGraphStore = getGraphStore;
 
     (window as any).dagnetE2e = {
       /**
@@ -232,6 +234,34 @@ export function installE2eHooks(): void {
        * Used by Playwright to exercise the real bundle share-link generation path (including
        * scenario-state sourcing semantics).
        */
+      /**
+       * Get graph store state for a fileId (undo/redo E2E testing).
+       * Returns history metadata without cloning the full graph array.
+       */
+      getGraphStoreState: (fileId: string) => {
+        const store = getGraphStore(fileId);
+        if (!store) return null;
+        const s = store.getState();
+        return {
+          graph: s.graph,
+          historyIndex: s.historyIndex,
+          historyLength: s.history.length,
+          canUndo: s.canUndo,
+          canRedo: s.canRedo,
+          graphRevision: s.graphRevision,
+        };
+      },
+      /**
+       * Get a deep clone of a specific history entry (for state comparison in E2E tests).
+       */
+      getHistoryEntry: (fileId: string, index: number) => {
+        const store = getGraphStore(fileId);
+        if (!store) return null;
+        const s = store.getState();
+        const entry = s.history[index];
+        if (!entry) return null;
+        return JSON.parse(JSON.stringify(entry));
+      },
       buildLiveBundleShareUrlFromTabs: async (args: {
         tabIds: string[];
         secretOverride: string;

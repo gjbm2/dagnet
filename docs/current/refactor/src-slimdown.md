@@ -2,7 +2,7 @@
 
 **Created:** 15-Dec-25
 **Last reviewed:** 13-Mar-26
-**Status:** In progress — Target 1 (analysisEChartsService) completed 13-Mar-26
+**Status:** In progress — Target 2 UM-PR1–PR3 completed 16-Mar-26 (Target 1 completed 13-Mar-26)
 
 ---
 
@@ -20,6 +20,8 @@ This document is intended to be the **single source of truth** for the slimdown 
 - **14-Jan-26**: Up-front decisions agreed; programme order and PR sequences defined.
 - **13-Mar-26**: Full re-analysis. All targets re-inventoried (significant growth since Jan). New target added (`analysisEChartsService`). Responsibility clusters re-mapped against current code. Test runlists updated. Programme order revised.
 - **13-Mar-26**: Target 1 (`analysisEChartsService`) completed. 3,378-line god file split into 5 modules + 452-line facade. All 47 tests pass. Committed as `4f7536db` on `slimdown/src-modularisation`, merged to `feature/snapshot-db-phase0`.
+- **16-Mar-26**: Target 2 UM-PR1–PR3 (`UpdateManager.ts`) completed. Clusters A, B, G, H, I, J extracted into 6 modules under `updateManager/`. 5,136-line file reduced to 3,621-line facade + 1,706 lines in modules (5,327 total). All 8 mandated test files pass (169 tests). Full suite green (319 files, 4,215 tests, 0 failures). Isomorphic verification gate passed (no browser imports, no `this` captures, Node.js import test OK). UM-PR4–PR6 remain.
+- **16-Mar-26**: Re-verification of Targets 5 and 6 against current file state. Target 5 (`dataOperationsService`) trivial drift (+13 lines, 10,346 actual). Target 6 (`GraphCanvas`) significant drift (+199 lines, 7,134 actual): new `GraphIssuesIndicatorOverlay` sub-component (~140 lines), sync engine grew to ~1,786 lines, creation tools grew to ~796 lines, edge geometry grew to ~440 lines. Cluster line counts updated. GC-PR0 added for overlay extraction.
 
 ---
 
@@ -55,18 +57,18 @@ This document is intended to be the **single source of truth** for the slimdown 
 
 ---
 
-### Current Inventory (as of 13-Mar-26)
+### Current Inventory (as of 16-Mar-26)
 
 Primary targets (current line counts, with delta from 14-Jan-26 plan):
 
 - **Services**
-  - `graph-editor/src/services/dataOperationsService.ts` — **10,333** (+1,459 / +16%)
+  - `graph-editor/src/services/dataOperationsService.ts` — **10,346** (+1,472 / +17%)
   - `graph-editor/src/services/UpdateManager.ts` — **5,136** (+221 / +4%)
   - `graph-editor/src/services/statisticalEnhancementService.ts` — **3,434** (+328 / +11%)
   - `graph-editor/src/services/integrityCheckService.ts` — **3,589** (+517 / +17%)
   - `graph-editor/src/services/analysisEChartsService.ts` — **452** (facade; was 3,378; modularised 13-Mar-26)
 - **UI**
-  - `graph-editor/src/components/GraphCanvas.tsx` — **6,935** (+1,435 / +26%)
+  - `graph-editor/src/components/GraphCanvas.tsx` — **7,134** (+1,634 / +30%)
   - `graph-editor/src/components/PropertiesPanel.tsx` — **3,667** (+849 / +30%)
   - `graph-editor/src/components/edges/ConversionEdge.tsx` — **2,955** (−137 / −4%)
 
@@ -219,7 +221,7 @@ For each target below, follow the same internal sequencing per Decision 3.
 
 ---
 
-#### Target 2 — `UpdateManager.ts` (5,136 lines)
+#### Target 2 — `UpdateManager.ts` (5,136 → 3,621 lines after UM-PR1–PR3)
 
 **Current clusters (updated):**
 - A: Types & contracts (~115 lines)
@@ -241,9 +243,9 @@ For each target below, follow the same internal sequencing per Decision 3.
 
 **PR sequence:**
 
-- **UM-PR1 (types + pure helpers)**: Extract Clusters A, B, C, I, J, N into `updateManager/types.ts`, `updateManager/roundingUtils.ts`, `updateManager/nestedValueAccess.ts`, `updateManager/auditLog.ts`.
-- **UM-PR2 (mapping configuration)**: Extract Cluster H into `updateManager/mappingConfigurations.ts`. This is the largest single cluster (~1,200 lines) and is purely declarative.
-- **UM-PR3 (mapping engine + operations)**: Extract Cluster G (`applyMappings()` and all operation implementations) into `updateManager/mappingEngine.ts`.
+- **UM-PR1 (types + pure helpers)**: Extract Clusters A, B, I, J into `updateManager/types.ts` (122 lines), `updateManager/roundingUtils.ts` (27 lines), `updateManager/nestedValueAccess.ts` (104 lines), `updateManager/auditLog.ts` (43 lines). **DONE 16-Mar-26** — 169/169 tests pass. `getNestedValue`/`setNestedValue` confirmed stateless.
+- **UM-PR2 (mapping configuration)**: Extract Cluster H into `updateManager/mappingConfigurations.ts` (1,265 lines). Module-level `MAPPING_CONFIGURATIONS` constant replaces class-level lazy-init static cache. Also exports `getMappingKey()`. **DONE 16-Mar-26** — 169/169 tests pass. Mapping init/caching semantics confirmed equivalent (eager-init singleton vs lazy-init static).
+- **UM-PR3 (mapping engine)**: Extract Cluster G (`applyMappings()`) into `updateManager/mappingEngine.ts` (145 lines). Direction handlers remain in `UpdateManager.ts` and call the import. **DONE 16-Mar-26** — 169/169 tests pass. Isomorphic verification gate passed: no browser imports, no `this` captures, Node.js import test OK (applyMappings runs in plain Node with correct results).
 - **UM-PR4 (edge rebalancing + conditional probability)**: Extract Clusters D, E, K into `updateManager/edgeRebalancing.ts` and `updateManager/conditionalProbability.ts`.
 - **UM-PR5 (graph mutations + copy/paste)**: Extract Clusters L, M into `updateManager/graphMutations.ts` and `updateManager/clipboardOperations.ts`.
 - **UM-PR6 (facade tidy-up)**: Reduce `UpdateManager.ts` to direction handlers (Cluster F) + class shell that composes extracted modules.
@@ -361,7 +363,7 @@ For each target below, follow the same internal sequencing per Decision 3.
 
 ---
 
-#### Target 5 — `dataOperationsService.ts` (10,333 lines)
+#### Target 5 — `dataOperationsService.ts` (10,346 lines)
 
 **Current clusters (updated):**
 - A: Batch mode & toast management (~110 lines)
@@ -421,35 +423,41 @@ For each target below, follow the same internal sequencing per Decision 3.
 
 ---
 
-#### Target 6 — `GraphCanvas.tsx` (6,935 lines)
+#### Target 6 — `GraphCanvas.tsx` (7,134 lines)
 
-**Current clusters (updated):**
-- Core state management (~265 lines)
-- Edge geometry & bundling — `calculateEdgeOffsets()`, `getEdgeSortKey()` (~375 lines)
-- Edge connection & routing — optimal handles, reroute, reconnect (~455 lines)
-- Node & edge CRUD (~505 lines)
-- Canvas objects CRUD — post-its, containers, canvas analyses (~210 lines) — NEW since Jan
+**Current clusters (re-verified 16-Mar-26):**
+- GraphIssuesIndicatorOverlay (~140 lines) — NEW; self-contained sub-component with own state, effects, JSX (lines 139–278)
+- Core state management (~273 lines)
+- Edge geometry & bundling — `calculateEdgeOffsets()`, `getEdgeSortKey()` (~440 lines)
+- Edge connection & routing — optimal handles, reroute, reconnect (~345 lines)
+- Node & edge CRUD (~206 lines)
+- Canvas objects CRUD — post-its, containers, canvas analyses (~113 lines)
 - Selection & events (~180 lines)
-- Graph↔ReactFlow sync — fast path + slow path (~1,310 lines) — **largest cluster, highest risk**
-- Layout algorithms — dagre, sankey, hide (~375 lines)
-- Creation tools — addNode, addPostit, addContainer, addAnalysis (~645 lines)
-- Copy/paste/drag-drop (~255 lines)
-- Context menus (~740 lines)
-- Pan/zoom & decoration management (~135 lines) — NEW since Jan (atomic restore)
-- What-if/scenario rendering (~65 lines)
-- Snapshot boot tracing (~90 lines) — NEW since Jan
-- JSX render tree (~990 lines)
+- Graph↔ReactFlow sync — fast path + slow path (~1,786 lines) — **largest cluster, highest risk, grew significantly**
+- View mode effects, Sankey sizing, what-if recompute (~400 lines)
+- Creation tools — addNode, addPostit, addContainer, addAnalysis (~796 lines)
+- Copy/paste/drag-drop (~253 lines)
+- Context menus (~120 lines)
+- Edge connection handlers — wouldCreateCycle, onEdgeUpdate, onConnect (~314 lines)
+- Shift+Drag lasso selection (~165 lines)
+- Path highlighting + onSelectionChange (~378 lines)
+- Node drag handlers — onNodeDragStart, onNodeDrag, onNodeDragStop (~170 lines)
+- Pan/zoom & decoration management (~135 lines) — atomic restore
+- Snapshot boot tracing (~90 lines)
+- renderEdges useMemo (~64 lines)
+- JSX render tree (~1,015 lines)
 
 **Extraction directory:** `graph-editor/src/components/canvas/` (existing directory)
 
 **PR sequence:**
 
+- **GC-PR0 (overlay extraction)**: Extract `GraphIssuesIndicatorOverlay` into `canvas/GraphIssuesIndicatorOverlay.tsx`. Self-contained sub-component, zero coupling to CanvasInner state — lowest-risk warm-up.
 - **GC-PR1 (edge geometry)**: Extract edge geometry & bundling into `canvas/edgeGeometry.ts`. Pure computations.
-- **GC-PR2 (layout algorithms)**: Extract dagre + sankey layout into `canvas/layoutAlgorithms.ts`.
+- **GC-PR2 (layout algorithms)**: Extract view mode effects + Sankey sizing into `canvas/layoutAlgorithms.ts`.
 - **GC-PR3 (canvas object CRUD)**: Extract post-it, container, analysis handlers into `canvas/canvasObjectHandlers.ts`. These follow a consistent pattern and are self-contained.
 - **GC-PR4 (creation tools + copy/paste)**: Extract creation tools and clipboard operations into `canvas/creationTools.ts` and `canvas/clipboardOperations.ts`.
-- **GC-PR5 (context menus)**: Extract context menu handlers into `canvas/contextMenuHandlers.ts`.
-- **GC-PR6 (facade tidy-up)**: Reduce GraphCanvas to core state, Graph↔ReactFlow sync, selection, pan/zoom, and JSX render. Do NOT extract the sync engine — it is too tightly coupled to React state and refs.
+- **GC-PR5 (context menus + edge connection handlers)**: Extract context menu handlers and edge connection handlers into `canvas/contextMenuHandlers.ts` and `canvas/edgeConnectionHandlers.ts`.
+- **GC-PR6 (facade tidy-up)**: Reduce GraphCanvas to core state, Graph↔ReactFlow sync, selection, path highlighting, node drag, pan/zoom, and JSX render. Do NOT extract the sync engine — it is too tightly coupled to React state and refs (and has grown to ~1,786 lines, reinforcing this decision).
 
 **Stop/gates:**
 - After GC-PR2: explicitly confirm no render-loop or reactivity changes (dependency arrays and state ownership preserved).

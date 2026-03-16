@@ -3,12 +3,13 @@
 **Source**: `ccl08/dagnet-bayesian-analysis` (GitHub, public)
 **Reviewed**: 13-Mar-26
 **Relevance**: Independent implementation of a DAG → Bayesian inference pipeline targeting conversion funnels. Covers our Blocks 1–4 partially. Useful as validation of our architectural choices and as concrete PyMC 5 reference for model construction.
+**Related**: `programme.md` (programme), `0-high-level-logical-blocks.md` (Logical blocks)
 
 ---
 
 ## 1. Architecture alignment
 
-The repo mirrors our compiler → IR → model-builder → runner separation almost exactly. This is encouraging independent validation that the "runtime-agnostic IR" approach (Block 0, §3) is the right abstraction boundary.
+The repo mirrors our compiler → IR → model-builder → runner separation almost exactly. This is encouraging independent validation that the "runtime-agnostic IR" approach (Logical blocks, §3) is the right abstraction boundary.
 
 Their pipeline:
 
@@ -69,7 +70,7 @@ pm.Multinomial(f"obs_{group_id}", n=effective_ks.sum(), p=weights, observed=effe
 pm.LogNormal(f"lag_{edge_id}", mu=lat.mu, sigma=lat.sigma)
 ```
 
-- They treat latency as a prior-only variable (no observed likelihood). This is because they skip probability–latency coupling entirely. In our design, latency parameters participate in the completeness CDF constraint and therefore *do* have an implied likelihood via the joint model (see doc 1, §4).
+- They treat latency as a prior-only variable (no observed likelihood). This is because they skip probability–latency coupling entirely. In our design, latency parameters participate in the completeness CDF constraint and therefore *do* have an implied likelihood via the joint model (see Model contract, §4).
 
 ### 2.2 Prior overflow guard
 
@@ -113,7 +114,7 @@ Maps cleanly to our provenance flags (`bayesian / pooled-fallback / point-estima
 w = 1.0 - exp(-n / BLEND_K)    # BLEND_K = 50
 ```
 
-Exponential saturation curve: at n=50, w≈0.63; at n=150, w≈0.95. This is a simplified proxy for our CDF-based completeness model (doc 1, §3–4). Their approach is adequate for the flat case but cannot express the edge-level latency dependence our contract requires. Still, it's a useful fallback for edges where latency parameters are unavailable.
+Exponential saturation curve: at n=50, w≈0.63; at n=150, w≈0.95. This is a simplified proxy for our CDF-based completeness model (Model contract, §3–4). Their approach is adequate for the flat case but cannot express the edge-level latency dependence our contract requires. Still, it's a useful fallback for edges where latency parameters are unavailable.
 
 ### 2.6 Lognormal fitting from summary statistics
 
@@ -126,7 +127,7 @@ Derives μ and σ from median and mean without scipy. Includes a floor (`max(sig
 
 ### 2.7 t95-constrained sigma
 
-The compiler inflates σ to ensure P(lag ≤ t95) ≥ 0.95 under the LogNormal model. This prevents "thin-tail optimism" where a fitted distribution underestimates the tail and causes premature cohort maturity declarations. We identified this same concern in doc 1, §4.2. Their implementation is a simple `max(fitted_sigma, required_sigma)` — adequate for our needs.
+The compiler inflates σ to ensure P(lag ≤ t95) ≥ 0.95 under the LogNormal model. This prevents "thin-tail optimism" where a fitted distribution underestimates the tail and causes premature cohort maturity declarations. We identified this same concern in Model contract, §4.2. Their implementation is a simple `max(fitted_sigma, required_sigma)` — adequate for our needs.
 
 ---
 
@@ -136,23 +137,23 @@ These are areas where the reference implementation stops short. Listed here so w
 
 ### 3.1 No slice layer (critical gap)
 
-Their hierarchy is flat: graph → edge. No contextual partial pooling (paid vs organic, mobile vs desktop, etc.). Our 4-layer hierarchy (graph hyper → branch family → edge → slice) is substantially more complex. The Dirichlet parameterisation they use would need to be extended with per-slice deviations while preserving the simplex constraint — this is the "hierarchical Dirichlet" challenge identified in doc 0, §3.3.
+Their hierarchy is flat: graph → edge. No contextual partial pooling (paid vs organic, mobile vs desktop, etc.). Our 4-layer hierarchy (graph hyper → branch family → edge → slice) is substantially more complex. The Dirichlet parameterisation they use would need to be extended with per-slice deviations while preserving the simplex constraint — this is the "hierarchical Dirichlet" challenge identified in Logical blocks, §3.3.
 
 ### 3.2 No probability–latency coupling (critical gap)
 
-Latency edges are prior-only — no joint constraint with conversion probability via the completeness CDF. This means their model cannot distinguish "low conversion because users don't convert" from "low conversion because the cohort is immature and converters haven't been observed yet". Our contract doc (doc 1) exists precisely to solve this. Their approach is not wrong for mature cohorts but fails for the immature-cohort case that matters most in practice.
+Latency edges are prior-only — no joint constraint with conversion probability via the completeness CDF. This means their model cannot distinguish "low conversion because users don't convert" from "low conversion because the cohort is immature and converters haven't been observed yet". The Model contract exists precisely to solve this. Their approach is not wrong for mature cohorts but fails for the immature-cohort case that matters most in practice.
 
 ### 3.3 No exhaustive vs non-exhaustive branch classification
 
-They assume all branch groups are exhaustive (traffic sums to 1.0). No phantom dropout component for non-exhaustive groups. Our design (doc 0, §3.2) handles this with a k+1 Dirichlet where the extra component represents dropout — this is important for real-world funnels where not all traffic from a node reaches a downstream node.
+They assume all branch groups are exhaustive (traffic sums to 1.0). No phantom dropout component for non-exhaustive groups. Our design (Logical blocks, §3.2) handles this with a k+1 Dirichlet where the extra component represents dropout — this is important for real-world funnels where not all traffic from a node reaches a downstream node.
 
 ### 3.4 No model fingerprinting for warm-start
 
-They compute a SHA256 fingerprint but don't use it for anything beyond identification. No warm-start logic (reuse previous posterior as prior when fingerprint matches). Our design requires this for incremental learning (doc 0, §7).
+They compute a SHA256 fingerprint but don't use it for anything beyond identification. No warm-start logic (reuse previous posterior as prior when fingerprint matches). Our design requires this for incremental learning (Logical blocks, §7).
 
 ### 3.5 No fallback degradation strategy
 
-If evidence is thin for one branch group, the entire model either runs or doesn't. No per-group downgrade to pooled-only or point-estimate while continuing Bayesian inference for well-evidenced groups. Our design (doc 0, §7.3) requires graceful per-group degradation.
+If evidence is thin for one branch group, the entire model either runs or doesn't. No per-group downgrade to pooled-only or point-estimate while continuing Bayesian inference for well-evidenced groups. Our design (Logical blocks, §7.3) requires graceful per-group degradation.
 
 ### 3.6 Compiler steps 3–5 stubbed
 
