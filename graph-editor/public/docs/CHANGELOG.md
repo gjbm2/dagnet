@@ -1,4 +1,11 @@
 # DagNet Release Notes
+## Version 1.7.14b
+**Released:** 16-Mar-26
+
+various refactoring, bassic bayes infra
+
+---
+
 ## Version 1.7.13b
 **Released:** 15-Mar-26
 
