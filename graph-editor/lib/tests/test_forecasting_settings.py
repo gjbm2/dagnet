@@ -52,6 +52,12 @@ class TestForecastingSettingsDefaults:
     def test_blend_completeness_power(self):
         assert ForecastingSettings().blend_completeness_power == 2.25
 
+    def test_bayes_fit_history_interval_days(self):
+        assert ForecastingSettings().bayes_fit_history_interval_days == 7
+
+    def test_bayes_fit_history_max_entries(self):
+        assert ForecastingSettings().bayes_fit_history_max_entries == 12
+
 
 class TestSettingsFromDict:
 

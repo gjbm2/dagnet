@@ -711,6 +711,18 @@ async def bayes_submit_endpoint(request: Request):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.post("/api/bayes/cancel")
+async def bayes_cancel_endpoint(call_id: str = ""):
+    """Local equivalent of Modal's /cancel endpoint.
+    Marks the local job as cancelled so the FE stops polling."""
+    if not call_id:
+        return {"status": "error", "error": "call_id parameter required"}
+    from bayes_local import cancel
+    result = cancel(call_id)
+    print(f"[bayes/cancel] Job {call_id}: {result['status']}")
+    return result
+
+
 @app.get("/api/bayes/status")
 async def bayes_status_endpoint(call_id: str = ""):
     """Local equivalent of Modal's /status endpoint.
@@ -853,6 +865,7 @@ if __name__ == "__main__":
     print("  POST /api/runner/analyze          - Run analytics on selection")
     print("  POST /api/runner/available-analyses - Get available analyses")
     print("  POST /api/bayes/submit            - Local Bayes submit (async)")
+    print("  POST /api/bayes/cancel            - Cancel a running Bayes job")
     print("  GET  /api/bayes/status             - Local Bayes poll")
     print("  POST /api/bayes/tunnel/start       - Start cloudflared tunnel")
     print("  POST /api/bayes/tunnel/stop        - Stop cloudflared tunnel")

@@ -119,11 +119,52 @@ FE                     Vercel                    Modal                  GitHub
 - **Provenance is explicit.** A `provenance` field on the posterior
   distinguishes `bayesian`, `pooled-fallback`, `point-estimate`, and `skipped`.
   Consumption code can branch on this.
-- **Git history is the time-series.** Each nightly fit overwrites current
-  posterior values. Git commits provide the historical record. No need to
-  store successive fits in the same YAML.
+- **Distribution type is explicit.** The schema records which distribution
+  family was fitted (e.g. `beta`, `lognormal`). It is not assumed that all
+  edges will always use the same family.
+- **fit_history provides trajectory without git archaeology.** The Bayesian
+  fitting engine may want to inspect how posteriors have drifted over recent
+  weeks as an input to its own calculations. Rather than requiring git log
+  parsing, each posterior carries a rolling `fit_history` array of recent
+  snapshots. Retention policy (interval and cap) is controlled by forecasting
+  settings so it can be tuned per repo.
 - **Schema changes are additive.** All new fields are optional. Existing
   graphs without posteriors continue to work unchanged.
+
+### Graph-level run metadata (`_bayes`)
+
+Added to the graph document root. Records metadata about the most recent
+Bayesian fitting run for this graph. One block per graph, overwritten each run.
+
+| Field | Type | Description |
+|---|---|---|
+| `fitted_at` | string | UK date (d-MMM-yy) when the run completed |
+| `duration_ms` | number | Wall-clock elapsed time of the fitting run |
+| `fingerprint` | string | Deterministic hash of (graph structure + policy + evidence window) |
+| `model_version` | number | Schema version for forward-compat (starts at 1) |
+| `settings_signature` | string | Hash of the `ForecastingSettings` used for this run |
+| `quality.max_rhat` | number | Worst r-hat across all fitted parameters |
+| `quality.min_ess` | number | Worst effective sample size across all fitted parameters |
+| `quality.converged_pct` | number | Fraction of parameters that met convergence criteria |
+| `quality.edges_fitted` | number | How many edges received Bayesian posteriors |
+| `quality.edges_skipped` | number | How many edges fell back or were skipped |
+
+Example:
+
+```yaml
+_bayes:
+  fitted_at: "16-Mar-26"
+  duration_ms: 4200
+  fingerprint: "abc123..."
+  model_version: 1
+  settings_signature: "def456..."
+  quality:
+    max_rhat: 1.02
+    min_ess: 450
+    converged_pct: 0.95
+    edges_fitted: 12
+    edges_skipped: 2
+```
 
 ### Probability posterior (`p.posterior`)
 
@@ -131,6 +172,7 @@ Added to `ProbabilityParam`:
 
 | Field | Type | Description |
 |---|---|---|
+| `distribution` | string | Distribution family fitted (e.g. `beta`, `dirichlet-component`) |
 | `alpha` | number | Beta posterior shape parameter α |
 | `beta` | number | Beta posterior shape parameter β |
 | `hdi_lower` | number | Lower bound of HDI (at configured level) |
@@ -138,9 +180,11 @@ Added to `ProbabilityParam`:
 | `hdi_level` | number | HDI level used (e.g. 0.9 for 90%) |
 | `ess` | number | Effective sample size |
 | `rhat` | number | Gelman-Rubin convergence diagnostic |
+| `evidence_grade` | number | Evidence degradation level (0=cold start, 1=weak, 2=mature, 3=full Bayesian) |
 | `fitted_at` | string | UK date (d-MMM-yy) when posterior was computed |
 | `fingerprint` | string | Deterministic hash of (graph structure + policy + evidence window) |
 | `provenance` | string | `bayesian` / `pooled-fallback` / `point-estimate` / `skipped` |
+| `fit_history` | array | Rolling array of recent posterior snapshots (see fit_history below) |
 
 When a Bayesian posterior is written, `p.mean` and `p.stdev` are updated to
 the posterior mean and standard deviation of the Beta(α, β) distribution:
@@ -157,10 +201,12 @@ Added to `LatencyConfig`:
 
 | Field | Type | Description |
 |---|---|---|
-| `mu_mean` | number | Posterior mean of lognormal μ |
-| `mu_sd` | number | Posterior SD of lognormal μ |
-| `sigma_mean` | number | Posterior mean of lognormal σ |
-| `sigma_sd` | number | Posterior SD of lognormal σ |
+| `distribution` | string | Distribution family fitted (e.g. `lognormal`) |
+| `onset_delta_days` | number | Posterior onset (may differ from pre-Bayes value) |
+| `mu_mean` | number | Posterior mean of μ parameter |
+| `mu_sd` | number | Posterior SD of μ parameter |
+| `sigma_mean` | number | Posterior mean of σ parameter |
+| `sigma_sd` | number | Posterior SD of σ parameter |
 | `hdi_t95_lower` | number | Lower HDI bound for t95 (days) |
 | `hdi_t95_upper` | number | Upper HDI bound for t95 (days) |
 | `hdi_level` | number | HDI level used |
@@ -169,10 +215,112 @@ Added to `LatencyConfig`:
 | `fitted_at` | string | UK date (d-MMM-yy) |
 | `fingerprint` | string | Same fingerprint as probability posterior |
 | `provenance` | string | Same enum as probability posterior |
+| `fit_history` | array | Rolling array of recent posterior snapshots (see fit_history below) |
 
 When a latency posterior is written, `p.latency.mu` and `p.latency.sigma` are
-updated to the posterior means. Again, zero consumption-path changes — existing
-completeness calculations and t95 derivations use `mu`/`sigma` directly.
+updated to the posterior means, `p.latency.onset_delta_days` to the posterior
+onset (respecting `onset_delta_days_overridden`), and `p.latency.t95`
+recomputed from the posterior means (respecting `t95_overridden`). Zero
+consumption-path changes — existing completeness calculations and t95
+derivations use `mu`/`sigma`/`onset_delta_days` directly.
+
+### fit_history: rolling posterior snapshots
+
+Each posterior (probability and latency) carries a `fit_history` array —
+a capped, periodically-sampled record of recent fits. This enables the
+fitting engine to inspect posterior drift over time without git archaeology.
+
+**Retention policy** is controlled by two forecasting settings (see below):
+
+- `bayes_fit_history_interval_days` (default: 7) — minimum days between
+  retained snapshots. The worker runs nightly but only appends to
+  `fit_history` if at least this many days have passed since the last entry.
+- `bayes_fit_history_max_entries` (default: 12) — maximum entries retained.
+  Oldest entries are evicted when the cap is reached. At default settings
+  this gives ~3 months of weekly snapshots.
+
+**Probability fit_history entry shape** (deliberately slimmer than the
+top-level posterior — key params + convergence only):
+
+| Field | Type | Description |
+|---|---|---|
+| `fitted_at` | string | UK date |
+| `alpha` | number | Beta α at that point |
+| `beta` | number | Beta β at that point |
+| `hdi_lower` | number | HDI lower bound |
+| `hdi_upper` | number | HDI upper bound |
+| `rhat` | number | Convergence diagnostic |
+
+**Latency fit_history entry shape**:
+
+| Field | Type | Description |
+|---|---|---|
+| `fitted_at` | string | UK date |
+| `mu_mean` | number | Posterior mean of μ |
+| `sigma_mean` | number | Posterior mean of σ |
+| `onset_delta_days` | number | Onset at that point |
+| `rhat` | number | Convergence diagnostic |
+
+Example (probability):
+
+```yaml
+posterior:
+  distribution: "beta"
+  alpha: 45.2
+  beta: 120.8
+  hdi_lower: 0.21
+  hdi_upper: 0.35
+  hdi_level: 0.9
+  ess: 1200
+  rhat: 1.01
+  evidence_grade: 3
+  provenance: "bayesian"
+  fitted_at: "16-Mar-26"
+  fingerprint: "abc123..."
+  fit_history:
+    - fitted_at: "9-Mar-26"
+      alpha: 43.1
+      beta: 118.2
+      hdi_lower: 0.20
+      hdi_upper: 0.36
+      rhat: 1.01
+    - fitted_at: "2-Mar-26"
+      alpha: 40.5
+      beta: 115.9
+      hdi_lower: 0.19
+      hdi_upper: 0.36
+      rhat: 1.03
+```
+
+### Forecasting settings additions
+
+Two new constants in `graph-editor/src/constants/latency.ts`, added to the
+`ForecastingSettings` interface and `buildForecastingSettings()`:
+
+| Constant | Default | Interface field | Description |
+|---|---|---|---|
+| `BAYES_FIT_HISTORY_INTERVAL_DAYS` | 7 | `bayes_fit_history_interval_days` | Minimum days between retained fit_history entries |
+| `BAYES_FIT_HISTORY_MAX_ENTRIES` | 12 | `bayes_fit_history_max_entries` | Maximum fit_history entries per posterior |
+
+Python backend defines matching defaults in its constants module, validated
+by the existing cross-language parity test.
+
+### Cascade from parameter file to graph
+
+The posterior sub-object cascades to the graph via the existing isomorphic
+cascade module (`applyMappings()` with `fileToGraph` / `UPDATE` / `parameter`
+direction). The established `_overridden` pattern is respected:
+
+| Parameter file source | Graph target | Override guard |
+|---|---|---|
+| `p.posterior` (entire sub-object) | `edge.p.posterior` | Always cascaded |
+| Derived `α/(α+β)` | `edge.p.mean` | Only if `!mean_overridden` |
+| Derived from α, β | `edge.p.stdev` | Only if `!stdev_overridden` |
+| `p.latency.posterior` (entire sub-object) | `edge.p.latency.posterior` | Always cascaded |
+| `posterior.mu_mean` | `edge.p.latency.mu` | Always (internal, no override flag) |
+| `posterior.sigma_mean` | `edge.p.latency.sigma` | Always (internal, no override flag) |
+| `posterior.onset_delta_days` | `edge.p.latency.onset_delta_days` | Only if `!onset_delta_days_overridden` |
+| Derived t95 from posterior | `edge.p.latency.t95` | Only if `!t95_overridden` |
 
 ### Where schema changes are needed
 
@@ -180,26 +328,35 @@ All additions are optional fields on existing interfaces/models:
 
 | Layer | File | Change |
 |---|---|---|
-| **TypeScript types** | `src/types/index.ts` | Add `posterior?: ProbabilityPosterior` to `ProbabilityParam`; add `posterior?: LatencyPosterior` to `LatencyConfig` |
-| **Python Pydantic** | `lib/graph_types.py` | Add `ProbabilityPosterior` and `LatencyPosterior` models; add optional `posterior` field to existing models |
+| **TypeScript types** | `src/types/index.ts` | Add `posterior?: ProbabilityPosterior` to `ProbabilityParam`; add `posterior?: LatencyPosterior` to `LatencyConfig`; add `_bayes?: BayesRunMetadata` to graph document type |
+| **Python Pydantic** | `lib/graph_types.py` | Add `ProbabilityPosterior`, `LatencyPosterior`, `BayesRunMetadata` models; add optional `posterior` fields to existing models |
 | **YAML schema** | `public/param-schemas/parameter-schema.yaml` | Add `posterior` object under `p` and under `latency` with the fields above |
-| **Graph YAML schema** | (if separate from parameter schema) | Same additions |
+| **Graph YAML schema** | (if separate from parameter schema) | Same additions + `_bayes` at root |
+| **Forecasting settings** | `src/constants/latency.ts` | Add `BAYES_FIT_HISTORY_INTERVAL_DAYS`, `BAYES_FIT_HISTORY_MAX_ENTRIES`; extend `ForecastingSettings` interface and `buildForecastingSettings()` |
+| **Python settings** | `lib/forecasting_settings.py` (or equivalent) | Matching defaults; parity test updated |
 
 ### What the roundtrip skeleton writes
 
 The skeleton worker doesn't run inference. It writes placeholder posteriors
 that exercise the full schema:
 
-- **Probability**: `alpha=1, beta=1` (uniform prior), `provenance='point-estimate'`,
-  `ess=0, rhat=NaN`, `fitted_at` = today, `fingerprint` = hash of graph
-  snapshot.
-- **Latency**: mirror current `mu`/`sigma` values as `mu_mean`/`sigma_mean`
-  with `mu_sd=0, sigma_sd=0`, same quality placeholders.
-- **p.mean / p.stdev**: left unchanged (placeholder posterior doesn't update
-  point estimates).
+- **Graph-level**: `_bayes` block with `duration_ms`, `fingerprint`,
+  `model_version=1`, `settings_signature`, placeholder quality metrics
+  (`max_rhat=0, min_ess=0, converged_pct=0, edges_fitted=N, edges_skipped=0`).
+- **Probability**: `distribution='beta', alpha=1, beta=1` (uniform prior),
+  `provenance='point-estimate'`, `evidence_grade=0`, `ess=0, rhat=NaN`,
+  `fitted_at` = today, `fingerprint` = hash of graph snapshot,
+  `fit_history=[]` (empty — no prior snapshots).
+- **Latency**: `distribution='lognormal'`, mirror current `mu`/`sigma` values
+  as `mu_mean`/`sigma_mean` with `mu_sd=0, sigma_sd=0`,
+  `onset_delta_days` = current value, same quality placeholders,
+  `fit_history=[]`.
+- **p.mean / p.stdev / p.latency.mu / p.latency.sigma**: left unchanged
+  (placeholder posterior doesn't update point estimates).
 
 This is enough to verify: webhook formats correctly, YAML round-trips, FE
-reads the fields back, git diff shows expected changes.
+reads the fields back, git diff shows expected changes, fit_history array
+serialises and deserialises correctly.
 
 ---
 

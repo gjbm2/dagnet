@@ -5,6 +5,7 @@ import { WorkspaceState, FileState, ObjectType } from '../types';
 import YAML from 'yaml';
 import { merge3Way } from './mergeService';
 import { sessionLogService } from './sessionLogService';
+import { operationRegistryService } from './operationRegistryService';
 
 export interface RemoteStatus {
   isAhead: boolean;
@@ -238,6 +239,15 @@ class WorkspaceService {
   async cloneWorkspace(repository: string, branch: string, gitCreds: any): Promise<WorkspaceState> {
     const workspaceId = `${repository}-${branch}`;
     console.log(`🚀 WorkspaceService: Cloning workspace ${workspaceId} (using Tree API)...`);
+
+    // Register with operation registry for UI progress
+    const opId = `clone:${workspaceId}:${Date.now()}`;
+    operationRegistryService.register({
+      id: opId,
+      kind: 'clone',
+      label: `Cloning ${repository}/${branch}…`,
+      status: 'running',
+    });
     
     // SINGLE WORKSPACE POLICY: Clear any existing workspaces before cloning
     // This ensures we never have stale files from other repos polluting IDB
@@ -280,6 +290,7 @@ class WorkspaceService {
       const startTime = Date.now();
 
       // STEP 1: Get entire repository tree in ONE API call
+      operationRegistryService.setLabel(opId, `Cloning ${repository}/${branch} — reading tree…`);
       console.log(`📦 WorkspaceService: Fetching repository tree...`);
       const treeResult = await gitService.getRepositoryTree(branch, true);
       if (!treeResult.success || !treeResult.data) {
@@ -413,6 +424,7 @@ class WorkspaceService {
       });
 
       console.log(`📦 WorkspaceService: Fetching ${filesToFetch.length} files with concurrency limit (priority-sorted)...`);
+      operationRegistryService.setProgress(opId, { current: 0, total: filesToFetch.length, detail: 'Fetching files…' });
 
       // STEP 3: Fetch file contents with concurrency control
       // Limit concurrent requests to avoid overwhelming GitHub API and browser
@@ -513,10 +525,18 @@ class WorkspaceService {
         const batchResults = await Promise.all(batch.map(fetchSingleFile));
         const validIds = batchResults.filter((id): id is string => id !== null);
         fileIds.push(...validIds);
-        
+
+        // Update progress
+        const fetched = Math.min(i + CONCURRENCY_LIMIT, filesToFetch.length);
+        operationRegistryService.setProgress(opId, {
+          current: fetched,
+          total: filesToFetch.length,
+          detail: `${fetched}/${filesToFetch.length} files`,
+        });
+
         // Log progress for large clones
         if (filesToFetch.length > 50) {
-          console.log(`📦 WorkspaceService: Cloned ${Math.min(i + CONCURRENCY_LIMIT, filesToFetch.length)}/${filesToFetch.length} files...`);
+          console.log(`📦 WorkspaceService: Cloned ${fetched}/${filesToFetch.length} files...`);
         }
       }
 
@@ -569,6 +589,7 @@ class WorkspaceService {
       }
 
       // STEP 4: Fetch and store images (reuse tree to avoid an extra API call)
+      operationRegistryService.setLabel(opId, `Cloning ${repository}/${branch} — fetching images…`);
       console.log(`🖼️ WorkspaceService: Fetching images...`);
       const images = await this.fetchAllImagesFromGit(repository, branch, gitCreds, tree);
       
@@ -640,6 +661,9 @@ class WorkspaceService {
         { repository, branch, filesAffected: fileIds, duration: elapsed }
       );
 
+      // Mark operation complete in registry
+      operationRegistryService.complete(opId, 'complete');
+
       return workspace;
 
     } catch (error) {
@@ -647,6 +671,7 @@ class WorkspaceService {
       
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
       sessionLogService.endOperation(logOpId, 'error', `Clone failed: ${errorMessage}`);
+      operationRegistryService.complete(opId, 'error', `Clone failed: ${errorMessage}`);
       
       // Update workspace with error
       workspace.isCloning = false;

@@ -4,11 +4,11 @@
  * Context menu for graph nodes with data operations (Get/Put)
  */
 
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useLayoutEffect } from 'react';
 import { dataOperationsService } from '../services/dataOperationsService';
 import { fileOperationsService } from '../services/fileOperationsService';
 import { extractSubgraph, createGraphFromSubgraph, generateSubgraphName } from '../lib/subgraphExtractor';
-import { Folders, TrendingUpDown, ChevronRight, Share2, Database, DatabaseZap, Copy, Scissors, Clipboard, BarChart3, Settings, ClipboardCopy, Eye, EyeOff, Trash2 } from 'lucide-react';
+import { Folders, TrendingUpDown, ChevronRight, Share2, Database, DatabaseZap, Copy, Scissors, Clipboard, BarChart3, Settings, ClipboardCopy, Eye, EyeOff, Trash2, AlignStartVertical, AlignEndVertical, AlignStartHorizontal, AlignEndHorizontal, AlignCenterHorizontal, AlignCenterVertical, AlignHorizontalDistributeCenter, AlignVerticalDistributeCenter, MoveHorizontal, MoveVertical } from 'lucide-react';
 import '../styles/popup-menu.css';
 import { RemoveOverridesMenuItem } from './RemoveOverridesMenuItem';
 import { fileRegistry } from '../contexts/TabContext';
@@ -72,6 +72,8 @@ export const NodeContextMenu: React.FC<NodeContextMenuProps> = ({
   const [openSubmenu, setOpenSubmenu] = useState<string | null>(null);
   const submenuTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
+  const alignSubmenuRef = useRef<HTMLDivElement>(null);
+  const [alignSubmenuOffset, setAlignSubmenuOffset] = useState<{ top?: number; flipH?: boolean }>({});
   const [position, setPosition] = useState({ left: x, top: y });
 
   // Calculate constrained position on mount
@@ -111,6 +113,19 @@ export const NodeContextMenu: React.FC<NodeContextMenuProps> = ({
     }
   }, [x, y]);
   
+  // Self-correct alignment submenu if it overflows the viewport
+  useLayoutEffect(() => {
+    const el = alignSubmenuRef.current;
+    if (!el || openSubmenu !== 'align') { setAlignSubmenuOffset({}); return; }
+    const rect = el.getBoundingClientRect();
+    const vh = window.innerHeight;
+    const vw = window.innerWidth;
+    const next: typeof alignSubmenuOffset = {};
+    if (rect.bottom > vh - 20) next.top = -(rect.bottom - (vh - 20));
+    if (rect.right > vw - 20) next.flipH = true;
+    setAlignSubmenuOffset(next);
+  }, [openSubmenu]);
+
   // Helper to handle submenu open/close with delay to prevent closing when hovering over disabled items
   const handleSubmenuEnter = (submenuName: string) => {
     if (submenuTimeoutRef.current) {
@@ -939,38 +954,48 @@ export const NodeContextMenu: React.FC<NodeContextMenuProps> = ({
           </div>
           {openSubmenu === 'align' && (
             <div
+              ref={alignSubmenuRef}
               className="dagnet-popup dagnet-popup--submenu"
-              style={{ position: 'absolute', left: '100%', top: 'auto', marginTop: -30, zIndex: 10001 }}
+              style={{
+                position: 'absolute',
+                ...(alignSubmenuOffset.flipH
+                  ? { right: '100%', marginRight: '4px' }
+                  : { left: '100%', marginLeft: '4px' }),
+                top: 'auto',
+                marginTop: (alignSubmenuOffset.top ?? 0) - 30,
+                zIndex: 10001,
+                whiteSpace: 'nowrap',
+              }}
               onMouseEnter={handleSubmenuContentEnter}
               onMouseLeave={handleSubmenuContentLeave}
             >
               <div className="dagnet-popup-item" onClick={(e) => { e.stopPropagation(); onAlign('align-left'); onClose(); }} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                Align Left Edges
+                <AlignStartVertical size={14} /> Align Left Edges
               </div>
               <div className="dagnet-popup-item" onClick={(e) => { e.stopPropagation(); onAlign('align-right'); onClose(); }} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                Align Right Edges
+                <AlignEndVertical size={14} /> Align Right Edges
               </div>
               <div className="dagnet-popup-item" onClick={(e) => { e.stopPropagation(); onAlign('align-top'); onClose(); }} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                Align Top Edges
+                <AlignStartHorizontal size={14} /> Align Top Edges
               </div>
               <div className="dagnet-popup-item" onClick={(e) => { e.stopPropagation(); onAlign('align-bottom'); onClose(); }} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                Align Bottom Edges
+                <AlignEndHorizontal size={14} /> Align Bottom Edges
               </div>
               <div className="dagnet-popup-divider" />
               <div className="dagnet-popup-item" onClick={(e) => { e.stopPropagation(); onAlign('align-centre-horizontal'); onClose(); }} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                Align Centre Horizontally
+                <AlignCenterHorizontal size={14} /> Align Centre Horizontally
               </div>
               <div className="dagnet-popup-item" onClick={(e) => { e.stopPropagation(); onAlign('align-centre-vertical'); onClose(); }} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                Align Centre Vertically
+                <AlignCenterVertical size={14} /> Align Centre Vertically
               </div>
               {canDistribute && onDistribute && (
                 <>
                   <div className="dagnet-popup-divider" />
                   <div className="dagnet-popup-item" onClick={(e) => { e.stopPropagation(); onDistribute('distribute-horizontal'); onClose(); }} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    Distribute Horizontally
+                    <AlignHorizontalDistributeCenter size={14} /> Distribute Horizontally
                   </div>
                   <div className="dagnet-popup-item" onClick={(e) => { e.stopPropagation(); onDistribute('distribute-vertical'); onClose(); }} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    Distribute Vertically
+                    <AlignVerticalDistributeCenter size={14} /> Distribute Vertically
                   </div>
                 </>
               )}
@@ -978,10 +1003,10 @@ export const NodeContextMenu: React.FC<NodeContextMenuProps> = ({
                 <>
                   <div className="dagnet-popup-divider" />
                   <div className="dagnet-popup-item" onClick={(e) => { e.stopPropagation(); onEqualSize('equal-width'); onClose(); }} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    Make Equal Width
+                    <MoveHorizontal size={14} /> Make Equal Width
                   </div>
                   <div className="dagnet-popup-item" onClick={(e) => { e.stopPropagation(); onEqualSize('equal-height'); onClose(); }} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    Make Equal Height
+                    <MoveVertical size={14} /> Make Equal Height
                   </div>
                 </>
               )}

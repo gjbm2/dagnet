@@ -424,16 +424,19 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
     const snapped = applySnapToChanges(filtered, nodesForSnapRef.current, snapToGuides, altKeyPressedRef.current);
     onNodesChangeBase(snapped);
 
-    if (autoReroute && !isSyncingRef.current) {
+    if (autoReroute) {
       if (sankeyLayoutInProgressRef.current || isEffectsCooldownActive()) {
         console.log(`[${ts()}] [GraphCanvas] Reroute suppressed (layout/cooldown active)`);
         return;
       }
-      const positionChanges = changes.filter(change => change.type === 'position');
-      if (positionChanges.length > 0) {
-        console.log(`[${new Date().toISOString()}] [GraphCanvas] Position changes detected, triggering reroute`);
-        // Trigger re-routing by incrementing the flag
-        // This will run during drag (for visual feedback) and won't save history
+      // Only trigger reroute for user-initiated drags (dragging === true).
+      // Sync-generated position changes (from Graph→ReactFlow sync) don't
+      // set dragging, so this prevents the reroute→sync→reroute loop that
+      // isSyncingRef was guarding against, without blocking real user drags.
+      const dragPositionChanges = changes.filter(
+        (change: any) => change.type === 'position' && change.dragging === true,
+      );
+      if (dragPositionChanges.length > 0) {
         triggerReroute();
       }
     }
@@ -3127,19 +3130,32 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
 
 
   // Handle canvas right-click for context menu
+  // Close all context menus — called before opening any new one
+  const closeAllContextMenus = useCallback(() => {
+    setContextMenu(null);
+    setNodeContextMenu(null);
+    setPostitContextMenu(null);
+    setContainerContextMenu(null);
+    setAnalysisContextMenu(null);
+    setMultiSelectContextMenu(null);
+    setEdgeContextMenu(null);
+    setContextMenuLocalData(null);
+  }, []);
+
   const onPaneContextMenu = useCallback((event: React.MouseEvent) => {
     event.preventDefault();
-    
+    closeAllContextMenus();
+
     // Get the flow position (position in the canvas coordinate system)
     const flowPosition = screenToFlowPosition({ x: event.clientX, y: event.clientY });
-    
+
     setContextMenu({
       x: event.clientX,
       y: event.clientY,
       flowX: flowPosition.x,
       flowY: flowPosition.y
     });
-  }, [screenToFlowPosition]);
+  }, [screenToFlowPosition, closeAllContextMenus]);
 
   // Resolve available analysis types when the canvas analysis context menu opens
   useEffect(() => {
@@ -3163,16 +3179,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
   // Close context menus on any click
   useEffect(() => {
     if (contextMenu || nodeContextMenu || postitContextMenu || containerContextMenu || analysisContextMenu || multiSelectContextMenu || edgeContextMenu) {
-      const handleClick = () => {
-        setContextMenu(null);
-        setNodeContextMenu(null);
-        setPostitContextMenu(null);
-        setContainerContextMenu(null);
-        setAnalysisContextMenu(null);
-        setMultiSelectContextMenu(null);
-        setEdgeContextMenu(null);
-        setContextMenuLocalData(null);
-      };
+      const handleClick = () => closeAllContextMenus();
       // Delay adding the listener to avoid catching the same click that opened the menu
       const timeoutId = setTimeout(() => {
         document.addEventListener('click', handleClick);
@@ -3183,11 +3190,12 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
         document.removeEventListener('click', handleClick);
       };
     }
-  }, [contextMenu, nodeContextMenu, multiSelectContextMenu, edgeContextMenu]);
+  }, [contextMenu, nodeContextMenu, postitContextMenu, containerContextMenu, analysisContextMenu, multiSelectContextMenu, edgeContextMenu, closeAllContextMenus]);
 
   const onNodeContextMenu = useCallback((event: React.MouseEvent, node: any) => {
     event.preventDefault();
     event.stopPropagation();
+    closeAllContextMenus();
 
     // Check if this is a multi-select with canvas objects (mixed-type or canvas-only)
     const selectedNodes = nodes.filter(n => n.selected);
@@ -3225,10 +3233,12 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
         nodeId: node.id,
       });
     }
-  }, [nodes, isCanvasObjectNode]);
+  }, [nodes, isCanvasObjectNode, closeAllContextMenus]);
 
   // Shared: open edge context menu by edge ID (used by real right-click and E2E hooks)
   const openEdgeContextMenuById = useCallback((edgeId: string, clientX: number, clientY: number) => {
+    closeAllContextMenus();
+
     // edge.id is ReactFlow ID (uuid), check both uuid and human-readable id
     const edgeData = graph?.edges?.find((e: any) => e.uuid === edgeId || e.id === edgeId);
 
@@ -3245,7 +3255,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
       conditionalProbabilities: {},
       variantWeight: 0
     });
-  }, [graph, onSelectedEdgeChange]);
+  }, [graph, onSelectedEdgeChange, closeAllContextMenus]);
 
   // Handle edge right-click
   const onEdgeContextMenu = useCallback((event: React.MouseEvent, edge: any) => {

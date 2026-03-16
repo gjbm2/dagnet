@@ -22,6 +22,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   const modal_submit_url = process.env.BAYES_MODAL_SUBMIT_URL;
   const modal_status_url = process.env.BAYES_MODAL_STATUS_URL;
+  const modal_cancel_url = process.env.BAYES_MODAL_CANCEL_URL;
   const webhook_url = process.env.BAYES_WEBHOOK_URL;
   const webhook_secret = process.env.BAYES_WEBHOOK_SECRET;
   const db_connection = process.env.DB_CONNECTION;
@@ -39,5 +40,5 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     });
   }
 
-  return res.status(200).json({ modal_submit_url, modal_status_url, webhook_url, webhook_secret, db_connection });
+  return res.status(200).json({ modal_submit_url, modal_status_url, modal_cancel_url, webhook_url, webhook_secret, db_connection });
 }

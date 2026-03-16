@@ -8,7 +8,7 @@
  * Driven entirely by operationRegistryService — no direct react-hot-toast usage.
  */
 
-import React, { useEffect, useState, useCallback, useRef } from 'react';
+import React, { useEffect, useState, useCallback, useRef, type PointerEvent as ReactPointerEvent } from 'react';
 import { useOperations } from '../hooks/useOperations';
 import { operationRegistryService, type Operation, type OperationSubStep } from '../services/operationRegistryService';
 import './OperationsToast.css';
@@ -16,6 +16,9 @@ import './OperationsToast.css';
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
+
+/** Max sub-steps shown in PrimaryRow before truncation. */
+const MAX_VISIBLE_SUBSTEPS = 3;
 
 /** Full opacity hold time after completion (ms). */
 const OPAQUE_HOLD_MS = 8_000;
@@ -155,10 +158,14 @@ function ProgressBar({ op, className }: { op: Operation; className?: string }) {
   );
 }
 
-function SubSteps({ subSteps }: { subSteps: OperationSubStep[] }) {
+function SubSteps({ subSteps, max }: { subSteps: OperationSubStep[]; max?: number }) {
+  const limit = max ?? subSteps.length;
+  const visible = subSteps.slice(0, limit);
+  const hidden = subSteps.length - visible.length;
+
   return (
     <div className="ops-toast-substeps">
-      {subSteps.map((s, i) => (
+      {visible.map((s, i) => (
         <div key={i} className="ops-toast-substep">
           {subStepIcon(s.status)}
           <span className="ops-toast-substep-label">
@@ -167,6 +174,11 @@ function SubSteps({ subSteps }: { subSteps: OperationSubStep[] }) {
           </span>
         </div>
       ))}
+      {hidden > 0 && (
+        <div className="ops-toast-substep ops-toast-substep-overflow">
+          <span className="ops-toast-substep-label">and {hidden} more…</span>
+        </div>
+      )}
     </div>
   );
 }
@@ -238,7 +250,7 @@ function PrimaryRow({ op }: { op: Operation }) {
           )}
         </div>
       )}
-      {op.subSteps && op.subSteps.length > 0 && <SubSteps subSteps={op.subSteps} />}
+      {op.subSteps && op.subSteps.length > 0 && <SubSteps subSteps={op.subSteps} max={MAX_VISIBLE_SUBSTEPS} />}
       {(op.status === 'running' || op.status === 'countdown') && <ProgressBar op={op} />}
     </div>
   );
@@ -296,6 +308,67 @@ function ListItem({ op, fade }: { op: Operation; fade: string }) {
 }
 
 // ---------------------------------------------------------------------------
+// Drag hook — lets user reposition the toast anywhere in the viewport
+// ---------------------------------------------------------------------------
+
+function useDrag(containerRef: React.RefObject<HTMLDivElement | null>) {
+  // Store position as bottom + left to preserve bottom-anchoring (toast grows upward).
+  const [offset, setOffset] = useState<{ left: number; bottom: number } | null>(null);
+  const dragState = useRef<{ startX: number; startY: number; origLeft: number; origBottom: number } | null>(null);
+
+  const onPointerDown = useCallback((e: ReactPointerEvent<HTMLDivElement>) => {
+    // Don't drag when clicking interactive elements
+    const tag = (e.target as HTMLElement).tagName.toLowerCase();
+    if (tag === 'button' || tag === 'a' || tag === 'input') return;
+    if ((e.target as HTMLElement).closest('button, a, input')) return;
+
+    const el = containerRef.current;
+    if (!el) return;
+
+    const rect = el.getBoundingClientRect();
+    dragState.current = {
+      startX: e.clientX,
+      startY: e.clientY,
+      origLeft: rect.left,
+      origBottom: window.innerHeight - rect.bottom,
+    };
+    el.setPointerCapture(e.pointerId);
+  }, [containerRef]);
+
+  const onPointerMove = useCallback((e: ReactPointerEvent<HTMLDivElement>) => {
+    const ds = dragState.current;
+    if (!ds) return;
+
+    const dx = e.clientX - ds.startX;
+    const dy = e.clientY - ds.startY;
+
+    const el = containerRef.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+
+    // Clamp left so toast stays in viewport horizontally
+    const left = Math.max(0, Math.min(window.innerWidth - rect.width, ds.origLeft + dx));
+    // Clamp bottom (dy positive = mouse moved down = bottom decreases)
+    const bottom = Math.max(0, Math.min(window.innerHeight - rect.height, ds.origBottom - dy));
+
+    setOffset({ left, bottom });
+  }, [containerRef]);
+
+  const onPointerUp = useCallback((e: ReactPointerEvent<HTMLDivElement>) => {
+    if (!dragState.current) return;
+    const el = containerRef.current;
+    if (el) el.releasePointerCapture(e.pointerId);
+    dragState.current = null;
+  }, [containerRef]);
+
+  const style: React.CSSProperties | undefined = offset
+    ? { left: offset.left, bottom: offset.bottom, transform: 'none' }
+    : undefined;
+
+  return { style, onPointerDown, onPointerMove, onPointerUp };
+}
+
+// ---------------------------------------------------------------------------
 // Main component
 // ---------------------------------------------------------------------------
 
@@ -304,6 +377,8 @@ export function OperationsToast(): React.ReactElement | null {
   const [now, setNow] = useState(Date.now);
   const [isHovered, setIsHovered] = useState(false);
   const [dismissed, setDismissed] = useState(false);
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const drag = useDrag(containerRef);
 
   // Reset dismissed flag when new operations arrive.
   const prevActiveLen = useRef(active.length);
@@ -338,7 +413,7 @@ export function OperationsToast(): React.ReactElement | null {
   const handleMouseEnter = useCallback(() => setIsHovered(true), []);
   const handleMouseLeave = useCallback(() => setIsHovered(false), []);
 
-  // Build expanded list: active ops (excluding primary) + visible recent.
+  // Build lists: other active ops (always visible) + recent (hover-only).
   const otherActive = active.filter((o) => o !== primary);
 
   if (!hasContent || dismissed) return null;
@@ -357,9 +432,14 @@ export function OperationsToast(): React.ReactElement | null {
 
   return (
     <div
+      ref={containerRef}
       className={`ops-toast ${containerFade}`}
+      style={drag.style}
       onMouseEnter={handleMouseEnter}
       onMouseLeave={handleMouseLeave}
+      onPointerDown={drag.onPointerDown}
+      onPointerMove={drag.onPointerMove}
+      onPointerUp={drag.onPointerUp}
     >
       {/* Close button (visible on hover) */}
       <button
@@ -370,22 +450,20 @@ export function OperationsToast(): React.ReactElement | null {
         ✕
       </button>
 
-      {/* Expanded list (above primary so bottom-anchored primary row stays put on hover) */}
+      {/* Other active operations — always visible when present */}
+      {otherActive.length > 0 && (
+        <div className="ops-toast-active-list">
+          <div className="ops-toast-list-header">
+            <span>Active ({otherActive.length})</span>
+          </div>
+          {otherActive.map((op) => (
+            <ListItem key={op.id} op={op} fade="" />
+          ))}
+        </div>
+      )}
+
+      {/* Recent/completed — hover-only */}
       <div className="ops-toast-list">
-        {otherActive.length > 0 && (
-          <>
-            <div className="ops-toast-list-header">
-              <span>Active ({otherActive.length})</span>
-            </div>
-            {otherActive.map((op) => (
-              <ListItem
-                key={op.id}
-                op={op}
-                fade=""
-              />
-            ))}
-          </>
-        )}
         {visibleRecent.length > 0 && (
           <>
             <div className="ops-toast-list-header">

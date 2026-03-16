@@ -8,6 +8,7 @@
 import React from 'react';
 import type { Edge, Node, Connection } from 'reactflow';
 import { Plus, StickyNote, Square, BarChart3, Clipboard, CheckSquare, Monitor, MonitorOff, X } from 'lucide-react';
+import { ContextMenu, type ContextMenuItem } from '../ContextMenu';
 import { NodeContextMenu } from '../NodeContextMenu';
 import { PostItContextMenu } from '../PostItContextMenu';
 import { ContainerContextMenu } from '../ContainerContextMenu';
@@ -175,63 +176,64 @@ export const CanvasContextMenus: React.FC<CanvasContextMenusProps> = React.memo(
   return (
     <>
       {/* Pane Context Menu */}
-      {contextMenu && (
-        <div
-          className="dagnet-popup"
-          style={{ position: 'fixed', left: contextMenu.x, top: contextMenu.y }}
-        >
-          <div className="dagnet-popup-item" onClick={(e) => { e.stopPropagation(); addNodeAtPosition(contextMenu.flowX, contextMenu.flowY); setContextMenu(null); }} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <Plus size={14} />
-            Add node
-          </div>
-          <div className="dagnet-popup-item" onClick={(e) => { e.stopPropagation(); setActiveElementTool('new-postit'); setContextMenu(null); }} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <StickyNote size={14} />
-            Add post-it
-          </div>
-          <div className="dagnet-popup-item" onClick={(e) => { e.stopPropagation(); setActiveElementTool('new-container'); setContextMenu(null); }} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <Square size={14} />
-            Add container
-          </div>
-          <div className="dagnet-popup-item" onClick={(e) => { e.stopPropagation(); startAddChart(); setContextMenu(null); }} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <BarChart3 size={14} />
-            Add chart
-          </div>
-          <div className="dagnet-popup-divider" />
-          {copiedNode && (
-            <div className="dagnet-popup-item" onClick={(e) => { e.stopPropagation(); pasteNodeAtPosition(contextMenu.flowX, contextMenu.flowY); setContextMenu(null); }} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <Clipboard size={14} />
-              Paste node: {copiedNode.objectId}
-            </div>
-          )}
-          {copiedSubgraph && (
-            <div className="dagnet-popup-item" onClick={(e) => { e.stopPropagation(); pasteSubgraphAtPosition(contextMenu.flowX, contextMenu.flowY); setContextMenu(null); }} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <Clipboard size={14} />
-              Paste ({[
-                copiedSubgraph.nodes.length > 0 && `${copiedSubgraph.nodes.length} node${copiedSubgraph.nodes.length !== 1 ? 's' : ''}`,
-                copiedSubgraph.edges.length > 0 && `${copiedSubgraph.edges.length} edge${copiedSubgraph.edges.length !== 1 ? 's' : ''}`,
-                (copiedSubgraph.postits?.length ?? 0) > 0 && `${copiedSubgraph.postits!.length} post-it${copiedSubgraph.postits!.length !== 1 ? 's' : ''}`,
-              ].filter(Boolean).join(', ')})
-            </div>
-          )}
-          {nodes.length > 0 && (
-            <div className="dagnet-popup-item" onClick={(e) => { e.stopPropagation(); window.dispatchEvent(new CustomEvent('dagnet:selectAllNodes')); setContextMenu(null); }} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <CheckSquare size={14} />
-              Select All
-            </div>
-          )}
-          {(copiedNode || copiedSubgraph || nodes.length > 0) && <div className="dagnet-popup-divider" />}
-          <div className="dagnet-popup-item" onClick={(e) => { e.stopPropagation(); setContextMenu(null); toggleDashboardMode({ updateUrl: true }); }} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            {isDashboardMode ? <MonitorOff size={14} /> : <Monitor size={14} />}
-            {isDashboardMode ? 'Exit dashboard mode' : 'Enter dashboard mode'}
-          </div>
-          {tabId && (
-            <div className="dagnet-popup-item" onClick={async (e) => { e.stopPropagation(); setContextMenu(null); await tabOperations.closeTab(tabId); }} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <X size={14} />
-              Close tab
-            </div>
-          )}
-        </div>
-      )}
+      {contextMenu && (() => {
+        const paneItems: ContextMenuItem[] = [
+          { label: 'Add node', icon: <Plus size={14} />, onClick: () => addNodeAtPosition(contextMenu.flowX, contextMenu.flowY) },
+          { label: 'Add post-it', icon: <StickyNote size={14} />, onClick: () => setActiveElementTool('new-postit') },
+          { label: 'Add container', icon: <Square size={14} />, onClick: () => setActiveElementTool('new-container') },
+          { label: 'Add chart', icon: <BarChart3 size={14} />, onClick: () => startAddChart() },
+          { label: '', onClick: () => {}, divider: true },
+        ];
+        if (copiedNode) {
+          paneItems.push({
+            label: `Paste node: ${copiedNode.objectId}`,
+            icon: <Clipboard size={14} />,
+            onClick: () => pasteNodeAtPosition(contextMenu.flowX, contextMenu.flowY),
+          });
+        }
+        if (copiedSubgraph) {
+          const desc = [
+            copiedSubgraph.nodes.length > 0 && `${copiedSubgraph.nodes.length} node${copiedSubgraph.nodes.length !== 1 ? 's' : ''}`,
+            copiedSubgraph.edges.length > 0 && `${copiedSubgraph.edges.length} edge${copiedSubgraph.edges.length !== 1 ? 's' : ''}`,
+            (copiedSubgraph.postits?.length ?? 0) > 0 && `${copiedSubgraph.postits!.length} post-it${copiedSubgraph.postits!.length !== 1 ? 's' : ''}`,
+          ].filter(Boolean).join(', ');
+          paneItems.push({
+            label: `Paste (${desc})`,
+            icon: <Clipboard size={14} />,
+            onClick: () => pasteSubgraphAtPosition(contextMenu.flowX, contextMenu.flowY),
+          });
+        }
+        if (nodes.length > 0) {
+          paneItems.push({
+            label: 'Select All',
+            icon: <CheckSquare size={14} />,
+            onClick: () => window.dispatchEvent(new CustomEvent('dagnet:selectAllNodes')),
+          });
+        }
+        if (copiedNode || copiedSubgraph || nodes.length > 0) {
+          paneItems.push({ label: '', onClick: () => {}, divider: true });
+        }
+        paneItems.push({
+          label: isDashboardMode ? 'Exit dashboard mode' : 'Enter dashboard mode',
+          icon: isDashboardMode ? <MonitorOff size={14} /> : <Monitor size={14} />,
+          onClick: () => toggleDashboardMode({ updateUrl: true }),
+        });
+        if (tabId) {
+          paneItems.push({
+            label: 'Close tab',
+            icon: <X size={14} />,
+            onClick: () => { tabOperations.closeTab(tabId); },
+          });
+        }
+        return (
+          <ContextMenu
+            x={contextMenu.x}
+            y={contextMenu.y}
+            items={paneItems}
+            onClose={() => setContextMenu(null)}
+          />
+        );
+      })()}
 
       {/* Post-It Context Menu */}
       {postitContextMenu && graph && (() => {

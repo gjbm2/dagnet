@@ -17,6 +17,7 @@ import {
   encryptCallbackToken,
   submitBayesFit,
   pollUntilDone,
+  cancelBayesJob,
 } from '../services/bayesService';
 import type { BayesJobRecord } from '../services/bayesService';
 
@@ -26,6 +27,7 @@ export type BayesComputeMode = 'local' | 'modal';
 /** URLs for local dev mode (Python server on :9000, webhook on :5173). */
 const LOCAL_SUBMIT_URL = 'http://localhost:9000/api/bayes/submit';
 const LOCAL_STATUS_URL = 'http://localhost:9000/api/bayes/status';
+const LOCAL_CANCEL_URL = 'http://localhost:9000/api/bayes/cancel';
 const LOCAL_WEBHOOK_URL = 'http://localhost:5173/api/bayes-webhook';
 const TUNNEL_START_URL = 'http://localhost:9000/api/bayes/tunnel/start';
 const TUNNEL_STATUS_URL = 'http://localhost:9000/api/bayes/tunnel/status';
@@ -48,10 +50,16 @@ export function useBayesTrigger(computeMode: BayesComputeMode = 'local') {
     lastResult: null,
   });
 
-  const abortRef = useRef(false);
+  const abortControllerRef = useRef<AbortController | null>(null);
+  const jobIdRef = useRef<string | null>(null);
 
   const trigger = useCallback(async () => {
-    abortRef.current = false;
+    // Abort any previous in-flight trigger
+    abortControllerRef.current?.abort();
+    const abortController = new AbortController();
+    abortControllerRef.current = abortController;
+    jobIdRef.current = null;
+
     setState({ status: 'submitting', jobId: null, error: null, lastResult: null });
 
     const opId = `bayes-fit:${Date.now()}`;
@@ -134,13 +142,37 @@ export function useBayesTrigger(computeMode: BayesComputeMode = 'local') {
 
       // 7. Register operation for progress toast
       const graphLabel = activeTab.fileId.replace(/^graph-/, '');
+      const cancelUrl = isLocal ? LOCAL_CANCEL_URL : undefined; // Modal cancel uses config URL
+      const modeLabel = computeMode === 'modal' ? '(Modal)' : '(local)';
+
+      const handleCancel = () => {
+        const jid = jobIdRef.current;
+        if (!jid) return;
+
+        // Show "cancelling" state while we wait for confirmation
+        operationRegistryService.setLabel(opId, `Bayes ${modeLabel}: cancelling ${graphLabel}…`);
+        operationRegistryService.setCancellable(opId, undefined, false);
+
+        cancelBayesJob(jid, cancelUrl).then(() => {
+          // Cancel confirmed — abort polling, mark cancelled
+          abortController.abort();
+          setState(s => ({ ...s, status: 'failed', error: 'Cancelled by user' }));
+          operationRegistryService.complete(opId, 'cancelled', 'Cancelled by user');
+        }).catch((err) => {
+          // Cancel failed — restore cancellable state so user can retry
+          sessionLogService.warning('bayes', 'BAYES_CANCEL_FAILED', `Cancel request failed: ${err.message}`);
+          operationRegistryService.setLabel(opId, `Bayes ${modeLabel}: fitting ${graphLabel}… (cancel failed)`);
+          operationRegistryService.setCancellable(opId, handleCancel, true);
+        });
+      };
+
       operationRegistryService.register({
         id: opId,
         kind: 'bayes-fit',
-        label: `Bayes ${computeMode === 'modal' ? '(Modal)' : '(local)'}: submitting ${graphLabel}…`,
+        label: `Bayes ${modeLabel}: submitting ${graphLabel}…`,
         status: 'running',
         cancellable: true,
-        onCancel: () => { abortRef.current = true; },
+        onCancel: handleCancel,
       });
 
       // 8. Submit
@@ -158,23 +190,34 @@ export function useBayesTrigger(computeMode: BayesComputeMode = 'local') {
         webhook_url: webhookUrl,
       }, submitUrl);
 
-      const modeTag = computeMode === 'modal' ? '(Modal)' : '(local)';
+
       const fitStartedAt = Date.now();
+      jobIdRef.current = jobId;
       setState(s => ({ ...s, status: 'running', jobId }));
-      operationRegistryService.setLabel(opId, `Bayes ${modeTag}: fitting ${graphLabel}…`);
+      operationRegistryService.setLabel(opId, `Bayes ${modeLabel}: fitting ${graphLabel}…`);
       sessionLogService.info('bayes', 'BAYES_DEV_SUBMITTED', `Job submitted: ${jobId}`, undefined, { jobId });
 
-      // 9. Poll until done
+      // 9. Poll until done (signal allows cancel to break out of the loop)
       const finalStatus = await pollUntilDone(jobId, (pollStatus) => {
-        if (abortRef.current) return;
+        if (abortController.signal.aborted) return;
         const elapsedSec = Math.round((Date.now() - fitStartedAt) / 1000);
-        const label = pollStatus.status === 'running'
-          ? `Bayes ${modeTag}: fitting ${graphLabel} (${elapsedSec}s)…`
-          : `Bayes ${modeTag}: ${pollStatus.status} — ${graphLabel}`;
+        let label: string;
+        if (pollStatus.status === 'running') {
+          const p = pollStatus.progress;
+          const progressStr = p
+            ? `${p.pct}% — ${p.detail || p.stage}`
+            : `${elapsedSec}s`;
+          label = `Bayes ${modeLabel}: fitting ${graphLabel} (${progressStr})…`;
+        } else {
+          label = `Bayes ${modeLabel}: ${pollStatus.status} — ${graphLabel}`;
+        }
         operationRegistryService.setLabel(opId, label);
-      }, isLocal ? 2_000 : 10_000, 10 * 60 * 1000, statusUrl);
+      }, isLocal ? 2_000 : 10_000, 10 * 60 * 1000, statusUrl, abortController.signal);
 
-      // 9. Done
+      // If cancelled, onCancel already handled state + registry — bail out
+      if (finalStatus.status === 'cancelled') return;
+
+      // 10. Done
       const record: BayesJobRecord = {
         job_id: jobId,
         graph_id: activeTab.fileId,
@@ -193,7 +236,7 @@ export function useBayesTrigger(computeMode: BayesComputeMode = 'local') {
 
         // 10. Auto-pull the updated graph file so FE reflects the committed changes
         try {
-          operationRegistryService.setLabel(opId, `Bayes ${modeTag}: pulling updated ${graphLabel}…`);
+          operationRegistryService.setLabel(opId, `Bayes ${modeLabel}: pulling updated ${graphLabel}…`);
           // Re-set status to 'complete' before completing the operation below
           const repoName = gitCred.name;
           const branchName = navState.selectedBranch || 'main';

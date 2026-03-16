@@ -22,9 +22,15 @@
   overflow: hidden;
   font-size: 13px;
   transition: opacity 2s ease-out;
+  touch-action: none;
+  cursor: grab;
 
   /* Slide up on mount */
   animation: ops-toast-slide-up 0.15s ease-out;
+}
+
+.ops-toast:active {
+  cursor: grabbing;
 }
 
 .ops-toast:hover {
@@ -209,7 +215,15 @@
   100% { transform: translateX(430%); }
 }
 
-/* ---- Expanded list (on hover) ------------------------------------------ */
+/* ---- Active list (always visible when other active ops exist) ----------- */
+
+.ops-toast-active-list {
+  border-bottom: 1px solid var(--border-color, #3c3c3c);
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+/* ---- Recent list (expanded on hover) ----------------------------------- */
 
 .ops-toast-list {
   max-height: 0;
@@ -373,6 +387,11 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.ops-toast-substep-overflow .ops-toast-substep-label {
+  font-style: italic;
+  padding-left: 18px;
 }
 
 /* ---- Spinner animation ------------------------------------------------- */

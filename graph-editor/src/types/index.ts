@@ -546,6 +546,85 @@ export interface LatencyConfig {
 
   /** UK date (d-MMM-yy) when the model was last fitted (staleness detection, not UI-exposed) */
   model_trained_at?: string;
+
+  /** Bayesian posterior for latency parameters (written by fitting engine) */
+  posterior?: LatencyPosterior;
+}
+
+// ── Bayesian posterior types ────────────────────────────────────────────────
+
+/** Probability fit_history entry (slim snapshot for drift tracking) */
+export interface ProbabilityFitHistoryEntry {
+  fitted_at: string;   // UK date (d-MMM-yy)
+  alpha: number;
+  beta: number;
+  hdi_lower: number;
+  hdi_upper: number;
+  rhat: number;
+}
+
+/** Bayesian posterior for a probability parameter */
+export interface ProbabilityPosterior {
+  distribution: string;        // e.g. 'beta', 'dirichlet-component'
+  alpha: number;               // Beta shape α
+  beta: number;                // Beta shape β
+  hdi_lower: number;           // Lower bound of HDI
+  hdi_upper: number;           // Upper bound of HDI
+  hdi_level: number;           // HDI level used (e.g. 0.9)
+  ess: number;                 // Effective sample size
+  rhat: number;                // Gelman-Rubin convergence diagnostic
+  evidence_grade: number;      // 0=cold start, 1=weak, 2=mature, 3=full Bayesian
+  fitted_at: string;           // UK date (d-MMM-yy)
+  fingerprint: string;         // Deterministic model hash
+  provenance: 'bayesian' | 'pooled-fallback' | 'point-estimate' | 'skipped';
+  fit_history?: ProbabilityFitHistoryEntry[];
+}
+
+/** Latency fit_history entry (slim snapshot for drift tracking) */
+export interface LatencyFitHistoryEntry {
+  fitted_at: string;           // UK date (d-MMM-yy)
+  mu_mean: number;
+  sigma_mean: number;
+  onset_delta_days: number;
+  rhat: number;
+}
+
+/** Bayesian posterior for latency parameters */
+export interface LatencyPosterior {
+  distribution: string;        // e.g. 'lognormal'
+  onset_delta_days: number;    // Posterior onset (may differ from pre-Bayes value)
+  mu_mean: number;             // Posterior mean of μ
+  mu_sd: number;               // Posterior SD of μ
+  sigma_mean: number;          // Posterior mean of σ
+  sigma_sd: number;            // Posterior SD of σ
+  hdi_t95_lower: number;       // Lower HDI bound for t95 (days)
+  hdi_t95_upper: number;       // Upper HDI bound for t95 (days)
+  hdi_level: number;           // HDI level used
+  ess: number;                 // Effective sample size
+  rhat: number;                // Convergence diagnostic
+  fitted_at: string;           // UK date (d-MMM-yy)
+  fingerprint: string;         // Same fingerprint as probability posterior
+  provenance: 'bayesian' | 'pooled-fallback' | 'point-estimate' | 'skipped';
+  fit_history?: LatencyFitHistoryEntry[];
+}
+
+/** Quality metrics from a Bayesian fitting run */
+export interface BayesQuality {
+  max_rhat: number;
+  min_ess: number;
+  converged_pct: number;       // Fraction of params meeting convergence criteria
+  edges_fitted: number;
+  edges_skipped: number;
+}
+
+/** Graph-level metadata from the most recent Bayesian fitting run */
+export interface BayesRunMetadata {
+  fitted_at: string;           // UK date (d-MMM-yy)
+  duration_ms: number;         // Wall-clock elapsed time
+  fingerprint: string;         // Deterministic hash of (graph + policy + evidence)
+  model_version: number;       // Schema version (starts at 1)
+  settings_signature: string;  // Hash of ForecastingSettings used
+  quality: BayesQuality;
 }
 
 /**
@@ -662,6 +741,9 @@ export interface ProbabilityParam {
   /** Latency configuration for this probability parameter */
   latency?: LatencyConfig;
   
+  /** Bayesian posterior for this probability parameter (written by fitting engine) */
+  posterior?: ProbabilityPosterior;
+
   /** Forecast probability from mature cohorts (p_∞) */
   forecast?: {
     mean?: number;  // Forecast mean probability
@@ -959,6 +1041,9 @@ export interface ConversionGraph {
    * e.g. "amplitude-prod", "amplitude-staging"
    */
   defaultConnection?: string;
+
+  /** Metadata from the most recent Bayesian fitting run (written by fitting engine) */
+  _bayes?: BayesRunMetadata;
 }
 
 export type Graph = ConversionGraph;

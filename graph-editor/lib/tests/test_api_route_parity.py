@@ -106,6 +106,7 @@ def test_route_parity():
         '/api/snapshots/delete-test', # Test-only: cleanup test data (pytest-* prefix only)
         '/api/bayes/submit',          # Dev-only: proxies to Modal (FE calls Modal directly in prod)
         '/api/bayes/status',          # Dev-only: proxies to Modal (FE calls Modal directly in prod)
+        '/api/bayes/cancel',          # Dev-only: proxies to Modal (FE calls Modal directly in prod)
         '/api/bayes/tunnel/start',    # Dev-only: cloudflared tunnel management
         '/api/bayes/tunnel/status',   # Dev-only: cloudflared tunnel management
         '/api/bayes/tunnel/stop',     # Dev-only: cloudflared tunnel management

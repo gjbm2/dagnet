@@ -115,10 +115,7 @@ export function RepositoryMenu() {
     }
     
     try {
-      const toastId = toast.loading('Force reloading workspace...');
       await repositoryOperationsService.forceFullReload(state.selectedRepo, state.selectedBranch, true);
-      toast.dismiss(toastId);
-      toast.success('Workspace reloaded');
     } catch (error) {
       console.error('Failed to force reload:', error);
       toast.error(`Force reload failed: ${error instanceof Error ? error.message : 'Unknown error'}`);

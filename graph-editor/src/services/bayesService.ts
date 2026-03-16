@@ -17,6 +17,7 @@ import { sessionLogService } from './sessionLogService';
 interface BayesConfig {
   modal_submit_url: string;
   modal_status_url: string;
+  modal_cancel_url?: string;
   webhook_url: string;
   webhook_secret: string;
   db_connection: string;
@@ -32,8 +33,15 @@ export interface BayesJobRecord {
   error?: string;
 }
 
+export interface BayesProgress {
+  stage: string;
+  pct: number;
+  detail?: string;
+}
+
 interface BayesStatusResult {
-  status: 'complete' | 'running' | 'failed';
+  status: 'complete' | 'running' | 'failed' | 'cancelled';
+  progress?: BayesProgress;
   result?: {
     status: string;
     duration_ms: number;
@@ -215,7 +223,8 @@ export async function pollBayesStatus(jobId: string, statusUrl?: string): Promis
 }
 
 /**
- * Poll a job until it completes or fails. Calls onUpdate on each poll.
+ * Poll a job until it completes, fails, or is cancelled. Calls onUpdate on each poll.
+ * Pass an AbortSignal to stop polling early (e.g. when the user cancels).
  * Returns the final status result.
  */
 export async function pollUntilDone(
@@ -224,19 +233,59 @@ export async function pollUntilDone(
   intervalMs = 10_000,
   timeoutMs = 10 * 60 * 1000,
   statusUrl?: string,
+  signal?: AbortSignal,
 ): Promise<BayesStatusResult> {
   const deadline = Date.now() + timeoutMs;
 
   while (Date.now() < deadline) {
+    if (signal?.aborted) {
+      return { status: 'cancelled', error: 'Cancelled by user' };
+    }
+
     const status = await pollBayesStatus(jobId, statusUrl);
     onUpdate?.(status);
 
-    if (status.status === 'complete' || status.status === 'failed') {
+    if (status.status === 'complete' || status.status === 'failed' || status.status === 'cancelled') {
       return status;
     }
 
-    await new Promise(resolve => setTimeout(resolve, intervalMs));
+    // Wait for interval, but break early if aborted
+    await new Promise<void>(resolve => {
+      const timer = setTimeout(resolve, intervalMs);
+      signal?.addEventListener('abort', () => { clearTimeout(timer); resolve(); }, { once: true });
+    });
   }
 
   return { status: 'failed', error: 'FE wall-clock timeout' };
+}
+
+
+// ---------------------------------------------------------------------------
+// Job cancellation
+// ---------------------------------------------------------------------------
+
+/**
+ * Cancel a running Bayes job. For Modal jobs, hits Modal's cancel endpoint
+ * which terminates the container (via FunctionCall.cancel). For local jobs,
+ * marks the job as cancelled in the in-memory store.
+ *
+ * Pass cancelUrl to override (used by local dev mode).
+ * Falls back to modal_cancel_url from config, then local dev server.
+ */
+export async function cancelBayesJob(jobId: string, cancelUrl?: string): Promise<void> {
+  let url = cancelUrl;
+  if (!url) {
+    const config = await fetchBayesConfig();
+    url = config.modal_cancel_url || 'http://localhost:9000/api/bayes/cancel';
+  }
+  const fullUrl = `${url}?call_id=${encodeURIComponent(jobId)}`;
+
+  const resp = await fetch(fullUrl, { method: 'POST' });
+
+  if (!resp.ok) {
+    throw new Error(`Cancel request failed: ${resp.status}`);
+  }
+
+  const result = await resp.json();
+  sessionLogService.info('bayes', 'BAYES_CANCEL', `Cancelled job ${jobId}: ${result.status}`, undefined, { jobId });
 }

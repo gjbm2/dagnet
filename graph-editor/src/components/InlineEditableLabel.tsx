@@ -91,6 +91,7 @@ export function InlineEditableLabel({
   }, [selected]);
 
   const handlePointerUp = useCallback((e: React.PointerEvent) => {
+    if (e.button !== 0) return; // left-click only — right-click opens context menu
     if (editing) return;
     if (!wasSelectedRef.current) return;
     const dx = e.clientX - pointerDownPos.current.x;

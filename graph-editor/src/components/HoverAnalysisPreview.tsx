@@ -875,8 +875,8 @@ export function useHoverPreview(delay = 500, gracePeriod = 300) {
     const rect = el?.getBoundingClientRect?.();
     const pos = rect
       ? { x: rect.left + rect.width / 2, y: rect.top }
-      : { x: e.clientX, y: e.clientY };
-    const triggerBottom = rect ? rect.bottom : undefined;
+      : { x: e.clientX, y: e.clientY - 40 };
+    const triggerBottom = rect ? rect.bottom : (e.clientY + 40);
 
     showTimerRef.current = setTimeout(() => {
       if (isHoveringTriggerRef.current) {

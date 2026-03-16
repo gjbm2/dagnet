@@ -444,6 +444,24 @@ export const LATENCY_REFETCH_COOLDOWN_MINUTES = 720;
 export const LATENCY_MIN_EFFECTIVE_SAMPLE_SIZE = 150;
 
 // =============================================================================
+// Bayesian Fitting: fit_history Retention
+// =============================================================================
+
+/**
+ * Minimum days between retained fit_history entries.
+ * The worker runs nightly but only appends to fit_history if at least
+ * this many days have passed since the last entry.
+ */
+export const BAYES_FIT_HISTORY_INTERVAL_DAYS = 7;
+
+/**
+ * Maximum fit_history entries per posterior.
+ * Oldest entries are evicted when the cap is reached.
+ * At default settings (interval=7, max=12) this gives ~3 months of weekly snapshots.
+ */
+export const BAYES_FIT_HISTORY_MAX_ENTRIES = 12;
+
+// =============================================================================
 // Forecasting Settings (wire format for Python backend)
 // =============================================================================
 
@@ -471,6 +489,9 @@ export interface ForecastingSettings {
   blend_completeness_power: number;
   // Evidence scope
   fit_left_censor_days: number;
+  // Bayesian fit_history retention
+  bayes_fit_history_interval_days: number;
+  bayes_fit_history_max_entries: number;
 }
 
 /**
@@ -490,6 +511,8 @@ export function buildForecastingSettings(): ForecastingSettings {
     forecast_blend_lambda: FORECAST_BLEND_LAMBDA,
     blend_completeness_power: LATENCY_BLEND_COMPLETENESS_POWER,
     fit_left_censor_days: LATENCY_FE_FIT_LEFT_CENSOR_DAYS,
+    bayes_fit_history_interval_days: BAYES_FIT_HISTORY_INTERVAL_DAYS,
+    bayes_fit_history_max_entries: BAYES_FIT_HISTORY_MAX_ENTRIES,
   };
 }
 

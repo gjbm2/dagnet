@@ -63,6 +63,14 @@ class ForecastingSettings:
     fit_left_censor_days: float = 0
     """Left-censor fitting evidence to the most recent N days. 0 = no censor."""
 
+    # ── Bayesian fit_history retention ─────────────────────────
+
+    bayes_fit_history_interval_days: float = 7
+    """Minimum days between retained fit_history entries."""
+
+    bayes_fit_history_max_entries: float = 12
+    """Maximum fit_history entries per posterior."""
+
 
 def settings_from_dict(d: Optional[Dict[str, Any]]) -> ForecastingSettings:
     """

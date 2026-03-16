@@ -5,7 +5,7 @@
  * Used by NodeContextMenu and EdgeContextMenu.
  */
 
-import React from 'react';
+import React, { useLayoutEffect, useRef, useState } from 'react';
 import { ChevronRight, Camera, Database, DatabaseZap, Folders, TrendingUpDown, X, Trash2, FileText } from 'lucide-react';
 import type { DataOperationSection } from './DataOperationsSections';
 import '../styles/popup-menu.css';
@@ -48,6 +48,20 @@ export const DataSectionSubmenu: React.FC<DataSectionSubmenuProps> = ({
   onManageSnapshots,
 }) => {
   const hasSnapshots = (snapshotCount ?? 0) > 0;
+  const submenuRef = useRef<HTMLDivElement>(null);
+  const [submenuOffset, setSubmenuOffset] = useState<{ top?: number; flipH?: boolean }>({});
+
+  useLayoutEffect(() => {
+    const el = submenuRef.current;
+    if (!el || !isOpen) { setSubmenuOffset({}); return; }
+    const rect = el.getBoundingClientRect();
+    const vh = window.innerHeight;
+    const vw = window.innerWidth;
+    const next: typeof submenuOffset = {};
+    if (rect.bottom > vh - 20) next.top = -(rect.bottom - (vh - 20));
+    if (rect.right > vw - 20) next.flipH = true;
+    setSubmenuOffset(next);
+  }, [isOpen]);
 
   return (
     <div
@@ -59,17 +73,19 @@ export const DataSectionSubmenu: React.FC<DataSectionSubmenuProps> = ({
         <span>{section.label}</span>
         <ChevronRight size={14} className="dagnet-popup-arrow" />
       </div>
-      
+
       {isOpen && (
         <div
+          ref={submenuRef}
           className="dagnet-popup"
           style={{
             position: 'absolute',
-            left: '100%',
-            top: 0,
+            ...(submenuOffset.flipH
+              ? { right: '100%', marginRight: '4px' }
+              : { left: '100%', marginLeft: '4px' }),
+            top: submenuOffset.top ?? 0,
             minWidth: '200px',
             zIndex: 99999,
-            marginLeft: '4px',
             whiteSpace: 'nowrap'
           }}
           onMouseEnter={onSubmenuContentEnter}

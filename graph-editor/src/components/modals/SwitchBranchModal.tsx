@@ -30,6 +30,13 @@ export function SwitchBranchModal({ isOpen, onClose, targetBranch, onSwitchCompl
   React.useEffect(() => {
     if (targetBranch) setSelectedBranch(targetBranch);
   }, [targetBranch]);
+
+  // Refresh branch list from GitHub each time modal opens
+  React.useEffect(() => {
+    if (isOpen) {
+      navOps.refreshBranches();
+    }
+  }, [isOpen]); // eslint-disable-line react-hooks/exhaustive-deps
   const [isProcessing, setIsProcessing] = useState(false);
   const [error, setError] = useState<string | null>(null);
 

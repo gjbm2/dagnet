@@ -60,6 +60,10 @@ export function useEdgeRouting({
   const skipNextRerouteRef = useRef(false);
   const prevAutoRerouteRef = useRef<boolean | undefined>(undefined);
   const lastNodePositionsRef = useRef<{ [nodeId: string]: { x: number; y: number } }>({});
+  // Ref for performAutoReroute — the shouldReroute effect reads this instead of
+  // depending on the callback directly, so that recreations of the callback
+  // (which happen every time nodes/edges/graph change) don't cancel the timeout.
+  const performAutoRerouteRef = useRef<() => void>(() => {});
 
   // -------------------------------------------------------------------------
   // performImmediateReroute
@@ -162,6 +166,10 @@ export function useEdgeRouting({
         }
       });
 
+      // Always update tracked positions so the next call has a valid baseline
+      // (critical on first call after load when lastNodePositionsRef is empty)
+      lastNodePositionsRef.current = currentPositions;
+
       if (movedNodes.length === 0) {
         console.log('No nodes moved, skipping re-route');
         return;
@@ -169,9 +177,6 @@ export function useEdgeRouting({
     }
 
     console.log('Moved nodes:', movedNodes);
-
-    // Update last positions
-    lastNodePositionsRef.current = currentPositions;
 
     // Find edges that need re-routing
     const edgesToReroute = edges.filter(edge =>
@@ -290,6 +295,9 @@ export function useEdgeRouting({
     // Graph→ReactFlow sync will pick up the edge handle changes via the fast path
   }, [autoReroute, forceReroute, graph, nodes, edges, calculateOptimalHandles, setGraph]);
 
+  // Keep ref current so the shouldReroute effect always calls the latest version
+  performAutoRerouteRef.current = performAutoReroute;
+
   // -------------------------------------------------------------------------
   // Effect: reset position tracking + immediate reroute when autoReroute toggled ON
   // -------------------------------------------------------------------------
@@ -334,7 +342,7 @@ export function useEdgeRouting({
       // Add a small delay to ensure node positions are fully updated
       const timeoutId = setTimeout(() => {
         console.log('Executing delayed re-route after node movement');
-        performAutoReroute();
+        performAutoRerouteRef.current();
         if (forceReroute) {
           setForceReroute(false);
         }
@@ -344,7 +352,7 @@ export function useEdgeRouting({
 
       return () => clearTimeout(timeoutId);
     }
-  }, [shouldReroute, autoReroute, forceReroute, performAutoReroute]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [shouldReroute, autoReroute, forceReroute]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // -------------------------------------------------------------------------
   // Return

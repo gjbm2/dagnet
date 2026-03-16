@@ -78,6 +78,91 @@ class LatencyConfig(BaseModel):
     path_mu: Optional[float] = Field(None, description="Path-level A→Y log-normal mu (Fenton–Wilkinson, internal)")
     path_sigma: Optional[float] = Field(None, ge=0, description="Path-level A→Y log-normal sigma (Fenton–Wilkinson, internal)")
     model_trained_at: Optional[str] = Field(None, description="UK date (d-MMM-yy) when the model was last fitted (staleness detection)")
+    posterior: Optional['LatencyPosterior'] = Field(None, description="Bayesian posterior for latency parameters (written by fitting engine)")
+
+
+# ── Bayesian posterior types ────────────────────────────────────────────────
+
+class ProbabilityFitHistoryEntry(BaseModel):
+    """Slim snapshot for probability posterior drift tracking."""
+    fitted_at: str
+    alpha: float
+    beta_param: float = Field(..., alias='beta')
+    hdi_lower: float
+    hdi_upper: float
+    rhat: float
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class ProbabilityPosterior(BaseModel):
+    """Bayesian posterior for a probability parameter."""
+    distribution: str = Field(..., description="Distribution family fitted (e.g. 'beta', 'dirichlet-component')")
+    alpha: float = Field(..., description="Beta posterior shape α")
+    beta_param: float = Field(..., alias='beta', description="Beta posterior shape β")
+    hdi_lower: float = Field(..., description="Lower bound of HDI")
+    hdi_upper: float = Field(..., description="Upper bound of HDI")
+    hdi_level: float = Field(..., description="HDI level used (e.g. 0.9)")
+    ess: float = Field(..., description="Effective sample size")
+    rhat: float = Field(..., description="Gelman-Rubin convergence diagnostic")
+    evidence_grade: int = Field(..., ge=0, le=3, description="Evidence degradation level (0=cold, 1=weak, 2=mature, 3=full Bayesian)")
+    fitted_at: str = Field(..., description="UK date (d-MMM-yy)")
+    fingerprint: str = Field(..., description="Deterministic model hash")
+    provenance: Literal['bayesian', 'pooled-fallback', 'point-estimate', 'skipped']
+    fit_history: Optional[List[ProbabilityFitHistoryEntry]] = None
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class LatencyFitHistoryEntry(BaseModel):
+    """Slim snapshot for latency posterior drift tracking."""
+    fitted_at: str
+    mu_mean: float
+    sigma_mean: float
+    onset_delta_days: float
+    rhat: float
+
+
+class LatencyPosterior(BaseModel):
+    """Bayesian posterior for latency parameters."""
+    distribution: str = Field(..., description="Distribution family fitted (e.g. 'lognormal')")
+    onset_delta_days: float = Field(..., description="Posterior onset (may differ from pre-Bayes value)")
+    mu_mean: float = Field(..., description="Posterior mean of μ")
+    mu_sd: float = Field(..., description="Posterior SD of μ")
+    sigma_mean: float = Field(..., description="Posterior mean of σ")
+    sigma_sd: float = Field(..., description="Posterior SD of σ")
+    hdi_t95_lower: float = Field(..., description="Lower HDI bound for t95 (days)")
+    hdi_t95_upper: float = Field(..., description="Upper HDI bound for t95 (days)")
+    hdi_level: float = Field(..., description="HDI level used")
+    ess: float = Field(..., description="Effective sample size")
+    rhat: float = Field(..., description="Convergence diagnostic")
+    fitted_at: str = Field(..., description="UK date (d-MMM-yy)")
+    fingerprint: str = Field(..., description="Same fingerprint as probability posterior")
+    provenance: Literal['bayesian', 'pooled-fallback', 'point-estimate', 'skipped']
+    fit_history: Optional[List[LatencyFitHistoryEntry]] = None
+
+
+class BayesQuality(BaseModel):
+    """Quality metrics from a Bayesian fitting run."""
+    max_rhat: float
+    min_ess: float
+    converged_pct: float = Field(..., ge=0, le=1, description="Fraction of params meeting convergence criteria")
+    edges_fitted: int = Field(..., ge=0)
+    edges_skipped: int = Field(..., ge=0)
+
+
+class BayesRunMetadata(BaseModel):
+    """Graph-level metadata from the most recent Bayesian fitting run."""
+    fitted_at: str = Field(..., description="UK date (d-MMM-yy)")
+    duration_ms: float = Field(..., ge=0, description="Wall-clock elapsed time")
+    fingerprint: str = Field(..., description="Deterministic hash of (graph + policy + evidence)")
+    model_version: int = Field(..., ge=1, description="Schema version (starts at 1)")
+    settings_signature: str = Field(..., description="Hash of ForecastingSettings used")
+    quality: BayesQuality
+
+
+# Update forward reference for LatencyConfig.posterior
+LatencyConfig.model_rebuild()
 
 
 class ForecastParams(BaseModel):
@@ -104,6 +189,7 @@ class ProbabilityParam(BaseModel):
     evidence: Optional[Evidence] = None
     id: Optional[str] = Field(None, description="Reference to parameter file (FK to parameter-{id}.yaml)")
     data_source: Optional[DataSource] = None
+    posterior: Optional[ProbabilityPosterior] = Field(None, description="Bayesian posterior (written by fitting engine)")
     # LAG fields
     latency: Optional[LatencyConfig] = Field(None, description="Latency configuration for this probability")
     forecast: Optional[ForecastParams] = Field(None, description="Forecast probability from mature cohorts")
@@ -398,6 +484,8 @@ class CanvasAnalysis(BaseModel):
 
 class Graph(BaseModel):
     """Complete conversion funnel graph."""
+    model_config = ConfigDict(populate_by_name=True)
+
     nodes: List[Node] = Field(..., min_length=1)
     edges: List[Edge]
     policies: Policies
@@ -411,6 +499,7 @@ class Graph(BaseModel):
     debugging: Optional[bool] = Field(None, description="If true, run Graph Issues checks while this graph is open and show an Issues indicator overlay.")
     dailyFetch: Optional[bool] = Field(None, description="If true, this graph is included in unattended daily automation runs when ?retrieveall is used without an explicit graph list.")
     defaultConnection: Optional[str] = Field(None, description="Default connection for all edges. Fallback when edge-level connection is not set (e.g. 'amplitude-prod').")
+    bayes: Optional[BayesRunMetadata] = Field(None, alias='_bayes', description="Metadata from the most recent Bayesian fitting run")
     
     def get_node_by_id(self, node_id: str) -> Optional[Node]:
         """Get node by ID or UUID."""
