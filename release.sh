@@ -86,6 +86,83 @@ done
 # Navigate to script directory (should be repo root)
 cd "$(dirname "$0")"
 
+# ── Pre-flight: ensure this branch includes everything from origin/main ──
+# Without this, the version number could be stale (main was bumped elsewhere)
+# and pushing branch:main could silently lose commits.
+print_blue "Checking origin/main..."
+git fetch origin main --quiet 2>/dev/null || {
+  print_red "✗ Could not fetch origin/main. Check your network/SSH."
+  exit 1
+}
+
+if ! git merge-base --is-ancestor origin/main HEAD; then
+  MERGE_BASE=$(git merge-base origin/main HEAD)
+  BEHIND_COUNT=$(git rev-list --count "$MERGE_BASE"..origin/main)
+  AHEAD_COUNT=$(git rev-list --count "$MERGE_BASE"..HEAD)
+
+  echo ""
+  if [[ "$AHEAD_COUNT" -eq 0 ]]; then
+    print_yellow "Your branch is ${BEHIND_COUNT} commit(s) behind origin/main."
+  else
+    print_yellow "Your branch has diverged from origin/main."
+    print_yellow "  Behind by ${BEHIND_COUNT} commit(s), ahead by ${AHEAD_COUNT} commit(s)."
+  fi
+  echo ""
+
+  echo "  Commits on origin/main not on this branch:"
+  git log --oneline "$MERGE_BASE"..origin/main | sed 's/^/    /'
+  echo ""
+
+  # Can we merge cleanly?
+  # Use merge-tree (git 2.38+) to check for conflicts without touching the worktree.
+  MERGE_TREE_OUT=$(git merge-tree --write-tree origin/main HEAD 2>&1) || true
+  HAS_CONFLICTS=false
+  if echo "$MERGE_TREE_OUT" | grep -q "CONFLICT"; then
+    HAS_CONFLICTS=true
+  fi
+
+  if [[ "$HAS_CONFLICTS" == true ]]; then
+    print_red "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    print_red "✗ RELEASE BLOCKED: merging origin/main would produce conflicts."
+    print_red "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo ""
+    print_yellow "Merge origin/main manually, resolve the conflicts, then re-run release.sh:"
+    print_yellow "  git merge origin/main"
+    print_yellow "  # resolve conflicts"
+    print_yellow "  git commit"
+    print_yellow "  ./release.sh"
+    echo ""
+    exit 1
+  fi
+
+  # Clean merge possible — proceed after a short countdown (user can cancel).
+  print_yellow "origin/main can be merged cleanly. Merging in 3s (press any key to cancel)..."
+  SKIP_MERGE=false
+  for i in 3 2 1; do
+    printf "\r  Merging in %d... " "$i"
+    if read -r -s -n 1 -t 1 _key 2>/dev/null; then
+      SKIP_MERGE=true
+      break
+    fi
+  done
+  printf "\r                              \r"
+
+  if [[ "$SKIP_MERGE" == true ]]; then
+    print_yellow "Cancelled. Merge origin/main manually when ready."
+    exit 0
+  fi
+
+  git merge origin/main --no-edit || {
+    print_red "✗ Merge failed unexpectedly. Resolve manually and re-run."
+    exit 1
+  }
+  print_green "  ✓ Merged origin/main into $(git branch --show-current)"
+  echo ""
+else
+  print_green "  ✓ Branch is up-to-date with origin/main"
+fi
+echo ""
+
 # Check if there are uncommitted changes and commit them FIRST
 if [[ -n $(git status --porcelain) ]]; then
   print_yellow "⚠ You have uncommitted changes."
@@ -336,42 +413,6 @@ case "${SCOPE_CHOICE^^}" in
 esac
 
 if [[ "$MERGE_TO_MAIN" == true ]]; then
-  # CRITICAL PRE-FLIGHT: Check that origin/main hasn't diverged from this branch.
-  # If main has commits we don't have, pushing branch:main would either fail (non-fast-forward)
-  # or — worse — silently lose those commits.
-  print_blue "Checking origin/main for divergence..."
-  git fetch origin main --quiet 2>/dev/null || {
-    print_red "✗ Could not fetch origin/main. Check your network/SSH."
-    print_red "Release aborted."
-    exit 1
-  }
-
-  # Is origin/main reachable from our HEAD? (i.e., is it an ancestor?)
-  if ! git merge-base --is-ancestor origin/main HEAD; then
-    echo ""
-    print_red "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    print_red "✗ RELEASE BLOCKED: origin/main has commits not on this branch!"
-    print_red "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo ""
-    MERGE_BASE=$(git merge-base origin/main HEAD)
-    echo "  Branches diverged at: $(git log --oneline -1 "$MERGE_BASE")"
-    echo ""
-    echo "  Commits on origin/main that you're missing:"
-    git log --oneline "$MERGE_BASE"..origin/main | sed 's/^/    /'
-    echo ""
-    echo "  Commits on ${CURRENT_BRANCH} since divergence:"
-    git log --oneline "$MERGE_BASE"..HEAD | sed 's/^/    /'
-    echo ""
-    print_yellow "To fix: merge origin/main into your branch first, then re-run release.sh"
-    print_yellow "  git fetch origin main"
-    print_yellow "  git merge origin/main"
-    print_yellow "  # resolve any conflicts, then re-run ./release.sh"
-    echo ""
-    exit 1
-  fi
-  print_green "  ✓ origin/main is up-to-date (all its commits are on this branch)"
-  echo ""
-
   print_yellow "⚠ This will:"
   echo "  1. Release ${NEW_DISPLAY} on ${CURRENT_BRANCH}"
   echo "  2. Merge ${CURRENT_BRANCH} → main"
