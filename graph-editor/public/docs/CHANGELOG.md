@@ -1,4 +1,11 @@
 # DagNet Release Notes
+## Version 1.7.18b
+**Released:** 16-Mar-26
+
+Bayes II
+
+---
+
 ## Version 1.7.16b
 **Released:** 16-Mar-26
 
