@@ -44,7 +44,7 @@ def _extract_dev_server_bayes_routes(content: str) -> dict[str, str]:
     """
     routes = {}
     for m in re.finditer(
-        r'@app\.(post|get)\(["\'](/api/bayes/(?:submit|status|cancel))["\']',
+        r'@app\.(post|get)\(["\'](/api/bayes/(?:submit|status|cancel|version))["\']',
         content,
     ):
         method = m.group(1).upper()

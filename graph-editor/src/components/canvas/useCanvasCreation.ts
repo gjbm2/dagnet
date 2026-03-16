@@ -63,6 +63,9 @@ export interface UseCanvasCreationParams {
 
 export interface UseCanvasCreationReturn {
   addNodeAtPosition: (x: number, y: number) => void;
+  addPostitAtPosition: (x: number, y: number, w?: number, h?: number) => void;
+  addContainerAtPosition: (x: number, y: number, w?: number, h?: number) => void;
+  addChartAtPosition: (x: number, y: number, w?: number, h?: number) => void;
   pasteNodeAtPosition: (x: number, y: number) => Promise<void>;
   pasteSubgraphAtPosition: (x: number, y: number) => Promise<void>;
   startAddChart: (detail?: { contextNodeIds?: string[]; contextEdgeIds?: string[] }) => void;
@@ -74,6 +77,12 @@ export interface UseCanvasCreationReturn {
   onPaneClick: (event: React.MouseEvent) => void;
   drawRect: { x: number; y: number; w: number; h: number } | null;
   drawStartRef: React.MutableRefObject<{ screenX: number; screenY: number; flowX: number; flowY: number; tool: string } | null>;
+  /** Visual rect for right-drag lasso (flow-space coords), for rendering */
+  rightDragRect: { x: number; y: number; w: number; h: number } | null;
+  /** Consume the right-drag rect (returns value and clears state). Used by onPaneContextMenu. */
+  consumeRightDragRect: () => { x: number; y: number; w: number; h: number } | null;
+  /** Clear right-drag state without consuming. Used by closeAllContextMenus. */
+  clearRightDrag: () => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -115,6 +124,29 @@ export function useCanvasCreation({
   const drawStartRef = useRef<{ screenX: number; screenY: number; flowX: number; flowY: number; tool: string } | null>(null);
   const [drawRect, setDrawRect] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
   const DRAW_TOOLS = new Set(['new-postit', 'new-container', 'new-analysis']);
+
+  // -------------------------------------------------------------------------
+  // Right-drag lasso state (button 2 drag → context menu with drawn rect)
+  // -------------------------------------------------------------------------
+  const rightDragStartRef = useRef<{ screenX: number; screenY: number; flowX: number; flowY: number } | null>(null);
+  const rightDragRectRef = useRef<{ x: number; y: number; w: number; h: number } | null>(null);
+  const [rightDragRect, setRightDragRect] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
+
+  const consumeRightDragRect = useCallback(() => {
+    const rect = rightDragRectRef.current;
+    rightDragRectRef.current = null;
+    // Don't clear visual state here — rect stays visible while context menu is open.
+    // clearRightDrag() handles full cleanup when the menu dismisses.
+    console.log('[DIAG] consumeRightDragRect:', rect);
+    return rect;
+  }, []);
+
+  const clearRightDrag = useCallback(() => {
+    console.trace('[DIAG] clearRightDrag called');
+    rightDragStartRef.current = null;
+    rightDragRectRef.current = null;
+    setRightDragRect(null);
+  }, []);
 
   // -------------------------------------------------------------------------
   // Core creation callbacks
@@ -209,6 +241,14 @@ export function useCanvasCreation({
     );
     setActiveElementTool('new-analysis');
   }, [nodes, edges, isCanvasObjectNode, graph, setActiveElementTool, getContainedConversionNodeIds]);
+
+  /** Create a chart immediately at position + optional size (used by right-drag lasso). */
+  const addChartAtPosition = useCallback((x: number, y: number, w?: number, h?: number) => {
+    const payload = buildAddChartPayload(
+      graph, nodes, edges, [], [], isCanvasObjectNode, getContainedConversionNodeIds,
+    );
+    addCanvasAnalysisAtPosition(x, y, { ...(payload || {}), drawWidth: w, drawHeight: h });
+  }, [graph, nodes, edges, isCanvasObjectNode, getContainedConversionNodeIds, addCanvasAnalysisAtPosition]);
 
   // -------------------------------------------------------------------------
   // Ref exports to parent
@@ -432,6 +472,17 @@ export function useCanvasCreation({
   // -------------------------------------------------------------------------
 
   const onPaneMouseDown = useCallback((event: React.PointerEvent) => {
+    // Right-drag for lasso creation (button 2)
+    if (event.button === 2) {
+      const target = event.target as HTMLElement;
+      if (target.closest('.react-flow__node') || target.closest('.react-flow__edge')) return;
+      const flowPos = screenToFlowPosition({ x: event.clientX, y: event.clientY });
+      rightDragStartRef.current = { screenX: event.clientX, screenY: event.clientY, flowX: flowPos.x, flowY: flowPos.y };
+      rightDragRectRef.current = null;
+      setRightDragRect(null);
+      return;
+    }
+    // Left-click draw-to-place (existing)
     if (!activeElementTool || !DRAW_TOOLS.has(activeElementTool)) return;
     const target = event.target as HTMLElement;
     if (target.closest('.react-flow__node') || target.closest('.react-flow__edge')) return;
@@ -441,6 +492,26 @@ export function useCanvasCreation({
   }, [activeElementTool, screenToFlowPosition]);
 
   const onPaneMouseMove = useCallback((event: React.PointerEvent) => {
+    // Right-drag rect tracking
+    if (rightDragStartRef.current) {
+      const sdx = event.clientX - rightDragStartRef.current.screenX;
+      const sdy = event.clientY - rightDragStartRef.current.screenY;
+      // Only show rect after 10px screen-space movement (avoid accidental micro-drags)
+      if (sdx * sdx + sdy * sdy < 100) return;
+      const flowPos = screenToFlowPosition({ x: event.clientX, y: event.clientY });
+      const sx = rightDragStartRef.current.flowX;
+      const sy = rightDragStartRef.current.flowY;
+      const rect = {
+        x: Math.min(sx, flowPos.x),
+        y: Math.min(sy, flowPos.y),
+        w: Math.abs(flowPos.x - sx),
+        h: Math.abs(flowPos.y - sy),
+      };
+      rightDragRectRef.current = rect;
+      setRightDragRect(rect);
+      return;
+    }
+    // Left-click draw (existing)
     if (!drawStartRef.current) return;
     const flowPos = screenToFlowPosition({ x: event.clientX, y: event.clientY });
     const sx = drawStartRef.current.flowX;
@@ -454,6 +525,12 @@ export function useCanvasCreation({
   }, [screenToFlowPosition]);
 
   const onPaneMouseUp = useCallback((event: React.PointerEvent) => {
+    // Right-drag: clear start ref, leave rect for contextmenu handler
+    if (rightDragStartRef.current && event.button === 2) {
+      rightDragStartRef.current = null;
+      return;
+    }
+    // Left-click draw-to-place (existing)
     if (!drawStartRef.current) return;
     const tool = drawStartRef.current.tool;
     const flowPos = screenToFlowPosition({ x: event.clientX, y: event.clientY });
@@ -494,6 +571,9 @@ export function useCanvasCreation({
   // -------------------------------------------------------------------------
   return {
     addNodeAtPosition,
+    addPostitAtPosition,
+    addContainerAtPosition,
+    addChartAtPosition,
     pasteNodeAtPosition,
     pasteSubgraphAtPosition,
     startAddChart,
@@ -505,5 +585,8 @@ export function useCanvasCreation({
     onPaneClick,
     drawRect,
     drawStartRef,
+    rightDragRect,
+    consumeRightDragRect,
+    clearRightDrag,
   };
 }

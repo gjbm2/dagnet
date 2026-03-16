@@ -722,13 +722,13 @@ messages.
   `ProbabilityParam` and `LatencyConfig` (see Schema additions above).
 - **Single vs multi-file commit?** Atomic multi-file via Git Data API.
 - **How does the FE detect completion?** Commit message pattern on next pull.
-- **Parameter file vs graph file.** Both. The webhook updates parameter files
-  AND cascades to graph files in the same atomic commit, using a shared
-  isomorphic cascade module extracted from UpdateManager. See "Which files
-  the webhook updates" below.
-- **Webhook route GitHub auth (partial).** Credentials and simple API calls
-  are proven. Atomic multi-file commits via Git Data API are NOT proven
-  server-side — needs a spike. See "Server-side GitHub auth" below.
+- **Parameter file vs graph file.** Both, but differently. The webhook
+  writes posteriors to parameter files and `_bayes` metadata to the graph
+  file. It does NOT cascade derived scalars to graph edges — that happens
+  on the FE's post-pull derivation pass. See "Resolved (16-Mar-26, Step 3)".
+- **Webhook route GitHub auth.** Fully proven. Credentials, API calls, and
+  atomic multi-file commits via Git Data API all work server-side. See
+  "Resolved (16-Mar-26, Step 3)" for spike results.
 - **Submission route runtime.** No Vercel submission route — FE calls
   Modal directly. See "Submission and status routes" below.
 
@@ -773,23 +773,29 @@ messages.
   Step 7 adds IDB persistence and boot reconciliation (poll Modal for
   pending jobs on app restart). See "Step 7: IDB job persistence" below.
 
-### Still open
+### Resolved (16-Mar-26, Step 3 implementation)
 
-- **Isomorphic cascade module extraction.** The pure cascade logic
-  (138 field mappings, override checking, value transforms) must be extracted
-  from UpdateManager into a shared module usable by both the browser and the
-  webhook handler. Investigation confirmed the core logic has zero platform
-  dependencies — the extraction is a refactor, not a rewrite. But it touches
-  a large, critical service (UpdateManager is ~5100 lines) and must not
-  change FE behaviour. Needs a careful implementation plan. See "Which files
-  the webhook updates" below.
-- **Git Data API spike.** The atomic multi-file commit workflow (createBlob →
-  createTree → createCommit → updateRef) has never been executed server-side
-  in this codebase. All existing implementations are browser-only
-  (`gitService.ts`). A spike is needed to verify this works from a Vercel TS
-  serverless function, including Octokit instantiation, execution time within
-  Vercel timeout limits, and correct commit output. See "Server-side GitHub
-  auth" below for details.
+- **Git Data API spike.** Proven. `api/_lib/git-commit.ts` implements
+  `atomicCommitFiles()` using raw fetch (no Octokit — matches existing api
+  route patterns). Roundtrip test (`gitDataApi.roundtrip.test.ts`) creates a
+  2-file atomic commit on `feature/bayes-test-graph` in ~2.6s. Well within
+  Vercel timeout. Uses `Buffer.from()` for base64 (no btoa/atob issues).
+- **Isomorphic cascade module extraction.** Already done (src-slimdown).
+  `mappingEngine.ts`, `mappingConfigurations.ts`, `nestedValueAccess.ts` are
+  all platform-agnostic. However, the webhook **does not use the cascade** —
+  see design decision below.
+- **Webhook does NOT cascade to graph edges.** The webhook writes posteriors
+  to parameter files and `_bayes` metadata to the graph file. It does NOT
+  cascade derived scalars (`p.mean`, `p.stdev`, `p.latency.*`) into graph
+  edges. Rationale: scalar derivation (completeness, forecast, t95) is
+  triggered by many things beyond Bayes completion (query changes, context
+  changes, date changes, time passing). The derivation pipeline must live
+  where all those triggers can reach it — the FE (possibly via BE calls).
+  The webhook commits the posteriors; the FE pulls, derives, and commits
+  derived scalars via the normal cascade on pull. See "Derivation pipeline
+  trade-off" in `1-cohort-completeness-model-contract.md` for full analysis.
+
+### Still open
 - **Modal spike (cold start + DB + scientific stack).** Modal is the
   chosen vendor. The spike must verify: sub-second cold start with the
   scientific Python image (numpy/scipy/pymc), Neon DB connectivity from

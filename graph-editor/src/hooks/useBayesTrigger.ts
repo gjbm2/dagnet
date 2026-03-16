@@ -63,6 +63,23 @@ export function useBayesTrigger(computeMode: BayesComputeMode = 'local') {
     setState({ status: 'submitting', jobId: null, error: null, lastResult: null });
 
     const opId = `bayes-fit:${Date.now()}`;
+    const isLocal = computeMode === 'local';
+    const modeLabel = computeMode === 'modal' ? '(Modal)' : '(local)';
+
+    // Get graph label early so the toast can appear immediately
+    const activeTab = tabs.find(t => t.id === activeTabId);
+    const graphLabel = activeTab
+      ? activeTab.fileId.replace(/^graph-/, '')
+      : 'unknown';
+
+    // Register operation immediately so toast appears before slow setup steps
+    operationRegistryService.register({
+      id: opId,
+      kind: 'bayes-fit',
+      label: `Bayes ${modeLabel}: preparing ${graphLabel}…`,
+      status: 'running',
+      cancellable: false,
+    });
 
     try {
       // 1. Fetch config
@@ -82,7 +99,6 @@ export function useBayesTrigger(computeMode: BayesComputeMode = 'local') {
       }
 
       // 3. Get current graph context
-      const activeTab = tabs.find(t => t.id === activeTabId);
       if (!activeTab) throw new Error('No active tab');
 
       const graphFile = fileRegistry.getFile(activeTab.fileId);
@@ -118,10 +134,10 @@ export function useBayesTrigger(computeMode: BayesComputeMode = 'local') {
       );
 
       // 6. Resolve URLs based on compute mode
-      const isLocal = computeMode === 'local';
       let webhookUrl: string;
       const submitUrl = isLocal ? LOCAL_SUBMIT_URL : undefined; // undefined = use config
       const statusUrl = isLocal ? LOCAL_STATUS_URL : undefined;
+      const cancelUrl = isLocal ? LOCAL_CANCEL_URL : undefined;
 
       if (isLocal) {
         webhookUrl = LOCAL_WEBHOOK_URL;
@@ -140,11 +156,7 @@ export function useBayesTrigger(computeMode: BayesComputeMode = 'local') {
 
       sessionLogService.info('bayes', 'BAYES_DEV_TRIGGER', `Mode: ${computeMode}, webhook: ${webhookUrl}`);
 
-      // 7. Register operation for progress toast
-      const graphLabel = activeTab.fileId.replace(/^graph-/, '');
-      const cancelUrl = isLocal ? LOCAL_CANCEL_URL : undefined; // Modal cancel uses config URL
-      const modeLabel = computeMode === 'modal' ? '(Modal)' : '(local)';
-
+      // 7. Wire up cancel handler now that we have URLs
       const handleCancel = () => {
         const jid = jobIdRef.current;
         if (!jid) return;
@@ -166,14 +178,8 @@ export function useBayesTrigger(computeMode: BayesComputeMode = 'local') {
         });
       };
 
-      operationRegistryService.register({
-        id: opId,
-        kind: 'bayes-fit',
-        label: `Bayes ${modeLabel}: submitting ${graphLabel}…`,
-        status: 'running',
-        cancellable: true,
-        onCancel: handleCancel,
-      });
+      operationRegistryService.setLabel(opId, `Bayes ${modeLabel}: submitting ${graphLabel}…`);
+      operationRegistryService.setCancellable(opId, handleCancel, true);
 
       // 8. Submit
       const jobId = await submitBayesFit({
@@ -204,15 +210,21 @@ export function useBayesTrigger(computeMode: BayesComputeMode = 'local') {
         let label: string;
         if (pollStatus.status === 'running') {
           const p = pollStatus.progress;
-          const progressStr = p
-            ? `${p.pct}% — ${p.detail || p.stage}`
-            : `${elapsedSec}s`;
-          label = `Bayes ${modeLabel}: fitting ${graphLabel} (${progressStr})…`;
+          if (p) {
+            label = `Bayes ${modeLabel}: ${p.detail || p.stage} — ${graphLabel}`;
+            operationRegistryService.setProgress(opId, {
+              current: p.pct,
+              total: 100,
+              detail: p.detail || p.stage,
+            });
+          } else {
+            label = `Bayes ${modeLabel}: starting ${graphLabel} (${elapsedSec}s)…`;
+          }
         } else {
           label = `Bayes ${modeLabel}: ${pollStatus.status} — ${graphLabel}`;
         }
         operationRegistryService.setLabel(opId, label);
-      }, isLocal ? 2_000 : 10_000, 10 * 60 * 1000, statusUrl, abortController.signal);
+      }, isLocal ? 2_000 : 3_000, 10 * 60 * 1000, statusUrl, abortController.signal);
 
       // If cancelled, onCancel already handled state + registry — bail out
       if (finalStatus.status === 'cancelled') return;
@@ -232,7 +244,11 @@ export function useBayesTrigger(computeMode: BayesComputeMode = 'local') {
       operationRegistryService.complete(opId, finalStatus.status === 'complete' ? 'complete' : 'error', finalStatus.error);
 
       if (finalStatus.status === 'complete') {
-        sessionLogService.success('bayes', 'BAYES_DEV_COMPLETE', `Job ${jobId} complete`, JSON.stringify(finalStatus.result, null, 2), { jobId });
+        const r = finalStatus.result as Record<string, unknown> | undefined;
+        const ver = r?.version ?? 'unknown';
+        const timings = r?.timings as Record<string, number> | undefined;
+        const timingSummary = timings ? ` | neon=${timings.neon_ms}ms fitting=${timings.fitting_ms}ms total=${timings.total_ms}ms` : '';
+        sessionLogService.success('bayes', 'BAYES_DEV_COMPLETE', `Job ${jobId} complete (v${ver}${timingSummary})`, JSON.stringify(finalStatus.result, null, 2), { jobId });
 
         // 10. Auto-pull the updated graph file so FE reflects the committed changes
         try {

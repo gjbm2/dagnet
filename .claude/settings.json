@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(time curl:*)",
+      "Bash(CI= PLAYWRIGHT_BROWSERS_PATH=\"$HOME/.cache/ms-playwright\" npm run -s e2e -- e2e/autoRerouteSettles.spec.ts -g \"edge handles update\" --workers=1 --retries=0 --reporter=line --timeout=25000 --global-timeout=45000)",
+      "Bash(CI= PLAYWRIGHT_BROWSERS_PATH=\"$HOME/.cache/ms-playwright\" npm run -s e2e -- e2e/autoRerouteSettles.spec.ts --workers=1 --retries=0 --reporter=line --timeout=25000 --global-timeout=90000)",
+      "Bash(ls e2e/*.spec.ts)",
+      "Bash(CI= PLAYWRIGHT_BROWSERS_PATH=$HOME/.cache/ms-playwright npx playwright test e2e/contextMenuViewportAdjust.spec.ts --workers=1 --retries=0 --reporter=line --timeout=10000 --global-timeout=30000)",
+      "Bash(CI= PLAYWRIGHT_BROWSERS_PATH=$HOME/.cache/ms-playwright npx playwright test e2e/autoRerouteSettles.spec.ts --workers=1 --retries=0 --reporter=line --timeout=10000 --global-timeout=30000)",
+      "Bash(ls /home/reg/dev/dagnet/graph-editor/venv/bin/modal*)",
+      "Bash(python -m pytest lib/tests/test_bayes_modal_local_parity.py lib/tests/test_api_route_parity.py -v)",
+      "WebFetch(domain:vitest.dev)",
+      "WebFetch(domain:deepwiki.com)",
+      "Bash(node -e \"const pkg = require\\(''./node_modules/vitest/package.json''\\); console.log\\(pkg.version\\)\")",
+      "Bash(wc -l /home/reg/dev/dagnet/graph-editor/src/**/*.ts /home/reg/dev/dagnet/graph-editor/src/**/*.tsx)"
+    ]
+  }
+}

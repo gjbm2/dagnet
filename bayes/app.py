@@ -12,6 +12,9 @@ Components:
 
 import modal
 import time
+import uuid
+
+APP_VERSION = "0.3.3-progress-layout"  # Bump on every deploy so we can verify which code is running
 
 app = modal.App("dagnet-bayes")
 
@@ -20,9 +23,7 @@ app = modal.App("dagnet-bayes")
 # Entries auto-expire after 7 days of inactivity (Modal default).
 progress_dict = modal.Dict.from_name("dagnet-bayes-progress", create_if_missing=True)
 
-# Scientific Python image – used by the worker only.
-# Submit and status endpoints use a minimal image (fast cold start).
-science_image = modal.Image.debian_slim(python_version="3.12").pip_install(
+worker_image = modal.Image.debian_slim(python_version="3.12").pip_install(
     "numpy",
     "scipy",
     "pymc",
@@ -39,6 +40,16 @@ minimal_image = modal.Image.debian_slim(python_version="3.12").pip_install(
 
 
 # ---------------------------------------------------------------------------
+# 0. Version endpoint – quick sanity check, no auth
+# ---------------------------------------------------------------------------
+@app.function(image=minimal_image)
+@modal.fastapi_endpoint(method="GET")
+def version():
+    """Return the deployed app version. Use to verify which code is running."""
+    return {"version": APP_VERSION}
+
+
+# ---------------------------------------------------------------------------
 # 1. Submit web endpoint – called directly by FE
 # ---------------------------------------------------------------------------
 @app.function(image=minimal_image)
@@ -51,8 +62,18 @@ async def submit(request: dict):
       graph_snapshot, parameters_index, parameter_files, settings,
       callback_token, db_connection, webhook_url
     """
+    # Generate a progress key and inject it into the payload so the worker
+    # can write progress keyed by it.  We can't use call.object_id because
+    # it's only known AFTER fn.spawn().
+    progress_key = str(uuid.uuid4())
+    request["_job_id"] = progress_key
+
     fn = modal.Function.from_name("dagnet-bayes", "fit_graph")
     call = fn.spawn(request)
+
+    # Store mapping so the status endpoint can resolve call_id → progress_key
+    progress_dict[f"_map:{call.object_id}"] = progress_key
+
     return {"job_id": call.object_id}
 
 
@@ -67,7 +88,7 @@ def _report_progress(job_id: str, stage: str, pct: int, detail: str = ""):
         pass  # Best-effort — don't let progress reporting kill the job
 
 
-@app.function(image=science_image, timeout=600)
+@app.function(image=worker_image, timeout=600)
 def fit_graph(payload: dict) -> dict:
     """Fit posteriors for a single graph. Fires webhook on completion.
 
@@ -86,12 +107,20 @@ def fit_graph(payload: dict) -> dict:
 
     job_id = payload.get("_job_id", "unknown")
     log = []
+    timings = {}
     t0 = time.time()
+    log.append(f"worker started (version {APP_VERSION})")
     error = None
     webhook_response = None
 
+    # Progress layout: 0-10% startup, 10-90% processing, 90-100% delivery
+    STARTUP_PCT = 10
+    PROCESSING_PCT = 80   # 10→90
+    DELIVERY_PCT = 10     # 90→100
+
     try:
-        _report_progress(job_id, "connecting", 5, "Connecting to Neon…")
+        # -- Startup phase (0→10%) --
+        _report_progress(job_id, "startup", 2, "Connecting to database…")
 
         # -- 1. Connect to Neon --
         db_url = payload.get("db_connection", "")
@@ -106,36 +135,43 @@ def fit_graph(payload: dict) -> dict:
         else:
             log.append("no neon_database_url in payload – skipping DB check")
 
-        _report_progress(job_id, "fitting", 20, "Building posteriors…")
+        timings["neon_ms"] = int((time.time() - t0) * 1000)
+        _report_progress(job_id, "startup", 7, "Preparing edges…")
 
         # -- 2. Build placeholder posterior payload --
         graph_id = payload.get("graph_id", "unknown")
         edges = []
 
-        # For the skeleton, we produce one placeholder edge per parameter
-        # file in the submission. Real inference replaces this.
+        # Real inference will replace this loop with actual MCMC sampling.
         param_files = payload.get("parameter_files", {})
         n_params = len(param_files)
         for idx, param_id in enumerate(param_files):
             edges.append({
                 "param_id": param_id,
                 "posterior": {
-                    "alpha": 1.0,
-                    "beta": 1.0,
-                    "hdi_lower": 0.0,
-                    "hdi_upper": 1.0,
-                    "hdi_level": 0.9,
-                    "ess": 0,
-                    "rhat": 0.0,
+                    "alpha": 1.0, "beta": 1.0,
+                    "hdi_lower": 0.0, "hdi_upper": 1.0,
+                    "hdi_level": 0.9, "ess": 0, "rhat": 0.0,
                     "provenance": "point-estimate",
                 },
             })
-            if n_params > 0:
-                pct = 20 + int(60 * (idx + 1) / n_params)
-                _report_progress(job_id, "fitting", pct, f"Edge {idx + 1}/{n_params}")
+        timings["fitting_ms"] = int((time.time() - t0) * 1000) - timings.get("neon_ms", 0)
         log.append(f"built placeholder posteriors for {len(edges)} edges")
 
-        _report_progress(job_id, "webhook", 85, "Firing webhook…")
+        # -- Processing phase (10→90%) --
+        # Simulated: 10s with per-second ticks. Real MCMC will replace this.
+        # pct = STARTUP_PCT + PROCESSING_PCT * step/total
+        t_sim = time.time()
+        sim_duration = 10
+        for sec in range(1, sim_duration + 1):
+            time.sleep(1)
+            pct = STARTUP_PCT + int(PROCESSING_PCT * sec / sim_duration)
+            _report_progress(job_id, "sampling", pct, f"Sampling {sec}/{sim_duration}s")
+        timings["processing_ms"] = int((time.time() - t_sim) * 1000)
+        log.append(f"simulated processing ({timings['processing_ms']}ms)")
+
+        # -- Delivery phase (90→100%) --
+        _report_progress(job_id, "delivering", 92, "Delivering results…")
 
         # -- 3. Fire webhook --
         webhook_url = payload.get("webhook_url", "")
@@ -198,9 +234,13 @@ def fit_graph(payload: dict) -> dict:
 
     duration_ms = int((time.time() - t0) * 1000)
 
+    timings["total_ms"] = duration_ms
+
     return {
         "status": "failed" if error else "complete",
+        "version": APP_VERSION,
         "duration_ms": duration_ms,
+        "timings": timings,
         "edges_fitted": len(edges) if not error else 0,
         "edges_skipped": 0,
         "quality": {"max_rhat": 0.0, "min_ess": 0},
@@ -258,13 +298,18 @@ def status(call_id: str = ""):
         result = fc.get(timeout=0)
         return {"status": "complete", "result": result}
     except TimeoutError:
-        # Still running — attach progress if available
+        # Still running — attach progress if available.
+        # The worker writes progress keyed by _job_id (a UUID), not by
+        # call_id.  The submit endpoint stores the mapping call_id → _job_id
+        # under the key "_map:{call_id}".
         progress = None
         try:
-            progress = progress_dict.get(call_id)
+            progress_key = progress_dict.get(f"_map:{call_id}")
+            if progress_key:
+                progress = progress_dict.get(progress_key)
         except Exception:
             pass
-        resp = {"status": "running"}
+        resp = {"status": "running", "version": APP_VERSION}
         if progress:
             resp["progress"] = progress
         return resp

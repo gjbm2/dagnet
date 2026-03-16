@@ -67,9 +67,9 @@ export default defineConfig({
       return true;
     },
 
-    // DEBUG: Ensure console output from production code is visible during tests.
-    // This is critical for diagnosing slice-selection / aggregation behaviour in E2E flows.
-    disableConsoleIntercept: true,
+    // NOTE: disableConsoleIntercept was removed — it caused garbled terminal output
+    // by interleaving raw console.log with Vitest's ANSI cursor-manipulation sequences.
+    // Use marks + debug streams for diagnosing slice-selection / aggregation behaviour.
     
     coverage: {
       provider: 'v8',
@@ -131,7 +131,6 @@ export default defineConfig({
     // Force exit after tests complete (prevents hanging in CI/non-interactive mode)
     forceRerunTriggers: [],
     
-    // DEBUG: Use a verbose reporter so logs and failures are easier to correlate.
     reporters: ['default'],
     
     // Ensure tests exit properly (not in watch mode)

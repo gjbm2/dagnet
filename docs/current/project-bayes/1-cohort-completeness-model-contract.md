@@ -1717,3 +1717,63 @@ becomes unacceptable.
 - Topo change clears `path_mu`/`path_sigma`/`path_delta`
 - Next recompute repopulates them
 - Analysis with stale/missing path params falls back to edge-level
+
+---
+
+## 23. Derivation pipeline trade-off (16-Mar-26)
+
+**Context**: the Bayes webhook commits posteriors (alpha, beta, mu_mean,
+sigma_mean, HDI, ESS, r-hat) to parameter files and `_bayes` metadata to the
+graph file. The question is: who derives the scalar fields that consumers
+read — `p.mean`, `p.stdev`, `latency.t95`, `completeness`, `forecast`?
+
+### Why the webhook does not derive scalars
+
+Multiple triggers require scalar re-derivation, not just Bayes completion:
+
+- User changes query expression → different evidence scope
+- User changes date window → different evidence slice
+- User changes visible contexts → different cohort filter
+- Time passes → completeness changes (lognormal CDF is time-dependent)
+
+The Bayes worker cannot handle any of these. So derivation logic must live
+somewhere the FE can reach for all triggers. Putting it in the webhook would
+create a second code path that only handles one trigger — a maintenance
+burden with no benefit.
+
+### What the worker uniquely produces
+
+Just the posterior distribution parameters. That's the heavy compute (MCMC
+sampling, convergence diagnostics). Everything else is derivable:
+
+- `p.mean` = alpha / (alpha + beta) — trivial
+- `p.stdev` = sqrt(alpha·beta / ((alpha+beta)² · (alpha+beta+1))) — trivial
+- `latency.mu`, `latency.sigma` = posterior means — already in the posterior
+- `t95` = exp(mu + 1.645·sigma) — one line
+- `completeness` = lognormal CDF at elapsed time — needs scipy or JS approx
+- `forecast` = blend of prior and evidence weighted by completeness
+
+### Trade-off: FE vs BE for derivation
+
+**BE (Python) advantages**: scipy available, same code as batch/nightly
+derivation, no risk of FE/BE divergence for complex stats (CDF, FW
+approximation).
+
+**FE advantages**: works offline, no round-trip latency, can respond
+immediately to user changes (query, context, dates). FE already has
+derivation code for the trivial cases (posterior mean, t95 from mu/sigma).
+
+**Current position (open, not resolved)**: lean toward FE doing trivial
+derivations (posterior mean/stdev, t95) and commissioning BE for complex
+derivations (completeness from lognormal CDF, forecast blending, FW path
+composition). This mirrors the current architecture where py-stats handles
+the heavy lifting but FE can display intermediate results without a BE
+call. The exact boundary is TBD — it depends on whether the JS lognormal
+CDF approximation is accurate enough for production use.
+
+**What this means for the webhook**: the webhook is intentionally simple.
+It commits posteriors to param files + `_bayes` to graph. No derived
+scalars, no cascade. The FE pulls, sees the posteriors, and runs the
+derivation pipeline (FE-local for trivial, BE-commissioned for complex).
+The derived scalars are then written to graph edges via the normal
+file_to_graph cascade on the next commit.

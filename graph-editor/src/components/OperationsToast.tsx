@@ -140,12 +140,34 @@ function ProgressBar({ op, className }: { op: Operation; className?: string }) {
   const effectivePct = pct ?? countdownPct;
   const isIndeterminate = op.status === 'running' && effectivePct === undefined;
 
+  // Suppress CSS transition when the operation changes OR when switching
+  // from indeterminate to determinate (first progress report arrives).
+  // Without this the bar animates from the indeterminate 30% width down
+  // to the first real value (e.g. 5%), which looks wrong.
+  const prevOpIdRef = useRef(op.id);
+  const wasIndeterminateRef = useRef(isIndeterminate);
+  const [suppressTransition, setSuppressTransition] = useState(false);
+  useEffect(() => {
+    const opChanged = op.id !== prevOpIdRef.current;
+    const becameDeterminate = wasIndeterminateRef.current && !isIndeterminate;
+
+    prevOpIdRef.current = op.id;
+    wasIndeterminateRef.current = isIndeterminate;
+
+    if (opChanged || becameDeterminate) {
+      setSuppressTransition(true);
+      const raf = requestAnimationFrame(() => setSuppressTransition(false));
+      return () => cancelAnimationFrame(raf);
+    }
+  }, [op.id, isIndeterminate]);
+
   const barClass = [
     'ops-toast-bar',
     op.status === 'complete' ? 'complete' : '',
     op.status === 'error' ? 'error' : '',
     op.status === 'countdown' ? 'countdown' : '',
     isIndeterminate ? 'indeterminate' : '',
+    suppressTransition ? 'no-transition' : '',
     className ?? '',
   ]
     .filter(Boolean)

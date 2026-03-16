@@ -66,14 +66,19 @@ export const ALL_ANCHORS: Record<string, Anchor> = {
 /** Source anchors for conversion nodes (fixed-size): centre only. */
 export const NODE_DRAG_ANCHORS: string[] = ['centreX', 'centreY'];
 
+/** Source anchors for conversion nodes in Sankey view: centres + top/bottom
+ *  (nodes have varying heights, so edge alignment matters). */
+export const NODE_DRAG_ANCHORS_SANKEY: string[] = ['centreX', 'centreY', 'top', 'bottom'];
+
 /** Source anchors for resizable objects (post-its, containers, analyses): all six. */
 export const RESIZABLE_DRAG_ANCHORS: string[] = Object.keys(ALL_ANCHORS);
 
 /**
  * Determine which source anchors to use when dragging a node.
- * Conversion nodes get centre only; resizable objects get all six.
+ * Conversion nodes get centre only (or centre + top/bottom in Sankey view);
+ * resizable objects get all six.
  */
-export function getSourceAnchorsForNode(nodeId: string): string[] {
+export function getSourceAnchorsForNode(nodeId: string, sankeyMode?: boolean): string[] {
   if (
     nodeId.startsWith('postit-') ||
     nodeId.startsWith('container-') ||
@@ -81,7 +86,7 @@ export function getSourceAnchorsForNode(nodeId: string): string[] {
   ) {
     return RESIZABLE_DRAG_ANCHORS;
   }
-  return NODE_DRAG_ANCHORS;
+  return sankeyMode ? NODE_DRAG_ANCHORS_SANKEY : NODE_DRAG_ANCHORS;
 }
 
 // ─── Geometry helpers ────────────────────────────────────────────────────────

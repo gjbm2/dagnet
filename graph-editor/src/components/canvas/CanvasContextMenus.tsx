@@ -36,8 +36,8 @@ export interface CanvasContextMenusProps {
   graphFileId?: string | null;
 
   // Context menu state
-  contextMenu: { x: number; y: number; flowX: number; flowY: number } | null;
-  setContextMenu: React.Dispatch<React.SetStateAction<{ x: number; y: number; flowX: number; flowY: number } | null>>;
+  contextMenu: { x: number; y: number; flowX: number; flowY: number; flowW?: number; flowH?: number } | null;
+  setContextMenu: React.Dispatch<React.SetStateAction<{ x: number; y: number; flowX: number; flowY: number; flowW?: number; flowH?: number } | null>>;
   nodeContextMenu: { x: number; y: number; nodeId: string } | null;
   setNodeContextMenu: React.Dispatch<React.SetStateAction<{ x: number; y: number; nodeId: string } | null>>;
   postitContextMenu: { x: number; y: number; postitId: string } | null;
@@ -58,6 +58,9 @@ export interface CanvasContextMenusProps {
 
   // Pane context menu actions
   addNodeAtPosition: (x: number, y: number) => void;
+  addPostitAtPosition: (x: number, y: number, w?: number, h?: number) => void;
+  addContainerAtPosition: (x: number, y: number, w?: number, h?: number) => void;
+  addChartAtPosition: (x: number, y: number, w?: number, h?: number) => void;
   pasteNodeAtPosition: (x: number, y: number) => void;
   pasteSubgraphAtPosition: (x: number, y: number) => void;
   setActiveElementTool: (tool: any) => void;
@@ -136,6 +139,9 @@ export const CanvasContextMenus: React.FC<CanvasContextMenusProps> = React.memo(
   setCtxDslEditState,
   analysisCtxAvailableTypes,
   addNodeAtPosition,
+  addPostitAtPosition,
+  addContainerAtPosition,
+  addChartAtPosition,
   pasteNodeAtPosition,
   pasteSubgraphAtPosition,
   setActiveElementTool,
@@ -177,11 +183,30 @@ export const CanvasContextMenus: React.FC<CanvasContextMenusProps> = React.memo(
     <>
       {/* Pane Context Menu */}
       {contextMenu && (() => {
+        const hasDrawnRect = !!(contextMenu.flowW && contextMenu.flowH);
         const paneItems: ContextMenuItem[] = [
           { label: 'Add node', icon: <Plus size={14} />, onClick: () => addNodeAtPosition(contextMenu.flowX, contextMenu.flowY) },
-          { label: 'Add post-it', icon: <StickyNote size={14} />, onClick: () => setActiveElementTool('new-postit') },
-          { label: 'Add container', icon: <Square size={14} />, onClick: () => setActiveElementTool('new-container') },
-          { label: 'Add chart', icon: <BarChart3 size={14} />, onClick: () => startAddChart() },
+          { label: 'Add post-it', icon: <StickyNote size={14} />, onClick: () => {
+            if (hasDrawnRect) {
+              addPostitAtPosition(contextMenu.flowX, contextMenu.flowY, contextMenu.flowW, contextMenu.flowH);
+            } else {
+              setActiveElementTool('new-postit');
+            }
+          }},
+          { label: 'Add container', icon: <Square size={14} />, onClick: () => {
+            if (hasDrawnRect) {
+              addContainerAtPosition(contextMenu.flowX, contextMenu.flowY, contextMenu.flowW, contextMenu.flowH);
+            } else {
+              setActiveElementTool('new-container');
+            }
+          }},
+          { label: 'Add chart', icon: <BarChart3 size={14} />, onClick: () => {
+            if (hasDrawnRect) {
+              addChartAtPosition(contextMenu.flowX, contextMenu.flowY, contextMenu.flowW, contextMenu.flowH);
+            } else {
+              startAddChart();
+            }
+          }},
           { label: '', onClick: () => {}, divider: true },
         ];
         if (copiedNode) {

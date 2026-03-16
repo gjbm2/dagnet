@@ -11,6 +11,7 @@ import { useCallback, useRef, useState } from 'react';
 import type { Connection, Edge, Node } from 'reactflow';
 import { wouldCreateCycle as wouldCreateCycleCore } from './pathHighlighting';
 import { generateUniqueId } from '@/lib/idUtils';
+import type { SyncGuards } from './syncGuards';
 
 // ---------------------------------------------------------------------------
 // Hook
@@ -23,7 +24,7 @@ export interface UseEdgeConnectionParams {
   setGraph: (graph: any, oldGraph?: any, source?: string) => void;
   saveHistoryState: (action: string, nodeId?: string | undefined, edgeId?: string | undefined) => void;
   onSelectedEdgeChange: (edgeId: string | null) => void;
-  isSyncingRef: React.MutableRefObject<boolean>;
+  guards: SyncGuards;
   skipNextRerouteRef: React.MutableRefObject<boolean>;
   getAllExistingIds: (excludeId?: string) => string[];
 }
@@ -56,7 +57,7 @@ export function useEdgeConnection({
   setGraph,
   saveHistoryState,
   onSelectedEdgeChange,
-  isSyncingRef,
+  guards,
   skipNextRerouteRef,
   getAllExistingIds,
 }: UseEdgeConnectionParams): UseEdgeConnectionReturn {
@@ -227,7 +228,7 @@ export function useEdgeConnection({
       console.log('📊 Final edge object:', JSON.stringify(nextGraph.edges[edgeIndex], null, 2));
 
       // Prevent ReactFlow->Graph sync from overwriting this manual reconnection
-      isSyncingRef.current = true;
+      guards.beginConnectionSync();
       setGraph(nextGraph);
 
       // Prevent auto-reroute from overwriting manual handle selection
@@ -236,10 +237,8 @@ export function useEdgeConnection({
       // Save history state for edge reconnection
       saveHistoryState('Reconnect edge', undefined, nextGraph.edges[edgeIndex].uuid || undefined);
 
-      // Reset isSyncingRef after a short delay to allow Graph->ReactFlow sync to complete
-      setTimeout(() => {
-        isSyncingRef.current = false;
-      }, 100);
+      // Reset sync flag after a short delay to allow Graph->ReactFlow sync to complete
+      guards.endConnectionSync(100);
     }, 50); // 50ms debounce
   }, [graph, setGraph, wouldCreateCycle, saveHistoryState]);
 

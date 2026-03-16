@@ -723,6 +723,12 @@ async def bayes_cancel_endpoint(call_id: str = ""):
     return result
 
 
+@app.get("/api/bayes/version")
+async def bayes_version_endpoint():
+    """Local equivalent of Modal's /version endpoint."""
+    return {"version": "local-dev"}
+
+
 @app.get("/api/bayes/status")
 async def bayes_status_endpoint(call_id: str = ""):
     """Local equivalent of Modal's /status endpoint.

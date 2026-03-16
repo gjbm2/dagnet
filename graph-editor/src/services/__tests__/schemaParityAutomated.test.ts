@@ -278,9 +278,13 @@ describe('AUTOMATED Schema / TypeScript / Python Parity', () => {
       // Python: Graph class
       const pyFields = getPythonFields('Graph');
       
-      // Known drift: Python has helper methods that aren't fields
+      // Known drift:
+      // - baseDSL: in schema+TS (no-op entry, kept for documentation)
+      // - _bayes vs bayes: Python uses `bayes` field with alias='_bayes' for serialisation
       assertTripleParity(schemaFields, tsFields, pyFields, 'Graph', {
-        tsOnly: ['baseDSL']
+        tsOnly: ['baseDSL'],
+        schemaOnly: ['_bayes'],
+        pyOnly: ['bayes'],
       });
     });
   });

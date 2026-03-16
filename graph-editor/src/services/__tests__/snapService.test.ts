@@ -616,5 +616,21 @@ describe('snapService integration', () => {
       expect(getSourceAnchorsForNode('container-xyz').length).toBe(6);
       expect(getSourceAnchorsForNode('analysis-123').length).toBe(6);
     });
+
+    it('should return centre+top+bottom anchors for conversion nodes in sankey mode', () => {
+      const anchors = getSourceAnchorsForNode('switch-success', true);
+      expect(anchors).toContain('centreX');
+      expect(anchors).toContain('centreY');
+      expect(anchors).toContain('top');
+      expect(anchors).toContain('bottom');
+      expect(anchors).not.toContain('left');
+      expect(anchors).not.toContain('right');
+      expect(anchors.length).toBe(4);
+    });
+
+    it('should still return all 6 anchors for resizable objects in sankey mode', () => {
+      expect(getSourceAnchorsForNode('postit-abc', true).length).toBe(6);
+      expect(getSourceAnchorsForNode('container-xyz', true).length).toBe(6);
+    });
   });
 });

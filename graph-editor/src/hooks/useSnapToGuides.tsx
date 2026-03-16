@@ -89,6 +89,7 @@ export function useSnapToGuides() {
       nodes: Node[],
       enabled: boolean,
       altKeyPressed: boolean,
+      sankeyMode?: boolean,
     ): NodeChange[] => {
       if (!enabled || altKeyPressed) {
         helperLinesRef.current?.clear();
@@ -176,7 +177,7 @@ export function useSnapToGuides() {
           y2: dragChange.position.y + h,
         };
 
-        const sourceAnchors = getSourceAnchorsForNode(node.id);
+        const sourceAnchors = getSourceAnchorsForNode(node.id, sankeyMode);
         const viewportBox = getViewportBox();
 
         const { horizontal: hMatch, vertical: vMatch } = getHelperLines(

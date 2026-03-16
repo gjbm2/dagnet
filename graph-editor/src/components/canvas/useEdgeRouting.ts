@@ -10,7 +10,8 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Edge, Node } from 'reactflow';
-import { assignFacesForNode } from '@/lib/faceSelection';
+import { assignFacesForNode, type EdgeInfo } from '@/lib/faceSelection';
+import type { SyncGuards } from './syncGuards';
 
 // ---------------------------------------------------------------------------
 // Hook
@@ -24,9 +25,7 @@ export interface UseEdgeRoutingParams {
   autoReroute: boolean;
   useSankeyView: boolean;
   calculateOptimalHandles: (sourceNode: any, targetNode: any) => { sourceHandle: string; targetHandle: string };
-  isDraggingNodeRef: React.MutableRefObject<boolean>;
-  sankeyLayoutInProgressRef: React.MutableRefObject<boolean>;
-  isEffectsCooldownActive: () => boolean;
+  guards: SyncGuards;
 }
 
 export interface UseEdgeRoutingReturn {
@@ -48,9 +47,7 @@ export function useEdgeRouting({
   autoReroute,
   useSankeyView,
   calculateOptimalHandles,
-  isDraggingNodeRef,
-  sankeyLayoutInProgressRef,
-  isEffectsCooldownActive,
+  guards,
 }: UseEdgeRoutingParams): UseEdgeRoutingReturn {
   // -------------------------------------------------------------------------
   // Internal state and refs
@@ -134,7 +131,7 @@ export function useEdgeRouting({
       return;
     }
 
-    const isDragging = isDraggingNodeRef.current;
+    const isDragging = guards.isDragging();
     console.log('performAutoReroute executing:', { autoReroute, forceReroute, isDragging });
 
     const currentPositions: { [nodeId: string]: { x: number; y: number } } = {};
@@ -155,7 +152,11 @@ export function useEdgeRouting({
 
         currentPositions[node.id] = currentPos;
 
-        if (lastPos && (Math.abs(currentPos.x - lastPos.x) > 5 || Math.abs(currentPos.y - lastPos.y) > 5)) {
+        if (!lastPos) {
+          // No baseline for this node (e.g. first reroute after load, or new node).
+          // Treat as moved so its edges get evaluated.
+          movedNodes.push(node.id);
+        } else if (Math.abs(currentPos.x - lastPos.x) > 5 || Math.abs(currentPos.y - lastPos.y) > 5) {
           movedNodes.push(node.id);
           console.log(`Node ${node.id} moved:`, {
             from: lastPos,
@@ -199,38 +200,48 @@ export function useEdgeRouting({
     const processedNodes = new Set<string>();
     const nodesToProcess = [...movedNodes];
 
-    // Process nodes in waves, using original edge state for decisions
+    // Process nodes in waves.
+    // IMPORTANT: derive EdgeInfo from nextGraph.edges (not ReactFlow `edges`)
+    // so that (a) later wave steps see faces assigned by earlier steps, and
+    // (b) successive reroute calls see the latest graph handles rather than
+    // stale ReactFlow state (which lags by one render cycle).
     while (nodesToProcess.length > 0) {
       const nodeId = nodesToProcess.shift()!;
       if (processedNodes.has(nodeId)) continue;
 
       processedNodes.add(nodeId);
 
-      // Use original edges for face assignment decisions
-      const assignments = assignFacesForNode(nodeId, pos, edges as any);
+      // Build EdgeInfo from the progressively-mutated nextGraph
+      const edgeInfos: EdgeInfo[] = nextGraph.edges.map((ge: any) => ({
+        id: ge.uuid || ge.id,
+        source: ge.from,
+        target: ge.to,
+        sourceHandle: ge.fromHandle || null,
+        targetHandle: ge.toHandle || null,
+      }));
+      const assignments = assignFacesForNode(nodeId, pos, edgeInfos);
 
       // Apply assignments and track changes
       Object.entries(assignments).forEach(([edgeId, face]) => {
-        const originalEdge = edges.find(e => e.id === edgeId);
         const graphEdge = nextGraph.edges.find((e: any) => e.uuid === edgeId || e.id === edgeId);
-        if (!originalEdge || !graphEdge) return;
+        if (!graphEdge) return;
 
         const newFromHandle = graphEdge.from === nodeId ? face + '-out' : graphEdge.fromHandle;
         const newToHandle = graphEdge.to === nodeId ? face : graphEdge.toHandle;
 
-        // Check if this edge's face actually changed
-        const fromChanged = graphEdge.from === nodeId && originalEdge.sourceHandle !== newFromHandle;
-        const toChanged = graphEdge.to === nodeId && originalEdge.targetHandle !== newToHandle;
+        // Compare against current nextGraph handles (not stale RF edges)
+        const fromChanged = graphEdge.from === nodeId && graphEdge.fromHandle !== newFromHandle;
+        const toChanged = graphEdge.to === nodeId && graphEdge.toHandle !== newToHandle;
 
         if (fromChanged || toChanged) {
           changedEdges.add(edgeId);
 
           // Add connected nodes for next wave (avoid duplicates)
-          if (!processedNodes.has(originalEdge.source) && !nodesToProcess.includes(originalEdge.source)) {
-            nodesToProcess.push(originalEdge.source);
+          if (!processedNodes.has(graphEdge.from) && !nodesToProcess.includes(graphEdge.from)) {
+            nodesToProcess.push(graphEdge.from);
           }
-          if (!processedNodes.has(originalEdge.target) && !nodesToProcess.includes(originalEdge.target)) {
-            nodesToProcess.push(originalEdge.target);
+          if (!processedNodes.has(graphEdge.to) && !nodesToProcess.includes(graphEdge.to)) {
+            nodesToProcess.push(graphEdge.to);
           }
         }
 
@@ -332,7 +343,7 @@ export function useEdgeRouting({
   // Effect: perform reroute when shouldReroute flag changes
   // -------------------------------------------------------------------------
   useEffect(() => {
-    if (sankeyLayoutInProgressRef.current || isEffectsCooldownActive()) {
+    if (guards.isBlocked()) {
       const ts = () => new Date().toISOString();
       console.log(`[${ts()}] [GraphCanvas] Re-route skipped (layout/cooldown active)`);
       return;

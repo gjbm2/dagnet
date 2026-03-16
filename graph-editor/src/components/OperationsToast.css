@@ -205,6 +205,10 @@
   transition: width 0.2s ease-out;
 }
 
+.ops-toast-bar.no-transition {
+  transition: none !important;
+}
+
 .ops-toast-bar.indeterminate {
   width: 30% !important;
   animation: ops-toast-indeterminate 1.4s ease-in-out infinite;

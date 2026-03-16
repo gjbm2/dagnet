@@ -148,16 +148,47 @@ export function getOptimalFace(
   return primaryFace;
 }
 
+// Face outward-direction unit vectors
+const FACE_DIR: Record<string, { x: number; y: number }> = {
+  right: { x: 1, y: 0 },
+  left:  { x: -1, y: 0 },
+  bottom: { x: 0, y: 1 },
+  top:    { x: 0, y: -1 },
+};
+const ALL_FACES = ['left', 'right', 'top', 'bottom'] as const;
+
+// Direction-mixing penalty applied when a face already has edges in the
+// opposite direction.  Large enough to outweigh geometry + stickiness in
+// almost all cases, but not infinite so the algorithm can still fall back
+// if every face is mixed.
+const DIR_CONFLICT_PENALTY = 2.0;
+
+export interface AssignFacesOptions {
+  /** 0..1 — bonus for keeping an edge on its current face. Default 0.4. */
+  stickyBias?: number;
+}
+
 /**
  * Assign faces for all incident edges at a node in one pass.
- * Ensures faces avoid mixing inputs/outputs where possible and prefers straighter (dominant axis) directions.
- * Returns a map of edgeId -> face for THIS node's side only.
+ *
+ * Each candidate face is scored:
+ *   geometric affinity (0..1)  — dot product of face direction with edge direction
+ * + sticky bonus (0..stickyBias) — if this face is the edge's CURRENT face
+ * − direction conflict penalty   — if the face already has opposite-direction edges
+ *
+ * Highest-scoring direction-compatible face wins; if all faces conflict,
+ * the least-loaded face is chosen as fallback.
+ *
+ * Returns a map of edgeId → face for THIS node's side only.
  */
 export function assignFacesForNode(
   nodeId: string,
   nodePositions: Record<string, { x: number; y: number }>,
-  allEdges: EdgeInfo[]
+  allEdges: EdgeInfo[],
+  options?: AssignFacesOptions,
 ): Record<string, string> {
+  const stickyBias = options?.stickyBias ?? 0.4;
+
   const incident = allEdges.filter(e => e.source === nodeId || e.target === nodeId);
 
   // Compute direction and priority (dominant axis magnitude) per edge
@@ -169,51 +200,68 @@ export function assignFacesForNode(
     const dy = (otherPos?.y ?? 0) - (nodePos?.y ?? 0);
     const dominant = Math.max(Math.abs(dx), Math.abs(dy));
     const isOutput = e.source === nodeId;
-    return { edge: e, dx, dy, dominant, isOutput };
+
+    // Current face for this edge at this node (derived from handles)
+    let currentFace: string | undefined;
+    if (isOutput) {
+      const h = e.sourceHandle || 'right-out';
+      currentFace = h.split('-')[0];
+    } else {
+      const h = e.targetHandle || 'left';
+      currentFace = h.split('-')[0];
+    }
+
+    return { edge: e, dx, dy, dominant, isOutput, currentFace };
   });
 
   // Sort by dominant axis magnitude descending (straighter/closer first)
   records.sort((a, b) => b.dominant - a.dominant);
 
-  // Track current face usage at this node
+  // Track current face usage at this node (built up as edges are assigned)
   const faceToDir: Record<string, 'in' | 'out' | 'mixed' | undefined> = {};
   const faceLoad: Record<string, number> = { left: 0, right: 0, top: 0, bottom: 0 };
 
   const result: Record<string, string> = {};
 
   for (const r of records) {
-    // Candidate faces: primary then secondary then others (geometric simple algorithm)
-    const candidates: string[] = [];
-    if (Math.abs(r.dx) > Math.abs(r.dy)) {
-      candidates.push(r.dx > 0 ? 'right' : 'left');
-      candidates.push(r.dy > 0 ? 'bottom' : 'top');
-    } else {
-      candidates.push(r.dy > 0 ? 'bottom' : 'top');
-      candidates.push(r.dx > 0 ? 'right' : 'left');
-    }
-    for (const f of ['left', 'right', 'top', 'bottom']) {
-      if (!candidates.includes(f)) candidates.push(f);
-    }
-
     const desiredDir: 'in' | 'out' = r.isOutput ? 'out' : 'in';
+    const mag = Math.sqrt(r.dx * r.dx + r.dy * r.dy) || 1;
 
-    // Pick first face that doesn't mix opposite direction; else choose least-loaded
-    let pick: string | null = null;
-    for (const face of candidates) {
+    // Score each face
+    let bestFace = 'right';
+    let bestScore = -Infinity;
+    let bestDirOk = false;
+
+    for (const face of ALL_FACES) {
+      const fd = FACE_DIR[face];
+
+      // Geometric affinity: cosine similarity normalised to 0..1
+      const dot = (fd.x * r.dx + fd.y * r.dy) / mag; // −1..1
+      const geo = (dot + 1) / 2; // 0..1
+
+      // Sticky bonus: reward keeping the current face
+      const sticky = (r.currentFace === face) ? stickyBias : 0;
+
+      // Direction compatibility
       const dir = faceToDir[face];
-      if (!dir) { pick = face; break; }
-      if (dir === desiredDir) { pick = face; break; }
-    }
-    if (!pick) {
-      // All faces have opposite/mixed; pick least loaded among candidates
-      pick = candidates.reduce((best, face) => (faceLoad[face] < faceLoad[best] ? face : best), candidates[0]);
+      const dirOk = !dir || dir === desiredDir;
+      const penalty = dirOk ? 0 : DIR_CONFLICT_PENALTY;
+
+      const score = geo + sticky - penalty;
+
+      // Prefer direction-compatible faces; among those, highest score wins
+      if (dirOk && !bestDirOk) {
+        bestFace = face; bestScore = score; bestDirOk = true;
+      } else if (dirOk === bestDirOk && score > bestScore) {
+        bestFace = face; bestScore = score; bestDirOk = dirOk;
+      }
     }
 
-    result[r.edge.id] = pick;
-    faceLoad[pick] = (faceLoad[pick] || 0) + 1;
-    const existing = faceToDir[pick];
-    if (!existing) faceToDir[pick] = desiredDir;
-    else if (existing !== desiredDir) faceToDir[pick] = 'mixed';
+    result[r.edge.id] = bestFace;
+    faceLoad[bestFace] = (faceLoad[bestFace] || 0) + 1;
+    const existing = faceToDir[bestFace];
+    if (!existing) faceToDir[bestFace] = desiredDir;
+    else if (existing !== desiredDir) faceToDir[bestFace] = 'mixed';
   }
 
   return result;

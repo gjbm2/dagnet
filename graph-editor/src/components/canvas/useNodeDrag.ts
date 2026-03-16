@@ -12,6 +12,7 @@ import { useCallback, useEffect, useRef } from 'react';
 import type { Node, Edge } from 'reactflow';
 import { fromFlow } from '@/lib/transform';
 import { DEFAULT_NODE_WIDTH, DEFAULT_NODE_HEIGHT } from '@/lib/nodeEdgeConstants';
+import type { SyncGuards } from './syncGuards';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -26,10 +27,9 @@ export interface UseNodeDragParams {
   saveHistoryState: (action: string, nodeId?: string, edgeId?: string) => void;
   resetHelperLines: () => void;
   rebuildSnapIndex: (nodes: Node[]) => void;
-  isDraggingNodeRef: React.MutableRefObject<boolean>;
+  guards: SyncGuards;
   setIsDraggingNode: (dragging: boolean) => void;
   setDraggedAnalysisId: (id: string | null) => void;
-  isSyncingRef: React.MutableRefObject<boolean>;
   lastSyncedReactFlowRef: React.MutableRefObject<string | null>;
 }
 
@@ -52,10 +52,9 @@ export function useNodeDrag({
   saveHistoryState,
   resetHelperLines,
   rebuildSnapIndex,
-  isDraggingNodeRef,
+  guards,
   setIsDraggingNode,
   setDraggedAnalysisId,
-  isSyncingRef,
   lastSyncedReactFlowRef,
 }: UseNodeDragParams): UseNodeDragReturn {
 
@@ -75,7 +74,7 @@ export function useNodeDrag({
     resetHelperLines();
 
     // Block Graph→ReactFlow sync during drag to prevent interruption
-    isDraggingNodeRef.current = true;
+    guards.beginInteraction('drag');
     setIsDraggingNode(true);
 
     // Track the specific analysis being dragged so SelectionConnectors
@@ -140,15 +139,15 @@ export function useNodeDrag({
       clearTimeout(dragTimeoutRef.current);
     }
     dragTimeoutRef.current = window.setTimeout(() => {
-      if (isDraggingNodeRef.current) {
+      if (guards.isDragging()) {
         console.log('[GraphCanvas] Drag timeout elapsed, clearing drag flag (failsafe)');
-        isDraggingNodeRef.current = false;
+        guards.endInteraction('drag');
         setIsDraggingNode(false);
         setDraggedAnalysisId(null);
       }
       dragTimeoutRef.current = null;
     }, 5000);
-  }, [nodes, resetHelperLines, isDraggingNodeRef, setIsDraggingNode, setDraggedAnalysisId]);
+  }, [nodes, resetHelperLines, guards, setIsDraggingNode, setDraggedAnalysisId]);
 
   // -------------------------------------------------------------------------
   // onNodeDrag
@@ -202,24 +201,25 @@ export function useNodeDrag({
             // Only update if positions actually changed
             if (updatedJson !== lastSyncedReactFlowRef.current) {
               console.log(`🎯 Syncing node positions to graph store after drag`);
-              isSyncingRef.current = true;
+              guards.beginConnectionSync();
               lastSyncedReactFlowRef.current = updatedJson;
-              // Keep isDraggingNodeRef.current = true - sync effect will clear it after taking fast path
+              // Keep drag guard active - sync effect will clear it after taking fast path
               setGraph(updatedGraph);
               // Clear syncing flag and drag state AFTER the sync render settles,
               // so edge components still see isDraggingNode=true and suppress hover previews
               setTimeout(() => {
-                isSyncingRef.current = false;
+                guards.endInteraction('drag');
                 setIsDraggingNode(false);
               }, 0);
+              guards.endConnectionSync(0);
             } else {
               // No position change, clear flags immediately
-              isDraggingNodeRef.current = false;
+              guards.endInteraction('drag');
               setIsDraggingNode(false);
             }
           } else {
             // No graph update, clear flags immediately
-            isDraggingNodeRef.current = false;
+            guards.endInteraction('drag');
             setIsDraggingNode(false);
           }
 
@@ -230,12 +230,12 @@ export function useNodeDrag({
           }, 0);
         } else {
           // Click-only (no movement) - just clear drag flag, no graph update or history entry
-          isDraggingNodeRef.current = false;
+          guards.endInteraction('drag');
           setIsDraggingNode(false);
         }
       });
     });
-  }, [saveHistoryState, graph, nodes, edges, setGraph, resetHelperLines, rebuildSnapIndex, isDraggingNodeRef, setIsDraggingNode, setDraggedAnalysisId, isSyncingRef, lastSyncedReactFlowRef]);
+  }, [saveHistoryState, graph, nodes, edges, setGraph, resetHelperLines, rebuildSnapIndex, guards, setIsDraggingNode, setDraggedAnalysisId, lastSyncedReactFlowRef]);
 
   // -------------------------------------------------------------------------
   // Cleanup drag timeout on unmount

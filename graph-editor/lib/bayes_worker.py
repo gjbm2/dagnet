@@ -11,13 +11,8 @@ any Modal dependency.
 
 Progress reporting: the payload may contain a '_report_progress' callback
 (injected by bayes_local.py) — same shape as Modal's _report_progress.
-
-Slow demo mode: set BAYES_SLOW_DEMO=1 (or pass _slow_demo=True in payload)
-to simulate a 60-second fit with progress updates, for testing the FE
-progress indicator.
 """
 
-import os
 import time
 
 
@@ -36,7 +31,6 @@ def fit_graph_local(payload: dict) -> dict:
     import psycopg2
 
     report = payload.get("_report_progress", _noop_progress)
-    slow_demo = payload.get("_slow_demo", os.environ.get("BAYES_SLOW_DEMO") == "1")
 
     log = []
     t0 = time.time()
@@ -46,10 +40,6 @@ def fit_graph_local(payload: dict) -> dict:
 
     try:
         report("connecting", 5, "Connecting to Neon…")
-
-        if slow_demo:
-            # Simulate slow DB connection
-            time.sleep(3)
 
         # -- 1. Connect to Neon --
         db_url = payload.get("db_connection", "")
@@ -72,45 +62,23 @@ def fit_graph_local(payload: dict) -> dict:
         param_files = payload.get("parameter_files", {})
         n_params = len(param_files)
 
-        if slow_demo and n_params == 0:
-            # Simulate 10 edges over ~45 seconds so we have something to watch
-            n_fake = 10
-            for i in range(n_fake):
-                time.sleep(4.5)
-                pct = 15 + int(65 * (i + 1) / n_fake)
-                report("fitting", pct, f"Sampling edge {i + 1}/{n_fake}")
-                edges.append({
-                    "param_id": f"demo-edge-{i}",
-                    "posterior": {
-                        "alpha": 1.0, "beta": 1.0,
-                        "hdi_lower": 0.0, "hdi_upper": 1.0,
-                        "hdi_level": 0.9, "ess": 0, "rhat": 0.0,
-                        "provenance": "point-estimate",
-                    },
-                })
-            log.append(f"built demo posteriors for {len(edges)} edges (slow demo)")
-        else:
-            for idx, param_id in enumerate(param_files):
-                if slow_demo:
-                    time.sleep(45.0 / max(n_params, 1))
-                edges.append({
-                    "param_id": param_id,
-                    "posterior": {
-                        "alpha": 1.0, "beta": 1.0,
-                        "hdi_lower": 0.0, "hdi_upper": 1.0,
-                        "hdi_level": 0.9, "ess": 0, "rhat": 0.0,
-                        "provenance": "point-estimate",
-                    },
-                })
-                if n_params > 0:
-                    pct = 15 + int(65 * (idx + 1) / n_params)
-                    report("fitting", pct, f"Edge {idx + 1}/{n_params}")
-            log.append(f"built placeholder posteriors for {len(edges)} edges")
+        # Real inference will replace this loop with actual MCMC sampling.
+        for idx, param_id in enumerate(param_files):
+            edges.append({
+                "param_id": param_id,
+                "posterior": {
+                    "alpha": 1.0, "beta": 1.0,
+                    "hdi_lower": 0.0, "hdi_upper": 1.0,
+                    "hdi_level": 0.9, "ess": 0, "rhat": 0.0,
+                    "provenance": "point-estimate",
+                },
+            })
+            if n_params > 0:
+                pct = 15 + int(65 * (idx + 1) / n_params)
+                report("fitting", pct, f"Edge {idx + 1}/{n_params}")
+        log.append(f"built placeholder posteriors for {len(edges)} edges")
 
         report("webhook", 85, "Firing webhook…")
-
-        if slow_demo:
-            time.sleep(3)
 
         # -- 3. Fire webhook --
         webhook_url = payload.get("webhook_url", "")

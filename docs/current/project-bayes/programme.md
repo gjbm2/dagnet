@@ -119,14 +119,18 @@ webhook → atomic git commit → FE pull — with correct posterior schema fiel
 but placeholder values.
 
 **Steps**:
-1. Schema additions: `posterior` sub-objects on `ProbabilityParam` and
-   `LatencyConfig` in TS types, Python Pydantic models, YAML schemas
-2. Webhook handler: `/api/bayes-webhook.ts` with atomic multi-file commit via
-   Git Data API, idempotency, authentication
-3. Compute vendor setup: Modal (or chosen vendor), DB connectivity, webhook
-   delivery
-4. Submission route: `/api/bayes/fit`, FE trigger
-5. FE integration: job tracking, session log
+1. ~~Schema additions~~: `posterior` sub-objects on `ProbabilityParam` and
+   `LatencyConfig` in TS types, Python Pydantic models, YAML schemas.
+   **Done 16-Mar-26.**
+2. ~~Isomorphic verification gate~~: confirm UpdateManager extracted modules
+   are platform-agnostic. **Done 16-Mar-26.**
+3. ~~Webhook handler~~: `/api/bayes-webhook.ts` with atomic multi-file commit
+   via Git Data API (`api/_lib/git-commit.ts`). Writes posteriors to param
+   files + `_bayes` metadata to graph. No cascade — scalar derivation
+   deferred to FE post-pull (see §23 in doc 1). **Done 16-Mar-26.**
+4. Compute vendor setup: Modal, DB connectivity, webhook delivery
+5. Submission route: `/api/bayes/fit`, FE trigger
+6. FE integration: job tracking, session log
 
 **Exit criteria**:
 - FE can submit and receive a job_id
