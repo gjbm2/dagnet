@@ -1,4 +1,14 @@
 # DagNet Release Notes
+## Version 1.7.9b
+**Released:** 16-Mar-26
+
+
+Preview: git add .
+
+  - .gitignore  (+7 / -0)
+
+---
+
 ## Version 1.7.7b
 **Released:** 11-Mar-26
 
