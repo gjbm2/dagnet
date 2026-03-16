@@ -88,15 +88,16 @@ import {
   registerSnapshotBootExpectations,
   summariseSnapshotCharts,
 } from '@/lib/snapshotBootTrace';
-import { generateIdFromLabel, generateUniqueId } from '@/lib/idUtils';
 import { computeEffectiveEdgeProbability } from '@/lib/whatIf';
-import { getOptimalFace, assignFacesForNode } from '@/lib/faceSelection';
+import { getOptimalFace } from '@/lib/faceSelection';
+import { useEdgeRouting } from './canvas/useEdgeRouting';
+import { useEdgeConnection } from './canvas/useEdgeConnection';
 import { computeFaceDirectionsFromEdges } from '@/lib/faceDirections';
 import { buildScenarioRenderEdges } from './canvas/buildScenarioRenderEdges';
 import { calculateEdgeOffsets as calculateEdgeOffsetsCore } from './canvas/edgeGeometry';
 import { computeDagreLayout as computeDagreLayoutCore, computeSankeyLayout as computeSankeyLayoutCore } from './canvas/layoutAlgorithms';
 import { createNodeInGraph, createNodeFromFileInGraph, createPostitInGraph, createContainerInGraph, createCanvasAnalysisInGraph, buildAddChartPayload } from './canvas/creationTools';
-import { wouldCreateCycle as wouldCreateCycleCore, computeHighlightMetadata } from './canvas/pathHighlighting';
+import { computeHighlightMetadata } from './canvas/pathHighlighting';
 import { getCaseEdgeVariantInfo } from './edges/edgeLabelHelpers';
 import { MAX_EDGE_WIDTH, MIN_EDGE_WIDTH, DEFAULT_NODE_WIDTH, DEFAULT_NODE_HEIGHT, MIN_NODE_HEIGHT, MAX_NODE_HEIGHT, IMAGE_VIEW_NODE_WIDTH, IMAGE_VIEW_NODE_HEIGHT } from '@/lib/nodeEdgeConstants';
 import { Monitor, MonitorOff, X, Plus, StickyNote, Square, BarChart3, Clipboard, CheckSquare } from 'lucide-react';
@@ -395,12 +396,6 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
     onEdgesChangeBase(filteredChanges);
   }, [onEdgesChangeBase, activeElementTool]);
   
-  // Trigger flag for re-routing
-  const [shouldReroute, setShouldReroute] = useState(0);
-  const [forceReroute, setForceReroute] = useState(false); // Force re-route once (for layout)
-  const skipNextRerouteRef = useRef(false); // Skip next auto-reroute after manual reconnection
-  const prevAutoRerouteRef = useRef<boolean | undefined>(undefined); // Track previous autoReroute state to detect actual changes
-  
   // Auto-layout state
   const [layoutDirection, setLayoutDirection] = useState<'LR' | 'RL' | 'TB' | 'BT'>('LR');
   
@@ -457,7 +452,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
         console.log(`[${new Date().toISOString()}] [GraphCanvas] Position changes detected, triggering reroute`);
         // Trigger re-routing by incrementing the flag
         // This will run during drag (for visual feedback) and won't save history
-        setShouldReroute((v) => v + 1);
+        triggerReroute();
       }
     }
   }, [autoReroute, snapToGuides, onNodesChangeBase, activeElementTool, applySnapToChanges]);
@@ -527,14 +522,14 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
   const reactFlowWrapperRef = useRef<HTMLDivElement>(null); // For lasso coordinate calculations
   const hasInitialFitViewRef = useRef(false);
   const currentGraphIdRef = useRef<string>('');
-  
+  const sankeyLayoutInProgressRef = useRef(false); // Gate reroutes/slow-path during Sankey layout
+  const effectsCooldownUntilRef = useRef<number>(0); // Suppress effects until this timestamp (ms)
+  const isEffectsCooldownActive = () => performance.now() < effectsCooldownUntilRef.current;
+
   // Track last committed RENDER edges (not base edges) for geometry field merge during slow-path rebuilds
   const lastRenderEdgesRef = useRef<Edge[]>([]);
   const isInSlowPathRebuildRef = useRef(false);
   
-  // Re-route feature state
-  const lastNodePositionsRef = useRef<{ [nodeId: string]: { x: number; y: number } }>({});
-
   // Ref to autofocus edge probability input in context menu
   const edgeProbabilityInputRef = useRef<HTMLInputElement | null>(null);
   
@@ -572,292 +567,26 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
     
     return { sourceHandle, targetHandle };
   }, [edges, useSankeyView]);
-  
-  // Perform immediate re-route of ALL edges (used when toggling on)
-  const performImmediateReroute = useCallback(() => {
-    if (!graph) {
-      console.log('No graph, skipping immediate re-route');
-      return;
-    }
-    
-    console.log('Performing immediate re-route of ALL edges');
-    
-    const nextGraph = structuredClone(graph);
-    let updatedCount = 0;
-    
-    // Re-route ALL edges
-    nextGraph.edges.forEach((graphEdge: any) => {
-      // For ReactFlow nodes, n.id IS the uuid, but graphEdge.from/to could be either uuid or human-readable id
-      const sourceNode = nodes.find(n => n.id === graphEdge.from || n.data?.id === graphEdge.from);
-      const targetNode = nodes.find(n => n.id === graphEdge.to || n.data?.id === graphEdge.to);
-      
-      if (sourceNode && targetNode) {
-        const { sourceHandle, targetHandle } = calculateOptimalHandles(sourceNode, targetNode);
-        
-        // Only count as updated if handles actually changed
-        const handleChanged = graphEdge.fromHandle !== sourceHandle || graphEdge.toHandle !== targetHandle;
-        
-        if (handleChanged) {
-          console.log(`Re-routing edge ${graphEdge.id}:`, {
-            from: graphEdge.from,
-            to: graphEdge.to,
-            oldFromHandle: graphEdge.fromHandle,
-            newFromHandle: sourceHandle,
-            oldToHandle: graphEdge.toHandle,
-            newToHandle: targetHandle
-          });
-          
-          graphEdge.fromHandle = sourceHandle;
-          graphEdge.toHandle = targetHandle;
-          updatedCount++;
-        }
-      }
-    });
-    
-    console.log(`Updated ${updatedCount} edges`);
-    
-    if (updatedCount > 0) {
-      if (nextGraph.metadata) {
-        nextGraph.metadata.updated_at = new Date().toISOString();
-      }
-      
-      console.log('Updating graph with immediate re-route changes');
-      setGraph(nextGraph);
-    }
-  }, [graph, nodes, calculateOptimalHandles, setGraph]);
-  
-  // Auto re-route edges when nodes move
-  const performAutoReroute = useCallback(() => {
-    // Skip if we just did a manual reconnection
-    if (skipNextRerouteRef.current) {
-      console.log('Auto re-route skipped: manual reconnection just occurred');
-      skipNextRerouteRef.current = false;
-      return;
-    }
-    
-    // Allow execution if autoReroute is enabled OR if forceReroute is true
-    if ((!autoReroute && !forceReroute) || !graph) {
-      console.log('Auto re-route skipped:', { autoReroute, forceReroute, hasGraph: !!graph });
-      return;
-    }
-    
-    const isDragging = isDraggingNodeRef.current;
-    console.log('performAutoReroute executing:', { autoReroute, forceReroute, isDragging });
-    
-    const currentPositions: { [nodeId: string]: { x: number; y: number } } = {};
-    let movedNodes: string[] = [];
-    
-    // If forceReroute, re-route ALL edges
-    if (forceReroute) {
-      console.log('Force re-route: processing all nodes');
-      movedNodes = nodes.map(n => n.id);
-      nodes.forEach(node => {
-        currentPositions[node.id] = { x: node.position.x, y: node.position.y };
-      });
-    } else {
-      // Check which nodes have moved
-      nodes.forEach(node => {
-        const currentPos = { x: node.position.x, y: node.position.y };
-        const lastPos = lastNodePositionsRef.current[node.id];
-        
-        currentPositions[node.id] = currentPos;
-        
-        if (lastPos && (Math.abs(currentPos.x - lastPos.x) > 5 || Math.abs(currentPos.y - lastPos.y) > 5)) {
-          movedNodes.push(node.id);
-          console.log(`Node ${node.id} moved:`, { 
-            from: lastPos, 
-            to: currentPos, 
-            deltaX: currentPos.x - lastPos.x, 
-            deltaY: currentPos.y - lastPos.y 
-          });
-        }
-      });
-      
-      if (movedNodes.length === 0) {
-        console.log('No nodes moved, skipping re-route');
-        return;
-      }
-    }
-    
-    console.log('Moved nodes:', movedNodes);
-    
-    // Update last positions
-    lastNodePositionsRef.current = currentPositions;
-    
-    // Find edges that need re-routing
-    const edgesToReroute = edges.filter(edge => 
-      movedNodes.includes(edge.source) || movedNodes.includes(edge.target)
-    );
-    
-    console.log('Edges to re-route:', edgesToReroute.map(e => e.id));
-    
-    if (edgesToReroute.length === 0) return;
-    
-    // Update graph with new handle positions
-    const nextGraph = structuredClone(graph);
-    
-    // Build quick position map
-    const pos: Record<string, { x: number; y: number }> = {};
-    nodes.forEach(n => { pos[n.id] = { x: n.position.x, y: n.position.y }; });
 
-    // Track which edges changed to identify nodes that need re-evaluation
-    const changedEdges = new Set<string>();
-    const processedNodes = new Set<string>();
-    const nodesToProcess = [...movedNodes];
-    
-    // Process nodes in waves, using original edge state for decisions
-    while (nodesToProcess.length > 0) {
-      const nodeId = nodesToProcess.shift()!;
-      if (processedNodes.has(nodeId)) continue;
-      
-      processedNodes.add(nodeId);
-      
-      // Use original edges for face assignment decisions
-      const assignments = assignFacesForNode(nodeId, pos, edges as any);
-      
-      // Apply assignments and track changes
-      Object.entries(assignments).forEach(([edgeId, face]) => {
-        const originalEdge = edges.find(e => e.id === edgeId); // ReactFlow edge IDs match
-        const graphEdge = nextGraph.edges.find(e => e.uuid === edgeId || e.id === edgeId);
-        if (!originalEdge || !graphEdge) return;
-        
-        const newFromHandle = graphEdge.from === nodeId ? face + '-out' : graphEdge.fromHandle;
-        const newToHandle = graphEdge.to === nodeId ? face : graphEdge.toHandle;
-        
-        
-        // Check if this edge's face actually changed
-        const fromChanged = graphEdge.from === nodeId && originalEdge.sourceHandle !== newFromHandle;
-        const toChanged = graphEdge.to === nodeId && originalEdge.targetHandle !== newToHandle;
-        
-        if (fromChanged || toChanged) {
-          changedEdges.add(edgeId);
-          
-          // Add connected nodes for next wave (avoid duplicates)
-          if (!processedNodes.has(originalEdge.source) && !nodesToProcess.includes(originalEdge.source)) {
-            nodesToProcess.push(originalEdge.source);
-          }
-          if (!processedNodes.has(originalEdge.target) && !nodesToProcess.includes(originalEdge.target)) {
-            nodesToProcess.push(originalEdge.target);
-          }
-        }
-        
-        // Apply the changes
-        if (graphEdge.from === nodeId) {
-          graphEdge.fromHandle = face + '-out';
-        }
-        if (graphEdge.to === nodeId) {
-          graphEdge.toHandle = face;
-        }
-      });
-    }
-    
-    // Only update if edges actually changed
-    if (changedEdges.size === 0) {
-      console.log('No edges changed, skipping graph update');
-      return;
-    }
-    
-    // Preserve current ReactFlow node positions in the graph
-    // This prevents nodes from jumping back to old positions when graph is synced.
-    // Must patch ALL node types: conversion nodes (layout.x/y), containers, postits,
-    // and canvas analyses (x/y directly). During drag, the graph store has stale
-    // positions (only updated at onNodeDragStop), but RF has the current positions.
-    nextGraph.nodes.forEach((node: any) => {
-      const reactFlowNode = nodes.find(n => n.id === node.uuid || n.id === node.id);
-      if (reactFlowNode && node.layout) {
-        node.layout.x = reactFlowNode.position.x;
-        node.layout.y = reactFlowNode.position.y;
-      }
-    });
-    if (nextGraph.containers) {
-      nextGraph.containers.forEach((container: any) => {
-        const rfNode = nodes.find(n => n.id === `container-${container.id}`);
-        if (rfNode) {
-          container.x = rfNode.position.x;
-          container.y = rfNode.position.y;
-        }
-      });
-    }
-    if (nextGraph.postits) {
-      nextGraph.postits.forEach((postit: any) => {
-        const rfNode = nodes.find(n => n.id === `postit-${postit.id}`);
-        if (rfNode) {
-          postit.x = rfNode.position.x;
-          postit.y = rfNode.position.y;
-        }
-      });
-    }
-    if (nextGraph.canvasAnalyses) {
-      nextGraph.canvasAnalyses.forEach((analysis: any) => {
-        const rfNode = nodes.find(n => n.id === `analysis-${analysis.id}`);
-        if (rfNode) {
-          analysis.x = rfNode.position.x;
-          analysis.y = rfNode.position.y;
-        }
-      });
-    }
-    
-    if (nextGraph.metadata) {
-      nextGraph.metadata.updated_at = new Date().toISOString();
-    }
-    
-    console.log(`Updating graph with ${changedEdges.size} changed edge handle positions`);
-    setGraph(nextGraph);
-    // Graph→ReactFlow sync will pick up the edge handle changes via the fast path
-  }, [autoReroute, forceReroute, graph, nodes, edges, calculateOptimalHandles, setGraph]);
-  
-  // Reset position tracking and perform immediate re-route when autoReroute is actually toggled ON
-  // Only react when the value actually changes, not on initial load
-  useEffect(() => {
-    const prev = prevAutoRerouteRef.current;
-    prevAutoRerouteRef.current = autoReroute;
-    
-    console.log(`[${new Date().toISOString()}] [GraphCanvas] useEffect#GC4: Auto re-route:`, autoReroute, `(prev: ${prev})`);
-    
-    if (autoReroute) {
-      // Initialize position tracking when enabling
-      const initialPositions: { [nodeId: string]: { x: number; y: number } } = {};
-      nodes.forEach(node => {
-        initialPositions[node.id] = { x: node.position.x, y: node.position.y };
-      });
-      lastNodePositionsRef.current = initialPositions;
-      
-      // Only perform immediate re-route if this is an actual toggle (not initial load)
-      if (prev !== undefined && prev !== autoReroute && graph && nodes.length > 0 && edges.length > 0) {
-        console.log('Triggering immediate re-route on toggle');
-        setTimeout(() => {
-          performImmediateReroute();
-        }, 50);
-      }
-    } else {
-      // Clear position tracking when disabling
-      lastNodePositionsRef.current = {};
-    }
-  }, [autoReroute]); // ONLY depend on autoReroute, not nodes/edges/graph!
-  
-  // Perform re-routing when shouldReroute flag changes (with small delay after node movement)
-  useEffect(() => {
-    if (sankeyLayoutInProgressRef.current || isEffectsCooldownActive()) {
-      console.log(`[${ts()}] [GraphCanvas] Re-route skipped (layout/cooldown active)`);
-      return;
-    }
-    if ((shouldReroute > 0 && autoReroute) || forceReroute) {
-      console.log('Re-route triggered:', { shouldReroute, autoReroute, forceReroute });
-      // Add a small delay to ensure node positions are fully updated
-      const timeoutId = setTimeout(() => {
-        console.log('Executing delayed re-route after node movement');
-        performAutoReroute();
-        if (forceReroute) {
-          setForceReroute(false); // Reset force flag after execution
-        }
-        // Reset the shouldReroute flag to prevent infinite loops
-        setShouldReroute(0);
-      }, 100); // 100ms delay after user finishes dragging
-      
-      return () => clearTimeout(timeoutId);
-    }
-  }, [shouldReroute, autoReroute, forceReroute, performAutoReroute]);
-  
+  // Edge routing hook (extracted from GraphCanvas Phase B2)
+  const {
+    triggerReroute,
+    setForceReroute,
+    skipNextRerouteRef,
+    performImmediateReroute,
+  } = useEdgeRouting({
+    graph,
+    nodes,
+    edges,
+    setGraph,
+    autoReroute,
+    useSankeyView,
+    calculateOptimalHandles,
+    isDraggingNodeRef,
+    sankeyLayoutInProgressRef,
+    isEffectsCooldownActive,
+  });
+
   // Get all existing ids (nodes and edges) for uniqueness checking
   const getAllExistingIds = useCallback((excludeId?: string) => {
     if (!graph) return [];
@@ -2927,9 +2656,6 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
   const lastWhatIfVersionRef = useRef<string>('');
   const sankeyUpdatingRef = useRef(false);
   const skipSankeyNodeSizingRef = useRef(false); // Set by Sankey layout to skip sizing after layout
-  const sankeyLayoutInProgressRef = useRef(false); // Gate reroutes/slow-path during Sankey layout
-  const effectsCooldownUntilRef = useRef<number>(0); // Suppress effects until this timestamp (ms)
-  const isEffectsCooldownActive = () => performance.now() < effectsCooldownUntilRef.current;
   useEffect(() => {
     if (!useSankeyView || sankeyUpdatingRef.current || skipSankeyNodeSizingRef.current) {
       if (skipSankeyNodeSizingRef.current) {
@@ -3100,322 +2826,29 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
     }
   }, [nodes, edges]); // Removed 'graph' and 'setGraph' from dependencies
 
-  // Cycle detection (core algorithm in canvas/pathHighlighting.ts)
-  const wouldCreateCycle = useCallback((source: string, target: string, currentEdges: any[]) => {
-    return wouldCreateCycleCore(source, target, currentEdges, nodes.map(n => n.id));
-  }, [nodes]);
+  // Edge connection hook (extracted from GraphCanvas Phase B3)
+  const {
+    onEdgeUpdate,
+    onConnect,
+    generateEdgeId,
+    handleVariantSelection,
+    wouldCreateCycle,
+    showVariantModal,
+    pendingConnection,
+    caseNodeVariants,
+    dismissVariantModal,
+  } = useEdgeConnection({
+    graph,
+    nodes,
+    edges,
+    setGraph,
+    saveHistoryState,
+    onSelectedEdgeChange,
+    isSyncingRef,
+    skipNextRerouteRef,
+    getAllExistingIds,
+  });
 
-  // Track pending reconnections to prevent race conditions
-  const pendingReconnectionRef = useRef<string | null>(null);
-  const reconnectionTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-
-  // Handle edge reconnection (dragging edge to new source/target)
-  // ReactFlow v11 uses onReconnect with signature: (oldEdge, newConnection)
-  const onEdgeUpdate = useCallback((oldEdge: Edge, newConnection: Connection) => {
-    
-    // Clear any existing timeout for this edge
-    if (reconnectionTimeoutRef.current) {
-      clearTimeout(reconnectionTimeoutRef.current);
-      reconnectionTimeoutRef.current = null;
-    }
-    
-    // If this is an invalid connection, ignore it
-    if (!newConnection.source || !newConnection.target) {
-      console.log('❌ REJECTED: Invalid connection (missing source/target)');
-      return;
-    }
-    
-    // CRITICAL: Only allow reconnection if edge is selected
-    if (!oldEdge.selected) {
-      console.log('❌ REJECTED: Edge not selected');
-      return;
-    }
-    
-    if (!graph) {
-      console.log('❌ REJECTED: No graph available');
-      return;
-    }
-    
-    // Check for valid connection
-    if (!newConnection.source || !newConnection.target) {
-      console.log('❌ REJECTED: Missing source or target');
-      console.log('╚════════════════════════════════════════════════════╝');
-      return;
-    }
-    
-    // Additional check: if this is an invalid connection (no target), ignore it
-    // This prevents ReactFlow from calling us with invalid connections when mouseup happens outside nodes
-    if (newConnection.target === null || newConnection.target === undefined) {
-      console.log('❌ REJECTED: Invalid target (null/undefined)');
-      return;
-    }
-    
-    // Prevent self-referencing edges (but allow changing the handle on same nodes)
-    if (newConnection.source === newConnection.target && 
-        oldEdge.source === oldEdge.target) {
-      console.log('❌ REJECTED: Cannot connect node to itself');
-      return;
-    }
-    
-    // Check for circular dependencies ONLY if source or target changed
-    const nodesChanged = oldEdge.source !== newConnection.source || oldEdge.target !== newConnection.target;
-    if (nodesChanged) {
-      const reactFlowEdges = graph.edges
-        .filter(e => e.uuid !== oldEdge.id) // oldEdge.id from ReactFlow is the edge UUID
-        .map(e => ({ source: e.from, target: e.to }));
-      if (wouldCreateCycle(newConnection.source, newConnection.target, reactFlowEdges)) {
-        console.log('❌ REJECTED: Would create cycle');
-        alert('Cannot create this connection as it would create a circular dependency.');
-        return;
-      }
-    }
-    
-    console.log('✅ VALIDATION PASSED - Debouncing reconnection...');
-    
-    // Debounce the reconnection to handle multiple rapid calls
-    reconnectionTimeoutRef.current = setTimeout(() => {
-      console.log('🔄 Processing debounced reconnection...');
-      
-      // Update the edge in graph state
-      const nextGraph = structuredClone(graph);
-      
-      // Try multiple ways to find the edge
-      let edgeIndex = nextGraph.edges.findIndex((e: any) => e.uuid === oldEdge.id || e.id === oldEdge.id);
-      
-      if (edgeIndex === -1) {
-        // Try finding by source->target format
-        const sourceTargetId = `${oldEdge.source}->${oldEdge.target}`;
-        edgeIndex = nextGraph.edges.findIndex((e: any) => e.uuid === sourceTargetId || e.id === sourceTargetId);
-      }
-      
-      if (edgeIndex === -1) {
-        // Try finding by from->to format (from/to could be uuid or id)
-        edgeIndex = nextGraph.edges.findIndex((e: any) => 
-          (e.from === oldEdge.source || e.from === oldEdge.source) && 
-          (e.to === oldEdge.target || e.to === oldEdge.target)
-        );
-      }
-      
-      if (edgeIndex === -1) {
-        console.log('❌ ERROR: Edge not found in graph:', oldEdge.id);
-        console.log('Available edges:', nextGraph.edges.map((e: any) => e.id));
-        return;
-      }
-      
-      const originalEdge = { ...nextGraph.edges[edgeIndex] };
-      
-      console.log('');
-      console.log('📊 PROBABILITY CHECK:');
-      console.log('  Original edge probability:', originalEdge.p);
-      
-      // Update edge source/target and handles (source and target are guaranteed non-null by earlier check)
-      nextGraph.edges[edgeIndex].from = newConnection.source!;
-      nextGraph.edges[edgeIndex].to = newConnection.target!;
-      
-      // Map handle IDs to match our node component
-      // Source handles: "top" -> "top-out", "left" -> "left-out", etc.
-      // Target handles: keep as-is ("top", "left", "right", "bottom")
-      const sourceHandle = newConnection.sourceHandle ? 
-        (newConnection.sourceHandle.endsWith('-out') ? newConnection.sourceHandle : `${newConnection.sourceHandle}-out`) : 
-        undefined;
-      const targetHandle = newConnection.targetHandle || undefined;
-      
-      nextGraph.edges[edgeIndex].fromHandle = sourceHandle;
-      nextGraph.edges[edgeIndex].toHandle = targetHandle;
-      
-      if (nextGraph.metadata) {
-        nextGraph.metadata.updated_at = new Date().toISOString();
-      }
-      
-      console.log('Updated edge:');
-      console.log('  from:', originalEdge.from, '→', nextGraph.edges[edgeIndex].from);
-      console.log('  to:', originalEdge.to, '→', nextGraph.edges[edgeIndex].to);
-      console.log('  fromHandle:', originalEdge.fromHandle, '→', nextGraph.edges[edgeIndex].fromHandle);
-      console.log('  toHandle:', originalEdge.toHandle, '→', nextGraph.edges[edgeIndex].toHandle);
-      console.log('  probability (p):', originalEdge.p, '→', nextGraph.edges[edgeIndex].p);
-      console.log('✅ SUCCESS - Edge reconnected!');
-      console.log('📊 Final edge object:', JSON.stringify(nextGraph.edges[edgeIndex], null, 2));
-      
-      // Prevent ReactFlow->Graph sync from overwriting this manual reconnection
-      isSyncingRef.current = true;
-      setGraph(nextGraph);
-      
-      // Prevent auto-reroute from overwriting manual handle selection
-      skipNextRerouteRef.current = true;
-      
-      // Save history state for edge reconnection
-      saveHistoryState('Reconnect edge', undefined, nextGraph.edges[edgeIndex].uuid || undefined);
-      
-      // Reset isSyncingRef after a short delay to allow Graph->ReactFlow sync to complete
-      setTimeout(() => {
-        isSyncingRef.current = false;
-      }, 100);
-    }, 50); // 50ms debounce
-  }, [graph, setGraph, wouldCreateCycle, saveHistoryState]);
-
-  // Generate a unique id for an edge based on node ids
-  const generateEdgeId = useCallback((sourceId: string, targetId: string) => {
-    if (!graph?.nodes) return `${sourceId}-to-${targetId}`;
-    
-    // Find source and target nodes to get their ids
-    const sourceNode = graph.nodes.find((n: any) => n.uuid === sourceId || n.id === sourceId);
-    const targetNode = graph.nodes.find((n: any) => n.uuid === targetId || n.id === targetId);
-    
-    const sourceId_ = sourceNode?.id || sourceNode?.uuid || sourceId;
-    const targetId_ = targetNode?.id || targetNode?.uuid || targetId;
-    
-    let baseId = `${sourceId_}-to-${targetId_}`;
-    let edgeId = baseId;
-    let counter = 1;
-    
-    // Ensure uniqueness by appending a number if needed
-    const existingIds = getAllExistingIds();
-    const uniqueId = generateUniqueId(baseId, existingIds);
-    
-    return uniqueId;
-  }, [graph, getAllExistingIds]);
-
-  // Handle new connections
-  const onConnect = useCallback(async (connection: Connection) => {
-    if (!graph) return;
-    
-    // Capture the current graph at the start of this callback
-    const currentGraph = graph;
-    
-    // Check for valid connection
-    if (!connection.source || !connection.target) {
-      return;
-    }
-    
-    // Prevent self-referencing edges
-    if (connection.source === connection.target) {
-      alert('Cannot create an edge from a node to itself.');
-      return;
-    }
-
-    // Check if source is a case node (do this check early)
-    // connection.source is ReactFlow ID (uuid)
-    const sourceNode = currentGraph.nodes.find(n => n.uuid === connection.source || n.id === connection.source);
-    const isCaseNode = sourceNode && sourceNode.type === 'case' && sourceNode.case;
-    
-    // Prevent duplicate edges (but allow multiple edges from case nodes with different variants)
-    if (!isCaseNode) {
-      // For normal nodes, prevent any duplicate edges
-      const existingEdge = currentGraph.edges.find(edge => 
-        edge.from === connection.source && edge.to === connection.target
-      );
-      if (existingEdge) {
-        alert('An edge already exists between these nodes.');
-        return;
-      }
-    }
-    // For case nodes, duplication check will happen after variant selection
-
-    // Check for circular dependencies (convert graph edges to ReactFlow format for check)
-    const reactFlowEdges = currentGraph.edges.map(e => ({ source: e.from, target: e.to }));
-    if (wouldCreateCycle(connection.source, connection.target, reactFlowEdges)) {
-      alert('Cannot create this connection as it would create a circular dependency.');
-      return;
-    }
-
-    // If source is a case node with multiple variants, show variant selection modal
-    if (isCaseNode && sourceNode.case && sourceNode.case.variants.length > 1) {
-      setPendingConnection(connection);
-      setCaseNodeVariants(sourceNode.case.variants);
-      setShowVariantModal(true);
-      return; // Don't create the edge yet, wait for variant selection
-    }
-    
-    // Use UpdateManager to create edge with proper ID generation and probability calculation
-    const { updateManager } = await import('../services/UpdateManager');
-    const options: any = {};
-    
-    // If source is a case node with single variant, automatically assign variant properties
-    if (isCaseNode && sourceNode.case && sourceNode.case.variants.length === 1) {
-      const variant = sourceNode.case.variants[0];
-      options.case_id = sourceNode.case.id;
-      options.case_variant = variant.name;
-    }
-    
-    const { graph: nextGraph, edgeId } = updateManager.createEdge(
-      currentGraph,
-      {
-        source: connection.source!,
-        target: connection.target!,
-        sourceHandle: connection.sourceHandle || null,
-        targetHandle: connection.targetHandle || null
-      },
-      options
-    );
-    
-    // Single path: route through GraphCanvas setGraph wrapper (avoids nested updateGraph calls)
-    await setGraph(nextGraph, currentGraph, 'add-edge');
-    saveHistoryState('Add edge', undefined, edgeId);
-    
-    // Select the new edge after a brief delay to allow sync to complete
-    setTimeout(() => {
-      onSelectedEdgeChange(edgeId);
-    }, 50);
-  }, [graph, setGraph, wouldCreateCycle, onSelectedEdgeChange, saveHistoryState]);
-
-  // Variant selection modal state
-  const [showVariantModal, setShowVariantModal] = useState(false);
-  const [pendingConnection, setPendingConnection] = useState<Connection | null>(null);
-  const [caseNodeVariants, setCaseNodeVariants] = useState<any[]>([]);
-
-  // Handle variant selection for case edges
-  const handleVariantSelection = useCallback(async (variant: any) => {
-    if (!pendingConnection || !graph) return;
-    
-    // Capture the current graph at the start of this callback
-    const currentGraph = graph;
-    
-    // pendingConnection.source is ReactFlow ID (uuid)
-    const sourceNode = currentGraph.nodes.find(n => n.uuid === pendingConnection.source || n.id === pendingConnection.source);
-    if (!sourceNode || !sourceNode.case) return;
-    
-    // Check if an edge with this variant already exists between these nodes
-    const existingVariantEdge = currentGraph.edges.find(edge => 
-      edge.from === pendingConnection.source && 
-      edge.to === pendingConnection.target &&
-      edge.case_id === sourceNode.case?.id &&
-      edge.case_variant === variant.name
-    );
-    
-    if (existingVariantEdge) {
-      alert(`An edge for variant "${variant.name}" already exists between these nodes.`);
-      setShowVariantModal(false);
-      setPendingConnection(null);
-      setCaseNodeVariants([]);
-      return;
-    }
-    
-    // Use UpdateManager to create edge with variant properties
-    const { updateManager } = await import('../services/UpdateManager');
-    const { graph: nextGraph, edgeId } = updateManager.createEdge(
-      currentGraph,
-      {
-        source: pendingConnection.source!,
-        target: pendingConnection.target!,
-        sourceHandle: pendingConnection.sourceHandle || null,
-        targetHandle: pendingConnection.targetHandle || null
-      },
-      {
-        case_variant: variant.name
-        // case_id will be automatically inferred from source node by UpdateManager
-      }
-    );
-    
-    // Single path: route through GraphCanvas setGraph wrapper (avoids nested updateGraph calls)
-    await setGraph(nextGraph, currentGraph, 'add-edge-variant');
-    saveHistoryState('Add edge', undefined, edgeId);
-    
-    // Close modal and clear state
-    setShowVariantModal(false);
-    setPendingConnection(null);
-    setCaseNodeVariants([]);
-  }, [pendingConnection, graph, setGraph, saveHistoryState]);
-  
   // Handle Shift+Drag lasso selection
   const [isLassoSelecting, setIsLassoSelecting] = useState(false);
   const [lassoStart, setLassoStart] = useState<{ x: number; y: number } | null>(null);
@@ -5645,11 +5078,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
             </div>
             
             <button
-              onClick={() => {
-                setShowVariantModal(false);
-                setPendingConnection(null);
-                setCaseNodeVariants([]);
-              }}
+              onClick={dismissVariantModal}
               style={{
                 padding: '8px 16px',
                 background: '#6c757d',
