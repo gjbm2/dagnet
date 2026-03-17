@@ -1,4 +1,11 @@
 # DagNet Release Notes
+## Version 1.7.22b
+**Released:** 17-Mar-26
+
+One remaining fetch sync issue
+
+---
+
 ## Version 1.7.20b
 **Released:** 16-Mar-26
 
