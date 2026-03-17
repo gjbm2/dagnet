@@ -1,0 +1,10 @@
+# Bayes inference dependencies — heavy stats libs for local dev + Modal.
+# These must NEVER go into graph-editor/requirements.txt (Vercel size limit).
+#
+# Install into the shared venv:
+#   . graph-editor/venv/bin/activate && pip install -r bayes/requirements.txt
+
+pymc>=5.10.0
+arviz>=0.17.0
+numpy>=1.24.0
+scipy>=1.10.0

@@ -1,7 +1,7 @@
 # Project Bayes: Programme
 
 **Status**: Draft
-**Date**: 16-Mar-26
+**Date**: 17-Mar-26
 **Purpose**: Phased delivery plan for Project Bayes. This doc owns sequencing;
 design docs contain the detail.
 
@@ -17,6 +17,7 @@ design docs contain the detail.
 | **Compute arch** | `3-compute-and-deployment-architecture.md` | Compute vendor, deployment topology, shared code, DB access |
 | **Async infra** | `4-async-roundtrip-infrastructure.md` | Async roundtrip: submission, webhook, git commit, schema |
 | **Local dev setup** | `5-local-dev-setup.md` | Local dev environment, tunnel, deployment |
+| **Compiler + worker** | `6-compiler-and-worker-pipeline.md` | Compiler IR, model materialisation, worker orchestration, evidence assembly |
 
 **Context**: `../codebase/APP_ARCHITECTURE.md` (app architecture),
 `../project-db/` (snapshot DB)
@@ -25,16 +26,25 @@ design docs contain the detail.
 
 ## Structure
 
-Two independent workstreams converge when both are complete.
+Three workstreams. Bayesian inference can start as soon as async infrastructure
+is done — it reads evidence directly from graph + parameter files + snapshot DB,
+all of which are already populated by the existing system. Semantic foundation
+improves *consumption* of posteriors but is not a prerequisite for *production*.
 
 ```
 Semantic foundation
   Evaluator unification → Python model ownership → FE stats deletion
                                                                   ↘
-                                                                   Bayesian inference → Posterior consumption
+                                                                   Posterior consumption
                                                                   ↗
+Bayesian inference (compiler + worker)
+  Compiler IR → model materialisation → MCMC → webhook commit
+  Depends on: Async infrastructure (webhook + atomic commit)
+  Evidence sources: graph topology (inline), param files (git),
+                    snapshot DB (PostgreSQL)
+
 Async infrastructure
-  Async roundtrip ───────────────────────────────────────────────
+  Async roundtrip (Steps 1–3 done) → vendor setup → submission → FE integration
 ```
 
 ---
@@ -147,36 +157,67 @@ progress, nightly scheduling.
 
 ---
 
-## Convergence
+## Bayesian inference (workstream)
 
-These depend on both workstreams being complete.
+**Depends on**: Async infrastructure Steps 1–3 (webhook + atomic commit).
+Does NOT depend on Semantic foundation.
 
-### Bayesian inference
+**Why no Semantic foundation dependency**: The compiler reads evidence directly
+from three sources that already exist and are already populated:
 
-**Depends on**: Semantic foundation complete (Python owns fitting, FE stats
-deleted) AND Async infrastructure complete (roundtrip proven).
+1. **Graph topology** — sent inline by FE (same as existing
+   `/api/runner/analyze` pattern)
+2. **Parameter files** — sent inline by FE in the submit request. Richer than
+   graph edges: daily arrays (n_daily, k_daily, dates), multiple values[]
+   windows, per-slice latency histograms, cohort bounds, onset data.
+3. **Snapshot DB** — queried via PostgreSQL (same as existing analysis runners).
+   Time-series evidence rows with full granularity.
 
-Real Bayesian inference running on the proven infrastructure, writing real
-posteriors to graph/parameter YAML files.
+The compiler produces posteriors. It doesn't need the FE fitting code deleted
+or the evaluator unified — those concern *consumption*, not *production*.
+
+### Compiler + worker pipeline
 
 **Scope**:
 - Graph-to-hierarchy compiler: canonicalise graph, identify branch groups,
   build probability and latency hierarchies, encode coupling, bind evidence
+- Evidence assembly from parameter files (git) and snapshot DB
 - PyMC model materialisation from compiler IR
 - Inference execution (MCMC sampling via compute vendor)
 - Posterior summarisation and quality gates (r-hat, ESS, HDI)
-- Artefact persistence: real posterior values replace placeholders in YAML
+- Webhook callback with posterior payload → atomic git commit
 
-**Exit criterion**: at least one real graph fitted end-to-end with Bayesian
-posteriors committed to git. Quality metrics within acceptable bounds. FE reads
-real posterior values after pull.
+**Phased delivery** (see `6-compiler-and-worker-pipeline.md`):
+- Phase A: independent Beta per edge (no hierarchy, no Dirichlet, no slice
+  pooling). Proves full pipeline end-to-end with real posteriors.
+- Phase B: Dirichlet branch groups (sibling coupling at branching nodes).
+- Phase C: slice pooling + hierarchical Dirichlet.
+- Phase D: probability–latency coupling through completeness.
+- Phase E (optional): per-chain fan-out across workers. The serialisable IR
+  boundary enables a compile-once, sample-many pattern — dispatch N workers
+  each running `build_model` → `pm.sample` independently, merge traces via
+  `az.concat`. Not required for initial delivery: PyMC parallelises chains
+  across cores on a single machine, and wall-clock time is not a binding
+  constraint.
+
+**Exit criterion (Phase A)**: at least one real graph fitted end-to-end with
+independent Beta posteriors committed to git. Quality metrics within acceptable
+bounds. FE reads real posterior values after pull.
+
+**Exit criterion (Phase D)**: full hierarchical model with joint
+probability–latency coupling, per-slice Dirichlet, and completeness-adjusted
+likelihoods.
 
 **Design detail**: Logical blocks (compiler, hierarchy, IR), Reference impl
-(PyMC patterns).
+(PyMC patterns), Compiler + worker (implementation).
 
-### Posterior consumption
+---
 
-**Depends on**: Bayesian inference (real posterior data in YAML files).
+## Posterior consumption
+
+**Depends on**: Bayesian inference Phase A (real posterior data in YAML files).
+Benefits from Semantic foundation (cleaner FE derivation) but can start without
+it.
 
 The FE uses posterior distributions for richer analysis and display.
 
@@ -196,11 +237,15 @@ The FE uses posterior distributions for richer analysis and display.
 - **Parallelism within Semantic foundation**: can Python model ownership start
   before Evaluator unification is fully complete? The Model contract implies
   sequential but the codepaths may be separable.
-- **Vendor selection timing**: should compute vendor prototyping happen before
-  or after the schema and webhook handler are built? The Async infra doc
-  sequences schema first, but vendor DX evaluation could start earlier as a
-  spike.
-- **Bayesian inference scope**: Logical blocks is comprehensive (full
-  hierarchical Dirichlet, slice pooling, latency coupling). Is there a useful
-  first slice that fits simpler models (e.g. independent Beta per edge, no
-  hierarchy) to prove the pipeline before tackling compiler complexity?
+- ~~**Evidence assembly strategy**~~: **Resolved.** FE sends parameter file
+  contents in the submit request (long-established pattern). Worker receives
+  graph + param files + snapshot DB coordinates in a single payload.
+- ~~**Bayesian inference scope**~~: **Resolved 17-Mar-26.** Phased delivery
+  starting with independent Beta (Phase A) before hierarchical Dirichlet
+  (Phases B–D). See `6-compiler-and-worker-pipeline.md`.
+- ~~**Vendor selection timing**~~: no longer blocked — async infra Steps 1–3
+  are done, vendor setup can proceed immediately.
+- ~~**Bayesian inference dependency on Semantic foundation**~~: **Resolved
+  17-Mar-26.** No hard dependency. Compiler reads evidence from graph + param
+  files + snapshot DB, all already populated. Semantic foundation improves
+  consumption, not production.

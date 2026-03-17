@@ -17,7 +17,23 @@
       "Bash(git filter-branch:*)",
       "Bash(git stash:*)",
       "Bash(FILTER_BRANCH_SQUELCH_WARNING=1 git filter-branch --force --index-filter 'git rm --cached --ignore-unmatch graph-editor/.env.vercel' --prune-empty -- 6527541c..HEAD)",
-      "Bash(git tag:*)"
+      "Bash(git tag:*)",
+      "Bash(cloc graph-editor/src graph-editor/lib graph-editor/api bayes/app.py --exclude-dir=node_modules,dist,build,.next)",
+      "Bash(cloc graph-editor/src --exclude-dir=__tests__ --not-match-f='\\\\.\\(test|spec\\)\\\\.\\(ts|tsx\\)$' --include-lang=TypeScript,CSS)",
+      "Bash(cloc graph-editor/src/services/__tests__ graph-editor/src --match-f='\\\\.\\(test|spec\\)\\\\.\\(ts|tsx\\)$' graph-editor/e2e graph-editor/tests graph-editor/lib/tests --include-lang=TypeScript,Python)",
+      "Bash(python -c \"import pymc; print\\(''pymc'', pymc.__version__\\)\")",
+      "Bash(python -c \"import arviz; print\\(''arviz'', arviz.__version__\\)\")",
+      "Bash(python -c \"import numpy; print\\(''numpy'', numpy.__version__\\)\")",
+      "Bash(python -c \"import scipy; print\\(''scipy'', scipy.__version__\\)\")",
+      "Bash(python -m pytest bayes/test_inference.py::TestParameterRecovery::test_single_edge_recovery -v)",
+      "Bash(python -m pytest bayes/test_inference.py -v)",
+      "Bash(find /home/reg/dev/dagnet/docs -name \"*.md\" -exec cat {} +)",
+      "Read(//home/reg/dev/dagnet/$dir/**)",
+      "Bash(__NEW_LINE_f0061b5454507c44__ echo:*)",
+      "Bash(find /home/reg/dev/dagnet/graph-editor/src -maxdepth 2 -path */stores* -name *.ts -o -path */stores* -name *.tsx)",
+      "Bash(__NEW_LINE_ff5ef5e12d15310b__ echo:*)",
+      "Bash(du -sh /home/reg/dev/dagnet/graph-editor/src/components/*/)",
+      "Bash(/tmp/dagnet_codebase_summary.txt:*)"
     ]
   }
 }
