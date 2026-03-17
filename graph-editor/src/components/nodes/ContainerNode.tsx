@@ -3,6 +3,8 @@ import { NodeProps, NodeResizer, useViewport } from 'reactflow';
 import type { Container } from '@/types';
 import { InlineEditableLabel } from '../InlineEditableLabel';
 import { getLastSnappedResize, clearLastSnappedResize } from '../../services/snapService';
+import { groupResizeStart, groupResize, groupResizeEnd } from '../canvas/useGroupResize';
+import { beginResizeGuard, endResizeGuard } from '../canvas/syncGuards';
 
 export const CONTAINER_COLOURS = [
   '#94A3B8', '#86EFAC', '#7DD3FC', '#FCD34D', '#FDA4AF', '#C4B5FD',
@@ -31,7 +33,7 @@ function hexToRgb(hex: string): [number, number, number] {
 }
 
 export default function ContainerNode({ data, selected }: NodeProps<ContainerNodeData>) {
-  const { container, onUpdate, onDelete, onResizeStart, onResizeEnd } = data;
+  const { container, onUpdate, onDelete } = data;
   const { zoom } = useViewport();
   const resizeTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
@@ -40,10 +42,8 @@ export default function ContainerNode({ data, selected }: NodeProps<ContainerNod
   // NodeResizer's useEffect re-runs → d3-drag is torn down mid-resize.
   const onUpdateRef = useRef(onUpdate);
   onUpdateRef.current = onUpdate;
-  const onResizeStartRef = useRef(onResizeStart);
-  onResizeStartRef.current = onResizeStart;
-  const onResizeEndRef = useRef(onResizeEnd);
-  onResizeEndRef.current = onResizeEnd;
+  // onResizeStart/onResizeEnd from data are no longer used — guard is called
+  // directly via module-level singleton (beginResizeGuard/endResizeGuard).
   const containerIdRef = useRef(container.id);
   containerIdRef.current = container.id;
 
@@ -52,22 +52,15 @@ export default function ContainerNode({ data, selected }: NodeProps<ContainerNod
   }, []);
 
   const handleResizeStart = useCallback(() => {
-    onResizeStartRef.current?.();
+    beginResizeGuard();
+    groupResizeStart(`container-${containerIdRef.current}`);
   }, []);
 
   const handleResize = useCallback((_event: any, params: { x: number; y: number; width: number; height: number }) => {
-    if (resizeTimeoutRef.current) clearTimeout(resizeTimeoutRef.current);
-    resizeTimeoutRef.current = setTimeout(() => {
-      // Use snapped dimensions if available, otherwise d3-drag params
-      const snap = getLastSnappedResize();
-      const useSnap = snap && snap.nodeId === `container-${containerIdRef.current}`;
-      onUpdateRef.current(containerIdRef.current, {
-        x: Math.round(useSnap ? snap.x : params.x),
-        y: Math.round(useSnap ? snap.y : params.y),
-        width: Math.round(useSnap ? snap.width : params.width),
-        height: Math.round(useSnap ? snap.height : params.height),
-      });
-    }, 50);
+    groupResize(`container-${containerIdRef.current}`, params.width, params.height);
+    // No mid-drag onUpdate — saving to graph store during resize triggers the
+    // sync effect which applies stale positions from React state, causing the
+    // node to bounce. handleResizeEnd saves the final state instead.
   }, []);
 
   const handleResizeEnd = useCallback((_event: any, params: { x: number; y: number; width: number; height: number }) => {
@@ -76,14 +69,17 @@ export default function ContainerNode({ data, selected }: NodeProps<ContainerNod
     // snap adjustments, so its params would cause a "bounce" on release.
     const snap = getLastSnappedResize();
     const useSnap = snap && snap.nodeId === `container-${containerIdRef.current}`;
+    const finalW = Math.round(useSnap ? snap.width : params.width);
+    const finalH = Math.round(useSnap ? snap.height : params.height);
     onUpdateRef.current(containerIdRef.current, {
       x: Math.round(useSnap ? snap.x : params.x),
       y: Math.round(useSnap ? snap.y : params.y),
-      width: Math.round(useSnap ? snap.width : params.width),
-      height: Math.round(useSnap ? snap.height : params.height),
+      width: finalW,
+      height: finalH,
     });
     clearLastSnappedResize();
-    onResizeEndRef.current?.();
+    groupResizeEnd(`container-${containerIdRef.current}`, finalW, finalH);
+    endResizeGuard();
   }, []);
 
   const [r, g, b] = hexToRgb(container.colour);

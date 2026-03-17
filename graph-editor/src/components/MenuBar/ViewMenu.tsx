@@ -16,7 +16,7 @@ import { graphIssuesService } from '../../services/graphIssuesService';
  * View Menu
  * 
  * Context-sensitive based on active tab type:
- * - Graph tabs: Show graph-specific options (Edge Scaling, Re-route, Auto Layout, etc.)
+ * - Graph tabs: Show graph-specific options (Edge Scaling, Re-route, etc.)
  * - Other tabs: Show general view options
  * - All tabs: Open in New Tab (JSON/YAML views)
  */
@@ -122,10 +122,6 @@ export function ViewMenu() {
     } else if (activeTabId) {
       operations.updateTabState(activeTabId, { animateFlow: newValue });
     }
-  };
-
-  const handleAutoLayout = (direction: 'LR' | 'RL' | 'TB' | 'BT') => {
-    window.dispatchEvent(new CustomEvent('dagnet:autoLayout', { detail: { direction } }));
   };
 
   const handleSankeyLayout = () => {
@@ -297,57 +293,23 @@ export function ViewMenu() {
                 </Menubar.Portal>
               </Menubar.Sub>
 
-              <Menubar.Separator className="menubar-separator" />
-
-              <Menubar.Sub>
-                <Menubar.SubTrigger className="menubar-item">
-                  Auto Layout
-                  <div className="menubar-right-slot">›</div>
-                </Menubar.SubTrigger>
-                <Menubar.Portal>
-                  <Menubar.SubContent className="menubar-content" alignOffset={-5}>
-                    <Menubar.Item 
-                      className="menubar-item" 
-                      onSelect={() => handleAutoLayout('LR')}
-                    >
-                      Left-to-right
-                    </Menubar.Item>
-                    <Menubar.Item 
-                      className="menubar-item" 
-                      onSelect={() => handleAutoLayout('RL')}
-                    >
-                      Right-to-left
-                    </Menubar.Item>
-                    <Menubar.Item 
-                      className="menubar-item" 
-                      onSelect={() => handleAutoLayout('TB')}
-                    >
-                      Top-to-bottom
-                    </Menubar.Item>
-                    <Menubar.Item 
-                      className="menubar-item" 
-                      onSelect={() => handleAutoLayout('BT')}
-                    >
-                      Bottom-to-top
-                    </Menubar.Item>
-                  </Menubar.SubContent>
-                </Menubar.Portal>
-              </Menubar.Sub>
-
               {/* Sankey Layout option - only show when Sankey view is active */}
               {isSankeyView && (
-                <Menubar.Item 
-                  className="menubar-item" 
-                  onSelect={handleSankeyLayout}
-                >
-                  Sankey Layout
-                </Menubar.Item>
+                <>
+                  <Menubar.Separator className="menubar-separator" />
+                  <Menubar.Item
+                    className="menubar-item"
+                    onSelect={handleSankeyLayout}
+                  >
+                    Sankey Layout
+                  </Menubar.Item>
+                </>
               )}
 
               <Menubar.Separator className="menubar-separator" />
 
-              <Menubar.Item 
-                className="menubar-item" 
+              <Menubar.Item
+                className="menubar-item"
                 onSelect={handleHideUnselected}
               >
                 Hide unselected

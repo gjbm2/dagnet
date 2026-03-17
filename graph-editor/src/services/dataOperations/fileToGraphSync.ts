@@ -1437,11 +1437,13 @@ export async function getParameterFromFile(options: {
           // If no data available for window, don't fall back - show error and return early
           if (errorMsg.includes('No data available for window')) {
             const filterRange = (isCohortQuery && cohortWindow) ? cohortWindow : window;
-            toast.error(`No data available for selected ${isCohortQuery ? 'cohort' : 'window'} (${filterRange?.start} to ${filterRange?.end})`);
-            sessionLogService.endOperation(logOpId, 'error', `No data for ${isCohortQuery ? 'cohort' : 'window'} (${filterRange?.start} to ${filterRange?.end})`);
+            const rangeLabel = `${filterRange?.start} to ${filterRange?.end}`;
+            const paramLabel = edgeId ? `${paramId} (edge ${edgeId})` : paramId;
+            batchableToastError(`${paramLabel}: no data for ${isCohortQuery ? 'cohort' : 'window'} ${rangeLabel}`);
+            sessionLogService.endOperation(logOpId, 'error', `${paramLabel}: no data for ${isCohortQuery ? 'cohort' : 'window'} (${rangeLabel})`);
             return { success: false }; // Don't proceed with file-to-graph update
           }
-          toast.error(`Window aggregation failed: ${errorMsg}`);
+          batchableToastError(`${paramId}: window aggregation failed — ${errorMsg}`);
           // Fall back to regular file-to-graph update only for other errors
           // IMPORTANT: Track the error so session log can report 'warning' instead of 'success'
           aggregationFallbackError = errorMsg;

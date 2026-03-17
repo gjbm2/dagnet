@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState, type ReactNod
 import { useNavigatorContext } from '../contexts/NavigatorContext';
 import { useTabContext, useFileRegistry } from '../contexts/TabContext';
 import { stalenessNudgeService } from '../services/stalenessNudgeService';
-import { usePullAll } from './usePullAll';
+import { usePullAll, onOpenConflictModal } from './usePullAll';
 import { executeRetrieveAllSlicesWithProgressToast } from '../services/retrieveAllSlicesService';
 import { sessionLogService } from '../services/sessionLogService';
 import { STALENESS_NUDGE_COUNTDOWN_SECONDS, STALENESS_NUDGE_VISIBLE_POLL_MS } from '../constants/staleness';
@@ -26,9 +26,11 @@ export interface UseStalenessNudgesResult {
  * Global safety nudges:
  * - stale page (reload) → persistent banner
  * - stale git pull (check remote HEAD) → non-blocking pull toast
- * - stale "retrieve all slices" for the focused graph tab → progress toast
+ * - stale "retrieve all slices" for the focused graph tab → persistent banner (user must click)
  *
  * All nudges are non-blocking. No modal is ever shown.
+ * IMPORTANT: Retrieve-all is NEVER executed automatically. It is managed by the nightly
+ * cron cycle (?retrieveall URL param). Interactive sessions only show a banner nudge.
  *
  * IMPORTANT:
  * - This hook centralises the nudging logic so UI entry points stay access-only.
@@ -39,6 +41,15 @@ export function useStalenessNudges(): UseStalenessNudgesResult {
   const { pullAll, conflictModal, openConflictModal } = usePullAll();
   const openConflictModalRef = useRef(openConflictModal);
   useEffect(() => { openConflictModalRef.current = openConflictModal; });
+
+  // Listen for conflict modal open requests from ANY usePullAll instance.
+  // Context menus unmount before pullAll() completes, so their local state
+  // updates fire into the void.  This persistent listener (in AppShell)
+  // ensures the modal always opens.
+  useEffect(() => onOpenConflictModal(
+    (conflicts, opId) => openConflictModalRef.current(conflicts, opId)
+  ), []);
+
   const fileRegistry = useFileRegistry();
   const tabOperations = tabContext.operations;
   const shareMode = useShareModeOptional();
@@ -232,7 +243,11 @@ export function useStalenessNudges(): UseStalenessNudgesResult {
   }, []);
 
   /**
-   * Fire retrieve-all-slices directly via progress toast (no user consent needed).
+   * Fire retrieve-all-slices via progress toast.
+   *
+   * IMPORTANT: This must ONLY be called from a user-initiated action (e.g. banner click).
+   * Never call this automatically — retrieve-all is managed by the nightly cron cycle;
+   * interactive sessions should only nudge the user, not execute autonomously.
    */
   const fireRetrieveAllDirect = useCallback(() => {
     if (!retrieveTargetGraphFileId) return;
@@ -240,6 +255,7 @@ export function useStalenessNudges(): UseStalenessNudgesResult {
     const graphFile = fileRegistry.getFile(retrieveTargetGraphFileId) as any;
     if (!graphFile?.data || graphFile?.type !== 'graph') return;
 
+    bannerManagerService.clearBanner('retrieve-stale');
     void executeRetrieveAllSlicesWithProgressToast({
       getGraph: () => (fileRegistry.getFile(retrieveTargetGraphFileId) as any)?.data || null,
       setGraph: (g) => tabOperations.updateTabData(retrieveTargetGraphFileId, g),
@@ -247,6 +263,21 @@ export function useStalenessNudges(): UseStalenessNudgesResult {
       toastLabel: 'Retrieve All (stale data)',
     });
   }, [retrieveTargetGraphFileId, fileRegistry, tabOperations]);
+
+  /**
+   * Show a persistent banner nudging the user to retrieve stale data.
+   * The user must click to initiate — no automatic execution.
+   */
+  const showRetrieveNudgeBanner = useCallback(() => {
+    bannerManagerService.setBanner({
+      id: 'retrieve-stale',
+      priority: 40,
+      label: 'Data may be stale — retrieve latest?',
+      actionLabel: 'Retrieve All',
+      onAction: () => fireRetrieveAllDirect(),
+      actionTitle: 'Retrieve all slices for the current graph',
+    });
+  }, [fireRetrieveAllDirect]);
 
   /**
    * Start a non-blocking pull with standard callbacks (dismiss, conflicts, cascade).
@@ -267,7 +298,7 @@ export function useStalenessNudges(): UseStalenessNudgesResult {
       repository,
       branch,
       remoteSha: detectedRemoteSha,
-      onConflicts: (conflicts) => openConflictModalRef.current(conflicts),
+      onConflicts: (conflicts, opId) => openConflictModalRef.current(conflicts, opId),
       onDismiss: () => {
         if (detectedRemoteSha) {
           stalenessNudgeService.dismissRemoteSha(repository, branch, detectedRemoteSha, storage);
@@ -275,18 +306,14 @@ export function useStalenessNudges(): UseStalenessNudgesResult {
       },
       onComplete: () => {
         stalenessNudgeService.clearDismissedRemoteSha(repository, branch, storage);
-        // Cascade: if retrieve-all is also due, run it non-blocking via progress toast.
-        if (retrieveDue && retrieveTargetGraphFileId && tabOperations?.updateTabData) {
-          void executeRetrieveAllSlicesWithProgressToast({
-            getGraph: () => (fileRegistry.getFile(retrieveTargetGraphFileId) as any)?.data || null,
-            setGraph: (g) => tabOperations.updateTabData(retrieveTargetGraphFileId, g),
-            toastId: `cascade-retrieve:${retrieveTargetGraphFileId}`,
-            toastLabel: 'Retrieve All (post-pull)',
-          });
+        // Cascade: if retrieve-all is also due, show banner — let user decide.
+        // Retrieve-all is managed by the nightly cron; interactive sessions only nudge.
+        if (retrieveDue) {
+          showRetrieveNudgeBanner();
         }
       },
     });
-  }, [retrieveTargetGraphFileId, fileRegistry, tabOperations]);
+  }, [showRetrieveNudgeBanner]);
 
   const maybePrompt = useCallback(async () => {
     if (suppressStalenessNudges) return;
@@ -404,14 +431,15 @@ export function useStalenessNudges(): UseStalenessNudgesResult {
         });
       }
 
-      // Retrieve due standalone (no pull cascading into it) → fire directly.
+      // Retrieve due standalone (no pull cascading into it) → show banner, let user decide.
+      // Retrieve-all is managed by the nightly cron; interactive sessions only nudge.
       if (retrieveDue && !gitPullDue) {
-        fireRetrieveAllDirect();
+        showRetrieveNudgeBanner();
       }
     } finally {
       inFlightRef.current = false;
     }
-  }, [suppressStalenessNudges, navState.selectedRepo, navState.selectedBranch, activeFileId, fileRegistry, shareMode, isDashboardMode, showReloadBanner, fireNonBlockingPull, fireRetrieveAllDirect, startCountdown, retrieveTargetGraphFileId, activeFileType, activeChartEffectiveDsl, isTabContextInitDone, navigatorIsLoading]);
+  }, [suppressStalenessNudges, navState.selectedRepo, navState.selectedBranch, activeFileId, fileRegistry, shareMode, isDashboardMode, showReloadBanner, fireNonBlockingPull, showRetrieveNudgeBanner, startCountdown, retrieveTargetGraphFileId, activeFileType, activeChartEffectiveDsl, isTabContextInitDone, navigatorIsLoading]);
 
   // Boot completion: when TabContext signals init done, re-run prompt evaluation once.
   useEffect(() => {
@@ -432,9 +460,12 @@ export function useStalenessNudges(): UseStalenessNudgesResult {
   useEffect(() => stopCountdown, [stopCountdown]);
   useEffect(() => cancelNonBlockingPull, []);
 
-  // Clear reload banner on unmount.
+  // Clear banners on unmount.
   useEffect(() => {
-    return () => bannerManagerService.clearBanner('app-update');
+    return () => {
+      bannerManagerService.clearBanner('app-update');
+      bannerManagerService.clearBanner('retrieve-stale');
+    };
   }, []);
 
   // Run on key "user is back" moments.

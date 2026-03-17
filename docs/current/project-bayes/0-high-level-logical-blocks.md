@@ -234,22 +234,32 @@ create.
 ### Step 5 — Encode the probability–latency coupling
 
 The conversion probability and latency models are coupled through
-**completeness**. For each observation:
+**completeness**. Window and cohort observations use different probability
+variables from the hierarchical structure (see doc 6 Layer 3):
 
-- Mature cohort (high completeness): `Y ~ Binomial(X, p)`
-- Immature cohort: `Y ~ Binomial(X, p × c(age, mu_path, sigma_path))`
+- Window observation: `Y ~ Binomial(X, p_window × c_edge(age, mu_XY, sigma_XY))`
+  (edge-level completeness, single hop)
+- Cohort observation: `Y ~ Binomial(X, p_cohort × c_path(age, mu_path, sigma_path))`
+  (path-level completeness, full chain from anchor)
 
-where `c()` is the lognormal CDF giving the fraction of eventual converters
-observed by the cohort's age.
+where `p_window` and `p_cohort` are hierarchically linked through `p_base`,
+with cohort allowed to diverge by a path-informed amount
+`τ_cohort = σ_temporal · path_sigma_AX`. The `c()` functions are lognormal
+CDFs giving the fraction of eventual converters observed by the
+observation's age.
 
-This means the likelihood for immature data jointly constrains both `p` (via
-the total conversion count) and `(mu, sigma)` (via the age-dependent
-completeness). The compiler must:
+This means the likelihood for immature data jointly constrains both `p`
+(via the total conversion count) and `(mu, sigma)` (via the age-dependent
+completeness), while the hierarchical structure lets window data guide
+cohort expectations. The compiler must:
 
-- Partition evidence rows into mature vs immature per edge × slice.
-- For immature rows, tag which path-level latency parameters enter the
+- Classify evidence rows by observation type (window vs cohort) per edge × slice.
+- Emit the appropriate probability variable (`p_window` or `p_cohort`) and
+  completeness scope (edge-level or path-level) for each row.
+- For cohort rows, tag which path-level latency parameters enter the
   completeness term.
-- Emit censoring metadata so the model builder constructs the right likelihood.
+- Emit the graph-level `σ_temporal` hyperparameter and per-edge
+  `path_sigma_AX` for the divergence allowance.
 
 ### Step 6 — Bind evidence to hierarchy leaves
 
@@ -258,14 +268,19 @@ Map snapshot rows to the hierarchy's leaf-level latent variables.
 - Each row is identified by `(param_id, core_hash, slice_key, anchor_day)`.
 - The compiler maps `param_id` → edge, `slice_key` → slice group, using the
   signature equivalence closure.
-- Mature vs immature partition is determined by cohort age relative to the
-  edge's current t95 estimate (or a policy threshold).
+- **Observation type classification**: rows are classified as window or cohort
+  based on the slice DSL prefix. This determines which probability variable
+  (`p_window_XY` or `p_cohort_XY`) and which completeness scope (edge-level
+  or path-level) the row binds to.
+- Maturity classification (diagnostic only — does not affect likelihood form;
+  completeness coupling is always on) determined by cohort age relative to
+  the edge's current t95 estimate.
 - Recency weighting (if used) is defined at bind time as metadata, not applied
   ad hoc in model code.
 
 Key risk: silent row leakage across groups due to signature drift or stale
 equivalence mappings. The compiler should validate that every bound row maps
-to exactly one edge × slice group.
+to exactly one edge × slice group × observation type.
 
 ### Step 7 — Validate and plan fallbacks
 
@@ -395,13 +410,12 @@ latency) while keeping the blast radius to a single graph.
 
 ## Open questions
 
-- Exhaustiveness policy: how to determine whether a branch group is exhaustive
-  or has dropout? Is this a graph metadata flag, or inferred from data?
-- Pooling policy: should slice pooling strength (τ) be estimated per edge, per
-  branch group, or globally? More granular = more parameters = slower.
-- Latency composition strategy: Fenton-Wilkinson per MCMC draw, or simulation
-  within each draw? With generous runtime budget, accuracy can be preferred
-  over speed.
-- Conditional probability interaction: edges with existing `conditional_p`
-  definitions — do these become informative priors, hard constraints, or are
-  they ignored by the Bayesian model?
+All items from this section have been resolved in doc 6
+(`6-compiler-and-worker-pipeline.md`, §Resolved decisions). See
+`programme.md` §Open decisions for the consolidated register.
+
+- ~~Exhaustiveness policy~~: **per-node metadata flag** (doc 6).
+- ~~Pooling policy~~: **per-edge τ** (doc 6).
+- ~~Latency composition strategy~~: **Fenton-Wilkinson**, differentiable (doc 6).
+- ~~Conditional probability interaction~~: **separate simplexes per condition
+  per branch group** — virtual fork semantics, not pooled (doc 6 §Layer 1).

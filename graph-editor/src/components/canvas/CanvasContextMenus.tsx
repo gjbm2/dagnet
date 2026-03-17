@@ -7,7 +7,7 @@
 
 import React from 'react';
 import type { Edge, Node, Connection } from 'reactflow';
-import { Plus, StickyNote, Square, BarChart3, Clipboard, CheckSquare, Monitor, MonitorOff, X } from 'lucide-react';
+import { Plus, StickyNote, Square, BarChart3, Clipboard, CheckSquare, Monitor, MonitorOff, X, LayoutGrid } from 'lucide-react';
 import { ContextMenu, type ContextMenuItem } from '../ContextMenu';
 import { NodeContextMenu } from '../NodeContextMenu';
 import { PostItContextMenu } from '../PostItContextMenu';
@@ -236,6 +236,20 @@ export const CanvasContextMenus: React.FC<CanvasContextMenusProps> = React.memo(
           });
         }
         if (copiedNode || copiedSubgraph || nodes.length > 0) {
+          paneItems.push({ label: '', onClick: () => {}, divider: true });
+        }
+        if (nodes.length > 0) {
+          paneItems.push({
+            label: 'Auto Layout',
+            icon: <LayoutGrid size={14} />,
+            onClick: () => {},
+            submenu: [
+              { label: 'Left-to-right', onClick: () => window.dispatchEvent(new CustomEvent('dagnet:autoLayout', { detail: { direction: 'LR' } })) },
+              { label: 'Right-to-left', onClick: () => window.dispatchEvent(new CustomEvent('dagnet:autoLayout', { detail: { direction: 'RL' } })) },
+              { label: 'Top-to-bottom', onClick: () => window.dispatchEvent(new CustomEvent('dagnet:autoLayout', { detail: { direction: 'TB' } })) },
+              { label: 'Bottom-to-top', onClick: () => window.dispatchEvent(new CustomEvent('dagnet:autoLayout', { detail: { direction: 'BT' } })) },
+            ],
+          });
           paneItems.push({ label: '', onClick: () => {}, divider: true });
         }
         paneItems.push({

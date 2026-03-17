@@ -35,6 +35,7 @@ vi.mock('../../services/stalenessNudgeService', () => ({
 
 vi.mock('../usePullAll', () => ({
   usePullAll: () => ({ pullAll: vi.fn(async () => {}), conflictModal: React.createElement('div', { 'data-testid': 'conflict-modal' }) }),
+  onOpenConflictModal: () => () => {},
 }));
 
 vi.mock('../useRetrieveAllSlicesRequestListener', () => ({

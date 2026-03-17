@@ -208,16 +208,17 @@ describe('Commit Flow Integration Tests', () => {
         structuredClone(originalData)
       );
       
-      // Get the file and make a change
+      // Get the file and complete initialisation so normal dirty tracking applies
       const file = fileRegistry.getFile('graph-roundtrip');
       expect(file).toBeDefined();
       expect(file?.data?.nodes).toBeDefined();
-      
+      await fileRegistry.completeInitialization('graph-roundtrip');
+
       // Make a change via updateFile (the proper way)
       const modifiedData = structuredClone(file!.data);
       modifiedData.nodes[0].label = 'Modified';
       await fileRegistry.updateFile('graph-roundtrip', modifiedData);
-      
+
       // Should be dirty
       expect(fileRegistry.getFile('graph-roundtrip')?.isDirty).toBe(true);
       

@@ -1,6 +1,8 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { NodeProps, NodeResizer, useViewport } from 'reactflow';
 import { getLastSnappedResize, clearLastSnappedResize } from '../../services/snapService';
+import { groupResizeStart, groupResize, groupResizeEnd } from '../canvas/useGroupResize';
+import { beginResizeGuard, endResizeGuard } from '../canvas/syncGuards';
 import type { GraphData } from '@/types';
 import { PostItEditor } from './PostItEditor';
 import { useElementTool } from '../../contexts/ElementToolContext';
@@ -34,7 +36,7 @@ interface PostItNodeData {
 }
 
 export default function PostItNode({ data, selected }: NodeProps<PostItNodeData>) {
-  const { postit, onUpdate, onDelete, onResizeStart, onResizeEnd } = data;
+  const { postit, onUpdate, onDelete } = data;
   const { zoom } = useViewport();
   const { activeElementTool } = useElementTool();
   const { theme } = useTheme();
@@ -52,10 +54,8 @@ export default function PostItNode({ data, selected }: NodeProps<PostItNodeData>
   // NodeResizer's useEffect re-runs → d3-drag is torn down mid-resize.
   const onUpdateRef = useRef(onUpdate);
   onUpdateRef.current = onUpdate;
-  const onResizeStartRef = useRef(onResizeStart);
-  onResizeStartRef.current = onResizeStart;
-  const onResizeEndRef = useRef(onResizeEnd);
-  onResizeEndRef.current = onResizeEnd;
+  // onResizeStart/onResizeEnd from data are no longer used — guard is called
+  // directly via module-level singleton (beginResizeGuard/endResizeGuard).
   const postitIdRef = useRef(postit.id);
   postitIdRef.current = postit.id;
 
@@ -63,20 +63,15 @@ export default function PostItNode({ data, selected }: NodeProps<PostItNodeData>
     return () => { if (resizeTimeoutRef.current) clearTimeout(resizeTimeoutRef.current); };
   }, []);
 
-  const stableResizeStart = useCallback(() => { onResizeStartRef.current?.(); }, []);
+  const stableResizeStart = useCallback(() => {
+    beginResizeGuard();
+    groupResizeStart(`postit-${postitIdRef.current}`);
+  }, []);
   const stableResize = useCallback((_event: any, params: { x: number; y: number; width: number; height: number }) => {
-    if (resizeTimeoutRef.current) clearTimeout(resizeTimeoutRef.current);
-    resizeTimeoutRef.current = setTimeout(() => {
-      // Use snapped dimensions if available, otherwise d3-drag params
-      const snap = getLastSnappedResize();
-      const useSnap = snap && snap.nodeId === `postit-${postitIdRef.current}`;
-      onUpdateRef.current(postitIdRef.current, {
-        x: Math.round(useSnap ? snap.x : params.x),
-        y: Math.round(useSnap ? snap.y : params.y),
-        width: Math.round(useSnap ? snap.width : params.width),
-        height: Math.round(useSnap ? snap.height : params.height),
-      });
-    }, 50);
+    groupResize(`postit-${postitIdRef.current}`, params.width, params.height);
+    // No mid-drag onUpdate — saving to graph store during resize triggers the
+    // sync effect which applies stale positions from React state, causing the
+    // node to bounce. stableResizeEnd saves the final state instead.
   }, []);
   const stableResizeEnd = useCallback((_event: any, params: { x: number; y: number; width: number; height: number }) => {
     if (resizeTimeoutRef.current) clearTimeout(resizeTimeoutRef.current);
@@ -96,14 +91,17 @@ export default function PostItNode({ data, selected }: NodeProps<PostItNodeData>
           : { x: Math.round(params.x), y: Math.round(params.y), w: Math.round(params.width), h: Math.round(params.height) },
       });
     }
+    const finalW = Math.round(useSnap ? snap!.width : params.width);
+    const finalH = Math.round(useSnap ? snap!.height : params.height);
     onUpdateRef.current(postitIdRef.current, {
       x: Math.round(useSnap ? snap!.x : params.x),
       y: Math.round(useSnap ? snap!.y : params.y),
-      width: Math.round(useSnap ? snap!.width : params.width),
-      height: Math.round(useSnap ? snap!.height : params.height),
+      width: finalW,
+      height: finalH,
     });
     clearLastSnappedResize();
-    onResizeEndRef.current?.();
+    groupResizeEnd(`postit-${postitIdRef.current}`, finalW, finalH);
+    endResizeGuard();
   }, []);
 
   const pendingAutoEditRef = useRef(false);

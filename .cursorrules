@@ -301,6 +301,12 @@ Operation types: `'session' | 'git' | 'file' | 'workspace' | 'msmdc' | 'data-fet
 
 ## Architecture Patterns
 
+### Codebase architecture docs (`docs/current/codebase/`)
+This folder contains hard-won understanding of how our dependencies and subsystems actually work internally. Two rules:
+
+1. **Before debugging a system-level problem**: check this folder for an existing doc on the subsystem. Reading it first will save hours.
+2. **After resolving a system-level problem that required non-obvious understanding**: add or update a doc in this folder encoding the mental model. If you fought a dependency's internals to understand behaviour that isn't documented anywhere obvious, that understanding belongs here.
+
 ### Service Layer Pattern
 ```typescript
 // 1. UI calls service (no business logic in UI)

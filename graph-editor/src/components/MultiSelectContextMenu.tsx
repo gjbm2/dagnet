@@ -22,6 +22,7 @@ import {
   AlignHorizontalSpaceAround,
   AlignVerticalSpaceAround,
   RulerDimensionLine,
+  LayoutGrid,
   Trash2,
 } from 'lucide-react';
 import type { AlignCommand, DistributeCommand, EqualSizeCommand } from '../services/alignmentService';
@@ -77,6 +78,21 @@ export function MultiSelectContextMenu({
       ],
     });
 
+    items.push({ label: '', onClick: () => {}, divider: true });
+  }
+
+  if (selectedCount >= 2) {
+    items.push({
+      label: 'Auto Layout',
+      icon: <LayoutGrid size={14} />,
+      onClick: () => {},
+      submenu: [
+        { label: 'Left-to-right', onClick: () => window.dispatchEvent(new CustomEvent('dagnet:autoLayout', { detail: { direction: 'LR' } })) },
+        { label: 'Right-to-left', onClick: () => window.dispatchEvent(new CustomEvent('dagnet:autoLayout', { detail: { direction: 'RL' } })) },
+        { label: 'Top-to-bottom', onClick: () => window.dispatchEvent(new CustomEvent('dagnet:autoLayout', { detail: { direction: 'TB' } })) },
+        { label: 'Bottom-to-top', onClick: () => window.dispatchEvent(new CustomEvent('dagnet:autoLayout', { detail: { direction: 'BT' } })) },
+      ],
+    });
     items.push({ label: '', onClick: () => {}, divider: true });
   }
 

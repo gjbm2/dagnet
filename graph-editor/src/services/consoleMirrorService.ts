@@ -139,6 +139,78 @@ class ConsoleMirrorService {
 
     // Also capture the current active graph (if any) into /debug/graph-snapshots/
     void graphSnapshotService.snapshotAtMark(label);
+
+    // Dump FileRegistry state for parameter files → debug/tmp.registry-dump.json
+    void this.dumpFileRegistryOnMark(label);
+  }
+
+  /**
+   * On mark, snapshot FileRegistry + IDB parameter file state to a debug file.
+   * This enables offline investigation of planner coverage bugs without polluting
+   * console or session logs.
+   */
+  private async dumpFileRegistryOnMark(markLabel: string): Promise<void> {
+    try {
+      // Lazy import to avoid circular deps at module scope
+      const { fileRegistry } = await import('../contexts/TabContext');
+      const { db } = await import('../db/appDatabase');
+
+      // Collect all parameter files from FileRegistry
+      const regFiles: Record<string, any> = {};
+      const allFiles = typeof fileRegistry.getAllFiles === 'function'
+        ? fileRegistry.getAllFiles()
+        : [];
+      for (const f of allFiles) {
+        if (f.type !== 'parameter') continue;
+        const vals = f.data?.values;
+        regFiles[f.fileId] = {
+          exists: true,
+          type: f.type,
+          path: f.source?.path,
+          valuesCount: Array.isArray(vals) ? vals.length : (vals === undefined ? 'undefined' : typeof vals),
+          cohortCount: Array.isArray(vals)
+            ? vals.filter((v: any) => v.cohort_from || v.cohort_to || (v.sliceDSL && v.sliceDSL.includes('cohort('))).length
+            : 0,
+          signedCount: Array.isArray(vals)
+            ? vals.filter((v: any) => !!v.query_signature).length
+            : 0,
+        };
+      }
+
+      // Also check IDB for parameter files
+      const idbParamFiles = await db.files
+        .filter((f: any) => f.type === 'parameter')
+        .toArray();
+      const idbSummary = idbParamFiles.map((f: any) => ({
+        fileId: f.fileId,
+        path: f.source?.path,
+        valuesCount: Array.isArray(f.data?.values) ? f.data.values.length : 'no-values',
+        repo: f.source?.repository,
+        branch: f.source?.branch,
+      }));
+
+      const dump = {
+        mark: markLabel,
+        ts: Date.now(),
+        fileRegistry: {
+          totalFiles: allFiles.length,
+          parameterFiles: regFiles,
+        },
+        idb: {
+          totalParamFiles: idbParamFiles.length,
+          files: idbSummary,
+        },
+      };
+
+      await fetch('/__dagnet/registry-dump', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(dump, null, 2),
+        keepalive: true,
+      });
+    } catch {
+      // best-effort — never break mark functionality
+    }
   }
 
   /**

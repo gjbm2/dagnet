@@ -117,6 +117,36 @@ export interface SyncGuards {
  * In Sub-phase 2 the refs will move into the useGraphSync hook and this
  * factory will be called there instead.
  */
+// ---------------------------------------------------------------------------
+// Module-level singleton — allows node components to call guard transitions
+// directly without threading callbacks through ReactFlow node data (which
+// gets lost during controlled-mode round-trips through nodeInternals).
+// Same pattern as useGroupResize's module-level state.
+// ---------------------------------------------------------------------------
+
+let _guards: SyncGuards | null = null;
+
+/** Bind the singleton to the current SyncGuards instance (called by useGraphSync). */
+export function bindSyncGuards(guards: SyncGuards): void {
+  _guards = guards;
+}
+
+/** Called by node components at resize start — sets the resize guard. */
+export function beginResizeGuard(): void {
+  if (import.meta.env.DEV) console.log('[syncGuards] beginResizeGuard →', !!_guards);
+  _guards?.beginInteraction('resize');
+}
+
+/** Called by node components at resize end — clears the resize guard. */
+export function endResizeGuard(): void {
+  if (import.meta.env.DEV) console.log('[syncGuards] endResizeGuard →', !!_guards);
+  _guards?.endInteraction('resize');
+}
+
+// ---------------------------------------------------------------------------
+// Factory
+// ---------------------------------------------------------------------------
+
 export function createSyncGuards(refs: SyncGuardRefs): SyncGuards {
   const {
     isSyncingRef,

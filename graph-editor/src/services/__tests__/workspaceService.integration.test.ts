@@ -965,6 +965,322 @@ describe('workspaceService.pullLatest() - Integration Tests', () => {
     expect(file?.sha).toBe('sha-new');
     expect(file?.isDirty).toBe(false);
   });
+  // ---------------------------------------------------------------------------
+  // BUG A REGRESSION: merge parse failure must surface as conflict, never be
+  // silently swallowed. The text-based 3-way merge can produce structurally
+  // invalid JSON/YAML (e.g. duplicate keys, broken syntax). Before this fix
+  // the parse error was caught by the outer catch and discarded — the file
+  // was never updated and the user received no feedback.
+  // ---------------------------------------------------------------------------
+
+  it('should surface as conflict when auto-merge produces unparseable JSON (graph file)', async () => {
+    const workspaceId = 'test-repo-main';
+    await db.workspaces.add({
+      id: workspaceId,
+      repository: 'test-repo',
+      branch: 'main',
+      fileIds: ['graph-test-graph'],
+      lastSynced: Date.now()
+    });
+
+    const originalGraph = { nodes: [{ id: 'a' }], edges: [{ source: 'a', target: 'b' }] };
+    const localGraph = { nodes: [{ id: 'a' }], edges: [{ source: 'a', target: 'b' }], extra: 'local' };
+
+    await db.files.add({
+      fileId: 'graph-test-graph',
+      type: 'graph',
+      name: 'test-graph.json',
+      path: 'graphs/test-graph.json',
+      data: localGraph,
+      originalData: originalGraph,
+      isDirty: true,
+      source: {
+        repository: 'test-repo',
+        path: 'graphs/test-graph.json',
+        branch: 'main',
+        commitHash: 'abc123'
+      },
+      isLoaded: true,
+      isLocal: false,
+      viewTabs: [],
+      lastModified: Date.now(),
+      sha: 'sha-old',
+      lastSynced: Date.now()
+    });
+
+    vi.mocked(gitService.setCredentials).mockImplementation(() => {});
+    vi.mocked(gitService.getRepositoryTree).mockResolvedValue({
+      success: true,
+      data: {
+        tree: [
+          { path: 'graphs/test-graph.json', type: 'blob', sha: 'sha-new', size: 200 }
+        ],
+        commitSha: 'commit-new'
+      }
+    });
+
+    vi.mocked(gitService.getBlobContent).mockResolvedValue({
+      success: true,
+      data: {
+        content: JSON.stringify({ nodes: [{ id: 'a' }, { id: 'c' }], edges: [] }, null, 2),
+        sha: 'sha-new'
+      }
+    });
+
+    // Mock merge3Way to return "no conflicts" but produce INVALID JSON.
+    // This simulates the real-world scenario where the text-level merge
+    // produces output that looks conflict-free but is structurally broken.
+    vi.spyOn(mergeServiceModule, 'merge3Way').mockReturnValue({
+      success: true,
+      hasConflicts: false,
+      merged: '{ "nodes": [{ "id": "a" }], INVALID JSON HERE }}}',
+    });
+
+    const gitCreds = {
+      name: 'test-repo', owner: 'test-owner', token: 'test-token', basePath: '',
+      paramsPath: 'parameters', graphsPath: 'graphs', nodesPath: 'nodes',
+      eventsPath: 'events', contextsPath: 'contexts', casesPath: 'cases'
+    };
+
+    const result = await workspaceService.pullLatest('test-repo', 'main', gitCreds);
+
+    // CRITICAL: parse failure must surface as a conflict
+    expect(result.conflicts).toHaveLength(1);
+    expect(result.conflicts[0]).toMatchObject({
+      fileId: 'graph-test-graph',
+      type: 'graph',
+      hasConflicts: true
+    });
+
+    // File in IDB must NOT be updated with corrupt data
+    const file = await db.files.get('graph-test-graph');
+    expect(file?.data).toEqual(localGraph);   // Still the local version
+    expect(file?.sha).toBe('sha-old');        // SHA unchanged
+    expect(file?.isDirty).toBe(true);         // Still dirty
+  });
+
+  it('should surface as conflict when auto-merge produces unparseable YAML (parameter file)', async () => {
+    const workspaceId = 'test-repo-main';
+    await db.workspaces.add({
+      id: workspaceId,
+      repository: 'test-repo',
+      branch: 'main',
+      fileIds: ['parameter-dup-keys'],
+      lastSynced: Date.now()
+    });
+
+    await db.files.add({
+      fileId: 'parameter-dup-keys',
+      type: 'parameter',
+      name: 'dup-keys.yaml',
+      path: 'parameters/dup-keys.yaml',
+      data: { id: 'dup-keys', value: 100, created_at: '2025-01-01' },
+      originalData: { id: 'dup-keys', value: 100 },
+      isDirty: true,
+      source: {
+        repository: 'test-repo',
+        path: 'parameters/dup-keys.yaml',
+        branch: 'main',
+        commitHash: 'abc123'
+      },
+      isLoaded: true,
+      isLocal: false,
+      viewTabs: [],
+      lastModified: Date.now(),
+      sha: 'sha-old',
+      lastSynced: Date.now()
+    });
+
+    vi.mocked(gitService.setCredentials).mockImplementation(() => {});
+    vi.mocked(gitService.getRepositoryTree).mockResolvedValue({
+      success: true,
+      data: {
+        tree: [
+          { path: 'parameters/dup-keys.yaml', type: 'blob', sha: 'sha-new', size: 120 }
+        ],
+        commitSha: 'commit-new'
+      }
+    });
+
+    vi.mocked(gitService.getBlobContent).mockResolvedValue({
+      success: true,
+      data: {
+        content: 'id: dup-keys\nvalue: 200\ncreated_at: 2025-06-01\n',
+        sha: 'sha-new'
+      }
+    });
+
+    // Mock merge3Way to return YAML with duplicate keys (real-world failure mode)
+    vi.spyOn(mergeServiceModule, 'merge3Way').mockReturnValue({
+      success: true,
+      hasConflicts: false,
+      merged: 'id: dup-keys\nvalue: 100\ncreated_at: 2025-01-01\ncreated_at: 2025-06-01\nvalue: 200\n',
+    });
+
+    const gitCreds = {
+      name: 'test-repo', owner: 'test-owner', token: 'test-token', basePath: '',
+      paramsPath: 'parameters', graphsPath: 'graphs', nodesPath: 'nodes',
+      eventsPath: 'events', contextsPath: 'contexts', casesPath: 'cases'
+    };
+
+    const result = await workspaceService.pullLatest('test-repo', 'main', gitCreds);
+
+    // CRITICAL: must surface as conflict, not silently skip
+    expect(result.conflicts).toHaveLength(1);
+    expect(result.conflicts[0]).toMatchObject({
+      fileId: 'parameter-dup-keys',
+      type: 'parameter',
+      hasConflicts: true
+    });
+
+    // File must NOT be corrupted in IDB
+    const file = await db.files.get('parameter-dup-keys');
+    expect(file?.data.value).toBe(100);       // Local value preserved
+    expect(file?.sha).toBe('sha-old');
+  });
+
+  it('should tolerate duplicate YAML keys in remote index files (v1.x parseDocument workaround)', async () => {
+    // Remote index files generated by the Python pipeline contain duplicate
+    // `created_at` keys.  yaml v1.x YAML.parse() rejects these with
+    // YAMLSemanticError.  parseYamlLenient uses parseDocument + error
+    // filtering so the file loads successfully.
+    const workspaceId = 'test-repo-main';
+    await db.workspaces.put({
+      id: workspaceId,
+      name: 'test-repo',
+      branch: 'main',
+      repository: 'test-repo',
+      createdAt: Date.now(),
+      lastSynced: Date.now(),
+      commitSHA: 'commit-old',
+    });
+
+    // Remote YAML with duplicate created_at (matches real-world Python pipeline output)
+    const remoteContent =
+      '- id: param-1\n  file_path: parameters/param-1.yaml\n  status: active\n  created_at: 2025-01-01\n  created_at: 2025-06-01\n' +
+      '- id: param-2\n  file_path: parameters/param-2.yaml\n  status: active\n  created_at: 2025-02-01\n  created_at: 2025-07-01\n';
+
+    vi.mocked(gitService.setCredentials).mockImplementation(() => {});
+    vi.mocked(gitService.getRepositoryTree).mockResolvedValue({
+      success: true,
+      data: {
+        tree: [
+          { path: 'parameters-index.yaml', type: 'blob', sha: 'sha-idx-new', size: 300 }
+        ],
+        commitSha: 'commit-new'
+      }
+    });
+
+    vi.mocked(gitService.getBlobContent).mockResolvedValue({
+      success: true,
+      data: { content: remoteContent, sha: 'sha-idx-new' }
+    });
+
+    const gitCreds = {
+      name: 'test-repo', owner: 'test-owner', token: 'test-token', basePath: '',
+      paramsPath: 'parameters', graphsPath: 'graphs', nodesPath: 'nodes',
+      eventsPath: 'events', contextsPath: 'contexts', casesPath: 'cases'
+    };
+
+    const result = await workspaceService.pullLatest('test-repo', 'main', gitCreds);
+
+    // Must succeed — no conflicts, no errors
+    expect(result.conflicts).toHaveLength(0);
+
+    // Index file stored in IDB with correct data (last duplicate key wins in YAML)
+    const file = await db.files.get('parameter-index');
+    expect(file).toBeDefined();
+    expect(file?.data).toBeInstanceOf(Array);
+    expect(file?.data).toHaveLength(2);
+    expect(file?.data[0].id).toBe('param-1');
+    expect(file?.data[1].id).toBe('param-2');
+    // Duplicate created_at: last value wins
+    expect(file?.data[0].created_at).toBe('2025-06-01');
+    expect(file?.data[1].created_at).toBe('2025-07-01');
+  });
+
+  it('should still apply valid auto-merge result after failed parse on a different file', async () => {
+    // Ensures one file's parse failure doesn't block other files from updating
+    const workspaceId = 'test-repo-main';
+    await db.workspaces.add({
+      id: workspaceId,
+      repository: 'test-repo',
+      branch: 'main',
+      fileIds: ['graph-broken', 'parameter-good'],
+      lastSynced: Date.now()
+    });
+
+    // File 1: graph that will fail to merge-parse
+    await db.files.add({
+      fileId: 'graph-broken',
+      type: 'graph',
+      name: 'broken.json',
+      path: 'graphs/broken.json',
+      data: { nodes: [{ id: 'a' }], edges: [] },
+      originalData: { nodes: [], edges: [] },
+      isDirty: true,
+      source: { repository: 'test-repo', path: 'graphs/broken.json', branch: 'main', commitHash: 'abc' },
+      isLoaded: true, isLocal: false, viewTabs: [], lastModified: Date.now(),
+      sha: 'sha-old-1', lastSynced: Date.now()
+    });
+
+    // File 2: parameter that will cleanly update (not dirty)
+    await db.files.add({
+      fileId: 'parameter-good',
+      type: 'parameter',
+      name: 'good.yaml',
+      path: 'parameters/good.yaml',
+      data: { id: 'good', value: 10 },
+      originalData: { id: 'good', value: 10 },
+      isDirty: false,
+      source: { repository: 'test-repo', path: 'parameters/good.yaml', branch: 'main', commitHash: 'abc' },
+      isLoaded: true, isLocal: false, viewTabs: [], lastModified: Date.now(),
+      sha: 'sha-old-2', lastSynced: Date.now()
+    });
+
+    vi.mocked(gitService.setCredentials).mockImplementation(() => {});
+    vi.mocked(gitService.getRepositoryTree).mockResolvedValue({
+      success: true,
+      data: {
+        tree: [
+          { path: 'graphs/broken.json', type: 'blob', sha: 'sha-new-1', size: 200 },
+          { path: 'parameters/good.yaml', type: 'blob', sha: 'sha-new-2', size: 100 },
+        ],
+        commitSha: 'commit-new'
+      }
+    });
+
+    vi.mocked(gitService.getBlobContent).mockImplementation(async (sha: string) => {
+      if (sha === 'sha-new-1') {
+        return { success: true, data: { content: '{"nodes":[]}', sha: 'sha-new-1' } };
+      }
+      return { success: true, data: { content: 'id: good\nvalue: 99\n', sha: 'sha-new-2' } };
+    });
+
+    // Only the graph file triggers merge (it's dirty); mock to produce invalid JSON
+    vi.spyOn(mergeServiceModule, 'merge3Way').mockReturnValue({
+      success: true,
+      hasConflicts: false,
+      merged: 'NOT VALID JSON AT ALL',
+    });
+
+    const gitCreds = {
+      name: 'test-repo', owner: 'test-owner', token: 'test-token', basePath: '',
+      paramsPath: 'parameters', graphsPath: 'graphs', nodesPath: 'nodes',
+      eventsPath: 'events', contextsPath: 'contexts', casesPath: 'cases'
+    };
+
+    const result = await workspaceService.pullLatest('test-repo', 'main', gitCreds);
+
+    // Broken file → conflict
+    expect(result.conflicts).toHaveLength(1);
+    expect(result.conflicts[0].fileId).toBe('graph-broken');
+
+    // Good file → updated normally
+    const goodFile = await db.files.get('parameter-good');
+    expect(goodFile?.data.value).toBe(99);
+    expect(goodFile?.sha).toBe('sha-new-2');
+  });
 });
 
 // ---------------------------------------------------------------------------

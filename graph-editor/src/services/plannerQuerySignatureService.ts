@@ -116,24 +116,56 @@ export async function computePlannerQuerySignaturesForGraph(input: {
     }
   };
 
+  // Derive workspace scope from any file already in the registry so event
+  // restoreFile lookups use the correct workspace-prefixed IDB key.
+  //
+  // Some test suites intentionally use a minimal fileRegistry mock that omits
+  // getAllFiles(). In that case we simply proceed without workspace scope.
+  const allRegistryFiles: any[] = (() => {
+    const getAllFilesFn = (fileRegistry as any)?.getAllFiles;
+    if (typeof getAllFilesFn === 'function') {
+      try {
+        const files = getAllFilesFn.call(fileRegistry);
+        return Array.isArray(files) ? files : [];
+      } catch {
+        return [];
+      }
+    }
+    const filesMap = (fileRegistry as any)?.files;
+    if (filesMap && typeof filesMap.values === 'function') {
+      try {
+        return Array.from(filesMap.values());
+      } catch {
+        return [];
+      }
+    }
+    return [];
+  })();
+  const workspaceScope: { repository: string; branch: string } | undefined = (() => {
+    for (const f of allRegistryFiles) {
+      const src = (f as any).source;
+      if (src?.repository && src?.branch) return { repository: src.repository, branch: src.branch };
+    }
+    return undefined;
+  })();
+
   const eventLoader = async (eventId: string) => {
     const fileId = `event-${eventId}`;
     let file = fileRegistry.getFile(fileId);
     if (!file) {
       try {
-        await fileRegistry.restoreFile(fileId);
+        await fileRegistry.restoreFile(fileId, workspaceScope);
         file = fileRegistry.getFile(fileId);
       } catch {
         // ignore
       }
     }
-    return (
-      file?.data ?? {
-        id: eventId,
-        name: eventId,
-        provider_event_names: {},
-      }
-    );
+    const resolved = file?.data ?? {
+      id: eventId,
+      name: eventId,
+      provider_event_names: {},
+    };
+    return resolved;
   };
 
   // Parse the graph-level DSL once (will be merged per-edge with edge query constraints).

@@ -431,7 +431,7 @@ function buildParameterPlanItem(
   
   // Get all values from file
   const allValues = file?.data?.values ?? [];
-  
+
   // Filter to mode-appropriate values
   const modeFilteredValues = allValues.filter(v => {
     if (isCohortQuery) return isCohortModeValue(v);
@@ -558,7 +558,9 @@ function buildParameterPlanItem(
         bustCache,
         dsl
       );
-  
+
+
+
   const missingDates = new Set<string>();
   if (incrementalResult.needsFetch && incrementalResult.fetchWindows) {
     for (const fw of incrementalResult.fetchWindows) {

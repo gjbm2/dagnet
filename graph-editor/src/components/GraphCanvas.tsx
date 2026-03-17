@@ -17,6 +17,7 @@ import ReactFlow, {
   NodeTypes,
   EdgeTypes,
   useReactFlow,
+  useStoreApi,
   ConnectionMode,
 } from 'reactflow';
 import 'reactflow/dist/style.css';
@@ -65,6 +66,7 @@ import { getOptimalFace } from '@/lib/faceSelection';
 import { useEdgeRouting } from './canvas/useEdgeRouting';
 import { useEdgeConnection } from './canvas/useEdgeConnection';
 import { useGraphSync } from './canvas/useGraphSync';
+import { useGroupResize } from './canvas/useGroupResize';
 import type { SyncGuards } from './canvas/syncGuards';
 import { CanvasContextMenus } from './canvas/CanvasContextMenus';
 import { buildScenarioRenderEdges } from './canvas/buildScenarioRenderEdges';
@@ -294,6 +296,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
   // Create a "version" to track changes in what-if state (for reactivity)
   const overridesVersion = effectiveWhatIfDSL || '';
   const { deleteElements, fitView: rfFitView, screenToFlowPosition, flowToScreenPosition, setCenter } = useReactFlow();
+  const rfStore = useStoreApi();
   
   const isCanvasObjectNode = useCallback((id: string) =>
     id?.startsWith('postit-') || id?.startsWith('container-') || id?.startsWith('analysis-'), []);
@@ -389,9 +392,45 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
 
   // Custom onNodesChange handler — snap-to-guide interception + auto re-routing
   const onNodesChange = useCallback((changes: any[]) => {
-    const filtered = activeElementTool === 'pan'
+    let filtered = activeElementTool === 'pan'
       ? changes.filter((c: any) => c.type !== 'select')
       : changes;
+
+    // During active resize, three problems cause the primary node to bounce:
+    //
+    // 1. ResizeObserver dimension changes (type: 'dimensions' without resizing flag):
+    //    groupResize() manipulates peer DOM styles directly → ResizeObserver → onNodesChange.
+    //    These lack updateStyle, so applyNodeChanges sets node.width/height but NOT
+    //    node.style, causing React to overwrite groupResize's DOM manipulation.
+    //
+    // 2. type: 'reset' changes from useReactFlow().setNodes() (SelectionConnectors halo):
+    //    In controlled mode, setNodes reads stale positions from nodeInternals and creates
+    //    'reset' changes that REPLACE THE ENTIRE NODE ARRAY, clobbering d3-drag's updates.
+    //
+    // 3. TWO-RENDER LAG (the primary bounce cause for left/top handles):
+    //    NodeRenderer reads from Zustand store's nodeInternals. useStoreUpdater syncs
+    //    controlled nodes → nodeInternals in a useEffect (post-render). So every update
+    //    causes: (a) first render with STALE nodeInternals → wrong position painted,
+    //    (b) effect syncs nodeInternals → second render with correct position. This creates
+    //    a visible bounce because each d3-drag frame alternates between stale and correct.
+    //    Bottom-right doesn't bounce because position is unchanged (same CSS transform).
+    //
+    // Fix for (3): apply position/dimension changes directly to nodeInternals SYNCHRONOUSLY
+    // so NodeRenderer sees correct values on the first render.
+    const resizing = guardsRef.current?.isResizing();
+
+    if (resizing) {
+      const before = filtered.length;
+      filtered = filtered.filter((c: any) => {
+        if (c.type === 'dimensions' && (c.resizing === true || c.resizing === false)) return true;
+        if (c.type === 'dimensions') return false;
+        if (c.type === 'reset') return false;
+        return true;
+      });
+      if (import.meta.env.DEV && filtered.length !== before) {
+        console.log('[GraphCanvas] FILTERED during resize:', before - filtered.length, 'dropped');
+      }
+    }
 
     // Apply snap-to-guide lines before committing position changes
     if (import.meta.env.DEV) {
@@ -407,6 +446,44 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
       }
     }
     const snapped = applySnapToChanges(filtered, nodesForSnapRef.current, snapToGuides, altKeyPressedRef.current, useSankeyView);
+
+    // Fix (3): During resize, apply position/dimension changes directly to nodeInternals
+    // SYNCHRONOUSLY. This prevents the two-render bounce where NodeRenderer reads stale
+    // nodeInternals on the first render (useStoreUpdater only syncs in a post-render effect).
+    if (resizing) {
+      const { nodeInternals } = rfStore.getState();
+      const updatedInternals = new Map(nodeInternals);
+      let changed = false;
+      for (const c of snapped as any[]) {
+        if (c.type === 'position' && c.position) {
+          const prev = updatedInternals.get(c.id);
+          if (prev) {
+            updatedInternals.set(c.id, {
+              ...prev,
+              position: c.position,
+              positionAbsolute: { ...c.position },
+            });
+            changed = true;
+          }
+        }
+        if (c.type === 'dimensions' && c.dimensions) {
+          const prev = updatedInternals.get(c.id);
+          if (prev) {
+            updatedInternals.set(c.id, {
+              ...prev,
+              width: c.dimensions.width,
+              height: c.dimensions.height,
+              ...(c.updateStyle ? { style: { ...(prev.style || {}), ...c.dimensions } } : {}),
+            });
+            changed = true;
+          }
+        }
+      }
+      if (changed) {
+        rfStore.setState({ nodeInternals: updatedInternals });
+      }
+    }
+
     onNodesChangeBase(snapped);
 
     if (autoReroute) {
@@ -941,6 +1018,8 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
     whatIfDSL,
   });
   guardsRef.current = guards;
+
+  useGroupResize({ nodes, setNodes, handleUpdatePostit, handleUpdateContainer, handleUpdateAnalysis });
 
   // Edge routing hook (extracted from GraphCanvas Phase B2)
   const {

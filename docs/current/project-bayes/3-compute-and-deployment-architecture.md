@@ -392,26 +392,21 @@ implementation detail behind Vercel.
 
 ### Open questions on result flow
 
-These are not yet resolved:
+All items from the original list have been resolved or built:
 
-- **Conflict with dirty files.** If the user has local edits to a parameter
-  file and the webhook commits new posteriors to the same file, the next
-  pull will hit a conflict. How should this be handled? Options: webhook
-  commits to a dedicated branch; webhook only updates posterior-specific
-  fields (not the whole file); FE merge logic handles it.
-- **Commit granularity.** One commit per graph? One commit per nightly
-  batch (all graphs)? Per-graph is simpler for traceability but creates
-  more commits.
-- **Which files get updated.** Posterior results need to flow into parameter
-  YAML files. The exact field mapping (which YAML fields carry Bayesian
-  estimates vs point estimates vs overrides) needs to be defined in
-  conjunction with the artefact schema (Logical blocks, Block 6).
-- **Webhook authentication.** Shared secret, signed payload, or IP
-  allowlist? Depends on compute vendor capabilities.
-- **Graph snapshot at submission time.** The MCMC job needs the graph
-  definition. Should the FE send the full graph in the submission payload,
-  or should the worker read it from git? Sending it avoids a race condition
-  (graph changes between submission and execution).
+- ~~**Conflict with dirty files**~~. **Accepted as known limitation.**
+  Webhook commits directly to target branch; user resolves conflicts
+  via existing merge flow. Revisit if problematic.
+- ~~**Commit granularity**~~. **Built.** Per-batch atomic commit (all
+  files in one commit) via Git Data API. See `api/_lib/git-commit.ts`.
+- ~~**Which files get updated**~~. **Resolved in doc 4.** Full field
+  mapping defined in the posterior schema.
+- ~~**Webhook authentication**~~. **Built.** AES-256-GCM encrypted
+  callback token with PBKDF2 key derivation, 60-min expiry. See
+  `api/bayes-webhook.ts`.
+- ~~**Graph snapshot at submission time**~~. **Built.** FE sends full
+  graph + param files inline in submit payload. See
+  `hooks/useBayesTrigger.ts`.
 
 ### Progress during on-demand runs (secondary concern)
 
@@ -478,34 +473,23 @@ operation ran locally (git, file ops) or remotely (MCMC).
   Parse JSON + GitHub API commit is seconds, not minutes. Pro plan allows
   up to 800s with Fluid Compute.
 
-### Still open
+### Resolved
 
-- **Vendor selection**: Modal is the leading candidate but needs hands-on
-  prototyping. Key unknowns: cold start latency for nightly jobs, PyMC/
-  PyTensor compatibility in their container environment, cost at expected
-  scale (N graphs x M minutes per graph), and webhook retry behaviour on
-  non-2xx responses.
-- **Webhook reliability**: Vercel provides no built-in retry. Handler must
-  be idempotent. Need to verify compute vendor's webhook retry semantics.
-  May need a webhook gateway (Hookdeck) if vendor doesn't retry.
-- **Artefact schema**: what exactly gets persisted in the YAML files?
-  Posterior summaries (HDI, mean, sufficient statistics), convergence
-  diagnostics, model fingerprint — the field mapping is TBD.
-- **Conflict with dirty files**: if the user has local edits and the webhook
-  commits new posteriors to the same parameter file, the next pull conflicts.
-  Options: dedicated branch, posterior-only field updates, FE merge logic.
-- **Multi-file commit atomicity**: GitHub Contents API
-  (`createOrUpdateFileContents`) commits one file at a time. A nightly batch
-  updating 14 parameter files would create 14 commits (noisy) or require
-  the lower-level Git Data API (`createTree` + `createCommit`) for a single
-  atomic commit. The latter is more complex but cleaner. Needs design.
-- **Service account token**: the webhook route needs a GitHub token with
-  write access to the repo. This should be a dedicated service account /
-  GitHub App installation token, not a user's personal token. Setup TBD.
-- **Shared package evolution**: at what point does `lib/` need to become a
-  proper pip package vs just a shared directory? Likely when CI/CD for the
-  MCMC worker needs its own build context.
-- **Warm-start storage**: Logical blocks specifies warm-start from previous posterior
-  when fingerprint matches. Where are previous posterior samples stored?
-  Object storage (S3/R2), compute vendor's persistent volumes, or
-  reconstructed from the sufficient statistics in YAML?
+- ~~Vendor selection~~: **Modal.** Worker in `bayes/app.py`.
+- ~~Shared package evolution~~: Modal's `@app.function` uploads local
+  code; no separate pip package needed.
+- ~~Webhook authentication~~: **Built.** AES-256-GCM encrypted callback
+  token. See `api/bayes-webhook.ts`.
+- ~~Service account token~~: **Not needed.** User's git token encrypted
+  in the callback token.
+- ~~Artefact schema~~: **Resolved in doc 4.**
+- ~~Conflict with dirty files~~: **Accepted as known limitation.** User
+  resolves via existing merge flow.
+- ~~Multi-file commit atomicity~~: **Built.** Git Data API. See
+  `api/_lib/git-commit.ts`.
+- ~~Commit granularity~~: **Built.** Per-batch atomic commit.
+- ~~Graph snapshot at submission~~: **Built.** FE sends inline. See
+  `hooks/useBayesTrigger.ts`.
+- ~~Which files get updated~~: **Resolved in doc 4.** Full field mapping.
+- ~~Warm-start storage~~: **Parameter file YAML.** Previous posterior's
+  `(alpha, beta)` with ESS cap. See doc 8 Phase A.

@@ -148,6 +148,9 @@ Bayesian fitting run for this graph. One block per graph, overwritten each run.
 | `quality.converged_pct` | number | Fraction of parameters that met convergence criteria |
 | `quality.edges_fitted` | number | How many edges received Bayesian posteriors |
 | `quality.edges_skipped` | number | How many edges fell back or were skipped |
+| `quality.total_divergences` | number | Sum of divergences across all fitted edges |
+| `quality.edges_with_surprise` | number | Count of edges with trajectory surprise \|z\| > 2 |
+| `quality.edges_by_tier` | object | Prior cascade tier distribution (see example) |
 
 Example:
 
@@ -164,17 +167,28 @@ _bayes:
     converged_pct: 0.95
     edges_fitted: 12
     edges_skipped: 2
+    total_divergences: 0
+    edges_with_surprise: 1
+    edges_by_tier:
+      direct_history: 6
+      trajectory_calibrated: 3
+      inherited: 1
+      uninformative: 2
 ```
 
 ### Probability posterior (`p.posterior`)
 
-Added to `ProbabilityParam`:
+Added to `ProbabilityParam`. The top-level `alpha`/`beta` are derived from
+the **window** posterior (the most current estimate of conversion
+performance). Window and cohort posteriors are stored as entries in the
+`slices` map, keyed by their slice DSL strings — the same keying mechanism
+used for context slices.
 
 | Field | Type | Description |
 |---|---|---|
 | `distribution` | string | Distribution family fitted (e.g. `beta`, `dirichlet-component`) |
-| `alpha` | number | Beta posterior shape parameter α |
-| `beta` | number | Beta posterior shape parameter β |
+| `alpha` | number | Beta posterior shape parameter α (from window posterior) |
+| `beta` | number | Beta posterior shape parameter β (from window posterior) |
 | `hdi_lower` | number | Lower bound of HDI (at configured level) |
 | `hdi_upper` | number | Upper bound of HDI |
 | `hdi_level` | number | HDI level used (e.g. 0.9 for 90%) |
@@ -184,16 +198,22 @@ Added to `ProbabilityParam`:
 | `fitted_at` | string | UK date (d-MMM-yy) when posterior was computed |
 | `fingerprint` | string | Deterministic hash of (graph structure + policy + evidence window) |
 | `provenance` | string | `bayesian` / `pooled-fallback` / `point-estimate` / `skipped` |
+| `divergences` | number | Count of MCMC divergent transitions (0 = good) |
+| `prior_tier` | string | Prior cascade tier used: `direct_history` / `trajectory_calibrated` / `inherited` / `sibling_pooled` / `uninformative` |
+| `surprise_z` | number &#124; null | Trajectory surprise z-score (null if < 3 fit_history entries) |
 | `fit_history` | array | Rolling array of recent posterior snapshots (see fit_history below) |
+| `slices` | object &#124; null | Per-slice posteriors keyed by slice DSL (see below) |
+| `_model_state` | object &#124; null | Model-internal parameters for subsequent runs (see below) |
 
 When a Bayesian posterior is written, `p.mean` and `p.stdev` are updated to
-the posterior mean and standard deviation of the Beta(α, β) distribution:
+the posterior mean and standard deviation of the window Beta(α, β):
 - `p.mean = α / (α + β)`
 - `p.stdev = sqrt(αβ / ((α+β)²(α+β+1)))`
 
 This means **zero changes to existing consumption code**. Everything that reads
 `p.mean` and `p.stdev` today — confidence intervals, graph rendering, path
-calculations — continues to work, now with better estimates.
+calculations — continues to work, now with the window posterior estimate
+(the best current-performance figure).
 
 ### Latency posterior (`p.latency.posterior`)
 
@@ -245,11 +265,22 @@ top-level posterior — key params + convergence only):
 | Field | Type | Description |
 |---|---|---|
 | `fitted_at` | string | UK date |
-| `alpha` | number | Beta α at that point |
-| `beta` | number | Beta β at that point |
+| `alpha` | number | Beta α (window posterior — matches top-level) |
+| `beta` | number | Beta β (window posterior) |
 | `hdi_lower` | number | HDI lower bound |
 | `hdi_upper` | number | HDI upper bound |
 | `rhat` | number | Convergence diagnostic |
+| `divergences` | number | Divergent transitions at that point |
+| `slices` | object &#124; null | Per-slice snapshots keyed by slice DSL (see below) |
+
+Each `slices` entry in a fit_history snapshot carries `alpha` and `beta`
+only (minimal footprint). Window and cohort slices appear here under their
+DSL keys, alongside any context slices. This enables trajectory analysis
+per observation type: the divergence between window and cohort posteriors
+over time is a direct measure of temporal volatility — when window
+performance shifts but cohort hasn't caught up yet, the gap widens. The
+DerSimonian-Laird estimator can use per-type trajectories to estimate
+between-run heterogeneity separately for window and cohort domains.
 
 **Latency fit_history entry shape**:
 
@@ -260,36 +291,156 @@ top-level posterior — key params + convergence only):
 | `sigma_mean` | number | Posterior mean of σ |
 | `onset_delta_days` | number | Onset at that point |
 | `rhat` | number | Convergence diagnostic |
+| `divergences` | number | Divergent transitions at that point |
+
+### Per-slice posteriors (`p.posterior.slices`)
+
+#### Why a separate `slices` map (not on `values[]` entries)
+
+The model produces posteriors at **aggregate levels that no `values[]`
+entry represents**. Real data arrives as compound slices — e.g.
+`window(28-Oct-25:16-Mar-26).context(channel:paid-search)` — but the
+model also needs to surface posteriors at coarser granularity: the
+uncontexted window posterior (aggregating across all channels), the
+uncontexted cohort posterior, the per-context posterior (aggregating
+across observation types). None of these correspond to a single
+`values[]` entry. The `slices` map exists to hold posteriors at any
+granularity the model produces, including aggregates.
+
+An alternative — storing posteriors directly on `values[]` entries — was
+considered. It co-locates data with results, but breaks down for
+aggregate posteriors that span multiple `values[]` entries. It also
+conflates input (fetch pipeline writes `values[]`) with output (Bayes
+worker writes posteriors), complicating ownership and atomic writes.
+
+#### DSL identity invariant
+
+**The slice DSL is the single identity system.** Keys in
+`posterior.slices` and `sliceDSL` values in `values[]` entries use the
+**same grammar, same canonicalisation, same parsing logic**. There are no
+special-case keys — an uncontexted window posterior is keyed by
+`window(1-Jan-26:16-Mar-26)`, which is simply a DSL expression with no
+context suffix. A compound slice is
+`cohort(household-created,28-Oct-25:16-Mar-26).context(channel:paid-search)`.
+The `slices` map happens to hold entries at coarser granularity than
+`values[]`, but they are all valid DSL expressions in the same language.
+
+Any code that parses, compares, or matches slice identities — whether in
+the evidence binder, the posterior writer, or downstream consumers —
+must use the shared DSL parser. No string matching, no ad-hoc key
+construction.
+
+#### Structure
+
+Posteriors are stored as a keyed sub-map within the `posterior` block.
+The slice DSL string is the key (unique per edge by construction). This
+includes **all** slice types uniformly — window/cohort observation types,
+context dimensions, aggregates, and any future slice types all live in
+the same map under their DSL keys. Each value has the same core fields
+as the edge-level posterior:
+
+| Field | Type | Description |
+|---|---|---|
+| `alpha` | number | Beta posterior α for this slice |
+| `beta` | number | Beta posterior β for this slice |
+| `hdi_lower` | number | HDI lower bound for this slice |
+| `hdi_upper` | number | HDI upper bound for this slice |
+| `ess` | number | Effective sample size for this slice |
+| `rhat` | number | Convergence diagnostic for this slice |
+| `divergences` | number | Divergent transitions for this slice |
+
+Per-slice `fit_history` is carried within the edge-level `fit_history`
+entries (slim `alpha`/`beta` snapshots per slice per run — see
+fit_history section above). Full per-slice trajectory calibration is not
+performed; the DerSimonian-Laird estimator operates on the edge-level
+aggregate and optionally on per-observation-type trajectories.
 
 Example (probability):
 
 ```yaml
 posterior:
   distribution: "beta"
-  alpha: 45.2
-  beta: 120.8
-  hdi_lower: 0.21
+  alpha: 46.8                          # window posterior (top-level = window)
+  beta: 122.1
+  hdi_lower: 0.22
   hdi_upper: 0.35
   hdi_level: 0.9
   ess: 1200
   rhat: 1.01
+  divergences: 0
   evidence_grade: 3
   provenance: "bayesian"
+  prior_tier: "trajectory_calibrated"
+  surprise_z: 0.8
   fitted_at: "16-Mar-26"
   fingerprint: "abc123..."
+  slices:                              # all slices keyed by DSL string
+    "window(1-Jan-26:16-Mar-26)":
+      alpha: 46.8                      # same as top-level
+      beta: 122.1
+      hdi_lower: 0.22
+      hdi_upper: 0.35
+      ess: 1200
+      rhat: 1.01
+      divergences: 0
+    "cohort(landing-page,1-Sep-25:30-Nov-25)":
+      alpha: 41.3
+      beta: 117.9
+      hdi_lower: 0.20
+      hdi_upper: 0.34
+      ess: 950
+      rhat: 1.02
+      divergences: 0
+    "context(device:mobile)":
+      alpha: 12.1
+      beta: 38.4
+      hdi_lower: 0.18
+      hdi_upper: 0.38
+      ess: 800
+      rhat: 1.02
+      divergences: 0
+    "context(device:desktop)":
+      alpha: 33.1
+      beta: 82.4
+      hdi_lower: 0.22
+      hdi_upper: 0.34
+      ess: 1100
+      rhat: 1.01
+      divergences: 0
   fit_history:
     - fitted_at: "9-Mar-26"
-      alpha: 43.1
-      beta: 118.2
+      alpha: 44.5                      # window posterior at that point
+      beta: 119.8
       hdi_lower: 0.20
       hdi_upper: 0.36
       rhat: 1.01
+      divergences: 0
+      slices:
+        "window(1-Jan-26:9-Mar-26)":
+          alpha: 44.5
+          beta: 119.8
+        "cohort(landing-page,1-Sep-25:30-Nov-25)":
+          alpha: 39.2
+          beta: 114.6
     - fitted_at: "2-Mar-26"
-      alpha: 40.5
-      beta: 115.9
+      alpha: 42.1
+      beta: 117.0
       hdi_lower: 0.19
       hdi_upper: 0.36
       rhat: 1.03
+      divergences: 2
+      slices:
+        "window(1-Jan-26:2-Mar-26)":
+          alpha: 42.1
+          beta: 117.0
+        "cohort(landing-page,1-Sep-25:30-Nov-25)":
+          alpha: 36.8
+          beta: 112.5
+  _model_state:                        # model-internal, no business semantics
+    sigma_temporal: 0.12               # graph-level temporal volatility
+    tau_cohort: 0.31                   # σ_temporal · path_sigma_AX for this edge
+    p_base_alpha: 45.2                 # hierarchical anchor (if needed for warm-start)
+    p_base_beta: 120.8
 ```
 
 ### Forecasting settings additions

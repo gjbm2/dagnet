@@ -102,6 +102,48 @@ export function computeDagreLayout(
     positions.set(nodeId, { x: dagreNode.x, y: dagreNode.y });
   });
 
+  // When laying out a selection subset, anchor the topologically highest node
+  // (fewest incoming edges within the selection) so it stays stationary.
+  if (selectedNodes.length > 0) {
+    // Count in-degree within the selection for each node
+    const inDegree = new Map<string, number>();
+    for (const id of nodeIdsToLayout) inDegree.set(id, 0);
+    for (const edge of edges) {
+      if (nodeIdsToLayout.has(edge.source) && nodeIdsToLayout.has(edge.target)) {
+        inDegree.set(edge.target, (inDegree.get(edge.target) || 0) + 1);
+      }
+    }
+
+    // Pick the node with lowest in-degree (ties broken by first found)
+    let anchorId: string | null = null;
+    let minInDegree = Infinity;
+    for (const [id, deg] of inDegree) {
+      if (deg < minInDegree) {
+        minInDegree = deg;
+        anchorId = id;
+      }
+    }
+
+    if (anchorId) {
+      const anchorNode = nodesToLayout.find(n => n.id === anchorId);
+      const anchorDagrePos = positions.get(anchorId);
+      if (anchorNode && anchorDagrePos) {
+        // Original position is the node's current centre
+        const origX = (anchorNode.position?.x ?? anchorNode.positionAbsolute?.x ?? 0)
+          + (anchorNode.width || DEFAULT_NODE_WIDTH) / 2;
+        const origY = (anchorNode.position?.y ?? anchorNode.positionAbsolute?.y ?? 0)
+          + (anchorNode.height || DEFAULT_NODE_HEIGHT) / 2;
+
+        const dx = origX - anchorDagrePos.x;
+        const dy = origY - anchorDagrePos.y;
+
+        for (const [id, pos] of positions) {
+          positions.set(id, { x: pos.x + dx, y: pos.y + dy });
+        }
+      }
+    }
+  }
+
   return { positions };
 }
 

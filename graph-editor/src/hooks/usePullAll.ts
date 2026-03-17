@@ -22,6 +22,32 @@ import { dispatchGitAuthExpired } from '../services/gitService';
 import { countdownService } from '../services/countdownService';
 import { useCountdown } from './useCountdown';
 
+// ---- DOM event for cross-component conflict modal communication ----
+// Context menus (NavigatorItemContextMenu, TabContextMenu, etc.) unmount
+// when closed.  If pullAll() completes after unmount, the hook's setState
+// fires into a dead component.  This event routes the conflict data to the
+// persistent listener in useStalenessNudges (AppShell), which is always mounted.
+const CONFLICT_MODAL_EVENT = 'dagnet:openConflictModal';
+
+/** Dispatch conflicts to the persistent listener. */
+function dispatchOpenConflictModal(conflicts: ConflictFile[], opId?: string): void {
+  window.dispatchEvent(
+    new CustomEvent(CONFLICT_MODAL_EVENT, { detail: { conflicts, opId } })
+  );
+}
+
+/** Subscribe to conflict modal open requests.  Returns an unsubscribe function. */
+export function onOpenConflictModal(
+  handler: (conflicts: ConflictFile[], opId?: string) => void
+): () => void {
+  const listener = (e: Event) => {
+    const detail = (e as CustomEvent).detail;
+    handler(detail.conflicts, detail.opId);
+  };
+  window.addEventListener(CONFLICT_MODAL_EVENT, listener);
+  return () => window.removeEventListener(CONFLICT_MODAL_EVENT, listener);
+}
+
 interface UsePullAllResult {
   /** Whether a pull operation is in progress */
   isPulling: boolean;
@@ -30,7 +56,7 @@ interface UsePullAllResult {
   /** Render this in your component to show conflict modal when needed */
   conflictModal: React.ReactNode;
   /** Open the conflict resolution modal with externally-supplied conflicts (e.g. from auto-pull). */
-  openConflictModal: (conflicts: ConflictFile[]) => void;
+  openConflictModal: (conflicts: ConflictFile[], opId?: string) => void;
 }
 
 /**
@@ -53,6 +79,7 @@ export function usePullAll(): UsePullAllResult {
   const [isPulling, setIsPulling] = useState(false);
   const [conflicts, setConflicts] = useState<ConflictFile[]>([]);
   const [isConflictModalOpen, setIsConflictModalOpen] = useState(false);
+  const lastPullOpIdRef = useRef<string | null>(null);
 
   // Force-replace-on-pull confirmation (one-shot, per-file, countdown)
   const [isForceReplaceModalOpen, setIsForceReplaceModalOpen] = useState(false);
@@ -137,14 +164,20 @@ export function usePullAll(): UsePullAllResult {
   
   const handleResolveConflicts = useCallback(async (resolutions: Map<string, 'local' | 'remote' | 'manual'>) => {
     const resolvedCount = await conflictResolutionService.applyResolutions(conflicts as any, resolutions);
-    
+
     // Refresh navigator to show updated state
     await navOps.refreshItems();
-    
+
     if (resolvedCount > 0) {
       toast.success(`Resolved ${resolvedCount} conflict${resolvedCount !== 1 ? 's' : ''}`);
     }
-    
+
+    // Dismiss the pull operation from the toast — conflicts are resolved.
+    if (lastPullOpIdRef.current) {
+      operationRegistryService.remove(lastPullOpIdRef.current);
+      lastPullOpIdRef.current = null;
+    }
+
     setIsConflictModalOpen(false);
     setConflicts([]);
   }, [conflicts, navOps]);
@@ -192,14 +225,18 @@ export function usePullAll(): UsePullAllResult {
       if (result.conflicts && result.conflicts.length > 0) {
         operationRegistryService.setLabel(opId, `Pull completed with ${result.conflicts.length} conflict(s)`);
         const typedConflicts = result.conflicts as ConflictFile[];
+        // Store opId so handleResolveConflicts can dismiss it after resolution.
+        lastPullOpIdRef.current = opId;
         operationRegistryService.complete(
           opId,
           'error',
           `${result.conflicts.length} conflict(s) need resolution`,
-          { label: 'Resolve conflicts', onClick: () => openConflictModal(typedConflicts) },
+          // Use DOM event so the persistent listener (AppShell/useStalenessNudges)
+          // opens the modal even if this component unmounts (e.g. context menu closes).
+          { label: 'Resolve conflicts', onClick: () => dispatchOpenConflictModal(typedConflicts, opId) },
         );
-        setConflicts(typedConflicts);
-        setIsConflictModalOpen(true);
+        // Dispatch event for the persistent listener.
+        dispatchOpenConflictModal(typedConflicts, opId);
         return { success: true, conflicts: typedConflicts };
       } else {
         operationRegistryService.setLabel(opId, 'Successfully pulled latest changes');
@@ -244,7 +281,10 @@ export function usePullAll(): UsePullAllResult {
     onCancel: () => resolveForceReplace(false),
   });
   
-  const openConflictModal = useCallback((externalConflicts: ConflictFile[]) => {
+  const openConflictModal = useCallback((externalConflicts: ConflictFile[], opId?: string) => {
+    console.log(`🔀 usePullAll.openConflictModal: opening with ${externalConflicts.length} conflict(s):`,
+      externalConflicts.map(c => c.fileName));
+    if (opId) lastPullOpIdRef.current = opId;
     setConflicts(externalConflicts);
     setIsConflictModalOpen(true);
   }, []);

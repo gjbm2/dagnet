@@ -162,6 +162,28 @@ export default defineConfig(({ mode }) => {
                       return;
                     }
 
+                    // File registry dump (triggered on mark for debugging)
+                    if (req.url === '/__dagnet/registry-dump') {
+                      let body = '';
+                      req.setEncoding('utf8');
+                      req.on('data', (chunk: string) => { body += chunk; if (body.length > 5_000_000) { res.statusCode = 413; res.end('too large'); req.destroy(); } });
+                      req.on('end', () => {
+                        try {
+                          const debugDir = path.resolve(__dirname, '..', 'debug');
+                          fs.mkdirSync(debugDir, { recursive: true });
+                          const outPath = path.join(debugDir, 'tmp.registry-dump.json');
+                          fs.writeFileSync(outPath, body, 'utf8');
+                          res.statusCode = 200;
+                          res.setHeader('content-type', 'application/json');
+                          res.end(JSON.stringify({ ok: true, path: outPath }));
+                        } catch (err: any) {
+                          res.statusCode = 400;
+                          res.end(`bad request: ${err?.message || String(err)}`);
+                        }
+                      });
+                      return;
+                    }
+
                     // Console/session streams (JSONL)
                     if (req.url !== endpoint) return next();
 

@@ -39,8 +39,9 @@ These are the **stable IR**. They must be:
 
 - **Serialisable**: JSON-round-trippable, no PyMC or PyTensor objects
 - **Deterministic**: same inputs → same IR, byte-for-byte
-- **Fingerprintable**: a hash of the IR determines whether a cached posterior
-  is structurally compatible with a new run
+- **Fingerprintable**: two-tier hashing — topology fingerprint (structural
+  compatibility, warm-start eligibility) and model fingerprint (full cache
+  identity including evidence and settings)
 - **Engine-independent**: the IR does not assume PyMC. A different inference
   backend (Stan, NumPyro) should be able to consume the same IR
 
@@ -107,11 +108,15 @@ event count (for window observations) or anchor cohort daily counts (for
 cohort observations). See the denominator contract section below for the
 full specification.
 
-If `n_A` is not available from the data, the compiler must **refuse to
-compile that branch group as a Multinomial** and fall back to independent
-Binomials with a diagnostic warning. The `max(n_B, n_C, ...)` approximation
-is unsafe — if `k_B + k_C` exceeds that max, the Multinomial likelihood
-becomes infeasible.
+If `n_A` is not directly available from the data, the compiler **still
+compiles a Multinomial** — the graph's intent is mass-conserving and the
+model should reflect that. The compiler estimates `n_A` as
+`max(Σ k_siblings, max_i(n_i))` and emits a diagnostic noting the
+estimation. If the source data doesn't actually conserve mass (e.g.
+`k_B + k_C > n_A` due to timing mismatches or double-counting upstream),
+the Multinomial will produce a poor fit — divergences, high r-hat, or
+wide posteriors. This is a **data quality signal**, not a modelling error,
+and is more useful than silently switching to a different analysis pattern.
 
 Non-exhaustive (the common case in conversion funnels) adds a phantom dropout
 component. Exhaustiveness should be a **per-node metadata flag**, not inferred
@@ -211,7 +216,9 @@ the collapsed lognormal is unimodal. The compiler should detect this case
 (high ratio of between-path variance to within-path variance) and flag it
 in the compile diagnostics. For typical funnels (2–3 inbound paths of
 broadly similar timing, or one dominant path), the approximation error is
-small.
+small. A future `mixture_lognormal` family could avoid this loss entirely
+by keeping the mixture as the native path representation — see
+"Distribution family extensibility".
 
 ### Latency model: edge-level variables
 
@@ -283,13 +290,72 @@ NUTS's gradient-based proposals.
 ### Conditional probabilities
 
 Edges with `conditional_p` entries (e.g. `visited(promo)`,
-`context(device:mobile)`) represent different versions of the same edge
-depending on a condition. Each condition gets its own probability variable and
-evidence binding, but they may share a common prior (pooled toward the base
-`p`).
+`case(test_id:variant)`) represent mutually exclusive alternative versions of
+the same edge. Conditionals are **separate simplexes, not pooled slices** —
+they are semantically distinct from context slices. Context slices represent
+additive deviations from a shared base (partial pooling); conditionals
+represent mutually exclusive substitution (first-match), where each condition
+defines a genuinely different population.
 
-This is structurally similar to the slice layer (Layer 2) — conditions are
-effectively named slices with partial pooling.
+**Branch-group-level semantics**: a conditional on any sibling in a branch
+group creates a **virtual fork** — a complete alternative Dirichlet simplex
+for the branch group under that condition. The UI enforces coherence: all
+siblings must have matching conditional entries (the condition applies to the
+branch group, not individual edges). Each condition gets its own independent
+simplex with its own latent variables. No pooling between conditions — they
+represent genuinely different populations.
+
+**Evidence binding**: the conditional's own `values[]` entries (which already
+exist — the data pipeline fetches them on the conditional params) bind to the
+condition-specific simplex. The default `values[]` bind to the default
+simplex. The existing DSL keying identifies which condition each observation
+belongs to.
+
+**Downstream propagation — current limitation**: the model is parameterised
+at the explicit conditional level only. Downstream edges that don't carry
+their own conditionals use a single blended `p` from all populations. This is
+correct given available data — the data pipeline currently fetches
+condition-sliced observations only on the conditional params themselves, not
+on downstream edges. Without per-condition observations downstream,
+per-condition latent variables would be unidentified.
+
+**Downstream propagation — future extension**: when the data pipeline extends
+to produce condition-sliced cohort observations on downstream edges (e.g.
+`cohort(Landing,...).conditional(visited-comparison:true)` on
+Purchase→Cancelled), the compiler can introduce per-condition latent variables
+downstream and route each condition-slice to its own virtual world. This
+requires no model redesign — the same machinery (separate latent variables,
+DSL-keyed evidence routing) applies at any edge. The constraint is data
+availability, not model architecture.
+
+**Why this matters for cohort data**: a cohort anchored upstream of a
+conditional fork (e.g. `cohort(Landing,...)` on Purchase→Cancelled) traverses
+the fork. The observed (n, k) on downstream edges is a blend of
+condition-specific populations that may have genuinely different conversion
+rates. Until condition-sliced downstream data is available, this population
+heterogeneity manifests as overdispersion — wider posteriors and potentially
+elevated diagnostics (divergences, poor r-hat). This is an honest signal to
+the graph author that unmodelled structure exists.
+
+**Completeness at joins downstream of conditionals**: even without
+per-condition probability variables downstream, the completeness model can
+account for the conditional's effect on path weights at join nodes. The
+join-weight computation uses blended weights:
+`blended_w = f_X * w|X + (1-f_X) * w_default`, where `f_X` is the observed
+condition fraction and `w|X`, `w_default` are deterministic functions of the
+upstream latent simplexes. This is fully differentiable and adds no latent
+variables.
+
+**Cost**: one extra Dirichlet (or set of independent Betas in Phase A) per
+condition per branch group. Linear in the number of conditionals. No
+combinatorial explosion — downstream propagation is handled by deterministic
+weight blending, not by multiplying latent variable counts.
+
+**Phasing**: Phase A–B treat conditionals as unsupported (compiler recognises,
+logs diagnostic, skips). Phase C introduces conditional support at the
+branch-group level (separate simplexes, existing condition-sliced data). Full
+downstream propagation is a future feature contingent on data pipeline
+extension.
 
 ---
 
@@ -398,6 +464,50 @@ This is the hierarchical Dirichlet pattern described in doc 0, §3.3.
   nodes)
 - Aggregate (no context qualifier) — the overall edge observation
 
+### MECE classification and cross-product contexts
+
+Not all context dimensions are mutually exclusive and collectively
+exhaustive (MECE). The compiler must know which dimensions are MECE because
+this determines whether the partition-based double-counting prevention
+(above) applies.
+
+**MECE dimensions** (each user belongs to exactly one value):
+- `context(channel:*)` — channel attribution is exclusive by construction
+- `context(device:*)` — exclusive within a session
+- `case(test:variant)` — A/B assignment is exclusive by construction
+
+**Non-MECE dimensions** (a user can appear in multiple values):
+- `visited(node_id)` — a user can visit multiple nodes
+
+**Classification**: the compiler classifies each context dimension as MECE
+or non-MECE based on a **per-dimension metadata flag** on the graph's
+`dataInterestsDSL`. This is analogous to the per-node exhaustiveness flag
+for branch groups — sampling noise makes runtime detection unreliable.
+
+**Cross-product explosion**: `context(channel);context(browser_type)` with
+5 channels × 4 browser types = 20 slices. Each slice gets its own
+deviation variable + likelihood term. For a branch group with 3 siblings,
+that's 60+ variables for one node. This is feasible but the compiler must
+enumerate it explicitly and the evidence binder must track which
+cross-product cells have data. Cross-products of MECE dimensions are
+themselves MECE, so the partition logic applies normally.
+
+**Rules by MECE status**:
+- **MECE dimensions**: slice-level Dirichlet/pooling with partition-based
+  double-counting prevention. If slices exhaustively cover the aggregate,
+  exclude the aggregate. If partial, compute the residual.
+- **Non-MECE dimensions**: independent per-slice likelihoods without the
+  partition constraint. No residual computation (residual is undefined when
+  slices overlap). No aggregate exclusion — but the aggregate and per-slice
+  observations are not independent, so the compiler should use only the
+  per-slice terms and exclude the aggregate to avoid double-counting from
+  the overlap direction. The model treats each slice as a separate
+  observation of the same underlying `p` (or `p_slice` with pooling).
+- **Mixed**: if both MECE and non-MECE dimensions are present, the compiler
+  handles each dimension independently. MECE dimensions partition within
+  each non-MECE slice (or vice versa). The cross-product logic applies only
+  to MECE × MECE products.
+
 ---
 
 ## Layer 3: Window vs cohort data
@@ -407,33 +517,139 @@ entry uses `window(...)` or `cohort(anchor, ...)`.
 
 **What it contains**:
 
-- **Window entries** (`sliceDSL: window(25-Nov-25:1-Dec-25)`): standard
-  event-time observations. The observation period is closed. All conversions
-  that will ever happen within this window have already happened (or at least,
-  maturity is not in question).
+- **Window entries** (`sliceDSL: window(25-Nov-25:1-Dec-25)`): event-time
+  observations on a single edge X→Y. The observation period is defined but
+  recent entries within the window may still be immature — converters with
+  long X→Y latency haven't arrived yet. Completeness depends on the
+  **edge-level** latency only (no upstream path).
 
 - **Cohort entries** (`sliceDSL: cohort(landing-page,1-Sep-25:30-Nov-25)`):
   anchor-time observations. The date range is a **collection window of
   single-day cohorts** — each day's entrants form an independent cohort.
   The `n_daily` / `k_daily` arrays give per-day observations. Recent days
-  may be immature (converters still arriving).
+  may be immature. Completeness depends on the **path-level** latency
+  (anchor → edge target, including upstream edges).
 
 **What it contributes to the model**:
 
-### Window observations → simple likelihood
+### Window and cohort: related but distinct distributions
 
-Window data is mature by assumption. The likelihood is straightforward:
+Window and cohort observations of the same edge X→Y are **related but
+not identical**. They differ in two ways that both scale with path
+complexity:
+
+1. **Temporal spread (diffusion).** Cohort members enter A within a date
+   range but arrive at X **spread across the A→X path latency** — which
+   can span weeks or months. Each sub-group experiences whatever `p_XY`
+   was at the calendar date they arrived. Even if `p_XY` is perfectly
+   stable, the convolution over the arrival distribution widens the
+   distribution of cohort outcomes relative to a temporally localised
+   window observation.
+
+2. **Temporal shift (real drift in `p_XY`).** Conversion rates change
+   over time. Window data captures the current rate (narrow calendar
+   window). Cohort data reflects a time-weighted blend of historical
+   rates across the arrival spread. When `p_XY` is trending, these
+   diverge — and the divergence is a real, valuable signal about changing
+   conversion performance.
+
+Both effects increase with path length. For the first edge from anchor
+(path = edge, no temporal spread), they vanish — window and cohort
+measure the same thing. For deeply downstream edges with `path_t95` of
+100+ days, the two observations can represent materially different
+distributions.
+
+**Why this matters for forecasting**: window data arrives early and
+captures recent conversion performance. It is the best early indicator
+of what a mature cohort will eventually show. The model must use window
+evidence to **guide** cohort fit expectations — not as an identical
+constraint, but as a leading signal that the cohort estimate is pooled
+toward.
+
+### Model structure: hierarchical pooling with path-informed divergence
+
+The model creates **separate probability variables** for window and
+cohort observations, linked through a shared base with partial pooling.
+The allowed divergence between them scales with path complexity:
 
 ```
-obs ~ Binomial(n, p), observed=k
+# Shared base probability for edge X→Y
+logit_p_base_XY ~ Normal(μ_prior, σ_prior)
+
+# Graph-level temporal volatility (learned — how much do conversion
+# rates in this graph tend to vary over time?)
+σ_temporal ~ HalfNormal(σ_temporal_prior)
+
+# Path-informed divergence allowance for the cohort
+# path_sigma_AX = stdev of A→X arrival distribution (from latency model)
+# More temporal spread → more room for cohort to differ from window
+τ_cohort_XY = σ_temporal · path_sigma_AX
+
+# Window probability: close to the base (direct, temporally localised)
+τ_window = small constant or HalfNormal with tight prior
+logit_p_window_XY ~ Normal(logit_p_base_XY, τ_window)
+
+# Cohort probability: can diverge by path-scaled amount
+logit_p_cohort_XY ~ Normal(logit_p_base_XY, τ_cohort_XY)
+
+p_window_XY = sigmoid(logit_p_window_XY)
+p_cohort_XY = sigmoid(logit_p_cohort_XY)
 ```
 
-No latency coupling needed.
+**Behaviour at the extremes**:
 
-### Cohort observations → completeness-adjusted likelihood
+- **First edge from anchor** (`path_sigma_AX ≈ 0`): `τ_cohort ≈ 0`,
+  so `p_cohort ≈ p_window ≈ p_base`. Window and cohort are forced to
+  agree. Correct — there is no temporal spread.
+
+- **Deep downstream edge** (`path_sigma_AX` large): `τ_cohort` is
+  large, so the cohort can diverge from the window-guided base.
+  Correct — the cohort observation integrates over a wide calendar
+  spread and may reflect a materially different effective rate.
+
+- **Stable graph** (`σ_temporal → 0`): all τ_cohort values shrink,
+  forcing agreement everywhere. The model learns from the data that
+  rates aren't moving, and behaves like a shared-p model.
+
+- **Volatile graph** (`σ_temporal` large): cohort estimates are free
+  to diverge from window. The model has learned that rates move, and
+  gives the cohort evidence room to express a different effective rate.
+
+**Window as leading indicator**: because both `p_window` and `p_cohort`
+are pooled toward the same `p_base`, new window evidence shifts the
+base, which pulls the cohort estimate. This is the architectural
+encoding of "window data guides cohort expectations." The cohort can
+deviate from this guidance, but only by the amount the path complexity
+warrants. When the cohort later matures and confirms or contradicts the
+window's signal, that evidence flows back into the base and into
+`σ_temporal`.
+
+### Window observations → edge-level completeness
+
+For a window entry on edge X→Y, each observation has an effective
+observation time (window end minus the user's X-event date). Completeness
+depends only on the **edge's own** latency — no upstream path:
+
+```
+obs_time_j = window_end - event_date_j
+completeness_j = CDF_LN(max(0, obs_time_j - onset_XY), mu_XY, sigma_XY)
+obs_j ~ Binomial(n_j, p_window_XY * completeness_j), observed=k_j
+```
+
+When the window is sufficiently old relative to the edge's latency,
+`completeness_j ≈ 1.0` and the term reduces to a simple Binomial on
+`p_window`. But for recent or short windows this adjustment matters —
+it prevents the model from interpreting still-in-transit conversions as
+a lower `p`.
+
+Because this couples only to the edge-level `(mu_XY, sigma_XY)`, the
+window provides a **direct, single-hop constraint** on both `p_window`
+and edge latency. No upstream latency uncertainty dilutes the signal.
+
+### Cohort observations → path-level completeness
 
 Cohort data may be immature. The observed `(n, k)` undercounts converters
-because some are still in transit. The likelihood must account for this.
+because some are still in transit **along the full path** from anchor.
 
 **Our cohorts are single-day.** The `cohort_from:cohort_to` range is a
 collection window of daily cohorts. Each day `i` in `n_daily` / `k_daily`
@@ -442,7 +658,7 @@ is an independent single-day cohort with its own age:
 ```
 age_i = today - dates[i]
 completeness_i = CDF_LN(max(0, age_i - path_delta), path_mu, path_sigma)
-obs_i ~ Binomial(n_daily[i], p * completeness_i), observed=k_daily[i]
+obs_i ~ Binomial(n_daily[i], p_cohort_XY * completeness_i), observed=k_daily[i]
 ```
 
 Each day gets its own completeness factor. Old days (large `age_i`) have
@@ -451,36 +667,117 @@ to approximate cohort age as a single scalar — each daily observation
 carries its own age naturally.
 
 Where:
-- `path_delta` is the deterministic onset sum along the path from anchor to
-  the edge's target node (see Layer 1, Latency paths)
+- `path_delta` is the deterministic onset sum along the **full path** from
+  anchor to the edge's target node (see Layer 1, Latency paths)
 - `path_mu`, `path_sigma` are deterministic functions of the **latent**
-  edge-level latency variables along the path (via FW composition)
+  edge-level latency variables **along the entire path** (via FW
+  composition) — including upstream edges, not just X→Y
 - `completeness_i` is a deterministic node in the PyTensor graph
-- NUTS jointly constrains `p` and latency params through the shared
-  likelihood — low observed `k_i` on a recent day can be explained by
-  either low `p` or slow latency, and the model resolves this by using
-  the older (mature) days as anchors
+- NUTS jointly constrains `p_cohort` and all path latency params through
+  the shared likelihood — low observed `k_i` on a recent day can be
+  explained by either low `p_cohort` or slow latency **anywhere on the
+  path**, and the model resolves this by using the older (mature) days
+  as anchors
 
-This is the probability–latency coupling. The compiler must:
+### Why the hierarchical registration matters
+
+Window and cohort observations for the same edge participate in a single
+`pm.Model` but bind to **separate probability variables** (`p_window_XY`
+and `p_cohort_XY`) linked through a shared base. They share the same
+edge-level latency variables `mu_XY`, `sigma_XY` — the latency model is
+the same physical process regardless of observation type. The probability
+is what differs, because the two observation types sample different
+temporal windows of that process.
+
+The hierarchical structure gives the model four properties:
+
+1. **Window terms anchor the base.** Because `p_window` is tightly
+   coupled to `p_base` and window completeness couples only to
+   `(mu_XY, sigma_XY)` — one hop, no upstream uncertainty — the window
+   data pins down the base rate and edge latency quickly, even while
+   cohort data is still immature.
+
+2. **The base guides cohort expectations.** Through the shared `p_base`,
+   the window's constraint on the current rate propagates to the cohort
+   estimate. This is the "window as canary" mechanism: early window
+   evidence sets expectations for what the maturing cohort should show.
+
+3. **The cohort can deviate by the amount the path warrants.** The
+   path-informed `τ_cohort` gives the cohort room to express a
+   different effective rate — reflecting both the diffusion from path
+   convolution and any real temporal drift. The model doesn't force
+   agreement when disagreement is physically expected.
+
+4. **Divergence between window and cohort is a signal, not noise.**
+   When `p_window` and `p_cohort` posteriors separate, this is real
+   information: conversion rates have been changing over the period
+   spanned by the cohort's arrival spread. The magnitude of the
+   divergence, calibrated against `σ_temporal`, tells you how unusual
+   the movement is for this graph. This is a first-order forecasting
+   signal — it directly informs expectations about future cohort
+   maturation.
+
+If window and cohort evidence are **inconsistent** beyond what
+`τ_cohort` can absorb (e.g. the window implies `p = 0.3` but the
+mature end of the cohort implies `p = 0.15` on a short path), the
+shared `p_base` will be pulled in both directions, producing wide
+posteriors and diagnostics (r-hat, divergences). This signals either
+genuine rapid rate change, misaligned observation windows, or
+double-counting — all of which warrant investigation.
+
+### Compiler responsibilities
+
+The compiler must:
 1. Classify each `values[]` entry as window or cohort
-2. For cohort entries, emit **per-day** likelihood terms from the daily
-   arrays, each with its own completeness factor
-3. Wire each day's likelihood through the correct path latency chain,
-   including onset (`path_delta`)
+2. For each edge with both types, emit the hierarchical probability
+   structure: `p_base`, `p_window`, `p_cohort` with path-informed
+   `τ_cohort` derived from the A→X path latency spread
+3. For edges with only window data: emit `p_window` only (no cohort
+   variable needed). `p_base ≈ p_window`.
+4. For edges with only cohort data: emit `p_cohort` only. `p_base`
+   is constrained by the cohort alone (no window guidance).
+5. For window entries, emit likelihood terms with **edge-level**
+   completeness (single-hop: `onset_XY`, `mu_XY`, `sigma_XY`)
+6. For cohort entries, emit **per-day** likelihood terms from the daily
+   arrays, each with **path-level** completeness (full chain from anchor)
+7. Ensure that both types share the **same** edge-level latency
+   variables `(mu_XY, sigma_XY)` — the latency model is common;
+   only the probability differs by observation type
+8. Emit `σ_temporal` as a graph-level hyperparameter (one per graph,
+   shared across all edges)
 
-### Identifiability risk
+### Identifiability
 
-`p` and completeness are directly confounded in each likelihood term. The
-model is identified because:
-- Mature daily observations (high `age_i`, completeness ≈ 1) pin down `p`
-- Immature observations then constrain latency given the established `p`
-- Independent latency evidence (histograms, lag summaries) provides strong
-  priors on `(mu, sigma)`
+The model is identified through a combination of mechanisms:
 
-If latency evidence is weak **and** all days are immature, the model will be
-poorly identified. The compiler should flag this case (diagnostic) and
-consider falling back to a simpler model (treat all observations as mature,
-fit latency separately).
+**Probability identification**:
+- Window observations (especially mature ones with completeness ≈ 1)
+  directly constrain `p_window`
+- Cohort observations (especially mature daily entries) directly
+  constrain `p_cohort`
+- The shared `p_base` and `σ_temporal` are informed by the pattern
+  of agreement/disagreement across all edges in the graph
+- When only one observation type exists for an edge, the missing type
+  collapses to the base (no divergence to estimate)
+
+**Latency identification** (unchanged from the coupling discussion):
+- Mature daily observations (high `age_i`, completeness ≈ 1) pin down
+  `p_cohort` independently of latency
+- Immature observations then constrain latency given the established
+  `p_cohort`
+- Independent latency evidence (histograms, lag summaries) provides
+  strong priors on `(mu, sigma)`
+
+**`σ_temporal` identification**: this is a graph-level parameter
+informed by the divergence pattern across all edges. Graphs with many
+edges provide strong signal. Graphs with few edges may have wide
+posteriors for `σ_temporal`, which is appropriate — the model is
+uncertain about how volatile rates are in a small graph.
+
+If latency evidence is weak **and** all days are immature, the model
+will be poorly identified. The compiler should flag this case
+(diagnostic) and consider falling back to a simpler model (treat all
+observations as mature, fit latency separately).
 
 ### Apparent circularity of completeness
 
@@ -557,6 +854,21 @@ likelihood terms because:
 - Aggregating to `(total_n, total_k)` would lose the maturity gradient
   that makes the joint model identifiable
 
+### Non-latency edges in cohort mode
+
+If an edge has no latency parameter (`latency_parameter: false` or absent),
+the compiler has no `(mu, sigma)` to compute completeness. The rule:
+**completeness = 1.0** for all daily observations on non-latency edges.
+This is equivalent to assuming instant conversion — a degenerate shifted
+lognormal with `delta = 0, sigma → 0`. The compiler emits a diagnostic
+noting that cohort immaturity on this edge is unmodelled.
+
+This is safe: it biases toward the window-like interpretation (treat all
+observations as mature). It means the model cannot distinguish "low
+conversion" from "slow conversion" on this edge — but without latency data,
+that distinction is unidentifiable anyway. The non-latency case becomes a
+proper subset of the latency case.
+
 ---
 
 ## Layer 4: Historic snapshot data
@@ -623,15 +935,28 @@ A parameter file may have multiple `values[]` entries — different time
 windows, different cohorts, different contexts. The compiler must decide
 how to combine them:
 
-- **Same context, different time windows**: most recent window is the primary
-  evidence. Older windows could contribute to the prior (informal time-series
-  pooling) or be excluded by a training-window policy.
+- **Same context, different time windows**: all windows enter as likelihood
+  terms with recency weighting. The existing recency-weighting setting on
+  the graph controls the observation-level scale factor — newer data
+  contributes more to the posterior, older data contributes less but is not
+  discarded. No window is "primary"; each is a weighted likelihood term.
 - **Same time, different contexts**: separate observations feeding separate
   slice-level likelihood terms (see Layer 2).
-- **Window + cohort for the same edge**: the window entry gives a mature
-  baseline; the cohort entry adds immature-but-richer latency-coupled
-  evidence. Both contribute to the same edge's probability variable but
-  with different likelihood forms.
+- **Window + cohort for the same edge**: both contribute — they are
+  **temporally complementary**, not redundant. They share latent latency
+  variables (`mu_XY`, `sigma_XY`) but have **separate probability
+  variables** (`p_window_XY`, `p_cohort_XY`) linked through `p_base_XY`
+  via the hierarchical structure. Window data (X→Y) matures faster
+  because its completeness couples only to edge-level latency (single
+  hop), while cohort data (A→X→Y) couples to the full path. The window
+  anchors `p_base` and edge latency early; the cohort adds path-level
+  coupling as it matures, with its probability allowed to diverge by
+  `τ_cohort = σ_temporal · path_sigma_AX`. See "Why the hierarchical
+  registration matters" above for the full interaction model. Date
+  overlap at the edge-event level (not the anchor level) should be
+  detected by the evidence binder and flagged as a diagnostic; the
+  initial implementation accepts the mild overconfidence rather than
+  attempting deduplication.
 
 ### Anchor lag arrays
 
@@ -713,30 +1038,380 @@ boundaries per edge) to support overlap detection on the next run.
 The compiler must verify that the previous posterior is still valid:
 - Has the graph topology changed? (New edges, removed edges, changed
   branching structure.) If so, the previous posterior is invalid — start
-  fresh. The model fingerprint (hash of TopologyAnalysis) detects this.
+  fresh. The topology fingerprint (hash of TopologyAnalysis) detects this.
 - Has the edge's structural role changed? (Was solo, now part of a branch
   group.) If so, the Beta posterior can't seed a Dirichlet — start fresh.
 - Is the posterior suspiciously old or from a different model version?
   Policy decision on staleness threshold.
 
-### Prior ESS cap (replacing the overflow guard)
+### Trajectory-calibrated priors (from `fit_history`)
 
-Warm-started priors must not accumulate unbounded concentration from many
-sequential runs. Rather than the abrupt `if alpha + beta > 500: Beta(2, 2)`
-(which destroys all accumulated information), use a **mean-preserving ESS
-cap**:
+The simple warm-start above uses only the *most recent* posterior. But
+the parameter file carries a rolling `fit_history` trajectory (see doc 4)
+— a sequence of posterior summaries from previous runs. The *variance of
+this trajectory* is information: it tells the compiler how stable or
+volatile each parameter has been, and therefore how confident the prior
+should be.
+
+**Framing: random-effects meta-analysis.** Each `fit_history` entry is a
+"study" that estimated the same underlying parameter. Each has a point
+estimate `m_i` (posterior mean), a standard error `s_i` (posterior stdev),
+and a date `t_i`. Between runs, the true parameter may have moved. The
+between-run heterogeneity `tau^2` captures this.
+
+**Step 1 — Transform to unconstrained space.** Probability is bounded
+[0, 1]; the meta-analytic calculations are cleaner in logit space:
 
 ```
-ess = alpha + beta
-if ess > ESS_CAP:
-    alpha' = (alpha / ess) * ESS_CAP    # same mean, reduced concentration
-    beta'  = (beta  / ess) * ESS_CAP
+eta_i = logit(m_i) = ln(m_i / (1 - m_i))
+sigma_eta_i = s_i / (m_i * (1 - m_i))       # delta method
 ```
 
-This preserves the posterior's location (the learned conversion rate) while
-smoothly limiting its influence. `ESS_CAP = 500` is a reasonable default —
-it means the prior can contribute at most ~500 pseudo-observations, after
-which new evidence dominates.
+For latency `mu` (real-valued), no transform. For latency `sigma`
+(positive), use log space.
+
+**Step 2 — Estimate between-run heterogeneity (DerSimonian-Laird).**
+
+```
+w_i = 1 / sigma_eta_i^2                      # inverse-variance weight
+eta_bar = Σ(w_i * eta_i) / Σ(w_i)            # weighted pooled mean
+Q = Σ w_i * (eta_i - eta_bar)^2              # Cochran's Q statistic
+c = Σ(w_i) - Σ(w_i^2) / Σ(w_i)             # scaling constant
+tau^2 = max(0, (Q - (K - 1)) / c)            # between-run variance
+```
+
+`tau^2` is the genuine between-run movement after subtracting within-run
+sampling noise. If the trajectory is stable, `Q ≈ K - 1` and `tau^2 = 0`.
+If the parameter has been volatile, `Q >> K - 1` and `tau^2` is large.
+
+**Step 3 — Predictive prior for the next run** (in logit space):
+
+```
+eta_{K+1} ~ Normal(eta_K, tau^2 + sigma_eta_K^2)
+```
+
+Centred on the *most recent* estimate (not the pooled mean — we want to
+track drift, not regress to the historical average). The variance combines:
+- `sigma_eta_K^2` — within-run uncertainty of the last fit
+- `tau^2` — between-run volatility from the trajectory
+
+**Step 4 — Convert to Beta hyperparameters** (for probability):
+
+```
+mu_prior = m_K                                # last posterior mean
+V_logit = tau^2 + sigma_eta_K^2              # total variance in logit space
+V_prob = V_logit * (mu_prior * (1 - mu_prior))^2    # delta method to prob space
+
+n_eff = mu_prior * (1 - mu_prior) / V_prob - 1
+n_eff = clamp(n_eff, 2, ESS_CAP)
+
+alpha_prior = mu_prior * n_eff
+beta_prior = (1 - mu_prior) * n_eff
+```
+
+The critical result: `n_eff` (the prior's effective sample size) is
+**derived from the trajectory**, not a fixed constant. A stable edge
+earns high `n_eff` (up to `ESS_CAP`). A volatile edge gets low `n_eff`
+because `V_prob` is large. The fixed `ESS_CAP` becomes a safety ceiling,
+not the primary concentration-control mechanism.
+
+**For latency parameters** — same structure, no logit transform:
+
+```
+tau_mu^2 = DL estimate from fit_history[].mu
+mu_edge ~ Normal(mu_K, sqrt(tau_mu^2 + sigma_mu_K^2))
+```
+
+For latency `sigma` (positive), work in log space for the DL estimate,
+then convert back to Gamma parameters via moment-matching.
+
+**Step 5 — Surprise detection** (post-fit diagnostic):
+
+After the new run produces posterior mean `m_{K+1}`:
+
+```
+z = (logit(m_{K+1}) - eta_K) / sqrt(tau^2 + sigma_eta_K^2)
+```
+
+This measures departure **calibrated to the edge's own volatility**. A
+stable edge with a sudden shift produces a large `|z|`. A volatile edge
+with the same absolute shift produces a smaller `|z|`. Both are
+meaningful: the z-score says "this is surprising *for this edge*".
+
+Diagnostic thresholds (indicative):
+- `|z| < 2`: normal variation
+- `2 ≤ |z| < 3`: noteworthy — flag in session log
+- `|z| ≥ 3`: surprising — flag prominently, possible regime change
+
+**Minimum history requirement**: `K < 3` → insufficient trajectory data
+to estimate `tau` reliably. Fall back to simple warm-start (last
+posterior, fixed ESS cap). Trajectory calibration activates at `K ≥ 3`.
+
+**Where this sits in the pipeline**: trajectory calibration is computed in
+`bind_evidence`. It reads `fit_history`, estimates `tau^2`, derives the
+calibrated hyperparameters, and stores them in the bound evidence.
+`build_model` emits `pm.Beta(alpha=alpha_prior, beta=beta_prior)` without
+knowing the hyperparameters came from trajectory analysis. No additional
+latent variables enter the model — this is empirical Bayes (estimate
+hyperparameters from historical data, condition on them in the current
+model).
+
+**Time-varying extension** (future): the above treats `tau` as constant.
+If the parameter is trending (monotone drift from product evolution),
+`tau` should scale with the time gap: `tau^2(Δt) = tau^2_per_day * Δt`
+(random-walk model). Estimable from first differences of the trajectory.
+Not required initially but the structure accommodates it.
+
+### Prior ESS cap
+
+The ESS cap remains as a safety ceiling on trajectory-calibrated priors.
+Even if `tau ≈ 0` (very stable edge), the prior concentration must not
+grow without bound:
+
+```
+n_eff = clamp(n_eff, 2, ESS_CAP)      # ESS_CAP = 500 default
+alpha_prior = mu_prior * n_eff
+beta_prior = (1 - mu_prior) * n_eff
+```
+
+This replaces the earlier overflow guard (`if alpha + beta > 500:
+Beta(2, 2)`) which destroyed accumulated information. The ESS cap
+preserves the posterior's location while smoothly limiting concentration.
+
+### Evidence inheritance from analogous edges
+
+When topology changes invalidate an edge's direct history (the topology
+fingerprint changes), the edge's own `fit_history` is formally unusable
+for warm-start. But the old edge's accumulated evidence is often still
+highly relevant — a renamed edge, a split edge, or a structural
+reorganisation doesn't change the underlying conversion process.
+
+The source edge's posterior `(alpha, beta)` **encodes** all the historical
+evidence that produced it. A `Beta(62.5, 2.1)` is not an arbitrary
+starting point — it represents ~63 effective observations of a conversion
+rate near 0.97. Inheriting this posterior is mathematically equivalent to
+asserting that those historical observations are relevant to the new
+edge, weighted by how much the user trusts the analogy.
+
+The evidence inheritance mechanism lets the user assert: "this new edge
+measures the same (or similar) conversion process as that old edge — its
+historical data has weight here." The `strength` parameter controls how
+much of that historical evidence carries over (measured in effective
+observations), and the `created_at` timestamp ensures the inherited
+evidence naturally fades as the new edge accumulates its own data.
+
+**This does not add latent variables to the model.** It affects only the
+prior hyperparameters — which encode inherited evidence as pseudo-
+observations. The MCMC sampler sees the same model structure regardless
+of where the hyperparameters came from. `build_model` emits
+`pm.Beta(alpha, beta)` without knowing whether those values encode direct
+history, inherited evidence, or an uninformative default.
+
+**Annotation object** (on the edge, in the graph or parameter file):
+
+```yaml
+evidence_inherit:
+  source_edge: "register-v1"
+  source_graph: "conversion-flow-v2"   # optional, default: same graph
+  asat: "1-Jan-26"                      # optional: historical version
+  strength: 0.7                         # 0.0 (hint) → 1.0 (strong)
+  created_at: "15-Mar-26"              # auto-set, drives natural decay
+```
+
+**Source resolution**: the compiler reads the source edge's posterior
+summary and `fit_history` at the `asat` date (or `created_at` if `asat`
+is omitted). If the source's `fit_history` covers that date, read
+directly — no git lookup. If it predates `fit_history`, fall back to git
+archaeology (one-off).
+
+**How inherited evidence weight is computed:**
+
+The source's posterior encodes `ESS_source = alpha_source + beta_source`
+effective observations. The annotation controls what fraction of those
+observations carry over, decaying with age:
+
+```
+annotation_age = today - created_at
+decay = exp(-annotation_age / half_life)       # half_life ≈ 90 days
+effective_weight = strength * decay
+
+ESS_inherited = ESS_source * effective_weight
+alpha_inherited = (alpha_source / ESS_source) * ESS_inherited
+beta_inherited  = (beta_source  / ESS_source) * ESS_inherited
+```
+
+This preserves the source's posterior *mean* (the learned conversion
+rate) while scaling down its *concentration* (how many pseudo-
+observations it contributes). The result:
+
+- **Fresh + strong** (weight ≈ 0.8): ~80% of the source's effective
+  observations carry over. The new edge starts with substantial
+  historical evidence.
+- **Fresh + hint** (weight ≈ 0.1): ~10% carry over. A gentle nudge —
+  the historical data is noted but easily overridden.
+- **Aged** (weight → 0): the inherited evidence fades to zero effective
+  observations. No manual cleanup needed.
+
+**Strength slider** (UX convenience over raw numbers):
+
+| Label    | strength | Effect on inherited evidence                    |
+|----------|----------|-------------------------------------------------|
+| Hint     | ~0.1     | ~10% of source ESS — easily overridden          |
+| Moderate | ~0.4     | ~40% of source ESS — noticeable weight           |
+| Strong   | ~0.8     | ~80% of source ESS — nearly full inheritance     |
+
+**Combining with the edge's own history** — when both inherited evidence
+and direct history exist, they combine via precision-weighted average in
+logit space:
+
+```
+# Own trajectory-calibrated prior (if any):
+tau_own = 1 / V_own
+
+# Inherited evidence component:
+V_inherited = V_source / effective_weight
+tau_inherited = 1 / V_inherited
+
+# Combined:
+tau_combined = tau_own + tau_inherited
+mu_combined = (mu_own * tau_own + mu_source * tau_inherited) / tau_combined
+V_combined = 1 / tau_combined
+```
+
+As the edge accumulates its own `fit_history`, `tau_own` grows and the
+inherited contribution shrinks. New empirical data naturally dominates —
+the inherited evidence doesn't fight the data, it just provides a
+starting point that's better than nothing.
+
+**Multiple annotations**: an edge may reference multiple sources (e.g.
+"this edge is similar to both A and B"). Each contributes inherited
+evidence; they combine additively in precision space.
+
+**Self-cleaning diagnostics**: the compiler emits a diagnostic when an
+annotation's effective contribution drops below 5%: "evidence_inherit on
+edge X is N days old and contributing < 5% to prior — consider removing
+for clarity." The annotation still works (negligible effect); the
+diagnostic is housekeeping.
+
+**Prior cascade** (complete, from strongest to weakest evidence source):
+
+```
+1. Own fit_history (K ≥ 3) + any inherited evidence
+   → trajectory-calibrated, precision-combined with inherited
+
+2. Own fit_history (K < 3) + any inherited evidence
+   → simple warm-start, precision-combined with inherited
+
+3. Inherited evidence only, no own history
+   → inherited evidence alone (strength- and age-decayed)
+
+4. No history, no inheritance, but sibling edges with history
+   → Dirichlet hierarchy pools toward sibling base rate
+
+5. Graph-level base rate (if enough edges have history)
+   → empirical distribution of conversion rates across all edges
+
+6. Nothing
+   → weakly informative default: Beta(1, 1)
+```
+
+Each tier contributes fewer effective observations than the one above.
+The compiler walks the cascade and uses the first available source,
+emitting a diagnostic noting which tier was used per edge.
+
+**Resilience to graph changes — window/cohort asymmetry**: topology
+changes affect window and cohort data differently, and this asymmetry is
+what makes the architecture ductile:
+
+- **Window data survives topology changes.** `window(X→Y)` observes
+  X-event users converting to Y. It depends only on edge X→Y existing
+  and having associated events. If the graph changes *upstream* of X
+  (new paths to X, removed paths, restructured branching), the window
+  data is unaffected — it never referenced the upstream structure. The
+  window's edge-level completeness coupling uses only `(mu_XY, sigma_XY)`,
+  which are properties of the edge, not the path.
+
+- **Cohort data breaks at the path level.** `cohort(A→...→X→Y)` depends
+  on the entire path from anchor to Y. If any edge on that path is added,
+  removed, or restructured, the path latency composition changes and old
+  cohort observations can't be combined with new ones under the same
+  completeness model. The cohort data for affected paths is invalidated.
+
+- **Evidence inheritance fills the gap.** The new or restructured edge
+  borrows weighted evidence from its predecessor. The surviving window
+  data anchors `p_base` (via `p_window`) and edge latency immediately
+  (single-hop, unaffected by the topology change). The inherited evidence
+  provides a starting
+  point for path-level parameters while new cohort data matures under the
+  new topology.
+
+**Recovery dynamics — why cohort fit quality recovers quickly**: because
+window and cohort terms for the same edge are hierarchically linked
+through `p_base_XY` and share latent `mu_XY`, `sigma_XY` in a single
+`pm.Model` (see "Why the hierarchical registration matters"), the
+surviving window data does double duty after a topology change. It
+directly constrains `p_window_XY` (which anchors `p_base_XY`), and
+the shared latency parameters propagate into the cohort completeness
+model — the sampler knows `(mu_XY, sigma_XY)` from the window, so the
+cohort's path-level completeness is already partially determined even
+before the new cohort data has fully matured. The `p_base_XY` anchor
+means `p_cohort_XY` starts in the right region, with only the
+path-informed divergence `τ_cohort_XY` left to resolve. The new cohort
+observations then only need to resolve the *upstream* path latency
+(which the inherited evidence gives a starting point for) and the
+magnitude of temporal divergence from current window performance. This
+means cohort fit quality recovers in weeks, not months — the window
+evidence anchors the edge, the inherited evidence anchors the path, and
+each new daily cohort observation tightens the joint posterior
+incrementally.
+
+The net result: after a topology change, the model has (a) intact window
+evidence for unchanged edges, (b) inherited weighted evidence for
+restructured edges, and (c) fresh cohort data accumulating under the new
+path structure with its convergence accelerated by the hierarchical
+window/cohort registration. Only genuinely novel edges with no window
+data and no analogy start cold. Graph restructuring degrades gracefully
+in proportion to how much actually changed — it is a routine operation,
+not a reset.
+
+**Note**: the survival of window data and invalidation of cohort data
+after topology changes is a *snapshot DB* concern, not a compiler concern.
+The compiler's evidence binder trusts that the snapshots it receives are
+consistent with the current topology. See open question in `programme.md`
+re: snapshot signature hash design.
+
+**Future UI integration**: on a topology-breaking change, the app could
+detect which edges lost their history and prompt "these edges have no
+prior fit data — link to previous version?" with a pre-populated `asat`
+pointing at the last commit before the restructure. This is a natural
+UX surface for the inheritance machinery — not required for the
+computational architecture but worth designing when the pipeline is
+stable.
+
+### Warm-start constraints for hierarchical parameters
+
+Solo-edge Beta posteriors are straightforward to warm-start (same shape,
+same interpretation). Hierarchical parameters require more care:
+
+- **Dirichlet base simplex, κ**: the hierarchical structure may change
+  between runs (new slices appearing, old slices disappearing).
+  Warm-starting a Dirichlet with a different component count is not
+  meaningful — start fresh.
+- **Slice deviations**: if slice identities change, previous deviations
+  don't map to the new slices — start fresh.
+- **Latency posteriors**: latency variables interact with completeness
+  coupling. Warm-starting them while changing the evidence window could
+  bias the coupled model. Requires careful overlap detection and
+  compatibility checking before reuse.
+
+Once the parameter-file schema carries sufficient metadata (component
+counts, slice identities, training windows per posterior), warm-starting
+hierarchical parameters becomes feasible — but the cost of getting it
+wrong (silent double-counting or shape mismatch) is higher than the cost
+of a cold start.
+
+**Implementation sequencing**: see `8-compiler-implementation-phases.md`
+for warm-start rules by implementation phase.
 
 ---
 
@@ -787,10 +1462,12 @@ edge mean. Loose pooling = slices are nearly independent.
 
 ### Completeness coupling toggle
 
-Whether to use completeness-adjusted likelihoods for immature cohorts
-(Layer 3) or treat all observations as mature. Useful for debugging — if
-the coupled model diverges, disabling coupling isolates whether the problem
-is in the latency structure or the probability structure.
+Whether to use completeness-adjusted likelihoods for cohort observations
+(Layer 3) or treat all observations as mature (completeness = 1.0
+everywhere). Useful for debugging — if the coupled model diverges,
+disabling coupling isolates whether the problem is in the latency structure
+or the probability structure. When enabled (the default), completeness
+applies to all daily observations — there is no mature/immature branching.
 
 ---
 
@@ -817,8 +1494,10 @@ The compiler must determine:
 
 3. **Window vs cohort** (Layer 3): `cohort(landing-page,...)` — this is a
    cohort observation anchored at `landing-page`. Cohort closed `30-Nov-25`.
-   Is it mature? Compute `cohort_age = today - cohort_to`. Compare to
-   `path_t95`. If immature → completeness-adjusted likelihood.
+   Completeness coupling applies to all daily observations — no
+   mature/immature branching. Old days have completeness ≈ 1.0 naturally;
+   recent days have lower completeness. Maturity is a diagnostic label, not
+   a model branch.
 
 4. **Evidence** (Layer 4): `n=1580, k=1518`. Plus per-slice latency histogram
    (`median_lag_days=5.4`, `t95=19.0`). Plus anchor latency
@@ -838,9 +1517,12 @@ The compiler resolves all six layers and emits:
 # This observation contributes a completeness-adjusted, slice-pooled
 # likelihood term to the pm.Model:
 
-p_confirmed_shipped = ...           # from Layer 1 (solo or branch group)
+# Hierarchical probability structure (Layer 3)
+# p_base_confirmed_shipped is the shared anchor
+# This is a cohort observation, so we use p_cohort_confirmed_shipped
+p_cohort_confirmed_shipped = ...    # from Layer 1 + Layer 3 hierarchical structure
 delta_classic_cart = ...             # from Layer 2 (slice deviation)
-p_slice = logistic(logit(p_confirmed_shipped) + delta_classic_cart)
+p_slice = logistic(logit(p_cohort_confirmed_shipped) + delta_classic_cart)
 
 # Path latency with onset (from Layer 1 latency chain)
 path_delta = onset_landing_confirmed + onset_confirmed_shipped
@@ -849,10 +1531,15 @@ path_mu = fw_compose(mu_landing_confirmed, sigma_landing_confirmed,
 path_sigma = fw_compose(...).sigma
 
 # Completeness with onset subtraction (doc 1 §15.3)
+# Cohort uses path-level completeness (full chain from anchor)
 completeness = cdf_lognormal(max(0, cohort_age - path_delta), path_mu, path_sigma)
 
-pm.Binomial("obs_confirmed_shipped_classic_cart",
+pm.Binomial("obs_cohort_confirmed_shipped_classic_cart",
             n=1580, p=p_slice * completeness, observed=1518)
+
+# A window observation for the same edge would instead use:
+# p_window_confirmed_shipped (close to p_base, tight τ_window)
+# edge-level completeness only (single hop, not full path)
 ```
 
 ---
@@ -874,18 +1561,24 @@ who abandoned. The raw residual `n_A - k_B - k_C` overstates dropout.
 The solution is to apply per-sibling completeness factors inside the
 Multinomial likelihood, exactly as completeness is applied to solo-edge
 cohort observations (§ Layer 3). Each sibling edge has its own path latency
-and therefore its own completeness:
+and therefore its own completeness. The probability used is the
+observation-type-appropriate variant: `p_cohort_B` for cohort observations,
+`p_window_B` for window observations (see Layer 3 hierarchical structure):
 
 ```
+# Cohort observation example:
 completeness_B(t) = CDF_LN(max(0, age_t - path_delta_B), path_mu_B, path_sigma_B)
 completeness_C(t) = CDF_LN(max(0, age_t - path_delta_C), path_mu_C, path_sigma_C)
 
-p_effective_B = p_B * completeness_B(t)
-p_effective_C = p_C * completeness_C(t)
+p_effective_B = p_cohort_B * completeness_B(t)
+p_effective_C = p_cohort_C * completeness_C(t)
 p_effective_dropout = 1 - p_effective_B - p_effective_C
 
 obs_t ~ Multinomial(n_A_t, [p_effective_B, p_effective_C, p_effective_dropout]),
         observed=[k_B_t, k_C_t, n_A_t - k_B_t - k_C_t]
+
+# Window observations use p_window_B, p_window_C instead, with edge-level
+# completeness (single hop) rather than path-level.
 ```
 
 This gives the model the freedom to explain a large observed residual as
@@ -904,8 +1597,9 @@ from "censored conversion" until the data matures.
 ### Shared denominator contract for branch groups
 
 The shared denominator `n_A` is the total traffic at the source node. The
-compiler **requires** this from the data — it does not estimate or
-approximate it.
+compiler uses this from the data when available. If `n_A` is not directly
+available, the compiler estimates it as `max(Σ k_siblings, max_i(n_i))`
+and emits a diagnostic — see the branch group section in Layer 1.
 
 **Window observations**: `n_A` is the source node's outbound event count
 within the window. This comes from:
@@ -921,11 +1615,12 @@ Because completeness applies *per sibling* (not to `n_A`), the denominator
 represents the full cohort entering `A` on day `t`, not an adjusted count.
 The adjustment is on the probability side.
 
-**If `n_A` is not available**: the compiler falls back to independent
-Binomials for that branch group (one per sibling, no shared denominator,
-no dropout component) and emits a diagnostic warning. This is a correct
-but weaker model — it loses the simplex constraint and cannot estimate
-dropout, but it does not produce infeasible likelihoods.
+**If `n_A` is not directly available**: the compiler estimates it as
+`max(Σ k_siblings, max_i(n_i))` and emits a diagnostic. The Multinomial
+is still used — the graph's structural intent is mass-conserving, and the
+model should reflect that even when the data source is imperfect. If mass
+conservation is genuinely violated in the data, the model's diagnostics
+(divergences, high r-hat) will surface it.
 
 ---
 
@@ -939,25 +1634,29 @@ Walks the graph once. Produces:
 - Topo-sorted node order
 - Branch groups (which edges are siblings at each branching node)
 - Solo edges
-- Join nodes with inbound edge lists and traffic weights
+- Join nodes with inbound edge identities (which edges converge, not
+  weights — weights are functions of latent `p`, resolved in `build_model`)
+- Join recipes: at each non-terminal join, the instruction "collapse inbound
+  paths via moment-matching" with the list of inbound path identifiers
 - Latency chains (anchor → edge path for each latency-enabled edge)
-- Path onset accumulation (`path_delta` per edge)
-- Join-collapsed path models (moment-matched at each non-terminal join)
+- Path onset accumulation (`path_delta` per edge — this is purely
+  structural: onset is a fixed scalar per edge, not latent)
 
-This is purely structural — no evidence, no PyMC. The output is a
-serialisable, deterministic data structure. Testable independently with
-deterministic assertions on known graph topologies.
+This is purely structural — no evidence, no PyMC, no latent-dependent
+values. The output is a serialisable, deterministic data structure. Testable
+independently with deterministic assertions on known graph topologies.
 
-**Model fingerprint**: a content hash of TopologyAnalysis. Used for
-warm-start compatibility checks — if the fingerprint changes, all previous
-posteriors are invalidated.
+**Topology fingerprint**: a content hash of TopologyAnalysis. Answers "has
+the graph structure changed?" Used for warm-start eligibility — if the
+topology fingerprint changes, all previous posteriors are invalidated.
 
 ### 2. `bind_evidence(topology, param_files, settings) → BoundEvidence`
 
 For each edge in the topology, reads the parameter file and classifies each
 `values[]` entry:
-- Context dimension and slice key
-- Window vs cohort, with maturity assessment
+- Context dimension, slice key, and MECE classification
+- Window vs cohort, with maturity classification (diagnostic only — does not
+  affect likelihood form; completeness is always on)
 - `(n, k)` per entry (aggregate and daily)
 - `n_A` resolution for branch groups (source node traffic)
 - Latency priors from histogram/summary stats (model-space, onset subtracted)
@@ -968,9 +1667,12 @@ For each edge in the topology, reads the parameter file and classifies each
 This is data wrangling — no PyMC. The output is serialisable. Testable with
 real parameter files from the data repo.
 
-**Evidence fingerprint**: a content hash of BoundEvidence (excluding
-settings that don't affect model structure, like sampling config). Combined
-with the model fingerprint, this determines full cache identity.
+**Model fingerprint**: a content hash of BoundEvidence + structural
+settings (exhaustiveness flags, completeness coupling toggle, pooling
+policy, prior policy). Combined with the topology fingerprint, this
+determines full cache identity. Two runs with the same graph but different
+training windows or different structural settings share the topology
+fingerprint but have different model fingerprints.
 
 ### 3. `build_model(topology, evidence) → pm.Model`
 
@@ -980,13 +1682,92 @@ Reads the topology analysis and bound evidence, emits PyMC declarations:
 - Creates latency variables if latency chains exist
 - Computes path-level `(path_delta, path_mu, path_sigma)` as deterministic
   nodes from edge-level latents
-- Collapses path models at join nodes via moment-matching
-- Wires completeness coupling (with onset) for cohort observations
+- Computes traffic weights at join nodes as deterministic functions of
+  latent edge probabilities (`w_i = p_path_i / Σ p_path_i`)
+- Executes join-collapse moment-matching at each non-terminal join (per the
+  join recipes from TopologyAnalysis) as differentiable PyTensor expressions
+  — gradients flow through the collapse so NUTS can explore the joint space
+- Wires completeness coupling (with onset) for cohort observations;
+  assigns completeness = 1.0 for non-latency edges
 - Binds each observation to its likelihood term
 
 This is the only function that imports PyMC. It is a mechanical translation
-of the IR into PyMC calls — all design decisions have already been made by
-the first two functions.
+of the IR into PyMC calls — the topology and evidence have already been
+analysed, and `build_model` executes the recipes with actual latent values.
+
+### Distribution family extensibility
+
+The initial implementation uses **shifted lognormal** for latency and
+**Beta** (or Dirichlet) for probability. These are good defaults but not
+the only viable families. The architecture must not bake distribution-
+specific assumptions into the IR or the composition pipeline.
+
+**Design principle**: distribution-specific logic is isolated behind a
+**family interface**, dispatched by a tag in the IR. The IR itself is
+family-agnostic — it describes *what* needs composing and coupling, not
+*how*.
+
+**Extension points** (four places where distribution choice matters):
+
+1. **Edge-level variable creation** (`build_model`). Each latency edge
+   carries a `latency_family` tag. `build_model` dispatches on this tag to
+   emit the correct PyMC variables — e.g. `(mu, sigma)` for lognormal,
+   `(alpha, beta)` for Gamma, `(k, lambda)` for Weibull. Similarly, each
+   probability edge carries a `prob_family` tag (Beta, logit-Normal, etc.).
+
+2. **Chain composition** (path-level aggregation of edge latencies). FW is
+   the composition strategy for lognormal. Other families need their own
+   strategy — e.g. Gamma sum is exact (closed-form), Weibull sum requires
+   moment-matching to a different target. The composition function is
+   selected by the family tag, not hardwired.
+
+3. **Join-node collapse** (mixture moment-matching at joins). The collapse
+   targets the same family as the inbound paths. If a future family
+   supports native mixture representation (e.g. mixture-of-lognormals),
+   the collapse step becomes a no-op — the mixture *is* the path model,
+   avoiding the multimodality loss entirely.
+
+4. **Completeness CDF** (the coupling function in the likelihood). The CDF
+   is a method on the family: `CDF_LN` for lognormal, `CDF_Gamma` for
+   Gamma, etc. The likelihood wiring in `build_model` calls the family's
+   CDF, not a hardcoded function.
+
+**What this means for the IR**:
+
+- `TopologyAnalysis` gains a `latency_family` field per edge (default:
+  `"shifted_lognormal"`). Join recipes carry a `collapse_strategy` tag
+  (default: `"moment_match_to_family"`).
+- `BoundEvidence` maps observed summaries to family-appropriate prior
+  parameters. The mapping is family-dispatched: lognormal reads
+  `median_lag` and derives `(mu_prior, sigma_prior)`; Gamma would read
+  `mean_lag` and derive `(alpha_prior, beta_prior)`.
+- `build_model` dispatches on the family tag at each of the four
+  extension points above.
+
+**Initial implementation**: ships with `shifted_lognormal` and
+`Beta`/`Dirichlet` only. The family tag exists in the IR from the start
+but only one value is supported. This is a one-line default, not a
+premature abstraction — the dispatch structure in `build_model` naturally
+accommodates it because each extension point is already a distinct code
+block.
+
+**Model comparison**: when multiple families are available, the mechanism
+for selection is posterior predictive comparison — WAIC or LOO-CV via
+ArviZ. Run the same graph with two family tags, compare `elpd`. This is
+a natural output of the existing sampling pipeline (ArviZ already
+computes these from the inference trace).
+
+**Candidate families**:
+
+| Family | Latency | Probability | Notes |
+|---|---|---|---|
+| Shifted lognormal | initial | — | Right-skewed, FW-composable, good default |
+| Beta / Dirichlet | — | initial | Conjugate to Binomial/Multinomial |
+| Shifted Gamma | future | — | Closed-form sum, sometimes better numerics |
+| Weibull | future | — | Flexible hazard shape, no closed-form sum |
+| Log-logistic | future | — | Closed-form CDF, heavier tails |
+| Mixture of lognormals | future | — | Avoids join-collapse loss entirely |
+| Logit-Normal | — | future | Better for extreme p (near 0 or 1) |
 
 ---
 
@@ -1009,19 +1790,24 @@ the first two functions.
   maturity gradient.
 - ~~Mature/immature hard switch~~: **always use completeness**. Let CDF → 1.0
   naturally for old cohorts. Hard switch removed from the statistical model.
-- ~~Prior overflow guard~~: replaced with **mean-preserving ESS cap**.
-- ~~Latency composition method~~: **Fenton-Wilkinson only**. Simulation
-  within MCMC draws is ruled out (not differentiable).
-- ~~Branch group likelihood~~: **Multinomial with shared denominator**, not
-  separate Binomials. If the source node's total traffic count (`n_A`) is
-  not available from the data, the compiler cannot safely build a
-  Multinomial (because if `k_B + k_C > n_A_estimated`, the likelihood is
-  mathematically impossible). In that case it falls back to fitting each
-  sibling edge independently as `Beta + Binomial` — weaker (loses the
-  simplex constraint and dropout estimate) but safe. **Update**: `n_A` is
-  in practice always available — the Nquery mechanism provides source-node
-  traffic counts for all branch groups. The Binomial fallback is a
-  theoretical safety net, not an expected runtime path.
+- ~~Prior overflow guard~~: replaced with **trajectory-calibrated priors**.
+  Between-run heterogeneity (`tau^2`) estimated from `fit_history` via
+  DerSimonian-Laird; prior concentration derived from trajectory variance,
+  not fixed. ESS cap retained as safety ceiling. Falls back to simple
+  warm-start when `K < 3` history entries.
+- ~~Latency composition method~~: **Fenton-Wilkinson** for the shifted
+  lognormal family. Simulation within MCMC draws is ruled out (not
+  differentiable). Other families use their own composition strategy,
+  dispatched by the family tag in the IR — see "Distribution family
+  extensibility".
+- ~~Branch group likelihood~~: **always Multinomial with shared
+  denominator**. The graph's intent is mass-conserving; the model reflects
+  that. If `n_A` is not directly available, the compiler estimates it as
+  `max(Σ k_siblings, max_i(n_i))` and emits a diagnostic. If the source
+  data doesn't actually conserve mass, the Multinomial produces a poor
+  fit — divergences, high r-hat, or wide posteriors — which is a data
+  quality signal, not a modelling error. In practice `n_A` is almost
+  always available via the Nquery mechanism.
 - ~~Hierarchical Dirichlet pooling~~: **base simplex + concentration (κ)**,
   not shared concentration alone.
 - ~~Dropout in immature cohorts~~: **completeness-adjusted Multinomial** with
@@ -1037,9 +1823,12 @@ the first two functions.
   doc 1 §15.4. Weighted by traffic flow mass from edge probabilities.
   Composable through chains of joins. No unique-path constraint. Dominant-
   path selection replaced.
-- ~~Shared denominator source~~: **required from data** (source node event
-  count or anchor cohort size). No unsafe approximations (`max(n_B, n_C)` is
-  banned). Missing denominator → fall back to independent Binomials.
+- ~~Shared denominator source~~: **always Multinomial**. The graph's intent
+  is mass-conserving; the model reflects that. If `n_A` is not directly
+  available, estimate as `max(Σ k_siblings, max_i(n_i))` and emit
+  diagnostic. No unsafe approximations (`max(n_B, n_C)` is banned). Mass
+  conservation violations surface as data quality signals via model
+  diagnostics (divergences, high r-hat).
 - ~~IR boundary~~: **TopologyAnalysis and BoundEvidence are the stable IR**.
   Serialisable, deterministic, fingerprintable, engine-independent. Only
   `build_model` imports PyMC.
@@ -1056,11 +1845,209 @@ the first two functions.
   device; a shipping edge might not). The hierarchical model learns this
   naturally — `τ_slice ~ HalfNormal` per edge, with the data determining
   how much shrinkage occurs. No manual tuning needed.
+- ~~IR purity~~: **TopologyAnalysis carries join recipes, not computed
+  values**. Traffic weights and moment-matched collapsed path models are
+  functions of latent edge probabilities — they belong in `build_model` as
+  deterministic PyTensor expressions, not in the structural IR. The IR
+  records which edges converge at each join and the instruction to collapse;
+  `build_model` executes the collapse with actual latent values.
+- ~~Fingerprint scope~~: **two-tier fingerprint**. `topology_fingerprint`
+  (hash of TopologyAnalysis) answers "has the graph structure changed?" —
+  used for warm-start eligibility. `model_fingerprint` (hash of
+  TopologyAnalysis + BoundEvidence + structural settings: exhaustiveness,
+  coupling toggle, pooling policy, prior policy) answers "is a cached trace
+  compatible with this exact model?" — used for cache hit/miss. Two runs
+  with the same graph but different training windows share a topology
+  fingerprint (warm-start eligible) but have different model fingerprints
+  (can't reuse cached trace).
+- ~~Non-latency edges in cohort mode~~: **completeness = 1.0**. If an edge
+  has no latency parameter (`latency_parameter: false` or absent), the
+  compiler assigns completeness = 1.0 for all daily observations —
+  equivalent to assuming instant conversion. This is a degenerate shifted
+  lognormal with `delta = 0, sigma → 0`. The compiler emits a diagnostic
+  noting that cohort immaturity on this edge is unmodelled. Safe default:
+  biases toward the window-like interpretation.
+- ~~Window + cohort for the same edge~~: **both contribute —
+  hierarchically registered, temporally complementary**. Window and
+  cohort terms for the same edge are linked through a shared `p_base_XY`
+  with observation-type-specific probability variables (`p_window_XY`,
+  `p_cohort_XY`) and shared latency parameters `mu_XY`, `sigma_XY` in a
+  single `pm.Model` (see Layer 3 "hierarchical pooling with path-informed
+  divergence"). `p_window_XY` is tightly pooled toward `p_base_XY`;
+  `p_cohort_XY` can diverge by `τ_cohort_XY = σ_temporal · path_sigma_AX`,
+  reflecting both temporal shift and path-length diffusion. Both need
+  completeness adjustment at different scopes: window completeness couples
+  to **edge-level** latency only (single hop); cohort completeness couples
+  to the **full path** from anchor. The window anchors `p_base` and edge
+  latency early (no upstream uncertainty); the cohort adds path-level
+  coupling as it matures. The hierarchical structure means divergence
+  between window and cohort performance is a learned signal (captured by
+  `σ_temporal`), not a data quality problem. Date overlap at the
+  edge-event level (not the anchor level) should be detected by the
+  evidence binder and flagged as a diagnostic; the initial implementation
+  accepts the mild overconfidence rather than attempting deduplication.
+- ~~Hierarchical warm-start rules~~: **progressively enabled with care**.
+  Solo-edge Beta posteriors are warm-started (same shape, same
+  interpretation). Dirichlet base simplex, κ, and slice deviations are
+  not warm-started (structure may change between runs). Latency posteriors
+  are not warm-started (completeness coupling risk). See
+  `8-compiler-implementation-phases.md` for warm-start rules by phase.
+- ~~Context dimension MECE classification~~: **per-dimension metadata flag**.
+  `context(channel)` and `case(test:variant)` are MECE by construction
+  (each user belongs to exactly one value). `visited(node_id)` is never
+  MECE (a user can visit multiple nodes). Cross-products of MECE dimensions
+  are themselves MECE. MECE dimensions get slice-level Dirichlet/pooling
+  with partition-based double-counting prevention. Non-MECE dimensions get
+  independent per-slice likelihoods without the partition constraint — no
+  residual computation, no aggregate exclusion.
+- ~~Distribution family extensibility~~: **family-dispatched from the
+  start**. The IR carries a `latency_family` tag per edge and a
+  `prob_family` tag per edge (defaults: `shifted_lognormal` and `Beta`).
+  Composition, collapse, CDF, and variable creation are dispatched by
+  these tags. Initially one value per tag is supported. This is a design constraint,
+  not a premature abstraction — it prevents distribution-specific
+  assumptions from being baked into the IR or composition pipeline. Future
+  families (shifted Gamma, Weibull, mixture-of-lognormals, logit-Normal)
+  slot in by implementing the same interface. Model comparison via
+  WAIC/LOO-CV selects between families.
+- ~~Evidence inheritance across topology changes~~: **decaying weighted
+  inheritance from analogous edges**. When topology changes invalidate
+  direct history, an `evidence_inherit` annotation on the edge points at
+  a source edge (optionally at a historical version via `asat`). The
+  source's posterior encodes its accumulated evidence as effective
+  observations; `strength` (0 = hint, 1 = strong) and exponential decay
+  from `created_at` (half-life ~90 days) control what fraction of those
+  observations carry over. Combined with any own history via precision-
+  weighted average. Does not add latent variables — affects prior
+  hyperparameters (which encode evidence as pseudo-observations) only.
+  Post-Phase-A feature.
+- ~~Per-slice quality metrics in the posterior schema~~: **keyed sub-map
+  within the existing `posterior` block**. The edge-level `posterior`
+  stays exactly as designed in doc 4 (always present, same shape). A
+  `slices` sub-map is added, keyed by slice DSL string (the natural
+  unique identifier). Each value has the same fields as the edge-level
+  posterior: `alpha`, `beta`, `hdi_lower`, `hdi_upper`, `ess`, `rhat`.
+  Consumers that don't care about slices ignore `slices`. `fit_history`
+  remains edge-level only (per-slice trajectory history would be
+  prohibitively verbose and isn't needed for prior calibration — the DL
+  estimator operates on the edge aggregate). Present only when slice
+  pooling is active. See doc 4 for the base schema.
+- ~~Divergence count persistence~~: **yes, add `posterior.divergences`
+  (integer)**. The sampler reports divergence count via ArviZ; persist it
+  per-edge alongside `rhat` and `ess`. Also add to `fit_history` entries
+  (divergence count per fit is important for tracking whether model
+  quality is improving or degrading). Also add `total_divergences` to the
+  graph-level `_bayes.quality` block. Negligible schema cost; high
+  diagnostic value for fit quality visualisation and trajectory surprise
+  detection.
+- ~~Fit quality reporting granularity~~: **compute at edge level,
+  summarise at graph level in `_bayes.quality`**. The graph-level summary
+  is derived by the webhook handler from edge-level metrics at commit
+  time, not computed independently by the sampler. Extend `_bayes.quality`
+  with `total_divergences`, `edges_by_tier` (prior cascade tier
+  distribution: how many edges used direct history, trajectory-calibrated,
+  inherited, uninformative), and `edges_with_surprise` (count with
+  |z| > 2). The FE reads per-edge `posterior.rhat`, `posterior.ess`,
+  `posterior.evidence_grade` etc. for edge-level colour-coding; reads
+  `_bayes.quality` for the graph-level "is this model trustworthy?"
+  summary.
 
-## Open questions
+## Proof obligations (test gate)
 
-- **Conditional probability entries**: treat as named slices with partial
-  pooling, or as hard separate models? The `conditional_p` pattern on edges
-  is structurally similar to context slicing but semantically distinct
-  (first-match vs additive).
+The following acceptance tests are required proof that the design is
+correctly implemented. Each test protects a specific invariant. They are
+listed by the subsystem or interaction they cover.
+
+### Topology analysis
+
+- **Branch group identification**: given a known graph, assert correct
+  sibling grouping, solo-edge classification, and join-node identification
+- **Path onset accumulation**: assert `path_delta` equals the sum of edge
+  onsets along the path, including through joins
+- **Join recipe correctness**: assert that non-terminal joins carry the
+  correct inbound edge identities and that terminal joins are inert
+- **Topo-sort determinism**: same graph → same ordering, byte-for-byte
+
+### Evidence binding
+
+- **Slice partition detection**: given exhaustive slices, assert aggregate
+  is excluded from likelihood; given partial slices, assert residual is
+  correctly computed
+- **MECE dimension classification**: assert `context()` dimensions flagged
+  MECE produce exclusive partitions; `visited()` flagged non-MECE does not
+  attempt residual computation
+- **Window + cohort co-occurrence**: assert both bind to the same
+  `p_base_XY` (hierarchical anchor) and shared `mu_XY`, `sigma_XY`;
+  assert `p_window_XY` is tightly pooled toward `p_base_XY` (small
+  `τ_window`); assert `p_cohort_XY` has divergence allowance
+  `τ_cohort_XY = σ_temporal · path_sigma_AX`; window terms use
+  edge-level completeness (single hop), cohort terms use path-level
+  completeness (full chain); assert date-overlap diagnostic is emitted
+  when windows share coverage
+- **Non-latency edge handling**: assert cohort evidence on non-latency edges
+  gets completeness = 1.0 with diagnostic
+- **Latency prior derivation**: assert model-space (onset-subtracted)
+  mu/sigma match expected values from known lag summaries
+- **Double-counting prevention**: assert that when slices exhaustively
+  partition the aggregate, only slice-level terms enter the likelihood
+
+### Model materialisation
+
+- **FW parity**: for known edge latency parameters, assert FW-composed
+  path model matches the analytical result within tolerance
+- **Moment preservation at joins**: for a known join with 2–3 inbound paths
+  and given weights, assert the collapsed `(delta_mix, mu_mix, sigma_mix)`
+  preserves mean and variance of the full mixture
+- **`path_delta` correctness**: assert `completeness = 0` when
+  `age < path_delta`, and `completeness → 1` for large age
+- **Completeness-adjusted Multinomial**: assert per-sibling completeness
+  factors produce correct effective probabilities and that
+  `p_effective_dropout` converges to `1 - Σ p_i` as age → ∞
+- **Probability–latency coupling**: assert that the joint model can
+  distinguish low-p from slow-latency given a mix of mature and immature
+  daily observations (parameter recovery test)
+
+### Warm-start, trajectory calibration, and caching
+
+- **Trajectory-calibrated prior (stable edge)**: given a fit_history with
+  low variance, assert `n_eff` is high (near ESS_CAP) and the Beta prior
+  is tight around the last posterior mean
+- **Trajectory-calibrated prior (volatile edge)**: given a fit_history with
+  high variance, assert `n_eff` is low and the Beta prior is wide
+- **DerSimonian-Laird correctness**: given a known fit_history with
+  analytically computable `tau^2`, assert the estimated between-run
+  heterogeneity matches
+- **Surprise detection**: given a fit_history followed by a new posterior
+  that departs significantly, assert `|z| > 2` diagnostic is emitted;
+  given a departure within historical range, assert no surprise diagnostic
+- **ESS cap**: assert `n_eff` is clamped to ESS_CAP even when trajectory
+  variance is near zero (prevents unbounded concentration)
+- **Minimum history fallback**: with `K < 3` fit_history entries, assert
+  the compiler falls back to simple warm-start with fixed ESS cap
+- **Overlap detection**: assert warm-start is rejected (or ESS-discounted)
+  when new evidence overlaps the previous training window
+- **Topology fingerprint**: assert fingerprint changes when graph structure
+  changes and is stable when only evidence changes
+- **Model fingerprint**: assert fingerprint changes when structural settings
+  (exhaustiveness, coupling toggle, pooling policy) change
+- **Evidence inheritance (fresh, strong)**: given an `evidence_inherit`
+  annotation with strength ~0.8 and age 0, assert inherited ESS is ~80%
+  of source ESS and the prior mean matches the source's posterior mean
+- **Evidence inheritance (aged)**: given the same annotation aged 180 days,
+  assert inherited ESS has decayed to < 5% of source ESS
+- **Evidence inheritance + own history**: given both an inheritance
+  annotation and the edge's own fit_history, assert the combined prior
+  reflects both sources with own history dominating as it accumulates
+- **Prior cascade tier diagnostic**: assert the compiler emits a diagnostic
+  identifying which evidence source tier was used for each edge
+
+### Degradation and invalidation
+
+- **Missing denominator estimation**: assert branch group still compiles
+  as Multinomial when `n_A` is unavailable, with estimated denominator and
+  diagnostic emitted to session log
+- **Poorly identified model diagnostic**: assert compiler flags edges with
+  weak latency evidence + all-immature daily observations
+- **Structural role change**: assert warm-start is rejected when an edge
+  moves from solo to branch group (or vice versa)
 

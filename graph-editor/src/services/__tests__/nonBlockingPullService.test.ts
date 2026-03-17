@@ -302,7 +302,7 @@ describe('nonBlockingPullService', () => {
 
   // ---------- Conflict action: onConflicts callback and toast action ----------
 
-  it('should call onConflicts callback immediately with conflict data when conflicts are detected', async () => {
+  it('should NOT call onConflicts immediately — background pull must not hijack the screen', async () => {
     const conflictData = [
       { fileId: 'param-a', fileName: 'a.yaml', hasConflicts: true },
       { fileId: 'param-b', fileName: 'b.yaml', hasConflicts: true },
@@ -321,9 +321,9 @@ describe('nonBlockingPullService', () => {
     await vi.advanceTimersByTimeAsync(0);
     await vi.advanceTimersByTimeAsync(0);
 
-    // Callback must fire with the exact conflict array — this is what opens the modal.
-    expect(onConflicts).toHaveBeenCalledTimes(1);
-    expect(onConflicts).toHaveBeenCalledWith(conflictData);
+    // Auto-pull is background — onConflicts must NOT fire automatically.
+    // User opens the modal via the toast "Resolve conflicts" action instead.
+    expect(onConflicts).not.toHaveBeenCalled();
   });
 
   it('should attach a "Resolve conflicts" action to the operation when onConflicts is provided', async () => {
@@ -352,7 +352,7 @@ describe('nonBlockingPullService', () => {
     onConflicts.mockClear();
     op!.action!.onClick();
     expect(onConflicts).toHaveBeenCalledTimes(1);
-    expect(onConflicts).toHaveBeenCalledWith([{ fileId: 'param-x', fileName: 'x.yaml' }]);
+    expect(onConflicts).toHaveBeenCalledWith([{ fileId: 'param-x', fileName: 'x.yaml' }], opId);
   });
 
   it('should NOT attach an action when onConflicts is not provided (backward compat)', async () => {
@@ -449,8 +449,8 @@ describe('nonBlockingPullService', () => {
     // onDismiss must fire so the remote SHA is dismissed in staleness detection.
     // Without this, maybePrompt() sees gitPullDue=true again and starts another pull.
     expect(onDismiss).toHaveBeenCalledTimes(1);
-    // onConflicts must also fire (opens modal).
-    expect(onConflicts).toHaveBeenCalledTimes(1);
+    // onConflicts must NOT fire — background pull doesn't auto-open the modal.
+    expect(onConflicts).not.toHaveBeenCalled();
   });
 
   it('should NOT call onDismiss on successful pull (SHA is naturally cleared by onComplete)', async () => {

@@ -100,6 +100,7 @@ vi.mock('../usePullAll', () => ({
       openConflictModal: fn,
     };
   },
+  onOpenConflictModal: () => () => {},
 }));
 
 vi.mock('../useRetrieveAllSlicesRequestListener', () => ({
@@ -355,7 +356,7 @@ describe('useStalenessNudges', () => {
     });
   });
 
-  it('should fire retrieve-all directly via progress toast when retrieve is due (no pull)', async () => {
+  it('should show retrieve banner (not auto-execute) when retrieve is due (no pull)', async () => {
     hoisted.getRetrieveAllSlicesStalenessStatus.mockResolvedValue({
       isStale: true,
       parameterCount: 2,
@@ -365,12 +366,18 @@ describe('useStalenessNudges', () => {
 
     render(<Harness />);
 
+    // Retrieve-all must NEVER execute automatically — only the nightly cron does that.
+    // The hook should show a banner that the user must click to initiate retrieval.
     await waitFor(() => {
-      expect(hoisted.retrieveAllSlicesExecute).toHaveBeenCalledTimes(1);
+      expect(hoisted.setBanner).toHaveBeenCalledWith(
+        expect.objectContaining({
+          id: 'retrieve-stale',
+          label: expect.stringContaining('stale'),
+          actionLabel: 'Retrieve All',
+        })
+      );
     });
-    // Verify it was called with the correct graph file ID in the toast ID.
-    const call = hoisted.retrieveAllSlicesExecute.mock.calls[0][0];
-    expect(call.toastId).toContain('graph-1');
+    expect(hoisted.retrieveAllSlicesExecute).not.toHaveBeenCalled();
   });
 
   it('should start non-blocking pull AND show reload banner when both are due (no strict cascade block)', async () => {
@@ -456,10 +463,16 @@ describe('useStalenessNudges', () => {
 
     render(<Harness />);
 
-    // Retrieve fires directly via progress toast for chart's parent graph.
+    // Should show banner (not auto-execute) for chart's parent graph.
     await waitFor(() => {
-      expect(hoisted.retrieveAllSlicesExecute).toHaveBeenCalledTimes(1);
+      expect(hoisted.setBanner).toHaveBeenCalledWith(
+        expect.objectContaining({
+          id: 'retrieve-stale',
+          actionLabel: 'Retrieve All',
+        })
+      );
     });
+    expect(hoisted.retrieveAllSlicesExecute).not.toHaveBeenCalled();
 
     // Ensure the chart path threads the effective DSL through to the service call.
     const call = hoisted.getRetrieveAllSlicesStalenessStatus.mock.calls.find((c) => c[3] === chartDsl);
@@ -603,12 +616,13 @@ describe('useStalenessNudges', () => {
     // Simulate the pull completing with conflicts by invoking the captured onConflicts.
     const opts = hoisted.startNonBlockingPull.mock.calls[0][0];
     const fakeConflicts = [{ fileId: 'f1', fileName: 'test.yaml' }];
-    opts.onConflicts(fakeConflicts);
+    const fakeOpId = 'auto-pull:repo-1:main';
+    opts.onConflicts(fakeConflicts, fakeOpId);
 
     // The LATEST openConflictModal instance (from after re-render) must be called.
     const latestInstance = hoisted.openConflictModalInstances[hoisted.openConflictModalInstances.length - 1];
     expect(latestInstance).toHaveBeenCalledTimes(1);
-    expect(latestInstance).toHaveBeenCalledWith(fakeConflicts);
+    expect(latestInstance).toHaveBeenCalledWith(fakeConflicts, fakeOpId);
 
     // If a different (earlier) instance exists, it must NOT have been called —
     // that would mean we're calling a stale closure.

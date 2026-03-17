@@ -1,5 +1,6 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { DiffEditor } from '@monaco-editor/react';
+import './Modal.css';
 import './MergeConflictModal.css';
 
 export interface ConflictFile {
@@ -35,14 +36,21 @@ export function MergeConflictModal({
   conflicts, 
   onResolve 
 }: MergeConflictModalProps) {
-  const [selectedFile, setSelectedFile] = useState<string | null>(
-    conflicts.length > 0 ? conflicts[0].fileId : null
-  );
+  const [selectedFile, setSelectedFile] = useState<string | null>(null);
   const [resolutions, setResolutions] = useState<Map<string, 'local' | 'remote' | 'manual'>>(
     new Map()
   );
   const [isResolving, setIsResolving] = useState(false);
   const [diffView, setDiffView] = useState<'local-remote' | 'local-base' | 'remote-base'>('local-remote');
+
+  // Auto-select the first conflict file when conflicts change (e.g. modal reopened
+  // with new data). Also reset resolutions so stale choices don't carry over.
+  useEffect(() => {
+    if (conflicts.length > 0) {
+      setSelectedFile(conflicts[0].fileId);
+      setResolutions(new Map());
+    }
+  }, [conflicts]);
 
   if (!isOpen) return null;
 

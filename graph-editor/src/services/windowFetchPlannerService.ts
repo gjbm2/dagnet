@@ -1409,6 +1409,19 @@ class WindowFetchPlannerService {
       const latencyConfig = edge?.p?.latency as LatencyConfig | undefined;
       const effectiveT95 = latencyConfig?.path_t95 ?? latencyConfig?.t95;
       
+      // Derive the staleness reason from available context rather than hardcoding.
+      // - Cohort mode with latency → immature cohort dates within maturity horizon
+      // - Window mode with latency → immature recent dates not yet settled
+      // - No latency (gaps_only path) → incomplete-day refetch (same-day retrieval)
+      let stalenessReason: string | undefined;
+      if (classification === 'stale_candidate') {
+        if (effectiveT95 != null) {
+          stalenessReason = fpItem.mode === 'cohort' ? 'immature_cohort' : 'immature_dates';
+        } else {
+          stalenessReason = 'incomplete_day_refetch';
+        }
+      }
+
       items.push({
         id: fpItem.itemKey,
         type: fpItem.type,
@@ -1418,9 +1431,8 @@ class WindowFetchPlannerService {
         conditionalIndex: fpItem.conditionalIndex,
         classification,
         missingDates: classification === 'needs_fetch' ? missingDates : undefined,
-        stalenessReason: classification === 'stale_candidate' ? 'immature_dates' : undefined,
+        stalenessReason,
         effectiveT95,
-        // Note: boundedCohortWindow is no longer produced (first-principles: no start bounding)
       });
     }
     

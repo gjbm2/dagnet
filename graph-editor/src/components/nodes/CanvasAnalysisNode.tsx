@@ -13,6 +13,8 @@ import { captureTabScenariosToRecipe } from '@/services/captureTabScenariosServi
 import { advanceMode } from '@/services/canvasAnalysisMutationService';
 import { isSnapshotBootChart, logSnapshotBoot, recordSnapshotBootLedgerStage } from '@/lib/snapshotBootTrace';
 import { getLastSnappedResize, clearLastSnappedResize } from '@/services/snapService';
+import { groupResizeStart, groupResize, groupResizeEnd } from '../canvas/useGroupResize';
+import { beginResizeGuard, endResizeGuard } from '../canvas/syncGuards';
 import { Loader2, AlertCircle, ServerOff, ExternalLink, Settings2 } from 'lucide-react';
 import { chartOperationsService } from '@/services/chartOperationsService';
 import { InlineEditableLabel } from '../InlineEditableLabel';
@@ -438,25 +440,18 @@ function CanvasAnalysisNodeInner({ data, selected }: NodeProps<CanvasAnalysisNod
   const analysisIdRef = useRef(analysis.id);
   analysisIdRef.current = analysis.id;
 
-  const onResizeStartRef = useRef(data.onResizeStart);
-  onResizeStartRef.current = data.onResizeStart;
-  const onResizeEndRef = useRef(data.onResizeEnd);
-  onResizeEndRef.current = data.onResizeEnd;
-
-  const handleResizeStart = useCallback(() => { onResizeStartRef.current?.(); }, []);
+  const handleResizeStart = useCallback(() => {
+    if (import.meta.env.DEV) console.log('[CanvasAnalysisNode] handleResizeStart (singleton guard)', { id: analysisIdRef.current });
+    // Call module-level singleton directly — no data prop needed.
+    // This bypasses ReactFlow's controlled-mode data-prop-loss problem entirely.
+    beginResizeGuard();
+    groupResizeStart(`analysis-${analysisIdRef.current}`);
+  }, []);
   const handleResize = useCallback((_event: any, params: { x: number; y: number; width: number; height: number }) => {
-    if (resizeTimeoutRef.current) clearTimeout(resizeTimeoutRef.current);
-    resizeTimeoutRef.current = setTimeout(() => {
-      // Use snapped dimensions if available, otherwise d3-drag params
-      const snap = getLastSnappedResize();
-      const useSnap = snap && snap.nodeId === `analysis-${analysisIdRef.current}`;
-      onUpdateRef.current(analysisIdRef.current, {
-        x: Math.round(useSnap ? snap.x : params.x),
-        y: Math.round(useSnap ? snap.y : params.y),
-        width: Math.round(useSnap ? snap.width : params.width),
-        height: Math.round(useSnap ? snap.height : params.height),
-      });
-    }, 200);
+    groupResize(`analysis-${analysisIdRef.current}`, params.width, params.height);
+    // No mid-drag onUpdate — saving to graph store during resize triggers the
+    // sync effect which applies stale positions from React state, causing the
+    // node to bounce. handleResizeEnd saves the final state instead.
   }, []);
   const handleResizeEnd = useCallback((_event: any, params: { x: number; y: number; width: number; height: number }) => {
     if (resizeTimeoutRef.current) clearTimeout(resizeTimeoutRef.current);
@@ -464,14 +459,17 @@ function CanvasAnalysisNodeInner({ data, selected }: NodeProps<CanvasAnalysisNod
     // snap adjustments, so its params would cause a "bounce" on release.
     const snap = getLastSnappedResize();
     const useSnap = snap && snap.nodeId === `analysis-${analysisIdRef.current}`;
+    const finalW = Math.round(useSnap ? snap.width : params.width);
+    const finalH = Math.round(useSnap ? snap.height : params.height);
     onUpdateRef.current(analysisIdRef.current, {
       x: Math.round(useSnap ? snap.x : params.x),
       y: Math.round(useSnap ? snap.y : params.y),
-      width: Math.round(useSnap ? snap.width : params.width),
-      height: Math.round(useSnap ? snap.height : params.height),
+      width: finalW,
+      height: finalH,
     });
     clearLastSnappedResize();
-    onResizeEndRef.current?.();
+    groupResizeEnd(`analysis-${analysisIdRef.current}`, finalW, finalH);
+    endResizeGuard();
   }, []);
 
 

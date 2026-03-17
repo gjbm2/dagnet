@@ -18,6 +18,10 @@ design docs contain the detail.
 | **Async infra** | `4-async-roundtrip-infrastructure.md` | Async roundtrip: submission, webhook, git commit, schema |
 | **Local dev setup** | `5-local-dev-setup.md` | Local dev environment, tunnel, deployment |
 | **Compiler + worker** | `6-compiler-and-worker-pipeline.md` | Compiler IR, model materialisation, worker orchestration, evidence assembly |
+| **asat() completion** | `7-asat-analysis-completion.md` | Historic asat through analysis/charting (Phase A), future asat with forecasts (Phase B) |
+| **Compiler phases** | `8-compiler-implementation-phases.md` | Phased delivery plan for compiler: A (independent), B (Dirichlet), C (slices), D (latency coupling), E (fan-out) |
+| **FE posterior consumption** | `9-fe-posterior-consumption-and-overlay.md` | FE changes for posterior display, settings, fit guidance, stats deletion schedule |
+| **Topology signatures** | `10-topology-signatures.md` | Per-fit-unit structural fingerprinting for posterior staleness detection |
 
 **Context**: `../codebase/APP_ARCHITECTURE.md` (app architecture),
 `../project-db/` (snapshot DB)
@@ -26,26 +30,70 @@ design docs contain the detail.
 
 ## Structure
 
-Three workstreams. Bayesian inference can start as soon as async infrastructure
-is done — it reads evidence directly from graph + parameter files + snapshot DB,
-all of which are already populated by the existing system. Semantic foundation
-improves *consumption* of posteriors but is not a prerequisite for *production*.
+Three workstreams with a validation feedback loop. Bayesian inference
+can start as soon as async infrastructure is done — it reads evidence
+directly from graph + parameter files + snapshot DB, all already
+populated by the existing system. Semantic foundation improves
+*consumption* of posteriors but is not a prerequisite for *production*.
+
+Critically, **model validation requires FE visibility**: to confirm the
+model produces useful outcomes, analysis views (cohort maturity, asat,
+conversion analysis) must render model-derived CDFs and posteriors
+alongside the existing analytic curves. This creates a dependency
+lattice — not a simple linear pipeline.
 
 ```
-Semantic foundation
-  Evaluator unification → Python model ownership → FE stats deletion
-                                                                  ↘
-                                                                   Posterior consumption
-                                                                  ↗
-Bayesian inference (compiler + worker)
-  Compiler IR → model materialisation → MCMC → webhook commit
-  Depends on: Async infrastructure (webhook + atomic commit)
-  Evidence sources: graph topology (inline), param files (git),
-                    snapshot DB (PostgreSQL)
-
 Async infrastructure
-  Async roundtrip (Steps 1–3 done) → vendor setup → submission → FE integration
+  Steps 1–3 (done) → vendor setup → submission → FE integration
+         │
+         ▼
+Bayesian inference
+  Phase A (independent) → Phase B (Dirichlet) → Phase C (slices) → Phase D (coupling)
+         │                       │                     │                    │
+         ▼                       ▼                     ▼                    ▼
+    FE overlay ──────────── FE overlay ─────────── FE overlay ────────── FE overlay
+    (basic posterior        (simplex               (per-slice             (latency CDF
+     display on edges,       constraint             posterior bands,       overlay on
+     confidence bands)       visualised,            shrinkage visible)     cohort maturity
+                             branch group                                  curves)
+                             quality)
+         │                                                                  │
+         ▼                                                                  ▼
+    Visual validation ──────────────────────────────────────────────── Quantitative
+    (does the model                                                    backtesting
+     agree with existing                                               (systematic
+     analytic curves?)                                                  model comparison)
+
+Semantic foundation (parallel, feeds into consumption quality)
+  Evaluator unification → Python model ownership → FE stats deletion
 ```
+
+### Dependency lattice — what blocks what
+
+| Milestone | Depends on | Enables |
+|---|---|---|
+| Phase A posteriors in YAML | Async infra Steps 1–6 | FE overlay (basic), visual validation |
+| FE overlay (basic) | Phase A, FE posterior reading | Visual validation, fit quality display |
+| Visual validation | FE overlay, existing analytic curves | Confidence to proceed to Phase B |
+| Phase B posteriors | Phase A proven | FE overlay (Dirichlet), branch group quality |
+| Phase C posteriors | Phase B proven | Per-slice visualisation, MECE validation |
+| Phase D posteriors | Phase C proven | Latency CDF overlay on cohort maturity |
+| Quantitative backtesting | Phase A + fit_history depth + snapshot DB | Distribution family selection, model improvement |
+| Fit quality visualisation | Phase A + FE overlay | Edge colour-coding, quality-driven graph triage |
+| Semantic foundation complete | Independent | Cleaner FE derivation, deletion of FE fitting code |
+
+The critical insight: each compiler phase needs its corresponding FE
+overlay to validate before progressing. Phase A is not "done" when
+posteriors land in YAML — it is done when an analyst can see the
+model's `p` and confidence bands on edges and compare them against the
+existing analytic estimates. If they diverge unexpectedly, that's a
+signal to fix the model before adding complexity in Phase B.
+
+Similarly, Phase D's latency coupling is not validated until the
+model-derived completeness CDF is rendered alongside the existing
+cohort maturity curve in the analysis view. If the model curve doesn't
+match the observed maturation shape, the latency model needs work —
+and that's visible only in the FE.
 
 ---
 
@@ -129,9 +177,36 @@ webhook → atomic git commit → FE pull — with correct posterior schema fiel
 but placeholder values.
 
 **Steps**:
-1. ~~Schema additions~~: `posterior` sub-objects on `ProbabilityParam` and
-   `LatencyConfig` in TS types, Python Pydantic models, YAML schemas.
-   **Done 16-Mar-26.**
+1. ~~Schema additions (initial)~~: `posterior` sub-objects on
+   `ProbabilityParam` and `LatencyConfig` in TS types, Python Pydantic
+   models, YAML schemas. **Done 16-Mar-26.**
+
+   **Schema revision required before Phase A** (post-17-Mar-26 design
+   changes — see doc 4 and doc 6 Layer 3):
+
+   - **`posterior.slices` map**: per-slice posteriors keyed by slice DSL
+     string. Holds posteriors at all granularities — window/cohort
+     observation types, context dimensions, and aggregate levels not
+     represented in `values[]`. The `slices` map uses the same DSL
+     grammar and canonicalisation as `values[].sliceDSL`.
+   - **Top-level `alpha`/`beta` = window posterior**: the top-level
+     posterior represents the window (most current) estimate. `p.mean`
+     and `p.stdev` are derived from it. This replaces the earlier
+     assumption of a single shared probability parameter.
+   - **`posterior._model_state`**: model-internal parameters persisted
+     for subsequent runs (e.g. `sigma_temporal`, `tau_cohort`,
+     hierarchical anchor params). Separated from business-meaningful
+     posteriors — no consumption semantics.
+   - **`fit_history` per-slice snapshots**: each fit_history entry
+     carries a `slices` sub-map with slim `alpha`/`beta` per slice,
+     enabling per-observation-type trajectory analysis for the
+     DerSimonian-Laird estimator.
+   - **DSL canonicalisation gate**: before Phase A writes posteriors,
+     the DSL identity system must be validated end-to-end — the same
+     parser must produce identical keys whether invoked by the evidence
+     binder (reading `values[].sliceDSL`) or the posterior writer
+     (keying `posterior.slices`). TS types, Python Pydantic models, and
+     YAML schema must all be updated to reflect the revised structure.
 2. ~~Isomorphic verification gate~~: confirm UpdateManager extracted modules
    are platform-agnostic. **Done 16-Mar-26.**
 3. ~~Webhook handler~~: `/api/bayes-webhook.ts` with atomic multi-file commit
@@ -187,26 +262,16 @@ or the evaluator unified — those concern *consumption*, not *production*.
 - Posterior summarisation and quality gates (r-hat, ESS, HDI)
 - Webhook callback with posterior payload → atomic git commit
 
-**Phased delivery** (see `6-compiler-and-worker-pipeline.md`):
-- Phase A: independent Beta per edge (no hierarchy, no Dirichlet, no slice
-  pooling). Proves full pipeline end-to-end with real posteriors.
-- Phase B: Dirichlet branch groups (sibling coupling at branching nodes).
-- Phase C: slice pooling + hierarchical Dirichlet.
-- Phase D: probability–latency coupling through completeness.
-- Phase E (optional): per-chain fan-out across workers. The serialisable IR
-  boundary enables a compile-once, sample-many pattern — dispatch N workers
-  each running `build_model` → `pm.sample` independently, merge traces via
-  `az.concat`. Not required for initial delivery: PyMC parallelises chains
-  across cores on a single machine, and wall-clock time is not a binding
-  constraint.
-
-**Exit criterion (Phase A)**: at least one real graph fitted end-to-end with
-independent Beta posteriors committed to git. Quality metrics within acceptable
-bounds. FE reads real posterior values after pull.
-
-**Exit criterion (Phase D)**: full hierarchical model with joint
-probability–latency coupling, per-slice Dirichlet, and completeness-adjusted
-likelihoods.
+**Phased delivery**: see `8-compiler-implementation-phases.md` for full
+phase definitions, entry/exit criteria, warm-start rules by phase, and
+cross-phase feature activation. Summary:
+- Phase A: independent Beta per edge with window/cohort separation —
+  proves full pipeline end-to-end (includes schema revision for
+  `posterior.slices`, `_model_state`, DSL canonicalisation)
+- Phase B: Dirichlet branch groups (sibling coupling)
+- Phase C: slice pooling + hierarchical Dirichlet
+- Phase D: probability–latency coupling through completeness
+- Phase E (optional): per-chain fan-out across workers
 
 **Design detail**: Logical blocks (compiler, hierarchy, IR), Reference impl
 (PyMC patterns), Compiler + worker (implementation).
@@ -219,33 +284,204 @@ likelihoods.
 Benefits from Semantic foundation (cleaner FE derivation) but can start without
 it.
 
-The FE uses posterior distributions for richer analysis and display.
+The FE uses posterior distributions for richer analysis and display. This is
+not a single milestone — it progresses in lockstep with the compiler phases,
+because each phase's outputs need FE visibility for validation.
 
-**Scope** (not yet designed in detail):
-- Confidence bands on graph edges from Beta posterior quantiles (replacing
-  current standard-error approximation)
-- Fan charts in cohort analysis consuming posterior interval data
+### FE overlay — model curves alongside analytic curves
+
+The core validation mechanism: existing analysis types (cohort maturity,
+conversion analysis, asat) already produce analytic curves from deterministic
+logic. The Bayesian model produces probabilistic versions of the same
+quantities. Rendering both side-by-side is how we confirm the model is useful.
+
+**Phase A overlay**:
+- **Edge-level posterior display**: window Beta posterior mean + HDI on
+  each edge in the graph view (top-level `posterior.alpha`/`beta`).
+  Compare against the existing point estimate (which comes from the raw
+  `k/n` ratio or the FE fitted value).
+- **Confidence bands**: HDI-derived bands replacing the current
+  standard-error approximation.
+- **Window/cohort divergence indicator**: where both observation types
+  have posteriors (in `posterior.slices`), surface the divergence as a
+  diagnostic — a large gap signals temporal volatility in conversion
+  performance.
+- This is the minimum required to visually validate Phase A.
+
+**Phase B overlay**:
+- **Simplex visualisation**: branch group siblings shown with their
+  Dirichlet-derived posteriors. Verify `Σ p_i ≤ 1` visually.
+- **Branch group quality**: surface branch-group-level diagnostics
+  (any sibling with poor r-hat flags the group).
+
+**Phase C overlay**:
+- **Per-slice posterior bands**: each context slice shown with its own
+  posterior interval. Verify shrinkage is visible (low-data slices
+  tighter toward base rate than the raw estimate would suggest).
+
+**Phase D overlay**:
+- **Latency CDF overlay on cohort maturity**: the model's completeness
+  CDF (from latent latency posteriors) rendered alongside the existing
+  analytic maturity curve. This is the key validation for the
+  probability–latency coupling — if the model's predicted maturation
+  shape doesn't match the observed data, the latency model needs work.
+- **Posterior-predicted maturation**: for a given cohort, the model can
+  predict the maturation curve at different cohort ages. Overlay the
+  predicted curve against the actual observed maturation from later
+  snapshots.
+
+### Fit quality visualisation
+
+Surface per-edge (and per-slice) quality metrics in the graph UI:
+- Edge colour-coding by `evidence_grade` or `rhat`
+- Quality overlay mode
+- Warnings on poorly identified edges
+- Prior cascade tier indicator (is this edge running on direct history,
+  inherited evidence, or an uninformative prior?)
+
+Per-edge quality is already stored in parameter files (`posterior.ess`,
+`posterior.rhat`, `posterior.evidence_grade`); graph-level summary is in
+`_bayes.quality`. Per-slice quality metrics are available via
+`posterior.slices` — each slice entry carries `ess`, `rhat`, and
+`divergences` (see doc 4 schema revision).
+
+### Other consumption features
+
 - Posterior-powered queries ("is this conversion rate within the 90% HDI?")
+- Fan charts in cohort analysis consuming posterior interval data
 - Nightly scheduling (cron trigger for automated fits)
+
+### Backtesting and model validation
+
+**Depends on**: Bayesian inference Phase A (posteriors in YAML files) +
+`fit_history` populated across multiple runs + snapshot DB with historical
+evidence.
+
+Systematic evaluation of model predictive accuracy by comparing
+historical posteriors against later-observed evidence. This is the path
+from "we have a Bayesian model" to "we have a validated, improving model."
+
+**What it measures**:
+- **Calibration**: when the model says 90% HDI, does reality fall within
+  that interval ~90% of the time? Overcoverage = underconfident (model
+  could be tighter). Undercoverage = overconfident (priors too tight,
+  wrong family, missing structure).
+- **Log predictive density**: for each held-out observation, how surprised
+  was the model? Aggregated across edges and dates, this gives a single
+  score for comparing model configurations.
+- **Latency forecast accuracy**: the model predicts cohort maturation
+  curves via the completeness CDF. Later snapshots reveal the actual
+  maturation shape. The discrepancy directly measures latency model
+  quality.
+- **Surprise calibration**: are the trajectory z-scores (from doc 6,
+  trajectory-calibrated priors) actually well-calibrated? Do flagged
+  surprises correspond to real regime changes?
+
+**What it enables for model improvement**:
+- Distribution family selection (shifted-lognormal vs Gamma vs mixture —
+  which has better predictive density on held-out data?)
+- Prior policy evaluation (does trajectory calibration outperform
+  uninformative? Does evidence inheritance help?)
+- Structural model comparison (Phase A independent vs Phase B Dirichlet
+  vs Phase D coupled — which generalises better?)
+- Model rot detection (calibration degrading over time = something
+  changed in the product, market, or data pipeline)
+
+**Infrastructure**: `fit_history` provides historical posteriors.
+`asat()` and the snapshot DB provide historical evidence. The serialisable
+IR means the evidence binder can re-bind against historical snapshots
+without re-running MCMC — backtesting is an evaluation loop over existing
+data, not a compute-intensive operation.
+
+**Not required for initial delivery.** This is a future programme step
+that becomes valuable once the model is producing real posteriors across
+multiple runs. Design detail to be written post-Phase A.
 
 **Design detail**: to be written when Bayesian inference is near completion.
 
 ---
 
-## Open questions (programme-level)
+## Open decisions
 
-- **Parallelism within Semantic foundation**: can Python model ownership start
-  before Evaluator unification is fully complete? The Model contract implies
-  sequential but the codepaths may be separable.
-- ~~**Evidence assembly strategy**~~: **Resolved.** FE sends parameter file
-  contents in the submit request (long-established pattern). Worker receives
-  graph + param files + snapshot DB coordinates in a single payload.
-- ~~**Bayesian inference scope**~~: **Resolved 17-Mar-26.** Phased delivery
-  starting with independent Beta (Phase A) before hierarchical Dirichlet
-  (Phases B–D). See `6-compiler-and-worker-pipeline.md`.
-- ~~**Vendor selection timing**~~: no longer blocked — async infra Steps 1–3
-  are done, vendor setup can proceed immediately.
-- ~~**Bayesian inference dependency on Semantic foundation**~~: **Resolved
-  17-Mar-26.** No hard dependency. Compiler reads evidence from graph + param
-  files + snapshot DB, all already populated. Semantic foundation improves
-  consumption, not production.
+Genuinely unresolved design and architecture decisions. Grouped by
+criticality relative to the delivery sequence.
+
+### Critical path — blocks Phase A delivery
+
+**Upstream onset isn't persisted**
+
+Doc 1 §10.4 recommends deriving and persisting `anchor_onset_delta_days`
+from the anchor lag histogram at fetch time. Currently not implemented —
+the histogram is fetched then discarded, and the onset scalar is only
+available for X→Y edges, not upstream A→X legs. The compiler needs
+edge-level onset for `path_delta = Σ(edge onsets)`. Without it,
+path-level completeness falls back to onset = 0, biasing the CDF.
+
+Prerequisite for correct path composition in Phase A.
+
+**No FE overlay spec exists**
+
+Programme.md describes *what* each phase overlay shows but not *how* —
+no component specs, no chart builder changes, no PropertiesPanel
+integration, no analysis view modifications. Blocked by the application
+locus decision above. Needs its own design doc (doc 9).
+
+### Known limitations (not decisions — implementation will address when relevant)
+
+**Downstream conditional data**: the data pipeline only fetches
+condition-sliced observations on the conditional params themselves, not
+on downstream edges. Downstream propagation of conditionals (post-Phase
+C) requires extending the data pipeline. See doc 6 §conditional
+probabilities (Layer 1).
+
+**Snapshot DB topology invalidation**: topology changes invalidate
+cohort datasets downstream (path structure has changed). Window datasets
+survive (single-hop). The signature hash system needs to handle this.
+Review against `../project-db/` design docs and doc 10 (topology
+signatures) when relevant.
+
+### Resolved
+
+- ~~Vendor selection~~: **Modal.** Worker in `bayes/app.py`.
+- ~~Shared package evolution~~: Modal uploads local code; no separate
+  pip package needed.
+- ~~Webhook authentication~~: **Built.** AES-256-GCM encrypted callback
+  token. See `api/bayes-webhook.ts`.
+- ~~Commit granularity~~: **Built.** Per-batch atomic commit via Git
+  Data API. See `api/_lib/git-commit.ts`.
+- ~~Graph snapshot at submission~~: **Built.** FE sends full graph +
+  param files inline. See `hooks/useBayesTrigger.ts`.
+- ~~Dirty file conflicts~~: **Accepted as known limitation.** User
+  resolves via existing merge flow.
+- ~~Evidence assembly strategy~~: **Resolved.** FE sends param file
+  contents in submit request.
+- ~~Bayesian inference scope~~: **Resolved 17-Mar-26.** Phased A→E.
+- ~~Bayesian inference dependency on Semantic foundation~~: **Resolved
+  17-Mar-26.** No hard dependency.
+- ~~Exhaustiveness policy~~: **Resolved in doc 6.** Per-node metadata
+  flag.
+- ~~Pooling granularity~~: **Resolved in doc 6.** Per-edge `τ`.
+- ~~Latency composition strategy~~: **Resolved in doc 6.**
+  Fenton-Wilkinson (differentiable).
+- ~~Conditional probability interaction~~: **Resolved 17-Mar-26 in
+  doc 6.** Separate simplexes per condition per branch group.
+- ~~Artefact schema~~: **Resolved in doc 4.** Full posterior schema.
+- ~~Multi-file commit atomicity~~: **Resolved in doc 3.** Git Data API.
+- ~~Warm-start storage~~: **Parameter file YAML.** Previous posterior's
+  `(alpha, beta)` with ESS cap. See doc 8 Phase A.
+- ~~Semantic foundation parallelism~~: **Separable.** Python model
+  ownership can start on edges that don't depend on evaluator
+  unification.
+- ~~Application locus~~: **Resolved 17-Mar-26.** Three-tier model:
+  Modal does MCMC inference → posteriors to YAML; BE analysis runners
+  continue analytic lognormal fitting and path composition; FE retains
+  only trivial application code (Beta CDF, mean, HDI from published
+  α/β/μ/σ — tens of lines, not thousands). FE is source-agnostic:
+  derives display quantities from whatever params are in the files,
+  regardless of whether they came from analytic fitting or MCMC.
+  Posture 2 (FE applies from published params) for Phases A–C;
+  posture 3 (hybrid) becomes relevant at Phase D if path-level
+  Fenton-Wilkinson composition proves too complex for TS. The BE
+  analytic pipeline remains as instant fallback for edges without
+  posteriors; `posterior.provenance` distinguishes source.
+  Design detail: doc 1 §14, §21–22; doc 9 §6.

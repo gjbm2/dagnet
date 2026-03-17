@@ -12,6 +12,7 @@ import type { AlignCommand, DistributeCommand, EqualSizeCommand } from '../../se
  * - Add Node / Add Post-It / Add Container
  * - Delete Selected
  * - Align / Distribute (submenu)
+ * - Auto Layout (submenu: LR, RL, TB, BT)
  * - Sync Index from Graph
  *
  * Only visible when a graph tab in interactive mode is active
@@ -58,6 +59,10 @@ export function ElementsMenu() {
 
   const handleEqualSize = (command: EqualSizeCommand) => {
     window.dispatchEvent(new CustomEvent('dagnet:equalSize', { detail: { command } }));
+  };
+
+  const handleAutoLayout = (direction: 'LR' | 'RL' | 'TB' | 'BT') => {
+    window.dispatchEvent(new CustomEvent('dagnet:autoLayout', { detail: { direction } }));
   };
 
   const handleSyncIndex = () => {
@@ -159,6 +164,43 @@ export function ElementsMenu() {
                   </Menubar.Item>
                   <Menubar.Item className="menubar-item" onSelect={() => handleEqualSize('equal-height')}>
                     Make Equal Height
+                  </Menubar.Item>
+                </Menubar.SubContent>
+              </Menubar.Portal>
+            </Menubar.Sub>
+
+            <Menubar.Separator className="menubar-separator" />
+
+            <Menubar.Sub>
+              <Menubar.SubTrigger className="menubar-item">
+                Auto Layout
+                <div className="menubar-right-slot">›</div>
+              </Menubar.SubTrigger>
+              <Menubar.Portal>
+                <Menubar.SubContent className="menubar-content" alignOffset={-5}>
+                  <Menubar.Item
+                    className="menubar-item"
+                    onSelect={() => handleAutoLayout('LR')}
+                  >
+                    Left-to-right
+                  </Menubar.Item>
+                  <Menubar.Item
+                    className="menubar-item"
+                    onSelect={() => handleAutoLayout('RL')}
+                  >
+                    Right-to-left
+                  </Menubar.Item>
+                  <Menubar.Item
+                    className="menubar-item"
+                    onSelect={() => handleAutoLayout('TB')}
+                  >
+                    Top-to-bottom
+                  </Menubar.Item>
+                  <Menubar.Item
+                    className="menubar-item"
+                    onSelect={() => handleAutoLayout('BT')}
+                  >
+                    Bottom-to-top
                   </Menubar.Item>
                 </Menubar.SubContent>
               </Menubar.Portal>

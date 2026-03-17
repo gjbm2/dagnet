@@ -8,47 +8,59 @@ DagNet is a visual graph editor for designing and analysing conversion funnels, 
 
 > ## Independent Assessment
 >
-> *In December 2025, the developer asked Claude (Anthropic) to evaluate the project's sophistication, depth, and quality after exploring the full codebase. Below is an abridged version of that assessment.*
+> *In March 2026, the developer asked Claude (Anthropic) to evaluate the project's sophistication, depth, and quality after exploring the full codebase — repeating the exercise first performed in December 2025. Below is an abridged version of that assessment.*
 >
 > ### Summary
 >
-> DagNet is a **professional-grade analytical tool**—not a hobby project or proof-of-concept, but a production-ready application representing substantial thoughtful design and implementation across approximately **150,000 lines of code**.
+> DagNet has grown from a **professional-grade analytical tool** into a **research-grade probabilistic inference platform** — one that combines visual graph editing, time-series snapshot storage, live charting, and (with Project Bayes) hierarchical Bayesian modelling under a single coherent architecture. Across approximately **320,000 lines of TypeScript and 24,500 lines of Python**, the codebase now spans four major subsystems that did not exist three months ago: a snapshot database with temporal query semantics, a freeform canvas workspace, an embedded charting engine, and a Bayesian inference pipeline with its own compiler IR, Modal deployment harness, and cryptographic webhook roundtrip.
 >
-> ### Sophistication (9/10)
+> ### Sophistication (9.5/10, up from 9)
 >
-> The project tackles a genuinely difficult problem: **probabilistic DAG analytics with temporal dynamics**. The recently-completed "Project LAG" (Latency-Aware Graphs) represents a conceptual leap from static probability snapshots to time-indexed flow models:
+> The December assessment noted the MSMDC algorithm and LAG forecasting as markers of genuine algorithmic depth. Both remain, but the codebase has since added:
 >
-> - Survival/lag distributions fitted from daily cohort data
-> - Cohort maturation curves with evidence vs. forecast separation
-> - Convolution of latencies across the DAG for time-indexed projections
+> - A **Bayesian compiler architecture** with a formally specified intermediate representation — topology analysis, bound evidence, and model fingerprinting — designed to be engine-independent (not coupled to PyMC). The per-slice hierarchical Dirichlet pattern addresses a subtle modelling problem that most applied Bayesian tools sidestep entirely.
+> - **Probability–latency coupling**: the design for Phase D jointly infers conversion probability and time-to-event latency, using completeness CDFs as the bridge — distinguishing "low conversion rate" from "slow conversion."
+> - **Snapshot DB with `asat()` semantics**: point-in-time virtual snapshots materialised from a temporal log of retrievals, with signature equivalence closure handling semantically identical but textually different query DSLs.
+> - **AES-GCM credential roundtrip**: the Bayes webhook flow encrypts GitHub credentials into the callback payload using PBKDF2-derived keys, so no secrets are stored in the compute layer.
 >
-> The **MSMDC algorithm** (Minimal Set of Maximally Discriminating Constraints) demonstrates genuine algorithmic thinking—witness-guided constraint generation without full path enumeration. The Query DSL is thoughtfully designed with composable, order-independent semantics.
+> The conceptual leap since December is the move from **analytic computation** (closed-form probabilities, fitted distributions) to **inference** (posterior estimation with convergence diagnostics, warm-start eligibility, trajectory calibration). The former answers "what does the data say?"; the latter answers "what should we believe, given the data and the model structure?"
 >
-> ### Depth (9/10)
+> ### Depth (9.5/10, up from 9)
 >
-> The service architecture demonstrates mature software engineering:
+> The service layer has grown from 48+ modules to **155 non-test service files**. Key additions since December:
 >
-> - **48+ service modules** covering data operations, Git integration, graph analysis, statistical enhancement, and state management
-> - **Type definitions** (860+ lines) showing careful domain modelling with evidence, forecast, and latency structures
-> - **Python Pydantic models** mirroring TypeScript types with explicit schema parity testing
-> - **Offline-first architecture** with IndexedDB persistence, workspace cloning, and conflict resolution
+> - **Snapshot DB**: Write/read/inventory/coverage services; Python backend with 2,500+ lines of integration tests
+> - **Bayes pipeline**: Inference engine, Modal harness, local dev worker, FE submission client, webhook handler
+> - **Canvas elements**: Creation/mutation services for analyses, post-its, containers; group-resize with snap
+> - **Chart rendering**: 5 ECharts builder modules (bridge, cohort, funnel, snapshot, common) totalling 120+ KB
+> - **Automation**: Daily orchestration with Web Locks cross-tab exclusion, UK day-boundary scheduling
+> - **Sharing**: Dependency-closure boot with dual-pass context resolution, blob SHA deduplication, tree-based fetch
+> - **Staleness**: Multi-signal nudge engine with share-live auto-refresh countdown, scoped snoozing
 >
-> ### Quality (8.5/10)
+> Type definitions have grown to 1,115 lines. The Python backend has matured to 24,500 lines covering graph types (Pydantic), MSMDC, query DSL, snapshot service, Bayesian inference, and Modal deployment. The test infrastructure now comprises 319 Vitest files plus 24 Playwright E2E specs.
 >
-> Documentation is exceptional: a 3,300-line design document for Project LAG, comprehensive changelog, and user-facing guides. The codebase follows clear separation of concerns with centralised service logic, single sources of truth, and override tracking patterns.
+> ### Quality (9/10, up from 8.5)
+>
+> The service-oriented pattern has been rigorously maintained as the codebase doubled in size. The CLAUDE.md guidelines (861 lines) have evolved into a comprehensive engineering constitution — mock discipline, assertion quality standards, test design gates, and risk assessment protocols that would be unusual even in mature commercial codebases. Newer React components demonstrate sophisticated understanding of performance pitfalls: selective Zustand subscriptions, ref-based context reads to avoid re-render cascading, and inverse-zoom compensation. The Bayes webhook roundtrip uses production-grade cryptography (AES-GCM, PBKDF2 key derivation, time-bounded tokens). The daily automation service implements version-safety checks, single-retry with pull-before-commit, and Web Locks API for cross-tab exclusion.
 >
 > ### Notable Technical Highlights
 >
-> 1. **Provider Abstraction**: Data adapter system supporting Amplitude, Google Sheets, and PostgreSQL with capability detection
-> 2. **Scenario System**: Parameter overlays with live composition and visibility modes
+> 1. **Provider Abstraction**: Data adapter system supporting Amplitude, Google Sheets, and PostgreSQL
+> 2. **Scenario System**: Now with tristate mode cycling (live → custom → fixed), canvas-embedded rendering, and share-payload integrity
 > 3. **MSMDC Query Generation**: Automatic optimal query construction from graph topology
 > 4. **LAG Forecasting**: Cohort maturation model with completeness-weighted blending
+> 5. **Snapshot Database**: Temporal query engine with `asat()` semantics and signature equivalence closure
+> 6. **Bayesian Compiler IR**: Five-phase compiler design with deterministic model fingerprinting and warm-start eligibility
+> 7. **Canvas Workspace**: Post-its, containers, and live-updating embedded analysis charts
+> 8. **Cryptographic Webhook Roundtrip**: AES-GCM encrypted credential tokens enabling stateless serverless compute callbacks
+> 9. **Daily Automation**: Cross-tab orchestration with Web Locks, version safety, and UK day-boundary scheduling
+> 10. **Live Sharing**: Dependency-closure boot with dual-pass context resolution and blob SHA deduplication
 >
 > ### Conclusion
 >
-> *"The combination of mathematical rigour (probability theory, graph algorithms), clean architecture (service layer, type safety, testing), comprehensive documentation, and modern tooling places this firmly in the category of sophisticated domain-specific applications rather than typical CRUD web apps. If this were a commercial product, it would compete with enterprise analytics tools."*
+> *"Three months ago, this was a sophisticated domain-specific application that happened to include some statistical computation. Today it is evolving into something rarer: a visual probabilistic programming environment — one where graph topology defines model structure, evidence flows in from external data sources, and Bayesian inference produces posterior beliefs that feed back into the same visual workspace. The combination of temporal storage, freeform canvas, embedded analytics, and hierarchical Bayesian modelling under a coherent service architecture is genuinely unusual. I am not aware of a direct analogue in open-source or commercial tooling that unifies all four."*
 >
-> — Claude (Opus 4.5), December 2025
+> — Claude (Opus 4.6), March 2026
 
 ---
 
@@ -148,9 +160,9 @@ DagNet is a visual graph editor for designing and analysing conversion funnels, 
 
 ## Version Information
 
-- **App version**: 1.2.9b (from `graph-editor/package.json`: `1.2.9-beta`)
+- **App version**: 1.7.21b (from `graph-editor/package.json`: `1.7.21-beta`)
 - **Release notes**: See `docs/CHANGELOG.md` (Help → Current Version)
-- **This page last updated**: 15-Jan-26
+- **This page last updated**: 17-Mar-26
 - **License**: MIT
 - **Repository**: [github.com/gjbm2/dagnet](https://github.com/gjbm2/dagnet)
 

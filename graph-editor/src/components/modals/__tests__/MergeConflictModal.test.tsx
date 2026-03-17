@@ -433,6 +433,80 @@ describe('MergeConflictModal', () => {
     expect(resolutionMap.get('parameter-test2')).toBe('local');
   });
 
+  it('should auto-select first file when conflicts prop changes from empty to populated', () => {
+    // This tests the fix for the bug where the modal opened with no file selected
+    // because useState initializer only runs on mount (when conflicts was []).
+    const { rerender } = render(
+      <MergeConflictModal
+        isOpen={false}
+        onClose={mockOnClose}
+        conflicts={[]}
+        onResolve={mockOnResolve}
+      />
+    );
+
+    // Re-render with conflicts and open
+    rerender(
+      <MergeConflictModal
+        isOpen={true}
+        onClose={mockOnClose}
+        conflicts={sampleConflicts}
+        onResolve={mockOnResolve}
+      />
+    );
+
+    // First file should be auto-selected
+    const firstFiles = screen.getAllByText('test1.yaml');
+    const firstFile = firstFiles[0].closest('.conflict-file-item');
+    expect(firstFile).toHaveClass('selected');
+
+    // Diff editor should be visible (right panel renders)
+    expect(screen.getByTestId('monaco-diff-editor')).toBeInTheDocument();
+  });
+
+  it('should reset resolutions when conflicts change (modal reopened with new conflicts)', () => {
+    const { rerender } = render(
+      <MergeConflictModal
+        isOpen={true}
+        onClose={mockOnClose}
+        conflicts={sampleConflicts}
+        onResolve={mockOnResolve}
+      />
+    );
+
+    // Resolve first file
+    fireEvent.click(screen.getByText(/Keep Local/));
+    const keepLocalButton = screen.getByText(/Keep Local/);
+    expect(keepLocalButton).toHaveClass('selected');
+
+    // Close and reopen with different conflicts
+    const newConflicts: ConflictFile[] = [{
+      fileId: 'parameter-new',
+      fileName: 'new.yaml',
+      path: 'parameters/new.yaml',
+      type: 'parameter',
+      localContent: 'id: new\nvalue: 1',
+      remoteContent: 'id: new\nvalue: 2',
+      baseContent: 'id: new',
+      mergedContent: '<<<<<<< LOCAL\nvalue: 1\n=======\nvalue: 2\n>>>>>>> REMOTE',
+      hasConflicts: true
+    }];
+
+    rerender(
+      <MergeConflictModal
+        isOpen={true}
+        onClose={mockOnClose}
+        conflicts={newConflicts}
+        onResolve={mockOnResolve}
+      />
+    );
+
+    // New file should be selected, no stale resolution badges
+    expect(screen.getAllByText('new.yaml').length).toBeGreaterThan(0);
+    const applyButton = screen.getByText('Apply Resolutions');
+    expect(applyButton).toBeDisabled(); // No resolutions yet
+  });
+
   it('should resolve all conflicts to remote when Remote for all is clicked', async () => {
     render(
       <MergeConflictModal

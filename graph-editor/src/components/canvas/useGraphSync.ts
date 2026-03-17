@@ -16,7 +16,7 @@ import { useCallback, useEffect, useRef } from 'react';
 import type { MutableRefObject } from 'react';
 import type { Edge, Node } from 'reactflow';
 
-import { createSyncGuards } from './syncGuards';
+import { createSyncGuards, bindSyncGuards } from './syncGuards';
 import type { SyncGuards } from './syncGuards';
 import { toFlow, fromFlow } from '@/lib/transform';
 import {
@@ -175,6 +175,10 @@ export function useGraphSync(params: UseGraphSyncParams): UseGraphSyncReturn {
     sankeyUpdatingRef,
   });
 
+  // Bind module-level singleton so node components can call beginResizeGuard/endResizeGuard
+  // directly without needing callbacks threaded through ReactFlow node data.
+  bindSyncGuards(guards);
+
   const isEffectsCooldownActive = guards.isEffectsCooldownActive;
 
   // -------------------------------------------------------------------------
@@ -200,8 +204,14 @@ export function useGraphSync(params: UseGraphSyncParams): UseGraphSyncReturn {
   // handleResizeStart / handleResizeEnd
   // -------------------------------------------------------------------------
 
-  const handleResizeStart = useCallback(() => { guards.beginInteraction('resize'); }, []);
-  const handleResizeEnd = useCallback(() => { guards.endInteraction('resize'); }, []);
+  const handleResizeStart = useCallback(() => {
+    if (import.meta.env.DEV) console.log('[useGraphSync] handleResizeStart → beginInteraction(resize)');
+    guards.beginInteraction('resize');
+  }, []);
+  const handleResizeEnd = useCallback(() => {
+    if (import.meta.env.DEV) console.log('[useGraphSync] handleResizeEnd → endInteraction(resize)');
+    guards.endInteraction('resize');
+  }, []);
 
   // -------------------------------------------------------------------------
   // Event listeners
@@ -666,7 +676,15 @@ export function useGraphSync(params: UseGraphSyncParams): UseGraphSyncReturn {
                   onDelete: handleDeleteAnalysis,
                   onResizeStart: handleResizeStart,
                   onResizeEnd: handleResizeEnd,
-                } : prevData,
+                } : {
+                  ...prevData,
+                  // Always ensure resize callbacks are present — they can be lost when
+                  // type:'reset' changes (from SelectionConnectors halo setNodes) round-trip
+                  // through nodeInternals → getNodes() → applyNodeChanges, because functions
+                  // don't survive JSON-like operations in the controlled mode pipeline.
+                  onResizeStart: handleResizeStart,
+                  onResizeEnd: handleResizeEnd,
+                },
               };
             }
             const graphNode = graph.nodes.find((n: any) => n.uuid === prevNode.id || n.id === prevNode.id);

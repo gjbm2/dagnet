@@ -1299,8 +1299,13 @@ export function ScenariosProvider({ children, fileId, tabId }: ScenariosProvider
         if (!workingScenario.meta) workingScenario.meta = {};
         workingScenario.meta.lastEffectiveDSL = effective;
         
-        // 3. Trigger actual regeneration with visibleOrder
-        await regenerateScenario(scenario.id, undefined, effectiveBase, workingScenarios, visibleOrder);
+        // 3. Trigger actual regeneration with visibleOrder.
+        // CRITICAL: Never allow source fetches from regenerateAllLive — this is called
+        // from workspace-files-changed (pull) and topology-change handlers where automatic
+        // Amplitude fetches would be unexpected and unauthorised.
+        await regenerateScenario(scenario.id, undefined, effectiveBase, workingScenarios, visibleOrder, {
+          allowFetchFromSource: false,
+        });
         successCount++;
         
       } catch (err) {

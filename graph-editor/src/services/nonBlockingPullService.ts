@@ -27,8 +27,8 @@ export interface NonBlockingPullOptions {
   onComplete?: () => void;
   /** Called when user cancels the countdown (e.g. to dismiss the remote SHA). */
   onDismiss?: () => void;
-  /** Called when pull completes with merge conflicts, passing the conflict data for modal display. */
-  onConflicts?: (conflicts: any[]) => void;
+  /** Called when pull completes with merge conflicts, passing the conflict data and operation ID for modal display. */
+  onConflicts?: (conflicts: any[], opId: string) => void;
 }
 
 /** Active pull state — prevents duplicate triggers. */
@@ -201,7 +201,7 @@ async function executePull(opId: string, opts: NonBlockingPullOptions): Promise<
 
       // Build action button for the toast — opens the conflict resolution modal.
       const action = opts.onConflicts
-        ? { label: 'Resolve conflicts', onClick: () => opts.onConflicts!(conflicts) }
+        ? { label: 'Resolve conflicts', onClick: () => opts.onConflicts!(conflicts, opId) }
         : undefined;
 
       operationRegistryService.complete(
@@ -211,6 +211,9 @@ async function executePull(opId: string, opts: NonBlockingPullOptions): Promise<
         action,
       );
 
+      // Clean up so future auto-pulls aren't blocked by the stale activePullOpId.
+      cleanup();
+
       // Dismiss the remote SHA so staleness detection won't re-trigger a pull
       // for this SHA. The pull was attempted; conflicts need manual resolution.
       // Without this, maybePrompt() sees gitPullDue=true again immediately
@@ -218,8 +221,8 @@ async function executePull(opId: string, opts: NonBlockingPullOptions): Promise<
       // starts another pull → conflicts → pull → infinite loop.
       opts.onDismiss?.();
 
-      // Also call the callback immediately so the modal opens without waiting for user click.
-      opts.onConflicts?.(conflicts);
+      // Non-blocking auto-pull must not hijack the screen. Users open the
+      // conflict modal via the toast action when they choose.
 
       sessionLogService.warning(
         'session',

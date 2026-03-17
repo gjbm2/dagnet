@@ -102,8 +102,26 @@ path model, which is the convolution of all upstream edge latencies along the
 path.
 
 The relationship between the two modes is not merely structural — it is
-**informational**. Recent window() conversions inform future expectations for
-cohort() performance on the same edge. The model must account for both.
+**informational and temporally distinct**. Two effects drive the
+distinction:
+
+1. **Temporal spread (diffusion)**: cohort members arrive at X spread
+   across the A→X path latency (potentially 100+ days). Even with stable
+   underlying conversion, convolving over this arrival distribution widens
+   the cohort outcome distribution relative to a temporally localised
+   window observation.
+
+2. **Temporal shift (real drift)**: conversion rates genuinely move over
+   time. Window captures the current rate; cohort reflects a historical
+   blend. This divergence is a valuable signal — it indicates how much
+   performance has shifted since the cohort was assembled.
+
+Window and cohort are therefore **related but distinct distributions**, not
+different views of an invariant `p_XY`. Any correct model must account for
+both effects — how it does so is a design decision (see doc 6 Layer 3),
+but the domain constraint is that window and cohort cannot share a single
+probability parameter. Recent window() conversions are the best early
+signal for adjusting cohort() expectations (window as canary).
 
 ---
 
@@ -503,11 +521,34 @@ In cohort() mode, non-latency edges downstream of latency edges still need a
 distribution. At minimum an onset (implying a degenerate/sharp distribution).
 This is acknowledged but not yet implemented.
 
-### 11.4 Window-cohort informational relationship
+### 11.4 Window-cohort relationship: domain constraints
 
-window() and cohort() observations on the same edge are logically associated.
-Recent window() conversions inform future cohort() expectations. The Bayesian
-model should leverage both evidence sources, not treat them independently.
+window() and cohort() observations on the same edge are related but
+**not views of an invariant distribution**. They differ in two ways:
+
+1. **Temporal spread (diffusion)**: cohort members arrive at X spread across
+   the A→X path latency (potentially 100+ days). Even with stable conversion
+   rates, the convolution over this arrival distribution widens the cohort
+   outcome distribution relative to a temporally localised window observation.
+
+2. **Temporal shift (real drift)**: conversion rates genuinely move over time.
+   Window captures the current rate; cohort reflects a historical blend. This
+   divergence is a valuable forecasting signal — it indicates how much
+   conversion performance has shifted since the cohort was assembled.
+
+**Domain constraints on any modelling approach**:
+- Window and cohort must have separate probability parameters (they are
+  distinct distributions).
+- The model must structurally relate them (they are not independent — they
+  measure the same underlying process at different temporal blends).
+- The permissible divergence between them should scale with the path's
+  temporal spread (longer paths → more diffusion → more divergence expected).
+- Latency parameters (`mu_XY`, `sigma_XY`) are shared (latency is a physical
+  property of the edge, not observation-type-dependent).
+- Window data is the best early canary for future cohort performance — the
+  model should encode this directional relationship.
+
+See doc 6 Layer 3 for the chosen modelling approach.
 
 ### 11.5 Snapshot DB as primary evidence source
 

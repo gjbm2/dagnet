@@ -8,7 +8,7 @@ import React, { useState, useRef, useEffect, useLayoutEffect } from 'react';
 import { dataOperationsService } from '../services/dataOperationsService';
 import { fileOperationsService } from '../services/fileOperationsService';
 import { extractSubgraph, createGraphFromSubgraph, generateSubgraphName } from '../lib/subgraphExtractor';
-import { Folders, TrendingUpDown, ChevronRight, Share2, Database, DatabaseZap, Copy, Scissors, Clipboard, BarChart3, Settings, ClipboardCopy, Eye, EyeOff, Trash2, AlignStartVertical, AlignEndVertical, AlignStartHorizontal, AlignEndHorizontal, AlignCenterHorizontal, AlignCenterVertical, AlignHorizontalDistributeCenter, AlignVerticalDistributeCenter, MoveHorizontal, MoveVertical } from 'lucide-react';
+import { Folders, TrendingUpDown, ChevronRight, Share2, Database, DatabaseZap, Copy, Scissors, Clipboard, BarChart3, Settings, ClipboardCopy, Eye, EyeOff, Trash2, AlignStartVertical, AlignEndVertical, AlignStartHorizontal, AlignEndHorizontal, AlignCenterHorizontal, AlignCenterVertical, AlignHorizontalDistributeCenter, AlignVerticalDistributeCenter, MoveHorizontal, MoveVertical, LayoutGrid } from 'lucide-react';
 import '../styles/popup-menu.css';
 import { RemoveOverridesMenuItem } from './RemoveOverridesMenuItem';
 import { fileRegistry } from '../contexts/TabContext';
@@ -1010,6 +1010,52 @@ export const NodeContextMenu: React.FC<NodeContextMenuProps> = ({
                   </div>
                 </>
               )}
+            </div>
+          )}
+        </>
+      )}
+
+      {/* Auto Layout (multi-select) */}
+      {isMultiSelect && (
+        <>
+          <div className="dagnet-popup-divider" />
+          <div
+            className={`dagnet-popup-item${openSubmenu === 'autoLayout' ? ' dagnet-popup-item--active' : ''}`}
+            onMouseEnter={() => handleSubmenuEnter('autoLayout')}
+            onMouseLeave={handleSubmenuLeave}
+            style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'default' }}
+          >
+            <LayoutGrid size={14} />
+            Auto Layout
+            <span className="dagnet-popup-arrow">›</span>
+          </div>
+          {openSubmenu === 'autoLayout' && (
+            <div
+              className="dagnet-popup dagnet-popup--submenu"
+              style={{
+                position: 'absolute',
+                left: '100%',
+                marginLeft: '4px',
+                top: 'auto',
+                marginTop: -30,
+                zIndex: 10001,
+                whiteSpace: 'nowrap',
+              }}
+              onMouseEnter={handleSubmenuContentEnter}
+              onMouseLeave={handleSubmenuContentLeave}
+            >
+              <div className="dagnet-popup-item" onClick={(e) => { e.stopPropagation(); window.dispatchEvent(new CustomEvent('dagnet:autoLayout', { detail: { direction: 'LR' } })); onClose(); }}>
+                Left-to-right
+              </div>
+              <div className="dagnet-popup-item" onClick={(e) => { e.stopPropagation(); window.dispatchEvent(new CustomEvent('dagnet:autoLayout', { detail: { direction: 'RL' } })); onClose(); }}>
+                Right-to-left
+              </div>
+              <div className="dagnet-popup-item" onClick={(e) => { e.stopPropagation(); window.dispatchEvent(new CustomEvent('dagnet:autoLayout', { detail: { direction: 'TB' } })); onClose(); }}>
+                Top-to-bottom
+              </div>
+              <div className="dagnet-popup-item" onClick={(e) => { e.stopPropagation(); window.dispatchEvent(new CustomEvent('dagnet:autoLayout', { detail: { direction: 'BT' } })); onClose(); }}>
+                Bottom-to-top
+              </div>
             </div>
           )}
         </>

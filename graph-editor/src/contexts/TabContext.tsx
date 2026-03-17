@@ -310,13 +310,19 @@ class FileRegistry {
     file.syncOrigin = opts?.syncOrigin;
     const wasDirty = file.isDirty;
     
-    // Simple dirty detection: if content changed from original, it's dirty. Period.
-    // No exceptions - every change marks dirty. The user explicitly wants this.
-    file.isDirty = newDataStr !== originalDataStr;
-    
-    // If this is the first real change during initialization, complete init now
-    if (file.isInitializing && file.isDirty) {
-      file.isInitializing = false;
+    // Dirty detection: content changed from original → dirty.
+    // During initialisation, absorb normalisation changes (editor adds defaults,
+    // sorts keys, etc.) by updating originalData to match.  This prevents
+    // normalisation drift from accumulating false "dirty" state that later
+    // triggers the fragile text-based 3-way merge path on pull.
+    if (file.isInitializing) {
+      if (newDataStr !== originalDataStr) {
+        // Normalisation change during init — absorb it as the new baseline.
+        file.originalData = structuredClone(newData);
+        file.isDirty = false;
+      }
+    } else {
+      file.isDirty = newDataStr !== originalDataStr;
     }
     
     file.lastModified = Date.now();

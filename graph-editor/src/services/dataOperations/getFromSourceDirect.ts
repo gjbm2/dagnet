@@ -832,8 +832,21 @@ export async function getFromSourceDirect(options: {
               }
 
               // Fall back to IndexedDB (source of truth) if not hydrated in FileRegistry.
+              // Try workspace-prefixed lookup first, then unprefixed for back-compat.
               try {
-                const dbFile: any = await db.files.get(fileId);
+                let dbFile: any = null;
+                const wsScope = (() => {
+                  for (const f of fileRegistry.getAllFiles()) {
+                    const src = (f as any).source;
+                    if (src?.repository && src?.branch) return src;
+                  }
+                  return null;
+                })();
+                if (wsScope) {
+                  const prefixedId = `${wsScope.repository}-${wsScope.branch}-${fileId}`;
+                  dbFile = await db.files.get(prefixedId);
+                }
+                if (!dbFile) dbFile = await db.files.get(fileId);
                 if (dbFile?.data) {
                   if (diagnosticOn) {
                     sessionLogService.info('data-fetch', 'EVENT_LOADED',
@@ -1023,8 +1036,21 @@ export async function getFromSourceDirect(options: {
               }
               
               // Fall back to IndexedDB (source of truth).
+              // Try workspace-prefixed lookup first, then unprefixed for back-compat.
               try {
-                const dbFile: any = await db.files.get(fileId);
+                let dbFile: any = null;
+                const wsScope = (() => {
+                  for (const f of fileRegistry.getAllFiles()) {
+                    const src = (f as any).source;
+                    if (src?.repository && src?.branch) return src;
+                  }
+                  return null;
+                })();
+                if (wsScope) {
+                  const prefixedId = `${wsScope.repository}-${wsScope.branch}-${fileId}`;
+                  dbFile = await db.files.get(prefixedId);
+                }
+                if (!dbFile) dbFile = await db.files.get(fileId);
                 if (dbFile?.data) {
                   if (diagnosticOn) {
                     sessionLogService.info('data-fetch', 'EVENT_LOADED',
