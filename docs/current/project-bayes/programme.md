@@ -43,8 +43,8 @@ alongside the existing analytic curves. This creates a dependency
 lattice — not a simple linear pipeline.
 
 ```
-Async infrastructure
-  Steps 1–3 (done) → vendor setup → submission → FE integration
+Async infrastructure (done)
+  Steps 1–6: schema, webhook, git commit, Modal, submission, FE trigger
          │
          ▼
 Bayesian inference
@@ -72,7 +72,7 @@ Semantic foundation (parallel, feeds into consumption quality)
 
 | Milestone | Depends on | Enables |
 |---|---|---|
-| Phase A posteriors in YAML | Async infra Steps 1–6 | FE overlay (basic), visual validation |
+| Phase A posteriors in YAML | Async infra (done), schema revision, compiler Phase A | FE overlay (basic), visual validation |
 | FE overlay (basic) | Phase A, FE posterior reading | Visual validation, fit quality display |
 | Visual validation | FE overlay, existing analytic curves | Confidence to proceed to Phase B |
 | Phase B posteriors | Phase A proven | FE overlay (Dirichlet), branch group quality |
@@ -113,6 +113,13 @@ maturity charts use the same evaluator with the same parameters.
 - Onset handling fixed for path params (use edge onset, not `0.0`)
 - Explicit `query_mode` field on analysis requests
 - Provenance metadata in analysis responses
+
+**Progress (17-Mar-26)**: `_resolve_completeness_params()` implemented in
+`api_handlers.py` — BE annotation and chart CDF now use the same resolved
+mu/sigma/onset per doc 1 §16.1 truth table. Onset for cohort path params
+uses edge onset (Phase 1 interim) or `path_delta` when available — never
+`0.0`. Remaining: `query_mode` field on requests, provenance metadata in
+responses, `completeness_model` object per subject (doc 1 §19.1).
 
 **Not in scope**: moving FE completeness to Python, new fitting infrastructure,
 join handling, chains > 2 hops.
@@ -213,9 +220,15 @@ but placeholder values.
    via Git Data API (`api/_lib/git-commit.ts`). Writes posteriors to param
    files + `_bayes` metadata to graph. No cascade — scalar derivation
    deferred to FE post-pull (see §23 in doc 1). **Done 16-Mar-26.**
-4. Compute vendor setup: Modal, DB connectivity, webhook delivery
-5. Submission route: `/api/bayes/fit`, FE trigger
-6. FE integration: job tracking, session log
+4. ~~Compute vendor setup~~: Modal app (`bayes/app.py`) with DB
+   connectivity (`psycopg2-binary`), webhook delivery on completion,
+   progress tracking via `modal.Dict`. **Done 16-Mar-26.**
+5. ~~Submission route~~: Modal `/submit` endpoint receives FE payload,
+   spawns worker, returns job_id. `/status` and `/cancel` endpoints.
+   FE trigger via `useBayesTrigger.ts`. **Done 16-Mar-26.**
+6. ~~FE integration~~: `useBayesTrigger.ts` hook with job tracking
+   (status polling), `DevBayesTrigger.tsx` in menu bar, session
+   logging. **Done 16-Mar-26.**
 
 **Exit criteria**:
 - FE can submit and receive a job_id
@@ -234,8 +247,8 @@ progress, nightly scheduling.
 
 ## Bayesian inference (workstream)
 
-**Depends on**: Async infrastructure Steps 1–3 (webhook + atomic commit).
-Does NOT depend on Semantic foundation.
+**Depends on**: Async infrastructure (done — webhook, atomic commit,
+Modal app, FE trigger all built). Does NOT depend on Semantic foundation.
 
 **Why no Semantic foundation dependency**: The compiler reads evidence directly
 from three sources that already exist and are already populated:
@@ -403,42 +416,54 @@ multiple runs. Design detail to be written post-Phase A.
 
 ## Open decisions
 
-Genuinely unresolved design and architecture decisions. Grouped by
-criticality relative to the delivery sequence.
+No unresolved design decisions block Phase A. All remaining work is
+implementation. This section tracks known limitations and future-phase
+concerns.
 
-### Critical path — blocks Phase A delivery
+### Implementation work remaining for Phase A
 
-**Upstream onset isn't persisted**
+The design is complete. The async infrastructure is built end-to-end.
+What remains:
 
-Doc 1 §10.4 recommends deriving and persisting `anchor_onset_delta_days`
-from the anchor lag histogram at fetch time. Currently not implemented —
-the histogram is fetched then discarded, and the onset scalar is only
-available for X→Y edges, not upstream A→X legs. The compiler needs
-edge-level onset for `path_delta = Σ(edge onsets)`. Without it,
-path-level completeness falls back to onset = 0, biasing the CDF.
+1. **Schema revision** — update TS types, Python Pydantic models, and
+   YAML schemas to match the doc 4 / doc 6 Layer 3 design:
+   `posterior.slices` map, top-level alpha/beta as window posterior,
+   `_model_state`, `fit_history` per-slice snapshots, DSL
+   canonicalisation validation. See Async roundtrip §Step 1.
 
-Prerequisite for correct path composition in Phase A.
+2. **Compiler Phase A** — the core implementation work: graph-to-IR
+   compiler, evidence binder, PyMC model materialisation, inference
+   execution, posterior summarisation, quality gates. See doc 8.
 
-**No FE overlay spec exists**
+### Known limitations (implementation will address when relevant)
 
-Programme.md describes *what* each phase overlay shows but not *how* —
-no component specs, no chart builder changes, no PropertiesPanel
-integration, no analysis view modifications. Blocked by the application
-locus decision above. Needs its own design doc (doc 9).
+**Evaluator congruence (partially fixed 17-Mar-26)**
 
-### Known limitations (not decisions — implementation will address when relevant)
+Doc 1 §13 divergences 1 and 3 fixed: `_resolve_completeness_params()`
+in `api_handlers.py` ensures BE annotation and chart CDF use the same
+resolved mu/sigma/onset per doc 1 §16.1 truth table. Divergence 2 (FE
+vs BE evaluator independence) remains — resolves with Semantic
+Foundation Phase 2 (FE becomes pure applier of BE-published path model).
+
+**Upstream onset (A→X) not persisted**
+
+Doc 1 §10.4 recommends deriving `anchor_onset_delta_days` from the A→X
+histogram at fetch time. Not yet implemented. Affects **analytic
+(pre-Bayes) path composition only** — the Bayesian compiler estimates
+delta from panel data directly (A, X, Y counts + anchor lag scalars all
+persisted in snapshot DB). For the analytic pipeline,
+`anchor_median_lag_days` serves as a conservative proxy.
+`_resolve_completeness_params()` falls back to edge onset when
+`path_delta` is absent. Proper `path_delta` accumulation through
+topo DP comes with Semantic Foundation Phase 2 (doc 1 §15.3.4).
 
 **Downstream conditional data**: the data pipeline only fetches
 condition-sliced observations on the conditional params themselves, not
-on downstream edges. Downstream propagation of conditionals (post-Phase
-C) requires extending the data pipeline. See doc 6 §conditional
-probabilities (Layer 1).
+on downstream edges. Post-Phase C. See doc 6 §conditional probabilities.
 
 **Snapshot DB topology invalidation**: topology changes invalidate
-cohort datasets downstream (path structure has changed). Window datasets
-survive (single-hop). The signature hash system needs to handle this.
-Review against `../project-db/` design docs and doc 10 (topology
-signatures) when relevant.
+cohort datasets downstream. Window datasets survive. Doc 10 covers the
+design; implementation is post-Phase A.
 
 ### Resolved
 
@@ -485,3 +510,25 @@ signatures) when relevant.
   analytic pipeline remains as instant fallback for edges without
   posteriors; `posterior.provenance` distinguishes source.
   Design detail: doc 1 §14, §21–22; doc 9 §6.
+- ~~Cohort chart onset = 0.0 for path params~~: **Fixed 17-Mar-26.**
+  `_resolve_completeness_params()` in `api_handlers.py` implements
+  doc 1 §16.1 truth table. Both annotation and chart CDF use the same
+  resolved mu/sigma/onset. Cohort mode uses edge onset (Phase 1) or
+  `path_delta` (Phase 2) — never `0.0`. See doc 1 §17.1.
+- ~~Upstream onset blocks Bayes~~: **Resolved 17-Mar-26.** The Bayesian
+  compiler does not need pre-computed onset — it estimates delta as
+  part of the MCMC posterior from panel data (A, X, Y counts +
+  anchor lag scalars, all already persisted in snapshot DB). Upstream
+  onset is only relevant to the analytic pipeline's path composition,
+  where `anchor_median_lag_days` serves as a conservative proxy.
+  See doc 1 §10.4, §15.3.
+- ~~Async infra~~: **Built 16-Mar-26.** All 6 steps complete: schema
+  additions, isomorphic verification, webhook handler, Modal app
+  (`bayes/app.py` with submit/status/cancel/fit_graph), FE trigger
+  (`useBayesTrigger.ts`), session logging. End-to-end roundtrip
+  working with placeholder posteriors.
+- ~~FE overlay spec~~: **Resolved 17-Mar-26.** Doc 9 covers posterior
+  consumption: PropertiesPanel changes, edge rendering, analysis view
+  adaptations, quality overlay, confidence interval migration, stats
+  deletion schedule, settings/fit guidance UI. Component-level detail
+  to be refined incrementally per phase.

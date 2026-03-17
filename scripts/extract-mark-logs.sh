@@ -238,5 +238,30 @@ else
   echo "  ⚠  Snapshots directory not found: $SNAPSHOTS_DIR"
 fi
 
+# Diagnostic state dump (FileRegistry + IDB + planner)
+# Check both filenames: new (diag-state) and old (registry-dump) for compat with running server
+DIAG_DUMP="$REPO_ROOT/debug/tmp.diag-state.json"
+DIAG_DUMP_OLD="$REPO_ROOT/debug/tmp.registry-dump.json"
+if [[ ! -f "$DIAG_DUMP" && -f "$DIAG_DUMP_OLD" ]]; then
+  DIAG_DUMP="$DIAG_DUMP_OLD"
+fi
+echo ""
+echo "━━━ DIAGNOSTIC STATE DUMP ━━━"
+if [[ -f "$DIAG_DUMP" ]]; then
+  echo "  File: $DIAG_DUMP"
+  echo "  Size: $(wc -c < "$DIAG_DUMP") bytes"
+  # Show the dump label/timestamp to confirm it matches the mark
+  DUMP_LABEL=$(grep -oP '"label"\s*:\s*"\K[^"]+' "$DIAG_DUMP" 2>/dev/null | head -1 || echo "?")
+  DUMP_TS=$(grep -oP '"tsISO"\s*:\s*"\K[^"]+' "$DIAG_DUMP" 2>/dev/null | head -1 || echo "?")
+  echo "  Dump label: $DUMP_LABEL  (ts: $DUMP_TS)"
+  echo ""
+  cat "$DIAG_DUMP"
+else
+  echo "  ⚠  No diagnostic dump found."
+  echo "  Checked: $REPO_ROOT/debug/tmp.diag-state.json"
+  echo "           $REPO_ROOT/debug/tmp.registry-dump.json"
+  echo "  (Enable console mirroring, place a mark, or run window.dagnetDump() in DevTools)"
+fi
+
 echo ""
 echo "Done."

@@ -260,6 +260,26 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
     analysis_type = data.get('analysis_type', 'lag_histogram')
     scenarios = data.get('scenarios', [])
 
+    def _resolve_completeness_params(model_params: Dict[str, Any], is_window: bool) -> tuple:
+        """Select mu/sigma/onset based on query mode and path param availability.
+
+        Returns (mu, sigma, onset, mode_tag).
+        See doc 1 §16.1 truth table and §17.1 shared helper.
+        """
+        if is_window:
+            return (model_params['mu'], model_params['sigma'],
+                    model_params['onset_delta_days'], 'window')
+        # cohort mode
+        path_mu = model_params.get('path_mu')
+        path_sigma = model_params.get('path_sigma')
+        if path_mu is not None and path_sigma is not None:
+            # Use path_delta if available, fall back to edge onset (Phase 1 interim)
+            path_delta = model_params.get('path_delta',
+                                           model_params['onset_delta_days'])
+            return (path_mu, path_sigma, path_delta, 'cohort_path')
+        return (model_params['mu'], model_params['sigma'],
+                model_params['onset_delta_days'], 'cohort_edge_fallback')
+
     def _read_edge_model_params(graph: Any, target_id: str) -> Optional[Dict[str, float]]:
         """Read mu/sigma/onset/t95/path_t95 and forecast.mean from graph edge."""
         if not graph or not target_id:
@@ -300,6 +320,9 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
             result['path_mu'] = float(path_mu)
         if isinstance(path_sigma, (int, float)) and math.isfinite(path_sigma) and path_sigma > 0:
             result['path_sigma'] = float(path_sigma)
+        path_delta = latency.get('path_delta')
+        if isinstance(path_delta, (int, float)) and math.isfinite(path_delta) and path_delta >= 0:
+            result['path_delta'] = float(path_delta)
         return result
 
     def _append_synthetic_cohort_maturity_frames(args: Dict[str, Any]) -> None:
@@ -625,9 +648,19 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
             target_id = (subj.get('target') or {}).get('targetId')
             model_params = _read_edge_model_params(graph, target_id)
             if model_params and result:
-                mu = model_params['mu']
-                sigma = model_params['sigma']
-                onset = model_params['onset_delta_days']
+                # Determine query mode once — used by both annotation and chart CDF.
+                # See doc 1 §16.1 truth table: annotation and chart must use the
+                # same resolved params (Divergence 1 fix).
+                subj_slice_keys = subj.get('slice_keys') or []
+                has_window_slice = any('window(' in str(sk) for sk in subj_slice_keys)
+                has_cohort_slice = any('cohort(' in str(sk) for sk in subj_slice_keys)
+                if has_window_slice or has_cohort_slice:
+                    is_window = has_window_slice and not has_cohort_slice
+                else:
+                    query_dsl = data.get('query_dsl') or ''
+                    is_window = 'window(' in query_dsl or '.window(' in query_dsl
+
+                mu, sigma, onset, cdf_mode = _resolve_completeness_params(model_params, is_window)
 
                 if analysis_type == 'cohort_maturity' and 'frames' in result:
                     for frame in result['frames']:
@@ -653,43 +686,15 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
                 # ── Model CDF curve (cohort maturity only) ──────────────
                 # Generate the theoretical cumulative lognormal curve so the
                 # frontend can overlay it on the empirical maturity chart.
-                subj_slice_keys = subj.get('slice_keys') or []
+                # Uses the same resolved params as annotation (doc 1 §17.1).
                 is_gap_epoch = any(str(sk) == '__epoch_gap__' for sk in subj_slice_keys)
 
                 if analysis_type == 'cohort_maturity' and 'forecast_mean' in model_params and not is_gap_epoch:
                     forecast_mean = model_params['forecast_mean']
 
-                    # Determine axis mode: window() uses edge-level X→Y params,
-                    # cohort() uses path-level A→Y params (derived from path_t95).
-                    # Detection: check the subject's slice_keys (authoritative),
-                    # then fall back to query_dsl string matching.
-                    has_window_slice = any('window(' in str(sk) for sk in subj_slice_keys)
-                    has_cohort_slice = any('cohort(' in str(sk) for sk in subj_slice_keys)
-                    if has_window_slice or has_cohort_slice:
-                        is_window = has_window_slice and not has_cohort_slice
-                    else:
-                        query_dsl = data.get('query_dsl') or ''
-                        is_window = 'window(' in query_dsl or '.window(' in query_dsl
-
-                    if is_window:
-                        cdf_mu = mu
-                        cdf_sigma = sigma
-                        cdf_onset = onset
-                        cdf_mode = 'window'
-                    else:
-                        # Cohort mode: use path-level A→Y CDF params if available.
-                        path_mu_val = model_params.get('path_mu')
-                        path_sigma_val = model_params.get('path_sigma')
-                        if path_mu_val is not None and path_sigma_val is not None:
-                            cdf_mu = path_mu_val
-                            cdf_sigma = path_sigma_val
-                            cdf_onset = 0.0
-                            cdf_mode = 'cohort_path'
-                        else:
-                            cdf_mu = mu
-                            cdf_sigma = sigma
-                            cdf_onset = onset
-                            cdf_mode = 'cohort_edge_fallback'
+                    cdf_mu = mu
+                    cdf_sigma = sigma
+                    cdf_onset = onset
 
                     # Extend curve well beyond t95 so it covers the full displayed
                     # chart axis. Use sweep_to − anchor_from as a baseline, and

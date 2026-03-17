@@ -6,6 +6,7 @@ import { createDASRunner } from './lib/das';
 import { getURLBooleanParam } from './lib/urlSettings';
 import { consoleMirrorService } from './services/consoleMirrorService';
 import { sessionLogMirrorService } from './services/sessionLogMirrorService';
+import { devDiagnosticService } from './services/devDiagnosticService';
 import { sessionLogService } from './services/sessionLogService';
 import { installE2eHooks } from './dev/e2eHooks';
 
@@ -42,7 +43,10 @@ if (sessionLogService.getDiagnosticLoggingEnabled()) {
 }
 
 // Dev-only: install console mirroring hook (off by default; opt-in via localStorage).
+// IMPORTANT: devDiagnosticService.install() MUST run BEFORE consoleMirrorService.install()
+// so it captures the real (pre-hook) console.warn/log references.
 if (import.meta.env.DEV) {
+  devDiagnosticService.install();
   consoleMirrorService.install();
   sessionLogMirrorService.install();
   installE2eHooks();

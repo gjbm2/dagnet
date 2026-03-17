@@ -508,12 +508,23 @@ explicitly so future models can use alternative families.
 
 `onset_delta_days` is currently derived for the X-to-Y edge from the lag
 histogram. There is no equivalent `anchor_onset_delta_days` for the A-to-X
-leg. This is identified as a gap in the model contract (doc 1, section 7.4). Path
-composition needs onset from both legs:
+leg. Doc 1 §10.4 recommends deriving it from the A→X histogram at fetch
+time. This affects **analytic (pre-Bayes) path composition only**:
 
 ```
 path_delta = anchor_onset + edge_onset
 ```
+
+The Bayesian compiler does not need pre-computed onset — it estimates
+delta as part of the MCMC posterior from panel data (A, X, Y counts +
+`anchor_median_lag_days` / `anchor_mean_lag_days`, all persisted in the
+snapshot DB). For the analytic pipeline, `anchor_median_lag_days` serves
+as a conservative proxy. Proper `path_delta` accumulation comes with
+Semantic Foundation Phase 2 (doc 1 §15.3.4).
+
+As of 17-Mar-26, `_resolve_completeness_params()` in `api_handlers.py`
+ensures the BE chart CDF uses edge onset (not `0.0`) for cohort path
+params, and will use `path_delta` when available.
 
 ### 11.3 Non-latency edge distributions
 

@@ -104,7 +104,12 @@
       "Bash(grep -n \"lag_histogram\\\\|stepTransTimeDistribution\\\\|step_trans_time_distribution\" /home/reg/dev/dagnet/graph-editor/src/services/dataOperations/*.ts)",
       "Bash(scripts/extract-mark-logs.sh \"dump\")",
       "Bash(curl -s http://localhost:5173/src/services/consoleMirrorService.ts)",
-      "Bash(curl -s -X POST -H \"content-type: application/json\" -d '{\"\"test\"\":true}' \"http://localhost:5173/__dagnet/registry-dump\")"
+      "Bash(curl -s -X POST -H \"content-type: application/json\" -d '{\"\"test\"\":true}' \"http://localhost:5173/__dagnet/registry-dump\")",
+      "Bash(scripts/extract-mark-logs.sh \"test2\")",
+      "Bash(python -c \"import py_compile; py_compile.compile\\(''lib/api_handlers.py'', doraise=True\\)\")",
+      "Bash(scripts/extract-mark-logs.sh \"dump2\")",
+      "Bash(scripts/extract-mark-logs.sh \"dump3\")",
+      "Bash(scripts/extract-mark-logs.sh \"dump4\")"
     ]
   }
 }

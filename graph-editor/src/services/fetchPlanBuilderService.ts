@@ -151,6 +151,17 @@ export interface ItemDiagnostic {
   refetchDecision?: string;
   classification: string;
   notes: string[];
+  // Coverage diagnostic fields (populated by buildParameterPlanItem)
+  fileExists?: boolean;
+  filePath?: string;
+  allValuesCount?: number;
+  modeFilteredCount?: number;
+  shouldFilterBySignature?: boolean;
+  valuesForCoverageCount?: number;
+  currentSignature?: string;
+  hasFullHeaderCoverage?: boolean;
+  cifNeedsFetch?: boolean;
+  cifMatchType?: string;
 }
 
 // =============================================================================
@@ -676,6 +687,17 @@ function buildParameterPlanItem(
     refetchDecision: refetchDecision.type,
     classification,
     notes,
+    // Coverage diagnostics for devDiagnosticService
+    fileExists: !!file,
+    filePath: (file as any)?.source?.path,
+    allValuesCount: allValues.length,
+    modeFilteredCount: modeFilteredValues.length,
+    shouldFilterBySignature,
+    valuesForCoverageCount: valuesForCoverage.length,
+    currentSignature: currentSignature ?? undefined,
+    hasFullHeaderCoverage,
+    cifNeedsFetch: incrementalResult.needsFetch,
+    cifMatchType: incrementalResult.signatureDiagnostics?.matchType,
   };
   
   return { item, diagnostic };

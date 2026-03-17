@@ -162,16 +162,17 @@ export default defineConfig(({ mode }) => {
                       return;
                     }
 
-                    // File registry dump (triggered on mark for debugging)
-                    if (req.url === '/__dagnet/registry-dump') {
+                    // Dev diagnostic state dump (FileRegistry + IDB + planner)
+                    // Triggered on mark or via window.dagnetDump() → devDiagnosticService
+                    if (req.url === '/__dagnet/diag-dump' || req.url === '/__dagnet/registry-dump') {
                       let body = '';
                       req.setEncoding('utf8');
-                      req.on('data', (chunk: string) => { body += chunk; if (body.length > 5_000_000) { res.statusCode = 413; res.end('too large'); req.destroy(); } });
+                      req.on('data', (chunk: string) => { body += chunk; if (body.length > 10_000_000) { res.statusCode = 413; res.end('too large'); req.destroy(); } });
                       req.on('end', () => {
                         try {
                           const debugDir = path.resolve(__dirname, '..', 'debug');
                           fs.mkdirSync(debugDir, { recursive: true });
-                          const outPath = path.join(debugDir, 'tmp.registry-dump.json');
+                          const outPath = path.join(debugDir, 'tmp.diag-state.json');
                           fs.writeFileSync(outPath, body, 'utf8');
                           res.statusCode = 200;
                           res.setHeader('content-type', 'application/json');

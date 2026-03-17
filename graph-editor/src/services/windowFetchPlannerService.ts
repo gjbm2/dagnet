@@ -49,6 +49,7 @@ import {
 import type { FetchPlan, FetchPlanItem } from './fetchPlanTypes';
 import { computePlannerQuerySignaturesForGraph } from './plannerQuerySignatureService';
 import { isSignatureCheckingEnabled } from './signaturePolicyService';
+import { devDiagnosticService } from './devDiagnosticService';
 
 // =============================================================================
 // Types
@@ -299,7 +300,37 @@ class WindowFetchPlannerService {
       this.cachedResult = result;
       this.cachedDSL = dsl;
       this.cachedGraphHash = graphHash;
-      
+
+      // Capture diagnostics for devDiagnosticService (dev-only state inspection)
+      if (import.meta.env.DEV) {
+        devDiagnosticService.capturePlannerDiagnostics({
+          ts: Date.now(),
+          dsl,
+          trigger,
+          durationMs,
+          diagnostics: planDiagnostics,
+          querySignatures: querySignatures ?? undefined,
+          itemSummaries: planDiagnostics.itemDiagnostics.map(d => ({
+            itemKey: d.itemKey,
+            objectId: d.objectId,
+            classification: d.classification,
+            mode: d.mode,
+            missingDates: d.missingDates,
+            notes: d.notes,
+            fileExists: d.fileExists,
+            filePath: d.filePath,
+            allValuesCount: d.allValuesCount,
+            modeFilteredCount: d.modeFilteredCount,
+            shouldFilterBySignature: d.shouldFilterBySignature,
+            valuesForCoverageCount: d.valuesForCoverageCount,
+            currentSignature: d.currentSignature,
+            hasFullHeaderCoverage: d.hasFullHeaderCoverage,
+            cifNeedsFetch: d.cifNeedsFetch,
+            cifMatchType: d.cifMatchType,
+          })),
+        });
+      }
+
       // Log summary
       sessionLogService.addChild(logOpId, 'info', 'PLANNER_ITEMS',
         `Inspected ${items.length} items: ${autoAggregationItems.length - staleCandidates.length} covered, ${fetchPlanItems.length} need fetch, ${staleCandidates.length} stale, ${unfetchableGaps.length} file-only`,
