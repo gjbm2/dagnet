@@ -1,0 +1,75 @@
+/* PosteriorIndicator — inline badge + diagnostic popover */
+
+.posterior-indicator {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.posterior-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 9px;
+  font-weight: 500;
+  cursor: default;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: var(--bg-secondary, rgba(255,255,255,0.05));
+  white-space: nowrap;
+  user-select: none;
+}
+
+.posterior-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+/* Popover */
+.posterior-popover {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 10000;
+  background: var(--bg-primary, #1a1a1a);
+  border: 1px solid var(--border-primary, #333);
+  border-radius: 6px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4);
+  padding: 6px 8px;
+  min-width: 180px;
+  max-width: 260px;
+  pointer-events: auto;
+}
+
+/* Details table */
+.posterior-details-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 10px;
+  line-height: 1.4;
+}
+
+.posterior-details-label {
+  color: var(--text-muted, #888);
+  padding: 1px 6px 1px 0;
+  white-space: nowrap;
+  vertical-align: top;
+  width: 1%;
+}
+
+.posterior-details-value {
+  color: var(--text-primary, #e0e0e0);
+  padding: 1px 0;
+  text-align: right;
+}
+
+.posterior-details-reason {
+  color: var(--text-muted, #888);
+  padding: 0 0 3px 0;
+  font-size: 9px;
+  font-style: italic;
+  text-align: right;
+}

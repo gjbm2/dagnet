@@ -502,7 +502,7 @@ export function HoverAnalysisPreview({
   const { viewOverlayMode } = useViewOverlayMode();
 
   // Derive default info tab from view overlay mode
-  const infoDefaultTab = viewOverlayMode === 'forecast-quality' ? 'forecast' : undefined;
+  const infoDefaultTab = viewOverlayMode === 'forecast-quality' ? 'diagnostics' : undefined;
 
 
   // --- Satellite row ---

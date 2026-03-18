@@ -13,6 +13,8 @@ import { useGraphStore } from '../contexts/GraphStoreContext';
 import { LATENCY_HORIZON_DECIMAL_PLACES } from '../constants/latency';
 import { PRECISION_DECIMAL_PLACES } from '../constants/latency';
 import { roundToDecimalPlaces } from '../utils/rounding';
+import { PosteriorIndicator } from './shared/PosteriorIndicator';
+import { useTheme } from '../contexts/ThemeContext';
 import './ParameterSection.css';
 
 interface ParameterSectionProps {
@@ -48,6 +50,10 @@ interface ParameterSectionProps {
       mean?: number;
       stdev?: number;
     };
+    // Bayesian posterior (display only — written by fitting engine)
+    posterior?: any;
+    // Evidence metadata (for freshness display)
+    evidence?: { retrieved_at?: string; [key: string]: any };
   };
   
   // Handlers
@@ -99,6 +105,7 @@ export function ParameterSection({
 }: ParameterSectionProps) {
   const { tabs, operations: tabOps } = useTabContext();
   const { graph: currentGraph, setGraph } = useGraphStore();
+  const { theme } = useTheme();
   const [isRefreshingAnchor, setIsRefreshingAnchor] = useState(false);
 
   const formatOptionalNumber = (value: number | undefined, dp: number): string => {
@@ -349,8 +356,18 @@ export function ParameterSection({
             </div>
           )}
         </AutomatableField>
+        {/* Posterior quality indicator — shows when Bayesian fit has run */}
+        {param?.posterior && (
+          <div style={{ marginTop: '4px' }}>
+            <PosteriorIndicator
+              posterior={param.posterior}
+              retrievedAt={param.evidence?.retrieved_at}
+              theme={theme === 'dark' ? 'dark' : 'light'}
+            />
+          </div>
+        )}
       </div>
-      
+
       {/* Standard Deviation and Distribution - separate lines */}
       
       {/* Std Dev */}

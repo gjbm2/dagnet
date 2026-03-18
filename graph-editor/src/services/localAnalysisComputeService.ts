@@ -178,10 +178,6 @@ function buildNodeInfoResult(graph: ConversionGraph, dsl: string): AnalysisResul
   const data: Record<string, any>[] = [];
 
   // ── Tab: Overview (intrinsic node properties) ──
-
-  // Freshness: graph update time
-  buildFreshnessRows(data, 'overview', graph);
-
   data.push({ tab: 'overview', section: 'Identity', property: 'Label', value: node.label || node.id });
   data.push({ tab: 'overview', section: 'Identity', property: 'ID', value: node.id });
   data.push({ tab: 'overview', section: 'Identity', property: 'Type', value: node.type || 'normal' });
@@ -238,6 +234,9 @@ function buildNodeInfoResult(graph: ConversionGraph, dsl: string): AnalysisResul
       });
     }
   }
+
+  // ── Tab: Diagnostics (freshness) ──
+  buildFreshnessRows(data, 'diagnostics', graph);
 
   return {
     analysis_type: 'node_info',
@@ -299,10 +298,6 @@ function buildEdgeInfoResult(graph: ConversionGraph, dsl: string): AnalysisResul
   const data: Record<string, any>[] = [];
 
   // ── Tab: Overview (summary of edge) ──
-
-  // Freshness: data fetch time + graph update time
-  buildFreshnessRows(data, 'overview', graph, edge);
-
   if (edge.id) {
     data.push({ tab: 'overview', section: 'Identity', property: 'Edge ID', value: edge.id });
   }
@@ -424,6 +419,8 @@ function buildEdgeInfoResult(graph: ConversionGraph, dsl: string): AnalysisResul
   }
 
   // ── Tab: Forecast (Bayes quality) ──
+  // ── Tab: Diagnostics (freshness + forecast quality) ──
+  buildFreshnessRows(data, 'diagnostics', graph, edge);
   buildEdgeForecastTab(data, edge, graph);
 
   return {
@@ -460,7 +457,7 @@ function buildEdgeForecastTab(
 
   if (!posterior && !latPosterior) {
     data.push({
-      tab: 'forecast',
+      tab: 'diagnostics',
       section: 'Bayesian Fit',
       property: 'Status',
       value: 'No posterior available — run Bayesian fit',
@@ -471,12 +468,12 @@ function buildEdgeForecastTab(
   // Probability posterior — all field accesses guarded (posterior may be partial/malformed)
   if (posterior) {
     const tier = computeQualityTier(posterior);
-    data.push({ tab: 'forecast', section: 'Quality', property: 'Tier', value: qualityTierLabel(tier.tier) });
-    data.push({ tab: 'forecast', section: 'Quality', property: 'Reason', value: tier.reason });
+    data.push({ tab: 'diagnostics', section: 'Quality', property: 'Tier', value: qualityTierLabel(tier.tier) });
+    data.push({ tab: 'diagnostics', section: 'Quality', property: 'Reason', value: tier.reason });
 
     if (posterior.hdi_level != null && posterior.hdi_lower != null && posterior.hdi_upper != null) {
       data.push({
-        tab: 'forecast',
+        tab: 'diagnostics',
         section: 'Probability',
         property: `HDI ${fmtPct(posterior.hdi_level)}`,
         value: `${fmtPct(posterior.hdi_lower)} — ${fmtPct(posterior.hdi_upper)}`,
@@ -484,34 +481,34 @@ function buildEdgeForecastTab(
     }
 
     if (posterior.evidence_grade != null) {
-      data.push({ tab: 'forecast', section: 'Probability', property: 'Evidence Grade', value: `${posterior.evidence_grade}/3` });
+      data.push({ tab: 'diagnostics', section: 'Probability', property: 'Evidence Grade', value: `${posterior.evidence_grade}/3` });
     }
     if (posterior.prior_tier) {
-      data.push({ tab: 'forecast', section: 'Probability', property: 'Prior Tier', value: posterior.prior_tier.replace(/_/g, ' ') });
+      data.push({ tab: 'diagnostics', section: 'Probability', property: 'Prior Tier', value: posterior.prior_tier.replace(/_/g, ' ') });
     }
 
     if (posterior.rhat != null) {
-      data.push({ tab: 'forecast', section: 'Convergence', property: 'rhat', value: posterior.rhat.toFixed(4) });
+      data.push({ tab: 'diagnostics', section: 'Convergence', property: 'rhat', value: posterior.rhat.toFixed(4) });
     }
     if (posterior.ess != null) {
-      data.push({ tab: 'forecast', section: 'Convergence', property: 'ESS', value: fmtNum(Math.round(posterior.ess)) });
+      data.push({ tab: 'diagnostics', section: 'Convergence', property: 'ESS', value: fmtNum(Math.round(posterior.ess)) });
     }
     if (posterior.divergences != null && posterior.divergences > 0) {
-      data.push({ tab: 'forecast', section: 'Convergence', property: 'Divergences', value: posterior.divergences.toString() });
+      data.push({ tab: 'diagnostics', section: 'Convergence', property: 'Divergences', value: posterior.divergences.toString() });
     }
 
     if (posterior.surprise_z != null && Math.abs(posterior.surprise_z) > 2) {
-      data.push({ tab: 'forecast', section: 'Anomaly', property: 'Surprise z', value: posterior.surprise_z.toFixed(1) });
+      data.push({ tab: 'diagnostics', section: 'Anomaly', property: 'Surprise z', value: posterior.surprise_z.toFixed(1) });
     }
 
     if (posterior.provenance) {
-      data.push({ tab: 'forecast', section: 'Metadata', property: 'Provenance', value: posterior.provenance });
+      data.push({ tab: 'diagnostics', section: 'Metadata', property: 'Provenance', value: posterior.provenance });
     }
     if (posterior.fitted_at) {
       const relFit = formatRelativeTime(posterior.fitted_at);
       const fitLevel = getFreshnessLevel(posterior.fitted_at);
       data.push({
-        tab: 'forecast', section: 'Metadata', property: 'Fitted',
+        tab: 'diagnostics', section: 'Metadata', property: 'Fitted',
         value: relFit ? `${relFit} (${posterior.fitted_at})` : posterior.fitted_at,
         freshness: fitLevel,
       });
@@ -522,21 +519,21 @@ function buildEdgeForecastTab(
   if (latPosterior) {
     const latTier = computeQualityTier(latPosterior);
     if (!posterior) {
-      data.push({ tab: 'forecast', section: 'Quality', property: 'Tier (Latency)', value: qualityTierLabel(latTier.tier) });
+      data.push({ tab: 'diagnostics', section: 'Quality', property: 'Tier (Latency)', value: qualityTierLabel(latTier.tier) });
     }
     if (latPosterior.hdi_level != null && latPosterior.hdi_t95_lower != null && latPosterior.hdi_t95_upper != null) {
       data.push({
-        tab: 'forecast',
+        tab: 'diagnostics',
         section: 'Latency HDI',
         property: `t95 HDI ${fmtPct(latPosterior.hdi_level)}`,
         value: `${latPosterior.hdi_t95_lower.toFixed(1)}d — ${latPosterior.hdi_t95_upper.toFixed(1)}d`,
       });
     }
     if (latPosterior.rhat != null) {
-      data.push({ tab: 'forecast', section: 'Latency HDI', property: 'rhat', value: latPosterior.rhat.toFixed(4) });
+      data.push({ tab: 'diagnostics', section: 'Latency HDI', property: 'rhat', value: latPosterior.rhat.toFixed(4) });
     }
     if (latPosterior.ess != null) {
-      data.push({ tab: 'forecast', section: 'Latency HDI', property: 'ESS', value: fmtNum(Math.round(latPosterior.ess)) });
+      data.push({ tab: 'diagnostics', section: 'Latency HDI', property: 'ESS', value: fmtNum(Math.round(latPosterior.ess)) });
     }
   }
 }

@@ -1275,11 +1275,7 @@ class WorkspaceService {
                 ? dirConfig.type
                 : `${dirConfig.type}-${fileNameWithoutExt}`;
 
-            // Check if local file exists and has changes (flagged dirty OR actual content drift).
-            // Defence-in-depth: isDirty flag may be false even when content differs from originalData
-            // (e.g. race conditions, editor focus loss, programmatic changes). Comparing serialised
-            // content catches these cases and routes them through the 3-way merge path instead of
-            // silently overwriting local work.
+            // Check if local file exists and has changes.
             const localFileState = localFileMap.get(treeItem.path);
             const hasActualChanges = localFileState && localFileState.originalData && (() => {
               try {
@@ -1291,7 +1287,65 @@ class WorkspaceService {
               }
             })();
 
-            if (localFileState && (localFileState.isDirty || hasActualChanges)) {
+            // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+            // HARD GATE: Graph files MUST NOT be silently overwritten on pull.
+            //
+            // The isDirty / hasActualChanges check is unreliable — dirty flags
+            // can be cleared by editor normalisation, programmatic updates, or
+            // store↔file sync races. For graph files we use a direct content
+            // comparison against the REMOTE payload instead. If local content
+            // differs from remote in ANY way, the file MUST go through 3-way
+            // merge. There is NO "clean update" path for graphs with differing
+            // content — silent overwrites cause production data loss.
+            //
+            // Non-graph files (parameters, cases, nodes, etc.) retain the
+            // existing isDirty/hasActualChanges gate, plus the force_replace_at_ms
+            // mechanism for derived data.
+            // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+            const isGraphFile = dirConfig.type === 'graph';
+            let localDiffersFromRemote = false;
+            if (isGraphFile && localFileState?.data) {
+              try {
+                const localContentForGate = JSON.stringify(localFileState.data);
+                const remoteContentForGate = JSON.stringify(data);
+                localDiffersFromRemote = localContentForGate !== remoteContentForGate;
+              } catch {
+                // If serialisation fails, assume they differ — safety first.
+                localDiffersFromRemote = true;
+              }
+            }
+
+            // For graph files: dirty detection is supplemented by the hard gate.
+            // If dirty detection missed it but content actually differs, the gate catches it.
+            const dirtyDetected = localFileState && (localFileState.isDirty || hasActualChanges);
+            const graphGateTriggered = isGraphFile && localFileState && localDiffersFromRemote && !dirtyDetected;
+
+            if (graphGateTriggered) {
+              // The old dirty-detection would have taken the "clean update" path and
+              // silently overwritten local work. Log this as a serious near-miss.
+              const gateMsg =
+                `🛑 GRAPH OVERWRITE BLOCKED by hard gate: ${treeItem.path} — ` +
+                `local content differs from remote but isDirty=${localFileState.isDirty}, ` +
+                `hasActualChanges=${!!hasActualChanges}. Routing through 3-way merge instead of silent overwrite.`;
+              console.error(gateMsg);
+              sessionLogService.error(
+                'git',
+                'GRAPH_OVERWRITE_GATE_BLOCKED',
+                gateMsg,
+                undefined,
+                { fileId, path: treeItem.path, isDirty: localFileState.isDirty, hasActualChanges: !!hasActualChanges }
+              );
+              // Fire a toast so the user knows the gate fired
+              try {
+                const { default: toast } = await import('react-hot-toast');
+                toast.error(
+                  `Graph overwrite blocked: ${fileName}\nLocal differs from remote but was not marked dirty. Merging instead.`,
+                  { duration: 8000 }
+                );
+              } catch { /* toast unavailable in non-UI context */ }
+            }
+
+            if (localFileState && (dirtyDetected || graphGateTriggered)) {
               // One-shot force-replace (per file) for derived-data files only (parameters/cases).
               // This is designed to prevent stale data resurrection via 3-way merge after a "Clear Data" commit.
               const isDerivedDataFile =
@@ -1344,6 +1398,10 @@ class WorkspaceService {
                     if ((fileRegistry as any).notifyListeners) {
                       (fileRegistry as any).notifyListeners(fileId, localFileState);
                     }
+                    // Schedule completeInitialization — without this, isInitializing
+                    // stays true forever and all subsequent edits are silently absorbed
+                    // into originalData (isDirty never becomes true).
+                    setTimeout(() => fileRegistry.completeInitialization(fileId), 500);
 
                     forceReplaceApplied.push(fileId);
                     updatedCount++;
@@ -1472,12 +1530,41 @@ class WorkspaceService {
                 if ((fileRegistry as any).notifyListeners) {
                   (fileRegistry as any).notifyListeners(fileId, localFileState);
                 }
+                // Schedule completeInitialization — without this, isInitializing
+                // stays true forever and all subsequent edits are silently absorbed
+                // into originalData (isDirty never becomes true).
+                setTimeout(() => fileRegistry.completeInitialization(fileId), 500);
                 console.log(`   → Updated in FileRegistry`);
 
                 updatedCount++;
               }
             } else {
-              // No local changes - safe to update
+              // No local changes detected — safe to update.
+              // DEFENCE-IN-DEPTH: For graph files, verify content is truly identical.
+              // If somehow a graph reached this path with differing content, block it.
+              if (isGraphFile && localFileState?.data && localDiffersFromRemote) {
+                const escapeMsg =
+                  `🛑 GRAPH OVERWRITE GATE (defence-in-depth): ${treeItem.path} reached clean-update ` +
+                  `path but content differs from remote. This should have been caught by the primary gate. ` +
+                  `Blocking overwrite and preserving local.`;
+                console.error(escapeMsg);
+                sessionLogService.error(
+                  'git',
+                  'GRAPH_OVERWRITE_GATE_ESCAPED',
+                  escapeMsg,
+                  undefined,
+                  { fileId, path: treeItem.path }
+                );
+                try {
+                  const { default: toast } = await import('react-hot-toast');
+                  toast.error(
+                    `Graph overwrite blocked (defence-in-depth): ${fileName}\nPlease report this — the primary gate was bypassed.`,
+                    { duration: 10000 }
+                  );
+                } catch { /* toast unavailable */ }
+                return; // DO NOT overwrite — preserve local
+              }
+
               const fileState: FileState = {
                 fileId,
                 type: dirConfig.type,
@@ -1516,7 +1603,11 @@ class WorkspaceService {
               if ((fileRegistry as any).notifyListeners) {
                 (fileRegistry as any).notifyListeners(fileId, fileState);
               }
-              
+              // Schedule completeInitialization — without this, isInitializing
+              // stays true forever and all subsequent edits are silently absorbed
+              // into originalData (isDirty never becomes true).
+              setTimeout(() => fileRegistry.completeInitialization(fileId), 500);
+
               const action = isNew ? 'ADDED' : 'UPDATED';
               const icon = isNew ? '📄➕' : '✅';
               console.log(`${icon} WorkspaceService: ${action} ${treeItem.path}`);

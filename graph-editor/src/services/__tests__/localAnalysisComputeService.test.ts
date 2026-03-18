@@ -240,7 +240,7 @@ describe('edge_info tab decomposition', () => {
     const tabs = [...new Set(data.map((r: any) => r.tab))];
     expect(tabs).toContain('overview');
     expect(tabs).toContain('evidence');
-    expect(tabs).toContain('forecast');
+    expect(tabs).toContain('diagnostics');
 
     // Overview should have Identity, Probability, Forecast, Latency sections
     const overviewSections = [...new Set(data.filter((r: any) => r.tab === 'overview').map((r: any) => r.section))];
@@ -252,7 +252,7 @@ describe('edge_info tab decomposition', () => {
     expect(evidenceSections).toContain('Observations');
 
     // Forecast should have Bayesian Fit (no posterior → "No posterior available" message)
-    const forecastRows = data.filter((r: any) => r.tab === 'forecast');
+    const forecastRows = data.filter((r: any) => r.tab === 'diagnostics');
     expect(forecastRows.length).toBeGreaterThan(0);
   });
 
@@ -285,7 +285,7 @@ describe('edge_info tab decomposition', () => {
     expect(response.success).toBe(true);
     const data = response.result!.data;
 
-    const forecastRows = data.filter((r: any) => r.tab === 'forecast');
+    const forecastRows = data.filter((r: any) => r.tab === 'diagnostics');
     const sections = [...new Set(forecastRows.map((r: any) => r.section))];
     expect(sections).toContain('Quality');
     expect(sections).toContain('Convergence');
@@ -354,7 +354,7 @@ describe('edge_info with malformed/partial posterior must not throw', () => {
     const response = computeLocalResult(graph, 'edge_info', 'from(A).to(B)');
     expect(response.success).toBe(true);
     expect(response.result).toBeDefined();
-    const forecastRows = response.result!.data.filter((r: any) => r.tab === 'forecast');
+    const forecastRows = response.result!.data.filter((r: any) => r.tab === 'diagnostics');
     expect(forecastRows.length).toBeGreaterThan(0);
   });
 

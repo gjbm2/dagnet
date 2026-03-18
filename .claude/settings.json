@@ -159,7 +159,16 @@
       "Bash(python -m pytest lib/tests/test_snapshot_read_integrity.py -v --tb=line)",
       "Bash(python -m pytest lib/tests/test_snapshot_read_integrity.py -v -s -k \"ri005 or ri006_query_virtual_latest\")",
       "Bash(for i:*)",
-      "Bash(python -m pytest --tb=line -q)"
+      "Bash(python -m pytest --tb=line -q)",
+      "Bash(grep -rn \"forceOverwrite\\\\|force_replace\\\\|forceReplace\\\\|skipConflict\\\\|skipMerge\" /home/reg/dev/dagnet/graph-editor/src/services/*.ts)",
+      "Bash(grep -rn \"retrieval\\\\|GetFromSource\\\\|dataOperationsService.*pull\" /home/reg/dev/dagnet/graph-editor/src/services/*.ts)",
+      "Bash(grep -r \"setInterval\\\\|setTimeout\" /home/reg/dev/dagnet/graph-editor/src/services/*.ts)",
+      "Bash(grep -r \"setInterval\\\\|setTimeout\" /home/reg/dev/dagnet/graph-editor/src/hooks/*.ts)",
+      "Bash(grep -l \"setInterval\\\\|setTimeout\" /home/reg/dev/dagnet/graph-editor/src/services/*.ts)",
+      "Bash(find . -name li-cohort-segmentation-v2* -type f)",
+      "Bash(grep -rn \"bridge\\\\|dataSource\\\\|custom\" /home/reg/dev/dagnet/nous-monorepo --include=*.ts --include=*.js --include=*.json)",
+      "Bash(grep -rn \"bridge\\\\|dataSource\" /home/reg/dev/dagnet/nous-conversion --include=*.yaml --include=*.yml --include=*.md)",
+      "Bash(find . -type f -name *msmdc* -o -name *latency*write*)"
     ]
   }
 }
