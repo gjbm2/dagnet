@@ -1,16 +1,6 @@
 # TODO
 
-- Fix cohort() charts per docs/current/project-bayes/1-cohort-completeness-model-contract.md
-
-- complete project-canvas work -- charts
-  - so much chart polishing still to do for diff. chart types
-  - legends, axis positioning, etc. polish, polish, polish
-  - axis titles, ranges
-  - chart props section
-  - colourways for e.g. child node charts, etc. , etc. etc.
-  - analysis chart display is a wreck (sigh)
-- Snap-to behaviour when moving / resizing graph objects (nodes, post it notes, canvas charts)
-- auto, unattended pull (with a standard consolidated class for implementing toast-type automated actions)
+- Bridge chart issues--not updating properly with e.g. date changes & custom scenarios
 
 - Chart scenarios: don't support what-if conditionality --  The custom scenario mechanism (used by non-live/frozen charts) can differentiate scenarios via visibility_mode (f+e vs f vs e) and effective_dsl, but it can't produce different graph topologies per scenario. The what_if_dsl field exists but is only applied to the current scenario. Since the sample data has no evidence/forecast split on edges, changing visibility_mode alone gives identical graphs.
 

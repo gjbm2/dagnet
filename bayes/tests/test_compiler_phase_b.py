@@ -282,13 +282,13 @@ class TestBranchGroupNearExhaustive:
 
 
 class TestBranchGroupExhaustive:
-    """B4: Exhaustive branch group — no dropout, Σp_i = 1."""
+    """B4: Exhaustive branch group — all targets have events, no dropout."""
 
     def test_recovers_exhaustive_simplex(self):
         graph, params, truth = build_branch_group_3way(
             p_true=[0.5, 0.3, 0.2],
             n_a=8_000,
-            exhaustive=True,
+            all_targets_have_events=True,
             seed=45,
         )
         result, trace, topology = _run_pipeline(graph, params)

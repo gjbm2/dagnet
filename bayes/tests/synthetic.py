@@ -6,7 +6,7 @@ Each builder produces:
   - param_files: dict of param_id → param file data with values[] entries
   - ground_truth: dict of edge_id → true probability (for recovery checks)
 
-Evidence is generated from Multinomial draws with a fixed seed.
+Evidence is generated from Binomial/Multinomial draws with a fixed seed.
 """
 
 from __future__ import annotations
@@ -24,7 +24,7 @@ def _node(
     *,
     is_start: bool = False,
     absorbing: bool = False,
-    exhaustive: bool = False,
+    event_id: str | None = None,
 ) -> dict:
     node = {
         "uuid": node_id,
@@ -32,8 +32,8 @@ def _node(
         "entry": {"is_start": is_start} if is_start else {},
         "absorbing": absorbing,
     }
-    if exhaustive:
-        node["exhaustive"] = True
+    if event_id:
+        node["event_id"] = event_id
     return node
 
 
@@ -44,15 +44,19 @@ def _edge(
     param_id: str,
     *,
     p_mean: float = 0.5,
+    latency: dict | None = None,
 ) -> dict:
+    p_block: dict = {
+        "id": param_id,
+        "mean": p_mean,
+    }
+    if latency:
+        p_block["latency"] = latency
     return {
         "uuid": edge_id,
         "from": from_node,
         "to": to_node,
-        "p": {
-            "id": param_id,
-            "mean": p_mean,
-        },
+        "p": p_block,
     }
 
 
@@ -73,6 +77,71 @@ def _window_param_file(
                 "n": int(n),
                 "k": int(k),
                 "mean": effective_mean,
+                "stdev": 0.01,
+            },
+        ],
+    }
+
+
+def _cohort_param_file(
+    n_daily: list[int],
+    k_daily: list[int],
+    dates: list[str],
+    *,
+    param_id: str = "",
+    anchor_node: str = "node-anchor",
+) -> dict:
+    """Build a parameter file dict with a cohort observation (daily arrays)."""
+    total_n = sum(n_daily)
+    total_k = sum(k_daily)
+    return {
+        "id": param_id,
+        "values": [
+            {
+                "sliceDSL": f"cohort({anchor_node},1-Oct-24:1-Jan-25)",
+                "n": total_n,
+                "k": total_k,
+                "n_daily": n_daily,
+                "k_daily": k_daily,
+                "dates": dates,
+                "mean": total_k / total_n if total_n > 0 else 0.5,
+                "stdev": 0.01,
+            },
+        ],
+    }
+
+
+def _window_and_cohort_param_file(
+    window_n: int,
+    window_k: int,
+    n_daily: list[int],
+    k_daily: list[int],
+    dates: list[str],
+    *,
+    param_id: str = "",
+    anchor_node: str = "node-anchor",
+) -> dict:
+    """Build a parameter file with both window and cohort observations."""
+    total_n = sum(n_daily)
+    total_k = sum(k_daily)
+    return {
+        "id": param_id,
+        "values": [
+            {
+                "sliceDSL": "window(1-Jan-25:1-Mar-25)",
+                "n": window_n,
+                "k": window_k,
+                "mean": window_k / window_n if window_n > 0 else 0.5,
+                "stdev": 0.01,
+            },
+            {
+                "sliceDSL": f"cohort({anchor_node},1-Oct-24:1-Jan-25)",
+                "n": total_n,
+                "k": total_k,
+                "n_daily": n_daily,
+                "k_daily": k_daily,
+                "dates": dates,
+                "mean": total_k / total_n if total_n > 0 else 0.5,
                 "stdev": 0.01,
             },
         ],
@@ -106,7 +175,7 @@ def build_branch_group_3way(
     p_true: list[float],
     n_a: int = 10_000,
     *,
-    exhaustive: bool = False,
+    all_targets_have_events: bool = False,
     seed: int = 42,
 ) -> tuple[dict, dict[str, dict], dict[str, float]]:
     """Build A → {B, C, D} branch group with known Multinomial truth.
@@ -114,7 +183,8 @@ def build_branch_group_3way(
     Args:
         p_true: [p_B, p_C, p_D]. If sum < 1, residual is dropout.
         n_a: shared denominator (source node traffic).
-        exhaustive: whether the branch group is exhaustive.
+        all_targets_have_events: if True, all target nodes get event_ids,
+            causing the compiler to infer exhaustiveness.
         seed: random seed for reproducible draws.
 
     Returns:
@@ -135,7 +205,7 @@ def build_branch_group_3way(
     edge_a_d = "edge-a-d"
 
     # Draw observations
-    if exhaustive:
+    if all_targets_have_events:
         # Exhaustive: probabilities must sum to 1, no dropout
         normalised = [p / sum(p_true) for p in p_true]
         counts = _multinomial_draw(rng, n_a, normalised)
@@ -146,10 +216,15 @@ def build_branch_group_3way(
     graph_snapshot = {
         "nodes": [
             _node(anchor_id, is_start=True),
-            _node(node_a, exhaustive=exhaustive),
-            _node(node_b, absorbing=True),
-            _node(node_c, absorbing=True),
-            _node(node_d, absorbing=True),
+            _node(node_a),
+            # When all_targets_have_events, give each target an event_id
+            # so the compiler infers exhaustiveness from graph structure.
+            _node(node_b, absorbing=True,
+                  event_id="evt-b" if all_targets_have_events else None),
+            _node(node_c, absorbing=True,
+                  event_id="evt-c" if all_targets_have_events else None),
+            _node(node_d, absorbing=True,
+                  event_id="evt-d" if all_targets_have_events else None),
         ],
         "edges": [
             _edge(edge_anchor_a, anchor_id, node_a, "param-anchor-a", p_mean=0.9),
@@ -313,6 +388,274 @@ def build_mixed_solo_and_branch(
         edge_a_c: branch_p[1],
         edge_anchor_x: anchor_p[1],
         edge_x_y: solo_p_xy,
+    }
+
+    return graph_snapshot, param_files, ground_truth
+
+
+# ---------------------------------------------------------------------------
+# Phase A scenario builders: solo edges, chains, cohort data
+# ---------------------------------------------------------------------------
+
+def _generate_cohort_daily(
+    rng: np.random.Generator,
+    p_true: float,
+    n_per_day: int,
+    n_days: int,
+    *,
+    onset: float = 0.0,
+    mu: float = 2.0,
+    sigma: float = 0.5,
+    today_str: str = "2025-03-01",
+) -> tuple[list[int], list[int], list[str]]:
+    """Generate synthetic cohort daily arrays with completeness effects.
+
+    For each day, users enter. Some convert with true probability p_true,
+    but those whose latency exceeds the observation window are censored.
+    This produces the completeness effect the model must handle.
+
+    Returns (n_daily, k_daily, dates).
+    """
+    from datetime import datetime, timedelta
+    from bayes.compiler.completeness import shifted_lognormal_cdf
+
+    today = datetime.strptime(today_str, "%Y-%m-%d")
+    n_daily = []
+    k_daily = []
+    dates = []
+
+    for day_offset in range(n_days):
+        cohort_date = today - timedelta(days=n_days - day_offset)
+        age_days = (today - cohort_date).days
+
+        true_k = rng.binomial(n_per_day, p_true)
+
+        # Apply completeness censoring
+        completeness = shifted_lognormal_cdf(age_days, onset, mu, sigma)
+        observed_k = rng.binomial(true_k, completeness)
+
+        n_daily.append(int(n_per_day))
+        k_daily.append(int(observed_k))
+        dates.append(cohort_date.strftime("%Y-%m-%d"))
+
+    return n_daily, k_daily, dates
+
+
+def build_solo_edge_window(
+    p_true: float = 0.3,
+    n: int = 10_000,
+    *,
+    seed: int = 50,
+) -> tuple[dict, dict[str, dict], dict[str, float]]:
+    """A1: Single solo edge with abundant window data.
+
+    Topology: anchor → A → B (absorbing)
+    Evidence: window observation on A→B.
+    """
+    rng = np.random.default_rng(seed)
+    k = rng.binomial(n, p_true)
+
+    graph_snapshot = {
+        "nodes": [
+            _node("node-anchor", is_start=True),
+            _node("node-a"),
+            _node("node-b", absorbing=True),
+        ],
+        "edges": [
+            _edge("edge-anchor-a", "node-anchor", "node-a", "param-anchor-a", p_mean=0.9),
+            _edge("edge-a-b", "node-a", "node-b", "param-a-b", p_mean=p_true),
+        ],
+    }
+
+    param_files = {
+        "param-anchor-a": _window_param_file(n * 2, int(n * 2 * 0.9), param_id="param-anchor-a"),
+        "param-a-b": _window_param_file(n, k, param_id="param-a-b"),
+    }
+
+    return graph_snapshot, param_files, {"edge-a-b": p_true}
+
+
+def build_solo_edge_sparse(
+    p_true: float = 0.4,
+    n: int = 50,
+    *,
+    seed: int = 51,
+) -> tuple[dict, dict[str, dict], dict[str, float]]:
+    """A2: Single solo edge with sparse data (n=50)."""
+    rng = np.random.default_rng(seed)
+    k = rng.binomial(n, p_true)
+
+    graph_snapshot = {
+        "nodes": [
+            _node("node-anchor", is_start=True),
+            _node("node-a"),
+            _node("node-b", absorbing=True),
+        ],
+        "edges": [
+            _edge("edge-anchor-a", "node-anchor", "node-a", "param-anchor-a", p_mean=0.9),
+            _edge("edge-a-b", "node-a", "node-b", "param-a-b", p_mean=p_true),
+        ],
+    }
+
+    param_files = {
+        "param-anchor-a": _window_param_file(n * 3, int(n * 3 * 0.9), param_id="param-anchor-a"),
+        "param-a-b": _window_param_file(n, k, param_id="param-a-b"),
+    }
+
+    return graph_snapshot, param_files, {"edge-a-b": p_true}
+
+
+def build_solo_edge_window_and_cohort(
+    p_true: float = 0.35,
+    window_n: int = 5_000,
+    cohort_n_per_day: int = 100,
+    cohort_days: int = 90,
+    *,
+    onset: float = 2.0,
+    mu: float = 2.3,
+    sigma: float = 0.6,
+    seed: int = 52,
+) -> tuple[dict, dict[str, dict], dict[str, float]]:
+    """A3: Solo edge with both window and cohort data.
+
+    The hierarchical p_base/p_window/p_cohort structure is exercised.
+    Edge has latency so completeness coupling is active on cohort obs.
+    """
+    rng = np.random.default_rng(seed)
+
+    window_k = rng.binomial(window_n, p_true)
+    n_daily, k_daily, dates = _generate_cohort_daily(
+        rng, p_true, cohort_n_per_day, cohort_days,
+        onset=onset, mu=mu, sigma=sigma,
+    )
+
+    latency_block = {
+        "latency_parameter": True,
+        "onset_delta_days": onset,
+        "mu": mu,
+        "sigma": sigma,
+        "median_lag_days": onset + float(np.exp(mu)),
+        "mean_lag_days": onset + float(np.exp(mu + sigma**2 / 2)),
+    }
+
+    graph_snapshot = {
+        "nodes": [
+            _node("node-anchor", is_start=True),
+            _node("node-a"),
+            _node("node-b", absorbing=True),
+        ],
+        "edges": [
+            _edge("edge-anchor-a", "node-anchor", "node-a", "param-anchor-a", p_mean=0.9),
+            _edge("edge-a-b", "node-a", "node-b", "param-a-b",
+                  p_mean=p_true, latency=latency_block),
+        ],
+    }
+
+    param_files = {
+        "param-anchor-a": _window_param_file(
+            window_n * 2, int(window_n * 2 * 0.9), param_id="param-anchor-a"),
+        "param-a-b": _window_and_cohort_param_file(
+            window_n, window_k, n_daily, k_daily, dates, param_id="param-a-b"),
+    }
+
+    return graph_snapshot, param_files, {"edge-a-b": p_true}
+
+
+def build_solo_edge_immature_cohort(
+    p_true: float = 0.5,
+    cohort_n_per_day: int = 200,
+    cohort_days: int = 30,
+    *,
+    onset: float = 5.0,
+    mu: float = 3.0,
+    sigma: float = 0.7,
+    seed: int = 53,
+) -> tuple[dict, dict[str, dict], dict[str, float]]:
+    """A4: Solo edge with only immature cohort data.
+
+    Long latency (onset=5, mu=3 → median ~25 days) and short cohort
+    (30 days). Most recent days have low completeness. The model must
+    attribute low observed k to immaturity, not low p.
+    """
+    rng = np.random.default_rng(seed)
+
+    n_daily, k_daily, dates = _generate_cohort_daily(
+        rng, p_true, cohort_n_per_day, cohort_days,
+        onset=onset, mu=mu, sigma=sigma,
+    )
+
+    latency_block = {
+        "latency_parameter": True,
+        "onset_delta_days": onset,
+        "mu": mu,
+        "sigma": sigma,
+        "median_lag_days": onset + float(np.exp(mu)),
+        "mean_lag_days": onset + float(np.exp(mu + sigma**2 / 2)),
+    }
+
+    graph_snapshot = {
+        "nodes": [
+            _node("node-anchor", is_start=True),
+            _node("node-b", absorbing=True),
+        ],
+        "edges": [
+            _edge("edge-anchor-b", "node-anchor", "node-b", "param-anchor-b",
+                  p_mean=p_true, latency=latency_block),
+        ],
+    }
+
+    param_files = {
+        "param-anchor-b": _cohort_param_file(
+            n_daily, k_daily, dates,
+            param_id="param-anchor-b", anchor_node="node-anchor"),
+    }
+
+    return graph_snapshot, param_files, {"edge-anchor-b": p_true}
+
+
+def build_linear_chain(
+    p_true: list[float] = [0.7, 0.5, 0.3],
+    n: int = 8_000,
+    *,
+    seed: int = 54,
+) -> tuple[dict, dict[str, dict], dict[str, float]]:
+    """A5: Linear chain A → B → C → D (3 solo edges in series).
+
+    Tests that edges in a chain are fitted independently. Window only,
+    no latency, no cohort.
+    """
+    rng = np.random.default_rng(seed)
+
+    k_ab = rng.binomial(n, p_true[0])
+    n_bc = k_ab
+    k_bc = rng.binomial(n_bc, p_true[1])
+    n_cd = k_bc
+    k_cd = rng.binomial(n_cd, p_true[2])
+
+    graph_snapshot = {
+        "nodes": [
+            _node("node-a", is_start=True),
+            _node("node-b"),
+            _node("node-c"),
+            _node("node-d", absorbing=True),
+        ],
+        "edges": [
+            _edge("edge-a-b", "node-a", "node-b", "param-a-b", p_mean=p_true[0]),
+            _edge("edge-b-c", "node-b", "node-c", "param-b-c", p_mean=p_true[1]),
+            _edge("edge-c-d", "node-c", "node-d", "param-c-d", p_mean=p_true[2]),
+        ],
+    }
+
+    param_files = {
+        "param-a-b": _window_param_file(n, k_ab, param_id="param-a-b"),
+        "param-b-c": _window_param_file(max(n_bc, 1), k_bc, param_id="param-b-c"),
+        "param-c-d": _window_param_file(max(n_cd, 1), k_cd, param_id="param-c-d"),
+    }
+
+    ground_truth = {
+        "edge-a-b": p_true[0],
+        "edge-b-c": p_true[1],
+        "edge-c-d": p_true[2],
     }
 
     return graph_snapshot, param_files, ground_truth

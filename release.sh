@@ -259,7 +259,7 @@ if [[ "$RUN_TESTS" == true ]]; then
   # Run Python tests (with skip-on-keypress countdown)
   SKIP_PYTHON=false
   if [[ "$AUTO_MODE" != true ]]; then
-    print_yellow "[3/3] Python tests — press any key within 3s to skip..."
+    print_yellow "[3/4] Python tests — press any key within 3s to skip..."
     for i in 3 2 1; do
       printf "\r  Starting in %d... " "$i"
       if read -r -s -n 1 -t 1 _key 2>/dev/null; then
@@ -273,7 +273,7 @@ if [[ "$RUN_TESTS" == true ]]; then
   if [[ "$SKIP_PYTHON" == true ]]; then
     print_yellow "  ⊘ Python tests skipped (user interrupt)"
   else
-    print_yellow "[3/3] Running Python tests..."
+    print_yellow "[3/4] Running Python tests..."
     # Run from graph-editor so pytest picks up graph-editor/pytest.ini (incl pythonpath=lib).
     if ! (cd graph-editor && venv/bin/pytest --tb=short -q); then
       echo ""
@@ -282,6 +282,34 @@ if [[ "$RUN_TESTS" == true ]]; then
       exit 1
     fi
     print_green "✓ Python tests passed"
+  fi
+  echo ""
+
+  # Run Bayes compiler tests (separate invocation — different rootdir, MCMC ~20s)
+  SKIP_BAYES=false
+  if [[ "$AUTO_MODE" != true ]]; then
+    print_yellow "[4/4] Bayes compiler tests (~20s MCMC) — press any key within 3s to skip..."
+    for i in 3 2 1; do
+      printf "\r  Starting in %d... " "$i"
+      if read -r -s -n 1 -t 1 _key 2>/dev/null; then
+        SKIP_BAYES=true
+        break
+      fi
+    done
+    printf "\r                              \r"
+  fi
+
+  if [[ "$SKIP_BAYES" == true ]]; then
+    print_yellow "  ⊘ Bayes compiler tests skipped (user interrupt)"
+  else
+    print_yellow "[4/4] Running Bayes compiler tests..."
+    if ! (cd graph-editor && venv/bin/pytest ../bayes/tests/ --tb=short -q); then
+      echo ""
+      print_red "✗ Bayes compiler tests failed!"
+      print_red "Release aborted."
+      exit 1
+    fi
+    print_green "✓ Bayes compiler tests passed"
   fi
   echo ""
   

@@ -555,17 +555,72 @@ for specifying the superstructure mapping and strength parameter.
 Not needed for Phase A (edges with sufficient direct data) — becomes
 valuable when building new graphs or restructuring existing ones.
 
-**Model variable precedence (deferred)**
+**Model variable precedence and source provenance**
 
-When both analytic (`latency.mu`/`sigma`) and Bayesian
-(`posterior.mu_mean`/`sigma_mean`) params exist for an edge, which
-set is authoritative for derived quantities (completeness, forecast
-blend, path composition)? For now, analytic values remain authoritative
-— Bayesian posteriors are inspectable alongside but do not override.
-The Bayes webhook does NOT overwrite `latency.mu`/`latency.sigma`.
-This decision needs revisiting once Bayes posteriors are validated and
-trusted, and will require a provenance indicator so the active model
-source is always inspectable.
+As the compiler iterates through successive phases, Bayesian posteriors
+become richer than analytic estimates. The system must track which
+source produced which scalar, let the user switch between sources, and
+surface provenance clearly in edge properties.
+
+**Architecture** (owned here in programme.md):
+
+1. **`model_source` metadata block** on `ProbabilityParam` — records
+   `probability_source` and `latency_source` (`'analytic'` |
+   `'bayesian'` | `'manual'`) plus `*_source_at` timestamps. Written
+   by whichever pipeline last updated the scalars.
+
+2. **`model_source_preference`** on `ConversionGraph` — per-graph
+   setting, default `'bayesian'`. When a converged posterior exists
+   and passes quality gates (`rhat < 1.05`, `ess > 400`), its values
+   cascade to scalars. Edges without posteriors (or with failed
+   posteriors) fall back to analytic automatically. User can override
+   to `'analytic'` via Graph Properties or Data menu.
+
+3. **Cascade behaviour** — under `'bayesian'` preference, the webhook
+   writes `latency.mu`/`sigma`/`t95` from posterior means (respecting
+   `_overridden` guards). Under `'analytic'`, today's behaviour is
+   unchanged.
+
+4. **Override hierarchy** — manual > preference-selected automated
+   source > fallback automated source. `model_source` records the
+   actual source, not the preference.
+
+5. **Quality-gated fallback** — even under `'bayesian'` preference,
+   edges whose posteriors fail quality gates silently fall back to
+   analytic. `model_source` records the actual source per edge.
+
+6. **Phase activation**:
+
+   | Phase | What `'bayesian'` preference enables |
+   |---|---|
+   | A (done) | `p.mean`/`p.stdev` from window `α`/`β` (adds provenance tracking) |
+   | B | Same, plus Dirichlet-derived `p.mean` for branch group edges |
+   | C | Per-slice scalar derivation from slice posteriors |
+   | D | `latency.mu`/`sigma`/`t95` from latency posteriors — full scalar switchover |
+
+**Schema changes**:
+- `src/types/index.ts`: `ModelSource` interface on `ProbabilityParam`;
+  `model_source_preference` on `ConversionGraph`
+- `lib/graph_types.py`: matching Pydantic models
+- `api/bayes-webhook.ts`: write `model_source` block; consult
+  `model_source_preference` for latency cascade
+- BE analysis runner: write `probability_source: 'analytic'` when
+  fitting
+- Scalar re-cascade service: re-evaluate per-edge sources when
+  `model_source_preference` changes
+
+**UI surfaces** — detailed design in doc 9 §5.7:
+- Graph Properties "Model" card (§5.7.1) — source preference control,
+  source summary, last fit info, quality gate display
+- Data menu toggle (§5.7.2) — quick source switching
+- Edge ParameterSection source-grouped layout (§5.7.3) — source
+  badges, inline HDI, convergence section, comparison view
+
+**Not in scope** (future):
+- Per-edge source override
+- Automated source switching via backtesting
+- Path-level provenance tracking
+- Per-graph quality gate threshold tuning
 
 **Downstream conditional data**: the data pipeline only fetches
 condition-sliced observations on the conditional params themselves, not

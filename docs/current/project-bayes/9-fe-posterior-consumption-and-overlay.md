@@ -622,6 +622,215 @@ recency decay.
 
 ---
 
+## 5.7 Model source UI surfaces
+
+As the compiler progresses through phases (B → C → D), Bayesian
+posteriors become richer and more authoritative. The FE must surface
+model source provenance clearly, let the user switch between sources,
+and present params grouped by provenance so the user trusts what
+they're seeing.
+
+This section covers the three UI surfaces: Graph Properties "Model"
+card, Data menu actions, and edge-level ParameterSection layout. The
+architectural foundations (`model_source` metadata block, per-graph
+`model_source_preference`, cascade behaviour, override hierarchy,
+phase activation) are defined in programme.md §Model variable
+precedence.
+
+### 5.7.1 Graph Properties: "Model" card
+
+A new card in Graph Properties (alongside the existing graph metadata
+cards) that surfaces model source configuration and status at a
+glance:
+
+- **Source preference**: radio or dropdown — "Bayesian (recommended)"
+  / "Analytic". Mirrors `model_source_preference` on the graph
+  document. Change takes effect on save (triggers scalar re-cascade).
+- **Source summary**: read-only row showing edge counts by actual
+  source — e.g. "8 edges Bayesian, 2 edges analytic (fallback), 1
+  edge manual override". Derived from scanning `model_source` across
+  parameter files. Gives the user an immediate sense of how much of
+  the graph is Bayesian vs fallback.
+- **Last Bayesian fit**: date, duration, convergence summary (from
+  `_bayes` metadata). Links to the fit quality overlay for detail.
+- **Quality gate thresholds**: display the current quality gates
+  (rhat, ESS, divergences) that determine whether an edge's Bayesian
+  posterior is trusted. Initially read-only (from forecasting
+  settings); editable in a future iteration if per-graph tuning is
+  needed.
+
+This card is the primary surface for the user to understand and
+control which model engine drives their graph's display values.
+
+**Files**:
+- `src/components/PropertiesPanel.tsx` — new "Model" card in graph
+  properties section (alongside existing graph metadata cards)
+- `src/types/index.ts` — `model_source_preference` on
+  `ConversionGraph`
+
+### 5.7.2 Data menu: model source actions
+
+The Data menu already has "Run Bayesian Fit" (§5.6). Add a companion
+item for source switching:
+
+- **"Model Source: Bayesian"** / **"Model Source: Analytic"** — a
+  toggle or submenu item that switches `model_source_preference`.
+  Mirrors the Graph Properties card but accessible without opening
+  properties. Same pattern as toggling `dailyFetch` from the Data
+  menu.
+- After switching to Bayesian, if posteriors exist, a brief toast:
+  "Switched to Bayesian model source — N edges updated". If no
+  posteriors exist: "No Bayesian posteriors available — run a fit
+  first" with the "Run Bayesian Fit" action offered.
+
+The Data menu is the natural home because model source is a data
+pipeline concern (which pipeline's outputs drive the scalars), not a
+visual/layout concern.
+
+**Files**:
+- `src/components/DataMenu.tsx` — toggle item
+- Service layer for scalar re-cascade (see programme.md §3)
+
+### 5.7.3 Edge Properties: model params grouped by provenance
+
+#### Current state
+
+The ParameterSection layout treats Bayesian posteriors as a metadata
+footnote. PosteriorIndicator is a small badge below the mean value,
+clickable for a diagnostic popover. The current layout:
+
+```
+Probability (ParameterSection)
+├── Parameter ID: [selector]
+├── External Data Source: [ConnectionControl]
+├── Mean: 27.8%           [ZapOff override icon]
+│   └── [PosteriorIndicator badge: small dot + "Strong"]
+├── Std Dev: 0.031        [ZapOff override icon]
+├── Distribution: [dropdown]
+├── Latency Tracking: [checkbox]
+│   ├── Edge t95: 14.2    [ZapOff override icon]
+│   ├── Path t95: ...     [ZapOff override icon]
+│   ├── Onset: 1.0        [ZapOff override icon]
+│   └── Cohort anchor: ...
+└── Query: [QueryExpressionEditor]
+```
+
+Problems as Bayesian becomes the default source:
+- No indication of which source produced each displayed value without
+  clicking the PosteriorIndicator badge
+- No way to compare Bayesian vs analytic values at a glance
+- HDI bounds (the primary advantage of Bayesian) hidden in a popover
+- Latency params buried behind a toggle, no source badge
+- No visual distinction between "this edge is Bayesian" and "this
+  edge fell back to analytic because the posterior failed"
+
+#### Proposed layout — source-grouped with provenance badges
+
+The probability sub-section for an edge with a Bayesian posterior
+should present params in source-grouped blocks:
+
+```
+Probability
+├── Parameter ID: [selector]
+├── Data Source: [ConnectionControl]
+│
+├── Active Model [source badge: "Bayesian" or "Analytic"]
+│   ├── Mean: 27.8%          [override icon]
+│   ├── Std Dev: 0.031       [override icon]
+│   └── HDI: [22.0% – 35.0%] (90%)
+│
+├── Latency                   [source badge]
+│   ├── t95: 14.2 days       [override icon]
+│   ├── Onset: 1.0 days      [override icon]
+│   └── HDI: [11.8 – 17.1 days] (90%)
+│
+├── Convergence (collapsed by default)
+│   ├── r-hat: 1.01  ESS: 1200  Divergences: 0
+│   ├── Quality tier: Strong
+│   ├── Evidence grade: 3
+│   └── Fitted: 18-Mar-26
+│
+├── Comparison (collapsed, shown only when both sources exist)
+│   ├── Analytic: mean 28.1%, stdev 0.033
+│   ├── Bayesian: mean 27.8%, stdev 0.031
+│   └── Δ: -0.3pp (within HDI)
+│
+└── Query: [QueryExpressionEditor]
+```
+
+#### Design principles
+
+**Source badge on each group header**: a small inline label
+("Bayesian", "Analytic", "Manual") on the Active Model and Latency
+headers. Coloured to match the quality overlay palette. This answers
+"where did these numbers come from?" without clicking.
+
+**HDI inline with scalars**: when a Bayesian posterior is the active
+source, the HDI bounds appear as a compact row directly below mean
+and stdev. This is the primary advantage of Bayesian estimates over
+analytic — uncertainty quantification — and it should be immediately
+visible, not hidden in a popover.
+
+**Convergence collapsed by default**: rhat, ESS, divergences, quality
+tier, evidence grade, fitted date. Important for trust but not needed
+on every glance. The PosteriorIndicator badge (coloured dot + tier
+label) remains as the compact inline signal; the collapsed section
+is the expanded view.
+
+**Comparison section**: when both Bayesian and analytic values exist,
+a collapsed section shows them side by side with the delta. This
+replaces the current pattern where the user must mentally compare the
+PosteriorIndicator popover against the displayed scalar. The delta
+row ("Δ: -0.3pp, within HDI") tells the user whether the difference
+is material.
+
+**Override icons unchanged**: the AutomatableField ZapOff pattern
+continues to work per-field. When a field is manually overridden, the
+source badge updates to "Manual" for that field. The source badge
+reflects reality, not preference.
+
+**Latency section elevation**: currently latency params (t95, onset,
+mu, sigma) are nested behind a "Latency Tracking" toggle deep in the
+parameter section. When the active source is Bayesian and latency
+posteriors exist (Phase D), the latency params should be elevated to
+the same visual level as the probability params, with their own source
+badge and HDI row. Pre-Phase D (latency not latent), the current
+nested display is fine — there's no Bayesian latency to surface.
+
+**Edges without posteriors**: when no posterior exists (edge not yet
+fitted, or skipped), the layout is unchanged from today — scalar
+fields with AutomatableField wrappers, no source badge (implicitly
+analytic), no HDI row, no comparison section. The PosteriorIndicator
+badge does not appear. This avoids visual noise on edges that haven't
+been through the Bayesian pipeline.
+
+**Edges with failed posteriors**: when a posterior exists but failed
+quality gates (rhat > 1.05, etc.), the source badge shows "Analytic
+(Bayesian failed)" with a warning colour. The Convergence section
+auto-expands to show why. The Comparison section shows both values
+with the Bayesian values flagged as untrusted.
+
+#### Phase-specific rendering
+
+| Phase | Edge Properties change |
+|---|---|
+| A (done) | Source badge on probability group. HDI row. Convergence section. Comparison section. Current PosteriorIndicator badge complemented by source badge. |
+| B | Same, plus Dirichlet simplex indicator on branch group edges (e.g. "Σp = 0.87, dropout = 0.13") |
+| C | Per-slice sub-rows in probability section when slice posteriors exist |
+| D | Latency group elevated with own source badge + HDI. Full source grouping. |
+
+**Files**:
+- `src/components/ParameterSection.tsx` — source-grouped layout,
+  source badges, HDI row, convergence section, comparison section
+- `src/components/AutomatableField.tsx` — no change (override icons
+  work as today)
+- `src/components/shared/PosteriorIndicator.tsx` — retains compact
+  badge role, complemented by source badge on group headers
+- `src/components/PropertiesPanel.tsx` — pass `model_source` data
+  to ParameterSection
+
+---
+
 ## 6. Application locus (RESOLVED 17-Mar-26)
 
 Three-tier computation model — each tier does qualitatively different
@@ -678,3 +887,4 @@ The implementation plan in sections 3–5 assumes this resolution.
 | Doc 6 | Compiler output | Defines what posteriors exist per phase |
 | Doc 8 | Implementation phasing | Determines when each posterior type appears |
 | Programme.md | Application locus decision | Blocks final scope of sections 3–5 |
+| Programme.md §Model variable precedence | Source provenance architecture | `model_source` block, `model_source_preference`, cascade behaviour, override hierarchy, phase activation. §5.7 in this doc covers the UI surfaces. |

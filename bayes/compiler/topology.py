@@ -61,7 +61,24 @@ def analyse_topology(graph_snapshot: dict) -> TopologyAnalysis:
         if len(out_edges) > 1:
             group_id = f"bg_{source_uuid[:12]}"
             source_node_data = node_by_uuid.get(source_uuid, {})
-            is_exhaustive = bool(source_node_data.get("exhaustive", False))
+
+            # Infer exhaustiveness from graph structure.
+            #
+            # Case nodes (A/B test splits): always exhaustive — every user
+            # is assigned to exactly one variant by construction.
+            #
+            # Normal nodes: exhaustive iff every sibling's target node has
+            # an event_id (all outcomes are measurable). If any target lacks
+            # an event, that path is unmeasurable (abandonment, leakage) and
+            # the Dirichlet needs a dropout component to absorb the residual.
+            if source_node_data.get("type") == "case":
+                is_exhaustive = True
+            else:
+                is_exhaustive = all(
+                    bool(node_by_uuid.get(e["to"], {}).get("event_id"))
+                    for e in out_edges
+                )
+
             branch_groups[group_id] = BranchGroup(
                 group_id=group_id,
                 source_node=source_uuid,
