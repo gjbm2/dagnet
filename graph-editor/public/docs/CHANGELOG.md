@@ -1,4 +1,11 @@
 # DagNet Release Notes
+## Version 1.7.24b
+**Released:** 18-Mar-26
+
+Bayesian surfacing
+
+---
+
 ## Version 1.7.22b
 **Released:** 17-Mar-26
 
