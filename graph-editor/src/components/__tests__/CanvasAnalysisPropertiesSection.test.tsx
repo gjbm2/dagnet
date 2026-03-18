@@ -70,6 +70,7 @@ vi.mock('../../contexts/TabContext', () => ({
       switchTab: vi.fn(),
       getScenarioState: () => scenarioStateMock,
       getScenarioVisibilityMode: () => 'f+e',
+      getEffectiveScenarioColour: (_tabId: string, _sid: string) => '#3b82f6',
       toggleScenarioVisibility: vi.fn(),
       cycleScenarioVisibilityMode: vi.fn(),
     },
@@ -304,12 +305,50 @@ describe('CanvasAnalysisPropertiesSection smoke tests', () => {
     expect(wrappersWithOverlay.length).toBe(1);
   });
 
-  it('should reorder the full stored scenario list in custom mode', () => {
+  it('should render Current underlayer at bottom (bucket C) in custom mode', () => {
     currentGraph.canvasAnalyses[0].mode = 'custom';
     currentGraph.canvasAnalyses[0].recipe.scenarios = [
-      { scenario_id: 'current', name: 'Current', colour: '#3b82f6', effective_dsl: 'window(-30d:)', visibility_mode: 'f+e' },
+      { scenario_id: 'sc-A', name: 'Google', colour: '#ec4899', effective_dsl: 'context(channel:google)', visibility_mode: 'f+e' },
+      { scenario_id: 'no-overrides', name: 'No overrides', colour: '#3b82f6', effective_dsl: undefined, visibility_mode: 'f+e' },
+      { scenario_id: 'current', name: 'Current', colour: '#3b82f6', effective_dsl: undefined, visibility_mode: 'f+e' },
+    ];
+    currentGraph.canvasAnalyses[0].display = { hidden_scenarios: ['current'] };
+
+    const { container } = render(
+      <PropertiesPanel
+        selectedNodeId={null}
+        onSelectedNodeChange={() => {}}
+        selectedEdgeId={null}
+        onSelectedEdgeChange={() => {}}
+        selectedAnalysisId="ca-1"
+        tabId="tab-1"
+      />
+    );
+
+    const rows = Array.from(container.querySelectorAll('.scenario-row'));
+    const names = rows.map(r => r.querySelector('.scenario-name')?.textContent?.replace(/\s+/g, ' ').trim());
+
+    // Bucket B (user scenarios) rendered first, then divider, then bucket C (base/underlayer) at bottom
+    expect(names).toEqual(['Google', 'No overrides', 'Current']);
+
+    // Current row should have base styling (bucket C) and be last
+    const lastRow = rows[rows.length - 1];
+    expect(lastRow.classList.contains('scenario-base')).toBe(true);
+
+    // Current should be hidden (not visible)
+    const eyeOffIcons = lastRow.querySelectorAll('svg');
+    // The visibility button should show EyeOff for hidden scenarios
+    expect(lastRow.querySelector('.scenario-action-btn')).toBeTruthy();
+  });
+
+  it('should reorder the full stored scenario list in custom mode', () => {
+    currentGraph.canvasAnalyses[0].mode = 'custom';
+    // current/base get kind:'current'/'base' (non-draggable anchors);
+    // only user scenarios are draggable.
+    currentGraph.canvasAnalyses[0].recipe.scenarios = [
       { scenario_id: 'sc-1', name: 'Google', colour: '#ec4899', effective_dsl: 'window(-30d:).context(channel:google)', visibility_mode: 'f+e' },
-      { scenario_id: 'base', name: 'Base', colour: '#6b7280', effective_dsl: 'window(-30d:)', visibility_mode: 'f+e' },
+      { scenario_id: 'sc-2', name: 'Meta', colour: '#f59e0b', effective_dsl: 'window(-30d:).context(channel:meta)', visibility_mode: 'f+e' },
+      { scenario_id: 'sc-3', name: 'Organic', colour: '#10b981', effective_dsl: 'window(-30d:).context(channel:organic)', visibility_mode: 'f+e' },
     ];
 
     const { container } = render(
@@ -332,7 +371,7 @@ describe('CanvasAnalysisPropertiesSection smoke tests', () => {
     fireEvent.dragOver(allRows[0], { dataTransfer });
     fireEvent.dragEnd(draggableRows[2], { dataTransfer });
 
-    expect(currentGraph.canvasAnalyses[0].recipe.scenarios.map((s: any) => s.scenario_id)).toEqual(['base', 'current', 'sc-1']);
+    expect(currentGraph.canvasAnalyses[0].recipe.scenarios.map((s: any) => s.scenario_id)).toEqual(['sc-3', 'sc-1', 'sc-2']);
     expect(saveHistoryStateMock).toHaveBeenCalledWith('Reorder chart scenarios');
   });
 
@@ -371,7 +410,9 @@ describe('CanvasAnalysisPropertiesSection smoke tests', () => {
     fireEvent.dragEnd(draggableRows[0], { dataTransfer });
 
     expect(currentGraph.canvasAnalyses[0].mode).toBe('custom');
-    expect(currentGraph.canvasAnalyses[0].recipe.scenarios.map((s: any) => s.scenario_id)).toEqual(['current', 'sc-2', 'sc-1', 'base']);
+    // Reorder happens, then auto-promote to custom via advanceMode:
+    // 'current' replaced by 'no-overrides' in-place, original moved to end (hidden underlayer)
+    expect(currentGraph.canvasAnalyses[0].recipe.scenarios.map((s: any) => s.scenario_id)).toEqual(['sc-1', 'no-overrides', 'sc-2', 'base', 'current']);
     expect(saveHistoryStateMock).toHaveBeenCalledWith('Reorder chart scenarios');
   });
 });

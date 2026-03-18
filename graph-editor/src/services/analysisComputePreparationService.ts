@@ -344,7 +344,10 @@ export async function prepareAnalysisComputeInputs(
       return logBlockedResult(params, { status: 'blocked', reason: 'custom_scenarios_missing' });
     }
 
-    scenarios = customScenarios.map((scenario) => {
+    // Build prepared scenarios in recipe order, then reorder so 'current'
+    // (the base reference) comes first.  Bridge uses index 0 as start and
+    // index 1 as end — "from base TO variation".
+    const builtScenarios = customScenarios.map((scenario) => {
       const visibilityMode = scenario.visibility_mode || 'f+e';
       let scenarioGraph: Graph = graph;
       // Apply captured graph parameter overrides (from Live-mode composition).
@@ -370,6 +373,12 @@ export async function prepareAnalysisComputeInputs(
         ),
       };
     });
+    const currentIdx = builtScenarios.findIndex((s) => s.scenario_id === 'current');
+    if (currentIdx > 0) {
+      const [currentScenario] = builtScenarios.splice(currentIdx, 1);
+      builtScenarios.unshift(currentScenario);
+    }
+    scenarios = builtScenarios;
   }
 
   logChartReadinessTrace('AnalysisPrepare:scenarios-built', {

@@ -400,8 +400,11 @@ describe('Live → Custom full transition parity (capture + advanceMode + custom
     advanceMode(analysis, realisticCurrentDSL, captured);
 
     expect(analysis.mode).toBe('custom');
-    // Order must be preserved after advanceMode
-    expect(analysis.recipe.scenarios!.map(s => s.scenario_id)).toEqual(expectedOrder);
+    // 'current' is replaced in-place by 'no-overrides' and moved to end (hidden underlayer)
+    const expectedCustomOrder = expectedOrder
+      .map(id => id === 'current' ? 'no-overrides' : id);
+    expectedCustomOrder.push('current');
+    expect(analysis.recipe.scenarios!.map(s => s.scenario_id)).toEqual(expectedCustomOrder);
   });
 
   it('should preserve colours, names, and visibility modes through the full transition', () => {
@@ -472,7 +475,9 @@ describe('Live → Custom full transition parity (capture + advanceMode + custom
     // The round-trip must produce semantically identical absolute DSLs.
     // Clause order may differ (context before window vs after) but normalised form must match.
     for (const customResult of customResults) {
-      const liveAbsolute = liveAbsoluteDSLs.get(customResult.scenario_id);
+      // 'no-overrides' is a promoted copy of 'current' — same DSL
+      const lookupId = customResult.scenario_id === 'no-overrides' ? 'current' : customResult.scenario_id;
+      const liveAbsolute = liveAbsoluteDSLs.get(lookupId);
       expect(normalizeConstraintString(customResult.effective_dsl)).toBe(normalizeConstraintString(liveAbsolute!));
     }
   });
@@ -511,14 +516,21 @@ describe('Live → Custom full transition parity (capture + advanceMode + custom
     const analysis = makeLiveAnalysis();
     advanceMode(analysis, realisticCurrentDSL, captured);
 
-    const customRenderingState = computeCustomEffectiveDSLs(analysis, realisticCurrentDSL);
+    const allCustomState = computeCustomEffectiveDSLs(analysis, realisticCurrentDSL);
+    // Filter to visible scenarios only (exclude hidden 'current' underlayer)
+    const hiddenIds = new Set<string>(((analysis.display as any)?.hidden_scenarios) || []);
+    const customRenderingState = allCustomState.filter(s => !hiddenIds.has(s.scenario_id));
 
-    // Assert FULL parity
+    // Custom has 'no-overrides' (promoted copy of current) in place of 'current'.
+    // Map live 'current' to custom 'no-overrides' for parity comparison.
+    const liveToCustomIdMap: Record<string, string> = { current: 'no-overrides' };
     expect(customRenderingState).toHaveLength(liveRenderingState.length);
     for (let i = 0; i < liveRenderingState.length; i++) {
-      expect(customRenderingState[i].scenario_id).toBe(liveRenderingState[i].scenario_id);
+      const expectedId = liveToCustomIdMap[liveRenderingState[i].scenario_id] || liveRenderingState[i].scenario_id;
+      expect(customRenderingState[i].scenario_id).toBe(expectedId);
       expect(customRenderingState[i].colour).toBe(liveRenderingState[i].colour);
-      expect(customRenderingState[i].name).toBe(liveRenderingState[i].name);
+      const expectedName = liveRenderingState[i].scenario_id === 'current' ? 'No overrides' : liveRenderingState[i].name;
+      expect(customRenderingState[i].name).toBe(expectedName);
       expect(normalizeConstraintString(customRenderingState[i].effective_dsl)).toBe(normalizeConstraintString(liveRenderingState[i].effective_dsl));
       expect(customRenderingState[i].visibility_mode).toBe(liveRenderingState[i].visibility_mode);
     }

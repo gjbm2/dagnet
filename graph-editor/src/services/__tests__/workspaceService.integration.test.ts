@@ -973,7 +973,10 @@ describe('workspaceService.pullLatest() - Integration Tests', () => {
   // was never updated and the user received no feedback.
   // ---------------------------------------------------------------------------
 
-  it('should surface as conflict when auto-merge produces unparseable JSON (graph file)', async () => {
+  it('should surface as conflict when JSON structural merge detects conflicting changes (graph file)', async () => {
+    // JSON files now use structural merge (key-by-key). This test verifies
+    // that a real structural conflict (both sides modify same primitive key
+    // to different values) surfaces as a conflict.
     const workspaceId = 'test-repo-main';
     await db.workspaces.add({
       id: workspaceId,
@@ -983,8 +986,8 @@ describe('workspaceService.pullLatest() - Integration Tests', () => {
       lastSynced: Date.now()
     });
 
-    const originalGraph = { nodes: [{ id: 'a' }], edges: [{ source: 'a', target: 'b' }] };
-    const localGraph = { nodes: [{ id: 'a' }], edges: [{ source: 'a', target: 'b' }], extra: 'local' };
+    const originalGraph = { nodes: [], edges: [], baseDSL: 'original' };
+    const localGraph = { nodes: [], edges: [], baseDSL: 'local-change' };
 
     await db.files.add({
       fileId: 'graph-test-graph',
@@ -1019,21 +1022,13 @@ describe('workspaceService.pullLatest() - Integration Tests', () => {
       }
     });
 
+    // Remote also changed baseDSL to a different value → structural conflict on baseDSL.
     vi.mocked(gitService.getBlobContent).mockResolvedValue({
       success: true,
       data: {
-        content: JSON.stringify({ nodes: [{ id: 'a' }, { id: 'c' }], edges: [] }, null, 2),
+        content: JSON.stringify({ nodes: [], edges: [], baseDSL: 'remote-change' }, null, 2),
         sha: 'sha-new'
       }
-    });
-
-    // Mock merge3Way to return "no conflicts" but produce INVALID JSON.
-    // This simulates the real-world scenario where the text-level merge
-    // produces output that looks conflict-free but is structurally broken.
-    vi.spyOn(mergeServiceModule, 'merge3Way').mockReturnValue({
-      success: true,
-      hasConflicts: false,
-      merged: '{ "nodes": [{ "id": "a" }], INVALID JSON HERE }}}',
     });
 
     const gitCreds = {
@@ -1044,7 +1039,7 @@ describe('workspaceService.pullLatest() - Integration Tests', () => {
 
     const result = await workspaceService.pullLatest('test-repo', 'main', gitCreds);
 
-    // CRITICAL: parse failure must surface as a conflict
+    // Structural conflict must surface
     expect(result.conflicts).toHaveLength(1);
     expect(result.conflicts[0]).toMatchObject({
       fileId: 'graph-test-graph',
@@ -1052,11 +1047,11 @@ describe('workspaceService.pullLatest() - Integration Tests', () => {
       hasConflicts: true
     });
 
-    // File in IDB must NOT be updated with corrupt data
+    // File in IDB must NOT be updated
     const file = await db.files.get('graph-test-graph');
-    expect(file?.data).toEqual(localGraph);   // Still the local version
-    expect(file?.sha).toBe('sha-old');        // SHA unchanged
-    expect(file?.isDirty).toBe(true);         // Still dirty
+    expect(file?.data).toEqual(localGraph);
+    expect(file?.sha).toBe('sha-old');
+    expect(file?.isDirty).toBe(true);
   });
 
   it('should surface as conflict when auto-merge produces unparseable YAML (parameter file)', async () => {
@@ -1199,8 +1194,8 @@ describe('workspaceService.pullLatest() - Integration Tests', () => {
     expect(file?.data[1].created_at).toBe('2025-07-01');
   });
 
-  it('should still apply valid auto-merge result after failed parse on a different file', async () => {
-    // Ensures one file's parse failure doesn't block other files from updating
+  it('should still apply valid auto-merge result after structural conflict on a different file', async () => {
+    // Ensures one file's structural conflict doesn't block other files from updating
     const workspaceId = 'test-repo-main';
     await db.workspaces.add({
       id: workspaceId,
@@ -1210,14 +1205,14 @@ describe('workspaceService.pullLatest() - Integration Tests', () => {
       lastSynced: Date.now()
     });
 
-    // File 1: graph that will fail to merge-parse
+    // File 1: graph with a structural conflict (both sides modify baseDSL)
     await db.files.add({
       fileId: 'graph-broken',
       type: 'graph',
       name: 'broken.json',
       path: 'graphs/broken.json',
-      data: { nodes: [{ id: 'a' }], edges: [] },
-      originalData: { nodes: [], edges: [] },
+      data: { nodes: [], edges: [], baseDSL: 'local-dsl' },
+      originalData: { nodes: [], edges: [], baseDSL: 'original-dsl' },
       isDirty: true,
       source: { repository: 'test-repo', path: 'graphs/broken.json', branch: 'main', commitHash: 'abc' },
       isLoaded: true, isLocal: false, viewTabs: [], lastModified: Date.now(),
@@ -1252,16 +1247,10 @@ describe('workspaceService.pullLatest() - Integration Tests', () => {
 
     vi.mocked(gitService.getBlobContent).mockImplementation(async (sha: string) => {
       if (sha === 'sha-new-1') {
-        return { success: true, data: { content: '{"nodes":[]}', sha: 'sha-new-1' } };
+        // Remote also changed baseDSL → structural conflict
+        return { success: true, data: { content: JSON.stringify({ nodes: [], edges: [], baseDSL: 'remote-dsl' }), sha: 'sha-new-1' } };
       }
       return { success: true, data: { content: 'id: good\nvalue: 99\n', sha: 'sha-new-2' } };
-    });
-
-    // Only the graph file triggers merge (it's dirty); mock to produce invalid JSON
-    vi.spyOn(mergeServiceModule, 'merge3Way').mockReturnValue({
-      success: true,
-      hasConflicts: false,
-      merged: 'NOT VALID JSON AT ALL',
     });
 
     const gitCreds = {
@@ -1272,7 +1261,7 @@ describe('workspaceService.pullLatest() - Integration Tests', () => {
 
     const result = await workspaceService.pullLatest('test-repo', 'main', gitCreds);
 
-    // Broken file → conflict
+    // Conflicting file → conflict
     expect(result.conflicts).toHaveLength(1);
     expect(result.conflicts[0].fileId).toBe('graph-broken');
 
@@ -1303,6 +1292,8 @@ describe('POLICY: pullLatestRemoteWins usage is restricted to headless contexts'
     'repositoryOperationsService.ts',
     // Headless nightly automation
     'dailyRetrieveAllAutomationService.ts',
+    // Headless job scheduler automation
+    'dailyAutomationJob.ts',
     // Headless URL-triggered automation
     'useURLDailyRetrieveAllQueue.ts',
     // Staleness nudge service — only calls it behind isDashboardMode guard
@@ -1344,6 +1335,66 @@ describe('POLICY: pullLatestRemoteWins usage is restricted to headless contexts'
     }
 
     expect(violations).toEqual([]);
+  });
+});
+
+describe('workspaceService.loadWorkspaceFromIDB() — isInitializing invariant', () => {
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    (fileRegistry as any).files.clear();
+    await db.workspaces.clear();
+    await db.files.clear();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('should reset isInitializing to false on files loaded from IDB so edits mark dirty', async () => {
+    // A file persisted to IDB with isInitializing: true (happens when updateFile
+    // runs before the 500ms completeInitialization timeout). On workspace restore,
+    // isInitializing must be cleared — otherwise all edits are absorbed as
+    // normalisation and isDirty never becomes true.
+    const repository = 'test-repo';
+    const branch = 'main';
+    const workspaceId = `${repository}-${branch}`;
+
+    await db.workspaces.add({
+      id: workspaceId,
+      repository,
+      branch,
+      fileIds: [`${workspaceId}-parameter-stuck`],
+      lastSynced: Date.now(),
+    });
+
+    await db.files.add({
+      fileId: `${workspaceId}-parameter-stuck`,
+      type: 'parameter',
+      name: 'stuck.yaml',
+      path: 'parameters/stuck.yaml',
+      data: { id: 'stuck', value: 1 },
+      originalData: { id: 'stuck', value: 1 },
+      isDirty: false,
+      isInitializing: true, // ← the bug: persisted before completeInitialization fired
+      source: {
+        repository,
+        path: 'parameters/stuck.yaml',
+        branch,
+        commitHash: 'abc',
+      },
+      isLoaded: true,
+      isLocal: false,
+      viewTabs: [],
+      lastModified: Date.now(),
+      sha: 'sha-abc',
+      lastSynced: Date.now(),
+    });
+
+    await workspaceService.loadWorkspaceFromIDB(repository, branch);
+
+    const loaded = (fileRegistry as any).files.get('parameter-stuck');
+    expect(loaded).toBeTruthy();
+    expect(loaded.isInitializing).toBe(false);
   });
 });
 

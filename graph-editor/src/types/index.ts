@@ -357,6 +357,12 @@ export interface TabOperations {
   setScenarioVisibilityMode: (tabId: string, scenarioId: string, mode: ScenarioVisibilityMode) => Promise<void>;
   selectScenario: (tabId: string, scenarioId: string | undefined) => Promise<void>;
   reorderScenarios: (tabId: string, newOrder: string[]) => Promise<void>;
+  /** Effective colour for a scenario layer, accounting for single-visible-layer grey. */
+  getEffectiveScenarioColour: (
+    tabId: string,
+    scenarioId: string,
+    scenariosContext: { currentColour?: string; baseColour?: string; scenarios?: Array<{ id: string; colour?: string }> } | null,
+  ) => string;
 }
 
 /**

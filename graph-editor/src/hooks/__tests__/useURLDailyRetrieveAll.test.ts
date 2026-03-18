@@ -74,6 +74,36 @@ vi.mock('../../services/repositoryOperationsService', () => ({
   },
 }));
 
+vi.mock('../../services/bannerManagerService', () => ({
+  bannerManagerService: {
+    setBanner: vi.fn(),
+    clearBanner: vi.fn(),
+    clearAll: vi.fn(),
+    subscribe: vi.fn(() => vi.fn()),
+    getState: vi.fn(() => ({ banners: [] })),
+  },
+}));
+
+vi.mock('../../services/operationRegistryService', () => ({
+  operationRegistryService: {
+    register: vi.fn(),
+    setStatus: vi.fn(),
+    setProgress: vi.fn(),
+    setLabel: vi.fn(),
+    setCountdown: vi.fn(),
+    complete: vi.fn(),
+    subscribe: vi.fn(() => vi.fn()),
+    getState: vi.fn(() => ({ active: [], recent: [] })),
+    get: vi.fn(),
+    remove: vi.fn(),
+    pauseCountdown: vi.fn(),
+    resumeCountdown: vi.fn(),
+    setCancellable: vi.fn(),
+    setSubSteps: vi.fn(),
+    clearRecent: vi.fn(),
+  },
+}));
+
 vi.mock('../../services/workspaceService', () => ({
   workspaceService: {
     loadWorkspaceFromIDB: vi.fn(async () => ({})),
@@ -81,7 +111,8 @@ vi.mock('../../services/workspaceService', () => ({
 }));
 
 import { resetURLDailyRetrieveAllQueueProcessed, useURLDailyRetrieveAllQueue } from '../useURLDailyRetrieveAllQueue';
-import { automationRunService } from '../../services/automationRunService';
+import { jobSchedulerService } from '../../services/jobSchedulerService';
+import { _resetDailyAutomationJob } from '../../services/dailyAutomationJob';
 
 describe('useURLDailyRetrieveAllQueue', () => {
   beforeEach(() => {
@@ -93,6 +124,11 @@ describe('useURLDailyRetrieveAllQueue', () => {
     hoisted.toArray.mockReset();
     hoisted.navState = { selectedRepo: 'repo-1', selectedBranch: 'main' };
     resetURLDailyRetrieveAllQueueProcessed();
+    jobSchedulerService._reset();
+    _resetDailyAutomationJob();
+
+    // Signal boot complete so boot-gated jobs can fire.
+    jobSchedulerService.signalBootComplete();
 
     // Start each test with a clean URL.
     window.history.replaceState({}, document.title, '/');
@@ -103,11 +139,9 @@ describe('useURLDailyRetrieveAllQueue', () => {
     });
   });
 
-  // Make tests robust if a failure leaves automation state active.
-  // (automationRunService ignores finish() when runId mismatches.)
   const forceFinishIfNeeded = () => {
-    const st = automationRunService.getState();
-    if (st.phase !== 'idle' && st.runId) automationRunService.finish(st.runId);
+    // Scheduler handles lifecycle; just cancel if running.
+    jobSchedulerService.cancel('daily-automation');
   };
 
   it('runs daily automation once for ?retrieveall=<graph>, then cleans URL params', async () => {
@@ -229,7 +263,9 @@ describe('useURLDailyRetrieveAllQueue', () => {
     });
 
     await waitFor(() => {
-      expect(automationRunService.getState().phase).toBe('idle');
+      const jobState = jobSchedulerService.getJobState('daily-automation');
+      // After completion, the job should be in a terminal state or idle.
+      expect(jobState?.phase === 'idle' || jobState?.phase === 'complete' || jobState === undefined).toBe(true);
     });
   });
 });

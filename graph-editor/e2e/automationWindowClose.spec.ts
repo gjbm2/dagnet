@@ -8,7 +8,8 @@ import { test, expect } from '@playwright/test';
  * outcomes kept the window open forever, blocking the next day's scheduled run.
  *
  * Strategy:
- * - Seed a graph in IDB, stub external services.
+ * - Seed ALL required IDB state (credentials, workspace, graph, tab, appState)
+ *   in a single visit BEFORE triggering automation.
  * - Navigate with ?retrieveall=<graph>&e2e=1 (e2e=1 shortens all delays).
  * - Spy on window.close() via addInitScript to prevent the page actually closing.
  * - Assert the spy was triggered (meaning the close logic fired).
@@ -39,7 +40,7 @@ async function installStubs(page: any) {
   });
 }
 
-async function seedGraphAndAppState(page: any) {
+async function seedAllState(page: any) {
   await page.evaluate(async () => {
     const w = window as any;
     const db = w.db;
@@ -57,7 +58,7 @@ async function seedGraphAndAppState(page: any) {
       metadata: { created: '1-Jan-25', modified: '1-Jan-25' },
     };
 
-    // Seed both variants.
+    // Graph files (both unprefixed and prefixed).
     for (const fId of [fileId, prefixedFileId]) {
       await db.files.put({
         fileId: fId,
@@ -72,7 +73,7 @@ async function seedGraphAndAppState(page: any) {
       });
     }
 
-    // Seed a tab.
+    // Tab.
     await db.tabs.put({
       id: 'tab-graph-autoclose',
       fileId,
@@ -93,7 +94,34 @@ async function seedGraphAndAppState(page: any) {
       },
     });
 
-    // Seed appState with selectedRepo so the automation hook proceeds.
+    // Credentials — required for NavigatorContext boot.
+    await db.files.put({
+      fileId: 'credentials-credentials',
+      type: 'credentials',
+      data: {
+        git: [{
+          name: repo,
+          owner: 'test-owner',
+          repo: repo,
+          token: 'fake-token',
+          branch,
+          isDefault: true,
+        }],
+      },
+      isDirty: false,
+      lastModified: Date.now(),
+    });
+
+    // Workspace record — prevents navigator from attempting a clone.
+    await db.workspaces.put({
+      id: `${repo}-${branch}`,
+      repository: repo,
+      branch,
+      fileIds: [fileId, prefixedFileId],
+      lastSynced: Date.now(),
+    });
+
+    // App state.
     await db.appState.put({
       id: 'app-state',
       dockLayout: null,
@@ -106,8 +134,8 @@ async function seedGraphAndAppState(page: any) {
         selectedRepo: repo,
         selectedBranch: branch,
         expandedSections: ['graphs'],
-        availableRepos: [],
-        availableBranches: [],
+        availableRepos: [repo],
+        availableBranches: [branch],
         viewMode: 'all',
         showLocalOnly: false,
         showDirtyOnly: false,
@@ -131,32 +159,32 @@ test('window.close() is called after automation finishes with error outcome', as
     };
   });
 
-  // Step 1: First visit to seed IDB (no ?retrieveall, no automation).
+  // Step 1: Seed IDB. Visit without ?retrieveall so automation doesn't trigger.
+  // All state (credentials, workspace, graph, tab, appState) is seeded in one go
+  // so the CredentialsManager cache is populated correctly on the automation visit.
   await page.goto(new URL('/?e2e=1', baseURL).toString(), { waitUntil: 'domcontentloaded' });
   await expect
     .poll(async () => page.evaluate(() => !!(window as any).db))
     .toBeTruthy();
-  await seedGraphAndAppState(page);
-  // Brief settle for IDB writes.
-  await page.waitForTimeout(100);
+  await seedAllState(page);
+  await page.waitForTimeout(200);
 
   // Step 2: Navigate with ?retrieveall to trigger automation.
+  // Full page reload clears all module singletons. The app boots fresh with
+  // all IDB state already present — credentials, workspace, graph, tab.
   // The pull step will fail (GitHub stubbed to 500) → error outcome.
-  // With ?e2e=1, all delays are shortened:
-  //   - start countdown: 0 ms (skipped)
-  //   - close delay: 500 ms
+  // With ?e2e=1 all delays are shortened (start: 0ms, close: 500ms).
   await page.goto(
     new URL('/?retrieveall=autoclose-e2e&e2e=1', baseURL).toString(),
     { waitUntil: 'domcontentloaded' }
   );
 
   // Step 3: Wait for window.close() spy to fire.
-  // Budget: app boot (~2s) + automation fail (~1s) + close delay (500ms) = ~4s.
-  // Poll with generous timeout to handle CI slowness.
+  // Budget: app boot (~2-4s) + job waitForAppReady + automation fail + close delay (500ms).
   await expect
     .poll(
       async () => page.evaluate(() => (window as any).__dagnetWindowCloseCalled === true),
-      { timeout: 15_000, intervals: [500] }
+      { timeout: 20_000, intervals: [500] }
     )
     .toBeTruthy();
 

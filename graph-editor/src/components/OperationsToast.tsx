@@ -438,6 +438,11 @@ export function OperationsToast(): React.ReactElement | null {
   // Build lists: other active ops (always visible) + recent (hover-only).
   const otherActive = active.filter((o) => o !== primary);
 
+  // Actionable errors (e.g. "Resolve conflicts") must be always-visible,
+  // not buried in the hover-only recent list where the button is unreachable.
+  const actionableRecent = visibleRecent.filter((o) => o.status === 'error' && o.action);
+  const nonActionableRecent = visibleRecent.filter((o) => !(o.status === 'error' && o.action));
+
   if (!hasContent || dismissed) return null;
 
   // Container-level fade: when only faded recent ops remain (no active, not hovered).
@@ -472,13 +477,18 @@ export function OperationsToast(): React.ReactElement | null {
         ✕
       </button>
 
-      {/* Other active operations — always visible when present */}
-      {otherActive.length > 0 && (
+      {/* Other active operations + actionable errors — always visible */}
+      {(otherActive.length > 0 || actionableRecent.length > 0) && (
         <div className="ops-toast-active-list">
-          <div className="ops-toast-list-header">
-            <span>Active ({otherActive.length})</span>
-          </div>
+          {otherActive.length > 0 && (
+            <div className="ops-toast-list-header">
+              <span>Active ({otherActive.length})</span>
+            </div>
+          )}
           {otherActive.map((op) => (
+            <ListItem key={op.id} op={op} fade="" />
+          ))}
+          {actionableRecent.map((op) => (
             <ListItem key={op.id} op={op} fade="" />
           ))}
         </div>
@@ -486,12 +496,12 @@ export function OperationsToast(): React.ReactElement | null {
 
       {/* Recent/completed — hover-only */}
       <div className="ops-toast-list">
-        {visibleRecent.length > 0 && (
+        {nonActionableRecent.length > 0 && (
           <>
             <div className="ops-toast-list-header">
               <span>Recent</span>
             </div>
-            {visibleRecent.map((op) => (
+            {nonActionableRecent.map((op) => (
               <ListItem
                 key={op.id}
                 op={op}

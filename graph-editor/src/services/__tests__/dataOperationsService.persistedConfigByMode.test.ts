@@ -117,7 +117,7 @@ describe('dataOperationsService.getFromSourceDirect uses correct persisted confi
     await (fileRegistry as any).registerFile('parameter-p1', {
       id: 'p1',
       connection: 'amplitude-prod-file',
-      latency: { latency_parameter: true, anchor_node_id: 'A', t95: 13.12, path_t95: 40 },
+      latency: { latency_parameter: true, anchor_node_id: 'A', t95: 13.12, path_t95: 40, path_t95_overridden: true },
       values: [],
     });
 
@@ -136,6 +136,7 @@ describe('dataOperationsService.getFromSourceDirect uses correct persisted confi
 
     expect(buildDslFromEdgeSpy).toHaveBeenCalled();
     const edgeArg = buildDslFromEdgeSpy.mock.calls[0][0];
+    // File's path_t95 is locked (path_t95_overridden: true), so file value wins
     expect(edgeArg.p.latency.path_t95).toBe(40);
     // Connection always comes from graph (not file) — connection is a graph-level concern.
     expect(edgeArg.p.connection).toBe('amplitude-prod-graph');

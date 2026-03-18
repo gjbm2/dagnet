@@ -168,7 +168,21 @@
       "Bash(find . -name li-cohort-segmentation-v2* -type f)",
       "Bash(grep -rn \"bridge\\\\|dataSource\\\\|custom\" /home/reg/dev/dagnet/nous-monorepo --include=*.ts --include=*.js --include=*.json)",
       "Bash(grep -rn \"bridge\\\\|dataSource\" /home/reg/dev/dagnet/nous-conversion --include=*.yaml --include=*.yml --include=*.md)",
-      "Bash(find . -type f -name *msmdc* -o -name *latency*write*)"
+      "Bash(find . -type f -name *msmdc* -o -name *latency*write*)",
+      "Bash(node -e \"const v = require\\(''vitest/package.json''\\); console.log\\(v.version\\)\")",
+      "Bash(node -e \"const vi = require\\(''vitest''\\); console.log\\(Object.keys\\(vi.vi\\).filter\\(k => k.includes\\(''Tick''\\) || k.includes\\(''tick''\\) || k.includes\\(''Async''\\) || k.includes\\(''flush''\\)\\)\\)\")",
+      "Bash(grep -rn ScenarioLayerItem /home/reg/dev/dagnet/graph-editor/src/types/ --include=*.ts)",
+      "Bash(grep -n \"fileRegistry.updateFile\\\\|fileRegistry.setFile\" /home/reg/dev/dagnet/graph-editor/src/services/*.ts)",
+      "Bash(scripts/extract-mark-logs.sh \"bridge\")",
+      "Bash(scripts/extract-mark-logs.sh \"bridge2\")",
+      "Bash(scripts/extract-mark-logs.sh \"bridge3\" --console-only)",
+      "Bash(CI= PLAYWRIGHT_BROWSERS_PATH=$HOME/.cache/ms-playwright npm run -s e2e -- e2e/automationWindowClose.spec.ts --workers=1 --retries=0 --reporter=line --timeout=20000 --global-timeout=30000 2)",
+      "Bash(grep -E \"^d|\\\\.py$\")",
+      "Bash(scripts/extract-mark-logs.sh \"pull\")",
+      "WebFetch(domain:bitsquid.blogspot.com)",
+      "WebFetch(domain:people.cs.vt.edu)",
+      "Bash(scripts/extract-mark-logs.sh \"pull\" --all --session-only)",
+      "Bash(scripts/extract-mark-logs.sh \"tt\" --session-only)"
     ]
   }
 }

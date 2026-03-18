@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { merge3Way, canAutoMerge, formatConflict } from '../mergeService';
+import { merge3Way, canAutoMerge, formatConflict, mergeJson3Way } from '../mergeService';
 
 describe('mergeService', () => {
   describe('merge3Way', () => {
@@ -340,4 +340,231 @@ description: Updated description`;
   });
 });
 
+describe('mergeJson3Way — structural JSON merge', () => {
+  it('should auto-merge when local adds key A and remote adds key B', () => {
+    const base = { nodes: [], edges: [] };
+    const local = { nodes: [], edges: [], canvasAnalyses: [{ id: 'chart-1' }] };
+    const remote = { nodes: [], edges: [], _bayes: { posteriors: [0.5] } };
+
+    const result = mergeJson3Way(base, local, remote);
+
+    expect(result.hasConflicts).toBe(false);
+    expect(result.merged.canvasAnalyses).toEqual([{ id: 'chart-1' }]);
+    expect(result.merged._bayes).toEqual({ posteriors: [0.5] });
+    expect(result.merged.nodes).toEqual([]);
+    expect(result.merged.edges).toEqual([]);
+  });
+
+  it('should auto-merge when local modifies key A and remote modifies key B', () => {
+    const base = { a: 1, b: 2, c: 3 };
+    const local = { a: 10, b: 2, c: 3 };
+    const remote = { a: 1, b: 20, c: 3 };
+
+    const result = mergeJson3Way(base, local, remote);
+
+    expect(result.hasConflicts).toBe(false);
+    expect(result.merged).toEqual({ a: 10, b: 20, c: 3 });
+  });
+
+  it('should report conflict when both modify same key to different values', () => {
+    const base = { a: 1 };
+    const local = { a: 2 };
+    const remote = { a: 3 };
+
+    const result = mergeJson3Way(base, local, remote);
+
+    expect(result.hasConflicts).toBe(true);
+    expect(result.conflicts).toHaveLength(1);
+    expect(result.conflicts[0].path).toEqual(['a']);
+    expect(result.conflicts[0].base).toBe(1);
+    expect(result.conflicts[0].local).toBe(2);
+    expect(result.conflicts[0].remote).toBe(3);
+    // Default to local for conflicting key
+    expect(result.merged.a).toBe(2);
+  });
+
+  it('should keep value when both modify same key to same value', () => {
+    const base = { a: 1 };
+    const local = { a: 2 };
+    const remote = { a: 2 };
+
+    const result = mergeJson3Way(base, local, remote);
+
+    expect(result.hasConflicts).toBe(false);
+    expect(result.merged.a).toBe(2);
+  });
+
+  it('should recurse into nested objects to avoid false conflicts', () => {
+    const base = { _bayes: { config: { method: 'mcmc' }, posteriors: null } };
+    const local = { _bayes: { config: { method: 'mcmc' }, posteriors: null }, canvasAnalyses: [] };
+    const remote = { _bayes: { config: { method: 'mcmc' }, posteriors: [0.5, 0.3] } };
+
+    const result = mergeJson3Way(base, local, remote);
+
+    expect(result.hasConflicts).toBe(false);
+    expect(result.merged._bayes.posteriors).toEqual([0.5, 0.3]);
+    expect(result.merged.canvasAnalyses).toEqual([]);
+  });
+
+  it('should take the changed side when only one side modifies an array', () => {
+    const base = { items: [1, 2, 3] };
+    const local = { items: [1, 2, 3] };
+    const remote = { items: [1, 2, 3, 4] };
+
+    const result = mergeJson3Way(base, local, remote);
+
+    expect(result.hasConflicts).toBe(false);
+    expect(result.merged.items).toEqual([1, 2, 3, 4]);
+  });
+
+  it('should delete key when one side deletes and other side is unchanged', () => {
+    const base = { a: 1, b: 2 };
+    const local = { a: 1 }; // deleted b
+    const remote = { a: 1, b: 2 }; // unchanged
+
+    const result = mergeJson3Way(base, local, remote);
+
+    expect(result.hasConflicts).toBe(false);
+    expect(result.merged).toEqual({ a: 1 });
+    expect('b' in result.merged).toBe(false);
+  });
+
+  it('should conflict when one side deletes and other modifies', () => {
+    const base = { a: 1, b: 2 };
+    const local = { a: 1 }; // deleted b
+    const remote = { a: 1, b: 99 }; // modified b
+
+    const result = mergeJson3Way(base, local, remote);
+
+    expect(result.hasConflicts).toBe(true);
+    expect(result.conflicts[0].path).toEqual(['b']);
+    expect(result.conflicts[0].local).toBeUndefined();
+    expect(result.conflicts[0].remote).toBe(99);
+  });
+
+  it('should handle the real-world graph scenario: chart + bayes on different keys', () => {
+    const base = {
+      nodes: [{ id: 'n1', type: 'node' }],
+      edges: [{ id: 'e1', source: 'n1', target: 'n2' }],
+      metadata: { name: 'test-graph' },
+    };
+    const local = {
+      ...base,
+      canvasAnalyses: [{ id: 'chart-1', x: 96, y: 5, width: 400, height: 300, view_mode: 'chart' }],
+    };
+    const remote = {
+      ...base,
+      _bayes: { posteriors: { 'param-1': [0.5, 0.3, 0.2] }, fit_ts: '2026-03-18' },
+    };
+
+    const result = mergeJson3Way(base, local, remote);
+
+    expect(result.hasConflicts).toBe(false);
+    expect(result.merged.nodes).toEqual(base.nodes);
+    expect(result.merged.edges).toEqual(base.edges);
+    expect(result.merged.metadata).toEqual(base.metadata);
+    expect(result.merged.canvasAnalyses).toEqual(local.canvasAnalyses);
+    expect(result.merged._bayes).toEqual(remote._bayes);
+  });
+
+  it('should return base when neither side changed', () => {
+    const base = { a: 1, b: [1, 2] };
+    const result = mergeJson3Way(base, { a: 1, b: [1, 2] }, { a: 1, b: [1, 2] });
+
+    expect(result.hasConflicts).toBe(false);
+    expect(result.merged).toEqual(base);
+  });
+
+  it('should merge arrays of objects by uuid when both sides modify different elements', () => {
+    const base = {
+      edges: [
+        { uuid: 'e1', source: 'a', target: 'b', weight: 1 },
+        { uuid: 'e2', source: 'c', target: 'd', weight: 2 },
+      ],
+    };
+    const local = {
+      edges: [
+        { uuid: 'e1', source: 'a', target: 'b', weight: 10 }, // modified weight
+        { uuid: 'e2', source: 'c', target: 'd', weight: 2 },
+      ],
+    };
+    const remote = {
+      edges: [
+        { uuid: 'e1', source: 'a', target: 'b', weight: 1 },
+        { uuid: 'e2', source: 'c', target: 'd', weight: 20 }, // modified weight
+      ],
+    };
+
+    const result = mergeJson3Way(base, local, remote);
+
+    expect(result.hasConflicts).toBe(false);
+    expect(result.merged.edges).toEqual([
+      { uuid: 'e1', source: 'a', target: 'b', weight: 10 },
+      { uuid: 'e2', source: 'c', target: 'd', weight: 20 },
+    ]);
+  });
+
+  it('should merge arrays by id when uuid not present', () => {
+    const base = { nodes: [{ id: 'n1', label: 'A' }] };
+    const local = { nodes: [{ id: 'n1', label: 'A' }, { id: 'n2', label: 'B' }] };
+    const remote = { nodes: [{ id: 'n1', label: 'A-updated' }] };
+
+    const result = mergeJson3Way(base, local, remote);
+
+    expect(result.hasConflicts).toBe(false);
+    // n1: remote modified label → take remote. n2: local added → keep.
+    expect(result.merged.nodes).toEqual([
+      { id: 'n1', label: 'A-updated' },
+      { id: 'n2', label: 'B' },
+    ]);
+  });
+
+  it('should auto-resolve updated_at timestamps (take most recent)', () => {
+    const base = { metadata: { name: 'g', updated_at: '2026-01-01T00:00:00Z' } };
+    const local = { metadata: { name: 'g', updated_at: '2026-03-18T14:09:00Z' } };
+    const remote = { metadata: { name: 'g', updated_at: '2026-03-16T06:10:00Z' } };
+
+    const result = mergeJson3Way(base, local, remote);
+
+    expect(result.hasConflicts).toBe(false);
+    expect(result.merged.metadata.updated_at).toBe('2026-03-18T14:09:00Z');
+  });
+
+  it('should handle the real scenario: edges with uuid + metadata.updated_at + chart addition', () => {
+    const base = {
+      edges: [
+        { uuid: 'e1', source: 'a', target: 'b', data: { weight: 1 } },
+      ],
+      metadata: { name: 'graph', updated_at: '2026-03-15T00:00:00Z' },
+      _bayes: { config: { method: 'mcmc' } },
+    };
+    const local = {
+      edges: [
+        { uuid: 'e1', source: 'a', target: 'b', data: { weight: 1 } },
+      ],
+      metadata: { name: 'graph', updated_at: '2026-03-18T14:09:00Z' },
+      _bayes: { config: { method: 'mcmc' } },
+      canvasAnalyses: [{ id: 'chart-1', view_mode: 'chart' }],
+    };
+    const remote = {
+      edges: [
+        { uuid: 'e1', source: 'a', target: 'b', data: { weight: 1, _bayes_posterior: 0.5 } },
+      ],
+      metadata: { name: 'graph', updated_at: '2026-03-16T06:10:00Z' },
+      _bayes: { config: { method: 'mcmc' }, posteriors: [0.5] },
+    };
+
+    const result = mergeJson3Way(base, local, remote);
+
+    expect(result.hasConflicts).toBe(false);
+    // Edge: remote added _bayes_posterior, local unchanged → take remote's edge data
+    expect(result.merged.edges[0].data._bayes_posterior).toBe(0.5);
+    // Metadata: local is more recent → take local
+    expect(result.merged.metadata.updated_at).toBe('2026-03-18T14:09:00Z');
+    // _bayes: remote added posteriors, local unchanged → take remote
+    expect(result.merged._bayes.posteriors).toEqual([0.5]);
+    // canvasAnalyses: local-only addition → keep
+    expect(result.merged.canvasAnalyses).toEqual([{ id: 'chart-1', view_mode: 'chart' }]);
+  });
+});
 

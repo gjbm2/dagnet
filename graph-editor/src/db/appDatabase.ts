@@ -4,6 +4,18 @@ import { CredentialsData } from '../types/credentials';
 import { Scenario } from '../types/scenarios';
 import { getShareDbName } from '../lib/shareBootResolver';
 
+/** Persisted record for a scheduler job that can outlive a browser session. */
+export interface SchedulerJobRecord {
+  jobId: string;              // instance ID (e.g. 'bayes-fit:graph-x:1710720000000')
+  jobDefId: string;           // registered job definition ID (e.g. 'bayes-fit')
+  status: 'submitted' | 'running' | 'complete' | 'error' | 'cancelled';
+  params?: Record<string, unknown>;
+  submittedAtMs: number;      // epoch ms
+  lastUpdatedAtMs: number;    // epoch ms
+  result?: unknown;           // serialised outcome data
+  error?: string;
+}
+
 /** Persisted record for one automation run (pull → retrieve → commit cycle). */
 export interface AutomationRunLog {
   runId: string;
@@ -46,6 +58,7 @@ export class AppDatabase extends Dexie {
   settings!: Table<SettingsData, string>;
   credentials!: Table<CredentialsData & { id: string; source: string; timestamp: number }, string>;
   automationRunLogs!: Table<AutomationRunLog, string>;
+  schedulerJobs!: Table<SchedulerJobRecord, string>;
 
   constructor(dbName: string = DEFAULT_DB_NAME) {
     super(dbName);
@@ -98,8 +111,23 @@ export class AppDatabase extends Dexie {
     // Version 4: Add automationRunLogs table (persisted automation run diagnostics)
     this.version(4).stores({
       automationRunLogs: 'runId, timestamp',
-      
+
       // Keep existing tables
+      scenarios: 'id, fileId, createdAt, updatedAt',
+      workspaces: 'id, repository, branch, lastSynced',
+      files: 'fileId, type, isDirty, source.repository, source.branch, lastModified',
+      tabs: 'id, fileId, viewMode',
+      appState: 'id, updatedAt',
+      settings: 'id',
+      credentials: 'id, source, timestamp'
+    });
+
+    // Version 5: Add schedulerJobs table (long-lived jobs that survive browser close)
+    this.version(5).stores({
+      schedulerJobs: 'jobId, jobDefId, status, submittedAtMs',
+
+      // Keep existing tables
+      automationRunLogs: 'runId, timestamp',
       scenarios: 'id, fileId, createdAt, updatedAt',
       workspaces: 'id, repository, branch, lastSynced',
       files: 'fileId, type, isDirty, source.repository, source.branch, lastModified',

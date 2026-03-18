@@ -242,6 +242,51 @@ describe('advanceMode — tristate transitions', () => {
       const reconstructed = augmentDSLWithConstraint(currentDSL, sc1.effective_dsl!);
       expect(reconstructed).toBe(normalizeConstraintString('window(-7d:).context(channel:google)'));
     });
+
+    it('should promote current to no-overrides, move current to end, and hide it', () => {
+      const analysis = makeLiveAnalysis();
+      const currentDSL = 'window(-7d:).context(channel:google)';
+      const captured = {
+        scenarios: [
+          { scenario_id: 'sc-A', name: 'Meta', colour: '#EC4899', effective_dsl: 'window(-7d:).context(channel:meta)', is_live: true, visibility_mode: 'f+e' as const },
+          { scenario_id: 'current', name: 'Current', colour: '#3b82f6', effective_dsl: 'window(-7d:).context(channel:google)', is_live: true, visibility_mode: 'f+e' as const },
+        ],
+      };
+
+      advanceMode(analysis, currentDSL, captured);
+
+      // Recipe should have 3 scenarios: sc-A, no-overrides (promoted), current (underlayer at end)
+      const ids = analysis.recipe.scenarios!.map(s => s.scenario_id);
+      expect(ids).toEqual(['sc-A', 'no-overrides', 'current']);
+
+      // 'no-overrides' is the promoted copy of current
+      const noOverrides = analysis.recipe.scenarios!.find(s => s.scenario_id === 'no-overrides')!;
+      expect(noOverrides.name).toBe('No overrides');
+      expect(noOverrides.colour).toBe('#3b82f6');
+
+      // 'current' underlayer retains original name
+      const current = analysis.recipe.scenarios!.find(s => s.scenario_id === 'current')!;
+      expect(current.name).toBe('Current');
+
+      // 'current' is hidden by default
+      expect((analysis.display as any)?.hidden_scenarios).toContain('current');
+
+      // Visible scenario count (excluding hidden) = 2 → bridge eligible
+      const hidden = new Set<string>(((analysis.display as any)?.hidden_scenarios) || []);
+      const visibleIds = analysis.recipe.scenarios!
+        .map(s => s.scenario_id)
+        .filter(id => !hidden.has(id));
+      expect(visibleIds).toEqual(['sc-A', 'no-overrides']);
+      expect(visibleIds.length).toBe(2);
+
+      // Unhiding current → 3 visible scenarios
+      hidden.delete('current');
+      const visibleAfterUnhide = analysis.recipe.scenarios!
+        .map(s => s.scenario_id)
+        .filter(id => !hidden.has(id));
+      expect(visibleAfterUnhide).toEqual(['sc-A', 'no-overrides', 'current']);
+      expect(visibleAfterUnhide.length).toBe(3);
+    });
   });
 
   describe('Custom → Fixed (bake deltas into absolute DSLs)', () => {
@@ -263,13 +308,18 @@ describe('advanceMode — tristate transitions', () => {
 
       expect(analysis.mode).toBe('fixed');
 
-      const currentScenario = analysis.recipe.scenarios!.find(s => s.scenario_id === 'current')!;
-      // Empty delta → baked to normalised currentDSL
-      expect(currentScenario.effective_dsl).toBe(normalizeConstraintString(currentDSL));
-
       const sc1 = analysis.recipe.scenarios!.find(s => s.scenario_id === 'sc-1')!;
       // delta window(-30d:) on base window(-7d:).context(channel:google) → window(-30d:).context(channel:google)
       expect(sc1.effective_dsl).toBe(normalizeConstraintString('window(-30d:).context(channel:google)'));
+
+      // 'current' was visible (no hidden_scenarios set) → included in fixed, baked to absolute, at end
+      const currentScenario = analysis.recipe.scenarios!.find(s => s.scenario_id === 'current')!;
+      expect(currentScenario.effective_dsl).toBe(normalizeConstraintString(currentDSL));
+      // current is last (user scenarios first, current at bottom)
+      expect(analysis.recipe.scenarios![analysis.recipe.scenarios!.length - 1].scenario_id).toBe('current');
+
+      // hidden_scenarios cleared in fixed mode
+      expect((analysis.display as any)?.hidden_scenarios).toBeUndefined();
     });
   });
 

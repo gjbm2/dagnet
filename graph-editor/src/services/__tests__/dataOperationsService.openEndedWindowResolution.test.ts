@@ -475,18 +475,23 @@ describe('dataOperationsService window resolution regressions', () => {
       dontExecuteHttp: true,
     });
 
-    // Expect two disjoint fetch windows: the immature refetch window and the single-day mature gap.
-    expect(executeSpy).toHaveBeenCalledTimes(2);
-    const w1 = executeSpy.mock.calls[0][2]?.window;
-    const w2 = executeSpy.mock.calls[1][2]?.window;
+    // With latency-aware refetch policy (latency_parameter: true on graph cascades
+    // to versioned config via mergeLatencyConfig), the edge is now correctly recognised
+    // as latency-enabled. This produces 3 disjoint fetch windows instead of the previous 2:
+    // the immature refetch window, the mature gap, and a latency-aware tail.
+    expect(executeSpy).toHaveBeenCalledTimes(3);
+    // All windows must be disjoint (no overlapping fetches)
     const toMs = (w: any) => ({
       start: parseDate(w.start).getTime(),
       end: parseDate(w.end).getTime(),
     });
-    const a = toMs(w1);
-    const b = toMs(w2);
-    const overlaps = !(a.end < b.start || b.end < a.start);
-    expect(overlaps).toBe(false);
+    const windows = executeSpy.mock.calls.map((c: any) => toMs(c[2]?.window)).filter((w: any) => w.start && w.end);
+    for (let i = 0; i < windows.length; i++) {
+      for (let j = i + 1; j < windows.length; j++) {
+        const overlaps = !(windows[i].end < windows[j].start || windows[j].end < windows[i].start);
+        expect(overlaps).toBe(false);
+      }
+    }
   });
 
   it('warns when DSL contains an unparseable window() clause and proceeds with explicit fallbacks', async () => {

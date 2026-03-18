@@ -241,14 +241,22 @@ function CanvasAnalysisPropertiesSection({ analysisId, graph, setGraph, saveHist
       });
     }
     const frozenScenarios = analysis?.recipe?.scenarios || [];
-    return frozenScenarios.map((fs: any) => ({
-      id: fs.scenario_id, name: fs.name || fs.scenario_id,
-      colour: fs.colour || '#808080',
-      visible: !chartHiddenScenarioIds.has(fs.scenario_id),
-      visibilityMode: (fs.visibility_mode || 'f+e') as 'f+e' | 'f' | 'e',
-      kind: 'user' as const,
-      tooltip: fs.effective_dsl,
-    }));
+    const isCustom = analysis?.mode === 'custom';
+    return frozenScenarios.map((fs: any) => {
+      // In custom mode, the 'current' underlayer inherits its displayed colour
+      // from the tab (grey when sole visible layer, else assigned colour).
+      const colour = isCustom && fs.scenario_id === 'current' && liveTabId
+        ? operations.getEffectiveScenarioColour(liveTabId, 'current', scenariosContext as any)
+        : (fs.colour || '#808080');
+      return {
+        id: fs.scenario_id, name: fs.name || fs.scenario_id,
+        colour,
+        visible: !chartHiddenScenarioIds.has(fs.scenario_id),
+        visibilityMode: (fs.visibility_mode || 'f+e') as 'f+e' | 'f' | 'e',
+        kind: (isCustom && fs.scenario_id === 'current' ? 'base' as const : 'user' as const),
+        tooltip: fs.effective_dsl,
+      };
+    });
   }, [analysis, scenariosContext, liveTabId, operations, chartHiddenScenarioIds]);
 
   const visibleScenarioCount = scenarioLayerItems.filter(i => i.visible).length || 1;
@@ -260,12 +268,14 @@ function CanvasAnalysisPropertiesSection({ analysisId, graph, setGraph, saveHist
   useEffect(() => {
     if (!graph) return;
     const key = `${graph.nodes?.length || 0}-${analyticsDsl}-${visibleScenarioCount}`;
+    console.log('[PropertiesPanel] resolve-check', { key, prevKey: fetchKeyRef.current, visibleScenarioCount, mode: analysis?.mode, analysisId: analysisId?.slice(0, 8) });
     if (key === fetchKeyRef.current) return;
     fetchKeyRef.current = key;
     const timer = setTimeout(async () => {
       const { availableAnalyses: resolved, primaryAnalysisType } = await resolveAnalysisType(
         graph, analyticsDsl || undefined, visibleScenarioCount
       );
+      console.log('[PropertiesPanel] resolved', { primaryAnalysisType, availableIds: resolved.map(a => a.id), visibleScenarioCount });
       setAvailableAnalyses(resolved);
       const currentType = analysis?.recipe?.analysis?.analysis_type;
       // Preserve intentionally blank analysis types for newly created canvas charts.
@@ -290,6 +300,18 @@ function CanvasAnalysisPropertiesSection({ analysisId, graph, setGraph, saveHist
     onEditScenarioDsl: (id) => setEditingScenarioId(id),
   });
 
+  // Listen for edit-scenario-dsl events dispatched from the canvas chart toolbar
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      if (detail?.analysisId === analysisId && detail?.scenarioId) {
+        setEditingScenarioId(detail.scenarioId);
+      }
+    };
+    window.addEventListener('dagnet:editScenarioDsl', handler);
+    return () => window.removeEventListener('dagnet:editScenarioDsl', handler);
+  }, [analysisId]);
+
   const handleAddScenario = useCallback(() => {
     if (!analysis) return;
     const existing = analysis.recipe?.scenarios || [];
@@ -311,7 +333,8 @@ function CanvasAnalysisPropertiesSection({ analysisId, graph, setGraph, saveHist
           whatIfDSL,
         });
         const nextGraph = mutateCanvasAnalysisGraph(graph, analysisId, (a) => {
-          advanceMode(a, graphStore.currentDSL || '', captured);
+          const liveColour = liveTabId ? operations.getEffectiveScenarioColour(liveTabId, 'current', scenariosContext as any) : undefined;
+          advanceMode(a, graphStore.currentDSL || '', captured, liveColour);
           a.recipe.scenarios = [...(a.recipe.scenarios || []), newScenario];
         });
         if (nextGraph) { setGraph(nextGraph); saveHistoryState('Add chart scenario'); }
@@ -391,8 +414,9 @@ function CanvasAnalysisPropertiesSection({ analysisId, graph, setGraph, saveHist
                 whatIfDSL,
               });
             }
-            advanceMode(clone, graphStore.currentDSL || '', captured);
-            updateAnalysis({ mode: clone.mode, recipe: clone.recipe });
+            const liveColour = liveTabId ? operations.getEffectiveScenarioColour(liveTabId, 'current', scenariosContext as any) : undefined;
+            advanceMode(clone, graphStore.currentDSL || '', captured, liveColour);
+            updateAnalysis({ mode: clone.mode, recipe: clone.recipe, display: clone.display });
           }} />
         }
       >

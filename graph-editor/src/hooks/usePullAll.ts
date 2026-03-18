@@ -29,8 +29,8 @@ import { useCountdown } from './useCountdown';
 // persistent listener in useStalenessNudges (AppShell), which is always mounted.
 const CONFLICT_MODAL_EVENT = 'dagnet:openConflictModal';
 
-/** Dispatch conflicts to the persistent listener. */
-function dispatchOpenConflictModal(conflicts: ConflictFile[], opId?: string): void {
+/** Dispatch conflicts to the persistent listener (AppShell/useStalenessNudges). */
+export function dispatchOpenConflictModal(conflicts: ConflictFile[], opId?: string): void {
   window.dispatchEvent(
     new CustomEvent(CONFLICT_MODAL_EVENT, { detail: { conflicts, opId } })
   );

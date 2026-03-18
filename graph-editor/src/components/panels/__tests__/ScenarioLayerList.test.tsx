@@ -48,7 +48,7 @@ describe('ScenarioLayerList', () => {
 
     rerender(<ScenarioLayerList items={baseItems} onEdit={vi.fn()} />);
     const editButtonsAfter = container.querySelectorAll('[title="Edit"]');
-    expect(editButtonsAfter.length).toBe(4); // current + 2 user + base
+    expect(editButtonsAfter.length).toBe(3); // current + 2 user (base excluded — editing base DSL is meaningless)
   });
 
   it('should render visibility toggle only when onToggleVisibility is provided', () => {

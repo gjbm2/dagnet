@@ -1,50 +1,68 @@
+/**
+ * UK Day Boundary Scheduler
+ *
+ * Fires at midnight UK time and notifies subscribers. Used by ScenariosContext
+ * to invalidate dynamic DSLs on day change.
+ *
+ * Timer management is delegated to jobSchedulerService (deadline pattern).
+ * This module is a thin adapter that preserves the existing subscribe API.
+ */
+
 import { ukReferenceDayService } from './ukReferenceDayService';
+import { jobSchedulerService } from './jobSchedulerService';
 
 type Subscription = (dayUK: string) => void;
 
-let timer: number | null = null;
 let lastDayUK: string | null = null;
+let jobRegistered = false;
 const subs = new Set<Subscription>();
 
-function tick(): void {
-  const dayUK = ukReferenceDayService.getReferenceDayUK();
-  if (lastDayUK === null) lastDayUK = dayUK;
-  if (dayUK !== lastDayUK) {
-    lastDayUK = dayUK;
-    for (const fn of subs) {
-      try {
-        fn(dayUK);
-      } catch {
-        // best-effort subscribers only
-      }
-    }
-  }
+function registerJobIfNeeded(): void {
+  if (jobRegistered) return;
+  jobRegistered = true;
 
-  const nextMs = ukReferenceDayService.getNextDayBoundaryMs();
-  const delay = Math.max(10_000, Math.min(6 * 60 * 60 * 1000, nextMs - Date.now() + 500));
-  timer = window.setTimeout(tick, delay);
+  lastDayUK = ukReferenceDayService.getReferenceDayUK();
+
+  jobSchedulerService.registerJob({
+    id: 'uk-day-boundary',
+    schedule: {
+      type: 'deadline',
+      getNextDeadlineMs: () => ukReferenceDayService.getNextDayBoundaryMs() + 500,
+    },
+    bootGated: false,
+    presentation: 'silent',
+    runFn: async () => {
+      const dayUK = ukReferenceDayService.getReferenceDayUK();
+      if (lastDayUK === null) lastDayUK = dayUK;
+      if (dayUK !== lastDayUK) {
+        lastDayUK = dayUK;
+        for (const fn of subs) {
+          try {
+            fn(dayUK);
+          } catch {
+            // best-effort subscribers only
+          }
+        }
+      }
+    },
+  });
 }
 
 export const ukDayBoundarySchedulerService = {
   start(): void {
-    if (timer) return;
-    lastDayUK = ukReferenceDayService.getReferenceDayUK();
-    timer = window.setTimeout(tick, Math.max(10_000, ukReferenceDayService.getNextDayBoundaryMs() - Date.now() + 500));
+    registerJobIfNeeded();
   },
 
   stop(): void {
-    if (timer) window.clearTimeout(timer);
-    timer = null;
-    lastDayUK = null;
+    // No-op: lifecycle is owned by the scheduler.
+    // Kept for API compatibility.
   },
 
   subscribe(fn: Subscription): () => void {
     subs.add(fn);
-    // ensure scheduler is running when at least one subscriber exists
-    this.start();
+    registerJobIfNeeded();
     return () => {
       subs.delete(fn);
-      if (subs.size === 0) this.stop();
     };
   },
 };

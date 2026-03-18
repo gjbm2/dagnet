@@ -292,6 +292,10 @@ export function RepositoryMenu() {
       <SwitchBranchModal
         isOpen={isSwitchBranchModalOpen}
         onClose={() => setIsSwitchBranchModalOpen(false)}
+        onCommitFirst={() => {
+          setIsSwitchBranchModalOpen(false);
+          setIsCommitModalOpen(true);
+        }}
       />
       <NewBranchModal
         isOpen={isNewBranchModalOpen}

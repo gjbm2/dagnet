@@ -13,7 +13,8 @@ import { db } from '../db/appDatabase';
 import { FileState } from '../types';
 import { sessionLogService } from './sessionLogService';
 import { conflictResolutionService } from './conflictResolutionService';
-import { merge3Way } from './mergeService';
+import { merge3Way, mergeJson3Way } from './mergeService';
+import type { ConflictFile } from '../components/modals/MergeConflictModal';
 
 export interface RepositoryStatus {
   repository: string;
@@ -270,7 +271,7 @@ class RepositoryOperationsService {
    * - Updates local file in IDB and FileRegistry
    * - Marks file as not dirty (synced with remote)
    */
-  async pullFile(fileId: string, repository: string, branch: string): Promise<{ success: boolean; message?: string }> {
+  async pullFile(fileId: string, repository: string, branch: string): Promise<{ success: boolean; message?: string; conflict?: ConflictFile }> {
     console.log(`🔄 RepositoryOperationsService: Pulling file ${fileId} from ${repository}/${branch}`);
     sessionLogService.info('git', 'GIT_PULL_FILE', `Pulling file ${fileId}`, undefined, { fileId, repository, branch });
 
@@ -349,22 +350,91 @@ class RepositoryOperationsService {
       let finalData: any;
 
       if (hasLocalChanges && file.originalData) {
-        const baseContent = serialise(file.originalData);
-        const localContent = serialise(file.data);
-        const remoteContent = isJson ? JSON.stringify(remoteData, null, 2)
-          : isYaml && YAML ? YAML.stringify(remoteData)
-          : content;
+        // JSON files: structural merge (key-by-key, handles different-key additions).
+        // Other files: text-based line-level merge.
+        if (isJson) {
+          // Diagnostic: log the top-level keys each side has so we can trace merge decisions.
+          const baseKeys = Object.keys(file.originalData || {}).sort();
+          const localKeys = Object.keys(file.data || {}).sort();
+          const remoteKeys = Object.keys(remoteData || {}).sort();
+          const localOnly = localKeys.filter(k => !baseKeys.includes(k));
+          const remoteOnly = remoteKeys.filter(k => !baseKeys.includes(k));
+          sessionLogService.info('git', 'JSON_MERGE_INPUTS',
+            `Structural merge inputs for ${fileId}`,
+            `base keys: ${baseKeys.join(', ')}\nlocal keys: ${localKeys.join(', ')}\nremote keys: ${remoteKeys.join(', ')}\nlocal-only: ${localOnly.join(', ') || '(none)'}\nremote-only: ${remoteOnly.join(', ') || '(none)'}`,
+            { fileId, baseKeyCount: baseKeys.length, localKeyCount: localKeys.length, remoteKeyCount: remoteKeys.length, localOnlyKeys: localOnly, remoteOnlyKeys: remoteOnly });
 
-        const mergeResult = merge3Way(baseContent, localContent, remoteContent);
+          const jsonMerge = mergeJson3Way(file.originalData, file.data, remoteData);
 
-        if (mergeResult.hasConflicts) {
-          sessionLogService.warning('git', 'GIT_PULL_FILE_CONFLICT',
-            `Pull file ${fileId}: 3-way merge has conflicts -- keeping local version`,
-            undefined, { fileId, conflictCount: mergeResult.conflicts?.length });
-          return { success: false, message: `Merge conflict pulling ${file.name || fileId}. Local changes preserved.` };
+          if (jsonMerge.hasConflicts) {
+            const baseContent = serialise(file.originalData);
+            const localContent = serialise(file.data);
+            const remoteContent = JSON.stringify(remoteData, null, 2);
+
+            // Log each conflict path with detail about what each side has.
+            for (const c of jsonMerge.conflicts) {
+              const pathStr = c.path.join('.');
+              sessionLogService.warning('git', 'JSON_MERGE_CONFLICT_DETAIL',
+                `Conflict at "${pathStr}": base=${typeof c.base === 'object' ? JSON.stringify(c.base)?.slice(0, 80) : String(c.base)}, local=${typeof c.local === 'object' ? JSON.stringify(c.local)?.slice(0, 80) : String(c.local)}, remote=${typeof c.remote === 'object' ? JSON.stringify(c.remote)?.slice(0, 80) : String(c.remote)}`,
+                undefined,
+                { fileId, path: pathStr });
+            }
+
+            sessionLogService.warning('git', 'GIT_PULL_FILE_CONFLICT',
+              `Pull file ${fileId}: structural merge has ${jsonMerge.conflicts.length} conflict(s)`,
+              jsonMerge.conflicts.map(c => c.path.join('.')).join(', '),
+              { fileId, conflictCount: jsonMerge.conflicts.length, paths: jsonMerge.conflicts.map(c => c.path.join('.')) });
+            return {
+              success: false,
+              message: `Merge conflict pulling ${file.name || fileId}`,
+              conflict: {
+                fileId,
+                fileName: file.name || fileId,
+                path: file.source!.path,
+                type: file.type || 'unknown',
+                localContent: localContent,
+                remoteContent: remoteContent,
+                baseContent: baseContent,
+                mergedContent: JSON.stringify(jsonMerge.merged, null, 2),
+                hasConflicts: true,
+              },
+            };
+          }
+
+          finalData = jsonMerge.merged;
+          sessionLogService.info('git', 'GIT_PULL_FILE_MERGED',
+            `Structural auto-merge for ${fileId} (JSON)`, undefined, { fileId });
+        } else {
+          const baseContent = serialise(file.originalData);
+          const localContent = serialise(file.data);
+          const remoteContent = isYaml && YAML ? YAML.stringify(remoteData) : content;
+
+          const mergeResult = merge3Way(baseContent, localContent, remoteContent);
+
+          if (mergeResult.hasConflicts) {
+            sessionLogService.warning('git', 'GIT_PULL_FILE_CONFLICT',
+              `Pull file ${fileId}: 3-way merge has conflicts`,
+              undefined, { fileId, conflictCount: mergeResult.conflicts?.length });
+            return {
+              success: false,
+              message: `Merge conflict pulling ${file.name || fileId}`,
+              conflict: {
+                fileId,
+                fileName: file.name || fileId,
+                path: file.source!.path,
+                type: file.type || 'unknown',
+                localContent: localContent,
+                remoteContent: remoteContent,
+                baseContent: baseContent,
+                mergedContent: mergeResult.merged || '',
+                hasConflicts: true,
+              },
+            };
+          }
+
+          finalData = parseContent(mergeResult.merged || remoteContent);
         }
 
-        finalData = parseContent(mergeResult.merged || remoteContent);
         sessionLogService.info('git', 'GIT_PULL_FILE_MERGED',
           `Auto-merged local changes with remote for ${fileId}`, undefined, { fileId });
       } else {

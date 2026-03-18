@@ -58,6 +58,7 @@ export function advanceMode(
   analysis: CanvasAnalysis,
   currentDSL: string,
   captured: { scenarios: ChartRecipeScenario[]; what_if_dsl?: string } | null,
+  currentColour?: string,
 ): void {
   switch (analysis.mode) {
     case 'live': {
@@ -68,18 +69,67 @@ export function advanceMode(
         const delta = computeRebaseDelta(base, absoluteDsl);
         return { ...s, effective_dsl: delta || undefined, is_live: false };
       });
+      // Promote 'current' to a visible "No overrides" copy (bucket B) and
+      // keep the original as a hidden underlayer (bucket C, kind:'current').
+      const currentIdx = rebasedScenarios.findIndex((s) => s.scenario_id === 'current');
+      if (currentIdx >= 0) {
+        const orig = rebasedScenarios[currentIdx];
+        const copy = {
+          ...orig,
+          scenario_id: 'no-overrides',
+          name: 'No overrides',
+        };
+        // Replace original with copy at the same position (bucket B).
+        // Move original to end of list (bucket C — hidden underlayer).
+        rebasedScenarios.splice(currentIdx, 1, copy);
+        rebasedScenarios.push(orig);
+      }
+
       analysis.mode = 'custom';
       analysis.recipe = {
         ...analysis.recipe,
         scenarios: rebasedScenarios,
         analysis: { ...analysis.recipe.analysis, what_if_dsl: captured.what_if_dsl },
       };
+
+      // Hide the 'current' underlayer by default — it's the base reference
+      // (bucket C). Users can unhide it to use as a comparison scenario.
+      if (!analysis.display) analysis.display = {};
+      const hidden = Array.isArray((analysis.display as any).hidden_scenarios)
+        ? [...(analysis.display as any).hidden_scenarios]
+        : [];
+      if (!hidden.includes('current')) hidden.push('current');
+      (analysis.display as any).hidden_scenarios = hidden;
       break;
     }
 
     case 'custom': {
       const base = currentDSL || '';
-      const bakedScenarios = (analysis.recipe.scenarios || []).map((s: ChartRecipeScenario) => {
+      const hiddenIds = new Set<string>(
+        Array.isArray((analysis.display as any)?.hidden_scenarios)
+          ? (analysis.display as any).hidden_scenarios
+          : [],
+      );
+      // Only visible scenarios carry over into Fixed mode.
+      // If 'current' is visible, include it (baked to absolute) as the last scenario.
+      const allScenarios = analysis.recipe.scenarios || [];
+      const visibleNonCurrent = allScenarios.filter(
+        (s: ChartRecipeScenario) => s.scenario_id !== 'current' && !hiddenIds.has(s.scenario_id),
+      );
+      const currentScenario = allScenarios.find(
+        (s: ChartRecipeScenario) => s.scenario_id === 'current',
+      );
+      const currentIsVisible = currentScenario && !hiddenIds.has('current');
+      const scenariosToFixed = [...visibleNonCurrent];
+      if (currentIsVisible) {
+        // Stamp the live displayed colour so Fixed mode preserves it
+        const stamped = currentColour
+          ? { ...currentScenario, colour: currentColour }
+          : currentScenario;
+        scenariosToFixed.push(stamped);
+      }
+
+      const bakedScenarios = scenariosToFixed.map((s: ChartRecipeScenario) => {
         const delta = s.effective_dsl || '';
         const absolute = delta
           ? augmentDSLWithConstraint(base, delta)
@@ -88,6 +138,10 @@ export function advanceMode(
       });
       analysis.mode = 'fixed';
       analysis.recipe = { ...analysis.recipe, scenarios: bakedScenarios };
+      // Clear hidden_scenarios — fixed mode has no hidden layers
+      if (analysis.display) {
+        (analysis.display as any).hidden_scenarios = undefined;
+      }
       break;
     }
 
@@ -98,6 +152,10 @@ export function advanceMode(
         scenarios: undefined,
         analysis: { ...analysis.recipe.analysis, what_if_dsl: undefined },
       };
+      // Clear hidden_scenarios — no residual visibility state from custom/fixed
+      if (analysis.display) {
+        (analysis.display as any).hidden_scenarios = undefined;
+      }
       break;
     }
   }

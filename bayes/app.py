@@ -100,7 +100,7 @@ def _report_progress(job_id: str, stage: str, pct: int, detail: str = ""):
         pass  # Best-effort — don't let progress reporting kill the job
 
 
-@app.function(image=worker_image, timeout=600)
+@app.function(image=worker_image, timeout=600, cpu=4)
 def fit_graph(payload: dict) -> dict:
     """Fit posteriors for a single graph via the compiler pipeline.
 

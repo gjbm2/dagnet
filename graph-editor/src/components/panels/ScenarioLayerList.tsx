@@ -293,7 +293,7 @@ export function ScenarioLayerList({
                 <Trash2 size={14} />
               </button>
             )}
-            {onEdit && (
+            {onEdit && item.kind !== 'base' && (
               <button className="scenario-action-btn" onClick={() => onEdit(item.id)} title={getEditTooltip?.(item.id) || 'Edit'}>
                 <Edit2 size={14} />
               </button>

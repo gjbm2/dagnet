@@ -228,3 +228,255 @@ export function formatConflict(conflict: MergeConflict): string {
   ].join('\n');
 }
 
+// ---------------------------------------------------------------------------
+// JSON-aware structural 3-way merge
+//
+// Merges parsed JSON objects key-by-key, recursing into nested objects.
+// Different keys added/modified by different sides auto-merge without conflict.
+// Arrays and primitives are atomic (one-side-wins or conflict).
+//
+// Prior art: BitSquid 3-way JSON merge philosophy, trimerge (npm).
+// ---------------------------------------------------------------------------
+
+export interface JsonKeyConflict {
+  /** Dot-separated path to the conflicting key (e.g. ["_bayes", "posteriors"]) */
+  path: string[];
+  base: unknown;
+  local: unknown;
+  remote: unknown;
+}
+
+export interface JsonMergeResult {
+  /** The merged object. Conflicting keys use the LOCAL value as default. */
+  merged: any;
+  conflicts: JsonKeyConflict[];
+  hasConflicts: boolean;
+}
+
+/**
+ * Structural 3-way merge for parsed JSON objects.
+ *
+ * Rules (BitSquid-style):
+ * - Objects: recurse key-by-key. Different keys auto-merge.
+ * - Arrays/primitives: atomic. One-side-wins or conflict.
+ * - Key added by one side only: keep the addition.
+ * - Key deleted by one side, unchanged by other: delete.
+ * - Key deleted by one side, modified by other: conflict.
+ * - Both sides modify same key to same value: keep it.
+ * - Both sides modify same key to different values: recurse if both objects, else conflict.
+ */
+export function mergeJson3Way(base: any, local: any, remote: any): JsonMergeResult {
+  const conflicts: JsonKeyConflict[] = [];
+  const merged = mergeValue(base, local, remote, [], conflicts);
+  return { merged, conflicts, hasConflicts: conflicts.length > 0 };
+}
+
+function deepEqual(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  if (a == null || b == null) return a === b;
+  if (typeof a !== typeof b) return false;
+  if (typeof a !== 'object') return false;
+
+  if (Array.isArray(a)) {
+    if (!Array.isArray(b) || a.length !== b.length) return false;
+    return a.every((v, i) => deepEqual(v, (b as any[])[i]));
+  }
+
+  const aObj = a as Record<string, unknown>;
+  const bObj = b as Record<string, unknown>;
+  const aKeys = Object.keys(aObj);
+  const bKeys = Object.keys(bObj);
+  if (aKeys.length !== bKeys.length) return false;
+  return aKeys.every(k => Object.prototype.hasOwnProperty.call(bObj, k) && deepEqual(aObj[k], bObj[k]));
+}
+
+function isPlainObject(v: unknown): v is Record<string, unknown> {
+  return v != null && typeof v === 'object' && !Array.isArray(v);
+}
+
+function mergeValue(
+  base: unknown,
+  local: unknown,
+  remote: unknown,
+  path: string[],
+  conflicts: JsonKeyConflict[],
+): unknown {
+  const baseChanged = !deepEqual(base, local);
+  const remoteChanged = !deepEqual(base, remote);
+
+  // Neither side changed → keep base.
+  if (!baseChanged && !remoteChanged) return base;
+
+  // Only local changed → take local.
+  if (baseChanged && !remoteChanged) return local;
+
+  // Only remote changed → take remote.
+  if (!baseChanged && remoteChanged) return remote;
+
+  // Both changed to the same value → keep it.
+  if (deepEqual(local, remote)) return local;
+
+  // Both changed to different values.
+  // If both are objects, recurse key-by-key.
+  if (isPlainObject(base) && isPlainObject(local) && isPlainObject(remote)) {
+    return mergeObjects(base, local, remote, path, conflicts);
+  }
+
+  // Arrays of objects with identity keys (uuid, id) — merge element-by-element.
+  if (Array.isArray(base) && Array.isArray(local) && Array.isArray(remote)) {
+    const idKey = detectIdKey(base) || detectIdKey(local) || detectIdKey(remote);
+    if (idKey) {
+      return mergeArrayById(base, local, remote, idKey, path, conflicts);
+    }
+  }
+
+  // Auto-resolve timestamp fields: take the most recent value.
+  const leafKey = path[path.length - 1];
+  if (leafKey && /^(updated_at|lastModified|modified_at|created_at)$/i.test(leafKey)) {
+    const localTime = typeof local === 'string' ? Date.parse(local) : typeof local === 'number' ? local : 0;
+    const remoteTime = typeof remote === 'string' ? Date.parse(remote) : typeof remote === 'number' ? remote : 0;
+    return localTime >= remoteTime ? local : remote;
+  }
+
+  // Atomic conflict (arrays without IDs, primitives, type changes).
+  // Default to local; record the conflict.
+  conflicts.push({ path: [...path], base, local, remote });
+  return local;
+}
+
+function mergeObjects(
+  base: Record<string, unknown>,
+  local: Record<string, unknown>,
+  remote: Record<string, unknown>,
+  path: string[],
+  conflicts: JsonKeyConflict[],
+): Record<string, unknown> {
+  const result: Record<string, unknown> = {};
+  const allKeys = new Set([...Object.keys(base), ...Object.keys(local), ...Object.keys(remote)]);
+
+  for (const key of allKeys) {
+    const inBase = Object.prototype.hasOwnProperty.call(base, key);
+    const inLocal = Object.prototype.hasOwnProperty.call(local, key);
+    const inRemote = Object.prototype.hasOwnProperty.call(remote, key);
+
+    if (!inBase && inLocal && !inRemote) {
+      // Added by local only → keep.
+      result[key] = local[key];
+    } else if (!inBase && !inLocal && inRemote) {
+      // Added by remote only → keep.
+      result[key] = remote[key];
+    } else if (!inBase && inLocal && inRemote) {
+      // Added by both → recurse/compare.
+      result[key] = mergeValue(undefined, local[key], remote[key], [...path, key], conflicts);
+    } else if (inBase && !inLocal && !inRemote) {
+      // Deleted by both → omit.
+    } else if (inBase && !inLocal && inRemote) {
+      // Deleted by local. If remote unchanged → delete. If remote modified → conflict.
+      if (deepEqual(base[key], remote[key])) {
+        // Remote didn't touch it; local deleted → omit.
+      } else {
+        conflicts.push({ path: [...path, key], base: base[key], local: undefined, remote: remote[key] });
+        // Omit (favour local deletion), but conflict is recorded.
+      }
+    } else if (inBase && inLocal && !inRemote) {
+      // Deleted by remote. If local unchanged → delete. If local modified → conflict.
+      if (deepEqual(base[key], local[key])) {
+        // Local didn't touch it; remote deleted → omit.
+      } else {
+        conflicts.push({ path: [...path, key], base: base[key], local: local[key], remote: undefined });
+        result[key] = local[key]; // Favour local modification.
+      }
+    } else {
+      // Key in all three → recurse.
+      result[key] = mergeValue(base[key], local[key], remote[key], [...path, key], conflicts);
+    }
+  }
+
+  return result;
+}
+
+/** Detect an identity key (uuid, id) shared by all objects in an array. */
+function detectIdKey(arr: unknown[]): string | null {
+  if (arr.length === 0) return null;
+  for (const candidate of ['uuid', 'id']) {
+    if (arr.every(item => isPlainObject(item) && typeof (item as any)[candidate] === 'string')) {
+      return candidate;
+    }
+  }
+  return null;
+}
+
+/**
+ * Merge arrays of objects by identity key (BitSquid approach).
+ * Match elements by ID, merge each pair structurally, add new elements from either side.
+ */
+function mergeArrayById(
+  base: unknown[],
+  local: unknown[],
+  remote: unknown[],
+  idKey: string,
+  path: string[],
+  conflicts: JsonKeyConflict[],
+): unknown[] {
+  const baseMap = new Map<string, Record<string, unknown>>();
+  const localMap = new Map<string, Record<string, unknown>>();
+  const remoteMap = new Map<string, Record<string, unknown>>();
+
+  for (const item of base) if (isPlainObject(item)) baseMap.set((item as any)[idKey], item);
+  for (const item of local) if (isPlainObject(item)) localMap.set((item as any)[idKey], item);
+  for (const item of remote) if (isPlainObject(item)) remoteMap.set((item as any)[idKey], item);
+
+  const allIds = new Set([...baseMap.keys(), ...localMap.keys(), ...remoteMap.keys()]);
+  const result: unknown[] = [];
+
+  // Preserve local ordering as the primary order, then append new remote-only items.
+  const orderedIds: string[] = [];
+  for (const item of local) {
+    if (isPlainObject(item)) orderedIds.push((item as any)[idKey]);
+  }
+  // Add remote-only IDs at the end.
+  for (const id of allIds) {
+    if (!orderedIds.includes(id)) orderedIds.push(id);
+  }
+
+  for (const id of orderedIds) {
+    const inBase = baseMap.has(id);
+    const inLocal = localMap.has(id);
+    const inRemote = remoteMap.has(id);
+
+    if (!inBase && inLocal && !inRemote) {
+      // Added by local only → keep.
+      result.push(localMap.get(id)!);
+    } else if (!inBase && !inLocal && inRemote) {
+      // Added by remote only → keep.
+      result.push(remoteMap.get(id)!);
+    } else if (!inBase && inLocal && inRemote) {
+      // Added by both → merge the two.
+      result.push(mergeValue(undefined, localMap.get(id)!, remoteMap.get(id)!, [...path, `[${id}]`], conflicts));
+    } else if (inBase && !inLocal && !inRemote) {
+      // Deleted by both → omit.
+    } else if (inBase && !inLocal && inRemote) {
+      // Deleted by local. If remote unchanged → delete. If remote modified → conflict.
+      if (deepEqual(baseMap.get(id), remoteMap.get(id))) {
+        // Remote didn't change it; local deleted → omit.
+      } else {
+        conflicts.push({ path: [...path, `[${id}]`], base: baseMap.get(id), local: undefined, remote: remoteMap.get(id) });
+      }
+    } else if (inBase && inLocal && !inRemote) {
+      // Deleted by remote. If local unchanged → delete. If local modified → conflict (keep local).
+      if (deepEqual(baseMap.get(id), localMap.get(id))) {
+        // Local didn't change it; remote deleted → omit.
+      } else {
+        conflicts.push({ path: [...path, `[${id}]`], base: baseMap.get(id), local: localMap.get(id), remote: undefined });
+        result.push(localMap.get(id)!);
+      }
+    } else if (inBase && inLocal && inRemote) {
+      // In all three → recurse on the element.
+      const merged = mergeValue(baseMap.get(id)!, localMap.get(id)!, remoteMap.get(id)!, [...path, `[${id}]`], conflicts);
+      result.push(merged);
+    }
+  }
+
+  return result;
+}
+

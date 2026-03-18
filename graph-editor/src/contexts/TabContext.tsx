@@ -2610,6 +2610,25 @@ export function TabProvider({ children }: { children: React.ReactNode }) {
   }, [tabs]);
 
   /**
+   * Get the effective display colour for a scenario on a tab.
+   * When only one layer is visible, it's shown in grey (no comparison context).
+   * Otherwise returns the scenario's assigned colour from ScenariosContext.
+   */
+  const getEffectiveScenarioColour = useCallback((
+    tabId: string,
+    scenarioId: string,
+    scenariosContext: { currentColour?: string; baseColour?: string; scenarios?: Array<{ id: string; colour?: string }> } | null,
+  ): string => {
+    const state = getScenarioState(tabId);
+    const visibleCount = state?.visibleScenarioIds?.length || 1;
+    if (visibleCount === 1) return '#808080';
+    if (scenarioId === 'current') return scenariosContext?.currentColour || '#3b82f6';
+    if (scenarioId === 'base') return scenariosContext?.baseColour || '#6b7280';
+    const scenario = scenariosContext?.scenarios?.find((s: any) => s.id === scenarioId);
+    return scenario?.colour || '#808080';
+  }, [getScenarioState]);
+
+  /**
    * Set visible scenarios for a tab
    */
   const setVisibleScenarios = useCallback(async (tabId: string, scenarioIds: string[]): Promise<void> => {
@@ -2940,6 +2959,7 @@ export function TabProvider({ children }: { children: React.ReactNode }) {
     showAllNodes,
     isNodeHidden,
     getScenarioState,
+    getEffectiveScenarioColour,
     setVisibleScenarios,
     addVisibleScenarios,
     toggleScenarioVisibility,

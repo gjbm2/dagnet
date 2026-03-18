@@ -1,6 +1,7 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigatorContext } from '../../contexts/NavigatorContext';
-import { useTabContext } from '../../contexts/TabContext';
+import { repositoryOperationsService } from '../../services/repositoryOperationsService';
+import type { FileState } from '../../types';
 import './Modal.css';
 
 interface SwitchBranchModalProps {
@@ -10,40 +11,66 @@ interface SwitchBranchModalProps {
   targetBranch?: string;
   /** Called after a successful branch switch (e.g. to open a graph from the new branch) */
   onSwitchComplete?: () => void;
+  /** Called when user chooses "Commit First" — parent should close this modal and open CommitModal */
+  onCommitFirst?: () => void;
 }
 
 /**
  * Switch Branch Modal
- * 
+ *
  * Guarded operation to switch to a different branch.
- * Warns user about dirty files and offers options to:
+ * Uses SHA-based content comparison (via getCommittableFiles) to reliably
+ * detect local edits — not just in-memory dirty flags.
+ *
+ * Warns user about uncommitted files and offers options to:
  * - Commit changes to current branch before switching
  * - Discard changes and switch
  * - Cancel the operation
  */
-export function SwitchBranchModal({ isOpen, onClose, targetBranch, onSwitchComplete }: SwitchBranchModalProps) {
+export function SwitchBranchModal({ isOpen, onClose, targetBranch, onSwitchComplete, onCommitFirst }: SwitchBranchModalProps) {
   const { state: navState, operations: navOps } = useNavigatorContext();
-  const { operations: tabOps } = useTabContext();
   const [selectedBranch, setSelectedBranch] = useState(targetBranch || navState.selectedBranch);
-  
+
+  // Committable files state (loaded async from IDB via SHA comparison)
+  const [committableFiles, setCommittableFiles] = useState<FileState[]>([]);
+  const [isCheckingFiles, setIsCheckingFiles] = useState(false);
+
   // Update selected branch when targetBranch changes (e.g. URL-driven)
-  React.useEffect(() => {
+  useEffect(() => {
     if (targetBranch) setSelectedBranch(targetBranch);
   }, [targetBranch]);
 
-  // Refresh branch list from GitHub each time modal opens
-  React.useEffect(() => {
+  // Refresh branch list and check for committable files each time modal opens
+  useEffect(() => {
     if (isOpen) {
       navOps.refreshBranches();
+
+      // Check for uncommitted local edits via SHA-based comparison (IDB source of truth)
+      setIsCheckingFiles(true);
+      repositoryOperationsService.getCommittableFiles(
+        navState.selectedRepo,
+        navState.selectedBranch
+      ).then(files => {
+        setCommittableFiles(files);
+      }).catch(err => {
+        console.error('SwitchBranchModal: Failed to check committable files:', err);
+        setCommittableFiles([]);
+      }).finally(() => {
+        setIsCheckingFiles(false);
+      });
+    } else {
+      // Reset state when modal closes
+      setCommittableFiles([]);
+      setIsCheckingFiles(false);
     }
   }, [isOpen]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const [isProcessing, setIsProcessing] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   if (!isOpen) return null;
 
-  const dirtyTabs = tabOps.getDirtyTabs();
-  const hasDirtyFiles = dirtyTabs.length > 0;
+  const hasDirtyFiles = committableFiles.length > 0;
   const availableBranches = navState.availableBranches.filter(branch => branch !== navState.selectedBranch);
 
   const handleSwitch = async (action: 'commit' | 'discard' | 'cancel') => {
@@ -52,26 +79,21 @@ export function SwitchBranchModal({ isOpen, onClose, targetBranch, onSwitchCompl
       return;
     }
 
+    if (action === 'commit') {
+      if (onCommitFirst) {
+        onClose();
+        onCommitFirst();
+      } else {
+        setError('Please commit or discard changes first using the Repository menu.');
+      }
+      return;
+    }
+
     setIsProcessing(true);
     setError(null);
 
     try {
-      if (action === 'commit') {
-        // TODO: Trigger commit modal and wait for completion
-        // For now, just show an error that commit must be done first
-        setError('Please commit or discard changes first using the Navigator commit button.');
-        setIsProcessing(false);
-        return;
-      }
-
-      if (action === 'discard') {
-        // Discard all dirty files
-        // TODO: Implement bulk discard operation in TabContext
-        console.log('Discarding all dirty files...');
-        // For now, just proceed with the switch
-      }
-
-      // Switch branch
+      // Switch branch — workspace replacement handles cleanup of old branch data
       console.log(`Switching to branch: ${selectedBranch}`);
       await navOps.selectBranch(selectedBranch);
 
@@ -94,13 +116,28 @@ export function SwitchBranchModal({ isOpen, onClose, targetBranch, onSwitchCompl
         </div>
 
         <div className="modal-body">
+          {/* Loading state while checking for uncommitted files */}
+          {isCheckingFiles && (
+            <div className="modal-info">
+              <p>Checking for uncommitted changes…</p>
+            </div>
+          )}
+
           {/* Warning about dirty files */}
-          {hasDirtyFiles && (
+          {!isCheckingFiles && hasDirtyFiles && (
             <div className="modal-warning">
               <div className="warning-icon">⚠️</div>
               <div className="warning-content">
-                <strong>You have {dirtyTabs.length} unsaved file{dirtyTabs.length === 1 ? '' : 's'}</strong>
-                <p>Switching branches will replace your workspace. You must commit or discard changes before proceeding.</p>
+                <strong>You have {committableFiles.length} uncommitted file{committableFiles.length === 1 ? '' : 's'}</strong>
+                <p>Switching branches will replace your workspace. These changes will be <strong>permanently lost</strong> unless you commit first:</p>
+                <ul style={{ margin: '8px 0 0 0', padding: '0 0 0 20px', fontSize: '0.9em' }}>
+                  {committableFiles.slice(0, 10).map(f => (
+                    <li key={f.fileId}>{f.name || f.fileId}</li>
+                  ))}
+                  {committableFiles.length > 10 && (
+                    <li style={{ fontStyle: 'italic' }}>…and {committableFiles.length - 10} more</li>
+                  )}
+                </ul>
               </div>
             </div>
           )}
@@ -128,15 +165,16 @@ export function SwitchBranchModal({ isOpen, onClose, targetBranch, onSwitchCompl
             </div>
           )}
 
-          {/* Info */}
-          <div className="modal-info">
-            <p><strong>What happens when you switch:</strong></p>
-            <ul>
-              <li>Local workspace will be updated to reflect the new branch</li>
-              <li>All open tabs will remain, but content may change</li>
-              <li>Your current uncommitted changes will be lost (unless committed)</li>
-            </ul>
-          </div>
+          {/* Info — only show when no dirty files (dirty warning already explains consequences) */}
+          {!isCheckingFiles && !hasDirtyFiles && (
+            <div className="modal-info">
+              <p><strong>What happens when you switch:</strong></p>
+              <ul>
+                <li>Local workspace will be updated to reflect the new branch</li>
+                <li>All open tabs will remain, but content may change</li>
+              </ul>
+            </div>
+          )}
         </div>
 
         <div className="modal-footer">
@@ -153,14 +191,14 @@ export function SwitchBranchModal({ isOpen, onClose, targetBranch, onSwitchCompl
               <button
                 className="modal-btn modal-btn-danger"
                 onClick={() => handleSwitch('discard')}
-                disabled={isProcessing || selectedBranch === navState.selectedBranch}
+                disabled={isProcessing || isCheckingFiles || selectedBranch === navState.selectedBranch}
               >
-                Discard Changes & Switch
+                {isProcessing ? 'Switching…' : 'Discard Changes & Switch'}
               </button>
               <button
                 className="modal-btn modal-btn-primary"
                 onClick={() => handleSwitch('commit')}
-                disabled={isProcessing || selectedBranch === navState.selectedBranch}
+                disabled={isProcessing || isCheckingFiles}
               >
                 Commit First
               </button>
@@ -169,9 +207,9 @@ export function SwitchBranchModal({ isOpen, onClose, targetBranch, onSwitchCompl
             <button
               className="modal-btn modal-btn-primary"
               onClick={() => handleSwitch('discard')}
-              disabled={isProcessing || selectedBranch === navState.selectedBranch}
+              disabled={isProcessing || isCheckingFiles || selectedBranch === navState.selectedBranch}
             >
-              {isProcessing ? 'Switching...' : 'Switch Branch'}
+              {isProcessing ? 'Switching…' : 'Switch Branch'}
             </button>
           )}
         </div>
@@ -179,6 +217,3 @@ export function SwitchBranchModal({ isOpen, onClose, targetBranch, onSwitchCompl
     </div>
   );
 }
-
-
-

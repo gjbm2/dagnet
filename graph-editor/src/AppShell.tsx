@@ -1876,6 +1876,10 @@ function MainAppShellContent() {
             isOpen={urlBranchSwitch.isOpen}
             onClose={() => setUrlBranchSwitch({ isOpen: false, branch: '', graph: null })}
             targetBranch={urlBranchSwitch.branch}
+            onCommitFirst={() => {
+              setUrlBranchSwitch({ isOpen: false, branch: '', graph: null });
+              setCommitModalState({ isOpen: true, preselectedFiles: [] });
+            }}
             onSwitchComplete={async () => {
               const graphToOpen = urlBranchSwitch.graph;
               setUrlBranchSwitch({ isOpen: false, branch: '', graph: null });

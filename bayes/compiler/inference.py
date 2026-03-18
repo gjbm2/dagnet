@@ -49,10 +49,9 @@ def run_inference(
         if pct > last_pct[0]:
             last_pct[0] = pct
             phase = "tuning" if draw.tuning else "sampling"
-            chain = draw.chain + 1
             report_progress(
                 "sampling", pct,
-                f"Chain {chain}/{config.chains} {phase}",
+                f"{config.chains} chains {phase}",
             )
 
     if report_progress:
@@ -63,7 +62,7 @@ def run_inference(
             draws=config.draws,
             tune=config.tune,
             chains=config.chains,
-            cores=1 if use_callback else config.cores,
+            cores=config.cores,
             target_accept=config.target_accept,
             return_inferencedata=True,
             random_seed=config.random_seed,

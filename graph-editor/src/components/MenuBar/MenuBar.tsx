@@ -17,6 +17,8 @@ import { DevConsoleMirrorControls } from './DevConsoleMirrorControls';
 import { DevBayesTrigger } from './DevBayesTrigger';
 import { ShareLinkModal } from '../modals/ShareLinkModal';
 import { SwitchBranchModal } from '../modals/SwitchBranchModal';
+import { CommitModal } from '../CommitModal';
+import { useCommitHandler } from '../../hooks/useCommitHandler';
 import { APP_VERSION } from '../../version';
 import { useHealthStatus } from '../../hooks/useHealthStatus';
 import { GitHubOAuthChip } from '../../hooks/useGitHubOAuthChip';
@@ -33,6 +35,8 @@ export function MenuBarComponent() {
   const { isDashboardMode, toggleDashboardMode } = useDashboardMode();
   const [shareModalOpen, setShareModalOpen] = useState(false);
   const [branchModalOpen, setBranchModalOpen] = useState(false);
+  const [commitModalOpen, setCommitModalOpen] = useState(false);
+  const { handleCommitFiles } = useCommitHandler();
   const { mode: healthMode, tooltip: healthTooltip } = useHealthStatus({ pollIntervalMs: 5 * 60_000 });
   const { theme, toggleTheme } = useTheme();
 
@@ -90,7 +94,20 @@ export function MenuBarComponent() {
         </div>
       </div>
       <ShareLinkModal isOpen={shareModalOpen} onClose={() => setShareModalOpen(false)} />
-      <SwitchBranchModal isOpen={branchModalOpen} onClose={() => setBranchModalOpen(false)} />
+      <SwitchBranchModal
+        isOpen={branchModalOpen}
+        onClose={() => setBranchModalOpen(false)}
+        onCommitFirst={() => {
+          setBranchModalOpen(false);
+          setCommitModalOpen(true);
+        }}
+      />
+      <CommitModal
+        isOpen={commitModalOpen}
+        onClose={() => setCommitModalOpen(false)}
+        onCommit={handleCommitFiles}
+        preselectedFiles={[]}
+      />
     </div>
   );
 }

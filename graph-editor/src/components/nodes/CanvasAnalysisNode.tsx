@@ -256,8 +256,12 @@ function CanvasAnalysisNodeInner({ data, selected }: NodeProps<CanvasAnalysisNod
     const graph = storeHandle?.getState?.()?.graph;
     if (!graph) return;
     let cancelled = false;
+    console.log('[CanvasAnalysisNode] resolveAnalysisType', { analysisId: analysis.id?.slice(0, 8), analyticsDsl, scenarioCount, mode: analysis.mode });
     resolveAnalysisType(graph, analyticsDsl || undefined, scenarioCount).then(({ availableAnalyses: resolved }) => {
-      if (!cancelled) setAvailableAnalyses(resolved);
+      if (!cancelled) {
+        console.log('[CanvasAnalysisNode] resolved', { analysisId: analysis.id?.slice(0, 8), availableIds: resolved.map(a => a.id), scenarioCount });
+        setAvailableAnalyses(resolved);
+      }
     });
     return () => { cancelled = true; };
   }, [analyticsDsl, scenarioCount, storeHandle]);
@@ -281,9 +285,13 @@ function CanvasAnalysisNodeInner({ data, selected }: NodeProps<CanvasAnalysisNod
       if (analysis.mode !== 'live' && analysis.recipe.scenarios) {
         const s = analysis.recipe.scenarios.find(s => s.scenario_id === id);
         if (s) {
+          // In custom mode, 'current' underlayer gets its colour from the tab context
+          const colour = analysis.mode === 'custom' && id === 'current' && tabId
+            ? operationsRef.current.getEffectiveScenarioColour(tabId, 'current', scenariosContext as any)
+            : (s.colour || '#808080');
           m[id] = {
             name: s.name || id,
-            colour: s.colour || '#808080',
+            colour,
             visibility_mode: (s.visibility_mode as any) || 'f+e',
           };
         }
@@ -332,17 +340,23 @@ function CanvasAnalysisNodeInner({ data, selected }: NodeProps<CanvasAnalysisNod
         };
       });
     }
-    // Custom mode: show all recipe scenarios (including hidden)
+    // Custom/fixed mode: show all recipe scenarios (including hidden)
     const frozenScenarios = analysis.recipe?.scenarios || [];
-    return frozenScenarios.map(fs => ({
-      id: fs.scenario_id,
-      name: fs.name || fs.scenario_id,
-      colour: fs.colour || '#808080',
-      visible: !hiddenSet.has(fs.scenario_id),
-      visibilityMode: (fs.visibility_mode || 'f+e') as 'f+e' | 'f' | 'e',
-      kind: 'user' as const,
-    }));
-  }, [analysis.mode, analysis.recipe?.scenarios, analysis.display, visibleScenarioIds, scenarioMetaById]);
+    const isCustom = analysis.mode === 'custom';
+    return frozenScenarios.map(fs => {
+      const colour = isCustom && fs.scenario_id === 'current' && tabId
+        ? operationsRef.current.getEffectiveScenarioColour(tabId, 'current', scenariosContext as any)
+        : (fs.colour || '#808080');
+      return {
+        id: fs.scenario_id,
+        name: fs.name || fs.scenario_id,
+        colour,
+        visible: !hiddenSet.has(fs.scenario_id),
+        visibilityMode: (fs.visibility_mode || 'f+e') as 'f+e' | 'f' | 'e',
+        kind: (isCustom && fs.scenario_id === 'current' ? 'base' as const : 'user' as const),
+      };
+    });
+  }, [analysis.mode, analysis.recipe?.scenarios, analysis.display, visibleScenarioIds, scenarioMetaById, scenariosContext]);
 
   // DSL subtitles for scenario cards
   const scenarioDslSubtitleById = useMemo(() => {
@@ -426,6 +440,37 @@ function CanvasAnalysisNodeInner({ data, selected }: NodeProps<CanvasAnalysisNod
     return getScenarioVisibilityOverlayStyle(item?.visibilityMode);
   }, [allScenarioLayerItems]);
 
+  const handleScenarioDelete = useCallback((id: string) => {
+    mutateScenarios((scenarios, display) => {
+      const filtered = scenarios.filter((sc: any) => sc.scenario_id !== id);
+      const hidden = [...(((display as any)?.hidden_scenarios) || []) as string[]].filter(sid => sid !== id);
+      return { scenarios: filtered, display: { ...display, hidden_scenarios: hidden } };
+    });
+  }, [mutateScenarios]);
+
+  const handleScenarioReorder = useCallback((fromIndex: number, toIndex: number) => {
+    mutateScenarios((scenarios) => {
+      const userScenarios = scenarios.filter((s: any) => s.scenario_id !== 'current' || analysis.mode !== 'custom');
+      const currentUnderlayer = analysis.mode === 'custom' ? scenarios.find((s: any) => s.scenario_id === 'current') : null;
+      const arr = [...userScenarios];
+      const [moved] = arr.splice(fromIndex, 1);
+      arr.splice(toIndex, 0, moved);
+      if (currentUnderlayer) arr.push(currentUnderlayer);
+      return { scenarios: arr };
+    });
+  }, [mutateScenarios, analysis.mode]);
+
+  const handleScenarioEdit = useCallback((id: string) => {
+    // In custom mode, 'current' underlayer is not editable
+    if (analysis.mode === 'custom' && id === 'current') return;
+    // Open the properties panel and request DSL edit for this scenario
+    window.dispatchEvent(new CustomEvent('dagnet:openAnalysisProperties', { detail: { analysisId: analysis.id } }));
+    // Small delay to let the panel mount before requesting edit
+    setTimeout(() => {
+      window.dispatchEvent(new CustomEvent('dagnet:editScenarioDsl', { detail: { analysisId: analysis.id, scenarioId: id } }));
+    }, 100);
+  }, [analysis.id, analysis.mode]);
+
   const handleAddScenario = useCallback(() => {
     mutateScenarios((scenarios) => {
       const usedColours = new Set(scenarios.map((s: any) => s.colour));
@@ -492,10 +537,12 @@ function CanvasAnalysisNodeInner({ data, selected }: NodeProps<CanvasAnalysisNod
         whatIfDSL,
       });
     }
-    advanceMode(clone, currentDSL || '', captured);
+    const liveColour = tabId ? operationsRef.current.getEffectiveScenarioColour(tabId, 'current', scenariosContext as any) : undefined;
+    advanceMode(clone, currentDSL || '', captured, liveColour);
     onUpdate(analysis.id, {
       mode: clone.mode,
       recipe: clone.recipe,
+      display: clone.display,
     } as any);
   }, [analysis, onUpdate, tabId, currentDSL]);
 
@@ -820,6 +867,9 @@ function CanvasAnalysisNodeInner({ data, selected }: NodeProps<CanvasAnalysisNod
             onScenarioToggleVisibility={handleScenarioToggleVisibility}
             onScenarioCycleMode={handleScenarioCycleMode}
             onScenarioColourChange={handleScenarioColourChange}
+            onScenarioDelete={handleScenarioDelete}
+            onScenarioReorder={handleScenarioReorder}
+            onScenarioEdit={handleScenarioEdit}
             getScenarioSwatchOverlayStyle={getScenarioSwatchOverlay}
             onAddScenario={handleAddScenario}
             overlayActive={!!analysis.display?.show_subject_overlay}

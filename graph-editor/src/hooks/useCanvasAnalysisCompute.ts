@@ -329,19 +329,32 @@ export function useCanvasAnalysisCompute({
                 getScenarioName,
                 getScenarioColour,
               }
-            : {
-                mode: 'custom',
-                graph: graph as any,
-                analysisType,
-                analyticsDsl,
-                currentDSL,
-                chartCurrentLayerDsl: analysis.chart_current_layer_dsl,
-                needsSnapshots,
-                workspace,
-                customScenarios: analysis.recipe?.scenarios as any,
-                hiddenScenarioIds: (((analysis.display as any)?.hidden_scenarios) || []) as string[],
-                frozenWhatIfDsl: analysis.recipe?.analysis?.what_if_dsl,
-              },
+            : (() => {
+                // Patch the 'current' underlayer's colour with the live tab value
+                // so charts (e.g. bridge) render the correct active colour.
+                let customScenarios = analysis.recipe?.scenarios as any;
+                if (analysis.mode === 'custom' && tabId && customScenarios) {
+                  const liveColour = operationsRef.current.getEffectiveScenarioColour(
+                    tabId, 'current', scenariosContext as any,
+                  );
+                  customScenarios = customScenarios.map((s: any) =>
+                    s.scenario_id === 'current' ? { ...s, colour: liveColour } : s,
+                  );
+                }
+                return {
+                  mode: 'custom',
+                  graph: graph as any,
+                  analysisType,
+                  analyticsDsl,
+                  currentDSL,
+                  chartCurrentLayerDsl: analysis.chart_current_layer_dsl,
+                  needsSnapshots,
+                  workspace,
+                  customScenarios,
+                  hiddenScenarioIds: (((analysis.display as any)?.hidden_scenarios) || []) as string[],
+                  frozenWhatIfDsl: analysis.recipe?.analysis?.what_if_dsl,
+                };
+              })(),
         );
         if (!mountedRef.current) return;
         if (thisVersion < lastAppliedPrepareRef.current) return;

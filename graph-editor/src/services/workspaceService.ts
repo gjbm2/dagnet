@@ -3,7 +3,7 @@ import { gitService } from './gitService';
 import { fileRegistry } from '../contexts/TabContext';
 import { WorkspaceState, FileState, ObjectType } from '../types';
 import YAML from 'yaml';
-import { merge3Way } from './mergeService';
+import { merge3Way, mergeJson3Way } from './mergeService';
 import { sessionLogService } from './sessionLogService';
 import { operationRegistryService } from './operationRegistryService';
 
@@ -924,9 +924,12 @@ class WorkspaceService {
         ? file.fileId.substring(prefix.length)
         : file.fileId;
       
-      // Create clean FileState with original fileId for FileRegistry
-      const cleanFileState = { ...file, fileId: actualFileId };
-      
+      // Create clean FileState with original fileId for FileRegistry.
+      // Reset isInitializing: files in IDB have already been normalised;
+      // leaving it true causes all subsequent edits to be absorbed as
+      // normalisation (isDirty never becomes true).
+      const cleanFileState = { ...file, fileId: actualFileId, isInitializing: false };
+
       // Use the internal map directly since files are already in IDB
       (fileRegistry as any).files.set(actualFileId, cleanFileState);
       console.log(`✅ WorkspaceService: Loaded ${actualFileId} into FileRegistry (type: ${file.type}, path: ${file.source?.path})`);
@@ -1438,45 +1441,62 @@ class WorkspaceService {
                     : YAML.stringify(localFileState.data))
                 : '';
 
-              // Perform 3-way merge
-              const mergeResult = merge3Way(baseContent, localContent, remoteContent);
+              // Perform 3-way merge.
+              // JSON files: structural merge (key-by-key, handles different-key additions).
+              // YAML files: text-based line-level merge.
+              let mergedData: any;
 
-              if (mergeResult.hasConflicts) {
-                // Conflict detected - preserve local and notify user
-                console.warn(`⚠️ WorkspaceService: CONFLICT detected for ${treeItem.path}`);
-                conflicts.push({
-                  fileId,
-                  fileName,
-                  path: treeItem.path,
-                  type: dirConfig.type,
-                  localContent,
-                  remoteContent,
-                  baseContent,
-                  mergedContent: mergeResult.merged || '',
-                  hasConflicts: true
-                });
-                
-                // Keep local version in IndexedDB for now, user will resolve via modal
-                return;
+              if (isJsonFile && localFileState.originalData && localFileState.data) {
+                // Structural merge — operates on parsed objects, no text round-trip.
+                const remoteData = JSON.parse(remoteContent);
+                const jsonMerge = mergeJson3Way(localFileState.originalData, localFileState.data, remoteData);
+
+                if (jsonMerge.hasConflicts) {
+                  console.warn(`⚠️ WorkspaceService: Structural CONFLICT in ${treeItem.path}: ${jsonMerge.conflicts.map(c => c.path.join('.')).join(', ')}`);
+                  conflicts.push({
+                    fileId,
+                    fileName,
+                    path: treeItem.path,
+                    type: dirConfig.type,
+                    localContent,
+                    remoteContent,
+                    baseContent,
+                    mergedContent: JSON.stringify(jsonMerge.merged, null, 2),
+                    hasConflicts: true
+                  });
+                  return;
+                }
+
+                mergedData = jsonMerge.merged;
+                console.log(`✅ WorkspaceService: Structural auto-merged ${treeItem.path} (JSON)`);
               } else {
-                // Auto-merge successful — but the text-level merge may have produced
-                // structurally invalid content (e.g. duplicate YAML keys, broken JSON
-                // syntax). Parse to verify; if parsing fails, treat as a conflict.
-                console.log(`✅ WorkspaceService: Auto-merged ${treeItem.path}`);
+                const mergeResult = merge3Way(baseContent, localContent, remoteContent);
 
+                if (mergeResult.hasConflicts) {
+                  console.warn(`⚠️ WorkspaceService: CONFLICT detected for ${treeItem.path}`);
+                  conflicts.push({
+                    fileId,
+                    fileName,
+                    path: treeItem.path,
+                    type: dirConfig.type,
+                    localContent,
+                    remoteContent,
+                    baseContent,
+                    mergedContent: mergeResult.merged || '',
+                    hasConflicts: true
+                  });
+                  return;
+                }
+
+                // Auto-merge successful — but the text-level merge may have produced
+                // structurally invalid content. Parse to verify.
+                console.log(`✅ WorkspaceService: Auto-merged ${treeItem.path}`);
                 const mergedContent = mergeResult.merged || remoteContent;
-                let mergedData: any;
                 try {
-                  // Strict parse for merge results — duplicate keys mean the
-                  // merge algorithm produced invalid output and we must surface
-                  // the conflict rather than silently accept broken content.
                   mergedData = isJsonFile
                     ? JSON.parse(mergedContent)
                     : YAML.parse(mergedContent);
                 } catch (parseError) {
-                  // Text-based merge produced structurally invalid output.
-                  // Surface as a conflict so the user can resolve it — never
-                  // silently discard the update.
                   console.warn(
                     `⚠️ WorkspaceService: Auto-merge of ${treeItem.path} produced unparseable ` +
                     `${isJsonFile ? 'JSON' : 'YAML'} — treating as conflict:`,
@@ -1495,8 +1515,10 @@ class WorkspaceService {
                   });
                   return;
                 }
+              }
 
-                // Parse succeeded — apply the merged data
+              {
+                // Apply the merged data
                 localFileState.data = mergedData;
                 localFileState.originalData = structuredClone(mergedData);
                 localFileState.isDirty = false;

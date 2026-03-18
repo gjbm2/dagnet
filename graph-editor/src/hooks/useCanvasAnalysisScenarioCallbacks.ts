@@ -64,8 +64,9 @@ export function useCanvasAnalysisScenarioCallbacks({
     if (analysis?.mode !== 'live') return null;
     const captured = captureScenarios();
     if (!captured) return null;
+    const liveColour = liveTabId ? operations.getEffectiveScenarioColour(liveTabId, 'current', scenariosContext as any) : undefined;
     const nextGraph = mutateCanvasAnalysisGraph(graph, analysisId, (a) => {
-      advanceMode(a, graphStore.currentDSL || '', captured);
+      advanceMode(a, graphStore.currentDSL || '', captured, liveColour);
     });
     if (!nextGraph) return null;
     setGraph(nextGraph);
@@ -78,7 +79,8 @@ export function useCanvasAnalysisScenarioCallbacks({
       if (analysis.mode === 'live') {
         const captured = captureScenarios();
         if (!captured) return;
-        advanceMode(a, graphStore.currentDSL || '', captured);
+        const liveColour = liveTabId ? operations.getEffectiveScenarioColour(liveTabId, 'current', scenariosContext as any) : undefined;
+        advanceMode(a, graphStore.currentDSL || '', captured, liveColour);
       }
       mutator(a);
     });
@@ -162,6 +164,8 @@ export function useCanvasAnalysisScenarioCallbacks({
   }, [mutateRecipeScenarios]);
 
   const onEdit = useCallback((id: string) => {
+    // In custom mode, 'current' is the hidden base underlayer — editing its DSL is meaningless.
+    if (analysis?.mode === 'custom' && id === 'current') return;
     if (analysis?.mode === 'live' && id === 'current') {
       onEditScenarioDsl(id);
       return;

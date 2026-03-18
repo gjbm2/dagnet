@@ -145,6 +145,18 @@ export interface RetrieveAllSlicesOptions {
 export interface RetrieveAllSlicesWithProgressToastOptions extends RetrieveAllSlicesOptions {
   toastId: string;
   toastLabel?: string;
+
+  /**
+   * Pre-run hook. Called before execute(). May return a cleanup function
+   * that is called in the finally block (e.g. restore evidence-mode overrides).
+   */
+  onBeforeRun?: () => Promise<(() => Promise<void>) | void>;
+
+  /**
+   * Post-run hook. Called after a successful (non-aborted, at least one success) run.
+   * E.g. interactive callers use this for conditional put-to-base.
+   */
+  onSuccess?: (result: RetrieveAllSlicesResult) => void;
 }
 
 /**
@@ -1420,7 +1432,7 @@ export const retrieveAllSlicesService = RetrieveAllSlicesService.getInstance();
 export async function executeRetrieveAllSlicesWithProgressToast(
   options: RetrieveAllSlicesWithProgressToastOptions
 ): Promise<RetrieveAllSlicesResult> {
-  const { toastId, toastLabel, onProgress, ...rest } = options;
+  const { toastId, toastLabel, onProgress, onBeforeRun, onSuccess, ...rest } = options;
   const opId = `retrieve-all:${toastId}`;
 
   operationRegistryService.register({
@@ -1470,10 +1482,13 @@ export async function executeRetrieveAllSlicesWithProgressToast(
     onProgress?.(p);
   };
 
+  let cleanup: (() => Promise<void>) | void = undefined;
   try {
+    cleanup = await onBeforeRun?.();
+
     const result = await retrieveAllSlicesService.execute({
       ...rest,
-      isAutomated: true,
+      isAutomated: rest.isAutomated ?? true,
       onProgress: handleProgress,
     });
 
@@ -1492,10 +1507,18 @@ export async function executeRetrieveAllSlicesWithProgressToast(
     operationRegistryService.setLabel(opId, toastLabel || 'Retrieve All');
     operationRegistryService.complete(opId, hasIssues ? 'error' : 'complete', hasIssues ? message : undefined);
 
+    if (!result.aborted && result.totalSuccess > 0) {
+      onSuccess?.(result);
+    }
+
     return result;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     operationRegistryService.complete(opId, 'error', `Retrieve All failed: ${message}`);
     throw error;
+  } finally {
+    if (cleanup) {
+      try { await cleanup(); } catch { /* best-effort */ }
+    }
   }
 }

@@ -37,6 +37,76 @@ export interface PersistedProbabilityConfig {
 }
 
 /**
+ * Override-gated latency fields: each entry is [valueField, overriddenFlag].
+ *
+ * `_overridden` on the FILE is an inbound lock ("don't write to me").
+ * When the file is NOT locked for a field, the graph's value cascades through.
+ * When the file IS locked, the file's value is preserved.
+ */
+const OVERRIDE_GATED_LATENCY_PAIRS: ReadonlyArray<[keyof LatencyConfig, keyof LatencyConfig]> = [
+  ['latency_parameter', 'latency_parameter_overridden'],
+  ['t95', 't95_overridden'],
+  ['path_t95', 'path_t95_overridden'],
+  ['onset_delta_days', 'onset_delta_days_overridden'],
+];
+
+/**
+ * Inherently graph-mastered latency fields — always from graph regardless of
+ * file override state. See mappingConfigurations.ts:653.
+ */
+const GRAPH_MASTERED_LATENCY_KEYS: ReadonlyArray<keyof LatencyConfig> = [
+  'anchor_node_id',
+  'anchor_node_id_overridden',
+];
+
+/**
+ * Lazy cascade: merge file and graph latency configs for versioned mode.
+ *
+ * The file is the base (it holds persisted derived values: mu, sigma, t95, etc.).
+ * The graph cascades override-gated fields when the file isn't locked, and
+ * always provides inherently graph-mastered fields (anchor_node_id).
+ *
+ * File-mastered fields (mu, sigma, path_mu, path_sigma, model_trained_at,
+ * completeness, median_lag_days, mean_lag_days, posterior) always come from
+ * the file — they have no override mechanism.
+ */
+export function mergeLatencyConfig(
+  fileLatency: Partial<LatencyConfig> | undefined,
+  graphLatency: Partial<LatencyConfig> | undefined,
+): LatencyConfig | undefined {
+  if (!fileLatency && !graphLatency) return undefined;
+  if (!fileLatency) return graphLatency as LatencyConfig;
+  if (!graphLatency) return fileLatency as LatencyConfig;
+
+  // Start with file as base (file-mastered fields stay untouched)
+  const merged: Record<string, any> = { ...fileLatency };
+
+  // Override-gated fields: cascade graph value when file is NOT locked
+  for (const [field, overriddenFlag] of OVERRIDE_GATED_LATENCY_PAIRS) {
+    if ((fileLatency as any)[overriddenFlag] === true) {
+      // File is locked for this field — keep file's value
+      continue;
+    }
+    // File is not locked — cascade graph's value (and its _overridden flag)
+    if ((graphLatency as any)[field] !== undefined) {
+      merged[field] = (graphLatency as any)[field];
+    }
+    if ((graphLatency as any)[overriddenFlag] !== undefined) {
+      merged[overriddenFlag] = (graphLatency as any)[overriddenFlag];
+    }
+  }
+
+  // Inherently graph-mastered fields: always from graph
+  for (const key of GRAPH_MASTERED_LATENCY_KEYS) {
+    if ((graphLatency as any)[key] !== undefined) {
+      merged[key] = (graphLatency as any)[key];
+    }
+  }
+
+  return merged as LatencyConfig;
+}
+
+/**
  * Select the persisted probability config for a parameter-backed edge slot.
  *
  * @param writeToFile - true when running versioned parameter retrieval (source→file→graph)
@@ -62,7 +132,7 @@ export function selectPersistedProbabilityConfig(options: {
       // Callers should fall back to graph.defaultConnection if this is undefined.
       connection: graphParam?.connection,
       connection_string: fileParamData.connection_string,
-      latency: fileParamData.latency,
+      latency: mergeLatencyConfig(fileParamData.latency, graphParam?.latency),
     };
   }
 

@@ -8,6 +8,7 @@
 
 import { useEffect, useRef } from 'react';
 import { operationRegistryService } from '../services/operationRegistryService';
+import { jobSchedulerService } from '../services/jobSchedulerService';
 
 const BOOT_OP_ID = 'app:boot';
 
@@ -17,7 +18,11 @@ export function useBootProgress(): void {
   useEffect(() => {
     // Don't register if TabContext already finished (e.g. hot reload).
     try {
-      if ((window as any).__dagnetTabContextInitDone) return;
+      if ((window as any).__dagnetTabContextInitDone) {
+        // Ensure the scheduler knows boot is complete (idempotent).
+        jobSchedulerService.signalBootComplete();
+        return;
+      }
     } catch {
       return;
     }
@@ -39,6 +44,10 @@ export function useBootProgress(): void {
       if (tabContextDone && navigatorDone) {
         operationRegistryService.setLabel(BOOT_OP_ID, 'Workspace ready');
         operationRegistryService.complete(BOOT_OP_ID, 'complete');
+        // Signal the unified job scheduler that app boot is complete.
+        // This drains all boot-gated jobs (version-check, git-remote-check,
+        // graph-integrity, etc.) and runs IDB reconciliation for persisted jobs.
+        jobSchedulerService.signalBootComplete();
       }
     };
 

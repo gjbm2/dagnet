@@ -224,6 +224,8 @@ vi.mock('../../services/stalenessNudgeService', () => ({
 }));
 
 import { useStalenessNudges } from '../useStalenessNudges';
+import { jobSchedulerService } from '../../services/jobSchedulerService';
+import { _resetStalenessNudgeJobs } from '../../services/stalenessNudgeJobs';
 
 function Harness() {
   const { modals } = useStalenessNudges();
@@ -236,11 +238,17 @@ describe('useStalenessNudges', () => {
       if (typeof fn === 'function' && 'mockReset' in fn) (fn as any).mockReset();
     }
 
+    // Reset scheduler and staleness jobs between tests.
+    jobSchedulerService._reset();
+    _resetStalenessNudgeJobs();
+
     // Reset stale-closure tracking.
     hoisted.openConflictModalInstances.length = 0;
 
-    // Boot readiness gate in useStalenessNudges waits for TabContext init completion.
+    // Boot readiness gate — signal boot complete so scheduler jobs can fire.
     (window as any).__dagnetTabContextInitDone = true;
+    // Signal boot complete on the scheduler (jobs are boot-gated).
+    jobSchedulerService.signalBootComplete();
 
     hoisted.isDashboardMode = false;
     hoisted._nonBlockingPullActive = false;

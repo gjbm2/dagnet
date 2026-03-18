@@ -12,6 +12,7 @@ import { fileRegistry } from '../contexts/TabContext';
 import type { ObjectType, TabState } from '../types';
 import { formatIssuesForClipboard } from './graphIssuesClipboardExport';
 import { sessionLogService } from './sessionLogService';
+import { jobSchedulerService } from './jobSchedulerService';
 
 type IssueSeverity = 'error' | 'warning' | 'info';
 
@@ -86,9 +87,7 @@ class GraphIssuesService {
   };
   
   private subscribers: Set<Subscriber> = new Set();
-  private debounceTimer: ReturnType<typeof setTimeout> | null = null;
   private isInitialised = false;
-  private periodicCheckInterval: ReturnType<typeof setInterval> | null = null;
   private pendingGraphSelectionByTabId = new Map<string, { graphName: string; t0: number }>();
 
   private findGraphFileByName(graphName: string): { fileId: string; data: any } | null {
@@ -117,45 +116,44 @@ class GraphIssuesService {
   }
   
   /**
-   * Initialise the service (called lazily on first subscription or tab open)
+   * Initialise the service (called lazily on first subscription or tab open).
+   * Timer management is delegated to jobSchedulerService (debounced pattern).
    */
   private initialise(): void {
     if (this.isInitialised) return;
     this.isInitialised = true;
-    
-    // Set up periodic check (every 30s as fallback)
-    this.periodicCheckInterval = setInterval(() => {
-      // Only run if we have subscribers (tab is open)
-      if (this.subscribers.size > 0) {
-        this.scheduleCheck();
-      }
-    }, 30000);
-    
-    console.log('[GraphIssuesService] Initialised');
+
+    jobSchedulerService.registerJob({
+      id: 'graph-integrity',
+      schedule: { type: 'debounced', idleMs: DEBOUNCE_MS, maxWaitMs: 30_000 },
+      bootGated: true,
+      presentation: 'silent',
+      runFn: async () => {
+        if (this.subscribers.size > 0) {
+          await this.runCheck();
+        }
+      },
+    });
+
+    console.log('[GraphIssuesService] Initialised (timer via jobSchedulerService)');
   }
   
   /**
-   * Schedule a debounced integrity check
+   * Schedule a debounced integrity check.
+   * Delegates to jobSchedulerService (resets debounce timer).
    */
   scheduleCheck(): void {
-    if (this.debounceTimer) {
-      clearTimeout(this.debounceTimer);
-    }
-    
-    this.debounceTimer = setTimeout(() => {
-      this.runCheck();
-    }, DEBOUNCE_MS);
+    jobSchedulerService.trigger('graph-integrity');
   }
-  
+
   /**
-   * Force an immediate check (bypasses debounce)
+   * Force an immediate check (bypasses debounce).
+   * Delegates to jobSchedulerService.run() for immediate execution.
    */
   async forceCheck(): Promise<void> {
-    if (this.debounceTimer) {
-      clearTimeout(this.debounceTimer);
-      this.debounceTimer = null;
-    }
-    await this.runCheck();
+    jobSchedulerService.run('graph-integrity');
+    // Note: run() is fire-and-forget; callers that need to await should
+    // subscribe to state changes instead. Kept async for API compatibility.
   }
   
   /**
@@ -627,12 +625,7 @@ class GraphIssuesService {
    * Cleanup
    */
   dispose(): void {
-    if (this.debounceTimer) {
-      clearTimeout(this.debounceTimer);
-    }
-    if (this.periodicCheckInterval) {
-      clearInterval(this.periodicCheckInterval);
-    }
+    // Timer cleanup is handled by jobSchedulerService.
     this.subscribers.clear();
     this.isInitialised = false;
   }

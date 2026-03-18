@@ -1,15 +1,16 @@
 /**
  * All Slices Modal
- * 
- * Modal for fetching data across all pinned slices.
+ *
+ * Configuration form for fetching data across all pinned slices.
  * Uses dslExplosion to enumerate slices from graph.dataInterestsDSL,
- * then runs 'Get all from sources (versioned)' for each selected slice.
+ * then commissions a retrieve-all job via executeRetrieveAllSlicesWithProgressToast.
+ * Progress is shown in the OperationsToast, not in this modal.
  */
 
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { explodeDSL } from '../../lib/dslExplosion';
-import { retrieveAllSlicesService } from '../../services/retrieveAllSlicesService';
+import { executeRetrieveAllSlicesWithProgressToast } from '../../services/retrieveAllSlicesService';
 import { useTabContext, fileRegistry } from '../../contexts/TabContext';
 import toast from 'react-hot-toast';
 import type { GraphData } from '../../types';
@@ -34,11 +35,9 @@ interface SliceItem {
 
 /**
  * All Slices Modal
- * 
- * Allows users to:
- * - View all slices derived from graph.dataInterestsDSL
- * - Select which slices to fetch
- * - Execute batch fetches across all selected slices with progress tracking
+ *
+ * Configuration form — gathers user options (slices, cache, simulate, etc.)
+ * then closes and delegates execution to the shared retrieve-all service.
  */
 export function AllSlicesModal({
   isOpen,
@@ -52,24 +51,10 @@ export function AllSlicesModal({
   const { activeTabId, tabs, operations: tabOperations } = useTabContext();
   const [slices, setSlices] = useState<SliceItem[]>([]);
   const [isLoading, setIsLoading] = useState(false);
-  const [isProcessing, setIsProcessing] = useState(false);
-  const [progress, setProgress] = useState({ currentSlice: 0, totalSlices: 0, currentItem: 0, totalItems: 0 });
   const [bustCache, setBustCache] = useState(false);
   const [simulateToLog, setSimulateToLog] = useState(false);
   const [putToBaseAfter, setPutToBaseAfter] = useState(true);
   const [checkDbCoverage, setCheckDbCoverage] = useState(false);
-  
-  // CRITICAL: Use ref for log content so it's synchronously available at end of batch
-  // React state setters are async, so logContent state would be empty when we check it
-  const logContentRef = useRef<string>('');
-  
-  // CRITICAL: Use ref to track latest graph state during batch operations
-  // Without this, rebalancing doesn't work because each iteration uses stale graph
-  const graphRef = useRef(graph);
-  
-  // Abort ref for cancelling in-progress operations
-  const abortRef = useRef(false);
-  const [currentSliceName, setCurrentSliceName] = useState('');
 
   // Load slices when modal opens
   useEffect(() => {
@@ -78,7 +63,7 @@ export function AllSlicesModal({
         setSlices([]);
         return;
       }
-      
+
       setIsLoading(true);
       try {
         const dslSlices = await explodeDSL(graph.dataInterestsDSL);
@@ -95,26 +80,12 @@ export function AllSlicesModal({
         setIsLoading(false);
       }
     };
-    
+
     loadSlices();
   }, [isOpen, graph?.dataInterestsDSL]);
 
-  // Keep graphRef in sync with graph prop (for initial value and external changes)
-  useEffect(() => {
-    graphRef.current = graph;
-  }, [graph]);
-
-  // Reset state when modal closes
-  useEffect(() => {
-    if (!isOpen) {
-      setIsProcessing(false);
-      setProgress({ currentSlice: 0, totalSlices: 0, currentItem: 0, totalItems: 0 });
-      setCurrentSliceName('');
-    }
-  }, [isOpen]);
-
   const handleToggleSlice = (id: string) => {
-    setSlices(prev => prev.map(slice => 
+    setSlices(prev => prev.map(slice =>
       slice.id === id ? { ...slice, selected: !slice.selected } : slice
     ));
   };
@@ -129,154 +100,79 @@ export function AllSlicesModal({
 
   const selectedSlices = useMemo(() => slices.filter(s => s.selected), [slices]);
 
-  const executeAllSlicesFetch = async () => {
+  const executeAllSlicesFetch = () => {
     if (!graph || selectedSlices.length === 0) return;
 
-    // Simulation mode: run the REAL Retrieve All codepaths, but:
-    // - no external HTTP (dry-run request construction only)
-    // - no file writes
-    // - no graph mutation
-    //
-    // Derive workspace identity from the active graph file for DB coverage preflight
+    // Derive workspace identity from the active graph file for DB coverage preflight.
     const activeTab = activeTabId ? tabs.find(t => t.id === activeTabId) : undefined;
     const graphFileSource = activeTab?.fileId ? fileRegistry.getFile(activeTab.fileId)?.source : undefined;
     const wsForCoverage = (checkDbCoverage && graphFileSource?.repository && graphFileSource?.branch)
       ? { repository: graphFileSource.repository, branch: graphFileSource.branch }
       : undefined;
 
-    // The artefact is the session log trace (DRY_RUN_HTTP entries).
-    if (simulateToLog) {
-      setIsProcessing(true);
-      try {
-        const graphSnapshot = graphRef.current as GraphData | null;
-        if (!graphSnapshot) return;
+    // Capture values needed by callbacks (modal is about to close).
+    const capturedActiveTabId = activeTabId;
+    const capturedTabs = tabs;
+    const capturedTabOperations = tabOperations;
+    const targetFileId = activeTab?.fileId;
+    const wantPutToBase = putToBaseAfter && !simulateToLog;
 
-        await retrieveAllSlicesService.execute({
-          getGraph: () => graphSnapshot,
-          // No graph mutation in simulation mode.
-          setGraph: () => {},
-          slices: selectedSlices.map(s => s.dsl),
-          bustCache,
-          simulate: true,
-          checkDbCoverageFirst: checkDbCoverage,
-          workspace: wsForCoverage,
-          shouldAbort: () => abortRef.current,
-          onProgress: (p) => {
-            setProgress({
-              currentSlice: p.currentSlice,
-              totalSlices: p.totalSlices,
-              currentItem: p.currentItem,
-              totalItems: p.totalItems,
-            });
-            setCurrentSliceName(p.currentSliceDSL || '');
-          },
-        });
+    // Build onBeforeRun: evidence-mode override (skip for simulation).
+    const onBeforeRun = simulateToLog ? undefined : async () => {
+      const affectedTabIds = targetFileId
+        ? capturedTabs.filter(t => t.fileId === targetFileId).map(t => t.id)
+        : [];
+      const prevModes = new Map<string, 'f+e' | 'f' | 'e'>();
 
-        toast.success('Simulation complete (see session log for dry-run HTTP commands)');
-      } catch (error) {
-        console.error('[AllSlicesModal] Simulation failed:', error);
-        toast.error(`Simulation failed: ${error instanceof Error ? error.message : String(error)}`);
-      } finally {
-        setIsProcessing(false);
-        onClose();
+      for (const tabId of affectedTabIds) {
+        const prev = capturedTabOperations.getScenarioVisibilityMode(tabId, 'current');
+        prevModes.set(tabId, prev);
+        await capturedTabOperations.setScenarioVisibilityMode(tabId, 'current', 'e');
       }
-      return;
-    }
 
-    setIsProcessing(true);
-    const totalSlices = selectedSlices.length;
-    setProgress({ currentSlice: 0, totalSlices, currentItem: 0, totalItems: 0 });
-
-    const progressToastId = toast.loading(
-      `Processing slice 0/${totalSlices}...`,
-      { duration: Infinity }
-    );
-
-    abortRef.current = false;
-
-    const setGraphWithRef = (newGraph: GraphData | null) => {
-      graphRef.current = newGraph;
-      setGraph(newGraph);
+      // Return cleanup function to restore modes.
+      return async () => {
+        for (const tabId of affectedTabIds) {
+          const prev = prevModes.get(tabId);
+          if (!prev) continue;
+          try {
+            await capturedTabOperations.setScenarioVisibilityMode(tabId, 'current', prev);
+          } catch {
+            // Best-effort only.
+          }
+        }
+      };
     };
 
-    // Apply a temporary evidence-mode override for ALL tabs viewing this graph file.
-    const targetFileId = activeTab?.fileId;
-    const affectedTabIds = targetFileId ? tabs.filter(t => t.fileId === targetFileId).map(t => t.id) : [];
-    const prevModes = new Map<string, 'f+e' | 'f' | 'e'>();
-    let shouldPutToBase = false;
+    // Build onSuccess: conditional put-to-base.
+    const onSuccess = (wantPutToBase && capturedActiveTabId)
+      ? () => { requestPutToBase(capturedActiveTabId); }
+      : undefined;
 
-    try {
-      // Force CURRENT layer only to evidence mode in all affected tabs (restore in finally).
-      for (const tabId of affectedTabIds) {
-        const prev = tabOperations.getScenarioVisibilityMode(tabId, 'current');
-        prevModes.set(tabId, prev);
-        await tabOperations.setScenarioVisibilityMode(tabId, 'current', 'e');
-      }
+    // Close modal immediately — progress is shown in OperationsToast.
+    onClose();
 
-      const result = await retrieveAllSlicesService.execute({
-        getGraph: () => graphRef.current as GraphData | null,
-        setGraph: setGraphWithRef,
-        slices: selectedSlices.map(s => s.dsl),
-        bustCache,
-        checkDbCoverageFirst: checkDbCoverage,
-        workspace: wsForCoverage,
-        postRunRefreshDsl: currentDSL,
-        shouldAbort: () => abortRef.current,
-        onProgress: (p) => {
-          setProgress({
-            currentSlice: p.currentSlice,
-            totalSlices: p.totalSlices,
-            currentItem: p.currentItem,
-            totalItems: p.totalItems,
-          });
-          setCurrentSliceName(p.currentSliceDSL || '');
-          toast.loading(
-            `Processing slice ${p.currentSlice}/${p.totalSlices}: ${p.currentSliceDSL || ''}`,
-            { id: progressToastId, duration: Infinity }
-          );
-        },
-      });
+    // Simulation: snapshot the graph (no mutation during dry-run).
+    const graphSnapshot = graph;
+    const getGraph = simulateToLog ? () => graphSnapshot : () => graph;
+    const setGraphFn = simulateToLog ? () => {} : setGraph;
 
-      // Finalise: optionally Put To Base after retrieve (refresh live scenarios).
-      // Any post-retrieve topo/LAG pass is service-layer behaviour (not UI).
-      if (!result.aborted && result.totalSuccess > 0) {
-        shouldPutToBase = putToBaseAfter && Boolean(activeTabId);
-      }
-
-      toast.dismiss(progressToastId);
-      if (result.aborted) {
-        toast('Operation cancelled', { icon: '⏹️' });
-      } else if (result.totalErrors > 0 && result.totalSuccess === 0) {
-        toast.error(`All ${result.totalErrors} operations failed`);
-      } else if (result.totalErrors > 0) {
-        toast(`Completed: ${result.totalSuccess} succeeded, ${result.totalErrors} failed`, { icon: '⚠️', duration: 4000 });
-      } else {
-        const durationStr = (result.durationMs / 1000).toFixed(1);
-        toast.success(
-          `Retrieve All complete (${durationStr}s)\n${result.totalCacheHits} cached, ${result.totalApiFetches} fetched (${result.totalDaysFetched}d new)`
-        );
-      }
-    } catch (error) {
-      toast.dismiss(progressToastId);
-      toast.error(`Error: ${error instanceof Error ? error.message : String(error)}`);
-    } finally {
-      // Restore CURRENT layer visibility modes.
-      for (const tabId of affectedTabIds) {
-        const prev = prevModes.get(tabId);
-        if (!prev) continue;
-        try {
-          await tabOperations.setScenarioVisibilityMode(tabId, 'current', prev);
-        } catch {
-          // Best-effort only.
-        }
-      }
-
-      if (shouldPutToBase && activeTabId) {
-        requestPutToBase(activeTabId);
-      }
-      setIsProcessing(false);
-      onClose();
-    }
+    // Fire and forget — the wrapper handles progress, errors, and completion.
+    void executeRetrieveAllSlicesWithProgressToast({
+      getGraph,
+      setGraph: setGraphFn,
+      slices: selectedSlices.map(s => s.dsl),
+      bustCache,
+      simulate: simulateToLog,
+      isAutomated: false,
+      checkDbCoverageFirst: checkDbCoverage,
+      workspace: wsForCoverage,
+      postRunRefreshDsl: simulateToLog ? undefined : currentDSL,
+      toastId: `manual:${Date.now()}`,
+      toastLabel: 'Retrieve All Slices',
+      onBeforeRun,
+      onSuccess,
+    });
   };
 
   if (!isOpen) return null;
@@ -286,43 +182,13 @@ export function AllSlicesModal({
       <div className="modal-container" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '600px' }}>
         <div className="modal-header">
           <h2 className="modal-title">Retrieve All Slices</h2>
-          <button className="modal-close-btn" onClick={() => {
-            if (isProcessing) {
-              abortRef.current = true;
-            } else {
-              onClose();
-            }
-          }}>×</button>
+          <button className="modal-close-btn" onClick={onClose}>×</button>
         </div>
 
         <div className="modal-body">
           {isLoading ? (
             <div style={{ textAlign: 'center', padding: '40px 20px', color: '#666' }}>
               Loading slices...
-            </div>
-          ) : isProcessing ? (
-            <div style={{ textAlign: 'center', padding: '40px 20px' }}>
-              <div style={{ fontSize: '16px', marginBottom: '12px' }}>
-                Processing slice {progress.currentSlice} of {progress.totalSlices}
-              </div>
-              <div style={{ fontSize: '13px', color: '#666', marginBottom: '20px', fontFamily: 'monospace' }}>
-                {currentSliceName}
-              </div>
-              <div style={{ width: '100%', height: '8px', backgroundColor: dark ? '#404040' : '#e0e0e0', borderRadius: '4px', overflow: 'hidden', marginBottom: '8px' }}>
-                <div
-                  style={{
-                    width: `${(progress.currentSlice / progress.totalSlices) * 100}%`,
-                    height: '100%',
-                    backgroundColor: '#0066cc',
-                    transition: 'width 0.3s ease'
-                  }}
-                />
-              </div>
-              {progress.totalItems > 0 && (
-                <div style={{ fontSize: '12px', color: '#888' }}>
-                  Item {progress.currentItem} of {progress.totalItems}
-                </div>
-              )}
             </div>
           ) : (
             <>
@@ -446,7 +312,7 @@ export function AllSlicesModal({
                   />
                   <span style={{ fontSize: '14px' }}>Simulate to log (no external calls)</span>
                 </label>
-                
+
                 <label style={{ display: 'flex', alignItems: 'center', cursor: 'pointer' }}>
                   <input
                     type="checkbox"
@@ -483,22 +349,16 @@ export function AllSlicesModal({
         <div className="modal-footer">
           <button
             className="modal-btn modal-btn-secondary"
-            onClick={() => {
-              if (isProcessing) {
-                abortRef.current = true;
-              } else {
-                onClose();
-              }
-            }}
+            onClick={onClose}
           >
-            {isProcessing ? 'Stop' : 'Cancel'}
+            Cancel
           </button>
           <button
             className="modal-btn modal-btn-primary"
             onClick={executeAllSlicesFetch}
-            disabled={isProcessing || isLoading || selectedSlices.length === 0}
+            disabled={isLoading || selectedSlices.length === 0}
           >
-            {isProcessing ? 'Processing...' : `Fetch ${selectedSlices.length} Slice${selectedSlices.length !== 1 ? 's' : ''}`}
+            {`Fetch ${selectedSlices.length} Slice${selectedSlices.length !== 1 ? 's' : ''}`}
           </button>
         </div>
       </div>
@@ -507,4 +367,3 @@ export function AllSlicesModal({
 
   return createPortal(modalContent, document.body);
 }
-

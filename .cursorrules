@@ -698,14 +698,17 @@ When asked to "run tests":
 - Run BOTH only if changes affect both frontend and Python
 
 ### Investigating Test Failures
-**CRITICAL**: If a test failure appears unrelated to your recent change, **do NOT dismiss it as "pre-existing"**. The user is asking you to investigate what caused the failure. Your job:
+**CRITICAL**: Every test failure is your responsibility to investigate, regardless of whether your changes caused it. When tests fail — whether from a targeted run or a full suite — you **own** the investigation. Do not label failures as "pre-existing" or "unrelated" and move on. That is not acceptable.
+
+Your job for **every** failure:
 
 1. **Read the failing test** — understand what invariant it protects.
 2. **Check recent changes** — use `git log` and `git diff` to identify what changed in the file under test or its dependencies.
 3. **Trace the root cause** — determine whether the failure is from your change (indirect coupling), a recent commit on the branch, or a genuinely flaky test.
 4. **Report findings** — tell the user exactly what broke and why, with file paths and line numbers.
+5. **Propose a fix or flag it** — either fix it (if within scope and low risk) or explicitly flag it as needing attention with enough context for the user to act.
 
-Never say "unrelated, pre-existing" without evidence. If you haven't checked the git history and the test's dependencies, you don't know whether it's pre-existing.
+Never say "unrelated, pre-existing" without evidence. If you haven't checked the git history and the test's dependencies, you don't know whether it's pre-existing. Even when a failure genuinely predates your work, the user still needs the investigation — they may not have seen it before.
 
 ### Running Playwright E2E Tests (DagNet)
 **CRITICAL: Playwright tests MUST be brisk. If a single Playwright spec does not complete in ~10–15s, treat that as a PROBLEM WITH THE TEST (or environment), not a cue to increase timeouts.**
