@@ -27,12 +27,8 @@
   flex-shrink: 0;
 }
 
-/* Popover */
+/* Popover (portalled to body, positioned via inline style) */
 .posterior-popover {
-  position: absolute;
-  bottom: calc(100% + 6px);
-  left: 50%;
-  transform: translateX(-50%);
   z-index: 10000;
   background: var(--bg-primary, #1a1a1a);
   border: 1px solid var(--border-primary, #333);

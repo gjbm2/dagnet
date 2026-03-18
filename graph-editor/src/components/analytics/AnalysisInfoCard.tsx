@@ -10,11 +10,12 @@
  * controls which tab is visible initially.
  */
 
-import React, { useMemo } from 'react';
+import React, { useMemo, useCallback } from 'react';
 import type { AnalysisResult } from '../../lib/graphComputeClient';
 import { fontSizeZoom } from '../../lib/analysisDisplaySettingsRegistry';
 import { TabbedContainer, type TabDefinition } from '../shared/TabbedContainer';
 import { freshnessColour, type FreshnessLevel } from '../../utils/freshnessDisplay';
+import { objectTypeTheme, type ObjectType } from '../../theme/objectTypeTheme';
 import '../../styles/analysis-info-card.css';
 
 interface AnalysisInfoCardProps {
@@ -23,6 +24,10 @@ interface AnalysisInfoCardProps {
   fontSize?: number | string;
   /** Default tab to show (driven by view overlay mode). */
   defaultTab?: string;
+  /** Callback when a file link is clicked (fileId, objectType). */
+  onFileLink?: (fileId: string, type: string) => void;
+  /** Extra React content to append after a specific tab's table. Keyed by tab ID. */
+  tabExtra?: Record<string, React.ReactNode>;
 }
 
 interface RowData {
@@ -34,6 +39,8 @@ interface RowData {
   detail?: string;
   /** Freshness level for colour-coding the value */
   freshness?: string;
+  /** File link — when present, value renders as icon + clickable text */
+  link?: { type: string; fileId: string };
 }
 
 interface SectionData {
@@ -46,6 +53,7 @@ const TAB_LABELS: Record<string, string> = {
   overview: 'Overview',
   structure: 'Structure',
   evidence: 'Evidence',
+  forecast: 'Forecast',
   diagnostics: 'Diagnostics',
 };
 
@@ -53,7 +61,7 @@ const TAB_LABELS: Record<string, string> = {
 // Other tabs show a single value column even in multi-scenario mode.
 const SCENARIO_AWARE_TABS = new Set(['overview', 'structure']);
 
-export function AnalysisInfoCard({ result, fontSize, defaultTab }: AnalysisInfoCardProps) {
+export function AnalysisInfoCard({ result, fontSize, defaultTab, onFileLink, tabExtra }: AnalysisInfoCardProps) {
   const sizeZoom = fontSizeZoom(fontSize);
   const data = result.data || [];
 
@@ -99,7 +107,7 @@ export function AnalysisInfoCard({ result, fontSize, defaultTab }: AnalysisInfoC
     const sections = buildSections(data, scenarioIds, scenarioMeta, result.dimension_values);
     return (
       <div className="info-card" style={sizeZoom !== 1 ? { zoom: sizeZoom } as any : undefined}>
-        <InfoTable sections={sections} scenarioIds={scenarioIds} scenarioMeta={scenarioMeta} />
+        <InfoTable sections={sections} scenarioIds={scenarioIds} scenarioMeta={scenarioMeta} onFileLink={onFileLink} />
       </div>
     );
   }
@@ -128,12 +136,17 @@ export function AnalysisInfoCard({ result, fontSize, defaultTab }: AnalysisInfoC
   const panels: Record<string, React.ReactNode> = {};
   for (const tabId of tabIds) {
     const isScenarioAware = SCENARIO_AWARE_TABS.has(tabId);
+    const extra = tabExtra?.[tabId];
     panels[tabId] = (
-      <InfoTable
-        sections={sectionsByTab[tabId] || []}
-        scenarioIds={isScenarioAware ? scenarioIds : []}
-        scenarioMeta={isScenarioAware ? scenarioMeta : {}}
-      />
+      <>
+        <InfoTable
+          sections={sectionsByTab[tabId] || []}
+          scenarioIds={isScenarioAware ? scenarioIds : []}
+          scenarioMeta={isScenarioAware ? scenarioMeta : {}}
+          onFileLink={onFileLink}
+        />
+        {extra}
+      </>
     );
   }
 
@@ -209,6 +222,7 @@ function buildSections(
         value: row.value ?? '',
         detail: row.detail,
         freshness: row.freshness,
+        link: row.link,
       });
     }
   }
@@ -224,10 +238,12 @@ function InfoTable({
   sections,
   scenarioIds,
   scenarioMeta,
+  onFileLink,
 }: {
   sections: SectionData[];
   scenarioIds: string[];
   scenarioMeta: Record<string, { name: string; colour?: string }>;
+  onFileLink?: (fileId: string, type: string) => void;
 }) {
   if (sections.length === 0) {
     return <div className="info-card-empty">No data</div>;
@@ -298,7 +314,9 @@ function InfoTable({
                       colSpan={hasMultiScenario ? scenarioIds.length : 1}
                       style={row.freshness ? { color: freshnessColour(row.freshness as FreshnessLevel) } : undefined}
                     >
-                      {row.value}
+                      {row.link ? (
+                        <FileLinkValue link={row.link} value={row.value} onFileLink={onFileLink} />
+                      ) : row.value}
                     </td>
                   )}
                 </tr>
@@ -315,5 +333,40 @@ function InfoTable({
         ))}
       </tbody>
     </table>
+  );
+}
+
+// ────────────────────────────────────────────────────────────
+// FileLinkValue — renders an icon + clickable value for file references
+// ────────────────────────────────────────────────────────────
+
+function FileLinkValue({
+  link,
+  value,
+  onFileLink,
+}: {
+  link: { type: string; fileId: string };
+  value?: string;
+  onFileLink?: (fileId: string, type: string) => void;
+}) {
+  const theme = objectTypeTheme[link.type as ObjectType];
+  const Icon = theme?.icon;
+  const accentColour = theme?.accentColour;
+
+  const handleClick = useCallback((e: React.MouseEvent) => {
+    e.stopPropagation();
+    onFileLink?.(link.fileId, link.type);
+  }, [onFileLink, link.fileId, link.type]);
+
+  return (
+    <span
+      className={`info-card-file-link${onFileLink ? ' info-card-file-link--clickable' : ''}`}
+      style={accentColour ? { color: accentColour } : undefined}
+      onClick={onFileLink ? handleClick : undefined}
+      title={`Open ${link.fileId}`}
+    >
+      {Icon && <Icon size={12} style={{ marginRight: 3, verticalAlign: -1 }} />}
+      {value}
+    </span>
   );
 }

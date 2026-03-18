@@ -80,13 +80,18 @@ def run_inference(
     rhat_values = []
     ess_values = []
     for var_name in rhat_ds.data_vars:
-        val = float(rhat_ds[var_name].values)
-        if not math.isnan(val):
-            rhat_values.append(val)
+        arr = rhat_ds[var_name].values
+        # Dirichlet and other multi-dimensional variables produce arrays
+        for val in arr.flat:
+            val = float(val)
+            if not math.isnan(val):
+                rhat_values.append(val)
     for var_name in ess_ds.data_vars:
-        val = float(ess_ds[var_name].values)
-        if not math.isnan(val):
-            ess_values.append(val)
+        arr = ess_ds[var_name].values
+        for val in arr.flat:
+            val = float(val)
+            if not math.isnan(val):
+                ess_values.append(val)
 
     max_rhat = max(rhat_values) if rhat_values else 0.0
     min_ess = min(ess_values) if ess_values else 0.0
@@ -167,14 +172,26 @@ def summarise_posteriors(
         # Moment-match Beta
         alpha, beta_val = _fit_beta_to_samples(samples)
 
-        # HDI
+        # HDI (handle both scalar and multi-dimensional variables)
         hdi = az.hdi(trace, var_names=[p_var_name], hdi_prob=HDI_PROB)
-        hdi_lower = float(hdi[p_var_name].values[0])
-        hdi_upper = float(hdi[p_var_name].values[1])
+        hdi_vals = hdi[p_var_name].values
+        if hdi_vals.ndim == 1:
+            hdi_lower = float(hdi_vals[0])
+            hdi_upper = float(hdi_vals[1])
+        else:
+            # Multi-dimensional — take first component
+            hdi_lower = float(hdi_vals.flat[0])
+            hdi_upper = float(hdi_vals.flat[1])
 
-        # Per-variable diagnostics
-        edge_rhat = float(rhat_ds[p_var_name].values) if p_var_name in rhat_ds else 0.0
-        edge_ess = float(ess_ds[p_var_name].values) if p_var_name in ess_ds else 0.0
+        # Per-variable diagnostics (handle multi-dimensional Dirichlet components)
+        edge_rhat = 0.0
+        if p_var_name in rhat_ds:
+            rhat_arr = rhat_ds[p_var_name].values
+            edge_rhat = float(rhat_arr.flat[0]) if rhat_arr.size > 0 else 0.0
+        edge_ess = 0.0
+        if p_var_name in ess_ds:
+            ess_arr = ess_ds[p_var_name].values
+            edge_ess = float(ess_arr.flat[0]) if ess_arr.size > 0 else 0.0
 
         edge_converged = edge_rhat < RHAT_THRESHOLD and edge_ess >= ESS_THRESHOLD
         if ev.total_n == 0:

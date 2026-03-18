@@ -156,11 +156,9 @@
   white-space: nowrap;
 }
 
-.scenario-legend-new:hover {
+.scenario-legend-new-wrapper:hover .scenario-legend-new {
   gap: 4px; /* Add gap when text appears */
   background: #D1D5DB !important; /* Darker grey on hover */
-  transform: translateY(-1px) !important;
-  box-shadow: 0 3px 8px rgba(0, 0, 0, 0.3) !important;
 }
 
 .scenario-legend-new-text {
@@ -173,15 +171,91 @@
   transition: max-width 0.2s ease, opacity 0.15s ease;
 }
 
-.scenario-legend-new:hover .scenario-legend-new-text {
+.scenario-legend-new-wrapper:hover .scenario-legend-new-text {
   max-width: 100px;
   opacity: 1;
 }
 
+/* ---- View mode pill (dashed outline, low-key) ---- */
+.scenario-legend-mode-pill {
+  background: transparent !important;
+  color: #374151 !important;
+  border: 1.5px dashed #9ca3af !important;
+  box-shadow: none !important;
+}
+
+.scenario-legend-mode-pill .scenario-legend-delete {
+  background: rgba(0, 0, 0, 0.08);
+  color: #6b7280;
+}
+
+.scenario-legend-mode-pill .scenario-legend-delete:hover {
+  background: rgba(0, 0, 0, 0.15);
+}
+
+/* ---- Hover submenu: view mode pills below + button ---- */
+
+.scenario-legend-hover-submenu {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  padding-top: 6px; /* visual gap, but part of the hover zone */
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  pointer-events: none;
+}
+
+.scenario-legend-new-wrapper:hover .scenario-legend-hover-submenu {
+  pointer-events: auto;
+}
+
+/* Submenu pill — dashed outline, same dims as New Scenario button */
+.scenario-legend-view-pill {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-radius: 16px;
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+  background: transparent;
+  border: 1.5px dashed #9ca3af;
+  color: #374151;
+  box-shadow: none;
+  opacity: 0;
+  transform: translateY(-4px);
+  transition: opacity 0.15s ease, transform 0.15s ease, border-color 0.15s ease;
+}
+
+.scenario-legend-view-pill:hover {
+  transform: translateY(-1px) !important;
+  border-color: #6b7280;
+}
+
+.scenario-legend-view-pill.active {
+  border-style: solid;
+  border-color: #374151;
+  color: #374151;
+}
+
+.scenario-legend-new-wrapper:hover .scenario-legend-view-pill {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+/* Stagger fade-in */
+.scenario-legend-new-wrapper:hover .scenario-legend-view-pill:nth-child(1) { transition-delay: 0.08s; }
+.scenario-legend-new-wrapper:hover .scenario-legend-view-pill:nth-child(2) { transition-delay: 0.16s; }
+.scenario-legend-new-wrapper:hover .scenario-legend-view-pill:nth-child(3) { transition-delay: 0.24s; }
+.scenario-legend-new-wrapper:hover .scenario-legend-view-pill:nth-child(4) { transition-delay: 0.32s; }
+
 /* Dark mode support */
 [data-theme="dark"] {
   .scenario-legend {
-    background: rgba(30, 30, 30, 0.95);
+    background: transparent;
   }
   
   .scenario-legend-toggle,
@@ -210,6 +284,35 @@
 
   .scenario-legend-new-text {
     color: #e0e0e0;
+  }
+
+  .scenario-legend-mode-pill {
+    background: transparent !important;
+    color: #d1d5db !important;
+    border-color: #6b7280 !important;
+  }
+
+  .scenario-legend-mode-pill .scenario-legend-delete {
+    background: rgba(255, 255, 255, 0.1);
+    color: #9ca3af;
+  }
+
+  .scenario-legend-mode-pill .scenario-legend-delete:hover {
+    background: rgba(255, 255, 255, 0.2);
+  }
+
+  .scenario-legend-view-pill {
+    border-color: #6b7280;
+    color: #d1d5db;
+  }
+
+  .scenario-legend-view-pill:hover {
+    border-color: #9ca3af;
+  }
+
+  .scenario-legend-view-pill.active {
+    border-color: #d1d5db;
+    color: #d1d5db;
   }
 }
 

@@ -72,14 +72,14 @@ Semantic foundation (parallel, feeds into consumption quality)
 
 | Milestone | Depends on | Enables |
 |---|---|---|
-| Phase A posteriors in YAML | Async infra (done), schema revision, compiler Phase A | FE overlay (basic), visual validation |
-| FE overlay (basic) | Phase A, FE posterior reading | Visual validation, fit quality display |
-| Visual validation | FE overlay, existing analytic curves | Confidence to proceed to Phase B |
+| Phase A posteriors in YAML (done) | Async infra (done), schema revision, compiler Phase A | FE overlay (basic), visual validation |
+| FE overlay (basic) (done) | Phase A, FE posterior reading | Visual validation, fit quality display |
+| Visual validation | FE overlay (done), existing analytic curves | Confidence to proceed to Phase B |
 | Phase B posteriors | Phase A proven | FE overlay (Dirichlet), branch group quality |
 | Phase C posteriors | Phase B proven | Per-slice visualisation, MECE validation |
 | Phase D posteriors | Phase C proven | Latency CDF overlay on cohort maturity |
 | Quantitative backtesting | Phase A + fit_history depth + snapshot DB | Distribution family selection, model improvement |
-| Fit quality visualisation | Phase A + FE overlay | Edge colour-coding, quality-driven graph triage |
+| Fit quality visualisation (done) | Phase A + FE overlay | Edge colour-coding, quality-driven graph triage |
 | Semantic foundation complete | Independent | Cleaner FE derivation, deletion of FE fitting code |
 
 The critical insight: each compiler phase needs its corresponding FE
@@ -308,18 +308,21 @@ conversion analysis, asat) already produce analytic curves from deterministic
 logic. The Bayesian model produces probabilistic versions of the same
 quantities. Rendering both side-by-side is how we confirm the model is useful.
 
-**Phase A overlay**:
-- **Edge-level posterior display**: window Beta posterior mean + HDI on
-  each edge in the graph view (top-level `posterior.alpha`/`beta`).
-  Compare against the existing point estimate (which comes from the raw
-  `k/n` ratio or the FE fitted value).
-- **Confidence bands**: HDI-derived bands replacing the current
-  standard-error approximation.
-- **Window/cohort divergence indicator**: where both observation types
-  have posteriors (in `posterior.slices`), surface the divergence as a
-  diagnostic — a large gap signals temporal volatility in conversion
-  performance.
-- This is the minimum required to visually validate Phase A.
+**Phase A overlay** (built 18-Mar-26):
+- **Edge-level posterior display**: `PosteriorIndicator` component shows
+  quality tier badge + popover with HDI bounds, evidence grade,
+  convergence metrics (rhat, ESS), prior tier, provenance, and
+  fitted_at freshness. `AnalysisInfoCard` Forecast tab shows full
+  posterior diagnostics per edge. Both support probability and latency
+  posteriors.
+- **Quality overlay mode**: edges colour-coded by quality tier
+  (failed/warning/cold-start/weak/mature/strong) in forecast-quality
+  overlay mode. `ConversionEdge.tsx` and `EdgeBeads.tsx` render quality
+  tier beads when overlay is active.
+- **Bayesian model curve on cohort maturity chart**: blue dashed line
+  alongside analytic model curve for direct comparison.
+- **Remaining**: window/cohort divergence indicator (deferred — Phase A
+  does not populate `posterior.slices`; activates Phase C).
 
 **Phase B overlay**:
 - **Simplex visualisation**: branch group siblings shown with their
@@ -343,14 +346,16 @@ quantities. Rendering both side-by-side is how we confirm the model is useful.
   predicted curve against the actual observed maturation from later
   snapshots.
 
-### Fit quality visualisation
+### Fit quality visualisation (built 18-Mar-26)
 
-Surface per-edge (and per-slice) quality metrics in the graph UI:
-- Edge colour-coding by `evidence_grade` or `rhat`
-- Quality overlay mode
-- Warnings on poorly identified edges
-- Prior cascade tier indicator (is this edge running on direct history,
-  inherited evidence, or an uninformative prior?)
+Per-edge quality metrics surfaced in the graph UI:
+- Edge colour-coding by quality tier (composite of rhat, ESS,
+  divergences, evidence grade) in forecast-quality overlay mode
+- `PosteriorIndicator` popover shows convergence diagnostics, prior
+  tier, provenance, freshness
+- `AnalysisInfoCard` Forecast tab shows full diagnostic breakdown
+- `bayesQualityTier.ts` computes tier: failed/warning/cold-start/
+  weak/mature/strong with colour palette
 
 Per-edge quality is already stored in parameter files (`posterior.ess`,
 `posterior.rhat`, `posterior.evidence_grade`); graph-level summary is in
@@ -416,9 +421,10 @@ multiple runs. Design detail to be written post-Phase A.
 
 ## Open decisions
 
-No unresolved design decisions block Phase A. All remaining work is
-implementation. This section tracks known limitations and future-phase
-concerns.
+Phase A is complete (compiler, FE overlay, real graph validation — all
+done 18-Mar-26). No unresolved design decisions block Phase B. This
+section tracks known limitations, future-phase concerns, and
+implementation progress.
 
 ### Implementation work remaining for Phase A
 
@@ -451,6 +457,16 @@ concerns.
    fields defined. The compiler does not populate `slices` or
    `_model_state` in Phase A (correctly — no slice pooling yet). No
    blocking work remains; these activate in Phase C.
+
+5. ~~**Phase A FE overlay**~~: **Done 18-Mar-26.** Full posterior
+   consumption UI built: `PosteriorIndicator` component (badge +
+   popover with HDI, evidence grade, convergence, provenance,
+   freshness), quality tier utility (`bayesQualityTier.ts`), edge-level
+   quality overlay mode in `ConversionEdge.tsx`/`EdgeBeads.tsx`,
+   `AnalysisInfoCard` with Forecast/Diagnostics tabs,
+   `localAnalysisComputeService` edge info builder with posterior
+   diagnostics. Bayesian model curve on cohort maturity chart. See
+   doc 9 §4 for component inventory.
 
 ### Known limitations (implementation will address when relevant)
 

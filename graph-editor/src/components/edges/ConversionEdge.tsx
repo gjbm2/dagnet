@@ -8,11 +8,12 @@ import { dataOperationsService } from '../../services/dataOperationsService';
 import { useSnapshotsMenu } from '../../hooks/useSnapshotsMenu';
 import toast from 'react-hot-toast';
 import { HoverAnalysisPreview, useHoverPreview, useHoverScenarios } from '@/components/HoverAnalysisPreview';
+import { useEdgeSnapshotRetrievals } from '@/hooks/useEdgeSnapshotRetrievals';
 import { getConditionalColour, getConditionalProbabilityColour, isConditionalEdge } from '@/lib/conditionalColours';
 import { computeEffectiveEdgeProbability, getEdgeWhatIfDisplay } from '@/lib/whatIf';
 import { getVisitedNodeIds } from '@/lib/queryDSL';
 import { calculateConfidenceBounds } from '@/utils/confidenceIntervals';
-import { computeQualityTier, qualityTierToColour } from '@/utils/bayesQualityTier';
+import { computeQualityTier, qualityTierToColour, qualityTierLabel } from '@/utils/bayesQualityTier';
 import type { ProbabilityPosterior } from '@/types';
 import { useEdgeBeads, EdgeBeadsRenderer } from './EdgeBeads';
 import { useDecorationVisibility } from '../GraphCanvas';
@@ -285,6 +286,14 @@ export default function ConversionEdge({
   const hoverPreview = useHoverPreview(500);
   const hoverScenarios = useHoverScenarios(graph);
 
+  // Snapshot retrievals for hover Evidence tab (same code path as @ asat picker)
+  const snapshotRetrievals = useEdgeSnapshotRetrievals(graph as any);
+
+  // File link handler for info card
+  const handleFileLink = useCallback((fileId: string, type: string) => {
+    tabOps.openTab({ type, id: fileId.replace(`${type}-`, ''), name: fileId } as any, 'interactive');
+  }, [tabOps]);
+
   // Resolve source/target node IDs for edge_info DSL
   const edgeSourceNodeId = useMemo(() => {
     const n = graph?.nodes.find((nd: any) => nd.uuid === source || nd.id === source);
@@ -304,12 +313,14 @@ export default function ConversionEdge({
 
     // Trigger snapshot inventory fetch (hook handles caching)
     void snapshots.refresh();
+    // Commission snapshot retrievals (same code path as @ menu)
+    snapshotRetrievals.commission(lookupId);
 
     // Trigger hover preview — pass mouse coordinates only.
     // Edge bead <g> elements span the entire edge path, so
     // getBoundingClientRect() returns the full path extent (too high).
     hoverPreview.handleTriggerEnter({ clientX: e.clientX, clientY: e.clientY, buttons: e.buttons });
-  }, [data?.scenarioOverlay, isDraggingNode, snapshots.refresh, hoverPreview.handleTriggerEnter]);
+  }, [data?.scenarioOverlay, isDraggingNode, snapshots.refresh, snapshotRetrievals.commission, lookupId, hoverPreview.handleTriggerEnter]);
 
   // Handle mouse move (no-op now, preview position is set on enter)
   const handleTooltipMouseMove = useCallback((_e: React.MouseEvent<Element>) => {
@@ -453,7 +464,7 @@ export default function ConversionEdge({
       e.uuid === lookupId || e.id === lookupId || `${e.from}->${e.to}` === lookupId
     );
     if (!edge) return 'none';
-    return `${edge.uuid}-${edge.p?.mean}-${edge.p?.stdev}-${edge.p?.evidence?.n}-${edge.p?.evidence?.k}-${edge.p?.evidence?.mean}-${edge.p?.latency?.completeness}`;
+    return `${edge.uuid}-${edge.p?.mean}-${edge.p?.stdev}-${edge.p?.evidence?.n}-${edge.p?.evidence?.k}-${edge.p?.evidence?.mean}-${edge.p?.latency?.completeness}-${edge.p?.posterior?.rhat}-${edge.p?.posterior?.fitted_at}`;
   }, [graph, lookupId, graph?.metadata?.updated_at]);
   
   const fullEdge = useMemo(() => {
@@ -709,6 +720,11 @@ export default function ConversionEdge({
   }, [effectiveSelected, data?.isHighlighted, data?.highlightDepth, data?.isSingleNodeHighlight, data?.scenarioColour, dark, qualityOverlayColour]);
   
   const getEdgeColour = () => edgeColour;
+
+  // When the quality overlay is active, override scenarioColour so that
+  // all SVG paths (which use `scenarioColour || getEdgeColour()`) pick up
+  // the quality tier colour instead of the scenario colour.
+  const effectiveScenarioColour = qualityOverlayColour || data?.scenarioColour;
 
   // Band opacity schema – experimental: very low opacities
   // Outer: 0.1, Middle: 0.4, Inner: 0.5
@@ -2085,7 +2101,7 @@ export default function ConversionEdge({
                 const fadeEnd = Math.min(1, completeness + LAG_ANCHOR_FADE_BAND / 2);
                 const anchorColor = (effectiveSelected || data?.isHighlighted) 
                   ? getEdgeColour() 
-                  : (data?.scenarioColour || getEdgeColour());
+                  : (effectiveScenarioColour || getEdgeColour());
                 return (
                   <>
                     {/* Full opacity from start to fadeStart */}
@@ -2119,7 +2135,7 @@ export default function ConversionEdge({
                       d={`M0,0 L${LAG_ANCHOR_CHEVRON_SIZE / 2},${LAG_ANCHOR_CHEVRON_SIZE / 2} L0,${LAG_ANCHOR_CHEVRON_SIZE}`}
                       stroke={(effectiveSelected || data?.isHighlighted) 
                         ? getEdgeColour() 
-                        : (data?.scenarioColour || getEdgeColour())}
+                        : (effectiveScenarioColour || getEdgeColour())}
                       strokeWidth={LAG_ANCHOR_CHEVRON_STROKE}
                       strokeLinecap="round"
                       strokeLinejoin="round"
@@ -2134,7 +2150,7 @@ export default function ConversionEdge({
                       height={LAG_ANCHOR_STRIPE_WIDTH + LAG_ANCHOR_STRIPE_GAP} 
                       fill={(effectiveSelected || data?.isHighlighted) 
                         ? getEdgeColour() 
-                        : (data?.scenarioColour || getEdgeColour())}
+                        : (effectiveScenarioColour || getEdgeColour())}
                     />
                   )}
                 </pattern>
@@ -2188,7 +2204,7 @@ export default function ConversionEdge({
               patternTransform={`rotate(${LAG_EVIDENCE_STRIPE_ANGLE})${LAG_EVIDENCE_STRIPE_OFFSET ? ` translate(${LAG_EVIDENCE_STRIPE_OFFSET}, 0)` : ''}`}
             >
               <rect x="0" y="0" width={LAG_EVIDENCE_STRIPE_WIDTH} height={LAG_EVIDENCE_STRIPE_WIDTH + LAG_EVIDENCE_STRIPE_GAP} 
-                fill={(effectiveSelected || data?.isHighlighted) ? getEdgeColour() : (data?.scenarioColour || getEdgeColour())}
+                fill={(effectiveSelected || data?.isHighlighted) ? getEdgeColour() : (effectiveScenarioColour || getEdgeColour())}
                 fillOpacity={LAG_EVIDENCE_STRIPE_OPACITY}
               />
             </pattern>
@@ -2201,7 +2217,7 @@ export default function ConversionEdge({
               patternTransform={`rotate(${LAG_FORECAST_STRIPE_ANGLE})${LAG_FORECAST_STRIPE_OFFSET ? ` translate(${LAG_FORECAST_STRIPE_OFFSET}, 0)` : ''}`}
             >
               <rect x="0" y="0" width={LAG_FORECAST_STRIPE_WIDTH} height={LAG_FORECAST_STRIPE_WIDTH + LAG_FORECAST_STRIPE_GAP} 
-                fill={(effectiveSelected || data?.isHighlighted) ? getEdgeColour() : (data?.scenarioColour || getEdgeColour())} 
+                fill={(effectiveSelected || data?.isHighlighted) ? getEdgeColour() : (effectiveScenarioColour || getEdgeColour())} 
                 fillOpacity={LAG_FORECAST_STRIPE_OPACITY} />
             </pattern>
           </>
@@ -2254,7 +2270,7 @@ export default function ConversionEdge({
                     : sankeyFERibbons.mode === 'e'
                       ? ((effectiveSelected || data?.isHighlighted)
                           ? getEdgeColour()
-                          : (data?.scenarioColour || getEdgeColour()))
+                          : (effectiveScenarioColour || getEdgeColour()))
                       : `url(#lag-stripe-outer-${id})`,
                   // In E mode, apply NO_EVIDENCE_E_MODE_OPACITY for edges without evidence
                   // IMPORTANT: Hidden-current should NOT be more opaque in Sankey mode than normal mode.
@@ -2374,7 +2390,7 @@ export default function ConversionEdge({
                 style={{
                   stroke: isHiddenCurrent 
                     ? `url(#lag-anchor-stipple-${id})` 
-                    : ((effectiveSelected || data?.isHighlighted) ? getEdgeColour() : (data?.scenarioColour || getEdgeColour())),
+                    : ((effectiveSelected || data?.isHighlighted) ? getEdgeColour() : (effectiveScenarioColour || getEdgeColour())),
                   strokeWidth: confidenceData.widths.upper,
                   strokeOpacity: isHiddenCurrent ? 1 : (confidenceData.opacities.outer * ((data?.strokeOpacity ?? EDGE_OPACITY) / EDGE_OPACITY)),
                   mixBlendMode: USE_GROUP_BASED_BLENDING ? 'normal' : EDGE_BLEND_MODE,
@@ -2403,7 +2419,7 @@ export default function ConversionEdge({
                 style={{
                   stroke: isHiddenCurrent 
                     ? `url(#lag-anchor-stipple-${id})` 
-                    : ((effectiveSelected || data?.isHighlighted) ? getEdgeColour() : (data?.scenarioColour || getEdgeColour())),
+                    : ((effectiveSelected || data?.isHighlighted) ? getEdgeColour() : (effectiveScenarioColour || getEdgeColour())),
                   strokeWidth: confidenceData.widths.middle,
                   strokeOpacity: isHiddenCurrent ? 1 : (confidenceData.opacities.middle * ((data?.strokeOpacity ?? EDGE_OPACITY) / EDGE_OPACITY)),
                   mixBlendMode: USE_GROUP_BASED_BLENDING ? 'normal' : EDGE_BLEND_MODE,
@@ -2433,7 +2449,7 @@ export default function ConversionEdge({
                 style={{
                   stroke: isHiddenCurrent 
                     ? `url(#lag-anchor-stipple-${id})` 
-                    : ((effectiveSelected || data?.isHighlighted) ? getEdgeColour() : (data?.scenarioColour || getEdgeColour())),
+                    : ((effectiveSelected || data?.isHighlighted) ? getEdgeColour() : (effectiveScenarioColour || getEdgeColour())),
                   strokeWidth: confidenceData.widths.lower,
                   strokeOpacity: isHiddenCurrent ? 1 : (confidenceData.opacities.inner * ((data?.strokeOpacity ?? EDGE_OPACITY) / EDGE_OPACITY)),
                   mixBlendMode: USE_GROUP_BASED_BLENDING ? 'normal' : EDGE_BLEND_MODE,
@@ -2479,7 +2495,7 @@ export default function ConversionEdge({
                     style={{
                       // When evidence=0 in E mode, show thin dashed line; otherwise transparent for interaction only
                       stroke: (lagLayerData.mode === 'e' && lagLayerData.evidenceWidth === 0)
-                        ? ((effectiveSelected || data?.isHighlighted) ? getEdgeColour() : (data?.scenarioColour || getEdgeColour()))
+                        ? ((effectiveSelected || data?.isHighlighted) ? getEdgeColour() : (effectiveScenarioColour || getEdgeColour()))
                         : 'transparent',
                       strokeWidth: (lagLayerData.mode === 'e' && lagLayerData.evidenceWidth === 0)
                         ? MIN_EDGE_WIDTH  // Thin hairline (matches pattern-based anchor for 0-evidence)
@@ -2510,7 +2526,7 @@ export default function ConversionEdge({
                     d={completenessChevron.path}
                     fill={(effectiveSelected || data?.isHighlighted) 
                       ? getEdgeColour() 
-                      : (data?.scenarioColour || getEdgeColour())}
+                      : (effectiveScenarioColour || getEdgeColour())}
                     fillOpacity={effectiveSelected
                       ? COMPLETENESS_CHEVRON_SELECTED_OPACITY
                       : data?.isHighlighted
@@ -2582,7 +2598,7 @@ export default function ConversionEdge({
                   style={{
                     stroke: isHiddenCurrent 
                       ? `url(#lag-anchor-stipple-${id})` 
-                      : ((effectiveSelected || data?.isHighlighted) ? getEdgeColour() : (data?.scenarioColour || getEdgeColour())),
+                      : ((effectiveSelected || data?.isHighlighted) ? getEdgeColour() : (effectiveScenarioColour || getEdgeColour())),
                     strokeWidth: lagLayerData.evidenceWidth,
                     strokeOpacity: isHiddenCurrent
                       ? 1
@@ -2871,6 +2887,7 @@ export default function ConversionEdge({
                 onMouseEnter={data?.scenarioOverlay ? undefined : handleTooltipMouseEnter}
                 onMouseLeave={data?.scenarioOverlay ? undefined : handleTooltipMouseLeave}
                 onMouseDown={data?.scenarioOverlay ? undefined : handleEdgeMouseDown}
+                viewOverlayMode={viewOverlayMode}
               />
             );
           })()}
@@ -2888,6 +2905,8 @@ export default function ConversionEdge({
           onCardEnter={hoverPreview.handleCardEnter}
           onCardLeave={hoverPreview.handleCardLeave}
           onDismiss={hoverPreview.handleDismiss}
+          snapshotRetrievals={snapshotRetrievals.data ?? undefined}
+          onFileLink={handleFileLink}
         />
       )}
 

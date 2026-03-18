@@ -60,11 +60,13 @@ def analyse_topology(graph_snapshot: dict) -> TopologyAnalysis:
     for source_uuid, out_edges in outgoing.items():
         if len(out_edges) > 1:
             group_id = f"bg_{source_uuid[:12]}"
+            source_node_data = node_by_uuid.get(source_uuid, {})
+            is_exhaustive = bool(source_node_data.get("exhaustive", False))
             branch_groups[group_id] = BranchGroup(
                 group_id=group_id,
                 source_node=source_uuid,
                 sibling_edge_ids=[e["uuid"] for e in out_edges],
-                is_exhaustive=False,  # default non-exhaustive; per-node flag future
+                is_exhaustive=is_exhaustive,
             )
             for e in out_edges:
                 edge_to_group[e["uuid"]] = group_id

@@ -182,7 +182,14 @@
       "WebFetch(domain:bitsquid.blogspot.com)",
       "WebFetch(domain:people.cs.vt.edu)",
       "Bash(scripts/extract-mark-logs.sh \"pull\" --all --session-only)",
-      "Bash(scripts/extract-mark-logs.sh \"tt\" --session-only)"
+      "Bash(scripts/extract-mark-logs.sh \"tt\" --session-only)",
+      "Bash(scripts/extract-mark-logs.sh \"roundtrip\" --session-only)",
+      "Bash(scripts/extract-mark-logs.sh \"roundtrip\" --console-only)",
+      "Bash(scripts/extract-mark-logs.sh \"roundtrip2\" --session-only)",
+      "Bash(scripts/extract-mark-logs.sh \"roundtrip2\" --console-only)",
+      "Bash(scripts/extract-mark-logs.sh \"roundtrip4\" --session-only)",
+      "Bash(scripts/extract-mark-logs.sh \"roundtrip5\" --session-only)",
+      "Bash(scripts/extract-mark-logs.sh \"roundtrip5\" --console-only)"
     ]
   }
 }

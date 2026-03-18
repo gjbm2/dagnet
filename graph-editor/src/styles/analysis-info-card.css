@@ -121,3 +121,95 @@
   color: var(--text-muted, #777);
   padding: 0 10px 2px;
 }
+
+/* --- File link values (icon + clickable text) --- */
+
+.info-card-file-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.info-card-file-link--clickable {
+  cursor: pointer;
+  opacity: 0.85;
+}
+
+.info-card-file-link--clickable:hover {
+  opacity: 1;
+  text-decoration: underline;
+}
+
+/* --- Compact snapshot calendar (read-only, scaled down for info card) --- */
+
+.info-card-snapshot-calendar {
+  padding: 2px 6px 4px;
+  max-width: 160px;
+}
+
+.info-card-snapshot-calendar--dual {
+  max-width: 340px;
+}
+
+.info-card-snapshot-calendar-pair {
+  display: flex;
+  gap: 8px;
+}
+
+.info-card-snapshot-calendar-month {
+  flex: 1;
+  min-width: 0;
+}
+
+.info-card-snapshot-calendar .calendar-grid-nav {
+  margin: 2px 0;
+  gap: 4px;
+}
+
+.info-card-snapshot-calendar .calendar-grid-nav-btn {
+  width: 18px;
+  height: 18px;
+  border-radius: 4px;
+}
+
+.info-card-snapshot-calendar .calendar-grid-month {
+  font-size: 10px;
+}
+
+.info-card-snapshot-calendar .calendar-grid {
+  gap: 1px;
+}
+
+.info-card-snapshot-calendar .calendar-grid-dow {
+  font-size: 8px;
+  padding: 1px 0;
+}
+
+.info-card-snapshot-calendar .calendar-grid-day {
+  height: 16px;
+  font-size: 8px;
+  border-radius: 3px;
+  /* Read-only: no click, no hover effect */
+  cursor: default;
+}
+
+.info-card-snapshot-calendar .calendar-grid-day:hover {
+  background: transparent;
+}
+
+.info-card-snapshot-calendar .calendar-grid-day.highlighted:hover {
+  background: rgba(207, 250, 254, var(--highlight-opacity, 1));
+}
+
+[data-theme="dark"] .info-card-snapshot-calendar .calendar-grid-day:hover {
+  background: transparent;
+}
+
+[data-theme="dark"] .info-card-snapshot-calendar .calendar-grid-day.highlighted:hover {
+  background: rgba(30, 60, 80, var(--highlight-opacity, 1));
+}
+
+.info-card-snapshot-calendar .calendar-grid-footer {
+  margin-top: 3px;
+  font-size: 9px;
+}

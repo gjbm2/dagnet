@@ -836,6 +836,9 @@ export function useGraphSync(params: UseGraphSyncParams): UseGraphSyncReturn {
             }
 
             updatedNodes = updatedNodes.map(node => {
+              // Non-flow nodes keep their own dimensions — they're not part of the flow network.
+              if (node.type === 'canvasAnalysis' || node.type === 'postit' || node.type === 'container') return node;
+
               const mass = maxFlowMassPerNode.get(node.id) || 0;
               const normalizedMass = mass / currentLayerMaxMass;
               const height = Math.max(MIN_NODE_HEIGHT, Math.min(MAX_NODE_HEIGHT, normalizedMass * MAX_NODE_HEIGHT));
@@ -1213,6 +1216,9 @@ export function useGraphSync(params: UseGraphSyncParams): UseGraphSyncReturn {
       }
 
       nodesWithSelection = nodesWithSelection.map(node => {
+        // Non-flow nodes keep their own dimensions.
+        if (node.type === 'canvasAnalysis' || node.type === 'postit' || node.type === 'container') return node;
+
         const mass = maxFlowMassPerNode.get(node.id) || 0;
         const normalizedMass = mass / currentLayerMaxMass;
         const height = Math.max(MIN_NODE_HEIGHT, Math.min(MAX_NODE_HEIGHT, normalizedMass * MAX_NODE_HEIGHT));

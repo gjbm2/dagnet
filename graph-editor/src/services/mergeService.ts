@@ -254,6 +254,17 @@ export interface JsonMergeResult {
 }
 
 /**
+ * Graph-specific key ownership policies.
+ *
+ * Certain top-level keys have known ownership and should never conflict:
+ * - `_bayes`: written exclusively by the Bayes service → remote always wins.
+ * - `canvasAnalyses`: local-only UI state (canvas charts) → local always wins.
+ *   Remote never intentionally deletes these; their absence from a remote commit
+ *   just means the remote codepath doesn't know about them.
+ */
+const REMOTE_WINS_KEYS = new Set(['_bayes']);
+
+/**
  * Structural 3-way merge for parsed JSON objects.
  *
  * Rules (BitSquid-style):
@@ -264,10 +275,15 @@ export interface JsonMergeResult {
  * - Key deleted by one side, modified by other: conflict.
  * - Both sides modify same key to same value: keep it.
  * - Both sides modify same key to different values: recurse if both objects, else conflict.
+ * - Domain-specific policies override generic rules for known keys.
  */
 export function mergeJson3Way(base: any, local: any, remote: any): JsonMergeResult {
   const conflicts: JsonKeyConflict[] = [];
-  const merged = mergeValue(base, local, remote, [], conflicts);
+  // Top-level merge must go through mergeObjects to apply ownership policies,
+  // even when one side is "unchanged" from base (which would normally short-circuit).
+  const merged = (isPlainObject(base) || base == null) && isPlainObject(local) && isPlainObject(remote)
+    ? mergeObjects(base as Record<string, unknown> ?? {}, local, remote, [], conflicts)
+    : mergeValue(base, local, remote, [], conflicts);
   return { merged, conflicts, hasConflicts: conflicts.length > 0 };
 }
 
@@ -358,6 +374,15 @@ function mergeObjects(
     const inBase = Object.prototype.hasOwnProperty.call(base, key);
     const inLocal = Object.prototype.hasOwnProperty.call(local, key);
     const inRemote = Object.prototype.hasOwnProperty.call(remote, key);
+
+    // Domain-specific ownership policies (top-level keys only).
+    if (path.length === 0) {
+      if (REMOTE_WINS_KEYS.has(key)) {
+        if (inRemote) result[key] = remote[key];
+        // If not in remote, omit (remote is authoritative).
+        continue;
+      }
+    }
 
     if (!inBase && inLocal && !inRemote) {
       // Added by local only → keep.

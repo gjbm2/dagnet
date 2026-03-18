@@ -67,7 +67,7 @@ describe('MergeConflictModal', () => {
     );
 
     expect(screen.getByText('Merge Conflicts')).toBeInTheDocument();
-    expect(screen.getByText(/2 files with conflicts\./)).toBeInTheDocument();
+    expect(screen.getByText(/2 files changed on both sides\./)).toBeInTheDocument();
   });
 
   it('should not render when closed', () => {
@@ -158,7 +158,7 @@ describe('MergeConflictModal', () => {
     expect(screen.getByText(/Use Remote/)).toBeInTheDocument();
   });
 
-  it('should show "Manual Merge" option', () => {
+  it('should show "Accept Merged" option', () => {
     render(
       <MergeConflictModal
         isOpen={true}
@@ -168,7 +168,7 @@ describe('MergeConflictModal', () => {
       />
     );
 
-    expect(screen.getByText('Manual Merge')).toBeInTheDocument();
+    expect(screen.getByText('Accept Merged')).toBeInTheDocument();
   });
 
   it('should mark file as resolved when option is selected', () => {
@@ -217,8 +217,9 @@ describe('MergeConflictModal', () => {
     const originalContent = screen.getByTestId('original-content');
     const modifiedContent = screen.getByTestId('modified-content');
 
+    // Default diff view is "local vs merged" — original is localContent, modified is mergedContent
     expect(originalContent.textContent).toContain('value: 150');
-    expect(modifiedContent.textContent).toContain('value: 200');
+    expect(modifiedContent.textContent).toContain('<<<<<<< LOCAL');
   });
 
   it('should disable Apply button when no resolutions selected', () => {
@@ -231,7 +232,7 @@ describe('MergeConflictModal', () => {
       />
     );
 
-    const applyButton = screen.getByText('Apply Resolutions');
+    const applyButton = screen.getByText('Apply');
     expect(applyButton).toBeDisabled();
   });
 
@@ -253,7 +254,7 @@ describe('MergeConflictModal', () => {
     fireEvent.click(file2Items[0]);
     fireEvent.click(screen.getByText(/Use Remote/));
 
-    const applyButton = screen.getByText('Apply Resolutions');
+    const applyButton = screen.getByText('Apply');
     expect(applyButton).not.toBeDisabled();
   });
 
@@ -276,7 +277,7 @@ describe('MergeConflictModal', () => {
     fireEvent.click(screen.getByText(/Use Remote/));
 
     // Click Apply
-    const applyButton = screen.getByText('Apply Resolutions');
+    const applyButton = screen.getByText('Apply');
     fireEvent.click(applyButton);
 
     await waitFor(() => {
@@ -330,7 +331,7 @@ describe('MergeConflictModal', () => {
       />
     );
 
-    expect(screen.getByText(/1 file with conflicts\./)).toBeInTheDocument();
+    expect(screen.getByText(/1 file changed on both sides\./)).toBeInTheDocument();
   });
 
   it('should show correct count in summary when multiple conflicts', () => {
@@ -343,7 +344,7 @@ describe('MergeConflictModal', () => {
       />
     );
 
-    expect(screen.getByText(/2 files with conflicts\./)).toBeInTheDocument();
+    expect(screen.getByText(/2 files changed on both sides\./)).toBeInTheDocument();
   });
 
   it('should allow changing resolution after selection', () => {
@@ -394,7 +395,7 @@ describe('MergeConflictModal', () => {
     expect(keepLocalButton).toHaveClass('selected');
   });
 
-  it('should show Local for all and Remote for all batch buttons', () => {
+  it('should show Accept Merged for all batch button', () => {
     render(
       <MergeConflictModal
         isOpen={true}
@@ -404,11 +405,10 @@ describe('MergeConflictModal', () => {
       />
     );
 
-    expect(screen.getByText('Local for all')).toBeInTheDocument();
-    expect(screen.getByText('Remote for all')).toBeInTheDocument();
+    expect(screen.getByText('Accept Merged for all')).toBeInTheDocument();
   });
 
-  it('should resolve all conflicts to local when Local for all is clicked', async () => {
+  it('should resolve all conflicts to merged when Accept Merged for all is clicked', async () => {
     render(
       <MergeConflictModal
         isOpen={true}
@@ -418,9 +418,9 @@ describe('MergeConflictModal', () => {
       />
     );
 
-    fireEvent.click(screen.getByText('Local for all'));
+    fireEvent.click(screen.getByText('Accept Merged for all'));
 
-    const applyButton = screen.getByText('Apply Resolutions');
+    const applyButton = screen.getByText('Apply');
     expect(applyButton).not.toBeDisabled();
     fireEvent.click(applyButton);
 
@@ -429,8 +429,8 @@ describe('MergeConflictModal', () => {
     });
 
     const resolutionMap = mockOnResolve.mock.calls[0][0];
-    expect(resolutionMap.get('parameter-test1')).toBe('local');
-    expect(resolutionMap.get('parameter-test2')).toBe('local');
+    expect(resolutionMap.get('parameter-test1')).toBe('merged');
+    expect(resolutionMap.get('parameter-test2')).toBe('merged');
   });
 
   it('should auto-select first file when conflicts prop changes from empty to populated', () => {
@@ -503,11 +503,11 @@ describe('MergeConflictModal', () => {
 
     // New file should be selected, no stale resolution badges
     expect(screen.getAllByText('new.yaml').length).toBeGreaterThan(0);
-    const applyButton = screen.getByText('Apply Resolutions');
+    const applyButton = screen.getByText('Apply');
     expect(applyButton).toBeDisabled(); // No resolutions yet
   });
 
-  it('should resolve all conflicts to remote when Remote for all is clicked', async () => {
+  it('should resolve all conflicts to remote when Use Remote is selected per-file', async () => {
     render(
       <MergeConflictModal
         isOpen={true}
@@ -517,9 +517,15 @@ describe('MergeConflictModal', () => {
       />
     );
 
-    fireEvent.click(screen.getByText('Remote for all'));
+    // Resolve first file as remote
+    fireEvent.click(screen.getByText(/Use Remote/));
 
-    const applyButton = screen.getByText('Apply Resolutions');
+    // Select second file and resolve as remote
+    const file2Items = screen.getAllByText('test2.yaml');
+    fireEvent.click(file2Items[0]);
+    fireEvent.click(screen.getByText(/Use Remote/));
+
+    const applyButton = screen.getByText('Apply');
     expect(applyButton).not.toBeDisabled();
     fireEvent.click(applyButton);
 

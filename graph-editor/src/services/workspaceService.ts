@@ -1323,6 +1323,12 @@ class WorkspaceService {
             const dirtyDetected = localFileState && (localFileState.isDirty || hasActualChanges);
             const graphGateTriggered = isGraphFile && localFileState && localDiffersFromRemote && !dirtyDetected;
 
+            // Diagnostic: log merge-path decision for graph files.
+            if (isGraphFile && localFileState) {
+              console.log(`🔍 WorkspaceService MERGE DECISION for ${treeItem.path}: isDirty=${localFileState.isDirty}, hasActualChanges=${!!hasActualChanges}, localDiffersFromRemote=${localDiffersFromRemote}, dirtyDetected=${!!dirtyDetected}, graphGateTriggered=${graphGateTriggered}, isInitializing=${(localFileState as any).isInitializing}`);
+              sessionLogService.info('git', 'MERGE_DECISION', `${treeItem.path}: isDirty=${localFileState.isDirty}, hasActualChanges=${!!hasActualChanges}, localDiffersFromRemote=${localDiffersFromRemote}, dirtyDetected=${!!dirtyDetected}, graphGateTriggered=${graphGateTriggered}, isInitializing=${(localFileState as any).isInitializing}`);
+            }
+
             if (graphGateTriggered) {
               // The old dirty-detection would have taken the "clean update" path and
               // silently overwritten local work. Log this as a serious near-miss.
@@ -1430,8 +1436,8 @@ class WorkspaceService {
               // Convert to strings for merge
               const isJsonFile = dirConfig.type === 'graph' || dirConfig.extension === 'json';
               const remoteContent = contentStr;
-              const baseContent = localFileState.originalData 
-                ? (isJsonFile 
+              const baseContent = localFileState.originalData
+                ? (isJsonFile
                     ? JSON.stringify(localFileState.originalData, null, 2)
                     : YAML.stringify(localFileState.originalData))
                 : '';

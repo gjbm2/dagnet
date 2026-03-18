@@ -2390,12 +2390,12 @@
    ============================================================ */
 
 .rf-overlay-forecast-quality .react-flow__node .conversion-node {
-  filter: saturate(0.3) opacity(0.7);
+  filter: saturate(0.3);
   transition: filter 0.3s ease-in-out;
 }
 
-/* Keep selected/hovered nodes full strength */
+/* Keep selected/hovered nodes closer to full strength */
 .rf-overlay-forecast-quality .react-flow__node.selected .conversion-node,
 .rf-overlay-forecast-quality .react-flow__node:hover .conversion-node {
-  filter: saturate(0.6) opacity(0.85);
+  filter: saturate(0.6);
 }

@@ -12,6 +12,7 @@ import { credentialsManager } from '../lib/credentials';
 import { operationRegistryService } from '../services/operationRegistryService';
 import { sessionLogService } from '../services/sessionLogService';
 import { startNonBlockingPull } from '../services/nonBlockingPullService';
+import { dispatchOpenConflictModal } from './usePullAll';
 import {
   fetchBayesConfig,
   encryptCallbackToken,
@@ -308,10 +309,8 @@ export function useBayesTrigger(computeMode: BayesComputeMode = 'local') {
               }
             },
             onConflicts: (conflicts, pullOpId) => {
-              // Surface conflicts — user resolves via the merge modal
-              window.dispatchEvent(new CustomEvent('dagnet:showMergeConflicts', {
-                detail: { conflicts, operationId: pullOpId },
-              }));
+              // Surface conflicts via the persistent listener in useStalenessNudges.
+              dispatchOpenConflictModal(conflicts, pullOpId);
             },
           });
         }

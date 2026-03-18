@@ -475,6 +475,75 @@ describe('mergeJson3Way — structural JSON merge', () => {
     expect(result.merged).toEqual(base);
   });
 
+  // ---- Domain-specific ownership policies ----
+
+  it('should always take remote for _bayes (Bayes service is authoritative)', () => {
+    const base = { _bayes: { posteriors: [0.1] }, nodes: [] };
+    const local = { _bayes: { posteriors: [0.1] }, nodes: [] }; // unchanged
+    const remote = { _bayes: { posteriors: [0.5, 0.3] }, nodes: [] }; // new run
+
+    const result = mergeJson3Way(base, local, remote);
+
+    expect(result.hasConflicts).toBe(false);
+    expect(result.merged._bayes).toEqual({ posteriors: [0.5, 0.3] });
+  });
+
+  it('should take remote _bayes even when local also changed _bayes (stale local)', () => {
+    const base = { _bayes: { posteriors: [0.1] } };
+    const local = { _bayes: { posteriors: [0.2] } }; // old run result
+    const remote = { _bayes: { posteriors: [0.5, 0.3], fit_ts: '2026-03-18' } }; // new run
+
+    const result = mergeJson3Way(base, local, remote);
+
+    expect(result.hasConflicts).toBe(false);
+    expect(result.merged._bayes).toEqual(remote._bayes);
+  });
+
+  it('should keep local addition when remote never had the key (not a deletion)', () => {
+    // canvasAnalyses added by local, never in base, not in remote.
+    // This is a local addition, not a remote deletion.
+    const base = { nodes: [] };
+    const local = { canvasAnalyses: [{ id: 'c1' }], nodes: [] };
+    const remote = { nodes: [] };
+
+    const result = mergeJson3Way(base, local, remote);
+
+    expect(result.hasConflicts).toBe(false);
+    expect(result.merged.canvasAnalyses).toEqual([{ id: 'c1' }]);
+  });
+
+  it('should handle the full Bayes roundtrip: chart preserved + bayes updated + no conflict', () => {
+    const base = {
+      nodes: [{ id: 'n1' }],
+      edges: [{ uuid: 'e1', source: 'a', target: 'b', p: { id: 'p1' } }],
+      _bayes: { posteriors: [0.1], fit_ts: '2026-03-17' },
+      canvasAnalyses: [{ id: 'chart-1', view_mode: 'chart' }],
+      metadata: { updated_at: '2026-03-17T00:00:00Z' },
+    };
+    const local = {
+      ...base,
+      metadata: { updated_at: '2026-03-18T10:00:00Z' },
+    };
+    const remote = {
+      nodes: [{ id: 'n1' }],
+      edges: [{ uuid: 'e1', source: 'a', target: 'b', p: { id: 'p1' } }],
+      _bayes: { posteriors: [0.5, 0.3], fit_ts: '2026-03-18' },
+      // no canvasAnalyses — remote doesn't know about charts
+      metadata: { updated_at: '2026-03-18T08:00:00Z' },
+    };
+
+    const result = mergeJson3Way(base, local, remote);
+
+    expect(result.hasConflicts).toBe(false);
+    expect(result.merged._bayes).toEqual(remote._bayes); // remote wins (REMOTE_WINS_KEYS)
+    // canvasAnalyses: present in base and local (unchanged), absent from remote.
+    // Standard merge rule: "deleted by remote, local unchanged → omit".
+    // No LOCAL_WINS policy exists for canvasAnalyses, so the deletion stands.
+    expect(result.merged.canvasAnalyses).toBeUndefined();
+    expect(result.merged.metadata.updated_at).toBe('2026-03-18T10:00:00Z'); // most recent
+    expect(result.merged.nodes).toEqual(base.nodes);
+  });
+
   it('should merge arrays of objects by uuid when both sides modify different elements', () => {
     const base = {
       edges: [

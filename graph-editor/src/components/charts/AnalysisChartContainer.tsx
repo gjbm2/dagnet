@@ -168,6 +168,10 @@ export function AnalysisChartContainer(props: {
   suppressAnimation?: boolean;
   /** Default tab for info cards (driven by view overlay mode). */
   infoDefaultTab?: string;
+  /** Callback when a file link is clicked in an info card. */
+  onFileLink?: (fileId: string, type: string) => void;
+  /** Extra React content to append after a specific tab's table in info cards. */
+  infoTabExtra?: Record<string, React.ReactNode>;
   /** Called once the chart reaches a terminal visual state.
    *  'rendered' = ECharts painted real data; 'failed' = null option / info / no chart. */
   onRendered?: (outcome: 'rendered' | 'failed') => void;
@@ -993,7 +997,7 @@ export function AnalysisChartContainer(props: {
           props.children
         ) : effectiveKind === 'info' && patchedResult ? (
           <div style={{ flex: fillHeight ? 1 : undefined, minHeight: 0, overflow: 'auto' }}>
-            <AnalysisInfoCard result={patchedResult} fontSize={resolvedSettings.font_size} defaultTab={props.infoDefaultTab} />
+            <AnalysisInfoCard result={patchedResult} fontSize={resolvedSettings.font_size} defaultTab={props.infoDefaultTab} onFileLink={props.onFileLink} tabExtra={props.infoTabExtra} />
           </div>
         ) : echartsOption ? (
           <div style={{ flex: fillHeight ? 1 : undefined, minHeight: 0, position: 'relative' }}>

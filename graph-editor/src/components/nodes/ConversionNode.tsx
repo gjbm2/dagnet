@@ -124,6 +124,11 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
   const hoverPreview = useHoverPreview(500);
   const hoverScenarios = useHoverScenarios(graph);
 
+  // File link handler for info card
+  const handleFileLink = useCallback((fileId: string, type: string) => {
+    operations.openTab({ type, id: fileId.replace(`${type}-`, ''), name: fileId } as any, 'interactive');
+  }, [operations]);
+
   // Image preview/loupe state
   const [showImagePreview, setShowImagePreview] = useState(false);
   const [showImageLoupe, setShowImageLoupe] = useState(false);
@@ -1448,6 +1453,7 @@ export default function ConversionNode({ data, selected }: NodeProps<ConversionN
         onCardEnter={hoverPreview.handleCardEnter}
         onCardLeave={hoverPreview.handleCardLeave}
         onDismiss={hoverPreview.handleDismiss}
+        onFileLink={handleFileLink}
       />
     )}
     </>

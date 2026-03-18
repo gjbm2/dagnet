@@ -10,7 +10,9 @@ import { EdgeLabelRenderer } from 'reactflow';
 import { Plug, ZapOff } from 'lucide-react';
 import { buildBeadDefinitions, type BeadDefinition } from './edgeBeadHelpers';
 import type { Graph, GraphEdge } from '../../types';
-import type { ScenarioVisibilityMode } from '../../types';
+import type { ScenarioVisibilityMode, ViewOverlayMode } from '../../types';
+import { computeQualityTier, qualityTierToColour, qualityTierLabel } from '../../utils/bayesQualityTier';
+import type { ProbabilityPosterior } from '../../types';
 import { BEAD_MARKER_DISTANCE, BEAD_SPACING, BEAD_FONT_SIZE, BEAD_HEIGHT, BEAD_ARRIVAL_FACE_OFFSET } from '../../lib/nodeEdgeConstants';
 import { hasAnyEdgeQueryOverride, listOverriddenFlagPaths } from '../../utils/overrideFlags';
 
@@ -73,6 +75,8 @@ interface EdgeBeadsProps {
   onMouseEnter?: (e: React.MouseEvent) => void;
   onMouseLeave?: (e: React.MouseEvent) => void;
   onMouseDown?: (e: React.MouseEvent) => void;
+  /** When set to 'forecast-quality', replaces normal beads with a quality tier bead. */
+  viewOverlayMode?: ViewOverlayMode;
 }
 
 interface BeadState {
@@ -102,6 +106,7 @@ export function useEdgeBeads(props: EdgeBeadsProps): { svg: React.ReactNode; htm
     onMouseEnter: onBeadMouseEnter,
     onMouseLeave: onBeadMouseLeave,
     onMouseDown: onBeadMouseDown,
+    viewOverlayMode,
   } = props;
   
   // Create a memoized path element from pathD for accurate position calculations
@@ -135,6 +140,26 @@ export function useEdgeBeads(props: EdgeBeadsProps): { svg: React.ReactNode; htm
       ? visibleScenarioIds 
       : ['current'];
     
+    // In Forecast Quality mode, show a single quality tier bead instead of normal beads.
+    // The colour communicates the tier; the label surfaces diagnostic detail.
+    if (viewOverlayMode === 'forecast-quality') {
+      const posterior = edge.p?.posterior as ProbabilityPosterior | undefined;
+      const tier = computeQualityTier(posterior);
+      const tierColour = qualityTierToColour(tier.tier, 'dark');
+      return [{
+        type: 'probability' as const,
+        values: [{ scenarioId: 'current', text: tier.reason, colour: tierColour }],
+        displayText: tier.reason,
+        allIdentical: true,
+        backgroundColor: tierColour,
+        hasParameterConnection: false,
+        isOverridden: false,
+        distance: visibleStartOffset ?? BEAD_MARKER_DISTANCE,
+        expanded: true,
+        index: 0,
+      }];
+    }
+
     const beads = buildBeadDefinitions(
       edge,
       graph,
@@ -147,7 +172,7 @@ export function useEdgeBeads(props: EdgeBeadsProps): { svg: React.ReactNode; htm
       visibleStartOffset,
       getScenarioVisibilityMode
     );
-    
+
     return beads;
   }, [
     edge.uuid || edge.id, // Stable edge identifier
@@ -194,6 +219,8 @@ export function useEdgeBeads(props: EdgeBeadsProps): { svg: React.ReactNode; htm
     whatIfDSL, // What-If DSL
     visibleStartOffset, // Visible start offset
     visibilityModesKey, // Visibility modes (stable string)
+    viewOverlayMode, // View overlay (forecast quality replaces beads)
+    edge.p?.posterior, // Posterior data (for quality tier bead)
   ]);
 
   
@@ -852,7 +879,8 @@ export const EdgeBeadsRenderer = React.memo(function EdgeBeadsRenderer(props: Ed
     prevProps.visibleEndOffset === nextProps.visibleEndOffset &&
     prevProps.edgeWidth === nextProps.edgeWidth &&
     // CRITICAL: pathD determines bead positions - must re-render when path changes
-    prevProps.pathD === nextProps.pathD
+    prevProps.pathD === nextProps.pathD &&
+    prevProps.viewOverlayMode === nextProps.viewOverlayMode
   );
 });
 

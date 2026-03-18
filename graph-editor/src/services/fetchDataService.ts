@@ -1209,7 +1209,7 @@ export async function fetchItems(
   } finally {
     // Always reset batch mode
     if (shouldShowBatchProgress) {
-      setBatchMode(false);  // flushes summary toast
+      discardBatchMode();   // fetchDataService already showed its own progress toast; don't duplicate with batch summary
     } else if (shouldSuppressToasts) {
       discardBatchMode();   // clears buffer without showing any toast
     }

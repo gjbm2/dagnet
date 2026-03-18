@@ -179,7 +179,7 @@ function buildNodeInfoResult(graph: ConversionGraph, dsl: string): AnalysisResul
 
   // ── Tab: Overview (intrinsic node properties) ──
   data.push({ tab: 'overview', section: 'Identity', property: 'Label', value: node.label || node.id });
-  data.push({ tab: 'overview', section: 'Identity', property: 'ID', value: node.id });
+  data.push({ tab: 'overview', section: 'Identity', property: 'ID', value: node.id, link: { type: 'node', fileId: `node-${node.id}` } });
   data.push({ tab: 'overview', section: 'Identity', property: 'Type', value: node.type || 'normal' });
 
   if (node.absorbing) {
@@ -187,6 +187,12 @@ function buildNodeInfoResult(graph: ConversionGraph, dsl: string): AnalysisResul
   }
   if (node.outcome_type) {
     data.push({ tab: 'overview', section: 'Identity', property: 'Outcome Type', value: node.outcome_type });
+  }
+  if (node.event_id) {
+    data.push({ tab: 'overview', section: 'Identity', property: 'Event', value: node.event_id, link: { type: 'event', fileId: `event-${node.event_id}` } });
+  }
+  if (node.tags && node.tags.length > 0) {
+    data.push({ tab: 'overview', section: 'Identity', property: 'Tags', value: node.tags.join(', ') });
   }
 
   // Entry info
@@ -199,9 +205,12 @@ function buildNodeInfoResult(graph: ConversionGraph, dsl: string): AnalysisResul
     }
   }
 
-  // Description
+  // Details
   if (node.description) {
     data.push({ tab: 'overview', section: 'Details', property: 'Description', value: node.description });
+  }
+  if (node.url) {
+    data.push({ tab: 'overview', section: 'Details', property: 'URL', value: node.url });
   }
 
   // ── Tab: Structure (relationships — cases, outgoing edges) ──
@@ -232,6 +241,55 @@ function buildNodeInfoResult(graph: ConversionGraph, dsl: string): AnalysisResul
         property: `→ ${targetLabel}`,
         value: prob !== undefined ? fmtPct(prob) : '—',
       });
+    }
+  }
+
+  // ── Tab: Evidence (from outgoing edges) ──
+  const outEdgesForEvidence = graph.edges.filter(e => e.from === node.uuid || e.from === node.id);
+  if (outEdgesForEvidence.length > 0) {
+    for (const oe of outEdgesForEvidence) {
+      const target = graph.nodes.find(n => n.uuid === oe.to || n.id === oe.to);
+      const targetLabel = target?.label || target?.id || oe.to;
+      const ev = oe.p?.evidence as any;
+      if (ev && ev.n !== undefined && ev.k !== undefined) {
+        data.push({
+          tab: 'evidence',
+          section: `→ ${targetLabel}`,
+          property: 'Counts',
+          value: `n=${ev.n}, k=${ev.k}`,
+        });
+        if (ev.n > 0) {
+          data.push({
+            tab: 'evidence',
+            section: `→ ${targetLabel}`,
+            property: 'Observed Rate',
+            value: fmtPct(ev.k / ev.n),
+          });
+        }
+        if (ev.window_from && ev.window_to) {
+          data.push({
+            tab: 'evidence',
+            section: `→ ${targetLabel}`,
+            property: 'Window',
+            value: `${fmtDate(ev.window_from)} — ${fmtDate(ev.window_to)}`,
+          });
+        }
+        if (ev.source) {
+          data.push({
+            tab: 'evidence',
+            section: `→ ${targetLabel}`,
+            property: 'Source',
+            value: ev.source,
+          });
+        }
+      } else {
+        data.push({
+          tab: 'evidence',
+          section: `→ ${targetLabel}`,
+          property: 'Status',
+          value: 'No direct evidence',
+        });
+      }
     }
   }
 
@@ -325,6 +383,9 @@ function buildEdgeInfoResult(graph: ConversionGraph, dsl: string): AnalysisResul
         value: stdev ? `${fmtPct(prob)} ± ${fmtPct(stdev)}` : fmtPct(prob),
       });
     }
+    if (edge.p.distribution && edge.p.distribution !== 'beta') {
+      data.push({ tab: 'overview', section: 'Probability', property: 'Distribution', value: edge.p.distribution });
+    }
     if (edge.p.n !== undefined && edge.p.n > 0) {
       data.push({ tab: 'overview', section: 'Probability', property: 'Forecast Population (n)', value: fmtNum(edge.p.n) });
     }
@@ -367,11 +428,33 @@ function buildEdgeInfoResult(graph: ConversionGraph, dsl: string): AnalysisResul
     data.push({ tab: 'overview', section: 'Costs', property: 'Labour Cost', value: `${edge.labour_cost.mean.toFixed(1)}d` });
   }
 
+  // Conditional overrides count
+  if (edge.conditional_p && edge.conditional_p.length > 0) {
+    const count = edge.conditional_p.length;
+    data.push({
+      tab: 'overview',
+      section: 'Probability',
+      property: 'Conditions',
+      value: `${count} override${count > 1 ? 's' : ''}`,
+    });
+  }
+
   if (edge.description) {
     data.push({ tab: 'overview', section: 'Details', property: 'Description', value: edge.description });
   }
   if (edge.query) {
     data.push({ tab: 'overview', section: 'Details', property: 'Query', value: edge.query });
+  }
+  if (edge.n_query) {
+    data.push({ tab: 'overview', section: 'Details', property: 'n Query', value: edge.n_query });
+  }
+  const dataSourceType = (edge.p as any)?.data_source?.type || (edge.p as any)?.connection;
+  if (dataSourceType) {
+    data.push({ tab: 'overview', section: 'Details', property: 'Data Source', value: dataSourceType });
+  }
+  const paramId = edge.p?.id as string | undefined;
+  if (paramId) {
+    data.push({ tab: 'overview', section: 'Details', property: 'Parameter', value: paramId, link: { type: 'parameter', fileId: `parameter-${paramId}` } });
   }
 
   // ── Tab: Evidence (data provenance) ──
@@ -419,9 +502,10 @@ function buildEdgeInfoResult(graph: ConversionGraph, dsl: string): AnalysisResul
   }
 
   // ── Tab: Forecast (Bayes quality) ──
-  // ── Tab: Diagnostics (freshness + forecast quality) ──
-  buildFreshnessRows(data, 'diagnostics', graph, edge);
   buildEdgeForecastTab(data, edge, graph);
+
+  // ── Tab: Diagnostics (freshness) ──
+  buildFreshnessRows(data, 'diagnostics', graph, edge);
 
   return {
     analysis_type: 'edge_info',
@@ -457,7 +541,7 @@ function buildEdgeForecastTab(
 
   if (!posterior && !latPosterior) {
     data.push({
-      tab: 'diagnostics',
+      tab: 'forecast',
       section: 'Bayesian Fit',
       property: 'Status',
       value: 'No posterior available — run Bayesian fit',
@@ -468,12 +552,12 @@ function buildEdgeForecastTab(
   // Probability posterior — all field accesses guarded (posterior may be partial/malformed)
   if (posterior) {
     const tier = computeQualityTier(posterior);
-    data.push({ tab: 'diagnostics', section: 'Quality', property: 'Tier', value: qualityTierLabel(tier.tier) });
-    data.push({ tab: 'diagnostics', section: 'Quality', property: 'Reason', value: tier.reason });
+    data.push({ tab: 'forecast', section: 'Quality', property: 'Tier', value: qualityTierLabel(tier.tier) });
+    data.push({ tab: 'forecast', section: 'Quality', property: 'Reason', value: tier.reason });
 
     if (posterior.hdi_level != null && posterior.hdi_lower != null && posterior.hdi_upper != null) {
       data.push({
-        tab: 'diagnostics',
+        tab: 'forecast',
         section: 'Probability',
         property: `HDI ${fmtPct(posterior.hdi_level)}`,
         value: `${fmtPct(posterior.hdi_lower)} — ${fmtPct(posterior.hdi_upper)}`,
@@ -481,34 +565,34 @@ function buildEdgeForecastTab(
     }
 
     if (posterior.evidence_grade != null) {
-      data.push({ tab: 'diagnostics', section: 'Probability', property: 'Evidence Grade', value: `${posterior.evidence_grade}/3` });
+      data.push({ tab: 'forecast', section: 'Probability', property: 'Evidence Grade', value: `${posterior.evidence_grade}/3` });
     }
     if (posterior.prior_tier) {
-      data.push({ tab: 'diagnostics', section: 'Probability', property: 'Prior Tier', value: posterior.prior_tier.replace(/_/g, ' ') });
+      data.push({ tab: 'forecast', section: 'Probability', property: 'Prior Tier', value: posterior.prior_tier.replace(/_/g, ' ') });
     }
 
     if (posterior.rhat != null) {
-      data.push({ tab: 'diagnostics', section: 'Convergence', property: 'rhat', value: posterior.rhat.toFixed(4) });
+      data.push({ tab: 'forecast', section: 'Convergence', property: 'rhat', value: posterior.rhat.toFixed(4) });
     }
     if (posterior.ess != null) {
-      data.push({ tab: 'diagnostics', section: 'Convergence', property: 'ESS', value: fmtNum(Math.round(posterior.ess)) });
+      data.push({ tab: 'forecast', section: 'Convergence', property: 'ESS', value: fmtNum(Math.round(posterior.ess)) });
     }
     if (posterior.divergences != null && posterior.divergences > 0) {
-      data.push({ tab: 'diagnostics', section: 'Convergence', property: 'Divergences', value: posterior.divergences.toString() });
+      data.push({ tab: 'forecast', section: 'Convergence', property: 'Divergences', value: posterior.divergences.toString() });
     }
 
     if (posterior.surprise_z != null && Math.abs(posterior.surprise_z) > 2) {
-      data.push({ tab: 'diagnostics', section: 'Anomaly', property: 'Surprise z', value: posterior.surprise_z.toFixed(1) });
+      data.push({ tab: 'forecast', section: 'Anomaly', property: 'Surprise z', value: posterior.surprise_z.toFixed(1) });
     }
 
     if (posterior.provenance) {
-      data.push({ tab: 'diagnostics', section: 'Metadata', property: 'Provenance', value: posterior.provenance });
+      data.push({ tab: 'forecast', section: 'Metadata', property: 'Provenance', value: posterior.provenance });
     }
     if (posterior.fitted_at) {
       const relFit = formatRelativeTime(posterior.fitted_at);
       const fitLevel = getFreshnessLevel(posterior.fitted_at);
       data.push({
-        tab: 'diagnostics', section: 'Metadata', property: 'Fitted',
+        tab: 'forecast', section: 'Metadata', property: 'Fitted',
         value: relFit ? `${relFit} (${posterior.fitted_at})` : posterior.fitted_at,
         freshness: fitLevel,
       });
@@ -519,21 +603,21 @@ function buildEdgeForecastTab(
   if (latPosterior) {
     const latTier = computeQualityTier(latPosterior);
     if (!posterior) {
-      data.push({ tab: 'diagnostics', section: 'Quality', property: 'Tier (Latency)', value: qualityTierLabel(latTier.tier) });
+      data.push({ tab: 'forecast', section: 'Quality', property: 'Tier (Latency)', value: qualityTierLabel(latTier.tier) });
     }
     if (latPosterior.hdi_level != null && latPosterior.hdi_t95_lower != null && latPosterior.hdi_t95_upper != null) {
       data.push({
-        tab: 'diagnostics',
+        tab: 'forecast',
         section: 'Latency HDI',
         property: `t95 HDI ${fmtPct(latPosterior.hdi_level)}`,
         value: `${latPosterior.hdi_t95_lower.toFixed(1)}d — ${latPosterior.hdi_t95_upper.toFixed(1)}d`,
       });
     }
     if (latPosterior.rhat != null) {
-      data.push({ tab: 'diagnostics', section: 'Latency HDI', property: 'rhat', value: latPosterior.rhat.toFixed(4) });
+      data.push({ tab: 'forecast', section: 'Latency HDI', property: 'rhat', value: latPosterior.rhat.toFixed(4) });
     }
     if (latPosterior.ess != null) {
-      data.push({ tab: 'diagnostics', section: 'Latency HDI', property: 'ESS', value: fmtNum(Math.round(latPosterior.ess)) });
+      data.push({ tab: 'forecast', section: 'Latency HDI', property: 'ESS', value: fmtNum(Math.round(latPosterior.ess)) });
     }
   }
 }
@@ -624,3 +708,4 @@ function fmtDate(d: string | Date): string {
   const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
   return `${date.getDate()}-${months[date.getMonth()]}-${date.getFullYear().toString().slice(-2)}`;
 }
+

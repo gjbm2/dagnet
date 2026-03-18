@@ -19,6 +19,8 @@ vi.mock('../../services/dataOperationsService', () => ({
     getNodeFromFile: vi.fn().mockResolvedValue(undefined),
   },
   setBatchMode: vi.fn(), // Batch mode control for toast suppression
+  discardBatchMode: vi.fn(), // Discard queued batch results
+  isBatchMode: vi.fn().mockReturnValue(false), // Check if batch mode is active
 }));
 
 vi.mock('../../services/windowAggregationService', () => ({

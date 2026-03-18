@@ -29,6 +29,8 @@ import { useViewOverlayMode } from '../hooks/useViewOverlayMode';
 import type { ConversionGraph, Graph, CanvasAnalysis } from '../types';
 import type { AnalysisResult } from '../lib/graphComputeClient';
 import type { LocalScenario } from '../services/localAnalysisComputeService';
+import type { EdgeSnapshotRetrievalsData } from '../hooks/useEdgeSnapshotRetrievals';
+import { CalendarGrid } from './CalendarGrid';
 
 // -------------------------------------------------------------------
 // Satellite helpers
@@ -140,6 +142,8 @@ function DraggableAnalysisCard({
   onSettled,
   deferred,
   infoDefaultTab,
+  snapshotRetrievals,
+  onFileLink,
 }: {
   analysisType: string;
   dsl: string;
@@ -165,6 +169,10 @@ function DraggableAnalysisCard({
   deferred?: boolean;
   /** Default tab for info cards (driven by view overlay mode) */
   infoDefaultTab?: string;
+  /** Snapshot retrieval data for edge_info Evidence tab (async — arrives when ready) */
+  snapshotRetrievals?: EdgeSnapshotRetrievalsData;
+  /** Callback when a file link is clicked */
+  onFileLink?: (fileId: string, type: string) => void;
 }) {
   const cardRef = useRef<HTMLDivElement>(null);
   const { operations } = useTabContext();
@@ -389,12 +397,11 @@ function DraggableAnalysisCard({
       }
       onMouseEnter={dragging ? undefined : onCardEnter}
       onMouseLeave={dragging ? undefined : onCardLeave}
-      onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
       onPointerUp={handlePointerUp}
       style={{
         position: 'relative' as const,
-        cursor: dragging ? 'grabbing' : 'grab',
+        cursor: dragging ? 'grabbing' : undefined,
         transition: dragging ? undefined : 'opacity 0.25s ease-in-out',
         ...style,
         // Invisible only while still loading with no result or error — transition handles the fade-in.
@@ -406,7 +413,7 @@ function DraggableAnalysisCard({
       }}
     >
       {!hideHeader && (
-        <div className="hover-analysis-preview-header">
+        <div className="hover-analysis-preview-header" onPointerDown={handlePointerDown}>
           <GripVertical size={9} className="hover-analysis-preview-grip" />
           <span className="hover-analysis-preview-title">
             {label}{effectiveChartKind && effectiveChartKind !== 'info' ? ` · ${effectiveChartKind.replace(/_/g, ' ')}` : ''}
@@ -417,7 +424,6 @@ function DraggableAnalysisCard({
       <div
         className="hover-analysis-preview-body"
         style={{
-          pointerEvents: 'none',
           ...(scaleContent ? { zoom: SATELLITE_CONTENT_SCALE } as React.CSSProperties : {}),
         }}
       >
@@ -441,6 +447,10 @@ function DraggableAnalysisCard({
             suppressAnimation={!!scaleContent}
             onRendered={fireSettled}
             infoDefaultTab={infoDefaultTab}
+            onFileLink={onFileLink}
+            infoTabExtra={snapshotRetrievals ? {
+              evidence: <SnapshotCalendarSection data={snapshotRetrievals} />,
+            } : undefined}
           />
         ) : waitingForDeps ? (
           <div style={{ padding: '12px 10px', color: 'var(--text-muted, #666)', fontSize: 10 }}>
@@ -467,6 +477,81 @@ function DraggableAnalysisCard({
 }
 
 // -------------------------------------------------------------------
+// SnapshotCalendarSection — compact calendar for Evidence tab
+// -------------------------------------------------------------------
+
+function SnapshotCalendarSection({ data }: { data: EdgeSnapshotRetrievalsData }) {
+  // Right month = the latest retrieval month (or current month)
+  const [rightMonth, setRightMonth] = useState(() => {
+    if (data.latestRetrievedAt) {
+      const d = new Date(data.latestRetrievedAt);
+      return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1));
+    }
+    const now = new Date();
+    return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
+  });
+
+  // Left month = one month before right
+  const leftMonth = useMemo(() => {
+    const d = new Date(rightMonth.getTime());
+    d.setUTCMonth(d.getUTCMonth() - 1);
+    return d;
+  }, [rightMonth]);
+
+  const highlightedDates = useMemo(
+    () => new Set(data.retrievedDays),
+    [data.retrievedDays],
+  );
+
+  // Shared nav moves the pair
+  const setLeftMonth = useCallback((d: Date) => {
+    const next = new Date(d.getTime());
+    next.setUTCMonth(next.getUTCMonth() + 1);
+    next.setUTCDate(1);
+    setRightMonth(next);
+  }, []);
+
+  const noop = useCallback(() => {}, []);
+
+  return (
+    <div className="info-card-snapshot-calendar info-card-snapshot-calendar--dual">
+      <div className="info-card-section-title" style={{ padding: '3px 4px 1px' }}>
+        Snapshots
+      </div>
+      <div className="info-card-snapshot-calendar-pair">
+        <div className="info-card-snapshot-calendar-month">
+          <CalendarGrid
+            monthCursor={leftMonth}
+            setMonthCursor={setLeftMonth}
+            highlightedDates={highlightedDates}
+            selectedDate={null}
+            onDateClick={noop}
+            getDayTitle={(iso, highlighted) =>
+              highlighted ? 'Snapshot available' : ''
+            }
+          />
+        </div>
+        <div className="info-card-snapshot-calendar-month">
+          <CalendarGrid
+            monthCursor={rightMonth}
+            setMonthCursor={setRightMonth}
+            highlightedDates={highlightedDates}
+            selectedDate={null}
+            onDateClick={noop}
+            getDayTitle={(iso, highlighted) =>
+              highlighted ? 'Snapshot available' : ''
+            }
+          />
+        </div>
+      </div>
+      <div className="calendar-grid-footer">
+        {data.count} row{data.count !== 1 ? 's' : ''} across {data.retrievedDays.length} day{data.retrievedDays.length !== 1 ? 's' : ''}
+      </div>
+    </div>
+  );
+}
+
+// -------------------------------------------------------------------
 // Main component
 // -------------------------------------------------------------------
 
@@ -482,6 +567,10 @@ interface HoverAnalysisPreviewProps {
   onCardEnter: () => void;
   onCardLeave: () => void;
   onDismiss: () => void;
+  /** Snapshot retrieval data for edge_info Evidence tab (async — arrives when ready) */
+  snapshotRetrievals?: EdgeSnapshotRetrievalsData;
+  /** Callback when a file link is clicked in an info card */
+  onFileLink?: (fileId: string, type: string) => void;
 }
 
 export function HoverAnalysisPreview({
@@ -496,13 +585,15 @@ export function HoverAnalysisPreview({
   onCardEnter,
   onCardLeave,
   onDismiss,
+  snapshotRetrievals,
+  onFileLink,
 }: HoverAnalysisPreviewProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const { activeTabId } = useTabContext();
   const { viewOverlayMode } = useViewOverlayMode();
 
   // Derive default info tab from view overlay mode
-  const infoDefaultTab = viewOverlayMode === 'forecast-quality' ? 'diagnostics' : undefined;
+  const infoDefaultTab = viewOverlayMode === 'forecast-quality' ? 'forecast' : undefined;
 
 
   // --- Satellite row ---
@@ -787,6 +878,8 @@ export function HoverAnalysisPreview({
           onCardEnter={handleCardEnterWithSatellites}
           onCardLeave={handleCardLeaveWithSatellites}
           infoDefaultTab={infoDefaultTab}
+          snapshotRetrievals={snapshotRetrievals}
+          onFileLink={onFileLink}
         />
       </div>
 

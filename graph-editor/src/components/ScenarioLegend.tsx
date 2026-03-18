@@ -11,9 +11,17 @@
 import React, { useCallback, useState } from 'react';
 import { Scenario } from '../types/scenarios';
 import { Eye, EyeOff, Images, Image, Square, X, Plus } from 'lucide-react';
-import type { ScenarioVisibilityMode } from '../types';
+import type { ScenarioVisibilityMode, ViewOverlayMode } from '../types';
 import toast from 'react-hot-toast';
 import './ScenarioLegend.css';
+
+/** View mode items for the hover submenu. */
+interface ViewModeItem {
+  id: string;
+  label: string;
+  isActive: () => boolean;
+  toggle: () => void;
+}
 
 interface ScenarioLegendProps {
   scenarios: Scenario[];
@@ -23,20 +31,18 @@ interface ScenarioLegendProps {
   baseColour: string;
   showCurrent: boolean;
   showBase: boolean;
-  /** True when legend is rendered in dashboard mode (affects labelling). */
   isDashboardMode?: boolean;
-  /**
-   * Authoritative Query DSL currently being displayed (used for dashboard clarity).
-   * In dashboard mode we include it in the tooltip/label for the Current/Base chips.
-   */
   activeDsl?: string | null;
-  /** Persisted baseline DSL from the graph file (used to label Base in dashboard mode). */
   baseDsl?: string | null;
   onToggleVisibility: (scenarioId: string) => void;
   onCycleVisibilityMode?: (scenarioId: string) => void;
   getVisibilityMode?: (scenarioId: string) => ScenarioVisibilityMode;
   onDelete: (scenarioId: string) => void;
   onNewScenario?: () => void;
+  /** View mode items for the hover submenu. */
+  viewModes?: ViewModeItem[];
+  /** When true, scenario chips are hidden (replaced by the active mode pill). */
+  hideScenarioChips?: boolean;
 }
 
 export function ScenarioLegend({
@@ -54,7 +60,9 @@ export function ScenarioLegend({
   onCycleVisibilityMode,
   getVisibilityMode,
   onDelete,
-  onNewScenario
+  onNewScenario,
+  viewModes = [],
+  hideScenarioChips = false,
 }: ScenarioLegendProps) {
   const [deletingIds, setDeletingIds] = useState<string[]>([]);
   
@@ -172,7 +180,7 @@ export function ScenarioLegend({
   // Count visible scenarios (user scenarios + current/base if visible)
   const visibleCount = visibleScenarioIds.length;
   // Show chips if there are any scenarios (visible or not) or if current/base are shown
-  const shouldShowChips = scenarios.length > 0 || visibleCount > 0;
+  const shouldShowChips = !hideScenarioChips && (scenarios.length > 0 || visibleCount > 0);
   
   /**
    * Get effective colour for a scenario (with single-layer grey override)
@@ -386,9 +394,26 @@ export function ScenarioLegend({
         </div>
       )}
       
-      {/* New Scenario button - not shown in dashboard mode */}
-      {onNewScenario && !isDashboardMode && (
-        <span className="scenario-legend-new-wrapper">
+      {/* Active view mode pills — shown for each active mode */}
+      {viewModes.filter(m => m.isActive()).map(mode => (
+        <div key={mode.id} className="scenario-legend-chip scenario-legend-mode-pill">
+          <span className="scenario-legend-name">{mode.label}</span>
+          <button
+            className="scenario-legend-delete"
+            onClick={(e) => {
+              e.stopPropagation();
+              mode.toggle();
+            }}
+            title={`Exit ${mode.label}`}
+          >
+            <X size={14} />
+          </button>
+        </div>
+      ))}
+
+      {/* + button with hover submenu — not shown in dashboard mode */}
+      {!isDashboardMode && (
+        <div className="scenario-legend-new-wrapper">
           {/* Invisible spacer to reserve full expanded width */}
           <span className="scenario-legend-new-spacer" aria-hidden="true">
             <Plus size={16} />
@@ -399,13 +424,30 @@ export function ScenarioLegend({
             className="scenario-legend-chip scenario-legend-new"
             onClick={onNewScenario}
             title={scenarios.length >= 15 ? 'Maximum scenarios reached' : 'New scenario'}
-            disabled={scenarios.length >= 15}
-            style={{ opacity: scenarios.length >= 15 ? 0.5 : 1 }}
+            disabled={!onNewScenario || scenarios.length >= 15}
+            style={{ opacity: (!onNewScenario || scenarios.length >= 15) ? 0.5 : 1 }}
           >
             <Plus size={16} />
             <span className="scenario-legend-new-text">New scenario</span>
           </button>
-        </span>
+          {/* Hover submenu: view mode pills */}
+          {viewModes.length > 0 && (
+            <div className="scenario-legend-hover-submenu">
+              {viewModes.map(mode => (
+                <button
+                  key={mode.id}
+                  className={`scenario-legend-view-pill ${mode.isActive() ? 'active' : ''}`}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    mode.toggle();
+                  }}
+                >
+                  {mode.label}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
       )}
     </div>
   );

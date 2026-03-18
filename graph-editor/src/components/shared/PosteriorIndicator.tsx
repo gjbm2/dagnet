@@ -10,6 +10,7 @@
  */
 
 import React, { useCallback, useRef, useState } from 'react';
+import ReactDOM from 'react-dom';
 import { computeQualityTier, qualityTierToColour, qualityTierLabel } from '../../utils/bayesQualityTier';
 import { formatRelativeTime, getFreshnessLevel, freshnessColour, type FreshnessLevel } from '../../utils/freshnessDisplay';
 import type { ProbabilityPosterior, LatencyPosterior } from '../../types';
@@ -36,6 +37,7 @@ export function PosteriorIndicator({ posterior, retrievedAt, theme = 'dark', bad
   const label = qualityTierLabel(tier.tier);
 
   const [showPopover, setShowPopover] = useState(false);
+  const badgeRef = useRef<HTMLSpanElement>(null);
   const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const handleEnter = useCallback(() => {
@@ -48,9 +50,18 @@ export function PosteriorIndicator({ posterior, retrievedAt, theme = 'dark', bad
     hideTimer.current = setTimeout(() => setShowPopover(false), 200);
   }, []);
 
+  // Position popover above the badge using viewport coordinates (portal escapes overflow)
+  const popoverPos = showPopover && badgeRef.current
+    ? (() => {
+        const rect = badgeRef.current!.getBoundingClientRect();
+        return { left: rect.left + rect.width / 2, bottom: window.innerHeight - rect.top + 4 };
+      })()
+    : null;
+
   return (
     <span
       className="posterior-indicator"
+      ref={badgeRef}
       onMouseEnter={handleEnter}
       onMouseLeave={handleLeave}
     >
@@ -60,15 +71,22 @@ export function PosteriorIndicator({ posterior, retrievedAt, theme = 'dark', bad
         {label}
       </span>
 
-      {/* Diagnostic popover */}
-      {showPopover && (
+      {/* Diagnostic popover — portalled to body to escape overflow containers */}
+      {showPopover && popoverPos && ReactDOM.createPortal(
         <div
           className="posterior-popover"
+          style={{
+            position: 'fixed',
+            left: popoverPos.left,
+            bottom: popoverPos.bottom,
+            transform: 'translateX(-50%)',
+          }}
           onMouseEnter={handleEnter}
           onMouseLeave={handleLeave}
         >
           <PosteriorDetails posterior={posterior} retrievedAt={retrievedAt} theme={theme} />
-        </div>
+        </div>,
+        document.body,
       )}
     </span>
   );

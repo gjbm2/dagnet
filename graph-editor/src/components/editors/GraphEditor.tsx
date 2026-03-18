@@ -19,12 +19,13 @@ import { useSidebarState } from '../../hooks/useSidebarState';
 import { useTheme } from '../../contexts/ThemeContext';
 import { getGraphEditorLayout, getGraphEditorLayoutMinimized, PANEL_TO_TAB_ID } from '../../layouts/graphSidebarLayout';
 import { dockGroups } from '../../layouts/defaultLayout';
-import { ViewPreferencesProvider } from '../../contexts/ViewPreferencesContext';
+import { ViewPreferencesProvider, useViewPreferencesContext } from '../../contexts/ViewPreferencesContext';
 import { ScenariosProvider, useScenariosContextOptional } from '../../contexts/ScenariosContext';
 import { useURLScenarios } from '../../hooks/useURLScenarios';
 import { useDashboardMode } from '../../hooks/useDashboardMode';
+import { useViewOverlayMode } from '../../hooks/useViewOverlayMode';
 import { usePutToBaseRequestListener } from '../../hooks/usePutToBaseRequestListener';
-import { Layers, FileText, Wrench, BarChart3 } from 'lucide-react';
+import { Layers, FileText, Wrench, BarChart3, X } from 'lucide-react';
 import { DEFAULT_SIDEBAR_WIDTH, MIN_SIDEBAR_WIDTH } from '../../lib/uiConstants';
 import { SelectorModal } from '../SelectorModal';
 import { ItemBase } from '../../hooks/useItemFiltering';
@@ -116,51 +117,82 @@ function PutToBaseRequestProcessor({ tabId }: { tabId?: string }) {
 }
 
 /**
- * ScenarioLegendWrapper - wrapper component that has access to scenarios context
+ * ScenarioLegendWrapper - wrapper component that has access to scenarios context.
+ *
+ * When a view overlay mode is active (e.g. Forecast Quality), the scenario chips
+ * are replaced by a single view-mode pill with dismiss button.
  */
 function ScenarioLegendWrapper({ tabId }: { tabId: string }) {
   const scenariosContext = useScenariosContextOptional();
   const { operations, tabs } = useTabContext();
   const activeDsl = useGraphStore((s) => s.currentDSL);
   const baseDsl = useGraphStore((s) => (s.graph as any)?.currentQueryDSL ?? null);
-  const { isDashboardMode } = useDashboardMode();
-  
+  const { isDashboardMode, toggleDashboardMode } = useDashboardMode();
+  const { viewOverlayMode, setViewOverlayMode } = useViewOverlayMode();
+  const viewPrefs = useViewPreferencesContext();
+
   if (!scenariosContext || !tabId) {
     return null;
   }
-  
+
+  // Build view mode items for the submenu.
+  const isSankey = viewPrefs?.useSankeyView ?? false;
+  const viewModes = React.useMemo(() => [
+    {
+      id: 'forecast-quality',
+      label: 'Forecast Quality',
+      isActive: () => viewOverlayMode === 'forecast-quality',
+      toggle: () => setViewOverlayMode(viewOverlayMode === 'forecast-quality' ? 'none' : 'forecast-quality'),
+    },
+    {
+      id: 'sankey',
+      label: 'Sankey',
+      isActive: () => isSankey,
+      toggle: () => viewPrefs?.setUseSankeyView(!isSankey),
+    },
+    {
+      id: 'dashboard',
+      label: 'Dashboard',
+      isActive: () => isDashboardMode,
+      toggle: () => toggleDashboardMode({ updateUrl: true }),
+    },
+  ], [viewOverlayMode, setViewOverlayMode, isDashboardMode, toggleDashboardMode, isSankey, viewPrefs]);
+
+  // Forecast quality hides scenario chips; dashboard does not.
+  const hideScenarioChips = viewOverlayMode === 'forecast-quality';
+
   const { scenarios, deleteScenario, currentColour, baseColour } = scenariosContext;
-  
+
   // Get tab's scenario state
   const currentTab = tabs.find(t => t.id === tabId);
   const scenarioState = currentTab?.editorState?.scenarioState;
   const scenarioOrder = scenarioState?.scenarioOrder || [];
   const visibleScenarioIds = scenarioState?.visibleScenarioIds || [];
   const visibleColourOrderIds = scenarioState?.visibleColourOrderIds || [];
-  
+
   const handleToggleVisibility = React.useCallback((scenarioId: string) => {
     operations.toggleScenarioVisibility(tabId, scenarioId);
   }, [operations, tabId]);
-  
+
   const handleCycleVisibilityMode = React.useCallback((scenarioId: string) => {
     operations.cycleScenarioVisibilityMode(tabId, scenarioId);
   }, [operations, tabId]);
-  
+
   const getVisibilityMode = React.useCallback((scenarioId: string) => {
     return operations.getScenarioVisibilityMode(tabId, scenarioId);
   }, [operations, tabId]);
-  
+
   const handleDelete = React.useCallback(async (scenarioId: string) => {
     // No confirmation needed - it's reversible via graph history
     try {
       await deleteScenario(scenarioId);
-      
+
       // Clean up visibility state if this scenario was visible
       const scenarioState = operations.getScenarioState(tabId);
       if (scenarioState?.visibleScenarioIds.includes(scenarioId)) {
         const newVisibleIds = scenarioState.visibleScenarioIds.filter(id => id !== scenarioId);
         const newColourOrderIds = scenarioState.visibleColourOrderIds.filter(id => id !== scenarioId);
-        
+
         await operations.updateTabState(tabId, {
           scenarioState: {
             ...scenarioState,
@@ -173,15 +205,15 @@ function ScenarioLegendWrapper({ tabId }: { tabId: string }) {
       console.error('Failed to delete scenario:', error);
     }
   }, [deleteScenario, operations, tabId]);
-  
+
   const handleNewScenario = React.useCallback(() => {
     // Dispatch event that ScenariosPanel will listen to (creates snapshot everything)
     // Include tabId so only the matching ScenariosPanel responds
     window.dispatchEvent(new CustomEvent('dagnet:newScenario', { detail: { tabId } }));
   }, [tabId]);
-  
+
   const baseVisible = visibleScenarioIds.includes('base');
-  
+
   return (
     <ScenarioLegend
       scenarios={scenarios}
@@ -189,8 +221,6 @@ function ScenarioLegendWrapper({ tabId }: { tabId: string }) {
       visibleScenarioIds={visibleScenarioIds}
       currentColour={currentColour}
       baseColour={baseColour}
-      // Dashboard requires the Current chip even when there are no user scenarios.
-      // Keep legacy behaviour in normal mode to avoid unintended UX changes.
       showCurrent={isDashboardMode ? true : scenarios.length >= 1}
       showBase={baseVisible}
       isDashboardMode={isDashboardMode}
@@ -201,6 +231,8 @@ function ScenarioLegendWrapper({ tabId }: { tabId: string }) {
       getVisibilityMode={getVisibilityMode}
       onDelete={handleDelete}
       onNewScenario={handleNewScenario}
+      viewModes={viewModes}
+      hideScenarioChips={hideScenarioChips}
     />
   );
 }

@@ -162,7 +162,7 @@ export function usePullAll(): UsePullAllResult {
     });
   }, [resolveForceReplace]);
   
-  const handleResolveConflicts = useCallback(async (resolutions: Map<string, 'local' | 'remote' | 'manual'>) => {
+  const handleResolveConflicts = useCallback(async (resolutions: Map<string, import('../components/modals/MergeConflictModal').ConflictResolution>) => {
     const resolvedCount = await conflictResolutionService.applyResolutions(conflicts as any, resolutions);
 
     // Refresh navigator to show updated state
@@ -170,6 +170,48 @@ export function usePullAll(): UsePullAllResult {
 
     if (resolvedCount > 0) {
       toast.success(`Resolved ${resolvedCount} conflict${resolvedCount !== 1 ? 's' : ''}`);
+    }
+
+    // After resolving graph file conflicts, run file→graph cascade.
+    // Param files were updated by the pull but posteriors couldn't propagate
+    // to graph edges while the graph had an unresolved conflict. Now that the
+    // graph is resolved, cascade param data (posteriors etc.) into graph edges.
+    const resolvedGraphFiles = conflicts.filter(
+      c => c.type === 'graph' && resolutions.has(c.fileId) && resolutions.get(c.fileId) !== 'local'
+    );
+    if (resolvedGraphFiles.length > 0) {
+      try {
+        const { getParameterFromFile } = await import('../services/dataOperations/fileToGraphSync');
+        const { getGraphStore } = await import('../contexts/GraphStoreContext');
+        for (const graphConflict of resolvedGraphFiles) {
+          const store = getGraphStore(graphConflict.fileId);
+          if (!store) continue;
+          const graph = store.getState().graph;
+          const currentDSL = store.getState().currentDSL || '';
+          const setGraph = (g: any) => { if (g) store.getState().setGraph(g); };
+          if (!graph || !currentDSL) continue;
+
+          sessionLogService.info('merge', 'POST_RESOLVE_CASCADE',
+            `Re-running file→graph cascade after conflict resolution for ${graphConflict.fileId}`);
+          let cascaded = 0;
+          for (const edge of (graph.edges || [])) {
+            const paramId = edge.p?.id;
+            if (!paramId) continue;
+            await getParameterFromFile({
+              paramId,
+              edgeId: edge.uuid || edge.id,
+              graph: store.getState().graph,
+              setGraph,
+              targetSlice: currentDSL,
+            });
+            cascaded++;
+          }
+          sessionLogService.success('merge', 'POST_RESOLVE_CASCADE_COMPLETE',
+            `Cascaded ${cascaded} params from files to graph after resolution`);
+        }
+      } catch (err) {
+        console.warn('Post-resolution file→graph cascade failed (best-effort):', err);
+      }
     }
 
     // Dismiss the pull operation from the toast — conflicts are resolved.

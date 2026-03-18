@@ -231,14 +231,41 @@ curve and observed data points.
 repo — a rebuild of the nouse-conversion graph specifically for Bayes
 validation. Simple topology for initial model plausibility checks.
 
-**Remaining Phase A overlay work** (not yet built):
-- Read `p.posterior` fields in PropertiesPanel
-- Display HDI band instead of (or alongside) current CI
-- Show provenance badge (bayesian vs point-estimate)
-- Show evidence grade
-- Basic convergence indicator (rhat warning if > 1.1)
+**Phase A overlay — posterior consumption and quality display (built 18-Mar-26):**
+
+- **PosteriorIndicator component** (`shared/PosteriorIndicator.tsx`) —
+  reusable badge + popover showing quality tier, HDI bounds, evidence
+  grade, convergence metrics (rhat, ESS), prior tier, provenance, and
+  fitted_at with freshness colour-coding. Supports both
+  `ProbabilityPosterior` and `LatencyPosterior`. Theme-aware
+  (light/dark).
+- **Quality tier utility** (`utils/bayesQualityTier.ts`) — computes
+  composite quality tier from posterior diagnostics. Two-axis signal:
+  diagnostic health (failed/warning from rhat > 1.1, divergences, low
+  ESS) and evidential depth (good-0 through good-3, cold start, no
+  data). Colour palette: red/amber/pale–saturated green/grey.
+- **Edge-level quality overlay** — `ConversionEdge.tsx` and
+  `EdgeBeads.tsx` colour-code edges by quality tier when
+  `viewOverlayMode === 'forecast-quality'`. Quality tier bead replaces
+  normal probability/latency beads in overlay mode.
+- **AnalysisInfoCard** (`analytics/AnalysisInfoCard.tsx`) — tabbed info
+  panel with Forecast tab showing posterior diagnostics, quality tier,
+  HDI, convergence metrics; Diagnostics tab with freshness indicators.
+  Multi-scenario column support.
+- **localAnalysisComputeService edge info** — `buildEdgeInfoAnalysis()`
+  builds Forecast tab rows from edge posterior (probability and
+  latency), computes quality tier, shows HDI bounds, evidence grade,
+  prior tier, convergence diagnostics, and freshness colour-coding.
+- **Freshness display** (`utils/freshnessDisplay.ts`) — age-based
+  colour-coding for posterior timestamps (current/stale/very-stale).
 - Scalar cascade writes `p.mean`/`p.stdev` — existing edge display
-  works without changes
+  works without changes.
+
+**Remaining Phase A overlay work** (not yet built):
+- Window/cohort divergence indicator — surfaces divergence between
+  observation types where both have posteriors in `posterior.slices`.
+  Deferred: Phase A does not populate `posterior.slices` (activates
+  Phase C).
 
 ### Phase B overlay (Dirichlet branch groups)
 

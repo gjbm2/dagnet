@@ -11,44 +11,45 @@ export interface ConflictFile {
   localContent: string;
   remoteContent: string;
   baseContent: string;
-  mergedContent: string; // Content with conflict markers
+  mergedContent: string;
   hasConflicts: boolean;
 }
+
+export type ConflictResolution = 'merged' | 'local' | 'remote' | 'manual';
 
 interface MergeConflictModalProps {
   isOpen: boolean;
   onClose: () => void;
   conflicts: ConflictFile[];
-  onResolve: (resolutions: Map<string, 'local' | 'remote' | 'manual'>) => Promise<void>;
+  onResolve: (resolutions: Map<string, ConflictResolution>) => Promise<void>;
 }
+
+type DiffView = 'local-merged' | 'local-remote' | 'local-base' | 'remote-base';
 
 /**
  * Merge Conflict Resolution Modal
- * 
- * Shows conflicts from pull operation and lets user choose:
- * - Use local version (keep your changes)
- * - Use remote version (accept incoming changes)
- * - Manual merge (edit to resolve)
+ *
+ * Default view: local vs merged result. The merged content is pre-computed
+ * by the structural merge and preserves non-conflicting changes from both sides.
+ * The user reviews the merged result and accepts it, or falls back to
+ * local/remote/manual if they disagree.
  */
-export function MergeConflictModal({ 
-  isOpen, 
-  onClose, 
-  conflicts, 
-  onResolve 
+export function MergeConflictModal({
+  isOpen,
+  onClose,
+  conflicts,
+  onResolve
 }: MergeConflictModalProps) {
   const [selectedFile, setSelectedFile] = useState<string | null>(null);
-  const [resolutions, setResolutions] = useState<Map<string, 'local' | 'remote' | 'manual'>>(
-    new Map()
-  );
+  const [resolutions, setResolutions] = useState<Map<string, ConflictResolution>>(new Map());
   const [isResolving, setIsResolving] = useState(false);
-  const [diffView, setDiffView] = useState<'local-remote' | 'local-base' | 'remote-base'>('local-remote');
+  const [diffView, setDiffView] = useState<DiffView>('local-merged');
 
-  // Auto-select the first conflict file when conflicts change (e.g. modal reopened
-  // with new data). Also reset resolutions so stale choices don't carry over.
   useEffect(() => {
     if (conflicts.length > 0) {
       setSelectedFile(conflicts[0].fileId);
       setResolutions(new Map());
+      setDiffView('local-merged');
     }
   }, [conflicts]);
 
@@ -57,7 +58,6 @@ export function MergeConflictModal({
   const currentFile = conflicts.find(c => c.fileId === selectedFile);
   const allResolved = conflicts.every(c => resolutions.has(c.fileId));
 
-  // Get language for Monaco based on file type
   const getLanguage = (file: ConflictFile) => {
     if (file.type === 'graph') return 'json';
     if (file.path.endsWith('.yaml') || file.path.endsWith('.yml')) return 'yaml';
@@ -65,38 +65,33 @@ export function MergeConflictModal({
     return 'plaintext';
   };
 
-  // Get left and right content for diff based on current view
   const getDiffContent = (file: ConflictFile) => {
     switch (diffView) {
+      case 'local-merged':
+        return { original: file.localContent, modified: file.mergedContent };
       case 'local-remote':
-        return { original: file.localContent, modified: file.remoteContent, label: 'Local vs Remote' };
+        return { original: file.localContent, modified: file.remoteContent };
       case 'local-base':
-        return { original: file.baseContent, modified: file.localContent, label: 'Base vs Local (Your changes)' };
+        return { original: file.baseContent, modified: file.localContent };
       case 'remote-base':
-        return { original: file.baseContent, modified: file.remoteContent, label: 'Base vs Remote (Incoming)' };
+        return { original: file.baseContent, modified: file.remoteContent };
     }
   };
 
-  const handleResolve = (fileId: string, resolution: 'local' | 'remote' | 'manual') => {
-    const newResolutions = new Map(resolutions);
-    newResolutions.set(fileId, resolution);
-    setResolutions(newResolutions);
+  const handleResolve = (fileId: string, resolution: ConflictResolution) => {
+    const next = new Map(resolutions);
+    next.set(fileId, resolution);
+    setResolutions(next);
   };
 
-  const handleResolveAll = (resolution: 'local' | 'remote') => {
-    const newResolutions = new Map(resolutions);
-    for (const c of conflicts) {
-      newResolutions.set(c.fileId, resolution);
-    }
-    setResolutions(newResolutions);
+  const handleAcceptMergedAll = () => {
+    const next = new Map(resolutions);
+    for (const c of conflicts) next.set(c.fileId, 'merged');
+    setResolutions(next);
   };
 
   const handleApply = async () => {
-    if (!allResolved) {
-      alert('Please resolve all conflicts before applying');
-      return;
-    }
-
+    if (!allResolved) return;
     setIsResolving(true);
     try {
       await onResolve(resolutions);
@@ -119,8 +114,8 @@ export function MergeConflictModal({
         <div className="modal-content">
           <div className="conflict-summary">
             <p>
-              {conflicts.length} file{conflicts.length !== 1 ? 's' : ''} with conflicts.
-              Both you and the remote repository modified the same lines.
+              {conflicts.length} file{conflicts.length !== 1 ? 's' : ''} changed on both sides.
+              Review the proposed merge below — non-conflicting changes from both sides are combined automatically.
             </p>
           </div>
 
@@ -135,9 +130,6 @@ export function MergeConflictModal({
                   onClick={() => setSelectedFile(file.fileId)}
                 >
                   <div className="file-name">{file.fileName}</div>
-                  <div className="conflict-count">
-                    Conflict
-                  </div>
                   {resolutions.has(file.fileId) && (
                     <div className="resolution-badge">
                       {resolutions.get(file.fileId)?.toUpperCase()}
@@ -154,48 +146,55 @@ export function MergeConflictModal({
                   <h3>{currentFile.fileName}</h3>
                   <div className="diff-view-selector">
                     <button
+                      className={`view-button ${diffView === 'local-merged' ? 'active' : ''}`}
+                      onClick={() => setDiffView('local-merged')}
+                      title="Your version vs proposed merge result"
+                    >
+                      Local vs Merged
+                    </button>
+                    <button
                       className={`view-button ${diffView === 'local-remote' ? 'active' : ''}`}
                       onClick={() => setDiffView('local-remote')}
-                      title="Compare your changes with incoming changes"
+                      title="Your version vs incoming remote version"
                     >
-                      Local ↔ Remote
+                      Local vs Remote
                     </button>
                     <button
                       className={`view-button ${diffView === 'local-base' ? 'active' : ''}`}
                       onClick={() => setDiffView('local-base')}
-                      title="See your changes from the original"
+                      title="Original vs your changes"
                     >
-                      Local vs Base
+                      Base vs Local
                     </button>
                     <button
                       className={`view-button ${diffView === 'remote-base' ? 'active' : ''}`}
                       onClick={() => setDiffView('remote-base')}
-                      title="See incoming changes from the original"
+                      title="Original vs incoming changes"
                     >
-                      Remote vs Base
+                      Base vs Remote
                     </button>
                   </div>
                 </div>
-                
+
                 <div className="conflict-options">
+                  <button
+                    className={`option-button primary ${resolutions.get(currentFile.fileId) === 'merged' ? 'selected' : ''}`}
+                    onClick={() => handleResolve(currentFile.fileId, 'merged')}
+                    title="Accept the auto-merged result (combines both sides)"
+                  >
+                    Accept Merged
+                  </button>
                   <button
                     className={`option-button ${resolutions.get(currentFile.fileId) === 'local' ? 'selected' : ''}`}
                     onClick={() => handleResolve(currentFile.fileId, 'local')}
                   >
-                    Keep Local (Your Changes)
+                    Keep Local
                   </button>
                   <button
                     className={`option-button ${resolutions.get(currentFile.fileId) === 'remote' ? 'selected' : ''}`}
                     onClick={() => handleResolve(currentFile.fileId, 'remote')}
                   >
-                    Use Remote (Incoming)
-                  </button>
-                  <button
-                    className={`option-button ${resolutions.get(currentFile.fileId) === 'manual' ? 'selected' : ''}`}
-                    onClick={() => handleResolve(currentFile.fileId, 'manual')}
-                    title="Edit the file manually to resolve conflicts"
-                  >
-                    Manual Merge
+                    Use Remote
                   </button>
                 </div>
 
@@ -219,10 +218,6 @@ export function MergeConflictModal({
                     }}
                   />
                 </div>
-
-                <div className="conflict-summary-info">
-                  <strong>Merge conflict</strong> detected - choose resolution
-                </div>
               </div>
             )}
           </div>
@@ -231,20 +226,12 @@ export function MergeConflictModal({
         <div className="modal-footer">
           <div className="footer-batch-actions">
             <button
-              className="button batch"
-              onClick={() => handleResolveAll('local')}
+              className="button batch primary"
+              onClick={handleAcceptMergedAll}
               disabled={isResolving}
-              title="Resolve all conflicts by keeping your local changes"
+              title="Accept the auto-merged result for all files"
             >
-              Local for all
-            </button>
-            <button
-              className="button batch"
-              onClick={() => handleResolveAll('remote')}
-              disabled={isResolving}
-              title="Resolve all conflicts by accepting incoming changes"
-            >
-              Remote for all
+              Accept Merged for all
             </button>
           </div>
           <div className="footer-main-actions">
@@ -256,7 +243,7 @@ export function MergeConflictModal({
               onClick={handleApply}
               disabled={!allResolved || isResolving}
             >
-              {isResolving ? 'Applying...' : 'Apply Resolutions'}
+              {isResolving ? 'Applying...' : 'Apply'}
             </button>
           </div>
         </div>
@@ -264,4 +251,3 @@ export function MergeConflictModal({
     </div>
   );
 }
-
