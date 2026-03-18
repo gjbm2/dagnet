@@ -1,4 +1,11 @@
 # DagNet Release Notes
+## Version 1.7.26b
+**Released:** 18-Mar-26
+
+Fixes to merge logic
+
+---
+
 ## Version 1.7.24b
 **Released:** 18-Mar-26
 
