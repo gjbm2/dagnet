@@ -265,6 +265,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
   const snapToGuides = viewPrefs?.snapToGuides ?? true;
   const useSankeyView = viewPrefs?.useSankeyView ?? false;
   const showNodeImages = viewPrefs?.showNodeImages ?? false;
+  const viewOverlayMode = viewPrefs?.viewOverlayMode ?? 'none';
   const ts = () => new Date().toISOString();
 
   // Track graph store reference changes to detect loops
@@ -1784,7 +1785,10 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
           );
         })()}
         <ReactFlow
-          className={activeElementTool === 'pan' ? 'rf-pan-mode' : (activeElementTool === 'new-node' || activeElementTool === 'new-postit' || activeElementTool === 'new-container' || activeElementTool === 'new-analysis') ? 'rf-create-mode' : undefined}
+          className={[
+            activeElementTool === 'pan' ? 'rf-pan-mode' : (activeElementTool === 'new-node' || activeElementTool === 'new-postit' || activeElementTool === 'new-container' || activeElementTool === 'new-analysis') ? 'rf-create-mode' : '',
+            viewOverlayMode !== 'none' ? `rf-overlay-${viewOverlayMode}` : '',
+          ].filter(Boolean).join(' ') || undefined}
           nodes={nodes}
           edges={renderEdges}
         onNodesChange={onNodesChange}

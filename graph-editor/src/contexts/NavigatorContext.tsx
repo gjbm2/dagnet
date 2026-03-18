@@ -79,6 +79,18 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
       }
       const savedState = await loadStateFromDB();
       const repoBranch = await loadCredentialsAndUpdateRepo(savedState);
+
+      // If ?branch= is in the URL, use it instead of the saved branch.
+      // This prevents cloning the saved branch (often main) only to
+      // immediately switch — wasteful and slow for large repos.
+      try {
+        const urlBranch = new URL(window.location.href).searchParams.get('branch');
+        if (urlBranch && repoBranch?.repo && urlBranch !== repoBranch.branch) {
+          console.log(`[NavigatorContext] URL ?branch=${urlBranch} overrides saved branch ${repoBranch.branch}`);
+          repoBranch.branch = urlBranch;
+        }
+      } catch { /* best effort */ }
+
       // Policy: NO remote sync on init unless this is the first time the repo/branch is being initialised locally.
       // We still populate the UI from IndexedDB immediately.
       if (repoBranch?.repo && repoBranch?.branch) {

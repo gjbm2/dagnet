@@ -422,18 +422,51 @@ concerns.
 
 ### Implementation work remaining for Phase A
 
-The design is complete. The async infrastructure is built end-to-end.
-What remains:
+**Progress (18-Mar-26)**:
 
-1. **Schema revision** — update TS types, Python Pydantic models, and
-   YAML schemas to match the doc 4 / doc 6 Layer 3 design:
-   `posterior.slices` map, top-level alpha/beta as window posterior,
-   `_model_state`, `fit_history` per-slice snapshots, DSL
-   canonicalisation validation. See Async roundtrip §Step 1.
+1. ~~**Compiler Phase A**~~: **Done 18-Mar-26.** Full pipeline implemented
+   in `bayes/compiler/` (topology → evidence → model → inference).
+   Unified `bayes/worker.py` replaces duplicated placeholder code in
+   both Modal (`bayes/app.py`) and local (`graph-editor/lib/bayes_worker.py`,
+   now deleted). Placeholder mode preserved via `settings.placeholder`
+   flag for E2E roundtrip test isolation.
 
-2. **Compiler Phase A** — the core implementation work: graph-to-IR
-   compiler, evidence binder, PyMC model materialisation, inference
-   execution, posterior summarisation, quality gates. See doc 8.
+2. ~~**fit_history accumulation**~~: **Done 18-Mar-26.** Webhook handler
+   (`api/bayes-webhook.ts`) now appends a slim snapshot of the previous
+   posterior to `fit_history[]` before overwriting with the new posterior.
+   Retention capped at 20 entries (most recent kept). Both probability
+   and latency posteriors accumulate independently.
+
+3. **Real graph validation**: **18-Mar-26.** Compiler ran successfully
+   on `bayes-test-gm-rebuild` (9 nodes, 8 edges, 4 param files with
+   daily arrays). All 4 edges with data produced sensible posteriors
+   matching analytic values. Convergence: 3 of 4 edges fully converged
+   (r-hat < 1.01, ESS > 2000); 1 edge marginal (r-hat 1.014, ESS 391).
+   **323 divergences** from hierarchical logit parameterisation with
+   very high-n data (100k–580k obs). Requires non-centred
+   reparameterisation — see known limitation below.
+
+4. **Schema revision** — TS types, Pydantic models, and YAML schemas
+   already have `posterior.slices`, `_model_state`, and `fit_history`
+   fields defined. The compiler does not populate `slices` or
+   `_model_state` in Phase A (correctly — no slice pooling yet). No
+   blocking work remains; these activate in Phase C.
+
+### Known limitations (implementation will address when relevant)
+
+**Divergences with high-n data (identified and fixed 18-Mar-26)**
+
+The hierarchical p_base/p_window/p_cohort logit parameterisation
+initially produced ~680 divergent transitions on the test graph
+(100k–580k observations). Root cause: centred parameterisation
+creates funnel geometry when the posterior is concentrated. Fixed
+with non-centred parameterisation
+(`logit_p_window = logit_p_base + ε * τ_window` where
+`ε ~ Normal(0, 1)`) combined with `target_accept=0.95`. Result:
+divergences reduced from 680 → 73, all edges converge (r-hat < 1.01,
+min ESS 911). The 73 remaining divergences are on `registered-to-success`
+which has latency coupling through a chain — acceptable for Phase A,
+expected to improve in Phase D when latency becomes latent.
 
 ### Known limitations (implementation will address when relevant)
 
@@ -456,6 +489,67 @@ persisted in snapshot DB). For the analytic pipeline,
 `_resolve_completeness_params()` falls back to edge onset when
 `path_delta` is absent. Proper `path_delta` accumulation through
 topo DP comes with Semantic Foundation Phase 2 (doc 1 §15.3.4).
+
+**Browser-closed job rehydration**
+
+If the user closes the browser while a Bayes fit is running on Modal,
+the FE loses the job ID and polling state. On next boot, the app must
+detect in-flight or recently-completed jobs and rehydrate: check for
+pending webhook commits, pull any results that landed while offline,
+and surface the outcome to the user. Without this, the job completes
+silently and the user never sees the posteriors until a manual pull.
+
+**Cross-graph prior transfer (superstructure guidance)**
+
+New graphs with fine-grained structure (e.g.
+`A→a1→a2→a3→B→b1→...→C→...→D`) often have sparse data on their
+new edges. An existing graph with coarser structure (`A→B→C→D`) may
+have rich data and well-fitted posteriors. The old graph's posteriors
+are informative about the new graph's aggregate behaviour — this is
+real observed data from a related system, not just an uninformative
+prior.
+
+The user would specify a **superstructure mapping** on the new graph:
+`new_A ↔ old_A`, `new_B ↔ old_B`, etc., with a strength parameter
+controlling how much influence the old data carries. The compiler
+would then:
+
+1. Identify the composed path from new_A-descendants to
+   new_B-descendants in the new graph
+2. Convert the old `A→B` posterior to **pseudo-observations** at the
+   path level: `n_pseudo = γ(α+β)`, `k_pseudo = γα` where γ ∈ (0,1]
+   is the strength discount
+3. Add these pseudo-observations as an additional likelihood term
+   constraining the composed path probability
+
+This handles forking and recombination naturally — the constraint is
+on the aggregate path, not individual edges. The old graph is
+**read-only** — its params are consumed as evidence but never
+overwritten.
+
+**Why encoded pseudo-observations rather than reading old param files
+directly**: the old graph has different topology, edge UUIDs, and
+queries. The evidence binder wouldn't know what to do with foreign
+param files. Converting posteriors to pseudo-observations decouples
+the old structure from the new and lets the compiler treat them as
+additional data at the path level.
+
+The `fit_guidance` block (doc 9 §5.6 Level 3) is the natural home
+for specifying the superstructure mapping and strength parameter.
+Not needed for Phase A (edges with sufficient direct data) — becomes
+valuable when building new graphs or restructuring existing ones.
+
+**Model variable precedence (deferred)**
+
+When both analytic (`latency.mu`/`sigma`) and Bayesian
+(`posterior.mu_mean`/`sigma_mean`) params exist for an edge, which
+set is authoritative for derived quantities (completeness, forecast
+blend, path composition)? For now, analytic values remain authoritative
+— Bayesian posteriors are inspectable alongside but do not override.
+The Bayes webhook does NOT overwrite `latency.mu`/`latency.sigma`.
+This decision needs revisiting once Bayes posteriors are validated and
+trusted, and will require a provenance indicator so the active model
+source is always inspectable.
 
 **Downstream conditional data**: the data pipeline only fetches
 condition-sliced observations on the conditional params themselves, not

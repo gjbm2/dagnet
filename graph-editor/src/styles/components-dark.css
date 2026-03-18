@@ -2384,3 +2384,18 @@
 .hover-analysis-preview:hover .hover-analysis-preview-tooltip {
   opacity: 1;
 }
+
+/* ============================================================
+   FORECAST QUALITY OVERLAY — node desaturation
+   ============================================================ */
+
+.rf-overlay-forecast-quality .react-flow__node .conversion-node {
+  filter: saturate(0.3) opacity(0.7);
+  transition: filter 0.3s ease-in-out;
+}
+
+/* Keep selected/hovered nodes full strength */
+.rf-overlay-forecast-quality .react-flow__node.selected .conversion-node,
+.rf-overlay-forecast-quality .react-flow__node:hover .conversion-node {
+  filter: saturate(0.6) opacity(0.85);
+}

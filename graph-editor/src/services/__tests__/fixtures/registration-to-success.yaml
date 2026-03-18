@@ -1,0 +1,191 @@
+id: registration-to-success
+name: registration-to-success
+type: probability
+query: from(switch-registered).to(switch-success)
+values:
+- sliceDSL: window(28-Oct-25:17-Mar-26).context(channel:paid-search)
+  n: 16
+  k: 15
+  mean: 0.719
+  query_signature: '{"c":"3f802d3ac7a1b5806a1d3b7f303dcabc46983edc490fe40b65aa190ab7356a25","x":{"channel":"a86cf8e8c52877d30238a027533c9826676fb50704b5fe0c13f22b41e795e311"}}'
+  n_daily:
+  - 0
+  - 6
+  - 3
+  - 7
+  - 0
+  k_daily:
+  - 0
+  - 5
+  - 3
+  - 7
+  - 0
+  median_lag_days:
+  - null
+  - 6.5
+  - 6.5
+  - 6.5
+  - null
+  mean_lag_days:
+  - null
+  - 6.5
+  - 6.5
+  - 6.5
+  - null
+  dates:
+  - 28-Oct-25
+  - 29-Oct-25
+  - 30-Oct-25
+  - 31-Oct-25
+  - 1-Nov-25
+- sliceDSL: cohort(household-created,28-Oct-25:17-Mar-26).context(channel:paid-search)
+  n: 6
+  k: 6
+  mean: 0.651
+  query_signature: '{"c":"235c877b01e511458a6e61fcaa732212e1f1ea3b93a3e56708188a6c0c0a151f","x":{"channel":"a86cf8e8c52877d30238a027533c9826676fb50704b5fe0c13f22b41e795e311"}}'
+  n_daily:
+  - 2
+  - 1
+  - 1
+  - 0
+  - 2
+  k_daily:
+  - 2
+  - 1
+  - 1
+  - 0
+  - 2
+  median_lag_days:
+  - 6.5
+  - 6.5
+  - 6.5
+  - null
+  - 6.5
+  mean_lag_days:
+  - 6.5
+  - 6.5
+  - 6.5
+  - null
+  - 6.5
+  dates:
+  - 28-Oct-25
+  - 29-Oct-25
+  - 30-Oct-25
+  - 31-Oct-25
+  - 1-Nov-25
+- sliceDSL: cohort(household-created,28-Oct-25:17-Mar-26).context(channel:influencer)
+  n: 0
+  k: 0
+  mean: 0.654
+  query_signature: '{"c":"235c877b01e511458a6e61fcaa732212e1f1ea3b93a3e56708188a6c0c0a151f","x":{"channel":"a86cf8e8c52877d30238a027533c9826676fb50704b5fe0c13f22b41e795e311"}}'
+  n_daily:
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  k_daily:
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  median_lag_days:
+  - null
+  - null
+  - null
+  - null
+  - null
+  mean_lag_days:
+  - null
+  - null
+  - null
+  - null
+  - null
+  dates:
+  - 28-Oct-25
+  - 29-Oct-25
+  - 30-Oct-25
+  - 31-Oct-25
+  - 1-Nov-25
+- sliceDSL: cohort(household-created,28-Oct-25:17-Mar-26).context(channel:paid-social)
+  n: 8
+  k: 3
+  mean: 0.426
+  query_signature: '{"c":"235c877b01e511458a6e61fcaa732212e1f1ea3b93a3e56708188a6c0c0a151f","x":{"channel":"a86cf8e8c52877d30238a027533c9826676fb50704b5fe0c13f22b41e795e311"}}'
+  n_daily:
+  - 2
+  - 1
+  - 2
+  - 2
+  - 1
+  k_daily:
+  - 1
+  - 0
+  - 1
+  - 1
+  - 0
+  median_lag_days:
+  - 6.5
+  - null
+  - 6.5
+  - 6.5
+  - null
+  mean_lag_days:
+  - 6.5
+  - null
+  - 6.5
+  - 6.5
+  - null
+  dates:
+  - 28-Oct-25
+  - 29-Oct-25
+  - 30-Oct-25
+  - 31-Oct-25
+  - 1-Nov-25
+- sliceDSL: cohort(household-created,28-Oct-25:17-Mar-26).context(channel:other)
+  n: 62
+  k: 45
+  mean: 0.664
+  query_signature: '{"c":"235c877b01e511458a6e61fcaa732212e1f1ea3b93a3e56708188a6c0c0a151f","x":{"channel":"a86cf8e8c52877d30238a027533c9826676fb50704b5fe0c13f22b41e795e311"}}'
+  n_daily:
+  - 28
+  - 1
+  - 7
+  - 5
+  - 21
+  k_daily:
+  - 19
+  - 0
+  - 5
+  - 4
+  - 17
+  median_lag_days:
+  - 6.5
+  - null
+  - 6.5
+  - 6.5
+  - 6.5
+  mean_lag_days:
+  - 6.5
+  - null
+  - 6.5
+  - 6.5
+  - 6.5
+  dates:
+  - 28-Oct-25
+  - 29-Oct-25
+  - 30-Oct-25
+  - 31-Oct-25
+  - 1-Nov-25
+latency:
+  latency_parameter: true
+  anchor_node_id: household-created
+  t95: 13.14
+  path_t95: 51.23
+  onset_delta_days: 5.3
+  mu: 0.6801548577678405
+  sigma: 0.7952388499730212
+  median_lag_days: 6.5
+  path_mu: 2.734994508078487
+  path_sigma: 0.31415586693603237

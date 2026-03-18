@@ -197,6 +197,10 @@ properties:
                   type: number
                 rhat:
                   type: number
+                divergences:
+                  type: integer
+                  minimum: 0
+                  description: "Divergent transitions at that point"
               additionalProperties: false
         additionalProperties: false
     additionalProperties: false
@@ -254,6 +258,17 @@ properties:
       provenance:
         type: string
         enum: [bayesian, pooled-fallback, point-estimate, skipped]
+      divergences:
+        type: integer
+        minimum: 0
+        description: "Count of MCMC divergent transitions"
+      prior_tier:
+        type: string
+        enum: [direct_history, trajectory_calibrated, inherited, sibling_pooled, uninformative]
+        description: "Prior cascade tier used"
+      surprise_z:
+        type: number
+        description: "Trajectory surprise z-score (null if < 3 fit_history entries)"
       fit_history:
         type: array
         description: "Rolling array of recent posterior snapshots"
@@ -272,7 +287,56 @@ properties:
               type: number
             rhat:
               type: number
+            divergences:
+              type: integer
+              minimum: 0
+            slices:
+              type: object
+              description: "Per-slice snapshots keyed by slice DSL"
+              additionalProperties:
+                type: object
+                properties:
+                  alpha:
+                    type: number
+                  beta:
+                    type: number
+                additionalProperties: false
           additionalProperties: false
+      slices:
+        type: object
+        description: "Per-slice posteriors keyed by slice DSL string"
+        additionalProperties:
+          type: object
+          properties:
+            alpha:
+              type: number
+              minimum: 0
+            beta:
+              type: number
+              minimum: 0
+            hdi_lower:
+              type: number
+              minimum: 0
+              maximum: 1
+            hdi_upper:
+              type: number
+              minimum: 0
+              maximum: 1
+            ess:
+              type: number
+              minimum: 0
+            rhat:
+              type: number
+              minimum: 0
+            divergences:
+              type: integer
+              minimum: 0
+          additionalProperties: false
+      _model_state:
+        type: object
+        description: "Model-internal parameters for subsequent runs (no consumption semantics)"
+        additionalProperties:
+          type: number
     additionalProperties: false
 
   force_replace_at_ms:

@@ -12,6 +12,8 @@ import { getConditionalColour, getConditionalProbabilityColour, isConditionalEdg
 import { computeEffectiveEdgeProbability, getEdgeWhatIfDisplay } from '@/lib/whatIf';
 import { getVisitedNodeIds } from '@/lib/queryDSL';
 import { calculateConfidenceBounds } from '@/utils/confidenceIntervals';
+import { computeQualityTier, qualityTierToColour } from '@/utils/bayesQualityTier';
+import type { ProbabilityPosterior } from '@/types';
 import { useEdgeBeads, EdgeBeadsRenderer } from './EdgeBeads';
 import { useDecorationVisibility } from '../GraphCanvas';
 import { useTheme } from '../../contexts/ThemeContext';
@@ -650,9 +652,25 @@ export default function ConversionEdge({
     } : { r: 153, g: 153, b: 153 }; // fallback to gray
   };
   
+  // Forecast quality overlay: compute quality tier colour from posterior
+  const viewOverlayMode = viewPrefs?.viewOverlayMode ?? 'none';
+  const qualityOverlayColour = useMemo(() => {
+    if (viewOverlayMode !== 'forecast-quality') return null;
+    const posterior = fullEdge?.p?.posterior as ProbabilityPosterior | undefined;
+    const tier = computeQualityTier(posterior);
+    return qualityTierToColour(tier.tier, dark ? 'dark' : 'light');
+  }, [viewOverlayMode, fullEdge?.p?.posterior, dark]);
+
   // Edge colour logic: highlight/selection shading
   // Case/conditional edge colours now shown as markers, not full edge colouring
   const edgeColour = useMemo(() => {
+    // Forecast quality overlay supersedes scenario colour
+    if (qualityOverlayColour) {
+      // Still allow selection/highlight emphasis on top of quality colour
+      if (effectiveSelected) return dark ? '#eee' : '#222';
+      return qualityOverlayColour;
+    }
+
     // Highlight/selection direction: blend toward black (light mode) or white (dark mode)
     const emphasisTarget = dark ? { r: 255, g: 255, b: 255 } : { r: 0, g: 0, b: 0 };
 
@@ -665,7 +683,7 @@ export default function ConversionEdge({
       // - Single node (isSingleNodeHighlight=true): 30% fading with depth
       // - Multi-node topological (isSingleNodeHighlight=false): 50% solid
       let intensity: number;
-      
+
       if (data.isSingleNodeHighlight) {
         // Single node selection: Start at 30%, fade by 10% per hop
         const depth = data.highlightDepth || 0;
@@ -674,21 +692,21 @@ export default function ConversionEdge({
         // Multi-node topological selection: 50% solid
         intensity = 0.5;
       }
-      
+
       // Blend scenario colour toward emphasis target
       const baseColourHex = data?.scenarioColour || '#b3b3b3';
       const baseColourRgb = hexToRgb(baseColourHex);
-      
+
       const blendedR = Math.round(emphasisTarget.r * intensity + baseColourRgb.r * (1 - intensity));
       const blendedG = Math.round(emphasisTarget.g * intensity + baseColourRgb.g * (1 - intensity));
       const blendedB = Math.round(emphasisTarget.b * intensity + baseColourRgb.b * (1 - intensity));
-      
+
       return `rgb(${blendedR}, ${blendedG}, ${blendedB})`;
     }
-    
+
     // Default: use scenario colour
     return data?.scenarioColour || '#b3b3b3';
-  }, [effectiveSelected, data?.isHighlighted, data?.highlightDepth, data?.isSingleNodeHighlight, data?.scenarioColour, dark]);
+  }, [effectiveSelected, data?.isHighlighted, data?.highlightDepth, data?.isSingleNodeHighlight, data?.scenarioColour, dark, qualityOverlayColour]);
   
   const getEdgeColour = () => edgeColour;
 

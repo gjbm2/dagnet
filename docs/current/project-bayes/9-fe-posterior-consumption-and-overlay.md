@@ -207,14 +207,38 @@ This is a **gradual migration**, not a rip-and-replace:
 
 ### Phase A overlay (Beta posteriors exist)
 
-Minimum viable FE changes:
+**Minimum viable validation surface (built 17-Mar-26):**
+
+- **Data > Run Bayesian Fit** menu item in `DataMenu.tsx` — promotes
+  the dev-only `DevBayesTrigger` to a proper Data menu entry. Uses
+  `useBayesTrigger` hook with stored compute mode preference. Disabled
+  when a fit is already in flight or no graph tab is active.
+- **Bayesian model curve on cohort maturity chart** — when
+  `p.latency.posterior` exists on an edge, `api_handlers.py` generates
+  a second `model_curve_bayes` alongside the existing analytic
+  `model_curve`. `cohortComparisonBuilders.ts` renders it as a blue
+  dashed line (z=11, above the analytic dotted grey line). Both curves
+  use the same `forecast_mean` so they're directly comparable.
+  Propagated through `graphComputeClient.ts` via `bayesCurve` /
+  `bayesParams` on the `model_curves` metadata map.
+
+This enables the core Phase A validation workflow: run a Bayes fit,
+pull the updated parameter files, open cohort maturity analysis, and
+visually compare the Bayesian model curve against the analytic model
+curve and observed data points.
+
+**Test graph**: `bayes-gm-rebuild-jan-26` feature branch in the data
+repo — a rebuild of the nouse-conversion graph specifically for Bayes
+validation. Simple topology for initial model plausibility checks.
+
+**Remaining Phase A overlay work** (not yet built):
 - Read `p.posterior` fields in PropertiesPanel
 - Display HDI band instead of (or alongside) current CI
 - Show provenance badge (bayesian vs point-estimate)
 - Show evidence grade
 - Basic convergence indicator (rhat warning if > 1.1)
-- No new chart types needed — existing edge display works because
-  scalar cascade writes `p.mean`/`p.stdev`
+- Scalar cascade writes `p.mean`/`p.stdev` — existing edge display
+  works without changes
 
 ### Phase B overlay (Dirichlet branch groups)
 

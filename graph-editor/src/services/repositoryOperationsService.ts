@@ -391,8 +391,8 @@ class RepositoryOperationsService {
 
       (fileRegistry as any).notifyListeners(fileId, file);
 
-      window.dispatchEvent(new CustomEvent('dagnet:fileDirtyChanged', { 
-        detail: { fileId, isDirty: false } 
+      window.dispatchEvent(new CustomEvent('dagnet:fileDirtyChanged', {
+        detail: { fileId, isDirty: false }
       }));
 
       sessionLogService.success('git', 'GIT_PULL_FILE', `Pulled ${fileId} from remote`);

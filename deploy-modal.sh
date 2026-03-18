@@ -20,10 +20,15 @@ print_yellow() { printf '\033[1;33m%s\033[0m\n' "$*"; }
 
 cd "$(dirname "$0")"
 
+# Activate venv so modal CLI is on PATH
+if [[ -f graph-editor/venv/bin/activate ]]; then
+  source graph-editor/venv/bin/activate
+fi
+
 # Pre-flight checks
 if ! command -v modal &>/dev/null; then
   print_red "Error: 'modal' CLI not found."
-  echo "Install: pip install modal"
+  echo "Install: pip install modal (inside graph-editor/venv)"
   echo "Auth:    modal token set"
   exit 1
 fi

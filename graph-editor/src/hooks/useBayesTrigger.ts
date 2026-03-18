@@ -10,8 +10,8 @@ import { useNavigatorContext } from '../contexts/NavigatorContext';
 import { useTabContext, fileRegistry } from '../contexts/TabContext';
 import { credentialsManager } from '../lib/credentials';
 import { operationRegistryService } from '../services/operationRegistryService';
-import { repositoryOperationsService } from '../services/repositoryOperationsService';
 import { sessionLogService } from '../services/sessionLogService';
+import { startNonBlockingPull } from '../services/nonBlockingPullService';
 import {
   fetchBayesConfig,
   encryptCallbackToken,
@@ -83,8 +83,13 @@ export function useBayesTrigger(computeMode: BayesComputeMode = 'local') {
 
     try {
       // 1. Fetch config
+      console.log('[useBayesTrigger] trigger() called, mode:', computeMode);
       sessionLogService.info('bayes', 'BAYES_DEV_TRIGGER', 'Dev harness: starting Bayes roundtrip');
       const config = await fetchBayesConfig();
+      console.log('[useBayesTrigger] config fetched, webhook_url:', config.webhook_url, 'submit_url:', isLocal ? LOCAL_SUBMIT_URL : config.modal_submit_url);
+
+      // 2. Load credentials
+      console.log('[useBayesTrigger] loading credentials, selectedRepo:', navState.selectedRepo);
 
       // 2. Load credentials
       const credsResult = await credentialsManager.loadCredentials();
@@ -190,13 +195,16 @@ export function useBayesTrigger(computeMode: BayesComputeMode = 'local') {
         graph_snapshot: graphFile.data,
         parameters_index: parametersIndex?.data ?? {},
         parameter_files: parameterFiles,
-        settings: {},
+        settings: {
+          ...(new URLSearchParams(window.location.search).has('placeholder') ? { placeholder: true } : {}),
+        },
         callback_token: callbackToken,
         db_connection: config.db_connection,
         webhook_url: webhookUrl,
       }, submitUrl);
 
 
+      console.log('[useBayesTrigger] submitted, jobId:', jobId);
       const fitStartedAt = Date.now();
       jobIdRef.current = jobId;
       setState(s => ({ ...s, status: 'running', jobId }));
@@ -250,24 +258,62 @@ export function useBayesTrigger(computeMode: BayesComputeMode = 'local') {
         const timingSummary = timings ? ` | neon=${timings.neon_ms}ms fitting=${timings.fitting_ms}ms total=${timings.total_ms}ms` : '';
         sessionLogService.success('bayes', 'BAYES_DEV_COMPLETE', `Job ${jobId} complete (v${ver}${timingSummary})`, JSON.stringify(finalStatus.result, null, 2), { jobId });
 
-        // 10. Auto-pull the updated graph file so FE reflects the committed changes
-        try {
-          operationRegistryService.setLabel(opId, `Bayes ${modeLabel}: pulling updated ${graphLabel}…`);
-          // Re-set status to 'complete' before completing the operation below
+        // 10. Non-blocking pull: countdown → 3-way merge → cascade.
+        // Uses the same infrastructure as daily automation pulls:
+        // - Shows countdown in progress indicator (user can cancel)
+        // - 3-way merge preserves local changes (doesn't force-overwrite)
+        // - Surfaces conflicts via toast with "Resolve" action
+        // - On success: triggers "Get All from Files" to cascade posteriors
+        //   from param files to graph edges
+        {
           const repoName = gitCred.name;
           const branchName = navState.selectedBranch || 'main';
-          const pullResult = await repositoryOperationsService.pullFile(
-            activeTab.fileId,
-            repoName,
-            branchName,
-          );
-          if (pullResult.success) {
-            sessionLogService.success('bayes', 'BAYES_PULL_COMPLETE', `Pulled updated ${graphLabel} after Bayes fit`);
-          } else {
-            sessionLogService.warning('bayes', 'BAYES_PULL_WARNING', `Pull after Bayes fit: ${pullResult.message}`);
-          }
-        } catch (pullErr: any) {
-          sessionLogService.warning('bayes', 'BAYES_PULL_ERROR', `Auto-pull failed: ${pullErr.message}. Manual pull needed.`);
+
+          startNonBlockingPull({
+            repository: repoName,
+            branch: branchName,
+            countdownSeconds: 5,
+            onComplete: async () => {
+              // After successful pull, cascade param file data → graph edges.
+              // This propagates posteriors from IDB param files to graph edges
+              // via the same file-to-graph sync used by "Get from File".
+              sessionLogService.info('bayes', 'BAYES_POST_PULL_CASCADE',
+                'Cascading posteriors from param files to graph edges');
+              try {
+                const { getParameterFromFile } = await import('../services/dataOperations/fileToGraphSync');
+                const { getGraphStore } = await import('../contexts/GraphStoreContext');
+                const store = getGraphStore(activeTab.fileId);
+                if (!store) throw new Error('No graph store');
+                const currentDSL = store.getState().currentDSL || '';
+                const setGraph = (g: any) => { if (g) store.getState().setGraph(g); };
+                const graph = store.getState().graph;
+                let cascaded = 0;
+                for (const edge of (graph?.edges || [])) {
+                  const paramId = edge.p?.id;
+                  if (!paramId) continue;
+                  await getParameterFromFile({
+                    paramId,
+                    edgeId: edge.uuid || edge.id,
+                    graph: store.getState().graph,
+                    setGraph,
+                    targetSlice: currentDSL,
+                  });
+                  cascaded++;
+                }
+                sessionLogService.success('bayes', 'BAYES_CASCADE_COMPLETE',
+                  `Cascaded ${cascaded} params from files to graph`);
+              } catch (e: any) {
+                sessionLogService.warning('bayes', 'BAYES_CASCADE_ERROR',
+                  `Post-pull cascade failed: ${e.message}. Use Data > Get All from Files manually.`);
+              }
+            },
+            onConflicts: (conflicts, pullOpId) => {
+              // Surface conflicts — user resolves via the merge modal
+              window.dispatchEvent(new CustomEvent('dagnet:showMergeConflicts', {
+                detail: { conflicts, operationId: pullOpId },
+              }));
+            },
+          });
         }
       } else {
         sessionLogService.error('bayes', 'BAYES_DEV_FAILED', `Job ${jobId} failed: ${finalStatus.error}`, undefined, { jobId });

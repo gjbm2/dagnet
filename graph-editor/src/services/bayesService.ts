@@ -10,6 +10,11 @@
 
 import { sessionLogService } from './sessionLogService';
 
+// Environment-aware base URL — same pattern as graphComputeClient
+const API_BASE_URL = import.meta.env.DEV
+  ? (import.meta.env.VITE_PYTHON_API_URL || 'http://localhost:9000')
+  : '';
+
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -65,10 +70,10 @@ let _configCache: BayesConfig | null = null;
 export async function fetchBayesConfig(): Promise<BayesConfig> {
   if (_configCache) return _configCache;
 
-  const resp = await fetch('/api/bayes/config');
+  const resp = await fetch(`${API_BASE_URL}/api/bayes/config`);
   if (!resp.ok) {
     const body = await resp.json().catch(() => ({}));
-    throw new Error(`Failed to fetch Bayes config: ${resp.status} ${body.error || ''}`);
+    throw new Error(`Failed to fetch Bayes config: ${resp.status} ${body.error || body.detail || ''}`);
   }
 
   _configCache = await resp.json();

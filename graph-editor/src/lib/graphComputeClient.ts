@@ -515,16 +515,22 @@ export class GraphComputeClient {
       // Collect model CDF curves from backend results, keyed by subject_id.
       // When multiple epochs collapse into one subject, keep the longest curve
       // (the gap epoch typically has a short or empty curve).
-      const modelCurveBySubject = new Map<string, { curve: Array<{ tau_days: number; model_rate: number }>; params: Record<string, number> }>();
+      const modelCurveBySubject = new Map<string, { curve: Array<{ tau_days: number; model_rate: number }>; params: Record<string, number>; bayesCurve?: Array<{ tau_days: number; model_rate: number }>; bayesParams?: Record<string, number> }>();
       for (const b of blocks) {
         const r = b.result;
         if (r?.model_curve && Array.isArray(r.model_curve) && r.model_curve.length > 0) {
           const existing = modelCurveBySubject.get(b.subject_id);
           if (!existing || r.model_curve.length > existing.curve.length) {
-            modelCurveBySubject.set(b.subject_id, {
+            const entry: any = {
               curve: r.model_curve,
               params: r.model_curve_params || {},
-            });
+            };
+            // Bayesian posterior overlay curve (if posteriors exist on this edge)
+            if (r?.model_curve_bayes && Array.isArray(r.model_curve_bayes) && r.model_curve_bayes.length > 0) {
+              entry.bayesCurve = r.model_curve_bayes;
+              entry.bayesParams = r.model_curve_bayes_params || {};
+            }
+            modelCurveBySubject.set(b.subject_id, entry);
           }
         }
       }

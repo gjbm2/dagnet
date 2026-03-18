@@ -323,6 +323,16 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
         path_delta = latency.get('path_delta')
         if isinstance(path_delta, (int, float)) and math.isfinite(path_delta) and path_delta >= 0:
             result['path_delta'] = float(path_delta)
+        # Bayesian latency posterior — if present, extract mu_mean/sigma_mean/onset
+        lat_posterior = latency.get('posterior') or {}
+        bayes_mu = lat_posterior.get('mu_mean')
+        bayes_sigma = lat_posterior.get('sigma_mean')
+        if (isinstance(bayes_mu, (int, float)) and math.isfinite(bayes_mu)
+                and isinstance(bayes_sigma, (int, float)) and math.isfinite(bayes_sigma) and bayes_sigma > 0):
+            result['bayes_mu'] = float(bayes_mu)
+            result['bayes_sigma'] = float(bayes_sigma)
+            bayes_onset = lat_posterior.get('onset_delta_days')
+            result['bayes_onset'] = float(bayes_onset) if isinstance(bayes_onset, (int, float)) and math.isfinite(bayes_onset) else 0.0
         return result
 
     def _append_synthetic_cohort_maturity_frames(args: Dict[str, Any]) -> None:
@@ -743,6 +753,30 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
                             'forecast_mean': forecast_mean,
                             'mode': cdf_mode,
                         }
+
+                        # Bayesian posterior overlay — second model curve if posteriors exist
+                        if 'bayes_mu' in model_params:
+                            bayes_curve = []
+                            for tau in range(0, axis_tau_max + 1):
+                                bc = compute_completeness(
+                                    float(tau),
+                                    model_params['bayes_mu'],
+                                    model_params['bayes_sigma'],
+                                    model_params['bayes_onset'],
+                                )
+                                bc = max(0.0, min(1.0, float(bc)))
+                                bayes_curve.append({
+                                    'tau_days': tau,
+                                    'model_rate': round(forecast_mean * bc, 8),
+                                })
+                            result['model_curve_bayes'] = bayes_curve
+                            result['model_curve_bayes_params'] = {
+                                'mu': model_params['bayes_mu'],
+                                'sigma': model_params['bayes_sigma'],
+                                'onset_delta_days': model_params['bayes_onset'],
+                                'forecast_mean': forecast_mean,
+                                'mode': 'bayesian',
+                            }
 
             per_subject_results.append({
                 "subject_id": subj.get('subject_id'),

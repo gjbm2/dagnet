@@ -169,10 +169,14 @@ async function readGitHubFile(
  *
  * Updates:
  *   - values[0].mean, values[0].stdev (from probability posterior)
- *   - latency.mu, latency.sigma, latency.model_trained_at (from latency posterior)
+ *   - latency.model_trained_at (timestamp only — does NOT overwrite
+ *     latency.mu/latency.sigma, which remain as analytic LAG pass values)
  *   - posterior sub-object on the parameter root (probability)
  *   - latency.posterior sub-object (latency)
  */
+/** Default retention settings for fit_history. */
+const FIT_HISTORY_MAX_ENTRIES = 20;
+
 function mergePosteriorsIntoParam(
   paramDoc: any,
   edge: EdgePosterior,
@@ -188,7 +192,36 @@ function mergePosteriorsIntoParam(
       paramDoc.values[0].stdev = prob.stdev;
     }
 
-    // Set posterior sub-object
+    // Append to fit_history BEFORE overwriting posterior (so we capture
+    // the previous run's snapshot, not the current one being written).
+    // The first run has no previous posterior, so fit_history starts empty
+    // and grows from the second run onward.
+    const existingPosterior = paramDoc.posterior;
+    if (existingPosterior?.alpha != null && existingPosterior?.beta != null) {
+      if (!Array.isArray(paramDoc.posterior.fit_history)) {
+        paramDoc.posterior.fit_history = [];
+      }
+      paramDoc.posterior.fit_history.push({
+        fitted_at: existingPosterior.fitted_at ?? fittedAt,
+        alpha: existingPosterior.alpha,
+        beta: existingPosterior.beta,
+        hdi_lower: existingPosterior.hdi_lower ?? 0,
+        hdi_upper: existingPosterior.hdi_upper ?? 1,
+        rhat: existingPosterior.rhat ?? 0,
+        divergences: existingPosterior.divergences ?? 0,
+      });
+      // Retention: keep only the most recent entries
+      if (paramDoc.posterior.fit_history.length > FIT_HISTORY_MAX_ENTRIES) {
+        paramDoc.posterior.fit_history = paramDoc.posterior.fit_history.slice(
+          -FIT_HISTORY_MAX_ENTRIES,
+        );
+      }
+    }
+
+    // Carry forward the accumulated fit_history into the new posterior
+    const fitHistory = paramDoc.posterior?.fit_history ?? [];
+
+    // Set posterior sub-object (overwrites previous, fit_history carried forward)
     paramDoc.posterior = {
       distribution: 'beta',
       alpha: prob.alpha,
@@ -202,6 +235,7 @@ function mergePosteriorsIntoParam(
       fitted_at: fittedAt,
       fingerprint,
       provenance: prob.provenance,
+      ...(fitHistory.length > 0 ? { fit_history: fitHistory } : {}),
     };
   }
 
@@ -211,8 +245,32 @@ function mergePosteriorsIntoParam(
     // Ensure latency section exists
     if (!paramDoc.latency) paramDoc.latency = {};
 
-    paramDoc.latency.mu = lat.mu_mean;
-    paramDoc.latency.sigma = lat.sigma_mean;
+    // Append to latency fit_history (same pattern as probability)
+    const existingLatPosterior = paramDoc.latency.posterior;
+    if (existingLatPosterior?.mu_mean != null) {
+      if (!Array.isArray(paramDoc.latency.posterior.fit_history)) {
+        paramDoc.latency.posterior.fit_history = [];
+      }
+      paramDoc.latency.posterior.fit_history.push({
+        fitted_at: existingLatPosterior.fitted_at ?? fittedAt,
+        mu_mean: existingLatPosterior.mu_mean,
+        sigma_mean: existingLatPosterior.sigma_mean,
+        onset_delta_days: existingLatPosterior.onset_delta_days ?? 0,
+        rhat: existingLatPosterior.rhat ?? 0,
+        divergences: existingLatPosterior.divergences ?? 0,
+      });
+      if (paramDoc.latency.posterior.fit_history.length > FIT_HISTORY_MAX_ENTRIES) {
+        paramDoc.latency.posterior.fit_history = paramDoc.latency.posterior.fit_history.slice(
+          -FIT_HISTORY_MAX_ENTRIES,
+        );
+      }
+    }
+
+    const latFitHistory = paramDoc.latency.posterior?.fit_history ?? [];
+
+    // NOTE: Do NOT overwrite latency.mu/latency.sigma — those are the analytic
+    // (pre-Bayes) model params from the LAG pass. Bayesian values live exclusively
+    // in latency.posterior so both are inspectable side by side.
     paramDoc.latency.model_trained_at = fittedAt;
 
     // Set latency posterior sub-object
@@ -231,6 +289,7 @@ function mergePosteriorsIntoParam(
       fitted_at: fittedAt,
       fingerprint,
       provenance: lat.provenance,
+      ...(latFitHistory.length > 0 ? { fit_history: latFitHistory } : {}),
     };
   }
 }
@@ -297,9 +356,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // Read and update each parameter file
     const updatedFiles: CommitFile[] = [];
 
+    const edgeDiag: Array<{ param_id: string; file_path: string; status: string; detail?: string }> = [];
     for (const edge of body.edges) {
       if (!edge.file_path) {
-        console.warn(`[bayes-webhook] Edge ${edge.param_id} has no file_path, skipping`);
+        edgeDiag.push({ param_id: edge.param_id, file_path: '', status: 'skipped', detail: 'no file_path' });
         continue;
       }
 
@@ -307,7 +367,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       try {
         paramFile = await readGitHubFile(owner, repo, edge.file_path, branch, token);
       } catch (e: any) {
-        console.error(`[bayes-webhook] Failed to read ${edge.file_path}: ${e.message}`);
+        edgeDiag.push({ param_id: edge.param_id, file_path: edge.file_path, status: 'read_failed', detail: e.message });
         continue;
       }
 
@@ -315,16 +375,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       try {
         paramDoc = yaml.load(paramFile.content);
       } catch (e: any) {
-        console.error(`[bayes-webhook] Failed to parse ${edge.file_path}: ${e.message}`);
+        edgeDiag.push({ param_id: edge.param_id, file_path: edge.file_path, status: 'parse_failed', detail: e.message });
         continue;
       }
 
-      // Merge posteriors into parameter
       mergePosteriorsIntoParam(paramDoc, edge, fittedAt, fingerprint);
 
-      // Serialise back to YAML
       const updatedYaml = yaml.dump(paramDoc, { lineWidth: -1, noRefs: true, sortKeys: false });
       updatedFiles.push({ path: edge.file_path, content: updatedYaml });
+      edgeDiag.push({ param_id: edge.param_id, file_path: edge.file_path, status: 'ok', detail: `posterior=${!!paramDoc.posterior}` });
     }
 
     // 4. Update graph _bayes metadata
@@ -371,8 +430,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       status: 'committed',
       graph_id: body.graph_id,
       job_id: body.job_id,
-      edges_fitted: body.edges.length,
-      files_updated: updatedFiles.length,
+      edges_received: body.edges.length,
+      files_committed: updatedFiles.length,
+      files_committed_paths: updatedFiles.map(f => f.path),
+      edge_diagnostics: edgeDiag,
       commit_sha: result.sha,
       commit_url: result.url,
     });

@@ -121,6 +121,7 @@ def test_route_parity():
         '/api/generate-all-queries',  # Legacy bulk query generation
         '/api/snapshots/query',       # Test-only: query snapshots for verification
         '/api/snapshots/delete-test', # Test-only: cleanup test data (pytest-* prefix only)
+        '/api/bayes/config',          # Dev-only: served by api/bayes-config.ts (Vercel TS function) in prod
         '/api/bayes/version',         # Dev-only: local version check (Modal has its own)
         '/api/bayes/submit',          # Dev-only: proxies to Modal (FE calls Modal directly in prod)
         '/api/bayes/status',          # Dev-only: proxies to Modal (FE calls Modal directly in prod)

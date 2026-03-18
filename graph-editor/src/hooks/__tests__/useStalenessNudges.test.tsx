@@ -59,6 +59,10 @@ const hoisted = vi.hoisted(() => ({
   setBanner: vi.fn(),
   clearBanner: vi.fn(),
 
+  // operationRegistryService fakes
+  opsRegister: vi.fn(),
+  opsComplete: vi.fn(),
+
   // db fakes
   dbWorkspacesGet: vi.fn(),
 
@@ -144,12 +148,12 @@ vi.mock('../../services/nonBlockingPullService', () => ({
 
 vi.mock('../../services/operationRegistryService', () => ({
   operationRegistryService: {
-    register: vi.fn(),
+    register: hoisted.opsRegister,
     setStatus: vi.fn(),
     setProgress: vi.fn(),
     setLabel: vi.fn(),
     setCountdown: vi.fn(),
-    complete: vi.fn(),
+    complete: hoisted.opsComplete,
     subscribe: vi.fn(() => vi.fn()),
     getState: vi.fn(() => ({ active: [], recent: [] })),
     get: vi.fn(),
@@ -356,7 +360,7 @@ describe('useStalenessNudges', () => {
     });
   });
 
-  it('should show retrieve banner (not auto-execute) when retrieve is due (no pull)', async () => {
+  it('should show retrieve progress indicator (not auto-execute) when retrieve is due (no pull)', async () => {
     hoisted.getRetrieveAllSlicesStalenessStatus.mockResolvedValue({
       isStale: true,
       parameterCount: 2,
@@ -367,13 +371,13 @@ describe('useStalenessNudges', () => {
     render(<Harness />);
 
     // Retrieve-all must NEVER execute automatically — only the nightly cron does that.
-    // The hook should show a banner that the user must click to initiate retrieval.
+    // The hook should register a progress indicator nudging the user to retrieve.
     await waitFor(() => {
-      expect(hoisted.setBanner).toHaveBeenCalledWith(
+      expect(hoisted.opsRegister).toHaveBeenCalledWith(
         expect.objectContaining({
           id: 'retrieve-stale',
+          kind: 'staleness-nudge',
           label: expect.stringContaining('stale'),
-          actionLabel: 'Retrieve All',
         })
       );
     });
@@ -463,12 +467,12 @@ describe('useStalenessNudges', () => {
 
     render(<Harness />);
 
-    // Should show banner (not auto-execute) for chart's parent graph.
+    // Should show progress indicator (not auto-execute) for chart's parent graph.
     await waitFor(() => {
-      expect(hoisted.setBanner).toHaveBeenCalledWith(
+      expect(hoisted.opsRegister).toHaveBeenCalledWith(
         expect.objectContaining({
           id: 'retrieve-stale',
-          actionLabel: 'Retrieve All',
+          kind: 'staleness-nudge',
         })
       );
     });

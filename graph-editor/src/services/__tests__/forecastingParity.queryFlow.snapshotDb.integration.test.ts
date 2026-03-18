@@ -34,43 +34,6 @@ import { computeShortCoreHash } from '../coreHashService';
 import { runParityComparison } from '../lagRecomputeService';
 import { sessionLogService } from '../sessionLogService';
 
-function findRepoRoot(): string {
-  let dir = process.cwd();
-  for (let i = 0; i < 10; i++) {
-    if (fs.existsSync(path.join(dir, 'graph-editor'))) return dir;
-    dir = path.dirname(dir);
-  }
-  return path.resolve(process.cwd(), '..');
-}
-
-const REPO_ROOT = findRepoRoot();
-
-/** Read DATA_REPO_DIR from .private-repos.conf (never hardcode private repo names). */
-function getDataRepoDir(): string {
-  const confPath = path.join(REPO_ROOT, '.private-repos.conf');
-  if (!fs.existsSync(confPath)) {
-    throw new Error(`.private-repos.conf not found at ${confPath} — see README.md for setup`);
-  }
-  const text = fs.readFileSync(confPath, 'utf8');
-  const match = text.match(/^DATA_REPO_DIR=(.+)$/m);
-  if (!match?.[1]?.trim()) {
-    throw new Error('DATA_REPO_DIR not set in .private-repos.conf');
-  }
-  const dir = match[1].trim();
-  if (!fs.existsSync(path.join(REPO_ROOT, dir))) {
-    throw new Error(`Data repo directory "${dir}" not found — clone it per README.md`);
-  }
-  return dir;
-}
-
-function safeGetDataRepoDir(): string | null {
-  try {
-    return getDataRepoDir();
-  } catch {
-    return null;
-  }
-}
-
 const PYTHON_BASE_URL =
   process.env.DAGNET_PYTHON_API_URL ||
   process.env.VITE_PYTHON_API_URL ||
@@ -92,13 +55,8 @@ async function isPythonSnapshotReachable(): Promise<boolean> {
   }
 }
 
-const DATA_REPO_DIR = safeGetDataRepoDir();
 const PYTHON_SNAPSHOT_AVAILABLE = await isPythonSnapshotReachable();
-const describeDeps = (PYTHON_SNAPSHOT_AVAILABLE && !!DATA_REPO_DIR) ? describe : describe.skip;
-
-function loadYaml(relPath: string): any {
-  return yaml.load(fs.readFileSync(path.join(REPO_ROOT, relPath), 'utf8'));
-}
+const describeDeps = PYTHON_SNAPSHOT_AVAILABLE ? describe : describe.skip;
 
 function ukToISO(uk: string): string {
   const m = String(uk).match(/^(\d{1,2})-([A-Za-z]{3})-(\d{2})$/);
@@ -161,10 +119,11 @@ describeDeps('Forecasting parity — query flow + snapshot DB (integration)', ()
   const SNAPSHOT_PREFIX = `${SNAPSHOT_TEST_REPO}-${SNAPSHOT_TEST_BRANCH}-`;
 
   // Realistic source parameter file containing both window() and cohort() slices with query_signature.
-  // Loaded directly from the local data repo (directory name from .private-repos.conf).
-  const PARAM_REL = `${DATA_REPO_DIR}/parameters/registration-to-success.yaml`;
+  // Loaded from committed test fixtures (not the data repo, which varies by branch).
+  const FIXTURES_DIR = path.join(path.dirname(new URL(import.meta.url).pathname), 'fixtures');
+  const PARAM_REL_ABS = path.join(FIXTURES_DIR, 'registration-to-success.yaml');
   const PARAM_ID = 'registration-to-success';
-  const CHANNEL_CONTEXT_REL = `${DATA_REPO_DIR}/contexts/channel.yaml`;
+  const CHANNEL_CONTEXT_ABS = path.join(FIXTURES_DIR, 'channel-mece-local.yaml');
 
   // We use a single, concrete cohort DSL from the file itself.
   // This ensures the FE from-file pipeline selects a realistic slice and computes mu/sigma.
@@ -174,6 +133,12 @@ describeDeps('Forecasting parity — query flow + snapshot DB (integration)', ()
   let cohortValue: any;
   let windowValue: any;
   let cohortMECEValues: any[] = [];
+
+  // Dynamic "now" derived from the fixture's latest anchor date, so the BE
+  // left-censor (LATENCY_FE_FIT_LEFT_CENSOR_DAYS = 100) never ages out the
+  // seeded evidence. Set to latest_anchor + 30 days — comfortably within range.
+  let FAKE_NOW: Date;
+  let FAKE_RETRIEVED_AT: string;
 
   beforeAll(async () => {
     // Ensure Python snapshot API is running and DB is reachable.
@@ -186,7 +151,7 @@ describeDeps('Forecasting parity — query flow + snapshot DB (integration)', ()
       throw new Error(`Snapshot DB not healthy: ${JSON.stringify(healthBody)}`);
     }
 
-    const fullParam = loadYaml(PARAM_REL);
+    const fullParam = yaml.load(fs.readFileSync(PARAM_REL_ABS, 'utf8')) as any;
     const values: any[] = fullParam?.values || [];
 
     cohortValue = values.find(v =>
@@ -200,7 +165,7 @@ describeDeps('Forecasting parity — query flow + snapshot DB (integration)', ()
       v.sliceDSL.includes(TARGET_CONTEXT)
     );
     if (!cohortValue || !windowValue) {
-      throw new Error(`Expected both cohort+window values for ${TARGET_CONTEXT} in ${PARAM_REL}`);
+      throw new Error(`Expected both cohort+window values for ${TARGET_CONTEXT} in fixture registration-to-success.yaml`);
     }
     if (typeof cohortValue.query_signature !== 'string' || typeof windowValue.query_signature !== 'string') {
       throw new Error('Expected query_signature on both cohort and window values');
@@ -235,7 +200,7 @@ describeDeps('Forecasting parity — query flow + snapshot DB (integration)', ()
       v.query_signature === unsaltedCohortSig
     ).map(v => ({ ...v, query_signature: v.query_signature + testSalt }));
     if (cohortMECEValues.length < 2) {
-      throw new Error(`Expected >=2 cohort()+context(channel:*) slices with same query_signature in ${PARAM_REL}`);
+      throw new Error(`Expected >=2 cohort()+context(channel:*) slices with same query_signature in fixture registration-to-success.yaml`);
     }
     // This specific debug bundle is expected to include the full MECE set for channel.
     const sliceSet = new Set(cohortMECEValues.map(v => String(v.sliceDSL)));
@@ -249,6 +214,23 @@ describeDeps('Forecasting parity — query flow + snapshot DB (integration)', ()
       const has = Array.from(sliceSet).some(s => s.includes(frag));
       if (!has) throw new Error(`Expected cohort MECE slice set to include ${frag}`);
     }
+
+    // Derive FAKE_NOW from the fixture's latest anchor date so the BE
+    // left-censor (fit_left_censor_days=100) never ages out the evidence.
+    // Uses all dates across all values (cohort + window + MECE slices).
+    const allDates: Date[] = values
+      .flatMap((v: any) => (v.dates || []) as string[])
+      .map((d: string) => new Date(ukToISO(d)))
+      .filter((d: Date) => Number.isFinite(d.getTime()));
+    if (!allDates.length) throw new Error('Fixture has no parseable dates');
+    const latestAnchor = new Date(Math.max(...allDates.map(d => d.getTime())));
+    // 30 days after latest anchor — well within the 100-day censor window.
+    FAKE_NOW = new Date(latestAnchor.getTime() + 30 * 24 * 60 * 60 * 1000);
+    FAKE_NOW.setUTCHours(12, 0, 0, 0);
+    // retrieved_at must be <= FAKE_NOW for the BE's `retrieved_at <= as_at` filter.
+    const retrievedAtDate = new Date(FAKE_NOW);
+    retrievedAtDate.setUTCHours(0, 0, 0, 0);
+    FAKE_RETRIEVED_AT = retrievedAtDate.toISOString();
   });
 
   beforeEach(async () => {
@@ -259,7 +241,7 @@ describeDeps('Forecasting parity — query flow + snapshot DB (integration)', ()
 
     // Register the channel context so implicit-uncontexted MECE resolution is allowed.
     // (MECE logic is conservatively disabled when the context definition is unavailable.)
-    const channelContext = loadYaml(CHANNEL_CONTEXT_REL);
+    const channelContext = yaml.load(fs.readFileSync(CHANNEL_CONTEXT_ABS, 'utf8')) as any;
     await fileRegistry.registerFile('context-channel', {
       fileId: 'context-channel',
       type: 'context',
@@ -302,7 +284,7 @@ describeDeps('Forecasting parity — query flow + snapshot DB (integration)', ()
     });
 
     // Freeze time so the FE/BE “as_at” reference is deterministic.
-    vi.setSystemTime(new Date('2026-02-10T12:00:00.000Z'));
+    vi.setSystemTime(FAKE_NOW);
 
     // Seed snapshot DB with WINDOW evidence rows ONLY (wrong on purpose).
     // FE fits from cohort(); BE will query cohort slice keys and should fall back / diverge,
@@ -310,7 +292,7 @@ describeDeps('Forecasting parity — query flow + snapshot DB (integration)', ()
     const cohortSig = cohortValue.query_signature as string;
     const cohortCoreHash = await computeShortCoreHash(cohortSig);
     // Ensure retrieved_at <= as_at (query_snapshots filters by retrieved_at <= as_at).
-    const retrievedAt = new Date('2026-02-10T00:00:00.000Z').toISOString();
+    const retrievedAt = FAKE_RETRIEVED_AT;
 
     const dates: string[] = windowValue.dates || [];
     const nDaily: number[] = windowValue.n_daily || [];
@@ -449,12 +431,12 @@ describeDeps('Forecasting parity — query flow + snapshot DB (integration)', ()
       return undefined as any;
     });
 
-    vi.setSystemTime(new Date('2026-02-10T12:00:00.000Z'));
+    vi.setSystemTime(FAKE_NOW);
 
     // Seed snapshot DB with cohort evidence rows ONLY (correct).
     const cohortSig = cohortValue.query_signature as string;
     const cohortCoreHash = await computeShortCoreHash(cohortSig);
-    const retrievedAt = new Date('2026-02-10T00:00:00.000Z').toISOString();
+    const retrievedAt = FAKE_RETRIEVED_AT;
 
     const dates: string[] = cohortValue.dates || [];
     const nDaily: number[] = cohortValue.n_daily || [];
@@ -558,7 +540,7 @@ describeDeps('Forecasting parity — query flow + snapshot DB (integration)', ()
       );
     }
 
-    expect(seen.requestBody?.as_at).toBe('2026-02-10T12:00:00.000Z');
+    expect(seen.requestBody?.as_at).toBe(FAKE_NOW.toISOString());
     expect(parityErrors).toHaveLength(0);
     errorSpy.mockRestore();
   });
@@ -577,11 +559,11 @@ describeDeps('Forecasting parity — query flow + snapshot DB (integration)', ()
       return undefined as any;
     });
 
-    vi.setSystemTime(new Date('2026-02-10T12:00:00.000Z'));
+    vi.setSystemTime(FAKE_NOW);
 
     const cohortSig = cohortValue.query_signature as string;
     const cohortCoreHash = await computeShortCoreHash(cohortSig);
-    const retrievedAt = new Date('2026-02-10T00:00:00.000Z').toISOString();
+    const retrievedAt = FAKE_RETRIEVED_AT;
 
     const dates: string[] = cohortValue.dates || [];
     const nDaily: number[] = cohortValue.n_daily || [];
@@ -678,14 +660,14 @@ describeDeps('Forecasting parity — query flow + snapshot DB (integration)', ()
       return undefined as any;
     });
 
-    vi.setSystemTime(new Date('2026-02-10T12:00:00.000Z'));
+    vi.setSystemTime(FAKE_NOW);
 
     const cohortSig = cohortValue.query_signature as string;
     const cohortCoreHash = await computeShortCoreHash(cohortSig);
 
     // Seed snapshot DB for BOTH cohort slices, same core_hash family, different slice_key.
     const seedOne = async (v: any) => {
-      const retrievedAt = new Date('2026-02-10T00:00:00.000Z').toISOString();
+      const retrievedAt = FAKE_RETRIEVED_AT;
 
       const dates: string[] = v.dates || [];
       const nDaily: number[] = v.n_daily || [];

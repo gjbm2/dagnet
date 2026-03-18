@@ -337,7 +337,11 @@ function buildMappingConfigurations(): Map<string, MappingConfiguration> {
       sourceField: 'p.latency.path_sigma',
       targetField: 'latency.path_sigma',
       condition: (source) => source.p?.latency?.path_sigma !== undefined && source.p?.id
-    }
+    },
+    // NOTE: Bayesian posteriors are NOT mapped graph → file.
+    // The webhook is the sole writer of posterior data to param files.
+    // The graph carries a stripped summary (no fit_history/slices/_model_state)
+    // which must not overwrite the full posterior on the file.
   ]);
 
   // Flow B.APPEND: Graph → File/Parameter (APPEND new value)
@@ -770,6 +774,30 @@ function buildMappingConfigurations(): Map<string, MappingConfiguration> {
     // path_mu, path_sigma: path-level A→Y CDF params (Fenton–Wilkinson, internal)
     { sourceField: 'latency.path_mu', targetField: 'p.latency.path_mu', condition: isProbType },
     { sourceField: 'latency.path_sigma', targetField: 'p.latency.path_sigma', condition: isProbType },
+
+    // Bayesian posteriors (file → graph, summary only — strip fit_history/slices/_model_state)
+    // Probability posterior — written by Bayes webhook to param file root
+    {
+      sourceField: 'posterior',
+      targetField: 'p.posterior',
+      condition: (source) => isProbType(source) && source.posterior !== undefined,
+      transform: (value: any) => {
+        if (!value || typeof value !== 'object') return value;
+        const { fit_history, slices, _model_state, ...summary } = value;
+        return summary;
+      },
+    },
+    // Latency posterior — written by Bayes webhook to param file latency block
+    {
+      sourceField: 'latency.posterior',
+      targetField: 'p.latency.posterior',
+      condition: (source) => isProbType(source) && source.latency?.posterior !== undefined,
+      transform: (value: any) => {
+        if (!value || typeof value !== 'object') return value;
+        const { fit_history, ...summary } = value;
+        return summary;
+      },
+    },
 
     // LAG: Latency DATA fields (file → graph only, display-only)
     {

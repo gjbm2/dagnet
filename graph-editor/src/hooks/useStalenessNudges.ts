@@ -12,6 +12,7 @@ import { useCountdown } from './useCountdown';
 import { useDashboardMode } from '../contexts/DashboardModeContext';
 import { liveShareSyncService } from '../services/liveShareSyncService';
 import { repositoryOperationsService } from '../services/repositoryOperationsService';
+import { operationRegistryService } from '../services/operationRegistryService';
 import toast from 'react-hot-toast';
 import { APP_VERSION } from '../version';
 import { bannerManagerService } from '../services/bannerManagerService';
@@ -269,15 +270,20 @@ export function useStalenessNudges(): UseStalenessNudgesResult {
    * The user must click to initiate — no automatic execution.
    */
   const showRetrieveNudgeBanner = useCallback(() => {
-    bannerManagerService.setBanner({
+    // Non-blocking progress indicator. Banners are reserved for serious
+    // operational alerts (automation cycles, auth expiry). A routine data
+    // freshness nudge uses the progress indicator in the status bar.
+    operationRegistryService.register({
       id: 'retrieve-stale',
-      priority: 40,
-      label: 'Data may be stale — retrieve latest?',
-      actionLabel: 'Retrieve All',
-      onAction: () => fireRetrieveAllDirect(),
-      actionTitle: 'Retrieve all slices for the current graph',
+      kind: 'staleness-nudge',
+      label: 'Data may be stale — use Data \u203a Retrieve All Slices to refresh',
+      status: 'pending',
     });
-  }, [fireRetrieveAllDirect]);
+    // Auto-dismiss after 8 seconds
+    setTimeout(() => {
+      operationRegistryService.complete('retrieve-stale', 'complete', 'Dismissed');
+    }, 8_000);
+  }, []);
 
   /**
    * Start a non-blocking pull with standard callbacks (dismiss, conflicts, cascade).

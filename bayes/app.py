@@ -4,17 +4,20 @@ Deployed via: modal deploy bayes/app.py
 
 Components:
   1. /submit   – web endpoint, receives FE payload, spawns worker
-  2. fit_graph – worker function, connects to Neon, computes posteriors,
-                 fires webhook, reports progress via modal.Dict
+  2. fit_graph – worker function, runs compiler pipeline (topology → evidence
+                 → model → MCMC inference), fires webhook, reports progress
   3. /cancel   – web endpoint, terminates a running job
   4. /status   – web endpoint, polls FunctionCall status + progress for FE
+
+The compute logic lives in worker.py (shared with local dev server).
 """
 
 import modal
+import os
 import time
 import uuid
 
-APP_VERSION = "0.3.3-progress-layout"  # Bump on every deploy so we can verify which code is running
+APP_VERSION = "1.0.0-compiler-phase-a"  # Bump on every deploy so we can verify which code is running
 
 app = modal.App("dagnet-bayes")
 
@@ -23,14 +26,23 @@ app = modal.App("dagnet-bayes")
 # Entries auto-expire after 7 days of inactivity (Modal default).
 progress_dict = modal.Dict.from_name("dagnet-bayes-progress", create_if_missing=True)
 
-worker_image = modal.Image.debian_slim(python_version="3.12").pip_install(
-    "numpy",
-    "scipy",
-    "pymc",
-    "arviz",
-    "requests",
-    "pyyaml",
-    "psycopg2-binary",
+worker_image = (
+    modal.Image.debian_slim(python_version="3.12")
+    .pip_install(
+        "numpy",
+        "scipy",
+        "pymc",
+        "arviz",
+        "requests",
+        "pyyaml",
+        "psycopg2-binary",
+    )
+    .env({"PYTHONPATH": "/root/bayes"})
+    .add_local_dir(
+        os.path.dirname(__file__),
+        remote_path="/root/bayes",
+        ignore=["__pycache__", "*.pyc"],
+    )
 )
 
 minimal_image = modal.Image.debian_slim(python_version="3.12").pip_install(
@@ -90,165 +102,37 @@ def _report_progress(job_id: str, stage: str, pct: int, detail: str = ""):
 
 @app.function(image=worker_image, timeout=600)
 def fit_graph(payload: dict) -> dict:
-    """Fit posteriors for a single graph. Fires webhook on completion.
+    """Fit posteriors for a single graph via the compiler pipeline.
+
+    Delegates to worker.fit_graph() which runs:
+      topology analysis → evidence binding → PyMC model → MCMC → webhook.
 
     Reports progress via modal.Dict so the FE can show real-time updates.
-
-    For the skeleton/spike phase this does minimal work:
-    - Connects to Neon (proves DB access)
-    - Reads evidence inventory (proves query works)
-    - Builds placeholder posterior payload
-    - POSTs to webhook (proves callback chain works)
-
     Returns a rich diagnostic object consumed by the status endpoint.
     """
-    import requests as http
-    import psycopg2
-
     job_id = payload.get("_job_id", "unknown")
-    log = []
-    timings = {}
-    t0 = time.time()
-    log.append(f"worker started (version {APP_VERSION})")
-    error = None
-    webhook_response = None
 
-    # Progress layout: 0-10% startup, 10-90% processing, 90-100% delivery
-    STARTUP_PCT = 10
-    PROCESSING_PCT = 80   # 10→90
-    DELIVERY_PCT = 10     # 90→100
+    def modal_progress(stage: str, pct: int, detail: str = ""):
+        _report_progress(job_id, stage, pct, detail)
 
     try:
-        # -- Startup phase (0→10%) --
-        _report_progress(job_id, "startup", 2, "Connecting to database…")
-
-        # -- 1. Connect to Neon --
-        db_url = payload.get("db_connection", "")
-        if db_url:
-            t_db = time.time()
-            conn = psycopg2.connect(db_url)
-            cur = conn.cursor()
-            cur.execute("SELECT 1")
-            cur.close()
-            conn.close()
-            log.append(f"connected to Neon ({int((time.time() - t_db) * 1000)}ms)")
-        else:
-            log.append("no neon_database_url in payload – skipping DB check")
-
-        timings["neon_ms"] = int((time.time() - t0) * 1000)
-        _report_progress(job_id, "startup", 7, "Preparing edges…")
-
-        # -- 2. Build placeholder posterior payload --
-        graph_id = payload.get("graph_id", "unknown")
-        edges = []
-
-        # Real inference will replace this loop with actual MCMC sampling.
-        param_files = payload.get("parameter_files", {})
-        n_params = len(param_files)
-        for idx, param_id in enumerate(param_files):
-            edges.append({
-                "param_id": param_id,
-                "posterior": {
-                    "alpha": 1.0, "beta": 1.0,
-                    "hdi_lower": 0.0, "hdi_upper": 1.0,
-                    "hdi_level": 0.9, "ess": 0, "rhat": 0.0,
-                    "provenance": "point-estimate",
-                },
-            })
-        timings["fitting_ms"] = int((time.time() - t0) * 1000) - timings.get("neon_ms", 0)
-        log.append(f"built placeholder posteriors for {len(edges)} edges")
-
-        # -- Processing phase (10→90%) --
-        # Simulated: 10s with per-second ticks. Real MCMC will replace this.
-        # pct = STARTUP_PCT + PROCESSING_PCT * step/total
-        t_sim = time.time()
-        sim_duration = 10
-        for sec in range(1, sim_duration + 1):
-            time.sleep(1)
-            pct = STARTUP_PCT + int(PROCESSING_PCT * sec / sim_duration)
-            _report_progress(job_id, "sampling", pct, f"Sampling {sec}/{sim_duration}s")
-        timings["processing_ms"] = int((time.time() - t_sim) * 1000)
-        log.append(f"simulated processing ({timings['processing_ms']}ms)")
-
-        # -- Delivery phase (90→100%) --
-        _report_progress(job_id, "delivering", 92, "Delivering results…")
-
-        # -- 3. Fire webhook --
-        webhook_url = payload.get("webhook_url", "")
-        callback_token = payload.get("callback_token", "")
-
-        if webhook_url:
-            import json
-            from datetime import datetime
-
-            webhook_body = {
-                "job_id": payload.get("_job_id", "unknown"),
-                "graph_id": graph_id,
-                "repo": payload.get("repo", ""),
-                "branch": payload.get("branch", ""),
-                "graph_file_path": payload.get("graph_file_path", ""),
-                "fingerprint": f"skeleton-{int(time.time())}",
-                "fitted_at": datetime.utcnow().strftime("%-d-%b-%y"),
-                "quality": {
-                    "max_rhat": 0.0,
-                    "min_ess": 0,
-                    "converged_pct": 0.0,
-                },
-                "edges": edges,
-                "skipped": [],
-            }
-
-            t_wh = time.time()
-            resp = http.post(
-                webhook_url,
-                headers={
-                    "x-bayes-callback": callback_token,
-                    "Content-Type": "application/json",
-                },
-                json=webhook_body,
-                timeout=30,
-            )
-            webhook_response = {
-                "status": resp.status_code,
-                "body": resp.json() if resp.headers.get("content-type", "").startswith("application/json") else resp.text[:500],
-            }
-            log.append(
-                f"webhook POST {resp.status_code} ({int((time.time() - t_wh) * 1000)}ms)"
-            )
-            if resp.status_code >= 400:
-                error = f"webhook returned {resp.status_code}"
-        else:
-            log.append("no webhook_url in payload – skipping webhook")
-
-        _report_progress(job_id, "complete", 100)
-
+        from worker import fit_graph as _fit_graph
+        result = _fit_graph(payload, report_progress=modal_progress)
+        result["version"] = APP_VERSION
+        return result
     except Exception as e:
-        error = str(e)
-        log.append(f"ERROR: {error}")
-
-    # Clean up progress entry (best-effort)
-    try:
-        progress_dict.pop(job_id, None)
-    except Exception:
-        pass
-
-    duration_ms = int((time.time() - t0) * 1000)
-
-    timings["total_ms"] = duration_ms
-
-    return {
-        "status": "failed" if error else "complete",
-        "version": APP_VERSION,
-        "duration_ms": duration_ms,
-        "timings": timings,
-        "edges_fitted": len(edges) if not error else 0,
-        "edges_skipped": 0,
-        "quality": {"max_rhat": 0.0, "min_ess": 0},
-        "warnings": [],
-        "log": log,
-        "webhook_response": webhook_response,
-        "error": error,
-    }
+        import traceback
+        return {
+            "status": "failed",
+            "version": APP_VERSION,
+            "error": str(e),
+            "log": [f"ERROR: {e}", traceback.format_exc()],
+        }
+    finally:
+        try:
+            progress_dict.pop(job_id, None)
+        except Exception:
+            pass
 
 
 # ---------------------------------------------------------------------------

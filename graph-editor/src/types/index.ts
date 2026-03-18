@@ -31,6 +31,13 @@ export type ObjectType =
 export type ViewMode = 'interactive' | 'raw-json' | 'raw-yaml';
 
 /**
+ * View overlay modes — control canvas-wide visual overlays.
+ * 'none' = standard display; other values activate specialised overlays
+ * (e.g. colour-coding edges by Bayesian fit quality).
+ */
+export type ViewOverlayMode = 'none' | 'forecast-quality';
+
+/**
  * Source information for a file
  */
 export interface FileSource {
@@ -120,6 +127,7 @@ export interface TabState {
     showNodeImages?: boolean;
     confidenceIntervalLevel?: 'none' | '80' | '90' | '95' | '99';
     animateFlow?: boolean;
+    viewOverlayMode?: ViewOverlayMode;
     sidebarOpen?: boolean;
     whatIfOpen?: boolean;
     propertiesOpen?: boolean;
@@ -553,6 +561,17 @@ export interface LatencyConfig {
 
 // ── Bayesian posterior types ────────────────────────────────────────────────
 
+/** Per-slice posterior entry (keyed by slice DSL string in slices map) */
+export interface SlicePosteriorEntry {
+  alpha: number;
+  beta: number;
+  hdi_lower: number;
+  hdi_upper: number;
+  ess: number;
+  rhat: number;
+  divergences: number;
+}
+
 /** Probability fit_history entry (slim snapshot for drift tracking) */
 export interface ProbabilityFitHistoryEntry {
   fitted_at: string;   // UK date (d-MMM-yy)
@@ -561,13 +580,15 @@ export interface ProbabilityFitHistoryEntry {
   hdi_lower: number;
   hdi_upper: number;
   rhat: number;
+  divergences: number;
+  slices?: Record<string, { alpha: number; beta: number }> | null;
 }
 
 /** Bayesian posterior for a probability parameter */
 export interface ProbabilityPosterior {
   distribution: string;        // e.g. 'beta', 'dirichlet-component'
-  alpha: number;               // Beta shape α
-  beta: number;                // Beta shape β
+  alpha: number;               // Beta shape α (window posterior)
+  beta: number;                // Beta shape β (window posterior)
   hdi_lower: number;           // Lower bound of HDI
   hdi_upper: number;           // Upper bound of HDI
   hdi_level: number;           // HDI level used (e.g. 0.9)
@@ -577,7 +598,12 @@ export interface ProbabilityPosterior {
   fitted_at: string;           // UK date (d-MMM-yy)
   fingerprint: string;         // Deterministic model hash
   provenance: 'bayesian' | 'pooled-fallback' | 'point-estimate' | 'skipped';
+  divergences: number;         // Count of MCMC divergent transitions
+  prior_tier: 'direct_history' | 'trajectory_calibrated' | 'inherited' | 'sibling_pooled' | 'uninformative';
+  surprise_z?: number | null;  // Trajectory surprise z-score (null if < 3 fit_history entries)
   fit_history?: ProbabilityFitHistoryEntry[];
+  slices?: Record<string, SlicePosteriorEntry> | null;  // Per-slice posteriors keyed by slice DSL
+  _model_state?: Record<string, number> | null;         // Model-internal params for subsequent runs
 }
 
 /** Latency fit_history entry (slim snapshot for drift tracking) */
@@ -587,6 +613,7 @@ export interface LatencyFitHistoryEntry {
   sigma_mean: number;
   onset_delta_days: number;
   rhat: number;
+  divergences: number;
 }
 
 /** Bayesian posterior for latency parameters */
@@ -615,6 +642,9 @@ export interface BayesQuality {
   converged_pct: number;       // Fraction of params meeting convergence criteria
   edges_fitted: number;
   edges_skipped: number;
+  total_divergences: number;   // Sum of divergences across all fitted edges
+  edges_with_surprise: number; // Count of edges with trajectory surprise |z| > 2
+  edges_by_tier: Record<string, number>; // Prior cascade tier distribution
 }
 
 /** Graph-level metadata from the most recent Bayesian fitting run */

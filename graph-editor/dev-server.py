@@ -10,6 +10,21 @@ from fastapi.middleware.cors import CORSMiddleware
 import sys
 import os
 
+# Load .env.local (same env vars Vite reads — DB_CONNECTION, BAYES_WEBHOOK_SECRET, etc.)
+_env_local = os.path.join(os.path.dirname(__file__), '.env.local')
+if os.path.isfile(_env_local):
+    with open(_env_local) as _f:
+        for _line in _f:
+            _line = _line.strip()
+            if not _line or _line.startswith('#'):
+                continue
+            _eq = _line.find('=')
+            if _eq < 0:
+                continue
+            _key, _val = _line[:_eq], _line[_eq + 1:]
+            if _key not in os.environ:  # don't override explicit env
+                os.environ[_key] = _val
+
 # Add lib/ to Python path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'lib'))
 
@@ -697,12 +712,24 @@ async def runner_available_analyses_endpoint(request: Request):
 @app.post("/api/bayes/submit")
 async def bayes_submit_endpoint(request: Request):
     """Local equivalent of Modal's /submit endpoint.
-    Spawns fit_graph in a background thread, returns job_id immediately."""
+    Spawns fit_graph in a background thread, returns job_id immediately.
+
+    Set BAYES_PLACEHOLDER=1 to skip MCMC and return shifted placeholder
+    posteriors (used by E2E roundtrip tests).
+    """
     try:
         data = await request.json()
+
+        # Inject placeholder mode when env var is set (E2E testing)
+        if os.environ.get("BAYES_PLACEHOLDER") == "1":
+            settings = data.get("settings") or {}
+            settings["placeholder"] = True
+            data["settings"] = settings
+
         from bayes_local import submit
         job_id = submit(data)
-        print(f"[bayes/submit] Spawned local job {job_id} for graph={data.get('graph_id', '?')}")
+        mode = "placeholder" if (data.get("settings") or {}).get("placeholder") else "compiler"
+        print(f"[bayes/submit] Spawned local job {job_id} ({mode}) for graph={data.get('graph_id', '?')}")
         return {"job_id": job_id}
     except Exception as e:
         import traceback
@@ -721,6 +748,35 @@ async def bayes_cancel_endpoint(call_id: str = ""):
     result = cancel(call_id)
     print(f"[bayes/cancel] Job {call_id}: {result['status']}")
     return result
+
+
+@app.get("/api/bayes/config")
+async def bayes_config_endpoint():
+    """Equivalent of the Vercel /api/bayes/config endpoint.
+    Reads from same env vars as Vercel. Falls back to local URLs only
+    when Modal env vars aren't set."""
+    webhook_secret = os.environ.get("BAYES_WEBHOOK_SECRET", "")
+    db_connection = os.environ.get("DB_CONNECTION", "")
+    if not webhook_secret:
+        raise HTTPException(status_code=500, detail="BAYES_WEBHOOK_SECRET not set in env")
+
+    # Modal URLs from env (same vars as Vercel). If not set, fall back to local.
+    port = os.environ.get("PYTHON_API_PORT", "9000")
+    vite_port = os.environ.get("VITE_PORT", "5173")
+
+    # Webhook URL: in local dev, ALWAYS use localhost (the Vite dev server serves
+    # the webhook endpoint). The .env.local BAYES_WEBHOOK_URL points to production
+    # Vercel which is wrong for local dev. Only use the env var in production.
+    webhook_url = f"http://localhost:{vite_port}/api/bayes-webhook"
+
+    return {
+        "modal_submit_url": os.environ.get("BAYES_MODAL_SUBMIT_URL", f"http://localhost:{port}/api/bayes/submit"),
+        "modal_status_url": os.environ.get("BAYES_MODAL_STATUS_URL", f"http://localhost:{port}/api/bayes/status"),
+        "modal_cancel_url": os.environ.get("BAYES_MODAL_CANCEL_URL", f"http://localhost:{port}/api/bayes/cancel"),
+        "webhook_url": webhook_url,
+        "webhook_secret": webhook_secret,
+        "db_connection": db_connection,
+    }
 
 
 @app.get("/api/bayes/version")

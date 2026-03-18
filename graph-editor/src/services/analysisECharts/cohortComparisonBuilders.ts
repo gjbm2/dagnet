@@ -252,6 +252,34 @@ export function buildCohortMaturityEChartsOption(
         }
       }
     }
+    // Bayesian posterior overlay (dashed, distinct colour)
+    if (entry?.bayesCurve && Array.isArray(entry.bayesCurve) && entry.bayesCurve.length > 0) {
+      const bayesData = entry.bayesCurve
+        .filter((p: any) => typeof p?.tau_days === 'number' && typeof p?.model_rate === 'number')
+        .map((p: any) => ({ value: [p.tau_days, p.model_rate] }));
+      if (bayesData.length > 0) {
+        const bayesColour = c.text === '#e0e0e0' ? '#60a5fa' : '#2563eb';
+        seriesOut.push({
+          id: 'model_cdf_bayes',
+          name: 'Bayesian Model',
+          type: 'line',
+          showSymbol: false,
+          smooth: true,
+          connectNulls: false,
+          lineStyle: { width: 2, color: bayesColour, type: 'dashed', opacity: 0.85 },
+          itemStyle: { color: bayesColour },
+          emphasis: { disabled: true },
+          z: 11,
+          data: bayesData,
+        });
+        if (maxTau !== null) {
+          const curveMax = bayesData[bayesData.length - 1]?.value?.[0];
+          if (typeof curveMax === 'number' && Number.isFinite(curveMax) && curveMax > maxTau) {
+            maxTau = curveMax;
+          }
+        }
+      }
+    }
   }
 
   // Y-axis max from data with headroom

@@ -88,20 +88,87 @@ class GitService {
   private currentRepo: GitRepositoryCredential | null = null;
   private octokit: Octokit;
 
+  /**
+   * Surface rate limit to user. Imported lazily to avoid circular deps.
+   * Shows a toast and logs to session log so the user knows WHY the app
+   * appears to hang (previously: silent multi-minute wait with zero feedback).
+   */
+  private static _rateLimitTimerId: ReturnType<typeof setInterval> | null = null;
+
+  private static _notifyRateLimit(retryAfter: number, retryCount: number): void {
+    const mins = Math.ceil(retryAfter / 60);
+    try {
+      import('./sessionLogService').then(({ sessionLogService }) => {
+        sessionLogService.warning('git', 'GIT_RATE_LIMIT',
+          `Rate limit hit (attempt ${retryCount}). Resets in ${mins} min (${retryAfter}s).`);
+      });
+    } catch { /* session log not available */ }
+
+    // Show a ticking countdown via the operation registry so the user
+    // sees exactly how long they need to wait.
+    try {
+      import('./operationRegistryService').then(({ operationRegistryService }) => {
+        const opId = 'git-rate-limit';
+        const resetAt = Date.now() + retryAfter * 1000;
+
+        // Clear any existing timer
+        if (GitService._rateLimitTimerId) {
+          clearInterval(GitService._rateLimitTimerId);
+        }
+
+        operationRegistryService.register({
+          id: opId,
+          kind: 'git-rate-limit',
+          label: `GitHub rate limit — resets in ${mins} min`,
+          status: 'running',
+          cancellable: false,
+        });
+
+        // Tick every second
+        GitService._rateLimitTimerId = setInterval(() => {
+          const remaining = Math.max(0, Math.ceil((resetAt - Date.now()) / 1000));
+          if (remaining <= 0) {
+            if (GitService._rateLimitTimerId) {
+              clearInterval(GitService._rateLimitTimerId);
+              GitService._rateLimitTimerId = null;
+            }
+            operationRegistryService.complete(opId, 'complete', 'Rate limit reset — retrying');
+            return;
+          }
+          const m = Math.floor(remaining / 60);
+          const s = remaining % 60;
+          operationRegistryService.setLabel(opId,
+            `GitHub rate limit — resets in ${m}:${String(s).padStart(2, '0')}`);
+          operationRegistryService.setProgress(opId, {
+            current: retryAfter - remaining,
+            total: retryAfter,
+          });
+        }, 1000);
+      });
+    } catch { /* operation registry not available */ }
+  }
+
+  private static _makeThrottleConfig() {
+    return {
+      onRateLimit: (retryAfter: number, options: any, octokit: any, retryCount: number) => {
+        console.warn(`⚠️ GitService: Rate limit hit, resets in ${Math.ceil(retryAfter / 60)} min (attempt ${retryCount})`);
+        GitService._notifyRateLimit(retryAfter, retryCount);
+        // Only retry for short waits (< 30s). For longer waits, fail fast
+        // so the error propagates and the user sees what happened.
+        return retryAfter < 30 && retryCount < 2;
+      },
+      onSecondaryRateLimit: (retryAfter: number, options: any, octokit: any) => {
+        console.warn(`⚠️ GitService: Secondary rate limit hit, resets in ${Math.ceil(retryAfter / 60)} min`);
+        GitService._notifyRateLimit(retryAfter, 0);
+        return retryAfter < 30;
+      },
+    };
+  }
+
   constructor(credentials?: CredentialsData) {
     this.credentials = credentials || null;
-    // Initialize Octokit with throttling
     this.octokit = new OctokitWithPlugins({
-      throttle: {
-        onRateLimit: (retryAfter: number, options: any, octokit: any, retryCount: number) => {
-          console.warn(`⚠️ GitService: Rate limit hit, retrying after ${retryAfter}s (attempt ${retryCount})`);
-          return retryCount < 3; // Retry up to 3 times
-        },
-        onSecondaryRateLimit: (retryAfter: number, options: any, octokit: any) => {
-          console.warn(`⚠️ GitService: Secondary rate limit hit, retrying after ${retryAfter}s`);
-          return true; // Always retry on secondary rate limits
-        }
-      }
+      throttle: GitService._makeThrottleConfig(),
     });
     this.setCurrentRepo();
   }
@@ -137,16 +204,7 @@ class GitService {
     if (authToken && authToken.trim() !== '') {
       this.octokit = new OctokitWithPlugins({
         auth: authToken,
-        throttle: {
-          onRateLimit: (retryAfter: number, options: any, octokit: any, retryCount: number) => {
-            console.warn(`⚠️ GitService: Rate limit hit, retrying after ${retryAfter}s (attempt ${retryCount})`);
-            return retryCount < 3;
-          },
-          onSecondaryRateLimit: (retryAfter: number, options: any, octokit: any) => {
-            console.warn(`⚠️ GitService: Secondary rate limit hit, retrying after ${retryAfter}s`);
-            return true;
-          }
-        }
+        throttle: GitService._makeThrottleConfig(),
       });
       console.log('✅ GitService: Octokit reinitialized with new credentials');
     }

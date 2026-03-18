@@ -25,6 +25,7 @@ import { buildGraphForAnalysisLayer } from '../services/CompositionService';
 import { resolveAnalysisType } from '../services/analysisTypeResolutionService';
 import { useScenariosContextOptional } from '../contexts/ScenariosContext';
 import { useTabContext } from '../contexts/TabContext';
+import { useViewOverlayMode } from '../hooks/useViewOverlayMode';
 import type { ConversionGraph, Graph, CanvasAnalysis } from '../types';
 import type { AnalysisResult } from '../lib/graphComputeClient';
 import type { LocalScenario } from '../services/localAnalysisComputeService';
@@ -138,6 +139,7 @@ function DraggableAnalysisCard({
   chartHeight,
   onSettled,
   deferred,
+  infoDefaultTab,
 }: {
   analysisType: string;
   dsl: string;
@@ -161,6 +163,8 @@ function DraggableAnalysisCard({
   onSettled?: (outcome: 'rendered' | 'failed') => void;
   /** When true, render placeholder shell without starting compute (progressive reveal) */
   deferred?: boolean;
+  /** Default tab for info cards (driven by view overlay mode) */
+  infoDefaultTab?: string;
 }) {
   const cardRef = useRef<HTMLDivElement>(null);
   const { operations } = useTabContext();
@@ -436,6 +440,7 @@ function DraggableAnalysisCard({
             hideChrome
             suppressAnimation={!!scaleContent}
             onRendered={fireSettled}
+            infoDefaultTab={infoDefaultTab}
           />
         ) : waitingForDeps ? (
           <div style={{ padding: '12px 10px', color: 'var(--text-muted, #666)', fontSize: 10 }}>
@@ -494,6 +499,11 @@ export function HoverAnalysisPreview({
 }: HoverAnalysisPreviewProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const { activeTabId } = useTabContext();
+  const { viewOverlayMode } = useViewOverlayMode();
+
+  // Derive default info tab from view overlay mode
+  const infoDefaultTab = viewOverlayMode === 'forecast-quality' ? 'forecast' : undefined;
+
 
   // --- Satellite row ---
   // Satellites are commissioned progressively (center-out) to avoid hammering
@@ -776,6 +786,7 @@ export function HoverAnalysisPreview({
           onDismiss={onDismiss}
           onCardEnter={handleCardEnterWithSatellites}
           onCardLeave={handleCardLeaveWithSatellites}
+          infoDefaultTab={infoDefaultTab}
         />
       </div>
 

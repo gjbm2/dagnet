@@ -486,14 +486,14 @@ echo ""
 
 # Ensure shipped docs index is up to date (helps keep Help → Workshop etc. in sync)
 # Note: graph-editor/public/docs/index.json is intentionally gitignored and generated at build time.
-print_blue "[0/7] Updating docs index (build-time)..."
+print_blue "[0/9] Updating docs index (build-time)..."
 (
   cd graph-editor
   npm run generate-docs
 )
 
 # Update package.json version
-print_blue "[1/7] Updating package.json..."
+print_blue "[1/9] Updating package.json..."
 (cd graph-editor && npm version "$NEW_VERSION" --no-git-tag-version)
 
 # Verify the version was updated correctly
@@ -506,7 +506,7 @@ if [[ "$UPDATED_VERSION" != "$NEW_VERSION" ]]; then
 fi
 
 # Update deployed version marker (used by reload-page nudge)
-print_blue "[2/7] Updating graph-editor/public/version.json..."
+print_blue "[2/9] Updating graph-editor/public/version.json..."
 cat > graph-editor/public/version.json << EOF
 {
   "version": "${NEW_VERSION}",
@@ -515,7 +515,7 @@ cat > graph-editor/public/version.json << EOF
 EOF
 
 # Update CHANGELOG.md if release notes were provided
-print_blue "[3/7] Updating CHANGELOG.md..."
+print_blue "[3/9] Updating CHANGELOG.md..."
 if [[ -n "$RELEASE_NOTES" && "$RELEASE_NOTES" != $'\n' ]]; then
   # DagNet date format: d-MMM-yy (e.g., 1-Dec-25)
   CURRENT_DATE="$(date "+%e-%b-%y" | sed 's/^ //')"
@@ -550,7 +550,7 @@ if git rev-parse "v${NEW_VERSION}" >/dev/null 2>&1; then
   git tag -d "v${NEW_VERSION}" >/dev/null 2>&1
 fi
 
-print_blue "[4/7] Staging changes..."
+print_blue "[4/9] Staging changes..."
 if [[ -n "$RELEASE_NOTES" && "$RELEASE_NOTES" != $'\n' ]]; then
   git add graph-editor/package.json graph-editor/package-lock.json graph-editor/public/version.json graph-editor/public/docs/CHANGELOG.md
 else
@@ -558,15 +558,15 @@ else
 fi
 
 # Commit the version bump
-print_blue "[5/7] Committing version bump..."
+print_blue "[5/9] Committing version bump..."
 git commit -m "Bump version to ${NEW_VERSION}"
 
 # Create git tag
-print_blue "[6/7] Creating git tag v${NEW_VERSION}..."
+print_blue "[6/9] Creating git tag v${NEW_VERSION}..."
 git tag "v${NEW_VERSION}"
 
 # Push changes and the new tag (only the new tag, not all local tags)
-print_blue "[7/7] Pushing ${CURRENT_BRANCH} to remote..."
+print_blue "[7/9] Pushing ${CURRENT_BRANCH} to remote..."
 if [[ "$FORCE_PUSH" == true ]]; then
   print_yellow "  ⚠ Force-pushing (--force)"
   git push --force origin "$CURRENT_BRANCH" "v${NEW_VERSION}"
@@ -574,10 +574,58 @@ else
   git push origin "$CURRENT_BRANCH" "v${NEW_VERSION}"
 fi
 
+# Deploy Modal (Bayes backend) if bayes/ has changes
+echo ""
+BAYES_CHANGED=$(git diff --name-only origin/main...HEAD -- bayes/ 2>/dev/null || true)
+if [[ -n "$BAYES_CHANGED" ]]; then
+  print_yellow "[8/9] Modal deploy — bayes/ has changed:"
+  echo "$BAYES_CHANGED" | sed 's/^/  /'
+  echo ""
+
+  SKIP_MODAL=false
+  if [[ "$AUTO_MODE" != true ]]; then
+    print_yellow "Deploy to Modal — press any key within 3s to skip..."
+    for i in 3 2 1; do
+      printf "\r  Deploying in %d... " "$i"
+      if read -r -s -n 1 -t 1 _key 2>/dev/null; then
+        SKIP_MODAL=true
+        break
+      fi
+    done
+    printf "\r                              \r"
+  fi
+
+  if [[ "$SKIP_MODAL" == true ]]; then
+    print_yellow "  ⊘ Modal deploy skipped (user interrupt)"
+    print_yellow "  Run ./deploy-modal.sh manually when ready."
+  else
+    # Activate venv so modal CLI is on PATH
+    if [[ -f graph-editor/venv/bin/activate ]]; then
+      source graph-editor/venv/bin/activate
+    fi
+
+    if ! command -v modal &>/dev/null; then
+      print_red "  ✗ 'modal' CLI not found — skipping Modal deploy."
+      print_yellow "  Install: pip install modal (inside graph-editor/venv)"
+      print_yellow "  Run ./deploy-modal.sh manually when ready."
+    else
+      print_blue "  Running: modal deploy bayes/app.py"
+      if modal deploy bayes/app.py; then
+        print_green "  ✓ Modal deployment complete"
+      else
+        print_red "  ✗ Modal deploy failed — run ./deploy-modal.sh manually."
+      fi
+    fi
+  fi
+else
+  print_yellow "[8/9] Modal deploy — no bayes/ changes, skipping."
+fi
+echo ""
+
 # Merge to main if requested
 if [[ "$MERGE_TO_MAIN" == true ]]; then
   echo ""
-  print_blue "[8/8] Pushing to main..."
+  print_blue "[9/9] Pushing to main..."
   
   # Push current branch directly to main without checking it out
   if [[ "$FORCE_PUSH" == true ]]; then

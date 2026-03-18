@@ -166,6 +166,8 @@ export function AnalysisChartContainer(props: {
   children?: React.ReactNode;
   /** Force-disable ECharts load animations (e.g. hover preview satellites). */
   suppressAnimation?: boolean;
+  /** Default tab for info cards (driven by view overlay mode). */
+  infoDefaultTab?: string;
   /** Called once the chart reaches a terminal visual state.
    *  'rendered' = ECharts painted real data; 'failed' = null option / info / no chart. */
   onRendered?: (outcome: 'rendered' | 'failed') => void;
@@ -991,7 +993,7 @@ export function AnalysisChartContainer(props: {
           props.children
         ) : effectiveKind === 'info' && patchedResult ? (
           <div style={{ flex: fillHeight ? 1 : undefined, minHeight: 0, overflow: 'auto' }}>
-            <AnalysisInfoCard result={patchedResult} fontSize={resolvedSettings.font_size} />
+            <AnalysisInfoCard result={patchedResult} fontSize={resolvedSettings.font_size} defaultTab={props.infoDefaultTab} />
           </div>
         ) : echartsOption ? (
           <div style={{ flex: fillHeight ? 1 : undefined, minHeight: 0, position: 'relative' }}>

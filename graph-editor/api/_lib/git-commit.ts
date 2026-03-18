@@ -61,9 +61,12 @@ async function ghFetch<T = any>(
 
   if (!resp.ok) {
     const errText = await resp.text();
-    throw new Error(
+    const err = new Error(
       `GitHub API ${options?.method ?? 'GET'} ${url} returned ${resp.status}: ${errText}`,
     );
+    (err as any).status = resp.status;
+    (err as any).body = errText;
+    throw err;
   }
 
   return resp.json() as Promise<T>;
@@ -97,6 +100,7 @@ export async function atomicCommitFiles(
     throw new Error('atomicCommitFiles: at least one file is required');
   }
 
+  const MAX_RETRIES = 3;
   const baseUrl = `https://api.github.com/repos/${owner}/${repo}`;
   const headers: GitHubHeaders = {
     Authorization: `token ${token}`,
@@ -104,21 +108,9 @@ export async function atomicCommitFiles(
     'User-Agent': 'dagnet-bayes-webhook',
   };
 
-  // 1. Get current branch HEAD SHA
-  const ref = await ghFetch<{ object: { sha: string } }>(
-    `${baseUrl}/git/ref/heads/${branch}`,
-    headers,
-  );
-  const headSha = ref.object.sha;
-
-  // 2. Get the commit to find the base tree SHA
-  const commit = await ghFetch<{ tree: { sha: string } }>(
-    `${baseUrl}/git/commits/${headSha}`,
-    headers,
-  );
-  const baseTreeSha = commit.tree.sha;
-
-  // 3. Create blobs for each file (parallel — all independent)
+  // 3. Create blobs for each file (parallel — all independent).
+  // Blobs are content-addressable and immutable, so they're created once
+  // and reused across retries.
   const blobPromises = files.map(file =>
     ghFetch<{ sha: string }>(
       `${baseUrl}/git/blobs`,
@@ -135,7 +127,6 @@ export async function atomicCommitFiles(
   const blobs = await Promise.all(blobPromises);
   const blobShas = blobs.map(b => b.sha);
 
-  // 4. Create a new tree with all the updated blobs
   const treeEntries = files.map((file, i) => ({
     path: file.path,
     mode: '100644' as const,  // regular file
@@ -143,49 +134,81 @@ export async function atomicCommitFiles(
     sha: blobShas[i],
   }));
 
-  const tree = await ghFetch<{ sha: string }>(
-    `${baseUrl}/git/trees`,
-    headers,
-    {
-      method: 'POST',
-      body: {
-        base_tree: baseTreeSha,
-        tree: treeEntries,
-      },
-    },
-  );
-  const newTreeSha = tree.sha;
+  // Steps 1-2, 4-6 are retried on fast-forward failure (HTTP 422).
+  // This handles the race where another commit lands between reading
+  // the ref and updating it.
+  for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+    // 1. Get current branch HEAD SHA
+    const ref = await ghFetch<{ object: { sha: string } }>(
+      `${baseUrl}/git/ref/heads/${branch}`,
+      headers,
+    );
+    const headSha = ref.object.sha;
 
-  // 5. Create the commit
-  const newCommit = await ghFetch<{ sha: string; html_url: string }>(
-    `${baseUrl}/git/commits`,
-    headers,
-    {
-      method: 'POST',
-      body: {
-        message,
-        tree: newTreeSha,
-        parents: [headSha],
-      },
-    },
-  );
+    // 2. Get the commit to find the base tree SHA
+    const commit = await ghFetch<{ tree: { sha: string } }>(
+      `${baseUrl}/git/commits/${headSha}`,
+      headers,
+    );
+    const baseTreeSha = commit.tree.sha;
 
-  // 6. Update the branch ref to point to the new commit
-  await ghFetch(
-    `${baseUrl}/git/refs/heads/${branch}`,
-    headers,
-    {
-      method: 'PATCH',
-      body: {
-        sha: newCommit.sha,
+    // 4. Create a new tree with all the updated blobs
+    const tree = await ghFetch<{ sha: string }>(
+      `${baseUrl}/git/trees`,
+      headers,
+      {
+        method: 'POST',
+        body: {
+          base_tree: baseTreeSha,
+          tree: treeEntries,
+        },
       },
-    },
-  );
+    );
+    const newTreeSha = tree.sha;
 
-  return {
-    sha: newCommit.sha,
-    url: newCommit.html_url,
-    blob_shas: blobShas,
-    tree_sha: newTreeSha,
-  };
+    // 5. Create the commit
+    const newCommit = await ghFetch<{ sha: string; html_url: string }>(
+      `${baseUrl}/git/commits`,
+      headers,
+      {
+        method: 'POST',
+        body: {
+          message,
+          tree: newTreeSha,
+          parents: [headSha],
+        },
+      },
+    );
+
+    // 6. Update the branch ref to point to the new commit
+    try {
+      await ghFetch(
+        `${baseUrl}/git/refs/heads/${branch}`,
+        headers,
+        {
+          method: 'PATCH',
+          body: {
+            sha: newCommit.sha,
+          },
+        },
+      );
+    } catch (err: any) {
+      // 422 = "Update is not a fast forward" — branch moved since step 1.
+      // Retry from step 1 with fresh ref.
+      if (err.status === 422 && attempt < MAX_RETRIES - 1) {
+        continue;
+      }
+      throw err;
+    }
+
+    return {
+      sha: newCommit.sha,
+      url: newCommit.html_url,
+      blob_shas: blobShas,
+      tree_sha: newTreeSha,
+    };
+  }
+
+  // Should be unreachable — the last attempt throws on failure.
+  throw new Error('atomicCommitFiles: exhausted retries');
 }

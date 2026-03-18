@@ -7,6 +7,7 @@ import { useViewPreferencesContext } from '../../contexts/ViewPreferencesContext
 import { useSankeyView } from '../../hooks/useSankeyView';
 import { useNodeImageView } from '../../hooks/useNodeImageView';
 import { useDashboardMode } from '../../hooks/useDashboardMode';
+import { useViewOverlayMode } from '../../hooks/useViewOverlayMode';
 import { useProjectionMode } from '../../contexts/ProjectionModeContext';
 import { useTheme } from '../../contexts/ThemeContext';
 import { sessionLogService } from '../../services/sessionLogService';
@@ -46,6 +47,7 @@ export function ViewMenu() {
   // Use centralised hooks for view toggles
   const { useSankeyView: isSankeyView, toggleSankeyView } = useSankeyView();
   const { showNodeImages, toggleNodeImageView } = useNodeImageView();
+  const { isForecastQuality, toggleForecastQuality } = useViewOverlayMode();
   
   // Debug: Log when menu is checked
   React.useEffect(() => {
@@ -292,6 +294,15 @@ export function ViewMenu() {
                   </Menubar.SubContent>
                 </Menubar.Portal>
               </Menubar.Sub>
+
+              <Menubar.Separator className="menubar-separator" />
+
+              <Menubar.Item
+                className="menubar-item"
+                onSelect={toggleForecastQuality}
+              >
+                {isForecastQuality ? '✓ ' : ''}Forecast Quality
+              </Menubar.Item>
 
               {/* Sankey Layout option - only show when Sankey view is active */}
               {isSankeyView && (

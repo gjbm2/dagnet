@@ -83,6 +83,27 @@ class LatencyConfig(BaseModel):
 
 # ── Bayesian posterior types ────────────────────────────────────────────────
 
+class SlicePosteriorEntry(BaseModel):
+    """Per-slice posterior entry (keyed by slice DSL string in slices map)."""
+    alpha: float
+    beta_param: float = Field(..., alias='beta')
+    hdi_lower: float
+    hdi_upper: float
+    ess: float
+    rhat: float
+    divergences: int = Field(0, ge=0)
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class SliceFitHistoryEntry(BaseModel):
+    """Slim per-slice snapshot within a fit_history entry."""
+    alpha: float
+    beta_param: float = Field(..., alias='beta')
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
 class ProbabilityFitHistoryEntry(BaseModel):
     """Slim snapshot for probability posterior drift tracking."""
     fitted_at: str
@@ -91,6 +112,8 @@ class ProbabilityFitHistoryEntry(BaseModel):
     hdi_lower: float
     hdi_upper: float
     rhat: float
+    divergences: int = Field(0, ge=0)
+    slices: Optional[Dict[str, SliceFitHistoryEntry]] = None
 
     model_config = ConfigDict(populate_by_name=True)
 
@@ -98,8 +121,8 @@ class ProbabilityFitHistoryEntry(BaseModel):
 class ProbabilityPosterior(BaseModel):
     """Bayesian posterior for a probability parameter."""
     distribution: str = Field(..., description="Distribution family fitted (e.g. 'beta', 'dirichlet-component')")
-    alpha: float = Field(..., description="Beta posterior shape α")
-    beta_param: float = Field(..., alias='beta', description="Beta posterior shape β")
+    alpha: float = Field(..., description="Beta posterior shape α (window posterior)")
+    beta_param: float = Field(..., alias='beta', description="Beta posterior shape β (window posterior)")
     hdi_lower: float = Field(..., description="Lower bound of HDI")
     hdi_upper: float = Field(..., description="Upper bound of HDI")
     hdi_level: float = Field(..., description="HDI level used (e.g. 0.9)")
@@ -109,7 +132,12 @@ class ProbabilityPosterior(BaseModel):
     fitted_at: str = Field(..., description="UK date (d-MMM-yy)")
     fingerprint: str = Field(..., description="Deterministic model hash")
     provenance: Literal['bayesian', 'pooled-fallback', 'point-estimate', 'skipped']
+    divergences: int = Field(0, ge=0, description="Count of MCMC divergent transitions")
+    prior_tier: Literal['direct_history', 'trajectory_calibrated', 'inherited', 'sibling_pooled', 'uninformative'] = Field(..., description="Prior cascade tier used")
+    surprise_z: Optional[float] = Field(None, description="Trajectory surprise z-score (null if < 3 fit_history entries)")
     fit_history: Optional[List[ProbabilityFitHistoryEntry]] = None
+    slices: Optional[Dict[str, SlicePosteriorEntry]] = Field(None, description="Per-slice posteriors keyed by slice DSL")
+    model_state: Optional[Dict[str, float]] = Field(None, alias='_model_state', description="Model-internal params for subsequent runs")
 
     model_config = ConfigDict(populate_by_name=True)
 
@@ -121,6 +149,7 @@ class LatencyFitHistoryEntry(BaseModel):
     sigma_mean: float
     onset_delta_days: float
     rhat: float
+    divergences: int = Field(0, ge=0)
 
 
 class LatencyPosterior(BaseModel):
@@ -149,6 +178,9 @@ class BayesQuality(BaseModel):
     converged_pct: float = Field(..., ge=0, le=1, description="Fraction of params meeting convergence criteria")
     edges_fitted: int = Field(..., ge=0)
     edges_skipped: int = Field(..., ge=0)
+    total_divergences: int = Field(0, ge=0, description="Sum of divergences across all fitted edges")
+    edges_with_surprise: int = Field(0, ge=0, description="Count of edges with trajectory surprise |z| > 2")
+    edges_by_tier: Dict[str, int] = Field(default_factory=dict, description="Prior cascade tier distribution")
 
 
 class BayesRunMetadata(BaseModel):

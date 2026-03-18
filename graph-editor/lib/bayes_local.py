@@ -39,15 +39,10 @@ def get_progress(job_id: str) -> dict | None:
 def _run_fit_graph(job_id: str, payload: dict) -> None:
     """Run fit_graph in a background thread, storing the result."""
     try:
-        # Make report_progress available to the worker via the payload
-        # so bayes_worker can report progress without importing bayes_local.
-        payload_with_progress = {
-            **payload,
-            '_report_progress': lambda stage, pct, detail="": report_progress(job_id, stage, pct, detail),
-        }
+        progress_fn = lambda stage, pct, detail="": report_progress(job_id, stage, pct, detail)
 
-        from bayes_worker import fit_graph_local
-        result = fit_graph_local(payload_with_progress)
+        from worker import fit_graph
+        result = fit_graph(payload, report_progress=progress_fn)
 
         with _lock:
             _jobs[job_id]['status'] = 'complete'

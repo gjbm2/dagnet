@@ -213,6 +213,216 @@ describe('hover preview ↔ pinned roundtrip invariant', () => {
   });
 });
 
+describe('edge_info tab decomposition', () => {
+  it('should produce overview, evidence, and forecast tabs', () => {
+    const graph: ConversionGraph = {
+      nodes: [
+        { id: 'A', uuid: 'uuid-a', label: 'Node A', type: 'normal' } as any,
+        { id: 'B', uuid: 'uuid-b', label: 'Node B', type: 'normal' } as any,
+      ],
+      edges: [
+        {
+          id: 'A-to-B', uuid: 'uuid-e1', from: 'uuid-a', to: 'uuid-b',
+          p: {
+            mean: 0.5, stdev: 0.05, n: 100,
+            evidence: { n: 200, k: 100, source: 'amplitude', window_from: '2026-01-01', window_to: '2026-02-01' },
+            forecast: { mean: 0.48, stdev: 0.03 },
+            latency: { latency_parameter: 'lat-1', median_lag_days: 5.2, t95: 14.1, completeness: 0.95 },
+          },
+        } as any,
+      ],
+      metadata: {} as any,
+    };
+    const response = computeLocalResult(graph, 'edge_info', 'from(A).to(B)');
+    expect(response.success).toBe(true);
+    const data = response.result!.data;
+
+    const tabs = [...new Set(data.map((r: any) => r.tab))];
+    expect(tabs).toContain('overview');
+    expect(tabs).toContain('evidence');
+    expect(tabs).toContain('forecast');
+
+    // Overview should have Identity, Probability, Forecast, Latency sections
+    const overviewSections = [...new Set(data.filter((r: any) => r.tab === 'overview').map((r: any) => r.section))];
+    expect(overviewSections).toContain('Identity');
+    expect(overviewSections).toContain('Probability');
+
+    // Evidence should have Observations
+    const evidenceSections = [...new Set(data.filter((r: any) => r.tab === 'evidence').map((r: any) => r.section))];
+    expect(evidenceSections).toContain('Observations');
+
+    // Forecast should have Bayesian Fit (no posterior → "No posterior available" message)
+    const forecastRows = data.filter((r: any) => r.tab === 'forecast');
+    expect(forecastRows.length).toBeGreaterThan(0);
+  });
+
+  it('should produce forecast tab with quality data when posterior is present', () => {
+    const graph: ConversionGraph = {
+      nodes: [
+        { id: 'A', uuid: 'uuid-a', label: 'Node A', type: 'normal' } as any,
+        { id: 'B', uuid: 'uuid-b', label: 'Node B', type: 'normal' } as any,
+      ],
+      edges: [
+        {
+          id: 'A-to-B', uuid: 'uuid-e1', from: 'uuid-a', to: 'uuid-b',
+          p: {
+            mean: 0.42, stdev: 0.05,
+            posterior: {
+              distribution: 'beta', alpha: 42, beta: 58,
+              hdi_lower: 0.35, hdi_upper: 0.49, hdi_level: 0.9,
+              ess: 2156, rhat: 1.008,
+              evidence_grade: 3, fitted_at: '18-Mar-26',
+              fingerprint: 'abc123',
+              provenance: 'bayesian', divergences: 0,
+              prior_tier: 'direct_history',
+            },
+          },
+        } as any,
+      ],
+      metadata: {} as any,
+    };
+    const response = computeLocalResult(graph, 'edge_info', 'from(A).to(B)');
+    expect(response.success).toBe(true);
+    const data = response.result!.data;
+
+    const forecastRows = data.filter((r: any) => r.tab === 'forecast');
+    const sections = [...new Set(forecastRows.map((r: any) => r.section))];
+    expect(sections).toContain('Quality');
+    expect(sections).toContain('Convergence');
+
+    // Quality tier should be 'Strong' (grade 3, clean convergence)
+    const tierRow = forecastRows.find((r: any) => r.property === 'Tier');
+    expect(tierRow?.value).toBe('Strong');
+
+    // HDI bounds should be present
+    const hdiRow = forecastRows.find((r: any) => r.property?.includes('HDI'));
+    expect(hdiRow).toBeDefined();
+    expect(hdiRow?.value).toContain('35.0%');
+    expect(hdiRow?.value).toContain('49.0%');
+  });
+});
+
+describe('node_info tab decomposition', () => {
+  it('should produce overview and structure tabs for case nodes', () => {
+    const graph: ConversionGraph = {
+      nodes: [
+        {
+          id: 'C', uuid: 'uuid-c', label: 'Case Node', type: 'case',
+          case: { status: 'active', variants: [{ name: 'control', weight: 0.5 }, { name: 'treatment', weight: 0.5 }] },
+        } as any,
+        { id: 'B', uuid: 'uuid-b', label: 'Node B', type: 'normal' } as any,
+      ],
+      edges: [
+        { id: 'C-to-B', uuid: 'uuid-e2', from: 'uuid-c', to: 'uuid-b', p: { mean: 0.5 } } as any,
+      ],
+      metadata: {} as any,
+    };
+    const response = computeLocalResult(graph, 'node_info', 'from(C)');
+    expect(response.success).toBe(true);
+    const data = response.result!.data;
+
+    const tabs = [...new Set(data.map((r: any) => r.tab))];
+    expect(tabs).toContain('overview');
+    expect(tabs).toContain('structure');
+
+    // Overview should have Identity
+    const overviewSections = [...new Set(data.filter((r: any) => r.tab === 'overview').map((r: any) => r.section))];
+    expect(overviewSections).toContain('Identity');
+
+    // Structure should have Case and Outgoing Edges
+    const structureSections = [...new Set(data.filter((r: any) => r.tab === 'structure').map((r: any) => r.section))];
+    expect(structureSections).toContain('Case');
+    expect(structureSections).toContain('Outgoing Edges');
+  });
+});
+
+describe('edge_info with malformed/partial posterior must not throw', () => {
+  it('should succeed when posterior is an empty object', () => {
+    const graph: ConversionGraph = {
+      nodes: [
+        { id: 'A', uuid: 'uuid-a', label: 'Node A', type: 'normal' } as any,
+        { id: 'B', uuid: 'uuid-b', label: 'Node B', type: 'normal' } as any,
+      ],
+      edges: [
+        {
+          id: 'A-to-B', uuid: 'uuid-e1', from: 'uuid-a', to: 'uuid-b',
+          p: { mean: 0.5, posterior: {} },
+        } as any,
+      ],
+      metadata: {} as any,
+    };
+    const response = computeLocalResult(graph, 'edge_info', 'from(A).to(B)');
+    expect(response.success).toBe(true);
+    expect(response.result).toBeDefined();
+    const forecastRows = response.result!.data.filter((r: any) => r.tab === 'forecast');
+    expect(forecastRows.length).toBeGreaterThan(0);
+  });
+
+  it('should succeed when posterior has only rhat and ess (missing prior_tier, hdi_level, etc.)', () => {
+    const graph: ConversionGraph = {
+      nodes: [
+        { id: 'A', uuid: 'uuid-a', label: 'Node A', type: 'normal' } as any,
+        { id: 'B', uuid: 'uuid-b', label: 'Node B', type: 'normal' } as any,
+      ],
+      edges: [
+        {
+          id: 'A-to-B', uuid: 'uuid-e1', from: 'uuid-a', to: 'uuid-b',
+          p: {
+            mean: 0.42,
+            posterior: { rhat: 1.005, ess: 2000, divergences: 0, provenance: 'bayesian' },
+          },
+        } as any,
+      ],
+      metadata: {} as any,
+    };
+    const response = computeLocalResult(graph, 'edge_info', 'from(A).to(B)');
+    expect(response.success).toBe(true);
+    expect(response.result).toBeDefined();
+  });
+
+  it('should succeed when posterior is truthy but fields are undefined', () => {
+    const graph: ConversionGraph = {
+      nodes: [
+        { id: 'A', uuid: 'uuid-a', label: 'Node A', type: 'normal' } as any,
+        { id: 'B', uuid: 'uuid-b', label: 'Node B', type: 'normal' } as any,
+      ],
+      edges: [
+        {
+          id: 'A-to-B', uuid: 'uuid-e1', from: 'uuid-a', to: 'uuid-b',
+          p: {
+            mean: 0.5,
+            posterior: {
+              distribution: 'beta', alpha: 42, beta: 58,
+              // Missing: hdi_lower, hdi_upper, hdi_level, prior_tier, rhat, ess, evidence_grade, etc.
+              provenance: 'bayesian',
+            },
+          },
+        } as any,
+      ],
+      metadata: {} as any,
+    };
+    const response = computeLocalResult(graph, 'edge_info', 'from(A).to(B)');
+    expect(response.success).toBe(true);
+    expect(response.result).toBeDefined();
+  });
+
+  it('should succeed when edge has no p at all', () => {
+    const graph: ConversionGraph = {
+      nodes: [
+        { id: 'A', uuid: 'uuid-a', label: 'Node A', type: 'normal' } as any,
+        { id: 'B', uuid: 'uuid-b', label: 'Node B', type: 'normal' } as any,
+      ],
+      edges: [
+        { id: 'A-to-B', uuid: 'uuid-e1', from: 'uuid-a', to: 'uuid-b' } as any,
+      ],
+      metadata: {} as any,
+    };
+    const response = computeLocalResult(graph, 'edge_info', 'from(A).to(B)');
+    expect(response.success).toBe(true);
+    expect(response.result).toBeDefined();
+  });
+});
+
 describe('mergeBackendAugmentation does not destroy info shape', () => {
   it('preserves local data when backend has different-shaped rows', () => {
     const graph = makeGraph();

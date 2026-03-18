@@ -1,0 +1,72 @@
+/* TabbedContainer — shared tab chrome */
+
+.dagnet-tabs {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;          /* allow flex shrink inside parent */
+  height: 100%;
+}
+
+.dagnet-tabs--single {
+  /* No tab bar — panel fills the container */
+}
+
+.dagnet-tab-bar {
+  display: flex;
+  gap: 0;
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--border-primary, #333);
+  background: var(--bg-secondary, #222);
+  padding: 0 4px;
+  overflow-x: auto;
+  scrollbar-width: none;   /* Firefox */
+  /* Re-enable pointer events even when parent body has pointerEvents: none
+     (hover preview cards disable body events for drag-to-pin). */
+  pointer-events: auto;
+}
+.dagnet-tab-bar::-webkit-scrollbar {
+  display: none;           /* Chrome/Safari */
+}
+
+.dagnet-tab-button {
+  all: unset;
+  cursor: pointer;
+  padding: 3px 8px;
+  font-size: 9px;
+  font-weight: 500;
+  color: var(--text-muted, #888);
+  white-space: nowrap;
+  border-bottom: 2px solid transparent;
+  transition: color 0.15s, border-color 0.15s;
+  user-select: none;
+}
+
+.dagnet-tab-button:hover {
+  color: var(--text-primary, #e0e0e0);
+}
+
+.dagnet-tab-button--active {
+  color: var(--text-primary, #e0e0e0);
+  border-bottom-color: var(--accent-primary, #60a5fa);
+}
+
+.dagnet-tab-panel {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+/* Measurement phase: all panels rendered but invisible, no clipping */
+.dagnet-tab-panel--measure {
+  visibility: hidden;
+  position: absolute;
+  overflow: visible;
+  /* Stack children to measure each independently */
+}
+.dagnet-tab-measure-slot {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+}

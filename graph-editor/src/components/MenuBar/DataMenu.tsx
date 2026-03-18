@@ -24,6 +24,8 @@ import { DailyFetchManagerModal } from '../modals/DailyFetchManagerModal';
 import { db } from '../../db/appDatabase';
 import { AutoUpdateChartsMenubarItem } from './AutoUpdateChartsMenubarItem';
 import { useLagHorizons } from '../../hooks/useLagHorizons';
+import { useBayesTrigger } from '../../hooks/useBayesTrigger';
+import type { BayesComputeMode } from '../../hooks/useBayesTrigger';
 
 /**
  * Data Menu
@@ -107,6 +109,17 @@ export function DataMenu() {
     setGraph: handleSetGraph as any,
     currentDSL: () => graphStore?.getState().currentDSL || '',  // AUTHORITATIVE DSL from graphStore
   });
+
+  // Bayesian fit trigger — reads stored compute mode preference
+  const bayesComputeMode: BayesComputeMode = (() => {
+    try {
+      const v = localStorage.getItem('dagnet-bayes-compute-mode');
+      if (v === 'modal' || v === 'local') return v;
+    } catch { /* ignore */ }
+    return 'local';
+  })();
+  const { status: bayesStatus, trigger: bayesTrigger } = useBayesTrigger(bayesComputeMode);
+  const bayesIsActive = bayesStatus === 'submitting' || bayesStatus === 'running';
 
   const lagHorizons = useLagHorizons({
     getGraph: () => (graphStore?.getState().graph as any) || null,
@@ -912,8 +925,19 @@ export function DataMenu() {
             </Menubar.Portal>
           </Menubar.Sub>
           
+          {/* Bayesian fit */}
+          <Menubar.Item
+            className="menubar-item"
+            onSelect={() => void bayesTrigger()}
+            disabled={!isGraphTab || bayesIsActive}
+          >
+            {bayesIsActive
+              ? (bayesStatus === 'submitting' ? 'Submitting Bayesian fit…' : 'Bayesian fit running…')
+              : 'Run Bayesian Fit…'}
+          </Menubar.Item>
+
           <Menubar.Separator className="menubar-separator" />
-          
+
           {/* Credentials */}
           <Menubar.Item 
             className="menubar-item" 

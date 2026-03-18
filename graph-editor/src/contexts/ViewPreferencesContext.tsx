@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
 import { useTabContext } from './TabContext';
+import type { ViewOverlayMode } from '../types';
 
 export interface ViewPreferencesState {
   useUniformScaling: boolean;
@@ -10,6 +11,7 @@ export interface ViewPreferencesState {
   showNodeImages: boolean;
   confidenceIntervalLevel: 'none' | '80' | '90' | '95' | '99';
   animateFlow: boolean;
+  viewOverlayMode: ViewOverlayMode;
 }
 
 interface ViewPreferencesContextValue extends ViewPreferencesState {
@@ -21,6 +23,7 @@ interface ViewPreferencesContextValue extends ViewPreferencesState {
   setShowNodeImages: (value: boolean) => void;
   setConfidenceIntervalLevel: (value: 'none' | '80' | '90' | '95' | '99') => void;
   setAnimateFlow: (value: boolean) => void;
+  setViewOverlayMode: (value: ViewOverlayMode) => void;
 }
 
 const ViewPreferencesContext = createContext<ViewPreferencesContextValue | null>(null);
@@ -46,6 +49,9 @@ export function ViewPreferencesProvider({ tabId, children }: { tabId?: string; c
     (editorState.confidenceIntervalLevel as 'none' | '80' | '90' | '95' | '99') ?? 'none'
   );
   const [animateFlow, setAnimateFlowLocal] = useState<boolean>(editorState.animateFlow ?? true);
+  const [viewOverlayMode, setViewOverlayModeLocal] = useState<ViewOverlayMode>(
+    (editorState.viewOverlayMode as ViewOverlayMode) ?? 'none'
+  );
 
   // Sync FROM tab state when it changes externally (tab switch/restore)
   useEffect(() => {
@@ -74,6 +80,9 @@ export function ViewPreferencesProvider({ tabId, children }: { tabId?: string; c
   useEffect(() => {
     if (editorState.animateFlow !== undefined) setAnimateFlowLocal(editorState.animateFlow);
   }, [editorState.animateFlow]);
+  useEffect(() => {
+    if (editorState.viewOverlayMode !== undefined) setViewOverlayModeLocal(editorState.viewOverlayMode as ViewOverlayMode);
+  }, [editorState.viewOverlayMode]);
 
   // Setters: update local immediately, persist to tab state asynchronously
   const setUseUniformScaling = (value: boolean) => {
@@ -108,6 +117,10 @@ export function ViewPreferencesProvider({ tabId, children }: { tabId?: string; c
     setAnimateFlowLocal(value);
     if (tabId) tabOps.updateTabState(tabId, { animateFlow: value });
   };
+  const setViewOverlayMode = (value: ViewOverlayMode) => {
+    setViewOverlayModeLocal(value);
+    if (tabId) tabOps.updateTabState(tabId, { viewOverlayMode: value });
+  };
 
   const value = useMemo<ViewPreferencesContextValue>(() => ({
     useUniformScaling,
@@ -118,6 +131,7 @@ export function ViewPreferencesProvider({ tabId, children }: { tabId?: string; c
     showNodeImages,
     confidenceIntervalLevel,
     animateFlow,
+    viewOverlayMode,
     setUseUniformScaling,
     setMassGenerosity,
     setAutoReroute,
@@ -125,8 +139,9 @@ export function ViewPreferencesProvider({ tabId, children }: { tabId?: string; c
     setUseSankeyView,
     setShowNodeImages,
     setConfidenceIntervalLevel,
-    setAnimateFlow
-  }), [useUniformScaling, massGenerosity, autoReroute, snapToGuides, useSankeyView, showNodeImages, confidenceIntervalLevel, animateFlow]);
+    setAnimateFlow,
+    setViewOverlayMode
+  }), [useUniformScaling, massGenerosity, autoReroute, snapToGuides, useSankeyView, showNodeImages, confidenceIntervalLevel, animateFlow, viewOverlayMode]);
 
   return (
     <ViewPreferencesContext.Provider value={value}>

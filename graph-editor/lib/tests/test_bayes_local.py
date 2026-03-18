@@ -3,7 +3,7 @@ Functional lifecycle tests for bayes_local.py — the local dev-server
 Bayes job runner that mirrors Modal's async spawn/poll pattern.
 
 Tests exercise submit(), get_status(), and cancel() directly with a
-mocked fit_graph_local to avoid DB/webhook dependencies.
+mocked worker.fit_graph to avoid DB/webhook/MCMC dependencies.
 """
 
 import threading
@@ -32,9 +32,9 @@ def _clean_job_store():
     bayes_local._progress.clear()
 
 
-def _mock_fit_graph_local(payload, *, delay=0, result=None, raise_exc=None):
-    """Factory for mock fit_graph_local functions."""
-    def fn(p):
+def _mock_fit_graph(payload, *, delay=0, result=None, raise_exc=None):
+    """Factory for mock worker.fit_graph functions."""
+    def fn(p, report_progress=None):
         if delay:
             time.sleep(delay)
         if raise_exc:
@@ -47,14 +47,14 @@ class TestSubmitAndComplete:
     """Happy path: submit a job, poll until complete, verify result."""
 
     def test_submit_returns_job_id_with_local_prefix(self):
-        with patch('bayes_worker.fit_graph_local', side_effect=_mock_fit_graph_local({})):
+        with patch('worker.fit_graph', side_effect=_mock_fit_graph({})):
             job_id = bayes_local.submit({'graph_id': 'test'})
         assert job_id.startswith('local-')
         assert len(job_id) > len('local-')
 
     def test_submit_job_reaches_complete_status(self):
         mock_result = {'fitted': True, 'params': [1, 2, 3]}
-        with patch('bayes_worker.fit_graph_local', return_value=mock_result):
+        with patch('worker.fit_graph', return_value=mock_result):
             job_id = bayes_local.submit({'graph_id': 'test'})
 
         # Poll until complete (max 5s)
@@ -73,11 +73,11 @@ class TestSubmitAndComplete:
         """The worker receives _job_id in the payload for webhook correlation."""
         captured = {}
 
-        def capture_fn(payload):
+        def capture_fn(payload, report_progress=None):
             captured.update(payload)
             return {'ok': True}
 
-        with patch('bayes_worker.fit_graph_local', side_effect=capture_fn):
+        with patch('worker.fit_graph', side_effect=capture_fn):
             job_id = bayes_local.submit({'graph_id': 'test'})
             # Wait for thread to run
             time.sleep(0.2)
@@ -90,10 +90,10 @@ class TestSubmitAndFail:
     """Error path: worker raises an exception."""
 
     def test_failed_job_reports_error(self):
-        def failing_fn(payload):
+        def failing_fn(payload, report_progress=None):
             raise ValueError('DB connection refused')
 
-        with patch('bayes_worker.fit_graph_local', side_effect=failing_fn):
+        with patch('worker.fit_graph', side_effect=failing_fn):
             job_id = bayes_local.submit({'graph_id': 'test'})
 
         # Poll until done
@@ -117,11 +117,11 @@ class TestCancel:
         # Use a slow worker so we can cancel while it's running
         barrier = threading.Event()
 
-        def slow_fn(payload):
+        def slow_fn(payload, report_progress=None):
             barrier.wait(timeout=5)
             return {'ok': True}
 
-        with patch('bayes_worker.fit_graph_local', side_effect=slow_fn):
+        with patch('worker.fit_graph', side_effect=slow_fn):
             job_id = bayes_local.submit({'graph_id': 'test'})
 
             # Verify it's running
@@ -143,7 +143,7 @@ class TestCancel:
 
     def test_cancel_completed_job_returns_current_status(self):
         """Cancelling an already-complete job returns 'complete', not 'cancelled'."""
-        with patch('bayes_worker.fit_graph_local', return_value={'fitted': True}):
+        with patch('worker.fit_graph', return_value={'fitted': True}):
             job_id = bayes_local.submit({'graph_id': 'test'})
 
         # Wait for completion
@@ -174,11 +174,11 @@ class TestGetStatus:
     def test_status_running_job_has_no_result(self):
         barrier = threading.Event()
 
-        def slow_fn(payload):
+        def slow_fn(payload, report_progress=None):
             barrier.wait(timeout=5)
             return {'ok': True}
 
-        with patch('bayes_worker.fit_graph_local', side_effect=slow_fn):
+        with patch('worker.fit_graph', side_effect=slow_fn):
             job_id = bayes_local.submit({'graph_id': 'test'})
 
             status = bayes_local.get_status(job_id)
@@ -195,13 +195,13 @@ class TestProgress:
         """Status endpoint includes progress when worker reports it."""
         barrier = threading.Event()
 
-        def worker_with_progress(payload):
-            report = payload.get('_report_progress', lambda *a: None)
-            report('fitting', 42, 'Edge 3/7')
+        def worker_with_progress(payload, report_progress=None):
+            if report_progress:
+                report_progress('fitting', 42, 'Edge 3/7')
             barrier.wait(timeout=5)
             return {'ok': True}
 
-        with patch('bayes_worker.fit_graph_local', side_effect=worker_with_progress):
+        with patch('worker.fit_graph', side_effect=worker_with_progress):
             job_id = bayes_local.submit({'graph_id': 'test'})
             time.sleep(0.1)  # Let the worker thread start and report
 
@@ -216,12 +216,12 @@ class TestProgress:
 
     def test_progress_cleaned_up_after_completion(self):
         """Progress entry is removed once the job completes."""
-        def worker_with_progress(payload):
-            report = payload.get('_report_progress', lambda *a: None)
-            report('fitting', 50, 'Halfway')
+        def worker_with_progress(payload, report_progress=None):
+            if report_progress:
+                report_progress('fitting', 50, 'Halfway')
             return {'ok': True}
 
-        with patch('bayes_worker.fit_graph_local', side_effect=worker_with_progress):
+        with patch('worker.fit_graph', side_effect=worker_with_progress):
             job_id = bayes_local.submit({'graph_id': 'test'})
 
         # Wait for completion
@@ -239,11 +239,11 @@ class TestProgress:
         """Status has no progress field when worker doesn't use the callback."""
         barrier = threading.Event()
 
-        def silent_worker(payload):
+        def silent_worker(payload, report_progress=None):
             barrier.wait(timeout=5)
             return {'ok': True}
 
-        with patch('bayes_worker.fit_graph_local', side_effect=silent_worker):
+        with patch('worker.fit_graph', side_effect=silent_worker):
             job_id = bayes_local.submit({'graph_id': 'test'})
             time.sleep(0.1)
 

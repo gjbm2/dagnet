@@ -37,6 +37,7 @@ These are **non-negotiable reflexes**. When the user's message matches a trigger
 | **"see mark X"**, "inspect mark X", "check mark X", "review mark X", "look at mark X", or **any message containing "mark 'X'"** | `scripts/extract-mark-logs.sh "X"` — then analyse the output. **NEVER** search for log files manually. **NEVER** try to reason without the logs. |
 | "run tests" (without specific files) | Run only tests related to files you changed — use file paths, not patterns |
 | "dry run" / "run the script" | Requires `required_permissions: ["all"]` — the sandbox hides `node_modules` and env files |
+| **"RTFM"**, "rtfm", or any derivation (e.g. "read the manual", "check the docs", "did you even read the rules") | The user is telling you that your recent response missed context that is already documented. **Three mandatory steps**: **(1)** Re-read this entire CLAUDE.md file systematically — do not skim. **(2)** Review relevant codebase docs (`docs/current/`, `docs/current/project-contexts/`, `graph-editor/docs/`, and any files referenced in the current discussion) to rebuild working knowledge. **(3)** Revise your most recent response/analysis in light of what you missed, and respond with corrected, properly contextualised guidance. **Do NOT defend the original response.** The user is not asking for justification — they are telling you that you were wrong. |
 
 **The mark trigger is the most commonly violated.** If the user mentions a mark name, your first action is `scripts/extract-mark-logs.sh`. Period.
 
