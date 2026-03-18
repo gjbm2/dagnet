@@ -675,7 +675,7 @@ export function AnalysisChartContainer(props: {
               {(() => {
                 const availableIds = new Set((props.availableAnalyses || []).map(a => a.id));
                 const types = showAllAnalysisTypes
-                  ? ANALYSIS_TYPES.map(tm => ({ id: tm.id, meta: tm, available: availableIds.has(tm.id) }))
+                  ? ANALYSIS_TYPES.filter(tm => !tm.internal).map(tm => ({ id: tm.id, meta: tm, available: availableIds.has(tm.id) }))
                   : (props.availableAnalyses || []).map(a => ({ id: a.id, meta: getAnalysisTypeMeta(a.id), available: true }));
                 return types.map(({ id, meta, available }) => {
                   const Icon = meta?.icon;

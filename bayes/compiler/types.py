@@ -124,10 +124,26 @@ class CohortDailyObs:
 
 
 @dataclass
+class CohortDailyTrajectory:
+    """A single cohort day observed at multiple retrieval ages (Phase S).
+
+    The trajectory Multinomial uses `a` (anchor entrants) as the fixed
+    denominator and path-level probability in the interval probabilities.
+    See doc 6, Layer 3 § "Maturation trajectory likelihood".
+    """
+    date: str
+    a: int                                  # anchor entrants (fixed denominator)
+    retrieval_ages: list[float] = field(default_factory=list)   # sorted ascending
+    cumulative_y: list[int] = field(default_factory=list)       # monotonised target counts
+    path_edge_ids: list[str] = field(default_factory=list)      # edges on path (for p_path)
+
+
+@dataclass
 class CohortObservation:
     """A cohort-type values[] entry bound to an edge."""
     slice_dsl: str
     daily: list[CohortDailyObs] = field(default_factory=list)
+    trajectories: list[CohortDailyTrajectory] = field(default_factory=list)
     anchor_node: str = ""
 
 

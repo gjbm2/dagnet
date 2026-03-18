@@ -1716,6 +1716,235 @@ This is acceptable because:
 
 ---
 
+## Return path re-architecture: patch file model (18-Mar-26)
+
+### Problem with the current webhook-commits-files approach
+
+The current webhook handler reads graph and parameter files from git,
+merges posterior data into them, and commits the updated files
+atomically. This creates a fundamental conflict with the FE's local
+state:
+
+1. User opens graph, adds canvas charts, makes edits (local dirty state)
+2. User triggers Bayes fit — webhook will fire when complete
+3. Time passes (minutes for local, up to hours for nightly runs)
+4. Webhook fires, reads files from git (which don't have the user's
+   uncommitted canvas charts, postits, or other local-only state),
+   modifies `_bayes` and `posterior` blocks, commits
+5. FE pulls — detects "both sides changed" on the graph file
+6. 3-way merge sees: base had canvas charts (from a previous merge),
+   remote doesn't have them (webhook wrote from git state), local has
+   them → merge interprets remote's absence as a deletion
+7. User's canvas charts are removed from the proposed merge
+
+The root cause: the webhook does a full read-modify-write of files it
+only needs to patch one block of. Any field absent from the git version
+at webhook-read-time is implicitly deleted. The 3-way merge can't
+distinguish "remote deliberately deleted X" from "remote never knew
+about X."
+
+This is not fixable by tuning the merge logic — the ambiguity is
+inherent in a 3-way diff when one side does a full file rewrite with
+partial knowledge.
+
+### Solution: webhook writes a patch file, FE applies it
+
+The webhook stops writing graph and parameter files. Instead it
+commits a single **patch file** containing the raw posterior results.
+The FE detects the patch file on pull (or on job completion poll),
+applies the upserts into its local files (which have full local
+context), and commits the result through the normal dirty-file flow.
+
+```
+Compute vendor            Vercel webhook handler         GitHub
+    │                          │                           │
+    ├─ POST webhook ──────────>│                           │
+    │  {posteriors, quality}   │                           │
+    │                          ├─ format patch file        │
+    │                          ├─ commit patch file ──────>│
+    │                          │  _bayes/patch-{id}.json   │
+    │                          │                           │
+    │                          ├─ return 200               │
+    │                          │                           │
+```
+
+```
+FE (on job complete or next pull)
+    │
+    ├─ git pull → sees _bayes/patch-{id}.json
+    ├─ read patch file
+    ├─ for each edge in patch:
+    │   ├─ upsert posterior block into local parameter file
+    │   ├─ cascade p.mean/p.stdev to graph edge (existing cascade)
+    │   └─ mark parameter file dirty
+    ├─ upsert _bayes block into local graph file
+    ├─ mark graph file dirty
+    ├─ delete (or archive) patch file
+    └─ normal commit flow pushes updated files to git
+```
+
+### Patch file format
+
+Location: `_bayes/patch-{job_id}.json` (the `_bayes/` directory is
+reserved for Bayes artefacts, gitignored from data repo linting).
+
+```json
+{
+  "job_id": "514ba52f-d570-4f1d-ae44-9e01966c16af",
+  "graph_id": "graph-bayes-test-gm-rebuild",
+  "fitted_at": "18-Mar-26",
+  "fingerprint": "fa368668c10069e1",
+  "model_version": 1,
+  "quality": {
+    "max_rhat": 1.002,
+    "min_ess": 3114.3,
+    "converged_pct": 100
+  },
+  "edges": [
+    {
+      "param_id": "bayes-test-create-to-delegated",
+      "file_path": "parameters/bayes-test-create-to-delegated.yaml",
+      "probability": {
+        "alpha": 45.2,
+        "beta": 120.8,
+        "mean": 0.272,
+        "stdev": 0.034,
+        "hdi_lower": 0.22,
+        "hdi_upper": 0.33,
+        "hdi_level": 0.9,
+        "ess": 1200,
+        "rhat": 1.001,
+        "provenance": "bayesian"
+      },
+      "latency": {
+        "mu_mean": 2.35,
+        "mu_sd": 0.08,
+        "sigma_mean": 0.72,
+        "sigma_sd": 0.04,
+        "hdi_t95_lower": 14.2,
+        "hdi_t95_upper": 19.8,
+        "provenance": "bayesian"
+      }
+    }
+  ],
+  "skipped": [
+    { "param_id": "some-edge", "reason": "no observations" }
+  ]
+}
+```
+
+This is the same payload the webhook currently receives from the
+worker — the webhook just writes it to a file instead of applying it.
+No formatting, no YAML generation, no reading of existing files.
+
+### Webhook handler changes
+
+The webhook handler becomes dramatically simpler:
+
+1. Decrypt callback token → git credentials
+2. Validate payload (job_id, graph_id, edges array)
+3. Write `_bayes/patch-{job_id}.json` to git via a single-file commit
+4. Return 200
+
+No reading of graph or parameter files. No YAML parsing. No cascade
+logic. No multi-file atomic commit. One file, one commit.
+
+### FE patch application service
+
+New service: `bayesPatchService.ts`
+
+**Detection**: on pull, scan for files matching `_bayes/patch-*.json`.
+Also: on Bayes job completion (polled from `useBayesTrigger`), trigger
+a pull and check for the patch file.
+
+**Application** (per patch file):
+
+1. Parse the patch JSON
+2. For each edge in `edges[]`:
+   a. Find the local parameter file by `param_id` (from FileRegistry)
+   b. Upsert `posterior` block from the patch's `probability` data
+   c. Upsert `latency.posterior` block from the patch's `latency` data
+   d. Append to `fit_history[]` (same logic the webhook currently does)
+   e. Cascade `p.mean`, `p.stdev` to the graph edge (existing
+      `UpdateManager` cascade, already handles this)
+   f. Mark the parameter file dirty
+3. Upsert `_bayes` block on the graph document from the patch metadata
+4. Mark the graph dirty
+5. Delete the patch file from git (or move to `_bayes/applied/`)
+6. Session log: "Applied Bayes patch {job_id}: {n} edges updated"
+
+**Conflict-free by construction**: the FE is the sole writer of
+parameter and graph files. The patch provides the data; the FE applies
+it into its local state, which includes canvas charts, postits, dirty
+edits, and everything else. No 3-way merge needed for the Bayes
+results — it's a targeted upsert.
+
+### Closed-browser case
+
+If the user closes the browser before the job completes:
+
+1. Worker finishes, fires webhook
+2. Webhook writes `_bayes/patch-{job_id}.json` to git
+3. No FE is listening — patch sits in git
+
+On next app open:
+
+4. FE pulls, sees the patch file in the workspace
+5. `bayesPatchService` detects and applies it automatically
+6. Updated files are committed through normal flow
+
+The patch file acts as a durable message queue with git as the
+transport. No state is lost.
+
+### Multiple pending patches
+
+If multiple Bayes runs complete while the browser is closed (e.g.
+nightly runs over a weekend), multiple patch files accumulate:
+
+```
+_bayes/patch-abc123.json  (Friday night run)
+_bayes/patch-def456.json  (Saturday night run)
+_bayes/patch-ghi789.json  (Sunday night run)
+```
+
+The FE applies them in chronological order (by `fitted_at` date).
+Later patches overwrite earlier ones' posteriors on the same edges,
+which is correct — the latest run has the most current evidence.
+
+### Idempotency
+
+A patch file should be applied at most once. The service tracks
+applied patch IDs (via the `_bayes.last_applied_patch` field on the
+graph, or a local marker) to avoid re-applying a patch that was
+already processed but whose deletion hasn't been pushed yet.
+
+### Migration from current webhook
+
+The current webhook handler (`api/bayes-webhook.ts`) needs to be
+rewritten. The new version is much simpler — it writes one JSON file
+instead of reading/modifying/committing N+1 files. The existing
+`mergePosteriorsIntoParam()`, `cascadePosteriorToGraphEdge()`, and
+multi-file atomic commit logic moves from the webhook into the FE
+`bayesPatchService`.
+
+The E2E roundtrip test (`bayesPosteriorFullRoundtrip.spec.ts`) needs
+updating to verify the patch-file flow instead of the direct-commit
+flow: webhook writes patch → FE detects → applies → commits.
+
+### What this does NOT change
+
+- **Submission path**: FE → Modal → worker → webhook. Unchanged.
+- **Worker logic**: compiler, inference, posterior summarisation. The
+  worker still sends the same JSON payload to the webhook. Unchanged.
+- **Posterior schema**: the patch file contains the same posterior
+  fields that the webhook currently writes. Unchanged.
+- **FE consumption**: `PosteriorIndicator`, quality overlay, analysis
+  charts — all read from the same `p.posterior` fields on parameter
+  files. Unchanged (they just arrive via patch application instead of
+  webhook commit).
+
+---
+
 ## Acceptance criteria
 
 This workstream is complete when:

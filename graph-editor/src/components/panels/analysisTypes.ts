@@ -24,6 +24,7 @@ import {
   TrendingUp,
   CircleDot,
   Cable,
+  FlaskConical,
   type LucideIcon,
 } from 'lucide-react';
 
@@ -67,6 +68,9 @@ export interface AnalysisTypeMeta {
   icon: LucideIcon;
   /** If present, this analysis type requires snapshot DB data */
   snapshotContract?: SnapshotContract;
+  /** If true, this type is used by backend pipelines only (e.g. Bayes compiler)
+   *  and should never appear in user-facing selectors or chart/satellite UI. */
+  internal?: boolean;
 }
 
 /**
@@ -270,6 +274,24 @@ export const ANALYSIS_TYPES: AnalysisTypeMeta[] = [
     icon: TrendingUp,
     snapshotContract: {
       scopeRule: 'funnel_path',
+      readMode: 'sweep_simple',
+      slicePolicy: 'mece_fulfilment_allowed',
+      timeBoundsSource: 'query_dsl_window',
+      perScenario: false,
+    },
+  },
+  // Bayes fit — not a user-visible analysis type. Used internally by
+  // useBayesTrigger to build snapshot subjects for the compiler's
+  // evidence assembly (Phase S). Scope: all graph parameters.
+  {
+    id: 'bayes_fit',
+    name: 'Bayesian Fit',
+    shortDescription: 'Internal: snapshot subjects for Bayes compiler',
+    selectionHint: '',
+    icon: FlaskConical,
+    internal: true,
+    snapshotContract: {
+      scopeRule: 'all_graph_parameters',
       readMode: 'sweep_simple',
       slicePolicy: 'mece_fulfilment_allowed',
       timeBoundsSource: 'query_dsl_window',

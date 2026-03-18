@@ -210,10 +210,15 @@ describe('Pipeline uniformity — satellite ↔ CanvasAnalysisNode invariant', (
 
   const allAnalysisTypeIds = ANALYSIS_TYPES.map(t => t.id);
 
+  // Internal-only analysis types (marked internal: true in analysisTypes.ts) that
+  // intentionally have no chart/satellite presence. Used by backend pipelines only.
+  const internalOnlyTypes = new Set(ANALYSIS_TYPES.filter(t => t.internal).map(t => t.id));
+
   it('should have chart_kinds for every analysis type in ANALYSIS_TYPES', () => {
-    // Every analysis type must have at least one known chart kind so that
+    // Every user-facing analysis type must have at least one known chart kind so that
     // it can participate in the satellite recipe cartesian product.
     for (const typeId of allAnalysisTypeIds) {
+      if (internalOnlyTypes.has(typeId)) continue;
       const kinds = getChartKindsForAnalysisType(typeId);
       expect(kinds.length, `${typeId} has no chart_kinds mapping`).toBeGreaterThan(0);
     }
@@ -222,9 +227,9 @@ describe('Pipeline uniformity — satellite ↔ CanvasAnalysisNode invariant', (
   it('should produce at least one satellite-eligible chart kind for every non-info analysis type', () => {
     // For each analysis type (except node_info/edge_info whose only kind is
     // 'info'), at least one chart kind must survive the NON_CHART_KINDS filter.
-    const infoOnlyTypes = new Set(['node_info', 'edge_info']);
+    const nonVisualTypes = new Set(['node_info', 'edge_info', ...internalOnlyTypes]);
     for (const typeId of allAnalysisTypeIds) {
-      if (infoOnlyTypes.has(typeId)) continue;
+      if (nonVisualTypes.has(typeId)) continue;
       const kinds = getChartKindsForAnalysisType(typeId);
       const visual = kinds.filter(k => !NON_CHART_KINDS.has(k));
       expect(visual.length, `${typeId} has no visual chart kinds after filtering table/info`).toBeGreaterThan(0);
@@ -342,9 +347,9 @@ describe('Pipeline uniformity — satellite ↔ CanvasAnalysisNode invariant', (
     }
     // Verify we got recipes for all non-info-only types
     const typesWithRecipes = new Set(allRecipes.map(r => r.analysisType));
-    const infoOnlyTypes = new Set(['node_info', 'edge_info']);
+    const nonVisualTypes = new Set(['node_info', 'edge_info', ...internalOnlyTypes]);
     for (const typeId of allAnalysisTypeIds) {
-      if (infoOnlyTypes.has(typeId)) continue;
+      if (nonVisualTypes.has(typeId)) continue;
       expect(
         typesWithRecipes.has(typeId),
         `${typeId} has no satellite recipes — it would be invisible in satellite row`,

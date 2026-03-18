@@ -126,6 +126,89 @@ export function useBayesTrigger(computeMode: BayesComputeMode = 'local') {
         }
       }
 
+      // 4b. Build snapshot subjects from pinned DSL (Phase S)
+      //
+      // The pinned DSL (dataInterestsDSL) may be compound:
+      //   "context(channel);context(device).window(-90d:)"
+      // This must be exploded into atomic slices first, then each slice
+      // gets its own fetch plan and snapshot subjects — same as the
+      // retrieve-all-slices service does for data fetching.
+      let snapshotSubjects: any[] = [];
+      const pinnedDsl = (graphFile.data as any)?.dataInterestsDSL;
+      if (pinnedDsl && typeof pinnedDsl === 'string' && pinnedDsl.trim()) {
+        try {
+          const { explodeDSL } = await import('../lib/dslExplosion');
+          const { buildFetchPlanProduction } = await import('../services/fetchPlanBuilderService');
+          const { mapFetchPlanToSnapshotSubjects } = await import('../services/snapshotDependencyPlanService');
+          const { parseConstraints } = await import('../lib/queryDSL');
+          const { resolveRelativeDate, formatDateUK } = await import('../lib/dateFormat');
+
+          const explodedSlices = await explodeDSL(pinnedDsl);
+          if (explodedSlices.length === 0) {
+            sessionLogService.info('bayes', 'BAYES_NO_EXPLODED_SLICES',
+              'Pinned DSL produced no slices after explosion');
+          }
+
+          const workspace = {
+            repository: `${gitCred.owner}/${gitCred.name}`,
+            branch: navState.selectedBranch || 'main',
+          };
+
+          for (const sliceDsl of explodedSlices) {
+            // Derive date range from this slice's window/cohort clause
+            const constraints = parseConstraints(sliceDsl);
+            let dslWindow: { start: string; end: string } | null = null;
+            if (constraints.cohort?.start) {
+              dslWindow = {
+                start: resolveRelativeDate(constraints.cohort.start),
+                end: constraints.cohort.end ? resolveRelativeDate(constraints.cohort.end) : formatDateUK(new Date()),
+              };
+            } else if (constraints.window?.start) {
+              dslWindow = {
+                start: resolveRelativeDate(constraints.window.start),
+                end: constraints.window.end ? resolveRelativeDate(constraints.window.end) : formatDateUK(new Date()),
+              };
+            }
+
+            if (!dslWindow) continue;
+
+            const { plan } = await buildFetchPlanProduction(graphFile.data as any, sliceDsl, dslWindow);
+            const resolved = await mapFetchPlanToSnapshotSubjects({
+              plan,
+              analysisType: 'bayes_fit',
+              graph: graphFile.data as any,
+              selectedEdgeUuids: [],
+              workspace,
+              queryDsl: sliceDsl,
+            });
+            if (resolved?.subjects) {
+              snapshotSubjects.push(...resolved.subjects);
+            }
+          }
+
+          if (snapshotSubjects.length > 0) {
+            sessionLogService.info('bayes', 'BAYES_SNAPSHOT_SUBJECTS',
+              `Built ${snapshotSubjects.length} snapshot subjects from ${explodedSlices.length} exploded slices`);
+          }
+        } catch (err: any) {
+          // Non-fatal: fall back to param-file-only evidence
+          sessionLogService.warning('bayes', 'BAYES_SNAPSHOT_SUBJECTS_FAILED',
+            `Could not build snapshot subjects: ${err.message} — falling back to param files`);
+        }
+      } else {
+        sessionLogService.info('bayes', 'BAYES_NO_PINNED_DSL',
+          'No dataInterestsDSL on graph — snapshot evidence not available');
+      }
+
+      // 4c. Load forecasting settings
+      let forecastingSettings: Record<string, unknown> = {};
+      try {
+        const { forecastingSettingsService } = await import('../services/forecastingSettingsService');
+        forecastingSettings = await forecastingSettingsService.getForecastingModelSettings() as any;
+      } catch {
+        // Non-fatal: compiler uses defaults
+      }
+
       // 5. Encrypt callback token
       const callbackToken = await encryptCallbackToken(
         {
@@ -197,8 +280,10 @@ export function useBayesTrigger(computeMode: BayesComputeMode = 'local') {
         parameters_index: parametersIndex?.data ?? {},
         parameter_files: parameterFiles,
         settings: {
+          ...forecastingSettings,
           ...(new URLSearchParams(window.location.search).has('placeholder') ? { placeholder: true } : {}),
         },
+        ...(snapshotSubjects.length > 0 ? { snapshot_subjects: snapshotSubjects } : {}),
         callback_token: callbackToken,
         db_connection: config.db_connection,
         webhook_url: webhookUrl,

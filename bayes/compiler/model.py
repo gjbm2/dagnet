@@ -130,7 +130,8 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence):
 
                 if emit_window_binomial:
                     _emit_window_likelihoods(safe_id, p_window, ev, diagnostics)
-                _emit_cohort_likelihoods(safe_id, p_cohort, ev, diagnostics)
+                _emit_cohort_likelihoods(safe_id, p_cohort, ev, diagnostics,
+                                        topology, edge_var_names, model)
 
                 if edge_id not in edge_var_names:
                     edge_var_names[edge_id] = f"p_base_{safe_id}"
@@ -150,7 +151,8 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence):
                 else:
                     p = pm.Beta(f"p_{safe_id}", alpha=ev.prob_prior.alpha, beta=ev.prob_prior.beta)
                     edge_var_names[edge_id] = f"p_{safe_id}"
-                _emit_cohort_likelihoods(safe_id, p, ev, diagnostics)
+                _emit_cohort_likelihoods(safe_id, p, ev, diagnostics,
+                                        topology, edge_var_names, model)
 
             else:
                 if p_base_var is None:
@@ -363,37 +365,149 @@ def _emit_cohort_likelihoods(
     p_var,
     ev: EdgeEvidence,
     diagnostics: list[str],
+    topology=None,
+    edge_var_names: dict[str, str] | None = None,
+    model=None,
 ) -> None:
-    """Emit per-day Binomial likelihoods for cohort observations."""
+    """Emit cohort likelihoods: trajectory Multinomials and/or per-day Binomials.
+
+    Trajectory days (multiple retrieval ages) → Multinomial over intervals
+    with anchor-based denominator and path-level p_path.
+    Single-retrieval days → existing per-day Binomial with completeness.
+    """
     import pymc as pm
     import numpy as np
 
     for c_idx, c_obs in enumerate(ev.cohort_obs):
-        if not c_obs.daily:
-            continue
-
         c_suffix = f"_c{c_idx}" if len(ev.cohort_obs) > 1 else ""
 
-        n_arr = np.array([d.n for d in c_obs.daily], dtype=np.int64)
-        k_arr = np.array([min(d.k, d.n) for d in c_obs.daily], dtype=np.int64)
-        compl_arr = np.array([d.completeness for d in c_obs.daily], dtype=np.float64)
+        # --- Trajectory Multinomials (Phase S) ---
+        for t_idx, traj in enumerate(c_obs.trajectories):
+            if len(traj.retrieval_ages) < 2 or traj.a <= 0:
+                continue
 
-        mask = n_arr > 0
-        if not mask.any():
-            continue
+            t_suffix = f"{c_suffix}_t{t_idx}"
 
-        n_arr = n_arr[mask]
-        k_arr = k_arr[mask]
-        compl_arr = compl_arr[mask]
+            # Build p_path: product of p variables along the path from anchor.
+            # For the first edge from anchor, p_path = p_var (this edge only).
+            # For downstream edges, p_path = p_upstream1 * p_upstream2 * ... * p_var.
+            p_path = _resolve_path_probability(
+                traj.path_edge_ids, ev.edge_id, p_var,
+                topology, edge_var_names, model,
+            )
 
-        p_effective = pm.math.clip(p_var * compl_arr, 0.001, 0.999)
+            # Compute path CDF at each retrieval age (fixed latency in Phase A/B/S)
+            from .completeness import shifted_lognormal_cdf
+            cdf_vals = [
+                shifted_lognormal_cdf(
+                    age,
+                    ev.latency_prior.onset_delta_days if ev.latency_prior else 0.0,
+                    ev.latency_prior.mu if ev.latency_prior else 0.0,
+                    ev.latency_prior.sigma if ev.latency_prior else 0.01,
+                )
+                if ev.latency_prior else 1.0
+                for age in traj.retrieval_ages
+            ]
 
-        pm.Binomial(
-            f"obs_c_{safe_id}{c_suffix}",
-            n=n_arr,
-            p=p_effective,
-            observed=k_arr,
-        )
+            # Build interval counts: [y₁, Δy₂, ..., Δyₘ, a - yₘ]
+            cum_y = traj.cumulative_y
+            interval_counts = [cum_y[0]]
+            for j in range(1, len(cum_y)):
+                interval_counts.append(cum_y[j] - cum_y[j - 1])
+            interval_counts.append(traj.a - cum_y[-1])
+
+            # Build interval probabilities
+            interval_probs = [p_path * cdf_vals[0]]
+            for j in range(1, len(cdf_vals)):
+                diff = max(cdf_vals[j] - cdf_vals[j - 1], 1e-10)
+                interval_probs.append(p_path * diff)
+            interval_probs.append(1.0 - p_path * cdf_vals[-1])
+
+            # Stack into PyTensor vectors
+            import pytensor.tensor as pt
+            p_vec = pt.stack(interval_probs)
+            # Ensure probabilities are valid (clip to avoid numerical issues)
+            p_vec = pm.math.clip(p_vec, 1e-8, 1.0 - 1e-8)
+            # Renormalise to sum to 1
+            p_vec = p_vec / pt.sum(p_vec)
+
+            obs_arr = np.array(interval_counts, dtype=np.int64)
+
+            safe_date = traj.date.replace("-", "")
+            pm.Multinomial(
+                f"obs_traj_{safe_id}{t_suffix}_{safe_date}",
+                n=traj.a,
+                p=p_vec,
+                observed=obs_arr,
+            )
+
+        # --- Single-retrieval days (existing per-day Binomial) ---
+        if c_obs.daily:
+            n_arr = np.array([d.n for d in c_obs.daily], dtype=np.int64)
+            k_arr = np.array([min(d.k, d.n) for d in c_obs.daily], dtype=np.int64)
+            compl_arr = np.array([d.completeness for d in c_obs.daily], dtype=np.float64)
+
+            mask = n_arr > 0
+            if mask.any():
+                n_arr = n_arr[mask]
+                k_arr = k_arr[mask]
+                compl_arr = compl_arr[mask]
+
+                p_effective = pm.math.clip(p_var * compl_arr, 0.001, 0.999)
+
+                pm.Binomial(
+                    f"obs_c_{safe_id}{c_suffix}",
+                    n=n_arr,
+                    p=p_effective,
+                    observed=k_arr,
+                )
+
+
+def _resolve_path_probability(
+    path_edge_ids: list[str],
+    current_edge_id: str,
+    current_p_var,
+    topology,
+    edge_var_names: dict[str, str] | None,
+    model,
+):
+    """Compute p_path = product of p variables along the path.
+
+    For the first edge from anchor, p_path = current_p_var.
+    For downstream edges, p_path includes upstream p's.
+    """
+    if not path_edge_ids or not topology or not edge_var_names or not model:
+        return current_p_var
+
+    # The path includes this edge. Collect p variables for upstream edges.
+    p_product = None
+    for eid in path_edge_ids:
+        if eid == current_edge_id:
+            p_var = current_p_var
+        else:
+            var_name = edge_var_names.get(eid)
+            if var_name is None:
+                continue
+            # Find the variable in the model
+            p_var = None
+            safe_eid = _safe_var_name(eid)
+            for prefix in ("p_window_", "p_base_", "p_"):
+                candidate = f"{prefix}{safe_eid}"
+                for rv in model.deterministics + model.free_RVs:
+                    if rv.name == candidate:
+                        p_var = rv
+                        break
+                if p_var is not None:
+                    break
+            if p_var is None:
+                continue
+
+        if p_product is None:
+            p_product = p_var
+        else:
+            p_product = p_product * p_var
+
+    return p_product if p_product is not None else current_p_var
 
 
 def _emit_branch_group_multinomial(

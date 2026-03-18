@@ -25,7 +25,7 @@ import { useURLScenarios } from '../../hooks/useURLScenarios';
 import { useDashboardMode } from '../../hooks/useDashboardMode';
 import { useViewOverlayMode } from '../../hooks/useViewOverlayMode';
 import { usePutToBaseRequestListener } from '../../hooks/usePutToBaseRequestListener';
-import { Layers, FileText, Wrench, BarChart3, X } from 'lucide-react';
+import { Layers, FileText, Wrench, BarChart3, X, Activity, GitBranch, LayoutDashboard } from 'lucide-react';
 import { DEFAULT_SIDEBAR_WIDTH, MIN_SIDEBAR_WIDTH } from '../../lib/uiConstants';
 import { SelectorModal } from '../SelectorModal';
 import { ItemBase } from '../../hooks/useItemFiltering';
@@ -141,18 +141,21 @@ function ScenarioLegendWrapper({ tabId }: { tabId: string }) {
     {
       id: 'forecast-quality',
       label: 'Forecast Quality',
+      icon: Activity,
       isActive: () => viewOverlayMode === 'forecast-quality',
       toggle: () => setViewOverlayMode(viewOverlayMode === 'forecast-quality' ? 'none' : 'forecast-quality'),
     },
     {
       id: 'sankey',
       label: 'Sankey',
+      icon: GitBranch,
       isActive: () => isSankey,
       toggle: () => viewPrefs?.setUseSankeyView(!isSankey),
     },
     {
       id: 'dashboard',
       label: 'Dashboard',
+      icon: LayoutDashboard,
       isActive: () => isDashboardMode,
       toggle: () => toggleDashboardMode({ updateUrl: true }),
     },

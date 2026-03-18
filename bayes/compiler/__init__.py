@@ -10,7 +10,7 @@ Only build_model imports PyMC. Everything else is pure Python.
 """
 
 from .topology import analyse_topology
-from .evidence import bind_evidence
+from .evidence import bind_evidence, bind_snapshot_evidence
 from .model import build_model
 from .inference import run_inference, summarise_posteriors
 from .types import (
@@ -23,6 +23,7 @@ from .types import (
     WindowObservation,
     CohortObservation,
     CohortDailyObs,
+    CohortDailyTrajectory,
     ProbabilityPrior,
     LatencyPrior,
     PosteriorSummary,
@@ -34,6 +35,7 @@ from .types import (
 __all__ = [
     "analyse_topology",
     "bind_evidence",
+    "bind_snapshot_evidence",
     "build_model",
     "run_inference",
     "summarise_posteriors",
@@ -46,6 +48,7 @@ __all__ = [
     "WindowObservation",
     "CohortObservation",
     "CohortDailyObs",
+    "CohortDailyTrajectory",
     "ProbabilityPrior",
     "LatencyPrior",
     "PosteriorSummary",

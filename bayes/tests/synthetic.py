@@ -659,3 +659,203 @@ def build_linear_chain(
     }
 
     return graph_snapshot, param_files, ground_truth
+
+
+# ---------------------------------------------------------------------------
+# Phase S: snapshot row generators
+# ---------------------------------------------------------------------------
+
+def generate_snapshot_rows(
+    rng: np.random.Generator,
+    p_true: float,
+    n_per_day: int,
+    n_days: int,
+    retrieval_dates: list[str],
+    *,
+    onset: float = 0.0,
+    mu: float = 2.0,
+    sigma: float = 0.5,
+    slice_key: str = "cohort(node-anchor,2024-10-01:2025-01-01)",
+    param_id: str = "repo-branch-param-a-b",
+    core_hash: str = "test-hash",
+    today_str: str = "2025-03-01",
+) -> list[dict]:
+    """Generate synthetic snapshot DB rows with maturation trajectories.
+
+    For each cohort day, draws per-converter lags from the true latency
+    distribution. At each retrieval age, the cumulative count is the number
+    of converters whose lag ≤ age. This produces naturally monotonic
+    trajectories (later retrievals always show ≥ earlier counts).
+    """
+    from datetime import datetime, timedelta
+
+    today = datetime.strptime(today_str, "%Y-%m-%d")
+    rows = []
+
+    sorted_ret_dates = sorted(retrieval_dates)
+
+    for day_offset in range(n_days):
+        cohort_date = today - timedelta(days=n_days - day_offset)
+        anchor_day_str = cohort_date.strftime("%Y-%m-%d")
+
+        # Draw true converters and their lags
+        true_k = rng.binomial(n_per_day, p_true)
+        if true_k > 0:
+            # Each converter's lag from the shifted lognormal
+            raw_lags = rng.lognormal(mu, sigma, size=true_k)
+            lags = onset + raw_lags
+        else:
+            lags = np.array([])
+
+        for ret_date_str in sorted_ret_dates:
+            ret_date = datetime.strptime(ret_date_str, "%Y-%m-%d")
+            if ret_date < cohort_date:
+                continue
+
+            age = (ret_date - cohort_date).days
+            # Count converters whose lag ≤ age (naturally monotonic)
+            observed_k = int(np.sum(lags <= age)) if len(lags) > 0 else 0
+
+            rows.append({
+                "param_id": param_id,
+                "core_hash": core_hash,
+                "slice_key": slice_key,
+                "anchor_day": anchor_day_str,
+                "retrieved_at": f"{ret_date_str}T12:00:00",
+                "a": n_per_day,
+                "x": n_per_day,
+                "y": observed_k,
+                "median_lag_days": onset + float(np.exp(mu)),
+                "mean_lag_days": onset + float(np.exp(mu + sigma**2 / 2)),
+                "onset_delta_days": onset,
+            })
+
+    return rows
+
+
+def build_solo_edge_with_snapshots(
+    p_true: float = 0.35,
+    n_per_day: int = 100,
+    n_days: int = 60,
+    *,
+    onset: float = 2.0,
+    mu: float = 2.3,
+    sigma: float = 0.6,
+    seed: int = 60,
+) -> tuple[dict, dict[str, dict], dict[str, list[dict]], dict[str, float]]:
+    """S1: Solo edge with snapshot cohort evidence (maturation trajectory).
+
+    Returns (graph_snapshot, param_files, snapshot_rows, ground_truth).
+    The param_files have minimal data (for prior resolution). The rich
+    evidence comes from snapshot_rows.
+    """
+    rng = np.random.default_rng(seed)
+    today_str = "2025-03-01"
+
+    from datetime import datetime, timedelta
+    today = datetime.strptime(today_str, "%Y-%m-%d")
+    cohort_start = today - timedelta(days=n_days)
+
+    retrieval_dates = []
+    ret = cohort_start + timedelta(days=30)
+    while ret <= today:
+        retrieval_dates.append(ret.strftime("%Y-%m-%d"))
+        ret += timedelta(days=10)
+
+    latency_block = {
+        "latency_parameter": True,
+        "onset_delta_days": onset,
+        "mu": mu,
+        "sigma": sigma,
+        "median_lag_days": onset + float(np.exp(mu)),
+        "mean_lag_days": onset + float(np.exp(mu + sigma**2 / 2)),
+    }
+
+    graph_snapshot = {
+        "nodes": [
+            _node("node-anchor", is_start=True),
+            _node("node-a"),
+            _node("node-b", absorbing=True),
+        ],
+        "edges": [
+            _edge("edge-anchor-a", "node-anchor", "node-a", "param-anchor-a", p_mean=0.9),
+            _edge("edge-a-b", "node-a", "node-b", "param-a-b",
+                  p_mean=p_true, latency=latency_block),
+        ],
+    }
+
+    param_files = {
+        "param-anchor-a": _window_param_file(
+            n_per_day * n_days * 2, int(n_per_day * n_days * 2 * 0.9),
+            param_id="param-anchor-a"),
+        "param-a-b": {"id": "param-a-b", "values": [
+            {"sliceDSL": "window(1-Jan-25:1-Mar-25)",
+             "n": 100, "k": int(100 * p_true),
+             "mean": p_true, "stdev": 0.05}]},
+    }
+
+    rows = generate_snapshot_rows(
+        rng, p_true, n_per_day, n_days, retrieval_dates,
+        onset=onset, mu=mu, sigma=sigma,
+        slice_key="cohort(node-anchor,2024-10-01:2025-01-01)",
+        param_id="repo-branch-param-a-b",
+        today_str=today_str,
+    )
+
+    return graph_snapshot, param_files, {"edge-a-b": rows}, {"edge-a-b": p_true}
+
+
+def build_snapshot_with_fallback(
+    p_true_snapshot: float = 0.3,
+    p_true_paramfile: float = 0.6,
+    n_snapshot: int = 10_000,
+    n_paramfile: int = 5_000,
+    *,
+    seed: int = 62,
+) -> tuple[dict, dict[str, dict], dict[str, list[dict]], dict[str, float]]:
+    """S3: Two edges — one with snapshot data, one without (fallback).
+
+    edge-a-b has window snapshot rows. edge-b-c has param file only.
+    """
+    rng = np.random.default_rng(seed)
+
+    k_ab = rng.binomial(n_snapshot, p_true_snapshot)
+    k_bc = rng.binomial(n_paramfile, p_true_paramfile)
+
+    graph_snapshot = {
+        "nodes": [
+            _node("node-a", is_start=True),
+            _node("node-b"),
+            _node("node-c", absorbing=True),
+        ],
+        "edges": [
+            _edge("edge-a-b", "node-a", "node-b", "param-a-b", p_mean=p_true_snapshot),
+            _edge("edge-b-c", "node-b", "node-c", "param-b-c", p_mean=p_true_paramfile),
+        ],
+    }
+
+    param_files = {
+        "param-a-b": {"id": "param-a-b", "values": [
+            {"sliceDSL": "window(1-Jan-25:1-Mar-25)",
+             "n": 100, "k": int(100 * p_true_snapshot),
+             "mean": p_true_snapshot, "stdev": 0.05}]},
+        "param-b-c": _window_param_file(n_paramfile, k_bc, param_id="param-b-c"),
+    }
+
+    snapshot_rows = {
+        "edge-a-b": [{
+            "param_id": "repo-branch-param-a-b",
+            "core_hash": "test-hash",
+            "slice_key": "window(1-Jan-25:1-Mar-25)",
+            "anchor_day": "2025-01-15",
+            "retrieved_at": "2025-03-01T12:00:00",
+            "a": None, "x": n_snapshot, "y": k_ab,
+        }],
+    }
+
+    ground_truth = {
+        "edge-a-b": p_true_snapshot,
+        "edge-b-c": p_true_paramfile,
+    }
+
+    return graph_snapshot, param_files, snapshot_rows, ground_truth

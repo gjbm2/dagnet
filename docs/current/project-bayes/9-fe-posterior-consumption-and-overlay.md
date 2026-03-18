@@ -831,6 +831,339 @@ with the Bayesian values flagged as untrusted.
 
 ---
 
+## 5.8 Implementation impact assessment: model source provenance
+
+Exhaustive inventory of every code site affected by the model source
+provenance feature (§5.7). Organised by subsystem, with file paths
+and the specific change required at each site.
+
+### 5.8.1 Type definitions
+
+**TypeScript types** (`src/types/index.ts`):
+- `ProbabilityParam` interface (~line 751): add
+  `model_source?: ModelSource`
+- `ConversionGraph` interface (~line 1038): add
+  `model_source_preference?: 'bayesian' | 'analytic'`
+- New `ModelSource` interface:
+  `{ probability_source, probability_source_at, latency_source,
+  latency_source_at }`
+- `ViewOverlayMode` type (~line 38): possibly add `'model-source'`
+  overlay mode
+
+**Python Pydantic models** (`lib/graph_types.py`):
+- `ProbabilityParam` class (~line 210): add `model_source` optional
+  field
+- `Graph` class (~line 517): add `model_source_preference` optional
+  field with default `'bayesian'`
+- New `ModelSource` Pydantic model matching the TS interface
+
+**YAML schema** (`public/param-schemas/parameter-schema.yaml`):
+- Add `model_source` object definition under the probability param
+  schema
+
+### 5.8.2 Cascade system (UpdateManager)
+
+The UpdateManager mapping configuration is the load-bearing mechanism
+for propagating `model_source` between files and graph edges. All
+mappings are in `src/services/updateManager/mappingConfigurations.ts`
+(1,293 lines).
+
+**File → Graph mappings** (Flow G, ~lines 640–950):
+- Add mapping: `model_source` → `p.model_source` (no override flag —
+  system-controlled, same pattern as `latency.mu`, `latency.sigma`,
+  `latency.model_trained_at`)
+- No transform needed — copy the object as-is
+
+**Graph → File mappings** (Flow A, ~lines 62–346):
+- `model_source` is NOT synced graph → file. The file is written by
+  the pipeline that produced the values (webhook or analytic runner).
+  Graph → file APPEND flow writes `values[]` entries, not
+  `model_source`.
+
+**Mapping engine** (`mappingEngine.ts`):
+- No changes needed. The existing `applyMappings()` function handles
+  nested object fields via `nestedValueAccess.ts`. The `model_source`
+  object will be copied as a whole (same as `posterior` and
+  `data_source`).
+
+### 5.8.3 Webhook handler
+
+**`api/bayes-webhook.ts`** (~lines 165–295):
+
+Currently the webhook:
+- Writes `posterior.*` fields to parameter files
+- Writes `values[0].mean = α/(α+β)` and `values[0].stdev`
+- Writes `latency.model_trained_at` but does NOT write
+  `latency.mu`/`sigma` from posterior
+
+Changes needed:
+- Read `model_source_preference` from the graph document (already
+  available in the webhook payload — graph is sent inline)
+- If preference is `'bayesian'` and posterior passes quality gates:
+  write `latency.mu = posterior.mu_mean`,
+  `latency.sigma = posterior.sigma_mean`,
+  `latency.t95 = exp(mu + 1.645 * sigma) + onset` (respecting
+  `t95_overridden` and `onset_delta_days_overridden` guards)
+- Write `model_source` block on the parameter file:
+  `{ probability_source: 'bayesian', probability_source_at: fittedAt,
+  latency_source: 'bayesian', latency_source_at: fittedAt }`
+- If preference is `'analytic'`: write posterior block as today but
+  do NOT touch scalars beyond `values[0].mean`/`stdev`. Write
+  `model_source.probability_source: 'bayesian'` (the scalars are
+  Bayesian even under analytic preference, because `p.mean` is
+  already derived from `α/(α+β)` today)
+
+### 5.8.4 BE analysis runner
+
+**`api/python-api.py` / `lib/runner/api_handlers.py`**:
+
+When the analytic runner writes `latency.mu`/`sigma` to parameter
+files (via the `/api/lag/recompute-models` endpoint):
+- Also write `model_source.latency_source: 'analytic'` and
+  `model_source.latency_source_at` with the current date
+- Check `model_source_preference` on the graph: if `'bayesian'` and a
+  fresher Bayesian posterior exists (`model_source.latency_source_at`
+  > runner's date), suppress the analytic write
+
+### 5.8.5 Scalar re-cascade service (NEW)
+
+**New service**: `src/services/modelSourceService.ts`
+
+When the user changes `model_source_preference` on a graph, this
+service must:
+1. Read all parameter files for the graph
+2. For each edge with both analytic and Bayesian values available:
+   - Under `'bayesian'`: copy `posterior.mu_mean` → `latency.mu`,
+     `posterior.sigma_mean` → `latency.sigma`, derive `t95`
+     (respecting `_overridden` guards). Set `model_source` block.
+   - Under `'analytic'`: restore analytic values (from the parameter
+     file's own analytic fields — these are always preserved
+     alongside posteriors). Set `model_source` block.
+3. Mark affected parameter files as dirty
+4. Sync via FileRegistry → GraphStore
+
+Follow the `dailyFetchService.ts` pattern for workspace-scoped
+operations (dual IDB update: prefixed + unprefixed, FileRegistry
+sync, GraphStore sync, toast feedback).
+
+### 5.8.6 Graph Properties panel
+
+**`src/components/PropertiesPanel.tsx`**:
+
+Currently `dailyFetch` is rendered in an "Automation" section
+(~line 1765) as a checkbox with `updateGraph(['dailyFetch'], value)`.
+The `model_source_preference` setting follows the same pattern.
+
+Changes:
+- New "Model" `CollapsibleSection` in graph properties (after
+  "Automation", or as a dedicated card)
+- Radio buttons or dropdown for `model_source_preference`:
+  "Bayesian (recommended)" / "Analytic"
+- `updateGraph(['model_source_preference'], value)` on change
+- Source summary row (read-only): count edges by actual source from
+  `model_source` blocks across parameter files. Requires reading
+  parameter files from FileRegistry — similar to how
+  `dailyFetchService.getGraphsForWorkspace()` scans IDB.
+- Last Bayesian fit row: read from `graph._bayes` metadata (already
+  available on the graph object)
+- Warning: if switching to `'bayesian'` and no posteriors exist,
+  show "No posteriors available — run a fit first"
+- Warning: if `model_source_preference === 'bayesian'` but some edges
+  fell back to analytic, show count of fallback edges
+
+### 5.8.7 Data menu
+
+**`src/components/MenuBar/DataMenu.tsx`** (~lines 40–150):
+
+Currently has:
+- "Run Bayesian Fit" item (via `useBayesTrigger`)
+- "Automated Daily Fetches..." item (opens
+  `DailyFetchManagerModal`)
+
+Changes:
+- Add "Model Source: Bayesian ✓" / "Model Source: Analytic" toggle
+  item (or submenu). Read current value from
+  `graph.model_source_preference`. On select, call
+  `modelSourceService.switchPreference()` which updates the graph
+  and triggers scalar re-cascade.
+- Toast on switch: "Switched to Bayesian — N edges updated" or
+  "No Bayesian posteriors available — run a fit first"
+
+### 5.8.8 ParameterSection (edge properties)
+
+**`src/components/ParameterSection.tsx`**:
+
+Currently renders: parameter ID selector, ConnectionControl, mean
+(ProbabilityInput), stdev, distribution, latency sub-fields, query.
+PosteriorIndicator is a small badge below mean.
+
+Changes (per the layout in §5.7.3):
+
+- **Props**: add `modelSource?: ModelSource` and
+  `modelSourcePreference?: 'bayesian' | 'analytic'`
+- **Source badge**: inline label on the "Active Model" group header.
+  Read from `modelSource.probability_source`. Colour from quality
+  overlay palette.
+- **HDI row**: when `modelSource.probability_source === 'bayesian'`
+  and `posterior.hdi_lower`/`hdi_upper` exist, render a compact
+  `[hdi_lower – hdi_upper] (hdi_level%)` row below mean and stdev.
+  Same for latency HDI when latency posterior exists.
+- **Convergence section**: new `CollapsibleSection` (collapsed by
+  default) showing rhat, ESS, divergences, quality tier, evidence
+  grade, fitted_at. Data from `posterior` (already on the edge).
+  PosteriorIndicator badge remains as the compact inline signal.
+- **Comparison section**: new `CollapsibleSection` (collapsed, shown
+  only when both analytic and Bayesian values exist). Show both sets
+  of scalars with delta row.
+- **Latency elevation** (Phase D): when `latency.posterior` exists
+  and `modelSource.latency_source === 'bayesian'`, render latency
+  params at the same visual level as probability params with own
+  source badge and HDI row. Pre-Phase D, keep current nested layout.
+
+### 5.8.9 PosteriorIndicator
+
+**`src/components/shared/PosteriorIndicator.tsx`**:
+
+Currently renders: coloured dot + quality tier label, clickable for
+diagnostic popover.
+
+Changes:
+- **Props**: add `modelSource?: ModelSource`
+- **Popover**: add "Active source: Bayesian" / "Analytic" / "Manual"
+  row, read from `modelSource.probability_source`. Already shows
+  `provenance` — `model_source` is the complement (provenance says
+  what the posterior is; model_source says what the displayed
+  scalars are).
+- **Badge label**: optionally append source indicator when source
+  differs from expectation (e.g. "Strong · Analytic fallback" when
+  preference is Bayesian but this edge fell back)
+
+### 5.8.10 Edge rendering
+
+**`src/components/edges/ConversionEdge.tsx`**:
+- No changes to the rendering logic itself — edges continue to read
+  `edge.p.mean`, `edge.p.latency.t95` for display values. The
+  cascade ensures these scalars reflect the active source.
+- Quality overlay (`viewOverlayMode === 'forecast-quality'`): if
+  adding a `'model-source'` overlay mode, colour-code edges by
+  `model_source.probability_source` (Bayesian = blue, Analytic =
+  grey, Manual = orange). Otherwise, the existing quality tier
+  overlay already distinguishes edges with/without posteriors.
+
+**`src/components/edges/EdgeBeads.tsx`**:
+- Same as ConversionEdge — beads read from scalars, which are already
+  source-aware via the cascade. No bead logic changes needed.
+
+**`src/components/canvas/buildScenarioRenderEdges.ts`**:
+- No changes. Edge rendering pipeline reads scalars from graph edges.
+  The cascade handles source selection upstream.
+
+### 5.8.11 Analysis services
+
+**`src/services/localAnalysisComputeService.ts`**:
+- `buildEdgeInfoAnalysis()`: add "Model Source" row to the Forecast
+  tab output, showing `model_source.probability_source` and
+  `model_source.latency_source` with their timestamps.
+- Currently shows posterior diagnostics (HDI, rhat, ESS, quality
+  tier, provenance, freshness). The model source row sits naturally
+  alongside provenance.
+
+**`src/components/analytics/AnalysisInfoCard.tsx`**:
+- Forecast tab: render the "Model Source" row from
+  `localAnalysisComputeService` output. No structural change to the
+  tab system — just an additional row in the existing table.
+
+### 5.8.12 Quality utilities
+
+**`src/utils/bayesQualityTier.ts`**:
+- `computeQualityTier()`: no changes needed. Quality tier is computed
+  from posterior diagnostics regardless of source preference.
+- Potentially add a helper: `meetsQualityGate(posterior)` → boolean.
+  Returns true if `rhat < 1.05 && ess > 400 && provenance ===
+  'bayesian'`. Used by the webhook, the re-cascade service, and the
+  PropertiesPanel to determine whether Bayesian values are trusted.
+
+**`src/utils/freshnessDisplay.ts`**:
+- `getFreshnessLevel()`: no changes needed. Already classifies by
+  age. Used for `model_source.*_source_at` timestamps in the same
+  way as `posterior.fitted_at`.
+
+### 5.8.13 Hooks
+
+**`src/hooks/useBayesTrigger.ts`**:
+- After a Bayes fit completes and the user pulls updated files, the
+  cascade automatically propagates `model_source` from parameter
+  files to graph edges (via the UpdateManager mappings added in
+  §5.8.2). No hook-level changes needed beyond what the webhook
+  already does.
+
+**`src/hooks/usePullAll.ts`**:
+- Same — pull triggers file-to-graph cascade, which now includes
+  `model_source` mappings. No specific changes.
+
+### 5.8.14 Composition and scenario system
+
+**`src/services/CompositionService.ts`**:
+- `model_source_preference` is a graph-level setting, not a
+  scenario-level setting. Scenarios do not override model source —
+  all scenarios in a graph use the same source preference.
+- No changes to composition logic. Scenarios compose scalars
+  (`p.mean`, `latency.t95`) which are already source-aware.
+
+**`src/components/ScenarioLegend.tsx`**:
+- No changes. Source preference is graph-level, not per-scenario.
+
+### 5.8.15 Graph store and persistence
+
+**`src/contexts/GraphStoreContext.tsx`**:
+- No changes. `model_source_preference` is a field on the graph
+  object. When `setGraph()` is called (via `updateGraph()` in
+  PropertiesPanel), the store updates automatically and
+  `graphRevision` increments.
+
+**`src/components/editors/GraphEditor.tsx`** (~lines 1682–1717):
+- No changes. The existing `useEffect` that watches `graph` and
+  calls `updateData()` to sync to FileRegistry/IDB already handles
+  any graph field change, including `model_source_preference`.
+
+**`src/contexts/TabContext.tsx`** (FileRegistry):
+- No changes. `updateFile()` compares full JSON content. A change
+  to `model_source_preference` makes the content differ from
+  `originalData`, setting `isDirty: true` automatically.
+
+### 5.8.16 Bulk management (optional, lower priority)
+
+**New modal**: `src/components/modals/ModelSourceManagerModal.tsx`
+
+Following the `DailyFetchManagerModal.tsx` pattern (~326 lines):
+- Transfer-list showing all graphs in workspace with current
+  `model_source_preference`
+- Bulk toggle between Bayesian and Analytic
+- On save, call `modelSourceService.applyChanges()` which updates
+  each graph's `model_source_preference` and triggers re-cascade
+
+This is lower priority — the per-graph toggle in Graph Properties
+and Data menu covers the primary use case. Bulk management becomes
+useful when the user has many graphs and wants to switch them all.
+
+### 5.8.17 Summary: change count by priority
+
+| Priority | Files | Description |
+|---|---|---|
+| **Critical** (blocks all else) | 3 | Type definitions: `types/index.ts`, `graph_types.py`, `parameter-schema.yaml` |
+| **Critical** (data flow) | 2 | Cascade: `mappingConfigurations.ts`, `bayes-webhook.ts` |
+| **Critical** (new service) | 1 | `modelSourceService.ts` (re-cascade on preference change) |
+| **High** (primary UI) | 3 | `PropertiesPanel.tsx` (Model card), `DataMenu.tsx` (toggle), `ParameterSection.tsx` (source-grouped layout) |
+| **High** (display) | 2 | `PosteriorIndicator.tsx` (source badge), `localAnalysisComputeService.ts` (source row) |
+| **Medium** (utilities) | 1 | `bayesQualityTier.ts` (`meetsQualityGate` helper) |
+| **Medium** (BE) | 1 | `api_handlers.py` (analytic runner writes source) |
+| **Low** (optional) | 1 | `ModelSourceManagerModal.tsx` (bulk management) |
+| **No changes** | 10+ | `AutomatableField.tsx`, `ConversionEdge.tsx`, `EdgeBeads.tsx`, `buildScenarioRenderEdges.ts`, `CompositionService.ts`, `ScenarioLegend.tsx`, `GraphStoreContext.tsx`, `GraphEditor.tsx`, `TabContext.tsx`, `useBayesTrigger.ts`, `usePullAll.ts`, `freshnessDisplay.ts` |
+
+Total: ~13 files changed, 1 new file, 1 optional new file.
+
+---
+
 ## 6. Application locus (RESOLVED 17-Mar-26)
 
 Three-tier computation model — each tier does qualitatively different

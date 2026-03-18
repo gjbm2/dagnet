@@ -45,6 +45,7 @@ export function AnalysisTypeCardList({
   const filteredTypes = useMemo(() => {
     const needle = searchTerm.trim().toLowerCase();
     return ANALYSIS_TYPES.filter((typeMeta) => {
+      if (typeMeta.internal) return false;
       if (!effectiveShowAll && !availableById.has(typeMeta.id)) return false;
       if (needle && !typeMeta.name.toLowerCase().includes(needle) && !typeMeta.shortDescription.toLowerCase().includes(needle)) return false;
       return true;

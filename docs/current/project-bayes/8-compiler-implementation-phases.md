@@ -306,17 +306,23 @@ model's behaviour is well understood through backtesting.
 ## Dependency graph
 
 ```
-Phase A ──→ Phase B ──→ Phase C ──→ Phase D ──→ Phase E (optional)
-  │                                    │
-  │                                    ├──→ Distribution family dispatch
-  ├──→ Trajectory calibration (K ≥ 3)  │
-  ├──→ Evidence inheritance            │
-  └──→ Backtesting                     └──→ Backtesting (structural comparison)
+Phase A ──→ Phase B ──→ Phase S ──→ Phase C ──→ Phase D ──→ Phase E (optional)
+  │                       │                        │
+  │                       │                        ├──→ Distribution family dispatch
+  ├──→ Trajectory cal.    │                        │
+  ├──→ Evidence inherit.  │                        │
+  └──→ Backtesting        └──→ Backtesting         └──→ Backtesting (structural)
+                               (snapshot-enriched)
 ```
 
-Phase A is the critical path. Phases B–D are sequential (each adds model
-complexity that builds on the previous). Phase E and the cross-phase
-features are independent of each other.
+Phase A is the critical path. Phase S (snapshot evidence assembly,
+doc 11) is positioned between B and C because slice pooling (Phase C)
+needs rich per-slice evidence from the snapshot DB to make meaningful
+shrinkage decisions. Phase S also immediately improves Phase A/B
+posteriors by providing maturation trajectories for completeness
+coupling. Phases B–D are sequential (each adds model complexity that
+builds on the previous). Phase E and the cross-phase features are
+independent of each other.
 
 ---
 

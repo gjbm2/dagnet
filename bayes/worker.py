@@ -205,20 +205,20 @@ def _fit_graph_compiler(payload: dict, report_progress=None) -> dict:
     quality_dict = {"max_rhat": 0.0, "min_ess": 0, "converged_pct": 0.0}
 
     try:
-        # ── 1. DB connection (proves access) ──
+        # ── 1. DB connection ──
         report("startup", 0, "Connecting to database…")
         db_url = payload.get("db_connection", "")
+        db_conn = None
         if db_url:
             import psycopg2
             t_db = time.time()
-            conn = psycopg2.connect(db_url)
-            cur = conn.cursor()
+            db_conn = psycopg2.connect(db_url)
+            cur = db_conn.cursor()
             cur.execute("SELECT 1")
             cur.close()
-            conn.close()
             log.append(f"connected to Neon ({int((time.time() - t_db) * 1000)}ms)")
         else:
-            log.append("no db_connection — skipping DB check")
+            log.append("no db_connection — skipping DB")
         timings["neon_ms"] = int((time.time() - t0) * 1000)
 
         # ── 2. Compile: topology analysis ──
@@ -244,9 +244,35 @@ def _fit_graph_compiler(payload: dict, report_progress=None) -> dict:
 
         # ── 3. Compile: evidence binding ──
         report("compiling", 0, "Binding evidence…")
-        evidence = bind_evidence(
-            topology, param_files, params_index, settings,
-        )
+        snapshot_subjects = payload.get("snapshot_subjects", [])
+        snapshot_rows: dict[str, list[dict]] = {}
+
+        if snapshot_subjects and db_conn:
+            # Phase S: query snapshot DB for rich maturation trajectories
+            report("compiling", 0, "Querying snapshot DB…")
+            t_snap = time.time()
+            snapshot_rows = _query_snapshot_subjects(
+                db_conn, snapshot_subjects, topology, log,
+            )
+            snap_ms = int((time.time() - t_snap) * 1000)
+            log.append(
+                f"snapshot DB: {len(snapshot_subjects)} subjects queried, "
+                f"{sum(len(v) for v in snapshot_rows.values())} rows fetched "
+                f"({snap_ms}ms)"
+            )
+        elif snapshot_subjects and not db_conn:
+            log.append("snapshot_subjects provided but no db_connection — falling back to param files")
+
+        if snapshot_rows:
+            from compiler import bind_snapshot_evidence
+            evidence = bind_snapshot_evidence(
+                topology, snapshot_rows, param_files, params_index, settings,
+            )
+        else:
+            evidence = bind_evidence(
+                topology, param_files, params_index, settings,
+            )
+
         n_with_data = sum(1 for e in evidence.edges.values() if not e.skipped)
         n_skipped = sum(1 for e in evidence.edges.values() if e.skipped)
         log.append(f"evidence: {n_with_data} edges with data, {n_skipped} skipped")
@@ -374,11 +400,117 @@ def _fit_graph_compiler(payload: dict, report_progress=None) -> dict:
         error = str(e)
         log.append(f"ERROR: {error}")
         log.append(traceback.format_exc())
+    finally:
+        if db_conn:
+            try:
+                db_conn.close()
+            except Exception:
+                pass
 
     return _build_result(
         error, log, timings, t0, result_edges, result_skipped,
         quality_dict, webhook_response,
     )
+
+
+# ---------------------------------------------------------------------------
+# Snapshot DB queries (Phase S)
+# ---------------------------------------------------------------------------
+
+def _query_snapshot_subjects(
+    conn,
+    snapshot_subjects: list[dict],
+    topology,
+    log: list[str],
+) -> dict[str, list[dict]]:
+    """Query snapshot DB for each subject, return rows grouped by edge_id.
+
+    Each subject has: param_id, core_hash, slice_keys, anchor_from/to,
+    sweep_from/to, equivalent_hashes, edge_id.
+
+    Uses a simple direct query per subject via psycopg2 (not
+    snapshot_service.py — avoids the graph-editor/lib dependency for now).
+    When the Modal image includes graph-editor/lib, this can be replaced
+    with snapshot_service.query_snapshots_for_sweep().
+    """
+    from datetime import date
+
+    result: dict[str, list[dict]] = {}
+
+    for subj in snapshot_subjects:
+        edge_id = subj.get("edge_id", "")
+        param_id = subj.get("param_id", "")
+        core_hash = subj.get("core_hash", "")
+        slice_keys = subj.get("slice_keys", [""])
+        anchor_from = subj.get("anchor_from", "")
+        anchor_to = subj.get("anchor_to", "")
+        sweep_from = subj.get("sweep_from", "")
+        sweep_to = subj.get("sweep_to", "")
+        equivalent_hashes = subj.get("equivalent_hashes", [])
+
+        if not core_hash or not edge_id:
+            log.append(f"  snapshot: skipping subject (no core_hash or edge_id)")
+            continue
+
+        # Build hash list for query (seed + equivalents)
+        all_hashes = [core_hash] + [h for h in equivalent_hashes if h != core_hash]
+
+        try:
+            cur = conn.cursor()
+
+            # Query: all rows matching hashes within anchor and sweep bounds
+            query = """
+                SELECT param_id, core_hash, slice_key, anchor_day,
+                       retrieved_at, a, x, y,
+                       median_lag_days, mean_lag_days,
+                       anchor_median_lag_days, anchor_mean_lag_days,
+                       onset_delta_days
+                FROM snapshots
+                WHERE core_hash = ANY(%s)
+                  AND anchor_day >= %s AND anchor_day <= %s
+                  AND retrieved_at >= %s AND retrieved_at < %s
+            """
+
+            # Sweep bounds: retrieved_at is timestamp, sweep dates are dates
+            # sweep_to is inclusive as a date, so we use < (sweep_to + 1 day)
+            sweep_to_exclusive = ""
+            if sweep_to:
+                try:
+                    dt = date.fromisoformat(sweep_to)
+                    from datetime import timedelta
+                    sweep_to_exclusive = (dt + timedelta(days=1)).isoformat()
+                except ValueError:
+                    sweep_to_exclusive = sweep_to
+
+            params = (
+                all_hashes,
+                anchor_from,
+                anchor_to,
+                sweep_from,
+                sweep_to_exclusive or sweep_to,
+            )
+
+            cur.execute(query, params)
+            columns = [desc[0] for desc in cur.description]
+            rows = [dict(zip(columns, row)) for row in cur.fetchall()]
+            cur.close()
+
+            # Filter by slice_keys if specified (empty string matches uncontexted)
+            if slice_keys and slice_keys != [""]:
+                rows = [r for r in rows if str(r.get("slice_key", "")) in slice_keys]
+
+            if rows:
+                if edge_id not in result:
+                    result[edge_id] = []
+                result[edge_id].extend(rows)
+                log.append(f"  snapshot: {edge_id[:8]}… → {len(rows)} rows")
+            else:
+                log.append(f"  snapshot: {edge_id[:8]}… → 0 rows (will fall back to param file)")
+
+        except Exception as e:
+            log.append(f"  snapshot: {edge_id[:8]}… query failed: {e}")
+
+    return result
 
 
 # ---------------------------------------------------------------------------

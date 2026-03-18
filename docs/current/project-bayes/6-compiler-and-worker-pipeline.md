@@ -854,20 +854,321 @@ likelihood terms because:
 - Aggregating to `(total_n, total_k)` would lose the maturity gradient
   that makes the joint model identifiable
 
+### Maturation trajectory likelihood (Phase S)
+
+The snapshot DB stores multiple retrievals of the same cohort day at
+different ages. This is richer evidence than a single `(n, k)` point:
+it traces the CDF shape directly. The correct likelihood for this data
+is a **Multinomial over retrieval intervals**, not independent Binomials.
+
+#### Why not independent Binomials
+
+Snapshot rows for the same cohort day at different retrieval ages are
+**cumulative**: `k` at age 20 includes the converters already counted
+at age 10. Treating each retrieval as an independent
+`Binomial(n, p · CDF(tⱼ))` double-counts the early converters.
+
+#### The denominator problem for downstream edges
+
+For an edge X→Y in a chain A→X→Y with an A-anchored cohort, the
+snapshot row at each retrieval age `t` gives:
+
+- `a` = anchor entrants (entered A on this cohort day) — **constant**
+- `x(t)` = entrants who have reached X by age `t` — **grows over time**
+- `y(t)` = converters who have reached Y by age `t` — **grows over time**
+
+A Multinomial requires a **fixed denominator**. Using `x` as the
+denominator fails because `x` changes between retrieval ages: new
+arrivals at X between retrievals contribute new potential Y-converters
+that weren't in the earlier denominator. The `y`-increments between
+ages conflate two sources — new Y-converters from the previously-at-X
+pool and new Y-converters from newly-arrived-at-X entrants.
+
+**For the first edge from anchor** (A→X), `x` is not relevant — the
+denominator is `a`, which is constant. The problem only arises for
+downstream edges.
+
+#### The correct formulation: anchor-based denominator with path probability
+
+The solution is to use **`a` (anchor entrants) as the denominator for
+all edges**, with the **path-level probability** `p_path` (product of
+per-edge probabilities along the path from anchor to this edge's
+target) in the interval probabilities.
+
+**Generative model.** Each of the `a` anchor entrants independently:
+
+1. Converts at A→X with probability `p_AX`. If so, lag
+   `T_AX ~ onset_AX + LN(mu_AX, sigma_AX)`.
+2. Converts at X→Y with probability `p_XY`. If so, lag
+   `T_XY ~ onset_XY + LN(mu_XY, sigma_XY)`.
+3. Total time to reach Y: `T_total = T_AX + T_XY`.
+4. Observed as having reached Y at retrieval age `t` iff
+   `T_total ≤ t`.
+
+The probability of reaching Y by age `t` is:
+
+```
+P(at Y by t) = p_AX · p_XY · CDF_path(t)
+```
+
+where `CDF_path(t) = P(T_AX + T_XY ≤ t)` — the FW-composed path-level
+CDF, which the compiler already computes (see §Latency paths and onset
+composition).
+
+More generally, for an edge at any depth in the graph:
+
+```
+P(at target by t) = p_path · CDF_path(t)
+```
+
+where `p_path = ∏ p_edge` along the path from anchor to the edge's
+target node, and `CDF_path` is the FW-composed shifted lognormal CDF
+for the full path.
+
+#### Interval partition
+
+At any retrieval age `t`, each of the `a` anchor entrants is in one of
+two observable states:
+
+- **At Y** (reached the target by age `t`): probability `p_path · CDF_path(t)`
+- **Not at Y** (either won't convert or hasn't arrived yet):
+  probability `1 - p_path · CDF_path(t)`
+
+Given retrieval ages `t₁ < t₂ < ... < tₘ` with cumulative target
+counts `y₁ ≤ y₂ ≤ ... ≤ yₘ`, the `a` entrants partition into `m + 1`
+mutually exclusive groups:
+
+| Group | Description | Count | Probability |
+|---|---|---|---|
+| 0 | Reached target by `t₁` | `y₁` | `p_path · CDF_path(t₁)` |
+| j (1 ≤ j < m) | Reached target in `(tⱼ, tⱼ₊₁]` | `yⱼ₊₁ - yⱼ` | `p_path · [CDF_path(tⱼ₊₁) - CDF_path(tⱼ)]` |
+| m | Not at target by `tₘ` | `a - yₘ` | `1 - p_path · CDF_path(tₘ)` |
+
+**Likelihood:**
+
+```
+(y₁, Δy₂, ..., Δyₘ, a - yₘ) ~ Multinomial(a, [π₀, π₁, ..., πₘ])
+```
+
+This is **exact** (up to the FW approximation of the path CDF). Each
+entrant falls into exactly one interval. The denominator `a` is
+constant across all retrieval ages.
+
+#### First-edge degeneracy
+
+For the first edge from anchor (A→X), `p_path = p_AX` and
+`CDF_path = CDF_AX`. The formulation reduces to:
+
+```
+(y₁, ..., a - yₘ) ~ Multinomial(a, [p_AX · CDF_AX(t₁), ..., 1 - p_AX · CDF_AX(tₘ)])
+```
+
+No upstream path — this is a standard single-edge trajectory. With a
+single retrieval (m = 1), it further degenerates to the existing
+Phase A per-day Binomial: `Binomial(a, p_AX · CDF_AX(t₁))`.
+
+#### The `x` column
+
+Each snapshot row provides `x(t)` (from-step entrants at this
+retrieval age). In the anchor-based formulation, **`x` is not used in
+the likelihood**. The model predicts `x(t) = a · p_AX · CDF_AX(t)` as
+a derived quantity, but does not condition on it. The observed `x`
+serves as a diagnostic check: if the model's predicted `x(t)` diverges
+substantially from observed `x(t)`, the upstream edge parameters may
+be poorly estimated.
+
+Each edge uses only its own `y` column from its own snapshot rows,
+with `a` as denominator. The `x` observations from edge X→Y's snapshot
+rows are NOT used as likelihood data for the upstream A→X edge — the
+A→X edge has its own snapshot rows providing its own `y` trajectory.
+Using both would double-count the A→X conversion evidence.
+
+#### Inter-edge coupling
+
+The X→Y trajectory likelihood contains `p_path = p_AX · p_XY` — a
+product of the upstream edge's probability and the edge's own
+probability. This means the Y trajectory evidence constrains both
+`p_AX` and `p_XY` jointly. This is a departure from the existing
+Phase A model where each edge's likelihood references only its own `p`
+and uses `x` as a fixed denominator.
+
+The coupling is **correct and desirable**. The Y trajectory IS evidence
+about upstream conversion: fewer people reaching Y than expected could
+mean lower `p_AX`, lower `p_XY`, or slower latency anywhere on the
+path. The Multinomial interval structure lets the sampler disentangle
+these through the CDF shape — the *pattern* of when converters arrive
+disambiguates `p` from latency.
+
+In the existing Phase A model, using `x` as a fixed denominator
+implicitly conditions on upstream performance without letting the model
+reason about it. The anchor-based formulation makes the dependency
+explicit and exploits the joint constraint.
+
+In PyMC, `p_path` is a PyTensor expression — a product of latent
+variables — and gradients flow through. NUTS explores the joint
+`(p_AX, p_XY, mu_AX, sigma_AX, mu_XY, sigma_XY)` space, with the
+trajectory Multinomial providing structured gradient information about
+the full path.
+
+#### What this constrains
+
+The trajectory jointly identifies `p_path` and the path CDF shape:
+
+- Many converters in the first interval → fast path CDF rise
+- Few converters in middle intervals → CDF flattening → constrains
+  path sigma
+- Large residual `a - yₘ` at the final age → either low `p_path` or
+  slow CDF. The trajectory shape disambiguates: rapid early conversion
+  + large tail = low `p_path` with fast latency. Slow early
+  conversion = slow latency (and `p_path` may be high but censored).
+- For downstream edges, the separation of `p_path` into
+  `p_AX · p_XY` is informed by the upstream edge's own trajectory
+  (which constrains `p_AX` independently).
+
+#### Interaction with the window/cohort hierarchy
+
+The trajectory Multinomial uses cohort-variant probabilities. For edge
+X→Y in the hierarchy:
+
+```
+p_path = p_cohort_AX · p_cohort_XY
+```
+
+where `p_cohort_AX` and `p_cohort_XY` are the cohort-variant
+probability variables from the hierarchical structure (§Layer 3), each
+allowed to diverge from their respective `p_base` by the path-informed
+`τ_cohort`.
+
+Window trajectory data (if multi-retrieval window observations ever
+exist) would use `p_window` and edge-level CDF (single hop). In
+practice, window data typically has a single retrieval (the latest), so
+the trajectory Multinomial applies primarily to cohort data.
+
+#### Interaction with branch groups
+
+For branch groups, each sibling edge gets its own trajectory Multinomial
+per cohort day. The `p_path` for each sibling includes the Dirichlet
+component for that sibling: if A branches to {X₁, X₂}, then
+`p_path_to_Y₁ = p_X₁ · p_X₁Y₁` where `p_X₁` is a Dirichlet
+component. The trajectory constrains the product; the Dirichlet
+constrains the simplex. Both coexist in the model.
+
+The completeness-adjusted branch-group Multinomial (§Dropout and
+abandonment) and the trajectory Multinomial serve different purposes:
+the former couples siblings at a branching node, the latter constrains
+the CDF shape per edge. They are distinct likelihood terms.
+
+#### Edge cases
+
+- **Δy < 0** (data correction — later retrieval shows fewer converters
+  than earlier). The evidence binder should monotonise the sequence:
+  if `yⱼ₊₁ < yⱼ`, set `yⱼ₊₁ = yⱼ` (carry forward) and emit a
+  diagnostic.
+- **Δy = 0** for an interval. Valid — the Multinomial handles zero
+  counts naturally.
+- **CDF differences near zero.** When `CDF_path(tⱼ₊₁) - CDF_path(tⱼ)`
+  is very small, the interval probability approaches zero. If Δy > 0
+  with near-zero interval probability, this is strong evidence against
+  the current path latency parameters.
+- **Single retrieval.** Degenerates to the existing per-day Binomial:
+  `Binomial(a, p_path · CDF_path(t₁))`. The evidence binder emits a
+  standard `CohortDailyObs` and the existing model path handles it.
+- **Non-latency edges.** Completeness = 1.0 at all ages, so
+  `CDF_path(tⱼ) = 1` for all j. The interval probabilities collapse
+  to `[p_path, 0, 0, ..., 1 - p_path]` and the Multinomial reduces
+  to a Binomial on the final count. The trajectory adds no
+  information — without a latency model there is no CDF to constrain.
+
+#### When trajectory data is unavailable
+
+Edges without snapshot trajectory data fall back to parameter file
+evidence — the existing per-day Binomial from `n_daily`/`k_daily`
+arrays. The existing Phase A model uses `x` as the denominator and
+edge-level completeness. This is an approximation (it implicitly
+conditions on upstream performance) but it works and has been validated.
+
+The trajectory Multinomial is an enrichment that activates when snapshot
+data is available, not a replacement for the parameter-file path.
+
+#### Implementation in PyMC
+
+```
+# Edge X→Y in chain A→X→Y, cohort day 15-Jan
+# a = 1000 anchor entrants (constant across all retrieval ages)
+# Retrieval ages and cumulative y counts from snapshot rows:
+ages = [10, 20, 30, 45]
+cum_y = [12, 38, 65, 82]
+a = 1000
+
+# Path probability: product of upstream p's (PyTensor expressions)
+p_path = p_cohort_AX * p_cohort_XY
+
+# Path CDF at each retrieval age (differentiable PyTensor)
+cdf_vals = [CDF_path(t) for t in ages]
+
+# Interval probabilities
+interval_probs = [
+    p_path * cdf_vals[0],
+    p_path * (cdf_vals[1] - cdf_vals[0]),
+    p_path * (cdf_vals[2] - cdf_vals[1]),
+    p_path * (cdf_vals[3] - cdf_vals[2]),
+    1 - p_path * cdf_vals[3],
+]
+
+# Interval counts (observed)
+interval_counts = [12, 26, 27, 17, 918]
+
+pm.Multinomial("obs_XY_15jan", n=1000, p=interval_probs,
+               observed=interval_counts)
+```
+
+#### IR representation
+
+The evidence binder produces a new dataclass:
+
+```
+@dataclass
+class CohortDailyTrajectory:
+    """A single cohort day observed at multiple retrieval ages."""
+    date: str
+    a: int                          # anchor entrants (fixed denominator)
+    retrieval_ages: list[float]     # sorted ascending
+    cumulative_y: list[int]         # monotonised cumulative target counts
+    path_edge_ids: list[str]        # edges on the path (for p_path product)
+```
+
+`CohortObservation` gains an optional `trajectories` field alongside
+the existing `daily` field. Days with trajectory data use the
+Multinomial emission; days with only a single observation use the
+existing Binomial emission. Both can coexist within the same
+`CohortObservation`.
+
 ### Non-latency edges in cohort mode
 
 If an edge has no latency parameter (`latency_parameter: false` or absent),
-the compiler has no `(mu, sigma)` to compute completeness. The rule:
-**completeness = 1.0** for all daily observations on non-latency edges.
-This is equivalent to assuming instant conversion — a degenerate shifted
-lognormal with `delta = 0, sigma → 0`. The compiler emits a diagnostic
-noting that cohort immaturity on this edge is unmodelled.
+the edge itself contributes zero latency to the path composition. However,
+for **downstream** non-latency edges, the **path** from anchor may still
+have non-trivial latency from upstream edges. A non-latency edge X→Y
+sitting downstream of a latency edge A→X inherits the A→X path latency
+— entrants at A haven't all reached X yet, so cohort observations of Y
+are affected by upstream immaturity.
 
-This is safe: it biases toward the window-like interpretation (treat all
-observations as mature). It means the model cannot distinguish "low
-conversion" from "slow conversion" on this edge — but without latency data,
-that distinction is unidentifiable anyway. The non-latency case becomes a
-proper subset of the latency case.
+The rule: **completeness uses the path-level latency, not the edge-level
+latency.** The topology analyser already propagates upstream path latency
+to non-latency edges (line 281 of `topology.py`: "non-latency edge:
+inherit source node's path latency"). The evidence binder checks whether
+the path has non-trivial latency (`path_sigma > 0.01 or path_delta > 0`),
+not whether the edge itself has `latency_parameter: true`.
+
+- If the **entire path** has trivial latency (no upstream latency edges):
+  `completeness = 1.0`. Correct — all observations are mature.
+- If upstream edges have latency: completeness uses the inherited
+  `(path_delta, path_mu, path_sigma)`. The non-latency edge adds zero
+  to the path composition, but the upstream contribution remains.
+
+This means a non-latency edge downstream of a slow upstream edge will
+correctly show lower completeness on recent cohort days, preventing
+the model from interpreting upstream immaturity as low `p` on this edge.
 
 ---
 
@@ -1860,13 +2161,11 @@ computes these from the inference trace).
   with the same graph but different training windows share a topology
   fingerprint (warm-start eligible) but have different model fingerprints
   (can't reuse cached trace).
-- ~~Non-latency edges in cohort mode~~: **completeness = 1.0**. If an edge
-  has no latency parameter (`latency_parameter: false` or absent), the
-  compiler assigns completeness = 1.0 for all daily observations —
-  equivalent to assuming instant conversion. This is a degenerate shifted
-  lognormal with `delta = 0, sigma → 0`. The compiler emits a diagnostic
-  noting that cohort immaturity on this edge is unmodelled. Safe default:
-  biases toward the window-like interpretation.
+- ~~Non-latency edges in cohort mode~~: **completeness uses path-level
+  latency**. A non-latency edge downstream of latency edges inherits
+  upstream path immaturity via `path_latency` propagation. Completeness
+  = 1.0 only when the **entire path** from anchor has trivial latency.
+  See §Non-latency edges in cohort mode for the updated rule.
 - ~~Window + cohort for the same edge~~: **both contribute —
   hierarchically registered, temporally complementary**. Window and
   cohort terms for the same edge are linked through a shared `p_base_XY`

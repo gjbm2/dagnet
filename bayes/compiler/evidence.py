@@ -22,6 +22,7 @@ from .types import (
     WindowObservation,
     CohortObservation,
     CohortDailyObs,
+    CohortDailyTrajectory,
     ProbabilityPrior,
     LatencyPrior,
     ESS_CAP,
@@ -183,6 +184,394 @@ def bind_evidence(
 
 
 # ---------------------------------------------------------------------------
+# Snapshot-based evidence binding (Phase S)
+# ---------------------------------------------------------------------------
+
+def bind_snapshot_evidence(
+    topology: TopologyAnalysis,
+    snapshot_rows: dict[str, list[dict]],
+    param_files: dict[str, dict],
+    params_index: dict | None = None,
+    settings: dict | None = None,
+    today: str | None = None,
+) -> BoundEvidence:
+    """Bind evidence from snapshot DB rows, falling back to parameter files.
+
+    snapshot_rows: dict of edge_id → list of DB row dicts. Each row has:
+        param_id, core_hash, slice_key, anchor_day, retrieved_at,
+        a (anchor entrants), x (from-step), y (to-step),
+        median_lag_days, mean_lag_days, onset_delta_days.
+
+    For each edge:
+      - If snapshot_rows has data: convert to observations (latest per
+        anchor_day for cohort, latest for window). Ignore param file values[].
+      - If no snapshot data: fall back to param file values[] (existing path).
+      - Priors always come from param files (warm-start / moment-matched).
+    """
+    diagnostics: list[str] = []
+    settings = settings or {}
+    today_date = _parse_today(today)
+
+    param_id_to_path = _build_path_lookup(params_index)
+    edges_evidence: dict[str, EdgeEvidence] = {}
+
+    for edge_id, et in topology.edges.items():
+        param_id = et.param_id
+        if not param_id:
+            diagnostics.append(f"SKIP edge {edge_id[:8]}…: no param_id")
+            continue
+
+        pf_data = _resolve_param_file(param_id, param_files)
+
+        file_path = param_id_to_path.get(param_id, "")
+        if not file_path:
+            bare_id = param_id
+            if bare_id.startswith("parameter-"):
+                bare_id = bare_id[len("parameter-"):]
+            file_path = f"parameters/{bare_id}.yaml"
+
+        ev = EdgeEvidence(
+            edge_id=edge_id,
+            param_id=param_id,
+            file_path=file_path,
+        )
+
+        # --- Prior (always from param file) ---
+        if pf_data:
+            ev.prob_prior = _resolve_prior(pf_data, topology.fingerprint)
+        else:
+            ev.prob_prior = ProbabilityPrior(alpha=1.0, beta=1.0, source="uninformative")
+
+        # --- Latency prior ---
+        if et.has_latency:
+            ev.latency_prior = LatencyPrior(
+                onset_delta_days=et.onset_delta_days,
+                mu=et.mu_prior,
+                sigma=et.sigma_prior,
+                source="topology",
+            )
+
+        # --- Evidence: snapshot rows if available, else param file ---
+        rows = snapshot_rows.get(edge_id, [])
+
+        if rows:
+            _bind_from_snapshot_rows(
+                ev, et, rows, today_date, diagnostics,
+            )
+            diagnostics.append(
+                f"INFO edge {edge_id[:8]}…: {len(rows)} snapshot rows "
+                f"→ {len(ev.window_obs)} window obs, "
+                f"{sum(len(c.daily) for c in ev.cohort_obs)} cohort daily obs"
+            )
+        elif pf_data:
+            _bind_from_param_file(
+                ev, et, pf_data, today_date, settings, diagnostics,
+            )
+            diagnostics.append(
+                f"INFO edge {edge_id[:8]}…: no snapshot data, using param file"
+            )
+        else:
+            diagnostics.append(f"SKIP edge {edge_id[:8]}…: no snapshot data and no param file")
+
+        # --- Minimum-n gate ---
+        min_n = settings.get("min_n_threshold", MIN_N_THRESHOLD)
+        if ev.total_n < min_n and ev.total_n > 0:
+            ev.skipped = True
+            ev.skip_reason = f"total_n={ev.total_n} < min_n={min_n}"
+            ev.prob_prior = ProbabilityPrior(source="prior-only")
+            diagnostics.append(f"PRIOR-ONLY edge {edge_id[:8]}…: {ev.skip_reason}")
+        elif ev.total_n == 0:
+            ev.skipped = True
+            ev.skip_reason = "no observations"
+            diagnostics.append(f"SKIP edge {edge_id[:8]}…: no observations")
+
+        edges_evidence[edge_id] = ev
+
+    return BoundEvidence(
+        edges=edges_evidence,
+        settings=settings,
+        today=today_date.strftime("%-d-%b-%y"),
+        diagnostics=diagnostics,
+    )
+
+
+def _bind_from_snapshot_rows(
+    ev: EdgeEvidence,
+    et,
+    rows: list[dict],
+    today: datetime,
+    diagnostics: list[str],
+) -> None:
+    """Convert snapshot DB rows to observations on an EdgeEvidence.
+
+    Each row has: anchor_day, retrieved_at, slice_key, a, x, y, and lag cols.
+
+    Cohort rows: builds CohortDailyTrajectory per (anchor_day, slice_key)
+    — multiple retrieval ages per day form the trajectory Multinomial
+    (doc 6, Layer 3 § "Maturation trajectory likelihood"). Uses `a`
+    (anchor entrants) as denominator, `y` as cumulative target count.
+    Falls back to single-retrieval CohortDailyObs when only one
+    retrieval exists for a day.
+
+    Window rows: latest retrieval per (anchor_day, slice_key), aggregated
+    across days within each slice.
+    """
+    from collections import defaultdict
+
+    # Group rows by (slice_key, anchor_day) → list of rows (all retrievals)
+    by_slice_day: dict[tuple[str, str], list[dict]] = defaultdict(list)
+    for row in rows:
+        anchor_day = str(row.get("anchor_day", ""))
+        slice_key = str(row.get("slice_key", ""))
+        by_slice_day[(slice_key, anchor_day)].append(row)
+
+    # Reorganise by slice_key
+    by_slice: dict[str, dict[str, list[dict]]] = defaultdict(dict)
+    for (slice_key, anchor_day), day_rows in by_slice_day.items():
+        by_slice[slice_key][anchor_day] = day_rows
+
+    for slice_key, days in by_slice.items():
+        if _is_cohort(slice_key):
+            trajectories: list[CohortDailyTrajectory] = []
+            daily_fallback: list[CohortDailyObs] = []
+
+            for anchor_day in sorted(days.keys()):
+                day_rows = days[anchor_day]
+
+                # Sort by retrieved_at ascending
+                day_rows.sort(key=lambda r: str(r.get("retrieved_at", "")))
+
+                # Get anchor entrants (a). Should be consistent across
+                # retrievals for the same day; use the first non-null.
+                a_val = None
+                for r in day_rows:
+                    a_candidate = _safe_int(r.get("a"))
+                    if a_candidate is not None and a_candidate > 0:
+                        a_val = a_candidate
+                        break
+
+                if a_val is None or a_val <= 0:
+                    continue
+
+                if len(day_rows) >= 2:
+                    # Multiple retrievals → trajectory
+                    retrieval_ages: list[float] = []
+                    cumulative_y: list[int] = []
+                    prev_y = 0
+
+                    for r in day_rows:
+                        retrieved_at = str(r.get("retrieved_at", ""))
+                        y = _safe_int(r.get("y"))
+                        if y is None:
+                            y = 0
+
+                        age = _retrieval_age(anchor_day, retrieved_at, today)
+                        if age <= 0:
+                            continue
+
+                        # Monotonise: y must not decrease
+                        y = max(y, prev_y)
+                        # Cap at anchor entrants
+                        y = min(y, a_val)
+                        prev_y = y
+
+                        retrieval_ages.append(age)
+                        cumulative_y.append(y)
+
+                    if len(retrieval_ages) >= 2:
+                        trajectories.append(CohortDailyTrajectory(
+                            date=anchor_day,
+                            a=a_val,
+                            retrieval_ages=retrieval_ages,
+                            cumulative_y=cumulative_y,
+                            path_edge_ids=et.path_edge_ids,
+                        ))
+                        ev.total_n += a_val
+                    elif len(retrieval_ages) == 1:
+                        # Only one valid retrieval after filtering
+                        daily_fallback.append(CohortDailyObs(
+                            date=anchor_day,
+                            n=a_val,
+                            k=cumulative_y[0],
+                            age_days=retrieval_ages[0],
+                            completeness=_compute_cohort_completeness(
+                                retrieval_ages[0],
+                                et.path_latency.path_delta,
+                                et.path_latency.path_mu,
+                                et.path_latency.path_sigma,
+                                et.has_latency,
+                            ),
+                        ))
+                        ev.total_n += a_val
+
+                else:
+                    # Single retrieval → standard CohortDailyObs
+                    r = day_rows[0]
+                    y = _safe_int(r.get("y")) or 0
+                    retrieved_at = str(r.get("retrieved_at", ""))
+                    age = _retrieval_age(anchor_day, retrieved_at, today)
+
+                    daily_fallback.append(CohortDailyObs(
+                        date=anchor_day,
+                        n=a_val,
+                        k=min(y, a_val),
+                        age_days=age,
+                        completeness=_compute_cohort_completeness(
+                            age,
+                            et.path_latency.path_delta,
+                            et.path_latency.path_mu,
+                            et.path_latency.path_sigma,
+                            et.has_latency,
+                        ),
+                    ))
+                    ev.total_n += a_val
+
+            if trajectories or daily_fallback:
+                ev.cohort_obs.append(CohortObservation(
+                    slice_dsl=slice_key,
+                    daily=daily_fallback,
+                    trajectories=trajectories,
+                ))
+                ev.has_cohort = True
+
+        else:
+            # Window observation — latest retrieval per anchor_day,
+            # aggregated across days for this slice.
+            total_x = 0
+            total_y = 0
+            for anchor_day, day_rows in days.items():
+                # Use latest retrieval
+                latest = max(day_rows, key=lambda r: str(r.get("retrieved_at", "")))
+                x = _safe_int(latest.get("x"))
+                y = _safe_int(latest.get("y"))
+                if x is not None and x > 0:
+                    total_x += x
+                    total_y += min(y if y is not None else 0, x)
+
+            if total_x > 0:
+                compl = _compute_window_completeness(
+                    slice_key, today,
+                    et.onset_delta_days, et.mu_prior, et.sigma_prior,
+                    et.has_latency,
+                )
+                ev.window_obs.append(WindowObservation(
+                    n=total_x,
+                    k=total_y,
+                    slice_dsl=slice_key,
+                    completeness=compl,
+                ))
+                ev.has_window = True
+                ev.total_n += total_x
+
+
+def _bind_from_param_file(
+    ev: EdgeEvidence,
+    et,
+    pf_data: dict,
+    today: datetime,
+    settings: dict,
+    diagnostics: list[str],
+) -> None:
+    """Bind evidence from parameter file values[] (existing Phase A path).
+
+    Extracted from bind_evidence() so both paths can share this logic.
+    """
+    values = pf_data.get("values") or []
+    for v in values:
+        if not isinstance(v, dict):
+            continue
+        slice_dsl = v.get("sliceDSL", "") or ""
+        n = _safe_int(v.get("n"))
+        k = _safe_int(v.get("k"))
+
+        if _is_cohort(slice_dsl):
+            n_daily = v.get("n_daily") or []
+            k_daily = v.get("k_daily") or []
+            dates = v.get("dates") or []
+
+            if n_daily and k_daily and dates and len(n_daily) == len(k_daily) == len(dates):
+                daily_obs = _build_cohort_daily(
+                    n_daily, k_daily, dates, today,
+                    et.path_latency.path_delta,
+                    et.path_latency.path_mu,
+                    et.path_latency.path_sigma,
+                    et.has_latency,
+                )
+                if daily_obs:
+                    ev.cohort_obs.append(CohortObservation(
+                        slice_dsl=slice_dsl,
+                        daily=daily_obs,
+                    ))
+                    ev.has_cohort = True
+                    ev.total_n += sum(d.n for d in daily_obs)
+            elif n is not None and k is not None and n > 0:
+                cohort_age = _estimate_cohort_age(slice_dsl, today)
+                compl = _compute_cohort_completeness(
+                    cohort_age,
+                    et.path_latency.path_delta,
+                    et.path_latency.path_mu,
+                    et.path_latency.path_sigma,
+                    et.has_latency,
+                )
+                ev.cohort_obs.append(CohortObservation(
+                    slice_dsl=slice_dsl,
+                    daily=[CohortDailyObs(
+                        date="aggregate",
+                        n=n, k=k,
+                        age_days=cohort_age,
+                        completeness=compl,
+                    )],
+                ))
+                ev.has_cohort = True
+                ev.total_n += n
+
+        elif _is_window(slice_dsl) or (n is not None and k is not None):
+            if n is not None and k is not None and n > 0:
+                compl = _compute_window_completeness(
+                    slice_dsl, today,
+                    et.onset_delta_days, et.mu_prior, et.sigma_prior,
+                    et.has_latency,
+                )
+                ev.window_obs.append(WindowObservation(
+                    n=n, k=k,
+                    slice_dsl=slice_dsl,
+                    completeness=compl,
+                ))
+                ev.has_window = True
+                ev.total_n += n
+
+
+def _retrieval_age(anchor_day: str, retrieved_at: str, today: datetime) -> float:
+    """Compute age in days between anchor_day and retrieved_at."""
+    anchor_dt = None
+    for fmt in ("%Y-%m-%d", "%d-%b-%y", "%d-%b-%Y"):
+        try:
+            anchor_dt = datetime.strptime(anchor_day, fmt)
+            break
+        except ValueError:
+            continue
+
+    retrieval_dt = None
+    # retrieved_at may be a full datetime or just a date
+    for fmt in ("%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d",
+                "%d-%b-%y", "%d-%b-%Y"):
+        try:
+            retrieval_dt = datetime.strptime(retrieved_at[:19], fmt)
+            break
+        except ValueError:
+            continue
+
+    if anchor_dt and retrieval_dt:
+        return max(0.0, (retrieval_dt - anchor_dt).days)
+
+    # Fallback: use today - anchor_day
+    if anchor_dt:
+        return max(0.0, (today - anchor_dt).days)
+
+    return 30.0  # conservative default
+
+
+# ---------------------------------------------------------------------------
 # Prior resolution
 # ---------------------------------------------------------------------------
 
@@ -295,8 +684,15 @@ def _compute_cohort_completeness(
     path_sigma: float,
     has_latency: bool,
 ) -> float:
-    """Compute path-level completeness for a cohort observation."""
-    if not has_latency:
+    """Compute path-level completeness for a cohort observation.
+
+    Uses path-level latency even for non-latency edges: a non-latency
+    edge downstream of a latency edge inherits upstream path immaturity.
+    The path_delta/mu/sigma already reflect the upstream composition
+    (topology.py line 281: non-latency edges inherit source node's path).
+    Completeness = 1.0 only when the entire path has trivial latency.
+    """
+    if path_sigma <= 0.01 and path_delta == 0.0:
         return 1.0
     return shifted_lognormal_cdf(age_days, path_delta, path_mu, path_sigma)
 

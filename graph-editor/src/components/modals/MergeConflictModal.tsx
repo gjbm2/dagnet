@@ -233,6 +233,26 @@ export function MergeConflictModal({
             >
               Accept Merged for all
             </button>
+            <button
+              className="button secondary"
+              onClick={() => {
+                const dump = conflicts.map(c => ({
+                  fileId: c.fileId,
+                  fileName: c.fileName,
+                  path: c.path,
+                  type: c.type,
+                  hasConflicts: c.hasConflicts,
+                  localContent: c.localContent,
+                  remoteContent: c.remoteContent,
+                  baseContent: c.baseContent,
+                  mergedContent: c.mergedContent,
+                }));
+                navigator.clipboard.writeText(JSON.stringify(dump, null, 2));
+              }}
+              title="Copy all conflict data as JSON to clipboard"
+            >
+              Copy JSON
+            </button>
           </div>
           <div className="footer-main-actions">
             <button className="button secondary" onClick={onClose} disabled={isResolving}>

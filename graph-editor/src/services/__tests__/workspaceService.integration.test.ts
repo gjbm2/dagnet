@@ -26,6 +26,8 @@ vi.mock('../../contexts/TabContext', () => {
       files,
       listeners: new Map(),
       notifyListeners: vi.fn(),
+      completeInitialization: vi.fn(),
+      restoreFile: vi.fn(),
     },
   };
 });

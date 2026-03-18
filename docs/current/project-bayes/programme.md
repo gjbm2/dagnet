@@ -19,9 +19,10 @@ design docs contain the detail.
 | **Local dev setup** | `5-local-dev-setup.md` | Local dev environment, tunnel, deployment |
 | **Compiler + worker** | `6-compiler-and-worker-pipeline.md` | Compiler IR, model materialisation, worker orchestration, evidence assembly |
 | **asat() completion** | `7-asat-analysis-completion.md` | Historic asat through analysis/charting (Phase A), future asat with forecasts (Phase B) |
-| **Compiler phases** | `8-compiler-implementation-phases.md` | Phased delivery plan for compiler: A (independent), B (Dirichlet), C (slices), D (latency coupling), E (fan-out) |
+| **Compiler phases** | `8-compiler-implementation-phases.md` | Phased delivery plan for compiler: A (independent), B (Dirichlet), S (snapshot evidence), C (slices), D (latency coupling), E (fan-out) |
 | **FE posterior consumption** | `9-fe-posterior-consumption-and-overlay.md` | FE changes for posterior display, settings, fit guidance, stats deletion schedule |
 | **Topology signatures** | `10-topology-signatures.md` | Per-fit-unit structural fingerprinting for posterior staleness detection |
+| **Snapshot evidence** | `11-snapshot-evidence-assembly.md` | Phase S: direct snapshot DB queries replace inline param-file evidence. FE fetch plan, worker DB integration, maturation trajectories. Sequenced A → B → **S** → C → D. |
 
 **Context**: `../codebase/APP_ARCHITECTURE.md` (app architecture),
 `../project-db/` (snapshot DB)
@@ -48,7 +49,7 @@ Async infrastructure (done)
          │
          ▼
 Bayesian inference
-  Phase A (independent) → Phase B (Dirichlet) → Phase C (slices) → Phase D (coupling)
+  Phase A (independent) → Phase B (Dirichlet) → Phase S (snapshot evidence) → Phase C (slices) → Phase D (coupling)
          │                       │                     │                    │
          ▼                       ▼                     ▼                    ▼
     FE overlay ──────────── FE overlay ─────────── FE overlay ────────── FE overlay
@@ -76,7 +77,8 @@ Semantic foundation (parallel, feeds into consumption quality)
 | FE overlay (basic) (done) | Phase A, FE posterior reading | Visual validation, fit quality display |
 | Visual validation | FE overlay (done), existing analytic curves | Confidence to proceed to Phase B |
 | Phase B posteriors | Phase A proven | FE overlay (Dirichlet), branch group quality |
-| Phase C posteriors | Phase B proven | Per-slice visualisation, MECE validation |
+| Phase S snapshot evidence | Phase B, FE hash infrastructure, snapshot DB | Richer maturation trajectories, tighter posteriors, enables meaningful slice pooling |
+| Phase C posteriors | Phase S proven | Per-slice visualisation, MECE validation |
 | Phase D posteriors | Phase C proven | Latency CDF overlay on cohort maturity |
 | Quantitative backtesting | Phase A + fit_history depth + snapshot DB | Distribution family selection, model improvement |
 | Fit quality visualisation (done) | Phase A + FE overlay | Edge colour-coding, quality-driven graph triage |
@@ -282,6 +284,10 @@ cross-phase feature activation. Summary:
   proves full pipeline end-to-end (includes schema revision for
   `posterior.slices`, `_model_state`, DSL canonicalisation)
 - Phase B: Dirichlet branch groups (sibling coupling)
+- Phase S: snapshot DB evidence assembly — FE sends hashes, worker
+  queries DB for maturation trajectories, replaces inline param-file
+  evidence (doc 11). Must precede Phase C because slice pooling needs
+  rich per-slice evidence.
 - Phase C: slice pooling + hierarchical Dirichlet
 - Phase D: probability–latency coupling through completeness
 - Phase E (optional): per-chain fan-out across workers

@@ -109,6 +109,9 @@
 
 .scenario-legend-name {
   flex: 1;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -128,8 +131,11 @@
   visibility: hidden;
   display: flex;
   align-items: center;
+  box-sizing: border-box;
+  height: 31px;
   gap: 4px;
-  padding: 6px 12px;
+  padding: 0 12px;
+  border: 1.5px solid transparent;
   font-size: 13px;
   font-weight: 500;
   white-space: nowrap;
@@ -140,9 +146,10 @@
   position: absolute;
   top: 0;
   left: 0;
-  height: 100%;
+  height: 31px;
+  box-sizing: border-box;
   background: #E5E7EB !important; /* Light grey background */
-  border: none;
+  border: 1.5px solid transparent;
   color: #374151 !important; /* Dark grey/black icon */
   cursor: pointer !important;
   display: flex;
@@ -176,11 +183,12 @@
   opacity: 1;
 }
 
-/* ---- View mode pill (dashed outline, low-key) ---- */
+/* ---- View mode pill (active/persisted — solid outline, opaque bg) ---- */
 .scenario-legend-mode-pill {
-  background: transparent !important;
+  background: rgba(255, 255, 255, 0.9) !important;
+  backdrop-filter: blur(4px);
   color: #374151 !important;
-  border: 1.5px dashed #9ca3af !important;
+  border: 1.5px solid #374151 !important;
   box-shadow: none !important;
 }
 
@@ -202,6 +210,7 @@
   padding-top: 6px; /* visual gap, but part of the hover zone */
   display: flex;
   flex-direction: column;
+  align-items: flex-start;
   gap: 4px;
   pointer-events: none;
 }
@@ -210,21 +219,24 @@
   pointer-events: auto;
 }
 
-/* Submenu pill — dashed outline, same dims as New Scenario button */
+/* Submenu pill — dashed outline, matches New Scenario button height */
 .scenario-legend-view-pill {
   display: flex;
   align-items: center;
+  box-sizing: border-box;
+  height: 31px;
   gap: 6px;
-  padding: 6px 10px;
+  padding: 0 10px;
   border-radius: 16px;
   font-size: 13px;
   font-weight: 500;
   white-space: nowrap;
   cursor: pointer;
-  background: transparent;
+  background: rgba(255, 255, 255, 0.7);
+  backdrop-filter: blur(8px);
   border: 1.5px dashed #9ca3af;
   color: #374151;
-  box-shadow: none;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
   opacity: 0;
   transform: translateY(-4px);
   transition: opacity 0.15s ease, transform 0.15s ease, border-color 0.15s ease;
@@ -287,9 +299,10 @@
   }
 
   .scenario-legend-mode-pill {
-    background: transparent !important;
+    background: rgba(30, 30, 30, 0.9) !important;
+    backdrop-filter: blur(4px);
     color: #d1d5db !important;
-    border-color: #6b7280 !important;
+    border-color: #d1d5db !important;
   }
 
   .scenario-legend-mode-pill .scenario-legend-delete {
@@ -302,6 +315,8 @@
   }
 
   .scenario-legend-view-pill {
+    background: rgba(30, 30, 30, 0.7);
+    backdrop-filter: blur(8px);
     border-color: #6b7280;
     color: #d1d5db;
   }

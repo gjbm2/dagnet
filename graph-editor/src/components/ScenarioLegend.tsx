@@ -10,7 +10,7 @@
 
 import React, { useCallback, useState } from 'react';
 import { Scenario } from '../types/scenarios';
-import { Eye, EyeOff, Images, Image, Square, X, Plus } from 'lucide-react';
+import { Eye, EyeOff, Images, Image, Square, X, Plus, type LucideIcon } from 'lucide-react';
 import type { ScenarioVisibilityMode, ViewOverlayMode } from '../types';
 import toast from 'react-hot-toast';
 import './ScenarioLegend.css';
@@ -19,6 +19,7 @@ import './ScenarioLegend.css';
 interface ViewModeItem {
   id: string;
   label: string;
+  icon?: LucideIcon;
   isActive: () => boolean;
   toggle: () => void;
 }
@@ -395,9 +396,11 @@ export function ScenarioLegend({
       )}
       
       {/* Active view mode pills — shown for each active mode */}
-      {viewModes.filter(m => m.isActive()).map(mode => (
+      {viewModes.filter(m => m.isActive()).map(mode => {
+        const ModeIcon = mode.icon;
+        return (
         <div key={mode.id} className="scenario-legend-chip scenario-legend-mode-pill">
-          <span className="scenario-legend-name">{mode.label}</span>
+          <span className="scenario-legend-name">{ModeIcon && <ModeIcon size={16} />}{mode.label}</span>
           <button
             className="scenario-legend-delete"
             onClick={(e) => {
@@ -409,7 +412,8 @@ export function ScenarioLegend({
             <X size={14} />
           </button>
         </div>
-      ))}
+        );
+      })}
 
       {/* + button with hover submenu — not shown in dashboard mode */}
       {!isDashboardMode && (
@@ -433,18 +437,22 @@ export function ScenarioLegend({
           {/* Hover submenu: view mode pills */}
           {viewModes.length > 0 && (
             <div className="scenario-legend-hover-submenu">
-              {viewModes.map(mode => (
-                <button
-                  key={mode.id}
-                  className={`scenario-legend-view-pill ${mode.isActive() ? 'active' : ''}`}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    mode.toggle();
-                  }}
-                >
-                  {mode.label}
-                </button>
-              ))}
+              {viewModes.map(mode => {
+                const Icon = mode.icon;
+                return (
+                  <button
+                    key={mode.id}
+                    className={`scenario-legend-view-pill ${mode.isActive() ? 'active' : ''}`}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      mode.toggle();
+                    }}
+                  >
+                    {Icon && <Icon size={16} />}
+                    {mode.label}
+                  </button>
+                );
+              })}
             </div>
           )}
         </div>

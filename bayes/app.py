@@ -17,7 +17,7 @@ import os
 import time
 import uuid
 
-APP_VERSION = "1.0.0-compiler-phase-a"  # Bump on every deploy so we can verify which code is running
+APP_VERSION = "1.1.0-compiler-phase-b-s"  # Bump on every deploy so we can verify which code is running
 
 app = modal.App("dagnet-bayes")
 
@@ -25,6 +25,8 @@ app = modal.App("dagnet-bayes")
 # Keys: job_id → { "stage": str, "pct": int, ... }
 # Entries auto-expire after 7 days of inactivity (Modal default).
 progress_dict = modal.Dict.from_name("dagnet-bayes-progress", create_if_missing=True)
+
+_repo_root = os.path.dirname(os.path.dirname(__file__))
 
 worker_image = (
     modal.Image.debian_slim(python_version="3.12")
@@ -37,11 +39,16 @@ worker_image = (
         "pyyaml",
         "psycopg2-binary",
     )
-    .env({"PYTHONPATH": "/root/bayes"})
+    .env({"PYTHONPATH": "/root/bayes:/root/lib"})
     .add_local_dir(
         os.path.dirname(__file__),
         remote_path="/root/bayes",
         ignore=["__pycache__", "*.pyc"],
+    )
+    .add_local_dir(
+        os.path.join(_repo_root, "graph-editor", "lib"),
+        remote_path="/root/lib",
+        ignore=["__pycache__", "*.pyc", "tests"],
     )
 )
 
