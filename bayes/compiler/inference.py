@@ -8,6 +8,8 @@ summarise_posteriors: InferenceData + topology/evidence → InferenceResult
 from __future__ import annotations
 
 import math
+import threading
+import time
 
 from .types import (
     TopologyAnalysis,
@@ -54,21 +56,71 @@ def run_inference(
                 f"{config.chains} chains {phase}",
             )
 
+    # Select the fastest available sampler backend.
+    # nutpie (Rust) is ~5-10x faster than PyMC default on CPU.
+    # numpyro (JAX) enables GPU — even faster when available.
+    nuts_sampler = "pymc"  # default fallback
+    try:
+        import nutpie  # noqa: F401
+        nuts_sampler = "nutpie"
+    except ImportError:
+        pass
+    # numpyro/JAX GPU is available but currently slower for this model
+    # geometry due to aggressive tree depth (1023 steps/iteration).
+    # Revisit when model reparameterisation improves JAX performance.
+    # try:
+    #     import numpyro  # noqa: F401
+    #     nuts_sampler = "numpyro"
+    # except ImportError:
+    #     pass
+
+    sampler_kwargs = dict(
+        draws=config.draws,
+        tune=config.tune,
+        chains=config.chains,
+        cores=config.cores,
+        target_accept=config.target_accept,
+        return_inferencedata=True,
+        random_seed=config.random_seed,
+    )
+
+    if nuts_sampler == "pymc":
+        sampler_kwargs["progressbar"] = not use_callback
+        sampler_kwargs["callback"] = _sampling_callback if use_callback else None
+    else:
+        # nutpie/numpyro don't support PyMC's callback mechanism.
+        # Run a heartbeat thread that reports elapsed time so the
+        # FE poll endpoint shows the job is alive.
+        sampler_kwargs["nuts_sampler"] = nuts_sampler
+        sampler_kwargs["progressbar"] = False  # suppress terminal bar
+
     if report_progress:
-        report_progress("sampling", 0, "Starting MCMC…")
+        report_progress("sampling", 0, f"Starting MCMC ({nuts_sampler})…")
+
+    # For non-pymc backends: heartbeat thread reports elapsed time
+    heartbeat_stop = threading.Event()
+    if nuts_sampler != "pymc" and report_progress:
+        total_iters = config.chains * (config.tune + config.draws)
+        t_sample_start = time.time()
+
+        def _heartbeat():
+            while not heartbeat_stop.is_set():
+                heartbeat_stop.wait(5.0)
+                if heartbeat_stop.is_set():
+                    break
+                elapsed = time.time() - t_sample_start
+                report_progress(
+                    "sampling", -1,
+                    f"{nuts_sampler} — {elapsed:.0f}s elapsed",
+                )
+
+        hb_thread = threading.Thread(target=_heartbeat, daemon=True)
+        hb_thread.start()
 
     with model:
-        trace = pm.sample(
-            draws=config.draws,
-            tune=config.tune,
-            chains=config.chains,
-            cores=config.cores,
-            target_accept=config.target_accept,
-            return_inferencedata=True,
-            random_seed=config.random_seed,
-            progressbar=not use_callback,
-            callback=_sampling_callback if use_callback else None,
-        )
+        trace = pm.sample(**sampler_kwargs)
+
+    heartbeat_stop.set()
 
     if report_progress:
         report_progress("summarising", 100, "Computing diagnostics…")
@@ -221,27 +273,124 @@ def summarise_posteriors(
             prior_tier=ev.prob_prior.source,
         ))
 
-        # Latency posterior (Phase A: echo the fixed point estimate)
+        # Latency posterior: extract from MCMC trace if latent, else echo prior
         if et.has_latency and ev.latency_prior:
             lp = ev.latency_prior
             onset = lp.onset_delta_days
-            mu = lp.mu
-            sigma = lp.sigma
+            safe_eid = _safe_var_name(edge_id)
+            mu_var_name = f"mu_lat_{safe_eid}"
+            sigma_var_name = f"sigma_lat_{safe_eid}"
 
-            # Compute t95 HDI from fixed latency
-            t95_lower = math.exp(mu + 1.28 * sigma) + onset
-            t95_upper = math.exp(mu + 2.0 * sigma) + onset
-
-            latency_posteriors[edge_id] = LatencyPosteriorSummary(
-                mu_mean=mu,
-                mu_sd=abs(mu) * 0.03,  # small uncertainty echo
-                sigma_mean=sigma,
-                sigma_sd=sigma * 0.05,
-                onset_delta_days=onset,
-                hdi_t95_lower=t95_lower,
-                hdi_t95_upper=t95_upper,
-                provenance="point-estimate",  # Phase A: not latent
+            latent_edges = metadata.get("latent_latency_edges", set())
+            is_latent = (
+                edge_id in latent_edges
+                and mu_var_name in trace.posterior
+                and sigma_var_name in trace.posterior
             )
+
+            if is_latent:
+                mu_samples = trace.posterior[mu_var_name].values.flatten()
+                sigma_samples = trace.posterior[sigma_var_name].values.flatten()
+
+                mu_mean = float(np.mean(mu_samples))
+                mu_sd = float(np.std(mu_samples))
+                sigma_mean = float(np.mean(sigma_samples))
+                sigma_sd = float(np.std(sigma_samples))
+
+                # t95 HDI from posterior samples of the latency distribution
+                t95_samples = np.exp(mu_samples + 1.645 * sigma_samples) + onset
+                t95_hdi = az.hdi(t95_samples, hdi_prob=HDI_PROB)
+                t95_lower = float(t95_hdi[0])
+                t95_upper = float(t95_hdi[1])
+
+                # Per-variable convergence
+                lat_rhat = 0.0
+                lat_ess = 0.0
+                if mu_var_name in rhat_ds:
+                    lat_rhat = max(lat_rhat, float(rhat_ds[mu_var_name].values.flat[0]))
+                if sigma_var_name in rhat_ds:
+                    lat_rhat = max(lat_rhat, float(rhat_ds[sigma_var_name].values.flat[0]))
+                if mu_var_name in ess_ds:
+                    lat_ess = float(ess_ds[mu_var_name].values.flat[0])
+                if sigma_var_name in ess_ds:
+                    lat_ess = min(lat_ess, float(ess_ds[sigma_var_name].values.flat[0]))
+
+                lat_provenance = "bayesian" if (lat_rhat < RHAT_THRESHOLD and lat_ess >= ESS_THRESHOLD) else "pooled-fallback"
+
+                latency_posteriors[edge_id] = LatencyPosteriorSummary(
+                    mu_mean=mu_mean,
+                    mu_sd=mu_sd,
+                    sigma_mean=sigma_mean,
+                    sigma_sd=sigma_sd,
+                    onset_delta_days=onset,
+                    hdi_t95_lower=t95_lower,
+                    hdi_t95_upper=t95_upper,
+                    ess=lat_ess,
+                    rhat=lat_rhat,
+                    provenance=lat_provenance,
+                )
+                diagnostics.append(
+                    f"  latency {edge_id[:8]}…: mu={mu_mean:.3f}±{mu_sd:.3f} "
+                    f"(prior={lp.mu:.3f}), sigma={sigma_mean:.3f}±{sigma_sd:.3f} "
+                    f"(prior={lp.sigma:.3f}), rhat={lat_rhat:.3f}, ess={lat_ess:.0f}"
+                )
+            else:
+                # Phase S fallback: echo fixed point estimate
+                mu = lp.mu
+                sigma = lp.sigma
+                t95_lower = math.exp(mu + 1.28 * sigma) + onset
+                t95_upper = math.exp(mu + 2.0 * sigma) + onset
+
+                latency_posteriors[edge_id] = LatencyPosteriorSummary(
+                    mu_mean=mu,
+                    mu_sd=abs(mu) * 0.03,
+                    sigma_mean=sigma,
+                    sigma_sd=sigma * 0.05,
+                    onset_delta_days=onset,
+                    hdi_t95_lower=t95_lower,
+                    hdi_t95_upper=t95_upper,
+                    provenance="point-estimate",
+                )
+
+        # Cohort-level (path) latency posterior
+        cohort_edges = metadata.get("cohort_latency_edges", set())
+        if edge_id in cohort_edges:
+            safe_eid = _safe_var_name(edge_id)
+            onset_name = f"onset_cohort_{safe_eid}"
+            mu_name = f"mu_cohort_{safe_eid}"
+            sigma_name = f"sigma_cohort_{safe_eid}"
+
+            if mu_name in trace.posterior and sigma_name in trace.posterior:
+                mu_c_samples = trace.posterior[mu_name].values.flatten()
+                sigma_c_samples = trace.posterior[sigma_name].values.flatten()
+                onset_c_samples = (
+                    trace.posterior[onset_name].values.flatten()
+                    if onset_name in trace.posterior else None
+                )
+
+                path_mu = float(np.mean(mu_c_samples))
+                path_mu_sd = float(np.std(mu_c_samples))
+                path_sigma = float(np.mean(sigma_c_samples))
+                path_sigma_sd = float(np.std(sigma_c_samples))
+                path_onset = float(np.mean(onset_c_samples)) if onset_c_samples is not None else 0.0
+
+                path_provenance = "bayesian"
+
+                # Attach to existing latency posterior (or create one)
+                if edge_id in latency_posteriors:
+                    lat = latency_posteriors[edge_id]
+                    lat.path_onset_delta_days = path_onset
+                    lat.path_mu_mean = path_mu
+                    lat.path_mu_sd = path_mu_sd
+                    lat.path_sigma_mean = path_sigma
+                    lat.path_sigma_sd = path_sigma_sd
+                    lat.path_provenance = path_provenance
+
+                diagnostics.append(
+                    f"  cohort_latency {edge_id[:8]}…: onset={path_onset:.1f}, "
+                    f"mu={path_mu:.3f}±{path_mu_sd:.3f}, "
+                    f"sigma={path_sigma:.3f}±{path_sigma_sd:.3f}"
+                )
 
     return InferenceResult(
         posteriors=posteriors,
@@ -255,6 +404,11 @@ def summarise_posteriors(
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+def _safe_var_name(edge_id: str) -> str:
+    """Convert edge UUID to a safe PyMC variable name."""
+    return edge_id.replace("-", "_")
+
 
 def _fit_beta_to_samples(samples) -> tuple[float, float]:
     """Moment-match a Beta distribution to posterior samples."""

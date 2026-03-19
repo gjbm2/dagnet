@@ -710,3 +710,16 @@ design; implementation is post-Phase A.
   adaptations, quality overlay, confidence interval migration, stats
   deletion schedule, settings/fit guidance UI. Component-level detail
   to be refined incrementally per phase.
+
+### Future work
+
+- **Sampling progress estimation**: nutpie exposes per-chain
+  `finished_draws / total_draws` via `PyChainProgress` (fields:
+  `finished_draws`, `total_draws`, `tuning`, `step_size`,
+  `num_steps`). Accessing it requires using nutpie's native API with
+  `blocking=False` and polling `PySampler.inspect()`, instead of going
+  through `pm.sample()`. This would give real % complete instead of
+  the current elapsed-time heartbeat. Requires a refactor of
+  `inference.py` to use nutpie directly rather than through PyMC's
+  wrapper. Not blocking but would improve the FE progress display
+  significantly.

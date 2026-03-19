@@ -510,14 +510,16 @@ likelihood"**, including:
 | FE settings in payload | Done | `forecastingSettingsService` settings included |
 | `bayes_fit` analysis type | Done | `scopeRule: 'all_graph_parameters'`, `readMode: 'sweep_simple'` |
 | FE snapshot subject building | Done | `useBayesTrigger` builds 8 subjects (4 edges × 2 slices), `edge_id` flattened, `equivalent_hashes` from hash-mappings, commission logging |
-| Worker DB query | Done | `_query_snapshot_subjects` queries Neon, returns rows grouped by `edge_id`. 6135 rows for test graph |
-| Evidence binder | Needs rewrite | Groups by `(slice_key, anchor_day)` — should group by `anchor_day` only. Window data aggregated to single obs, not trajectories. See §5 |
-| Model emission | Needs rewrite | 235 individual `pm.Multinomial` → 5min PyTensor compilation. Must switch to `pm.Potential` vectorisation. See doc 6 |
-| Inference | Works | 2ms/gradient, ~30s sampling (once compilation unblocked) |
-| Posterior extraction | Works | Tested with window-only data |
+| Worker DB query | Done | `_query_snapshot_subjects` queries Neon, returns rows grouped by `edge_id`. 6255 rows for test graph |
+| Evidence binder | Done | Cohort-first grouping by `anchor_day`, both window/cohort obs types, deduplication, monotonisation |
+| Model emission | Done | `pm.Potential` per edge per obs_type. Window uses `p_window`, cohort uses `p_cohort`. Compiles in ~2.5s |
+| Latent latency (Phase D) | Done | Per-edge `mu_lat`/`sigma_lat` free variables. Window Potentials use edge-level CDF. Cohort Potentials use FW-composed path-level CDF with differentiable gradients to all upstream edges |
+| Inference | Done | nutpie backend, ~31s sampling, rhat=1.002, ess=2432, 0 divergences |
+| Posterior extraction | Done | Probability from real samples + moment-matched Beta. Latency from real `mu_lat`/`sigma_lat` samples (not echoed priors) |
 | Webhook / patch delivery | Done | Patch file written to git, FE fetches and applies |
 | FE patch application | Done | `bayesPatchService` upserts posteriors, cascade runs |
-| Test harness | Created | `bayes/test_harness.py` — direct pipeline execution with progress, timeout |
+| Test harness | Done | `bayes/test_harness.py` — direct pipeline execution with progress, timeout |
+| Wiring harness | Done | `bayes/test_wiring.py` — 111 structural assertions at every integration boundary |
 
 ### Development stages
 
@@ -607,16 +609,84 @@ Verification (via session log):
 
 ## 8. Test strategy
 
-### Harness tests (real data, `bayes/test_harness.py`)
+### Three-tier verification workflow
 
-Primary validation tool. Runs the pipeline directly with real DB
-data, stage by stage:
-- Stage-by-stage output with timing and progress
-- Hard timeout (180s default)
-- Assertions at each integration boundary
-- `--no-webhook` for pipeline-only testing
-- `--placeholder` for fast smoke tests
-- `--curl` to generate curl commands for server testing
+Changes to the compiler must pass through three tiers in order.
+Each tier gates the next. Do not skip to FE testing without passing
+the earlier tiers — wiring bugs found via FE round-trip are expensive
+to diagnose.
+
+#### Tier 1: Wiring harness (`bayes/test_wiring.py`) — ~2s
+
+Structural verification of the PyTensor computation graph. No MCMC.
+Checks every integration boundary:
+
+```bash
+. graph-editor/venv/bin/activate
+python bayes/test_wiring.py --no-mcmc
+```
+
+111 assertions covering:
+- **TOPO**: anchor, edges, branch groups, path composition, latency priors
+- **EVID**: snapshot rows → observations, window/cohort split, trajectory
+  quality (monotonic y, positive ages, correct denominators)
+- **MODEL**: free variables exist, Potentials exist, `p_window` wires to
+  window Potentials (not `p_cohort`), `p_cohort` wires to cohort Potentials,
+  latent `mu_lat`/`sigma_lat` in computation graph, FW path composition
+  verified via PyTensor ancestor traversal (downstream cohort Potentials
+  depend on upstream latency variables)
+- **Pass criteria**: all 111 checks green
+
+#### Tier 2: Test harness (`bayes/test_harness.py`) — ~35s
+
+Full pipeline execution with real MCMC on the test graph. No browser
+needed. Verifies the model compiles, samples, converges, and produces
+sensible posteriors.
+
+```bash
+. graph-editor/venv/bin/activate
+python bayes/test_harness.py --no-webhook --timeout 300 > /tmp/bayes-harness.log 2>&1 &
+tail -f /tmp/bayes-harness.log
+```
+
+Also supports fast mode via wiring harness:
+```bash
+python bayes/test_wiring.py          # fast MCMC (200 draws, ~30s)
+python bayes/test_wiring.py --full   # full MCMC (2000 draws, ~35s)
+```
+
+- **Pass criteria**: `PASS` at end, rhat < 1.05, ESS > 400, 0 divergences
+- **Latency check**: inference log must show `latency {edge}…: mu=X±Y
+  (prior=Z)` lines confirming posteriors are from real samples, not echoed
+  priors. Delta between posterior and prior should be reasonable (not
+  massively inflated — that indicates missing path composition)
+
+#### Tier 3: FE round-trip — ~45s
+
+Full browser-based round-trip via `useBayesTrigger`. Validates the
+complete async pipeline including webhook, patch application, cascade,
+and visual rendering.
+
+1. Ensure dev server is running and reloaded with latest compiler code
+2. Trigger Bayes fit from the dev UI on the test graph
+3. Check session log for:
+   - `BAYES_COMMISSION_PLAN`: 8 subjects, correct hashes
+   - `BAYES_DEV_COMPLETE`: status=complete, edges_fitted=4, latency
+     posterior diagnostics present
+   - `BAYES_PATCH_APPLIED`: 4 edges updated, latency=true for 2 edges
+   - `BAYES_CASCADE_COMPLETE`: cascade ran
+4. Visual check: cohort maturity chart Bayesian curve tracks the data
+   for both short-path and long-path edges
+
+### Diagnosing common failures
+
+| Symptom | Likely cause | Which tier catches it |
+|---|---|---|
+| Window Potential uses `p_cohort` | `p_window_var` not passed to `_emit_cohort_likelihoods` | Tier 1 (ancestor check) |
+| Latency posterior echoes prior exactly | `summarise_posteriors` not reading trace samples | Tier 2 (latency diagnostic lines missing) |
+| Downstream edge mu inflated | Cohort CDF using edge-level instead of FW-composed path-level latency | Tier 1 (upstream ancestor check) + Tier 2 (posterior delta) |
+| Bayesian curve shape wrong, level OK | FE rendering uses stale latency (point-estimate provenance) | Tier 3 (visual check + patch log `latency=true`) |
+| `eps_window` unconstrained | Window trajectories in `cohort_obs` not routing through `p_window` | Tier 1 (ancestor check) |
 
 ### Parameter recovery tests (synthetic data)
 
@@ -863,16 +933,35 @@ For the test graph (4 edges, ~16 weekly bins):
 - Compilation: unchanged (Potential structure same, CDFs become
   PyTensor expressions instead of constants)
 
-### Implementation steps (not yet scheduled)
+### Implementation status (19-Mar-26)
 
-1. Add `mu_XY`, `sigma_XY` as free variables per latency edge
-   (basic Phase D — latent but stable latency)
-2. Update Potential emission: CDF becomes PyTensor expression of
-   `(mu, sigma)` instead of precomputed constant
-3. Verify: harness with latent latency, check identifiability
-4. Add time bins: `mu_t` random walk, bin assignment per Cohort day
-5. Verify: harness with binned latency, check drift detection
-6. Update posterior extraction: report current-regime `(mu, sigma)`
+1. ~~Add `mu_XY`, `sigma_XY` as free variables per latency edge~~
+   **Done.** `model.py` creates `pm.Normal(mu_lat_*)` and
+   `pm.HalfNormal(sigma_lat_*)` for edges with `sigma > 0.01`.
+
+2. ~~Update Potential emission: CDF becomes PyTensor expression~~
+   **Done.** Window Potentials use edge-level latent CDF. Cohort
+   Potentials use FW-composed path-level CDF via `pt_fw_chain()`
+   in `completeness.py`. Gradients flow through to all upstream
+   edge latencies. Verified by PyTensor ancestor traversal in
+   `test_wiring.py`.
+
+3. ~~Verify: harness with latent latency, check identifiability~~
+   **Done.** Test harness: rhat=1.002, ess=2432, 0 divergences.
+   registered→success mu moved from inflated 2.008 (broken
+   edge-only CDF) to 1.537 (correct FW-composed path CDF).
+   delegated→registered stable at 1.448.
+
+4. ~~Update posterior extraction: report current-regime `(mu, sigma)`~~
+   **Done.** `inference.py` reads real `mu_lat`/`sigma_lat` samples
+   from the trace. Latency posteriors have `provenance: "bayesian"`,
+   real `mu_sd`/`sigma_sd`, per-variable rhat/ESS.
+
+5. Add time bins: `mu_t` random walk, bin assignment per Cohort day
+   — **not yet scheduled** (Phase D step 3, see §10 design notes)
+
+6. Verify: harness with binned latency, check drift detection
+   — **not yet scheduled**
 
 ---
 
@@ -896,15 +985,23 @@ For the test graph (4 edges, ~16 weekly bins):
   infrastructure
 - [x] FE includes forecasting settings in the `settings` block
 - [x] Worker queries snapshot DB per subject and receives rows
-- [ ] Evidence binder transforms snapshot rows into Cohort-first
+- [x] Evidence binder transforms snapshot rows into Cohort-first
   trajectory objects, both `window()` and `cohort()` observation types
-- [ ] Model emits `pm.Potential` per edge per observation type
-  (not per-day `pm.Multinomial`), compiles in <30s
-- [ ] Full pipeline produces posteriors from real snapshot data
-  (rhat < 1.05, ess > 400)
+- [x] Model emits `pm.Potential` per edge per observation type
+  (not per-day `pm.Multinomial`), compiles in <3s (nutpie)
+- [x] Window Potentials use `p_window`, cohort Potentials use `p_cohort`
+  (verified by PyTensor graph traversal, `test_wiring.py`)
+- [x] Latent latency: per-edge `mu_lat`/`sigma_lat` with edge-level CDF
+  for window, FW-composed path-level CDF for cohort (verified by ancestor
+  traversal — downstream cohort depends on upstream latency vars)
+- [x] Posterior extraction reads real MCMC samples for both probability
+  and latency (not echoed priors). Latency provenance = `bayesian`
+- [x] Full pipeline produces posteriors from real snapshot data
+  (rhat=1.002, ess=2432, 0 divergences)
 - [x] Falls back to parameter file evidence when no snapshot data exists
 - [x] No double-counting between snapshot and parameter file evidence
 - [x] Priors still come from parameter files (warm-start path unchanged)
-- [ ] At least one real graph fitted with snapshot evidence via FE
+- [x] At least one real graph fitted with snapshot evidence via FE
+  (test graph `bayes-test-gm-rebuild`, 4 edges, 2 latency edges)
 - [x] Existing graphs without snapshot data continue to work (graceful
   fallback)

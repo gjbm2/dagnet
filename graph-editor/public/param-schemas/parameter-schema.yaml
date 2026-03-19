@@ -202,6 +202,30 @@ properties:
                   minimum: 0
                   description: "Divergent transitions at that point"
               additionalProperties: false
+          # Path-level (cohort) latency — present when cohort latency is fitted
+          path_onset_delta_days:
+            type: number
+            minimum: 0
+            description: "Fitted path onset for cohort context"
+          path_mu_mean:
+            type: number
+            description: "Path-level posterior mean of μ"
+          path_mu_sd:
+            type: number
+            minimum: 0
+            description: "Path-level posterior SD of μ"
+          path_sigma_mean:
+            type: number
+            minimum: 0
+            description: "Path-level posterior mean of σ"
+          path_sigma_sd:
+            type: number
+            minimum: 0
+            description: "Path-level posterior SD of σ"
+          path_provenance:
+            type: string
+            enum: [bayesian, pooled-fallback, point-estimate]
+            description: "Provenance of path-level latency posterior"
         additionalProperties: false
     additionalProperties: false
 

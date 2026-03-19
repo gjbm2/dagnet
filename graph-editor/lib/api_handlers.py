@@ -323,7 +323,7 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
         path_delta = latency.get('path_delta')
         if isinstance(path_delta, (int, float)) and math.isfinite(path_delta) and path_delta >= 0:
             result['path_delta'] = float(path_delta)
-        # Bayesian latency posterior — if present, extract mu_mean/sigma_mean/onset
+        # Bayesian latency posterior — edge-level (window)
         lat_posterior = latency.get('posterior') or {}
         bayes_mu = lat_posterior.get('mu_mean')
         bayes_sigma = lat_posterior.get('sigma_mean')
@@ -333,6 +333,29 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
             result['bayes_sigma'] = float(bayes_sigma)
             bayes_onset = lat_posterior.get('onset_delta_days')
             result['bayes_onset'] = float(bayes_onset) if isinstance(bayes_onset, (int, float)) and math.isfinite(bayes_onset) else 0.0
+        # Bayesian latency posterior — uncertainty (for confidence bands)
+        bayes_mu_sd = lat_posterior.get('mu_sd')
+        bayes_sigma_sd = lat_posterior.get('sigma_sd')
+        if (isinstance(bayes_mu_sd, (int, float)) and math.isfinite(bayes_mu_sd) and bayes_mu_sd > 0):
+            result['bayes_mu_sd'] = float(bayes_mu_sd)
+        if (isinstance(bayes_sigma_sd, (int, float)) and math.isfinite(bayes_sigma_sd) and bayes_sigma_sd > 0):
+            result['bayes_sigma_sd'] = float(bayes_sigma_sd)
+        # Bayesian latency posterior — path-level (cohort)
+        bayes_path_mu = lat_posterior.get('path_mu_mean')
+        bayes_path_sigma = lat_posterior.get('path_sigma_mean')
+        if (isinstance(bayes_path_mu, (int, float)) and math.isfinite(bayes_path_mu)
+                and isinstance(bayes_path_sigma, (int, float)) and math.isfinite(bayes_path_sigma) and bayes_path_sigma > 0):
+            result['bayes_path_mu'] = float(bayes_path_mu)
+            result['bayes_path_sigma'] = float(bayes_path_sigma)
+            bayes_path_onset = lat_posterior.get('path_onset_delta_days')
+            result['bayes_path_onset'] = float(bayes_path_onset) if isinstance(bayes_path_onset, (int, float)) and math.isfinite(bayes_path_onset) else 0.0
+            # Path-level uncertainty
+            bayes_path_mu_sd = lat_posterior.get('path_mu_sd')
+            bayes_path_sigma_sd = lat_posterior.get('path_sigma_sd')
+            if (isinstance(bayes_path_mu_sd, (int, float)) and math.isfinite(bayes_path_mu_sd) and bayes_path_mu_sd > 0):
+                result['bayes_path_mu_sd'] = float(bayes_path_mu_sd)
+            if (isinstance(bayes_path_sigma_sd, (int, float)) and math.isfinite(bayes_path_sigma_sd) and bayes_path_sigma_sd > 0):
+                result['bayes_path_sigma_sd'] = float(bayes_path_sigma_sd)
         return result
 
     def _append_synthetic_cohort_maturity_frames(args: Dict[str, Any]) -> None:
@@ -754,15 +777,24 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
                             'mode': cdf_mode,
                         }
 
-                        # Bayesian posterior overlay — second model curve if posteriors exist
+                        # Bayesian posterior overlay — second model curve if posteriors exist.
+                        # For cohort_path mode, use path-level Bayesian params if available;
+                        # for window mode, use edge-level Bayesian params.
                         if 'bayes_mu' in model_params:
+                            if cdf_mode == 'cohort_path' and 'bayes_path_mu' in model_params:
+                                b_mu = model_params['bayes_path_mu']
+                                b_sigma = model_params['bayes_path_sigma']
+                                b_onset = model_params['bayes_path_onset']
+                                b_mode = 'bayesian_path'
+                            else:
+                                b_mu = model_params['bayes_mu']
+                                b_sigma = model_params['bayes_sigma']
+                                b_onset = model_params['bayes_onset']
+                                b_mode = 'bayesian'
                             bayes_curve = []
                             for tau in range(0, axis_tau_max + 1):
                                 bc = compute_completeness(
-                                    float(tau),
-                                    model_params['bayes_mu'],
-                                    model_params['bayes_sigma'],
-                                    model_params['bayes_onset'],
+                                    float(tau), b_mu, b_sigma, b_onset,
                                 )
                                 bc = max(0.0, min(1.0, float(bc)))
                                 bayes_curve.append({
@@ -771,12 +803,55 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
                                 })
                             result['model_curve_bayes'] = bayes_curve
                             result['model_curve_bayes_params'] = {
-                                'mu': model_params['bayes_mu'],
-                                'sigma': model_params['bayes_sigma'],
-                                'onset_delta_days': model_params['bayes_onset'],
+                                'mu': b_mu,
+                                'sigma': b_sigma,
+                                'onset_delta_days': b_onset,
                                 'forecast_mean': forecast_mean,
-                                'mode': 'bayesian',
+                                'mode': b_mode,
                             }
+
+                            # Bayesian confidence band (90% — k=1.645).
+                            # Upper/lower CDF envelopes from posterior uncertainty
+                            # on mu and sigma.  Signs: higher mu shifts the CDF
+                            # right (slower); higher sigma spreads it (also slower
+                            # in the tail).  So the "upper" (faster) bound uses
+                            # mu−k·sd, sigma−k·sd and vice-versa.
+                            if cdf_mode == 'cohort_path' and 'bayes_path_mu_sd' in model_params:
+                                band_mu_sd = model_params['bayes_path_mu_sd']
+                                band_sigma_sd = model_params.get('bayes_path_sigma_sd', 0.0)
+                            else:
+                                band_mu_sd = model_params.get('bayes_mu_sd')
+                                band_sigma_sd = model_params.get('bayes_sigma_sd', 0.0)
+
+                            if band_mu_sd is not None and band_mu_sd > 0:
+                                band_k = 1.28  # 80% band
+                                # Vary mu only; keep sigma at posterior mean.
+                                # Jointly shifting mu and sigma produces degenerate
+                                # CDFs (step functions / never-rising tails) because
+                                # the effects compound rather than representing
+                                # realistic posterior uncertainty.
+                                band_mu_upper = b_mu - band_k * band_mu_sd
+                                band_sigma_upper = b_sigma
+                                band_mu_lower = b_mu + band_k * band_mu_sd
+                                band_sigma_lower = b_sigma
+
+                                bayes_band_upper = []
+                                bayes_band_lower = []
+                                for tau in range(0, axis_tau_max + 1):
+                                    cu = compute_completeness(float(tau), band_mu_upper, band_sigma_upper, b_onset)
+                                    cu = max(0.0, min(1.0, float(cu)))
+                                    cl = compute_completeness(float(tau), band_mu_lower, band_sigma_lower, b_onset)
+                                    cl = max(0.0, min(1.0, float(cl)))
+                                    bayes_band_upper.append({
+                                        'tau_days': tau,
+                                        'model_rate': round(forecast_mean * cu, 8),
+                                    })
+                                    bayes_band_lower.append({
+                                        'tau_days': tau,
+                                        'model_rate': round(forecast_mean * cl, 8),
+                                    })
+                                result['model_curve_bayes_band_upper'] = bayes_band_upper
+                                result['model_curve_bayes_band_lower'] = bayes_band_lower
 
             per_subject_results.append({
                 "subject_id": subj.get('subject_id'),

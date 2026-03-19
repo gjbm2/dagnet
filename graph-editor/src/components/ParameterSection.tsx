@@ -633,9 +633,20 @@ export function ParameterSection({
                   <span style={{ fontSize: '12px', color: '#6B7280' }}>days</span>
                 </div>
               </AutomatableField>
+
+              {/* Latency posterior indicator — shows edge & path CDF sparkline */}
+              {param?.latency?.posterior && (
+                <div style={{ marginTop: '4px' }}>
+                  <PosteriorIndicator
+                    posterior={param.latency.posterior as any}
+                    retrievedAt={param.evidence?.retrieved_at}
+                    theme={theme === 'dark' ? 'dark' : 'light'}
+                  />
+                </div>
+              )}
             </>
           )}
-          
+
           {/* Cohort anchor (always visible; independent of latency tracking enablement) */}
           <AutomatableField
             label=""

@@ -11,6 +11,7 @@
  */
 
 import React, { useMemo, useCallback } from 'react';
+import ReactECharts from 'echarts-for-react';
 import type { AnalysisResult } from '../../lib/graphComputeClient';
 import { fontSizeZoom } from '../../lib/analysisDisplaySettingsRegistry';
 import { TabbedContainer, type TabDefinition } from '../shared/TabbedContainer';
@@ -133,6 +134,8 @@ export function AnalysisInfoCard({ result, fontSize, defaultTab, onFileLink, tab
     return result_;
   }, [data, tabIds, scenarioIds, scenarioMeta]);
 
+  const latencyCdfMeta = (result as any).metadata?.latency_cdf;
+
   const panels: Record<string, React.ReactNode> = {};
   for (const tabId of tabIds) {
     const isScenarioAware = SCENARIO_AWARE_TABS.has(tabId);
@@ -145,9 +148,24 @@ export function AnalysisInfoCard({ result, fontSize, defaultTab, onFileLink, tab
           scenarioMeta={isScenarioAware ? scenarioMeta : {}}
           onFileLink={onFileLink}
         />
+        {tabId === 'latency' && latencyCdfMeta && (
+          <LatencyCdfTab edge={latencyCdfMeta.edge} path={latencyCdfMeta.path} />
+        )}
         {extra}
       </>
     );
+  }
+
+  // If no latency data rows but we have CDF metadata, add the tab
+  if (latencyCdfMeta && !tabIds.includes('latency')) {
+    const diagIdx = tabs.findIndex(t => t.id === 'diagnostics');
+    const latencyTab = { id: 'latency', label: 'Latency' };
+    if (diagIdx >= 0) {
+      tabs.splice(diagIdx, 0, latencyTab);
+    } else {
+      tabs.push(latencyTab);
+    }
+    panels['latency'] = <LatencyCdfTab edge={latencyCdfMeta.edge} path={latencyCdfMeta.path} />;
   }
 
   return (
@@ -370,3 +388,119 @@ function FileLinkValue({
     </span>
   );
 }
+
+// ────────────────────────────────────────────────────────────
+// Latency CDF sparkline — lightweight inline chart
+// ────────────────────────────────────────────────────────────
+
+function shiftedLognormalCdf(age: number, onset: number, mu: number, sigma: number): number {
+  const t = age - onset;
+  if (t <= 0 || sigma <= 0) return 0;
+  const z = (Math.log(t) - mu) / (sigma * Math.SQRT2);
+  return 0.5 * (1 + erf(z));
+}
+
+function erf(x: number): number {
+  const sign = x >= 0 ? 1 : -1;
+  const a = Math.abs(x);
+  const t = 1 / (1 + 0.3275911 * a);
+  const y = 1 - (((((1.061405429 * t - 1.453152027) * t) + 1.421413741) * t - 0.284496736) * t + 0.254829592) * t * Math.exp(-a * a);
+  return sign * y;
+}
+
+interface CdfParams { mu: number; sigma: number; onset: number }
+
+function buildCombinedCdfOption(edge?: CdfParams, path?: CdfParams) {
+  const edgeT95 = edge ? Math.exp(edge.mu + 1.645 * edge.sigma) + edge.onset : 0;
+  const pathT95 = path ? Math.exp(path.mu + 1.645 * path.sigma) + path.onset : 0;
+  const maxDays = Math.ceil(Math.max(edgeT95, pathT95, 5) * 1.3);
+  const steps = Math.min(maxDays, 80);
+
+  const edgeData: [number, number][] = [];
+  const pathData: [number, number][] = [];
+  for (let d = 0; d <= steps; d++) {
+    const tau = (d / steps) * maxDays;
+    if (edge) edgeData.push([tau, shiftedLognormalCdf(tau, edge.onset, edge.mu, edge.sigma)]);
+    if (path) pathData.push([tau, shiftedLognormalCdf(tau, path.onset, path.mu, path.sigma)]);
+  }
+
+  // Onset markers
+  const markLines: any[] = [];
+  if (edge && edge.onset > 0) {
+    markLines.push({ xAxis: edge.onset, label: { formatter: `onset ${edge.onset.toFixed(0)}d`, fontSize: 8, position: 'insideStartTop' }, lineStyle: { color: '#60a5fa', type: 'dotted', width: 1 } });
+  }
+  if (path && path.onset > 0 && (!edge || Math.abs(path.onset - edge.onset) > 0.5)) {
+    markLines.push({ xAxis: path.onset, label: { formatter: `onset ${path.onset.toFixed(0)}d`, fontSize: 8, position: 'insideStartTop' }, lineStyle: { color: '#f59e0b', type: 'dotted', width: 1 } });
+  }
+
+  const series: any[] = [];
+
+  if (edge) {
+    series.push({
+      name: `Edge: μ=${edge.mu.toFixed(2)} σ=${edge.sigma.toFixed(2)}`,
+      type: 'line', showSymbol: false, smooth: true,
+      lineStyle: { width: 1.5, color: '#60a5fa' },
+      areaStyle: { color: '#60a5fa', opacity: 0.06 },
+      data: edgeData,
+      ...(markLines.length > 0 ? { markLine: { silent: true, symbol: 'none', data: markLines } } : {}),
+    });
+  }
+
+  if (path) {
+    series.push({
+      name: `Path: μ=${path.mu.toFixed(2)} σ=${path.sigma.toFixed(2)}`,
+      type: 'line', showSymbol: false, smooth: true,
+      lineStyle: { width: 1.5, color: '#f59e0b', type: 'dashed' },
+      areaStyle: { color: '#f59e0b', opacity: 0.06 },
+      data: pathData,
+      // Put mark lines on path series if no edge series
+      ...(!edge && markLines.length > 0 ? { markLine: { silent: true, symbol: 'none', data: markLines } } : {}),
+    });
+  }
+
+  return {
+    animation: false,
+    grid: { left: 30, right: 8, top: 28, bottom: 20 },
+    legend: {
+      show: true, top: 0, left: 0, itemWidth: 14, itemHeight: 8, itemGap: 12,
+      textStyle: { fontSize: 8, color: '#aaa' },
+    },
+    xAxis: {
+      type: 'value' as const, min: 0, max: maxDays,
+      name: 'days', nameLocation: 'end' as const,
+      nameTextStyle: { fontSize: 8, color: '#666', padding: [0, 0, 0, -20] },
+      axisLabel: { fontSize: 8, color: '#888', formatter: '{value}' },
+      axisLine: { lineStyle: { color: '#444' } },
+      splitLine: { show: false },
+    },
+    yAxis: {
+      type: 'value' as const, min: 0, max: 1,
+      name: 'completeness',
+      nameTextStyle: { fontSize: 8, color: '#666' },
+      axisLabel: { fontSize: 8, color: '#888', formatter: (v: number) => `${(v * 100).toFixed(0)}%` },
+      axisLine: { lineStyle: { color: '#444' } },
+      splitLine: { show: false },
+    },
+    tooltip: {
+      trigger: 'axis' as const,
+      backgroundColor: 'rgba(30,30,30,0.9)',
+      borderColor: '#444',
+      textStyle: { fontSize: 9, color: '#ddd' },
+      formatter: (params: any) => {
+        if (!Array.isArray(params) || params.length === 0) return '';
+        const tau = params[0].value[0].toFixed(1);
+        const lines = params.map((p: any) =>
+          `<span style="color:${p.color}">●</span> ${p.seriesName}: ${(p.value[1] * 100).toFixed(1)}%`
+        );
+        return `${tau}d<br/>${lines.join('<br/>')}`;
+      },
+    },
+    series,
+  };
+}
+
+const LatencyCdfTab = React.memo(function LatencyCdfTab({ edge, path }: { edge?: CdfParams; path?: CdfParams }) {
+  if (!edge && !path) return null;
+  const option = useMemo(() => buildCombinedCdfOption(edge, path), [edge, path]);
+  return <ReactECharts option={option} style={{ height: 140 }} notMerge lazyUpdate />;
+});

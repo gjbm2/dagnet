@@ -210,6 +210,7 @@ class BoundEvidence:
     settings: dict[str, Any] = field(default_factory=dict)
     today: str = ""
     diagnostics: list[str] = field(default_factory=list)
+    n_drift_bins: int = 1           # Phase D drift: number of time bins (future)
 
 
 # ---------------------------------------------------------------------------
@@ -262,7 +263,16 @@ class PosteriorSummary:
 
 @dataclass
 class LatencyPosteriorSummary:
-    """Plain-dict posterior for one edge's latency (Phase A: point estimate echo)."""
+    """Plain-dict posterior for one edge's latency.
+
+    Edge-level fields (mu_mean, sigma_mean, onset_delta_days): the
+    canonical X→Y model, pinned by window data.
+
+    Path-level fields (path_*): the fitted A→Y cohort application model.
+    Directly usable for cohort() rendering — no FW composition needed
+    at consumption time. Populated when cohort-level latency variables
+    exist (Phase D step 2.5).
+    """
     mu_mean: float
     mu_sd: float
     sigma_mean: float
@@ -275,13 +285,26 @@ class LatencyPosteriorSummary:
     rhat: float = 0.0
     provenance: str = "point-estimate"
 
+    # Path-level (cohort) latency — populated when cohort latency is fitted
+    path_onset_delta_days: float | None = None
+    path_mu_mean: float | None = None
+    path_mu_sd: float | None = None
+    path_sigma_mean: float | None = None
+    path_sigma_sd: float | None = None
+    path_provenance: str | None = None
+
     def to_webhook_dict(self) -> dict[str, Any]:
-        """Format for the webhook payload's edge.latency block."""
-        return {
+        """Format for the webhook payload's edge.latency block.
+
+        Flat structure: edge-level fields at root, path-level fields
+        with path_ prefix. Mirrors the analytic latency.path_mu pattern.
+        """
+        result = {
             "mu_mean": round(self.mu_mean, 4),
             "mu_sd": round(self.mu_sd, 4),
             "sigma_mean": round(self.sigma_mean, 4),
             "sigma_sd": round(self.sigma_sd, 4),
+            "onset_delta_days": round(self.onset_delta_days, 2),
             "hdi_t95_lower": round(self.hdi_t95_lower, 1),
             "hdi_t95_upper": round(self.hdi_t95_upper, 1),
             "hdi_level": self.hdi_level,
@@ -289,6 +312,14 @@ class LatencyPosteriorSummary:
             "rhat": round(self.rhat, 4) if self.rhat else None,
             "provenance": self.provenance,
         }
+        if self.path_mu_mean is not None:
+            result["path_onset_delta_days"] = round(self.path_onset_delta_days, 2) if self.path_onset_delta_days is not None else None
+            result["path_mu_mean"] = round(self.path_mu_mean, 4)
+            result["path_mu_sd"] = round(self.path_mu_sd, 4) if self.path_mu_sd is not None else None
+            result["path_sigma_mean"] = round(self.path_sigma_mean, 4) if self.path_sigma_mean is not None else None
+            result["path_sigma_sd"] = round(self.path_sigma_sd, 4) if self.path_sigma_sd is not None else None
+            result["path_provenance"] = self.path_provenance or self.provenance
+        return result
 
 
 @dataclass

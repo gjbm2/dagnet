@@ -622,14 +622,22 @@ export interface LatencyFitHistoryEntry {
   divergences: number;
 }
 
-/** Bayesian posterior for latency parameters */
+/** Bayesian posterior for latency parameters.
+ *
+ * Edge-level fields (mu_mean, sigma_mean, onset_delta_days): canonical X→Y
+ * model, pinned by window data.
+ *
+ * Path-level fields (path_*): fitted A→Y cohort application model. Directly
+ * usable for cohort() rendering — no FW composition needed at consumption
+ * time. Present when cohort-level latency variables are fitted (Phase D).
+ */
 export interface LatencyPosterior {
   distribution: string;        // e.g. 'lognormal'
-  onset_delta_days: number;    // Posterior onset (may differ from pre-Bayes value)
-  mu_mean: number;             // Posterior mean of μ
-  mu_sd: number;               // Posterior SD of μ
-  sigma_mean: number;          // Posterior mean of σ
-  sigma_sd: number;            // Posterior SD of σ
+  onset_delta_days: number;    // Edge-level onset (window context)
+  mu_mean: number;             // Edge-level posterior mean of μ
+  mu_sd: number;               // Edge-level posterior SD of μ
+  sigma_mean: number;          // Edge-level posterior mean of σ
+  sigma_sd: number;            // Edge-level posterior SD of σ
   hdi_t95_lower: number;       // Lower HDI bound for t95 (days)
   hdi_t95_upper: number;       // Upper HDI bound for t95 (days)
   hdi_level: number;           // HDI level used
@@ -639,6 +647,14 @@ export interface LatencyPosterior {
   fingerprint: string;         // Same fingerprint as probability posterior
   provenance: 'bayesian' | 'pooled-fallback' | 'point-estimate' | 'skipped';
   fit_history?: LatencyFitHistoryEntry[];
+
+  // Path-level (cohort) latency — present when cohort latency is fitted
+  path_onset_delta_days?: number;   // Fitted path onset (cohort context)
+  path_mu_mean?: number;            // Path-level posterior mean of μ
+  path_mu_sd?: number;              // Path-level posterior SD of μ
+  path_sigma_mean?: number;         // Path-level posterior mean of σ
+  path_sigma_sd?: number;           // Path-level posterior SD of σ
+  path_provenance?: 'bayesian' | 'pooled-fallback' | 'point-estimate';
 }
 
 /** Quality metrics from a Bayesian fitting run */

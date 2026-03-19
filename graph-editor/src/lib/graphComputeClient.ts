@@ -530,6 +530,11 @@ export class GraphComputeClient {
               entry.bayesCurve = r.model_curve_bayes;
               entry.bayesParams = r.model_curve_bayes_params || {};
             }
+            // Bayesian confidence band (upper/lower envelope)
+            if (r?.model_curve_bayes_band_upper && Array.isArray(r.model_curve_bayes_band_upper) && r.model_curve_bayes_band_upper.length > 0) {
+              entry.bayesBandUpper = r.model_curve_bayes_band_upper;
+              entry.bayesBandLower = r.model_curve_bayes_band_lower;
+            }
             modelCurveBySubject.set(b.subject_id, entry);
           }
         }

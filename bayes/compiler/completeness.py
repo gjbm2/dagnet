@@ -90,6 +90,61 @@ def fw_chain(edges: list[tuple[float, float]]) -> FWResult:
 
 
 # ---------------------------------------------------------------------------
+# PyTensor-native FW composition (Phase D: differentiable path latency)
+# ---------------------------------------------------------------------------
+
+def pt_fw_compose_pair(mu1, sigma1, mu2, sigma2):
+    """FW approximation for sum of two lognormals — PyTensor version.
+
+    Identical maths to fw_compose_pair but using pytensor.tensor ops,
+    so the result is a differentiable PyTensor expression. Accepts any
+    mix of PyTensor variables and Python floats.
+
+    Returns (mu_fw, sigma_fw) as PyTensor expressions.
+    """
+    import pytensor.tensor as pt
+
+    e1 = pt.exp(mu1 + sigma1 ** 2 / 2)
+    e2 = pt.exp(mu2 + sigma2 ** 2 / 2)
+
+    v1 = (pt.exp(sigma1 ** 2) - 1) * pt.exp(2 * mu1 + sigma1 ** 2)
+    v2 = (pt.exp(sigma2 ** 2) - 1) * pt.exp(2 * mu2 + sigma2 ** 2)
+
+    e_sum = e1 + e2
+    v_sum = v1 + v2
+
+    sigma_sq = pt.log(1 + v_sum / pt.maximum(e_sum ** 2, 1e-30))
+    sigma_fw = pt.sqrt(pt.maximum(sigma_sq, 1e-6))
+    mu_fw = pt.log(pt.maximum(e_sum, 1e-30)) - sigma_sq / 2
+
+    return mu_fw, sigma_fw
+
+
+def pt_fw_chain(components: list[tuple]) -> tuple:
+    """Compose a chain of lognormals via iterated PyTensor FW.
+
+    components: list of (mu, sigma) pairs. Each can be a PyTensor
+    variable (latent edge) or a Python float (fixed edge). PyTensor
+    promotes floats automatically.
+
+    Returns (mu_composed, sigma_composed) as PyTensor expressions.
+    """
+    import pytensor.tensor as pt
+
+    if not components:
+        return pt.as_tensor_variable(0.0), pt.as_tensor_variable(0.01)
+
+    mu, sigma = components[0]
+    if len(components) == 1:
+        return pt.as_tensor_variable(mu), pt.as_tensor_variable(sigma)
+
+    for mu_next, sigma_next in components[1:]:
+        mu, sigma = pt_fw_compose_pair(mu, sigma, mu_next, sigma_next)
+
+    return mu, sigma
+
+
+# ---------------------------------------------------------------------------
 # Join-node moment-matched collapse (doc 6, §join latency handling)
 # ---------------------------------------------------------------------------
 

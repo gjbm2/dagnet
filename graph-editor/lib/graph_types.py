@@ -153,13 +153,19 @@ class LatencyFitHistoryEntry(BaseModel):
 
 
 class LatencyPosterior(BaseModel):
-    """Bayesian posterior for latency parameters."""
+    """Bayesian posterior for latency parameters.
+
+    Edge-level fields: canonical X→Y model, pinned by window data.
+    Path-level fields (path_*): fitted A→Y cohort application model,
+    directly usable for cohort() rendering. Present when cohort-level
+    latency variables are fitted (Phase D step 2.5).
+    """
     distribution: str = Field(..., description="Distribution family fitted (e.g. 'lognormal')")
-    onset_delta_days: float = Field(..., description="Posterior onset (may differ from pre-Bayes value)")
-    mu_mean: float = Field(..., description="Posterior mean of μ")
-    mu_sd: float = Field(..., description="Posterior SD of μ")
-    sigma_mean: float = Field(..., description="Posterior mean of σ")
-    sigma_sd: float = Field(..., description="Posterior SD of σ")
+    onset_delta_days: float = Field(..., description="Edge-level onset (window context)")
+    mu_mean: float = Field(..., description="Edge-level posterior mean of μ")
+    mu_sd: float = Field(..., description="Edge-level posterior SD of μ")
+    sigma_mean: float = Field(..., description="Edge-level posterior mean of σ")
+    sigma_sd: float = Field(..., description="Edge-level posterior SD of σ")
     hdi_t95_lower: float = Field(..., description="Lower HDI bound for t95 (days)")
     hdi_t95_upper: float = Field(..., description="Upper HDI bound for t95 (days)")
     hdi_level: float = Field(..., description="HDI level used")
@@ -169,6 +175,13 @@ class LatencyPosterior(BaseModel):
     fingerprint: str = Field(..., description="Same fingerprint as probability posterior")
     provenance: Literal['bayesian', 'pooled-fallback', 'point-estimate', 'skipped']
     fit_history: Optional[List[LatencyFitHistoryEntry]] = None
+    # Path-level (cohort) latency — present when cohort latency is fitted
+    path_onset_delta_days: Optional[float] = Field(None, description="Fitted path onset (cohort context)")
+    path_mu_mean: Optional[float] = Field(None, description="Path-level posterior mean of μ")
+    path_mu_sd: Optional[float] = Field(None, description="Path-level posterior SD of μ")
+    path_sigma_mean: Optional[float] = Field(None, description="Path-level posterior mean of σ")
+    path_sigma_sd: Optional[float] = Field(None, description="Path-level posterior SD of σ")
+    path_provenance: Optional[Literal['bayesian', 'pooled-fallback', 'point-estimate']] = None
 
 
 class BayesQuality(BaseModel):

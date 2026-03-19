@@ -810,11 +810,13 @@ The compiler must:
    completeness (single-hop: `onset_XY`, `mu_XY`, `sigma_XY`)
 6. For cohort entries, emit **per-day** likelihood terms from the daily
    arrays, each with **path-level** completeness (full chain from anchor)
-7. Ensure that both types share the **same** edge-level latency
-   variables `(mu_XY, sigma_XY)` — the latency model is common;
-   only the probability differs by observation type
+7. For window terms, use edge-level latency `(mu_base_XY, sigma_base_XY)`
+   directly. For cohort terms, use cohort-level latent path latency
+   `(onset_cohort_XY, mu_cohort_XY, sigma_cohort_XY)` with the
+   FW-composed edge latency as prior (see "Hierarchical latency")
 8. Emit `σ_temporal` as a graph-level hyperparameter (one per graph,
-   shared across all edges)
+   shared across all edges). Emit `σ_latency_temporal` similarly for
+   latency divergence allowance
 
 ### Identifiability
 
@@ -848,6 +850,197 @@ If latency evidence is weak **and** all days are immature, the model
 will be poorly identified. The compiler should flag this case
 (diagnostic) and consider falling back to a simpler model (treat all
 observations as mature, fit latency separately).
+
+### Hierarchical latency: mirroring the probability structure
+
+**Date**: 19-Mar-26
+**Status**: Design — follows from Phase D implementation experience
+
+The probability dimension has a hierarchical structure: `p_base` →
+`p_window` (tight pooling) → `p_cohort` (path-informed divergence via
+`τ_cohort = σ_temporal · path_sigma_AX`). This accommodates temporal
+diffusion and drift between the two observation types.
+
+The latency dimension needs the same structure. Currently, window and
+cohort share the same edge-level `(mu_XY, sigma_XY)` directly. This
+creates two problems:
+
+1. **The cohort CDF uses FW-composed path latency from edge latents,
+   but the output is edge-level.** The FE needs a usable shifted
+   lognormal `(onset, mu, sigma)` at cohort level. FW composition of
+   edge posteriors gives `path_mu` and `path_sigma`, but the path onset
+   is a noisy sum of edge-level histogram-derived point estimates. The
+   cohort trajectory data directly constrains when conversions start
+   arriving — richer evidence for path onset than the sum of edge
+   estimates.
+
+2. **Temporal diffusion and drift affect latency, not just probability.**
+   Cohort members enter the anchor across a date range and arrive at
+   intermediate nodes spread across the path latency distribution. This
+   arrival spread means the effective latency distribution at cohort
+   level is broader than what edge-level FW composition predicts. If
+   latency is also drifting (product getting faster or slower), the
+   cohort integrates over multiple latency regimes — the same effect
+   that `σ_temporal` accommodates for probability.
+
+#### Hierarchical latency model
+
+Mirror the probability hierarchy into the latency dimension:
+
+```
+# Edge-level base latency (anchored by window data)
+mu_base_XY    ~ Normal(mu_prior, sigma_mu_prior)
+sigma_base_XY ~ Gamma(alpha, beta)   # mode at observed dispersion
+
+# Window latency: tightly pooled toward base (direct, single-hop)
+# In practice, window uses (mu_base, sigma_base) directly — no
+# separate window latency variable needed (same argument as τ_window
+# being a small constant for probability).
+
+# Cohort path-level latency: can diverge from base
+# Onset is latent — constrained by cohort trajectory data
+onset_cohort_XY ~ HalfNormal(onset_prior)   # prior from Σ edge onsets
+
+# Path mu and sigma: allowed to deviate from FW-composed edge base
+mu_cohort_XY    ~ Normal(mu_path_composed, τ_mu_cohort)
+sigma_cohort_XY ~ Normal(sigma_path_composed, τ_sigma_cohort)
+
+# Divergence allowance mirrors the probability structure:
+# τ_mu_cohort = σ_latency_temporal · path_complexity_factor
+# τ_sigma_cohort = similar
+```
+
+Where:
+- `mu_path_composed`, `sigma_path_composed` are the deterministic FW
+  composition of upstream edge-level `(mu_base, sigma_base)` — the
+  prior expectation for path latency
+- `onset_cohort_XY` is latent with prior centred on `Σ edge_onsets`
+- `τ_mu_cohort` and `τ_sigma_cohort` allow the cohort path latency to
+  deviate from the FW-composed edge-level prediction, absorbing
+  temporal diffusion and drift effects
+
+#### Window CDF (unchanged)
+
+```
+CDF_window = CDF_LN(max(0, age - onset_edge), mu_base_XY, sigma_base_XY)
+```
+
+Single hop, edge-level, clean signal. Pins `(mu_base, sigma_base)`.
+
+#### Cohort CDF (uses cohort-level latency)
+
+```
+CDF_cohort = CDF_LN(max(0, age - onset_cohort_XY), mu_cohort_XY, sigma_cohort_XY)
+```
+
+Path-level, with all three parameters fitted. The cohort trajectory
+data directly constrains the shape (mu, sigma) AND the shift (onset).
+
+#### Posterior output
+
+The model produces two latency summaries per edge:
+
+- **Edge-level** (from window): `(onset_edge, mu_base, sigma_base)` —
+  the canonical fast-learning edge model. Used for `window()` analysis
+  and as the building block for path composition.
+
+- **Path-level** (from cohort): `(onset_cohort, mu_cohort, sigma_cohort)`
+  — the fitted cohort application model. Directly usable for `cohort()`
+  analysis rendering. No FW composition needed at consumption time.
+
+This satisfies the contract from doc 1 §6: "`X→Y` remains the
+canonical latent model family; `A→Y` path behaviour is a deterministic
+path-level application of those edge latents" — except that the
+application is now informed by cohort-level evidence rather than being
+a pure deterministic composition. The FW composition serves as the
+**prior** for the cohort latency; the cohort trajectory data provides
+the **posterior correction**.
+
+#### Joint structure: the four connections
+
+The probability and latency dimensions for window and cohort form a
+coupled square. All four connections live in the same `pm.Model`:
+
+```
+              p dimension              latency dimension
+            ┌──────────────┐         ┌────────────────────┐
+  window:   │ p_window_XY  │─────────│ mu_base, sigma_base│
+            │ (tight pool) │  joint  │ (edge-level)       │
+            └──────┬───────┘  CDF    └────────┬───────────┘
+                   │                          │
+          p_base + σ_temporal      FW prior + σ_latency_temporal
+                   │                          │
+            ┌──────┴───────┐         ┌────────┴───────────┐
+  cohort:   │ p_cohort_XY  │─────────│ onset_cohort,      │
+            │ (path diverge)│  joint │ mu_cohort,          │
+            └──────────────┘  CDF    │ sigma_cohort        │
+                                     └────────────────────┘
+```
+
+1. **window.p ↔ window.latency** (horizontal, top): joint in the
+   window CDF. `p_window * CDF(age - onset_edge, mu_base, sigma_base)`.
+   Window trajectory shape separates level (p) from shape (latency).
+
+2. **window.p ↔ cohort.p** (vertical, left): hierarchical via
+   `p_base` + `τ_cohort = σ_temporal · path_sigma_AX`. Window anchors
+   the base; cohort can deviate proportional to path complexity.
+
+3. **window.latency ↔ cohort.latency** (vertical, right): hierarchical
+   via FW-composed prior + `τ_mu_cohort`. Edge-level latency anchors
+   the path expectation; cohort latency can deviate to absorb temporal
+   diffusion, drift, and onset correction.
+
+4. **cohort.p ↔ cohort.latency** (horizontal, bottom): joint in the
+   cohort CDF. `p_path * CDF(age - onset_cohort, mu_cohort, sigma_cohort)`.
+   The maturation curve shape constrains both simultaneously — low
+   observed k can be explained by low p_path OR slow path latency,
+   and the model resolves this using the age gradient across days.
+
+NUTS explores the full joint. The window side pins both p and latency
+quickly (single hop, clean signal). Those feed as priors/anchors into
+the cohort side, which has room to deviate on both dimensions
+proportional to path complexity. The four connections are not
+independent — they form a single coupled posterior.
+
+#### Behaviour at extremes
+
+- **First edge from anchor** (`path_sigma_AX ≈ 0`): `τ_mu_cohort ≈ 0`,
+  so `mu_cohort ≈ mu_base`, `sigma_cohort ≈ sigma_base`,
+  `onset_cohort ≈ onset_edge`. Window and cohort agree. Correct — no
+  temporal spread, no path composition.
+
+- **Deep downstream edge** (large `path_sigma_AX`): `τ_mu_cohort` is
+  large, allowing the cohort path latency to diverge from the
+  FW-composed edge prediction. The cohort trajectory data (which
+  directly observes the path-level maturation curve) drives the fit.
+
+- **No cohort data**: `mu_cohort` collapses to the FW-composed prior.
+  The output is the deterministic composition — the best available
+  estimate without cohort evidence.
+
+#### Interaction with temporal drift (Phase D step 3)
+
+When time-binned latency is active (`mu_t` per bin), the FW-composed
+prior for `mu_cohort` uses the current-regime bin's composition. The
+cohort latency can still deviate from this, but the prior tracks the
+latest edge-level regime. `σ_latency_temporal` (the latency analogue
+of `σ_temporal`) governs how much the cohort path latency can diverge
+from the current edge composition — it is calibrated from
+`fit_history` latency trajectory variance, same mechanism as
+`σ_temporal` for probability.
+
+#### Implementation phasing
+
+This is a natural extension of Phase D:
+
+- **Phase D step 2** (current): FW-composed path CDF for cohort, shared
+  edge-level `(mu, sigma)`. Output is edge-level only.
+- **Phase D step 2.5** (this design): add `(onset_cohort, mu_cohort,
+  sigma_cohort)` as latent variables for cohort path latency. Output
+  both edge-level and path-level latency posteriors.
+- **Phase D step 3**: time-binned `mu_t` per edge. The FW-composed
+  prior for `mu_cohort` uses the current bin. `σ_latency_temporal`
+  calibrated from `fit_history`.
 
 ### Apparent circularity of completeness
 
@@ -2634,14 +2827,20 @@ pooled-level hierarchy.
   single `pm.Model` (see Layer 3 "hierarchical pooling with path-informed
   divergence"). `p_window_XY` is tightly pooled toward `p_base_XY`;
   `p_cohort_XY` can diverge by `τ_cohort_XY = σ_temporal · path_sigma_AX`,
-  reflecting both temporal shift and path-length diffusion. Both need
+  reflecting both temporal shift and path-length diffusion. **The same
+  hierarchical structure extends to latency** (see "Hierarchical latency:
+  mirroring the probability structure"): window uses edge-level
+  `(mu_base, sigma_base)` directly; cohort uses path-level
+  `(onset_cohort, mu_cohort, sigma_cohort)` with the FW-composed edge
+  latency as prior and path-informed divergence allowance. Both need
   completeness adjustment at different scopes: window completeness couples
   to **edge-level** latency only (single hop); cohort completeness couples
-  to the **full path** from anchor. The window anchors `p_base` and edge
-  latency early (no upstream uncertainty); the cohort adds path-level
-  coupling as it matures. The hierarchical structure means divergence
-  between window and cohort performance is a learned signal (captured by
-  `σ_temporal`), not a data quality problem. Date overlap at the
+  to the **cohort-level latent** path latency. The window anchors
+  `p_base` and edge latency early (no upstream uncertainty); the cohort
+  adds path-level coupling as it matures. The hierarchical structure
+  means divergence between window and cohort performance is a learned
+  signal (captured by `σ_temporal` for probability, `σ_latency_temporal`
+  for latency), not a data quality problem. Date overlap at the
   edge-event level (not the anchor level) should be detected by the
   evidence binder and flagged as a diagnostic; the initial implementation
   accepts the mild overconfidence rather than attempting deduplication.

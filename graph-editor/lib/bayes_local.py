@@ -36,11 +36,24 @@ def get_progress(job_id: str) -> dict | None:
     return _progress.get(job_id)
 
 
+def _invalidate_compiler_cache() -> None:
+    """Purge cached bayes/compiler modules so edits are picked up.
+
+    Python's sys.modules cache means once a module is imported, subsequent
+    imports return the cached version. In dev, we want hot-reload: every
+    job should use the latest code on disk.
+    """
+    stale = [k for k in sys.modules if k == 'worker' or k.startswith('compiler')]
+    for k in stale:
+        del sys.modules[k]
+
+
 def _run_fit_graph(job_id: str, payload: dict) -> None:
     """Run fit_graph in a background thread, storing the result."""
     try:
         progress_fn = lambda stage, pct, detail="": report_progress(job_id, stage, pct, detail)
 
+        _invalidate_compiler_cache()
         from worker import fit_graph
         result = fit_graph(payload, report_progress=progress_fn)
 

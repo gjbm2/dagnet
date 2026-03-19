@@ -127,6 +127,13 @@ export interface BayesPatchEdge {
     ess: number;
     rhat: number | null;
     provenance: string;
+    // Path-level (cohort) latency — present when cohort latency is fitted
+    path_onset_delta_days?: number;
+    path_mu_mean?: number;
+    path_mu_sd?: number;
+    path_sigma_mean?: number;
+    path_sigma_sd?: number;
+    path_provenance?: string;
   };
 }
 
@@ -254,6 +261,15 @@ export async function applyPatch(patch: BayesPatchFile): Promise<number> {
           fitted_at: patch.fitted_at,
           fingerprint: patch.fingerprint,
           provenance: lat.provenance,
+          // Path-level (cohort) latency
+          ...(lat.path_mu_mean != null ? {
+            path_onset_delta_days: lat.path_onset_delta_days,
+            path_mu_mean: lat.path_mu_mean,
+            path_mu_sd: lat.path_mu_sd,
+            path_sigma_mean: lat.path_sigma_mean,
+            path_sigma_sd: lat.path_sigma_sd,
+            path_provenance: lat.path_provenance,
+          } : {}),
         };
       }
     }
@@ -374,6 +390,15 @@ function mergePosteriorsIntoParam(
       fingerprint,
       provenance: lat.provenance,
       ...(latFitHistory.length > 0 ? { fit_history: latFitHistory } : {}),
+      // Path-level (cohort) latency — present when cohort latency is fitted
+      ...(lat.path_mu_mean != null ? {
+        path_onset_delta_days: lat.path_onset_delta_days,
+        path_mu_mean: lat.path_mu_mean,
+        path_mu_sd: lat.path_mu_sd,
+        path_sigma_mean: lat.path_sigma_mean,
+        path_sigma_sd: lat.path_sigma_sd,
+        path_provenance: lat.path_provenance,
+      } : {}),
     };
   }
 }

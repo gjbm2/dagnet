@@ -401,21 +401,27 @@ function buildEdgeInfoResult(graph: ConversionGraph, dsl: string): AnalysisResul
       });
     }
 
-    // Latency summary
+    // Latency summary — on the latency tab (chart rendered by AnalysisInfoCard)
     const lat = edge.p.latency;
     if (lat && lat.latency_parameter) {
       if (lat.median_lag_days !== undefined) {
-        data.push({ tab: 'overview', section: 'Latency', property: 'Median Lag', value: `${lat.median_lag_days.toFixed(1)}d` });
+        data.push({ tab: 'latency', section: 'Edge', property: 'Median Lag', value: `${lat.median_lag_days.toFixed(1)}d` });
       }
       if (lat.t95 !== undefined) {
-        data.push({ tab: 'overview', section: 'Latency', property: 't95', value: `${lat.t95.toFixed(1)}d` });
+        data.push({ tab: 'latency', section: 'Edge', property: 't95', value: `${lat.t95.toFixed(1)}d` });
+      }
+      if (lat.onset_delta_days !== undefined) {
+        data.push({ tab: 'latency', section: 'Edge', property: 'Onset', value: `${lat.onset_delta_days.toFixed(1)}d` });
       }
       if (lat.completeness !== undefined) {
-        data.push({ tab: 'overview', section: 'Latency', property: 'Completeness', value: fmtPct(lat.completeness) });
+        data.push({ tab: 'latency', section: 'Edge', property: 'Completeness', value: fmtPct(lat.completeness) });
+      }
+      if (lat.path_t95 !== undefined) {
+        data.push({ tab: 'latency', section: 'Path', property: 'Path t95', value: `${lat.path_t95.toFixed(1)}d` });
       }
       if (lat.anchor_node_id) {
         const anchorNode = graph.nodes.find(n => n.id === lat.anchor_node_id || n.uuid === lat.anchor_node_id);
-        data.push({ tab: 'overview', section: 'Latency', property: 'Anchor', value: anchorNode?.label || lat.anchor_node_id });
+        data.push({ tab: 'latency', section: 'Path', property: 'Anchor', value: anchorNode?.label || lat.anchor_node_id });
       }
     }
   }
@@ -507,6 +513,9 @@ function buildEdgeInfoResult(graph: ConversionGraph, dsl: string): AnalysisResul
   // ── Tab: Diagnostics (freshness) ──
   buildFreshnessRows(data, 'diagnostics', graph, edge);
 
+  // Build latency CDF metadata for sparkline rendering
+  const latencyCdf = buildLatencyCdfMeta(edge);
+
   return {
     analysis_type: 'edge_info',
     analysis_name: `Edge: ${edgeLabel}`,
@@ -524,7 +533,33 @@ function buildEdgeInfoResult(graph: ConversionGraph, dsl: string): AnalysisResul
       chart: { recommended: 'info' },
     },
     data,
+    ...(latencyCdf ? { metadata: { latency_cdf: latencyCdf } } : {}),
   };
+}
+
+function buildLatencyCdfMeta(edge: GraphEdge): Record<string, any> | null {
+  const lat = edge.p?.latency as any;
+  if (!lat) return null;
+
+  const result: Record<string, any> = {};
+
+  // Edge-level CDF params (from analytic LAG pass or Bayesian posterior)
+  const edgeMu = lat.posterior?.mu_mean ?? lat.mu;
+  const edgeSigma = lat.posterior?.sigma_mean ?? lat.sigma;
+  const edgeOnset = lat.posterior?.onset_delta_days ?? lat.onset_delta_days ?? 0;
+  if (typeof edgeMu === 'number' && typeof edgeSigma === 'number' && edgeSigma > 0) {
+    result.edge = { mu: edgeMu, sigma: edgeSigma, onset: edgeOnset };
+  }
+
+  // Path-level CDF params (from Bayesian posterior path_* fields, or analytic path_mu/path_sigma)
+  const pathMu = lat.posterior?.path_mu_mean ?? lat.path_mu;
+  const pathSigma = lat.posterior?.path_sigma_mean ?? lat.path_sigma;
+  const pathOnset = lat.posterior?.path_onset_delta_days ?? lat.path_delta ?? edgeOnset;
+  if (typeof pathMu === 'number' && typeof pathSigma === 'number' && pathSigma > 0) {
+    result.path = { mu: pathMu, sigma: pathSigma, onset: pathOnset };
+  }
+
+  return Object.keys(result).length > 0 ? result : null;
 }
 
 // ────────────────────────────────────────────────────────────

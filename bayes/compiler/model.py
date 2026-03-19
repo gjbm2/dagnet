@@ -63,6 +63,106 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence):
                 model, diagnostics,
             )
 
+        # --- Per-edge latency variables (Phase D: latent latency) ---
+        latency_vars: dict[str, tuple] = {}
+        cohort_latency_vars: dict[str, tuple] = {}
+
+        for edge_id in topology.topo_order:
+            et = topology.edges.get(edge_id)
+            ev = evidence.edges.get(edge_id)
+            if et is None or ev is None or ev.skipped:
+                continue
+            if ev.latency_prior is not None and ev.latency_prior.sigma > 0.01:
+                safe_id = _safe_var_name(edge_id)
+                mu_prior = ev.latency_prior.mu
+                sigma_prior = ev.latency_prior.sigma
+                # mu_base ~ Normal centred on prior, moderate uncertainty
+                mu_var = pm.Normal(
+                    f"mu_lat_{safe_id}",
+                    mu=mu_prior,
+                    sigma=max(0.5, sigma_prior),
+                )
+                # sigma_base ~ Gamma with mode at observed dispersion.
+                # NOT HalfNormal (mode at 0 biases sigma toward zero,
+                # making the CDF too steep — see doc 6 §Latency model).
+                from .completeness import gamma_params_from_mode
+                gamma_a, gamma_b = gamma_params_from_mode(
+                    max(sigma_prior, 0.1), spread=0.5,
+                )
+                sigma_var = pm.Gamma(
+                    f"sigma_lat_{safe_id}",
+                    alpha=gamma_a, beta=gamma_b,
+                )
+                latency_vars[edge_id] = (mu_var, sigma_var)
+                diagnostics.append(
+                    f"  latency: {edge_id[:8]}… mu_prior={mu_prior:.3f}, "
+                    f"sigma_prior={sigma_prior:.3f} → latent"
+                )
+
+
+
+        # --- Cohort-level latency variables (Phase D step 2.5) ---
+        # Non-centred parameterisation: cohort latency = FW-composed
+        # edge latency + deviation. This keeps the cohort data
+        # constraining the edge-level latents (gradients flow through
+        # the FW composition) while allowing path-informed divergence.
+        # Mirrors the p_cohort = logit(p_base) + eps * tau pattern.
+        for edge_id in topology.topo_order:
+            et = topology.edges.get(edge_id)
+            ev = evidence.edges.get(edge_id)
+            if et is None or ev is None or ev.skipped:
+                continue
+            if not ev.has_cohort:
+                continue
+            path_has_latency = any(
+                topology.edges.get(eid) is not None
+                and topology.edges[eid].has_latency
+                for eid in et.path_edge_ids
+            )
+            if not path_has_latency:
+                continue
+
+            safe_id = _safe_var_name(edge_id)
+            path_sigma_ax = max(et.path_sigma_ax, 0.01)
+
+            # FW-composed path latency from edge-level latents
+            path_result = _resolve_path_latency(
+                et.path_edge_ids, topology, latency_vars,
+            )
+            if path_result is None:
+                continue
+
+            onset_prior, mu_path_composed, sigma_path_composed = path_result
+
+            # onset_cohort: latent, prior from sum of edge onsets
+            onset_cohort = pm.HalfNormal(
+                f"onset_cohort_{safe_id}",
+                sigma=max(onset_prior, 1.0),
+            )
+
+            # mu_cohort = mu_path_composed + eps * tau (non-centred)
+            # Gradients flow through mu_path_composed → edge latents
+            tau_mu_lat = max(path_sigma_ax * 0.5, 0.1)
+            eps_mu_cohort = pm.Normal(f"eps_mu_cohort_{safe_id}", mu=0, sigma=1)
+            mu_cohort = pm.Deterministic(
+                f"mu_cohort_{safe_id}",
+                mu_path_composed + eps_mu_cohort * tau_mu_lat,
+            )
+
+            # sigma_cohort = sigma_path_composed + eps * tau (non-centred)
+            tau_sigma_lat = 0.1
+            eps_sigma_cohort = pm.Normal(f"eps_sigma_cohort_{safe_id}", mu=0, sigma=1)
+            sigma_cohort = pm.Deterministic(
+                f"sigma_cohort_{safe_id}",
+                pt.maximum(sigma_path_composed + eps_sigma_cohort * tau_sigma_lat, 0.01),
+            )
+
+            cohort_latency_vars[edge_id] = (onset_cohort, mu_cohort, sigma_cohort)
+            diagnostics.append(
+                f"  cohort_latency: {edge_id[:8]}… onset_prior={onset_prior:.1f}, "
+                f"mu_path_prior=FW-composed, tau_mu={tau_mu_lat:.3f}"
+            )
+
         # --- Per-edge variables and likelihoods ---
         for edge_id in topology.topo_order:
             et = topology.edges.get(edge_id)
@@ -91,13 +191,13 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence):
 
             if ev.has_window and ev.has_cohort:
                 if p_base_var is not None:
-                    # Branch group edge — Dirichlet component is the base
                     p_base = p_base_var
                 else:
-                    # Solo edge
                     p_base = pm.Beta(f"p_base_{safe_id}", alpha=ev.prob_prior.alpha, beta=ev.prob_prior.beta)
 
                 logit_p_base = pm.math.log(p_base / (1 - p_base))
+
+
 
                 # Window: tight pooling around base (non-centred)
                 tau_window = 0.1
@@ -131,7 +231,11 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence):
                 if emit_window_binomial:
                     _emit_window_likelihoods(safe_id, p_window, ev, diagnostics)
                 _emit_cohort_likelihoods(safe_id, p_cohort, ev, diagnostics,
-                                        topology, edge_var_names, model)
+                                        topology, edge_var_names, model,
+                                        latency_vars=latency_vars,
+                                        p_window_var=p_window,
+                                        cohort_latency_vars=cohort_latency_vars,
+)
 
                 if edge_id not in edge_var_names:
                     edge_var_names[edge_id] = f"p_base_{safe_id}"
@@ -152,7 +256,10 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence):
                     p = pm.Beta(f"p_{safe_id}", alpha=ev.prob_prior.alpha, beta=ev.prob_prior.beta)
                     edge_var_names[edge_id] = f"p_{safe_id}"
                 _emit_cohort_likelihoods(safe_id, p, ev, diagnostics,
-                                        topology, edge_var_names, model)
+                                        topology, edge_var_names, model,
+                                        latency_vars=latency_vars,
+                                        cohort_latency_vars=cohort_latency_vars,
+)
 
             else:
                 if p_base_var is None:
@@ -167,6 +274,8 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence):
 
     metadata = {
         "edge_var_names": edge_var_names,
+        "latent_latency_edges": set(latency_vars.keys()),
+        "cohort_latency_edges": set(cohort_latency_vars.keys()),
         "diagnostics": diagnostics,
     }
 
@@ -368,12 +477,28 @@ def _emit_cohort_likelihoods(
     topology=None,
     edge_var_names: dict[str, str] | None = None,
     model=None,
+    latency_vars: dict[str, tuple] | None = None,
+    p_window_var=None,
+    cohort_latency_vars: dict[str, tuple] | None = None,
 ) -> None:
     """Emit cohort likelihoods via pm.Potential (vectorised per obs_type).
 
     Trajectory Cohort days (multiple retrieval ages) → vectorised
     Multinomial log-probability via pm.Potential (one per obs_type per
     edge). Single-retrieval days → pm.Binomial with completeness.
+
+    p_var is the primary probability variable (p_cohort for hierarchical
+    edges, p for solo edges). p_window_var, if provided, is used for
+    window-type trajectories instead of p_var — ensuring window data
+    constrains p_window (tight pooling) not p_cohort (path-informed).
+
+    cohort_latency_vars: if provided, maps edge_id → (onset_cohort,
+    mu_cohort, sigma_cohort) for cohort-level path latency. Cohort
+    trajectories use these instead of FW-composed edge latency.
+
+    Phase D: when latency_vars contains latent (mu, sigma) for this edge
+    or upstream edges, CDFs are PyTensor expressions and the trajectory
+    shape constrains latency jointly with probability.
 
     See doc 6 § "Efficient emission: pm.Potential vectorisation".
     """
@@ -400,109 +525,218 @@ def _emit_cohort_likelihoods(
             all_daily.extend(c_obs.daily)
 
     # --- Emit trajectory Potentials ---
-    # Phase S: CDFs are constants (fixed latency). The entire Multinomial
-    # logp is computed as numpy arrays with only p_expr as the single
-    # PyTensor variable. This creates a tiny PyTensor graph regardless
-    # of trajectory count. See doc 6 § "pm.Potential vectorisation".
+    # See doc 6 § "pm.Potential vectorisation" and § "Phase D: latent latency".
+    latency_vars = latency_vars or {}
+
     for obs_type, trajs in [("window", window_trajs), ("cohort", cohort_trajs)]:
         if not trajs:
             continue
 
         # Resolve p expression for this obs_type
         if obs_type == "window":
-            p_expr = p_var  # edge-level probability
+            p_expr = p_window_var if p_window_var is not None else p_var
         else:
             p_expr = _resolve_path_probability(
                 trajs[0].path_edge_ids, ev.edge_id, p_var,
                 topology, edge_var_names, model,
             )
 
-        # Resolve CDF parameters for this obs_type
-        if obs_type == "window":
+        # Resolve latency: latent (Phase D) or fixed (Phase S)?
+        # For window: edge-level latency only.
+        # For cohort: path-level composed from per-edge latents.
+        has_latent_latency = False
+        if obs_type == "window" and ev.edge_id in latency_vars:
+            has_latent_latency = True
+            mu_var, sigma_var = latency_vars[ev.edge_id]
             onset = ev.latency_prior.onset_delta_days if ev.latency_prior else 0.0
-            mu = ev.latency_prior.mu if ev.latency_prior else 0.0
-            sigma = ev.latency_prior.sigma if ev.latency_prior else 0.01
+        elif obs_type == "cohort":
+            # Phase D step 2.5: use cohort-level latency variables if
+            # available (onset_cohort, mu_cohort, sigma_cohort). These
+            # have the FW-composed edge latency as prior but are free to
+            # deviate — the cohort trajectory data constrains all three.
+            cohort_latency_vars = cohort_latency_vars or {}
+            if ev.edge_id in cohort_latency_vars:
+                has_latent_latency = True
+                onset_var, mu_var, sigma_var = cohort_latency_vars[ev.edge_id]
+                onset = onset_var  # latent — PyTensor variable
+            else:
+                # Fallback: FW-composed edge latency (Phase D step 2)
+                path_ids = trajs[0].path_edge_ids if trajs else []
+                path_result = _resolve_path_latency(
+                    path_ids, topology, latency_vars,
+                )
+                if path_result is not None:
+                    has_latent_latency = True
+                    onset, mu_var, sigma_var = path_result
+
+        if not has_latent_latency:
+            # Phase S fallback: fixed CDFs
+            if obs_type == "window":
+                onset = ev.latency_prior.onset_delta_days if ev.latency_prior else 0.0
+                mu_fixed = ev.latency_prior.mu if ev.latency_prior else 0.0
+                sigma_fixed = ev.latency_prior.sigma if ev.latency_prior else 0.01
+            else:
+                et = topology.edges.get(ev.edge_id) if topology else None
+                if et and hasattr(et, 'path_latency') and et.path_latency:
+                    onset = et.path_latency.path_delta
+                    mu_fixed = et.path_latency.path_mu
+                    sigma_fixed = et.path_latency.path_sigma
+                elif ev.latency_prior:
+                    onset = ev.latency_prior.onset_delta_days
+                    mu_fixed = ev.latency_prior.mu
+                    sigma_fixed = ev.latency_prior.sigma
+                else:
+                    onset, mu_fixed, sigma_fixed = 0.0, 0.0, 0.01
+
+        has_any_latency = (has_latent_latency or
+                          (ev.latency_prior is not None and
+                           (ev.latency_prior.sigma > 0.01 or
+                            (ev.latency_prior.onset_delta_days or 0) > 0)))
+
+        if has_latent_latency:
+            # Phase D: CDFs are PyTensor expressions of latent (mu, sigma).
+            #
+            # Strategy: compute ALL CDFs in ONE vectorised erfc call, then
+            # use numpy integer index arrays (advanced indexing) to extract
+            # interval coefficients. The PyTensor graph has ~10 nodes total
+            # regardless of how many trajectories exist.
+            #
+            # The interval structure for the Multinomial logp:
+            #   For each trajectory with ages [t1, t2, ..., tk]:
+            #     interval_coeff[0] = CDF(t1)
+            #     interval_coeff[j] = CDF(tj) - CDF(tj-1)  for j > 0
+            #     remainder uses CDF(tk)
+            #   logp = Σ count * log(p * coeff) + Σ remainder * log(1 - p * CDF_final)
+
+            # Step 1: Flatten all ages into one array (numpy)
+            all_ages_raw = []
+            for traj in trajs:
+                all_ages_raw.extend(traj.retrieval_ages)
+            ages_raw_np = np.array(all_ages_raw, dtype=np.float64)
+
+            # Step 2: Subtract onset and compute CDF
+            onset_is_latent = hasattr(onset, 'name')
+            if onset_is_latent:
+                effective_ages = pt.maximum(
+                    pt.as_tensor_variable(ages_raw_np) - onset, 1e-6,
+                )
+                log_ages = pt.log(effective_ages)
+            else:
+                effective_ages_np = np.maximum(ages_raw_np - float(onset), 1e-6)
+                log_ages = pt.log(pt.as_tensor_variable(effective_ages_np))
+
+            z_all = (log_ages - mu_var) / (sigma_var * pt.sqrt(2.0))
+            cdf_all = 0.5 * pt.erfc(-z_all)  # shape: (N,)
+
+            # Step 3: Build index arrays for interval coefficients (numpy)
+            curr_indices = []
+            prev_indices = []
+            interval_counts = []
+            remainder_indices = []
+            remainder_counts_list = []
+
+            age_offset = 0
+            for traj in trajs:
+                n_ages = len(traj.retrieval_ages)
+                cum_y = traj.cumulative_y
+
+                # First interval: coeff = CDF(t0), no previous
+                # First interval
+                curr_indices.append(age_offset)
+                prev_indices.append(-1)
+                interval_counts.append(float(cum_y[0]))
+
+                # Subsequent intervals
+                for j in range(1, n_ages):
+                    curr_indices.append(age_offset + j)
+                    prev_indices.append(age_offset + j - 1)
+                    interval_counts.append(float(max(0, cum_y[j] - cum_y[j - 1])))
+
+                # Remainder
+                remainder_indices.append(age_offset + n_ages - 1)
+                remainder_counts_list.append(float(max(0, traj.n - cum_y[-1])))
+
+                age_offset += n_ages
+
+            # Step 4: Compute interval CDF coefficients via advanced indexing
+            # (2 PyTensor index ops, not N individual ones)
+            curr_idx_np = np.array(curr_indices, dtype=np.int64)
+            prev_idx_np = np.array(prev_indices, dtype=np.int64)
+            counts_np = np.array(interval_counts, dtype=np.float64)
+
+            cdf_curr = cdf_all[curr_idx_np]  # one advanced index op
+            # For prev: use 0 where sentinel (-1), then mask
+            prev_safe = np.where(prev_idx_np >= 0, prev_idx_np, 0)
+            cdf_prev = cdf_all[prev_safe]  # one advanced index op
+            is_first = pt.as_tensor_variable((prev_idx_np < 0).astype(np.float64))
+            # coeff = cdf_curr - cdf_prev * (1 - is_first)
+            # When is_first=1: coeff = cdf_curr
+            # When is_first=0: coeff = cdf_curr - cdf_prev
+            cdf_coeffs = cdf_curr - cdf_prev * (1.0 - is_first)
+            cdf_coeffs = pt.clip(cdf_coeffs, 1e-12, 1.0)
+
+            # Step 5: Conversion logp
+            conv_probs = p_expr * cdf_coeffs
+            conv_logp = pt.sum(counts_np * pt.log(pt.clip(conv_probs, 1e-30, 1.0)))
+
+            # Step 6: Remainder logp
+            rem_idx_np = np.array(remainder_indices, dtype=np.int64)
+            rem_counts_np = np.array(remainder_counts_list, dtype=np.float64)
+            cdf_finals = cdf_all[rem_idx_np]
+            remainder_logp = pt.sum(
+                rem_counts_np * pt.log(pt.clip(1.0 - p_expr * cdf_finals, 1e-12, 1.0))
+            )
+
+            logp = conv_logp + remainder_logp
+            n_terms = len(trajs)
+
         else:
-            et = topology.edges.get(ev.edge_id) if topology else None
-            if et and hasattr(et, 'path_latency') and et.path_latency:
-                onset = et.path_latency.path_delta
-                mu = et.path_latency.path_mu
-                sigma = et.path_latency.path_sigma
-            elif ev.latency_prior:
-                onset = ev.latency_prior.onset_delta_days
-                mu = ev.latency_prior.mu
-                sigma = ev.latency_prior.sigma
-            else:
-                onset, mu, sigma = 0.0, 0.0, 0.01
+            # Phase S: fixed CDFs — use efficient decomposition.
+            total_conversion_count = 0.0
+            cdf_logp_constant = 0.0
+            remainder_counts = []
+            remainder_cdf_finals = []
 
-        has_latency = ev.latency_prior is not None and (sigma > 0.01 or onset > 0)
+            for traj in trajs:
+                cum_y = traj.cumulative_y
 
-        # Precompute ALL interval CDF coefficients and counts as numpy.
-        # For each trajectory day, the Multinomial logp kernel is:
-        #   Σ_i count_i * log(p * cdf_coeff_i)     for conversion intervals
-        #   + count_remainder * log(1 - p * cdf_final)
-        #
-        # We split into:
-        #   conversion_logp = Σ (count_i * log(p)) + Σ (count_i * log(cdf_coeff_i))
-        #                   = total_k * log(p) + Σ (count_i * log(cdf_coeff_i))
-        #   remainder_logp  = Σ remainder_j * log(1 - p * cdf_final_j)
-        #
-        # The first term depends on p only via log(p) scaled by total_k.
-        # The cdf coefficients are constants (Phase S).
-        # The remainder terms each depend on p via log(1 - p * const).
+                if has_any_latency:
+                    cdf_vals = [shifted_lognormal_cdf(age, onset, mu_fixed, sigma_fixed)
+                                for age in traj.retrieval_ages]
+                else:
+                    cdf_vals = [1.0] * len(traj.retrieval_ages)
 
-        total_conversion_count = 0.0     # sum of all interval counts (= total k across all days)
-        cdf_logp_constant = 0.0          # sum of count_i * log(cdf_coeff_i) — pure constant
-        remainder_counts = []            # one per trajectory day
-        remainder_cdf_finals = []        # one per trajectory day
+                counts = [cum_y[0]]
+                coeffs = [max(cdf_vals[0], 1e-15)]
+                for j in range(1, len(cum_y)):
+                    counts.append(max(0, cum_y[j] - cum_y[j - 1]))
+                    coeffs.append(max(cdf_vals[j] - cdf_vals[j - 1], 1e-15))
 
-        for traj in trajs:
-            cum_y = traj.cumulative_y
+                remainder = max(0, traj.n - cum_y[-1])
+                cdf_final = min(cdf_vals[-1], 1.0 - 1e-10)
 
-            # CDF at each retrieval age
-            if has_latency:
-                cdf_vals = [shifted_lognormal_cdf(age, onset, mu, sigma)
-                            for age in traj.retrieval_ages]
-            else:
-                cdf_vals = [1.0] * len(traj.retrieval_ages)
+                for c, coeff in zip(counts, coeffs):
+                    if c > 0:
+                        total_conversion_count += c
+                        cdf_logp_constant += c * np.log(max(coeff, 1e-30))
 
-            # Interval counts and CDF coefficients
-            # Interval 0: count = y_0, cdf_coeff = cdf_0
-            # Interval j: count = y_j - y_{j-1}, cdf_coeff = cdf_j - cdf_{j-1}
-            # Remainder: count = n - y_last, cdf_final = cdf_last
-            counts = [cum_y[0]]
-            coeffs = [max(cdf_vals[0], 1e-15)]
-            for j in range(1, len(cum_y)):
-                counts.append(max(0, cum_y[j] - cum_y[j - 1]))
-                coeffs.append(max(cdf_vals[j] - cdf_vals[j - 1], 1e-15))
+                remainder_counts.append(remainder)
+                remainder_cdf_finals.append(cdf_final)
 
-            remainder = max(0, traj.n - cum_y[-1])
-            cdf_final = min(cdf_vals[-1], 1.0 - 1e-10)
+            remainder_counts_arr = np.array(remainder_counts, dtype=np.float64)
+            remainder_cdf_arr = np.array(remainder_cdf_finals, dtype=np.float64)
 
-            # Accumulate
-            for c, coeff in zip(counts, coeffs):
-                if c > 0:
-                    total_conversion_count += c
-                    cdf_logp_constant += c * np.log(max(coeff, 1e-30))
-
-            remainder_counts.append(remainder)
-            remainder_cdf_finals.append(cdf_final)
-
-        # Build the Potential with minimal PyTensor nodes:
-        #   logp = total_k * log(p) + constant + Σ remainder_j * log(1 - p * cdf_j)
-        remainder_counts_arr = np.array(remainder_counts, dtype=np.float64)
-        remainder_cdf_arr = np.array(remainder_cdf_finals, dtype=np.float64)
-
-        logp = (
-            total_conversion_count * pt.log(pt.clip(p_expr, 1e-12, 1.0))
-            + cdf_logp_constant
-            + pt.sum(remainder_counts_arr * pt.log(pt.clip(1.0 - p_expr * remainder_cdf_arr, 1e-12, 1.0)))
-        )
+            logp = (
+                total_conversion_count * pt.log(pt.clip(p_expr, 1e-12, 1.0))
+                + cdf_logp_constant
+                + pt.sum(remainder_counts_arr * pt.log(pt.clip(1.0 - p_expr * remainder_cdf_arr, 1e-12, 1.0)))
+            )
+            n_terms = len(trajs)
 
         pm.Potential(f"traj_{obs_type}_{safe_id}", logp)
         diagnostics.append(
             f"  Potential traj_{obs_type}_{safe_id}: "
-            f"{len(trajs)} Cohort days, total_k={total_conversion_count:.0f}, "
+            f"{n_terms} Cohort days, latent_latency={has_latent_latency}, "
             f"p_type={'edge' if obs_type == 'window' else 'path'}"
         )
 
@@ -526,6 +760,47 @@ def _emit_cohort_likelihoods(
                 p=p_effective,
                 observed=k_arr,
             )
+
+
+def _resolve_path_latency(
+    path_edge_ids: list[str],
+    topology,
+    latency_vars: dict[str, tuple],
+) -> tuple | None:
+    """Compose path-level latency from per-edge latents via differentiable FW.
+
+    For each edge on the path that has latency:
+      - If in latency_vars: use the latent (mu_var, sigma_var) — PyTensor
+      - Else: use fixed (mu_prior, sigma_prior) — float constants
+
+    Returns (onset, mu_composed, sigma_composed) where mu/sigma are PyTensor
+    expressions. Returns None if no latency edges on path.
+    """
+    from .completeness import pt_fw_chain
+
+    if not path_edge_ids or not topology:
+        return None
+
+    components = []
+    onset = 0.0
+    has_any_latent = False
+
+    for eid in path_edge_ids:
+        et = topology.edges.get(eid)
+        if et is None or not et.has_latency:
+            continue
+        onset += et.onset_delta_days
+        if eid in latency_vars:
+            components.append(latency_vars[eid])
+            has_any_latent = True
+        else:
+            components.append((et.mu_prior, et.sigma_prior))
+
+    if not components or not has_any_latent:
+        return None
+
+    mu_composed, sigma_composed = pt_fw_chain(components)
+    return onset, mu_composed, sigma_composed
 
 
 def _resolve_path_probability(
@@ -710,3 +985,5 @@ def _emit_branch_group_multinomial(
 def _safe_var_name(edge_id: str) -> str:
     """Convert edge UUID to a safe PyMC variable name."""
     return edge_id.replace("-", "_")
+
+

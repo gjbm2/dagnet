@@ -252,6 +252,57 @@ export function buildCohortMaturityEChartsOption(
         }
       }
     }
+    // Bayesian confidence band (filled polygon between upper and lower curves).
+    // Uses a custom series that draws a closed polygon via renderItem.
+    // api.coord() requires coordinateSystem + encode to map data → pixels.
+    const bandUpper = entry?.bayesBandUpper;
+    const bandLower = entry?.bayesBandLower;
+    if (Array.isArray(bandUpper) && bandUpper.length > 0 && Array.isArray(bandLower) && bandLower.length > 0) {
+      const bandColour = c.text === '#e0e0e0' ? 'rgba(96,165,250,0.18)' : 'rgba(37,99,235,0.15)';
+      const upperPts = bandUpper
+        .filter((p: any) => typeof p?.tau_days === 'number' && typeof p?.model_rate === 'number');
+      const lowerPts = bandLower
+        .filter((p: any) => typeof p?.tau_days === 'number' && typeof p?.model_rate === 'number');
+      if (upperPts.length > 0 && lowerPts.length > 0) {
+        // Each data item: [tau, upper_rate, lower_rate]
+        const polyData = upperPts.map((p: any, i: number) => {
+          const lower = i < lowerPts.length ? lowerPts[i].model_rate : p.model_rate;
+          return [p.tau_days, p.model_rate, lower];
+        });
+        const fill = bandColour;
+        seriesOut.push({
+          id: 'bayes_band',
+          name: 'Bayes 80% band',
+          type: 'custom' as any,
+          coordinateSystem: 'cartesian2d',
+          encode: { x: 0, y: 1 },
+          renderItem: (params: any, api: any) => {
+            // Draw the full polygon on the first data point only.
+            // api.value() only reads the CURRENT dataIndex, so we use the
+            // closure-captured polyData directly and convert via api.coord().
+            if (params.dataIndex !== 0) return;
+            const points: number[][] = [];
+            // Upper curve left → right
+            for (let i = 0; i < polyData.length; i++) {
+              points.push(api.coord([polyData[i][0], polyData[i][1]]));
+            }
+            // Lower curve right → left
+            for (let i = polyData.length - 1; i >= 0; i--) {
+              points.push(api.coord([polyData[i][0], polyData[i][2]]));
+            }
+            return {
+              type: 'polygon',
+              shape: { points, smooth: 0.3 },
+              style: { fill, stroke: 'none' },
+              silent: true,
+            };
+          },
+          data: polyData,
+          z: 9,
+          silent: true,
+        });
+      }
+    }
     // Bayesian posterior overlay (dashed, distinct colour)
     if (entry?.bayesCurve && Array.isArray(entry.bayesCurve) && entry.bayesCurve.length > 0) {
       const bayesData = entry.bayesCurve
@@ -282,12 +333,26 @@ export function buildCohortMaturityEChartsOption(
     }
   }
 
-  // Y-axis max from data with headroom
+  // Y-axis max from data with headroom.
+  // For stacked band series, the visual max is lower + delta — account for
+  // that by checking the raw upper band data (pre-delta) if present.
   let maxRate = 0;
   for (const s of seriesOut) {
+    if (s.id === 'bayes_band') continue; // handled below via raw upper data
     for (const d of (s.data || [])) {
       const v = d?.value?.[1];
       if (typeof v === 'number' && Number.isFinite(v) && v > maxRate) maxRate = v;
+    }
+  }
+  // Include the actual Bayes band upper envelope (not the delta) in yMax.
+  if (modelCurves && typeof modelCurves === 'object') {
+    const bandEntry = modelCurves[effectiveSubjectId];
+    const rawUpper = bandEntry?.bayesBandUpper;
+    if (Array.isArray(rawUpper)) {
+      for (const p of rawUpper) {
+        const v = p?.model_rate;
+        if (typeof v === 'number' && Number.isFinite(v) && v > maxRate) maxRate = v;
+      }
     }
   }
   const yMax = settings.y_axis_max ?? Math.min(1.0, Math.max(0.05, Math.ceil((maxRate * 1.2) * 20) / 20));
@@ -312,7 +377,8 @@ export function buildCohortMaturityEChartsOption(
           ? `Age: ${tauDays} day(s) · As at ${bd}`
           : `As at ${bd}`;
 
-        const scenarioItems = items.filter((it: any) => it?.seriesId !== 'model_cdf');
+        const excludeIds = new Set(['model_cdf', 'bayes_band']);
+        const scenarioItems = items.filter((it: any) => !excludeIds.has(it?.seriesId));
         const lines = scenarioItems
           .filter((it: any, idx: number, arr: any[]) => arr.findIndex((x: any) => String(x?.seriesName) === String(it?.seriesName)) === idx)
           .map((it: any) => `${it?.seriesName || 'Scenario'}: <strong>${fmtPercent(it?.value?.[1])}</strong>`);

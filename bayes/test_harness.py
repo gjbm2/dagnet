@@ -9,6 +9,11 @@ Usage:
 
 Reads the test graph from the data repo, builds snapshot subjects,
 runs the compiler, and prints the full log. No browser needed.
+
+IMPORTANT: This runs fit_graph in-process, NOT via the dev server.
+Do NOT run this while the dev server is processing a Bayes job.
+Only one instance at a time — the harness enforces this via a
+lock file.
 """
 
 import sys
@@ -16,7 +21,41 @@ import os
 import json
 import time
 import argparse
+import atexit
+import signal
 from datetime import datetime, date
+
+LOCK_FILE = "/tmp/bayes-harness.lock"
+
+
+def _acquire_lock():
+    """Ensure only one harness runs at a time."""
+    if os.path.exists(LOCK_FILE):
+        try:
+            with open(LOCK_FILE) as f:
+                old_pid = int(f.read().strip())
+            # Check if that process is still alive
+            os.kill(old_pid, 0)
+            print(f"ERROR: Another harness is running (PID {old_pid}).")
+            print(f"  Kill it first: kill {old_pid}")
+            print(f"  Or remove stale lock: rm {LOCK_FILE}")
+            sys.exit(1)
+        except (ProcessLookupError, ValueError):
+            # Stale lock — remove it
+            os.remove(LOCK_FILE)
+
+    with open(LOCK_FILE, "w") as f:
+        f.write(str(os.getpid()))
+
+    def _release_lock(*_args):
+        try:
+            os.remove(LOCK_FILE)
+        except FileNotFoundError:
+            pass
+
+    atexit.register(_release_lock)
+    signal.signal(signal.SIGTERM, lambda *a: (_release_lock(), sys.exit(1)))
+    signal.signal(signal.SIGINT, lambda *a: (_release_lock(), sys.exit(1)))
 
 # Paths
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -62,10 +101,13 @@ class DateEncoder(json.JSONEncoder):
 
 
 def main():
+    _acquire_lock()
+
     parser = argparse.ArgumentParser(description="Bayes test harness")
     parser.add_argument("--placeholder", action="store_true", help="Use placeholder mode (skip MCMC)")
     parser.add_argument("--no-webhook", action="store_true", help="Skip webhook call")
     parser.add_argument("--curl", action="store_true", help="Generate curl command instead of running directly")
+    parser.add_argument("--timeout", type=int, default=600, help="Hard timeout in seconds (default: 600)")
     args = parser.parse_args()
 
     conf = _read_private_repos_conf()
@@ -152,7 +194,7 @@ def main():
     import threading
     import signal
 
-    TIMEOUT_S = 180  # 3 minutes hard cap
+    TIMEOUT_S = args.timeout
     t_start = time.time()
     last_stage = ["idle"]
     result_box = [None]
@@ -186,6 +228,12 @@ def main():
             elapsed = time.time() - t_start
             if elapsed > TIMEOUT_S:
                 print(f"\n  TIMEOUT after {elapsed:.0f}s (last stage: {last_stage[0]})")
+                # Kill any child processes (PyMC multiprocessing workers)
+                import subprocess
+                subprocess.run(
+                    ["pkill", "-P", str(os.getpid())],
+                    capture_output=True,
+                )
                 sys.exit(1)
             # Heartbeat — show we're alive
             print(f"  ... {elapsed:.0f}s elapsed, stage: {last_stage[0]}", flush=True)
