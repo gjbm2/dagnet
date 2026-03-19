@@ -23,6 +23,7 @@ design docs contain the detail.
 | **FE posterior consumption** | `9-fe-posterior-consumption-and-overlay.md` | FE changes for posterior display, settings, fit guidance, stats deletion schedule |
 | **Topology signatures** | `10-topology-signatures.md` | Per-fit-unit structural fingerprinting for posterior staleness detection |
 | **Snapshot evidence** | `11-snapshot-evidence-assembly.md` | Phase S: direct snapshot DB queries replace inline param-file evidence. FE fetch plan, worker DB integration, maturation trajectories. Phase D (latent latency + temporal drift) now sequenced before Phase C: A → B → **S** → **D** → C. |
+| **Quality gating** | `13-model-quality-gating-and-preview.md` | Model quality signalling (progress, session log, Graph Issues), auto-enable Forecast Quality, accept/reject preview workflow |
 
 **Context**: `../codebase/APP_ARCHITECTURE.md` (app architecture),
 `../project-db/` (snapshot DB)
@@ -329,6 +330,17 @@ quantities. Rendering both side-by-side is how we confirm the model is useful.
   alongside analytic model curve for direct comparison.
 - **Remaining**: window/cohort divergence indicator (deferred — Phase A
   does not populate `posterior.slices`; activates Phase C).
+- **Confidence bands on model CDF** (built 19-Mar-26): 80% posterior
+  uncertainty bands on Bayesian model curve in cohort maturity chart.
+  Mu-only variation (sigma held at posterior mean) with k=1.28.
+  Backend generates band curves, threaded through graphComputeClient,
+  rendered as ECharts custom series polygon. Path-level bands visible
+  in cohort() mode; edge-level bands sub-pixel (poor model fit on
+  test graph — see doc 13 for quality gating response).
+- **Model quality gating** (designed 19-Mar-26, not yet built): quality
+  signalling (progress indicator, session log, Graph Issues), auto-enable
+  Forecast Quality view on poor fits, accept/reject preview workflow.
+  See doc 13 for full specification.
 
 **Phase B overlay**:
 - **Simplex visualisation**: branch group siblings shown with their

@@ -810,7 +810,7 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
                                 'mode': b_mode,
                             }
 
-                            # Bayesian confidence band (90% — k=1.645).
+                            # Bayesian confidence band (99% — k=2.576).
                             # Upper/lower CDF envelopes from posterior uncertainty
                             # on mu and sigma.  Signs: higher mu shifts the CDF
                             # right (slower); higher sigma spreads it (also slower
@@ -824,7 +824,7 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
                                 band_sigma_sd = model_params.get('bayes_sigma_sd', 0.0)
 
                             if band_mu_sd is not None and band_mu_sd > 0:
-                                band_k = 1.28  # 80% band
+                                band_k = 2.576  # 99% band
                                 # Vary mu only; keep sigma at posterior mean.
                                 # Jointly shifting mu and sigma produces degenerate
                                 # CDFs (step functions / never-rising tails) because

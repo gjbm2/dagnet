@@ -114,12 +114,18 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence):
                 continue
             if not ev.has_cohort:
                 continue
-            path_has_latency = any(
-                topology.edges.get(eid) is not None
+            # Count latency edges on the path
+            path_latency_count = sum(
+                1 for eid in et.path_edge_ids
+                if topology.edges.get(eid) is not None
                 and topology.edges[eid].has_latency
-                for eid in et.path_edge_ids
             )
-            if not path_has_latency:
+            if path_latency_count == 0:
+                continue
+            # Only create cohort latency vars when path has 2+ latency
+            # edges (FW composition genuinely differs from edge latency).
+            # Single-latency paths use the edge's own latent vars directly.
+            if path_latency_count < 2:
                 continue
 
             safe_id = _safe_var_name(edge_id)
@@ -615,12 +621,15 @@ def _emit_cohort_likelihoods(
             ages_raw_np = np.array(all_ages_raw, dtype=np.float64)
 
             # Step 2: Subtract onset and compute CDF
+            # When onset is latent, use softplus instead of hard clamp
+            # to avoid the gradient discontinuity at age=onset that
+            # causes NUTS divergences. softplus(x) = log(1+exp(x))
+            # smoothly transitions through zero.
             onset_is_latent = hasattr(onset, 'name')
             if onset_is_latent:
-                effective_ages = pt.maximum(
-                    pt.as_tensor_variable(ages_raw_np) - onset, 1e-6,
-                )
-                log_ages = pt.log(effective_ages)
+                age_minus_onset = pt.as_tensor_variable(ages_raw_np) - onset
+                effective_ages = pt.softplus(age_minus_onset)
+                log_ages = pt.log(pt.maximum(effective_ages, 1e-30))
             else:
                 effective_ages_np = np.maximum(ages_raw_np - float(onset), 1e-6)
                 log_ages = pt.log(pt.as_tensor_variable(effective_ages_np))
