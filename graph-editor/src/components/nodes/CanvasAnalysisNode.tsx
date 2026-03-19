@@ -296,23 +296,32 @@ function CanvasAnalysisNodeInner({ data, selected }: NodeProps<CanvasAnalysisNod
           };
         }
       } else {
+        // Solo scenario → neutral grey; multi-scenario → real colour
+        const isSolo = visibleScenarioIds.length <= 1;
+        const resolveColour = (scenarioId: string): string => {
+          if (isSolo) return '#808080';
+          if (scenarioId === 'current') return (scenariosContextRef.current as any)?.currentColour || '#3b82f6';
+          if (scenarioId === 'base') return (scenariosContextRef.current as any)?.baseColour || '#6b7280';
+          const s = (scenariosContextRef.current as any)?.scenarios?.find((x: any) => x.id === scenarioId);
+          return s?.colour || '#808080';
+        };
         if (id === 'current') {
           m[id] = {
             name: 'Current',
-            colour: (scenariosContextRef.current as any)?.currentColour || '#3b82f6',
+            colour: resolveColour(id),
             visibility_mode: scenarioVisibilityModes[id] || 'f+e',
           };
         } else if (id === 'base') {
           m[id] = {
             name: 'Base',
-            colour: (scenariosContextRef.current as any)?.baseColour || '#6b7280',
+            colour: resolveColour(id),
             visibility_mode: scenarioVisibilityModes[id] || 'f+e',
           };
         } else {
           const s = (scenariosContextRef.current as any)?.scenarios?.find((x: any) => x.id === id);
           m[id] = {
             name: s?.name || id,
-            colour: s?.colour || '#808080',
+            colour: resolveColour(id),
             visibility_mode: scenarioVisibilityModes[id] || 'f+e',
           };
         }

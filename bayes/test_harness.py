@@ -29,20 +29,29 @@ LOCK_FILE = "/tmp/bayes-harness.lock"
 
 
 def _acquire_lock():
-    """Ensure only one harness runs at a time."""
+    """Ensure only one harness runs at a time. Kills any existing run."""
     if os.path.exists(LOCK_FILE):
         try:
             with open(LOCK_FILE) as f:
                 old_pid = int(f.read().strip())
-            # Check if that process is still alive
-            os.kill(old_pid, 0)
-            print(f"ERROR: Another harness is running (PID {old_pid}).")
-            print(f"  Kill it first: kill {old_pid}")
-            print(f"  Or remove stale lock: rm {LOCK_FILE}")
-            sys.exit(1)
+            # Kill the old process and its children
+            os.kill(old_pid, 0)  # check alive
+            print(f"Killing previous harness (PID {old_pid})…")
+            import subprocess
+            subprocess.run(["pkill", "-P", str(old_pid)], capture_output=True)
+            try:
+                os.kill(old_pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            import time
+            time.sleep(0.5)
+            print(f"  Previous run killed.")
         except (ProcessLookupError, ValueError):
-            # Stale lock — remove it
+            pass  # stale lock
+        try:
             os.remove(LOCK_FILE)
+        except FileNotFoundError:
+            pass
 
     with open(LOCK_FILE, "w") as f:
         f.write(str(os.getpid()))

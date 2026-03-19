@@ -109,87 +109,56 @@ export function PosteriorDetails({ posterior, retrievedAt, theme = 'dark' }: Pos
   const colour = qualityTierToColour(tier.tier, theme);
   const isProbability = 'evidence_grade' in posterior;
 
+  if (isProbability) {
+    return <ProbabilityPosteriorDetails posterior={posterior as ProbabilityPosterior} tier={tier} colour={colour} retrievedAt={retrievedAt} theme={theme!} />;
+  }
+  return <LatencyPosteriorDetails posterior={posterior as LatencyPosterior} tier={tier} colour={colour} retrievedAt={retrievedAt} theme={theme!} />;
+}
+
+function SectionHeader({ label, theme }: { label: string; theme: string }) {
+  return (
+    <tr>
+      <td colSpan={2} className="posterior-details-section" style={{ color: theme === 'dark' ? '#888' : '#999', fontSize: '9px', textTransform: 'uppercase' as const, letterSpacing: '0.5px', paddingTop: 6 }}>
+        {label}
+      </td>
+    </tr>
+  );
+}
+
+function ProbabilityPosteriorDetails({ posterior, tier, colour, retrievedAt, theme }: {
+  posterior: ProbabilityPosterior; tier: ReturnType<typeof computeQualityTier>; colour: string;
+  retrievedAt?: string | number | null; theme: string;
+}) {
+  const a = posterior.alpha, b = posterior.beta;
+  const pMean = a / (a + b);
+  const pSd = Math.sqrt(a * b / ((a + b) ** 2 * (a + b + 1)));
+
   return (
     <table className="posterior-details-table">
       <tbody>
-        {/* Quality tier */}
+        {/* ── Estimate ── */}
+        <SectionHeader label="Probability" theme={theme} />
         <tr>
-          <td className="posterior-details-label">Quality</td>
-          <td className="posterior-details-value" style={{ color: colour }}>
-            {qualityTierLabel(tier.tier)}
+          <td className="posterior-details-label">p</td>
+          <td className="posterior-details-value">
+            {fmtPct(pMean)} ± {fmtPct(pSd)}
           </td>
         </tr>
+        {posterior.hdi_lower != null && (
+          <tr>
+            <td className="posterior-details-label">HDI {fmtPct(posterior.hdi_level)}</td>
+            <td className="posterior-details-value">
+              {fmtPct(posterior.hdi_lower)} — {fmtPct(posterior.hdi_upper)}
+            </td>
+          </tr>
+        )}
         <tr>
-          <td className="posterior-details-label" />
-          <td className="posterior-details-reason">{tier.reason}</td>
+          <td className="posterior-details-label">Beta</td>
+          <td className="posterior-details-value">α={a.toFixed(2)}  β={b.toFixed(2)}</td>
         </tr>
 
-        {/* HDI bounds */}
-        {isProbability && (posterior as ProbabilityPosterior).hdi_lower != null && (
-          <tr>
-            <td className="posterior-details-label">
-              HDI {fmtPct((posterior as ProbabilityPosterior).hdi_level)}
-            </td>
-            <td className="posterior-details-value">
-              {fmtPct((posterior as ProbabilityPosterior).hdi_lower)} — {fmtPct((posterior as ProbabilityPosterior).hdi_upper)}
-            </td>
-          </tr>
-        )}
-
-        {/* Latency HDI */}
-        {!isProbability && (posterior as LatencyPosterior).hdi_t95_lower != null && (
-          <tr>
-            <td className="posterior-details-label">
-              t95 HDI {fmtPct((posterior as LatencyPosterior).hdi_level)}
-            </td>
-            <td className="posterior-details-value">
-              {(posterior as LatencyPosterior).hdi_t95_lower?.toFixed(1)}d — {(posterior as LatencyPosterior).hdi_t95_upper?.toFixed(1)}d
-            </td>
-          </tr>
-        )}
-
-        {/* Latency model parameters — edge-level (window) */}
-        {!isProbability && (posterior as LatencyPosterior).mu_mean != null && (
-          <tr>
-            <td className="posterior-details-label">Edge</td>
-            <td className="posterior-details-value">
-              onset={fmtDays((posterior as LatencyPosterior).onset_delta_days)}{' '}
-              μ={fmtNum((posterior as LatencyPosterior).mu_mean)}{' '}
-              σ={fmtNum((posterior as LatencyPosterior).sigma_mean)}
-            </td>
-          </tr>
-        )}
-
-        {/* Latency model parameters — path-level (cohort) */}
-        {!isProbability && (posterior as LatencyPosterior).path_mu_mean != null && (
-          <tr>
-            <td className="posterior-details-label">Path</td>
-            <td className="posterior-details-value">
-              onset={fmtDays((posterior as LatencyPosterior).path_onset_delta_days)}{' '}
-              μ={fmtNum((posterior as LatencyPosterior).path_mu_mean)}{' '}
-              σ={fmtNum((posterior as LatencyPosterior).path_sigma_mean)}
-            </td>
-          </tr>
-        )}
-
-        {/* Latency CDF sparkline — edge vs path curves */}
-        {!isProbability && (posterior as LatencyPosterior).mu_mean != null && (
-          <tr>
-            <td colSpan={2}>
-              <LatencyCdfSparkline posterior={posterior as LatencyPosterior} theme={theme} />
-            </td>
-          </tr>
-        )}
-
-        {/* Evidence grade (probability only) */}
-        {isProbability && (posterior as ProbabilityPosterior).evidence_grade != null && (
-          <tr>
-            <td className="posterior-details-label">Evidence</td>
-            <td className="posterior-details-value">{(posterior as ProbabilityPosterior).evidence_grade}/3</td>
-          </tr>
-        )}
-
-        {/* Convergence */}
+        {/* ── Convergence ── */}
+        <SectionHeader label="Convergence" theme={theme} />
         {posterior.rhat != null && (
           <tr>
             <td className="posterior-details-label">rhat</td>
@@ -204,24 +173,141 @@ export function PosteriorDetails({ posterior, retrievedAt, theme = 'dark' }: Pos
             <td className="posterior-details-value">{Math.round(posterior.ess)}</td>
           </tr>
         )}
+        <tr>
+          <td className="posterior-details-label">Quality</td>
+          <td className="posterior-details-value" style={{ color: colour }}>
+            {qualityTierLabel(tier.tier)}
+          </td>
+        </tr>
 
-        {/* Prior tier (probability only) */}
-        {isProbability && (posterior as ProbabilityPosterior).prior_tier && (
+        {/* ── Metadata ── */}
+        <SectionHeader label="Metadata" theme={theme} />
+        <tr>
+          <td className="posterior-details-label">Provenance</td>
+          <td className="posterior-details-value">{posterior.provenance}</td>
+        </tr>
+        {posterior.evidence_grade != null && (
+          <tr>
+            <td className="posterior-details-label">Evidence</td>
+            <td className="posterior-details-value">{posterior.evidence_grade}/3</td>
+          </tr>
+        )}
+        {posterior.prior_tier && (
           <tr>
             <td className="posterior-details-label">Prior</td>
-            <td className="posterior-details-value">{(posterior as ProbabilityPosterior).prior_tier!.replace(/_/g, ' ')}</td>
+            <td className="posterior-details-value">{posterior.prior_tier.replace(/_/g, ' ')}</td>
           </tr>
         )}
-
-        {/* Provenance */}
-        {posterior.provenance && (
+        {posterior.fitted_at && (
           <tr>
-            <td className="posterior-details-label">Provenance</td>
-            <td className="posterior-details-value">{posterior.provenance}</td>
+            <td className="posterior-details-label">Fitted</td>
+            <td className="posterior-details-value" style={{ color: freshnessColour(getFreshnessLevel(posterior.fitted_at), theme) }}>
+              {formatRelativeTime(posterior.fitted_at) ?? posterior.fitted_at}
+            </td>
+          </tr>
+        )}
+        {retrievedAt && (
+          <tr>
+            <td className="posterior-details-label">Data fetched</td>
+            <td className="posterior-details-value" style={{ color: freshnessColour(getFreshnessLevel(retrievedAt), theme) }}>
+              {formatRelativeTime(retrievedAt) ?? String(retrievedAt)}
+            </td>
+          </tr>
+        )}
+      </tbody>
+    </table>
+  );
+}
+
+function LatencyPosteriorDetails({ posterior, tier, colour, retrievedAt, theme }: {
+  posterior: LatencyPosterior; tier: ReturnType<typeof computeQualityTier>; colour: string;
+  retrievedAt?: string | number | null; theme: string;
+}) {
+  const hasPath = posterior.path_mu_mean != null;
+
+  return (
+    <table className="posterior-details-table">
+      <tbody>
+        {/* ── Edge-level (window) ── */}
+        <SectionHeader label="Edge latency (window)" theme={theme} />
+        <tr>
+          <td className="posterior-details-label">onset</td>
+          <td className="posterior-details-value">{fmtDays(posterior.onset_delta_days)}</td>
+        </tr>
+        <tr>
+          <td className="posterior-details-label">μ</td>
+          <td className="posterior-details-value">{fmtNum(posterior.mu_mean)} ± {fmtNum(posterior.mu_sd)}</td>
+        </tr>
+        <tr>
+          <td className="posterior-details-label">σ</td>
+          <td className="posterior-details-value">{fmtNum(posterior.sigma_mean)} ± {fmtNum(posterior.sigma_sd)}</td>
+        </tr>
+
+        {/* ── Path-level (cohort) ── */}
+        {hasPath && (
+          <>
+            <SectionHeader label="Path latency (cohort)" theme={theme} />
+            <tr>
+              <td className="posterior-details-label">onset</td>
+              <td className="posterior-details-value">{fmtDays(posterior.path_onset_delta_days)}</td>
+            </tr>
+            <tr>
+              <td className="posterior-details-label">μ</td>
+              <td className="posterior-details-value">{fmtNum(posterior.path_mu_mean)} ± {fmtNum(posterior.path_mu_sd)}</td>
+            </tr>
+            <tr>
+              <td className="posterior-details-label">σ</td>
+              <td className="posterior-details-value">{fmtNum(posterior.path_sigma_mean)} ± {fmtNum(posterior.path_sigma_sd)}</td>
+            </tr>
+          </>
+        )}
+
+        {/* ── t95 HDI ── */}
+        {posterior.hdi_t95_lower != null && (
+          <tr>
+            <td className="posterior-details-label">t95 HDI {fmtPct(posterior.hdi_level)}</td>
+            <td className="posterior-details-value">
+              {posterior.hdi_t95_lower.toFixed(1)}d — {posterior.hdi_t95_upper.toFixed(1)}d
+            </td>
           </tr>
         )}
 
-        {/* Freshness */}
+        {/* ── Sparkline ── */}
+        <tr>
+          <td colSpan={2}>
+            <LatencyCdfSparkline posterior={posterior} theme={theme} />
+          </td>
+        </tr>
+
+        {/* ── Convergence ── */}
+        <SectionHeader label="Convergence" theme={theme} />
+        {posterior.rhat != null && (
+          <tr>
+            <td className="posterior-details-label">rhat</td>
+            <td className="posterior-details-value" style={posterior.rhat > 1.1 ? { color: qualityTierToColour('failed', theme) } : undefined}>
+              {posterior.rhat.toFixed(4)}
+            </td>
+          </tr>
+        )}
+        {posterior.ess != null && (
+          <tr>
+            <td className="posterior-details-label">ESS</td>
+            <td className="posterior-details-value">{Math.round(posterior.ess)}</td>
+          </tr>
+        )}
+        <tr>
+          <td className="posterior-details-label">Quality</td>
+          <td className="posterior-details-value" style={{ color: colour }}>
+            {qualityTierLabel(tier.tier)}
+          </td>
+        </tr>
+
+        {/* ── Metadata ── */}
+        <SectionHeader label="Metadata" theme={theme} />
+        <tr>
+          <td className="posterior-details-label">Provenance</td>
+          <td className="posterior-details-value">{posterior.provenance}</td>
+        </tr>
         {posterior.fitted_at && (
           <tr>
             <td className="posterior-details-label">Fitted</td>

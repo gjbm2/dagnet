@@ -29,8 +29,9 @@ export function filterResultForScenarios(
   }
 
   let dimensionValues = result.dimension_values;
-  if (scenarioMetaById && dimensionValues?.scenario_id) {
-    const patched = { ...dimensionValues.scenario_id };
+  if (scenarioMetaById) {
+    const existing_scenario_id = dimensionValues?.scenario_id || {};
+    const patched = { ...existing_scenario_id };
     for (const [id, meta] of Object.entries(scenarioMetaById)) {
       const existing = patched[id] as any;
       if (existing) {
@@ -39,7 +40,7 @@ export function filterResultForScenarios(
         patched[id] = meta as any;
       }
     }
-    dimensionValues = { ...dimensionValues, scenario_id: patched };
+    dimensionValues = { ...(dimensionValues || {}), scenario_id: patched };
   }
 
   if (data === result.data && dimensionValues === result.dimension_values) return result;

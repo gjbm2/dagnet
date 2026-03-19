@@ -617,8 +617,41 @@ def check_webhook_payload(result_edges, evidence, r: WiringResults):
 # Main
 # ---------------------------------------------------------------------------
 
+LOCK_FILE = "/tmp/bayes-harness.lock"  # shared with test_harness.py
+
+
+def _acquire_lock():
+    """Kill any existing harness/wiring run and take the lock."""
+    import signal as sig
+    if os.path.exists(LOCK_FILE):
+        try:
+            with open(LOCK_FILE) as f:
+                old_pid = int(f.read().strip())
+            os.kill(old_pid, 0)
+            print(f"Killing previous run (PID {old_pid})…")
+            import subprocess
+            subprocess.run(["pkill", "-P", str(old_pid)], capture_output=True)
+            try:
+                os.kill(old_pid, sig.SIGKILL)
+            except ProcessLookupError:
+                pass
+            time.sleep(0.5)
+        except (ProcessLookupError, ValueError):
+            pass
+        try:
+            os.remove(LOCK_FILE)
+        except FileNotFoundError:
+            pass
+    with open(LOCK_FILE, "w") as f:
+        f.write(str(os.getpid()))
+    import atexit
+    atexit.register(lambda: os.remove(LOCK_FILE) if os.path.exists(LOCK_FILE) else None)
+
+
 def main():
     import argparse
+
+    _acquire_lock()
 
     parser = argparse.ArgumentParser(description="Bayes wiring verification")
     parser.add_argument("--no-mcmc", action="store_true",

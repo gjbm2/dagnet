@@ -584,12 +584,16 @@ function buildEdgeForecastTab(
     return;
   }
 
-  // Probability posterior — all field accesses guarded (posterior may be partial/malformed)
+  // ── Probability posterior ──
   if (posterior) {
-    const tier = computeQualityTier(posterior);
-    data.push({ tab: 'forecast', section: 'Quality', property: 'Tier', value: qualityTierLabel(tier.tier) });
-    data.push({ tab: 'forecast', section: 'Quality', property: 'Reason', value: tier.reason });
-
+    // Core estimate: p from Beta(α, β)
+    const a = posterior.alpha, b = posterior.beta;
+    if (a != null && b != null && (a + b) > 0) {
+      const pMean = a / (a + b);
+      const pSd = Math.sqrt(a * b / ((a + b) ** 2 * (a + b + 1)));
+      data.push({ tab: 'forecast', section: 'Probability', property: 'p (Bayes)', value: `${fmtPct(pMean)} ± ${fmtPct(pSd)}` });
+      data.push({ tab: 'forecast', section: 'Probability', property: 'Beta α / β', value: `${a.toFixed(2)} / ${b.toFixed(2)}` });
+    }
     if (posterior.hdi_level != null && posterior.hdi_lower != null && posterior.hdi_upper != null) {
       data.push({
         tab: 'forecast',
@@ -598,7 +602,6 @@ function buildEdgeForecastTab(
         value: `${fmtPct(posterior.hdi_lower)} — ${fmtPct(posterior.hdi_upper)}`,
       });
     }
-
     if (posterior.evidence_grade != null) {
       data.push({ tab: 'forecast', section: 'Probability', property: 'Evidence Grade', value: `${posterior.evidence_grade}/3` });
     }
@@ -606,6 +609,9 @@ function buildEdgeForecastTab(
       data.push({ tab: 'forecast', section: 'Probability', property: 'Prior Tier', value: posterior.prior_tier.replace(/_/g, ' ') });
     }
 
+    // Quality + convergence
+    const tier = computeQualityTier(posterior);
+    data.push({ tab: 'forecast', section: 'Convergence', property: 'Quality', value: `${qualityTierLabel(tier.tier)} — ${tier.reason}` });
     if (posterior.rhat != null) {
       data.push({ tab: 'forecast', section: 'Convergence', property: 'rhat', value: posterior.rhat.toFixed(4) });
     }
@@ -615,45 +621,66 @@ function buildEdgeForecastTab(
     if (posterior.divergences != null && posterior.divergences > 0) {
       data.push({ tab: 'forecast', section: 'Convergence', property: 'Divergences', value: posterior.divergences.toString() });
     }
-
-    if (posterior.surprise_z != null && Math.abs(posterior.surprise_z) > 2) {
-      data.push({ tab: 'forecast', section: 'Anomaly', property: 'Surprise z', value: posterior.surprise_z.toFixed(1) });
-    }
-
     if (posterior.provenance) {
-      data.push({ tab: 'forecast', section: 'Metadata', property: 'Provenance', value: posterior.provenance });
+      data.push({ tab: 'forecast', section: 'Convergence', property: 'Provenance', value: posterior.provenance });
     }
-    if (posterior.fitted_at) {
-      const relFit = formatRelativeTime(posterior.fitted_at);
-      const fitLevel = getFreshnessLevel(posterior.fitted_at);
-      data.push({
-        tab: 'forecast', section: 'Metadata', property: 'Fitted',
-        value: relFit ? `${relFit} (${posterior.fitted_at})` : posterior.fitted_at,
-        freshness: fitLevel,
-      });
+    if (posterior.surprise_z != null && Math.abs(posterior.surprise_z) > 2) {
+      data.push({ tab: 'forecast', section: 'Convergence', property: 'Surprise z', value: posterior.surprise_z.toFixed(1) });
     }
   }
 
-  // Latency posterior — all field accesses guarded
+  // ── Latency posterior ──
   if (latPosterior) {
-    const latTier = computeQualityTier(latPosterior);
-    if (!posterior) {
-      data.push({ tab: 'forecast', section: 'Quality', property: 'Tier (Latency)', value: qualityTierLabel(latTier.tier) });
+    // Edge-level (window)
+    if (latPosterior.mu_mean != null) {
+      data.push({ tab: 'forecast', section: 'Latency (edge)', property: 'onset', value: `${(latPosterior.onset_delta_days ?? 0).toFixed(1)}d` });
+      data.push({ tab: 'forecast', section: 'Latency (edge)', property: 'μ', value: `${latPosterior.mu_mean.toFixed(4)} ± ${(latPosterior.mu_sd ?? 0).toFixed(4)}` });
+      data.push({ tab: 'forecast', section: 'Latency (edge)', property: 'σ', value: `${latPosterior.sigma_mean.toFixed(4)} ± ${(latPosterior.sigma_sd ?? 0).toFixed(4)}` });
     }
+
+    // Path-level (cohort)
+    if (latPosterior.path_mu_mean != null) {
+      data.push({ tab: 'forecast', section: 'Latency (path)', property: 'onset', value: `${(latPosterior.path_onset_delta_days ?? 0).toFixed(1)}d` });
+      data.push({ tab: 'forecast', section: 'Latency (path)', property: 'μ', value: `${latPosterior.path_mu_mean.toFixed(4)} ± ${(latPosterior.path_mu_sd ?? 0).toFixed(4)}` });
+      if (latPosterior.path_sigma_mean != null) {
+        data.push({ tab: 'forecast', section: 'Latency (path)', property: 'σ', value: `${latPosterior.path_sigma_mean.toFixed(4)} ± ${(latPosterior.path_sigma_sd ?? 0).toFixed(4)}` });
+      }
+    }
+
+    // t95 HDI
     if (latPosterior.hdi_level != null && latPosterior.hdi_t95_lower != null && latPosterior.hdi_t95_upper != null) {
       data.push({
         tab: 'forecast',
-        section: 'Latency HDI',
+        section: 'Latency (edge)',
         property: `t95 HDI ${fmtPct(latPosterior.hdi_level)}`,
         value: `${latPosterior.hdi_t95_lower.toFixed(1)}d — ${latPosterior.hdi_t95_upper.toFixed(1)}d`,
       });
     }
+
+    // Latency convergence (only if separate from probability)
     if (latPosterior.rhat != null) {
-      data.push({ tab: 'forecast', section: 'Latency HDI', property: 'rhat', value: latPosterior.rhat.toFixed(4) });
+      const section = latPosterior.path_mu_mean != null ? 'Latency (path)' : 'Latency (edge)';
+      data.push({ tab: 'forecast', section, property: 'rhat', value: latPosterior.rhat.toFixed(4) });
     }
     if (latPosterior.ess != null) {
-      data.push({ tab: 'forecast', section: 'Latency HDI', property: 'ESS', value: fmtNum(Math.round(latPosterior.ess)) });
+      const section = latPosterior.path_mu_mean != null ? 'Latency (path)' : 'Latency (edge)';
+      data.push({ tab: 'forecast', section, property: 'ESS', value: fmtNum(Math.round(latPosterior.ess)) });
     }
+    if (latPosterior.provenance) {
+      const section = latPosterior.path_mu_mean != null ? 'Latency (path)' : 'Latency (edge)';
+      data.push({ tab: 'forecast', section, property: 'Provenance', value: latPosterior.provenance });
+    }
+  }
+
+  // ── Metadata ──
+  if (posterior?.fitted_at) {
+    const relFit = formatRelativeTime(posterior.fitted_at);
+    const fitLevel = getFreshnessLevel(posterior.fitted_at);
+    data.push({
+      tab: 'forecast', section: 'Metadata', property: 'Fitted',
+      value: relFit ? `${relFit} (${posterior.fitted_at})` : posterior.fitted_at,
+      freshness: fitLevel,
+    });
   }
 }
 

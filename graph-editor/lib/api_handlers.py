@@ -310,6 +310,10 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
         }
         if isinstance(forecast_mean, (int, float)) and math.isfinite(forecast_mean) and forecast_mean > 0:
             result['forecast_mean'] = float(forecast_mean)
+        # Probability posterior uncertainty (for confidence bands)
+        p_stdev = p.get('stdev')
+        if isinstance(p_stdev, (int, float)) and math.isfinite(p_stdev) and p_stdev > 0:
+            result['p_stdev'] = float(p_stdev)
         if isinstance(t95, (int, float)) and math.isfinite(t95) and t95 > 0:
             result['t95'] = float(t95)
         if isinstance(path_t95, (int, float)) and math.isfinite(path_t95) and path_t95 > 0:
@@ -810,45 +814,74 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
                                 'mode': b_mode,
                             }
 
-                            # Bayesian confidence band (99% — k=2.576).
-                            # Upper/lower CDF envelopes from posterior uncertainty
-                            # on mu and sigma.  Signs: higher mu shifts the CDF
-                            # right (slower); higher sigma spreads it (also slower
-                            # in the tail).  So the "upper" (faster) bound uses
-                            # mu−k·sd, sigma−k·sd and vice-versa.
+                            # Bayesian confidence band (99.9%) via delta method.
+                            # model_rate(τ) = p × CDF(τ; mu, sigma, onset)
+                            # Three independent axes of uncertainty: p, mu, sigma.
+                            # Partial derivatives:
+                            #   ∂rate/∂p     = CDF(τ)
+                            #   ∂rate/∂mu    = p × ∂CDF/∂mu
+                            #   ∂rate/∂sigma = p × ∂CDF/∂sigma
+                            # var(rate) = CDF²·p_sd² + p²·[(∂CDF/∂mu)²·mu_sd²
+                            #             + (∂CDF/∂sigma)²·sigma_sd²]
                             if cdf_mode == 'cohort_path' and 'bayes_path_mu_sd' in model_params:
                                 band_mu_sd = model_params['bayes_path_mu_sd']
                                 band_sigma_sd = model_params.get('bayes_path_sigma_sd', 0.0)
                             else:
                                 band_mu_sd = model_params.get('bayes_mu_sd')
                                 band_sigma_sd = model_params.get('bayes_sigma_sd', 0.0)
+                            band_p_sd = model_params.get('p_stdev', 0.0)
 
                             if band_mu_sd is not None and band_mu_sd > 0:
-                                band_k = 2.576  # 99% band
-                                # Vary mu only; keep sigma at posterior mean.
-                                # Jointly shifting mu and sigma produces degenerate
-                                # CDFs (step functions / never-rising tails) because
-                                # the effects compound rather than representing
-                                # realistic posterior uncertainty.
-                                band_mu_upper = b_mu - band_k * band_mu_sd
-                                band_sigma_upper = b_sigma
-                                band_mu_lower = b_mu + band_k * band_mu_sd
-                                band_sigma_lower = b_sigma
+                                band_k = 3.291  # 99.9% band
+                                sqrt_2pi = math.sqrt(2.0 * math.pi)
+                                p_val = forecast_mean  # posterior mean of p
 
                                 bayes_band_upper = []
                                 bayes_band_lower = []
                                 for tau in range(0, axis_tau_max + 1):
-                                    cu = compute_completeness(float(tau), band_mu_upper, band_sigma_upper, b_onset)
-                                    cu = max(0.0, min(1.0, float(cu)))
-                                    cl = compute_completeness(float(tau), band_mu_lower, band_sigma_lower, b_onset)
-                                    cl = max(0.0, min(1.0, float(cl)))
+                                    cdf_val = compute_completeness(float(tau), b_mu, b_sigma, b_onset)
+                                    cdf_val = max(0.0, min(1.0, float(cdf_val)))
+                                    rate = p_val * cdf_val
+
+                                    model_age = float(tau) - b_onset
+                                    if model_age > 0 and b_sigma > 0:
+                                        z = (math.log(model_age) - b_mu) / b_sigma
+                                        phi_z = math.exp(-0.5 * z * z) / sqrt_2pi
+
+                                        dcdf_dmu = -phi_z / b_sigma
+                                        dcdf_dsigma = -phi_z * z / b_sigma
+
+                                        # var(rate) from all three axes
+                                        var_rate = 0.0
+                                        # p uncertainty: ∂rate/∂p = CDF
+                                        if band_p_sd > 0:
+                                            var_rate += (cdf_val ** 2) * (band_p_sd ** 2)
+                                        # mu uncertainty: ∂rate/∂mu = p × ∂CDF/∂mu
+                                        var_rate += (p_val * dcdf_dmu) ** 2 * (band_mu_sd ** 2)
+                                        # sigma uncertainty: ∂rate/∂sigma = p × ∂CDF/∂sigma
+                                        if band_sigma_sd > 0:
+                                            var_rate += (p_val * dcdf_dsigma) ** 2 * (band_sigma_sd ** 2)
+
+                                        sd_rate = math.sqrt(var_rate)
+                                        ru = rate + band_k * sd_rate
+                                        rl = max(0.0, rate - band_k * sd_rate)
+                                    else:
+                                        # Before onset: only p uncertainty matters
+                                        if band_p_sd > 0 and cdf_val > 0:
+                                            sd_rate = cdf_val * band_p_sd
+                                            ru = rate + band_k * sd_rate
+                                            rl = max(0.0, rate - band_k * sd_rate)
+                                        else:
+                                            ru = rate
+                                            rl = rate
+
                                     bayes_band_upper.append({
                                         'tau_days': tau,
-                                        'model_rate': round(forecast_mean * cu, 8),
+                                        'model_rate': round(ru, 8),
                                     })
                                     bayes_band_lower.append({
                                         'tau_days': tau,
-                                        'model_rate': round(forecast_mean * cl, 8),
+                                        'model_rate': round(rl, 8),
                                     })
                                 result['model_curve_bayes_band_upper'] = bayes_band_upper
                                 result['model_curve_bayes_band_lower'] = bayes_band_lower
