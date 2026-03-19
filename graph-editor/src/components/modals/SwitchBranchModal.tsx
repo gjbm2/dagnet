@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigatorContext } from '../../contexts/NavigatorContext';
 import { repositoryOperationsService } from '../../services/repositoryOperationsService';
+import { workspaceService } from '../../services/workspaceService';
 import type { FileState } from '../../types';
 import './Modal.css';
 
@@ -71,6 +72,7 @@ export function SwitchBranchModal({ isOpen, onClose, targetBranch, onSwitchCompl
   if (!isOpen) return null;
 
   const hasDirtyFiles = committableFiles.length > 0;
+  const isSameBranch = selectedBranch === navState.selectedBranch;
   const availableBranches = navState.availableBranches.filter(branch => branch !== navState.selectedBranch);
 
   const handleSwitch = async (action: 'commit' | 'discard' | 'cancel') => {
@@ -93,7 +95,13 @@ export function SwitchBranchModal({ isOpen, onClose, targetBranch, onSwitchCompl
     setError(null);
 
     try {
-      // Switch branch — workspace replacement handles cleanup of old branch data
+      if (isSameBranch) {
+        // Clear workspace files + records (preserves credentials/connections),
+        // then selectBranch will see no workspace and do a fresh clone.
+        console.log(`Re-cloning current branch: clearing workspace then cloning fresh`);
+        await workspaceService.clearAllWorkspaces();
+      }
+
       console.log(`Switching to branch: ${selectedBranch}`);
       await navOps.selectBranch(selectedBranch);
 
@@ -151,7 +159,9 @@ export function SwitchBranchModal({ isOpen, onClose, targetBranch, onSwitchCompl
               onChange={(e) => setSelectedBranch(e.target.value)}
               disabled={isProcessing}
             >
-              <option value={navState.selectedBranch}>{navState.selectedBranch} (current)</option>
+              <option value={navState.selectedBranch}>
+                {navState.selectedBranch} (current{isSameBranch ? ' — re-clone' : ''})
+              </option>
               {availableBranches.map(branch => (
                 <option key={branch} value={branch}>{branch}</option>
               ))}
@@ -168,11 +178,17 @@ export function SwitchBranchModal({ isOpen, onClose, targetBranch, onSwitchCompl
           {/* Info — only show when no dirty files (dirty warning already explains consequences) */}
           {!isCheckingFiles && !hasDirtyFiles && (
             <div className="modal-info">
-              <p><strong>What happens when you switch:</strong></p>
-              <ul>
-                <li>Local workspace will be updated to reflect the new branch</li>
-                <li>All open tabs will remain, but content may change</li>
-              </ul>
+              {isSameBranch ? (
+                <p>Re-clone will discard local state and fetch all files fresh from git.</p>
+              ) : (
+                <>
+                  <p><strong>What happens when you switch:</strong></p>
+                  <ul>
+                    <li>Local workspace will be updated to reflect the new branch</li>
+                    <li>All open tabs will remain, but content may change</li>
+                  </ul>
+                </>
+              )}
             </div>
           )}
         </div>
@@ -191,9 +207,11 @@ export function SwitchBranchModal({ isOpen, onClose, targetBranch, onSwitchCompl
               <button
                 className="modal-btn modal-btn-danger"
                 onClick={() => handleSwitch('discard')}
-                disabled={isProcessing || isCheckingFiles || selectedBranch === navState.selectedBranch}
+                disabled={isProcessing || isCheckingFiles}
               >
-                {isProcessing ? 'Switching…' : 'Discard Changes & Switch'}
+                {isProcessing
+                  ? (isSameBranch ? 'Re-cloning…' : 'Switching…')
+                  : (isSameBranch ? 'Discard Changes & Re-clone' : 'Discard Changes & Switch')}
               </button>
               <button
                 className="modal-btn modal-btn-primary"
@@ -207,9 +225,11 @@ export function SwitchBranchModal({ isOpen, onClose, targetBranch, onSwitchCompl
             <button
               className="modal-btn modal-btn-primary"
               onClick={() => handleSwitch('discard')}
-              disabled={isProcessing || isCheckingFiles || selectedBranch === navState.selectedBranch}
+              disabled={isProcessing || isCheckingFiles}
             >
-              {isProcessing ? 'Switching…' : 'Switch Branch'}
+              {isProcessing
+                ? (isSameBranch ? 'Re-cloning…' : 'Switching…')
+                : (isSameBranch ? 'Re-clone from Git' : 'Switch Branch')}
             </button>
           )}
         </div>

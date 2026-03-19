@@ -513,9 +513,60 @@ themselves MECE, so the partition logic applies normally.
 ## Layer 3: Window vs cohort data
 
 **Source**: parameter file `values[].sliceDSL` — specifically, whether the
-entry uses `window(...)` or `cohort(anchor, ...)`.
+entry uses `window(...)` or `cohort(anchor, ...)`. With snapshot DB
+evidence (Phase S), the source is the `slice_key` column on each DB
+row.
 
-**What it contains**:
+### Terminology convention
+
+**Cohort** (capital C): a group of people who commenced something on
+a specific date — an independent experiment group. Both `window()`
+and `cohort()` slices produce Cohorts; the difference is how those
+Cohorts are observed. The word "Cohort" in this document always means
+the statistical unit (people × date), not the DagNet slice type.
+
+**`window()` slice**: edge-anchored observation. Denominator is `x`
+(entrants at the from-node). Completeness depends on **edge-level**
+latency only (single hop, no upstream path).
+
+**`cohort()` slice**: path-anchored observation. Denominator is `a`
+(anchor entrants). Completeness depends on **path-level** latency
+(full path from anchor to target, including upstream edges).
+
+### Underlying data shape: symmetric
+
+Both `window()` and `cohort()` slices have the same underlying
+structure — a collection of Cohorts (one per `anchor_day`), each
+observed at successive as-at dates (`retrieved_at`), forming a
+monotonic cumulative distribution:
+
+```
+Cohort 2025-11-19:
+  age 82d → y=329    (as at 2026-02-09)
+  age 84d → y=329    (as at 2026-02-11)
+
+Cohort 2025-11-20:
+  age 81d → y=258    (as at 2026-02-09)
+  age 83d → y=258    (as at 2026-02-11)
+```
+
+Each Cohort is an independent experiment. The as-at dates are
+successive measurements of the same monotonic cumulative count.
+The trajectory constrains **both** the probability and the latency
+distribution jointly — you cannot separate them because the
+maturation curve shape reflects both.
+
+**What differs** between `window()` and `cohort()` is not the data
+shape but the **anchoring**:
+
+| | `window()` | `cohort()` |
+|---|---|---|
+| Denominator | `x` (from-node entrants) | `a` (anchor entrants) |
+| Probability | `p_window` (edge-level) | `p_path_cohort` (path product) |
+| CDF | edge-level `CDF(t \| mu_XY, sigma_XY)` | path-level `CDF(t \| path_mu, path_sigma)` |
+| Latency constraint | Direct, single hop — pins edge latency cleanly | Path-level — couples upstream edges |
+
+**What it contains** (parameter file evidence):
 
 - **Window entries** (`sliceDSL: window(25-Nov-25:1-Dec-25)`): event-time
   observations on a single edge X→Y. The observation period is defined but
@@ -525,7 +576,7 @@ entry uses `window(...)` or `cohort(anchor, ...)`.
 
 - **Cohort entries** (`sliceDSL: cohort(landing-page,1-Sep-25:30-Nov-25)`):
   anchor-time observations. The date range is a **collection window of
-  single-day cohorts** — each day's entrants form an independent cohort.
+  single-day Cohorts** — each day's entrants form an independent Cohort.
   The `n_daily` / `k_daily` arrays give per-day observations. Recent days
   may be immature. Completeness depends on the **path-level** latency
   (anchor → edge target, including upstream edges).
@@ -534,9 +585,9 @@ entry uses `window(...)` or `cohort(anchor, ...)`.
 
 ### Window and cohort: related but distinct distributions
 
-Window and cohort observations of the same edge X→Y are **related but
-not identical**. They differ in two ways that both scale with path
-complexity:
+`window()` and `cohort()` observations of the same edge X→Y are
+**related but not identical**. They differ in two ways that both
+scale with path complexity:
 
 1. **Temporal spread (diffusion).** Cohort members enter A within a date
    range but arrive at X **spread across the A→X path latency** — which
@@ -626,9 +677,13 @@ window's signal, that evidence flows back into the base and into
 
 ### Window observations → edge-level completeness
 
-For a window entry on edge X→Y, each observation has an effective
-observation time (window end minus the user's X-event date). Completeness
-depends only on the **edge's own** latency — no upstream path:
+Both `window()` and `cohort()` slices describe evolving Cohorts — the
+same underlying data shape (Cohorts × as-at ages → monotonic
+cumulative counts). For `window()`, each Cohort's completeness
+depends only on the **edge's own** latency — no upstream path.
+
+**Parameter-file evidence** (single retrieval per day): each
+observation has an effective observation time. Completeness:
 
 ```
 obs_time_j = window_end - event_date_j
@@ -636,24 +691,39 @@ completeness_j = CDF_LN(max(0, obs_time_j - onset_XY), mu_XY, sigma_XY)
 obs_j ~ Binomial(n_j, p_window_XY * completeness_j), observed=k_j
 ```
 
-When the window is sufficiently old relative to the edge's latency,
-`completeness_j ≈ 1.0` and the term reduces to a simple Binomial on
-`p_window`. But for recent or short windows this adjustment matters —
-it prevents the model from interpreting still-in-transit conversions as
-a lower `p`.
+**Snapshot evidence** (multiple retrievals per day): window Cohorts
+form trajectories with the same structure as `cohort()` trajectories.
+Each Cohort day has `x` entrants (from-node) and successive
+observations of cumulative `y` at increasing ages. The trajectory
+jointly constrains `p_window` and edge-level latency:
+
+```
+# Window trajectory for Cohort day i on edge X→Y
+# x_i entrants at from-node, observed at ages t_1, t_2, ..., t_k
+# CDF is edge-level only (single hop)
+interval_probs = [
+    p_window * CDF_edge(t_1),
+    p_window * (CDF_edge(t_2) - CDF_edge(t_1)),
+    ...,
+    1 - p_window * CDF_edge(t_k),
+]
+```
 
 Because this couples only to the edge-level `(mu_XY, sigma_XY)`, the
 window provides a **direct, single-hop constraint** on both `p_window`
 and edge latency. No upstream latency uncertainty dilutes the signal.
+This makes window trajectory data the cleanest source for identifying
+edge latency parameters.
 
 ### Cohort observations → path-level completeness
 
-Cohort data may be immature. The observed `(n, k)` undercounts converters
-because some are still in transit **along the full path** from anchor.
+`cohort()` data may be immature. The observed `(a, y)` undercounts
+converters because some are still in transit **along the full path**
+from anchor.
 
-**Our cohorts are single-day.** The `cohort_from:cohort_to` range is a
-collection window of daily cohorts. Each day `i` in `n_daily` / `k_daily`
-is an independent single-day cohort with its own age:
+**Our Cohorts are single-day.** The `cohort_from:cohort_to` range is
+a collection window of daily Cohorts. Each day `i` in `n_daily` /
+`k_daily` is an independent single-day Cohort with its own age:
 
 ```
 age_i = today - dates[i]
@@ -1027,11 +1097,16 @@ The trajectory jointly identifies `p_path` and the path CDF shape:
 
 #### Interaction with the window/cohort hierarchy
 
-The trajectory Multinomial uses cohort-variant probabilities. For edge
-X→Y in the hierarchy:
+Both `window()` and `cohort()` slices describe evolving Cohorts with
+the same trajectory structure. Both produce trajectory likelihood
+terms. They differ in anchoring:
+
+**`cohort()` trajectories** use path-variant probabilities:
 
 ```
 p_path = p_cohort_AX · p_cohort_XY
+CDF = CDF_path(t | path_onset, path_mu, path_sigma)
+denominator = a (anchor entrants)
 ```
 
 where `p_cohort_AX` and `p_cohort_XY` are the cohort-variant
@@ -1039,10 +1114,24 @@ probability variables from the hierarchical structure (§Layer 3), each
 allowed to diverge from their respective `p_base` by the path-informed
 `τ_cohort`.
 
-Window trajectory data (if multi-retrieval window observations ever
-exist) would use `p_window` and edge-level CDF (single hop). In
-practice, window data typically has a single retrieval (the latest), so
-the trajectory Multinomial applies primarily to cohort data.
+**`window()` trajectories** use edge-level probabilities:
+
+```
+p = p_window_XY
+CDF = CDF_edge(t | onset_XY, mu_XY, sigma_XY)
+denominator = x (from-node entrants)
+```
+
+Window trajectories provide the **cleanest latency signal** — single
+hop, no upstream path composition, no Fenton-Wilkinson approximation.
+They directly pin `(mu_XY, sigma_XY)` for the edge.
+
+Both share the same `(mu_XY, sigma_XY)` latency variables and are
+linked through `p_base` via the hierarchical structure. They are not
+independent — they observe the same underlying conversion process.
+The `pm.Potential` emission approach (see §Efficient emission above)
+creates separate Potentials for window and cohort data per edge,
+preserving the hierarchical connection.
 
 #### Interaction with branch groups
 
@@ -1122,9 +1211,78 @@ pm.Multinomial("obs_XY_15jan", n=1000, p=interval_probs,
                observed=interval_counts)
 ```
 
+#### Efficient emission: `pm.Potential` vectorisation (19-Mar-26)
+
+The per-day `pm.Multinomial` approach above creates one PyTensor
+distribution node per cohort day. With real snapshot data this
+produces ~235 nodes for a 4-edge graph, causing a **5-minute
+PyTensor compilation bottleneck** (the model evaluates in 2ms per
+gradient step — compilation, not inference, is the constraint).
+
+**Root cause**: PyTensor's graph optimiser attempts to fuse
+operations across nodes. With 235 separate distribution nodes, the
+fused graph exceeds kernel argument limits ("Loop fusion failed").
+The number of free variables (13) and the gradient cost (2ms) are
+small — the problem is purely graph-construction overhead.
+
+**Solution**: compute the Multinomial log-probability manually per
+edge and add via `pm.Potential`. For each edge, the evidence binder
+produces cohort objects (see doc 11 §9) sorted cohort-first: each
+cohort day has `a` anchor entrants and a sequence of `(age, y)`
+measurements. The compiler flattens all cohort days for an edge into
+arrays and computes one scalar log-probability contribution:
+
+```
+# Per edge: flatten all cohort trajectories into arrays
+ages_flat = [...]     # all retrieval ages, concatenated across days
+y_flat = [...]        # corresponding cumulative y counts
+a_per_day = [...]     # anchor entrants per day
+day_offsets = [...]   # index boundaries between days
+
+# CDF at every observation point (vectorised)
+cdf_all = CDF(ages_flat, onset, mu, sigma)
+q_all = p * cdf_all
+
+# Compute interval Multinomial logp per day:
+#   for each day: partition (y_1, y_2-y_1, ..., a-y_k) against
+#   (q_1, q_2-q_1, ..., 1-q_k), sum log-probabilities
+# Sum across all days → one scalar
+
+pm.Potential("traj_EDGE", total_logp)
+```
+
+This replaces ~80 `pm.Multinomial` nodes with 1 `pm.Potential` node
+per edge (~4 total). Compilation time should drop to seconds.
+
+**Window vs cohort trajectories**: both observation types produce
+cohort-day objects with the same structure (date, a, ages, y values).
+The compiler emits separate Potentials for window and cohort data on
+each edge:
+- Window Potential: uses `p_window` and edge-level CDF
+- Cohort Potential: uses `p_cohort` and path-level CDF
+
+Both share `(mu_edge, sigma_edge)` and are linked through `p_base`
+via the hierarchical structure (§Layer 3 above). The Potential
+approach preserves the full hierarchical connection.
+
+**Phase S vs Phase D**: with fixed latency (Phase S), CDF values are
+precomputed float constants — the Potential depends on `p` only. When
+latency becomes latent (Phase D), CDF values become PyTensor
+expressions of `(mu_edge, sigma_edge)` — the same Potential structure
+works, gradients flow through automatically. No structural change at
+the Phase D boundary.
+
+**Numerical stability**: the Multinomial logp involves `log(q)` where
+`q` can be near zero (CDF differences between close ages, or large
+`1 - p·CDF` remainder). Implementation must use `log1p` and
+clamp interval probabilities to a small positive floor (e.g. 1e-12)
+to avoid -inf contributions.
+
 #### IR representation
 
-The evidence binder produces a new dataclass:
+The evidence binder produces cohort-first trajectory objects (see
+doc 11 §9 for the transformation from DB rows). The compiler
+receives:
 
 ```
 @dataclass
@@ -1132,14 +1290,16 @@ class CohortDailyTrajectory:
     """A single cohort day observed at multiple retrieval ages."""
     date: str
     a: int                          # anchor entrants (fixed denominator)
-    retrieval_ages: list[float]     # sorted ascending
+    retrieval_ages: list[float]     # sorted ascending (days)
     cumulative_y: list[int]         # monotonised cumulative target counts
     path_edge_ids: list[str]        # edges on the path (for p_path product)
+    obs_type: str                   # 'window' or 'cohort' (determines
+                                    # completeness model and p variable)
 ```
 
 `CohortObservation` gains an optional `trajectories` field alongside
 the existing `daily` field. Days with trajectory data use the
-Multinomial emission; days with only a single observation use the
+Potential emission; days with only a single observation use the
 existing Binomial emission. Both can coexist within the same
 `CohortObservation`.
 
@@ -2069,6 +2229,306 @@ computes these from the inference trace).
 | Log-logistic | future | — | Closed-form CDF, heavier tails |
 | Mixture of lognormals | future | — | Avoids join-collapse loss entirely |
 | Logit-Normal | — | future | Better for extreme p (near 0 or 1) |
+
+---
+
+## End-state compiler approach for snapshot evidence
+
+**Date**: 19-Mar-26
+
+This section describes how the compiler should work when fed real
+snapshot data from the DB — the target design for Phase S and its
+evolution into Phase D. It synthesises the formulations across Layers
+1–3 and the `pm.Potential` emission approach into a single coherent
+narrative.
+
+### The fundamental data unit: the Cohort
+
+A Cohort is a group of people who commenced something on a specific
+date — an independent experiment group. The snapshot DB stores
+successive measurements of each Cohort at increasing ages (as-at
+dates). Each measurement records how many of the original population
+have reached a given node by that observation date. Over time, the
+cumulative count rises monotonically as late converters arrive.
+
+Both `window()` and `cohort()` DagNet slice types produce Cohorts.
+The underlying data shape is identical: a collection of Cohort days,
+each observed at one or more as-at ages, each forming a monotonic
+cumulative distribution. What differs is the anchoring — which
+population serves as the denominator, and which latency model governs
+the completeness coupling.
+
+### Two observation types, same structure
+
+For edge X→Y in a chain A→…→X→Y:
+
+**`window()` observations** are anchored at the edge. The denominator
+is `x` — the number of people who reached node X on a given Cohort
+day. The probability is `p_window_XY` (a single edge probability).
+The completeness CDF is edge-level: `CDF(t | onset_XY, mu_XY,
+sigma_XY)`. This is the cleanest signal for identifying edge latency
+because there is no upstream path composition, no Fenton-Wilkinson
+approximation, and no coupling to other edges' latency variables.
+Window data directly pins `(mu_XY, sigma_XY)`.
+
+**`cohort()` observations** are anchored at the graph root. The
+denominator is `a` — the number of people who entered at the anchor
+node. The probability is `p_path = p_cohort_AX · p_cohort_XY` (the
+product of all edge probabilities along the path from anchor to
+target). The completeness CDF is path-level: `CDF(t | path_onset,
+path_mu, path_sigma)`, where the path latency parameters are composed
+from per-edge latents via Fenton-Wilkinson. This creates inter-edge
+coupling — the Cohort trajectory for edge Y constrains latency
+variables on edges A→X as well as X→Y. The trajectory IS evidence
+about upstream conversion just as much as about this edge.
+
+### The hierarchical connection
+
+`window()` and `cohort()` observations of the same edge are not
+independent — they observe the same underlying conversion process.
+The model connects them through a shared base probability:
+
+- `p_base_XY` — the underlying conversion rate
+- `p_window_XY = invlogit(logit(p_base) + eps_window)` — small
+  deviation, tightly constrained
+- `p_cohort_XY = invlogit(logit(p_base) + eps_cohort)` — can diverge
+  by a path-informed amount `tau_cohort = sigma_temporal ·
+  path_sigma_AX`
+
+Both share the same edge-level latency variables `(mu_XY, sigma_XY)`.
+The latency is a physical property of the conversion process and does
+not depend on how the observation was anchored.
+
+This connection gives the model four properties:
+
+1. Window data pins the base rate and edge latency quickly (direct,
+   single-hop, no upstream uncertainty).
+2. The base guides cohort expectations through partial pooling.
+3. The cohort can diverge from the base by the amount the path
+   complexity warrants (deep downstream edges have wide arrival
+   spreads that genuinely produce different effective rates).
+4. Divergence between window and cohort posteriors is a signal about
+   temporal drift in conversion rates, not noise.
+
+### Successive hops and latency coupling
+
+The compiler processes a graph with successive hops: A→B→X→Y. Each
+hop has its own latency parameters `(onset, mu, sigma)`. The path
+latency to any node is the sum of all upstream hop latencies:
+`T_path(A→Y) = T_AB + T_BX + T_XY`. The sum of shifted lognormals
+is approximated via Fenton-Wilkinson to get composed `(path_onset,
+path_mu, path_sigma)`.
+
+This composition creates a chain of constraints:
+
+- `window()` trajectory on A→B directly pins `(mu_AB, sigma_AB)`.
+- `cohort()` trajectory on B→X uses a path CDF that depends on
+  `(mu_AB, sigma_AB)` composed with `(mu_BX, sigma_BX)`.
+- `cohort()` trajectory on X→Y uses a path CDF that depends on all
+  three hops' latency variables.
+
+The window data at each hop anchors the edge latency. That then
+propagates into the path CDFs used by `cohort()` trajectories on all
+downstream edges. The entire chain is coupled through shared latency
+variables and the Fenton-Wilkinson composition, which is implemented
+as differentiable PyTensor operations so NUTS explores the joint
+space naturally.
+
+### Emission: `pm.Potential` vectorisation
+
+Each edge receives two `pm.Potential` nodes — one for its `window()`
+Cohorts and one for its `cohort()` Cohorts. Each Potential computes
+the full Multinomial log-probability across all Cohort days for that
+edge and observation type in a single vectorised PyTensor expression.
+
+The evidence binder transforms raw DB rows into Cohort-first arrays
+per edge:
+
+- `ages`: all retrieval ages across all Cohort days, concatenated
+- `y`: corresponding cumulative conversion counts
+- `denominators`: `x` per Cohort day for `window()`, `a` for
+  `cohort()`
+- `day_boundaries`: index array marking where each Cohort day starts
+
+The Potential computes:
+
+1. CDF at every observation age (vectorised array operation — one CDF
+   call for the entire edge, not per Cohort day).
+2. Interval probabilities from the cumulative CDF values: for each
+   Cohort day, partition into `(y_1, y_2 - y_1, ..., denom - y_k)`
+   against `(p · CDF(t_1), p · (CDF(t_2) - CDF(t_1)), ...,
+   1 - p · CDF(t_k))`.
+3. Multinomial log-probability per Cohort day: sum of
+   `count · log(prob)` across intervals.
+4. Total: sum across all Cohort days → one scalar log-probability
+   contribution.
+
+This replaces hundreds of individual `pm.Multinomial` distribution
+nodes with a handful of `pm.Potential` nodes (two per edge). The
+computational cost per gradient step is the same (array operations
+on the same data), but the PyTensor graph is small enough for the
+graph optimiser to compile in seconds rather than minutes.
+
+### Phase S vs Phase D: latency treatment
+
+In Phase S, latency parameters `(mu, sigma)` are fixed from the
+topology priors. The CDF values in the Potential are precomputed
+float constants. The trajectory data constrains only the probability
+(through the level of the maturation curve, not its shape). This is
+already valuable — it uses richer per-Cohort-day evidence with
+correct completeness coupling instead of summary aggregates from
+parameter files.
+
+In Phase D, `(mu, sigma)` become free variables in the model. The
+CDF values become PyTensor expressions — differentiable functions of
+the latent latency parameters. The trajectory shape now directly
+constrains the latency distribution: a steep early rise means fast
+latency, a slow rise means slow latency, and the pattern across
+Cohort days of different ages identifies the distribution parameters.
+
+The structural change at the Phase D boundary is minimal: the CDF
+call in the Potential switches from a precomputed array to a
+PyTensor expression. The Potential structure, the Cohort-first data
+transformation, and the hierarchical connection are unchanged.
+
+### Phase D: time-binned latency with drift detection
+
+**Sequencing**: D before C (see doc 11 §10 and `programme.md`).
+Phase S delivers the data pipeline; Phase D extracts the full
+value from trajectory shape. Phase C (slice pooling) adds breadth
+on top.
+
+**Motivation**: with stable `(mu, sigma)`, the model cannot detect
+latency drift. A speed-up in conversion fulfilment is misattributed
+as a change in probability, producing materially wrong forecasts.
+The purpose of drift detection is forecasting accuracy — project
+from the current latency regime, not from a historical average.
+
+#### Time-binned latency model
+
+Segment Cohort days into time bins (bin width configurable via model
+settings, e.g. `LATENCY_DRIFT_BIN_DAYS = 7`). Each bin `t` gets its
+own `mu_t`, connected by a random walk:
+
+```
+mu_base_XY ~ Normal(prior_mu, prior_sigma)
+sigma_drift_XY ~ HalfNormal(sigma_drift_prior)
+mu_t_XY ~ Normal(mu_{t-1}_XY, sigma_drift_XY)    for t = 1..T
+sigma_XY ~ HalfNormal(sigma_prior)                 shared across bins
+```
+
+`mu_t` varies (central tendency of latency shifts over time).
+`sigma` is shared (inherent variability of the process). If
+`sigma_drift → 0`, all bins collapse to `mu_base` and the model
+recovers stable-latency behaviour. The data decides.
+
+Each Cohort day maps to bin `floor((anchor_day - start) / bin_days)`.
+The CDF for that Cohort uses its bin's `mu_t`:
+
+```
+CDF_edge(age | onset_XY, mu_t_XY, sigma_XY)
+```
+
+Path composition for downstream edges: `FW_compose(mu_t_AB,
+sigma_AB, ..., mu_t_XY, sigma_XY)` using the anchor day's bin
+assignment for all path edges — "the latency conditions when this
+Cohort entered are the ones that apply."
+
+#### Drift prior calibration from `fit_history`
+
+The `sigma_drift` and `sigma_temporal` priors are not uninformative
+— they are calibrated from the parameter's own `fit_history` using
+the same DerSimonian-Laird mechanism already specified in Layer 5
+(§ Trajectory-calibrated priors):
+
+**Latency drift**: `tau_mu²` estimated from `fit_history[].mu`
+(between-run variance of latency log-mean across successive fits)
+sets `sigma_drift_prior`:
+
+```
+sigma_drift_XY ~ HalfNormal(sqrt(tau_mu^2 / fits_per_bin))
+```
+
+The scaling by `fits_per_bin` converts between-run variance (one
+fit covers the full training window) to per-bin variance (each bin
+is a fraction of the window). If historic fits show stable `mu`,
+`sigma_drift_prior` is small → bins tightly constrained. If `mu`
+has been volatile, `sigma_drift_prior` is large → bins can separate.
+
+**Probability drift**: `tau²` estimated from `fit_history[].logit(p)`
+sets `sigma_temporal_prior`:
+
+```
+sigma_temporal ~ HalfNormal(sqrt(tau^2))
+```
+
+Already specified in Layer 5 — this is the same `tau²` that
+calibrates the warm-start prior concentration, now also feeding the
+temporal volatility parameter.
+
+**Adaptive without user configuration**: the drift allowance for
+both probability and latency is learned from the edge's own history.
+A new edge with no `fit_history` gets uninformative drift priors
+(conservative). An edge with 10+ stable fits gets tight priors that
+resist spurious bin separation. Layer 5's existing `K < 3` fallback
+applies: insufficient history → uninformative priors.
+
+The mechanism is the same DerSimonian-Laird estimate already
+designed for warm-start — it feeds two consumers: prior
+concentration (existing) and drift variance (new).
+
+#### Identifiability: separating p drift from latency drift
+
+With both `p` and `mu_t` free to vary, the same observation could be
+explained by higher `p` or faster latency. Window trajectories
+resolve this: the maturation SHAPE of a window trajectory (edge-level
+CDF) directly separates level (p) from shape (latency). A steep
+early rise = fast latency. A high final level = high p.
+
+The two drift hierarchies coexist independently:
+- `sigma_temporal` governs probability drift (Layer 3 hierarchy)
+- `sigma_drift` governs latency drift (Phase D addition)
+
+Window data anchors both: edge-level `p_window` via probability,
+edge-level `(mu_t, sigma)` via trajectory shape. Cohort data
+constrains the full path. The hierarchical connection between
+`p_window` and `p_cohort` via `p_base` (Layer 3) is unchanged.
+
+#### Posterior output
+
+The model's posterior for latency is the **current-regime** estimate
+— the most recent time bin's `mu_t`. The forecast projects from
+current conditions, not a historical average. `sigma_drift` is a
+diagnostic: near zero = stable latency, material = latency is
+moving.
+
+The user sees the same posterior summary. Time bins are internal
+model machinery, not exposed in the UI.
+
+#### Cost estimate
+
+For the test graph (4 edges, ~16 weekly bins):
+- ~64 `mu_t` variables + 4 `sigma_drift` + 4 `sigma` = ~72 new
+  free variables (from current 13 → ~85 total)
+- NUTS sampling: estimated 5–10 minutes (from current 2 minutes)
+- Compilation: unchanged (Potential structure same, CDFs become
+  PyTensor expressions)
+
+### Phase C: Dirichlet interactions
+
+Phase C (slice pooling) adds context-sliced evidence: different
+channels, devices, or segments each contribute their own Cohort
+trajectories. At branch group nodes, the Dirichlet prior constrains
+sibling edges to a simplex. Each sibling edge gets its own trajectory
+Potential, and the `p_path` product includes the Dirichlet component
+for that sibling. The trajectory constrains the product; the
+Dirichlet constrains the simplex. Both coexist as likelihood terms.
+
+The Cohort-first data structure and the `pm.Potential` emission
+approach extend naturally to sliced data — each (edge × observation
+type × context slice) combination gets its own Potential, with the
+probability variable drawn from the appropriate slice-level or
+pooled-level hierarchy.
 
 ---
 

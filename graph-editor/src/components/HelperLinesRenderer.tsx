@@ -24,7 +24,7 @@ export interface HelperLinesHandle {
   clear(): void;
 }
 
-const DEFAULT_COLOUR = '#0041d0';
+const DEFAULT_COLOUR = 'rgba(0, 65, 208, 0.5)';
 
 const HelperLinesRenderer = forwardRef<HelperLinesHandle, {}>((_, ref) => {
   const storeState = useStore(storeSelector);
@@ -46,7 +46,7 @@ const HelperLinesRenderer = forwardRef<HelperLinesHandle, {}>((_, ref) => {
 
       ctx.scale(dpi, dpi);
       ctx.clearRect(0, 0, width, height);
-      ctx.lineWidth = 1.5;
+      ctx.lineWidth = 0.75;
 
       if (vertical) {
         ctx.beginPath();

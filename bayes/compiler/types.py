@@ -125,17 +125,28 @@ class CohortDailyObs:
 
 @dataclass
 class CohortDailyTrajectory:
-    """A single cohort day observed at multiple retrieval ages (Phase S).
+    """A single Cohort day observed at multiple retrieval ages (Phase S).
 
-    The trajectory Multinomial uses `a` (anchor entrants) as the fixed
-    denominator and path-level probability in the interval probabilities.
-    See doc 6, Layer 3 § "Maturation trajectory likelihood".
+    Both window() and cohort() slices produce these — same data shape,
+    different anchoring. See doc 6 § "End-state compiler approach".
+
+    obs_type determines the compiler's treatment:
+      'window'  → denominator is `n` (x, from-node entrants),
+                   probability is p_window, CDF is edge-level
+      'cohort'  → denominator is `n` (a, anchor entrants),
+                   probability is p_path_cohort, CDF is path-level
     """
     date: str
-    a: int                                  # anchor entrants (fixed denominator)
+    n: int                                  # denominator: x for window, a for cohort
+    obs_type: str = "cohort"                # "window" | "cohort"
     retrieval_ages: list[float] = field(default_factory=list)   # sorted ascending
     cumulative_y: list[int] = field(default_factory=list)       # monotonised target counts
     path_edge_ids: list[str] = field(default_factory=list)      # edges on path (for p_path)
+
+    @property
+    def a(self) -> int:
+        """Backward compat — old code references .a"""
+        return self.n
 
 
 @dataclass

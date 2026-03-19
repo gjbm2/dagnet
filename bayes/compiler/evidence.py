@@ -302,166 +302,200 @@ def _bind_from_snapshot_rows(
     today: datetime,
     diagnostics: list[str],
 ) -> None:
-    """Convert snapshot DB rows to observations on an EdgeEvidence.
+    """Convert snapshot DB rows to Cohort-first trajectory objects.
 
-    Each row has: anchor_day, retrieved_at, slice_key, a, x, y, and lag cols.
+    Both window() and cohort() slices produce Cohorts (independent
+    experiment groups indexed by anchor_day). They differ in anchoring:
+      - window(): denominator x (from-node), edge-level CDF
+      - cohort(): denominator a (anchor entrants), path-level CDF
 
-    Cohort rows: builds CohortDailyTrajectory per (anchor_day, slice_key)
-    — multiple retrieval ages per day form the trajectory Multinomial
-    (doc 6, Layer 3 § "Maturation trajectory likelihood"). Uses `a`
-    (anchor entrants) as denominator, `y` as cumulative target count.
-    Falls back to single-retrieval CohortDailyObs when only one
-    retrieval exists for a day.
+    See doc 6 § "End-state compiler approach for snapshot evidence".
 
-    Window rows: latest retrieval per (anchor_day, slice_key), aggregated
-    across days within each slice.
+    Grouping is by (obs_type, anchor_day) — rows from different
+    slice_keys for the same anchor_day are merged into one Cohort,
+    deduplicated by retrieved_at.
     """
     from collections import defaultdict
 
-    # Group rows by (slice_key, anchor_day) → list of rows (all retrievals)
-    by_slice_day: dict[tuple[str, str], list[dict]] = defaultdict(list)
+    # Step 1: Classify each row and group by (obs_type, anchor_day).
+    # Rows from different slice_keys for the same anchor_day are the
+    # same Cohort observed via different queries — merge them.
+    window_by_day: dict[str, list[dict]] = defaultdict(list)
+    cohort_by_day: dict[str, list[dict]] = defaultdict(list)
+
     for row in rows:
         anchor_day = str(row.get("anchor_day", ""))
         slice_key = str(row.get("slice_key", ""))
-        by_slice_day[(slice_key, anchor_day)].append(row)
-
-    # Reorganise by slice_key
-    by_slice: dict[str, dict[str, list[dict]]] = defaultdict(dict)
-    for (slice_key, anchor_day), day_rows in by_slice_day.items():
-        by_slice[slice_key][anchor_day] = day_rows
-
-    for slice_key, days in by_slice.items():
         if _is_cohort(slice_key):
-            trajectories: list[CohortDailyTrajectory] = []
-            daily_fallback: list[CohortDailyObs] = []
+            cohort_by_day[anchor_day].append(row)
+        else:
+            window_by_day[anchor_day].append(row)
 
-            for anchor_day in sorted(days.keys()):
-                day_rows = days[anchor_day]
+    # Step 2: Build trajectories for each obs_type.
+    window_trajs, window_daily = _build_trajectories_for_obs_type(
+        window_by_day, "window", et, today, diagnostics,
+    )
+    cohort_trajs, cohort_daily = _build_trajectories_for_obs_type(
+        cohort_by_day, "cohort", et, today, diagnostics,
+    )
 
-                # Sort by retrieved_at ascending
-                day_rows.sort(key=lambda r: str(r.get("retrieved_at", "")))
+    # Step 3: Attach to EdgeEvidence.
+    if window_trajs or window_daily:
+        ev.cohort_obs.append(CohortObservation(
+            slice_dsl="window(snapshot)",
+            daily=window_daily,
+            trajectories=window_trajs,
+        ))
+        ev.has_window = True
+        for t in window_trajs:
+            ev.total_n += t.n
+        for d in window_daily:
+            ev.total_n += d.n
 
-                # Get anchor entrants (a). Should be consistent across
-                # retrievals for the same day; use the first non-null.
-                a_val = None
-                for r in day_rows:
-                    a_candidate = _safe_int(r.get("a"))
-                    if a_candidate is not None and a_candidate > 0:
-                        a_val = a_candidate
-                        break
+    if cohort_trajs or cohort_daily:
+        ev.cohort_obs.append(CohortObservation(
+            slice_dsl="cohort(snapshot)",
+            daily=cohort_daily,
+            trajectories=cohort_trajs,
+        ))
+        ev.has_cohort = True
+        for t in cohort_trajs:
+            ev.total_n += t.n
+        for d in cohort_daily:
+            ev.total_n += d.n
 
-                if a_val is None or a_val <= 0:
+
+def _build_trajectories_for_obs_type(
+    by_day: dict[str, list[dict]],
+    obs_type: str,
+    et,
+    today: datetime,
+    diagnostics: list[str],
+) -> tuple[list[CohortDailyTrajectory], list[CohortDailyObs]]:
+    """Build trajectory and fallback objects for one observation type.
+
+    Groups rows by anchor_day (already done by caller), deduplicates
+    by retrieved_at, and produces CohortDailyTrajectory for multi-
+    retrieval days, CohortDailyObs for single-retrieval days.
+    """
+    trajectories: list[CohortDailyTrajectory] = []
+    daily_fallback: list[CohortDailyObs] = []
+
+    for anchor_day in sorted(by_day.keys()):
+        day_rows = by_day[anchor_day]
+
+        # Deduplicate by retrieved_at (same observation from overlapping slices)
+        seen_ret: dict[str, dict] = {}
+        for r in day_rows:
+            ret_key = str(r.get("retrieved_at", ""))
+            if ret_key not in seen_ret:
+                seen_ret[ret_key] = r
+        deduped = sorted(seen_ret.values(), key=lambda r: str(r.get("retrieved_at", "")))
+
+        # Resolve denominator: x for window, a for cohort
+        if obs_type == "window":
+            denom = None
+            for r in deduped:
+                x = _safe_int(r.get("x"))
+                if x is not None and x > 0:
+                    denom = x
+                    break
+        else:
+            denom = None
+            for r in deduped:
+                a = _safe_int(r.get("a"))
+                if a is not None and a > 0:
+                    denom = a
+                    break
+
+        if denom is None or denom <= 0:
+            continue
+
+        if len(deduped) >= 2:
+            # Multiple retrievals → trajectory
+            retrieval_ages: list[float] = []
+            cumulative_y: list[int] = []
+            prev_y = 0
+
+            for r in deduped:
+                retrieved_at = str(r.get("retrieved_at", ""))
+                y = _safe_int(r.get("y"))
+                if y is None:
+                    y = 0
+
+                age = _retrieval_age(anchor_day, retrieved_at, today)
+                if age <= 0:
                     continue
 
-                if len(day_rows) >= 2:
-                    # Multiple retrievals → trajectory
-                    retrieval_ages: list[float] = []
-                    cumulative_y: list[int] = []
-                    prev_y = 0
+                # Monotonise and cap
+                y = max(y, prev_y)
+                y = min(y, denom)
+                prev_y = y
 
-                    for r in day_rows:
-                        retrieved_at = str(r.get("retrieved_at", ""))
-                        y = _safe_int(r.get("y"))
-                        if y is None:
-                            y = 0
+                retrieval_ages.append(age)
+                cumulative_y.append(y)
 
-                        age = _retrieval_age(anchor_day, retrieved_at, today)
-                        if age <= 0:
-                            continue
-
-                        # Monotonise: y must not decrease
-                        y = max(y, prev_y)
-                        # Cap at anchor entrants
-                        y = min(y, a_val)
-                        prev_y = y
-
-                        retrieval_ages.append(age)
-                        cumulative_y.append(y)
-
-                    if len(retrieval_ages) >= 2:
-                        trajectories.append(CohortDailyTrajectory(
-                            date=anchor_day,
-                            a=a_val,
-                            retrieval_ages=retrieval_ages,
-                            cumulative_y=cumulative_y,
-                            path_edge_ids=et.path_edge_ids,
-                        ))
-                        ev.total_n += a_val
-                    elif len(retrieval_ages) == 1:
-                        # Only one valid retrieval after filtering
-                        daily_fallback.append(CohortDailyObs(
-                            date=anchor_day,
-                            n=a_val,
-                            k=cumulative_y[0],
-                            age_days=retrieval_ages[0],
-                            completeness=_compute_cohort_completeness(
-                                retrieval_ages[0],
-                                et.path_latency.path_delta,
-                                et.path_latency.path_mu,
-                                et.path_latency.path_sigma,
-                                et.has_latency,
-                            ),
-                        ))
-                        ev.total_n += a_val
-
-                else:
-                    # Single retrieval → standard CohortDailyObs
-                    r = day_rows[0]
-                    y = _safe_int(r.get("y")) or 0
-                    retrieved_at = str(r.get("retrieved_at", ""))
-                    age = _retrieval_age(anchor_day, retrieved_at, today)
-
-                    daily_fallback.append(CohortDailyObs(
-                        date=anchor_day,
-                        n=a_val,
-                        k=min(y, a_val),
-                        age_days=age,
-                        completeness=_compute_cohort_completeness(
-                            age,
-                            et.path_latency.path_delta,
-                            et.path_latency.path_mu,
-                            et.path_latency.path_sigma,
-                            et.has_latency,
-                        ),
-                    ))
-                    ev.total_n += a_val
-
-            if trajectories or daily_fallback:
-                ev.cohort_obs.append(CohortObservation(
-                    slice_dsl=slice_key,
-                    daily=daily_fallback,
-                    trajectories=trajectories,
+            if len(retrieval_ages) >= 2:
+                trajectories.append(CohortDailyTrajectory(
+                    date=anchor_day,
+                    n=denom,
+                    obs_type=obs_type,
+                    retrieval_ages=retrieval_ages,
+                    cumulative_y=cumulative_y,
+                    path_edge_ids=et.path_edge_ids,
                 ))
-                ev.has_cohort = True
-
-        else:
-            # Window observation — latest retrieval per anchor_day,
-            # aggregated across days for this slice.
-            total_x = 0
-            total_y = 0
-            for anchor_day, day_rows in days.items():
-                # Use latest retrieval
-                latest = max(day_rows, key=lambda r: str(r.get("retrieved_at", "")))
-                x = _safe_int(latest.get("x"))
-                y = _safe_int(latest.get("y"))
-                if x is not None and x > 0:
-                    total_x += x
-                    total_y += min(y if y is not None else 0, x)
-
-            if total_x > 0:
-                compl = _compute_window_completeness(
-                    slice_key, today,
-                    et.onset_delta_days, et.mu_prior, et.sigma_prior,
-                    et.has_latency,
+            elif len(retrieval_ages) == 1:
+                _append_single_obs(
+                    daily_fallback, anchor_day, denom,
+                    cumulative_y[0], retrieval_ages[0],
+                    obs_type, et,
                 )
-                ev.window_obs.append(WindowObservation(
-                    n=total_x,
-                    k=total_y,
-                    slice_dsl=slice_key,
-                    completeness=compl,
-                ))
-                ev.has_window = True
-                ev.total_n += total_x
+        else:
+            # Single retrieval → CohortDailyObs
+            r = deduped[0]
+            y = _safe_int(r.get("y")) or 0
+            retrieved_at = str(r.get("retrieved_at", ""))
+            age = _retrieval_age(anchor_day, retrieved_at, today)
+            _append_single_obs(
+                daily_fallback, anchor_day, denom,
+                min(y, denom), age,
+                obs_type, et,
+            )
+
+    return trajectories, daily_fallback
+
+
+def _append_single_obs(
+    daily_list: list[CohortDailyObs],
+    anchor_day: str,
+    n: int,
+    k: int,
+    age: float,
+    obs_type: str,
+    et,
+) -> None:
+    """Append a single-retrieval CohortDailyObs with appropriate completeness."""
+    if obs_type == "window":
+        compl = _compute_cohort_completeness(
+            age,
+            et.onset_delta_days, et.mu_prior, et.sigma_prior,
+            et.has_latency,
+        )
+    else:
+        compl = _compute_cohort_completeness(
+            age,
+            et.path_latency.path_delta,
+            et.path_latency.path_mu,
+            et.path_latency.path_sigma,
+            et.has_latency,
+        )
+    daily_list.append(CohortDailyObs(
+        date=anchor_day,
+        n=n,
+        k=k,
+        age_days=age,
+        completeness=compl,
+    ))
 
 
 def _bind_from_param_file(

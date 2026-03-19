@@ -12,8 +12,11 @@ import toast from 'react-hot-toast';
 import { RepositoryItem, ObjectType } from '../../types';
 import { registryService, RegistryItem } from '../../services/registryService';
 import { getObjectTypeTheme } from '../../theme/objectTypeTheme';
-import { Tag } from 'lucide-react';
+import { Tag, GitBranch } from 'lucide-react';
 import { filterSystemTags } from '../../utils/favourites';
+import { SwitchBranchModal } from '../modals/SwitchBranchModal';
+import { CommitModal } from '../CommitModal';
+import { useCommitHandler } from '../../hooks/useCommitHandler';
 import './Navigator.css';
 
 // NavigatorEntry is imported from ObjectTypeSection
@@ -35,6 +38,9 @@ export function NavigatorContent() {
   const fileRegistry = useFileRegistry();
   const [contextMenu, setContextMenu] = useState<{ item: RepositoryItem; x: number; y: number } | null>(null);
   const [sectionContextMenu, setSectionContextMenu] = useState<{ type: ObjectType; x: number; y: number } | null>(null);
+  const [branchModalOpen, setBranchModalOpen] = useState(false);
+  const [commitModalOpen, setCommitModalOpen] = useState(false);
+  const { handleCommitFiles } = useCommitHandler();
 
   // Historical calendar — single instance shared across all navigator items
   const [historicalCalState, setHistoricalCalState] = useState<{
@@ -568,6 +574,16 @@ export function NavigatorContent() {
         </div>
       )}
 
+      {/* Branch indicator — acts as the "root directory" of the tree */}
+      <div
+        className="navigator-branch-indicator"
+        title={`${state.selectedRepo || 'repo'} / ${state.selectedBranch || 'main'}\nClick to switch branch`}
+        onClick={() => setBranchModalOpen(true)}
+      >
+        <GitBranch size={13} className="navigator-branch-icon" />
+        <span className="navigator-branch-name">{state.selectedBranch || 'main'}</span>
+      </div>
+
       {/* Object tree */}
       <div className="navigator-tree">
         {isLoading ? (
@@ -726,6 +742,22 @@ export function NavigatorContent() {
           onClose={() => setSectionContextMenu(null)}
         />
       )}
+
+      {/* Branch switch + commit modals */}
+      <SwitchBranchModal
+        isOpen={branchModalOpen}
+        onClose={() => setBranchModalOpen(false)}
+        onCommitFirst={() => {
+          setBranchModalOpen(false);
+          setCommitModalOpen(true);
+        }}
+      />
+      <CommitModal
+        isOpen={commitModalOpen}
+        onClose={() => setCommitModalOpen(false)}
+        onCommit={handleCommitFiles}
+        preselectedFiles={[]}
+      />
 
       {/* Historical calendar picker — single shared instance for all navigator items */}
       {historicalCalState && (

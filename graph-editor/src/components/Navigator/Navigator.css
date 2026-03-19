@@ -13,10 +13,10 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 8px;
-  background-color: #fff;
-  border-bottom: 1px solid #e0e0e0;
-  min-height: 44px;
+  padding: 6px 8px;
+  background-color: transparent;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+  min-height: 38px;
   flex-shrink: 0;
 }
 
@@ -48,13 +48,14 @@
 
 .navigator-search-input {
   flex: 1;
-  padding: 6px 32px 6px 32px; /* Left padding for search icon */
-  border: 1px solid #d0d0d0;
-  border-radius: 4px;
-  font-size: 13px;
+  padding: 5px 32px 5px 30px; /* Left padding for search icon */
+  border: 1px solid transparent;
+  border-radius: 6px;
+  font-size: 12px;
   outline: none;
-  transition: border-color 0.15s ease;
+  transition: border-color 0.15s ease, background-color 0.15s ease;
   box-sizing: border-box;
+  background-color: rgba(0, 0, 0, 0.04);
 }
 
 .search-clear-btn {
@@ -83,7 +84,8 @@
 }
 
 .navigator-search-input:focus {
-  border-color: #0066cc;
+  border-color: rgba(0, 102, 204, 0.4);
+  background-color: #fff;
 }
 
 /* Filter Dropdown */
@@ -227,8 +229,8 @@
   gap: 3px;
   padding: 4px 8px;
   align-items: center;
-  background: #f5f5f5;
-  border-bottom: 1px solid #e0e0e0;
+  background: transparent;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.06);
   flex-shrink: 0;
 }
 
@@ -265,9 +267,9 @@
 }
 
 .tag-filter-chip.active {
-  background: #3b82f6;
-  color: #fff;
-  border-color: #3b82f6;
+  background: #e0e7ef;
+  color: #374151;
+  border-color: #c5cdd8;
 }
 
 .filter-action-btn {
@@ -318,11 +320,42 @@
   color: #0066cc;
 }
 
+/* Branch indicator — root directory breadcrumb */
+.navigator-branch-indicator {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 12px;
+  font-size: 12px;
+  font-family: 'SF Mono', 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
+  color: #555;
+  cursor: pointer;
+  transition: background-color 0.1s ease;
+  flex-shrink: 0;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+}
+
+.navigator-branch-indicator:hover {
+  background-color: rgba(0, 0, 0, 0.04);
+  color: #333;
+}
+
+.navigator-branch-icon {
+  flex-shrink: 0;
+  color: #888;
+}
+
+.navigator-branch-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* Object Tree */
 .navigator-tree {
   flex: 1;
   overflow-y: auto;
-  padding: 8px 0;
+  padding: 0;
   position: relative;
 }
 
@@ -333,54 +366,54 @@
   font-size: 13px;
 }
 
-/* Object Type Section - Card-like Adobe Lightroom style with colored accents */
+/* Object Type Section - Flat tree view (Cursor/VS Code style) */
 .object-type-section {
-  background: #fff;
-  border: 1px solid #e0e0e0;
-  border-left: 3px solid var(--section-accent-color, #9CA3AF); /* Colored left border */
-  border-radius: 6px;
-  margin: 8px;
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  margin: 0;
   overflow: visible; /* Required for sticky headers */
-  transition: border-left-color 0.2s ease, box-shadow 0.2s ease;
 }
 
 .object-type-section:hover {
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+  box-shadow: none;
 }
 
 .object-type-section:last-child {
-  margin-bottom: 8px;
+  margin-bottom: 0;
 }
 
 .section-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 10px 12px;
+  padding: 0 12px;
+  height: 28px;
   cursor: pointer;
   user-select: none;
-  background: #fcfcfc; /* Very slightly lighter than panel bg #f8f9fa */
-  border-bottom: 1px solid transparent;
-  transition: all 0.2s ease;
+  background: #f8f9fa;
+  border-bottom: none;
+  transition: background-color 0.1s ease;
   position: sticky;
   top: 0;
   z-index: 10;
-  border-radius: 6px 6px 0 0;
+  border-radius: 0;
 }
 
 .section-header:hover {
-  background-color: #f8f8f8;
+  background-color: #f0f1f2;
 }
 
 /* Add border when section is expanded */
 .section-header.is-expanded {
-  border-bottom-color: #e5e5e5;
+  border-bottom-color: transparent;
 }
 
 /* Chevron rotation */
 .chevron {
   transition: transform 0.2s ease;
   flex-shrink: 0;
+  color: #999;
 }
 
 .chevron.expanded {
@@ -438,9 +471,11 @@
 }
 
 .section-title {
-  font-size: 13px;
-  font-weight: 600;
-  color: #333;
+  font-size: 11px;
+  font-weight: 700;
+  color: #555;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
   flex: 1;
   min-width: 0;
   overflow: hidden;
@@ -448,41 +483,53 @@
   white-space: nowrap;
 }
 
-.section-count {
-  font-size: 11px;
-  color: #888;
+/* Unified count pill — used for section counts, sub-category counts, and tab counts */
+.section-count,
+.tab-count,
+.navigator-tab-count {
+  font-size: 10px;
   font-weight: 500;
+  color: #888;
+  background: rgba(0, 0, 0, 0.06);
+  padding: 0 5px;
+  border-radius: 8px;
+  line-height: 16px;
+  min-width: 16px;
+  text-align: center;
   flex-shrink: 0;
   margin-left: 4px;
 }
 
-/* Index button - minimal style */
-.index-button {
-  all: unset;
-  display: flex;
+/* Section icon — consistent sizing whether clickable or not */
+.section-icon-btn {
+  display: inline-flex;
   align-items: center;
   justify-content: center;
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+  border-radius: 3px;
+  transition: opacity 0.12s ease;
+}
+
+.section-icon-btn.clickable {
   cursor: pointer;
-  color: #888;
-  opacity: 0.6;
-  transition: opacity 0.15s ease;
 }
 
-.index-button:hover {
-  opacity: 1;
+.section-icon-btn.clickable:hover {
+  opacity: 0.7;
 }
 
-.index-button.is-dirty {
+.section-icon-btn.is-dirty {
   color: #e67700;
-  opacity: 1;
 }
 
 /* Section Items - with smooth animation */
 .section-items {
   overflow: visible; /* Changed from hidden to allow sticky sub-category headers */
   transition: max-height 0.3s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.3s ease;
-  background: #fff;
-  border-radius: 0 0 6px 6px; /* Rounded bottom corners */
+  background: transparent;
+  border-radius: 0;
 }
 
 .section-items.collapsed {
@@ -505,20 +552,20 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 2px 12px 2px 20px;
+  padding: 3px 12px 3px 24px;
   cursor: pointer;
   border-radius: 3px;
-  margin: 0px 6px;
-  transition: background-color 0.15s ease;
-  min-height: 22px;
+  margin: 0 4px;
+  transition: background-color 0.1s ease;
+  min-height: 24px;
 }
 
 .navigator-item:hover {
-  background-color: #e9ecef;
+  background-color: rgba(0, 0, 0, 0.04);
 }
 
 .navigator-item.active {
-  background-color: #e3f2fd;
+  background-color: rgba(0, 102, 204, 0.08);
 }
 
 .navigator-item-name {
@@ -667,29 +714,24 @@
   gap: 4px;
 }
 
-.tab-count {
-  font-size: 11px;
-  color: #0066cc;
-  font-weight: 600;
-  padding: 0 4px;
-}
+/* .tab-count is defined above in the unified count pill block */
 
-/* Scrollbar */
+/* Scrollbar - thin, subtle */
 .navigator-tree::-webkit-scrollbar {
-  width: 8px;
+  width: 5px;
 }
 
 .navigator-tree::-webkit-scrollbar-track {
-  background: #f0f0f0;
+  background: transparent;
 }
 
 .navigator-tree::-webkit-scrollbar-thumb {
-  background: #c0c0c0;
-  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.15);
+  border-radius: 3px;
 }
 
 .navigator-tree::-webkit-scrollbar-thumb:hover {
-  background: #a0a0a0;
+  background: rgba(0, 0, 0, 0.25);
 }
 
 /* Dark mode support */
@@ -699,9 +741,23 @@
     border-right-color: #333;
   }
 
+  .navigator-branch-indicator {
+    color: #aaa;
+    border-bottom-color: rgba(255, 255, 255, 0.06);
+  }
+
+  .navigator-branch-indicator:hover {
+    background-color: rgba(255, 255, 255, 0.05);
+    color: #e0e0e0;
+  }
+
+  .navigator-branch-icon {
+    color: #666;
+  }
+
   .navigator-header {
-    background-color: #252525;
-    border-bottom-color: #333;
+    background-color: transparent;
+    border-bottom-color: rgba(255, 255, 255, 0.06);
   }
 
   .search-icon {
@@ -718,17 +774,18 @@
   }
 
   .navigator-search-input {
-    background-color: #2d2d2d;
-    border-color: #404040;
+    background-color: rgba(255, 255, 255, 0.06);
+    border-color: transparent;
     color: #e0e0e0;
   }
 
   .navigator-search-input::placeholder {
-    color: #666;
+    color: #555;
   }
 
   .navigator-search-input:focus {
-    border-color: #0066cc;
+    border-color: rgba(77, 158, 247, 0.4);
+    background-color: rgba(255, 255, 255, 0.08);
   }
 
   .navigator-filter-btn {
@@ -798,50 +855,47 @@
   }
 
   .object-type-section {
-    background: #252525;
-    border-color: #404040;
-    border-left: 3px solid var(--section-accent-color, #9CA3AF);
+    background: transparent;
+    border: none;
   }
 
   .object-type-section:hover {
-    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+    box-shadow: none;
   }
 
   .section-header {
-    background: #2a2a2a; /* Very slightly lighter than panel bg #252525 */
+    background: #1e1e1e;
   }
 
   .section-header:hover {
-    background-color: #333333;
-  }
-  
-  .section-header.is-expanded {
-    border-bottom-color: #404040;
-  }
-  
-  .section-count {
-    color: #777;
-  }
-  
-  .index-button {
-    color: #777;
+    background-color: #252525;
   }
 
-  .section-expand-icon,
-  .section-count {
-    color: #999;
+  .section-header.is-expanded {
+    border-bottom-color: transparent;
+  }
+
+  .section-count,
+  .tab-count,
+  .navigator-tab-count {
+    color: #777;
+    background: rgba(255, 255, 255, 0.08);
+  }
+
+  .section-icon-btn.is-dirty {
+    color: #ffb347;
+  }
+
+  .section-expand-icon {
+    color: #666;
   }
 
   .section-title {
-    color: #e0e0e0;
-  }
-
-  .section-count {
-    background: #404040;
+    color: #999;
   }
 
   .section-items {
-    background: #252525;
+    background: transparent;
   }
 
   .section-empty {
@@ -849,11 +903,11 @@
   }
 
   .navigator-item:hover {
-    background-color: #2d2d2d;
+    background-color: rgba(255, 255, 255, 0.05);
   }
 
   .navigator-item.active {
-    background-color: #1a3a52;
+    background-color: rgba(77, 158, 247, 0.12);
   }
 
   .navigator-item-name {
@@ -887,47 +941,45 @@
   }
 
   .navigator-tree::-webkit-scrollbar-track {
-    background: #1e1e1e;
+    background: transparent;
   }
 
   .navigator-tree::-webkit-scrollbar-thumb {
-    background: #404040;
+    background: rgba(255, 255, 255, 0.12);
   }
 
   .navigator-tree::-webkit-scrollbar-thumb:hover {
-    background: #505050;
+    background: rgba(255, 255, 255, 0.2);
   }
   
   /* Sub-categories dark mode */
   .sub-category + .sub-category {
-    border-top-color: #404040;
+    border-top: none;
   }
 
   .sub-category-header {
-    background: #2d2d2d;
-    color: #aaa;
+    background: #1e1e1e;
+    color: #888;
   }
-  
+
   .sub-category-header:hover {
-    background: #353535;
+    background: #252525;
   }
 
   .sub-category-header.is-sticky {
-    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.4);
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
   }
 
-  .sub-category-header .section-count {
-    background: #404040;
-  }
+  /* sub-category counts inherit from unified dark mode block above */
 
   .sub-category-items {
-    background: #252525;
+    background: transparent;
   }
 
   /* Tag bar + tag chips */
   .navigator-tag-bar {
-    background: #252525;
-    border-bottom-color: #404040;
+    background: transparent;
+    border-bottom-color: rgba(255, 255, 255, 0.06);
   }
 
   .navigator-tag-bar-icon {
@@ -946,9 +998,9 @@
   }
 
   .tag-filter-chip.active {
-    background: #1976d2;
-    color: #fff;
-    border-color: #1976d2;
+    background: #3a3f47;
+    color: #ccc;
+    border-color: #555;
   }
 
   .navigator-star {
@@ -982,10 +1034,7 @@
     color: #4d9ef7;
   }
 
-  /* Tab count */
-  .tab-count {
-    color: #4d9ef7;
-  }
+  /* tab-count dark mode handled in unified block above */
 }
 
 /* Sub-categories - within card sections */
@@ -995,28 +1044,28 @@
 
 /* Use adjacent sibling selector - only add border between sub-categories */
 .sub-category + .sub-category {
-  border-top: 1px solid #e5e5e5;
+  border-top: none;
 }
 
 .sub-category-header {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 6px 12px;
-  font-size: 12px;
-  font-weight: 500;
-  color: #666;
-  background: #fafafa;
+  padding: 4px 12px 4px 18px;
+  font-size: 11px;
+  font-weight: 600;
+  color: #777;
+  background: #f8f9fa;
   cursor: pointer;
   user-select: none;
-  transition: all 0.2s ease;
+  transition: background-color 0.1s ease;
   position: sticky;
-  top: 41px; /* Height of main section header */
+  top: 28px; /* Must match .section-header height */
   z-index: 9;
 }
 
 .sub-category-header:hover {
-  background: #f0f0f0;
+  background: #f0f1f2;
 }
 
 /* Shadow when sub-category header is sticky */
@@ -1030,11 +1079,11 @@
 }
 
 .sub-category-header .section-count {
-  background: #e0e0e0;
+  margin-left: auto;
 }
 
 .sub-category-items {
-  background: #fff;
+  background: transparent;
   display: block;
   padding: 0;
   margin: 0;

@@ -1,7 +1,7 @@
 # Doc 11 — Phase S: Snapshot Evidence Assembly
 
-**Status**: Design draft
-**Date**: 18-Mar-26
+**Status**: In progress — Stage 1 (evidence binder rewrite)
+**Date**: 18-Mar-26 (design), 19-Mar-26 (implementation plan)
 **Purpose**: Scope the work to replace inline parameter-file evidence with
 direct snapshot DB queries in the Bayes compiler. This is a distinct
 development phase positioned between Phase B (Dirichlet) and Phase C
@@ -397,245 +397,514 @@ source, not the snapshot DB.
 
 ---
 
-## 5. Evidence binder changes
+## 5. Evidence binder: snapshot row transformation
 
-`evidence.py` currently has one evidence path: parse `values[]` from
-parameter files. Phase S adds a second path: snapshot rows from the DB.
+### Cohort-first structure
 
-### New function: `bind_snapshot_evidence()`
+Raw snapshot DB rows are indexed by `(core_hash, slice_key,
+anchor_day, retrieved_at)`. The evidence binder transforms these into
+a **Cohort-first** structure where the natural unit is the Cohort —
+a group of people who commenced on a specific date (an independent
+experiment group).
+
+Both `window()` and `cohort()` slices describe evolving Cohorts with
+the same underlying data shape:
 
 ```
-bind_snapshot_evidence(
-    topology: TopologyAnalysis,
-    snapshot_rows: dict[str, list[dict]],  # edge_id → rows from DB
-    param_files: dict[str, dict],          # fallback + prior source
-    settings: dict,
-    today: str,
-) → BoundEvidence
+Cohort 2025-11-19:
+  age 82d → y=329
+  age 84d → y=329
+
+Cohort 2025-11-20:
+  age 81d → y=258
+  age 83d → y=258
 ```
 
-For each edge in the topology:
-1. Check if `snapshot_rows[edge_id]` has data
-2. If yes: convert rows to `CohortObservation` / `WindowObservation`
-   objects, classifying by `slice_key` prefix (`cohort(` vs `window(`)
-3. If no: fall back to `param_files` (current `bind_evidence()` logic)
-4. Prior resolution from param files — same as current (warm-start,
-   moment-matched, or uninformative)
-5. Latency prior derivation — from param file latency block or snapshot
-   row lag summaries (whichever is richer)
-6. Minimum-n gating, diagnostics — same as current
+Each Cohort is an independent experiment with a fixed population.
+The as-at dates (`retrieved_at`) are successive measurements of the
+same monotonic cumulative distribution. The trajectory jointly
+constrains both probability and latency — they cannot be separated
+because the maturation curve shape reflects both.
 
-### Maturation trajectory → interval-censored Multinomial
+### Transformation steps
 
-The snapshot DB provides multiple retrievals of the same cohort day at
-increasing ages. These are **cumulative** — later counts include earlier
-converters. Treating them as independent Binomials would double-count.
+1. **Group by `(edge_id, anchor_day)`** across all `slice_key`
+   values — the slice_key reflects how the FE queried the data, not
+   the identity of the Cohort
+2. **Deduplicate** rows with identical `(anchor_day, retrieved_at)`
+   that appear across overlapping slices (same observation, not
+   independent)
+3. **Sort** observations within each Cohort by age ascending
+4. **Monotonise** cumulative `y` (carry forward if `y` decreases)
+5. **Tag** each Cohort with its observation type:
+   - `window()` rows → edge-level completeness, `p_window` variable,
+     denominator is `x` (from-node entrants)
+   - `cohort()` rows → path-level completeness, `p_cohort` variable,
+     denominator is `a` (anchor entrants)
+6. **Produce** `CohortDailyTrajectory` for Cohorts with multiple
+   retrieval ages, `CohortDailyObs` fallback for single-retrieval
+   Cohorts
 
-The correct likelihood is a **Multinomial over retrieval intervals**
-with **anchor entrants (`a`) as the fixed denominator** and the
-**path-level probability** `p_path = ∏ p_edge` in the interval
-probabilities. The retrieval ages partition each anchor entrant's
-outcome into mutually exclusive intervals, and the interval counts
-follow a Multinomial whose probabilities are `p_path · CDF_path`
-differences. This jointly constrains the path probability and the CDF
-shape.
+### Denominator: `x` vs `a`
 
-Key design decisions:
+The two observation types use different denominators:
 
-- **Anchor-based denominator, not `x`**: the from-step count `x`
-  changes between retrieval ages for downstream edges (upstream
-  converters are still arriving). `a` is constant. Using `a` with
-  `p_path` gives an exact Multinomial for all edges at any depth.
-- **Path probability in the likelihood**: `p_path = p_AX · p_XY · ...`
-  appears in each interval probability. This creates inter-edge
-  coupling — the Y trajectory constrains upstream p's jointly. This
-  coupling is correct (the trajectory IS evidence about upstream
-  conversion) and handled naturally by NUTS.
-- **`x` column not used in likelihood**: each edge uses only its own
-  `y` column from its own snapshot rows. `x` becomes a diagnostic
-  (model prediction vs observed), not likelihood data.
-- **Degeneracy**: a single retrieval reduces to the existing per-day
-  Binomial. A first-hop edge reduces to the single-edge form.
+- **`window()` Cohorts**: denominator is `x` (from-node entrants for
+  this edge). Direct edge-level observation.
+- **`cohort()` Cohorts**: denominator is `a` (anchor entrants).
+  Path-level observation — the probability in the likelihood is
+  `p_path = ∏ p_edge` (product of all upstream edge probabilities).
 
-The full mathematical formulation, including edge cases (Δy < 0,
-single retrieval degeneracy, non-latency edges, interaction with
-the window/cohort hierarchy and branch groups) is specified in
-**doc 6, Layer 3 § "Maturation trajectory likelihood (Phase S)"**.
+For the first edge from anchor, `x = a` and the two coincide.
 
-The evidence binder produces `CohortDailyTrajectory` objects
-(date, `a`, sorted retrieval ages, monotonised cumulative `y`,
-path edge IDs). `build_model` emits `pm.Multinomial` per trajectory
-day. Days with only one retrieval use the existing per-day Binomial.
+### Fallback to parameter files
 
-### Window observations from snapshots
+Per edge: if snapshot rows exist, use them (richer per-Cohort
+trajectory data). If not, fall back to parameter file `values[]`
+entries (current Phase A/B behaviour). No double-counting — decision
+is per edge, not per observation.
 
-Window observations are simpler — no maturation effect. Use the latest
-retrieval per `(anchor_day, slice_key)` for window-mode rows. The
-snapshot DB may have multiple retrievals of the same window, but the
-latest is authoritative.
+Priors (warm-start from previous posteriors) always come from
+parameter files regardless of snapshot source.
 
 ---
 
 ## 6. Model impact
 
-`model.py` gains a new likelihood emission path: the trajectory
-Multinomial (doc 6, Layer 3 § "Maturation trajectory likelihood"). For
-each cohort day with multiple retrieval ages, the model emits a
-`pm.Multinomial` over retrieval intervals instead of a single
-`pm.Binomial`. Days with only one retrieval continue to use the
-existing Binomial path.
+The compiler receives Cohort-first trajectory objects from the
+evidence binder and emits likelihood terms. The full mathematical
+formulation is in **doc 6, Layer 3 § "Maturation trajectory
+likelihood"**, including:
 
-The effect: **direct CDF shape identification**. The trajectory
-constrains `(mu, sigma)` through the pattern of when converters arrive
-across intervals, not just through the age gradient across different
-cohort days. This is the core value of querying the snapshot DB.
+- **Interval-censored Multinomial**: cumulative observations
+  partitioned into intervals, preventing double-counting of the same
+  individuals across retrieval ages
+- **`pm.Potential` vectorisation**: one Potential per edge per
+  observation type (window/cohort), replacing per-day `pm.Multinomial`
+  nodes to avoid PyTensor compilation bottleneck
+- **Window/cohort hierarchy**: separate Potentials for `window()` and
+  `cohort()` data, linked through `p_base` and shared `(mu, sigma)`
+  latency variables (see doc 6, Layer 3 § "Hierarchical pooling")
+- **Phase S latency**: fixed from priors (CDF values are constants).
+  Phase D makes latency latent — same Potential structure, gradients
+  flow through automatically
 
-`inference.py` is unchanged — the Multinomial is a standard PyMC
-distribution and ArviZ diagnostics handle it automatically.
+### What this constrains
 
----
-
-## 7. Test strategy
-
-### Unit tests (evidence binder)
-
-- Snapshot rows for a solo edge produce the expected CohortDailyObs
-  (correct age and completeness per row)
-- Fallback to parameter files when no snapshot data exists
-- No double-counting: edge with both snapshot rows and param file
-  values[] uses snapshot only
-- Window observations use latest retrieval only
-- Slice keys correctly partition snapshot rows
-- Priors still come from parameter files regardless of snapshot source
-
-### Integration tests (parameter recovery)
-
-- Same synthetic graph topologies as Phase A/B tests
-- Synthetic snapshot rows generated from known ground truth (per-day
-  observations with completeness-censored k)
-- Recovery should be at least as good as Phase A/B tests
-- Key test: immature cohort recovery (A4 analogue) with richer daily
-  granularity
-
-### DB integration test (requires Neon access)
-
-- End-to-end: real graph, real DB query via
-  `query_snapshots_for_sweep()`, compiler pipeline, verify posteriors
-- Manual validation step, not CI
+- `window()` trajectories **directly pin edge latency** —
+  single hop, no path composition, cleanest signal
+- `cohort()` trajectories **constrain the full path** — latency
+  from all upstream edges is coupled through the composed CDF
+- Both share `(mu_edge, sigma_edge)` and connect through `p_base`
+- The hierarchical connection ensures they are not modelled
+  independently — they observe the same underlying conversion process
 
 ---
 
-## 8. Implementation steps
+## 7. Implementation status and plan
 
-### Step 1: FE settings in payload
+### Component status (19-Mar-26)
 
-Update `useBayesTrigger.ts` to include forecasting settings:
-- Call `forecastingSettingsService.getForecastingModelSettings()`
-- Merge into `settings` block alongside existing `placeholder` flag
+| Component | Status | Notes |
+|---|---|---|
+| FE settings in payload | Done | `forecastingSettingsService` settings included |
+| `bayes_fit` analysis type | Done | `scopeRule: 'all_graph_parameters'`, `readMode: 'sweep_simple'` |
+| FE snapshot subject building | Done | `useBayesTrigger` builds 8 subjects (4 edges × 2 slices), `edge_id` flattened, `equivalent_hashes` from hash-mappings, commission logging |
+| Worker DB query | Done | `_query_snapshot_subjects` queries Neon, returns rows grouped by `edge_id`. 6135 rows for test graph |
+| Evidence binder | Needs rewrite | Groups by `(slice_key, anchor_day)` — should group by `anchor_day` only. Window data aggregated to single obs, not trajectories. See §5 |
+| Model emission | Needs rewrite | 235 individual `pm.Multinomial` → 5min PyTensor compilation. Must switch to `pm.Potential` vectorisation. See doc 6 |
+| Inference | Works | 2ms/gradient, ~30s sampling (once compilation unblocked) |
+| Posterior extraction | Works | Tested with window-only data |
+| Webhook / patch delivery | Done | Patch file written to git, FE fetches and applies |
+| FE patch application | Done | `bayesPatchService` upserts posteriors, cascade runs |
+| Test harness | Created | `bayes/test_harness.py` — direct pipeline execution with progress, timeout |
 
-Small change, no new infrastructure. Can be done immediately.
+### Development stages
 
-### Step 2: Register `bayes_fit` analysis type contract
+Each stage gates the next. Verification at each integration boundary
+before proceeding.
 
-Add entry to `analysisTypes.ts` with `scopeRule: 'all_graph_parameters'`
-and `readMode: 'cohort_maturity'`. This is a type registration only —
-no chart rendering, no UI. Enables reuse of
-`mapFetchPlanToSnapshotSubjects()`.
+#### Stage 1: Evidence binder rewrite
 
-Assess whether `mapFetchPlanToSnapshotSubjects()` needs generalisation
-to skip epoch segmentation for the `bayes_fit` contract. If the epoch
-logic is tightly coupled, extract the core hash/slice/bounds resolution
-into a shared helper that both the epoch path and the Bayes path can
-call.
+**Goal**: `_bind_from_snapshot_rows` produces Cohort-first trajectory
+objects from both `window()` and `cohort()` rows.
 
-### Step 3: FE snapshot subject building
+Work:
+- Rewrite grouping: `anchor_day` across all slice_keys, not
+  `(slice_key, anchor_day)`
+- Both `window()` and `cohort()` rows produce trajectory objects
+- Tag each with `obs_type` for the compiler (determines denominator,
+  probability variable, CDF level)
+- Deduplicate rows with identical `(anchor_day, retrieved_at)` across
+  slices
 
-Update `useBayesTrigger.ts`:
-1. Read `dataInterestsDSL` from graph
-2. Build fetch plan via `buildFetchPlanProduction()` with pinned DSL
-3. Map to subjects via `mapFetchPlanToSnapshotSubjects()` with
-   `analysisType: 'bayes_fit'`
-4. Attach `snapshot_subjects[]` to payload
+Verification (via test harness):
+- Per-edge summary showing window Cohorts AND cohort Cohorts
+- Trajectory counts, age distributions, denominators (`x` vs `a`)
+- No trajectories with zero or negative ages
+- Monotonic `y` within each trajectory
 
-### Step 4: Worker DB query
+#### Stage 2: Model emission — `pm.Potential` vectorisation
 
-Update `worker.py` `_fit_graph_compiler()`:
-1. Extract `snapshot_subjects[]` from payload
-2. For each subject: call `snapshot_service.query_snapshots_for_sweep()`
-3. Group resulting rows by `edge_id`
-4. Pass grouped rows to the evidence binder
+**Goal**: model builds in <10s, compiles in <30s, with separate
+window and cohort Potentials per edge.
 
-**Modal image dependency**: `snapshot_service.py` lives in
-`graph-editor/lib/` alongside its dependencies (`graph_types.py`,
-`query_dsl.py`, etc.). The Modal image (`bayes/app.py`) currently
-uploads only `bayes/` to `/root/bayes`. Phase S must add a second
-`.add_local_dir()` for `graph-editor/lib/` and extend PYTHONPATH so
-`snapshot_service` and dependencies are importable:
+Work:
+- Replace per-day `pm.Multinomial` with per-edge `pm.Potential`
+- Implement vectorised Multinomial logp (interval partitioning from
+  cumulative observations, log-probability sum)
+- Separate Potentials for window and cohort data per edge
+- Numerical stability: clamp interval probabilities to floor (1e-12),
+  use `log1p` where appropriate
 
-```python
-worker_image = (
-    modal.Image.debian_slim(python_version="3.12")
-    .pip_install(...)
-    .env({"PYTHONPATH": "/root/bayes:/root/lib"})
-    .add_local_dir("bayes/", remote_path="/root/bayes", ...)
-    .add_local_dir("graph-editor/lib/", remote_path="/root/lib", ...)
-)
+Verification (via test harness):
+- Model builds without error
+- Correct free variable count (13 for Phase S fixed latency)
+- Window and cohort Potential nodes present (not 235 Multinomials)
+- Compilation time <30s
+- logp/dlogp evaluation <10ms
+
+#### Stage 3: End-to-end inference
+
+**Goal**: full pipeline produces posteriors from real snapshot data.
+
+Work:
+- Run harness with all 8 subjects, no webhook
+- May need sampling config tuning (target_accept, draws)
+
+Verification:
+- Sampling completes within 3 minutes
+- `rhat < 1.05`, `ess > 400` for all edges
+- Posteriors exist for all 4 fitted edges
+- Compare against window-only baseline (4-subject run, which
+  converged with rhat=1.002, ess=4272): snapshot-enriched posteriors
+  should be tighter or materially different where Cohort data adds
+  information
+
+#### Stage 4: FE round-trip
+
+**Goal**: full loop works from browser through to posteriors on
+canvas.
+
+Work:
+- Run via `useBayesTrigger` on the clean test branch
+  (`feature/bayes-test-graph`, reset to clean state 19-Mar-26)
+- Clear app state, re-clone test branch, trigger Bayes fit
+
+Verification (via session log):
+- `BAYES_COMMISSION_PLAN` shows 8 subjects with correct
+  `edge_id`, `core_hash`, `equivalent_hashes`
+- `BAYES_DEV_COMPLETE` result log shows DB rows fetched,
+  window + cohort Cohorts bound, Potentials emitted
+- Evidence detail lines show `source=snapshot` with trajectory
+  counts for both observation types
+- `BAYES_PATCH_APPLIED` shows edges updated
+- `BAYES_CASCADE_COMPLETE` shows cascade ran
+- Posterior indicators visible on canvas edges
+- Cohort maturity chart shows Bayesian curve tracking evidence
+
+---
+
+## 8. Test strategy
+
+### Harness tests (real data, `bayes/test_harness.py`)
+
+Primary validation tool. Runs the pipeline directly with real DB
+data, stage by stage:
+- Stage-by-stage output with timing and progress
+- Hard timeout (180s default)
+- Assertions at each integration boundary
+- `--no-webhook` for pipeline-only testing
+- `--placeholder` for fast smoke tests
+- `--curl` to generate curl commands for server testing
+
+### Parameter recovery tests (synthetic data)
+
+Same synthetic topologies as Phase A/B tests, with synthetic snapshot
+rows generated from known ground truth:
+- Solo edges, chains, branch groups
+- Immature Cohorts with richer daily granularity
+- Recovery at least as good as Phase A/B tests
+
+### Fallback tests
+
+- Edge with snapshot data + edge without → mixed path works
+- No snapshot subjects → falls back to param file evidence entirely
+- Priors from param files regardless of evidence source
+
+---
+
+## 9. Evidence binder: snapshot row transformation
+
+**Date**: 19-Mar-26
+
+### Data transformation: cohort-first structure
+
+Raw snapshot DB rows are indexed by `(core_hash, slice_key,
+anchor_day, retrieved_at)`. Before the compiler sees them, the
+evidence binder should transform into a **cohort-first** structure
+where the natural unit is the cohort day:
+
+```
+Cohort 2025-11-19 (a=651):
+  age 82d → y=329
+  age 84d → y=329
+
+Cohort 2025-11-20 (a=493):
+  age 81d → y=258
+  age 83d → y=258
 ```
 
-This follows doc 3 §5's design ("the MCMC worker is a new entry point
-that imports from the same `lib/`"). No code changes to
-`snapshot_service.py` — it already uses `psycopg2` and takes a
-connection string.
+Each cohort day is an independent experiment with `a` individuals.
+The as-at dates (`retrieved_at`) are successive measurements of the
+same monotonic cumulative distribution. The `age` is
+`(retrieved_at - anchor_day)` in days.
 
-### Step 5: Evidence binder snapshot path
+This transformation:
+- Groups all rows for a given `(edge_id, anchor_day)` regardless
+  of `slice_key` — the slice_key reflects how the FE queried the
+  data, not the identity of the cohort
+- Deduplicates rows with identical `(anchor_day, retrieved_at)` that
+  appear across overlapping slices (same observation, not independent)
+- Sorts observations within each cohort by age ascending
+- Monotonises cumulative `y` (carry forward if `y` decreases)
+- Produces one `CohortDailyTrajectory` per cohort day (or
+  `CohortDailyObs` fallback for single-retrieval days)
 
-New `bind_snapshot_evidence()` in `evidence.py`:
-- Convert snapshot rows to `CohortObservation` / `WindowObservation`
-- Fall back to param files per-edge
-- Priors from param files regardless
+Window and cohort rows contribute to the same cohort-first structure
+but are tagged with their observation type for the compiler:
+- Window rows → edge-level completeness, `p_window` variable
+- Cohort rows → path-level completeness, `p_cohort` variable
 
-### Step 6: Wire it together
+The compiler design for how these cohort objects become likelihood
+terms is specified in **doc 6, Layer 3 § "Maturation trajectory
+likelihood"** — including the `pm.Potential` vectorisation approach,
+the window/cohort hierarchical connection, and Phase S vs Phase D
+latency treatment.
 
-Worker calls `bind_snapshot_evidence()` when `snapshot_subjects` are
-present, else falls back to `bind_evidence()` (current param-file path).
+### First integration test results
 
-### Step 7: Tests
+Test graph `bayes-test-gm-rebuild`, 4 edges, 8 snapshot subjects
+(window + cohort), 6135 total DB rows:
 
-- Synthetic snapshot row generators
-- Phase S parameter recovery tests
-- Verify fallback works (no snapshot data → param file behaviour)
+| Edge | Total rows | Trajectories | Unique cohort days |
+|---|---|---|---|
+| landing→created | 663 | 82 (2 ages each) | 120 |
+| created→delegated | 504 | 0 (single-retrieval) | 120 |
+| delegated→registered | 2360 | 72 (2–31 ages) | 120 |
+| registered→success | 2608 | 81 (2–37 ages) | 120 |
 
-### Step 8: Real graph validation
-
-Run on `bayes-test-gm-rebuild` with actual DB access. Compare posteriors
-against Phase A/B param-file-only baseline.
+The current implementation emits 235 individual `pm.Multinomial`
+nodes, causing a 5-minute PyTensor compilation bottleneck (the model
+itself evaluates in 2ms per gradient step). The `pm.Potential`
+vectorisation approach in doc 6 addresses this.
 
 ---
 
-## 9. What this does NOT include
+## 10. Phase D sub-phase: latent latency with temporal drift
+
+**Date**: 19-Mar-26
+**Status**: Design notes — not yet implemented
+
+### Motivation: why Phase D matters more than originally scoped
+
+Phase S delivers the snapshot data pipeline and uses Cohort
+trajectories for completeness-adjusted probability estimation. But
+with fixed latency (Phase S), the within-trajectory maturation
+shape — the richest signal in the snapshot data — is locked in a
+constant. The model uses the cross-Cohort age gradient but not the
+within-Cohort curve. Phase D unlocks that by making `(mu, sigma)`
+latent.
+
+More importantly: if latency is drifting (the product is getting
+faster or slower), a model with stable `(mu, sigma)` averages over
+the entire training period. The forecast then projects from a
+historical average that may not reflect current conditions. A
+speed-up in fulfilment would be misattributed as a change in
+conversion probability, leading to materially wrong forecasts.
+
+**The purpose of temporal drift detection is forecasting, not
+reporting.** We are not interested in telling the user what the
+latency distribution looked like in historic periods — we use
+evidence for that. We ARE interested in ensuring the model's forward
+projections accommodate the possibility that latency has shifted.
+The forecast should project from the **current regime**, informed
+by the drift pattern, not from a diluted historical average.
+
+### Phase D sequencing: before Phase C
+
+The original sequence was A → B → S → C → D. Revised proposal:
+**A → B → S → D → C**.
+
+Arguments:
+- Phase S delivers the data. Phase D extracts the full value from
+  that data. Doing C first (slice pooling) adds more data of the
+  same kind; doing D first extracts more from what we already have.
+- The latency drift question matters more for forecast accuracy than
+  the segmentation question (does channel X differ from channel Y?).
+- The `pm.Potential` structure extends cleanly to latent CDFs — the
+  implementation path is clear.
+- Phase C (Dirichlet across slices) can be built on top of latent
+  latency more naturally than the reverse.
+
+### Design: time-binned latency
+
+Instead of one fixed `(mu, sigma)` per edge, segment Cohort days
+into time bins and allow `mu` to vary by bin:
+
+```
+mu_base_XY ~ Normal(prior_mu, prior_sigma)
+sigma_drift_XY ~ HalfNormal(small)         # how much mu moves per bin
+mu_t_XY ~ Normal(mu_{t-1}_XY, sigma_drift_XY)  for t = 1..T
+sigma_XY ~ HalfNormal(prior)                    # shared across bins
+```
+
+`mu_t` varies (central tendency of latency shifts over time).
+`sigma` is shared (inherent variability of the process, less likely
+to drift). The random walk connects successive bins: if `sigma_drift
+→ 0`, all bins collapse to `mu_base` and we recover the stable
+model. The data decides.
+
+**Bin width**: configurable via model settings (e.g.
+`LATENCY_DRIFT_BIN_DAYS = 7`), not a literal "weekly." Each Cohort
+day maps to bin `floor((anchor_day - start) / bin_days)`.
+
+**Path composition**: for downstream edges, the path CDF for Cohort
+day `d` uses `FW_compose(mu_AB_bin(d), sigma_AB, ..., mu_XY_bin(d),
+sigma_XY)`. The bin is determined by the anchor day — "the latency
+conditions when this Cohort entered are the ones that apply." FW
+composition is computed per unique bin combination (at most T
+computations per downstream edge).
+
+**Self-regularisation**: the random walk prior + hierarchical
+structure means the model is conservative by default. Insufficient
+data per bin → bins collapse to the shared base → stable-latency
+behaviour. Rich data with genuine drift → bins separate → model
+identifies the current regime.
+
+### Identifiability: p drift vs latency drift
+
+With both `p` and `mu` free to vary over time, the same observation
+(more early conversions) could be explained by higher `p` or faster
+latency. **Window trajectories resolve this** — the maturation
+SHAPE of a window trajectory separates level (p) from shape
+(latency). A steep early rise = fast latency. A high final level =
+high p. The shape and level are distinguishable when trajectories
+have 3+ retrieval ages.
+
+For edges with only 2-point trajectories (e.g. landing→created),
+within-trajectory shape information is minimal. Identifiability
+relies on the cross-Cohort pattern: different time bins showing
+systematically different maturation patterns.
+
+### Posterior output
+
+The model produces per-edge posteriors as now: `(alpha, beta)` for
+probability, plus `(mu, sigma)` for latency. The latency posterior
+is the **current-regime estimate** — the most recent time bin's
+`mu_t`, not a historical average. The drift rate `sigma_drift` is a
+diagnostic: near zero = stable, material = latency is moving.
+
+The user sees the same posterior summary and quality metrics. The
+time bins are internal model machinery, not exposed in the UI.
+The forecast benefits because it projects from current conditions.
+
+### Drift priors from `fit_history`
+
+Doc 6, Layer 5 already specifies trajectory-calibrated priors via
+DerSimonian-Laird: the between-run heterogeneity `tau²` estimated
+from `fit_history` entries sets the prior concentration. This same
+mechanism directly calibrates the drift parameters:
+
+- **`sigma_drift` prior** ← `tau_mu²` from `fit_history[].mu`
+  (between-run variance of latency log-mean). If historic fits show
+  stable `mu`, `sigma_drift_prior` is small → time bins tightly
+  constrained. If `mu` has been jumping, `sigma_drift_prior` is
+  large → bins have room to separate.
+
+- **`sigma_temporal` prior** ← `tau²` from `fit_history[].logit(p)`
+  (between-run variance of probability in logit space). Already
+  specified in doc 6 Layer 5.
+
+This makes the model adaptive without user configuration. The drift
+allowance for both probability and latency is calibrated from the
+history of each parameter. A newly created edge with no fit history
+gets uninformative drift priors (conservative, allows the data to
+speak). An edge with 10+ stable fits gets tight drift priors that
+resist spurious bin separation.
+
+The mechanism is the same DerSimonian-Laird estimate already
+designed for warm-start priors — it just feeds into a different
+consumer (drift variance prior rather than prior concentration).
+
+### Interaction with existing model
+
+The probability hierarchy (`p_base`, `p_window`, `p_cohort`,
+`sigma_temporal`) is unchanged — it governs p drift independently.
+The latency hierarchy (`mu_base`, `mu_t`, `sigma_drift`, `sigma`)
+runs in parallel. Both coexist:
+
+- `sigma_temporal`: how much conversion rates move over time
+  (prior from fit_history probability trajectory)
+- `sigma_drift`: how much latency moves over time
+  (prior from fit_history latency trajectory)
+
+Window data anchors both: edge-level p via `p_window`, edge-level
+latency via the window trajectory shape. Cohort data constrains
+the full path through composed latency and `p_path`.
+
+### Cost estimate
+
+For the test graph (4 edges, ~16 weekly bins):
+- ~64 new `mu_t` variables + 4 `sigma_drift` + 4 `sigma` = ~72
+  new free variables
+- Total ~85 free variables (from current 13)
+- NUTS sampling: estimated 5–10 minutes (from current 2 minutes)
+- Compilation: unchanged (Potential structure same, CDFs become
+  PyTensor expressions instead of constants)
+
+### Implementation steps (not yet scheduled)
+
+1. Add `mu_XY`, `sigma_XY` as free variables per latency edge
+   (basic Phase D — latent but stable latency)
+2. Update Potential emission: CDF becomes PyTensor expression of
+   `(mu, sigma)` instead of precomputed constant
+3. Verify: harness with latent latency, check identifiability
+4. Add time bins: `mu_t` random walk, bin assignment per Cohort day
+5. Verify: harness with binned latency, check drift detection
+6. Update posterior extraction: report current-regime `(mu, sigma)`
+
+---
+
+## 11. What this does NOT include (original scope)
 
 - **Snapshot write path**: posteriors go to git/YAML via webhook, not DB
 - **Snapshot topology invalidation**: separate concern (doc 10)
 - **Batch inventory optimisation**: query row counts before fetching —
   defer unless upfront cost is prohibitive
-- **Slice pooling**: Phase C. Phase S provides the data.
-- **Latent latency**: Phase D. Phase S provides richer evidence for the
-  fixed-latency completeness coupling.
+- **Slice pooling**: Phase C. Phase S provides the data. Phase D
+  (latent latency with temporal drift) is now proposed before Phase C.
 - **Epoch segmentation**: chart-rendering machinery, not needed for
   Bayes. The worker queries raw rows directly.
 
 ---
 
-## 10. Exit criteria
+## 12. Exit criteria
 
-- FE builds and sends `snapshot_subjects[]` in the Bayes submit payload,
-  derived from the pinned DSL via existing fetch planning infrastructure
-- FE includes forecasting settings in the `settings` block
-- Worker queries snapshot DB per subject and receives rows
-- Evidence binder converts snapshot rows to likelihood terms
-- Falls back to parameter file evidence when no snapshot data exists
-- No double-counting between snapshot and parameter file evidence
-- Priors still come from parameter files (warm-start path unchanged)
-- At least one real graph fitted with snapshot evidence
-- Existing graphs without snapshot data continue to work (graceful
+- [x] FE builds and sends `snapshot_subjects[]` in the Bayes submit
+  payload, derived from the pinned DSL via existing fetch planning
+  infrastructure
+- [x] FE includes forecasting settings in the `settings` block
+- [x] Worker queries snapshot DB per subject and receives rows
+- [ ] Evidence binder transforms snapshot rows into Cohort-first
+  trajectory objects, both `window()` and `cohort()` observation types
+- [ ] Model emits `pm.Potential` per edge per observation type
+  (not per-day `pm.Multinomial`), compiles in <30s
+- [ ] Full pipeline produces posteriors from real snapshot data
+  (rhat < 1.05, ess > 400)
+- [x] Falls back to parameter file evidence when no snapshot data exists
+- [x] No double-counting between snapshot and parameter file evidence
+- [x] Priors still come from parameter files (warm-start path unchanged)
+- [ ] At least one real graph fitted with snapshot evidence via FE
+- [x] Existing graphs without snapshot data continue to work (graceful
   fallback)

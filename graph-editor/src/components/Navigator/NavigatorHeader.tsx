@@ -210,17 +210,23 @@ export function NavigatorHeader() {
                       Filter by Tag
                     </label>
                     <div className="tag-filter-chips">
-                      {allTags.map(tag => (
-                        <span
-                          key={tag}
-                          className={`tag-filter-chip ${state.searchQuery === tag ? 'active' : ''}`}
-                          onClick={() => {
-                            operations.setSearchQuery(state.searchQuery === tag ? '' : tag);
-                          }}
-                        >
-                          {tag}
-                        </span>
-                      ))}
+                      {allTags.map(tag => {
+                        const isSelected = (state.selectedTags || []).includes(tag);
+                        return (
+                          <span
+                            key={tag}
+                            className={`tag-filter-chip ${isSelected ? 'active' : ''}`}
+                            onClick={() => {
+                              const current = state.selectedTags || [];
+                              operations.setSelectedTags(
+                                isSelected ? current.filter(t => t !== tag) : [...current, tag]
+                              );
+                            }}
+                          >
+                            {tag}
+                          </span>
+                        );
+                      })}
                     </div>
                   </div>
                 </>

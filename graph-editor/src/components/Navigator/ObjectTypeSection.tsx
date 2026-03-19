@@ -3,7 +3,7 @@ import { ObjectType } from '../../types';
 import { useTabContext, useFileRegistry } from '../../contexts/TabContext';
 import { useNavigatorContext } from '../../contexts/NavigatorContext';
 import { getObjectTypeTheme } from '../../theme/objectTypeTheme';
-import { AtSign, ChevronRight, FileText, TrendingUp, Coins, Clock, Package, Star, LucideIcon } from 'lucide-react';
+import { AtSign, ChevronRight, TrendingUp, Coins, Clock, Package, Star, LucideIcon } from 'lucide-react';
 import { WhereUsedService } from '../../services/whereUsedService';
 import { historicalFileService } from '../../services/historicalFileService';
 import { toggleFavourite, isFavourite, filterSystemTags } from '../../utils/favourites';
@@ -131,7 +131,7 @@ const missingEntryWarned = new Set<string>();
 
 function NavigatorItem({ fileId, isActive, tabCount }: NavigatorItemProps) {
   const { getEntry, onItemClick, onItemContextMenu } = useEntriesRegistry();
-  const { operations: navOps } = useNavigatorContext();
+  const { state: navState, operations: navOps } = useNavigatorContext();
   const [tooltip, setTooltip] = useState<string | null>(null);
   const [isHovering, setIsHovering] = useState(false);
   const hoverTimeoutRef = useRef<NodeJS.Timeout | null>(null);
@@ -306,7 +306,13 @@ function NavigatorItem({ fileId, isActive, tabCount }: NavigatorItemProps) {
                 <span
                   key={t}
                   className="navigator-tag-chip navigator-tag-clickable"
-                  onClick={(e) => { e.stopPropagation(); navOps.setSearchQuery(t); }}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    const current = navState.selectedTags || [];
+                    navOps.setSelectedTags(
+                      current.includes(t) ? current.filter((x: string) => x !== t) : [...current, t]
+                    );
+                  }}
                   title={`Filter by tag: ${t}`}
                 >{t}</span>
               ))}
@@ -466,41 +472,33 @@ export function ObjectTypeSection({
     <div 
       className="object-type-section" 
       data-type={sectionType}
-      style={{ borderLeftColor: theme.accentColour }}
     >
       <div 
         className={`section-header ${isExpanded ? 'is-expanded' : ''}`}
         onContextMenu={handleSectionContextMenu}
       >
         <div className="section-header-left" onClick={onToggle}>
-          <ChevronRight 
-            size={14} 
+          <ChevronRight
+            size={12}
             className={`chevron ${isExpanded ? 'expanded' : ''}`}
-            style={{ color: theme.accentColour }}
           />
-          <Icon 
-            size={16} 
-            strokeWidth={2}
-            style={{ color: theme.accentColour, marginRight: '6px' }}
-          />
-          <span className="section-title" style={{ color: theme.accentColour }}>{title}</span>
+          <span
+            className={`section-icon-btn ${onIndexClick ? 'clickable' : ''} ${indexIsDirty ? 'is-dirty' : ''}`}
+            onClick={onIndexClick ? (e: React.MouseEvent) => {
+              e.stopPropagation();
+              onIndexClick();
+            } : undefined}
+            title={onIndexClick ? `Open ${sectionType}s index file` : undefined}
+          >
+            <Icon
+              size={14}
+              strokeWidth={2}
+              style={{ color: indexIsDirty ? undefined : theme.accentColour }}
+            />
+          </span>
+          <span className="section-title">{title}</span>
           <span className="section-count">{entries.length}</span>
         </div>
-        
-        {onIndexClick && (
-          <div className="section-header-right">
-            <button 
-              className={`index-button ${indexIsDirty ? 'is-dirty' : ''}`}
-              onClick={(e) => {
-                e.stopPropagation();
-                onIndexClick();
-              }}
-              title={`Open ${sectionType}s index file`}
-            >
-              <FileText size={14} />
-            </button>
-          </div>
-        )}
       </div>
       
       <div className={`section-content ${isExpanded ? 'expanded' : ''}`}>
@@ -526,7 +524,6 @@ export function ObjectTypeSection({
                     <ChevronRight 
                       size={12} 
                       className={`chevron ${isSubCatExpanded ? 'expanded' : ''}`}
-                      style={{ color: theme.accentColour, opacity: 0.7 }}
                     />
                     {React.createElement(SubCatIcon, { 
                       size: 14,
@@ -572,7 +569,6 @@ export function ObjectTypeSection({
                     <ChevronRight 
                       size={12} 
                       className={`chevron ${isTagExpanded ? 'expanded' : ''}`}
-                      style={{ color: theme.accentColour, opacity: 0.7 }}
                     />
                     <span className="navigator-tag-chip" style={{ marginRight: '4px' }}>{tagKey}</span>
                     <span className="section-count">{tagEntries.length}</span>

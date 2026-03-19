@@ -2,10 +2,10 @@
 
 .navigator-controls {
   display: flex;
-  gap: 6px;
-  padding: 6px 8px;
-  background: #f5f5f5;
-  border-bottom: 1px solid #e0e0e0;
+  gap: 4px;
+  padding: 4px 8px;
+  background: transparent;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.06);
   flex-shrink: 0;
 }
 
@@ -20,31 +20,34 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 4px 8px;
-  background: white;
-  border: 1px solid #d0d0d0;
-  border-radius: 4px;
-  font-size: 12px;
+  padding: 3px 6px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  font-size: 11px;
   font-family: inherit;
   cursor: pointer;
-  transition: all 0.15s ease;
-  min-height: 26px;
+  transition: all 0.1s ease;
+  min-height: 22px;
+  color: #666;
 }
 
 .control-button:hover {
-  background: #f8f9fa;
-  border-color: #0066cc;
+  background: rgba(0, 0, 0, 0.04);
+  border-color: transparent;
+  color: #333;
 }
 
 .control-button.active {
-  background: #e3f2fd;
-  border-color: #0066cc;
+  background: rgba(0, 102, 204, 0.06);
+  border-color: transparent;
+  color: #0066cc;
 }
 
 .control-button.has-selection {
-  background: #eff6ff;
-  border-color: #3b82f6;
-  color: #1d4ed8;
+  background: rgba(59, 130, 246, 0.08);
+  border-color: transparent;
+  color: #2563eb;
 }
 
 .control-button-label {
@@ -165,34 +168,36 @@
 /* ===== DARK MODE ===== */
 
 [data-theme="dark"] .navigator-controls {
-  background: #252525;
-  border-bottom-color: #404040;
+  background: transparent;
+  border-bottom-color: rgba(255, 255, 255, 0.06);
 }
 
 [data-theme="dark"] .control-button {
-  background: #2d2d2d;
-  border-color: #555;
-  color: #e0e0e0;
+  background: transparent;
+  border-color: transparent;
+  color: #888;
 }
 
 [data-theme="dark"] .control-button:hover {
-  background: #353535;
-  border-color: #4d9ef7;
+  background: rgba(255, 255, 255, 0.05);
+  border-color: transparent;
+  color: #ccc;
 }
 
 [data-theme="dark"] .control-button.active {
-  background: #1a2a40;
-  border-color: #4d9ef7;
+  background: rgba(77, 158, 247, 0.1);
+  border-color: transparent;
+  color: #4d9ef7;
 }
 
 [data-theme="dark"] .control-button.has-selection {
-  background: #172554;
-  border-color: #4d9ef7;
+  background: rgba(77, 158, 247, 0.1);
+  border-color: transparent;
   color: #60a5fa;
 }
 
 [data-theme="dark"] .control-button-arrow {
-  color: #999;
+  color: #666;
 }
 
 [data-theme="dark"] .control-dropdown {

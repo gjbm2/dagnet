@@ -11,8 +11,6 @@ import { useTabContext, fileRegistry } from '../contexts/TabContext';
 import { credentialsManager } from '../lib/credentials';
 import { operationRegistryService } from '../services/operationRegistryService';
 import { sessionLogService } from '../services/sessionLogService';
-import { startNonBlockingPull } from '../services/nonBlockingPullService';
-import { dispatchOpenConflictModal } from './usePullAll';
 import {
   fetchBayesConfig,
   encryptCallbackToken,
@@ -186,10 +184,39 @@ export function useBayesTrigger(computeMode: BayesComputeMode = 'local') {
             }
           }
 
-          if (snapshotSubjects.length > 0) {
-            sessionLogService.info('bayes', 'BAYES_SNAPSHOT_SUBJECTS',
-              `Built ${snapshotSubjects.length} snapshot subjects from ${explodedSlices.length} exploded slices`);
+          // Flatten target.targetId → edge_id for worker compatibility.
+          // The worker expects a flat `edge_id` key, not nested `target.targetId`.
+          // Also add equivalent_hashes from hash-mappings so the worker can
+          // query all equivalent core_hashes (e.g. bayes-test-* ↔ gm-*).
+          const { getClosureSet } = await import('../services/hashMappingsService');
+          for (const subj of snapshotSubjects) {
+            if (subj.target?.targetId && !subj.edge_id) {
+              subj.edge_id = subj.target.targetId;
+            }
+            if (subj.core_hash && !subj.equivalent_hashes?.length) {
+              subj.equivalent_hashes = getClosureSet(subj.core_hash);
+            }
           }
+
+          // Log comprehensive commission details
+          const commissionLogId = sessionLogService.startOperation(
+            'info', 'bayes', 'BAYES_COMMISSION_PLAN',
+            `Bayes commission: DSL="${pinnedDsl}", ${explodedSlices.length} slices, ${snapshotSubjects.length} subjects`,
+          );
+          for (let i = 0; i < explodedSlices.length; i++) {
+            sessionLogService.addChild(commissionLogId, 'info', 'BAYES_SLICE',
+              `Slice ${i + 1}/${explodedSlices.length}: "${explodedSlices[i]}"`);
+          }
+          for (const subj of snapshotSubjects) {
+            sessionLogService.addChild(commissionLogId, 'info', 'BAYES_SUBJECT',
+              `Subject: param_id=${subj.param_id || '?'}, edge_id=${subj.edge_id || '?'}, core_hash=${subj.core_hash || '?'}, ` +
+              `anchor=${subj.anchor_from || '?'}→${subj.anchor_to || '?'}, sweep=${subj.sweep_from || '?'}→${subj.sweep_to || '?'}, ` +
+              `slices=[${(subj.slice_keys || []).join(',')}], read_mode=${subj.read_mode || '?'}, ` +
+              `equiv_hashes=${(subj.equivalent_hashes || []).length}`);
+          }
+          sessionLogService.endOperation(commissionLogId, 'success',
+            `${snapshotSubjects.length} subjects from ${explodedSlices.length} slices`);
+
         } catch (err: any) {
           // Non-fatal: fall back to param-file-only evidence
           sessionLogService.warning('bayes', 'BAYES_SNAPSHOT_SUBJECTS_FAILED',
@@ -270,7 +297,31 @@ export function useBayesTrigger(computeMode: BayesComputeMode = 'local') {
       operationRegistryService.setLabel(opId, `Bayes ${modeLabel}: submitting ${graphLabel}…`);
       operationRegistryService.setCancellable(opId, handleCancel, true);
 
-      // 8. Submit
+      // 8. Log payload summary + submit
+      const paramFileIds = Object.keys(parameterFiles);
+      sessionLogService.info('bayes', 'BAYES_PAYLOAD_SUMMARY',
+        `Submitting: graph=${activeTab.fileId}, ${paramFileIds.length} param files, ` +
+        `${snapshotSubjects.length} snapshot subjects, mode=${computeMode}`,
+        JSON.stringify({
+          graph_id: activeTab.fileId,
+          graph_file_path: graphFilePath,
+          repo: `${gitCred.owner}/${gitCred.name}`,
+          branch: navState.selectedBranch || 'main',
+          parameter_file_ids: paramFileIds,
+          snapshot_subject_count: snapshotSubjects.length,
+          snapshot_subjects_preview: snapshotSubjects.map(s => ({
+            param_id: s.param_id,
+            edge_id: s.edge_id,
+            core_hash: s.core_hash,
+            read_mode: s.read_mode,
+            anchor: `${s.anchor_from}→${s.anchor_to}`,
+            sweep: `${s.sweep_from}→${s.sweep_to}`,
+            slice_keys: s.slice_keys,
+          })),
+          settings_keys: Object.keys(forecastingSettings),
+          webhook_url: webhookUrl,
+        }, null, 2));
+
       const jobId = await submitBayesFit({
         graph_id: activeTab.fileId,
         repo: `${gitCred.owner}/${gitCred.name}`,
@@ -334,9 +385,6 @@ export function useBayesTrigger(computeMode: BayesComputeMode = 'local') {
         error: finalStatus.error,
       };
 
-      setState({ status: finalStatus.status === 'complete' ? 'complete' : 'failed', jobId, error: finalStatus.error ?? null, lastResult: record });
-      operationRegistryService.complete(opId, finalStatus.status === 'complete' ? 'complete' : 'error', finalStatus.error);
-
       if (finalStatus.status === 'complete') {
         const r = finalStatus.result as Record<string, unknown> | undefined;
         const ver = r?.version ?? 'unknown';
@@ -344,32 +392,39 @@ export function useBayesTrigger(computeMode: BayesComputeMode = 'local') {
         const timingSummary = timings ? ` | neon=${timings.neon_ms}ms fitting=${timings.fitting_ms}ms total=${timings.total_ms}ms` : '';
         sessionLogService.success('bayes', 'BAYES_DEV_COMPLETE', `Job ${jobId} complete (v${ver}${timingSummary})`, JSON.stringify(finalStatus.result, null, 2), { jobId });
 
-        // 10. Non-blocking pull: countdown → 3-way merge → cascade.
-        // Uses the same infrastructure as daily automation pulls:
-        // - Shows countdown in progress indicator (user can cancel)
-        // - 3-way merge preserves local changes (doesn't force-overwrite)
-        // - Surfaces conflicts via toast with "Resolve" action
-        // - On success: triggers "Get All from Files" to cascade posteriors
-        //   from param files to graph edges
+        // 10. Fetch and apply the Bayes patch file directly.
+        //
+        // The webhook writes _bayes/patch-{job_id}.json to git. We fetch
+        // ONLY that file (not a full pull), apply the posteriors into local
+        // parameter and graph files, then cascade to graph edges.
+        // No 3-way merge, no conflict risk.
         {
-          const repoName = gitCred.name;
-          const branchName = navState.selectedBranch || 'main';
+          try {
+            const { fetchAndApplyPatch } = await import('../services/bayesPatchService');
+            // The patch path is in the webhook response (the worker's _job_id
+            // differs from the Modal call_id that the FE tracks as jobId).
+            const webhookResp = (r as any)?.webhook_response?.body;
+            const patchPath = webhookResp?.patch_path || `_bayes/patch-${jobId}.json`;
+            console.log(`[useBayesTrigger] Fetching patch: ${patchPath} (from webhookResp: ${!!webhookResp?.patch_path})`);
+            const edgesUpdated = await fetchAndApplyPatch({
+              owner: gitCred.owner,
+              repo: gitCred.name,
+              branch: navState.selectedBranch || 'main',
+              token: gitCred.token,
+              patchPath,
+              graphId: activeTab.fileId,
+            });
 
-          startNonBlockingPull({
-            repository: repoName,
-            branch: branchName,
-            countdownSeconds: 5,
-            onComplete: async () => {
-              // After successful pull, cascade param file data → graph edges.
-              // This propagates posteriors from IDB param files to graph edges
-              // via the same file-to-graph sync used by "Get from File".
-              sessionLogService.info('bayes', 'BAYES_POST_PULL_CASCADE',
-                'Cascading posteriors from param files to graph edges');
-              try {
-                const { getParameterFromFile } = await import('../services/dataOperations/fileToGraphSync');
-                const { getGraphStore } = await import('../contexts/GraphStoreContext');
-                const store = getGraphStore(activeTab.fileId);
-                if (!store) throw new Error('No graph store');
+            console.log(`[useBayesTrigger] Patch applied: ${edgesUpdated} edges updated`);
+            if (edgesUpdated > 0) {
+              sessionLogService.success('bayes', 'BAYES_PATCH_APPLIED',
+                `Applied Bayes posteriors to ${edgesUpdated} edges`);
+
+              // Cascade from param files to graph edges
+              const { getParameterFromFile } = await import('../services/dataOperations/fileToGraphSync');
+              const { getGraphStore } = await import('../contexts/GraphStoreContext');
+              const store = getGraphStore(activeTab.fileId);
+              if (store) {
                 const currentDSL = store.getState().currentDSL || '';
                 const setGraph = (g: any) => { if (g) store.getState().setGraph(g); };
                 const graph = store.getState().graph;
@@ -386,20 +441,33 @@ export function useBayesTrigger(computeMode: BayesComputeMode = 'local') {
                   });
                   cascaded++;
                 }
+                // Sync the cascaded graph back to FileRegistry/IDB.
+                // setGraph updates GraphStore in-memory but doesn't
+                // immediately persist to IDB. Explicit updateFile ensures
+                // posteriors are visible to all consumers.
+                const updatedGraph = store.getState().graph;
+                if (updatedGraph) {
+                  await fileRegistry.updateFile(activeTab.fileId, updatedGraph);
+                }
                 sessionLogService.success('bayes', 'BAYES_CASCADE_COMPLETE',
                   `Cascaded ${cascaded} params from files to graph`);
-              } catch (e: any) {
-                sessionLogService.warning('bayes', 'BAYES_CASCADE_ERROR',
-                  `Post-pull cascade failed: ${e.message}. Use Data > Get All from Files manually.`);
               }
-            },
-            onConflicts: (conflicts, pullOpId) => {
-              // Surface conflicts via the persistent listener in useStalenessNudges.
-              dispatchOpenConflictModal(conflicts, pullOpId);
-            },
-          });
+            } else {
+              sessionLogService.warning('bayes', 'BAYES_PATCH_EMPTY',
+                'Patch file found but no edges updated');
+            }
+          } catch (e: any) {
+            console.error('[useBayesTrigger] Patch error:', e.message, e);
+            sessionLogService.warning('bayes', 'BAYES_PATCH_ERROR',
+              `Patch fetch/apply failed: ${e.message}. Patch remains in git for next pull.`);
+          }
         }
+        // Report complete AFTER patch application so consumers see posteriors
+        setState({ status: 'complete', jobId, error: null, lastResult: record });
+        operationRegistryService.complete(opId, 'complete', undefined);
       } else {
+        setState({ status: 'failed', jobId, error: finalStatus.error ?? null, lastResult: record });
+        operationRegistryService.complete(opId, 'error', finalStatus.error);
         sessionLogService.error('bayes', 'BAYES_DEV_FAILED', `Job ${jobId} failed: ${finalStatus.error}`, undefined, { jobId });
       }
 

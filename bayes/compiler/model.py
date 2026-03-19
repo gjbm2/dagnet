@@ -369,98 +369,163 @@ def _emit_cohort_likelihoods(
     edge_var_names: dict[str, str] | None = None,
     model=None,
 ) -> None:
-    """Emit cohort likelihoods: trajectory Multinomials and/or per-day Binomials.
+    """Emit cohort likelihoods via pm.Potential (vectorised per obs_type).
 
-    Trajectory days (multiple retrieval ages) → Multinomial over intervals
-    with anchor-based denominator and path-level p_path.
-    Single-retrieval days → existing per-day Binomial with completeness.
+    Trajectory Cohort days (multiple retrieval ages) → vectorised
+    Multinomial log-probability via pm.Potential (one per obs_type per
+    edge). Single-retrieval days → pm.Binomial with completeness.
+
+    See doc 6 § "Efficient emission: pm.Potential vectorisation".
     """
     import pymc as pm
     import numpy as np
+    import pytensor.tensor as pt
+    from .completeness import shifted_lognormal_cdf
 
-    for c_idx, c_obs in enumerate(ev.cohort_obs):
-        c_suffix = f"_c{c_idx}" if len(ev.cohort_obs) > 1 else ""
+    # Collect all trajectories across CohortObservation objects,
+    # grouped by obs_type. Each obs_type gets one Potential.
+    window_trajs = []
+    cohort_trajs = []
+    all_daily = []
 
-        # --- Trajectory Multinomials (Phase S) ---
-        for t_idx, traj in enumerate(c_obs.trajectories):
-            if len(traj.retrieval_ages) < 2 or traj.a <= 0:
+    for c_obs in ev.cohort_obs:
+        for traj in c_obs.trajectories:
+            if len(traj.retrieval_ages) < 2 or traj.n <= 0:
                 continue
+            if traj.obs_type == "window":
+                window_trajs.append(traj)
+            else:
+                cohort_trajs.append(traj)
+        if c_obs.daily:
+            all_daily.extend(c_obs.daily)
 
-            t_suffix = f"{c_suffix}_t{t_idx}"
+    # --- Emit trajectory Potentials ---
+    # Phase S: CDFs are constants (fixed latency). The entire Multinomial
+    # logp is computed as numpy arrays with only p_expr as the single
+    # PyTensor variable. This creates a tiny PyTensor graph regardless
+    # of trajectory count. See doc 6 § "pm.Potential vectorisation".
+    for obs_type, trajs in [("window", window_trajs), ("cohort", cohort_trajs)]:
+        if not trajs:
+            continue
 
-            # Build p_path: product of p variables along the path from anchor.
-            # For the first edge from anchor, p_path = p_var (this edge only).
-            # For downstream edges, p_path = p_upstream1 * p_upstream2 * ... * p_var.
-            p_path = _resolve_path_probability(
-                traj.path_edge_ids, ev.edge_id, p_var,
+        # Resolve p expression for this obs_type
+        if obs_type == "window":
+            p_expr = p_var  # edge-level probability
+        else:
+            p_expr = _resolve_path_probability(
+                trajs[0].path_edge_ids, ev.edge_id, p_var,
                 topology, edge_var_names, model,
             )
 
-            # Compute path CDF at each retrieval age (fixed latency in Phase A/B/S)
-            from .completeness import shifted_lognormal_cdf
-            cdf_vals = [
-                shifted_lognormal_cdf(
-                    age,
-                    ev.latency_prior.onset_delta_days if ev.latency_prior else 0.0,
-                    ev.latency_prior.mu if ev.latency_prior else 0.0,
-                    ev.latency_prior.sigma if ev.latency_prior else 0.01,
-                )
-                if ev.latency_prior else 1.0
-                for age in traj.retrieval_ages
-            ]
+        # Resolve CDF parameters for this obs_type
+        if obs_type == "window":
+            onset = ev.latency_prior.onset_delta_days if ev.latency_prior else 0.0
+            mu = ev.latency_prior.mu if ev.latency_prior else 0.0
+            sigma = ev.latency_prior.sigma if ev.latency_prior else 0.01
+        else:
+            et = topology.edges.get(ev.edge_id) if topology else None
+            if et and hasattr(et, 'path_latency') and et.path_latency:
+                onset = et.path_latency.path_delta
+                mu = et.path_latency.path_mu
+                sigma = et.path_latency.path_sigma
+            elif ev.latency_prior:
+                onset = ev.latency_prior.onset_delta_days
+                mu = ev.latency_prior.mu
+                sigma = ev.latency_prior.sigma
+            else:
+                onset, mu, sigma = 0.0, 0.0, 0.01
 
-            # Build interval counts: [y₁, Δy₂, ..., Δyₘ, a - yₘ]
+        has_latency = ev.latency_prior is not None and (sigma > 0.01 or onset > 0)
+
+        # Precompute ALL interval CDF coefficients and counts as numpy.
+        # For each trajectory day, the Multinomial logp kernel is:
+        #   Σ_i count_i * log(p * cdf_coeff_i)     for conversion intervals
+        #   + count_remainder * log(1 - p * cdf_final)
+        #
+        # We split into:
+        #   conversion_logp = Σ (count_i * log(p)) + Σ (count_i * log(cdf_coeff_i))
+        #                   = total_k * log(p) + Σ (count_i * log(cdf_coeff_i))
+        #   remainder_logp  = Σ remainder_j * log(1 - p * cdf_final_j)
+        #
+        # The first term depends on p only via log(p) scaled by total_k.
+        # The cdf coefficients are constants (Phase S).
+        # The remainder terms each depend on p via log(1 - p * const).
+
+        total_conversion_count = 0.0     # sum of all interval counts (= total k across all days)
+        cdf_logp_constant = 0.0          # sum of count_i * log(cdf_coeff_i) — pure constant
+        remainder_counts = []            # one per trajectory day
+        remainder_cdf_finals = []        # one per trajectory day
+
+        for traj in trajs:
             cum_y = traj.cumulative_y
-            interval_counts = [cum_y[0]]
+
+            # CDF at each retrieval age
+            if has_latency:
+                cdf_vals = [shifted_lognormal_cdf(age, onset, mu, sigma)
+                            for age in traj.retrieval_ages]
+            else:
+                cdf_vals = [1.0] * len(traj.retrieval_ages)
+
+            # Interval counts and CDF coefficients
+            # Interval 0: count = y_0, cdf_coeff = cdf_0
+            # Interval j: count = y_j - y_{j-1}, cdf_coeff = cdf_j - cdf_{j-1}
+            # Remainder: count = n - y_last, cdf_final = cdf_last
+            counts = [cum_y[0]]
+            coeffs = [max(cdf_vals[0], 1e-15)]
             for j in range(1, len(cum_y)):
-                interval_counts.append(cum_y[j] - cum_y[j - 1])
-            interval_counts.append(traj.a - cum_y[-1])
+                counts.append(max(0, cum_y[j] - cum_y[j - 1]))
+                coeffs.append(max(cdf_vals[j] - cdf_vals[j - 1], 1e-15))
 
-            # Build interval probabilities
-            interval_probs = [p_path * cdf_vals[0]]
-            for j in range(1, len(cdf_vals)):
-                diff = max(cdf_vals[j] - cdf_vals[j - 1], 1e-10)
-                interval_probs.append(p_path * diff)
-            interval_probs.append(1.0 - p_path * cdf_vals[-1])
+            remainder = max(0, traj.n - cum_y[-1])
+            cdf_final = min(cdf_vals[-1], 1.0 - 1e-10)
 
-            # Stack into PyTensor vectors
-            import pytensor.tensor as pt
-            p_vec = pt.stack(interval_probs)
-            # Ensure probabilities are valid (clip to avoid numerical issues)
-            p_vec = pm.math.clip(p_vec, 1e-8, 1.0 - 1e-8)
-            # Renormalise to sum to 1
-            p_vec = p_vec / pt.sum(p_vec)
+            # Accumulate
+            for c, coeff in zip(counts, coeffs):
+                if c > 0:
+                    total_conversion_count += c
+                    cdf_logp_constant += c * np.log(max(coeff, 1e-30))
 
-            obs_arr = np.array(interval_counts, dtype=np.int64)
+            remainder_counts.append(remainder)
+            remainder_cdf_finals.append(cdf_final)
 
-            safe_date = traj.date.replace("-", "")
-            pm.Multinomial(
-                f"obs_traj_{safe_id}{t_suffix}_{safe_date}",
-                n=traj.a,
-                p=p_vec,
-                observed=obs_arr,
+        # Build the Potential with minimal PyTensor nodes:
+        #   logp = total_k * log(p) + constant + Σ remainder_j * log(1 - p * cdf_j)
+        remainder_counts_arr = np.array(remainder_counts, dtype=np.float64)
+        remainder_cdf_arr = np.array(remainder_cdf_finals, dtype=np.float64)
+
+        logp = (
+            total_conversion_count * pt.log(pt.clip(p_expr, 1e-12, 1.0))
+            + cdf_logp_constant
+            + pt.sum(remainder_counts_arr * pt.log(pt.clip(1.0 - p_expr * remainder_cdf_arr, 1e-12, 1.0)))
+        )
+
+        pm.Potential(f"traj_{obs_type}_{safe_id}", logp)
+        diagnostics.append(
+            f"  Potential traj_{obs_type}_{safe_id}: "
+            f"{len(trajs)} Cohort days, total_k={total_conversion_count:.0f}, "
+            f"p_type={'edge' if obs_type == 'window' else 'path'}"
+        )
+
+    # --- Single-retrieval days (existing per-day Binomial) ---
+    if all_daily:
+        n_arr = np.array([d.n for d in all_daily], dtype=np.int64)
+        k_arr = np.array([min(d.k, d.n) for d in all_daily], dtype=np.int64)
+        compl_arr = np.array([d.completeness for d in all_daily], dtype=np.float64)
+
+        mask = n_arr > 0
+        if mask.any():
+            n_arr = n_arr[mask]
+            k_arr = k_arr[mask]
+            compl_arr = compl_arr[mask]
+
+            p_effective = pm.math.clip(p_var * compl_arr, 0.001, 0.999)
+
+            pm.Binomial(
+                f"obs_daily_{safe_id}",
+                n=n_arr,
+                p=p_effective,
+                observed=k_arr,
             )
-
-        # --- Single-retrieval days (existing per-day Binomial) ---
-        if c_obs.daily:
-            n_arr = np.array([d.n for d in c_obs.daily], dtype=np.int64)
-            k_arr = np.array([min(d.k, d.n) for d in c_obs.daily], dtype=np.int64)
-            compl_arr = np.array([d.completeness for d in c_obs.daily], dtype=np.float64)
-
-            mask = n_arr > 0
-            if mask.any():
-                n_arr = n_arr[mask]
-                k_arr = k_arr[mask]
-                compl_arr = compl_arr[mask]
-
-                p_effective = pm.math.clip(p_var * compl_arr, 0.001, 0.999)
-
-                pm.Binomial(
-                    f"obs_c_{safe_id}{c_suffix}",
-                    n=n_arr,
-                    p=p_effective,
-                    observed=k_arr,
-                )
 
 
 def _resolve_path_probability(

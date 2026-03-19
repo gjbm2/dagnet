@@ -22,7 +22,7 @@ design docs contain the detail.
 | **Compiler phases** | `8-compiler-implementation-phases.md` | Phased delivery plan for compiler: A (independent), B (Dirichlet), S (snapshot evidence), C (slices), D (latency coupling), E (fan-out) |
 | **FE posterior consumption** | `9-fe-posterior-consumption-and-overlay.md` | FE changes for posterior display, settings, fit guidance, stats deletion schedule |
 | **Topology signatures** | `10-topology-signatures.md` | Per-fit-unit structural fingerprinting for posterior staleness detection |
-| **Snapshot evidence** | `11-snapshot-evidence-assembly.md` | Phase S: direct snapshot DB queries replace inline param-file evidence. FE fetch plan, worker DB integration, maturation trajectories. Sequenced A → B → **S** → C → D. |
+| **Snapshot evidence** | `11-snapshot-evidence-assembly.md` | Phase S: direct snapshot DB queries replace inline param-file evidence. FE fetch plan, worker DB integration, maturation trajectories. Phase D (latent latency + temporal drift) now sequenced before Phase C: A → B → **S** → **D** → C. |
 
 **Context**: `../codebase/APP_ARCHITECTURE.md` (app architecture),
 `../project-db/` (snapshot DB)
@@ -49,7 +49,7 @@ Async infrastructure (done)
          │
          ▼
 Bayesian inference
-  Phase A (independent) → Phase B (Dirichlet) → Phase S (snapshot evidence) → Phase C (slices) → Phase D (coupling)
+  Phase A (independent) → Phase B (Dirichlet) → Phase S (snapshot evidence) → Phase D (latent latency + drift) → Phase C (slices)
          │                       │                     │                    │
          ▼                       ▼                     ▼                    ▼
     FE overlay ──────────── FE overlay ─────────── FE overlay ────────── FE overlay
@@ -512,14 +512,21 @@ persisted in snapshot DB). For the analytic pipeline,
 `path_delta` is absent. Proper `path_delta` accumulation through
 topo DP comes with Semantic Foundation Phase 2 (doc 1 §15.3.4).
 
-**Browser-closed job rehydration**
+**Browser-closed job rehydration (deferred)**
 
 If the user closes the browser while a Bayes fit is running on Modal,
-the FE loses the job ID and polling state. On next boot, the app must
-detect in-flight or recently-completed jobs and rehydrate: check for
-pending webhook commits, pull any results that landed while offline,
-and surface the outcome to the user. Without this, the job completes
-silently and the user never sees the posteriors until a manual pull.
+the FE loses the job ID and polling state. The webhook still fires and
+commits a patch file (`_bayes/patch-{job_id}.json`) to git. On next
+boot, the app must detect unapplied patch files in the `_bayes/`
+directory, apply them (upsert posteriors into local parameter and
+graph files), and surface the outcome to the user.
+
+The happy path (browser open) is implemented: `fetchAndApplyPatch()`
+reads the patch file from git by path on job completion, applies it,
+and deletes it. The closed-browser path requires the workspace service
+to scan `_bayes/` during pull/clone and call the patch application
+logic — deferred until needed (see doc 4 § "Return path
+re-architecture").
 
 **Cross-graph prior transfer (superstructure guidance)**
 

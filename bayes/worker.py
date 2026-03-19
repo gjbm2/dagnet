@@ -171,7 +171,14 @@ def _fit_graph_placeholder(payload: dict, report_progress=None) -> dict:
                 json=webhook_body,
                 timeout=30,
             )
-            webhook_response = {"status": resp.status_code}
+            webhook_response = {
+                "status": resp.status_code,
+                "body": (
+                    resp.json()
+                    if resp.headers.get("content-type", "").startswith("application/json")
+                    else resp.text[:500]
+                ),
+            }
             log.append(f"webhook POST {resp.status_code}")
             if resp.status_code >= 400:
                 error = f"webhook returned {resp.status_code}"
@@ -278,6 +285,36 @@ def _fit_graph_compiler(payload: dict, report_progress=None) -> dict:
         log.append(f"evidence: {n_with_data} edges with data, {n_skipped} skipped")
         for d in evidence.diagnostics:
             log.append(f"  evidence: {d}")
+
+        # Intermediate evidence summary — what data is the model actually getting?
+        for edge_id, edge_ev in evidence.edges.items():
+            if edge_ev.skipped:
+                continue
+            n_cohort_obs = len(edge_ev.cohort_obs)
+            n_window_traj = 0
+            n_cohort_traj = 0
+            n_window_daily = 0
+            n_cohort_daily = 0
+            for co in edge_ev.cohort_obs:
+                for t in co.trajectories:
+                    if t.obs_type == "window":
+                        n_window_traj += 1
+                    else:
+                        n_cohort_traj += 1
+                for d in co.daily:
+                    # daily obs don't have obs_type yet; infer from slice_dsl
+                    if "window" in co.slice_dsl:
+                        n_window_daily += 1
+                    else:
+                        n_cohort_daily += 1
+            has_snapshot = n_window_traj + n_cohort_traj + n_window_daily + n_cohort_daily > 0
+            log.append(
+                f"  evidence detail {edge_id[:8]}…: "
+                f"source={'snapshot' if has_snapshot else 'param_file'}, "
+                f"window_traj={n_window_traj}, cohort_traj={n_cohort_traj}, "
+                f"window_daily={n_window_daily}, cohort_daily={n_cohort_daily}"
+            )
+
         timings["evidence_ms"] = int((time.time() - t0) * 1000) - timings.get("neon_ms", 0) - timings.get("topology_ms", 0)
 
         if n_with_data == 0:

@@ -131,6 +131,9 @@
 /* Colour swatch - clickable to change colour */
 .scenario-colour-swatch-wrapper {
   flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  overflow: hidden;
   pointer-events: auto; /* Clickable for colour picker */
   transition: transform 0.2s ease, box-shadow 0.2s ease;
   border-radius: 3px;
