@@ -287,12 +287,47 @@ def bind_snapshot_evidence(
 
         edges_evidence[edge_id] = ev
 
-    return BoundEvidence(
+    result = BoundEvidence(
         edges=edges_evidence,
         settings=settings,
         today=today_date.strftime("%-d-%b-%y"),
         diagnostics=diagnostics,
     )
+
+    # Recency weighting: recent trajectories contribute more to the likelihood
+    half_life = float(settings.get("RECENCY_HALF_LIFE_DAYS", 30))
+    _apply_recency_weights(result, today_date, half_life, diagnostics)
+
+    return result
+
+
+def _apply_recency_weights(
+    evidence: BoundEvidence,
+    today: datetime,
+    half_life_days: float,
+    diagnostics: list[str],
+) -> None:
+    """Set recency_weight on each trajectory based on anchor_day age.
+
+    weight = exp(-ln2 * age_days / half_life_days)
+    Recent trajectories ≈ 1.0, old ones decay toward 0.
+    """
+    import math
+    ln2 = math.log(2)
+    n_weighted = 0
+    for ev in evidence.edges.values():
+        if ev.skipped:
+            continue
+        for co in ev.cohort_obs:
+            for traj in co.trajectories:
+                age = _date_age(traj.date, today)
+                traj.recency_weight = math.exp(-ln2 * age / half_life_days)
+                n_weighted += 1
+    if n_weighted > 0:
+        diagnostics.append(
+            f"INFO recency: {n_weighted} trajectories weighted "
+            f"(half_life={half_life_days:.0f}d)"
+        )
 
 
 def _bind_from_snapshot_rows(
@@ -392,21 +427,15 @@ def _build_trajectories_for_obs_type(
                 seen_ret[ret_key] = r
         deduped = sorted(seen_ret.values(), key=lambda r: str(r.get("retrieved_at", "")))
 
-        # Resolve denominator: x for window, a for cohort
+        # Resolve denominator: max x for window (x grows as more data
+        # arrives — early retrievals have incomplete counts), max a for cohort.
+        # Uses the same aggregation logic as derive_cohort_maturity.
         if obs_type == "window":
-            denom = None
-            for r in deduped:
-                x = _safe_int(r.get("x"))
-                if x is not None and x > 0:
-                    denom = x
-                    break
+            denom = max((_safe_int(r.get("x")) or 0 for r in deduped), default=0)
+            denom = denom if denom > 0 else None
         else:
-            denom = None
-            for r in deduped:
-                a = _safe_int(r.get("a"))
-                if a is not None and a > 0:
-                    denom = a
-                    break
+            denom = max((_safe_int(r.get("a")) or 0 for r in deduped), default=0)
+            denom = denom if denom > 0 else None
 
         if denom is None or denom <= 0:
             continue

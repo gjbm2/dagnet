@@ -142,6 +142,7 @@ class CohortDailyTrajectory:
     retrieval_ages: list[float] = field(default_factory=list)   # sorted ascending
     cumulative_y: list[int] = field(default_factory=list)       # monotonised target counts
     path_edge_ids: list[str] = field(default_factory=list)      # edges on path (for p_path)
+    recency_weight: float = 1.0     # exp(-ln2 * age / half_life), 1.0 = most recent
 
     @property
     def a(self) -> int:

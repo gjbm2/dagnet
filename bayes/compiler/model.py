@@ -648,22 +648,22 @@ def _emit_cohort_likelihoods(
             for traj in trajs:
                 n_ages = len(traj.retrieval_ages)
                 cum_y = traj.cumulative_y
+                w = getattr(traj, 'recency_weight', 1.0)
 
-                # First interval: coeff = CDF(t0), no previous
                 # First interval
                 curr_indices.append(age_offset)
                 prev_indices.append(-1)
-                interval_counts.append(float(cum_y[0]))
+                interval_counts.append(float(cum_y[0]) * w)
 
                 # Subsequent intervals
                 for j in range(1, n_ages):
                     curr_indices.append(age_offset + j)
                     prev_indices.append(age_offset + j - 1)
-                    interval_counts.append(float(max(0, cum_y[j] - cum_y[j - 1])))
+                    interval_counts.append(float(max(0, cum_y[j] - cum_y[j - 1])) * w)
 
                 # Remainder
                 remainder_indices.append(age_offset + n_ages - 1)
-                remainder_counts_list.append(float(max(0, traj.n - cum_y[-1])))
+                remainder_counts_list.append(float(max(0, traj.n - cum_y[-1])) * w)
 
                 age_offset += n_ages
 
@@ -708,6 +708,7 @@ def _emit_cohort_likelihoods(
 
             for traj in trajs:
                 cum_y = traj.cumulative_y
+                w = getattr(traj, 'recency_weight', 1.0)
 
                 if has_any_latency:
                     cdf_vals = [shifted_lognormal_cdf(age, onset, mu_fixed, sigma_fixed)
@@ -715,13 +716,13 @@ def _emit_cohort_likelihoods(
                 else:
                     cdf_vals = [1.0] * len(traj.retrieval_ages)
 
-                counts = [cum_y[0]]
+                counts = [cum_y[0] * w]
                 coeffs = [max(cdf_vals[0], 1e-15)]
                 for j in range(1, len(cum_y)):
-                    counts.append(max(0, cum_y[j] - cum_y[j - 1]))
+                    counts.append(max(0, cum_y[j] - cum_y[j - 1]) * w)
                     coeffs.append(max(cdf_vals[j] - cdf_vals[j - 1], 1e-15))
 
-                remainder = max(0, traj.n - cum_y[-1])
+                remainder = max(0, traj.n - cum_y[-1]) * w
                 cdf_final = min(cdf_vals[-1], 1.0 - 1e-10)
 
                 for c, coeff in zip(counts, coeffs):

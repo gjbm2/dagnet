@@ -32,6 +32,20 @@ describe('chartDisplayPlanningService', () => {
     expect(plan.fallbackReasons.length).toBeGreaterThan(0);
   });
 
+  it('should keep all visible scenarios for cohort_maturity (multi-scenario overlay)', () => {
+    const plan = planChartDisplay({
+      result: RESULT_WITH_FE,
+      requestedChartKind: 'cohort_maturity',
+      visibleScenarioIds: ['base', 'current'],
+      scenarioVisibilityModes: { base: 'f+e', current: 'f+e' },
+    });
+
+    expect(plan.xAxisMode).toBe('time');
+    expect(plan.scenarioIdsToRender).toEqual(['base', 'current']);
+    expect(plan.scenarioSelectionMode).toBe('all_visible');
+    expect(plan.fallbackReasons.length).toBe(0);
+  });
+
   it('should keep all visible scenarios for non-time scenario comparison', () => {
     const plan = planChartDisplay({
       result: RESULT_WITH_FE,

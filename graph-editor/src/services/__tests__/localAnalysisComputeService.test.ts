@@ -288,12 +288,12 @@ describe('edge_info tab decomposition', () => {
 
     const forecastRows = data.filter((r: any) => r.tab === 'forecast');
     const sections = [...new Set(forecastRows.map((r: any) => r.section))];
-    expect(sections).toContain('Quality');
+    expect(sections).toContain('Probability');
     expect(sections).toContain('Convergence');
 
     // Quality tier should be 'Strong' (grade 3, clean convergence)
-    const tierRow = forecastRows.find((r: any) => r.property === 'Tier');
-    expect(tierRow?.value).toBe('Strong');
+    const tierRow = forecastRows.find((r: any) => r.property === 'Quality');
+    expect(tierRow?.value).toContain('Strong');
 
     // HDI bounds should be present
     const hdiRow = forecastRows.find((r: any) => r.property?.includes('HDI'));

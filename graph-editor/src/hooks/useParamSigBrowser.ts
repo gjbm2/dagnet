@@ -68,6 +68,8 @@ export function detectQueryMode(row: SigRegistryRow): 'cohort' | 'window' | 'unk
 
 export interface ParamSigBrowserOptions {
   workspacePrefix: string;
+  /** Repo-only prefix (no branch) for cross-branch signature discovery. */
+  repoPrefix: string;
   dbParams: SigParamSummary[];
   graphParamIds: Set<string> | null;
   currentCoreHash?: string | null;
@@ -107,7 +109,7 @@ export interface ParamSigBrowserState {
 // ─── Hook ────────────────────────────────────────────────────────────────────
 
 export function useParamSigBrowser(options: ParamSigBrowserOptions): ParamSigBrowserState {
-  const { workspacePrefix, dbParams, graphParamIds, currentCoreHash = null } = options;
+  const { workspacePrefix, repoPrefix, dbParams, graphParamIds, currentCoreHash = null } = options;
 
   const [paramFilter, setParamFilter] = useState('');
   const [selectedParamId, setSelectedParamId] = useState<string | null>(null);
@@ -161,12 +163,12 @@ export function useParamSigBrowser(options: ParamSigBrowserOptions): ParamSigBro
     setIsLoading(true);
     const opId = sessionLogService.startOperation('info', 'session', 'SIGS_REFRESH', `Loading signatures for ${selectedParamId}`);
     try {
-      // Fetch current-param signatures, inventory, AND a broad workspace registry
-      // (the broad listing resolves core_hash → param_id for cross-param link navigation).
+      // Fetch current-param signatures, inventory, AND a broad repo-wide registry
+      // (the broad listing resolves core_hash → param_id for cross-param/cross-branch link navigation).
       const [regRes, inventoryRes, broadRegRes] = await Promise.all([
         listSignatures({ param_id: selectedParamId, include_inputs: true, limit: 500 }),
         getBatchInventoryV2([selectedParamId]).catch(() => ({} as Record<string, SnapshotInventoryV2Param>)),
-        listSignatures({ param_id_prefix: workspacePrefix, limit: 5000 }).catch(() => ({ success: false, rows: [], count: 0 } as any)),
+        listSignatures({ param_id_prefix: repoPrefix, limit: 5000 }).catch(() => ({ success: false, rows: [], count: 0 } as any)),
       ]);
       if (!regRes.success) throw new Error(regRes.error || 'listSignatures failed');
 

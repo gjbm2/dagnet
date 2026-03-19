@@ -100,9 +100,22 @@ vi.mock('../../../contexts/TabContext', () => ({
   }),
 }));
 
+vi.mock('../../modals/SwitchBranchModal', () => ({
+  SwitchBranchModal: () => null,
+}));
+
+vi.mock('../../CommitModal', () => ({
+  CommitModal: () => null,
+}));
+
+vi.mock('../../../hooks/useCommitHandler', () => ({
+  useCommitHandler: () => ({ handleCommitFiles: vi.fn() }),
+}));
+
 // ---- Import component under test AFTER mocks --------------------------------
 
 import { NavigatorContent } from '../NavigatorContent';
+import { DialogProvider } from '../../../contexts/DialogContext';
 import { registryService as mockedRegistryService } from '../../../services/registryService';
 
 // ---- Tests ------------------------------------------------------------------
@@ -144,7 +157,7 @@ describe('NavigatorContent registry synchronization', () => {
   });
 
   it('loads registry items on mount', async () => {
-    render(<NavigatorContent />);
+    render(<DialogProvider><NavigatorContent /></DialogProvider>);
 
     await waitFor(() => {
       expect((mockedRegistryService as any).getParameters).toHaveBeenCalledTimes(1);
@@ -156,7 +169,7 @@ describe('NavigatorContent registry synchronization', () => {
   });
 
   it('refreshes registry items when file dirty state changes', async () => {
-    render(<NavigatorContent />);
+    render(<DialogProvider><NavigatorContent /></DialogProvider>);
 
     // Initial load on mount
     await waitFor(() => {

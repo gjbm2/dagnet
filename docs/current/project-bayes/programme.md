@@ -723,6 +723,49 @@ design; implementation is post-Phase A.
   deletion schedule, settings/fit guidance UI. Component-level detail
   to be refined incrementally per phase.
 
+**Posterior confidence bands too narrow — overdispersion not modelled**
+
+Phase A confidence bands on the cohort maturity model curve are
+mathematically correct but practically useless: at 99.9% (k=3.291),
+bands are only ±5% wide for a Beta(824, 186) posterior. The model
+treats every conversion as an independent Bernoulli trial, so with
+~1000 observations the posterior concentrates sharply. Real conversion
+data has **overdispersion**: cohort rates vary by day, segment, and
+channel; observations within a cohort are correlated; and there is
+temporal autocorrelation across cohorts. The Beta model ignores all of
+this, producing a posterior that is far more confident than the data
+warrants.
+
+The effective sample size is much smaller than the raw observation
+count. Until overdispersion is modelled, the bands convey false
+precision rather than genuine uncertainty.
+
+**Candidate approaches** (to be evaluated in Phase D):
+
+- **Beta-Binomial likelihood**: replace Binomial with Beta-Binomial,
+  adding a dispersion parameter φ. Variance inflates by
+  (1 + (n−1)·ρ) where ρ is the intra-cluster correlation. Natural
+  fit for cohort-level overdispersion.
+- **Effective sample size**: estimate n_eff < n from variance ratios
+  or autocorrelation in the cohort time series, then scale
+  α_eff = α·(n_eff/n), β_eff = β·(n_eff/n). Lightweight but ad hoc.
+- **Hierarchical model**: model per-cohort rates as draws from a
+  population distribution (e.g. per-cohort p_i ~ Beta(a, b) with
+  hyperpriors on a, b). Between-cohort variance inflates the
+  posterior naturally. Most principled but heaviest computationally.
+
+**Key modelling question**: how should DagNet estimate the degree of
+overdispersion from snapshot data, and which correction fits the
+existing compiler pipeline with least disruption? The answer likely
+depends on whether the dominant source of overdispersion is
+between-cohort heterogeneity (hierarchical model) or within-cohort
+correlation (Beta-Binomial / effective-n).
+
+**Interim mitigation**: document that Phase A bands reflect
+sampling uncertainty only, not real-world uncertainty. Quality gating
+(doc 13) should flag that bands are unrealistically tight as a known
+model limitation, not a data problem.
+
 ### Future work
 
 - **Sampling progress estimation**: nutpie exposes per-chain
@@ -735,3 +778,54 @@ design; implementation is post-Phase A.
   `inference.py` to use nutpie directly rather than through PyMC's
   wrapper. Not blocking but would improve the FE progress display
   significantly.
+
+---
+
+## Bug fix: hash-mappings.json — wrong hash format + missing fields (19-Mar-26)
+
+Discovered when testing bayes-test branch on the data repo. The Snapshot
+Manager showed 0 links for window() segments and 2 (false positive) for
+cohort(). The equivalence closure set was silently empty, meaning no hash
+expansion ever occurred via hash-mappings.
+
+**Root cause**: Three issues in the data repo's `hash-mappings.json`:
+
+1. `core_hash` values were full 64-char SHA-256 hex strings. The system
+   uses ~22-char base64url short hashes (first 16 bytes of SHA-256,
+   base64url encoded, no padding). The hex strings never matched anything
+   in the UI or closure derivation.
+2. Missing `operation` field. `getClosureSet()` in
+   `hashMappingsService.ts` requires `operation === 'equivalent'` to
+   include a row. Without it (`undefined !== 'equivalent'` → true), all
+   rows were silently skipped — the closure set was always empty.
+3. Missing `weight` field (required by `HashMapping` interface, defaults
+   to 1.0).
+
+**Fix**: Converted all `core_hash` values from hex to short base64url
+format. Added `operation: "equivalent"` and `weight: 1.0` to every
+entry. Pushed to `feature/bayes-test-graph` branch in data repo.
+
+**Conversion method**: `base64url(hex_hash_bytes[:16])` — take first 16
+bytes of the raw SHA-256, base64url encode without padding. This
+produces the same output as `computeShortCoreHash(canonical_signature)`
+because the hex values were the full SHA-256 of the same canonical
+signatures.
+
+**Impact on Bayes model**: The model was still working for cohort mode
+because the seed `core_hash` (correct short format) was identical to the
+production hash — same canonical signature, same hash. The broken
+closure was dead weight. Window mode was not resolved because the window
+seed hash differs from production and the closure couldn't bridge the
+gap.
+
+**No hash logic code was changed.** The fix was purely to the data file.
+The hash computation code (`coreHashService.ts`,
+`hashMappingsService.ts`, `plannerQuerySignatureService.ts`) is correct;
+the mappings file was simply authored in the wrong format.
+
+**Key invariant (confirmed)**: The canonical signature does NOT include
+`param_id` or branch — it is purely semantic (connection + events +
+filters + cohort mode + latency). Different param names on different
+branches querying the same edge produce the same `core_hash`.
+`query_snapshots` queries by `core_hash` alone (no `param_id` in WHERE),
+so snapshot data is shared across branches and param names by design.

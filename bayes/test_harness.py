@@ -69,6 +69,7 @@ def _acquire_lock():
 # Paths
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(REPO_ROOT, "graph-editor", "lib"))
+sys.path.insert(0, os.path.join(REPO_ROOT, "graph-editor"))
 sys.path.insert(0, os.path.join(REPO_ROOT, "bayes"))
 
 # Read .private-repos.conf

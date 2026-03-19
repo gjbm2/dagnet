@@ -99,6 +99,7 @@ export const SignatureLinksViewer: React.FC = () => {
   const repo = navState.selectedRepo;
   const branch = navState.selectedBranch || 'main';
   const workspacePrefix = `${repo}-${branch}-`;
+  const repoPrefix = `${repo}-`;
 
   // ── Context from tab service ─────────────────────────────────────────────
   const [context, setContext] = useState<SignatureLinksContext | null>(null);
@@ -126,19 +127,19 @@ export const SignatureLinksViewer: React.FC = () => {
     return paramItems.map((i) => ({ id: i.id, dbId: `${workspacePrefix}${i.id}` }));
   }, [items, workspacePrefix]);
 
-  // Load all workspace params from DB (graph filtering is local)
+  // Load all repo params from DB (cross-branch — same core_hash is shared across branches)
   const loadParams = useCallback(async () => {
     try {
       const res = await listSignatures({
         list_params: true,
-        param_id_prefix: workspacePrefix,
+        param_id_prefix: repoPrefix,
         limit: 500,
       });
       if (res.success && res.params) setDbParams(res.params);
     } catch (err) {
       console.error('[SignatureLinksViewer] loadParams failed:', err);
     }
-  }, [workspacePrefix]);
+  }, [repoPrefix]);
 
   useEffect(() => { void loadParams(); }, [loadParams]);
 
@@ -221,8 +222,8 @@ export const SignatureLinksViewer: React.FC = () => {
   const currentCoreHash = computedCoreHash ?? context?.currentCoreHash ?? null;
 
   // ── Two browser instances ────────────────────────────────────────────────
-  const primary = useParamSigBrowser({ workspacePrefix, dbParams, graphParamIds, currentCoreHash });
-  const secondary = useParamSigBrowser({ workspacePrefix, dbParams, graphParamIds: secondaryGraphParamIds });
+  const primary = useParamSigBrowser({ workspacePrefix, repoPrefix, dbParams, graphParamIds, currentCoreHash });
+  const secondary = useParamSigBrowser({ workspacePrefix, repoPrefix, dbParams, graphParamIds: secondaryGraphParamIds });
 
   // Auto-select graph + param from context (primary only)
   useEffect(() => {
@@ -1002,6 +1003,7 @@ export const SignatureLinksViewer: React.FC = () => {
         browser={primary}
         variant="primary"
         workspacePrefix={workspacePrefix}
+        repoPrefix={repoPrefix}
         navigatorParams={navigatorParams}
         graphParamIds={graphParamIds}
         dbParams={dbParams}
@@ -1039,7 +1041,9 @@ export const SignatureLinksViewer: React.FC = () => {
             <span className="sig-subject-param">
               {primary.selectedParamId?.startsWith(workspacePrefix)
                 ? primary.selectedParamId.slice(workspacePrefix.length)
-                : primary.selectedParamId}
+                : primary.selectedParamId?.startsWith(repoPrefix)
+                  ? primary.selectedParamId.slice(repoPrefix.length)
+                  : primary.selectedParamId}
             </span>
             <span className="sig-hash-chip primary" data-tip={hashChipTip(selectedRow)}>{truncateHash(selectedRow.core_hash)}</span>
             {effectiveCompareRow && (
@@ -1761,6 +1765,7 @@ export const SignatureLinksViewer: React.FC = () => {
               browser={secondary}
               variant="secondary"
               workspacePrefix={workspacePrefix}
+              repoPrefix={repoPrefix}
               navigatorParams={navigatorParams}
               graphParamIds={secondaryGraphParamIds}
               dbParams={dbParams}

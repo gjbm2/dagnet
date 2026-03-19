@@ -1,133 +1,127 @@
-# Doc 12 — Drift Detection: Design Notes and Attempted Approaches
+# Doc 12 — Temporal Adaptation: Recency Weighting
 
-**Status**: Parked — backing out to fix upstream edge fit quality first
+**Status**: Implemented (19-Mar-26)
 **Date**: 19-Mar-26
 
 ---
 
 ## 1. Goal
 
-Detect and accommodate temporal drift in both probability and latency
-within a single training window. The model should project from the
-**current regime**, not a historical average.
+The model should project from **current conditions**, not a historical
+average. If conversion rates or latency have changed recently, the
+forecast should reflect the change without waiting for old data to
+age out of the training window.
 
-## 2. Design (from doc 6 §Phase D and session reasoning)
+## 2. Approaches considered and rejected
 
-### Symmetric drift in p and latency
-
-The probability dimension already has a hierarchy: `p_base → p_window
-(tight) → p_cohort (path-informed divergence via σ_temporal)`. The
-latency dimension now mirrors this (`mu_base → mu_cohort`). Drift
-adds **within-run temporal variation** on top:
-
-- `σ_p_drift`: how much p moves between time bins
-- `σ_mu_drift`: how much latency mu moves between time bins
-- Both governed by their own drift parameters
-- Both calibratable from `fit_history` via DerSimonian-Laird
-
-### Separate bin schemes for p and mu
-
-p drift can be estimated from ALL trajectories (mature ones give
-k/n ≈ p directly). Latency drift can only be estimated from
-**immature** trajectories where the CDF shape is visible. So:
-
-- **p bins**: adaptive, sized by cumulative n threshold. Every anchor
-  day contributes. More data → smaller bins → finer resolution.
-- **mu bins**: adaptive, sized by immature trajectory count (anchor
-  days with min age < 30d and 5+ retrieval ages). Fewer, wider bins
-  concentrated in the recent period.
-
-### Adaptive binning criteria
-
-- Walk through anchor days chronologically
-- Accumulate into a bin until threshold met, then start new bin
-- Minimum bin width: 14 days (prevents single-day degenerate bins)
-- p threshold: ~30,000 total n per bin
-- mu threshold: ~30 immature trajectories per bin
-- Degenerate cases: <2 bins → drift disabled for that dimension
-
-### Output
-
-- Current-regime estimate (most recent bin's posterior) for both p and mu
-- σ_p_drift and σ_mu_drift as diagnostics
-- Per-bin trajectory NOT output (no forecasting value without trend model)
-
-## 3. Approaches tried
-
-### Random walk (non-centred)
+### Per-bin random walk
 
 ```
-logit_p_base_0 = logit(p_base)
-eps_t ~ Normal(0, 1)
-logit_p_t = logit_p_{t-1} + eps_t * σ_drift * sqrt(gap)
+logit_p_t = logit_p_{t-1} + eps_t * sigma_drift
 ```
 
-**Result**: NUTS could not sample efficiently. Even with 4 bins (30-day),
-the model timed out at 600s. The funnel geometry between `eps_t` and
-`σ_drift` is pathological — when σ_drift → 0 (stable parameter, the
-common case), all eps values must → 0 simultaneously, creating a
-high-dimensional funnel that NUTS navigates with tiny step sizes.
+Failed: the funnel geometry between `eps_t` and `sigma_drift` made
+NUTS unsampleable, even with 4 bins. The random walk creates
+high-dimensional funnels that scale with bin count × edge count.
 
-The problem scales with the number of bins AND the number of edges
-(each edge contributes its own funnel). With 4 edges × 4 bins, that's
-16 simultaneous funnels — intractable.
-
-### Not yet tried: partial pooling (hierarchical)
+### Per-bin partial pooling (independent per bin, shared mean)
 
 ```
-logit_p_mean ~ Normal(prior)
-tau_p ~ HalfNormal(0.3)
-logit_p_t ~ Normal(logit_p_mean, tau_p)  for each populated bin t
+logit_p_t ~ Normal(logit_p_base, tau)
 ```
 
-Independent per-bin values pulled toward a shared mean. No chain
-between bins, no funnel. Standard partial pooling — well-studied,
-NUTS-friendly. Loses time-ordering information but for current-regime
-estimation we only need the most recent bin.
+Failed: even with `tau` as a free variable and only 2 groups
+(recent/historic), the tau-logit interaction created enough geometry
+problems to prevent convergence within reasonable time.
 
-**This is the recommended next approach when drift work resumes.**
+### Per-bin partial pooling with fixed tau
 
-## 4. Key data insights
+Timed out. Even without estimating tau, the additional per-bin
+variables and the per-trajectory p dispatch (especially in the Phase S
+branch) created a PyTensor graph too complex for efficient evaluation.
 
-### Snapshot data span vs anchor day span
+### BASE + DELTA (recent bucket split)
 
-The test graph has 120 days of anchor days (Nov 2025 – Mar 2026) but
-only 39-54 days of daily fetch activity (late Jan – mid Mar). Early
-anchor days have only 1-2 retrieval ages at very mature ages (60-100d)
-— they constrain p (final rate) but not latency shape. Recent anchor
-days have 5-14 retrieval ages spanning the CDF rise — they constrain
-both p and latency.
+```
+logit_p_base_recent = logit_p_base + eps_drift * tau_fixed
+```
 
-### Bin sizing must be data-driven
+Worked (rhat=1.002, 0 divergences, 26 vars) but introduced:
+- Two arbitrary cutoff dates (p and mu) varying by data sufficiency
+- Complex trajectory routing (recent vs historic Potentials)
+- Unclear propagation from window edge signal to cohort path estimates
+- Questions about what onset_cohort means in each period
 
-Fixed calendar bins (7d or 30d) create bins with wildly different
-data density. Adaptive binning by cumulative evidence threshold gives
-well-constrained bins regardless of fetch history length.
+The machinery was disproportionate to the goal.
 
-### Immaturity criterion for mu bins
+## 3. Final approach: recency-weighted likelihood
 
-A trajectory is informative for latency shape only if its minimum
-retrieval age is below the edge's t95 (~15-17d for this graph) AND
-it has enough retrieval ages (5+) to trace the CDF rise. Most
-trajectories from before the daily fetch period are fully mature
-and contribute nothing to latency drift detection.
+Instead of modelling drift explicitly in parameter space, **weight
+each trajectory's likelihood contribution by its recency**:
 
-## 5. Code written (to be backed out)
+```
+weight = exp(-ln2 * age_days / half_life_days)
+```
 
-Files modified for drift:
-- `bayes/compiler/types.py`: `bin_idx`, `mu_bin_idx` on CohortDailyTrajectory/Obs,
-  `n_drift_bins`, `n_mu_drift_bins` on BoundEvidence
-- `bayes/compiler/evidence.py`: `_assign_trajectory_bins()`,
-  `_adaptive_bin_boundaries()`, `_parse_trajectory_date()`
-- `bayes/compiler/model.py`: `_build_drift_walk()`, drift variable creation
-  in `build_model()`, per-bin mu/p dispatch in `_emit_cohort_likelihoods()`
-- `bayes/compiler/inference.py`: drift diagnostic extraction
-- `bayes/test_wiring.py`: drift-aware checks
+where `age_days = today - anchor_day`.
 
-## 6. Prerequisites before resuming
+Recent trajectories contribute ~1.0 to the likelihood. Old ones
+decay toward 0. The posterior naturally reflects current conditions
+because recent data dominates.
 
-- Fix upstream edge fit quality (low-quality fits on edges closer to
-  anchor — the reason drift work was parked)
-- Consider whether partial-pooling approach resolves the funnel issue
-- May need to reduce the number of drift variables further (e.g.,
-  drift only on edges with evidence of instability from fit_history)
+### Implementation
+
+One multiplication per trajectory count in the Potential logp. Both
+latent-CDF (Phase D) and fixed-CDF (Phase S) branches weight
+interval counts and remainder counts by the trajectory's
+`recency_weight`. No new model variables. No Potential splitting.
+The model structure is unchanged (20 vars for the test graph).
+
+The `RECENCY_HALF_LIFE_DAYS` setting (default 30, configurable per
+graph via `forecastingSettingsService`) controls the weighting. This
+is the same setting the analytic forecasting pipeline uses —
+consistent semantics between Bayesian and analytic forecasts.
+
+### Why this works
+
+- **Window sees edge improvement first** → high-weight recent window
+  trajectories pull edge-level `(mu, sigma)` toward current latency
+- **FW composition propagates** → the edge-level posteriors compose
+  into path-level CDFs automatically
+- **Cohort completeness updates** → the cohort CDF uses the
+  (now shifted) edge latencies, so immature cohort forecasts improve
+- **No routing needed** → all trajectories participate, just at
+  different strengths. No split, no bins, no cutoffs.
+
+### Future: adaptive half-life from fit_history
+
+When `fit_history` has 3+ entries, the DerSimonian-Laird `tau²`
+(between-run variance) measures per-edge volatility. This can
+modulate the effective half-life:
+
+```
+effective_half_life = base_half_life / (1 + k * tau²)
+```
+
+Volatile edges → shorter half-life → faster adaptation.
+Stable edges → longer half-life → more data contributes.
+
+This avoids a static half-life that's too aggressive for stable edges
+or too conservative for volatile ones. Not implemented yet — requires
+accumulated fit_history from multiple runs.
+
+## 4. Phase D exit criteria status
+
+| Criterion | Status |
+|---|---|
+| Latent latency variables | Done — `mu ~ Normal`, `sigma ~ Gamma` per edge |
+| Path composition differentiable (FW) | Done — `pt_fw_chain`, verified by ancestor traversal |
+| Completeness coupling fully joint | Done — cohort CDF uses latent path latency |
+| Window couples to latent edge latency | Done — window CDF uses `(mu_lat, sigma_lat)` |
+| Joint model distinguishes low-p from slow-latency | Done — convergence with 0 divergences |
+| rhat/ESS acceptable | Done — rhat=1.001, ESS=2290 |
+| Join-node collapse differentiable | Not tested — test graph has no non-trivial joins |
+| Completeness-adjusted Multinomial per-sibling | Not tested — branch groups in test graph have <2 siblings with data |
+| Recency weighting | Done — likelihood weighted by `exp(-ln2 * age / half_life)` |
+| Cohort-level latency hierarchy | Done — onset_cohort, mu_cohort, sigma_cohort for 2+ latency-hop paths |
+| Softplus onset | Done — smooth CDF boundary for latent onset |

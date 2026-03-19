@@ -197,6 +197,15 @@ function CanvasAnalysisNodeInner({ data, selected }: NodeProps<CanvasAnalysisNod
   const hasAnalysisType = !!analysis.recipe?.analysis?.analysis_type;
   const analyticsDsl = analysis.recipe?.analysis?.analytics_dsl;
 
+  // Reactive scenario state for live mode — drives visibleScenarioIds, scenarioMetaById, etc.
+  // Must depend on tabContext.tabs (not the ref) so the memo re-evaluates when scenario
+  // visibility changes.
+  const liveScenarioState = useMemo(() => {
+    if (analysis.mode !== 'live' || !tabId) return null;
+    const tab = tabContext.tabs.find((t: any) => t.id === tabId);
+    return tab?.editorState?.scenarioState ?? null;
+  }, [analysis.mode, tabId, tabContext.tabs]);
+
   const visibleScenarioIds = useMemo(() => {
     if (analysis.mode !== 'live' && analysis.recipe.scenarios) {
       const hidden = new Set<string>((((analysis.display as any)?.hidden_scenarios) || []) as string[]);
@@ -204,13 +213,12 @@ function CanvasAnalysisNodeInner({ data, selected }: NodeProps<CanvasAnalysisNod
         .map(s => s.scenario_id)
         .filter((id) => !hidden.has(id));
     }
-    if (tabId) {
-      const state = operationsRef.current.getScenarioState(tabId);
+    if (tabId && liveScenarioState) {
       // Derive order from scenarioOrder (same source the panel uses) so chart
       // left-to-right matches panel bottom-to-top.  scenarioOrder is newest-first
       // (prepended), so reversing gives composition order (bottom-to-top).
-      const visibleSet = new Set(state?.visibleScenarioIds || ['current']);
-      const order = state?.scenarioOrder || [];
+      const visibleSet = new Set(liveScenarioState.visibleScenarioIds || ['current']);
+      const order = liveScenarioState.scenarioOrder || [];
       const userItems = [...order]
         .reverse()
         .filter(id => id !== 'current' && id !== 'base' && visibleSet.has(id));
@@ -221,7 +229,7 @@ function CanvasAnalysisNodeInner({ data, selected }: NodeProps<CanvasAnalysisNod
       return result.length > 0 ? result : ['current'];
     }
     return ['current'];
-  }, [analysis.mode, analysis.recipe.scenarios, analysis.display, tabId]);
+  }, [analysis.mode, analysis.recipe.scenarios, analysis.display, tabId, liveScenarioState]);
 
   const scenarioCount = visibleScenarioIds.length || 1;
   // True when Live mode has user scenarios but ScenariosContext hasn't hydrated yet.

@@ -67,7 +67,12 @@ export function planChartDisplay(args: PlanChartDisplayArgs): ChartDisplayPlan {
   let scenarioIdsToRender = [...(args.visibleScenarioIds || [])];
   let scenarioSelectionMode: ChartScenarioSelectionMode = 'all_visible';
 
-  if (xAxisMode === 'time' && scenarioIdsToRender.length > 1) {
+  // Cohort maturity supports multi-scenario overlay natively (per-scenario series
+  // with distinct colours). Other time-series charts (daily_conversions, lag_fit)
+  // only render one scenario at a time.
+  const multiScenarioTimeSeriesKinds = new Set(['cohort_maturity']);
+  if (xAxisMode === 'time' && scenarioIdsToRender.length > 1
+      && !multiScenarioTimeSeriesKinds.has(requestedChartKind || '')) {
     const lastScenarioId = scenarioIdsToRender[scenarioIdsToRender.length - 1];
     scenarioIdsToRender = lastScenarioId ? [lastScenarioId] : scenarioIdsToRender.slice(0, 1);
     scenarioSelectionMode = 'current_only';

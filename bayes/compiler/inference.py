@@ -219,7 +219,25 @@ def summarise_posteriors(
             skipped.append({"param_id": ev.param_id, "reason": f"{p_var_name} not in trace"})
             continue
 
-        samples = trace.posterior[p_var_name].values.flatten()
+        # Use recent p if drift is active (current-regime estimate).
+        # p_window_recent includes both the drift delta AND the window
+        # offset — it's the full current-regime window estimate.
+        safe_eid = _safe_var_name(edge_id)
+        recent_p_name = f"p_window_recent_{safe_eid}"
+        window_p_name = f"p_window_{safe_eid}"
+        if recent_p_name in trace.posterior:
+            samples = trace.posterior[recent_p_name].values.flatten()
+            # Compare against p_window (historic) for the drift diagnostic
+            if window_p_name in trace.posterior:
+                p_historic = float(np.mean(trace.posterior[window_p_name].values.flatten()))
+            else:
+                p_historic = float(np.mean(trace.posterior[p_var_name].values.flatten()))
+            diagnostics.append(
+                f"  p_drift {edge_id[:8]}…: recent={float(np.mean(samples)):.4f} "
+                f"vs historic={p_historic:.4f}"
+            )
+        else:
+            samples = trace.posterior[p_var_name].values.flatten()
 
         # Moment-match Beta
         alpha, beta_val = _fit_beta_to_samples(samples)
@@ -289,7 +307,17 @@ def summarise_posteriors(
             )
 
             if is_latent:
-                mu_samples = trace.posterior[mu_var_name].values.flatten()
+                # Use recent mu if drift is active
+                mu_recent_name = f"mu_recent_{safe_eid}"
+                if mu_recent_name in trace.posterior:
+                    mu_samples = trace.posterior[mu_recent_name].values.flatten()
+                    mu_base_val = float(np.mean(trace.posterior[mu_var_name].values.flatten()))
+                    diagnostics.append(
+                        f"  mu_drift {edge_id[:8]}…: using recent mu "
+                        f"(base={mu_base_val:.3f}, recent={float(np.mean(mu_samples)):.3f})"
+                    )
+                else:
+                    mu_samples = trace.posterior[mu_var_name].values.flatten()
                 sigma_samples = trace.posterior[sigma_var_name].values.flatten()
 
                 mu_mean = float(np.mean(mu_samples))

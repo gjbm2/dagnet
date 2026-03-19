@@ -57,6 +57,8 @@ interface ParamListPanelProps {
   browser: ParamSigBrowserState;
   label: string;
   workspacePrefix: string;
+  /** Repo-only prefix (no branch) for cross-branch display name stripping. */
+  repoPrefix: string;
   navigatorParams: Array<{ id: string; dbId: string }>;
   graphParamIds: Set<string> | null;
   dbParams: SigParamSummary[];
@@ -71,7 +73,7 @@ interface ParamListPanelProps {
 }
 
 export const ParamListPanel: React.FC<ParamListPanelProps> = ({
-  browser: b, label, workspacePrefix, navigatorParams, graphParamIds, dbParams,
+  browser: b, label, workspacePrefix, repoPrefix, navigatorParams, graphParamIds, dbParams,
   graphItems, selectedGraphName, onGraphChange,
   availableConnections, selectedConnection, onConnectionChange,
 }) => {
@@ -128,13 +130,20 @@ export const ParamListPanel: React.FC<ParamListPanelProps> = ({
         )}
         {b.filteredParams.map((p) => {
           let displayName = p.param_id;
-          if (displayName.startsWith(workspacePrefix)) displayName = displayName.slice(workspacePrefix.length);
+          const isCurrentBranch = displayName.startsWith(workspacePrefix);
+          if (isCurrentBranch) {
+            displayName = displayName.slice(workspacePrefix.length);
+          } else if (displayName.startsWith(repoPrefix)) {
+            // Cross-branch param — strip repo prefix, keep branch for disambiguation
+            displayName = displayName.slice(repoPrefix.length);
+          }
           if (displayName.startsWith('parameter-')) displayName = displayName.slice('parameter-'.length);
           return (
             <div
               key={p.param_id}
-              className={`sig-links-param-item${b.selectedParamId === p.param_id ? ' selected' : ''}`}
+              className={`sig-links-param-item${b.selectedParamId === p.param_id ? ' selected' : ''}${!isCurrentBranch ? ' cross-branch' : ''}`}
               onClick={() => b.setSelectedParamId(p.param_id)}
+              style={!isCurrentBranch ? { opacity: 0.7 } : undefined}
             >
               <div className="param-name" title={p.param_id}>{displayName}</div>
               <div className="param-badge">{p.signature_count}</div>
@@ -167,6 +176,8 @@ interface Props {
   browser: ParamSigBrowserState;
   variant: 'primary' | 'secondary';
   workspacePrefix: string;
+  /** Repo-only prefix (no branch) for cross-branch display name stripping. */
+  repoPrefix: string;
   navigatorParams: Array<{ id: string; dbId: string }>;
   graphParamIds: Set<string> | null;
   dbParams: SigParamSummary[];
@@ -195,6 +206,7 @@ export const ParamSigBrowser: React.FC<Props> = ({
   browser: b,
   variant,
   workspacePrefix,
+  repoPrefix,
   navigatorParams,
   graphParamIds,
   dbParams,
@@ -248,6 +260,7 @@ export const ParamSigBrowser: React.FC<Props> = ({
               browser={b}
               label={isPrimary ? 'Primary' : 'Compare'}
               workspacePrefix={workspacePrefix}
+              repoPrefix={repoPrefix}
               navigatorParams={navigatorParams}
               graphParamIds={graphParamIds}
               dbParams={dbParams}
@@ -271,7 +284,11 @@ export const ParamSigBrowser: React.FC<Props> = ({
         <div className="sig-links-centre-header">
           <h3 style={{ fontSize: 12 }}>
             {b.selectedParamId
-              ? (b.selectedParamId.startsWith(workspacePrefix) ? b.selectedParamId.slice(workspacePrefix.length) : b.selectedParamId)
+              ? (b.selectedParamId.startsWith(workspacePrefix)
+                  ? b.selectedParamId.slice(workspacePrefix.length)
+                  : b.selectedParamId.startsWith(repoPrefix)
+                    ? b.selectedParamId.slice(repoPrefix.length)
+                    : b.selectedParamId)
               : 'Select a parameter'}
           </h3>
           {b.selectedParamId && (
