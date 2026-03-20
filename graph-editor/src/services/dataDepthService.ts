@@ -349,9 +349,9 @@ export function formatPct(f: number): string {
   return `${Math.round(f * 100)}%`;
 }
 
-/** Build a concise bead label from a depth score. */
+/** Build a concise bead label from a depth score (shown on edge in overlay mode). */
 export function depthBeadLabel(score: DataDepthScore, n: number): string {
-  return `${formatPct(score.depth)} — n=${formatN(n)}`;
+  return `${formatPct(score.depth)}  dates ${formatPct(score.f1)} · snaps ${formatPct(score.f2)} · n ${formatPct(score.f3)} (${formatN(n)})`;
 }
 
 // ── Hover tab row builder ──────────────────────────────────

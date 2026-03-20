@@ -11,9 +11,9 @@ import { Plug, ZapOff } from 'lucide-react';
 import { buildBeadDefinitions, type BeadDefinition } from './edgeBeadHelpers';
 import type { Graph, GraphEdge } from '../../types';
 import type { ScenarioVisibilityMode, ViewOverlayMode } from '../../types';
-import { computeQualityTier, qualityTierToColour, qualityTierLabel } from '../../utils/bayesQualityTier';
+import { computeQualityTier } from '../../utils/bayesQualityTier';
 import { useDataDepthContext } from '../../contexts/DataDepthContext';
-import { depthToColour, depthBeadLabel, formatPct } from '../../services/dataDepthService';
+import { depthBeadLabel, formatPct } from '../../services/dataDepthService';
 import type { ProbabilityPosterior } from '../../types';
 import { BEAD_MARKER_DISTANCE, BEAD_SPACING, BEAD_FONT_SIZE, BEAD_HEIGHT, BEAD_ARRIVAL_FACE_OFFSET } from '../../lib/nodeEdgeConstants';
 import { hasAnyEdgeQueryOverride, listOverriddenFlagPaths } from '../../utils/overrideFlags';
@@ -150,13 +150,12 @@ export function useEdgeBeads(props: EdgeBeadsProps): { svg: React.ReactNode; htm
     if (viewOverlayMode === 'forecast-quality') {
       const posterior = edge.p?.posterior as ProbabilityPosterior | undefined;
       const tier = computeQualityTier(posterior);
-      const tierColour = qualityTierToColour(tier.tier, 'dark');
       return [{
         type: 'probability' as const,
-        values: [{ scenarioId: 'current', text: tier.reason, colour: tierColour }],
+        values: [{ scenarioId: 'current', text: tier.reason, colour: '#FFFFFF' }],
         displayText: tier.reason,
         allIdentical: true,
-        backgroundColor: tierColour,
+        backgroundColor: '#374151',
         hasParameterConnection: false,
         isOverridden: false,
         distance: visibleStartOffset ?? BEAD_MARKER_DISTANCE,
@@ -169,15 +168,14 @@ export function useEdgeBeads(props: EdgeBeadsProps): { svg: React.ReactNode; htm
     if (viewOverlayMode === 'data-depth') {
       const edgeId = edge.uuid || edge.id || '';
       const score = edgeId ? dataDepthScores?.get(edgeId) : undefined;
-      const colour = depthToColour(score?.depth ?? null, 'dark');
       const n = edge.p?.evidence?.n ?? 0;
       const label = score ? depthBeadLabel(score, n) : (n > 0 ? `n=${n}` : 'No data');
       return [{
         type: 'probability' as const,
-        values: [{ scenarioId: 'current', text: label, colour }],
+        values: [{ scenarioId: 'current', text: label, colour: '#FFFFFF' }],
         displayText: label,
         allIdentical: true,
-        backgroundColor: colour,
+        backgroundColor: '#374151',
         hasParameterConnection: false,
         isOverridden: false,
         distance: visibleStartOffset ?? BEAD_MARKER_DISTANCE,
@@ -604,7 +602,7 @@ export function useEdgeBeads(props: EdgeBeadsProps): { svg: React.ReactNode; htm
               pointerEvents: 'painted', // Only capture events over painted (visible) stroke
             }}
           />
-          
+
           {/* Text along the path - render with scenario colours using tspan */}
           {/* Calculate center point of text for rotation when upside down */}
           {(() => {
@@ -815,7 +813,7 @@ export function useEdgeBeads(props: EdgeBeadsProps): { svg: React.ReactNode; htm
           />
         </g>
       );
-      
+
       // Advance currentDistance: bead occupies baseWidth along the path
       if (!bead.rightAligned) {
         currentDistance = strokeStartDistance + baseWidth + BEAD_SPACING;
