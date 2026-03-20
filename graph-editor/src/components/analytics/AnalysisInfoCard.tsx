@@ -55,6 +55,7 @@ const TAB_LABELS: Record<string, string> = {
   structure: 'Structure',
   evidence: 'Evidence',
   forecast: 'Forecast',
+  depth: 'Data Depth',
   diagnostics: 'Diagnostics',
 };
 

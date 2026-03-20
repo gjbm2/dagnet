@@ -420,6 +420,19 @@ def summarise_posteriors(
                     f"sigma={path_sigma:.3f}±{path_sigma_sd:.3f}"
                 )
 
+    # Per-edge overdispersion concentration κ
+    for edge_id in topology.edges:
+        safe_eid = _safe_var_name(edge_id)
+        kappa_name = f"kappa_{safe_eid}"
+        if kappa_name in trace.posterior:
+            kappa_samples = trace.posterior[kappa_name].values.flatten()
+            kappa_mean = float(np.mean(kappa_samples))
+            kappa_sd = float(np.std(kappa_samples))
+            diagnostics.append(
+                f"  kappa {edge_id[:8]}…: {kappa_mean:.1f}±{kappa_sd:.1f} "
+                f"(large=Binomial, small=overdispersed)"
+            )
+
     return InferenceResult(
         posteriors=posteriors,
         latency_posteriors=latency_posteriors,

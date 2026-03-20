@@ -115,7 +115,7 @@ export function PosteriorDetails({ posterior, retrievedAt, theme = 'dark' }: Pos
   return <LatencyPosteriorDetails posterior={posterior as LatencyPosterior} tier={tier} colour={colour} retrievedAt={retrievedAt} theme={theme!} />;
 }
 
-function SectionHeader({ label, theme }: { label: string; theme: string }) {
+function SectionHeader({ label, theme }: { label: string; theme: 'light' | 'dark' }) {
   return (
     <tr>
       <td colSpan={2} className="posterior-details-section" style={{ color: theme === 'dark' ? '#888' : '#999', fontSize: '9px', textTransform: 'uppercase' as const, letterSpacing: '0.5px', paddingTop: 6 }}>
@@ -127,7 +127,7 @@ function SectionHeader({ label, theme }: { label: string; theme: string }) {
 
 function ProbabilityPosteriorDetails({ posterior, tier, colour, retrievedAt, theme }: {
   posterior: ProbabilityPosterior; tier: ReturnType<typeof computeQualityTier>; colour: string;
-  retrievedAt?: string | number | null; theme: string;
+  retrievedAt?: string | number | null; theme: 'light' | 'dark';
 }) {
   const a = posterior.alpha, b = posterior.beta;
   const pMean = a / (a + b);
@@ -221,7 +221,7 @@ function ProbabilityPosteriorDetails({ posterior, tier, colour, retrievedAt, the
 
 function LatencyPosteriorDetails({ posterior, tier, colour, retrievedAt, theme }: {
   posterior: LatencyPosterior; tier: ReturnType<typeof computeQualityTier>; colour: string;
-  retrievedAt?: string | number | null; theme: string;
+  retrievedAt?: string | number | null; theme: 'light' | 'dark';
 }) {
   const hasPath = posterior.path_mu_mean != null;
 

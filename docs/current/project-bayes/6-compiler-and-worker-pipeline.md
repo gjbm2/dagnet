@@ -220,6 +220,59 @@ small. A future `mixture_lognormal` family could avoid this loss entirely
 by keeping the mixture as the native path representation — see
 "Distribution family extensibility".
 
+### Overdispersion: Beta-Binomial / Dirichlet-Multinomial
+
+**Status**: Implemented (20-Mar-26)
+
+Standard Binomial/Multinomial likelihoods treat every conversion as an
+independent trial. With n=3000 people per trajectory-day, the posterior
+concentrates far more than the data warrants — day-to-day variation in
+conversion rates (marketing mix, seasonality, operational factors) means
+the true uncertainty is much larger than Binomial sampling noise.
+
+**Solution**: replace Binomial with Beta-Binomial, Multinomial with
+Dirichlet-Multinomial. A per-edge latent concentration parameter κ
+controls the degree of overdispersion:
+
+```
+κ_{edge} ~ Gamma(3, 0.1)       # mode=20, mean=30, broad tail
+
+# Solo edges: Beta-Binomial
+obs ~ BetaBinomial(n, p·κ, (1-p)·κ)
+
+# Branch groups: Dirichlet-Multinomial
+obs ~ DirichletMultinomial(n, κ·p_vec)
+
+# Trajectory Potentials: Dirichlet-Multinomial logp
+logp = Σ_i [logΓ(count_i + κ·prob_i) − logΓ(κ·prob_i)]
+     + logΓ(κ) − logΓ(n + κ)     per trajectory-day
+```
+
+Large κ → Binomial (no overdispersion). Small κ → heavy day-to-day
+variation. Each edge learns its own κ from trajectory data.
+
+**Observed values** (test graph, 20-Mar-26):
+
+| Edge | κ | Interpretation |
+|---|---|---|
+| created→delegated | 1.5±0.2 | Heavily overdispersed |
+| landing→created | 6.1±1.0 | Moderate |
+| registered→success | 11.0±1.4 | Moderate |
+| delegated→registered | 23.7±3.9 | Nearly Binomial |
+
+Early funnel edges (traffic-dependent) have much more day-to-day jitter
+than later edges (operationally stable). This matches expectation.
+
+**Effect on posteriors**: κ flows through the likelihood into all
+parameter posteriors — p, mu, sigma. Edges with small κ have wider
+posteriors (less information per trajectory-day). The posterior stdevs
+and HDI bands are properly calibrated to real data variation.
+
+**Recency weighting**: trajectory-day logp contributions are weighted by
+`w = exp(-ln2 · age / half_life)` (power-posterior interpretation).
+Integer counts are used in the logΓ terms; the weight scales the
+per-trajectory logp, not the counts.
+
 ### Latency model: edge-level variables
 
 For each edge with `latency.latency_parameter == true`, the compiler creates

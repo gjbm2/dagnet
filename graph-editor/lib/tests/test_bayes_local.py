@@ -32,6 +32,17 @@ def _clean_job_store():
     bayes_local._progress.clear()
 
 
+@pytest.fixture(autouse=True)
+def _disable_cache_invalidation():
+    """Prevent _invalidate_compiler_cache from evicting the worker module.
+
+    Without this, the cache invalidation deletes 'worker' from sys.modules,
+    causing _run_fit_graph to reimport the real module and bypass mocks.
+    """
+    with patch.object(bayes_local, '_invalidate_compiler_cache'):
+        yield
+
+
 def _mock_fit_graph(payload, *, delay=0, result=None, raise_exc=None):
     """Factory for mock worker.fit_graph functions."""
     def fn(p, report_progress=None):

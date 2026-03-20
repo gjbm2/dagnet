@@ -101,7 +101,10 @@ def load_test_data():
     import yaml
 
     conf = _read_conf()
-    data_repo = conf.get("DATA_REPO_DIR", "nous-conversion")
+    data_repo = conf.get("DATA_REPO_DIR", "")
+    if not data_repo:
+        print("ERROR: DATA_REPO_DIR not set in .private-repos.conf")
+        sys.exit(1)
     data_repo_path = os.path.join(REPO_ROOT, data_repo)
 
     env = _load_env(os.path.join(REPO_ROOT, "graph-editor", ".env.local"))
@@ -128,20 +131,58 @@ def load_test_data():
         ("bayes-test-landing-to-created",        "b91c2820-7a1d-4498-9082-5967b5027d76", "SXVK13yfsOIpXc4RQSv2GA", "yHCQevqcdyITym82h-uwdQ"),
         ("bayes-test-registered-to-success",     "97b11265-1242-4fa8-a097-359f2384665a", "VTgXES1p_XdQoHMZ7VsEoA", "XiDhZpbnp535eBHiPu614w"),
     ]
+
+    # Build equivalent_hashes from hash-mappings.json — same ClosureEntry
+    # shape the FE sends (dicts with core_hash, operation, weight).
+    equiv_map: dict[str, list[dict]] = {}  # core_hash → [ClosureEntry, ...]
+    mappings_path = os.path.join(data_repo_path, "hash-mappings.json")
+    if os.path.exists(mappings_path):
+        import json as _json
+        with open(mappings_path) as f:
+            _raw = _json.load(f)
+        _mappings = _raw if isinstance(_raw, list) else _raw.get("hash_mappings", [])
+        for m in _mappings:
+            if m.get("operation") != "equivalent":
+                continue
+            src = m.get("core_hash", "")
+            dst = m.get("equivalent_to", "")
+            if not src or not dst or src == dst:
+                continue
+            # Undirected: both directions
+            for a, b in [(src, dst), (dst, src)]:
+                equiv_map.setdefault(a, [])
+                entry = {"core_hash": b, "operation": m["operation"], "weight": m.get("weight", 1.0)}
+                if entry not in equiv_map[a]:
+                    equiv_map[a].append(entry)
+
+    # Build snapshot subjects matching the FE SnapshotSubjectPayload contract:
+    # includes target (nested dict), equivalent_hashes (ClosureEntry[]),
+    # read_mode, subject_id, canonical_signature.
     snapshot_subjects = []
     for param_id, edge_id, window_hash, cohort_hash in _edges:
         base = {
             "param_id": param_id,
+            "subject_id": f"parameter:{param_id}:{edge_id}:p:",
+            "canonical_signature": "",
+            "read_mode": "sweep_simple",
+            "target": {"targetId": edge_id},
             "edge_id": edge_id,
-            "equivalent_hashes": [],
             "slice_keys": [""],
             "anchor_from": "2025-11-19",
             "anchor_to": "2026-03-19",
             "sweep_from": "2025-11-19",
             "sweep_to": "2026-03-19",
         }
-        snapshot_subjects.append({**base, "core_hash": window_hash})
-        snapshot_subjects.append({**base, "core_hash": cohort_hash})
+        snapshot_subjects.append({
+            **base,
+            "core_hash": window_hash,
+            "equivalent_hashes": equiv_map.get(window_hash, []),
+        })
+        snapshot_subjects.append({
+            **base,
+            "core_hash": cohort_hash,
+            "equivalent_hashes": equiv_map.get(cohort_hash, []),
+        })
 
     return graph, param_files, snapshot_subjects, db_connection
 
@@ -691,14 +732,13 @@ def main():
     print("Stage 2: Snapshot DB query")
     print("="*60)
 
-    import psycopg2
-    conn = psycopg2.connect(db_connection)
-    # Reuse the worker's query logic
+    # Set DB_CONNECTION so snapshot_service.get_db_connection() works
+    os.environ["DB_CONNECTION"] = db_connection
+    # Reuse the worker's query logic (uses snapshot_service internally)
     sys.path.insert(0, os.path.join(REPO_ROOT, "bayes"))
     from worker import _query_snapshot_subjects
     log = []
-    snapshot_rows = _query_snapshot_subjects(conn, snapshot_subjects, topology, log)
-    conn.close()
+    snapshot_rows = _query_snapshot_subjects(snapshot_subjects, topology, log)
     for l in log:
         print(f"  {l}")
     check_snapshot_query(snapshot_rows, r)

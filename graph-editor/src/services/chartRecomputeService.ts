@@ -7,6 +7,7 @@ import { dslDependsOnReferenceDay } from '../lib/dslDynamics';
 import { ukReferenceDayService } from './ukReferenceDayService';
 import { chartDepsSignatureV1 } from '../lib/chartDeps';
 import { computeGraphInputsSignatureV1 } from './graphInputSignatureService';
+import { resolveComputeAffectingDisplay } from '../lib/analysisDisplaySettingsRegistry';
 
 type AnyScenario = {
   id: string;
@@ -139,6 +140,11 @@ async function deriveCurrentDepsStamp(args: {
     }
   })();
 
+  // Include compute-affecting display settings in the signature so that
+  // changing e.g. bayes_band_level triggers a recompute.
+  const display = chartData?.definition?.display ?? chartData?.display;
+  const compute_display = resolveComputeAffectingDisplay(chartKind, display);
+
   return {
     v: 1,
     mode,
@@ -148,6 +154,7 @@ async function deriveCurrentDepsStamp(args: {
     scenarios,
     inputs_signature,
     reference_day_uk,
+    compute_display,
   };
 }
 

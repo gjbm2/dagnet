@@ -1,16 +1,17 @@
 """
 Model builder: TopologyAnalysis + BoundEvidence → pm.Model.
 
-Phase B model structure:
+Model structure:
   - Graph-level σ_temporal (learned temporal volatility)
+  - Per-edge κ (overdispersion concentration: BetaBinomial/DM)
   - Solo edges: p ~ Beta(α, β)
   - Branch groups: [p_1, ..., p_K, p_dropout] ~ Dirichlet(α_vec)
     - Exhaustive groups omit the dropout component
-  - If window + cohort: p_base from Dirichlet/Beta, p_window (tight), p_cohort (path-informed)
-  - If window only: p from Dirichlet/Beta
-  - Solo edges: window obs → Binomial(n, p * completeness, k)
-  - Branch groups: window obs → Multinomial(n_A, [p_siblings..., dropout], [k_siblings..., residual])
-  - All edges: cohort obs → per-day Binomial(n_daily, p * path_completeness, k_daily)
+  - If window + cohort: p_base, p_window (tight), p_cohort (path-informed)
+  - Solo edges: window obs → BetaBinomial(n, p·κ, (1-p)·κ)
+  - Branch groups: window obs → DirichletMultinomial(n, κ·p_vec)
+  - Trajectory obs → Dirichlet-Multinomial logp via pm.Potential
+  - Daily cohort obs → BetaBinomial(n, p·κ, (1-p)·κ)
 
 This is the only module that imports PyMC.
 """
@@ -195,6 +196,12 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence):
                 beta_param = ev.prob_prior.beta
                 p_base_var = None  # will be created below per observation type
 
+            # Per-edge overdispersion concentration κ.
+            # BetaBinomial / Dirichlet-Multinomial: large κ → Binomial,
+            # small κ → heavy overdispersion. Each edge learns its own
+            # level from its trajectory data.
+            edge_kappa = pm.Gamma(f"kappa_{safe_id}", alpha=3, beta=0.1)
+
             if ev.has_window and ev.has_cohort:
                 if p_base_var is not None:
                     p_base = p_base_var
@@ -235,13 +242,13 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence):
                 )
 
                 if emit_window_binomial:
-                    _emit_window_likelihoods(safe_id, p_window, ev, diagnostics)
+                    _emit_window_likelihoods(safe_id, p_window, ev, diagnostics, kappa=edge_kappa)
                 _emit_cohort_likelihoods(safe_id, p_cohort, ev, diagnostics,
                                         topology, edge_var_names, model,
                                         latency_vars=latency_vars,
                                         p_window_var=p_window,
                                         cohort_latency_vars=cohort_latency_vars,
-)
+                                        kappa=edge_kappa)
 
                 if edge_id not in edge_var_names:
                     edge_var_names[edge_id] = f"p_base_{safe_id}"
@@ -253,7 +260,7 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence):
                     p = pm.Beta(f"p_{safe_id}", alpha=ev.prob_prior.alpha, beta=ev.prob_prior.beta)
                     edge_var_names[edge_id] = f"p_{safe_id}"
                 if emit_window_binomial:
-                    _emit_window_likelihoods(safe_id, p, ev, diagnostics)
+                    _emit_window_likelihoods(safe_id, p, ev, diagnostics, kappa=edge_kappa)
 
             elif ev.has_cohort:
                 if p_base_var is not None:
@@ -265,7 +272,7 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence):
                                         topology, edge_var_names, model,
                                         latency_vars=latency_vars,
                                         cohort_latency_vars=cohort_latency_vars,
-)
+                                        kappa=edge_kappa)
 
             else:
                 if p_base_var is None:
@@ -458,19 +465,25 @@ def _emit_window_likelihoods(
     p_var,
     ev: EdgeEvidence,
     diagnostics: list[str],
+    kappa=None,
 ) -> None:
-    """Emit Binomial likelihoods for window observations (solo edges only)."""
+    """Emit BetaBinomial likelihoods for window observations (solo edges only).
+
+    BetaBinomial(n, α=p·κ, β=(1-p)·κ) generalises Binomial to allow
+    overdispersion (day-to-day rate variation beyond Binomial noise).
+    """
     import pymc as pm
 
     for i, w_obs in enumerate(ev.window_obs):
         if w_obs.n <= 0:
             continue
         suffix = f"_{i}" if len(ev.window_obs) > 1 else ""
-        p_effective = p_var * w_obs.completeness
-        pm.Binomial(
+        p_effective = pm.math.clip(p_var * w_obs.completeness, 0.001, 0.999)
+        pm.BetaBinomial(
             f"obs_w_{safe_id}{suffix}",
             n=w_obs.n,
-            p=pm.math.clip(p_effective, 0.001, 0.999),
+            alpha=p_effective * kappa,
+            beta=(1.0 - p_effective) * kappa,
             observed=min(w_obs.k, w_obs.n),
         )
 
@@ -486,6 +499,7 @@ def _emit_cohort_likelihoods(
     latency_vars: dict[str, tuple] | None = None,
     p_window_var=None,
     cohort_latency_vars: dict[str, tuple] | None = None,
+    kappa=None,
 ) -> None:
     """Emit cohort likelihoods via pm.Potential (vectorised per obs_type).
 
@@ -602,17 +616,14 @@ def _emit_cohort_likelihoods(
         if has_latent_latency:
             # Phase D: CDFs are PyTensor expressions of latent (mu, sigma).
             #
-            # Strategy: compute ALL CDFs in ONE vectorised erfc call, then
-            # use numpy integer index arrays (advanced indexing) to extract
-            # interval coefficients. The PyTensor graph has ~10 nodes total
-            # regardless of how many trajectories exist.
+            # Dirichlet-Multinomial logp per trajectory-day:
+            #   Σ_i [logΓ(count_i + κ·prob_i) − logΓ(κ·prob_i)]
+            #   + logΓ(κ) − logΓ(n + κ)
+            # where prob_i = p·cdf_coeff_i (intervals) or 1−p·CDF_final
+            # (remainder). Recency weight scales each trajectory's logp.
             #
-            # The interval structure for the Multinomial logp:
-            #   For each trajectory with ages [t1, t2, ..., tk]:
-            #     interval_coeff[0] = CDF(t1)
-            #     interval_coeff[j] = CDF(tj) - CDF(tj-1)  for j > 0
-            #     remainder uses CDF(tk)
-            #   logp = Σ count * log(p * coeff) + Σ remainder * log(1 - p * CDF_final)
+            # Vectorisation: flatten all intervals across all trajectories
+            # into one array. Same advanced-indexing strategy as before.
 
             # Step 1: Flatten all ages into one array (numpy)
             all_ages_raw = []
@@ -637,12 +648,15 @@ def _emit_cohort_likelihoods(
             z_all = (log_ages - mu_var) / (sigma_var * pt.sqrt(2.0))
             cdf_all = 0.5 * pt.erfc(-z_all)  # shape: (N,)
 
-            # Step 3: Build index arrays for interval coefficients (numpy)
+            # Step 3: Build index arrays and INTEGER counts (numpy)
             curr_indices = []
             prev_indices = []
-            interval_counts = []
+            interval_counts = []    # unweighted integer counts
+            interval_weights = []   # per-element recency weight
             remainder_indices = []
             remainder_counts_list = []
+            remainder_weights = []
+            n_per_traj = []
 
             age_offset = 0
             for traj in trajs:
@@ -653,58 +667,81 @@ def _emit_cohort_likelihoods(
                 # First interval
                 curr_indices.append(age_offset)
                 prev_indices.append(-1)
-                interval_counts.append(float(cum_y[0]) * w)
+                interval_counts.append(float(cum_y[0]))
+                interval_weights.append(w)
 
                 # Subsequent intervals
                 for j in range(1, n_ages):
                     curr_indices.append(age_offset + j)
                     prev_indices.append(age_offset + j - 1)
-                    interval_counts.append(float(max(0, cum_y[j] - cum_y[j - 1])) * w)
+                    interval_counts.append(float(max(0, cum_y[j] - cum_y[j - 1])))
+                    interval_weights.append(w)
 
                 # Remainder
                 remainder_indices.append(age_offset + n_ages - 1)
-                remainder_counts_list.append(float(max(0, traj.n - cum_y[-1])) * w)
+                remainder_counts_list.append(float(max(0, traj.n - cum_y[-1])))
+                remainder_weights.append(w)
+                n_per_traj.append(float(traj.n))
 
                 age_offset += n_ages
 
             # Step 4: Compute interval CDF coefficients via advanced indexing
-            # (2 PyTensor index ops, not N individual ones)
             curr_idx_np = np.array(curr_indices, dtype=np.int64)
             prev_idx_np = np.array(prev_indices, dtype=np.int64)
             counts_np = np.array(interval_counts, dtype=np.float64)
+            weights_np = np.array(interval_weights, dtype=np.float64)
 
-            cdf_curr = cdf_all[curr_idx_np]  # one advanced index op
-            # For prev: use 0 where sentinel (-1), then mask
+            cdf_curr = cdf_all[curr_idx_np]
             prev_safe = np.where(prev_idx_np >= 0, prev_idx_np, 0)
-            cdf_prev = cdf_all[prev_safe]  # one advanced index op
+            cdf_prev = cdf_all[prev_safe]
             is_first = pt.as_tensor_variable((prev_idx_np < 0).astype(np.float64))
-            # coeff = cdf_curr - cdf_prev * (1 - is_first)
-            # When is_first=1: coeff = cdf_curr
-            # When is_first=0: coeff = cdf_curr - cdf_prev
             cdf_coeffs = cdf_curr - cdf_prev * (1.0 - is_first)
             cdf_coeffs = pt.clip(cdf_coeffs, 1e-12, 1.0)
 
-            # Step 5: Conversion logp
-            conv_probs = p_expr * cdf_coeffs
-            conv_logp = pt.sum(counts_np * pt.log(pt.clip(conv_probs, 1e-30, 1.0)))
-
-            # Step 6: Remainder logp
-            rem_idx_np = np.array(remainder_indices, dtype=np.int64)
-            rem_counts_np = np.array(remainder_counts_list, dtype=np.float64)
-            cdf_finals = cdf_all[rem_idx_np]
-            remainder_logp = pt.sum(
-                rem_counts_np * pt.log(pt.clip(1.0 - p_expr * cdf_finals, 1e-12, 1.0))
+            # Step 5: Dirichlet-Multinomial logp — interval terms
+            # α_i = κ · p · cdf_coeff_i
+            alpha_interval = kappa * p_expr * cdf_coeffs
+            alpha_interval = pt.maximum(alpha_interval, 1e-12)
+            logp_intervals = pt.sum(
+                weights_np * (pt.gammaln(counts_np + alpha_interval)
+                              - pt.gammaln(alpha_interval))
             )
 
-            logp = conv_logp + remainder_logp
+            # Step 6: DM logp — remainder terms
+            rem_idx_np = np.array(remainder_indices, dtype=np.int64)
+            rem_counts_np = np.array(remainder_counts_list, dtype=np.float64)
+            rem_weights_np = np.array(remainder_weights, dtype=np.float64)
+            cdf_finals = cdf_all[rem_idx_np]
+            alpha_remainder = kappa * (1.0 - p_expr * cdf_finals)
+            alpha_remainder = pt.maximum(alpha_remainder, 1e-12)
+            logp_remainders = pt.sum(
+                rem_weights_np * (pt.gammaln(rem_counts_np + alpha_remainder)
+                                  - pt.gammaln(alpha_remainder))
+            )
+
+            # Step 7: DM logp — per-trajectory normalisation
+            n_per_traj_np = np.array(n_per_traj, dtype=np.float64)
+            traj_weights_np = np.array(
+                [getattr(t, 'recency_weight', 1.0) for t in trajs],
+                dtype=np.float64,
+            )
+            logp_norm = pt.sum(
+                traj_weights_np * (pt.gammaln(kappa) - pt.gammaln(n_per_traj_np + kappa))
+            )
+
+            logp = logp_intervals + logp_remainders + logp_norm
             n_terms = len(trajs)
 
         else:
-            # Phase S: fixed CDFs — use efficient decomposition.
-            total_conversion_count = 0.0
-            cdf_logp_constant = 0.0
+            # Phase S: fixed CDFs — Dirichlet-Multinomial with constant
+            # CDF coefficients. Only κ and p flow through as PyTensor.
+            interval_counts = []
+            interval_alphas = []   # κ · p · cdf_coeff (p is PyTensor, rest constant)
+            interval_weights = []
             remainder_counts = []
             remainder_cdf_finals = []
+            remainder_weights = []
+            n_per_traj = []
 
             for traj in trajs:
                 cum_y = traj.cumulative_y
@@ -716,31 +753,51 @@ def _emit_cohort_likelihoods(
                 else:
                     cdf_vals = [1.0] * len(traj.retrieval_ages)
 
-                counts = [cum_y[0] * w]
-                coeffs = [max(cdf_vals[0], 1e-15)]
+                # First interval
+                interval_counts.append(float(cum_y[0]))
+                interval_alphas.append(max(cdf_vals[0], 1e-15))
+                interval_weights.append(w)
+
+                # Subsequent intervals
                 for j in range(1, len(cum_y)):
-                    counts.append(max(0, cum_y[j] - cum_y[j - 1]) * w)
-                    coeffs.append(max(cdf_vals[j] - cdf_vals[j - 1], 1e-15))
+                    interval_counts.append(float(max(0, cum_y[j] - cum_y[j - 1])))
+                    interval_alphas.append(max(cdf_vals[j] - cdf_vals[j - 1], 1e-15))
+                    interval_weights.append(w)
 
-                remainder = max(0, traj.n - cum_y[-1]) * w
-                cdf_final = min(cdf_vals[-1], 1.0 - 1e-10)
+                remainder_counts.append(float(max(0, traj.n - cum_y[-1])))
+                remainder_cdf_finals.append(min(cdf_vals[-1], 1.0 - 1e-10))
+                remainder_weights.append(w)
+                n_per_traj.append(float(traj.n))
 
-                for c, coeff in zip(counts, coeffs):
-                    if c > 0:
-                        total_conversion_count += c
-                        cdf_logp_constant += c * np.log(max(coeff, 1e-30))
+            counts_np = np.array(interval_counts, dtype=np.float64)
+            coeffs_np = np.array(interval_alphas, dtype=np.float64)
+            weights_np = np.array(interval_weights, dtype=np.float64)
 
-                remainder_counts.append(remainder)
-                remainder_cdf_finals.append(cdf_final)
-
-            remainder_counts_arr = np.array(remainder_counts, dtype=np.float64)
-            remainder_cdf_arr = np.array(remainder_cdf_finals, dtype=np.float64)
-
-            logp = (
-                total_conversion_count * pt.log(pt.clip(p_expr, 1e-12, 1.0))
-                + cdf_logp_constant
-                + pt.sum(remainder_counts_arr * pt.log(pt.clip(1.0 - p_expr * remainder_cdf_arr, 1e-12, 1.0)))
+            # α_interval = κ · p · cdf_coeff (cdf_coeff is constant)
+            alpha_interval = kappa * p_expr * pt.as_tensor_variable(coeffs_np)
+            alpha_interval = pt.maximum(alpha_interval, 1e-12)
+            logp_intervals = pt.sum(
+                weights_np * (pt.gammaln(counts_np + alpha_interval)
+                              - pt.gammaln(alpha_interval))
             )
+
+            rem_counts_np = np.array(remainder_counts, dtype=np.float64)
+            rem_cdf_np = np.array(remainder_cdf_finals, dtype=np.float64)
+            rem_weights_np = np.array(remainder_weights, dtype=np.float64)
+            alpha_remainder = kappa * (1.0 - p_expr * pt.as_tensor_variable(rem_cdf_np))
+            alpha_remainder = pt.maximum(alpha_remainder, 1e-12)
+            logp_remainders = pt.sum(
+                rem_weights_np * (pt.gammaln(rem_counts_np + alpha_remainder)
+                                  - pt.gammaln(alpha_remainder))
+            )
+
+            n_per_traj_np = np.array(n_per_traj, dtype=np.float64)
+            traj_weights_np = np.array(remainder_weights, dtype=np.float64)
+            logp_norm = pt.sum(
+                traj_weights_np * (pt.gammaln(kappa) - pt.gammaln(n_per_traj_np + kappa))
+            )
+
+            logp = logp_intervals + logp_remainders + logp_norm
             n_terms = len(trajs)
 
         pm.Potential(f"traj_{obs_type}_{safe_id}", logp)
@@ -764,10 +821,11 @@ def _emit_cohort_likelihoods(
 
             p_effective = pm.math.clip(p_var * compl_arr, 0.001, 0.999)
 
-            pm.Binomial(
+            pm.BetaBinomial(
                 f"obs_daily_{safe_id}",
                 n=n_arr,
-                p=p_effective,
+                alpha=p_effective * kappa,
+                beta=(1.0 - p_effective) * kappa,
                 observed=k_arr,
             )
 
@@ -974,15 +1032,35 @@ def _emit_branch_group_multinomial(
         effective_n = shared_n
 
     safe_group = _safe_var_name(bg.group_id)
-    pm.Multinomial(
-        f"obs_bg_{safe_group}",
-        n=effective_n,
-        p=p_full,
-        observed=k_full,
-    )
+
+    # Use the first sibling's κ for the branch group DM.
+    # Siblings share a source node so share overdispersion characteristics.
+    first_sib_id = sibling_info[0]["edge_id"]
+    first_safe = _safe_var_name(first_sib_id)
+    kappa_var = None
+    kappa_name = f"kappa_{first_safe}"
+    for rv in model.free_RVs:
+        if rv.name == kappa_name:
+            kappa_var = rv
+            break
+
+    if kappa_var is not None:
+        pm.DirichletMultinomial(
+            f"obs_bg_{safe_group}",
+            n=effective_n,
+            a=kappa_var * p_full,
+            observed=k_full,
+        )
+    else:
+        pm.Multinomial(
+            f"obs_bg_{safe_group}",
+            n=effective_n,
+            p=p_full,
+            observed=k_full,
+        )
 
     diagnostics.append(
-        f"INFO: branch group {bg.group_id}: Multinomial emitted, "
+        f"INFO: branch group {bg.group_id}: DirichletMultinomial emitted, "
         f"{len(sibling_info)} siblings, n_A={effective_n}, Σk={total_k}, "
         f"exhaustive={bg.is_exhaustive}"
     )

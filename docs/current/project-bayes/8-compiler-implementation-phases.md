@@ -1,7 +1,7 @@
 # Project Bayes: Compiler implementation phases
 
-**Status**: Draft
-**Date**: 17-Mar-26
+**Status**: Phases A, B, S, D substantially complete; Phase C next
+**Date**: 20-Mar-26
 **Purpose**: Phased delivery plan for the compiler and worker pipeline.
 This doc owns development sequencing; `6-compiler-and-worker-pipeline.md`
 contains the end-state technical design.
@@ -169,30 +169,51 @@ base rate via hierarchical shrinkage.
 
 ---
 
-## Phase D: Probability–latency coupling
+## Phase D: Probability–latency coupling + overdispersion
+
+**Status**: Substantially complete (20-Mar-26). Latent latency, FW path
+composition, cohort latency hierarchy, recency weighting, softplus onset,
+and Beta-Binomial/DM overdispersion are all implemented and converging
+(0 divergences, rhat=1.004, ESS=1805). Remaining: join-node collapse
+(needs graph with non-trivial joins), branch group completeness (needs
+2+ siblings with data), parameter recovery tests.
 
 **Goal**: latency variables become fully latent. The model jointly infers
 conversion probability and latency, using the completeness CDF as the
-coupling mechanism.
+coupling mechanism. Overdispersion is properly modelled via
+Beta-Binomial / Dirichlet-Multinomial likelihoods.
 
-**What changes from Phase C**:
+**What changes from Phase S**:
 
 - **Latent latency variables**: `mu_edge` and `sigma_edge` are
   `pm.Normal` and `pm.Gamma` respectively, not fixed point estimates.
-  NUTS explores the joint (p, mu, sigma) space.
+  NUTS explores the joint (p, mu, sigma) space. Gamma prior for sigma
+  with mode at observed dispersion (not HalfNormal which biases toward
+  zero). Done.
 - **Path composition becomes differentiable**: FW composition of
   edge-level latents into path-level `(path_mu, path_sigma)` via
-  PyTensor deterministic nodes. Gradients flow through the composition.
+  PyTensor deterministic nodes (`pt_fw_chain`). Gradients flow through
+  the composition. Done.
+- **Cohort latency hierarchy**: for paths with 2+ latency edges,
+  `onset_cohort`, `mu_cohort`, `sigma_cohort` are non-centred
+  deviations from FW-composed edge latency. Done.
+- **Softplus onset**: `pt.softplus(age - onset)` replaces hard clamp
+  to eliminate gradient discontinuity causing NUTS divergences. Done.
+- **Recency-weighted likelihood**: `w = exp(-ln2 · age / half_life)`
+  per trajectory-day, applied to logp contributions. Replaces explicit
+  drift modelling (see doc 12). Done.
+- **Beta-Binomial / Dirichlet-Multinomial overdispersion**: per-edge
+  latent κ replaces Binomial/Multinomial. Each edge's κ is learned from
+  its trajectory data. See doc 6 § "Overdispersion". Done.
 - **Join-node collapse becomes differentiable**: moment-matching at joins
-  uses latent traffic weights `w_i = p_path_i / Σ p_path_i`, computed
-  as PyTensor expressions.
+  uses latent traffic weights. Not yet tested (needs graph with joins).
 - **Completeness coupling is fully joint**: the CDF in each cohort
   likelihood term is a function of latent `(path_mu, path_sigma)`,
   which are themselves functions of upstream latent variables. The
-  sampler resolves "low p vs slow latency" jointly.
+  sampler resolves "low p vs slow latency" jointly. Done.
 - **Window completeness couples to latent edge latency**: window terms
   use `CDF(obs_time - onset, mu_XY, sigma_XY)` where `mu_XY`,
-  `sigma_XY` are latent, not fixed.
+  `sigma_XY` are latent, not fixed. Done.
 
 **What is NOT changed**:
 - Warm-start: no warm-start for latency posteriors (latency interacts
@@ -200,15 +221,15 @@ coupling mechanism.
   window could bias the coupled model). Revisit after Phase D is stable.
 
 **Exit criteria**:
-- Joint model can distinguish low-p from slow-latency given a mix of
-  mature and immature daily observations (parameter recovery test)
-- Path composition via FW is differentiable and gradients are correct
-  (numerical gradient check)
+- ~~Joint model can distinguish low-p from slow-latency~~ — Done (latency
+  posteriors diverge from prior, 0 divergences)
+- ~~Path composition via FW is differentiable~~ — Done (wiring checks
+  confirm upstream mu_lat/sigma_lat in cohort Potential ancestry)
 - Completeness-adjusted Multinomial produces correct effective
-  probabilities with per-sibling completeness factors
-- `p_effective_dropout` converges to `1 - Σ p_i` as age → ∞
-- r-hat and ESS acceptable for the joint model (may need longer chains
-  than Phase A–C)
+  probabilities with per-sibling completeness factors — Not tested
+- `p_effective_dropout` converges to `1 - Σ p_i` as age → ∞ — Not tested
+- ~~r-hat and ESS acceptable~~ — Done (rhat=1.004, ESS=1805, 0 divergences)
+- ~~Overdispersion properly modelled~~ — Done (per-edge κ via BetaBinomial/DM)
 
 ---
 
@@ -306,7 +327,7 @@ model's behaviour is well understood through backtesting.
 ## Dependency graph
 
 ```
-Phase A ──→ Phase B ──→ Phase S ──→ Phase C ──→ Phase D ──→ Phase E (optional)
+Phase A ──→ Phase B ──→ Phase S ──→ Phase D ──→ Phase C ──→ Phase E (optional)
   │                       │                        │
   │                       │                        ├──→ Distribution family dispatch
   ├──→ Trajectory cal.    │                        │

@@ -14,6 +14,8 @@ import { computeEffectiveEdgeProbability, getEdgeWhatIfDisplay } from '@/lib/wha
 import { getVisitedNodeIds } from '@/lib/queryDSL';
 import { calculateConfidenceBounds } from '@/utils/confidenceIntervals';
 import { computeQualityTier, qualityTierToColour, qualityTierLabel } from '@/utils/bayesQualityTier';
+import { useDataDepthContext } from '../../contexts/DataDepthContext';
+import { depthToColour, formatPct, formatN } from '../../services/dataDepthService';
 import type { ProbabilityPosterior } from '@/types';
 import { useEdgeBeads, EdgeBeadsRenderer } from './EdgeBeads';
 import { useDecorationVisibility } from '../GraphCanvas';
@@ -663,14 +665,25 @@ export default function ConversionEdge({
     } : { r: 153, g: 153, b: 153 }; // fallback to gray
   };
   
-  // Forecast quality overlay: compute quality tier colour from posterior
+  // Overlay mode: compute overlay colour from posterior or data depth
   const viewOverlayMode = viewPrefs?.viewOverlayMode ?? 'none';
+
+  // Data depth scores from context (computed once for the whole graph)
+  const { scores: dataDepthScores } = useDataDepthContext();
+
   const qualityOverlayColour = useMemo(() => {
-    if (viewOverlayMode !== 'forecast-quality') return null;
-    const posterior = fullEdge?.p?.posterior as ProbabilityPosterior | undefined;
-    const tier = computeQualityTier(posterior);
-    return qualityTierToColour(tier.tier, dark ? 'dark' : 'light');
-  }, [viewOverlayMode, fullEdge?.p?.posterior, dark]);
+    if (viewOverlayMode === 'forecast-quality') {
+      const posterior = fullEdge?.p?.posterior as ProbabilityPosterior | undefined;
+      const tier = computeQualityTier(posterior);
+      return qualityTierToColour(tier.tier, dark ? 'dark' : 'light');
+    }
+    if (viewOverlayMode === 'data-depth' && dataDepthScores) {
+      const edgeId = fullEdge?.uuid || fullEdge?.id;
+      const score = edgeId ? dataDepthScores.get(edgeId) : undefined;
+      return depthToColour(score?.depth ?? null, dark ? 'dark' : 'light');
+    }
+    return null;
+  }, [viewOverlayMode, fullEdge?.p?.posterior, fullEdge?.uuid, fullEdge?.id, dark, dataDepthScores]);
 
   // Edge colour logic: highlight/selection shading
   // Case/conditional edge colours now shown as markers, not full edge colouring

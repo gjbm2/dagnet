@@ -328,6 +328,7 @@ export function useCanvasAnalysisCompute({
                 ),
                 getScenarioName,
                 getScenarioColour,
+                display: analysis.display as Record<string, unknown> | undefined,
               }
             : (() => {
                 // Patch the 'current' underlayer's colour with the live tab value
@@ -353,6 +354,7 @@ export function useCanvasAnalysisCompute({
                   customScenarios,
                   hiddenScenarioIds: (((analysis.display as any)?.hidden_scenarios) || []) as string[],
                   frozenWhatIfDsl: analysis.recipe?.analysis?.what_if_dsl,
+                  display: analysis.display as Record<string, unknown> | undefined,
                 };
               })(),
         );

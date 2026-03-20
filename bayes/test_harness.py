@@ -121,7 +121,10 @@ def main():
     args = parser.parse_args()
 
     conf = _read_private_repos_conf()
-    data_repo = conf.get("DATA_REPO_DIR", "nous-conversion")
+    data_repo = conf.get("DATA_REPO_DIR", "")
+    if not data_repo:
+        print("ERROR: DATA_REPO_DIR not set in .private-repos.conf")
+        sys.exit(1)
     data_repo_path = os.path.join(REPO_ROOT, data_repo)
 
     # Load env
@@ -160,20 +163,54 @@ def main():
         ("bayes-test-landing-to-created",        "b91c2820-7a1d-4498-9082-5967b5027d76", "SXVK13yfsOIpXc4RQSv2GA", "yHCQevqcdyITym82h-uwdQ"),
         ("bayes-test-registered-to-success",     "97b11265-1242-4fa8-a097-359f2384665a", "VTgXES1p_XdQoHMZ7VsEoA", "XiDhZpbnp535eBHiPu614w"),
     ]
+
+    # Build equivalent_hashes from hash-mappings.json — same ClosureEntry
+    # shape the FE sends (dicts with core_hash, operation, weight).
+    equiv_map: dict[str, list[dict]] = {}
+    mappings_path = os.path.join(data_repo_path, "hash-mappings.json")
+    if os.path.exists(mappings_path):
+        with open(mappings_path) as f:
+            _raw = json.load(f)
+        _mappings = _raw if isinstance(_raw, list) else _raw.get("hash_mappings", [])
+        for m in _mappings:
+            if m.get("operation") != "equivalent":
+                continue
+            src = m.get("core_hash", "")
+            dst = m.get("equivalent_to", "")
+            if not src or not dst or src == dst:
+                continue
+            for a, b in [(src, dst), (dst, src)]:
+                equiv_map.setdefault(a, [])
+                entry = {"core_hash": b, "operation": m["operation"], "weight": m.get("weight", 1.0)}
+                if entry not in equiv_map[a]:
+                    equiv_map[a].append(entry)
+
+    # Build snapshot subjects matching the FE SnapshotSubjectPayload contract
     snapshot_subjects = []
     for param_id, edge_id, window_hash, cohort_hash in _edges:
         base = {
             "param_id": param_id,
+            "subject_id": f"parameter:{param_id}:{edge_id}:p:",
+            "canonical_signature": "",
+            "read_mode": "sweep_simple",
+            "target": {"targetId": edge_id},
             "edge_id": edge_id,
-            "equivalent_hashes": [],
             "slice_keys": [""],
             "anchor_from": "2025-11-19",
             "anchor_to": "2026-03-19",
             "sweep_from": "2025-11-19",
             "sweep_to": "2026-03-19",
         }
-        snapshot_subjects.append({**base, "core_hash": window_hash})
-        snapshot_subjects.append({**base, "core_hash": cohort_hash})
+        snapshot_subjects.append({
+            **base,
+            "core_hash": window_hash,
+            "equivalent_hashes": equiv_map.get(window_hash, []),
+        })
+        snapshot_subjects.append({
+            **base,
+            "core_hash": cohort_hash,
+            "equivalent_hashes": equiv_map.get(cohort_hash, []),
+        })
     print(f"Snapshot subjects: {len(snapshot_subjects)} (4 edges × 2 slices)")
 
     payload = {

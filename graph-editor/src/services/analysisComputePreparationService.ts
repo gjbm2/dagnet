@@ -10,6 +10,7 @@ import {
   type SnapshotPlannerInputsStatusResult,
 } from './snapshotSubjectResolutionService';
 import type { Graph, ScenarioVisibilityMode } from '../types';
+import { resolveComputeAffectingDisplay } from '../lib/analysisDisplaySettingsRegistry';
 
 type ScenarioLike = {
   id: string;
@@ -69,6 +70,8 @@ export interface PreparedAnalysisComputeReady {
   queryDsl: string;
   scenarios: PreparedAnalysisScenario[];
   signature: string;
+  /** Compute-affecting display settings forwarded to the backend. */
+  displaySettings?: Record<string, unknown>;
 }
 
 export interface PreparedAnalysisComputeBlocked {
@@ -92,6 +95,8 @@ type SharedParams = {
   chartCurrentLayerDsl?: string | null;
   needsSnapshots: boolean;
   workspace?: { repository: string; branch: string };
+  /** Canvas analysis display bag — compute-affecting keys are forwarded to the backend. */
+  display?: Record<string, unknown> | null;
 };
 
 type LiveParams = SharedParams & {
@@ -195,8 +200,9 @@ export function createPreparedSignature(
   analysisType: string,
   queryDsl: string,
   scenarios: PreparedAnalysisScenario[],
+  displaySettings?: Record<string, unknown>,
 ): string {
-  return [
+  const parts = [
     analysisType,
     queryDsl,
     ...scenarios.map((scenario) => [
@@ -206,7 +212,11 @@ export function createPreparedSignature(
       graphSignature(scenario.graph),
       snapshotSubjectsSignature(scenario.snapshot_subjects),
     ].join('|')),
-  ].join('||');
+  ];
+  if (displaySettings) {
+    parts.push(`ds:${JSON.stringify(displaySettings)}`);
+  }
+  return parts.join('||');
 }
 
 function createBlockedPlannerState(
@@ -436,12 +446,15 @@ export async function prepareAnalysisComputeInputs(
     }
   }
 
+  const displaySettings = resolveComputeAffectingDisplay(analysisType, params.display ?? undefined);
+
   const ready: PreparedAnalysisComputeReady = {
     status: 'ready',
     analysisType,
     queryDsl,
     scenarios,
-    signature: createPreparedSignature(analysisType, queryDsl, scenarios),
+    signature: createPreparedSignature(analysisType, queryDsl, scenarios, displaySettings),
+    displaySettings,
   };
 
   logChartReadinessTrace('AnalysisPrepare:ready', {
@@ -532,6 +545,7 @@ async function runBackendAnalysis(
       })),
       prepared.queryDsl || undefined,
       prepared.analysisType,
+      prepared.displaySettings,
     );
   }
 
@@ -545,5 +559,6 @@ async function runBackendAnalysis(
     prepared.analysisType,
     scenario.visibility_mode,
     scenario.snapshot_subjects,
+    prepared.displaySettings,
   );
 }

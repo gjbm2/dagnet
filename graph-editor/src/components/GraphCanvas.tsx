@@ -69,6 +69,7 @@ import { useGraphSync } from './canvas/useGraphSync';
 import { useGroupResize } from './canvas/useGroupResize';
 import type { SyncGuards } from './canvas/syncGuards';
 import { CanvasContextMenus } from './canvas/CanvasContextMenus';
+import type { ContextMenuItem } from './ContextMenu';
 import { buildScenarioRenderEdges } from './canvas/buildScenarioRenderEdges';
 import { calculateEdgeOffsets as calculateEdgeOffsetsCore } from './canvas/edgeGeometry';
 import { computeDagreLayout as computeDagreLayoutCore, computeSankeyLayout as computeSankeyLayoutCore } from './canvas/layoutAlgorithms';
@@ -266,6 +267,32 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
   const useSankeyView = viewPrefs?.useSankeyView ?? false;
   const showNodeImages = viewPrefs?.showNodeImages ?? false;
   const viewOverlayMode = viewPrefs?.viewOverlayMode ?? 'none';
+
+  // Build view-mode items for the canvas context menu submenu.
+  const viewModeItems: ContextMenuItem[] = React.useMemo(() => [
+    {
+      label: 'Forecast Quality',
+      checked: viewOverlayMode === 'forecast-quality',
+      onClick: () => viewPrefs?.setViewOverlayMode(viewOverlayMode === 'forecast-quality' ? 'none' : 'forecast-quality'),
+    },
+    {
+      label: 'Data Depth',
+      checked: viewOverlayMode === 'data-depth',
+      onClick: () => viewPrefs?.setViewOverlayMode(viewOverlayMode === 'data-depth' ? 'none' : 'data-depth'),
+    },
+    {
+      label: 'Sankey',
+      checked: useSankeyView,
+      onClick: () => viewPrefs?.setUseSankeyView(!useSankeyView),
+    },
+    { label: '', onClick: () => {}, divider: true },
+    {
+      label: 'Dashboard',
+      checked: isDashboardMode,
+      onClick: () => toggleDashboardMode({ updateUrl: true }),
+    },
+  ], [viewOverlayMode, viewPrefs, useSankeyView, isDashboardMode, toggleDashboardMode]);
+
   const ts = () => new Date().toISOString();
 
   // Track graph store reference changes to detect loops
@@ -2077,6 +2104,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
         copySubgraph={copySubgraph}
         isDashboardMode={isDashboardMode}
         toggleDashboardMode={toggleDashboardMode}
+        viewModeItems={viewModeItems}
         tabId={tabId}
         tabs={tabs}
         tabOperations={tabOperations}

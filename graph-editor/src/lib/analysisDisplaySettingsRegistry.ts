@@ -81,6 +81,12 @@ export interface DisplaySettingDef {
    * together inside a single `cfp-pill-group` wrapper in the inline toolbar.
    */
   group?: string;
+  /**
+   * If true, changing this setting affects backend computation (not just rendering).
+   * The setting value is included in the chart deps signature and sent to the backend
+   * in the analysis request, so changes trigger a full recompute.
+   */
+  computeAffecting?: boolean;
 }
 
 // ============================================================
@@ -941,6 +947,24 @@ export const CHART_DISPLAY_SETTINGS: Record<string, DisplaySettingDef[]> = {
     ...COMMON_GROUPING_SETTINGS,
     ...COMMON_MOVING_AVERAGE_SETTINGS,
     ...COMMON_CONFIDENCE_SETTINGS,
+    {
+      key: 'bayes_band_level',
+      label: 'Bayes band',
+      shortLabel: 'Band',
+      type: 'radio',
+      options: [
+        { value: 'off', label: 'Off' },
+        { value: '80', label: '80%' },
+        { value: '90', label: '90%' },
+        { value: '95', label: '95%' },
+        { value: '99', label: '99%' },
+      ],
+      defaultValue: '90',
+      propsPanel: true,
+      inline: 'brief',
+      contextMenu: false,
+      computeAffecting: true,
+    },
     ...COMMON_SMOOTHING_SETTINGS,
     ...COMMON_MARKER_SETTINGS,
     ...COMMON_AREA_SETTINGS,
@@ -1075,6 +1099,27 @@ export function getDisplaySettingsForSurface(
 export function resolveDisplaySetting(display: Record<string, unknown> | undefined, setting: DisplaySettingDef): any {
   if (display && setting.key in display) return display[setting.key];
   return setting.defaultValue;
+}
+
+/**
+ * Extract the compute-affecting display settings for a given chart kind,
+ * resolved against the current display object (falling back to defaults).
+ * Returns a plain object suitable for inclusion in deps signatures and
+ * backend request payloads.
+ */
+export function resolveComputeAffectingDisplay(
+  chartKind: string | undefined,
+  display: Record<string, unknown> | undefined,
+): Record<string, unknown> | undefined {
+  const allSettings = chartKind ? (CHART_DISPLAY_SETTINGS as Record<string, DisplaySettingDef[]>)[chartKind] : undefined;
+  if (!allSettings) return undefined;
+  const caSettings = allSettings.filter(s => s.computeAffecting);
+  if (caSettings.length === 0) return undefined;
+  const out: Record<string, unknown> = {};
+  for (const s of caSettings) {
+    out[s.key] = resolveDisplaySetting(display, s);
+  }
+  return out;
 }
 
 /**

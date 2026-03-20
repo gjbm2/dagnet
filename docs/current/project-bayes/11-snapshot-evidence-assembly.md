@@ -503,23 +503,25 @@ likelihood"**, including:
 
 ## 7. Implementation status and plan
 
-### Component status (19-Mar-26)
+### Component status (20-Mar-26)
 
 | Component | Status | Notes |
 |---|---|---|
 | FE settings in payload | Done | `forecastingSettingsService` settings included |
 | `bayes_fit` analysis type | Done | `scopeRule: 'all_graph_parameters'`, `readMode: 'sweep_simple'` |
-| FE snapshot subject building | Done | `useBayesTrigger` builds 8 subjects (4 edges × 2 slices), `edge_id` flattened, `equivalent_hashes` from hash-mappings, commission logging |
-| Worker DB query | Done | `_query_snapshot_subjects` queries Neon, returns rows grouped by `edge_id`. 6255 rows for test graph |
+| FE snapshot subject building | Done | `useBayesTrigger` builds 8 subjects (4 edges × 2 slices), `edge_id` flattened, `equivalent_hashes` (ClosureEntry[]) from hash-mappings, commission logging |
+| Worker DB query | Done | Uses `snapshot_service.query_snapshots_for_sweep()` — same lib as BE analysis path. Handles ClosureEntry `equivalent_hashes` natively. 12,510 rows for test graph (with hash expansion) |
 | Evidence binder | Done | Cohort-first grouping by `anchor_day`, both window/cohort obs types, deduplication, monotonisation |
 | Model emission | Done | `pm.Potential` per edge per obs_type. Window uses `p_window`, cohort uses `p_cohort`. Compiles in ~2.5s |
 | Latent latency (Phase D) | Done | Per-edge `mu_lat`/`sigma_lat` free variables. Window Potentials use edge-level CDF. Cohort Potentials use FW-composed path-level CDF with differentiable gradients to all upstream edges |
-| Inference | Done | nutpie backend, ~31s sampling, rhat=1.002, ess=2432, 0 divergences |
-| Posterior extraction | Done | Probability from real samples + moment-matched Beta. Latency from real `mu_lat`/`sigma_lat` samples (not echoed priors) |
+| Overdispersion (Phase D) | Done | Beta-Binomial / Dirichlet-Multinomial likelihoods with per-edge latent κ. Replaces Binomial/Multinomial. κ learned from data: 1.5–23.7 across test graph edges |
+| Recency weighting | Done | `exp(-ln2 · age / half_life)` per trajectory-day. Power-posterior on DM logp. Half-life from FE settings |
+| Inference | Done | nutpie backend, ~107s sampling, rhat=1.004, ess=1805, 0 divergences, 24 free vars |
+| Posterior extraction | Done | Probability from real samples + moment-matched Beta. Latency from real `mu_lat`/`sigma_lat` samples. Per-edge κ in diagnostics |
 | Webhook / patch delivery | Done | Patch file written to git, FE fetches and applies |
 | FE patch application | Done | `bayesPatchService` upserts posteriors, cascade runs |
-| Test harness | Done | `bayes/test_harness.py` — direct pipeline execution with progress, timeout |
-| Wiring harness | Done | `bayes/test_wiring.py` — 111 structural assertions at every integration boundary |
+| Test harness | Done | `bayes/test_harness.py` — direct pipeline execution with progress, timeout. Subjects match FE contract (ClosureEntry equiv_hashes, target dict) |
+| Wiring harness | Done | `bayes/test_wiring.py` — 111 structural assertions at every integration boundary. Subjects match FE contract |
 
 ### Development stages
 

@@ -113,7 +113,20 @@ def _load_param_files_from_snapshot(graph_snapshot: dict) -> dict[str, dict]:
     return param_files
 
 
-WORKSPACE_PREFIX = "nous-conversion-feature/bayes-test-graph"
+# Derive workspace prefix from .private-repos.conf (never hard-code the
+# private repo name — it must not appear in the public dagnet repo).
+def _workspace_prefix() -> str:
+    conf_path = os.path.join(os.path.dirname(__file__), '..', '..', '.private-repos.conf')
+    repo_name = "data-repo"  # fallback that doesn't leak
+    if os.path.isfile(conf_path):
+        with open(conf_path) as f:
+            for line in f:
+                line = line.strip()
+                if line.startswith("DATA_REPO_DIR="):
+                    repo_name = line.split("=", 1)[1].strip()
+    return f"{repo_name}-feature/bayes-test-graph"
+
+WORKSPACE_PREFIX = _workspace_prefix()
 
 
 def _query_all_snapshot_rows(graph_snapshot: dict) -> dict[str, list[dict]]:

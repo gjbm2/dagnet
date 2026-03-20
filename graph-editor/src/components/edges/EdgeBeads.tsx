@@ -12,6 +12,8 @@ import { buildBeadDefinitions, type BeadDefinition } from './edgeBeadHelpers';
 import type { Graph, GraphEdge } from '../../types';
 import type { ScenarioVisibilityMode, ViewOverlayMode } from '../../types';
 import { computeQualityTier, qualityTierToColour, qualityTierLabel } from '../../utils/bayesQualityTier';
+import { useDataDepthContext } from '../../contexts/DataDepthContext';
+import { depthToColour, depthBeadLabel, formatPct } from '../../services/dataDepthService';
 import type { ProbabilityPosterior } from '../../types';
 import { BEAD_MARKER_DISTANCE, BEAD_SPACING, BEAD_FONT_SIZE, BEAD_HEIGHT, BEAD_ARRIVAL_FACE_OFFSET } from '../../lib/nodeEdgeConstants';
 import { hasAnyEdgeQueryOverride, listOverriddenFlagPaths } from '../../utils/overrideFlags';
@@ -125,6 +127,9 @@ export function useEdgeBeads(props: EdgeBeadsProps): { svg: React.ReactNode; htm
   // Bead expansion state (per-edge, per-bead type)
   const [beadStates, setBeadStates] = useState<Map<string, BeadState>>(new Map());
   
+  // Data depth scores from context
+  const { scores: dataDepthScores } = useDataDepthContext();
+
   // Get bead definitions - memoize with stable dependencies
   const beadDefinitions = useMemo(() => {
     if (!graph || !path || !scenariosContext) {
@@ -160,6 +165,27 @@ export function useEdgeBeads(props: EdgeBeadsProps): { svg: React.ReactNode; htm
       }];
     }
 
+    // In Data Depth mode, show a single bead with composite depth score.
+    if (viewOverlayMode === 'data-depth') {
+      const edgeId = edge.uuid || edge.id || '';
+      const score = edgeId ? dataDepthScores?.get(edgeId) : undefined;
+      const colour = depthToColour(score?.depth ?? null, 'dark');
+      const n = edge.p?.evidence?.n ?? 0;
+      const label = score ? depthBeadLabel(score, n) : (n > 0 ? `n=${n}` : 'No data');
+      return [{
+        type: 'probability' as const,
+        values: [{ scenarioId: 'current', text: label, colour }],
+        displayText: label,
+        allIdentical: true,
+        backgroundColor: colour,
+        hasParameterConnection: false,
+        isOverridden: false,
+        distance: visibleStartOffset ?? BEAD_MARKER_DISTANCE,
+        expanded: true,
+        index: 0,
+      }];
+    }
+
     const beads = buildBeadDefinitions(
       edge,
       graph,
@@ -181,6 +207,7 @@ export function useEdgeBeads(props: EdgeBeadsProps): { svg: React.ReactNode; htm
     // Basis fields for probability bead when in F or E mode
     edge.p?.forecast?.mean,
     edge.p?.forecast?.stdev,
+    edge.p?.evidence?.n, // Evidence sample size (for data depth overlay)
     edge.p?.evidence?.mean,
     edge.p?.evidence?.stdev,
     edge.p?.mean_overridden, // Override flag for probability
@@ -221,6 +248,7 @@ export function useEdgeBeads(props: EdgeBeadsProps): { svg: React.ReactNode; htm
     visibilityModesKey, // Visibility modes (stable string)
     viewOverlayMode, // View overlay (forecast quality replaces beads)
     edge.p?.posterior, // Posterior data (for quality tier bead)
+    dataDepthScores, // Data depth scores (composite overlay)
   ]);
 
   

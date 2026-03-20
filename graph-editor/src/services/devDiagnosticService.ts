@@ -5,14 +5,17 @@
  * Provides:
  *
  * 1. **State dumps on mark** — when console mirroring is enabled and a mark is placed,
- *    comprehensive browser state (FileRegistry, IDB, planner results) is written to
- *    `debug/tmp.diag-state.json` via the Vite dev server.
+ *    comprehensive browser state (FileRegistry, IDB, planner results, data depth scores)
+ *    is written to `debug/tmp.diag-state.json` via the Vite dev server.
  *
  * 2. **On-demand inspection** — `window.dagnetDump()` triggers a state dump at any time.
  *    `window.dagnetDiag` exposes the last planner result and diagnostic trace.
  *
  * 3. **Planner capture** — the planner calls `capturePlannerDiagnostics()` after each
  *    analysis run, storing per-item diagnostics (value counts, signatures, coverage).
+ *
+ * 4. **Data depth capture** — the useDataDepthScores hook calls `captureDataDepthState()`
+ *    after each computation, storing full inputs + outputs for audit.
  *
  * All output goes to `/__dagnet/diag-dump` endpoint → `debug/tmp.diag-state.json`.
  * Errors are logged to the REAL console (pre-hook), never swallowed.
@@ -21,6 +24,7 @@
  */
 
 import type { FetchPlanDiagnostics } from './fetchPlanBuilderService';
+import type { DataDepthScore } from './dataDepthService';
 
 // Use the registry-dump endpoint which is already registered in the running Vite server.
 // The vite.config.ts also accepts /__dagnet/diag-dump as an alias (after server restart).
@@ -54,10 +58,47 @@ interface PlannerCapture {
   }>;
 }
 
+/** Full data depth computation state for diagnostic dumps. */
+export interface DataDepthCapture {
+  ts: number;
+  dsl: string | null;
+  mode: 'full' | 'n-only';
+  window: { start: string; end: string } | null;
+  allDatesInWindowCount: number;
+  allDatesInWindowSample: string[];  // first 5 + last 5
+  nMedian: number;
+  edgeCount: number;
+  edges: Array<{
+    edgeId: string;
+    fromNode: string;
+    toNode: string;
+    n: number;
+    k?: number;
+    f1: number;
+    f2: number;
+    f3: number;
+    depth: number;
+    planItemCount: number;
+    snapshotDayCount: number;
+    snapshotDaysSample: string[];  // first 5
+    /** Snapshot days that intersect with the DSL window (audit: these drive f₂) */
+    snapshotDaysInWindow: string[];
+    sliceBreakdown: Array<{
+      label: string;
+      coverage: number;
+      coveredDays: number;
+      totalDays: number;
+    }>;
+  }>;
+  /** Score distribution: count of edges in each 0.1-width bucket */
+  histogram: Record<string, number>;
+}
+
 class DevDiagnosticService {
   private installed = false;
   private lastPlannerCapture: PlannerCapture | null = null;
   private plannerCaptureHistory: PlannerCapture[] = [];
+  private lastDataDepthCapture: DataDepthCapture | null = null;
   private maxHistory = 5;
 
   install(): void {
@@ -72,10 +113,11 @@ class DevDiagnosticService {
         console.log('[dagnetDump] State dump triggered. Check debug/tmp.diag-state.json');
       };
 
-      // Diagnostic object — inspect planner state from DevTools
+      // Diagnostic object — inspect planner/data-depth state from DevTools
       (window as any).dagnetDiag = {
         lastPlanner: () => this.lastPlannerCapture,
         plannerHistory: () => this.plannerCaptureHistory,
+        lastDataDepth: () => this.lastDataDepthCapture,
         dumpState: (label?: string) => void this.dumpState(label || 'manual-dump'),
       };
     }
@@ -90,6 +132,14 @@ class DevDiagnosticService {
     if (this.plannerCaptureHistory.length > this.maxHistory) {
       this.plannerCaptureHistory.shift();
     }
+  }
+
+  /**
+   * Called by useDataDepthScores after each computation.
+   * Stores full inputs + outputs for audit via mark dumps.
+   */
+  captureDataDepthState(capture: DataDepthCapture): void {
+    this.lastDataDepthCapture = capture;
   }
 
   /**
@@ -212,6 +262,7 @@ class DevDiagnosticService {
               querySignatures: this.lastPlannerCapture.querySignatures,
             }
           : null,
+        dataDepth: this.lastDataDepthCapture,
       };
 
       // No keepalive — dump payload can exceed the 64KB keepalive limit.

@@ -1,6 +1,13 @@
 # TODO
 
 - Bridge chart issues--not updating properly with e.g. date changes & custom scenarios
+  - also not intuitive to() vs. visited() dsl -- needs love
+
+- Tabbed views of canvas objects; View layers on charts (show differnet SETS of canvas objects...)
+
+-
+- **Snapshot calendar (Evidence tab) missing in canvas analysis nodes** — `SnapshotCalendarSection` is private to `HoverAnalysisPreview.tsx`; `CanvasAnalysisNode` doesn't pass `infoTabExtra` at all. Extract the calendar component to a shared location, add `useEdgeSnapshotRetrievals` to canvas nodes (auto-commission from DSL from/to), and pass `infoTabExtra`. Same component, same data, same codepath — no bespoke hover-only rendering.
+
 
 - Chart scenarios: don't support what-if conditionality --  The custom scenario mechanism (used by non-live/frozen charts) can differentiate scenarios via visibility_mode (f+e vs f vs e) and effective_dsl, but it can't produce different graph topologies per scenario. The what_if_dsl field exists but is only applied to the current scenario. Since the sample data has no evidence/forecast split on edges, changing visibility_mode alone gives identical graphs.
 
@@ -95,7 +102,7 @@
 -   - **Incremental behaviour is an assumption**: Run 2 will only be “subset” if planner + cache rules refetch a tail window as expected.
 -   - **Test hygiene**: Amplitude HTTP recorder restores `global.fetch` at the end; if the test fails early, it may not restore (wrap in `try/finally` when stabilising).
 -   - **Does not prove UI wiring**: even if this passes, the app UI still isn’t wired to call `snapshot_query` (see section above).
--
+
 - Log mirrorring isn't working properly -- only some entries are captured and returned
 
 - Auto-retry if fetch fail on automated chron

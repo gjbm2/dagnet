@@ -77,7 +77,7 @@ function parseUkDate(s: string): number {
 
 // ── Age colour coding ───────────────────────────────────────
 
-export type FreshnessLevel = 'current' | 'stale' | 'very-stale' | 'unknown';
+export type FreshnessLevel = 'good' | 'current' | 'stale' | 'very-stale' | 'unknown';
 
 /**
  * Classify a timestamp's age into a freshness level.
@@ -105,6 +105,7 @@ export function getFreshnessLevel(timestamp: string | number | Date | null | und
 }
 
 const FRESHNESS_COLOURS: Record<FreshnessLevel, { light: string; dark: string }> = {
+  'good':       { light: '#16a34a', dark: '#4ade80' },   // Green
   'current':    { light: '#6b7280', dark: '#9ca3af' },   // Neutral grey
   'stale':      { light: '#d97706', dark: '#f59e0b' },   // Amber
   'very-stale': { light: '#dc2626', dark: '#ef4444' },   // Red

@@ -510,6 +510,9 @@ function buildEdgeInfoResult(graph: ConversionGraph, dsl: string): AnalysisResul
   // ── Tab: Forecast (Bayes quality) ──
   buildEdgeForecastTab(data, edge, graph);
 
+  // ── Tab: Data Depth (always present — scores enriched at render time) ──
+  buildEdgeDepthTab(data, edge);
+
   // ── Tab: Diagnostics (freshness) ──
   buildFreshnessRows(data, 'diagnostics', graph, edge);
 
@@ -563,6 +566,22 @@ function buildLatencyCdfMeta(edge: GraphEdge): Record<string, any> | null {
 }
 
 // ────────────────────────────────────────────────────────────
+// Edge depth tab builder (always present; scores enriched at render time)
+// ────────────────────────────────────────────────────────────
+
+function buildEdgeDepthTab(data: Record<string, any>[], edge: GraphEdge): void {
+  const n = edge.p?.evidence?.n ?? 0;
+  const k = edge.p?.evidence?.k;
+  data.push({ tab: 'depth', section: 'Sample Size', property: 'n', value: n > 0 ? fmtNum(n) : '—' });
+  if (k != null && n > 0) {
+    data.push({ tab: 'depth', section: 'Sample Size', property: 'k', value: fmtNum(k) });
+    data.push({ tab: 'depth', section: 'Sample Size', property: 'Observed Rate', value: fmtPct(k / n) });
+  }
+  // Coverage scores (f₁, f₂, f₃, composite) are appended at render time
+  // by AnalysisChartContainer when DataDepthContext scores are available.
+}
+
+// ────────────────────────────────────────────────────────────
 // Edge forecast tab builder
 // ────────────────────────────────────────────────────────────
 
@@ -603,29 +622,37 @@ function buildEdgeForecastTab(
       });
     }
     if (posterior.evidence_grade != null) {
-      data.push({ tab: 'forecast', section: 'Probability', property: 'Evidence Grade', value: `${posterior.evidence_grade}/3` });
+      const gradeFreshness = posterior.evidence_grade >= 2 ? 'good' : posterior.evidence_grade >= 1 ? 'stale' : 'very-stale';
+      data.push({ tab: 'forecast', section: 'Probability', property: 'Evidence Grade', value: `${posterior.evidence_grade}/3`, freshness: gradeFreshness });
     }
     if (posterior.prior_tier) {
       data.push({ tab: 'forecast', section: 'Probability', property: 'Prior Tier', value: posterior.prior_tier.replace(/_/g, ' ') });
     }
 
-    // Quality + convergence
+    // Quality + convergence (RAG-coloured)
     const tier = computeQualityTier(posterior);
-    data.push({ tab: 'forecast', section: 'Convergence', property: 'Quality', value: `${qualityTierLabel(tier.tier)} — ${tier.reason}` });
+    const tierFreshness = tier.tier === 'failed' ? 'very-stale'
+      : tier.tier === 'warning' ? 'stale'
+      : tier.tier.startsWith('good') ? 'good'
+      : undefined;
+    data.push({ tab: 'forecast', section: 'Convergence', property: 'Quality', value: `${qualityTierLabel(tier.tier)} — ${tier.reason}`, freshness: tierFreshness });
     if (posterior.rhat != null) {
-      data.push({ tab: 'forecast', section: 'Convergence', property: 'rhat', value: posterior.rhat.toFixed(4) });
+      const rhatFreshness = posterior.rhat > 1.1 ? 'very-stale' : posterior.rhat > 1.01 ? 'stale' : 'good';
+      data.push({ tab: 'forecast', section: 'Convergence', property: 'rhat', value: posterior.rhat.toFixed(4), freshness: rhatFreshness });
     }
     if (posterior.ess != null) {
-      data.push({ tab: 'forecast', section: 'Convergence', property: 'ESS', value: fmtNum(Math.round(posterior.ess)) });
+      const essFreshness = posterior.ess < 100 ? 'very-stale' : posterior.ess < 400 ? 'stale' : 'good';
+      data.push({ tab: 'forecast', section: 'Convergence', property: 'ESS', value: fmtNum(Math.round(posterior.ess)), freshness: essFreshness });
     }
     if (posterior.divergences != null && posterior.divergences > 0) {
-      data.push({ tab: 'forecast', section: 'Convergence', property: 'Divergences', value: posterior.divergences.toString() });
+      data.push({ tab: 'forecast', section: 'Convergence', property: 'Divergences', value: posterior.divergences.toString(), freshness: 'very-stale' });
     }
     if (posterior.provenance) {
-      data.push({ tab: 'forecast', section: 'Convergence', property: 'Provenance', value: posterior.provenance });
+      const provFreshness = ['pooled-fallback', 'point-estimate'].includes(posterior.provenance) ? 'stale' : undefined;
+      data.push({ tab: 'forecast', section: 'Convergence', property: 'Provenance', value: posterior.provenance, freshness: provFreshness });
     }
     if (posterior.surprise_z != null && Math.abs(posterior.surprise_z) > 2) {
-      data.push({ tab: 'forecast', section: 'Convergence', property: 'Surprise z', value: posterior.surprise_z.toFixed(1) });
+      data.push({ tab: 'forecast', section: 'Convergence', property: 'Surprise z', value: posterior.surprise_z.toFixed(1), freshness: 'stale' });
     }
   }
 
@@ -657,18 +684,21 @@ function buildEdgeForecastTab(
       });
     }
 
-    // Latency convergence (only if separate from probability)
+    // Latency convergence (only if separate from probability) — RAG-coloured
     if (latPosterior.rhat != null) {
       const section = latPosterior.path_mu_mean != null ? 'Latency (path)' : 'Latency (edge)';
-      data.push({ tab: 'forecast', section, property: 'rhat', value: latPosterior.rhat.toFixed(4) });
+      const rhatFreshness = latPosterior.rhat > 1.1 ? 'very-stale' : latPosterior.rhat > 1.01 ? 'stale' : 'good';
+      data.push({ tab: 'forecast', section, property: 'rhat', value: latPosterior.rhat.toFixed(4), freshness: rhatFreshness });
     }
     if (latPosterior.ess != null) {
       const section = latPosterior.path_mu_mean != null ? 'Latency (path)' : 'Latency (edge)';
-      data.push({ tab: 'forecast', section, property: 'ESS', value: fmtNum(Math.round(latPosterior.ess)) });
+      const essFreshness = latPosterior.ess < 100 ? 'very-stale' : latPosterior.ess < 400 ? 'stale' : 'good';
+      data.push({ tab: 'forecast', section, property: 'ESS', value: fmtNum(Math.round(latPosterior.ess)), freshness: essFreshness });
     }
     if (latPosterior.provenance) {
       const section = latPosterior.path_mu_mean != null ? 'Latency (path)' : 'Latency (edge)';
-      data.push({ tab: 'forecast', section, property: 'Provenance', value: latPosterior.provenance });
+      const provFreshness = ['pooled-fallback', 'point-estimate'].includes(latPosterior.provenance) ? 'stale' : undefined;
+      data.push({ tab: 'forecast', section, property: 'Provenance', value: latPosterior.provenance, freshness: provFreshness });
     }
   }
 

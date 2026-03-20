@@ -831,8 +831,16 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
                                 band_sigma_sd = model_params.get('bayes_sigma_sd', 0.0)
                             band_p_sd = model_params.get('p_stdev', 0.0)
 
-                            if band_mu_sd is not None and band_mu_sd > 0:
-                                band_k = 3.291  # 99.9% band
+                            # Map display setting to z-multiplier
+                            _band_level_z = {
+                                '80': 1.282, '90': 1.645,
+                                '95': 1.960, '99': 2.576,
+                            }
+                            _ds = data.get('display_settings') or {}
+                            _bl = str(_ds.get('bayes_band_level', '90'))
+
+                            if _bl != 'off' and band_mu_sd is not None and band_mu_sd > 0:
+                                band_k = _band_level_z.get(_bl, 1.645)
                                 sqrt_2pi = math.sqrt(2.0 * math.pi)
                                 p_val = forecast_mean  # posterior mean of p
 

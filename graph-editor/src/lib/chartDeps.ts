@@ -57,6 +57,12 @@ export type ChartDepsStampV1 = {
    * Must be in d-MMM-yy format.
    */
   reference_day_uk?: string;
+
+  /**
+   * Compute-affecting display settings (e.g. bayes_band_level).
+   * Included only when at least one such setting is defined for the chart kind.
+   */
+  compute_display?: Record<string, unknown>;
 };
 
 function normaliseText(x: unknown): string | undefined {
@@ -108,6 +114,7 @@ export function canonicaliseChartDepsStampV1(stamp: ChartDepsStampV1): ChartDeps
     scenarios,
     inputs_signature: normaliseText((stamp as any).inputs_signature),
     reference_day_uk: normaliseText(stamp.reference_day_uk),
+    compute_display: stamp.compute_display,
   }) as ChartDepsStampV1;
 }
 

@@ -31,6 +31,9 @@ import { AnalysisInfoCard } from '../analytics/AnalysisInfoCard';
 import { renderTraySettings } from './settingPillRenderer';
 import { CfpPopover } from './CfpPopover';
 import { OVERLAY_PRESET_COLOURS } from '../ColourSelector';
+import { useDataDepthContext } from '../../contexts/DataDepthContext';
+import { buildDataDepthInfoRows } from '../../services/dataDepthService';
+import { useGraphStoreOptional } from '../../contexts/GraphStoreContext';
 
 type ChartKind = 'funnel' | 'bridge' | 'histogram' | 'daily_conversions' | 'cohort_maturity' | 'lag_fit' | 'bar_grouped' | 'pie' | 'time_series' | 'info';
 
@@ -237,9 +240,35 @@ export function AnalysisChartContainer(props: {
     return clone as AnalysisResult;
   }, [result, scenarioMetaById]);
 
+  // ── Data Depth score enrichment (appends coverage scores when available) ──
+  // The depth tab always exists from buildEdgeInfoResult (basic n/k rows).
+  // This memo appends f₁/f₂/f₃/composite rows once async scores arrive.
+  const { scores: _ddScores } = useDataDepthContext();
+  const _ddGraph: any = useGraphStoreOptional((s: any) => s?.graph);
+  const finalResult = useMemo(() => {
+    if (!patchedResult || patchedResult.analysis_type !== 'edge_info' || !_ddScores || !_ddGraph?.edges) {
+      return patchedResult;
+    }
+    const rows = patchedResult.data as any[] | undefined;
+    const edgeIdRow = rows?.find((r: any) => r.tab === 'overview' && r.property === 'Edge ID');
+    if (!edgeIdRow?.value) return patchedResult;
+
+    const edgeObj = _ddGraph.edges.find((e: any) => e.id === edgeIdRow.value || e.uuid === edgeIdRow.value);
+    const scoreKey = edgeObj ? (edgeObj.uuid ?? edgeObj.id) : edgeIdRow.value;
+    const score = _ddScores.get(scoreKey);
+    if (!score) return patchedResult;
+
+    const n = edgeObj?.p?.evidence?.n ?? 0;
+    const k = edgeObj?.p?.evidence?.k;
+    return {
+      ...patchedResult,
+      data: [...(rows ?? []), ...buildDataDepthInfoRows(score, n, k)],
+    };
+  }, [patchedResult, _ddScores, _ddGraph]);
+
   const inferredChartKind = useMemo((): ChartKind | null => {
-    if (!patchedResult) return null;
-    const t = (patchedResult as any)?.analysis_type;
+    if (!finalResult) return null;
+    const t = (finalResult as any)?.analysis_type;
     if (t === 'conversion_funnel') return 'funnel';
     if (t === 'lag_histogram') return 'histogram';
     if (t === 'daily_conversions') return 'daily_conversions';
@@ -247,31 +276,31 @@ export function AnalysisChartContainer(props: {
     if (t === 'lag_fit') return 'lag_fit';
     if (typeof t === 'string' && t.includes('bridge')) return 'bridge';
     return 'bridge';
-  }, [patchedResult]);
+  }, [finalResult]);
 
   const availableChartKinds = useMemo((): ChartKind[] => {
-    if (!patchedResult) return [];
-    const spec: any = patchedResult?.semantics?.chart;
+    if (!finalResult) return [];
+    const spec: any = finalResult?.semantics?.chart;
     const rec = normaliseChartKind(spec?.recommended);
     const alts = Array.isArray(spec?.alternatives) ? spec.alternatives : [];
-    const augmented = augmentChartKindOptionsForAnalysisType(patchedResult?.analysis_type, [spec?.recommended, ...alts].filter(Boolean) as string[]);
+    const augmented = augmentChartKindOptionsForAnalysisType(finalResult?.analysis_type, [spec?.recommended, ...alts].filter(Boolean) as string[]);
     const altKinds = augmented.slice(1).map(normaliseChartKind).filter(Boolean) as ChartKind[];
     const augmentedRec = normaliseChartKind(augmented[0] || spec?.recommended);
     const all = [augmentedRec || rec, ...altKinds].filter(Boolean) as ChartKind[];
     if (all.length === 0 && inferredChartKind) return [inferredChartKind];
     return Array.from(new Set(all));
-  }, [patchedResult, inferredChartKind]);
+  }, [finalResult, inferredChartKind]);
 
   const [selectedKind, setSelectedKind] = useState<ChartKind | null>(null);
   const normalisedOverride = normaliseChartKind(chartKindOverride);
   const kind = normalisedOverride ?? selectedKind ?? availableChartKinds[0] ?? null;
   const displayPlan = useMemo(() => planChartDisplay({
-    result: patchedResult,
-    requestedChartKind: kind || chartKindOverride || patchedResult?.semantics?.chart?.recommended,
+    result: finalResult,
+    requestedChartKind: kind || chartKindOverride || finalResult?.semantics?.chart?.recommended,
     visibleScenarioIds,
     scenarioVisibilityModes,
     display: effectiveDisplay,
-  }), [patchedResult, kind, chartKindOverride, visibleScenarioIds, scenarioVisibilityModes, effectiveDisplay]);
+  }), [finalResult, kind, chartKindOverride, visibleScenarioIds, scenarioVisibilityModes, effectiveDisplay]);
   const effectiveKind = normaliseChartKind(displayPlan.effectiveChartKind || kind);
 
   const resolvedSettings = useMemo(() => {
@@ -302,12 +331,12 @@ export function AnalysisChartContainer(props: {
   const { ref: chartViewportRef, width: chartWidthPx, height: chartHeightPx } = useElementSize<HTMLDivElement>();
 
   const echartsOption = useMemo(() => {
-    if (!patchedResult) return null;
+    if (!finalResult) return null;
     if (!effectiveKind) return null;
     const finalSettings = hideScenarioLegend
       ? { ...resolvedSettings, show_legend: false }
       : resolvedSettings;
-    const opt = buildChartOption(effectiveKind, patchedResult, finalSettings, {
+    const opt = buildChartOption(effectiveKind, finalResult, finalSettings, {
       visibleScenarioIds: displayPlan.scenarioIdsToRender,
       scenarioVisibilityModes,
       scenarioDslSubtitleById,
@@ -319,62 +348,62 @@ export function AnalysisChartContainer(props: {
     });
     if (props.suppressAnimation && opt) opt.animation = false;
     return opt;
-  }, [effectiveKind, patchedResult, resolvedSettings, hideScenarioLegend, displayPlan.scenarioIdsToRender, scenarioVisibilityModes, scenarioDslSubtitleById, effectiveSubjectId, chartWidthPx, chartHeightPx, fillHeight, height, props.suppressAnimation]);
+  }, [effectiveKind, finalResult, resolvedSettings, hideScenarioLegend, displayPlan.scenarioIdsToRender, scenarioVisibilityModes, scenarioDslSubtitleById, effectiveSubjectId, chartWidthPx, chartHeightPx, fillHeight, height, props.suppressAnimation]);
 
   // Diagnostic: log when we have a result but no chart option
   useEffect(() => {
     if (!import.meta.env.DEV) return;
-    if (!patchedResult) return; // still loading — nothing to log
+    if (!finalResult) return; // still loading — nothing to log
     if (effectiveKind === 'info') return; // info cards don't need echarts
     if (echartsOption) {
-      console.log(`[ChartRender] OK ${patchedResult.analysis_type}×${effectiveKind}`, {
+      console.log(`[ChartRender] OK ${finalResult.analysis_type}×${effectiveKind}`, {
         analysisId: props.analysisId,
-        dataRows: patchedResult.data?.length,
+        dataRows: finalResult.data?.length,
         seriesCount: echartsOption?.series?.length,
-        source: patchedResult.metadata?.source,
+        source: finalResult.metadata?.source,
       });
       return;
     }
     console.warn(`[ChartRender] NULL echartsOption — chart will be invisible`, {
       analysisId: props.analysisId,
-      analysisType: patchedResult.analysis_type,
+      analysisType: finalResult.analysis_type,
       effectiveKind,
       hasResult: true,
-      dataRows: patchedResult.data?.length,
-      dimensions: patchedResult.semantics?.dimensions?.map((d: any) => d?.id),
-      metrics: patchedResult.semantics?.metrics?.map((m: any) => m?.id),
-      source: patchedResult.metadata?.source,
-      empty: patchedResult.metadata?.empty,
+      dataRows: finalResult.data?.length,
+      dimensions: finalResult.semantics?.dimensions?.map((d: any) => d?.id),
+      metrics: finalResult.semantics?.metrics?.map((m: any) => m?.id),
+      source: finalResult.metadata?.source,
+      empty: finalResult.metadata?.empty,
       hasOnViewModeChange: !!props.onViewModeChange,
     });
-  }, [patchedResult, effectiveKind, echartsOption]);
+  }, [finalResult, effectiveKind, echartsOption]);
 
   // Fire onRendered for non-ECharts paths (info card, null option) — these are
   // already at their final visual state, no ECharts 'finished' event will come.
   useEffect(() => {
     if (renderedCallbackFiredRef.current) return;
-    if (!patchedResult) return; // still loading
+    if (!finalResult) return; // still loading
     if (echartsOption) return;  // ECharts path — handled by handleChartReady
     renderedCallbackFiredRef.current = true;
     props.onRendered?.('failed');
-  }, [patchedResult, echartsOption, props.onRendered]);
+  }, [finalResult, echartsOption, props.onRendered]);
 
   // Auto-fallback: when chart view can't render (no echarts option and not info),
   // switch to the next available view mode instead of showing "No data available".
-  const chartCanRender = (effectiveKind === 'info' && !!patchedResult) || !!echartsOption;
+  const chartCanRender = (effectiveKind === 'info' && !!finalResult) || !!echartsOption;
   useEffect(() => {
     if (chartCanRender) return;            // chart renders fine
     if (props.children) return;            // parent supplies content (cards/table)
-    if (!patchedResult) return;            // no result yet — still loading
+    if (!finalResult) return;            // no result yet — still loading
     if (!props.onViewModeChange) return;   // can't switch view mode
     if (props.viewMode && props.viewMode !== 'chart') return; // already not chart
 
-    const available = getAvailableExpressions(patchedResult);
+    const available = getAvailableExpressions(finalResult);
     const fallback = available.find(m => m !== 'chart');
     if (fallback) {
       props.onViewModeChange(fallback);
     }
-  }, [chartCanRender, patchedResult, props.children, props.onViewModeChange, props.viewMode]);
+  }, [chartCanRender, finalResult, props.children, props.onViewModeChange, props.viewMode]);
 
   const onEvents = useMemo(() => ({}), []);
   const echartsRef = useRef<any>(null);
@@ -995,9 +1024,9 @@ export function AnalysisChartContainer(props: {
         >
         {props.children ? (
           props.children
-        ) : effectiveKind === 'info' && patchedResult ? (
+        ) : effectiveKind === 'info' && finalResult ? (
           <div style={{ flex: fillHeight ? 1 : undefined, minHeight: 0, overflow: 'auto' }}>
-            <AnalysisInfoCard result={patchedResult} fontSize={resolvedSettings.font_size} defaultTab={props.infoDefaultTab} onFileLink={props.onFileLink} tabExtra={props.infoTabExtra} />
+            <AnalysisInfoCard result={finalResult} fontSize={resolvedSettings.font_size} defaultTab={props.infoDefaultTab} onFileLink={props.onFileLink} tabExtra={props.infoTabExtra} />
           </div>
         ) : echartsOption ? (
           <div style={{ flex: fillHeight ? 1 : undefined, minHeight: 0, position: 'relative' }}>

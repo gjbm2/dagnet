@@ -272,7 +272,7 @@ export function buildCohortMaturityEChartsOption(
         const fill = bandColour;
         seriesOut.push({
           id: 'bayes_band',
-          name: 'Bayes 80% band',
+          name: `Bayes ${settings.bayes_band_level || '90'}% band`,
           type: 'custom' as any,
           coordinateSystem: 'cartesian2d',
           encode: { x: 0, y: 1 },

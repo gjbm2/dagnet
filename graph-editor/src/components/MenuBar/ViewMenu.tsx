@@ -17,7 +17,7 @@ import { graphIssuesService } from '../../services/graphIssuesService';
  * View Menu
  * 
  * Context-sensitive based on active tab type:
- * - Graph tabs: Show graph-specific options (Edge Scaling, Re-route, etc.)
+ * - Graph tabs: Show graph-specific options (Edge Scaling, view toggles, etc.)
  * - Other tabs: Show general view options
  * - All tabs: Open in New Tab (JSON/YAML views)
  */
@@ -39,7 +39,6 @@ export function ViewMenu() {
   // Fallback: read from active tab state when context not available
   const useUniformScaling = viewPrefsCtx?.useUniformScaling ?? (activeTab?.editorState?.useUniformScaling ?? false);
   const massGenerosity = viewPrefsCtx?.massGenerosity ?? (activeTab?.editorState?.massGenerosity ?? 0.5);
-  const autoReroute = viewPrefsCtx?.autoReroute ?? (activeTab?.editorState?.autoReroute ?? true);
   const snapToGuides = viewPrefsCtx?.snapToGuides ?? (activeTab?.editorState?.snapToGuides ?? true);
   const confidenceIntervalLevel = viewPrefsCtx?.confidenceIntervalLevel ?? (activeTab?.editorState?.confidenceIntervalLevel as 'none' | '80' | '90' | '95' | '99' ?? 'none');
   const animateFlow = viewPrefsCtx?.animateFlow ?? (activeTab?.editorState?.animateFlow ?? true);
@@ -47,7 +46,7 @@ export function ViewMenu() {
   // Use centralised hooks for view toggles
   const { useSankeyView: isSankeyView, toggleSankeyView } = useSankeyView();
   const { showNodeImages, toggleNodeImageView } = useNodeImageView();
-  const { isForecastQuality, toggleForecastQuality } = useViewOverlayMode();
+  const { isForecastQuality, toggleForecastQuality, isDataDepth, toggleDataDepth } = useViewOverlayMode();
   
   // Debug: Log when menu is checked
   React.useEffect(() => {
@@ -84,19 +83,6 @@ export function ViewMenu() {
       viewPrefsCtx.setMassGenerosity(value);
     } else if (activeTabId) {
       operations.updateTabState(activeTabId, { massGenerosity: value });
-    }
-  };
-
-  const handleReRoute = () => {
-    window.dispatchEvent(new CustomEvent('dagnet:forceReroute'));
-  };
-
-  const handleToggleAutoReroute = () => {
-    const newValue = !autoReroute;
-    if (viewPrefsCtx) {
-      viewPrefsCtx.setAutoReroute(newValue);
-    } else if (activeTabId) {
-      operations.updateTabState(activeTabId, { autoReroute: newValue });
     }
   };
 
@@ -208,49 +194,41 @@ export function ViewMenu() {
 
               <Menubar.Separator className="menubar-separator" />
 
-              <Menubar.Item 
-                className="menubar-item" 
-                onSelect={handleReRoute}
+              <Menubar.CheckboxItem
+                className="menubar-item menubar-item--checkable"
+                checked={snapToGuides}
+                onCheckedChange={handleToggleSnapToGuides}
               >
-                Re-route
-              </Menubar.Item>
+                <Menubar.ItemIndicator className="menubar-item-indicator">✓</Menubar.ItemIndicator>
+                Snap to Guides
+              </Menubar.CheckboxItem>
 
-              <Menubar.Item
-                className="menubar-item"
-                onSelect={handleToggleAutoReroute}
+              <Menubar.CheckboxItem
+                className="menubar-item menubar-item--checkable"
+                checked={isSankeyView}
+                onCheckedChange={toggleSankeyView}
               >
-                {autoReroute ? '✓ ' : ''}Auto Re-route
-              </Menubar.Item>
+                <Menubar.ItemIndicator className="menubar-item-indicator">✓</Menubar.ItemIndicator>
+                Sankey View
+              </Menubar.CheckboxItem>
 
-              <Menubar.Item
-                className="menubar-item"
-                onSelect={handleToggleSnapToGuides}
+              <Menubar.CheckboxItem
+                className="menubar-item menubar-item--checkable"
+                checked={animateFlow}
+                onCheckedChange={handleToggleAnimateFlow}
               >
-                {snapToGuides ? '✓ ' : ''}Snap to Guides
-              </Menubar.Item>
+                <Menubar.ItemIndicator className="menubar-item-indicator">✓</Menubar.ItemIndicator>
+                Animate Flow
+              </Menubar.CheckboxItem>
 
-              <Menubar.Separator className="menubar-separator" />
-
-              <Menubar.Item 
-                className="menubar-item" 
-                onSelect={toggleSankeyView}
+              <Menubar.CheckboxItem
+                className="menubar-item menubar-item--checkable"
+                checked={showNodeImages}
+                onCheckedChange={toggleNodeImageView}
               >
-                {isSankeyView ? '✓ ' : ''}Sankey View
-              </Menubar.Item>
-
-              <Menubar.Item 
-                className="menubar-item" 
-                onSelect={handleToggleAnimateFlow}
-              >
-                {animateFlow ? '✓ ' : ''}Animate Flow
-              </Menubar.Item>
-
-              <Menubar.Item 
-                className="menubar-item" 
-                onSelect={toggleNodeImageView}
-              >
-                {showNodeImages ? '✓ ' : ''}Show Node Images
-              </Menubar.Item>
+                <Menubar.ItemIndicator className="menubar-item-indicator">✓</Menubar.ItemIndicator>
+                Show Node Images
+              </Menubar.CheckboxItem>
 
               <Menubar.Separator className="menubar-separator" />
 
@@ -261,48 +239,51 @@ export function ViewMenu() {
                 </Menubar.SubTrigger>
                 <Menubar.Portal>
                   <Menubar.SubContent className="menubar-content" alignOffset={-5}>
-                    <Menubar.Item 
-                      className="menubar-item" 
-                      onSelect={() => handleConfidenceIntervalChange('99')}
-                    >
-                      {confidenceIntervalLevel === '99' ? '✓ ' : ''}99%
-                    </Menubar.Item>
-                    <Menubar.Item 
-                      className="menubar-item" 
-                      onSelect={() => handleConfidenceIntervalChange('95')}
-                    >
-                      {confidenceIntervalLevel === '95' ? '✓ ' : ''}95%
-                    </Menubar.Item>
-                    <Menubar.Item 
-                      className="menubar-item" 
-                      onSelect={() => handleConfidenceIntervalChange('90')}
-                    >
-                      {confidenceIntervalLevel === '90' ? '✓ ' : ''}90%
-                    </Menubar.Item>
-                    <Menubar.Item 
-                      className="menubar-item" 
-                      onSelect={() => handleConfidenceIntervalChange('80')}
-                    >
-                      {confidenceIntervalLevel === '80' ? '✓ ' : ''}80%
-                    </Menubar.Item>
-                    <Menubar.Item 
-                      className="menubar-item" 
-                      onSelect={() => handleConfidenceIntervalChange('none')}
-                    >
-                      {confidenceIntervalLevel === 'none' ? '✓ ' : ''}None
-                    </Menubar.Item>
+                    <Menubar.RadioGroup value={confidenceIntervalLevel} onValueChange={(v) => handleConfidenceIntervalChange(v as 'none' | '80' | '90' | '95' | '99')}>
+                      <Menubar.RadioItem className="menubar-item menubar-item--checkable" value="99">
+                        <Menubar.ItemIndicator className="menubar-item-indicator">✓</Menubar.ItemIndicator>
+                        99%
+                      </Menubar.RadioItem>
+                      <Menubar.RadioItem className="menubar-item menubar-item--checkable" value="95">
+                        <Menubar.ItemIndicator className="menubar-item-indicator">✓</Menubar.ItemIndicator>
+                        95%
+                      </Menubar.RadioItem>
+                      <Menubar.RadioItem className="menubar-item menubar-item--checkable" value="90">
+                        <Menubar.ItemIndicator className="menubar-item-indicator">✓</Menubar.ItemIndicator>
+                        90%
+                      </Menubar.RadioItem>
+                      <Menubar.RadioItem className="menubar-item menubar-item--checkable" value="80">
+                        <Menubar.ItemIndicator className="menubar-item-indicator">✓</Menubar.ItemIndicator>
+                        80%
+                      </Menubar.RadioItem>
+                      <Menubar.RadioItem className="menubar-item menubar-item--checkable" value="none">
+                        <Menubar.ItemIndicator className="menubar-item-indicator">✓</Menubar.ItemIndicator>
+                        None
+                      </Menubar.RadioItem>
+                    </Menubar.RadioGroup>
                   </Menubar.SubContent>
                 </Menubar.Portal>
               </Menubar.Sub>
 
               <Menubar.Separator className="menubar-separator" />
 
-              <Menubar.Item
-                className="menubar-item"
-                onSelect={toggleForecastQuality}
+              <Menubar.CheckboxItem
+                className="menubar-item menubar-item--checkable"
+                checked={isForecastQuality}
+                onCheckedChange={toggleForecastQuality}
               >
-                {isForecastQuality ? '✓ ' : ''}Forecast Quality
-              </Menubar.Item>
+                <Menubar.ItemIndicator className="menubar-item-indicator">✓</Menubar.ItemIndicator>
+                Forecast Quality
+              </Menubar.CheckboxItem>
+
+              <Menubar.CheckboxItem
+                className="menubar-item menubar-item--checkable"
+                checked={isDataDepth}
+                onCheckedChange={toggleDataDepth}
+              >
+                <Menubar.ItemIndicator className="menubar-item-indicator">✓</Menubar.ItemIndicator>
+                Data Depth
+              </Menubar.CheckboxItem>
 
               {/* Sankey Layout option - only show when Sankey view is active */}
               {isSankeyView && (
@@ -338,26 +319,32 @@ export function ViewMenu() {
           )}
 
           {/* General view options */}
-          <Menubar.Item
-            className="menubar-item"
-            onSelect={handleToggleDashboardMode}
+          <Menubar.CheckboxItem
+            className="menubar-item menubar-item--checkable"
+            checked={isDashboardMode}
+            onCheckedChange={handleToggleDashboardMode}
           >
-            {isDashboardMode ? '✓ ' : ''}Dashboard mode
-          </Menubar.Item>
+            <Menubar.ItemIndicator className="menubar-item-indicator">✓</Menubar.ItemIndicator>
+            Dashboard mode
+          </Menubar.CheckboxItem>
 
-          <Menubar.Item
-            className="menubar-item"
-            onSelect={() => toggleProjectionMode({ updateUrl: true })}
+          <Menubar.CheckboxItem
+            className="menubar-item menubar-item--checkable"
+            checked={isProjectionMode}
+            onCheckedChange={() => toggleProjectionMode({ updateUrl: true })}
           >
-            {isProjectionMode ? '✓ ' : ''}Projection view
-          </Menubar.Item>
+            <Menubar.ItemIndicator className="menubar-item-indicator">✓</Menubar.ItemIndicator>
+            Projection view
+          </Menubar.CheckboxItem>
 
-          <Menubar.Item
-            className="menubar-item"
-            onSelect={toggleTheme}
+          <Menubar.CheckboxItem
+            className="menubar-item menubar-item--checkable"
+            checked={theme === 'dark'}
+            onCheckedChange={toggleTheme}
           >
-            {theme === 'dark' ? '✓ ' : ''}Dark mode
-          </Menubar.Item>
+            <Menubar.ItemIndicator className="menubar-item-indicator">✓</Menubar.ItemIndicator>
+            Dark mode
+          </Menubar.CheckboxItem>
 
           <Menubar.Item 
             className="menubar-item" 

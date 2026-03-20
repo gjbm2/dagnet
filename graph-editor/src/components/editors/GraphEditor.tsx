@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo, createContext, useContext } from 'react';
 import { EditorProps, GraphData } from '../../types';
-import { useFileState, useTabContext } from '../../contexts/TabContext';
+import { useFileState, useTabContext, fileRegistry } from '../../contexts/TabContext';
 import { GraphStoreProvider, useGraphStore, GraphStoreContext } from '../../contexts/GraphStoreContext';
 import { useVisibleTabs } from '../../contexts/VisibleTabsContext';
 import DockLayout, { LayoutData } from 'rc-dock';
@@ -25,12 +25,15 @@ import { useURLScenarios } from '../../hooks/useURLScenarios';
 import { useDashboardMode } from '../../hooks/useDashboardMode';
 import { useViewOverlayMode } from '../../hooks/useViewOverlayMode';
 import { usePutToBaseRequestListener } from '../../hooks/usePutToBaseRequestListener';
-import { Layers, FileText, Wrench, BarChart3, X, Activity, GitBranch, LayoutDashboard } from 'lucide-react';
+import { Layers, FileText, Wrench, BarChart3, X, Activity, GitBranch, LayoutDashboard, Database } from 'lucide-react';
 import { DEFAULT_SIDEBAR_WIDTH, MIN_SIDEBAR_WIDTH } from '../../lib/uiConstants';
 import { SelectorModal } from '../SelectorModal';
 import { ItemBase } from '../../hooks/useItemFiltering';
 import { WindowSelector } from '../WindowSelector';
 import { ScenarioLegend } from '../ScenarioLegend';
+import { DataDepthLegend } from '../DataDepthLegend';
+import { DataDepthProvider } from '../../contexts/DataDepthContext';
+import { useDataDepthScores } from '../../hooks/useDataDepthScores';
 import { useActiveGraphTracking } from '../../hooks/useActiveGraphTracking';
 import { ElementToolProvider, type ElementToolContextType, type ElementToolType } from '../../contexts/ElementToolContext';
 import { logSnapshotBoot, summariseSnapshotCharts } from '../../lib/snapshotBootTrace';
@@ -117,6 +120,44 @@ function PutToBaseRequestProcessor({ tabId }: { tabId?: string }) {
 }
 
 /**
+ * DataDepthOverlayProvider — runs the async depth score computation when
+ * the data-depth overlay is active and provides scores via DataDepthContext.
+ * Also renders the floating legend.
+ */
+function DataDepthOverlayProvider({ children }: { children: React.ReactNode }) {
+  const viewPrefs = useViewPreferencesContext();
+  const graph = useGraphStore((s) => s.graph);
+  // Data depth uses dataInterestsDSL (the full pinned DSL, e.g. "window(-120d:);cohort(-120d:)").
+  // The hook explodes this into atomic slices and builds fetch plans per slice.
+  const dataInterestsDSL = (graph as any)?.dataInterestsDSL as string | undefined;
+  const { theme: themeMode } = useTheme();
+  const { activeTabId, tabs } = useTabContext();
+  const workspace = useMemo(() => {
+    const tab = activeTabId ? tabs.find(t => t.id === activeTabId) : undefined;
+    if (!tab) return undefined;
+    const file = fileRegistry.getFile(tab.fileId);
+    const repository = file?.source?.repository;
+    const branch = file?.source?.branch;
+    return repository && branch ? { repository, branch } : undefined;
+  }, [activeTabId, tabs]);
+
+  const active = viewPrefs?.viewOverlayMode === 'data-depth';
+  const { scores, loading } = useDataDepthScores(graph, dataInterestsDSL, active, workspace);
+
+  return (
+    <DataDepthProvider scores={scores} loading={loading}>
+      {children}
+      {active && (
+        <DataDepthLegend
+          theme={themeMode === 'dark' ? 'dark' : 'light'}
+          loading={loading}
+        />
+      )}
+    </DataDepthProvider>
+  );
+}
+
+/**
  * ScenarioLegendWrapper - wrapper component that has access to scenarios context.
  *
  * When a view overlay mode is active (e.g. Forecast Quality), the scenario chips
@@ -146,6 +187,13 @@ function ScenarioLegendWrapper({ tabId }: { tabId: string }) {
       toggle: () => setViewOverlayMode(viewOverlayMode === 'forecast-quality' ? 'none' : 'forecast-quality'),
     },
     {
+      id: 'data-depth',
+      label: 'Data Depth',
+      icon: Database,
+      isActive: () => viewOverlayMode === 'data-depth',
+      toggle: () => setViewOverlayMode(viewOverlayMode === 'data-depth' ? 'none' : 'data-depth'),
+    },
+    {
       id: 'sankey',
       label: 'Sankey',
       icon: GitBranch,
@@ -162,7 +210,7 @@ function ScenarioLegendWrapper({ tabId }: { tabId: string }) {
   ], [viewOverlayMode, setViewOverlayMode, isDashboardMode, toggleDashboardMode, isSankey, viewPrefs]);
 
   // Forecast quality hides scenario chips; dashboard does not.
-  const hideScenarioChips = viewOverlayMode === 'forecast-quality';
+  const hideScenarioChips = viewOverlayMode === 'forecast-quality' || viewOverlayMode === 'data-depth';
 
   const { scenarios, deleteScenario, currentColour, baseColour } = scenariosContext;
 
@@ -1100,32 +1148,34 @@ const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, r
     
     console.log(`[CanvasHost ${fileId}] Rendering GraphCanvas (tab is visible)`);
     return (
-      <div style={{ position: 'relative', width: '100%', height: '100%' }}>
-        <GraphCanvas
-          tabId={tabId}
-          activeTabId={activeTabId}
-          onSelectedNodeChange={handleNodeSelection}
-          onSelectedEdgeChange={handleEdgeSelection}
-          onSelectedAnnotationChange={handleAnnotationSelection}
-          onAddNodeRef={addNodeRef}
-          onAddPostitRef={addPostitRef}
-          onAddContainerRef={addContainerRef}
-          activeElementTool={activeElementTool}
-          onClearElementTool={() => setActiveElementTool(null)}
-          onDeleteSelectedRef={deleteSelectedRef}
-          onAutoLayoutRef={autoLayoutRef}
-          onSankeyLayoutRef={sankeyLayoutRef}
-          onForceRerouteRef={forceRerouteRef}
-          onHideUnselectedRef={hideUnselectedRef}
-          whatIfDSL={whatIfDSL}
-          externalSelectedNodeId={selectedNodeId}
-          externalSelectedEdgeId={selectedEdgeId}
-        />
-        {/* WindowSelector is chrome; keep it out of dashboard mode.
-            Static share mode is view-first: do not render the WindowSelector machinery at all. */}
-        {!isDashboardMode && !readonly && <WindowSelector tabId={tabId} />}
-        {tabId && <ScenarioLegendWrapper tabId={tabId} />}
-      </div>
+      <DataDepthOverlayProvider>
+        <div style={{ position: 'relative', width: '100%', height: '100%' }}>
+          <GraphCanvas
+            tabId={tabId}
+            activeTabId={activeTabId}
+            onSelectedNodeChange={handleNodeSelection}
+            onSelectedEdgeChange={handleEdgeSelection}
+            onSelectedAnnotationChange={handleAnnotationSelection}
+            onAddNodeRef={addNodeRef}
+            onAddPostitRef={addPostitRef}
+            onAddContainerRef={addContainerRef}
+            activeElementTool={activeElementTool}
+            onClearElementTool={() => setActiveElementTool(null)}
+            onDeleteSelectedRef={deleteSelectedRef}
+            onAutoLayoutRef={autoLayoutRef}
+            onSankeyLayoutRef={sankeyLayoutRef}
+            onForceRerouteRef={forceRerouteRef}
+            onHideUnselectedRef={hideUnselectedRef}
+            whatIfDSL={whatIfDSL}
+            externalSelectedNodeId={selectedNodeId}
+            externalSelectedEdgeId={selectedEdgeId}
+          />
+          {/* WindowSelector is chrome; keep it out of dashboard mode.
+              Static share mode is view-first: do not render the WindowSelector machinery at all. */}
+          {!isDashboardMode && !readonly && <WindowSelector tabId={tabId} />}
+          {tabId && <ScenarioLegendWrapper tabId={tabId} />}
+        </div>
+      </DataDepthOverlayProvider>
     );
   };
   

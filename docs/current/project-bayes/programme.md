@@ -24,6 +24,7 @@ design docs contain the detail.
 | **Topology signatures** | `10-topology-signatures.md` | Per-fit-unit structural fingerprinting for posterior staleness detection |
 | **Snapshot evidence** | `11-snapshot-evidence-assembly.md` | Phase S: direct snapshot DB queries replace inline param-file evidence. FE fetch plan, worker DB integration, maturation trajectories. Phase D (latent latency + temporal drift) now sequenced before Phase C: A → B → **S** → **D** → C. |
 | **Quality gating** | `13-model-quality-gating-and-preview.md` | Model quality signalling (progress, session log, Graph Issues), auto-enable Forecast Quality, accept/reject preview workflow |
+| **Phase C design** | `14-phase-c-slice-pooling-design.md` | Phase C detailed design: slice DSL parsing, IR extension, solo-edge pooling, hierarchical Dirichlet for branch groups, conditional_p, posterior.slices output, Phase D interaction |
 
 **Context**: `../codebase/APP_ARCHITECTURE.md` (app architecture),
 `../project-db/` (snapshot DB)
@@ -76,11 +77,11 @@ Semantic foundation (parallel, feeds into consumption quality)
 |---|---|---|
 | Phase A posteriors in YAML (done) | Async infra (done), schema revision, compiler Phase A | FE overlay (basic), visual validation |
 | FE overlay (basic) (done) | Phase A, FE posterior reading | Visual validation, fit quality display |
-| Visual validation | FE overlay (done), existing analytic curves | Confidence to proceed to Phase B |
-| Phase B posteriors | Phase A proven | FE overlay (Dirichlet), branch group quality |
-| Phase S snapshot evidence | Phase B, FE hash infrastructure, snapshot DB | Richer maturation trajectories, tighter posteriors, enables meaningful slice pooling |
-| Phase C posteriors | Phase S proven | Per-slice visualisation, MECE validation |
-| Phase D posteriors | Phase C proven | Latency CDF overlay on cohort maturity |
+| Visual validation (done) | FE overlay (done), existing analytic curves | Confidence to proceed to Phase B |
+| Phase B posteriors (done) | Phase A proven | FE overlay (Dirichlet), branch group quality |
+| Phase S snapshot evidence (done) | Phase B, FE hash infrastructure, snapshot DB | Richer maturation trajectories, tighter posteriors, enables meaningful slice pooling |
+| Phase D posteriors (done) | Phase S proven | Latent latency, overdispersion (BetaBinomial/DM), recency weighting, cohort latency hierarchy |
+| Phase C posteriors (next) | Phase D proven, test data with contexts | Per-slice visualisation, MECE validation |
 | Quantitative backtesting | Phase A + fit_history depth + snapshot DB | Distribution family selection, model improvement |
 | Fit quality visualisation (done) | Phase A + FE overlay | Edge colour-coding, quality-driven graph triage |
 | Semantic foundation complete | Independent | Cleaner FE derivation, deletion of FE fitting code |
@@ -723,50 +724,37 @@ design; implementation is post-Phase A.
   deletion schedule, settings/fit guidance UI. Component-level detail
   to be refined incrementally per phase.
 
-**Posterior confidence bands too narrow — overdispersion not modelled**
-
-Phase A confidence bands on the cohort maturity model curve are
-mathematically correct but practically useless: at 99.9% (k=3.291),
-bands are only ±5% wide for a Beta(824, 186) posterior. The model
-treats every conversion as an independent Bernoulli trial, so with
-~1000 observations the posterior concentrates sharply. Real conversion
-data has **overdispersion**: cohort rates vary by day, segment, and
-channel; observations within a cohort are correlated; and there is
-temporal autocorrelation across cohorts. The Beta model ignores all of
-this, producing a posterior that is far more confident than the data
-warrants.
-
-The effective sample size is much smaller than the raw observation
-count. Until overdispersion is modelled, the bands convey false
-precision rather than genuine uncertainty.
-
-**Candidate approaches** (to be evaluated in Phase D):
-
-- **Beta-Binomial likelihood**: replace Binomial with Beta-Binomial,
-  adding a dispersion parameter φ. Variance inflates by
-  (1 + (n−1)·ρ) where ρ is the intra-cluster correlation. Natural
-  fit for cohort-level overdispersion.
-- **Effective sample size**: estimate n_eff < n from variance ratios
-  or autocorrelation in the cohort time series, then scale
-  α_eff = α·(n_eff/n), β_eff = β·(n_eff/n). Lightweight but ad hoc.
-- **Hierarchical model**: model per-cohort rates as draws from a
-  population distribution (e.g. per-cohort p_i ~ Beta(a, b) with
-  hyperpriors on a, b). Between-cohort variance inflates the
-  posterior naturally. Most principled but heaviest computationally.
-
-**Key modelling question**: how should DagNet estimate the degree of
-overdispersion from snapshot data, and which correction fits the
-existing compiler pipeline with least disruption? The answer likely
-depends on whether the dominant source of overdispersion is
-between-cohort heterogeneity (hierarchical model) or within-cohort
-correlation (Beta-Binomial / effective-n).
-
-**Interim mitigation**: document that Phase A bands reflect
-sampling uncertainty only, not real-world uncertainty. Quality gating
-(doc 13) should flag that bands are unrealistically tight as a known
-model limitation, not a data problem.
+- ~~Posterior confidence bands too narrow~~: **Resolved 20-Mar-26.**
+  Replaced Binomial/Multinomial likelihoods with Beta-Binomial /
+  Dirichlet-Multinomial throughout (model.py). Per-edge latent κ
+  (`kappa_{edge}` ~ Gamma(3, 0.1)) controls overdispersion — large κ
+  recovers Binomial, small κ allows heavy day-to-day variation. The
+  model learns each edge's κ from trajectory data: test graph shows
+  κ ranging from 1.5 (created→delegated, heavily overdispersed) to
+  23.7 (delegated→registered, nearly Binomial). Posterior stdevs on
+  p, mu, and sigma are now properly calibrated to real data variation,
+  not Binomial fantasy. 0 divergences, 100% converged. See doc 6
+  § "Overdispersion: Beta-Binomial / Dirichlet-Multinomial".
 
 ### Future work
+
+- **Session logging verbosity**: the Bayes roundtrip (useBayesTrigger,
+  bayesPatchService, worker diagnostics) emits detailed session log
+  entries that are useful during development but excessive for
+  production. Once the pipeline is stable, dial back to summary-level
+  logging by default, with verbose output only in a diagnostic mode
+  (e.g. `?bayes_debug=1` or a dev-tools toggle).
+
+- **Bayes test hardening — immature cohort recovery**: the Phase A
+  `test_completeness_prevents_p_underestimate` test (A4 scenario) is
+  `xfail` — the fixed-latency model cannot recover true p from
+  immature-only data (posterior mean ~0.16 vs truth 0.50). The
+  directional assertion passes (posterior closer to truth than naive
+  k/n ratio), but absolute recovery is poor. Phase D's latent latency
+  should substantially improve this. When Phase D lands, remove the
+  `xfail` marker and tighten the tolerance. Also review whether
+  additional edge cases (mixed maturity, very short cohorts) need
+  coverage.
 
 - **Sampling progress estimation**: nutpie exposes per-chain
   `finished_draws / total_draws` via `PyChainProgress` (fields:

@@ -30,10 +30,16 @@ export function useViewOverlayMode() {
     setViewOverlayMode(viewOverlayMode === 'forecast-quality' ? 'none' : 'forecast-quality');
   };
 
+  const toggleDataDepth = () => {
+    setViewOverlayMode(viewOverlayMode === 'data-depth' ? 'none' : 'data-depth');
+  };
+
   return {
     viewOverlayMode,
     setViewOverlayMode,
     toggleForecastQuality,
+    toggleDataDepth,
     isForecastQuality: viewOverlayMode === 'forecast-quality',
+    isDataDepth: viewOverlayMode === 'data-depth',
   };
 }

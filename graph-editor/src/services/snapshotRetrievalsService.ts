@@ -153,6 +153,7 @@ export async function buildSnapshotRetrievalsQueryForEdge(args: {
   edgeId: string;
   effectiveDSL: string;
   workspace?: { repository: string; branch: string };
+  limit?: number;
 }): Promise<QuerySnapshotRetrievalsParams | null> {
   const sigResult = await computeCurrentSignatureForEdge(args);
   if (!sigResult) return null;
@@ -203,7 +204,7 @@ export async function buildSnapshotRetrievalsQueryForEdge(args: {
     canonical_signature: signature,
     slice_keys,
     // No anchor_from/anchor_to — see comment above.
-    limit: 200,
+    limit: args.limit ?? 200,
   };
 }
 
@@ -212,6 +213,7 @@ export async function getSnapshotRetrievalsForEdge(args: {
   edgeId: string;
   effectiveDSL: string;
   workspace?: { repository: string; branch: string };
+  limit?: number;
 }): Promise<QuerySnapshotRetrievalsResult> {
   const query = await buildSnapshotRetrievalsQueryForEdge(args);
   if (!query) {

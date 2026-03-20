@@ -177,6 +177,7 @@ function DraggableAnalysisCard({
   const cardRef = useRef<HTMLDivElement>(null);
   const { operations } = useTabContext();
   const scenariosCtx = useScenariosContextOptional();
+  const { viewOverlayMode } = useViewOverlayMode();
 
   // Stable unique ID per component instance (for compute caching)
   const stableId = useRef(`hover-${Math.random().toString(36).slice(2, 8)}`).current;
@@ -448,6 +449,7 @@ function DraggableAnalysisCard({
             onRendered={fireSettled}
             infoDefaultTab={infoDefaultTab}
             onFileLink={onFileLink}
+            source={{ query_dsl: dsl }}
             infoTabExtra={snapshotRetrievals ? {
               evidence: <SnapshotCalendarSection data={snapshotRetrievals} />,
             } : undefined}
@@ -593,7 +595,11 @@ export function HoverAnalysisPreview({
   const { viewOverlayMode } = useViewOverlayMode();
 
   // Derive default info tab from view overlay mode
-  const infoDefaultTab = viewOverlayMode === 'forecast-quality' ? 'forecast' : undefined;
+  const infoDefaultTab = viewOverlayMode === 'forecast-quality'
+    ? 'forecast'
+    : viewOverlayMode === 'data-depth'
+      ? 'depth'
+      : undefined;
 
 
   // --- Satellite row ---

@@ -228,7 +228,7 @@ visually compare the Bayesian model curve against the analytic model
 curve and observed data points.
 
 **Test graph**: `bayes-gm-rebuild-jan-26` feature branch in the data
-repo — a rebuild of the nouse-conversion graph specifically for Bayes
+repo — a rebuild of the production conversion graph specifically for Bayes
 validation. Simple topology for initial model plausibility checks.
 
 **Phase A overlay — posterior consumption and quality display (built 18-Mar-26):**

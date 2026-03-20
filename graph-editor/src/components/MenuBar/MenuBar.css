@@ -395,6 +395,22 @@
   color: rgba(255, 255, 255, 0.8);
 }
 
+/* Checkbox / radio items — extra left padding for the indicator gutter */
+.menubar-item.menubar-item--checkable {
+  padding-left: 28px;
+}
+
+/* The indicator rendered by Radix ItemIndicator (only visible when checked) */
+.menubar-item-indicator {
+  position: absolute;
+  left: 8px;
+  width: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+}
+
 /* Separator */
 .menubar-separator {
   height: 1px;

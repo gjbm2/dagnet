@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import * as Menubar from '@radix-ui/react-menubar';
 import { useTabContext } from '../../contexts/TabContext';
 import { useNavigatorContext } from '../../contexts/NavigatorContext';
+import { useViewPreferencesContext } from '../../contexts/ViewPreferencesContext';
 import { SyncIndexModal } from '../modals/SyncIndexModal';
 import type { AlignCommand, DistributeCommand, EqualSizeCommand } from '../../services/alignmentService';
 
@@ -13,15 +14,19 @@ import type { AlignCommand, DistributeCommand, EqualSizeCommand } from '../../se
  * - Delete Selected
  * - Align / Distribute (submenu)
  * - Auto Layout (submenu: LR, RL, TB, BT)
+ * - Re-route Edges / Auto Re-route
  * - Sync Index from Graph
  *
  * Only visible when a graph tab in interactive mode is active
  */
 export function ElementsMenu() {
-  const { activeTabId, tabs } = useTabContext();
+  const { activeTabId, tabs, operations } = useTabContext();
   const { items } = useNavigatorContext();
+  const viewPrefsCtx = useViewPreferencesContext();
   const activeTab = tabs.find(t => t.id === activeTabId);
   const isGraphTab = activeTab?.fileId.startsWith('graph-') && activeTab?.viewMode === 'interactive';
+
+  const autoReroute = viewPrefsCtx?.autoReroute ?? (activeTab?.editorState?.autoReroute ?? true);
 
   const [isSyncIndexModalOpen, setIsSyncIndexModalOpen] = useState(false);
 
@@ -63,6 +68,19 @@ export function ElementsMenu() {
 
   const handleAutoLayout = (direction: 'LR' | 'RL' | 'TB' | 'BT') => {
     window.dispatchEvent(new CustomEvent('dagnet:autoLayout', { detail: { direction } }));
+  };
+
+  const handleReRoute = () => {
+    window.dispatchEvent(new CustomEvent('dagnet:forceReroute'));
+  };
+
+  const handleToggleAutoReroute = () => {
+    const newValue = !autoReroute;
+    if (viewPrefsCtx) {
+      viewPrefsCtx.setAutoReroute(newValue);
+    } else if (activeTabId) {
+      operations.updateTabState(activeTabId, { autoReroute: newValue });
+    }
   };
 
   const handleSyncIndex = () => {
@@ -205,6 +223,24 @@ export function ElementsMenu() {
                 </Menubar.SubContent>
               </Menubar.Portal>
             </Menubar.Sub>
+
+            <Menubar.Separator className="menubar-separator" />
+
+            <Menubar.Item
+              className="menubar-item"
+              onSelect={handleReRoute}
+            >
+              Re-route Edges
+            </Menubar.Item>
+
+            <Menubar.CheckboxItem
+              className="menubar-item menubar-item--checkable"
+              checked={autoReroute}
+              onCheckedChange={handleToggleAutoReroute}
+            >
+              <Menubar.ItemIndicator className="menubar-item-indicator">✓</Menubar.ItemIndicator>
+              Auto Re-route
+            </Menubar.CheckboxItem>
 
             <Menubar.Separator className="menubar-separator" />
 

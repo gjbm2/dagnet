@@ -1500,16 +1500,19 @@ export class GraphComputeClient {
     scenarioColour: string = '#3b82f6',
     analysisType?: string,
     visibilityMode: 'f+e' | 'f' | 'e' = 'f+e',
-    snapshotSubjects?: SnapshotSubjectPayload[]
+    snapshotSubjects?: SnapshotSubjectPayload[],
+    displaySettings?: Record<string, unknown>,
   ): Promise<AnalysisResponse> {
     const bypassCache = this.shouldBypassCache();
     const snapshotSig = snapshotSubjectsSignature(snapshotSubjects);
 
+    const displaySig = displaySettings ? JSON.stringify(displaySettings) : '';
     const cacheKey =
       this.generateCacheKey(graph, queryDsl, analysisType, [scenarioId])
       + `|vis:${visibilityMode}`
       + (snapshotSig ? `|snap:${this.hashString(snapshotSig)}` : '')
-      + (analysisType === 'cohort_maturity' ? `|cmv:${this.COHORT_MATURITY_CACHE_VERSION}` : '');
+      + (analysisType === 'cohort_maturity' ? `|cmv:${this.COHORT_MATURITY_CACHE_VERSION}` : '')
+      + (displaySig ? `|ds:${this.hashString(displaySig)}` : '');
     if (!bypassCache) {
       const cached = this.analysisCache.get(cacheKey);
       if (cached && Date.now() - cached.timestamp < this.CACHE_TTL_MS) {
@@ -1552,6 +1555,7 @@ export class GraphComputeClient {
       scenarios: [scenarioEntry],
       query_dsl: queryDsl,
       analysis_type: analysisType,
+      ...(displaySettings ? { display_settings: displaySettings } : {}),
     };
 
     const response = await fetch(`${this.baseUrl}/api/runner/analyze`, {
@@ -1660,6 +1664,7 @@ export class GraphComputeClient {
     scenarios: Array<{ scenario_id: string; name: string; graph: any; colour?: string; visibility_mode?: 'f+e' | 'f' | 'e'; snapshot_subjects?: SnapshotSubjectPayload[] }>,
     queryDsl?: string,
     analysisType?: string,
+    displaySettings?: Record<string, unknown>,
   ): Promise<AnalysisResponse> {
     const bypassCache = this.shouldBypassCache();
 
@@ -1680,11 +1685,13 @@ export class GraphComputeClient {
       .map(s => `${s.scenario_id}:${this.hashString(this.graphSignature(s.graph))}`)
       .join(',');
 
+    const multiDisplaySig = displaySettings ? JSON.stringify(displaySettings) : '';
     const cacheKey =
       `multi|graphs:${scenarioGraphKey}|dsl:${queryDsl || ''}|type:${analysisType || ''}|scenarios:${scenarioIds.join(',')}`
       + `|vis:${visibilityModes}`
       + (snapshotSig ? `|snap:${this.hashString(snapshotSig)}` : '')
-      + (analysisType === 'cohort_maturity' ? `|cmv:${this.COHORT_MATURITY_CACHE_VERSION}` : '');
+      + (analysisType === 'cohort_maturity' ? `|cmv:${this.COHORT_MATURITY_CACHE_VERSION}` : '')
+      + (multiDisplaySig ? `|ds:${this.hashString(multiDisplaySig)}` : '');
     
     // Check cache first (unless explicitly bypassed via URL params for debugging).
     if (!bypassCache) {
@@ -1730,6 +1737,7 @@ export class GraphComputeClient {
       })),
       query_dsl: queryDsl,
       analysis_type: analysisType,
+      ...(displaySettings ? { display_settings: displaySettings } : {}),
     };
 
     // DEV/forensics: make the exact compute boundary payload easy to copy without
@@ -1966,6 +1974,8 @@ export interface AnalysisRequest {
   analysis_type?: string;
   /** Forecasting settings from buildForecastingSettings(). Sent for snapshot analyses. */
   forecasting_settings?: import('../constants/latency').ForecastingSettings;
+  /** Compute-affecting display settings (e.g. bayes_band_level). */
+  display_settings?: Record<string, unknown>;
 }
 
 /**

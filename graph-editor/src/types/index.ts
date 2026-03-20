@@ -35,7 +35,7 @@ export type ViewMode = 'interactive' | 'raw-json' | 'raw-yaml';
  * 'none' = standard display; other values activate specialised overlays
  * (e.g. colour-coding edges by Bayesian fit quality).
  */
-export type ViewOverlayMode = 'none' | 'forecast-quality';
+export type ViewOverlayMode = 'none' | 'forecast-quality' | 'data-depth';
 
 /**
  * Source information for a file

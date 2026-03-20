@@ -16,6 +16,7 @@ Responsibilities:
 from __future__ import annotations
 
 import math
+import os
 import time
 from datetime import datetime
 
@@ -254,12 +255,15 @@ def _fit_graph_compiler(payload: dict, report_progress=None) -> dict:
         snapshot_subjects = payload.get("snapshot_subjects", [])
         snapshot_rows: dict[str, list[dict]] = {}
 
-        if snapshot_subjects and db_conn:
-            # Phase S: query snapshot DB for rich maturation trajectories
+        if snapshot_subjects and db_url:
+            # Phase S: query snapshot DB for rich maturation trajectories.
+            # Set DB_CONNECTION so snapshot_service.get_db_connection() works
+            # (same env var the BE analysis path uses).
+            os.environ["DB_CONNECTION"] = db_url
             report("compiling", 0, "Querying snapshot DB…")
             t_snap = time.time()
             snapshot_rows = _query_snapshot_subjects(
-                db_conn, snapshot_subjects, topology, log,
+                snapshot_subjects, topology, log,
             )
             snap_ms = int((time.time() - t_snap) * 1000)
             log.append(
@@ -267,7 +271,7 @@ def _fit_graph_compiler(payload: dict, report_progress=None) -> dict:
                 f"{sum(len(v) for v in snapshot_rows.values())} rows fetched "
                 f"({snap_ms}ms)"
             )
-        elif snapshot_subjects and not db_conn:
+        elif snapshot_subjects and not db_url:
             log.append("snapshot_subjects provided but no db_connection — falling back to param files")
 
         if snapshot_rows:
@@ -455,86 +459,71 @@ def _fit_graph_compiler(payload: dict, report_progress=None) -> dict:
 # ---------------------------------------------------------------------------
 
 def _query_snapshot_subjects(
-    conn,
     snapshot_subjects: list[dict],
     topology,
     log: list[str],
 ) -> dict[str, list[dict]]:
     """Query snapshot DB for each subject, return rows grouped by edge_id.
 
-    Each subject has: param_id, core_hash, slice_keys, anchor_from/to,
-    sweep_from/to, equivalent_hashes, edge_id.
+    Uses the same snapshot_service.query_snapshots_for_sweep() that the
+    BE analysis path uses. The FE sends identical SnapshotSubjectPayload
+    shapes for both Bayes and analysis — same fields, same hash-mapping
+    ClosureEntry objects.
 
-    Uses a simple direct query per subject via psycopg2 (not
-    snapshot_service.py — avoids the graph-editor/lib dependency for now).
-    When the Modal image includes graph-editor/lib, this can be replaced
-    with snapshot_service.query_snapshots_for_sweep().
+    Subjects have: param_id, core_hash, slice_keys, anchor_from/to,
+    sweep_from/to, equivalent_hashes (ClosureEntry[]), edge_id (or
+    target.targetId).
     """
     from datetime import date
+    try:
+        # Modal: graph-editor/lib is on PYTHONPATH as /root/lib
+        from snapshot_service import query_snapshots_for_sweep
+    except ImportError:
+        # Local dev: add graph-editor/lib to path
+        import sys
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'graph-editor', 'lib'))
+        from snapshot_service import query_snapshots_for_sweep
 
     result: dict[str, list[dict]] = {}
 
     for subj in snapshot_subjects:
+        # edge_id: flat field or nested target.targetId (FE flattens it,
+        # but handle both for robustness)
         edge_id = subj.get("edge_id", "")
-        param_id = subj.get("param_id", "")
-        core_hash = subj.get("core_hash", "")
-        slice_keys = subj.get("slice_keys", [""])
-        anchor_from = subj.get("anchor_from", "")
-        anchor_to = subj.get("anchor_to", "")
-        sweep_from = subj.get("sweep_from", "")
-        sweep_to = subj.get("sweep_to", "")
-        equivalent_hashes = subj.get("equivalent_hashes", [])
+        if not edge_id:
+            target = subj.get("target")
+            if isinstance(target, dict):
+                edge_id = target.get("targetId", "")
 
+        core_hash = subj.get("core_hash", "")
         if not core_hash or not edge_id:
             log.append(f"  snapshot: skipping subject (no core_hash or edge_id)")
             continue
 
-        # Build hash list for query (seed + equivalents)
-        all_hashes = [core_hash] + [h for h in equivalent_hashes if h != core_hash]
+        param_id = subj.get("param_id", "")
+        slice_keys = subj.get("slice_keys", [""])
+        anchor_from_str = subj.get("anchor_from", "")
+        anchor_to_str = subj.get("anchor_to", "")
+        sweep_from_str = subj.get("sweep_from", "")
+        sweep_to_str = subj.get("sweep_to", "")
+        equivalent_hashes = subj.get("equivalent_hashes") or None
 
         try:
-            cur = conn.cursor()
+            anchor_from = date.fromisoformat(anchor_from_str) if anchor_from_str else None
+            anchor_to = date.fromisoformat(anchor_to_str) if anchor_to_str else None
+            sweep_from = date.fromisoformat(sweep_from_str) if sweep_from_str else None
+            sweep_to = date.fromisoformat(sweep_to_str) if sweep_to_str else None
 
-            # Query: all rows matching hashes within anchor and sweep bounds
-            query = """
-                SELECT param_id, core_hash, slice_key, anchor_day,
-                       retrieved_at, a, x, y,
-                       median_lag_days, mean_lag_days,
-                       anchor_median_lag_days, anchor_mean_lag_days,
-                       onset_delta_days
-                FROM snapshots
-                WHERE core_hash = ANY(%s)
-                  AND anchor_day >= %s AND anchor_day <= %s
-                  AND retrieved_at >= %s AND retrieved_at < %s
-            """
-
-            # Sweep bounds: retrieved_at is timestamp, sweep dates are dates
-            # sweep_to is inclusive as a date, so we use < (sweep_to + 1 day)
-            sweep_to_exclusive = ""
-            if sweep_to:
-                try:
-                    dt = date.fromisoformat(sweep_to)
-                    from datetime import timedelta
-                    sweep_to_exclusive = (dt + timedelta(days=1)).isoformat()
-                except ValueError:
-                    sweep_to_exclusive = sweep_to
-
-            params = (
-                all_hashes,
-                anchor_from,
-                anchor_to,
-                sweep_from,
-                sweep_to_exclusive or sweep_to,
+            rows = query_snapshots_for_sweep(
+                param_id=param_id,
+                core_hash=core_hash,
+                slice_keys=slice_keys,
+                anchor_from=anchor_from,
+                anchor_to=anchor_to,
+                sweep_from=sweep_from,
+                sweep_to=sweep_to,
+                equivalent_hashes=equivalent_hashes,
             )
-
-            cur.execute(query, params)
-            columns = [desc[0] for desc in cur.description]
-            rows = [dict(zip(columns, row)) for row in cur.fetchall()]
-            cur.close()
-
-            # Filter by slice_keys if specified (empty string matches uncontexted)
-            if slice_keys and slice_keys != [""]:
-                rows = [r for r in rows if str(r.get("slice_key", "")) in slice_keys]
 
             if rows:
                 if edge_id not in result:

@@ -7,7 +7,7 @@
 
 import React from 'react';
 import type { Edge, Node, Connection } from 'reactflow';
-import { Plus, StickyNote, Square, BarChart3, Clipboard, CheckSquare, Monitor, MonitorOff, X, LayoutGrid } from 'lucide-react';
+import { Plus, StickyNote, Square, BarChart3, Clipboard, CheckSquare, Monitor, X, LayoutGrid } from 'lucide-react';
 import { ContextMenu, type ContextMenuItem } from '../ContextMenu';
 import { NodeContextMenu } from '../NodeContextMenu';
 import { PostItContextMenu } from '../PostItContextMenu';
@@ -99,6 +99,9 @@ export interface CanvasContextMenusProps {
   scenariosContext: any;
   captureTabScenariosToRecipe: any;
 
+  // View mode submenu items (built by parent from current state)
+  viewModeItems: ContextMenuItem[];
+
   // Variant modal (from useEdgeConnection)
   showVariantModal: boolean;
   pendingConnection: Connection | null;
@@ -173,6 +176,7 @@ export const CanvasContextMenus: React.FC<CanvasContextMenusProps> = React.memo(
   store,
   scenariosContext,
   captureTabScenariosToRecipe,
+  viewModeItems,
   showVariantModal,
   pendingConnection,
   caseNodeVariants,
@@ -252,11 +256,14 @@ export const CanvasContextMenus: React.FC<CanvasContextMenusProps> = React.memo(
           });
           paneItems.push({ label: '', onClick: () => {}, divider: true });
         }
-        paneItems.push({
-          label: isDashboardMode ? 'Exit dashboard mode' : 'Enter dashboard mode',
-          icon: isDashboardMode ? <MonitorOff size={14} /> : <Monitor size={14} />,
-          onClick: () => toggleDashboardMode({ updateUrl: true }),
-        });
+        if (viewModeItems.length > 0) {
+          paneItems.push({
+            label: 'View Modes',
+            icon: <Monitor size={14} />,
+            onClick: () => {},
+            submenu: viewModeItems,
+          });
+        }
         if (tabId) {
           paneItems.push({
             label: 'Close tab',
