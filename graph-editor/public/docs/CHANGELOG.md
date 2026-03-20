@@ -1,4 +1,11 @@
 # DagNet Release Notes
+## Version 1.7.29b
+**Released:** 20-Mar-26
+
+Ready for Bayes Phase D (finally). Added Data Quality view.
+
+---
+
 ## Version 1.7.28b
 **Released:** 18-Mar-26
 
