@@ -25,10 +25,13 @@ from .types import (
     CohortDailyTrajectory,
     ProbabilityPrior,
     LatencyPrior,
+    SliceObservations,
+    SliceGroup,
     ESS_CAP,
     MIN_N_THRESHOLD,
 )
 from .completeness import shifted_lognormal_cdf
+from .slices import context_key, dimension_key, is_mece_dimension
 
 
 def bind_evidence(
@@ -84,12 +87,14 @@ def bind_evidence(
         # --- Prior ---
         ev.prob_prior = _resolve_prior(pf_data, topology.fingerprint)
 
-        # --- Latency prior (for completeness computation, not latent in Phase A) ---
+        # --- Latency prior ---
         if et.has_latency:
+            onset = et.onset_delta_days
             ev.latency_prior = LatencyPrior(
-                onset_delta_days=et.onset_delta_days,
+                onset_delta_days=onset,
                 mu=et.mu_prior,
                 sigma=et.sigma_prior,
+                onset_uncertainty=max(1.0, onset * 0.3),
                 source="topology",
             )
 
@@ -160,6 +165,9 @@ def bind_evidence(
                     ))
                     ev.has_window = True
                     ev.total_n += n
+
+        # --- Phase C: route sliced observations to SliceGroups ---
+        _route_slices(ev, settings, diagnostics)
 
         # --- Minimum-n gate ---
         min_n = settings.get("min_n_threshold", MIN_N_THRESHOLD)
@@ -244,10 +252,12 @@ def bind_snapshot_evidence(
 
         # --- Latency prior ---
         if et.has_latency:
+            onset = et.onset_delta_days
             ev.latency_prior = LatencyPrior(
-                onset_delta_days=et.onset_delta_days,
+                onset_delta_days=onset,
                 mu=et.mu_prior,
                 sigma=et.sigma_prior,
+                onset_uncertainty=max(1.0, onset * 0.3),
                 source="topology",
             )
 
@@ -708,6 +718,141 @@ def _is_cohort(slice_dsl: str) -> bool:
 
 def _is_window(slice_dsl: str) -> bool:
     return bool(_WINDOW_RE.search(slice_dsl))
+
+
+# ---------------------------------------------------------------------------
+# Phase C: slice routing
+# ---------------------------------------------------------------------------
+
+def _route_slices(
+    ev: EdgeEvidence,
+    settings: dict,
+    diagnostics: list[str],
+) -> None:
+    """Route sliced observations from aggregate lists into SliceGroups.
+
+    After the main binding loop, window_obs and cohort_obs contain ALL
+    observations (aggregate + sliced). This function:
+    1. Identifies sliced observations (non-empty context_key)
+    2. Groups them by dimension
+    3. Moves them into ev.slice_groups
+    4. Leaves aggregate observations (empty context_key) in place
+    5. Detects exhaustiveness for MECE dimensions
+    6. Computes residuals for partial MECE dimensions
+
+    Modifies ev in place. No-op if no sliced observations exist.
+    """
+    min_n_slice = settings.get("min_n_slice", MIN_N_THRESHOLD)
+
+    # Collect all sliceDSL strings to discover dimensions
+    all_dsls: list[str] = []
+    for w in ev.window_obs:
+        all_dsls.append(w.slice_dsl)
+    for c in ev.cohort_obs:
+        all_dsls.append(c.slice_dsl)
+
+    # Build dimension → [context_key, ...] mapping
+    from .slices import extract_dimensions
+    dim_map = extract_dimensions(all_dsls)
+    if not dim_map:
+        return  # no sliced observations
+
+    # Partition window_obs and cohort_obs into aggregate vs sliced
+    agg_window: list[WindowObservation] = []
+    sliced_window: dict[str, list[WindowObservation]] = {}  # context_key → [obs]
+    for w in ev.window_obs:
+        ctx = context_key(w.slice_dsl)
+        if ctx:
+            sliced_window.setdefault(ctx, []).append(w)
+        else:
+            agg_window.append(w)
+
+    agg_cohort: list[CohortObservation] = []
+    sliced_cohort: dict[str, list[CohortObservation]] = {}
+    for c in ev.cohort_obs:
+        ctx = context_key(c.slice_dsl)
+        if ctx:
+            sliced_cohort.setdefault(ctx, []).append(c)
+        else:
+            agg_cohort.append(c)
+
+    if not sliced_window and not sliced_cohort:
+        return  # all observations are aggregate
+
+    # Replace aggregate lists with only the true aggregates
+    ev.window_obs = agg_window
+    ev.cohort_obs = agg_cohort
+
+    # Build SliceGroups
+    for dim_key_str, ctx_keys in dim_map.items():
+        mece = is_mece_dimension(dim_key_str)
+        group = SliceGroup(
+            dimension_key=dim_key_str,
+            is_mece=mece,
+        )
+
+        total_slice_n = 0
+        for ctx in ctx_keys:
+            s_obs = SliceObservations(context_key=ctx)
+
+            # Window observations for this slice
+            for w in sliced_window.get(ctx, []):
+                s_obs.window_obs.append(w)
+                s_obs.total_n += w.n
+                s_obs.has_window = True
+
+            # Cohort observations for this slice
+            for c in sliced_cohort.get(ctx, []):
+                s_obs.cohort_obs.append(c)
+                n_from_cohort = sum(d.n for d in c.daily)
+                n_from_cohort += sum(
+                    t.n for t in c.trajectories
+                )
+                s_obs.total_n += n_from_cohort
+                s_obs.has_cohort = True
+
+            # Per-slice min-n gate
+            if s_obs.total_n < min_n_slice:
+                continue  # too sparse — fold into residual
+
+            total_slice_n += s_obs.total_n
+            group.slices[ctx] = s_obs
+
+        if not group.slices:
+            continue  # all slices below min-n
+
+        # Exhaustiveness check for MECE dimensions
+        agg_n = sum(w.n for w in agg_window) + sum(
+            sum(d.n for d in c.daily) + sum(t.n for t in c.trajectories)
+            for c in agg_cohort
+        )
+        if mece and agg_n > 0:
+            coverage = total_slice_n / agg_n if agg_n > 0 else 0
+            group.is_exhaustive = coverage > 0.85
+            # For partial MECE: compute residual
+            if not group.is_exhaustive:
+                residual_n = max(0, agg_n - total_slice_n)
+                if residual_n > min_n_slice:
+                    # Residual gets the aggregate obs as-is (represents
+                    # the unsliced remainder)
+                    group.residual = SliceObservations(
+                        context_key="__residual__",
+                        window_obs=list(agg_window),
+                        cohort_obs=list(agg_cohort),
+                        total_n=residual_n,
+                        has_window=bool(agg_window),
+                        has_cohort=bool(agg_cohort),
+                    )
+
+        ev.slice_groups[dim_key_str] = group
+        ev.has_slices = True
+
+        n_slices = len(group.slices)
+        diagnostics.append(
+            f"  slices: {ev.edge_id[:8]}… dim={dim_key_str}, "
+            f"{n_slices} slices, mece={mece}, "
+            f"exhaustive={group.is_exhaustive}"
+        )
 
 
 # ---------------------------------------------------------------------------

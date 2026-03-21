@@ -557,7 +557,7 @@ function buildLatencyCdfMeta(edge: GraphEdge): Record<string, any> | null {
   // Path-level CDF params (from Bayesian posterior path_* fields, or analytic path_mu/path_sigma)
   const pathMu = lat.posterior?.path_mu_mean ?? lat.path_mu;
   const pathSigma = lat.posterior?.path_sigma_mean ?? lat.path_sigma;
-  const pathOnset = lat.posterior?.path_onset_delta_days ?? lat.path_delta ?? edgeOnset;
+  const pathOnset = lat.posterior?.path_onset_delta_days ?? lat.path_onset_delta_days ?? edgeOnset;
   if (typeof pathMu === 'number' && typeof pathSigma === 'number' && pathSigma > 0) {
     result.path = { mu: pathMu, sigma: pathSigma, onset: pathOnset };
   }

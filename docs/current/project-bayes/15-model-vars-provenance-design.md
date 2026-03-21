@@ -570,15 +570,17 @@ set to `'manual'` on that edge.
 | `statisticalEnhancementService` | No change — reads promoted scalars. |
 | Edge rendering | No change — reads promoted scalars. |
 
-### 14.4 UI changes
+### 14.4 UI design
+
+See §17 for the full UI specification. Summary of component changes:
 
 | Component | Change |
 |---|---|
-| PropertiesPanel | Show `model_vars` entries for comparison. Source badge on promoted scalars. Toggle for `model_source_preference`. |
-| Graph Properties | `model_source_preference` setting (graph level). |
-| Data menu | Source preference toggle item. |
-| ParameterSection | Source-grouped layout per doc 9 §5.7.3 (adapted for model_vars). |
+| ParameterSection | Three-card layout (Bayesian, Analytic, Manual) with toggle-based source selection. Replaces current flat scalar layout for model var fields. |
+| Graph Properties | `model_source_preference` dropdown (Auto / Bayesian / Analytic). Summary row. Last Bayes fit info. |
+| PropertiesPanel scalar edits | Manual entry creation flow: snapshot → upsert → flip source. |
 | PosteriorIndicator | Show active source in popover. |
+| Distribution dropdown | Remove (stub, no runtime effect). |
 
 ### 14.5 No changes needed
 
@@ -610,15 +612,17 @@ probability but now extending to latency.
 
 ### Phase 3: Manual entry and preference UI
 
-Wire PropertiesPanel manual edits to create manual model_vars entries.
-Add `model_source_preference` UI to Graph Properties and Data menu.
-Add per-edge preference override to ParameterSection.
+Wire PropertiesPanel manual edits to create manual model_vars entries
+(§5.3 flow). Implement the three-card layout in ParameterSection
+(§17.2) with toggle-based source selection (§17.3). Add
+`model_source_preference` dropdown to Graph Properties (§18). Remove
+distribution dropdown (§17.5).
 
-### Phase 4: Comparison UI
+### Phase 4: Comparison and polish
 
-ParameterSection shows all model_vars entries for comparison. Source
-badges, HDI inline, convergence section, comparison section per
-doc 9 §5.7.3.
+Bayesian card quality section, data summary inline chart (§17.4),
+graph properties summary row and last-fit info (§18.2–18.3). Override
+flag surfacing in edge properties summary.
 
 ---
 
@@ -637,21 +641,288 @@ doc 9 §5.7.3.
    This is a display concern, not a data model question — derivable by
    scanning edges. No schema impact.
 
-3. **Bayesian model_vars entry without latency?** Pre-Phase D, the
-   Bayesian compiler produces probability posteriors but not latency
-   posteriors. The Bayesian model_vars entry would have `probability`
-   but no `latency`. Resolution must handle partial entries: for
-   probability, use Bayesian; for latency, fall back to analytic. This
-   is per-domain resolution within a single edge, not per-field
-   stitching — the domains (probability, latency) are structurally
-   separate.
+3. **Bayesian model_vars entry without latency?** The compiler already
+   produces both probability AND latency posteriors (Phase D is
+   substantially implemented: `model.py` emits `p_window`/`p_cohort`
+   with `sigma_temporal`/`tau_cohort`, latent cohort latency vars
+   `onset_cohort`/`mu_cohort`/`sigma_cohort`, and BetaBinomial/
+   DirichletMultinomial likelihoods; `inference.py` extracts
+   `path_mu_mean`/`path_sigma_mean` into `LatencyPosterior`;
+   `bayesPatchService` writes these to graph edges).
 
-   This is the one place where entries may be incomplete. It's bounded
-   and predictable: probability and latency are the two domains, and
-   each is either present or absent in an entry. The resolution function
-   resolves per domain: for each of (probability, latency), find the
-   best available entry that has that domain populated.
+   So in practice, the Bayesian model_vars entry will have BOTH
+   `probability` and `latency` domains populated for edges with data.
+   The latency field on ModelVarsEntry should remain optional for edges
+   where the compiler skipped latency fitting (no histogram data, no
+   anchor), and resolution handles the absent case by falling back to
+   the analytic entry's latency. This is per-domain resolution (two
+   domains: probability, latency), not per-field stitching.
 
 4. **Cost params?** `CostParam` has the same `mean`/`stdev` pattern
    but no Bayesian source today. The model_vars pattern could extend
    to cost params in future but is not needed now. No action.
+
+   **Design debt**: the current `CostParam` and `ProbabilityParam`
+   share similar scalar/override patterns but are structurally
+   independent. If model_vars proves successful on probability params,
+   extending it to cost params would unify the pattern. Tracked in
+   programme.md as future work.
+
+---
+
+## 17. UI design — Edge Properties (ParameterSection)
+
+### 17.1 Layout overview
+
+The ParameterSection for a probability parameter is reorganised into
+zones:
+
+1. **Config fields** (above cards): Parameter ID, Data Source,
+   Latency Tracking checkbox, Anchor node.
+2. **Source cards** (the core of this design): Three collapsible cards
+   — Bayesian, Analytic, Manual — each with a toggle.
+3. **Query** (below cards): The query DSL expression (existing field,
+   unchanged).
+
+The config fields and query are outside model var selection — they are
+parameter-level settings that don't change with source.
+
+### 17.2 Source cards
+
+Three cards, always present, in fixed order: **Bayesian**, **Analytic**,
+**Manual**.
+
+Each card has:
+- **Header**: source name (left), active badge (centre-right), toggle
+  (far right).
+- **Body**: source-specific fields (collapsible).
+
+#### 17.2.1 Bayesian card
+
+Read-only. Displays the `source: 'bayesian'` model_vars entry.
+
+Fields shown:
+- **Probability**: mean, stdev, HDI (from posterior α/β)
+- **Latency**: mu, sigma, onset (from posterior — read-only, NOT an
+  overridable input here), t95, path-level (mu, sigma, t95) when
+  present, HDI ranges
+- **Quality**: rhat, ESS, divergences, evidence_grade, gate_passed
+- **Fitted**: `source_at` date
+
+If no Bayesian entry exists (model not yet run), the card body shows
+a placeholder: "No Bayesian model available."
+
+**Future**: fit_guidance annotations (user-provided hints to the Bayes
+engine, e.g. prior overrides) will appear in this card as editable
+fields. Not in scope for initial implementation.
+
+#### 17.2.2 Analytic card
+
+Mostly read-only. Displays the `source: 'analytic'` model_vars entry.
+
+Fields shown:
+- **Probability**: mean, stdev (read-only — derived from evidence)
+- **Latency**:
+  - mu, sigma (read-only — from LAG pass MLE fit)
+  - **onset** (overridable — ZapOff pattern, `onset_delta_days_overridden`)
+  - **t95** (overridable — ZapOff pattern, `t95_overridden`)
+  - **path_t95** (overridable — ZapOff pattern, `path_t95_overridden`)
+  - path_mu, path_sigma (read-only)
+- **Retrieved**: `source_at` date
+
+The overridable fields (onset, t95, path_t95) are analytic model
+inputs — they steer the analytic pipeline. They are NOT used by the
+Bayesian engine and NOT part of manual specification. They live in the
+Analytic card because they are meaningful only in the context of
+analytic fitting.
+
+**Onset clarification**: onset is currently conflated between analytic
+and Bayesian contexts. Under this design:
+- **Analytic onset**: user-overridable input that shifts the analytic
+  latency curve. Lives in the Analytic card. This is the existing
+  `onset_delta_days` + `onset_delta_days_overridden` pattern.
+- **Bayesian onset**: a latent variable estimated by the model (doc 18,
+  `18-latent-onset-design.md`). The histogram-derived onset enters as
+  a soft observation; a graph-level hyperprior and learned dispersion
+  (`tau_onset`) govern partial pooling across edges. The posterior
+  onset (mean ± sd, HDI) is a derived output. Displayed read-only in
+  the Bayesian card — NOT an input the user overrides here. The
+  Bayesian model does NOT consume the user's analytic onset override
+  as a prior, avoiding feedback loops.
+
+Doc 18 specifies the full compiler-side design (latent edge-level onset,
+path-level onset with learned dispersion, identifiability analysis,
+FE consumption changes). Sequenced as Phase D.O in programme.md.
+
+#### 17.2.3 Manual card
+
+Always expanded (not collapsible). Shows the promoted scalar values
+in editable fields.
+
+When no manual entry exists:
+- Fields show the current promoted values (from whichever source is
+  active) as **read-only** placeholders.
+- Editing any field triggers the manual entry creation flow (§5.3):
+  snapshot all current promoted scalars → create manual entry → apply
+  edit → set `model_source_preference = 'manual'` → toggle flips to
+  green.
+
+When a manual entry exists:
+- Fields show the manual entry's values, all editable.
+- Subsequent edits update the manual entry in place.
+
+Fields shown:
+- **Probability**: mean, stdev
+- **Latency** (if latency tracking enabled): mu, sigma, t95,
+  onset_delta_days, path-level fields
+
+The Manual card is fundamentally different from Bayesian/Analytic:
+those are model outputs (one sophisticated, one simpler); Manual is
+direct output specification. The user is not guiding a model — they
+are saying "use these numbers."
+
+### 17.3 Toggle behaviour and source selection
+
+#### 17.3.1 Toggle states
+
+Each card's toggle has two visual states:
+
+- **Grey (outline)**: auto-selected. The system chose this source via
+  `resolveActiveModelVars()`. The user has not pinned a preference.
+- **Green (filled)**: user-pinned. The user explicitly selected this
+  source. `model_source_preference_overridden` is set on the edge.
+
+At most one toggle is green at any time. When a toggle is switched to
+green, any other green toggle reverts to off (grey or hidden).
+
+#### 17.3.2 Hover behaviour
+
+When the user hovers over a grey (auto-on) toggle, it previews as
+green — indicating "click to pin this choice." Clicking converts it
+from auto-on to user-pinned (green), setting
+`edge.p.model_source_preference` to that source and setting
+`model_source_preference_overridden = true`.
+
+#### 17.3.3 All toggles off = auto mode
+
+When no toggle is green, the edge uses `best_available` resolution
+(inheriting from graph-level preference). The system auto-selects the
+best source, and that card's toggle shows as grey (auto-on).
+
+#### 17.3.4 Manual card toggle
+
+The Manual card toggle follows the same grey/green pattern. When the
+user edits a scalar in the Manual card, the toggle automatically flips
+to green (user-pinned to manual). The user can click a green Manual
+toggle to turn it off, reverting to auto selection (which will choose
+Bayesian or Analytic, since Manual is not in the auto hierarchy).
+
+#### 17.3.5 Override flag
+
+When any toggle is green (user-pinned), the edge carries
+`model_source_preference_overridden = true`. This flag:
+- Is visible in the Edge Properties override summary (alongside other
+  `_overridden` fields)
+- Follows the same connection/connection_overridden pattern used
+  elsewhere
+- Is cleared when the user reverts all toggles to off (auto mode)
+
+### 17.4 Data summary and completeness
+
+A compact data summary section (above or between cards) shows:
+- A small inline chart (existing hover-preview pattern: mini model
+  curve with edge and path overlays)
+- Completeness metric for the current query DSL
+
+This leverages the existing chart-preview infrastructure as a generic
+asset. Not a new component — reuse and embed.
+
+### 17.5 Fields removed from ParameterSection
+
+- **Distribution dropdown**: Remove. Currently a stub (`log_normal`
+  always) with no runtime effect. If multi-distribution support is
+  added later, it will be automatically selected by the model engine,
+  not user-specified at edge level.
+
+---
+
+## 18. UI design — Graph Properties
+
+### 18.1 Model Source Preference
+
+A dropdown in Graph Properties:
+
+- **Label**: "Model Source"
+- **Options**: Auto (default) · Bayesian · Analytic
+- **No "Manual" option** — manual is inherently per-edge, not
+  graph-wide.
+- **Stored as**: `graph.model_source_preference` (`'best_available'` |
+  `'bayesian'` | `'analytic'`)
+
+When changed, all edges without a per-edge override re-resolve their
+promoted scalars. Edges with `model_source_preference_overridden = true`
+are unaffected.
+
+### 18.2 Summary row
+
+Below the dropdown, a read-only summary:
+
+> **Source breakdown**: 12 Bayesian · 3 Analytic · 1 Manual · 2 overridden
+
+Derived by scanning edges — not stored. Shows the count of edges
+currently promoted from each source, and how many have per-edge
+overrides.
+
+### 18.3 Last Bayes fit info
+
+A compact line showing:
+- Date of most recent Bayesian model run (`_bayes.fitted_at` or
+  similar)
+- Model quality summary (e.g. "14/16 edges passed quality gate")
+
+This helps the user understand whether the Bayesian option is stale
+or current.
+
+---
+
+## 19. UI design — Onset per-source summary
+
+The onset field appears in different contexts depending on source:
+
+| Source | Onset behaviour | Editable? | Location |
+|---|---|---|---|
+| Analytic | User-overridable input to LAG pass | Yes (ZapOff) | Analytic card |
+| Bayesian | Latent variable; graph onset is prior, posterior is output | No (read-only) | Bayesian card |
+| Manual | Part of complete snapshot; user specifies directly | Yes | Manual card |
+
+This separates the current conflation where a single onset field serves
+as both an analytic model input and a Bayesian model input. The
+compiler-side change to treat onset as a Bayesian latent (using the
+graph value as prior) is design debt tracked in programme.md.
+
+---
+
+## 20. Design rationale — three sources, three cards
+
+The three sources differ fundamentally in user interaction model:
+
+- **Analytic**: semi-automatic. The pipeline estimates values from data;
+  the user steers by overriding onset, t95, and other inputs. Quick to
+  recompute, imperfect but useful. User is a co-pilot.
+
+- **Bayesian**: sophisticated model, hands-off. The engine produces
+  posterior estimates; the user inspects but doesn't directly edit
+  outputs. Future: user provides fit guidance (priors, constraints) but
+  doesn't override posteriors. User is an observer (for now).
+
+- **Manual**: direct output specification. The user is not guiding a
+  model — they are saying "use these exact numbers." Useful for
+  what-if analysis, known values from external sources, or overriding
+  when both models are wrong.
+
+This is why Manual is not a "tab" alongside Bayesian and Analytic in a
+model selector. Bayesian and Analytic are model outputs with different
+sophistication. Manual is a bypass — the user IS the model. The three-
+card layout makes this distinction visible: the first two cards show
+model outputs (read-only or lightly steerable); the third shows the
+user's direct specification (fully editable).

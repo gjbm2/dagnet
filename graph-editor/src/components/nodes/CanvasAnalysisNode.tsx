@@ -1,7 +1,11 @@
 import React, { useEffect, useRef, useMemo, useState, useCallback } from 'react';
+import ReactDOM from 'react-dom';
 import { NodeProps, NodeResizer, useStore as useReactFlowStore } from 'reactflow';
-import type { CanvasAnalysis } from '@/types';
-import { useCanvasAnalysisCompute } from '@/hooks/useCanvasAnalysisCompute';
+import type { CanvasAnalysis, ContentItem } from '@/types';
+import { getActiveContentItem, getContentItems, deriveDslSubjectLabel } from '@/utils/canvasAnalysisAccessors';
+import { CanvasAnalysisCard } from '../CanvasAnalysisCard';
+import type { TabDragOutcome } from '../CanvasAnalysisCard';
+import { useCanvasAnalysisCompute, contentItemResultCache } from '@/hooks/useCanvasAnalysisCompute';
 import { useGraphStore, useGraphStoreApi } from '@/contexts/GraphStoreContext';
 import { useScenariosContextOptional } from '@/contexts/ScenariosContext';
 import { useTabContext } from '@/contexts/TabContext';
@@ -10,15 +14,17 @@ import { AnalysisResultCards } from '../analytics/AnalysisResultCards';
 import { AnalysisResultTable } from '../analytics/AnalysisResultTable';
 import { resolveAnalysisType } from '@/services/analysisTypeResolutionService';
 import { captureTabScenariosToRecipe } from '@/services/captureTabScenariosService';
-import { advanceMode } from '@/services/canvasAnalysisMutationService';
+import { advanceMode, removeContentItem, addContentItem } from '@/services/canvasAnalysisMutationService';
 import { isSnapshotBootChart, logSnapshotBoot, recordSnapshotBootLedgerStage } from '@/lib/snapshotBootTrace';
 import { getLastSnappedResize, clearLastSnappedResize } from '@/services/snapService';
 import { groupResizeStart, groupResize, groupResizeEnd } from '../canvas/useGroupResize';
 import { beginResizeGuard, endResizeGuard } from '../canvas/syncGuards';
-import { Loader2, AlertCircle, ServerOff, ExternalLink, Settings2 } from 'lucide-react';
+import { Loader2, AlertCircle, ServerOff, ExternalLink, Settings2, ChevronDown } from 'lucide-react';
 import { chartOperationsService } from '@/services/chartOperationsService';
 import { InlineEditableLabel } from '../InlineEditableLabel';
 import type { AvailableAnalysis } from '@/lib/graphComputeClient';
+import { getAnalysisTypeMeta } from '../panels/analysisTypes';
+import { AnalysisTypeCardList } from '../panels/AnalysisTypeCardList';
 import type { ScenarioLayerItem } from '@/types/scenarioLayerList';
 import { getScenarioVisibilityOverlayStyle } from '@/lib/scenarioVisibilityModeStyles';
 import { SCENARIO_PALETTE } from '@/contexts/ScenariosContext';
@@ -50,6 +56,27 @@ function CanvasAnalysisNodeInner({ data, selected }: NodeProps<CanvasAnalysisNod
   const storeHandle = useGraphStoreApi();
   const analysis = analysisProp;
   const analysisType = analysis.recipe?.analysis?.analysis_type;
+  const contentItems = getContentItems(analysis);
+  const [activeContentIndex, setActiveContentIndex] = useState(0);
+  // Clamp index if content items shrink
+  const clampedIndex = Math.min(activeContentIndex, contentItems.length - 1);
+  const contentItem = contentItems[clampedIndex] || getActiveContentItem(analysis);
+
+  // Broadcast active tab changes so SelectionConnectors can show the right connectors
+  useEffect(() => {
+    window.dispatchEvent(new CustomEvent('dagnet:analysisActiveTabChanged', {
+      detail: { analysisId: analysis.id, activeContentIndex: clampedIndex },
+    }));
+  }, [analysis.id, clampedIndex]);
+
+  // Subject label derived from active tab's DSL + graph nodes
+  const analyticsDslForSubject = contentItem?.analytics_dsl || analysis.recipe?.analysis?.analytics_dsl;
+  const subjectLabel = useMemo(() => {
+    if (!analyticsDslForSubject) return undefined;
+    const graphNodes = storeHandle.getState().graph?.nodes || [];
+    return deriveDslSubjectLabel(analyticsDslForSubject, graphNodes);
+  }, [analyticsDslForSubject, storeHandle]);
+
   const propAnalysisType = analysisProp.recipe?.analysis?.analysis_type;
   const propDebugSnapshotChart = isSnapshotBootChart(analysisProp);
   const debugSnapshotChart = propDebugSnapshotChart;
@@ -78,6 +105,7 @@ function CanvasAnalysisNodeInner({ data, selected }: NodeProps<CanvasAnalysisNod
   const zoom = useReactFlowStore((s) => s.transform[2]);
 
   // Unified sizing: scale_with_canvas controls whether content scales with ReactFlow zoom.
+  // Reads from container-level display (not per-tab) — switching tabs must not change zoom.
   const scaleWithCanvas = resolveDisplaySetting(
     analysis.display as Record<string, unknown> | undefined,
     SCALE_WITH_CANVAS_SETTING,
@@ -195,7 +223,7 @@ function CanvasAnalysisNodeInner({ data, selected }: NodeProps<CanvasAnalysisNod
 
   const [availableAnalyses, setAvailableAnalyses] = useState<AvailableAnalysis[]>([]);
   const hasAnalysisType = !!analysis.recipe?.analysis?.analysis_type;
-  const analyticsDsl = analysis.recipe?.analysis?.analytics_dsl;
+  const analyticsDsl = contentItem?.analytics_dsl || analysis.recipe?.analysis?.analytics_dsl;
 
   // Reactive scenario state for live mode — drives visibleScenarioIds, scenarioMetaById, etc.
   // Must depend on tabContext.tabs (not the ref) so the memo re-evaluates when scenario
@@ -582,17 +610,98 @@ function CanvasAnalysisNodeInner({ data, selected }: NodeProps<CanvasAnalysisNod
     }
   }, [analysis, onUpdate]);
 
+  const handleRemoveContentItem = useCallback((contentItemId: string) => {
+    const clone = structuredClone(analysis);
+    const shouldDelete = removeContentItem(clone, contentItemId);
+    if (shouldDelete) {
+      onDelete(analysis.id);
+    } else {
+      onUpdate(analysis.id, { content_items: clone.content_items } as any);
+    }
+  }, [analysis, onUpdate, onDelete]);
+
+  // --- Analysis type picker popover (title bar dropdown) ---
+  const [typePickerAnchor, setTypePickerAnchor] = useState<{ x: number; y: number } | null>(null);
+
+  const handleAddContentItem = useCallback(() => {
+    console.log('[CanvasAnalysisNode] handleAddContentItem FIRED (+ button)', {
+      analysisId: analysis.id?.slice(0, 12),
+      existingItems: analysis.content_items?.length,
+    });
+    const clone = structuredClone(analysis);
+    // New tab inherits the active tab's DSL
+    const activeItem = clone.content_items?.[clampedIndex];
+    addContentItem(clone, {
+      analytics_dsl: activeItem?.analytics_dsl,
+      chart_current_layer_dsl: activeItem?.chart_current_layer_dsl,
+    });
+    onUpdate(analysis.id, { content_items: clone.content_items } as any);
+    setActiveContentIndex(clone.content_items!.length - 1);
+  }, [analysis, clampedIndex, onUpdate]);
+
+  const handleShowChangeTypePicker = useCallback((e: React.MouseEvent) => {
+    e.stopPropagation();
+    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    setTypePickerAnchor({ x: rect.left, y: rect.bottom + 2 });
+  }, []);
+
+  const handleTypePickerSelect = useCallback((typeId: string) => {
+    onUpdate(analysis.id, {
+      recipe: { ...analysis.recipe, analysis: { ...analysis.recipe.analysis, analysis_type: typeId } },
+      analysis_type_overridden: true,
+      chart_kind: undefined,
+    } as any);
+    setTypePickerAnchor(null);
+  }, [analysis.id, analysis.recipe, onUpdate]);
+
+  // ── Tab drag complete → dispatch extraction event ──
+  const handleTabDragComplete = useCallback((outcome: TabDragOutcome) => {
+    window.dispatchEvent(new CustomEvent('dagnet:extractContentItem', {
+      detail: {
+        sourceAnalysisId: analysis.id,
+        contentItemId: outcome.contentItem.id,
+        screenX: outcome.screenX,
+        screenY: outcome.screenY,
+        duplicate: outcome.duplicate,
+        targetAnalysisId: outcome.targetAnalysisId,
+      },
+    }));
+  }, [analysis.id]);
+
+  const handleOpenContentItemAsTab = useCallback((ci: ContentItem) => {
+    if (!result) return;
+    const chartKind = ci.chart_kind || result?.semantics?.chart?.recommended;
+    if (!chartKind) return;
+    const currentTab = tabId ? tabsRef.current.find(t => t.id === tabId) : undefined;
+    chartOperationsService.openAnalysisChartTabFromAnalysis({
+      chartKind: chartKind as any,
+      analysisResult: result,
+      scenarioIds: visibleScenarioIds,
+      source: {
+        parent_tab_id: tabId,
+        parent_file_id: currentTab?.fileId,
+        query_dsl: contentItem?.analytics_dsl || analysis.recipe?.analysis?.analytics_dsl,
+        analysis_type: ci.analysis_type,
+      },
+      render: {
+        view_mode: ci.view_type as ViewMode | undefined,
+        chart_kind: ci.chart_kind,
+        display: ci.display as Record<string, unknown> | undefined,
+      },
+    });
+  }, [result, tabId, visibleScenarioIds, contentItem?.analytics_dsl, analysis.recipe?.analysis?.analytics_dsl]);
+
   const chartSource = useMemo(() => {
     const currentTab = tabId ? tabsRef.current.find(t => t.id === tabId) : undefined;
     return {
       parent_tab_id: tabId,
       parent_file_id: currentTab?.fileId,
-      query_dsl: analysis.recipe?.analysis?.analytics_dsl,
+      query_dsl: contentItem?.analytics_dsl || analysis.recipe?.analysis?.analytics_dsl,
       analysis_type: analysis.recipe?.analysis?.analysis_type,
     };
-  }, [tabId, analysis.recipe?.analysis?.analytics_dsl, analysis.recipe?.analysis?.analysis_type]);
+  }, [tabId, contentItem?.analytics_dsl, analysis.recipe?.analysis?.analytics_dsl, analysis.recipe?.analysis?.analysis_type]);
 
-  const displayTitle = analysis.title || result?.analysis_name || analysis.recipe.analysis.analysis_type || 'Analysis';
+  const displayTitle = contentItem.title || result?.analysis_name || contentItem.analysis_type || 'Analysis';
 
   // Graph for DSL editor in toolbar badge popover (autocomplete suggestions)
   const graphForDsl = useGraphStore(s => s.graph);
@@ -641,14 +750,14 @@ function CanvasAnalysisNodeInner({ data, selected }: NodeProps<CanvasAnalysisNod
   const handleDeleteSelf = useCallback(() => onDelete(analysis.id), [analysis.id, onDelete]);
 
   // ── Pre-resolved display settings for table/cards (avoids IIFE + inline resolve) ──
-  const expressionViewMode = (analysis.view_mode === 'cards' || analysis.view_mode === 'table')
-    ? analysis.view_mode as ViewMode : null;
+  const expressionViewMode = (contentItem.view_type === 'cards' || contentItem.view_type === 'table')
+    ? contentItem.view_type as ViewMode : null;
   const resolvedExpressionDisplay = useMemo(() => {
     if (!expressionViewMode) return null;
     const settings = getDisplaySettings(undefined, expressionViewMode);
     const resolve = (key: string) => {
       const s = settings.find(s => s.key === key);
-      return s ? resolveDisplaySetting(analysis.display as Record<string, unknown> | undefined, s) : undefined;
+      return s ? resolveDisplaySetting(contentItem.display as Record<string, unknown> | undefined, s) : undefined;
     };
     return {
       fontSize: resolve('font_size') as number | string | undefined,
@@ -660,7 +769,7 @@ function CanvasAnalysisNodeInner({ data, selected }: NodeProps<CanvasAnalysisNod
       columnWidths: resolve('table_column_widths') as string | undefined,
       collapsedCards: resolve('cards_collapsed') as string[] | undefined,
     };
-  }, [expressionViewMode, analysis.display]);
+  }, [expressionViewMode, contentItem.display]);
 
   // Memoize the tray element to prevent ChartFloatingIcon re-renders
   const expressionTray = useMemo(() => {
@@ -669,13 +778,13 @@ function CanvasAnalysisNodeInner({ data, selected }: NodeProps<CanvasAnalysisNod
       <ExpressionToolbarTray
         viewMode={expressionViewMode}
         result={result}
-        display={analysis.display as Record<string, unknown> | undefined}
+        display={contentItem.display as Record<string, unknown> | undefined}
         onViewModeChange={handleViewModeChange}
         onDisplayChange={handleDisplayChangeBatch}
         onDelete={handleDeleteSelf}
       />
     );
-  }, [expressionViewMode, result, analysis.display, handleViewModeChange, handleDisplayChangeBatch, handleDeleteSelf]);
+  }, [expressionViewMode, result, contentItem.display, handleViewModeChange, handleDisplayChangeBatch, handleDeleteSelf]);
 
   const handleChartKindChange = useCallback((kind: string | undefined) => {
     onUpdate(analysis.id, { chart_kind: kind || undefined } as any);
@@ -697,8 +806,8 @@ function CanvasAnalysisNodeInner({ data, selected }: NodeProps<CanvasAnalysisNod
         height: '100%',
         background: 'var(--canvas-analysis-bg, #ffffff)',
         border: '1px solid var(--canvas-analysis-border, #d1d5db)',
-        outline: (selected || analysis.display?.show_subject_overlay)
-          ? `12px solid ${analysis.display?.subject_overlay_colour || '#3b82f6'}${selected ? '1a' : '0d'}`
+        outline: (selected || contentItem.display?.show_subject_overlay)
+          ? `12px solid ${contentItem.display?.subject_overlay_colour || '#3b82f6'}${selected ? '1a' : '0d'}`
           : 'none',
         outlineOffset: -1,
         borderRadius: 8,
@@ -744,33 +853,80 @@ function CanvasAnalysisNodeInner({ data, selected }: NodeProps<CanvasAnalysisNod
         </button>
       )}
 
-      {/* Title bar */}
+      {/* Title bar — dropzone for tab drag */}
       <div
+        data-dropzone={`analysis-${analysis.id}`}
         style={{
           padding: '4px 8px',
-          fontSize: 8,
+          fontSize: 10,
           fontWeight: 600,
           color: 'var(--canvas-analysis-title, #374151)',
           borderBottom: '1px solid var(--canvas-analysis-border, #e5e7eb)',
           flexShrink: 0,
           display: 'flex',
           alignItems: 'center',
-          gap: 6,
+          gap: 4,
           background: 'var(--canvas-analysis-title-bg, #f9fafb)',
+          minWidth: 0,
         }}
       >
-        <InlineEditableLabel
-          value={analysis.title || ''}
-          placeholder={result?.analysis_name || analysis.recipe.analysis.analysis_type || 'Choose analysis type'}
-          selected={!!selected}
-          onCommit={(v) => onUpdate(analysis.id, { title: v })}
-          displayStyle={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}
-          editStyle={{ minWidth: 0 }}
-        />
-        <span className={`canvas-analysis-mode-badge canvas-analysis-mode-badge--${analysis.mode === 'live' && !analysis.chart_current_layer_dsl ? 'live' : analysis.mode}`}>
-          {analysis.mode === 'live' && !analysis.chart_current_layer_dsl ? 'LIVE' : analysis.mode === 'custom' ? 'CUSTOM' : 'FIXED'}
+        {/* Subject label (from DSL) + analysis type select (folded when single tab) */}
+        {subjectLabel ? (
+          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0, flexShrink: 1 }}>
+            <span title={subjectLabel}>{subjectLabel}</span>
+            {contentItems.length <= 1 && (
+              <>
+                <span style={{ fontWeight: 400, color: 'var(--text-muted, #6b7280)' }}>{' — '}</span>
+                <button
+                  type="button"
+                  className="nodrag canvas-analysis-type-select"
+                  onClick={handleShowChangeTypePicker}
+                  title="Change analysis type"
+                  style={{
+                    all: 'unset', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 2,
+                    fontWeight: 400, color: 'var(--text-muted, #6b7280)', fontSize: 'inherit',
+                  }}
+                >
+                  {(() => {
+                    const meta = getAnalysisTypeMeta(contentItem.analysis_type || '');
+                    const Icon = meta?.icon;
+                    return (
+                      <>
+                        {Icon && <Icon size={9} strokeWidth={2} />}
+                        {meta?.name || contentItem.analysis_type || 'Choose type'}
+                        <ChevronDown size={8} />
+                      </>
+                    );
+                  })()}
+                </button>
+              </>
+            )}
+          </span>
+        ) : (
+          <InlineEditableLabel
+            value={contentItem.title || ''}
+            placeholder={result?.analysis_name || contentItem.analysis_type || 'Choose analysis type'}
+            selected={!!selected}
+            onCommit={(v) => onUpdate(analysis.id, { title: v })}
+            displayStyle={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}
+            editStyle={{ minWidth: 0 }}
+          />
+        )}
+        <span className={`canvas-analysis-mode-badge canvas-analysis-mode-badge--${analysis.mode === 'live' && !(contentItem?.chart_current_layer_dsl || analysis.chart_current_layer_dsl) ? 'live' : analysis.mode}`}>
+          {analysis.mode === 'live' && !(contentItem?.chart_current_layer_dsl || analysis.chart_current_layer_dsl) ? 'LIVE' : analysis.mode === 'custom' ? 'CUSTOM' : 'FIXED'}
         </span>
         {hasAnalysisType && (loading || waitingForDeps) && <Loader2 size={12} style={{ animation: 'spin 1s linear infinite', flexShrink: 0 }} />}
+        {contentItems.length <= 1 && (
+          <button
+            type="button"
+            className="canvas-analysis-title-btn nodrag"
+            onClick={(e) => { e.stopPropagation(); handleAddContentItem(); }}
+            title="Add tab"
+            style={{ fontSize: 10, padding: '0 2px', lineHeight: 1 }}
+          >
+            +
+          </button>
+        )}
         <span style={{ flex: 1 }} />
         {result && (
           <button
@@ -778,7 +934,7 @@ function CanvasAnalysisNodeInner({ data, selected }: NodeProps<CanvasAnalysisNod
             className="canvas-analysis-title-btn"
             onClick={(e) => {
               e.stopPropagation();
-              const chartKind = analysis.chart_kind || result?.semantics?.chart?.recommended;
+              const chartKind = contentItem.chart_kind || result?.semantics?.chart?.recommended;
               if (chartKind) {
                 chartOperationsService.openAnalysisChartTabFromAnalysis({
                   chartKind: chartKind as any,
@@ -786,9 +942,9 @@ function CanvasAnalysisNodeInner({ data, selected }: NodeProps<CanvasAnalysisNod
                   scenarioIds: visibleScenarioIds,
                   source: chartSource,
                   render: {
-                    view_mode: analysis.view_mode as ViewMode | undefined,
-                    chart_kind: analysis.chart_kind,
-                    display: analysis.display as Record<string, unknown> | undefined,
+                    view_mode: contentItem.view_type as ViewMode | undefined,
+                    chart_kind: contentItem.chart_kind,
+                    display: contentItem.display as Record<string, unknown> | undefined,
                   },
                 });
               }
@@ -811,140 +967,159 @@ function CanvasAnalysisNodeInner({ data, selected }: NodeProps<CanvasAnalysisNod
         </button>
       </div>
 
-      {/* Content area — interactive only when selected; unselected nodes just drag */}
-      <div style={{ flex: 1, overflow: 'hidden', position: 'relative', minHeight: 0, ...contentZoomStyle }}>
-        {/* When not selected, a transparent overlay captures mouse events for dragging
-            instead of letting them fall into scrollable table/chart content */}
-        {!selected && (
-          <div style={{ position: 'absolute', inset: 0, zIndex: 10, cursor: 'grab' }} />
+      <CanvasAnalysisCard
+        analysisId={analysis.id}
+        contentItems={contentItems}
+        activeContentIndex={activeContentIndex}
+        onActiveContentIndexChange={setActiveContentIndex}
+        style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}
+        result={result}
+        loading={loading}
+        error={error}
+        backendUnavailable={backendUnavailable}
+        waitingForDeps={waitingForDeps}
+        hasAnalysisType={hasAnalysisType}
+        awaitingScenariosHydration={awaitingScenariosHydration}
+        interactive={!!selected}
+        contentZoomStyle={contentZoomStyle}
+        onRemoveContentItem={handleRemoveContentItem}
+        onAddContentItem={handleAddContentItem}
+        onOpenContentItemAsTab={handleOpenContentItemAsTab}
+        onTabDragComplete={handleTabDragComplete}
+        renderContent={(ci, previewOverlay) => {
+          // Per-content-item result: check item-specific cache first (for tabs
+          // snapped in with a different analysis type), then container result.
+          const ciResult = contentItemResultCache.get(ci.id) || result;
+          return (
+          <>
+            {ci.view_type === 'chart' && (ciResult || !hasAnalysisType) && !(awaitingScenariosHydration) && (
+              <AnalysisChartContainer
+                result={ciResult}
+                chartKindOverride={ci.chart_kind}
+                visibleScenarioIds={visibleScenarioIds}
+                scenarioVisibilityModes={scenarioVisibilityModes}
+                scenarioMetaById={scenarioMetaById}
+                display={ci.display}
+                onChartKindChange={handleChartKindChange}
+                onDisplayChange={handleDisplayChangeBatch}
+                source={chartSource}
+                fillHeight
+                chartContext="canvas"
+                canvasZoom={toolbarCanvasZoom}
+                hideScenarioLegend={analysis.mode === 'live' && ci.display?.show_legend !== true}
+                analysisTypeId={analysis.recipe?.analysis?.analysis_type}
+                availableAnalyses={availableAnalyses}
+                onAnalysisTypeChange={handleAnalysisTypeChange}
+                analysisMode={analysis.mode}
+                onModeCycle={handleModeCycle}
+                scenarioLayerItems={allScenarioLayerItems}
+                onScenarioToggleVisibility={handleScenarioToggleVisibility}
+                onScenarioCycleMode={handleScenarioCycleMode}
+                onScenarioColourChange={handleScenarioColourChange}
+                onScenarioDelete={handleScenarioDelete}
+                onScenarioReorder={handleScenarioReorder}
+                onScenarioEdit={handleScenarioEdit}
+                getScenarioSwatchOverlayStyle={getScenarioSwatchOverlay}
+                onAddScenario={handleAddScenario}
+                overlayActive={!!ci.display?.show_subject_overlay}
+                overlayColour={ci.display?.subject_overlay_colour as string | undefined}
+                onOverlayToggle={handleOverlayToggle}
+                onOverlayColourChange={handleOverlayColourChange}
+                graph={graphForDsl}
+                onDslChange={handleDslChange}
+                analysisId={analysis.id}
+                onDelete={handleDeleteSelf}
+                viewMode={ci.view_type as ViewMode | undefined}
+                onViewModeChange={handleViewModeChange}
+                facet={ci.facet}
+              />
+            )}
+            {previewOverlay}
+          </>
+        );
+        }}
+        renderExtra={() => (
+          <>
+            {expressionResult && expressionViewMode && resolvedExpressionDisplay && !(awaitingScenariosHydration) && (
+              <div
+                ref={expressionViewportRef}
+                style={{ position: 'relative', overflow: 'auto', height: '100%' }}
+              >
+                <ChartFloatingIcon
+                  containerRef={expressionViewportRef}
+                  tray={expressionTray}
+                  canvasZoom={toolbarCanvasZoom}
+                  defaultAnchor="top-right"
+                />
+                <div style={{ padding: 8, height: '100%', boxSizing: 'border-box' }}>
+                  {expressionViewMode === 'cards' && (
+                    <AnalysisResultCards
+                      result={expressionResult}
+                      scenarioDslSubtitleById={scenarioDslSubtitleById}
+                      fontSize={resolvedExpressionDisplay.fontSize}
+                      collapsedCards={resolvedExpressionDisplay.collapsedCards}
+                      onCollapsedCardsChange={handleCollapsedCardsChange}
+                    />
+                  )}
+                  {expressionViewMode === 'table' && (
+                    <AnalysisResultTable
+                      result={expressionResult}
+                      fontSize={resolvedExpressionDisplay.fontSize}
+                      striped={resolvedExpressionDisplay.striped}
+                      sortColumn={resolvedExpressionDisplay.sortColumn}
+                      sortDirection={resolvedExpressionDisplay.sortDirection}
+                      onSortChange={handleTableSortChange}
+                      hiddenColumns={resolvedExpressionDisplay.hiddenColumns}
+                      onHiddenColumnsChange={handleTableHiddenColumnsChange}
+                      columnOrder={resolvedExpressionDisplay.columnOrder}
+                      onColumnOrderChange={handleTableColumnOrderChange}
+                      columnWidths={resolvedExpressionDisplay.columnWidths}
+                      onColumnWidthsChange={handleTableColumnWidthsChange}
+                    />
+                  )}
+                </div>
+              </div>
+            )}
+          </>
         )}
-        {/* Recomputing overlay: shown when loading with a stale result still visible */}
-        {result && loading && (
-          <div style={{
-            position: 'absolute', inset: 0, zIndex: 5,
-            background: 'var(--canvas-analysis-recompute-overlay, rgba(255,255,255,0.55))',
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            pointerEvents: 'none',
-          }}>
-            <Loader2 size={20} style={{ animation: 'spin 1s linear infinite', color: 'var(--text-muted, #6b7280)' }} />
-          </div>
-        )}
-        {hasAnalysisType && backendUnavailable && (
-          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', gap: 8, color: 'var(--text-muted)', padding: 16 }}>
-            <ServerOff size={28} />
-            <span style={{ fontSize: 12, textAlign: 'center' }}>Analysis backend unavailable</span>
-          </div>
-        )}
+      />
 
-        {hasAnalysisType && !backendUnavailable && error && !result && (
-          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', gap: 8, color: 'var(--color-danger)', padding: 16 }}>
-            <AlertCircle size={24} />
-            <span style={{ fontSize: 11, textAlign: 'center', maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', WebkitLineClamp: 3, display: '-webkit-box', WebkitBoxOrient: 'vertical' }}>{error}</span>
-          </div>
-        )}
-
-        {hasAnalysisType && !backendUnavailable && !result && !error && (loading || waitingForDeps) && (
-          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', gap: 8, color: 'var(--text-muted)' }}>
-            <Loader2 size={28} style={{ animation: 'spin 1s linear infinite' }} />
-            <span style={{ fontSize: 12 }}>{waitingForDeps ? 'Loading chart dependencies...' : 'Computing...'}</span>
-          </div>
-        )}
-
-        {/* Gate: don't render chart until scenarios are hydrated (Live mode with user scenarios).
-            Without this, a cached result renders with fallback '#808080' colours before
-            ScenariosContext has loaded the real scenario metadata from IDB. */}
-        {awaitingScenariosHydration && result && (
-          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', gap: 8, color: 'var(--text-muted)' }}>
-            <Loader2 size={28} style={{ animation: 'spin 1s linear infinite' }} />
-            <span style={{ fontSize: 12 }}>Loading scenarios...</span>
-          </div>
-        )}
-
-        {analysis.view_mode === 'chart' && (result || !hasAnalysisType) && !(awaitingScenariosHydration) && (
-          <AnalysisChartContainer
-            result={result}
-            chartKindOverride={analysis.chart_kind}
-            visibleScenarioIds={visibleScenarioIds}
-            scenarioVisibilityModes={scenarioVisibilityModes}
-            scenarioMetaById={scenarioMetaById}
-            display={analysis.display}
-            onChartKindChange={handleChartKindChange}
-            onDisplayChange={handleDisplayChangeBatch}
-            source={chartSource}
-            fillHeight
-            chartContext="canvas"
-            canvasZoom={toolbarCanvasZoom}
-            hideScenarioLegend={analysis.mode === 'live' && analysis.display?.show_legend !== true}
-            analysisTypeId={analysis.recipe?.analysis?.analysis_type}
-            availableAnalyses={availableAnalyses}
-            onAnalysisTypeChange={handleAnalysisTypeChange}
-            analysisMode={analysis.mode}
-            onModeCycle={handleModeCycle}
-            scenarioLayerItems={allScenarioLayerItems}
-            onScenarioToggleVisibility={handleScenarioToggleVisibility}
-            onScenarioCycleMode={handleScenarioCycleMode}
-            onScenarioColourChange={handleScenarioColourChange}
-            onScenarioDelete={handleScenarioDelete}
-            onScenarioReorder={handleScenarioReorder}
-            onScenarioEdit={handleScenarioEdit}
-            getScenarioSwatchOverlayStyle={getScenarioSwatchOverlay}
-            onAddScenario={handleAddScenario}
-            overlayActive={!!analysis.display?.show_subject_overlay}
-            overlayColour={analysis.display?.subject_overlay_colour as string | undefined}
-            onOverlayToggle={handleOverlayToggle}
-            onOverlayColourChange={handleOverlayColourChange}
-            graph={graphForDsl}
-            onDslChange={handleDslChange}
-            analysisId={analysis.id}
-            onDelete={handleDeleteSelf}
-            viewMode={analysis.view_mode as ViewMode | undefined}
-            onViewModeChange={handleViewModeChange}
-          />
-        )}
-
-        {expressionResult && expressionViewMode && resolvedExpressionDisplay && !(awaitingScenariosHydration) && (
+      {/* Analysis type picker popover — portalled to body to escape ReactFlow transforms */}
+      {typePickerAnchor && ReactDOM.createPortal(
+        <>
+          {/* Click-outside backdrop */}
           <div
-            ref={expressionViewportRef}
-            style={{ position: 'relative', overflow: 'auto', height: '100%' }}
+            style={{ position: 'fixed', inset: 0, zIndex: 10001 }}
+            onClick={() => setTypePickerAnchor(null)}
+          />
+          <div
+            className="nodrag nowheel"
+            style={{
+              position: 'fixed',
+              left: typePickerAnchor.x,
+              top: typePickerAnchor.y,
+              zIndex: 10002,
+              background: 'var(--bg-primary, #fff)',
+              border: '1px solid var(--border-primary, #e5e7eb)',
+              borderRadius: 8,
+              boxShadow: '0 8px 24px rgba(0,0,0,0.18)',
+              padding: 8,
+              maxHeight: 320,
+              overflowY: 'auto',
+              width: 280,
+            }}
+            onClick={(e) => e.stopPropagation()}
           >
-            <ChartFloatingIcon
-              containerRef={expressionViewportRef}
-              tray={expressionTray}
-              canvasZoom={toolbarCanvasZoom}
-              defaultAnchor="top-right"
+            <AnalysisTypeCardList
+              availableAnalyses={availableAnalyses}
+              selectedAnalysisId={contentItem.analysis_type}
+              onSelect={handleTypePickerSelect}
+              viewMode="icons"
             />
-            <div
-              style={{ padding: 8, height: '100%', boxSizing: 'border-box' }}
-            >
-              {expressionViewMode === 'cards' && (
-                <AnalysisResultCards
-                  result={expressionResult}
-                  scenarioDslSubtitleById={scenarioDslSubtitleById}
-                  fontSize={resolvedExpressionDisplay.fontSize}
-                  collapsedCards={resolvedExpressionDisplay.collapsedCards}
-                  onCollapsedCardsChange={handleCollapsedCardsChange}
-                />
-              )}
-              {expressionViewMode === 'table' && (
-                <AnalysisResultTable
-                  result={expressionResult}
-                  fontSize={resolvedExpressionDisplay.fontSize}
-                  striped={resolvedExpressionDisplay.striped}
-                  sortColumn={resolvedExpressionDisplay.sortColumn}
-                  sortDirection={resolvedExpressionDisplay.sortDirection}
-                  onSortChange={handleTableSortChange}
-                  hiddenColumns={resolvedExpressionDisplay.hiddenColumns}
-                  onHiddenColumnsChange={handleTableHiddenColumnsChange}
-                  columnOrder={resolvedExpressionDisplay.columnOrder}
-                  onColumnOrderChange={handleTableColumnOrderChange}
-                  columnWidths={resolvedExpressionDisplay.columnWidths}
-                  onColumnWidthsChange={handleTableColumnWidthsChange}
-                />
-              )}
-            </div>
           </div>
-        )}
-      </div>
+        </>,
+        document.body,
+      )}
     </div>
   );
 }

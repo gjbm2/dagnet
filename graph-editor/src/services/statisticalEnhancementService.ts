@@ -1617,6 +1617,7 @@ export interface EdgeLAGValues {
     sigma?: number;  // Fitted log-normal sigma (for offline completeness + parity comparison)
     path_mu?: number;   // Path-level A→Y mu (Fenton–Wilkinson combined)
     path_sigma?: number; // Path-level A→Y sigma (Fenton–Wilkinson combined)
+    path_onset_delta_days?: number; // Path-level Σ onset_delta_days (DP sum along path)
   };
   /** Blended p.mean (if computed) */
   blendedMean?: number;
@@ -1907,9 +1908,13 @@ export function enhanceGraphLatencies(
   // Propagated through the topo traversal including skipped/non-latency edges.
   const nodePathMu = new Map<string, number | undefined>();
   const nodePathSigma = new Map<string, number | undefined>();
+  // DP state: path-level onset = sum of edge onsets along path from anchor.
+  // Mirrors PathLatency.path_delta in bayes/compiler/topology.py.
+  const nodePathOnset = new Map<string, number>();
   for (const startId of startNodes) {
     nodePathMu.set(startId, undefined);
     nodePathSigma.set(startId, undefined);
+    nodePathOnset.set(startId, 0);
   }
   const edgePathMuInPass = new Map<string, number | undefined>();
   const edgePathSigmaInPass = new Map<string, number | undefined>();
@@ -2006,15 +2011,17 @@ export function enhanceGraphLatencies(
       if (!hasLocalLatency && !isBehindLaggedPath) {
         console.log('[LAG_TOPO_SKIP] noLag:', { edgeId, latencyEnabled, edgePrecomputedPathT95 });
         // Truly simple edge: no latency config AND no upstream lag.
-        // Skip LAG computation but propagate path (mu, sigma) through.
+        // Skip LAG computation but propagate path (mu, sigma, onset) through.
         const skipFromMu = nodePathMu.get(nodeId);
         const skipFromSigma = nodePathSigma.get(nodeId);
+        const skipFromOnset = nodePathOnset.get(nodeId) ?? 0;
         edgePathMuInPass.set(edgeId, skipFromMu);
         edgePathSigmaInPass.set(edgeId, skipFromSigma);
         const skipEdgeT95 = precomputedPathT95.get(edgeId) ?? 0;
         if (skipEdgeT95 >= (nodePathT95.get(toNodeId) ?? 0)) {
           nodePathMu.set(toNodeId, skipFromMu);
           nodePathSigma.set(toNodeId, skipFromSigma);
+          nodePathOnset.set(toNodeId, Math.max(nodePathOnset.get(toNodeId) ?? 0, skipFromOnset));
         }
         const newInDegree = (inDegree.get(toNodeId) ?? 1) - 1;
         inDegree.set(toNodeId, newInDegree);
@@ -2040,15 +2047,17 @@ export function enhanceGraphLatencies(
       const paramValues = paramLookup.get(edgeId);
       if (!paramValues || paramValues.length === 0) {
         console.log('[LAG_TOPO_SKIP] noParamValues:', { edgeId, hasInLookup: paramLookup.has(edgeId) });
-        // No data for this edge — propagate path (mu, sigma) through.
+        // No data for this edge — propagate path (mu, sigma, onset) through.
         const skipFromMu = nodePathMu.get(nodeId);
         const skipFromSigma = nodePathSigma.get(nodeId);
+        const skipFromOnset2 = nodePathOnset.get(nodeId) ?? 0;
         edgePathMuInPass.set(edgeId, skipFromMu);
         edgePathSigmaInPass.set(edgeId, skipFromSigma);
         const skipEdgeT95 = edgePathT95InPass.get(edgeId) ?? precomputedPathT95.get(edgeId) ?? 0;
         if (skipEdgeT95 >= (nodePathT95.get(toNodeId) ?? 0)) {
           nodePathMu.set(toNodeId, skipFromMu);
           nodePathSigma.set(toNodeId, skipFromSigma);
+          nodePathOnset.set(toNodeId, Math.max(nodePathOnset.get(toNodeId) ?? 0, skipFromOnset2));
         }
         const newInDegree = (inDegree.get(toNodeId) ?? 1) - 1;
         inDegree.set(toNodeId, newInDegree);
@@ -2107,15 +2116,17 @@ export function enhanceGraphLatencies(
         } else {
           console.log('[LAG_TOPO_SKIP] noData:', { edgeId, paramValuesCount: paramValues.length, isWindowMode });
         }
-        // Propagate path (mu, sigma) through edges with empty cohort data.
+        // Propagate path (mu, sigma, onset) through edges with empty cohort data.
         const skipFromMu3 = nodePathMu.get(nodeId);
         const skipFromSigma3 = nodePathSigma.get(nodeId);
+        const skipFromOnset3 = nodePathOnset.get(nodeId) ?? 0;
         edgePathMuInPass.set(edgeId, skipFromMu3);
         edgePathSigmaInPass.set(edgeId, skipFromSigma3);
         const skipEdgeT953 = edgePathT95InPass.get(edgeId) ?? precomputedPathT95.get(edgeId) ?? 0;
         if (skipEdgeT953 >= (nodePathT95.get(toNodeId) ?? 0)) {
           nodePathMu.set(toNodeId, skipFromMu3);
           nodePathSigma.set(toNodeId, skipFromSigma3);
+          nodePathOnset.set(toNodeId, Math.max(nodePathOnset.get(toNodeId) ?? 0, skipFromOnset3));
         }
         const newInDegree = (inDegree.get(toNodeId) ?? 1) - 1;
         inDegree.set(toNodeId, newInDegree);
@@ -2412,6 +2423,8 @@ export function enhanceGraphLatencies(
       let completenessUsed = latencyStats.completeness;
       let pathMu: number | undefined;
       let pathSigma: number | undefined;
+      // Path onset: DP sum of edge onsets along the path (deterministic shift, not FW).
+      const pathOnset = (nodePathOnset.get(nodeId) ?? 0) + (edgeOnsetDeltaDays ?? 0);
       // NOTE: EdgeLAGValues['debug'] is optional (can be undefined), so avoid conditional types that
       // collapse to `never` under union-with-undefined. Use the actual field type.
       let completenessMode: NonNullable<EdgeLAGValues['debug']>['completenessMode'] =
@@ -2581,6 +2594,7 @@ export function enhanceGraphLatencies(
           onset_delta_days: edgeOnsetDeltaDays,
           path_mu: pathMu,
           path_sigma: pathSigma,
+          path_onset_delta_days: pathOnset,
         },
         debug: {
           queryDate: queryDate.toISOString().split('T')[0],
@@ -3033,12 +3047,13 @@ export function enhanceGraphLatencies(
 
       // Update node path_t95 for target node (needed for downstream edges)
       const currentTargetT95 = nodePathT95.get(toNodeId) ?? 0;
-      // Store and propagate path (mu, sigma) — piggyback on the dominant-path selection.
+      // Store and propagate path (mu, sigma, onset) — piggyback on the dominant-path selection.
       edgePathMuInPass.set(edgeId, pathMu);
       edgePathSigmaInPass.set(edgeId, pathSigma);
       if (edgePathT95 >= currentTargetT95) {
         nodePathMu.set(toNodeId, pathMu);
         nodePathSigma.set(toNodeId, pathSigma);
+        nodePathOnset.set(toNodeId, Math.max(nodePathOnset.get(toNodeId) ?? 0, pathOnset));
       }
       nodePathT95.set(toNodeId, Math.max(currentTargetT95, edgePathT95));
       
@@ -3157,9 +3172,10 @@ export function enhanceGraphLatencies(
             mu: cpLatencyStats.completeness_cdf.mu,
             sigma: cpLatencyStats.completeness_cdf.sigma,
             onset_delta_days: cpOnsetDeltaDays,
+            path_onset_delta_days: pathOnset, // Shared with base edge (same physical path)
           },
         };
-        
+
         // Preserve forecast/evidence from conditional probability
         if (cp.p?.forecast?.mean !== undefined) {
           cpEdgeLAGValues.forecast = { mean: cp.p.forecast.mean };

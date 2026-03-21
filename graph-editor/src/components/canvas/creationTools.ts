@@ -172,6 +172,7 @@ export function createCanvasAnalysisInGraph(
       analysisResult: dragData.analysisResult,
       analysisTypeOverridden: dragData.analysisTypeOverridden ?? false,
       display: dragData.display,
+      contentItems: dragData.contentItems,
     },
     { x: position.x, y: position.y },
     { width: w, height: h },

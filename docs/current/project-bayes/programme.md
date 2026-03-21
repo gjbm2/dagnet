@@ -25,6 +25,11 @@ design docs contain the detail.
 | **Snapshot evidence** | `11-snapshot-evidence-assembly.md` | Phase S: direct snapshot DB queries replace inline param-file evidence. FE fetch plan, worker DB integration, maturation trajectories. Phase D (latent latency + temporal drift) now sequenced before Phase C: A → B → **S** → **D** → C. |
 | **Quality gating** | `13-model-quality-gating-and-preview.md` | Model quality signalling (progress, session log, Graph Issues), auto-enable Forecast Quality, accept/reject preview workflow |
 | **Phase C design** | `14-phase-c-slice-pooling-design.md` | Phase C detailed design: slice DSL parsing, IR extension, solo-edge pooling, hierarchical Dirichlet for branch groups, conditional_p, posterior.slices output, Phase D interaction |
+| **Model vars provenance** | `15-model-vars-provenance-design.md` | Model variable sets with provenance on graph edges, source selection, scalar promotion. Supersedes §"Model variable precedence" below and doc 9 §5.7–5.8. |
+| **Lag array defect** | `16-lag-array-population-defect.md` | Window-type values[] entries have zero lag arrays; blocks sensible first-run latency priors. Investigation scope and fix approach. |
+| **Latent onset** | `18-latent-onset-design.md` | Latent edge-level onset, graph-level onset hyperprior and dispersion (`tau_onset`), path-level onset with learned dispersion, FE onset posterior display. Replaces fixed histogram-derived onset. |
+| **Synthetic data generator** | `17-synthetic-data-generator.md` | Monte Carlo simulator for parameter recovery testing. General-purpose over any graph topology, DB-backed, phased (Phase 1: core sim, Phase 2: context slices). |
+| **Compiler journal** | `18-compiler-journal.md` | Chronological record of what was tried, what worked, what failed, and key invariants discovered. Prevents re-exploring dead ends. |
 
 **Context**: `../codebase/APP_ARCHITECTURE.md` (app architecture),
 `../project-db/` (snapshot DB)
@@ -81,7 +86,8 @@ Semantic foundation (parallel, feeds into consumption quality)
 | Phase B posteriors (done) | Phase A proven | FE overlay (Dirichlet), branch group quality |
 | Phase S snapshot evidence (done) | Phase B, FE hash infrastructure, snapshot DB | Richer maturation trajectories, tighter posteriors, enables meaningful slice pooling |
 | Phase D posteriors (done) | Phase S proven | Latent latency, overdispersion (BetaBinomial/DM), recency weighting, cohort latency hierarchy |
-| Phase C posteriors (next) | Phase D proven, test data with contexts | Per-slice visualisation, MECE validation |
+| Phase D.O latent onset (next) | Phase D proven | Latent edge-level onset, graph-level onset dispersion (`tau_onset`), path onset with learned dispersion, onset posterior FE display (doc 18) |
+| Phase C posteriors | Phase D.O proven, test data with contexts | Per-slice visualisation, MECE validation |
 | Quantitative backtesting | Phase A + fit_history depth + snapshot DB | Distribution family selection, model improvement |
 | Fit quality visualisation (done) | Phase A + FE overlay | Edge colour-coding, quality-driven graph triage |
 | Semantic foundation complete | Independent | Cleaner FE derivation, deletion of FE fitting code |
@@ -583,70 +589,29 @@ valuable when building new graphs or restructuring existing ones.
 
 **Model variable precedence and source provenance**
 
-As the compiler iterates through successive phases, Bayesian posteriors
-become richer than analytic estimates. The system must track which
-source produced which scalar, let the user switch between sources, and
-surface provenance clearly in edge properties.
+**Superseded by doc 15** (`15-model-vars-provenance-design.md`).
 
-**Architecture** (owned here in programme.md):
+Summary of the revised design: each graph edge carries a `model_vars[]`
+array of complete, provenance-tagged variable sets (analytic, Bayesian,
+manual). A pure resolution function selects among them based on
+`model_source_preference` (graph-level default, per-edge override).
+The selected entry's values are promoted to the flat scalars (`p.mean`,
+`latency.mu`, etc.) that the rest of the system consumes. UpdateManager
+stays a dumb data sync; resolution is separate from cascade. Manual
+user edits create a complete `source: 'manual'` entry (snapshot +
+edit), replacing the `_overridden` flag mechanism for model var fields.
 
-1. **`model_source` metadata block** on `ProbabilityParam` — records
-   `probability_source` and `latency_source` (`'analytic'` |
-   `'bayesian'` | `'manual'`) plus `*_source_at` timestamps. Written
-   by whichever pipeline last updated the scalars.
+**Phase activation** (unchanged):
 
-2. **`model_source_preference`** on `ConversionGraph` — per-graph
-   setting, default `'bayesian'`. When a converged posterior exists
-   and passes quality gates (`rhat < 1.05`, `ess > 400`), its values
-   cascade to scalars. Edges without posteriors (or with failed
-   posteriors) fall back to analytic automatically. User can override
-   to `'analytic'` via Graph Properties or Data menu.
+| Phase | What `'bayesian'` preference enables |
+|---|---|
+| A (done) | `p.mean`/`p.stdev` from window `α`/`β` |
+| B (done) | Same, plus Dirichlet-derived `p.mean` for branch group edges |
+| D (done) | `latency.mu`/`sigma`/`t95` from latency posteriors — full scalar switchover |
+| C (next) | Per-slice scalar derivation from slice posteriors |
 
-3. **Cascade behaviour** — under `'bayesian'` preference, the webhook
-   writes `latency.mu`/`sigma`/`t95` from posterior means (respecting
-   `_overridden` guards). Under `'analytic'`, today's behaviour is
-   unchanged.
-
-4. **Override hierarchy** — manual > preference-selected automated
-   source > fallback automated source. `model_source` records the
-   actual source, not the preference.
-
-5. **Quality-gated fallback** — even under `'bayesian'` preference,
-   edges whose posteriors fail quality gates silently fall back to
-   analytic. `model_source` records the actual source per edge.
-
-6. **Phase activation**:
-
-   | Phase | What `'bayesian'` preference enables |
-   |---|---|
-   | A (done) | `p.mean`/`p.stdev` from window `α`/`β` (adds provenance tracking) |
-   | B | Same, plus Dirichlet-derived `p.mean` for branch group edges |
-   | C | Per-slice scalar derivation from slice posteriors |
-   | D | `latency.mu`/`sigma`/`t95` from latency posteriors — full scalar switchover |
-
-**Schema changes**:
-- `src/types/index.ts`: `ModelSource` interface on `ProbabilityParam`;
-  `model_source_preference` on `ConversionGraph`
-- `lib/graph_types.py`: matching Pydantic models
-- `api/bayes-webhook.ts`: write `model_source` block; consult
-  `model_source_preference` for latency cascade
-- BE analysis runner: write `probability_source: 'analytic'` when
-  fitting
-- Scalar re-cascade service: re-evaluate per-edge sources when
-  `model_source_preference` changes
-
-**UI surfaces** — detailed design in doc 9 §5.7:
-- Graph Properties "Model" card (§5.7.1) — source preference control,
-  source summary, last fit info, quality gate display
-- Data menu toggle (§5.7.2) — quick source switching
-- Edge ParameterSection source-grouped layout (§5.7.3) — source
-  badges, inline HDI, convergence section, comparison view
-
-**Not in scope** (future):
-- Per-edge source override
-- Automated source switching via backtesting
-- Path-level provenance tracking
-- Per-graph quality gate threshold tuning
+**Future design debt**: extend `model_vars` pattern to `CostParam`
+(same `mean`/`stdev` pattern, no Bayesian source today). See doc 15 §16.4.
 
 **Downstream conditional data**: the data pipeline only fetches
 condition-sliced observations on the conditional params themselves, not
@@ -737,6 +702,111 @@ design; implementation is post-Phase A.
   § "Overdispersion: Beta-Binomial / Dirichlet-Multinomial".
 
 ### Future work
+
+- **Latency prior warm-start from previous posteriors**: after the
+  first Bayes run, the fitted `(mu, sigma, onset)` per edge should be
+  used as priors for subsequent runs. This is the natural extension of
+  the existing probability warm-start (ESS-capped Beta). The first run
+  uses whatever priors the analytic pipeline provides (median_lag /
+  mean_lag from the param file, or the broad default); subsequent runs
+  converge faster and more reliably from the previous posterior.
+  Implementation: store latency posterior in the same `posterior` block
+  on the param file; compiler reads it in the same fallback chain as
+  the probability warm-start. ESS-capping applies to prevent
+  over-concentration from accumulated runs.
+
+- **Quality gate and escalating back-off**: after each MCMC run, check
+  convergence quality (rhat, ESS, divergences). If below threshold:
+  1. **Re-run with self-seeded priors** — use the (possibly poor)
+     posteriors from the failed run as priors for a second attempt.
+     Even a non-converged run finds roughly the right region; the
+     second attempt starts there and usually converges.
+  2. **Increase chains/draws** — if the first re-run still fails,
+     double the chain count or draws. More samples help with mixing.
+  3. **Flag for review** — if two re-runs fail, mark the result as
+     `provenance: "unconverged"` and deliver it with a quality warning
+     rather than silently delivering bad posteriors.
+  Compute cost is acceptable — a complex graph taking an hour on a
+  large CPU is fine for an overnight batch job. The quality gate
+  ensures we don't deliver garbage.
+
+- **Convergence diagnostics for users**: the compiler is a general tool
+  that must handle arbitrary user-defined graphs. Some graphs will have
+  structural or data issues that prevent convergence (p-latency
+  identifiability on specific edges, pathological priors, insufficient
+  data, multimodal posteriors). When a fit fails or partially converges,
+  the system must export rich per-variable diagnostics — not just a
+  pass/fail flag — so users can identify and fix the problem. Needed:
+  1. **Per-edge convergence status** in the webhook payload: rhat, ESS,
+     and a clear flag per edge (converged / unconverged / bimodal).
+  2. **Problematic variable identification**: which edge(s) caused
+     non-convergence, and whether the issue is p-latency coupling
+     (bimodality), insufficient data, or prior-data conflict.
+  3. **Actionable guidance**: e.g. "edge X has two plausible modes —
+     consider adding a stronger latency prior" or "edge Y has too
+     little data for latent latency — falling back to fixed CDF".
+  4. **Graph Issues integration**: surface convergence problems via the
+     existing Graph Issues panel so users see them in context.
+  This is essential for production deployment. A model that silently
+  delivers garbage when it can't converge is worse than no model at all.
+
+- **Synthetic data generator for parameter recovery tests**: the model
+  is tested against real snapshot data, but real data may have holes,
+  pathological shapes, or inconsistencies that confuse the model. We
+  cannot distinguish "model geometry problem" from "data quality
+  problem" without a clean baseline. A synthetic data generator would:
+  1. Take a graph structure with ground-truth parameters (p, onset, mu,
+     sigma per edge).
+  2. Monte Carlo simulate N people/day for M days traversing the graph
+     (Bernoulli branching, ShiftedLognormal timing).
+  3. At standard retrieval ages (1, 3, 7, 14, 30, 60d), count arrivals
+     to produce window + cohort trajectory data.
+  4. Output in `_query_snapshot_subjects` return format — feeds directly
+     into `bind_snapshot_evidence`, no DB needed.
+  Parameter recovery test: fit the model on synthetic data, verify it
+  recovers the known ground-truth parameters within posterior credible
+  intervals. This is the gold standard for Bayesian model validation
+  and would definitively separate model issues from data issues. Also
+  enables controlled testing of structural features (joins, branch
+  groups) with known-good data. Priority: high — needed before
+  declaring Phase D complete for graphs with joins.
+
+- **Snapshot/param-file evidence deduplication**: when a new graph is
+  created and the daily cron runs, both the parameter file `values[]`
+  entries and the snapshot DB get populated with that day's data. If
+  Bayes receives both sources (inline param-file evidence AND snapshot
+  DB rows), the same cohort observations appear twice — inflating
+  effective sample size and producing overconfident posteriors. The
+  evidence binding step must deduplicate: when snapshot DB evidence is
+  available for an edge, the overlapping param-file `values[]` entries
+  for the same dates/slices should be suppressed. This is a
+  preprocessing concern in `evidence.py`, not a model concern.
+
+- **Lag array population defect** (doc 16): window-type `values[]`
+  entries have all-zero `median_lag_days` / `mean_lag_days` arrays,
+  causing the FE's `aggregateLatencyStats` to produce near-zero
+  scalars. This gives the Bayes compiler pathological latency priors
+  on first run. Fix needed in the daily fetch → file write pipeline.
+  See doc 16 for full investigation scope.
+
+- **Latent onset and onset dispersion (doc 18)**: edge-level onset
+  becomes a latent variable with a graph-level hyperprior and learned
+  dispersion parameter (`tau_onset`). Path-level onset prior spread
+  derives from `tau_onset` rather than being hardcoded. Onset
+  posteriors (mean, SD, HDI) surfaced in FE alongside mu/sigma.
+  Sequenced as Phase D.O, between Phase D and Phase C. See
+  `18-latent-onset-design.md` for full specification.
+
+- **Analytic-derived latency priors for first run**: the analytic
+  pipeline (lag fit, t95 computation) produces reasonable latency
+  estimates. These could seed Bayes priors on the very first run
+  before any posterior exists. Design consideration: avoid creating
+  a backdoor prior injection / override system. The analytic values
+  should be a one-shot initialisation, superseded by warm-start from
+  posteriors on all subsequent runs. With latent onset (doc 18), the
+  histogram-derived onset value enters as a soft observation rather
+  than a fixed input, which partially addresses the onset prior
+  concern.
 
 - **Session logging verbosity**: the Bayes roundtrip (useBayesTrigger,
   bayesPatchService, worker diagnostics) emits detailed session log

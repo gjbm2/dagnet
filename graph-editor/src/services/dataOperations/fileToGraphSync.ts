@@ -1778,7 +1778,16 @@ export async function getParameterFromFile(options: {
       
       // Apply changes to the edge (base p slot)
       applyChanges(nextGraph.edges[edgeIndex], result.changes);
-      
+
+      // MODEL_VARS: Upsert analytic entry built by UpdateManager (doc 15 §5.1)
+      const analyticEntry = (result.metadata as any)?.analyticModelVarsEntry;
+      if (analyticEntry && nextGraph.edges[edgeIndex].p) {
+        const { upsertModelVars, applyPromotion } = await import('../modelVarsResolution');
+        upsertModelVars(nextGraph.edges[edgeIndex].p, analyticEntry);
+        // Run resolution to update promoted scalars (doc 15 §8)
+        applyPromotion(nextGraph.edges[edgeIndex].p, nextGraph.model_source_preference);
+      }
+
       console.log('[DataOperationsService] AFTER applyChanges:', {
         'edge.p': JSON.stringify(nextGraph.edges[edgeIndex]?.p)
       });

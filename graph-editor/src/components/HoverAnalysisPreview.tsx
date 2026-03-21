@@ -26,11 +26,13 @@ import { resolveAnalysisType } from '../services/analysisTypeResolutionService';
 import { useScenariosContextOptional } from '../contexts/ScenariosContext';
 import { useTabContext } from '../contexts/TabContext';
 import { useViewOverlayMode } from '../hooks/useViewOverlayMode';
-import type { ConversionGraph, Graph, CanvasAnalysis } from '../types';
-import type { AnalysisResult } from '../lib/graphComputeClient';
+import type { ConversionGraph, Graph, CanvasAnalysis, ContentItem } from '../types';
+import { CanvasAnalysisCard } from './CanvasAnalysisCard';
+import type { TabDragOutcome } from './CanvasAnalysisCard';
 import type { LocalScenario } from '../services/localAnalysisComputeService';
 import type { EdgeSnapshotRetrievalsData } from '../hooks/useEdgeSnapshotRetrievals';
 import { CalendarGrid } from './CalendarGrid';
+import { TAB_LABELS, extractTabIds, buildPinDragData } from '../utils/canvasAnalysisAccessors';
 
 // -------------------------------------------------------------------
 // Satellite helpers
@@ -73,44 +75,6 @@ export function centerOutOrder(count: number): number[] {
 // Drag data builder — extracted for testability
 // -------------------------------------------------------------------
 
-export interface PinDragDataInput {
-  analysisType: string;
-  dsl: string;
-  chartKind?: string;
-  result: AnalysisResult | null;
-  screenWidth: number;
-  screenHeight: number;
-  canvasZoom: number;
-  baseFontSize: number;
-  scaleContent: boolean;
-}
-
-/** Build the drag data payload dispatched when a card is pinned to canvas.
- *  Pure function — no DOM access. */
-export function buildPinDragData(input: PinDragDataInput) {
-  const { analysisType, dsl, chartKind, result, screenWidth, screenHeight, canvasZoom, baseFontSize, scaleContent } = input;
-  const z = canvasZoom || 1;
-  return {
-    type: 'dagnet-drag' as const,
-    objectType: 'canvas-analysis' as const,
-    recipe: {
-      analysis: {
-        analysis_type: analysisType,
-        analytics_dsl: dsl,
-      },
-    },
-    viewMode: 'chart' as const,
-    chartKind,
-    analysisTypeOverridden: true,
-    analysisResult: result,
-    drawWidth: screenWidth / z,
-    drawHeight: screenHeight / z,
-    display: {
-      font_size: baseFontSize,
-      scale_with_canvas: scaleContent,
-    },
-  };
-}
 
 // -------------------------------------------------------------------
 // DraggableAnalysisCard — self-contained: compute + render + drag
@@ -144,6 +108,7 @@ function DraggableAnalysisCard({
   infoDefaultTab,
   snapshotRetrievals,
   onFileLink,
+  onClickPin,
 }: {
   analysisType: string;
   dsl: string;
@@ -173,11 +138,12 @@ function DraggableAnalysisCard({
   snapshotRetrievals?: EdgeSnapshotRetrievalsData;
   /** Callback when a file link is clicked */
   onFileLink?: (fileId: string, type: string) => void;
+  /** Called on click (no drag) — satellites use this to pin at main card position */
+  onClickPin?: () => void;
 }) {
   const cardRef = useRef<HTMLDivElement>(null);
   const { operations } = useTabContext();
   const scenariosCtx = useScenariosContextOptional();
-  const { viewOverlayMode } = useViewOverlayMode();
 
   // Stable unique ID per component instance (for compute caching)
   const stableId = useRef(`hover-${Math.random().toString(36).slice(2, 8)}`).current;
@@ -197,6 +163,13 @@ function DraggableAnalysisCard({
     chart_kind: chartKind,
     mode: 'live' as const,
     x: 0, y: 0, width: 300, height: 200,
+    content_items: [{
+      id: `${stableId}-content-0`,
+      analysis_type: deferred ? '' : analysisType,
+      view_type: 'chart' as const,
+      chart_kind: chartKind,
+      analytics_dsl: dsl,
+    }],
   }), [stableId, analysisType, dsl, chartKind, deferred]);
 
   // Standard compute — same hook as CanvasAnalysisNode. Handles workspace,
@@ -278,11 +251,20 @@ function DraggableAnalysisCard({
   // --- Drag-to-pin (same event as canvas analysis creation) ---
   // Uses transform: translate(dx, dy) for drag movement — immune to containing
   // block issues (parent transforms, fixed positioning inside transforms).
+  //
+  // Drag sources: header (main card) or whole card (satellites with hideHeader).
+  // During drag, hit-tests for existing containers — shows snap-in preview tab,
+  // and drops into the container on release (instead of pinning to canvas).
   const dragState = useRef<{ startX: number; startY: number; ox: number; oy: number } | null>(null);
   const [dragging, setDragging] = useState(false);
   const [dragDelta, setDragDelta] = useState<{ dx: number; dy: number } | null>(null);
+  // Tab drag active — suppresses hover dismissal while a tab is being dragged
+  const [tabDragging, setTabDragging] = useState(false);
+  const anyDragging = dragging || tabDragging;
+  // Drop-target tracking during card drag (snap-in preview on containers)
+  const dragDropTargetRef = useRef<string | null>(null);
 
-  const handlePointerDown = useCallback((e: React.PointerEvent) => {
+  const handleCardPointerDown = useCallback((e: React.PointerEvent) => {
     e.preventDefault();
     e.stopPropagation();
     const el = cardRef.current;
@@ -298,29 +280,105 @@ function DraggableAnalysisCard({
     setDragging(true);
   }, []);
 
-  const handlePointerMove = useCallback((e: React.PointerEvent) => {
+  const handleCardPointerMove = useCallback((e: React.PointerEvent) => {
     if (!dragState.current) return;
     setDragDelta({
       dx: e.clientX - dragState.current.startX,
       dy: e.clientY - dragState.current.startY,
     });
-  }, []);
 
-  const handlePointerUp = useCallback((e: React.PointerEvent) => {
+    // Hit-test for container drop targets (title bar / tab bar only)
+    const elements = document.elementsFromPoint(e.clientX, e.clientY);
+    let targetId: string | null = null;
+    for (const el of elements) {
+      const dz = (el as HTMLElement).closest?.('[data-dropzone^="analysis-"]');
+      if (dz) {
+        targetId = (dz.getAttribute('data-dropzone') || '').replace('analysis-', '') || null;
+        break;
+      }
+    }
+    if (targetId !== dragDropTargetRef.current) {
+      if (dragDropTargetRef.current) {
+        window.dispatchEvent(new CustomEvent('dagnet:clearContentItemPreview', {
+          detail: { targetAnalysisId: dragDropTargetRef.current },
+        }));
+      }
+      dragDropTargetRef.current = targetId;
+      if (targetId) {
+        const meta = ANALYSIS_TYPES.find((t) => t.id === analysisType);
+        window.dispatchEvent(new CustomEvent('dagnet:previewContentItem', {
+          detail: {
+            targetAnalysisId: targetId,
+            contentItem: {
+              analysis_type: analysisType,
+              view_type: 'chart',
+              chart_kind: effectiveChartKind,
+              title: meta?.name || analysisType,
+              analytics_dsl: dsl,
+            },
+            analysisResult: result,
+          },
+        }));
+      }
+    }
+  }, [analysisType, dsl, effectiveChartKind, result]);
+
+  const handleCardPointerUp = useCallback((e: React.PointerEvent) => {
     if (!dragState.current) return;
     const ds = dragState.current;
     dragState.current = null;
     setDragging(false);
     setDragDelta(null);
 
+    // Clear any snap-in preview
+    const dropTarget = dragDropTargetRef.current;
+    if (dropTarget) {
+      window.dispatchEvent(new CustomEvent('dagnet:clearContentItemPreview', {
+        detail: { targetAnalysisId: dropTarget },
+      }));
+      dragDropTargetRef.current = null;
+    }
+
     const dx = e.clientX - ds.startX;
     const dy = e.clientY - ds.startY;
-    if (dx * dx + dy * dy <= 9) return;
+    if (dx * dx + dy * dy <= 9) {
+      // Click (no drag) — satellites use onClickPin to pin at main card position
+      if (onClickPin) onClickPin();
+      return;
+    }
 
+    // Drop into existing container — snap content item
+    if (dropTarget) {
+      const meta = ANALYSIS_TYPES.find((t) => t.id === analysisType);
+      console.log('[HoverPreview] SNAP dispatch', {
+        dropTarget: dropTarget?.slice(0, 12),
+        analysisType,
+        effectiveChartKind,
+        title: meta?.name || analysisType,
+        dsl: dsl?.slice(0, 40),
+        hasResult: !!result,
+      });
+      window.dispatchEvent(new CustomEvent('dagnet:snapContentItemToContainer', {
+        detail: {
+          targetAnalysisId: dropTarget,
+          contentItem: {
+            analysis_type: analysisType,
+            view_type: 'chart',
+            chart_kind: effectiveChartKind,
+            title: meta?.name || analysisType,
+            analytics_dsl: dsl,
+          },
+          analysisResult: result,
+        },
+      }));
+      onDismiss();
+      return;
+    }
+
+    // Drop onto empty canvas — pin as new analysis
     const el = cardRef.current;
     const cardLeft = e.clientX - ds.ox;
     const cardTop = e.clientY - ds.oy;
-
     const dragData = buildPinDragData({
       analysisType,
       dsl,
@@ -336,7 +394,7 @@ function DraggableAnalysisCard({
       detail: { screenX: cardLeft, screenY: cardTop, dragData },
     }));
     onDismiss();
-  }, [analysisType, dsl, effectiveChartKind, result, canvasZoom, scaleContent, onDismiss]);
+  }, [analysisType, dsl, effectiveChartKind, result, canvasZoom, scaleContent, onDismiss, onClickPin]);
 
   // --- Render ---
   const meta = ANALYSIS_TYPES.find((t) => t.id === analysisType);
@@ -388,6 +446,78 @@ function DraggableAnalysisCard({
     return m;
   }, [visibleScenarioIds, scenariosCtx, scenarioVisibilityModes]);
 
+  // --- Synthesise content items from result facets for CanvasAnalysisCard ---
+  const tabIds = useMemo(() => extractTabIds(result), [result]);
+  const hasMultipleTabs = tabIds.length > 1;
+  const [activeTabIdx, setActiveTabIdx] = useState(0);
+
+  // Honour infoDefaultTab (driven by view overlay mode) when tabs first appear
+  useEffect(() => {
+    if (!infoDefaultTab || tabIds.length === 0) return;
+    const idx = tabIds.indexOf(infoDefaultTab);
+    if (idx >= 0) setActiveTabIdx(idx);
+  }, [infoDefaultTab, tabIds]);
+
+  const hoverContentItems = useMemo((): ContentItem[] => {
+    if (tabIds.length <= 1) {
+      return [{
+        id: `${stableId}-main`,
+        analysis_type: analysisType,
+        view_type: 'chart',
+        chart_kind: chartKind,
+      }];
+    }
+    return tabIds.map(tid => ({
+      id: `${stableId}-${tid}`,
+      analysis_type: analysisType,
+      view_type: 'chart' as const,
+      chart_kind: chartKind,
+      facet: tid,
+      title: TAB_LABELS[tid] || tid,
+      analysis_type_overridden: true,
+    }));
+  }, [stableId, tabIds, analysisType, chartKind]);
+
+  // Tab drag complete → pin as new analysis or snap into existing container
+  const handleTabDragComplete = useCallback((outcome: TabDragOutcome) => {
+    const facet = outcome.contentItem.facet;
+    if (outcome.targetAnalysisId) {
+      window.dispatchEvent(new CustomEvent('dagnet:snapContentItemToContainer', {
+        detail: {
+          targetAnalysisId: outcome.targetAnalysisId,
+          contentItem: {
+            analysis_type: analysisType,
+            view_type: 'chart' as const,
+            chart_kind: effectiveChartKind,
+            facet,
+            title: TAB_LABELS[facet || ''] || facet || outcome.label,
+            analysis_type_overridden: true,
+          },
+          analysisResult: result,
+        },
+      }));
+      onDismiss();
+    } else {
+      const el = cardRef.current;
+      const dragData = buildPinDragData({
+        analysisType,
+        dsl,
+        chartKind: effectiveChartKind,
+        result,
+        screenWidth: el ? el.offsetWidth : 400,
+        screenHeight: el ? el.offsetHeight : 300,
+        canvasZoom: canvasZoom || 1,
+        baseFontSize: el ? parseFloat(getComputedStyle(el).fontSize) || 10 : 10,
+        scaleContent: !!scaleContent,
+        singleFacet: facet,
+      });
+      window.dispatchEvent(new CustomEvent('dagnet:pinAnalysisAtScreenPosition', {
+        detail: { screenX: outcome.screenX, screenY: outcome.screenY, dragData },
+      }));
+      onDismiss();
+    }
+  }, [analysisType, effectiveChartKind, result, dsl, canvasZoom, scaleContent, onDismiss]);
+
   return (
     <div
       ref={cardRef}
@@ -396,25 +526,25 @@ function DraggableAnalysisCard({
         (dragging ? ' hover-analysis-preview--dragging' : '') +
         (className ? ` ${className}` : '')
       }
-      onMouseEnter={dragging ? undefined : onCardEnter}
-      onMouseLeave={dragging ? undefined : onCardLeave}
-      onPointerMove={handlePointerMove}
-      onPointerUp={handlePointerUp}
+      onMouseEnter={anyDragging ? undefined : onCardEnter}
+      onMouseLeave={anyDragging ? undefined : onCardLeave}
+      onPointerDown={hideHeader ? handleCardPointerDown : undefined}
+      onPointerMove={handleCardPointerMove}
+      onPointerUp={handleCardPointerUp}
       style={{
         position: 'relative' as const,
-        cursor: dragging ? 'grabbing' : undefined,
-        transition: dragging ? undefined : 'opacity 0.25s ease-in-out',
+        cursor: anyDragging ? 'grabbing' : undefined,
+        transition: anyDragging ? undefined : 'opacity 0.25s ease-in-out',
+        display: 'flex',
+        flexDirection: 'column',
         ...style,
-        // Invisible only while still loading with no result or error — transition handles the fade-in.
-        // Show the card (with a message) when errored or waiting-for-deps, even without a result.
+        ...(hasMultipleTabs && !hideHeader ? { width: 420 } : {}),
         ...(loading && !result && !error && !backendUnavailable && !waitingForDeps ? { opacity: 0 } : {}),
-        // Drag via transform — stays in the same containing block, no
-        // coordinate system issues from parent transforms.
         ...(dragDelta ? { transform: `translate(${dragDelta.dx}px, ${dragDelta.dy}px)`, zIndex: 10001 } : {}),
       }}
     >
       {!hideHeader && (
-        <div className="hover-analysis-preview-header" onPointerDown={handlePointerDown}>
+        <div className="hover-analysis-preview-header" onPointerDown={handleCardPointerDown}>
           <GripVertical size={9} className="hover-analysis-preview-grip" />
           <span className="hover-analysis-preview-title">
             {label}{effectiveChartKind && effectiveChartKind !== 'info' ? ` · ${effectiveChartKind.replace(/_/g, ' ')}` : ''}
@@ -422,52 +552,59 @@ function DraggableAnalysisCard({
           <span className="hover-analysis-preview-hint">drag to pin</span>
         </div>
       )}
-      <div
-        className="hover-analysis-preview-body"
+      <CanvasAnalysisCard
+        analysisId={stableId}
+        contentItems={hoverContentItems}
+        activeContentIndex={activeTabIdx}
+        onActiveContentIndexChange={setActiveTabIdx}
+        result={result}
+        loading={loading}
+        error={error ?? undefined}
+        backendUnavailable={backendUnavailable}
+        waitingForDeps={waitingForDeps}
+        hasAnalysisType={!deferred && !!analysisType}
+        interactive
+        onTabDragComplete={handleTabDragComplete}
+        onTabDragActiveChange={setTabDragging}
+        contentZoomStyle={scaleContent ? { zoom: SATELLITE_CONTENT_SCALE } as React.CSSProperties : undefined}
         style={{
-          ...(scaleContent ? { zoom: SATELLITE_CONTENT_SCALE } as React.CSSProperties : {}),
+          flex: 1,
+          display: 'flex',
+          flexDirection: 'column' as const,
+          overflow: 'hidden',
+          minHeight: 0,
         }}
-      >
-        {error ? (
-          <div style={{ padding: '12px 10px', color: 'var(--text-warning, #b86e00)', fontSize: 10 }}>
-            Error
-          </div>
-        ) : backendUnavailable ? (
-          <div style={{ padding: '12px 10px', color: 'var(--text-muted, #666)', fontSize: 10 }}>
-            Backend unavailable
-          </div>
-        ) : result ? (
-          <AnalysisChartContainer
-            result={result}
-            chartKindOverride={effectiveChartKind}
-            visibleScenarioIds={visibleScenarioIds}
-            scenarioVisibilityModes={scenarioVisibilityModes}
-            scenarioMetaById={scenarioMetaById}
-            height={chartHeight ?? (effectiveChartKind === 'info' ? undefined : 140)}
-            hideChrome
-            suppressAnimation={!!scaleContent}
-            onRendered={fireSettled}
-            infoDefaultTab={infoDefaultTab}
-            onFileLink={onFileLink}
-            source={{ query_dsl: dsl }}
-            infoTabExtra={snapshotRetrievals ? {
-              evidence: <SnapshotCalendarSection data={snapshotRetrievals} />,
-            } : undefined}
-          />
-        ) : waitingForDeps ? (
-          <div style={{ padding: '12px 10px', color: 'var(--text-muted, #666)', fontSize: 10 }}>
-            Waiting…
-          </div>
-        ) : loading ? (
-          <div style={{ padding: '12px 10px', color: 'var(--text-muted, #666)', fontSize: 10 }}>
-            Computing…
-          </div>
-        ) : (
-          <div style={{ padding: '12px 10px', color: 'var(--text-muted, #666)', fontSize: 10 }}>
-            No data
+        renderContent={(ci, previewOverlay) => (
+          <div
+            className="hover-analysis-preview-body"
+            style={{
+              ...(hasMultipleTabs ? { height: 320, flex: 'none', overflow: 'auto' } : {}),
+            }}
+          >
+            {result ? (
+              <AnalysisChartContainer
+                result={result}
+                chartKindOverride={effectiveChartKind}
+                visibleScenarioIds={visibleScenarioIds}
+                scenarioVisibilityModes={scenarioVisibilityModes}
+                scenarioMetaById={scenarioMetaById}
+                height={chartHeight ?? (effectiveChartKind === 'info' ? undefined : 140)}
+                hideChrome
+                suppressAnimation={!!scaleContent}
+                onRendered={fireSettled}
+                onFileLink={onFileLink}
+                source={{ query_dsl: dsl }}
+                facet={ci.facet}
+                infoDefaultTab={hasMultipleTabs ? undefined : infoDefaultTab}
+                infoTabExtra={snapshotRetrievals ? {
+                  evidence: <SnapshotCalendarSection data={snapshotRetrievals} />,
+                } : undefined}
+              />
+            ) : null}
+            {previewOverlay}
           </div>
         )}
-      </div>
+      />
       {/* Tooltip — shows analysis type & chart kind on hover (satellites only) */}
       {hideHeader && (
         <div className="hover-analysis-preview-tooltip">
@@ -869,6 +1006,31 @@ export function HoverAnalysisPreview({
     setCards(initial);
   }, [satelliteLayout, satelliteRecipes]);
 
+  // Satellite click-to-pin: clicking (not dragging) a satellite pins that
+  // chart type at the main hover preview card's screen position.
+  const makeSatelliteClickPin = useCallback((recipe: SatelliteRecipe) => {
+    return () => {
+      const el = containerRef.current;
+      if (!el) return;
+      const rect = el.getBoundingClientRect();
+      const dragData = buildPinDragData({
+        analysisType: recipe.analysisType,
+        dsl,
+        chartKind: recipe.chartKind,
+        result: null, // no cached result for the satellite's type at main card position
+        screenWidth: rect.width,
+        screenHeight: rect.height,
+        canvasZoom: canvasZoom || 1,
+        baseFontSize: 10,
+        scaleContent: false,
+      });
+      window.dispatchEvent(new CustomEvent('dagnet:pinAnalysisAtScreenPosition', {
+        detail: { screenX: rect.left, screenY: rect.top, dragData },
+      }));
+      onDismiss();
+    };
+  }, [dsl, canvasZoom, onDismiss]);
+
   return ReactDOM.createPortal(
     <>
       {/* Main preview card — rendered first so containerRef is populated
@@ -923,6 +1085,7 @@ export function HoverAnalysisPreview({
                 className="satellite-card"
                 scaleContent
                 hideHeader
+                onClickPin={makeSatelliteClickPin(card.recipe)}
                 onSettled={(outcome) => handleTrialSettled(card.id, card.recipe, outcome)}
                 chartHeight={Math.round((satelliteLayout.tileSize - 4) / SATELLITE_CONTENT_SCALE)}
                 style={{
@@ -1024,12 +1187,24 @@ export function useHoverPreview(delay = 500, gracePeriod = 300) {
   }, [previewState]);
 
   useEffect(() => {
-    const onMouseDown = () => {
+    const onMouseDown = (e: MouseEvent) => {
       // Always cancel pending timers on mousedown (prevents hover preview
       // from appearing during drag — the show timer may have been set just
       // before the user clicked to start dragging)
       clearAllTimers();
       isHoveringTriggerRef.current = false;
+
+      // If the click target is inside the hover preview card or satellite row,
+      // treat it as an in-card interaction (tab clicks, scroll, etc.) and do
+      // NOT dismiss.  mouseenter may not have fired if the card appeared under
+      // the cursor, so isHoveringCardRef can be stale — the DOM check is
+      // authoritative.
+      const target = e.target as HTMLElement | null;
+      if (target?.closest('.hover-analysis-preview, .satellite-row')) {
+        isHoveringCardRef.current = true;
+        return;
+      }
+
       if (cardActiveRef.current && !isHoveringCardRef.current) {
         isHoveringCardRef.current = false;
         setPreviewState(null);

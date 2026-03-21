@@ -1547,5 +1547,87 @@ describe('UpdateManager', () => {
       expect(graphEdge.p.connection_string).toBe('{"segment":"from-graph"}');
     });
   });
+
+  // ============================================================
+  // Analytic model_vars upsert (doc 15 §5.1)
+  // ============================================================
+
+  describe('Analytic model_vars metadata (doc 15 §5.1)', () => {
+    it('should attach analytic ModelVarsEntry with probability + latency from file data', async () => {
+      const paramFile = {
+        type: 'probability',
+        values: [{ mean: 0.12, stdev: 0.03, data_source: { retrieved_at: '20-Mar-26' } }],
+        latency: { mu: 2.5, sigma: 0.8, t95: 45, onset_delta_days: 3 },
+      };
+      const edge = { p: { mean: 0, stdev: 0 } };
+
+      const result = await updateManager.handleFileToGraph(paramFile, edge, 'UPDATE', 'parameter');
+      const entry = (result.metadata as any)?.analyticModelVarsEntry;
+
+      expect(entry).toBeDefined();
+      expect(entry.source).toBe('analytic');
+      expect(entry.source_at).toBe('20-Mar-26');
+      expect(entry.probability).toEqual({ mean: 0.12, stdev: 0.03 });
+      expect(entry.latency).toEqual({
+        mu: 2.5, sigma: 0.8, t95: 45, onset_delta_days: 3,
+      });
+    });
+
+    it('should include path-level latency fields when present', async () => {
+      const paramFile = {
+        type: 'probability',
+        values: [{ mean: 0.1, stdev: 0.02, window_to: '19-Mar-26' }],
+        latency: { mu: 2, sigma: 0.7, t95: 40, onset_delta_days: 2, path_mu: 3.1, path_sigma: 0.9, path_t95: 60 },
+      };
+      const edge = { p: { mean: 0, stdev: 0 } };
+
+      const result = await updateManager.handleFileToGraph(paramFile, edge, 'UPDATE', 'parameter');
+      const entry = (result.metadata as any)?.analyticModelVarsEntry;
+
+      expect(entry.latency.path_mu).toBe(3.1);
+      expect(entry.latency.path_sigma).toBe(0.9);
+      expect(entry.latency.path_t95).toBe(60);
+    });
+
+    it('should omit latency block when mu/sigma absent on file', async () => {
+      const paramFile = {
+        type: 'probability',
+        values: [{ mean: 0.5, stdev: 0.1 }],
+      };
+      const edge = { p: { mean: 0, stdev: 0 } };
+
+      const result = await updateManager.handleFileToGraph(paramFile, edge, 'UPDATE', 'parameter');
+      const entry = (result.metadata as any)?.analyticModelVarsEntry;
+
+      expect(entry.probability).toEqual({ mean: 0.5, stdev: 0.1 });
+      expect(entry.latency).toBeUndefined();
+    });
+
+    it('should fall back to window_to then current date for source_at', async () => {
+      const paramFile = {
+        type: 'probability',
+        values: [{ mean: 0.3, stdev: 0.05, window_to: '18-Mar-26' }],
+      };
+      const edge = { p: { mean: 0, stdev: 0 } };
+
+      const result = await updateManager.handleFileToGraph(paramFile, edge, 'UPDATE', 'parameter');
+      const entry = (result.metadata as any)?.analyticModelVarsEntry;
+
+      expect(entry.source_at).toBe('18-Mar-26');
+    });
+
+    it('should not produce analytic entry for cost_gbp parameter type', async () => {
+      const paramFile = {
+        type: 'cost_gbp',
+        values: [{ mean: 100, stdev: 10 }],
+      };
+      const edge = { cost_gbp: { mean: 0, stdev: 0 } };
+
+      const result = await updateManager.handleFileToGraph(paramFile, edge, 'UPDATE', 'parameter');
+      const entry = (result.metadata as any)?.analyticModelVarsEntry;
+
+      expect(entry).toBeUndefined();
+    });
+  });
 });
 

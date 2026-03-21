@@ -77,8 +77,50 @@ class LatencyConfig(BaseModel):
     sigma: Optional[float] = Field(None, ge=0, description="Fitted log-normal sigma parameter (internal, not UI-exposed)")
     path_mu: Optional[float] = Field(None, description="Path-level A→Y log-normal mu (Fenton–Wilkinson, internal)")
     path_sigma: Optional[float] = Field(None, ge=0, description="Path-level A→Y log-normal sigma (Fenton–Wilkinson, internal)")
+    path_onset_delta_days: Optional[float] = Field(None, ge=0, description="Path-level Σ onset_delta_days along path (DP sum, internal)")
     model_trained_at: Optional[str] = Field(None, description="UK date (d-MMM-yy) when the model was last fitted (staleness detection)")
     posterior: Optional['LatencyPosterior'] = Field(None, description="Bayesian posterior for latency parameters (written by fitting engine)")
+
+
+# ── Model variable provenance (doc 15) ──────────────────────────────────────
+
+class ModelVarsQuality(BaseModel):
+    """Quality metrics from a Bayesian model_vars entry (evaluated once at write time)."""
+    rhat: float
+    ess: float
+    divergences: int = Field(0, ge=0)
+    evidence_grade: int = Field(..., ge=0, le=3, description="0=cold start, 1=weak, 2=mature, 3=full Bayesian")
+    gate_passed: bool = Field(..., description="meetsQualityGate() result at write time")
+
+
+class ModelVarsLatency(BaseModel):
+    """Latency sub-block within a ModelVarsEntry."""
+    mu: float
+    sigma: float = Field(..., ge=0)
+    t95: float = Field(..., ge=0)
+    onset_delta_days: float = Field(..., ge=0)
+    path_mu: Optional[float] = None
+    path_sigma: Optional[float] = Field(None, ge=0)
+    path_t95: Optional[float] = Field(None, ge=0)
+    path_onset_delta_days: Optional[float] = Field(None, ge=0)
+
+
+class ModelVarsProbability(BaseModel):
+    """Probability sub-block within a ModelVarsEntry."""
+    mean: float = Field(..., ge=0, le=1)
+    stdev: float = Field(..., ge=0)
+
+
+class ModelVarsEntry(BaseModel):
+    """Provenance-tagged set of model variables from one source (doc 15 §2.1).
+
+    Each entry is a complete snapshot — no sparse entries, no per-field mixing.
+    """
+    source: Literal['analytic', 'bayesian', 'manual']
+    source_at: str = Field(..., description="UK date (d-MMM-yy) when this entry was last updated")
+    probability: ModelVarsProbability
+    latency: Optional[ModelVarsLatency] = None
+    quality: Optional[ModelVarsQuality] = Field(None, description="Bayesian-specific quality metadata (present only when source == 'bayesian')")
 
 
 # ── Bayesian posterior types ────────────────────────────────────────────────
@@ -175,8 +217,17 @@ class LatencyPosterior(BaseModel):
     fingerprint: str = Field(..., description="Same fingerprint as probability posterior")
     provenance: Literal['bayesian', 'pooled-fallback', 'point-estimate', 'skipped']
     fit_history: Optional[List[LatencyFitHistoryEntry]] = None
+    # Edge-level onset posterior (Phase D.O) — present when onset is latent
+    onset_mean: Optional[float] = Field(None, description="Posterior mean of latent onset (days)")
+    onset_sd: Optional[float] = Field(None, description="Posterior SD of latent onset")
+    onset_hdi_lower: Optional[float] = Field(None, description="HDI lower bound for onset")
+    onset_hdi_upper: Optional[float] = Field(None, description="HDI upper bound for onset")
+    onset_mu_corr: Optional[float] = Field(None, description="Posterior correlation onset↔μ (identifiability)")
     # Path-level (cohort) latency — present when cohort latency is fitted
     path_onset_delta_days: Optional[float] = Field(None, description="Fitted path onset (cohort context)")
+    path_onset_sd: Optional[float] = Field(None, description="Path-level onset posterior SD")
+    path_onset_hdi_lower: Optional[float] = Field(None, description="Path-level onset HDI lower bound")
+    path_onset_hdi_upper: Optional[float] = Field(None, description="Path-level onset HDI upper bound")
     path_mu_mean: Optional[float] = Field(None, description="Path-level posterior mean of μ")
     path_mu_sd: Optional[float] = Field(None, description="Path-level posterior SD of μ")
     path_sigma_mean: Optional[float] = Field(None, description="Path-level posterior mean of σ")
@@ -235,6 +286,10 @@ class ProbabilityParam(BaseModel):
     id: Optional[str] = Field(None, description="Reference to parameter file (FK to parameter-{id}.yaml)")
     data_source: Optional[DataSource] = None
     posterior: Optional[ProbabilityPosterior] = Field(None, description="Bayesian posterior (written by fitting engine)")
+    # Model variable provenance (doc 15)
+    model_vars: Optional[List[ModelVarsEntry]] = Field(None, description="Candidate model variable sets from different sources")
+    model_source_preference: Optional[Literal['best_available', 'bayesian', 'analytic', 'manual']] = Field(None, description="Per-edge override of graph.model_source_preference")
+    model_source_preference_overridden: bool = Field(False, description="True when model_source_preference was explicitly set by user")
     # LAG fields
     latency: Optional[LatencyConfig] = Field(None, description="Latency configuration for this probability")
     forecast: Optional[ForecastParams] = Field(None, description="Forecast probability from mature cohorts")
@@ -544,6 +599,7 @@ class Graph(BaseModel):
     debugging: Optional[bool] = Field(None, description="If true, run Graph Issues checks while this graph is open and show an Issues indicator overlay.")
     dailyFetch: Optional[bool] = Field(None, description="If true, this graph is included in unattended daily automation runs when ?retrieveall is used without an explicit graph list.")
     defaultConnection: Optional[str] = Field(None, description="Default connection for all edges. Fallback when edge-level connection is not set (e.g. 'amplitude-prod').")
+    model_source_preference: Optional[Literal['best_available', 'bayesian', 'analytic']] = Field(None, description="Graph-level default for which model var source to promote to scalars (doc 15 §2.3)")
     bayes: Optional[BayesRunMetadata] = Field(None, alias='_bayes', description="Metadata from the most recent Bayesian fitting run")
     
     def get_node_by_id(self, node_id: str) -> Optional[Node]:

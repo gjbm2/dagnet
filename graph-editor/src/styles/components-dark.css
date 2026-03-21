@@ -2272,6 +2272,43 @@
   color: var(--text-primary, #374151);
 }
 
+/* Inline analysis type select in canvas analysis title bar */
+.canvas-analysis-type-select {
+  all: unset;
+  font: inherit;
+  font-weight: 400;
+  color: var(--text-muted, #6b7280);
+  cursor: pointer;
+  max-width: 120px;
+  text-overflow: ellipsis;
+}
+.canvas-analysis-type-select:hover {
+  color: var(--text-primary, #374151);
+}
+[data-theme="dark"] .canvas-analysis-type-select {
+  color: var(--text-muted, #999);
+}
+[data-theme="dark"] .canvas-analysis-type-select:hover {
+  color: var(--text-primary, #e0e0e0);
+}
+
+/* Content tab bar — hide scrollbar, allow scroll via wheel/touch */
+.canvas-analysis-tab-bar {
+  scrollbar-width: none; /* Firefox */
+}
+.canvas-analysis-tab-bar::-webkit-scrollbar {
+  display: none; /* Chrome/Safari */
+}
+
+/* Content tab bar — × close button visible on tab hover */
+.canvas-analysis-content-tab:hover .canvas-analysis-tab-close {
+  opacity: 0.6 !important;
+}
+.canvas-analysis-tab-close:hover {
+  opacity: 1 !important;
+  color: var(--color-danger, #ef4444) !important;
+}
+
 /* ============================================================
    HOVER ANALYSIS PREVIEW (node_info / edge_info popup)
    ============================================================ */
@@ -2335,8 +2372,44 @@
   font-style: italic;
 }
 
+/* Container-level tab bar — mirrors CanvasAnalysisNode tab bar pattern */
+.hover-analysis-preview-tab-bar {
+  display: flex;
+  gap: 0;
+  border-bottom: 1px solid var(--border-secondary, rgba(255, 255, 255, 0.08));
+  flex-shrink: 0;
+  overflow: hidden;
+}
+
+.hover-preview-tab {
+  all: unset;
+  padding: 3px 8px;
+  font-size: 9px;
+  color: var(--text-muted, #666);
+  cursor: grab;
+  white-space: nowrap;
+  border-bottom: 2px solid transparent;
+  transition: color 0.1s, border-color 0.1s;
+}
+
+.hover-preview-tab.active {
+  color: var(--text-primary, #e0e0e0);
+  border-bottom-color: var(--accent-primary, #3b82f6);
+  font-weight: 600;
+}
+
+.hover-preview-tab:hover:not(.active) {
+  color: var(--text-secondary, #999);
+}
+
+/* Ghost card shown when dragging a single tab */
+.hover-tab-drag-ghost {
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
+  border-color: var(--accent-primary, #3b82f6);
+}
+
 .hover-analysis-preview-body {
-  overflow-y: auto;
+  overflow: hidden;    /* children (TabbedContainer panel) handle their own scrolling */
   padding: 2px;
   flex: 1;
   min-height: 0;

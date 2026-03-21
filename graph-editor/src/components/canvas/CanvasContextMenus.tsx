@@ -629,7 +629,7 @@ export const CanvasContextMenus: React.FC<CanvasContextMenusProps> = React.memo(
                 source: {
                   parent_tab_id: tabId,
                   parent_file_id: currentTab?.fileId,
-                  query_dsl: analysis.recipe?.analysis?.analytics_dsl || undefined,
+                  query_dsl: analysis.content_items?.[0]?.analytics_dsl || analysis.recipe?.analysis?.analytics_dsl || undefined,
                   analysis_type: analysis.recipe?.analysis?.analysis_type || undefined,
                 },
                 render: {

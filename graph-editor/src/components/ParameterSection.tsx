@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { Info, Clock, RefreshCcw } from 'lucide-react';
 import { EnhancedSelector } from './EnhancedSelector';
 import { ConnectionControl } from './ConnectionControl';
@@ -14,6 +14,8 @@ import { LATENCY_HORIZON_DECIMAL_PLACES } from '../constants/latency';
 import { PRECISION_DECIMAL_PLACES } from '../constants/latency';
 import { roundToDecimalPlaces } from '../utils/rounding';
 import { PosteriorIndicator } from './shared/PosteriorIndicator';
+import { ModelVarsCards } from './ModelVarsCards';
+import { resolveActiveModelVars, effectivePreference } from '../services/modelVarsResolution';
 import { useTheme } from '../contexts/ThemeContext';
 import './ParameterSection.css';
 
@@ -54,6 +56,10 @@ interface ParameterSectionProps {
     posterior?: any;
     // Evidence metadata (for freshness display)
     evidence?: { retrieved_at?: string; [key: string]: any };
+    // Model variable provenance (doc 15)
+    model_vars?: import('../types').ModelVarsEntry[];
+    model_source_preference?: import('../types').ModelSourcePreference;
+    model_source_preference_overridden?: boolean;
   };
   
   // Handlers
@@ -64,7 +70,6 @@ interface ParameterSectionProps {
   label: string;  // e.g., "Probability", "Cost (GBP)", "Cost (Time)"
   showQueryEditor?: boolean;  // Default true
   showStdev?: boolean;  // Default true
-  showDistribution?: boolean;  // Default true
   showLatency?: boolean;  // Default true for probability, false for cost
   showBalanceButton?: boolean;  // Default false (true for conditional p)
   isUnbalanced?: boolean;  // Show balance button as highlighted
@@ -81,7 +86,6 @@ interface ParameterSectionProps {
  * - Mean value input (slider/number)
  * - Query expression editor
  * - Stdev input
- * - Distribution dropdown
  * - All AutomatableField wrappers
  * - Override flags management
  */
@@ -97,7 +101,6 @@ export function ParameterSection({
   label,
   showQueryEditor = true,
   showStdev = true,
-  showDistribution = true,
   showLatency = paramSlot === 'p',  // Default true for probability, false for cost
   showBalanceButton = false,
   isUnbalanced = false,
@@ -107,6 +110,18 @@ export function ParameterSection({
   const { graph: currentGraph, setGraph } = useGraphStore();
   const { theme } = useTheme();
   const [isRefreshingAnchor, setIsRefreshingAnchor] = useState(false);
+
+  // §17.1: When model_vars exists on a probability param, the cards replace
+  // the flat scalar layout (mean slider, stdev, latency fields, posterior indicator).
+  const hasModelVars = paramSlot === 'p' && (param?.model_vars?.length ?? 0) > 0;
+
+  // Compute the active model variable source for the PosteriorIndicator popover (doc 15 §14.4)
+  const activeModelSource = useMemo(() => {
+    if (!param?.model_vars?.length) return null;
+    const pref = effectivePreference(param.model_source_preference, graph?.model_source_preference);
+    const entry = resolveActiveModelVars(param.model_vars, pref);
+    return entry?.source ?? null;
+  }, [param?.model_vars, param?.model_source_preference, graph?.model_source_preference]);
 
   const formatOptionalNumber = (value: number | undefined, dp: number): string => {
     if (value === undefined) return '';
@@ -294,6 +309,22 @@ export function ParameterSection({
       />
       </div>
       
+      {/* Model Vars Cards — three-card source layout (doc 15 §17) */}
+      {hasModelVars && (
+        <ModelVarsCards
+          modelVars={param!.model_vars}
+          edgePreference={param!.model_source_preference as any}
+          edgePreferenceOverridden={param!.model_source_preference_overridden}
+          graphPreference={graph?.model_source_preference as any}
+          promotedMean={param!.mean}
+          promotedStdev={param!.stdev}
+          promotedLatency={param!.latency}
+          latencyEnabled={param!.latency?.latency_parameter === true}
+          onUpdate={(changes) => onUpdate(changes)}
+          disabled={disabled}
+        />
+      )}
+
       {/* Mean Value (Probability slider OR Cost input) */}
       <div style={{ marginBottom: '20px' }}>
         <AutomatableField
@@ -363,6 +394,7 @@ export function ParameterSection({
               posterior={param.posterior}
               retrievedAt={param.evidence?.retrieved_at}
               theme={theme === 'dark' ? 'dark' : 'light'}
+              activeSource={activeModelSource}
             />
           </div>
         )}
@@ -399,38 +431,6 @@ export function ParameterSection({
                 disabled={disabled}
                 className="parameter-input"
               />
-            </div>
-          </AutomatableField>
-        </div>
-      )}
-      
-      {/* Distribution */}
-      {showDistribution && (
-        <div style={{ marginBottom: '16px' }}>
-          <AutomatableField
-            label=""
-            value={param?.distribution || 'beta'}
-            overridden={param?.distribution_overridden || false}
-            onClearOverride={() => {
-              onUpdate({ distribution_overridden: false });
-            }}
-          >
-            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-              <label className="parameter-section-label">Distribution</label>
-              <select
-                value={param?.distribution || 'beta'}
-                onChange={(e) => {
-                  onUpdate({ distribution: e.target.value, distribution_overridden: true });
-                }}
-                disabled={disabled}
-                className="parameter-input"
-              >
-                <option value="beta">Beta</option>
-                <option value="normal">Normal</option>
-                <option value="lognormal">Log-Normal</option>
-                <option value="gamma">Gamma</option>
-                <option value="uniform">Uniform</option>
-              </select>
             </div>
           </AutomatableField>
         </div>
@@ -641,6 +641,7 @@ export function ParameterSection({
                     posterior={param.latency.posterior as any}
                     retrievedAt={param.evidence?.retrieved_at}
                     theme={theme === 'dark' ? 'dark' : 'light'}
+                    activeSource={activeModelSource}
                   />
                 </div>
               )}

@@ -12,6 +12,7 @@ import { useCallback, useEffect, useRef } from 'react';
 import type { Node, Edge } from 'reactflow';
 import { fromFlow } from '@/lib/transform';
 import { DEFAULT_NODE_WIDTH, DEFAULT_NODE_HEIGHT } from '@/lib/nodeEdgeConstants';
+import { canvasAnalysisResultCache } from '@/hooks/useCanvasAnalysisCompute';
 import type { SyncGuards } from './syncGuards';
 
 // ---------------------------------------------------------------------------
@@ -65,6 +66,9 @@ export function useNodeDrag({
   const containerDragContainedRef = useRef<Set<string> | null>(null);
   const containerDragLastPosRef = useRef<{ x: number; y: number } | null>(null);
   const dragTimeoutRef = useRef<number | null>(null);
+  // Analysis merge-on-drop: tracks the target analysis node during drag
+  const mergeTargetRef = useRef<string | null>(null);
+  const draggedAnalysisIdRef = useRef<string | null>(null);
 
   // -------------------------------------------------------------------------
   // onNodeDragStart
@@ -78,12 +82,28 @@ export function useNodeDrag({
     setIsDraggingNode(true);
 
     // Track the specific analysis being dragged so SelectionConnectors
-    // can show connectors/shapes/halos for it (same codepath as selection)
+    // can show connectors/shapes/halos for it (same codepath as selection).
+    // Only single-tab containers participate in merge-on-drop — multi-tab
+    // containers are established objects that should just move.
     if (_node.id?.startsWith('analysis-')) {
-      setDraggedAnalysisId(_node.id.replace('analysis-', ''));
+      const aid = _node.id.replace('analysis-', '');
+      const analysis = graph?.canvasAnalyses?.find((a: any) => a.id === aid);
+      const tabCount = analysis?.content_items?.length ?? 1;
+      setDraggedAnalysisId(aid);
+      draggedAnalysisIdRef.current = tabCount <= 1 ? aid : null;
+      // Highlight available dropzones for single-tab container drag
+      if (draggedAnalysisIdRef.current) {
+        document.querySelectorAll<HTMLElement>('[data-dropzone^="analysis-"]').forEach(el => {
+          if (el.getAttribute('data-dropzone') !== `analysis-${aid}`) {
+            el.classList.add('dropzone-highlight');
+          }
+        });
+      }
     } else {
       setDraggedAnalysisId(null);
+      draggedAnalysisIdRef.current = null;
     }
+    mergeTargetRef.current = null;
 
     // Container group drag: snapshot contained objects
     if (_node.id?.startsWith('container-')) {
@@ -146,8 +166,8 @@ export function useNodeDrag({
         setDraggedAnalysisId(null);
       }
       dragTimeoutRef.current = null;
-    }, 5000);
-  }, [nodes, resetHelperLines, guards, setIsDraggingNode, setDraggedAnalysisId]);
+    }, 30000);
+  }, [graph, nodes, resetHelperLines, guards, setIsDraggingNode, setDraggedAnalysisId]);
 
   // -------------------------------------------------------------------------
   // onNodeDrag
@@ -155,6 +175,54 @@ export function useNodeDrag({
   const onNodeDrag = useCallback((_event: any, draggedNode: any) => {
     if (!hasNodeMovedRef.current) {
       hasNodeMovedRef.current = true;
+    }
+
+    // Analysis merge detection: use pointer position to find target dropzone
+    // (title bar / tab bar only — not the whole container)
+    if (draggedAnalysisIdRef.current && draggedNode.id?.startsWith('analysis-')) {
+      const elements = document.elementsFromPoint(_event.clientX, _event.clientY);
+      let bestTarget: string | null = null;
+      for (const el of elements) {
+        const dz = (el as HTMLElement).closest?.('[data-dropzone^="analysis-"]');
+        if (dz) {
+          const aid = (dz.getAttribute('data-dropzone') || '').replace('analysis-', '');
+          if (aid !== draggedAnalysisIdRef.current) { bestTarget = aid; break; }
+        }
+      }
+
+      if (bestTarget !== mergeTargetRef.current) {
+        // Clear old snap-in preview
+        if (mergeTargetRef.current) {
+          window.dispatchEvent(new CustomEvent('dagnet:clearContentItemPreview', {
+            detail: { targetAnalysisId: mergeTargetRef.current },
+          }));
+        }
+        mergeTargetRef.current = bestTarget;
+        // Show snap-in preview tab on new target + hide the dragged node
+        // (it visually "snaps in" — one visual representation, not two)
+        if (bestTarget) {
+          const sourceAnalysis = graph?.canvasAnalyses?.find((a: any) => a.id === draggedAnalysisIdRef.current);
+          let previewItem = sourceAnalysis?.content_items?.[0];
+          // Ensure preview item carries DSL (backfill from container if legacy)
+          if (previewItem && !previewItem.analytics_dsl && sourceAnalysis?.recipe?.analysis?.analytics_dsl) {
+            previewItem = { ...previewItem, analytics_dsl: sourceAnalysis.recipe.analysis.analytics_dsl };
+          }
+          if (previewItem) {
+            // Pass cached result so the target can render real chart content
+            const cachedResult = canvasAnalysisResultCache.get(draggedAnalysisIdRef.current!);
+            window.dispatchEvent(new CustomEvent('dagnet:previewContentItem', {
+              detail: {
+                targetAnalysisId: bestTarget,
+                contentItem: previewItem,
+                analysisResult: cachedResult ?? null,
+              },
+            }));
+          }
+        }
+        // Hide/show dragged node via direct DOM (avoids React re-render cascade)
+        const nodeEl = document.querySelector(`[data-id="${draggedNode.id}"]`) as HTMLElement | null;
+        if (nodeEl) nodeEl.style.opacity = bestTarget ? '0' : '1';
+      }
     }
 
     // Container group drag: move contained objects by delta
@@ -173,7 +241,7 @@ export function useNodeDrag({
         }));
       }
     }
-  }, [setNodes]);
+  }, [graph, setNodes]);
 
   // -------------------------------------------------------------------------
   // onNodeDragStop
@@ -186,6 +254,42 @@ export function useNodeDrag({
     // Clear container group drag state
     containerDragContainedRef.current = null;
     containerDragLastPosRef.current = null;
+
+    // Clear dropzone highlights
+    document.querySelectorAll('.dropzone-highlight').forEach(el => el.classList.remove('dropzone-highlight'));
+
+    // Analysis merge: if dropped on another analysis node, dispatch merge event
+    // When merging, skip the normal position sync — the source node is being deleted.
+    const didMerge = !!(mergeTargetRef.current && draggedAnalysisIdRef.current);
+    const draggedNodeId = draggedAnalysisIdRef.current
+      ? `analysis-${draggedAnalysisIdRef.current}` : null;
+    if (didMerge) {
+      const sourceId = draggedAnalysisIdRef.current!;
+      const targetId = mergeTargetRef.current!;
+      // Clear snap-in preview
+      window.dispatchEvent(new CustomEvent('dagnet:clearContentItemPreview', {
+        detail: { targetAnalysisId: targetId },
+      }));
+      // Dispatch merge (source node will be deleted — no need to restore opacity)
+      window.dispatchEvent(new CustomEvent('dagnet:mergeContainers', {
+        detail: { sourceAnalysisId: sourceId, targetAnalysisId: targetId },
+      }));
+    } else if (draggedNodeId) {
+      // No merge — restore opacity on the dragged node in case it was hidden
+      const nodeEl = document.querySelector(`[data-id="${draggedNodeId}"]`) as HTMLElement | null;
+      if (nodeEl) nodeEl.style.opacity = '1';
+    }
+    mergeTargetRef.current = null;
+    draggedAnalysisIdRef.current = null;
+
+    if (didMerge) {
+      // Merge handler already updated the graph — just clear drag state
+      guards.endInteraction('drag');
+      setIsDraggingNode(false);
+      setDraggedAnalysisId(null);
+      return;
+    }
+
     // Keep drag flag set - it will be cleared by the sync effect when it takes the fast path
     // Use double requestAnimationFrame to ensure ReactFlow has finished updating node positions
     // and React has re-rendered before we sync to graph store and trigger edge recalculation

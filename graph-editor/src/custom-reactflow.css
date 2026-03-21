@@ -1,3 +1,11 @@
+/* Dropzone highlight during drag — title bar / tab bar of analysis containers */
+[data-dropzone].dropzone-highlight {
+  outline: 2px dashed var(--accent-primary, #3b82f6);
+  outline-offset: -1px;
+  background: color-mix(in srgb, var(--accent-primary, #3b82f6) 8%, transparent) !important;
+  transition: outline-color 0.15s, background 0.15s;
+}
+
 /* Hidden node and edge transparency */
 .react-flow__node.hidden {
   opacity: 0.1 !important;

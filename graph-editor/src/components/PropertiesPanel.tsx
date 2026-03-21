@@ -152,7 +152,8 @@ function CanvasAnalysisPropertiesSection({ analysisId, graph, setGraph, saveHist
   const fetchKeyRef = useRef('');
   const [editingScenarioId, setEditingScenarioId] = useState<string | null>(null);
 
-  const analyticsDsl = analysis?.recipe?.analysis?.analytics_dsl || '';
+  const activeCI = analysis?.content_items?.[0];
+  const analyticsDsl = activeCI?.analytics_dsl || analysis?.recipe?.analysis?.analytics_dsl || '';
   const selectedType = analysis?.recipe?.analysis?.analysis_type || '';
   const cachedResult = canvasAnalysisResultCache.get(analysisId);
 
@@ -169,6 +170,10 @@ function CanvasAnalysisPropertiesSection({ analysisId, graph, setGraph, saveHist
   const updateRecipeAnalysis = useCallback((field: string, value: any) => {
     const nextGraph = mutateCanvasAnalysisGraph(graph, analysisId, (a) => {
       if (a?.recipe?.analysis) (a.recipe.analysis as any)[field] = value;
+      // Mirror analytics_dsl to all content items (tab-level DSL)
+      if (field === 'analytics_dsl' && a.content_items) {
+        for (const ci of a.content_items) ci.analytics_dsl = value;
+      }
     });
     if (!nextGraph) return;
     setGraph(nextGraph);
@@ -445,11 +450,17 @@ function CanvasAnalysisPropertiesSection({ analysisId, graph, setGraph, saveHist
         <ScenarioQueryEditModal
           isOpen={true}
           scenarioName={isEditingCurrentLayerDsl ? 'Current layer' : (editingScenario?.name || editingScenarioId || '')}
-          currentDSL={isEditingCurrentLayerDsl ? (analysis.chart_current_layer_dsl || '') : (editingScenario?.effective_dsl || '')}
+          currentDSL={isEditingCurrentLayerDsl ? (activeCI?.chart_current_layer_dsl || analysis.chart_current_layer_dsl || '') : (editingScenario?.effective_dsl || '')}
           inheritedDSL={graphCurrentDSL || ''}
           onSave={(newDSL) => {
             if (isEditingCurrentLayerDsl) {
-              updateAnalysis({ chart_current_layer_dsl: newDSL || undefined });
+              const nextGraph = mutateCanvasAnalysisGraph(graph, analysisId, (a) => {
+                a.chart_current_layer_dsl = newDSL || undefined;
+                if (a.content_items) {
+                  for (const ci of a.content_items) ci.chart_current_layer_dsl = newDSL || undefined;
+                }
+              });
+              if (nextGraph) setGraph(nextGraph);
               saveHistoryState('Update current layer DSL');
             } else {
               const nextGraph = structuredClone(graph);
@@ -1218,7 +1229,19 @@ export default function PropertiesPanel({
       if (next.metadata) {
         next.metadata.updated_at = new Date().toISOString();
       }
-      
+
+      // MODEL_VARS: Re-resolve promoted scalars when preference or model_vars changes (doc 15 §8)
+      if (paramSlot === 'p' && (
+        'model_source_preference' in actualChanges ||
+        'model_source_preference_overridden' in actualChanges ||
+        'model_vars' in actualChanges
+      )) {
+        const { applyPromotion } = await import('../services/modelVarsResolution');
+        if (next.edges[edgeIndex].p) {
+          applyPromotion(next.edges[edgeIndex].p, next.model_source_preference);
+        }
+      }
+
       // For drag interactions (sliders) we avoid graphMutationService and just update the graph in place.
       // For committed updates, route through graphMutationService so topology-sensitive changes (e.g. enabling latency)
       // can trigger MSMDC regeneration (anchors).
@@ -1727,6 +1750,95 @@ export default function PropertiesPanel({
                   Fallback connection for all edges. Per-edge connection overrides this.
                 </div>
               </div>
+            </CollapsibleSection>
+
+            <CollapsibleSection title="Model Source" defaultOpen={false} icon={Settings}>
+              <div className="property-section">
+                <label className="property-label">Default Source</label>
+                <select
+                  className="property-input"
+                  value={graph?.model_source_preference || 'best_available'}
+                  onChange={async (e) => {
+                    const val = e.target.value;
+                    if (!graph) return;
+                    const next = structuredClone(graph);
+                    next.model_source_preference = (val === 'best_available' ? undefined : val) as any;
+                    if (next.metadata) next.metadata.updated_at = new Date().toISOString();
+                    // Re-resolve promoted scalars for all edges without per-edge override (doc 15 §8.3)
+                    const { applyPromotion } = await import('../services/modelVarsResolution');
+                    for (const edge of (next.edges ?? [])) {
+                      if (edge.p?.model_vars?.length && !edge.p.model_source_preference_overridden) {
+                        applyPromotion(edge.p, next.model_source_preference);
+                      }
+                    }
+                    setGraph(next);
+                    saveHistoryState('Update model source preference');
+                  }}
+                >
+                  <option value="best_available">Auto (best available)</option>
+                  <option value="bayesian">Bayesian</option>
+                  <option value="analytic">Analytic</option>
+                </select>
+                <div style={{ fontSize: '11px', color: '#6B7280', marginTop: '4px' }}>
+                  Which model source to promote to scalars across all edges. Per-edge override available in edge properties.
+                </div>
+              </div>
+
+              {/* §18.2 Summary row + §18.3 Last-fit info */}
+              {(() => {
+                const edges = graph?.edges ?? [];
+                const withVars = edges.filter((e: any) => e.p?.model_vars?.length);
+                if (withVars.length === 0) return null;
+                const counts = { bayesian: 0, analytic: 0, manual: 0, overridden: 0 };
+                let lastFit: string | undefined;
+                let gatedCount = 0;
+                let totalBayes = 0;
+                for (const edge of withVars) {
+                  const p = edge.p;
+                  if (!p) continue;
+                  // Count by source presence
+                  for (const v of p.model_vars ?? []) {
+                    if (v.source === 'bayesian') {
+                      totalBayes++;
+                      if (v.quality?.gate_passed) gatedCount++;
+                      if (!lastFit || v.source_at > (lastFit || '')) lastFit = v.source_at;
+                    }
+                  }
+                  // Count active sources (simplified: use the first matching)
+                  const bayesEntry = p.model_vars?.find((v: any) => v.source === 'bayesian' && v.quality?.gate_passed);
+                  const analyticEntry = p.model_vars?.find((v: any) => v.source === 'analytic');
+                  const manualEntry = p.model_vars?.find((v: any) => v.source === 'manual');
+                  if (p.model_source_preference_overridden) {
+                    counts.overridden++;
+                    if (p.model_source_preference === 'manual' && manualEntry) counts.manual++;
+                    else if (p.model_source_preference === 'analytic' && analyticEntry) counts.analytic++;
+                    else if (p.model_source_preference === 'bayesian' && bayesEntry) counts.bayesian++;
+                    else if (bayesEntry) counts.bayesian++;
+                    else if (analyticEntry) counts.analytic++;
+                  } else {
+                    // Graph default
+                    if (bayesEntry) counts.bayesian++;
+                    else if (analyticEntry) counts.analytic++;
+                  }
+                }
+                return (
+                  <>
+                    <div style={{ fontSize: '11px', color: '#6B7280', marginTop: '8px', lineHeight: 1.6 }}>
+                      <strong>Sources:</strong>{' '}
+                      {counts.bayesian > 0 && <span>{counts.bayesian} Bayesian · </span>}
+                      {counts.analytic > 0 && <span>{counts.analytic} Analytic · </span>}
+                      {counts.manual > 0 && <span>{counts.manual} Manual · </span>}
+                      {counts.overridden > 0 && <span>{counts.overridden} overridden</span>}
+                      {counts.bayesian === 0 && counts.analytic === 0 && counts.manual === 0 && <span>none</span>}
+                    </div>
+                    {totalBayes > 0 && (
+                      <div style={{ fontSize: '11px', color: '#6B7280', marginTop: '4px' }}>
+                        <strong>Last fit:</strong> {lastFit || '–'} · {gatedCount}/{totalBayes} edges passed quality gate
+                      </div>
+                    )}
+                  </>
+                );
+              })()}
             </CollapsibleSection>
 
             <CollapsibleSection title="Query" defaultOpen={false} icon={Sliders}>

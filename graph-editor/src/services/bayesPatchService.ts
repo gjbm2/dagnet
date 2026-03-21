@@ -10,12 +10,25 @@
  *      § "Return path re-architecture: patch file model"
  */
 
+import type { ModelVarsEntry, ModelVarsQuality } from '../types';
 import { fileRegistry } from '../contexts/TabContext';
 import { sessionLogService } from './sessionLogService';
+import { upsertModelVars, ukDateNow, applyPromotion } from './modelVarsResolution';
 
 console.log('[bayesPatchService] Module loaded');
 
 const FIT_HISTORY_MAX_ENTRIES = 20;
+
+// ── Quality gate for model_vars (doc 15 §3) ────────────────────────────────
+// Same thresholds as bayesQualityTier 'failed' tier.
+const RHAT_GATE = 1.1;
+const ESS_GATE = 100;
+
+function meetsQualityGate(prob: { ess: number; rhat: number | null; provenance: string }, divergences: number): boolean {
+  if (prob.rhat != null && prob.rhat > RHAT_GATE) return false;
+  if (divergences > 0 && prob.ess < ESS_GATE) return false;
+  return true;
+}
 
 // --- Direct fetch + apply (happy path: browser is open) ---
 
@@ -127,8 +140,17 @@ export interface BayesPatchEdge {
     ess: number;
     rhat: number | null;
     provenance: string;
+    // Edge-level onset posterior (Phase D.O) — present when onset is latent
+    onset_mean?: number;
+    onset_sd?: number;
+    onset_hdi_lower?: number;
+    onset_hdi_upper?: number;
+    onset_mu_corr?: number;
     // Path-level (cohort) latency — present when cohort latency is fitted
     path_onset_delta_days?: number;
+    path_onset_sd?: number;
+    path_onset_hdi_lower?: number;
+    path_onset_hdi_upper?: number;
     path_mu_mean?: number;
     path_mu_sd?: number;
     path_sigma_mean?: number;
@@ -226,8 +248,10 @@ export async function applyPatch(patch: BayesPatchFile): Promise<number> {
 
       if (patchEdge.probability) {
         const prob = patchEdge.probability;
-        graphEdge.p.mean = prob.mean;
-        graphEdge.p.stdev = prob.stdev;
+        // NOTE (doc 15 §7, Option A): Do NOT overwrite p.mean/p.stdev from
+        // the Bayesian posterior. Those stay as analytic pipeline output.
+        // The Bayesian mean lives in the model_vars entry and is promoted
+        // to p.mean only when the resolution function selects it.
         graphEdge.p.posterior = {
           distribution: 'beta',
           alpha: prob.alpha,
@@ -261,9 +285,20 @@ export async function applyPatch(patch: BayesPatchFile): Promise<number> {
           fitted_at: patch.fitted_at,
           fingerprint: patch.fingerprint,
           provenance: lat.provenance,
+          // Edge-level onset posterior (Phase D.O)
+          ...(lat.onset_mean != null ? {
+            onset_mean: lat.onset_mean,
+            onset_sd: lat.onset_sd,
+            onset_hdi_lower: lat.onset_hdi_lower,
+            onset_hdi_upper: lat.onset_hdi_upper,
+            ...(lat.onset_mu_corr != null ? { onset_mu_corr: lat.onset_mu_corr } : {}),
+          } : {}),
           // Path-level (cohort) latency
           ...(lat.path_mu_mean != null ? {
             path_onset_delta_days: lat.path_onset_delta_days,
+            path_onset_sd: lat.path_onset_sd,
+            path_onset_hdi_lower: lat.path_onset_hdi_lower,
+            path_onset_hdi_upper: lat.path_onset_hdi_upper,
             path_mu_mean: lat.path_mu_mean,
             path_mu_sd: lat.path_mu_sd,
             path_sigma_mean: lat.path_sigma_mean,
@@ -272,11 +307,56 @@ export async function applyPatch(patch: BayesPatchFile): Promise<number> {
           } : {}),
         };
       }
+
+      // ── Upsert Bayesian model_vars entry (doc 15 §5.2) ──────────────
+      if (patchEdge.probability) {
+        const prob = patchEdge.probability;
+        const lat = patchEdge.latency;
+        const divergences = 'divergences' in prob ? (prob as any).divergences ?? 0 : 0;
+        const gated = meetsQualityGate(prob, divergences);
+
+        const bayesEntry: ModelVarsEntry = {
+          source: 'bayesian',
+          source_at: patch.fitted_at,
+          probability: {
+            mean: prob.alpha / (prob.alpha + prob.beta),
+            stdev: Math.sqrt(
+              (prob.alpha * prob.beta) /
+              ((prob.alpha + prob.beta) ** 2 * (prob.alpha + prob.beta + 1))
+            ),
+          },
+          ...(lat ? {
+            latency: {
+              mu: lat.mu_mean,
+              sigma: lat.sigma_mean,
+              t95: Math.exp(lat.mu_mean + 1.645 * lat.sigma_mean) + (lat.onset_mean ?? graphEdge.p.latency?.onset_delta_days ?? 0),
+              onset_delta_days: lat.onset_mean ?? graphEdge.p.latency?.onset_delta_days ?? 0,
+              ...(lat.path_mu_mean != null ? {
+                path_mu: lat.path_mu_mean,
+                path_sigma: lat.path_sigma_mean,
+                path_t95: Math.exp(lat.path_mu_mean + 1.645 * (lat.path_sigma_mean ?? 0)) + (lat.path_onset_delta_days ?? 0),
+              } : {}),
+            },
+          } : {}),
+          quality: {
+            rhat: prob.rhat ?? 0,
+            ess: prob.ess,
+            divergences,
+            evidence_grade: prob.ess >= 400 && (prob.rhat === null || prob.rhat < 1.05) ? 3 : 0,
+            gate_passed: gated,
+          },
+        };
+
+        upsertModelVars(graphEdge.p, bayesEntry);
+
+        // Run resolution to update promoted scalars (doc 15 §8)
+        applyPromotion(graphEdge.p, graphDoc.model_source_preference);
+      }
     }
 
     await fileRegistry.updateFile(patch.graph_id, graphDoc);
     sessionLogService.addChild(logOpId, 'info', 'PATCH_GRAPH_UPDATED',
-      `Updated _bayes + edge posteriors on ${patch.graph_id}`);
+      `Updated _bayes + edge posteriors + model_vars on ${patch.graph_id}`);
   }
 
   sessionLogService.endOperation(logOpId, 'success',
@@ -296,11 +376,10 @@ function mergePosteriorsIntoParam(
   if (edge.probability) {
     const prob = edge.probability;
 
-    // Update current values (scalar cascade source)
-    if (paramDoc.values && paramDoc.values.length > 0) {
-      paramDoc.values[0].mean = prob.mean;
-      paramDoc.values[0].stdev = prob.stdev;
-    }
+    // NOTE (doc 15 §7, Option A): Do NOT overwrite values[0].mean/stdev
+    // from the Bayesian posterior. values[0].mean stays as the analytic
+    // pipeline output (k/n from evidence or blend). The Bayesian mean
+    // lives in posterior.alpha/beta and in model_vars.
 
     // Append to fit_history BEFORE overwriting posterior
     const existingPosterior = paramDoc.posterior;
@@ -390,9 +469,20 @@ function mergePosteriorsIntoParam(
       fingerprint,
       provenance: lat.provenance,
       ...(latFitHistory.length > 0 ? { fit_history: latFitHistory } : {}),
+      // Edge-level onset posterior (Phase D.O)
+      ...(lat.onset_mean != null ? {
+        onset_mean: lat.onset_mean,
+        onset_sd: lat.onset_sd,
+        onset_hdi_lower: lat.onset_hdi_lower,
+        onset_hdi_upper: lat.onset_hdi_upper,
+        ...(lat.onset_mu_corr != null ? { onset_mu_corr: lat.onset_mu_corr } : {}),
+      } : {}),
       // Path-level (cohort) latency — present when cohort latency is fitted
       ...(lat.path_mu_mean != null ? {
         path_onset_delta_days: lat.path_onset_delta_days,
+        path_onset_sd: lat.path_onset_sd,
+        path_onset_hdi_lower: lat.path_onset_hdi_lower,
+        path_onset_hdi_upper: lat.path_onset_hdi_upper,
         path_mu_mean: lat.path_mu_mean,
         path_mu_sd: lat.path_mu_sd,
         path_sigma_mean: lat.path_sigma_mean,

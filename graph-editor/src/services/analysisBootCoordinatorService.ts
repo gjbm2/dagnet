@@ -93,7 +93,7 @@ export function collectSnapshotDslStrings(
   const dsls: string[] = [];
   for (const a of analyses) {
     if (!analysisNeedsSnapshots(a)) continue;
-    const dsl = a.recipe?.analysis?.analytics_dsl;
+    const dsl = a.content_items?.[0]?.analytics_dsl || a.recipe?.analysis?.analytics_dsl;
     if (dsl) dsls.push(dsl);
     for (const s of a.recipe?.scenarios || []) {
       if ((s as any).effective_dsl) dsls.push((s as any).effective_dsl);

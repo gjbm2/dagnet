@@ -1,0 +1,300 @@
+/* ModelVarsCards — three-card source layout (doc 15 §17) */
+
+.mv-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 8px 0;
+}
+
+/* ── Card container ─────────────────────────────────────────────── */
+
+.mv-card {
+  border: 1px solid var(--mv-border, #E5E7EB);
+  border-radius: 6px;
+  font-size: 12px;
+  overflow: hidden;
+  transition: border-color 0.15s, background 0.15s;
+}
+.mv-card--active {
+  border-color: var(--mv-active-border, #60A5FA);
+  background: var(--mv-active-bg, #EFF6FF);
+}
+.mv-card--pinned {
+  border-color: var(--mv-pinned-border, #34D399);
+  background: var(--mv-pinned-bg, #ECFDF5);
+}
+
+/* ── Collapse header (clickable strip) ──────────────────────────── */
+
+.mv-card-collapse-header {
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+  padding: 6px 8px;
+  gap: 4px;
+  user-select: none;
+}
+.mv-card-collapse-header:hover {
+  background: var(--mv-header-hover, rgba(0,0,0,0.03));
+}
+
+.mv-chevron {
+  font-size: 9px;
+  color: var(--mv-chevron-color, #9CA3AF);
+  transition: transform 0.15s;
+  flex-shrink: 0;
+  width: 12px;
+  text-align: center;
+}
+.mv-chevron--open {
+  transform: rotate(90deg);
+}
+
+/* ── Card header (inside collapse strip or standalone for Manual) ── */
+
+.mv-card-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+}
+
+.mv-card-title {
+  font-weight: 600;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--mv-title-color, #374151);
+  flex-shrink: 0;
+}
+
+.mv-card-date {
+  font-size: 10px;
+  color: var(--mv-date-color, #9CA3AF);
+}
+
+.mv-card-header-spacer {
+  flex: 1;
+}
+
+/* §17.2: Active badge (centre-right) */
+.mv-active-badge {
+  font-size: 9px;
+  font-weight: 500;
+  padding: 1px 6px;
+  border-radius: 3px;
+  background: var(--mv-badge-bg, #DBEAFE);
+  color: var(--mv-badge-color, #2563EB);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  flex-shrink: 0;
+}
+.mv-active-badge--pinned {
+  background: var(--mv-badge-pinned-bg, #D1FAE5);
+  color: var(--mv-badge-pinned-color, #065F46);
+}
+
+/* §17.3: Toggle button */
+.mv-toggle {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 2px solid var(--mv-toggle-border, #D1D5DB);
+  background: transparent;
+  cursor: pointer;
+  padding: 0;
+  transition: border-color 0.15s, background 0.15s;
+  flex-shrink: 0;
+}
+.mv-toggle:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+/* §17.3.2: Hover preview — grey toggle shows green preview on hover */
+.mv-toggle:not(:disabled):hover {
+  border-color: var(--mv-pinned-border, #34D399);
+  background: rgba(52, 211, 153, 0.15);
+}
+.mv-toggle--auto {
+  border-color: var(--mv-active-border, #60A5FA);
+  background: var(--mv-toggle-auto-bg, #BFDBFE);
+}
+/* §17.3.2: Auto toggle shows green on hover (preview pin) */
+.mv-toggle--auto:not(:disabled):hover {
+  border-color: var(--mv-pinned-border, #34D399);
+  background: rgba(52, 211, 153, 0.3);
+}
+.mv-toggle--pinned {
+  border-color: var(--mv-pinned-border, #34D399);
+  background: var(--mv-pinned-border, #34D399);
+}
+
+/* ── Card body ──────────────────────────────────────────────────── */
+
+.mv-card-body {
+  padding: 4px 10px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.mv-section-label {
+  font-size: 9px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--mv-section-color, #9CA3AF);
+  margin-top: 4px;
+  margin-bottom: 1px;
+}
+
+.mv-placeholder {
+  color: var(--mv-placeholder-color, #9CA3AF);
+  font-style: italic;
+  font-size: 11px;
+  padding: 6px 10px;
+}
+
+/* ── Row (read-only and editable fields) ────────────────────────── */
+
+.mv-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 22px;
+}
+.mv-row--zapoff {
+  position: relative;
+}
+
+.mv-row-label {
+  font-size: 10px;
+  color: var(--mv-label-color, #6B7280);
+  min-width: 54px;
+  flex-shrink: 0;
+}
+
+.mv-row-value {
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--mv-value-color, #111827);
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.mv-row-unit {
+  font-size: 10px;
+  color: var(--mv-label-color, #6B7280);
+}
+
+/* ── Editable input (Manual card + ZapOff) ──────────────────────── */
+
+.mv-edit-input {
+  width: 60px;
+  padding: 1px 4px;
+  border: 1px solid var(--mv-input-border, #E5E7EB);
+  border-radius: 3px;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  background: var(--mv-input-bg, #fff);
+  color: var(--mv-value-color, #111827);
+}
+.mv-edit-input:focus {
+  outline: none;
+  border-color: var(--mv-active-border, #60A5FA);
+}
+.mv-edit-input--placeholder {
+  color: var(--mv-placeholder-color, #9CA3AF);
+  font-style: italic;
+}
+.mv-edit-input--overridden {
+  border-color: var(--mv-active-border, #60A5FA);
+  background: var(--mv-overridden-bg, #F0F9FF);
+}
+
+/* ZapOff clear button */
+.mv-zapoff-btn {
+  position: absolute;
+  right: -2px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 12px;
+  padding: 0 2px;
+  color: var(--mv-active-border, #60A5FA);
+  opacity: 0.7;
+}
+.mv-zapoff-btn:hover {
+  opacity: 1;
+}
+
+/* ── Quality section (§17.2.1) ──────────────────────────────────── */
+
+.mv-quality-section {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.mv-gate-badge {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-size: 10px;
+  font-weight: 500;
+  margin-bottom: 2px;
+}
+.mv-gate-badge--passed {
+  background: var(--mv-gate-passed-bg, #D1FAE5);
+  color: var(--mv-gate-passed-color, #065F46);
+}
+.mv-gate-badge--failed {
+  background: var(--mv-gate-failed-bg, #FEE2E2);
+  color: var(--mv-gate-failed-color, #991B1B);
+}
+
+/* ── Dark mode ──────────────────────────────────────────────────── */
+
+[data-theme="dark"] .mv-card {
+  --mv-border: #374151;
+  --mv-active-border: #3B82F6;
+  --mv-active-bg: #1E293B;
+  --mv-pinned-border: #10B981;
+  --mv-pinned-bg: rgba(6, 78, 59, 0.2);
+  --mv-header-hover: rgba(255,255,255,0.03);
+  --mv-chevron-color: #6B7280;
+  --mv-title-color: #D1D5DB;
+  --mv-date-color: #6B7280;
+  --mv-badge-bg: #1E3A5F;
+  --mv-badge-color: #93C5FD;
+  --mv-badge-pinned-bg: #064E3B;
+  --mv-badge-pinned-color: #6EE7B7;
+  --mv-toggle-border: #4B5563;
+  --mv-toggle-auto-bg: #1E3A5F;
+  --mv-section-color: #6B7280;
+  --mv-placeholder-color: #6B7280;
+  --mv-label-color: #9CA3AF;
+  --mv-value-color: #E5E7EB;
+  --mv-input-border: #374151;
+  --mv-input-bg: #1F2937;
+  --mv-overridden-bg: #1E293B;
+  --mv-gate-passed-bg: #064E3B;
+  --mv-gate-passed-color: #6EE7B7;
+  --mv-gate-failed-bg: #7F1D1D;
+  --mv-gate-failed-color: #FCA5A5;
+}
+
+/* Remove spinner arrows on number inputs */
+.mv-edit-input::-webkit-inner-spin-button,
+.mv-edit-input::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+.mv-edit-input[type=number] {
+  -moz-appearance: textfield;
+}

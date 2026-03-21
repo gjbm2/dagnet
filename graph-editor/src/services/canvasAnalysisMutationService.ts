@@ -1,6 +1,25 @@
-import type { GraphData, CanvasAnalysis, CanvasAnalysisMode } from '../types';
+import type { GraphData, CanvasAnalysis, CanvasAnalysisMode, ContentItem } from '../types';
 import type { ChartRecipeScenario } from '../types/chartRecipe';
 import { computeRebaseDelta, augmentDSLWithConstraint, normalizeConstraintString } from '../lib/queryDSL';
+
+/**
+ * After a mutator runs, sync flat fields to content_items[0] so both
+ * representations stay consistent during the migration period.
+ *
+ * Only applies to single-tab containers where the container-level flat fields
+ * ARE the tab's fields. Multi-tab containers have per-item authority — each
+ * content item owns its own title, analysis_type, view_type, etc.
+ */
+function syncFlatFieldsToContentItems(analysis: CanvasAnalysis): void {
+  if (!analysis.content_items || analysis.content_items.length !== 1) return;
+  const item = analysis.content_items[0];
+  item.analysis_type = analysis.recipe?.analysis?.analysis_type ?? item.analysis_type;
+  item.view_type = analysis.view_mode ?? item.view_type;
+  item.chart_kind = analysis.chart_kind;
+  item.display = analysis.display;
+  item.title = analysis.title;
+  item.analysis_type_overridden = analysis.analysis_type_overridden;
+}
 
 export function mutateCanvasAnalysisGraph(
   graph: GraphData | null | undefined,
@@ -12,6 +31,7 @@ export function mutateCanvasAnalysisGraph(
   const analysis = nextGraph.canvasAnalyses?.find((a: any) => a.id === analysisId) as CanvasAnalysis | undefined;
   if (!analysis) return null;
   mutator(analysis, nextGraph);
+  syncFlatFieldsToContentItems(analysis);
   if (nextGraph.metadata) nextGraph.metadata.updated_at = new Date().toISOString();
   return nextGraph;
 }
@@ -158,5 +178,51 @@ export function advanceMode(
       }
       break;
     }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Content item mutations
+// ---------------------------------------------------------------------------
+
+/**
+ * Remove a content item from a canvas analysis by its ID.
+ * Returns true if the analysis should be deleted (last item removed).
+ */
+export function removeContentItem(analysis: CanvasAnalysis, contentItemId: string): boolean {
+  if (!analysis.content_items) return false;
+  analysis.content_items = analysis.content_items.filter(ci => ci.id !== contentItemId);
+  return analysis.content_items.length === 0;
+}
+
+/**
+ * Add a content item to a canvas analysis.
+ * When `preset` is provided, its fields are merged into the new item
+ * (useful for drop-to-snap from hover preview tabs).
+ * Returns the new content item.
+ */
+export function addContentItem(analysis: CanvasAnalysis, preset?: Partial<ContentItem>): ContentItem {
+  if (!analysis.content_items) analysis.content_items = [];
+  const newItem: ContentItem = {
+    analysis_type: '',
+    view_type: 'chart',
+    ...preset,
+    id: crypto.randomUUID(), // always generate a fresh ID regardless of preset
+  };
+  analysis.content_items.push(newItem);
+  return newItem;
+}
+
+/**
+ * Ensure all content items on an analysis have analytics_dsl populated.
+ * Backfills from container-level recipe if missing (legacy migration).
+ */
+export function ensureContentItemDsl(analysis: CanvasAnalysis): void {
+  if (!analysis.content_items) return;
+  const containerDsl = analysis.recipe?.analysis?.analytics_dsl;
+  const containerLayerDsl = analysis.chart_current_layer_dsl;
+  for (const ci of analysis.content_items) {
+    if (!ci.analytics_dsl && containerDsl) ci.analytics_dsl = containerDsl;
+    if (!ci.chart_current_layer_dsl && containerLayerDsl) ci.chart_current_layer_dsl = containerLayerDsl;
   }
 }

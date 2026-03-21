@@ -1608,7 +1608,7 @@ export function useGraphSync(params: UseGraphSyncParams): UseGraphSyncReturn {
   // -------------------------------------------------------------------------
 
   useEffect(() => {
-    if (guards.isBlocked()) {
+    if (guards.isBlocked() || guards.isInteracting()) {
       return;
     }
     if (edges.length === 0) return;

@@ -29,6 +29,12 @@ interface AnalysisInfoCardProps {
   onFileLink?: (fileId: string, type: string) => void;
   /** Extra React content to append after a specific tab's table. Keyed by tab ID. */
   tabExtra?: Record<string, React.ReactNode>;
+  /**
+   * When set, filter data rows to only those matching this tab/facet ID.
+   * Renders flat (no tab bar) — the tab bar lives at the container level.
+   * Used by multi-content-item containers where each content item shows one facet.
+   */
+  facet?: string;
 }
 
 interface RowData {
@@ -63,9 +69,11 @@ const TAB_LABELS: Record<string, string> = {
 // Other tabs show a single value column even in multi-scenario mode.
 const SCENARIO_AWARE_TABS = new Set(['overview', 'structure']);
 
-export function AnalysisInfoCard({ result, fontSize, defaultTab, onFileLink, tabExtra }: AnalysisInfoCardProps) {
+export function AnalysisInfoCard({ result, fontSize, defaultTab, onFileLink, tabExtra, facet }: AnalysisInfoCardProps) {
   const sizeZoom = fontSizeZoom(fontSize);
-  const data = result.data || [];
+  const allData = result.data || [];
+  // When facet is set, filter to only rows matching that tab — renders flat (no tab bar).
+  const data = facet ? allData.filter((row: any) => row.tab === facet) : allData;
 
   // Detect tabs: rows with a `tab` field
   const tabIds = useMemo(() => {
@@ -100,28 +108,10 @@ export function AnalysisInfoCard({ result, fontSize, defaultTab, onFileLink, tab
     return { scenarioIds: scIds, scenarioMeta: scMeta };
   }, [data, result.dimension_values]);
 
-  if (data.length === 0) {
-    return <div className="info-card-empty">No data</div>;
-  }
-
-  if (!hasTabs) {
-    // No tabs — render flat as before
-    const sections = buildSections(data, scenarioIds, scenarioMeta, result.dimension_values);
-    return (
-      <div className="info-card" style={sizeZoom !== 1 ? { zoom: sizeZoom } as any : undefined}>
-        <InfoTable sections={sections} scenarioIds={scenarioIds} scenarioMeta={scenarioMeta} onFileLink={onFileLink} />
-      </div>
-    );
-  }
-
-  // Tabbed layout
-  const tabs: TabDefinition[] = tabIds.map(id => ({
-    id,
-    label: TAB_LABELS[id] || id,
-  }));
-
-  // Build sections per tab — only pass scenario info to scenario-aware tabs
+  // Build sections per tab — MUST be unconditional (before early returns) to
+  // keep hook count stable. Skips work when hasTabs is false.
   const sectionsByTab = useMemo(() => {
+    if (!hasTabs) return {};
     const result_: Record<string, SectionData[]> = {};
     for (const tabId of tabIds) {
       const tabRows = data.filter(row => row.tab === tabId);
@@ -133,7 +123,29 @@ export function AnalysisInfoCard({ result, fontSize, defaultTab, onFileLink, tab
       );
     }
     return result_;
-  }, [data, tabIds, scenarioIds, scenarioMeta]);
+  }, [hasTabs, data, tabIds, scenarioIds, scenarioMeta]);
+
+  if (data.length === 0) {
+    return <div className="info-card-empty">No data</div>;
+  }
+
+  if (!hasTabs) {
+    // No tabs — render flat (single tab, faceted view, or no tab field at all)
+    const sections = buildSections(data, scenarioIds, scenarioMeta, result.dimension_values);
+    const extra = facet ? tabExtra?.[facet] : undefined;
+    return (
+      <div className="info-card" style={sizeZoom !== 1 ? { zoom: sizeZoom } as any : undefined}>
+        <InfoTable sections={sections} scenarioIds={scenarioIds} scenarioMeta={scenarioMeta} onFileLink={onFileLink} />
+        {extra}
+      </div>
+    );
+  }
+
+  // Tabbed layout
+  const tabs: TabDefinition[] = tabIds.map(id => ({
+    id,
+    label: TAB_LABELS[id] || id,
+  }));
 
   const latencyCdfMeta = (result as any).metadata?.latency_cdf;
 

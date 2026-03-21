@@ -13,6 +13,7 @@ import {
   recordSnapshotBootLedgerStage,
 } from '../lib/snapshotBootTrace';
 import type { CanvasAnalysis } from '../types';
+import { getActiveContentItem } from '../utils/canvasAnalysisAccessors';
 import { isChartComputeReady } from '../services/chartHydrationService';
 import {
   prepareAnalysisComputeInputs,
@@ -40,6 +41,10 @@ interface UseCanvasAnalysisComputeResult {
 
 export const canvasAnalysisTransientCache = new Map<string, AnalysisResult>();
 export const canvasAnalysisResultCache = new Map<string, AnalysisResult>();
+/** Per-content-item result cache — used when a tab carries its own result
+ *  (e.g. snapped-in from hover preview with a different analysis type).
+ *  Keyed by content item UUID. */
+export const contentItemResultCache = new Map<string, AnalysisResult>();
 
 export function useCanvasAnalysisCompute({
   analysis: analysisProp,
@@ -60,6 +65,8 @@ export function useCanvasAnalysisCompute({
     const fromStore = (graph as any)?.canvasAnalyses?.find((a: any) => a.id === analysisProp.id);
     return fromStore || analysisProp;
   }, [graph, analysisProp]);
+
+  const contentItem = getActiveContentItem(analysis);
 
   const [result, setResult] = useState<AnalysisResult | null>(() => {
     const cached = canvasAnalysisTransientCache.get(analysis.id);
@@ -88,12 +95,12 @@ export function useCanvasAnalysisCompute({
   const timeSeriesRetryCountRef = useRef(0);
   const snapshotEmptyRetryCountRef = useRef(0);
 
-  const isTimeSeriesChartKind = analysis?.chart_kind === 'time_series';
+  const isTimeSeriesChartKind = contentItem?.chart_kind === 'time_series';
   const expectsTimeSeriesBranchResult =
     analysis?.recipe?.analysis?.analysis_type === 'branch_comparison'
     && isTimeSeriesChartKind;
   const analysisType = analysis?.recipe?.analysis?.analysis_type;
-  const analyticsDsl = analysis?.recipe?.analysis?.analytics_dsl || '';
+  const analyticsDsl = contentItem?.analytics_dsl || analysis?.recipe?.analysis?.analytics_dsl || '';
   const snapshotMeta = useMemo(
     () => ANALYSIS_TYPES.find(t => t.id === analysisType),
     [analysisType],
@@ -112,7 +119,7 @@ export function useCanvasAnalysisCompute({
     ]),
     [],
   );
-  const chartKindNeedsSnapshots = !analysis.chart_kind || SNAPSHOT_REQUIRING_CHART_KINDS.has(analysis.chart_kind);
+  const chartKindNeedsSnapshots = !contentItem.chart_kind || SNAPSHOT_REQUIRING_CHART_KINDS.has(contentItem.chart_kind);
   const needsSnapshots = !!snapshotMeta?.snapshotContract && chartKindNeedsSnapshots;
   const resultHasTimeDimension = !!(result?.semantics?.dimensions || []).some((d: any) => d?.id === 'date' || d?.type === 'time');
   const debugSnapshotChart = debugSnapshotChartOverride ?? isSnapshotBootChart(analysis);
@@ -316,7 +323,7 @@ export function useCanvasAnalysisCompute({
                 analysisType,
                 analyticsDsl,
                 currentDSL,
-                chartCurrentLayerDsl: analysis.chart_current_layer_dsl,
+                chartCurrentLayerDsl: contentItem?.chart_current_layer_dsl || analysis.chart_current_layer_dsl,
                 needsSnapshots,
                 workspace,
                 rawScenarioStateLoaded: Boolean(rawScenarioState),
@@ -328,7 +335,7 @@ export function useCanvasAnalysisCompute({
                 ),
                 getScenarioName,
                 getScenarioColour,
-                display: analysis.display as Record<string, unknown> | undefined,
+                display: contentItem.display as Record<string, unknown> | undefined,
               }
             : (() => {
                 // Patch the 'current' underlayer's colour with the live tab value
@@ -348,13 +355,13 @@ export function useCanvasAnalysisCompute({
                   analysisType,
                   analyticsDsl,
                   currentDSL,
-                  chartCurrentLayerDsl: analysis.chart_current_layer_dsl,
+                  chartCurrentLayerDsl: contentItem?.chart_current_layer_dsl || analysis.chart_current_layer_dsl,
                   needsSnapshots,
                   workspace,
                   customScenarios,
                   hiddenScenarioIds: (((analysis.display as any)?.hidden_scenarios) || []) as string[],
                   frozenWhatIfDsl: analysis.recipe?.analysis?.what_if_dsl,
-                  display: analysis.display as Record<string, unknown> | undefined,
+                  display: contentItem.display as Record<string, unknown> | undefined,
                 };
               })(),
         );

@@ -5,6 +5,7 @@
   flex-direction: column;
   min-height: 0;          /* allow flex shrink inside parent */
   height: 100%;
+  overflow: hidden;        /* tab bar stays pinned; panel scrolls */
 }
 
 .dagnet-tabs--single {

@@ -19,7 +19,8 @@ import {
   createCanvasAnalysisInGraph,
   buildAddChartPayload,
 } from './creationTools';
-import { canvasAnalysisTransientCache } from '../../hooks/useCanvasAnalysisCompute';
+import { canvasAnalysisTransientCache, contentItemResultCache } from '../../hooks/useCanvasAnalysisCompute';
+import { addContentItem, ensureContentItemDsl } from '../../services/canvasAnalysisMutationService';
 import { fileRegistry } from '../../contexts/TabContext';
 import { dataOperationsService } from '../../services/dataOperationsService';
 
@@ -34,6 +35,7 @@ export function setPendingAnalysisPayload(payload: any) { pendingAnalysisPayload
 
 export interface UseCanvasCreationParams {
   graph: any;
+  graphRef: React.MutableRefObject<any>;
   nodes: Node[];
   edges: Edge[];
   setGraph: (graph: any, oldGraph?: any, source?: string) => void;
@@ -91,6 +93,7 @@ export interface UseCanvasCreationReturn {
 
 export function useCanvasCreation({
   graph,
+  graphRef,
   nodes,
   edges,
   setGraph,
@@ -304,6 +307,82 @@ export function useCanvasCreation({
     window.addEventListener('dagnet:addAnalysis', handler as any);
     return () => window.removeEventListener('dagnet:addAnalysis', handler as any);
   }, [startAddChart, tabId, effectiveActiveTabId]);
+
+  // Snap a content item into an existing canvas analysis container
+  // (fired when a hover-preview tab is dropped onto a canvas analysis node).
+  useEffect(() => {
+    const handler = (e: CustomEvent) => {
+      if (tabId !== effectiveActiveTabId) return;
+      const { targetAnalysisId, contentItem: rawItem, analysisResult } = e.detail || {};
+      if (!targetAnalysisId || !rawItem || !graph) return;
+      console.log('[SnapHandler] SNAP event received', {
+        targetAnalysisId: targetAnalysisId?.slice(0, 12),
+        rawItem: { ...rawItem, analytics_dsl: rawItem.analytics_dsl?.slice(0, 40) },
+        hasResult: !!analysisResult,
+        existingItemCount: graph.canvasAnalyses?.find((a: any) => a.id === targetAnalysisId)?.content_items?.length,
+      });
+      const nextGraph = structuredClone(graph);
+      const analyses: any[] = nextGraph.canvasAnalyses || [];
+      const target = analyses.find((a: any) => a.id === targetAnalysisId);
+      if (!target) { console.warn('[SnapHandler] target not found!', targetAnalysisId); return; }
+      // Ensure content item carries DSL (may be absent on legacy data or hover-preview items)
+      const contentItem = rawItem.analytics_dsl ? rawItem : {
+        ...rawItem,
+        analytics_dsl: rawItem.analytics_dsl || target.recipe?.analysis?.analytics_dsl,
+      };
+      const newItem = addContentItem(target, contentItem);
+      console.log('[SnapHandler] SNAP committed', {
+        newItemId: newItem.id?.slice(0, 12),
+        newItem: { ...newItem, analytics_dsl: newItem.analytics_dsl?.slice(0, 40) },
+        totalItems: target.content_items?.length,
+        hasResult: !!analysisResult,
+      });
+      // Cache the result per content item so the new tab can render immediately
+      // (the container's compute hook produces the container's analysis type result,
+      // which won't match if the snapped-in tab has a different analysis type).
+      if (analysisResult) {
+        contentItemResultCache.set(newItem.id, analysisResult);
+      }
+      if (nextGraph.metadata) nextGraph.metadata.updated_at = new Date().toISOString();
+      setGraphDirect(nextGraph);
+      graphRef.current = nextGraph; // Keep ref in sync — prevents stale-ref race with onUpdate
+      saveHistoryState('Snap tab into container');
+      onSelectedAnnotationChange?.(targetAnalysisId, 'canvasAnalysis');
+    };
+    window.addEventListener('dagnet:snapContentItemToContainer', handler as any);
+    return () => window.removeEventListener('dagnet:snapContentItemToContainer', handler as any);
+  }, [graph, graphRef, setGraphDirect, saveHistoryState, onSelectedAnnotationChange, tabId, effectiveActiveTabId]);
+
+  // Merge two canvas analysis containers — all content items from source are
+  // added to target, then source is deleted. Fired when an analysis node is
+  // dragged and dropped onto another analysis node.
+  useEffect(() => {
+    const handler = (e: CustomEvent) => {
+      if (tabId !== effectiveActiveTabId) return;
+      const { sourceAnalysisId, targetAnalysisId } = e.detail || {};
+      if (!sourceAnalysisId || !targetAnalysisId || !graph) return;
+      const analyses: any[] = graph.canvasAnalyses || [];
+      const source = analyses.find((a: any) => a.id === sourceAnalysisId);
+      const target = analyses.find((a: any) => a.id === targetAnalysisId);
+      if (!source || !target) return;
+      // Ensure source items carry their DSL (backfill from container if needed)
+      ensureContentItemDsl(source);
+      // Move all content items from source into target
+      const sourceItems = source.content_items || [];
+      for (const item of sourceItems) {
+        addContentItem(target, { ...item });
+      }
+      // Delete the source container
+      const nextAnalyses = analyses.filter((a: any) => a.id !== sourceAnalysisId);
+      const nextGraph = { ...graph, canvasAnalyses: nextAnalyses };
+      setGraphDirect(nextGraph);
+      graphRef.current = nextGraph; // Keep ref in sync — prevents stale-ref race with onUpdate
+      saveHistoryState('Merge analysis containers');
+      onSelectedAnnotationChange?.(targetAnalysisId, 'canvasAnalysis');
+    };
+    window.addEventListener('dagnet:mergeContainers', handler as any);
+    return () => window.removeEventListener('dagnet:mergeContainers', handler as any);
+  }, [graph, graphRef, setGraphDirect, saveHistoryState, onSelectedAnnotationChange, tabId, effectiveActiveTabId]);
 
   // -------------------------------------------------------------------------
   // Paste callbacks

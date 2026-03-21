@@ -8,7 +8,6 @@ summarise_posteriors: InferenceData + topology/evidence → InferenceResult
 from __future__ import annotations
 
 import math
-import threading
 import time
 
 from .types import (
@@ -30,97 +29,49 @@ def run_inference(
     config: SamplingConfig | None = None,
     report_progress=None,
 ):
-    """Run NUTS sampling. Returns (InferenceData, QualityMetrics)."""
+    """Run NUTS sampling via nutpie. Returns (InferenceData, QualityMetrics)."""
     import pymc as pm
     import arviz as az
 
     if config is None:
         config = SamplingConfig()
 
-    # Sampling is ~90% of wall time. The percentage reported here is
-    # actual progress through the MCMC draws (0–100%), not a fake layout.
-    # Pre/post-sampling stages report stage labels without fake percentages.
-    use_callback = report_progress is not None
-    total_steps = config.chains * (config.tune + config.draws)
-    steps_done = [0]  # mutable for closure
-    last_pct = [-1]
+    if report_progress:
+        report_progress("sampling", 0, "Starting MCMC (nutpie)…")
 
-    def _sampling_callback(trace, draw):
-        steps_done[0] += 1
-        pct = int(100 * steps_done[0] / total_steps)
-        if pct > last_pct[0]:
-            last_pct[0] = pct
-            phase = "tuning" if draw.tuning else "sampling"
-            report_progress(
-                "sampling", pct,
-                f"{config.chains} chains {phase}",
-            )
-
-    # Select the fastest available sampler backend.
-    # nutpie (Rust) is ~5-10x faster than PyMC default on CPU.
-    # numpyro (JAX) enables GPU — even faster when available.
-    nuts_sampler = "pymc"  # default fallback
     try:
         import nutpie  # noqa: F401
-        nuts_sampler = "nutpie"
+        trace = _sample_nutpie(model, config, report_progress)
     except ImportError:
-        pass
-    # numpyro/JAX GPU is available but currently slower for this model
-    # geometry due to aggressive tree depth (1023 steps/iteration).
-    # Revisit when model reparameterisation improves JAX performance.
-    # try:
-    #     import numpyro  # noqa: F401
-    #     nuts_sampler = "numpyro"
-    # except ImportError:
-    #     pass
+        # Fallback: PyMC native NUTS (no nutpie installed)
+        use_callback = report_progress is not None
+        total_steps = config.chains * (config.tune + config.draws)
+        steps_done = [0]
+        last_pct = [-1]
 
-    sampler_kwargs = dict(
-        draws=config.draws,
-        tune=config.tune,
-        chains=config.chains,
-        cores=config.cores,
-        target_accept=config.target_accept,
-        return_inferencedata=True,
-        random_seed=config.random_seed,
-    )
-
-    if nuts_sampler == "pymc":
-        sampler_kwargs["progressbar"] = not use_callback
-        sampler_kwargs["callback"] = _sampling_callback if use_callback else None
-    else:
-        # nutpie/numpyro don't support PyMC's callback mechanism.
-        # Run a heartbeat thread that reports elapsed time so the
-        # FE poll endpoint shows the job is alive.
-        sampler_kwargs["nuts_sampler"] = nuts_sampler
-        sampler_kwargs["progressbar"] = False  # suppress terminal bar
-
-    if report_progress:
-        report_progress("sampling", 0, f"Starting MCMC ({nuts_sampler})…")
-
-    # For non-pymc backends: heartbeat thread reports elapsed time
-    heartbeat_stop = threading.Event()
-    if nuts_sampler != "pymc" and report_progress:
-        total_iters = config.chains * (config.tune + config.draws)
-        t_sample_start = time.time()
-
-        def _heartbeat():
-            while not heartbeat_stop.is_set():
-                heartbeat_stop.wait(5.0)
-                if heartbeat_stop.is_set():
-                    break
-                elapsed = time.time() - t_sample_start
+        def _sampling_callback(trace, draw):
+            steps_done[0] += 1
+            pct = int(100 * steps_done[0] / total_steps)
+            if pct > last_pct[0]:
+                last_pct[0] = pct
+                phase = "tuning" if draw.tuning else "sampling"
                 report_progress(
-                    "sampling", -1,
-                    f"{nuts_sampler} — {elapsed:.0f}s elapsed",
+                    "sampling", pct,
+                    f"{config.chains} chains {phase}",
                 )
 
-        hb_thread = threading.Thread(target=_heartbeat, daemon=True)
-        hb_thread.start()
-
-    with model:
-        trace = pm.sample(**sampler_kwargs)
-
-    heartbeat_stop.set()
+        with model:
+            trace = pm.sample(
+                draws=config.draws,
+                tune=config.tune,
+                chains=config.chains,
+                cores=config.cores,
+                target_accept=config.target_accept,
+                return_inferencedata=True,
+                random_seed=config.random_seed,
+                progressbar=not use_callback,
+                callback=_sampling_callback if use_callback else None,
+            )
 
     if report_progress:
         report_progress("summarising", 100, "Computing diagnostics…")
@@ -300,6 +251,7 @@ def summarise_posteriors(
             sigma_var_name = f"sigma_lat_{safe_eid}"
 
             latent_edges = metadata.get("latent_latency_edges", set())
+            latent_onset_edges = metadata.get("latent_onset_edges", set())
             is_latent = (
                 edge_id in latent_edges
                 and mu_var_name in trace.posterior
@@ -325,8 +277,33 @@ def summarise_posteriors(
                 sigma_mean = float(np.mean(sigma_samples))
                 sigma_sd = float(np.std(sigma_samples))
 
+                # Onset: latent posterior or fixed
+                onset_var_name = f"onset_{safe_eid}"
+                has_latent_onset = (
+                    edge_id in latent_onset_edges
+                    and onset_var_name in trace.posterior
+                )
+                if has_latent_onset:
+                    onset_samples = trace.posterior[onset_var_name].values.flatten()
+                    onset_post_mean = float(np.mean(onset_samples))
+                    onset_post_sd = float(np.std(onset_samples))
+                    onset_hdi = az.hdi(onset_samples, hdi_prob=HDI_PROB)
+                    onset_hdi_lower = float(onset_hdi[0])
+                    onset_hdi_upper = float(onset_hdi[1])
+                    # Correlation between onset and mu (identifiability diagnostic)
+                    onset_mu_corr = float(np.corrcoef(onset_samples, mu_samples)[0, 1])
+                    # Use posterior onset mean for t95
+                    onset_for_t95 = onset_samples  # vectorised
+                else:
+                    onset_post_mean = None
+                    onset_post_sd = None
+                    onset_hdi_lower = None
+                    onset_hdi_upper = None
+                    onset_mu_corr = None
+                    onset_for_t95 = onset  # fixed scalar
+
                 # t95 HDI from posterior samples of the latency distribution
-                t95_samples = np.exp(mu_samples + 1.645 * sigma_samples) + onset
+                t95_samples = np.exp(mu_samples + 1.645 * sigma_samples) + onset_for_t95
                 t95_hdi = az.hdi(t95_samples, hdi_prob=HDI_PROB)
                 t95_lower = float(t95_hdi[0])
                 t95_upper = float(t95_hdi[1])
@@ -342,26 +319,43 @@ def summarise_posteriors(
                     lat_ess = float(ess_ds[mu_var_name].values.flat[0])
                 if sigma_var_name in ess_ds:
                     lat_ess = min(lat_ess, float(ess_ds[sigma_var_name].values.flat[0]))
+                if has_latent_onset and onset_var_name in rhat_ds:
+                    lat_rhat = max(lat_rhat, float(rhat_ds[onset_var_name].values.flat[0]))
+                if has_latent_onset and onset_var_name in ess_ds:
+                    lat_ess = min(lat_ess, float(ess_ds[onset_var_name].values.flat[0]))
 
                 lat_provenance = "bayesian" if (lat_rhat < RHAT_THRESHOLD and lat_ess >= ESS_THRESHOLD) else "pooled-fallback"
+
+                # Use posterior onset mean as canonical onset_delta_days when latent
+                canonical_onset = onset_post_mean if has_latent_onset else onset
 
                 latency_posteriors[edge_id] = LatencyPosteriorSummary(
                     mu_mean=mu_mean,
                     mu_sd=mu_sd,
                     sigma_mean=sigma_mean,
                     sigma_sd=sigma_sd,
-                    onset_delta_days=onset,
+                    onset_delta_days=canonical_onset,
                     hdi_t95_lower=t95_lower,
                     hdi_t95_upper=t95_upper,
                     ess=lat_ess,
                     rhat=lat_rhat,
                     provenance=lat_provenance,
+                    onset_mean=onset_post_mean,
+                    onset_sd=onset_post_sd,
+                    onset_hdi_lower=onset_hdi_lower,
+                    onset_hdi_upper=onset_hdi_upper,
+                    onset_mu_corr=onset_mu_corr,
                 )
                 diagnostics.append(
                     f"  latency {edge_id[:8]}…: mu={mu_mean:.3f}±{mu_sd:.3f} "
                     f"(prior={lp.mu:.3f}), sigma={sigma_mean:.3f}±{sigma_sd:.3f} "
                     f"(prior={lp.sigma:.3f}), rhat={lat_rhat:.3f}, ess={lat_ess:.0f}"
                 )
+                if has_latent_onset:
+                    diagnostics.append(
+                        f"  onset {edge_id[:8]}…: {onset_post_mean:.2f}±{onset_post_sd:.2f} "
+                        f"(prior={onset:.2f}), corr(onset,mu)={onset_mu_corr:.3f}"
+                    )
             else:
                 # Phase S fallback: echo fixed point estimate
                 mu = lp.mu
@@ -401,6 +395,14 @@ def summarise_posteriors(
                 path_sigma = float(np.mean(sigma_c_samples))
                 path_sigma_sd = float(np.std(sigma_c_samples))
                 path_onset = float(np.mean(onset_c_samples)) if onset_c_samples is not None else 0.0
+                path_onset_sd = float(np.std(onset_c_samples)) if onset_c_samples is not None else None
+                if onset_c_samples is not None:
+                    path_onset_hdi = az.hdi(onset_c_samples, hdi_prob=HDI_PROB)
+                    path_onset_hdi_lower = float(path_onset_hdi[0])
+                    path_onset_hdi_upper = float(path_onset_hdi[1])
+                else:
+                    path_onset_hdi_lower = None
+                    path_onset_hdi_upper = None
 
                 path_provenance = "bayesian"
 
@@ -408,6 +410,9 @@ def summarise_posteriors(
                 if edge_id in latency_posteriors:
                     lat = latency_posteriors[edge_id]
                     lat.path_onset_delta_days = path_onset
+                    lat.path_onset_sd = path_onset_sd
+                    lat.path_onset_hdi_lower = path_onset_hdi_lower
+                    lat.path_onset_hdi_upper = path_onset_hdi_upper
                     lat.path_mu_mean = path_mu
                     lat.path_mu_sd = path_mu_sd
                     lat.path_sigma_mean = path_sigma
@@ -415,7 +420,8 @@ def summarise_posteriors(
                     lat.path_provenance = path_provenance
 
                 diagnostics.append(
-                    f"  cohort_latency {edge_id[:8]}…: onset={path_onset:.1f}, "
+                    f"  cohort_latency {edge_id[:8]}…: onset={path_onset:.1f}"
+                    f"{'±' + f'{path_onset_sd:.1f}' if path_onset_sd else ''}, "
                     f"mu={path_mu:.3f}±{path_mu_sd:.3f}, "
                     f"sigma={path_sigma:.3f}±{path_sigma_sd:.3f}"
                 )
@@ -440,6 +446,241 @@ def summarise_posteriors(
         skipped=skipped,
         diagnostics=diagnostics,
     )
+
+
+# ---------------------------------------------------------------------------
+# nutpie direct sampling (bypass pm.sample for progress callback access)
+# ---------------------------------------------------------------------------
+
+# Plain-text template — nutpie renders this via Jinja2 on the Rust side
+# and passes the result to our callback every `progress_rate` ms.
+_NUTPIE_PROGRESS_TEMPLATE = (
+    "{{ total_finished_draws }}|{{ total_draws }}"
+    "|{{ time_remaining_estimate }}"
+    "|{{ finished_chains }}|{{ num_chains }}"
+)
+
+
+def _sample_nutpie(model, config: SamplingConfig, report_progress=None):
+    """Sample via nutpie directly, with real progress reporting.
+
+    Calls nutpie.compile_pymc_model + nutpie.sample instead of going through
+    pm.sample(nuts_sampler="nutpie").  This gives us access to nutpie's
+    template_callback progress mechanism — real draw counts and ETA — which
+    PyMC's wrapper doesn't expose.
+
+    The ~15 lines of post-sampling InferenceData enrichment are replicated
+    from PyMC's _sample_external_nuts (observed_data, constant_data, attrs).
+    """
+    import nutpie
+    import pymc as pm
+    from pymc.backends.arviz import (
+        coords_and_dims_for_inferencedata,
+        find_constants,
+        find_observations,
+    )
+    from arviz import dict_to_dataset
+
+    import threading
+
+    # Heartbeat thread: reports elapsed time during both compilation and
+    # sampling.  Once the Rust template_callback starts firing with real
+    # draw counts, the heartbeat goes quiet.
+    heartbeat_stop = threading.Event()
+    sampling_started = threading.Event()
+    t_phase_start = time.time()
+
+    if report_progress:
+        def _heartbeat():
+            while not heartbeat_stop.is_set():
+                heartbeat_stop.wait(3.0)
+                if heartbeat_stop.is_set():
+                    break
+                elapsed = time.time() - t_phase_start
+                if not sampling_started.is_set():
+                    report_progress(
+                        "compiling", 0,
+                        f"Compiling model… {elapsed:.0f}s",
+                    )
+                # Once sampling_started is set, the Rust callback handles it.
+
+        hb_thread = threading.Thread(target=_heartbeat, daemon=True)
+        hb_thread.start()
+        report_progress("compiling", 0, "Compiling model…")
+
+    compiled_model = nutpie.compile_pymc_model(model)
+    t_sampling_start = time.time()
+
+    if report_progress:
+        report_progress("sampling", 0, "Starting sampler…")
+
+    sample_kwargs = dict(
+        draws=config.draws,
+        tune=config.tune,
+        chains=config.chains,
+        cores=config.cores,
+        target_accept=config.target_accept,
+        seed=config.random_seed,
+        save_warmup=True,
+        progress_bar=True,  # show nutpie's built-in terminal bar
+    )
+
+    if report_progress:
+        # Use nutpie's template_callback: the Rust sampler renders our
+        # template with live stats and calls _on_progress every 200ms.
+        from nutpie import _lib as nutpie_lib
+
+        def _on_nutpie_progress(formatted: str):
+            try:
+                sampling_started.set()
+                parts = formatted.split("|")
+                done = int(parts[0])
+                total = int(parts[1])
+                nutpie_eta = parts[2].strip()  # e.g. "2 minutes", "now"
+                chains_done = int(parts[3])
+                n_chains = int(parts[4])
+
+                pct = int(100 * done / total) if total > 0 else 0
+
+                if pct >= 100:
+                    detail = "Finalising…"
+                elif nutpie_eta and nutpie_eta != "now":
+                    detail = f"Sampling — {nutpie_eta} remaining"
+                else:
+                    detail = "Sampling…"
+
+                report_progress("sampling", pct, detail)
+            except Exception as exc:
+                report_progress("sampling", 0, f"progress error: {exc}")
+
+        # nutpie fires the callback every `progress_rate` ms from Rust.
+        # We throttle on the Python side: only forward to report_progress
+        # if ≥2s have elapsed or pct changed by ≥5pp.  This avoids spamming
+        # the log / poll store while still giving responsive updates.
+        _last_report = [0.0, -1]  # [timestamp, last_pct]
+
+        _orig_on_progress = _on_nutpie_progress
+
+        def _throttled_on_progress(formatted: str):
+            now = time.time()
+            # Always parse to get pct for throttle decision
+            try:
+                parts = formatted.split("|")
+                done = int(parts[0])
+                total = int(parts[1])
+                pct = int(100 * done / total) if total > 0 else 0
+            except (ValueError, IndexError):
+                pct = -1
+
+            elapsed_since_last = now - _last_report[0]
+            pct_delta = abs(pct - _last_report[1])
+
+            # Report if: first call, ≥2s elapsed, ≥5pp change, or done
+            if (_last_report[0] == 0.0
+                    or elapsed_since_last >= 2.0
+                    or pct_delta >= 5
+                    or pct >= 100):
+                _last_report[0] = now
+                _last_report[1] = pct
+                _orig_on_progress(formatted)
+
+        progress_type = nutpie_lib.ProgressType.template_callback(
+            500,  # ms between Rust-side renders
+            _NUTPIE_PROGRESS_TEMPLATE,
+            config.cores or config.chains,
+            _throttled_on_progress,
+        )
+
+        # Build the sampler manually so we can inject our ProgressType.
+        # This mirrors what nutpie.sample() does internally.
+        settings = nutpie_lib.PyNutsSettings.Diag(config.random_seed)
+        settings.num_tune = config.tune
+        settings.num_draws = config.draws
+        settings.num_chains = config.chains
+        if config.target_accept is not None:
+            settings.target_accept = config.target_accept
+
+        import numpy as np
+        init_mean = np.zeros(compiled_model.n_dim)
+        store = nutpie_lib.PyStorage.arrow()
+
+        cores = config.cores
+        if cores is None:
+            import os
+            try:
+                cores = os.process_cpu_count()
+            except AttributeError:
+                cores = os.cpu_count()
+            cores = min(config.chains, cores)
+
+        sampler = compiled_model._make_sampler(
+            settings, init_mean, cores, progress_type, store,
+        )
+        try:
+            sampler.wait()
+        except KeyboardInterrupt:
+            sampler.abort()
+
+        heartbeat_stop.set()
+        results = sampler.take_results()
+
+        # Release Rust sampler + progress callback before processing results.
+        # Without this, Python shutdown can segfault when the Rust callback
+        # closure outlives the Python objects it references.
+        del sampler
+        del progress_type
+
+        # Convert raw arrow trace to arviz InferenceData
+        from nutpie.sample import _arrow_to_arviz
+        import pandas as pd
+
+        draw_batches, stat_batches = results.get_arrow_trace()
+        trace = _arrow_to_arviz(
+            draw_batches,
+            stat_batches,
+            coords={
+                name: pd.Index(vals)
+                for name, vals in compiled_model.coords.items()
+            },
+            save_warmup=True,
+        )
+        del results
+    else:
+        # No progress callback — use nutpie.sample() directly (simpler)
+        trace = nutpie.sample(compiled_model, **sample_kwargs)
+        heartbeat_stop.set()
+
+    # Enrich InferenceData with observed/constant data and attrs,
+    # same as PyMC's _sample_external_nuts does.
+    coords, dims = coords_and_dims_for_inferencedata(model)
+    constant_data = dict_to_dataset(
+        find_constants(model),
+        library=pm,
+        coords=coords,
+        dims=dims,
+        default_dims=[],
+    )
+    observed_data = dict_to_dataset(
+        find_observations(model),
+        library=pm,
+        coords=coords,
+        dims=dims,
+        default_dims=[],
+    )
+    from arviz.data.base import make_attrs
+    attrs = make_attrs(
+        {"tuning_steps": config.tune},
+        library=nutpie,
+    )
+    for k, v in attrs.items():
+        trace.posterior.attrs[k] = v
+    trace.add_groups(
+        {"constant_data": constant_data, "observed_data": observed_data},
+        coords=coords,
+        dims=dims,
+    )
+
+    return trace
 
 
 # ---------------------------------------------------------------------------

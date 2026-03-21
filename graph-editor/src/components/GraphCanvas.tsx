@@ -906,10 +906,26 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
 
   const analysisHistoryTimerRef = useRef<NodeJS.Timeout | null>(null);
   const handleUpdateAnalysis = useCallback((id: string, updates: any) => {
+    const updateKeys = Object.keys(updates);
+    const itemCountBefore = graphRef.current?.canvasAnalyses?.find((a: any) => a.id === id)?.content_items?.length;
     const nextGraph = mutateCanvasAnalysisGraph(graphRef.current, id, (a) => {
       Object.assign(a, updates);
     });
     if (!nextGraph) return;
+    const itemCountAfter = nextGraph.canvasAnalyses?.find((a: any) => a.id === id)?.content_items?.length;
+    if (updateKeys.includes('content_items') || itemCountBefore !== itemCountAfter) {
+      console.log('[handleUpdateAnalysis] content_items changed!', {
+        id: id?.slice(0, 12),
+        updateKeys,
+        itemCountBefore,
+        itemCountAfter,
+        contentItems: nextGraph.canvasAnalyses?.find((a: any) => a.id === id)?.content_items?.map((ci: any) => ({
+          id: ci.id?.slice(0, 8),
+          type: ci.analysis_type,
+          title: ci.title,
+        })),
+      });
+    }
     setGraphDirect(nextGraph);
     graphRef.current = nextGraph; // Keep ref in sync for rapid successive calls (e.g. resize)
     if (analysisHistoryTimerRef.current) clearTimeout(analysisHistoryTimerRef.current);
@@ -926,6 +942,83 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
     saveHistoryState('Delete canvas analysis');
     onSelectedAnnotationChange?.(null, null);
   }, [graph, setGraph, saveHistoryState, onSelectedAnnotationChange]);
+
+  // ── Content item extraction (tab drag-out / merge) ──
+  // Listens for dagnet:extractContentItem events dispatched by CanvasAnalysisNode tab drag.
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const { sourceAnalysisId, contentItemId, screenX, screenY, duplicate, targetAnalysisId } = (e as CustomEvent).detail;
+      const g = graphRef.current;
+      if (!g?.canvasAnalyses) return;
+
+      const source = g.canvasAnalyses.find((a: any) => a.id === sourceAnalysisId);
+      if (!source) return;
+      const ci = source.content_items?.find((c: any) => c.id === contentItemId);
+      if (!ci) return;
+      // Ensure content item carries DSL (backfill from container if legacy)
+      if (!ci.analytics_dsl && source.recipe?.analysis?.analytics_dsl) {
+        ci.analytics_dsl = source.recipe.analysis.analytics_dsl;
+      }
+
+      const clonedItem = { ...structuredClone(ci), id: crypto.randomUUID() };
+      let nextGraph = structuredClone(g);
+
+      if (targetAnalysisId) {
+        // Merge into existing analysis
+        const target = nextGraph.canvasAnalyses!.find((a: any) => a.id === targetAnalysisId) as any;
+        if (!target) return;
+        if (!target.content_items) target.content_items = [];
+        target.content_items.push(clonedItem);
+      } else {
+        // Create new container at drop position
+        const flowPos = screenToFlowPosition({ x: screenX, y: screenY });
+        const newAnalysis = {
+          ...structuredClone(source),
+          id: crypto.randomUUID(),
+          x: Math.round(flowPos.x),
+          y: Math.round(flowPos.y),
+          content_items: [clonedItem],
+        };
+        // Clear flat fields on the new container — content_items is the source of truth
+        delete (newAnalysis as any).view_mode;
+        delete (newAnalysis as any).chart_kind;
+        delete (newAnalysis as any).display;
+        delete (newAnalysis as any).title;
+        delete (newAnalysis as any).analysis_type_overridden;
+        if (!nextGraph.canvasAnalyses) nextGraph.canvasAnalyses = [];
+        nextGraph.canvasAnalyses.push(newAnalysis as any);
+      }
+
+      // Remove from source (unless duplicate)
+      if (!duplicate) {
+        const srcAnalysis = nextGraph.canvasAnalyses!.find((a: any) => a.id === sourceAnalysisId) as any;
+        if (srcAnalysis?.content_items) {
+          srcAnalysis.content_items = srcAnalysis.content_items.filter((c: any) => c.id !== contentItemId);
+          if (srcAnalysis.content_items.length === 0) {
+            // Last tab out — check if it was dragged to canvas (reposition) or to another container (delete source)
+            if (targetAnalysisId) {
+              nextGraph.canvasAnalyses = nextGraph.canvasAnalyses!.filter((a: any) => a.id !== sourceAnalysisId);
+            } else {
+              // Last tab dragged to canvas = reposition: delete the new container, just move source
+              const newId = nextGraph.canvasAnalyses![nextGraph.canvasAnalyses!.length - 1].id;
+              nextGraph.canvasAnalyses = nextGraph.canvasAnalyses!.filter((a: any) => a.id !== newId);
+              const flowPos = screenToFlowPosition({ x: screenX, y: screenY });
+              srcAnalysis.content_items = [clonedItem];
+              srcAnalysis.x = Math.round(flowPos.x);
+              srcAnalysis.y = Math.round(flowPos.y);
+            }
+          }
+        }
+      }
+
+      if (nextGraph.metadata) nextGraph.metadata.updated_at = new Date().toISOString();
+      setGraph(nextGraph);
+      graphRef.current = nextGraph;
+      saveHistoryState(duplicate ? 'Duplicate content tab' : 'Move content tab');
+    };
+    window.addEventListener('dagnet:extractContentItem', handler);
+    return () => window.removeEventListener('dagnet:extractContentItem', handler);
+  }, [screenToFlowPosition, setGraph, saveHistoryState]);
 
   // Delete selected elements
   const deleteSelected = useCallback(async () => {
@@ -1159,6 +1252,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
     clearRightDrag,
   } = useCanvasCreation({
     graph,
+    graphRef,
     nodes,
     edges,
     setGraph,
@@ -1485,7 +1579,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
     const analysis = graph.canvasAnalyses?.find((a: any) => a.id === analysisContextMenu.analysisId) as any;
     if (!analysis) return;
     let cancelled = false;
-    const dsl = analysis.recipe?.analysis?.analytics_dsl;
+    const dsl = analysis.content_items?.[0]?.analytics_dsl || analysis.recipe?.analysis?.analytics_dsl;
     const scenarioCount = analysis.mode === 'live'
       ? (tabId ? tabOperations.getScenarioState(tabId)?.visibleScenarioIds?.length : null) || 1
       : (analysis.recipe?.scenarios?.length || 1);

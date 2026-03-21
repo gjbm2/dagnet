@@ -38,6 +38,8 @@ import { roundToDP, roundHorizonDays } from './updateManager/roundingUtils';
 import { buildAuditEntry } from './updateManager/auditLog';
 import { MAPPING_CONFIGURATIONS, getMappingKey } from './updateManager/mappingConfigurations';
 import { applyMappings } from './updateManager/mappingEngine';
+import type { ModelVarsEntry } from '../types';
+import { upsertModelVars, ukDateNow } from './modelVarsResolution';
 
 // ─── Re-exports (public API — preserve existing import paths) ───────────────
 export type {
@@ -1106,6 +1108,47 @@ export class UpdateManager {
       }
     }
     
+    // MODEL_VARS: Build analytic entry from cascaded file values (doc 15 §5.1).
+    // Attached as metadata so callers can upsert onto the edge after applying changes.
+    if (result.success && subDest === 'parameter') {
+      const isProbType = fileData.type === 'probability' ||
+        fileData.type === 'conditional_probability' ||
+        fileData.parameter_type === 'probability' ||
+        fileData.parameter_type === 'conditional_probability';
+
+      if (isProbType) {
+        const latestValue = fileData.values?.[fileData.values.length - 1];
+        if (latestValue) {
+          const entry: ModelVarsEntry = {
+            source: 'analytic',
+            source_at: latestValue.data_source?.retrieved_at || latestValue.window_to || ukDateNow(),
+            probability: {
+              mean: latestValue.mean,
+              stdev: latestValue.stdev,
+            },
+          };
+
+          // Add latency block when mu/sigma are present on the file
+          const lat = fileData.latency;
+          if (lat?.mu != null && lat?.sigma != null) {
+            entry.latency = {
+              mu: lat.mu,
+              sigma: lat.sigma,
+              t95: lat.t95 ?? 0,
+              onset_delta_days: lat.onset_delta_days ?? 0,
+              ...(lat.path_mu != null ? { path_mu: lat.path_mu } : {}),
+              ...(lat.path_sigma != null ? { path_sigma: lat.path_sigma } : {}),
+              ...(lat.path_t95 != null ? { path_t95: lat.path_t95 } : {}),
+              ...(lat.path_onset_delta_days != null ? { path_onset_delta_days: lat.path_onset_delta_days } : {}),
+            };
+          }
+
+          result.metadata = result.metadata || {};
+          (result.metadata as any).analyticModelVarsEntry = entry;
+        }
+      }
+    }
+
     // AUTO-REBALANCE: After case variant update from file, rebalance variants
     // This applies to "Get from Source" (versioned) - if treatment weight changes from file, rebalance control weight
     // NOTE: Set flag even when validateOnly=true, because caller uses this to decide rebalancing
@@ -2105,12 +2148,15 @@ export class UpdateManager {
       if ((update.latency as any).sigma !== undefined) {
         targetP.latency.sigma = (update.latency as any).sigma;
       }
-      // path_mu/path_sigma: path-level A→Y CDF params (Fenton–Wilkinson combined)
+      // path_mu/path_sigma/path_onset_delta_days: path-level A→Y CDF params (Fenton–Wilkinson combined)
       if ((update.latency as any).path_mu !== undefined) {
         targetP.latency.path_mu = (update.latency as any).path_mu;
       }
       if ((update.latency as any).path_sigma !== undefined) {
         targetP.latency.path_sigma = (update.latency as any).path_sigma;
+      }
+      if ((update.latency as any).path_onset_delta_days !== undefined) {
+        targetP.latency.path_onset_delta_days = (update.latency as any).path_onset_delta_days;
       }
       
       // Apply forecast if provided

@@ -3,7 +3,9 @@ Model builder: TopologyAnalysis + BoundEvidence → pm.Model.
 
 Model structure:
   - Graph-level σ_temporal (learned temporal volatility)
+  - Graph-level onset_hyper_mu, tau_onset (onset hyperprior + dispersion, doc 18)
   - Per-edge κ (overdispersion concentration: BetaBinomial/DM)
+  - Per-edge onset (latent, doc 18; or fixed when latent_onset=False)
   - Solo edges: p ~ Beta(α, β)
   - Branch groups: [p_1, ..., p_K, p_dropout] ~ Dirichlet(α_vec)
     - Exhaustive groups omit the dropout component
@@ -25,16 +27,32 @@ from .types import (
 )
 
 
-def build_model(topology: TopologyAnalysis, evidence: BoundEvidence):
+def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
+                features: dict | None = None):
     """Build a PyMC model from the topology and bound evidence.
 
     Returns (pm.Model, model_metadata_dict).
+
+    features: optional dict of boolean feature flags for A/B testing:
+        latent_latency:    if False, skip latent mu/sigma (Phase S behaviour)
+        cohort_latency:    if False, skip cohort-level latency hierarchy
+        overdispersion:    if False, use Binomial/Multinomial (no per-edge kappa)
     """
     import pymc as pm
     import pytensor.tensor as pt
     import numpy as np
 
+    features = features or {}
+    feat_latent_latency = features.get("latent_latency", True)
+    feat_cohort_latency = features.get("cohort_latency", True)
+    feat_overdispersion = features.get("overdispersion", True)
+    feat_latent_onset = features.get("latent_onset", True)
+
     diagnostics: list[str] = []
+    diagnostics.append(f"features: latent_latency={feat_latent_latency}, "
+                       f"cohort_latency={feat_cohort_latency}, "
+                       f"overdispersion={feat_overdispersion}, "
+                       f"latent_onset={feat_latent_onset}")
     edge_var_names: dict[str, str] = {}  # edge_id → primary p variable name
 
     # Identify which edges will have their window obs handled by a branch
@@ -53,6 +71,53 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence):
         # --- Graph-level σ_temporal ---
         sigma_temporal = pm.HalfNormal("sigma_temporal", sigma=0.5)
 
+        # --- Graph-level onset hyperprior (Phase D.O, doc 18) ---
+        # onset_hyper_mu: typical onset scale across the graph
+        # tau_onset: how much onset varies across edges (dispersion)
+        onset_vars: dict[str, object] = {}  # edge_id → latent onset variable
+        if feat_latent_onset:
+            onset_hyper_mu = pm.HalfNormal("onset_hyper_mu", sigma=10.0)
+            tau_onset = pm.HalfNormal("tau_onset", sigma=5.0)
+        else:
+            onset_hyper_mu = None
+            tau_onset = None
+
+        # --- Per-edge latent onset (Phase D.O) ---
+        if feat_latent_onset:
+            for edge_id in topology.topo_order:
+                et = topology.edges.get(edge_id)
+                ev = evidence.edges.get(edge_id)
+                if et is None or ev is None or ev.skipped:
+                    continue
+                if not et.has_latency or ev.latency_prior is None:
+                    continue
+                safe_id = _safe_var_name(edge_id)
+                lp = ev.latency_prior
+
+                # Non-centred: onset_raw = onset_hyper_mu + eps * tau_onset
+                eps_onset = pm.Normal(f"eps_onset_{safe_id}", mu=0, sigma=1)
+                onset_raw = onset_hyper_mu + eps_onset * tau_onset
+                # softplus ensures onset >= 0
+                onset_var = pm.Deterministic(
+                    f"onset_{safe_id}",
+                    pt.softplus(onset_raw),
+                )
+
+                # Soft observation: histogram-derived onset as noisy data
+                if lp.onset_delta_days > 0:
+                    pm.Normal(
+                        f"onset_obs_{safe_id}",
+                        mu=onset_var,
+                        sigma=max(lp.onset_uncertainty, 0.5),
+                        observed=np.array(lp.onset_delta_days),
+                    )
+
+                onset_vars[edge_id] = onset_var
+                diagnostics.append(
+                    f"  onset: {edge_id[:8]}… histogram={lp.onset_delta_days:.1f}d "
+                    f"(±{lp.onset_uncertainty:.1f}) → latent"
+                )
+
         # --- Branch group Dirichlet priors (Phase B) ---
         # Emit Dirichlet per branch group. Each sibling gets a component;
         # non-exhaustive groups get a phantom dropout component.
@@ -68,12 +133,15 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence):
         latency_vars: dict[str, tuple] = {}
         cohort_latency_vars: dict[str, tuple] = {}
 
+        if not feat_latent_latency:
+            diagnostics.append("  FEATURE OFF: latent_latency — using fixed priors")
+
         for edge_id in topology.topo_order:
             et = topology.edges.get(edge_id)
             ev = evidence.edges.get(edge_id)
             if et is None or ev is None or ev.skipped:
                 continue
-            if ev.latency_prior is not None and ev.latency_prior.sigma > 0.01:
+            if feat_latent_latency and ev.latency_prior is not None and ev.latency_prior.sigma > 0.01:
                 safe_id = _safe_var_name(edge_id)
                 mu_prior = ev.latency_prior.mu
                 sigma_prior = ev.latency_prior.sigma
@@ -103,12 +171,16 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence):
 
 
         # --- Cohort-level latency variables (Phase D step 2.5) ---
+        if not feat_cohort_latency:
+            diagnostics.append("  FEATURE OFF: cohort_latency — no cohort latency hierarchy")
         # Non-centred parameterisation: cohort latency = FW-composed
         # edge latency + deviation. This keeps the cohort data
         # constraining the edge-level latents (gradients flow through
         # the FW composition) while allowing path-informed divergence.
         # Mirrors the p_cohort = logit(p_base) + eps * tau pattern.
         for edge_id in topology.topo_order:
+            if not feat_cohort_latency:
+                break
             et = topology.edges.get(edge_id)
             ev = evidence.edges.get(edge_id)
             if et is None or ev is None or ev.skipped:
@@ -135,17 +207,34 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence):
             # FW-composed path latency from edge-level latents
             path_result = _resolve_path_latency(
                 et.path_edge_ids, topology, latency_vars,
+                onset_vars=onset_vars,
             )
             if path_result is None:
                 continue
 
             onset_prior, mu_path_composed, sigma_path_composed = path_result
 
-            # onset_cohort: latent, prior from sum of edge onsets
-            onset_cohort = pm.HalfNormal(
-                f"onset_cohort_{safe_id}",
-                sigma=max(onset_prior, 1.0),
-            )
+            # onset_cohort: latent, prior from sum of edge onsets.
+            # Phase D.O: dispersion from tau_onset * sqrt(n_path_edges)
+            # instead of hardcoded HalfNormal sigma.
+            n_path_latency = max(path_latency_count, 1)
+            if feat_latent_onset and tau_onset is not None:
+                import math as _math
+                # Non-centred: onset_cohort = path_onset_sum + eps * path_onset_tau
+                # onset_prior is now a PyTensor expr (sum of latent edge onsets)
+                path_onset_tau = tau_onset * _math.sqrt(n_path_latency)
+                eps_onset_path = pm.Normal(f"eps_onset_path_{safe_id}", mu=0, sigma=1)
+                onset_cohort = pm.Deterministic(
+                    f"onset_cohort_{safe_id}",
+                    pt.softplus(onset_prior + eps_onset_path * path_onset_tau),
+                )
+            else:
+                # Legacy: hardcoded HalfNormal sigma
+                onset_prior_val = float(onset_prior) if not hasattr(onset_prior, 'name') else 5.0
+                onset_cohort = pm.HalfNormal(
+                    f"onset_cohort_{safe_id}",
+                    sigma=max(onset_prior_val, 1.0),
+                )
 
             # mu_cohort = mu_path_composed + eps * tau (non-centred)
             # Gradients flow through mu_path_composed → edge latents
@@ -166,8 +255,9 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence):
 
             cohort_latency_vars[edge_id] = (onset_cohort, mu_cohort, sigma_cohort)
             diagnostics.append(
-                f"  cohort_latency: {edge_id[:8]}… onset_prior={onset_prior:.1f}, "
-                f"mu_path_prior=FW-composed, tau_mu={tau_mu_lat:.3f}"
+                f"  cohort_latency: {edge_id[:8]}… "
+                f"mu_path_prior=FW-composed, tau_mu={tau_mu_lat:.3f}, "
+                f"latent_onset={'tau_onset' if feat_latent_onset else 'hardcoded'}"
             )
 
         # --- Per-edge variables and likelihoods ---
@@ -200,7 +290,7 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence):
             # BetaBinomial / Dirichlet-Multinomial: large κ → Binomial,
             # small κ → heavy overdispersion. Each edge learns its own
             # level from its trajectory data.
-            edge_kappa = pm.Gamma(f"kappa_{safe_id}", alpha=3, beta=0.1)
+            edge_kappa = pm.Gamma(f"kappa_{safe_id}", alpha=3, beta=0.1) if feat_overdispersion else None
 
             if ev.has_window and ev.has_cohort:
                 if p_base_var is not None:
@@ -248,7 +338,8 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence):
                                         latency_vars=latency_vars,
                                         p_window_var=p_window,
                                         cohort_latency_vars=cohort_latency_vars,
-                                        kappa=edge_kappa)
+                                        kappa=edge_kappa,
+                                        onset_vars=onset_vars)
 
                 if edge_id not in edge_var_names:
                     edge_var_names[edge_id] = f"p_base_{safe_id}"
@@ -272,7 +363,8 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence):
                                         topology, edge_var_names, model,
                                         latency_vars=latency_vars,
                                         cohort_latency_vars=cohort_latency_vars,
-                                        kappa=edge_kappa)
+                                        kappa=edge_kappa,
+                                        onset_vars=onset_vars)
 
             else:
                 if p_base_var is None:
@@ -288,6 +380,7 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence):
     metadata = {
         "edge_var_names": edge_var_names,
         "latent_latency_edges": set(latency_vars.keys()),
+        "latent_onset_edges": set(onset_vars.keys()),
         "cohort_latency_edges": set(cohort_latency_vars.keys()),
         "diagnostics": diagnostics,
     }
@@ -413,7 +506,7 @@ def _identify_branch_group_window_edges(
 
     An edge qualifies if:
       - It's in a branch group
-      - It has window observations
+      - It has window observations (either window_obs or window trajectories)
       - At least one sibling also has window observations
       - Total sibling k doesn't exceed shared n (counts are consistent)
 
@@ -428,25 +521,46 @@ def _identify_branch_group_window_edges(
             ev = evidence.edges.get(sib_id)
             if ev is None or ev.skipped:
                 continue
-            if ev.has_window and sum(w.n for w in ev.window_obs) > 0:
+            if not ev.has_window:
+                continue
+            # Check both old path (window_obs) and trajectory path
+            n_from_obs = sum(w.n for w in ev.window_obs)
+            n_from_traj = sum(
+                t.n for c in ev.cohort_obs for t in c.trajectories
+                if t.obs_type == "window"
+            )
+            if n_from_obs > 0 or n_from_traj > 0:
                 siblings_with_window.append(sib_id)
 
         if len(siblings_with_window) < 2:
             continue
 
-        # Check count consistency
-        shared_n = max(
-            sum(w.n for w in evidence.edges[sid].window_obs)
-            for sid in siblings_with_window
-        )
-        total_k = sum(
-            sum(w.k for w in evidence.edges[sid].window_obs)
-            for sid in siblings_with_window
-        )
+        # Check count consistency using the best available n
+        def _sibling_n_k(sid):
+            ev = evidence.edges[sid]
+            n_obs = sum(w.n for w in ev.window_obs)
+            k_obs = sum(w.k for w in ev.window_obs)
+            if n_obs > 0:
+                return n_obs, k_obs
+            # Trajectory path: sum across window trajectory days
+            n_traj = sum(
+                t.n for c in ev.cohort_obs for t in c.trajectories
+                if t.obs_type == "window"
+            )
+            k_traj = sum(
+                t.cumulative_y[-1] if t.cumulative_y else 0
+                for c in ev.cohort_obs for t in c.trajectories
+                if t.obs_type == "window"
+            )
+            return n_traj, k_traj
+
+        shared_n = max(_sibling_n_k(sid)[0] for sid in siblings_with_window)
+        total_k = sum(_sibling_n_k(sid)[1] for sid in siblings_with_window)
+
         if total_k > shared_n:
             diagnostics.append(
                 f"WARN: branch group {group_id}: "
-                f"Σk={total_k} > n_A={shared_n}, falling back to per-edge Binomials"
+                f"Σk={total_k} > n_A={shared_n}, falling back to per-edge Potentials"
             )
             continue
 
@@ -500,6 +614,7 @@ def _emit_cohort_likelihoods(
     p_window_var=None,
     cohort_latency_vars: dict[str, tuple] | None = None,
     kappa=None,
+    onset_vars: dict[str, object] | None = None,
 ) -> None:
     """Emit cohort likelihoods via pm.Potential (vectorised per obs_type).
 
@@ -565,10 +680,15 @@ def _emit_cohort_likelihoods(
         # For window: edge-level latency only.
         # For cohort: path-level composed from per-edge latents.
         has_latent_latency = False
+        onset_vars = onset_vars or {}
         if obs_type == "window" and ev.edge_id in latency_vars:
             has_latent_latency = True
             mu_var, sigma_var = latency_vars[ev.edge_id]
-            onset = ev.latency_prior.onset_delta_days if ev.latency_prior else 0.0
+            # Phase D.O: use latent onset if available
+            if ev.edge_id in onset_vars:
+                onset = onset_vars[ev.edge_id]
+            else:
+                onset = ev.latency_prior.onset_delta_days if ev.latency_prior else 0.0
         elif obs_type == "cohort":
             # Phase D step 2.5: use cohort-level latency variables if
             # available (onset_cohort, mu_cohort, sigma_cohort). These
@@ -631,14 +751,12 @@ def _emit_cohort_likelihoods(
                 all_ages_raw.extend(traj.retrieval_ages)
             ages_raw_np = np.array(all_ages_raw, dtype=np.float64)
 
-            # Step 2: Subtract onset and compute CDF
-            # When onset is latent, use softplus instead of hard clamp
-            # to avoid the gradient discontinuity at age=onset that
-            # causes NUTS divergences. softplus(x) = log(1+exp(x))
-            # smoothly transitions through zero.
+            # Step 2: Compute CDF at all ages (single path).
+            ages_tensor = pt.as_tensor_variable(ages_raw_np)
+
             onset_is_latent = hasattr(onset, 'name')
             if onset_is_latent:
-                age_minus_onset = pt.as_tensor_variable(ages_raw_np) - onset
+                age_minus_onset = ages_tensor - onset
                 effective_ages = pt.softplus(age_minus_onset)
                 log_ages = pt.log(pt.maximum(effective_ages, 1e-30))
             else:
@@ -834,30 +952,46 @@ def _resolve_path_latency(
     path_edge_ids: list[str],
     topology,
     latency_vars: dict[str, tuple],
+    onset_vars: dict[str, object] | None = None,
 ) -> tuple | None:
-    """Compose path-level latency from per-edge latents via differentiable FW.
+    """Compose path-level latency from per-edge latents via FW chain.
 
-    For each edge on the path that has latency:
-      - If in latency_vars: use the latent (mu_var, sigma_var) — PyTensor
-      - Else: use fixed (mu_prior, sigma_prior) — float constants
+    Returns (onset, mu_composed, sigma_composed) or None if no latency.
+    Uses latent variables where available, fixed priors otherwise.
 
-    Returns (onset, mu_composed, sigma_composed) where mu/sigma are PyTensor
-    expressions. Returns None if no latency edges on path.
+    onset_vars: if provided (Phase D.O), edge-level latent onset variables
+    are summed instead of fixed onset_delta_days. This makes path_delta
+    differentiable — NUTS gradients flow through to edge onset.
     """
+    import pytensor.tensor as pt
     from .completeness import pt_fw_chain
 
     if not path_edge_ids or not topology:
         return None
 
+    onset_vars = onset_vars or {}
     components = []
     onset = 0.0
+    onset_is_latent = False
     has_any_latent = False
 
     for eid in path_edge_ids:
         et = topology.edges.get(eid)
         if et is None or not et.has_latency:
             continue
-        onset += et.onset_delta_days
+        # Onset: latent if available (Phase D.O), else fixed
+        if eid in onset_vars:
+            if not onset_is_latent:
+                # First latent onset on path — convert accumulator to tensor
+                onset = pt.as_tensor_variable(float(onset)) + onset_vars[eid]
+            else:
+                onset = onset + onset_vars[eid]
+            onset_is_latent = True
+        else:
+            if onset_is_latent:
+                onset = onset + et.onset_delta_days
+            else:
+                onset += et.onset_delta_days
         if eid in latency_vars:
             components.append(latency_vars[eid])
             has_any_latent = True
@@ -942,7 +1076,8 @@ def _emit_branch_group_multinomial(
     import pytensor.tensor as pt
     import numpy as np
 
-    # Collect siblings that have window data and a model variable
+    # Collect siblings that have window data and a model variable.
+    # Check both old path (window_obs) and trajectory path.
     sibling_info = []
     for sib_id in bg.sibling_edge_ids:
         ev = evidence.edges.get(sib_id)
@@ -952,12 +1087,27 @@ def _emit_branch_group_multinomial(
         if var_name is None:
             continue
 
+        # Old path: window_obs
         total_k = sum(w.k for w in ev.window_obs)
         total_n = sum(w.n for w in ev.window_obs)
         avg_completeness = (
             sum(w.n * w.completeness for w in ev.window_obs) / total_n
             if total_n > 0 else 1.0
         )
+
+        # Trajectory path: aggregate window trajectories
+        if total_n == 0:
+            window_trajs = [
+                t for c in ev.cohort_obs for t in c.trajectories
+                if t.obs_type == "window"
+            ]
+            if window_trajs:
+                total_n = sum(t.n for t in window_trajs)
+                total_k = sum(
+                    t.cumulative_y[-1] if t.cumulative_y else 0
+                    for t in window_trajs
+                )
+                avg_completeness = 1.0  # trajectory CDF handles completeness
 
         if total_n > 0:
             sibling_info.append({

@@ -1,30 +1,49 @@
 # DagNet Development Guidelines for AI Assistants
 
-## ABSOLUTE BAN: Git Commands
+## Pre-flight Checks (MANDATORY before every Bash command)
 
-**NEVER run any git command that writes** — `git add`, `git commit`, `git push`, `git checkout`, `git reset`, `git stash`, `git rebase`, `git merge`, `git pull`, `git branch`, or ANY other `git` subcommand — **unless the user has given unmistakable, explicit, unambiguous instruction to do so in the current message**.
+A `PreToolUse` hook fires on every Bash tool call and reminds you to check
+these gates. **Scan all three gates before executing.** If any gate fails,
+STOP and use the listed alternative. Do not rationalise around them.
 
-## ABSOLUTE BAN: Memory System
+### Gate 1: Git writes
 
-**NEVER write to the Claude Code memory system** (`~/.claude/projects/*/memory/`, `MEMORY.md`, or any memory files). All shared context belongs in the repo (CLAUDE.md, docs/, code comments). The memory system is not used in this project.
+`git add`, `git commit`, `git push`, `git checkout`, `git reset`, `git stash`,
+`git rebase`, `git merge`, `git pull`, `git branch`, or ANY other git
+subcommand that modifies state.
 
-## ABSOLUTE BAN: Destructive Terminal Commands
+- **Pass condition**: the user gave unmistakable, explicit instruction **in
+  the current message**.
+- **If no permission**: use `git diff`, `git status`, `git log` (read-only)
+  to inspect. To undo your own code changes, use the **Edit** tool to reverse
+  specific edits. **Ask the user** if unsure — never default to a git write.
 
-**NEVER run OR ADVISE any operation that deletes, truncates, overwrites, or destroys data** without unmistakable, explicit, unambiguous instruction from the user **in the current message**. This applies equally to terminal commands, code changes, AND instructions/advice for the user to execute (e.g. browser console commands, IDB operations).
+### Gate 2: Destructive / data-loss operations
 
-**When you don't know the precise target, investigate or ask — NEVER widen the blast radius.** If the user asks to fix one stale record, do not suggest clearing the whole table. If one table doesn't help, do not escalate to clearing all tables. Uncertainty is a reason to investigate, not to destroy more.
+`rm`, `rmdir`, `unlink`, `truncate`, `shred`, `> file` (overwriting redirect),
+`echo "" > file`, `cat /dev/null > file`, `mv` that overwrites, `sed -i`,
+`awk` in-place, `scripts/extract-mark-logs.sh --trim`,
+IndexedDB `.clear()` / `.delete()` / `deleteDatabase()`.
 
-This includes but is not limited to:
-- `rm`, `rmdir`, `unlink`
-- `truncate`, `shred`
-- `> file` (redirect that overwrites)
-- `scripts/extract-mark-logs.sh --trim` or any `--trim` flag on log management scripts
-- `echo "" > file`, `cat /dev/null > file`, or any other pattern that empties a file
-- `mv` that would overwrite an existing file without the user's knowledge
-- `sed -i` or `awk` with in-place modification on files the user hasn't asked to edit
-- IndexedDB `.clear()`, `.delete()`, `deleteDatabase()` — IDB is the source of truth for files, credentials, tabs, and workspace state
+- **Pass condition**: the user gave unmistakable, explicit instruction **in
+  the current message**.
+- **If no permission**: **READ first.** Investigate. Ask. Never widen the
+  blast radius — if unsure of the precise target, ask, don't escalate.
 
-**Read-only commands are always safe.** When in doubt, **READ the file first** — never modify, truncate, or delete.
+### Gate 3: Memory system writes
+
+`~/.claude/projects/*/memory/`, `MEMORY.md`, or any memory files.
+
+- **Always fails.** The memory system is not used in this project. All shared
+  context belongs in the repo (CLAUDE.md, docs/, code comments).
+
+### Why these gates exist
+
+These commands **destroy user work that cannot be recovered**. A `git checkout --`
+wipes uncommitted edits. An `rm` deletes files permanently. An IDB `.clear()`
+erases the workspace source of truth. The cost of asking first is a few seconds;
+the cost of getting it wrong is lost work and lost trust. **When in doubt, READ
+the file first — never modify, truncate, or delete.**
 
 ---
 

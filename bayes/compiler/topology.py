@@ -103,7 +103,10 @@ def analyse_topology(graph_snapshot: dict) -> TopologyAnalysis:
 
         onset = float(latency.get("onset_delta_days") or 0)
 
-        # Derive latency prior from available data
+        # Derive latency prior from available data.
+        # Default: mu=0 (median 1 day), sigma=0.5 (moderate).
+        # The t95 fallback below handles most cases where lag data
+        # is missing; this default is the last resort.
         mu_prior = 0.0
         sigma_prior = 0.5
         if has_latency:
@@ -120,6 +123,18 @@ def analyse_topology(graph_snapshot: dict) -> TopologyAnalysis:
             elif mu_from_param is not None and sigma_from_param is not None:
                 mu_prior = float(mu_from_param)
                 sigma_prior = float(sigma_from_param)
+            else:
+                # Fallback: derive from t95 if available. Pragmatic
+                # bridge until doc 16 (lag array defect) is fixed and
+                # latency warm-start is implemented. Assume moderate
+                # sigma and solve for mu from t95.
+                t95 = latency.get("t95")
+                if t95 is not None and float(t95) > onset:
+                    import math
+                    assumed_sigma = 0.7
+                    t95_shifted = max(float(t95) - onset, 0.5)
+                    mu_prior = math.log(t95_shifted) - 1.645 * assumed_sigma
+                    sigma_prior = assumed_sigma
 
         group_id = edge_to_group.get(edge_id)
 
@@ -145,7 +160,19 @@ def analyse_topology(graph_snapshot: dict) -> TopologyAnalysis:
         graph_snapshot, diagnostics,
     )
 
-    # 7. Fingerprint
+    # 7. Join nodes (in-degree > 1)
+    from .types import JoinNode
+    join_nodes: dict[str, JoinNode] = {}
+    for node_uuid, in_edges in incoming.items():
+        if len(in_edges) >= 2:
+            in_edge_ids = [ie["uuid"] for ie in in_edges if ie["uuid"] in edges]
+            if len(in_edge_ids) >= 2:
+                join_nodes[node_uuid] = JoinNode(
+                    node_id=node_uuid,
+                    inbound_edge_ids=in_edge_ids,
+                )
+
+    # 8. Fingerprint
     fingerprint = _compute_fingerprint(anchor_node_id, edges, branch_groups)
 
     return TopologyAnalysis(
@@ -153,6 +180,7 @@ def analyse_topology(graph_snapshot: dict) -> TopologyAnalysis:
         edges=edges,
         branch_groups=branch_groups,
         topo_order=topo_order,
+        join_nodes=join_nodes,
         fingerprint=fingerprint,
         diagnostics=diagnostics,
     )

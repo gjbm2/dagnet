@@ -90,12 +90,24 @@ class BranchGroup:
 
 
 @dataclass
+class JoinNode:
+    """A node where multiple paths converge (in-degree > 1).
+
+    Used by the model builder to construct differentiable moment-matched
+    collapse of inbound path latencies at join points.
+    """
+    node_id: str
+    inbound_edge_ids: list[str]     # edge UUIDs entering this node
+
+
+@dataclass
 class TopologyAnalysis:
     """Complete structural decomposition of a graph."""
     anchor_node_id: str
     edges: dict[str, EdgeTopology]
     branch_groups: dict[str, BranchGroup]
     topo_order: list[str]                  # edge IDs in topological order
+    join_nodes: dict[str, JoinNode] = field(default_factory=dict)
     fingerprint: str = ""
     diagnostics: list[str] = field(default_factory=list)
 
@@ -159,12 +171,55 @@ class CohortObservation:
     anchor_node: str = ""
 
 
+# ---------------------------------------------------------------------------
+# Phase C: Slice IR
+# ---------------------------------------------------------------------------
+
+@dataclass
+class SliceObservations:
+    """Observations for a single context slice of an edge.
+
+    Same structure as the aggregate (window_obs + cohort_obs) but scoped
+    to one context_key. Populated by evidence binding when sliceDSL
+    contains context() / visited() / case() qualifiers.
+    """
+    context_key: str                # e.g. "context(channel:google)" or "" (aggregate)
+    window_obs: list[WindowObservation] = field(default_factory=list)
+    cohort_obs: list[CohortObservation] = field(default_factory=list)
+    total_n: int = 0
+    has_window: bool = False
+    has_cohort: bool = False
+
+
+@dataclass
+class SliceGroup:
+    """A grouping of slices along one context dimension.
+
+    All slices share the same dimension(s) — e.g. all context(channel:*)
+    slices form a single SliceGroup with dimension_key="channel".
+    """
+    dimension_key: str              # e.g. "channel" or "channel×device"
+    is_mece: bool = True            # context() = MECE, visited() = non-MECE
+    is_exhaustive: bool = False     # True if Σ n_slice ≈ n_aggregate
+    slices: dict[str, SliceObservations] = field(default_factory=dict)
+    residual: SliceObservations | None = None   # non-None for partial MECE
+
+
 @dataclass
 class LatencyPrior:
-    """Prior for edge-level latency (Phase A: fixed, not latent)."""
+    """Prior for edge-level latency.
+
+    onset_delta_days: histogram-derived onset. Used as soft observation
+    for the latent onset variable (doc 18) or as fixed value when
+    latent_onset is disabled.
+    onset_uncertainty: estimated uncertainty on the histogram onset.
+    Default: max(1.0, onset * 0.3). Used as sigma for the soft
+    observation Normal constraint.
+    """
     onset_delta_days: float = 0.0
     mu: float = 0.0
     sigma: float = 0.5
+    onset_uncertainty: float = 1.0   # sigma for histogram soft observation
     source: str = "lag_summary"   # "lag_summary" | "param_file" | "default"
 
 
@@ -199,6 +254,10 @@ class EdgeEvidence:
     # Total observations across all entries
     total_n: int = 0
 
+    # Phase C: context slices
+    slice_groups: dict[str, SliceGroup] = field(default_factory=dict)
+    has_slices: bool = False
+
     # Skip state
     skipped: bool = False
     skip_reason: str = ""
@@ -223,7 +282,7 @@ class SamplingConfig:
     draws: int = DEFAULT_DRAWS
     tune: int = DEFAULT_TUNE
     chains: int = DEFAULT_CHAINS
-    cores: int = DEFAULT_CHAINS
+    cores: int | None = None
     target_accept: float = DEFAULT_TARGET_ACCEPT
     random_seed: int | None = None
 
@@ -273,6 +332,10 @@ class LatencyPosteriorSummary:
     Directly usable for cohort() rendering — no FW composition needed
     at consumption time. Populated when cohort-level latency variables
     exist (Phase D step 2.5).
+
+    Onset posterior fields (onset_mean, onset_sd, onset_hdi_*): populated
+    when latent_onset is enabled (Phase D.O, doc 18). onset_delta_days
+    becomes the posterior mean; the HDI and SD give uncertainty.
     """
     mu_mean: float
     mu_sd: float
@@ -286,8 +349,18 @@ class LatencyPosteriorSummary:
     rhat: float = 0.0
     provenance: str = "point-estimate"
 
+    # Edge-level onset posterior (Phase D.O) — None when onset is fixed
+    onset_mean: float | None = None
+    onset_sd: float | None = None
+    onset_hdi_lower: float | None = None
+    onset_hdi_upper: float | None = None
+    onset_mu_corr: float | None = None    # posterior correlation onset↔mu
+
     # Path-level (cohort) latency — populated when cohort latency is fitted
     path_onset_delta_days: float | None = None
+    path_onset_sd: float | None = None
+    path_onset_hdi_lower: float | None = None
+    path_onset_hdi_upper: float | None = None
     path_mu_mean: float | None = None
     path_mu_sd: float | None = None
     path_sigma_mean: float | None = None
@@ -313,8 +386,20 @@ class LatencyPosteriorSummary:
             "rhat": round(self.rhat, 4) if self.rhat else None,
             "provenance": self.provenance,
         }
+        # Edge-level onset posterior (Phase D.O)
+        if self.onset_mean is not None:
+            result["onset_mean"] = round(self.onset_mean, 2)
+            result["onset_sd"] = round(self.onset_sd, 2) if self.onset_sd is not None else None
+            result["onset_hdi_lower"] = round(self.onset_hdi_lower, 2) if self.onset_hdi_lower is not None else None
+            result["onset_hdi_upper"] = round(self.onset_hdi_upper, 2) if self.onset_hdi_upper is not None else None
+            if self.onset_mu_corr is not None:
+                result["onset_mu_corr"] = round(self.onset_mu_corr, 3)
+        # Path-level (cohort) latency
         if self.path_mu_mean is not None:
             result["path_onset_delta_days"] = round(self.path_onset_delta_days, 2) if self.path_onset_delta_days is not None else None
+            result["path_onset_sd"] = round(self.path_onset_sd, 2) if self.path_onset_sd is not None else None
+            result["path_onset_hdi_lower"] = round(self.path_onset_hdi_lower, 2) if self.path_onset_hdi_lower is not None else None
+            result["path_onset_hdi_upper"] = round(self.path_onset_hdi_upper, 2) if self.path_onset_hdi_upper is not None else None
             result["path_mu_mean"] = round(self.path_mu_mean, 4)
             result["path_mu_sd"] = round(self.path_mu_sd, 4) if self.path_mu_sd is not None else None
             result["path_sigma_mean"] = round(self.path_sigma_mean, 4) if self.path_sigma_mean is not None else None

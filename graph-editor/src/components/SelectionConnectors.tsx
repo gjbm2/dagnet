@@ -464,6 +464,23 @@ export function SelectionConnectors({ graph }: { graph: any }) {
     return () => window.removeEventListener('dagnet:analysisHover', handler);
   }, []);
 
+  // Track active content tab per analysis (for per-tab DSL connector resolution)
+  const [activeTabByAnalysis, setActiveTabByAnalysis] = useState<Map<string, number>>(new Map());
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const { analysisId, activeContentIndex } = (e as CustomEvent).detail || {};
+      if (analysisId != null) {
+        setActiveTabByAnalysis(m => {
+          const next = new Map(m);
+          next.set(analysisId, activeContentIndex ?? 0);
+          return next;
+        });
+      }
+    };
+    window.addEventListener('dagnet:analysisActiveTabChanged', handler);
+    return () => window.removeEventListener('dagnet:analysisActiveTabChanged', handler);
+  }, []);
+
   // ONE visibility decision — four triggers, same rendering codepath.
   const visibleIds = useMemo(() => {
     if (!graph?.canvasAnalyses?.length) return new Set<string>();
@@ -496,7 +513,11 @@ export function SelectionConnectors({ graph }: { graph: any }) {
     const baseShapes = (graph.canvasAnalyses as any[])
       .filter((a: any) => visibleIds.has(a.id))
       .map((a: any) => {
-        const dsl = a.chart_current_layer_dsl || a.recipe?.analysis?.analytics_dsl;
+        // Read DSL from active content item (tab-level), falling back to container-level
+        const activeIdx = activeTabByAnalysis.get(a.id) ?? 0;
+        const activeCI = a.content_items?.[activeIdx] || a.content_items?.[0];
+        const dsl = activeCI?.chart_current_layer_dsl || activeCI?.analytics_dsl
+          || a.chart_current_layer_dsl || a.recipe?.analysis?.analytics_dsl;
         if (!dsl) return null;
 
         const rfNode = rfNodes.find(n => n.id === `analysis-${a.id}`);
@@ -624,7 +645,7 @@ export function SelectionConnectors({ graph }: { graph: any }) {
         fillOpacity: shape.isSelected ? 0.08 : shape.isHovered ? 0.015 : 0.03,
       } as ShapeData;
     });
-  }, [visibleIds, rfNodes, graph, selectedAnalysisId, hoveredAnalysisId, draggedAnalysisId]);
+  }, [visibleIds, rfNodes, graph, selectedAnalysisId, hoveredAnalysisId, draggedAnalysisId, activeTabByAnalysis]);
 
   // Halo highlights — ONE codepath. Every shape contributes equally.
   const { setNodes } = useReactFlow();

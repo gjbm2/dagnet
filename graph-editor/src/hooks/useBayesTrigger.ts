@@ -356,9 +356,10 @@ export function useBayesTrigger(computeMode: BayesComputeMode = 'local') {
         if (pollStatus.status === 'running') {
           const p = pollStatus.progress;
           if (p) {
-            label = `Bayes ${modeLabel}: ${p.detail || p.stage} — ${graphLabel}`;
+            const pct = Math.max(0, p.pct);  // clamp: -1 → 0
+            label = `Bayes ${modeLabel}: ${graphLabel}`;
             operationRegistryService.setProgress(opId, {
-              current: p.pct,
+              current: pct,
               total: 100,
               detail: p.detail || p.stage,
             });
@@ -369,7 +370,7 @@ export function useBayesTrigger(computeMode: BayesComputeMode = 'local') {
           label = `Bayes ${modeLabel}: ${pollStatus.status} — ${graphLabel}`;
         }
         operationRegistryService.setLabel(opId, label);
-      }, isLocal ? 2_000 : 3_000, 10 * 60 * 1000, statusUrl, abortController.signal);
+      }, 5_000, 10 * 60 * 1000, statusUrl, abortController.signal);
 
       // If cancelled, onCancel already handled state + registry — bail out
       if (finalStatus.status === 'cancelled') return;

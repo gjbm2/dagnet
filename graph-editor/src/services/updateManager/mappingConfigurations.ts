@@ -338,6 +338,12 @@ function buildMappingConfigurations(): Map<string, MappingConfiguration> {
       targetField: 'latency.path_sigma',
       condition: (source) => source.p?.latency?.path_sigma !== undefined && source.p?.id
     },
+    // path_onset_delta_days: path-level Σ onset_delta_days (DP sum along path, internal)
+    {
+      sourceField: 'p.latency.path_onset_delta_days',
+      targetField: 'latency.path_onset_delta_days',
+      condition: (source) => source.p?.latency?.path_onset_delta_days !== undefined && source.p?.id
+    },
     // NOTE: Bayesian posteriors are NOT mapped graph → file.
     // The webhook is the sole writer of posterior data to param files.
     // The graph carries a stripped summary (no fit_history/slices/_model_state)
@@ -771,9 +777,10 @@ function buildMappingConfigurations(): Map<string, MappingConfiguration> {
     { sourceField: 'latency.mu', targetField: 'p.latency.mu', condition: isProbType },
     { sourceField: 'latency.sigma', targetField: 'p.latency.sigma', condition: isProbType },
     { sourceField: 'latency.model_trained_at', targetField: 'p.latency.model_trained_at', condition: isProbType },
-    // path_mu, path_sigma: path-level A→Y CDF params (Fenton–Wilkinson, internal)
+    // path_mu, path_sigma, path_onset_delta_days: path-level A→Y CDF params (Fenton–Wilkinson, internal)
     { sourceField: 'latency.path_mu', targetField: 'p.latency.path_mu', condition: isProbType },
     { sourceField: 'latency.path_sigma', targetField: 'p.latency.path_sigma', condition: isProbType },
+    { sourceField: 'latency.path_onset_delta_days', targetField: 'p.latency.path_onset_delta_days', condition: isProbType },
 
     // Bayesian posteriors (file → graph, summary only — strip fit_history/slices/_model_state)
     // Probability posterior — written by Bayes webhook to param file root

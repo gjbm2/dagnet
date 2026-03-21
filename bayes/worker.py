@@ -342,7 +342,7 @@ def _fit_graph_compiler(payload: dict, report_progress=None) -> dict:
             draws=settings.get("draws", 2000),
             tune=settings.get("tune", 1000),
             chains=settings.get("chains", 4),
-            cores=settings.get("cores", 4),
+            cores=settings.get("cores"),
             target_accept=settings.get("target_accept", 0.90),
             random_seed=settings.get("random_seed"),
         )
@@ -557,6 +557,7 @@ def _build_result(
         "quality": quality,
         "warnings": [],
         "log": log,
+        "webhook_payload_edges": edges,  # for warm-start / harness re-run
         "webhook_response": webhook_response,
         "error": error,
     }

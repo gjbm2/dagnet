@@ -28,9 +28,11 @@ interface PosteriorIndicatorProps {
   theme?: 'light' | 'dark';
   /** When true, show only the badge (no popover on hover). Default false. */
   badgeOnly?: boolean;
+  /** Active model variable source (doc 15 §14.4) — shown in popover metadata */
+  activeSource?: 'bayesian' | 'analytic' | 'manual' | null;
 }
 
-export function PosteriorIndicator({ posterior, retrievedAt, theme = 'dark', badgeOnly = false }: PosteriorIndicatorProps) {
+export function PosteriorIndicator({ posterior, retrievedAt, theme = 'dark', badgeOnly = false, activeSource }: PosteriorIndicatorProps) {
   if (!posterior) return null;
 
   const tier = computeQualityTier(posterior);
@@ -85,7 +87,7 @@ export function PosteriorIndicator({ posterior, retrievedAt, theme = 'dark', bad
           onMouseEnter={handleEnter}
           onMouseLeave={handleLeave}
         >
-          <PosteriorDetails posterior={posterior} retrievedAt={retrievedAt} theme={theme} />
+          <PosteriorDetails posterior={posterior} retrievedAt={retrievedAt} theme={theme} activeSource={activeSource} />
         </div>,
         document.body,
       )}
@@ -101,18 +103,19 @@ interface PosteriorDetailsProps {
   posterior: Posterior;
   retrievedAt?: string | number | null;
   theme?: 'light' | 'dark';
+  activeSource?: 'bayesian' | 'analytic' | 'manual' | null;
 }
 
 /** Renders a compact diagnostic summary table. Reusable in popovers and panels. */
-export function PosteriorDetails({ posterior, retrievedAt, theme = 'dark' }: PosteriorDetailsProps) {
+export function PosteriorDetails({ posterior, retrievedAt, theme = 'dark', activeSource }: PosteriorDetailsProps) {
   const tier = computeQualityTier(posterior);
   const colour = qualityTierToColour(tier.tier, theme);
   const isProbability = 'evidence_grade' in posterior;
 
   if (isProbability) {
-    return <ProbabilityPosteriorDetails posterior={posterior as ProbabilityPosterior} tier={tier} colour={colour} retrievedAt={retrievedAt} theme={theme!} />;
+    return <ProbabilityPosteriorDetails posterior={posterior as ProbabilityPosterior} tier={tier} colour={colour} retrievedAt={retrievedAt} theme={theme!} activeSource={activeSource} />;
   }
-  return <LatencyPosteriorDetails posterior={posterior as LatencyPosterior} tier={tier} colour={colour} retrievedAt={retrievedAt} theme={theme!} />;
+  return <LatencyPosteriorDetails posterior={posterior as LatencyPosterior} tier={tier} colour={colour} retrievedAt={retrievedAt} theme={theme!} activeSource={activeSource} />;
 }
 
 function SectionHeader({ label, theme }: { label: string; theme: 'light' | 'dark' }) {
@@ -125,9 +128,9 @@ function SectionHeader({ label, theme }: { label: string; theme: 'light' | 'dark
   );
 }
 
-function ProbabilityPosteriorDetails({ posterior, tier, colour, retrievedAt, theme }: {
+function ProbabilityPosteriorDetails({ posterior, tier, colour, retrievedAt, theme, activeSource }: {
   posterior: ProbabilityPosterior; tier: ReturnType<typeof computeQualityTier>; colour: string;
-  retrievedAt?: string | number | null; theme: 'light' | 'dark';
+  retrievedAt?: string | number | null; theme: 'light' | 'dark'; activeSource?: 'bayesian' | 'analytic' | 'manual' | null;
 }) {
   const a = posterior.alpha, b = posterior.beta;
   const pMean = a / (a + b);
@@ -182,6 +185,12 @@ function ProbabilityPosteriorDetails({ posterior, tier, colour, retrievedAt, the
 
         {/* ── Metadata ── */}
         <SectionHeader label="Metadata" theme={theme} />
+        {activeSource && (
+          <tr>
+            <td className="posterior-details-label">Active source</td>
+            <td className="posterior-details-value" style={{ textTransform: 'capitalize' }}>{activeSource}</td>
+          </tr>
+        )}
         <tr>
           <td className="posterior-details-label">Provenance</td>
           <td className="posterior-details-value">{posterior.provenance}</td>
@@ -219,9 +228,9 @@ function ProbabilityPosteriorDetails({ posterior, tier, colour, retrievedAt, the
   );
 }
 
-function LatencyPosteriorDetails({ posterior, tier, colour, retrievedAt, theme }: {
+function LatencyPosteriorDetails({ posterior, tier, colour, retrievedAt, theme, activeSource }: {
   posterior: LatencyPosterior; tier: ReturnType<typeof computeQualityTier>; colour: string;
-  retrievedAt?: string | number | null; theme: 'light' | 'dark';
+  retrievedAt?: string | number | null; theme: 'light' | 'dark'; activeSource?: 'bayesian' | 'analytic' | 'manual' | null;
 }) {
   const hasPath = posterior.path_mu_mean != null;
 
@@ -304,6 +313,12 @@ function LatencyPosteriorDetails({ posterior, tier, colour, retrievedAt, theme }
 
         {/* ── Metadata ── */}
         <SectionHeader label="Metadata" theme={theme} />
+        {activeSource && (
+          <tr>
+            <td className="posterior-details-label">Active source</td>
+            <td className="posterior-details-value" style={{ textTransform: 'capitalize' }}>{activeSource}</td>
+          </tr>
+        )}
         <tr>
           <td className="posterior-details-label">Provenance</td>
           <td className="posterior-details-value">{posterior.provenance}</td>

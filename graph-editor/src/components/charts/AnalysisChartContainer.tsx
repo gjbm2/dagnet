@@ -175,6 +175,8 @@ export function AnalysisChartContainer(props: {
   onFileLink?: (fileId: string, type: string) => void;
   /** Extra React content to append after a specific tab's table in info cards. */
   infoTabExtra?: Record<string, React.ReactNode>;
+  /** When set, filter AnalysisInfoCard to this facet (no internal tab bar). */
+  facet?: string;
   /** Called once the chart reaches a terminal visual state.
    *  'rendered' = ECharts painted real data; 'failed' = null option / info / no chart. */
   onRendered?: (outcome: 'rendered' | 'failed') => void;
@@ -390,9 +392,16 @@ export function AnalysisChartContainer(props: {
 
   // Auto-fallback: when chart view can't render (no echarts option and not info),
   // switch to the next available view mode instead of showing "No data available".
+  // Guard with ref to fire at most once per mount — prevents infinite loop when
+  // viewMode prop reads from ci.view_type (content item) but onViewModeChange
+  // updates analysis.view_mode (container), so the prop never changes.
   const chartCanRender = (effectiveKind === 'info' && !!finalResult) || !!echartsOption;
+  const autoFallbackFiredRef = useRef(false);
+  // Reset fallback guard when chart becomes renderable again (e.g. new result arrives)
+  if (chartCanRender) autoFallbackFiredRef.current = false;
   useEffect(() => {
     if (chartCanRender) return;            // chart renders fine
+    if (autoFallbackFiredRef.current) return; // already fired — prevent loop
     if (props.children) return;            // parent supplies content (cards/table)
     if (!finalResult) return;            // no result yet — still loading
     if (!props.onViewModeChange) return;   // can't switch view mode
@@ -401,6 +410,7 @@ export function AnalysisChartContainer(props: {
     const available = getAvailableExpressions(finalResult);
     const fallback = available.find(m => m !== 'chart');
     if (fallback) {
+      autoFallbackFiredRef.current = true;
       props.onViewModeChange(fallback);
     }
   }, [chartCanRender, finalResult, props.children, props.onViewModeChange, props.viewMode]);
@@ -1026,7 +1036,7 @@ export function AnalysisChartContainer(props: {
           props.children
         ) : effectiveKind === 'info' && finalResult ? (
           <div style={{ flex: fillHeight ? 1 : undefined, minHeight: 0, overflow: 'auto' }}>
-            <AnalysisInfoCard result={finalResult} fontSize={resolvedSettings.font_size} defaultTab={props.infoDefaultTab} onFileLink={props.onFileLink} tabExtra={props.infoTabExtra} />
+            <AnalysisInfoCard result={finalResult} fontSize={resolvedSettings.font_size} defaultTab={props.infoDefaultTab} onFileLink={props.onFileLink} tabExtra={props.infoTabExtra} facet={props.facet} />
           </div>
         ) : echartsOption ? (
           <div style={{ flex: fillHeight ? 1 : undefined, minHeight: 0, position: 'relative' }}>

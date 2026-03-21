@@ -1,4 +1,17 @@
 {
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo 'PRE-FLIGHT: Check CLAUDE.md gates — git writes? destructive ops? memory writes? Do you have EXPLICIT permission in the CURRENT message?'"
+          }
+        ]
+      }
+    ]
+  },
   "permissions": {
     "allow": [
       "Bash(time curl:*)",

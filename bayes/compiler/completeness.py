@@ -205,6 +205,116 @@ def moment_matched_collapse(
     return delta_mix, mu_mix, sigma_mix
 
 
+def pt_moment_matched_collapse(
+    inbound: list[tuple],
+) -> tuple:
+    """Differentiable moment-matched collapse at a join node.
+
+    inbound: list of (delta, mu, sigma, weight) per inbound path.
+    delta is a float (onset sum); mu, sigma, weight may be PyTensor
+    variables or floats.
+
+    Returns (delta_mix, mu_mix, sigma_mix) where mu_mix/sigma_mix are
+    PyTensor expressions. delta_mix is a float (min of deltas).
+
+    Uses log-sum-exp formulation to avoid numerical overflow. The naive
+    approach computes E[T] = exp(mu + sigma²/2) which explodes for
+    large mu (e.g. mu=7 → E[T]=10,000). Log-sum-exp keeps everything
+    in log-space: log(Σ w_i · exp(a_i)) = max(a_i) + log(Σ w_i · exp(a_i - max(a_i))).
+
+    See doc 6 § "Join latency handling: moment-matched collapse".
+    """
+    import pytensor.tensor as pt
+
+    if not inbound:
+        return 0.0, pt.as_tensor_variable(0.0), pt.as_tensor_variable(0.01)
+
+    if len(inbound) == 1:
+        d, m, s, _ = inbound[0]
+        return d, pt.as_tensor_variable(m), pt.as_tensor_variable(s)
+
+    # Normalise weights
+    raw_weights = [w for _, _, _, w in inbound]
+    all_float = all(isinstance(w, (int, float)) for w in raw_weights)
+    total_w = sum(raw_weights) if all_float else pt.sum(pt.stack(raw_weights))
+    weights = [w / total_w for w in raw_weights]
+
+    delta_mix = min(float(d) for d, _, _, _ in inbound)
+
+    # Log-space moment computation.
+    # For each inbound path i with shifted lognormal (delta_i, mu_i, sigma_i):
+    #   log E[T_i - delta_mix] = log(delta_i - delta_mix + exp(mu_i + sigma_i²/2))
+    # We need log(Σ w_i · E[T_i - delta_mix]) = log-sum-exp of (log(w_i) + log(E[T_i - delta_mix]))
+    #
+    # For the second moment:
+    #   log E[(T_i - delta_mix)²] = log(Var_i + E_shifted_i²)
+
+    # Build log(E_shifted_i) for each path using log-add-exp
+    # E_shifted_i = (delta_i - delta_mix) + exp(mu_i + sigma_i²/2)
+    log_e_shifted = []
+    log_e2_shifted = []
+
+    for (delta, mu, sigma, _), w in zip(inbound, weights):
+        mu = pt.as_tensor_variable(mu)
+        sigma = pt.as_tensor_variable(sigma)
+
+        d_offset = float(delta) - delta_mix  # non-negative float
+        log_lognormal_mean = mu + sigma ** 2 / 2  # log(exp(mu + sigma²/2))
+
+        if d_offset > 0:
+            # E_shifted = d_offset + exp(log_lognormal_mean)
+            # log(E_shifted) = log(d_offset + exp(log_lognormal_mean))
+            #                 = log_add_exp(log(d_offset), log_lognormal_mean)
+            log_d = pt.log(pt.as_tensor_variable(d_offset))
+            log_es = pt.logaddexp(log_d, log_lognormal_mean)
+        else:
+            # d_offset == 0 (this is the min-delta path)
+            log_es = log_lognormal_mean
+
+        log_e_shifted.append(log_es)
+
+        # E[(T - delta_mix)²] = (delta - delta_mix)² + 2*(delta - delta_mix)*exp(mu + sigma²/2) + exp(2*mu + 2*sigma²)
+        # In log-space: log(E2) = log(d²  + 2*d*exp(a) + exp(2a + sigma²))
+        #   where a = mu + sigma²/2
+        # = log-sum-exp of the three terms
+        log_term3 = 2 * mu + 2 * sigma ** 2  # log(exp(2*mu + 2*sigma²))
+        if d_offset > 0:
+            log_term1 = pt.log(pt.as_tensor_variable(d_offset ** 2))
+            log_term2 = pt.log(pt.as_tensor_variable(2 * d_offset)) + log_lognormal_mean
+            log_e2 = pt.logaddexp(pt.logaddexp(log_term1, log_term2), log_term3)
+        else:
+            log_e2 = log_term3
+
+        log_e2_shifted.append(log_e2)
+
+    # Weighted log-sum-exp: log(Σ w_i · E_shifted_i) = log-sum-exp(log(w_i) + log(E_shifted_i))
+    log_w = [pt.log(pt.maximum(pt.as_tensor_variable(w), 1e-30)) for w in weights]
+
+    log_we = pt.stack([lw + les for lw, les in zip(log_w, log_e_shifted)])
+    log_e_mix = pt.logsumexp(log_we)
+
+    log_we2 = pt.stack([lw + le2 for lw, le2 in zip(log_w, log_e2_shifted)])
+    log_e2_mix = pt.logsumexp(log_we2)
+
+    # Var = E2 - E² → log(Var) = log(exp(log_E2) - exp(2*log_E))
+    # Use: log(a - b) = log(a) + log(1 - exp(log(b) - log(a)))
+    #                  = log_E2 + log(1 - exp(2*log_E - log_E2))
+    # = log_E2 + log1mexp(log_E2 - 2*log_E)  [when log_E2 > 2*log_E]
+    two_log_e = 2 * log_e_mix
+    log_var_diff = log_e2_mix - two_log_e  # should be > 0 (variance > 0)
+    # log(1 - exp(-|x|)) ≈ log(|x|) for small |x|, stable via log1mexp
+    log_var = log_e2_mix + pt.log(pt.maximum(1.0 - pt.exp(two_log_e - log_e2_mix), 1e-10))
+
+    # sigma_mix² = log(1 + Var/E²) = log(1 + exp(log_var - 2*log_e))
+    sigma_sq = pt.log1p(pt.exp(log_var - two_log_e))
+    sigma_mix = pt.sqrt(pt.maximum(sigma_sq, 1e-6))
+
+    # mu_mix = log(E_shifted) - sigma² / 2
+    mu_mix = log_e_mix - sigma_sq / 2
+
+    return delta_mix, mu_mix, sigma_mix
+
+
 # ---------------------------------------------------------------------------
 # Latency prior derivation (doc 1 §15.1, doc 6 Layer 4)
 # ---------------------------------------------------------------------------

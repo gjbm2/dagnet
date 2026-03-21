@@ -118,6 +118,11 @@ def main():
     parser.add_argument("--no-webhook", action="store_true", help="Skip webhook call")
     parser.add_argument("--curl", action="store_true", help="Generate curl command instead of running directly")
     parser.add_argument("--timeout", type=int, default=600, help="Hard timeout in seconds (default: 600)")
+    parser.add_argument("--graph", choices=["simple", "branch"], default="simple",
+                        help="Test graph: simple=bayes-test-gm-rebuild (4 edges), "
+                             "branch=conversion-flow-v2-recs-collapsed (10 edges, branch groups, joins)")
+    parser.add_argument("--warmstart", action="store_true",
+                        help="Two-pass: run once, feed posteriors back as priors, run again")
     args = parser.parse_args()
 
     conf = _read_private_repos_conf()
@@ -134,14 +139,53 @@ def main():
         print("ERROR: No DB_CONNECTION in graph-editor/.env.local")
         sys.exit(1)
 
+    # --- Graph-specific test data ---
+    # Each test graph has: graph file, edge→hash mapping, graph_id.
+    # (param_id, edge_uuid, window_core_hash, cohort_core_hash)
+    GRAPH_CONFIGS = {
+        "simple": {
+            "graph_file": "bayes-test-gm-rebuild.json",
+            "graph_id": "graph-bayes-test-gm-rebuild",
+            "edges": [
+                ("bayes-test-create-to-delegated",      "c64ddc4d-c369-4ae8-a44a-398a63a46ab1", "UaWTiPJp1kTXTlkigKzBAQ", "1npRXxdOjD56XTgKnZKbsw"),
+                ("bayes-test-delegated-to-registered",   "7bb83fbf-3ac6-4152-a395-a8b64a12506a", "ES2r-ClxqBl4VQQqYdfYYg", "YSX41CZhnZKsP49i80jjTg"),
+                ("bayes-test-landing-to-created",        "b91c2820-7a1d-4498-9082-5967b5027d76", "SXVK13yfsOIpXc4RQSv2GA", "yHCQevqcdyITym82h-uwdQ"),
+                ("bayes-test-registered-to-success",     "97b11265-1242-4fa8-a097-359f2384665a", "VTgXES1p_XdQoHMZ7VsEoA", "XiDhZpbnp535eBHiPu614w"),
+            ],
+            "anchor_from": "2025-11-19",
+            "anchor_to": "2026-03-19",
+        },
+        "branch": {
+            "graph_file": "conversion-flow-v2-recs-collapsed.json",
+            "graph_id": "graph-conversion-flow-v2-recs-collapsed",
+            "edges": [
+                ("coffee-to-bds",                    "76e0e0f8-133d-4065-9fab-56480063d9c9", "HZC_WqTRBfy7zPWtXTtY7A", "plxD-64WK7_SJAY--TUlcA"),
+                ("registration-to-success",          "370dce1d-3a36-4109-9711-204c301478c8", "-wNEREQRwNRE5wRjjuy2iQ", "CsFATi4Ye90pSpK-tEyzbg"),
+                ("household-delegation-rate",        "3d0a0757-8224-4cf0-a841-4ad17cd48d91", "r0AMpAJ_uExLojzFQhI3BQ", "QqoOJonqx8zzialfD5jKlQ"),
+                ("delegated-to-non-energy-rec",      "10e37cc7-0d37-4cd9-844b-653148025a51", "0Q4-AGwPXERTs5bQ0NACRg", "v_BRrQXxGn6lQ0MuJVccpA"),
+                ("bds-to-energy-rec",                "77d0a69e-3c75-4722-932b-7f54d317d0ce", "D6tg5LOxVxSqUXvaLjtbog", "spQwZYRcECdZMr2CshbT-g"),
+                ("delegated-to-coffee",              "64f4529c-62b8-4e7e-8479-c5289d925e58", "cFSR9ljHVYv9oAxijnyEWg", "kpDI95Ogtg6Rstx-jFpGCQ"),
+                ("no-bdos-to-rec",                   "13b5397f-9feb-453a-8e86-500c0693b4af", "xrcxwR2t-wEECamJSw4RNg", "gTtI0X5ks5GD4USIz_tEGQ"),
+                ("delegation-straight-to-energy-rec","8c23ea34-9c7e-40b3-ade3-291590774bfc", "EtC-FhDURPFuAvbZmc_DcA", "4Rfk9gYwK_27k2po2zOxzA"),
+                ("non-energy-rec-to-reg",            "9624cce1-21f3-4085-9388-c155b5b657fd", "gmOm0rBQD9HRA3l8Kdo7hw", "_oPC_SNhxKml76ZzmESycg"),
+                ("rec-with-bdos-to-registration",    "d45debd8-939b-4abb-b0d0-c5ef62412add", "ENci8vAkh-B9vMUx9SutXQ", "z3jCJuGWXK5g7h47on_Ryg"),
+            ],
+            "anchor_from": "2025-11-01",
+            "anchor_to": "2026-03-20",
+        },
+    }
+
+    gcfg = GRAPH_CONFIGS[args.graph]
+    _edges = gcfg["edges"]
+
     # Load graph
-    graph_path = os.path.join(data_repo_path, "graphs", "bayes-test-gm-rebuild.json")
+    graph_path = os.path.join(data_repo_path, "graphs", gcfg["graph_file"])
     if not os.path.isfile(graph_path):
         print(f"ERROR: Graph not found: {graph_path}")
         sys.exit(1)
     with open(graph_path) as f:
         graph = json.load(f)
-    print(f"Graph: {len(graph.get('edges', []))} edges")
+    print(f"Graph [{args.graph}]: {len(graph.get('edges', []))} edges")
 
     # Load param files
     import yaml
@@ -152,17 +196,6 @@ def main():
             with open(os.path.join(params_dir, fname)) as f:
                 param_id = fname.replace(".yaml", "")
                 param_files[f"parameter-{param_id}"] = yaml.safe_load(f)
-    print(f"Param files: {list(param_files.keys())}")
-
-    # Build snapshot subjects: 4 edges × 2 slices (window + cohort) = 8 subjects.
-    # Each slice type has a different core_hash because the FE computes
-    # core_hash from the canonical_signature which includes the DSL.
-    _edges = [
-        ("bayes-test-create-to-delegated",      "c64ddc4d-c369-4ae8-a44a-398a63a46ab1", "UaWTiPJp1kTXTlkigKzBAQ", "1npRXxdOjD56XTgKnZKbsw"),
-        ("bayes-test-delegated-to-registered",   "7bb83fbf-3ac6-4152-a395-a8b64a12506a", "ES2r-ClxqBl4VQQqYdfYYg", "YSX41CZhnZKsP49i80jjTg"),
-        ("bayes-test-landing-to-created",        "b91c2820-7a1d-4498-9082-5967b5027d76", "SXVK13yfsOIpXc4RQSv2GA", "yHCQevqcdyITym82h-uwdQ"),
-        ("bayes-test-registered-to-success",     "97b11265-1242-4fa8-a097-359f2384665a", "VTgXES1p_XdQoHMZ7VsEoA", "XiDhZpbnp535eBHiPu614w"),
-    ]
 
     # Build equivalent_hashes from hash-mappings.json — same ClosureEntry
     # shape the FE sends (dicts with core_hash, operation, weight).
@@ -196,10 +229,10 @@ def main():
             "target": {"targetId": edge_id},
             "edge_id": edge_id,
             "slice_keys": [""],
-            "anchor_from": "2025-11-19",
-            "anchor_to": "2026-03-19",
-            "sweep_from": "2025-11-19",
-            "sweep_to": "2026-03-19",
+            "anchor_from": gcfg["anchor_from"],
+            "anchor_to": gcfg["anchor_to"],
+            "sweep_from": gcfg["anchor_from"],
+            "sweep_to": gcfg["anchor_to"],
         }
         snapshot_subjects.append({
             **base,
@@ -211,10 +244,10 @@ def main():
             "core_hash": cohort_hash,
             "equivalent_hashes": equiv_map.get(cohort_hash, []),
         })
-    print(f"Snapshot subjects: {len(snapshot_subjects)} (4 edges × 2 slices)")
+    print(f"Snapshot subjects: {len(snapshot_subjects)} ({len(_edges)} edges × 2 slices)")
 
     payload = {
-        "graph_id": "graph-bayes-test-gm-rebuild",
+        "graph_id": gcfg["graph_id"],
         "graph_snapshot": graph,
         "parameter_files": param_files,
         "parameters_index": {},
@@ -222,7 +255,9 @@ def main():
         "db_connection": db_connection,
         "webhook_url": "" if args.no_webhook else "http://localhost:5173/api/bayes-webhook",
         "callback_token": "test-harness",
-        "settings": {"placeholder": True} if args.placeholder else {},
+        "settings": {
+            **({"placeholder": True} if args.placeholder else {}),
+        },
         "_job_id": f"harness-{int(time.time())}",
     }
 
@@ -237,9 +272,22 @@ def main():
         print(f'  curl -s "http://localhost:9000/api/bayes/status?call_id=JOB_ID" | python3 -m json.tool')
         return
 
-    # Run in a background thread with timeout and progress reporting
+    # Run in a background thread with timeout and progress reporting.
+    # All output goes to both stdout and a log file for tailing.
     import threading
     import signal
+
+    LOG_PATH = "/tmp/bayes_harness.log"
+    log_file = open(LOG_PATH, "w")
+
+    def _print(msg="", **kwargs):
+        """Print to both stdout and log file."""
+        print(msg, flush=True, **kwargs)
+        log_file.write(msg + "\n")
+        log_file.flush()
+
+    _print(f"Log file: {LOG_PATH}")
+    _print(f"  tail -f {LOG_PATH}")
 
     TIMEOUT_S = args.timeout
     t_start = time.time()
@@ -250,86 +298,143 @@ def main():
     def on_progress(stage, pct, detail=""):
         elapsed = time.time() - t_start
         last_stage[0] = stage
-        print(f"  [{pct:3d}%] {elapsed:6.1f}s  {stage}: {detail}", flush=True)
+        _print(f"  [{pct:3d}%] {elapsed:6.1f}s  {stage}: {detail}")
 
-    def run_worker():
-        from worker import fit_graph
-        try:
-            result_box[0] = fit_graph(payload, report_progress=on_progress)
-        except Exception as e:
-            import traceback
-            error_box[0] = (e, traceback.format_exc())
+    def _run_once(run_payload, label=""):
+        """Run fit_graph in a background thread with timeout. Returns result or exits."""
+        result_box[0] = None
+        error_box[0] = None
+        t_start_run = time.time()
 
-    print(f"\n{'='*60}")
-    print(f"Running fit_graph ({'placeholder' if args.placeholder else 'compiler'})...")
-    print(f"Timeout: {TIMEOUT_S}s")
-    print(f"{'='*60}\n")
+        def _worker():
+            from worker import fit_graph
+            try:
+                result_box[0] = fit_graph(run_payload, report_progress=on_progress)
+            except Exception as e:
+                import traceback
+                error_box[0] = (e, traceback.format_exc())
 
-    thread = threading.Thread(target=run_worker, daemon=True)
-    thread.start()
+        _print(f"\n{'='*60}")
+        _print(f"Running fit_graph [{args.graph}]{' — ' + label if label else ''} "
+               f"({'placeholder' if args.placeholder else 'compiler'})...")
+        _print(f"Timeout: {TIMEOUT_S}s")
+        _print(f"{'='*60}\n")
 
-    # Poll until done or timeout
-    while thread.is_alive():
-        thread.join(timeout=5.0)
-        if thread.is_alive():
-            elapsed = time.time() - t_start
-            if elapsed > TIMEOUT_S:
-                print(f"\n  TIMEOUT after {elapsed:.0f}s (last stage: {last_stage[0]})")
-                # Kill any child processes (PyMC multiprocessing workers)
-                import subprocess
-                subprocess.run(
-                    ["pkill", "-P", str(os.getpid())],
-                    capture_output=True,
-                )
-                sys.exit(1)
-            # Heartbeat — show we're alive
-            print(f"  ... {elapsed:.0f}s elapsed, stage: {last_stage[0]}", flush=True)
+        thread = threading.Thread(target=_worker, daemon=True)
+        thread.start()
 
-    if error_box[0]:
-        e, tb = error_box[0]
-        print(f"\nCRASHED after {time.time() - t_start:.1f}s: {e}")
-        print(tb)
-        sys.exit(1)
+        while thread.is_alive():
+            thread.join(timeout=5.0)
+            if thread.is_alive():
+                elapsed = time.time() - t_start_run
+                if elapsed > TIMEOUT_S:
+                    _print(f"\n  TIMEOUT after {elapsed:.0f}s (last stage: {last_stage[0]})")
+                    import subprocess
+                    subprocess.run(["pkill", "-P", str(os.getpid())], capture_output=True)
+                    log_file.close()
+                    sys.exit(1)
+                _print(f"  ... {elapsed:.0f}s elapsed, stage: {last_stage[0]}")
 
-    result = result_box[0]
-    if not result:
-        print(f"\nNo result returned after {time.time() - t_start:.1f}s")
-        sys.exit(1)
+        if error_box[0]:
+            e, tb = error_box[0]
+            _print(f"\nCRASHED after {time.time() - t_start_run:.1f}s: {e}")
+            _print(tb)
+            log_file.close()
+            sys.exit(1)
+
+        if not result_box[0]:
+            _print(f"\nNo result returned after {time.time() - t_start_run:.1f}s")
+            log_file.close()
+            sys.exit(1)
+
+        return result_box[0]
+
+    def _patch_graph_with_posteriors(graph_snapshot, result):
+        """Write fitted latency posteriors back onto graph edges as priors for next run."""
+        import copy
+        patched = copy.deepcopy(graph_snapshot)
+        edges_by_uuid = {e["uuid"]: e for e in patched.get("edges", [])}
+
+        webhook_edges = result.get("webhook_payload_edges", [])
+        patched_count = 0
+        for we in webhook_edges:
+            eid = we.get("edge_id", "")
+            lat = we.get("latency")
+            if not lat or not eid:
+                continue
+            edge = edges_by_uuid.get(eid)
+            if not edge:
+                continue
+            p_block = edge.get("p") or {}
+            latency_block = p_block.get("latency") or {}
+            # Write fitted mu/sigma as the latency block's mu/sigma
+            # (topology.py reads these in the second fallback)
+            if lat.get("mu_mean") is not None:
+                latency_block["mu"] = lat["mu_mean"]
+            if lat.get("sigma_mean") is not None:
+                latency_block["sigma"] = lat["sigma_mean"]
+            if lat.get("onset_delta_days") is not None:
+                latency_block["onset_delta_days"] = lat["onset_delta_days"]
+            # Path-level too
+            if lat.get("path_mu_mean") is not None:
+                latency_block["path_mu"] = lat["path_mu_mean"]
+            if lat.get("path_sigma_mean") is not None:
+                latency_block["path_sigma"] = lat["path_sigma_mean"]
+            p_block["latency"] = latency_block
+            edge["p"] = p_block
+            patched_count += 1
+
+        _print(f"\n  Warm-start: patched {patched_count} edges with posteriors as priors")
+        return patched
+
+    # --- Run ---
+    result = _run_once(payload, label="pass 1" if args.warmstart else "")
+
+    if args.warmstart:
+        quality = result.get("quality", {})
+        _print(f"\n  Pass 1 quality: rhat={quality.get('max_rhat')}, "
+               f"ess={quality.get('min_ess')}, div={quality.get('total_divergences')}")
+
+        patched_graph = _patch_graph_with_posteriors(payload["graph_snapshot"], result)
+        payload2 = {**payload, "graph_snapshot": patched_graph,
+                    "_job_id": f"harness-warmstart-{int(time.time())}"}
+        result = _run_once(payload2, label="pass 2 (warm-started)")
 
     # Print results
-    print(f"\n{'='*60}")
-    print("RESULT LOG")
-    print(f"{'='*60}")
+    _print(f"\n{'='*60}")
+    _print("RESULT LOG")
+    _print(f"{'='*60}")
     for line in result.get("log", []):
-        print(f"  {line}")
+        _print(f"  {line}")
 
-    print(f"\nStatus:      {result.get('status')}")
-    print(f"Edges fitted: {result.get('edges_fitted')}")
-    print(f"Duration:    {result.get('duration_ms')}ms")
+    _print(f"\nStatus:      {result.get('status')}")
+    _print(f"Edges fitted: {result.get('edges_fitted')}")
+    _print(f"Duration:    {result.get('duration_ms')}ms")
 
     quality = result.get("quality", {})
-    print(f"Quality:     rhat={quality.get('max_rhat')}, ess={quality.get('min_ess')}, converged={quality.get('converged_pct')}%")
+    _print(f"Quality:     rhat={quality.get('max_rhat')}, ess={quality.get('min_ess')}, converged={quality.get('converged_pct')}%")
 
     if result.get("error"):
-        print(f"Error:       {result['error']}")
+        _print(f"Error:       {result['error']}")
 
-    # Print posterior summaries
     webhook_resp = result.get("webhook_response")
     if webhook_resp:
-        print(f"\nWebhook:     {webhook_resp.get('status')}")
+        _print(f"\nWebhook:     {webhook_resp.get('status')}")
 
     timings = result.get("timings", {})
     if timings:
-        print(f"\nTimings:")
+        _print(f"\nTimings:")
         for k, v in timings.items():
-            print(f"  {k}: {v}ms")
+            _print(f"  {k}: {v}ms")
 
-    print(f"\n{'='*60}")
+    _print(f"\n{'='*60}")
     if result.get("status") == "complete" or result.get("edges_fitted", 0) > 0:
-        print("PASS")
+        _print("PASS")
     else:
-        print("FAIL")
-    print(f"{'='*60}")
+        _print("FAIL")
+    _print(f"{'='*60}")
+
+    log_file.close()
 
 
 if __name__ == "__main__":

@@ -273,10 +273,10 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
         path_mu = model_params.get('path_mu')
         path_sigma = model_params.get('path_sigma')
         if path_mu is not None and path_sigma is not None:
-            # Use path_delta if available, fall back to edge onset (Phase 1 interim)
-            path_delta = model_params.get('path_delta',
+            # Use path_onset_delta_days if available, fall back to edge onset
+            path_onset = model_params.get('path_onset_delta_days',
                                            model_params['onset_delta_days'])
-            return (path_mu, path_sigma, path_delta, 'cohort_path')
+            return (path_mu, path_sigma, path_onset, 'cohort_path')
         return (model_params['mu'], model_params['sigma'],
                 model_params['onset_delta_days'], 'cohort_edge_fallback')
 
@@ -324,9 +324,9 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
             result['path_mu'] = float(path_mu)
         if isinstance(path_sigma, (int, float)) and math.isfinite(path_sigma) and path_sigma > 0:
             result['path_sigma'] = float(path_sigma)
-        path_delta = latency.get('path_delta')
-        if isinstance(path_delta, (int, float)) and math.isfinite(path_delta) and path_delta >= 0:
-            result['path_delta'] = float(path_delta)
+        path_onset = latency.get('path_onset_delta_days')
+        if isinstance(path_onset, (int, float)) and math.isfinite(path_onset) and path_onset >= 0:
+            result['path_onset_delta_days'] = float(path_onset)
         # Bayesian latency posterior — edge-level (window)
         lat_posterior = latency.get('posterior') or {}
         bayes_mu = lat_posterior.get('mu_mean')
@@ -335,8 +335,12 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
                 and isinstance(bayes_sigma, (int, float)) and math.isfinite(bayes_sigma) and bayes_sigma > 0):
             result['bayes_mu'] = float(bayes_mu)
             result['bayes_sigma'] = float(bayes_sigma)
-            bayes_onset = lat_posterior.get('onset_delta_days')
+            # Phase D.O: prefer posterior onset_mean (latent onset) over prior onset_delta_days
+            bayes_onset = lat_posterior.get('onset_mean') or lat_posterior.get('onset_delta_days')
             result['bayes_onset'] = float(bayes_onset) if isinstance(bayes_onset, (int, float)) and math.isfinite(bayes_onset) else 0.0
+            bayes_onset_sd = lat_posterior.get('onset_sd')
+            if isinstance(bayes_onset_sd, (int, float)) and math.isfinite(bayes_onset_sd) and bayes_onset_sd > 0:
+                result['bayes_onset_sd'] = float(bayes_onset_sd)
         # Bayesian latency posterior — uncertainty (for confidence bands)
         bayes_mu_sd = lat_posterior.get('mu_sd')
         bayes_sigma_sd = lat_posterior.get('sigma_sd')
@@ -360,6 +364,9 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
                 result['bayes_path_mu_sd'] = float(bayes_path_mu_sd)
             if (isinstance(bayes_path_sigma_sd, (int, float)) and math.isfinite(bayes_path_sigma_sd) and bayes_path_sigma_sd > 0):
                 result['bayes_path_sigma_sd'] = float(bayes_path_sigma_sd)
+            bayes_path_onset_sd = lat_posterior.get('path_onset_sd')
+            if isinstance(bayes_path_onset_sd, (int, float)) and math.isfinite(bayes_path_onset_sd) and bayes_path_onset_sd > 0:
+                result['bayes_path_onset_sd'] = float(bayes_path_onset_sd)
         return result
 
     def _append_synthetic_cohort_maturity_frames(args: Dict[str, Any]) -> None:
@@ -816,19 +823,23 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
 
                             # Bayesian confidence band (99.9%) via delta method.
                             # model_rate(τ) = p × CDF(τ; mu, sigma, onset)
-                            # Three independent axes of uncertainty: p, mu, sigma.
+                            # Four independent axes of uncertainty: p, mu, sigma, onset.
                             # Partial derivatives:
                             #   ∂rate/∂p     = CDF(τ)
                             #   ∂rate/∂mu    = p × ∂CDF/∂mu
                             #   ∂rate/∂sigma = p × ∂CDF/∂sigma
+                            #   ∂rate/∂onset = p × ∂CDF/∂onset = -p × φ(z) / (σ × (τ-δ))
                             # var(rate) = CDF²·p_sd² + p²·[(∂CDF/∂mu)²·mu_sd²
-                            #             + (∂CDF/∂sigma)²·sigma_sd²]
+                            #             + (∂CDF/∂sigma)²·sigma_sd²
+                            #             + (∂CDF/∂onset)²·onset_sd²]
                             if cdf_mode == 'cohort_path' and 'bayes_path_mu_sd' in model_params:
                                 band_mu_sd = model_params['bayes_path_mu_sd']
                                 band_sigma_sd = model_params.get('bayes_path_sigma_sd', 0.0)
+                                band_onset_sd = model_params.get('bayes_path_onset_sd', 0.0)
                             else:
                                 band_mu_sd = model_params.get('bayes_mu_sd')
                                 band_sigma_sd = model_params.get('bayes_sigma_sd', 0.0)
+                                band_onset_sd = model_params.get('bayes_onset_sd', 0.0)
                             band_p_sd = model_params.get('p_stdev', 0.0)
 
                             # Map display setting to z-multiplier
@@ -859,7 +870,7 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
                                         dcdf_dmu = -phi_z / b_sigma
                                         dcdf_dsigma = -phi_z * z / b_sigma
 
-                                        # var(rate) from all three axes
+                                        # var(rate) from four axes (delta method)
                                         var_rate = 0.0
                                         # p uncertainty: ∂rate/∂p = CDF
                                         if band_p_sd > 0:
@@ -869,6 +880,10 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
                                         # sigma uncertainty: ∂rate/∂sigma = p × ∂CDF/∂sigma
                                         if band_sigma_sd > 0:
                                             var_rate += (p_val * dcdf_dsigma) ** 2 * (band_sigma_sd ** 2)
+                                        # onset uncertainty: ∂rate/∂onset = -p × φ(z) / (σ × (τ-δ))
+                                        if band_onset_sd > 0 and model_age > 0:
+                                            dcdf_donset = -phi_z / (b_sigma * model_age)
+                                            var_rate += (p_val * dcdf_donset) ** 2 * (band_onset_sd ** 2)
 
                                         sd_rate = math.sqrt(var_rate)
                                         ru = rate + band_k * sd_rate

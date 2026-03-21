@@ -557,12 +557,64 @@ export interface LatencyConfig {
   path_mu?: number;
   /** Path-level A→Y log-normal sigma from Fenton–Wilkinson (internal, not UI-exposed) */
   path_sigma?: number;
+  /** Path-level Σ onset_delta_days along path (DP sum, internal, not UI-exposed) */
+  path_onset_delta_days?: number;
 
   /** UK date (d-MMM-yy) when the model was last fitted (staleness detection, not UI-exposed) */
   model_trained_at?: string;
 
   /** Bayesian posterior for latency parameters (written by fitting engine) */
   posterior?: LatencyPosterior;
+}
+
+// ── Model variable provenance (doc 15) ──────────────────────────────────────
+
+/** Source of a model variable set */
+export type ModelSource = 'analytic' | 'bayesian' | 'manual';
+
+/** Preference for which model var source to promote to scalars.
+ *  'manual' is valid only at edge level (not graph level).
+ */
+export type ModelSourcePreference = 'best_available' | 'bayesian' | 'analytic' | 'manual';
+
+/** Graph-level model source preference (no 'manual' option) */
+export type GraphModelSourcePreference = 'best_available' | 'bayesian' | 'analytic';
+
+/** Quality metrics from a Bayesian model_vars entry (evaluated once at write time) */
+export interface ModelVarsQuality {
+  rhat: number;
+  ess: number;
+  divergences: number;
+  evidence_grade: number;       // 0=cold start, 1=weak, 2=mature, 3=full Bayesian
+  gate_passed: boolean;         // meetsQualityGate() result at write time
+}
+
+/** Provenance-tagged set of model variables from one source.
+ *  Each entry is a complete snapshot — no sparse entries, no per-field mixing.
+ *  See doc 15 §2.1.
+ */
+export interface ModelVarsEntry {
+  source: ModelSource;
+  source_at: string;            // d-MMM-yy — when this entry was last updated
+
+  probability: {
+    mean: number;               // [0,1]
+    stdev: number;              // >= 0
+  };
+
+  latency?: {
+    mu: number;                 // log-normal location
+    sigma: number;              // log-normal scale
+    t95: number;                // 95th percentile (days)
+    onset_delta_days: number;
+    path_mu?: number;
+    path_sigma?: number;
+    path_t95?: number;
+    path_onset_delta_days?: number;
+  };
+
+  /** Bayesian-specific quality metadata (present only when source === 'bayesian') */
+  quality?: ModelVarsQuality;
 }
 
 // ── Bayesian posterior types ────────────────────────────────────────────────
@@ -648,8 +700,18 @@ export interface LatencyPosterior {
   provenance: 'bayesian' | 'pooled-fallback' | 'point-estimate' | 'skipped';
   fit_history?: LatencyFitHistoryEntry[];
 
+  // Edge-level onset posterior (Phase D.O) — present when onset is latent
+  onset_mean?: number;              // Posterior mean of latent onset (days)
+  onset_sd?: number;                // Posterior SD of latent onset
+  onset_hdi_lower?: number;         // HDI lower bound for onset
+  onset_hdi_upper?: number;         // HDI upper bound for onset
+  onset_mu_corr?: number;           // Posterior correlation onset↔μ (identifiability)
+
   // Path-level (cohort) latency — present when cohort latency is fitted
   path_onset_delta_days?: number;   // Fitted path onset (cohort context)
+  path_onset_sd?: number;           // Path-level onset posterior SD
+  path_onset_hdi_lower?: number;    // Path-level onset HDI lower bound
+  path_onset_hdi_upper?: number;    // Path-level onset HDI upper bound
   path_mu_mean?: number;            // Path-level posterior mean of μ
   path_mu_sd?: number;              // Path-level posterior SD of μ
   path_sigma_mean?: number;         // Path-level posterior mean of σ
@@ -795,6 +857,20 @@ export interface ProbabilityParam {
   
   /** Bayesian posterior for this probability parameter (written by fitting engine) */
   posterior?: ProbabilityPosterior;
+
+  // === Model variable provenance (doc 15) ===
+
+  /** Candidate model variable sets from different sources */
+  model_vars?: ModelVarsEntry[];
+
+  /** Per-edge override of graph.model_source_preference.
+   *  If present, takes precedence over graph-level setting.
+   *  'manual' valid only here, not at graph level.
+   */
+  model_source_preference?: ModelSourcePreference;
+
+  /** True when model_source_preference was explicitly set by user (not auto) */
+  model_source_preference_overridden?: boolean;
 
   /** Forecast probability from mature cohorts (p_∞) */
   forecast?: {
@@ -1039,6 +1115,32 @@ export interface CanvasAnalysisDisplay {
 
 export type CanvasAnalysisMode = 'live' | 'custom' | 'fixed';
 
+/** A single renderable item inside a canvas object container. */
+export interface ContentItem {
+  id: string;                          // UUID — stable across drag/reorder
+  analysis_type: string;               // 'edge_info', 'cohort_maturity', etc.
+  view_type: 'chart' | 'cards' | 'table';  // how to render
+  chart_kind?: string;                 // which chart variant (when view_type = 'chart')
+  facet?: string;                      // 'overview' | 'evidence' | 'forecast' | ...
+  display?: CanvasAnalysisDisplay;     // font_size, scale_with_canvas, etc.
+  title?: string;                      // per-content label override
+  analysis_type_overridden?: boolean;
+  analytics_dsl?: string;              // data subject — e.g. 'from(X).to(Y)'
+  chart_current_layer_dsl?: string;    // live-mode constraint fragment
+}
+
+/**
+ * CanvasAnalysis — a canvas object container with content items.
+ *
+ * Container owns: position, size, scenario policy.
+ * Content items own: data subject (DSL), analysis type, view type, chart kind,
+ *   facet, display, chart_current_layer_dsl.
+ *
+ * For backward compatibility, the flat ChartDefinition fields (view_mode,
+ * chart_kind, display, recipe.analysis.analysis_type, recipe.analysis.analytics_dsl)
+ * are preserved. Use normaliseCanvasAnalysis() to ensure content_items is populated
+ * from flat fields when loading legacy graphs.
+ */
 export interface CanvasAnalysis extends ChartDefinition {
   id: string;
   x: number;
@@ -1049,6 +1151,8 @@ export interface CanvasAnalysis extends ChartDefinition {
   chart_current_layer_dsl?: string;
   analysis_type_overridden?: boolean;
   display?: CanvasAnalysisDisplay;
+  /** Ordered list of content inside this container. */
+  content_items?: ContentItem[];
 }
 
 export interface ConversionGraph {
@@ -1093,6 +1197,11 @@ export interface ConversionGraph {
    * e.g. "amplitude-prod", "amplitude-staging"
    */
   defaultConnection?: string;
+
+  /** Which model var source to promote to scalars (doc 15 §2.3).
+   *  Default: 'best_available'. Cascades to all edges without per-edge override.
+   */
+  model_source_preference?: GraphModelSourcePreference;
 
   /** Metadata from the most recent Bayesian fitting run (written by fitting engine) */
   _bayes?: BayesRunMetadata;

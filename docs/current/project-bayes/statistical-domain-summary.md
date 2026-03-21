@@ -515,10 +515,16 @@ time. This affects **analytic (pre-Bayes) path composition only**:
 path_delta = anchor_onset + edge_onset
 ```
 
-The Bayesian compiler does not need pre-computed onset — it estimates
-delta as part of the MCMC posterior from panel data (A, X, Y counts +
-`anchor_median_lag_days` / `anchor_mean_lag_days`, all persisted in the
-snapshot DB). For the analytic pipeline, `anchor_median_lag_days` serves
+**Update 21-Mar-26**: Doc 18 (`18-latent-onset-design.md`) designs
+edge-level onset as a latent variable in the Bayesian model. The
+histogram-derived value enters as a soft observation (noisy prior), not
+a fixed input. A graph-level dispersion parameter (`tau_onset`) governs
+how much onset varies across edges — learned from trajectory data. This
+supersedes the analytic pipeline's dependency on pre-computed onset for
+Bayesian inference, though the analytic pipeline retains its own
+histogram-derived onset for non-Bayesian consumers.
+
+For the analytic pipeline, `anchor_median_lag_days` serves
 as a conservative proxy. Proper `path_delta` accumulation comes with
 Semantic Foundation Phase 2 (doc 1 §15.3.4).
 

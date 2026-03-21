@@ -76,7 +76,7 @@ export function useAnalysisBootCoordinator(
       .filter(analysisNeedsSnapshots)
       .map(a => {
         const type = a.recipe?.analysis?.analysis_type || '';
-        const dsl = a.recipe?.analysis?.analytics_dsl || '';
+        const dsl = a.content_items?.[0]?.analytics_dsl || a.recipe?.analysis?.analytics_dsl || '';
         const scenarioDsls = (a.recipe?.scenarios || [])
           .map((s: any) => s.effective_dsl || '')
           .join(',');

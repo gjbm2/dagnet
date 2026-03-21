@@ -233,6 +233,51 @@ Beta-Binomial / Dirichlet-Multinomial likelihoods.
 
 ---
 
+## Phase D.O: Latent onset and onset dispersion
+
+**Status**: Design (21-Mar-26). Full specification in doc 18
+(`18-latent-onset-design.md`).
+
+**Goal**: make edge-level onset a latent variable, add graph-level onset
+hyperprior and learned dispersion (`tau_onset`), derive path-level onset
+prior spread from `tau_onset`, and surface onset posteriors in FE.
+
+**What changes from Phase D**:
+
+- **Latent edge-level onset**: `onset_{edge}` becomes a latent variable
+  drawn from a graph-level hierarchical prior (`onset_hyper_mu`,
+  `tau_onset`). Non-centred parameterisation. Histogram-derived onset
+  enters as a soft observation (noisy prior), not fixed ground truth.
+- **Graph-level onset dispersion**: `tau_onset ~ HalfNormal(5.0)` learned
+  from data — controls how much onset varies across edges. Low-data
+  edges borrow onset strength from better-observed edges.
+- **Path-level onset prior from learned dispersion**: `onset_cohort` prior
+  spread derives from `tau_onset * sqrt(n_path_edges)` rather than
+  hardcoded `HalfNormal(sigma=max(..., 1.0))`. Path onset prior centre
+  is the latent sum of edge onsets — gradients flow back.
+- **Softplus everywhere**: `softplus(age - onset)` replaces `max(0,...)`
+  for window completeness (already done for cohort). Ensures NUTS
+  gradients flow through onset.
+- **Posterior output**: `onset_mean`, `onset_sd`, `onset_hdi_*` per edge;
+  `path_onset_sd`, `path_onset_hdi_*` per path. `onset_mu_corr` for
+  identifiability monitoring.
+- **FE consumption**: onset posterior displayed alongside mu/sigma in
+  PropertiesPanel and AnalysisInfoCard. Comparison to histogram value.
+
+**Feature flag**: `latent_onset` (default `True`). When `False`, existing
+fixed-onset behaviour is preserved.
+
+**Exit criteria**:
+- Edge-level onset posteriors are sensible (close to histogram for
+  well-observed edges, appropriately uncertain for sparse edges)
+- `tau_onset` converges and is informative about graph-level onset variation
+- Path onset posteriors tighter than prior (cohort trajectory data
+  constrains path onset)
+- Onset-mu correlation < 0.9 for edges with sufficient trajectory data
+- FE displays onset posterior with HDI in PropertiesPanel
+
+---
+
 ## Phase E (optional): Parallel chain fan-out
 
 **Goal**: compile once, dispatch N workers (one per MCMC chain), merge
@@ -306,14 +351,15 @@ completeness CDF) for that family.
 
 Warm-starting is progressively enabled as the model stabilises:
 
-| Parameter type | Phase A | Phase B | Phase C | Phase D |
-|---|---|---|---|---|
-| Solo-edge Beta | Yes (simple) | Yes (trajectory when K ≥ 3) | Yes | Yes |
-| Branch-group Beta → Dirichlet | No (shape mismatch) | Fresh start | Fresh start | Fresh start |
-| Dirichlet base simplex, κ | N/A | No | No (structure may change) | No |
-| Slice deviations | N/A | N/A | No (slices may change) | No |
-| Latency (mu, sigma) | N/A (not latent) | N/A (not latent) | N/A (not latent) | No (coupling risk) |
-| Evidence inheritance | No | Available | Available | Available |
+| Parameter type | Phase A | Phase B | Phase C | Phase D | Phase D.O |
+|---|---|---|---|---|---|
+| Solo-edge Beta | Yes (simple) | Yes (trajectory when K ≥ 3) | Yes | Yes | Yes |
+| Branch-group Beta → Dirichlet | No (shape mismatch) | Fresh start | Fresh start | Fresh start | Fresh start |
+| Dirichlet base simplex, κ | N/A | No | No (structure may change) | No | No |
+| Slice deviations | N/A | N/A | No (slices may change) | No | No |
+| Latency (mu, sigma) | N/A (not latent) | N/A (not latent) | N/A (not latent) | No (coupling risk) | No |
+| Onset | N/A (fixed) | N/A (fixed) | N/A (fixed) | N/A (fixed) | No (new latent) |
+| Evidence inheritance | No | Available | Available | Available | Available |
 
 Once the full model is stable and the parameter-file schema carries
 sufficient metadata (component counts, slice identities, training windows
@@ -327,7 +373,7 @@ model's behaviour is well understood through backtesting.
 ## Dependency graph
 
 ```
-Phase A ──→ Phase B ──→ Phase S ──→ Phase D ──→ Phase C ──→ Phase E (optional)
+Phase A ──→ Phase B ──→ Phase S ──→ Phase D ──→ Phase D.O ──→ Phase C ──→ Phase E (optional)
   │                       │                        │
   │                       │                        ├──→ Distribution family dispatch
   ├──→ Trajectory cal.    │                        │

@@ -13,7 +13,7 @@
  * GraphCanvas insertion is then synchronous and insertion-only.
  */
 
-import type { CanvasAnalysis } from '../types';
+import type { CanvasAnalysis, ContentItem } from '../types';
 import type { ViewMode } from '../types/chartRecipe';
 
 export interface CanvasAnalysisCreationPayload {
@@ -30,6 +30,22 @@ export interface CanvasAnalysisCreationPayload {
   analysisTypeOverridden: boolean;
   /** Display settings to persist (e.g. font_size, scale_with_canvas). */
   display?: Record<string, unknown>;
+  /**
+   * Pre-built content items (e.g. one per tab from a hover preview).
+   * When provided, buildCanvasAnalysisObject uses these instead of
+   * creating a single content item from the flat fields.
+   */
+  contentItems?: Array<{
+    analysis_type: string;
+    view_type: ViewMode;
+    chart_kind?: string;
+    facet?: string;
+    title?: string;
+    display?: Record<string, unknown>;
+    analysis_type_overridden?: boolean;
+    analytics_dsl?: string;
+    chart_current_layer_dsl?: string;
+  }>;
 }
 
 export interface BuildCanvasAnalysisPayloadArgs {
@@ -77,17 +93,44 @@ export function buildCanvasAnalysisObject(
   position: { x: number; y: number },
   size: { width: number; height: number },
 ): CanvasAnalysis {
+  // Build content items: use pre-built list if provided, otherwise single item from flat fields
+  const analyticsDsl = payload.recipe.analysis.analytics_dsl;
+  const contentItems: ContentItem[] = payload.contentItems
+    ? payload.contentItems.map(ci => ({
+        id: crypto.randomUUID(),
+        analysis_type: ci.analysis_type,
+        view_type: ci.view_type,
+        chart_kind: ci.chart_kind,
+        facet: ci.facet,
+        title: ci.title,
+        display: ci.display as any,
+        analysis_type_overridden: ci.analysis_type_overridden,
+        analytics_dsl: ci.analytics_dsl || analyticsDsl,
+        chart_current_layer_dsl: ci.chart_current_layer_dsl,
+      }))
+    : [{
+        id: crypto.randomUUID(),
+        analysis_type: payload.recipe.analysis.analysis_type || '',
+        view_type: payload.viewMode,
+        chart_kind: payload.chartKind,
+        display: payload.display as any,
+        analysis_type_overridden: payload.analysisTypeOverridden || undefined,
+        analytics_dsl: analyticsDsl,
+      }];
+
   return {
     id: crypto.randomUUID(),
     x: Math.round(position.x),
     y: Math.round(position.y),
     width: size.width,
     height: size.height,
+    // Flat fields preserved for backward compatibility during migration
     view_mode: payload.viewMode,
     chart_kind: payload.chartKind,
     mode: 'live' as const,
     analysis_type_overridden: payload.analysisTypeOverridden || undefined,
     recipe: payload.recipe,
     ...(payload.display ? { display: payload.display } : {}),
+    content_items: contentItems,
   } as CanvasAnalysis;
 }

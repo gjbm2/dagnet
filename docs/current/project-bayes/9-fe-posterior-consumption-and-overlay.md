@@ -86,6 +86,10 @@ richer information that the FE does not currently read:
 | `posterior.fit_history` | `p.posterior.fit_history` | Trajectory sparkline / history chart |
 | `latency.posterior.hdi_t95_lower/upper` | `p.latency.posterior` | Latency confidence band on t95 |
 | `latency.posterior.mu_sd/sigma_sd` | `p.latency.posterior` | Parameter uncertainty display |
+| `latency.posterior.onset_mean/onset_sd` | `p.latency.posterior` | Edge-level onset posterior (doc 18) |
+| `latency.posterior.onset_hdi_lower/upper` | `p.latency.posterior` | Onset HDI band (doc 18) |
+| `latency.posterior.path_onset_sd` | `p.latency.posterior` | Path-level onset uncertainty (doc 18) |
+| `latency.posterior.path_onset_hdi_lower/upper` | `p.latency.posterior` | Path onset HDI band (doc 18) |
 | `_bayes` (graph-level) | Graph document root | Run summary, quality dashboard |
 
 ---
@@ -128,6 +132,10 @@ Currently shows: mean, stdev, evidence block, manual overrides.
 **Latency section additions:**
 - HDI band for t95: `[hdi_t95_lower, hdi_t95_upper]`
 - Parameter uncertainty: mu ± mu_sd, sigma ± sigma_sd
+- **Onset posterior** (doc 18): onset ± onset_sd with HDI band
+  `[onset_hdi_lower, onset_hdi_upper]`. Shows comparison to
+  histogram-derived value when available. Path onset (± path_onset_sd,
+  with HDI) shown when cohort-level latency is fitted.
 - Same provenance/convergence indicators as probability
 
 ### 3.3 Edge rendering changes
@@ -624,6 +632,14 @@ recency decay.
 
 ## 5.7 Model source UI surfaces
 
+**Data model superseded by doc 15** (`15-model-vars-provenance-design.md`).
+The `model_source` metadata block, cascade-based source selection, and
+`modelSourceService` re-cascade described in §5.7–5.8 below are replaced
+by the `model_vars[]` array + resolution function design in doc 15. The
+UI surfaces described here (Graph Properties "Model" card, Data menu
+toggle, ParameterSection layout) remain valid but should reference
+`model_vars` entries rather than `model_source` metadata blocks.
+
 As the compiler progresses through phases (B → C → D), Bayesian
 posteriors become richer and more authoritative. The FE must surface
 model source provenance clearly, let the user switch between sources,
@@ -794,8 +810,11 @@ mu, sigma) are nested behind a "Latency Tracking" toggle deep in the
 parameter section. When the active source is Bayesian and latency
 posteriors exist (Phase D), the latency params should be elevated to
 the same visual level as the probability params, with their own source
-badge and HDI row. Pre-Phase D (latency not latent), the current
-nested display is fine — there's no Bayesian latency to surface.
+badge and HDI row. With latent onset (doc 18), the onset row gains
+its own posterior display (mean ± sd, HDI band) alongside mu and sigma.
+A comparison to the histogram-derived onset value is shown when
+available, so the user can see how much the model moved onset from
+the histogram estimate.
 
 **Edges without posteriors**: when no posterior exists (edge not yet
 fitted, or skipped), the layout is unchanged from today — scalar

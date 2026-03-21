@@ -290,8 +290,10 @@ Where:
 - The `Gamma` prior on `sigma` is parameterised to place its mode near the
   fitted dispersion from data: `alpha_sigma`, `beta_sigma` chosen so that
   `mode = (alpha - 1) / beta ≈ sigma_from_data`
-- `onset_delta` is the edge's `onset_delta_days` — a fixed (non-latent)
-  scalar from the parameter file
+- `onset_delta` is the edge's `onset_delta_days` — **currently a fixed
+  (non-latent) scalar** from the parameter file. Doc 18
+  (`18-latent-onset-design.md`) designs the transition to latent onset
+  with a graph-level hyperprior and learned dispersion (`tau_onset`)
 
 Note: `HalfNormal(scale)` is **not** used for `sigma` because its mode is at
 zero, which would pull the dispersion estimate toward zero rather than
@@ -327,10 +329,13 @@ The `max(0, ...)` term means completeness is exactly zero when `age` is less
 than `path_delta` — no conversions can arrive before the deterministic onset.
 This is consistent with doc 1 §15.3 and §15.3.4.
 
-`path_delta` is deterministic (not a latent variable). `path_mu` and
-`path_sigma` are deterministic functions of the latent edge-level
-`(mu_i, sigma_i)` variables via FW — differentiable, so NUTS gradients flow
-through.
+`path_delta` is currently deterministic (sum of fixed edge onsets).
+Under doc 18 (`18-latent-onset-design.md`), edge-level onset becomes
+latent, making `path_delta` a deterministic function of the latent
+edge onsets — differentiable via `softplus`, so NUTS gradients flow
+through. `path_mu` and `path_sigma` are deterministic functions of the
+latent edge-level `(mu_i, sigma_i)` variables via FW — also
+differentiable.
 
 At **join nodes**, the incoming path models are collapsed via moment-matching
 (see above) before being composed with the next edge. The `path_delta` at a
@@ -967,7 +972,10 @@ Where:
 - `mu_path_composed`, `sigma_path_composed` are the deterministic FW
   composition of upstream edge-level `(mu_base, sigma_base)` — the
   prior expectation for path latency
-- `onset_cohort_XY` is latent with prior centred on `Σ edge_onsets`
+- `onset_cohort_XY` is latent with prior centred on `Σ edge_onsets`.
+  Under doc 18, the edge onsets feeding this sum are themselves latent,
+  and the prior spread derives from a learned `tau_onset` rather than
+  a hardcoded `HalfNormal` sigma
 - `τ_mu_cohort` and `τ_sigma_cohort` allow the cohort path latency to
   deviate from the FW-composed edge-level prediction, absorbing
   temporal diffusion and drift effects
@@ -1086,9 +1094,13 @@ from the current edge composition — it is calibrated from
 
 This is a natural extension of Phase D:
 
-- **Phase D step 2** (current): FW-composed path CDF for cohort, shared
+- **Phase D step 2** (done): FW-composed path CDF for cohort, shared
   edge-level `(mu, sigma)`. Output is edge-level only.
-- **Phase D step 2.5** (this design): add `(onset_cohort, mu_cohort,
+- **Phase D.O** (doc 18): latent edge-level onset, graph-level onset
+  hyperprior (`onset_hyper_mu`, `tau_onset`), histogram as soft
+  observation. `softplus` replaces `max(0,...)` for differentiability.
+  Path onset prior spread derived from `tau_onset` instead of hardcoded.
+- **Phase D step 2.5** (done): add `(onset_cohort, mu_cohort,
   sigma_cohort)` as latent variables for cohort path latency. Output
   both edge-level and path-level latency posteriors.
 - **Phase D step 3**: time-binned `mu_t` per edge. The FW-composed
