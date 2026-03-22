@@ -2008,7 +2008,9 @@ export class IntegrityCheckService {
         });
       }
 
-      // #4: Missing complement/abandon edge (all outgoing are fetchable, none go to an unfetchable absorbing node)
+      // #4: Missing complement/abandon edge — mass conservation violation.
+      // All outgoing edges are fetchable and none target an absorbing node,
+      // so the residual probability (1 − Σp) has nowhere to go.
       if (fetchableEdges.length > 0 && unfetchableEdges.length === 0) {
         const hasAbsorbingTarget = outgoing.some((e: any) => {
           const t = nodes.find((n: any) => n.uuid === e._resolvedToUuid);
@@ -2018,11 +2020,11 @@ export class IntegrityCheckService {
           issues.push({
             fileId: graphFileId,
             type: 'graph',
-            severity: 'info',
+            severity: 'warning',
             category: 'semantic',
             field: `node: ${nodeName}`,
-            message: `Node "${nodeName}" has only fetchable outgoing edges and no complement edge to an absorbing node — residual probability (1 − Σfetched) may be lost`,
-            suggestion: 'Add an unfetchable edge to an absorbing abandon node so the complement algorithm can assign the residual',
+            message: `Node "${nodeName}" has no complement edge — mass is not conserved. All ${fetchableEdges.length} outgoing edge(s) are fetchable and none target an absorbing node, so residual probability (1 − Σfetched) is lost`,
+            suggestion: 'Add an unfetchable edge to an absorbing dropout/abandon node so the complement algorithm can assign the residual',
             nodeUuid: node.uuid
           });
         }
@@ -2150,7 +2152,7 @@ export class IntegrityCheckService {
             edgeUuid: edge.uuid
           });
         } else {
-          // Check 2: source handle should not be '-in'
+          // Check 2a: source handle should not be '-in'
           if (parsed.suffix === 'in') {
             issues.push({
               fileId: graphFileId,
@@ -2159,7 +2161,22 @@ export class IntegrityCheckService {
               category: 'face-alignment',
               field: `edges[${i}].fromHandle`,
               message: `Edge "${edgeLabel}" source handle "${fromHandle}" is marked as input — source handles should be output`,
-              suggestion: `Change to "${parsed.face}-out" or "${parsed.face}"`,
+              suggestion: `Change to "${parsed.face}-out"`,
+              edgeUuid: edge.uuid
+            });
+          }
+
+          // Check 2b: source handle without '-out' suffix won't connect in ReactFlow
+          // (bare face names like "bottom" are target handle IDs, not source handle IDs)
+          if (parsed.suffix === '') {
+            issues.push({
+              fileId: graphFileId,
+              type: 'graph',
+              severity: 'warning',
+              category: 'face-alignment',
+              field: `edges[${i}].fromHandle`,
+              message: `Edge "${edgeLabel}" source handle "${fromHandle}" is missing "-out" suffix — ReactFlow source handles require the "-out" suffix to connect`,
+              suggestion: `Change to "${parsed.face}-out"`,
               edgeUuid: edge.uuid
             });
           }

@@ -309,134 +309,7 @@ export function ParameterSection({
       />
       </div>
       
-      {/* Model Vars Cards — three-card source layout (doc 15 §17) */}
-      {hasModelVars && (
-        <ModelVarsCards
-          modelVars={param!.model_vars}
-          edgePreference={param!.model_source_preference as any}
-          edgePreferenceOverridden={param!.model_source_preference_overridden}
-          graphPreference={graph?.model_source_preference as any}
-          promotedMean={param!.mean}
-          promotedStdev={param!.stdev}
-          promotedLatency={param!.latency}
-          latencyEnabled={param!.latency?.latency_parameter === true}
-          onUpdate={(changes) => onUpdate(changes)}
-          disabled={disabled}
-        />
-      )}
-
-      {/* Mean Value (Probability slider OR Cost input) */}
-      <div style={{ marginBottom: '20px' }}>
-        <AutomatableField
-          label=""
-          value={param?.mean ?? 0}
-          overridden={param?.mean_overridden || false}
-          onClearOverride={() => {
-            onUpdate({ mean_overridden: false });
-          }}
-        >
-          {paramSlot === 'p' ? (
-            // Probability: Show slider without label (obvious what it is)
-            <ProbabilityInput
-              value={param?.mean ?? 0}
-              onChange={(newValue) => {
-                // Update graph immediately while dragging (provides real-time feedback)
-                // NO history entry - only visual update
-                onUpdate({ mean: newValue, mean_overridden: true, _noHistory: true });
-              }}
-              onCommit={(newValue) => {
-                // Commit is called on mouse release - THIS creates the history entry
-                onUpdate({ mean: newValue, mean_overridden: true });
-              }}
-              onRebalance={onRebalance ? async () => {
-                // Ignore value from ProbabilityInput - handler uses current graph value
-                if (onRebalance) {
-                  await onRebalance();
-                }
-              } : undefined}
-              isUnbalanced={isUnbalanced}
-              showBalanceButton={showBalanceButton}
-              disabled={disabled}
-              min={0}
-              max={1}
-              step={0.01}
-            />
-          ) : (
-            // Cost: Show number input with inline label
-            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-              <label className="parameter-section-label">
-                {paramSlot === 'cost_gbp' ? '£ cost' : 'Time cost'}
-              </label>
-              <input
-                type="number"
-                min="0"
-                step={paramSlot === 'cost_gbp' ? '0.01' : '1'}
-                value={param?.mean !== undefined ? param.mean : ''}
-                onChange={(e) => {
-                  const value = e.target.value === '' ? undefined : parseFloat(e.target.value);
-                  onUpdate({ mean: value });
-                }}
-                onBlur={() => {
-                  onUpdate({ mean_overridden: true });
-                }}
-                placeholder={paramSlot === 'labour_cost' ? '120' : '0.00'}
-                title={paramSlot === 'labour_cost' ? 'Enter minutes (future: 2d, 10m formats)' : 'Enter cost in £'}
-                disabled={disabled}
-                className="parameter-input"
-              />
-            </div>
-          )}
-        </AutomatableField>
-        {/* Posterior quality indicator — shows when Bayesian fit has run */}
-        {param?.posterior && (
-          <div style={{ marginTop: '4px' }}>
-            <PosteriorIndicator
-              posterior={param.posterior}
-              retrievedAt={param.evidence?.retrieved_at}
-              theme={theme === 'dark' ? 'dark' : 'light'}
-              activeSource={activeModelSource}
-            />
-          </div>
-        )}
-      </div>
-
-      {/* Standard Deviation and Distribution - separate lines */}
-      
-      {/* Std Dev */}
-      {showStdev && (
-        <div style={{ marginBottom: '16px' }}>
-          <AutomatableField
-            label=""
-            value={param?.stdev || ''}
-            overridden={param?.stdev_overridden || false}
-            onClearOverride={() => {
-              onUpdate({ stdev_overridden: false });
-            }}
-          >
-            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-              <label className="parameter-section-label">Std Dev</label>
-              <input
-                type="number"
-                min="0"
-                step="0.01"
-                value={param?.stdev !== undefined ? roundToDecimalPlaces(param.stdev, PRECISION_DECIMAL_PLACES) : ''}
-                onChange={(e) => {
-                  const value = e.target.value === '' ? undefined : parseFloat(e.target.value);
-                  onUpdate({ stdev: value });
-                }}
-                onBlur={() => {
-                  onUpdate({ stdev_overridden: true });
-                }}
-                placeholder="Optional"
-                disabled={disabled}
-                className="parameter-input"
-              />
-            </div>
-          </AutomatableField>
-        </div>
-      )}
-      
-      {/* Latency Tracking (probability params only) */}
+      {/* §17.1 zone 1: Latency Tracking + Cohort Anchor (config fields, above cards) */}
       {showLatency && (
         <div style={{ marginBottom: '16px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
           {/* Enable Latency checkbox with override toggle */}
@@ -461,7 +334,7 @@ export function ParameterSection({
                   disabled={disabled}
                   style={{ width: '14px', height: '14px', cursor: 'pointer', flexShrink: 0 }}
                 />
-                <label 
+                <label
                   htmlFor={`latency-track-${objectId}-${paramSlot}`}
                   style={{ cursor: 'pointer', fontSize: '12px', fontWeight: 600, color: '#333', whiteSpace: 'nowrap' }}
                 >
@@ -476,19 +349,220 @@ export function ParameterSection({
             value={param?.latency?.latency_parameter ?? false}
             overridden={param?.latency?.latency_parameter_overridden || false}
             onClearOverride={() => {
-              onUpdate({ 
-                latency: { 
+              onUpdate({
+                latency: {
                   ...param?.latency,
-                  latency_parameter_overridden: false 
-                } 
+                  latency_parameter_overridden: false
+                }
               });
             }}
           >
             <div style={{ display: 'none' }} />
           </AutomatableField>
-          
-          {/* t95 and path_t95 fields (only shown when latency tracking is enabled) */}
-          {(param?.latency?.latency_parameter === true) && (
+
+          {/* Cohort anchor (always visible; independent of latency tracking enablement) */}
+          <AutomatableField
+            label=""
+            value={param?.latency?.anchor_node_id || ''}
+            overridden={param?.latency?.anchor_node_id_overridden || false}
+            onClearOverride={() => {
+              onUpdate({
+                latency: {
+                  ...param?.latency,
+                  anchor_node_id_overridden: false,
+                },
+              });
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <label className="parameter-section-label" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <span>Cohort anchor</span>
+                <button
+                  type="button"
+                  onClick={handleRefreshCohortAnchor}
+                  title="Refresh cohort anchor for this parameter using MSMDC"
+                  disabled={disabled || isRefreshingAnchor}
+                  style={{
+                    background: 'none',
+                    border: 'none',
+                    padding: '2px',
+                    cursor: disabled || isRefreshingAnchor ? 'not-allowed' : 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    color: '#6B7280',
+                    opacity: disabled || isRefreshingAnchor ? 0.5 : 1,
+                    transition: 'color 0.2s',
+                  }}
+                  onMouseEnter={(e) => {
+                    if (!disabled && !isRefreshingAnchor) e.currentTarget.style.color = '#3B82F6';
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.color = '#6B7280';
+                  }}
+                >
+                  <RefreshCcw size={14} />
+                </button>
+              </label>
+              <input
+                type="text"
+                value={param?.latency?.anchor_node_id || ''}
+                onChange={(e) => {
+                  onUpdate({
+                    latency: {
+                      ...param?.latency,
+                      anchor_node_id: e.target.value || undefined,
+                    },
+                  });
+                }}
+                onBlur={() => {
+                  onUpdate({
+                    latency: {
+                      ...param?.latency,
+                      anchor_node_id_overridden: true,
+                    },
+                  });
+                }}
+                disabled={disabled}
+                className="parameter-input"
+                placeholder="(auto)"
+                title="Cohort entry point for this edge. Defaults to furthest upstream START node."
+              />
+            </div>
+          </AutomatableField>
+        </div>
+      )}
+
+      {/* §17.1 zone 2: Model Vars Cards — three-card source layout */}
+      {hasModelVars && (
+        <ModelVarsCards
+          modelVars={param!.model_vars}
+          edgePreference={param!.model_source_preference as any}
+          edgePreferenceOverridden={param!.model_source_preference_overridden}
+          graphPreference={graph?.model_source_preference as any}
+          promotedMean={param!.mean}
+          promotedStdev={param!.stdev}
+          meanOverridden={param!.mean_overridden}
+          stdevOverridden={param!.stdev_overridden}
+          promotedLatency={param!.latency}
+          latencyEnabled={param!.latency?.latency_parameter === true}
+          onUpdate={(changes) => onUpdate(changes)}
+          disabled={disabled}
+        />
+      )}
+
+      {/* §17.1: When model_vars exists, cards replace flat scalar layout.
+       *  Mean slider, stdev, and posterior indicator are INSIDE the cards.
+       *  Only render the old flat layout for cost params or edges without model_vars. */}
+      {!hasModelVars && (
+        <>
+          {/* Mean Value (Probability slider OR Cost input) */}
+          <div style={{ marginBottom: '20px' }}>
+            <AutomatableField
+              label=""
+              value={param?.mean ?? 0}
+              overridden={param?.mean_overridden || false}
+              onClearOverride={() => {
+                onUpdate({ mean_overridden: false });
+              }}
+            >
+              {paramSlot === 'p' ? (
+                <ProbabilityInput
+                  value={param?.mean ?? 0}
+                  onChange={(newValue) => {
+                    onUpdate({ mean: newValue, mean_overridden: true, _noHistory: true });
+                  }}
+                  onCommit={(newValue) => {
+                    onUpdate({ mean: newValue, mean_overridden: true });
+                  }}
+                  onRebalance={onRebalance ? async () => {
+                    if (onRebalance) {
+                      await onRebalance();
+                    }
+                  } : undefined}
+                  isUnbalanced={isUnbalanced}
+                  showBalanceButton={showBalanceButton}
+                  disabled={disabled}
+                  min={0}
+                  max={1}
+                  step={0.01}
+                />
+              ) : (
+                <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <label className="parameter-section-label">
+                    {paramSlot === 'cost_gbp' ? '£ cost' : 'Time cost'}
+                  </label>
+                  <input
+                    type="number"
+                    min="0"
+                    step={paramSlot === 'cost_gbp' ? '0.01' : '1'}
+                    value={param?.mean !== undefined ? param.mean : ''}
+                    onChange={(e) => {
+                      const value = e.target.value === '' ? undefined : parseFloat(e.target.value);
+                      onUpdate({ mean: value });
+                    }}
+                    onBlur={() => {
+                      onUpdate({ mean_overridden: true });
+                    }}
+                    placeholder={paramSlot === 'labour_cost' ? '120' : '0.00'}
+                    title={paramSlot === 'labour_cost' ? 'Enter minutes (future: 2d, 10m formats)' : 'Enter cost in £'}
+                    disabled={disabled}
+                    className="parameter-input"
+                  />
+                </div>
+              )}
+            </AutomatableField>
+            {/* Posterior quality indicator — only in legacy mode (model_vars cards have this internally) */}
+            {param?.posterior && (
+              <div style={{ marginTop: '4px' }}>
+                <PosteriorIndicator
+                  posterior={param.posterior}
+                  retrievedAt={param.evidence?.retrieved_at}
+                  theme={theme === 'dark' ? 'dark' : 'light'}
+                  activeSource={activeModelSource}
+                />
+              </div>
+            )}
+          </div>
+
+          {/* Std Dev */}
+          {showStdev && (
+            <div style={{ marginBottom: '16px' }}>
+              <AutomatableField
+                label=""
+                value={param?.stdev || ''}
+                overridden={param?.stdev_overridden || false}
+                onClearOverride={() => {
+                  onUpdate({ stdev_overridden: false });
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <label className="parameter-section-label">Std Dev</label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={param?.stdev !== undefined ? roundToDecimalPlaces(param.stdev, PRECISION_DECIMAL_PLACES) : ''}
+                    onChange={(e) => {
+                      const value = e.target.value === '' ? undefined : parseFloat(e.target.value);
+                      onUpdate({ stdev: value });
+                    }}
+                    onBlur={() => {
+                      onUpdate({ stdev_overridden: true });
+                    }}
+                    placeholder="Optional"
+                    disabled={disabled}
+                    className="parameter-input"
+                  />
+                </div>
+              </AutomatableField>
+            </div>
+          )}
+        </>
+      )}
+      
+      {/* Legacy latency fields — only in non-model_vars mode */}
+      {showLatency && !hasModelVars && (param?.latency?.latency_parameter === true) && (
+        <div style={{ marginBottom: '16px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
             <>
               {/* Edge t95 */}
               <AutomatableField
@@ -496,11 +570,11 @@ export function ParameterSection({
                 value={param?.latency?.t95 ?? ''}
                 overridden={param?.latency?.t95_overridden || false}
                 onClearOverride={() => {
-                  onUpdate({ 
-                    latency: { 
+                  onUpdate({
+                    latency: {
                       ...param?.latency,
-                      t95_overridden: false 
-                    } 
+                      t95_overridden: false
+                    }
                   });
                 }}
               >
@@ -537,18 +611,18 @@ export function ParameterSection({
                   <span style={{ fontSize: '12px', color: '#6B7280' }}>days</span>
                 </div>
               </AutomatableField>
-              
+
               {/* Path t95 */}
               <AutomatableField
                 label=""
                 value={param?.latency?.path_t95 ?? ''}
                 overridden={param?.latency?.path_t95_overridden || false}
                 onClearOverride={() => {
-                  onUpdate({ 
-                    latency: { 
+                  onUpdate({
+                    latency: {
                       ...param?.latency,
-                      path_t95_overridden: false 
-                    } 
+                      path_t95_overridden: false
+                    }
                   });
                 }}
               >
@@ -646,81 +720,10 @@ export function ParameterSection({
                 </div>
               )}
             </>
-          )}
-
-          {/* Cohort anchor (always visible; independent of latency tracking enablement) */}
-          <AutomatableField
-            label=""
-            value={param?.latency?.anchor_node_id || ''}
-            overridden={param?.latency?.anchor_node_id_overridden || false}
-            onClearOverride={() => {
-              onUpdate({
-                latency: {
-                  ...param?.latency,
-                  anchor_node_id_overridden: false,
-                },
-              });
-            }}
-          >
-            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-              <label className="parameter-section-label" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                <span>Cohort anchor</span>
-                <button
-                  type="button"
-                  onClick={handleRefreshCohortAnchor}
-                  title="Refresh cohort anchor for this parameter using MSMDC"
-                  disabled={disabled || isRefreshingAnchor}
-                  style={{
-                    background: 'none',
-                    border: 'none',
-                    padding: '2px',
-                    cursor: disabled || isRefreshingAnchor ? 'not-allowed' : 'pointer',
-                    display: 'flex',
-                    alignItems: 'center',
-                    color: '#6B7280',
-                    opacity: disabled || isRefreshingAnchor ? 0.5 : 1,
-                    transition: 'color 0.2s',
-                  }}
-                  onMouseEnter={(e) => {
-                    if (!disabled && !isRefreshingAnchor) e.currentTarget.style.color = '#3B82F6';
-                  }}
-                  onMouseLeave={(e) => {
-                    e.currentTarget.style.color = '#6B7280';
-                  }}
-                >
-                  <RefreshCcw size={14} />
-                </button>
-              </label>
-              <input
-                type="text"
-                value={param?.latency?.anchor_node_id || ''}
-                onChange={(e) => {
-                  onUpdate({
-                    latency: {
-                      ...param?.latency,
-                      anchor_node_id: e.target.value || undefined,
-                    },
-                  });
-                }}
-                onBlur={() => {
-                  onUpdate({
-                    latency: {
-                      ...param?.latency,
-                      anchor_node_id_overridden: true,
-                    },
-                  });
-                }}
-                disabled={disabled}
-                className="parameter-input"
-                placeholder="(auto)"
-                title="Cohort entry point for this edge. Defaults to furthest upstream START node."
-              />
-            </div>
-          </AutomatableField>
         </div>
       )}
-      
-      {/* Query Expression Editor (at bottom - usually auto-generated) */}
+
+      {/* §17.1 zone 3: Query Expression Editor (at bottom) */}
       {showQueryEditor && (
         <div style={{ marginTop: '20px', marginBottom: '0px' }}>
           <AutomatableField

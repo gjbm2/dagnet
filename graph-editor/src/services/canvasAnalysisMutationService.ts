@@ -15,7 +15,7 @@ function syncFlatFieldsToContentItems(analysis: CanvasAnalysis): void {
   const item = analysis.content_items[0];
   item.analysis_type = analysis.recipe?.analysis?.analysis_type ?? item.analysis_type;
   item.view_type = analysis.view_mode ?? item.view_type;
-  item.chart_kind = analysis.chart_kind;
+  item.kind = analysis.chart_kind;
   item.display = analysis.display;
   item.title = analysis.title;
   item.analysis_type_overridden = analysis.analysis_type_overridden;

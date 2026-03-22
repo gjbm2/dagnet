@@ -11,7 +11,8 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { buildPinDragData, centerOutOrder } from '../../components/HoverAnalysisPreview';
+import { buildPinDragData } from '../../utils/canvasAnalysisAccessors';
+import { centerOutOrder } from '../../components/HoverAnalysisPreview';
 import { getChartKindsForAnalysisType } from '../analysisTypeResolutionService';
 import { ANALYSIS_TYPES } from '../../components/panels/analysisTypes';
 import type { CanvasAnalysis } from '../../types';

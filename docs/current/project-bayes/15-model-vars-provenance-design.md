@@ -679,8 +679,9 @@ zones:
 
 1. **Config fields** (above cards): Parameter ID, Data Source,
    Latency Tracking checkbox, Anchor node.
-2. **Source cards** (the core of this design): Three collapsible cards
-   — Bayesian, Analytic, Manual — each with a toggle.
+2. **Source cards** (the core of this design): Three cards
+   — Bayesian (collapsible), Analytic (collapsible), Output (always
+   expanded) — each with a toggle.
 3. **Query** (below cards): The query DSL expression (existing field,
    unchanged).
 
@@ -690,7 +691,7 @@ parameter-level settings that don't change with source.
 ### 17.2 Source cards
 
 Three cards, always present, in fixed order: **Bayesian**, **Analytic**,
-**Manual**.
+**Output**.
 
 Each card has:
 - **Header**: source name (left), active badge (centre-right), toggle
@@ -718,17 +719,20 @@ fields. Not in scope for initial implementation.
 
 #### 17.2.2 Analytic card
 
-Mostly read-only. Displays the `source: 'analytic'` model_vars entry.
+Mostly read-only. Shows the analytic fitting parameters and
+overridable inputs — NOT the promoted output scalars (those appear
+in the Output card to avoid duplication).
 
 Fields shown:
-- **Probability**: mean, stdev (read-only — derived from evidence)
-- **Latency**:
+- **Latency fit**:
   - mu, sigma (read-only — from LAG pass MLE fit)
   - **onset** (overridable — ZapOff pattern, `onset_delta_days_overridden`)
   - **t95** (overridable — ZapOff pattern, `t95_overridden`)
   - **path_t95** (overridable — ZapOff pattern, `path_t95_overridden`)
-  - path_mu, path_sigma (read-only)
 - **Retrieved**: `source_at` date
+
+Probability mean/stdev and path_mu/path_sigma are promoted output
+scalars — they appear in the Output card, not here.
 
 The overridable fields (onset, t95, path_t95) are analytic model
 inputs — they steer the analytic pipeline. They are NOT used by the
@@ -754,10 +758,11 @@ Doc 18 specifies the full compiler-side design (latent edge-level onset,
 path-level onset with learned dispersion, identifiability analysis,
 FE consumption changes). Sequenced as Phase D.O in programme.md.
 
-#### 17.2.3 Manual card
+#### 17.2.3 Output card (data model: `source: 'manual'`)
 
-Always expanded (not collapsible). Shows the promoted scalar values
-in editable fields.
+**UI label: "Output".** Always expanded (not collapsible). Shows the
+promoted scalar values — the numbers the rest of the system consumes.
+All fields are editable.
 
 When no manual entry exists:
 - Fields show the current promoted values (from whichever source is
@@ -776,10 +781,11 @@ Fields shown:
 - **Latency** (if latency tracking enabled): mu, sigma, t95,
   onset_delta_days, path-level fields
 
-The Manual card is fundamentally different from Bayesian/Analytic:
-those are model outputs (one sophisticated, one simpler); Manual is
-direct output specification. The user is not guiding a model — they
-are saying "use these numbers."
+The Output card is fundamentally different from Bayesian/Analytic:
+those show model parameters and fitting inputs; Output shows the
+promoted scalars that the system actually uses. When the user edits
+here, they are saying "use these numbers" — direct output
+specification, not model guidance.
 
 ### 17.3 Toggle behaviour and source selection
 

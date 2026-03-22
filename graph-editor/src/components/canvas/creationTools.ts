@@ -170,6 +170,7 @@ export function createCanvasAnalysisInGraph(
       viewMode: dragData.viewMode || 'chart',
       chartKind: dragData.chartKind,
       analysisResult: dragData.analysisResult,
+      title: dragData.title,
       analysisTypeOverridden: dragData.analysisTypeOverridden ?? false,
       display: dragData.display,
       contentItems: dragData.contentItems,

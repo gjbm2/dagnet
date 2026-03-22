@@ -39,7 +39,7 @@ import { buildAuditEntry } from './updateManager/auditLog';
 import { MAPPING_CONFIGURATIONS, getMappingKey } from './updateManager/mappingConfigurations';
 import { applyMappings } from './updateManager/mappingEngine';
 import type { ModelVarsEntry } from '../types';
-import { upsertModelVars, ukDateNow } from './modelVarsResolution';
+import { upsertModelVars, ukDateNow, applyPromotion } from './modelVarsResolution';
 
 // ─── Re-exports (public API — preserve existing import paths) ───────────────
 export type {
@@ -454,13 +454,40 @@ export class UpdateManager {
     if (changesApplied > 0 && nextGraph.metadata) {
       nextGraph.metadata.updated_at = new Date().toISOString();
     }
-    
+
+    // MODEL_VARS: auto-create manual entry when overriding a model var field (doc 15 §5.3).
+    // Centralised here so context menus, rebalance, and any other entry point all trigger it.
+    if (setOverrideFlag && changesApplied > 0 && edge.p.model_vars?.length) {
+      const existing = edge.p.model_vars.find((e: any) => e.source === 'manual');
+      const base = existing ?? {
+        source: 'manual' as const,
+        source_at: ukDateNow(),
+        probability: { mean: edge.p.mean ?? 0, stdev: edge.p.stdev ?? 0 },
+        ...(edge.p.latency?.mu != null ? {
+          latency: {
+            mu: edge.p.latency.mu, sigma: edge.p.latency.sigma ?? 0,
+            t95: edge.p.latency.t95 ?? 0, onset_delta_days: edge.p.latency.onset_delta_days ?? 0,
+            ...(edge.p.latency.path_mu != null ? { path_mu: edge.p.latency.path_mu } : {}),
+            ...(edge.p.latency.path_sigma != null ? { path_sigma: edge.p.latency.path_sigma } : {}),
+            ...(edge.p.latency.path_t95 != null ? { path_t95: edge.p.latency.path_t95 } : {}),
+          },
+        } : {}),
+      };
+      const updated = { ...base, source_at: ukDateNow() };
+      // Edge.p.mean/stdev already have the new values from above
+      updated.probability = { mean: edge.p.mean ?? 0, stdev: edge.p.stdev ?? 0 };
+      upsertModelVars(edge.p, updated);
+      edge.p.model_source_preference = 'manual';
+      edge.p.model_source_preference_overridden = true;
+      applyPromotion(edge.p, nextGraph.model_source_preference);
+    }
+
     return nextGraph;
   }
-  
+
   /**
    * Update a conditional probability entry on an edge.
-   * 
+   *
    * This is the SINGLE code path for all conditional_p updates:
    * - UI slider edits (EdgeContextMenu)
    * - Data from parameter files (getParameterFromFile)

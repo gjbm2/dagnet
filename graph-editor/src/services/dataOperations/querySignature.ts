@@ -289,6 +289,8 @@ export async function computeQuerySignature(
       original_query: normalizedOriginalQuery,
     });
     const coreHash = await hashText(coreCanonical);
+    // DEBUG: expose last coreCanonical for parity testing
+    (computeQuerySignature as any).__lastCoreCanonical = coreCanonical;
 
     // ─────────────────────────────────────────────────────────────────────────────
     // BUILD STRUCTURED SIGNATURE

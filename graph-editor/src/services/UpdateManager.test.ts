@@ -1631,3 +1631,60 @@ describe('UpdateManager', () => {
   });
 });
 
+// ── updateEdgeProbability + model_vars auto-creation (doc 15 §5.3) ─────────
+
+describe('updateEdgeProbability: auto-creates manual model_vars entry', () => {
+  const um = new UpdateManager();
+  const analyticMV = {
+    source: 'analytic', source_at: '20-Mar-26',
+    probability: { mean: 0.12, stdev: 0.03 },
+  };
+
+  it('creates manual entry and pins to manual when setOverrideFlag + model_vars exists', () => {
+    const graph = {
+      edges: [{
+        uuid: 'e1', id: 'e1',
+        p: { mean: 0.12, stdev: 0.03, model_vars: [analyticMV] },
+      }],
+      model_source_preference: undefined,
+      metadata: { updated_at: '' },
+    };
+
+    const result = um.updateEdgeProbability(graph, 'e1', { mean: 0.25 }, { setOverrideFlag: true });
+
+    const p = result.edges[0].p;
+    expect(p.mean_overridden).toBe(true);
+    expect(p.model_source_preference).toBe('manual');
+    expect(p.model_source_preference_overridden).toBe(true);
+    const manual = p.model_vars.find((e: any) => e.source === 'manual');
+    expect(manual).toBeDefined();
+    expect(manual.probability.mean).toBeCloseTo(0.25, 2);
+  });
+
+  it('does NOT create manual entry when model_vars is absent', () => {
+    const graph = {
+      edges: [{ uuid: 'e1', id: 'e1', p: { mean: 0.12, stdev: 0.03 } }],
+      metadata: { updated_at: '' },
+    };
+
+    const result = um.updateEdgeProbability(graph, 'e1', { mean: 0.25 }, { setOverrideFlag: true });
+
+    expect(result.edges[0].p.model_vars).toBeUndefined();
+    expect(result.edges[0].p.model_source_preference).toBeUndefined();
+  });
+
+  it('does NOT create manual entry when setOverrideFlag is false (automated update)', () => {
+    const graph = {
+      edges: [{
+        uuid: 'e1', id: 'e1',
+        p: { mean: 0.12, stdev: 0.03, model_vars: [analyticMV] },
+      }],
+      metadata: { updated_at: '' },
+    };
+
+    const result = um.updateEdgeProbability(graph, 'e1', { mean: 0.25 }, { setOverrideFlag: false });
+
+    expect(result.edges[0].p.model_source_preference).toBeUndefined();
+  });
+});
+

@@ -280,6 +280,7 @@ export function resolveShapeNodes(
 export interface AnalysisVisibilityInput {
   id: string;
   display?: { show_subject_overlay?: boolean; subject_overlay_colour?: string };
+  content_items?: Array<{ display?: { show_subject_overlay?: boolean; subject_overlay_colour?: string } }>;
   chart_current_layer_dsl?: string;
   recipe?: { analysis?: { analytics_dsl?: string } };
 }
@@ -305,7 +306,10 @@ export function getVisibleAnalysisIds(
     if (a.id === selectedAnalysisId) { visible.add(a.id); continue; }
     if (a.id === draggedAnalysisId) { visible.add(a.id); continue; }
     if (a.id === hoveredAnalysisId) { visible.add(a.id); continue; }
+    // Container-level overlay (legacy)
     if (a.display?.show_subject_overlay === true) { visible.add(a.id); continue; }
+    // Per-tab overlay — if ANY content item has the flag, the analysis is visible
+    if (a.content_items?.some(ci => (ci.display as any)?.show_subject_overlay === true)) { visible.add(a.id); continue; }
   }
   return visible;
 }
@@ -510,79 +514,105 @@ export function SelectionConnectors({ graph }: { graph: any }) {
     };
 
     // --- Pass 1: compute shapes with base radii ---
-    const baseShapes = (graph.canvasAnalyses as any[])
-      .filter((a: any) => visibleIds.has(a.id))
-      .map((a: any) => {
-        // Read DSL from active content item (tab-level), falling back to container-level
-        const activeIdx = activeTabByAnalysis.get(a.id) ?? 0;
-        const activeCI = a.content_items?.[activeIdx] || a.content_items?.[0];
-        const dsl = activeCI?.chart_current_layer_dsl || activeCI?.analytics_dsl
+    // Each shape represents one visible tab within an analysis.
+    // For selected/hovered/dragged analyses: the active tab gets a shape.
+    // For persisted overlays: each tab with show_subject_overlay gets its own shape.
+    type BaseShape = {
+      id: string; isSelected: boolean; isHovered: boolean; rfNode: any; colour: string;
+      connectedNodes: Array<{ centre: Point; radius: number }>;
+      disconnectedNodes: Array<{ centre: Point; radius: number }>;
+      allNodes: Array<{ centre: Point; radius: number }>;
+      nodeHumanIds: string[];
+      connectedHumanIds: string[];
+      referencedOnPath: Set<string>;
+      referencedNodeIds: string[];
+    };
+
+    const buildShape = (
+      analysisId: string, dsl: string, colour: string, isSelected: boolean, isHovered: boolean, rfNode: any,
+    ): BaseShape | null => {
+      const { connectedIds, disconnectedIds, referencedOnPath } = resolveShapeNodes(
+        dsl, graph.edges || [], nodeUuidToId,
+      );
+
+      console.log('[SelectionConnectors] shape resolve', {
+        analysisId,
+        dsl,
+        isSelected,
+        connectedIds,
+        disconnectedIds,
+        referencedOnPath: [...referencedOnPath],
+      });
+
+      const connectedNodes: Array<{ centre: Point; radius: number }> = [];
+      const connectedHumanIds: string[] = [];
+      for (const id of connectedIds) {
+        const info = getNodeInfo(id);
+        if (info) {
+          connectedNodes.push(referencedOnPath.has(id) ? info : { centre: info.centre, radius: TRANSIT_RADIUS });
+          connectedHumanIds.push(id);
+        }
+      }
+      const disconnectedNodes: Array<{ centre: Point; radius: number }> = [];
+      const disconnectedHumanIds: string[] = [];
+      for (const id of disconnectedIds) {
+        const info = getNodeInfo(id);
+        if (info) { disconnectedNodes.push(info); disconnectedHumanIds.push(id); }
+      }
+      const allNodes = [...connectedNodes, ...disconnectedNodes];
+      const nodeHumanIds = [...connectedHumanIds, ...disconnectedHumanIds];
+      if (allNodes.length === 0) return null;
+
+      const referencedNodeIds: string[] = [];
+      for (const id of connectedIds) {
+        if (referencedOnPath.has(id)) referencedNodeIds.push(id);
+      }
+      for (const id of disconnectedIds) {
+        referencedNodeIds.push(id);
+      }
+
+      return {
+        id: analysisId, isSelected, isHovered, rfNode, colour,
+        connectedNodes, disconnectedNodes, allNodes, nodeHumanIds,
+        connectedHumanIds, referencedOnPath, referencedNodeIds,
+      };
+    };
+
+    const baseShapes: BaseShape[] = [];
+    for (const a of (graph.canvasAnalyses as any[]).filter((a: any) => visibleIds.has(a.id))) {
+      const rfNode = rfNodes.find(n => n.id === `analysis-${a.id}`);
+      const isSelected = a.id === selectedAnalysisId;
+      const isHovered = !isSelected && a.id !== draggedAnalysisId && a.id === hoveredAnalysisId;
+      const activeIdx = activeTabByAnalysis.get(a.id) ?? 0;
+      const contentItems: any[] = a.content_items || [];
+
+      // Collect tabs that need shapes:
+      // - The active tab (for selected/hovered/dragged)
+      // - Any tab with persisted show_subject_overlay
+      const tabsToShow = new Set<number>();
+      if (isSelected || a.id === draggedAnalysisId || a.id === hoveredAnalysisId) {
+        tabsToShow.add(activeIdx);
+      }
+      for (let i = 0; i < contentItems.length; i++) {
+        if ((contentItems[i].display as any)?.show_subject_overlay === true) tabsToShow.add(i);
+      }
+      // Legacy: container-level overlay → show active tab
+      if (a.display?.show_subject_overlay === true) tabsToShow.add(activeIdx);
+
+      for (const tabIdx of tabsToShow) {
+        const ci = contentItems[tabIdx] || contentItems[0];
+        const dsl = ci?.chart_current_layer_dsl || ci?.analytics_dsl
           || a.chart_current_layer_dsl || a.recipe?.analysis?.analytics_dsl;
-        if (!dsl) return null;
-
-        const rfNode = rfNodes.find(n => n.id === `analysis-${a.id}`);
-        const colour = a.display?.subject_overlay_colour || DEFAULT_COLOUR;
-        const isSelected = a.id === selectedAnalysisId;
-        // Hover-only: visible solely because mouse is over the chart (not selected/dragged/persisted)
-        const isHovered = !isSelected && a.id !== draggedAnalysisId
-          && !a.display?.show_subject_overlay && a.id === hoveredAnalysisId;
-
-        const { connectedIds, disconnectedIds, referencedOnPath } = resolveShapeNodes(
-          dsl, graph.edges || [], nodeUuidToId,
-        );
-
-        console.log('[SelectionConnectors] shape resolve', {
-          analysisId: a.id,
-          dsl,
-          isSelected,
-          connectedIds,
-          disconnectedIds,
-          referencedOnPath: [...referencedOnPath],
-        });
-
-        const connectedNodes: Array<{ centre: Point; radius: number }> = [];
-        const connectedHumanIds: string[] = [];
-        for (const id of connectedIds) {
-          const info = getNodeInfo(id);
-          if (info) {
-            connectedNodes.push(referencedOnPath.has(id) ? info : { centre: info.centre, radius: TRANSIT_RADIUS });
-            connectedHumanIds.push(id);
-          }
-        }
-        const disconnectedNodes: Array<{ centre: Point; radius: number }> = [];
-        const disconnectedHumanIds: string[] = [];
-        for (const id of disconnectedIds) {
-          const info = getNodeInfo(id);
-          if (info) { disconnectedNodes.push(info); disconnectedHumanIds.push(id); }
-        }
-        const allNodes = [...connectedNodes, ...disconnectedNodes];
-        const nodeHumanIds = [...connectedHumanIds, ...disconnectedHumanIds];
-        if (allNodes.length === 0) return null;
-
-        // Human IDs of DSL-referenced nodes — these get halos.
-        const referencedNodeIds: string[] = [];
-        for (const id of connectedIds) {
-          if (referencedOnPath.has(id)) referencedNodeIds.push(id);
-        }
-        for (const id of disconnectedIds) {
-          referencedNodeIds.push(id);
-        }
-
-        return {
-          id: a.id, isSelected, isHovered, rfNode, colour,
-          connectedNodes, disconnectedNodes, allNodes, nodeHumanIds,
-          connectedHumanIds, referencedOnPath, referencedNodeIds,
-        };
-      }).filter(Boolean) as Array<{
-        id: string; isSelected: boolean; isHovered: boolean; rfNode: any; colour: string;
-        connectedNodes: Array<{ centre: Point; radius: number }>;
-        disconnectedNodes: Array<{ centre: Point; radius: number }>;
-        allNodes: Array<{ centre: Point; radius: number }>;
-        nodeHumanIds: string[];
-        connectedHumanIds: string[];
-        referencedOnPath: Set<string>;
-        referencedNodeIds: string[];
-      }>;
+        if (!dsl) continue;
+        const colour = (ci?.display as any)?.subject_overlay_colour
+          || a.display?.subject_overlay_colour || DEFAULT_COLOUR;
+        const isPersisted = (ci?.display as any)?.show_subject_overlay === true
+          || a.display?.show_subject_overlay === true;
+        const tabIsHovered = isHovered && !isPersisted;
+        const shape = buildShape(a.id, dsl, colour, isSelected, tabIsHovered, rfNode);
+        if (shape) baseShapes.push(shape);
+      }
+    }
 
     // --- Pass 2: deterministic radius staggering for shared nodes ---
     // Build node → sorted shape IDs map

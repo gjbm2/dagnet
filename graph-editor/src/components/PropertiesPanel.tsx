@@ -22,6 +22,7 @@ import { ConditionalProbabilityEditor } from './ConditionalProbabilityEditor';
 import { QueryExpressionEditor } from './QueryExpressionEditor';
 import { AutomatableField } from './AutomatableField';
 import { ParameterSection } from './ParameterSection';
+import { applyPromotion, upsertModelVars, ukDateNow } from '../services/modelVarsResolution';
 import { ConnectionControl } from './ConnectionControl';
 import { ConnectionSelector } from './ConnectionSelector';
 import { ImageThumbnail } from './ImageThumbnail';
@@ -31,7 +32,7 @@ import { ChipInput } from './ChipInput';
 import { imageOperationsService } from '../services/imageOperationsService';
 import { getObjectTypeTheme } from '../theme/objectTypeTheme';
 import { Box, Settings, Layers, Edit3, ChevronDown, ChevronRight, X, Sliders, Info, TrendingUp, Coins, Clock, FileJson, ZapOff, RefreshCcw, ExternalLink, Zap, Plus } from 'lucide-react';
-import { ANALYSIS_TYPES } from './panels/analysisTypes';
+import { ANALYSIS_TYPES, getKindsForView } from './panels/analysisTypes';
 import { AnalysisTypeSection } from './panels/AnalysisTypeSection';
 import { ChartSettingsSection } from './panels/ChartSettingsSection';
 import { useCanvasAnalysisScenarioCallbacks } from '../hooks/useCanvasAnalysisScenarioCallbacks';
@@ -152,20 +153,39 @@ function CanvasAnalysisPropertiesSection({ analysisId, graph, setGraph, saveHist
   const fetchKeyRef = useRef('');
   const [editingScenarioId, setEditingScenarioId] = useState<string | null>(null);
 
-  const activeCI = analysis?.content_items?.[0];
+  // Track active tab index via event from CanvasAnalysisNode.
+  // On mount / analysisId change, request the current tab state.
+  const [activeTabIndex, setActiveTabIndex] = useState(0);
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const { analysisId: aid, activeContentIndex } = (e as CustomEvent).detail || {};
+      if (aid === analysisId) setActiveTabIndex(activeContentIndex ?? 0);
+    };
+    window.addEventListener('dagnet:analysisActiveTabChanged', handler);
+    // Request current state from the node (it re-fires on this event)
+    window.dispatchEvent(new CustomEvent('dagnet:requestAnalysisActiveTab', { detail: { analysisId } }));
+    return () => window.removeEventListener('dagnet:analysisActiveTabChanged', handler);
+  }, [analysisId]);
+
+  const activeCI = analysis?.content_items?.[activeTabIndex] || analysis?.content_items?.[0];
   const analyticsDsl = activeCI?.analytics_dsl || analysis?.recipe?.analysis?.analytics_dsl || '';
-  const selectedType = analysis?.recipe?.analysis?.analysis_type || '';
+  const selectedType = activeCI?.analysis_type || analysis?.recipe?.analysis?.analysis_type || '';
   const cachedResult = canvasAnalysisResultCache.get(analysisId);
 
 
   const updateAnalysis = useCallback((updates: any) => {
     const nextGraph = mutateCanvasAnalysisGraph(graph, analysisId, (a) => {
       Object.assign(a, updates);
+      // Mirror relevant fields to the active content item
+      const ci = a.content_items?.[activeTabIndex] || a.content_items?.[0];
+      if (ci) {
+        if (updates.view_mode != null) ci.view_type = updates.view_mode;
+      }
     });
     if (!nextGraph) return;
     setGraph(nextGraph);
     saveHistoryState('Update canvas analysis');
-  }, [graph, setGraph, saveHistoryState, analysisId]);
+  }, [graph, setGraph, saveHistoryState, analysisId, activeTabIndex]);
 
   const updateRecipeAnalysis = useCallback((field: string, value: any) => {
     const nextGraph = mutateCanvasAnalysisGraph(graph, analysisId, (a) => {
@@ -181,27 +201,48 @@ function CanvasAnalysisPropertiesSection({ analysisId, graph, setGraph, saveHist
 
   const updateDisplaySetting = useCallback((keyOrBatch: string | Record<string, any>, value?: any) => {
     const nextGraph = mutateCanvasAnalysisGraph(graph, analysisId, (a) => {
+      // Write to container display (backward compat for single-tab)
       if (!a.display) a.display = {};
       if (typeof keyOrBatch === 'object') {
         Object.assign(a.display as any, keyOrBatch);
       } else {
         (a.display as any)[keyOrBatch] = value;
       }
+      // Also write to active content item's display
+      const ci = a.content_items?.[activeTabIndex] || a.content_items?.[0];
+      if (ci) {
+        if (!ci.display) ci.display = {} as any;
+        if (typeof keyOrBatch === 'object') {
+          Object.assign(ci.display as any, keyOrBatch);
+        } else {
+          (ci.display as any)[keyOrBatch] = value;
+        }
+      }
     });
     if (!nextGraph) return;
     setGraph(nextGraph);
     saveHistoryState('Update display setting');
-  }, [graph, setGraph, saveHistoryState, analysisId]);
+  }, [graph, setGraph, saveHistoryState, analysisId, activeTabIndex]);
 
   const chartKindOptions = useMemo(() => {
+    const viewType = activeCI?.view_type || 'chart';
+    const analysisType = activeCI?.analysis_type || analysis?.recipe?.analysis?.analysis_type || '';
+    // Query the registry for declared kinds
+    const registryKinds = getKindsForView(analysisType, viewType as 'chart' | 'cards' | 'table');
+    if (registryKinds.length > 0) return registryKinds.map(k => k.id);
+    // Fall back to result semantics for chart kinds
     const spec: any = cachedResult?.semantics?.chart;
     const rec = spec?.recommended;
     const alts = Array.isArray(spec?.alternatives) ? spec.alternatives : [];
     const all = [rec, ...alts].filter(Boolean) as string[];
     return augmentChartKindOptionsForAnalysisType(cachedResult?.analysis_type, Array.from(new Set(all)));
-  }, [cachedResult]);
+  }, [cachedResult, activeCI?.view_type, activeCI?.analysis_type, analysis?.recipe?.analysis?.analysis_type]);
 
-  const effectiveChartKind = analysis?.chart_kind || cachedResult?.semantics?.chart?.recommended || cachedResult?.analysis_type || undefined;
+  // For cards tabs, kind IS the effective kind (no fallback to chart semantics).
+  // For chart tabs, fall back to result recommendation → container chart_kind.
+  const effectiveChartKind = activeCI?.kind
+    || (activeCI?.view_type !== 'cards' ? (analysis?.chart_kind || cachedResult?.semantics?.chart?.recommended) : undefined)
+    || undefined;
 
   const scenariosContext = useScenariosContextOptional();
   const { tabs, operations } = useTabContext();
@@ -383,16 +424,31 @@ function CanvasAnalysisPropertiesSection({ analysisId, graph, setGraph, saveHist
               <span>Overlay</span>
               <ColourSelector
                 compact
-                value={analysis.display?.show_subject_overlay ? (analysis.display?.subject_overlay_colour as string || '#3b82f6') : ''}
+                value={(activeCI?.display as any)?.show_subject_overlay ? ((activeCI?.display as any)?.subject_overlay_colour as string || '#3b82f6') : ''}
                 presetColours={OVERLAY_PRESET_COLOURS}
                 showClear
                 onChange={(c) => {
-                  updateAnalysis({ display: { ...analysis.display, show_subject_overlay: true, subject_overlay_colour: c } });
-                  saveHistoryState('Set overlay colour');
+                  // Write per-tab overlay
+                  const nextGraph = mutateCanvasAnalysisGraph(graph, analysisId, (a) => {
+                    const ci = a.content_items?.[activeTabIndex] || a.content_items?.[0];
+                    if (ci) {
+                      if (!ci.display) ci.display = {} as any;
+                      (ci.display as any).show_subject_overlay = true;
+                      (ci.display as any).subject_overlay_colour = c;
+                    }
+                  });
+                  if (nextGraph) { setGraph(nextGraph); saveHistoryState('Set overlay colour'); }
                 }}
                 onClear={() => {
-                  updateAnalysis({ display: { ...analysis.display, show_subject_overlay: false, subject_overlay_colour: undefined } });
-                  saveHistoryState('Hide overlay');
+                  const nextGraph = mutateCanvasAnalysisGraph(graph, analysisId, (a) => {
+                    const ci = a.content_items?.[activeTabIndex] || a.content_items?.[0];
+                    if (ci) {
+                      if (!ci.display) ci.display = {} as any;
+                      (ci.display as any).show_subject_overlay = false;
+                      (ci.display as any).subject_overlay_colour = undefined;
+                    }
+                  });
+                  if (nextGraph) { setGraph(nextGraph); saveHistoryState('Hide overlay'); }
                 }}
               />
             </div>
@@ -488,6 +544,13 @@ function CanvasAnalysisPropertiesSection({ analysisId, graph, setGraph, saveHist
             if (a.recipe?.analysis) a.recipe.analysis.analysis_type = analysisType;
             a.analysis_type_overridden = true;
             a.chart_kind = undefined;
+            // Update active content item too
+            const ci = a.content_items?.[activeTabIndex] || a.content_items?.[0];
+            if (ci) {
+              ci.analysis_type = analysisType;
+              ci.analysis_type_overridden = true;
+              ci.kind = undefined;
+            }
             if (nextGraph.metadata) nextGraph.metadata.updated_at = new Date().toISOString();
             setGraph(nextGraph);
             saveHistoryState('Update analysis type');
@@ -517,26 +580,51 @@ function CanvasAnalysisPropertiesSection({ analysisId, graph, setGraph, saveHist
 
       {/* ── Section 4: Chart Settings ── */}
       <ChartSettingsSection
-        title={analysis.title || ''}
+        title={activeCI?.title || analysis.title || ''}
         onTitleChange={(title) => {
           const nextGraph = structuredClone(graph);
           const a = nextGraph.canvasAnalyses?.find((a: any) => a.id === analysisId);
-          if (a) a.title = title;
+          if (a) {
+            // Update the active content item's title
+            const ci = a.content_items?.[activeTabIndex] || a.content_items?.[0];
+            if (ci) ci.title = title;
+            a.title = title;
+          }
           setGraph(nextGraph);
         }}
-        viewMode={analysis.view_mode}
+        viewMode={activeCI?.view_type || analysis.view_mode}
         onViewModeChange={(mode) => updateAnalysis({ view_mode: mode })}
-        chartKind={analysis.chart_kind}
+        chartKind={activeCI?.kind || analysis.chart_kind}
         effectiveChartKind={effectiveChartKind}
-        onChartKindChange={(kind) => { updateAnalysis({ chart_kind: kind }); saveHistoryState(kind ? 'Pin chart kind' : 'Reset chart kind to auto'); }}
+        kindLabels={useMemo(() => {
+          const viewType = activeCI?.view_type || 'chart';
+          const aType = activeCI?.analysis_type || analysis?.recipe?.analysis?.analysis_type || '';
+          const kinds = getKindsForView(aType, viewType as 'chart' | 'cards' | 'table');
+          if (kinds.length === 0) return undefined;
+          const labels: Record<string, string> = {};
+          for (const k of kinds) labels[k.id] = k.name;
+          return labels;
+        }, [activeCI?.view_type, activeCI?.analysis_type, analysis?.recipe?.analysis?.analysis_type])}
+        onChartKindChange={(newKind) => {
+          const nextGraph = mutateCanvasAnalysisGraph(graph, analysisId, (a) => {
+            // Write to the active content item's kind
+            const ci = a.content_items?.[activeTabIndex] || a.content_items?.[0];
+            if (ci) ci.kind = newKind || undefined;
+            // Also update container flat field for single-tab backward compat
+            a.chart_kind = newKind || undefined;
+          });
+          if (!nextGraph) return;
+          setGraph(nextGraph);
+          saveHistoryState(newKind ? 'Pin chart kind' : 'Reset chart kind to auto');
+        }}
         chartKindOptions={chartKindOptions}
-        display={analysis.display}
+        display={activeCI?.display || analysis.display}
         onDisplayChange={updateDisplaySetting}
         onClearAllOverrides={() => {
           const nextGraph = structuredClone(graph);
           const a = nextGraph.canvasAnalyses?.find((a: any) => a.id === analysisId);
           if (!a?.display) return;
-          const displaySettingsList = getDisplaySettingsForSurface(analysis.chart_kind, analysis.view_mode, 'propsPanel');
+          const displaySettingsList = getDisplaySettingsForSurface(activeCI?.kind || analysis.chart_kind, activeCI?.view_type || analysis.view_mode, 'propsPanel');
           for (const s of displaySettingsList) {
             if ((s as any).overridable) delete a.display[(s as any).key];
           }
@@ -1230,21 +1318,58 @@ export default function PropertiesPanel({
         next.metadata.updated_at = new Date().toISOString();
       }
 
-      // MODEL_VARS: Re-resolve promoted scalars when preference or model_vars changes (doc 15 §8)
+      // MODEL_VARS: When a model var field is overridden and model_vars exists,
+      // auto-create/update the manual entry and pin to manual (doc 15 §5.3).
+      // This centralises the logic so it works from ANY entry point (Output card,
+      // context menu, slider, etc.) — not just ModelVarsCards.
+      const TOP_LEVEL_OVERRIDE_FIELDS = ['mean_overridden', 'stdev_overridden'];
+      const LATENCY_OVERRIDE_FIELDS = ['t95_overridden', 'onset_delta_days_overridden', 'path_t95_overridden'];
+      const latencyChanges = (actualChanges as any).latency;
+      const hasModelVarOverride = paramSlot === 'p' &&
+        next.edges[edgeIndex].p?.model_vars?.length &&
+        !('model_vars' in actualChanges) && // skip if caller already built model_vars
+        (TOP_LEVEL_OVERRIDE_FIELDS.some(f => (actualChanges as any)[f] === true) ||
+         (latencyChanges && LATENCY_OVERRIDE_FIELDS.some(f => latencyChanges[f] === true)));
+
+      if (hasModelVarOverride) {
+        const p = next.edges[edgeIndex].p!;
+        const existing = p.model_vars!.find((e: any) => e.source === 'manual');
+        const base = existing ?? {
+          source: 'manual' as const,
+          source_at: ukDateNow(),
+          probability: { mean: p.mean ?? 0, stdev: p.stdev ?? 0 },
+          ...(p.latency?.mu != null ? {
+            latency: {
+              mu: p.latency.mu, sigma: p.latency.sigma ?? 0,
+              t95: p.latency.t95 ?? 0, onset_delta_days: p.latency.onset_delta_days ?? 0,
+              ...(p.latency.path_mu != null ? { path_mu: p.latency.path_mu } : {}),
+              ...(p.latency.path_sigma != null ? { path_sigma: p.latency.path_sigma } : {}),
+              ...(p.latency.path_t95 != null ? { path_t95: p.latency.path_t95 } : {}),
+            },
+          } : {}),
+        };
+        const updated = { ...base, source_at: ukDateNow() };
+        // Apply the changed field values to the manual entry
+        if ('mean' in actualChanges) updated.probability = { ...updated.probability, mean: (actualChanges as any).mean };
+        if ('stdev' in actualChanges) updated.probability = { ...updated.probability, stdev: (actualChanges as any).stdev };
+        upsertModelVars(p, updated);
+        p.model_source_preference = 'manual';
+        p.model_source_preference_overridden = true;
+      }
+
+      // MODEL_VARS: Re-resolve promoted scalars when model_vars or preference changes (doc 15 §8).
       if (paramSlot === 'p' && (
+        'model_vars' in actualChanges ||
         'model_source_preference' in actualChanges ||
-        'model_source_preference_overridden' in actualChanges ||
-        'model_vars' in actualChanges
+        hasModelVarOverride
       )) {
-        const { applyPromotion } = await import('../services/modelVarsResolution');
         if (next.edges[edgeIndex].p) {
           applyPromotion(next.edges[edgeIndex].p, next.model_source_preference);
         }
       }
 
-      // For drag interactions (sliders) we avoid graphMutationService and just update the graph in place.
-      // For committed updates, route through graphMutationService so topology-sensitive changes (e.g. enabling latency)
-      // can trigger MSMDC regeneration (anchors).
+      // For drag interactions (sliders) and instant preference changes, we
+      // update the graph directly. Committed updates go through graphMutationService.
       if (_noHistory) {
         setGraph(next);
       } else {
@@ -1765,7 +1890,6 @@ export default function PropertiesPanel({
                     next.model_source_preference = (val === 'best_available' ? undefined : val) as any;
                     if (next.metadata) next.metadata.updated_at = new Date().toISOString();
                     // Re-resolve promoted scalars for all edges without per-edge override (doc 15 §8.3)
-                    const { applyPromotion } = await import('../services/modelVarsResolution');
                     for (const edge of (next.edges ?? [])) {
                       if (edge.p?.model_vars?.length && !edge.p.model_source_preference_overridden) {
                         applyPromotion(edge.p, next.model_source_preference);

@@ -27,6 +27,8 @@ const DEBOUNCE_MS = 2000;
 interface UseCanvasAnalysisComputeParams {
   analysis: CanvasAnalysis;
   tabId?: string;
+  /** Index of the active content tab — compute uses this tab's DSL, type, kind. */
+  activeContentIndex?: number;
   debugSnapshotChartOverride?: boolean;
 }
 
@@ -49,6 +51,7 @@ export const contentItemResultCache = new Map<string, AnalysisResult>();
 export function useCanvasAnalysisCompute({
   analysis: analysisProp,
   tabId,
+  activeContentIndex,
   debugSnapshotChartOverride,
 }: UseCanvasAnalysisComputeParams): UseCanvasAnalysisComputeResult {
   const { graph, currentDSL } = useGraphStore();
@@ -66,7 +69,9 @@ export function useCanvasAnalysisCompute({
     return fromStore || analysisProp;
   }, [graph, analysisProp]);
 
-  const contentItem = getActiveContentItem(analysis);
+  const contentItem = (activeContentIndex != null && analysis.content_items?.[activeContentIndex])
+    ? analysis.content_items[activeContentIndex]
+    : getActiveContentItem(analysis);
 
   const [result, setResult] = useState<AnalysisResult | null>(() => {
     const cached = canvasAnalysisTransientCache.get(analysis.id);
@@ -79,6 +84,21 @@ export function useCanvasAnalysisCompute({
   const [loading, setLoading] = useState(!result);
   const [error, setError] = useState<string | null>(null);
   const [backendUnavailable, setBackendUnavailable] = useState(false);
+
+  // On tab switch, instantly restore per-item cached result (avoids full re-compute).
+  // Sets cacheSeededRef so the run effect skips the next compute cycle.
+  const contentItemId = contentItem?.id;
+  const cacheSeededRef = useRef(false);
+  useEffect(() => {
+    if (!contentItemId) return;
+    const cached = contentItemResultCache.get(contentItemId);
+    if (cached) {
+      setResult(cached);
+      setLoading(false);
+      setError(null);
+      cacheSeededRef.current = true;
+    }
+  }, [contentItemId]);
   const [manualRefreshNonce, setManualRefreshNonce] = useState(0);
   const [registryVersion, setRegistryVersion] = useState(0);
   const [preparedState, setPreparedState] = useState<PreparedAnalysisComputeState>({
@@ -95,11 +115,13 @@ export function useCanvasAnalysisCompute({
   const timeSeriesRetryCountRef = useRef(0);
   const snapshotEmptyRetryCountRef = useRef(0);
 
-  const isTimeSeriesChartKind = contentItem?.chart_kind === 'time_series';
+  // Per-tab properties take priority over container-level properties
+  const chartKind = contentItem?.kind || analysis.chart_kind;
+  const isTimeSeriesChartKind = chartKind === 'time_series';
+  const analysisType = contentItem?.analysis_type || analysis?.recipe?.analysis?.analysis_type;
   const expectsTimeSeriesBranchResult =
-    analysis?.recipe?.analysis?.analysis_type === 'branch_comparison'
+    analysisType === 'branch_comparison'
     && isTimeSeriesChartKind;
-  const analysisType = analysis?.recipe?.analysis?.analysis_type;
   const analyticsDsl = contentItem?.analytics_dsl || analysis?.recipe?.analysis?.analytics_dsl || '';
   const snapshotMeta = useMemo(
     () => ANALYSIS_TYPES.find(t => t.id === analysisType),
@@ -119,7 +141,7 @@ export function useCanvasAnalysisCompute({
     ]),
     [],
   );
-  const chartKindNeedsSnapshots = !contentItem.chart_kind || SNAPSHOT_REQUIRING_CHART_KINDS.has(contentItem.chart_kind);
+  const chartKindNeedsSnapshots = !contentItem.kind || SNAPSHOT_REQUIRING_CHART_KINDS.has(contentItem.kind);
   const needsSnapshots = !!snapshotMeta?.snapshotContract && chartKindNeedsSnapshots;
   const resultHasTimeDimension = !!(result?.semantics?.dimensions || []).some((d: any) => d?.id === 'date' || d?.type === 'time');
   const debugSnapshotChart = debugSnapshotChartOverride ?? isSnapshotBootChart(analysis);
@@ -134,7 +156,7 @@ export function useCanvasAnalysisCompute({
         propAnalysisType: analysisProp.recipe?.analysis?.analysis_type,
         propChartKind: analysisProp.chart_kind,
         storeAnalysisType: analysis.recipe?.analysis?.analysis_type,
-        storeChartKind: analysis.chart_kind,
+        storeChartKind: chartKind,
         propLooksSnapshot,
         storeLooksSnapshot,
         tabId,
@@ -174,14 +196,14 @@ export function useCanvasAnalysisCompute({
       && (result.metadata as any)?.source === 'snapshot_db';
     if (!isEmpty) return;
     if (snapshotEmptyRetryCountRef.current >= 1) {
-      console.warn(`[SnapshotRetry] ${analysis.id} (${analysisType}×${analysis.chart_kind}): empty snapshot result after retry — giving up.`, {
+      console.warn(`[SnapshotRetry] ${analysis.id} (${analysisType}×${chartKind}): empty snapshot result after retry — giving up.`, {
         resultDescription: result.analysis_description,
         metadata: result.metadata,
       });
       return;
     }
 
-    console.log(`[SnapshotRetry] ${analysis.id} (${analysisType}×${analysis.chart_kind}): empty snapshot result — scheduling retry in 2s.`, {
+    console.log(`[SnapshotRetry] ${analysis.id} (${analysisType}×${chartKind}): empty snapshot result — scheduling retry in 2s.`, {
       resultDescription: result.analysis_description,
       metadata: result.metadata,
       preparedSignature: preparedSignatureRef.current,
@@ -190,7 +212,7 @@ export function useCanvasAnalysisCompute({
     const timer = setTimeout(() => {
       if (!mountedRef.current) return;
       snapshotEmptyRetryCountRef.current += 1;
-      console.log(`[SnapshotRetry] ${analysis.id} (${analysisType}×${analysis.chart_kind}): executing retry now.`);
+      console.log(`[SnapshotRetry] ${analysis.id} (${analysisType}×${chartKind}): executing retry now.`);
       completedRunKeyRef.current = null;
       preparedSignatureRef.current = null; // Force full re-prepare
       setResult(null);
@@ -201,12 +223,12 @@ export function useCanvasAnalysisCompute({
     }, 2000);
 
     return () => clearTimeout(timer);
-  }, [needsSnapshots, result, analysis.id, analysisType, analysis.chart_kind]);
+  }, [needsSnapshots, result, analysis.id, analysisType, chartKind]);
 
   // Reset snapshot empty retry counter when the analysis changes
   useEffect(() => {
     snapshotEmptyRetryCountRef.current = 0;
-  }, [analysisType, analysis.chart_kind]);
+  }, [analysisType, chartKind]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -245,7 +267,7 @@ export function useCanvasAnalysisCompute({
     logSnapshotBoot('CanvasAnalysisCompute:file-state', {
       analysisId: analysis.id,
       analysisType,
-      chartKind: analysis.chart_kind,
+      chartKind: chartKind,
       tabId,
       fileId: currentTab?.fileId,
       workspace,
@@ -257,7 +279,7 @@ export function useCanvasAnalysisCompute({
     debugSnapshotChart,
     analysis.id,
     analysisType,
-    analysis.chart_kind,
+    chartKind,
     tabId,
     currentTab?.fileId,
     workspace,
@@ -306,7 +328,7 @@ export function useCanvasAnalysisCompute({
       logChartReadinessTrace('CanvasScheduler:prepare-triggered', {
         analysisId: analysis.id,
         analysisType,
-        chartKind: analysis.chart_kind,
+        chartKind: chartKind,
         mode: analysis.mode,
         manualRefreshNonce,
         registryVersion,
@@ -371,7 +393,7 @@ export function useCanvasAnalysisCompute({
 
         const nextSig = nextPreparedState.status === 'ready' ? nextPreparedState.signature : null;
         if (nextSig !== null && nextSig === preparedSignatureRef.current) {
-          console.log(`[Compute] SKIP-redundant-prepare ${analysis.id} (${analysisType}×${analysis.chart_kind})`, {
+          console.log(`[Compute] SKIP-redundant-prepare ${analysis.id} (${analysisType}×${chartKind})`, {
             signature: nextSig?.slice(0, 16),
           });
           return;
@@ -379,7 +401,7 @@ export function useCanvasAnalysisCompute({
         preparedSignatureRef.current = nextSig;
         if (nextPreparedState.status === 'ready' && needsSnapshots) {
           const scenarios = nextPreparedState.scenarios;
-          console.log(`[CanvasAnalysisCompute] snapshot-ready ${analysis.id} (${analysisType}×${analysis.chart_kind})`, {
+          console.log(`[CanvasAnalysisCompute] snapshot-ready ${analysis.id} (${analysisType}×${chartKind})`, {
             signature: nextSig,
             scenarios: scenarios.map(s => ({
               id: s.scenario_id,
@@ -397,7 +419,7 @@ export function useCanvasAnalysisCompute({
             })),
           });
         } else if (nextPreparedState.status === 'blocked') {
-          console.log(`[CanvasAnalysisCompute] blocked ${analysis.id} (${analysisType}×${analysis.chart_kind}): ${nextPreparedState.reason}`, {
+          console.log(`[CanvasAnalysisCompute] blocked ${analysis.id} (${analysisType}×${chartKind}): ${nextPreparedState.reason}`, {
             requiredFileIds: nextPreparedState.requiredFileIds,
             missingFileIds: nextPreparedState.missingFileIds,
             hydratableFileIds: nextPreparedState.hydratableFileIds,
@@ -410,7 +432,7 @@ export function useCanvasAnalysisCompute({
         lastAppliedPrepareRef.current = thisVersion;
         preparedSignatureRef.current = null;
         const msg = err?.message || String(err);
-        console.warn(`[CanvasAnalysisCompute] prepare failed for ${analysis.id} (${analysisType}×${analysis.chart_kind}):`, msg, {
+        console.warn(`[CanvasAnalysisCompute] prepare failed for ${analysis.id} (${analysisType}×${chartKind}):`, msg, {
           needsSnapshots,
           workspace,
           analyticsDsl,
@@ -485,7 +507,7 @@ export function useCanvasAnalysisCompute({
 
   useEffect(() => {
     if (preparedState.status === 'blocked') {
-      console.log(`[Compute] BLOCKED ${analysis.id} (${analysisType}×${analysis.chart_kind}): ${preparedState.reason}`, {
+      console.log(`[Compute] BLOCKED ${analysis.id} (${analysisType}×${chartKind}): ${preparedState.reason}`, {
         requiredFileIds: preparedState.requiredFileIds?.length,
         missingFileIds: preparedState.missingFileIds?.length,
         hydratableFileIds: preparedState.hydratableFileIds?.length,
@@ -506,7 +528,7 @@ export function useCanvasAnalysisCompute({
   const readinessSnapshot = useMemo(() => ({
     analysisId: analysis.id,
     analysisType,
-    chartKind: analysis.chart_kind,
+    chartKind: chartKind,
     mode: analysis.mode,
     tabId,
     graphReady,
@@ -522,7 +544,7 @@ export function useCanvasAnalysisCompute({
   }), [
     analysis.id,
     analysisType,
-    analysis.chart_kind,
+    chartKind,
     analysis.mode,
     tabId,
     graphReady,
@@ -551,7 +573,7 @@ export function useCanvasAnalysisCompute({
     recordSnapshotBootLedgerStage('hook-mounted', {
       analysisId: analysis.id,
       analysisType,
-      chartKind: analysis.chart_kind,
+      chartKind: chartKind,
       mode: analysis.mode,
       tabId,
       source: 'useCanvasAnalysisCompute',
@@ -559,7 +581,7 @@ export function useCanvasAnalysisCompute({
     logSnapshotBoot('CanvasAnalysisCompute:hook-mount', {
       analysisId: analysis.id,
       analysisType,
-      chartKind: analysis.chart_kind,
+      chartKind: chartKind,
       mode: analysis.mode,
       tabId,
     });
@@ -567,7 +589,7 @@ export function useCanvasAnalysisCompute({
       recordSnapshotBootLedgerStage('hook-unmounted', {
         analysisId: analysis.id,
         analysisType,
-        chartKind: analysis.chart_kind,
+        chartKind: chartKind,
         mode: analysis.mode,
         tabId,
         source: 'useCanvasAnalysisCompute',
@@ -575,12 +597,12 @@ export function useCanvasAnalysisCompute({
       logSnapshotBoot('CanvasAnalysisCompute:hook-unmount', {
         analysisId: analysis.id,
         analysisType,
-        chartKind: analysis.chart_kind,
+        chartKind: chartKind,
         mode: analysis.mode,
         tabId,
       });
     };
-  }, [debugSnapshotChart, analysis.id, analysisType, analysis.chart_kind, analysis.mode, tabId]);
+  }, [debugSnapshotChart, analysis.id, analysisType, chartKind, analysis.mode, tabId]);
 
   useEffect(() => {
     if (!debugSnapshotChart) return;
@@ -588,7 +610,7 @@ export function useCanvasAnalysisCompute({
       recordSnapshotBootLedgerStage('prepared-blocked', {
         analysisId: analysis.id,
         analysisType,
-        chartKind: analysis.chart_kind,
+        chartKind: chartKind,
         mode: analysis.mode,
         tabId,
         reason: preparedState.reason,
@@ -601,14 +623,14 @@ export function useCanvasAnalysisCompute({
     recordSnapshotBootLedgerStage('prepared-ready', {
       analysisId: analysis.id,
       analysisType,
-      chartKind: analysis.chart_kind,
+      chartKind: chartKind,
       mode: analysis.mode,
       tabId,
       signature: preparedState.signature,
       scenarioIds: preparedState.scenarios.map((scenario) => scenario.scenario_id),
       source: 'useCanvasAnalysisCompute',
     });
-  }, [debugSnapshotChart, preparedState, analysis.id, analysisType, analysis.chart_kind, analysis.mode, tabId]);
+  }, [debugSnapshotChart, preparedState, analysis.id, analysisType, chartKind, analysis.mode, tabId]);
 
   const runCompute = useCallback(async (prepared: PreparedAnalysisComputeReady, runKey: string) => {
     const thisCompute = ++computeCountRef.current;
@@ -621,7 +643,7 @@ export function useCanvasAnalysisCompute({
       recordSnapshotBootLedgerStage('compute-start', {
         analysisId: analysis.id,
         analysisType,
-        chartKind: analysis.chart_kind,
+        chartKind: chartKind,
         mode: analysis.mode,
         tabId,
         scenarioIds: prepared.scenarios.map((scenario) => scenario.scenario_id),
@@ -631,7 +653,7 @@ export function useCanvasAnalysisCompute({
       logSnapshotBoot('CanvasAnalysisCompute:compute-start', {
         analysisId: analysis.id,
         analysisType,
-        chartKind: analysis.chart_kind,
+        chartKind: chartKind,
         mode: analysis.mode,
         scenarioIds: prepared.scenarios.map((scenario) => scenario.scenario_id),
         signature: prepared.signature,
@@ -645,13 +667,22 @@ export function useCanvasAnalysisCompute({
         if (augmented?.result) {
           setResult(augmented.result);
           canvasAnalysisResultCache.set(analysis.id, augmented.result);
+          if (contentItem?.id) contentItemResultCache.set(contentItem.id, augmented.result);
+          // Cache for sibling tabs with same analysis_type
+          if (analysis.content_items) {
+            for (const ci of analysis.content_items) {
+              if (ci.analysis_type === analysisType && ci.id !== contentItem?.id) {
+                contentItemResultCache.set(ci.id, augmented.result);
+              }
+            }
+          }
         }
       });
       if (thisCompute !== computeCountRef.current || !mountedRef.current) return;
 
       if (response?.result) {
         completedRunKeyRef.current = runKey;
-        console.log(`[Compute] RESULT ${analysis.id} (${analysisType}×${analysis.chart_kind})`, {
+        console.log(`[Compute] RESULT ${analysis.id} (${analysisType}×${chartKind})`, {
           responseType: response.result.analysis_type,
           dataRows: response.result.data?.length,
           source: (response.result.metadata as any)?.source,
@@ -661,7 +692,7 @@ export function useCanvasAnalysisCompute({
           recordSnapshotBootLedgerStage('compute-success', {
             analysisId: analysis.id,
             analysisType,
-            chartKind: analysis.chart_kind,
+            chartKind: chartKind,
             mode: analysis.mode,
             tabId,
             requestedAnalysisType: analysisType,
@@ -680,22 +711,33 @@ export function useCanvasAnalysisCompute({
         }
         setResult(response.result);
         canvasAnalysisResultCache.set(analysis.id, response.result);
+        // Cache per content item so tab switches can restore instantly.
+        // Also cache for ALL sibling content items with the same analysis_type —
+        // they share one compute result (e.g. all edge_info card tabs).
+        if (contentItem?.id) contentItemResultCache.set(contentItem.id, response.result);
+        if (analysis.content_items) {
+          for (const ci of analysis.content_items) {
+            if (ci.analysis_type === analysisType && ci.id !== contentItem?.id) {
+              contentItemResultCache.set(ci.id, response.result);
+            }
+          }
+        }
         setError(null);
       } else {
         completedRunKeyRef.current = runKey;
-        console.warn(`[Compute] NO-RESULT ${analysis.id} (${analysisType}×${analysis.chart_kind})`);
+        console.warn(`[Compute] NO-RESULT ${analysis.id} (${analysisType}×${chartKind})`);
         setError('No result returned from compute');
       }
     } catch (err: any) {
       if (thisCompute !== computeCountRef.current || !mountedRef.current) return;
       const msg = err?.message || String(err);
       completedRunKeyRef.current = runKey;
-      console.error(`[Compute] ERROR ${analysis.id} (${analysisType}×${analysis.chart_kind}):`, msg);
+      console.error(`[Compute] ERROR ${analysis.id} (${analysisType}×${chartKind}):`, msg);
       if (debugSnapshotChart) {
         recordSnapshotBootLedgerStage('compute-error', {
           analysisId: analysis.id,
           analysisType,
-          chartKind: analysis.chart_kind,
+          chartKind: chartKind,
           mode: analysis.mode,
           tabId,
           message: msg,
@@ -704,7 +746,7 @@ export function useCanvasAnalysisCompute({
         logSnapshotBoot('CanvasAnalysisCompute:compute-error', {
           analysisId: analysis.id,
           analysisType,
-          chartKind: analysis.chart_kind,
+          chartKind: chartKind,
           message: msg,
         });
       }
@@ -721,7 +763,7 @@ export function useCanvasAnalysisCompute({
         setLoading(false);
       }
     }
-  }, [analysis.id, analysis.mode, analysis.chart_kind, analysisType, debugSnapshotChart, tabId]);
+  }, [analysis.id, analysis.mode, chartKind, analysisType, debugSnapshotChart, tabId]);
 
   useEffect(() => {
     if (preparedState.status !== 'ready') return;
@@ -729,10 +771,11 @@ export function useCanvasAnalysisCompute({
     const runKey = `${preparedState.signature}|refresh:${manualRefreshNonce}`;
     if (debounceRef.current) clearTimeout(debounceRef.current);
 
-    if (seededTransientResultRef.current && result && manualRefreshNonce === 0) {
+    if ((seededTransientResultRef.current || cacheSeededRef.current) && result && manualRefreshNonce === 0) {
       seededTransientResultRef.current = false;
+      cacheSeededRef.current = false;
       canvasAnalysisResultCache.set(analysis.id, result);
-      console.log(`[Compute] SKIP-seeded ${analysis.id} (${analysisType}×${analysis.chart_kind})`);
+      console.log(`[Compute] SKIP-seeded ${analysis.id} (${analysisType}×${chartKind})`);
       return;
     }
 
@@ -740,7 +783,7 @@ export function useCanvasAnalysisCompute({
     const completedRunKey = completedRunKeyRef.current;
     const hasSettledCurrentResult = completedRunKey === runKey && !!result && !loading && !error && !backendUnavailable;
     if (activeRunKey === runKey || hasSettledCurrentResult) {
-      console.log(`[Compute] SKIP-dup ${analysis.id} (${analysisType}×${analysis.chart_kind})`, {
+      console.log(`[Compute] SKIP-dup ${analysis.id} (${analysisType}×${chartKind})`, {
         activeMatch: activeRunKey === runKey,
         settled: hasSettledCurrentResult,
         hasResult: !!result,
@@ -749,11 +792,16 @@ export function useCanvasAnalysisCompute({
     }
 
     const isManualRefresh = manualRefreshNonce > 0;
-    const shouldDebounce = analysis.mode === 'live' && !!result && !isManualRefresh;
+    // Only debounce when re-computing the SAME analysis type (e.g., graph changed).
+    // Don't debounce when the analysis type changed (tab switch) — the user needs
+    // the new result now, not in 2s.
+    const resultMatchesCurrentType = result?.analysis_type === analysisType;
+    const shouldDebounce = analysis.mode === 'live' && resultMatchesCurrentType && !isManualRefresh;
 
     if (shouldDebounce) {
-      console.log(`[Compute] DEBOUNCE ${analysis.id} (${analysisType}×${analysis.chart_kind}) ${DEBOUNCE_MS}ms`);
-      setLoading(true);
+      console.log(`[Compute] DEBOUNCE ${analysis.id} (${analysisType}×${chartKind}) ${DEBOUNCE_MS}ms`);
+      // Don't set loading=true — we already have a result to show during the debounce.
+      // The stale result is better than a loading flash.
       debounceRef.current = setTimeout(() => {
         void runCompute(preparedState, runKey);
       }, DEBOUNCE_MS);
@@ -762,7 +810,7 @@ export function useCanvasAnalysisCompute({
       };
     }
 
-    console.log(`[Compute] RUN ${analysis.id} (${analysisType}×${analysis.chart_kind})`, {
+    console.log(`[Compute] RUN ${analysis.id} (${analysisType}×${chartKind})`, {
       signature: preparedState.signature?.slice(0, 16),
       manualRefresh: isManualRefresh,
       needsSnapshots,

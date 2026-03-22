@@ -557,6 +557,31 @@ class CanvasAnalysisDisplay(BaseModel, extra='allow'):
     hidden_scenarios: Optional[List[str]] = None
 
 
+class ContentItem(BaseModel, extra='allow'):
+    """A single content tab inside a canvas analysis container."""
+    id: str
+    analysis_type: str = ''
+    view_type: str = 'chart'
+    kind: Optional[str] = None
+    title: Optional[str] = None
+    display: Optional[CanvasAnalysisDisplay] = None
+    analysis_type_overridden: Optional[bool] = None
+    analytics_dsl: Optional[str] = None
+    chart_current_layer_dsl: Optional[str] = None
+
+    @model_validator(mode='before')
+    @classmethod
+    def migrate_chart_kind_facet(cls, data: Any) -> Any:
+        """Migrate legacy chart_kind / facet → kind."""
+        if isinstance(data, dict):
+            if 'kind' not in data or data['kind'] is None:
+                data['kind'] = data.pop('facet', None) or data.pop('chart_kind', None)
+            else:
+                data.pop('facet', None)
+                data.pop('chart_kind', None)
+        return data
+
+
 class CanvasAnalysis(BaseModel):
     """Canvas annotation: live analysis pinned to the canvas (chart or result cards)."""
     id: str
@@ -580,6 +605,7 @@ class CanvasAnalysis(BaseModel):
     analysis_type_overridden: Optional[bool] = Field(None, description="True when user explicitly selected an analysis type (vs auto-assigned at creation)")
     recipe: ChartRecipeCore
     display: Optional[CanvasAnalysisDisplay] = None
+    content_items: Optional[List[ContentItem]] = Field(None, description="Ordered list of content tabs inside this container")
 
 
 class Graph(BaseModel):

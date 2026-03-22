@@ -19,6 +19,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import ReactDOM from 'react-dom';
 import { GripVertical } from 'lucide-react';
 import { AnalysisChartContainer } from './charts/AnalysisChartContainer';
+import { AnalysisInfoCard } from './analytics/AnalysisInfoCard';
 import { ANALYSIS_TYPES, getAnalysisTypeMeta } from './panels/analysisTypes';
 import { useCanvasAnalysisCompute } from '../hooks/useCanvasAnalysisCompute';
 import { buildGraphForAnalysisLayer } from '../services/CompositionService';
@@ -167,7 +168,7 @@ function DraggableAnalysisCard({
       id: `${stableId}-content-0`,
       analysis_type: deferred ? '' : analysisType,
       view_type: 'chart' as const,
-      chart_kind: chartKind,
+      kind: chartKind,
       analytics_dsl: dsl,
     }],
   }), [stableId, analysisType, dsl, chartKind, deferred]);
@@ -312,7 +313,7 @@ function DraggableAnalysisCard({
             contentItem: {
               analysis_type: analysisType,
               view_type: 'chart',
-              chart_kind: effectiveChartKind,
+              kind: effectiveChartKind,
               title: meta?.name || analysisType,
               analytics_dsl: dsl,
             },
@@ -330,14 +331,14 @@ function DraggableAnalysisCard({
     setDragging(false);
     setDragDelta(null);
 
-    // Clear any snap-in preview
     const dropTarget = dragDropTargetRef.current;
+    // Clear any snap-in preview
     if (dropTarget) {
       window.dispatchEvent(new CustomEvent('dagnet:clearContentItemPreview', {
         detail: { targetAnalysisId: dropTarget },
       }));
-      dragDropTargetRef.current = null;
     }
+    dragDropTargetRef.current = null;
 
     const dx = e.clientX - ds.startX;
     const dy = e.clientY - ds.startY;
@@ -364,11 +365,12 @@ function DraggableAnalysisCard({
           contentItem: {
             analysis_type: analysisType,
             view_type: 'chart',
-            chart_kind: effectiveChartKind,
+            kind: effectiveChartKind,
             title: meta?.name || analysisType,
             analytics_dsl: dsl,
           },
           analysisResult: result,
+          sourceTabId: tabId,
         },
       }));
       onDismiss();
@@ -379,22 +381,27 @@ function DraggableAnalysisCard({
     const el = cardRef.current;
     const cardLeft = e.clientX - ds.ox;
     const cardTop = e.clientY - ds.oy;
+    const pinMeta = ANALYSIS_TYPES.find((t) => t.id === analysisType);
+    // Satellites are thumbnails — use a standard size for the pinned analysis, not the tile size.
+    const pinWidth = scaleContent ? 400 : (el ? el.offsetWidth : 400);
+    const pinHeight = scaleContent ? 300 : (el ? el.offsetHeight : 300);
     const dragData = buildPinDragData({
       analysisType,
       dsl,
       chartKind: effectiveChartKind,
       result,
-      screenWidth: el ? el.offsetWidth : 400,
-      screenHeight: el ? el.offsetHeight : 300,
+      screenWidth: pinWidth,
+      screenHeight: pinHeight,
       canvasZoom: canvasZoom || 1,
       baseFontSize: el ? parseFloat(getComputedStyle(el).fontSize) || 10 : 10,
-      scaleContent: !!scaleContent,
+      scaleContent: false, // Pinned analyses don't scale content — they're standard-sized
+      title: pinMeta?.name || analysisType,
     });
     window.dispatchEvent(new CustomEvent('dagnet:pinAnalysisAtScreenPosition', {
-      detail: { screenX: cardLeft, screenY: cardTop, dragData },
+      detail: { screenX: cardLeft, screenY: cardTop, dragData, sourceTabId: tabId },
     }));
     onDismiss();
-  }, [analysisType, dsl, effectiveChartKind, result, canvasZoom, scaleContent, onDismiss, onClickPin]);
+  }, [analysisType, dsl, effectiveChartKind, result, canvasZoom, scaleContent, onDismiss, onClickPin, tabId]);
 
   // --- Render ---
   const meta = ANALYSIS_TYPES.find((t) => t.id === analysisType);
@@ -464,15 +471,14 @@ function DraggableAnalysisCard({
         id: `${stableId}-main`,
         analysis_type: analysisType,
         view_type: 'chart',
-        chart_kind: chartKind,
+        kind: chartKind,
       }];
     }
     return tabIds.map(tid => ({
       id: `${stableId}-${tid}`,
       analysis_type: analysisType,
-      view_type: 'chart' as const,
-      chart_kind: chartKind,
-      facet: tid,
+      view_type: 'cards' as const,
+      kind: tid,
       title: TAB_LABELS[tid] || tid,
       analysis_type_overridden: true,
     }));
@@ -480,25 +486,26 @@ function DraggableAnalysisCard({
 
   // Tab drag complete → pin as new analysis or snap into existing container
   const handleTabDragComplete = useCallback((outcome: TabDragOutcome) => {
-    const facet = outcome.contentItem.facet;
+    const itemKind = outcome.contentItem.kind;
     if (outcome.targetAnalysisId) {
       window.dispatchEvent(new CustomEvent('dagnet:snapContentItemToContainer', {
         detail: {
           targetAnalysisId: outcome.targetAnalysisId,
           contentItem: {
             analysis_type: analysisType,
-            view_type: 'chart' as const,
-            chart_kind: effectiveChartKind,
-            facet,
-            title: TAB_LABELS[facet || ''] || facet || outcome.label,
+            view_type: 'cards' as const,
+            kind: itemKind,
+            title: TAB_LABELS[itemKind || ''] || itemKind || outcome.label,
             analysis_type_overridden: true,
           },
           analysisResult: result,
+          sourceTabId: tabId,
         },
       }));
       onDismiss();
     } else {
       const el = cardRef.current;
+      const tabPinMeta = ANALYSIS_TYPES.find((t) => t.id === analysisType);
       const dragData = buildPinDragData({
         analysisType,
         dsl,
@@ -509,10 +516,11 @@ function DraggableAnalysisCard({
         canvasZoom: canvasZoom || 1,
         baseFontSize: el ? parseFloat(getComputedStyle(el).fontSize) || 10 : 10,
         scaleContent: !!scaleContent,
-        singleFacet: facet,
+        singleFacet: itemKind,
+        title: tabPinMeta?.name || analysisType,
       });
       window.dispatchEvent(new CustomEvent('dagnet:pinAnalysisAtScreenPosition', {
-        detail: { screenX: outcome.screenX, screenY: outcome.screenY, dragData },
+        detail: { screenX: outcome.screenX, screenY: outcome.screenY, dragData, sourceTabId: tabId },
       }));
       onDismiss();
     }
@@ -581,7 +589,15 @@ function DraggableAnalysisCard({
               ...(hasMultipleTabs ? { height: 320, flex: 'none', overflow: 'auto' } : {}),
             }}
           >
-            {result ? (
+            {result && ci.view_type === 'cards' ? (
+              <AnalysisInfoCard
+                result={result}
+                kind={ci.kind}
+                fontSize={ci.display?.font_size as number | undefined}
+                onFileLink={onFileLink}
+                tabExtra={snapshotRetrievals ? { evidence: <SnapshotCalendarSection data={snapshotRetrievals} /> } : undefined}
+              />
+            ) : result ? (
               <AnalysisChartContainer
                 result={result}
                 chartKindOverride={effectiveChartKind}
@@ -594,7 +610,7 @@ function DraggableAnalysisCard({
                 onRendered={fireSettled}
                 onFileLink={onFileLink}
                 source={{ query_dsl: dsl }}
-                facet={ci.facet}
+                infoCardKind={ci.kind}
                 infoDefaultTab={hasMultipleTabs ? undefined : infoDefaultTab}
                 infoTabExtra={snapshotRetrievals ? {
                   evidence: <SnapshotCalendarSection data={snapshotRetrievals} />,
@@ -1013,6 +1029,7 @@ export function HoverAnalysisPreview({
       const el = containerRef.current;
       if (!el) return;
       const rect = el.getBoundingClientRect();
+      const satMeta = ANALYSIS_TYPES.find((t) => t.id === recipe.analysisType);
       const dragData = buildPinDragData({
         analysisType: recipe.analysisType,
         dsl,
@@ -1023,6 +1040,7 @@ export function HoverAnalysisPreview({
         canvasZoom: canvasZoom || 1,
         baseFontSize: 10,
         scaleContent: false,
+        title: satMeta?.name || recipe.analysisType,
       });
       window.dispatchEvent(new CustomEvent('dagnet:pinAnalysisAtScreenPosition', {
         detail: { screenX: rect.left, screenY: rect.top, dragData },

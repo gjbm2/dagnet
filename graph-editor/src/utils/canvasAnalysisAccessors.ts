@@ -29,7 +29,7 @@ export function getActiveContentItem(analysis: CanvasAnalysis): ContentItem {
     id: `${analysis.id}-content-0`,
     analysis_type: analysis.recipe?.analysis?.analysis_type ?? '',
     view_type: analysis.view_mode ?? 'chart',
-    chart_kind: analysis.chart_kind,
+    kind: analysis.chart_kind,
     display: analysis.display,
     title: analysis.title,
     analysis_type_overridden: analysis.analysis_type_overridden,
@@ -84,6 +84,20 @@ export function normaliseCanvasAnalysis(analysis: CanvasAnalysis): CanvasAnalysi
       if (!ci.analytics_dsl && containerDsl) ci.analytics_dsl = containerDsl;
       if (!ci.chart_current_layer_dsl && containerLayerDsl) ci.chart_current_layer_dsl = containerLayerDsl;
     }
+  }
+  // Migrate legacy chart_kind / facet → kind on content items
+  for (const ci of analysis.content_items) {
+    const legacy = ci as any;
+    const hadFacet = !!legacy.facet;
+    if (!ci.kind && (legacy.chart_kind || legacy.facet)) {
+      ci.kind = legacy.facet || legacy.chart_kind;
+    }
+    // Items that had a facet were card views, not chart views
+    if (hadFacet && ci.view_type === 'chart') {
+      ci.view_type = 'cards';
+    }
+    delete legacy.chart_kind;
+    delete legacy.facet;
   }
   return analysis;
 }
@@ -164,12 +178,14 @@ export interface PinDragDataInput {
   scaleContent: boolean;
   /** When set, pin only this single facet instead of all tabs. */
   singleFacet?: string;
+  /** Human-readable title (e.g. 'Lag Histogram'). Falls back to analysisType if omitted. */
+  title?: string;
 }
 
 /** Build the drag data payload dispatched when a card is pinned to canvas.
  *  Pure function — no DOM access. */
 export function buildPinDragData(input: PinDragDataInput) {
-  const { analysisType, dsl, chartKind, result, screenWidth, screenHeight, canvasZoom, baseFontSize, scaleContent, singleFacet } = input;
+  const { analysisType, dsl, chartKind, result, screenWidth, screenHeight, canvasZoom, baseFontSize, scaleContent, singleFacet, title } = input;
   const z = canvasZoom || 1;
   const display = {
     font_size: baseFontSize,
@@ -179,9 +195,8 @@ export function buildPinDragData(input: PinDragDataInput) {
   const tabIds = extractTabIds(result);
   let contentItems: Array<{
     analysis_type: string;
-    view_type: 'chart';
-    chart_kind?: string;
-    facet: string;
+    view_type: 'chart' | 'cards';
+    kind?: string;
     title: string;
     display: typeof display;
     analysis_type_overridden: boolean;
@@ -190,9 +205,8 @@ export function buildPinDragData(input: PinDragDataInput) {
   if (singleFacet) {
     contentItems = [{
       analysis_type: analysisType,
-      view_type: 'chart' as const,
-      chart_kind: chartKind,
-      facet: singleFacet,
+      view_type: 'cards' as const,
+      kind: singleFacet,
       title: TAB_LABELS[singleFacet] || singleFacet,
       display,
       analysis_type_overridden: true,
@@ -201,9 +215,8 @@ export function buildPinDragData(input: PinDragDataInput) {
   } else if (tabIds.length > 1) {
     contentItems = tabIds.map(tabId => ({
       analysis_type: analysisType,
-      view_type: 'chart' as const,
-      chart_kind: chartKind,
-      facet: tabId,
+      view_type: 'cards' as const,
+      kind: tabId,
       title: TAB_LABELS[tabId] || tabId,
       display,
       analysis_type_overridden: true,
@@ -222,6 +235,7 @@ export function buildPinDragData(input: PinDragDataInput) {
     },
     viewMode: 'chart' as const,
     chartKind,
+    title: title || analysisType,
     analysisTypeOverridden: true,
     analysisResult: result,
     drawWidth: screenWidth / z,

@@ -1291,15 +1291,18 @@ class WorkspaceService {
             })();
 
             // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-            // HARD GATE: Graph files MUST NOT be silently overwritten on pull.
+            // HARD GATE: Graph files with USER EDITS must not be silently
+            // overwritten on pull.
             //
             // The isDirty / hasActualChanges check is unreliable — dirty flags
             // can be cleared by editor normalisation, programmatic updates, or
             // store↔file sync races. For graph files we use a direct content
-            // comparison against the REMOTE payload instead. If local content
-            // differs from remote in ANY way, the file MUST go through 3-way
-            // merge. There is NO "clean update" path for graphs with differing
-            // content — silent overwrites cause production data loss.
+            // comparison against the REMOTE payload as a safety net.
+            //
+            // However, the gate must NOT block clean fast-forwards: if local
+            // content matches its original base (what was last pulled), the
+            // user hasn't edited anything — remote simply advanced. In that
+            // case the file is safe to overwrite with the remote version.
             //
             // Non-graph files (parameters, cases, nodes, etc.) retain the
             // existing isDirty/hasActualChanges gate, plus the force_replace_at_ms
@@ -1321,12 +1324,25 @@ class WorkspaceService {
             // For graph files: dirty detection is supplemented by the hard gate.
             // If dirty detection missed it but content actually differs, the gate catches it.
             const dirtyDetected = localFileState && (localFileState.isDirty || hasActualChanges);
-            const graphGateTriggered = isGraphFile && localFileState && localDiffersFromRemote && !dirtyDetected;
+
+            // Positive check: does local content match its original base (what was
+            // last pulled)?  If so, the user hasn't edited — the difference between
+            // local and remote is simply because remote advanced.  That's a clean
+            // fast-forward, not a conflict the gate should block.
+            const localMatchesOriginal = isGraphFile && localFileState?.originalData && (() => {
+              try {
+                return JSON.stringify(localFileState.data) === JSON.stringify(localFileState.originalData);
+              } catch {
+                return false;
+              }
+            })();
+
+            const graphGateTriggered = isGraphFile && localFileState && localDiffersFromRemote && !dirtyDetected && !localMatchesOriginal;
 
             // Diagnostic: log merge-path decision for graph files.
             if (isGraphFile && localFileState) {
-              console.log(`🔍 WorkspaceService MERGE DECISION for ${treeItem.path}: isDirty=${localFileState.isDirty}, hasActualChanges=${!!hasActualChanges}, localDiffersFromRemote=${localDiffersFromRemote}, dirtyDetected=${!!dirtyDetected}, graphGateTriggered=${graphGateTriggered}, isInitializing=${(localFileState as any).isInitializing}`);
-              sessionLogService.info('git', 'MERGE_DECISION', `${treeItem.path}: isDirty=${localFileState.isDirty}, hasActualChanges=${!!hasActualChanges}, localDiffersFromRemote=${localDiffersFromRemote}, dirtyDetected=${!!dirtyDetected}, graphGateTriggered=${graphGateTriggered}, isInitializing=${(localFileState as any).isInitializing}`);
+              console.log(`🔍 WorkspaceService MERGE DECISION for ${treeItem.path}: isDirty=${localFileState.isDirty}, hasActualChanges=${!!hasActualChanges}, localDiffersFromRemote=${localDiffersFromRemote}, localMatchesOriginal=${!!localMatchesOriginal}, dirtyDetected=${!!dirtyDetected}, graphGateTriggered=${graphGateTriggered}, isInitializing=${(localFileState as any).isInitializing}`);
+              sessionLogService.info('git', 'MERGE_DECISION', `${treeItem.path}: isDirty=${localFileState.isDirty}, hasActualChanges=${!!hasActualChanges}, localDiffersFromRemote=${localDiffersFromRemote}, localMatchesOriginal=${!!localMatchesOriginal}, dirtyDetected=${!!dirtyDetected}, graphGateTriggered=${graphGateTriggered}, isInitializing=${(localFileState as any).isInitializing}`);
             }
 
             if (graphGateTriggered) {
@@ -1568,12 +1584,13 @@ class WorkspaceService {
               }
             } else {
               // No local changes detected — safe to update.
-              // DEFENCE-IN-DEPTH: For graph files, verify content is truly identical.
-              // If somehow a graph reached this path with differing content, block it.
-              if (isGraphFile && localFileState?.data && localDiffersFromRemote) {
+              // DEFENCE-IN-DEPTH: For graph files, verify content is truly identical
+              // OR that the user hasn't edited (local matches original → clean fast-forward).
+              // Only block if local genuinely has user edits that differ from remote.
+              if (isGraphFile && localFileState?.data && localDiffersFromRemote && !localMatchesOriginal) {
                 const escapeMsg =
                   `🛑 GRAPH OVERWRITE GATE (defence-in-depth): ${treeItem.path} reached clean-update ` +
-                  `path but content differs from remote. This should have been caught by the primary gate. ` +
+                  `path but content differs from remote and local has edits. ` +
                   `Blocking overwrite and preserving local.`;
                 console.error(escapeMsg);
                 sessionLogService.error(

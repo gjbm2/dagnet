@@ -1,0 +1,25 @@
+{
+  "gates": {
+    "git-write": {
+      "description": "Commands that modify git state",
+      "patterns": [
+        "git add", "git commit", "git push", "git pull",
+        "git checkout", "git reset", "git rebase", "git merge",
+        "git stash", "git revert", "git tag", "git rm", "git mv",
+        "git clean", "git restore", "git switch", "git cherry-pick",
+        "git apply", "git am", "git filter-branch", "git config",
+        "git branch ",
+        "--force"
+      ],
+      "claude_md_section": "Gate 1: Git writes"
+    },
+    "destructive": {
+      "description": "Commands that delete or overwrite data",
+      "patterns": [
+        "rm ", "rm\t", "rmdir ", "unlink ", "truncate ", "shred ", "sed -i",
+        "dagnet-gate-"
+      ],
+      "claude_md_section": "Gate 2: Destructive / data-loss operations"
+    }
+  }
+}

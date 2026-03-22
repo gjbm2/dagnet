@@ -78,7 +78,7 @@ extract_window() {
 
   # Collect all matching mark line numbers + labels
   local mark_lines
-  mark_lines=$(grep -n -i "$pattern" "$file" || true)
+  mark_lines=$(grep -a -n -i "$pattern" "$file" || true)
 
   if [[ -z "$mark_lines" ]]; then
     echo "  (no marks matching '$LABEL' in $stream_name)"
@@ -87,7 +87,7 @@ extract_window() {
 
   # Collect ALL mark line numbers in the file (for windowing)
   local all_mark_lines
-  all_mark_lines=$(grep -n "$4" "$file" | cut -d: -f1)
+  all_mark_lines=$(grep -a -n "$4" "$file" | cut -d: -f1)
 
   # Decide which matching marks to show
   local chosen_lines
@@ -166,7 +166,7 @@ trim_file() {
   local snap_cut="$naive_cut"
   local first_mark_after
   first_mark_after=$(tail -n +"$naive_cut" "$file" \
-    | grep -n "$mark_pattern" \
+    | grep -a -n "$mark_pattern" \
     | head -n 1 \
     | cut -d: -f1 || true)
 

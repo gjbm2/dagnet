@@ -60,12 +60,27 @@ export interface SnapshotContract {
   perScenario: boolean;
 }
 
+/** A kind within a view type, with a human-readable label. */
+export interface KindMeta {
+  id: string;
+  name: string;
+}
+
+/** Declares what view types an analysis type supports and which kinds are valid for each. */
+export interface ViewSpec {
+  chart?: KindMeta[];
+  cards?: KindMeta[];
+  table?: KindMeta[];
+}
+
 export interface AnalysisTypeMeta {
   id: string;
   name: string;
   shortDescription: string;
   selectionHint: string;
   icon: LucideIcon;
+  /** Valid view_type → kind[] combinations. When absent, inferred from result semantics at runtime. */
+  views?: ViewSpec;
   /** If present, this analysis type requires snapshot DB data */
   snapshotContract?: SnapshotContract;
   /** If true, this type is used by backend pipelines only (e.g. Bayes compiler)
@@ -205,6 +220,13 @@ export const ANALYSIS_TYPES: AnalysisTypeMeta[] = [
     shortDescription: 'Curated summary of a single node',
     selectionHint: 'Hover over a node or select with from()',
     icon: CircleDot,
+    views: {
+      cards: [
+        { id: 'overview', name: 'Overview' },
+        { id: 'structure', name: 'Structure' },
+      ],
+      chart: [{ id: 'info', name: 'Info' }],
+    },
   },
   {
     id: 'edge_info',
@@ -212,6 +234,16 @@ export const ANALYSIS_TYPES: AnalysisTypeMeta[] = [
     shortDescription: 'Curated summary of a single edge',
     selectionHint: 'Hover over an edge or select with from().to()',
     icon: Cable,
+    views: {
+      cards: [
+        { id: 'overview', name: 'Overview' },
+        { id: 'evidence', name: 'Evidence' },
+        { id: 'forecast', name: 'Forecast' },
+        { id: 'depth', name: 'Data Depth' },
+        { id: 'diagnostics', name: 'Diagnostics' },
+      ],
+      chart: [{ id: 'info', name: 'Info' }],
+    },
   },
 
   // Fallback
@@ -307,5 +339,15 @@ export function getAnalysisTypeMeta(id: string): AnalysisTypeMeta | undefined {
   // Handle aliases (backend may use different IDs for same type)
   const normalizedId = id === 'graph_overview_empty' ? 'graph_overview' : id;
   return ANALYSIS_TYPES.find(t => t.id === normalizedId);
+}
+
+/**
+ * Get the valid kinds for an analysis type × view type combination.
+ * Returns KindMeta[] from the registry, or empty array if not declared
+ * (caller should fall back to result semantics for chart kinds).
+ */
+export function getKindsForView(analysisTypeId: string, viewType: 'chart' | 'cards' | 'table'): KindMeta[] {
+  const meta = getAnalysisTypeMeta(analysisTypeId);
+  return meta?.views?.[viewType] || [];
 }
 

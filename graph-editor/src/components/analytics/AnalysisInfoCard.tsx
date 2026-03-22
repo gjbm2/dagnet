@@ -30,11 +30,11 @@ interface AnalysisInfoCardProps {
   /** Extra React content to append after a specific tab's table. Keyed by tab ID. */
   tabExtra?: Record<string, React.ReactNode>;
   /**
-   * When set, filter data rows to only those matching this tab/facet ID.
+   * When set, filter data rows to only those matching this card kind.
    * Renders flat (no tab bar) — the tab bar lives at the container level.
-   * Used by multi-content-item containers where each content item shows one facet.
+   * Used by multi-content-item containers where each content item shows one card kind.
    */
-  facet?: string;
+  kind?: string;
 }
 
 interface RowData {
@@ -69,11 +69,11 @@ const TAB_LABELS: Record<string, string> = {
 // Other tabs show a single value column even in multi-scenario mode.
 const SCENARIO_AWARE_TABS = new Set(['overview', 'structure']);
 
-export function AnalysisInfoCard({ result, fontSize, defaultTab, onFileLink, tabExtra, facet }: AnalysisInfoCardProps) {
+export function AnalysisInfoCard({ result, fontSize, defaultTab, onFileLink, tabExtra, kind }: AnalysisInfoCardProps) {
   const sizeZoom = fontSizeZoom(fontSize);
   const allData = result.data || [];
-  // When facet is set, filter to only rows matching that tab — renders flat (no tab bar).
-  const data = facet ? allData.filter((row: any) => row.tab === facet) : allData;
+  // When kind is set, filter to only rows matching that card kind — renders flat (no tab bar).
+  const data = kind ? allData.filter((row: any) => row.tab === kind) : allData;
 
   // Detect tabs: rows with a `tab` field
   const tabIds = useMemo(() => {
@@ -132,7 +132,7 @@ export function AnalysisInfoCard({ result, fontSize, defaultTab, onFileLink, tab
   if (!hasTabs) {
     // No tabs — render flat (single tab, faceted view, or no tab field at all)
     const sections = buildSections(data, scenarioIds, scenarioMeta, result.dimension_values);
-    const extra = facet ? tabExtra?.[facet] : undefined;
+    const extra = kind ? tabExtra?.[kind] : undefined;
     return (
       <div className="info-card" style={sizeZoom !== 1 ? { zoom: sizeZoom } as any : undefined}>
         <InfoTable sections={sections} scenarioIds={scenarioIds} scenarioMeta={scenarioMeta} onFileLink={onFileLink} />

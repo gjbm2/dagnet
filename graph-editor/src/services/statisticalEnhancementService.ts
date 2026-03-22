@@ -2478,13 +2478,24 @@ export function enhanceGraphLatencies(
 
           if (anchorLagCandidates.length > 0) {
             const totalNForAnchor = anchorLagCandidates.reduce((sum, c) => sum + c.n, 0);
-            const anchorMedian =
+            const anchorMedianRaw =
               anchorLagCandidates.reduce((sum, c) => sum + c.n * (c.anchor_median_lag_days ?? 0), 0) / (totalNForAnchor || 1);
-            const anchorMean =
+            const anchorMeanRaw =
               anchorLagCandidates.reduce(
                 (sum, c) => sum + c.n * (c.anchor_mean_lag_days ?? c.anchor_median_lag_days ?? 0),
                 0
               ) / (totalNForAnchor || 1);
+
+            // Shift anchor moments into model space by subtracting upstream path onset.
+            // anchor_median/mean_lag_days are calendar-time A→X observations that include
+            // the dead-time (onset) of all edges from A to X.  Subtracting the accumulated
+            // upstream onset gives onset-free moments suitable for lognormal fitting, so
+            // that path_mu/path_sigma describe only the stochastic part.  This keeps the
+            // separation clean: path_onset carries the deterministic shift, path_mu/sigma
+            // carry the lognormal shape.
+            const upstreamOnset = nodePathOnset.get(nodeId) ?? 0;
+            const anchorMedian = Math.max(0.01, anchorMedianRaw - upstreamOnset);
+            const anchorMean = Math.max(anchorMedian, anchorMeanRaw - upstreamOnset);
 
             const anchorFit = fitLagDistribution(
               anchorMedian,

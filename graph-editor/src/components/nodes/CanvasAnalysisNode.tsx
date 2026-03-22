@@ -5,11 +5,15 @@ import type { CanvasAnalysis, ContentItem } from '@/types';
 import { getActiveContentItem, getContentItems, deriveDslSubjectLabel } from '@/utils/canvasAnalysisAccessors';
 import { CanvasAnalysisCard } from '../CanvasAnalysisCard';
 import type { TabDragOutcome } from '../CanvasAnalysisCard';
-import { useCanvasAnalysisCompute, contentItemResultCache } from '@/hooks/useCanvasAnalysisCompute';
+import { useCanvasAnalysisCompute, contentItemResultCache, canvasAnalysisResultCache } from '@/hooks/useCanvasAnalysisCompute';
 import { useGraphStore, useGraphStoreApi } from '@/contexts/GraphStoreContext';
 import { useScenariosContextOptional } from '@/contexts/ScenariosContext';
 import { useTabContext } from '@/contexts/TabContext';
 import { AnalysisChartContainer } from '../charts/AnalysisChartContainer';
+import { AnalysisInfoCard } from '../analytics/AnalysisInfoCard';
+import { buildContextMenuSettingItems } from '@/lib/analysisDisplaySettingsRegistry';
+import { OVERLAY_PRESET_COLOURS } from '../ColourSelector';
+import type { ContextMenuItem } from '../ContextMenu';
 import { AnalysisResultCards } from '../analytics/AnalysisResultCards';
 import { AnalysisResultTable } from '../analytics/AnalysisResultTable';
 import { resolveAnalysisType } from '@/services/analysisTypeResolutionService';
@@ -19,7 +23,7 @@ import { isSnapshotBootChart, logSnapshotBoot, recordSnapshotBootLedgerStage } f
 import { getLastSnappedResize, clearLastSnappedResize } from '@/services/snapService';
 import { groupResizeStart, groupResize, groupResizeEnd } from '../canvas/useGroupResize';
 import { beginResizeGuard, endResizeGuard } from '../canvas/syncGuards';
-import { Loader2, AlertCircle, ServerOff, ExternalLink, Settings2, ChevronDown } from 'lucide-react';
+import { Loader2, AlertCircle, ServerOff, ExternalLink, Settings2, ChevronDown, Crosshair, SlidersHorizontal, RefreshCw, X } from 'lucide-react';
 import { chartOperationsService } from '@/services/chartOperationsService';
 import { InlineEditableLabel } from '../InlineEditableLabel';
 import type { AvailableAnalysis } from '@/lib/graphComputeClient';
@@ -62,11 +66,25 @@ function CanvasAnalysisNodeInner({ data, selected }: NodeProps<CanvasAnalysisNod
   const clampedIndex = Math.min(activeContentIndex, contentItems.length - 1);
   const contentItem = contentItems[clampedIndex] || getActiveContentItem(analysis);
 
-  // Broadcast active tab changes so SelectionConnectors can show the right connectors
+  // Broadcast active tab changes so SelectionConnectors + PropertiesPanel can track the active tab
   useEffect(() => {
     window.dispatchEvent(new CustomEvent('dagnet:analysisActiveTabChanged', {
       detail: { analysisId: analysis.id, activeContentIndex: clampedIndex },
     }));
+  }, [analysis.id, clampedIndex]);
+
+  // Respond to tab state requests (e.g. PropertiesPanel mounting after the node)
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const { analysisId: aid } = (e as CustomEvent).detail || {};
+      if (aid === analysis.id) {
+        window.dispatchEvent(new CustomEvent('dagnet:analysisActiveTabChanged', {
+          detail: { analysisId: analysis.id, activeContentIndex: clampedIndex },
+        }));
+      }
+    };
+    window.addEventListener('dagnet:requestAnalysisActiveTab', handler);
+    return () => window.removeEventListener('dagnet:requestAnalysisActiveTab', handler);
   }, [analysis.id, clampedIndex]);
 
   // Subject label derived from active tab's DSL + graph nodes
@@ -174,6 +192,7 @@ function CanvasAnalysisNodeInner({ data, selected }: NodeProps<CanvasAnalysisNod
   const { result, loading, waitingForDeps, error, backendUnavailable, refresh } = useCanvasAnalysisCompute({
     analysis,
     tabId,
+    activeContentIndex: clampedIndex,
     debugSnapshotChartOverride: propDebugSnapshotChart,
   });
 
@@ -592,23 +611,27 @@ function CanvasAnalysisNodeInner({ data, selected }: NodeProps<CanvasAnalysisNod
   }, [analysis, onUpdate, tabId, currentDSL]);
 
   const handleOverlayToggle = useCallback((active: boolean) => {
-    const colour = analysis.display?.subject_overlay_colour || '#3b82f6';
+    const ciDisplay = contentItem?.display || {};
+    const colour = (ciDisplay as any).subject_overlay_colour || analysis.display?.subject_overlay_colour || '#3b82f6';
+    // Write to active content item's display (per-tab overlay)
     onUpdate(analysis.id, {
-      display: { ...analysis.display, show_subject_overlay: active, ...(active ? { subject_overlay_colour: colour } : {}) },
-    });
-  }, [analysis, onUpdate]);
+      content_items: analysis.content_items?.map((ci, i) =>
+        i === clampedIndex
+          ? { ...ci, display: { ...ci.display, show_subject_overlay: active, ...(active ? { subject_overlay_colour: colour } : {}) } as any }
+          : ci,
+      ),
+    } as any);
+  }, [analysis, onUpdate, contentItem, clampedIndex]);
 
   const handleOverlayColourChange = useCallback((colour: string | null) => {
-    if (colour) {
-      onUpdate(analysis.id, {
-        display: { ...analysis.display, show_subject_overlay: true, subject_overlay_colour: colour },
-      });
-    } else {
-      onUpdate(analysis.id, {
-        display: { ...analysis.display, show_subject_overlay: false, subject_overlay_colour: undefined },
-      });
-    }
-  }, [analysis, onUpdate]);
+    onUpdate(analysis.id, {
+      content_items: analysis.content_items?.map((ci, i) =>
+        i === clampedIndex
+          ? { ...ci, display: { ...ci.display, show_subject_overlay: !!colour, subject_overlay_colour: colour || undefined } as any }
+          : ci,
+      ),
+    } as any);
+  }, [analysis, onUpdate, clampedIndex]);
 
   const handleRemoveContentItem = useCallback((contentItemId: string) => {
     const clone = structuredClone(analysis);
@@ -670,11 +693,11 @@ function CanvasAnalysisNodeInner({ data, selected }: NodeProps<CanvasAnalysisNod
 
   const handleOpenContentItemAsTab = useCallback((ci: ContentItem) => {
     if (!result) return;
-    const chartKind = ci.chart_kind || result?.semantics?.chart?.recommended;
-    if (!chartKind) return;
+    const ciKind = ci.kind || result?.semantics?.chart?.recommended;
+    if (!ciKind) return;
     const currentTab = tabId ? tabsRef.current.find(t => t.id === tabId) : undefined;
     chartOperationsService.openAnalysisChartTabFromAnalysis({
-      chartKind: chartKind as any,
+      chartKind: ciKind as any,
       analysisResult: result,
       scenarioIds: visibleScenarioIds,
       source: {
@@ -685,7 +708,7 @@ function CanvasAnalysisNodeInner({ data, selected }: NodeProps<CanvasAnalysisNod
       },
       render: {
         view_mode: ci.view_type as ViewMode | undefined,
-        chart_kind: ci.chart_kind,
+        chart_kind: ci.kind,
         display: ci.display as Record<string, unknown> | undefined,
       },
     });
@@ -750,7 +773,11 @@ function CanvasAnalysisNodeInner({ data, selected }: NodeProps<CanvasAnalysisNod
   const handleDeleteSelf = useCallback(() => onDelete(analysis.id), [analysis.id, onDelete]);
 
   // ── Pre-resolved display settings for table/cards (avoids IIFE + inline resolve) ──
+  // Expression view (generic cards/table) only applies when the content item
+  // doesn't have a specific kind — card-kind items (overview, evidence, etc.)
+  // are rendered by the cards branch in renderContent, not by renderExtra.
   const expressionViewMode = (contentItem.view_type === 'cards' || contentItem.view_type === 'table')
+    && !contentItem.kind
     ? contentItem.view_type as ViewMode : null;
   const resolvedExpressionDisplay = useMemo(() => {
     if (!expressionViewMode) return null;
@@ -934,16 +961,16 @@ function CanvasAnalysisNodeInner({ data, selected }: NodeProps<CanvasAnalysisNod
             className="canvas-analysis-title-btn"
             onClick={(e) => {
               e.stopPropagation();
-              const chartKind = contentItem.chart_kind || result?.semantics?.chart?.recommended;
-              if (chartKind) {
+              const ciKind = contentItem.kind || result?.semantics?.chart?.recommended;
+              if (ciKind) {
                 chartOperationsService.openAnalysisChartTabFromAnalysis({
-                  chartKind: chartKind as any,
+                  chartKind: ciKind as any,
                   analysisResult: result,
                   scenarioIds: visibleScenarioIds,
                   source: chartSource,
                   render: {
                     view_mode: contentItem.view_type as ViewMode | undefined,
-                    chart_kind: contentItem.chart_kind,
+                    chart_kind: contentItem.kind,
                     display: contentItem.display as Record<string, unknown> | undefined,
                   },
                 });
@@ -972,6 +999,7 @@ function CanvasAnalysisNodeInner({ data, selected }: NodeProps<CanvasAnalysisNod
         contentItems={contentItems}
         activeContentIndex={activeContentIndex}
         onActiveContentIndexChange={setActiveContentIndex}
+        connectorColour={(contentItem.display as any)?.show_subject_overlay ? ((contentItem.display as any)?.subject_overlay_colour as string | undefined) : undefined}
         style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}
         result={result}
         loading={loading}
@@ -985,17 +1013,189 @@ function CanvasAnalysisNodeInner({ data, selected }: NodeProps<CanvasAnalysisNod
         onRemoveContentItem={handleRemoveContentItem}
         onAddContentItem={handleAddContentItem}
         onOpenContentItemAsTab={handleOpenContentItemAsTab}
+        buildTabContextMenuItems={(ci, closeMenu) => {
+          const hasOverlay = !!(ci.display as any)?.show_subject_overlay;
+          const ciColour = (ci.display as any)?.subject_overlay_colour || '#3b82f6';
+          const items: ContextMenuItem[] = [];
+
+          // View Mode
+          items.push({
+            label: 'View Mode', onClick: () => {},
+            submenu: (['chart', 'cards', 'table'] as const).map(mode => ({
+              label: mode.charAt(0).toUpperCase() + mode.slice(1),
+              checked: ci.view_type === mode,
+              onClick: () => {
+                onUpdate(analysis.id, {
+                  content_items: analysis.content_items?.map(item =>
+                    item.id === ci.id ? { ...item, view_type: mode } : item,
+                  ),
+                } as any);
+                closeMenu();
+              },
+            })),
+          });
+
+          // Connectors
+          const connectorItems: ContextMenuItem[] = [
+            {
+              label: 'Show connectors',
+              icon: <Crosshair size={14} />,
+              checked: hasOverlay,
+              onClick: () => {
+                onUpdate(analysis.id, {
+                  content_items: analysis.content_items?.map(item =>
+                    item.id === ci.id
+                      ? { ...item, display: { ...item.display, show_subject_overlay: !hasOverlay, ...(!hasOverlay ? { subject_overlay_colour: ciColour } : {}) } as any }
+                      : item,
+                  ),
+                } as any);
+                closeMenu();
+              },
+            },
+            { label: '', onClick: () => {}, divider: true },
+          ];
+          for (const { name, value: hex } of OVERLAY_PRESET_COLOURS) {
+            connectorItems.push({
+              label: name,
+              checked: hasOverlay && ciColour === hex,
+              onClick: () => {
+                onUpdate(analysis.id, {
+                  content_items: analysis.content_items?.map(item =>
+                    item.id === ci.id
+                      ? { ...item, display: { ...item.display, show_subject_overlay: true, subject_overlay_colour: hex } as any }
+                      : item,
+                  ),
+                } as any);
+                closeMenu();
+              },
+            });
+          }
+          items.push({ label: 'Connectors', icon: <Crosshair size={14} />, onClick: () => {}, submenu: connectorItems });
+
+          // Display
+          const ciKind = ci.kind || analysis.chart_kind;
+          if (ciKind) {
+            const displayItems = buildContextMenuSettingItems(
+              ciKind, ci.view_type || 'chart', ci.display as Record<string, unknown> | undefined,
+              (key, value) => {
+                onUpdate(analysis.id, {
+                  content_items: analysis.content_items?.map(item =>
+                    item.id === ci.id
+                      ? { ...item, display: { ...item.display, [key]: value } as any }
+                      : item,
+                  ),
+                } as any);
+              },
+            );
+            if (displayItems.length > 0) {
+              items.push({ label: 'Display', icon: <SlidersHorizontal size={14} />, onClick: () => {}, submenu: displayItems as ContextMenuItem[] });
+            }
+          }
+
+          items.push({ label: '', onClick: () => {}, divider: true });
+
+          // Open as Tab
+          items.push({
+            label: 'Open as Tab',
+            icon: <ExternalLink size={14} />,
+            disabled: !result,
+            onClick: () => { handleOpenContentItemAsTab(ci); closeMenu(); },
+          });
+
+          // Refresh
+          items.push({
+            label: 'Refresh',
+            icon: <RefreshCw size={14} />,
+            onClick: () => { refresh(); closeMenu(); },
+          });
+
+          // Close tab
+          items.push({ label: '', onClick: () => {}, divider: true });
+          items.push({
+            label: 'Close tab',
+            icon: <X size={14} />,
+            onClick: () => { handleRemoveContentItem(ci.id); closeMenu(); },
+          });
+
+          return items;
+        }}
+        onTabOverlayToggle={(ci, active) => {
+          const colour = (ci.display as any)?.subject_overlay_colour || '#3b82f6';
+          onUpdate(analysis.id, {
+            content_items: analysis.content_items?.map(item =>
+              item.id === ci.id
+                ? { ...item, display: { ...item.display, show_subject_overlay: active, ...(active ? { subject_overlay_colour: colour } : {}) } as any }
+                : item,
+            ),
+          } as any);
+        }}
+        onTabOverlayColourChange={(ci, colour) => {
+          onUpdate(analysis.id, {
+            content_items: analysis.content_items?.map(item =>
+              item.id === ci.id
+                ? { ...item, display: { ...item.display, show_subject_overlay: !!colour, subject_overlay_colour: colour || undefined } as any }
+                : item,
+            ),
+          } as any);
+        }}
         onTabDragComplete={handleTabDragComplete}
         renderContent={(ci, previewOverlay) => {
-          // Per-content-item result: check item-specific cache first (for tabs
-          // snapped in with a different analysis type), then container result.
-          const ciResult = contentItemResultCache.get(ci.id) || result;
+          // Resolve the best available result for this content item:
+          // 1. Per-item cache (snapped-in tabs with their own result)
+          // 2. Hook result, if its analysis_type matches this tab
+          // 3. Container-level cache (previous compute for this analysis)
+          // 4. Hook result as last resort
+          const perItemResult = contentItemResultCache.get(ci.id);
+          const hookResultMatchesTab = result?.analysis_type === ci.analysis_type;
+          const containerCachedResult = canvasAnalysisResultCache.get(analysis.id);
+          const containerCacheMatchesTab = containerCachedResult?.analysis_type === ci.analysis_type;
+          // Use the best matching result. If nothing matches, show null
+          // (loading state) rather than wrong data from a different analysis type.
+          const ciResult = perItemResult
+            || (hookResultMatchesTab ? result : null)
+            || (containerCacheMatchesTab ? containerCachedResult : null)
+            || null;
           return (
           <>
+            {ci.view_type === 'cards' && ciResult && !(awaitingScenariosHydration) && (() => {
+              const cardViewportRef = React.createRef<HTMLDivElement>();
+              const ciOverlayActive = !!(ci.display as any)?.show_subject_overlay;
+              const ciOverlayColour = (ci.display as any)?.subject_overlay_colour;
+              const cardTray = (
+                <div style={{ display: 'flex', gap: 4, alignItems: 'center', padding: '2px 4px', fontSize: 11 }}>
+                  <button
+                    type="button"
+                    title={ciOverlayActive ? 'Hide connectors' : 'Show connectors'}
+                    style={{ all: 'unset', cursor: 'pointer', display: 'flex', padding: 2, borderRadius: 3, background: ciOverlayActive ? 'var(--accent-primary-15)' : undefined }}
+                    onClick={() => {
+                      onUpdate(analysis.id, {
+                        content_items: analysis.content_items?.map(item =>
+                          item.id === ci.id
+                            ? { ...item, display: { ...item.display, show_subject_overlay: !ciOverlayActive, ...(ciOverlayActive ? {} : { subject_overlay_colour: ciOverlayColour || '#3b82f6' }) } as any }
+                            : item,
+                        ),
+                      } as any);
+                    }}
+                  >
+                    <Crosshair size={12} style={ciOverlayActive ? { color: ciOverlayColour || 'var(--accent-primary)' } : undefined} />
+                  </button>
+                </div>
+              );
+              return (
+                <div ref={cardViewportRef} style={{ flex: 1, minHeight: 0, overflow: 'auto', position: 'relative' }}>
+                  <ChartFloatingIcon containerRef={cardViewportRef} tray={cardTray} canvasZoom={toolbarCanvasZoom} />
+                  <AnalysisInfoCard
+                    result={ciResult}
+                    kind={ci.kind}
+                    fontSize={ci.display?.font_size as number | undefined}
+                  />
+                </div>
+              );
+            })()}
             {ci.view_type === 'chart' && (ciResult || !hasAnalysisType) && !(awaitingScenariosHydration) && (
               <AnalysisChartContainer
                 result={ciResult}
-                chartKindOverride={ci.chart_kind}
+                chartKindOverride={ci.kind}
                 visibleScenarioIds={visibleScenarioIds}
                 scenarioVisibilityModes={scenarioVisibilityModes}
                 scenarioMetaById={scenarioMetaById}
@@ -1007,7 +1207,7 @@ function CanvasAnalysisNodeInner({ data, selected }: NodeProps<CanvasAnalysisNod
                 chartContext="canvas"
                 canvasZoom={toolbarCanvasZoom}
                 hideScenarioLegend={analysis.mode === 'live' && ci.display?.show_legend !== true}
-                analysisTypeId={analysis.recipe?.analysis?.analysis_type}
+                analysisTypeId={ci.analysis_type || analysis.recipe?.analysis?.analysis_type}
                 availableAnalyses={availableAnalyses}
                 onAnalysisTypeChange={handleAnalysisTypeChange}
                 analysisMode={analysis.mode}
@@ -1031,7 +1231,7 @@ function CanvasAnalysisNodeInner({ data, selected }: NodeProps<CanvasAnalysisNod
                 onDelete={handleDeleteSelf}
                 viewMode={ci.view_type as ViewMode | undefined}
                 onViewModeChange={handleViewModeChange}
-                facet={ci.facet}
+                infoCardKind={ci.kind}
               />
             )}
             {previewOverlay}

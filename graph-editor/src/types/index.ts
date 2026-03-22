@@ -1120,8 +1120,7 @@ export interface ContentItem {
   id: string;                          // UUID — stable across drag/reorder
   analysis_type: string;               // 'edge_info', 'cohort_maturity', etc.
   view_type: 'chart' | 'cards' | 'table';  // how to render
-  chart_kind?: string;                 // which chart variant (when view_type = 'chart')
-  facet?: string;                      // 'overview' | 'evidence' | 'forecast' | ...
+  kind?: string;                       // variant within analysis_type × view_type (e.g. 'overview', 'pie', 'funnel')
   display?: CanvasAnalysisDisplay;     // font_size, scale_with_canvas, etc.
   title?: string;                      // per-content label override
   analysis_type_overridden?: boolean;

@@ -1,12 +1,26 @@
 /**
- * Canvas analysis snap-into-container integration tests.
+ * Canvas analysis content-item integration tests.
  *
  * Invariants protected:
- * - Snapping a content item into a container preserves title, analytics_dsl, and analysis_type
- * - Per-content-item result cache stores results under the new content item UUID
- * - Content item result cache lookup returns per-item result over container result
- * - addContentItem always generates a fresh UUID regardless of preset
- * - ensureContentItemDsl backfills DSL from container when content item lacks it
+ *
+ * Content item schema (kind field):
+ * - ContentItem uses `kind`, not `chart_kind` or `facet`
+ * - normaliseCanvasAnalysis migrates facet → kind + sets view_type: 'cards'
+ * - normaliseCanvasAnalysis migrates chart_kind → kind, keeps view_type: 'chart'
+ * - addContentItem preserves kind from preset
+ *
+ * Creation / snap:
+ * - buildCanvasAnalysisObject sets kind on content items from payload
+ * - Snap adds exactly 1 content item with correct kind, title, analytics_dsl, view_type
+ * - Pin from single-tab card includes title from registry
+ *
+ * Registry:
+ * - getKindsForView('edge_info', 'cards') returns the 5 info card kinds
+ * - getKindsForView('edge_info', 'chart') returns info
+ * - getKindsForView returns empty for types without declared views
+ *
+ * Rendering dispatch (structural — no DOM):
+ * - Content item with view_type 'cards' and kind set must suppress expressionViewMode
  *
  * Uses REAL service functions and caches — no mocks for internal components.
  */
@@ -15,6 +29,8 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { addContentItem, ensureContentItemDsl, mutateCanvasAnalysisGraph } from '../canvasAnalysisMutationService';
 import { contentItemResultCache } from '../../hooks/useCanvasAnalysisCompute';
 import { buildCanvasAnalysisPayload, buildCanvasAnalysisObject } from '../canvasAnalysisCreationService';
+import { normaliseCanvasAnalysis } from '../../utils/canvasAnalysisAccessors';
+import { getKindsForView } from '../../components/panels/analysisTypes';
 import type { CanvasAnalysis, ContentItem } from '../../types';
 import type { AnalysisResult } from '../../lib/graphComputeClient';
 
@@ -44,7 +60,7 @@ describe('Canvas analysis snap-into-container: addContentItem', () => {
     const newItem = addContentItem(analysis, {
       analysis_type: 'daily_conversions',
       view_type: 'chart',
-      chart_kind: 'daily_conversions',
+      kind: 'daily_conversions',
       title: 'Daily Conversions',
       analytics_dsl: 'from(signup).to(purchase)',
     });
@@ -52,7 +68,7 @@ describe('Canvas analysis snap-into-container: addContentItem', () => {
     expect(newItem.title).toBe('Daily Conversions');
     expect(newItem.analytics_dsl).toBe('from(signup).to(purchase)');
     expect(newItem.analysis_type).toBe('daily_conversions');
-    expect(newItem.chart_kind).toBe('daily_conversions');
+    expect(newItem.kind).toBe('daily_conversions');
     expect(newItem.view_type).toBe('chart');
   });
 
@@ -191,7 +207,7 @@ describe('Canvas analysis snap-into-container: syncFlatFields must not overwrite
       title: 'Daily Conversions',
       analytics_dsl: 'from(signup).to(purchase)',
       view_type: 'chart',
-      chart_kind: 'daily_conversions',
+      kind: 'daily_conversions',
     });
     // Wrap in a graph structure (as mutateCanvasAnalysisGraph expects)
     const graph = { canvasAnalyses: [analysis], metadata: { updated_at: '' } };
@@ -215,7 +231,7 @@ describe('Canvas analysis snap-into-container: syncFlatFields must not overwrite
     expect(tab1.title).toBe('Daily Conversions');
     expect(tab1.analysis_type).toBe('daily_conversions');
     expect(tab1.analytics_dsl).toBe('from(signup).to(purchase)');
-    expect(tab1.chart_kind).toBe('daily_conversions');
+    expect(tab1.kind).toBe('daily_conversions');
     expect(tab1.view_type).toBe('chart');
   });
 
@@ -269,7 +285,7 @@ describe('Canvas analysis snap-into-container: full roundtrip', () => {
     const snappedPreset: Partial<ContentItem> = {
       analysis_type: 'daily_conversions',
       view_type: 'chart',
-      chart_kind: 'daily_conversions',
+      kind: 'daily_conversions',
       title: 'Daily Conversions',
       analytics_dsl: 'from(signup).to(purchase)',
     };
@@ -290,7 +306,7 @@ describe('Canvas analysis snap-into-container: full roundtrip', () => {
     expect(lastItem.title).toBe('Daily Conversions');
     expect(lastItem.analytics_dsl).toBe('from(signup).to(purchase)');
     expect(lastItem.analysis_type).toBe('daily_conversions');
-    expect(lastItem.chart_kind).toBe('daily_conversions');
+    expect(lastItem.kind).toBe('daily_conversions');
 
     // 6. Verify per-item result resolution
     const containerResult = makeMockResult('edge_info');
@@ -332,3 +348,165 @@ describe('Canvas analysis snap-into-container: full roundtrip', () => {
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// Content item schema: kind field
+// ---------------------------------------------------------------------------
+
+describe('ContentItem schema: kind replaces chart_kind and facet', () => {
+  it('should set kind on content items created via buildCanvasAnalysisObject with contentItems', () => {
+    const payload = buildCanvasAnalysisPayload({ analyticsDsl: 'from(a).to(b)', analysisType: 'edge_info' });
+    const analysis = buildCanvasAnalysisObject(
+      { ...payload, contentItems: [
+        { analysis_type: 'edge_info', view_type: 'cards' as const, kind: 'overview', title: 'Overview', analytics_dsl: 'from(a).to(b)' },
+        { analysis_type: 'edge_info', view_type: 'cards' as const, kind: 'evidence', title: 'Evidence', analytics_dsl: 'from(a).to(b)' },
+      ]},
+      { x: 0, y: 0 }, { width: 400, height: 300 },
+    );
+    expect(analysis.content_items).toHaveLength(2);
+    expect(analysis.content_items![0].kind).toBe('overview');
+    expect(analysis.content_items![1].kind).toBe('evidence');
+    // Must NOT have chart_kind or facet
+    expect((analysis.content_items![0] as any).chart_kind).toBeUndefined();
+    expect((analysis.content_items![0] as any).facet).toBeUndefined();
+  });
+
+  it('should set kind on fallback content item from payload.chartKind', () => {
+    const payload = buildCanvasAnalysisPayload({ analyticsDsl: 'from(a).to(b)', analysisType: 'graph_overview', chartKind: 'pie' });
+    const analysis = buildCanvasAnalysisObject(payload, { x: 0, y: 0 }, { width: 400, height: 300 });
+    expect(analysis.content_items).toHaveLength(1);
+    expect(analysis.content_items![0].kind).toBe('pie');
+    expect((analysis.content_items![0] as any).chart_kind).toBeUndefined();
+  });
+
+  it('should preserve kind when adding a content item via addContentItem', () => {
+    const analysis = makeAnalysis();
+    const item = addContentItem(analysis, {
+      analysis_type: 'edge_info',
+      view_type: 'cards',
+      kind: 'diagnostics',
+      title: 'Diagnostics',
+    });
+    expect(item.kind).toBe('diagnostics');
+    expect(item.view_type).toBe('cards');
+    expect(item.title).toBe('Diagnostics');
+    expect((item as any).chart_kind).toBeUndefined();
+    expect((item as any).facet).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// normaliseCanvasAnalysis migration
+// ---------------------------------------------------------------------------
+
+describe('normaliseCanvasAnalysis: legacy migration', () => {
+  it('should migrate facet to kind and set view_type to cards', () => {
+    const analysis = makeAnalysis();
+    (analysis.content_items![0] as any).facet = 'evidence';
+    (analysis.content_items![0] as any).chart_kind = 'info';
+    analysis.content_items![0].view_type = 'chart';
+    delete (analysis.content_items![0] as any).kind;
+
+    normaliseCanvasAnalysis(analysis);
+
+    expect(analysis.content_items![0].kind).toBe('evidence');
+    expect(analysis.content_items![0].view_type).toBe('cards');
+    expect((analysis.content_items![0] as any).facet).toBeUndefined();
+    expect((analysis.content_items![0] as any).chart_kind).toBeUndefined();
+  });
+
+  it('should migrate chart_kind to kind and keep view_type as chart', () => {
+    const analysis = makeAnalysis();
+    (analysis.content_items![0] as any).chart_kind = 'funnel';
+    analysis.content_items![0].view_type = 'chart';
+    delete (analysis.content_items![0] as any).kind;
+
+    normaliseCanvasAnalysis(analysis);
+
+    expect(analysis.content_items![0].kind).toBe('funnel');
+    expect(analysis.content_items![0].view_type).toBe('chart');
+    expect((analysis.content_items![0] as any).chart_kind).toBeUndefined();
+  });
+
+  it('should not overwrite existing kind', () => {
+    const analysis = makeAnalysis();
+    analysis.content_items![0].kind = 'pie';
+    (analysis.content_items![0] as any).chart_kind = 'funnel';
+
+    normaliseCanvasAnalysis(analysis);
+
+    expect(analysis.content_items![0].kind).toBe('pie');
+    expect((analysis.content_items![0] as any).chart_kind).toBeUndefined();
+  });
+
+  it('should prefer facet over chart_kind when both present', () => {
+    const analysis = makeAnalysis();
+    (analysis.content_items![0] as any).facet = 'forecast';
+    (analysis.content_items![0] as any).chart_kind = 'info';
+    delete (analysis.content_items![0] as any).kind;
+
+    normaliseCanvasAnalysis(analysis);
+
+    expect(analysis.content_items![0].kind).toBe('forecast');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Registry: getKindsForView
+// ---------------------------------------------------------------------------
+
+describe('getKindsForView: registry-driven kind options', () => {
+  it('should return 5 card kinds for edge_info cards view', () => {
+    const kinds = getKindsForView('edge_info', 'cards');
+    expect(kinds.length).toBe(5);
+    const ids = kinds.map(k => k.id);
+    expect(ids).toContain('overview');
+    expect(ids).toContain('evidence');
+    expect(ids).toContain('forecast');
+    expect(ids).toContain('depth');
+    expect(ids).toContain('diagnostics');
+  });
+
+  it('should return info for edge_info chart view', () => {
+    const kinds = getKindsForView('edge_info', 'chart');
+    expect(kinds.length).toBe(1);
+    expect(kinds[0].id).toBe('info');
+  });
+
+  it('should return card kinds for node_info cards view', () => {
+    const kinds = getKindsForView('node_info', 'cards');
+    expect(kinds.length).toBeGreaterThan(0);
+    expect(kinds.map(k => k.id)).toContain('overview');
+  });
+
+  it('should return empty array for types without declared views', () => {
+    const kinds = getKindsForView('graph_overview', 'chart');
+    expect(kinds).toEqual([]);
+  });
+
+  it('should return empty array for unknown analysis type', () => {
+    const kinds = getKindsForView('nonexistent_type', 'cards');
+    expect(kinds).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// syncFlatFieldsToContentItems uses kind (not chart_kind)
+// ---------------------------------------------------------------------------
+
+describe('syncFlatFieldsToContentItems: writes kind not chart_kind', () => {
+  it('should sync container chart_kind to content item kind for single-tab', () => {
+    const analysis = makeAnalysis();
+    expect(analysis.content_items).toHaveLength(1);
+
+    const graph = { canvasAnalyses: [analysis], metadata: { updated_at: '' } };
+    const nextGraph = mutateCanvasAnalysisGraph(graph as any, analysis.id, (a) => {
+      a.chart_kind = 'bridge';
+    });
+
+    const updated = nextGraph!.canvasAnalyses!.find((a: any) => a.id === analysis.id)!;
+    expect(updated.content_items![0].kind).toBe('bridge');
+    expect((updated.content_items![0] as any).chart_kind).toBeUndefined();
+  });
+});
+

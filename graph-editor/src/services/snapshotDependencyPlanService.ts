@@ -460,7 +460,21 @@ export async function mapFetchPlanToSnapshotSubjects(args: {
   const skipped: Array<{ subjectId: string; reason: string }> = [];
 
   for (const item of inScopeItems) {
-    // Skip items without a query signature (means no data has been fetched yet)
+    // If plan item has no querySignature (e.g. simulation graph where no fetch
+    // has occurred), try to resolve it from the parameter file's query_signature
+    // field. This allows pre-populated synthetic data to be analysed.
+    if (!item.querySignature) {
+      try {
+        const { fileRegistry } = await import('../contexts/TabContext');
+        const pf = fileRegistry.getFile(`parameter-${item.objectId}`) as any;
+        const values: any[] = Array.isArray(pf?.data?.values) ? pf.data.values : [];
+        const withSig = values.find((v: any) => typeof v?.query_signature === 'string' && v.query_signature.trim());
+        if (withSig) {
+          (item as any).querySignature = withSig.query_signature;
+        }
+      } catch { /* ignore — fall through to skip */ }
+    }
+
     if (!item.querySignature) {
       skipped.push({ subjectId: item.itemKey, reason: 'No query signature on plan item' });
       continue;

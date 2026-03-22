@@ -770,6 +770,76 @@ describe('useCanvasAnalysisCompute DSL handling', () => {
   });
 });
 
+describe('activeContentIndex: compute must use the selected tab properties', () => {
+  it('should send tab 1 analysis_type and DSL when activeContentIndex switches from 0 to 1', async () => {
+    const { useCanvasAnalysisCompute } = await import('../useCanvasAnalysisCompute');
+
+    // Multi-tab analysis: tab 0 is edge_info, tab 1 is graph_overview with different DSL
+    const analysis: any = {
+      id: 'multi-tab-1',
+      mode: 'live' as const,
+      view_mode: 'chart',
+      chart_kind: 'info',
+      recipe: {
+        analysis: {
+          analysis_type: 'edge_info',
+          analytics_dsl: 'from(landing).to(signup)',
+        },
+      },
+      content_items: [
+        {
+          id: 'ci-0',
+          analysis_type: 'edge_info',
+          view_type: 'chart',
+          kind: 'info',
+          analytics_dsl: 'from(landing).to(signup)',
+        },
+        {
+          id: 'ci-1',
+          analysis_type: 'graph_overview',
+          view_type: 'chart',
+          kind: 'pie',
+          analytics_dsl: 'from(delegated).to(registered)',
+        },
+      ],
+    };
+
+    // Start with tab 0 selected
+    const { result, rerender } = renderHook(
+      ({ currentAnalysis, idx }) => useCanvasAnalysisCompute({
+        analysis: currentAnalysis,
+        tabId: 'tab-1',
+        activeContentIndex: idx,
+      }),
+      { initialProps: { currentAnalysis: analysis, idx: 0 } },
+    );
+
+    // Wait for initial compute to fire (edge_info is local-compute, so analyzeSelection won't fire)
+    // but let's at least wait for the hook to settle.
+    await waitFor(() => {
+      expect(result.current.loading).toBe(false);
+    });
+
+    // Clear mocks, then switch to tab 1
+    mockAnalyzeSelection.mockClear();
+    rerender({ currentAnalysis: analysis, idx: 1 });
+
+    // Tab 1 is graph_overview — not local-compute, so it goes to analyzeSelection.
+    // The hook debounces live-mode recomputes by 2s when a result already exists,
+    // so wait long enough for the debounce to fire.
+    await waitFor(() => {
+      expect(mockAnalyzeSelection).toHaveBeenCalled();
+    }, { timeout: 5000 });
+
+    // Assert the backend received the tab 1 DSL, not tab 0's
+    const call = mockAnalyzeSelection.mock.calls[0];
+    // analyzeSelection(graph, queryDsl, scenarioId, scenarioName, scenarioColour, analysisType, ...)
+    const [, queryDsl, , , , analysisType] = call;
+    expect(analysisType).toBe('graph_overview');
+    expect(queryDsl).toContain('from(delegated).to(registered)');
+  });
+});
+
 describe('chart_current_layer_dsl fragment composition', () => {
   it('should compose context fragment onto scenario DSL', () => {
     const scenarioDsl = 'window(-30d:)';

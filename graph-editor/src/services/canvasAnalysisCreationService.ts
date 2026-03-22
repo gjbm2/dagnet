@@ -28,6 +28,8 @@ export interface CanvasAnalysisCreationPayload {
   chartKind?: string;
   analysisResult?: any;
   analysisTypeOverridden: boolean;
+  /** Container/content-item title (e.g. 'Lag Histogram'). */
+  title?: string;
   /** Display settings to persist (e.g. font_size, scale_with_canvas). */
   display?: Record<string, unknown>;
   /**
@@ -38,8 +40,7 @@ export interface CanvasAnalysisCreationPayload {
   contentItems?: Array<{
     analysis_type: string;
     view_type: ViewMode;
-    chart_kind?: string;
-    facet?: string;
+    kind?: string;
     title?: string;
     display?: Record<string, unknown>;
     analysis_type_overridden?: boolean;
@@ -100,8 +101,7 @@ export function buildCanvasAnalysisObject(
         id: crypto.randomUUID(),
         analysis_type: ci.analysis_type,
         view_type: ci.view_type,
-        chart_kind: ci.chart_kind,
-        facet: ci.facet,
+        kind: ci.kind,
         title: ci.title,
         display: ci.display as any,
         analysis_type_overridden: ci.analysis_type_overridden,
@@ -112,7 +112,8 @@ export function buildCanvasAnalysisObject(
         id: crypto.randomUUID(),
         analysis_type: payload.recipe.analysis.analysis_type || '',
         view_type: payload.viewMode,
-        chart_kind: payload.chartKind,
+        kind: payload.chartKind,
+        title: payload.title,
         display: payload.display as any,
         analysis_type_overridden: payload.analysisTypeOverridden || undefined,
         analytics_dsl: analyticsDsl,

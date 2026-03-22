@@ -1,7 +1,7 @@
 /**
  * ModelVarsCards — three-card source layout for model variable provenance.
  *
- * Renders Bayesian / Analytic / Manual cards with toggle-based source
+ * Renders Bayesian / Analytic / Output cards with toggle-based source
  * selection.  Each card displays its ModelVarsEntry from edge.p.model_vars[].
  * The active (promoted) source is highlighted; users can pin a source via
  * the toggle button.
@@ -10,11 +10,15 @@
  *
  * Layout zones (§17.1):
  *   1. Config fields (above cards) — handled by ParameterSection
- *   2. Source cards (this component) — Bayesian, Analytic, Manual
+ *   2. Source cards (this component) — Bayesian, Analytic, Output
  *   3. Query (below cards) — handled by ParameterSection
+ *
+ * Styling: reuses CollapsibleSection for collapse, .property-input for inputs,
+ * .collapsible-section-badge for badges, theme tokens for all colours.
  */
 
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { ZapOff } from 'lucide-react';
 import type {
   ModelVarsEntry,
   ModelSource,
@@ -26,33 +30,28 @@ import type {
 import {
   resolveActiveModelVars,
   effectivePreference,
-  ukDateNow,
 } from '../services/modelVarsResolution';
 import { roundToDecimalPlaces } from '../utils/rounding';
 import { LATENCY_HORIZON_DECIMAL_PLACES } from '../constants/latency';
+import CollapsibleSection from './CollapsibleSection';
+import { AutomatableField } from './AutomatableField';
 import './ModelVarsCards.css';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
 interface ModelVarsCardsProps {
-  /** The model_vars array from edge.p */
   modelVars?: ModelVarsEntry[];
-  /** Edge-level preference (undefined = inherit graph default) */
   edgePreference?: ModelSourcePreference;
-  /** Whether edge preference was explicitly set by user */
   edgePreferenceOverridden?: boolean;
-  /** Graph-level preference */
   graphPreference?: GraphModelSourcePreference;
-  /** Currently promoted scalars (for manual card placeholder display) */
   promotedMean?: number;
   promotedStdev?: number;
-  /** Current promoted latency config (for manual card placeholders and analytic ZapOff) */
+  /** Per-field override flags (existing _overridden pattern) */
+  meanOverridden?: boolean;
+  stdevOverridden?: boolean;
   promotedLatency?: LatencyConfig;
-  /** Whether latency tracking is enabled on this edge */
   latencyEnabled?: boolean;
-  /** Callback to update fields on edge.p (model_vars, preference, latency overrides) */
   onUpdate: (changes: Record<string, any>) => void;
-  /** Disabled state */
   disabled?: boolean;
 }
 
@@ -72,19 +71,13 @@ function fmtPct(v: number | undefined | null): string {
   return (v * 100).toFixed(1) + '%';
 }
 
-// ── Component ────────────────────────────────────────────────────────────────
+// ── Main component ──────────────────────────────────────────────────────────
 
 export function ModelVarsCards({
-  modelVars,
-  edgePreference,
-  edgePreferenceOverridden,
-  graphPreference,
-  promotedMean,
-  promotedStdev,
-  promotedLatency,
-  latencyEnabled,
-  onUpdate,
-  disabled = false,
+  modelVars, edgePreference, edgePreferenceOverridden, graphPreference,
+  promotedMean, promotedStdev, meanOverridden, stdevOverridden,
+  promotedLatency, latencyEnabled,
+  onUpdate, disabled = false,
 }: ModelVarsCardsProps) {
   const pref = effectivePreference(edgePreference, graphPreference);
   const activeEntry = resolveActiveModelVars(modelVars, pref);
@@ -94,526 +87,403 @@ export function ModelVarsCards({
   const analytic = findEntry(modelVars, 'analytic');
   const manual = findEntry(modelVars, 'manual');
 
-  // §17.3.1: Toggle pin/unpin
+  // Collapse state: active card open, others closed. User can manually toggle.
+  // Auto-open the active card when activeSource changes.
+  const [bayesOpen, setBayesOpen] = useState(activeSource === 'bayesian');
+  const [analyticOpen, setAnalyticOpen] = useState(activeSource === 'analytic');
+  const prevSource = useRef(activeSource);
+  useEffect(() => {
+    if (activeSource !== prevSource.current) {
+      setBayesOpen(activeSource === 'bayesian');
+      setAnalyticOpen(activeSource === 'analytic');
+      prevSource.current = activeSource;
+    }
+  }, [activeSource]);
+
   const handleToggle = useCallback((source: ModelSourcePreference) => {
     if (disabled) return;
     if (edgePreferenceOverridden && edgePreference === source) {
-      // Unpin — revert to auto (§17.3.3)
-      onUpdate({
-        model_source_preference: undefined,
-        model_source_preference_overridden: false,
-      });
+      onUpdate({ model_source_preference: undefined, model_source_preference_overridden: false });
     } else {
-      // Pin to this source
-      onUpdate({
-        model_source_preference: source,
-        model_source_preference_overridden: true,
-      });
+      onUpdate({ model_source_preference: source, model_source_preference_overridden: true });
     }
   }, [disabled, edgePreference, edgePreferenceOverridden, onUpdate]);
 
-  // §5.3 + §17.2.3: Manual entry creation/update on edit
-  const handleManualEdit = useCallback((field: string, value: number) => {
-    const existing = findEntry(modelVars, 'manual');
-    // Snapshot current promoted scalars on first edit (§5.3)
-    const base: ModelVarsEntry = existing ?? {
-      source: 'manual',
-      source_at: ukDateNow(),
-      probability: {
-        mean: promotedMean ?? 0,
-        stdev: promotedStdev ?? 0,
-      },
-      ...(latencyEnabled && promotedLatency?.mu != null ? {
-        latency: {
-          mu: promotedLatency.mu,
-          sigma: promotedLatency.sigma ?? 0,
-          t95: promotedLatency.t95 ?? 0,
-          onset_delta_days: promotedLatency.onset_delta_days ?? 0,
-          ...(promotedLatency.path_mu != null ? { path_mu: promotedLatency.path_mu } : {}),
-          ...(promotedLatency.path_sigma != null ? { path_sigma: promotedLatency.path_sigma } : {}),
-          ...(promotedLatency.path_t95 != null ? { path_t95: promotedLatency.path_t95 } : {}),
-        },
-      } : {}),
-    };
-
-    const updated: ModelVarsEntry = { ...base, source_at: ukDateNow() };
-
-    // Apply the edit to the appropriate field
-    if (field === 'mean' || field === 'stdev') {
-      updated.probability = { ...updated.probability, [field]: value };
+  // Output field commit: just set the field + override flag.
+  // updateEdgeParam handles manual model_vars entry creation centrally (doc 15 §5.3).
+  const handleOutputCommit = useCallback((field: string, value: number) => {
+    if (field === 'mean') {
+      onUpdate({ mean: value, mean_overridden: true });
+    } else if (field === 'stdev') {
+      onUpdate({ stdev: value, stdev_overridden: true });
     } else {
-      // Latency fields
-      updated.latency = {
-        ...(updated.latency ?? { mu: 0, sigma: 0, t95: 0, onset_delta_days: 0 }),
-        [field]: value,
-      };
+      // Latency fields — nested under latency object
+      onUpdate({
+        latency: {
+          ...promotedLatency,
+          [field]: value,
+          ...(field === 't95' ? { t95_overridden: true } : {}),
+          ...(field === 'onset_delta_days' ? { onset_delta_days_overridden: true } : {}),
+        },
+      });
     }
+  }, [promotedLatency, onUpdate]);
 
-    // Upsert into array
-    const nextVars = [...(modelVars ?? [])];
-    const idx = nextVars.findIndex(e => e.source === 'manual');
-    if (idx >= 0) nextVars[idx] = updated;
-    else nextVars.push(updated);
-
-    // §17.3.4: Auto-pin to manual on edit
+  // Immediately flip source to manual on first keystroke (§17.3.4).
+  // Uses _noHistory for synchronous setGraph.
+  const handleOutputStartEdit = useCallback(() => {
+    if (disabled) return;
+    if (edgePreferenceOverridden && edgePreference === 'manual') return;
     onUpdate({
-      model_vars: nextVars,
       model_source_preference: 'manual',
       model_source_preference_overridden: true,
+      _noHistory: true,
     });
-  }, [modelVars, promotedMean, promotedStdev, promotedLatency, latencyEnabled, onUpdate]);
+  }, [disabled, edgePreference, edgePreferenceOverridden, onUpdate]);
 
-  // §17.2.2: Analytic card ZapOff fields update edge.p.latency directly
-  const handleAnalyticLatencyOverride = useCallback((field: string, value: number | undefined, overridden: boolean) => {
-    onUpdate({
-      latency: {
-        ...promotedLatency,
-        [field]: value,
-        [`${field}_overridden`]: overridden,
-      },
-    });
-  }, [promotedLatency, onUpdate]);
+  const isPinned = (s: ModelSourcePreference) => edgePreferenceOverridden === true && edgePreference === s;
+  const anyPinned = edgePreferenceOverridden === true;
+  // §17.3: auto-on only when this source is active AND nothing is pinned.
+  // If something is pinned, only the pinned source shows on.
+  const isAutoOn = (s: ModelSource) => activeSource === s && !anyPinned;
 
   return (
     <div className="mv-cards">
-      <BayesianCard
-        entry={bayesian}
-        isActive={activeSource === 'bayesian'}
-        isPinned={edgePreferenceOverridden === true && edgePreference === 'bayesian'}
-        onToggle={() => handleToggle('bayesian')}
-        disabled={disabled}
-      />
-      <AnalyticCard
-        entry={analytic}
-        isActive={activeSource === 'analytic'}
-        isPinned={edgePreferenceOverridden === true && edgePreference === 'analytic'}
-        onToggle={() => handleToggle('analytic')}
-        disabled={disabled}
-        promotedLatency={promotedLatency}
-        onLatencyOverride={handleAnalyticLatencyOverride}
-      />
-      <ManualCard
-        entry={manual}
-        isActive={activeSource === 'manual'}
-        isPinned={edgePreferenceOverridden === true && edgePreference === 'manual'}
-        onToggle={() => handleToggle('manual')}
-        onEdit={handleManualEdit}
-        promotedMean={promotedMean}
-        promotedStdev={promotedStdev}
-        promotedLatency={promotedLatency}
-        latencyEnabled={latencyEnabled}
-        disabled={disabled}
-      />
+      {/* ── Bayesian (§17.2.1) — collapsible, open only when active ── */}
+      <div className={`mv-card-wrap ${isPinned('bayesian') ? 'mv-card-wrap--pinned' : isAutoOn('bayesian') ? 'mv-card-wrap--active' : ''}`}>
+        <CollapsibleSection
+          title={<>Bayesian{isAutoOn('bayesian') && <span className="collapsible-section-badge" style={{ marginLeft: '8px' }}>Auto</span>}</>}
+          isOpen={bayesOpen}
+          onToggle={() => setBayesOpen(!bayesOpen)}
+          headerRight={
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+              {isPinned('bayesian') && <SourceOverrideIcon onClear={() => handleToggle('bayesian')} />}
+              <PinToggle active={isAutoOn('bayesian')} pinned={isPinned('bayesian')}
+                onClick={() => handleToggle('bayesian')} disabled={disabled} />
+            </span>
+          }
+        >
+          {bayesian ? (
+            <>
+              <FieldGroup label="Probability">
+                <RoField label="p" value={fmtPct(bayesian.probability.mean)} />
+                <RoField label="stdev" value={fmt(bayesian.probability.stdev)} />
+              </FieldGroup>
+              {bayesian.latency && (
+                <FieldGroup label="Latency">
+                  <RoField label="onset" value={fmt(bayesian.latency.onset_delta_days, 0)} unit="d" />
+                  <RoField label="μ" value={fmt(bayesian.latency.mu, 3)} />
+                  <RoField label="σ" value={fmt(bayesian.latency.sigma, 3)} />
+                  <RoField label="t95" value={fmt(bayesian.latency.t95, 1)} unit="d" />
+                  {bayesian.latency.path_mu != null && (
+                    <>
+                      <RoField label="path μ" value={fmt(bayesian.latency.path_mu, 3)} />
+                      <RoField label="path σ" value={fmt(bayesian.latency.path_sigma, 3)} />
+                      <RoField label="path t95" value={fmt(bayesian.latency.path_t95, 1)} unit="d" />
+                    </>
+                  )}
+                </FieldGroup>
+              )}
+              {bayesian.quality && (
+                <FieldGroup label="Quality">
+                  <QualitySection quality={bayesian.quality} />
+                </FieldGroup>
+              )}
+              {bayesian.source_at && <RoField label="Fitted" value={bayesian.source_at} />}
+            </>
+          ) : (
+            <p style={{ color: 'var(--text-muted)', fontStyle: 'italic', fontSize: '12px', margin: 0 }}>
+              No Bayesian model available.
+            </p>
+          )}
+        </CollapsibleSection>
+      </div>
+
+      {/* ── Analytic (§17.2.2) — collapsible, open only when active ── */}
+      <div className={`mv-card-wrap ${isPinned('analytic') ? 'mv-card-wrap--pinned' : isAutoOn('analytic') ? 'mv-card-wrap--active' : ''}`}>
+        <CollapsibleSection
+          title={<>Analytic{isAutoOn('analytic') && <span className="collapsible-section-badge" style={{ marginLeft: '8px' }}>Auto</span>}</>}
+          isOpen={analyticOpen}
+          onToggle={() => setAnalyticOpen(!analyticOpen)}
+          headerRight={
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+              {isPinned('analytic') && <SourceOverrideIcon onClear={() => handleToggle('analytic')} />}
+              <PinToggle active={isAutoOn('analytic')} pinned={isPinned('analytic')}
+                onClick={() => handleToggle('analytic')} disabled={disabled} />
+            </span>
+          }
+        >
+          {analytic ? (
+            <>
+              {/* Analytic card shows only fitting params + overridable inputs, not promoted scalars */}
+              {analytic.latency && (
+                <FieldGroup label="Latency fit">
+                  <RoField label="μ" value={fmt(analytic.latency.mu, 3)} />
+                  <RoField label="σ" value={fmt(analytic.latency.sigma, 3)} />
+                  {/* ZapOff overridable fields (§17.2.2) */}
+                  <LatencyZapOff field="onset_delta_days" label="onset" unit="d" step={1} dp={0}
+                    latency={promotedLatency} onUpdate={onUpdate} disabled={disabled} />
+                  <LatencyZapOff field="t95" label="t95" unit="d" step={0.01} dp={LATENCY_HORIZON_DECIMAL_PLACES}
+                    latency={promotedLatency} onUpdate={onUpdate} disabled={disabled} />
+                  {analytic.latency.path_mu != null && (
+                    <LatencyZapOff field="path_t95" label="path t95" unit="d" step={0.01} dp={LATENCY_HORIZON_DECIMAL_PLACES}
+                      latency={promotedLatency} onUpdate={onUpdate} disabled={disabled} />
+                  )}
+                </FieldGroup>
+              )}
+              {analytic.source_at && <RoField label="Retrieved" value={analytic.source_at} />}
+            </>
+          ) : (
+            <p style={{ color: 'var(--text-muted)', fontStyle: 'italic', fontSize: '12px', margin: 0 }}>
+              No analytic data.
+            </p>
+          )}
+        </CollapsibleSection>
+      </div>
+
+      {/* ── Output (§17.2.3) — collapsible, defaults open ── */}
+      <div className={`mv-card-wrap ${isPinned('manual') ? 'mv-card-wrap--pinned' : isAutoOn('manual') ? 'mv-card-wrap--active' : ''}`}>
+        <CollapsibleSection
+          title={<>Output{isAutoOn('manual') && <span className="collapsible-section-badge" style={{ marginLeft: '8px' }}>Auto</span>}</>}
+          defaultOpen={true}
+          headerRight={
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+              {isPinned('manual') && <SourceOverrideIcon onClear={() => handleToggle('manual')} />}
+              <PinToggle active={isAutoOn('manual')} pinned={isPinned('manual')}
+                onClick={() => handleToggle('manual')} disabled={disabled} />
+            </span>
+          }
+        >
+          <OutputCardBody
+            onCommit={handleOutputCommit}
+            onStartEdit={handleOutputStartEdit}
+            onClearFieldOverride={(flag, isLatency) => {
+              if (isLatency) {
+                onUpdate({ latency: { ...promotedLatency, [flag]: false } });
+              } else {
+                onUpdate({ [flag]: false });
+              }
+            }}
+            promotedMean={promotedMean} promotedStdev={promotedStdev}
+            meanOverridden={meanOverridden}
+            stdevOverridden={stdevOverridden}
+            promotedLatency={promotedLatency} latencyEnabled={latencyEnabled}
+            disabled={disabled}
+          />
+        </CollapsibleSection>
+      </div>
     </div>
   );
 }
 
-// ── Shared sub-components ───────────────────────────────────────────────────
+// ── Source override indicator (ZapOff) — shown on pinned card header ────────
 
-interface CardProps {
-  isActive: boolean;
-  isPinned: boolean;
-  onToggle: () => void;
-  disabled: boolean;
-}
-
-/** §17.3: Toggle button — grey (off), blue outline (auto-selected), green (pinned).
- *  §17.3.2: Hover previews as green when auto-selected (CSS handles this). */
-function ToggleButton({ isActive, isPinned, onClick, disabled }: {
-  isActive: boolean; isPinned: boolean; onClick: () => void; disabled: boolean;
-}) {
-  const cls = isPinned ? 'mv-toggle mv-toggle--pinned'
-    : isActive ? 'mv-toggle mv-toggle--auto'
-    : 'mv-toggle';
+function SourceOverrideIcon({ onClear }: { onClear: () => void }) {
   return (
     <button
-      className={cls}
-      onClick={onClick}
-      disabled={disabled}
-      title={isPinned ? 'Click to unpin (use auto)' : isActive ? 'Auto-selected. Click to pin.' : 'Click to pin this source'}
-    />
+      className="override-toggle"
+      onClick={(e) => { e.stopPropagation(); onClear(); }}
+      title="Clear source override — revert to auto"
+      type="button"
+      style={{ padding: '2px' }}
+    >
+      <ZapOff size={12} />
+    </button>
   );
 }
 
-/** §17.2 header: source name (left), active badge (centre-right), toggle (far right). */
-function CardHeader({ title, isActive, isPinned, onToggle, disabled, dateLabel }: {
-  title: string; isActive: boolean; isPinned: boolean;
-  onToggle: () => void; disabled: boolean; dateLabel?: string;
+// ── Pin toggle (§17.3) — reuses toggle-track/thumb visual pattern ───────────
+
+function PinToggle({ active, pinned, onClick, disabled }: {
+  active: boolean; pinned: boolean; onClick: () => void; disabled: boolean;
 }) {
+  // §17.3.1: two states — grey (auto-on, thumb right) vs green (pinned, thumb right).
+  // Not active = thumb left, grey track.
+  const trackClass = `collapsible-section-toggle-track${pinned ? ' on-success' : active ? ' on-grey' : ''}`;
   return (
-    <div className="mv-card-header">
-      <span className="mv-card-title">{title}</span>
-      {dateLabel && <span className="mv-card-date">{dateLabel}</span>}
-      <span className="mv-card-header-spacer" />
-      {(isActive || isPinned) && (
-        <span className={`mv-active-badge ${isPinned ? 'mv-active-badge--pinned' : ''}`}>
-          {isPinned ? 'Pinned' : 'Active'}
-        </span>
-      )}
-      <ToggleButton isActive={isActive} isPinned={isPinned} onClick={onToggle} disabled={disabled} />
+    <span
+      onClick={(e) => { e.stopPropagation(); if (!disabled) onClick(); }}
+      title={pinned ? 'Click to unpin (use auto)' : active ? 'Auto-selected. Click to pin.' : 'Click to pin this source'}
+      style={{ display: 'inline-flex', alignItems: 'center', cursor: disabled ? 'default' : 'pointer', opacity: disabled ? 0.4 : 1, flexShrink: 0 }}
+    >
+      <span className={trackClass} style={{ display: 'block' }}>
+        <span className="collapsible-section-toggle-thumb" />
+      </span>
+    </span>
+  );
+}
+
+// ── Shared layout helpers ───────────────────────────────────────────────────
+
+function FieldGroup({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div style={{ marginTop: '6px' }}>
+      <div style={{ fontSize: '10px', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.04em',
+        color: 'var(--text-muted)', marginBottom: '2px' }}>{label}</div>
+      {children}
     </div>
   );
 }
 
-function cardClass(isActive: boolean, isPinned: boolean): string {
-  if (isPinned) return 'mv-card mv-card--pinned';
-  if (isActive) return 'mv-card mv-card--active';
-  return 'mv-card';
-}
-
-/** Read-only field row */
-function ReadOnlyField({ label, value, unit }: { label: string; value: string; unit?: string }) {
+function RoField({ label, value, unit }: { label: string; value: string; unit?: string }) {
   return (
-    <div className="mv-row">
-      <span className="mv-row-label">{label}</span>
-      <span className="mv-row-value">{value}{unit ? <span className="mv-row-unit">{unit}</span> : null}</span>
-    </div>
-  );
-}
-
-// ── Bayesian card (§17.2.1) ─────────────────────────────────────────────────
-
-function BayesianCard({ entry, isActive, isPinned, onToggle, disabled }: CardProps & { entry?: ModelVarsEntry }) {
-  const [open, setOpen] = useState(true);
-
-  return (
-    <div className={cardClass(isActive, isPinned)}>
-      <div className="mv-card-collapse-header" onClick={() => setOpen(!open)}>
-        <span className={`mv-chevron ${open ? 'mv-chevron--open' : ''}`}>&#9654;</span>
-        <CardHeader title="Bayesian" isActive={isActive} isPinned={isPinned}
-          onToggle={onToggle} disabled={disabled}
-          dateLabel={entry?.source_at} />
-      </div>
-      {open && (
-        entry ? (
-          <div className="mv-card-body">
-            {/* Probability */}
-            <div className="mv-section-label">Probability</div>
-            <ReadOnlyField label="p" value={fmtPct(entry.probability.mean)} />
-            <ReadOnlyField label="stdev" value={fmt(entry.probability.stdev)} />
-
-            {/* Latency */}
-            {entry.latency && (
-              <>
-                <div className="mv-section-label">Latency</div>
-                <ReadOnlyField label="onset" value={fmt(entry.latency.onset_delta_days, 0)} unit="d" />
-                <ReadOnlyField label="mu" value={fmt(entry.latency.mu, 3)} />
-                <ReadOnlyField label="sigma" value={fmt(entry.latency.sigma, 3)} />
-                <ReadOnlyField label="t95" value={fmt(entry.latency.t95, 1)} unit="d" />
-                {entry.latency.path_mu != null && (
-                  <>
-                    <div className="mv-section-label">Path latency</div>
-                    <ReadOnlyField label="path mu" value={fmt(entry.latency.path_mu, 3)} />
-                    <ReadOnlyField label="path sigma" value={fmt(entry.latency.path_sigma, 3)} />
-                    <ReadOnlyField label="path t95" value={fmt(entry.latency.path_t95, 1)} unit="d" />
-                  </>
-                )}
-              </>
-            )}
-
-            {/* Quality (§17.2.1) */}
-            {entry.quality && (
-              <>
-                <div className="mv-section-label">Quality</div>
-                <QualitySection quality={entry.quality} />
-              </>
-            )}
-          </div>
-        ) : (
-          <div className="mv-placeholder">No Bayesian model available.</div>
-        )
-      )}
-    </div>
-  );
-}
-
-// ── Analytic card (§17.2.2) ─────────────────────────────────────────────────
-
-interface AnalyticCardProps extends CardProps {
-  entry?: ModelVarsEntry;
-  promotedLatency?: LatencyConfig;
-  onLatencyOverride: (field: string, value: number | undefined, overridden: boolean) => void;
-}
-
-function AnalyticCard({ entry, isActive, isPinned, onToggle, disabled, promotedLatency, onLatencyOverride }: AnalyticCardProps) {
-  const [open, setOpen] = useState(true);
-
-  return (
-    <div className={cardClass(isActive, isPinned)}>
-      <div className="mv-card-collapse-header" onClick={() => setOpen(!open)}>
-        <span className={`mv-chevron ${open ? 'mv-chevron--open' : ''}`}>&#9654;</span>
-        <CardHeader title="Analytic" isActive={isActive} isPinned={isPinned}
-          onToggle={onToggle} disabled={disabled}
-          dateLabel={entry?.source_at} />
-      </div>
-      {open && (
-        entry ? (
-          <div className="mv-card-body">
-            {/* Probability (read-only) */}
-            <div className="mv-section-label">Probability</div>
-            <ReadOnlyField label="p" value={fmtPct(entry.probability.mean)} />
-            <ReadOnlyField label="stdev" value={fmt(entry.probability.stdev)} />
-
-            {/* Latency — mu/sigma read-only, onset/t95/path_t95 overridable (ZapOff) */}
-            {entry.latency && (
-              <>
-                <div className="mv-section-label">Latency</div>
-                <ReadOnlyField label="mu" value={fmt(entry.latency.mu, 3)} />
-                <ReadOnlyField label="sigma" value={fmt(entry.latency.sigma, 3)} />
-                {/* ZapOff: onset (§17.2.2) */}
-                <ZapOffField
-                  label="onset"
-                  value={promotedLatency?.onset_delta_days}
-                  overridden={promotedLatency?.onset_delta_days_overridden || false}
-                  unit="d"
-                  step={1}
-                  dp={0}
-                  disabled={disabled}
-                  onCommit={(v) => onLatencyOverride('onset_delta_days', v, true)}
-                  onClearOverride={() => onLatencyOverride('onset_delta_days', promotedLatency?.onset_delta_days, false)}
-                />
-                {/* ZapOff: t95 (§17.2.2) */}
-                <ZapOffField
-                  label="t95"
-                  value={promotedLatency?.t95}
-                  overridden={promotedLatency?.t95_overridden || false}
-                  unit="d"
-                  step={0.01}
-                  dp={LATENCY_HORIZON_DECIMAL_PLACES}
-                  disabled={disabled}
-                  onCommit={(v) => onLatencyOverride('t95', v, true)}
-                  onClearOverride={() => onLatencyOverride('t95', promotedLatency?.t95, false)}
-                />
-                {/* Path-level (read-only mu/sigma, ZapOff path_t95) */}
-                {entry.latency.path_mu != null && (
-                  <>
-                    <div className="mv-section-label">Path latency</div>
-                    <ReadOnlyField label="path mu" value={fmt(entry.latency.path_mu, 3)} />
-                    <ReadOnlyField label="path sigma" value={fmt(entry.latency.path_sigma, 3)} />
-                    {/* ZapOff: path_t95 (§17.2.2) */}
-                    <ZapOffField
-                      label="path t95"
-                      value={promotedLatency?.path_t95}
-                      overridden={promotedLatency?.path_t95_overridden || false}
-                      unit="d"
-                      step={0.01}
-                      dp={LATENCY_HORIZON_DECIMAL_PLACES}
-                      disabled={disabled}
-                      onCommit={(v) => onLatencyOverride('path_t95', v, true)}
-                      onClearOverride={() => onLatencyOverride('path_t95', promotedLatency?.path_t95, false)}
-                    />
-                  </>
-                )}
-              </>
-            )}
-          </div>
-        ) : (
-          <div className="mv-placeholder">No analytic data.</div>
-        )
-      )}
-    </div>
-  );
-}
-
-// ── Manual card (§17.2.3) ───────────────────────────────────────────────────
-
-interface ManualCardProps extends CardProps {
-  entry?: ModelVarsEntry;
-  onEdit: (field: string, value: number) => void;
-  promotedMean?: number;
-  promotedStdev?: number;
-  promotedLatency?: LatencyConfig;
-  latencyEnabled?: boolean;
-}
-
-function ManualCard({
-  entry, isActive, isPinned, onToggle, onEdit,
-  promotedMean, promotedStdev, promotedLatency, latencyEnabled, disabled,
-}: ManualCardProps) {
-  // §17.2.3: Always expanded (not collapsible)
-  // When no manual entry: show promoted values as read-only placeholders.
-  // When manual entry exists: show manual values, all editable.
-  const hasEntry = !!entry;
-  const prob = entry?.probability ?? { mean: promotedMean ?? 0, stdev: promotedStdev ?? 0 };
-  const lat = entry?.latency ?? (latencyEnabled && promotedLatency?.mu != null ? {
-    mu: promotedLatency.mu,
-    sigma: promotedLatency.sigma ?? 0,
-    t95: promotedLatency.t95 ?? 0,
-    onset_delta_days: promotedLatency.onset_delta_days ?? 0,
-    path_mu: promotedLatency.path_mu,
-    path_sigma: promotedLatency.path_sigma,
-    path_t95: promotedLatency.path_t95,
-  } : undefined);
-
-  return (
-    <div className={cardClass(isActive, isPinned)}>
-      <CardHeader title="Manual" isActive={isActive} isPinned={isPinned}
-        onToggle={onToggle} disabled={disabled}
-        dateLabel={entry?.source_at} />
-      <div className="mv-card-body">
-        {/* Probability */}
-        <div className="mv-section-label">Probability</div>
-        <EditableField label="p" value={prob.mean} format="pct"
-          hasEntry={hasEntry} disabled={disabled}
-          onCommit={(v) => onEdit('mean', v)} />
-        <EditableField label="stdev" value={prob.stdev} format="dec4"
-          hasEntry={hasEntry} disabled={disabled}
-          onCommit={(v) => onEdit('stdev', v)} />
-
-        {/* Latency (§17.2.3: when latency tracking enabled) */}
-        {latencyEnabled && lat && (
-          <>
-            <div className="mv-section-label">Latency</div>
-            <EditableField label="mu" value={lat.mu} format="dec3"
-              hasEntry={hasEntry} disabled={disabled}
-              onCommit={(v) => onEdit('mu', v)} />
-            <EditableField label="sigma" value={lat.sigma} format="dec3"
-              hasEntry={hasEntry} disabled={disabled}
-              onCommit={(v) => onEdit('sigma', v)} />
-            <EditableField label="t95" value={lat.t95} format="dec1" unit="d"
-              hasEntry={hasEntry} disabled={disabled}
-              onCommit={(v) => onEdit('t95', v)} />
-            <EditableField label="onset" value={lat.onset_delta_days} format="dec0" unit="d"
-              hasEntry={hasEntry} disabled={disabled}
-              onCommit={(v) => onEdit('onset_delta_days', v)} />
-            {lat.path_mu != null && (
-              <>
-                <div className="mv-section-label">Path latency</div>
-                <EditableField label="path mu" value={lat.path_mu} format="dec3"
-                  hasEntry={hasEntry} disabled={disabled}
-                  onCommit={(v) => onEdit('path_mu', v)} />
-                <EditableField label="path sigma" value={lat.path_sigma} format="dec3"
-                  hasEntry={hasEntry} disabled={disabled}
-                  onCommit={(v) => onEdit('path_sigma', v)} />
-                <EditableField label="path t95" value={lat.path_t95} format="dec1" unit="d"
-                  hasEntry={hasEntry} disabled={disabled}
-                  onCommit={(v) => onEdit('path_t95', v)} />
-              </>
-            )}
-          </>
-        )}
-
-        {!hasEntry && (
-          <div className="mv-placeholder">Edit any field to create manual override</div>
-        )}
-      </div>
-    </div>
-  );
-}
-
-// ── Editable field (Manual card) ────────────────────────────────────────────
-
-type FieldFormat = 'pct' | 'dec0' | 'dec1' | 'dec3' | 'dec4';
-
-function formatFieldValue(v: number | undefined | null, format: FieldFormat): string {
-  if (v === undefined || v === null) return '';
-  switch (format) {
-    case 'pct': return (v * 100).toFixed(1);
-    case 'dec0': return v.toFixed(0);
-    case 'dec1': return v.toFixed(1);
-    case 'dec3': return v.toFixed(3);
-    case 'dec4': return v.toFixed(4);
-  }
-}
-
-function parseFieldValue(raw: string, format: FieldFormat): number | undefined {
-  const v = parseFloat(raw);
-  if (isNaN(v)) return undefined;
-  return format === 'pct' ? v / 100 : v;
-}
-
-function EditableField({ label, value, format, unit, hasEntry, disabled, onCommit }: {
-  label: string; value?: number | null; format: FieldFormat; unit?: string;
-  hasEntry: boolean; disabled: boolean; onCommit: (v: number) => void;
-}) {
-  const [local, setLocal] = useState('');
-  const [editing, setEditing] = useState(false);
-  const displayValue = formatFieldValue(value, format);
-
-  return (
-    <div className="mv-row">
-      <span className="mv-row-label">{label}</span>
-      <span className="mv-row-value">
-        <input
-          className={`mv-edit-input ${!hasEntry ? 'mv-edit-input--placeholder' : ''}`}
-          type="number"
-          step="any"
-          value={editing ? local : displayValue}
-          placeholder={displayValue || '–'}
-          disabled={disabled}
-          readOnly={!hasEntry && !editing}
-          onFocus={() => {
-            setEditing(true);
-            setLocal(displayValue);
-          }}
-          onBlur={() => {
-            setEditing(false);
-            const parsed = parseFieldValue(local, format);
-            if (parsed !== undefined && parsed !== value) {
-              onCommit(parsed);
-            }
-            setLocal('');
-          }}
-          onChange={(e) => setLocal(e.target.value)}
-        />
-        {unit && <span className="mv-row-unit">{unit}</span>}
-        {format === 'pct' && <span className="mv-row-unit">%</span>}
+    <div className="property-field-inline" style={{ minHeight: '20px', gap: '6px' }}>
+      <label className="parameter-section-label" style={{ minWidth: '54px', fontSize: '11px' }}>{label}</label>
+      <span style={{ fontSize: '11px', fontVariantNumeric: 'tabular-nums', color: 'var(--text-primary)' }}>
+        {value}{unit && <span style={{ color: 'var(--text-muted)', fontSize: '10px', marginLeft: '2px' }}>{unit}</span>}
       </span>
     </div>
   );
 }
 
-// ── ZapOff field (Analytic card overridable fields) ─────────────────────────
+// ── Latency ZapOff field (wraps AutomatableField) ───────────────────────────
 
-function ZapOffField({ label, value, overridden, unit, step, dp, disabled, onCommit, onClearOverride }: {
-  label: string; value?: number; overridden: boolean; unit?: string;
-  step: number; dp: number; disabled: boolean;
-  onCommit: (v: number | undefined) => void;
-  onClearOverride: () => void;
+function LatencyZapOff({ field, label, unit, step, dp, latency, onUpdate, disabled }: {
+  field: string; label: string; unit: string; step: number; dp: number;
+  latency?: LatencyConfig; onUpdate: (changes: Record<string, any>) => void; disabled: boolean;
 }) {
-  const [local, setLocal] = useState('');
-  const [editing, setEditing] = useState(false);
-  const displayValue = value !== undefined ? roundToDecimalPlaces(value, dp).toString() : '';
+  const value = (latency as any)?.[field];
+  const overridden = (latency as any)?.[`${field}_overridden`] || false;
+  const [local, setLocal] = useState(value !== undefined ? String(roundToDecimalPlaces(value, dp)) : '');
+
+  // Sync local when external changes
+  React.useEffect(() => {
+    setLocal(value !== undefined ? String(roundToDecimalPlaces(value, dp)) : '');
+  }, [value, dp]);
 
   return (
-    <div className="mv-row mv-row--zapoff">
-      <span className="mv-row-label">{label}</span>
-      <span className="mv-row-value">
+    <AutomatableField
+      label=""
+      value={value ?? ''}
+      overridden={overridden}
+      onClearOverride={() => {
+        onUpdate({ latency: { ...latency, [`${field}_overridden`]: false } });
+      }}
+    >
+      <div className="property-field-inline" style={{ minHeight: '20px', gap: '6px' }}>
+        <label className="parameter-section-label" style={{ minWidth: '54px', fontSize: '11px' }}>{label}</label>
         <input
-          className={`mv-edit-input ${overridden ? 'mv-edit-input--overridden' : ''}`}
+          className="property-input"
           type="number"
           min={0}
           step={step}
-          value={editing ? local : displayValue}
-          placeholder="(computed)"
-          disabled={disabled}
-          onFocus={() => {
-            setEditing(true);
-            setLocal(displayValue);
-          }}
+          value={local}
+          onChange={(e) => setLocal(e.target.value)}
           onBlur={() => {
-            setEditing(false);
             const parsed = parseFloat(local);
             if (!isNaN(parsed) && parsed >= 0) {
-              onCommit(roundToDecimalPlaces(parsed, dp));
+              const rounded = roundToDecimalPlaces(parsed, dp);
+              setLocal(String(rounded));
+              onUpdate({ latency: { ...latency, [field]: rounded, [`${field}_overridden`]: true } });
             }
-            setLocal('');
           }}
-          onChange={(e) => setLocal(e.target.value)}
-        />
-        {unit && <span className="mv-row-unit">{unit}</span>}
-      </span>
-      {overridden && (
-        <button
-          className="mv-zapoff-btn"
-          onClick={onClearOverride}
           disabled={disabled}
-          title="Clear override — revert to computed value"
-        >
-          &#x26A1;
-        </button>
+          placeholder="(computed)"
+          style={{ width: '70px', padding: '2px 6px', fontSize: '11px' }}
+        />
+        <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{unit}</span>
+      </div>
+    </AutomatableField>
+  );
+}
+
+// ── Output card body (§17.2.3) ──────────────────────────────────────────────
+// Each field uses AutomatableField for the standard override indicator.
+// On blur, handleOutputCommit creates/updates the manual model_vars entry,
+// sets _overridden, and pins to manual — all in one onUpdate call.
+
+function OutputCardBody({ onCommit, onStartEdit, onClearFieldOverride, promotedMean, promotedStdev, meanOverridden, stdevOverridden, promotedLatency, latencyEnabled, disabled }: {
+  onCommit: (field: string, value: number) => void;
+  onStartEdit: () => void;
+  onClearFieldOverride: (flag: string, isLatency?: boolean) => void;
+  meanOverridden?: boolean; stdevOverridden?: boolean;
+  promotedMean?: number; promotedStdev?: number; promotedLatency?: LatencyConfig;
+  latencyEnabled?: boolean; disabled: boolean;
+}) {
+  return (
+    <div>
+      <FieldGroup label="Probability">
+        <OutputInput label="p" field="mean" value={promotedMean} dp={1} pct
+          overridden={meanOverridden} onClearOverride={() => onClearFieldOverride('mean_overridden')}
+          onCommit={onCommit} onStartEdit={onStartEdit} disabled={disabled} />
+        <OutputInput label="stdev" field="stdev" value={promotedStdev} dp={4}
+          overridden={stdevOverridden} onClearOverride={() => onClearFieldOverride('stdev_overridden')}
+          onCommit={onCommit} onStartEdit={onStartEdit} disabled={disabled} />
+      </FieldGroup>
+      {/* Edge-level latency — only when latency tracking enabled */}
+      {latencyEnabled && promotedLatency?.mu != null && (
+        <FieldGroup label="Edge latency">
+          <RoField label="μ" value={fmt(promotedLatency.mu, 3)} />
+          <RoField label="σ" value={fmt(promotedLatency.sigma, 3)} />
+          <OutputInput label="t95" field="t95" value={promotedLatency.t95} dp={1} unit="d"
+            overridden={promotedLatency.t95_overridden} onClearOverride={() => onClearFieldOverride('t95_overridden', true)}
+            onCommit={onCommit} onStartEdit={onStartEdit} disabled={disabled} />
+          <OutputInput label="onset" field="onset_delta_days" value={promotedLatency.onset_delta_days} dp={0} unit="d"
+            overridden={promotedLatency.onset_delta_days_overridden} onClearOverride={() => onClearFieldOverride('onset_delta_days_overridden', true)}
+            onCommit={onCommit} onStartEdit={onStartEdit} disabled={disabled} />
+        </FieldGroup>
+      )}
+      {/* Path-level latency — shown whenever path values exist (topological, not gated on edge latency) */}
+      {promotedLatency?.path_mu != null && (
+        <FieldGroup label="Path latency">
+          <RoField label="path μ" value={fmt(promotedLatency.path_mu, 3)} />
+          <RoField label="path σ" value={fmt(promotedLatency.path_sigma, 3)} />
+          <RoField label="path onset" value={fmt(promotedLatency.path_onset_delta_days, 0)} unit="d" />
+          <OutputInput label="path t95" field="path_t95" value={promotedLatency.path_t95} dp={1} unit="d"
+            overridden={promotedLatency.path_t95_overridden} onClearOverride={() => onClearFieldOverride('path_t95_overridden', true)}
+            onCommit={onCommit} onStartEdit={onStartEdit} disabled={disabled} />
+        </FieldGroup>
       )}
     </div>
+  );
+}
+
+/** Single output field: AutomatableField + input with blur-to-commit. */
+function OutputInput({ label, field, value, dp, pct, unit, overridden, onClearOverride, onCommit, onStartEdit, disabled }: {
+  label: string; field: string; value?: number; dp: number; pct?: boolean; unit?: string;
+  overridden?: boolean; onClearOverride?: () => void;
+  onCommit: (field: string, value: number) => void;
+  onStartEdit: () => void;
+  disabled: boolean;
+}) {
+  const display = value !== undefined ? (pct ? (value * 100).toFixed(dp) : value.toFixed(dp)) : '';
+  const [local, setLocal] = useState(display);
+  const [dirty, setDirty] = useState(false);
+  React.useEffect(() => { setLocal(display); }, [display]);
+
+  return (
+    <AutomatableField label="" value={value ?? ''} overridden={overridden || false} onClearOverride={onClearOverride || (() => {})}>
+      <div className="property-field-inline" style={{ minHeight: '20px', gap: '6px' }}>
+        <label className="parameter-section-label" style={{ minWidth: '54px', fontSize: '11px' }}>{label}</label>
+        <input
+          className="property-input"
+          type="number" step="any" min={0}
+          value={local}
+          onChange={(e) => {
+            setLocal(e.target.value);
+            if (!dirty) {
+              setDirty(true);
+              onStartEdit(); // Immediately flip source on first keystroke
+            }
+          }}
+          onBlur={() => {
+            const raw = parseFloat(local);
+            if (!isNaN(raw)) {
+              const v = pct ? raw / 100 : raw;
+              // Use tolerance to avoid spurious commits from float precision
+              if (value === undefined || Math.abs(v - value) > 1e-9) {
+                onCommit(field, v);
+              }
+            }
+            setDirty(false);
+          }}
+          disabled={disabled}
+          style={{ width: '60px', padding: '2px 6px', fontSize: '11px' }}
+        />
+        {pct && <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>%</span>}
+        {unit && <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>{unit}</span>}
+      </div>
+    </AutomatableField>
   );
 }
 
@@ -622,16 +492,19 @@ function ZapOffField({ label, value, overridden, unit, step, dp, disabled, onCom
 function QualitySection({ quality }: { quality: ModelVarsQuality }) {
   const passed = quality.gate_passed;
   return (
-    <div className="mv-quality-section">
-      <span className={`mv-gate-badge ${passed ? 'mv-gate-badge--passed' : 'mv-gate-badge--failed'}`}>
+    <>
+      <span className="collapsible-section-badge"
+        style={{
+          display: 'inline-block', marginBottom: '4px',
+          background: passed ? 'var(--color-success-bg)' : 'var(--color-danger-bg)',
+          color: passed ? 'var(--color-success)' : 'var(--color-danger)',
+        }}>
         {passed ? 'Gate passed' : 'Gate failed'}
       </span>
-      <ReadOnlyField label="rhat" value={fmt(quality.rhat, 4)} />
-      <ReadOnlyField label="ESS" value={String(Math.round(quality.ess))} />
-      {quality.divergences > 0 && (
-        <ReadOnlyField label="divergences" value={String(quality.divergences)} />
-      )}
-      <ReadOnlyField label="evidence" value={`${quality.evidence_grade}/3`} />
-    </div>
+      <RoField label="r̂" value={fmt(quality.rhat, 4)} />
+      <RoField label="ESS" value={String(Math.round(quality.ess))} />
+      {quality.divergences > 0 && <RoField label="div" value={String(quality.divergences)} />}
+      <RoField label="evidence" value={`${quality.evidence_grade}/3`} />
+    </>
   );
 }

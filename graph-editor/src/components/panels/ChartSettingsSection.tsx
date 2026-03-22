@@ -27,6 +27,17 @@ const CHART_KIND_LABELS: Record<string, string> = {
   time_series: 'Time Series',
 };
 
+const KIND_LABELS: Record<string, string> = {
+  ...CHART_KIND_LABELS,
+  overview: 'Overview',
+  structure: 'Structure',
+  evidence: 'Evidence',
+  forecast: 'Forecast',
+  depth: 'Data Depth',
+  diagnostics: 'Diagnostics',
+  info: 'Info',
+};
+
 /**
  * Visual grouping for display settings.
  * Keys that share a group prefix are rendered under a shared heading.
@@ -85,6 +96,8 @@ interface ChartSettingsSectionProps {
   effectiveChartKind?: string;
   onChartKindChange: (kind: string | undefined) => void;
   chartKindOptions: string[];
+  /** ID → human label for kind options. Falls back to built-in chart kind labels. */
+  kindLabels?: Record<string, string>;
   display?: Record<string, unknown>;
   onDisplayChange: (keyOrBatch: string | Record<string, any>, value?: any) => void;
   onClearAllOverrides?: () => void;
@@ -160,11 +173,17 @@ export function ChartSettingsSection({
   effectiveChartKind,
   onChartKindChange,
   chartKindOptions,
+  kindLabels: kindLabelsProp,
   display,
   onDisplayChange,
   onClearAllOverrides,
   defaultOpen = true,
 }: ChartSettingsSectionProps) {
+  // Merge caller-provided kind labels (from registry) with built-in chart kind labels
+  const resolvedKindLabels = useMemo(
+    () => kindLabelsProp ? { ...CHART_KIND_LABELS, ...kindLabelsProp } : KIND_LABELS,
+    [kindLabelsProp],
+  );
   const settingsKind = effectiveChartKind || chartKind;
   const displaySettings = useMemo(() => {
     return getDisplaySettingsForSurface(settingsKind, viewMode, 'propsPanel');
@@ -194,10 +213,10 @@ export function ChartSettingsSection({
   useEffect(() => { setLocalTitle(title || ''); }, [title]);
 
   const sectionTitle = useMemo(() => {
-    if (overrideCount === 0 || !onClearAllOverrides) return 'Chart Settings';
+    if (overrideCount === 0 || !onClearAllOverrides) return 'Settings';
     return (
       <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-        Chart Settings
+        Settings
         <button
           type="button"
           className="chart-settings-header-clear"
@@ -257,12 +276,12 @@ export function ChartSettingsSection({
           </div>
         </div>
 
-        {/* Chart Kind */}
-        {viewMode === 'chart' && (
+        {/* Kind */}
+        {(viewMode === 'chart' || chartKind) && (
           <div className="chart-settings-row">
             <AutomatableField
-              label="Chart kind"
-              value={chartKind || 'auto'}
+              label="Kind"
+              value={resolvedKindLabels[chartKind || ''] || chartKind || 'auto'}
               overridden={!!chartKind}
               onClearOverride={() => onChartKindChange(undefined)}
             >
@@ -283,7 +302,7 @@ export function ChartSettingsSection({
                       className={`chart-settings-chip${kind === chartKind ? ' active' : ''}`}
                       onClick={() => onChartKindChange(kind)}
                     >
-                      {CHART_KIND_LABELS[kind] || kind}
+                      {resolvedKindLabels[kind] || kind}
                     </button>
                   ))}
                 </div>
@@ -295,7 +314,7 @@ export function ChartSettingsSection({
                   onChange={(e) => onChartKindChange(e.target.value || undefined)}
                 >
                   <option value="">Auto</option>
-                  {Object.entries(CHART_KIND_LABELS).map(([value, label]) => (
+                  {Object.entries(resolvedKindLabels).map(([value, label]) => (
                     <option key={value} value={value}>{label}</option>
                   ))}
                 </select>

@@ -88,8 +88,18 @@ export interface CanvasAnalysisCardProps {
   /** Called when a tab is right-clicked → Open as Tab. */
   onOpenContentItemAsTab?: (ci: ContentItem) => void;
 
+  /** Per-tab connector overlay toggle/colour. */
+  onTabOverlayToggle?: (ci: ContentItem, active: boolean) => void;
+  onTabOverlayColourChange?: (ci: ContentItem, colour: string | null) => void;
+
+  /** Build full context menu items for a tab — delegates to parent for shared codepath with node context menu. */
+  buildTabContextMenuItems?: (ci: ContentItem, closeMenu: () => void) => import('./ContextMenu').ContextMenuItem[];
+
   /** Content area zoom style (for inverse-zoom in pinned mode). */
   contentZoomStyle?: React.CSSProperties;
+
+  /** Connector overlay colour — used to tint tab accents when subject overlay is active. */
+  connectorColour?: string;
 
   /** When false, an overlay blocks interaction (pinned mode: not selected). */
   interactive?: boolean;
@@ -135,7 +145,11 @@ export function CanvasAnalysisCard({
   onRemoveContentItem,
   onAddContentItem,
   onOpenContentItemAsTab,
+  onTabOverlayToggle,
+  onTabOverlayColourChange,
+  buildTabContextMenuItems,
   contentZoomStyle,
+  connectorColour,
   interactive = true,
   awaitingScenariosHydration,
   onTabDragActiveChange,
@@ -150,10 +164,11 @@ export function CanvasAnalysisCard({
   const onTabDragActiveChangeRef = useRef(onTabDragActiveChange);
   onTabDragActiveChangeRef.current = onTabDragActiveChange;
 
-  // Auto-select newly added tab when contentItems.length grows
+  // Auto-select newly added tab when a SINGLE item is added (snap-in).
+  // Don't auto-select when bulk-populating tabs (e.g. result arrives with 5 facets).
   const prevItemCountRef = useRef(contentItems.length);
   useEffect(() => {
-    if (contentItems.length > prevItemCountRef.current) {
+    if (contentItems.length === prevItemCountRef.current + 1) {
       onActiveContentIndexChange(contentItems.length - 1);
     }
     prevItemCountRef.current = contentItems.length;
@@ -225,7 +240,7 @@ export function CanvasAnalysisCard({
     e.stopPropagation();
     tabDragRef.current = {
       contentItem: item,
-      label: item.title || item.analysis_type || TAB_LABELS[item.facet || ''] || `Tab ${idx + 1}`,
+      label: item.title || item.analysis_type || TAB_LABELS[item.kind || ''] || `Tab ${idx + 1}`,
       startX: e.clientX,
       startY: e.clientY,
       extracted: false,
@@ -337,11 +352,22 @@ export function CanvasAnalysisCard({
   const tabContextMenuItems = useMemo((): ContextMenuItem[] => {
     if (!tabContextMenu) return [];
     const ci = tabContextMenu.item;
+    const closeMenu = () => setTabContextMenu(null);
+    // Use parent-provided full menu builder when available (shared codepath with node context menu)
+    if (buildTabContextMenuItems) {
+      return buildTabContextMenuItems(ci, closeMenu);
+    }
+    // Fallback: simple menu for contexts without the full builder (e.g. hover preview)
+    const hasOverlay = !!(ci.display as any)?.show_subject_overlay;
     return [
-      ...(onOpenContentItemAsTab ? [{ label: 'Open as Tab', onClick: () => { onOpenContentItemAsTab(ci); setTabContextMenu(null); }, disabled: !result }] : []),
-      ...(onRemoveContentItem ? [{ label: 'Close', onClick: () => { onRemoveContentItem(ci.id); setTabContextMenu(null); }, divider: true as const }] : []),
+      ...(onTabOverlayToggle ? [{
+        label: hasOverlay ? 'Hide Connectors' : 'Show Connectors',
+        onClick: () => { onTabOverlayToggle(ci, !hasOverlay); closeMenu(); },
+      }] : []),
+      ...(onOpenContentItemAsTab ? [{ label: 'Open as Tab', onClick: () => { onOpenContentItemAsTab(ci); closeMenu(); }, disabled: !result }] : []),
+      ...(onRemoveContentItem ? [{ label: 'Close', onClick: () => { onRemoveContentItem(ci.id); closeMenu(); }, divider: true as const }] : []),
     ];
-  }, [tabContextMenu, result, onOpenContentItemAsTab, onRemoveContentItem]);
+  }, [tabContextMenu, result, onOpenContentItemAsTab, onRemoveContentItem, onTabOverlayToggle, buildTabContextMenuItems]);
 
   const handleTabContextMenu = useCallback((e: React.MouseEvent, item: ContentItem) => {
     e.preventDefault();
@@ -369,14 +395,14 @@ export function CanvasAnalysisCard({
       {previewResult ? (
         <AnalysisChartContainer
           result={previewResult}
-          chartKindOverride={previewItem.chart_kind}
+          chartKindOverride={previewItem.kind}
           visibleScenarioIds={previewScenarioIds}
           display={previewItem.display}
           fillHeight
           chartContext="canvas"
           hideScenarioLegend
           analysisTypeId={previewItem.analysis_type}
-          facet={previewItem.facet}
+          infoCardKind={previewItem.kind}
         />
       ) : (
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: 'var(--text-muted)' }}>
@@ -418,12 +444,21 @@ export function CanvasAnalysisCard({
                 key={item.id}
                 className="canvas-analysis-content-tab"
                 onContextMenu={(e) => handleTabContextMenu(e, item)}
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  borderBottom: idx === clampedIndex ? '2px solid var(--accent-primary, #3b82f6)' : '2px solid transparent',
-                  background: idx === clampedIndex ? 'var(--bg-primary, #fff)' : 'transparent',
-                }}
+                style={(() => {
+                  const tabOverlayColour = (item.display as any)?.subject_overlay_colour;
+                  const isActive = idx === clampedIndex;
+                  const hasOverlay = (item.display as any)?.show_subject_overlay && tabOverlayColour;
+                  return {
+                    display: 'flex',
+                    alignItems: 'center',
+                    borderBottom: isActive
+                      ? `2px solid ${tabOverlayColour || connectorColour || 'var(--accent-primary, #3b82f6)'}`
+                      : hasOverlay
+                        ? `2px solid ${tabOverlayColour}80` // 50% opacity via hex alpha
+                        : '2px solid transparent',
+                    background: isActive ? 'var(--bg-primary, #fff)' : 'transparent',
+                  };
+                })()}
               >
                 <button
                   type="button"
@@ -493,7 +528,7 @@ export function CanvasAnalysisCard({
                   fontSize: 'inherit',
                   userSelect: 'none',
                 }}>
-                  {previewItem.title || previewItem.facet || 'New tab'}
+                  {previewItem.title || previewItem.kind || 'New tab'}
                 </span>
               </div>
             )}
@@ -568,14 +603,15 @@ export function CanvasAnalysisCard({
         </div>
       </div>
 
-      {/* Tab context menu */}
-      {tabContextMenu && (
+      {/* Tab context menu — portalled to body to escape ReactFlow transform context */}
+      {tabContextMenu && createPortal(
         <ContextMenu
           x={tabContextMenu.x}
           y={tabContextMenu.y}
           items={tabContextMenuItems}
           onClose={() => setTabContextMenu(null)}
-        />
+        />,
+        document.body,
       )}
 
       {/* Ghost during tab drag-out — full-content preview matching the card dimensions */}

@@ -19,6 +19,7 @@ import { ScenarioQueryEditModal } from '../modals/ScenarioQueryEditModal';
 import { canvasAnalysisResultCache } from '../../hooks/useCanvasAnalysisCompute';
 import { chartOperationsService } from '../../services/chartOperationsService';
 import { extractSubgraph } from '../../lib/subgraphExtractor';
+import { getActiveContentTabIndex } from '../../services/activeContentTabTracker';
 import type { AvailableAnalysis } from '../../lib/graphComputeClient';
 
 // ---------------------------------------------------------------------------
@@ -599,25 +600,40 @@ export const CanvasContextMenus: React.FC<CanvasContextMenusProps> = React.memo(
               } as any);
               setAnalysisContextMenu(null);
             }}
-            overlayActive={!!analysis.display?.show_subject_overlay}
-            overlayColour={analysis.display?.subject_overlay_colour as string | undefined}
+            overlayActive={(() => {
+              const tabIdx = getActiveContentTabIndex(analysisContextMenu.analysisId);
+              const ci = analysis.content_items?.[tabIdx] || analysis.content_items?.[0];
+              return !!(ci?.display as any)?.show_subject_overlay || !!analysis.display?.show_subject_overlay;
+            })()}
+            overlayColour={(() => {
+              const tabIdx = getActiveContentTabIndex(analysisContextMenu.analysisId);
+              const ci = analysis.content_items?.[tabIdx] || analysis.content_items?.[0];
+              return ((ci?.display as any)?.subject_overlay_colour || analysis.display?.subject_overlay_colour) as string | undefined;
+            })()}
             onOverlayToggle={(active) => {
-              const colour = analysis.display?.subject_overlay_colour || '#3b82f6';
+              const tabIdx = getActiveContentTabIndex(analysisContextMenu.analysisId);
+              const items = analysis.content_items || [];
+              const ci = items[tabIdx] || items[0];
+              const colour = (ci?.display as any)?.subject_overlay_colour || analysis.display?.subject_overlay_colour || '#3b82f6';
               handleUpdateAnalysis(analysisContextMenu.analysisId, {
-                display: { ...(analysis.display as Record<string, unknown> || {}), show_subject_overlay: active, ...(active ? { subject_overlay_colour: colour } : {}) },
+                content_items: items.map((item: any, i: number) =>
+                  i === tabIdx
+                    ? { ...item, display: { ...item.display, show_subject_overlay: active, ...(active ? { subject_overlay_colour: colour } : {}) } }
+                    : item,
+                ),
               });
               setAnalysisContextMenu(null);
             }}
             onOverlayColourChange={(colour) => {
-              if (colour) {
-                handleUpdateAnalysis(analysisContextMenu.analysisId, {
-                  display: { ...(analysis.display as Record<string, unknown> || {}), show_subject_overlay: true, subject_overlay_colour: colour },
-                });
-              } else {
-                handleUpdateAnalysis(analysisContextMenu.analysisId, {
-                  display: { ...(analysis.display as Record<string, unknown> || {}), show_subject_overlay: false, subject_overlay_colour: undefined },
-                });
-              }
+              const tabIdx = getActiveContentTabIndex(analysisContextMenu.analysisId);
+              const items = analysis.content_items || [];
+              handleUpdateAnalysis(analysisContextMenu.analysisId, {
+                content_items: items.map((item: any, i: number) =>
+                  i === tabIdx
+                    ? { ...item, display: { ...item.display, show_subject_overlay: !!colour, subject_overlay_colour: colour || undefined } }
+                    : item,
+                ),
+              });
               setAnalysisContextMenu(null);
             }}
             onOpenAsTab={cachedResult ? () => {

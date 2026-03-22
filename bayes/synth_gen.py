@@ -32,7 +32,9 @@ See doc 17 for design rationale.
 """
 from __future__ import annotations
 
+import base64
 import bisect
+import hashlib
 import os
 import sys
 import json
@@ -83,6 +85,19 @@ GRAPH_CONFIGS: dict[str, dict[str, Any]] = {
         ],
         "base_date": "2025-11-01",
     },
+    "diamond": {
+        "graph_file": "synth-diamond-test.json",
+        "graph_id": "graph-synth-diamond-test",
+        "edges": [
+            ("synth-anchor-to-gate",   "a2bdb15c-a828-45e3-9af3-0ec414ab709d", "SYNTH-anchor-to-gate-w",   "SYNTH-anchor-to-gate-c"),
+            ("synth-gate-to-path-a",   "273f7315-a626-4440-8ce4-89cd9225bf43", "SYNTH-gate-to-path-a-w",   "SYNTH-gate-to-path-a-c"),
+            ("synth-gate-to-path-b",   "dbe5585c-7669-4cf8-ab33-8ed294db80ea", "SYNTH-gate-to-path-b-w",   "SYNTH-gate-to-path-b-c"),
+            ("synth-path-a-to-join",   "c41a7e20-5f33-4d9a-b1c2-3e8f7a6d9b04", "SYNTH-path-a-to-join-w",   "SYNTH-path-a-to-join-c"),
+            ("synth-path-b-to-join",   "2901e1fd-640b-4bd7-b028-af458e3b0cbe", "SYNTH-path-b-to-join-w",   "SYNTH-path-b-to-join-c"),
+            ("synth-join-to-outcome",  "7abcdf0c-e6a5-4ccd-81db-4fb1116ebe2c", "SYNTH-join-to-outcome-w",  "SYNTH-join-to-outcome-c"),
+        ],
+        "base_date": "2025-12-12",
+    },
 }
 
 
@@ -107,6 +122,165 @@ def _load_db_connection() -> str:
             if line.startswith("DB_CONNECTION="):
                 return line.split("=", 1)[1].strip().strip('"')
     return ""
+
+
+def _sha256_hex(text: str) -> str:
+    """SHA-256 of UTF-8 bytes, full hex digest. Matches FE hashText()."""
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _short_hash(canonical: str) -> str:
+    """SHA-256 → first 16 bytes → base64url (no padding).
+
+    Matches coreHashService.ts computeShortCoreHash() and
+    snapshot_service.py short_core_hash_from_canonical_signature().
+    """
+    digest = hashlib.sha256(canonical.strip().encode("utf-8")).digest()[:16]
+    return base64.urlsafe_b64encode(digest).decode("ascii").rstrip("=")
+
+
+def compute_core_hashes(
+    graph_snapshot: dict,
+    topology,
+    data_repo: str,
+) -> dict[str, dict[str, str]]:
+    """Compute real FE-compatible core hashes for each edge.
+
+    Replicates the FE's querySignature.ts → coreHashService.ts pipeline:
+    1. Build coreCanonical JSON (connection, event_ids, event_def_hashes,
+       query, latency_parameter, etc.)
+    2. coreHash = sha256(coreCanonical).hex()
+    3. structuredSig = JSON.stringify({c: coreHash, x: {}})
+    4. core_hash = sha256(structuredSig)[:16] → base64url
+
+    Two hashes per edge: window (cohort_mode=false) and cohort (cohort_mode=true).
+
+    Returns dict[param_id → {window_hash, cohort_hash}].
+    """
+    # Build node lookups
+    nodes_by_id = {n["id"]: n for n in graph_snapshot.get("nodes", [])}
+    nodes_by_uuid = {n["uuid"]: n for n in graph_snapshot.get("nodes", [])}
+
+    def find_node(ref: str) -> dict | None:
+        return nodes_by_id.get(ref) or nodes_by_uuid.get(ref)
+
+    # Load event definitions from data repo
+    event_defs: dict[str, dict] = {}
+    events_dir = os.path.join(data_repo, "events")
+    if os.path.isdir(events_dir):
+        for fname in os.listdir(events_dir):
+            if fname.endswith(".yaml"):
+                with open(os.path.join(events_dir, fname)) as f:
+                    edef = yaml.safe_load(f) or {}
+                    if edef.get("id"):
+                        event_defs[edef["id"]] = edef
+
+    result: dict[str, dict[str, str]] = {}
+
+    for edge_id, et in topology.edges.items():
+        pid = et.param_id
+        if not pid:
+            continue
+
+        # Find the graph edge object
+        edge = None
+        for e in graph_snapshot.get("edges", []):
+            if e["uuid"] == edge_id:
+                edge = e
+                break
+        if not edge:
+            continue
+
+        query = edge.get("query", "")
+        lat = edge.get("p", {}).get("latency", {})
+        has_latency = lat.get("latency_parameter", False)
+
+        # Resolve event_ids from from/to nodes via query
+        from_node = find_node(et.from_node)
+        to_node = find_node(et.to_node)
+        from_event_id = from_node.get("event_id", "") if from_node else ""
+        to_event_id = to_node.get("event_id", "") if to_node else ""
+
+        # Latency anchor event_id
+        anchor_node_id = lat.get("anchor_node_id", "")
+        anchor_node = find_node(anchor_node_id) if anchor_node_id else None
+        latency_anchor_event_id = anchor_node.get("event_id", "") if anchor_node else ""
+
+        # Event definition hashes
+        # The FE's buildDslFromEdge only loads event defs for from/to nodes.
+        # The latency anchor event is NOT loaded by buildDslFromEdge, so
+        # querySignature.ts falls back to "not_loaded" for it.
+        # We must match this behaviour exactly.
+        loaded_event_ids = {from_event_id, to_event_id}  # what buildDslFromEdge loads
+        all_event_ids = [eid for eid in [from_event_id, to_event_id, latency_anchor_event_id] if eid]
+        event_def_hashes: dict[str, str] = {}
+        for eid in all_event_ids:
+            if eid not in loaded_event_ids:
+                event_def_hashes[eid] = "not_loaded"
+                continue
+            edef = event_defs.get(eid)
+            if edef:
+                normalized = {
+                    "id": edef.get("id"),
+                    "provider_event_names": edef.get("provider_event_names", {}),
+                    "amplitude_filters": edef.get("amplitude_filters", []),
+                }
+                event_def_hashes[eid] = _sha256_hex(json.dumps(normalized, separators=(",", ":")))
+            else:
+                event_def_hashes[eid] = "not_loaded"
+
+        # Normalise query: replace node IDs with event IDs
+        normalized_query = query
+        for node in graph_snapshot.get("nodes", []):
+            nid = node.get("id", "")
+            eid = node.get("event_id", "")
+            if nid and eid:
+                normalized_query = normalized_query.replace(nid, eid)
+
+        # Compute window hash (cohort_mode=false) and cohort hash (cohort_mode=true)
+        hashes: dict[str, str] = {}
+        for mode_name, cohort_mode in [("window_hash", False), ("cohort_hash", True)]:
+            # The FE's buildDslFromEdge only sets cohort_anchor_event_id when
+            # the DSL explicitly names an anchor node (e.g. cohort(nodeId,...)).
+            # Our dataInterestsDSL uses cohort(date:date) without a node ref,
+            # so the FE leaves anchor_event_id as "".
+            cohort_anchor = ""
+
+            core_canonical = json.dumps({
+                "connection": "amplitude",
+                "from_event_id": from_event_id,
+                "to_event_id": to_event_id,
+                "visited_event_ids": [],
+                "exclude_event_ids": [],
+                "event_def_hashes": event_def_hashes,
+                "event_filters": {},
+                "case": [],
+                "cohort_mode": cohort_mode,
+                "cohort_anchor_event_id": cohort_anchor,
+                "latency_parameter": has_latency,
+                "latency_anchor_event_id": latency_anchor_event_id,
+                "original_query": normalized_query,
+            }, separators=(",", ":"))
+
+            core_hash_hex = _sha256_hex(core_canonical)
+
+            # Structured signature (no context keys for synthetic data)
+            structured_sig = json.dumps({
+                "c": core_hash_hex,
+                "x": {},
+            }, separators=(",", ":"))
+
+            hashes[mode_name] = _short_hash(structured_sig)
+            # Also store the structured sig for parameter file query_signature
+            sig_key = mode_name.replace("_hash", "_sig")
+            hashes[sig_key] = structured_sig
+
+        result[pid] = hashes
+        # Also store with parameter- prefix
+        if not pid.startswith("parameter-"):
+            result[f"parameter-{pid}"] = hashes
+
+    return result
 
 
 def _build_hash_lookup(gcfg: dict) -> dict[str, dict[str, str]]:
@@ -321,12 +495,18 @@ def simulate_graph(
 
     # --- Pre-aggregate arrival times for fast observation generation ---
     # sorted_times[day_idx][node_id] = sorted list of arrival times
+    # sorted_edge_times[day_idx][edge_id] = sorted arrival times for
+    #   people who traversed that specific edge (needed for correct
+    #   per-edge counts at join nodes)
     sorted_times: list[dict[str, list[float]]] = []
+    sorted_edge_times: list[dict[str, list[float]]] = []
     all_nodes = set()
     for et in topology.edges.values():
         all_nodes.add(et.from_node)
         all_nodes.add(et.to_node)
     all_nodes.add(topology.anchor_node_id)
+
+    all_edge_ids = [eid for eid in topology.edges if topology.edges[eid].param_id]
 
     for day_idx in range(n_days):
         day_sorted: dict[str, list[float]] = {}
@@ -336,10 +516,18 @@ def simulate_graph(
             day_sorted[nid] = times
         sorted_times.append(day_sorted)
 
+        day_edge_sorted: dict[str, list[float]] = {}
+        for eid in all_edge_ids:
+            key = f"edge:{eid}"
+            times = [p[key] for p in arrivals_by_day[day_idx] if key in p]
+            times.sort()
+            day_edge_sorted[eid] = times
+        sorted_edge_times.append(day_edge_sorted)
+
     # --- Per-edge daily aggregates (for parameter file values[]) ---
     # Computed before freeing arrivals_by_day.
     # For each edge: n_daily[d] = people reaching from_node on day d,
-    #                k_daily[d] = people reaching to_node on day d
+    #                k_daily[d] = people who traversed this edge on day d
     edge_daily: dict[str, dict] = {}  # edge_id → {n_daily, k_daily, dates}
     for edge_id, et in topology.edges.items():
         if not et.param_id:
@@ -351,9 +539,9 @@ def simulate_graph(
             day_date = base_date + timedelta(days=day_idx)
             dates.append(day_date.strftime("%-d-%b-%y"))
             from_times = sorted_times[day_idx].get(et.from_node, [])
-            to_times = sorted_times[day_idx].get(et.to_node, [])
+            edge_times = sorted_edge_times[day_idx].get(edge_id, [])
             n_daily.append(len(from_times))
-            k_daily.append(len(to_times))
+            k_daily.append(len(edge_times))
         edge_daily[edge_id] = {
             "n_daily": n_daily,
             "k_daily": k_daily,
@@ -365,7 +553,7 @@ def simulate_graph(
 
     # --- Generate observations via nightly fetch model ---
     snapshot_rows = _generate_observations_nightly(
-        topology, sorted_times, actual_traffic,
+        topology, sorted_times, sorted_edge_times, actual_traffic,
         hash_lookup, n_days, base_date, failure_rate, rng,
     )
 
@@ -458,7 +646,11 @@ def _take_edge(
     topology,
     adj_out, edge_params, day_probs, edge_to_bg, rng,
 ) -> None:
-    """Person takes an edge: draw latency, record arrival, recurse."""
+    """Person takes an edge: draw latency, record arrival, recurse.
+
+    Records both node arrival (node_id → t) and edge traversal
+    (edge:<edge_id> → t_arrival) so per-edge counts work at joins.
+    """
     et = topology.edges[edge_id]
     params = edge_params[edge_id]
 
@@ -471,6 +663,7 @@ def _take_edge(
         latency = 0.0
 
     t_arrival = t_current + latency
+    person[f"edge:{edge_id}"] = t_arrival
     _traverse(et.to_node, t_arrival, person, topology,
               adj_out, edge_params, day_probs, edge_to_bg, rng)
 
@@ -487,6 +680,7 @@ def _count_by_age(sorted_arrivals: list[float], age: float) -> int:
 def _generate_observations_nightly(
     topology,
     sorted_times: list[dict[str, list[float]]],
+    sorted_edge_times: list[dict[str, list[float]]],
     actual_traffic: list[int],
     hash_lookup: dict[str, dict[str, str]],
     n_days: int,
@@ -499,6 +693,8 @@ def _generate_observations_nightly(
     For each fetch night t (1..n_days), observes all anchor_days d < t.
     Retrieval age = t - d. Fetch nights fail with probability failure_rate.
 
+    Uses sorted_edge_times for per-edge y counts (correct at joins where
+    multiple edges feed the same to_node).
     Uses real core hashes from hash_lookup for FE visibility.
     """
     result: dict[str, list[dict]] = defaultdict(list)
@@ -537,6 +733,8 @@ def _generate_observations_nightly(
             n_people = actual_traffic[day_idx]
             day_sorted = sorted_times[day_idx]
 
+            day_edge_sorted = sorted_edge_times[day_idx]
+
             for edge_id, et in topology.edges.items():
                 if not et.param_id:
                     continue  # unevented edge
@@ -544,11 +742,12 @@ def _generate_observations_nightly(
                 pid = et.param_id
                 w_hash, c_hash = edge_hashes[edge_id]
                 from_times = day_sorted.get(et.from_node, [])
-                to_times = day_sorted.get(et.to_node, [])
+                edge_times = day_edge_sorted.get(edge_id, [])
 
-                # Window observation: denominator = arrivals at from_node by age
+                # Window observation: denominator = arrivals at from_node by age,
+                # numerator = per-edge conversions by age (correct at joins)
                 x_count = _count_by_age(from_times, age)
-                y_window = _count_by_age(to_times, age)
+                y_window = _count_by_age(edge_times, age)
 
                 if x_count > 0:
                     result[edge_id].append({
@@ -565,8 +764,9 @@ def _generate_observations_nightly(
                         "onset_delta_days": None,
                     })
 
-                # Cohort observation: denominator = total people entering that day
-                y_cohort = _count_by_age(to_times, age)
+                # Cohort observation: denominator = total people entering that day,
+                # numerator = per-edge conversions by age (correct at joins)
+                y_cohort = _count_by_age(edge_times, age)
 
                 result[edge_id].append({
                     "param_id": pid,
@@ -592,117 +792,132 @@ def _generate_observations_nightly(
 def write_to_snapshot_db(
     snapshot_rows: dict[str, list[dict]],
     db_connection: str,
+    workspace_prefix: str = "",
+    hash_lookup: dict[str, dict[str, str]] | None = None,
 ) -> dict[str, dict[str, str]]:
-    """Write synthetic rows to snapshot DB.
+    """Write synthetic rows to snapshot DB using the existing snapshot_service.
 
     Cleans existing rows for the same core hashes first (idempotent).
+    workspace_prefix: e.g. "nous-conversion-feature/bayes-test-graph" —
+        prepended to param_ids as "${prefix}-${param_id}" to match the FE's
+        buildDbParamId format.
     Returns dict[param_id → {window_hash, cohort_hash}] for test harness.
     """
-    import psycopg2
-    from psycopg2.extras import execute_values
+    # Use the existing snapshot_service (same as FE fetch pipeline)
+    lib_dir = os.path.join(REPO_ROOT, "graph-editor", "lib")
+    ge_dir = os.path.join(REPO_ROOT, "graph-editor")
+    if lib_dir not in sys.path:
+        sys.path.insert(0, lib_dir)
+    if ge_dir not in sys.path:
+        sys.path.insert(0, ge_dir)
+    os.environ["DB_CONNECTION"] = db_connection
+    from lib.snapshot_service import append_snapshots, delete_snapshots
 
-    conn = psycopg2.connect(db_connection)
-    cur = conn.cursor()
+    # Group rows by (param_id, core_hash, slice_key, retrieved_at)
+    # — each group becomes one append_snapshots call
+    # Apply workspace prefix to param_ids (FE queries with prefixed IDs)
+    from collections import defaultdict
+    groups: dict[tuple, list[dict]] = defaultdict(list)
+    for edge_rows in snapshot_rows.values():
+        for r in edge_rows:
+            db_pid = f"{workspace_prefix}-{r['param_id']}" if workspace_prefix else r["param_id"]
+            key = (db_pid, r["core_hash"], r["slice_key"], r["retrieved_at"])
+            groups[key].append(r)
 
-    # Collect all hashes we're about to write
-    all_hashes = set()
-    for rows in snapshot_rows.values():
-        for r in rows:
-            all_hashes.add(r["core_hash"])
+    # Clean existing data for all param_id + core_hash combos
+    cleaned_combos: set[tuple[str, str]] = set()
+    for (pid, ch, _sk, _ra) in groups:
+        if (pid, ch) not in cleaned_combos:
+            result = delete_snapshots(pid, core_hashes=[ch])
+            if result["success"] and result["deleted"] > 0:
+                print(f"  Cleaned {result['deleted']} existing rows for {pid}/{ch[:12]}…")
+            cleaned_combos.add((pid, ch))
 
-    # Clean existing data for these hashes
-    if all_hashes:
-        cur.execute(
-            "DELETE FROM snapshot_entries WHERE core_hash = ANY(%s)",
-            (list(all_hashes),),
-        )
-        print(f"  Cleaned {cur.rowcount} existing rows for target hashes")
-
-    # Insert new rows
+    # Insert via append_snapshots
     total_inserted = 0
     hash_map: dict[str, dict[str, str]] = {}
 
-    for edge_id, rows in snapshot_rows.items():
-        if not rows:
-            continue
+    for (pid, core_hash, slice_key, retrieved_at_str), rows in groups.items():
+        # Parse retrieved_at regardless of separator (T or space)
+        clean_ra = retrieved_at_str.replace("T", " ")
+        retrieved_at = datetime.strptime(clean_ra, "%Y-%m-%d %H:%M:%S")
 
-        values = []
+        # Build rows in append_snapshots format
+        append_rows = []
         for r in rows:
-            values.append((
-                r["param_id"],
-                r["core_hash"],
-                r["slice_key"],
-                r["anchor_day"],
-                r["retrieved_at"],
-                r.get("a"),
-                r.get("x"),
-                r["y"],
-                r.get("median_lag_days"),
-                r.get("mean_lag_days"),
-                r.get("onset_delta_days"),
-            ))
+            append_rows.append({
+                "anchor_day": r["anchor_day"],
+                "A": r.get("a"),
+                "X": r.get("x"),
+                "Y": r["y"],
+                "median_lag_days": r.get("median_lag_days"),
+                "mean_lag_days": r.get("mean_lag_days"),
+                "onset_delta_days": r.get("onset_delta_days"),
+            })
 
-        execute_values(
-            cur,
-            """INSERT INTO snapshot_entries
-               (param_id, core_hash, slice_key, anchor_day, retrieved_at,
-                "A", "X", "Y",
-                median_lag_days, mean_lag_days, onset_delta_days)
-               VALUES %s
-               ON CONFLICT (param_id, core_hash, slice_key, anchor_day, retrieved_at)
-               DO UPDATE SET "A" = EXCLUDED."A", "X" = EXCLUDED."X", "Y" = EXCLUDED."Y"
-            """,
-            values,
+        # Resolve the real structured sig for registry parity.
+        # The FE sends current_signatures from param file query_signature;
+        # the registry canonical_signature must match for family grouping.
+        bare_pid = pid.replace(f"{workspace_prefix}-", "") if workspace_prefix else pid
+        sig_key = "window_sig" if "window" in slice_key else "cohort_sig"
+        real_sig = (hash_lookup or {}).get(bare_pid, {}).get(sig_key)
+        canonical = real_sig if real_sig else f"synthetic:{pid}:{slice_key}"
+
+        result = append_snapshots(
+            param_id=pid,
+            canonical_signature=canonical,
+            inputs_json={"synthetic": True, "generator": "synth_gen"},
+            sig_algo="sig_v1_sha256_trunc128_b64url",
+            slice_key=slice_key,
+            retrieved_at=retrieved_at,
+            rows=append_rows,
+            core_hash=core_hash,
         )
-        total_inserted += len(values)
+
+        if result.get("success"):
+            total_inserted += result.get("inserted", 0)
+        else:
+            print(f"  WARNING: append failed for {pid}/{slice_key}: {result}")
 
         # Build hash map
-        pid = rows[0]["param_id"]
         if pid not in hash_map:
             hash_map[pid] = {}
-        for r in rows:
-            if r["slice_key"] == "window()":
-                hash_map[pid]["window_hash"] = r["core_hash"]
-            else:
-                hash_map[pid]["cohort_hash"] = r["core_hash"]
-
-    conn.commit()
-    cur.close()
-    conn.close()
+        if "window" in slice_key:
+            hash_map[pid]["window_hash"] = core_hash
+        else:
+            hash_map[pid]["cohort_hash"] = core_hash
 
     print(f"  Inserted {total_inserted} rows")
     return hash_map
 
 
 def clean_synthetic_data(db_connection: str, gcfg: dict | None = None) -> None:
-    """Remove synthetic data from snapshot DB.
+    """Remove synthetic data from snapshot DB using snapshot_service.
 
     If gcfg is provided, removes only rows matching that graph's core hashes.
-    Otherwise removes all SYNTH-prefixed rows (legacy cleanup).
     """
-    import psycopg2
-    conn = psycopg2.connect(db_connection)
-    cur = conn.cursor()
+    lib_dir = os.path.join(REPO_ROOT, "graph-editor", "lib")
+    ge_dir = os.path.join(REPO_ROOT, "graph-editor")
+    if lib_dir not in sys.path:
+        sys.path.insert(0, lib_dir)
+    if ge_dir not in sys.path:
+        sys.path.insert(0, ge_dir)
+    os.environ["DB_CONNECTION"] = db_connection
+    from lib.snapshot_service import delete_snapshots
 
-    if gcfg:
-        hashes = []
-        for _pid, _eid, wh, ch in gcfg.get("edges", []):
-            hashes.extend([wh, ch])
-        if hashes:
-            cur.execute(
-                "DELETE FROM snapshot_entries WHERE core_hash = ANY(%s)",
-                (hashes,),
-            )
-            print(f"Cleaned {cur.rowcount} rows for graph '{gcfg.get('graph_id', '?')}'")
-    else:
-        cur.execute(
-            "DELETE FROM snapshot_entries WHERE core_hash LIKE 'SYNTH-%'"
-        )
-        print(f"Cleaned {cur.rowcount} legacy SYNTH-prefixed rows")
+    if not gcfg:
+        print("No graph config — nothing to clean")
+        return
 
-    conn.commit()
-    cur.close()
-    conn.close()
+    total_deleted = 0
+    for pid, _eid, wh, ch in gcfg.get("edges", []):
+        for core_hash in [wh, ch]:
+            result = delete_snapshots(pid, core_hashes=[core_hash])
+            if result["success"]:
+                total_deleted += result["deleted"]
+
+    print(f"Cleaned {total_deleted} rows for graph '{gcfg.get('graph_id', '?')}'")
+
 
 
 # ---------------------------------------------------------------------------
@@ -720,6 +935,7 @@ def write_parameter_files(
     sim_stats: dict,
     data_repo: str,
     graph_snapshot: dict,
+    hash_lookup: dict[str, dict[str, str]] | None = None,
 ) -> list[str]:
     """Write/update parameter YAML files with simulated values[].
 
@@ -776,6 +992,56 @@ def write_parameter_files(
         # (not critical for snapshot path, but useful for FE display)
         onset = t.get("onset", 0.0)
 
+        # Resolve anchor node ID for cohort DSL
+        anchor_id = uuid_to_id.get(
+            topology.anchor_node_id, topology.anchor_node_id
+        )
+        window_dsl = f"window({_format_date_dmy(base_date)}:{_format_date_dmy(end_date)})"
+        cohort_dsl = f"cohort({anchor_id},{_format_date_dmy(base_date)}:{_format_date_dmy(end_date)})"
+        now_str = datetime.now(tz=None).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+        # Window values[] entry
+        window_entry: dict[str, Any] = {
+            "mean": round(mean, 6),
+            "n": total_n,
+            "k": total_k,
+            "n_daily": n_daily,
+            "k_daily": k_daily,
+            "dates": dates,
+            "window_from": _format_date_dmy(base_date),
+            "window_to": _format_date_dmy(end_date),
+            "sliceDSL": window_dsl,
+            "data_source": {
+                "type": "synthetic",
+                "retrieved_at": now_str,
+                "full_query": query,
+            },
+            "forecast": round(mean, 6),
+        }
+        if hash_lookup and pid in hash_lookup and "window_sig" in hash_lookup[pid]:
+            window_entry["query_signature"] = hash_lookup[pid]["window_sig"]
+
+        # Cohort values[] entry (same daily data, different DSL + signature)
+        cohort_entry: dict[str, Any] = {
+            "mean": round(mean, 6),
+            "n": total_n,
+            "k": total_k,
+            "n_daily": n_daily,
+            "k_daily": k_daily,
+            "dates": dates,
+            "cohort_from": _format_date_dmy(base_date),
+            "cohort_to": _format_date_dmy(end_date),
+            "sliceDSL": cohort_dsl,
+            "data_source": {
+                "type": "synthetic",
+                "retrieved_at": now_str,
+                "full_query": query,
+            },
+            "forecast": round(mean, 6),
+        }
+        if hash_lookup and pid in hash_lookup and "cohort_sig" in hash_lookup[pid]:
+            cohort_entry["query_signature"] = hash_lookup[pid]["cohort_sig"]
+
         param_data = {
             "id": file_id,
             "name": file_id,
@@ -783,25 +1049,9 @@ def write_parameter_files(
             "query": query,
             "query_overridden": False,
             "n_query_overridden": False,
-            "values": [{
-                "mean": round(mean, 6),
-                "n": total_n,
-                "k": total_k,
-                "n_daily": n_daily,
-                "k_daily": k_daily,
-                "dates": dates,
-                "window_from": _format_date_dmy(base_date),
-                "window_to": _format_date_dmy(end_date),
-                "sliceDSL": f"window({_format_date_dmy(base_date)}:{_format_date_dmy(end_date)})",
-                "data_source": {
-                    "type": "synthetic",
-                    "retrieved_at": datetime.now(tz=None).strftime("%Y-%m-%dT%H:%M:%SZ"),
-                    "full_query": query,
-                },
-                "forecast": round(mean, 6),
-            }],
+            "values": [window_entry, cohort_entry],
             "latency": {
-                "latency_parameter": False,
+                "latency_parameter": et.has_latency,
                 "anchor_node_id": uuid_to_id.get(
                     topology.anchor_node_id, topology.anchor_node_id
                 ),
@@ -833,11 +1083,18 @@ def write_parameter_files(
     return written
 
 
-def set_simulation_guard(graph_path: str, enable: bool = True) -> None:
+def set_simulation_guard(
+    graph_path: str,
+    enable: bool = True,
+    sim_stats: dict | None = None,
+) -> None:
     """Set or clear the simulation flag on a graph JSON file.
 
     When simulation=true, the FE fetch planner returns empty fetch plans,
     preventing real Amplitude fetches from overwriting synthetic data.
+
+    Also sets dataInterestsDSL and currentQueryDSL so the FE knows
+    what date range the synthetic data covers.
     """
     with open(graph_path) as f:
         graph = json.load(f)
@@ -845,8 +1102,20 @@ def set_simulation_guard(graph_path: str, enable: bool = True) -> None:
     if enable:
         graph["simulation"] = True
         graph["dailyFetch"] = False
+
+        # Set the pinned DSL so the FE knows the data date range
+        if sim_stats:
+            base_date = datetime.strptime(sim_stats["base_date"], "%Y-%m-%d")
+            n_days = sim_stats["n_days"]
+            end_date = base_date + timedelta(days=n_days - 1)
+            window_from = _format_date_dmy(base_date)
+            window_to = _format_date_dmy(end_date)
+            graph["dataInterestsDSL"] = f"window({window_from}:{window_to});cohort({window_from}:{window_to})"
+            graph["currentQueryDSL"] = f"window({window_from}:{window_to})"
     else:
         graph.pop("simulation", None)
+        graph.pop("dataInterestsDSL", None)
+        graph.pop("currentQueryDSL", None)
 
     with open(graph_path, "w") as f:
         json.dump(graph, f, indent=2, ensure_ascii=False)
@@ -903,6 +1172,11 @@ def update_graph_edge_metadata(
     with open(graph_path) as f:
         graph = json.load(f)
 
+    # Build node UUID → node id lookup
+    uuid_to_id: dict[str, str] = {}
+    for n in graph.get("nodes", []):
+        uuid_to_id[n["uuid"]] = n.get("id", "")
+
     edge_by_uuid = {e["uuid"]: e for e in graph.get("edges", [])}
 
     for edge_id, et in topology.edges.items():
@@ -929,14 +1203,22 @@ def update_graph_edge_metadata(
         p["mean"] = round(mean, 6)
         p["n"] = total_n
 
+        # Set query string at edge top level (FE reads edge.query, not edge.p.query)
+        from_id = uuid_to_id.get(et.from_node, et.from_node)
+        to_id = uuid_to_id.get(et.to_node, et.to_node)
+        edge["query"] = f"from({from_id}).to({to_id})"
+
         # Update latency block if truth has it
         if t.get("mu") is not None:
             lat = p.setdefault("latency", {})
             lat["onset_delta_days"] = t.get("onset", 0.0)
+            lat["path_t95"] = lat.get("t95", lat.get("path_t95"))
             onset = t.get("onset", 0.0)
             mu = t.get("mu", 1.0)
             sigma = t.get("sigma", 0.5)
             lat["t95"] = round(onset + math.exp(mu + 1.645 * sigma), 1)
+            if "path_t95" not in lat or lat["path_t95"] is None:
+                lat["path_t95"] = lat["t95"]
 
     with open(graph_path, "w") as f:
         json.dump(graph, f, indent=2, ensure_ascii=False)
@@ -1084,8 +1366,16 @@ Examples:
             truth = derive_truth_from_graph(graph, topology)
             print("Truth: derived from graph edge metadata")
 
-    # Build hash lookup from GRAPH_CONFIGS
+    # Build hash lookup — compute real FE-compatible hashes, fall back to
+    # GRAPH_CONFIGS static hashes (for graphs with known FE hashes)
     hash_lookup = _build_hash_lookup(gcfg)
+    computed_hashes = compute_core_hashes(graph, topology, data_repo)
+    # Computed hashes override static SYNTH-* fallbacks
+    for pid, hashes in computed_hashes.items():
+        existing = hash_lookup.get(pid, {})
+        if existing.get("window_hash", "").startswith("SYNTH-") or pid not in hash_lookup:
+            hash_lookup[pid] = hashes
+    print(f"Hashes: computed {len(computed_hashes)} edge hashes from graph + event definitions")
     # Also merge any hashes from truth config edges
     for pid, edata in truth.get("edges", {}).items():
         if "window_hash" in edata and "cohort_hash" in edata:
@@ -1131,8 +1421,20 @@ Examples:
     hash_map = {}
     if db_conn:
         print(f"\nWriting to snapshot DB...")
+        # Build workspace prefix: repo-branch (matches FE buildDbParamId)
+        import subprocess
+        repo_name = os.path.basename(data_repo)
         try:
-            hash_map = write_to_snapshot_db(snapshot_rows, db_conn)
+            branch_name = subprocess.check_output(
+                ["git", "-C", data_repo, "branch", "--show-current"],
+                text=True,
+            ).strip()
+        except Exception:
+            branch_name = "main"
+        workspace_prefix = f"{repo_name}-{branch_name}"
+        print(f"  Workspace prefix: {workspace_prefix}")
+        try:
+            hash_map = write_to_snapshot_db(snapshot_rows, db_conn, workspace_prefix, hash_lookup)
             print_edge_config(topology, hash_map)
         except Exception as e:
             print(f"\n  WARNING: DB write failed: {e}")
@@ -1147,7 +1449,7 @@ Examples:
         # 1. Parameter YAML files
         print("  Parameter files:")
         written_params = write_parameter_files(
-            topology, truth, sim_stats, data_repo, graph,
+            topology, truth, sim_stats, data_repo, graph, hash_lookup,
         )
         print(f"    Wrote {len(written_params)} parameter files")
 
@@ -1161,8 +1463,8 @@ Examples:
 
         # 4. Set simulation guard
         print("  Simulation guard:")
-        set_simulation_guard(graph_path, enable=True)
-        print("    Set simulation=true, dailyFetch=false")
+        set_simulation_guard(graph_path, enable=True, sim_stats=sim_stats)
+        print("    Set simulation=true, dailyFetch=false, dataInterestsDSL set")
 
         print(f"\nData repo files written. Next steps:")
         print(f"  1. cd {data_repo}")

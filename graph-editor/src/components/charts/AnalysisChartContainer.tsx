@@ -175,8 +175,8 @@ export function AnalysisChartContainer(props: {
   onFileLink?: (fileId: string, type: string) => void;
   /** Extra React content to append after a specific tab's table in info cards. */
   infoTabExtra?: Record<string, React.ReactNode>;
-  /** When set, filter AnalysisInfoCard to this facet (no internal tab bar). */
-  facet?: string;
+  /** When set, filter AnalysisInfoCard to this card kind (no internal tab bar). */
+  infoCardKind?: string;
   /** Called once the chart reaches a terminal visual state.
    *  'rendered' = ECharts painted real data; 'failed' = null option / info / no chart. */
   onRendered?: (outcome: 'rendered' | 'failed') => void;
@@ -303,7 +303,9 @@ export function AnalysisChartContainer(props: {
     scenarioVisibilityModes,
     display: effectiveDisplay,
   }), [finalResult, kind, chartKindOverride, visibleScenarioIds, scenarioVisibilityModes, effectiveDisplay]);
-  const effectiveKind = normaliseChartKind(displayPlan.effectiveChartKind || kind);
+  // Explicit override (from content item kind) is authoritative — the planner
+  // may only adjust scenarios, not override the kind itself.
+  const effectiveKind = normalisedOverride || normaliseChartKind(displayPlan.effectiveChartKind || kind);
 
   const resolvedSettings = useMemo(() => {
     if (!effectiveKind) return {};
@@ -1036,7 +1038,7 @@ export function AnalysisChartContainer(props: {
           props.children
         ) : effectiveKind === 'info' && finalResult ? (
           <div style={{ flex: fillHeight ? 1 : undefined, minHeight: 0, overflow: 'auto' }}>
-            <AnalysisInfoCard result={finalResult} fontSize={resolvedSettings.font_size} defaultTab={props.infoDefaultTab} onFileLink={props.onFileLink} tabExtra={props.infoTabExtra} facet={props.facet} />
+            <AnalysisInfoCard result={finalResult} fontSize={resolvedSettings.font_size} defaultTab={props.infoDefaultTab} onFileLink={props.onFileLink} tabExtra={props.infoTabExtra} kind={props.infoCardKind} />
           </div>
         ) : echartsOption ? (
           <div style={{ flex: fillHeight ? 1 : undefined, minHeight: 0, position: 'relative' }}>

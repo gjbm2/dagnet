@@ -1,5 +1,7 @@
 # TODO
 
+- ~~**Graph pull hard gate fires incorrectly on clean fast-forward** (21-Mar-26)~~ **FIXED 22-Mar-26**: Added `localMatchesOriginal` check — both the primary gate and the defence-in-depth gate now allow clean fast-forwards when local content matches its original base (user hasn't edited). See `workspaceService.ts:1328-1340`.
+
 - Bridge chart issues--not updating properly with e.g. date changes & custom scenarios
   - also not intuitive to() vs. visited() dsl -- needs love
 

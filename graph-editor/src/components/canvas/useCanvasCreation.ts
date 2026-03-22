@@ -290,8 +290,9 @@ export function useCanvasCreation({
 
   useEffect(() => {
     const handler = (e: CustomEvent) => {
-      if (tabId !== effectiveActiveTabId) return;
-      const { screenX, screenY, dragData } = e.detail;
+      const { screenX, screenY, dragData, sourceTabId } = e.detail;
+      // Only process on the tab that originated the event (or fall back to active-tab guard)
+      if (sourceTabId ? sourceTabId !== tabId : tabId !== effectiveActiveTabId) return;
       const flowPos = screenToFlowPosition({ x: screenX, y: screenY });
       addCanvasAnalysisAtPosition(flowPos.x, flowPos.y, dragData);
     };
@@ -312,8 +313,8 @@ export function useCanvasCreation({
   // (fired when a hover-preview tab is dropped onto a canvas analysis node).
   useEffect(() => {
     const handler = (e: CustomEvent) => {
-      if (tabId !== effectiveActiveTabId) return;
-      const { targetAnalysisId, contentItem: rawItem, analysisResult } = e.detail || {};
+      const { targetAnalysisId, contentItem: rawItem, analysisResult, sourceTabId } = e.detail || {};
+      if (sourceTabId ? sourceTabId !== tabId : tabId !== effectiveActiveTabId) return;
       if (!targetAnalysisId || !rawItem || !graph) return;
       console.log('[SnapHandler] SNAP event received', {
         targetAnalysisId: targetAnalysisId?.slice(0, 12),

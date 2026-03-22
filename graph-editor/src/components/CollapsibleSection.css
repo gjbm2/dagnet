@@ -164,6 +164,19 @@
   background: var(--accent-colour, #3b82f6);
 }
 
+/* Grey-on variant — thumb slides right but track stays grey (auto-selected, not user-pinned) */
+.collapsible-section-toggle-track.on-grey .collapsible-section-toggle-thumb {
+  left: 14px;
+}
+
+/* Green variant — for "pinned" / user-confirmed states */
+.collapsible-section-toggle-track.on-success {
+  background: var(--color-success, #10b981);
+}
+.collapsible-section-toggle-track.on-success .collapsible-section-toggle-thumb {
+  left: 14px;
+}
+
 .collapsible-section-toggle-thumb {
   width: 12px;
   height: 12px;
