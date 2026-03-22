@@ -98,6 +98,15 @@ GRAPH_CONFIGS: dict[str, dict[str, Any]] = {
         ],
         "base_date": "2025-12-12",
     },
+    "simple": {
+        "graph_file": "synth-simple-abc.json",
+        "graph_id": "graph-synth-simple-abc",
+        "edges": [
+            ("simple-a-to-b", "80844ce8-094b-4ab7-b0a1-c5569f1b72a8", "SYNTH-a-to-b-w", "SYNTH-a-to-b-c"),
+            ("simple-b-to-c", "69320810-4258-4883-8093-7c3fb34640c2", "SYNTH-b-to-c-w", "SYNTH-b-to-c-c"),
+        ],
+        "base_date": "2025-12-12",
+    },
 }
 
 
@@ -206,29 +215,6 @@ def compute_core_hashes(
         anchor_node = find_node(anchor_node_id) if anchor_node_id else None
         latency_anchor_event_id = anchor_node.get("event_id", "") if anchor_node else ""
 
-        # Event definition hashes
-        # The FE's buildDslFromEdge only loads event defs for from/to nodes.
-        # The latency anchor event is NOT loaded by buildDslFromEdge, so
-        # querySignature.ts falls back to "not_loaded" for it.
-        # We must match this behaviour exactly.
-        loaded_event_ids = {from_event_id, to_event_id}  # what buildDslFromEdge loads
-        all_event_ids = [eid for eid in [from_event_id, to_event_id, latency_anchor_event_id] if eid]
-        event_def_hashes: dict[str, str] = {}
-        for eid in all_event_ids:
-            if eid not in loaded_event_ids:
-                event_def_hashes[eid] = "not_loaded"
-                continue
-            edef = event_defs.get(eid)
-            if edef:
-                normalized = {
-                    "id": edef.get("id"),
-                    "provider_event_names": edef.get("provider_event_names", {}),
-                    "amplitude_filters": edef.get("amplitude_filters", []),
-                }
-                event_def_hashes[eid] = _sha256_hex(json.dumps(normalized, separators=(",", ":")))
-            else:
-                event_def_hashes[eid] = "not_loaded"
-
         # Normalise query: replace node IDs with event IDs
         normalized_query = query
         for node in graph_snapshot.get("nodes", []):
@@ -237,14 +223,53 @@ def compute_core_hashes(
             if nid and eid:
                 normalized_query = normalized_query.replace(nid, eid)
 
+        # Find anchor node for cohort mode
+        anchor_start_node = None
+        for n in graph_snapshot.get("nodes", []):
+            if n.get("entry", {}).get("is_start"):
+                anchor_start_node = n
+                break
+        anchor_start_eid = anchor_start_node.get("event_id", "") if anchor_start_node else ""
+
         # Compute window hash (cohort_mode=false) and cohort hash (cohort_mode=true)
         hashes: dict[str, str] = {}
         for mode_name, cohort_mode in [("window_hash", False), ("cohort_hash", True)]:
-            # The FE's buildDslFromEdge only sets cohort_anchor_event_id when
-            # the DSL explicitly names an anchor node (e.g. cohort(nodeId,...)).
-            # Our dataInterestsDSL uses cohort(date:date) without a node ref,
-            # so the FE leaves anchor_event_id as "".
-            cohort_anchor = ""
+            # In cohort mode, buildDslFromEdge resolves the anchor node,
+            # sets cohort_anchor_event_id, and loads the anchor event def.
+            # In window mode, cohort_anchor is empty and the anchor event
+            # is only loaded if it's also a from/to node.
+            # When from_node IS the anchor, buildDslFromEdge uses a 2-step
+            # funnel and does NOT set cohort_anchor_event_id.
+            if cohort_mode and from_event_id != anchor_start_eid:
+                cohort_anchor = anchor_start_eid
+            else:
+                cohort_anchor = ""
+
+            # Event definition hashes — mode-dependent.
+            # buildDslFromEdge loads from/to events always.
+            # In cohort mode, it also loads the anchor event.
+            # The latency anchor event is NOT loaded unless it coincides
+            # with from/to/cohort-anchor.
+            loaded_event_ids = {from_event_id, to_event_id}
+            if cohort_mode and anchor_start_eid:
+                loaded_event_ids.add(anchor_start_eid)
+
+            all_event_ids = [eid for eid in [from_event_id, to_event_id, latency_anchor_event_id] if eid]
+            event_def_hashes: dict[str, str] = {}
+            for eid in all_event_ids:
+                if eid not in loaded_event_ids:
+                    event_def_hashes[eid] = "not_loaded"
+                    continue
+                edef = event_defs.get(eid)
+                if edef:
+                    normalized = {
+                        "id": edef.get("id"),
+                        "provider_event_names": edef.get("provider_event_names", {}),
+                        "amplitude_filters": edef.get("amplitude_filters", []),
+                    }
+                    event_def_hashes[eid] = _sha256_hex(json.dumps(normalized, separators=(",", ":")))
+                else:
+                    event_def_hashes[eid] = "not_loaded"
 
             core_canonical = json.dumps({
                 "connection": "amplitude",
@@ -360,6 +385,7 @@ DEFAULT_SIM_CONFIG = {
     "failure_rate": 0.05,          # 5% of fetch nights fail
     "drift_sigma": 0.0,           # random-walk drift disabled by default
     "seed": 42,
+    "growth_rate_mom": 0.0,       # monthly growth rate (0.05 = 5% MoM exponential)
 }
 
 
@@ -407,6 +433,36 @@ def simulate_graph(
 
     rng = np.random.default_rng(seed)
 
+    # --- Burn-in period ---
+    # Simulate max(path_t95) extra days before base_date so the first
+    # observable day has realistic from-node arrival counts (the pipeline
+    # is "warmed up"). Observation rows are only emitted for dates >=
+    # base_date; burn-in days contribute arrivals but not rows.
+    # Compute burn-in from TRUTH config (not graph edge, which may be stripped).
+    # Sum onset + t95 along the longest path to get max path completion time.
+    # Simple approach: sum all edge onsets + max edge t95 as upper bound.
+    max_edge_t95 = 0.0
+    total_onset = 0.0
+    for edge_id, et in topology.edges.items():
+        pid = et.param_id
+        t = truth.get("edges", {}).get(pid, {})
+        if not t:
+            bare = pid.replace("parameter-", "") if pid.startswith("parameter-") else pid
+            t = truth.get("edges", {}).get(bare, {})
+        if t:
+            onset = t.get("onset", 0.0)
+            mu = t.get("mu", 1.0)
+            sigma = t.get("sigma", 0.5)
+            edge_t95 = onset + math.exp(mu + 1.645 * sigma)
+            total_onset += onset
+            if edge_t95 > max_edge_t95:
+                max_edge_t95 = edge_t95
+    # Conservative: use sum of all onsets + longest single edge t95
+    max_path_t95 = total_onset + max_edge_t95
+    burn_in_days = math.ceil(max_path_t95)
+    total_sim_days = burn_in_days + n_days
+    sim_start_date = base_date - timedelta(days=burn_in_days)
+
     # --- Resolve edge params from truth config ---
     edge_params: dict[str, dict] = {}  # edge_id → {p, onset, mu, sigma, kappa_sim}
     for edge_id, et in topology.edges.items():
@@ -434,26 +490,38 @@ def simulate_graph(
             edge_to_bg[sib_id] = bg.group_id
 
     # --- Random-walk drift (logit scale, per-edge) ---
-    # drift_path[edge_id] = array of n_days logit offsets
+    # drift_path[edge_id] = array of total_sim_days logit offsets
     drift_paths: dict[str, np.ndarray] = {}
     if drift_sigma > 0:
         for edge_id in edge_params:
-            increments = rng.normal(0.0, drift_sigma, size=n_days)
+            increments = rng.normal(0.0, drift_sigma, size=total_sim_days)
             drift_paths[edge_id] = np.cumsum(increments)
     else:
-        zero_path = np.zeros(n_days)
+        zero_path = np.zeros(total_sim_days)
         for edge_id in edge_params:
             drift_paths[edge_id] = zero_path
 
     # --- Person-level simulation ---
-    # arrivals_by_day[day_idx] = list of {node_id: t_arrival}
-    # actual_traffic[day_idx] = int (actual people that day)
+    # Runs for total_sim_days (burn_in + n_days). The first burn_in_days
+    # populate the pipeline; observation rows are only for day_idx >= burn_in_days.
     arrivals_by_day: list[list[dict[str, float]]] = []
     actual_traffic: list[int] = []
 
-    for day_idx in range(n_days):
-        n_people = int(rng.poisson(mean_daily_traffic))
+    # Exponential growth: daily rate from MoM growth
+    growth_rate_mom = sim_config.get("growth_rate_mom", 0.0)
+    daily_growth = (1.0 + growth_rate_mom) ** (1.0 / 30.0) if growth_rate_mom > 0 else 1.0
+
+    print(f"  Simulating {total_sim_days} days ({burn_in_days} burn-in + {n_days} observable)...", flush=True)
+    if growth_rate_mom > 0:
+        print(f"  Growth: {growth_rate_mom * 100:.1f}% MoM ({(daily_growth - 1) * 100:.3f}%/day)", flush=True)
+    for day_idx in range(total_sim_days):
+        # Apply exponential growth relative to sim start (day 0 = burn-in start)
+        day_mean = mean_daily_traffic * (daily_growth ** day_idx)
+        n_people = int(rng.poisson(day_mean))
         actual_traffic.append(n_people)
+        if (day_idx + 1) % 20 == 0:
+            phase = "burn-in" if day_idx < burn_in_days else "observable"
+            print(f"    Day {day_idx + 1}/{total_sim_days} ({phase})", flush=True)
 
         # Draw day-specific effective probabilities per edge:
         # 1. Apply drift: p_drifted = logistic(logit(p_true) + drift)
@@ -508,7 +576,7 @@ def simulate_graph(
 
     all_edge_ids = [eid for eid in topology.edges if topology.edges[eid].param_id]
 
-    for day_idx in range(n_days):
+    for day_idx in range(total_sim_days):
         day_sorted: dict[str, list[float]] = {}
         for nid in all_nodes:
             times = [p[nid] for p in arrivals_by_day[day_idx] if nid in p]
@@ -528,34 +596,86 @@ def simulate_graph(
     # Computed before freeing arrivals_by_day.
     # For each edge: n_daily[d] = people reaching from_node on day d,
     #                k_daily[d] = people who traversed this edge on day d
-    edge_daily: dict[str, dict] = {}  # edge_id → {n_daily, k_daily, dates}
+    edge_daily: dict[str, dict] = {}  # edge_id → {n_daily, k_daily, dates, ...}
+    anchor_node_id = topology.anchor_node_id
     for edge_id, et in topology.edges.items():
         if not et.param_id:
             continue
         n_daily = []
         k_daily = []
         dates = []
-        for day_idx in range(n_days):
-            day_date = base_date + timedelta(days=day_idx)
+        median_lag_daily = []
+        mean_lag_daily = []
+        anchor_median_lag_daily = []
+        anchor_mean_lag_daily = []
+        anchor_n_daily_list = []
+        edge_key = f"edge:{edge_id}"
+
+        for day_idx in range(burn_in_days, total_sim_days):
+            day_date = base_date + timedelta(days=day_idx - burn_in_days)
             dates.append(day_date.strftime("%-d-%b-%y"))
             from_times = sorted_times[day_idx].get(et.from_node, [])
             edge_times = sorted_edge_times[day_idx].get(edge_id, [])
             n_daily.append(len(from_times))
             k_daily.append(len(edge_times))
+            anchor_n_daily_list.append(actual_traffic[day_idx])
+
+            # Compute empirical lag stats from person-level data
+            edge_lags = []  # from_node → to_node lag for converters
+            anchor_lags = []  # anchor → from_node lag for converters
+            for person in arrivals_by_day[day_idx]:
+                if edge_key not in person:
+                    continue  # didn't traverse this edge
+                if et.from_node not in person:
+                    continue
+                to_arrival = person[edge_key]
+                from_arrival = person[et.from_node]
+                edge_lags.append(to_arrival - from_arrival)
+                # Anchor lag = from_node arrival relative to anchor entry (time 0).
+                # Amplitude's anchor_median_lag measures A→X (anchor to from-event),
+                # NOT A→Y (anchor to to-event).
+                anchor_lags.append(from_arrival)
+
+            if edge_lags:
+                edge_lags_sorted = sorted(edge_lags)
+                n_conv = len(edge_lags_sorted)
+                median_lag_daily.append(round(edge_lags_sorted[n_conv // 2], 2))
+                mean_lag_daily.append(round(sum(edge_lags) / n_conv, 2))
+            else:
+                median_lag_daily.append(0)
+                mean_lag_daily.append(0)
+
+            if anchor_lags:
+                anchor_lags_sorted = sorted(anchor_lags)
+                n_conv = len(anchor_lags_sorted)
+                anchor_median_lag_daily.append(round(anchor_lags_sorted[n_conv // 2], 2))
+                anchor_mean_lag_daily.append(round(sum(anchor_lags) / n_conv, 2))
+            else:
+                anchor_median_lag_daily.append(0)
+                anchor_mean_lag_daily.append(0)
+
         edge_daily[edge_id] = {
             "n_daily": n_daily,
             "k_daily": k_daily,
             "dates": dates,
+            "median_lag_daily": median_lag_daily,
+            "mean_lag_daily": mean_lag_daily,
+            "anchor_median_lag_daily": anchor_median_lag_daily,
+            "anchor_mean_lag_daily": anchor_mean_lag_daily,
+            "anchor_n_daily": anchor_n_daily_list,
         }
 
-    # Free the raw person data now — we only need sorted_times
-    del arrivals_by_day
-
     # --- Generate observations via nightly fetch model ---
+    # arrivals_by_day is needed for window index construction (grouping
+    # by from-node arrival day across simulation days).
     snapshot_rows = _generate_observations_nightly(
         topology, sorted_times, sorted_edge_times, actual_traffic,
         hash_lookup, n_days, base_date, failure_rate, rng,
+        arrivals_by_day, burn_in_days, total_sim_days, edge_params,
     )
+
+    # Free the raw person data now
+    del arrivals_by_day
 
     # --- Simulation stats ---
     total_rows = sum(len(v) for v in snapshot_rows.values())
@@ -563,6 +683,8 @@ def simulate_graph(
         "n_days": n_days,
         "mean_daily_traffic": mean_daily_traffic,
         "actual_traffic_range": (min(actual_traffic), max(actual_traffic)),
+        "actual_traffic": actual_traffic,
+        "burn_in_days": burn_in_days,
         "kappa_default": kappa_default,
         "failure_rate": failure_rate,
         "drift_sigma": drift_sigma,
@@ -687,20 +809,68 @@ def _generate_observations_nightly(
     base_date: datetime,
     failure_rate: float,
     rng: np.random.Generator,
+    arrivals_by_day: list[list[dict[str, float]]],
+    burn_in_days: int = 0,
+    total_sim_days: int | None = None,
+    edge_params: dict[str, dict] | None = None,
 ) -> dict[str, list[dict]]:
     """Generate snapshot rows using nightly fetch simulation.
 
-    For each fetch night t (1..n_days), observes all anchor_days d < t.
-    Retrieval age = t - d. Fetch nights fail with probability failure_rate.
+    Produces two distinct slicings of the same simulated reality:
 
-    Uses sorted_edge_times for per-edge y counts (correct at joins where
-    multiple edges feed the same to_node).
-    Uses real core hashes from hash_lookup for FE visibility.
+    **Cohort rows** (slice_key="cohort()"):
+      anchor_day = day person entered the anchor node (simulation day)
+      a = total anchor entrants on that day (fixed denominator)
+      y = count who reached to_node by retrieval age (relative to anchor day)
+
+    **Window rows** (slice_key="window()"):
+      anchor_day = day person arrived at the FROM node (varies per person due
+        to upstream latency — mixes people from different simulation days)
+      x = count who arrived at from_node on that calendar day
+      y = count of those who reached to_node by retrieval age (relative to
+        from_node arrival day)
+
+    The window and cohort rows trace DIFFERENT populations for the same edge:
+    window groups by from-node arrival day, cohort groups by anchor entry day.
     """
     result: dict[str, list[dict]] = defaultdict(list)
 
+    # Pre-compute latency stats per edge for DB rows
+    edge_latency_stats: dict[str, dict] = {}
+    if edge_params:
+        for edge_id, ep in edge_params.items():
+            onset = ep.get("onset", 0.0)
+            mu = ep.get("mu", 0.0)
+            sigma = ep.get("sigma", 0.0)
+            if sigma > 0.001:
+                median_lag = onset + math.exp(mu)
+                mean_lag = onset + math.exp(mu + sigma ** 2 / 2)
+            else:
+                median_lag = onset
+                mean_lag = onset
+
+            # Path-level (anchor → this edge) latency from FW composition
+            et = topology.edges.get(edge_id)
+            if et and not et.path_latency.is_trivial:
+                pd = et.path_latency.path_delta
+                pm = et.path_latency.path_mu
+                ps = et.path_latency.path_sigma
+                anchor_median = pd + math.exp(pm)
+                anchor_mean = pd + math.exp(pm + ps ** 2 / 2)
+            else:
+                anchor_median = median_lag
+                anchor_mean = mean_lag
+
+            edge_latency_stats[edge_id] = {
+                "onset": onset,
+                "median_lag_days": round(median_lag, 2),
+                "mean_lag_days": round(mean_lag, 2),
+                "anchor_median_lag_days": round(anchor_median, 2),
+                "anchor_mean_lag_days": round(anchor_mean, 2),
+            }
+
     # Pre-resolve hashes per edge
-    edge_hashes: dict[str, tuple[str, str]] = {}  # edge_id → (window_hash, cohort_hash)
+    edge_hashes: dict[str, tuple[str, str]] = {}
     for edge_id, et in topology.edges.items():
         pid = et.param_id
         hashes = hash_lookup.get(pid)
@@ -710,78 +880,181 @@ def _generate_observations_nightly(
         if hashes:
             edge_hashes[edge_id] = (hashes["window_hash"], hashes["cohort_hash"])
         else:
-            # Fallback: synthetic hash (won't be FE-visible but still
-            # consumable by test harness with explicit hash config)
             edge_hashes[edge_id] = (f"SYNTH-{pid}-w", f"SYNTH-{pid}-c")
 
-    # Nightly fetch loop
-    for fetch_night in range(1, n_days + 1):
-        # Fetch failure
+    # ── Build window arrival index ──────────────────────────────────────
+    # For each edge, group person arrivals by the ABSOLUTE CALENDAR DAY
+    # they reached the from_node. Each entry records:
+    #   from_arrival_offset: fractional days from from_node arrival to
+    #     to_node arrival (or None if they didn't convert)
+    #
+    # window_index[edge_id][abs_from_day] = list of
+    #   (edge_arrival_offset | None)  — one per person who reached from_node
+    #
+    # abs_from_day is an integer: calendar day offset from base_date.
+    # edge_arrival_offset = to_node_arrival - from_node_arrival (in days).
+
+    window_index: dict[str, dict[int, list[float | None]]] = defaultdict(
+        lambda: defaultdict(list)
+    )
+
+    _tsd = total_sim_days or n_days
+    for day_idx in range(_tsd):
+        for person in arrivals_by_day[day_idx]:
+            for edge_id, et in topology.edges.items():
+                if not et.param_id:
+                    continue
+                from_node = et.from_node
+                if from_node not in person:
+                    continue
+
+                # Absolute calendar day of from_node arrival, relative to
+                # base_date (not sim_start). day_idx=0 is sim_start which
+                # is burn_in_days before base_date.
+                from_arrival_time = person[from_node]
+                abs_from_day = (day_idx - burn_in_days) + int(from_arrival_time)
+
+                edge_key = f"edge:{edge_id}"
+                if edge_key in person:
+                    to_arrival_time = person[edge_key]
+                    edge_offset = to_arrival_time - from_arrival_time
+                    window_index[edge_id][abs_from_day].append(edge_offset)
+                else:
+                    window_index[edge_id][abs_from_day].append(None)
+
+    # Pre-sort the non-None offsets for bisect-based counting
+    window_sorted: dict[str, dict[int, tuple[int, list[float]]]] = {}
+    for edge_id, day_map in window_index.items():
+        window_sorted[edge_id] = {}
+        for abs_day, offsets in day_map.items():
+            total_x = len(offsets)  # everyone who reached from_node on this day
+            converted_offsets = sorted([o for o in offsets if o is not None])
+            window_sorted[edge_id][abs_day] = (total_x, converted_offsets)
+
+    del window_index  # free memory
+
+    # ── Determine fetch nights (with failure simulation) ────────────────
+    fetch_nights: list[int] = []
+    for fn in range(1, n_days + 1):
         if failure_rate > 0 and rng.random() < failure_rate:
             continue
+        fetch_nights.append(fn)
 
+    # ── Generate cohort rows ────────────────────────────────────────────
+    # Cohort: anchor_day = simulation day (within observable window only),
+    # a = anchor entrants, y = people from that sim day who reached
+    # to_node by retrieval age.
+    # sim_day_idx is 0-based from sim_start; observable days start at burn_in_days.
+    n_cohort_rows = 0
+    for fi, fetch_night in enumerate(fetch_nights):
         retrieved_at = (base_date + timedelta(days=fetch_night)).strftime(
             "%Y-%m-%d 02:00:00"
         )
 
-        for day_idx in range(fetch_night):
-            age = fetch_night - day_idx  # retrieval age in days
+        # Only observable anchor days (sim_day >= burn_in_days)
+        # that are before this fetch night
+        obs_start = burn_in_days
+        obs_end = burn_in_days + fetch_night  # fetch_night is 1-based offset from base_date
+        for sim_day in range(obs_start, min(obs_end, _tsd)):
+            obs_day_offset = sim_day - burn_in_days  # 0-based from base_date
+            age = fetch_night - obs_day_offset
             if age < 1:
                 continue
 
-            anchor_day = (base_date + timedelta(days=day_idx)).strftime("%Y-%m-%d")
-            n_people = actual_traffic[day_idx]
-            day_sorted = sorted_times[day_idx]
-
-            day_edge_sorted = sorted_edge_times[day_idx]
+            anchor_day_str = (base_date + timedelta(days=obs_day_offset)).strftime("%Y-%m-%d")
+            n_people = actual_traffic[sim_day]
+            day_edge_sorted = sorted_edge_times[sim_day]
 
             for edge_id, et in topology.edges.items():
                 if not et.param_id:
-                    continue  # unevented edge
+                    continue
 
                 pid = et.param_id
                 w_hash, c_hash = edge_hashes[edge_id]
-                from_times = day_sorted.get(et.from_node, [])
+                from_times = sorted_times[sim_day].get(et.from_node, [])
                 edge_times = day_edge_sorted.get(edge_id, [])
-
-                # Window observation: denominator = arrivals at from_node by age,
-                # numerator = per-edge conversions by age (correct at joins)
-                x_count = _count_by_age(from_times, age)
-                y_window = _count_by_age(edge_times, age)
-
-                if x_count > 0:
-                    result[edge_id].append({
-                        "param_id": pid,
-                        "core_hash": w_hash,
-                        "slice_key": "window()",
-                        "anchor_day": anchor_day,
-                        "retrieved_at": retrieved_at,
-                        "a": None,
-                        "x": x_count,
-                        "y": y_window,
-                        "median_lag_days": None,
-                        "mean_lag_days": None,
-                        "onset_delta_days": None,
-                    })
-
-                # Cohort observation: denominator = total people entering that day,
-                # numerator = per-edge conversions by age (correct at joins)
+                x_cohort = _count_by_age(from_times, age)
                 y_cohort = _count_by_age(edge_times, age)
 
+                lstats = edge_latency_stats.get(edge_id, {})
                 result[edge_id].append({
                     "param_id": pid,
                     "core_hash": c_hash,
                     "slice_key": "cohort()",
-                    "anchor_day": anchor_day,
+                    "anchor_day": anchor_day_str,
                     "retrieved_at": retrieved_at,
                     "a": n_people,
-                    "x": None,
+                    "x": x_cohort,
                     "y": y_cohort,
-                    "median_lag_days": None,
-                    "mean_lag_days": None,
-                    "onset_delta_days": None,
+                    "median_lag_days": lstats.get("median_lag_days"),
+                    "mean_lag_days": lstats.get("mean_lag_days"),
+                    "anchor_median_lag_days": lstats.get("anchor_median_lag_days"),
+                    "anchor_mean_lag_days": lstats.get("anchor_mean_lag_days"),
+                    "onset_delta_days": lstats.get("onset"),
                 })
+                n_cohort_rows += 1
 
+        if (fi + 1) % 10 == 0:
+            print(f"  Cohort observations: {fi + 1}/{len(fetch_nights)} nights, {n_cohort_rows} rows", flush=True)
+
+    # ── Generate window rows ────────────────────────────────────────────
+    # Window: anchor_day = absolute calendar day person reached from_node,
+    # x = count reaching from_node on that day (across all sim days),
+    # y = count of those who reached to_node by retrieval age relative
+    #     to the from_node arrival day
+    n_window_rows = 0
+    for fi, fetch_night in enumerate(fetch_nights):
+        retrieved_at = (base_date + timedelta(days=fetch_night)).strftime(
+            "%Y-%m-%d 02:00:00"
+        )
+
+        for edge_id, et in topology.edges.items():
+            if not et.param_id:
+                continue
+
+            pid = et.param_id
+            w_hash, _c_hash = edge_hashes[edge_id]
+            edge_window = window_sorted.get(edge_id, {})
+
+            for abs_from_day, (total_x, conv_offsets) in edge_window.items():
+                # Only emit for observable window (abs_from_day >= 0 means
+                # the from_node arrival is on or after base_date)
+                if abs_from_day < 0:
+                    continue
+                if abs_from_day >= n_days:
+                    continue  # beyond observation window
+
+                w_age = fetch_night - abs_from_day
+                if w_age < 1:
+                    continue
+
+                anchor_day_str = (base_date + timedelta(days=abs_from_day)).strftime(
+                    "%Y-%m-%d"
+                )
+
+                y_window = bisect.bisect_right(conv_offsets, float(w_age))
+
+                if total_x > 0:
+                    lstats = edge_latency_stats.get(edge_id, {})
+                    result[edge_id].append({
+                        "param_id": pid,
+                        "core_hash": w_hash,
+                        "slice_key": "window()",
+                        "anchor_day": anchor_day_str,
+                        "retrieved_at": retrieved_at,
+                        "a": None,
+                        "x": total_x,
+                        "y": y_window,
+                        "median_lag_days": lstats.get("median_lag_days"),
+                        "mean_lag_days": lstats.get("mean_lag_days"),
+                        "onset_delta_days": lstats.get("onset"),
+                    })
+                    n_window_rows += 1
+
+        if (fi + 1) % 10 == 0:
+            print(f"  Window observations: {fi + 1}/{len(fetch_nights)} nights, {n_window_rows} rows", flush=True)
+
+    print(f"  Total: {sum(len(v) for v in result.values())} rows ({n_cohort_rows} cohort + {n_window_rows} window)", flush=True)
     return dict(result)
 
 
@@ -852,6 +1125,8 @@ def write_to_snapshot_db(
                 "Y": r["y"],
                 "median_lag_days": r.get("median_lag_days"),
                 "mean_lag_days": r.get("mean_lag_days"),
+                "anchor_median_lag_days": r.get("anchor_median_lag_days"),
+                "anchor_mean_lag_days": r.get("anchor_mean_lag_days"),
                 "onset_delta_days": r.get("onset_delta_days"),
             })
 
@@ -952,6 +1227,8 @@ def write_parameter_files(
     base_date = datetime.strptime(sim_stats["base_date"], "%Y-%m-%d")
     n_days = sim_stats["n_days"]
     end_date = base_date + timedelta(days=n_days - 1)
+    actual_traffic = sim_stats.get("actual_traffic", [])
+    burn_in_days = sim_stats.get("burn_in_days", 0)
 
     # Build node UUID → node id lookup from graph
     uuid_to_id: dict[str, str] = {}
@@ -1000,7 +1277,15 @@ def write_parameter_files(
         cohort_dsl = f"cohort({anchor_id},{_format_date_dmy(base_date)}:{_format_date_dmy(end_date)})"
         now_str = datetime.now(tz=None).strftime("%Y-%m-%dT%H:%M:%SZ")
 
-        # Window values[] entry
+        # Empirical lag stats from actual simulated arrivals (per-day lists).
+        # These match what Amplitude would derive from its lag histograms.
+        median_lag_daily = daily.get("median_lag_daily", [0] * len(dates))
+        mean_lag_daily = daily.get("mean_lag_daily", [0] * len(dates))
+        anchor_median_daily = daily.get("anchor_median_lag_daily", [0] * len(dates))
+        anchor_mean_daily = daily.get("anchor_mean_lag_daily", [0] * len(dates))
+        anchor_n_daily = daily.get("anchor_n_daily", [0] * len(dates))
+
+        # Window values[] entry — matches real Amplitude fetch output shape
         window_entry: dict[str, Any] = {
             "mean": round(mean, 6),
             "n": total_n,
@@ -1011,6 +1296,9 @@ def write_parameter_files(
             "window_from": _format_date_dmy(base_date),
             "window_to": _format_date_dmy(end_date),
             "sliceDSL": window_dsl,
+            "median_lag_days": median_lag_daily,
+            "mean_lag_days": mean_lag_daily,
+            "latency": {"onset_delta_days": onset},
             "data_source": {
                 "type": "synthetic",
                 "retrieved_at": now_str,
@@ -1021,7 +1309,7 @@ def write_parameter_files(
         if hash_lookup and pid in hash_lookup and "window_sig" in hash_lookup[pid]:
             window_entry["query_signature"] = hash_lookup[pid]["window_sig"]
 
-        # Cohort values[] entry (same daily data, different DSL + signature)
+        # Cohort values[] entry
         cohort_entry: dict[str, Any] = {
             "mean": round(mean, 6),
             "n": total_n,
@@ -1029,9 +1317,15 @@ def write_parameter_files(
             "n_daily": n_daily,
             "k_daily": k_daily,
             "dates": dates,
+            "anchor_n_daily": anchor_n_daily,
             "cohort_from": _format_date_dmy(base_date),
             "cohort_to": _format_date_dmy(end_date),
             "sliceDSL": cohort_dsl,
+            "median_lag_days": median_lag_daily,
+            "mean_lag_days": mean_lag_daily,
+            "anchor_median_lag_days": anchor_median_daily,
+            "anchor_mean_lag_days": anchor_mean_daily,
+            "latency": {"onset_delta_days": onset},
             "data_source": {
                 "type": "synthetic",
                 "retrieved_at": now_str,
@@ -1056,11 +1350,7 @@ def write_parameter_files(
                     topology.anchor_node_id, topology.anchor_node_id
                 ),
                 "onset_delta_days": onset,
-                "t95": round(onset + math.exp(t.get("mu", 1.0) + 1.645 * t.get("sigma", 0.5)), 1),
-                "path_t95": round(onset + math.exp(t.get("mu", 1.0) + 1.645 * t.get("sigma", 0.5)), 1),
                 "latency_parameter_overridden": False,
-                "t95_overridden": False,
-                "path_t95_overridden": False,
             },
             "metadata": {
                 "description": f"Synthetic data (seed={sim_stats.get('seed', '?')}, "
@@ -1103,7 +1393,9 @@ def set_simulation_guard(
         graph["simulation"] = True
         graph["dailyFetch"] = False
 
-        # Set the pinned DSL so the FE knows the data date range
+        # Set the pinned DSL so the FE knows the data date range.
+        # The cohort clause MUST include the anchor node ID so the
+        # snapshot dependency plan can resolve the cohort sweep.
         if sim_stats:
             base_date = datetime.strptime(sim_stats["base_date"], "%Y-%m-%d")
             n_days = sim_stats["n_days"]
@@ -1111,6 +1403,7 @@ def set_simulation_guard(
             window_from = _format_date_dmy(base_date)
             window_to = _format_date_dmy(end_date)
             graph["dataInterestsDSL"] = f"window({window_from}:{window_to});cohort({window_from}:{window_to})"
+            graph["pinnedDSL"] = f"window({window_from}:{window_to});cohort({window_from}:{window_to})"
             graph["currentQueryDSL"] = f"window({window_from}:{window_to})"
     else:
         graph.pop("simulation", None)
@@ -1200,25 +1493,34 @@ def update_graph_edge_metadata(
             continue
 
         p = edge.setdefault("p", {})
-        p["mean"] = round(mean, 6)
-        p["n"] = total_n
+        # Clear stale analytical fields from prior runs
+        for stale_key in ["mean", "n", "forecast", "stdev", "evidence"]:
+            p.pop(stale_key, None)
 
-        # Set query string at edge top level (FE reads edge.query, not edge.p.query)
+        # Set query string at edge top level (FE reads edge.query)
         from_id = uuid_to_id.get(et.from_node, et.from_node)
         to_id = uuid_to_id.get(et.to_node, et.to_node)
         edge["query"] = f"from({from_id}).to({to_id})"
 
-        # Update latency block if truth has it
-        if t.get("mu") is not None:
-            lat = p.setdefault("latency", {})
-            lat["onset_delta_days"] = t.get("onset", 0.0)
-            lat["path_t95"] = lat.get("t95", lat.get("path_t95"))
-            onset = t.get("onset", 0.0)
-            mu = t.get("mu", 1.0)
-            sigma = t.get("sigma", 0.5)
-            lat["t95"] = round(onset + math.exp(mu + 1.645 * sigma), 1)
-            if "path_t95" not in lat or lat["path_t95"] is None:
-                lat["path_t95"] = lat["t95"]
+        # Structural latency block — only fields that exist before the
+        # stats pass runs. Clear any stale analytical params from prior runs.
+        p["latency"] = {
+            "latency_parameter": True,
+        }
+        anchor_id = uuid_to_id.get(
+            topology.anchor_node_id, topology.anchor_node_id
+        )
+        p["latency"]["anchor_node_id"] = anchor_id
+
+        # cohort_anchor_event_id — FE uses this to derive the cohort
+        # anchor for snapshot queries
+        anchor_node = None
+        for n in graph.get("nodes", []):
+            if n.get("uuid") == topology.anchor_node_id or n.get("id") == uuid_to_id.get(topology.anchor_node_id):
+                anchor_node = n
+                break
+        if anchor_node and anchor_node.get("event_id"):
+            p["cohort_anchor_event_id"] = anchor_node["event_id"]
 
     with open(graph_path, "w") as f:
         json.dump(graph, f, indent=2, ensure_ascii=False)
@@ -1318,6 +1620,8 @@ Examples:
                         help="Fetch failure rate 0-1 (default: 0.05)")
     parser.add_argument("--drift", type=float, default=None,
                         help="Drift sigma for random-walk on p (default: 0 = off)")
+    parser.add_argument("--growth", type=float, default=None,
+                        help="MoM growth rate (0.05 = 5%% MoM exponential, default: 0 = flat)")
     parser.add_argument("--dry-run", action="store_true",
                         help="Generate and summarise but don't write to DB or files")
     parser.add_argument("--write-files", action="store_true",
@@ -1392,6 +1696,7 @@ Examples:
         "kappa_sim_default": args.kappa,
         "failure_rate": args.failure_rate,
         "drift_sigma": args.drift,
+        "growth_rate_mom": args.growth,
     }
     sim_config = _get_sim_config(truth, cli_overrides)
     sim_config["base_date"] = gcfg.get("base_date", "2025-11-01")
@@ -1446,22 +1751,30 @@ Examples:
     if args.write_files:
         print(f"\nWriting data repo files...")
 
-        # 1. Parameter YAML files
+        # 1. Update graph edge structural metadata (query, latency_parameter,
+        #    anchor_node_id, cohort_anchor_event_id). Does NOT write analytical
+        #    params (mu/sigma/t95/forecast) — those are derived by the FE stats pass.
+        print("  Graph edge metadata:")
+        update_graph_edge_metadata(graph_path, topology, truth, sim_stats)
+        print("    Updated structural fields (query, latency_parameter, cohort_anchor)")
+
+        # 2. Compute hashes from the updated graph
+        with open(graph_path) as f:
+            updated_graph = json.load(f)
+        hash_lookup = compute_core_hashes(updated_graph, topology, data_repo)
+        print(f"    Computed {len(hash_lookup)} edge hashes")
+
+        # 3. Parameter YAML files (with correct hashes)
         print("  Parameter files:")
         written_params = write_parameter_files(
-            topology, truth, sim_stats, data_repo, graph, hash_lookup,
+            topology, truth, sim_stats, data_repo, updated_graph, hash_lookup,
         )
         print(f"    Wrote {len(written_params)} parameter files")
 
-        # 2. Update parameters-index.yaml
+        # 4. Update parameters-index.yaml
         update_parameter_index(data_repo, written_params)
 
-        # 3. Update graph edge metadata (p.mean, latency)
-        print("  Graph edge metadata:")
-        update_graph_edge_metadata(graph_path, topology, truth, sim_stats)
-        print("    Updated edge p blocks")
-
-        # 4. Set simulation guard
+        # 5. Set simulation guard
         print("  Simulation guard:")
         set_simulation_guard(graph_path, enable=True, sim_stats=sim_stats)
         print("    Set simulation=true, dailyFetch=false, dataInterestsDSL set")

@@ -314,27 +314,79 @@ For each cohort day d = 1..N_days:
 
 Result: `arrivals[d][i] = {node_id: t_arrival, ...}`
 
-### 5.2 Observation generation (per fetch night)
+### 5.2 Burn-in warm-up
 
-For each simulated fetch night t = 1..N_days:
+The simulation starts `max(path_t95)` days BEFORE the observable window
+(base_date). Burn-in days spawn people and run DAG traversal, but do
+NOT emit observation rows. This ensures that from-node arrival counts
+on day 1 of the observable window are realistic — the upstream pipeline
+is "warmed up" with people in transit from earlier days.
 
-1. If `random() < failure_rate`: skip (fetch failed)
-2. For each anchor_day d in fetch window:
-   - `retrieval_age = t - d`
-   - If retrieval_age < 1: skip (cohort hasn't started yet)
-   - For each edge (from_node → to_node):
+Without burn-in, deep edges (e.g. 3 steps from anchor) show near-zero
+`X` counts at the start of the observation window because nobody has
+had time to traverse the upstream path.
 
-     **Window row** (slice_key = "window()"):
-     - `x` = count of people from day d who arrived at from_node by
-       age `retrieval_age`
-     - `y` = count who arrived at to_node by age `retrieval_age`
-     - Only emit if x > 0
+### 5.3 Observation generation: two distinct passes
 
-     **Cohort row** (slice_key = "cohort()"):
-     - `a` = n_people(d) (everyone entered anchor at time 0)
-     - `y` = count who arrived at to_node by age `retrieval_age`
+Window and cohort rows trace **different populations** and are generated
+in separate passes from the same person-level data.
 
-3. Store all rows with `retrieved_at = base_date + t`
+**Pass 1: Window index construction**
+
+For each edge, iterate ALL simulated people across ALL days (including
+burn-in). For each person who reached the from-node:
+
+1. Compute `abs_from_day = sim_day_offset + floor(from_node_arrival_time)`
+   — the absolute calendar day they arrived at the from-node.
+2. If they traversed this edge, record the offset:
+   `edge_offset = to_node_arrival - from_node_arrival`.
+3. Group by `(edge_id, abs_from_day)`.
+
+This produces a **window index**: for each edge and each calendar day,
+the list of people who arrived at the from-node on that day, with their
+conversion offsets (or None if they didn't convert).
+
+**Critical**: window rows mix people from different anchor-entry days.
+Someone who entered the anchor on day 5 and took 3 days to reach a
+deep from-node appears in the window index at day 8, alongside someone
+who entered on day 7 and took 1 day. This cross-day mixing is exactly
+what Amplitude's window mode does.
+
+**Pass 2: Cohort observation emission**
+
+For each fetch night t, for each observable anchor day d:
+- `retrieval_age = t - d`
+- For each edge:
+  - `x` = count of people from sim day d who reached from_node by age
+  - `y` = count who traversed this edge by age
+  - `a` = n_people(d) (anchor entrants)
+  - Emit cohort row with `anchor_day = d`
+
+Cohort rows group by simulation day = anchor entry day. No cross-day mixing.
+
+**Pass 3: Window observation emission**
+
+For each fetch night t, for each edge:
+- For each `abs_from_day` in the window index (within observable window):
+  - `w_age = t - abs_from_day`
+  - `x` = total people who reached from-node on this day
+  - `y` = count whose conversion offset ≤ w_age (via bisect)
+  - Emit window row with `anchor_day = abs_from_day`
+
+### 5.4 Lag statistics (empirical, not theoretical)
+
+Each DB row carries lag stats derived from **actual simulated arrivals**:
+
+- `median_lag_days`, `mean_lag_days`: edge-level lag (to_arrival - from_arrival)
+  for converters. Computed per-day from the simulation.
+- `anchor_median_lag_days`, `anchor_mean_lag_days`: **A→X lag only** — time
+  from anchor entry to from-node arrival. NOT anchor to to-node (see
+  `SNAPSHOT_FIELD_SEMANTICS.md` §2 for why this matters).
+- `onset_delta_days`: edge-level onset from truth config (matching what the
+  FE would derive from Amplitude's lag histogram).
+
+Parameter files carry these as **per-day lists** (one value per date),
+matching the real Amplitude fetch output shape.
 
 ### 5.3 File params generation (cold start)
 

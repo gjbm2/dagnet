@@ -535,6 +535,11 @@ export class GraphComputeClient {
               entry.bayesBandUpper = r.model_curve_bayes_band_upper;
               entry.bayesBandLower = r.model_curve_bayes_band_lower;
             }
+            // Method B comparison curve (old onset approach)
+            if (r?.model_curve_method_b && Array.isArray(r.model_curve_method_b) && r.model_curve_method_b.length > 0) {
+              entry.methodBCurve = r.model_curve_method_b;
+              entry.methodBParams = r.model_curve_method_b_params || {};
+            }
             modelCurveBySubject.set(b.subject_id, entry);
           }
         }
@@ -592,12 +597,15 @@ export class GraphComputeClient {
         const tauFutureMax = (B && anchorFromIso) ? Math.max(0, dayDiffUTC(B, anchorFromIso) ?? 0) : 0;
 
         const tauMax = (() => {
-          const v = axisMode === 'window' ? latency.t95Days : latency.pathT95Days;
-          if (typeof v === 'number' && Number.isFinite(v) && v > 0) return Math.floor(v);
+          // Use the date-span as the hard upper bound (the actual data range).
+          // Latency t95/path_t95 from the FE graph may be stale if the graph
+          // hasn't been reloaded; the date-span is always authoritative.
           if (B && anchorFromIso) {
             const span = dayDiffUTC(B, anchorFromIso);
             if (span !== null && Number.isFinite(span) && span >= 0) return Math.floor(span);
           }
+          const v = axisMode === 'window' ? latency.t95Days : latency.pathT95Days;
+          if (typeof v === 'number' && Number.isFinite(v) && v > 0) return Math.floor(v);
           return 0;
         })();
 
@@ -615,22 +623,40 @@ export class GraphComputeClient {
         const buckets = new Map<number, TauBucket>();
 
         // Collect all detailed points for this scenario+subject.
-        const points = Array.from(cohortPointsByKey.values()).filter((r: any) =>
+        const allPoints = Array.from(cohortPointsByKey.values());
+        const points = allPoints.filter((r: any) =>
           String(r?.scenario_id) === String(scenarioId) && String(r?.subject_id) === String(subjectId)
         );
+
+        // DEV diagnostic — remove after synth debugging
+        if (allPoints.length > 0 && points.length === 0) {
+          const sample = allPoints[0];
+          console.warn('[CohortMaturity] 0 points after scenario+subject filter', {
+            scenarioId, subjectId, allPointsCount: allPoints.length,
+            sampleScenarioId: sample?.scenario_id, sampleSubjectId: sample?.subject_id,
+          });
+        }
+        // DEV diagnostic counters
+        let _skipNoDate = 0, _skipTau = 0, _skipX = 0, _accepted = 0;
+        console.log('[CohortMaturity] tau aggregation', {
+          scenarioId, subjectId, pointsCount: points.length, tauMax,
+          latencyT95: latency.t95Days, latencyPathT95: latency.pathT95Days, axisMode, B,
+          sample0: points[0] ? { as_at_date: points[0].as_at_date, anchor_day: points[0].anchor_day, x: points[0].x, y: points[0].y } : null,
+        });
 
         for (const p of points) {
           const asAt = String(p?.as_at_date || '').slice(0, 10);
           const ad = String(p?.anchor_day || '').slice(0, 10);
-          if (!asAt || !ad) continue;
+          if (!asAt || !ad) { _skipNoDate++; continue; }
 
           const tau = dayDiffUTC(asAt, ad);
-          if (tau === null || !Number.isFinite(tau) || tau < 0 || tau > tauMax) continue;
+          if (tau === null || !Number.isFinite(tau) || tau < 0 || tau > tauMax) { _skipTau++; continue; }
 
           const y = p?.y === null || p?.y === undefined ? null : Number(p.y);
           const x = p?.x === null || p?.x === undefined ? null : Number(p.x);
           const projY = p?.projected_y === null || p?.projected_y === undefined ? null : Number(p.projected_y);
-          if (x === null || !Number.isFinite(x) || x <= 0) continue;
+          if (x === null || !Number.isFinite(x) || x <= 0) { _skipX++; continue; }
+          _accepted++;
 
           let b = buckets.get(tau);
           if (!b) { b = { sumY: 0, sumX: 0, sumProjY: 0, sumProjX: 0, count: 0, projCount: 0 }; buckets.set(tau, b); }
@@ -646,6 +672,11 @@ export class GraphComputeClient {
             b.projCount += 1;
           }
         }
+
+        console.log('[CohortMaturity] bucket result', {
+          subjectId, accepted: _accepted, skipNoDate: _skipNoDate, skipTau: _skipTau, skipX: _skipX,
+          bucketCount: buckets.size, tauMax,
+        });
 
         // Emit one row per τ that has data.
         for (const [tau, b] of Array.from(buckets.entries()).sort((a, c) => a[0] - c[0])) {

@@ -463,14 +463,22 @@ export async function mapFetchPlanToSnapshotSubjects(args: {
     // If plan item has no querySignature (e.g. simulation graph where no fetch
     // has occurred), try to resolve it from the parameter file's query_signature
     // field. This allows pre-populated synthetic data to be analysed.
+    // Prefer cohort signature for cohort-mode analyses, window otherwise.
     if (!item.querySignature) {
       try {
         const { fileRegistry } = await import('../contexts/TabContext');
         const pf = fileRegistry.getFile(`parameter-${item.objectId}`) as any;
         const values: any[] = Array.isArray(pf?.data?.values) ? pf.data.values : [];
-        const withSig = values.find((v: any) => typeof v?.query_signature === 'string' && v.query_signature.trim());
-        if (withSig) {
-          (item as any).querySignature = withSig.query_signature;
+        const withSig = values.filter((v: any) => typeof v?.query_signature === 'string' && v.query_signature.trim());
+        if (withSig.length > 0) {
+          // If the query DSL is cohort-mode, prefer a cohort values[] entry
+          const isCohortQuery = queryDsl.includes('cohort(');
+          const preferred = withSig.find((v: any) =>
+            isCohortQuery
+              ? (v.sliceDSL || '').startsWith('cohort(')
+              : (v.sliceDSL || '').startsWith('window(')
+          ) || withSig[0];
+          (item as any).querySignature = preferred.query_signature;
         }
       } catch { /* ignore — fall through to skip */ }
     }

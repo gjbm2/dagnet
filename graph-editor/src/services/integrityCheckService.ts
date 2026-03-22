@@ -2030,6 +2030,31 @@ export class IntegrityCheckService {
         }
       }
 
+      // #5: Fetchable edges missing cohort_anchor_event_id — cohort analysis will fail.
+      // The FE derives the cohort anchor from this field; without it, snapshot
+      // queries for cohort-mode analyses cannot resolve the anchor event.
+      if (fetchableEdges.length > 0) {
+        const startNode = nodes.find((n: any) => n.entry?.is_start);
+        const startEventId = startNode?.event_id;
+        if (startEventId) {
+          for (const e of fetchableEdges) {
+            if (!e.p?.cohort_anchor_event_id) {
+              const edgeLabel = e.p?.id || e.uuid?.substring(0, 8) || '?';
+              issues.push({
+                fileId: graphFileId,
+                type: 'graph',
+                severity: 'warning',
+                category: 'semantic',
+                field: `edges[].p.cohort_anchor_event_id`,
+                message: `Edge "${edgeLabel}" missing cohort_anchor_event_id — cohort analysis will fail for this edge`,
+                suggestion: `Set p.cohort_anchor_event_id to "${startEventId}" (the start node\'s event)`,
+                edgeUuid: e.uuid
+              });
+            }
+          }
+        }
+      }
+
       // #8: Outgoing edge probabilities sum > 1.0
       let sumP = 0;
       let hasProbabilities = false;

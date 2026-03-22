@@ -185,6 +185,34 @@ export default defineConfig(({ mode }) => {
                       return;
                     }
 
+                    // Analysis compute roundtrip dumps (one JSON per compute)
+                    if (req.url === '/__dagnet/analysis-dump') {
+                      let body = '';
+                      req.setEncoding('utf8');
+                      req.on('data', (chunk: string) => { body += chunk; if (body.length > 20_000_000) { res.statusCode = 413; res.end('too large'); req.destroy(); } });
+                      req.on('end', () => {
+                        try {
+                          const parsed = JSON.parse(body || '{}');
+                          const dumpDir = path.resolve(__dirname, '..', 'debug', 'analysis-dumps');
+                          fs.mkdirSync(dumpDir, { recursive: true });
+                          const ts = Date.now();
+                          const atype = typeof parsed?.analysisType === 'string'
+                            ? parsed.analysisType.replace(/[^a-z0-9_-]/gi, '').slice(0, 30) : 'unknown';
+                          const dsl = typeof parsed?.analyticsDsl === 'string'
+                            ? parsed.analyticsDsl.replace(/[^a-zA-Z0-9()-]/g, '_').slice(0, 50) : '';
+                          const outPath = path.join(dumpDir, `${ts}_${atype}_${dsl}.json`);
+                          fs.writeFileSync(outPath, JSON.stringify(parsed, null, 2), 'utf8');
+                          res.statusCode = 200;
+                          res.setHeader('content-type', 'application/json');
+                          res.end(JSON.stringify({ ok: true, path: outPath }));
+                        } catch (err: any) {
+                          res.statusCode = 400;
+                          res.end(`bad request: ${err?.message || String(err)}`);
+                        }
+                      });
+                      return;
+                    }
+
                     // Console/session streams (JSONL)
                     if (req.url !== endpoint) return next();
 
