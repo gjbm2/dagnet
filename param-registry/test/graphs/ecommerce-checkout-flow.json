@@ -543,16 +543,17 @@
       "y": 600,
       "width": 560,
       "height": 350,
-      "view_mode": "chart",
-      "chart_kind": "funnel",
-      "mode": "live",
-      "title": "Checkout Funnel",
-      "recipe": {
-        "analysis": {
+      "content_items": [
+        {
+          "id": "ci000000-0001-4000-8000-000000000001",
           "analysis_type": "conversion_funnel",
-          "analytics_dsl": "from(landing-page).to(order-complete).visited(product-view).visited(checkout).visited(order-shipped).visited(order-delivered)"
+          "view_type": "chart",
+          "kind": "funnel",
+          "title": "Checkout Funnel",
+          "analytics_dsl": "from(landing-page).to(order-complete).visited(product-view).visited(checkout).visited(order-shipped).visited(order-delivered)",
+          "mode": "live"
         }
-      }
+      ]
     },
     {
       "id": "ca000000-0002-4000-8000-000000000002",
@@ -560,16 +561,17 @@
       "y": 600,
       "width": 480,
       "height": 350,
-      "view_mode": "chart",
-      "chart_kind": "bar_grouped",
-      "mode": "live",
-      "title": "Checkout Outcomes",
-      "recipe": {
-        "analysis": {
+      "content_items": [
+        {
+          "id": "ci000000-0002-4000-8000-000000000002",
           "analysis_type": "from_node_outcomes",
-          "analytics_dsl": "from(checkout)"
+          "view_type": "chart",
+          "kind": "bar_grouped",
+          "title": "Checkout Outcomes",
+          "analytics_dsl": "from(checkout)",
+          "mode": "live"
         }
-      }
+      ]
     },
     {
       "id": "ca000000-0003-4000-8000-000000000003",
@@ -577,33 +579,34 @@
       "y": 1000,
       "width": 560,
       "height": 350,
-      "view_mode": "chart",
-      "chart_kind": "bridge",
-      "mode": "fixed",
-      "title": "Order Reach: Classic vs Quick Cart",
-      "recipe": {
-        "analysis": {
+      "content_items": [
+        {
+          "id": "ci000000-0003-4000-8000-000000000003",
           "analysis_type": "bridge_view",
+          "view_type": "chart",
+          "kind": "bridge",
+          "title": "Order Reach: Classic vs Quick Cart",
           "analytics_dsl": "to(order-complete)",
-          "what_if_dsl": "case(cart-experience-test:quick)"
-        },
-        "scenarios": [
-          {
-            "scenario_id": "base",
-            "name": "Classic (50%) + Quick (50%)",
-            "effective_dsl": "",
-            "colour": "#6b7280",
-            "visibility_mode": "f+e"
-          },
-          {
-            "scenario_id": "current",
-            "name": "Quick Cart (100%)",
-            "effective_dsl": "",
-            "colour": "#10b981",
-            "visibility_mode": "f+e"
-          }
-        ]
-      }
+          "what_if_dsl": "case(cart-experience-test:quick)",
+          "mode": "fixed",
+          "scenarios": [
+            {
+              "scenario_id": "base",
+              "name": "Classic (50%) + Quick (50%)",
+              "effective_dsl": "",
+              "colour": "#6b7280",
+              "visibility_mode": "f+e"
+            },
+            {
+              "scenario_id": "current",
+              "name": "Quick Cart (100%)",
+              "effective_dsl": "",
+              "colour": "#10b981",
+              "visibility_mode": "f+e"
+            }
+          ]
+        }
+      ]
     }
   ]
 }

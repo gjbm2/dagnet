@@ -1,104 +1,138 @@
 /**
- * canvasAnalysisAccessors — bridge between flat CanvasAnalysis fields and
- * the container/content-item model.
+ * canvasAnalysisAccessors — content item accessors and legacy migration.
  *
- * During the migration period, CanvasAnalysis objects may have content_items
- * populated (new model) or only flat fields (legacy). These accessors
- * normalise both shapes so consumers always see content_items.
+ * Content items are the unit of authority. The container (CanvasAnalysis)
+ * owns only placement (x, y, width, height) and the tab list (content_items).
  *
- * See: docs/current/project-canvas/7-container-content-split.md
+ * normaliseCanvasAnalysis handles legacy graphs where flat fields lived on
+ * the container. On load, it moves everything into content_items and strips
+ * the container.
  */
 
 import type { CanvasAnalysis, ContentItem, CanvasAnalysisDisplay } from '../types';
+import type { ChartDefinition } from '../types/chartRecipe';
 import type { AnalysisResult } from '../lib/graphComputeClient';
 import { getAnalyticsDsl } from '../types/chartRecipe';
 import { parseDSL } from '../lib/queryDSL';
 
 /**
- * Get the active content item for a canvas analysis.
- *
- * If content_items is populated, returns the first item.
- * Otherwise, synthesises one from the flat fields (legacy migration).
+ * Get the first content item (default tab).
+ * Content items are always populated after normalisation.
  */
 export function getActiveContentItem(analysis: CanvasAnalysis): ContentItem {
-  if (analysis.content_items && analysis.content_items.length > 0) {
-    return analysis.content_items[0];
-  }
-  // Legacy: synthesise from flat fields (including DSL migration)
+  return analysis.content_items[0];
+}
+
+/**
+ * Get all content items.
+ */
+export function getContentItems(analysis: CanvasAnalysis): ContentItem[] {
+  return analysis.content_items;
+}
+
+/**
+ * Get the analytics DSL from the first content item.
+ */
+export function getContainerDsl(analysis: CanvasAnalysis): string | undefined {
+  return analysis.content_items[0]?.analytics_dsl;
+}
+
+/**
+ * Build a ChartDefinition from a ContentItem.
+ * Used by "Open as Tab" and share link construction.
+ */
+export function contentItemToChartDefinition(ci: ContentItem): ChartDefinition {
   return {
-    id: `${analysis.id}-content-0`,
-    analysis_type: analysis.recipe?.analysis?.analysis_type ?? '',
-    view_type: analysis.view_mode ?? 'chart',
-    kind: analysis.chart_kind,
-    display: analysis.display,
-    title: analysis.title,
-    analysis_type_overridden: analysis.analysis_type_overridden,
-    analytics_dsl: getAnalyticsDsl(analysis.recipe?.analysis),
-    chart_current_layer_dsl: analysis.chart_current_layer_dsl,
+    title: ci.title,
+    view_mode: ci.view_type,
+    chart_kind: ci.kind,
+    display: ci.display as Record<string, unknown> | undefined,
+    recipe: {
+      analysis: {
+        analysis_type: ci.analysis_type,
+        analytics_dsl: ci.analytics_dsl,
+        what_if_dsl: ci.what_if_dsl,
+      },
+      scenarios: ci.scenarios,
+    },
   };
 }
 
 /**
- * Get all content items for a canvas analysis.
+ * Normalise a CanvasAnalysis in-place on graph load.
  *
- * If content_items is populated, returns them.
- * Otherwise, synthesises a single item from flat fields.
- */
-export function getContentItems(analysis: CanvasAnalysis): ContentItem[] {
-  if (analysis.content_items && analysis.content_items.length > 0) {
-    // Backfill DSL from container level if missing (legacy migration)
-    const containerDsl = getAnalyticsDsl(analysis.recipe?.analysis);
-    const containerLayerDsl = analysis.chart_current_layer_dsl;
-    for (const ci of analysis.content_items) {
-      if (!ci.analytics_dsl && containerDsl) ci.analytics_dsl = containerDsl;
-      if (!ci.chart_current_layer_dsl && containerLayerDsl) ci.chart_current_layer_dsl = containerLayerDsl;
-    }
-    return analysis.content_items;
-  }
-  return [getActiveContentItem(analysis)];
-}
-
-/**
- * Get the analytics DSL from a canvas analysis's active content item.
- * Falls back to container-level recipe.analysis.analytics_dsl for legacy data.
- */
-export function getContainerDsl(analysis: CanvasAnalysis): string | undefined {
-  const active = getActiveContentItem(analysis);
-  return active.analytics_dsl || getAnalyticsDsl(analysis.recipe?.analysis);
-}
-
-/**
- * Normalise a CanvasAnalysis in-place, ensuring content_items is populated.
- * Used during graph load/migration to upgrade legacy flat objects.
+ * Migrates legacy flat fields (recipe, mode, view_mode, chart_kind, etc.)
+ * from the container into content_items, then strips them from the container.
  *
- * Returns the same object (mutated) for convenience in map() chains.
+ * After normalisation, the container has ONLY id, x, y, width, height, content_items.
  */
 export function normaliseCanvasAnalysis(analysis: CanvasAnalysis): CanvasAnalysis {
+  const legacy = analysis as any;
+
+  // Step 1: ensure content_items exists
   if (!analysis.content_items || analysis.content_items.length === 0) {
-    analysis.content_items = [getActiveContentItem(analysis)];
-  } else {
-    // Backfill DSL onto content items that lack it (migration from container-level DSL)
-    const containerDsl = getAnalyticsDsl(analysis.recipe?.analysis);
-    const containerLayerDsl = analysis.chart_current_layer_dsl;
-    for (const ci of analysis.content_items) {
-      if (!ci.analytics_dsl && containerDsl) ci.analytics_dsl = containerDsl;
-      if (!ci.chart_current_layer_dsl && containerLayerDsl) ci.chart_current_layer_dsl = containerLayerDsl;
-    }
+    // Synthesise a single content item from legacy container flat fields
+    analysis.content_items = [{
+      id: `${analysis.id}-content-0`,
+      analysis_type: legacy.recipe?.analysis?.analysis_type ?? '',
+      view_type: legacy.view_mode ?? 'chart',
+      kind: legacy.chart_kind,
+      display: legacy.display,
+      title: legacy.title,
+      analysis_type_overridden: legacy.analysis_type_overridden,
+      analytics_dsl: getAnalyticsDsl(legacy.recipe?.analysis),
+      chart_current_layer_dsl: legacy.chart_current_layer_dsl,
+      mode: legacy.mode ?? 'live',
+      scenarios: legacy.recipe?.scenarios,
+      what_if_dsl: legacy.recipe?.analysis?.what_if_dsl,
+    }];
   }
-  // Migrate legacy chart_kind / facet → kind on content items
-  for (const ci of analysis.content_items) {
-    const legacy = ci as any;
-    const hadFacet = !!legacy.facet;
-    if (!ci.kind && (legacy.chart_kind || legacy.facet)) {
-      ci.kind = legacy.facet || legacy.chart_kind;
+
+  // Step 2: migrate per-item legacy fields and backfill defaults
+  const containerDsl = getAnalyticsDsl(legacy.recipe?.analysis);
+  const containerLayerDsl = legacy.chart_current_layer_dsl;
+  for (let i = 0; i < analysis.content_items.length; i++) {
+    const ci = analysis.content_items[i];
+    const ciLegacy = ci as any;
+
+    // Backfill DSL from container if missing
+    if (!ci.analytics_dsl && containerDsl) ci.analytics_dsl = containerDsl;
+    if (!ci.chart_current_layer_dsl && containerLayerDsl) ci.chart_current_layer_dsl = containerLayerDsl;
+
+    // Migrate chart_kind / facet → kind
+    const hadFacet = !!ciLegacy.facet;
+    if (!ci.kind && (ciLegacy.chart_kind || ciLegacy.facet)) {
+      ci.kind = ciLegacy.facet || ciLegacy.chart_kind;
     }
-    // Items that had a facet were card views, not chart views
     if (hadFacet && ci.view_type === 'chart') {
       ci.view_type = 'cards';
     }
-    delete legacy.chart_kind;
-    delete legacy.facet;
+    delete ciLegacy.chart_kind;
+    delete ciLegacy.facet;
+
+    // Ensure mode is set (default live)
+    if (!ci.mode) ci.mode = 'live';
+
+    // Copy container scenarios to content_items[0] only (if not already set)
+    if (i === 0 && !ci.scenarios && legacy.recipe?.scenarios) {
+      ci.scenarios = legacy.recipe.scenarios;
+      ci.what_if_dsl = ci.what_if_dsl ?? legacy.recipe?.analysis?.what_if_dsl;
+    }
+    if (i === 0 && legacy.mode && ci.mode === 'live') {
+      ci.mode = legacy.mode;
+    }
   }
+
+  // Step 3: strip ALL legacy flat fields from container
+  delete legacy.recipe;
+  delete legacy.mode;
+  delete legacy.view_mode;
+  delete legacy.chart_kind;
+  delete legacy.title;
+  delete legacy.display;
+  delete legacy.chart_current_layer_dsl;
+  delete legacy.analysis_type_overridden;
+
   return analysis;
 }
 
@@ -227,12 +261,8 @@ export function buildPinDragData(input: PinDragDataInput) {
   return {
     type: 'dagnet-drag' as const,
     objectType: 'canvas-analysis' as const,
-    recipe: {
-      analysis: {
-        analysis_type: analysisType,
-        analytics_dsl: dsl,
-      },
-    },
+    analysisType,
+    analyticsDsl: dsl,
     viewMode: 'chart' as const,
     chartKind,
     title: title || analysisType,

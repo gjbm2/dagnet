@@ -705,10 +705,10 @@ export async function getParameterFromFile(options: {
         
         // For MECE aggregation, use ALL values (already filtered above)
         // For contextAny/specific slice queries, isolate to target slice
-        const valuesWithDaily = isMECEAggregation 
+        const valuesWithDaily = isMECEAggregation
           ? allValuesWithDaily  // MECE: use all values, they'll be summed
           : isolateSlice(allValuesWithDaily, targetSlice);  // contextAny or specific slice
-        
+
         markTime('beforeSignatureValidation');
         if (valuesWithDaily.length > 0) {
           try {

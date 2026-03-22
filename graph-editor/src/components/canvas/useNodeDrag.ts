@@ -204,8 +204,8 @@ export function useNodeDrag({
           const sourceAnalysis = graph?.canvasAnalyses?.find((a: any) => a.id === draggedAnalysisIdRef.current);
           let previewItem = sourceAnalysis?.content_items?.[0];
           // Ensure preview item carries DSL (backfill from container if legacy)
-          if (previewItem && !previewItem.analytics_dsl && sourceAnalysis?.recipe?.analysis?.analytics_dsl) {
-            previewItem = { ...previewItem, analytics_dsl: sourceAnalysis.recipe.analysis.analytics_dsl };
+          if (previewItem && !previewItem.analytics_dsl && sourceAnalysis?.content_items?.[0]?.analytics_dsl) {
+            previewItem = { ...previewItem, analytics_dsl: sourceAnalysis.content_items[0].analytics_dsl };
           }
           if (previewItem) {
             // Pass cached result so the target can render real chart content
@@ -219,9 +219,10 @@ export function useNodeDrag({
             }));
           }
         }
-        // Hide/show dragged node via direct DOM (avoids React re-render cascade)
+        // Hide/show dragged node via direct DOM (avoids React re-render cascade).
+        // Use visibility (not opacity) because .selected has opacity: 1 !important.
         const nodeEl = document.querySelector(`[data-id="${draggedNode.id}"]`) as HTMLElement | null;
-        if (nodeEl) nodeEl.style.opacity = bestTarget ? '0' : '1';
+        if (nodeEl) nodeEl.style.visibility = bestTarget ? 'hidden' : '';
       }
     }
 
@@ -275,9 +276,9 @@ export function useNodeDrag({
         detail: { sourceAnalysisId: sourceId, targetAnalysisId: targetId },
       }));
     } else if (draggedNodeId) {
-      // No merge — restore opacity on the dragged node in case it was hidden
+      // No merge — restore visibility on the dragged node in case it was hidden
       const nodeEl = document.querySelector(`[data-id="${draggedNodeId}"]`) as HTMLElement | null;
-      if (nodeEl) nodeEl.style.opacity = '1';
+      if (nodeEl) nodeEl.style.visibility = '';
     }
     mergeTargetRef.current = null;
     draggedAnalysisIdRef.current = null;

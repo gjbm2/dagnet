@@ -1,26 +1,25 @@
 import type { GraphData, CanvasAnalysis, CanvasAnalysisMode, ContentItem } from '../types';
 import type { ChartRecipeScenario } from '../types/chartRecipe';
 import { computeRebaseDelta, augmentDSLWithConstraint, normalizeConstraintString } from '../lib/queryDSL';
+import { getAnalysisTypeMeta } from '../components/panels/analysisTypes';
 
-/**
- * After a mutator runs, sync flat fields to content_items[0] so both
- * representations stay consistent during the migration period.
- *
- * Only applies to single-tab containers where the container-level flat fields
- * ARE the tab's fields. Multi-tab containers have per-item authority — each
- * content item owns its own title, analysis_type, view_type, etc.
- */
-function syncFlatFieldsToContentItems(analysis: CanvasAnalysis): void {
-  if (!analysis.content_items || analysis.content_items.length !== 1) return;
-  const item = analysis.content_items[0];
-  item.analysis_type = analysis.recipe?.analysis?.analysis_type ?? item.analysis_type;
-  item.view_type = analysis.view_mode ?? item.view_type;
-  item.kind = analysis.chart_kind;
-  item.display = analysis.display;
-  item.title = analysis.title;
-  item.analysis_type_overridden = analysis.analysis_type_overridden;
+/** Strip legacy flat fields from a container after clone/mutation.
+ *  These may linger in in-memory graphs that haven't been re-normalised. */
+function stripLegacyContainerFields(analysis: any): void {
+  delete analysis.recipe;
+  delete analysis.mode;
+  delete analysis.view_mode;
+  delete analysis.chart_kind;
+  delete analysis.title;
+  delete analysis.display;
+  delete analysis.chart_current_layer_dsl;
+  delete analysis.analysis_type_overridden;
 }
 
+/**
+ * Mutate a canvas analysis container (placement, content_items array).
+ * For mutating individual content items, use mutateContentItem.
+ */
 export function mutateCanvasAnalysisGraph(
   graph: GraphData | null | undefined,
   analysisId: string,
@@ -30,10 +29,61 @@ export function mutateCanvasAnalysisGraph(
   const nextGraph = structuredClone(graph) as GraphData;
   const analysis = nextGraph.canvasAnalyses?.find((a: any) => a.id === analysisId) as CanvasAnalysis | undefined;
   if (!analysis) return null;
+  stripLegacyContainerFields(analysis);
   mutator(analysis, nextGraph);
-  syncFlatFieldsToContentItems(analysis);
   if (nextGraph.metadata) nextGraph.metadata.updated_at = new Date().toISOString();
   return nextGraph;
+}
+
+/**
+ * Mutate a specific content item within a canvas analysis.
+ * Clones the graph, finds the analysis and content item, runs the mutator.
+ */
+export function mutateContentItem(
+  graph: GraphData | null | undefined,
+  analysisId: string,
+  contentItemIndex: number,
+  mutator: (ci: ContentItem, analysis: CanvasAnalysis) => void
+): GraphData | null {
+  if (!graph) return null;
+  const nextGraph = structuredClone(graph) as GraphData;
+  const analysis = nextGraph.canvasAnalyses?.find((a: any) => a.id === analysisId) as CanvasAnalysis | undefined;
+  if (!analysis) return null;
+  stripLegacyContainerFields(analysis);
+  const ci = analysis.content_items[contentItemIndex];
+  if (!ci) return null;
+  mutator(ci, analysis);
+  if (nextGraph.metadata) nextGraph.metadata.updated_at = new Date().toISOString();
+  return nextGraph;
+}
+
+/**
+ * Get the human-readable title for an analysis type ID.
+ * Uses the ANALYSIS_TYPES registry, with humanisation fallback for unknown types.
+ */
+export function humaniseAnalysisType(analysisTypeId: string): string {
+  const meta = getAnalysisTypeMeta(analysisTypeId);
+  return meta?.name || analysisTypeId.replace(/[_-]/g, ' ').replace(/\b\w/g, (c: string) => c.toUpperCase());
+}
+
+/**
+ * Change a content item's analysis type.
+ * Sets analysis_type, title (from registry), analysis_type_overridden, and clears kind.
+ * This is the ONE function all code paths must use when changing type.
+ */
+export function setContentItemAnalysisType(
+  graph: GraphData | null | undefined,
+  analysisId: string,
+  contentItemIndex: number,
+  analysisTypeId: string,
+): GraphData | null {
+  const title = humaniseAnalysisType(analysisTypeId);
+  return mutateContentItem(graph, analysisId, contentItemIndex, (ci) => {
+    ci.analysis_type = analysisTypeId;
+    ci.title = title;
+    ci.analysis_type_overridden = true;
+    ci.kind = undefined;
+  });
 }
 
 export function deleteCanvasAnalysisFromGraph(
@@ -74,13 +124,22 @@ export function nextMode(mode: CanvasAnalysisMode): CanvasAnalysisMode {
  * @param currentDSL - The live base DSL from the active tab
  * @param captured - Captured tab scenarios (only needed for Live→Custom)
  */
+/**
+ * Advance a content item one step through the tristate cycle.
+ * Mutates the content item in place (caller should pass a clone via mutateContentItem).
+ *
+ * Transitions:
+ * - Live → Custom: takes captured scenarios, rebases to deltas
+ * - Custom → Fixed: bakes deltas into absolutes
+ * - Fixed → Live: clears scenarios and what_if_dsl
+ */
 export function advanceMode(
-  analysis: CanvasAnalysis,
+  ci: ContentItem,
   currentDSL: string,
   captured: { scenarios: ChartRecipeScenario[]; what_if_dsl?: string } | null,
   currentColour?: string,
 ): void {
-  switch (analysis.mode) {
+  switch (ci.mode) {
     case 'live': {
       if (!captured) return;
       const base = currentDSL || '';
@@ -89,50 +148,35 @@ export function advanceMode(
         const delta = computeRebaseDelta(base, absoluteDsl);
         return { ...s, effective_dsl: delta || undefined, is_live: false };
       });
-      // Promote 'current' to a visible "No overrides" copy (bucket B) and
-      // keep the original as a hidden underlayer (bucket C, kind:'current').
       const currentIdx = rebasedScenarios.findIndex((s) => s.scenario_id === 'current');
       if (currentIdx >= 0) {
         const orig = rebasedScenarios[currentIdx];
-        const copy = {
-          ...orig,
-          scenario_id: 'no-overrides',
-          name: 'No overrides',
-        };
-        // Replace original with copy at the same position (bucket B).
-        // Move original to end of list (bucket C — hidden underlayer).
+        const copy = { ...orig, scenario_id: 'no-overrides', name: 'No overrides' };
         rebasedScenarios.splice(currentIdx, 1, copy);
         rebasedScenarios.push(orig);
       }
 
-      analysis.mode = 'custom';
-      analysis.recipe = {
-        ...analysis.recipe,
-        scenarios: rebasedScenarios,
-        analysis: { ...analysis.recipe.analysis, what_if_dsl: captured.what_if_dsl },
-      };
+      ci.mode = 'custom';
+      ci.scenarios = rebasedScenarios;
+      ci.what_if_dsl = captured.what_if_dsl;
 
-      // Hide the 'current' underlayer by default — it's the base reference
-      // (bucket C). Users can unhide it to use as a comparison scenario.
-      if (!analysis.display) analysis.display = {};
-      const hidden = Array.isArray((analysis.display as any).hidden_scenarios)
-        ? [...(analysis.display as any).hidden_scenarios]
+      if (!ci.display) ci.display = {} as any;
+      const hidden = Array.isArray((ci.display as any).hidden_scenarios)
+        ? [...(ci.display as any).hidden_scenarios]
         : [];
       if (!hidden.includes('current')) hidden.push('current');
-      (analysis.display as any).hidden_scenarios = hidden;
+      (ci.display as any).hidden_scenarios = hidden;
       break;
     }
 
     case 'custom': {
       const base = currentDSL || '';
       const hiddenIds = new Set<string>(
-        Array.isArray((analysis.display as any)?.hidden_scenarios)
-          ? (analysis.display as any).hidden_scenarios
+        Array.isArray((ci.display as any)?.hidden_scenarios)
+          ? (ci.display as any).hidden_scenarios
           : [],
       );
-      // Only visible scenarios carry over into Fixed mode.
-      // If 'current' is visible, include it (baked to absolute) as the last scenario.
-      const allScenarios = analysis.recipe.scenarios || [];
+      const allScenarios = ci.scenarios || [];
       const visibleNonCurrent = allScenarios.filter(
         (s: ChartRecipeScenario) => s.scenario_id !== 'current' && !hiddenIds.has(s.scenario_id),
       );
@@ -142,7 +186,6 @@ export function advanceMode(
       const currentIsVisible = currentScenario && !hiddenIds.has('current');
       const scenariosToFixed = [...visibleNonCurrent];
       if (currentIsVisible) {
-        // Stamp the live displayed colour so Fixed mode preserves it
         const stamped = currentColour
           ? { ...currentScenario, colour: currentColour }
           : currentScenario;
@@ -156,25 +199,20 @@ export function advanceMode(
           : normalizeConstraintString(base);
         return { ...s, effective_dsl: absolute || undefined, is_live: false };
       });
-      analysis.mode = 'fixed';
-      analysis.recipe = { ...analysis.recipe, scenarios: bakedScenarios };
-      // Clear hidden_scenarios — fixed mode has no hidden layers
-      if (analysis.display) {
-        (analysis.display as any).hidden_scenarios = undefined;
+      ci.mode = 'fixed';
+      ci.scenarios = bakedScenarios;
+      if (ci.display) {
+        (ci.display as any).hidden_scenarios = undefined;
       }
       break;
     }
 
     case 'fixed': {
-      analysis.mode = 'live';
-      analysis.recipe = {
-        ...analysis.recipe,
-        scenarios: undefined,
-        analysis: { ...analysis.recipe.analysis, what_if_dsl: undefined },
-      };
-      // Clear hidden_scenarios — no residual visibility state from custom/fixed
-      if (analysis.display) {
-        (analysis.display as any).hidden_scenarios = undefined;
+      ci.mode = 'live';
+      ci.scenarios = undefined;
+      ci.what_if_dsl = undefined;
+      if (ci.display) {
+        (ci.display as any).hidden_scenarios = undefined;
       }
       break;
     }
@@ -206,6 +244,7 @@ export function addContentItem(analysis: CanvasAnalysis, preset?: Partial<Conten
   const newItem: ContentItem = {
     analysis_type: '',
     view_type: 'chart',
+    mode: 'live' as const,
     ...preset,
     id: crypto.randomUUID(), // always generate a fresh ID regardless of preset
   };
@@ -219,10 +258,12 @@ export function addContentItem(analysis: CanvasAnalysis, preset?: Partial<Conten
  */
 export function ensureContentItemDsl(analysis: CanvasAnalysis): void {
   if (!analysis.content_items) return;
-  const containerDsl = analysis.recipe?.analysis?.analytics_dsl;
-  const containerLayerDsl = analysis.chart_current_layer_dsl;
+  // Use the first content item's DSL as the canonical source for backfilling others
+  const firstCi = analysis.content_items[0];
+  const canonicalDsl = firstCi?.analytics_dsl;
+  const canonicalLayerDsl = firstCi?.chart_current_layer_dsl;
   for (const ci of analysis.content_items) {
-    if (!ci.analytics_dsl && containerDsl) ci.analytics_dsl = containerDsl;
-    if (!ci.chart_current_layer_dsl && containerLayerDsl) ci.chart_current_layer_dsl = containerLayerDsl;
+    if (!ci.analytics_dsl && canonicalDsl) ci.analytics_dsl = canonicalDsl;
+    if (!ci.chart_current_layer_dsl && canonicalLayerDsl) ci.chart_current_layer_dsl = canonicalLayerDsl;
   }
 }

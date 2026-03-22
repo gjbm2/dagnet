@@ -97,6 +97,8 @@ export interface CanvasAnalysisCardProps {
 
   /** Content area zoom style (for inverse-zoom in pinned mode). */
   contentZoomStyle?: React.CSSProperties;
+  /** Chrome (tab bar) zoom style — inverse zoom so always readable. */
+  chromeZoomStyle?: React.CSSProperties;
 
   /** Connector overlay colour — used to tint tab accents when subject overlay is active. */
   connectorColour?: string;
@@ -149,6 +151,7 @@ export function CanvasAnalysisCard({
   onTabOverlayColourChange,
   buildTabContextMenuItems,
   contentZoomStyle,
+  chromeZoomStyle,
   connectorColour,
   interactive = true,
   awaitingScenariosHydration,
@@ -156,8 +159,6 @@ export function CanvasAnalysisCard({
   className,
   style,
 }: CanvasAnalysisCardProps) {
-  const clampedIndex = Math.min(activeContentIndex, contentItems.length - 1);
-  const contentItem = contentItems[clampedIndex] || contentItems[0];
   const cardRef = useRef<HTMLDivElement>(null);
   const contentAreaRef = useRef<HTMLDivElement>(null);
   const tabBarRef = useRef<HTMLDivElement>(null);
@@ -205,20 +206,6 @@ export function CanvasAnalysisCard({
     };
   }, [analysisId]);
 
-  const showContentTabs = contentItems.length > 1 || !!previewItem;
-
-  // Auto-scroll tab bar to the end when preview appears or tabs grow
-  useEffect(() => {
-    if (showContentTabs && tabBarRef.current) {
-      // Use rAF to ensure the new tab is in the DOM before scrolling
-      requestAnimationFrame(() => {
-        if (tabBarRef.current) {
-          tabBarRef.current.scrollLeft = tabBarRef.current.scrollWidth;
-        }
-      });
-    }
-  }, [showContentTabs, contentItems.length, !!previewItem]);
-
   // --- Tab drag-out gesture ---
   const tabDragRef = useRef<{
     contentItem: ContentItem;
@@ -231,6 +218,24 @@ export function CanvasAnalysisCard({
   } | null>(null);
   const [tabDragGhost, setTabDragGhost] = useState<{ x: number; y: number; label: string; contentItem: ContentItem; width: number; height: number } | null>(null);
   const [tabDragOverTarget, setTabDragOverTarget] = useState<string | null>(null);
+  const [draggedTabId, setDraggedTabId] = useState<string | null>(null);
+  // During tab drag, filter out the dragged tab so it visually disappears from the source
+  const visibleItems = draggedTabId ? contentItems.filter(item => item.id !== draggedTabId) : contentItems;
+  const clampedIndex = Math.min(activeContentIndex, visibleItems.length - 1);
+  const contentItem = visibleItems[clampedIndex] || visibleItems[0];
+  const showContentTabs = visibleItems.length > 1 || !!previewItem;
+
+  // Auto-scroll tab bar to the end when preview appears or tabs grow
+  useEffect(() => {
+    if (showContentTabs && tabBarRef.current) {
+      requestAnimationFrame(() => {
+        if (tabBarRef.current) {
+          tabBarRef.current.scrollLeft = tabBarRef.current.scrollWidth;
+        }
+      });
+    }
+  }, [showContentTabs, visibleItems.length, !!previewItem]);
+
   const prevDragOverTargetRef = useRef<string | null>(null);
   const onTabDragCompleteRef = useRef(onTabDragComplete);
   onTabDragCompleteRef.current = onTabDragComplete;
@@ -257,15 +262,15 @@ export function CanvasAnalysisCard({
       const dist = Math.abs(e.clientX - drag.startX) + Math.abs(e.clientY - drag.startY);
       if (!drag.extracted && dist > EXTRACT_THRESHOLD) {
         drag.extracted = true;
-        // Capture card dimensions at extraction time — stable for the entire drag
         drag.width = cardRef.current?.offsetWidth || 400;
         drag.height = cardRef.current?.offsetHeight || 300;
+        setDraggedTabId(drag.contentItem.id);
         onTabDragActiveChangeRef.current?.(true);
-        // Highlight available dropzones (title bar / tab bar of other containers)
+        // Show connectors for the source analysis during tab drag
+        window.dispatchEvent(new CustomEvent('dagnet:analysisHover', { detail: { analysisId } }));
+        // Highlight available dropzones (ALL containers including source — drop back to cancel)
         document.querySelectorAll<HTMLElement>('[data-dropzone^="analysis-"]').forEach(el => {
-          if (el.getAttribute('data-dropzone') !== `analysis-${analysisId}`) {
-            el.classList.add('dropzone-highlight');
-          }
+          el.classList.add('dropzone-highlight');
         });
       }
       if (!drag.extracted) return;
@@ -279,7 +284,7 @@ export function CanvasAnalysisCard({
         const dz = (el as HTMLElement).closest?.('[data-dropzone^="analysis-"]');
         if (dz) {
           const aid = (dz.getAttribute('data-dropzone') || '').replace('analysis-', '');
-          if (aid !== analysisId) { targetId = aid; break; }
+          targetId = aid; break;
         }
       }
       setTabDragOverTarget(targetId);
@@ -320,13 +325,18 @@ export function CanvasAnalysisCard({
 
       setTabDragGhost(null);
       setTabDragOverTarget(null);
+      setDraggedTabId(null);
+      // Clear hover connectors from tab drag
+      window.dispatchEvent(new CustomEvent('dagnet:analysisHover', { detail: { analysisId: null } }));
       // Clear dropzone highlights
       document.querySelectorAll('.dropzone-highlight').forEach(el => el.classList.remove('dropzone-highlight'));
 
       if (drag.extracted) {
         onTabDragActiveChangeRef.current?.(false);
       }
-      if (drag.extracted && onTabDragCompleteRef.current) {
+      // Drop back on source = cancel (tab reappears via draggedTabId clearing above)
+      const isCancel = targetId === analysisId;
+      if (drag.extracted && onTabDragCompleteRef.current && !isCancel) {
         onTabDragCompleteRef.current({
           contentItem: drag.contentItem,
           label: drag.label,
@@ -437,9 +447,10 @@ export function CanvasAnalysisCard({
             overflowX: 'auto',
             overflowY: 'hidden',
             alignItems: 'stretch',
+            ...chromeZoomStyle,
           }}
           >
-            {contentItems.map((item, idx) => (
+            {visibleItems.map((item, idx) => (
               <div
                 key={item.id}
                 className="canvas-analysis-content-tab"

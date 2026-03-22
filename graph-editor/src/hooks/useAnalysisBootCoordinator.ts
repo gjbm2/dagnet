@@ -75,12 +75,13 @@ export function useAnalysisBootCoordinator(
     return analyses
       .filter(analysisNeedsSnapshots)
       .map(a => {
-        const type = a.recipe?.analysis?.analysis_type || '';
-        const dsl = a.content_items?.[0]?.analytics_dsl || a.recipe?.analysis?.analytics_dsl || '';
-        const scenarioDsls = (a.recipe?.scenarios || [])
+        const ci = a.content_items?.[0];
+        const type = ci?.analysis_type || '';
+        const dsl = ci?.analytics_dsl || '';
+        const scenarioDsls = (ci?.scenarios || [])
           .map((s: any) => s.effective_dsl || '')
           .join(',');
-        return `${a.id}:${type}:${a.chart_kind || ''}:${dsl}:${scenarioDsls}`;
+        return `${a.id}:${type}:${ci?.kind || ''}:${dsl}:${scenarioDsls}`;
       })
       .sort()
       .join('|');

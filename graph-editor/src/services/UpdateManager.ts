@@ -1144,7 +1144,7 @@ export class UpdateManager {
         fileData.parameter_type === 'conditional_probability';
 
       if (isProbType) {
-        const latestValue = fileData.values?.[fileData.values.length - 1];
+        const latestValue = getNestedValue(fileData, 'values[latest]');
         if (latestValue) {
           const entry: ModelVarsEntry = {
             source: 'analytic',

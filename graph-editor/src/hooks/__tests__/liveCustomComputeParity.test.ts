@@ -14,7 +14,7 @@ import { captureTabScenariosToRecipe } from '../../services/captureTabScenariosS
 import { buildGraphForAnalysisLayer } from '../../services/CompositionService';
 import { advanceMode } from '../../services/canvasAnalysisMutationService';
 import { augmentDSLWithConstraint, normalizeConstraintString } from '../../lib/queryDSL';
-import type { CanvasAnalysis } from '../../types';
+import type { ContentItem } from '../../types';
 
 vi.mock('../../services/CompositionService', () => ({
   buildGraphForAnalysisLayer: vi.fn(
@@ -339,18 +339,14 @@ describe('Live → Custom full transition parity (capture + advanceMode + custom
 
   const realisticCurrentDSL = 'window(-30d:)';
 
-  function makeLiveAnalysis(): CanvasAnalysis {
+  function makeLiveContentItem(): ContentItem {
     return {
-      id: 'ca-test',
+      id: 'ci-test',
+      analysis_type: 'pit',
+      view_type: 'chart',
+      analytics_dsl: 'pit_pull(start)',
       mode: 'live',
-      x: 0,
-      y: 0,
-      width: 400,
-      height: 300,
-      recipe: {
-        analysis: { analysis_type: 'pit', analytics_dsl: 'pit_pull(start)' },
-      },
-    } as CanvasAnalysis;
+    };
   }
 
   /**
@@ -358,10 +354,10 @@ describe('Live → Custom full transition parity (capture + advanceMode + custom
    * re-expand its delta DSL via augmentDSLWithConstraint(currentDSL, delta).
    */
   function computeCustomEffectiveDSLs(
-    analysis: CanvasAnalysis,
+    ci: ContentItem,
     baseDSL: string,
   ): Array<{ scenario_id: string; name: string; colour: string; visibility_mode: string; effective_dsl: string }> {
-    const customScenarios = analysis.recipe.scenarios || [];
+    const customScenarios = ci.scenarios || [];
     return customScenarios.map((s) => {
       const delta = s.effective_dsl || '';
       const absolute = delta
@@ -396,15 +392,15 @@ describe('Live → Custom full transition parity (capture + advanceMode + custom
     expect(captured.scenarios.map(s => s.scenario_id)).toEqual(expectedOrder);
 
     // Step 2: advanceMode (Live → Custom)
-    const analysis = makeLiveAnalysis();
-    advanceMode(analysis, realisticCurrentDSL, captured);
+    const ci = makeLiveContentItem();
+    advanceMode(ci, realisticCurrentDSL, captured);
 
-    expect(analysis.mode).toBe('custom');
+    expect(ci.mode).toBe('custom');
     // 'current' is replaced in-place by 'no-overrides' and moved to end (hidden underlayer)
     const expectedCustomOrder = expectedOrder
       .map(id => id === 'current' ? 'no-overrides' : id);
     expectedCustomOrder.push('current');
-    expect(analysis.recipe.scenarios!.map(s => s.scenario_id)).toEqual(expectedCustomOrder);
+    expect(ci.scenarios!.map(s => s.scenario_id)).toEqual(expectedCustomOrder);
   });
 
   it('should preserve colours, names, and visibility modes through the full transition', () => {
@@ -424,10 +420,10 @@ describe('Live → Custom full transition parity (capture + advanceMode + custom
       scenariosContext: realisticContext as any,
     });
 
-    const analysis = makeLiveAnalysis();
-    advanceMode(analysis, realisticCurrentDSL, captured);
+    const ci = makeLiveContentItem();
+    advanceMode(ci, realisticCurrentDSL, captured);
 
-    const customScenarios = analysis.recipe.scenarios!;
+    const customScenarios = ci.scenarios!;
 
     // Colours preserved exactly
     const noOverrides = customScenarios.find(s => s.scenario_id === 'sc-no-overrides');
@@ -466,11 +462,11 @@ describe('Live → Custom full transition parity (capture + advanceMode + custom
     }
 
     // advanceMode: absolute → delta
-    const analysis = makeLiveAnalysis();
-    advanceMode(analysis, realisticCurrentDSL, captured);
+    const ci = makeLiveContentItem();
+    advanceMode(ci, realisticCurrentDSL, captured);
 
     // Custom compute: delta → absolute (same as analysisComputePreparationService)
-    const customResults = computeCustomEffectiveDSLs(analysis, realisticCurrentDSL);
+    const customResults = computeCustomEffectiveDSLs(ci, realisticCurrentDSL);
 
     // The round-trip must produce semantically identical absolute DSLs.
     // Clause order may differ (context before window vs after) but normalised form must match.
@@ -513,12 +509,12 @@ describe('Live → Custom full transition parity (capture + advanceMode + custom
       scenariosContext: realisticContext as any,
     });
 
-    const analysis = makeLiveAnalysis();
-    advanceMode(analysis, realisticCurrentDSL, captured);
+    const ci = makeLiveContentItem();
+    advanceMode(ci, realisticCurrentDSL, captured);
 
-    const allCustomState = computeCustomEffectiveDSLs(analysis, realisticCurrentDSL);
+    const allCustomState = computeCustomEffectiveDSLs(ci, realisticCurrentDSL);
     // Filter to visible scenarios only (exclude hidden 'current' underlayer)
-    const hiddenIds = new Set<string>(((analysis.display as any)?.hidden_scenarios) || []);
+    const hiddenIds = new Set<string>(((ci.display as any)?.hidden_scenarios) || []);
     const customRenderingState = allCustomState.filter(s => !hiddenIds.has(s.scenario_id));
 
     // Custom has 'no-overrides' (promoted copy of current) in place of 'current'.
@@ -552,10 +548,10 @@ describe('Live → Custom full transition parity (capture + advanceMode + custom
     const cohortCaptured = captured.scenarios.find(s => s.scenario_id === 'sc-cohort');
     expect(cohortCaptured?.effective_dsl).toBe('window(-30d:).context(cohort:11feb-12mar)');
 
-    const analysis = makeLiveAnalysis();
-    advanceMode(analysis, realisticCurrentDSL, captured);
+    const ci = makeLiveContentItem();
+    advanceMode(ci, realisticCurrentDSL, captured);
 
-    const customResults = computeCustomEffectiveDSLs(analysis, realisticCurrentDSL);
+    const customResults = computeCustomEffectiveDSLs(ci, realisticCurrentDSL);
     const cohortCustom = customResults.find(s => s.scenario_id === 'sc-cohort');
 
     // The context filter must survive the round-trip (normalised for clause order)
@@ -577,11 +573,11 @@ describe('Live → Custom full transition parity (capture + advanceMode + custom
 
     expect(captured.what_if_dsl).toBe(whatIf);
 
-    const analysis = makeLiveAnalysis();
-    advanceMode(analysis, realisticCurrentDSL, captured);
+    const ci = makeLiveContentItem();
+    advanceMode(ci, realisticCurrentDSL, captured);
 
-    // what_if_dsl must be preserved in the recipe analysis
-    expect(analysis.recipe.analysis.what_if_dsl).toBe(whatIf);
+    // what_if_dsl must be preserved on the content item
+    expect(ci.what_if_dsl).toBe(whatIf);
   });
 
   it('should handle base scenario through the full transition', () => {
@@ -602,10 +598,10 @@ describe('Live → Custom full transition parity (capture + advanceMode + custom
     expect(derivedOrder[derivedOrder.length - 1]).toBe('current');
     expect(captured.scenarios.map(s => s.scenario_id)).toEqual(derivedOrder);
 
-    const analysis = makeLiveAnalysis();
-    advanceMode(analysis, realisticCurrentDSL, captured);
+    const ci = makeLiveContentItem();
+    advanceMode(ci, realisticCurrentDSL, captured);
 
-    const customResults = computeCustomEffectiveDSLs(analysis, realisticCurrentDSL);
+    const customResults = computeCustomEffectiveDSLs(ci, realisticCurrentDSL);
 
     // Base scenario should have the base DSL
     const baseDsl = customResults.find(s => s.scenario_id === 'base');

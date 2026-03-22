@@ -166,7 +166,7 @@ export function createCanvasAnalysisInGraph(
 
   const analysis = buildCanvasAnalysisObject(
     {
-      recipe: dragData.recipe || { analysis: { analysis_type: dragData.analysisType || '' } },
+      recipe: dragData.recipe || { analysis: { analysis_type: dragData.analysisType || '', analytics_dsl: dragData.analyticsDsl } },
       viewMode: dragData.viewMode || 'chart',
       chartKind: dragData.chartKind,
       analysisResult: dragData.analysisResult,

@@ -644,14 +644,21 @@ export async function buildLiveChartShareUrlFromCanvasAnalysis(args: {
     })();
 
     const whatIfDsl = tab?.editorState?.whatIfDSL ?? null;
-    const effectiveChartKind = analysis.chart_kind || undefined;
+    const ci = analysis.content_items?.[0];
+    const effectiveChartKind = ci?.kind || undefined;
 
     return buildLiveChartShareUrlFromRecipe({
-      recipe: analysis.recipe,
+      recipe: {
+        analysis: {
+          analysis_type: ci?.analysis_type || '',
+          analytics_dsl: ci?.analytics_dsl,
+        },
+        scenarios: ci?.scenarios,
+      },
       identity,
       secret,
       chartKind: effectiveChartKind,
-      title: analysis.title,
+      title: ci?.title,
       graphState,
       whatIfDsl,
       dashboardMode,

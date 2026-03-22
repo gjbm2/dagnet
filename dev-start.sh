@@ -95,11 +95,11 @@ if [[ "${DETACH_MODE}" == "true" ]]; then
     tmux send-keys -t dagnet:dev.1 "export PYTHON_API_PORT=${PYTHON_API_PORT}" C-m
     tmux send-keys -t dagnet:dev.1 "export VITE_PORT=${VITE_PORT}" C-m
     tmux send-keys -t dagnet:dev.1 "export DB_CONNECTION=\"${DB_CONNECTION}\"" C-m
-    tmux send-keys -t dagnet:dev.1 "python dev-server.py" C-m
+    tmux send-keys -t dagnet:dev.1 "python dev-server.py 2>&1 | tee debug/tmp.python-server.log" C-m
 
     echo "Started DagNet in detached tmux session 'dagnet' (window 'dev', panes 0/1)."
     echo "Frontend logs: dagnet:dev.0"
-    echo "Backend logs:  dagnet:dev.1"
+    echo "Backend logs:  dagnet:dev.1 (also: debug/tmp.python-server.log)"
     exit 0
 fi
 
@@ -309,7 +309,7 @@ tmux send-keys -t dagnet:dev.1 "echo '  ⏹️  Ctrl+B then K  - Kill both serve
 tmux send-keys -t dagnet:dev.1 "echo '  ↔️  Ctrl+B then ←→ - Switch panes'" C-m
 tmux send-keys -t dagnet:dev.1 "echo '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━'" C-m
 tmux send-keys -t dagnet:dev.1 "echo ''" C-m
-tmux send-keys -t dagnet:dev.1 "python dev-server.py" C-m
+tmux send-keys -t dagnet:dev.1 "python dev-server.py 2>&1 | tee debug/tmp.python-server.log" C-m
 
 # Attach to the session
 tmux attach-session -t dagnet:dev

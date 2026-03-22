@@ -74,11 +74,12 @@ export const INITIAL_BOOT_STATE: AnalysisBootState = {
 const COMPARISON_TYPES = new Set(['branch_comparison', 'outcome_comparison', 'multi_branch_comparison', 'multi_outcome_comparison']);
 
 export function analysisNeedsSnapshots(analysis: CanvasAnalysis): boolean {
-  const analysisType = analysis.recipe?.analysis?.analysis_type;
+  const ci = analysis.content_items?.[0];
+  const analysisType = ci?.analysis_type;
   if (!analysisType) return false;
   const meta = ANALYSIS_TYPES.find(t => t.id === analysisType);
   if (!meta?.snapshotContract) return false;
-  if (COMPARISON_TYPES.has(analysisType) && analysis.chart_kind !== 'time_series') return false;
+  if (COMPARISON_TYPES.has(analysisType) && ci?.kind !== 'time_series') return false;
   return true;
 }
 
@@ -93,9 +94,10 @@ export function collectSnapshotDslStrings(
   const dsls: string[] = [];
   for (const a of analyses) {
     if (!analysisNeedsSnapshots(a)) continue;
-    const dsl = a.content_items?.[0]?.analytics_dsl || a.recipe?.analysis?.analytics_dsl;
+    const ci = a.content_items?.[0];
+    const dsl = ci?.analytics_dsl;
     if (dsl) dsls.push(dsl);
-    for (const s of a.recipe?.scenarios || []) {
+    for (const s of ci?.scenarios || []) {
       if ((s as any).effective_dsl) dsls.push((s as any).effective_dsl);
     }
   }

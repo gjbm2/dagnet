@@ -959,6 +959,15 @@ When deriving `p.forecast.mean`, **recent mature days are weighted more heavily*
 │  p.latency.median_lag_days  │  Observed median lag for this edge only              │
 │  p.latency.mean_lag_days    │  Observed mean lag for this edge only                │
 │  p.latency.onset_delta_days │  Dead-time onset shift δ (days) for this edge        │
+│  p.latency.path_mu          │  Path-level log-normal μ (Fenton–Wilkinson combined) │
+│  p.latency.path_sigma       │  Path-level log-normal σ (Fenton–Wilkinson combined) │
+│  p.latency.path_onset_delta_days│ Path-level Σ onset_delta_days (DP sum along path)│
+│  p.latency.posterior        │  Bayesian posterior summary (from webhook)            │
+│  p.posterior                │  Edge probability posterior (from Bayes webhook)      │
+│  p.model_vars[]             │  Candidate model sets: analytic, bayesian, manual     │
+│  p.model_source_preference  │  Per-edge override: best_available/bayesian/analytic/ │
+│                             │  manual. Determines which model_vars entry promotes   │
+│                             │  to p.mean/p.stdev. Falls back to graph-level default │
 └─────────────────────────────┴──────────────────────────────────────────────────────┘
 ```
 

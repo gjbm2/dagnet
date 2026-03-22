@@ -230,22 +230,51 @@ export function buildCohortMaturityEChartsOption(
         .filter((p: any) => typeof p?.tau_days === 'number' && typeof p?.model_rate === 'number')
         .map((p: any) => ({ value: [p.tau_days, p.model_rate] }));
       if (data.length > 0) {
-        const modelColour = c.text === '#e0e0e0' ? '#9ca3af' : '#4b5563';
+        // Method A (new onset-adjusted approach) — red
+        const methodAColour = c.text === '#e0e0e0' ? '#f87171' : '#dc2626';
         seriesOut.push({
           id: 'model_cdf',
-          name: 'Model CDF',
+          name: 'Analytic A (new)',
           type: 'line',
           showSymbol: false,
           smooth: true,
           connectNulls: false,
-          lineStyle: { width: 2, color: modelColour, type: 'dotted', opacity: 0.7 },
-          itemStyle: { color: modelColour },
+          lineStyle: { width: 2, color: methodAColour, type: 'dotted', opacity: 0.7 },
+          itemStyle: { color: methodAColour },
           emphasis: { disabled: true },
           z: 10,
           data,
         });
         if (maxTau !== null) {
           const curveMax = data[data.length - 1]?.value?.[0];
+          if (typeof curveMax === 'number' && Number.isFinite(curveMax) && curveMax > maxTau) {
+            maxTau = curveMax;
+          }
+        }
+      }
+    }
+    // Method B comparison curve (old raw-anchor approach) — green
+    if (entry?.methodBCurve && Array.isArray(entry.methodBCurve) && entry.methodBCurve.length > 0) {
+      const methodBData = entry.methodBCurve
+        .filter((p: any) => typeof p?.tau_days === 'number' && typeof p?.model_rate === 'number')
+        .map((p: any) => ({ value: [p.tau_days, p.model_rate] }));
+      if (methodBData.length > 0) {
+        const methodBColour = c.text === '#e0e0e0' ? '#4ade80' : '#16a34a';
+        seriesOut.push({
+          id: 'model_cdf_method_b',
+          name: 'Analytic B (old)',
+          type: 'line',
+          showSymbol: false,
+          smooth: true,
+          connectNulls: false,
+          lineStyle: { width: 2, color: methodBColour, type: 'dashed', opacity: 0.7 },
+          itemStyle: { color: methodBColour },
+          emphasis: { disabled: true },
+          z: 10,
+          data: methodBData,
+        });
+        if (maxTau !== null) {
+          const curveMax = methodBData[methodBData.length - 1]?.value?.[0];
           if (typeof curveMax === 'number' && Number.isFinite(curveMax) && curveMax > maxTau) {
             maxTau = curveMax;
           }

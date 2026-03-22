@@ -97,8 +97,10 @@ function summariseLedgerEntry(entry: SnapshotBootLedgerEntry) {
 }
 
 export function isSnapshotBootChart(analysis: any): boolean {
-  const analysisType = safeString(analysis?.recipe?.analysis?.analysis_type);
-  const chartKind = safeString(analysis?.chart_kind);
+  // Content-item authority: read from content_items[0], fall back to legacy flat fields
+  const ci = analysis?.content_items?.[0];
+  const analysisType = safeString(ci?.analysis_type || analysis?.recipe?.analysis?.analysis_type);
+  const chartKind = safeString(ci?.kind || analysis?.chart_kind);
   if (analysisType === 'cohort_maturity' || analysisType === 'daily_conversions' || analysisType === 'lag_fit') {
     return true;
   }
@@ -109,12 +111,15 @@ export function summariseSnapshotCharts(graph: any): SnapshotChartSummary[] {
   const analyses = Array.isArray(graph?.canvasAnalyses) ? graph.canvasAnalyses : [];
   return analyses
     .filter((analysis: any) => isSnapshotBootChart(analysis))
-    .map((analysis: any) => ({
-      id: safeString(analysis?.id),
-      analysisType: safeString(analysis?.recipe?.analysis?.analysis_type),
-      chartKind: safeString(analysis?.chart_kind) || undefined,
-      mode: analysis?.mode,
-    }));
+    .map((analysis: any) => {
+      const ci = analysis?.content_items?.[0];
+      return {
+        id: safeString(analysis?.id),
+        analysisType: safeString(ci?.analysis_type || analysis?.recipe?.analysis?.analysis_type),
+        chartKind: safeString(ci?.kind || analysis?.chart_kind) || undefined,
+        mode: ci?.mode || analysis?.mode,
+      };
+    });
 }
 
 export function logSnapshotBoot(stage: string, payload: Record<string, unknown>): void {

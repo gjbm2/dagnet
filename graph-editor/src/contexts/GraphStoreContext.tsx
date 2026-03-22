@@ -5,6 +5,7 @@ import { useTabContext, fileRegistry } from './TabContext';
 import { db } from '../db/appDatabase';
 import { parseDate } from '../services/windowAggregationService';
 import { parseConstraints } from '../lib/queryDSL';
+import { normaliseCanvasAnalysis } from '../utils/canvasAnalysisAccessors';
 
 /**
  * DateRange normalization and equality
@@ -106,6 +107,12 @@ export function createGraphStore(): GraphStoreHook {
     graph: null,
     graphRevision: 0,
     setGraph: (graph: GraphData) => {
+      // Normalise legacy canvas analysis objects on every graph write.
+      // Migrates flat fields (recipe, mode, display, etc.) into content_items.
+      if (graph?.canvasAnalyses) {
+        for (const ca of graph.canvasAnalyses) normaliseCanvasAnalysis(ca);
+      }
+
       // On initial load, hydrate the AUTHORITATIVE DSL from the graph's persisted DSL.
       // This ensures any early startup logic (planner/fetch) sees the correct DSL
       // even before WindowSelector mounts.

@@ -144,10 +144,10 @@ describe('Spec: getKindsForView returns registry-driven kind options', () => {
     }
   });
 
-  it('edge_info chart view has info', async () => {
+  it('edge_info chart view returns empty (edge_info is cards-only)', async () => {
     const { getKindsForView } = await import('../../components/panels/analysisTypes');
     const kinds = getKindsForView('edge_info', 'chart');
-    expect(kinds.map(k => k.id)).toEqual(['info']);
+    expect(kinds).toEqual([]);
   });
 
   it('types without declared views return empty (fall back to result semantics)', async () => {
@@ -157,22 +157,154 @@ describe('Spec: getKindsForView returns registry-driven kind options', () => {
   });
 });
 
-describe('Spec: syncFlatFieldsToContentItems writes kind not chart_kind', () => {
-  it('container chart_kind syncs to single content item as kind', async () => {
-    const { mutateCanvasAnalysisGraph } = await import('../canvasAnalysisMutationService');
+// ── Spec: Changing analysis type MUST update title ──────────────────────────
+//
+// When a content item's analysis_type changes (via ANY path — context menu,
+// properties panel, inline picker, or "add as new tab"), the title MUST be
+// set to the human-readable name from the ANALYSIS_TYPES registry.
+// Raw IDs like 'graph_overview' or 'daily_conversions' must NEVER appear as titles.
+
+describe('Spec: changing analysis_type must update title to human name', () => {
+  it('setContentItemAnalysisType must set title from registry', async () => {
+    const { setContentItemAnalysisType } = await import('../canvasAnalysisMutationService');
     const { buildCanvasAnalysisPayload, buildCanvasAnalysisObject } = await import('../canvasAnalysisCreationService');
 
     const payload = buildCanvasAnalysisPayload({ analysisType: 'edge_info', analyticsDsl: 'from(a).to(b)' });
     const analysis = buildCanvasAnalysisObject(payload, { x: 0, y: 0 }, { width: 400, height: 300 });
     const graph = { canvasAnalyses: [analysis], metadata: { updated_at: '' } };
 
-    const nextGraph = mutateCanvasAnalysisGraph(graph as any, analysis.id, (a) => {
-      a.chart_kind = 'bridge';
+    const nextGraph = setContentItemAnalysisType(graph as any, analysis.id, 0, 'graph_overview');
+    const ci = nextGraph!.canvasAnalyses!.find((a: any) => a.id === analysis.id)!.content_items[0];
+
+    // Title MUST be the human name, not the raw ID
+    expect(ci.title).toBe('Graph Overview');
+    expect(ci.analysis_type).toBe('graph_overview');
+    expect(ci.analysis_type_overridden).toBe(true);
+    expect(ci.kind).toBeUndefined();
+  });
+
+  it('setContentItemAnalysisType must humanise unknown types', async () => {
+    const { setContentItemAnalysisType } = await import('../canvasAnalysisMutationService');
+    const { buildCanvasAnalysisPayload, buildCanvasAnalysisObject } = await import('../canvasAnalysisCreationService');
+
+    const payload = buildCanvasAnalysisPayload({ analysisType: 'edge_info', analyticsDsl: 'from(a).to(b)' });
+    const analysis = buildCanvasAnalysisObject(payload, { x: 0, y: 0 }, { width: 400, height: 300 });
+    const graph = { canvasAnalyses: [analysis], metadata: { updated_at: '' } };
+
+    const nextGraph = setContentItemAnalysisType(graph as any, analysis.id, 0, 'some_future_type');
+    const ci = nextGraph!.canvasAnalyses!.find((a: any) => a.id === analysis.id)!.content_items[0];
+
+    // Unknown types get humanised (title case, underscores → spaces)
+    expect(ci.title).toBe('Some Future Type');
+  });
+
+  it('STALE PROP BUG: type change via stale analysis prop silently drops the update', async () => {
+    const { addContentItem, mutateCanvasAnalysisGraph, humaniseAnalysisType } = await import('../canvasAnalysisMutationService');
+    const { buildCanvasAnalysisPayload, buildCanvasAnalysisObject } = await import('../canvasAnalysisCreationService');
+
+    // 1. Create a container with one edge_info tab
+    const payload = buildCanvasAnalysisPayload({ analysisType: 'edge_info', analyticsDsl: 'from(a).to(b)' });
+    const originalAnalysis = buildCanvasAnalysisObject(payload, { x: 0, y: 0 }, { width: 400, height: 300 });
+    const graph1 = { canvasAnalyses: [originalAnalysis], metadata: { updated_at: '' } } as any;
+
+    // 2. Add a blank tab (simulates clicking +). Graph store now has 2 tabs.
+    const graph2 = mutateCanvasAnalysisGraph(graph1, originalAnalysis.id, (a) => {
+      addContentItem(a, { analytics_dsl: a.content_items[0]?.analytics_dsl, title: 'New analysis' });
+    })!;
+    const newTabIndex = 1;
+
+    // 3. Simulate the STALE PROP bug:
+    //    React.memo hasn't re-rendered yet, so the component callback still
+    //    has `analysis` from BEFORE the + click (1 tab, not 2).
+    //    handleTypePickerSelect maps over staleAnalysis.content_items (length 1)
+    //    with clampedIndex=1 — index 1 never matches, type change is silently lost.
+    const staleItems = originalAnalysis.content_items; // only 1 item!
+    const brokenResult = staleItems.map((item: any, i: number) =>
+      i === newTabIndex
+        ? { ...item, analysis_type: 'graph_overview', title: humaniseAnalysisType('graph_overview') }
+        : item,
+    );
+    // PROVES THE BUG: stale prop map doesn't touch the new tab
+    expect(brokenResult.length).toBe(1);
+    expect(brokenResult.find((i: any) => i.analysis_type === 'graph_overview')).toBeUndefined();
+
+    // 4. THE FIX: read content_items from the CURRENT graph (store), not the stale prop.
+    //    handleTypePickerSelect must use storeHandle.getState().graph to get current items.
+    const currentAnalysis = graph2.canvasAnalyses!.find((a: any) => a.id === originalAnalysis.id)!;
+    const currentItems = currentAnalysis.content_items;
+    const fixedResult = currentItems.map((item: any, i: number) =>
+      i === newTabIndex
+        ? { ...item, analysis_type: 'graph_overview', analysis_type_overridden: true, kind: undefined, title: humaniseAnalysisType('graph_overview') }
+        : item,
+    );
+    expect(fixedResult.length).toBe(2);
+    expect(fixedResult[1].title).toBe('Graph Overview');
+    expect(fixedResult[1].analysis_type).toBe('graph_overview');
+    expect(fixedResult[0].analysis_type).toBe('edge_info'); // original unchanged
+  });
+
+  it('add blank tab then change type via setContentItemAnalysisType: title must update', async () => {
+    const { addContentItem, mutateCanvasAnalysisGraph, setContentItemAnalysisType } = await import('../canvasAnalysisMutationService');
+    const { buildCanvasAnalysisPayload, buildCanvasAnalysisObject } = await import('../canvasAnalysisCreationService');
+
+    const payload = buildCanvasAnalysisPayload({ analysisType: 'edge_info', analyticsDsl: 'from(a).to(b)' });
+    const analysis = buildCanvasAnalysisObject(payload, { x: 0, y: 0 }, { width: 400, height: 300 });
+    const graph1 = { canvasAnalyses: [analysis], metadata: { updated_at: '' } };
+
+    // Add blank tab
+    const graph2 = mutateCanvasAnalysisGraph(graph1 as any, analysis.id, (a) => {
+      addContentItem(a, { analytics_dsl: a.content_items[0]?.analytics_dsl, title: 'New analysis' });
+    })!;
+    const newTabIndex = graph2.canvasAnalyses!.find((a: any) => a.id === analysis.id)!.content_items.length - 1;
+
+    // Change type via the canonical function — must use graph2 (the CURRENT graph), not graph1
+    const graph3 = setContentItemAnalysisType(graph2, analysis.id, newTabIndex, 'daily_conversions')!;
+    const tab = graph3.canvasAnalyses!.find((a: any) => a.id === analysis.id)!.content_items[newTabIndex];
+
+    expect(tab.title).toBe('Daily Conversions');
+    expect(tab.analysis_type).toBe('daily_conversions');
+  });
+
+  it('STALE GRAPH BUG: setContentItemAnalysisType with stale graph returns null', async () => {
+    const { addContentItem, mutateCanvasAnalysisGraph, setContentItemAnalysisType } = await import('../canvasAnalysisMutationService');
+    const { buildCanvasAnalysisPayload, buildCanvasAnalysisObject } = await import('../canvasAnalysisCreationService');
+
+    // 1. Create container with 1 tab
+    const payload = buildCanvasAnalysisPayload({ analysisType: 'edge_info', analyticsDsl: 'from(a).to(b)' });
+    const analysis = buildCanvasAnalysisObject(payload, { x: 0, y: 0 }, { width: 400, height: 300 });
+    const staleGraph = { canvasAnalyses: [analysis], metadata: { updated_at: '' } };
+
+    // 2. Add blank tab — produces graph2 with 2 tabs. staleGraph still has 1 tab.
+    const graph2 = mutateCanvasAnalysisGraph(staleGraph as any, analysis.id, (a) => {
+      addContentItem(a, { analytics_dsl: a.content_items[0]?.analytics_dsl, title: 'New analysis' });
+    })!;
+
+    // 3. Try to change type on tab index 1 using STALE graph (1 tab) — FAILS SILENTLY
+    const result = setContentItemAnalysisType(staleGraph as any, analysis.id, 1, 'graph_overview');
+    expect(result).toBeNull(); // BUG: returns null because tab 1 doesn't exist in stale graph
+
+    // 4. Same operation with CURRENT graph — works
+    const result2 = setContentItemAnalysisType(graph2, analysis.id, 1, 'graph_overview');
+    expect(result2).not.toBeNull();
+    expect(result2!.canvasAnalyses![0].content_items[1].title).toBe('Graph Overview');
+  });
+});
+
+describe('Spec: mutateContentItem sets kind directly on content item', () => {
+  it('should set kind on content item via mutateContentItem', async () => {
+    const { mutateContentItem } = await import('../canvasAnalysisMutationService');
+    const { buildCanvasAnalysisPayload, buildCanvasAnalysisObject } = await import('../canvasAnalysisCreationService');
+
+    const payload = buildCanvasAnalysisPayload({ analysisType: 'edge_info', analyticsDsl: 'from(a).to(b)' });
+    const analysis = buildCanvasAnalysisObject(payload, { x: 0, y: 0 }, { width: 400, height: 300 });
+    const graph = { canvasAnalyses: [analysis], metadata: { updated_at: '' } };
+
+    const nextGraph = mutateContentItem(graph as any, analysis.id, 0, (ci) => {
+      ci.kind = 'bridge';
     });
 
-    const ci = nextGraph!.canvasAnalyses!.find((a: any) => a.id === analysis.id)!.content_items![0];
+    const ci = nextGraph!.canvasAnalyses!.find((a: any) => a.id === analysis.id)!.content_items[0];
     expect(ci.kind).toBe('bridge');
-    expect('chart_kind' in ci).toBe(false);
   });
 });
 

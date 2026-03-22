@@ -13,6 +13,12 @@ export interface ContextMenuItem {
   icon?: React.ReactNode;
   /** Show a check mark to the left, indicating the active/selected option */
   checked?: boolean;
+  /** Secondary action icon shown on hover at the right edge */
+  secondaryIcon?: React.ReactNode;
+  /** Secondary action tooltip */
+  secondaryTitle?: string;
+  /** Callback when secondary icon is clicked (instead of primary onClick) */
+  onSecondaryClick?: () => void;
 }
 
 const MIN_WIDTH_PX = 200;
@@ -214,6 +220,19 @@ const MenuLevel: React.FC<MenuLevelProps> = ({
                 {item.icon}
                 {item.label}
               </span>
+              {item.secondaryIcon && item.onSecondaryClick && (
+                <span
+                  className="dagnet-popup-secondary"
+                  title={item.secondaryTitle}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    item.onSecondaryClick!();
+                    if (!item.keepMenuOpen) onClose();
+                  }}
+                >
+                  {item.secondaryIcon}
+                </span>
+              )}
               {hasSubmenu ? <span className="dagnet-popup-arrow">›</span> : null}
             </div>
           );

@@ -203,7 +203,7 @@ test.describe('Canvas analysis creation parity', () => {
       const db = (window as any).db;
       if (!db) return null;
       const file = await db.files.get('graph-e2e-canvas-analysis');
-      return file?.data?.canvasAnalyses?.[0]?.recipe?.analysis || null;
+      return file?.data?.canvasAnalyses?.[0]?.content_items?.[0] || null;
     });
     expect(persisted?.analytics_dsl).toBe('to(purchase)');
     expect(persisted?.analysis_type || '').toBe('');
@@ -372,11 +372,13 @@ test.describe('Analysis type change reactivity', () => {
     });
 
     expect(analysis).toBeTruthy();
-    expect(analysis.recipe.analysis.analysis_type).toBe('to_node_reach');
-    expect(analysis.recipe.analysis.analytics_dsl).toBe('to(purchase)');
-    expect(analysis.mode).toBe('live');
+    const ci = analysis.content_items?.[0];
+    expect(ci).toBeTruthy();
+    expect(ci.analysis_type).toBe('to_node_reach');
+    expect(ci.analytics_dsl).toBe('to(purchase)');
+    expect(ci.mode).toBe('live');
     // Auto-fallback: AnalysisChartContainer switches from 'chart' to 'cards' when the
     // stubbed result cannot produce renderable ECharts options (bar chart from minimal stub data).
-    expect(['chart', 'cards']).toContain(analysis.view_mode);
+    expect(['chart', 'cards']).toContain(ci.view_type);
   });
 });

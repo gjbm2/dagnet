@@ -78,39 +78,37 @@ describe('analysisBootCoordinatorService', () => {
   describe('analysisNeedsSnapshots', () => {
     it('should return false for non-snapshot analysis types', () => {
       expect(analysisNeedsSnapshots({
-        recipe: { analysis: { analysis_type: 'conversion_funnel' } },
+        content_items: [{ id: 'ci-1', analysis_type: 'conversion_funnel', view_type: 'chart', mode: 'live' }],
       } as any)).toBe(false);
     });
 
     it('should return false when analysis type is missing', () => {
       expect(analysisNeedsSnapshots({
-        recipe: { analysis: {} },
+        content_items: [{ id: 'ci-1', analysis_type: '', view_type: 'chart', mode: 'live' }],
       } as any)).toBe(false);
     });
 
     it('should return true for daily_conversions (snapshot-backed)', () => {
       expect(analysisNeedsSnapshots({
-        recipe: { analysis: { analysis_type: 'daily_conversions' } },
+        content_items: [{ id: 'ci-1', analysis_type: 'daily_conversions', view_type: 'chart', mode: 'live' }],
       } as any)).toBe(true);
     });
 
     it('should return true for cohort_maturity (snapshot-backed)', () => {
       expect(analysisNeedsSnapshots({
-        recipe: { analysis: { analysis_type: 'cohort_maturity' } },
+        content_items: [{ id: 'ci-1', analysis_type: 'cohort_maturity', view_type: 'chart', mode: 'live' }],
       } as any)).toBe(true);
     });
 
-    it('should return false for branch_comparison without time_series chart_kind', () => {
+    it('should return false for branch_comparison without time_series kind', () => {
       expect(analysisNeedsSnapshots({
-        recipe: { analysis: { analysis_type: 'branch_comparison' } },
-        chart_kind: 'bar_grouped',
+        content_items: [{ id: 'ci-1', analysis_type: 'branch_comparison', view_type: 'chart', kind: 'bar_grouped', mode: 'live' }],
       } as any)).toBe(false);
     });
 
-    it('should return true for branch_comparison with time_series chart_kind', () => {
+    it('should return true for branch_comparison with time_series kind', () => {
       expect(analysisNeedsSnapshots({
-        recipe: { analysis: { analysis_type: 'branch_comparison' } },
-        chart_kind: 'time_series',
+        content_items: [{ id: 'ci-1', analysis_type: 'branch_comparison', view_type: 'chart', kind: 'time_series', mode: 'live' }],
       } as any)).toBe(true);
     });
   });
@@ -122,8 +120,8 @@ describe('analysisBootCoordinatorService', () => {
   describe('collectSnapshotDslStrings', () => {
     it('should collect analytics DSL from snapshot analyses only', () => {
       const analyses: any[] = [
-        { recipe: { analysis: { analysis_type: 'daily_conversions', analytics_dsl: 'from(a).to(b)' } } },
-        { recipe: { analysis: { analysis_type: 'conversion_funnel', analytics_dsl: 'from(c).to(d)' } } },
+        { content_items: [{ id: 'ci-1', analysis_type: 'daily_conversions', analytics_dsl: 'from(a).to(b)', view_type: 'chart', mode: 'live' }] },
+        { content_items: [{ id: 'ci-2', analysis_type: 'conversion_funnel', analytics_dsl: 'from(c).to(d)', view_type: 'chart', mode: 'live' }] },
       ];
       const dsls = collectSnapshotDslStrings(analyses, {});
       expect(dsls).toContain('from(a).to(b)');
@@ -133,12 +131,16 @@ describe('analysisBootCoordinatorService', () => {
     it('should include frozen scenario effective_dsl from snapshot analyses', () => {
       const analyses: any[] = [
         {
-          recipe: {
-            analysis: { analysis_type: 'cohort_maturity', analytics_dsl: 'from(x).to(y)' },
+          content_items: [{
+            id: 'ci-1',
+            analysis_type: 'cohort_maturity',
+            analytics_dsl: 'from(x).to(y)',
+            view_type: 'chart',
+            mode: 'fixed',
             scenarios: [
               { effective_dsl: 'window(-30d:).context(channel:paid)' },
             ],
-          },
+          }],
         },
       ];
       const dsls = collectSnapshotDslStrings(analyses, {});
@@ -162,7 +164,7 @@ describe('analysisBootCoordinatorService', () => {
       const result = await checkBootRequirements({
         graph: { nodes: [], edges: [] },
         analyses: [
-          { recipe: { analysis: { analysis_type: 'conversion_funnel' } } } as any,
+          { content_items: [{ id: 'ci-1', analysis_type: 'conversion_funnel', view_type: 'chart', mode: 'live' }] } as any,
         ],
       });
       expect(result.ready).toBe(true);
@@ -182,7 +184,7 @@ describe('analysisBootCoordinatorService', () => {
       const result = await checkBootRequirements({
         graph: { nodes: [{ id: 'n1', event_id: 'ev-1' }], edges: [] },
         analyses: [
-          { recipe: { analysis: { analysis_type: 'daily_conversions', analytics_dsl: 'from(a).to(b)' } } } as any,
+          { content_items: [{ id: 'ci-1', analysis_type: 'daily_conversions', analytics_dsl: 'from(a).to(b)', view_type: 'chart', mode: 'live' }] } as any,
         ],
         workspace: { repository: 'repo', branch: 'main' },
       });
@@ -204,7 +206,7 @@ describe('analysisBootCoordinatorService', () => {
       const result = await checkBootRequirements({
         graph: { nodes: [], edges: [] },
         analyses: [
-          { recipe: { analysis: { analysis_type: 'daily_conversions' } } } as any,
+          { content_items: [{ id: 'ci-1', analysis_type: 'daily_conversions', view_type: 'chart', mode: 'live' }] } as any,
         ],
         workspace: { repository: 'repo', branch: 'main' },
       });
@@ -225,7 +227,7 @@ describe('analysisBootCoordinatorService', () => {
       const result = await checkBootRequirements({
         graph: { nodes: [], edges: [] },
         analyses: [
-          { recipe: { analysis: { analysis_type: 'daily_conversions' } } } as any,
+          { content_items: [{ id: 'ci-1', analysis_type: 'daily_conversions', view_type: 'chart', mode: 'live' }] } as any,
         ],
         workspace: { repository: 'repo', branch: 'main' },
       });
@@ -246,7 +248,7 @@ describe('analysisBootCoordinatorService', () => {
       await checkBootRequirements({
         graph: { nodes: [], edges: [], currentQueryDSL: 'window(-7d:)' },
         analyses: [
-          { recipe: { analysis: { analysis_type: 'daily_conversions', analytics_dsl: 'from(a).to(b)' } } } as any,
+          { content_items: [{ id: 'ci-1', analysis_type: 'daily_conversions', analytics_dsl: 'from(a).to(b)', view_type: 'chart', mode: 'live' }] } as any,
         ],
         workspace: { repository: 'repo', branch: 'main' },
       });

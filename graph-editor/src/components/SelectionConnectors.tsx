@@ -279,10 +279,7 @@ export function resolveShapeNodes(
 
 export interface AnalysisVisibilityInput {
   id: string;
-  display?: { show_subject_overlay?: boolean; subject_overlay_colour?: string };
-  content_items?: Array<{ display?: { show_subject_overlay?: boolean; subject_overlay_colour?: string } }>;
-  chart_current_layer_dsl?: string;
-  recipe?: { analysis?: { analytics_dsl?: string } };
+  content_items: Array<{ display?: { show_subject_overlay?: boolean; subject_overlay_colour?: string }; analytics_dsl?: string; chart_current_layer_dsl?: string }>;
 }
 
 /**
@@ -291,7 +288,7 @@ export interface AnalysisVisibilityInput {
  *   1. selectedAnalysisId — the analysis the user clicked/selected
  *   2. draggedAnalysisId — the analysis currently being dragged
  *   3. hoveredAnalysisId — the analysis the mouse is currently over
- *   4. persisted overlay — analysis.display.show_subject_overlay === true
+ *   4. persisted overlay — content_item.display.show_subject_overlay === true
  * Returns the IDs of analyses that should show shapes + connectors + halos.
  * All visible analyses go through ONE rendering codepath downstream.
  */
@@ -306,8 +303,6 @@ export function getVisibleAnalysisIds(
     if (a.id === selectedAnalysisId) { visible.add(a.id); continue; }
     if (a.id === draggedAnalysisId) { visible.add(a.id); continue; }
     if (a.id === hoveredAnalysisId) { visible.add(a.id); continue; }
-    // Container-level overlay (legacy)
-    if (a.display?.show_subject_overlay === true) { visible.add(a.id); continue; }
     // Per-tab overlay — if ANY content item has the flag, the analysis is visible
     if (a.content_items?.some(ci => (ci.display as any)?.show_subject_overlay === true)) { visible.add(a.id); continue; }
   }
@@ -584,7 +579,11 @@ export function SelectionConnectors({ graph }: { graph: any }) {
       const isSelected = a.id === selectedAnalysisId;
       const isHovered = !isSelected && a.id !== draggedAnalysisId && a.id === hoveredAnalysisId;
       const activeIdx = activeTabByAnalysis.get(a.id) ?? 0;
-      const contentItems: any[] = a.content_items || [];
+      // Ensure content_items exists — legacy in-memory graphs may still have flat fields
+      const contentItems: any[] = a.content_items?.length ? a.content_items : [{
+        analytics_dsl: (a as any).recipe?.analysis?.analytics_dsl || (a as any).chart_current_layer_dsl,
+        display: (a as any).display,
+      }];
 
       // Collect tabs that need shapes:
       // - The active tab (for selected/hovered/dragged)
@@ -596,20 +595,22 @@ export function SelectionConnectors({ graph }: { graph: any }) {
       for (let i = 0; i < contentItems.length; i++) {
         if ((contentItems[i].display as any)?.show_subject_overlay === true) tabsToShow.add(i);
       }
-      // Legacy: container-level overlay → show active tab
-      if (a.display?.show_subject_overlay === true) tabsToShow.add(activeIdx);
 
+      // Deduplicate tabs with the same DSL (avoids overlapping identical shapes)
+      const seenDsls = new Set<string>();
       for (const tabIdx of tabsToShow) {
         const ci = contentItems[tabIdx] || contentItems[0];
         const dsl = ci?.chart_current_layer_dsl || ci?.analytics_dsl
-          || a.chart_current_layer_dsl || a.recipe?.analysis?.analytics_dsl;
+          // Fallback: any content item with a DSL (legacy graphs may not have DSL on every item)
+          || contentItems.find((c: any) => c.analytics_dsl)?.analytics_dsl;
         if (!dsl) continue;
-        const colour = (ci?.display as any)?.subject_overlay_colour
-          || a.display?.subject_overlay_colour || DEFAULT_COLOUR;
-        const isPersisted = (ci?.display as any)?.show_subject_overlay === true
-          || a.display?.show_subject_overlay === true;
+        if (seenDsls.has(dsl)) continue;
+        seenDsls.add(dsl);
+        const colour = (ci?.display as any)?.subject_overlay_colour || DEFAULT_COLOUR;
+        const isPersisted = (ci?.display as any)?.show_subject_overlay === true;
         const tabIsHovered = isHovered && !isPersisted;
-        const shape = buildShape(a.id, dsl, colour, isSelected, tabIsHovered, rfNode);
+        const shapeId = `${a.id}:${tabIdx}`;
+        const shape = buildShape(shapeId, dsl, colour, isSelected, tabIsHovered, rfNode);
         if (shape) baseShapes.push(shape);
       }
     }
@@ -761,10 +762,11 @@ export function SelectionConnectors({ graph }: { graph: any }) {
       <g transform={`translate(${viewport.x}, ${viewport.y}) scale(${viewport.zoom})`}>
         {allShapes.map(shape => {
           const c = shape.colour;
-          const fillOpacity = shape.isSelected ? 0.08 : shape.isHovered ? 0.015 : 0.03;
-          const outlineOpacity = shape.isSelected ? 0.2 : shape.isHovered ? 0.05 : 0.1;
-          const lineOpacity = shape.isSelected ? 0.3 : shape.isHovered ? 0.1 : 0.15;
-          const dotOpacity = shape.isSelected ? 0.5 : shape.isHovered ? 0.15 : 0.25;
+          //                       Selected   Hover/Drag  Persisted
+          const fillOpacity    = shape.isSelected ? 0.08 : shape.isHovered ? 0.04 : 0.03;
+          const outlineOpacity = shape.isSelected ? 0.20 : shape.isHovered ? 0.12 : 0.10;
+          const lineOpacity    = shape.isSelected ? 0.30 : shape.isHovered ? 0.20 : 0.15;
+          const dotOpacity     = shape.isSelected ? 0.50 : shape.isHovered ? 0.35 : 0.25;
           // Connector lines: always show for visible shapes (same codepath)
           const showConnector = !!shape.rfNode;
 

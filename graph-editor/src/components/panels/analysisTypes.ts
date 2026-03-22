@@ -225,7 +225,6 @@ export const ANALYSIS_TYPES: AnalysisTypeMeta[] = [
         { id: 'overview', name: 'Overview' },
         { id: 'structure', name: 'Structure' },
       ],
-      chart: [{ id: 'info', name: 'Info' }],
     },
   },
   {
@@ -242,7 +241,6 @@ export const ANALYSIS_TYPES: AnalysisTypeMeta[] = [
         { id: 'depth', name: 'Data Depth' },
         { id: 'diagnostics', name: 'Diagnostics' },
       ],
-      chart: [{ id: 'info', name: 'Info' }],
     },
   },
 
@@ -349,5 +347,21 @@ export function getAnalysisTypeMeta(id: string): AnalysisTypeMeta | undefined {
 export function getKindsForView(analysisTypeId: string, viewType: 'chart' | 'cards' | 'table'): KindMeta[] {
   const meta = getAnalysisTypeMeta(analysisTypeId);
   return meta?.views?.[viewType] || [];
+}
+
+/**
+ * Get available view types for an analysis type from the registry.
+ * Returns the declared view type keys (e.g. ['cards', 'chart']).
+ * If the analysis type has no views declaration, returns null (caller
+ * should fall back to result-driven detection via getAvailableExpressions).
+ */
+export function getAvailableViewTypes(analysisTypeId: string | undefined): ('chart' | 'cards' | 'table')[] | null {
+  if (!analysisTypeId) return null;
+  const meta = getAnalysisTypeMeta(analysisTypeId);
+  if (!meta?.views) return null;
+  return (Object.keys(meta.views) as ('chart' | 'cards' | 'table')[]).filter(k => {
+    const kinds = meta.views![k];
+    return kinds && kinds.length > 0;
+  });
 }
 

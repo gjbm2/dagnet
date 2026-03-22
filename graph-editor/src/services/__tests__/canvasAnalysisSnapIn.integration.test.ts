@@ -26,7 +26,7 @@
  */
 
 import { describe, it, expect, beforeEach } from 'vitest';
-import { addContentItem, ensureContentItemDsl, mutateCanvasAnalysisGraph } from '../canvasAnalysisMutationService';
+import { addContentItem, ensureContentItemDsl, mutateCanvasAnalysisGraph, mutateContentItem } from '../canvasAnalysisMutationService';
 import { contentItemResultCache } from '../../hooks/useCanvasAnalysisCompute';
 import { buildCanvasAnalysisPayload, buildCanvasAnalysisObject } from '../canvasAnalysisCreationService';
 import { normaliseCanvasAnalysis } from '../../utils/canvasAnalysisAccessors';
@@ -256,18 +256,17 @@ describe('Canvas analysis snap-into-container: syncFlatFields must not overwrite
     expect(updated.content_items![0].view_type).not.toBe('cards');
   });
 
-  it('should still sync flat fields for single-tab containers (backward compat)', () => {
+  it('should allow direct mutation of content item fields via mutateCanvasAnalysisGraph', () => {
     const analysis = makeAnalysis({ title: 'Updated Title' });
     expect(analysis.content_items).toHaveLength(1);
 
     const graph = { canvasAnalyses: [analysis], metadata: { updated_at: '' } };
     const nextGraph = mutateCanvasAnalysisGraph(graph as any, analysis.id, (a) => {
-      Object.assign(a, { title: 'New Title' });
+      a.content_items[0].title = 'New Title';
     });
 
     const updated = nextGraph!.canvasAnalyses!.find((a: any) => a.id === analysis.id)!;
-    // Single-tab: container title SHOULD sync to content_items[0]
-    expect(updated.content_items![0].title).toBe('New Title');
+    expect(updated.content_items[0].title).toBe('New Title');
   });
 });
 
@@ -279,7 +278,7 @@ describe('Canvas analysis snap-into-container: full roundtrip', () => {
   it('should produce a working multi-tab container when snapping a different analysis type', () => {
     // 1. Create an edge_info container
     const analysis = makeAnalysis();
-    expect(analysis.recipe?.analysis?.analysis_type).toBe('edge_info');
+    expect(analysis.content_items[0].analysis_type).toBe('edge_info');
 
     // 2. Simulate snap: add a daily_conversions tab with its own DSL and result
     const snappedPreset: Partial<ContentItem> = {
@@ -467,10 +466,9 @@ describe('getKindsForView: registry-driven kind options', () => {
     expect(ids).toContain('diagnostics');
   });
 
-  it('should return info for edge_info chart view', () => {
+  it('should return empty for edge_info chart view (edge_info is cards-only)', () => {
     const kinds = getKindsForView('edge_info', 'chart');
-    expect(kinds.length).toBe(1);
-    expect(kinds[0].id).toBe('info');
+    expect(kinds).toEqual([]);
   });
 
   it('should return card kinds for node_info cards view', () => {
@@ -491,22 +489,21 @@ describe('getKindsForView: registry-driven kind options', () => {
 });
 
 // ---------------------------------------------------------------------------
-// syncFlatFieldsToContentItems uses kind (not chart_kind)
+// mutateContentItem: direct content item mutation
 // ---------------------------------------------------------------------------
 
-describe('syncFlatFieldsToContentItems: writes kind not chart_kind', () => {
-  it('should sync container chart_kind to content item kind for single-tab', () => {
+describe('mutateContentItem: direct content item mutation', () => {
+  it('should mutate a specific content item by index', () => {
     const analysis = makeAnalysis();
     expect(analysis.content_items).toHaveLength(1);
 
     const graph = { canvasAnalyses: [analysis], metadata: { updated_at: '' } };
-    const nextGraph = mutateCanvasAnalysisGraph(graph as any, analysis.id, (a) => {
-      a.chart_kind = 'bridge';
+    const nextGraph = mutateContentItem(graph as any, analysis.id, 0, (ci) => {
+      ci.kind = 'bridge';
     });
 
     const updated = nextGraph!.canvasAnalyses!.find((a: any) => a.id === analysis.id)!;
-    expect(updated.content_items![0].kind).toBe('bridge');
-    expect((updated.content_items![0] as any).chart_kind).toBeUndefined();
+    expect(updated.content_items[0].kind).toBe('bridge');
   });
 });
 

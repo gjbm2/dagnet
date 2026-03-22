@@ -1,12 +1,6 @@
 import React, { useMemo, useState, useCallback, useRef, useEffect } from 'react';
 import ReactECharts from 'echarts-for-react';
-import {
-  Download, RefreshCcw, Trash2, MoreHorizontal, Sliders,
-  BarChart3, Code, ExternalLink, ClipboardCopy,
-  Layers, Crosshair, ChevronDown, Plus, Eye, EyeOff,
-} from 'lucide-react';
-import { ModeTrack } from '../ModeTrack';
-import { QueryExpressionEditor } from '../QueryExpressionEditor';
+import { Download, Sliders, ExternalLink, ClipboardCopy } from 'lucide-react';
 
 import type { AnalysisResult, AvailableAnalysis } from '../../lib/graphComputeClient';
 import { getDisplaySettings, getDisplaySettingsForSurface, resolveDisplaySetting, buildContextMenuSettingItems } from '../../lib/analysisDisplaySettingsRegistry';
@@ -20,7 +14,6 @@ import { downloadTextFile } from '../../services/downloadService';
 import { useElementSize } from '../../hooks/useElementSize';
 import { getAnalysisTypeMeta, ANALYSIS_TYPES } from '../panels/analysisTypes';
 import { AnalysisTypeCardList } from '../panels/AnalysisTypeCardList';
-import { ScenarioLayerList } from '../panels/ScenarioLayerList';
 import type { ScenarioLayerItem } from '../../types/scenarioLayerList';
 import { ChartFloatingIcon } from './ChartInlineSettingsFloating';
 import { logChartReadinessTrace } from '../../lib/snapshotBootTrace';
@@ -28,9 +21,8 @@ import type { ViewMode } from '../../types/chartRecipe';
 import { getAvailableExpressions } from '../../types/chartRecipe';
 import { LayoutGrid, Table2 } from 'lucide-react';
 import { AnalysisInfoCard } from '../analytics/AnalysisInfoCard';
-import { renderTraySettings } from './settingPillRenderer';
+import { ExpressionToolbarTray } from './ExpressionToolbarTray';
 import { CfpPopover } from './CfpPopover';
-import { OVERLAY_PRESET_COLOURS } from '../ColourSelector';
 import { useDataDepthContext } from '../../contexts/DataDepthContext';
 import { buildDataDepthInfoRows } from '../../services/dataDepthService';
 import { useGraphStoreOptional } from '../../contexts/GraphStoreContext';
@@ -434,7 +426,6 @@ export function AnalysisChartContainer(props: {
 
   // Right-click context menu (non-canvas contexts only — canvas has its own node-level menu)
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number } | null>(null);
-  const [showAllAnalysisTypes, setShowAllAnalysisTypes] = useState(false);
   const handleContextMenu = useCallback((e: React.MouseEvent) => {
     if (defaultContext === 'canvas') return; // canvas uses CanvasAnalysisContextMenu
     e.preventDefault();
@@ -493,7 +484,6 @@ export function AnalysisChartContainer(props: {
   }, [isDebugDailyConversions, echartsOption, props.analysisId]);
 
   const renderedCallbackFiredRef = useRef(false);
-  const overlayColourInputRef = useRef<HTMLInputElement>(null);
   const handleChartReady = useCallback((instance: any) => {
     // Fire onRendered once the ECharts instance has finished its first paint.
     // With suppressAnimation, 'finished' fires synchronously during setOption —
@@ -542,44 +532,8 @@ export function AnalysisChartContainer(props: {
     instance?.on?.('finished', onFinished);
   }, [isDebugDailyConversions, props.analysisId, props.onRendered]);
 
-  if (showInlineAnalysisTypePicker) {
-    return (
-      <div
-        style={{
-          display: 'flex',
-          flexDirection: 'column',
-          minHeight: 0,
-          height: fillHeight ? '100%' : undefined,
-        }}
-      >
-        <div ref={chartViewportRef} style={{ flex: fillHeight ? 1 : undefined, minHeight: 0, overflow: 'auto', padding: '8px 10px' }}>
-          <div style={{ fontSize: 10, color: 'var(--text-muted)', marginBottom: 6, textAlign: 'center' }}>
-            Choose an analysis type
-          </div>
-          <AnalysisTypeCardList
-            availableAnalyses={props.availableAnalyses || []}
-            selectedAnalysisId={props.analysisTypeId}
-            onSelect={(id) => props.onAnalysisTypeChange?.(id)}
-            viewMode="icons"
-            showAll={false}
-          />
-        </div>
-      </div>
-    );
-  }
-
-  if (!effectiveKind) {
-    return (
-      <div style={{ padding: 12, color: 'var(--text-secondary)' }}>
-        No chart available for this analysis.
-      </div>
-    );
-  }
-
-  const showChooser = availableChartKinds.length > 1;
-  const showAnalysisTypeDropdown = !!props.analysisTypeId && !!props.onAnalysisTypeChange && (props.availableAnalyses?.length ?? 0) > 0;
-
   // Context menu items for non-canvas right-click
+  // (must be before early returns to satisfy React hooks ordering)
   const ctxMenuItems = useMemo((): ContextMenuItem[] => {
     if (defaultContext === 'canvas') return [];
     const items: ContextMenuItem[] = [];
@@ -678,336 +632,84 @@ export function AnalysisChartContainer(props: {
     return items;
   }, [defaultContext, props.analysisTypeId, props.onAnalysisTypeChange, props.availableAnalyses, availableChartKinds, kind, handleChartKindChange, effectiveKind, effectiveDisplay, handleDisplayChange, props.scenarioLayerItems, props.onScenarioToggleVisibility, result, props.onOpenAsTab, props.onDumpDebug]);
 
-  // Whether chart is wide enough to auto-expand popovers into inline pills.
+  if (showInlineAnalysisTypePicker) {
+    return (
+      <div
+        style={{
+          display: 'flex',
+          flexDirection: 'column',
+          minHeight: 0,
+          height: fillHeight ? '100%' : undefined,
+        }}
+      >
+        <div ref={chartViewportRef} style={{ flex: fillHeight ? 1 : undefined, minHeight: 0, overflow: 'auto', padding: '8px 10px' }}>
+          <div style={{ fontSize: 10, color: 'var(--text-muted)', marginBottom: 6, textAlign: 'center' }}>
+            Choose an analysis type
+          </div>
+          <AnalysisTypeCardList
+            availableAnalyses={props.availableAnalyses || []}
+            selectedAnalysisId={props.analysisTypeId}
+            onSelect={(id) => props.onAnalysisTypeChange?.(id)}
+            viewMode="icons"
+            showAll={false}
+          />
+        </div>
+      </div>
+    );
+  }
+
+  if (!effectiveKind) {
+    return (
+      <div style={{ padding: 12, color: 'var(--text-secondary)' }}>
+        No chart available for this analysis.
+      </div>
+    );
+  }
+
   const wideToolbar = chartWidthPx > 480;
 
-  const VIEW_MODE_ICONS: Record<ViewMode, React.ComponentType<{ size?: number | string }>> = {
-    chart: BarChart3,
-    cards: LayoutGrid,
-    table: Table2,
-  };
-  const VIEW_MODE_LABELS: Record<ViewMode, string> = { chart: 'Chart', cards: 'Cards', table: 'Table' };
-
   const toolbarTray = (
-    <>
-      {/* --- Analysis type: popover palette (most fundamental choice) --- */}
-      {showAnalysisTypeDropdown && (() => {
-        const activeMeta = getAnalysisTypeMeta(props.analysisTypeId!);
-        const ActiveIcon = activeMeta?.icon;
-        return (
-          <CfpPopover
-            icon={<>{ActiveIcon && <ActiveIcon size={13} />}<ChevronDown size={9} /></>}
-            label={activeMeta?.name}
-            title="Analysis type"
-          >
-            <div style={{ display: 'flex', justifyContent: 'flex-end', padding: '0 4px 4px' }}>
-              <button
-                type="button"
-                className="cfp-show-all-toggle"
-                onClick={() => setShowAllAnalysisTypes(prev => !prev)}
-                title={showAllAnalysisTypes ? 'Available only' : 'Show all'}
-                style={{ display: 'flex', alignItems: 'center', gap: 3, background: 'none', border: 'none', cursor: 'pointer', fontSize: 10, color: 'var(--text-muted, #9ca3af)', padding: '2px 4px' }}
-              >
-                {showAllAnalysisTypes ? <EyeOff size={11} /> : <Eye size={11} />}
-                {showAllAnalysisTypes ? 'Available only' : 'Show all'}
-              </button>
-            </div>
-            <div className="cfp-type-palette">
-              {(() => {
-                const availableIds = new Set((props.availableAnalyses || []).map(a => a.id));
-                const types = showAllAnalysisTypes
-                  ? ANALYSIS_TYPES.filter(tm => !tm.internal).map(tm => ({ id: tm.id, meta: tm, available: availableIds.has(tm.id) }))
-                  : (props.availableAnalyses || []).map(a => ({ id: a.id, meta: getAnalysisTypeMeta(a.id), available: true }));
-                return types.map(({ id, meta, available }) => {
-                  const Icon = meta?.icon;
-                  const active = id === props.analysisTypeId;
-                  return (
-                    <button
-                      key={id}
-                      type="button"
-                      className={`cfp-type-palette-item${active ? ' active' : ''}${!available ? ' unavailable' : ''}`}
-                      onClick={() => props.onAnalysisTypeChange?.(id)}
-                      title={meta?.shortDescription || meta?.name || id}
-                    >
-                      {Icon && <Icon size={22} />}
-                      <span className="cfp-type-palette-label">{meta?.name || id}</span>
-                    </button>
-                  );
-                });
-              })()}
-            </div>
-          </CfpPopover>
-        );
-      })()}
-
-      {/* --- View mode switcher --- */}
-      {props.onViewModeChange && (() => {
-        const available = getAvailableExpressions(result);
-        if (available.length <= 1) return null;
-        const current = props.viewMode || 'chart';
-        return (
-          <>
-            {showAnalysisTypeDropdown && <span className="cfp-sep" />}
-            <span className="cfp-pill-group" title="View">
-              <span className="cfp-group-label">View</span>
-              {available.map(mode => {
-                const Icon = VIEW_MODE_ICONS[mode];
-                return (
-                  <button
-                    key={mode}
-                    type="button"
-                    className={`cfp-pill${mode === current ? ' active' : ''}`}
-                    onClick={() => props.onViewModeChange!(mode)}
-                    title={VIEW_MODE_LABELS[mode]}
-                  >
-                    <Icon size={13} />
-                  </button>
-                );
-              })}
-            </span>
-          </>
-        );
-      })()}
-
-      {/* --- Separator --- */}
-      {(showChooser || showSubjectSelector) && <span className="cfp-sep" />}
-
-      {/* --- Chart kind: inline pills (wide) or popover (narrow) --- */}
-      {showChooser && (
-        wideToolbar ? (
-          <span className="cfp-pill-group" title="Chart type">
-            <span className="cfp-group-label">Chart</span>
-            {availableChartKinds.map(k => (
-              <button
-                key={k}
-                type="button"
-                className={`cfp-pill${k === kind ? ' active' : ''}`}
-                onClick={() => handleChartKindChange(k)}
-                title={labelForChartKind(k)}
-              >
-                {labelForChartKind(k)}
-              </button>
-            ))}
-          </span>
-        ) : (
-          <CfpPopover
-            icon={<><BarChart3 size={13} /><ChevronDown size={9} /></>}
-            label={kind ? labelForChartKind(kind) : 'Chart'}
-            title="Chart type"
-          >
-            {availableChartKinds.map(k => (
-              <button
-                key={k}
-                type="button"
-                className={`cfp-menu-item${k === kind ? ' active' : ''}`}
-                onClick={() => handleChartKindChange(k)}
-              >
-                {labelForChartKind(k)}
-              </button>
-            ))}
-          </CfpPopover>
-        )
-      )}
-
-      {/* --- Subject selector --- */}
-      {showSubjectSelector && (
-        <select
-          value={effectiveSubjectId || ''}
-          onChange={handleSubjectChange}
-          className="cfp-select"
-          aria-label="Subject"
-        >
-          {subjectIds.map(sid => {
-            const meta = (result?.dimension_values as any)?.subject_id?.[sid];
-            return <option key={sid} value={sid}>{meta?.name || sid}</option>;
-          })}
-        </select>
-      )}
-
-      {/* --- Separator --- */}
-      <span className="cfp-sep" />
-
-      {/* --- Display settings: inline (wide) or popover (narrow) --- */}
-      {toolbarSettings.length > 0 && (
-        wideToolbar
-          ? renderTraySettings(toolbarSettings, effectiveDisplay, handleDisplayChange)
-          : (
-            <CfpPopover
-              icon={<Sliders size={13} />}
-              title="Display"
-              label="Display"
-            >
-              {renderTraySettings(toolbarSettings, effectiveDisplay, handleDisplayChange)}
-            </CfpPopover>
-          )
-      )}
-
-      {/* --- Overlay group --- */}
-      {props.onOverlayToggle && (
-        <span className="cfp-pill-group">
-          <span className="cfp-group-label">Overlay</span>
-          <button
-            type="button"
-            className={`cfp-pill${props.overlayActive ? ' active' : ''}`}
-            style={props.overlayColour ? { color: props.overlayColour } : undefined}
-            title="Toggle overlay connectors"
-            onClick={() => props.onOverlayToggle!(!props.overlayActive)}
-          >
-            <Crosshair size={13} />
-          </button>
-          <CfpPopover
-            icon={<span className="cfp-menu-swatch" style={{ background: props.overlayColour || '#3b82f6' }} />}
-            title="Overlay colour"
-          >
-            {OVERLAY_PRESET_COLOURS.map(p => (
-              <button
-                key={p.value}
-                type="button"
-                className={`cfp-menu-item${props.overlayColour === p.value ? ' active' : ''}`}
-                onClick={() => props.onOverlayColourChange?.(p.value)}
-              >
-                <span className="cfp-menu-swatch" style={{ background: p.value }} />
-                {p.name}
-              </button>
-            ))}
-            <button
-              type="button"
-              className={`cfp-menu-item${props.overlayColour && !OVERLAY_PRESET_COLOURS.some(p => p.value === props.overlayColour) ? ' active' : ''}`}
-              onClick={() => overlayColourInputRef.current?.click()}
-            >
-              <span className="cfp-menu-swatch" style={{ background: props.overlayColour || '#888', border: '1px dashed #9CA3AF' }} />
-              Custom...
-            </button>
-            <input
-              ref={overlayColourInputRef}
-              type="color"
-              value={props.overlayColour || '#3b82f6'}
-              onChange={(e) => props.onOverlayColourChange?.(e.target.value)}
-              style={{ position: 'absolute', width: 1, height: 1, opacity: 0, pointerEvents: 'none' }}
-            />
-          </CfpPopover>
-        </span>
-      )}
-
-      {/* --- Mode / Scenarios group --- */}
-      {(props.onModeCycle || (props.scenarioLayerItems && props.scenarioLayerItems.length > 0)) && (
-        <span className="cfp-pill-group">
-          <span className="cfp-group-label">{props.onModeCycle ? 'Mode' : 'Scenarios'}</span>
-          <CfpPopover
-            icon={<><Layers size={13} /><ChevronDown size={9} /></>}
-            title="Scenarios"
-            trigger={props.onModeCycle
-              ? <ModeTrack mode={props.analysisMode || 'live'} onClick={props.onModeCycle} />
-              : undefined}
-          >
-            <div className="cfp-scenario-popover">
-              {props.scenarioLayerItems && props.scenarioLayerItems.length > 0 && (
-                <ScenarioLayerList
-                  items={props.scenarioLayerItems}
-                  containerClassName="cfp-scenario-popover__list"
-                  onToggleVisibility={props.onScenarioToggleVisibility}
-                  onCycleMode={props.onScenarioCycleMode}
-                  onColourChange={props.onScenarioColourChange}
-                  onReorder={props.onScenarioReorder}
-                  onDelete={props.onScenarioDelete}
-                  onEdit={props.onScenarioEdit}
-                  getEditTooltip={props.getScenarioEditTooltip}
-                  getSwatchOverlayStyle={props.getScenarioSwatchOverlayStyle}
-                />
-              )}
-              {props.onAddScenario && (
-                <button
-                  type="button"
-                  className="cfp-scenario-popover__add-btn"
-                  onClick={props.onAddScenario}
-                  title="Add a blank scenario"
-                >
-                  <Plus size={12} /> Add scenario
-                </button>
-              )}
-            </div>
-          </CfpPopover>
-        </span>
-      )}
-
-      {/* --- DSL badge (canvas only — tab shows DSL in panel above) --- */}
-      {defaultContext === 'canvas' && source?.query_dsl && (
-        <CfpPopover
-          icon={<Code size={13} />}
-          title="Query DSL"
-          sticky
-          popoverClassName="cfp-popover--dsl"
-        >
-          {props.graph && props.onDslChange ? (
-            <QueryExpressionEditor
-              value={source.query_dsl}
-              onChange={() => {}}
-              onBlur={props.onDslChange}
-              graph={props.graph}
-              height="120px"
-              placeholder="from(node).to(node)"
-            />
-          ) : (
-            <pre className="cfp-dsl-preview">{source.query_dsl}</pre>
-          )}
-        </CfpPopover>
-      )}
-
-      {/* --- More actions dropdown --- */}
-      <CfpPopover
-        icon={<MoreHorizontal size={13} />}
-        title="More actions"
-      >
-        {props.analysisId && (
-          <button
-            type="button"
-            className="cfp-menu-item"
-            onClick={() => window.dispatchEvent(new CustomEvent('dagnet:canvasAnalysisRefresh', { detail: { analysisId: props.analysisId } }))}
-          >
-            <RefreshCcw size={12} /> Refresh
-          </button>
-        )}
-        {props.onOpenAsTab && (
-          <button
-            type="button"
-            className="cfp-menu-item"
-            onClick={props.onOpenAsTab}
-          >
-            <ExternalLink size={12} /> Open as Tab
-          </button>
-        )}
-        {result && (
-          <button
-            type="button"
-            className="cfp-menu-item"
-            onClick={() => {
-              const { filename, csv } = analysisResultToCsv(result);
-              if (csv) downloadTextFile({ filename, content: csv, mimeType: 'text/csv' });
-            }}
-          >
-            <Download size={12} /> Download CSV
-          </button>
-        )}
-        {props.onDumpDebug && (
-          <button
-            type="button"
-            className="cfp-menu-item"
-            onClick={props.onDumpDebug}
-          >
-            <ClipboardCopy size={12} /> Dump Debug JSON
-          </button>
-        )}
-        {props.onDelete && (
-          <button
-            type="button"
-            className="cfp-menu-item cfp-menu-item--danger"
-            onClick={props.onDelete}
-          >
-            <Trash2 size={12} /> Delete
-          </button>
-        )}
-      </CfpPopover>
-    </>
+    <ExpressionToolbarTray
+      viewMode={props.viewMode || 'chart'}
+      result={result}
+      display={effectiveDisplay}
+      onViewModeChange={props.onViewModeChange}
+      onDisplayChange={handleDisplayChange}
+      onOpenAsTab={props.onOpenAsTab}
+      onDumpDebug={props.onDumpDebug}
+      onDelete={props.onDelete}
+      analysisTypeId={props.analysisTypeId}
+      availableAnalyses={props.availableAnalyses}
+      onAnalysisTypeChange={props.onAnalysisTypeChange}
+      kind={kind ?? undefined}
+      onKindChange={props.onChartKindChange ? (k) => handleChartKindChange(k as any) : undefined}
+      availableKinds={availableChartKinds.length > 1 ? availableChartKinds.map(k => ({ id: k, name: labelForChartKind(k) })) : undefined}
+      overlayActive={props.overlayActive}
+      overlayColour={props.overlayColour}
+      onOverlayToggle={props.onOverlayToggle}
+      onOverlayColourChange={props.onOverlayColourChange}
+      analysisMode={props.analysisMode}
+      onModeCycle={props.onModeCycle}
+      scenarioLayerItems={props.scenarioLayerItems}
+      onScenarioToggleVisibility={props.onScenarioToggleVisibility}
+      onScenarioCycleMode={props.onScenarioCycleMode}
+      onScenarioColourChange={props.onScenarioColourChange}
+      onScenarioReorder={props.onScenarioReorder}
+      onScenarioDelete={props.onScenarioDelete}
+      onScenarioEdit={props.onScenarioEdit}
+      onAddScenario={props.onAddScenario}
+      getScenarioEditTooltip={props.getScenarioEditTooltip}
+      getScenarioSwatchOverlayStyle={props.getScenarioSwatchOverlayStyle}
+      analysisId={props.analysisId}
+      wideToolbar={wideToolbar}
+      subjectIds={showSubjectSelector ? subjectIds : undefined}
+      effectiveSubjectId={effectiveSubjectId}
+      subjectMeta={(result?.dimension_values as any)?.subject_id}
+      onSubjectChange={showSubjectSelector ? (sid) => setSelectedSubjectId(sid) : undefined}
+      queryDsl={source?.query_dsl}
+      onDslChange={props.onDslChange}
+      graph={props.graph}
+    />
   );
 
   return (

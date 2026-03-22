@@ -20,9 +20,13 @@ let currentGraph: any = {
     {
       id: 'ca-1',
       x: 0, y: 0, width: 400, height: 300,
-      view_mode: 'chart',
-      mode: 'live' as const,
-      recipe: { analysis: { analysis_type: 'conversion_funnel', analytics_dsl: 'from(node-a).to(node-b)' } },
+      content_items: [{
+        id: 'ci-1',
+        analysis_type: 'conversion_funnel',
+        view_type: 'chart',
+        analytics_dsl: 'from(node-a).to(node-b)',
+        mode: 'live' as const,
+      }],
     },
   ],
 };
@@ -162,9 +166,13 @@ describe('CanvasAnalysisPropertiesSection smoke tests', () => {
         {
           id: 'ca-1',
           x: 0, y: 0, width: 400, height: 300,
-          view_mode: 'chart',
-          mode: 'live' as const,
-          recipe: { analysis: { analysis_type: 'conversion_funnel', analytics_dsl: 'from(node-a).to(node-b)' } },
+          content_items: [{
+            id: 'ci-1',
+            analysis_type: 'conversion_funnel',
+            view_type: 'chart',
+            analytics_dsl: 'from(node-a).to(node-b)',
+            mode: 'live' as const,
+          }],
         },
       ],
     };
@@ -244,8 +252,8 @@ describe('CanvasAnalysisPropertiesSection smoke tests', () => {
   });
 
   it('should not crash when analysis has no recipe scenarios (live mode)', () => {
-    currentGraph.canvasAnalyses[0].mode = 'live';
-    currentGraph.canvasAnalyses[0].recipe.scenarios = undefined;
+    currentGraph.canvasAnalyses[0].content_items[0].mode = 'live';
+    currentGraph.canvasAnalyses[0].content_items[0].scenarios = undefined;
 
     expect(() => {
       render(
@@ -262,8 +270,8 @@ describe('CanvasAnalysisPropertiesSection smoke tests', () => {
   });
 
   it('should not crash when analysis has custom scenarios', () => {
-    currentGraph.canvasAnalyses[0].mode = 'custom';
-    currentGraph.canvasAnalyses[0].recipe.scenarios = [
+    currentGraph.canvasAnalyses[0].content_items[0].mode = 'custom';
+    currentGraph.canvasAnalyses[0].content_items[0].scenarios = [
       { scenario_id: 'current', name: 'Current', colour: '#3b82f6', effective_dsl: 'window(-30d:)', visibility_mode: 'f+e' },
       { scenario_id: 'sc-1', name: 'Google', colour: '#ec4899', effective_dsl: 'window(-30d:).context(channel:google)', visibility_mode: 'f+e' },
     ];
@@ -283,8 +291,8 @@ describe('CanvasAnalysisPropertiesSection smoke tests', () => {
   });
 
   it('should render visibility-mode swatch overlays in custom chart props', () => {
-    currentGraph.canvasAnalyses[0].mode = 'custom';
-    currentGraph.canvasAnalyses[0].recipe.scenarios = [
+    currentGraph.canvasAnalyses[0].content_items[0].mode = 'custom';
+    currentGraph.canvasAnalyses[0].content_items[0].scenarios = [
       { scenario_id: 'current', name: 'Current', colour: '#3b82f6', effective_dsl: 'window(-30d:)', visibility_mode: 'f' },
       { scenario_id: 'sc-1', name: 'Google', colour: '#ec4899', effective_dsl: 'window(-30d:).context(channel:google)', visibility_mode: 'e' },
     ];
@@ -306,13 +314,13 @@ describe('CanvasAnalysisPropertiesSection smoke tests', () => {
   });
 
   it('should render Current underlayer at bottom (bucket C) in custom mode', () => {
-    currentGraph.canvasAnalyses[0].mode = 'custom';
-    currentGraph.canvasAnalyses[0].recipe.scenarios = [
+    currentGraph.canvasAnalyses[0].content_items[0].mode = 'custom';
+    currentGraph.canvasAnalyses[0].content_items[0].scenarios = [
       { scenario_id: 'sc-A', name: 'Google', colour: '#ec4899', effective_dsl: 'context(channel:google)', visibility_mode: 'f+e' },
       { scenario_id: 'no-overrides', name: 'No overrides', colour: '#3b82f6', effective_dsl: undefined, visibility_mode: 'f+e' },
       { scenario_id: 'current', name: 'Current', colour: '#3b82f6', effective_dsl: undefined, visibility_mode: 'f+e' },
     ];
-    currentGraph.canvasAnalyses[0].display = { hidden_scenarios: ['current'] };
+    currentGraph.canvasAnalyses[0].content_items[0].display = { hidden_scenarios: ['current'] };
 
     const { container } = render(
       <PropertiesPanel
@@ -342,10 +350,10 @@ describe('CanvasAnalysisPropertiesSection smoke tests', () => {
   });
 
   it('should reorder the full stored scenario list in custom mode', () => {
-    currentGraph.canvasAnalyses[0].mode = 'custom';
+    currentGraph.canvasAnalyses[0].content_items[0].mode = 'custom';
     // current/base get kind:'current'/'base' (non-draggable anchors);
     // only user scenarios are draggable.
-    currentGraph.canvasAnalyses[0].recipe.scenarios = [
+    currentGraph.canvasAnalyses[0].content_items[0].scenarios = [
       { scenario_id: 'sc-1', name: 'Google', colour: '#ec4899', effective_dsl: 'window(-30d:).context(channel:google)', visibility_mode: 'f+e' },
       { scenario_id: 'sc-2', name: 'Meta', colour: '#f59e0b', effective_dsl: 'window(-30d:).context(channel:meta)', visibility_mode: 'f+e' },
       { scenario_id: 'sc-3', name: 'Organic', colour: '#10b981', effective_dsl: 'window(-30d:).context(channel:organic)', visibility_mode: 'f+e' },
@@ -371,7 +379,7 @@ describe('CanvasAnalysisPropertiesSection smoke tests', () => {
     fireEvent.dragOver(allRows[0], { dataTransfer });
     fireEvent.dragEnd(draggableRows[2], { dataTransfer });
 
-    expect(currentGraph.canvasAnalyses[0].recipe.scenarios.map((s: any) => s.scenario_id)).toEqual(['sc-3', 'sc-1', 'sc-2']);
+    expect(currentGraph.canvasAnalyses[0].content_items[0].scenarios.map((s: any) => s.scenario_id)).toEqual(['sc-3', 'sc-1', 'sc-2']);
     expect(saveHistoryStateMock).toHaveBeenCalledWith('Reorder chart scenarios');
   });
 
@@ -409,10 +417,10 @@ describe('CanvasAnalysisPropertiesSection smoke tests', () => {
     fireEvent.dragOver(metaRow!, { dataTransfer });
     fireEvent.dragEnd(draggableRows[0], { dataTransfer });
 
-    expect(currentGraph.canvasAnalyses[0].mode).toBe('custom');
+    expect(currentGraph.canvasAnalyses[0].content_items[0].mode).toBe('custom');
     // Reorder happens, then auto-promote to custom via advanceMode:
     // 'current' replaced by 'no-overrides' in-place, original moved to end (hidden underlayer)
-    expect(currentGraph.canvasAnalyses[0].recipe.scenarios.map((s: any) => s.scenario_id)).toEqual(['sc-1', 'no-overrides', 'sc-2', 'base', 'current']);
+    expect(currentGraph.canvasAnalyses[0].content_items[0].scenarios.map((s: any) => s.scenario_id)).toEqual(['sc-1', 'no-overrides', 'sc-2', 'base', 'current']);
     expect(saveHistoryStateMock).toHaveBeenCalledWith('Reorder chart scenarios');
   });
 });

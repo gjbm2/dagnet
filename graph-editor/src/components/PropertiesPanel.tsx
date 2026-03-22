@@ -32,7 +32,7 @@ import { ChipInput } from './ChipInput';
 import { imageOperationsService } from '../services/imageOperationsService';
 import { getObjectTypeTheme } from '../theme/objectTypeTheme';
 import { Box, Settings, Layers, Edit3, ChevronDown, ChevronRight, X, Sliders, Info, TrendingUp, Coins, Clock, FileJson, ZapOff, RefreshCcw, ExternalLink, Zap, Plus } from 'lucide-react';
-import { ANALYSIS_TYPES, getKindsForView } from './panels/analysisTypes';
+import { ANALYSIS_TYPES, getKindsForView, getAnalysisTypeMeta } from './panels/analysisTypes';
 import { AnalysisTypeSection } from './panels/AnalysisTypeSection';
 import { ChartSettingsSection } from './panels/ChartSettingsSection';
 import { useCanvasAnalysisScenarioCallbacks } from '../hooks/useCanvasAnalysisScenarioCallbacks';
@@ -45,7 +45,7 @@ import { analysisResultToCsv } from '../services/analysisExportService';
 import { downloadTextFile } from '../services/downloadService';
 import { getDisplaySettingsForSurface } from '../lib/analysisDisplaySettingsRegistry';
 import { getScenarioVisibilityOverlayStyle } from '../lib/scenarioVisibilityModeStyles';
-import { mutateCanvasAnalysisGraph, deleteCanvasAnalysisFromGraph, advanceMode } from '../services/canvasAnalysisMutationService';
+import { mutateCanvasAnalysisGraph, deleteCanvasAnalysisFromGraph, advanceMode, setContentItemAnalysisType } from '../services/canvasAnalysisMutationService';
 import { ModeTrack } from './ModeTrack';
 import { ScenarioLayerList } from './panels/ScenarioLayerList';
 import type { ScenarioLayerItem } from '../types/scenarioLayerList';
@@ -149,6 +149,8 @@ function CanvasAnalysisPropertiesSection({ analysisId, graph, setGraph, saveHist
   tabId?: string;
 }) {
   const analysis = graph?.canvasAnalyses?.find((a: any) => a.id === analysisId);
+  const graphRef = useRef(graph);
+  graphRef.current = graph;
   const [availableAnalyses, setAvailableAnalyses] = useState<AvailableAnalysis[]>([]);
   const fetchKeyRef = useRef('');
   const [editingScenarioId, setEditingScenarioId] = useState<string | null>(null);
@@ -168,31 +170,16 @@ function CanvasAnalysisPropertiesSection({ analysisId, graph, setGraph, saveHist
   }, [analysisId]);
 
   const activeCI = analysis?.content_items?.[activeTabIndex] || analysis?.content_items?.[0];
-  const analyticsDsl = activeCI?.analytics_dsl || analysis?.recipe?.analysis?.analytics_dsl || '';
-  const selectedType = activeCI?.analysis_type || analysis?.recipe?.analysis?.analysis_type || '';
+  const analyticsDsl = activeCI?.analytics_dsl || '';
+  const selectedType = activeCI?.analysis_type || '';
   const cachedResult = canvasAnalysisResultCache.get(analysisId);
 
 
-  const updateAnalysis = useCallback((updates: any) => {
-    const nextGraph = mutateCanvasAnalysisGraph(graph, analysisId, (a) => {
-      Object.assign(a, updates);
-      // Mirror relevant fields to the active content item
-      const ci = a.content_items?.[activeTabIndex] || a.content_items?.[0];
-      if (ci) {
-        if (updates.view_mode != null) ci.view_type = updates.view_mode;
-      }
-    });
-    if (!nextGraph) return;
-    setGraph(nextGraph);
-    saveHistoryState('Update canvas analysis');
-  }, [graph, setGraph, saveHistoryState, analysisId, activeTabIndex]);
-
   const updateRecipeAnalysis = useCallback((field: string, value: any) => {
     const nextGraph = mutateCanvasAnalysisGraph(graph, analysisId, (a) => {
-      if (a?.recipe?.analysis) (a.recipe.analysis as any)[field] = value;
-      // Mirror analytics_dsl to all content items (tab-level DSL)
-      if (field === 'analytics_dsl' && a.content_items) {
-        for (const ci of a.content_items) ci.analytics_dsl = value;
+      // Write to all content items (e.g. analytics_dsl is shared across tabs)
+      if (a.content_items) {
+        for (const ci of a.content_items) (ci as any)[field] = value;
       }
     });
     if (!nextGraph) return;
@@ -201,14 +188,7 @@ function CanvasAnalysisPropertiesSection({ analysisId, graph, setGraph, saveHist
 
   const updateDisplaySetting = useCallback((keyOrBatch: string | Record<string, any>, value?: any) => {
     const nextGraph = mutateCanvasAnalysisGraph(graph, analysisId, (a) => {
-      // Write to container display (backward compat for single-tab)
-      if (!a.display) a.display = {};
-      if (typeof keyOrBatch === 'object') {
-        Object.assign(a.display as any, keyOrBatch);
-      } else {
-        (a.display as any)[keyOrBatch] = value;
-      }
-      // Also write to active content item's display
+      // Write to active content item's display
       const ci = a.content_items?.[activeTabIndex] || a.content_items?.[0];
       if (ci) {
         if (!ci.display) ci.display = {} as any;
@@ -226,7 +206,7 @@ function CanvasAnalysisPropertiesSection({ analysisId, graph, setGraph, saveHist
 
   const chartKindOptions = useMemo(() => {
     const viewType = activeCI?.view_type || 'chart';
-    const analysisType = activeCI?.analysis_type || analysis?.recipe?.analysis?.analysis_type || '';
+    const analysisType = activeCI?.analysis_type || '';
     // Query the registry for declared kinds
     const registryKinds = getKindsForView(analysisType, viewType as 'chart' | 'cards' | 'table');
     if (registryKinds.length > 0) return registryKinds.map(k => k.id);
@@ -236,12 +216,12 @@ function CanvasAnalysisPropertiesSection({ analysisId, graph, setGraph, saveHist
     const alts = Array.isArray(spec?.alternatives) ? spec.alternatives : [];
     const all = [rec, ...alts].filter(Boolean) as string[];
     return augmentChartKindOptionsForAnalysisType(cachedResult?.analysis_type, Array.from(new Set(all)));
-  }, [cachedResult, activeCI?.view_type, activeCI?.analysis_type, analysis?.recipe?.analysis?.analysis_type]);
+  }, [cachedResult, activeCI?.view_type, activeCI?.analysis_type]);
 
   // For cards tabs, kind IS the effective kind (no fallback to chart semantics).
-  // For chart tabs, fall back to result recommendation → container chart_kind.
+  // For chart tabs, fall back to result recommendation.
   const effectiveChartKind = activeCI?.kind
-    || (activeCI?.view_type !== 'cards' ? (analysis?.chart_kind || cachedResult?.semantics?.chart?.recommended) : undefined)
+    || (activeCI?.view_type !== 'cards' ? cachedResult?.semantics?.chart?.recommended : undefined)
     || undefined;
 
   const scenariosContext = useScenariosContextOptional();
@@ -249,12 +229,12 @@ function CanvasAnalysisPropertiesSection({ analysisId, graph, setGraph, saveHist
   const graphStore = useGraphStore();
   const liveTabId = propTabId || tabs[0]?.id;
   const chartHiddenScenarioIds = useMemo(
-    () => new Set<string>((((analysis?.display as any)?.hidden_scenarios) || []) as string[]),
-    [analysis?.display]
+    () => new Set<string>((((activeCI?.display as any)?.hidden_scenarios) || []) as string[]),
+    [activeCI?.display]
   );
 
   const scenarioLayerItems = useMemo((): ScenarioLayerItem[] => {
-    if (analysis?.mode === 'live') {
+    if (activeCI?.mode === 'live') {
       const scenarioState = liveTabId ? operations.getScenarioState(liveTabId) : null;
       const visibleIds: string[] = scenarioState?.visibleScenarioIds || ['current'];
       return visibleIds.map((sid: string) => {
@@ -286,8 +266,8 @@ function CanvasAnalysisPropertiesSection({ analysisId, graph, setGraph, saveHist
         };
       });
     }
-    const frozenScenarios = analysis?.recipe?.scenarios || [];
-    const isCustom = analysis?.mode === 'custom';
+    const frozenScenarios = activeCI?.scenarios || [];
+    const isCustom = activeCI?.mode === 'custom';
     return frozenScenarios.map((fs: any) => {
       // In custom mode, the 'current' underlayer inherits its displayed colour
       // from the tab (grey when sole visible layer, else assigned colour).
@@ -314,7 +294,7 @@ function CanvasAnalysisPropertiesSection({ analysisId, graph, setGraph, saveHist
   useEffect(() => {
     if (!graph) return;
     const key = `${graph.nodes?.length || 0}-${analyticsDsl}-${visibleScenarioCount}`;
-    console.log('[PropertiesPanel] resolve-check', { key, prevKey: fetchKeyRef.current, visibleScenarioCount, mode: analysis?.mode, analysisId: analysisId?.slice(0, 8) });
+    console.log('[PropertiesPanel] resolve-check', { key, prevKey: fetchKeyRef.current, visibleScenarioCount, mode: activeCI?.mode, analysisId: analysisId?.slice(0, 8) });
     if (key === fetchKeyRef.current) return;
     fetchKeyRef.current = key;
     const timer = setTimeout(async () => {
@@ -323,15 +303,16 @@ function CanvasAnalysisPropertiesSection({ analysisId, graph, setGraph, saveHist
       );
       console.log('[PropertiesPanel] resolved', { primaryAnalysisType, availableIds: resolved.map(a => a.id), visibleScenarioCount });
       setAvailableAnalyses(resolved);
-      const currentType = analysis?.recipe?.analysis?.analysis_type;
+      const currentType = activeCI?.analysis_type;
       // Preserve intentionally blank analysis types for newly created canvas charts.
       // These should show the picker UI until the user explicitly chooses a type.
-      if (!analysis?.analysis_type_overridden && currentType && primaryAnalysisType) {
+      if (!activeCI?.analysis_type_overridden && currentType && primaryAnalysisType) {
         if (currentType !== primaryAnalysisType) {
           const nextGraph = structuredClone(graph);
           const a = nextGraph.canvasAnalyses?.find((item: any) => item.id === analysisId);
-          if (a?.recipe?.analysis) {
-            a.recipe.analysis.analysis_type = primaryAnalysisType;
+          const ci = a?.content_items?.[activeTabIndex] || a?.content_items?.[0];
+          if (ci) {
+            ci.analysis_type = primaryAnalysisType;
             if (nextGraph.metadata) nextGraph.metadata.updated_at = new Date().toISOString();
             setGraph(nextGraph);
           }
@@ -339,10 +320,10 @@ function CanvasAnalysisPropertiesSection({ analysisId, graph, setGraph, saveHist
       }
     }, 300);
     return () => clearTimeout(timer);
-  }, [graph, analyticsDsl, visibleScenarioCount, analysis?.analysis_type_overridden, analysisId, setGraph]);
+  }, [graph, analyticsDsl, visibleScenarioCount, activeCI?.analysis_type_overridden, analysisId, setGraph]);
 
   const scenarioCallbacks = useCanvasAnalysisScenarioCallbacks({
-    analysisId, analysis, graph, setGraph, saveHistoryState, tabId: propTabId,
+    analysisId, analysis, contentItemIndex: activeTabIndex, graph, setGraph, saveHistoryState, tabId: propTabId,
     onEditScenarioDsl: (id) => setEditingScenarioId(id),
   });
 
@@ -360,13 +341,13 @@ function CanvasAnalysisPropertiesSection({ analysisId, graph, setGraph, saveHist
 
   const handleAddScenario = useCallback(() => {
     if (!analysis) return;
-    const existing = analysis.recipe?.scenarios || [];
+    const existing = activeCI?.scenarios || [];
     const usedColours = new Set(existing.map((s: any) => s.colour));
     const colour = SCENARIO_PALETTE.find(c => !usedColours.has(c)) || SCENARIO_PALETTE[existing.length % SCENARIO_PALETTE.length];
     const id = `scenario_${Date.now()}`;
     const name = new Date().toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
     const newScenario = { scenario_id: id, name, colour, effective_dsl: '', visibility_mode: 'f+e' as const };
-    if (analysis.mode === 'live') {
+    if (activeCI?.mode === 'live') {
       // Auto-promote to custom first (rebase to delta DSLs)
       if (liveTabId && scenariosContext) {
         const currentTab = tabs.find(t => t.id === liveTabId);
@@ -379,25 +360,29 @@ function CanvasAnalysisPropertiesSection({ analysisId, graph, setGraph, saveHist
           whatIfDSL,
         });
         const nextGraph = mutateCanvasAnalysisGraph(graph, analysisId, (a) => {
+          const ci = a.content_items?.[activeTabIndex] || a.content_items?.[0];
+          if (!ci) return;
           const liveColour = liveTabId ? operations.getEffectiveScenarioColour(liveTabId, 'current', scenariosContext as any) : undefined;
-          advanceMode(a, graphStore.currentDSL || '', captured, liveColour);
-          a.recipe.scenarios = [...(a.recipe.scenarios || []), newScenario];
+          advanceMode(ci, graphStore.currentDSL || '', captured, liveColour);
+          ci.scenarios = [...(ci.scenarios || []), newScenario];
         });
         if (nextGraph) { setGraph(nextGraph); saveHistoryState('Add chart scenario'); }
       }
     } else {
       const nextGraph = mutateCanvasAnalysisGraph(graph, analysisId, (a) => {
-        if (!a.recipe.scenarios) a.recipe.scenarios = [];
-        a.recipe.scenarios.push(newScenario);
+        const ci = a.content_items?.[activeTabIndex] || a.content_items?.[0];
+        if (!ci) return;
+        if (!ci.scenarios) ci.scenarios = [];
+        ci.scenarios.push(newScenario);
       });
       if (nextGraph) { setGraph(nextGraph); saveHistoryState('Add chart scenario'); }
     }
-  }, [analysis, analysisId, graph, setGraph, saveHistoryState, liveTabId, scenariosContext, tabs, operations, graphStore]);
+  }, [analysis, activeCI, activeTabIndex, analysisId, graph, setGraph, saveHistoryState, liveTabId, scenariosContext, tabs, operations, graphStore]);
 
   const editingScenario = editingScenarioId
-    ? analysis?.recipe?.scenarios?.find((s: any) => s.scenario_id === editingScenarioId)
+    ? activeCI?.scenarios?.find((s: any) => s.scenario_id === editingScenarioId)
     : null;
-  const isEditingCurrentLayerDsl = editingScenarioId === 'current' && analysis?.mode === 'live';
+  const isEditingCurrentLayerDsl = editingScenarioId === 'current' && activeCI?.mode === 'live';
   const { currentDSL: graphCurrentDSL } = useGraphStore();
 
   if (!analysis) return <div style={{ textAlign: 'center', color: '#666', padding: '20px' }}>Canvas analysis not found</div>;
@@ -459,12 +444,13 @@ function CanvasAnalysisPropertiesSection({ analysisId, graph, setGraph, saveHist
       {/* ── Section 2: Data Source ── */}
       <CollapsibleSection
         title="Data Source"
-        defaultOpen={analysis.mode !== 'live'}
+        defaultOpen={activeCI?.mode !== 'live'}
         headerRight={
-          <ModeTrack mode={analysis.mode} onClick={() => {
-            const clone = structuredClone(analysis);
+          <ModeTrack mode={activeCI?.mode || 'live'} onClick={() => {
+            if (!activeCI) return;
+            const ciClone = structuredClone(activeCI);
             let captured: { scenarios: any[]; what_if_dsl?: string } | null = null;
-            if (analysis.mode === 'live' && liveTabId && scenariosContext) {
+            if (activeCI.mode === 'live' && liveTabId && scenariosContext) {
               const currentTab = tabs.find(t => t.id === liveTabId);
               const whatIfDSL = currentTab?.editorState?.whatIfDSL || null;
               captured = captureTabScenariosToRecipe({
@@ -476,8 +462,13 @@ function CanvasAnalysisPropertiesSection({ analysisId, graph, setGraph, saveHist
               });
             }
             const liveColour = liveTabId ? operations.getEffectiveScenarioColour(liveTabId, 'current', scenariosContext as any) : undefined;
-            advanceMode(clone, graphStore.currentDSL || '', captured, liveColour);
-            updateAnalysis({ mode: clone.mode, recipe: clone.recipe, display: clone.display });
+            advanceMode(ciClone, graphStore.currentDSL || '', captured, liveColour);
+            // Write mutated content item back via graph mutation
+            const nextGraph = mutateCanvasAnalysisGraph(graph, analysisId, (a) => {
+              const ci = a.content_items?.[activeTabIndex] || a.content_items?.[0];
+              if (ci) Object.assign(ci, { mode: ciClone.mode, scenarios: ciClone.scenarios, what_if_dsl: ciClone.what_if_dsl, display: ciClone.display });
+            });
+            if (nextGraph) { setGraph(nextGraph); saveHistoryState('Advance scenario mode'); }
           }} />
         }
       >
@@ -506,12 +497,11 @@ function CanvasAnalysisPropertiesSection({ analysisId, graph, setGraph, saveHist
         <ScenarioQueryEditModal
           isOpen={true}
           scenarioName={isEditingCurrentLayerDsl ? 'Current layer' : (editingScenario?.name || editingScenarioId || '')}
-          currentDSL={isEditingCurrentLayerDsl ? (activeCI?.chart_current_layer_dsl || analysis.chart_current_layer_dsl || '') : (editingScenario?.effective_dsl || '')}
+          currentDSL={isEditingCurrentLayerDsl ? (activeCI?.chart_current_layer_dsl || '') : (editingScenario?.effective_dsl || '')}
           inheritedDSL={graphCurrentDSL || ''}
           onSave={(newDSL) => {
             if (isEditingCurrentLayerDsl) {
               const nextGraph = mutateCanvasAnalysisGraph(graph, analysisId, (a) => {
-                a.chart_current_layer_dsl = newDSL || undefined;
                 if (a.content_items) {
                   for (const ci of a.content_items) ci.chart_current_layer_dsl = newDSL || undefined;
                 }
@@ -520,8 +510,9 @@ function CanvasAnalysisPropertiesSection({ analysisId, graph, setGraph, saveHist
               saveHistoryState('Update current layer DSL');
             } else {
               const nextGraph = structuredClone(graph);
-              const a = nextGraph.canvasAnalyses?.find((a: any) => a.id === analysisId);
-              const s = a?.recipe?.scenarios?.find((s: any) => s.scenario_id === editingScenarioId);
+              const a = nextGraph.canvasAnalyses?.find((item: any) => item.id === analysisId);
+              const ci = a?.content_items?.[activeTabIndex] || a?.content_items?.[0];
+              const s = ci?.scenarios?.find((s: any) => s.scenario_id === editingScenarioId);
               if (s) s.effective_dsl = newDSL;
               if (nextGraph.metadata) nextGraph.metadata.updated_at = new Date().toISOString();
               setGraph(nextGraph);
@@ -538,38 +529,34 @@ function CanvasAnalysisPropertiesSection({ analysisId, graph, setGraph, saveHist
         availableAnalyses={availableAnalyses}
         selectedAnalysisId={selectedType || null}
         onSelect={(analysisType) => {
-          const nextGraph = structuredClone(graph);
-          const a = nextGraph.canvasAnalyses?.find((item: any) => item.id === analysisId);
-          if (a) {
-            if (a.recipe?.analysis) a.recipe.analysis.analysis_type = analysisType;
-            a.analysis_type_overridden = true;
-            a.chart_kind = undefined;
-            // Update active content item too
-            const ci = a.content_items?.[activeTabIndex] || a.content_items?.[0];
-            if (ci) {
-              ci.analysis_type = analysisType;
-              ci.analysis_type_overridden = true;
-              ci.kind = undefined;
-            }
-            if (nextGraph.metadata) nextGraph.metadata.updated_at = new Date().toISOString();
+          // Use graphRef.current (latest) not graph (closure — may be stale after rapid mutations)
+          const currentGraph = graphRef.current;
+          const currentAnalysis = currentGraph?.canvasAnalyses?.find((a: any) => a.id === analysisId);
+          const itemCount = currentAnalysis?.content_items?.length ?? 0;
+          console.log('[PropertiesPanel] onSelect type', { analysisType, activeTabIndex, itemCount, analysisId: analysisId?.slice(0, 8), hasTab: !!currentAnalysis?.content_items?.[activeTabIndex] });
+          const nextGraph = setContentItemAnalysisType(currentGraph, analysisId!, activeTabIndex, analysisType);
+          if (nextGraph) {
             setGraph(nextGraph);
             saveHistoryState('Update analysis type');
+          } else {
+            console.error('[PropertiesPanel] setContentItemAnalysisType returned null!', { activeTabIndex, itemCount });
           }
         }}
-        defaultOpen={!analysis.analysis_type_overridden}
+        defaultOpen={!activeCI?.analysis_type_overridden}
         forceOpen={
-          analysis.analysis_type_overridden &&
+          !!activeCI?.analysis_type_overridden &&
           selectedType != null && selectedType !== '' &&
           availableAnalyses.length > 0 &&
           !availableAnalyses.some(a => a.id === selectedType)
         }
-        overridden={!!analysis.analysis_type_overridden}
+        overridden={!!activeCI?.analysis_type_overridden}
         onClearOverride={() => {
           const primary = availableAnalyses.find(a => a.is_primary);
           const nextGraph = mutateCanvasAnalysisGraph(graph, analysisId, (a) => {
-            a.analysis_type_overridden = false;
-            if (primary && a.recipe?.analysis) {
-              a.recipe.analysis.analysis_type = primary.id;
+            const ci = a.content_items?.[activeTabIndex] || a.content_items?.[0];
+            if (ci) {
+              ci.analysis_type_overridden = false;
+              if (primary) ci.analysis_type = primary.id;
             }
           });
           if (!nextGraph) return;
@@ -580,54 +567,55 @@ function CanvasAnalysisPropertiesSection({ analysisId, graph, setGraph, saveHist
 
       {/* ── Section 4: Chart Settings ── */}
       <ChartSettingsSection
-        title={activeCI?.title || analysis.title || ''}
+        title={activeCI?.title || ''}
         onTitleChange={(title) => {
-          const nextGraph = structuredClone(graph);
-          const a = nextGraph.canvasAnalyses?.find((a: any) => a.id === analysisId);
-          if (a) {
-            // Update the active content item's title
+          const nextGraph = mutateCanvasAnalysisGraph(graph, analysisId, (a) => {
             const ci = a.content_items?.[activeTabIndex] || a.content_items?.[0];
             if (ci) ci.title = title;
-            a.title = title;
-          }
-          setGraph(nextGraph);
+          });
+          if (nextGraph) setGraph(nextGraph);
         }}
-        viewMode={activeCI?.view_type || analysis.view_mode}
-        onViewModeChange={(mode) => updateAnalysis({ view_mode: mode })}
-        chartKind={activeCI?.kind || analysis.chart_kind}
+        viewMode={activeCI?.view_type || 'chart'}
+        onViewModeChange={(mode) => {
+          const nextGraph = mutateCanvasAnalysisGraph(graph, analysisId, (a) => {
+            const ci = a.content_items?.[activeTabIndex] || a.content_items?.[0];
+            if (ci) ci.view_type = mode as any;
+          });
+          if (nextGraph) { setGraph(nextGraph); saveHistoryState('Change view mode'); }
+        }}
+        chartKind={activeCI?.kind}
         effectiveChartKind={effectiveChartKind}
         kindLabels={useMemo(() => {
           const viewType = activeCI?.view_type || 'chart';
-          const aType = activeCI?.analysis_type || analysis?.recipe?.analysis?.analysis_type || '';
+          const aType = activeCI?.analysis_type || '';
           const kinds = getKindsForView(aType, viewType as 'chart' | 'cards' | 'table');
           if (kinds.length === 0) return undefined;
           const labels: Record<string, string> = {};
           for (const k of kinds) labels[k.id] = k.name;
           return labels;
-        }, [activeCI?.view_type, activeCI?.analysis_type, analysis?.recipe?.analysis?.analysis_type])}
+        }, [activeCI?.view_type, activeCI?.analysis_type])}
         onChartKindChange={(newKind) => {
           const nextGraph = mutateCanvasAnalysisGraph(graph, analysisId, (a) => {
-            // Write to the active content item's kind
             const ci = a.content_items?.[activeTabIndex] || a.content_items?.[0];
             if (ci) ci.kind = newKind || undefined;
-            // Also update container flat field for single-tab backward compat
-            a.chart_kind = newKind || undefined;
           });
           if (!nextGraph) return;
           setGraph(nextGraph);
           saveHistoryState(newKind ? 'Pin chart kind' : 'Reset chart kind to auto');
         }}
         chartKindOptions={chartKindOptions}
-        display={activeCI?.display || analysis.display}
+        display={activeCI?.display}
         onDisplayChange={updateDisplaySetting}
         onClearAllOverrides={() => {
-          const nextGraph = structuredClone(graph);
-          const a = nextGraph.canvasAnalyses?.find((a: any) => a.id === analysisId);
-          if (!a?.display) return;
-          const displaySettingsList = getDisplaySettingsForSurface(activeCI?.kind || analysis.chart_kind, activeCI?.view_type || analysis.view_mode, 'propsPanel');
-          for (const s of displaySettingsList) {
-            if ((s as any).overridable) delete a.display[(s as any).key];
-          }
+          const nextGraph = mutateCanvasAnalysisGraph(graph, analysisId, (a) => {
+            const ci = a.content_items?.[activeTabIndex] || a.content_items?.[0];
+            if (!ci?.display) return;
+            const displaySettingsList = getDisplaySettingsForSurface(activeCI?.kind, activeCI?.view_type || 'chart', 'propsPanel');
+            for (const s of displaySettingsList) {
+              if ((s as any).overridable) delete (ci.display as any)[(s as any).key];
+            }
+          });
+          if (!nextGraph) return;
           if (nextGraph.metadata) nextGraph.metadata.updated_at = new Date().toISOString();
           setGraph(nextGraph);
           saveHistoryState('Clear display overrides');
@@ -657,7 +645,7 @@ function CanvasAnalysisPropertiesSection({ analysisId, graph, setGraph, saveHist
                 chartKind: effectiveChartKind as any,
                 analysisResult: cachedResult,
                 scenarioIds: scenarioLayerItems.filter(i => i.visible).map(i => i.id),
-                title: analysis.title || undefined,
+                title: activeCI?.title || undefined,
                 source: {
                   parent_tab_id: liveTabId,
                   parent_file_id: currentTab?.fileId,
@@ -665,9 +653,9 @@ function CanvasAnalysisPropertiesSection({ analysisId, graph, setGraph, saveHist
                   analysis_type: selectedType || undefined,
                 },
                 render: {
-                  chart_kind: analysis.chart_kind || undefined,
-                  view_mode: analysis.view_mode || 'chart',
-                  display: analysis.display || {},
+                  chart_kind: activeCI?.kind || undefined,
+                  view_mode: activeCI?.view_type || 'chart',
+                  display: (activeCI?.display as Record<string, unknown>) || {},
                 },
               });
             }}

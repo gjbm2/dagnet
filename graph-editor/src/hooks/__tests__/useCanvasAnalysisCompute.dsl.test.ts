@@ -370,18 +370,17 @@ describe('useCanvasAnalysisCompute DSL handling', () => {
 
     const analysis: any = {
       id: 'test-analysis-1',
-      mode: 'live' as const,
-      view_mode: 'chart',
-      recipe: {
-        analysis: {
-          analysis_type: 'conversion_funnel',
-          analytics_dsl: analyticsDsl,
-        },
-      },
+      content_items: [{
+        id: 'ci-1',
+        analysis_type: 'conversion_funnel',
+        view_type: 'chart',
+        analytics_dsl: analyticsDsl,
+        mode: 'live' as const,
+      }],
     };
 
-    const analysisType = analysis.recipe.analysis.analysis_type;
-    const recipeAnalyticsDsl = analysis.recipe.analysis.analytics_dsl || '';
+    const analysisType = analysis.content_items[0].analysis_type;
+    const recipeAnalyticsDsl = analysis.content_items[0].analytics_dsl || '';
     const currentDSL = windowDsl;
 
     const finalDsl = recipeAnalyticsDsl || currentDSL;
@@ -450,15 +449,14 @@ describe('useCanvasAnalysisCompute DSL handling', () => {
 
     const analysis: any = {
       id: 'snapshot-analysis-1',
-      mode: 'live' as const,
-      view_mode: 'chart',
-      chart_kind: 'time_series',
-      recipe: {
-        analysis: {
-          analysis_type: 'branch_comparison',
-          analytics_dsl: 'visited(household-delegated)',
-        },
-      },
+      content_items: [{
+        id: 'ci-1',
+        analysis_type: 'branch_comparison',
+        view_type: 'chart',
+        kind: 'time_series',
+        analytics_dsl: 'visited(household-delegated)',
+        mode: 'live' as const,
+      }],
     };
 
     const { result, rerender } = renderHook(
@@ -488,14 +486,13 @@ describe('useCanvasAnalysisCompute DSL handling', () => {
 
     const analysis: any = {
       id: 'non-snapshot-analysis-1',
-      mode: 'live' as const,
-      view_mode: 'chart',
-      recipe: {
-        analysis: {
-          analysis_type: 'graph_overview',
-          analytics_dsl: '',
-        },
-      },
+      content_items: [{
+        id: 'ci-1',
+        analysis_type: 'graph_overview',
+        view_type: 'chart',
+        analytics_dsl: '',
+        mode: 'live' as const,
+      }],
     };
 
     renderHook(
@@ -542,15 +539,14 @@ describe('useCanvasAnalysisCompute DSL handling', () => {
 
     const analysis: any = {
       id: 'snapshot-analysis-2',
-      mode: 'live' as const,
-      view_mode: 'chart',
-      chart_kind: 'time_series',
-      recipe: {
-        analysis: {
-          analysis_type: 'branch_comparison',
-          analytics_dsl: 'visited(household-delegated)',
-        },
-      },
+      content_items: [{
+        id: 'ci-1',
+        analysis_type: 'branch_comparison',
+        view_type: 'chart',
+        kind: 'time_series',
+        analytics_dsl: 'visited(household-delegated)',
+        mode: 'live' as const,
+      }],
     };
 
     const { result } = renderHook(
@@ -612,15 +608,14 @@ describe('useCanvasAnalysisCompute DSL handling', () => {
 
     const analysis: any = {
       id: 'snapshot-analysis-daily-retry',
-      mode: 'live' as const,
-      view_mode: 'chart',
-      chart_kind: 'daily_conversions',
-      recipe: {
-        analysis: {
-          analysis_type: 'daily_conversions',
-          analytics_dsl: 'from(household-created).to(household-delegated)',
-        },
-      },
+      content_items: [{
+        id: 'ci-1',
+        analysis_type: 'daily_conversions',
+        view_type: 'chart',
+        kind: 'daily_conversions',
+        analytics_dsl: 'from(household-created).to(household-delegated)',
+        mode: 'live' as const,
+      }],
     };
 
     const { result } = renderHook(
@@ -661,15 +656,14 @@ describe('useCanvasAnalysisCompute DSL handling', () => {
 
     const analysis: any = {
       id: 'snapshot-analysis-seeded-branch-retry',
-      mode: 'live' as const,
-      view_mode: 'chart',
-      chart_kind: 'time_series',
-      recipe: {
-        analysis: {
-          analysis_type: 'branch_comparison',
-          analytics_dsl: 'visited(household-delegated)',
-        },
-      },
+      content_items: [{
+        id: 'ci-1',
+        analysis_type: 'branch_comparison',
+        view_type: 'chart',
+        kind: 'time_series',
+        analytics_dsl: 'visited(household-delegated)',
+        mode: 'live' as const,
+      }],
     };
 
     canvasAnalysisTransientCache.set(analysis.id, makeBranchComparisonBarResult().result);
@@ -693,14 +687,13 @@ describe('useCanvasAnalysisCompute DSL handling', () => {
     mockGraphFileState.source = { repository: 'repo-a', branch: 'main', path: 'graphs/graph-1.yaml' };
     const analysis: any = {
       id: 'custom-snapshot-analysis',
-      mode: 'fixed' as const,
-      view_mode: 'chart',
-      recipe: {
-        analysis: {
-          analysis_type: 'cohort_maturity',
-          analytics_dsl: 'from(household-delegated).to(switch-registered)',
-          what_if_dsl: 'case(test:on)',
-        },
+      content_items: [{
+        id: 'ci-1',
+        analysis_type: 'cohort_maturity',
+        view_type: 'chart',
+        analytics_dsl: 'from(household-delegated).to(switch-registered)',
+        what_if_dsl: 'case(test:on)',
+        mode: 'fixed' as const,
         scenarios: [
           {
             scenario_id: 'scenario-1',
@@ -713,7 +706,7 @@ describe('useCanvasAnalysisCompute DSL handling', () => {
             visibility_mode: 'f+e',
           },
         ],
-      },
+      }],
     };
 
     const { result } = renderHook(
@@ -746,14 +739,13 @@ describe('useCanvasAnalysisCompute DSL handling', () => {
 
     const analysis: any = {
       id: 'single-inflight-compute',
-      mode: 'live' as const,
-      view_mode: 'chart',
-      recipe: {
-        analysis: {
-          analysis_type: 'graph_overview',
-          analytics_dsl: '',
-        },
-      },
+      content_items: [{
+        id: 'ci-1',
+        analysis_type: 'graph_overview',
+        view_type: 'chart',
+        analytics_dsl: '',
+        mode: 'live' as const,
+      }],
     };
 
     renderHook(
@@ -777,15 +769,6 @@ describe('activeContentIndex: compute must use the selected tab properties', () 
     // Multi-tab analysis: tab 0 is edge_info, tab 1 is graph_overview with different DSL
     const analysis: any = {
       id: 'multi-tab-1',
-      mode: 'live' as const,
-      view_mode: 'chart',
-      chart_kind: 'info',
-      recipe: {
-        analysis: {
-          analysis_type: 'edge_info',
-          analytics_dsl: 'from(landing).to(signup)',
-        },
-      },
       content_items: [
         {
           id: 'ci-0',
@@ -793,6 +776,7 @@ describe('activeContentIndex: compute must use the selected tab properties', () 
           view_type: 'chart',
           kind: 'info',
           analytics_dsl: 'from(landing).to(signup)',
+          mode: 'live' as const,
         },
         {
           id: 'ci-1',
@@ -800,6 +784,7 @@ describe('activeContentIndex: compute must use the selected tab properties', () 
           view_type: 'chart',
           kind: 'pie',
           analytics_dsl: 'from(delegated).to(registered)',
+          mode: 'live' as const,
         },
       ],
     };

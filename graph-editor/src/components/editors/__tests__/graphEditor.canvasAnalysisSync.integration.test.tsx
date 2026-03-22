@@ -14,12 +14,14 @@ function makeGraph(title: string): GraphData {
     canvasAnalyses: [{
       id: 'a-1',
       x: 0, y: 0, width: 400, height: 300,
-      mode: 'fixed' as const,
-      view_mode: 'chart',
-      recipe: {
-        analysis: { analysis_type: 'graph_overview', analytics_dsl: '' },
+      content_items: [{
+        id: 'ci-1',
+        analysis_type: 'graph_overview',
+        view_type: 'chart',
+        analytics_dsl: '',
+        mode: 'fixed' as const,
         scenarios: [{ scenario_id: 'current', name: title, colour: '#3b82f6' }],
-      },
+      }],
     }],
   } as any;
 }
@@ -107,7 +109,7 @@ describe('GraphEditor canvas analysis sync bridge', () => {
 
     // First edit: rename to Currentsdfd
     const v1 = structuredClone(store.getState().graph!) as any;
-    v1.canvasAnalyses[0].recipe.scenarios[0].name = 'Currentsdfd';
+    v1.canvasAnalyses[0].content_items[0].scenarios[0].name = 'Currentsdfd';
     store.getState().setGraph(v1);
 
     await waitFor(() => {
@@ -117,11 +119,11 @@ describe('GraphEditor canvas analysis sync bridge', () => {
 
     // Second edit: rename to currenta
     const v2 = structuredClone(store.getState().graph!) as any;
-    v2.canvasAnalyses[0].recipe.scenarios[0].name = 'currenta';
+    v2.canvasAnalyses[0].content_items[0].scenarios[0].name = 'currenta';
     store.getState().setGraph(v2);
 
     await waitFor(() => {
-      expect((store.getState().graph as any).canvasAnalyses[0].recipe.scenarios[0].name).toBe('currenta');
+      expect((store.getState().graph as any).canvasAnalyses[0].content_items[0].scenarios[0].name).toBe('currenta');
     });
     const rev2 = store.getState().graphRevision;
     expect(rev2).toBeGreaterThan(rev1);
@@ -131,6 +133,6 @@ describe('GraphEditor canvas analysis sync bridge', () => {
 
     await new Promise((r) => setTimeout(r, 50));
 
-    expect((store.getState().graph as any).canvasAnalyses[0].recipe.scenarios[0].name).toBe('currenta');
+    expect((store.getState().graph as any).canvasAnalyses[0].content_items[0].scenarios[0].name).toBe('currenta');
   });
 });

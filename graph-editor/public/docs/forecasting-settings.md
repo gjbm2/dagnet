@@ -178,8 +178,26 @@ Given slice‑family onset values, DAGNet computes a **weighted β‑quantile** 
 **What it controls**  
 A guardrail used when fitting a lognormal from moments (median + mean). If the implied \(\text{mean}/\text{median}\) ratio exceeds this threshold, the fit is treated as unreliable and falls back to a default \(\sigma\).
 
-**Why it exists**  
+**Why it exists**
 Very heavy‑tailed moment pairs can imply extremely large \(\sigma\), which can destabilise downstream calculations.
+
+## Bayes Band Level — `bayes_band_level`
+
+**What it controls**
+The credible interval width for the Bayesian confidence band on cohort maturity charts. When a Bayesian posterior is available, the chart draws a shaded polygon between the upper and lower model curves.
+
+**Options**
+- **off**: no band shown
+- **80%**: narrower band (80% credible interval)
+- **90%**: default — 90% credible interval
+- **95%**: wider band
+- **99%**: widest band
+
+**Where it appears**
+Display settings in the chart toolbar and properties panel (cohort maturity charts only). Persisted in `display.bayes_band_level`.
+
+**Data requirement**
+Requires `bayesBandUpper` and `bayesBandLower` arrays in the analysis result (populated by the backend when Bayesian posteriors are available for the edge's latency model).
 
 **Current shipped default**  
 The default is **999999**, which effectively disables the guardrail (i.e. the fit will infer \(\sigma\) from moments even for very heavy tails). This was chosen because onset shifting can make the post‑onset median very small while the histogram still contains a real tail.

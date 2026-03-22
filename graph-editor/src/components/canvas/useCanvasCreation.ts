@@ -329,7 +329,7 @@ export function useCanvasCreation({
       // Ensure content item carries DSL (may be absent on legacy data or hover-preview items)
       const contentItem = rawItem.analytics_dsl ? rawItem : {
         ...rawItem,
-        analytics_dsl: rawItem.analytics_dsl || target.recipe?.analysis?.analytics_dsl,
+        analytics_dsl: rawItem.analytics_dsl || target.content_items?.[0]?.analytics_dsl,
       };
       const newItem = addContentItem(target, contentItem);
       console.log('[SnapHandler] SNAP committed', {

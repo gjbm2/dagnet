@@ -273,9 +273,21 @@ What we believe about a parameter after seeing data (e.g. distribution over p, o
 Shape parameters for the **Beta** distribution, a standard choice for modelling probabilities.  
 Roughly, alpha ≈ “successes + 1”, beta ≈ “failures + 1”.
 
-**Credible interval**  
-Bayesian analogue of a confidence interval.  
+**Credible interval**
+Bayesian analogue of a confidence interval.
 Example: “there is a 90% posterior probability that the median lag lies between 4 and 9 days”.
+
+**Confidence band (Bayes band)**
+Shaded region on a cohort maturity chart showing the credible interval around the model curve. Configurable via `bayes_band_level` display setting (off, 80%, 90%, 95%, 99%). Drawn as a filled polygon between the upper and lower model curves.
+
+**Model vars (`model_vars`)**
+Array of candidate model variable sets on an edge, each from a different source: `analytic` (from data retrieval), `bayesian` (from the Bayes webhook), or `manual` (from user override). Each entry carries `probability.mean/stdev` and optional `latency` parameters. The active entry is determined by `model_source_preference`.
+
+**Model source preference (`model_source_preference`)**
+Controls which `model_vars` entry promotes its values to `p.mean`/`p.stdev`. Options: `best_available` (default — prefers Bayesian if available, falls back to analytic), `bayesian`, `analytic`, `manual`. Can be set per-edge (with `model_source_preference_overridden` flag) or as a graph-level default.
+
+**Path onset (`path_onset_delta_days`)**
+Cumulative onset dead-time along the path from the anchor node to this edge. Computed as a DP sum of per-edge `onset_delta_days` values. Used internally for path-level lag model fitting. Related fields: `path_onset_sd`, `path_onset_hdi_lower`, `path_onset_hdi_upper` (posterior statistics when onset is estimated as a latent variable).
 
 ---
 

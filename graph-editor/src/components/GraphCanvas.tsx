@@ -55,6 +55,7 @@ import { SelectionConnectors } from './SelectionConnectors';
 import { captureTabScenariosToRecipe } from '../services/captureTabScenariosService';
 import { resolveAnalysisType } from '../services/analysisTypeResolutionService';
 import { mutateCanvasAnalysisGraph, deleteCanvasAnalysisFromGraph } from '../services/canvasAnalysisMutationService';
+import { getActiveContentTabIndex } from '../services/activeContentTabTracker';
 import { useDashboardMode } from '../hooks/useDashboardMode';
 import { useCopyPaste } from '../hooks/useCopyPaste';
 import { useGraphStore } from '../contexts/GraphStoreContext';
@@ -955,9 +956,10 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
       if (!source) return;
       const ci = source.content_items?.find((c: any) => c.id === contentItemId);
       if (!ci) return;
-      // Ensure content item carries DSL (backfill from container if legacy)
-      if (!ci.analytics_dsl && source.recipe?.analysis?.analytics_dsl) {
-        ci.analytics_dsl = source.recipe.analysis.analytics_dsl;
+      // Ensure content item carries DSL (backfill from first content item if missing)
+      if (!ci.analytics_dsl) {
+        const firstCi = source.content_items?.[0];
+        if (firstCi?.analytics_dsl) ci.analytics_dsl = firstCi.analytics_dsl;
       }
 
       const clonedItem = { ...structuredClone(ci), id: crypto.randomUUID() };
@@ -1579,10 +1581,12 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
     const analysis = graph.canvasAnalyses?.find((a: any) => a.id === analysisContextMenu.analysisId) as any;
     if (!analysis) return;
     let cancelled = false;
-    const dsl = analysis.content_items?.[0]?.analytics_dsl || analysis.recipe?.analysis?.analytics_dsl;
-    const scenarioCount = analysis.mode === 'live'
+    const activeIdx = getActiveContentTabIndex(analysisContextMenu.analysisId);
+    const ci = analysis.content_items?.[activeIdx] || analysis.content_items?.[0];
+    const dsl = ci?.analytics_dsl;
+    const scenarioCount = ci?.mode === 'live'
       ? (tabId ? tabOperations.getScenarioState(tabId)?.visibleScenarioIds?.length : null) || 1
-      : (analysis.recipe?.scenarios?.length || 1);
+      : (ci?.scenarios?.length || 1);
     resolveAnalysisType(graph, dsl || undefined, scenarioCount).then(({ availableAnalyses }) => {
       if (!cancelled) setAnalysisCtxAvailableTypes(availableAnalyses);
     });

@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { ChevronRight, Search, X } from 'lucide-react';
+import { ChevronRight, Plus, Search, X } from 'lucide-react';
 import type { AvailableAnalysis } from '../../lib/graphComputeClient';
 import { ANALYSIS_TYPES, type AnalysisTypeMeta } from './analysisTypes';
 
@@ -16,6 +16,8 @@ interface AnalysisTypeCardListProps {
   className?: string;
   /** Show a search/filter input above the card grid */
   searchable?: boolean;
+  /** Add as new tab (shows + icon on hover) */
+  onAddAsTab?: (analysisTypeId: string) => void;
 }
 
 const normalizeAnalysisId = (id: string) => (id === 'graph_overview_empty' ? 'graph_overview' : id);
@@ -30,6 +32,7 @@ export function AnalysisTypeCardList({
   onCardDragStart,
   className,
   searchable = false,
+  onAddAsTab,
 }: AnalysisTypeCardListProps) {
   const [searchTerm, setSearchTerm] = useState('');
 
@@ -99,6 +102,15 @@ export function AnalysisTypeCardList({
               >
                 <Icon size={16} strokeWidth={2} />
                 <span className="analytics-type-icon-label">{typeMeta.name}</span>
+                {onAddAsTab && (
+                  <span
+                    className="analytics-type-add-tab"
+                    title="Add as new tab"
+                    onClick={(e) => { e.stopPropagation(); onAddAsTab(typeMeta.id); }}
+                  >
+                    <Plus size={10} />
+                  </span>
+                )}
               </button>
             );
           }

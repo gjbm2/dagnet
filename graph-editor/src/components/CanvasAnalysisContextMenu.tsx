@@ -1,7 +1,7 @@
 import React, { useMemo } from 'react';
-import { Lock, Zap, Code, ArrowUpCircle, SlidersHorizontal, ExternalLink, RefreshCw, ArrowUpToLine, ArrowUp, ArrowDown, ArrowDownToLine, Copy, Scissors, Trash2, Crosshair } from 'lucide-react';
+import { Lock, Zap, Code, ArrowUpCircle, SlidersHorizontal, ExternalLink, RefreshCw, ArrowUpToLine, ArrowUp, ArrowDown, ArrowDownToLine, Copy, Scissors, Trash2, Crosshair, Plus } from 'lucide-react';
 import { ContextMenu, ContextMenuItem } from './ContextMenu';
-import type { CanvasAnalysis } from '@/types';
+import type { CanvasAnalysis, ContentItem } from '@/types';
 import type { ChartRecipeScenario } from '../types/chartRecipe';
 import type { AvailableAnalysis } from '../lib/graphComputeClient';
 import { buildContextMenuSettingItems } from '../lib/analysisDisplaySettingsRegistry';
@@ -81,6 +81,7 @@ interface CanvasAnalysisContextMenuProps {
   y: number;
   analysisId: string;
   analysis: CanvasAnalysis;
+  contentItemIndex?: number;
   analysisCount: number;
   onUpdate: (id: string, updates: Partial<CanvasAnalysis>) => void;
   onCaptureFromTab?: () => { scenarios: ChartRecipeScenario[]; what_if_dsl?: string } | null;
@@ -110,6 +111,8 @@ interface CanvasAnalysisContextMenuProps {
   availableAnalyses?: AvailableAnalysis[];
   /** Callback when user changes analysis type */
   onAnalysisTypeChange?: (analysisTypeId: string) => void;
+  /** Callback to add a new tab with a given analysis type */
+  onAddTabWithType?: (analysisTypeId: string) => void;
   /** Whether the subject overlay connectors are active */
   overlayActive?: boolean;
   /** Current overlay colour */
@@ -121,14 +124,15 @@ interface CanvasAnalysisContextMenuProps {
 }
 
 export function CanvasAnalysisContextMenu({
-  x, y, analysisId, analysis, analysisCount,
+  x, y, analysisId, analysis, contentItemIndex = 0, analysisCount,
   onUpdate, onCaptureFromTab, onUseAsCurrent, onEditScenarioDsl, onBringToFront, onBringForward, onSendBackward, onSendToBack,
   onCopy, onCut, onDelete, onClose,
   effectiveChartKind, display, onDisplayChange, onOpenAsTab, onRefresh, hasCachedResult,
-  availableAnalyses, onAnalysisTypeChange,
+  availableAnalyses, onAnalysisTypeChange, onAddTabWithType,
   overlayActive, overlayColour, onOverlayToggle, onOverlayColourChange,
 }: CanvasAnalysisContextMenuProps) {
-  const currentTypeId = analysis.recipe?.analysis?.analysis_type;
+  const ci: ContentItem | undefined = analysis.content_items?.[contentItemIndex] || analysis.content_items?.[0];
+  const currentTypeId = ci?.analysis_type;
 
   const items = useMemo((): ContextMenuItem[] => {
     const result: ContextMenuItem[] = [];
@@ -142,15 +146,20 @@ export function CanvasAnalysisContextMenu({
           icon,
           checked: a.id === currentTypeId,
           onClick: () => onAnalysisTypeChange(a.id),
+          ...(onAddTabWithType ? {
+            secondaryIcon: React.createElement(Plus, { size: 12 }),
+            secondaryTitle: 'Add as new tab',
+            onSecondaryClick: () => onAddTabWithType(a.id),
+          } : {}),
         };
       });
       result.push({ label: 'Analysis Type', onClick: () => {}, submenu: typeItems });
     }
 
     const viewModeItems: ContextMenuItem[] = [
-      { label: 'Chart', checked: analysis.view_mode === 'chart', onClick: () => onUpdate(analysisId, { view_mode: 'chart' }) },
-      { label: 'Cards', checked: analysis.view_mode === 'cards', onClick: () => onUpdate(analysisId, { view_mode: 'cards' }) },
-      { label: 'Table', checked: analysis.view_mode === 'table', onClick: () => onUpdate(analysisId, { view_mode: 'table' }) },
+      { label: 'Chart', checked: ci?.view_type === 'chart', onClick: () => onUpdate(analysisId, { content_items: analysis.content_items.map((item, i) => i === contentItemIndex ? { ...item, view_type: 'chart' } : item) } as any) },
+      { label: 'Cards', checked: ci?.view_type === 'cards', onClick: () => onUpdate(analysisId, { content_items: analysis.content_items.map((item, i) => i === contentItemIndex ? { ...item, view_type: 'cards' } : item) } as any) },
+      { label: 'Table', checked: ci?.view_type === 'table', onClick: () => onUpdate(analysisId, { content_items: analysis.content_items.map((item, i) => i === contentItemIndex ? { ...item, view_type: 'table' } : item) } as any) },
     ];
     result.push({ label: 'View Mode', onClick: () => {}, submenu: viewModeItems });
 
@@ -186,42 +195,38 @@ export function CanvasAnalysisContextMenu({
 
     result.push(
       { label: '', onClick: () => {}, divider: true },
-      analysis.mode === 'live'
+      ci?.mode === 'live'
         ? {
             label: 'Switch to Custom scenarios',
             icon: <Lock size={14} />,
             onClick: () => {
               const captured = onCaptureFromTab?.();
-              if (captured) {
-                onUpdate(analysisId, {
-                  mode: 'custom' as const,
-                  recipe: {
-                    ...analysis.recipe,
-                    scenarios: captured.scenarios,
-                    analysis: { ...analysis.recipe.analysis, what_if_dsl: captured.what_if_dsl },
-                  },
-                } as any);
-              } else {
-                onUpdate(analysisId, { mode: 'custom' as const } as any);
-              }
+              const updatedItems = analysis.content_items.map((item, i) => {
+                if (i !== contentItemIndex) return item;
+                if (captured) {
+                  return { ...item, mode: 'custom' as const, scenarios: captured.scenarios, what_if_dsl: captured.what_if_dsl };
+                }
+                return { ...item, mode: 'custom' as const };
+              });
+              onUpdate(analysisId, { content_items: updatedItems } as any);
             },
           }
         : {
             label: 'Return to Live scenarios',
             icon: <Zap size={14} />,
-            onClick: () => onUpdate(analysisId, {
-              mode: 'live' as const,
-              recipe: {
-                ...analysis.recipe,
-                scenarios: undefined,
-                analysis: { ...analysis.recipe.analysis, what_if_dsl: undefined },
-              },
-            } as any),
+            onClick: () => {
+              const updatedItems = analysis.content_items.map((item, i) =>
+                i === contentItemIndex
+                  ? { ...item, mode: 'live' as const, scenarios: undefined, what_if_dsl: undefined }
+                  : item,
+              );
+              onUpdate(analysisId, { content_items: updatedItems } as any);
+            },
           },
     );
 
-    if (analysis.mode !== 'live' && onEditScenarioDsl) {
-      const scenarios = analysis.recipe?.scenarios || [];
+    if (ci?.mode !== 'live' && onEditScenarioDsl) {
+      const scenarios = ci?.scenarios || [];
       if (scenarios.length > 0) {
         const editItems: ContextMenuItem[] = scenarios.map((s: any) => ({
           label: s.name || s.scenario_id,
@@ -231,8 +236,8 @@ export function CanvasAnalysisContextMenu({
       }
     }
 
-    if (analysis.mode !== 'live' && onUseAsCurrent) {
-      const scenarios = analysis.recipe?.scenarios || [];
+    if (ci?.mode !== 'live' && onUseAsCurrent) {
+      const scenarios = ci?.scenarios || [];
       const currentScenario = scenarios.find((s: any) => s.scenario_id === 'current');
       const dsl = currentScenario?.effective_dsl;
       if (typeof dsl === 'string' && dsl.trim()) {
@@ -247,7 +252,7 @@ export function CanvasAnalysisContextMenu({
     if (effectiveChartKind && onDisplayChange) {
       const displayItems = buildContextMenuSettingItems(
         effectiveChartKind,
-        analysis.view_mode || 'chart',
+        ci?.view_type || 'chart',
         display,
         (key, value) => onDisplayChange(key, value),
       );
@@ -294,7 +299,7 @@ export function CanvasAnalysisContextMenu({
     );
 
     return result;
-  }, [x, y, analysisId, analysis, analysisCount, onUpdate, onCaptureFromTab, onUseAsCurrent, onEditScenarioDsl, onBringToFront, onBringForward, onSendBackward, onSendToBack, onCopy, onCut, onDelete, effectiveChartKind, display, onDisplayChange, onOpenAsTab, onRefresh, hasCachedResult, availableAnalyses, onAnalysisTypeChange, currentTypeId, overlayActive, overlayColour, onOverlayToggle, onOverlayColourChange]);
+  }, [x, y, analysisId, analysis, contentItemIndex, ci, analysisCount, onUpdate, onCaptureFromTab, onUseAsCurrent, onEditScenarioDsl, onBringToFront, onBringForward, onSendBackward, onSendToBack, onCopy, onCut, onDelete, effectiveChartKind, display, onDisplayChange, onOpenAsTab, onRefresh, hasCachedResult, availableAnalyses, onAnalysisTypeChange, currentTypeId, overlayActive, overlayColour, onOverlayToggle, onOverlayColourChange]);
 
   return <ContextMenu x={x} y={y} items={items} onClose={onClose} />;
 }

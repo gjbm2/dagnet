@@ -64,15 +64,16 @@ describe('Canvas analysis CRUD: Create', () => {
 
     expect(graph.canvasAnalyses).toHaveLength(1);
     const a = graph.canvasAnalyses[0];
-    expect(a.recipe.analysis.analytics_dsl).toBe(dsl);
-    expect(a.recipe.analysis.analysis_type).toBe('path_between');
+    const ci = a.content_items[0];
+    expect(ci.analytics_dsl).toBe(dsl);
+    expect(ci.analysis_type).toBe('path_between');
     expect(a.x).toBe(100);
     expect(a.y).toBe(200);
     expect(a.width).toBe(400);
     expect(a.height).toBe(300);
-    expect(a.analysis_type_overridden).toBeFalsy();
-    expect(a.mode).toBe('live');
-    expect(a.view_mode).toBe('chart');
+    expect(ci.analysis_type_overridden).toBeFalsy();
+    expect(ci.mode).toBe('live');
+    expect(ci.view_type).toBe('chart');
   });
 
   it('should create with explicit type and mark as overridden', () => {
@@ -83,8 +84,8 @@ describe('Canvas analysis CRUD: Create', () => {
     });
     const analysis = buildCanvasAnalysisObject(payload, { x: 0, y: 0 }, { width: 400, height: 300 });
 
-    expect(analysis.recipe.analysis.analysis_type).toBe('bridge_view');
-    expect(analysis.analysis_type_overridden).toBe(true);
+    expect(analysis.content_items[0].analysis_type).toBe('bridge_view');
+    expect(analysis.content_items[0].analysis_type_overridden).toBe(true);
   });
 
   it('should create blank analysis with no selected type when no selection', () => {
@@ -94,9 +95,9 @@ describe('Canvas analysis CRUD: Create', () => {
     const payload = buildCanvasAnalysisPayload({ analyticsDsl: '' });
     const analysis = buildCanvasAnalysisObject(payload, { x: 50, y: 50 }, { width: 400, height: 300 });
 
-    expect(analysis.recipe.analysis.analytics_dsl).toBeUndefined();
-    expect(analysis.recipe.analysis.analysis_type).toBe('');
-    expect(analysis.analysis_type_overridden).toBeFalsy();
+    expect(analysis.content_items[0].analytics_dsl).toBeUndefined();
+    expect(analysis.content_items[0].analysis_type).toBe('');
+    expect(analysis.content_items[0].analysis_type_overridden).toBeFalsy();
   });
 
   it('should assign unique UUID on each creation', () => {
@@ -159,47 +160,48 @@ describe('Canvas analysis CRUD: Update via mutateCanvasAnalysisGraph', () => {
 
   it('should update analysis type and set overridden', () => {
     const result = mutateCanvasAnalysisGraph(graph, analysis.id, (a) => {
-      a.recipe.analysis.analysis_type = 'bridge_view';
-      a.analysis_type_overridden = true;
+      a.content_items[0].analysis_type = 'bridge_view';
+      a.content_items[0].analysis_type_overridden = true;
     });
     expect(result).not.toBeNull();
     const updated = result!.canvasAnalyses.find((a: any) => a.id === analysis.id);
-    expect(updated.recipe.analysis.analysis_type).toBe('bridge_view');
-    expect(updated.analysis_type_overridden).toBe(true);
+    expect(updated.content_items[0].analysis_type).toBe('bridge_view');
+    expect(updated.content_items[0].analysis_type_overridden).toBe(true);
     expect(result!.metadata.updated_at).not.toBe(graph.metadata.updated_at);
   });
 
   it('should update analytics DSL', () => {
     const result = mutateCanvasAnalysisGraph(graph, analysis.id, (a) => {
-      a.recipe.analysis.analytics_dsl = 'to(purchase)';
+      a.content_items[0].analytics_dsl = 'to(purchase)';
     });
     const updated = result!.canvasAnalyses.find((a: any) => a.id === analysis.id);
-    expect(updated.recipe.analysis.analytics_dsl).toBe('to(purchase)');
+    expect(updated.content_items[0].analytics_dsl).toBe('to(purchase)');
   });
 
   it('should update chart kind', () => {
     const result = mutateCanvasAnalysisGraph(graph, analysis.id, (a) => {
-      a.chart_kind = 'bridge';
+      a.content_items[0].kind = 'bridge';
     });
     const updated = result!.canvasAnalyses.find((a: any) => a.id === analysis.id);
-    expect(updated.chart_kind).toBe('bridge');
+    expect(updated.content_items[0].kind).toBe('bridge');
   });
 
   it('should update display settings', () => {
     const result = mutateCanvasAnalysisGraph(graph, analysis.id, (a) => {
-      if (!a.display) a.display = {};
-      (a.display as any).orientation = 'horizontal';
+      const ci = a.content_items[0];
+      if (!ci.display) ci.display = {} as any;
+      (ci.display as any).orientation = 'horizontal';
     });
     const updated = result!.canvasAnalyses.find((a: any) => a.id === analysis.id);
-    expect(updated.display.orientation).toBe('horizontal');
+    expect(updated.content_items[0].display.orientation).toBe('horizontal');
   });
 
   it('should update title', () => {
     const result = mutateCanvasAnalysisGraph(graph, analysis.id, (a) => {
-      a.title = 'My Custom Chart';
+      a.content_items[0].title = 'My Custom Chart';
     });
     const updated = result!.canvasAnalyses.find((a: any) => a.id === analysis.id);
-    expect(updated.title).toBe('My Custom Chart');
+    expect(updated.content_items[0].title).toBe('My Custom Chart');
   });
 
   it('should return null for nonexistent analysis ID', () => {
@@ -208,11 +210,11 @@ describe('Canvas analysis CRUD: Update via mutateCanvasAnalysisGraph', () => {
   });
 
   it('should not mutate the original graph', () => {
-    const originalType = graph.canvasAnalyses[0].recipe.analysis.analysis_type;
+    const originalType = graph.canvasAnalyses[0].content_items[0].analysis_type;
     mutateCanvasAnalysisGraph(graph, analysis.id, (a) => {
-      a.recipe.analysis.analysis_type = 'something_else';
+      a.content_items[0].analysis_type = 'something_else';
     });
-    expect(graph.canvasAnalyses[0].recipe.analysis.analysis_type).toBe(originalType);
+    expect(graph.canvasAnalyses[0].content_items[0].analysis_type).toBe(originalType);
   });
 });
 
@@ -229,7 +231,7 @@ describe('Canvas analysis CRUD: Live ↔ Custom toggle', () => {
     baseDSL: 'window(-30d:)',
   };
 
-  it('should toggle Live → Custom: capture scenarios into recipe', () => {
+  it('should toggle Live → Custom: capture scenarios into content item', () => {
     const analysis = buildCanvasAnalysisObject(
       buildCanvasAnalysisPayload({ analyticsDsl: 'from(a).to(b)', analysisType: 'conversion_funnel' }),
       { x: 0, y: 0 }, { width: 400, height: 300 },
@@ -245,16 +247,18 @@ describe('Canvas analysis CRUD: Live ↔ Custom toggle', () => {
     });
 
     const result = mutateCanvasAnalysisGraph(graph, analysis.id, (a) => {
-      a.mode = 'custom';
-      a.recipe = { ...a.recipe, scenarios: captured };
+      const ci = a.content_items[0];
+      ci.mode = 'custom';
+      ci.scenarios = captured;
     });
 
     const updated = result!.canvasAnalyses[0];
-    expect(updated.mode).toBe('custom');
-    expect(updated.recipe.scenarios).toBeDefined();
-    expect(updated.recipe.scenarios!.length).toBeGreaterThan(0);
+    const ci = updated.content_items[0];
+    expect(ci.mode).toBe('custom');
+    expect(ci.scenarios).toBeDefined();
+    expect(ci.scenarios!.length).toBeGreaterThan(0);
     // deriveOrderedVisibleIds puts base before current
-    expect(updated.recipe.scenarios![0].scenario_id).toBe('base');
+    expect(ci.scenarios![0].scenario_id).toBe('base');
   });
 
   it('should toggle Custom → Live: clear scenarios', () => {
@@ -262,20 +266,22 @@ describe('Canvas analysis CRUD: Live ↔ Custom toggle', () => {
       buildCanvasAnalysisPayload({ analysisType: 'conversion_funnel' }),
       { x: 0, y: 0 }, { width: 400, height: 300 },
     );
-    analysis.mode = 'custom';
-    analysis.recipe.scenarios = [
+    analysis.content_items[0].mode = 'custom';
+    analysis.content_items[0].scenarios = [
       { scenario_id: 'current', name: 'Current', effective_dsl: 'window(-30d:)', colour: '#3b82f6' },
     ] as any;
     let graph = addAnalysisToGraph(makeGraph(), analysis);
 
     const result = mutateCanvasAnalysisGraph(graph, analysis.id, (a) => {
-      a.mode = 'live';
-      a.recipe = { ...a.recipe, scenarios: undefined };
+      const ci = a.content_items[0];
+      ci.mode = 'live';
+      ci.scenarios = undefined;
     });
 
     const updated = result!.canvasAnalyses[0];
-    expect(updated.mode).toBe('live');
-    expect(updated.recipe.scenarios).toBeUndefined();
+    const ci = updated.content_items[0];
+    expect(ci.mode).toBe('live');
+    expect(ci.scenarios).toBeUndefined();
   });
 });
 
@@ -285,21 +291,21 @@ describe('Canvas analysis CRUD: Scenario edits in Custom mode', () => {
       buildCanvasAnalysisPayload({ analysisType: 'conversion_funnel' }),
       { x: 0, y: 0 }, { width: 400, height: 300 },
     );
-    analysis.mode = 'custom';
-    analysis.recipe.scenarios = [
+    analysis.content_items[0].mode = 'custom';
+    analysis.content_items[0].scenarios = [
       { scenario_id: 'sc-1', name: 'Original', effective_dsl: 'window(-30d:)', colour: '#3b82f6' },
       { scenario_id: 'sc-2', name: 'Second', effective_dsl: 'window(-7d:)', colour: '#ec4899' },
     ] as any;
     let graph = addAnalysisToGraph(makeGraph(), analysis);
 
     const result = mutateCanvasAnalysisGraph(graph, analysis.id, (a) => {
-      const s = a.recipe.scenarios?.find((s: any) => s.scenario_id === 'sc-1');
+      const s = a.content_items[0].scenarios?.find((s: any) => s.scenario_id === 'sc-1');
       if (s) (s as any).name = 'Renamed';
     });
 
     const updated = result!.canvasAnalyses[0];
-    expect(updated.recipe.scenarios![0].name).toBe('Renamed');
-    expect(updated.recipe.scenarios![1].name).toBe('Second');
+    expect(updated.content_items[0].scenarios![0].name).toBe('Renamed');
+    expect(updated.content_items[0].scenarios![1].name).toBe('Second');
   });
 });
 
@@ -315,7 +321,7 @@ describe('Canvas analysis CRUD: Copy/paste via subgraphExtractor + UpdateManager
       }),
       { x: 100, y: 200 }, { width: 400, height: 300 },
     );
-    analysis.title = 'My Chart';
+    analysis.content_items[0].title = 'My Chart';
     let graph = addAnalysisToGraph(makeGraph(), analysis);
 
     const subgraph = extractSubgraph({
@@ -342,8 +348,8 @@ describe('Canvas analysis CRUD: Copy/paste via subgraphExtractor + UpdateManager
     expect(pasted.id).not.toBe(analysis.id);
     expect(pasted.x).toBe(150); // 100 + 50 offset
     expect(pasted.y).toBe(250); // 200 + 50 offset
-    expect(pasted.recipe.analysis.analytics_dsl).toBe('from(a).to(b)');
-    expect(pasted.recipe.analysis.analysis_type).toBe('conversion_funnel');
-    expect(pasted.title).toBe('My Chart');
+    expect(pasted.content_items[0].analytics_dsl).toBe('from(a).to(b)');
+    expect(pasted.content_items[0].analysis_type).toBe('conversion_funnel');
+    expect(pasted.content_items[0].title).toBe('My Chart');
   });
 });

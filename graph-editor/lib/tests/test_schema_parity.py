@@ -28,7 +28,7 @@ from graph_types import (
     ConditionalProbability, Metadata, Policies, Layout,
     ResidualBehavior, DataSource, CaseDataSource,
     LatencyConfig, ForecastParams, NodeImage, PostIt, Container,
-    CanvasAnalysis, CanvasAnalysisDisplay, ChartRecipeCore,
+    CanvasAnalysis, ContentItem, CanvasAnalysisDisplay, ChartRecipeCore,
     ChartRecipeAnalysis, ChartRecipeScenario,
 )
 
@@ -300,6 +300,7 @@ class TestAllSchemaDefsHavePythonTypes:
         'PostIt': PostIt,
         'Container': Container,
         'CanvasAnalysis': CanvasAnalysis,
+        'ContentItem': ContentItem,
         'CanvasAnalysisDisplay': CanvasAnalysisDisplay,
         'ChartRecipeCore': ChartRecipeCore,
         'ChartRecipeAnalysis': ChartRecipeAnalysis,

@@ -107,6 +107,7 @@ export function buildCanvasAnalysisObject(
         analysis_type_overridden: ci.analysis_type_overridden,
         analytics_dsl: ci.analytics_dsl || analyticsDsl,
         chart_current_layer_dsl: ci.chart_current_layer_dsl,
+        mode: 'live' as const,
       }))
     : [{
         id: crypto.randomUUID(),
@@ -117,6 +118,7 @@ export function buildCanvasAnalysisObject(
         display: payload.display as any,
         analysis_type_overridden: payload.analysisTypeOverridden || undefined,
         analytics_dsl: analyticsDsl,
+        mode: 'live' as const,
       }];
 
   return {
@@ -125,13 +127,6 @@ export function buildCanvasAnalysisObject(
     y: Math.round(position.y),
     width: size.width,
     height: size.height,
-    // Flat fields preserved for backward compatibility during migration
-    view_mode: payload.viewMode,
-    chart_kind: payload.chartKind,
-    mode: 'live' as const,
-    analysis_type_overridden: payload.analysisTypeOverridden || undefined,
-    recipe: payload.recipe,
-    ...(payload.display ? { display: payload.display } : {}),
     content_items: contentItems,
-  } as CanvasAnalysis;
+  };
 }

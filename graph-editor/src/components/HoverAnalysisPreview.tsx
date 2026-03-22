@@ -21,6 +21,7 @@ import { GripVertical } from 'lucide-react';
 import { AnalysisChartContainer } from './charts/AnalysisChartContainer';
 import { AnalysisInfoCard } from './analytics/AnalysisInfoCard';
 import { ANALYSIS_TYPES, getAnalysisTypeMeta } from './panels/analysisTypes';
+import { humaniseAnalysisType } from '../services/canvasAnalysisMutationService';
 import { useCanvasAnalysisCompute } from '../hooks/useCanvasAnalysisCompute';
 import { buildGraphForAnalysisLayer } from '../services/CompositionService';
 import { resolveAnalysisType } from '../services/analysisTypeResolutionService';
@@ -154,15 +155,6 @@ function DraggableAnalysisCard({
   // When commissioned, analysis_type populates → hook triggers compute automatically.
   const syntheticAnalysis = useMemo((): CanvasAnalysis => ({
     id: stableId,
-    recipe: {
-      analysis: {
-        analysis_type: deferred ? '' : analysisType,
-        analytics_dsl: dsl,
-      },
-    },
-    view_mode: 'chart',
-    chart_kind: chartKind,
-    mode: 'live' as const,
     x: 0, y: 0, width: 300, height: 200,
     content_items: [{
       id: `${stableId}-content-0`,
@@ -170,6 +162,7 @@ function DraggableAnalysisCard({
       view_type: 'chart' as const,
       kind: chartKind,
       analytics_dsl: dsl,
+      mode: 'live' as const,
     }],
   }), [stableId, analysisType, dsl, chartKind, deferred]);
 
@@ -259,6 +252,7 @@ function DraggableAnalysisCard({
   const dragState = useRef<{ startX: number; startY: number; ox: number; oy: number } | null>(null);
   const [dragging, setDragging] = useState(false);
   const [dragDelta, setDragDelta] = useState<{ dx: number; dy: number } | null>(null);
+  const [isOverDropTarget, setIsOverDropTarget] = useState(false);
   // Tab drag active — suppresses hover dismissal while a tab is being dragged
   const [tabDragging, setTabDragging] = useState(false);
   const anyDragging = dragging || tabDragging;
@@ -305,8 +299,10 @@ function DraggableAnalysisCard({
         }));
       }
       dragDropTargetRef.current = targetId;
+      if (targetId) setIsOverDropTarget(true);  // Latch on — only cleared on pointer up
       if (targetId) {
         const meta = ANALYSIS_TYPES.find((t) => t.id === analysisType);
+        const humanTitle = humaniseAnalysisType(analysisType);
         window.dispatchEvent(new CustomEvent('dagnet:previewContentItem', {
           detail: {
             targetAnalysisId: targetId,
@@ -314,7 +310,7 @@ function DraggableAnalysisCard({
               analysis_type: analysisType,
               view_type: 'chart',
               kind: effectiveChartKind,
-              title: meta?.name || analysisType,
+              title: humanTitle,
               analytics_dsl: dsl,
             },
             analysisResult: result,
@@ -330,6 +326,7 @@ function DraggableAnalysisCard({
     dragState.current = null;
     setDragging(false);
     setDragDelta(null);
+    setIsOverDropTarget(false);
 
     const dropTarget = dragDropTargetRef.current;
     // Clear any snap-in preview
@@ -351,11 +348,12 @@ function DraggableAnalysisCard({
     // Drop into existing container — snap content item
     if (dropTarget) {
       const meta = ANALYSIS_TYPES.find((t) => t.id === analysisType);
+      const humanTitle = meta?.name || analysisType?.replace(/[_-]/g, ' ').replace(/\b\w/g, c => c.toUpperCase()) || analysisType;
       console.log('[HoverPreview] SNAP dispatch', {
         dropTarget: dropTarget?.slice(0, 12),
         analysisType,
         effectiveChartKind,
-        title: meta?.name || analysisType,
+        title: humanTitle,
         dsl: dsl?.slice(0, 40),
         hasResult: !!result,
       });
@@ -366,7 +364,7 @@ function DraggableAnalysisCard({
             analysis_type: analysisType,
             view_type: 'chart',
             kind: effectiveChartKind,
-            title: meta?.name || analysisType,
+            title: humanTitle,
             analytics_dsl: dsl,
           },
           analysisResult: result,
@@ -472,6 +470,7 @@ function DraggableAnalysisCard({
         analysis_type: analysisType,
         view_type: 'chart',
         kind: chartKind,
+        mode: 'live' as const,
       }];
     }
     return tabIds.map(tid => ({
@@ -481,6 +480,7 @@ function DraggableAnalysisCard({
       kind: tid,
       title: TAB_LABELS[tid] || tid,
       analysis_type_overridden: true,
+      mode: 'live' as const,
     }));
   }, [stableId, tabIds, analysisType, chartKind]);
 
@@ -548,6 +548,7 @@ function DraggableAnalysisCard({
         ...style,
         ...(hasMultipleTabs && !hideHeader ? { width: 420 } : {}),
         ...(loading && !result && !error && !backendUnavailable && !waitingForDeps ? { opacity: 0 } : {}),
+        ...(isOverDropTarget ? { opacity: 0 } : {}),
         ...(dragDelta ? { transform: `translate(${dragDelta.dx}px, ${dragDelta.dy}px)`, zIndex: 10001 } : {}),
       }}
     >

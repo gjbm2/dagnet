@@ -15,7 +15,7 @@ import { useGraphStore } from '../contexts/GraphStoreContext';
 import { useScenariosContextOptional } from '../contexts/ScenariosContext';
 import { captureTabScenariosToRecipe } from '../services/captureTabScenariosService';
 import { mutateCanvasAnalysisGraph, advanceMode } from '../services/canvasAnalysisMutationService';
-import type { CanvasAnalysis } from '../types';
+import type { CanvasAnalysis, ContentItem } from '../types';
 import type { ScenarioLayerListProps } from '../components/panels/ScenarioLayerList';
 
 type ScenarioCallbacks = Pick<ScenarioLayerListProps,
@@ -26,6 +26,7 @@ type ScenarioCallbacks = Pick<ScenarioLayerListProps,
 interface UseCanvasAnalysisScenarioCallbacksArgs {
   analysisId: string;
   analysis: CanvasAnalysis | undefined;
+  contentItemIndex?: number;
   graph: any;
   setGraph: (g: any) => void;
   saveHistoryState: (action: string) => void;
@@ -36,6 +37,7 @@ interface UseCanvasAnalysisScenarioCallbacksArgs {
 export function useCanvasAnalysisScenarioCallbacks({
   analysisId,
   analysis,
+  contentItemIndex = 0,
   graph,
   setGraph,
   saveHistoryState,
@@ -46,6 +48,7 @@ export function useCanvasAnalysisScenarioCallbacks({
   const { tabs, operations } = useTabContext();
   const graphStore = useGraphStore();
   const liveTabId = tabId || tabs[0]?.id;
+  const activeCI: ContentItem | undefined = analysis?.content_items?.[contentItemIndex] || analysis?.content_items?.[0];
 
   const captureScenarios = useCallback((): { scenarios: any[]; what_if_dsl?: string } | null => {
     if (!liveTabId || !scenariosContext) return null;
@@ -61,73 +64,77 @@ export function useCanvasAnalysisScenarioCallbacks({
   }, [liveTabId, scenariosContext, tabs, operations, graphStore]);
 
   const promoteToCustom = useCallback((): any[] | null => {
-    if (analysis?.mode !== 'live') return null;
+    if (activeCI?.mode !== 'live') return null;
     const captured = captureScenarios();
     if (!captured) return null;
     const liveColour = liveTabId ? operations.getEffectiveScenarioColour(liveTabId, 'current', scenariosContext as any) : undefined;
     const nextGraph = mutateCanvasAnalysisGraph(graph, analysisId, (a) => {
-      advanceMode(a, graphStore.currentDSL || '', captured, liveColour);
+      const ci = a.content_items?.[contentItemIndex] || a.content_items?.[0];
+      if (ci) advanceMode(ci, graphStore.currentDSL || '', captured, liveColour);
     });
     if (!nextGraph) return null;
     setGraph(nextGraph);
-    return nextGraph.canvasAnalyses?.find((a: any) => a.id === analysisId)?.recipe?.scenarios || null;
-  }, [analysis?.mode, analysisId, graph, setGraph, captureScenarios, graphStore]);
+    const updatedCI = nextGraph.canvasAnalyses?.find((a: any) => a.id === analysisId)?.content_items?.[contentItemIndex];
+    return updatedCI?.scenarios || null;
+  }, [activeCI?.mode, analysisId, contentItemIndex, graph, setGraph, captureScenarios, graphStore]);
 
-  const mutateRecipeScenarios = useCallback((mutator: (a: any) => void, label: string) => {
+  const mutateRecipeScenarios = useCallback((mutator: (ci: any) => void, label: string) => {
     if (!analysis) return;
     const nextGraph = mutateCanvasAnalysisGraph(graph, analysisId, (a) => {
-      if (analysis.mode === 'live') {
+      const ci = a.content_items?.[contentItemIndex] || a.content_items?.[0];
+      if (!ci) return;
+      if (activeCI?.mode === 'live') {
         const captured = captureScenarios();
         if (!captured) return;
         const liveColour = liveTabId ? operations.getEffectiveScenarioColour(liveTabId, 'current', scenariosContext as any) : undefined;
-        advanceMode(a, graphStore.currentDSL || '', captured, liveColour);
+        advanceMode(ci, graphStore.currentDSL || '', captured, liveColour);
       }
-      mutator(a);
+      mutator(ci);
     });
     if (!nextGraph) return;
     setGraph(nextGraph);
     saveHistoryState(label);
-  }, [analysis?.mode, analysis, analysisId, graph, setGraph, saveHistoryState, captureScenarios, graphStore]);
+  }, [activeCI?.mode, analysis, analysisId, contentItemIndex, graph, setGraph, saveHistoryState, captureScenarios, graphStore]);
 
   const onRename = useCallback((id: string, newName: string) => {
-    mutateRecipeScenarios((a) => {
-      const s = a?.recipe?.scenarios?.find((sc: any) => sc.scenario_id === id);
+    mutateRecipeScenarios((ci) => {
+      const s = ci?.scenarios?.find((sc: any) => sc.scenario_id === id);
       if (s) s.name = newName;
     }, 'Rename chart scenario');
   }, [mutateRecipeScenarios]);
 
   const onColourChange = useCallback((id: string, colour: string) => {
-    mutateRecipeScenarios((a) => {
-      const s = a?.recipe?.scenarios?.find((sc: any) => sc.scenario_id === id);
+    mutateRecipeScenarios((ci) => {
+      const s = ci?.scenarios?.find((sc: any) => sc.scenario_id === id);
       if (s) s.colour = colour;
     }, 'Change chart scenario colour');
   }, [mutateRecipeScenarios]);
 
   const onDelete = useCallback((id: string) => {
-    mutateRecipeScenarios((a) => {
-      if (a?.recipe?.scenarios) {
-        a.recipe.scenarios = a.recipe.scenarios.filter((sc: any) => sc.scenario_id !== id);
+    mutateRecipeScenarios((ci) => {
+      if (ci?.scenarios) {
+        ci.scenarios = ci.scenarios.filter((sc: any) => sc.scenario_id !== id);
       }
-      if (a?.display && Array.isArray(a.display.hidden_scenarios)) {
-        a.display.hidden_scenarios = a.display.hidden_scenarios.filter((sid: string) => sid !== id);
+      if (ci?.display && Array.isArray((ci.display as any).hidden_scenarios)) {
+        (ci.display as any).hidden_scenarios = (ci.display as any).hidden_scenarios.filter((sid: string) => sid !== id);
       }
     }, 'Delete chart scenario');
   }, [mutateRecipeScenarios]);
 
   const onToggleVisibility = useCallback((id: string) => {
-    mutateRecipeScenarios((a) => {
-      if (!a.display) a.display = {};
-      const hidden = Array.isArray(a.display.hidden_scenarios) ? [...a.display.hidden_scenarios] : [];
+    mutateRecipeScenarios((ci) => {
+      if (!ci.display) ci.display = {} as any;
+      const hidden = Array.isArray((ci.display as any).hidden_scenarios) ? [...(ci.display as any).hidden_scenarios] : [];
       const idx = hidden.indexOf(id);
       if (idx >= 0) hidden.splice(idx, 1);
       else hidden.push(id);
-      a.display.hidden_scenarios = hidden;
+      (ci.display as any).hidden_scenarios = hidden;
     }, 'Toggle chart scenario visibility');
   }, [mutateRecipeScenarios]);
 
   const onCycleMode = useCallback((id: string) => {
-    mutateRecipeScenarios((a) => {
-      const s = a?.recipe?.scenarios?.find((sc: any) => sc.scenario_id === id);
+    mutateRecipeScenarios((ci) => {
+      const s = ci?.scenarios?.find((sc: any) => sc.scenario_id === id);
       if (!s) return;
       const modes: Array<'f+e' | 'f' | 'e'> = ['f+e', 'f', 'e'];
       const cur = (s.visibility_mode || 'f+e') as 'f+e' | 'f' | 'e';
@@ -137,14 +144,14 @@ export function useCanvasAnalysisScenarioCallbacks({
   }, [mutateRecipeScenarios]);
 
   const onReorder = useCallback((fromIndex: number, toIndex: number) => {
-    mutateRecipeScenarios((a) => {
-      if (!a?.recipe?.scenarios) return;
-      const arr = [...a.recipe.scenarios];
-      if (analysis?.mode !== 'live') {
+    mutateRecipeScenarios((ci) => {
+      if (!ci?.scenarios) return;
+      const arr = [...ci.scenarios];
+      if (activeCI?.mode !== 'live') {
         if (fromIndex < 0 || toIndex < 0 || fromIndex >= arr.length || toIndex >= arr.length || fromIndex === toIndex) return;
         const [moved] = arr.splice(fromIndex, 1);
         arr.splice(toIndex, 0, moved);
-        a.recipe.scenarios = arr;
+        ci.scenarios = arr;
         return;
       }
 
@@ -159,22 +166,22 @@ export function useCanvasAnalysisScenarioCallbacks({
 
       const [moved] = arr.splice(fromFull, 1);
       arr.splice(toFull, 0, moved);
-      a.recipe.scenarios = arr;
+      ci.scenarios = arr;
     }, 'Reorder chart scenarios');
   }, [mutateRecipeScenarios]);
 
   const onEdit = useCallback((id: string) => {
     // In custom mode, 'current' is the hidden base underlayer — editing its DSL is meaningless.
-    if (analysis?.mode === 'custom' && id === 'current') return;
-    if (analysis?.mode === 'live' && id === 'current') {
+    if (activeCI?.mode === 'custom' && id === 'current') return;
+    if (activeCI?.mode === 'live' && id === 'current') {
       onEditScenarioDsl(id);
       return;
     }
-    if (analysis?.mode === 'live') {
+    if (activeCI?.mode === 'live') {
       promoteToCustom();
     }
     onEditScenarioDsl(id);
-  }, [analysis?.mode, promoteToCustom, onEditScenarioDsl]);
+  }, [activeCI?.mode, promoteToCustom, onEditScenarioDsl]);
 
   const shouldShowRefresh = useCallback(() => false, []);
 

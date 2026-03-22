@@ -8,6 +8,111 @@ Entries are reverse-chronological (newest first).
 
 ---
 
+## 22-Mar-26: path_onset_delta_days — analytic model onset separation
+
+### Problem statement
+
+The analytic model (FE stats pass in `statisticalEnhancementService.ts`)
+computes `path_mu`/`path_sigma` (FW-composed A→Y lognormal params) but
+had no path-level onset field. The Bayes compiler has `PathLatency.
+path_delta` (Σ edge onsets along path), but this was never parameterised
+in the analytic model. Consumers (completeness calculations, Cohort
+Maturity charts) either used edge-level onset as a fallback or had no
+onset at all.
+
+### What was implemented
+
+Added `path_onset_delta_days` as a DP accumulator in the topo traversal,
+mirroring the existing `nodePathMu`/`nodePathSigma` pattern:
+
+- **Stats pass**: `nodePathOnset` map, initialised to 0 at anchor,
+  accumulated as `upstream + edgeOnsetDeltaDays` at each edge. Propagated
+  through all four skip/main paths. Written to `EdgeLAGValues.latency.
+  path_onset_delta_days`.
+- **Persistence**: `UpdateManager.applyBatchLAGValues` writes to graph
+  edge. `mappingConfigurations.ts` syncs graph↔file bidirectionally.
+- **Types**: Added to `Latency` interface (TS), `LatencyConfig` and
+  `ModelVarsLatency` (Pydantic), `EdgeLAGValues` (stats pass internal).
+- **Consumers**: `api_handlers.py` reads `path_onset_delta_days` (was
+  `path_delta` which never existed on graph). `localAnalysis
+  ComputeService.ts` falls through `posterior.path_onset_delta_days →
+  lat.path_onset_delta_days → edgeOnset`.
+
+### The onset separation problem
+
+Attempted to make the system mathematically clean: path_onset = Σδ
+carries the deterministic shift, path_mu/sigma carry onset-free
+lognormal shape. This requires the anchor fit (A→X empirical data) to
+subtract upstream onset before fitting.
+
+**The anchor fit** (`fitLagDistribution(anchorMedian, anchorMean, ...)`)
+takes raw `anchor_median_lag_days` from 3-step funnel data. These are
+empirical observations in calendar time, including any A→X onset.
+
+**Attempted fix**: subtract `nodePathOnset.get(nodeId)` (DP-accumulated
+upstream onset) from anchor median/mean before fitting.
+
+**Result**: curves looked worse. The DP-accumulated onset is a sum of
+statistical estimates (weighted quantiles from window slice data), not
+a direct measurement. Subtracting this noisy estimate from clean
+empirical data distorted the fit.
+
+### Why the old approach worked
+
+Before this change, the system was internally consistent in an
+approximate way:
+
+1. Anchor fit uses raw empirical A→X data — onset absorbed into μ
+2. FW composes this with onset-free X→Y edge fit → `path_mu`,
+   `path_sigma` (A→X onset baked into lognormal shape)
+3. Consumer shifts CDF by edge onset only (δ_xy)
+4. Net effect: A→X onset handled implicitly through μ shape, X→Y
+   onset handled via explicit shift
+
+The lognormal has enough shape flexibility to approximate a shifted
+lognormal. The anchor fit captures the real empirical distribution
+directly — no estimated quantity subtracted, no noise introduced.
+
+### Two approaches to compare
+
+**Approach A (status quo + field)**: Keep anchor fit raw (onset absorbed
+into μ). Write `path_onset_delta_days = Σδ` to graph for informational
+purposes, but consumers continue using edge onset when paired with
+analytic `path_mu`/`path_sigma`. The field exists for Bayes and other
+consumers that have onset-free μ/σ.
+
+**Approach B (clean separation)**: Subtract upstream onset from anchor
+moments before fitting, so path_mu/sigma are onset-free. Consumers use
+`path_onset_delta_days = Σδ` as the CDF shift. Mathematically cleaner
+but depends on onset estimate quality.
+
+### Decision: empirical comparison needed
+
+Rather than guessing which approach produces better fits, we should
+measure it. Plan: use `synth_gen.py` to generate datasets with known
+ground-truth parameters (including known onset per edge), run both
+approaches on the same data, and compare fit accuracy using a
+well-defined metric (e.g. integrated CDF error against the true
+distribution). This parallels the parameter recovery testing approach
+already planned for Bayes model validation (doc 17).
+
+### Current state
+
+Both approaches implemented: `path_onset_delta_days` DP accumulator,
+onset-adjusted anchor fit (Approach B), and consumers using path onset.
+Empirical comparison via synth_gen needed to validate whether Approach B
+produces better or worse fits than Approach A (raw anchor + edge onset).
+
+### Key invariant discovered
+
+**Empirical anchor data should not be adjusted by estimated quantities
+without validation.** The anchor_median_lag_days is a direct observation;
+the DP onset sum is a derived estimate. Subtracting derived from observed
+can only improve things if the derived quantity is accurate. This must be
+verified, not assumed.
+
+---
+
 ## 21-Mar-26: Diagnostic instrumentation reveals real problem
 
 ### What we did

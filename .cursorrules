@@ -375,6 +375,19 @@ await repositoryOperationsService.commitFiles(
 - Index files use workspace-prefixed IDs in IndexedDB: `repo-branch-node-index`
 - Index files must be marked `isDirty: true` when modified
 
+## Debugging Heuristic: Recurring Defect = Multiple Code Paths
+
+When the user reports the same defect a second time after you "fixed" it, the most likely cause is **multiple code paths performing the same operation**. Before debugging further:
+
+1. **Grep for ALL call sites** that perform the same mutation/operation
+2. **List every code path** that can trigger it (context menus, toolbars, properties panels, inline pickers, keyboard shortcuts, drag-and-drop handlers)
+3. **Verify your fix applies to ALL paths**, not just the one you found first
+4. **Consolidate into ONE canonical function** that all paths call — do not fix each path independently
+
+Example: changing an analysis type was done in 4 places (inline picker, chart toolbar, properties panel, context menu). Fixing one left three broken. The fix was `setContentItemAnalysisType()` — one function, all four call sites use it.
+
+**If the user raises the same defect twice, assume multiple code paths until proven otherwise.**
+
 ## Common Pitfalls to Avoid
 
 1. **Don't put git/file operations in menu files**

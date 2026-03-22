@@ -1,7 +1,7 @@
 // Core Types for Tab System
 
 import type { Scenario } from './scenarios';
-import type { ChartRecipeCore, ChartDefinition } from './chartRecipe';
+import type { ChartRecipeCore } from './chartRecipe';
 export type { ChartRecipeCore, ChartRecipeScenario, ChartRecipeAnalysis, ChartVisibilityMode, ChartDefinition } from './chartRecipe';
 export { getAnalyticsDsl, toChartDefinition } from './chartRecipe';
 
@@ -1126,32 +1126,29 @@ export interface ContentItem {
   analysis_type_overridden?: boolean;
   analytics_dsl?: string;              // data subject — e.g. 'from(X).to(Y)'
   chart_current_layer_dsl?: string;    // live-mode constraint fragment
+  mode: CanvasAnalysisMode;            // scenario policy
+  scenarios?: import('./chartRecipe').ChartRecipeScenario[];  // custom/fixed scenario set
+  what_if_dsl?: string;                // what-if constraint
 }
 
 /**
- * CanvasAnalysis — a canvas object container with content items.
+ * CanvasAnalysis — a positioned container of content items on the canvas.
  *
- * Container owns: position, size, scenario policy.
- * Content items own: data subject (DSL), analysis type, view type, chart kind,
- *   facet, display, chart_current_layer_dsl.
+ * Container owns ONLY placement + tab list.
+ * Content items own everything else: analysis type, view type, kind,
+ *   DSL, display, mode, scenarios, etc.
  *
- * For backward compatibility, the flat ChartDefinition fields (view_mode,
- * chart_kind, display, recipe.analysis.analysis_type, recipe.analysis.analytics_dsl)
- * are preserved. Use normaliseCanvasAnalysis() to ensure content_items is populated
- * from flat fields when loading legacy graphs.
+ * On load, normaliseCanvasAnalysis() migrates legacy flat fields into
+ * content_items and strips them from the container.
  */
-export interface CanvasAnalysis extends ChartDefinition {
+export interface CanvasAnalysis {
   id: string;
   x: number;
   y: number;
   width: number;
   height: number;
-  mode: CanvasAnalysisMode;
-  chart_current_layer_dsl?: string;
-  analysis_type_overridden?: boolean;
-  display?: CanvasAnalysisDisplay;
   /** Ordered list of content inside this container. */
-  content_items?: ContentItem[];
+  content_items: ContentItem[];
 }
 
 export interface ConversionGraph {

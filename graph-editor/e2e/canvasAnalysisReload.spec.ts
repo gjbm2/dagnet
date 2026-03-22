@@ -132,8 +132,9 @@ test.describe('Canvas analysis reload', () => {
       const db = (window as any).db;
       const file = await db.files.get('graph-e2e-reload-custom');
       if (!file?.data?.canvasAnalyses?.[0]) throw new Error('analysis not persisted');
-      file.data.canvasAnalyses[0].mode = 'custom';
-      file.data.canvasAnalyses[0].recipe.scenarios = [
+      const ci = file.data.canvasAnalyses[0].content_items?.[0] || file.data.canvasAnalyses[0];
+      ci.mode = 'custom';
+      ci.scenarios = [
         { scenario_id: 'current', name: 'Current', colour: '#3b82f6', effective_dsl: 'window(-30d:)', visibility_mode: 'f+e' },
       ];
       await db.files.put(file);

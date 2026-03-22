@@ -788,6 +788,41 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
                             'mode': cdf_mode,
                         }
 
+                        # Method B comparison curve (old approach): re-absorb upstream
+                        # onset into μ and shift by edge onset only.  Approximates the
+                        # pre-onset-separation CDF for visual comparison.
+                        # Only emitted in cohort_path mode where path_onset differs from
+                        # edge onset (otherwise the two curves are identical).
+                        if cdf_mode == 'cohort_path':
+                            edge_onset = model_params['onset_delta_days']
+                            path_onset_val = model_params.get('path_onset_delta_days')
+                            if (isinstance(path_onset_val, (int, float))
+                                    and path_onset_val > edge_onset + 0.01):
+                                upstream_onset = path_onset_val - edge_onset
+                                # Re-absorb upstream onset into lognormal μ:
+                                # shifted LN median = onset + exp(μ), so
+                                # "dirty" μ ≈ ln(upstream_onset + exp(clean μ))
+                                mu_b = math.log(upstream_onset + math.exp(cdf_mu))
+                                sigma_b = cdf_sigma  # 2nd-order effect
+                                curve_b = []
+                                for tau in range(0, axis_tau_max + 1):
+                                    cb = compute_completeness(
+                                        float(tau), mu_b, sigma_b, edge_onset,
+                                    )
+                                    cb = max(0.0, min(1.0, float(cb)))
+                                    curve_b.append({
+                                        'tau_days': tau,
+                                        'model_rate': round(forecast_mean * cb, 8),
+                                    })
+                                result['model_curve_method_b'] = curve_b
+                                result['model_curve_method_b_params'] = {
+                                    'mu': mu_b,
+                                    'sigma': sigma_b,
+                                    'onset_delta_days': edge_onset,
+                                    'forecast_mean': forecast_mean,
+                                    'mode': 'cohort_path_method_b',
+                                }
+
                         # Bayesian posterior overlay — second model curve if posteriors exist.
                         # For cohort_path mode, use path-level Bayesian params if available;
                         # for window mode, use edge-level Bayesian params.

@@ -322,10 +322,10 @@ describe('resolveShapeNodes waypoint chaining', () => {
 
 describe('getVisibleAnalysisIds', () => {
   const analyses = [
-    { id: 'a1', display: { show_subject_overlay: false } },
-    { id: 'a2', display: { show_subject_overlay: true, subject_overlay_colour: '#ff0000' } },
-    { id: 'a3' },
-    { id: 'a4', display: { show_subject_overlay: false } },
+    { id: 'a1', content_items: [{ display: { show_subject_overlay: false } }] },
+    { id: 'a2', content_items: [{ display: { show_subject_overlay: true, subject_overlay_colour: '#ff0000' } }] },
+    { id: 'a3', content_items: [{}] },
+    { id: 'a4', content_items: [{ display: { show_subject_overlay: false } }] },
   ];
 
   it('selected analysis is visible', () => {

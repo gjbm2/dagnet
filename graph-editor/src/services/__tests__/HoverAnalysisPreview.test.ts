@@ -34,10 +34,10 @@ describe('buildPinDragData', () => {
     scaleContent: false,
   };
 
-  it('should preserve analysis type and DSL in the recipe', () => {
+  it('should preserve analysis type and DSL in the drag data', () => {
     const data = buildPinDragData(baseInput);
-    expect(data.recipe.analysis.analysis_type).toBe('node_info');
-    expect(data.recipe.analysis.analytics_dsl).toBe('from(myNode)');
+    expect(data.analysisType).toBe('node_info');
+    expect(data.analyticsDsl).toBe('from(myNode)');
   });
 
   it('should preserve the chart kind and analysis result', () => {
@@ -89,7 +89,7 @@ describe('buildPinDragData', () => {
     const data = buildPinDragData({ ...baseInput, chartKind: undefined });
     expect(data.chartKind).toBeUndefined();
     // All other fields should still be populated
-    expect(data.recipe.analysis.analysis_type).toBe('node_info');
+    expect(data.analysisType).toBe('node_info');
     expect(data.drawWidth).toBe(300);
   });
 });
@@ -314,23 +314,23 @@ describe('Pipeline uniformity — satellite ↔ CanvasAnalysisNode invariant', (
       for (const kind of visualKinds) {
         const synthetic: CanvasAnalysis = {
           id: `test-${typeId}-${kind}`,
-          recipe: {
-            analysis: {
-              analysis_type: typeId,
-              analytics_dsl: 'from(testNode)',
-            },
-          },
-          view_mode: 'chart',
-          chart_kind: kind,
-          mode: 'live' as const,
           x: 0, y: 0, width: 300, height: 200,
+          content_items: [{
+            id: `ci-${typeId}-${kind}`,
+            analysis_type: typeId,
+            view_type: 'chart',
+            kind,
+            analytics_dsl: 'from(testNode)',
+            mode: 'live' as const,
+          }],
         };
         // The shape must have all required fields
         expect(synthetic.id).toBeTruthy();
-        expect(synthetic.recipe.analysis.analysis_type).toBe(typeId);
-        expect(synthetic.chart_kind).toBe(kind);
-        expect(synthetic.view_mode).toBe('chart');
-        expect(synthetic.mode).toBe('live');
+        const ci = synthetic.content_items[0];
+        expect(ci.analysis_type).toBe(typeId);
+        expect(ci.kind).toBe(kind);
+        expect(ci.view_type).toBe('chart');
+        expect(ci.mode).toBe('live');
       }
     }
   });

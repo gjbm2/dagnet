@@ -102,8 +102,8 @@ GRAPH_CONFIGS: dict[str, dict[str, Any]] = {
         "graph_file": "synth-simple-abc.json",
         "graph_id": "graph-synth-simple-abc",
         "edges": [
-            ("simple-a-to-b", "80844ce8-094b-4ab7-b0a1-c5569f1b72a8", "SYNTH-a-to-b-w", "SYNTH-a-to-b-c"),
-            ("simple-b-to-c", "69320810-4258-4883-8093-7c3fb34640c2", "SYNTH-b-to-c-w", "SYNTH-b-to-c-c"),
+            ("simple-a-to-b", "80844ce8-094b-4ab7-b0a1-c5569f1b72a8", "tO7LaG4KYJmjx9IDcqWoOA", "UiR0QGUoUuGfnKV8wgLnGg"),
+            ("simple-b-to-c", "69320810-4258-4883-8093-7c3fb34640c2", "gQ5ZaO6wsxdaoBhlsTSymA", "hiUamUGuhipvS5Y061h75Q"),
         ],
         "base_date": "2025-12-12",
     },

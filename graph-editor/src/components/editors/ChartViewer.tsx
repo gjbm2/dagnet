@@ -6,6 +6,7 @@ import type { ScenarioLayerItem } from '../../types/scenarioLayerList';
 import { useFileState } from '../../contexts/TabContext';
 import { AnalysisChartContainer } from '../charts/AnalysisChartContainer';
 import { AnalysisResultCards } from '../analytics/AnalysisResultCards';
+import { AnalysisInfoCard } from '../analytics/AnalysisInfoCard';
 import { AnalysisResultTable } from '../analytics/AnalysisResultTable';
 import { ChartSettingsSection } from '../panels/ChartSettingsSection';
 import CollapsibleSection from '../CollapsibleSection';
@@ -684,12 +685,20 @@ export function ChartViewer({ fileId }: EditorProps): JSX.Element {
               >
                 {viewMode === 'cards' ? (
                   <div style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: 12 }}>
-                    <AnalysisResultCards
-                      result={expressionResult!}
-                      scenarioDslSubtitleById={scenarioDslSubtitleById}
-                      collapsedCards={resolveDisplaySetting(chartDef.display, { key: 'cards_collapsed', defaultValue: [] } as any)}
-                      onCollapsedCardsChange={(collapsed) => handleDisplayChange('cards_collapsed', collapsed)}
-                    />
+                    {chartDef.chart_kind && analysisResult ? (
+                      <AnalysisInfoCard
+                        result={analysisResult}
+                        kind={chartDef.chart_kind}
+                        fontSize={resolveDisplaySetting(chartDef.display, { key: 'font_size', defaultValue: undefined } as any)}
+                      />
+                    ) : (
+                      <AnalysisResultCards
+                        result={expressionResult!}
+                        scenarioDslSubtitleById={scenarioDslSubtitleById}
+                        collapsedCards={resolveDisplaySetting(chartDef.display, { key: 'cards_collapsed', defaultValue: [] } as any)}
+                        onCollapsedCardsChange={(collapsed) => handleDisplayChange('cards_collapsed', collapsed)}
+                      />
+                    )}
                   </div>
                 ) : viewMode === 'table' ? (
                   <div style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: 12 }}>

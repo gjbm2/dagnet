@@ -1,4 +1,54 @@
 # DagNet Release Notes
+## Version 1.7.30b
+**Released:** 22-Mar-26
+
+### Bayesian Model Infrastructure
+- **Model vars resolution** (`modelVarsResolution.ts`): new `model_vars` array on edges supports multiple candidate model sources (analytic, bayesian, manual). `applyPromotion` resolves the active source based on `model_source_preference` (per-edge or graph-level) and promotes scalars to `p.mean`/`p.stdev`
+- **Per-edge `model_source_preference`**: edges can override the graph-level preference (`best_available`, `bayesian`, `analytic`, `manual`) with `model_source_preference_overridden` flag
+- **Graph-level `model_source_preference`**: new field on `ConversionGraph` for default model resolution policy
+- **Manual override tracking**: when user manually edits edge values, a `manual` model_vars entry is upserted and `model_source_preference` set to `manual`
+- **UpdateManager**: builds `analyticModelVarsEntry` from `values[latest]` during file-to-graph sync, upserts into `model_vars`, and runs promotion
+
+### Bayesian Compiler (Phase C/D)
+- **Synthetic data generator** (`bayes/synth_gen.py`): generates realistic conversion graph test data with configurable topology, edge weights, latency distributions, and cohort patterns. Comprehensive test suite
+- **Compiler improvements**: completeness checking (`completeness.py`), slice-level inference (`slices.py`), enhanced evidence/inference pipeline
+- **Diagnostic harness** (`diag_run.py`): interactive debugging tool for compiler pipeline
+- **Test infrastructure**: model wiring tests, serialisation tests, hash parity tests
+- **Bayesian confidence bands** on cohort maturity charts (`bayes_band_level` setting: off/80%/90%/95%/99%)
+
+### New Data Fields
+- `path_onset_delta_days`: path-level cumulative onset delta (DP sum along path)
+- `path_onset_sd`, `path_onset_hdi_lower`, `path_onset_hdi_upper`: onset posterior statistics
+- `posterior` block on probability params and latency config (Bayesian posteriors from webhook, stripped of `fit_history`/`slices`/`_model_state` on file-to-graph sync)
+- Schema, Python, and TypeScript types all in parity
+
+### Content Item Authority Refactor
+Canvas analysis containers are now pure placement objects (`id, x, y, width, height, content_items`). All analysis state lives on content items (tabs), eliminating dual-state bugs in multi-tab containers.
+
+- Each tab independently owns analysis type, DSL, view mode, kind, scenario mode, display
+- Tab drag with visual removal from source; drop back to cancel
+- Per-tab connector persistence and connector colour
+- Chrome (title bar, tab bar) inverse-zoomed — always readable
+- `+` in tab bar adds new tabs; `+` on type picker tiles adds as new tab
+- Type/kind changes update tab title from registry (`humaniseAnalysisType`)
+
+### Shared Toolbar
+One toolbar component (`ExpressionToolbarTray`) drives all view types (chart, cards, table) — replaces 320 lines of inline toolbar JSX in `AnalysisChartContainer`.
+
+- Toolbar order: DSL, scenarios, analysis type, view mode, kind, subject, display, connectors, actions
+- Analysis type and view mode options scoped by registry (edge_info = cards only)
+- Context menu secondary action (`+` icon) for adding analysis types as new tabs
+
+### Bug Fixes
+- **`values[latest]` regression** (introduced 21-Mar-26): `applyPromotion` was overwriting `p.mean` with last array element instead of most recent by `window_from` timestamp. Fixed by using `getNestedValue(fileData, 'values[latest]')` in UpdateManager
+- **Orphaned connectors**: duplicate React keys on multi-tab shapes caused SVG elements to persist. Fixed with unique `analysisId:tabIdx` keys and DSL deduplication
+- **Selected container drag hiding**: CSS `opacity: 1 !important` on `.selected` nodes overrode inline `opacity: 0`. Fixed with `visibility: hidden`
+- **Stale closure in type picker**: React.memo prop lag after rapid mutations (+ then type pick). Fixed by reading from graph store at mutation time
+- **Satellite click-to-pin**: missing `analytics_dsl` in drag payload after `recipe` field removal
+- **Integrity checks**: enhanced for snapshot dependency planning and statistical enhancement
+
+---
+
 ## Version 1.7.29b
 **Released:** 20-Mar-26
 

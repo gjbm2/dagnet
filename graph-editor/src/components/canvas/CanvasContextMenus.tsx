@@ -20,6 +20,8 @@ import { canvasAnalysisResultCache } from '../../hooks/useCanvasAnalysisCompute'
 import { chartOperationsService } from '../../services/chartOperationsService';
 import { extractSubgraph } from '../../lib/subgraphExtractor';
 import { getActiveContentTabIndex } from '../../services/activeContentTabTracker';
+import { getAnalysisTypeMeta } from '../panels/analysisTypes';
+import { humaniseAnalysisType } from '../../services/canvasAnalysisMutationService';
 import type { AvailableAnalysis } from '../../lib/graphComputeClient';
 
 // ---------------------------------------------------------------------------
@@ -566,11 +568,13 @@ export const CanvasContextMenus: React.FC<CanvasContextMenusProps> = React.memo(
         if (!analysis) return null;
         const analysisCount = (graph.canvasAnalyses?.length ?? 0) + (graph.postits?.length ?? 0);
         const cachedResult = canvasAnalysisResultCache.get(analysisContextMenu.analysisId);
-        const effectiveChartKind = analysis.chart_kind || cachedResult?.semantics?.chart?.recommended || cachedResult?.analysis_type || undefined;
-        const hiddenScenarios = new Set<string>((((analysis.display as any)?.hidden_scenarios) || []) as string[]);
-        const visibleScenarioIds = analysis.mode === 'live'
+        const ciTabIdx = getActiveContentTabIndex(analysisContextMenu.analysisId);
+        const ci = analysis.content_items?.[ciTabIdx] || analysis.content_items?.[0];
+        const effectiveChartKind = ci?.kind || cachedResult?.semantics?.chart?.recommended || cachedResult?.analysis_type || undefined;
+        const hiddenScenarios = new Set<string>((((ci?.display as any)?.hidden_scenarios) || []) as string[]);
+        const visibleScenarioIds = ci?.mode === 'live'
           ? (tabId ? tabOperations.getScenarioState(tabId)?.visibleScenarioIds : null) || ['current']
-          : (analysis.recipe?.scenarios || []).filter((s: any) => !hiddenScenarios.has(s.scenario_id)).map((s: any) => s.scenario_id);
+          : (ci?.scenarios || []).filter((s: any) => !hiddenScenarios.has(s.scenario_id)).map((s: any) => s.scenario_id);
         const currentTab = tabId ? tabs.find((t: any) => t.id === tabId) : undefined;
         return (
           <CanvasAnalysisContextMenu
@@ -584,10 +588,15 @@ export const CanvasContextMenus: React.FC<CanvasContextMenusProps> = React.memo(
               setAnalysisContextMenu(null);
             }}
             effectiveChartKind={effectiveChartKind}
-            display={analysis.display as Record<string, unknown> | undefined}
+            display={ci?.display as Record<string, unknown> | undefined}
             onDisplayChange={(key, value) => {
+              const items = analysis.content_items || [];
               handleUpdateAnalysis(analysisContextMenu.analysisId, {
-                display: { ...(analysis.display as Record<string, unknown> || {}), [key]: value },
+                content_items: items.map((item: any, i: number) =>
+                  i === ciTabIdx
+                    ? { ...item, display: { ...item.display, [key]: value } }
+                    : item,
+                ),
               });
               setAnalysisContextMenu(null);
             }}
@@ -595,26 +604,45 @@ export const CanvasContextMenus: React.FC<CanvasContextMenusProps> = React.memo(
             availableAnalyses={analysisCtxAvailableTypes}
             onAnalysisTypeChange={(typeId) => {
               handleUpdateAnalysis(analysisContextMenu.analysisId, {
-                recipe: { ...analysis.recipe, analysis: { ...analysis.recipe.analysis, analysis_type: typeId } },
-                analysis_type_overridden: true,
+                content_items: (analysis.content_items || []).map((item: any, i: number) =>
+                  i === ciTabIdx
+                    ? { ...item, analysis_type: typeId, analysis_type_overridden: true, kind: undefined, title: humaniseAnalysisType(typeId) }
+                    : item,
+                ),
+              });
+              setAnalysisContextMenu(null);
+            }}
+            onAddTabWithType={(typeId) => {
+              const items = analysis.content_items || [];
+              const activeCi = items[ciTabIdx] || items[0];
+              handleUpdateAnalysis(analysisContextMenu.analysisId, {
+                content_items: [...items, {
+                  id: crypto.randomUUID(),
+                  analysis_type: typeId,
+                  view_type: 'chart' as const,
+                  title: humaniseAnalysisType(typeId),
+                  analysis_type_overridden: true,
+                  analytics_dsl: activeCi?.analytics_dsl,
+                  mode: 'live' as const,
+                }],
               } as any);
               setAnalysisContextMenu(null);
             }}
             overlayActive={(() => {
               const tabIdx = getActiveContentTabIndex(analysisContextMenu.analysisId);
               const ci = analysis.content_items?.[tabIdx] || analysis.content_items?.[0];
-              return !!(ci?.display as any)?.show_subject_overlay || !!analysis.display?.show_subject_overlay;
+              return !!(ci?.display as any)?.show_subject_overlay;
             })()}
             overlayColour={(() => {
               const tabIdx = getActiveContentTabIndex(analysisContextMenu.analysisId);
               const ci = analysis.content_items?.[tabIdx] || analysis.content_items?.[0];
-              return ((ci?.display as any)?.subject_overlay_colour || analysis.display?.subject_overlay_colour) as string | undefined;
+              return (ci?.display as any)?.subject_overlay_colour as string | undefined;
             })()}
             onOverlayToggle={(active) => {
               const tabIdx = getActiveContentTabIndex(analysisContextMenu.analysisId);
               const items = analysis.content_items || [];
               const ci = items[tabIdx] || items[0];
-              const colour = (ci?.display as any)?.subject_overlay_colour || analysis.display?.subject_overlay_colour || '#3b82f6';
+              const colour = (ci?.display as any)?.subject_overlay_colour || '#3b82f6';
               handleUpdateAnalysis(analysisContextMenu.analysisId, {
                 content_items: items.map((item: any, i: number) =>
                   i === tabIdx
@@ -641,17 +669,17 @@ export const CanvasContextMenus: React.FC<CanvasContextMenusProps> = React.memo(
                 chartKind: effectiveChartKind as any,
                 analysisResult: cachedResult,
                 scenarioIds: visibleScenarioIds,
-                title: analysis.title || undefined,
+                title: ci?.title || undefined,
                 source: {
                   parent_tab_id: tabId,
                   parent_file_id: currentTab?.fileId,
-                  query_dsl: analysis.content_items?.[0]?.analytics_dsl || analysis.recipe?.analysis?.analytics_dsl || undefined,
-                  analysis_type: analysis.recipe?.analysis?.analysis_type || undefined,
+                  query_dsl: ci?.analytics_dsl || undefined,
+                  analysis_type: ci?.analysis_type || undefined,
                 },
                 render: {
-                  chart_kind: analysis.chart_kind || undefined,
-                  view_mode: analysis.view_mode || 'chart',
-                  display: (analysis.display || {}) as Record<string, unknown>,
+                  chart_kind: ci?.kind || undefined,
+                  view_mode: ci?.view_type || 'chart',
+                  display: (ci?.display || {}) as Record<string, unknown>,
                 },
               });
               setAnalysisContextMenu(null);
@@ -763,7 +791,9 @@ export const CanvasContextMenus: React.FC<CanvasContextMenusProps> = React.memo(
       {/* Scenario DSL Edit Modal (opened from canvas analysis context menu) */}
       {ctxDslEditState && (() => {
         const a = graph?.canvasAnalyses?.find((ai: any) => ai.id === ctxDslEditState.analysisId);
-        const s = a?.recipe?.scenarios?.find((sc: any) => sc.scenario_id === ctxDslEditState.scenarioId);
+        const aTabIdx = getActiveContentTabIndex(ctxDslEditState.analysisId);
+        const aCi = a?.content_items?.[aTabIdx] || a?.content_items?.[0];
+        const s = aCi?.scenarios?.find((sc: any) => sc.scenario_id === ctxDslEditState.scenarioId);
         if (!a || !s) return null;
         return (
           <ScenarioQueryEditModal
@@ -775,7 +805,9 @@ export const CanvasContextMenus: React.FC<CanvasContextMenusProps> = React.memo(
               if (!graph) return;
               const nextGraph = structuredClone(graph);
               const target = nextGraph?.canvasAnalyses?.find((ai: any) => ai.id === ctxDslEditState.analysisId);
-              const scenario = target?.recipe?.scenarios?.find((sc: any) => sc.scenario_id === ctxDslEditState.scenarioId);
+              const tTabIdx = getActiveContentTabIndex(ctxDslEditState.analysisId);
+              const tCi = target?.content_items?.[tTabIdx] || target?.content_items?.[0];
+              const scenario = tCi?.scenarios?.find((sc: any) => sc.scenario_id === ctxDslEditState.scenarioId);
               if (scenario) scenario.effective_dsl = newDSL;
               if (nextGraph?.metadata) nextGraph.metadata.updated_at = new Date().toISOString();
               setGraphDirect(nextGraph as any);

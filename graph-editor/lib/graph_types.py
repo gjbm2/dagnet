@@ -558,7 +558,9 @@ class CanvasAnalysisDisplay(BaseModel, extra='allow'):
 
 
 class ContentItem(BaseModel, extra='allow'):
-    """A single content tab inside a canvas analysis container."""
+    """A single content tab inside a canvas analysis container.
+    Content items are the unit of authority — they own all analysis, display,
+    and scenario state. The container owns only placement."""
     id: str
     analysis_type: str = ''
     view_type: str = 'chart'
@@ -568,10 +570,13 @@ class ContentItem(BaseModel, extra='allow'):
     analysis_type_overridden: Optional[bool] = None
     analytics_dsl: Optional[str] = None
     chart_current_layer_dsl: Optional[str] = None
+    mode: str = Field('live', pattern=r"^(live|custom|fixed)$")
+    scenarios: Optional[List[dict]] = None
+    what_if_dsl: Optional[str] = None
 
     @model_validator(mode='before')
     @classmethod
-    def migrate_chart_kind_facet(cls, data: Any) -> Any:
+    def migrate_legacy_fields(cls, data: Any) -> Any:
         """Migrate legacy chart_kind / facet → kind."""
         if isinstance(data, dict):
             if 'kind' not in data or data['kind'] is None:
@@ -579,33 +584,81 @@ class ContentItem(BaseModel, extra='allow'):
             else:
                 data.pop('facet', None)
                 data.pop('chart_kind', None)
+            if 'mode' not in data:
+                data['mode'] = 'live'
         return data
 
 
 class CanvasAnalysis(BaseModel):
-    """Canvas annotation: live analysis pinned to the canvas (chart or result cards)."""
+    """Canvas analysis container — pure placement + tab list.
+    All analysis, display, and scenario state lives on content items."""
     id: str
     x: float
     y: float
     width: float = Field(..., gt=0)
     height: float = Field(..., gt=0)
-    view_mode: str = Field(..., pattern=r"^(chart|cards|table)$")
-    chart_kind: Optional[str] = None
-    mode: str = Field('live', pattern=r"^(live|custom|fixed)$")
-    title: Optional[str] = None
+    content_items: List[ContentItem] = Field(..., min_length=1)
 
     @model_validator(mode='before')
     @classmethod
-    def migrate_live_to_mode(cls, data: Any) -> Any:
-        """Backward compat: map legacy `live: bool` to `mode` enum."""
-        if isinstance(data, dict) and 'live' in data and 'mode' not in data:
+    def migrate_legacy_flat_fields(cls, data: Any) -> Any:
+        """Migrate legacy container flat fields into content_items on load."""
+        if not isinstance(data, dict):
+            return data
+
+        # Handle legacy live: bool → mode
+        if 'live' in data and 'mode' not in data:
             data['mode'] = 'live' if data.pop('live') else 'fixed'
+
+        items = data.get('content_items') or []
+
+        # If no content items, synthesise one from flat fields
+        if not items:
+            recipe = data.get('recipe') or {}
+            analysis = recipe.get('analysis') or {}
+            items = [{
+                'id': f"{data.get('id', 'unknown')}-content-0",
+                'analysis_type': analysis.get('analysis_type', ''),
+                'view_type': data.get('view_mode', 'chart'),
+                'kind': data.get('chart_kind'),
+                'title': data.get('title'),
+                'display': data.get('display'),
+                'analysis_type_overridden': data.get('analysis_type_overridden'),
+                'analytics_dsl': analysis.get('analytics_dsl'),
+                'chart_current_layer_dsl': data.get('chart_current_layer_dsl'),
+                'mode': data.get('mode', 'live'),
+                'scenarios': recipe.get('scenarios'),
+                'what_if_dsl': analysis.get('what_if_dsl'),
+            }]
+
+        # Backfill defaults and migrate container fields into items[0]
+        recipe = data.get('recipe') or {}
+        analysis_block = recipe.get('analysis') or {}
+        container_dsl = analysis_block.get('analytics_dsl')
+        container_layer_dsl = data.get('chart_current_layer_dsl')
+        container_mode = data.get('mode', 'live')
+        container_scenarios = recipe.get('scenarios')
+
+        for i, item in enumerate(items):
+            if not item.get('analytics_dsl') and container_dsl:
+                item['analytics_dsl'] = container_dsl
+            if not item.get('chart_current_layer_dsl') and container_layer_dsl:
+                item['chart_current_layer_dsl'] = container_layer_dsl
+            if 'mode' not in item:
+                item['mode'] = container_mode if i == 0 else 'live'
+            if i == 0 and not item.get('scenarios') and container_scenarios:
+                item['scenarios'] = container_scenarios
+                if not item.get('what_if_dsl'):
+                    item['what_if_dsl'] = analysis_block.get('what_if_dsl')
+
+        data['content_items'] = items
+
+        # Strip legacy flat fields from container
+        for key in ['recipe', 'mode', 'view_mode', 'chart_kind', 'title', 'display',
+                     'chart_current_layer_dsl', 'analysis_type_overridden', 'live']:
+            data.pop(key, None)
+
         return data
-    chart_current_layer_dsl: Optional[str] = Field(None, description="Current layer DSL composed onto all scenarios via augmentDSLWithConstraint (both Live and Custom mode)")
-    analysis_type_overridden: Optional[bool] = Field(None, description="True when user explicitly selected an analysis type (vs auto-assigned at creation)")
-    recipe: ChartRecipeCore
-    display: Optional[CanvasAnalysisDisplay] = None
-    content_items: Optional[List[ContentItem]] = Field(None, description="Ordered list of content tabs inside this container")
 
 
 class Graph(BaseModel):

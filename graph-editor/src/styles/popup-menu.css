@@ -77,6 +77,27 @@
   font-size: 14px;
 }
 
+/* Secondary action icon — shown on hover at right edge */
+.dagnet-popup-secondary {
+  margin-left: auto;
+  opacity: 0;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  padding: 2px 4px;
+  border-radius: 3px;
+  color: var(--text-muted, #6b7280);
+  transition: opacity 0.1s;
+}
+.dagnet-popup-item:hover .dagnet-popup-secondary,
+.dagnet-popup-item.dagnet-popup-item--active .dagnet-popup-secondary {
+  opacity: 0.6;
+}
+.dagnet-popup-secondary:hover {
+  opacity: 1 !important;
+  background: var(--bg-hover, rgba(0,0,0,0.06));
+}
+
 /* Right-side hint text (keyboard shortcuts, icons) */
 .dagnet-popup-hint {
   color: #666;
