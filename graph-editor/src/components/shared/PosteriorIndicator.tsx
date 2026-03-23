@@ -240,9 +240,18 @@ function LatencyPosteriorDetails({ posterior, tier, colour, retrievedAt, theme, 
         {/* ── Edge-level (window) ── */}
         <SectionHeader label="Edge latency (window)" theme={theme} />
         <tr>
-          <td className="posterior-details-label">onset</td>
-          <td className="posterior-details-value">{fmtDays(posterior.onset_delta_days)}</td>
+          <td className="posterior-details-label">onset δ</td>
+          <td className="posterior-details-value">
+            {fmtDays(posterior.onset_mean ?? posterior.onset_delta_days)}
+            {posterior.onset_sd != null && <span className="posterior-details-dim"> ± {fmtDays(posterior.onset_sd)}</span>}
+          </td>
         </tr>
+        {posterior.onset_hdi_lower != null && (
+          <tr>
+            <td className="posterior-details-label">onset HDI {fmtPct(posterior.hdi_level)}</td>
+            <td className="posterior-details-value">{fmtDays(posterior.onset_hdi_lower)} — {fmtDays(posterior.onset_hdi_upper)}</td>
+          </tr>
+        )}
         <tr>
           <td className="posterior-details-label">μ</td>
           <td className="posterior-details-value">{fmtNum(posterior.mu_mean)} ± {fmtNum(posterior.mu_sd)}</td>
@@ -251,15 +260,32 @@ function LatencyPosteriorDetails({ posterior, tier, colour, retrievedAt, theme, 
           <td className="posterior-details-label">σ</td>
           <td className="posterior-details-value">{fmtNum(posterior.sigma_mean)} ± {fmtNum(posterior.sigma_sd)}</td>
         </tr>
+        {posterior.onset_mu_corr != null && (
+          <tr>
+            <td className="posterior-details-label">onset↔μ corr</td>
+            <td className="posterior-details-value" style={Math.abs(posterior.onset_mu_corr) > 0.8 ? { color: qualityTierToColour('warning', theme) } : undefined}>
+              {posterior.onset_mu_corr.toFixed(3)}
+            </td>
+          </tr>
+        )}
 
         {/* ── Path-level (cohort) ── */}
         {hasPath && (
           <>
             <SectionHeader label="Path latency (cohort)" theme={theme} />
             <tr>
-              <td className="posterior-details-label">onset</td>
-              <td className="posterior-details-value">{fmtDays(posterior.path_onset_delta_days)}</td>
+              <td className="posterior-details-label">onset δ</td>
+              <td className="posterior-details-value">
+                {fmtDays(posterior.path_onset_delta_days)}
+                {posterior.path_onset_sd != null && <span className="posterior-details-dim"> ± {fmtDays(posterior.path_onset_sd)}</span>}
+              </td>
             </tr>
+            {posterior.path_onset_hdi_lower != null && (
+              <tr>
+                <td className="posterior-details-label">onset HDI {fmtPct(posterior.hdi_level)}</td>
+                <td className="posterior-details-value">{fmtDays(posterior.path_onset_hdi_lower)} — {fmtDays(posterior.path_onset_hdi_upper)}</td>
+              </tr>
+            )}
             <tr>
               <td className="posterior-details-label">μ</td>
               <td className="posterior-details-value">{fmtNum(posterior.path_mu_mean)} ± {fmtNum(posterior.path_mu_sd)}</td>
@@ -268,6 +294,12 @@ function LatencyPosteriorDetails({ posterior, tier, colour, retrievedAt, theme, 
               <td className="posterior-details-label">σ</td>
               <td className="posterior-details-value">{fmtNum(posterior.path_sigma_mean)} ± {fmtNum(posterior.path_sigma_sd)}</td>
             </tr>
+            {posterior.path_provenance && (
+              <tr>
+                <td className="posterior-details-label">provenance</td>
+                <td className="posterior-details-value">{posterior.path_provenance}</td>
+              </tr>
+            )}
           </>
         )}
 

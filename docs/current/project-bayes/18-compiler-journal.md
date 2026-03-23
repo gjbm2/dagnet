@@ -8,6 +8,96 @@ Entries are reverse-chronological (newest first).
 
 ---
 
+## 22-Mar-26: Synthetic data generator → parameter recovery attempt
+
+### What was done
+
+Built the `synth-simple-abc` graph: A → B → C linear chain with dropout
+nodes, realistic latencies (onset 1–2d, median 10–14d), complement edges
+for mass conservation. Ground truth: p(A→B)=0.7, p(B→C)=0.6.
+
+**synth_gen.py restructured**: simulation and observation phases fully
+separated. Window and cohort observations now represent genuinely different
+populations — window groups by from-node arrival day (cross-day mixture
+due to upstream latency), cohort groups by anchor entry day. Verified by
+4 new pytest tests (`TestWindowVsCohortSemantics`), 27/27 pass.
+
+**Data pipeline working**: 19,220 DB rows (9,610 window + 9,610 cohort),
+real FE-computed core hashes (vitest parity verified), param files with
+both window and cohort values[] entries. FE renders the graph and shows
+cohort maturity S-curves.
+
+**graph-ops moved to dagnet**: Generic playbooks, scripts, reference docs
+scrubbed of proprietary content and moved to `dagnet/graph-ops/`. Data
+repo retains only proprietary reference docs. Merged to
+`nous-conversion/main`.
+
+### Sampling performance problem — investigation log
+
+**Symptom**: 2-edge synth graph takes 15 minutes to sample (887s,
+252 divergences, kappa=728/868). The 4-edge production graph
+(`bayes-test-gm-rebuild`) samples in ~4 minutes (241s, 151 divergences,
+kappa=1.7-24.8). Despite the synth graph being simpler.
+
+**Parameter recovery works**: When sampling completes, the posteriors
+recover truth values accurately (mu, sigma, onset all within 1-2%).
+The issue is purely sampling efficiency, not model correctness.
+
+**What was ruled out**:
+
+- **Data volume (total rows)**: Synth has fewer total rows (19K) than
+  production (76K via hash equivalences). Not the issue.
+- **Trajectory density (retrieval ages per anchor_day)**: Synth has 94
+  retrieval ages vs production 5-27. The DM interval model decomposes
+  into independent intervals — thin vs fat intervals contain identical
+  statistical information. Extra density costs ~5-7x more gammaln calls
+  per step but should NOT change posterior geometry.
+- **Traffic per day**: Tried 5000/day and 300/day — same result.
+- **PyTensor type bug**: Found `bool→float64` composite rewrite failure
+  in `obs_daily_` path with small arrays. Fixed but didn't help — issue
+  is in the trajectory Potentials.
+
+**Key structural difference (NOT YET TESTED)**:
+
+Production graph: 2 edges `latent_latency=False` (simple Binomial) +
+2 edges `latent_latency=True` (CDF-based DM potentials).
+
+Synth graph (`synth-simple-abc`): ALL edges `latent_latency=True`.
+The `update_graph_edge_metadata` in synth_gen was hardcoding
+`latency_parameter: True` on all fetchable edges — fixed to respect
+the truth config.
+
+**Hypothesis**: ALL-CDF models have worse geometry than mixed models.
+The Binomial potentials provide well-conditioned probability anchors.
+Without them, onset↔mu correlations (corr=-0.88) create narrow ridges.
+
+**Next step**: Build `synth-mirror-4step` matching production structure
+exactly (2 no-latency + 2 latency edges, similar traffic/p values).
+Compare sampling performance. If it samples in ~4 minutes, the
+hypothesis is confirmed.
+
+**Also documented**: Bayes compiler uses `query_snapshots_for_sweep`
+(all raw rows) while FE uses `query_virtual_snapshot` (latest-wins).
+See `docs/current/codebase/snapshot-db-data-paths.md`.
+
+### Blocked: FE stats pass not available in Python
+
+The Bayes compiler needs priors (mu, sigma, onset, t95, forecast.mean)
+on graph edges. These come from the FE "stats pass" which fits a
+lognormal CDF to the maturation trajectories. Currently only implemented
+in TypeScript (`statisticalEnhancementService.ts`).
+
+For synthetic data graphs, we either:
+1. Fake priors from the truth config (current hack)
+2. Port the stats pass to Python (overdue, enables automated compiler
+   development iteration)
+
+Option 2 is next — the stats pass is conceptually simple (scipy
+curve_fit on lognormal CDF, ~50–100 lines) and unblocks the full
+generate → stats → compile → evaluate loop.
+
+---
+
 ## 22-Mar-26: path_onset_delta_days — analytic model onset separation
 
 ### Problem statement

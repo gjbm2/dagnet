@@ -926,7 +926,13 @@ def _emit_cohort_likelihoods(
         )
 
     # --- Single-retrieval days (existing per-day Binomial) ---
-    if all_daily:
+    # Skip if trajectory potentials already cover the data — the daily
+    # obs are redundant (they're anchor days with only one retrieval age,
+    # already excluded from trajectories by the len < 2 filter above).
+    # Including them with very small arrays can trigger a PyTensor
+    # composite rewrite bug (bool→float64 type mismatch on shape=(2,)).
+    has_trajectory_potentials = bool(window_trajs) or bool(cohort_trajs)
+    if all_daily and not has_trajectory_potentials:
         n_arr = np.array([d.n for d in all_daily], dtype=np.int64)
         k_arr = np.array([min(d.k, d.n) for d in all_daily], dtype=np.int64)
         compl_arr = np.array([d.completeness for d in all_daily], dtype=np.float64)

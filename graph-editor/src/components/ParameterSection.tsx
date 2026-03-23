@@ -447,6 +447,8 @@ export function ParameterSection({
           latencyEnabled={param!.latency?.latency_parameter === true}
           onUpdate={(changes) => onUpdate(changes)}
           disabled={disabled}
+          latencyPosterior={param!.latency?.posterior as any}
+          probabilityPosterior={param!.posterior as any}
         />
       )}
 
@@ -708,7 +710,7 @@ export function ParameterSection({
                 </div>
               </AutomatableField>
 
-              {/* Latency posterior indicator — shows edge & path CDF sparkline */}
+              {/* Latency posterior indicator badge */}
               {param?.latency?.posterior && (
                 <div style={{ marginTop: '4px' }}>
                   <PosteriorIndicator

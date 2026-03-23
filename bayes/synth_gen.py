@@ -107,6 +107,17 @@ GRAPH_CONFIGS: dict[str, dict[str, Any]] = {
         ],
         "base_date": "2025-12-12",
     },
+    "mirror": {
+        "graph_file": "synth-mirror-4step.json",
+        "graph_id": "graph-synth-mirror-4step",
+        "edges": [
+            ("m4-landing-to-created",      "1c3b7f6c-0ef4-4415-a660-ba7fdf659bf0", "PLACEHOLDER-w", "PLACEHOLDER-c"),
+            ("m4-created-to-delegated",    "5341d386-d19c-45c0-9d3e-9c9779f0627c", "PLACEHOLDER-w", "PLACEHOLDER-c"),
+            ("m4-delegated-to-registered", "7a26c540-0bc6-4afa-8333-67d46b2f92ba", "PLACEHOLDER-w", "PLACEHOLDER-c"),
+            ("m4-registered-to-success",   "e4a7a43c-37c5-44d1-9bb3-15914232f47b", "PLACEHOLDER-w", "PLACEHOLDER-c"),
+        ],
+        "base_date": "2025-12-12",
+    },
 }
 
 
@@ -245,14 +256,14 @@ def compute_core_hashes(
             else:
                 cohort_anchor = ""
 
-            # Event definition hashes — mode-dependent.
-            # buildDslFromEdge loads from/to events always.
-            # In cohort mode, it also loads the anchor event.
-            # The latency anchor event is NOT loaded unless it coincides
+            # Event definition hashes — per-edge, only events relevant to
+            # this edge. buildDslFromEdge loads from/to events always.
+            # In cohort mode it also loads the cohort anchor event.
+            # The latency anchor event is loaded only if it coincides
             # with from/to/cohort-anchor.
             loaded_event_ids = {from_event_id, to_event_id}
-            if cohort_mode and anchor_start_eid:
-                loaded_event_ids.add(anchor_start_eid)
+            if cohort_mode and cohort_anchor:
+                loaded_event_ids.add(cohort_anchor)
 
             all_event_ids = [eid for eid in [from_event_id, to_event_id, latency_anchor_event_id] if eid]
             event_def_hashes: dict[str, str] = {}
@@ -271,8 +282,13 @@ def compute_core_hashes(
                 else:
                     event_def_hashes[eid] = "not_loaded"
 
+            # Connection: read from edge p.connection or graph defaultConnection
+            edge_connection = edge.get("p", {}).get("connection")
+            if not edge_connection:
+                edge_connection = graph_snapshot.get("defaultConnection", "amplitude")
+
             core_canonical = json.dumps({
-                "connection": "amplitude",
+                "connection": edge_connection,
                 "from_event_id": from_event_id,
                 "to_event_id": to_event_id,
                 "visited_event_ids": [],
@@ -1059,6 +1075,90 @@ def _generate_observations_nightly(
 
 
 # ---------------------------------------------------------------------------
+# Hash rehashing + verification
+# ---------------------------------------------------------------------------
+
+def _rehash_snapshot_rows(
+    snapshot_rows: dict[str, list[dict]],
+    topology,
+    hash_lookup: dict[str, dict[str, str]],
+) -> None:
+    """Replace core_hash on every snapshot row with the authoritative FE hash.
+
+    snapshot_rows were generated with whatever hashes existed at simulation
+    time. This function overwrites them with the FE-computed hashes so the
+    DB write uses the correct hashes.
+    """
+    for edge_id, rows in snapshot_rows.items():
+        et = topology.edges.get(edge_id)
+        if not et or not et.param_id:
+            continue
+        pid = et.param_id
+        hashes = hash_lookup.get(pid)
+        if not hashes:
+            bare = pid.replace("parameter-", "") if pid.startswith("parameter-") else pid
+            hashes = hash_lookup.get(bare)
+        if not hashes:
+            continue
+
+        w_hash = hashes["window_hash"]
+        c_hash = hashes["cohort_hash"]
+
+        for r in rows:
+            sk = r.get("slice_key", "")
+            if "cohort" in sk:
+                r["core_hash"] = c_hash
+            else:
+                r["core_hash"] = w_hash
+
+
+def _verify_db_data(
+    hash_lookup: dict[str, dict[str, str]],
+    topology,
+    workspace_prefix: str,
+    db_connection: str,
+) -> None:
+    """Query DB with the authoritative hashes and confirm rows exist.
+
+    Prints PASS/FAIL per edge. Exits with error if any edge has 0 rows.
+    """
+    import psycopg2
+    conn = psycopg2.connect(db_connection)
+    cur = conn.cursor()
+
+    all_ok = True
+    for edge_id, et in topology.edges.items():
+        pid = et.param_id
+        if not pid:
+            continue
+        hashes = hash_lookup.get(pid)
+        if not hashes:
+            bare = pid.replace("parameter-", "") if pid.startswith("parameter-") else pid
+            hashes = hash_lookup.get(bare)
+        if not hashes:
+            continue
+
+        db_pid = f"{workspace_prefix}-{pid}" if workspace_prefix else pid
+
+        for mode, h in [("window", hashes["window_hash"]), ("cohort", hashes["cohort_hash"])]:
+            cur.execute(
+                "SELECT COUNT(*) FROM snapshots WHERE core_hash = %s AND param_id = %s",
+                (h, db_pid),
+            )
+            count = cur.fetchone()[0]
+            status = "PASS" if count > 0 else "FAIL"
+            if count == 0:
+                all_ok = False
+            print(f"  {status} {pid} {mode}: {count} rows (hash={h[:16]}…, db_pid={db_pid[:40]})")
+
+    conn.close()
+    if not all_ok:
+        print("\n  ERROR: Some edges have 0 rows in DB. Hash mismatch likely.")
+    else:
+        print("\n  All edges verified — DB data matches FE hashes.")
+
+
+# ---------------------------------------------------------------------------
 # DB write
 # ---------------------------------------------------------------------------
 
@@ -1504,8 +1604,16 @@ def update_graph_edge_metadata(
 
         # Structural latency block — only fields that exist before the
         # stats pass runs. Clear any stale analytical params from prior runs.
+        # Only set latency_parameter=true if the truth config has non-trivial
+        # latency for this edge (onset > 0 or mu > 0.01). Edges without
+        # latency compile as simple Binomials — much cheaper to sample.
+        edge_truth = truth.get("edges", {}).get(et.param_id, {})
+        if not edge_truth:
+            bare = et.param_id.replace("parameter-", "") if et.param_id.startswith("parameter-") else et.param_id
+            edge_truth = truth.get("edges", {}).get(bare, {})
+        has_latency = (edge_truth.get("onset", 0) > 0.01 or edge_truth.get("mu", 0) > 0.01)
         p["latency"] = {
-            "latency_parameter": True,
+            "latency_parameter": has_latency,
         }
         anchor_id = uuid_to_id.get(
             topology.anchor_node_id, topology.anchor_node_id
@@ -1670,16 +1778,20 @@ Examples:
             truth = derive_truth_from_graph(graph, topology)
             print("Truth: derived from graph edge metadata")
 
-    # Build hash lookup — compute real FE-compatible hashes, fall back to
-    # GRAPH_CONFIGS static hashes (for graphs with known FE hashes)
-    hash_lookup = _build_hash_lookup(gcfg)
-    computed_hashes = compute_core_hashes(graph, topology, data_repo)
-    # Computed hashes override static SYNTH-* fallbacks
-    for pid, hashes in computed_hashes.items():
-        existing = hash_lookup.get(pid, {})
-        if existing.get("window_hash", "").startswith("SYNTH-") or pid not in hash_lookup:
-            hash_lookup[pid] = hashes
-    print(f"Hashes: computed {len(computed_hashes)} edge hashes from graph + event definitions")
+    # Placeholder hashes for simulation. The simulation just needs some
+    # string to tag rows — the real FE-authoritative hashes are applied
+    # in the write pipeline (step 2) via _rehash_snapshot_rows.
+    hash_lookup: dict[str, dict[str, str]] = {}
+    for edge_id, et in topology.edges.items():
+        pid = et.param_id
+        if pid:
+            hash_lookup[pid] = {
+                "window_hash": f"SIM-{pid}-w",
+                "cohort_hash": f"SIM-{pid}-c",
+            }
+            if not pid.startswith("parameter-"):
+                hash_lookup[f"parameter-{pid}"] = hash_lookup[pid]
+    print(f"Hashes: {len(hash_lookup)} edges resolved via FE (Node.js)")
     # Also merge any hashes from truth config edges
     for pid, edata in truth.get("edges", {}).items():
         if "window_hash" in edata and "cohort_hash" in edata:
@@ -1722,72 +1834,106 @@ Examples:
         print("\n(Dry run — not writing to DB or files)")
         return
 
-    # Write to snapshot DB (optional — may not have local DB)
-    hash_map = {}
+    # ── WRITE PIPELINE ──────────────────────────────────────────────
+    # Single-pass: structural metadata → FE hashes → DB → param files → verify.
+    # ALL hash computation goes through compute_snapshot_subjects.mjs (Node.js).
+    # No Python hash computation. One source of truth.
+
+    import subprocess as _sp
+
+    # 1. Update graph edge structural metadata on disk.
+    #    (query, latency_parameter, anchor_node_id, cohort_anchor_event_id)
+    #    Does NOT touch analytical params (mu/sigma/t95) — stats pass does that.
+    if args.write_files:
+        print(f"\n── Step 1: Update graph structural metadata ──")
+        update_graph_edge_metadata(graph_path, topology, truth, sim_stats)
+        print("  Updated: query, latency_parameter, cohort_anchor_event_id")
+
+        # Set simulation guard (simulation=true, dailyFetch=false, DSL)
+        set_simulation_guard(graph_path, enable=True, sim_stats=sim_stats)
+        print("  Set simulation guard")
+
+    # 2. Compute authoritative hashes via Node.js (from the graph on disk).
+    #    This MUST happen AFTER structural metadata update (latency_parameter
+    #    affects the hash) but the graph must be on disk for Node to read it.
+    print(f"\n── Step 2: Compute FE-authoritative hashes ──")
+    node_script = os.path.join(REPO_ROOT, "bayes", "compute_snapshot_subjects.mjs")
+    nvm_prefix = (
+        f'export NVM_DIR="$HOME/.nvm" && '
+        f'. "$NVM_DIR/nvm.sh" 2>/dev/null && '
+        f'cd {os.path.join(REPO_ROOT, "graph-editor")} && '
+        f'nvm use "$(cat .nvmrc)" 2>/dev/null && '
+    )
+    node_cmd = f'{nvm_prefix}node {node_script} {graph_path}'
+    node_result = _sp.run(node_cmd, shell=True, capture_output=True, text=True, timeout=30)
+    if node_result.returncode != 0:
+        print(f"  ERROR: compute_snapshot_subjects.mjs failed:")
+        print(f"  {node_result.stderr[:300]}")
+        print(f"  Cannot proceed without authoritative hashes.")
+        sys.exit(1)
+    node_stdout = node_result.stdout
+    json_start = node_stdout.index("{")
+    fe_data = json.loads(node_stdout[json_start:])
+
+    hash_lookup: dict[str, dict[str, str]] = {}
+    for e in fe_data["edges"]:
+        pid = e["param_id"]
+        hash_lookup[pid] = {
+            "window_hash": e["window_hash"],
+            "cohort_hash": e["cohort_hash"],
+            "window_sig": e.get("window_sig", ""),
+            "cohort_sig": e.get("cohort_sig", ""),
+        }
+        if not pid.startswith("parameter-"):
+            hash_lookup[f"parameter-{pid}"] = hash_lookup[pid]
+    print(f"  {len(fe_data['edges'])} edges resolved")
+    for e in fe_data["edges"]:
+        print(f"    {e['param_id']}: w={e['window_hash'][:16]}… c={e['cohort_hash'][:16]}…")
+
+    # 3. Write to snapshot DB using FE hashes.
+    workspace_prefix = ""
     if db_conn:
-        print(f"\nWriting to snapshot DB...")
-        # Build workspace prefix: repo-branch (matches FE buildDbParamId)
-        import subprocess
+        print(f"\n── Step 3: Write to snapshot DB ──")
         repo_name = os.path.basename(data_repo)
         try:
-            branch_name = subprocess.check_output(
-                ["git", "-C", data_repo, "branch", "--show-current"],
-                text=True,
+            branch_name = _sp.check_output(
+                ["git", "-C", data_repo, "branch", "--show-current"], text=True,
             ).strip()
         except Exception:
             branch_name = "main"
         workspace_prefix = f"{repo_name}-{branch_name}"
         print(f"  Workspace prefix: {workspace_prefix}")
+
+        # Re-hash snapshot_rows with the authoritative hashes
+        # (snapshot_rows was generated with whatever hash_lookup existed at sim time)
+        _rehash_snapshot_rows(snapshot_rows, topology, hash_lookup)
+
         try:
-            hash_map = write_to_snapshot_db(snapshot_rows, db_conn, workspace_prefix, hash_lookup)
-            print_edge_config(topology, hash_map)
+            write_to_snapshot_db(snapshot_rows, db_conn, workspace_prefix, hash_lookup)
         except Exception as e:
-            print(f"\n  WARNING: DB write failed: {e}")
+            print(f"  WARNING: DB write failed: {e}")
             print(f"  (Continuing with file generation if --write-files is set)")
     else:
-        print("\nNo DB_CONNECTION — skipping snapshot DB write")
-        print("  (Set DB_CONNECTION in graph-editor/.env.local for DB writes)")
+        print(f"\n── Step 3: SKIPPED (no DB_CONNECTION) ──")
 
+    # 4. Write parameter files using FE hashes.
     if args.write_files:
-        print(f"\nWriting data repo files...")
-
-        # 1. Update graph edge structural metadata (query, latency_parameter,
-        #    anchor_node_id, cohort_anchor_event_id). Does NOT write analytical
-        #    params (mu/sigma/t95/forecast) — those are derived by the FE stats pass.
-        print("  Graph edge metadata:")
-        update_graph_edge_metadata(graph_path, topology, truth, sim_stats)
-        print("    Updated structural fields (query, latency_parameter, cohort_anchor)")
-
-        # 2. Compute hashes from the updated graph
+        print(f"\n── Step 4: Write parameter files ──")
         with open(graph_path) as f:
             updated_graph = json.load(f)
-        hash_lookup = compute_core_hashes(updated_graph, topology, data_repo)
-        print(f"    Computed {len(hash_lookup)} edge hashes")
-
-        # 3. Parameter YAML files (with correct hashes)
-        print("  Parameter files:")
         written_params = write_parameter_files(
             topology, truth, sim_stats, data_repo, updated_graph, hash_lookup,
         )
-        print(f"    Wrote {len(written_params)} parameter files")
-
-        # 4. Update parameters-index.yaml
+        print(f"  Wrote {len(written_params)} parameter files")
         update_parameter_index(data_repo, written_params)
 
-        # 5. Set simulation guard
-        print("  Simulation guard:")
-        set_simulation_guard(graph_path, enable=True, sim_stats=sim_stats)
-        print("    Set simulation=true, dailyFetch=false, dataInterestsDSL set")
-
-        print(f"\nData repo files written. Next steps:")
-        print(f"  1. cd {data_repo}")
-        print(f"  2. git diff  (review changes)")
-        print(f"  3. bash ../graph-ops/scripts/validate-graph.sh graphs/{gcfg['graph_file']}")
-        print(f"  4. Open graph in FE to inspect synthetic data")
+    # 5. Verify: query DB with the SAME hashes and confirm data exists.
+    if db_conn:
+        print(f"\n── Step 5: Verify DB data ──")
+        _verify_db_data(hash_lookup, topology, workspace_prefix, db_conn)
 
     if not db_conn and not args.write_files:
         print("\nWARNING: No DB and --write-files not set — data generated but not persisted.")
-        print("  Use --write-files to update data repo, or set DB_CONNECTION for DB writes.")
 
     print("\nDone.")
 

@@ -26,6 +26,8 @@ import type {
   GraphModelSourcePreference,
   ModelVarsQuality,
   LatencyConfig,
+  LatencyPosterior,
+  ProbabilityPosterior,
 } from '../types';
 import {
   resolveActiveModelVars,
@@ -53,6 +55,9 @@ interface ModelVarsCardsProps {
   latencyEnabled?: boolean;
   onUpdate: (changes: Record<string, any>) => void;
   disabled?: boolean;
+  /** Bayesian posteriors — full dispersion data for inline display */
+  latencyPosterior?: LatencyPosterior;
+  probabilityPosterior?: ProbabilityPosterior;
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -78,6 +83,7 @@ export function ModelVarsCards({
   promotedMean, promotedStdev, meanOverridden, stdevOverridden,
   promotedLatency, latencyEnabled,
   onUpdate, disabled = false,
+  latencyPosterior, probabilityPosterior,
 }: ModelVarsCardsProps) {
   const pref = effectivePreference(edgePreference, graphPreference);
   const activeEntry = resolveActiveModelVars(modelVars, pref);
@@ -170,18 +176,37 @@ export function ModelVarsCards({
                 <RoField label="stdev" value={fmt(bayesian.probability.stdev)} />
               </FieldGroup>
               {bayesian.latency && (
-                <FieldGroup label="Latency">
-                  <RoField label="onset" value={fmt(bayesian.latency.onset_delta_days, 0)} unit="d" />
-                  <RoField label="μ" value={fmt(bayesian.latency.mu, 3)} />
-                  <RoField label="σ" value={fmt(bayesian.latency.sigma, 3)} />
-                  <RoField label="t95" value={fmt(bayesian.latency.t95, 1)} unit="d" />
-                  {bayesian.latency.path_mu != null && (
-                    <>
-                      <RoField label="path μ" value={fmt(bayesian.latency.path_mu, 3)} />
-                      <RoField label="path σ" value={fmt(bayesian.latency.path_sigma, 3)} />
-                      <RoField label="path t95" value={fmt(bayesian.latency.path_t95, 1)} unit="d" />
-                    </>
+                <FieldGroup label="Latency (edge)">
+                  <RoField label="onset δ" value={fmt(bayesian.latency.onset_delta_days, 0)} unit="d" />
+                  {latencyPosterior?.onset_sd != null && (
+                    <RoField label="onset ±" value={fmt(latencyPosterior.onset_sd, 1)} unit="d" />
                   )}
+                  {latencyPosterior?.onset_hdi_lower != null && (
+                    <RoField label="onset HDI" value={`${fmt(latencyPosterior.onset_hdi_lower, 1)}d — ${fmt(latencyPosterior.onset_hdi_upper, 1)}d`} />
+                  )}
+                  <RoField label="μ" value={`${fmt(bayesian.latency.mu, 3)}${latencyPosterior?.mu_sd != null ? ` ± ${fmt(latencyPosterior.mu_sd, 3)}` : ''}`} />
+                  <RoField label="σ" value={`${fmt(bayesian.latency.sigma, 3)}${latencyPosterior?.sigma_sd != null ? ` ± ${fmt(latencyPosterior.sigma_sd, 3)}` : ''}`} />
+                  <RoField label="t95" value={fmt(bayesian.latency.t95, 1)} unit="d" />
+                  {latencyPosterior?.hdi_t95_lower != null && (
+                    <RoField label="t95 HDI" value={`${fmt(latencyPosterior.hdi_t95_lower, 1)}d — ${fmt(latencyPosterior.hdi_t95_upper, 1)}d`} />
+                  )}
+                  {latencyPosterior?.onset_mu_corr != null && (
+                    <RoField label="onset↔μ" value={fmt(latencyPosterior.onset_mu_corr, 3)} />
+                  )}
+                </FieldGroup>
+              )}
+              {bayesian.latency?.path_mu != null && (
+                <FieldGroup label="Latency (path)">
+                  <RoField label="onset δ" value={fmt(bayesian.latency.path_onset_delta_days, 0)} unit="d" />
+                  {latencyPosterior?.path_onset_sd != null && (
+                    <RoField label="onset ±" value={fmt(latencyPosterior.path_onset_sd, 1)} unit="d" />
+                  )}
+                  {latencyPosterior?.path_onset_hdi_lower != null && (
+                    <RoField label="onset HDI" value={`${fmt(latencyPosterior.path_onset_hdi_lower, 1)}d — ${fmt(latencyPosterior.path_onset_hdi_upper, 1)}d`} />
+                  )}
+                  <RoField label="μ" value={`${fmt(bayesian.latency.path_mu, 3)}${latencyPosterior?.path_mu_sd != null ? ` ± ${fmt(latencyPosterior.path_mu_sd, 3)}` : ''}`} />
+                  <RoField label="σ" value={`${fmt(bayesian.latency.path_sigma, 3)}${latencyPosterior?.path_sigma_sd != null ? ` ± ${fmt(latencyPosterior.path_sigma_sd, 3)}` : ''}`} />
+                  <RoField label="t95" value={fmt(bayesian.latency.path_t95, 1)} unit="d" />
                 </FieldGroup>
               )}
               {bayesian.quality && (

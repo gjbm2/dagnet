@@ -69,3 +69,7 @@
   font-style: italic;
   text-align: right;
 }
+
+.posterior-details-dim {
+  opacity: 0.6;
+}

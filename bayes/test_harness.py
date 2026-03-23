@@ -118,9 +118,10 @@ def main():
     parser.add_argument("--no-webhook", action="store_true", help="Skip webhook call")
     parser.add_argument("--curl", action="store_true", help="Generate curl command instead of running directly")
     parser.add_argument("--timeout", type=int, default=600, help="Hard timeout in seconds (default: 600)")
-    parser.add_argument("--graph", choices=["simple", "branch"], default="simple",
-                        help="Test graph: simple=bayes-test-gm-rebuild (4 edges), "
-                             "branch=conversion-flow-v2-recs-collapsed (10 edges, branch groups, joins)")
+    parser.add_argument("--graph", default="simple",
+                        help="Graph name (without .json) or shortcut: "
+                             "simple=bayes-test-gm-rebuild, branch=conversion-flow-v2-recs-collapsed. "
+                             "Any graph file in the data repo's graphs/ dir works.")
     parser.add_argument("--warmstart", action="store_true",
                         help="Two-pass: run once, feed posteriors back as priors, run again")
     args = parser.parse_args()
@@ -139,53 +140,65 @@ def main():
         print("ERROR: No DB_CONNECTION in graph-editor/.env.local")
         sys.exit(1)
 
-    # --- Graph-specific test data ---
-    # Each test graph has: graph file, edge→hash mapping, graph_id.
-    # (param_id, edge_uuid, window_core_hash, cohort_core_hash)
-    GRAPH_CONFIGS = {
-        "simple": {
-            "graph_file": "bayes-test-gm-rebuild.json",
-            "graph_id": "graph-bayes-test-gm-rebuild",
-            "edges": [
-                ("bayes-test-create-to-delegated",      "c64ddc4d-c369-4ae8-a44a-398a63a46ab1", "UaWTiPJp1kTXTlkigKzBAQ", "1npRXxdOjD56XTgKnZKbsw"),
-                ("bayes-test-delegated-to-registered",   "7bb83fbf-3ac6-4152-a395-a8b64a12506a", "ES2r-ClxqBl4VQQqYdfYYg", "YSX41CZhnZKsP49i80jjTg"),
-                ("bayes-test-landing-to-created",        "b91c2820-7a1d-4498-9082-5967b5027d76", "SXVK13yfsOIpXc4RQSv2GA", "yHCQevqcdyITym82h-uwdQ"),
-                ("bayes-test-registered-to-success",     "97b11265-1242-4fa8-a097-359f2384665a", "VTgXES1p_XdQoHMZ7VsEoA", "XiDhZpbnp535eBHiPu614w"),
-            ],
-            "anchor_from": "2025-11-19",
-            "anchor_to": "2026-03-19",
-        },
-        "branch": {
-            "graph_file": "conversion-flow-v2-recs-collapsed.json",
-            "graph_id": "graph-conversion-flow-v2-recs-collapsed",
-            "edges": [
-                ("coffee-to-bds",                    "76e0e0f8-133d-4065-9fab-56480063d9c9", "HZC_WqTRBfy7zPWtXTtY7A", "plxD-64WK7_SJAY--TUlcA"),
-                ("registration-to-success",          "370dce1d-3a36-4109-9711-204c301478c8", "-wNEREQRwNRE5wRjjuy2iQ", "CsFATi4Ye90pSpK-tEyzbg"),
-                ("household-delegation-rate",        "3d0a0757-8224-4cf0-a841-4ad17cd48d91", "r0AMpAJ_uExLojzFQhI3BQ", "QqoOJonqx8zzialfD5jKlQ"),
-                ("delegated-to-non-energy-rec",      "10e37cc7-0d37-4cd9-844b-653148025a51", "0Q4-AGwPXERTs5bQ0NACRg", "v_BRrQXxGn6lQ0MuJVccpA"),
-                ("bds-to-energy-rec",                "77d0a69e-3c75-4722-932b-7f54d317d0ce", "D6tg5LOxVxSqUXvaLjtbog", "spQwZYRcECdZMr2CshbT-g"),
-                ("delegated-to-coffee",              "64f4529c-62b8-4e7e-8479-c5289d925e58", "cFSR9ljHVYv9oAxijnyEWg", "kpDI95Ogtg6Rstx-jFpGCQ"),
-                ("no-bdos-to-rec",                   "13b5397f-9feb-453a-8e86-500c0693b4af", "xrcxwR2t-wEECamJSw4RNg", "gTtI0X5ks5GD4USIz_tEGQ"),
-                ("delegation-straight-to-energy-rec","8c23ea34-9c7e-40b3-ade3-291590774bfc", "EtC-FhDURPFuAvbZmc_DcA", "4Rfk9gYwK_27k2po2zOxzA"),
-                ("non-energy-rec-to-reg",            "9624cce1-21f3-4085-9388-c155b5b657fd", "gmOm0rBQD9HRA3l8Kdo7hw", "_oPC_SNhxKml76ZzmESycg"),
-                ("rec-with-bdos-to-registration",    "d45debd8-939b-4abb-b0d0-c5ef62412add", "ENci8vAkh-B9vMUx9SutXQ", "z3jCJuGWXK5g7h47on_Ryg"),
-            ],
-            "anchor_from": "2025-11-01",
-            "anchor_to": "2026-03-20",
-        },
+    # --- Resolve graph file ---
+    # Shortcuts for common graphs; otherwise treat as a graph filename
+    GRAPH_SHORTCUTS = {
+        "simple": "bayes-test-gm-rebuild",
+        "branch": "conversion-flow-v2-recs-collapsed",
     }
-
-    gcfg = GRAPH_CONFIGS[args.graph]
-    _edges = gcfg["edges"]
-
-    # Load graph
-    graph_path = os.path.join(data_repo_path, "graphs", gcfg["graph_file"])
+    graph_name = GRAPH_SHORTCUTS.get(args.graph, args.graph)
+    graph_file = f"{graph_name}.json"
+    graph_path = os.path.join(data_repo_path, "graphs", graph_file)
     if not os.path.isfile(graph_path):
         print(f"ERROR: Graph not found: {graph_path}")
         sys.exit(1)
     with open(graph_path) as f:
         graph = json.load(f)
-    print(f"Graph [{args.graph}]: {len(graph.get('edges', []))} edges")
+    graph_id = f"graph-{graph_name}"
+    print(f"Graph [{graph_name}]: {len(graph.get('edges', []))} edges")
+
+    # --- Compute edge hashes and snapshot subjects via Node.js ---
+    # Uses the real FE hash computation (compute_snapshot_subjects.mjs)
+    # to guarantee hash parity with the FE runtime.
+    import subprocess
+    node_script = os.path.join(REPO_ROOT, "bayes", "compute_snapshot_subjects.mjs")
+    nvm_prefix = (
+        f'export NVM_DIR="$HOME/.nvm" && '
+        f'. "$NVM_DIR/nvm.sh" 2>/dev/null && '
+        f'cd {os.path.join(REPO_ROOT, "graph-editor")} && '
+        f'nvm use "$(cat .nvmrc)" 2>/dev/null && '
+    )
+    node_cmd = f'{nvm_prefix}node {node_script} {graph_path}'
+    node_result = subprocess.run(
+        node_cmd, shell=True, capture_output=True, text=True, timeout=30,
+    )
+    if node_result.returncode != 0:
+        print(f"ERROR: compute_snapshot_subjects.mjs failed:\n{node_result.stderr}")
+        sys.exit(1)
+    # Parse JSON output (skip any nvm/node version lines before the JSON)
+    node_stdout = node_result.stdout
+    json_start = node_stdout.index("{")
+    fe_data = json.loads(node_stdout[json_start:])
+
+    _edges = [(e["param_id"], e["edge_uuid"], e["window_hash"], e["cohort_hash"])
+              for e in fe_data["edges"]]
+    print(f"  Resolved {len(_edges)} edges with hashes (via FE)")
+
+    # Derive anchor date range from pinnedDSL or dataInterestsDSL
+    import re
+    _dsl = graph.get("pinnedDSL", "") or graph.get("dataInterestsDSL", "")
+    _date_match = re.search(r"(\d{1,2}-\w{3}-\d{2}):(\d{1,2}-\w{3}-\d{2})", _dsl)
+    if _date_match:
+        from datetime import datetime
+        _from_dt = datetime.strptime(_date_match.group(1), "%d-%b-%y")
+        _to_dt = datetime.strptime(_date_match.group(2), "%d-%b-%y")
+        anchor_from = _from_dt.strftime("%Y-%m-%d")
+        anchor_to = _to_dt.strftime("%Y-%m-%d")
+    else:
+        # Default: last 120 days
+        anchor_to = date.today().isoformat()
+        anchor_from = (date.today() - __import__("datetime").timedelta(days=120)).isoformat()
+    print(f"  Anchor range: {anchor_from} → {anchor_to}")
 
     # Load param files
     import yaml
@@ -197,26 +210,22 @@ def main():
                 param_id = fname.replace(".yaml", "")
                 param_files[f"parameter-{param_id}"] = yaml.safe_load(f)
 
-    # Build equivalent_hashes from hash-mappings.json — same ClosureEntry
-    # shape the FE sends (dicts with core_hash, operation, weight).
+    # --- Run stats pass: derive mu/sigma/onset/t95 from param file lag data ---
+    sys.path.insert(0, os.path.join(REPO_ROOT, "graph-editor", "lib"))
+    from stats_enhancement import compute_stats_pass
+    graph = compute_stats_pass(graph, param_files)
+    # Count how many edges got latency priors
+    n_lat = sum(1 for e in graph.get("edges", [])
+                if e.get("p", {}).get("latency", {}).get("mu") is not None)
+    print(f"  Stats pass: {n_lat} edges with latency priors")
+
+    # Use equivalent_hashes from the Node.js output (already resolved)
     equiv_map: dict[str, list[dict]] = {}
-    mappings_path = os.path.join(data_repo_path, "hash-mappings.json")
-    if os.path.exists(mappings_path):
-        with open(mappings_path) as f:
-            _raw = json.load(f)
-        _mappings = _raw if isinstance(_raw, list) else _raw.get("hash_mappings", [])
-        for m in _mappings:
-            if m.get("operation") != "equivalent":
-                continue
-            src = m.get("core_hash", "")
-            dst = m.get("equivalent_to", "")
-            if not src or not dst or src == dst:
-                continue
-            for a, b in [(src, dst), (dst, src)]:
-                equiv_map.setdefault(a, [])
-                entry = {"core_hash": b, "operation": m["operation"], "weight": m.get("weight", 1.0)}
-                if entry not in equiv_map[a]:
-                    equiv_map[a].append(entry)
+    for subj in fe_data.get("subjects", []):
+        ch = subj.get("core_hash", "")
+        eh = subj.get("equivalent_hashes", [])
+        if ch and eh:
+            equiv_map[ch] = eh
 
     # Build snapshot subjects matching the FE SnapshotSubjectPayload contract
     snapshot_subjects = []
@@ -229,10 +238,10 @@ def main():
             "target": {"targetId": edge_id},
             "edge_id": edge_id,
             "slice_keys": [""],
-            "anchor_from": gcfg["anchor_from"],
-            "anchor_to": gcfg["anchor_to"],
-            "sweep_from": gcfg["anchor_from"],
-            "sweep_to": gcfg["anchor_to"],
+            "anchor_from": anchor_from,
+            "anchor_to": anchor_to,
+            "sweep_from": anchor_from,
+            "sweep_to": anchor_to,
         }
         snapshot_subjects.append({
             **base,
@@ -247,7 +256,7 @@ def main():
     print(f"Snapshot subjects: {len(snapshot_subjects)} ({len(_edges)} edges × 2 slices)")
 
     payload = {
-        "graph_id": gcfg["graph_id"],
+        "graph_id": graph_id,
         "graph_snapshot": graph,
         "parameter_files": param_files,
         "parameters_index": {},
