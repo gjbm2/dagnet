@@ -143,16 +143,21 @@ class CohortDailyTrajectory:
     different anchoring. See doc 6 § "End-state compiler approach".
 
     obs_type determines the compiler's treatment:
-      'window'  → denominator is `n` (x, from-node entrants),
-                   probability is p_window, CDF is edge-level
-      'cohort'  → denominator is `n` (a, anchor entrants),
-                   probability is p_path_cohort, CDF is path-level
+      'window'  → denominator is `n` (x, from-node entrants on anchor_day),
+                   x is fixed for the anchor_day. CDF is edge-level.
+      'cohort'  → denominator is `n` (a, anchor entrants on anchor_day),
+                   x(t) grows as upstream conversions arrive. CDF is path-level.
+                   cumulative_x tracks from-node arrivals per retrieval age.
+
+    For join nodes, x(t) is the TOTAL arrivals from all incoming edges
+    to the from-node (sum across all paths into that node).
     """
     date: str
     n: int                                  # denominator: x for window, a for cohort
     obs_type: str = "cohort"                # "window" | "cohort"
     retrieval_ages: list[float] = field(default_factory=list)   # sorted ascending
     cumulative_y: list[int] = field(default_factory=list)       # monotonised target counts
+    cumulative_x: list[int] = field(default_factory=list)       # from-node arrivals per age (cohort)
     path_edge_ids: list[str] = field(default_factory=list)      # edges on path (for p_path)
     recency_weight: float = 1.0     # exp(-ln2 * age / half_life), 1.0 = most recent
 

@@ -12,6 +12,7 @@ Only build_model imports PyMC. Everything else is pure Python.
 from .topology import analyse_topology
 from .evidence import bind_evidence, bind_snapshot_evidence
 from .model import build_model
+from .inspect_model import inspect_model
 from .inference import run_inference, summarise_posteriors
 from .types import (
     TopologyAnalysis,
@@ -37,6 +38,7 @@ __all__ = [
     "bind_evidence",
     "bind_snapshot_evidence",
     "build_model",
+    "inspect_model",
     "run_inference",
     "summarise_posteriors",
     "TopologyAnalysis",

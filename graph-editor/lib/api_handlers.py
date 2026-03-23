@@ -1979,3 +1979,131 @@ def handle_lag_recompute_models(data: Dict[str, Any]) -> Dict[str, Any]:
         'success': True,
         'subjects': results,
     }
+
+
+def handle_stats_topo_pass(data: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Run the BE analytic stats/topo pass on a graph.
+
+    Computes per-edge latency stats (mu, sigma, t95, path_t95, completeness,
+    p_infinity, blended_mean) and path-level lognormal params (path_mu,
+    path_sigma, path_onset_delta_days) via a topological traversal with
+    Fenton-Wilkinson composition.
+
+    This is the Python port of FE enhanceGraphLatencies().
+
+    Request shape:
+      - graph: full graph snapshot (nodes, edges)
+      - cohort_data: dict of edge_uuid → list of cohort data dicts
+            Each cohort dict: {date, age, n, k, median_lag_days?,
+            mean_lag_days?, anchor_median_lag_days?, anchor_mean_lag_days?}
+      - forecasting_settings: optional settings object
+
+    Returns:
+      - edges: list of per-edge results with latency scalars
+      - summary: {edges_processed, edges_with_lag}
+    """
+    from runner.stats_engine import (
+        CohortData,
+        EdgeContext,
+        enhance_graph_latencies,
+    )
+    from runner.forecasting_settings import settings_from_dict
+
+    graph = data.get('graph', {})
+    if not graph:
+        raise ValueError("Missing required 'graph' field")
+
+    settings_raw = data.get('forecasting_settings')
+    settings = settings_from_dict(settings_raw) if settings_raw else None
+
+    def _parse_cohorts(cohort_list: list) -> list:
+        parsed = []
+        for c in cohort_list:
+            parsed.append(CohortData(
+                date=c.get('date', ''),
+                age=float(c.get('age', 0)),
+                n=int(c.get('n', 0)),
+                k=int(c.get('k', 0)),
+                anchor_median_lag_days=c.get('anchor_median_lag_days'),
+                anchor_mean_lag_days=c.get('anchor_mean_lag_days'),
+                median_lag_days=c.get('median_lag_days'),
+                mean_lag_days=c.get('mean_lag_days'),
+            ))
+        return parsed
+
+    # Parse cohort data per edge
+    raw_cohorts = data.get('cohort_data', {})
+    param_lookup: Dict[str, list] = {}
+    for edge_id, cohort_list in raw_cohorts.items():
+        param_lookup[edge_id] = _parse_cohorts(cohort_list)
+
+    # Parse per-edge context (onset from window slices, window cohorts, nBaseline)
+    raw_contexts = data.get('edge_contexts', {})
+    edge_contexts: Dict[str, EdgeContext] = {}
+    for edge_id, ctx_dict in raw_contexts.items():
+        window_cohorts = None
+        if ctx_dict.get('window_cohorts'):
+            window_cohorts = _parse_cohorts(ctx_dict['window_cohorts'])
+        scoped_cohorts = None
+        if ctx_dict.get('scoped_cohorts'):
+            scoped_cohorts = _parse_cohorts(ctx_dict['scoped_cohorts'])
+        edge_contexts[edge_id] = EdgeContext(
+            onset_from_window_slices=ctx_dict.get('onset_from_window_slices'),
+            window_cohorts=window_cohorts,
+            n_baseline_from_window=ctx_dict.get('n_baseline_from_window'),
+            scoped_cohorts=scoped_cohorts,
+        )
+
+    result = enhance_graph_latencies(graph, param_lookup, settings, edge_contexts)
+
+    # If FE outputs were sent alongside, write the golden fixture to debug/
+    fe_outputs = data.get('fe_outputs')
+    if fe_outputs:
+        import json as _json
+        import os as _os
+        debug_dir = _os.path.join(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))), '..', 'debug')
+        _os.makedirs(debug_dir, exist_ok=True)
+        fixture_path = _os.path.join(debug_dir, 'tmp.topo-pass-golden.json')
+        with open(fixture_path, 'w') as _f:
+            _json.dump({
+                'inputs': {
+                    'graph': data.get('graph'),
+                    'cohort_data': data.get('cohort_data'),
+                    'edge_contexts': data.get('edge_contexts'),
+                    'forecasting_settings': data.get('forecasting_settings'),
+                },
+                'fe_outputs': fe_outputs,
+            }, _f, indent=2)
+        print(f'[lag/topo-pass] Golden fixture written to {fixture_path}')
+
+    edges_out = []
+    for ev in result.edge_values:
+        edges_out.append({
+            'edge_uuid': ev.edge_uuid,
+            'conditional_index': ev.conditional_index,
+            't95': ev.t95,
+            'path_t95': ev.path_t95,
+            'completeness': ev.completeness,
+            'mu': ev.mu,
+            'sigma': ev.sigma,
+            'onset_delta_days': ev.onset_delta_days,
+            'median_lag_days': ev.median_lag_days,
+            'mean_lag_days': ev.mean_lag_days,
+            'path_mu': ev.path_mu,
+            'path_sigma': ev.path_sigma,
+            'path_onset_delta_days': ev.path_onset_delta_days,
+            'p_infinity': ev.p_infinity,
+            'p_evidence': ev.p_evidence,
+            'forecast_available': ev.forecast_available,
+            'blended_mean': ev.blended_mean,
+        })
+
+    return {
+        'success': True,
+        'edges': edges_out,
+        'summary': {
+            'edges_processed': result.edges_processed,
+            'edges_with_lag': result.edges_with_lag,
+        },
+    }

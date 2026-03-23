@@ -3,7 +3,7 @@ Model builder: TopologyAnalysis + BoundEvidence → pm.Model.
 
 Model structure:
   - Graph-level σ_temporal (learned temporal volatility)
-  - Graph-level onset_hyper_mu, tau_onset (onset hyperprior + dispersion, doc 18)
+  - Per-edge independent onset priors (no graph-level sharing)
   - Per-edge κ (overdispersion concentration: BetaBinomial/DM)
   - Per-edge onset (latent, doc 18; or fixed when latent_onset=False)
   - Solo edges: p ~ Beta(α, β)
@@ -71,18 +71,11 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
         # --- Graph-level σ_temporal ---
         sigma_temporal = pm.HalfNormal("sigma_temporal", sigma=0.5)
 
-        # --- Graph-level onset hyperprior (Phase D.O, doc 18) ---
-        # onset_hyper_mu: typical onset scale across the graph
-        # tau_onset: how much onset varies across edges (dispersion)
-        onset_vars: dict[str, object] = {}  # edge_id → latent onset variable
-        if feat_latent_onset:
-            onset_hyper_mu = pm.HalfNormal("onset_hyper_mu", sigma=10.0)
-            tau_onset = pm.HalfNormal("tau_onset", sigma=5.0)
-        else:
-            onset_hyper_mu = None
-            tau_onset = None
-
-        # --- Per-edge latent onset (Phase D.O) ---
+        # --- Per-edge latent onset (independent priors) ---
+        # Each edge gets its own onset prior from its histogram data.
+        # No graph-level sharing — onset is a property of each specific
+        # business process, not a graph-wide characteristic.
+        onset_vars: dict[str, object] = {}
         if feat_latent_onset:
             for edge_id in topology.topo_order:
                 et = topology.edges.get(edge_id)
@@ -94,28 +87,28 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
                 safe_id = _safe_var_name(edge_id)
                 lp = ev.latency_prior
 
-                # Non-centred: onset_raw = onset_hyper_mu + eps * tau_onset
+                # Independent onset prior per edge, informed by histogram.
+                # Non-centred parameterisation centered at the histogram value:
+                #   onset = softplus(onset_prior + eps * uncertainty)
+                # This gives a prior naturally centered near onset_prior,
+                # with spread controlled by the histogram uncertainty.
+                onset_prior_val = max(lp.onset_delta_days, 0.0)
+                onset_sigma = max(lp.onset_uncertainty, 1.0)
+
                 eps_onset = pm.Normal(f"eps_onset_{safe_id}", mu=0, sigma=1)
-                onset_raw = onset_hyper_mu + eps_onset * tau_onset
-                # softplus ensures onset >= 0
                 onset_var = pm.Deterministic(
                     f"onset_{safe_id}",
-                    pt.softplus(onset_raw),
+                    pt.softplus(onset_prior_val + eps_onset * onset_sigma),
                 )
-
-                # Soft observation: histogram-derived onset as noisy data
-                if lp.onset_delta_days > 0:
-                    pm.Normal(
-                        f"onset_obs_{safe_id}",
-                        mu=onset_var,
-                        sigma=max(lp.onset_uncertainty, 0.5),
-                        observed=np.array(lp.onset_delta_days),
-                    )
+                # No soft observation — the prior already centers onset at
+                # onset_prior_val. Adding an observation at the same value
+                # double-constrains onset, preventing the sampler from
+                # exploring the onset-mu correlation ridge.
 
                 onset_vars[edge_id] = onset_var
                 diagnostics.append(
                     f"  onset: {edge_id[:8]}… histogram={lp.onset_delta_days:.1f}d "
-                    f"(±{lp.onset_uncertainty:.1f}) → latent"
+                    f"(±{lp.onset_uncertainty:.1f}) → latent (independent)"
                 )
 
         # --- Branch group Dirichlet priors (Phase B) ---
@@ -214,22 +207,17 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
 
             onset_prior, mu_path_composed, sigma_path_composed = path_result
 
-            # onset_cohort: latent, prior from sum of edge onsets.
-            # Phase D.O: dispersion from tau_onset * sqrt(n_path_edges)
-            # instead of hardcoded HalfNormal sigma.
-            n_path_latency = max(path_latency_count, 1)
-            if feat_latent_onset and tau_onset is not None:
-                import math as _math
-                # Non-centred: onset_cohort = path_onset_sum + eps * path_onset_tau
-                # onset_prior is now a PyTensor expr (sum of latent edge onsets)
-                path_onset_tau = tau_onset * _math.sqrt(n_path_latency)
+            # onset_cohort: path-level onset = sum of edge onsets along path.
+            # When edge onsets are latent (PyTensor), onset_prior is already
+            # a PyTensor sum. Add a small dispersion term.
+            if feat_latent_onset and hasattr(onset_prior, 'name'):
+                # onset_prior is PyTensor (sum of latent edge onsets)
                 eps_onset_path = pm.Normal(f"eps_onset_path_{safe_id}", mu=0, sigma=1)
                 onset_cohort = pm.Deterministic(
                     f"onset_cohort_{safe_id}",
-                    pt.softplus(onset_prior + eps_onset_path * path_onset_tau),
+                    pt.softplus(onset_prior + eps_onset_path * 1.0),
                 )
             else:
-                # Legacy: hardcoded HalfNormal sigma
                 onset_prior_val = float(onset_prior) if not hasattr(onset_prior, 'name') else 5.0
                 onset_cohort = pm.HalfNormal(
                     f"onset_cohort_{safe_id}",
@@ -257,7 +245,7 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
             diagnostics.append(
                 f"  cohort_latency: {edge_id[:8]}… "
                 f"mu_path_prior=FW-composed, tau_mu={tau_mu_lat:.3f}, "
-                f"latent_onset={'tau_onset' if feat_latent_onset else 'hardcoded'}"
+                f"latent_onset={'independent' if feat_latent_onset else 'hardcoded'}"
             )
 
         # --- Per-edge variables and likelihoods ---

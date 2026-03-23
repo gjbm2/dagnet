@@ -839,6 +839,74 @@ design; implementation is post-Phase A.
 
 ---
 
+## Compiler structural debt (23-Mar-26)
+
+Code-level concerns identified by reviewing the compiler implementation
+in isolation from the design docs. These are not feature gaps — the
+statistical model and pipeline architecture are sound. They are
+internal code quality issues that increase the cost and risk of
+subsequent phase work.
+
+### `_emit_cohort_likelihoods()` near-duplication (model.py)
+
+This single function (~350 lines) handles trajectory Potentials for
+both Phase S (fixed CDFs, numpy constants) and Phase D (latent CDFs,
+PyTensor expressions). The two branches share ~70% of their structure
+— interval count assembly, DM logp terms, remainder terms,
+normalisation, recency weighting — but diverge on whether CDFs are
+numpy or PyTensor. Fixing a bug in one branch without fixing the other
+is the obvious failure mode. Refactor: extract a shared skeleton that
+takes a CDF-coefficient provider (numpy array vs PyTensor expression),
+collapsing the two branches into one.
+
+### `build_model()` implicit state passing
+
+Each compiler phase added a new shared dict to `build_model()`:
+`onset_vars`, `latency_vars`, `cohort_latency_vars`, `bg_p_vars`,
+`edge_var_names`. These dicts are the real interface between model
+construction stages, but they are implicit — grown organically, not
+designed. A new phase (e.g. Phase C slice emission) must understand
+all existing dicts to know which variables exist and how to reference
+them. Risk: the dict-passing pattern makes it easy to introduce
+subtle ordering bugs (e.g. reading a dict before the stage that
+populates it). Mitigation: either formalise the dicts into a typed
+`ModelBuildState` dataclass, or split `build_model()` into named
+stages that each receive and return explicit state.
+
+### Utility duplication across modules
+
+- `_safe_var_name()` is identical in `model.py` and `inference.py`.
+  Move to `compiler/types.py` or a shared `compiler/utils.py`.
+- `_build_path_lookup()` is identical in `evidence.py` and `worker.py`.
+  Consolidate into evidence.py and import.
+- Date parsing (`_parse_today`, `_date_age`, `_retrieval_age`,
+  `_extract_date_from_dsl`) — four functions with slightly different
+  format lists and no shared parser. Consolidate into a single
+  `_parse_date(s: str) -> datetime` that tries all known formats once.
+
+These are small individually but they signal module-boundary drift.
+Each duplication is a place where a format change (e.g. adding a new
+date format) must be applied in multiple locations.
+
+### `_resolve_path_probability()` searches the model graph by string
+
+To find upstream p variables, this function iterates
+`model.deterministics + model.free_RVs` and matches `rv.name` against
+string prefixes (`p_window_`, `p_base_`, `p_`). This is fragile
+coupling to PyMC variable naming conventions. A dict mapping
+`edge_id → p_var` (PyTensor reference) maintained alongside
+`edge_var_names` would eliminate the scan and remove the dependency on
+naming conventions.
+
+### Dead backward-compat `.a` property on `CohortDailyTrajectory`
+
+`types.py` line 160: `.a` property returns `.n`, commented "Backward
+compat — old code references .a". Grep for remaining callers and
+delete. If no callers exist this is dead code inflating the type
+surface.
+
+---
+
 ## Bug fix: hash-mappings.json — wrong hash format + missing fields (19-Mar-26)
 
 Discovered when testing bayes-test branch on the data repo. The Snapshot

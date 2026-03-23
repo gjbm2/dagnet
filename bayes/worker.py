@@ -332,10 +332,26 @@ def _fit_graph_compiler(payload: dict, report_progress=None) -> dict:
 
         # ── 4. Build model ──
         report("compiling", 0, "Building model…")
-        model, metadata = build_model(topology, evidence)
+        features = settings.get("features") or {}
+        model, metadata = build_model(topology, evidence, features=features)
         log.append(f"model: {len(model.free_RVs)} free vars, {len(model.observed_RVs)} observed")
         for d in metadata.get("diagnostics", []):
             log.append(f"  model: {d}")
+
+        # ── 4b. Model inspection (always runs) ──
+        from compiler import inspect_model
+        inspection = inspect_model(model, metadata, topology, evidence)
+        for line in inspection:
+            log.append(line)
+
+        # Stop here if model_inspect_only — no MCMC
+        if settings.get("model_inspect_only"):
+            log.append("MODEL INSPECT ONLY — stopping before MCMC")
+            report("complete", 100, "Model inspection complete")
+            return _build_result(
+                None, log, timings, t0, result_edges, result_skipped,
+                quality_dict, webhook_response,
+            )
 
         # ── 5. Run inference ──
         sampling_config = SamplingConfig(

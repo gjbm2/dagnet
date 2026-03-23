@@ -110,24 +110,26 @@ def analyse_topology(graph_snapshot: dict) -> TopologyAnalysis:
         mu_prior = 0.0
         sigma_prior = 0.5
         if has_latency:
-            median_lag = latency.get("median_lag_days")
-            mean_lag = latency.get("mean_lag_days")
             mu_from_param = latency.get("mu")
             sigma_from_param = latency.get("sigma")
+            median_lag = latency.get("median_lag_days")
+            mean_lag = latency.get("mean_lag_days")
 
-            if (median_lag is not None and mean_lag is not None
+            # Priority: (1) mu/sigma from graph edge (stats pass output),
+            # (2) derive from median/mean, (3) t95 fallback.
+            # Doc 19: crude derive_latency_prior was preferred over graph
+            # mu/sigma, causing three-way prior discrepancy. Fixed to
+            # prefer the stats pass output which includes t95 improvement.
+            if mu_from_param is not None and sigma_from_param is not None:
+                mu_prior = float(mu_from_param)
+                sigma_prior = float(sigma_from_param)
+            elif (median_lag is not None and mean_lag is not None
                     and float(median_lag) > 0 and float(mean_lag) > 0):
                 mu_prior, sigma_prior = derive_latency_prior(
                     float(median_lag), float(mean_lag), onset,
                 )
-            elif mu_from_param is not None and sigma_from_param is not None:
-                mu_prior = float(mu_from_param)
-                sigma_prior = float(sigma_from_param)
             else:
-                # Fallback: derive from t95 if available. Pragmatic
-                # bridge until doc 16 (lag array defect) is fixed and
-                # latency warm-start is implemented. Assume moderate
-                # sigma and solve for mu from t95.
+                # Fallback: derive from t95 if available.
                 t95 = latency.get("t95")
                 if t95 is not None and float(t95) > onset:
                     import math

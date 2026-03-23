@@ -14,7 +14,7 @@ import ReactDOM from 'react-dom';
 import ReactECharts from 'echarts-for-react';
 import { computeQualityTier, qualityTierToColour, qualityTierLabel } from '../../utils/bayesQualityTier';
 import { formatRelativeTime, getFreshnessLevel, freshnessColour, type FreshnessLevel } from '../../utils/freshnessDisplay';
-import type { ProbabilityPosterior, LatencyPosterior } from '../../types';
+import type { ProbabilityPosterior, LatencyPosterior, ModelSource } from '../../types';
 import './posterior-indicator.css';
 
 type Posterior = ProbabilityPosterior | LatencyPosterior;
@@ -29,7 +29,7 @@ interface PosteriorIndicatorProps {
   /** When true, show only the badge (no popover on hover). Default false. */
   badgeOnly?: boolean;
   /** Active model variable source (doc 15 §14.4) — shown in popover metadata */
-  activeSource?: 'bayesian' | 'analytic' | 'manual' | null;
+  activeSource?: ModelSource | null;
 }
 
 export function PosteriorIndicator({ posterior, retrievedAt, theme = 'dark', badgeOnly = false, activeSource }: PosteriorIndicatorProps) {
@@ -103,7 +103,7 @@ interface PosteriorDetailsProps {
   posterior: Posterior;
   retrievedAt?: string | number | null;
   theme?: 'light' | 'dark';
-  activeSource?: 'bayesian' | 'analytic' | 'manual' | null;
+  activeSource?: ModelSource | null;
 }
 
 /** Renders a compact diagnostic summary table. Reusable in popovers and panels. */
@@ -130,7 +130,7 @@ function SectionHeader({ label, theme }: { label: string; theme: 'light' | 'dark
 
 function ProbabilityPosteriorDetails({ posterior, tier, colour, retrievedAt, theme, activeSource }: {
   posterior: ProbabilityPosterior; tier: ReturnType<typeof computeQualityTier>; colour: string;
-  retrievedAt?: string | number | null; theme: 'light' | 'dark'; activeSource?: 'bayesian' | 'analytic' | 'manual' | null;
+  retrievedAt?: string | number | null; theme: 'light' | 'dark'; activeSource?: ModelSource | null;
 }) {
   const a = posterior.alpha, b = posterior.beta;
   const pMean = a / (a + b);
@@ -230,7 +230,7 @@ function ProbabilityPosteriorDetails({ posterior, tier, colour, retrievedAt, the
 
 function LatencyPosteriorDetails({ posterior, tier, colour, retrievedAt, theme, activeSource }: {
   posterior: LatencyPosterior; tier: ReturnType<typeof computeQualityTier>; colour: string;
-  retrievedAt?: string | number | null; theme: 'light' | 'dark'; activeSource?: 'bayesian' | 'analytic' | 'manual' | null;
+  retrievedAt?: string | number | null; theme: 'light' | 'dark'; activeSource?: ModelSource | null;
 }) {
   const hasPath = posterior.path_mu_mean != null;
 

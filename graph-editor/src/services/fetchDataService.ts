@@ -26,7 +26,7 @@ import {
 import { isolateSlice, extractSliceDimensions } from './sliceIsolation';
 import { resolveMECEPartitionForImplicitUncontexted } from './meceSliceService';
 import { fileRegistry } from '../contexts/TabContext';
-import { runParityComparison, FORECASTING_PARALLEL_RUN } from './lagRecomputeService';
+import { compareModelVarsSources, FORECASTING_PARALLEL_RUN } from './forecastingParityService';
 import { parseConstraints } from '../lib/queryDSL';
 import { resolveRelativeDate } from '../lib/dateFormat';
 import type { Graph, DateRange } from '../types';
@@ -1614,6 +1614,25 @@ export async function runStage2EnhancementsAndInboundN(
               blendedMean: v.blendedMean,
             })),
           });
+
+          // Stash FE topo pass outputs so the BE topo pass can log a complete
+          // parity fixture (BE inputs + FE outputs) via console mirroring.
+          if (import.meta.env.DEV && typeof window !== 'undefined') {
+            (window as any).__feTopoFixtureOutputs = {
+              edges_processed: lagResult.edgesProcessed,
+              edges_with_lag: lagResult.edgesWithLAG,
+              edge_values: lagResult.edgeValues.map(v => ({
+                edge_uuid: v.edgeUuid, conditional_index: v.conditionalIndex ?? null,
+                t95: v.latency.t95, path_t95: v.latency.path_t95, completeness: v.latency.completeness,
+                mu: v.latency.mu, sigma: v.latency.sigma,
+                onset_delta_days: v.latency.onset_delta_days ?? null,
+                median_lag_days: v.latency.median_lag_days ?? null, mean_lag_days: v.latency.mean_lag_days ?? null,
+                path_mu: v.latency.path_mu ?? null, path_sigma: v.latency.path_sigma ?? null,
+                path_onset_delta_days: v.latency.path_onset_delta_days ?? null,
+                blended_mean: v.blendedMean ?? null,
+              })),
+            };
+          }
           
           // Apply ALL LAG values in ONE atomic operation via UpdateManager
           // Single call: clone once, apply all latency + means, rebalance once
@@ -1691,7 +1710,49 @@ export async function runStage2EnhancementsAndInboundN(
               }),
             });
           }
-          
+
+          // ── BE topo pass (analytic_be model_vars) + parity comparison ──
+          // Fire-and-forget: runs in parallel, upserts analytic_be entries
+          // when results arrive, then compares FE vs BE. Does not block the FE pipeline.
+          (async () => {
+            try {
+              const { runBeTopoPass } = await import('./beTopoPassService');
+              const { upsertModelVars } = await import('./modelVarsResolution');
+              const beEntries = await runBeTopoPass(
+                finalGraph, paramLookup, queryDateForLAG, lagHelpers, lagCohortWindow,
+              );
+              if (beEntries.length > 0 && finalGraph?.edges) {
+                const beGraph = structuredClone(finalGraph);
+                let applied = 0;
+                for (const { edgeUuid, conditionalIndex, entry } of beEntries) {
+                  const edge = beGraph.edges?.find((e: any) => e.uuid === edgeUuid || e.id === edgeUuid);
+                  if (!edge) continue;
+                  if (conditionalIndex != null) {
+                    // Conditional probability
+                    const cp = edge.conditional_p?.[conditionalIndex];
+                    if (cp?.p) {
+                      upsertModelVars(cp.p, entry);
+                      applied++;
+                    }
+                  } else if (edge.p) {
+                    upsertModelVars(edge.p, entry);
+                    applied++;
+                  }
+                }
+                if (applied > 0) {
+                  setGraph(beGraph);
+                  console.log(`[fetchDataService] BE topo pass: upserted ${applied} analytic_be entries`);
+                  // Both sources now on the graph — run parity comparison
+                  if (FORECASTING_PARALLEL_RUN) {
+                    compareModelVarsSources(beGraph);
+                  }
+                }
+              }
+            } catch (e) {
+              console.warn('[fetchDataService] BE topo pass failed (non-blocking):', e);
+            }
+          })();
+
           if (batchLogId) {
             sessionLogService.addChild(batchLogId, 'info', 'LAG_ENHANCED',
               `Enhanced ${lagResult.edgesWithLAG} edges with LAG stats (topo pass)`,
@@ -1784,25 +1845,8 @@ export async function runStage2EnhancementsAndInboundN(
             }
           }
 
-          // ── Forecasting parity comparison (every fetch, gated by flag) ──
-          if (FORECASTING_PARALLEL_RUN && lagResult.edgesWithLAG > 0) {
-            try {
-              const firstParamEdge = finalGraph?.edges?.find((e: any) => e?.p?.id);
-              const firstFileId = firstParamEdge?.p?.id ? `parameter-${firstParamEdge.p.id}` : undefined;
-              const src = firstFileId ? fileRegistry.getFile(firstFileId)?.source : undefined;
-              const ws = src?.repository && src?.branch
-                ? { repository: src.repository as string, branch: src.branch as string }
-                : undefined;
-              if (ws && finalGraph) {
-                // Fire-and-forget: don't block the fetch pipeline.
-                runParityComparison({ graph: finalGraph, workspace: ws }).catch((e: any) =>
-                  console.warn('[fetchDataService] Parity comparison failed (non-fatal):', e?.message || e)
-                );
-              }
-            } catch (e: any) {
-              console.warn('[fetchDataService] Parity comparison setup failed (non-fatal):', e?.message || e);
-            }
-          }
+          // Parity comparison now runs inside the BE topo pass block above
+          // (after analytic_be entries are written to the graph).
         }
         
         // ═══════════════════════════════════════════════════════════════════

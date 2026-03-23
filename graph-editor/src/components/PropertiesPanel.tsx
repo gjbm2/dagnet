@@ -1889,7 +1889,8 @@ export default function PropertiesPanel({
                 >
                   <option value="best_available">Auto (best available)</option>
                   <option value="bayesian">Bayesian</option>
-                  <option value="analytic">Analytic</option>
+                  <option value="analytic_be">Analytic (BE)</option>
+                  <option value="analytic">Analytic (FE)</option>
                 </select>
                 <div style={{ fontSize: '11px', color: '#6B7280', marginTop: '4px' }}>
                   Which model source to promote to scalars across all edges. Per-edge override available in edge properties.

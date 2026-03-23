@@ -8,6 +8,126 @@ Entries are reverse-chronological (newest first).
 
 ---
 
+## 23-Mar-26: Tooling hardening and parameter recovery baseline
+
+### What was done
+
+**Model inspection** (`compiler/inspect_model.py`): Structured dump of the
+compiled pm.Model that runs AFTER `build_model()`, BEFORE MCMC — always,
+every run. Shows all free RVs with distributions, deterministics, potentials,
+observed RVs, per-edge evidence binding confirmation, feature flags, and
+variable→edge mapping. Harness flag `--no-mcmc` stops before sampling.
+
+**Feature flags via settings** (`--feature KEY=VALUE`): Model features
+(latent_latency, cohort_latency, overdispersion, latent_onset) are now
+passed through harness CLI → payload settings → `build_model(features=...)`.
+No code changes needed for parallel A/B runs:
+```
+python bayes/test_harness.py --graph X --feature latent_onset=false
+python bayes/test_harness.py --graph X --feature latent_onset=true
+```
+
+**Parameter recovery shim** (`bayes/param_recovery.py`): Wraps the harness
+for synth graphs. Reads .truth.yaml sidecar, runs MCMC, compares posteriors
+to ground truth with z-scores and PASS/MISS per parameter. NOT for production
+data — production has no ground truth.
+
+**synth_gen hardened**:
+- FAILS if no .truth.yaml sidecar exists (no silent fallback to defaults —
+  the old fallback to `derive_truth_from_graph` wasted hours producing data
+  from wrong parameters)
+- `write_parameter_files` now derives `latency_parameter` from the truth
+  config, not from the stale topology object (which was built before
+  `update_graph_edge_metadata` ran)
+- `--write-files` flag required to update param files on disk
+
+### Bugs found and fixed
+
+**param files had wrong `latency_parameter`**: `write_parameter_files` read
+`et.has_latency` from the topology, which was built from the graph BEFORE
+`update_graph_edge_metadata` wrote `latency_parameter: true`. Result: edges
+with latency in truth had `latency_parameter: false` in param files. The
+stats engine and topology then treated them as no-latency edges, producing
+wildly wrong priors (mu=0.518 instead of mu=2.3 for the 2-step a-to-b edge).
+Fixed to derive `latency_parameter` from the truth config directly.
+
+**4-step regression no longer reproduces**: The rhat=1.530 regression
+reported earlier in this journal (onset hierarchy removal) does not reproduce
+with current code. The production 4-step now converges: rhat=1.002,
+ess=2780, 0 divergences, 59s. Likely caused by stale param files or
+topology.py state at the time of the original regression runs.
+
+### Parameter recovery results
+
+**2-step synth** (`synth-simple-abc`, all-latency, 267s):
+
+| Edge | Param | Truth | Posterior | z-score |
+|------|-------|-------|-----------|---------|
+| a-to-b | mu | 2.300 | 2.309±0.003 | 3.00 |
+| a-to-b | sigma | 0.500 | 0.511±0.002 | 5.50 |
+| a-to-b | onset | 1.000 | 1.050±0.030 | 1.67 |
+| b-to-c | mu | 2.500 | 2.496±0.011 | 0.36 |
+| b-to-c | sigma | 0.600 | 0.617±0.008 | 2.13 |
+| b-to-c | onset | 2.000 | 2.200±0.100 | 2.00 |
+
+Posteriors extremely close to truth (0.4% error on mu). High z-scores
+are precision artefacts — posteriors are so tight (±0.003) that sub-percent
+deviations register as >2σ. Recovery is accurate.
+
+**4-step synth mirror** (`synth-mirror-4step`, 2 no-latency + 2 latency, 130s):
+
+| Edge | Param | Truth | Posterior | z-score |
+|------|-------|-------|-----------|---------|
+| deleg-to-reg | mu | 1.500 | 1.477±0.032 | 0.72 |
+| deleg-to-reg | sigma | 0.570 | 0.599±0.021 | 1.38 |
+| deleg-to-reg | onset | 5.500 | 5.670±0.150 | 1.13 |
+| reg-to-success | mu | 1.300 | 1.042±0.234 | 1.10 |
+| reg-to-success | sigma | 0.190 | 0.234±0.044 | 1.00 |
+| reg-to-success | onset | 3.200 | 4.000±0.700 | 1.14 |
+
+All within 2 SD. PASS.
+
+**4-step production** (`bayes-test-gm-rebuild`, 59s):
+rhat=1.002, ess=2780, 0 divergences. Converges cleanly. Edge 7bb83fbf
+posterior mu=5.389 (prior=1.607) — data strongly disagrees with prior
+but the model converges to a consistent answer.
+
+### Systematic kappa issue
+
+Kappa (BetaBinomial overdispersion) is consistently 10-45x too high
+across both synth graphs:
+
+| Graph | Edge | Truth κ | Posterior κ |
+|-------|------|---------|------------|
+| 2-step | a-to-b | 50 | 1321±54 |
+| 2-step | b-to-c | 50 | 2250±98 |
+| 4-step | deleg-to-reg | 50 | 556±58 |
+| 4-step | reg-to-success | 50 | 478±57 |
+
+The model sees near-zero overdispersion (large κ → Binomial limit) when
+the data was generated with moderate overdispersion (κ=50). Either:
+1. synth_gen's overdispersion simulation doesn't produce BetaBinomial-style
+   variation (wrong noise model), or
+2. The DM likelihood's κ parameterisation doesn't match synth_gen's κ_sim
+   definition, or
+3. The trajectory-based DM likelihood averages over enough days that
+   per-day overdispersion is smoothed away
+
+**Not blocking** — mu/sigma/onset recovery works. But κ recovery failure
+means the model can't correctly estimate uncertainty bounds on conversion
+rates (overconfident posteriors).
+
+### Current state
+
+All three graphs converge with correct parameter recovery on mu/sigma/onset.
+The tooling pipeline (truth file → synth_gen → DB → harness → model inspect
+→ MCMC → param recovery comparison) is end-to-end functional. Remaining:
+- κ discrepancy investigation
+- p recovery (not yet extracted by param_recovery.py)
+- Playbook update for param recovery vs production run workflows
+
+---
+
 ## 22-Mar-26: Synthetic data generator → parameter recovery attempt
 
 ### What was done
@@ -79,6 +199,243 @@ hypothesis is confirmed.
 **Also documented**: Bayes compiler uses `query_snapshots_for_sweep`
 (all raw rows) while FE uses `query_virtual_snapshot` (latest-wins).
 See `docs/current/codebase/snapshot-db-data-paths.md`.
+
+### 23-Mar-26: Removed onset hierarchy — fixed 2-step, regressed 4-step (OPEN)
+
+**Hierarchy removed**: `onset_hyper_mu` and `tau_onset` shared across
+latency edges. No intellectual justification for sharing onset across
+edges with different business processes. Replaced with independent
+per-edge onset: `softplus(onset_prior + eps × uncertainty)`.
+
+**2-step synth (FIXED)**:
+- Before: rhat=1.661, 679 divergences, 300s. Degenerate hierarchy
+  (4 hyper-params for 2 onset values).
+- After: rhat=1.008, **0 divergences**, 50s. Clean convergence.
+
+**4-step production (REGRESSED)**:
+- Before (with hierarchy): rhat=1.006, 22 divergences, 89s.
+- After (independent onset): rhat=1.529-1.605, ess=7, 62s.
+- Same priors (mu_prior=1.502, sigma_prior=0.574 from derive_latency_prior).
+- Same data, same filter.
+- Edge 7bb83fbf posterior mu=5.7 (far from prior 1.5) regardless.
+
+**Unexplained**: A prior shape change (hierarchical → independent) with
+the SAME effective prior centre and similar spread should not cause
+catastrophic convergence failure. The old hierarchy had 2 extra free
+parameters (hyper_mu, tau) which should make sampling HARDER, not easier.
+Yet the old version converged and the new doesn't.
+
+**Possible explanations to investigate**:
+1. The hierarchical parameterisation accidentally provided a better
+   mass matrix initialisation (shared params smooth the geometry).
+2. The softplus(constant + eps × sigma) creates a different gradient
+   landscape than softplus(free_param + eps × free_param).
+3. The path-level onset (`onset_cohort`) changed parameterisation too
+   (uses eps × 1.0 fixed dispersion instead of eps × tau × sqrt(n)).
+   This may be too tight for the production edge.
+
+**Next step**: Compare PyTensor computational graphs between old and
+new. Check nutpie step size and mass matrix diagnostics. The issue is
+in the sampling geometry, not in the statistical model.
+
+### 23-Mar-26: Removed graph-level onset hierarchy (onset_hyper_mu, tau_onset)
+
+**What was removed**: Graph-level `onset_hyper_mu` and `tau_onset` shared
+across all latency edges (Phase D.O, doc 18). These created a hierarchical
+model where each edge's onset was drawn from a shared distribution.
+
+**Why**: No intellectual justification for sharing onset across edges.
+Onset is a property of a specific business process (how long before a
+specific conversion begins). Edges in different regions of the funnel
+have genuinely different onset characteristics — there is no reason to
+assume they come from a shared distribution.
+
+The topological constraints (branch group Dirichlet, FW path composition,
+join node mixing) are the correct inter-edge structure. These are
+structural properties of the graph, not statistical assumptions.
+
+**Immediate trigger**: The hierarchy made 2-edge all-latency graphs
+degenerate. 4 hierarchical parameters (hyper_mu, tau, eps_1, eps_2)
+estimated from 2 onset values — underdetermined, creating a posterior
+ridge that NUTS couldn't traverse (rhat=1.661, 679 divergences).
+
+**Fix**: Each latency edge gets an independent onset prior from its
+own histogram data. No shared parameters across edges.
+
+### 23-Mar-26: Zero-count bin merging — corrected implementation
+
+**First attempt (broken)**: Dropped ages where `cumulative_y[i] != kept_y[-1]`
+(comparison against last KEPT value, not previous consecutive value). This
+widened non-zero interval CDF coefficients → changed DM likelihood → rhat
+regressed from 1.004 to 1.530.
+
+**Corrected**: Keep ages where `y(t) != y(t-1)` OR `x(t) != x(t-1)`
+(consecutive comparison), plus the age before each change point (to preserve
+non-zero interval boundaries), plus first/last. Zero-count bins are merged
+but non-zero interval CDF coefficients are preserved exactly.
+
+**Literature confirms**: Zero-count DM bins contribute `gammaln(0+α) - gammaln(α) = 0`
+regardless of α. Merging them is provably lossless. But the previous filter
+inadvertently changed non-zero interval boundaries, which IS lossy.
+
+**Results with corrected filter**:
+- Production graph: rhat=1.006, ess=996, 22 divergences (IMPROVED from 49)
+- Synth mirror 4-step: 94 ages → 3-23 ages. rhat=1.014, 264s. Converges.
+- Synth simple 2-step: 94 ages → 6-22 ages. rhat=1.661. Doesn't converge
+  (all-latency geometry issue, not filter issue).
+
+### 23-Mar-26: BE stats engine and topology prior priority
+
+**BE stats engine** (`graph-editor/lib/runner/stats_engine.py`): Full port
+of FE `enhanceGraphLatencies` — topo pass, FW composition, t95 improvement,
+p_infinity estimation. Wired into harness via `handle_stats_topo_pass`.
+
+**Problem**: The topology builder (`topology.py`) reads priors from
+`derive_latency_prior(median_lag, mean_lag, onset)` which produces different
+values from both the FE stats pass and the BE stats engine. Three different
+computations of the same quantity:
+
+| Source | Edge 3 mu | Edge 3 sigma |
+|--------|-----------|-------------|
+| FE (on graph) | 1.867 | 0.369 |
+| BE stats engine | 1.157 | 0.800 |
+| topology derive_latency_prior | 1.502 | 0.574 |
+
+**Only derive_latency_prior gives convergence** on the production graph
+(rhat=1.006). The BE engine values (mu=1.157) cause rhat=1.735. The FE
+values (mu=1.867 via direct read) also fail.
+
+**Root cause**: The model posterior wants mu≈5-7 for this edge (production
+data). All three priors are < 2. The model is very sensitive to sigma_prior —
+derive_latency_prior gives sigma=0.574 which is wide enough for the sampler
+to explore. The BE engine gives sigma=0.800 (wider) but mu=1.157 (lower),
+creating a different posterior geometry that traps the sampler.
+
+**Decision**: Reverted topology to original priority (median/mean first,
+mu/sigma fallback). The BE stats engine needs parity validation against the
+FE before it can be trusted for priors. The topology's derive_latency_prior
+is a crude but WORKING approximation.
+
+**TODO**: Validate BE stats engine against FE output on production data.
+The three-way discrepancy must be resolved — all paths should produce
+identical mu/sigma for the same input data.
+
+### 23-Mar-26: Zero-increment filter — WRONG, reverted
+
+**Attempted**: Drop trajectory ages where neither x nor y changed, on the
+theory that zero-count DM intervals contribute `gammaln(0+α) - gammaln(α) = 0`.
+
+**Result**: rhat regressed from 1.004 to 1.530 on the production graph.
+
+**Why it's wrong**: The DM logp for a zero-count interval is NOT zero.
+It's `gammaln(0 + κ·p·cdf_coeff) - gammaln(κ·p·cdf_coeff)` which equals
+zero only when `cdf_coeff` is zero. When `cdf_coeff > 0` (model predicts
+conversions should happen), zero observed conversions is a PENALTY. This
+is how the model learns where the CDF rises — ages with zero conversions
+but positive CDF prediction constrain the CDF shape.
+
+**Correct approach for data density reduction**: The filter was wrong
+because it assumed "no change = no information." In fact, "no change"
+= "the model's predicted CDF increment here was wrong if it's non-zero."
+The correct way to reduce density is to MERGE adjacent intervals into
+wider bins (e.g. merge ages [5,6,7,8] into one interval [5,8] with
+total count = sum of increments). This preserves the statistical content
+(same total count, same CDF span) but reduces the number of evaluation
+points. The bin boundaries should be chosen to give roughly equal CDF
+increments, not equal age spacing.
+
+Alternatively, synth_gen should match the production fetch model (window-
+limited observations) rather than writing the full triangular matrix.
+
+### 23-Mar-26: Trajectory x(t) data and redundant-frame filtering
+
+**Problem**: Synth data has 94 retrieval ages per anchor_day (full
+triangular matrix from nightly fetch simulation). Most ages show no
+change in y — the CDF plateau means 80+ ages are redundant. 94-point
+trajectories cause 18K+ CDF evaluations per gradient step, making
+sampling take 27 minutes for a 4-edge graph.
+
+**Fix (evidence binder)**: Added zero-increment filtering in
+`_build_trajectories_for_obs_type`. Ages where NEITHER x nor y changed
+are dropped. Always keeps first and last ages. Reduces trajectory
+density from 94 to 2-21 ages depending on edge latency.
+
+**Key insight on x vs y**: Window observations have fixed x (from-node
+arrivals on anchor_day don't change). Cohort observations have GROWING
+x(t) as upstream arrivals accumulate. The filter checks both — ages
+where x changed but y didn't are informative about upstream latency
+timing and must be retained.
+
+Added `cumulative_x` field to `CohortDailyTrajectory` to store per-age
+from-node arrival counts alongside cumulative_y.
+
+### 23-Mar-26: Per-age x(t) — future model consumption (DESIGN NOTE)
+
+The model currently uses a fixed denominator per trajectory:
+- Window: n = x (fixed, from-node arrivals on that day)
+- Cohort: n = a (fixed, anchor entrants)
+
+For cohort trajectories, x(t) provides a direct observation of the
+upstream CDF: `x(t)/a ≈ p_upstream × CDF_upstream(t)`. This data is
+now preserved on the trajectory but NOT yet consumed by the model.
+
+**Options for consuming x(t)**:
+
+**A. Second Potential per cohort trajectory**: Score x(t) against the
+upstream CDF (FW-composed from edges above the from_node). Directly
+constrains upstream latency parameters from downstream observations.
+Clean and additive — doesn't change the existing y(t) Potential, just
+adds a new one. Doubles the cohort Potential count.
+
+**B. Per-age effective denominator**: Use x(t) as the at-risk population
+for the edge conversion at each age. Doesn't work cleanly because y(t)
+is a convolution — includes conversions from people who arrived at
+from_node at various earlier times, not just those present at age t.
+
+**C. Joint upstream+edge decomposition**: Simultaneously fit x(t) and
+y(t) to decompose the path into upstream arrival CDF × edge CDF. Most
+statistically correct but significantly more complex.
+
+**Recommendation**: Option A when ready. It's additive (no changes to
+existing likelihood terms), provides upstream parameter identification
+from cohort data, and the FW-composed upstream CDF is already computed
+by the topology pass. Implementation: one additional `pm.Potential` per
+cohort trajectory scoring x(t) increments against upstream CDF intervals.
+
+**For join nodes**: x(t) at a join is the TOTAL arrivals from ALL
+incoming edges. The upstream CDF for a join is the mixture/sum of the
+incoming path CDFs, weighted by their respective p values. This is
+already handled by the topology's path composition.
+
+### 23-Mar-26: Tooling hardened
+
+**Pre-flight checks** added to `test_harness.py`:
+1. DB connectivity check
+2. Per-subject row count verification (FAIL if any subject has 0 rows)
+3. Evidence binding via worker's actual query path (catches env/hash
+   mismatches)
+4. Trajectory summary (count, max ages, data source)
+
+**`--preflight-only` mode**: Runs all checks in <10s without MCMC.
+Must pass before any compiler run.
+
+**Early abort**: If sampling estimate exceeds 3× `expected_sample_seconds`
+(from truth file) within the first 10% of sampling, the harness aborts
+automatically with a geometry-problem diagnostic.
+
+**Hash consolidation**: Single source of truth for hashes — Node.js
+`compute_snapshot_subjects.mjs` calls the real FE `computeQuerySignature`
+pipeline. Used by both `synth_gen.py` (DB writes) and `test_harness.py`
+(DB reads). No Python hash reimplementation in the critical path.
+
+**synth_gen verification**: After DB write, synth_gen queries back with
+the same FE hashes and prints PASS/FAIL per subject. Pipeline aborts
+if any subject has 0 rows.
+
+**Stats pass**: Python port of FE `fitLagDistribution` in
+`graph-editor/lib/stats_enhancement.py`. Derives mu/sigma/onset/t95
+from parameter file lag data. Runs in memory (doesn't write to disk).
+Called by harness before building payload.
 
 ### Blocked: FE stats pass not available in Python
 

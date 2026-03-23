@@ -454,25 +454,62 @@ def _build_trajectories_for_obs_type(
             # Multiple retrievals → trajectory
             retrieval_ages: list[float] = []
             cumulative_y: list[int] = []
+            cumulative_x: list[int] = []
             prev_y = 0
+            prev_x = 0
 
             for r in deduped:
                 retrieved_at = str(r.get("retrieved_at", ""))
                 y = _safe_int(r.get("y"))
                 if y is None:
                     y = 0
+                x = _safe_int(r.get("x"))
+                if x is None:
+                    x = 0
 
                 age = _retrieval_age(anchor_day, retrieved_at, today)
                 if age <= 0:
                     continue
 
-                # Monotonise and cap
+                # Monotonise y and cap at denominator
                 y = max(y, prev_y)
                 y = min(y, denom)
+                # Monotonise x (from-node arrivals can only grow)
+                x = max(x, prev_x)
                 prev_y = y
+                prev_x = x
 
                 retrieval_ages.append(age)
                 cumulative_y.append(y)
+                cumulative_x.append(x)
+
+            # Merge consecutive zero-count intervals (lossless for DM).
+            #
+            # The DM logp for a zero-count bin is gammaln(0+α) - gammaln(α) = 0
+            # regardless of α. So merging adjacent zero-count bins doesn't
+            # change the likelihood. But we MUST preserve the exact boundaries
+            # of every non-zero-count interval — changing where non-zero counts
+            # are attributed changes the CDF coefficients and breaks the fit.
+            #
+            # Rule: keep age t if y(t) != y(t-1) OR x(t) != x(t-1)
+            # (consecutive comparison), plus the age BEFORE each such change
+            # (to preserve the left boundary of the non-zero interval),
+            # plus first and last ages.
+            if len(retrieval_ages) >= 4:
+                keep = [False] * len(retrieval_ages)
+                keep[0] = True   # always keep first
+                keep[-1] = True  # always keep last
+
+                for i in range(1, len(retrieval_ages)):
+                    y_changed = cumulative_y[i] != cumulative_y[i - 1]
+                    x_changed = cumulative_x[i] != cumulative_x[i - 1]
+                    if y_changed or x_changed:
+                        keep[i] = True      # the change point
+                        keep[i - 1] = True  # left boundary of non-zero interval
+
+                retrieval_ages = [a for a, k in zip(retrieval_ages, keep) if k]
+                cumulative_y = [y for y, k in zip(cumulative_y, keep) if k]
+                cumulative_x = [x for x, k in zip(cumulative_x, keep) if k]
 
             if len(retrieval_ages) >= 2:
                 trajectories.append(CohortDailyTrajectory(
@@ -481,6 +518,7 @@ def _build_trajectories_for_obs_type(
                     obs_type=obs_type,
                     retrieval_ages=retrieval_ages,
                     cumulative_y=cumulative_y,
+                    cumulative_x=cumulative_x,
                     path_edge_ids=et.path_edge_ids,
                 ))
             elif len(retrieval_ages) == 1:

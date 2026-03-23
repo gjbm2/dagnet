@@ -70,8 +70,35 @@ The Bayes evidence binder builds trajectories from these rows. More rows per tra
 - `len(deduped) >= 2` → CohortDailyTrajectory (multi-point maturation curve)
 - `len(deduped) == 1` → CohortDailyObs (single observation, fallback)
 
-Window obs: denominator = max(x), y = cumulative conversions
-Cohort obs: denominator = max(a), y = cumulative conversions
+Window obs: denominator = max(x) (fixed for anchor_day), y = cumulative conversions
+Cohort obs: denominator = max(a) (fixed for anchor_day), y = cumulative conversions,
+  cumulative_x = per-age from-node arrivals (growing — upstream latency)
+
+### Window vs Cohort semantics in trajectories
+
+**Window** trajectory for edge from→to, anchor_day d:
+- Cohort = people who arrived at **from_node** on day d
+- x is FIXED (count who arrived that day — doesn't change with retrieval age)
+- y(t) grows as those people convert over time
+- CDF is edge-level: P(convert by age t | reached from_node)
+
+**Cohort** trajectory for edge from→to, anchor_day d:
+- Cohort = people who entered **anchor** on day d
+- a is FIXED (anchor entrants)
+- x(t) GROWS as upstream arrivals accumulate (people reaching from_node)
+- y(t) GROWS as conversions accumulate
+- CDF is path-level: P(reach to_node by age t | entered anchor)
+- x(t) directly observes the upstream CDF: x(t)/a ≈ p_upstream × CDF_upstream(t)
+
+For join nodes, x(t) is the TOTAL arrivals from ALL incoming edges
+to the from-node (sum across all paths into that node).
+
+### Redundant-frame filtering
+
+Trajectory ages where NEITHER x nor y changed are dropped — they
+contribute zero information to the likelihood. This is critical for
+synth data (94 ages → 2-21 after filtering) and harmless for production
+data (5-27 ages, most have changes).
 
 ## Model Builder (`compiler/model.py`)
 

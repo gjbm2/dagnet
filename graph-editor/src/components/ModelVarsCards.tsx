@@ -19,6 +19,7 @@
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { ZapOff } from 'lucide-react';
+import ProbabilityInput from './ProbabilityInput';
 import type {
   ModelVarsEntry,
   ModelSource,
@@ -90,17 +91,20 @@ export function ModelVarsCards({
   const activeSource = activeEntry?.source;
 
   const bayesian = findEntry(modelVars, 'bayesian');
+  const analyticBe = findEntry(modelVars, 'analytic_be');
   const analytic = findEntry(modelVars, 'analytic');
   const manual = findEntry(modelVars, 'manual');
 
   // Collapse state: active card open, others closed. User can manually toggle.
   // Auto-open the active card when activeSource changes.
   const [bayesOpen, setBayesOpen] = useState(activeSource === 'bayesian');
+  const [analyticBeOpen, setAnalyticBeOpen] = useState(activeSource === 'analytic_be');
   const [analyticOpen, setAnalyticOpen] = useState(activeSource === 'analytic');
   const prevSource = useRef(activeSource);
   useEffect(() => {
     if (activeSource !== prevSource.current) {
       setBayesOpen(activeSource === 'bayesian');
+      setAnalyticBeOpen(activeSource === 'analytic_be');
       setAnalyticOpen(activeSource === 'analytic');
       prevSource.current = activeSource;
     }
@@ -224,10 +228,56 @@ export function ModelVarsCards({
         </CollapsibleSection>
       </div>
 
-      {/* ── Analytic (§17.2.2) — collapsible, open only when active ── */}
+      {/* ── Analytic BE (crossover testing) — collapsible ── */}
+      <div className={`mv-card-wrap ${isPinned('analytic_be') ? 'mv-card-wrap--pinned' : isAutoOn('analytic_be') ? 'mv-card-wrap--active' : ''}`}>
+        <CollapsibleSection
+          title={<>Analytic (BE){isAutoOn('analytic_be') && <span className="collapsible-section-badge" style={{ marginLeft: '8px' }}>Auto</span>}</>}
+          isOpen={analyticBeOpen}
+          onToggle={() => setAnalyticBeOpen(!analyticBeOpen)}
+          headerRight={
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+              {isPinned('analytic_be') && <SourceOverrideIcon onClear={() => handleToggle('analytic_be')} />}
+              <PinToggle active={isAutoOn('analytic_be')} pinned={isPinned('analytic_be')}
+                onClick={() => handleToggle('analytic_be')} disabled={disabled} />
+            </span>
+          }
+        >
+          {analyticBe ? (
+            <>
+              <FieldGroup label="Probability">
+                <RoField label="p" value={fmtPct(analyticBe.probability.mean)} />
+                <RoField label="stdev" value={fmt(analyticBe.probability.stdev)} />
+              </FieldGroup>
+              {analyticBe.latency && (
+                <FieldGroup label="Latency (edge)">
+                  <RoField label="onset δ" value={fmt(analyticBe.latency.onset_delta_days, 0)} unit="d" />
+                  <RoField label="μ" value={fmt(analyticBe.latency.mu, 3)} />
+                  <RoField label="σ" value={fmt(analyticBe.latency.sigma, 3)} />
+                  <RoField label="t95" value={fmt(analyticBe.latency.t95, 1)} unit="d" />
+                </FieldGroup>
+              )}
+              {analyticBe.latency?.path_mu != null && (
+                <FieldGroup label="Latency (path)">
+                  <RoField label="path μ" value={fmt(analyticBe.latency.path_mu, 3)} />
+                  <RoField label="path σ" value={fmt(analyticBe.latency.path_sigma, 3)} />
+                  <RoField label="path onset" value={fmt(analyticBe.latency.path_onset_delta_days, 0)} unit="d" />
+                  <RoField label="path t95" value={fmt(analyticBe.latency.path_t95, 1)} unit="d" />
+                </FieldGroup>
+              )}
+              {analyticBe.source_at && <RoField label="Computed" value={analyticBe.source_at} />}
+            </>
+          ) : (
+            <p style={{ color: 'var(--text-muted)', fontStyle: 'italic', fontSize: '12px', margin: 0 }}>
+              No BE analytic data. Run the BE topo pass to populate.
+            </p>
+          )}
+        </CollapsibleSection>
+      </div>
+
+      {/* ── Analytic FE (§17.2.2) — collapsible, open only when active ── */}
       <div className={`mv-card-wrap ${isPinned('analytic') ? 'mv-card-wrap--pinned' : isAutoOn('analytic') ? 'mv-card-wrap--active' : ''}`}>
         <CollapsibleSection
-          title={<>Analytic{isAutoOn('analytic') && <span className="collapsible-section-badge" style={{ marginLeft: '8px' }}>Auto</span>}</>}
+          title={<>Analytic (FE){isAutoOn('analytic') && <span className="collapsible-section-badge" style={{ marginLeft: '8px' }}>Auto</span>}</>}
           isOpen={analyticOpen}
           onToggle={() => setAnalyticOpen(!analyticOpen)}
           headerRight={
@@ -240,20 +290,27 @@ export function ModelVarsCards({
         >
           {analytic ? (
             <>
-              {/* Analytic card shows only fitting params + overridable inputs, not promoted scalars */}
+              <FieldGroup label="Probability">
+                <RoField label="p" value={fmtPct(analytic.probability.mean)} />
+                <RoField label="stdev" value={fmt(analytic.probability.stdev)} />
+              </FieldGroup>
               {analytic.latency && (
-                <FieldGroup label="Latency fit">
+                <FieldGroup label="Latency (edge)">
+                  <LatencyZapOff field="onset_delta_days" label="onset δ" unit="d" step={1} dp={0}
+                    latency={promotedLatency} onUpdate={onUpdate} disabled={disabled} />
                   <RoField label="μ" value={fmt(analytic.latency.mu, 3)} />
                   <RoField label="σ" value={fmt(analytic.latency.sigma, 3)} />
-                  {/* ZapOff overridable fields (§17.2.2) */}
-                  <LatencyZapOff field="onset_delta_days" label="onset" unit="d" step={1} dp={0}
-                    latency={promotedLatency} onUpdate={onUpdate} disabled={disabled} />
                   <LatencyZapOff field="t95" label="t95" unit="d" step={0.01} dp={LATENCY_HORIZON_DECIMAL_PLACES}
                     latency={promotedLatency} onUpdate={onUpdate} disabled={disabled} />
-                  {analytic.latency.path_mu != null && (
-                    <LatencyZapOff field="path_t95" label="path t95" unit="d" step={0.01} dp={LATENCY_HORIZON_DECIMAL_PLACES}
-                      latency={promotedLatency} onUpdate={onUpdate} disabled={disabled} />
-                  )}
+                </FieldGroup>
+              )}
+              {analytic.latency?.path_mu != null && (
+                <FieldGroup label="Latency (path)">
+                  <RoField label="path μ" value={fmt(analytic.latency.path_mu, 3)} />
+                  <RoField label="path σ" value={fmt(analytic.latency.path_sigma, 3)} />
+                  <RoField label="path onset" value={fmt(analytic.latency.path_onset_delta_days, 0)} unit="d" />
+                  <LatencyZapOff field="path_t95" label="path t95" unit="d" step={0.01} dp={LATENCY_HORIZON_DECIMAL_PLACES}
+                    latency={promotedLatency} onUpdate={onUpdate} disabled={disabled} />
                 </FieldGroup>
               )}
               {analytic.source_at && <RoField label="Retrieved" value={analytic.source_at} />}
@@ -428,9 +485,16 @@ function OutputCardBody({ onCommit, onStartEdit, onClearFieldOverride, promotedM
   return (
     <div>
       <FieldGroup label="Probability">
-        <OutputInput label="p" field="mean" value={promotedMean} dp={1} pct
-          overridden={meanOverridden} onClearOverride={() => onClearFieldOverride('mean_overridden')}
-          onCommit={onCommit} onStartEdit={onStartEdit} disabled={disabled} />
+        <AutomatableField label="" value={promotedMean ?? 0} overridden={meanOverridden || false}
+          onClearOverride={() => onClearFieldOverride('mean_overridden')}>
+          <ProbabilityInput
+            value={promotedMean ?? 0}
+            onChange={(v) => { onStartEdit(); onCommit('mean', v); }}
+            onCommit={(v) => onCommit('mean', v)}
+            disabled={disabled}
+            min={0} max={1} step={0.01}
+          />
+        </AutomatableField>
         <OutputInput label="stdev" field="stdev" value={promotedStdev} dp={4}
           overridden={stdevOverridden} onClearOverride={() => onClearFieldOverride('stdev_overridden')}
           onCommit={onCommit} onStartEdit={onStartEdit} disabled={disabled} />

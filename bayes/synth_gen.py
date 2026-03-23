@@ -1440,12 +1440,15 @@ def write_parameter_files(
             "id": file_id,
             "name": file_id,
             "type": "probability",
+            "connection": "synthetic",
             "query": query,
             "query_overridden": False,
             "n_query_overridden": False,
             "values": [window_entry, cohort_entry],
             "latency": {
-                "latency_parameter": et.has_latency,
+                "latency_parameter": bool(
+                    t.get("onset", 0) > 0.01 or t.get("mu", 0) > 0.01
+                ),
                 "anchor_node_id": uuid_to_id.get(
                     topology.anchor_node_id, topology.anchor_node_id
                 ),
@@ -1775,8 +1778,11 @@ Examples:
             truth = load_truth_config(truth_path)
             print(f"Truth: loaded from {truth_path}")
         else:
-            truth = derive_truth_from_graph(graph, topology)
-            print("Truth: derived from graph edge metadata")
+            print(f"ERROR: No truth file found at {truth_path}")
+            print("  Synth graphs MUST have a .truth.yaml sidecar.")
+            print("  derive_truth_from_graph fallback is disabled — it produces")
+            print("  silent wrong defaults that waste hours of debugging.")
+            sys.exit(1)
 
     # Placeholder hashes for simulation. The simulation just needs some
     # string to tag rows — the real FE-authoritative hashes are applied

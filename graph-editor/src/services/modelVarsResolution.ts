@@ -54,14 +54,19 @@ export function resolveActiveModelVars(
     return b?.quality?.gate_passed ? b : undefined;
   };
 
+  const analyticBest = (): ModelVarsEntry | undefined =>
+    find('analytic_be') ?? find('analytic');
+
   const bestAvailable = (): ModelVarsEntry | undefined =>
-    bayesianIfGated() ?? find('analytic');
+    bayesianIfGated() ?? analyticBest();
 
   switch (preference) {
     case 'manual':
       return find('manual') ?? bestAvailable();
     case 'bayesian':
-      return bayesianIfGated() ?? find('analytic');
+      return bayesianIfGated() ?? analyticBest();
+    case 'analytic_be':
+      return find('analytic_be') ?? find('analytic');
     case 'analytic':
       return find('analytic');
     case 'best_available':

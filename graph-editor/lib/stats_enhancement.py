@@ -389,7 +389,18 @@ def compute_stats_pass(
         if best_onset is None:
             best_onset = float(lat.get("onset_delta_days", 0))
 
-        if best_median is not None and best_median > 0:
+        # Use existing FE-computed mu/sigma on the graph edge if present.
+        # The Python stats pass is an incomplete port (missing the t95
+        # improvement step from improveFitWithT95). Until the port is
+        # complete, prefer FE values to avoid prior mismatch.
+        # TODO: Complete Python port of full FE stats pipeline, then
+        # remove this fallback.
+        existing_mu = lat.get("mu")
+        existing_sigma = lat.get("sigma")
+        if existing_mu is not None and existing_sigma is not None:
+            mu = float(existing_mu)
+            sigma = float(existing_sigma)
+        elif best_median is not None and best_median > 0:
             # Subtract onset before fitting (model-space)
             model_median = max(best_median - best_onset, 1e-6)
             model_mean = max(best_mean - best_onset, 1e-6) if best_mean else None
@@ -398,9 +409,8 @@ def compute_stats_pass(
             mu = fit["mu"]
             sigma = fit["sigma"]
         else:
-            # No lag data — use defaults
-            mu = float(lat.get("mu", 0))
-            sigma = float(lat.get("sigma", LATENCY_DEFAULT_SIGMA))
+            mu = 0.0
+            sigma = LATENCY_DEFAULT_SIGMA
 
         onset = best_onset
         t95 = compute_t95(mu, sigma, onset)

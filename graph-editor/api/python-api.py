@@ -121,9 +121,11 @@ class handler(BaseHTTPRequestHandler):
                     path = '/api/sigs/get'
                 elif endpoint == 'lag-recompute-models':
                     path = '/api/lag/recompute-models'
+                elif endpoint == 'lag-topo-pass':
+                    path = '/api/lag/topo-pass'
                 # If no endpoint param and no original path header, this is an error
                 elif not original_path:
-                    self.send_error_response(400, "Missing endpoint. Supported: parse-query, generate-all-parameters, stats-enhance, runner-analyze, runner-available-analyses, compile-exclude, snapshots-append, snapshots-health, snapshots-inventory, snapshots-batch-retrieval-days, snapshots-batch-anchor-coverage, snapshots-retrievals, snapshots-delete, snapshots-query-full, snapshots-query-virtual, sigs-list, sigs-get, lag-recompute-models")
+                    self.send_error_response(400, "Missing endpoint. Supported: parse-query, generate-all-parameters, stats-enhance, runner-analyze, runner-available-analyses, compile-exclude, snapshots-append, snapshots-health, snapshots-inventory, snapshots-batch-retrieval-days, snapshots-batch-anchor-coverage, snapshots-retrievals, snapshots-delete, snapshots-query-full, snapshots-query-virtual, sigs-list, sigs-get, lag-recompute-models, lag-topo-pass")
                     return
             
             if path == '/api/parse-query':
@@ -165,6 +167,8 @@ class handler(BaseHTTPRequestHandler):
             elif path == '/api/lag-recompute-models':
                 # Back-compat alias for older route naming (hyphen, no /lag prefix).
                 self.handle_lag_recompute_models(data)
+            elif path == '/api/lag/topo-pass':
+                self.handle_stats_topo_pass(data)
             else:
                 self.send_error_response(404, f"Unknown endpoint: {path}")
                 
@@ -372,7 +376,18 @@ class handler(BaseHTTPRequestHandler):
             self.send_error_response(400, str(e))
         except Exception as e:
             self.send_error_response(500, str(e))
-    
+
+    def handle_stats_topo_pass(self, data):
+        """Handle lag/topo-pass endpoint - BE analytic stats topo pass."""
+        try:
+            from api_handlers import handle_stats_topo_pass as handler_func
+            response = handler_func(data)
+            self.send_success_response(response)
+        except ValueError as e:
+            self.send_error_response(400, str(e))
+        except Exception as e:
+            self.send_error_response(500, str(e))
+
     def send_success_response(self, data):
         """Send successful JSON response."""
         response_json = json.dumps(data)
