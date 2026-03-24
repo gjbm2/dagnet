@@ -17,7 +17,7 @@ import os
 import time
 import uuid
 
-APP_VERSION = "1.1.0-compiler-phase-b-s"  # Bump on every deploy so we can verify which code is running
+APP_VERSION = "1.8.3-beta"
 
 app = modal.App("dagnet-bayes")
 

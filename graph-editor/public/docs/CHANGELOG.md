@@ -1,4 +1,11 @@
 # DagNet Release Notes
+## Version 1.8.3b
+**Released:** 24-Mar-26
+
+Fixed lossless compression issue in model by clipping floors
+
+---
+
 ## Version 1.8.2b
 **Released:** 24-Mar-26
 
