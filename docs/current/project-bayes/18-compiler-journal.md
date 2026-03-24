@@ -8,6 +8,125 @@ Entries are reverse-chronological (newest first).
 
 ---
 
+## 24-Mar-26: Zero-count trajectory filter — BLOCKING DEFECT
+
+### Problem
+
+The Bayes compiler needs to compress CDF trajectory data to avoid
+feeding redundant frames to NUTS. A trajectory of cumulative
+conversions at 30+ retrieval ages contains many consecutive frames
+where no new conversions occurred. These frames are informationally
+redundant — the CDF hasn't moved, so there is no new data.
+
+Without compression, large graphs with many edges produce massive
+PyTensor symbolic graphs (each age → CDF evaluation → gammaln pair),
+causing compilation times of 100+ seconds and slow sampling.
+
+### What we tried
+
+**Zero-count bin dropping**: Remove ages where neither y nor x
+changed. Keep first/last ages and predecessors of change points to
+preserve non-zero interval CDF coefficients exactly.
+
+**Result**: The filter is provably likelihood-lossless:
+- Zero-count DM terms: `gammaln(0+α) - gammaln(α) = 0` always
+- Kept CDF coefficients telescope: `Σ(cdf_coeffs) = CDF_final`
+  regardless of which intermediate ages are dropped
+- Remainder alpha `κ·(1 - p·CDF_final)` is unchanged
+- Total `Σα = κ` is preserved
+
+Yet it **breaks NUTS** on production data. Reproducible: rhat=1.53
+every run with filter, rhat=1.002 every run without. Not stochastic.
+Confirmed with `--asat` (same data, same result). The synth 4-step
+regression test passes with the filter — the issue is specific to
+production data with marginal posterior geometry (edge 7bb83fbf's
+onset-mu ridge).
+
+### Why likelihood-lossless ≠ NUTS-lossless
+
+The research (Tran & Kleppe 2024, Stan HMC documentation) identifies
+the mechanism: NUTS adapts its mass matrix and step size during warmup
+based on the gradient landscape. Zero-count DM terms contribute zero
+logp AND zero gradient — but the CDF evaluation points at those ages
+provide **gradient anchor points** that NUTS uses to navigate the
+posterior geometry. Removing those evaluation points changes the
+curvature landscape that NUTS adapts to, even though the logp surface
+is mathematically identical.
+
+This is analogous to removing data points from a regression that lie
+exactly on the fitted line — they don't change the loss, but they
+stabilise the optimiser.
+
+### Correct approach from the literature
+
+The standard lossless CDF compression uses a **grouped survival /
+mixture-cure likelihood** formulation:
+
+```
+ℓ = Σ_{j: y>0} y_j · [log(p) + log(F(t_j) - F(t_{j-1}))]
+  + (N - Σy) · log(1 - p·F(H))
+```
+
+Zero-count bins don't appear at all. The sufficient data per
+trajectory is:
+- `(t_j, y_j)` pairs where `y_j > 0` (non-zero event bins only)
+- `N` (total at risk)
+- `H` (horizon / last observation age)
+
+For the DM with overdispersion (κ):
+```
+ℓ = Σ_{j: y>0} [gammaln(y_j + α_j) - gammaln(α_j)]
+  + gammaln(R + α_R) - gammaln(α_R)
+  + gammaln(κ) - gammaln(N + κ)
+```
+
+The problem: this is algebraically identical to our current filter
+(the zero-count terms are 0 either way). The gradient information
+loss is the same.
+
+**Approach B — Poisson exposure penalty**: Replace the identically-
+zero DM terms for zero-count intervals with Poisson exposure terms
+that carry non-zero gradient:
+
+```
+logp_zero_block = -κ · p · (CDF(t_end) - CDF(t_start))
+```
+
+This is the piecewise-exponential / counting-process formulation from
+the survival literature. A zero-event interval over CDF span ΔF
+contributes `-κ·p·ΔF` — a penalty proportional to the expected
+events. This:
+- Is non-zero (preserves gradient flow through zero-event regions)
+- Is mergeable: `-Σ(κpΔF_i) = -κp·Σ(ΔF_i)` (lossless compression)
+- Provides "nothing happened here" signal to NUTS
+- Approaches 0 as ΔF→0 (consistent with DM in the limit)
+
+The hybrid model: DM for intervals with events (preserves
+overdispersion), Poisson penalty for intervals without events
+(preserves gradient signal). Consecutive zero-event intervals are
+merged into exposure blocks.
+
+### References
+
+- DM aggregation property: Frigyik, Kapila, Gupta (Introduction to
+  the Dirichlet Distribution)
+- Grouped mixture-cure likelihood: OUP Academic (mixture cure models
+  for grouped survival data)
+- Stan sufficient statistics: Stan User's Guide §25.9
+- Piecewise exponential / exposure blocks: Rodríguez (GLM notes §7.4)
+- NUTS mass matrix sensitivity: Tran & Kleppe (2024), Stan HMC docs
+- Interval censoring NPMLE: Turnbull (1976), PMC 3684949
+
+### Status
+
+**BLOCKING**. Filter disabled. Production graph converges without
+filter (30 ages/trajectory is manageable). Larger graphs will need
+the filter. Approach B (Poisson exposure penalty) is the next step —
+needs implementation and validation against both production and synth
+regression tests.
+
+---
+
 ## 24-Mar-26: Structural topology canon — 8 shapes proven
 
 ### Summary

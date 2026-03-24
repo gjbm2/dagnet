@@ -28,17 +28,12 @@ progress_dict = modal.Dict.from_name("dagnet-bayes-progress", create_if_missing=
 
 _repo_root = os.path.dirname(os.path.dirname(__file__))
 
+_requirements_path = os.path.join(os.path.dirname(__file__), "requirements.txt")
+
 worker_image = (
     modal.Image.debian_slim(python_version="3.12")
-    .pip_install(
-        "numpy",
-        "scipy",
-        "pymc",
-        "arviz",
-        "requests",
-        "pyyaml",
-        "psycopg2-binary",
-    )
+    .apt_install("libopenblas-dev")  # BLAS for PyTensor — without this, sampling is ~10× slower
+    .pip_install_from_requirements(_requirements_path)
     .env({"PYTHONPATH": "/root/bayes:/root/lib"})
     .add_local_dir(
         os.path.dirname(__file__),

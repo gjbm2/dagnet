@@ -524,6 +524,9 @@ print_blue "[0/9] Updating docs index (build-time)..."
 print_blue "[1/9] Updating package.json..."
 (cd graph-editor && npm version "$NEW_VERSION" --no-git-tag-version)
 
+# Update Bayes APP_VERSION so Modal deploy always matches the release
+sed -i "s/^APP_VERSION = .*/APP_VERSION = \"${NEW_VERSION}\"/" bayes/app.py
+
 # Verify the version was updated correctly
 UPDATED_VERSION=$(node -p "require('./graph-editor/package.json').version")
 if [[ "$UPDATED_VERSION" != "$NEW_VERSION" ]]; then
@@ -580,9 +583,9 @@ fi
 
 print_blue "[4/9] Staging changes..."
 if [[ -n "$RELEASE_NOTES" && "$RELEASE_NOTES" != $'\n' ]]; then
-  git add graph-editor/package.json graph-editor/package-lock.json graph-editor/public/version.json graph-editor/public/docs/CHANGELOG.md
+  git add graph-editor/package.json graph-editor/package-lock.json graph-editor/public/version.json graph-editor/public/docs/CHANGELOG.md bayes/app.py
 else
-  git add graph-editor/package.json graph-editor/package-lock.json graph-editor/public/version.json
+  git add graph-editor/package.json graph-editor/package-lock.json graph-editor/public/version.json bayes/app.py
 fi
 
 # Commit the version bump

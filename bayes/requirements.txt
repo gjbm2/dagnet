@@ -1,10 +1,15 @@
-# Bayes inference dependencies — heavy stats libs for local dev + Modal.
+# Bayes worker dependencies — single source of truth for dev venv AND Modal image.
+# Both sides install from this file. If you add a package here, it goes everywhere.
 # These must NEVER go into graph-editor/requirements.txt (Vercel size limit).
 #
 # Install into the shared venv:
 #   . graph-editor/venv/bin/activate && pip install -r bayes/requirements.txt
 
-pymc>=5.10.0
-arviz>=0.17.0
-numpy>=1.24.0
-scipy>=1.10.0
+numpy>=2.0
+scipy>=1.14
+pymc>=5.28
+arviz>=0.23
+nutpie>=0.16
+requests>=2.32
+pyyaml>=6.0
+psycopg2-binary>=2.9

@@ -114,13 +114,32 @@ export function useBayesTrigger(computeMode: BayesComputeMode = 'local') {
         throw new Error('Graph file has no source path — is it saved to a repo?');
       }
 
-      // 4. Gather parameter files
+      // 4. Gather parameter files — only those referenced by the loaded graph
+      const graphData = graphFile.data as any;
+      const graphEdges: any[] = graphData?.edges ?? [];
+      const referencedParamIds = new Set<string>();
+      for (const edge of graphEdges) {
+        for (const slot of ['p', 'cost_gbp', 'labour_cost']) {
+          const pid = (edge as any)[slot]?.id;
+          if (pid) referencedParamIds.add(pid);
+        }
+        // conditional_p entries
+        for (const cp of (edge.conditional_p ?? [])) {
+          const cpId = cp?.id;
+          if (cpId) referencedParamIds.add(cpId);
+        }
+      }
+
       const parametersIndex = fileRegistry.getFile('parameter-index');
       const parameterFiles: Record<string, unknown> = {};
       const allFiles = fileRegistry.getAllFiles();
       for (const f of allFiles) {
         if (f.type === 'parameter' && f.data) {
-          parameterFiles[f.fileId] = f.data;
+          // Strip 'parameter-' prefix to get the raw param id for matching
+          const rawId = f.fileId.replace(/^parameter-/, '');
+          if (referencedParamIds.has(rawId)) {
+            parameterFiles[f.fileId] = f.data;
+          }
         }
       }
 

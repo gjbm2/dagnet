@@ -301,6 +301,9 @@ def main():
     parser.add_argument("--draws", type=int, default=None, help="MCMC draws per chain (default: 2000)")
     parser.add_argument("--tune", type=int, default=None, help="MCMC warmup steps per chain (default: 1000)")
     parser.add_argument("--chains", type=int, default=None, help="Number of MCMC chains (default: 4)")
+    parser.add_argument("--asat", type=str, default=None,
+                        help="Reproduce a historical run: use graph/params from git as of this date "
+                             "(ISO: YYYY-MM-DD) and filter snapshot DB to retrieved_at <= this date")
     args = parser.parse_args()
 
     # Parse --feature flags into a dict
@@ -338,6 +341,12 @@ def main():
     # Set in environment so snapshot_service and worker can find it
     os.environ["DB_CONNECTION"] = db_connection
 
+    # --- Resolve asat date ---
+    asat_date = None
+    if args.asat:
+        asat_date = datetime.strptime(args.asat, "%Y-%m-%d").date()
+        print(f"ASAT mode: reproducing run as of {asat_date}")
+
     # --- Resolve graph file ---
     GRAPH_SHORTCUTS = {
         "simple": "bayes-test-gm-rebuild",
@@ -345,12 +354,55 @@ def main():
     }
     graph_name = GRAPH_SHORTCUTS.get(args.graph, args.graph)
     graph_file = f"{graph_name}.json"
-    graph_path = os.path.join(data_repo_path, "graphs", graph_file)
-    if not os.path.isfile(graph_path):
-        print(f"ERROR: Graph not found: {graph_path}")
-        sys.exit(1)
-    with open(graph_path) as f:
-        graph = json.load(f)
+
+    if asat_date:
+        # Load graph from git at the asat date
+        import subprocess as _sp
+        asat_iso = asat_date.isoformat()
+        # Find the last commit on or before asat_date in the data repo
+        git_rev = _sp.run(
+            ["git", "log", "--before", f"{asat_iso}T23:59:59", "--format=%H", "-1"],
+            capture_output=True, text=True, cwd=data_repo_path,
+        ).stdout.strip()
+        if not git_rev:
+            print(f"ERROR: No git commit found before {asat_iso} in data repo")
+            sys.exit(1)
+        print(f"  Git rev: {git_rev[:12]}… (data repo at {asat_iso})")
+
+        # Load graph JSON from that commit
+        graph_json_str = _sp.run(
+            ["git", "show", f"{git_rev}:graphs/{graph_file}"],
+            capture_output=True, text=True, cwd=data_repo_path,
+        ).stdout
+        if not graph_json_str:
+            print(f"ERROR: graphs/{graph_file} not found at {git_rev[:12]}")
+            sys.exit(1)
+        graph = json.loads(graph_json_str)
+
+        # Load param files from that commit
+        param_files_asat = {}
+        params_dir_listing = _sp.run(
+            ["git", "ls-tree", "--name-only", f"{git_rev}:parameters/"],
+            capture_output=True, text=True, cwd=data_repo_path,
+        ).stdout.strip().split("\n")
+        for fname in params_dir_listing:
+            if fname.endswith(".yaml") and "index" not in fname:
+                content = _sp.run(
+                    ["git", "show", f"{git_rev}:parameters/{fname}"],
+                    capture_output=True, text=True, cwd=data_repo_path,
+                ).stdout
+                if content:
+                    param_id = fname.replace(".yaml", "")
+                    param_files_asat[f"parameter-{param_id}"] = yaml.safe_load(content)
+        print(f"  Loaded {len(param_files_asat)} param files from git at {asat_iso}")
+        graph_path = os.path.join(data_repo_path, "graphs", graph_file)  # still needed for hash computation
+    else:
+        graph_path = os.path.join(data_repo_path, "graphs", graph_file)
+        if not os.path.isfile(graph_path):
+            print(f"ERROR: Graph not found: {graph_path}")
+            sys.exit(1)
+        with open(graph_path) as f:
+            graph = json.load(f)
     graph_id = f"graph-{graph_name}"
     print(f"Graph [{graph_name}]: {len(graph.get('edges', []))} edges")
 
@@ -383,18 +435,23 @@ def main():
         anchor_from = _from_dt.strftime("%Y-%m-%d")
         anchor_to = _to_dt.strftime("%Y-%m-%d")
     else:
-        anchor_to = date.today().isoformat()
-        anchor_from = (date.today() - timedelta(days=120)).isoformat()
+        ref_date = asat_date if asat_date else date.today()
+        anchor_to = ref_date.isoformat()
+        anchor_from = (ref_date - timedelta(days=120)).isoformat()
     print(f"  Anchor range: {anchor_from} → {anchor_to}")
 
     # --- Load param files ---
-    param_files = {}
-    params_dir = os.path.join(data_repo_path, "parameters")
-    for fname in os.listdir(params_dir):
-        if fname.endswith(".yaml") and "index" not in fname:
-            with open(os.path.join(params_dir, fname)) as f:
-                param_id = fname.replace(".yaml", "")
-                param_files[f"parameter-{param_id}"] = yaml.safe_load(f)
+    if asat_date and param_files_asat:
+        param_files = param_files_asat
+        print(f"  Using {len(param_files)} param files from git (asat {asat_date})")
+    else:
+        param_files = {}
+        params_dir = os.path.join(data_repo_path, "parameters")
+        for fname in os.listdir(params_dir):
+            if fname.endswith(".yaml") and "index" not in fname:
+                with open(os.path.join(params_dir, fname)) as f:
+                    param_id = fname.replace(".yaml", "")
+                    param_files[f"parameter-{param_id}"] = yaml.safe_load(f)
 
     # --- Run BE stats/topo pass (full port of FE enhanceGraphLatencies) ---
     print("\n── Stats pass (BE analytics engine) ──")
@@ -540,7 +597,7 @@ def main():
             "anchor_from": anchor_from,
             "anchor_to": anchor_to,
             "sweep_from": anchor_from,
-            "sweep_to": anchor_to,
+            "sweep_to": asat_date.isoformat() if asat_date else anchor_to,
         }
         snapshot_subjects.append({
             **base,
@@ -657,7 +714,7 @@ def main():
                 error_box[0] = (e, traceback.format_exc())
 
         _print(f"\n{'=' * 60}")
-        _print(f"Running fit_graph [{args.graph}]{' — ' + label if label else ''} "
+        _print(f"Running fit_graph [{args.graph} → {graph_name}]{' — ' + label if label else ''} "
                f"({'placeholder' if args.placeholder else 'compiler'})...")
         _print(f"Timeout: {timeout_s}s | Expected sampling: {expected_sample_s}s")
         _print(f"{'=' * 60}\n")

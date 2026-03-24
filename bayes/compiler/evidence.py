@@ -483,29 +483,31 @@ def _build_trajectories_for_obs_type(
                 cumulative_y.append(y)
                 cumulative_x.append(x)
 
-            # Merge consecutive zero-count intervals (lossless for DM).
+            # Merge consecutive zero-count intervals ONLY after the curve
+            # has started maturing (after first non-zero y). Pre-onset
+            # zero-count ages are preserved — they constrain onset location.
+            # Post-maturity zero-count ages (after the last y increment)
+            # are merged — they carry no new information.
             #
             # The DM logp for a zero-count bin is gammaln(0+α) - gammaln(α) = 0
-            # regardless of α. So merging adjacent zero-count bins doesn't
-            # change the likelihood. But we MUST preserve the exact boundaries
-            # of every non-zero-count interval — changing where non-zero counts
-            # are attributed changes the CDF coefficients and breaks the fit.
-            #
-            # Rule: keep age t if y(t) != y(t-1) OR x(t) != x(t-1)
-            # (consecutive comparison), plus the age BEFORE each such change
-            # (to preserve the left boundary of the non-zero interval),
-            # plus first and last ages.
+            # mathematically. But empirically, preserving pre-onset density
+            # is critical for NUTS geometry on edges with onset-mu correlation.
             if len(retrieval_ages) >= 4:
+                # Zero-count bin filter: drop ages where neither y nor x
+                # changed. Likelihood-lossless (gammaln(0+α)-gammaln(α)=0).
+                # Requires smooth clip floors in model.py (doc 20, §6.2)
+                # to prevent dead-gradient regions from disrupting NUTS.
+                # 24-Mar-26. Pending Approach B (Poisson exposure penalty).
                 keep = [False] * len(retrieval_ages)
-                keep[0] = True   # always keep first
-                keep[-1] = True  # always keep last
+                keep[0] = True
+                keep[-1] = True
 
                 for i in range(1, len(retrieval_ages)):
                     y_changed = cumulative_y[i] != cumulative_y[i - 1]
                     x_changed = cumulative_x[i] != cumulative_x[i - 1]
                     if y_changed or x_changed:
-                        keep[i] = True      # the change point
-                        keep[i - 1] = True  # left boundary of non-zero interval
+                        keep[i] = True
+                        keep[i - 1] = True
 
                 retrieval_ages = [a for a, k in zip(retrieval_ages, keep) if k]
                 cumulative_y = [y for y, k in zip(cumulative_y, keep) if k]

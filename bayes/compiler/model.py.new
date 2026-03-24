@@ -880,7 +880,7 @@ def _emit_cohort_likelihoods(
                 pcdf_prev = p_cdf_sum[prev_safe]
                 # interval_pcdf = p_cdf(t_i) - p_cdf(t_{i-1})
                 interval_pcdf = pcdf_curr - pcdf_prev * (1.0 - is_first)
-                interval_pcdf = _soft_floor(interval_pcdf)
+                interval_pcdf = pt.clip(interval_pcdf, 1e-12, 1.0)
 
                 # α_i = κ · interval_pcdf  (p is already folded into p_cdf_sum)
                 alpha_interval = kappa * interval_pcdf
@@ -889,23 +889,17 @@ def _emit_cohort_likelihoods(
                 cdf_curr = cdf_all[curr_idx_np]
                 cdf_prev = cdf_all[prev_safe]
                 cdf_coeffs = cdf_curr - cdf_prev * (1.0 - is_first)
-                cdf_coeffs = _soft_floor(cdf_coeffs)
+                cdf_coeffs = pt.clip(cdf_coeffs, 1e-12, 1.0)
                 alpha_interval = kappa * p_expr * cdf_coeffs
 
             # Step 5: Dirichlet-Multinomial logp — interval terms
-            alpha_interval = _soft_floor(alpha_interval)
+            alpha_interval = pt.maximum(alpha_interval, 1e-12)
             logp_intervals = pt.sum(
                 weights_np * (pt.gammaln(counts_np + alpha_interval)
                               - pt.gammaln(alpha_interval))
             )
 
             # Step 6: DM logp — remainder terms
-            #
-            # The remainder alpha must absorb ALL non-event CDF mass,
-            # including any zero-count intervals that were filtered out
-            # by the evidence binder. By the DM aggregation property,
-            # α_R = κ - Σ(kept interval alphas) per trajectory.
-            # This ensures Σα = κ regardless of which bins were kept.
             rem_idx_np = np.array(remainder_indices, dtype=np.int64)
             rem_counts_np = np.array(remainder_counts_list, dtype=np.float64)
             rem_weights_np = np.array(remainder_weights, dtype=np.float64)
@@ -917,7 +911,7 @@ def _emit_cohort_likelihoods(
                 cdf_finals = cdf_all[rem_idx_np]
                 alpha_remainder = kappa * (1.0 - p_expr * cdf_finals)
 
-            alpha_remainder = _soft_floor(alpha_remainder)
+            alpha_remainder = pt.maximum(alpha_remainder, 1e-12)
             logp_remainders = pt.sum(
                 rem_weights_np * (pt.gammaln(rem_counts_np + alpha_remainder)
                                   - pt.gammaln(alpha_remainder))
@@ -989,7 +983,7 @@ def _emit_cohort_likelihoods(
             rem_cdf_np = np.array(remainder_cdf_finals, dtype=np.float64)
             rem_weights_np = np.array(remainder_weights, dtype=np.float64)
             alpha_remainder = kappa * (1.0 - p_expr * pt.as_tensor_variable(rem_cdf_np))
-            alpha_remainder = _soft_floor(alpha_remainder)
+            alpha_remainder = pt.maximum(alpha_remainder, 1e-12)
             logp_remainders = pt.sum(
                 rem_weights_np * (pt.gammaln(rem_counts_np + alpha_remainder)
                                   - pt.gammaln(alpha_remainder))
@@ -1307,26 +1301,6 @@ def _emit_branch_group_multinomial(
         f"{len(sibling_info)} siblings, n_A={effective_n}, Σk={total_k}, "
         f"exhaustive={bg.is_exhaustive}"
     )
-
-
-# ---------------------------------------------------------------------------
-# Numerical helpers
-# ---------------------------------------------------------------------------
-
-def _soft_floor(x, floor=1e-12, sharpness=1e6):
-    """Smooth approximation to max(x, floor).
-
-    Unlike pt.maximum or pt.clip, the gradient is never exactly zero —
-    it approaches zero smoothly as x drops below the floor. This
-    prevents dead-gradient regions that disrupt NUTS mass matrix
-    adaptation. See doc 20 (trajectory compression briefing) §5.4.
-
-    At sharpness=1e6, indistinguishable from the hard floor for
-    values more than ~1e-5 above it. Standard practice in probabilistic
-    programming (cf. TFP SoftClip bijector).
-    """
-    import pytensor.tensor as pt
-    return floor + pt.softplus(sharpness * (x - floor)) / sharpness
 
 
 # ---------------------------------------------------------------------------

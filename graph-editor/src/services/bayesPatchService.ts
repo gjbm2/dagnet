@@ -24,9 +24,19 @@ const FIT_HISTORY_MAX_ENTRIES = 20;
 const RHAT_GATE = 1.1;
 const ESS_GATE = 100;
 
-function meetsQualityGate(prob: { ess: number; rhat: number | null; provenance: string }, divergences: number): boolean {
+function meetsQualityGate(
+  prob: { ess: number; rhat: number | null; provenance: string },
+  divergences: number,
+  latency?: { ess?: number; rhat?: number | null } | null,
+): boolean {
   if (prob.rhat != null && prob.rhat > RHAT_GATE) return false;
   if (divergences > 0 && prob.ess < ESS_GATE) return false;
+  // Latency posterior must also pass if present — a converged probability
+  // with a nonsensical latency (rhat=1.7, ess=6) is not usable.
+  if (latency) {
+    if (latency.rhat != null && latency.rhat > RHAT_GATE) return false;
+    if (latency.ess != null && latency.ess < ESS_GATE) return false;
+  }
   return true;
 }
 
@@ -313,7 +323,7 @@ export async function applyPatch(patch: BayesPatchFile): Promise<number> {
         const prob = patchEdge.probability;
         const lat = patchEdge.latency;
         const divergences = 'divergences' in prob ? (prob as any).divergences ?? 0 : 0;
-        const gated = meetsQualityGate(prob, divergences);
+        const gated = meetsQualityGate(prob, divergences, lat);
 
         const bayesEntry: ModelVarsEntry = {
           source: 'bayesian',
@@ -339,8 +349,9 @@ export async function applyPatch(patch: BayesPatchFile): Promise<number> {
             },
           } : {}),
           quality: {
-            rhat: prob.rhat ?? 0,
-            ess: prob.ess,
+            // Use worst rhat/ess across probability and latency posteriors
+            rhat: Math.max(prob.rhat ?? 0, lat?.rhat ?? 0),
+            ess: lat?.ess != null ? Math.min(prob.ess, lat.ess) : prob.ess,
             divergences,
             evidence_grade: prob.ess >= 400 && (prob.rhat === null || prob.rhat < 1.05) ? 3 : 0,
             gate_passed: gated,
