@@ -162,7 +162,13 @@ function graphSignature(graph: any): string {
   const nodeIds = (graph?.nodes || []).map((n: any) => n.id || n.uuid).sort().join(',');
   const edgeIds = (graph?.edges || []).map((e: any) => e.id || e.uuid).sort().join(',');
   const edgeProbs = (graph?.edges || [])
-    .map((e: any) => `${e.id || e.uuid}:${(e.p?.mean ?? 0).toFixed(6)}`)
+    .map((e: any) => {
+      const p = (e.p?.mean ?? 0).toFixed(6);
+      // Include latency params so Bayes posterior updates invalidate the signature
+      const lat = e.p?.latency;
+      const l = lat ? `:mu=${(lat.mu_mean ?? 0).toFixed(4)}:σ=${(lat.sigma_mean ?? 0).toFixed(4)}:on=${(lat.onset_delta_days ?? 0).toFixed(2)}` : '';
+      return `${e.id || e.uuid}:${p}${l}`;
+    })
     .sort()
     .join(',');
   const caseWeights = (graph?.nodes || [])

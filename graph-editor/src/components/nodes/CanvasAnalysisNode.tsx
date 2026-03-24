@@ -1257,7 +1257,7 @@ function CanvasAnalysisNodeInner({ data, selected }: NodeProps<CanvasAnalysisNod
                 fillHeight
                 chartContext="canvas"
                 canvasZoom={toolbarCanvasZoom}
-                hideScenarioLegend={contentItem?.mode === 'live' && ci.display?.show_legend !== true}
+                hideScenarioLegend={contentItem?.mode === 'live' && ci.display?.show_legend === false}
                 analysisTypeId={ci.analysis_type}
                 availableAnalyses={availableAnalyses}
                 onAnalysisTypeChange={handleAnalysisTypeChange}

@@ -225,22 +225,23 @@ export function buildCohortMaturityEChartsOption(
   const modelCurves = result?.metadata?.model_curves;
   if (modelCurves && typeof modelCurves === 'object') {
     const entry = modelCurves[effectiveSubjectId];
-    if (entry?.curve && Array.isArray(entry.curve) && entry.curve.length > 0) {
+    // Promoted model curve — shown by default (show_model_promoted defaults to true)
+    const showPromoted = settings.show_model_promoted !== false;
+    if (showPromoted && entry?.curve && Array.isArray(entry.curve) && entry.curve.length > 0) {
       const data = entry.curve
         .filter((p: any) => typeof p?.tau_days === 'number' && typeof p?.model_rate === 'number')
         .map((p: any) => ({ value: [p.tau_days, p.model_rate] }));
       if (data.length > 0) {
-        // Method A (new onset-adjusted approach) — red
-        const methodAColour = c.text === '#e0e0e0' ? '#f87171' : '#dc2626';
+        const promotedColour = c.text === '#e0e0e0' ? '#f87171' : '#dc2626';
         seriesOut.push({
           id: 'model_cdf',
-          name: 'Analytic A (new)',
+          name: 'Promoted model',
           type: 'line',
           showSymbol: false,
           smooth: true,
           connectNulls: false,
-          lineStyle: { width: 2, color: methodAColour, type: 'dotted', opacity: 0.7 },
-          itemStyle: { color: methodAColour },
+          lineStyle: { width: 2, color: promotedColour, type: 'dotted', opacity: 0.7 },
+          itemStyle: { color: promotedColour },
           emphasis: { disabled: true },
           z: 10,
           data,
@@ -253,8 +254,8 @@ export function buildCohortMaturityEChartsOption(
         }
       }
     }
-    // Method B comparison curve (old raw-anchor approach) — green
-    if (entry?.methodBCurve && Array.isArray(entry.methodBCurve) && entry.methodBCurve.length > 0) {
+    // Method B comparison curve (old raw-anchor approach) — green, part of promoted view
+    if (showPromoted && entry?.methodBCurve && Array.isArray(entry.methodBCurve) && entry.methodBCurve.length > 0) {
       const methodBData = entry.methodBCurve
         .filter((p: any) => typeof p?.tau_days === 'number' && typeof p?.model_rate === 'number')
         .map((p: any) => ({ value: [p.tau_days, p.model_rate] }));
@@ -282,10 +283,9 @@ export function buildCohortMaturityEChartsOption(
       }
     }
     // Bayesian confidence band (filled polygon between upper and lower curves).
-    // Uses a custom series that draws a closed polygon via renderItem.
-    // api.coord() requires coordinateSystem + encode to map data → pixels.
-    const bandUpper = entry?.bayesBandUpper;
-    const bandLower = entry?.bayesBandLower;
+    // Part of the promoted view — shown when promoted source is Bayesian.
+    const bandUpper = showPromoted ? entry?.bayesBandUpper : undefined;
+    const bandLower = showPromoted ? entry?.bayesBandLower : undefined;
     if (Array.isArray(bandUpper) && bandUpper.length > 0 && Array.isArray(bandLower) && bandLower.length > 0) {
       const bandColour = c.text === '#e0e0e0' ? 'rgba(96,165,250,0.18)' : 'rgba(37,99,235,0.15)';
       const upperPts = bandUpper
@@ -332,30 +332,122 @@ export function buildCohortMaturityEChartsOption(
         });
       }
     }
-    // Bayesian posterior overlay (dashed, distinct colour)
-    if (entry?.bayesCurve && Array.isArray(entry.bayesCurve) && entry.bayesCurve.length > 0) {
-      const bayesData = entry.bayesCurve
-        .filter((p: any) => typeof p?.tau_days === 'number' && typeof p?.model_rate === 'number')
-        .map((p: any) => ({ value: [p.tau_days, p.model_rate] }));
-      if (bayesData.length > 0) {
-        const bayesColour = c.text === '#e0e0e0' ? '#60a5fa' : '#2563eb';
+    // --- Per-source model curve overlays ---
+    // Controlled by display settings: show_model_analytic, show_model_analytic_be, show_model_bayesian.
+    // Falls back to the legacy bayesCurve/methodBCurve if sourceModelCurves not present.
+    const sourceModelCurves = entry?.sourceModelCurves;
+    if (sourceModelCurves && typeof sourceModelCurves === 'object') {
+      const sourceStyles: Record<string, { colour: [string, string]; dash: string; name: string; settingKey: string; z: number }> = {
+        analytic:    { colour: ['#f87171', '#dc2626'], dash: 'dotted',  name: 'Analytic (FE)', settingKey: 'show_model_analytic',    z: 10 },
+        analytic_be: { colour: ['#a78bfa', '#7c3aed'], dash: 'dotted',  name: 'Analytic (BE)', settingKey: 'show_model_analytic_be', z: 10 },
+        bayesian:    { colour: ['#60a5fa', '#2563eb'], dash: 'dashed',  name: 'Bayesian',      settingKey: 'show_model_bayesian',    z: 11 },
+      };
+
+      for (const [srcName, srcData] of Object.entries(sourceModelCurves)) {
+        const style = sourceStyles[srcName];
+        if (!style) continue;
+        // Check display setting — default off unless explicitly enabled
+        if (!settings[style.settingKey]) continue;
+
+        const srcCurve = (srcData as any)?.curve;
+        if (!Array.isArray(srcCurve) || srcCurve.length === 0) continue;
+        const curveData = srcCurve
+          .filter((p: any) => typeof p?.tau_days === 'number' && typeof p?.model_rate === 'number')
+          .map((p: any) => ({ value: [p.tau_days, p.model_rate] }));
+        if (curveData.length === 0) continue;
+
+        const colour = c.text === '#e0e0e0' ? style.colour[0] : style.colour[1];
         seriesOut.push({
-          id: 'model_cdf_bayes',
-          name: 'Bayesian Model',
+          id: `model_cdf_${srcName}`,
+          name: style.name,
           type: 'line',
           showSymbol: false,
           smooth: true,
           connectNulls: false,
-          lineStyle: { width: 2, color: bayesColour, type: 'dashed', opacity: 0.85 },
-          itemStyle: { color: bayesColour },
+          lineStyle: { width: 2, color: colour, type: style.dash as any, opacity: 0.85 },
+          itemStyle: { color: colour },
           emphasis: { disabled: true },
-          z: 11,
-          data: bayesData,
+          z: style.z,
+          data: curveData,
         });
         if (maxTau !== null) {
-          const curveMax = bayesData[bayesData.length - 1]?.value?.[0];
+          const curveMax = curveData[curveData.length - 1]?.value?.[0];
           if (typeof curveMax === 'number' && Number.isFinite(curveMax) && curveMax > maxTau) {
             maxTau = curveMax;
+          }
+        }
+
+        // Bayesian confidence band from per-source data
+        if (srcName === 'bayesian') {
+          const bandUpper = (srcData as any)?.band_upper;
+          const bandLower = (srcData as any)?.band_lower;
+          if (Array.isArray(bandUpper) && bandUpper.length > 0 && Array.isArray(bandLower) && bandLower.length > 0) {
+            const bandColour = c.text === '#e0e0e0' ? 'rgba(96,165,250,0.18)' : 'rgba(37,99,235,0.15)';
+            const upperPts = bandUpper
+              .filter((p: any) => typeof p?.tau_days === 'number' && typeof p?.model_rate === 'number');
+            const lowerPts = bandLower
+              .filter((p: any) => typeof p?.tau_days === 'number' && typeof p?.model_rate === 'number');
+            if (upperPts.length > 0 && lowerPts.length > 0) {
+              const polyData = upperPts.map((p: any, i: number) => {
+                const lower = i < lowerPts.length ? lowerPts[i].model_rate : p.model_rate;
+                return [p.tau_days, p.model_rate, lower];
+              });
+              seriesOut.push({
+                id: 'bayes_band_source',
+                name: `Bayes ${settings.bayes_band_level || '90'}% band`,
+                type: 'custom' as any,
+                coordinateSystem: 'cartesian2d',
+                encode: { x: 0, y: 1 },
+                renderItem: (params: any, api: any) => {
+                  if (params.dataIndex !== 0) return;
+                  const points: number[][] = [];
+                  for (let i = 0; i < polyData.length; i++) {
+                    points.push(api.coord([polyData[i][0], polyData[i][1]]));
+                  }
+                  for (let i = polyData.length - 1; i >= 0; i--) {
+                    points.push(api.coord([polyData[i][0], polyData[i][2]]));
+                  }
+                  return {
+                    type: 'polygon',
+                    shape: { points, smooth: 0.3 },
+                    style: { fill: bandColour, stroke: 'none' },
+                    silent: true,
+                  };
+                },
+                data: polyData,
+                z: 9,
+                silent: true,
+              });
+            }
+          }
+        }
+      }
+    } else {
+      // Legacy fallback: use bayesCurve from old format
+      if (entry?.bayesCurve && Array.isArray(entry.bayesCurve) && entry.bayesCurve.length > 0) {
+        const bayesData = entry.bayesCurve
+          .filter((p: any) => typeof p?.tau_days === 'number' && typeof p?.model_rate === 'number')
+          .map((p: any) => ({ value: [p.tau_days, p.model_rate] }));
+        if (bayesData.length > 0) {
+          const bayesColour = c.text === '#e0e0e0' ? '#60a5fa' : '#2563eb';
+          seriesOut.push({
+            id: 'model_cdf_bayes',
+            name: 'Bayesian Model',
+            type: 'line',
+            showSymbol: false,
+            smooth: true,
+            connectNulls: false,
+            lineStyle: { width: 2, color: bayesColour, type: 'dashed', opacity: 0.85 },
+            itemStyle: { color: bayesColour },
+            emphasis: { disabled: true },
+            z: 11,
+            data: bayesData,
+          });
+          if (maxTau !== null) {
+            const curveMax = bayesData[bayesData.length - 1]?.value?.[0];
+            if (typeof curveMax === 'number' && Number.isFinite(curveMax) && curveMax > maxTau) {
+              maxTau = curveMax;
+            }
           }
         }
       }
@@ -376,6 +468,7 @@ export function buildCohortMaturityEChartsOption(
   // Include the actual Bayes band upper envelope (not the delta) in yMax.
   if (modelCurves && typeof modelCurves === 'object') {
     const bandEntry = modelCurves[effectiveSubjectId];
+    // Legacy band
     const rawUpper = bandEntry?.bayesBandUpper;
     if (Array.isArray(rawUpper)) {
       for (const p of rawUpper) {
@@ -383,9 +476,18 @@ export function buildCohortMaturityEChartsOption(
         if (typeof v === 'number' && Number.isFinite(v) && v > maxRate) maxRate = v;
       }
     }
+    // Per-source Bayesian band
+    const srcBayes = bandEntry?.sourceModelCurves?.bayesian;
+    if (srcBayes?.band_upper && Array.isArray(srcBayes.band_upper)) {
+      for (const p of srcBayes.band_upper) {
+        const v = p?.model_rate;
+        if (typeof v === 'number' && Number.isFinite(v) && v > maxRate) maxRate = v;
+      }
+    }
   }
   const yMax = settings.y_axis_max ?? Math.min(1.0, Math.max(0.05, Math.ceil((maxRate * 1.2) * 20) / 20));
   const showLegend = settings.show_legend ?? true;
+  const legendPos = (settings.legend_position as string) || 'top';
 
   const fmtPercent = (v: number | null | undefined): string =>
     (v === null || v === undefined || !Number.isFinite(v)) ? '—' : `${(v * 100).toFixed(1)}%`;
@@ -430,7 +532,7 @@ export function buildCohortMaturityEChartsOption(
         return `<strong>${title}</strong><br/>${[...lines, ...extra_].join('<br/>')}`;
       },
     },
-    grid: { left: 52, right: 16, bottom: 60, top: seriesOut.length > 2 ? 80 : 50, containLabel: false },
+    grid: { left: 52, right: 16, bottom: 60, top: seriesOut.length > 2 ? 58 : 42, containLabel: false },
     xAxis: {
       type: 'value',
       name: settings.x_axis_title ?? 'Age (days since cohort date)',
@@ -452,7 +554,14 @@ export function buildCohortMaturityEChartsOption(
       axisLabel: { fontSize: 9, color: c.text, formatter: (v: number) => `${(v * 100).toFixed(0)}%` },
       splitLine: { lineStyle: { color: c.gridLine } },
     },
-    legend: showLegend ? { top: 22, left: 12, textStyle: { fontSize: 9, color: c.text }, icon: 'roundRect' } : { show: false },
+    legend: showLegend ? {
+      ...(legendPos === 'bottom' ? { bottom: 4, left: 'center' }
+        : legendPos === 'left' ? { top: 'middle', left: 4, orient: 'vertical' as const }
+        : legendPos === 'right' ? { top: 'middle', right: 4, orient: 'vertical' as const }
+        : { top: 14, left: 12 }),
+      textStyle: { fontSize: 8, color: c.text }, icon: 'roundRect', itemGap: 6, itemWidth: 12, itemHeight: 8,
+      data: seriesOut.map(s => s.name).filter(Boolean),
+    } : { show: false },
     series: seriesOut,
     dagnet_meta: {
       subject_id: effectiveSubjectId,

@@ -25,6 +25,12 @@ def _noop_progress(stage: str, pct: int, detail: str = "") -> None:
     pass
 
 
+def _log(log_list: list[str], msg: str) -> None:
+    """Append to the result log AND print to stdout (visible in Modal logs)."""
+    log_list.append(msg)
+    print(msg, flush=True)
+
+
 def fit_graph(payload: dict, report_progress=None) -> dict:
     """Fit posteriors for a single graph.
 
@@ -76,9 +82,9 @@ def _fit_graph_placeholder(payload: dict, report_progress=None) -> dict:
             cur.execute("SELECT 1")
             cur.close()
             conn.close()
-            log.append("connected to Neon (placeholder mode)")
+            _log(log,"connected to Neon (placeholder mode)")
         else:
-            log.append("no db_connection — skipping DB check")
+            _log(log,"no db_connection — skipping DB check")
 
         report("fitting", 20, "Building placeholder posteriors…")
 
@@ -147,7 +153,7 @@ def _fit_graph_placeholder(payload: dict, report_progress=None) -> dict:
 
             edges.append(edge_entry)
 
-        log.append(f"placeholder posteriors for {len(edges)} edges")
+        _log(log,f"placeholder posteriors for {len(edges)} edges")
         report("webhook", 85, "Firing webhook…")
 
         # Fire webhook (same as real path)
@@ -180,19 +186,19 @@ def _fit_graph_placeholder(payload: dict, report_progress=None) -> dict:
                     else resp.text[:500]
                 ),
             }
-            log.append(f"webhook POST {resp.status_code}")
+            _log(log,f"webhook POST {resp.status_code}")
             if resp.status_code >= 400:
                 error = f"webhook returned {resp.status_code}"
         else:
-            log.append("no webhook_url — skipping webhook")
+            _log(log,"no webhook_url — skipping webhook")
 
         report("complete", 100)
 
     except Exception as e:
         import traceback
         error = str(e)
-        log.append(f"ERROR: {error}")
-        log.append(traceback.format_exc())
+        _log(log,f"ERROR: {error}")
+        _log(log,traceback.format_exc())
 
     return _build_result(error, log, {}, t0, edges if not error else [], [], {"max_rhat": 0.0, "min_ess": 0, "converged_pct": 0.0}, webhook_response)
 
@@ -224,9 +230,9 @@ def _fit_graph_compiler(payload: dict, report_progress=None) -> dict:
             cur = db_conn.cursor()
             cur.execute("SELECT 1")
             cur.close()
-            log.append(f"connected to Neon ({int((time.time() - t_db) * 1000)}ms)")
+            _log(log,f"connected to Neon ({int((time.time() - t_db) * 1000)}ms)")
         else:
-            log.append("no db_connection — skipping DB")
+            _log(log,"no db_connection — skipping DB")
         timings["neon_ms"] = int((time.time() - t0) * 1000)
 
         # ── 2. Compile: topology analysis ──
@@ -241,13 +247,13 @@ def _fit_graph_compiler(payload: dict, report_progress=None) -> dict:
         settings = payload.get("settings", {})
 
         topology = analyse_topology(graph_snapshot)
-        log.append(
+        _log(log,
             f"topology: {len(topology.edges)} edges, "
             f"{len(topology.branch_groups)} branch groups, "
             f"anchor={topology.anchor_node_id[:8]}…"
         )
         for d in topology.diagnostics:
-            log.append(f"  topo: {d}")
+            _log(log,f"  topo: {d}")
         timings["topology_ms"] = int((time.time() - t0) * 1000) - timings.get("neon_ms", 0)
 
         # ── 3. Compile: evidence binding ──
@@ -266,13 +272,13 @@ def _fit_graph_compiler(payload: dict, report_progress=None) -> dict:
                 snapshot_subjects, topology, log,
             )
             snap_ms = int((time.time() - t_snap) * 1000)
-            log.append(
+            _log(log,
                 f"snapshot DB: {len(snapshot_subjects)} subjects queried, "
                 f"{sum(len(v) for v in snapshot_rows.values())} rows fetched "
                 f"({snap_ms}ms)"
             )
         elif snapshot_subjects and not db_url:
-            log.append("snapshot_subjects provided but no db_connection — falling back to param files")
+            _log(log,"snapshot_subjects provided but no db_connection — falling back to param files")
 
         if snapshot_rows:
             from compiler import bind_snapshot_evidence
@@ -286,9 +292,9 @@ def _fit_graph_compiler(payload: dict, report_progress=None) -> dict:
 
         n_with_data = sum(1 for e in evidence.edges.values() if not e.skipped)
         n_skipped = sum(1 for e in evidence.edges.values() if e.skipped)
-        log.append(f"evidence: {n_with_data} edges with data, {n_skipped} skipped")
+        _log(log,f"evidence: {n_with_data} edges with data, {n_skipped} skipped")
         for d in evidence.diagnostics:
-            log.append(f"  evidence: {d}")
+            _log(log,f"  evidence: {d}")
 
         # Intermediate evidence summary — what data is the model actually getting?
         for edge_id, edge_ev in evidence.edges.items():
@@ -312,7 +318,7 @@ def _fit_graph_compiler(payload: dict, report_progress=None) -> dict:
                     else:
                         n_cohort_daily += 1
             has_snapshot = n_window_traj + n_cohort_traj + n_window_daily + n_cohort_daily > 0
-            log.append(
+            _log(log,
                 f"  evidence detail {edge_id[:8]}…: "
                 f"source={'snapshot' if has_snapshot else 'param_file'}, "
                 f"window_traj={n_window_traj}, cohort_traj={n_cohort_traj}, "
@@ -322,7 +328,7 @@ def _fit_graph_compiler(payload: dict, report_progress=None) -> dict:
         timings["evidence_ms"] = int((time.time() - t0) * 1000) - timings.get("neon_ms", 0) - timings.get("topology_ms", 0)
 
         if n_with_data == 0:
-            log.append("no edges with data — skipping inference")
+            _log(log,"no edges with data — skipping inference")
             error = "no edges with data"
             report("complete", 100)
             return _build_result(
@@ -334,19 +340,19 @@ def _fit_graph_compiler(payload: dict, report_progress=None) -> dict:
         report("compiling", 0, "Building model…")
         features = settings.get("features") or {}
         model, metadata = build_model(topology, evidence, features=features)
-        log.append(f"model: {len(model.free_RVs)} free vars, {len(model.observed_RVs)} observed")
+        _log(log,f"model: {len(model.free_RVs)} free vars, {len(model.observed_RVs)} observed")
         for d in metadata.get("diagnostics", []):
-            log.append(f"  model: {d}")
+            _log(log,f"  model: {d}")
 
         # ── 4b. Model inspection (always runs) ──
         from compiler import inspect_model
         inspection = inspect_model(model, metadata, topology, evidence)
         for line in inspection:
-            log.append(line)
+            _log(log,line)
 
         # Stop here if model_inspect_only — no MCMC
         if settings.get("model_inspect_only"):
-            log.append("MODEL INSPECT ONLY — stopping before MCMC")
+            _log(log,"MODEL INSPECT ONLY — stopping before MCMC")
             report("complete", 100, "Model inspection complete")
             return _build_result(
                 None, log, timings, t0, result_edges, result_skipped,
@@ -366,7 +372,7 @@ def _fit_graph_compiler(payload: dict, report_progress=None) -> dict:
         t_sample = time.time()
         trace, quality = run_inference(model, sampling_config, report)
         timings["sampling_ms"] = int((time.time() - t_sample) * 1000)
-        log.append(
+        _log(log,
             f"sampling: {timings['sampling_ms']}ms, "
             f"rhat={quality.max_rhat:.3f}, ess={quality.min_ess:.0f}, "
             f"divergences={quality.total_divergences}"
@@ -402,9 +408,9 @@ def _fit_graph_compiler(payload: dict, report_progress=None) -> dict:
 
         result_skipped = inference_result.skipped
         for d in inference_result.diagnostics:
-            log.append(f"  inference: {d}")
+            _log(log,f"  inference: {d}")
 
-        log.append(f"posteriors: {len(result_edges)} edges, {len(result_skipped)} skipped")
+        _log(log,f"posteriors: {len(result_edges)} edges, {len(result_skipped)} skipped")
 
         # ── 8. Fire webhook ──
         report("delivering", 100, "Delivering results…")
@@ -444,19 +450,19 @@ def _fit_graph_compiler(payload: dict, report_progress=None) -> dict:
                     else resp.text[:500]
                 ),
             }
-            log.append(f"webhook POST {resp.status_code} ({int((time.time() - t_wh) * 1000)}ms)")
+            _log(log,f"webhook POST {resp.status_code} ({int((time.time() - t_wh) * 1000)}ms)")
             if resp.status_code >= 400:
                 error = f"webhook returned {resp.status_code}"
         else:
-            log.append("no webhook_url — skipping webhook")
+            _log(log,"no webhook_url — skipping webhook")
 
         report("complete", 100)
 
     except Exception as e:
         import traceback
         error = str(e)
-        log.append(f"ERROR: {error}")
-        log.append(traceback.format_exc())
+        _log(log,f"ERROR: {error}")
+        _log(log,traceback.format_exc())
     finally:
         if db_conn:
             try:
@@ -513,7 +519,7 @@ def _query_snapshot_subjects(
 
         core_hash = subj.get("core_hash", "")
         if not core_hash or not edge_id:
-            log.append(f"  snapshot: skipping subject (no core_hash or edge_id)")
+            _log(log,f"  snapshot: skipping subject (no core_hash or edge_id)")
             continue
 
         param_id = subj.get("param_id", "")
@@ -545,14 +551,14 @@ def _query_snapshot_subjects(
                 if edge_id not in result:
                     result[edge_id] = []
                 result[edge_id].extend(rows)
-                log.append(f"  snapshot: {edge_id[:8]}… → {len(rows)} rows")
+                _log(log,f"  snapshot: {edge_id[:8]}… → {len(rows)} rows")
             else:
-                log.append(f"  snapshot: {edge_id[:8]}… → 0 rows (will fall back to param file)")
+                _log(log,f"  snapshot: {edge_id[:8]}… → 0 rows (will fall back to param file)")
 
         except Exception as e:
             # Debug: log the types of each param to trace 'can't adapt type' errors
             eh_types = f", equiv_hashes types={[type(h).__name__ for h in (equivalent_hashes or [])]}" if equivalent_hashes else ""
-            log.append(f"  snapshot: {edge_id[:8]}… query failed: {e} [slice_keys={slice_keys}{eh_types}]")
+            _log(log,f"  snapshot: {edge_id[:8]}… query failed: {e} [slice_keys={slice_keys}{eh_types}]")
 
     return result
 

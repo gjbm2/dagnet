@@ -327,6 +327,75 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
         path_onset = latency.get('path_onset_delta_days')
         if isinstance(path_onset, (int, float)) and math.isfinite(path_onset) and path_onset >= 0:
             result['path_onset_delta_days'] = float(path_onset)
+        # Per-source model vars — extract latency params from each source
+        # so the frontend can render separate overlay curves per model.
+        model_vars = p.get('model_vars') or []
+        source_curves: Dict[str, Dict[str, float]] = {}
+        for mv in model_vars:
+            if not isinstance(mv, dict):
+                continue
+            src = mv.get('source', '')
+            if src not in ('analytic', 'analytic_be', 'bayesian'):
+                continue
+            mv_lat = mv.get('latency') or {}
+            mv_mu = mv_lat.get('mu')
+            mv_sigma = mv_lat.get('sigma')
+            if not isinstance(mv_mu, (int, float)) or not isinstance(mv_sigma, (int, float)):
+                continue
+            if not math.isfinite(mv_mu) or not math.isfinite(mv_sigma) or mv_sigma <= 0:
+                continue
+            entry: Dict[str, float] = {
+                'mu': float(mv_mu),
+                'sigma': float(mv_sigma),
+                'onset_delta_days': float(mv_lat.get('onset_delta_days') or 0),
+            }
+            # Path-level params (for cohort mode)
+            mv_pmu = mv_lat.get('path_mu')
+            mv_psigma = mv_lat.get('path_sigma')
+            if isinstance(mv_pmu, (int, float)) and math.isfinite(mv_pmu):
+                entry['path_mu'] = float(mv_pmu)
+            if isinstance(mv_psigma, (int, float)) and math.isfinite(mv_psigma) and mv_psigma > 0:
+                entry['path_sigma'] = float(mv_psigma)
+            mv_ponset = mv_lat.get('path_onset_delta_days')
+            if isinstance(mv_ponset, (int, float)) and math.isfinite(mv_ponset) and mv_ponset >= 0:
+                entry['path_onset_delta_days'] = float(mv_ponset)
+            # Probability mean from this source (for forecast_mean per source)
+            mv_prob = mv.get('probability') or {}
+            mv_pmean = mv_prob.get('mean')
+            if isinstance(mv_pmean, (int, float)) and math.isfinite(mv_pmean) and mv_pmean > 0:
+                entry['forecast_mean'] = float(mv_pmean)
+            # Bayesian uncertainty (for confidence bands)
+            if src == 'bayesian':
+                mv_q = mv.get('quality') or {}
+                mv_prob_stdev = mv_prob.get('stdev')
+                if isinstance(mv_prob_stdev, (int, float)) and math.isfinite(mv_prob_stdev) and mv_prob_stdev > 0:
+                    entry['p_stdev'] = float(mv_prob_stdev)
+                mv_mu_sd = mv_lat.get('mu_sd')
+                mv_sigma_sd = mv_lat.get('sigma_sd')
+                mv_onset_sd = mv_lat.get('onset_sd')
+                if isinstance(mv_mu_sd, (int, float)) and math.isfinite(mv_mu_sd) and mv_mu_sd > 0:
+                    entry['mu_sd'] = float(mv_mu_sd)
+                if isinstance(mv_sigma_sd, (int, float)) and math.isfinite(mv_sigma_sd) and mv_sigma_sd > 0:
+                    entry['sigma_sd'] = float(mv_sigma_sd)
+                if isinstance(mv_onset_sd, (int, float)) and math.isfinite(mv_onset_sd) and mv_onset_sd > 0:
+                    entry['onset_sd'] = float(mv_onset_sd)
+                # Path-level uncertainty
+                mv_pmu_sd = mv_lat.get('path_mu_sd')
+                mv_psigma_sd = mv_lat.get('path_sigma_sd')
+                mv_ponset_sd = mv_lat.get('path_onset_sd')
+                if isinstance(mv_pmu_sd, (int, float)) and math.isfinite(mv_pmu_sd) and mv_pmu_sd > 0:
+                    entry['path_mu_sd'] = float(mv_pmu_sd)
+                if isinstance(mv_psigma_sd, (int, float)) and math.isfinite(mv_psigma_sd) and mv_psigma_sd > 0:
+                    entry['path_sigma_sd'] = float(mv_psigma_sd)
+                if isinstance(mv_ponset_sd, (int, float)) and math.isfinite(mv_ponset_sd) and mv_ponset_sd > 0:
+                    entry['path_onset_sd'] = float(mv_ponset_sd)
+            source_curves[src] = entry
+        if source_curves:
+            result['source_curves'] = source_curves
+        # Identify the promoted source
+        msp = p.get('model_source_preference') or 'best_available'
+        result['promoted_source'] = msp
+
         # Bayesian latency posterior — edge-level (window)
         lat_posterior = latency.get('posterior') or {}
         bayes_mu = lat_posterior.get('mu_mean')
@@ -777,6 +846,7 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
                     axis_tau_max = int(math.ceil(max(candidates))) if candidates else None
 
                     if axis_tau_max and axis_tau_max > 0:
+                        # Promoted model curve (backward-compatible: model_curve / model_curve_params)
                         curve = []
                         for tau in range(0, axis_tau_max + 1):
                             c = compute_completeness(float(tau), cdf_mu, cdf_sigma, cdf_onset)
@@ -794,22 +864,15 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
                             'mode': cdf_mode,
                         }
 
-                        # Method B comparison curve (old approach): re-absorb upstream
-                        # onset into μ and shift by edge onset only.  Approximates the
-                        # pre-onset-separation CDF for visual comparison.
-                        # Only emitted in cohort_path mode where path_onset differs from
-                        # edge onset (otherwise the two curves are identical).
+                        # Method B comparison curve (old approach)
                         if cdf_mode == 'cohort_path':
                             edge_onset = model_params['onset_delta_days']
                             path_onset_val = model_params.get('path_onset_delta_days')
                             if (isinstance(path_onset_val, (int, float))
                                     and path_onset_val > edge_onset + 0.01):
                                 upstream_onset = path_onset_val - edge_onset
-                                # Re-absorb upstream onset into lognormal μ:
-                                # shifted LN median = onset + exp(μ), so
-                                # "dirty" μ ≈ ln(upstream_onset + exp(clean μ))
                                 mu_b = math.log(upstream_onset + math.exp(cdf_mu))
-                                sigma_b = cdf_sigma  # 2nd-order effect
+                                sigma_b = cdf_sigma
                                 curve_b = []
                                 for tau in range(0, axis_tau_max + 1):
                                     cb = compute_completeness(
@@ -829,126 +892,121 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
                                     'mode': 'cohort_path_method_b',
                                 }
 
-                        # Bayesian posterior overlay — second model curve if posteriors exist.
-                        # For cohort_path mode, use path-level Bayesian params if available;
-                        # for window mode, use edge-level Bayesian params.
-                        if 'bayes_mu' in model_params:
-                            if cdf_mode == 'cohort_path' and 'bayes_path_mu' in model_params:
-                                b_mu = model_params['bayes_path_mu']
-                                b_sigma = model_params['bayes_path_sigma']
-                                b_onset = model_params['bayes_path_onset']
-                                b_mode = 'bayesian_path'
-                            else:
-                                b_mu = model_params['bayes_mu']
-                                b_sigma = model_params['bayes_sigma']
-                                b_onset = model_params['bayes_onset']
-                                b_mode = 'bayesian'
-                            bayes_curve = []
+                        # --- Per-source model curves (from model_vars[]) ---
+                        # Each source gets its own CDF curve, enabling the
+                        # frontend to toggle analytic/analytic_be/bayesian overlays
+                        # independently via display settings.
+                        source_curves = model_params.get('source_curves') or {}
+                        _ds = data.get('display_settings') or {}
+                        source_curve_results: Dict[str, Any] = {}
+                        for src_name, src_params in source_curves.items():
+                            s_mu = src_params.get('mu')
+                            s_sigma = src_params.get('sigma')
+                            s_onset = src_params.get('onset_delta_days', 0.0)
+                            s_fm = src_params.get('forecast_mean', forecast_mean)
+                            if s_mu is None or s_sigma is None:
+                                continue
+
+                            # For cohort_path mode, prefer path-level params
+                            if cdf_mode == 'cohort_path':
+                                s_pmu = src_params.get('path_mu')
+                                s_psigma = src_params.get('path_sigma')
+                                s_ponset = src_params.get('path_onset_delta_days')
+                                if s_pmu is not None and s_psigma is not None and s_psigma > 0:
+                                    s_mu = s_pmu
+                                    s_sigma = s_psigma
+                                    if s_ponset is not None:
+                                        s_onset = s_ponset
+
+                            s_curve = []
                             for tau in range(0, axis_tau_max + 1):
-                                bc = compute_completeness(
-                                    float(tau), b_mu, b_sigma, b_onset,
-                                )
-                                bc = max(0.0, min(1.0, float(bc)))
-                                bayes_curve.append({
+                                sc = compute_completeness(float(tau), s_mu, s_sigma, s_onset)
+                                sc = max(0.0, min(1.0, float(sc)))
+                                s_curve.append({
                                     'tau_days': tau,
-                                    'model_rate': round(forecast_mean * bc, 8),
+                                    'model_rate': round(s_fm * sc, 8),
                                 })
-                            result['model_curve_bayes'] = bayes_curve
-                            result['model_curve_bayes_params'] = {
-                                'mu': b_mu,
-                                'sigma': b_sigma,
-                                'onset_delta_days': b_onset,
-                                'forecast_mean': forecast_mean,
-                                'mode': b_mode,
+                            src_entry: Dict[str, Any] = {
+                                'curve': s_curve,
+                                'params': {
+                                    'mu': s_mu,
+                                    'sigma': s_sigma,
+                                    'onset_delta_days': s_onset,
+                                    'forecast_mean': s_fm,
+                                    'source': src_name,
+                                },
                             }
 
-                            # Bayesian confidence band (99.9%) via delta method.
-                            # model_rate(τ) = p × CDF(τ; mu, sigma, onset)
-                            # Four independent axes of uncertainty: p, mu, sigma, onset.
-                            # Partial derivatives:
-                            #   ∂rate/∂p     = CDF(τ)
-                            #   ∂rate/∂mu    = p × ∂CDF/∂mu
-                            #   ∂rate/∂sigma = p × ∂CDF/∂sigma
-                            #   ∂rate/∂onset = p × ∂CDF/∂onset = -p × φ(z) / (σ × (τ-δ))
-                            # var(rate) = CDF²·p_sd² + p²·[(∂CDF/∂mu)²·mu_sd²
-                            #             + (∂CDF/∂sigma)²·sigma_sd²
-                            #             + (∂CDF/∂onset)²·onset_sd²]
-                            if cdf_mode == 'cohort_path' and 'bayes_path_mu_sd' in model_params:
-                                band_mu_sd = model_params['bayes_path_mu_sd']
-                                band_sigma_sd = model_params.get('bayes_path_sigma_sd', 0.0)
-                                band_onset_sd = model_params.get('bayes_path_onset_sd', 0.0)
-                            else:
-                                band_mu_sd = model_params.get('bayes_mu_sd')
-                                band_sigma_sd = model_params.get('bayes_sigma_sd', 0.0)
-                                band_onset_sd = model_params.get('bayes_onset_sd', 0.0)
-                            band_p_sd = model_params.get('p_stdev', 0.0)
+                            # Bayesian confidence bands (delta method)
+                            if src_name == 'bayesian':
+                                band_mu_sd = src_params.get('mu_sd') or src_params.get('path_mu_sd')
+                                band_sigma_sd = src_params.get('sigma_sd') or src_params.get('path_sigma_sd') or 0.0
+                                band_onset_sd = src_params.get('onset_sd') or src_params.get('path_onset_sd') or 0.0
+                                band_p_sd = src_params.get('p_stdev', 0.0)
 
-                            # Map display setting to z-multiplier
-                            _band_level_z = {
-                                '80': 1.282, '90': 1.645,
-                                '95': 1.960, '99': 2.576,
-                            }
-                            _ds = data.get('display_settings') or {}
-                            _bl = str(_ds.get('bayes_band_level', '90'))
+                                _band_level_z = {
+                                    '80': 1.282, '90': 1.645,
+                                    '95': 1.960, '99': 2.576,
+                                }
+                                _bl = str(_ds.get('bayes_band_level', '90'))
 
-                            if _bl != 'off' and band_mu_sd is not None and band_mu_sd > 0:
-                                band_k = _band_level_z.get(_bl, 1.645)
-                                sqrt_2pi = math.sqrt(2.0 * math.pi)
-                                p_val = forecast_mean  # posterior mean of p
+                                if _bl != 'off' and band_mu_sd is not None and band_mu_sd > 0:
+                                    band_k = _band_level_z.get(_bl, 1.645)
+                                    sqrt_2pi = math.sqrt(2.0 * math.pi)
+                                    p_val = s_fm
 
-                                bayes_band_upper = []
-                                bayes_band_lower = []
-                                for tau in range(0, axis_tau_max + 1):
-                                    cdf_val = compute_completeness(float(tau), b_mu, b_sigma, b_onset)
-                                    cdf_val = max(0.0, min(1.0, float(cdf_val)))
-                                    rate = p_val * cdf_val
+                                    band_upper = []
+                                    band_lower = []
+                                    for tau in range(0, axis_tau_max + 1):
+                                        cdf_val = compute_completeness(float(tau), s_mu, s_sigma, s_onset)
+                                        cdf_val = max(0.0, min(1.0, float(cdf_val)))
+                                        rate = p_val * cdf_val
 
-                                    model_age = float(tau) - b_onset
-                                    if model_age > 0 and b_sigma > 0:
-                                        z = (math.log(model_age) - b_mu) / b_sigma
-                                        phi_z = math.exp(-0.5 * z * z) / sqrt_2pi
+                                        model_age = float(tau) - s_onset
+                                        if model_age > 0 and s_sigma > 0:
+                                            z = (math.log(model_age) - s_mu) / s_sigma
+                                            phi_z = math.exp(-0.5 * z * z) / sqrt_2pi
+                                            dcdf_dmu = -phi_z / s_sigma
+                                            dcdf_dsigma = -phi_z * z / s_sigma
 
-                                        dcdf_dmu = -phi_z / b_sigma
-                                        dcdf_dsigma = -phi_z * z / b_sigma
+                                            var_rate = 0.0
+                                            if band_p_sd > 0:
+                                                var_rate += (cdf_val ** 2) * (band_p_sd ** 2)
+                                            var_rate += (p_val * dcdf_dmu) ** 2 * (band_mu_sd ** 2)
+                                            if band_sigma_sd > 0:
+                                                var_rate += (p_val * dcdf_dsigma) ** 2 * (band_sigma_sd ** 2)
+                                            if band_onset_sd > 0 and model_age > 0:
+                                                dcdf_donset = -phi_z / (s_sigma * model_age)
+                                                var_rate += (p_val * dcdf_donset) ** 2 * (band_onset_sd ** 2)
 
-                                        # var(rate) from four axes (delta method)
-                                        var_rate = 0.0
-                                        # p uncertainty: ∂rate/∂p = CDF
-                                        if band_p_sd > 0:
-                                            var_rate += (cdf_val ** 2) * (band_p_sd ** 2)
-                                        # mu uncertainty: ∂rate/∂mu = p × ∂CDF/∂mu
-                                        var_rate += (p_val * dcdf_dmu) ** 2 * (band_mu_sd ** 2)
-                                        # sigma uncertainty: ∂rate/∂sigma = p × ∂CDF/∂sigma
-                                        if band_sigma_sd > 0:
-                                            var_rate += (p_val * dcdf_dsigma) ** 2 * (band_sigma_sd ** 2)
-                                        # onset uncertainty: ∂rate/∂onset = -p × φ(z) / (σ × (τ-δ))
-                                        if band_onset_sd > 0 and model_age > 0:
-                                            dcdf_donset = -phi_z / (b_sigma * model_age)
-                                            var_rate += (p_val * dcdf_donset) ** 2 * (band_onset_sd ** 2)
-
-                                        sd_rate = math.sqrt(var_rate)
-                                        ru = rate + band_k * sd_rate
-                                        rl = max(0.0, rate - band_k * sd_rate)
-                                    else:
-                                        # Before onset: only p uncertainty matters
-                                        if band_p_sd > 0 and cdf_val > 0:
-                                            sd_rate = cdf_val * band_p_sd
+                                            sd_rate = math.sqrt(var_rate)
                                             ru = rate + band_k * sd_rate
                                             rl = max(0.0, rate - band_k * sd_rate)
                                         else:
-                                            ru = rate
-                                            rl = rate
+                                            if band_p_sd > 0 and cdf_val > 0:
+                                                sd_rate = cdf_val * band_p_sd
+                                                ru = rate + band_k * sd_rate
+                                                rl = max(0.0, rate - band_k * sd_rate)
+                                            else:
+                                                ru = rate
+                                                rl = rate
 
-                                    bayes_band_upper.append({
-                                        'tau_days': tau,
-                                        'model_rate': round(ru, 8),
-                                    })
-                                    bayes_band_lower.append({
-                                        'tau_days': tau,
-                                        'model_rate': round(rl, 8),
-                                    })
-                                result['model_curve_bayes_band_upper'] = bayes_band_upper
-                                result['model_curve_bayes_band_lower'] = bayes_band_lower
+                                        band_upper.append({
+                                            'tau_days': tau,
+                                            'model_rate': round(ru, 8),
+                                        })
+                                        band_lower.append({
+                                            'tau_days': tau,
+                                            'model_rate': round(rl, 8),
+                                        })
+                                    src_entry['band_upper'] = band_upper
+                                    src_entry['band_lower'] = band_lower
+
+                            source_curve_results[src_name] = src_entry
+
+                        if source_curve_results:
+                            result['source_model_curves'] = source_curve_results
+                            result['promoted_source'] = model_params.get('promoted_source', 'best_available')
 
             per_subject_results.append({
                 "subject_id": subj.get('subject_id'),
