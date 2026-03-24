@@ -267,6 +267,7 @@ def bind_snapshot_evidence(
         if rows:
             _bind_from_snapshot_rows(
                 ev, et, rows, today_date, diagnostics,
+                settings=settings,
             )
             diagnostics.append(
                 f"INFO edge {edge_id[:8]}…: {len(rows)} snapshot rows "
@@ -346,6 +347,7 @@ def _bind_from_snapshot_rows(
     rows: list[dict],
     today: datetime,
     diagnostics: list[str],
+    settings: dict | None = None,
 ) -> None:
     """Convert snapshot DB rows to Cohort-first trajectory objects.
 
@@ -377,11 +379,16 @@ def _bind_from_snapshot_rows(
             window_by_day[anchor_day].append(row)
 
     # Step 2: Build trajectories for each obs_type.
+    _settings = settings or {}
+    zcf = _settings.get("features", {}).get("zero_count_filter", True)
+    # zero_count_filter feature flag: --feature zero_count_filter=false
     window_trajs, window_daily = _build_trajectories_for_obs_type(
         window_by_day, "window", et, today, diagnostics,
+        zero_count_filter=zcf,
     )
     cohort_trajs, cohort_daily = _build_trajectories_for_obs_type(
         cohort_by_day, "cohort", et, today, diagnostics,
+        zero_count_filter=zcf,
     )
 
     # Step 3: Attach to EdgeEvidence.
@@ -416,6 +423,8 @@ def _build_trajectories_for_obs_type(
     et,
     today: datetime,
     diagnostics: list[str],
+    *,
+    zero_count_filter: bool = True,
 ) -> tuple[list[CohortDailyTrajectory], list[CohortDailyObs]]:
     """Build trajectory and fallback objects for one observation type.
 
@@ -492,7 +501,7 @@ def _build_trajectories_for_obs_type(
             # The DM logp for a zero-count bin is gammaln(0+α) - gammaln(α) = 0
             # mathematically. But empirically, preserving pre-onset density
             # is critical for NUTS geometry on edges with onset-mu correlation.
-            if len(retrieval_ages) >= 4:
+            if zero_count_filter and len(retrieval_ages) >= 4:
                 # Zero-count bin filter: drop ages where neither y nor x
                 # changed. Likelihood-lossless (gammaln(0+α)-gammaln(α)=0).
                 # Requires smooth clip floors in model.py (doc 20, §6.2)

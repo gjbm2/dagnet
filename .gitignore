@@ -151,3 +151,4 @@ test*.json
 
 # Local test data in project-data
 graph-editor/public/project-data/selection-test.json
+.vercel

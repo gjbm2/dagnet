@@ -62,8 +62,8 @@ export function useBayesTrigger(computeMode: BayesComputeMode = 'local') {
     setState({ status: 'submitting', jobId: null, error: null, lastResult: null });
 
     const opId = `bayes-fit:${Date.now()}`;
-    const isLocal = computeMode === 'local';
-    const modeLabel = computeMode === 'modal' ? '(Modal)' : '(local)';
+    const isLocal = import.meta.env.DEV && computeMode === 'local';
+    const modeLabel = !import.meta.env.DEV ? '(Modal)' : (computeMode === 'modal' ? '(Modal)' : '(local)');
 
     // Get graph label early so the toast can appear immediately
     const activeTab = tabs.find(t => t.id === activeTabId);
@@ -269,15 +269,25 @@ export function useBayesTrigger(computeMode: BayesComputeMode = 'local') {
       );
 
       // 6. Resolve URLs based on compute mode
+      //
+      // Production: always use Modal endpoints from config + production webhook.
+      // Dev local:  use local Python server on :9000 + local Vite webhook.
+      // Dev modal:  use Modal endpoints + cloudflared tunnel for webhook callback.
       let webhookUrl: string;
-      const submitUrl = isLocal ? LOCAL_SUBMIT_URL : undefined; // undefined = use config
-      const statusUrl = isLocal ? LOCAL_STATUS_URL : undefined;
-      const cancelUrl = isLocal ? LOCAL_CANCEL_URL : undefined;
+      let submitUrl: string | undefined;  // undefined = use config.modal_submit_url
+      let statusUrl: string | undefined;
+      let cancelUrl: string | undefined;
 
-      if (isLocal) {
+      if (!import.meta.env.DEV) {
+        // Production — Modal endpoints from config, Vercel webhook reachable directly
+        webhookUrl = config.webhook_url;
+      } else if (isLocal) {
+        submitUrl = LOCAL_SUBMIT_URL;
+        statusUrl = LOCAL_STATUS_URL;
+        cancelUrl = LOCAL_CANCEL_URL;
         webhookUrl = LOCAL_WEBHOOK_URL;
       } else {
-        // Modal mode: start cloudflared tunnel so Modal can reach our local webhook
+        // Dev modal mode: start cloudflared tunnel so Modal can reach our local webhook
         sessionLogService.info('bayes', 'BAYES_TUNNEL_START', 'Starting cloudflared tunnel for Modal callback…');
         const tunnelResp = await fetch(TUNNEL_START_URL, { method: 'POST' });
         const tunnelData = await tunnelResp.json();
