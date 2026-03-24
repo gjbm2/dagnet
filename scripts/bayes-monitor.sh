@@ -215,32 +215,6 @@ kill_all() {
     echo "  Killed ${killed} processes."
 }
 
-# ── Track which graphs already have tail windows ──
-# Seed from existing tmux windows (created by the outer script at launch)
-declare -A TAILED_GRAPHS
-for win_name in $(tmux list-windows -t bayes-monitor -F '#{window_name}' 2>/dev/null); do
-    [[ "$win_name" == "status" ]] && continue
-    # Window names are short names (e.g. "simple-abc"), map back to full
-    # Try both synth-prefixed and raw
-    for f in /tmp/bayes_harness-*"${win_name}".log; do
-        [[ -f "$f" ]] || continue
-        local_name=$(basename "$f" .log)
-        local_name="${local_name#bayes_harness-}"
-        TAILED_GRAPHS[$local_name]=1
-    done
-done
-
-# ── Spawn a tail window for a graph if not already tailed ──
-spawn_tail() {
-    local graph="$1"
-    [[ -n "${TAILED_GRAPHS[$graph]:-}" ]] && return
-    local log="/tmp/bayes_harness-${graph}.log"
-    local short="${graph#synth-}"
-    local tail_cmd="touch '${log}'; echo '─── ${graph} ───'; echo ''; tail -f '${log}'"
-    tmux new-window -t bayes-monitor -n "$short" bash -c "$tail_cmd" 2>/dev/null || return
-    TAILED_GRAPHS[$graph]=1
-}
-
 # ── Main loop ──
 # Strategy: collect ALL data first (CPU poll is the slow part — 1s),
 # then build the full frame into a buffer, then clear+dump in one go.
@@ -258,9 +232,6 @@ while true; do
         name=$(basename "$f" .log)
         name="${name#bayes_harness-}"
         lock="/tmp/bayes-harness-${name}.lock"
-
-        # Spawn a tail window for this graph if we haven't already
-        spawn_tail "$name"
 
         if lock_alive "$lock"; then
             marker="*"
@@ -297,13 +268,6 @@ while true; do
         job_lines+=$'\n'
     done
 
-    # ── 2b. Also check graph list for graphs not yet in log files ──
-    if [[ -f /tmp/bayes_recovery_graphs ]]; then
-        while IFS= read -r g; do
-            [[ -n "$g" ]] && spawn_tail "$g"
-        done < /tmp/bayes_recovery_graphs
-    fi
-
     # ── 3. Build frame and dump at once ──
     frame=""
     frame+="═══════════════════════════════════════════════════════════════════"$'\n'
@@ -315,27 +279,14 @@ while true; do
     frame+=$(printf "  %-28s %-14s %7s  %s\n" "─────" "─────" "───────" "──────")$'\n'
     frame+="${job_lines}"
     frame+="  * = running    ${running_count} active"$'\n'
-    frame+="  [k] kill all  [r] reload  [q] quit"$'\n'
+    frame+="  Ctrl-b K: kill all  Ctrl-b R: reload  Ctrl-b Q: quit"$'\n'
+    frame+="  Ctrl-b [: scroll pane (q to exit)  Ctrl-b n/p: next/prev page"$'\n'
 
     clear
     echo -e "$frame"
 
-    # ── 4. Wait for input or timeout ──
-    read -t 4 -n 1 key 2>/dev/null || key=""
-    case "$key" in
-        k|K)
-            kill_all
-            sleep 2
-            ;;
-        r|R)
-            # Immediate re-loop (skip the read timeout)
-            continue
-            ;;
-        q|Q)
-            tmux kill-session -t bayes-monitor 2>/dev/null || exit 0
-            exit 0
-            ;;
-    esac
+    # ── 4. Wait for next refresh ──
+    sleep 4
 done
 STATUSEOF
 chmod +x "$STATUS_SCRIPT"
@@ -343,33 +294,138 @@ chmod +x "$STATUS_SCRIPT"
 # ---------------------------------------------------------------------------
 # Build tmux session
 #
-# Window 0: status panel (CPU bars + job table)
-# Window 1..N: one per graph, tailing its harness log
+# Layout per page (window):
+#   ┌──────────────────────────────────────────┐
+#   │  status (CPU + jobs)                     │  pane 0
+#   ├─────────────────────┬────────────────────┤
+#   │  tail graph 1       │  tail graph 2      │  pane 1, 2
+#   ├─────────────────────┼────────────────────┤
+#   │  tail graph 3       │  tail graph 4      │  pane 3, 4
+#   └─────────────────────┴────────────────────┘
 #
-# Use windows (tabs) not splits — splits fail with "no space for new pane"
-# when monitoring 8+ graphs. Switch between windows with Ctrl-b n/p or
-# Ctrl-b <number>.
+# Pages: window "page-1" has graphs 0-3, "page-2" has graphs 4-7, etc.
+# Status pane duplicated per page so it's always visible.
+# Navigate: Ctrl-b n / Ctrl-b p
 # ---------------------------------------------------------------------------
+PANES_PER_PAGE=4
+
 tmux kill-session -t "$SESSION" 2>/dev/null || true
 
-# Window 0: status
-tmux new-session -d -s "$SESSION" -n "status" bash -c "$STATUS_SCRIPT"
-
-# Window per graph: tail the harness log
+# Pre-create all log files
 for graph in "${SELECTED[@]}"; do
-    log="/tmp/bayes_harness-${graph}.log"
-    short="${graph#synth-}"
-    tail_cmd="touch '${log}'; echo '─── ${graph} ───'; echo ''; tail -f '${log}'"
-    tmux new-window -t "$SESSION" -n "$short" bash -c "$tail_cmd"
+    touch "/tmp/bayes_harness-${graph}.log"
 done
 
-# Select the status window
+n_graphs=${#SELECTED[@]}
+n_pages=$(( (n_graphs + PANES_PER_PAGE - 1) / PANES_PER_PAGE ))
+
+tail_cmd() {
+    local graph="$1"
+    local short="${graph#synth-}"
+    local log="/tmp/bayes_harness-${graph}.log"
+    echo "echo '─── ${short} ───'; tail -f '${log}'"
+}
+
+for ((page=0; page<n_pages; page++)); do
+    page_label="page-$((page + 1))"
+    start=$((page * PANES_PER_PAGE))
+
+    page_graphs=()
+    for ((i=start; i<start+PANES_PER_PAGE && i<n_graphs; i++)); do
+        page_graphs+=("${SELECTED[$i]}")
+    done
+    n_on_page=${#page_graphs[@]}
+
+    if [[ $page -eq 0 ]]; then
+        tmux new-session -d -s "$SESSION" -n "$page_label" bash -c "$STATUS_SCRIPT"
+    else
+        tmux new-window -t "$SESSION" -n "$page_label" bash -c "$STATUS_SCRIPT"
+    fi
+
+    # Layout recipe:
+    #   1. Split status (full width) from a bottom area (70% height)
+    #   2. Split bottom into top-row and bottom-row (50/50)
+    #   3. Split each row left/right (50/50)
+    #
+    # Result:
+    #   pane 0: status (full width, top 30%)
+    #   pane 1: tail-topleft    pane 2: tail-topright
+    #   pane 3: tail-bottomleft pane 4: tail-bottomright
+
+    # Step 1: status on top, tail-area below (70% to bottom)
+    tmux split-window -t "$SESSION:$page_label.0" -v -l 70% \
+        bash -c "$(tail_cmd "${page_graphs[0]}")"
+    # Now: pane0=status, pane1=tail1
+
+    if [[ $n_on_page -ge 2 ]]; then
+        # Step 2: split pane1 into top-row / bottom-row (50/50 vertical)
+        tmux split-window -t "$SESSION:$page_label.1" -v -l 50% \
+            bash -c "$(tail_cmd "${page_graphs[1]}")"
+        # Now: pane0=status, pane1=tail1(top), pane2=tail2(bottom)
+    fi
+
+    if [[ $n_on_page -ge 3 ]]; then
+        # Step 3: split top-row (pane1) left/right
+        tmux split-window -t "$SESSION:$page_label.1" -h -l 50% \
+            bash -c "$(tail_cmd "${page_graphs[2]}")"
+        # Now: pane0=status, pane1=tail1(TL), pane2=tail3(TR), pane3=tail2(bottom)
+    fi
+
+    if [[ $n_on_page -ge 4 ]]; then
+        # Step 4: split bottom-row (pane3=tail2) left/right
+        tmux split-window -t "$SESSION:$page_label.3" -h -l 50% \
+            bash -c "$(tail_cmd "${page_graphs[3]}")"
+        # Now: pane0=status, pane1=TL, pane2=TR, pane3=BL, pane4=BR
+    fi
+done
+
 tmux select-window -t "${SESSION}:0"
 
+# ---------------------------------------------------------------------------
+# Keybindings — work from any pane, no Ctrl-b prefix needed
+# ---------------------------------------------------------------------------
+KILL_SCRIPT="${REPO_ROOT}/scripts/_bayes-kill.sh"
+cat > "$KILL_SCRIPT" << 'KILLEOF'
+#!/usr/bin/env bash
+for lock in /tmp/bayes-harness-*.lock; do
+    [[ -f "$lock" ]] || continue
+    pid=$(cat "$lock" 2>/dev/null)
+    if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
+        kill -- -"$pid" 2>/dev/null || kill "$pid" 2>/dev/null || true
+    fi
+    rm -f "$lock" 2>/dev/null
+done
+if [[ -f /tmp/bayes_recovery_pids ]]; then
+    while read -r pid; do
+        kill "$pid" 2>/dev/null || true
+    done < /tmp/bayes_recovery_pids
+    rm -f /tmp/bayes_recovery_pids
+fi
+KILLEOF
+chmod +x "$KILL_SCRIPT"
+
+# Keybindings (Ctrl-b prefix, so they don't conflict with copy-mode)
+# Ctrl-b K = kill all processes
+tmux bind-key -N "Kill all bayes" K run-shell "${KILL_SCRIPT}"
+# Ctrl-b Q = quit monitor  (uppercase to avoid conflict with copy-mode q)
+tmux bind-key -N "Quit monitor" Q kill-session -t "${SESSION}"
+# Ctrl-b R = reload entire monitor (rebuild all panes from current state)
+tmux bind-key -N "Reload monitor" R run-shell "${REPO_ROOT}/scripts/bayes-monitor.sh &"
+
+# Also increase scrollback so tail panes are useful
+tmux set-option -t "$SESSION" -g history-limit 10000
+
+page_hint=""
+if [[ $n_pages -gt 1 ]]; then
+    page_hint="  Ctrl-b n/p: next/prev page (${n_pages} pages)"
+fi
+
 echo "Monitor: tmux attach -t ${SESSION}"
-echo "  Window 0: status panel"
-echo "  Windows 1-${#SELECTED[@]}: per-graph logs"
-echo "  Ctrl-b n/p to switch, Ctrl-b <number> to jump"
+echo "  Top:    status (CPU + jobs)"
+echo "  Bottom: up to 4 tail panes per page"
+echo "  Keys:   k=kill all  r=reload  q=quit (no Ctrl-b needed)"
+[[ -n "$page_hint" ]] && echo "$page_hint"
+echo "  Ctrl-b ↑↓: switch pane  Ctrl-b [: scroll"
 echo ""
 
 if [[ -t 0 ]]; then

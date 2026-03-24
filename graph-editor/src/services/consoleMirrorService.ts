@@ -93,14 +93,34 @@ class ConsoleMirrorService {
       };
     }
 
-    // Auto-enable if user opted in.
+    // Auto-enable if user opted in (localStorage) or via URL param (?consolemirror).
     try {
-      this.enabled = typeof localStorage !== 'undefined' && localStorage.getItem(STORAGE_KEY) === '1';
+      const lsEnabled = typeof localStorage !== 'undefined' && localStorage.getItem(STORAGE_KEY) === '1';
+      let urlEnabled = false;
+      if (typeof window !== 'undefined') {
+        const params = new URLSearchParams(window.location.search);
+        urlEnabled = params.has('consolemirror');
+      }
+      this.enabled = lsEnabled || urlEnabled;
     } catch {
       this.enabled = false;
     }
 
-    if (this.enabled) this.hookConsole();
+    if (this.enabled) {
+      this.hookConsole();
+      // If enabled via URL param, auto-fire a boot mark so the entire startup is captured.
+      if (typeof window !== 'undefined') {
+        try {
+          const params = new URLSearchParams(window.location.search);
+          if (params.has('consolemirror')) {
+            const markLabel = params.get('consolemirror') || 'boot';
+            this.markNow(markLabel);
+            sessionLogMirrorService.enable();
+            sessionLogService.info('session', 'DEV_LOG_SYNC_START', `Auto-started via ?consolemirror=${markLabel}`);
+          }
+        } catch { /* ignore */ }
+      }
+    }
   }
 
   isEnabled(): boolean {

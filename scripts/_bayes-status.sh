@@ -187,25 +187,12 @@ while true; do
     frame+=$(printf "  %-28s %-14s %7s  %s\n" "─────" "─────" "───────" "──────")$'\n'
     frame+="${job_lines}"
     frame+="  * = running    ${running_count} active"$'\n'
-    frame+="  [k] kill all  [r] reload  [q] quit"$'\n'
+    frame+="  Ctrl-b K: kill all  Ctrl-b R: reload  Ctrl-b Q: quit"$'\n'
+    frame+="  Ctrl-b [: scroll pane (q to exit)  Ctrl-b n/p: next/prev page"$'\n'
 
     clear
     echo -e "$frame"
 
-    # ── 4. Wait for input or timeout ──
-    read -t 4 -n 1 key 2>/dev/null || key=""
-    case "$key" in
-        k|K)
-            kill_all
-            sleep 2
-            ;;
-        r|R)
-            # Immediate re-loop (skip the read timeout)
-            continue
-            ;;
-        q|Q)
-            tmux kill-session -t bayes-monitor 2>/dev/null || exit 0
-            exit 0
-            ;;
-    esac
+    # ── 4. Wait for next refresh ──
+    sleep 4
 done

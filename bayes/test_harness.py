@@ -312,7 +312,7 @@ def main():
                              "(ISO: YYYY-MM-DD) and filter snapshot DB to retrieved_at <= this date")
     args = parser.parse_args()
 
-    _acquire_lock(args.graph)
+    # NOTE: lock acquisition moved after graph name resolution (below)
 
     # Parse --feature flags into a dict
     feature_flags: dict[str, bool] = {}
@@ -361,6 +361,7 @@ def main():
         "branch": "conversion-flow-v2-recs-collapsed",
     }
     graph_name = GRAPH_SHORTCUTS.get(args.graph, args.graph)
+    _acquire_lock(graph_name)
     graph_file = f"{graph_name}.json"
 
     if asat_date:

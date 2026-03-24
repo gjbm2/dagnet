@@ -1012,14 +1012,15 @@ def _emit_cohort_likelihoods(
             f"p_type={'edge' if obs_type == 'window' else 'path'}{mixture_str}"
         )
 
-    # --- Single-retrieval days (existing per-day Binomial) ---
-    # Skip if trajectory potentials already cover the data — the daily
-    # obs are redundant (they're anchor days with only one retrieval age,
-    # already excluded from trajectories by the len < 2 filter above).
-    # Including them with very small arrays can trigger a PyTensor
-    # composite rewrite bug (bool→float64 type mismatch on shape=(2,)).
-    has_trajectory_potentials = bool(window_trajs) or bool(cohort_trajs)
-    if all_daily and not has_trajectory_potentials:
+    # --- Single-retrieval days (BetaBinomial p-anchor) ---
+    # Daily BetaBinomials anchor p to the observed conversion rate,
+    # preventing the p-latency tradeoff from drifting to degenerate
+    # modes (p≈1, mu→∞). Without them the trajectory Potentials let
+    # p and latency trade off freely.
+    # Guard: skip when array is very small (≤3 days) — too few
+    # points to anchor p, and small BetaBinomial arrays trigger a
+    # PyTensor composite rewrite bug (bool→float64 on shape≤2).
+    if all_daily and len(all_daily) > 3:
         n_arr = np.array([d.n for d in all_daily], dtype=np.int64)
         k_arr = np.array([min(d.k, d.n) for d in all_daily], dtype=np.int64)
         compl_arr = np.array([d.completeness for d in all_daily], dtype=np.float64)
