@@ -231,38 +231,33 @@ path in PropertiesPanel no longer needs to handle t95 or path_t95 edits
 creating manual entries. These edits are input-constraint changes, not
 model-output overrides.
 
-**Model vars entry management on source cards**: two distinct actions,
-reflecting the separation between the graph (live state) and parameter
-files (history archive).
+**Bayesian reset and history management**: two actions, presented as
+quiet links at the bottom of the Bayesian card in edge properties.
 
-**Action 1: Retire current** (per-source, e.g. "Reset bayesian"):
-- Removes the source's entry from `edge.p.model_vars[]` **on the graph
-  only**.
-- The parameter file retains the entry as history (fit_history).
-- If this source was the active promoted source, re-run promotion so the
-  next-best source takes over immediately.
-- Next Bayesian run finds no current bayesian entry on the graph → the
-  topology compiler falls back to analytic-derived mu/sigma as latency
-  priors → Bayes gets a fresh start.
-- Low-stakes, reversible: nothing is deleted from persistent storage,
-  Bayes simply re-runs with clean priors on the next invocation.
+**Action 1: "Reset on next run"**:
+- Sets a boolean flag on the parameter file (e.g.
+  `latency.bayes_reset: true`).
+- The topology compiler (`bayes/compiler/topology.py`) checks this flag.
+  When set, it ignores the previous bayesian posterior mu/sigma and falls
+  back to analytic-derived priors for that edge.
+- After Bayes runs successfully and produces a new posterior, the flag is
+  cleared automatically.
+- Low-stakes, reversible: nothing is deleted. The previous posterior
+  remains in fit_history. Bayes simply gets a fresh start from analytic
+  priors on the next invocation.
 - This is the normal corrective action when a Bayesian posterior has
   self-propagated into an unreasonable region.
 
-**Action 2: Clear history** (per-source, e.g. "Clear bayesian history"):
-- Removes all fit_history records for the source from the **parameter
-  file**.
-- **High-stakes**: fit_history is not just an audit trail — it will be
-  used as a model input for edge volatility / meta-dispersion (how much
-  an edge's parameters drift over time). Clearing it destroys signal.
+**Action 2: "Delete all history"**:
+- Removes all bayesian fit_history records from the parameter file.
+- Requires a **confirmation modal** because fit_history is not just an
+  audit trail — it will be used as a model input for edge volatility /
+  meta-dispersion (how much an edge's parameters drift over time).
+  Clearing it destroys signal.
 - User should only need this if history is genuinely polluted (e.g.
   early runs with bad data that would skew volatility estimates).
-- Does NOT affect the graph's current model_vars (use "Retire" for that).
 
-Both actions apply to any source card (analytic, analytic_be, bayesian),
-but the bayesian self-prior loop makes "Retire" most urgent there.
-
-Both should log via sessionLogService.
+Both actions should log via sessionLogService.
 
 ### 4.6 Backwards compatibility
 
@@ -408,22 +403,23 @@ This is the flow that is currently broken — today promotion stamps 85 onto
    persists it back to the file for the next run.
 
 3. **Bayesian should use its own previous posteriors as latency priors**
-   once available. The prior chain for Bayesian latency should be:
+   once available. Priors come from the **parameter file** (not the
+   graph), since the topology compiler reads file data. The prior chain:
 
-   1. Previous Bayesian posterior mu/sigma (from the `bayesian` model_vars
-      entry on the edge, if it exists)
-   2. Persisted mu/sigma from the parameter file (any source — analytic
-      bootstrap)
+   1. Previous Bayesian posterior mu/sigma from the parameter file's
+      `model_vars[]` bayesian entry — **unless `bayes_reset` is set**
+   2. Persisted mu/sigma from the parameter file's top-level
+      `latency.mu`/`.sigma` (any source — typically analytic bootstrap)
    3. Derived from `median_lag_days`/`mean_lag_days`
    4. Derived from `t95` (with assumed sigma)
    5. Uninformative default (mu=0, sigma=0.5)
 
    **Current state**: the topology compiler (`bayes/compiler/topology.py`
-   lines 112-139) reads `latency.mu`/`latency.sigma` from the edge's
-   top-level latency block. It does not look at `model_vars[]` entries.
-   This means it uses whatever was last persisted, regardless of source.
+   lines 112-139) reads `latency.mu`/`latency.sigma` from the top-level
+   latency block on the file. It does not look at `model_vars[]` entries.
 
    **Change needed**: the compiler should first check for a `bayesian`
-   entry in `edge.p.model_vars[]` and prefer its `latency.mu`/`.sigma`
-   as the prior. This ensures the Bayesian chain builds on itself rather
-   than being pulled toward the analytic fit's output on each run.
+   entry in the parameter file's `model_vars[]` and prefer its
+   `latency.mu`/`.sigma` as the prior — unless `latency.bayes_reset` is
+   set, in which case it skips step 1 and falls through. After a
+   successful run, the runner clears the `bayes_reset` flag.
