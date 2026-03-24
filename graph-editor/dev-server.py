@@ -781,19 +781,29 @@ async def bayes_config_endpoint():
     if not webhook_secret:
         raise HTTPException(status_code=500, detail="BAYES_WEBHOOK_SECRET not set in env")
 
-    # Modal URLs from env (same vars as Vercel). If not set, fall back to local.
     port = os.environ.get("PYTHON_API_PORT", "9000")
     vite_port = os.environ.get("VITE_PORT", "5173")
+    modal_base_url = os.environ.get("BAYES_MODAL_BASE_URL", "").strip()
 
     # Webhook URL: in local dev, ALWAYS use localhost (the Vite dev server serves
     # the webhook endpoint). The .env.local BAYES_WEBHOOK_URL points to production
-    # Vercel which is wrong for local dev. Only use the env var in production.
+    # Vercel which is wrong for local dev.
     webhook_url = f"http://localhost:{vite_port}/api/bayes-webhook"
 
+    # Modal URLs: derive from base URL if set, otherwise fall back to local dev server.
+    if modal_base_url:
+        submit_url = f"{modal_base_url}submit.modal.run"
+        status_url = f"{modal_base_url}status.modal.run"
+        cancel_url = f"{modal_base_url}cancel.modal.run"
+    else:
+        submit_url = f"http://localhost:{port}/api/bayes/submit"
+        status_url = f"http://localhost:{port}/api/bayes/status"
+        cancel_url = f"http://localhost:{port}/api/bayes/cancel"
+
     return {
-        "modal_submit_url": os.environ.get("BAYES_MODAL_SUBMIT_URL", f"http://localhost:{port}/api/bayes/submit"),
-        "modal_status_url": os.environ.get("BAYES_MODAL_STATUS_URL", f"http://localhost:{port}/api/bayes/status"),
-        "modal_cancel_url": os.environ.get("BAYES_MODAL_CANCEL_URL", f"http://localhost:{port}/api/bayes/cancel"),
+        "modal_submit_url": submit_url,
+        "modal_status_url": status_url,
+        "modal_cancel_url": cancel_url,
         "webhook_url": webhook_url,
         "webhook_secret": webhook_secret,
         "db_connection": db_connection,

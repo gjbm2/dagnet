@@ -1134,6 +1134,16 @@
           "default": false,
           "description": "If true, user manually set path_t95"
         },
+        "promoted_t95": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Winning model's t95 (written by applyPromotion, read-only for consumption)"
+        },
+        "promoted_path_t95": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Winning model's path_t95 (written by applyPromotion, read-only for consumption)"
+        },
         "onset_delta_days": {
           "type": "number",
           "minimum": 0,

@@ -147,11 +147,13 @@ export function applyPromotion(
   if (result.latency && p.latency) {
     p.latency.mu = result.latency.mu;
     p.latency.sigma = result.latency.sigma;
-    p.latency.t95 = result.latency.t95;
+    // Doc 19: t95 and path_t95 write to promoted_* fields to avoid
+    // circular dependency (user-configured t95 is an analytic fit input).
+    p.latency.promoted_t95 = result.latency.t95;
     p.latency.onset_delta_days = result.latency.onset_delta_days;
     if (result.latency.path_mu !== undefined) p.latency.path_mu = result.latency.path_mu;
     if (result.latency.path_sigma !== undefined) p.latency.path_sigma = result.latency.path_sigma;
-    if (result.latency.path_t95 !== undefined) p.latency.path_t95 = result.latency.path_t95;
+    if (result.latency.path_t95 !== undefined) p.latency.promoted_path_t95 = result.latency.path_t95;
   }
 
   return result.activeSource;

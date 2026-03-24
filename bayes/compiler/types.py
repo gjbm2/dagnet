@@ -72,6 +72,10 @@ class EdgeTopology:
     mu_prior: float = 0.0         # derived from lag summaries
     sigma_prior: float = 0.5      # derived from lag summaries
 
+    # Bayesian prior reset flag (doc 19): when True, compiler ignores
+    # previous bayesian posterior and falls back to analytic-derived priors.
+    bayes_reset: bool = False
+
     # Path from anchor to this edge's TARGET node (for cohort completeness)
     path_edge_ids: list[str] = field(default_factory=list)
     path_latency: PathLatency = field(default_factory=PathLatency)

@@ -22,6 +22,7 @@ import {
   computeAndApplyInboundN,
   runStage2EnhancementsAndInboundN,
   type FetchItem,
+  persistGraphMasteredLatencyToParameterFiles,
 } from '../fetchDataService';
 import type { Graph, DateRange } from '../../types';
 import { dataOperationsService } from '../dataOperationsService';
@@ -1377,6 +1378,103 @@ describe('FetchDataService', () => {
       
       expect(result).toBe(false);
     });
+  });
+});
+
+// ── Doc 19: persistGraphMasteredLatencyToParameterFiles lock-gating ─────────
+
+describe('persistGraphMasteredLatencyToParameterFiles (doc 19)', () => {
+  let putSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    putSpy = vi.spyOn(dataOperationsService, 'putParameterToFile').mockResolvedValue(undefined as any);
+  });
+
+  afterEach(() => {
+    putSpy.mockRestore();
+  });
+
+  function makeGraph(latency: Record<string, any>): any {
+    return {
+      edges: [{
+        uuid: 'edge-1',
+        from: 'A',
+        to: 'B',
+        p: {
+          id: 'param-1',
+          latency: {
+            latency_parameter: true,
+            ...latency,
+          },
+        },
+      }],
+    };
+  }
+
+  it('should persist promoted_t95 to file t95 when override lock is off', async () => {
+    const graph = makeGraph({
+      t95: 14,              // user's old value
+      t95_overridden: false, // unlocked
+      promoted_t95: 85,      // model output
+      path_t95: 20,
+      path_t95_overridden: false,
+      promoted_path_t95: 46,
+    });
+    const setGraph = vi.fn();
+
+    await persistGraphMasteredLatencyToParameterFiles({
+      graph, setGraph, edgeIds: ['edge-1'],
+    });
+
+    // Persist should have been called
+    expect(putSpy).toHaveBeenCalledTimes(1);
+    // The edge's t95 should have been updated from promoted_t95 before persist
+    expect(graph.edges[0].p.latency.t95).toBe(85);
+    expect(graph.edges[0].p.latency.path_t95).toBe(46);
+  });
+
+  it('should NOT overwrite file t95 when override lock is on', async () => {
+    const graph = makeGraph({
+      t95: 14,              // user's locked value
+      t95_overridden: true,  // LOCKED
+      promoted_t95: 85,      // model output — should NOT overwrite
+      path_t95: 25,
+      path_t95_overridden: true, // LOCKED
+      promoted_path_t95: 46,
+    });
+    const setGraph = vi.fn();
+
+    await persistGraphMasteredLatencyToParameterFiles({
+      graph, setGraph, edgeIds: ['edge-1'],
+    });
+
+    // Persist should NOT have been called — both locked, nothing to write
+    expect(putSpy).not.toHaveBeenCalled();
+    // User's values preserved
+    expect(graph.edges[0].p.latency.t95).toBe(14);
+    expect(graph.edges[0].p.latency.path_t95).toBe(25);
+  });
+
+  it('should persist path_t95 but not t95 when only t95 is locked', async () => {
+    const graph = makeGraph({
+      t95: 14,
+      t95_overridden: true,      // LOCKED
+      promoted_t95: 85,
+      path_t95: 20,
+      path_t95_overridden: false, // unlocked
+      promoted_path_t95: 46,
+    });
+    const setGraph = vi.fn();
+
+    await persistGraphMasteredLatencyToParameterFiles({
+      graph, setGraph, edgeIds: ['edge-1'],
+    });
+
+    // Persist called for path_t95 only
+    expect(putSpy).toHaveBeenCalledTimes(1);
+    // t95 preserved (locked), path_t95 updated (unlocked)
+    expect(graph.edges[0].p.latency.t95).toBe(14);
+    expect(graph.edges[0].p.latency.path_t95).toBe(46);
   });
 });
 

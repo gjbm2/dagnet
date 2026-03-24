@@ -36,6 +36,7 @@ import {
   getActiveEdges,
   // Graph-level LAG enhancement
   enhanceGraphLatencies,
+  computePathT95,
   // LAG types
   type CohortData,
   type LagDistributionFit,
@@ -53,6 +54,7 @@ import {
   LATENCY_T95_PERCENTILE,
   RECENCY_HALF_LIFE_DAYS,
   ONSET_MASS_FRACTION_ALPHA,
+  DEFAULT_T95_DAYS,
 } from '../../constants/latency';
 import { deriveOnsetDeltaDaysFromLagHistogram } from '../onsetDerivationService';
 
@@ -2163,5 +2165,93 @@ describe('LAG path_t95 Accumulation (baseline characterisation)', () => {
     expect(pathT95).toBeDefined();
     // Lock in path_t95 for two-edge sum (characterisation)
     expect(pathT95!).toBeCloseTo(25.48, 2);
+  });
+});
+
+// ── Doc 19: promoted_t95 / promoted_path_t95 field separation ──────────────
+
+describe('computePathT95 promoted field separation (doc 19)', () => {
+  // Build a simple A → B → C graph for path_t95 computation.
+  function makeLinearGraph(edgeLatency: {
+    e1: { t95?: number; promoted_t95?: number; latency_parameter?: boolean };
+    e2: { t95?: number; promoted_t95?: number; latency_parameter?: boolean };
+  }): GraphForPath {
+    return {
+      nodes: [
+        { id: 'A', type: 'start' },
+        { id: 'B', type: 'event' },
+        { id: 'C', type: 'event' },
+      ],
+      edges: [
+        {
+          uuid: 'e1', from: 'A', to: 'B',
+          p: {
+            latency: {
+              latency_parameter: edgeLatency.e1.latency_parameter ?? true,
+              t95: edgeLatency.e1.t95,
+              promoted_t95: edgeLatency.e1.promoted_t95,
+            },
+            mean: 0.5,
+          },
+        },
+        {
+          uuid: 'e2', from: 'B', to: 'C',
+          p: {
+            latency: {
+              latency_parameter: edgeLatency.e2.latency_parameter ?? true,
+              t95: edgeLatency.e2.t95,
+              promoted_t95: edgeLatency.e2.promoted_t95,
+            },
+            mean: 0.5,
+          },
+        },
+      ],
+    };
+  }
+
+  it('should use promoted_t95 over user-configured t95 for path computation', () => {
+    // User set t95=14 (locked constraint), model produced promoted_t95=85.
+    // Path computation should use the model's 85, not the user's 14.
+    const graph = makeLinearGraph({
+      e1: { t95: 14, promoted_t95: 85 },
+      e2: { t95: 10, promoted_t95: 40 },
+    });
+    const activeEdges = new Set(['e1', 'e2']);
+
+    const result = computePathT95(graph, activeEdges, 'A');
+
+    // e1 path_t95 = 0 (anchor) + 85 = 85
+    expect(result.get('e1')).toBe(85);
+    // e2 path_t95 = 85 + 40 = 125
+    expect(result.get('e2')).toBe(125);
+  });
+
+  it('should fall back to user-configured t95 when promoted_t95 is absent (backwards compatibility)', () => {
+    // Pre-migration edge: no promoted_t95, only t95.
+    const graph = makeLinearGraph({
+      e1: { t95: 30 },
+      e2: { t95: 20 },
+    });
+    const activeEdges = new Set(['e1', 'e2']);
+
+    const result = computePathT95(graph, activeEdges, 'A');
+
+    // e1 path_t95 = 0 + 30 = 30
+    expect(result.get('e1')).toBe(30);
+    // e2 path_t95 = 30 + 20 = 50
+    expect(result.get('e2')).toBe(50);
+  });
+
+  it('should fall back to DEFAULT_T95_DAYS when neither promoted_t95 nor t95 is set', () => {
+    const graph = makeLinearGraph({
+      e1: { latency_parameter: true },
+      e2: { latency_parameter: true },
+    });
+    const activeEdges = new Set(['e1', 'e2']);
+
+    const result = computePathT95(graph, activeEdges, 'A');
+
+    expect(result.get('e1')).toBe(DEFAULT_T95_DAYS);
+    expect(result.get('e2')).toBe(DEFAULT_T95_DAYS * 2);
   });
 });

@@ -73,7 +73,7 @@ describe('persistGraphMasteredLatencyToParameterFiles', () => {
         query: 'from(A).to(B)',
         p: {
           id: 'p1',
-          latency: { path_t95: 37.61, t95: 13.12, path_t95_overridden: false, t95_overridden: false },
+          latency: { path_t95: 30.16, promoted_path_t95: 37.61, t95: 13.12, path_t95_overridden: false, t95_overridden: false },
         } as any,
       } as any],
     } as any;
@@ -106,7 +106,7 @@ describe('persistGraphMasteredLatencyToParameterFiles', () => {
         query: 'from(A).to(B)',
         p: {
           id: 'p1',
-          latency: { path_t95: 37.61, t95: 13.12, path_t95_overridden: false, t95_overridden: false },
+          latency: { path_t95: 30.16, promoted_path_t95: 37.61, t95: 13.12, path_t95_overridden: true, t95_overridden: false, mu: 1.0, sigma: 0.5 },
         } as any,
       } as any],
     } as any;
@@ -141,11 +141,14 @@ describe('persistGraphMasteredLatencyToParameterFiles', () => {
         query: 'from(A).to(B)',
         p: {
           id: 'p1',
-          latency: { 
-            path_t95: 37.61, 
-            t95: 13.12, 
+          latency: {
+            path_t95: 30.16,
+            promoted_path_t95: 37.61,
+            t95: 13.12,
             onset_delta_days: 5,  // Graph has updated onset
-            onset_delta_days_overridden: false 
+            onset_delta_days_overridden: false,
+            mu: 1.0,
+            sigma: 0.5,
           },
         } as any,
       } as any],
@@ -264,11 +267,14 @@ describe('persistGraphMasteredLatencyToParameterFiles', () => {
         query: 'from(A).to(B)',
         p: {
           id: 'p1',
-          latency: { 
-            path_t95: 37.61, 
-            t95: 13.12, 
+          latency: {
+            path_t95: 30.16,
+            promoted_path_t95: 37.61,
+            t95: 13.12,
             onset_delta_days: 5,  // Graph has different value
-            onset_delta_days_overridden: false 
+            onset_delta_days_overridden: false,
+            mu: 1.0,
+            sigma: 0.5,
           },
         } as any,
       } as any],

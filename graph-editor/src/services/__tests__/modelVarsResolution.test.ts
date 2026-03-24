@@ -257,11 +257,14 @@ describe('applyPromotion', () => {
     expect(p.stdev).toBe(0); // unchanged
     expect(p.latency?.mu).toBe(2.3);
     expect(p.latency?.sigma).toBe(0.7);
-    expect(p.latency?.t95).toBe(40);
+    // Doc 19: t95 and path_t95 write to promoted_* fields to avoid circular dependency.
+    expect(p.latency?.t95).toBe(0); // user-configured value unchanged
+    expect(p.latency?.promoted_t95).toBe(40); // model output in promoted field
     expect(p.latency?.onset_delta_days).toBe(2.5);
     expect(p.latency?.path_mu).toBe(2.9);
     expect(p.latency?.path_sigma).toBe(0.85);
-    expect(p.latency?.path_t95).toBe(55);
+    expect(p.latency?.path_t95).toBeUndefined(); // user-configured value unchanged (was not set)
+    expect(p.latency?.promoted_path_t95).toBe(55); // model output in promoted field
   });
 
   it('should respect edge-level model_source_preference', () => {
@@ -303,6 +306,33 @@ describe('applyPromotion', () => {
     expect(source).toBeUndefined();
     expect(p.mean).toBe(0.99);
     expect(p.stdev).toBe(0.01);
+  });
+
+  it('should preserve user-configured t95 when Bayesian produces a different value (doc 19)', () => {
+    // Simulates: user locked t95=14, Bayesian posterior produces t95=85.
+    // Promotion must NOT overwrite the user's value.
+    const p: ProbabilityParam = {
+      mean: 0,
+      stdev: 0,
+      latency: {
+        mu: 0, sigma: 0, t95: 14, onset_delta_days: 0,
+        t95_overridden: true,
+        path_t95: 25,
+        path_t95_overridden: true,
+      },
+      model_vars: [bayesianGated], // bayesian has t95=40, path_t95=55
+    };
+
+    applyPromotion(p, undefined);
+
+    // User-configured values untouched
+    expect(p.latency?.t95).toBe(14);
+    expect(p.latency?.path_t95).toBe(25);
+    expect(p.latency?.t95_overridden).toBe(true);
+    expect(p.latency?.path_t95_overridden).toBe(true);
+    // Model output in promoted fields
+    expect(p.latency?.promoted_t95).toBe(40);
+    expect(p.latency?.promoted_path_t95).toBe(55);
   });
 
   it('should not write latency when ProbabilityParam has no latency block', () => {

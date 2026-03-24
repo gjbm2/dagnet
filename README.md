@@ -198,12 +198,11 @@ Both modes run the webhook handler locally with full terminal logs. The toggle a
 | `cloudflared` | `sudo dpkg -i cloudflared-linux-amd64.deb` or `brew install cloudflare/cloudflare/cloudflared` | Tunnel for Modal → local webhook (no account needed) |
 | `modal` | `pip install modal && modal token set` | Deploying to Modal (not needed for local-only dev) |
 
-**Bayes env vars (in `.env.local`):**
+**Bayes env vars (in `.env.local` and Vercel):**
 
 | Variable | Purpose |
 |----------|---------|
-| `BAYES_MODAL_SUBMIT_URL` | Modal /submit endpoint |
-| `BAYES_MODAL_STATUS_URL` | Modal /status endpoint |
+| `BAYES_MODAL_BASE_URL` | Modal endpoint base (e.g. `https://gjbm2--dagnet-bayes-`). Routes are derived: `{base}submit.modal.run`, `{base}status.modal.run`, `{base}cancel.modal.run` |
 | `BAYES_WEBHOOK_SECRET` | AES-GCM key for callback token encryption |
 | `BAYES_WEBHOOK_URL` | Production webhook URL (Vercel) |
 

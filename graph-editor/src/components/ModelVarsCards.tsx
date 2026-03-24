@@ -504,9 +504,8 @@ function OutputCardBody({ onCommit, onStartEdit, onClearFieldOverride, promotedM
         <FieldGroup label="Edge latency">
           <RoField label="μ" value={fmt(promotedLatency.mu, 3)} />
           <RoField label="σ" value={fmt(promotedLatency.sigma, 3)} />
-          <OutputInput label="t95" field="t95" value={promotedLatency.t95} dp={1} unit="d"
-            overridden={promotedLatency.t95_overridden} onClearOverride={() => onClearFieldOverride('t95_overridden', true)}
-            onCommit={onCommit} onStartEdit={onStartEdit} disabled={disabled} />
+          {/* Doc 19: t95 is read-only in Output card — user edits the input constraint elsewhere */}
+          <RoField label="t95" value={fmt(promotedLatency.promoted_t95 ?? promotedLatency.t95, 1)} unit="d" />
           <OutputInput label="onset" field="onset_delta_days" value={promotedLatency.onset_delta_days} dp={0} unit="d"
             overridden={promotedLatency.onset_delta_days_overridden} onClearOverride={() => onClearFieldOverride('onset_delta_days_overridden', true)}
             onCommit={onCommit} onStartEdit={onStartEdit} disabled={disabled} />
@@ -518,9 +517,8 @@ function OutputCardBody({ onCommit, onStartEdit, onClearFieldOverride, promotedM
           <RoField label="path μ" value={fmt(promotedLatency.path_mu, 3)} />
           <RoField label="path σ" value={fmt(promotedLatency.path_sigma, 3)} />
           <RoField label="path onset" value={fmt(promotedLatency.path_onset_delta_days, 0)} unit="d" />
-          <OutputInput label="path t95" field="path_t95" value={promotedLatency.path_t95} dp={1} unit="d"
-            overridden={promotedLatency.path_t95_overridden} onClearOverride={() => onClearFieldOverride('path_t95_overridden', true)}
-            onCommit={onCommit} onStartEdit={onStartEdit} disabled={disabled} />
+          {/* Doc 19: path_t95 is read-only in Output card */}
+          <RoField label="path t95" value={fmt(promotedLatency.promoted_path_t95 ?? promotedLatency.path_t95, 1)} unit="d" />
         </FieldGroup>
       )}
     </div>

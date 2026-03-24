@@ -54,6 +54,10 @@ export interface LatencyConfig {
   anchor_node_id?: string;
   t95?: number;
   path_t95?: number;  // Cumulative latency from anchor, computed by statisticalEnhancementService
+  /** Doc 19: winning model's t95 (written by applyPromotion). */
+  promoted_t95?: number;
+  /** Doc 19: winning model's path_t95 (written by applyPromotion). */
+  promoted_path_t95?: number;
 }
 
 export interface RefetchPolicyInput {

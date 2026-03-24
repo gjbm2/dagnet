@@ -132,14 +132,14 @@ This starts both Vite (:5173) and Python (:9000) in tmux panes.
 ### 2. Ensure .env.local has Bayes config
 
 ```
-BAYES_MODAL_SUBMIT_URL=https://...modal.run
-BAYES_MODAL_STATUS_URL=https://...modal.run
+BAYES_MODAL_BASE_URL=https://gjbm2--dagnet-bayes-
 BAYES_WEBHOOK_SECRET=...
 BAYES_WEBHOOK_URL=https://dagnet-nine.vercel.app/api/bayes-webhook
 DB_CONNECTION=postgresql://...
 ```
 
-These are used by the `/api/bayes/config` endpoint and by Modal mode.
+The `/api/bayes/config` endpoint derives Modal routes from the base URL
+(e.g. `{base}submit.modal.run`, `{base}status.modal.run`, `{base}cancel.modal.run`).
 Local mode ignores the Modal URLs and uses localhost instead.
 
 ### 3. Use the dev toggle

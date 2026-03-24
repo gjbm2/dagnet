@@ -1311,7 +1311,9 @@ export default function PropertiesPanel({
       // This centralises the logic so it works from ANY entry point (Output card,
       // context menu, slider, etc.) — not just ModelVarsCards.
       const TOP_LEVEL_OVERRIDE_FIELDS = ['mean_overridden', 'stdev_overridden'];
-      const LATENCY_OVERRIDE_FIELDS = ['t95_overridden', 'onset_delta_days_overridden', 'path_t95_overridden'];
+      // Doc 19: t95_overridden and path_t95_overridden are input constraints for the analytic
+      // fit, NOT model-output overrides — they don't create manual model_vars entries.
+      const LATENCY_OVERRIDE_FIELDS = ['onset_delta_days_overridden'];
       const latencyChanges = (actualChanges as any).latency;
       const hasModelVarOverride = paramSlot === 'p' &&
         next.edges[edgeIndex].p?.model_vars?.length &&

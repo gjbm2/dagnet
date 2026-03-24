@@ -1168,6 +1168,10 @@ export interface GraphEdgeForPath {
       latency_parameter?: boolean;
       t95?: number;
       path_t95?: number;
+      /** Doc 19: winning model's t95 (written by applyPromotion). */
+      promoted_t95?: number;
+      /** Doc 19: winning model's path_t95 (written by applyPromotion). */
+      promoted_path_t95?: number;
       median_lag_days?: number;
       mean_lag_days?: number;
       completeness?: number;
@@ -1490,8 +1494,9 @@ export function computePathT95(
     for (const edge of outgoing) {
       const edgeId = getEdgeId(edge);
       // Phase 2: edge t95 is either computed or default-injected when latency is enabled.
+      // Doc 19: prefer promoted_t95 (model output) over t95 (user-configured input).
       const edgeT95 = edge.p?.latency?.latency_parameter === true
-        ? (edge.p?.latency?.t95 ?? defaultT95Days)
+        ? (edge.p?.latency?.promoted_t95 ?? edge.p?.latency?.t95 ?? defaultT95Days)
         : 0;
 
       // path_t95 for this edge = path to source node + edge's own t95
@@ -2448,10 +2453,12 @@ export function enhanceGraphLatencies(
         //   and/or moment-matched A→Y fit when available.
         //
         // Override flags MUST NOT change semantic meaning; they only gate overwrite permissions.
+        // Doc 19: prefer promoted_path_t95 (model output) over path_t95 (user-configured).
         const latencyAny = (edge.p as any)?.latency as any | undefined;
+        const rawStoredPathT95 = latencyAny?.promoted_path_t95 ?? latencyAny?.path_t95;
         const storedPathT95 =
-          typeof latencyAny?.path_t95 === 'number' && Number.isFinite(latencyAny?.path_t95) && latencyAny.path_t95 > 0
-            ? latencyAny.path_t95
+          typeof rawStoredPathT95 === 'number' && Number.isFinite(rawStoredPathT95) && rawStoredPathT95 > 0
+            ? rawStoredPathT95
             : undefined;
 
         const candidates = [

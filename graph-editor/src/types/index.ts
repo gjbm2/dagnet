@@ -532,7 +532,14 @@ export interface LatencyConfig {
   path_t95?: number;
   /** True if user manually set path_t95 (vs computed from topo pass) */
   path_t95_overridden?: boolean;
-  
+
+  /** Winning model's t95 — written by applyPromotion, read by consumption (topo pass, planner).
+   *  Separate from t95 (user-configured input constraint) to avoid circular dependency (doc 19).
+   */
+  promoted_t95?: number;
+  /** Winning model's path_t95 — written by applyPromotion, read by consumption. */
+  promoted_path_t95?: number;
+
   /** Onset delay in days - minimum time before conversions begin.
    *  Aggregated from window() slice histograms (min of per-slice onset values).
    *  Used for shifted lognormal latency fitting and maturity calculations.

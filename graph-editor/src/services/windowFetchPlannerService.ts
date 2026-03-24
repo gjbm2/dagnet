@@ -655,7 +655,10 @@ class WindowFetchPlannerService {
    * is sufficient.
    */
   private getPathT95ForEdge(edge: any, graph: Graph): number | undefined {
-    // If edge already has path_t95, use it (set by fetchDataService after fetch)
+    // Doc 19: prefer promoted_path_t95 (model output) over path_t95 (user-configured).
+    if (edge.p?.latency?.promoted_path_t95 !== undefined) {
+      return edge.p.latency.promoted_path_t95;
+    }
     if (edge.p?.latency?.path_t95 !== undefined) {
       return edge.p.latency.path_t95;
     }
@@ -693,8 +696,9 @@ class WindowFetchPlannerService {
         p: e.p ? {
           latency: e.p.latency ? {
             latency_parameter: e.p.latency.latency_parameter,
-            t95: e.p.latency.t95,
-            path_t95: e.p.latency.path_t95,
+            // Doc 19: promoted values for consumption, fallback to user-configured.
+            t95: e.p.latency.promoted_t95 ?? e.p.latency.t95,
+            path_t95: e.p.latency.promoted_path_t95 ?? e.p.latency.path_t95,
           } : undefined,
           mean: e.p.mean,
         } : undefined,
@@ -1111,15 +1115,16 @@ class WindowFetchPlannerService {
       const daysSinceRetrieval = (Date.now() - retrievedDate.getTime()) / (24 * 60 * 60 * 1000);
       
       // Select effective t95 based on query mode
+      // Doc 19: prefer promoted values (model output) over user-configured.
       // For cohort queries: use path_t95 (cumulative from anchor) if available
       // For window queries: use edge-local t95
       let effectiveT95: number;
       if (isCohortQuery) {
         // Try to get path_t95 (computed on-demand if not present on edge)
         const pathT95 = this.getPathT95ForEdge(edge, graph);
-        effectiveT95 = pathT95 ?? latencyConfig?.t95 ?? 0;
+        effectiveT95 = pathT95 ?? latencyConfig?.promoted_t95 ?? latencyConfig?.t95 ?? 0;
       } else {
-        effectiveT95 = latencyConfig?.t95 ?? 0;
+        effectiveT95 = latencyConfig?.promoted_t95 ?? latencyConfig?.t95 ?? 0;
       }
       
       // Get query end date
@@ -1438,7 +1443,8 @@ class WindowFetchPlannerService {
       
       // Get effective t95 from edge
       const latencyConfig = edge?.p?.latency as LatencyConfig | undefined;
-      const effectiveT95 = latencyConfig?.path_t95 ?? latencyConfig?.t95;
+      // Doc 19: prefer promoted values (model output) over user-configured.
+      const effectiveT95 = latencyConfig?.promoted_path_t95 ?? latencyConfig?.path_t95 ?? latencyConfig?.promoted_t95 ?? latencyConfig?.t95;
       
       // Derive the staleness reason from available context rather than hardcoding.
       // - Cohort mode with latency → immature cohort dates within maturity horizon

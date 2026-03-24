@@ -281,7 +281,8 @@ export async function cancelBayesJob(jobId: string, cancelUrl?: string): Promise
   let url = cancelUrl;
   if (!url) {
     const config = await fetchBayesConfig();
-    url = config.modal_cancel_url || 'http://localhost:9000/api/bayes/cancel';
+    url = config.modal_cancel_url;
+    if (!url) throw new Error('No cancel URL configured');
   }
   const fullUrl = `${url}?call_id=${encodeURIComponent(jobId)}`;
 

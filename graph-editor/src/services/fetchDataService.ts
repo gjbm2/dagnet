@@ -785,14 +785,15 @@ export function computeAndApplyPathT95(
       p: e.p ? {
         latency: e.p.latency ? {
           latency_parameter: e.p.latency.latency_parameter,
-          t95: e.p.latency.t95,
-          path_t95: e.p.latency.path_t95,
+          // Doc 19: promoted values for consumption, fallback to user-configured.
+          t95: e.p.latency.promoted_t95 ?? e.p.latency.t95,
+          path_t95: e.p.latency.promoted_path_t95 ?? e.p.latency.path_t95,
         } : undefined,
         mean: e.p.mean,
       } : undefined,
     })),
   };
-  
+
   // Get active edges (edges with non-zero probability)
   // Pass whatIfDSL for scenario-aware active edge determination (B4 fix)
   const activeEdges = getActiveEdges(graphForPath, whatIfDSL);
@@ -931,8 +932,9 @@ export function computeAndApplyInboundN(
             latency: e.p.latency
               ? {
                   latency_parameter: e.p.latency.latency_parameter,
-                  t95: e.p.latency.t95,
-                  path_t95: e.p.latency.path_t95,
+                  // Doc 19: promoted values for consumption, fallback to user-configured.
+                  t95: e.p.latency.promoted_t95 ?? e.p.latency.t95,
+                  path_t95: e.p.latency.promoted_path_t95 ?? e.p.latency.path_t95,
                 }
               : undefined,
             mean: e.p.mean,
@@ -2061,21 +2063,35 @@ export async function persistGraphMasteredLatencyToParameterFiles(args: {
       const lat = edge?.p?.latency;
       // Only persist when there is something meaningful to persist.
       //
-      // Policy:
+      // Policy (doc 19):
+      // - Read from promoted_* fields (model output), not t95/path_t95 (user-configured).
       // - Persist edge t95 only for latency-enabled edges (local latency parameter).
       // - Persist path_t95 only when it is a positive finite horizon (i.e. behind a lagged path).
       // - Avoid writing 0/undefined horizons into files (prevents churn + accidental "unlagging").
+      // - Gate writes on override locks: when overridden, user's value is authoritative.
+      const promotedT95 = lat?.promoted_t95;
+      const promotedPathT95 = lat?.promoted_path_t95;
       const shouldWriteT95 =
         lat?.latency_parameter === true &&
-        typeof lat.t95 === 'number' &&
-        Number.isFinite(lat.t95) &&
-        lat.t95 > 0;
+        lat?.t95_overridden !== true &&
+        typeof promotedT95 === 'number' &&
+        Number.isFinite(promotedT95) &&
+        promotedT95 > 0;
       const shouldWritePath =
-        typeof lat?.path_t95 === 'number' &&
-        Number.isFinite(lat.path_t95) &&
-        lat.path_t95 > 0;
+        lat?.path_t95_overridden !== true &&
+        typeof promotedPathT95 === 'number' &&
+        Number.isFinite(promotedPathT95) &&
+        promotedPathT95 > 0;
 
-      if (!shouldWriteT95 && !shouldWritePath) continue;
+      // Doc 19 §4.4: mu/sigma always persist for bootstrap continuity.
+      const shouldWriteModel = typeof lat?.mu === 'number' || typeof lat?.sigma === 'number';
+      if (!shouldWriteT95 && !shouldWritePath && !shouldWriteModel) continue;
+
+      // Doc 19: copy promoted values to t95/path_t95 on the edge so that
+      // putParameterToFile (which copies the latency block) persists the
+      // model output. Only when not overridden (checked above).
+      if (shouldWriteT95) lat.t95 = promotedT95;
+      if (shouldWritePath) lat.path_t95 = promotedPathT95;
 
       await dataOperationsService.putParameterToFile({
         paramId,

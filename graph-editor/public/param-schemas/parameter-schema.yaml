@@ -101,6 +101,17 @@ properties:
       path_t95_overridden:
         type: boolean
         description: "If true, user manually set path_t95"
+      promoted_t95:
+        type: number
+        minimum: 0
+        description: "Winning model's t95 (written by applyPromotion, read-only for consumption)"
+      promoted_path_t95:
+        type: number
+        minimum: 0
+        description: "Winning model's path_t95 (written by applyPromotion, read-only for consumption)"
+      bayes_reset:
+        type: boolean
+        description: "When true, Bayesian compiler ignores previous posterior and uses analytic-derived priors. Cleared after successful run."
       onset_delta_days:
         type: number
         minimum: 0
