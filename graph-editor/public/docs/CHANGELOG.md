@@ -1,4 +1,11 @@
 # DagNet Release Notes
+## Version 1.8.8b
+**Released:** 24-Mar-26
+
+Fixes to live share, Bayes run now working
+
+---
+
 ## Version 1.8.3b
 **Released:** 24-Mar-26
 
