@@ -35,70 +35,83 @@ vi.mock('../../../services/registryService', () => {
   };
 });
 
-vi.mock('../../../contexts/NavigatorContext', () => ({
-  useNavigatorContext: () => ({
-    state: {
-      isOpen: true,
-      isPinned: true,
-      searchQuery: '',
-      selectedRepo: 'test-repo',
-      selectedBranch: 'main',
-      expandedSections: [
-        'graphs',
-        'parameters',
-        'contexts',
-        'cases',
-        'nodes',
-        'events',
-      ],
-      availableRepos: [],
-      availableBranches: [],
-      viewMode: 'all',
-      showLocalOnly: false,
-      showDirtyOnly: false,
-      showOpenOnly: false,
-      sortBy: 'name',
-      groupBySubCategories: false,
-      groupByTags: false,
-      registryIndexes: {},
-    },
-    operations: {
-      toggleNavigator: vi.fn(),
-      togglePin: vi.fn(),
-      setSearchQuery: vi.fn(),
-      selectRepository: vi.fn(),
-      selectBranch: vi.fn(),
-      expandSection: vi.fn(),
-      collapseSection: vi.fn(),
-      setViewMode: vi.fn(),
-      setShowLocalOnly: vi.fn(),
-      setShowDirtyOnly: vi.fn(),
-      setShowOpenOnly: vi.fn(),
-      setSortBy: vi.fn(),
-      setGroupBySubCategories: vi.fn(),
-      setGroupByTags: vi.fn(),
-      reloadCredentials: vi.fn(),
-      refreshItems: vi.fn(),
-      forceFullReload: vi.fn(),
-    },
-    items: [],
-    isLoading: false,
-  }),
-}));
+vi.mock('../../../contexts/NavigatorContext', () => {
+  // Stable references to prevent infinite re-render loops —
+  // useEffect deps include `items` and `state.registryIndexes` by reference.
+  const stableItems: any[] = [];
+  const stableRegistryIndexes = {};
+  const stableExpandedSections = [
+    'graphs',
+    'parameters',
+    'contexts',
+    'cases',
+    'nodes',
+    'events',
+  ];
+  const stableAvailableRepos: any[] = [];
+  const stableAvailableBranches: any[] = [];
+  const stableOperations = {
+    toggleNavigator: vi.fn(),
+    togglePin: vi.fn(),
+    setSearchQuery: vi.fn(),
+    selectRepository: vi.fn(),
+    selectBranch: vi.fn(),
+    expandSection: vi.fn(),
+    collapseSection: vi.fn(),
+    setViewMode: vi.fn(),
+    setShowLocalOnly: vi.fn(),
+    setShowDirtyOnly: vi.fn(),
+    setShowOpenOnly: vi.fn(),
+    setSortBy: vi.fn(),
+    setGroupBySubCategories: vi.fn(),
+    setGroupByTags: vi.fn(),
+    setVisibleFileIds: vi.fn(),
+    reloadCredentials: vi.fn(),
+    refreshItems: vi.fn(),
+    forceFullReload: vi.fn(),
+  };
 
-vi.mock('../../../contexts/TabContext', () => ({
-  useTabContext: () => ({
-    tabs: [{ id: 'tab-1', fileId: 'event-signup', viewMode: 'interactive' }],
-    activeTabId: 'tab-1',
-    operations: {
-      switchTab: vi.fn(),
-      openTab: vi.fn(),
-    },
-  }),
-  useFileRegistry: () => ({
-    getFile: vi.fn(),
-  }),
-}));
+  return {
+    useNavigatorContext: () => ({
+      state: {
+        isOpen: true,
+        isPinned: true,
+        searchQuery: '',
+        selectedRepo: 'test-repo',
+        selectedBranch: 'main',
+        expandedSections: stableExpandedSections,
+        availableRepos: stableAvailableRepos,
+        availableBranches: stableAvailableBranches,
+        viewMode: 'all',
+        showLocalOnly: false,
+        showDirtyOnly: false,
+        showOpenOnly: false,
+        sortBy: 'name',
+        groupBySubCategories: false,
+        groupByTags: false,
+        registryIndexes: stableRegistryIndexes,
+      },
+      operations: stableOperations,
+      items: stableItems,
+      isLoading: false,
+    }),
+  };
+});
+
+vi.mock('../../../contexts/TabContext', () => {
+  const stableTabs = [{ id: 'tab-1', fileId: 'event-signup', viewMode: 'interactive' }];
+  const stableTabOps = { switchTab: vi.fn(), openTab: vi.fn() };
+  const stableFileRegistry = { getFile: vi.fn() };
+
+  return {
+    useTabContext: () => ({
+      tabs: stableTabs,
+      activeTabId: 'tab-1',
+      operations: stableTabOps,
+    }),
+    useFileRegistry: () => stableFileRegistry,
+  };
+});
 
 vi.mock('../../modals/SwitchBranchModal', () => ({
   SwitchBranchModal: () => null,

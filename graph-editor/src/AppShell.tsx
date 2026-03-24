@@ -1609,23 +1609,41 @@ function MainAppShellContent() {
           </div>
         )}
         
-        {/* Navigator panel - when pinned */}
-        {navState.isPinned && (
-          <div className="app-shell-nav-panel" style={{ 
-            display: 'flex',
-            flexDirection: 'column',
-            borderRight: isResizing ? '2px solid #0066cc' : '1px solid #e0e0e0',
-            background: '#f8f9fa',
-            overflow: 'hidden',
-            position: 'relative',
-            boxSizing: 'border-box',
-            width: `${navWidth}px`,
-            minWidth: '200px',
-            maxWidth: '800px',
-            flexShrink: 0,
-            transition: isResizing ? 'none' : 'width 0.1s ease-out'
-          }}>
-            {/* Navigator header - same height as tab bar */}
+        {/* Navigator panel - single instance, styled for pinned vs overlay */}
+        {(navState.isPinned || (!navState.isPinned && isHovering)) && (
+          <div
+            className={`app-shell-nav-panel${!navState.isPinned ? ' app-shell-nav-overlay' : ''}`}
+            style={navState.isPinned ? {
+              display: 'flex',
+              flexDirection: 'column',
+              borderRight: isResizing ? '2px solid #0066cc' : '1px solid #e0e0e0',
+              background: '#f8f9fa',
+              overflow: 'hidden',
+              position: 'relative',
+              boxSizing: 'border-box',
+              width: `${navWidth}px`,
+              minWidth: '200px',
+              maxWidth: '800px',
+              flexShrink: 0,
+              transition: isResizing ? 'none' : 'width 0.1s ease-out'
+            } : {
+              position: 'absolute',
+              left: 0,
+              top: 0,
+              bottom: 0,
+              width: '240px',
+              borderRight: '1px solid #e0e0e0',
+              background: '#f8f9fa',
+              zIndex: 100,
+              boxShadow: '4px 0 16px rgba(0, 0, 0, 0.2)',
+              display: 'flex',
+              flexDirection: 'column',
+              overflow: 'hidden'
+            }}
+            onMouseEnter={!navState.isPinned ? () => setIsHovering(true) : undefined}
+            onMouseLeave={!navState.isPinned ? () => setIsHovering(false) : undefined}
+          >
+            {/* Navigator header */}
             <div className="app-shell-nav-header" style={{
               height: '36px',
               padding: '8px 12px',
@@ -1644,110 +1662,65 @@ function MainAppShellContent() {
             onClick={() => navOperations.togglePin()}
             >
               <span style={{ fontSize: '12px', lineHeight: 1, flexShrink: 0 }}>▼</span>
-              <span style={{ 
-                fontSize: '13px', 
-                fontWeight: 500, 
+              <span style={{
+                fontSize: '13px',
+                fontWeight: 500,
                 lineHeight: 1,
                 overflow: 'hidden',
                 textOverflow: 'ellipsis'
               }}>Navigator</span>
+              {!navState.isPinned && (
+                <span
+                  style={{ marginLeft: 'auto', fontSize: '12px', cursor: 'pointer', padding: '4px', lineHeight: 1 }}
+                  onClick={(e) => { e.stopPropagation(); navOperations.togglePin(); }}
+                  title="Pin"
+                >
+                  📍
+                </span>
+              )}
             </div>
-            
-            {/* Navigator content */}
+
+            {/* Navigator content - single instance */}
             <div style={{ flex: 1, overflow: 'auto' }}>
               <NavigatorContent />
             </div>
-            
-            {/* Resize handle - always visible with subtle border */}
-            <div 
-              onMouseDown={(e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                // Capture starting positions
-                resizeStartX.current = e.clientX;
-                resizeStartWidth.current = navWidth;
-                setIsResizing(true);
-              }}
-              className="app-shell-resize-handle"
-              style={{
-                position: 'absolute',
-                right: '0',
-                top: 0,
-                bottom: 0,
-                width: '3px',
-                cursor: 'col-resize',
-                background: isResizing ? '#0066cc' : 'transparent',
-                borderLeft: isResizing ? 'none' : '1px solid #e0e0e0',
-                zIndex: 1,
-                transition: isResizing ? 'none' : 'background 0.2s, border 0.2s'
-              }}
-              onMouseEnter={(e) => {
-                if (!isResizing) {
-                  e.currentTarget.style.background = 'rgba(0, 102, 204, 0.3)';
-                }
-              }}
-              onMouseLeave={(e) => {
-                if (!isResizing) {
-                  e.currentTarget.style.background = 'transparent';
-                }
-              }}
-              title="Drag to resize Navigator"
-            />
-          </div>
-        )}
-        
-        {/* Navigator panel - overlay when unpinned + hovering */}
-        {!navState.isPinned && isHovering && (
-          <div 
-            className="app-shell-nav-panel app-shell-nav-overlay"
-            style={{ 
-              position: 'absolute',
-              left: 0,
-              top: 0,
-              bottom: 0,
-              width: '240px',
-              borderRight: '1px solid #e0e0e0',
-              background: '#f8f9fa',
-              zIndex: 100, // Above in-content elements (WindowSelector z:55), below menu dropdowns (z:1000+)
-              boxShadow: '4px 0 16px rgba(0, 0, 0, 0.2)',
-              display: 'flex',
-              flexDirection: 'column',
-              overflow: 'hidden'
-            }}
-            onMouseEnter={() => setIsHovering(true)}
-            onMouseLeave={() => setIsHovering(false)}
-          >
-            {/* Header in overlay */}
-            <div className="app-shell-nav-header" style={{
-              height: '36px',
-              padding: '8px 12px',
-              background: '#f8f9fa',
-              borderBottom: '1px solid #e0e0e0',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '6px',
-              cursor: 'pointer',
-              userSelect: 'none',
-              flexShrink: 0,
-              boxSizing: 'border-box'
-            }}
-            onClick={() => navOperations.togglePin()}
-            >
-              <span style={{ fontSize: '12px', lineHeight: 1 }}>▼</span>
-              <span style={{ fontSize: '13px', fontWeight: 500, lineHeight: 1 }}>Navigator</span>
-              <span 
-                style={{ marginLeft: 'auto', fontSize: '12px', cursor: 'pointer', padding: '4px', lineHeight: 1 }}
-                onClick={(e) => { e.stopPropagation(); navOperations.togglePin(); }}
-                title="Pin"
-              >
-                📍
-              </span>
-            </div>
-            
-            {/* Content */}
-            <div style={{ flex: 1, overflow: 'auto' }}>
-              <NavigatorContent />
-            </div>
+
+            {/* Resize handle - only when pinned */}
+            {navState.isPinned && (
+              <div
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  resizeStartX.current = e.clientX;
+                  resizeStartWidth.current = navWidth;
+                  setIsResizing(true);
+                }}
+                className="app-shell-resize-handle"
+                style={{
+                  position: 'absolute',
+                  right: '0',
+                  top: 0,
+                  bottom: 0,
+                  width: '3px',
+                  cursor: 'col-resize',
+                  background: isResizing ? '#0066cc' : 'transparent',
+                  borderLeft: isResizing ? 'none' : '1px solid #e0e0e0',
+                  zIndex: 1,
+                  transition: isResizing ? 'none' : 'background 0.2s, border 0.2s'
+                }}
+                onMouseEnter={(e) => {
+                  if (!isResizing) {
+                    e.currentTarget.style.background = 'rgba(0, 102, 204, 0.3)';
+                  }
+                }}
+                onMouseLeave={(e) => {
+                  if (!isResizing) {
+                    e.currentTarget.style.background = 'transparent';
+                  }
+                }}
+                title="Drag to resize Navigator"
+              />
+            )}
           </div>
         )}
         
