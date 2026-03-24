@@ -550,7 +550,9 @@ def _query_snapshot_subjects(
                 log.append(f"  snapshot: {edge_id[:8]}… → 0 rows (will fall back to param file)")
 
         except Exception as e:
-            log.append(f"  snapshot: {edge_id[:8]}… query failed: {e}")
+            # Debug: log the types of each param to trace 'can't adapt type' errors
+            eh_types = f", equiv_hashes types={[type(h).__name__ for h in (equivalent_hashes or [])]}" if equivalent_hashes else ""
+            log.append(f"  snapshot: {edge_id[:8]}… query failed: {e} [slice_keys={slice_keys}{eh_types}]")
 
     return result
 
