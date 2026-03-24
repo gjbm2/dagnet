@@ -32,7 +32,7 @@ import yaml
 from datetime import datetime, date, timedelta
 from typing import Any
 
-LOCK_FILE = "/tmp/bayes-harness.lock"
+LOCK_FILE_PREFIX = "/tmp/bayes-harness"
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 # Ensure lib paths are available
@@ -45,14 +45,21 @@ sys.path.insert(0, os.path.join(REPO_ROOT, "bayes"))
 # Lock management
 # ---------------------------------------------------------------------------
 
-def _acquire_lock():
-    """Ensure only one harness runs at a time. Kills any existing run."""
-    if os.path.exists(LOCK_FILE):
+def _acquire_lock(graph_name: str = ""):
+    """Ensure only one harness runs per graph. Kills any existing run for the same graph.
+
+    Uses per-graph lock files so different graphs can run in parallel
+    (e.g. for parallel param recovery tests).
+    """
+    suffix = f"-{graph_name}" if graph_name else ""
+    lock_file = f"{LOCK_FILE_PREFIX}{suffix}.lock"
+
+    if os.path.exists(lock_file):
         try:
-            with open(LOCK_FILE) as f:
+            with open(lock_file) as f:
                 old_pid = int(f.read().strip())
             os.kill(old_pid, 0)
-            print(f"Killing previous harness (PID {old_pid})…")
+            print(f"Killing previous harness for '{graph_name or 'default'}' (PID {old_pid})…")
             subprocess.run(["pkill", "-P", str(old_pid)], capture_output=True)
             try:
                 os.kill(old_pid, signal.SIGKILL)
@@ -62,16 +69,16 @@ def _acquire_lock():
         except (ProcessLookupError, ValueError):
             pass
         try:
-            os.remove(LOCK_FILE)
+            os.remove(lock_file)
         except FileNotFoundError:
             pass
 
-    with open(LOCK_FILE, "w") as f:
+    with open(lock_file, "w") as f:
         f.write(str(os.getpid()))
 
     def _release_lock(*_args):
         try:
-            os.remove(LOCK_FILE)
+            os.remove(lock_file)
         except FileNotFoundError:
             pass
 
@@ -274,8 +281,6 @@ def _run_preflight(
 # ---------------------------------------------------------------------------
 
 def main():
-    _acquire_lock()
-
     parser = argparse.ArgumentParser(description="Bayes test harness")
     parser.add_argument("--placeholder", action="store_true", help="Use placeholder mode (skip MCMC)")
     parser.add_argument("--no-webhook", action="store_true", help="Skip webhook call")
@@ -301,10 +306,13 @@ def main():
     parser.add_argument("--draws", type=int, default=None, help="MCMC draws per chain (default: 2000)")
     parser.add_argument("--tune", type=int, default=None, help="MCMC warmup steps per chain (default: 1000)")
     parser.add_argument("--chains", type=int, default=None, help="Number of MCMC chains (default: 4)")
+    parser.add_argument("--cores", type=int, default=None, help="Number of cores for sampling (default: chains)")
     parser.add_argument("--asat", type=str, default=None,
                         help="Reproduce a historical run: use graph/params from git as of this date "
                              "(ISO: YYYY-MM-DD) and filter snapshot DB to retrieved_at <= this date")
     args = parser.parse_args()
+
+    _acquire_lock(args.graph)
 
     # Parse --feature flags into a dict
     feature_flags: dict[str, bool] = {}
@@ -644,6 +652,7 @@ def main():
             **({"draws": args.draws} if args.draws else {}),
             **({"tune": args.tune} if args.tune else {}),
             **({"chains": args.chains} if args.chains else {}),
+            **({"cores": args.cores} if args.cores else {}),
         },
         "_job_id": f"harness-{int(time.time())}",
     }
@@ -661,7 +670,7 @@ def main():
     # --- Run MCMC ---
     import threading
 
-    LOG_PATH = "/tmp/bayes_harness.log"
+    LOG_PATH = f"/tmp/bayes_harness-{graph_name}.log"
     log_file = open(LOG_PATH, "w")
 
     def _print(msg="", **kwargs):

@@ -10,6 +10,9 @@ NOT run in CI — run manually before merging model changes:
     . graph-editor/venv/bin/activate
     pytest bayes/tests/test_param_recovery.py -v -s --timeout=600
 
+For parallel execution (all graphs simultaneously):
+    scripts/run-param-recovery.sh
+
 Requires:
   - Snapshot DB populated (run synth_gen.py --graph X --write-files first)
   - DB_CONNECTION in graph-editor/.env.local
@@ -44,6 +47,22 @@ if os.path.exists(_conf_path):
             _data_repo_dir = line.strip().split("=", 1)[1].strip().strip('"')
 DATA_REPO = os.path.join(REPO_ROOT, _data_repo_dir) if _data_repo_dir else ""
 
+# ---------------------------------------------------------------------------
+# Parallel execution defaults
+# ---------------------------------------------------------------------------
+# 3 chains × 3 cores per test → 5 tests × 3 cores = 15 of 16 cores
+DEFAULT_CHAINS = 3
+DEFAULT_CORES = 3
+
+# Pin thread counts to prevent nutpie/BLAS/OpenMP from spawning extra threads
+# that would cause contention during parallel runs.
+_THREAD_PIN_ENV = {
+    "OMP_NUM_THREADS": "1",
+    "MKL_NUM_THREADS": "1",
+    "OPENBLAS_NUM_THREADS": "1",
+    "NUMBA_NUM_THREADS": "1",
+}
+
 
 def _has_db_connection() -> bool:
     env_path = os.path.join(REPO_ROOT, "graph-editor", ".env.local")
@@ -74,12 +93,15 @@ def _run_harness(
     features: dict | None = None,
     draws: int = 1000,
     tune: int = 500,
-    chains: int = 4,
+    chains: int = DEFAULT_CHAINS,
+    cores: int = DEFAULT_CORES,
 ) -> str:
     """Run test_harness and return stdout.
 
-    Defaults to fast sampling (1000 draws, 500 tune, 2 chains) for
+    Defaults to fast sampling (1000 draws, 500 tune, 3 chains/cores) for
     regression tests. Wider tolerances compensate for fewer samples.
+    Thread-pinning env vars prevent BLAS/OpenMP oversubscription during
+    parallel runs.
     """
     cmd = [
         sys.executable,
@@ -90,14 +112,17 @@ def _run_harness(
         "--draws", str(draws),
         "--tune", str(tune),
         "--chains", str(chains),
+        "--cores", str(cores),
     ]
     if features:
         for k, v in features.items():
             cmd.extend(["--feature", f"{k}={'true' if v else 'false'}"])
 
+    env = {**os.environ, **_THREAD_PIN_ENV}
     result = subprocess.run(
         cmd, capture_output=True, text=True,
         timeout=timeout + 60,
+        env=env,
     )
     output = result.stdout + result.stderr
     if result.returncode != 0:
@@ -260,11 +285,22 @@ class TestParamRecovery:
     """Parameter recovery regression tests.
 
     Each test runs full MCMC and checks posteriors against ground truth.
-    Run with: pytest bayes/tests/test_param_recovery.py -v -s --timeout=600
+
+    Single graph:
+        pytest bayes/tests/test_param_recovery.py::TestParamRecovery::test_2step_synth -v -s
+    All (sequential):
+        pytest bayes/tests/test_param_recovery.py -v -s --timeout=600
+    All (parallel via tmux):
+        scripts/run-param-recovery.sh
     """
 
-    def test_2step_synth_recovery(self):
-        """2-step all-latency linear chain recovers mu, sigma, onset."""
+    def test_2step_synth(self):
+        """2-step all-latency linear chain: recovery + convergence diagnostics.
+
+        Checks mu/sigma/onset recovery AND zero divergences + non-degenerate
+        onset-mu correlation (merged from formerly separate tests to avoid
+        a redundant 5-min MCMC run on the same graph).
+        """
         graph_name = "synth-simple-abc"
         if not _has_synth_data(graph_name):
             pytest.skip(f"No synth data for {graph_name} — run synth_gen.py first")
@@ -272,7 +308,24 @@ class TestParamRecovery:
         truth = _load_truth(graph_name)
         output = _run_harness(graph_name, timeout=600)
         results = _parse_results(output)
+
+        # --- Recovery ---
         assert_recovery(graph_name, results, truth)
+
+        # --- Convergence diagnostics ---
+        # Zero divergences on clean synth data
+        div_match = re.search(r"divergences=(\d+)", output)
+        if div_match:
+            assert int(div_match.group(1)) == 0, "Expected 0 divergences on clean synth data"
+
+        # Onset-mu correlation isn't degenerate (identifiability check)
+        for prefix, post in results.get("edges", {}).items():
+            corr = post.get("onset_mu_corr")
+            if corr is not None:
+                assert abs(corr) < 0.99, (
+                    f"Edge {prefix}: onset-mu correlation {corr:.3f} is nearly "
+                    f"degenerate — identifiability problem"
+                )
 
     def test_4step_mirror_recovery(self):
         """4-step mirror (2 no-latency + 2 latency) recovers latency params."""
@@ -296,27 +349,3 @@ class TestParamRecovery:
         output = _run_harness(graph_name, timeout=600)
         results = _parse_results(output)
         assert_recovery(graph_name, results, truth)
-
-    def test_2step_convergence_diagnostics(self):
-        """2-step: zero divergences and onset-mu correlation < 0.99."""
-        graph_name = "synth-simple-abc"
-        if not _has_synth_data(graph_name):
-            pytest.skip(f"No synth data for {graph_name}")
-
-        truth = _load_truth(graph_name)
-        output = _run_harness(graph_name, timeout=600)
-        results = _parse_results(output)
-
-        # Check divergences
-        div_match = re.search(r"divergences=(\d+)", output)
-        if div_match:
-            assert int(div_match.group(1)) == 0, "Expected 0 divergences on clean synth data"
-
-        # Check onset-mu correlation isn't degenerate
-        for prefix, post in results.get("edges", {}).items():
-            corr = post.get("onset_mu_corr")
-            if corr is not None:
-                assert abs(corr) < 0.99, (
-                    f"Edge {prefix}: onset-mu correlation {corr:.3f} is nearly "
-                    f"degenerate — identifiability problem"
-                )

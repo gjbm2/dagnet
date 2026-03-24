@@ -75,6 +75,7 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
       if (isShareMode()) {
         console.log('[NavigatorContext] Share mode detected - skipping workspace initialisation');
         setIsInitialized(true);
+        try { window.dispatchEvent(new CustomEvent('dagnet:navigatorLoadComplete', { detail: {} })); } catch { /* best effort */ }
         return;
       }
       const savedState = await loadStateFromDB();

@@ -20,7 +20,8 @@ cd dagnet
 
 All tools read `DB_CONNECTION` from `graph-editor/.env.local`.
 Data repo path resolved from `.private-repos.conf`.
-Only one tool should run at a time (shared DB connections).
+Multiple graphs can run in parallel — each gets its own lock file
+and log file. Use `scripts/bayes-monitor.sh` to watch all active runs.
 
 ### Common Commands
 
@@ -38,16 +39,31 @@ python bayes/test_harness.py --graph branch --no-webhook --timeout 900  # comple
 python bayes/test_harness.py --graph X --feature latent_onset=false
 python bayes/test_harness.py --graph X --feature overdispersion=false
 
-# ── Parameter recovery (synth graphs only) ──
+# ── Parameter recovery (single graph) ──
 python bayes/param_recovery.py --graph synth-simple-abc          # 2-step (~270s)
 python bayes/param_recovery.py --graph synth-mirror-4step        # 4-step (~130s)
-python bayes/param_recovery.py --graph synth-diamond-test        # diamond (FAILS — join issue)
+python bayes/param_recovery.py --graph synth-simple-abc --chains 3 --cores 3  # reduced core budget
 # Reads .truth.yaml, runs MCMC, prints structured truth vs posterior comparison.
 # NOT for production data — use test_harness.py directly.
 
+# ── Parameter recovery (parallel — all synth graphs at once) ──
+scripts/run-param-recovery.sh                                    # all synth graphs
+scripts/run-param-recovery.sh synth-simple-abc synth-mirror-4step  # subset
+scripts/run-param-recovery.sh --list                             # list available graphs
+scripts/run-param-recovery.sh --chains 3 --draws 1000            # override sampling config
+# Launches param_recovery.py as background processes, one per graph.
+# Default: 3 chains/cores per graph. Adjust based on available cores.
+
+# ── Monitor active runs ──
+scripts/bayes-monitor.sh                                         # auto-discover active runs
+scripts/bayes-monitor.sh synth-simple-abc synth-mirror-4step     # specific graphs
+scripts/bayes-monitor.sh --all                                   # include finished runs
+# Opens a tmux session: status summary (top) + tailed logs (bottom).
+# Works for any harness run — manual, param recovery, or pytest.
+
 # ── Regression tests (pytest) ──
 pytest bayes/tests/test_param_recovery.py -v -s --timeout=600   # all synth graphs
-pytest bayes/tests/test_param_recovery.py::TestParamRecovery::test_4step_mirror_recovery -v -s  # single
+pytest bayes/tests/test_param_recovery.py::TestParamRecovery::test_2step_synth -v -s  # single
 
 # ── Synthetic data generation ──
 python bayes/synth_gen.py --graph simple --write-files           # regen DB + param files
@@ -64,16 +80,14 @@ bash graph-ops/scripts/validate-graph.sh graphs/<name>.json --deep  # + Integrit
 python bayes/diag_run.py                                         # per-variable rhat/ESS
 python bayes/diag_run.py --no-latency                            # fixed latency (Phase S)
 python bayes/diag_run.py --exclude delegation-straight           # exclude edge
-
-# Monitor any running tool
-tail -f /tmp/bayes_harness.log
 ```
 
 ### Log and Output Files
 
 | File | Purpose |
 |------|---------|
-| `/tmp/bayes_harness.log` | All tools write here (tail -f to watch) |
+| `/tmp/bayes_harness-{graph}.log` | Per-graph harness log (progress, diagnostics, posteriors) |
+| `/tmp/bayes_recovery-{graph}.log` | Per-graph param recovery output (truth comparison, PASS/FAIL) |
 | `/tmp/bayes_diagnostics.txt` | Per-variable diagnostic report from diag_run |
 
 ### Two workflows: param recovery vs production
@@ -81,12 +95,14 @@ tail -f /tmp/bayes_harness.log
 | | Param recovery | Production |
 |---|---|---|
 | **Purpose** | Does the model recover known parameters? | Does the model converge on real data? |
-| **Tool** | `param_recovery.py` / `test_param_recovery.py` | `test_harness.py` |
+| **Tool** | `param_recovery.py` / `run-param-recovery.sh` | `test_harness.py` |
 | **Data** | Synthetic (synth_gen.py) | Real (snapshot DB) |
 | **Ground truth** | .truth.yaml sidecar | None (no ground truth) |
 | **Output** | Structured comparison (z-scores, PASS/MISS) | Quality metrics (rhat, ESS, divergences) |
+| **Parallel** | `run-param-recovery.sh` (N graphs at once) | Run multiple harness instances manually |
+| **Monitor** | `scripts/bayes-monitor.sh` | `scripts/bayes-monitor.sh` |
 | **When** | Before merging model changes | After model changes, on production graphs |
-| **Graphs** | synth-simple-abc, synth-mirror-4step | bayes-test-gm-rebuild, branch |
+| **Graphs** | `--list` shows all available synth graphs | bayes-test-gm-rebuild, branch |
 
 ---
 
@@ -265,24 +281,32 @@ been tried before and why it failed.
 ```bash
 . graph-editor/venv/bin/activate
 
-# All regression tests (~4 min):
-pytest bayes/tests/test_param_recovery.py -v -s
+# All regression tests (sequential, ~8 min):
+pytest bayes/tests/test_param_recovery.py -v -s --timeout=600
 
 # Single test:
-pytest bayes/tests/test_param_recovery.py::TestParamRecovery::test_4step_mirror_recovery -v -s
+pytest bayes/tests/test_param_recovery.py::TestParamRecovery::test_2step_synth -v -s
+
+# Parallel with pytest-xdist (3 tests × 3 cores = 9 cores):
+pytest bayes/tests/test_param_recovery.py -n 3 -v -s --timeout=600
+
+# Parallel via param_recovery.py (preferred — shows truth comparison):
+scripts/run-param-recovery.sh
+scripts/bayes-monitor.sh   # in another terminal
 ```
 
 ### What it tests
 
 | Test | Graph | Topology | Time | Status |
 |------|-------|----------|------|--------|
-| `test_2step_synth_recovery` | synth-simple-abc | 2-edge linear, all latency | ~150s | PASS |
+| `test_2step_synth` | synth-simple-abc | 2-edge linear, all latency + convergence diagnostics | ~150s | PASS |
 | `test_4step_mirror_recovery` | synth-mirror-4step | 4-edge linear, 2 no-lat + 2 lat | ~80s | PASS |
 | `test_diamond_recovery` | synth-diamond-test | branch + join, 6 edges | — | xfail (join issue) |
-| `test_2step_convergence_diagnostics` | synth-simple-abc | same as above | ~150s | PASS |
 
-Tests use fast sampling (1000 draws, 500 tune, 4 chains) with relaxed
+Tests use fast sampling (1000 draws, 500 tune, 3 chains) with relaxed
 tolerances (mu within 0.5, sigma within 0.3, onset within 1.5 days).
+Thread-pinning env vars (`OMP_NUM_THREADS=1`, etc.) prevent BLAS/OpenMP
+oversubscription during parallel runs.
 
 ### Prerequisites
 

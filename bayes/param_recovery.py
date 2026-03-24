@@ -6,11 +6,16 @@ Wraps test_harness: reads the .truth.yaml sidecar, runs the harness,
 then produces a structured comparison table showing whether the model
 recovers the known parameters.
 
-Usage:
+Usage (single graph):
     . graph-editor/venv/bin/activate
     python bayes/param_recovery.py --graph synth-simple-abc
     python bayes/param_recovery.py --graph synth-mirror-4step
+    python bayes/param_recovery.py --graph synth-simple-abc --chains 3 --cores 3
     python bayes/param_recovery.py --graph synth-simple-abc --feature latent_onset=false
+
+Parallel execution (all synth graphs):
+    scripts/run-param-recovery.sh
+    scripts/bayes-monitor.sh   # in another terminal
 
 NOT for production data — production graphs have no ground truth.
 Use test_harness.py directly for production runs.
@@ -38,6 +43,10 @@ def main():
                         help="Model feature flag (passed through to harness)")
     parser.add_argument("--timeout", type=int, default=600,
                         help="MCMC timeout in seconds (default: 600)")
+    parser.add_argument("--draws", type=int, default=None, help="MCMC draws per chain")
+    parser.add_argument("--tune", type=int, default=None, help="MCMC warmup steps per chain")
+    parser.add_argument("--chains", type=int, default=None, help="Number of MCMC chains")
+    parser.add_argument("--cores", type=int, default=None, help="Number of cores for sampling")
     parser.add_argument("--no-mcmc", action="store_true",
                         help="Stop after model build, skip MCMC (still shows truth)")
     args = parser.parse_args()
@@ -90,14 +99,26 @@ def main():
     ]
     if args.no_mcmc:
         cmd.append("--no-mcmc")
+    if args.draws:
+        cmd.extend(["--draws", str(args.draws)])
+    if args.tune:
+        cmd.extend(["--tune", str(args.tune)])
+    if args.chains:
+        cmd.extend(["--chains", str(args.chains)])
+    if args.cores:
+        cmd.extend(["--cores", str(args.cores)])
     for f in args.feature:
         cmd.extend(["--feature", f])
 
     print(f"Running: {' '.join(cmd[-6:])}")
     print()
 
+    # Pin thread counts to prevent BLAS/OpenMP oversubscription during parallel runs
+    env = {**os.environ, "OMP_NUM_THREADS": "1", "MKL_NUM_THREADS": "1",
+           "OPENBLAS_NUM_THREADS": "1", "NUMBA_NUM_THREADS": "1"}
+
     t0 = time.time()
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=args.timeout + 60)
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=args.timeout + 60, env=env)
     elapsed = time.time() - t0
 
     output = result.stdout + result.stderr

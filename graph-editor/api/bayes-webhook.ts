@@ -1,5 +1,6 @@
 import { VercelRequest, VercelResponse } from '@vercel/node';
-import { atomicCommitFiles, CommitFile } from './_lib/git-commit';
+import { webcrypto } from 'node:crypto';
+
 /**
  * POST /api/bayes-webhook
  *
@@ -21,6 +22,13 @@ import { atomicCommitFiles, CommitFile } from './_lib/git-commit';
  */
 
 export const maxDuration = 60;
+
+// Vercel's ESM runtime doesn't resolve _lib/ helper imports at runtime.
+// All code is inlined into this single file to avoid ERR_MODULE_NOT_FOUND.
+
+// Use webcrypto.subtle explicitly — bare `crypto.subtle` resolves to the
+// Node.js crypto module in Vercel's bundler, not the Web Crypto API global.
+const subtle = webcrypto.subtle;
 
 // --- Webhook payload types (from worker) ---
 
@@ -71,14 +79,14 @@ interface WebhookPayload {
 
 async function deriveKey(secret: string): Promise<CryptoKey> {
   const enc = new TextEncoder();
-  const keyMaterial = await crypto.subtle.importKey(
+  const keyMaterial = await subtle.importKey(
     'raw',
     enc.encode(secret),
     { name: 'PBKDF2' },
     false,
     ['deriveKey'],
   );
-  return crypto.subtle.deriveKey(
+  return subtle.deriveKey(
     {
       name: 'PBKDF2',
       salt: enc.encode('dagnet-bayes-callback-token'),
@@ -112,7 +120,7 @@ async function decryptCallbackToken(
   const ciphertext = raw.subarray(12);
 
   const key = await deriveKey(secret);
-  const decrypted = await crypto.subtle.decrypt(
+  const decrypted = await subtle.decrypt(
     { name: 'AES-GCM', iv },
     key,
     ciphertext,
@@ -120,6 +128,133 @@ async function decryptCallbackToken(
 
   const json = new TextDecoder().decode(decrypted);
   return JSON.parse(json);
+}
+
+// --- Atomic git commit via GitHub Git Data API ---
+
+interface GitHubHeaders {
+  Authorization: string;
+  Accept: string;
+  'User-Agent': string;
+  'Content-Type'?: string;
+}
+
+async function ghFetch<T = any>(
+  url: string,
+  headers: GitHubHeaders,
+  options?: { method?: string; body?: any },
+): Promise<T> {
+  const resp = await fetch(url, {
+    method: options?.method ?? 'GET',
+    headers: {
+      ...headers,
+      ...(options?.body ? { 'Content-Type': 'application/json' } : {}),
+    },
+    ...(options?.body ? { body: JSON.stringify(options.body) } : {}),
+  });
+
+  if (!resp.ok) {
+    const errText = await resp.text();
+    const err = new Error(
+      `GitHub API ${options?.method ?? 'GET'} ${url} returned ${resp.status}: ${errText}`,
+    );
+    (err as any).status = resp.status;
+    (err as any).body = errText;
+    throw err;
+  }
+
+  return resp.json() as Promise<T>;
+}
+
+async function atomicCommitFiles(
+  owner: string,
+  repo: string,
+  branch: string,
+  token: string,
+  files: Array<{ path: string; content: string }>,
+  message: string,
+): Promise<{ sha: string; url: string }> {
+  if (files.length === 0) {
+    throw new Error('atomicCommitFiles: at least one file is required');
+  }
+
+  const MAX_RETRIES = 3;
+  const baseUrl = `https://api.github.com/repos/${owner}/${repo}`;
+  const headers: GitHubHeaders = {
+    Authorization: `token ${token}`,
+    Accept: 'application/vnd.github.v3+json',
+    'User-Agent': 'dagnet-bayes-webhook',
+  };
+
+  const blobPromises = files.map(file =>
+    ghFetch<{ sha: string }>(
+      `${baseUrl}/git/blobs`,
+      headers,
+      {
+        method: 'POST',
+        body: {
+          content: Buffer.from(file.content, 'utf-8').toString('base64'),
+          encoding: 'base64',
+        },
+      },
+    ),
+  );
+  const blobs = await Promise.all(blobPromises);
+  const blobShas = blobs.map(b => b.sha);
+
+  const treeEntries = files.map((file, i) => ({
+    path: file.path,
+    mode: '100644' as const,
+    type: 'blob' as const,
+    sha: blobShas[i],
+  }));
+
+  for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+    const ref = await ghFetch<{ object: { sha: string } }>(
+      `${baseUrl}/git/ref/heads/${branch}`,
+      headers,
+    );
+    const headSha = ref.object.sha;
+
+    const commit = await ghFetch<{ tree: { sha: string } }>(
+      `${baseUrl}/git/commits/${headSha}`,
+      headers,
+    );
+    const baseTreeSha = commit.tree.sha;
+
+    const tree = await ghFetch<{ sha: string }>(
+      `${baseUrl}/git/trees`,
+      headers,
+      {
+        method: 'POST',
+        body: { base_tree: baseTreeSha, tree: treeEntries },
+      },
+    );
+
+    const newCommit = await ghFetch<{ sha: string; html_url: string }>(
+      `${baseUrl}/git/commits`,
+      headers,
+      {
+        method: 'POST',
+        body: { message, tree: tree.sha, parents: [headSha] },
+      },
+    );
+
+    try {
+      await ghFetch(
+        `${baseUrl}/git/refs/heads/${branch}`,
+        headers,
+        { method: 'PATCH', body: { sha: newCommit.sha } },
+      );
+    } catch (err: any) {
+      if (err.status === 422 && attempt < MAX_RETRIES - 1) continue;
+      throw err;
+    }
+
+    return { sha: newCommit.sha, url: newCommit.html_url };
+  }
+
+  throw new Error('atomicCommitFiles: exhausted retries');
 }
 
 // --- Handler ---
@@ -170,11 +305,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   );
 
   // 3. Write patch file to git
-  //
-  // The patch file contains the raw posterior data from the worker.
-  // The FE reads this on pull, applies upserts into local parameter
-  // and graph files (where it has full local context), and commits
-  // the result through the normal dirty-file flow.
   try {
     const patchData = {
       job_id: body.job_id,
