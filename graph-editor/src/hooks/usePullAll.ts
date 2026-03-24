@@ -51,8 +51,8 @@ export function onOpenConflictModal(
 interface UsePullAllResult {
   /** Whether a pull operation is in progress */
   isPulling: boolean;
-  /** Pull all latest changes from remote */
-  pullAll: () => Promise<{ success: boolean; conflicts?: ConflictFile[] }>;
+  /** Pull all latest changes from remote. Pass a Set of fileIds to pull only those files. */
+  pullAll: (fileIdFilter?: Set<string> | unknown) => Promise<{ success: boolean; conflicts?: ConflictFile[] }>;
   /** Render this in your component to show conflict modal when needed */
   conflictModal: React.ReactNode;
   /** Open the conflict resolution modal with externally-supplied conflicts (e.g. from auto-pull). */
@@ -224,7 +224,9 @@ export function usePullAll(): UsePullAllResult {
     setConflicts([]);
   }, [conflicts, navOps]);
   
-  const pullAll = useCallback(async () => {
+  const pullAll = useCallback(async (fileIdFilterArg?: Set<string> | unknown) => {
+    // Guard: only accept Set<string> (callers like onSelect pass an Event object)
+    const fileIdFilter = fileIdFilterArg instanceof Set ? fileIdFilterArg as Set<string> : undefined;
     const selectedRepo = navState.selectedRepo;
     const selectedBranch = navState.selectedBranch || gitConfig.branch;
     
@@ -235,12 +237,14 @@ export function usePullAll(): UsePullAllResult {
     
     setIsPulling(true);
     const opId = `git-pull:${selectedRepo}:${Date.now()}`;
-    operationRegistryService.register({ id: opId, kind: 'git-pull', label: 'Pulling latest changes…', status: 'running' });
+    const pullLabel = fileIdFilter ? `Pulling ${fileIdFilter.size} shown files…` : 'Pulling latest changes…';
+    operationRegistryService.register({ id: opId, kind: 'git-pull', label: pullLabel, status: 'running' });
 
     try {
       // Step A: detect force-replace requests (may still apply non-flagged updates).
       const preflight = await repositoryOperationsService.pullLatest(selectedRepo, selectedBranch, {
         forceReplace: { mode: 'detect' },
+        fileIdFilter,
       });
 
       const requested = (preflight.forceReplaceRequests || []) as any[];
@@ -261,6 +265,7 @@ export function usePullAll(): UsePullAllResult {
         operationRegistryService.setLabel(opId, 'Finalising pull…');
         result = await repositoryOperationsService.pullLatest(selectedRepo, selectedBranch, {
           forceReplace: { mode: 'apply', allowFileIds },
+          fileIdFilter,
         });
       }
 

@@ -1,10 +1,10 @@
 # Doc 20 — Trajectory Data Compression for NUTS Sampling
 
-**Status**: Blocking defect — filter disabled, solution needed
+**Status**: Resolved (24-Mar-26) — smooth clip floors fix the defect
 **Date**: 24-Mar-26
 **Purpose**: Detailed briefing on the CDF trajectory compression problem.
-Summarises the model machinery, what breaks, why, and candidate solutions
-with literature references. Written for parallel investigation.
+Summarises the model machinery, what broke, why, the fix, and lessons
+learned. Retains candidate solutions and external reviews for reference.
 
 ---
 
@@ -607,50 +607,143 @@ capture the onset-μ correlation (0.85-0.90) directly. Tran & Kleppe
 
 ---
 
-## 7. Recommendation
+### 6.6 Response C — "Clip floors + dense mass matrix"
 
-**4.1 (Poisson exposure penalty)** is the most promising immediate fix:
-- Preserves gradient flow (the core issue)
-- Enables lossless merging of zero-event intervals
-- Minimal code change (add one term per merged block)
-- Principled interpretation (counting-process exposure)
+**Core argument**: Agrees with Response B that smooth clip floors are
+the primary fix. Adds a second mechanism: the onset-μ correlation
+(0.85-0.90) is in the regime where diagonal mass matrices are fragile
+(Tran & Kleppe 2024). A dense mass matrix would stabilise warmup
+independently of the gradient landscape.
 
-The concern about mixing DM and Poisson is valid but pragmatic — the
-DM's zero-count term is identically zero, so replacing it with a
-Poisson penalty doesn't change the DM's non-zero behaviour. It only
-adds information where the DM provides none.
+**Recommended path (staged)**:
 
-**4.5 (keep all points, skip zero gammaln)** is the safest fallback
-if the Poisson approach doesn't work — it's the status quo (no filter)
-with a minor optimisation.
+1. **Smooth clip floors** (same as Response B, Layer 1) — eliminate
+   dead-gradient traps from `pt.clip`/`pt.maximum`.
 
-**4.2 (grouped mixture-cure)** is the cleanest long-term solution but
-requires a larger refactor and loses per-edge κ.
+2. **Dense mass matrix** for highly correlated parameters — use
+   `nuts_sampler_kwargs={"dense_mass": True}` or per-block dense
+   matrix for (onset, μ) pairs. Captures the correlation structure
+   directly, making sampling robust to gradient perturbations.
+
+3. **Re-enable filter** — with both fixes, the filter is safe.
+
+4. **Fallback: fused custom Op** if compilation still too slow.
+
+**Additional analysis on the Poisson hybrid**: Rejects Approach B
+Layer 2 more strongly — notes that scaling by κ (overdispersion)
+rather than n (population) is statistically incoherent. The expected
+interval count under the DM is `n·p·ΔF`, not `κ·p·ΔF`.
+
+**On floating-point chaos**: Identifies a second mechanism beyond the
+clip floors — the filter changes PyTensor graph topology, which
+changes floating-point accumulation order. In the pathological
+onset-μ geometry (corr ≈ 0.85-0.90), even tiny numerical
+perturbations during warmup can produce catastrophically different
+mass matrix estimates. The smooth clips address this by ensuring
+continuous gradient flow regardless of accumulation order.
+
+### 6.7 Updated synthesis
+
+All three responses now converge:
+- **Smooth clip floors**: Unanimous. Implemented and validated.
+- **Dense mass matrix**: Responses B and C recommend. Not yet tested.
+- **Poisson hybrid**: Response A rejects, Response C rejects more
+  strongly (κ vs n scaling issue), Response B proposed conditionally.
+  **Deprioritised.**
+- **Fused custom Op**: All agree as nuclear fallback.
+
+### 6.8 Current status (24-Mar-26)
+
+**Step 1 (smooth clips) is IMPLEMENTED AND VALIDATED.**
+
+Results with filter ON + smooth clips:
+
+| Test | rhat | ess | divs | Status |
+|---|---|---|---|---|
+| Production (today's data) | 1.002 | 2655 | 0 | PASS |
+| Production (yesterday's asat) | 1.002 | 2825 | 0 | PASS |
+| Synth 4-step mirror | — | — | — | PASS |
+| Synth 2-step | — | — | — | PASS |
+
+The blocking defect is resolved. The filter losslessly compresses
+trajectory data (29 ages → from 33 raw for the production graph)
+and NUTS converges correctly with smooth gradient floors.
+
+**Step 2 (dense mass matrix)** is recommended as a robustness measure
+but not yet tested. Worth investigating for edges with onset-μ
+correlation > 0.85.
 
 ---
 
-## 6. Current state
+## 7. Lessons learned
 
-- Filter: **disabled** in `compiler/evidence.py` (line 498: `if False`)
-- Production graph: **converges** without filter (30 ages/traj, 3-5s
-  compile, 60-70s sampling)
-- Synth graphs: converge with or without filter
-- Blocking for: large production graphs (10+ edges) where 30+ ages
-  per edge per trajectory makes compilation infeasible
-- Regression test: `test_param_recovery.py` passes (4-step mirror)
+### 7.1 Hard clip floors are dangerous in NUTS models
+
+Stan Functions Reference §3.7 explicitly warns against step-like
+functions (`clip`, `maximum`, `if_else`) in gradient-based samplers.
+We had 4 instances of `pt.clip`/`pt.maximum` at 1e-12 in the DM logp.
+These created dead-gradient traps that were invisible in normal
+operation but became catastrophic when the data compression filter
+changed which intervals hit the floor.
+
+**Rule**: In any NUTS model, replace `pt.clip(x, floor)` and
+`pt.maximum(x, floor)` with a smooth softplus-based approximation
+(`_soft_floor`). The cost is negligible; the robustness gain is
+significant.
+
+### 7.2 Likelihood-lossless ≠ NUTS-lossless
+
+A transformation that preserves the logp and its mathematical
+gradient can still break NUTS sampling if it changes the computational
+graph in ways that interact with:
+- Hard clip/maximum floors (dead gradient regions)
+- Floating-point accumulation order (warmup trajectory perturbation)
+- Mass matrix adaptation (curvature estimation during warmup)
+
+This is especially dangerous when the posterior has pathological
+geometry (high parameter correlations, multimodality, narrow ridges).
+
+### 7.3 Dense mass matrix as future robustness
+
+For edges with onset-μ correlation > 0.85, the diagonal mass matrix
+is fragile (Tran & Kleppe 2024). A dense or block-dense mass matrix
+would capture the correlation directly. Not yet implemented but worth
+considering as a complementary hardening measure for production graphs
+with marginal geometry.
+
+### 7.4 The investigation process
+
+The defect was found by:
+1. Confirming the regression was deterministic (not stochastic)
+2. Using `--asat` to rule out data changes
+3. Reverting model.py to rule out mixture CDF changes
+4. Bisecting to the evidence.py filter via git diff
+5. Disabling the filter to confirm
+6. Soliciting three independent analyses of the briefing
+7. Implementing the consensus fix (smooth clips)
+8. Validating on production + synth regression tests
+
+The `--asat` flag (added during this investigation) proved essential
+for reproducing historical runs. It loads graph/param files from git
+at a specified date and filters snapshot DB rows to `retrieved_at <=
+date`.
 
 ---
 
-## 7. Reproduction steps
+## 8. Reproduction steps
 
 ```bash
-# With filter (fails):
-# Edit evidence.py line 498: change "if False" to "if"
+# Current state (filter ON, smooth clips ON — should pass):
 python bayes/test_harness.py --graph simple --no-webhook
 
-# Without filter (passes):
+# To reproduce the original failure (revert smooth clips):
+# In model.py, replace _soft_floor() calls with pt.clip/pt.maximum
 python bayes/test_harness.py --graph simple --no-webhook
+# Expected: rhat ≈ 1.53
 
 # Historical replay:
 python bayes/test_harness.py --graph simple --asat 2026-03-23 --no-webhook
+
+# Regression tests:
+pytest bayes/tests/test_param_recovery.py -v -s
 ```

@@ -12,7 +12,8 @@ import toast from 'react-hot-toast';
 import { RepositoryItem, ObjectType } from '../../types';
 import { registryService, RegistryItem } from '../../services/registryService';
 import { getObjectTypeTheme } from '../../theme/objectTypeTheme';
-import { Tag, GitBranch } from 'lucide-react';
+import { Tag, GitBranch, X } from 'lucide-react';
+import { collectGraphDependencies } from '../../lib/dependencyClosure';
 import { filterSystemTags } from '../../utils/favourites';
 import { SwitchBranchModal } from '../modals/SwitchBranchModal';
 import { CommitModal } from '../CommitModal';
@@ -304,6 +305,31 @@ export function NavigatorContent() {
     return Array.from(entriesMap.values());
   }, [items, tabs, registryItems, dirtyStateVersion]);
 
+  // Build dependency filter set when a graph is selected for dependency filtering
+  const dependencyFileIds = useMemo(() => {
+    const graphId = state.dependencyFilterGraphId;
+    if (!graphId) return null;
+
+    // Get the graph data from fileRegistry
+    const graphFile = fileRegistry.getFile(graphId);
+    if (!graphFile?.data) return null;
+
+    const deps = collectGraphDependencies(graphFile.data);
+    const fileIds = new Set<string>();
+
+    // Always include the graph itself
+    fileIds.add(graphId);
+
+    // Map dependency IDs to navigator fileIds (type-id format)
+    for (const id of deps.parameterIds) fileIds.add(`parameter-${id}`);
+    for (const id of deps.eventIds) fileIds.add(`event-${id}`);
+    for (const id of deps.caseIds) fileIds.add(`case-${id}`);
+    for (const id of deps.contextKeys) fileIds.add(`context-${id}`);
+    for (const id of deps.nodeIds) fileIds.add(`node-${id}`);
+
+    return fileIds;
+  }, [state.dependencyFilterGraphId, fileRegistry]);
+
   // Apply filters and sorting
   const filteredAndSortedEntries = useMemo(() => {
     let filtered = navigatorEntries.filter(entry => {
@@ -311,16 +337,21 @@ export function NavigatorContent() {
       if (state.viewMode === 'files-only' && !entry.hasFile) {
         return false;
       }
-      
+
+      // Dependency filter (composable — AND'd with other filters)
+      if (dependencyFileIds && !dependencyFileIds.has(entry.fileId)) {
+        return false;
+      }
+
       // State filters
       if (state.showLocalOnly && !entry.isLocal) {
         return false;
       }
-      
+
       if (state.showDirtyOnly && !entry.isDirty) {
         return false;
       }
-      
+
       if (state.showOpenOnly && !entry.isOpen) {
         return false;
       }
@@ -328,7 +359,7 @@ export function NavigatorContent() {
       if (state.showFavouritesOnly && !entry.tags?.includes('_favourite')) {
         return false;
       }
-      
+
       // Search filter
       if (state.searchQuery) {
         const query = state.searchQuery.toLowerCase();
@@ -337,7 +368,7 @@ export function NavigatorContent() {
                entry.tags?.some(t => t.toLowerCase().includes(query)) ||
                entry.path?.toLowerCase().includes(query);
       }
-      
+
       return true;
     });
     
@@ -362,7 +393,7 @@ export function NavigatorContent() {
     });
     
     return filtered;
-  }, [navigatorEntries, state.viewMode, state.showLocalOnly, state.showDirtyOnly, state.showOpenOnly, state.showFavouritesOnly, state.searchQuery, state.sortBy]);
+  }, [navigatorEntries, state.viewMode, state.showLocalOnly, state.showDirtyOnly, state.showOpenOnly, state.showFavouritesOnly, state.searchQuery, state.sortBy, dependencyFileIds]);
 
   // --- Tag selection (persisted in NavigatorState) ---
   const selectedTags = state.selectedTags || [];
@@ -396,6 +427,18 @@ export function NavigatorContent() {
       entry.tags?.some(t => selectedTags.includes(t))
     );
   }, [filteredAndSortedEntries, selectedTags]);
+
+  // Sync visible fileIds to navigator state so other components (e.g. TabContextMenu) can use them
+  const visibleFileIdsRef = useRef<string[]>([]);
+  useEffect(() => {
+    const ids = tagFilteredEntries.map(e => e.fileId);
+    // Avoid unnecessary state updates by comparing lengths + spot-checking
+    const prev = visibleFileIdsRef.current;
+    if (ids.length !== prev.length || ids[0] !== prev[0] || ids[ids.length - 1] !== prev[ids.length - 1]) {
+      visibleFileIdsRef.current = ids;
+      operations.setVisibleFileIds(ids);
+    }
+  }, [tagFilteredEntries, operations]);
 
   // Group by type
   const groupedEntries = useMemo(() => {
@@ -556,6 +599,19 @@ export function NavigatorContent() {
         onTagToggle={handleTagToggle}
         onTagsClear={handleTagsClear}
       />
+
+      {/* Active dependency filter bar — only when a graph is selected */}
+      {state.dependencyFilterGraphId && (
+        <div className="navigator-tag-bar">
+          <span
+            className="tag-filter-chip active"
+            onClick={() => operations.setDependencyFilterGraphId(undefined)}
+            title="Clear dependency filter"
+          >
+            Deps: {state.dependencyFilterGraphId.replace(/^graph-/, '')} <X size={10} style={{ marginLeft: 2, verticalAlign: 'middle' }} />
+          </span>
+        </div>
+      )}
 
       {/* Active tag filter bar — only when tags are selected */}
       {selectedTags.length > 0 && (
@@ -731,6 +787,7 @@ export function NavigatorContent() {
           x={contextMenu.x}
           y={contextMenu.y}
           onClose={() => setContextMenu(null)}
+          visibleFileIds={tagFilteredEntries.map(e => e.fileId)}
         />
       )}
       

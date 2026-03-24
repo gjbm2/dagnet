@@ -35,12 +35,14 @@ interface NavigatorItemContextMenuProps {
   x: number;
   y: number;
   onClose: () => void;
+  /** FileIds currently visible in navigator (for "Pull All Shown") */
+  visibleFileIds?: string[];
 }
 
 /**
  * Context menu for Navigator item right-click
  */
-export function NavigatorItemContextMenu({ item, x, y, onClose }: NavigatorItemContextMenuProps) {
+export function NavigatorItemContextMenu({ item, x, y, onClose, visibleFileIds }: NavigatorItemContextMenuProps) {
   // CRITICAL DEBUG: Log what item this context menu received
   console.log('🟢 [NavigatorItemContextMenu] MOUNTED with item:', {
     type: item.type,
@@ -377,6 +379,18 @@ export function NavigatorItemContextMenu({ item, x, y, onClose }: NavigatorItemC
     });
   }
 
+  // Show Dependencies - filter navigator to show only this graph's dependencies
+  if (item.type === 'graph') {
+    const isActive = navState.dependencyFilterGraphId === fileId;
+    menuItems.push({
+      label: isActive ? 'Clear Dependency Filter' : 'Show Dependencies',
+      onClick: () => {
+        navOps.setDependencyFilterGraphId(isActive ? undefined : fileId);
+        onClose();
+      }
+    });
+  }
+
   // Share links (for graphs and charts)
   if (canShare) {
     if (canCopyWorkingLink) {
@@ -475,6 +489,17 @@ export function NavigatorItemContextMenu({ item, x, y, onClose }: NavigatorItemC
       label: 'Pull Latest',
       onClick: async () => {
         await pullFile();
+        onClose();
+      }
+    });
+  }
+
+  // Pull All Shown - only pull files visible in navigator (when filters are active)
+  if (visibleFileIds && visibleFileIds.length > 0) {
+    menuItems.push({
+      label: `Pull Shown (${visibleFileIds.length})`,
+      onClick: async () => {
+        await pullAll(new Set(visibleFileIds));
         onClose();
       }
     });

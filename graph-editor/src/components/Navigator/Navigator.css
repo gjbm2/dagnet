@@ -700,6 +700,12 @@
   background: rgba(25, 118, 210, 0.08);
 }
 
+/* Active state for dependency filter icon — stays visible and coloured */
+.navigator-item-history-btn.deps-active {
+  opacity: 1;
+  color: #1976d2;
+}
+
 .navigator-item-status {
   display: flex;
   align-items: center;
@@ -934,6 +940,10 @@
   .navigator-item-history-btn:hover {
     color: #90caf9;
     background: rgba(144, 202, 249, 0.1);
+  }
+
+  .navigator-item-history-btn.deps-active {
+    color: #90caf9;
   }
 
   .section-index-icon:hover {

@@ -3,7 +3,7 @@ import { ObjectType } from '../../types';
 import { useTabContext, useFileRegistry } from '../../contexts/TabContext';
 import { useNavigatorContext } from '../../contexts/NavigatorContext';
 import { getObjectTypeTheme } from '../../theme/objectTypeTheme';
-import { AtSign, ChevronRight, TrendingUp, Coins, Clock, Package, Star, LucideIcon } from 'lucide-react';
+import { AtSign, ChevronRight, TrendingUp, Coins, Clock, Package, Star, Share2, LucideIcon } from 'lucide-react';
 import { WhereUsedService } from '../../services/whereUsedService';
 import { historicalFileService } from '../../services/historicalFileService';
 import { toggleFavourite, isFavourite, filterSystemTags } from '../../utils/favourites';
@@ -260,6 +260,15 @@ function NavigatorItem({ fileId, isActive, tabCount }: NavigatorItemProps) {
     }));
   }, [fileId]);
 
+  // Dependency filter toggle for graphs
+  const isGraphEntry = entry?.type === 'graph';
+  const isDepsFilterActive = navState.dependencyFilterGraphId === fileId;
+  const handleDepsClick = useCallback((e: React.MouseEvent) => {
+    e.stopPropagation();
+    e.preventDefault();
+    navOps.setDependencyFilterGraphId(isDepsFilterActive ? undefined : fileId);
+  }, [fileId, isDepsFilterActive, navOps]);
+
   // Early return AFTER all hooks
   if (!entry) {
     if (!missingEntryWarned.has(fileId)) {
@@ -324,6 +333,16 @@ function NavigatorItem({ fileId, isActive, tabCount }: NavigatorItemProps) {
         })()}
       </span>
       <span className="navigator-item-actions">
+        {isGraphEntry && (isHovering || isDepsFilterActive) && (
+          <button
+            type="button"
+            className={`navigator-item-history-btn${isDepsFilterActive ? ' deps-active' : ''}`}
+            onClick={handleDepsClick}
+            title={isDepsFilterActive ? 'Clear dependency filter' : 'Show dependencies'}
+          >
+            <Share2 size={12} />
+          </button>
+        )}
         {isHovering && canShowHistory && (
           <button
             type="button"

@@ -119,11 +119,17 @@ merged into exposure blocks.
 
 ### Status
 
-**BLOCKING**. Filter disabled. Production graph converges without
-filter (30 ages/trajectory is manageable). Larger graphs will need
-the filter. Approach B (Poisson exposure penalty) is the next step —
-needs implementation and validation against both production and synth
-regression tests.
+**RESOLVED.** Root cause: hard `pt.clip`/`pt.maximum` at 1e-12
+created dead-gradient regions (Stan §3.7). Replaced with smooth
+`_soft_floor` (softplus-based, sharpness=1e6). Filter re-enabled.
+
+Results with filter ON + smooth clips:
+- Production (today): rhat=1.002, ess=2655, 0 divergences
+- Synth 4-step: PASS
+- Synth 2-step: PASS
+
+Full briefing and external review in doc 20. Further recommended:
+dense mass matrix for high onset-μ correlation edges (not yet tested).
 
 ---
 

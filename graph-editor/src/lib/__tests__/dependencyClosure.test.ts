@@ -181,4 +181,146 @@ describe('dependencyClosure', () => {
       expect(params.length).toBe(2);
     });
   });
+
+  describe('navigator dependency filter — fileId mapping', () => {
+    /**
+     * These tests verify the contract between collectGraphDependencies output
+     * and the navigator's fileId-based filtering. The navigator builds a Set
+     * of `type-id` fileIds from the closure and uses Set.has() to filter.
+     * If this mapping breaks, the navigator shows wrong files.
+     */
+
+    function buildDependencyFileIds(graphJson: any, graphFileId: string): Set<string> {
+      const deps = collectGraphDependencies(graphJson);
+      const fileIds = new Set<string>();
+      fileIds.add(graphFileId);
+      for (const id of deps.parameterIds) fileIds.add(`parameter-${id}`);
+      for (const id of deps.eventIds) fileIds.add(`event-${id}`);
+      for (const id of deps.caseIds) fileIds.add(`case-${id}`);
+      for (const id of deps.contextKeys) fileIds.add(`context-${id}`);
+      for (const id of deps.nodeIds) fileIds.add(`node-${id}`);
+      return fileIds;
+    }
+
+    const sampleGraph = {
+      nodes: [
+        { id: 'signup', event_id: 'user-signed-up' },
+        { id: 'purchase', type: 'case', case: { id: 'purchase-type' } },
+      ],
+      edges: [
+        { p: { id: 'channel' }, cost_gbp: { id: 'channel-cost' } },
+        { p: { id: 'conversion' } },
+      ],
+      currentQueryDSL: 'context(region:uk)',
+    };
+
+    it('should include the graph itself in the filtered set', () => {
+      const fileIds = buildDependencyFileIds(sampleGraph, 'graph-my-funnel');
+      expect(fileIds.has('graph-my-funnel')).toBe(true);
+    });
+
+    it('should map parameter dependencies to parameter-prefixed fileIds', () => {
+      const fileIds = buildDependencyFileIds(sampleGraph, 'graph-test');
+      expect(fileIds.has('parameter-channel')).toBe(true);
+      expect(fileIds.has('parameter-channel-cost')).toBe(true);
+      expect(fileIds.has('parameter-conversion')).toBe(true);
+    });
+
+    it('should map event dependencies to event-prefixed fileIds', () => {
+      const fileIds = buildDependencyFileIds(sampleGraph, 'graph-test');
+      expect(fileIds.has('event-user-signed-up')).toBe(true);
+    });
+
+    it('should map case dependencies to case-prefixed fileIds', () => {
+      const fileIds = buildDependencyFileIds(sampleGraph, 'graph-test');
+      expect(fileIds.has('case-purchase-type')).toBe(true);
+    });
+
+    it('should map context DSL keys to context-prefixed fileIds', () => {
+      const fileIds = buildDependencyFileIds(sampleGraph, 'graph-test');
+      expect(fileIds.has('context-region')).toBe(true);
+    });
+
+    it('should map node IDs to node-prefixed fileIds', () => {
+      const fileIds = buildDependencyFileIds(sampleGraph, 'graph-test');
+      expect(fileIds.has('node-signup')).toBe(true);
+      expect(fileIds.has('node-purchase')).toBe(true);
+    });
+
+    it('should not include unrelated fileIds', () => {
+      const fileIds = buildDependencyFileIds(sampleGraph, 'graph-test');
+      expect(fileIds.has('parameter-unrelated')).toBe(false);
+      expect(fileIds.has('event-other-event')).toBe(false);
+      expect(fileIds.has('graph-other-graph')).toBe(false);
+    });
+
+    it('should return only the graph for an empty graph', () => {
+      const fileIds = buildDependencyFileIds({ nodes: [], edges: [] }, 'graph-empty');
+      expect(fileIds.size).toBe(1);
+      expect(fileIds.has('graph-empty')).toBe(true);
+    });
+
+    it('should correctly filter navigator entries via Set membership', () => {
+      const fileIds = buildDependencyFileIds(sampleGraph, 'graph-my-funnel');
+
+      // Simulate navigator entries (only fileId matters for filtering)
+      const allEntries = [
+        { fileId: 'graph-my-funnel' },
+        { fileId: 'graph-other-graph' },
+        { fileId: 'parameter-channel' },
+        { fileId: 'parameter-channel-cost' },
+        { fileId: 'parameter-unrelated' },
+        { fileId: 'event-user-signed-up' },
+        { fileId: 'event-other-event' },
+        { fileId: 'case-purchase-type' },
+        { fileId: 'node-signup' },
+        { fileId: 'node-purchase' },
+        { fileId: 'node-orphan-node' },
+        { fileId: 'context-region' },
+      ];
+
+      const filtered = allEntries.filter(e => fileIds.has(e.fileId));
+      const filteredIds = filtered.map(e => e.fileId);
+
+      // Should include all dependencies
+      expect(filteredIds).toContain('graph-my-funnel');
+      expect(filteredIds).toContain('parameter-channel');
+      expect(filteredIds).toContain('parameter-channel-cost');
+      expect(filteredIds).toContain('event-user-signed-up');
+      expect(filteredIds).toContain('case-purchase-type');
+      expect(filteredIds).toContain('node-signup');
+      expect(filteredIds).toContain('node-purchase');
+      expect(filteredIds).toContain('context-region');
+
+      // Should exclude non-dependencies
+      expect(filteredIds).not.toContain('graph-other-graph');
+      expect(filteredIds).not.toContain('parameter-unrelated');
+      expect(filteredIds).not.toContain('event-other-event');
+      expect(filteredIds).not.toContain('node-orphan-node');
+
+      expect(filtered.length).toBe(8);
+    });
+
+    it('should compose with other filters (AND semantics)', () => {
+      const fileIds = buildDependencyFileIds(sampleGraph, 'graph-my-funnel');
+
+      const allEntries = [
+        { fileId: 'graph-my-funnel', isDirty: true },
+        { fileId: 'parameter-channel', isDirty: false },
+        { fileId: 'parameter-channel-cost', isDirty: true },
+        { fileId: 'parameter-unrelated', isDirty: true },
+        { fileId: 'event-user-signed-up', isDirty: false },
+      ];
+
+      // Apply dependency filter AND dirty filter (composable)
+      const filtered = allEntries.filter(e =>
+        fileIds.has(e.fileId) && e.isDirty
+      );
+
+      expect(filtered.map(e => e.fileId)).toEqual([
+        'graph-my-funnel',
+        'parameter-channel-cost',
+      ]);
+    });
+  });
 });

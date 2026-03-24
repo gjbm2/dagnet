@@ -201,7 +201,9 @@ export interface NavigatorState {
   groupBySubCategories?: boolean;       // Group by sub-categories (parameter_type, node_type, etc.)
   groupByTags?: boolean;                // Group by tags
   selectedTags?: string[];              // Active tag filter selections
-  
+  dependencyFilterGraphId?: string;     // When set, show only dependencies of this graph (composable with other filters)
+  visibleFileIds?: string[];            // FileIds currently shown in navigator after all filters applied
+
   // Registry indexes (lightweight metadata catalogs)
   registryIndexes?: {
     parameters?: any;  // parameters-index.yaml (workspace)
@@ -394,6 +396,8 @@ export interface NavigatorOperations {
   setGroupBySubCategories: (group: boolean) => void;
   setGroupByTags: (group: boolean) => void;
   setSelectedTags: (tags: string[]) => void;
+  setDependencyFilterGraphId: (graphId: string | undefined) => void;
+  setVisibleFileIds: (fileIds: string[]) => void;
 }
 
 /**

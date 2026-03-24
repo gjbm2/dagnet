@@ -582,8 +582,17 @@ export function FileMenu() {
               Pull Latest
             </Menubar.Item>
 
-            <Menubar.Item 
-              className="menubar-item" 
+            {navState.visibleFileIds && navState.visibleFileIds.length > 0 && (
+              <Menubar.Item
+                className="menubar-item"
+                onSelect={() => handlePullAllLatest(new Set(navState.visibleFileIds!))}
+              >
+                Pull Shown ({navState.visibleFileIds.length})
+              </Menubar.Item>
+            )}
+
+            <Menubar.Item
+              className="menubar-item"
               onSelect={handlePullAllLatest}
             >
               Pull All Latest

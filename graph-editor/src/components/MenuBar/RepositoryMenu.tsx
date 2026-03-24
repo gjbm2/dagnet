@@ -226,8 +226,18 @@ export function RepositoryMenu() {
               Force Full Reload
             </Menubar.Item>
 
-            <Menubar.Item 
-              className="menubar-item" 
+            {state.visibleFileIds && state.visibleFileIds.length > 0 && (
+              <Menubar.Item
+                className="menubar-item"
+                onSelect={() => pullAll(new Set(state.visibleFileIds!))}
+                disabled={isPulling}
+              >
+                Pull Shown ({state.visibleFileIds.length})
+              </Menubar.Item>
+            )}
+
+            <Menubar.Item
+              className="menubar-item"
               onSelect={pullAll}
               disabled={isPulling}
             >

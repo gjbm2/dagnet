@@ -76,6 +76,8 @@ export interface PullOptions {
     /** File IDs permitted to force-replace in apply mode (others will merge normally). */
     allowFileIds?: string[];
   };
+  /** When set, only pull files whose fileId is in this set (e.g. navigator-visible files). */
+  fileIdFilter?: Set<string>;
 }
 
 /**
@@ -1133,9 +1135,12 @@ class WorkspaceService {
       }
 
       // Any remaining local files were deleted remotely
-      for (const [localPath, localSha] of localShaMap.entries()) {
-        console.log(`🗑️ WorkspaceService: DELETED file: ${localPath}`);
-        toDelete.push(localPath);
+      // When fileIdFilter is active, skip deletes — we're only pulling a subset
+      if (!options?.fileIdFilter) {
+        for (const [localPath, localSha] of localShaMap.entries()) {
+          console.log(`🗑️ WorkspaceService: DELETED file: ${localPath}`);
+          toDelete.push(localPath);
+        }
       }
 
       console.log(`🔄 WorkspaceService: Changes detected:`);
@@ -1277,6 +1282,11 @@ class WorkspaceService {
               : dirConfig.isRootFile
                 ? dirConfig.type
                 : `${dirConfig.type}-${fileNameWithoutExt}`;
+
+            // If a fileId filter is active, skip files not in the set
+            if (options?.fileIdFilter && !options.fileIdFilter.has(fileId)) {
+              return;
+            }
 
             // Check if local file exists and has changes.
             const localFileState = localFileMap.get(treeItem.path);

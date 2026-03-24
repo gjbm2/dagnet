@@ -1694,7 +1694,7 @@ export interface EdgeLAGValues {
     completenessForBlendWeight?: number;
 
     /** Which completeness semantics were used for this edge under the current query mode */
-    completenessMode?: 'window_edge' | 'cohort_path_anchored' | 'cohort_conditional_fallback';
+    completenessMode?: 'window_edge' | 'cohort_path_anchored' | 'cohort_conditional_fallback' | 'bayesian_latency';
 
     /** Authoritative t95 used to pull the cohort completeness tail (days), when applicable */
     completenessAuthoritativeT95Days?: number;
@@ -2429,6 +2429,7 @@ export function enhanceGraphLatencies(
       // collapse to `never` under union-with-undefined. Use the actual field type.
       let completenessMode: NonNullable<EdgeLAGValues['debug']>['completenessMode'] =
         (isWindowMode ? 'window_edge' : 'cohort_conditional_fallback');
+
       let completenessAuthoritativeT95Days: number | undefined;
       let completenessTailConstraintApplied: boolean | undefined;
 

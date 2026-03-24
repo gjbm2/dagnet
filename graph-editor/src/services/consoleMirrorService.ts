@@ -69,7 +69,7 @@ class ConsoleMirrorService {
     if (this.installed) return;
     this.installed = true;
 
-    // Expose mark globally for quick “action boundaries” during repros.
+    // Expose mark globally for quick action boundaries during repros.
     if (typeof window !== 'undefined') {
       (window as any).dagnetMark = (label: string, meta?: Record<string, unknown>) => {
         this.mark(label, meta);
@@ -129,7 +129,16 @@ class ConsoleMirrorService {
   }
 
   mark(label: string, meta?: Record<string, unknown>): void {
-    if (!this.enabled) return;
+    // Always dump diagnostic state on mark, even when JSONL mirroring is off
+    void devDiagnosticService.dumpOnMark(label);
+
+    if (!this.enabled) {
+      // Surface that mirroring is off so user knows to re-enable
+      const w = this.originals.warn || console.warn;
+      w('[consoleMirror] mark() - JSONL mirroring is off. label:', label,
+        '- diagnostic dump still written. Toggle Console checkbox to enable JSONL.');
+      return;
+    }
     this.enqueue({
       kind: 'mark',
       ts_ms: Date.now(),
@@ -140,13 +149,10 @@ class ConsoleMirrorService {
 
     // Also capture the current active graph (if any) into /debug/graph-snapshots/
     void graphSnapshotService.snapshotAtMark(label);
-
-    // Dump comprehensive browser state (FileRegistry + IDB + planner) via devDiagnosticService
-    void devDiagnosticService.dumpOnMark(label);
   }
 
   /**
-   * Send a mark immediately (bypasses batching), so "stop" marks aren't lost when disabling.
+   * Send a mark immediately (bypasses batching), so stop marks are not lost when disabling.
    */
   async markNow(label: string, meta?: Record<string, unknown>): Promise<void> {
     if (!this.enabled) return;
@@ -231,18 +237,21 @@ class ConsoleMirrorService {
 
     const batch = this.queue.splice(0, this.queue.length);
     try {
-      await fetch(this.endpoint, {
+      const resp = await fetch(this.endpoint, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ entries: batch }),
         keepalive: true,
       });
-    } catch {
-      // If it fails, drop silently (we don’t want to create feedback loops).
+      if (!resp.ok) {
+        const w = this.originals.warn || console.warn;
+        w('[consoleMirror] flush failed:', resp.status);
+      }
+    } catch (err) {
+      const w = this.originals.warn || console.warn;
+      w('[consoleMirror] flush error:', err);
     }
   }
 }
 
 export const consoleMirrorService = new ConsoleMirrorService();
-
-

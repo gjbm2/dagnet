@@ -836,6 +836,14 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
     setState(prev => ({ ...prev, showFavouritesOnly: show }));
   }, []);
 
+  const setDependencyFilterGraphId = useCallback((graphId: string | undefined) => {
+    setState(prev => ({ ...prev, dependencyFilterGraphId: graphId }));
+  }, []);
+
+  const setVisibleFileIds = useCallback((fileIds: string[]) => {
+    setState(prev => ({ ...prev, visibleFileIds: fileIds }));
+  }, []);
+
   const setSortBy = useCallback((sort: 'name' | 'modified' | 'opened' | 'status' | 'type') => {
     setState(prev => ({ ...prev, sortBy: sort }));
   }, []);
@@ -990,7 +998,9 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
     setSortBy,
     setGroupBySubCategories,
     setGroupByTags,
-    setSelectedTags
+    setSelectedTags,
+    setDependencyFilterGraphId,
+    setVisibleFileIds
   };
 
   // Listen for last view closed events

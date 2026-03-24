@@ -27,7 +27,7 @@ interface TabContextMenuProps {
  */
 export function TabContextMenu({ tabId, x, y, onClose, onRequestCommit }: TabContextMenuProps) {
   const { tabs, operations } = useTabContext();
-  const { operations: navOps } = useNavigatorContext();
+  const { state: navState, operations: navOps } = useNavigatorContext();
   const tab = tabs.find(t => t.id === tabId);
 
   // Detect temporary/historical files — filter out inappropriate menu options
@@ -178,6 +178,18 @@ export function TabContextMenu({ tabId, x, y, onClose, onRequestCommit }: TabCon
           }
         });
       }
+      // Pull Shown — only when navigator has active filters
+      const visibleFileIds = navState.visibleFileIds;
+      if (visibleFileIds && visibleFileIds.length > 0) {
+        items.push({
+          label: `Pull Shown (${visibleFileIds.length})`,
+          onClick: async () => {
+            await pullAll(new Set(visibleFileIds));
+            onClose();
+          }
+        });
+      }
+
       items.push({
         label: 'Pull All Latest',
         onClick: async () => {
@@ -339,7 +351,7 @@ export function TabContextMenu({ tabId, x, y, onClose, onRequestCommit }: TabCon
     });
     
     return items;
-  }, [tab, tabId, tabs, operations, isTemporaryFile, canPull, pullFile, pullAll, canViewHistory, showHistoryModal, canOpenHistorical, isHistoricalLoading, historicalDateItems, loadHistoricalDates, selectHistoricalCommit, canManageSnapshots, openSnapshotManager, canShare, canShareStatic, canShareLive, canCopyWorkingLink, copyStaticShareLink, copyLiveShareLink, copyWorkingLink, liveShareUnavailableReason, onClose, onRequestCommit]);
+  }, [tab, tabId, tabs, operations, isTemporaryFile, canPull, pullFile, pullAll, navState.visibleFileIds, canViewHistory, showHistoryModal, canOpenHistorical, isHistoricalLoading, historicalDateItems, loadHistoricalDates, selectHistoricalCommit, canManageSnapshots, openSnapshotManager, canShare, canShareStatic, canShareLive, canCopyWorkingLink, copyStaticShareLink, copyLiveShareLink, copyWorkingLink, liveShareUnavailableReason, onClose, onRequestCommit]);
   
   const handleDuplicate = async (name: string, type: ObjectType) => {
     if (!tab) return;
