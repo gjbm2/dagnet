@@ -1346,11 +1346,12 @@ export default function PropertiesPanel({
       }
 
       // MODEL_VARS: Re-resolve promoted scalars when model_vars or preference changes (doc 15 §8).
-      if (paramSlot === 'p' && (
+      const sourceChanged = paramSlot === 'p' && (
         'model_vars' in actualChanges ||
         'model_source_preference' in actualChanges ||
         hasModelVarOverride
-      )) {
+      );
+      if (sourceChanged) {
         if (next.edges[edgeIndex].p) {
           applyPromotion(next.edges[edgeIndex].p, next.model_source_preference);
         }
@@ -1393,6 +1394,42 @@ export default function PropertiesPanel({
       if (!_noHistory) {
         const changedKeys = Object.keys(actualChanges).join(', ');
         saveHistoryState(`Update ${paramSlot}: ${changedKeys}`, undefined, selectedEdgeId || undefined);
+      }
+
+      // Source changed → trigger from-file topo recompute so completeness/forecast/blend
+      // are recomputed using the newly promoted latency params.
+      if (sourceChanged && !_noHistory) {
+        try {
+          const currentDsl = (graph as any)?.currentQueryDSL;
+          if (currentDsl) {
+            const { runStage2EnhancementsAndInboundN } = await import('../services/fetchDataService');
+            const updatedGraph = graph; // graph state is already updated via setGraph
+            if (updatedGraph) {
+              // Collect fetch items for the affected edges
+              const items = (updatedGraph as any).edges
+                ?.filter((e: any) => e.p?.latency?.latency_parameter)
+                .map((e: any) => ({
+                  id: `recompute-${e.uuid}`,
+                  type: 'parameter' as const,
+                  name: e.p?.id || e.uuid,
+                  objectId: e.p?.id || '',
+                  targetId: e.uuid,
+                  paramSlot: 'p',
+                })) ?? [];
+              if (items.length > 0) {
+                await runStage2EnhancementsAndInboundN(
+                  items, items,
+                  { mode: 'from-file' } as any,
+                  updatedGraph as any,
+                  setGraph as any,
+                  currentDsl,
+                );
+              }
+            }
+          }
+        } catch (e: any) {
+          console.warn('[PropertiesPanel] Source-change recompute failed (non-fatal):', e?.message || e);
+        }
       }
     }
   }, [selectedEdgeId, graph, setGraph, saveHistoryState]);
@@ -1885,6 +1922,36 @@ export default function PropertiesPanel({
                     }
                     setGraph(next);
                     saveHistoryState('Update model source preference');
+
+                    // Trigger topo recompute so completeness/forecast/blend
+                    // use the newly promoted latency params.
+                    try {
+                      const currentDsl = (next as any)?.currentQueryDSL;
+                      if (currentDsl) {
+                        const { runStage2EnhancementsAndInboundN } = await import('../services/fetchDataService');
+                        const items = (next as any).edges
+                          ?.filter((ed: any) => ed.p?.latency?.latency_parameter)
+                          .map((ed: any) => ({
+                            id: `recompute-${ed.uuid}`,
+                            type: 'parameter' as const,
+                            name: ed.p?.id || ed.uuid,
+                            objectId: ed.p?.id || '',
+                            targetId: ed.uuid,
+                            paramSlot: 'p',
+                          })) ?? [];
+                        if (items.length > 0) {
+                          await runStage2EnhancementsAndInboundN(
+                            items, items,
+                            { mode: 'from-file' } as any,
+                            next as any,
+                            setGraph as any,
+                            currentDsl,
+                          );
+                        }
+                      }
+                    } catch (err: any) {
+                      console.warn('[PropertiesPanel] Graph-level source recompute failed:', err?.message || err);
+                    }
                   }}
                 >
                   <option value="best_available">Auto (best available)</option>

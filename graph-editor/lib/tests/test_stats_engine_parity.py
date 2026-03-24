@@ -408,8 +408,10 @@ def _parse_edge_contexts(raw: Dict[str, Dict]) -> Dict[str, EdgeContext]:
 
 
 class TestTopoPassLiveFixture:
-    """Parity test against real FE output from console mirror. Skipped if no fixture available."""
+    """Superseded by test_stats_parity_contract.py which uses deterministic
+    synthetic vectors instead of a stale golden fixture. Kept for reference."""
 
+    @pytest.mark.skip(reason="Replaced by test_stats_parity_contract.py — deterministic contract tests")
     def test_live_parity(self):
         fixture = _load_live_fixture()
         if fixture is None:

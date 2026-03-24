@@ -564,16 +564,16 @@ class RepositoryOperationsService {
 
       // Delete workspace
       await workspaceService.deleteWorkspace(repository, branch);
-      
+
       // Re-clone from Git
       await workspaceService.cloneWorkspace(repository, branch, gitCreds);
 
-      // Reload Navigator to reflect fresh workspace
-      if (this.navigatorOps) {
-        await this.navigatorOps.refreshItems();
-      }
+      console.log(`✅ RepositoryOperationsService: Force reload complete — reloading page`);
 
-      console.log(`✅ RepositoryOperationsService: Force reload complete`);
+      // Hard page reload to get a genuinely clean slate (fresh FileRegistry,
+      // graph stores, editors, no stale loadingRef guards).  IDB is already
+      // populated by cloneWorkspace, so the reload hydrates from fresh data.
+      window.location.reload();
     } catch (error) {
       // Show error dialog
       if (this.dialogOps) {

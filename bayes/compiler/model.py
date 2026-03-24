@@ -655,21 +655,73 @@ def _emit_cohort_likelihoods(
         if not trajs:
             continue
 
-        # Resolve p expression for this obs_type
+        # Resolve p expression and latency for this obs_type.
+        #
+        # For cohort observations downstream of a join node, the edge
+        # may have multiple path_alternatives. In that case, we compute
+        # a mixture: Σ_alt [p_alt × CDF_alt(t)] rather than a single
+        # p × CDF. The mixture flag controls which DM likelihood path
+        # is used below.
+        is_mixture = False  # set True for join-downstream cohort
+        mixture_components = []  # list of (p_alt, onset_alt, mu_alt, sigma_alt)
+
         if obs_type == "window":
             p_expr = p_window_var if p_window_var is not None else p_var
         else:
-            p_expr = _resolve_path_probability(
-                trajs[0].path_edge_ids, ev.edge_id, p_var,
-                topology, edge_var_names, model,
-            )
+            # Check for join-node mixture (multiple path alternatives)
+            et_topo = topology.edges.get(ev.edge_id) if topology else None
+            path_alts = et_topo.path_alternatives if et_topo else []
+
+            if len(path_alts) > 1:
+                # Join-downstream edge: build mixture components.
+                # Each alternative is a complete path from anchor to
+                # this edge's target. p_alt = product of p's along
+                # the path. CDF_alt = FW-composed latency along the path.
+                onset_vars = onset_vars or {}
+                for alt_path in path_alts:
+                    p_alt = _resolve_path_probability(
+                        alt_path, ev.edge_id, p_var,
+                        topology, edge_var_names, model,
+                    )
+                    path_result = _resolve_path_latency(
+                        alt_path, topology, latency_vars,
+                        onset_vars=onset_vars,
+                    )
+                    if path_result is not None:
+                        onset_alt, mu_alt, sigma_alt = path_result
+                        mixture_components.append((p_alt, onset_alt, mu_alt, sigma_alt))
+                    else:
+                        # Non-latency path: CDF = 1.0 at all ages
+                        mixture_components.append((p_alt, 0.0, None, None))
+
+                if len(mixture_components) >= 2:
+                    is_mixture = True
+                    # p_expr not used for mixture — each component has its own p
+                    p_expr = None
+
+            if not is_mixture:
+                # Single path (no join, or single alternative)
+                p_expr = _resolve_path_probability(
+                    trajs[0].path_edge_ids, ev.edge_id, p_var,
+                    topology, edge_var_names, model,
+                )
 
         # Resolve latency: latent (Phase D) or fixed (Phase S)?
         # For window: edge-level latency only.
         # For cohort: path-level composed from per-edge latents.
+        # (For mixture cohort, latency is resolved per-component above.)
         has_latent_latency = False
         onset_vars = onset_vars or {}
-        if obs_type == "window" and ev.edge_id in latency_vars:
+        if is_mixture:
+            # Mixture handles its own latency per component
+            has_latent_latency = any(
+                comp[2] is not None and hasattr(comp[2], 'name')
+                for comp in mixture_components
+            ) or any(
+                comp[2] is not None
+                for comp in mixture_components
+            )
+        elif obs_type == "window" and ev.edge_id in latency_vars:
             has_latent_latency = True
             mu_var, sigma_var = latency_vars[ev.edge_id]
             # Phase D.O: use latent onset if available
@@ -727,32 +779,54 @@ def _emit_cohort_likelihoods(
             # Dirichlet-Multinomial logp per trajectory-day:
             #   Σ_i [logΓ(count_i + κ·prob_i) − logΓ(κ·prob_i)]
             #   + logΓ(κ) − logΓ(n + κ)
-            # where prob_i = p·cdf_coeff_i (intervals) or 1−p·CDF_final
-            # (remainder). Recency weight scales each trajectory's logp.
             #
-            # Vectorisation: flatten all intervals across all trajectories
-            # into one array. Same advanced-indexing strategy as before.
+            # For single-path edges:
+            #   prob_i = p·cdf_coeff_i (intervals) or 1−p·CDF_final (remainder)
+            #
+            # For join-downstream edges (mixture):
+            #   prob_i = Σ_alt [p_alt · cdf_coeff_alt_i]
+            #   remainder = 1 − Σ_alt [p_alt · CDF_alt_final]
+            #   Each alternative has its own p (product of edge p's along
+            #   that path) and its own CDF (FW-composed latency along that
+            #   path). Gradients flow to ALL path parameters through the sum.
 
             # Step 1: Flatten all ages into one array (numpy)
             all_ages_raw = []
             for traj in trajs:
                 all_ages_raw.extend(traj.retrieval_ages)
             ages_raw_np = np.array(all_ages_raw, dtype=np.float64)
-
-            # Step 2: Compute CDF at all ages (single path).
             ages_tensor = pt.as_tensor_variable(ages_raw_np)
 
-            onset_is_latent = hasattr(onset, 'name')
-            if onset_is_latent:
-                age_minus_onset = ages_tensor - onset
-                effective_ages = pt.softplus(age_minus_onset)
-                log_ages = pt.log(pt.maximum(effective_ages, 1e-30))
-            else:
-                effective_ages_np = np.maximum(ages_raw_np - float(onset), 1e-6)
-                log_ages = pt.log(pt.as_tensor_variable(effective_ages_np))
+            # Step 2: Compute CDF at all ages.
+            # For mixture: compute one CDF per alternative and weight by p_alt.
+            # For single-path: compute one CDF (existing behaviour).
+            def _compute_cdf_at_ages(onset_val, mu_val, sigma_val):
+                """Compute shifted lognormal CDF at all flattened ages."""
+                onset_is_latent = hasattr(onset_val, 'name')
+                if onset_is_latent:
+                    age_minus_onset = ages_tensor - onset_val
+                    effective_ages = pt.softplus(age_minus_onset)
+                    log_ages = pt.log(pt.maximum(effective_ages, 1e-30))
+                else:
+                    effective_ages_np = np.maximum(ages_raw_np - float(onset_val), 1e-6)
+                    log_ages = pt.log(pt.as_tensor_variable(effective_ages_np))
+                z = (log_ages - mu_val) / (sigma_val * pt.sqrt(2.0))
+                return 0.5 * pt.erfc(-z)
 
-            z_all = (log_ages - mu_var) / (sigma_var * pt.sqrt(2.0))
-            cdf_all = 0.5 * pt.erfc(-z_all)  # shape: (N,)
+            if is_mixture:
+                # Mixture CDF: Σ_alt [p_alt × CDF_alt(t)]
+                # This is the "effective p×CDF" — already includes p weighting.
+                p_cdf_sum = pt.zeros_like(ages_tensor)
+                for p_alt, onset_alt, mu_alt, sigma_alt in mixture_components:
+                    if mu_alt is not None:
+                        cdf_alt = _compute_cdf_at_ages(onset_alt, mu_alt, sigma_alt)
+                    else:
+                        # Non-latency path: CDF = 1.0 at all ages
+                        cdf_alt = pt.ones_like(ages_tensor)
+                    p_cdf_sum = p_cdf_sum + p_alt * cdf_alt
+                # p_cdf_sum shape: (N,) — weighted mixture of CDFs
+            else:
+                cdf_all = _compute_cdf_at_ages(onset, mu_var, sigma_var)
 
             # Step 3: Build index arrays and INTEGER counts (numpy)
             curr_indices = []
@@ -791,22 +865,34 @@ def _emit_cohort_likelihoods(
 
                 age_offset += n_ages
 
-            # Step 4: Compute interval CDF coefficients via advanced indexing
+            # Step 4: Compute interval probabilities via advanced indexing
             curr_idx_np = np.array(curr_indices, dtype=np.int64)
             prev_idx_np = np.array(prev_indices, dtype=np.int64)
             counts_np = np.array(interval_counts, dtype=np.float64)
             weights_np = np.array(interval_weights, dtype=np.float64)
-
-            cdf_curr = cdf_all[curr_idx_np]
             prev_safe = np.where(prev_idx_np >= 0, prev_idx_np, 0)
-            cdf_prev = cdf_all[prev_safe]
             is_first = pt.as_tensor_variable((prev_idx_np < 0).astype(np.float64))
-            cdf_coeffs = cdf_curr - cdf_prev * (1.0 - is_first)
-            cdf_coeffs = pt.clip(cdf_coeffs, 1e-12, 1.0)
+
+            if is_mixture:
+                # Mixture: interval prob = Σ_alt [p_alt × ΔCDF_alt]
+                # p_cdf_sum already has the weighted sum at each age point
+                pcdf_curr = p_cdf_sum[curr_idx_np]
+                pcdf_prev = p_cdf_sum[prev_safe]
+                # interval_pcdf = p_cdf(t_i) - p_cdf(t_{i-1})
+                interval_pcdf = pcdf_curr - pcdf_prev * (1.0 - is_first)
+                interval_pcdf = pt.clip(interval_pcdf, 1e-12, 1.0)
+
+                # α_i = κ · interval_pcdf  (p is already folded into p_cdf_sum)
+                alpha_interval = kappa * interval_pcdf
+            else:
+                # Single path: interval prob = p × ΔCDF
+                cdf_curr = cdf_all[curr_idx_np]
+                cdf_prev = cdf_all[prev_safe]
+                cdf_coeffs = cdf_curr - cdf_prev * (1.0 - is_first)
+                cdf_coeffs = pt.clip(cdf_coeffs, 1e-12, 1.0)
+                alpha_interval = kappa * p_expr * cdf_coeffs
 
             # Step 5: Dirichlet-Multinomial logp — interval terms
-            # α_i = κ · p · cdf_coeff_i
-            alpha_interval = kappa * p_expr * cdf_coeffs
             alpha_interval = pt.maximum(alpha_interval, 1e-12)
             logp_intervals = pt.sum(
                 weights_np * (pt.gammaln(counts_np + alpha_interval)
@@ -817,8 +903,14 @@ def _emit_cohort_likelihoods(
             rem_idx_np = np.array(remainder_indices, dtype=np.int64)
             rem_counts_np = np.array(remainder_counts_list, dtype=np.float64)
             rem_weights_np = np.array(remainder_weights, dtype=np.float64)
-            cdf_finals = cdf_all[rem_idx_np]
-            alpha_remainder = kappa * (1.0 - p_expr * cdf_finals)
+
+            if is_mixture:
+                pcdf_finals = p_cdf_sum[rem_idx_np]
+                alpha_remainder = kappa * (1.0 - pcdf_finals)
+            else:
+                cdf_finals = cdf_all[rem_idx_np]
+                alpha_remainder = kappa * (1.0 - p_expr * cdf_finals)
+
             alpha_remainder = pt.maximum(alpha_remainder, 1e-12)
             logp_remainders = pt.sum(
                 rem_weights_np * (pt.gammaln(rem_counts_np + alpha_remainder)
@@ -907,10 +999,11 @@ def _emit_cohort_likelihoods(
             n_terms = len(trajs)
 
         pm.Potential(f"traj_{obs_type}_{safe_id}", logp)
+        mixture_str = f", mixture={len(mixture_components)} paths" if is_mixture else ""
         diagnostics.append(
             f"  Potential traj_{obs_type}_{safe_id}: "
             f"{n_terms} Cohort days, latent_latency={has_latent_latency}, "
-            f"p_type={'edge' if obs_type == 'window' else 'path'}"
+            f"p_type={'edge' if obs_type == 'window' else 'path'}{mixture_str}"
         )
 
     # --- Single-retrieval days (existing per-day Binomial) ---

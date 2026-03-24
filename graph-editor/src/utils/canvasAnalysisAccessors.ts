@@ -185,7 +185,8 @@ export const TAB_LABELS: Record<string, string> = {
   overview: 'Overview',
   structure: 'Structure',
   evidence: 'Evidence',
-  forecast: 'Forecast',
+  forecast: 'Model',
+  latency: 'Latency',
   depth: 'Data Depth',
   diagnostics: 'Diagnostics',
 };

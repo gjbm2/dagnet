@@ -298,6 +298,9 @@ def main():
                         help="Model feature flag (repeatable). "
                              "e.g. --feature latent_onset=false --feature overdispersion=true. "
                              "Available: latent_latency, cohort_latency, overdispersion, latent_onset")
+    parser.add_argument("--draws", type=int, default=None, help="MCMC draws per chain (default: 2000)")
+    parser.add_argument("--tune", type=int, default=None, help="MCMC warmup steps per chain (default: 1000)")
+    parser.add_argument("--chains", type=int, default=None, help="Number of MCMC chains (default: 4)")
     args = parser.parse_args()
 
     # Parse --feature flags into a dict
@@ -581,6 +584,9 @@ def main():
             **({"placeholder": True} if args.placeholder else {}),
             **({"features": feature_flags} if feature_flags else {}),
             **({"model_inspect_only": True} if args.no_mcmc else {}),
+            **({"draws": args.draws} if args.draws else {}),
+            **({"tune": args.tune} if args.tune else {}),
+            **({"chains": args.chains} if args.chains else {}),
         },
         "_job_id": f"harness-{int(time.time())}",
     }

@@ -251,8 +251,10 @@ describe('applyPromotion', () => {
     const source = applyPromotion(p, undefined);
 
     expect(source).toBe('bayesian');
-    expect(p.mean).toBe(0.15);
-    expect(p.stdev).toBe(0.02);
+    // p.mean and p.stdev are per-query display quantities computed by the
+    // topo pass / pipeline — NOT written by applyPromotion.
+    expect(p.mean).toBe(0); // unchanged
+    expect(p.stdev).toBe(0); // unchanged
     expect(p.latency?.mu).toBe(2.3);
     expect(p.latency?.sigma).toBe(0.7);
     expect(p.latency?.t95).toBe(40);
@@ -274,7 +276,7 @@ describe('applyPromotion', () => {
     const source = applyPromotion(p, 'bayesian');
 
     expect(source).toBe('analytic');
-    expect(p.mean).toBe(0.12);
+    expect(p.mean).toBe(0); // unchanged — topo pass computes p.mean
   });
 
   it('should respect graph-level preference when edge has none', () => {
@@ -287,7 +289,7 @@ describe('applyPromotion', () => {
     const source = applyPromotion(p, 'analytic');
 
     expect(source).toBe('analytic');
-    expect(p.mean).toBe(0.12);
+    expect(p.mean).toBe(0); // unchanged — topo pass computes p.mean
   });
 
   it('should return undefined and not mutate when model_vars is empty', () => {
@@ -313,7 +315,7 @@ describe('applyPromotion', () => {
     const source = applyPromotion(p, undefined);
 
     expect(source).toBe('bayesian');
-    expect(p.mean).toBe(0.15);
+    expect(p.mean).toBe(0); // unchanged — topo pass computes p.mean
     expect(p.latency).toBeUndefined();
   });
 });

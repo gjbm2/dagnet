@@ -17,6 +17,9 @@ import { fontSizeZoom } from '../../lib/analysisDisplaySettingsRegistry';
 import { TabbedContainer, type TabDefinition } from '../shared/TabbedContainer';
 import { freshnessColour, type FreshnessLevel } from '../../utils/freshnessDisplay';
 import { objectTypeTheme, type ObjectType } from '../../theme/objectTypeTheme';
+import { useDataDepthContext } from '../../contexts/DataDepthContext';
+import { useGraphStoreOptional } from '../../contexts/GraphStoreContext';
+import { buildDataDepthInfoRows } from '../../services/dataDepthService';
 import '../../styles/analysis-info-card.css';
 
 interface AnalysisInfoCardProps {
@@ -60,7 +63,7 @@ const TAB_LABELS: Record<string, string> = {
   overview: 'Overview',
   structure: 'Structure',
   evidence: 'Evidence',
-  forecast: 'Forecast',
+  forecast: 'Model',
   depth: 'Data Depth',
   diagnostics: 'Diagnostics',
 };
@@ -71,7 +74,29 @@ const SCENARIO_AWARE_TABS = new Set(['overview', 'structure']);
 
 export function AnalysisInfoCard({ result, fontSize, defaultTab, onFileLink, tabExtra, kind }: AnalysisInfoCardProps) {
   const sizeZoom = fontSizeZoom(fontSize);
-  const allData = result.data || [];
+
+  // ── Data Depth score enrichment ──
+  // Depth skeleton rows (n, k, observed rate) are built by localAnalysisComputeService.
+  // Enriched rows (f₁, f₂, f₃, composite, slice breakdown) are appended here
+  // so they appear regardless of whether we're rendered via AnalysisChartContainer
+  // or directly (faceted card view).
+  const { scores: _ddScores } = useDataDepthContext();
+  const _ddGraph: any = useGraphStoreOptional((s: any) => s?.graph);
+  const enrichedData = useMemo(() => {
+    const raw = result.data || [];
+    if (result.analysis_type !== 'edge_info' || !_ddScores || !_ddGraph?.edges) return raw;
+    const edgeIdRow = raw.find((r: any) => r.tab === 'overview' && r.property === 'Edge ID');
+    if (!edgeIdRow?.value) return raw;
+    const edgeObj = _ddGraph.edges.find((e: any) => e.id === edgeIdRow.value || e.uuid === edgeIdRow.value);
+    const scoreKey = edgeObj ? (edgeObj.uuid ?? edgeObj.id) : edgeIdRow.value;
+    const score = _ddScores.get(scoreKey);
+    if (!score) return raw;
+    const n = edgeObj?.p?.evidence?.n ?? 0;
+    const k = edgeObj?.p?.evidence?.k;
+    return [...raw, ...buildDataDepthInfoRows(score, n, k)] as Record<string, any>[];
+  }, [result, _ddScores, _ddGraph]);
+
+  const allData = enrichedData as Record<string, any>[];
   // When kind is set, filter to only rows matching that card kind — renders flat (no tab bar).
   const data = kind ? allData.filter((row: any) => row.tab === kind) : allData;
 
@@ -129,13 +154,17 @@ export function AnalysisInfoCard({ result, fontSize, defaultTab, onFileLink, tab
     return <div className="info-card-empty">No data</div>;
   }
 
+  const latencyCdfMeta = (result as any).metadata?.latency_cdf;
+
   if (!hasTabs) {
     // No tabs — render flat (single tab, faceted view, or no tab field at all)
     const sections = buildSections(data, scenarioIds, scenarioMeta, result.dimension_values);
     const extra = kind ? tabExtra?.[kind] : undefined;
+    const showCdf = (kind === 'latency' || !kind) && !!latencyCdfMeta;
     return (
       <div className="info-card" style={sizeZoom !== 1 ? { zoom: sizeZoom } as any : undefined}>
         <InfoTable sections={sections} scenarioIds={scenarioIds} scenarioMeta={scenarioMeta} onFileLink={onFileLink} />
+        {showCdf && <LatencyCdfTab edge={latencyCdfMeta.edge} path={latencyCdfMeta.path} />}
         {extra}
       </div>
     );
@@ -146,8 +175,6 @@ export function AnalysisInfoCard({ result, fontSize, defaultTab, onFileLink, tab
     id,
     label: TAB_LABELS[id] || id,
   }));
-
-  const latencyCdfMeta = (result as any).metadata?.latency_cdf;
 
   const panels: Record<string, React.ReactNode> = {};
   for (const tabId of tabIds) {
@@ -473,10 +500,10 @@ function buildCombinedCdfOption(edge?: CdfParams, path?: CdfParams) {
 
   return {
     animation: false,
-    grid: { left: 30, right: 8, top: 28, bottom: 20 },
+    grid: { left: 30, right: 8, top: 36, bottom: 20 },
     legend: {
-      show: true, top: 0, left: 0, itemWidth: 14, itemHeight: 8, itemGap: 12,
-      textStyle: { fontSize: 8, color: '#aaa' },
+      show: true, top: 0, left: 0, itemWidth: 14, itemHeight: 8, itemGap: 8,
+      textStyle: { fontSize: 7, color: '#aaa' },
     },
     xAxis: {
       type: 'value' as const, min: 0, max: maxDays,

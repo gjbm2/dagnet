@@ -964,10 +964,13 @@ When deriving `p.forecast.mean`, **recent mature days are weighted more heavily*
 │  p.latency.path_onset_delta_days│ Path-level Σ onset_delta_days (DP sum along path)│
 │  p.latency.posterior        │  Bayesian posterior summary (from webhook)            │
 │  p.posterior                │  Edge probability posterior (from Bayes webhook)      │
-│  p.model_vars[]             │  Candidate model sets: analytic, bayesian, manual     │
-│  p.model_source_preference  │  Per-edge override: best_available/bayesian/analytic/ │
-│                             │  manual. Determines which model_vars entry promotes   │
-│                             │  to p.mean/p.stdev. Falls back to graph-level default │
+│  p.model_vars[]             │  Candidate model sets: analytic, analytic_be,        │
+│                             │  bayesian, manual. Each carries probability (p∞)     │
+│                             │  and latency params. See §12.                        │
+│  p.model_source_preference  │  Per-edge override: best_available/bayesian/          │
+│                             │  analytic_be/analytic/manual. Determines which        │
+│                             │  entry promotes to p.forecast/p.latency. Falls back  │
+│                             │  to graph-level default.                             │
 └─────────────────────────────┴──────────────────────────────────────────────────────┘
 ```
 
@@ -1281,7 +1284,74 @@ When a node has **case allocations** (e.g., A/B test with 50/50 split), this aff
 
 ---
 
-## 12. Constants Reference
+## 12. Model Source Selection and Forecast Derivation
+
+### 12.1 Model Variable Sources
+
+Each edge carries an array of candidate model variable sets (`p.model_vars[]`), one per source:
+
+| Source | How computed | When populated |
+|--------|-------------|----------------|
+| `analytic` | FE stats pass (lognormal moment-match from cohort lag data) | Every fetch |
+| `analytic_be` | BE stats engine (Python port of FE stats pass) | Every fetch (async) |
+| `bayesian` | MCMC posterior (from Bayes compiler) | On Bayes fit completion |
+| `manual` | User-edited values | On user edit in Output card |
+
+Each entry contains:
+- `probability.mean` — the model's forecast p∞ (asymptotic conversion rate)
+- `probability.stdev` — uncertainty on p∞ (0 for analytic, posterior SD for Bayesian)
+- `latency.{mu, sigma, t95, onset_delta_days}` — edge-level model parameters
+- `latency.{path_mu, path_sigma, path_t95, path_onset_delta_days}` — path-level composed parameters
+
+### 12.2 Source Resolution (Promotion)
+
+The active source is determined by `model_source_preference` (per-edge override or graph-level default). The resolution waterfall for `best_available` is:
+
+1. Bayesian (if present and quality gate passed)
+2. Analytic (FE)
+3. Analytic (BE)
+
+When the active source is selected, its latency parameters are **promoted** to `edge.p.latency.*` and its forecast p∞ is promoted to `edge.p.forecast.mean`.
+
+### 12.3 Derivation Chain
+
+Display quantities depend on the promoted model parameters:
+
+```
+Model source selection
+        │
+        ▼
+Promoted latency params (mu, sigma, onset, path_mu, path_sigma)
+        │
+        ├──▶ Completeness = CDF(cohort_ages, mu, sigma, onset)
+        │         │
+        ├──▶ Forecast p∞ = recency-weighted k/n from cohorts with age ≥ t95
+        │         │
+        └──▶ Blended p.mean = f(evidence.mean, forecast.mean, completeness)
+```
+
+- **evidence.mean** = raw observed k/n from the current query window (data, not model-dependent)
+- **completeness** = fraction of eventual converters observed (model-dependent via CDF params)
+- **forecast.mean** = p∞ from mature cohorts (model-dependent via t95 maturity threshold)
+- **p.mean** = blend of evidence and forecast, weighted by completeness (model-dependent)
+
+When the user switches source, all three derived quantities are recomputed from the new source's parameters. If `mean_overridden` is set, the user's manual value is preserved.
+
+### 12.4 Data vs Model Separation
+
+| Field | Category | Changes with source? |
+|-------|----------|---------------------|
+| `p.evidence.mean` | Data | No |
+| `p.evidence.n`, `.k` | Data | No |
+| `p.evidence.stdev` | Data | No |
+| `p.forecast.mean` | Model-derived | Yes (t95 determines maturity threshold) |
+| `p.latency.completeness` | Model-derived | Yes (CDF depends on mu/sigma/onset) |
+| `p.mean` | Model-derived | Yes (blend depends on completeness + forecast) |
+| `p.latency.mu`, `.sigma`, `.t95` | Model parameter | Yes (promoted from active source) |
+
+---
+
+## 13. Constants Reference
 
 Key defaults used in LAG calculations:
 

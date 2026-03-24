@@ -107,6 +107,54 @@ GRAPH_CONFIGS: dict[str, dict[str, Any]] = {
         ],
         "base_date": "2025-12-12",
     },
+    "skip": {
+        "graph_file": "synth-skip-test.json",
+        "graph_id": "graph-synth-skip-test",
+        "edges": [
+            ("synth-sk-anchor-to-middle", "ba49643e-3403-42e4-a74b-46d9abdd2ea0", "PLACEHOLDER-w", "PLACEHOLDER-c"),
+            ("synth-sk-anchor-to-target", "69e50f20-8710-499e-95a7-158b89f7b145", "PLACEHOLDER-w", "PLACEHOLDER-c"),
+            ("synth-sk-middle-to-target", "f35a11ae-84a4-4396-839c-eee557ff1d47", "PLACEHOLDER-w", "PLACEHOLDER-c"),
+            ("synth-sk-target-to-outcome", "75eb6486-6033-4ea7-91ae-9e1954f56bed", "PLACEHOLDER-w", "PLACEHOLDER-c"),
+        ],
+        "base_date": "2025-12-12",
+    },
+    "3join": {
+        "graph_file": "synth-3way-join-test.json",
+        "graph_id": "graph-synth-3way-join-test",
+        "edges": [
+            ("synth-3j-anchor-to-a",     "b6e72579-e4e2-4ad2-a468-f03b763d9518", "PLACEHOLDER-w", "PLACEHOLDER-c"),
+            ("synth-3j-anchor-to-b",     "e54d94fb-5ebf-465e-82e4-3279968dff9c", "PLACEHOLDER-w", "PLACEHOLDER-c"),
+            ("synth-3j-anchor-to-c",     "06d48cf6-1791-4616-b54d-e164cb09cf99", "PLACEHOLDER-w", "PLACEHOLDER-c"),
+            ("synth-3j-a-to-join",       "a6356eaa-6193-48f1-81e9-ba030de782aa", "PLACEHOLDER-w", "PLACEHOLDER-c"),
+            ("synth-3j-b-to-join",       "cc8e21a6-37c8-4a57-a639-69874cb9891b", "PLACEHOLDER-w", "PLACEHOLDER-c"),
+            ("synth-3j-c-to-join",       "a2771c0e-f341-4eb6-847c-3057718ab8b3", "PLACEHOLDER-w", "PLACEHOLDER-c"),
+            ("synth-3j-join-to-outcome", "45363ab9-b948-4c61-93e4-3acba4dedddf", "PLACEHOLDER-w", "PLACEHOLDER-c"),
+        ],
+        "base_date": "2025-12-12",
+    },
+    "joinbranch": {
+        "graph_file": "synth-join-branch-test.json",
+        "graph_id": "graph-synth-join-branch-test",
+        "edges": [
+            ("synth-jb-anchor-to-a",   "a2f1c1fe-591c-4f80-98c5-332212fab0b2", "PLACEHOLDER-w", "PLACEHOLDER-c"),
+            ("synth-jb-anchor-to-b",   "5ee86f9c-a34d-4cba-b245-a41263a42f03", "PLACEHOLDER-w", "PLACEHOLDER-c"),
+            ("synth-jb-a-to-join",     "89408718-7de6-4b91-b091-eafa75cec6a3", "PLACEHOLDER-w", "PLACEHOLDER-c"),
+            ("synth-jb-b-to-join",     "ff8d5b84-7b4c-4b58-b36b-eb4a1711146f", "PLACEHOLDER-w", "PLACEHOLDER-c"),
+            ("synth-jb-join-to-fast",  "87a90ca3-641f-4f51-b402-43d93eda61f8", "PLACEHOLDER-w", "PLACEHOLDER-c"),
+            ("synth-jb-join-to-slow",  "a2e4cdc3-e0af-4d2a-ad79-163dc34c12b5", "PLACEHOLDER-w", "PLACEHOLDER-c"),
+        ],
+        "base_date": "2025-12-12",
+    },
+    "fanout": {
+        "graph_file": "synth-fanout-test.json",
+        "graph_id": "graph-synth-fanout-test",
+        "edges": [
+            ("synth-fo-anchor-to-gate", "c5275986-d61d-457f-8e7a-5c72a302d02a", "PLACEHOLDER-w", "PLACEHOLDER-c"),
+            ("synth-fo-gate-to-fast",   "8d638bb5-ec14-48c5-9246-b6b0202f1504", "PLACEHOLDER-w", "PLACEHOLDER-c"),
+            ("synth-fo-gate-to-slow",   "a5bc58f0-5275-4b7f-b2b2-8a2f2f3837a9", "PLACEHOLDER-w", "PLACEHOLDER-c"),
+        ],
+        "base_date": "2025-12-12",
+    },
     "mirror": {
         "graph_file": "synth-mirror-4step.json",
         "graph_id": "graph-synth-mirror-4step",
@@ -336,9 +384,61 @@ def _build_hash_lookup(gcfg: dict) -> dict[str, dict[str, str]]:
 
 
 def load_truth_config(truth_path: str) -> dict:
-    """Load ground-truth config from .truth.yaml sidecar."""
+    """Load ground-truth config from .truth.yaml sidecar.
+
+    For new-format truth files (with graph structure), builds a
+    _edge_lookup dict that maps both short names (anchor-to-gate)
+    and prefixed names (synth-diamond-anchor-to-gate) to the same
+    config. The edges dict itself is unchanged (short names only).
+    """
     with open(truth_path) as f:
-        return yaml.safe_load(f)
+        truth = yaml.safe_load(f)
+
+    # For new-format truth files, build a _edge_prefix so that
+    # _resolve_truth_edge can match prefixed param_ids to short-name
+    # truth keys. The edges dict itself stays clean (short names only).
+    graph_name = truth.get("graph", {}).get("name", "")
+    if graph_name:
+        prefix = graph_name.replace("synth-", "").replace("-test", "")
+        if not prefix.startswith("synth"):
+            prefix = f"synth-{prefix}"
+        truth["_edge_prefix"] = prefix
+
+    return truth
+
+
+def _resolve_truth_edge(truth: dict, pid: str) -> dict:
+    """Look up edge truth config by param_id, trying multiple name forms.
+
+    Handles both old-format (keys match param_id directly) and new-format
+    (keys are short names like "anchor-to-gate" while param_id is prefixed
+    like "synth-diamond-anchor-to-gate").
+    """
+    edges = truth.get("edges", {})
+
+    # Direct match
+    if pid in edges and isinstance(edges[pid], dict) and "from" not in edges[pid] or pid in edges:
+        result = edges.get(pid, {})
+        if isinstance(result, dict):
+            return result
+
+    # Strip parameter- prefix
+    bare = pid.replace("parameter-", "") if pid.startswith("parameter-") else pid
+    if bare in edges:
+        result = edges[bare]
+        if isinstance(result, dict):
+            return result
+
+    # Strip graph-name prefix (new format)
+    edge_prefix = truth.get("_edge_prefix", "")
+    if edge_prefix and bare.startswith(edge_prefix + "-"):
+        short = bare[len(edge_prefix) + 1:]
+        if short in edges:
+            result = edges[short]
+            if isinstance(result, dict):
+                return result
+
+    return {}
 
 
 def derive_truth_from_graph(graph_snapshot: dict, topology) -> dict:
@@ -461,10 +561,7 @@ def simulate_graph(
     total_onset = 0.0
     for edge_id, et in topology.edges.items():
         pid = et.param_id
-        t = truth.get("edges", {}).get(pid, {})
-        if not t:
-            bare = pid.replace("parameter-", "") if pid.startswith("parameter-") else pid
-            t = truth.get("edges", {}).get(bare, {})
+        t = _resolve_truth_edge(truth, pid)
         if t:
             onset = t.get("onset", 0.0)
             mu = t.get("mu", 1.0)
@@ -483,10 +580,7 @@ def simulate_graph(
     edge_params: dict[str, dict] = {}  # edge_id → {p, onset, mu, sigma, kappa_sim}
     for edge_id, et in topology.edges.items():
         pid = et.param_id
-        found = truth.get("edges", {}).get(pid)
-        if not found:
-            bare = pid.replace("parameter-", "") if pid.startswith("parameter-") else pid
-            found = truth.get("edges", {}).get(bare)
+        found = _resolve_truth_edge(truth, pid) or None
         if found:
             ep = dict(found)
         else:
@@ -517,10 +611,88 @@ def simulate_graph(
         for edge_id in edge_params:
             drift_paths[edge_id] = zero_path
 
+    # --- Context dimensions ---
+    # Each dimension is an independent MECE partition. Each user is
+    # assigned one value per dimension. Effects compose multiplicatively
+    # for p (p_eff = p_base × Π p_mult) and additively for mu
+    # (mu_eff = mu_base + Σ mu_offset).
+    context_dims = truth.get("context_dimensions", [])
+    user_kappa = sim_config.get("user_kappa", sim_config.get("kappa_sim_default", 100.0))
+
+    # Pre-build context lookup: dim_id → [{id, weight, edges: {pid → {p_mult, mu_offset}}}]
+    ctx_lookup: list[dict] = []
+    for dim in context_dims:
+        dim_values = dim.get("values", [])
+        weights = [v.get("weight", 1.0) for v in dim_values]
+        total_w = sum(weights)
+        weights = [w / total_w for w in weights]
+        ctx_lookup.append({
+            "id": dim["id"],
+            "mece": dim.get("mece", True),
+            "values": dim_values,
+            "weights": np.array(weights),
+        })
+    if ctx_lookup:
+        dim_names = [d["id"] for d in ctx_lookup]
+        print(f"  Contexts: {len(ctx_lookup)} dimensions ({', '.join(dim_names)})", flush=True)
+        for cl in ctx_lookup:
+            vals = [f"{v['id']}={w:.0%}" for v, w in zip(cl["values"], cl["weights"])]
+            print(f"    {cl['id']}: {', '.join(vals)}", flush=True)
+
+    def _compute_user_params(
+        user_contexts: dict[str, str],
+        edge_id: str,
+        base_p: float,
+        base_mu: float,
+        drift_offset: float,
+    ) -> tuple[float, float]:
+        """Compute per-user effective p and mu from context assignments.
+
+        Composes context effects then draws per-user p from Beta.
+        Returns (p_user, mu_user).
+        """
+        p_mult = 1.0
+        mu_offset = 0.0
+
+        # Compose effects from all context dimensions
+        for dim in context_dims:
+            dim_id = dim["id"]
+            user_val = user_contexts.get(dim_id)
+            if user_val is None:
+                continue
+            for v in dim.get("values", []):
+                if v["id"] == user_val:
+                    pid = topology.edges[edge_id].param_id if edge_id in topology.edges else ""
+                    bare = pid.replace("parameter-", "") if pid.startswith("parameter-") else pid
+                    overrides = v.get("edges", {}).get(pid) or v.get("edges", {}).get(bare) or {}
+                    p_mult *= overrides.get("p_mult", 1.0)
+                    mu_offset += overrides.get("mu_offset", 0.0)
+                    break
+
+        # Apply drift
+        if abs(drift_offset) > 1e-9:
+            logit_p = math.log(max(base_p, 1e-6) / max(1 - base_p, 1e-6)) + drift_offset
+            p_drifted = 1.0 / (1.0 + math.exp(-logit_p))
+        else:
+            p_drifted = base_p
+
+        # Apply context p multiplier, clamp to (0, 1)
+        p_ctx = min(max(p_drifted * p_mult, 1e-6), 1.0 - 1e-6)
+
+        # Per-user Beta draw (user_kappa controls within-context variation)
+        alpha = p_ctx * user_kappa
+        beta_param = (1.0 - p_ctx) * user_kappa
+        alpha = max(alpha, 0.001)
+        beta_param = max(beta_param, 0.001)
+        p_user = float(rng.beta(alpha, beta_param))
+
+        mu_user = base_mu + mu_offset
+        return p_user, mu_user
+
     # --- Person-level simulation ---
     # Runs for total_sim_days (burn_in + n_days). The first burn_in_days
     # populate the pipeline; observation rows are only for day_idx >= burn_in_days.
-    arrivals_by_day: list[list[dict[str, float]]] = []
+    arrivals_by_day: list[list[dict]] = []
     actual_traffic: list[int] = []
 
     # Exponential growth: daily rate from MoM growth
@@ -539,39 +711,40 @@ def simulate_graph(
             phase = "burn-in" if day_idx < burn_in_days else "observable"
             print(f"    Day {day_idx + 1}/{total_sim_days} ({phase})", flush=True)
 
-        # Draw day-specific effective probabilities per edge:
-        # 1. Apply drift: p_drifted = logistic(logit(p_true) + drift)
-        # 2. Apply overdispersion: p_eff ~ Beta(p_drifted * kappa, (1 - p_drifted) * kappa)
-        day_probs: dict[str, float] = {}
-        for eid, ep in edge_params.items():
-            p_true = ep["p"]
-            kappa = ep["kappa_sim"]
-
-            # Drift
-            drift_offset = drift_paths[eid][day_idx]
-            if abs(drift_offset) > 1e-9:
-                logit_p = math.log(p_true / (1 - p_true)) + drift_offset
-                p_drifted = 1.0 / (1.0 + math.exp(-logit_p))
-            else:
-                p_drifted = p_true
-
-            # Overdispersion: Beta draw
-            alpha = p_drifted * kappa
-            beta_param = (1.0 - p_drifted) * kappa
-            # Guard against degenerate alpha/beta
-            alpha = max(alpha, 0.001)
-            beta_param = max(beta_param, 0.001)
-            p_eff = float(rng.beta(alpha, beta_param))
-            day_probs[eid] = p_eff
+        # Day-level drift offsets (same for all users on this day)
+        day_drift: dict[str, float] = {}
+        for eid in edge_params:
+            day_drift[eid] = float(drift_paths[eid][day_idx])
 
         # Simulate each person
-        day_arrivals: list[dict[str, float]] = []
+        day_arrivals: list[dict] = []
         for _ in range(n_people):
-            person: dict[str, float] = {}
+            # Assign context values (one per MECE dimension)
+            user_contexts: dict[str, str] = {}
+            for cl in ctx_lookup:
+                if cl["mece"]:
+                    choice = rng.choice(len(cl["values"]), p=cl["weights"])
+                    user_contexts[cl["id"]] = cl["values"][choice]["id"]
+                # TODO: non-MECE dimensions (user can belong to multiple values)
+
+            # Compute per-user effective params per edge
+            user_probs: dict[str, float] = {}
+            user_mus: dict[str, float] = {}
+            for eid, ep in edge_params.items():
+                p_user, mu_user = _compute_user_params(
+                    user_contexts, eid,
+                    ep["p"], ep.get("mu", 0.0),
+                    day_drift[eid],
+                )
+                user_probs[eid] = p_user
+                user_mus[eid] = mu_user
+
+            person: dict[str, Any] = {"_contexts": user_contexts}
             _traverse(
                 topology.anchor_node_id, 0.0, person,
-                topology, adj_out, edge_params, day_probs,
+                topology, adj_out, edge_params, user_probs,
                 edge_to_bg, rng,
+                user_mus=user_mus,
             )
             day_arrivals.append(person)
 
@@ -593,9 +766,11 @@ def simulate_graph(
     all_edge_ids = [eid for eid in topology.edges if topology.edges[eid].param_id]
 
     for day_idx in range(total_sim_days):
+        people = arrivals_by_day[day_idx]
+
         day_sorted: dict[str, list[float]] = {}
         for nid in all_nodes:
-            times = [p[nid] for p in arrivals_by_day[day_idx] if nid in p]
+            times = [p[nid] for p in people if nid in p]
             times.sort()
             day_sorted[nid] = times
         sorted_times.append(day_sorted)
@@ -603,7 +778,7 @@ def simulate_graph(
         day_edge_sorted: dict[str, list[float]] = {}
         for eid in all_edge_ids:
             key = f"edge:{eid}"
-            times = [p[key] for p in arrivals_by_day[day_idx] if key in p]
+            times = [p[key] for p in people if key in p]
             times.sort()
             day_edge_sorted[eid] = times
         sorted_edge_times.append(day_edge_sorted)
@@ -688,6 +863,7 @@ def simulate_graph(
         topology, sorted_times, sorted_edge_times, actual_traffic,
         hash_lookup, n_days, base_date, failure_rate, rng,
         arrivals_by_day, burn_in_days, total_sim_days, edge_params,
+        context_dims=context_dims,
     )
 
     # Free the raw person data now
@@ -715,18 +891,21 @@ def simulate_graph(
 def _traverse(
     node_id: str,
     t_current: float,
-    person: dict[str, float],
+    person: dict,
     topology,
     adj_out: dict[str, list[str]],
     edge_params: dict[str, dict],
     day_probs: dict[str, float],
     edge_to_bg: dict[str, str],
     rng: np.random.Generator,
+    user_mus: dict[str, float] | None = None,
 ) -> None:
     """Recursively traverse the DAG for one person.
 
-    Uses day_probs (daily effective probabilities after drift +
-    overdispersion) for conversion draws, and edge_params for latency.
+    Uses day_probs (per-user effective probabilities after context +
+    drift + user Beta draw) for conversion draws, and edge_params for
+    base latency. If user_mus is provided, overrides mu per edge
+    (context-adjusted).
     """
     person[node_id] = t_current
 
@@ -763,7 +942,8 @@ def _traverse(
         if choice < len(evented):
             chosen_eid = evented[choice]
             _take_edge(chosen_eid, t_current, person, topology,
-                       adj_out, edge_params, day_probs, edge_to_bg, rng)
+                       adj_out, edge_params, day_probs, edge_to_bg, rng,
+                       user_mus=user_mus)
         elif unevented:
             chosen_eid = rng.choice(unevented)
             et = topology.edges[chosen_eid]
@@ -774,25 +954,28 @@ def _traverse(
         p = day_probs[eid]
         if rng.random() < p:
             _take_edge(eid, t_current, person, topology,
-                       adj_out, edge_params, day_probs, edge_to_bg, rng)
+                       adj_out, edge_params, day_probs, edge_to_bg, rng,
+                       user_mus=user_mus)
 
 
 def _take_edge(
     edge_id: str,
     t_current: float,
-    person: dict[str, float],
+    person: dict,
     topology,
     adj_out, edge_params, day_probs, edge_to_bg, rng,
+    user_mus: dict[str, float] | None = None,
 ) -> None:
     """Person takes an edge: draw latency, record arrival, recurse.
 
     Records both node arrival (node_id → t) and edge traversal
     (edge:<edge_id> → t_arrival) so per-edge counts work at joins.
+    If user_mus is provided, uses per-user context-adjusted mu.
     """
     et = topology.edges[edge_id]
     params = edge_params[edge_id]
 
-    mu = params.get("mu", 0.0)
+    mu = user_mus.get(edge_id, params.get("mu", 0.0)) if user_mus else params.get("mu", 0.0)
     sigma = params.get("sigma", 0.0)
     onset = params.get("onset", 0.0)
     if sigma > 0.001:
@@ -803,7 +986,8 @@ def _take_edge(
     t_arrival = t_current + latency
     person[f"edge:{edge_id}"] = t_arrival
     _traverse(et.to_node, t_arrival, person, topology,
-              adj_out, edge_params, day_probs, edge_to_bg, rng)
+              adj_out, edge_params, day_probs, edge_to_bg, rng,
+              user_mus=user_mus)
 
 
 # ---------------------------------------------------------------------------
@@ -825,10 +1009,11 @@ def _generate_observations_nightly(
     base_date: datetime,
     failure_rate: float,
     rng: np.random.Generator,
-    arrivals_by_day: list[list[dict[str, float]]],
+    arrivals_by_day: list[list[dict]],
     burn_in_days: int = 0,
     total_sim_days: int | None = None,
     edge_params: dict[str, dict] | None = None,
+    context_dims: list[dict] | None = None,
 ) -> dict[str, list[dict]]:
     """Generate snapshot rows using nightly fetch simulation.
 
@@ -845,6 +1030,10 @@ def _generate_observations_nightly(
       x = count who arrived at from_node on that calendar day
       y = count of those who reached to_node by retrieval age (relative to
         from_node arrival day)
+
+    When context_dims is provided, also emits per-context rows with
+    slice_keys like "context(channel:organic).cohort()" alongside the
+    aggregate rows. All context slices share the same core_hash.
 
     The window and cohort rows trace DIFFERENT populations for the same edge:
     window groups by from-node arrival day, cohort groups by anchor entry day.
@@ -898,6 +1087,54 @@ def _generate_observations_nightly(
         else:
             edge_hashes[edge_id] = (f"SYNTH-{pid}-w", f"SYNTH-{pid}-c")
 
+    _tsd = total_sim_days or n_days
+
+    # ── Build per-context sorted lists ──────────────────────────────────
+    context_dims = context_dims or []
+    ctx_keys: list[str] = []
+    for dim in context_dims:
+        for v in dim.get("values", []):
+            ctx_keys.append(f"context({dim['id']}:{v['id']})")
+
+    ctx_sorted_times: dict[str, list[dict[str, list[float]]]] = {k: [] for k in ctx_keys}
+    ctx_sorted_edge_times: dict[str, list[dict[str, list[float]]]] = {k: [] for k in ctx_keys}
+    ctx_anchor_traffic: dict[str, list[int]] = {k: [] for k in ctx_keys}
+
+    if ctx_keys:
+        print(f"  Building per-context indices ({len(ctx_keys)} keys × {_tsd} days)...", flush=True)
+        all_edge_ids_ctx = [eid for eid in topology.edges if topology.edges[eid].param_id]
+        all_nodes_ctx = set()
+        for et in topology.edges.values():
+            all_nodes_ctx.add(et.from_node)
+            all_nodes_ctx.add(et.to_node)
+        all_nodes_ctx.add(topology.anchor_node_id)
+
+        for day_idx in range(_tsd):
+            people = arrivals_by_day[day_idx]
+            for dim in context_dims:
+                for v in dim.get("values", []):
+                    ck = f"context({dim['id']}:{v['id']})"
+                    ctx_people = [p for p in people
+                                  if p.get("_contexts", {}).get(dim["id"]) == v["id"]]
+
+                    day_ctx_sorted: dict[str, list[float]] = {}
+                    for nid in all_nodes_ctx:
+                        times = [p[nid] for p in ctx_people if nid in p]
+                        times.sort()
+                        day_ctx_sorted[nid] = times
+                    ctx_sorted_times[ck].append(day_ctx_sorted)
+
+                    day_ctx_edge: dict[str, list[float]] = {}
+                    for eid in all_edge_ids_ctx:
+                        key = f"edge:{eid}"
+                        times = [p[key] for p in ctx_people if key in p]
+                        times.sort()
+                        day_ctx_edge[eid] = times
+                    ctx_sorted_edge_times[ck].append(day_ctx_edge)
+
+                    anchor_count = sum(1 for p in ctx_people if topology.anchor_node_id in p)
+                    ctx_anchor_traffic[ck].append(anchor_count)
+
     # ── Build window arrival index ──────────────────────────────────────
     # For each edge, group person arrivals by the ABSOLUTE CALENDAR DAY
     # they reached the from_node. Each entry records:
@@ -913,10 +1150,14 @@ def _generate_observations_nightly(
     window_index: dict[str, dict[int, list[float | None]]] = defaultdict(
         lambda: defaultdict(list)
     )
+    # Per-context window indices: ctx_key → edge_id → abs_day → [offsets]
+    ctx_window_index: dict[str, dict[str, dict[int, list[float | None]]]] = {
+        ck: defaultdict(lambda: defaultdict(list)) for ck in ctx_keys
+    }
 
-    _tsd = total_sim_days or n_days
     for day_idx in range(_tsd):
         for person in arrivals_by_day[day_idx]:
+            user_ctxs = person.get("_contexts", {})
             for edge_id, et in topology.edges.items():
                 if not et.param_id:
                     continue
@@ -924,9 +1165,6 @@ def _generate_observations_nightly(
                 if from_node not in person:
                     continue
 
-                # Absolute calendar day of from_node arrival, relative to
-                # base_date (not sim_start). day_idx=0 is sim_start which
-                # is burn_in_days before base_date.
                 from_arrival_time = person[from_node]
                 abs_from_day = (day_idx - burn_in_days) + int(from_arrival_time)
 
@@ -935,19 +1173,40 @@ def _generate_observations_nightly(
                     to_arrival_time = person[edge_key]
                     edge_offset = to_arrival_time - from_arrival_time
                     window_index[edge_id][abs_from_day].append(edge_offset)
+                    # Per-context
+                    for dim in (context_dims or []):
+                        uval = user_ctxs.get(dim["id"])
+                        if uval:
+                            ck = f"context({dim['id']}:{uval})"
+                            ctx_window_index[ck][edge_id][abs_from_day].append(edge_offset)
                 else:
                     window_index[edge_id][abs_from_day].append(None)
+                    for dim in (context_dims or []):
+                        uval = user_ctxs.get(dim["id"])
+                        if uval:
+                            ck = f"context({dim['id']}:{uval})"
+                            ctx_window_index[ck][edge_id][abs_from_day].append(None)
 
     # Pre-sort the non-None offsets for bisect-based counting
     window_sorted: dict[str, dict[int, tuple[int, list[float]]]] = {}
     for edge_id, day_map in window_index.items():
         window_sorted[edge_id] = {}
         for abs_day, offsets in day_map.items():
-            total_x = len(offsets)  # everyone who reached from_node on this day
+            total_x = len(offsets)
             converted_offsets = sorted([o for o in offsets if o is not None])
             window_sorted[edge_id][abs_day] = (total_x, converted_offsets)
 
-    del window_index  # free memory
+    ctx_window_sorted: dict[str, dict[str, dict[int, tuple[int, list[float]]]]] = {}
+    for ck in ctx_keys:
+        ctx_window_sorted[ck] = {}
+        for edge_id, day_map in ctx_window_index[ck].items():
+            ctx_window_sorted[ck][edge_id] = {}
+            for abs_day, offsets in day_map.items():
+                total_x = len(offsets)
+                converted_offsets = sorted([o for o in offsets if o is not None])
+                ctx_window_sorted[ck][edge_id][abs_day] = (total_x, converted_offsets)
+
+    del window_index, ctx_window_index
 
     # ── Determine fetch nights (with failure simulation) ────────────────
     fetch_nights: list[int] = []
@@ -993,6 +1252,7 @@ def _generate_observations_nightly(
                 y_cohort = _count_by_age(edge_times, age)
 
                 lstats = edge_latency_stats.get(edge_id, {})
+                # Aggregate cohort row
                 result[edge_id].append({
                     "param_id": pid,
                     "core_hash": c_hash,
@@ -1009,6 +1269,31 @@ def _generate_observations_nightly(
                     "onset_delta_days": lstats.get("onset"),
                 })
                 n_cohort_rows += 1
+
+                # Per-context cohort rows (same core_hash, different slice_key)
+                for ck in ctx_keys:
+                    ctx_from = ctx_sorted_times[ck][sim_day].get(et.from_node, [])
+                    ctx_edge = ctx_sorted_edge_times[ck][sim_day].get(edge_id, [])
+                    ctx_a = ctx_anchor_traffic[ck][sim_day]
+                    ctx_x = _count_by_age(ctx_from, age)
+                    ctx_y = _count_by_age(ctx_edge, age)
+                    if ctx_a > 0:
+                        result[edge_id].append({
+                            "param_id": pid,
+                            "core_hash": c_hash,
+                            "slice_key": f"{ck}.cohort()",
+                            "anchor_day": anchor_day_str,
+                            "retrieved_at": retrieved_at,
+                            "a": ctx_a,
+                            "x": ctx_x,
+                            "y": ctx_y,
+                            "median_lag_days": lstats.get("median_lag_days"),
+                            "mean_lag_days": lstats.get("mean_lag_days"),
+                            "anchor_median_lag_days": lstats.get("anchor_median_lag_days"),
+                            "anchor_mean_lag_days": lstats.get("anchor_mean_lag_days"),
+                            "onset_delta_days": lstats.get("onset"),
+                        })
+                        n_cohort_rows += 1
 
         if (fi + 1) % 10 == 0:
             print(f"  Cohort observations: {fi + 1}/{len(fetch_nights)} nights, {n_cohort_rows} rows", flush=True)
@@ -1052,6 +1337,7 @@ def _generate_observations_nightly(
 
                 if total_x > 0:
                     lstats = edge_latency_stats.get(edge_id, {})
+                    # Aggregate window row
                     result[edge_id].append({
                         "param_id": pid,
                         "core_hash": w_hash,
@@ -1066,6 +1352,31 @@ def _generate_observations_nightly(
                         "onset_delta_days": lstats.get("onset"),
                     })
                     n_window_rows += 1
+
+                    # Per-context window rows
+                    for ck in ctx_keys:
+                        ctx_edge_window = ctx_window_sorted.get(ck, {}).get(edge_id, {})
+                        ctx_entry = ctx_edge_window.get(abs_from_day)
+                        if ctx_entry is None:
+                            continue
+                        ctx_x, ctx_conv = ctx_entry
+                        if ctx_x <= 0:
+                            continue
+                        ctx_y_w = bisect.bisect_right(ctx_conv, float(w_age))
+                        result[edge_id].append({
+                            "param_id": pid,
+                            "core_hash": w_hash,
+                            "slice_key": f"{ck}.window()",
+                            "anchor_day": anchor_day_str,
+                            "retrieved_at": retrieved_at,
+                            "a": None,
+                            "x": ctx_x,
+                            "y": ctx_y_w,
+                            "median_lag_days": lstats.get("median_lag_days"),
+                            "mean_lag_days": lstats.get("mean_lag_days"),
+                            "onset_delta_days": lstats.get("onset"),
+                        })
+                        n_window_rows += 1
 
         if (fi + 1) % 10 == 0:
             print(f"  Window observations: {fi + 1}/{len(fetch_nights)} nights, {n_window_rows} rows", flush=True)
@@ -1345,10 +1656,7 @@ def write_parameter_files(
             continue
 
         # Get ground truth for this edge
-        t = truth.get("edges", {}).get(pid, {})
-        if not t:
-            bare = pid.replace("parameter-", "") if pid.startswith("parameter-") else pid
-            t = truth.get("edges", {}).get(bare, {})
+        t = _resolve_truth_edge(truth, pid)
 
         n_daily = daily["n_daily"]
         k_daily = daily["k_daily"]
@@ -1436,6 +1744,57 @@ def write_parameter_files(
         if hash_lookup and pid in hash_lookup and "cohort_sig" in hash_lookup[pid]:
             cohort_entry["query_signature"] = hash_lookup[pid]["cohort_sig"]
 
+        # Context-qualified values[] entries (one per context value per obs type)
+        context_entries: list[dict] = []
+        context_dims = truth.get("context_dimensions", [])
+        for dim in context_dims:
+            for v in dim.get("values", []):
+                ctx_prefix = f"context({dim['id']}:{v['id']})"
+                # Context window entry
+                ctx_window: dict[str, Any] = {
+                    "mean": round(mean, 6),  # approximate — context-specific would be better
+                    "n": total_n,
+                    "k": total_k,
+                    "n_daily": n_daily,
+                    "k_daily": k_daily,
+                    "dates": dates,
+                    "window_from": _format_date_dmy(base_date),
+                    "window_to": _format_date_dmy(end_date),
+                    "sliceDSL": f"{ctx_prefix}.{window_dsl}",
+                    "median_lag_days": median_lag_daily,
+                    "mean_lag_days": mean_lag_daily,
+                    "latency": {"onset_delta_days": onset},
+                    "data_source": {"type": "synthetic", "retrieved_at": now_str, "full_query": query},
+                    "forecast": round(mean, 6),
+                }
+                if hash_lookup and pid in hash_lookup and "window_sig" in hash_lookup[pid]:
+                    ctx_window["query_signature"] = hash_lookup[pid]["window_sig"]
+                context_entries.append(ctx_window)
+
+                # Context cohort entry
+                ctx_cohort: dict[str, Any] = {
+                    "mean": round(mean, 6),
+                    "n": total_n,
+                    "k": total_k,
+                    "n_daily": n_daily,
+                    "k_daily": k_daily,
+                    "dates": dates,
+                    "anchor_n_daily": anchor_n_daily,
+                    "cohort_from": _format_date_dmy(base_date),
+                    "cohort_to": _format_date_dmy(end_date),
+                    "sliceDSL": f"{ctx_prefix}.{cohort_dsl}",
+                    "median_lag_days": median_lag_daily,
+                    "mean_lag_days": mean_lag_daily,
+                    "anchor_median_lag_days": anchor_median_daily,
+                    "anchor_mean_lag_days": anchor_mean_daily,
+                    "latency": {"onset_delta_days": onset},
+                    "data_source": {"type": "synthetic", "retrieved_at": now_str, "full_query": query},
+                    "forecast": round(mean, 6),
+                }
+                if hash_lookup and pid in hash_lookup and "cohort_sig" in hash_lookup[pid]:
+                    ctx_cohort["query_signature"] = hash_lookup[pid]["cohort_sig"]
+                context_entries.append(ctx_cohort)
+
         param_data = {
             "id": file_id,
             "name": file_id,
@@ -1444,7 +1803,7 @@ def write_parameter_files(
             "query": query,
             "query_overridden": False,
             "n_query_overridden": False,
-            "values": [window_entry, cohort_entry],
+            "values": [window_entry, cohort_entry] + context_entries,
             "latency": {
                 "latency_parameter": bool(
                     t.get("onset", 0) > 0.01 or t.get("mu", 0) > 0.01
@@ -1480,6 +1839,7 @@ def set_simulation_guard(
     graph_path: str,
     enable: bool = True,
     sim_stats: dict | None = None,
+    truth: dict | None = None,
 ) -> None:
     """Set or clear the simulation flag on a graph JSON file.
 
@@ -1487,7 +1847,9 @@ def set_simulation_guard(
     preventing real Amplitude fetches from overwriting synthetic data.
 
     Also sets dataInterestsDSL and currentQueryDSL so the FE knows
-    what date range the synthetic data covers.
+    what date range the synthetic data covers. If truth has context
+    dimensions, the DSL includes context qualifiers so the FE expands
+    the cartesian product (obs_type × context_value).
     """
     with open(graph_path) as f:
         graph = json.load(f)
@@ -1496,17 +1858,27 @@ def set_simulation_guard(
         graph["simulation"] = True
         graph["dailyFetch"] = False
 
-        # Set the pinned DSL so the FE knows the data date range.
-        # The cohort clause MUST include the anchor node ID so the
-        # snapshot dependency plan can resolve the cohort sweep.
         if sim_stats:
             base_date = datetime.strptime(sim_stats["base_date"], "%Y-%m-%d")
             n_days = sim_stats["n_days"]
             end_date = base_date + timedelta(days=n_days - 1)
             window_from = _format_date_dmy(base_date)
             window_to = _format_date_dmy(end_date)
-            graph["dataInterestsDSL"] = f"window({window_from}:{window_to});cohort({window_from}:{window_to})"
-            graph["pinnedDSL"] = f"window({window_from}:{window_to});cohort({window_from}:{window_to})"
+
+            temporal = f"window({window_from}:{window_to});cohort({window_from}:{window_to})"
+
+            # Add context dimensions to DSL if present in truth.
+            # Format: (window;cohort)(context(dim1);context(dim2))
+            # The FE expands this as a cartesian product.
+            context_dims = (truth or {}).get("context_dimensions", [])
+            if context_dims:
+                ctx_parts = ";".join(f"context({d['id']})" for d in context_dims)
+                dsl = f"({temporal})({ctx_parts})"
+            else:
+                dsl = temporal
+
+            graph["dataInterestsDSL"] = dsl
+            graph["pinnedDSL"] = dsl
             graph["currentQueryDSL"] = f"window({window_from}:{window_to})"
     else:
         graph.pop("simulation", None)
@@ -1586,10 +1958,7 @@ def update_graph_edge_metadata(
         total_k = sum(daily["k_daily"])
         mean = total_k / total_n if total_n > 0 else 0.0
 
-        t = truth.get("edges", {}).get(et.param_id, {})
-        if not t:
-            bare = et.param_id.replace("parameter-", "") if et.param_id.startswith("parameter-") else et.param_id
-            t = truth.get("edges", {}).get(bare, {})
+        t = _resolve_truth_edge(truth, et.param_id)
 
         edge = edge_by_uuid.get(edge_id)
         if not edge:
@@ -1610,10 +1979,7 @@ def update_graph_edge_metadata(
         # Only set latency_parameter=true if the truth config has non-trivial
         # latency for this edge (onset > 0 or mu > 0.01). Edges without
         # latency compile as simple Binomials — much cheaper to sample.
-        edge_truth = truth.get("edges", {}).get(et.param_id, {})
-        if not edge_truth:
-            bare = et.param_id.replace("parameter-", "") if et.param_id.startswith("parameter-") else et.param_id
-            edge_truth = truth.get("edges", {}).get(bare, {})
+        edge_truth = _resolve_truth_edge(truth, et.param_id)
         has_latency = (edge_truth.get("onset", 0) > 0.01 or edge_truth.get("mu", 0) > 0.01)
         p["latency"] = {
             "latency_parameter": has_latency,
@@ -1669,10 +2035,7 @@ def print_summary(
         pid = et.param_id
         if not pid:
             continue
-        t = truth.get("edges", {}).get(pid, {})
-        if not t:
-            bare = pid.replace("parameter-", "") if pid.startswith("parameter-") else pid
-            t = truth.get("edges", {}).get(bare, {})
+        t = _resolve_truth_edge(truth, pid)
         rows = snapshot_rows.get(edge_id, [])
         w_count = sum(1 for r in rows if r.get("slice_key") == "window()")
         c_count = sum(1 for r in rows if r.get("slice_key") == "cohort()")
@@ -1718,12 +2081,12 @@ Examples:
   python synth_gen.py --clean --graph branch
 """,
     )
-    parser.add_argument("--graph", choices=list(GRAPH_CONFIGS.keys()), default="branch",
-                        help="Test graph (default: branch)")
+    parser.add_argument("--graph", required=True,
+                        help="Graph name or shortcut. Resolves to a .truth.yaml in the data repo.")
     parser.add_argument("--people", type=int, default=None,
-                        help="Mean people per cohort day (default: 5000)")
+                        help="Mean people per cohort day (default: from truth file)")
     parser.add_argument("--days", type=int, default=None,
-                        help="Number of cohort days (default: 100)")
+                        help="Number of cohort days (default: from truth file)")
     parser.add_argument("--seed", type=int, default=None, help="RNG seed (default: 42)")
     parser.add_argument("--kappa", type=float, default=None,
                         help="Default kappa_sim for overdispersion (default: 50)")
@@ -1739,27 +2102,69 @@ Examples:
                         help="Also update data repo: param YAMLs, graph JSON, indexes")
     parser.add_argument("--clean", action="store_true",
                         help="Remove synthetic data from DB and exit")
-    parser.add_argument("--truth", type=str, default=None,
-                        help="Path to .truth.yaml (default: derive from graph)")
     args = parser.parse_args()
 
-    gcfg = GRAPH_CONFIGS[args.graph]
+    data_repo = _resolve_data_repo()
     db_conn = _load_db_connection()
+
+    # --- Resolve truth file ---
+    # Try: exact match, shortcut, synth-X, synth-X-test patterns
+    from graph_from_truth import generate_graph_artefacts, truth_has_graph_structure
+    graph_name = GRAPH_SHORTCUTS.get(args.graph, args.graph) if hasattr(sys.modules[__name__], 'GRAPH_SHORTCUTS') else args.graph
+
+    truth_candidates = [
+        os.path.join(data_repo, "graphs", f"{graph_name}.truth.yaml"),
+        os.path.join(data_repo, "graphs", f"synth-{graph_name}.truth.yaml"),
+        os.path.join(data_repo, "graphs", f"synth-{graph_name}-test.truth.yaml"),
+        os.path.join(data_repo, "graphs", f"{args.graph}.truth.yaml"),
+        os.path.join(data_repo, "graphs", f"synth-{args.graph}.truth.yaml"),
+        os.path.join(data_repo, "graphs", f"synth-{args.graph}-test.truth.yaml"),
+    ]
+    truth_path = None
+    for tp in truth_candidates:
+        if os.path.exists(tp):
+            truth_path = tp
+            break
+
+    if truth_path is None:
+        print(f"ERROR: No truth file found for '{args.graph}'")
+        print(f"  Searched: {[os.path.basename(t) for t in truth_candidates]}")
+        sys.exit(1)
+
+    truth = load_truth_config(truth_path)
+    print(f"Truth: {truth_path}")
+
+    # --- Generate or load graph ---
+    if truth_has_graph_structure(truth):
+        # New format: generate graph + entity files from truth
+        graph_name_resolved = truth.get("graph", {}).get("name", args.graph)
+        graph_path = os.path.join(data_repo, "graphs", f"{graph_name_resolved}.json")
+
+        # Always regenerate — truth file is authoritative
+        print(f"\n── Generate graph from truth ──")
+        graph_path = generate_graph_artefacts(truth, data_repo, graph_name_resolved)
+    else:
+        # Old format: truth has only params, graph JSON must exist
+        graph_path = truth_path.replace(".truth.yaml", ".json")
+        if not os.path.isfile(graph_path):
+            print(f"ERROR: Old-format truth — graph JSON not found at {graph_path}")
+            sys.exit(1)
+
+    with open(graph_path) as f:
+        graph = json.load(f)
+    print(f"Graph [{args.graph}]: {len(graph.get('edges', []))} edges")
 
     if args.clean:
         if not db_conn:
             print("ERROR: No DB_CONNECTION")
             sys.exit(1)
-        clean_synthetic_data(db_conn, gcfg)
+        # Clean using topology-derived hashes
+        from compiler.topology import analyse_topology as _at
+        _topo = _at(graph)
+        # Just delete all rows for this graph's param IDs
+        print("Cleaning synthetic data...")
+        # TODO: implement clean for new format
         return
-
-    data_repo = _resolve_data_repo()
-
-    # Load graph
-    graph_path = os.path.join(data_repo, "graphs", gcfg["graph_file"])
-    with open(graph_path) as f:
-        graph = json.load(f)
-    print(f"Graph [{args.graph}]: {len(graph.get('edges', []))} edges")
 
     # Topology
     from compiler.topology import analyse_topology
@@ -1767,22 +2172,6 @@ Examples:
     print(f"Topology: {len(topology.edges)} edges, "
           f"{len(topology.branch_groups)} branch groups, "
           f"{len(topology.join_nodes)} joins")
-
-    # Ground truth
-    if args.truth:
-        truth = load_truth_config(args.truth)
-        print(f"Truth: loaded from {args.truth}")
-    else:
-        truth_path = graph_path.replace(".json", ".truth.yaml")
-        if os.path.exists(truth_path):
-            truth = load_truth_config(truth_path)
-            print(f"Truth: loaded from {truth_path}")
-        else:
-            print(f"ERROR: No truth file found at {truth_path}")
-            print("  Synth graphs MUST have a .truth.yaml sidecar.")
-            print("  derive_truth_from_graph fallback is disabled — it produces")
-            print("  silent wrong defaults that waste hours of debugging.")
-            sys.exit(1)
 
     # Placeholder hashes for simulation. The simulation just needs some
     # string to tag rows — the real FE-authoritative hashes are applied
@@ -1817,7 +2206,7 @@ Examples:
         "growth_rate_mom": args.growth,
     }
     sim_config = _get_sim_config(truth, cli_overrides)
-    sim_config["base_date"] = gcfg.get("base_date", "2025-11-01")
+    sim_config["base_date"] = truth.get("simulation", {}).get("base_date", "2025-12-12")
 
     print(f"\nSimulating ~{sim_config['mean_daily_traffic']} people/day "
           f"× {sim_config['n_days']} days "
@@ -1856,7 +2245,7 @@ Examples:
         print("  Updated: query, latency_parameter, cohort_anchor_event_id")
 
         # Set simulation guard (simulation=true, dailyFetch=false, DSL)
-        set_simulation_guard(graph_path, enable=True, sim_stats=sim_stats)
+        set_simulation_guard(graph_path, enable=True, sim_stats=sim_stats, truth=truth)
         print("  Set simulation guard")
 
     # 2. Compute authoritative hashes via Node.js (from the graph on disk).

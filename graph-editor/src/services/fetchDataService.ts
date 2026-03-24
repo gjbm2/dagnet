@@ -1581,6 +1581,102 @@ export async function runStage2EnhancementsAndInboundN(
           
           const forecasting = await forecastingSettingsService.getForecastingModelSettings();
 
+          // ── First-fetch horizon bootstrap ──────────────────────────
+          // If any latency edge's param file has no mu/sigma, compute
+          // horizons via the BE stats engine and persist before the topo
+          // pass runs. Inline — no second fetch.
+          {
+            const edgesMissingHorizons = (finalGraph?.edges ?? []).filter((e: any) => {
+              if (!e?.p?.latency?.latency_parameter) return false;
+              const pid = e.p?.id;
+              if (!pid) return false;
+              const pf = fileRegistry.getFile(`parameter-${pid}`)?.data;
+              const fl = (pf as any)?.latency;
+              const missing = !fl?.mu && !fl?.sigma;
+              if (e.p.latency.latency_parameter) {
+                console.log(`[HORIZON_BOOTSTRAP_CHECK] ${pid}: file.latency.mu=${fl?.mu}, file.latency.sigma=${fl?.sigma}, missing=${missing}`);
+              }
+              return missing;
+            });
+            console.log(`[HORIZON_BOOTSTRAP_CHECK] ${edgesMissingHorizons.length} edges need horizons`);
+            if (edgesMissingHorizons.length > 0) {
+              console.log(`[fetchDataService] Horizon bootstrap: ${edgesMissingHorizons.length} edges missing mu/sigma — computing via BE`);
+              try {
+                const { runBeTopoPass } = await import('./beTopoPassService');
+                // Use ALL cohort data (global, un-windowed) for horizon computation
+                const globalCohorts: Record<string, any[]> = {};
+                for (const [edgeId, pv] of paramLookup) {
+                  const c = lagHelpers.aggregateCohortData(pv, queryDateForLAG, undefined);
+                  if (c.length > 0) globalCohorts[edgeId] = c;
+                }
+                // Only bootstrap if we actually have cohort data
+                if (Object.keys(globalCohorts).length > 0) {
+                  const beEntries = await runBeTopoPass(finalGraph, paramLookup, queryDateForLAG, lagHelpers);
+                  // Write horizons to param files and finalGraph edges
+                  for (const { edgeUuid, entry } of beEntries) {
+                    if (!entry.latency) continue;
+                    const edge = (finalGraph.edges as any[])?.find(
+                      (e: any) => e.uuid === edgeUuid || e.id === edgeUuid
+                    );
+                    if (!edge?.p?.latency) continue;
+                    // Write to graph edge (so topo pass can read them)
+                    edge.p.latency.mu = entry.latency.mu;
+                    edge.p.latency.sigma = entry.latency.sigma;
+                    edge.p.latency.t95 = entry.latency.t95;
+                    if (entry.latency.path_t95 != null) edge.p.latency.path_t95 = entry.latency.path_t95;
+                    if (entry.latency.path_mu != null) edge.p.latency.path_mu = entry.latency.path_mu;
+                    if (entry.latency.path_sigma != null) edge.p.latency.path_sigma = entry.latency.path_sigma;
+                  }
+                  // Persist to param files
+                  await persistGraphMasteredLatencyToParameterFiles({
+                    graph: finalGraph as any,
+                    setGraph: setGraph as any,
+                    edgeIds: edgesMissingHorizons.map((e: any) => e.uuid || e.id),
+                  });
+                  // Rebuild analytic model_vars entries — UpdateManager built
+                  // them before bootstrap ran (no latency). Now param files
+                  // have mu/sigma, so re-read and upsert with latency.
+                  const { upsertModelVars, ukDateNow } = await import('./modelVarsResolution');
+                  for (const { edgeUuid, entry } of beEntries) {
+                    if (!entry.latency) continue;
+                    const edge = (finalGraph.edges as any[])?.find(
+                      (e: any) => e.uuid === edgeUuid || e.id === edgeUuid
+                    );
+                    if (!edge?.p) continue;
+                    // Build a proper analytic entry with latency from BE results
+                    const pid = edge.p.id;
+                    const pf = pid ? fileRegistry.getFile(`parameter-${pid}`)?.data : null;
+                    const latestValue = (pf as any)?.values?.[0];
+                    if (latestValue) {
+                      const analyticEntry: any = {
+                        source: 'analytic',
+                        source_at: (latestValue as any).data_source?.retrieved_at || ukDateNow(),
+                        probability: {
+                          mean: latestValue.mean ?? 0,
+                          stdev: latestValue.stdev ?? 0,
+                        },
+                        latency: {
+                          mu: entry.latency.mu,
+                          sigma: entry.latency.sigma,
+                          t95: entry.latency.t95,
+                          onset_delta_days: entry.latency.onset_delta_days,
+                          ...(entry.latency.path_mu != null ? { path_mu: entry.latency.path_mu } : {}),
+                          ...(entry.latency.path_sigma != null ? { path_sigma: entry.latency.path_sigma } : {}),
+                          ...(entry.latency.path_t95 != null ? { path_t95: entry.latency.path_t95 } : {}),
+                          ...(entry.latency.path_onset_delta_days != null ? { path_onset_delta_days: entry.latency.path_onset_delta_days } : {}),
+                        },
+                      };
+                      upsertModelVars(edge.p, analyticEntry);
+                    }
+                  }
+                  console.log(`[fetchDataService] Horizon bootstrap: persisted horizons + rebuilt analytic entries for ${edgesMissingHorizons.length} edges`);
+                }
+              } catch (e: any) {
+                console.warn('[fetchDataService] Horizon bootstrap failed (non-fatal):', e?.message || e);
+              }
+            }
+          }
+
           // Pre-compute path_t95 for all edges ONCE (single code path)
           // This is used by enhanceGraphLatencies to classify edges
           const activeEdgesForLAG = getActiveEdges(finalGraph as GraphForPath);
@@ -1696,6 +1792,49 @@ export async function runStage2EnhancementsAndInboundN(
       // We do NOT persist derived horizons (t95/path_t95) back to parameter files as a side-effect
       // of ordinary fetches. Persisting horizons is an explicit action (e.g. after Retrieve All, or
       // via a dedicated "LAG horizons" menu action) so users can control automation via override flags.
+
+      // ── Update analytic model_vars entries with topo pass results ──
+      // The analytic entry was initially built by UpdateManager with raw
+      // evidence rate. Now that the topo pass has run, update it with the
+      // model's forecast (p∞) and full latency params.
+      {
+        const { upsertModelVars, applyPromotion } = await import('./modelVarsResolution');
+        for (const ev of edgeValuesToApply) {
+          const edge = finalGraph.edges?.find((e: any) => e.uuid === ev.edgeUuid || e.id === ev.edgeUuid);
+          if (!edge?.p?.model_vars) continue;
+          const existing = edge.p.model_vars.find((v: any) => v.source === 'analytic');
+          if (!existing) continue;
+
+          // Update probability.mean to p∞ (forecast), not raw evidence.
+          // Preserve existing stdev (evidence uncertainty) — the forecast
+          // has no separate uncertainty estimate, but zeroing stdev would
+          // clobber the evidence stdev when applyPromotion runs.
+          const pInfinity = ev.forecast?.mean;
+          if (typeof pInfinity === 'number' && Number.isFinite(pInfinity)) {
+            existing.probability.mean = pInfinity;
+          }
+
+          // Update latency from topo pass (may have been missing at UpdateManager time)
+          if (ev.latency?.mu != null) {
+            existing.latency = {
+              mu: ev.latency.mu!,
+              sigma: ev.latency.sigma!,
+              t95: ev.latency.t95,
+              onset_delta_days: ev.latency.onset_delta_days ?? 0,
+              ...(ev.latency.path_mu != null ? { path_mu: ev.latency.path_mu } : {}),
+              ...(ev.latency.path_sigma != null ? { path_sigma: ev.latency.path_sigma } : {}),
+              ...(ev.latency.path_t95 != null ? { path_t95: ev.latency.path_t95 } : {}),
+              ...(ev.latency.path_onset_delta_days != null ? { path_onset_delta_days: ev.latency.path_onset_delta_days } : {}),
+            };
+          }
+        }
+        // Re-run promotion so promoted scalars reflect updated entries
+        for (const edge of (finalGraph.edges ?? []) as any[]) {
+          if (edge.p?.model_vars?.length) {
+            applyPromotion(edge.p, (finalGraph as any).model_source_preference);
+          }
+        }
+      }
             
             // DEBUG: Log p.mean values AFTER LAG application
             console.log('[fetchDataService] AFTER applyBatchLAGValues:', {
@@ -1746,6 +1885,7 @@ export async function runStage2EnhancementsAndInboundN(
                   if (FORECASTING_PARALLEL_RUN) {
                     compareModelVarsSources(beGraph);
                   }
+
                 }
               }
             } catch (e) {

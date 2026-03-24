@@ -185,9 +185,9 @@ describe('Output card focus → updateEdgeParam → override state', () => {
     expect(afterBlur.edges[0].p.model_source_preference).toBe('manual');
     expect(afterBlur.edges[0].p.model_source_preference_overridden).toBe(true);
 
-    // Promoted scalars updated to manual entry's values
-    expect(afterBlur.edges[0].p.mean).toBeCloseTo(0.20, 4);
-    expect(afterBlur.edges[0].p.stdev).toBeCloseTo(0.02, 4);
+    // applyPromotion promotes latency only — NOT p.mean or p.stdev (topo pass computes those)
+    expect(afterBlur.edges[0].p.mean).toBeCloseTo(0.15, 4); // unchanged from initial
+    expect(afterBlur.edges[0].p.stdev).toBeCloseTo(0.02, 4); // unchanged from initial
 
     // Manual entry is in model_vars
     const manual = afterBlur.edges[0].p.model_vars.find((e: any) => e.source === 'manual');

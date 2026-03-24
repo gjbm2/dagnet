@@ -25,32 +25,45 @@ Only one tool should run at a time (shared DB connections).
 ### Common Commands
 
 ```bash
-# Structural checks (fast, ~2s)
-python bayes/test_wiring.py --no-mcmc
+# ── Model inspection (fast, ~5s) ──
+python bayes/test_harness.py --graph simple --no-mcmc --no-webhook
+# Shows full model structure (free RVs, potentials, evidence binding)
+# then stops before MCMC. Always prints model structure even without --no-mcmc.
 
-# Full MCMC on simple graph (~90s)
-python bayes/test_harness.py --no-webhook
+# ── MCMC on production data ──
+python bayes/test_harness.py --graph simple --no-webhook        # 4-step prod (~60s)
+python bayes/test_harness.py --graph branch --no-webhook --timeout 900  # complex (~5-10min)
 
-# Full MCMC on branch graph (5-10min)
-python bayes/test_harness.py --graph branch --no-webhook --timeout 900
+# ── Feature flag A/B (no code changes) ──
+python bayes/test_harness.py --graph X --feature latent_onset=false
+python bayes/test_harness.py --graph X --feature overdispersion=false
 
-# Diagnostic run with per-variable rhat/ESS breakdown
-python bayes/diag_run.py
+# ── Parameter recovery (synth graphs only) ──
+python bayes/param_recovery.py --graph synth-simple-abc          # 2-step (~270s)
+python bayes/param_recovery.py --graph synth-mirror-4step        # 4-step (~130s)
+python bayes/param_recovery.py --graph synth-diamond-test        # diamond (FAILS — join issue)
+# Reads .truth.yaml, runs MCMC, prints structured truth vs posterior comparison.
+# NOT for production data — use test_harness.py directly.
 
-# Diagnostic with feature flags
-python bayes/diag_run.py --no-latency          # Fixed latency (Phase S mode)
-python bayes/diag_run.py --no-overdispersion   # Binomial instead of BetaBinomial
+# ── Regression tests (pytest) ──
+pytest bayes/tests/test_param_recovery.py -v -s --timeout=600   # all synth graphs
+pytest bayes/tests/test_param_recovery.py::TestParamRecovery::test_4step_mirror_recovery -v -s  # single
 
-# Diagnostic excluding specific edge
-python bayes/diag_run.py --exclude delegation-straight
+# ── Synthetic data generation ──
+python bayes/synth_gen.py --graph simple --write-files           # regen DB + param files
+python bayes/synth_gen.py --graph simple --dry-run               # preview only
+python bayes/synth_gen.py --clean --graph simple                 # remove synth rows from DB
+# IMPORTANT: --write-files is required to update param files on disk.
+# synth_gen FAILS without a .truth.yaml sidecar (no silent defaults).
 
-# Diagnostic with synthetic data (bypasses snapshot DB)
-python bayes/diag_run.py --synth
+# ── Graph validation (before committing data repo changes) ──
+bash graph-ops/scripts/validate-graph.sh graphs/<name>.json       # structural (~1s)
+bash graph-ops/scripts/validate-graph.sh graphs/<name>.json --deep  # + IntegrityCheckService (~10s)
 
-# Generate synthetic snapshot data
-python bayes/synth_gen.py --graph branch --dry-run   # Preview
-python bayes/synth_gen.py --graph branch              # Write to DB
-python bayes/synth_gen.py --clean                     # Remove synthetic data
+# ── Diagnostics ──
+python bayes/diag_run.py                                         # per-variable rhat/ESS
+python bayes/diag_run.py --no-latency                            # fixed latency (Phase S)
+python bayes/diag_run.py --exclude delegation-straight           # exclude edge
 
 # Monitor any running tool
 tail -f /tmp/bayes_harness.log
@@ -62,6 +75,18 @@ tail -f /tmp/bayes_harness.log
 |------|---------|
 | `/tmp/bayes_harness.log` | All tools write here (tail -f to watch) |
 | `/tmp/bayes_diagnostics.txt` | Per-variable diagnostic report from diag_run |
+
+### Two workflows: param recovery vs production
+
+| | Param recovery | Production |
+|---|---|---|
+| **Purpose** | Does the model recover known parameters? | Does the model converge on real data? |
+| **Tool** | `param_recovery.py` / `test_param_recovery.py` | `test_harness.py` |
+| **Data** | Synthetic (synth_gen.py) | Real (snapshot DB) |
+| **Ground truth** | .truth.yaml sidecar | None (no ground truth) |
+| **Output** | Structured comparison (z-scores, PASS/MISS) | Quality metrics (rhat, ESS, divergences) |
+| **When** | Before merging model changes | After model changes, on production graphs |
+| **Graphs** | synth-simple-abc, synth-mirror-4step | bayes-test-gm-rebuild, branch |
 
 ---
 
@@ -233,18 +258,94 @@ been tried before and why it failed.
 
 ---
 
-## 5. Test Graph Topologies Needed
+## 5. Regression Test Suite
 
-As the compiler matures, we'll need test graphs covering:
+### Running
 
-| Topology | Purpose | Status |
-|----------|---------|--------|
-| Linear chain (4-5 nodes) | Baseline, solo edges | EXISTS: simple graph in data repo |
-| Complex (branches + joins) | Full structural features | EXISTS: branch graph in data repo |
-| Diamond (5 nodes, 1 join) | Isolate join behaviour | NEEDED |
-| Fan-out (5 nodes, 1 branch group) | Isolate Dirichlet | NEEDED |
-| Deep cascade (8+ nodes) | Multi-hop FW composition | NEEDED |
-| Context-sliced (5 nodes) | Phase C: per-context variation | NEEDED for Phase C |
+```bash
+. graph-editor/venv/bin/activate
+
+# All regression tests (~4 min):
+pytest bayes/tests/test_param_recovery.py -v -s
+
+# Single test:
+pytest bayes/tests/test_param_recovery.py::TestParamRecovery::test_4step_mirror_recovery -v -s
+```
+
+### What it tests
+
+| Test | Graph | Topology | Time | Status |
+|------|-------|----------|------|--------|
+| `test_2step_synth_recovery` | synth-simple-abc | 2-edge linear, all latency | ~150s | PASS |
+| `test_4step_mirror_recovery` | synth-mirror-4step | 4-edge linear, 2 no-lat + 2 lat | ~80s | PASS |
+| `test_diamond_recovery` | synth-diamond-test | branch + join, 6 edges | — | xfail (join issue) |
+| `test_2step_convergence_diagnostics` | synth-simple-abc | same as above | ~150s | PASS |
+
+Tests use fast sampling (1000 draws, 500 tune, 4 chains) with relaxed
+tolerances (mu within 0.5, sigma within 0.3, onset within 1.5 days).
+
+### Prerequisites
+
+- Synth data in the snapshot DB (run `synth_gen.py --graph X --write-files`)
+- DB_CONNECTION in `graph-editor/.env.local`
+- Truth files: `{graph-name}.truth.yaml` sidecars in data repo graphs/
+
+### Adding new test graphs
+
+1. Create graph JSON + entity files in data repo (full artefacts)
+2. Run `validate-graph.sh` — must pass structural checks
+3. Create `.truth.yaml` sidecar with ground truth parameters
+4. Run `synth_gen.py --graph X --write-files` to generate data
+5. Run `param_recovery.py --graph X` to verify manually
+6. Add a test method to `test_param_recovery.py`
+
+### Known issues (23-Mar-26)
+
+- **Kappa recovery not testable (Phase 1 noise model)**: posterior κ is
+  10-45x truth because synth_gen applies overdispersion per-day (one Beta
+  draw shared by all users), creating no within-trajectory overdispersion.
+  The model correctly finds large κ. Real overdispersion comes from
+  population heterogeneity (contexts). κ recovery requires the Phase C
+  three-layer noise model (contexts + per-user variation + drift).
+  See doc 17 §3.1 for the full noise model design.
+- **Join-node convergence**: diamond graph fails (early abort, geometry
+  problem). Known model structure issue — the p-latency identifiability
+  coupling at joins creates difficult posterior geometry for NUTS.
+- **Slow-latency trajectory density**: truth mu > 2.0 produces 50-80
+  ages per trajectory after dedup, causing long compilation (117s for
+  diamond) and slow sampling.
+
+---
+
+## 6. Test Graph Topologies — Structural Canon
+
+Every fundamental DAG shape must be proven with param recovery before
+moving to Phase C (contexts). Each shape isolates a specific model
+feature. If a test fails, we know exactly which feature is broken.
+
+| # | Shape | Graph | Structure | Tests | Status |
+|---|---|---|---|---|---|
+| 1 | Chain | synth-simple-abc | A→B→C (all latency) | FW composition, onset-mu | PASS |
+| 2 | Chain (mixed) | synth-mirror-4step | A→B→C→D→E (2 no-lat + 2 lat) | Mixed model, cohort hierarchy | PASS |
+| 3 | Fan-out | synth-fanout-test | A→{B,C,dropout} (asymmetric latency) | Dirichlet, per-sibling completeness | PASS |
+| 4 | Diamond | synth-diamond-test | A→{B,C}→D→E | Branch + join, mixture CDF | PASS |
+| 5 | Skip edge | synth-skip-test | A→B→C + A→C (shortcut) | Join with different path lengths | NEEDED |
+| 6 | Join→branch | synth-join-branch-test | {B,C}→D→{E,F} | Mixture CDF flowing into Dirichlet | NEEDED |
+| 7 | 3-way join | synth-3way-join-test | A→{B,C,D}→E | Mixture with 3+ components | NEEDED |
+| 8 | Lattice | synth-lattice-test | A→{B,C}→{D,E}→F (cross-connections) | Combinatorial paths, nested joins | NEEDED |
+| 9 | Asymmetric diamond | (variant of #4) | A→{B(95%),C(5%)}→D | Weak-path identifiability | NEEDED |
+| 10 | Case node | synth-case-test | A→case→{variant,control} | Exhaustive Dirichlet (no dropout) | NEEDED |
+
+**Priority order**: 5→6→7→8 (structural), then 9→10 (stress/special).
+Shapes 1-4 are proven. Contexts (Phase C) begin after the structural
+canon is complete.
+
+**Principles**:
+- One graph per structural feature for isolation
+- 500/day traffic (geometry, not performance)
+- Fast latencies (mu ≤ 1.5) to keep trajectories sparse
+- Each graph must pass `validate-graph.sh` before data generation
+- Each graph gets a `.truth.yaml` sidecar (synth_gen fails without it)
 
 Create new graphs as proper data repo artefacts with integrity checks.
 Don't hand-wave graph structures — use the data repo tooling.

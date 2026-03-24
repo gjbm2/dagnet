@@ -29,7 +29,7 @@ class CompletenessAnnotation:
     layer: str  # 'evidence' | 'forecast' | 'mature'
     evidence_y: float  # observed Y
     forecast_y: float  # projected additional Y (projected_y - evidence_y)
-    projected_y: float  # Y / max(c, eps)
+    projected_y: float  # blended projection
 
 
 def compute_completeness(
@@ -57,9 +57,11 @@ def annotate_data_point(
     anchor_day: str,
     retrieved_at_date: str,
     y: float,
+    x: float = 0.0,
     mu: float,
     sigma: float,
     onset_delta_days: float = 0.0,
+    forecast_mean: float = 0.0,
     maturity_threshold: float = 0.95,
 ) -> CompletenessAnnotation:
     """
@@ -69,7 +71,10 @@ def annotate_data_point(
         anchor_day: ISO date string (YYYY-MM-DD) — the cohort date.
         retrieved_at_date: ISO date string (YYYY-MM-DD) — when the data was observed.
         y: Observed conversions (Y value).
+        x: Population at this edge (from-node arrivals for window, anchor
+           entrants for cohort). Used for model-based projection.
         mu, sigma, onset_delta_days: Fitted model params.
+        forecast_mean: Model's forecast p∞ (from promoted model vars).
         maturity_threshold: Completeness above this → 'mature' (default 0.95).
     """
     try:
@@ -93,11 +98,27 @@ def annotate_data_point(
         layer = 'evidence'  # No model info (age 0 or during dead-time).
 
     # Evidence/forecast split.
+    #
+    # projected_y = model's prediction of total conversions at this age
+    #             = x × forecast_mean × CDF(τ)
+    # evidence_y  = what we actually observed
+    # forecast_y  = projected_y - evidence_y (remaining unseen conversions)
     evidence_y = float(y)
-    if c > COMPLETENESS_EPSILON:
-        projected_y = evidence_y / c
+    # projected_y: blend observed evidence with model prediction at this age.
+    #
+    # model_rate_at_tau = forecast_mean × CDF(τ) — what the model expects
+    # to have been observed by age τ (NOT the full eventual rate).
+    #
+    # The blend weights evidence vs model by completeness:
+    # - At c≈0 (immature): trust model → projected ≈ model_rate_at_tau × x
+    # - At c≈1 (mature): trust evidence → projected ≈ evidence
+    if x > 0 and forecast_mean > 0:
+        evidence_rate = evidence_y / x
+        model_rate_at_tau = forecast_mean * c
+        blended_rate = c * evidence_rate + (1.0 - c) * model_rate_at_tau
+        projected_y = x * blended_rate
     else:
-        projected_y = evidence_y  # Can't project with zero completeness.
+        projected_y = evidence_y
     forecast_y = max(0.0, projected_y - evidence_y)
 
     return CompletenessAnnotation(
@@ -116,6 +137,7 @@ def annotate_rows(
     sigma: float,
     onset_delta_days: float = 0.0,
     *,
+    forecast_mean: float = 0.0,
     maturity_threshold: float = 0.95,
     retrieved_at_override: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
@@ -124,6 +146,8 @@ def annotate_rows(
 
     Each input row must have at least 'anchor_day' and 'y' (or 'Y').
     Optionally 'retrieved_at' (ISO datetime); if absent, uses retrieved_at_override.
+    'x' or 'X' provides population (from-node arrivals / anchor entrants).
+    'a' is used as fallback population (anchor entrants for cohort mode).
 
     Returns the same rows with added fields:
     'completeness', 'layer', 'evidence_y', 'forecast_y', 'projected_y'.
@@ -137,6 +161,18 @@ def annotate_rows(
         except (ValueError, TypeError):
             y = 0.0
 
+        # Population for projection: use x (from-node arrivals) as the
+        # denominator.  The blend produces an edge-rate projection that
+        # the frontend aggregates as Σprojected_y / Σx.
+        # a (anchor entrants) is preserved on the row for informational
+        # purposes but is NOT used in the blend calculation.
+        x_raw = row.get('x') or row.get('X') or 0
+        try:
+            x_raw = float(x_raw)
+        except (ValueError, TypeError):
+            x_raw = 0.0
+        x_val = x_raw
+
         # Determine retrieved_at date for age calculation.
         ra = row.get('retrieved_at') or retrieved_at_override or ''
         ra_date = str(ra)[:10] if ra else ''
@@ -145,9 +181,11 @@ def annotate_rows(
             anchor_day=anchor_day,
             retrieved_at_date=ra_date,
             y=y,
+            x=x_val,
             mu=mu,
             sigma=sigma,
             onset_delta_days=onset_delta_days,
+            forecast_mean=forecast_mean,
             maturity_threshold=maturity_threshold,
         )
 

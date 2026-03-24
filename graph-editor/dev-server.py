@@ -354,6 +354,12 @@ async def lag_topo_pass(request: Request):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# Back-compat alias: python-api.py dispatches via hyphenated endpoint name.
+@app.post("/api/lag-topo-pass")
+async def lag_topo_pass_alias(request: Request):
+    return await lag_topo_pass(request)
+
+
 # Simple roundtrip test endpoint: Parse DSL query string
 @app.post("/api/parse-query")
 async def parse_query_endpoint(request: Request):

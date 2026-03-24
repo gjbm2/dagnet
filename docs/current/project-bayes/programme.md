@@ -86,8 +86,10 @@ Semantic foundation (parallel, feeds into consumption quality)
 | Phase B posteriors (done) | Phase A proven | FE overlay (Dirichlet), branch group quality |
 | Phase S snapshot evidence (done) | Phase B, FE hash infrastructure, snapshot DB | Richer maturation trajectories, tighter posteriors, enables meaningful slice pooling |
 | Phase D posteriors (done) | Phase S proven | Latent latency, overdispersion (BetaBinomial/DM), recency weighting, cohort latency hierarchy |
-| Phase D.O latent onset (next) | Phase D proven | Latent edge-level onset, graph-level onset dispersion (`tau_onset`), path onset with learned dispersion, onset posterior FE display (doc 18) |
-| Phase C posteriors | Phase D.O proven, test data with contexts | Per-slice visualisation, MECE validation |
+| Phase D.O latent onset (done) | Phase D proven | Independent per-edge latent onset (no hierarchy — see journal 23-Mar-26). Graph-level hierarchy removed (no intellectual justification). |
+| Phase D join-node mixture CDF (done) | Phase D proven | Mixture CDF at joins replaces single-path misspecification. All 8 structural topologies converge (journal 24-Mar-26). |
+| Phase C posteriors (next) | Phase D proven, test data with contexts | Per-slice visualisation, MECE validation, hierarchical shrinkage, κ recovery |
+| Nightly Bayes fit | Phase C proven, production confidence | Automatic posterior updates after daily fetch. Trigger Bayes fit for `dailyFetch: true` graphs when new snapshot data lands. Uses existing Modal/webhook/git-commit infrastructure — needs scheduling trigger + staleness detection + fit-on-change logic. |
 | Quantitative backtesting | Phase A + fit_history depth + snapshot DB | Distribution family selection, model improvement |
 | Fit quality visualisation (done) | Phase A + FE overlay | Edge colour-coding, quality-driven graph triage |
 | Semantic foundation complete | Independent | Cleaner FE derivation, deletion of FE fitting code |
@@ -165,6 +167,15 @@ fitting owner.
 
 **Scope**:
 - Complete parallel-run soak, confirm parity
+  - **Status (24-Mar-26)**: Core stats primitives (fit, CDF, inverseCDF, blended
+    mean, FW composition) and edge-level pipeline (`computeEdgeLatencyStats` /
+    `compute_edge_latency_stats`) confirmed in parity via contract tests
+    (`statsParity.contract.test.ts` + `test_stats_parity_contract.py`). However,
+    the graph-level pipeline (`enhance_graph_latencies` vs FE Stage-2) shows ~1%
+    drift on completeness and blended_mean. The drift is in the orchestration
+    layer: Bayesian evidence adjustment, sampled-cohort detection, n_baseline
+    selection from edge context. This needs investigation before FE stats deletion
+    can proceed.
 - Disable FE topo/LAG fitting pass
 - Delete FE fitting codepaths: `statisticalEnhancementService.ts`,
   `lagDistributionUtils.ts`, `forecastingParityService.ts`, and related modules
@@ -302,6 +313,43 @@ cross-phase feature activation. Summary:
 
 **Design detail**: Logical blocks (compiler, hierarchy, IR), Reference impl
 (PyMC patterns), Compiler + worker (implementation).
+
+### Nightly Bayes fit (production scheduling)
+
+Wire the Bayes model fit into the nightly fetch cycle so posteriors update
+automatically when new snapshot data arrives.
+
+**Depends on**: Phase C proven (model feature-complete for production
+graph types), production confidence from visual validation on real graphs.
+
+**Scope**:
+- **Trigger**: after daily fetch completes for a graph with
+  `dailyFetch: true`, check whether a Bayes refit is warranted
+- **Staleness detection**: compare current snapshot evidence fingerprint
+  against the fingerprint from the last fit (stored in
+  `posterior._model_state`). If unchanged, skip. If new data, trigger.
+- **Scheduling policy**: fit at most once per
+  `bayes_fit_history_interval_days` (default 7 — weekly). Don't refit
+  daily unless evidence has materially changed.
+- **Execution**: submit to Modal via the existing `/submit` endpoint.
+  Reuse the full worker pipeline (topology → evidence → model → MCMC →
+  webhook → git commit). No new infrastructure needed.
+- **Failure handling**: if fit fails (divergences, timeout, quality gate
+  failure), log to session log and Graph Issues. Do not commit bad
+  posteriors. Retry on next scheduled interval.
+- **Warm-start**: use previous posterior as prior for the next fit
+  (ESS-capped, topology-fingerprint validated). Faster convergence on
+  incremental evidence updates.
+
+**Not in scope**: real-time fitting (on every fetch), multi-graph
+parallelism (one fit at a time per graph initially), FE progress
+tracking for automated fits (use session log).
+
+**Exit criteria**:
+- Production graph posteriors update weekly without manual trigger
+- fit_history accumulates entries, trajectory calibration activates
+- Failed fits surface in Graph Issues with actionable diagnostics
+- No regression in existing fetch cycle (Bayes fit is additive, not blocking)
 
 ---
 

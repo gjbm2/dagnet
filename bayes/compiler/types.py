@@ -76,6 +76,12 @@ class EdgeTopology:
     path_edge_ids: list[str] = field(default_factory=list)
     path_latency: PathLatency = field(default_factory=PathLatency)
 
+    # Join-node mixture: all alternative paths from anchor to this edge's
+    # target node. Empty for non-join paths (use path_edge_ids as single
+    # path). Each entry is a list of edge_ids forming a complete path.
+    # Populated when the path passes through a join node.
+    path_alternatives: list[list[str]] = field(default_factory=list)
+
     # σ of A→X path — upstream of this edge (for τ_cohort)
     path_sigma_ax: float = 0.0
 

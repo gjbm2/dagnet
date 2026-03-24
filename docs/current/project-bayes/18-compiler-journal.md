@@ -8,6 +8,207 @@ Entries are reverse-chronological (newest first).
 
 ---
 
+## 24-Mar-26: Structural topology canon — 8 shapes proven
+
+### Summary
+
+Systematically tested every fundamental DAG shape with parameter
+recovery. All converge with 0 divergences. The mixture CDF fix from
+23-Mar-26 enables all join-containing topologies.
+
+| # | Shape | Graph | rhat | Time | Recovery |
+|---|---|---|---|---|---|
+| 1 | Chain (all-latency) | synth-simple-abc | 1.002 | 267s | mu ✓ |
+| 2 | Chain (mixed) | synth-mirror-4step | 1.003 | 130s | all ✓ |
+| 3 | Fan-out | synth-fanout-test | 1.001 | 72s | mu ✓, Dirichlet ✓ |
+| 4 | Diamond | synth-diamond-test | 1.001 | 935s | mu ✓, join ±drift |
+| 5 | Skip edge | synth-skip-test | 1.003 | 296s | mu ✓, unequal paths ✓ |
+| 6 | Join→branch | synth-join-branch-test | 1.005 | 567s | mixture→Dirichlet ✓ |
+| 7 | 3-way join | synth-3way-join-test | 1.003 | 603s | 3-component mixture ✓ |
+| 8 | Lattice | synth-lattice-test | 1.003 | 930s | 4-component nested ✓ |
+
+### Key observations
+
+**What works well**: upstream edges (directly from anchor) recover
+mu within 0.01-0.02 of truth across all topologies. The Dirichlet
+branch group, per-sibling completeness, and mixture CDF all function
+correctly.
+
+**Onset-mu drift at joins**: join-adjacent edges consistently show
+onset-mu correlation > 0.95, causing parameter drift (onset trades
+with mu). This is a precision limitation, not a convergence failure.
+The model finds a consistent solution but not the exact truth values.
+May improve with more data or stronger priors.
+
+**Not tested**: asymmetric diamond (95/5 weight split — identifiability
+stress test), case node (exhaustive Dirichlet). These are deferred to
+when needed.
+
+### Tooling improvements
+
+**Truth-driven graph generation** (`graph_from_truth.py`): truth files
+now define graph STRUCTURE (nodes, edges, topology) in addition to
+statistical parameters. `synth_gen` generates graph JSON, entity files,
+dropout nodes, and complement edges from the truth file alone. No more
+manual graph construction. Tested on diamond and lattice.
+
+**Edge name resolution** (`_resolve_truth_edge`): handles the mapping
+between short truth names (`anchor-to-gate`) and generated prefixed
+param_ids (`synth-diamond-anchor-to-gate`). Replaces the scattered
+`truth.get("edges", {}).get(pid)` pattern throughout synth_gen.
+
+**Context-aware synth_gen**: three-layer noise model infrastructure
+(contexts + per-user variation + drift) implemented. Truth files can
+define `context_dimensions` with per-edge overrides. Observations
+emitted with context-qualified slice_keys. Param files include
+per-context values[] entries. Graph pinnedDSL uses cartesian product
+form. Ready for Phase C compiler work.
+
+---
+
+## 23-Mar-26: Mixture CDF at joins — FIXES diamond convergence
+
+### The bug
+
+The topology pass selected ONE path (highest weight) at join nodes and
+discarded all others. For the diamond's join→outcome edge, `path_edge_ids`
+contained only path A — path B's parameters got zero gradient from the
+cohort observation. The model was structurally misspecified: trying to fit
+mixture data (arrivals from both paths) with a single component.
+
+### The fix
+
+**Topology**: Added `path_alternatives` field to EdgeTopology. At join
+nodes, ALL inbound paths are stored as alternatives (not just the best).
+Alternatives propagate recursively through downstream edges — handles
+nested joins (combinatorial: 2 joins × 2 paths = 4 alternatives).
+
+**Model builder**: For cohort trajectories on join-downstream edges with
+multiple path alternatives, the DM likelihood uses a mixture CDF:
+
+```
+prob_interval_i = Σ_alt [p_alt × ΔCDF_alt(t_i)]
+```
+
+where p_alt = product of p's along the alternative path, CDF_alt =
+FW-composed latency along that path. Gradients flow to ALL path
+parameters through the sum. Single-path edges are unchanged.
+
+### Result
+
+**Diamond (easy: 1 no-latency + 5 latency edges, 500 draws, 2 chains)**:
+- Before fix: early abort at 1%, estimated 17+ min. FAIL.
+- After fix: rhat=1.017, ess=301, **0 divergences**, 178s. PASS.
+
+Parameter recovery (quick run, wider tolerances expected):
+
+| Edge | Truth mu | Post mu | Truth onset | Post onset |
+|------|----------|---------|-------------|------------|
+| gate→path-a | 1.500 | 1.511±0.005 | 1.0 | 1.13±0.03 |
+| gate→path-b | 1.800 | 1.813±0.006 | 2.0 | 2.11±0.04 |
+| path-a→join | 1.300 | 1.127±0.035 | 1.0 | 1.64±0.11 |
+| path-b→join | 1.500 | 1.302±0.032 | 1.0 | 1.84±0.11 |
+| join→outcome | 1.300 | 1.166±0.033 | 1.0 | 1.51±0.11 |
+
+Upstream edges recover accurately. Join-adjacent edges show onset-mu
+ridge (corr ≈ -0.99) causing some drift — but the model converges with
+0 divergences, which it categorically could not do before.
+
+### Key insight
+
+The join problem was NOT inherent NUTS geometry — it was a **model
+misspecification**. The single-path approximation discarded ~43% of the
+traffic at the join. Fixing the model to represent the actual mixture
+resolved the convergence failure immediately.
+
+### Files changed
+
+- `compiler/types.py` — added `path_alternatives` field to EdgeTopology
+- `compiler/topology.py` — propagate all inbound paths at joins, store
+  alternatives recursively through downstream edges
+- `compiler/model.py` — mixture CDF in `_emit_cohort_likelihoods` when
+  `path_alternatives` has >1 entry
+
+---
+
+## 23-Mar-26: Diamond graph confirms join-node convergence is a model issue
+
+### What was tested
+
+Ran `synth-diamond-test` (6 all-latency edges: anchor → branch (path-a,
+path-b) → join → outcome) through the full pipeline: integrity check →
+synth_gen → param recovery.
+
+Structural integrity: PASS (after adding missing `defaultConnection`).
+Data generation: PASS (56,004 rows, all 12 hashes verified).
+Stats engine priors: accurate (mu within 0.002 of truth for all edges).
+
+### Result
+
+**EARLY ABORT** at 1% sampling — estimated 17+ minutes (3x limit).
+PyTensor compilation alone took 117s (vs 3s for 4-step linear, 19s for
+2-step). The symbolic graph is massive: 6 latency edges × 45-82 ages
+per trajectory.
+
+This is the join-node convergence problem. The diamond has a branch
+(gate → path-a, gate → path-b) merging at a join node, creating the
+p-latency identifiability coupling the journal has documented since
+20-Mar-26.
+
+### Significance
+
+**This is NOT a data issue — it's a model structure issue.** We hoped
+the production branch graph's convergence problems were data quality,
+but the diamond uses clean synthetic data with known ground truth and
+still fails. The join-node geometry is fundamentally difficult for NUTS.
+
+The linear chains (2-step, 4-step) converge perfectly with accurate
+parameter recovery. The diamond fails. The structural differentiator
+is the join node.
+
+### Known approaches not yet tried (from journal 21-Mar-26)
+
+1. **Window-first two-phase**: fit window data per-edge first (always
+   well-conditioned), use posteriors as strong priors for cohort fitting.
+   Most promising — eliminates p-latency ambiguity at joins by pinning
+   latency from window data.
+2. **Softmax reparameterisation at joins**: parameterise join-node path
+   shares on unconstrained logits.
+3. **SMC (Sequential Monte Carlo)**: tempering from prior to posterior.
+   Diagnostic tool for multimodality.
+
+### Outstanding issues
+
+- **Kappa discrepancy explained — noise model redesign needed (Phase C)**:
+  posterior κ is 10-45x truth because synth_gen's noise model is wrong.
+  It applies overdispersion as per-DAY p draws (one Beta per day, everyone
+  on that day uses it). This creates between-day total variance but NO
+  within-trajectory overdispersion — the time allocation within each
+  trajectory IS pure multinomial, so the model correctly finds large κ.
+
+  Real overdispersion comes from three layers:
+  1. **Contexts** (discrete user types) — different {p, mu, sigma} per
+     edge per context. Creates mixture CDFs → DM overdispersion in
+     trajectory shapes. This is the dominant source.
+  2. **Per-user variation within context** — individual propensity/speed
+     drawn from a distribution centred on the context's values. Creates
+     residual BetaBinomial variance even after conditioning on context.
+     This is what κ should capture.
+  3. **Day effects** — temporal drift in rates (already modelled via
+     drift_sigma, minor contribution).
+
+  The fix: replace kappa_sim with context-based population heterogeneity
+  in synth_gen. Contexts define per-edge overrides; users are assigned
+  to contexts; per-user Beta draws within context create residual
+  overdispersion. κ recovery becomes testable when the noise model
+  reflects real population structure. This work is Phase C for synth_gen.
+- **Trajectory density on slow-latency edges**: truth mu=2.3 (median
+  ~10 days) produces 59-83 ages after dedup vs 17-23 for mu=1.5.
+  Causes 267s sampling on 2-step (vs 130s for 4-step mirror).
+  Compilation time scales badly: 117s for diamond's 6 edges.
+
+---
+
 ## 23-Mar-26: Tooling hardening and parameter recovery baseline
 
 ### What was done

@@ -82,28 +82,46 @@ class TestAnnotateDataPoint:
         ann = annotate_data_point(
             anchor_day='2026-01-01',
             retrieved_at_date='2026-03-01',  # 59 days → very mature
-            y=50,
+            y=50, x=100,
             mu=MU, sigma=SIGMA, onset_delta_days=ONSET,
+            forecast_mean=0.6,
         )
         assert ann.layer == 'mature'
         assert ann.completeness > 0.95
         assert ann.evidence_y == 50
-        # Projected should be close to evidence (mature).
-        assert ann.projected_y == pytest.approx(50 / ann.completeness, abs=0.1)
-        assert ann.forecast_y < 5  # Small residual
+        # Blend: c × (y/x) + (1-c) × forecast_mean × c
+        # At c≈1: blend ≈ evidence_rate = 50/100 = 0.5
+        # projected ≈ 100 × 0.5 ≈ 50 (evidence dominates)
+        c = ann.completeness
+        evidence_rate = 50.0 / 100.0
+        model_rate = 0.6 * c
+        blended = c * evidence_rate + (1.0 - c) * model_rate
+        expected_proj = 100.0 * blended
+        assert ann.projected_y == pytest.approx(expected_proj, rel=1e-9)
+        # Mature cohort: projected ≈ evidence, small residual
+        assert ann.forecast_y < 1.0
 
     def test_immature_layer(self):
         ann = annotate_data_point(
             anchor_day='2026-01-01',
             retrieved_at_date='2026-01-04',  # 3 days → immature
-            y=10,
+            y=10, x=200,
             mu=MU, sigma=SIGMA, onset_delta_days=ONSET,
+            forecast_mean=0.5,
         )
         assert ann.layer == 'forecast'
         assert 0 < ann.completeness < 0.95
         assert ann.evidence_y == 10
-        assert ann.projected_y > 10  # Projection should be higher than observed
-        assert ann.forecast_y > 0
+        # Blend: c × (y/x) + (1-c) × forecast_mean × c
+        # Immature (c small): model dominates
+        c = ann.completeness
+        evidence_rate = 10.0 / 200.0
+        model_rate = 0.5 * c
+        blended = c * evidence_rate + (1.0 - c) * model_rate
+        expected_proj = 200.0 * blended
+        assert ann.projected_y == pytest.approx(expected_proj, rel=1e-9)
+        assert ann.projected_y > 10  # Model predicts more than observed
+        assert ann.forecast_y > 0  # Meaningful forecast component
 
     def test_dead_time_layer(self):
         """During onset dead-time, completeness = 0, layer = evidence (no model info)."""
@@ -118,17 +136,22 @@ class TestAnnotateDataPoint:
         assert ann.projected_y == 0  # Can't project with zero completeness
 
     def test_projection_formula(self):
-        """projected_y = y / completeness (when completeness > epsilon)."""
+        """projected_y = x × blended_rate where blend uses completeness."""
         ann = annotate_data_point(
             anchor_day='2026-01-01',
             retrieved_at_date='2026-01-10',  # 9 days
-            y=40,
+            y=40, x=500,
             mu=MU, sigma=SIGMA, onset_delta_days=ONSET,
+            forecast_mean=0.7,
         )
         if ann.completeness > COMPLETENESS_EPSILON:
-            expected_proj = 40 / ann.completeness
+            c = ann.completeness
+            evidence_rate = 40.0 / 500.0
+            model_rate = 0.7 * c
+            blended = c * evidence_rate + (1.0 - c) * model_rate
+            expected_proj = 500.0 * blended
             assert ann.projected_y == pytest.approx(expected_proj, rel=1e-9)
-            assert ann.forecast_y == pytest.approx(expected_proj - 40, rel=1e-9)
+            assert ann.forecast_y == pytest.approx(max(0, expected_proj - 40), rel=1e-9)
 
     def test_bad_dates_produce_zero_completeness(self):
         ann = annotate_data_point(

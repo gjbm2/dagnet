@@ -48,6 +48,9 @@ function attachShareBootConsoleGuards(page: any) {
     const text = msg.text?.() || '';
 
     if (type === 'error') {
+      // BE topo pass 404s are expected when the endpoint is not deployed;
+      // runBeTopoPass handles them gracefully (returns empty result).
+      if (/Failed to load resource.*404/i.test(text)) return;
       errors.push(text);
       return;
     }

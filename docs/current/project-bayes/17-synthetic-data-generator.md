@@ -143,30 +143,101 @@ unrealistically clean data.
 
 ## 3. Noise Model
 
-### 3.1 Daily overdispersion (κ-generating process)
+### 3.1 Population heterogeneity (three-layer variance model)
 
-Real conversion rates vary day-to-day. Sources: marketing mix,
-seasonality, operational changes, cohort composition. The model's
-per-edge κ parameter captures this.
+Real conversion data has more variance than a Binomial/Multinomial
+model predicts. The excess comes from population heterogeneity, not
+from a single "noise parameter." Three layers:
 
-**Generator model**: for each cohort day d, draw an effective
-probability for each edge:
+**Layer 1 — Contexts (discrete user types)**
+
+Users belong to contexts (channel, device, geography, etc.). Each
+context has different conversion probability AND different latency
+per edge. Example:
 
 ```
-p_effective(d, edge) ~ Beta(p_true × κ_sim, (1 - p_true) × κ_sim)
+context "organic":  p(A→B) = 0.6, mu(A→B) = 1.0 (fast)
+context "paid":     p(A→B) = 0.2, mu(A→B) = 2.5 (slow)
 ```
 
-where `κ_sim` is the simulation's overdispersion parameter per edge.
-Large κ_sim → near-constant p (Binomial-like). Small κ_sim → heavy
-daily variation (Beta-Binomial-like).
+When observed in aggregate (without conditioning on context), this
+creates:
+- **Total conversion variance** — context mix varies day to day
+  (BetaBinomial-like effect on k/n)
+- **Trajectory shape overdispersion** — aggregate CDF is a mixture
+  of context-specific CDFs (DM overdispersion in time allocation)
+- **Cross-edge correlation** — users fast on edge 1 tend to be fast
+  on edge 2 (same context determines both)
 
-The model should recover κ_sim ≈ κ_posterior. If the generator doesn't
-inject overdispersion, κ will be estimated as very large (trivially
-Binomial), which doesn't test the overdispersion machinery.
+This is the dominant source of overdispersion. The model's per-edge
+κ captures the residual after fitting what it can. With contexts
+modelled explicitly (Phase C), κ should decrease toward the
+multinomial limit.
 
-**Truth config specification**: per-edge `kappa_sim` value. Sensible
-defaults: κ_sim = 5-20 (moderate overdispersion matching the range
-we observed on real data: 1.5 to 23.7).
+**Layer 2 — Per-user variation within context**
+
+Even within a context, users differ. Each user draws:
+
+```
+p_user(edge) ~ Beta(p_context × user_κ, (1 - p_context) × user_κ)
+```
+
+where `user_κ` controls individual variation within the context.
+Large user_κ → users within a context are similar. Small user_κ →
+substantial individual differences.
+
+This creates residual BetaBinomial variance that persists even after
+conditioning on context — it's what the model's κ parameter should
+recover after Phase C slice pooling removes the context-level
+heterogeneity.
+
+**Layer 3 — Day effects (temporal drift)**
+
+Slow trends in conversion probability. See §3.5 below.
+
+### 3.1.1 Current implementation (Phase 1)
+
+The current generator uses a simplified model: per-day Beta draw
+(`p_eff ~ Beta(p × κ_sim, (1-p) × κ_sim)`) shared across all users
+on that day. This creates between-day total variance but NO within-
+trajectory overdispersion — the time allocation within each trajectory
+is pure multinomial.
+
+**Known consequence**: the model correctly finds large κ (near-
+multinomial) on Phase 1 synthetic data. κ recovery is not testable
+until the three-layer model is implemented (Phase C synth_gen work).
+
+### 3.1.2 Phase C implementation (planned)
+
+Replace κ_sim with context-based population heterogeneity:
+
+1. Truth file defines contexts with per-edge {p, mu, sigma} overrides
+   and population weights
+2. Each user is assigned a context at entry
+3. Within-context per-user Beta draws create residual variance
+4. Observation rows carry context-qualified slice_keys for Phase C
+   testing; aggregate rows reflect the natural mixture
+5. κ recovery is tested against the per-user variance parameter
+
+**Truth config (Phase C)**:
+```yaml
+contexts:
+  - name: organic
+    weight: 0.6
+    edges:
+      edge-a-to-b:
+        p_mult: 1.2       # multiplier on base p
+        mu_offset: -0.3    # offset on base mu (faster)
+  - name: paid
+    weight: 0.4
+    edges:
+      edge-a-to-b:
+        p_mult: 0.7
+        mu_offset: 0.5     # offset on base mu (slower)
+
+simulation:
+  user_kappa: 100           # per-user propensity variation within context
+```
 
 ### 3.2 Denominator variation
 

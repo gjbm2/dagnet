@@ -225,8 +225,9 @@ export async function runBeTopoPass(
       source: 'analytic_be',
       source_at: sourceAt,
       probability: {
-        mean: edge.p_evidence,
-        stdev: 0, // BE doesn't compute stdev in this path
+        // p∞ (forecast) when available, else evidence rate as fallback
+        mean: edge.p_infinity ?? edge.p_evidence,
+        stdev: 0, // analytic has no p∞ uncertainty estimate
       },
       ...(edge.mu != null ? {
         latency: {

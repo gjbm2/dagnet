@@ -23,9 +23,6 @@ import { LayoutGrid, Table2 } from 'lucide-react';
 import { AnalysisInfoCard } from '../analytics/AnalysisInfoCard';
 import { ExpressionToolbarTray } from './ExpressionToolbarTray';
 import { CfpPopover } from './CfpPopover';
-import { useDataDepthContext } from '../../contexts/DataDepthContext';
-import { buildDataDepthInfoRows } from '../../services/dataDepthService';
-import { useGraphStoreOptional } from '../../contexts/GraphStoreContext';
 
 type ChartKind = 'funnel' | 'bridge' | 'histogram' | 'daily_conversions' | 'cohort_maturity' | 'lag_fit' | 'bar_grouped' | 'pie' | 'time_series' | 'info';
 
@@ -234,31 +231,9 @@ export function AnalysisChartContainer(props: {
     return clone as AnalysisResult;
   }, [result, scenarioMetaById]);
 
-  // ── Data Depth score enrichment (appends coverage scores when available) ──
-  // The depth tab always exists from buildEdgeInfoResult (basic n/k rows).
-  // This memo appends f₁/f₂/f₃/composite rows once async scores arrive.
-  const { scores: _ddScores } = useDataDepthContext();
-  const _ddGraph: any = useGraphStoreOptional((s: any) => s?.graph);
-  const finalResult = useMemo(() => {
-    if (!patchedResult || patchedResult.analysis_type !== 'edge_info' || !_ddScores || !_ddGraph?.edges) {
-      return patchedResult;
-    }
-    const rows = patchedResult.data as any[] | undefined;
-    const edgeIdRow = rows?.find((r: any) => r.tab === 'overview' && r.property === 'Edge ID');
-    if (!edgeIdRow?.value) return patchedResult;
-
-    const edgeObj = _ddGraph.edges.find((e: any) => e.id === edgeIdRow.value || e.uuid === edgeIdRow.value);
-    const scoreKey = edgeObj ? (edgeObj.uuid ?? edgeObj.id) : edgeIdRow.value;
-    const score = _ddScores.get(scoreKey);
-    if (!score) return patchedResult;
-
-    const n = edgeObj?.p?.evidence?.n ?? 0;
-    const k = edgeObj?.p?.evidence?.k;
-    return {
-      ...patchedResult,
-      data: [...(rows ?? []), ...buildDataDepthInfoRows(score, n, k)],
-    };
-  }, [patchedResult, _ddScores, _ddGraph]);
+  // Data Depth enrichment now lives in AnalysisInfoCard (works in both
+  // chart-container and direct card-view paths).
+  const finalResult = patchedResult;
 
   const inferredChartKind = useMemo((): ChartKind | null => {
     if (!finalResult) return null;

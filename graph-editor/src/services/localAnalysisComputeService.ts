@@ -11,6 +11,7 @@ import type { ConversionGraph, GraphNode, GraphEdge, ProbabilityPosterior, Laten
 import { parseDSL } from '../lib/queryDSL';
 import { computeQualityTier, qualityTierLabel } from '../utils/bayesQualityTier';
 import { formatRelativeTime, getFreshnessLevel } from '../utils/freshnessDisplay';
+import { resolveActiveModelVars, effectivePreference } from './modelVarsResolution';
 
 // Analysis types that support local FE compute
 const LOCAL_COMPUTE_TYPES = new Set(['node_info', 'edge_info']);
@@ -424,6 +425,31 @@ function buildEdgeInfoResult(graph: ConversionGraph, dsl: string): AnalysisResul
         data.push({ tab: 'latency', section: 'Path', property: 'Anchor', value: anchorNode?.label || lat.anchor_node_id });
       }
     }
+
+    // Model vars source — show which source is currently promoted
+    const pref = effectivePreference(edge.p.model_source_preference, graph.model_source_preference);
+    const active = resolveActiveModelVars(edge.p.model_vars, pref);
+    if (active) {
+      const sourceLabel = active.source === 'analytic_be' ? 'Analytic (BE)' : active.source.charAt(0).toUpperCase() + active.source.slice(1);
+      data.push({ tab: 'latency', section: 'Source', property: 'Active Source', value: sourceLabel });
+      if (active.source_at) {
+        data.push({ tab: 'latency', section: 'Source', property: 'Updated', value: active.source_at });
+      }
+      if (active.latency) {
+        data.push({ tab: 'latency', section: 'Source', property: 'μ (log-normal)', value: active.latency.mu.toFixed(3) });
+        data.push({ tab: 'latency', section: 'Source', property: 'σ (log-normal)', value: active.latency.sigma.toFixed(3) });
+      }
+      data.push({ tab: 'latency', section: 'Source', property: 'p (mean)', value: fmtPct(active.probability.mean) });
+      if (active.probability.stdev > 0) {
+        data.push({ tab: 'latency', section: 'Source', property: 'p (stdev)', value: fmtPct(active.probability.stdev) });
+      }
+      if (active.quality) {
+        const gradeLabels = ['Cold Start', 'Weak', 'Mature', 'Full Bayesian'];
+        const gradeLabel = gradeLabels[active.quality.evidence_grade] ?? `Grade ${active.quality.evidence_grade}`;
+        const gateStr = active.quality.gate_passed ? '✓ passed' : '✗ failed';
+        data.push({ tab: 'latency', section: 'Source', property: 'Quality', value: `${gradeLabel} (${gateStr})` });
+      }
+    }
   }
 
   // Costs
@@ -596,9 +622,9 @@ function buildEdgeForecastTab(
   if (!posterior && !latPosterior) {
     data.push({
       tab: 'forecast',
-      section: 'Bayesian Fit',
+      section: 'Posterior',
       property: 'Status',
-      value: 'No posterior available — run Bayesian fit',
+      value: 'No posterior available',
     });
     return;
   }

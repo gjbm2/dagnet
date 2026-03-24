@@ -391,6 +391,7 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
         mu = float(args['mu'])
         sigma = float(args['sigma'])
         onset = float(args.get('onset_delta_days') or 0.0)
+        fm = float(args.get('forecast_mean') or 0.0)
         anchor_to = args.get('anchor_to')
         if not isinstance(anchor_to, str) or not anchor_to:
             return
@@ -446,6 +447,16 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
             return
 
         # Build tail frames at daily cadence.
+        #
+        # Each synthetic point carries:
+        #   y          = frozen evidence (last real observation) — keeps Σy stable
+        #   x          = frozen x (last real observation) — keeps Σx stable
+        #   projected_y = model prediction at this τ — the forecast curve
+        #   forecast_y  = max(0, projected_y - y) — the crown
+        #
+        # The FE computes evidence_rate = Σy/Σx (stable, plateauing) and
+        # projected_rate = Σprojected_y/Σx (rising toward model). The crown
+        # is the gap between them.
         new_frames: List[Dict[str, Any]] = []
         d = start_d
         while d <= tail_to_d:
@@ -470,51 +481,40 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
                 except (ValueError, TypeError):
                     a = 0.0
 
-                # Synthetic tail must respect cohort size invariants:
-                # - 0 <= y <= x (expected conversions cannot exceed cohort size)
-                # - 0 <= rate <= 1
                 if not math.isfinite(x) or x <= 0:
                     continue
-
-                # Use projected_y (final matured estimate) from the last real frame.
-                # Clamp to x to avoid impossible projections (projected_y is an estimate, not a guarantee).
-                y_inf = p.get('projected_y')
-                try:
-                    y_inf = float(y_inf) if y_inf is not None else None
-                except (ValueError, TypeError):
-                    y_inf = None
-                if y_inf is None or not math.isfinite(y_inf) or y_inf < 0:
-                    # If we can't establish a final-y estimate, we can't extend a future tail.
+                if fm <= 0:
                     continue
-                y_inf = min(y_inf, x)
 
-                # Compute expected observed conversions by future date: y(t) = y_inf * completeness(t).
+                # Frozen evidence from last real frame.
+                y_evidence = float(p.get('y') or p.get('Y') or 0)
+
+                # Model prediction at this future age.
                 try:
                     cohort_age_days = (d - date.fromisoformat(anchor_day)).days
                 except ValueError:
                     cohort_age_days = 0
                 c_future = compute_completeness(float(cohort_age_days), mu, sigma, onset)
                 c_future = max(0.0, min(1.0, float(c_future)))
-                y_future = max(0.0, y_inf * c_future)
-                y_future = min(y_future, x)
+                projected_y = x * fm * c_future
+                projected_y = min(projected_y, x)
 
-                rate = (y_future / x) if x > 0 else 0.0
+                forecast_y = max(0.0, projected_y - y_evidence)
+                rate = (y_evidence / x) if x > 0 else 0.0
                 rate = max(0.0, min(1.0, rate))
-                total_y += y_future
+                total_y += y_evidence
                 synth_points.append({
                     "anchor_day": anchor_day,
-                    "y": y_future,
+                    "y": y_evidence,
                     "x": x,
                     "a": a,
                     "rate": rate,
+                    "completeness": c_future,
+                    "layer": "forecast",
+                    "evidence_y": y_evidence,
+                    "forecast_y": forecast_y,
+                    "projected_y": projected_y,
                 })
-
-            if synth_points:
-                synth_points = annotate_rows(
-                    synth_points,
-                    mu, sigma, onset,
-                    retrieved_at_override=as_at_iso,
-                )
 
             new_frames.append({
                 "as_at_date": as_at_iso,
@@ -706,12 +706,16 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
 
                 mu, sigma, onset, cdf_mode = _resolve_completeness_params(model_params, is_window)
 
+                # Extract forecast_mean for annotation (model-based projection)
+                fm = model_params.get('forecast_mean', 0.0) or 0.0
+
                 if analysis_type == 'cohort_maturity' and 'frames' in result:
                     for frame in result['frames']:
                         as_at_date = frame.get('as_at_date', '')
                         if frame.get('data_points'):
                             frame['data_points'] = annotate_rows(
                                 frame['data_points'], mu, sigma, onset,
+                                forecast_mean=fm,
                                 retrieved_at_override=as_at_date,
                             )
                     # Phase 2: append synthetic future frames (forecast-only tail).
@@ -720,11 +724,13 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
                         'mu': mu,
                         'sigma': sigma,
                         'onset_delta_days': onset,
+                        'forecast_mean': fm,
                         'anchor_to': subj.get('anchor_to'),
                     })
                 elif analysis_type == 'daily_conversions' and 'rate_by_cohort' in result:
                     result['rate_by_cohort'] = annotate_rows(
                         result['rate_by_cohort'], mu, sigma, onset,
+                        forecast_mean=fm,
                     )
 
                 # ── Model CDF curve (cohort maturity only) ──────────────

@@ -54,8 +54,10 @@ export function resolveActiveModelVars(
     return b?.quality?.gate_passed ? b : undefined;
   };
 
+  // During crossover: FE analytic is the trusted default. BE is opt-in.
+  // Switch this to prefer analytic_be when parity is confirmed.
   const analyticBest = (): ModelVarsEntry | undefined =>
-    find('analytic_be') ?? find('analytic');
+    find('analytic') ?? find('analytic_be');
 
   const bestAvailable = (): ModelVarsEntry | undefined =>
     bayesianIfGated() ?? analyticBest();
@@ -138,8 +140,9 @@ export function applyPromotion(
   const result = promoteModelVars(entry);
   if (!result) return undefined;
 
-  p.mean = result.mean;
-  p.stdev = result.stdev;
+  // p.mean (blend), p.stdev (blend uncertainty), and p.forecast.mean (p∞)
+  // are per-query display quantities computed by the topo pass / pipeline.
+  // applyPromotion only promotes latency model parameters (mu, sigma, t95, etc.).
 
   if (result.latency && p.latency) {
     p.latency.mu = result.latency.mu;

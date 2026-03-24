@@ -246,6 +246,12 @@ def _compute_paths(
     node_path_edges: dict[str, list[str]] = {
         anchor_node_id: [],
     }
+    # node → list of alternative paths (each a list of edge_ids).
+    # For non-join nodes: single alternative = [path_edge_ids].
+    # For join nodes: one alternative per inbound path.
+    node_path_alts: dict[str, list[list[str]]] = {
+        anchor_node_id: [[]],
+    }
 
     # Traffic weights for join-node collapse (use p.mean from graph if available)
     edge_p_mean: dict[str, float] = {}
@@ -273,9 +279,13 @@ def _compute_paths(
 
         source_path = node_path[from_node]
         source_edges = node_path_edges[from_node]
+        source_alts = node_path_alts.get(from_node, [source_edges])
 
         # Store path from anchor to this edge's target
         et.path_edge_ids = source_edges + [edge_id]
+
+        # Propagate path alternatives (for join-downstream mixture CDFs)
+        et.path_alternatives = [alt + [edge_id] for alt in source_alts]
 
         # path_sigma_ax = sigma of A→X path (for τ_cohort)
         et.path_sigma_ax = source_path.path_sigma
@@ -320,11 +330,14 @@ def _compute_paths(
             # First path to this node — store directly
             node_path[to_node] = et.path_latency
             node_path_edges[to_node] = et.path_edge_ids
+            # Propagate alternatives from upstream (handles nested joins)
+            node_path_alts[to_node] = et.path_alternatives if et.path_alternatives else [et.path_edge_ids]
         else:
             # Join node — moment-matched collapse of all inbound paths
             # Collect all inbound edges that have reached this node
             inbound_edges = incoming.get(to_node, [])
             inbound_data = []
+            all_inbound_paths: list[list[str]] = []
             for ie in inbound_edges:
                 ie_id = ie["uuid"]
                 ie_topo = edges.get(ie_id)
@@ -333,6 +346,13 @@ def _compute_paths(
                 pl = ie_topo.path_latency
                 weight = edge_p_mean.get(ie_id, 1.0)
                 inbound_data.append((pl.path_delta, pl.path_mu, pl.path_sigma, weight))
+                # Collect ALL alternatives from this inbound edge
+                # (handles nested joins — each inbound may itself have
+                # multiple alternatives from an upstream join)
+                if ie_topo.path_alternatives:
+                    all_inbound_paths.extend(ie_topo.path_alternatives)
+                else:
+                    all_inbound_paths.append(ie_topo.path_edge_ids)
 
             if len(inbound_data) >= 2:
                 d_mix, mu_mix, sigma_mix = moment_matched_collapse(inbound_data)
@@ -342,6 +362,7 @@ def _compute_paths(
                     path_sigma=sigma_mix,
                 )
                 # Use the path edges from the highest-weight inbound
+                # (for backward-compat with code that reads path_edge_ids)
                 best_ie = max(
                     [(ie["uuid"], edge_p_mean.get(ie["uuid"], 1.0))
                      for ie in inbound_edges if ie["uuid"] in edges],
@@ -352,14 +373,18 @@ def _compute_paths(
                     ie_topo = edges.get(best_ie[0])
                     if ie_topo:
                         node_path_edges[to_node] = ie_topo.path_edge_ids
+                # Store ALL inbound paths as alternatives for mixture CDF
+                node_path_alts[to_node] = all_inbound_paths
                 diagnostics.append(
                     f"INFO: join at node {to_node[:8]}…, "
-                    f"{len(inbound_data)} inbound paths collapsed"
+                    f"{len(inbound_data)} inbound paths → "
+                    f"{len(all_inbound_paths)} alternatives"
                 )
             else:
                 # Only one inbound processed so far — update if this path is better
                 node_path[to_node] = et.path_latency
                 node_path_edges[to_node] = et.path_edge_ids
+                node_path_alts[to_node] = [et.path_edge_ids]
 
 
 def _compute_fingerprint(
