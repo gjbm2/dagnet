@@ -1,7 +1,7 @@
 {
   "name": "graph-editor",
   "private": true,
-  "version": "1.8.3-beta",
+  "version": "1.8.4-beta",
   "type": "module",
   "scripts": {
     "dev": "npm run generate-docs && npm run bundle-sample-data && vite",
