@@ -1,4 +1,11 @@
 # DagNet Release Notes
+## Version 1.8.2b
+**Released:** 24-Mar-26
+
+Progress with Bayes toplogies, cohort maturity curves, BE/FE stats modelling
+
+---
+
 ## Version 1.7.30b
 **Released:** 22-Mar-26
 
