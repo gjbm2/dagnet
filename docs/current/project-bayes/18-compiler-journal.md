@@ -8,6 +8,96 @@ Entries are reverse-chronological (newest first).
 
 ---
 
+## 25-Mar-26 (cont.): Fundamental model design — window/cohort relationship
+
+### Observation
+
+Even after the gradient-coupling fix (disconnected_grad on upstream path
+products), the model still over-estimates p for delegated-to-registered:
+analytic p≈0.095, model returns ≈0.184. With ~2800 snapshot rows, priors
+should not dominate — yet they appear to. This points to a structural
+issue in the model, not just a gradient leak.
+
+### Root cause analysis: what does each observation type measure?
+
+**Window observation for edge X→Y**: "Of N users at X, how many reached
+Y within R days?" The denominator is ALL users at X, regardless of how
+they arrived. This directly measures P(Y|X) for the general population.
+
+**Cohort observation for path A→…→X→Y**: "Of N₀ users entering at anchor
+A, how many completed A→…→X→Y within R days?" The population at X has
+been filtered — only users who cleared every upstream step. This is a
+selected subpopulation, not a random sample of users at X.
+
+### Key insight: cohort supervenes on window
+
+Cohort cannot meaningfully constrain window. It is strictly downstream.
+A cohort observation of X→Y is still looking at X→Y, but only AFTER
+A→…→X has happened. The relationship is:
+
+- **p_window** is the ground truth — the edge conversion rate P(Y|X)
+- **p_cohort(path)** is derived FROM the window p values along the path,
+  subject to:
+  (a) Possible drift (selection effects from the filtered population)
+  (b) Temporal dispersion from the **convolution product** of
+      intervening edge latency distributions along the path
+
+The expected cohort path rate at retrieval age R is:
+
+```
+E[rate] ≈ ∏(p_window_i) × CDF_path(R)
+```
+
+where `CDF_path` is the convolution of individual edge latency CDFs.
+Deviations from this are explained by dispersion (kappa) and drift —
+NOT by adjusting edge p values.
+
+### What this means for model construction
+
+1. **Window DM is the sole authority on edge p.** Window observations
+   constrain p_window directly. Nothing else should.
+
+2. **Cohort DM constrains latency and dispersion.** It uses window p
+   values as fixed inputs (via disconnected_grad or equivalent), combined
+   through the path product, convolved with latency. It should never
+   push back on edge p.
+
+3. **The dependency is strictly one-directional.** Window p → cohort
+   predictions, never cohort observations → window p.
+
+### Why the current model violates this
+
+The current model shares `p_base` between window and cohort:
+
+```
+p_base  ← shared Beta RV (BOTH observation types constrain this)
+p_window = sigmoid(logit(p_base) + eps_w × tau_w)
+p_cohort = sigmoid(logit(p_base) + eps_c × tau_c)
+```
+
+Even with disconnected_grad on the path product, cohort likelihoods
+still constrain p_base through:
+- The shared p_base parameter itself
+- Window trajectories within `_emit_cohort_likelihoods` that use
+  p_window directly (these have latent latency, creating a
+  higher-p/slower-latency coupling)
+
+Result: cohort data pulls p_base upward (from 0.097 to 0.184 for
+delegated-to-registered), violating the one-directional constraint.
+
+### Required change
+
+Remove the p_base sharing mechanism. Window p must be an independent
+variable constrained only by window DM. Cohort DM receives window p
+as a frozen input and constrains only latency, onset, and dispersion
+parameters.
+
+### Status
+
+Confirmed reasoning. Implementation plan to follow.
+
+---
+
 ## 25-Mar-26: Production graph p inflation — OPEN INVESTIGATION
 
 ### Problem

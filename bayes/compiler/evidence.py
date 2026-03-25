@@ -247,11 +247,27 @@ def bind_snapshot_evidence(
         if et.has_latency:
             ev.latency_prior = _resolve_latency_prior(et, pf_data)
 
-        # --- Evidence: snapshot rows if available, else param file ---
+        # --- Evidence: merge snapshot rows + param file ---
+        #
+        # Snapshot rows provide rich multi-retrieval trajectories per
+        # anchor_day.  Param-file values[] provide single-point observations
+        # (latest snapshot) for each anchor_day.  They originate from the
+        # same fetch pipeline so they almost always overlap, but may diverge
+        # after hash migrations, DB purges, or failed writes.
+        #
+        # Strategy:
+        #   1. Bind snapshot rows as trajectories (richer signal).
+        #   2. Supplement with param-file cohort daily points for any
+        #      anchor_days NOT already covered by snapshot trajectories.
+        #   3. Window aggregates from param files are NOT supplemented when
+        #      snapshot window trajectories exist — the per-day trajectories
+        #      are strictly richer than the aggregate.
+        #   4. When no snapshot rows exist at all, fall back entirely to
+        #      param-file evidence (preserving existing behaviour).
         rows = snapshot_rows.get(edge_id, [])
 
         if rows:
-            _bind_from_snapshot_rows(
+            snapshot_covered_days = _bind_from_snapshot_rows(
                 ev, et, rows, today_date, diagnostics,
                 settings=settings,
             )
@@ -260,6 +276,18 @@ def bind_snapshot_evidence(
                 f"→ {len(ev.window_obs)} window obs, "
                 f"{sum(len(c.daily) for c in ev.cohort_obs)} cohort daily obs"
             )
+
+            # Supplement with param-file data for uncovered anchor_days.
+            if pf_data:
+                n_supplemented = _supplement_from_param_file(
+                    ev, et, pf_data, today_date, settings,
+                    snapshot_covered_days, diagnostics,
+                )
+                if n_supplemented > 0:
+                    diagnostics.append(
+                        f"INFO edge {edge_id[:8]}…: supplemented {n_supplemented} "
+                        f"daily obs from param file (anchor_days not in snapshot DB)"
+                    )
         elif pf_data:
             _bind_from_param_file(
                 ev, et, pf_data, today_date, settings, diagnostics,
@@ -334,7 +362,7 @@ def _bind_from_snapshot_rows(
     today: datetime,
     diagnostics: list[str],
     settings: dict | None = None,
-) -> None:
+) -> set[str]:
     """Convert snapshot DB rows to Cohort-first trajectory objects.
 
     Both window() and cohort() slices produce Cohorts (independent
@@ -347,6 +375,9 @@ def _bind_from_snapshot_rows(
     Grouping is by (obs_type, anchor_day) — rows from different
     slice_keys for the same anchor_day are merged into one Cohort,
     deduplicated by retrieved_at.
+
+    Returns the set of anchor_day strings that produced observations,
+    used by the caller to deduplicate param-file supplementation.
     """
     from collections import defaultdict
 
@@ -401,6 +432,13 @@ def _bind_from_snapshot_rows(
             ev.total_n += t.n
         for d in cohort_daily:
             ev.total_n += d.n
+
+    # Return covered anchor_days so the caller can deduplicate
+    # param-file supplementation.
+    covered: set[str] = set()
+    covered.update(window_by_day.keys())
+    covered.update(cohort_by_day.keys())
+    return covered
 
 
 def _build_trajectories_for_obs_type(
@@ -575,6 +613,30 @@ def _append_single_obs(
     ))
 
 
+def _resolve_value_retrieved_at(v: dict, fallback: datetime) -> datetime:
+    """Extract data_source.retrieved_at from a values[] entry.
+
+    Returns the parsed datetime if present and parseable, otherwise
+    the fallback (typically wall-clock today). This ensures age and
+    completeness computations use the actual observation timestamp
+    rather than the time the model happens to run.
+    """
+    ds = v.get("data_source")
+    if not isinstance(ds, dict):
+        return fallback
+    raw = ds.get("retrieved_at")
+    if not raw or not isinstance(raw, str):
+        return fallback
+    for fmt in ("%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M:%SZ",
+                "%Y-%m-%d %H:%M:%S", "%Y-%m-%d",
+                "%d-%b-%y", "%d-%b-%Y"):
+        try:
+            return datetime.strptime(raw[:19], fmt)
+        except ValueError:
+            continue
+    return fallback
+
+
 def _bind_from_param_file(
     ev: EdgeEvidence,
     et,
@@ -586,6 +648,10 @@ def _bind_from_param_file(
     """Bind evidence from parameter file values[] (existing Phase A path).
 
     Extracted from bind_evidence() so both paths can share this logic.
+
+    Each values[] entry's age/completeness is computed relative to its
+    data_source.retrieved_at timestamp (the moment the data was fetched
+    from source), falling back to wall-clock today when absent.
     """
     values = pf_data.get("values") or []
     for v in values:
@@ -595,6 +661,10 @@ def _bind_from_param_file(
         n = _safe_int(v.get("n"))
         k = _safe_int(v.get("k"))
 
+        # Use the actual retrieval timestamp for age/completeness,
+        # falling back to today if the entry predates this field.
+        ref_date = _resolve_value_retrieved_at(v, today)
+
         if _is_cohort(slice_dsl):
             n_daily = v.get("n_daily") or []
             k_daily = v.get("k_daily") or []
@@ -602,7 +672,7 @@ def _bind_from_param_file(
 
             if n_daily and k_daily and dates and len(n_daily) == len(k_daily) == len(dates):
                 daily_obs = _build_cohort_daily(
-                    n_daily, k_daily, dates, today,
+                    n_daily, k_daily, dates, ref_date,
                     et.path_latency.path_delta,
                     et.path_latency.path_mu,
                     et.path_latency.path_sigma,
@@ -616,7 +686,7 @@ def _bind_from_param_file(
                     ev.has_cohort = True
                     ev.total_n += sum(d.n for d in daily_obs)
             elif n is not None and k is not None and n > 0:
-                cohort_age = _estimate_cohort_age(slice_dsl, today)
+                cohort_age = _estimate_cohort_age(slice_dsl, ref_date)
                 compl = _compute_cohort_completeness(
                     cohort_age,
                     et.path_latency.path_delta,
@@ -639,7 +709,7 @@ def _bind_from_param_file(
         elif _is_window(slice_dsl) or (n is not None and k is not None):
             if n is not None and k is not None and n > 0:
                 compl = _compute_window_completeness(
-                    slice_dsl, today,
+                    slice_dsl, ref_date,
                     et.onset_delta_days, et.mu_prior, et.sigma_prior,
                     et.has_latency,
                 )
@@ -650,6 +720,109 @@ def _bind_from_param_file(
                 ))
                 ev.has_window = True
                 ev.total_n += n
+
+
+def _normalise_date_key(date_str: str) -> str:
+    """Normalise a date string to ISO YYYY-MM-DD for dedup keying.
+
+    Snapshot DB rows use ISO dates; param-file dates[] may use UK
+    (d-MMM-yy) or ISO format.  Returns the original string if
+    parsing fails — this is safe because the dedup is conservative:
+    an unparseable key simply won't match, so the point is kept
+    rather than incorrectly deduplicated.
+    """
+    for fmt in ("%Y-%m-%d", "%d-%b-%y", "%d-%b-%Y"):
+        try:
+            return datetime.strptime(date_str, fmt).strftime("%Y-%m-%d")
+        except ValueError:
+            continue
+    return date_str
+
+
+def _supplement_from_param_file(
+    ev: EdgeEvidence,
+    et,
+    pf_data: dict,
+    today: datetime,
+    settings: dict,
+    snapshot_covered_days: set[str],
+    diagnostics: list[str],
+) -> int:
+    """Supplement snapshot evidence with param-file data for uncovered days.
+
+    For each cohort values[] entry with daily arrays (n_daily, k_daily,
+    dates), injects observations for anchor_days NOT already covered by
+    snapshot trajectories.  Window aggregates and cohort aggregates are
+    skipped — the snapshot trajectories are strictly richer.
+
+    Returns the number of supplemented daily observations.
+    """
+    # Normalise the snapshot-covered set to ISO keys for cross-format matching.
+    covered_iso = {_normalise_date_key(d) for d in snapshot_covered_days}
+
+    values = pf_data.get("values") or []
+    n_supplemented = 0
+
+    for v in values:
+        if not isinstance(v, dict):
+            continue
+        slice_dsl = v.get("sliceDSL", "") or ""
+
+        # Only supplement cohort daily arrays — these have per-anchor_day
+        # granularity that can be precisely deduplicated against snapshot
+        # trajectories.  Window aggregates (sum across window period) and
+        # cohort aggregates cannot be deduplicated at the anchor_day level.
+        if not _is_cohort(slice_dsl):
+            continue
+
+        n_daily = v.get("n_daily") or []
+        k_daily = v.get("k_daily") or []
+        dates = v.get("dates") or []
+
+        if not (n_daily and k_daily and dates
+                and len(n_daily) == len(k_daily) == len(dates)):
+            continue
+
+        ref_date = _resolve_value_retrieved_at(v, today)
+
+        # Filter to anchor_days not already covered by snapshot data.
+        supplemented_obs: list[CohortDailyObs] = []
+        for i in range(len(n_daily)):
+            date_str = str(dates[i]) if i < len(dates) else ""
+            if _normalise_date_key(date_str) in covered_iso:
+                continue  # snapshot trajectory exists for this day
+
+            n = _safe_int(n_daily[i])
+            k = _safe_int(k_daily[i])
+            if n is None or n <= 0:
+                continue
+
+            age = _date_age(date_str, ref_date)
+            compl = _compute_cohort_completeness(
+                age,
+                et.path_latency.path_delta,
+                et.path_latency.path_mu,
+                et.path_latency.path_sigma,
+                et.has_latency,
+            )
+            supplemented_obs.append(CohortDailyObs(
+                date=date_str,
+                n=n,
+                k=k if k is not None else 0,
+                age_days=age,
+                completeness=compl,
+            ))
+
+        if supplemented_obs:
+            ev.cohort_obs.append(CohortObservation(
+                slice_dsl=slice_dsl,
+                daily=supplemented_obs,
+            ))
+            ev.has_cohort = True
+            ev.total_n += sum(d.n for d in supplemented_obs)
+            n_supplemented += len(supplemented_obs)
+
+    return n_supplemented
 
 
 def _retrieval_age(anchor_day: str, retrieved_at: str, today: datetime) -> float:

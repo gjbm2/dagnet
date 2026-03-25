@@ -47,12 +47,14 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
     feat_cohort_latency = features.get("cohort_latency", True)
     feat_overdispersion = features.get("overdispersion", True)
     feat_latent_onset = features.get("latent_onset", True)
+    feat_window_only = features.get("window_only", False)
 
     diagnostics: list[str] = []
     diagnostics.append(f"features: latent_latency={feat_latent_latency}, "
                        f"cohort_latency={feat_cohort_latency}, "
                        f"overdispersion={feat_overdispersion}, "
-                       f"latent_onset={feat_latent_onset}")
+                       f"latent_onset={feat_latent_onset}, "
+                       f"window_only={feat_window_only}")
     edge_var_names: dict[str, str] = {}  # edge_id → primary p variable name
 
     # Identify which edges will have their window obs handled by a branch
@@ -321,13 +323,14 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
 
                 if emit_window_binomial:
                     _emit_window_likelihoods(safe_id, p_window, ev, diagnostics, kappa=edge_kappa)
-                _emit_cohort_likelihoods(safe_id, p_cohort, ev, diagnostics,
-                                        topology, edge_var_names, model,
-                                        latency_vars=latency_vars,
-                                        p_window_var=p_window,
-                                        cohort_latency_vars=cohort_latency_vars,
-                                        kappa=edge_kappa,
-                                        onset_vars=onset_vars)
+                if not feat_window_only:
+                    _emit_cohort_likelihoods(safe_id, p_cohort, ev, diagnostics,
+                                            topology, edge_var_names, model,
+                                            latency_vars=latency_vars,
+                                            p_window_var=p_window,
+                                            cohort_latency_vars=cohort_latency_vars,
+                                            kappa=edge_kappa,
+                                            onset_vars=onset_vars)
 
                 if edge_id not in edge_var_names:
                     edge_var_names[edge_id] = f"p_base_{safe_id}"
@@ -347,12 +350,13 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
                 else:
                     p = pm.Beta(f"p_{safe_id}", alpha=ev.prob_prior.alpha, beta=ev.prob_prior.beta)
                     edge_var_names[edge_id] = f"p_{safe_id}"
-                _emit_cohort_likelihoods(safe_id, p, ev, diagnostics,
-                                        topology, edge_var_names, model,
-                                        latency_vars=latency_vars,
-                                        cohort_latency_vars=cohort_latency_vars,
-                                        kappa=edge_kappa,
-                                        onset_vars=onset_vars)
+                if not feat_window_only:
+                    _emit_cohort_likelihoods(safe_id, p, ev, diagnostics,
+                                            topology, edge_var_names, model,
+                                            latency_vars=latency_vars,
+                                            cohort_latency_vars=cohort_latency_vars,
+                                            kappa=edge_kappa,
+                                            onset_vars=onset_vars)
 
             else:
                 if p_base_var is None:
@@ -1124,57 +1128,71 @@ def _resolve_path_probability(
     For the first edge from anchor, p_path = current_p_var.
     For downstream edges, p_path includes upstream p's.
 
-    stop_p_gradient: if True, wrap the entire product in stop_gradient
-        so that gradient from the calling likelihood does not flow back
-        to any edge's p variable. The product is still computed from
-        current p values (correct alpha computation) but the cohort DM
-        constrains only latency/kappa, not p. See journal 25-Mar-26:
-        edge.p → path.p is one-way; window DM owns p estimation.
+    stop_p_gradient: if True, wrap only the UPSTREAM edges' product
+        in disconnected_grad, leaving the current/terminal edge free
+        to receive gradient. This means cohort DM constrains the
+        terminal edge's p (conditional on upstream estimates) but
+        cannot distort upstream edges. See journal 25-Mar-26 (cont.):
+        the earlier version wrapped the ENTIRE product, which made
+        cohort data unable to constrain ANY edge's p — causing deep
+        funnel edges with sparse window data to be prior-dominated.
     """
     from pytensor.gradient import disconnected_grad
 
     if not path_edge_ids or not topology or not edge_var_names or not model:
-        return disconnected_grad(current_p_var) if stop_p_gradient else current_p_var
+        return current_p_var
 
-    # The path includes this edge. Collect p variables for upstream edges.
-    p_product = None
+    # Separate upstream edges from the current edge so we can apply
+    # disconnected_grad only to the upstream product.
+    upstream_product = None
+    current_p = None
+
     for eid in path_edge_ids:
         if eid == current_edge_id:
-            p_var = current_p_var
+            current_p = current_p_var
+            continue
+
+        var_name = edge_var_names.get(eid)
+        if var_name is None:
+            continue
+        # Find the variable in the model.
+        # For cohort path products (stop_p_gradient=True), prefer
+        # p_cohort_ to avoid cross-wiring cohort DM gradient into
+        # the window p variable. See journal 25-Mar-26.
+        p_var = None
+        safe_eid = _safe_var_name(eid)
+        if stop_p_gradient:
+            prefixes = ("p_cohort_", "p_base_", "p_")
         else:
-            var_name = edge_var_names.get(eid)
-            if var_name is None:
-                continue
-            # Find the variable in the model.
-            # For cohort path products (stop_p_gradient=True), prefer
-            # p_cohort_ to avoid cross-wiring cohort DM gradient into
-            # the window p variable. See journal 25-Mar-26.
-            p_var = None
-            safe_eid = _safe_var_name(eid)
-            if stop_p_gradient:
-                prefixes = ("p_cohort_", "p_base_", "p_")
-            else:
-                prefixes = ("p_window_", "p_base_", "p_")
-            for prefix in prefixes:
-                candidate = f"{prefix}{safe_eid}"
-                for rv in model.deterministics + model.free_RVs:
-                    if rv.name == candidate:
-                        p_var = rv
-                        break
-                if p_var is not None:
+            prefixes = ("p_window_", "p_base_", "p_")
+        for prefix in prefixes:
+            candidate = f"{prefix}{safe_eid}"
+            for rv in model.deterministics + model.free_RVs:
+                if rv.name == candidate:
+                    p_var = rv
                     break
-            if p_var is None:
-                continue
+            if p_var is not None:
+                break
+        if p_var is None:
+            continue
 
-        if p_product is None:
-            p_product = p_var
+        if upstream_product is None:
+            upstream_product = p_var
         else:
-            p_product = p_product * p_var
+            upstream_product = upstream_product * p_var
 
-    if stop_p_gradient and p_product is not None:
-        p_product = disconnected_grad(p_product)
+    # Current edge must be in the path
+    if current_p is None:
+        current_p = current_p_var
 
-    return p_product if p_product is not None else current_p_var
+    # Build the full product: disconnected upstream * live current
+    if upstream_product is not None:
+        if stop_p_gradient:
+            upstream_product = disconnected_grad(upstream_product)
+        return upstream_product * current_p
+    else:
+        # Current edge is the only edge in the path (first from anchor)
+        return current_p
 
 
 def _emit_branch_group_multinomial(

@@ -74,17 +74,14 @@ if [[ ${#SELECTED[@]} -eq 0 ]]; then
 fi
 
 if [[ ${#SELECTED[@]} -eq 0 ]]; then
-    echo "No active bayes runs found."
+    echo "No active bayes runs yet — starting monitor in standby."
+    echo "  Tail panes will appear automatically when runs start."
     echo ""
-    echo "  Run a harness:     python bayes/test_harness.py --graph <name>"
-    echo "  Param recovery:    scripts/run-param-recovery.sh"
-    echo "  Show all logs:     scripts/bayes-monitor.sh --all"
-    exit 0
+else
+    echo "Monitoring ${#SELECTED[@]} runs:"
+    for g in "${SELECTED[@]}"; do echo "  - $g"; done
+    echo ""
 fi
-
-echo "Monitoring ${#SELECTED[@]} runs:"
-for g in "${SELECTED[@]}"; do echo "  - $g"; done
-echo ""
 
 # Record initial graph set so the status script can detect new arrivals
 printf "%s\n" "${SELECTED[@]}" > /tmp/_bayes_monitor_initial_graphs
@@ -363,6 +360,11 @@ tail_cmd() {
     local log="/tmp/bayes_harness-${graph}.log"
     echo "echo '─── ${short} ───'; tail -f '${log}'"
 }
+
+if [[ $n_graphs -eq 0 ]]; then
+    # Standby mode — status pane only, will rebuild when runs appear
+    tmux new-session -d -s "$SESSION" -n "standby" bash -c "$STATUS_SCRIPT"
+fi
 
 for ((page=0; page<n_pages; page++)); do
     page_label="page-$((page + 1))"
