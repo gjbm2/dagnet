@@ -1,4 +1,11 @@
 # DagNet Release Notes
+## Version 1.8.10b
+**Released:** 25-Mar-26
+
+Gauge charts, dynamically from Bayes
+
+---
+
 ## Version 1.8.8b
 **Released:** 24-Mar-26
 
