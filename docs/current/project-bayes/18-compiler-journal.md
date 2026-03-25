@@ -8,6 +8,97 @@ Entries are reverse-chronological (newest first).
 
 ---
 
+## 25-Mar-26: Param recovery regression pipeline — PARTIAL, NEEDS CLEANUP
+
+### What was attempted
+
+Built a self-bootstrapping param recovery regression pipeline:
+- Orchestrator (`bayes/run_regression.py`) that discovers synth graphs
+  from truth files, checks data integrity via checksums, bootstraps
+  missing data, runs MCMC in parallel with core-aware scheduling, and
+  asserts recovery quality using z-score thresholds.
+- Upgraded `synth_gen.py` with importable API: `discover_synth_graphs()`,
+  `verify_synth_data()`, `save_synth_meta()`.
+- Created 5 new truth files for Structural Canon shapes 3, 5-8
+  (fanout, skip, 3way-join, join-branch, lattice).
+- Rewrote `test_param_recovery.py` as a thin pytest wrapper around the
+  orchestrator.
+
+### What works
+
+- **inference.py fix**: `import os` moved above the conditional at
+  line ~679. Commit `83a96405` introduced a bug where `os.cpu_count()`
+  was referenced outside the branch that imported `os`. Fix is valid.
+- **Discovery + preflight**: All 8 synth graphs discovered, data
+  integrity verified via DB row counts and truth file hashes.
+- **synth-fanout-test**: New graph, validates end-to-end. Dirichlet
+  branch group, 2 edges with asymmetric latency, MCMC converges in
+  ~80s with good recovery (rhat=1.006, ess=1429, 0 divergences).
+- **Orchestrator core-aware parallelism**: Correctly computes
+  `available_cores // chains_per_run` for max parallel workers.
+- **Two-gate assertion**: z-score OR absolute error floor, following
+  SBC best practice. Prevents false failures from precise posteriors
+  with tiny systematic biases.
+
+### What failed / is unvalidated
+
+- **4 new truth files created without validation**: synth-skip-test,
+  synth-3way-join-test, synth-join-branch-test, synth-lattice-test.
+  Parameters were chosen without running even `--no-mcmc` to verify
+  model structure. Results: 3way-join and lattice stuck compiling
+  (436s+), skip and join-branch running very slow. Likely causes:
+  too many edges with latency, trajectory density too high, or
+  graph structure issues from `graph_from_truth.py`.
+- **Original test_param_recovery.py deleted**: The 3 working hardcoded
+  tests (test_2step_synth, test_4step_mirror_recovery,
+  test_diamond_recovery) were replaced. The new pytest wrapper is
+  functional but the original tests were proven and should not have
+  been discarded without confirming the replacement works.
+- **param_recovery.py name matching**: New-format truth files use short
+  edge keys (e.g. `anchor-to-fast`) while graph edges use prefixed
+  param_ids (e.g. `synth-fanout-anchor-to-fast`). Added reverse lookup
+  but only validated on fanout.
+- **bayes-monitor auto-rebuild**: Added logic to detect new graphs and
+  rebuild tmux layout. Had a `local` keyword bug (used outside
+  function). Fixed but untested.
+
+### Key lesson
+
+**Do not create multiple untested artefacts and launch them all at
+once.** Each new synth graph should be validated individually:
+1. Create truth file
+2. `--no-mcmc` to verify model compiles and evidence binds
+3. Short MCMC (100 draws) to verify convergence
+4. Full MCMC to verify recovery
+5. Only then add to the regression suite
+
+### Files changed (cleanup needed)
+
+**dagnet repo**:
+- `bayes/compiler/inference.py` — valid fix, keep
+- `bayes/synth_gen.py` — new API functions, needs review
+- `bayes/run_regression.py` — new file, functional but assertion
+  parsing is fragile (regex on param_recovery.py stdout)
+- `bayes/tests/test_param_recovery.py` — rewritten, original deleted
+- `bayes/param_recovery.py` — name matching fix, needs broader testing
+- `scripts/bayes-monitor.sh` — auto-rebuild logic, needs testing
+- `bayes/TESTING_PLAYBOOK.md` — updated, describes intent not reality
+
+**data repo**:
+- 5 new truth files (only fanout validated)
+- 7 `.synth-meta.json` sidecars
+- Generated graph JSON + entity files for 5 new graphs
+- DB rows for 5 new graphs (persist in snapshot DB)
+
+### Next steps
+
+1. Validate each new truth file individually (no-mcmc → short MCMC)
+2. Fix or remove truth files that cause pathological compilation
+3. Restore original test_param_recovery.py tests as fallback
+4. Test the full pipeline end-to-end on proven graphs only
+
+---
+
 ## 24-Mar-26: Zero-count trajectory filter — BLOCKING DEFECT
 
 ### Problem

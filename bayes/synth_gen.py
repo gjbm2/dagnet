@@ -169,6 +169,186 @@ GRAPH_CONFIGS: dict[str, dict[str, Any]] = {
 }
 
 
+# ---------------------------------------------------------------------------
+# Importable API: discovery, verification, meta sidecar
+# ---------------------------------------------------------------------------
+
+def discover_synth_graphs(data_repo: str | None = None) -> list[dict]:
+    """Discover synth graphs from truth files in the data repo.
+
+    Returns list of dicts with keys:
+        graph_name, truth_path, graph_path (may not exist yet),
+        has_graph_json, has_new_format
+    """
+    if data_repo is None:
+        data_repo = _resolve_data_repo()
+    graphs_dir = os.path.join(data_repo, "graphs")
+    if not os.path.isdir(graphs_dir):
+        return []
+
+    from graph_from_truth import truth_has_graph_structure
+
+    results = []
+    for fname in sorted(os.listdir(graphs_dir)):
+        if not fname.startswith("synth-") or not fname.endswith(".truth.yaml"):
+            continue
+        if ".truth.hard." in fname:
+            continue
+
+        graph_name = fname.replace(".truth.yaml", "")
+        truth_path = os.path.join(graphs_dir, fname)
+        graph_path = os.path.join(graphs_dir, f"{graph_name}.json")
+
+        with open(truth_path) as f:
+            truth = yaml.safe_load(f) or {}
+
+        results.append({
+            "graph_name": graph_name,
+            "truth_path": truth_path,
+            "graph_path": graph_path,
+            "has_graph_json": os.path.isfile(graph_path),
+            "has_new_format": truth_has_graph_structure(truth),
+            "truth": truth,
+        })
+    return results
+
+
+def verify_synth_data(graph_name: str, data_repo: str | None = None) -> dict:
+    """Check whether synth data for a graph is present and fresh.
+
+    Returns dict with:
+        status: "fresh" | "stale" | "missing" | "no_truth"
+        reason: human-readable explanation
+        row_count: total DB rows (0 if not checked)
+        truth_sha256: current truth file hash
+        meta: loaded .synth-meta.json (empty dict if absent)
+    """
+    if data_repo is None:
+        data_repo = _resolve_data_repo()
+    graphs_dir = os.path.join(data_repo, "graphs")
+
+    truth_path = os.path.join(graphs_dir, f"{graph_name}.truth.yaml")
+    if not os.path.isfile(truth_path):
+        return {"status": "no_truth", "reason": f"No truth file: {truth_path}",
+                "row_count": 0, "truth_sha256": "", "meta": {}}
+
+    # Current truth file fingerprint
+    with open(truth_path, "rb") as f:
+        truth_sha = hashlib.sha256(f.read()).hexdigest()
+
+    # Load meta sidecar
+    meta_path = os.path.join(graphs_dir, f"{graph_name}.synth-meta.json")
+    meta = {}
+    if os.path.isfile(meta_path):
+        with open(meta_path) as f:
+            try:
+                meta = json.load(f)
+            except json.JSONDecodeError:
+                meta = {}
+
+    # Check truth file hash against meta
+    truth_stale = False
+    if meta and meta.get("truth_sha256") != truth_sha:
+        truth_stale = True
+
+    # Check DB rows — either via meta hashes or via FE hash computation
+    db_conn = _load_db_connection()
+
+    if not db_conn:
+        # Can't verify DB — trust the meta if it exists and is fresh
+        if not meta:
+            return {"status": "missing", "reason": "No .synth-meta.json and no DB available",
+                    "row_count": 0, "truth_sha256": truth_sha, "meta": meta}
+        if truth_stale:
+            return {"status": "stale", "reason": "Truth file changed since last generation",
+                    "row_count": 0, "truth_sha256": truth_sha, "meta": meta}
+        stored_count = meta.get("row_count", 0)
+        if stored_count > 0:
+            return {"status": "fresh", "reason": f"Meta says {stored_count} rows (DB not checked)",
+                    "row_count": stored_count, "truth_sha256": truth_sha, "meta": meta}
+        return {"status": "missing", "reason": "Meta shows 0 rows and DB not available",
+                "row_count": 0, "truth_sha256": truth_sha, "meta": meta}
+
+    # No meta and no graph JSON → definitely missing (skip DB entirely)
+    graph_path = os.path.join(graphs_dir, f"{graph_name}.json")
+    if not meta and not os.path.isfile(graph_path):
+        return {"status": "missing", "reason": "No meta sidecar and no graph JSON",
+                "row_count": 0, "truth_sha256": truth_sha, "meta": meta}
+
+    # DB is available — verify row counts
+    try:
+        import psycopg2
+        conn = psycopg2.connect(db_conn)
+        cur = conn.cursor()
+        total = 0
+
+        # Try meta hashes first (fast path)
+        if meta and meta.get("edge_hashes"):
+            for edge_hashes in meta["edge_hashes"].values():
+                for h in [edge_hashes.get("window_hash", ""), edge_hashes.get("cohort_hash", "")]:
+                    if h and not h.startswith("PLACEHOLDER") and not h.startswith("SIM-"):
+                        cur.execute("SELECT COUNT(*) FROM snapshots WHERE core_hash = %s", (h,))
+                        total += cur.fetchone()[0]
+        else:
+            # No meta — compute hashes via FE and check DB directly
+            graph_path = os.path.join(graphs_dir, f"{graph_name}.json")
+            if os.path.isfile(graph_path):
+                from compiler.topology import analyse_topology
+                with open(graph_path) as f:
+                    graph = json.load(f)
+                topo = analyse_topology(graph)
+                fe_hashes = compute_core_hashes(graph, topo, data_repo)
+                for pid, hashes in fe_hashes.items():
+                    if pid.startswith("parameter-"):
+                        continue
+                    for h in [hashes.get("window_hash", ""), hashes.get("cohort_hash", "")]:
+                        if h and not h.startswith("PLACEHOLDER") and not h.startswith("SIM-"):
+                            cur.execute("SELECT COUNT(*) FROM snapshots WHERE core_hash = %s", (h,))
+                            total += cur.fetchone()[0]
+        conn.close()
+
+        if truth_stale:
+            return {"status": "stale", "reason": "Truth file changed since last generation",
+                    "row_count": total, "truth_sha256": truth_sha, "meta": meta}
+
+        if total == 0:
+            return {"status": "missing", "reason": "0 DB rows found",
+                    "row_count": 0, "truth_sha256": truth_sha, "meta": meta}
+
+        return {"status": "fresh", "reason": f"{total} DB rows verified",
+                "row_count": total, "truth_sha256": truth_sha, "meta": meta}
+    except Exception as e:
+        return {"status": "missing", "reason": f"DB check failed: {e}",
+                "row_count": 0, "truth_sha256": truth_sha, "meta": meta}
+
+
+def save_synth_meta(
+    graph_name: str,
+    truth_path: str,
+    edge_hashes: dict[str, dict[str, str]],
+    row_count: int,
+    data_repo: str | None = None,
+) -> None:
+    """Write .synth-meta.json sidecar after successful generation."""
+    if data_repo is None:
+        data_repo = _resolve_data_repo()
+    graphs_dir = os.path.join(data_repo, "graphs")
+
+    with open(truth_path, "rb") as f:
+        truth_sha = hashlib.sha256(f.read()).hexdigest()
+
+    meta = {
+        "truth_sha256": truth_sha,
+        "generated_at": datetime.now().strftime("%-d-%b-%y %H:%M:%S"),
+        "row_count": row_count,
+        "edge_hashes": edge_hashes,
+    }
+
+    meta_path = os.path.join(graphs_dir, f"{graph_name}.synth-meta.json")
+    with open(meta_path, "w") as f:
+        json.dump(meta, f, indent=2)
+
+
 def _resolve_data_repo() -> str:
     conf_path = os.path.join(REPO_ROOT, ".private-repos.conf")
     if not os.path.exists(conf_path):
@@ -2329,6 +2509,21 @@ Examples:
 
     if not db_conn and not args.write_files:
         print("\nWARNING: No DB and --write-files not set — data generated but not persisted.")
+
+    # Write .synth-meta.json sidecar for integrity checking
+    if db_conn or args.write_files:
+        total_rows = sum(len(v) for v in snapshot_rows.values())
+        # Serialise edge hashes for the meta sidecar
+        meta_hashes = {}
+        for pid, h in hash_lookup.items():
+            if not pid.startswith("parameter-"):
+                meta_hashes[pid] = {
+                    "window_hash": h.get("window_hash", ""),
+                    "cohort_hash": h.get("cohort_hash", ""),
+                }
+        graph_name_for_meta = os.path.basename(truth_path).replace(".truth.yaml", "")
+        save_synth_meta(graph_name_for_meta, truth_path, meta_hashes, total_rows, data_repo)
+        print(f"Wrote .synth-meta.json (truth_sha256, {total_rows} rows, {len(meta_hashes)} edges)")
 
     print("\nDone.")
 

@@ -86,6 +86,9 @@ echo "Monitoring ${#SELECTED[@]} runs:"
 for g in "${SELECTED[@]}"; do echo "  - $g"; done
 echo ""
 
+# Record initial graph set so the status script can detect new arrivals
+printf "%s\n" "${SELECTED[@]}" > /tmp/_bayes_monitor_initial_graphs
+
 # ---------------------------------------------------------------------------
 # Create the status summary script (top pane runs this in a loop)
 # ---------------------------------------------------------------------------
@@ -285,7 +288,42 @@ while true; do
     clear
     echo -e "$frame"
 
-    # ── 4. Wait for next refresh ──
+    # ── 4. Check for new graphs and auto-rebuild ──
+    # If new harness log files appeared since launch, rebuild the monitor
+    # to add tail panes for them.
+    _cur_graphs=()
+    for f in /tmp/bayes_harness-*.log; do
+        [[ -f "$f" && -s "$f" ]] || continue
+        _gname=$(basename "$f" .log)
+        _gname="${_gname#bayes_harness-}"
+        _glock="/tmp/bayes-harness-${_gname}.lock"
+        if [[ -f "$_glock" ]] && lock_alive "$_glock"; then
+            _cur_graphs+=("$_gname")
+        fi
+    done
+    # Also check the runner's graph list
+    if [[ -f /tmp/bayes_recovery_graphs ]]; then
+        while IFS= read -r _rg; do
+            [[ -n "$_rg" ]] || continue
+            _found=0
+            for _cg in "${_cur_graphs[@]}"; do
+                [[ "$_cg" == "$_rg" ]] && _found=1 && break
+            done
+            [[ $_found -eq 0 ]] && _cur_graphs+=("$_rg")
+        done < /tmp/bayes_recovery_graphs
+    fi
+
+    # Compare against initial set — if new graphs appeared, trigger rebuild
+    if [[ -f /tmp/_bayes_monitor_initial_graphs ]]; then
+        for _cg in "${_cur_graphs[@]}"; do
+            if ! grep -qxF "$_cg" /tmp/_bayes_monitor_initial_graphs 2>/dev/null; then
+                echo "  New graph detected: $_cg — rebuilding monitor..."
+                sleep 1
+                exec bash "${REPO_ROOT}/scripts/bayes-monitor.sh"
+            fi
+        done
+    fi
+
     sleep 4
 done
 STATUSEOF

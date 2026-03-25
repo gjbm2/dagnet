@@ -16,7 +16,7 @@
  */
 
 import React, { useRef, useState } from 'react';
-import { BarChart3, LayoutGrid, Table2, Download, Trash2, ExternalLink, ClipboardCopy, MoreHorizontal, ChevronDown, Crosshair, Layers, Plus, RefreshCcw, Code } from 'lucide-react';
+import { BarChart3, LayoutGrid, Table2, Download, Trash2, ExternalLink, ClipboardCopy, MoreHorizontal, Settings, ChevronDown, Crosshair, Layers, Plus, RefreshCcw, Code } from 'lucide-react';
 import type { ViewMode } from '../../types/chartRecipe';
 import { getAvailableExpressions } from '../../types/chartRecipe';
 import { getDisplaySettingsForSurface } from '../../lib/analysisDisplaySettingsRegistry';
@@ -392,7 +392,7 @@ export const ExpressionToolbarTray = React.memo(function ExpressionToolbarTray({
 
       {/* --- Actions (more...) --- */}
       <CfpPopover
-        icon={<MoreHorizontal size={13} />}
+        icon={<Settings size={13} />}
         title="More actions"
       >
         {analysisId && (

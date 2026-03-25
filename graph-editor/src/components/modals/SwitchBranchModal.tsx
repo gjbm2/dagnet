@@ -137,7 +137,11 @@ export function SwitchBranchModal({ isOpen, onClose, targetBranch, onSwitchCompl
               <div className="warning-icon">⚠️</div>
               <div className="warning-content">
                 <strong>You have {committableFiles.length} uncommitted file{committableFiles.length === 1 ? '' : 's'}</strong>
-                <p>Switching branches will replace your workspace. These changes will be <strong>permanently lost</strong> unless you commit first:</p>
+                {isSameBranch ? (
+                  <p>Re-cloning will discard local state and fetch all files fresh from git. These changes will be <strong>permanently lost</strong> unless you commit first:</p>
+                ) : (
+                  <p>Switching to <strong>{selectedBranch}</strong> will load that branch's content. These uncommitted changes on <strong>{navState.selectedBranch}</strong> will be <strong>permanently lost</strong> unless you commit first:</p>
+                )}
                 <ul style={{ margin: '8px 0 0 0', padding: '0 0 0 20px', fontSize: '0.9em' }}>
                   {committableFiles.slice(0, 10).map(f => (
                     <li key={f.fileId}>{f.name || f.fileId}</li>
@@ -181,13 +185,7 @@ export function SwitchBranchModal({ isOpen, onClose, targetBranch, onSwitchCompl
               {isSameBranch ? (
                 <p>Re-clone will discard local state and fetch all files fresh from git.</p>
               ) : (
-                <>
-                  <p><strong>What happens when you switch:</strong></p>
-                  <ul>
-                    <li>Local workspace will be updated to reflect the new branch</li>
-                    <li>All open tabs will remain, but content may change</li>
-                  </ul>
-                </>
+                <p>Your workspace will be updated with content from <strong>{selectedBranch}</strong>. No uncommitted changes detected.</p>
               )}
             </div>
           )}

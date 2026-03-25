@@ -37,6 +37,7 @@ design docs contain the detail.
 | **Synthetic data playbook** | `19-synthetic-data-playbook.md` | Step-by-step guide for creating synth graphs, generating data, running parameter recovery. Operational reference. |
 | **Join-node convergence** | `bayes-join-node-convergence-briefing.md` | Join-node latency model geometry. Resolved by mixture CDF (journal 23-Mar-26). |
 | **Statistical domain summary** | `statistical-domain-summary.md` | Reference: statistical foundations and domain concepts. |
+| **Sampling performance** | `22-sampling-performance.md` | MCMC performance bottleneck analysis: compilation time, GPU vs CPU research, optimisation paths (compilation fix, dev-mode draws, more chains, NumPyro vectorised, faster cloud CPUs). Experiment protocol. |
 
 **Context**: `../codebase/APP_ARCHITECTURE.md` (app architecture),
 `../project-db/` (snapshot DB)
@@ -362,6 +363,38 @@ tracking for automated fits (use session log).
 - fit_history accumulates entries, trajectory calibration activates
 - Failed fits surface in Graph Issues with actionable diagnostics
 - No regression in existing fetch cycle (Bayes fit is additive, not blocking)
+
+### Sampling performance optimisation
+
+**Status**: Researched 25-Mar-26, no experiments run yet. See
+`22-sampling-performance.md` for full analysis.
+
+**Problem**: MCMC runs use ~20% of available compute (4 chains on 4 CPU
+cores; GPU idle). The branch graph takes ~7 min (155s compile + ~4 min
+sample). This is too slow for compiler development iteration.
+
+**Planned investigation sequence** (to be journalled in doc 18 as
+experiments are run):
+
+1. **Fix compilation time** — the branch graph's 155s compile is likely a
+   data representation issue in Potentials (each age point becomes a symbolic
+   node in the gradient graph). Investigate `freeze_model=True` and audit
+   Potential data handling. Target: <15s compile.
+2. **Dev-mode sampling** — add `--dev` flag to test_harness.py with reduced
+   draws (500/300/2). Already supported via CLI; needs a convenience flag.
+3. **More chains on production** — increase to 8 chains on Modal (many cores
+   available). Better ESS/wall-clock, no code changes needed.
+4. **NumPyro vectorised GPU experiment** — controlled test of
+   `pm.sample(nuts_sampler="numpyro")` on simple graph. Fundamentally
+   different from the prior unsuccessful JAX experiment (which used nutpie's
+   JAX backend, adding per-step dispatch overhead). 50/50 chance of helping
+   given this model's element-wise Potential profile.
+5. **Evaluate faster cloud CPUs** — Hetzner dedicated EPYC (5.1 GHz) vs
+   Modal shared EPYC (~3 GHz) for production workloads.
+
+**Not a blocker** for any current phase — this is a quality-of-life
+improvement for compiler development and a throughput improvement for
+production nightly fits.
 
 ---
 

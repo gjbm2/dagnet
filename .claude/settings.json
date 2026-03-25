@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash /home/reg/dev/dagnet/.claude/hooks/gate-check.sh"
+            "command": "bash .claude/hooks/gate-check.sh"
           }
         ]
       },
@@ -15,7 +15,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash /home/reg/dev/dagnet/.claude/hooks/guard-gate-files.sh"
+            "command": "bash .claude/hooks/guard-gate-files.sh"
           }
         ]
       }
@@ -40,9 +40,9 @@
       "Bash(python -c *)",
       "Bash(python -m pytest *)",
       "Bash(for i:*)",
-      "Bash(. /home/reg/dev/dagnet/.private-repos.conf)",
+      "Bash(. .private-repos.conf)",
       "Bash(CI= PLAYWRIGHT_BROWSERS_PATH=*)",
-      "Read(//home/reg/dev/dagnet/**)",
+      "Read(**)",
       "WebFetch(domain:vitest.dev)",
       "WebFetch(domain:deepwiki.com)",
       "WebFetch(domain:bitsquid.blogspot.com)",

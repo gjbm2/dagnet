@@ -676,9 +676,9 @@ def _sample_nutpie(model, config: SamplingConfig, report_progress=None):
         init_mean = np.zeros(compiled_model.n_dim)
         store = nutpie_lib.PyStorage.arrow()
 
+        import os
         cores = config.cores
         if cores is None:
-            import os
             try:
                 cores = os.process_cpu_count()
             except AttributeError:

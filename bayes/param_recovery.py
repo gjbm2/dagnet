@@ -210,15 +210,33 @@ def main():
     print(f"{'=' * 70}")
     print()
 
+    # Build reverse lookup: truth key → graph param_id (handles prefixed names)
+    # New-format truth files use short keys (anchor-to-fast) while graph edges
+    # use prefixed param_ids (synth-fanout-anchor-to-fast).
+    _truth_key_to_graph_pid: dict[str, str] = {}
+    for _uuid_pfx, _gpid in uuid_to_pid.items():
+        # Direct match
+        if _gpid in truth_edges:
+            _truth_key_to_graph_pid[_gpid] = _gpid
+        else:
+            # Try stripping graph-name prefix to find the truth key
+            for tkey in truth_edges:
+                if _gpid.endswith(tkey) or _gpid.endswith(f"-{tkey}"):
+                    _truth_key_to_graph_pid[tkey] = _gpid
+                    break
+
     any_fail = False
     for pid, t in truth_edges.items():
+        if isinstance(t, dict) and "from" in t and "p" not in t:
+            continue  # skip node-structure entries in new-format truth files
         has_latency = t.get("onset", 0) > 0.01 or t.get("mu", 0) > 0.01
 
-        # Find posterior by matching uuid prefix
+        # Find posterior by matching uuid prefix → graph param_id → truth key
         post = None
+        graph_pid = _truth_key_to_graph_pid.get(pid, pid)
         for prefix, p in posteriors.items():
             mapped_pid = uuid_to_pid.get(prefix, "")
-            if mapped_pid == pid:
+            if mapped_pid == graph_pid or mapped_pid == pid:
                 post = p
                 break
 

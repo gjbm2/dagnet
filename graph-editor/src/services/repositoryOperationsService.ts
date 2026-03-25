@@ -592,33 +592,55 @@ class RepositoryOperationsService {
   // For committing files, use the CommitModal UI flow which calls gitService.commitAndPushFiles()
 
   /**
-   * Discard all local changes
-   * - Revert all dirty files
-   * - Reload from workspace (IDB)
+   * Discard all local changes for the given workspace.
+   *
+   * Uses IDB (source of truth) to find ALL dirty files, not just those loaded
+   * in FileRegistry (which only has open tabs).  For files that are also in
+   * FileRegistry we delegate to fileRegistry.revertFile() so listeners, events
+   * and IDB are updated consistently.  For IDB-only files we patch IDB directly.
    */
   async discardLocalChanges(repository: string, branch: string): Promise<number> {
-    console.log(`🔄 RepositoryOperationsService: Discarding local changes`);
+    const logOpId = sessionLogService.startOperation('info', 'git', 'DISCARD_LOCAL', `Discarding local changes for ${repository}/${branch}`);
 
-    const dirtyFiles = fileRegistry.getDirtyFiles();
-    
+    // IDB stores files with workspace-prefixed IDs: "repo-branch-fileId"
+    const workspacePrefix = `${repository}-${branch}-`;
+
+    // Query IDB — the source of truth for dirty state
+    const allDirtyFiles = await db.getDirtyFiles();
+    const dirtyFiles = allDirtyFiles.filter(f => f.fileId.startsWith(workspacePrefix));
+
     if (dirtyFiles.length === 0) {
-      console.log('RepositoryOperationsService: No dirty files to discard');
+      sessionLogService.endOperation(logOpId, 'success', 'No dirty files to discard');
       return 0;
     }
 
     let discardedCount = 0;
-    for (const file of dirtyFiles) {
-      if (file.isLocal) {
-        // Local-only file: delete it
-        await fileRegistry.deleteFile(file.fileId);
+    for (const idbFile of dirtyFiles) {
+      // Derive the unprefixed fileId used by FileRegistry
+      const unprefixedId = idbFile.fileId.substring(workspacePrefix.length);
+      const registryFile = fileRegistry.getFile(unprefixedId);
+
+      if (registryFile) {
+        // File is loaded in FileRegistry — delegate so listeners/events fire
+        if (registryFile.isLocal) {
+          await fileRegistry.deleteFile(unprefixedId);
+        } else {
+          await fileRegistry.revertFile(unprefixedId);
+        }
       } else {
-        // Remote file: revert to original
-        if (file.originalData) {
-          file.data = structuredClone(file.originalData);
-          file.isDirty = false;
-          (fileRegistry as any).notifyListeners(file.fileId, file);
+        // File only exists in IDB (not open in any tab) — patch directly
+        if (idbFile.originalData) {
+          idbFile.data = structuredClone(idbFile.originalData);
+          idbFile.isDirty = false;
+          idbFile.lastModified = Date.now();
+          await db.files.put(idbFile);
+        } else {
+          // Local-only file with no original — remove from IDB
+          await db.files.delete(idbFile.fileId);
         }
       }
+
+      sessionLogService.addChild(logOpId, 'info', 'DISCARD_FILE', `Discarded: ${unprefixedId}`);
       discardedCount++;
     }
 
@@ -627,7 +649,7 @@ class RepositoryOperationsService {
       await this.navigatorOps.refreshItems();
     }
 
-    console.log(`✅ RepositoryOperationsService: Discarded ${discardedCount} changes`);
+    sessionLogService.endOperation(logOpId, 'success', `Discarded ${discardedCount} file(s)`);
     return discardedCount;
   }
 

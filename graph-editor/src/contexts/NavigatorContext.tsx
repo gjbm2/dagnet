@@ -96,6 +96,11 @@ export function NavigatorProvider({ children }: { children: React.ReactNode }) {
       // We still populate the UI from IndexedDB immediately.
       if (repoBranch?.repo && repoBranch?.branch) {
         await loadItems(repoBranch.repo, repoBranch.branch, { syncMode: 'first-init' });
+      } else {
+        // No credentials / no repo configured — loadItems (which normally
+        // dispatches navigatorLoadComplete) will never run, so fire it here
+        // to unblock the boot progress indicator.
+        try { window.dispatchEvent(new CustomEvent('dagnet:navigatorLoadComplete', { detail: {} })); } catch { /* best effort */ }
       }
       setIsInitialized(true);
     };
