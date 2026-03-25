@@ -650,6 +650,11 @@ def _sample_nutpie(model, config: SamplingConfig, report_progress=None):
                 _last_report[0] = now
                 _last_report[1] = pct
                 _orig_on_progress(formatted)
+                # Also print to stdout so it appears in Modal logs
+                elapsed_total = time.time() - t_phase_start
+                print(f"[nutpie] {pct}% ({done}/{total}) "
+                      f"elapsed={elapsed_total:.0f}s eta={parts[2].strip()}",
+                      flush=True)
 
         progress_type = nutpie_lib.ProgressType.template_callback(
             500,  # ms between Rust-side renders
@@ -679,6 +684,11 @@ def _sample_nutpie(model, config: SamplingConfig, report_progress=None):
             except AttributeError:
                 cores = os.cpu_count()
             cores = min(config.chains, cores)
+
+        compile_ms = int((time.time() - t_phase_start) * 1000)
+        print(f"[nutpie] cores={cores}, os.cpu_count={os.cpu_count()}, "
+              f"chains={config.chains}, draws={config.draws}, tune={config.tune}, "
+              f"compile={compile_ms}ms", flush=True)
 
         sampler = compiled_model._make_sampler(
             settings, init_mean, cores, progress_type, store,

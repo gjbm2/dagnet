@@ -30,6 +30,13 @@ design docs contain the detail.
 | **Latent onset** | `18-latent-onset-design.md` | Latent edge-level onset, graph-level onset hyperprior and dispersion (`tau_onset`), path-level onset with learned dispersion, FE onset posterior display. Replaces fixed histogram-derived onset. |
 | **Synthetic data generator** | `17-synthetic-data-generator.md` | Monte Carlo simulator for parameter recovery testing. General-purpose over any graph topology, DB-backed, phased (Phase 1: core sim, Phase 2: context slices). |
 | **Compiler journal** | `18-compiler-journal.md` | Chronological record of what was tried, what worked, what failed, and key invariants discovered. Prevents re-exploring dead ends. |
+| **Trajectory compression** | `20-trajectory-compression-briefing.md` | Zero-count bin filter, smooth clip floors fix, NUTS sensitivity analysis. Resolved 24-Mar-26. |
+| **Production/consumption separation** | `19-model-vars-production-consumption-separation.md` | `promoted_t95` separates user-configured t95 from model output. Done. |
+| **Unified posterior schema** | `21-unified-posterior-schema.md` | Single `posterior.slices` keyed by DSL replaces split probability/latency posterior blocks. Per-slice p + latency, `_model_state` for warm-start. Done 25-Mar-26. |
+| **BE stats engine bugs** | `19-be-stats-engine-bugs.md` | Three-way prior discrepancy (FE vs BE vs topology) on latency inference. Open. |
+| **Synthetic data playbook** | `19-synthetic-data-playbook.md` | Step-by-step guide for creating synth graphs, generating data, running parameter recovery. Operational reference. |
+| **Join-node convergence** | `bayes-join-node-convergence-briefing.md` | Join-node latency model geometry. Resolved by mixture CDF (journal 23-Mar-26). |
+| **Statistical domain summary** | `statistical-domain-summary.md` | Reference: statistical foundations and domain concepts. |
 
 **Context**: `../codebase/APP_ARCHITECTURE.md` (app architecture),
 `../project-db/` (snapshot DB)
@@ -88,7 +95,12 @@ Semantic foundation (parallel, feeds into consumption quality)
 | Phase D posteriors (done) | Phase S proven | Latent latency, overdispersion (BetaBinomial/DM), recency weighting, cohort latency hierarchy |
 | Phase D.O latent onset (done) | Phase D proven | Independent per-edge latent onset (no hierarchy — see journal 23-Mar-26). Graph-level hierarchy removed (no intellectual justification). |
 | Phase D join-node mixture CDF (done) | Phase D proven | Mixture CDF at joins replaces single-path misspecification. All 8 structural topologies converge (journal 24-Mar-26). |
-| Phase C posteriors (next) | Phase D proven, test data with contexts | Per-slice visualisation, MECE validation, hierarchical shrinkage, κ recovery |
+| Doc 19 promoted_t95 separation (done) | Phase D proven | Separates user-configured t95 (input constraint) from model-output promoted_t95 (consumption). Prevents Bayesian t95 overwriting user's horizon guidance. |
+| Doc 21 unified posterior schema (done 25-Mar-26) | Phase D proven | Single `posterior.slices` keyed by DSL replaces split `posterior` + `latency.posterior`. Per-slice entries carry both probability and latency. `_model_state` for warm-start. Per-obs-type `p_window`/`p_cohort` extraction. Prerequisite for Phase C context slices. |
+| Production graph fit quality (open) | Phase D done | Production graph (`bayes-test-gm-rebuild`) posteriors do not match observed data well. Needs investigation — may be prior sensitivity, evidence binding, or model structure. Blocks production confidence for nightly scheduling. |
+| BE stats engine prior discrepancy (open) | Phase D done | Three-way discrepancy between FE stats pass, BE stats engine, and topology `derive_latency_prior` on latency priors. Only topology's crude moment-match gives convergence. See `19-be-stats-engine-bugs.md`. Related to production fit quality. |
+| Model quality gating (designed, not built) | Phase A overlay done | Quality signalling (progress, session log, Graph Issues), auto-enable Forecast Quality, accept/reject preview. See doc 13. |
+| Phase C posteriors (next) | Phase D proven, doc 21 done, test data with contexts | Per-slice visualisation, MECE validation, hierarchical shrinkage, κ recovery |
 | Nightly Bayes fit | Phase C proven, production confidence | Automatic posterior updates after daily fetch. Trigger Bayes fit for `dailyFetch: true` graphs when new snapshot data lands. Uses existing Modal/webhook/git-commit infrastructure — needs scheduling trigger + staleness detection + fit-on-change logic. |
 | Quantitative backtesting | Phase A + fit_history depth + snapshot DB | Distribution family selection, model improvement |
 | Fit quality visualisation (done) | Phase A + FE overlay | Edge colour-coding, quality-driven graph triage |

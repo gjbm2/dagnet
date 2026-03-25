@@ -92,6 +92,16 @@ function emptyPlan(): FetchPlan {
 }
 
 // ---------------------------------------------------------------------------
+// Connectivity check — skip network-dependent tests when API is unavailable
+// ---------------------------------------------------------------------------
+
+let apiAvailable = false;
+try {
+  const probe = await fetch(`${PYTHON_API}/api/health`, { signal: AbortSignal.timeout(1000) }).catch(() => null);
+  apiAvailable = probe?.ok ?? false;
+} catch { /* not available */ }
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -149,7 +159,7 @@ describe('extractWindowFromDSL — window extraction logic', () => {
     expect(hasCohort || hasWindow || hasCohort2 || hasWindow2).toBe(true);
   });
 
-  it('should demonstrate that narrow currentQueryDSL gives 100% f₂ while dataInterestsDSL gives correct value', async () => {
+  it.skipIf(!apiAvailable)('should demonstrate that narrow currentQueryDSL gives 100% f₂ while dataInterestsDSL gives correct value', async () => {
     const { parseConstraints } = await import('../../lib/queryDSL');
     const { resolveRelativeDate } = await import('../../lib/dateFormat');
 
@@ -210,7 +220,7 @@ describe('extractWindowFromDSL — window extraction logic', () => {
   });
 });
 
-describe('dataDepthService — real snapshot DB', () => {
+describe.skipIf(!apiAvailable)('dataDepthService — real snapshot DB', () => {
   afterAll(() => {
     writeFileSync('/home/reg/dev/dagnet/debug/tmp.data-depth-test.log', log.join('\n') + '\n');
   });

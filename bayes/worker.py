@@ -31,6 +31,68 @@ def _log(log_list: list[str], msg: str) -> None:
     print(msg, flush=True)
 
 
+def _log_env_diagnostic(log: list[str]) -> None:
+    """Log CPU, BLAS, and sampler info for debugging performance."""
+    import os
+    cpu_count = os.cpu_count()
+    try:
+        cpu_process = os.process_cpu_count()
+    except AttributeError:
+        cpu_process = cpu_count
+
+    # CPU flags (AVX2/AVX-512 availability)
+    avx_flags = ""
+    try:
+        with open("/proc/cpuinfo") as f:
+            for line in f:
+                if line.startswith("flags"):
+                    flags = line.split(":", 1)[1]
+                    avx = []
+                    for flag in ("avx", "avx2", "avx512f", "sse4_2", "fma"):
+                        if f" {flag} " in f" {flags} ":
+                            avx.append(flag)
+                    avx_flags = " ".join(avx) if avx else "none"
+                    break
+    except Exception:
+        avx_flags = "unknown"
+
+    # CPU model
+    cpu_model = "unknown"
+    try:
+        with open("/proc/cpuinfo") as f:
+            for line in f:
+                if line.startswith("model name"):
+                    cpu_model = line.split(":", 1)[1].strip()
+                    break
+    except Exception:
+        pass
+
+    # BLAS backend
+    blas_info = "unknown"
+    try:
+        import numpy as np
+        cfg = np.show_config(mode="dicts")
+        blas_lib = cfg.get("Build Dependencies", {}).get("blas", {})
+        blas_info = f"{blas_lib.get('name', '?')} {blas_lib.get('version', '?')}"
+    except Exception:
+        try:
+            import numpy as np
+            blas_info = str(np.__config__.blas_opt_info)[:120]
+        except Exception:
+            pass
+
+    # nutpie version
+    nutpie_ver = "not installed"
+    try:
+        import nutpie
+        nutpie_ver = getattr(nutpie, "__version__", "installed (no version)")
+    except ImportError:
+        pass
+
+    _log(log, f"env: cpu={cpu_model}, cores={cpu_count} (process={cpu_process}), "
+         f"flags=[{avx_flags}], blas={blas_info}, nutpie={nutpie_ver}")
+
+
 def fit_graph(payload: dict, report_progress=None) -> dict:
     """Fit posteriors for a single graph.
 
@@ -223,6 +285,9 @@ def _fit_graph_compiler(payload: dict, report_progress=None) -> dict:
     quality_dict = {"max_rhat": 0.0, "min_ess": 0, "converged_pct": 0.0}
 
     try:
+        # ── 0. Environment diagnostic ──
+        _log_env_diagnostic(log)
+
         # ── 1. DB connection ──
         report("startup", 0, "Connecting to database…")
         db_url = payload.get("db_connection", "")
