@@ -185,6 +185,9 @@ export function applyCommonSettings(opt: any, settings: Record<string, any>): an
   // ── Animation ──
   if (settings.animate === false) {
     opt.animation = false;
+  } else {
+    // Halve ECharts default (1000ms → 500ms) for snappier load feel
+    opt.animationDuration = opt.animationDuration ?? 500;
   }
 
   // ── Data labels (series-level) ──

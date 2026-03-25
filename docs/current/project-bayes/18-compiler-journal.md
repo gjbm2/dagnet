@@ -8,6 +8,409 @@ Entries are reverse-chronological (newest first).
 
 ---
 
+## 25-Mar-26: Production graph p inflation — OPEN INVESTIGATION
+
+### Problem
+
+The 4-step production graph (`bayes-test-gm-rebuild`) produces wildly
+inflated probability posteriors on low-conversion edges. The model
+converges (rhat=1.01, ess=313, 0 divergences) but the answers are wrong.
+
+| Edge | Analytic p (k/n) | Bayes p | Ratio |
+|---|---|---|---|
+| landing-to-created | 0.175 (50900/290060) | 0.7397 | **4.23x** |
+| delegated-to-registered | 0.095 (3880/40679) | 0.2878 | **3.03x** |
+| create-to-delegated | 0.55 (38598/70193) | 0.7157 | **1.30x** |
+| registered-to-success | 0.695 (3597/5172) | 0.6980 | **1.00x** |
+
+Pattern: edges with low true p get inflated. High-p edge is fine.
+
+The simplest case to investigate is `landing-to-created`: no latency,
+high traffic (n=290K), simple branch group (1 evented + 1 dropout sibling).
+The trajectory data clearly shows y/n ≈ 0.17 across 83 window and 77
+cohort trajectories. Yet the model returns p=0.74.
+
+### Evidence verified
+
+- Snapshot DB: 438 window rows + 316 cohort rows for this edge. Average
+  y/x=0.162 (window), y/a=0.163 (cohort). Consistent with analytic p.
+- Evidence binder: 83 window trajectories (mean final y/n=0.170), 77
+  cohort trajectories (mean final y/n=0.165). Data is clean.
+- No-latency edge: CDF=1.0 at all ages. DM reduces to BetaBinomial.
+- Kappa posterior: 1.8±0.3 (heavy overdispersion).
+- Branch group `bg_1fed6ae1-a86`: non-exhaustive, 1 evented + 1 dropout
+  (dropout has no data).
+- Uninformative prior: Beta(1,1).
+
+The data entering the model is correct. The model converges. But the
+answer is wrong by 4x.
+
+### Candidate hypotheses
+
+**H1: Branch group Dirichlet coupling.** The Dirichlet constraint couples
+this edge's p with its dropout sibling. If the dropout sibling has no data
+and no constraint, the model may be free to assign probability between
+them in a way that satisfies the DM likelihood but not reality. The
+Dirichlet parameterisation might be allocating mass differently from what
+the BetaBinomial on its own would.
+
+Test: run landing-to-created as a solo edge (no branch group) and compare.
+If p≈0.17 in isolation, the Dirichlet coupling is the problem.
+
+**H2: Window vs cohort p confusion.** The model fits `p_window` and
+`p_cohort` as deviations from `p_base`. The harness reports `p_window`
+in the `window()` slice. But `p_base` is the hierarchical anchor — if
+`p_window` and `p_cohort` are both present and pulling in different
+directions, `p_base` might compromise at a value that satisfies neither
+observation type well.
+
+Test: check the posterior values of `p_base`, `p_window`, and `p_cohort`
+for this edge. If `p_base` is inflated and `p_window`/`p_cohort` are
+closer to 0.17, the hierarchy is the issue, not the likelihood.
+
+**H3: Trajectory denominator mismatch.** For window trajectories, `n` is
+the count of users arriving at the from-node on a given day. For a
+no-latency edge, all of them should convert (or not) instantly. But
+`n` varies enormously across trajectories (600 to 25,000). If the
+denominator `n` represents something different from what the model
+assumes (e.g. cumulative arrivals rather than daily), the BetaBinomial
+would see the wrong effective sample size.
+
+Test: inspect a few trajectories in detail — verify that `n` is a
+daily count and `cum_y` is the correct cumulative conversion count for
+that day's cohort.
+
+**H4: Recency weighting distortion.** Trajectories are weighted by
+`exp(-ln2 * age/half_life)` with half_life=30d. If recent trajectories
+(high weight) have systematically higher y/n than older ones, the model's
+weighted estimate would be pulled up. This would be a data feature, not
+a model bug — but it would explain why the unweighted analytic mean
+(0.175) differs from the model's estimate.
+
+Test: compare weighted mean of y/n across trajectories against unweighted
+mean. If the weighted mean is much higher, recency weighting is the
+explanation (and may be correct, not a bug).
+
+**H5: DM interval structure for no-latency edges.** With CDF=1.0 at all
+ages, all CDF coefficients except the first are 1e-15 (near-zero). The
+DM has many near-zero alpha terms. These shouldn't affect logp (zero
+count with zero alpha = zero contribution), but `_soft_floor` or clip
+floors might interact unexpectedly, creating a gradient landscape that
+favours high p.
+
+Test: manually compute the DM logp at p=0.17 and p=0.74 for the actual
+trajectory data. If logp is higher at p=0.74, the DM formulation has a
+bug. If logp is higher at p=0.17, the sampler is finding the wrong mode.
+
+### Root cause (FOUND)
+
+**`_append_single_obs` in evidence.py (line 552) applies latency
+completeness to ALL daily obs, including no-latency edges.** It calls
+`_compute_cohort_completeness(age, onset=0, mu=0, sigma=0.5, has_latency)`
+using the topology defaults (mu=0, sigma=0.5) for no-latency edges. At
+age=1 day, CDF(1, 0, 0, 0.5) = 0.5. At age=0, CDF=0.0.
+
+The BetaBinomial likelihood multiplies `p * completeness`. With
+completeness=0.5 and observed k/n≈0.21, the model infers p≈0.42. With
+26/39 daily obs at age=1d (completeness=0.5) and 1 at age=0
+(completeness=0.0), the effective completeness penalty pushes p from 0.17
+to 0.74.
+
+This is NOT hypothesis H1-H5. It's a simpler bug: the completeness guard
+`has_latency` is checked in `_compute_window_completeness` but NOT in the
+snapshot evidence path's `_append_single_obs`.
+
+**Fix**: in `_append_single_obs`, if `not et.has_latency`, set
+completeness=1.0 directly. Don't call the CDF computation.
+
+**Update**: Fix applied but model still returns p=0.71. The completeness
+bug was real and is fixed, but it's not the primary cause.
+
+### Actual root cause: kappa-p non-identifiability
+
+With kappa=1.8 (heavy overdispersion), the BetaBinomial likelihood is
+nearly flat across p. Difference between logp at p=0.21 and p=0.70 is
+only 0.9 per observation (vs 26 at kappa=50). The likelihood cannot
+distinguish the correct p from a wrong one.
+
+The Dirichlet branch group prior (alpha=[2,2] for a 2-component group
+with uninformative edge priors) pulls p toward 0.5. Since the likelihood
+can't push back, the posterior lands near the prior — explaining p≈0.7.
+
+The kappa=1.8 is plausible for this data (daily k/n ranges 0.005–0.28),
+but it makes p unidentifiable via the BetaBinomial. This is a structural
+model problem, not a bug.
+
+**Candidate fixes (to investigate)**:
+
+1. **Separate kappa for daily BB vs trajectory DM**: the daily BB uses
+   per-day overdispersion, but the trajectory DM uses per-trajectory
+   overdispersion. These measure different things. A separate (higher)
+   kappa for the daily BB would let it constrain p while the DM's low
+   kappa handles trajectory-level variation.
+
+2. **Stronger informative prior on p from evidence**: replace the
+   uninformative Beta(1,1) with a data-derived prior (e.g. from the
+   param file k/n). This prevents the Dirichlet from dominating when
+   kappa is low.
+
+3. **Dirichlet concentration from data**: derive alpha_vec from the
+   actual observed rates, not from the (uninformative) probability
+   prior. The current code uses the prior means, which are 0.5 for
+   uninformative priors.
+
+4. **Floor on kappa for the daily BB**: enforce kappa ≥ K_min (e.g. 10)
+   for the daily BetaBinomial to ensure p is identifiable. The DM can
+   still use its own learned kappa.
+
+### Update: logp probe DISPROVES model construction bug
+
+Evaluated model logp at fixed p_base values for landing-to-created
+(all other params at initial point):
+
+| p    | total logp | traj_w   | traj_c   | obs_daily |
+|------|-----------|----------|----------|-----------|
+| 0.10 | -64046    | -14937   | -10769   | -622      |
+| 0.17 | -63732    | -14923   | -10761   | -519      |
+| 0.21 | -63657    | -14923   | -10762   | -506      |
+| 0.50 | -64283    | -15048   | -10868   | -1039     |
+| 0.70 | -65560    | -15234   | -11019   | -1930     |
+
+The logp is **1900 units better** at p=0.21 vs p=0.70. All three
+likelihood components (window DM, cohort DM, daily BB) prefer p≈0.21.
+The model IS correctly specified.
+
+**The problem is the sampler.** NUTS converges to a wrong mode near
+p≈0.7 despite the global optimum being at p≈0.2. Reports rhat=1.003
+and 0 divergences — chains are all in the same wrong basin.
+
+This is a joint-parameter landscape issue: p and kappa (and possibly
+latency params on other edges) create a mode where high p + low kappa
+has comparable logp to low p + high kappa when ALL parameters are
+optimised jointly, even though varying p alone strongly favours the
+correct value.
+
+**Next steps**: investigate the joint landscape.
+
+### Update: data-derived priors and feature ablation
+
+**k/n-derived priors** (Beta(87.7, 412.3) for landing-to-created):
+improved from p=0.74 to p=0.55, but still 3x wrong. Data-derived
+priors are correct and needed, but don't fix the fundamental issue.
+
+**Feature ablation** (all with data-derived priors):
+
+| Features disabled | landing-to-created p | Ratio |
+|---|---|---|
+| None (full model) | 0.55 | 3.1x |
+| cohort_latency=false | 0.54 | 3.1x |
+| + latent_latency=false + latent_onset=false | 0.52 | 3.0x |
+
+Even the **simplest model** (no latent latency, no cohort latency,
+no latent onset — only kappa + p_base + eps + sigma_temporal) gives
+p=0.52 for an edge where the data clearly shows p≈0.17. The logp
+probe confirms the model prefers p=0.21 when p is varied alone.
+
+### Root cause identified: cohort path product coupling
+
+**Definitive ablation test**: stripped all cohort trajectories, kept
+window DM + daily BetaBinomial. Result:
+
+| Edge | Analytic | Window-only | Full model |
+|---|---|---|---|
+| landing-to-created | 0.175 | **0.196** (1.12x) | 0.52–0.74 (3–4x) |
+| create-to-delegated | 0.550 | **0.560** (1.02x) | 0.72 (1.3x) |
+| delegated-to-registered | 0.095 | **0.109** (1.15x) | 0.26–0.29 (3x) |
+| registered-to-success | 0.695 | **0.694** (1.00x) | 0.70 (1.0x) |
+
+Window-only: all edges recover correctly (within 12%).
+Full model: upstream edges inflated by 1.3–4x.
+
+The cohort DM trajectory Potentials use `p_path = Π p_edge` along the
+path from anchor. This couples every upstream edge's p into every
+downstream edge's cohort likelihood. The cohort path data is
+**inconsistent** with the product of per-edge window conversion rates:
+
+| Path | Window product | Cohort y/n | Ratio |
+|---|---|---|---|
+| [landing] | 0.175 | 0.128 | 0.73x |
+| [landing, create] | 0.096 | 0.115 | 1.20x |
+| [landing, create, deleg] | 0.009 | 0.010 | 1.09x |
+| [landing, create, deleg, reg] | 0.006 | 0.026 | 4.09x |
+
+The final path implies p_reg > 1.0 (0.026/0.010 = 2.6), which is
+impossible. The cohort path data is internally inconsistent — likely
+because cohort and window observations measure different populations
+(cohort groups by anchor entry day, window groups by from-node arrival
+day), and latency maturation affects the cohort y/n differently at
+each path depth.
+
+The model cannot satisfy both window and cohort constraints
+simultaneously. Because the cohort path product multiplies all
+upstream p values, the tension is resolved by inflating upstream edges
+(which improves downstream cohort fit at the expense of upstream
+edge-level fit). The window-only model has no such coupling and
+recovers correctly.
+
+**Standalone BetaBinomial test**: a minimal PyMC model with just
+BetaBinomial(n, p*κ, (1-p)*κ) on the daily obs for landing-to-created
+recovers p=0.205±0.005 perfectly (kappa=97). The sampler is fine;
+the model construction is fine; the issue is purely the cohort path
+product coupling.
+
+**Also fixed**: completeness bug in `_append_single_obs` (no-latency
+edges were getting CDF-derived completeness instead of 1.0). And
+k/n-derived priors added to `_resolve_prior` (was falling through to
+uninformative Beta(1,1) when param file stdev was missing).
+
+### Two contamination pathways found
+
+**Pathway 1: Daily BetaBinomial.** `all_daily` included both window
+and cohort daily obs. Cohort daily obs have anchor denominators
+(path-level: k/n = p_path for downstream edges), but the BetaBinomial
+uses per-edge `p_cohort`. For `create-to-delegated`: window daily
+k/n=0.555 (edge rate) but cohort daily k/n=0.094 (path rate). The
+BB compromises between them, inflating p.
+
+**Fix**: only use window daily obs in the BetaBinomial (line 647:
+filter by `"window" in c_obs.slice_dsl`). Implemented and verified —
+partially effective.
+
+**Pathway 2: Cohort DM Potential logp.** Even with `disconnected_grad`
+on p_path (gradient = 0), the cohort DM Potential's logp STILL varies
+with p (because `disconnected_grad` only affects gradient, not forward
+evaluation). NUTS uses logp for Hamiltonian acceptance, so the sampler
+can still drift toward high-p regions where the cohort DM logp is
+better. The `disconnected_grad` prevents gradient-based proposals but
+not logp-based acceptance.
+
+**Fix needed**: remove p from the cohort DM entirely. Use a CONSTANT
+p_path (from edge priors or observed k/n) in the cohort DM alpha
+computation: `alpha = kappa * p_path_constant * cdf_coeff`. This makes
+the cohort DM logp invariant to p — it constrains only latency CDF
+and kappa. The constant p_path gives the DM the correct scale for
+modeling the conversion-vs-remainder split.
+
+### Design principle (confirmed by investigation)
+
+**Cohort/path observations should never constrain edge p.** Their
+unique value is path-level latency (maturation CDF). Edge p comes
+from window observations (direct, per-edge, no coupling).
+
+The correct architecture:
+- Window DM → constrains per-edge p + per-edge latency CDF
+- Daily BetaBinomial (window obs only) → constrains per-edge p
+- Cohort DM → constrains path-level latency CDF + kappa ONLY
+  (uses constant p_path, no free p variable)
+
+### Resolution: cohort path used p_window for upstream edges
+
+The bug was in `_resolve_path_probability` line 1151:
+
+```python
+for prefix in ("p_window_", "p_base_", "p_"):
+```
+
+When building the cohort DM's path product, the function searched for
+`p_window_` first for upstream edges. This wired the cohort DM's
+gradient directly into upstream edges' `p_window` variables — the
+same variables constrained by the window DM. The cohort DM and window
+DM were pulling on the same variable in opposite directions.
+
+**Fix**: when building a cohort path (`stop_p_gradient=True`), search
+for `p_cohort_` first. This keeps cohort DM gradient on the cohort
+side of the hierarchy, preventing cross-contamination of window p.
+
+**Result** (full model, all features enabled):
+
+| Edge | Before | After | Analytic |
+|---|---|---|---|
+| landing-to-created | 0.74 (4.2x) | 0.218 (1.25x) | 0.175 |
+| create-to-delegated | 0.72 (1.3x) | 0.570 (1.04x) | 0.550 |
+| delegated-to-registered | 0.29 (3.0x) | 0.184 (1.94x) | 0.095 |
+| registered-to-success | 0.70 (1.0x) | 0.682 (0.98x) | 0.695 |
+
+rhat=1.005, ess=1147, 100% converged, 0 divergences.
+
+`delegated-to-registered` at 1.94x is expected — strong p-latency
+coupling (mu moves from prior 1.6 to 2.4, high onset-mu correlation).
+Not a wiring issue.
+
+### Diagnostic playbook (lessons from this investigation)
+
+This bug took extended investigation to find. The following heuristics
+were each differently valuable and should be part of the standard
+diagnostic approach for future model quality issues.
+
+**A. Verify the data end-to-end.** Query the snapshot DB directly.
+Inspect the raw rows. Check that trajectory n, y, and y/n values
+match expectations. Check for duplicates. Check denominators (anchor
+count vs from-node count). This was the FIRST thing we did and ruled
+out data corruption quickly. Cheap and essential.
+
+**B. Ablation: remove components until it starts working.** Disable
+features one at a time (`--feature latent_latency=false`, etc.). Then
+remove entire likelihood components (cohort DM, daily BB, cohort daily
+obs). Each ablation narrows the search space. The critical finding was:
+window-only model works, adding cohort DM breaks it. This pointed to
+the cohort DM as the source but not the mechanism.
+
+**C. Manual model construction.** Build the model by hand (raw PyMC,
+no compiler) using the SAME data arrays. Start with 1 edge, then 2,
+then 4. Compare results against the compiler model. If the manual
+model works and the compiler doesn't, the bug is in the compiler logic.
+This was the decisive test — the manual 4-edge model recovered all
+p values correctly, proving the compiler was constructing something
+different.
+
+**D. Graph ancestry inspection.** Use `pytensor.graph.ancestors()` to
+trace which variables each likelihood depends on. This revealed that
+the cohort DM for downstream edges used `p_window_` (not `p_cohort_`)
+for upstream edges — the actual wiring bug.
+
+**E. Logp probes.** Evaluate `model.point_logps()` at different fixed
+parameter values to check whether the model's likelihood surface is
+correct. This proved the model PREFERRED the correct p values (ruling
+out model specification errors) and pointed to the sampler finding a
+wrong mode — which turned out to be caused by the cross-wired gradient.
+
+**F. Standalone BetaBinomial test.** Build the simplest possible model
+(just BetaBinomial with the edge's data) to verify the sampler works
+correctly in isolation. This ruled out PyMC/NUTS issues.
+
+**Ordering**: A first (cheapest), then B (narrow the search), then C
+(decisive). D and E are targeted follow-ups once C identifies the
+compiler as the source. F is a quick sanity check early on.
+
+**Fallback architecture** (if constant p_path is insufficient): two-pass
+fitting. Pass 1 fits window data only → per-edge p and latency. Pass 2
+uses pass-1 posteriors as fixed priors and fits cohort data for
+path-level quantities. This decouples the path product from the
+per-edge estimation. Matches the insight that cohort observations
+supervene on edge probabilities and latencies, not vice versa.
+
+### Investigation strategy
+
+1. **H3 first** (cheapest): inspect 3-5 trajectories end-to-end from
+   snapshot DB row through evidence binder to verify `n` and `cum_y`
+   mean what we think they mean. This rules out data plumbing issues.
+
+2. **H1 second** (quick model change): run the edge in isolation (skip
+   Dirichlet, use solo Beta). If p recovers correctly, we know the
+   Dirichlet coupling is the problem and can investigate that
+   specifically.
+
+3. **H2 third**: extract `p_base`, `p_window`, `p_cohort` from the
+   trace for this edge and compare. This tells us whether the hierarchy
+   is distorting the estimate.
+
+4. **H4**: compute weighted vs unweighted mean — one line of code.
+
+5. **H5 last** (most expensive): manual logp evaluation. Only needed if
+   H1-H4 don't explain the result.
+
+---
+
 ## 25-Mar-26: Param recovery regression pipeline — PARTIAL, NEEDS CLEANUP
 
 ### What was attempted

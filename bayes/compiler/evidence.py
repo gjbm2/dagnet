@@ -549,7 +549,10 @@ def _append_single_obs(
     et,
 ) -> None:
     """Append a single-retrieval CohortDailyObs with appropriate completeness."""
-    if obs_type == "window":
+    if not et.has_latency:
+        # No-latency edge: conversion is instant, completeness=1.0 at all ages.
+        compl = 1.0
+    elif obs_type == "window":
         compl = _compute_cohort_completeness(
             age,
             et.onset_delta_days, et.mu_prior, et.sigma_prior,
@@ -794,6 +797,26 @@ def _resolve_prior(pf_data: dict, topo_fingerprint: str) -> ProbabilityPrior:
                         beta=max(beta, 0.5),
                         source="moment_matched",
                     )
+
+        # Fallback: derive from k/n when stdev is missing
+        n_val = values[0].get("n")
+        k_val = values[0].get("k")
+        if (n_val is not None and k_val is not None
+                and int(n_val) > 0 and 0 <= int(k_val) <= int(n_val)):
+            n_int = int(n_val)
+            k_int = int(k_val)
+            # Use k/n as the mean, with a moderate pseudo-count.
+            # Don't use the full n (would be massively overconfident);
+            # use a capped ESS that gives the sampler a sensible
+            # starting region without over-constraining.
+            pseudo_n = min(n_int, ESS_CAP)
+            alpha = max((k_int / n_int) * pseudo_n, 0.5)
+            beta = max((1 - k_int / n_int) * pseudo_n, 0.5)
+            return ProbabilityPrior(
+                alpha=alpha,
+                beta=beta,
+                source="kn_derived",
+            )
 
     return ProbabilityPrior(alpha=1.0, beta=1.0, source="uninformative")
 

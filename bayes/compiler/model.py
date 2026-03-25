@@ -644,7 +644,12 @@ def _emit_cohort_likelihoods(
                 window_trajs.append(traj)
             else:
                 cohort_trajs.append(traj)
-        if c_obs.daily:
+        # Only include WINDOW daily obs in the BetaBinomial. Cohort daily
+        # obs have anchor denominators (path-level), not from-node
+        # denominators (edge-level). Mixing them under a single per-edge
+        # p variable inflates p for downstream edges.
+        # See journal 25-Mar-26: "cohort path product coupling".
+        if c_obs.daily and "window" in c_obs.slice_dsl:
             all_daily.extend(c_obs.daily)
 
     # --- Emit trajectory Potentials ---
@@ -677,11 +682,14 @@ def _emit_cohort_likelihoods(
                 # Each alternative is a complete path from anchor to
                 # this edge's target. p_alt = product of p's along
                 # the path. CDF_alt = FW-composed latency along the path.
+                # stop_p_gradient: cohort DM constrains latency, not p
+                # (journal 25-Mar-26: edge.p → path.p is one-way).
                 onset_vars = onset_vars or {}
                 for alt_path in path_alts:
                     p_alt = _resolve_path_probability(
                         alt_path, ev.edge_id, p_var,
                         topology, edge_var_names, model,
+                        stop_p_gradient=True,
                     )
                     path_result = _resolve_path_latency(
                         alt_path, topology, latency_vars,
@@ -701,9 +709,12 @@ def _emit_cohort_likelihoods(
 
             if not is_mixture:
                 # Single path (no join, or single alternative)
+                # stop_p_gradient: cohort DM constrains latency, not p
+                # (journal 25-Mar-26: edge.p → path.p is one-way).
                 p_expr = _resolve_path_probability(
                     trajs[0].path_edge_ids, ev.edge_id, p_var,
                     topology, edge_var_names, model,
+                    stop_p_gradient=True,
                 )
 
         # Resolve latency: latent (Phase D) or fixed (Phase S)?
@@ -1106,14 +1117,24 @@ def _resolve_path_probability(
     topology,
     edge_var_names: dict[str, str] | None,
     model,
+    stop_p_gradient: bool = False,
 ):
     """Compute p_path = product of p variables along the path.
 
     For the first edge from anchor, p_path = current_p_var.
     For downstream edges, p_path includes upstream p's.
+
+    stop_p_gradient: if True, wrap the entire product in stop_gradient
+        so that gradient from the calling likelihood does not flow back
+        to any edge's p variable. The product is still computed from
+        current p values (correct alpha computation) but the cohort DM
+        constrains only latency/kappa, not p. See journal 25-Mar-26:
+        edge.p → path.p is one-way; window DM owns p estimation.
     """
+    from pytensor.gradient import disconnected_grad
+
     if not path_edge_ids or not topology or not edge_var_names or not model:
-        return current_p_var
+        return disconnected_grad(current_p_var) if stop_p_gradient else current_p_var
 
     # The path includes this edge. Collect p variables for upstream edges.
     p_product = None
@@ -1124,10 +1145,17 @@ def _resolve_path_probability(
             var_name = edge_var_names.get(eid)
             if var_name is None:
                 continue
-            # Find the variable in the model
+            # Find the variable in the model.
+            # For cohort path products (stop_p_gradient=True), prefer
+            # p_cohort_ to avoid cross-wiring cohort DM gradient into
+            # the window p variable. See journal 25-Mar-26.
             p_var = None
             safe_eid = _safe_var_name(eid)
-            for prefix in ("p_window_", "p_base_", "p_"):
+            if stop_p_gradient:
+                prefixes = ("p_cohort_", "p_base_", "p_")
+            else:
+                prefixes = ("p_window_", "p_base_", "p_")
+            for prefix in prefixes:
                 candidate = f"{prefix}{safe_eid}"
                 for rv in model.deterministics + model.free_RVs:
                     if rv.name == candidate:
@@ -1142,6 +1170,9 @@ def _resolve_path_probability(
             p_product = p_var
         else:
             p_product = p_product * p_var
+
+    if stop_p_gradient and p_product is not None:
+        p_product = disconnected_grad(p_product)
 
     return p_product if p_product is not None else current_p_var
 

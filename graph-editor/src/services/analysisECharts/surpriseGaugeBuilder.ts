@@ -128,7 +128,7 @@ function buildGaugeDial(
           `Verdict: ${variable.zone}`;
       },
     },
-    animationDuration: 1200,
+    animationDuration: 600,
     animationEasing: 'cubicOut',
     series: [{
       type: 'gauge',
@@ -136,10 +136,6 @@ function buildGaugeDial(
       endAngle: 0,
       min: -maxSigma,
       max: maxSigma,
-      // ECharts gauge animates from min by default. We override the
-      // animation origin to 0 (centre/expected) via progress callback
-      // in pointer. Unfortunately ECharts doesn't expose a "from" value.
-      // The workaround is setting animationDuration on the option level.
       center: ['50%', '70%'],
       radius: '90%',
       axisLine: {

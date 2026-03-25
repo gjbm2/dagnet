@@ -389,6 +389,7 @@ export function AnalysisChartContainer(props: {
 
   const onEvents = useMemo(() => ({}), []);
   const echartsRef = useRef<any>(null);
+
   const dailyRenderCommitRef = useRef(0);
   const dailyOptionVersionRef = useRef(0);
   const dailyEchartsReadyCountRef = useRef(0);

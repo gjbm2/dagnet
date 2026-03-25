@@ -1,6 +1,7 @@
 import * as React from 'react';
 import { useState, useCallback, useEffect, useRef, useMemo } from 'react';
 import toast from 'react-hot-toast';
+import { copyToClipboard } from '../utils/copyToClipboard';
 import { useGraphStore } from '../contexts/GraphStoreContext';
 import { useTabContext, fileRegistry } from '../contexts/TabContext';
 import { dataOperationsService } from '../services/dataOperationsService';
@@ -677,7 +678,7 @@ function CanvasAnalysisPropertiesSection({ analysisId, graph, setGraph, saveHist
           <button
             className="property-action-button"
             style={{ padding: '6px 12px', fontSize: 12, cursor: 'pointer', border: '1px solid #d1d5db', borderRadius: 4, background: 'transparent', color: '#6b7280', fontFamily: 'monospace' }}
-            onClick={() => {
+            onClick={async () => {
               const debugPayload = {
                 id: analysisId,
                 analysis: analysis ? { ...analysis } : null,
@@ -686,7 +687,12 @@ function CanvasAnalysisPropertiesSection({ analysisId, graph, setGraph, saveHist
                 scenarioLayerItems,
                 chartKindOptions,
               };
-              navigator.clipboard.writeText(JSON.stringify(debugPayload, null, 2));
+              const ok = await copyToClipboard(JSON.stringify(debugPayload, null, 2));
+              if (ok) {
+                toast.success('Debug JSON copied to clipboard');
+              } else {
+                toast.error('Clipboard write failed — check browser permissions or use HTTPS');
+              }
             }}
           >
             Dump Debug JSON

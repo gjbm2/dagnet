@@ -159,7 +159,18 @@ describe('extractWindowFromDSL — window extraction logic', () => {
     expect(hasCohort || hasWindow || hasCohort2 || hasWindow2).toBe(true);
   });
 
-  it.skipIf(!apiAvailable)('should demonstrate that narrow currentQueryDSL gives 100% f₂ while dataInterestsDSL gives correct value', async () => {
+});
+
+
+describe.skipIf(!apiAvailable)('dataDepthService — real snapshot DB', () => {
+  afterAll(() => {
+    writeFileSync('/home/reg/dev/dagnet/debug/tmp.data-depth-test.log', log.join('\n') + '\n');
+  });
+
+  // Known param with ~54 retrieval days spanning 25-Jan-26 to 19-Mar-26.
+  const REAL_PARAM_ID = 'nous-conversion-main-delegated-to-coffee';
+
+  it('should demonstrate that narrow currentQueryDSL gives 100% f₂ while dataInterestsDSL gives correct value', async () => {
     const { parseConstraints } = await import('../../lib/queryDSL');
     const { resolveRelativeDate } = await import('../../lib/dateFormat');
 
@@ -218,15 +229,6 @@ describe('extractWindowFromDSL — window extraction logic', () => {
     expect(fullF2).toBeLessThan(0.85);
     expect(fullF2).toBeGreaterThan(0.2);
   });
-});
-
-describe.skipIf(!apiAvailable)('dataDepthService — real snapshot DB', () => {
-  afterAll(() => {
-    writeFileSync('/home/reg/dev/dagnet/debug/tmp.data-depth-test.log', log.join('\n') + '\n');
-  });
-
-  // Known param with ~54 retrieval days spanning 25-Jan-26 to 19-Mar-26.
-  const REAL_PARAM_ID = 'nous-conversion-main-delegated-to-coffee';
 
   it('should retrieve snapshot days from the real API and find < 120 days of coverage', async () => {
     const result = await queryRetrievals(REAL_PARAM_ID);

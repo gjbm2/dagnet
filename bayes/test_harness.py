@@ -832,6 +832,85 @@ def main():
         for k, v in timings.items():
             _print(f"  {k}: {v}ms")
 
+    # --- Posterior summary (doc 21 unified slices) ---
+    webhook_edges = result.get("webhook_payload_edges", [])
+    if webhook_edges:
+        _print(f"\n{'─' * 60}")
+        _print("  POSTERIOR SUMMARY")
+        _print(f"{'─' * 60}")
+        for edge in webhook_edges:
+            pid = edge.get("param_id", "?")
+            slices = edge.get("slices", {})
+            # Also check legacy format (probability/latency blocks)
+            legacy_prob = edge.get("probability")
+            if not slices and legacy_prob:
+                # Legacy format — convert for display
+                alpha = legacy_prob.get("alpha", 0)
+                beta_v = legacy_prob.get("beta", 0)
+                p_mean = alpha / (alpha + beta_v) if (alpha + beta_v) > 0 else 0
+                _print(f"\n  {pid} (legacy format)")
+                _print(f"    p={p_mean:.4f} (α={alpha:.1f}, β={beta_v:.1f})")
+                lat = edge.get("latency", {})
+                if lat.get("mu_mean"):
+                    onset = lat.get("onset_mean") or lat.get("onset_delta_days", 0)
+                    import math
+                    t95 = math.exp(lat["mu_mean"] + 1.645 * lat.get("sigma_mean", 0)) + onset
+                    _print(f"    latency: mu={lat['mu_mean']:.3f} sigma={lat.get('sigma_mean', 0):.3f} "
+                           f"onset={onset:.1f} t95≈{t95:.0f}d")
+                continue
+
+            _print(f"\n  {pid}")
+            for sk, sv in slices.items():
+                alpha = sv.get("alpha", 0)
+                beta_v = sv.get("beta", 0)
+                p_mean = alpha / (alpha + beta_v) if (alpha + beta_v) > 0 else 0
+                ess = sv.get("ess", 0)
+                rhat = sv.get("rhat", 0)
+                prov = sv.get("provenance", "?")
+                _print(f"    {sk}: p={p_mean:.4f} (α={alpha:.1f}, β={beta_v:.1f})  "
+                       f"ess={ess:.0f} rhat={rhat:.3f} [{prov}]")
+                if sv.get("mu_mean") is not None:
+                    onset = sv.get("onset_mean", 0) or 0
+                    import math
+                    t95 = math.exp(sv["mu_mean"] + 1.645 * sv.get("sigma_mean", 0)) + onset
+                    corr = sv.get("onset_mu_corr")
+                    corr_str = f" corr(onset,mu)={corr:.2f}" if corr is not None else ""
+                    _print(f"      latency: mu={sv['mu_mean']:.3f}±{sv.get('mu_sd', 0):.3f} "
+                           f"sigma={sv.get('sigma_mean', 0):.3f}±{sv.get('sigma_sd', 0):.3f} "
+                           f"onset={onset:.1f}±{sv.get('onset_sd', 0):.1f} "
+                           f"t95≈{t95:.0f}d{corr_str}")
+
+        # Compare against analytic values from param files
+        _print(f"\n{'─' * 60}")
+        _print("  ANALYTIC COMPARISON")
+        _print(f"{'─' * 60}")
+        for edge in webhook_edges:
+            pid = edge.get("param_id", "?")
+            pf_key = f"parameter-{pid}" if not pid.startswith("parameter-") else pid
+            pf = param_files.get(pf_key) or param_files.get(pid, {})
+            vals = pf.get("values", []) if pf else []
+            if vals and isinstance(vals[0], dict):
+                v = vals[0]
+                analytic_mean = v.get("mean", "?")
+                analytic_n = v.get("n", "?")
+                analytic_k = v.get("k", "?")
+                dsl = v.get("sliceDSL", "")
+                # Get Bayes p from window() slice
+                slices = edge.get("slices", {})
+                ws = slices.get("window()", {})
+                if ws:
+                    bayes_alpha = ws.get("alpha", 0)
+                    bayes_beta = ws.get("beta", 0)
+                    bayes_p = bayes_alpha / (bayes_alpha + bayes_beta) if (bayes_alpha + bayes_beta) > 0 else 0
+                    ratio = bayes_p / analytic_mean if isinstance(analytic_mean, (int, float)) and analytic_mean > 0 else None
+                    ratio_str = f" (ratio={ratio:.2f}x)" if ratio is not None else ""
+                    _print(f"  {pid}: analytic={analytic_mean} (k/n={analytic_k}/{analytic_n}) "
+                           f"→ bayes={bayes_p:.4f}{ratio_str}")
+                else:
+                    _print(f"  {pid}: analytic={analytic_mean} (k/n={analytic_k}/{analytic_n}) → no bayes window()")
+            else:
+                _print(f"  {pid}: no analytic values")
+
     _print(f"\n{'=' * 60}")
     if result.get("status") == "complete" or result.get("edges_fitted", 0) > 0:
         _print("PASS")

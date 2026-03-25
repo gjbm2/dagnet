@@ -47,6 +47,7 @@ import { IndexedDBConnectionProvider } from '../../lib/das/IndexedDBConnectionPr
 import { prepareAnalysisComputeInputs, runPreparedAnalysis } from '../../services/analysisComputePreparationService';
 import { logChartReadinessTrace } from '../../lib/snapshotBootTrace';
 import toast from 'react-hot-toast';
+import { copyToClipboard } from '../../utils/copyToClipboard';
 import type { ViewMode } from '../../types/chartRecipe';
 import './AnalyticsPanel.css';
 
@@ -998,12 +999,16 @@ export default function AnalyticsPanel({ tabId, hideHeader = false }: AnalyticsP
     });
   }, [results, orderedVisibleScenarios, tabId, currentTab?.fileId, snapshotChartDsl]);
 
-  const handleDumpDebug = useCallback((viewMode: ViewMode) => {
+  const handleDumpDebug = useCallback(async (viewMode: ViewMode) => {
     const result = results?.result;
     if (!result) return;
     const payload = { analysisType: selectedAnalysisId, queryDSL, result, viewMode };
-    navigator.clipboard.writeText(JSON.stringify(payload, null, 2));
-    toast.success('Debug JSON copied to clipboard');
+    const ok = await copyToClipboard(JSON.stringify(payload, null, 2));
+    if (ok) {
+      toast.success('Debug JSON copied to clipboard');
+    } else {
+      toast.error('Clipboard write failed — check browser permissions or use HTTPS');
+    }
   }, [results, selectedAnalysisId, queryDSL]);
 
   return (
