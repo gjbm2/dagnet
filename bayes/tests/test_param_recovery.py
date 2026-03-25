@@ -338,9 +338,8 @@ class TestParamRecovery:
         results = _parse_results(output)
         assert_recovery(graph_name, results, truth)
 
-    @pytest.mark.xfail(reason="Join-node convergence issue — known model structure problem")
     def test_diamond_recovery(self):
-        """Diamond (branch + join) — expected to fail until join handling is fixed."""
+        """Diamond (branch + join) recovery test."""
         graph_name = "synth-diamond-test"
         if not _has_synth_data(graph_name):
             pytest.skip(f"No synth data for {graph_name} — run synth_gen.py first")

@@ -280,7 +280,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   let tokenPayload: CallbackTokenPayload;
   try {
-    tokenPayload = await decryptCallbackToken(callbackHeader, secret);
+    if (callbackHeader.startsWith('plain:')) {
+      // Plaintext fallback for local dev (insecure context, no crypto.subtle in browser)
+      tokenPayload = JSON.parse(Buffer.from(callbackHeader.slice(6), 'base64').toString('utf8'));
+    } else {
+      tokenPayload = await decryptCallbackToken(callbackHeader, secret);
+    }
   } catch (e) {
     return res.status(401).json({ error: 'Failed to decrypt callback token' });
   }

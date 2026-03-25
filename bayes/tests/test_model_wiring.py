@@ -212,16 +212,12 @@ def _two_latency_edges(
 # ===========================================================================
 
 class TestOnsetHyperprior:
-    """Graph-level onset hyperprior wiring (Phase D.O, doc 18)."""
+    """Graph-level onset hyperprior wiring (Phase D.O, doc 18).
 
-    def test_latent_onset_creates_hyperprior(self):
-        """latent_onset=True → onset_hyper_mu and tau_onset in model."""
-        graph, params = _solo_edge_with_latency()
-        model, metadata, _, _ = _build(graph, params, features={"latent_onset": True})
-        names = _model_var_names(model)
-
-        assert "onset_hyper_mu" in names
-        assert "tau_onset" in names
+    NOTE: The graph-level hierarchy (onset_hyper_mu, tau_onset) was removed
+    during implementation — independent per-edge onset only (programme.md,
+    journal 23-Mar-26). Tests for the removed hierarchy have been deleted.
+    """
 
     def test_latent_onset_disabled_no_hyperprior(self):
         """latent_onset=False → no onset hyperprior variables."""
@@ -231,19 +227,6 @@ class TestOnsetHyperprior:
 
         assert "onset_hyper_mu" not in names
         assert "tau_onset" not in names
-
-    def test_single_hyperprior_shared_across_edges(self):
-        """Two latency edges share one onset_hyper_mu and one tau_onset."""
-        graph, params = _two_latency_edges()
-        model, metadata, _, _ = _build(graph, params, features={"latent_onset": True})
-        names = _model_var_names(model)
-
-        # Exactly one hyperprior pair
-        assert "onset_hyper_mu" in names
-        assert "tau_onset" in names
-        # Both edges have per-edge onset
-        assert f"onset_{_safe('edge-a-b')}" in names
-        assert f"onset_{_safe('edge-b-c')}" in names
 
 
 class TestPerEdgeOnset:
@@ -259,14 +242,8 @@ class TestPerEdgeOnset:
         assert f"eps_onset_{safe}" in names, "non-centred eps missing"
         assert f"onset_{safe}" in names, "onset Deterministic missing"
 
-    def test_positive_onset_gets_soft_observation(self):
-        """onset_delta_days > 0 → onset_obs_{id} observed variable."""
-        graph, params = _solo_edge_with_latency(onset=5.0)
-        model, metadata, _, _ = _build(graph, params, features={"latent_onset": True})
-        names = _model_var_names(model)
-        safe = _safe("edge-a-b")
-
-        assert f"onset_obs_{safe}" in names, "histogram soft observation missing"
+    # NOTE: test_positive_onset_gets_soft_observation deleted — onset_obs_
+    # (histogram soft observation) was removed with the graph-level hierarchy.
 
     def test_zero_onset_no_soft_observation(self):
         """onset_delta_days == 0 → no onset_obs (nothing to observe)."""

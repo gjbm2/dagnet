@@ -225,6 +225,37 @@ def summarise_posteriors(
                 f"WARN {edge_id[:8]}…: rhat={edge_rhat:.3f} ess={edge_ess:.0f}"
             )
 
+        # Doc 21: extract p_window and p_cohort separately for per-slice posteriors
+        window_alpha_val = None
+        window_beta_val = None
+        window_hdi_lo = None
+        window_hdi_hi = None
+        cohort_alpha_val = None
+        cohort_beta_val = None
+        cohort_hdi_lo = None
+        cohort_hdi_hi = None
+
+        safe_eid = _safe_var_name(edge_id)
+        p_window_name = f"p_window_{safe_eid}"
+        p_cohort_name = f"p_cohort_{safe_eid}"
+        # For window: prefer p_window_recent (drift-adjusted) if available
+        p_window_recent_name = f"p_window_recent_{safe_eid}"
+        w_name = p_window_recent_name if p_window_recent_name in trace.posterior else p_window_name
+
+        if w_name in trace.posterior:
+            w_samples = trace.posterior[w_name].values.flatten()
+            window_alpha_val, window_beta_val = _fit_beta_to_samples(w_samples)
+            w_hdi = az.hdi(w_samples, hdi_prob=HDI_PROB)
+            window_hdi_lo = float(w_hdi[0])
+            window_hdi_hi = float(w_hdi[1])
+
+        if p_cohort_name in trace.posterior:
+            c_samples = trace.posterior[p_cohort_name].values.flatten()
+            cohort_alpha_val, cohort_beta_val = _fit_beta_to_samples(c_samples)
+            c_hdi = az.hdi(c_samples, hdi_prob=HDI_PROB)
+            cohort_hdi_lo = float(c_hdi[0])
+            cohort_hdi_hi = float(c_hdi[1])
+
         posteriors.append(PosteriorSummary(
             edge_id=edge_id,
             param_id=ev.param_id,
@@ -240,6 +271,14 @@ def summarise_posteriors(
             divergences=quality.total_divergences,
             provenance=provenance,
             prior_tier=ev.prob_prior.source,
+            window_alpha=window_alpha_val,
+            window_beta=window_beta_val,
+            window_hdi_lower=window_hdi_lo,
+            window_hdi_upper=window_hdi_hi,
+            cohort_alpha=cohort_alpha_val,
+            cohort_beta=cohort_beta_val,
+            cohort_hdi_lower=cohort_hdi_lo,
+            cohort_hdi_upper=cohort_hdi_hi,
         ))
 
         # Latency posterior: extract from MCMC trace if latent, else echo prior
@@ -439,10 +478,38 @@ def summarise_posteriors(
                 f"(large=Binomial, small=overdispersed)"
             )
 
+    # Doc 21: collect model_state — hierarchy/shared params for warm-start.
+    # These are posterior means of model internals, persisted for subsequent
+    # runs but never consumed by the FE.
+    model_state: dict[str, float] = {}
+    for edge_id in topology.edges:
+        safe_eid = _safe_var_name(edge_id)
+        # p_base
+        p_base_name = f"p_base_{safe_eid}"
+        if p_base_name in trace.posterior:
+            p_base_samples = trace.posterior[p_base_name].values.flatten()
+            p_base_a, p_base_b = _fit_beta_to_samples(p_base_samples)
+            model_state[f"p_base_alpha_{safe_eid}"] = round(p_base_a, 4)
+            model_state[f"p_base_beta_{safe_eid}"] = round(p_base_b, 4)
+        # tau_window / tau_cohort
+        for prefix in ("tau_window", "tau_cohort"):
+            vname = f"{prefix}_{safe_eid}"
+            if vname in trace.posterior:
+                model_state[vname] = round(float(np.mean(trace.posterior[vname].values.flatten())), 4)
+        # kappa
+        kappa_name = f"kappa_{safe_eid}"
+        if kappa_name in trace.posterior:
+            model_state[kappa_name] = round(float(np.mean(trace.posterior[kappa_name].values.flatten())), 2)
+    # Graph-level onset hyperpriors
+    for vname in ("onset_hyper_mu", "tau_onset"):
+        if vname in trace.posterior:
+            model_state[vname] = round(float(np.mean(trace.posterior[vname].values.flatten())), 4)
+
     return InferenceResult(
         posteriors=posteriors,
         latency_posteriors=latency_posteriors,
         quality=quality,
+        model_state=model_state,
         skipped=skipped,
         diagnostics=diagnostics,
     )

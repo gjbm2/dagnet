@@ -1,9 +1,11 @@
 """
 Serialisation contract tests for posterior IR → webhook JSON.
 
-Verifies that to_webhook_dict() on LatencyPosteriorSummary and
-PosteriorSummary produces the exact key set and rounding the FE
-patch service expects. No MCMC — pure dataclass construction.
+Verifies that:
+  - to_webhook_dict() on internal types (LatencyPosteriorSummary,
+    PosteriorSummary) produces correct rounding (regression tests).
+  - _build_unified_slices() (doc 21) produces the unified slice shape
+    the FE patch service expects.
 
 Run with:
     cd /home/reg/dev/dagnet
@@ -20,6 +22,7 @@ from bayes.compiler.types import (
     PosteriorSummary,
     HDI_PROB,
 )
+from bayes.worker import _build_unified_slices
 
 
 # ---------------------------------------------------------------------------
@@ -238,3 +241,106 @@ class TestProbabilityWebhookDict:
         assert d["hdi_upper"] == 0.345678  # 6dp
         assert d["ess"] == 900.8         # 1dp
         assert d["rhat"] == 1.0012       # 4dp
+
+
+# ---------------------------------------------------------------------------
+# _build_unified_slices (doc 21: unified posterior schema)
+# ---------------------------------------------------------------------------
+
+class TestBuildUnifiedSlices:
+    """Contract: PosteriorSummary + LatencyPosteriorSummary → unified slices dict."""
+
+    def _base_prob(self, **overrides) -> PosteriorSummary:
+        defaults = dict(
+            edge_id="e-1", param_id="p-1",
+            alpha=43.0, beta=119.5,
+            mean=0.265, stdev=0.034,
+            hdi_lower=0.22, hdi_upper=0.33,
+            ess=1100, rhat=1.002,
+            divergences=0, provenance="bayesian",
+            prior_tier="direct_history",
+        )
+        defaults.update(overrides)
+        return PosteriorSummary(**defaults)
+
+    def _base_lat(self, **overrides) -> LatencyPosteriorSummary:
+        defaults = dict(
+            mu_mean=2.35, mu_sd=0.08,
+            sigma_mean=0.72, sigma_sd=0.04,
+            onset_delta_days=1.5,
+            hdi_t95_lower=18.5, hdi_t95_upper=32.1,
+            ess=950, rhat=1.006,
+            provenance="bayesian",
+        )
+        defaults.update(overrides)
+        return LatencyPosteriorSummary(**defaults)
+
+    def test_window_slice_always_present(self):
+        """window() slice is always emitted."""
+        slices = _build_unified_slices(self._base_prob(), None)
+        assert "window()" in slices
+        assert "cohort()" not in slices
+
+    def test_window_slice_has_probability_fields(self):
+        """window() slice carries alpha/beta/p_hdi from PosteriorSummary."""
+        slices = _build_unified_slices(self._base_prob(), None)
+        w = slices["window()"]
+        assert w["alpha"] == 43.0
+        assert w["beta"] == 119.5
+        assert w["p_hdi_lower"] == 0.22
+        assert w["p_hdi_upper"] == 0.33
+        assert w["provenance"] == "bayesian"
+
+    def test_window_slice_has_latency_fields(self):
+        """window() slice carries latency fields from LatencyPosteriorSummary."""
+        slices = _build_unified_slices(self._base_prob(), self._base_lat())
+        w = slices["window()"]
+        assert w["mu_mean"] == 2.35
+        assert w["mu_sd"] == 0.08
+        assert w["sigma_mean"] == 0.72
+        assert w["onset_mean"] == 1.5
+        assert w["hdi_t95_lower"] == 18.5
+
+    def test_window_slice_combined_quality(self):
+        """ess = min(prob, lat), rhat = max(prob, lat)."""
+        slices = _build_unified_slices(
+            self._base_prob(ess=1100, rhat=1.002),
+            self._base_lat(ess=950, rhat=1.006),
+        )
+        w = slices["window()"]
+        assert w["ess"] == 950.0    # min
+        assert w["rhat"] == 1.006   # max
+
+    def test_cohort_slice_from_path_fields(self):
+        """cohort() slice emitted when path-level latency fields present."""
+        lat = self._base_lat(
+            path_mu_mean=2.81, path_mu_sd=0.12,
+            path_sigma_mean=0.58, path_sigma_sd=0.06,
+            path_onset_delta_days=3.2,
+            path_provenance="bayesian",
+        )
+        slices = _build_unified_slices(self._base_prob(), lat)
+        assert "cohort()" in slices
+        c = slices["cohort()"]
+        assert c["alpha"] == 43.0           # same probability as window
+        assert c["mu_mean"] == 2.81         # path-level
+        assert c["onset_mean"] == 3.2
+        assert c["provenance"] == "bayesian"
+
+    def test_no_cohort_without_path_fields(self):
+        """cohort() slice not emitted when no path-level latency."""
+        slices = _build_unified_slices(self._base_prob(), self._base_lat())
+        assert "cohort()" not in slices
+
+    def test_onset_mu_corr_in_window(self):
+        """onset_mu_corr present in window() when available."""
+        lat = self._base_lat(onset_mu_corr=-0.423)
+        slices = _build_unified_slices(self._base_prob(), lat)
+        assert slices["window()"]["onset_mu_corr"] == -0.423
+
+    def test_no_latency_fields_without_lat_post(self):
+        """window() slice has no mu_mean etc. when no latency posterior."""
+        slices = _build_unified_slices(self._base_prob(), None)
+        w = slices["window()"]
+        assert "mu_mean" not in w
+        assert "sigma_mean" not in w

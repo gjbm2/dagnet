@@ -24,7 +24,7 @@ import { AnalysisInfoCard } from '../analytics/AnalysisInfoCard';
 import { ExpressionToolbarTray } from './ExpressionToolbarTray';
 import { CfpPopover } from './CfpPopover';
 
-type ChartKind = 'funnel' | 'bridge' | 'histogram' | 'daily_conversions' | 'cohort_maturity' | 'lag_fit' | 'bar_grouped' | 'pie' | 'time_series' | 'info';
+type ChartKind = 'funnel' | 'bridge' | 'histogram' | 'daily_conversions' | 'cohort_maturity' | 'lag_fit' | 'bar_grouped' | 'pie' | 'time_series' | 'info' | 'surprise_gauge';
 
 export function normaliseChartKind(kind: string | undefined | null): ChartKind | null {
   if (!kind) return null;
@@ -34,6 +34,7 @@ export function normaliseChartKind(kind: string | undefined | null): ChartKind |
   if (kind === 'daily_conversions') return 'daily_conversions';
   if (kind === 'cohort_maturity') return 'cohort_maturity';
   if (kind === 'lag_fit') return 'lag_fit';
+  if (kind === 'surprise_gauge') return 'surprise_gauge';
   if (kind === 'bar_grouped') return 'bar_grouped';
   if (kind === 'pie') return 'pie';
   if (kind === 'time_series') return 'time_series';
@@ -51,6 +52,7 @@ function labelForChartKind(kind: ChartKind): string {
   if (kind === 'bar_grouped') return 'Comparison';
   if (kind === 'pie') return 'Pie';
   if (kind === 'time_series') return 'Time Series';
+  if (kind === 'surprise_gauge') return 'Expectation Gauge';
   return kind;
 }
 
@@ -243,6 +245,7 @@ export function AnalysisChartContainer(props: {
     if (t === 'daily_conversions') return 'daily_conversions';
     if (t === 'cohort_maturity') return 'cohort_maturity';
     if (t === 'lag_fit') return 'lag_fit';
+    if (t === 'surprise_gauge') return 'surprise_gauge';
     if (typeof t === 'string' && t.includes('bridge')) return 'bridge';
     return 'bridge';
   }, [finalResult]);

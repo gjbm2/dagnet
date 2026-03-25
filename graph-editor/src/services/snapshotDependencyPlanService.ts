@@ -138,7 +138,7 @@ export interface SnapshotSubjectRequest {
 
   // === Read intent ===
 
-  read_mode: 'raw_snapshots' | 'virtual_snapshot' | 'cohort_maturity' | 'sweep_simple';
+  read_mode: 'raw_snapshots' | 'virtual_snapshot' | 'cohort_maturity' | 'sweep_simple' | 'none';
 
   // === Time bounds ===
 

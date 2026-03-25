@@ -7,6 +7,7 @@ Used by both:
 
 This ensures dev and prod use identical handler logic.
 """
+import math
 from typing import Dict, Any, Optional, List
 
 
@@ -97,6 +98,301 @@ def handle_generate_all_parameters(data: Dict[str, Any]) -> Dict[str, Any]:
         },
         "success": True
     }
+
+
+def _compute_surprise_gauge(
+    graph_data: Dict[str, Any],
+    target_id: Optional[str],
+    subj: Dict[str, Any],
+    data: Dict[str, Any],
+) -> Dict[str, Any]:
+    """
+    Compute surprise gauge: compare current evidence against Bayesian posterior.
+
+    Phase 1: uses parameter file scalars (k, n, median_lag, mean_lag).
+    Phase 2: will add snapshot DB queries for onset evidence.
+
+    Returns:
+        { analysis_type, variables: [{ name, quantile, observed, expected,
+          posterior_sd, zone, label, available }] }
+    """
+    from scipy.stats import beta as beta_dist, norm as norm_dist
+
+    result: Dict[str, Any] = {
+        'analysis_type': 'surprise_gauge',
+        'analysis_name': 'Expectation Gauge',
+        'variables': [],
+    }
+
+    if not graph_data or not target_id:
+        return result
+
+    # Find the edge
+    edges = graph_data.get('edges', []) if isinstance(graph_data, dict) else []
+    edge = next(
+        (e for e in edges
+         if str(e.get('uuid') or e.get('id') or '') == str(target_id)),
+        None,
+    )
+    if not edge:
+        return result
+
+    p = edge.get('p') or {}
+    model_vars = p.get('model_vars') or []
+
+    # Find Bayesian model vars entry
+    bayes_entry = next(
+        (mv for mv in model_vars if isinstance(mv, dict) and mv.get('source') == 'bayesian'),
+        None,
+    )
+    # Determine the reference model entry: prefer Bayesian, fall back to any with stdev
+    reference_entry = bayes_entry
+    reference_source = 'bayesian'
+    if not reference_entry:
+        # Fall back to analytic_be, then analytic
+        for fallback_src in ('analytic_be', 'analytic'):
+            reference_entry = next(
+                (mv for mv in model_vars if isinstance(mv, dict) and mv.get('source') == fallback_src
+                 and isinstance((mv.get('probability') or {}).get('stdev'), (int, float))
+                 and (mv.get('probability') or {}).get('stdev', 0) > 0),
+                None,
+            )
+            if reference_entry:
+                reference_source = fallback_src
+                break
+    if not reference_entry:
+        result['error'] = 'No model vars with uncertainty available for this edge'
+        print(f"[surprise_gauge] No reference entry. model_vars sources: {[mv.get('source') for mv in model_vars if isinstance(mv, dict)]}")
+        return result
+
+    result['reference_source'] = reference_source
+    if reference_source != 'bayesian':
+        result['hint'] = 'Run Bayes model for better indicators'
+    print(f"[surprise_gauge] Using {reference_source} entry.")
+
+    ref_quality = reference_entry.get('quality') or {}
+    ref_prob = reference_entry.get('probability') or {}
+    ref_lat = reference_entry.get('latency') or {}
+
+    latency = p.get('latency') or {}
+    raw_posterior = latency.get('posterior') or {}
+
+    # --- Build reference distribution params ---
+    # For Bayesian: use raw posterior (alpha/beta, mu_mean/mu_sd, etc.)
+    # For analytic: reconstruct from mean/stdev (method of moments for Beta)
+
+    # Probability: alpha/beta
+    b_alpha_raw = raw_posterior.get('alpha') if reference_source == 'bayesian' else None
+    b_beta_raw = raw_posterior.get('beta') if reference_source == 'bayesian' else None
+    if b_alpha_raw is None or b_beta_raw is None:
+        # Reconstruct from mean/stdev using method of moments
+        b_mean = ref_prob.get('mean')
+        b_std = ref_prob.get('stdev')
+        if (isinstance(b_mean, (int, float)) and isinstance(b_std, (int, float))
+                and b_mean > 0 and b_mean < 1 and b_std > 0):
+            v = float(b_std) ** 2
+            m = float(b_mean)
+            if v < m * (1 - m):  # valid Beta
+                common = m * (1 - m) / v - 1
+                b_alpha_raw = m * common
+                b_beta_raw = (1 - m) * common
+
+    # Latency: mu_mean/mu_sd, sigma_mean/sigma_sd, onset
+    if reference_source == 'bayesian':
+        ref_lat_params = {
+            'mu_mean': raw_posterior.get('mu_mean') or ref_lat.get('mu'),
+            'mu_sd': raw_posterior.get('mu_sd'),
+            'sigma_mean': raw_posterior.get('sigma_mean') or ref_lat.get('sigma'),
+            'sigma_sd': raw_posterior.get('sigma_sd'),
+            'onset_mean': raw_posterior.get('onset_mean'),
+            'onset_sd': raw_posterior.get('onset_sd'),
+            'onset_delta_days': raw_posterior.get('onset_delta_days') or ref_lat.get('onset_delta_days') or 0,
+        }
+    else:
+        # Analytic: no posterior SDs available for latency params
+        ref_lat_params = {
+            'mu_mean': ref_lat.get('mu'),
+            'mu_sd': None,
+            'sigma_mean': ref_lat.get('sigma'),
+            'sigma_sd': None,
+            'onset_mean': None,
+            'onset_sd': None,
+            'onset_delta_days': ref_lat.get('onset_delta_days') or 0,
+        }
+
+    # Find the analytic model vars entry as "observed" (evidence-derived values).
+    # Prefer analytic_be, fall back to analytic.
+    analytic_entry = next(
+        (mv for mv in model_vars if isinstance(mv, dict) and mv.get('source') == 'analytic_be'),
+        next(
+            (mv for mv in model_vars if isinstance(mv, dict) and mv.get('source') == 'analytic'),
+            None,
+        ),
+    )
+
+    # Also get the promoted values from the edge as a fallback
+    promoted_prob = p.get('mean')
+    promoted_lat = p.get('latency') or {}
+
+    # Use analytic entry if available, else promoted values
+    obs_prob_mean = None
+    obs_lat_mu = None
+    obs_lat_sigma = None
+
+    if analytic_entry:
+        a_prob = analytic_entry.get('probability') or {}
+        a_lat = analytic_entry.get('latency') or {}
+        obs_prob_mean = a_prob.get('mean')
+        obs_lat_mu = a_lat.get('mu')
+        obs_lat_sigma = a_lat.get('sigma')
+
+    # Fallback to promoted values
+    if obs_prob_mean is None:
+        obs_prob_mean = promoted_prob
+    if obs_lat_mu is None:
+        obs_lat_mu = promoted_lat.get('mu')
+    if obs_lat_sigma is None:
+        obs_lat_sigma = promoted_lat.get('sigma')
+
+    # Zone classification from quantile
+    def classify_zone(q: float) -> str:
+        """Map a CDF quantile (0-1) to a surprise zone."""
+        tail = abs(q - 0.5) * 2  # 0 = centre, 1 = extreme
+        if tail < 0.60:   return 'expected'      # 20th–80th percentile
+        if tail < 0.80:   return 'noteworthy'     # 10th–20th or 80th–90th
+        if tail < 0.90:   return 'unusual'        # 5th–10th or 90th–95th
+        if tail < 0.98:   return 'surprising'     # 1st–5th or 95th–99th
+        return 'alarming'                         # beyond 1st/99th
+
+    def sigma_from_quantile(q: float) -> float:
+        """Convert quantile to signed σ distance from centre."""
+        q_clamped = max(1e-6, min(1 - 1e-6, q))
+        return norm_dist.ppf(q_clamped)
+
+    variables = []
+
+    # --- p (conversion rate) ---
+    # Compare analytic p.mean against Bayesian Beta(α,β) posterior.
+    b_alpha = b_alpha_raw
+    b_beta_param = b_beta_raw
+
+    if (isinstance(b_alpha, (int, float)) and isinstance(b_beta_param, (int, float))
+            and b_alpha > 0 and b_beta_param > 0
+            and isinstance(obs_prob_mean, (int, float)) and obs_prob_mean >= 0):
+        posterior_mean = b_alpha / (b_alpha + b_beta_param)
+        posterior_sd = bayes_prob.get('stdev', 0)
+        # Exact Beta CDF: where does the observed rate fall in the posterior?
+        quantile = float(beta_dist.cdf(float(obs_prob_mean), b_alpha, b_beta_param))
+        variables.append({
+            'name': 'p',
+            'label': 'Conversion rate',
+            'quantile': round(quantile, 6),
+            'sigma': round(sigma_from_quantile(quantile), 3),
+            'observed': round(float(obs_prob_mean), 6),
+            'expected': round(posterior_mean, 6),
+            'posterior_sd': round(float(posterior_sd), 6),
+            'zone': classify_zone(quantile),
+            'available': True,
+        })
+    else:
+        variables.append({
+            'name': 'p',
+            'label': 'Conversion rate',
+            'available': False,
+            'reason': 'Missing Bayesian posterior (alpha/beta) or analytic p.mean',
+        })
+
+    # --- mu (latency location) ---
+    # Compare analytic mu against Bayesian mu posterior.
+    b_mu_mean = ref_lat_params.get('mu_mean')
+    b_mu_sd = ref_lat_params.get('mu_sd')
+    b_onset_mean = ref_lat_params.get('onset_mean') or ref_lat_params.get('onset_delta_days') or 0
+
+    if (isinstance(b_mu_mean, (int, float)) and isinstance(b_mu_sd, (int, float))
+            and b_mu_sd > 0
+            and isinstance(obs_lat_mu, (int, float))):
+        z = (float(obs_lat_mu) - float(b_mu_mean)) / float(b_mu_sd)
+        quantile = float(norm_dist.cdf(z))
+        variables.append({
+            'name': 'mu',
+            'label': 'Latency location (μ)',
+            'quantile': round(quantile, 6),
+            'sigma': round(z, 3),
+            'observed': round(float(obs_lat_mu), 4),
+            'observed_days': round(math.exp(float(obs_lat_mu)) + float(b_onset_mean), 1),
+            'expected': round(float(b_mu_mean), 4),
+            'expected_days': round(math.exp(float(b_mu_mean)) + float(b_onset_mean), 1),
+            'posterior_sd': round(float(b_mu_sd), 4),
+            'zone': classify_zone(quantile),
+            'available': True,
+        })
+    else:
+        variables.append({
+            'name': 'mu',
+            'label': 'Latency location (μ)',
+            'available': False,
+            'reason': 'Missing Bayesian latency posterior or analytic mu',
+        })
+
+    # --- sigma (latency spread) ---
+    # Compare analytic sigma against Bayesian sigma posterior.
+    b_sigma_mean_val = ref_lat_params.get('sigma_mean')
+    b_sigma_sd = ref_lat_params.get('sigma_sd')
+
+    if (isinstance(b_sigma_mean_val, (int, float)) and isinstance(b_sigma_sd, (int, float))
+            and b_sigma_sd > 0
+            and isinstance(obs_lat_sigma, (int, float))):
+        z = (float(obs_lat_sigma) - float(b_sigma_mean_val)) / float(b_sigma_sd)
+        quantile = float(norm_dist.cdf(z))
+        variables.append({
+            'name': 'sigma',
+            'label': 'Latency spread (σ)',
+            'quantile': round(quantile, 6),
+            'sigma': round(z, 3),
+            'observed': round(float(obs_lat_sigma), 4),
+            'expected': round(float(b_sigma_mean_val), 4),
+            'posterior_sd': round(float(b_sigma_sd), 4),
+            'zone': classify_zone(quantile),
+            'available': True,
+        })
+    else:
+        variables.append({
+            'name': 'sigma',
+            'label': 'Latency spread (σ)',
+            'available': False,
+            'reason': 'Missing Bayesian sigma posterior or analytic sigma',
+        })
+
+    # --- onset (Phase 2 — placeholder) ---
+    b_onset_mean_val = ref_lat_params.get('onset_mean')
+    b_onset_sd = ref_lat_params.get('onset_sd')
+    if isinstance(b_onset_mean_val, (int, float)) and isinstance(b_onset_sd, (int, float)) and b_onset_sd > 0:
+        variables.append({
+            'name': 'onset',
+            'label': 'Onset (dead time)',
+            'available': False,
+            'reason': 'Phase 2: requires snapshot DB query for observed onset',
+            'expected': round(float(b_onset_mean_val), 2),
+            'posterior_sd': round(float(b_onset_sd), 2),
+        })
+    else:
+        variables.append({
+            'name': 'onset',
+            'label': 'Onset (dead time)',
+            'available': False,
+            'reason': 'No latent onset posterior available',
+        })
+
+    # Quality metadata
+    result['variables'] = variables
+    result['quality'] = {
+        'rhat': ref_quality.get('rhat'),
+        'ess': ref_quality.get('ess'),
+        'gate_passed': ref_quality.get('gate_passed'),
+    }
+    result['promoted_source'] = p.get('model_source_preference', 'best_available')
+
+    return result
 
 
 def handle_stats_enhance(data: Dict[str, Any]) -> Dict[str, Any]:
@@ -248,7 +544,6 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
     See: docs/current/project-db/1-reads.md §9
     """
     from datetime import date, datetime, timedelta
-    import math
     from snapshot_service import query_snapshots, query_snapshots_for_sweep
     from runner.histogram_derivation import derive_lag_histogram
     from runner.daily_conversions_derivation import derive_daily_conversions
@@ -634,6 +929,22 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
                 raise ValueError(f"snapshot_subjects[].anchor_to required (scenario={scenario_id}, subject_id={subj.get('subject_id')})")
 
             read_mode = subj.get('read_mode', 'raw_snapshots')
+
+            if analysis_type == 'surprise_gauge':
+                # Surprise gauge: compute directly from graph edge model_vars
+                # and parameter file values. No snapshot query needed.
+                graph_data = scenario.get('graph') or {}
+                target_id = (subj.get('target') or {}).get('targetId')
+                print(f"[surprise_gauge] target_id={target_id}, graph_edges={len(graph_data.get('edges', []))}")
+                result = _compute_surprise_gauge(graph_data, target_id, subj, data)
+                print(f"[surprise_gauge] result vars: {[(v.get('name'), v.get('available'), v.get('reason','')) for v in result.get('variables',[])]}")
+                per_subject_results.append({
+                    "subject_id": subj.get('subject_id'),
+                    "success": True,
+                    "result": result,
+                    "rows_analysed": 0,
+                })
+                continue
 
             if read_mode == 'cohort_maturity':
                 # Cohort maturity: use sweep query

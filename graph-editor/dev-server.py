@@ -45,6 +45,18 @@ else:
     for p in sorted(ports):
         ALLOWED_ORIGINS.append(f"http://localhost:{p}")
         ALLOWED_ORIGINS.append(f"http://127.0.0.1:{p}")
+    # WSL: also allow the machine's LAN IP so the app works when accessed
+    # via the WSL IP rather than localhost (common when localhost forwarding breaks).
+    # socket.gethostbyname returns 127.0.1.1 on WSL, so use subprocess instead.
+    import subprocess
+    try:
+        _ips = subprocess.check_output(["hostname", "-I"], text=True).strip().split()
+        for _ip in _ips:
+            if _ip and _ip not in ("127.0.0.1", "127.0.1.1"):
+                for p in sorted(ports):
+                    ALLOWED_ORIGINS.append(f"http://{_ip}:{p}")
+    except Exception:
+        pass
 
 app = FastAPI(
     title="DagNet Graph Compute (Local Dev)",

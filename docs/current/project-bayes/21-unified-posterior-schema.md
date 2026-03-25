@@ -288,37 +288,26 @@ Where `SlimSlice` is: `{ alpha, beta, mu_mean?, sigma_mean? }`.
 |---|---|
 | `bayes/compiler/evidence.py` | `_resolve_prior()` reads `_model_state` for hierarchy anchors (`p_base_alpha/beta`). Reads `slices["window()"]` for per-variable latency priors (mu_mean, mu_sd for ESS-capping). Falls back to uninformative when no previous posterior exists. |
 
-### 4.4 FE services — writes
+### 4.4 FE services
 
 | File | Change |
 |---|---|
 | `graph-editor/src/services/bayesPatchService.ts` | Rewrite patch application. Currently writes separate `posterior` (probability) and `latency.posterior`. Changes to write unified `posterior` with `slices`, `_model_state`, unified `fit_history`. |
-| `graph-editor/src/services/updateManager/mappingConfigurations.ts` | One cascade entry for `posterior` (instead of two for probability + latency posterior). Strip `fit_history`, `slices`, `_model_state` when cascading file → graph (same principle, simpler implementation). |
-
-### 4.5 FE services — reads
-
-| File | Change |
-|---|---|
-| `graph-editor/src/services/dataOperations/fileToGraphSync.ts` | **New behaviour**: when building model_vars entries during `getParameterFromFile`, look up `posterior.slices[targetSlice]` and build a Bayesian `ModelVarsEntry` from the matching slice. The analytic entry continues to be built from `values[]` data as today. |
+| `graph-editor/src/services/updateManager/mappingConfigurations.ts` | One cascade entry for `posterior` (instead of two for probability + latency posterior). Strip `fit_history`, `slices`, `_model_state` when cascading file → graph. Project summary fields from the relevant slice onto the graph edge in the shapes the UI already expects. |
+| `graph-editor/src/services/dataOperations/fileToGraphSync.ts` | When building model_vars entries during `getParameterFromFile`, look up `posterior.slices[targetSlice]` and build a Bayesian `ModelVarsEntry` from the matching slice. The analytic entry continues to be built from `values[]` data as today. |
 | `graph-editor/src/services/localAnalysisComputeService.ts` | Read from `posterior.slices[relevantDSL]` for both probability and latency display fields. Currently reads from two separate posterior blocks. |
 | `graph-editor/src/services/analysisComputePreparationService.ts` | Analysis signature computation reads latency posterior params from `posterior.slices` instead of `latency.posterior`. |
 | `graph-editor/lib/api_handlers.py` | BE dual-curve output reads from `posterior.slices[matchingDSL]` instead of `latency.posterior.*`. The DSL is available from the analysis request. |
-
-### 4.6 FE services — model vars integration
-
-| File | Change |
-|---|---|
 | `graph-editor/src/services/modelVarsResolution.ts` | No structural change. `resolveActiveModelVars` and `applyPromotion` continue to work on `ModelVarsEntry` objects. The Bayesian entry is built upstream (in `fileToGraphSync` or `bayesPatchService`) from the relevant slice. |
 
-### 4.7 UI components
+### 4.5 UI components
 
-| File | Change |
-|---|---|
-| `graph-editor/src/components/shared/PosteriorIndicator.tsx` | Currently discriminates probability vs latency by checking `'evidence_grade' in posterior`. With unified slice entries, receives a single `SlicePosteriorEntry` — no discrimination needed. Displays probability fields (alpha/beta → p̂) and optionally latency fields (mu, sigma, onset) from the same object. |
-| `graph-editor/src/components/edges/ConversionEdge.tsx` | `posterior.rhat` and `posterior.fitted_at` in cache key — these remain at `posterior` top level. No change. |
-| `graph-editor/src/utils/bayesQualityTier.ts` | Adapt to compute quality tier from `SlicePosteriorEntry` (which carries `ess`, `rhat`, `divergences`, `evidence_grade`). |
+No UI component changes. The cascade in `mappingConfigurations.ts` projects
+slice data onto the graph edge in the same shapes that `PosteriorIndicator`,
+`ConversionEdge`, and `bayesQualityTier` already consume. The cascade is
+the adapter between the new file format and the existing UI contracts.
 
-### 4.8 Tests
+### 4.6 Tests
 
 | File | Change |
 |---|---|

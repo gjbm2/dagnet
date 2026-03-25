@@ -320,6 +320,19 @@ class PosteriorSummary:
     provenance: str = "bayesian"
     prior_tier: str = "uninformative"
 
+    # Per-observation-type posteriors (doc 21) — separate from p_base.
+    # These are moment-matched from p_window / p_cohort MCMC samples.
+    # p_base alpha/beta (above) is the hierarchy anchor; these are the
+    # observation-type-specific posteriors used for slice entries.
+    window_alpha: float | None = None
+    window_beta: float | None = None
+    window_hdi_lower: float | None = None
+    window_hdi_upper: float | None = None
+    cohort_alpha: float | None = None
+    cohort_beta: float | None = None
+    cohort_hdi_lower: float | None = None
+    cohort_hdi_upper: float | None = None
+
     def to_webhook_dict(self) -> dict[str, Any]:
         """Format for the webhook payload's edge.probability block."""
         return {
@@ -438,5 +451,6 @@ class InferenceResult:
     posteriors: list[PosteriorSummary]
     latency_posteriors: dict[str, LatencyPosteriorSummary]  # edge_id → summary
     quality: QualityMetrics
+    model_state: dict[str, float] = field(default_factory=dict)  # doc 21: warm-start internals
     skipped: list[dict[str, str]] = field(default_factory=list)
     diagnostics: list[str] = field(default_factory=list)

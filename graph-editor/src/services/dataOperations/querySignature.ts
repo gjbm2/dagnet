@@ -15,6 +15,7 @@ import { parseDSL } from '../../lib/queryDSL';
 import { serialiseSignature } from '../signatureMatchingService';
 import { contextRegistry } from '../contextRegistry';
 import { sessionLogService } from '../sessionLogService';
+import { sha256 } from '../../lib/sha256';
 
 /**
  * Compute query signature for consistency checking.
@@ -145,7 +146,7 @@ export async function computeQuerySignature(
     const hashText = async (canonical: string): Promise<string> => {
       const encoder = new TextEncoder();
       const data = encoder.encode(canonical);
-      const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+      const hashBuffer = await sha256(data);
       const hashArray = Array.from(new Uint8Array(hashBuffer));
       return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
     };

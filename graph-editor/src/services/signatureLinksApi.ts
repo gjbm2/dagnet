@@ -17,10 +17,7 @@
 // Configuration
 // -----------------------------------------------------------------------------
 
-const PYTHON_API_BASE =
-  import.meta.env.DEV
-    ? (import.meta.env.VITE_PYTHON_API_URL || 'http://localhost:9000')
-    : '';
+import { PYTHON_API_BASE } from '../lib/pythonApiBase';
 
 const SIGS_ENABLED = import.meta.env.VITE_SNAPSHOTS_ENABLED !== 'false';
 

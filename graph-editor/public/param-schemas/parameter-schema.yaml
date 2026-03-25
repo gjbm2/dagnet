@@ -136,167 +136,28 @@ properties:
       model_trained_at:
         type: string
         description: "UK date (d-MMM-yy) when the model was last fitted (staleness detection)"
-      posterior:
-        type: object
-        description: "Bayesian posterior for latency parameters (written by fitting engine)"
-        properties:
-          distribution:
-            type: string
-            description: "Distribution family fitted (e.g. 'lognormal')"
-          onset_delta_days:
-            type: number
-            minimum: 0
-            description: "Posterior onset (may differ from pre-Bayes value)"
-          mu_mean:
-            type: number
-            description: "Posterior mean of μ"
-          mu_sd:
-            type: number
-            minimum: 0
-            description: "Posterior SD of μ"
-          sigma_mean:
-            type: number
-            minimum: 0
-            description: "Posterior mean of σ"
-          sigma_sd:
-            type: number
-            minimum: 0
-            description: "Posterior SD of σ"
-          hdi_t95_lower:
-            type: number
-            minimum: 0
-            description: "Lower HDI bound for t95 (days)"
-          hdi_t95_upper:
-            type: number
-            minimum: 0
-            description: "Upper HDI bound for t95 (days)"
-          hdi_level:
-            type: number
-            minimum: 0
-            maximum: 1
-            description: "HDI level used (e.g. 0.9)"
-          ess:
-            type: number
-            minimum: 0
-            description: "Effective sample size"
-          rhat:
-            type: number
-            minimum: 0
-            description: "Convergence diagnostic"
-          fitted_at:
-            type: string
-            description: "UK date (d-MMM-yy)"
-          fingerprint:
-            type: string
-            description: "Deterministic model hash"
-          provenance:
-            type: string
-            enum: [bayesian, pooled-fallback, point-estimate, skipped]
-          fit_history:
-            type: array
-            description: "Rolling array of recent posterior snapshots"
-            items:
-              type: object
-              properties:
-                fitted_at:
-                  type: string
-                mu_mean:
-                  type: number
-                sigma_mean:
-                  type: number
-                onset_delta_days:
-                  type: number
-                rhat:
-                  type: number
-                divergences:
-                  type: integer
-                  minimum: 0
-                  description: "Divergent transitions at that point"
-              additionalProperties: false
-          # Path-level (cohort) latency — present when cohort latency is fitted
-          path_onset_delta_days:
-            type: number
-            minimum: 0
-            description: "Fitted path onset for cohort context"
-          path_mu_mean:
-            type: number
-            description: "Path-level posterior mean of μ"
-          path_mu_sd:
-            type: number
-            minimum: 0
-            description: "Path-level posterior SD of μ"
-          path_sigma_mean:
-            type: number
-            minimum: 0
-            description: "Path-level posterior mean of σ"
-          path_sigma_sd:
-            type: number
-            minimum: 0
-            description: "Path-level posterior SD of σ"
-          path_provenance:
-            type: string
-            enum: [bayesian, pooled-fallback, point-estimate]
-            description: "Provenance of path-level latency posterior"
-        additionalProperties: false
+      # NOTE: No posterior sub-block under latency (doc 21). Bayesian latency
+      # posteriors live in the top-level posterior.slices entries.
     additionalProperties: false
 
-  # Bayesian posterior for probability (written by fitting engine)
+  # Unified Bayesian posterior (doc 21) — per-slice entries carry both
+  # probability and latency fields. Replaces the old split between
+  # top-level posterior (probability) and latency.posterior.
   posterior:
     type: object
-    description: "Bayesian posterior for this probability parameter"
+    description: "Unified Bayesian posterior (doc 21). Per-slice entries carry both probability and latency."
     properties:
-      distribution:
+      fitted_at:
         type: string
-        description: "Distribution family fitted (e.g. 'beta', 'dirichlet-component')"
-      alpha:
-        type: number
-        minimum: 0
-        description: "Beta posterior shape α"
-      beta:
-        type: number
-        minimum: 0
-        description: "Beta posterior shape β"
-      hdi_lower:
-        type: number
-        minimum: 0
-        maximum: 1
-        description: "Lower bound of HDI"
-      hdi_upper:
-        type: number
-        minimum: 0
-        maximum: 1
-        description: "Upper bound of HDI"
+        description: "UK date (d-MMM-yy) of most recent fit"
+      fingerprint:
+        type: string
+        description: "Deterministic model hash"
       hdi_level:
         type: number
         minimum: 0
         maximum: 1
         description: "HDI level used (e.g. 0.9)"
-      ess:
-        type: number
-        minimum: 0
-        description: "Effective sample size"
-      rhat:
-        type: number
-        minimum: 0
-        description: "Gelman-Rubin convergence diagnostic"
-      evidence_grade:
-        type: integer
-        minimum: 0
-        maximum: 3
-        description: "Evidence degradation level (0=cold start, 1=weak, 2=mature, 3=full Bayesian)"
-      fitted_at:
-        type: string
-        description: "UK date (d-MMM-yy)"
-      fingerprint:
-        type: string
-        description: "Deterministic model hash"
-      provenance:
-        type: string
-        enum: [bayesian, pooled-fallback, point-estimate, skipped]
-      divergences:
-        type: integer
-        minimum: 0
-        description: "Count of MCMC divergent transitions"
       prior_tier:
         type: string
         enum: [direct_history, trajectory_calibrated, inherited, sibling_pooled, uninformative]
@@ -304,30 +165,108 @@ properties:
       surprise_z:
         type: number
         description: "Trajectory surprise z-score (null if < 3 fit_history entries)"
+      slices:
+        type: object
+        description: "Per-slice posteriors keyed by slice DSL string (e.g. 'window()', 'cohort()', 'window().context(channel:google)')"
+        additionalProperties:
+          type: object
+          description: "Unified slice entry — probability + latency (doc 21 §3.2)"
+          properties:
+            # Probability
+            alpha:
+              type: number
+              minimum: 0
+              description: "Beta posterior shape α"
+            beta:
+              type: number
+              minimum: 0
+              description: "Beta posterior shape β"
+            p_hdi_lower:
+              type: number
+              minimum: 0
+              maximum: 1
+              description: "Probability HDI lower bound"
+            p_hdi_upper:
+              type: number
+              minimum: 0
+              maximum: 1
+              description: "Probability HDI upper bound"
+            # Latency (present when edge has latency fitted for this slice)
+            mu_mean:
+              type: number
+              description: "Posterior mean of log-normal μ"
+            mu_sd:
+              type: number
+              minimum: 0
+              description: "Posterior SD of μ"
+            sigma_mean:
+              type: number
+              minimum: 0
+              description: "Posterior mean of log-normal σ"
+            sigma_sd:
+              type: number
+              minimum: 0
+              description: "Posterior SD of σ"
+            onset_mean:
+              type: number
+              minimum: 0
+              description: "Posterior mean of onset (days)"
+            onset_sd:
+              type: number
+              minimum: 0
+              description: "Posterior SD of onset"
+            hdi_t95_lower:
+              type: number
+              minimum: 0
+              description: "HDI lower bound for t95 (days)"
+            hdi_t95_upper:
+              type: number
+              minimum: 0
+              description: "HDI upper bound for t95 (days)"
+            onset_mu_corr:
+              type: number
+              description: "Posterior correlation onset↔μ (identifiability diagnostic)"
+            # Quality (per-slice)
+            ess:
+              type: number
+              minimum: 0
+              description: "Effective sample size (min of p and latency)"
+            rhat:
+              type: number
+              minimum: 0
+              description: "Convergence diagnostic (max of p and latency)"
+            divergences:
+              type: integer
+              minimum: 0
+              description: "MCMC divergent transitions"
+            evidence_grade:
+              type: integer
+              minimum: 0
+              maximum: 3
+              description: "0=cold start, 1=weak, 2=mature, 3=full Bayesian"
+            provenance:
+              type: string
+              enum: [bayesian, pooled-fallback, point-estimate, skipped]
+      _model_state:
+        type: object
+        description: "Model-internal parameters for warm-start (no consumption semantics)"
+        additionalProperties:
+          type: number
       fit_history:
         type: array
-        description: "Rolling array of recent posterior snapshots"
+        description: "Rolling array of posterior snapshots — one entry per fit date"
         items:
           type: object
           properties:
             fitted_at:
               type: string
-            alpha:
-              type: number
-            beta:
-              type: number
-            hdi_lower:
-              type: number
-            hdi_upper:
-              type: number
-            rhat:
-              type: number
-            divergences:
-              type: integer
-              minimum: 0
+              description: "UK date (d-MMM-yy)"
+            fingerprint:
+              type: string
+              description: "Model hash at time of fit"
             slices:
               type: object
-              description: "Per-slice snapshots keyed by slice DSL"
+              description: "Slim per-slice snapshots keyed by slice DSL"
               additionalProperties:
                 type: object
                 properties:
@@ -335,43 +274,11 @@ properties:
                     type: number
                   beta:
                     type: number
-                additionalProperties: false
+                  mu_mean:
+                    type: number
+                  sigma_mean:
+                    type: number
           additionalProperties: false
-      slices:
-        type: object
-        description: "Per-slice posteriors keyed by slice DSL string"
-        additionalProperties:
-          type: object
-          properties:
-            alpha:
-              type: number
-              minimum: 0
-            beta:
-              type: number
-              minimum: 0
-            hdi_lower:
-              type: number
-              minimum: 0
-              maximum: 1
-            hdi_upper:
-              type: number
-              minimum: 0
-              maximum: 1
-            ess:
-              type: number
-              minimum: 0
-            rhat:
-              type: number
-              minimum: 0
-            divergences:
-              type: integer
-              minimum: 0
-          additionalProperties: false
-      _model_state:
-        type: object
-        description: "Model-internal parameters for subsequent runs (no consumption semantics)"
-        additionalProperties:
-          type: number
     additionalProperties: false
 
   force_replace_at_ms:

@@ -19,6 +19,7 @@ import {
   buildComparisonPieEChartsOption,
   buildComparisonTimeSeriesEChartsOption,
 } from './analysisECharts/cohortComparisonBuilders';
+import { buildSurpriseGaugeEChartsOption } from './analysisECharts/surpriseGaugeBuilder';
 
 // ─── Re-exports (public API) ────────────────────────────────────────────────
 
@@ -150,6 +151,10 @@ export function buildChartOption(
 
     case 'lag_fit':
       opt = buildLagFitEChartsOption(result, resolvedSettings);
+      break;
+
+    case 'surprise_gauge':
+      opt = buildSurpriseGaugeEChartsOption(result, resolvedSettings);
       break;
 
     default:

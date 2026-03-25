@@ -25,6 +25,7 @@ import {
   CircleDot,
   Cable,
   FlaskConical,
+  Gauge,
   type LucideIcon,
 } from 'lucide-react';
 
@@ -41,9 +42,9 @@ export type ScopeRule =
   | 'reachable_from'
   | 'all_graph_parameters';
 
-export type ReadMode = 'raw_snapshots' | 'virtual_snapshot' | 'cohort_maturity' | 'sweep_simple';
+export type ReadMode = 'raw_snapshots' | 'virtual_snapshot' | 'cohort_maturity' | 'sweep_simple' | 'none';
 
-export type SlicePolicy = 'explicit' | 'mece_fulfilment_allowed';
+export type SlicePolicy = 'explicit' | 'mece_fulfilment_allowed' | 'any';
 
 export type TimeBoundsSource = 'query_dsl_window' | 'analysis_arguments';
 
@@ -309,6 +310,13 @@ export const ANALYSIS_TYPES: AnalysisTypeMeta[] = [
       timeBoundsSource: 'query_dsl_window',
       perScenario: false,
     },
+  },
+  {
+    id: 'surprise_gauge',
+    name: 'Expectation Gauge',
+    shortDescription: 'How surprising is current evidence given the Bayesian posterior',
+    selectionHint: 'Use from(a).to(b) to select an edge',
+    icon: Gauge,
   },
   // Bayes fit — not a user-visible analysis type. Used internally by
   // useBayesTrigger to build snapshot subjects for the compiler's

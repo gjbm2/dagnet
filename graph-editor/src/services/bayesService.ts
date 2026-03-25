@@ -10,10 +10,8 @@
 
 import { sessionLogService } from './sessionLogService';
 
-// Environment-aware base URL — same pattern as graphComputeClient
-const API_BASE_URL = import.meta.env.DEV
-  ? (import.meta.env.VITE_PYTHON_API_URL || 'http://localhost:9000')
-  : '';
+import { PYTHON_API_BASE as API_BASE_URL } from '../lib/pythonApiBase';
+// Re-export as PYTHON_API_BASE was previously named API_BASE_URL in this file
 
 // ---------------------------------------------------------------------------
 // Types
@@ -125,6 +123,11 @@ interface CallbackTokenInput {
  * Encrypt the user's git credentials into an opaque callback token.
  * The token is AES-GCM encrypted using the webhook_secret as the key
  * (via PBKDF2 derivation). Only the Vercel webhook handler can decrypt it.
+ *
+ * In insecure contexts (http:// on non-localhost, e.g. WSL IP) where
+ * crypto.subtle is unavailable, falls back to a plaintext base64 token
+ * prefixed with "plain:" so the webhook handler can detect and handle it.
+ * This is acceptable for local dev only — production always uses HTTPS.
  */
 export async function encryptCallbackToken(
   input: CallbackTokenInput,
@@ -135,6 +138,12 @@ export async function encryptCallbackToken(
     issued_at: Date.now(),
     expires_at: Date.now() + 60 * 60 * 1000, // 60 minutes
   };
+
+  // Insecure context fallback — plaintext token for local dev
+  if (typeof crypto?.subtle?.importKey !== 'function') {
+    console.warn('[bayesService] crypto.subtle unavailable — using plaintext callback token (local dev only)');
+    return 'plain:' + btoa(JSON.stringify(payload));
+  }
 
   const key = await deriveKey(webhookSecret);
   const iv = crypto.getRandomValues(new Uint8Array(12));

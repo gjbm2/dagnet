@@ -114,21 +114,17 @@ def _fit_graph_placeholder(payload: dict, report_progress=None) -> dict:
             beta_val = (1 - bayes_mean) * pseudo_n
             stdev = math.sqrt(alpha * beta_val / ((alpha + beta_val) ** 2 * (alpha + beta_val + 1)))
 
-            edge_entry = {
-                "param_id": param_id,
-                "file_path": file_path,
-                "probability": {
-                    "alpha": round(alpha, 2),
-                    "beta": round(beta_val, 2),
-                    "mean": round(bayes_mean, 4),
-                    "stdev": round(stdev, 4),
-                    "hdi_lower": round(max(0, bayes_mean - 1.645 * stdev), 4),
-                    "hdi_upper": round(min(1, bayes_mean + 1.645 * stdev), 4),
-                    "hdi_level": 0.9,
-                    "ess": pseudo_n,
-                    "rhat": 1.002,
-                    "provenance": "bayesian",
-                },
+            # Build unified window() slice (doc 21)
+            window_slice = {
+                "alpha": round(alpha, 2),
+                "beta": round(beta_val, 2),
+                "p_hdi_lower": round(max(0, bayes_mean - 1.645 * stdev), 4),
+                "p_hdi_upper": round(min(1, bayes_mean + 1.645 * stdev), 4),
+                "ess": pseudo_n,
+                "rhat": 1.002,
+                "divergences": 0,
+                "evidence_grade": 0,
+                "provenance": "bayesian",
             }
 
             lat = pf_data.get("latency") or {}
@@ -138,18 +134,26 @@ def _fit_graph_placeholder(payload: dict, report_progress=None) -> dict:
                 bayes_mu = analytic_mu * 1.05
                 bayes_sigma = max(0.1, analytic_sigma * 0.95)
                 onset = lat.get("onset_delta_days", 0) or 0
-                edge_entry["latency"] = {
+                window_slice.update({
                     "mu_mean": round(bayes_mu, 4),
                     "mu_sd": round(abs(bayes_mu) * 0.03, 4),
                     "sigma_mean": round(bayes_sigma, 4),
                     "sigma_sd": round(bayes_sigma * 0.05, 4),
+                    "onset_mean": round(onset, 2),
+                    "onset_sd": 0.5,
                     "hdi_t95_lower": round(math.exp(bayes_mu + 1.28 * bayes_sigma) + onset, 1),
                     "hdi_t95_upper": round(math.exp(bayes_mu + 2.0 * bayes_sigma) + onset, 1),
-                    "hdi_level": 0.9,
-                    "ess": 180,
-                    "rhat": 1.005,
-                    "provenance": "bayesian",
-                }
+                })
+
+            edge_entry = {
+                "param_id": param_id,
+                "file_path": file_path,
+                "slices": {"window()": window_slice},
+                "_model_state": {},
+                "prior_tier": "uninformative",
+                "evidence_grade": 0,
+                "divergences": 0,
+            }
 
             edges.append(edge_entry)
 
@@ -393,16 +397,18 @@ def _fit_graph_compiler(payload: dict, report_progress=None) -> dict:
         param_id_to_path = _build_path_lookup(params_index)
 
         for post in inference_result.posteriors:
+            lat_post = inference_result.latency_posteriors.get(post.edge_id)
+            slices = _build_unified_slices(post, lat_post)
+
             edge_entry: dict = {
                 "param_id": post.param_id,
                 "file_path": _resolve_file_path(post.param_id, evidence, param_id_to_path),
-                "probability": post.to_webhook_dict(),
+                "slices": slices,
+                "_model_state": inference_result.model_state,
+                "prior_tier": post.prior_tier,
+                "evidence_grade": 3 if post.ess >= 400 and (not post.rhat or post.rhat < 1.05) else 0,
+                "divergences": post.divergences,
             }
-
-            # Latency posterior (Phase A: point estimate echo)
-            lat_post = inference_result.latency_posteriors.get(post.edge_id)
-            if lat_post:
-                edge_entry["latency"] = lat_post.to_webhook_dict()
 
             result_edges.append(edge_entry)
 
@@ -561,6 +567,89 @@ def _query_snapshot_subjects(
             _log(log,f"  snapshot: {edge_id[:8]}… query failed: {e} [slice_keys={slice_keys}{eh_types}]")
 
     return result
+
+
+# ---------------------------------------------------------------------------
+# Unified slice construction (doc 21)
+# ---------------------------------------------------------------------------
+
+def _build_unified_slices(
+    prob: object,
+    lat: object | None,
+) -> dict[str, dict]:
+    """Combine PosteriorSummary + LatencyPosteriorSummary into unified slices.
+
+    Produces:
+      "window()" — probability + edge-level latency
+      "cohort()" — probability + path-level latency (only if path fields exist)
+    """
+    # Window slice: probability (from p_window if available, else p_base) + edge-level latency
+    w_alpha = prob.window_alpha if prob.window_alpha is not None else prob.alpha
+    w_beta = prob.window_beta if prob.window_beta is not None else prob.beta
+    w_hdi_lo = prob.window_hdi_lower if prob.window_hdi_lower is not None else prob.hdi_lower
+    w_hdi_hi = prob.window_hdi_upper if prob.window_hdi_upper is not None else prob.hdi_upper
+
+    window: dict = {
+        "alpha": round(w_alpha, 4),
+        "beta": round(w_beta, 4),
+        "p_hdi_lower": round(w_hdi_lo, 6),
+        "p_hdi_upper": round(w_hdi_hi, 6),
+        "ess": round(prob.ess, 1),
+        "rhat": round(prob.rhat, 4) if prob.rhat else None,
+        "divergences": prob.divergences,
+        "evidence_grade": 3 if prob.ess >= 400 and (not prob.rhat or prob.rhat < 1.05) else 0,
+        "provenance": prob.provenance,
+    }
+
+    if lat:
+        window["mu_mean"] = round(lat.mu_mean, 4)
+        window["mu_sd"] = round(lat.mu_sd, 4)
+        window["sigma_mean"] = round(lat.sigma_mean, 4)
+        window["sigma_sd"] = round(lat.sigma_sd, 4)
+        window["onset_mean"] = round(lat.onset_delta_days, 2)
+        if lat.onset_sd is not None:
+            window["onset_sd"] = round(lat.onset_sd, 2)
+        window["hdi_t95_lower"] = round(lat.hdi_t95_lower, 1)
+        window["hdi_t95_upper"] = round(lat.hdi_t95_upper, 1)
+        if lat.onset_mu_corr is not None:
+            window["onset_mu_corr"] = round(lat.onset_mu_corr, 3)
+        # Use worst-of for combined quality
+        window["ess"] = round(min(prob.ess, lat.ess), 1)
+        window["rhat"] = round(max(prob.rhat or 0, lat.rhat or 0), 4) or None
+
+    slices = {"window()": window}
+
+    # Cohort slice: probability (from p_cohort if available, else p_base) + path-level latency
+    if lat and lat.path_mu_mean is not None:
+        c_alpha = prob.cohort_alpha if prob.cohort_alpha is not None else prob.alpha
+        c_beta = prob.cohort_beta if prob.cohort_beta is not None else prob.beta
+        c_hdi_lo = prob.cohort_hdi_lower if prob.cohort_hdi_lower is not None else prob.hdi_lower
+        c_hdi_hi = prob.cohort_hdi_upper if prob.cohort_hdi_upper is not None else prob.hdi_upper
+
+        cohort: dict = {
+            "alpha": round(c_alpha, 4),
+            "beta": round(c_beta, 4),
+            "p_hdi_lower": round(c_hdi_lo, 6),
+            "p_hdi_upper": round(c_hdi_hi, 6),
+            "ess": round(prob.ess, 1),
+            "rhat": round(prob.rhat, 4) if prob.rhat else None,
+            "divergences": prob.divergences,
+            "evidence_grade": 3 if prob.ess >= 400 and (not prob.rhat or prob.rhat < 1.05) else 0,
+            "provenance": lat.path_provenance or lat.provenance,
+            "mu_mean": round(lat.path_mu_mean, 4),
+            "mu_sd": round(lat.path_mu_sd, 4) if lat.path_mu_sd is not None else None,
+            "sigma_mean": round(lat.path_sigma_mean, 4) if lat.path_sigma_mean is not None else None,
+            "sigma_sd": round(lat.path_sigma_sd, 4) if lat.path_sigma_sd is not None else None,
+            "hdi_t95_lower": round(lat.hdi_t95_lower, 1),  # TODO: path-level t95 HDI
+            "hdi_t95_upper": round(lat.hdi_t95_upper, 1),
+        }
+        if lat.path_onset_delta_days is not None:
+            cohort["onset_mean"] = round(lat.path_onset_delta_days, 2)
+        if lat.path_onset_sd is not None:
+            cohort["onset_sd"] = round(lat.path_onset_sd, 2)
+        slices["cohort()"] = cohort
+
+    return slices
 
 
 # ---------------------------------------------------------------------------

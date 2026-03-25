@@ -13,10 +13,7 @@
  * - Set VITE_USE_MOCK_COMPUTE=true for frontend-only development
  */
 
-// Environment-aware base URL
-const API_BASE_URL = import.meta.env.DEV 
-  ? (import.meta.env.VITE_PYTHON_API_URL || 'http://localhost:9000')  // Local Python dev server
-  : '';                                                                 // Vercel serverless (same origin)
+import { PYTHON_API_BASE as API_BASE_URL } from './pythonApiBase';
 
 const USE_MOCK = import.meta.env.VITE_USE_MOCK_COMPUTE === 'true';
 

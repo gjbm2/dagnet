@@ -87,16 +87,9 @@ def bind_evidence(
         # --- Prior ---
         ev.prob_prior = _resolve_prior(pf_data, topology.fingerprint)
 
-        # --- Latency prior ---
+        # --- Latency prior (doc 21: warm-start from previous posterior) ---
         if et.has_latency:
-            onset = et.onset_delta_days
-            ev.latency_prior = LatencyPrior(
-                onset_delta_days=onset,
-                mu=et.mu_prior,
-                sigma=et.sigma_prior,
-                onset_uncertainty=max(1.0, onset * 0.3),
-                source="topology",
-            )
+            ev.latency_prior = _resolve_latency_prior(et, pf_data)
 
         # --- Parse values[] entries ---
         values = pf_data.get("values") or []
@@ -250,16 +243,9 @@ def bind_snapshot_evidence(
         else:
             ev.prob_prior = ProbabilityPrior(alpha=1.0, beta=1.0, source="uninformative")
 
-        # --- Latency prior ---
+        # --- Latency prior (doc 21: warm-start from previous posterior) ---
         if et.has_latency:
-            onset = et.onset_delta_days
-            ev.latency_prior = LatencyPrior(
-                onset_delta_days=onset,
-                mu=et.mu_prior,
-                sigma=et.sigma_prior,
-                onset_uncertainty=max(1.0, onset * 0.3),
-                source="topology",
-            )
+            ev.latency_prior = _resolve_latency_prior(et, pf_data)
 
         # --- Evidence: snapshot rows if available, else param file ---
         rows = snapshot_rows.get(edge_id, [])
@@ -697,6 +683,43 @@ def _retrieval_age(anchor_day: str, retrieved_at: str, today: datetime) -> float
 # Prior resolution
 # ---------------------------------------------------------------------------
 
+def _resolve_latency_prior(et, pf_data: dict | None) -> LatencyPrior:
+    """Resolve latency prior for an edge (doc 21: warm-start from posterior).
+
+    Priority:
+      1. Previous Bayesian posterior (posterior.slices["window()"].mu_mean/sigma_mean)
+      2. Topology-derived from graph edge (mu_prior/sigma_prior from stats pass)
+    """
+    onset = et.onset_delta_days
+    lat_mu = et.mu_prior
+    lat_sigma = et.sigma_prior
+    lat_source = "topology"
+
+    if isinstance(pf_data, dict):
+        posterior = pf_data.get("posterior")
+        if isinstance(posterior, dict):
+            slices = posterior.get("slices")
+            if isinstance(slices, dict):
+                ws = slices.get("window()", {})
+                prev_mu = ws.get("mu_mean")
+                prev_sigma = ws.get("sigma_mean")
+                if prev_mu is not None and prev_sigma is not None:
+                    lat_mu = float(prev_mu)
+                    lat_sigma = float(prev_sigma)
+                    lat_source = "warm_start"
+                    prev_onset = ws.get("onset_mean")
+                    if prev_onset is not None:
+                        onset = float(prev_onset)
+
+    return LatencyPrior(
+        onset_delta_days=onset,
+        mu=lat_mu,
+        sigma=lat_sigma,
+        onset_uncertainty=max(1.0, onset * 0.3),
+        source=lat_source,
+    )
+
+
 def _resolve_prior(pf_data: dict, topo_fingerprint: str) -> ProbabilityPrior:
     """Resolve the probability prior for an edge.
 
@@ -705,10 +728,32 @@ def _resolve_prior(pf_data: dict, topo_fingerprint: str) -> ProbabilityPrior:
       2. Moment-matched from current point estimates
       3. Uninformative Beta(1, 1)
     """
+    # Doc 21: read warm-start alpha/beta from posterior.slices["window()"]
+    # (unified schema) or fall back to _model_state p_base, then legacy
+    # top-level posterior.alpha/beta for backwards compatibility.
     posterior = pf_data.get("posterior")
-    if isinstance(posterior, dict) and posterior.get("alpha") and posterior.get("beta"):
-        alpha = float(posterior["alpha"])
-        beta = float(posterior["beta"])
+    alpha_raw = None
+    beta_raw = None
+    if isinstance(posterior, dict):
+        # Unified schema (doc 21): slices["window()"].alpha/beta
+        slices = posterior.get("slices")
+        if isinstance(slices, dict):
+            window_slice = slices.get("window()", {})
+            if window_slice.get("alpha") and window_slice.get("beta"):
+                alpha_raw = window_slice["alpha"]
+                beta_raw = window_slice["beta"]
+        # Fallback: _model_state.p_base_alpha/beta (hierarchy anchor)
+        if alpha_raw is None:
+            ms = posterior.get("_model_state") or {}
+            # _model_state keys are edge-keyed; we don't have edge_id here,
+            # so we skip this fallback for now. Phase C can add it.
+        # Legacy fallback: top-level alpha/beta (pre-doc-21 schema)
+        if alpha_raw is None and posterior.get("alpha") and posterior.get("beta"):
+            alpha_raw = posterior["alpha"]
+            beta_raw = posterior["beta"]
+    if alpha_raw is not None and beta_raw is not None:
+        alpha = float(alpha_raw)
+        beta = float(beta_raw)
         # ESS cap: if prior is too informative, scale down
         ess = alpha + beta
         capped = False

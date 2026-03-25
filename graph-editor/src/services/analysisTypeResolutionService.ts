@@ -47,6 +47,7 @@ const CHART_KINDS_BY_ANALYSIS_TYPE: Record<string, string[]> = {
   daily_conversions:        ['daily_conversions', 'table'],
   lag_histogram:            ['histogram', 'table'],
   lag_fit:                  ['lag_fit', 'table'],
+  surprise_gauge:           ['surprise_gauge', 'table'],
 };
 
 /** Get known chart kinds for an analysis type, including FE augmentation. */
@@ -100,6 +101,32 @@ function injectLocalAnalysisTypes(
           description: 'Curated summary of a single edge',
           is_primary: false,
           chart_kinds: getChartKindsForAnalysisType('edge_info'),
+        });
+      }
+    }
+  }
+
+  // surprise_gauge: from(a).to(b) edge with any model vars (probability mean + stdev)
+  if (parsed.from && parsed.to && !analyses.some(a => a.id === 'surprise_gauge') && graph?.edges) {
+    const fromRef = parsed.from;
+    const toRef = parsed.to;
+    const edge = graph.edges.find((e: any) => {
+      const fromNode = graph.nodes?.find((n: any) => n.uuid === e.from || n.id === e.from);
+      const toNode = graph.nodes?.find((n: any) => n.uuid === e.to || n.id === e.to);
+      return (fromNode && (fromNode.id === fromRef || fromNode.uuid === fromRef)) &&
+             (toNode && (toNode.id === toRef || toNode.uuid === toRef));
+    });
+    if (edge) {
+      const modelVars = edge?.p?.model_vars || [];
+      const hasAnyModelVars = modelVars.some((mv: any) =>
+        mv?.probability?.mean != null && mv?.probability?.stdev != null && mv.probability.stdev > 0);
+      if (hasAnyModelVars) {
+        analyses.push({
+          id: 'surprise_gauge',
+          name: 'Expectation Gauge',
+          description: 'How surprising is current evidence given model expectations',
+          is_primary: false,
+          chart_kinds: getChartKindsForAnalysisType('surprise_gauge'),
         });
       }
     }

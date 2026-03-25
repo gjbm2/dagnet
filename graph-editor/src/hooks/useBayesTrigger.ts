@@ -23,13 +23,15 @@ import type { BayesJobRecord } from '../services/bayesService';
 export type BayesTriggerStatus = 'idle' | 'submitting' | 'running' | 'complete' | 'failed';
 export type BayesComputeMode = 'local' | 'modal';
 
-/** URLs for local dev mode (Python server on :9000, webhook on :5173). */
-const LOCAL_SUBMIT_URL = 'http://localhost:9000/api/bayes/submit';
-const LOCAL_STATUS_URL = 'http://localhost:9000/api/bayes/status';
-const LOCAL_CANCEL_URL = 'http://localhost:9000/api/bayes/cancel';
-const LOCAL_WEBHOOK_URL = 'http://localhost:5173/api/bayes-webhook';
-const TUNNEL_START_URL = 'http://localhost:9000/api/bayes/tunnel/start';
-const TUNNEL_STATUS_URL = 'http://localhost:9000/api/bayes/tunnel/status';
+import { PYTHON_API_BASE } from '../lib/pythonApiBase';
+
+/** URLs for local dev mode (Python server, webhook on Vite dev server). */
+const LOCAL_SUBMIT_URL = `${PYTHON_API_BASE}/api/bayes/submit`;
+const LOCAL_STATUS_URL = `${PYTHON_API_BASE}/api/bayes/status`;
+const LOCAL_CANCEL_URL = `${PYTHON_API_BASE}/api/bayes/cancel`;
+const LOCAL_WEBHOOK_URL = `${window.location.origin}/api/bayes-webhook`;
+const TUNNEL_START_URL = `${PYTHON_API_BASE}/api/bayes/tunnel/start`;
+const TUNNEL_STATUS_URL = `${PYTHON_API_BASE}/api/bayes/tunnel/status`;
 
 interface BayesTriggerState {
   status: BayesTriggerStatus;

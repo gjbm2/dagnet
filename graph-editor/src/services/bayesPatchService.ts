@@ -124,49 +124,34 @@ export async function fetchAndApplyPatch(args: {
 
 // --- Patch file types ---
 
+/** Unified patch edge shape (doc 21) — per-slice entries carry both p and latency. */
 export interface BayesPatchEdge {
   param_id: string;
   file_path: string;
-  probability?: {
+  slices?: Record<string, {
     alpha: number;
     beta: number;
-    mean: number;
-    stdev: number;
-    hdi_lower: number;
-    hdi_upper: number;
-    hdi_level: number;
-    ess: number;
-    rhat: number | null;
-    provenance: string;
-  };
-  latency?: {
-    mu_mean: number;
-    mu_sd: number;
-    sigma_mean: number;
-    sigma_sd: number;
-    hdi_t95_lower: number;
-    hdi_t95_upper: number;
-    hdi_level: number;
-    ess: number;
-    rhat: number | null;
-    provenance: string;
-    // Edge-level onset posterior (Phase D.O) — present when onset is latent
+    p_hdi_lower: number;
+    p_hdi_upper: number;
+    mu_mean?: number;
+    mu_sd?: number;
+    sigma_mean?: number;
+    sigma_sd?: number;
     onset_mean?: number;
     onset_sd?: number;
-    onset_hdi_lower?: number;
-    onset_hdi_upper?: number;
+    hdi_t95_lower?: number;
+    hdi_t95_upper?: number;
     onset_mu_corr?: number;
-    // Path-level (cohort) latency — present when cohort latency is fitted
-    path_onset_delta_days?: number;
-    path_onset_sd?: number;
-    path_onset_hdi_lower?: number;
-    path_onset_hdi_upper?: number;
-    path_mu_mean?: number;
-    path_mu_sd?: number;
-    path_sigma_mean?: number;
-    path_sigma_sd?: number;
-    path_provenance?: string;
-  };
+    ess: number;
+    rhat: number | null;
+    divergences: number;
+    evidence_grade: number;
+    provenance: string;
+  }>;
+  _model_state?: Record<string, number>;
+  prior_tier?: string;
+  evidence_grade?: number;
+  divergences?: number;
 }
 
 export interface BayesPatchFile {
@@ -226,7 +211,7 @@ export async function applyPatch(patch: BayesPatchFile): Promise<number> {
     edgesUpdated++;
 
     sessionLogService.addChild(logOpId, 'info', 'PATCH_EDGE_APPLIED',
-      `Updated ${edge.param_id}: posterior=${!!edge.probability} latency=${!!edge.latency}`);
+      `Updated ${edge.param_id}: slices=${Object.keys(edge.slices || {}).join(',')}`);
   }
 
   // Upsert _bayes and edge posteriors on the graph
@@ -248,119 +233,115 @@ export async function applyPatch(patch: BayesPatchFile): Promise<number> {
     // Also upsert posterior summaries directly onto graph edges.
     // This mirrors what the UpdateManager cascade does (file → graph),
     // but done atomically here so the graph in IDB has both _bayes and
-    // per-edge posteriors in one update. Strips fit_history/slices/_model_state
-    // (same as the cascade's transform in mappingConfigurations.ts).
+    // per-edge posteriors in one update. Projects from unified slices
+    // (doc 21) onto the graph-edge shapes that UI components expect.
     for (const patchEdge of patch.edges) {
       const graphEdge = graphDoc.edges?.find(
         (e: any) => e.p?.id === patchEdge.param_id
       );
       if (!graphEdge?.p) continue;
 
-      if (patchEdge.probability) {
-        const prob = patchEdge.probability;
-        // NOTE (doc 15 §7, Option A): Do NOT overwrite p.mean/p.stdev from
-        // the Bayesian posterior. Those stay as analytic pipeline output.
-        // The Bayesian mean lives in the model_vars entry and is promoted
-        // to p.mean only when the resolution function selects it.
+      const slices = patchEdge.slices || {};
+      const windowSlice = slices['window()'];
+      const cohortSlice = slices['cohort()'];
+
+      // Project probability posterior summary onto graph edge (ProbabilityPosterior shape)
+      if (windowSlice) {
         graphEdge.p.posterior = {
           distribution: 'beta',
-          alpha: prob.alpha,
-          beta: prob.beta,
-          hdi_lower: prob.hdi_lower,
-          hdi_upper: prob.hdi_upper,
-          hdi_level: prob.hdi_level,
-          ess: prob.ess,
-          rhat: prob.rhat,
-          evidence_grade: prob.ess >= 400 && (prob.rhat === null || prob.rhat < 1.05) ? 3 : 0,
+          alpha: windowSlice.alpha,
+          beta: windowSlice.beta,
+          hdi_lower: windowSlice.p_hdi_lower,
+          hdi_upper: windowSlice.p_hdi_upper,
+          hdi_level: 0.9,
+          ess: windowSlice.ess,
+          rhat: windowSlice.rhat,
+          evidence_grade: windowSlice.evidence_grade,
           fitted_at: patch.fitted_at,
           fingerprint: patch.fingerprint,
-          provenance: prob.provenance,
+          provenance: windowSlice.provenance,
+          divergences: windowSlice.divergences,
+          prior_tier: patchEdge.prior_tier || 'uninformative',
         };
       }
 
-      if (patchEdge.latency && graphEdge.p.latency) {
-        const lat = patchEdge.latency;
+      // Project latency posterior summary onto graph edge (LatencyPosterior shape)
+      if (windowSlice?.mu_mean != null && graphEdge.p.latency) {
         graphEdge.p.latency.posterior = {
           distribution: 'lognormal',
-          onset_delta_days: graphEdge.p.latency.onset_delta_days ?? 0,
-          mu_mean: lat.mu_mean,
-          mu_sd: lat.mu_sd,
-          sigma_mean: lat.sigma_mean,
-          sigma_sd: lat.sigma_sd,
-          hdi_t95_lower: lat.hdi_t95_lower,
-          hdi_t95_upper: lat.hdi_t95_upper,
-          hdi_level: lat.hdi_level,
-          ess: lat.ess,
-          rhat: lat.rhat,
+          onset_delta_days: windowSlice.onset_mean ?? graphEdge.p.latency.onset_delta_days ?? 0,
+          mu_mean: windowSlice.mu_mean,
+          mu_sd: windowSlice.mu_sd,
+          sigma_mean: windowSlice.sigma_mean,
+          sigma_sd: windowSlice.sigma_sd,
+          hdi_t95_lower: windowSlice.hdi_t95_lower,
+          hdi_t95_upper: windowSlice.hdi_t95_upper,
+          hdi_level: 0.9,
+          ess: windowSlice.ess,
+          rhat: windowSlice.rhat,
           fitted_at: patch.fitted_at,
           fingerprint: patch.fingerprint,
-          provenance: lat.provenance,
-          // Edge-level onset posterior (Phase D.O)
-          ...(lat.onset_mean != null ? {
-            onset_mean: lat.onset_mean,
-            onset_sd: lat.onset_sd,
-            onset_hdi_lower: lat.onset_hdi_lower,
-            onset_hdi_upper: lat.onset_hdi_upper,
-            ...(lat.onset_mu_corr != null ? { onset_mu_corr: lat.onset_mu_corr } : {}),
+          provenance: windowSlice.provenance,
+          ...(windowSlice.onset_mean != null ? {
+            onset_mean: windowSlice.onset_mean,
+            onset_sd: windowSlice.onset_sd,
           } : {}),
-          // Path-level (cohort) latency
-          ...(lat.path_mu_mean != null ? {
-            path_onset_delta_days: lat.path_onset_delta_days,
-            path_onset_sd: lat.path_onset_sd,
-            path_onset_hdi_lower: lat.path_onset_hdi_lower,
-            path_onset_hdi_upper: lat.path_onset_hdi_upper,
-            path_mu_mean: lat.path_mu_mean,
-            path_mu_sd: lat.path_mu_sd,
-            path_sigma_mean: lat.path_sigma_mean,
-            path_sigma_sd: lat.path_sigma_sd,
-            path_provenance: lat.path_provenance,
+          ...(windowSlice.onset_mu_corr != null ? { onset_mu_corr: windowSlice.onset_mu_corr } : {}),
+          // Path-level from cohort slice
+          ...(cohortSlice?.mu_mean != null ? {
+            path_onset_delta_days: cohortSlice.onset_mean,
+            path_onset_sd: cohortSlice.onset_sd,
+            path_mu_mean: cohortSlice.mu_mean,
+            path_mu_sd: cohortSlice.mu_sd,
+            path_sigma_mean: cohortSlice.sigma_mean,
+            path_sigma_sd: cohortSlice.sigma_sd,
+            path_provenance: cohortSlice.provenance,
           } : {}),
         };
       }
 
       // ── Upsert Bayesian model_vars entry (doc 15 §5.2) ──────────────
-      if (patchEdge.probability) {
-        const prob = patchEdge.probability;
-        const lat = patchEdge.latency;
-        const divergences = 'divergences' in prob ? (prob as any).divergences ?? 0 : 0;
-        const gated = meetsQualityGate(prob, divergences, lat);
+      if (windowSlice) {
+        const divergences = windowSlice.divergences ?? 0;
+        const gated = meetsQualityGate(
+          { ess: windowSlice.ess, rhat: windowSlice.rhat, provenance: windowSlice.provenance },
+          divergences,
+          windowSlice.mu_mean != null ? { ess: windowSlice.ess, rhat: windowSlice.rhat } : undefined,
+        );
 
         const bayesEntry: ModelVarsEntry = {
           source: 'bayesian',
           source_at: patch.fitted_at,
           probability: {
-            mean: prob.alpha / (prob.alpha + prob.beta),
+            mean: windowSlice.alpha / (windowSlice.alpha + windowSlice.beta),
             stdev: Math.sqrt(
-              (prob.alpha * prob.beta) /
-              ((prob.alpha + prob.beta) ** 2 * (prob.alpha + prob.beta + 1))
+              (windowSlice.alpha * windowSlice.beta) /
+              ((windowSlice.alpha + windowSlice.beta) ** 2 * (windowSlice.alpha + windowSlice.beta + 1))
             ),
           },
-          ...(lat ? {
+          ...(windowSlice.mu_mean != null ? {
             latency: {
-              mu: lat.mu_mean,
-              sigma: lat.sigma_mean,
-              t95: Math.exp(lat.mu_mean + 1.645 * lat.sigma_mean) + (lat.onset_mean ?? graphEdge.p.latency?.onset_delta_days ?? 0),
-              onset_delta_days: lat.onset_mean ?? graphEdge.p.latency?.onset_delta_days ?? 0,
-              ...(lat.path_mu_mean != null ? {
-                path_mu: lat.path_mu_mean,
-                path_sigma: lat.path_sigma_mean,
-                path_t95: Math.exp(lat.path_mu_mean + 1.645 * (lat.path_sigma_mean ?? 0)) + (lat.path_onset_delta_days ?? 0),
+              mu: windowSlice.mu_mean,
+              sigma: windowSlice.sigma_mean!,
+              t95: Math.exp(windowSlice.mu_mean + 1.645 * windowSlice.sigma_mean!) + (windowSlice.onset_mean ?? graphEdge.p.latency?.onset_delta_days ?? 0),
+              onset_delta_days: windowSlice.onset_mean ?? graphEdge.p.latency?.onset_delta_days ?? 0,
+              ...(cohortSlice?.mu_mean != null ? {
+                path_mu: cohortSlice.mu_mean,
+                path_sigma: cohortSlice.sigma_mean,
+                path_t95: Math.exp(cohortSlice.mu_mean + 1.645 * (cohortSlice.sigma_mean ?? 0)) + (cohortSlice.onset_mean ?? 0),
               } : {}),
             },
           } : {}),
           quality: {
-            // Use worst rhat/ess across probability and latency posteriors
-            rhat: Math.max(prob.rhat ?? 0, lat?.rhat ?? 0),
-            ess: lat?.ess != null ? Math.min(prob.ess, lat.ess) : prob.ess,
+            rhat: windowSlice.rhat ?? 0,
+            ess: windowSlice.ess,
             divergences,
-            evidence_grade: prob.ess >= 400 && (prob.rhat === null || prob.rhat < 1.05) ? 3 : 0,
+            evidence_grade: windowSlice.evidence_grade,
             gate_passed: gated,
           },
         };
 
         upsertModelVars(graphEdge.p, bayesEntry);
-
-        // Run resolution to update promoted scalars (doc 15 §8)
         applyPromotion(graphEdge.p, graphDoc.model_source_preference);
       }
     }
@@ -376,7 +357,7 @@ export async function applyPatch(patch: BayesPatchFile): Promise<number> {
   return edgesUpdated;
 }
 
-// --- Posterior merge logic (moved from webhook handler) ---
+// --- Posterior merge logic (doc 21: unified posterior schema) ---
 
 function mergePosteriorsIntoParam(
   paramDoc: any,
@@ -384,122 +365,56 @@ function mergePosteriorsIntoParam(
   fittedAt: string,
   fingerprint: string,
 ): void {
-  if (edge.probability) {
-    const prob = edge.probability;
+  const slices = edge.slices;
+  if (!slices || Object.keys(slices).length === 0) return;
 
-    // NOTE (doc 15 §7, Option A): Do NOT overwrite values[0].mean/stdev
-    // from the Bayesian posterior. values[0].mean stays as the analytic
-    // pipeline output (k/n from evidence or blend). The Bayesian mean
-    // lives in posterior.alpha/beta and in model_vars.
+  // NOTE (doc 15 §7, Option A): Do NOT overwrite values[0].mean/stdev
+  // from the Bayesian posterior. The Bayesian mean lives in posterior.slices
+  // and in model_vars.
 
-    // Append to fit_history BEFORE overwriting posterior
-    const existingPosterior = paramDoc.posterior;
-    if (existingPosterior?.alpha != null && existingPosterior?.beta != null) {
-      if (!Array.isArray(paramDoc.posterior.fit_history)) {
-        paramDoc.posterior.fit_history = [];
-      }
-      paramDoc.posterior.fit_history.push({
-        fitted_at: existingPosterior.fitted_at ?? fittedAt,
-        alpha: existingPosterior.alpha,
-        beta: existingPosterior.beta,
-        hdi_lower: existingPosterior.hdi_lower ?? 0,
-        hdi_upper: existingPosterior.hdi_upper ?? 1,
-        rhat: existingPosterior.rhat ?? 0,
-        divergences: existingPosterior.divergences ?? 0,
-      });
-      if (paramDoc.posterior.fit_history.length > FIT_HISTORY_MAX_ENTRIES) {
-        paramDoc.posterior.fit_history = paramDoc.posterior.fit_history.slice(
-          -FIT_HISTORY_MAX_ENTRIES,
-        );
-      }
+  // Append existing slices to fit_history BEFORE overwriting
+  const existingPosterior = paramDoc.posterior;
+  const fitHistory: any[] = existingPosterior?.fit_history ?? [];
+  if (existingPosterior?.slices && Object.keys(existingPosterior.slices).length > 0) {
+    const slimSlices: Record<string, any> = {};
+    for (const [key, s] of Object.entries<any>(existingPosterior.slices)) {
+      slimSlices[key] = {
+        alpha: s.alpha,
+        beta: s.beta,
+        ...(s.mu_mean != null ? { mu_mean: s.mu_mean } : {}),
+        ...(s.sigma_mean != null ? { sigma_mean: s.sigma_mean } : {}),
+      };
     }
-
-    const fitHistory = paramDoc.posterior?.fit_history ?? [];
-
-    paramDoc.posterior = {
-      distribution: 'beta',
-      alpha: prob.alpha,
-      beta: prob.beta,
-      hdi_lower: prob.hdi_lower,
-      hdi_upper: prob.hdi_upper,
-      hdi_level: prob.hdi_level,
-      ess: prob.ess,
-      rhat: prob.rhat,
-      evidence_grade: prob.ess >= 400 && (prob.rhat === null || prob.rhat < 1.05) ? 3 : 0,
-      fitted_at: fittedAt,
-      fingerprint,
-      provenance: prob.provenance,
-      ...(fitHistory.length > 0 ? { fit_history: fitHistory } : {}),
-    };
+    fitHistory.push({
+      fitted_at: existingPosterior.fitted_at ?? fittedAt,
+      fingerprint: existingPosterior.fingerprint ?? fingerprint,
+      slices: slimSlices,
+    });
+    if (fitHistory.length > FIT_HISTORY_MAX_ENTRIES) {
+      fitHistory.splice(0, fitHistory.length - FIT_HISTORY_MAX_ENTRIES);
+    }
   }
 
-  if (edge.latency) {
-    const lat = edge.latency;
+  // Write unified posterior (doc 21 §3.3)
+  paramDoc.posterior = {
+    fitted_at: fittedAt,
+    fingerprint,
+    hdi_level: 0.9,
+    prior_tier: edge.prior_tier || 'uninformative',
+    slices,
+    ...(edge._model_state ? { _model_state: edge._model_state } : {}),
+    ...(fitHistory.length > 0 ? { fit_history: fitHistory } : {}),
+  };
 
+  // Update latency.model_trained_at if latency data present
+  const windowSlice = slices['window()'];
+  if (windowSlice?.mu_mean != null) {
     if (!paramDoc.latency) paramDoc.latency = {};
-
-    const existingLatPosterior = paramDoc.latency.posterior;
-    if (existingLatPosterior?.mu_mean != null) {
-      if (!Array.isArray(paramDoc.latency.posterior.fit_history)) {
-        paramDoc.latency.posterior.fit_history = [];
-      }
-      paramDoc.latency.posterior.fit_history.push({
-        fitted_at: existingLatPosterior.fitted_at ?? fittedAt,
-        mu_mean: existingLatPosterior.mu_mean,
-        sigma_mean: existingLatPosterior.sigma_mean,
-        onset_delta_days: existingLatPosterior.onset_delta_days ?? 0,
-        rhat: existingLatPosterior.rhat ?? 0,
-        divergences: existingLatPosterior.divergences ?? 0,
-      });
-      if (paramDoc.latency.posterior.fit_history.length > FIT_HISTORY_MAX_ENTRIES) {
-        paramDoc.latency.posterior.fit_history = paramDoc.latency.posterior.fit_history.slice(
-          -FIT_HISTORY_MAX_ENTRIES,
-        );
-      }
-    }
-
-    const latFitHistory = paramDoc.latency.posterior?.fit_history ?? [];
-
-    // NOTE: Do NOT overwrite latency.mu/latency.sigma — those are analytic
-    // LAG pass values. Bayesian values live in latency.posterior.
     paramDoc.latency.model_trained_at = fittedAt;
+  }
 
-    paramDoc.latency.posterior = {
-      distribution: 'lognormal',
-      onset_delta_days: paramDoc.latency.onset_delta_days ?? 0,
-      mu_mean: lat.mu_mean,
-      mu_sd: lat.mu_sd,
-      sigma_mean: lat.sigma_mean,
-      sigma_sd: lat.sigma_sd,
-      hdi_t95_lower: lat.hdi_t95_lower,
-      hdi_t95_upper: lat.hdi_t95_upper,
-      hdi_level: lat.hdi_level,
-      ess: lat.ess,
-      rhat: lat.rhat,
-      fitted_at: fittedAt,
-      fingerprint,
-      provenance: lat.provenance,
-      ...(latFitHistory.length > 0 ? { fit_history: latFitHistory } : {}),
-      // Edge-level onset posterior (Phase D.O)
-      ...(lat.onset_mean != null ? {
-        onset_mean: lat.onset_mean,
-        onset_sd: lat.onset_sd,
-        onset_hdi_lower: lat.onset_hdi_lower,
-        onset_hdi_upper: lat.onset_hdi_upper,
-        ...(lat.onset_mu_corr != null ? { onset_mu_corr: lat.onset_mu_corr } : {}),
-      } : {}),
-      // Path-level (cohort) latency — present when cohort latency is fitted
-      ...(lat.path_mu_mean != null ? {
-        path_onset_delta_days: lat.path_onset_delta_days,
-        path_onset_sd: lat.path_onset_sd,
-        path_onset_hdi_lower: lat.path_onset_hdi_lower,
-        path_onset_hdi_upper: lat.path_onset_hdi_upper,
-        path_mu_mean: lat.path_mu_mean,
-        path_mu_sd: lat.path_mu_sd,
-        path_sigma_mean: lat.path_sigma_mean,
-        path_sigma_sd: lat.path_sigma_sd,
-        path_provenance: lat.path_provenance,
-      } : {}),
-    };
+  // Remove legacy latency.posterior if it exists (doc 21: no longer used)
+  if (paramDoc.latency?.posterior) {
+    delete paramDoc.latency.posterior;
   }
 }

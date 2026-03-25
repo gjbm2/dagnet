@@ -38,16 +38,21 @@ export async function computeShortCoreHash(canonicalSignature: string): Promise<
   const encoder = new TextEncoder();
   const data = encoder.encode(sig);
 
-  // SHA-256 — works in both browser (crypto.subtle) and Node 18+ (globalThis.crypto)
+  // SHA-256 — portable: uses crypto.subtle in secure contexts,
+  // pure-JS fallback in insecure contexts (e.g. http:// on WSL IP),
+  // Node crypto in test/SSR environments.
   let hashBuffer: ArrayBuffer;
   if (typeof globalThis.crypto?.subtle?.digest === 'function') {
     hashBuffer = await globalThis.crypto.subtle.digest('SHA-256', data);
-  } else {
-    // Fallback for environments where crypto.subtle is unavailable (e.g. older Node / SSR)
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
+  } else if (typeof process !== 'undefined' && typeof process.versions?.node === 'string') {
+    // Node environment (tests, SSR)
     const nodeCrypto = await import('crypto');
     const hash = nodeCrypto.createHash('sha256').update(Buffer.from(data)).digest();
     hashBuffer = hash.buffer.slice(hash.byteOffset, hash.byteOffset + hash.byteLength);
+  } else {
+    // Browser insecure context — use pure-JS SHA-256
+    const { sha256 } = await import('../lib/sha256');
+    hashBuffer = await sha256(data);
   }
 
   // Take first 16 bytes

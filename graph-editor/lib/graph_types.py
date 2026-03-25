@@ -81,7 +81,8 @@ class LatencyConfig(BaseModel):
     path_sigma: Optional[float] = Field(None, ge=0, description="Path-level A→Y log-normal sigma (Fenton–Wilkinson, internal)")
     path_onset_delta_days: Optional[float] = Field(None, ge=0, description="Path-level Σ onset_delta_days along path (DP sum, internal)")
     model_trained_at: Optional[str] = Field(None, description="UK date (d-MMM-yy) when the model was last fitted (staleness detection)")
-    posterior: Optional['LatencyPosterior'] = Field(None, description="Bayesian posterior for latency parameters (written by fitting engine)")
+    # NOTE: Bayesian latency posterior no longer lives here (doc 21).
+    # It is in the file-level Posterior.slices. No posterior field on LatencyConfig.
 
 
 # ── Model variable provenance (doc 15) ──────────────────────────────────────
@@ -125,116 +126,77 @@ class ModelVarsEntry(BaseModel):
     quality: Optional[ModelVarsQuality] = Field(None, description="Bayesian-specific quality metadata (present only when source == 'bayesian')")
 
 
-# ── Bayesian posterior types ────────────────────────────────────────────────
+# ── Bayesian posterior types (doc 21: unified posterior schema) ─────────────
+#
+# FILE-LEVEL types (Posterior, SlicePosteriorEntry, FitHistoryEntry):
+#   Shape of `posterior` on parameter files. Per-slice entries carry both
+#   probability and latency fields. Written by compiler, read by warm-start.
+#
+# The old ProbabilityPosterior / LatencyPosterior graph-edge shapes are NOT
+# Pydantic models — they exist only in TS types. The cascade projects from
+# file-level Posterior into those shapes for UI consumption.
 
 class SlicePosteriorEntry(BaseModel):
-    """Per-slice posterior entry (keyed by slice DSL string in slices map)."""
+    """Per-slice posterior entry — unified probability + latency (doc 21 §3.2).
+    Keyed by slice DSL string (e.g. "window()", "cohort()").
+    """
+    # Probability
     alpha: float
     beta_param: float = Field(..., alias='beta')
-    hdi_lower: float
-    hdi_upper: float
+    p_hdi_lower: float
+    p_hdi_upper: float
+    # Latency (present when edge has latency fitted for this slice)
+    mu_mean: Optional[float] = None
+    mu_sd: Optional[float] = None
+    sigma_mean: Optional[float] = None
+    sigma_sd: Optional[float] = None
+    onset_mean: Optional[float] = None
+    onset_sd: Optional[float] = None
+    hdi_t95_lower: Optional[float] = None
+    hdi_t95_upper: Optional[float] = None
+    onset_mu_corr: Optional[float] = None
+    # Quality (per-slice)
     ess: float
     rhat: float
     divergences: int = Field(0, ge=0)
+    evidence_grade: int = Field(0, ge=0, le=3)
+    provenance: Literal['bayesian', 'pooled-fallback', 'point-estimate', 'skipped'] = 'bayesian'
 
     model_config = ConfigDict(populate_by_name=True)
 
 
-class SliceFitHistoryEntry(BaseModel):
-    """Slim per-slice snapshot within a fit_history entry."""
+class SlimSlice(BaseModel):
+    """Slim per-slice snapshot within a fit_history entry (drift tracking)."""
     alpha: float
     beta_param: float = Field(..., alias='beta')
+    mu_mean: Optional[float] = None
+    sigma_mean: Optional[float] = None
 
     model_config = ConfigDict(populate_by_name=True)
 
 
-class ProbabilityFitHistoryEntry(BaseModel):
-    """Slim snapshot for probability posterior drift tracking."""
+class FitHistoryEntry(BaseModel):
+    """Unified fit_history entry — one per fit date (doc 21 §3.4)."""
     fitted_at: str
-    alpha: float
-    beta_param: float = Field(..., alias='beta')
-    hdi_lower: float
-    hdi_upper: float
-    rhat: float
-    divergences: int = Field(0, ge=0)
-    slices: Optional[Dict[str, SliceFitHistoryEntry]] = None
-
-    model_config = ConfigDict(populate_by_name=True)
+    fingerprint: str
+    slices: Dict[str, SlimSlice]
 
 
-class ProbabilityPosterior(BaseModel):
-    """Bayesian posterior for a probability parameter."""
-    distribution: str = Field(..., description="Distribution family fitted (e.g. 'beta', 'dirichlet-component')")
-    alpha: float = Field(..., description="Beta posterior shape α (window posterior)")
-    beta_param: float = Field(..., alias='beta', description="Beta posterior shape β (window posterior)")
-    hdi_lower: float = Field(..., description="Lower bound of HDI")
-    hdi_upper: float = Field(..., description="Upper bound of HDI")
-    hdi_level: float = Field(..., description="HDI level used (e.g. 0.9)")
-    ess: float = Field(..., description="Effective sample size")
-    rhat: float = Field(..., description="Gelman-Rubin convergence diagnostic")
-    evidence_grade: int = Field(..., ge=0, le=3, description="Evidence degradation level (0=cold, 1=weak, 2=mature, 3=full Bayesian)")
-    fitted_at: str = Field(..., description="UK date (d-MMM-yy)")
-    fingerprint: str = Field(..., description="Deterministic model hash")
-    provenance: Literal['bayesian', 'pooled-fallback', 'point-estimate', 'skipped']
-    divergences: int = Field(0, ge=0, description="Count of MCMC divergent transitions")
-    prior_tier: Literal['direct_history', 'trajectory_calibrated', 'inherited', 'sibling_pooled', 'uninformative'] = Field(..., description="Prior cascade tier used")
-    surprise_z: Optional[float] = Field(None, description="Trajectory surprise z-score (null if < 3 fit_history entries)")
-    fit_history: Optional[List[ProbabilityFitHistoryEntry]] = None
-    slices: Optional[Dict[str, SlicePosteriorEntry]] = Field(None, description="Per-slice posteriors keyed by slice DSL")
-    model_state: Optional[Dict[str, float]] = Field(None, alias='_model_state', description="Model-internal params for subsequent runs")
-
-    model_config = ConfigDict(populate_by_name=True)
-
-
-class LatencyFitHistoryEntry(BaseModel):
-    """Slim snapshot for latency posterior drift tracking."""
-    fitted_at: str
-    mu_mean: float
-    sigma_mean: float
-    onset_delta_days: float
-    rhat: float
-    divergences: int = Field(0, ge=0)
-
-
-class LatencyPosterior(BaseModel):
-    """Bayesian posterior for latency parameters.
-
-    Edge-level fields: canonical X→Y model, pinned by window data.
-    Path-level fields (path_*): fitted A→Y cohort application model,
-    directly usable for cohort() rendering. Present when cohort-level
-    latency variables are fitted (Phase D step 2.5).
+class Posterior(BaseModel):
+    """File-level unified posterior (doc 21 §3.3).
+    Lives at `posterior` on the parameter file. Carries both probability and
+    latency posteriors via per-slice entries.
     """
-    distribution: str = Field(..., description="Distribution family fitted (e.g. 'lognormal')")
-    onset_delta_days: float = Field(..., description="Edge-level onset (window context)")
-    mu_mean: float = Field(..., description="Edge-level posterior mean of μ")
-    mu_sd: float = Field(..., description="Edge-level posterior SD of μ")
-    sigma_mean: float = Field(..., description="Edge-level posterior mean of σ")
-    sigma_sd: float = Field(..., description="Edge-level posterior SD of σ")
-    hdi_t95_lower: float = Field(..., description="Lower HDI bound for t95 (days)")
-    hdi_t95_upper: float = Field(..., description="Upper HDI bound for t95 (days)")
-    hdi_level: float = Field(..., description="HDI level used")
-    ess: float = Field(..., description="Effective sample size")
-    rhat: float = Field(..., description="Convergence diagnostic")
-    fitted_at: str = Field(..., description="UK date (d-MMM-yy)")
-    fingerprint: str = Field(..., description="Same fingerprint as probability posterior")
-    provenance: Literal['bayesian', 'pooled-fallback', 'point-estimate', 'skipped']
-    fit_history: Optional[List[LatencyFitHistoryEntry]] = None
-    # Edge-level onset posterior (Phase D.O) — present when onset is latent
-    onset_mean: Optional[float] = Field(None, description="Posterior mean of latent onset (days)")
-    onset_sd: Optional[float] = Field(None, description="Posterior SD of latent onset")
-    onset_hdi_lower: Optional[float] = Field(None, description="HDI lower bound for onset")
-    onset_hdi_upper: Optional[float] = Field(None, description="HDI upper bound for onset")
-    onset_mu_corr: Optional[float] = Field(None, description="Posterior correlation onset↔μ (identifiability)")
-    # Path-level (cohort) latency — present when cohort latency is fitted
-    path_onset_delta_days: Optional[float] = Field(None, description="Fitted path onset (cohort context)")
-    path_onset_sd: Optional[float] = Field(None, description="Path-level onset posterior SD")
-    path_onset_hdi_lower: Optional[float] = Field(None, description="Path-level onset HDI lower bound")
-    path_onset_hdi_upper: Optional[float] = Field(None, description="Path-level onset HDI upper bound")
-    path_mu_mean: Optional[float] = Field(None, description="Path-level posterior mean of μ")
-    path_mu_sd: Optional[float] = Field(None, description="Path-level posterior SD of μ")
-    path_sigma_mean: Optional[float] = Field(None, description="Path-level posterior mean of σ")
-    path_sigma_sd: Optional[float] = Field(None, description="Path-level posterior SD of σ")
-    path_provenance: Optional[Literal['bayesian', 'pooled-fallback', 'point-estimate']] = None
+    fitted_at: str = Field(..., description="UK date (d-MMM-yy) of most recent fit")
+    fingerprint: str = Field(..., description="Deterministic model hash")
+    hdi_level: float = Field(..., description="HDI level used (e.g. 0.9)")
+    prior_tier: Literal['direct_history', 'trajectory_calibrated', 'inherited', 'sibling_pooled', 'uninformative']
+    surprise_z: Optional[float] = Field(None, description="Trajectory surprise z-score")
+    slices: Dict[str, SlicePosteriorEntry] = Field(..., description="Per-slice posteriors keyed by DSL")
+    model_state: Optional[Dict[str, float]] = Field(None, alias='_model_state', description="Model internals for warm-start")
+    fit_history: Optional[List[FitHistoryEntry]] = None
+
+    model_config = ConfigDict(populate_by_name=True)
 
 
 class BayesQuality(BaseModel):
@@ -259,8 +221,8 @@ class BayesRunMetadata(BaseModel):
     quality: BayesQuality
 
 
-# Update forward reference for LatencyConfig.posterior
-LatencyConfig.model_rebuild()
+# No forward reference rebuild needed — LatencyConfig no longer has a
+# posterior field (doc 21: posterior lives at file top level, not under latency).
 
 
 class ForecastParams(BaseModel):
@@ -287,7 +249,7 @@ class ProbabilityParam(BaseModel):
     evidence: Optional[Evidence] = None
     id: Optional[str] = Field(None, description="Reference to parameter file (FK to parameter-{id}.yaml)")
     data_source: Optional[DataSource] = None
-    posterior: Optional[ProbabilityPosterior] = Field(None, description="Bayesian posterior (written by fitting engine)")
+    posterior: Optional[Posterior] = Field(None, description="Unified Bayesian posterior (doc 21) — file-level; cascade projects onto graph edge")
     # Model variable provenance (doc 15)
     model_vars: Optional[List[ModelVarsEntry]] = Field(None, description="Candidate model variable sets from different sources")
     model_source_preference: Optional[Literal['best_available', 'bayesian', 'analytic_be', 'analytic', 'manual']] = Field(None, description="Per-edge override of graph.model_source_preference")

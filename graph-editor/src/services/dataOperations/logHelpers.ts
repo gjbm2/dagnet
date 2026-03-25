@@ -9,10 +9,7 @@
 
 import type { Graph } from '../../types';
 
-/** Python API base URL (same pattern as snapshotWriteService / graphComputeClient). */
-const PYTHON_API_BASE = import.meta.env.DEV
-  ? (import.meta.env.VITE_PYTHON_API_URL || 'http://localhost:9000')  // Local Python dev server
-  : '';                                                                 // Vercel serverless (same origin)
+import { PYTHON_API_BASE } from '../../lib/pythonApiBase';
 
 /**
  * Format edge identifier in human-readable form for logging

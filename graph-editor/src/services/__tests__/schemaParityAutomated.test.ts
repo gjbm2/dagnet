@@ -210,7 +210,12 @@ describe('AUTOMATED Schema / TypeScript / Python Parity', () => {
       const tsFields = getTypeScriptFields('LatencyConfig');
       const pyFields = getPythonFields('LatencyConfig');
       
-      assertTripleParity(schemaFields, tsFields, pyFields, 'LatencyConfig');
+      // Doc 21: posterior lives at file top level, not under latency.
+      // Graph-edge LatencyConfig has it (cascade-projected for UI), but
+      // the Python file model correctly omits it.
+      assertTripleParity(schemaFields, tsFields, pyFields, 'LatencyConfig', {
+        schemaOnly: ['posterior'],
+      });
     });
   });
   

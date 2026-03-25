@@ -574,8 +574,10 @@ export interface LatencyConfig {
   /** UK date (d-MMM-yy) when the model was last fitted (staleness detection, not UI-exposed) */
   model_trained_at?: string;
 
-  /** Bayesian posterior for latency parameters (written by fitting engine) */
-  posterior?: LatencyPosterior;
+  // NOTE: Bayesian latency posterior no longer lives here. It is in the
+  // file-level Posterior.slices (doc 21). The cascade projects a LatencyPosterior
+  // summary onto the graph edge for UI consumption.
+  posterior?: LatencyPosterior;  // Graph-edge only (projected by cascade, not on file)
 }
 
 // ── Model variable provenance (doc 15) ──────────────────────────────────────
@@ -633,105 +635,137 @@ export interface ModelVarsEntry {
   quality?: ModelVarsQuality;
 }
 
-// ── Bayesian posterior types ────────────────────────────────────────────────
+// ── Bayesian posterior types (doc 21: unified posterior schema) ──────────────
+//
+// FILE-LEVEL types (Posterior, SlicePosteriorEntry, FitHistoryEntry):
+//   Define the shape of `posterior` on parameter files. Per-slice entries carry
+//   both probability and latency fields. These are what the compiler writes and
+//   the warm-start reads.
+//
+// GRAPH-EDGE types (ProbabilityPosterior, LatencyPosterior):
+//   Define the shape projected onto graph edges by the cascade in
+//   mappingConfigurations.ts. UI components consume these. They are NOT stored
+//   on files — the cascade adapts from file-level Posterior to these shapes.
 
-/** Per-slice posterior entry (keyed by slice DSL string in slices map) */
+/** Per-slice posterior entry — unified probability + latency (doc 21 §3.2).
+ *  Keyed by slice DSL string (e.g. "window()", "cohort()", "window().context(channel:google)").
+ */
 export interface SlicePosteriorEntry {
+  // Probability
   alpha: number;
   beta: number;
-  hdi_lower: number;
-  hdi_upper: number;
+  p_hdi_lower: number;
+  p_hdi_upper: number;
+  // Latency (present when edge has latency fitted for this slice)
+  mu_mean?: number;
+  mu_sd?: number;
+  sigma_mean?: number;
+  sigma_sd?: number;
+  onset_mean?: number;
+  onset_sd?: number;
+  hdi_t95_lower?: number;
+  hdi_t95_upper?: number;
+  onset_mu_corr?: number;           // Posterior correlation onset↔μ (identifiability)
+  // Quality (per-slice)
   ess: number;
   rhat: number;
   divergences: number;
+  evidence_grade: number;            // 0=cold start, 1=weak, 2=mature, 3=full Bayesian
+  provenance: 'bayesian' | 'pooled-fallback' | 'point-estimate' | 'skipped';
 }
 
-/** Probability fit_history entry (slim snapshot for drift tracking) */
-export interface ProbabilityFitHistoryEntry {
-  fitted_at: string;   // UK date (d-MMM-yy)
+/** Slim per-slice snapshot within a fit_history entry (drift tracking) */
+export interface SlimSlice {
+  alpha: number;
+  beta: number;
+  mu_mean?: number;
+  sigma_mean?: number;
+}
+
+/** Unified fit_history entry — one per fit date (doc 21 §3.4) */
+export interface FitHistoryEntry {
+  fitted_at: string;             // UK date (d-MMM-yy)
+  fingerprint: string;
+  slices: Record<string, SlimSlice>;
+}
+
+/** File-level unified posterior (doc 21 §3.3).
+ *  Lives at `posterior` on the parameter file. Carries both probability and
+ *  latency posteriors via per-slice entries. Replaces the old split between
+ *  top-level `posterior` (probability) and `latency.posterior`.
+ */
+export interface Posterior {
+  fitted_at: string;             // UK date (d-MMM-yy) of most recent fit
+  fingerprint: string;           // Deterministic model hash
+  hdi_level: number;             // HDI level used (e.g. 0.9)
+  prior_tier: 'direct_history' | 'trajectory_calibrated' | 'inherited' | 'sibling_pooled' | 'uninformative';
+  surprise_z?: number | null;    // Trajectory surprise z-score
+  slices: Record<string, SlicePosteriorEntry>;
+  _model_state?: Record<string, number> | null;
+  fit_history?: FitHistoryEntry[];
+}
+
+// ── Graph-edge posterior shapes (projected by cascade, consumed by UI) ───────
+
+/** Probability posterior summary on graph edge.
+ *  Projected by the cascade from Posterior.slices["window()"]. UI components
+ *  (PosteriorIndicator, bayesQualityTier, ConversionEdge) consume this shape.
+ */
+export interface ProbabilityPosterior {
+  distribution: string;
   alpha: number;
   beta: number;
   hdi_lower: number;
   hdi_upper: number;
+  hdi_level: number;
+  ess: number;
   rhat: number;
-  divergences: number;
-  slices?: Record<string, { alpha: number; beta: number }> | null;
-}
-
-/** Bayesian posterior for a probability parameter */
-export interface ProbabilityPosterior {
-  distribution: string;        // e.g. 'beta', 'dirichlet-component'
-  alpha: number;               // Beta shape α (window posterior)
-  beta: number;                // Beta shape β (window posterior)
-  hdi_lower: number;           // Lower bound of HDI
-  hdi_upper: number;           // Upper bound of HDI
-  hdi_level: number;           // HDI level used (e.g. 0.9)
-  ess: number;                 // Effective sample size
-  rhat: number;                // Gelman-Rubin convergence diagnostic
-  evidence_grade: number;      // 0=cold start, 1=weak, 2=mature, 3=full Bayesian
-  fitted_at: string;           // UK date (d-MMM-yy)
-  fingerprint: string;         // Deterministic model hash
+  evidence_grade: number;
+  fitted_at: string;
+  fingerprint: string;
   provenance: 'bayesian' | 'pooled-fallback' | 'point-estimate' | 'skipped';
-  divergences: number;         // Count of MCMC divergent transitions
-  prior_tier: 'direct_history' | 'trajectory_calibrated' | 'inherited' | 'sibling_pooled' | 'uninformative';
-  surprise_z?: number | null;  // Trajectory surprise z-score (null if < 3 fit_history entries)
-  fit_history?: ProbabilityFitHistoryEntry[];
-  slices?: Record<string, SlicePosteriorEntry> | null;  // Per-slice posteriors keyed by slice DSL
-  _model_state?: Record<string, number> | null;         // Model-internal params for subsequent runs
-}
-
-/** Latency fit_history entry (slim snapshot for drift tracking) */
-export interface LatencyFitHistoryEntry {
-  fitted_at: string;           // UK date (d-MMM-yy)
-  mu_mean: number;
-  sigma_mean: number;
-  onset_delta_days: number;
-  rhat: number;
   divergences: number;
+  prior_tier: 'direct_history' | 'trajectory_calibrated' | 'inherited' | 'sibling_pooled' | 'uninformative';
+  surprise_z?: number | null;
 }
 
-/** Bayesian posterior for latency parameters.
- *
- * Edge-level fields (mu_mean, sigma_mean, onset_delta_days): canonical X→Y
- * model, pinned by window data.
- *
- * Path-level fields (path_*): fitted A→Y cohort application model. Directly
- * usable for cohort() rendering — no FW composition needed at consumption
- * time. Present when cohort-level latency variables are fitted (Phase D).
+/** Latency posterior summary on graph edge.
+ *  Projected by the cascade from Posterior.slices. Edge-level fields from
+ *  "window()" slice, path-level fields from "cohort()" slice. UI components
+ *  consume this shape.
  */
 export interface LatencyPosterior {
-  distribution: string;        // e.g. 'lognormal'
-  onset_delta_days: number;    // Edge-level onset (window context)
-  mu_mean: number;             // Edge-level posterior mean of μ
-  mu_sd: number;               // Edge-level posterior SD of μ
-  sigma_mean: number;          // Edge-level posterior mean of σ
-  sigma_sd: number;            // Edge-level posterior SD of σ
-  hdi_t95_lower: number;       // Lower HDI bound for t95 (days)
-  hdi_t95_upper: number;       // Upper HDI bound for t95 (days)
-  hdi_level: number;           // HDI level used
-  ess: number;                 // Effective sample size
-  rhat: number;                // Convergence diagnostic
-  fitted_at: string;           // UK date (d-MMM-yy)
-  fingerprint: string;         // Same fingerprint as probability posterior
+  distribution: string;
+  onset_delta_days: number;
+  mu_mean: number;
+  mu_sd: number;
+  sigma_mean: number;
+  sigma_sd: number;
+  hdi_t95_lower: number;
+  hdi_t95_upper: number;
+  hdi_level: number;
+  ess: number;
+  rhat: number;
+  fitted_at: string;
+  fingerprint: string;
   provenance: 'bayesian' | 'pooled-fallback' | 'point-estimate' | 'skipped';
-  fit_history?: LatencyFitHistoryEntry[];
 
-  // Edge-level onset posterior (Phase D.O) — present when onset is latent
-  onset_mean?: number;              // Posterior mean of latent onset (days)
-  onset_sd?: number;                // Posterior SD of latent onset
-  onset_hdi_lower?: number;         // HDI lower bound for onset
-  onset_hdi_upper?: number;         // HDI upper bound for onset
-  onset_mu_corr?: number;           // Posterior correlation onset↔μ (identifiability)
+  // Edge-level onset posterior (Phase D.O)
+  onset_mean?: number;
+  onset_sd?: number;
+  onset_hdi_lower?: number;
+  onset_hdi_upper?: number;
+  onset_mu_corr?: number;
 
-  // Path-level (cohort) latency — present when cohort latency is fitted
-  path_onset_delta_days?: number;   // Fitted path onset (cohort context)
-  path_onset_sd?: number;           // Path-level onset posterior SD
-  path_onset_hdi_lower?: number;    // Path-level onset HDI lower bound
-  path_onset_hdi_upper?: number;    // Path-level onset HDI upper bound
-  path_mu_mean?: number;            // Path-level posterior mean of μ
-  path_mu_sd?: number;              // Path-level posterior SD of μ
-  path_sigma_mean?: number;         // Path-level posterior mean of σ
-  path_sigma_sd?: number;           // Path-level posterior SD of σ
+  // Path-level (cohort) latency
+  path_onset_delta_days?: number;
+  path_onset_sd?: number;
+  path_onset_hdi_lower?: number;
+  path_onset_hdi_upper?: number;
+  path_mu_mean?: number;
+  path_mu_sd?: number;
+  path_sigma_mean?: number;
+  path_sigma_sd?: number;
   path_provenance?: 'bayesian' | 'pooled-fallback' | 'point-estimate';
 }
 

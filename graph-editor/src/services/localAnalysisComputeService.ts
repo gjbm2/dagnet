@@ -14,7 +14,7 @@ import { formatRelativeTime, getFreshnessLevel } from '../utils/freshnessDisplay
 import { resolveActiveModelVars, effectivePreference } from './modelVarsResolution';
 
 // Analysis types that support local FE compute
-const LOCAL_COMPUTE_TYPES = new Set(['node_info', 'edge_info']);
+const LOCAL_COMPUTE_TYPES = new Set(['node_info', 'edge_info', 'surprise_gauge']);
 
 /**
  * Whether the given analysis type can be computed locally (FE-side).
@@ -37,6 +37,8 @@ export function computeLocalResult(
         return { success: true, result: buildNodeInfoResult(graph, queryDsl) };
       case 'edge_info':
         return { success: true, result: buildEdgeInfoResult(graph, queryDsl) };
+      case 'surprise_gauge':
+        return { success: true, result: buildSurpriseGaugeResult(graph, queryDsl) };
       default:
         return { success: false, error: { error_type: 'unsupported', message: `No local compute for ${analysisType}` } };
     }
@@ -825,5 +827,221 @@ function fmtDate(d: string | Date): string {
   const date = typeof d === 'string' ? new Date(d) : d;
   const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
   return `${date.getDate()}-${months[date.getMonth()]}-${date.getFullYear().toString().slice(-2)}`;
+}
+
+// ── Surprise Gauge ─────────────────────────────────────────────────────
+
+/** Normal CDF approximation (Abramowitz & Stegun 26.2.17). */
+function normalCdf(z: number): number {
+  if (!Number.isFinite(z)) return 0.5;
+  const a1 = 0.254829592, a2 = -0.284496736, a3 = 1.421413741;
+  const a4 = -1.453152027, a5 = 1.061405429, p = 0.3275911;
+  const sign = z < 0 ? -1 : 1;
+  const x = Math.abs(z) / Math.SQRT2;
+  const t = 1.0 / (1.0 + p * x);
+  const y = 1.0 - (((((a5 * t + a4) * t) + a3) * t + a2) * t + a1) * t * Math.exp(-x * x);
+  return 0.5 * (1.0 + sign * y);
+}
+
+/** Inverse normal CDF (Beasley-Springer-Moro approximation). */
+function normalPpf(q: number): number {
+  const clamped = Math.max(1e-8, Math.min(1 - 1e-8, q));
+  const a = [0, -3.969683028665376e1, 2.209460984245205e2, -2.759285104469687e2,
+    1.383577518672690e2, -3.066479806614716e1, 2.506628277459239e0];
+  const b = [0, -5.447609879822406e1, 1.615858368580409e2, -1.556989798598866e2,
+    6.680131188771972e1, -1.328068155288572e1];
+  const c = [0, -7.784894002430293e-3, -3.223964580411365e-1, -2.400758277161838e0,
+    -2.549732539343734e0, 4.374664141464968e0, 2.938163982698783e0];
+  const d = [0, 7.784695709041462e-3, 3.224671290700398e-1, 2.445134137142996e0, 3.754408661907416e0];
+  const pLow = 0.02425, pHigh = 1 - pLow;
+  let r: number, qq: number;
+  if (clamped < pLow) {
+    qq = Math.sqrt(-2 * Math.log(clamped));
+    return (((((c[1]*qq+c[2])*qq+c[3])*qq+c[4])*qq+c[5])*qq+c[6]) /
+           ((((d[1]*qq+d[2])*qq+d[3])*qq+d[4])*qq+1);
+  } else if (clamped <= pHigh) {
+    qq = clamped - 0.5;
+    r = qq * qq;
+    return (((((a[1]*r+a[2])*r+a[3])*r+a[4])*r+a[5])*r+a[6])*qq /
+           (((((b[1]*r+b[2])*r+b[3])*r+b[4])*r+b[5])*r+1);
+  } else {
+    qq = Math.sqrt(-2 * Math.log(1 - clamped));
+    return -(((((c[1]*qq+c[2])*qq+c[3])*qq+c[4])*qq+c[5])*qq+c[6]) /
+            ((((d[1]*qq+d[2])*qq+d[3])*qq+d[4])*qq+1);
+  }
+}
+
+function classifyZone(q: number): string {
+  const tail = Math.abs(q - 0.5) * 2;
+  if (tail < 0.60) return 'expected';
+  if (tail < 0.80) return 'noteworthy';
+  if (tail < 0.90) return 'unusual';
+  if (tail < 0.98) return 'surprising';
+  return 'alarming';
+}
+
+function buildSurpriseGaugeResult(graph: ConversionGraph, queryDsl: string): AnalysisResult {
+  const parsed = parseDSL(queryDsl);
+  const variables: any[] = [];
+  let hint: string | undefined;
+  let referenceSource = 'unknown';
+
+  // Find edge
+  const edge = (graph.edges || []).find((e: GraphEdge) => {
+    const fromNode = (graph.nodes || []).find((n: GraphNode) => n.uuid === e.from || n.id === e.from);
+    const toNode = (graph.nodes || []).find((n: GraphNode) => n.uuid === e.to || n.id === e.to);
+    return (fromNode && (fromNode.id === parsed.from || fromNode.uuid === parsed.from)) &&
+           (toNode && (toNode.id === parsed.to || toNode.uuid === parsed.to));
+  });
+
+  if (!edge) {
+    return { analysis_type: 'surprise_gauge', analysis_name: 'Expectation Gauge', variables: [], error: 'Edge not found', semantics: { chart: { recommended: 'surprise_gauge' } }, data: [] } as any;
+  }
+
+  const p = edge.p || {} as any;
+  const modelVars: any[] = p.model_vars || [];
+
+  // Find reference entry: prefer bayesian, fall back to analytic
+  let refEntry = modelVars.find((mv: any) => mv?.source === 'bayesian');
+  if (refEntry) {
+    referenceSource = 'bayesian';
+  } else {
+    refEntry = modelVars.find((mv: any) => mv?.source === 'analytic_be')
+      || modelVars.find((mv: any) => mv?.source === 'analytic');
+    if (refEntry) {
+      referenceSource = refEntry.source;
+      hint = 'Run Bayes model for better indicators';
+    }
+  }
+
+  if (!refEntry) {
+    return { analysis_type: 'surprise_gauge', analysis_name: 'Expectation Gauge', variables: [], error: 'No model vars available', semantics: { chart: { recommended: 'surprise_gauge' } }, data: [] } as any;
+  }
+
+  // Find observed (analytic entry, different from reference if reference is bayesian)
+  let obsEntry = modelVars.find((mv: any) => mv?.source === 'analytic_be')
+    || modelVars.find((mv: any) => mv?.source === 'analytic');
+  if (!obsEntry) {
+    // Fall back to promoted values
+    obsEntry = { probability: { mean: p.mean }, latency: p.latency };
+  }
+
+  const refProb = refEntry.probability || {};
+  const refLat = refEntry.latency || {};
+  const obsProb = obsEntry.probability || {};
+  const obsLat = obsEntry.latency || {};
+
+  // Reconstruct Beta params from mean/stdev (method of moments)
+  const refMean = refProb.mean;
+  const refStd = refProb.stdev;
+  let alpha: number | null = null;
+  let beta_param: number | null = null;
+  if (typeof refMean === 'number' && typeof refStd === 'number' && refMean > 0 && refMean < 1 && refStd > 0) {
+    const v = refStd * refStd;
+    if (v < refMean * (1 - refMean)) {
+      const common = refMean * (1 - refMean) / v - 1;
+      alpha = refMean * common;
+      beta_param = (1 - refMean) * common;
+    }
+  }
+
+  // --- p ---
+  const obsPMean = typeof obsProb.mean === 'number' ? obsProb.mean : null;
+  if (alpha !== null && beta_param !== null && obsPMean !== null) {
+    // Normal approximation to Beta CDF (good enough for gauge)
+    const posteriorMean = alpha / (alpha + beta_param);
+    const posteriorSd = Math.sqrt(alpha * beta_param / ((alpha + beta_param) ** 2 * (alpha + beta_param + 1)));
+    const z = posteriorSd > 0 ? (obsPMean - posteriorMean) / posteriorSd : 0;
+    const quantile = normalCdf(z);
+    variables.push({
+      name: 'p', label: 'Conversion rate',
+      quantile: Math.round(quantile * 1e6) / 1e6,
+      sigma: Math.round(z * 1000) / 1000,
+      observed: Math.round(obsPMean * 1e6) / 1e6,
+      expected: Math.round(posteriorMean * 1e6) / 1e6,
+      posterior_sd: Math.round(posteriorSd * 1e6) / 1e6,
+      zone: classifyZone(quantile),
+      available: true,
+    });
+  } else {
+    variables.push({ name: 'p', label: 'Conversion rate', available: false, reason: 'Missing probability mean/stdev' });
+  }
+
+  // --- mu ---
+  const refMu = refLat?.mu;
+  const obsMu = obsLat?.mu;
+  // For Bayesian, use posterior SD if available
+  const posterior = (p.latency as any)?.posterior || {};
+  const muSd = posterior.mu_sd || refLat?.mu_sd;
+
+  if (typeof refMu === 'number' && typeof obsMu === 'number' && typeof muSd === 'number' && muSd > 0) {
+    const z = (obsMu - refMu) / muSd;
+    const quantile = normalCdf(z);
+    const onset = posterior.onset_mean || refLat?.onset_delta_days || 0;
+    variables.push({
+      name: 'mu', label: 'Latency location (μ)',
+      quantile: Math.round(quantile * 1e6) / 1e6,
+      sigma: Math.round(z * 1000) / 1000,
+      observed: Math.round(obsMu * 1e4) / 1e4,
+      observed_days: Math.round((Math.exp(obsMu) + onset) * 10) / 10,
+      expected: Math.round(refMu * 1e4) / 1e4,
+      expected_days: Math.round((Math.exp(refMu) + onset) * 10) / 10,
+      posterior_sd: Math.round(muSd * 1e4) / 1e4,
+      zone: classifyZone(quantile),
+      available: true,
+    });
+  } else {
+    variables.push({ name: 'mu', label: 'Latency location (μ)', available: false, reason: muSd ? 'Missing mu values' : 'No posterior SD for mu' });
+  }
+
+  // --- sigma ---
+  const refSigma = refLat?.sigma;
+  const obsSigma = obsLat?.sigma;
+  const sigmaSd = posterior.sigma_sd || refLat?.sigma_sd;
+
+  if (typeof refSigma === 'number' && typeof obsSigma === 'number' && typeof sigmaSd === 'number' && sigmaSd > 0) {
+    const z = (obsSigma - refSigma) / sigmaSd;
+    const quantile = normalCdf(z);
+    variables.push({
+      name: 'sigma', label: 'Latency spread (σ)',
+      quantile: Math.round(quantile * 1e6) / 1e6,
+      sigma: Math.round(z * 1000) / 1000,
+      observed: Math.round(obsSigma * 1e4) / 1e4,
+      expected: Math.round(refSigma * 1e4) / 1e4,
+      posterior_sd: Math.round(sigmaSd * 1e4) / 1e4,
+      zone: classifyZone(quantile),
+      available: true,
+    });
+  } else {
+    variables.push({ name: 'sigma', label: 'Latency spread (σ)', available: false, reason: sigmaSd ? 'Missing sigma values' : 'No posterior SD for sigma' });
+  }
+
+  // --- onset (Phase 2 placeholder) ---
+  const onsetMean = posterior.onset_mean;
+  const onsetSd = posterior.onset_sd;
+  if (typeof onsetMean === 'number' && typeof onsetSd === 'number' && onsetSd > 0) {
+    variables.push({
+      name: 'onset', label: 'Onset (dead time)',
+      available: false,
+      reason: 'Phase 2: requires snapshot DB query for observed onset',
+      expected: Math.round(onsetMean * 100) / 100,
+      posterior_sd: Math.round(onsetSd * 100) / 100,
+    });
+  }
+
+  return {
+    analysis_type: 'surprise_gauge',
+    analysis_name: 'Expectation Gauge',
+    semantics: {
+      chart: { recommended: 'surprise_gauge' },
+      dimensions: [{ id: 'variable', name: 'Variable', type: 'categorical', role: 'primary' }],
+      metrics: [{ id: 'quantile', name: 'Quantile', type: 'number', role: 'primary' }],
+    },
+    data: variables,
+    variables,
+    reference_source: referenceSource,
+    hint,
+    promoted_source: p.model_source_preference || 'best_available',
+  } as any;
 }
 

@@ -1021,6 +1021,33 @@ export const CHART_DISPLAY_SETTINGS: Record<string, DisplaySettingDef[]> = {
     ...COMMON_ANIMATION_SETTINGS,
     ...COMMON_REFERENCE_LINE_SETTINGS,
   ],
+
+  surprise_gauge: [
+    ...COMMON_FONT_SIZE_SETTINGS,
+    ...COMMON_AXIS_SETTINGS,
+    ...COMMON_LABEL_SETTINGS,
+    {
+      key: 'surprise_var',
+      label: 'Variable',
+      shortLabel: 'Var',
+      type: 'radio',
+      options: [
+        { value: 'p', label: 'p (rate)' },
+        { value: 'mu', label: 'μ (latency)' },
+        { value: 'sigma', label: 'σ (spread)' },
+        { value: 'all', label: 'All' },
+      ],
+      defaultValue: 'all',
+      propsPanel: true,
+      inline: 'brief',
+      contextMenu: true,
+      computeAffecting: false,
+    },
+    ...COMMON_LEGEND_SETTINGS,
+    ...COMMON_TOOLTIP_SETTINGS,
+    ...COMMON_ANIMATION_SETTINGS,
+    ...COMMON_REFERENCE_LINE_SETTINGS,
+  ],
 };
 
 /**

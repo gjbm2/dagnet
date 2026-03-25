@@ -3,10 +3,12 @@ import { useBayesTrigger } from '../../hooks/useBayesTrigger';
 import type { BayesTriggerStatus, BayesComputeMode } from '../../hooks/useBayesTrigger';
 import './MenuBar.css';
 
+import { PYTHON_API_BASE } from '../../lib/pythonApiBase';
+
 const STORAGE_KEY = 'dagnet-bayes-compute-mode';
-const TUNNEL_START_URL = 'http://localhost:9000/api/bayes/tunnel/start';
-const TUNNEL_STOP_URL = 'http://localhost:9000/api/bayes/tunnel/stop';
-const TUNNEL_STATUS_URL = 'http://localhost:9000/api/bayes/tunnel/status';
+const TUNNEL_START_URL = `${PYTHON_API_BASE}/api/bayes/tunnel/start`;
+const TUNNEL_STOP_URL = `${PYTHON_API_BASE}/api/bayes/tunnel/stop`;
+const TUNNEL_STATUS_URL = `${PYTHON_API_BASE}/api/bayes/tunnel/status`;
 
 function getStoredMode(): BayesComputeMode {
   try {

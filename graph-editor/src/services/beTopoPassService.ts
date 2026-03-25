@@ -10,10 +10,7 @@ import type { CohortData, ParameterValueForLAG, LAGHelpers } from './statistical
 import type { ModelVarsEntry } from '../types';
 import { buildForecastingSettings } from '../constants/latency';
 
-/** Python API base URL (same pattern as snapshotWriteService). */
-const PYTHON_API_BASE = import.meta.env.DEV
-  ? (import.meta.env.VITE_PYTHON_API_URL || 'http://localhost:9000')
-  : '';
+import { PYTHON_API_BASE } from '../lib/pythonApiBase';
 
 /** Per-edge result from the BE topo pass. */
 interface BeTopoEdgeResult {
