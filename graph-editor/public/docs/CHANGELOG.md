@@ -1,4 +1,11 @@
 # DagNet Release Notes
+## Version 1.8.13b
+**Released:** 26-Mar-26
+
+Persistent views, dashboard loops
+
+---
+
 ## Version 1.8.12b
 **Released:** 26-Mar-26
 
