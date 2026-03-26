@@ -38,6 +38,21 @@ Two tabs of the same graph share the same Zustand store (`storeRegistry` keyed b
 
 New type stored on `CanvasView`:
 
+#### Pseudo-scenario visibility (Current and Base)
+
+Current and Base are always-present pseudo-scenarios. Their **definitions** don't need storing (Current is derived from the fetch pipeline; Base is the graph's `baseDSL`). But their **visibility** and **display mode** do vary per view.
+
+```typescript
+interface CanvasViewLayerVisibility {
+  visible: boolean;
+  visibility_mode?: 'f+e' | 'f' | 'e';
+}
+```
+
+#### User scenario blueprints
+
+For user-created scenarios (live and static), the view stores enough to recreate them from scratch:
+
 ```typescript
 interface CanvasViewScenario {
   /** For live scenarios: the regenerable DSL fragment */
@@ -57,12 +72,52 @@ interface CanvasViewScenario {
 }
 ```
 
-Added to `CanvasView`:
-```
+#### Added to `CanvasView`
+
+```typescript
+/** Pseudo-scenario visibility */
+currentLayer?: CanvasViewLayerVisibility;
+baseLayer?: CanvasViewLayerVisibility;
+/** User scenario blueprints (ordered; index = stack position) */
 scenarios?: CanvasViewScenario[];
+/** Apply-scope toggles (default true when undefined) */
+applyScenarios?: boolean;
+applyLayout?: boolean;
+applyDisplayMode?: boolean;
 ```
 
-This is a **blueprint** — everything needed to recreate the scenario from scratch. Not a reference to an ephemeral ID.
+`scenarios` is a **blueprint** array — everything needed to recreate the scenario from scratch. Not a reference to an ephemeral ID. The array order IS the stack order.
+
+`currentLayer` and `baseLayer` are lightweight — just visibility and display mode. Base DSL is not stored here; it lives on the graph (`ConversionGraph.baseDSL`) and is inherited by live scenarios at regeneration time as usual.
+
+### Apply-scope toggles
+
+Views store and apply three independent categories of state. Each can be toggled on or off per view, controlling both what gets applied on view switch and what gets auto-saved while the view is active.
+
+```typescript
+/** Which categories of state this view captures and applies. All default to true. */
+applyScenarios?: boolean;   // (A) Scenario visibility, order, modes, blueprints
+applyLayout?: boolean;      // (B) Min/max state of canvas objects + viewport
+applyDisplayMode?: boolean; // (C) Sankey, Data Depth, Forecast Quality overlay
+```
+
+Added to `CanvasView` alongside `locked`.
+
+**Behaviour:**
+
+| Toggle | On apply | On auto-save | When off |
+|---|---|---|---|
+| `applyScenarios` | Rehydrate scenarios, set visibility/order/modes | Capture scenario state changes | Scenarios left as-is; scenario changes not saved to view |
+| `applyLayout` | Apply min/max states + viewport transition | Capture min/max and viewport changes | Layout left as-is; layout changes not saved to view |
+| `applyDisplayMode` | Set viewOverlayMode + sankey | Capture display mode changes | Display mode left as-is; mode changes not saved to view |
+
+**Defaults:** All three are `true` (or `undefined`, treated as `true`). A fully-toggled view applies everything. A view with only `applyScenarios: true` and the others off acts as a pure scenario preset — switch scenarios without disturbing the user's current layout or display mode.
+
+**Interaction with lock:** Lock prevents ALL auto-save regardless of toggles. Toggles control scope; lock controls whether auto-save happens at all.
+
+**UI:** In the hover dropdown alongside the lock and delete icons, show three small toggle indicators for each view. These should be compact — icon-only buttons (e.g., `Users` for scenarios, `Layout` for layout, `Monitor` for display mode) that toggle opacity or fill to indicate on/off. Same pattern in context menu Views submenu: expose the three toggles for the active view.
+
+**Visual feedback on the active pill:** When one or more categories are toggled off, show a subtle indicator. Could be a small badge or dimmed section of the pill — but this is a UI detail to refine during implementation.
 
 ### Capture (on view create / auto-save)
 
@@ -70,7 +125,8 @@ When a view is created or auto-saved (while active and unlocked):
 
 1. Read current scenarios from `ScenariosContext`
 2. Read current visibility state from `editorState.scenarioState`
-3. For each scenario, serialise into a `CanvasViewScenario` descriptor:
+3. Capture `currentLayer` and `baseLayer`: visibility and visibility_mode from `scenarioState.visibleScenarioIds` and `scenarioState.visibilityMode`
+4. For each user scenario, serialise into a `CanvasViewScenario` descriptor:
    - Live scenarios: store `queryDSL`, `name`, `colour`, `is_live: true`
    - Static scenarios: store `params` (the diff), `name`, `colour`, `is_live: false`
    - From visibility state: `visible`, `order`, `visibility_mode`
@@ -79,7 +135,9 @@ When a view is created or auto-saved (while active and unlocked):
 
 Follow the share bundle pattern:
 
-1. **Match existing scenarios**: For each `CanvasViewScenario`, scan current `ScenariosContext.scenarios` by `(queryDSL, name)` for live scenarios, or by `(params content hash, name)` for static. If found, reuse the existing scenario's ID.
+1. **Restore Current/Base visibility**: Apply `currentLayer` and `baseLayer` to `scenarioState.visibleScenarioIds` and `scenarioState.visibilityMode`. These are just visibility toggles — no scenario creation needed.
+
+2. **Match existing user scenarios**: For each `CanvasViewScenario`, scan current `ScenariosContext.scenarios` by `(queryDSL, name)` for live scenarios, or by `(params content hash, name)` for static. If found, reuse the existing scenario's ID.
 
 2. **Create missing**: For unmatched descriptors, call `createLiveScenario()` or equivalent. Assign the stored colour.
 

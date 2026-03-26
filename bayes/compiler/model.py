@@ -48,6 +48,7 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
     feat_overdispersion = features.get("overdispersion", True)
     feat_latent_onset = features.get("latent_onset", True)
     feat_window_only = features.get("window_only", False)
+    feat_neutral_prior = features.get("neutral_prior", False)
 
     diagnostics: list[str] = []
     diagnostics.append(f"features: latent_latency={feat_latent_latency}, "
@@ -121,7 +122,7 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
         for group_id, bg in topology.branch_groups.items():
             _emit_dirichlet_prior(
                 bg, topology, evidence, bg_p_vars, edge_var_names,
-                model, diagnostics,
+                model, diagnostics, features=features,
             )
 
         # --- Per-edge latency variables (Phase D: latent latency) ---
@@ -272,8 +273,12 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
                 p_base_var = bg_p_vars[edge_id]
             else:
                 # Solo edge — independent Beta prior
-                alpha = ev.prob_prior.alpha
-                beta_param = ev.prob_prior.beta
+                if feat_neutral_prior:
+                    alpha = 1.0
+                    beta_param = 1.0
+                else:
+                    alpha = ev.prob_prior.alpha
+                    beta_param = ev.prob_prior.beta
                 p_base_var = None  # will be created below per observation type
 
             # Per-edge overdispersion concentration κ.
@@ -286,7 +291,7 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
                 if p_base_var is not None:
                     p_base = p_base_var
                 else:
-                    p_base = pm.Beta(f"p_base_{safe_id}", alpha=ev.prob_prior.alpha, beta=ev.prob_prior.beta)
+                    p_base = pm.Beta(f"p_base_{safe_id}", alpha=alpha, beta=beta_param)
 
                 logit_p_base = pm.math.log(p_base / (1 - p_base))
 
@@ -339,7 +344,7 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
                 if p_base_var is not None:
                     p = p_base_var
                 else:
-                    p = pm.Beta(f"p_{safe_id}", alpha=ev.prob_prior.alpha, beta=ev.prob_prior.beta)
+                    p = pm.Beta(f"p_{safe_id}", alpha=alpha, beta=beta_param)
                     edge_var_names[edge_id] = f"p_{safe_id}"
                 if emit_window_binomial:
                     _emit_window_likelihoods(safe_id, p, ev, diagnostics, kappa=edge_kappa)
@@ -348,7 +353,7 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
                 if p_base_var is not None:
                     p = p_base_var
                 else:
-                    p = pm.Beta(f"p_{safe_id}", alpha=ev.prob_prior.alpha, beta=ev.prob_prior.beta)
+                    p = pm.Beta(f"p_{safe_id}", alpha=alpha, beta=beta_param)
                     edge_var_names[edge_id] = f"p_{safe_id}"
                 if not feat_window_only:
                     _emit_cohort_likelihoods(safe_id, p, ev, diagnostics,
@@ -360,7 +365,7 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
 
             else:
                 if p_base_var is None:
-                    p = pm.Beta(f"p_{safe_id}", alpha=ev.prob_prior.alpha, beta=ev.prob_prior.beta)
+                    p = pm.Beta(f"p_{safe_id}", alpha=alpha, beta=beta_param)
                     edge_var_names[edge_id] = f"p_{safe_id}"
 
         # --- Branch group Multinomial likelihoods (window obs) ---
@@ -392,6 +397,7 @@ def _emit_dirichlet_prior(
     edge_var_names: dict[str, str],
     model,
     diagnostics: list[str],
+    features: dict | None = None,
 ) -> None:
     """Emit a Dirichlet prior for a branch group.
 
@@ -436,9 +442,13 @@ def _emit_dirichlet_prior(
 
     prior_means = []
     prior_ess_values = []
+    feat_neutral = features.get("neutral_prior", False) if features else False
     for sib_id, et, ev in sibling_edges:
-        a = ev.prob_prior.alpha
-        b = ev.prob_prior.beta
+        if feat_neutral:
+            a, b = 1.0, 1.0
+        else:
+            a = ev.prob_prior.alpha
+            b = ev.prob_prior.beta
         prior_means.append(a / (a + b))
         prior_ess_values.append(a + b)
 
@@ -641,9 +651,34 @@ def _emit_cohort_likelihoods(
     cohort_trajs = []
     all_daily = []
 
+    # Determine if this edge has any latency. No-latency edges should
+    # NOT go through DM trajectories — there is no maturation curve to
+    # trace, so a trajectory of identical y values is informationally
+    # equivalent to a single (n, k) observation. Route them to
+    # BetaBinomial instead.  See journal 26-Mar-26.
+    edge_has_latency = (
+        (ev.latency_prior is not None and
+         (ev.latency_prior.sigma > 0.01 or
+          (ev.latency_prior.onset_delta_days or 0) > 0))
+        or (latency_vars and ev.edge_id in (latency_vars or {}))
+    )
+
     for c_obs in ev.cohort_obs:
         for traj in c_obs.trajectories:
             if len(traj.retrieval_ages) < 2 or traj.n <= 0:
+                continue
+            if not edge_has_latency and traj.obs_type == "window":
+                # No-latency edge: convert trajectory to daily obs.
+                # Use the final cumulative y as k (all conversions are
+                # instantaneous, so the final y IS the total converted).
+                from .types import CohortDailyObs
+                all_daily.append(CohortDailyObs(
+                    date=traj.date,
+                    n=traj.n,
+                    k=traj.cumulative_y[-1] if traj.cumulative_y else 0,
+                    age_days=traj.retrieval_ages[-1] if traj.retrieval_ages else 1.0,
+                    completeness=1.0,
+                ))
                 continue
             if traj.obs_type == "window":
                 window_trajs.append(traj)
