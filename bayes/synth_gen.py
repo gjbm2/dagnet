@@ -1399,14 +1399,15 @@ def _generate_observations_nightly(
 
     # ── Determine fetch nights (with failure simulation) ────────────────
     fetch_nights: list[int] = []
-    # snapshot_start_offset > 0: only write DB rows for the last N days
-    # of fetches.  This simulates production's partial snapshot coverage.
-    snapshot_cutoff = (n_days - snapshot_start_offset) if snapshot_start_offset > 0 else 0
+    # snapshot_start_offset > 0: only write DB rows for anchor days
+    # within the last snapshot_start_offset observable days.  Older
+    # anchor days get no snapshot rows — they exist only in the param
+    # file (daily obs).  This simulates production's partial snapshot
+    # coverage where fetching started recently.
+    snapshot_anchor_cutoff = (n_days - snapshot_start_offset) if snapshot_start_offset > 0 else 0
     for fn in range(1, n_days + 1):
         if failure_rate > 0 and rng.random() < failure_rate:
             continue
-        if fn <= snapshot_cutoff:
-            continue  # before snapshot window — param file only
         fetch_nights.append(fn)
 
     # ── Generate cohort rows ────────────────────────────────────────────
@@ -1428,6 +1429,9 @@ def _generate_observations_nightly(
             obs_day_offset = sim_day - burn_in_days  # 0-based from base_date
             age = fetch_night - obs_day_offset
             if age < 1:
+                continue
+            # Skip anchor days before the snapshot window
+            if obs_day_offset < snapshot_anchor_cutoff:
                 continue
 
             anchor_day_str = (base_date + timedelta(days=obs_day_offset)).strftime("%Y-%m-%d")
@@ -1518,6 +1522,9 @@ def _generate_observations_nightly(
                     continue
                 if abs_from_day >= n_days:
                     continue  # beyond observation window
+                # Skip anchor days before the snapshot window
+                if abs_from_day < snapshot_anchor_cutoff:
+                    continue
 
                 w_age = fetch_night - abs_from_day
                 if w_age < 1:

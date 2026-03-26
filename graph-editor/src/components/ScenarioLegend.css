@@ -126,6 +126,10 @@
   display: inline-flex;
 }
 
+.scenario-legend-no-submenu {
+  position: static;
+}
+
 /* Invisible spacer - reserves the full expanded width */
 .scenario-legend-new-spacer {
   visibility: hidden;
@@ -165,7 +169,12 @@
 
 .scenario-legend-new-wrapper:hover .scenario-legend-new {
   gap: 4px; /* Add gap when text appears */
-  background: #D1D5DB !important; /* Darker grey on hover */
+  background: var(--next-scenario-colour, #D1D5DB) !important;
+  color: white !important;
+}
+
+.scenario-legend-new-wrapper:hover .scenario-legend-new-text {
+  color: white;
 }
 
 .scenario-legend-new-text {
@@ -213,6 +222,7 @@
   align-items: flex-start;
   gap: 4px;
   pointer-events: none;
+  overflow: visible;
 }
 
 .scenario-legend-new-wrapper:hover .scenario-legend-hover-submenu {
@@ -239,7 +249,9 @@
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
   opacity: 0;
   transform: translateY(-4px);
-  transition: opacity 0.15s ease, transform 0.15s ease, border-color 0.15s ease;
+  pointer-events: none;
+  /* Exit: fast uniform fade (no stagger). Entry stagger via inline transitionDelay. */
+  transition: opacity 0.1s ease, transform 0.1s ease, border-color 0.15s ease;
 }
 
 .scenario-legend-view-pill:hover {
@@ -253,16 +265,169 @@
   color: #374151;
 }
 
-.scenario-legend-new-wrapper:hover .scenario-legend-view-pill {
+/* Stagger fade-in — delays set inline via transitionDelay */
+.scenario-legend-new-wrapper:hover .scenario-legend-view-pill,
+.scenario-legend-new-wrapper:hover .scenario-legend-submenu-divider {
   opacity: 1;
   transform: translateY(0);
+  pointer-events: auto;
 }
 
-/* Stagger fade-in */
-.scenario-legend-new-wrapper:hover .scenario-legend-view-pill:nth-child(1) { transition-delay: 0.08s; }
-.scenario-legend-new-wrapper:hover .scenario-legend-view-pill:nth-child(2) { transition-delay: 0.16s; }
-.scenario-legend-new-wrapper:hover .scenario-legend-view-pill:nth-child(3) { transition-delay: 0.24s; }
-.scenario-legend-new-wrapper:hover .scenario-legend-view-pill:nth-child(4) { transition-delay: 0.32s; }
+/* Canvas view pill — solid outline when active, tinted background */
+.scenario-legend-canvas-view-pill {
+  background: rgba(99, 132, 168, 0.1) !important;
+  backdrop-filter: blur(4px);
+  color: #4b6a8a !important;
+  border: 1.5px solid #4b6a8a !important;
+  box-shadow: none !important;
+}
+
+.scenario-legend-canvas-view-pill .scenario-legend-name {
+  color: #4b6a8a;
+}
+
+.scenario-legend-canvas-view-pill .scenario-legend-delete {
+  background: transparent;
+  color: #6384a8;
+}
+
+.scenario-legend-canvas-view-pill .scenario-legend-delete:hover {
+  background: rgba(99, 132, 168, 0.15);
+  color: #3a5470;
+}
+
+.scenario-legend-canvas-view-pill .scenario-legend-inline-edit {
+  color: #4b6a8a;
+}
+
+/* Drain progress bar — shrinks R-to-L as cycle counts down */
+.scenario-legend-drain {
+  position: absolute;
+  inset: 0;
+  background: rgba(99, 132, 168, 0.12);
+  transform-origin: left center;
+  animation: dagnet-drain linear both;
+  pointer-events: none;
+  border-radius: inherit;
+}
+
+@keyframes dagnet-drain {
+  from { transform: scaleX(1); }
+  to   { transform: scaleX(0); }
+}
+
+[data-theme="dark"] .scenario-legend-drain {
+  background: rgba(99, 148, 200, 0.15);
+}
+
+/* Inline edit input inside pills — sizes to content via ch units */
+.scenario-legend-inline-edit {
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid currentColor;
+  color: inherit;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  padding: 0;
+  margin: 0;
+  min-width: 4ch;
+  outline: none;
+  box-sizing: content-box;
+}
+
+/* Submenu divider — gap only, no visible line */
+.scenario-legend-submenu-divider {
+  height: 0;
+  width: 100%;
+  margin: 3px 0;
+  opacity: 0;
+  transition: opacity 0.1s ease;
+}
+
+/* Canvas view items in submenu — blue-grey tint to distinguish from display modes */
+.scenario-legend-canvas-view-item {
+  position: relative;
+  border-color: #6384a8;
+  color: #4b6a8a;
+  background: rgba(99, 132, 168, 0.08);
+}
+
+.scenario-legend-canvas-view-item.active {
+  border-style: solid;
+  border-color: #4b6a8a;
+  background: rgba(99, 132, 168, 0.15);
+}
+
+.scenario-legend-canvas-view-item .scenario-legend-canvas-view-btn {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: none;
+  border: none;
+  color: inherit;
+  font: inherit;
+  padding: 0;
+  cursor: pointer;
+  text-align: left;
+}
+
+/* Extend hover zone rightward so pointer can reach action buttons.
+   Inherits pointer-events from parent (none when hidden, auto when shown). */
+.scenario-legend-canvas-view-item::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  right: -52px;
+  width: 52px;
+  height: 100%;
+}
+
+/* Shared style for action buttons outside the pill (lock + delete) */
+.scenario-legend-canvas-view-action,
+.scenario-legend-canvas-view-delete {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  background: rgba(255, 255, 255, 0.8);
+  backdrop-filter: blur(4px);
+  border: 1px solid rgba(0, 0, 0, 0.1);
+  border-radius: 50%;
+  color: #9ca3af;
+  padding: 0;
+  cursor: pointer;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s ease, color 0.15s ease, background 0.15s ease;
+  z-index: 20;
+}
+
+.scenario-legend-canvas-view-action { left: calc(100% + 4px); }
+.scenario-legend-canvas-view-delete { left: calc(100% + 28px); }
+
+.scenario-legend-canvas-view-item:hover .scenario-legend-canvas-view-action,
+.scenario-legend-canvas-view-item:hover .scenario-legend-canvas-view-delete {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.scenario-legend-canvas-view-action:hover {
+  color: #4b6a8a;
+  background: rgba(99, 132, 168, 0.15);
+  border-color: rgba(99, 132, 168, 0.3);
+}
+
+.scenario-legend-canvas-view-item .scenario-legend-canvas-view-delete:hover {
+  color: #ef4444;
+  background: rgba(239, 68, 68, 0.1);
+  border-color: rgba(239, 68, 68, 0.3);
+}
 
 /* Dark mode support */
 [data-theme="dark"] {
@@ -328,6 +493,56 @@
   .scenario-legend-view-pill.active {
     border-color: #d1d5db;
     color: #d1d5db;
+  }
+
+  .scenario-legend-canvas-view-pill {
+    background: rgba(99, 148, 200, 0.12) !important;
+    color: #8cb4d8 !important;
+    border-color: #6a9ac4 !important;
+  }
+
+  .scenario-legend-canvas-view-pill .scenario-legend-name,
+  .scenario-legend-canvas-view-pill .scenario-legend-inline-edit {
+    color: #8cb4d8;
+  }
+
+  .scenario-legend-canvas-view-pill .scenario-legend-delete {
+    color: #6a9ac4;
+  }
+
+  .scenario-legend-canvas-view-pill .scenario-legend-delete:hover {
+    background: rgba(99, 148, 200, 0.2);
+    color: #a8cce6;
+  }
+
+  .scenario-legend-canvas-view-item {
+    border-color: #6a9ac4;
+    color: #8cb4d8;
+    background: rgba(99, 148, 200, 0.1);
+  }
+
+  .scenario-legend-canvas-view-item.active {
+    border-color: #8cb4d8;
+    background: rgba(99, 148, 200, 0.18);
+  }
+
+  .scenario-legend-canvas-view-item .scenario-legend-canvas-view-action,
+  .scenario-legend-canvas-view-item .scenario-legend-canvas-view-delete {
+    background: rgba(30, 30, 30, 0.8);
+    border-color: rgba(255, 255, 255, 0.1);
+    color: #9ca3af;
+  }
+
+  .scenario-legend-canvas-view-item .scenario-legend-canvas-view-action:hover {
+    color: #8cb4d8;
+    background: rgba(99, 148, 200, 0.2);
+    border-color: rgba(99, 148, 200, 0.3);
+  }
+
+  .scenario-legend-canvas-view-item .scenario-legend-canvas-view-delete:hover {
+    color: #ef4444;
+    background: rgba(239, 68, 68, 0.15);
+    border-color: rgba(239, 68, 68, 0.3);
   }
 }
 

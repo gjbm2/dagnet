@@ -75,16 +75,35 @@ export default function PostItNode({ data, selected, dragging }: NodeProps<PostI
   const minimised = !!postit.minimised;
   const prevMinimisedRef = useRef(minimised);
   const prevAnchorRef = useRef<string | undefined>((postit as any).minimised_anchor);
-  const justRestored = prevMinimisedRef.current && !minimised;
-  const restoredAnchor = justRestored ? (prevAnchorRef.current || 'tl') : undefined;
+  const restoreAnimUntilRef = useRef(0);
+  const restoredAnchorStash = useRef('tl');
+  const [, forceRender] = useState(0);
+  if (prevMinimisedRef.current && !minimised) {
+    restoreAnimUntilRef.current = Date.now() + 180;
+    restoredAnchorStash.current = prevAnchorRef.current || 'tl';
+  }
   prevMinimisedRef.current = minimised;
   prevAnchorRef.current = (postit as any).minimised_anchor;
+  const justRestored = Date.now() < restoreAnimUntilRef.current;
+  const restoredAnchor = justRestored ? restoredAnchorStash.current : undefined;
+  useEffect(() => {
+    if (!justRestored) return;
+    const remaining = restoreAnimUntilRef.current - Date.now();
+    if (remaining <= 0) return;
+    const t = setTimeout(() => forceRender(n => n + 1), remaining);
+    return () => clearTimeout(t);
+  }, [justRestored]);
   const [editing, setEditing] = useState(false);
   const [focusAt, setFocusAt] = useState<{ x: number; y: number } | null>(null);
   const [hovered, setHovered] = useState(false);
+  const [iconHovered, setIconHovered] = useState(false);
+  const hoverOffTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const hoverOn = useCallback(() => { if (hoverOffTimer.current) { clearTimeout(hoverOffTimer.current); hoverOffTimer.current = null; } setHovered(true); setIconHovered(true); }, []);
+  const hoverOff = useCallback(() => { setIconHovered(false); hoverOffTimer.current = setTimeout(() => setHovered(false), 800); }, []);
   const [cornerHint, setCornerHint] = useState<AnchorCorner | null>(null);
-  const lastCornerRef = useRef<AnchorCorner | null>(null);
+  const lastCornerRef = useRef<AnchorCorner | null>((postit as any).minimised_anchor ?? null);
   if (cornerHint) lastCornerRef.current = cornerHint;
+  else if (!lastCornerRef.current && (postit as any).minimised_anchor) lastCornerRef.current = (postit as any).minimised_anchor;
   const hintSuppressedUntil = useRef(0);
   const setCornerHintGuarded = useCallback((c: AnchorCorner | null) => {
     if (c && Date.now() < hintSuppressedUntil.current) return;
@@ -229,6 +248,7 @@ export default function PostItNode({ data, selected, dragging }: NodeProps<PostI
 
   const handleMinimise = useCallback((anchor: 'tl' | 'tr' | 'bl' | 'br') => {
     suppressHint();
+    window.dispatchEvent(new Event('dagnet:hideConnectors'));
     const mw = 32, mh = 32;
     const dx = (anchor === 'tr' || anchor === 'br') ? postit.width - mw : 0;
     const dy = (anchor === 'bl' || anchor === 'br') ? postit.height - mh : 0;
@@ -240,6 +260,7 @@ export default function PostItNode({ data, selected, dragging }: NodeProps<PostI
 
   const handleRestore = useCallback(() => {
     suppressHint();
+    window.dispatchEvent(new Event('dagnet:hideConnectors'));
     const anchor = minimisedAnchor || 'tl';
     const mw = 32, mh = 32;
     const dx = (anchor === 'tr' || anchor === 'br') ? postit.width - mw : 0;
@@ -253,7 +274,7 @@ export default function PostItNode({ data, selected, dragging }: NodeProps<PostI
   // Auto-dismiss hover label after 5s to prevent stale labels
   useEffect(() => {
     if (!hovered || !minimised) return;
-    const t = setTimeout(() => setHovered(false), 5000);
+    const t = setTimeout(() => hoverOff(), 5000);
     return () => clearTimeout(t);
   }, [hovered, minimised]);
 
@@ -273,8 +294,8 @@ export default function PostItNode({ data, selected, dragging }: NodeProps<PostI
           colour={dark ? '#e0e0e0' : '#555'}
           onMinimise={handleMinimise}
           onRestore={handleRestore}
-          onMouseEnter={() => setHovered(true)}
-          onMouseLeave={() => setHovered(false)}
+          onMouseEnter={hoverOn}
+          onMouseLeave={hoverOff}
           onCornerHover={setCornerHintGuarded}
         />
 
@@ -295,11 +316,28 @@ export default function PostItNode({ data, selected, dragging }: NodeProps<PostI
           </button>
         )}
 
-        <div style={{
-          transform: cornerHint ? `scale(${(32 + 12) / 32}, ${(32 + 12) / 32})` : 'scale(1)',
-          transformOrigin: CORNER_ORIGINS[cornerHint ?? lastCornerRef.current ?? minimisedAnchor ?? 'tl'],
-          transition: 'transform 300ms cubic-bezier(0.25, 0.1, 0.25, 1) 80ms',
-        }}>
+        {/* Ghost outline showing full-size bounds on hover */}
+        {(() => {
+          const anchor = minimisedAnchor || 'tl';
+          const ghostLeft = (anchor === 'tr' || anchor === 'br') ? -(postit.width - 32) : 0;
+          const ghostTop = (anchor === 'bl' || anchor === 'br') ? -(postit.height - 32) : 0;
+          const originX = (anchor === 'tr' || anchor === 'br') ? 'right' : 'left';
+          const originY = (anchor === 'bl' || anchor === 'br') ? 'bottom' : 'top';
+          return (
+            <div
+              className={iconHovered ? 'minimised-ghost-expand' : 'minimised-ghost-collapse'}
+              style={{
+                position: 'absolute', left: ghostLeft, top: ghostTop,
+                width: postit.width, height: postit.height,
+                border: `1.5px dashed ${dark ? 'rgba(255,255,255,0.25)' : 'rgba(0,0,0,0.18)'}`,
+                borderRadius: '1px',
+                pointerEvents: 'none',
+                transformOrigin: `${originY} ${originX}`,
+              }}
+            />
+          );
+        })()}
+
         <div
           className="canvas-annotation-minimised"
           data-anchor={minimisedAnchor || 'tl'}
@@ -307,6 +345,7 @@ export default function PostItNode({ data, selected, dragging }: NodeProps<PostI
             if (!e.ctrlKey && !e.metaKey && !e.shiftKey) {
               e.stopPropagation();
               suppressHint();
+              window.dispatchEvent(new Event('dagnet:hideConnectors'));
               const anchor = minimisedAnchor || 'tl';
               const mw = 32, mh = 32;
               const dx = (anchor === 'tr' || anchor === 'br') ? postit.width - mw : 0;
@@ -317,8 +356,8 @@ export default function PostItNode({ data, selected, dragging }: NodeProps<PostI
               })));
             }
           }}
-          onMouseEnter={() => { setHovered(true); if (!selected) setCornerHintGuarded(minimisedAnchor || 'tl'); }}
-          onMouseLeave={() => { setHovered(false); setCornerHintGuarded(null); }}
+          onMouseEnter={() => { hoverOn(); }}
+          onMouseLeave={() => { hoverOff(); }}
           style={{
             width: 32, height: 32,
             backgroundColor: bgColour,
@@ -338,12 +377,13 @@ export default function PostItNode({ data, selected, dragging }: NodeProps<PostI
             <path d="M12 0 L0 12 L0 0 Z" fill={dark ? 'rgba(255,255,255,0.06)' : 'rgba(255,255,255,0.4)'} />
           </svg>
         </div>
-        </div>
 
         {/* Hover label — vertically centred with icon */}
         {hovered && (
           <div className="nodrag nopan" style={{
-            position: 'absolute', left: cornerHint ? 50 : 38, top: 0, height: 32,
+            position: 'absolute',
+            ...((minimisedAnchor === 'tr' || minimisedAnchor === 'br') ? { right: 34 } : { left: 34 }),
+            top: 0, height: 32,
             display: 'flex', alignItems: 'center',
             fontSize: 12 / zoom, lineHeight: 1,
             color: dark ? 'rgba(255,255,255,0.75)' : 'rgba(0,0,0,0.65)',
@@ -371,8 +411,8 @@ export default function PostItNode({ data, selected, dragging }: NodeProps<PostI
         colour={dark ? '#e0e0e0' : '#555'}
         onMinimise={handleMinimise}
         onRestore={handleRestore}
-        onMouseEnter={() => setHovered(true)}
-        onMouseLeave={() => setHovered(false)}
+        onMouseEnter={hoverOn}
+        onMouseLeave={hoverOff}
         onCornerHover={setCornerHintGuarded}
       />
       {/* Ghost outline — original bounds while shrinking */}
@@ -389,14 +429,14 @@ export default function PostItNode({ data, selected, dragging }: NodeProps<PostI
       <div
         className={justRestored ? 'canvas-annotation-normal' : undefined}
         {...(restoredAnchor ? { 'data-anchor': restoredAnchor } : {})}
-        onMouseEnter={() => setHovered(true)}
-        onMouseLeave={() => setHovered(false)}
+        onMouseEnter={hoverOn}
+        onMouseLeave={hoverOff}
         style={{
           position: 'relative', width: '100%', height: '100%',
           transform: cornerHint
             ? `scale(${(postit.width - 12) / postit.width}, ${(postit.height - 12) / postit.height})`
             : undefined,
-          transformOrigin: cornerHint ? CORNER_ORIGINS[cornerHint] : undefined,
+          transformOrigin: CORNER_ORIGINS[cornerHint ?? lastCornerRef.current ?? 'tl'],
           transition: 'transform 300ms cubic-bezier(0.25, 0.1, 0.25, 1) 200ms',
         }}
       >
@@ -462,7 +502,10 @@ export default function PostItNode({ data, selected, dragging }: NodeProps<PostI
         <PostItEditor
           content={postit.text}
           fontSize={fontSize}
+          fontSizeKey={postit.fontSize || 'M'}
+          colour={postit.colour}
           editing={editing}
+          zoom={zoom}
           focusAt={focusAt}
           onFocusAtApplied={() => setFocusAt(null)}
           onEditingChange={(isEditing) => {
@@ -470,6 +513,8 @@ export default function PostItNode({ data, selected, dragging }: NodeProps<PostI
             setEditing(isEditing);
           }}
           onChange={handleChange}
+          onFontSizeChange={(key) => onUpdate(postit.id, { fontSize: key as 'S' | 'M' | 'L' | 'XL' })}
+          onColourChange={(hex) => onUpdate(postit.id, { colour: hex })}
         />
       </div>
 

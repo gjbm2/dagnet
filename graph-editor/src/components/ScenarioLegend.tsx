@@ -8,10 +8,10 @@
  * without needing complex JavaScript width calculations.
  */
 
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useState, useRef, useEffect } from 'react';
 import { Scenario } from '../types/scenarios';
-import { Eye, EyeOff, Images, Image, Square, X, Plus, type LucideIcon } from 'lucide-react';
-import type { ScenarioVisibilityMode, ViewOverlayMode } from '../types';
+import { Eye, EyeOff, Images, Image, Square, X, Plus, Minimize2, Maximize2, Check, Trash2, LayoutTemplate, LockKeyhole, LockOpen, type LucideIcon } from 'lucide-react';
+import type { ScenarioVisibilityMode, ViewOverlayMode, CanvasView } from '../types';
 import toast from 'react-hot-toast';
 import './ScenarioLegend.css';
 
@@ -22,6 +22,8 @@ interface ViewModeItem {
   icon?: LucideIcon;
   isActive: () => boolean;
   toggle: () => void;
+  /** Optional sub-options shown on hover when this mode's pill is active. */
+  activeSubmenu?: { label: string; checked?: boolean; onClick: () => void }[];
 }
 
 interface ScenarioLegendProps {
@@ -44,6 +46,14 @@ interface ScenarioLegendProps {
   viewModes?: ViewModeItem[];
   /** When true, scenario chips are hidden (replaced by the active mode pill). */
   hideScenarioChips?: boolean;
+  /** Canvas view groups. */
+  canvasViews?: CanvasView[];
+  activeCanvasViewId?: string | null;
+  onRenameScenario?: (scenarioId: string, newName: string) => void;
+  /** Colour the next created scenario will get. */
+  nextScenarioColour?: string;
+  /** Dashboard auto-cycle interval in ms (null = off). Drives drain animation on view pill. */
+  dashboardCycleMs?: number | null;
 }
 
 export function ScenarioLegend({
@@ -64,6 +74,11 @@ export function ScenarioLegend({
   onNewScenario,
   viewModes = [],
   hideScenarioChips = false,
+  canvasViews = [],
+  activeCanvasViewId,
+  onRenameScenario,
+  nextScenarioColour,
+  dashboardCycleMs,
 }: ScenarioLegendProps) {
   const [deletingIds, setDeletingIds] = useState<string[]>([]);
   
@@ -329,8 +344,11 @@ export function ScenarioLegend({
               {getModeIcon(scenario.id)}
             </button>
             
-            <span className="scenario-legend-name">{scenario.name}</span>
-            
+            <InlineEditableName
+              name={scenario.name}
+              onRename={onRenameScenario ? (name) => onRenameScenario(scenario.id, name) : undefined}
+            />
+
             <button
               className="scenario-legend-delete"
               onClick={(e) => {
@@ -398,26 +416,60 @@ export function ScenarioLegend({
       {/* Active view mode pills — shown for each active mode */}
       {viewModes.filter(m => m.isActive()).map(mode => {
         const ModeIcon = mode.icon;
+        const hasSubmenu = mode.activeSubmenu && mode.activeSubmenu.length > 0;
         return (
-        <div key={mode.id} className="scenario-legend-chip scenario-legend-mode-pill">
-          <span className="scenario-legend-name">{ModeIcon && <ModeIcon size={16} />}{mode.label}</span>
-          <button
-            className="scenario-legend-delete"
-            onClick={(e) => {
-              e.stopPropagation();
-              mode.toggle();
-            }}
-            title={`Exit ${mode.label}`}
-          >
-            <X size={14} />
-          </button>
+        <div key={mode.id} className={`scenario-legend-new-wrapper${hasSubmenu ? '' : ' scenario-legend-no-submenu'}`}>
+          <div className="scenario-legend-chip scenario-legend-mode-pill">
+            <span className="scenario-legend-name">{ModeIcon && <ModeIcon size={16} />}{mode.label}</span>
+            <button
+              className="scenario-legend-delete"
+              onClick={(e) => {
+                e.stopPropagation();
+                mode.toggle();
+              }}
+              title={`Exit ${mode.label}`}
+            >
+              <X size={14} />
+            </button>
+          </div>
+          {hasSubmenu && (
+            <div className="scenario-legend-hover-submenu">
+              {mode.activeSubmenu!.map((item, i) => (
+                <button
+                  key={item.label}
+                  className={`scenario-legend-view-pill${item.checked ? ' active' : ''}`}
+                  style={{ transitionDelay: `${(i + 1) * 0.03 + 0.03}s` }}
+                  onClick={(e) => { e.stopPropagation(); item.onClick(); }}
+                >
+                  {item.checked && <Check size={14} />}
+                  {item.label}
+                </button>
+              ))}
+            </div>
+          )}
         </div>
         );
       })}
 
+      {/* Active canvas view pill — inline-editable name + dismiss */}
+      {activeCanvasViewId && (() => {
+        const activeView = canvasViews.find(v => v.id === activeCanvasViewId);
+        if (!activeView) return null;
+        return (
+          <CanvasViewPill
+            key={activeView.id}
+            view={activeView}
+            allViews={canvasViews}
+            cycleMs={dashboardCycleMs}
+            onDeactivate={() => window.dispatchEvent(new Event('dagnet:deactivateCanvasView'))}
+            onRename={(name) => window.dispatchEvent(new CustomEvent('dagnet:renameCanvasView', { detail: { viewId: activeView.id, name } }))}
+          />
+        );
+      })()}
+
       {/* + button with hover submenu — not shown in dashboard mode */}
       {!isDashboardMode && (
-        <div className="scenario-legend-new-wrapper">
+        <div className="scenario-legend-new-wrapper" style={nextScenarioColour ? { '--next-scenario-colour': nextScenarioColour } as React.CSSProperties : undefined}>
           {/* Invisible spacer to reserve full expanded width */}
           <span className="scenario-legend-new-spacer" aria-hidden="true">
             <Plus size={16} />
@@ -434,30 +486,267 @@ export function ScenarioLegend({
             <Plus size={16} />
             <span className="scenario-legend-new-text">New scenario</span>
           </button>
-          {/* Hover submenu: view mode pills */}
-          {viewModes.length > 0 && (
-            <div className="scenario-legend-hover-submenu">
-              {viewModes.map(mode => {
-                const Icon = mode.icon;
-                return (
-                  <button
-                    key={mode.id}
-                    className={`scenario-legend-view-pill ${mode.isActive() ? 'active' : ''}`}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      mode.toggle();
-                    }}
-                  >
-                    {Icon && <Icon size={16} />}
-                    {mode.label}
-                  </button>
-                );
-              })}
-            </div>
-          )}
+          {/* Hover submenu: view modes + canvas views + actions */}
+          <div className="scenario-legend-hover-submenu">
+            {(() => {
+              let idx = 0;
+              const delay = () => `${(idx++) * 0.03 + 0.03}s`;
+              return (
+                <>
+                  {viewModes.map(mode => {
+                    const Icon = mode.icon;
+                    const d = delay();
+                    return (
+                      <button
+                        key={mode.id}
+                        className={`scenario-legend-view-pill ${mode.isActive() ? 'active' : ''}`}
+                        style={{ transitionDelay: d }}
+                        onClick={(e) => { e.stopPropagation(); mode.toggle(); }}
+                      >
+                        {Icon && <Icon size={16} />}
+                        {mode.label}
+                      </button>
+                    );
+                  })}
+
+                  <CanvasViewSubmenuItems views={canvasViews} activeViewId={activeCanvasViewId} startIndex={idx} onIndex={() => idx++} />
+                </>
+              );
+            })()}
+          </div>
         </div>
       )}
     </div>
+  );
+}
+
+/** Inline-editable pill for the active canvas view, with hover submenu to switch views. */
+function CanvasViewPill({ view, allViews, cycleMs, onDeactivate, onRename }: {
+  view: CanvasView;
+  allViews: CanvasView[];
+  cycleMs?: number | null;
+  onDeactivate: () => void;
+  onRename: (name: string) => void;
+}) {
+  // Drain animation key — resets whenever the view changes or cycle interval changes
+  const [drainKey, setDrainKey] = useState(0);
+  useEffect(() => { setDrainKey(k => k + 1); }, [view.id, cycleMs]);
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(view.name);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (editing) {
+      setDraft(view.name);
+      requestAnimationFrame(() => inputRef.current?.select());
+    }
+  }, [editing, view.name]);
+
+  const commit = () => {
+    const trimmed = draft.trim();
+    if (trimmed && trimmed !== view.name) onRename(trimmed);
+    setEditing(false);
+  };
+
+  return (
+    <div className="scenario-legend-new-wrapper scenario-legend-canvas-view-pill-wrapper">
+      <div className="scenario-legend-chip scenario-legend-mode-pill scenario-legend-canvas-view-pill" style={{ position: 'relative', overflow: 'hidden' }}>
+        {/* Drain progress — fills L-to-R then resets on cycle */}
+        {cycleMs && cycleMs > 0 && (
+          <div
+            key={drainKey}
+            className="scenario-legend-drain"
+            style={{ animationDuration: `${cycleMs}ms` }}
+          />
+        )}
+        {editing ? (
+          <input
+            ref={inputRef}
+            className="scenario-legend-inline-edit"
+            value={draft}
+            style={{ width: `${Math.max(draft.length + 1, 4)}ch` }}
+            onChange={(e) => setDraft(e.target.value)}
+            onBlur={commit}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') commit();
+              if (e.key === 'Escape') setEditing(false);
+            }}
+            onClick={(e) => e.stopPropagation()}
+          />
+        ) : (
+          <span
+            className="scenario-legend-name"
+            onClick={() => setEditing(true)}
+            title="Click to rename"
+            style={{ cursor: 'text' }}
+          >
+            {view.locked ? <LockKeyhole size={14} /> : <LockOpen size={14} />}
+            {view.name}
+          </span>
+        )}
+        <button
+          className="scenario-legend-delete"
+          onClick={(e) => { e.stopPropagation(); onDeactivate(); }}
+          title="Deactivate view"
+        >
+          <X size={14} />
+        </button>
+      </div>
+      {/* Hover submenu — view-only items */}
+      <div className="scenario-legend-hover-submenu">
+        <CanvasViewSubmenuItems views={allViews} activeViewId={view.id} startIndex={0} />
+      </div>
+    </div>
+  );
+}
+
+/** Click-to-edit name span for scenario chips and similar pills. */
+function InlineEditableName({ name, onRename }: { name: string; onRename?: (name: string) => void }) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(name);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (editing) {
+      setDraft(name);
+      requestAnimationFrame(() => inputRef.current?.select());
+    }
+  }, [editing, name]);
+
+  const commit = () => {
+    const trimmed = draft.trim();
+    if (trimmed && trimmed !== name && onRename) onRename(trimmed);
+    setEditing(false);
+  };
+
+  if (!onRename) {
+    return <span className="scenario-legend-name">{name}</span>;
+  }
+
+  if (editing) {
+    return (
+      <input
+        ref={inputRef}
+        className="scenario-legend-inline-edit"
+        value={draft}
+        style={{ width: `${Math.max(draft.length + 1, 4)}ch` }}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') commit();
+          if (e.key === 'Escape') setEditing(false);
+        }}
+        onClick={(e) => e.stopPropagation()}
+      />
+    );
+  }
+
+  return (
+    <span
+      className="scenario-legend-name"
+      onClick={(e) => { e.stopPropagation(); setEditing(true); }}
+      title="Click to rename"
+      style={{ cursor: 'text' }}
+    >
+      {name}
+    </span>
+  );
+}
+
+/** Shared canvas view items for hover submenus (used in both main dropdown and pill dropdown). */
+function CanvasViewSubmenuItems({ views, activeViewId, startIndex = 0, onIndex }: {
+  views: CanvasView[];
+  activeViewId?: string | null;
+  startIndex?: number;
+  onIndex?: () => void;
+}) {
+  let idx = startIndex;
+  const delay = () => {
+    const d = `${(idx++) * 0.03 + 0.03}s`;
+    onIndex?.();
+    return d;
+  };
+
+  return (
+    <>
+      <div className="scenario-legend-submenu-divider" style={{ transitionDelay: delay() }} />
+
+      {views.map(view => (
+        <div
+          key={view.id}
+          className={`scenario-legend-view-pill scenario-legend-canvas-view-item ${view.id === activeViewId ? 'active' : ''}`}
+          style={{ transitionDelay: delay() }}
+        >
+          <button
+            className="scenario-legend-canvas-view-btn"
+            onClick={(e) => {
+              e.stopPropagation();
+              window.dispatchEvent(new CustomEvent('dagnet:applyCanvasView', { detail: { viewId: view.id } }));
+            }}
+          >
+            {view.locked ? <LockKeyhole size={14} /> : <LockOpen size={14} />}
+            {view.name}
+          </button>
+          <button
+            className="scenario-legend-canvas-view-action"
+            onClick={(e) => {
+              e.stopPropagation();
+              window.dispatchEvent(new CustomEvent('dagnet:toggleCanvasViewLocked', { detail: { viewId: view.id } }));
+            }}
+            title={view.locked ? 'Unlock view' : 'Lock view'}
+          >
+            {view.locked ? <LockKeyhole size={11} /> : <LockOpen size={11} />}
+          </button>
+          <button
+            className="scenario-legend-canvas-view-delete"
+            onClick={(e) => {
+              e.stopPropagation();
+              window.dispatchEvent(new CustomEvent('dagnet:deleteCanvasView', { detail: { viewId: view.id } }));
+            }}
+            title="Delete view"
+          >
+            <Trash2 size={12} />
+          </button>
+        </div>
+      ))}
+
+      <button
+        className="scenario-legend-view-pill scenario-legend-canvas-view-item"
+        style={{ transitionDelay: delay() }}
+        onClick={(e) => {
+          e.stopPropagation();
+          window.dispatchEvent(new CustomEvent('dagnet:createCanvasView', { detail: { name: `View ${views.length + 1}` } }));
+        }}
+      >
+        <Plus size={14} />
+        New view
+      </button>
+
+      <div className="scenario-legend-submenu-divider" style={{ transitionDelay: delay() }} />
+
+      <button
+        className="scenario-legend-view-pill scenario-legend-canvas-view-item"
+        style={{ transitionDelay: delay() }}
+        onClick={(e) => {
+          e.stopPropagation();
+          window.dispatchEvent(new CustomEvent('dagnet:restoreAll', { detail: { clearView: true } }));
+        }}
+      >
+        <Maximize2 size={14} />
+        Expand all
+      </button>
+      <button
+        className="scenario-legend-view-pill scenario-legend-canvas-view-item"
+        style={{ transitionDelay: delay() }}
+        onClick={(e) => {
+          e.stopPropagation();
+          window.dispatchEvent(new CustomEvent('dagnet:minimiseAll', { detail: { clearView: true } }));
+        }}
+      >
+        <Minimize2 size={14} />
+        Shrink all
+      </button>
+    </>
   );
 }
 

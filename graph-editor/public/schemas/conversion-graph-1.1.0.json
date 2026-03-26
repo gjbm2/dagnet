@@ -79,6 +79,13 @@
         "$ref": "#/$defs/CanvasAnalysis"
       }
     },
+    "canvasViews": {
+      "type": "array",
+      "description": "Named saved layout states for canvas objects (min/max configurations)",
+      "items": {
+        "$ref": "#/$defs/CanvasView"
+      }
+    },
     "_bayes": {
       "type": "object",
       "description": "Graph-level metadata from the most recent Bayesian fitting run",
@@ -333,6 +340,55 @@
           "items": {
             "$ref": "#/$defs/ChartRecipeScenario"
           }
+        }
+      }
+    },
+    "CanvasViewObjectState": {
+      "type": "object",
+      "description": "Min/max state of a single canvas object within a saved view.",
+      "additionalProperties": false,
+      "required": ["id", "type", "minimised"],
+      "properties": {
+        "id": { "type": "string" },
+        "type": { "type": "string", "enum": ["postit", "analysis"] },
+        "minimised": { "type": "boolean" },
+        "anchor": { "type": "string", "enum": ["tl", "tr", "bl", "br"] }
+      }
+    },
+    "CanvasView": {
+      "type": "object",
+      "description": "Named saved layout state for canvas objects (min/max configurations).",
+      "additionalProperties": false,
+      "required": ["id", "name", "states"],
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "states": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/CanvasViewObjectState" }
+        },
+        "viewport": {
+          "type": "object",
+          "description": "Saved viewport position and zoom",
+          "properties": {
+            "x": { "type": "number" },
+            "y": { "type": "number" },
+            "zoom": { "type": "number" }
+          },
+          "required": ["x", "y", "zoom"]
+        },
+        "locked": {
+          "type": "boolean",
+          "description": "When true, auto-save of state changes is suppressed"
+        },
+        "viewOverlayMode": {
+          "type": "string",
+          "enum": ["none", "forecast-quality", "data-depth"],
+          "description": "Display overlay mode captured with this view"
+        },
+        "sankey": {
+          "type": "boolean",
+          "description": "Whether Sankey view is enabled in this view"
         }
       }
     },

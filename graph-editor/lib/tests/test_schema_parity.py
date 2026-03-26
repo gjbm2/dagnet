@@ -30,6 +30,7 @@ from graph_types import (
     LatencyConfig, ForecastParams, NodeImage, PostIt, Container,
     CanvasAnalysis, ContentItem, CanvasAnalysisDisplay, ChartRecipeCore,
     ChartRecipeAnalysis, ChartRecipeScenario,
+    CanvasView, CanvasViewObjectState,
 )
 
 
@@ -305,6 +306,8 @@ class TestAllSchemaDefsHavePythonTypes:
         'ChartRecipeCore': ChartRecipeCore,
         'ChartRecipeAnalysis': ChartRecipeAnalysis,
         'ChartRecipeScenario': ChartRecipeScenario,
+        'CanvasView': CanvasView,
+        'CanvasViewObjectState': CanvasViewObjectState,
         # These are deprecated or not modeled separately in Python:
         # 'Costs', 'MonetaryCost', 'TimeCost' - deprecated
         # 'UUID', 'Id', 'Condition' - simple types, not classes

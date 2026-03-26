@@ -109,7 +109,7 @@ export function MinimiseCornerArrows({
                 : hoveredCorner != null ? 0.15
                 : 0.45,
               transition: 'opacity 450ms ease',
-              pointerEvents: 'auto',
+              pointerEvents: visible ? 'auto' : 'none',
               zIndex: 10,
             }}
             title={isMinimised ? 'Restore' : 'Minimise'}

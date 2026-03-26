@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import * as Menubar from '@radix-ui/react-menubar';
-import { useTabContext } from '../../contexts/TabContext';
+import { useTabContext, fileRegistry } from '../../contexts/TabContext';
 import { useNavigatorContext } from '../../contexts/NavigatorContext';
 import EdgeScalingControl from '../EdgeScalingControl';
 import { useViewPreferencesContext } from '../../contexts/ViewPreferencesContext';
@@ -316,19 +316,53 @@ export function ViewMenu() {
 
               <Menubar.Separator className="menubar-separator" />
 
-              <Menubar.Item
-                className="menubar-item"
-                onSelect={() => window.dispatchEvent(new CustomEvent('dagnet:minimiseAll'))}
-              >
-                Minimise all annotations
-              </Menubar.Item>
-
-              <Menubar.Item
-                className="menubar-item"
-                onSelect={() => window.dispatchEvent(new CustomEvent('dagnet:restoreAll'))}
-              >
-                Restore all annotations
-              </Menubar.Item>
+              <Menubar.Sub>
+                <Menubar.SubTrigger className="menubar-item">
+                  Views
+                  <div className="menubar-right-slot">›</div>
+                </Menubar.SubTrigger>
+                <Menubar.Portal>
+                  <Menubar.SubContent className="menubar-content" sideOffset={4}>
+                    {(() => {
+                      const graphData = activeTab ? fileRegistry.getFile(activeTab.fileId)?.data : null;
+                      const canvasViews = (graphData as any)?.canvasViews ?? [];
+                      const activeViewId = activeTab?.editorState?.activeCanvasViewId ?? null;
+                      return (
+                        <>
+                          {canvasViews.map((v: any) => (
+                            <Menubar.Item
+                              key={v.id}
+                              className="menubar-item"
+                              onSelect={() => window.dispatchEvent(new CustomEvent('dagnet:applyCanvasView', { detail: { viewId: v.id } }))}
+                            >
+                              {v.id === activeViewId ? '✓ ' : '   '}{v.name}
+                            </Menubar.Item>
+                          ))}
+                          <Menubar.Item
+                            className="menubar-item"
+                            onSelect={() => window.dispatchEvent(new CustomEvent('dagnet:createCanvasView', { detail: { name: `View ${canvasViews.length + 1}` } }))}
+                          >
+                            New view
+                          </Menubar.Item>
+                          <Menubar.Separator className="menubar-separator" />
+                          <Menubar.Item
+                            className="menubar-item"
+                            onSelect={() => window.dispatchEvent(new CustomEvent('dagnet:restoreAll', { detail: { clearView: true } }))}
+                          >
+                            Expand all
+                          </Menubar.Item>
+                          <Menubar.Item
+                            className="menubar-item"
+                            onSelect={() => window.dispatchEvent(new CustomEvent('dagnet:minimiseAll', { detail: { clearView: true } }))}
+                          >
+                            Shrink all
+                          </Menubar.Item>
+                        </>
+                      );
+                    })()}
+                  </Menubar.SubContent>
+                </Menubar.Portal>
+              </Menubar.Sub>
 
               <Menubar.Separator className="menubar-separator" />
             </>

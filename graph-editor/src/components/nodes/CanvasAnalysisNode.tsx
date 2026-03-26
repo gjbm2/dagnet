@@ -66,14 +66,33 @@ function CanvasAnalysisNodeInner({ data, selected, dragging }: NodeProps<CanvasA
   const minimised = !!analysis.minimised;
   const prevMinimisedRef = useRef(minimised);
   const prevAnchorRef = useRef<string | undefined>((analysis as any).minimised_anchor);
-  const justRestored = prevMinimisedRef.current && !minimised;
-  const restoredAnchor = justRestored ? (prevAnchorRef.current || 'tl') : undefined;
+  const restoreAnimUntilRef = useRef(0);
+  const restoredAnchorStash = useRef('tl');
+  const [, forceRender] = useState(0);
+  if (prevMinimisedRef.current && !minimised) {
+    restoreAnimUntilRef.current = Date.now() + 180;
+    restoredAnchorStash.current = prevAnchorRef.current || 'tl';
+  }
   prevMinimisedRef.current = minimised;
   prevAnchorRef.current = (analysis as any).minimised_anchor;
+  const justRestored = Date.now() < restoreAnimUntilRef.current;
+  const restoredAnchor = justRestored ? restoredAnchorStash.current : undefined;
+  useEffect(() => {
+    if (!justRestored) return;
+    const remaining = restoreAnimUntilRef.current - Date.now();
+    if (remaining <= 0) return;
+    const t = setTimeout(() => forceRender(n => n + 1), remaining);
+    return () => clearTimeout(t);
+  }, [justRestored]);
   const [hovered, setHovered] = useState(false);
+  const [iconHovered, setIconHovered] = useState(false);
+  const hoverOffTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const hoverOn = useCallback(() => { if (hoverOffTimer.current) { clearTimeout(hoverOffTimer.current); hoverOffTimer.current = null; } setHovered(true); setIconHovered(true); }, []);
+  const hoverOff = useCallback(() => { setIconHovered(false); hoverOffTimer.current = setTimeout(() => setHovered(false), 800); }, []);
   const [cornerHint, setCornerHint] = useState<AnchorCorner | null>(null);
-  const lastCornerRef = useRef<AnchorCorner | null>(null);
+  const lastCornerRef = useRef<AnchorCorner | null>((analysis as any).minimised_anchor ?? null);
   if (cornerHint) lastCornerRef.current = cornerHint;
+  else if (!lastCornerRef.current && (analysis as any).minimised_anchor) lastCornerRef.current = (analysis as any).minimised_anchor;
   const hintSuppressedUntil = useRef(0);
   const setCornerHintGuarded = useCallback((c: AnchorCorner | null) => {
     if (c && Date.now() < hintSuppressedUntil.current) return;
@@ -900,6 +919,7 @@ function CanvasAnalysisNodeInner({ data, selected, dragging }: NodeProps<CanvasA
 
   const handleMinimise = useCallback((anchor: 'tl' | 'tr' | 'bl' | 'br') => {
     suppressHint();
+    window.dispatchEvent(new Event('dagnet:hideConnectors'));
     const mw = 32, mh = 32;
     const dx = (anchor === 'tr' || anchor === 'br') ? analysis.width - mw : 0;
     const dy = (anchor === 'bl' || anchor === 'br') ? analysis.height - mh : 0;
@@ -911,6 +931,7 @@ function CanvasAnalysisNodeInner({ data, selected, dragging }: NodeProps<CanvasA
 
   const handleRestore = useCallback(() => {
     suppressHint();
+    window.dispatchEvent(new Event('dagnet:hideConnectors'));
     const anchor = minimisedAnchor || 'tl';
     const mw = 32, mh = 32;
     const dx = (anchor === 'tr' || anchor === 'br') ? analysis.width - mw : 0;
@@ -924,7 +945,7 @@ function CanvasAnalysisNodeInner({ data, selected, dragging }: NodeProps<CanvasA
   // Auto-dismiss hover label after 5s to prevent stale labels
   useEffect(() => {
     if (!hovered || !minimised) return;
-    const t = setTimeout(() => setHovered(false), 5000);
+    const t = setTimeout(() => hoverOff(), 5000);
     return () => clearTimeout(t);
   }, [hovered, minimised]);
 
@@ -948,8 +969,8 @@ function CanvasAnalysisNodeInner({ data, selected, dragging }: NodeProps<CanvasA
           colour="var(--text-primary, #555)"
           onMinimise={handleMinimise}
           onRestore={handleRestore}
-          onMouseEnter={() => setHovered(true)}
-          onMouseLeave={() => setHovered(false)}
+          onMouseEnter={hoverOn}
+          onMouseLeave={hoverOff}
           onCornerHover={setCornerHintGuarded}
         />
 
@@ -970,18 +991,36 @@ function CanvasAnalysisNodeInner({ data, selected, dragging }: NodeProps<CanvasA
           </button>
         )}
 
+        {/* Ghost outline showing full-size bounds on hover */}
+        {(() => {
+          const anchor = minimisedAnchor || 'tl';
+          const ghostLeft = (anchor === 'tr' || anchor === 'br') ? -(analysis.width - 32) : 0;
+          const ghostTop = (anchor === 'bl' || anchor === 'br') ? -(analysis.height - 32) : 0;
+          const originX = (anchor === 'tr' || anchor === 'br') ? 'right' : 'left';
+          const originY = (anchor === 'bl' || anchor === 'br') ? 'bottom' : 'top';
+          return (
+            <div
+              className={iconHovered ? 'minimised-ghost-expand' : 'minimised-ghost-collapse'}
+              style={{
+                position: 'absolute', left: ghostLeft, top: ghostTop,
+                width: analysis.width, height: analysis.height,
+                border: '1.5px dashed var(--canvas-analysis-border, rgba(0,0,0,0.12))',
+                borderRadius: 8,
+                pointerEvents: 'none',
+                transformOrigin: `${originY} ${originX}`,
+              }}
+            />
+          );
+        })()}
+
         <div
-          style={{
-            transform: cornerHint ? `scale(${(32 + 12) / 32}, ${(32 + 12) / 32})` : 'scale(1)',
-            transformOrigin: CORNER_ORIGINS[cornerHint ?? lastCornerRef.current ?? minimisedAnchor ?? 'tl'],
-            transition: 'transform 300ms cubic-bezier(0.25, 0.1, 0.25, 1) 80ms',
-          }}
+          className="canvas-analysis-node canvas-annotation-minimised"
+          data-anchor={minimisedAnchor || 'tl'}
           onClick={(e) => {
             if (!e.ctrlKey && !e.metaKey && !e.shiftKey) {
               e.stopPropagation();
               suppressHint();
-              // Capture restore params NOW (correct at click time), then schedule
-              // the write after d3-drag's interaction guard clears (2 rAFs in onNodeDragStop).
+              window.dispatchEvent(new Event('dagnet:hideConnectors'));
               const anchor = minimisedAnchor || 'tl';
               const mw = 32, mh = 32;
               const dx = (anchor === 'tr' || anchor === 'br') ? analysis.width - mw : 0;
@@ -992,18 +1031,12 @@ function CanvasAnalysisNodeInner({ data, selected, dragging }: NodeProps<CanvasA
               })));
             }
           }}
-        >
-        <div
-          className="canvas-analysis-node canvas-annotation-minimised"
-          data-anchor={minimisedAnchor || 'tl'}
           onMouseEnter={() => {
-            setHovered(true);
-            if (!selected) setCornerHintGuarded(minimisedAnchor || 'tl');
+            hoverOn();
             window.dispatchEvent(new CustomEvent('dagnet:analysisHover', { detail: { analysisId: analysis.id } }));
           }}
           onMouseLeave={() => {
-            setHovered(false);
-            setCornerHintGuarded(null);
+            hoverOff();
             window.dispatchEvent(new CustomEvent('dagnet:analysisHover', { detail: { analysisId: null } }));
           }}
           style={{
@@ -1026,12 +1059,13 @@ function CanvasAnalysisNodeInner({ data, selected, dragging }: NodeProps<CanvasA
         >
           <TypeIcon size={iconSize} style={{ color: 'var(--canvas-analysis-title, #374151)', opacity: 0.85 }} />
         </div>
-        </div>
 
         {/* Hover label — vertically centred with icon */}
         {hovered && (
           <div className="nodrag nopan" style={{
-            position: 'absolute', left: cornerHint ? 50 : 38, top: 0, height: 32,
+            position: 'absolute',
+            ...((minimisedAnchor === 'tr' || minimisedAnchor === 'br') ? { right: 34 } : { left: 34 }),
+            top: 0, height: 32,
             display: 'flex', alignItems: 'center',
             fontSize: 12 / zoom, lineHeight: 1,
             color: 'var(--canvas-analysis-title, #374151)',
@@ -1059,8 +1093,8 @@ function CanvasAnalysisNodeInner({ data, selected, dragging }: NodeProps<CanvasA
       colour="var(--text-primary, #555)"
       onMinimise={handleMinimise}
       onRestore={handleRestore}
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
+      onMouseEnter={hoverOn}
+      onMouseLeave={hoverOff}
       onCornerHover={setCornerHintGuarded}
     />
     {/* Ghost outline — original bounds while shrinking */}
@@ -1078,11 +1112,11 @@ function CanvasAnalysisNodeInner({ data, selected, dragging }: NodeProps<CanvasA
       className={`canvas-analysis-node${selected ? ' nowheel' : ''}${justRestored ? ' canvas-annotation-normal' : ''}`}
       {...(restoredAnchor ? { 'data-anchor': restoredAnchor } : {})}
       onMouseEnter={() => {
-        setHovered(true);
+        hoverOn();
         window.dispatchEvent(new CustomEvent('dagnet:analysisHover', { detail: { analysisId: analysis.id } }));
       }}
       onMouseLeave={() => {
-        setHovered(false);
+        hoverOff();
         window.dispatchEvent(new CustomEvent('dagnet:analysisHover', { detail: { analysisId: null } }));
       }}
       style={{
@@ -1104,7 +1138,7 @@ function CanvasAnalysisNodeInner({ data, selected, dragging }: NodeProps<CanvasA
         transform: cornerHint
           ? `scale(${(analysis.width - 12) / analysis.width}, ${(analysis.height - 12) / analysis.height})`
           : undefined,
-        transformOrigin: cornerHint ? CORNER_ORIGINS[cornerHint] : undefined,
+        transformOrigin: CORNER_ORIGINS[cornerHint ?? lastCornerRef.current ?? 'tl'],
         transition: 'transform 300ms cubic-bezier(0.25, 0.1, 0.25, 1) 200ms, box-shadow 0.15s ease-out',
       }}
     >

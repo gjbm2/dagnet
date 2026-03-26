@@ -7,7 +7,7 @@
 
 import React from 'react';
 import type { Edge, Node, Connection } from 'reactflow';
-import { Plus, StickyNote, Square, BarChart3, Clipboard, CheckSquare, Monitor, X, LayoutGrid, Minimize2, Maximize2 } from 'lucide-react';
+import { Plus, StickyNote, Square, BarChart3, Clipboard, CheckSquare, Monitor, X, LayoutGrid, Minimize2, Maximize2, Layers, Trash2, LockKeyhole, LockOpen } from 'lucide-react';
 import { ContextMenu, type ContextMenuItem } from '../ContextMenu';
 import { NodeContextMenu } from '../NodeContextMenu';
 import { PostItContextMenu } from '../PostItContextMenu';
@@ -104,6 +104,8 @@ export interface CanvasContextMenusProps {
 
   // View mode submenu items (built by parent from current state)
   viewModeItems: ContextMenuItem[];
+  // Active canvas view
+  activeCanvasViewId?: string | null;
 
   // Variant modal (from useEdgeConnection)
   showVariantModal: boolean;
@@ -180,6 +182,7 @@ export const CanvasContextMenus: React.FC<CanvasContextMenusProps> = React.memo(
   scenariosContext,
   captureTabScenariosToRecipe,
   viewModeItems,
+  activeCanvasViewId,
   showVariantModal,
   pendingConnection,
   caseNodeVariants,
@@ -245,16 +248,54 @@ export const CanvasContextMenus: React.FC<CanvasContextMenusProps> = React.memo(
         if (copiedNode || copiedSubgraph || nodes.length > 0) {
           paneItems.push({ label: '', onClick: () => {}, divider: true });
         }
-        paneItems.push({
-          label: 'Minimise All',
-          icon: <Minimize2 size={14} />,
-          onClick: () => window.dispatchEvent(new CustomEvent('dagnet:minimiseAll')),
-        });
-        paneItems.push({
-          label: 'Restore All',
-          icon: <Maximize2 size={14} />,
-          onClick: () => window.dispatchEvent(new CustomEvent('dagnet:restoreAll')),
-        });
+        {
+          const viewsSubmenu: ContextMenuItem[] = [];
+          const canvasViews = (graph as any)?.canvasViews ?? [];
+          const activeViewId = activeCanvasViewId ?? null;
+          for (const v of canvasViews) {
+            viewsSubmenu.push({
+              label: v.name + (v.locked ? ' 🔒' : ''),
+              icon: v.locked ? <LockKeyhole size={14} /> : <LockOpen size={14} />,
+              checked: v.id === activeViewId,
+              onClick: () => window.dispatchEvent(new CustomEvent('dagnet:applyCanvasView', { detail: { viewId: v.id } })),
+              secondaryIcon: <Trash2 size={12} />,
+              secondaryTitle: 'Delete view',
+              onSecondaryClick: () => window.dispatchEvent(new CustomEvent('dagnet:deleteCanvasView', { detail: { viewId: v.id } })),
+            });
+          }
+          if (activeViewId) {
+            const activeView = canvasViews.find((v: any) => v.id === activeViewId);
+            if (activeView) {
+              viewsSubmenu.push({
+                label: activeView.locked ? 'Unlock current view' : 'Lock current view',
+                icon: activeView.locked ? <LockOpen size={14} /> : <LockKeyhole size={14} />,
+                onClick: () => window.dispatchEvent(new CustomEvent('dagnet:toggleCanvasViewLocked', { detail: { viewId: activeViewId } })),
+              });
+            }
+          }
+          viewsSubmenu.push({
+            label: 'New view',
+            icon: <Plus size={14} />,
+            onClick: () => window.dispatchEvent(new CustomEvent('dagnet:createCanvasView', { detail: { name: `View ${canvasViews.length + 1}` } })),
+          });
+          viewsSubmenu.push({ label: '', onClick: () => {}, divider: true });
+          viewsSubmenu.push({
+            label: 'Expand All',
+            icon: <Maximize2 size={14} />,
+            onClick: () => window.dispatchEvent(new CustomEvent('dagnet:restoreAll', { detail: { clearView: true } })),
+          });
+          viewsSubmenu.push({
+            label: 'Shrink All',
+            icon: <Minimize2 size={14} />,
+            onClick: () => window.dispatchEvent(new CustomEvent('dagnet:minimiseAll', { detail: { clearView: true } })),
+          });
+          paneItems.push({
+            label: 'Views',
+            icon: <Layers size={14} />,
+            onClick: () => {},
+            submenu: viewsSubmenu,
+          });
+        }
         if (nodes.length > 0) {
           paneItems.push({ label: '', onClick: () => {}, divider: true });
         }

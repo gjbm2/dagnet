@@ -162,6 +162,10 @@ export interface TabState {
       propertiesOpen: boolean;
       toolsOpen: boolean;
     };
+    // Active canvas view (per-tab, references a CanvasView.id on the graph)
+    activeCanvasViewId?: string | null;
+    // Dashboard auto-cycle interval in ms (null/0 = off)
+    dashboardViewCycleMs?: number | null;
     // Scenarios state (per-tab visibility and selection)
     scenarioState?: {
       scenarioOrder?: string[];           // Full layer order (includes hidden + special layers)
@@ -1211,6 +1215,28 @@ export interface CanvasAnalysis {
   minimised_anchor?: 'tl' | 'tr' | 'bl' | 'br';
 }
 
+/** Saved min/max state of a single canvas object within a CanvasView. */
+export interface CanvasViewObjectState {
+  id: string;
+  type: 'postit' | 'analysis';
+  minimised: boolean;
+  anchor?: 'tl' | 'tr' | 'bl' | 'br';
+}
+
+/** A named snapshot of which canvas objects are minimised/maximised. */
+export interface CanvasView {
+  id: string;
+  name: string;
+  states: CanvasViewObjectState[];
+  /** Saved viewport position and zoom. */
+  viewport?: { x: number; y: number; zoom: number };
+  /** When true, auto-save of state changes is suppressed. */
+  locked?: boolean;
+  /** Display mode settings captured with this view. */
+  viewOverlayMode?: ViewOverlayMode;
+  sankey?: boolean;
+}
+
 export interface ConversionGraph {
   nodes: GraphNode[];
   edges: GraphEdge[];
@@ -1219,6 +1245,7 @@ export interface ConversionGraph {
   postits?: PostIt[];
   containers?: Container[];
   canvasAnalyses?: CanvasAnalysis[];
+  canvasViews?: CanvasView[];
   debugging?: boolean;
   
   // Contexts: Data interests specification for nightly runner

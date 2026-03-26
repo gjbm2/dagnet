@@ -56,6 +56,7 @@ import { captureTabScenariosToRecipe } from '../services/captureTabScenariosServ
 import { resolveAnalysisType } from '../services/analysisTypeResolutionService';
 import { mutateCanvasAnalysisGraph, deleteCanvasAnalysisFromGraph } from '../services/canvasAnalysisMutationService';
 import { getActiveContentTabIndex } from '../services/activeContentTabTracker';
+import { updateViewObjectState, createCanvasView, applyCanvasView, snapshotStates, deleteCanvasView, renameCanvasView, toggleCanvasViewLocked } from '../services/canvasViewService';
 import { useDashboardMode } from '../hooks/useDashboardMode';
 import { useCopyPaste } from '../hooks/useCopyPaste';
 import { useGraphStore } from '../contexts/GraphStoreContext';
@@ -311,6 +312,14 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
   // TabContext is the single source of truth; the prop is just a convenience.
   const tabForThisCanvas = tabId ? tabs.find(t => t.id === tabId) : undefined;
   const tabWhatIfDSL = tabForThisCanvas?.editorState?.whatIfDSL;
+  const activeCanvasViewId = tabForThisCanvas?.editorState?.activeCanvasViewId ?? null;
+  const activeCanvasViewIdRef = useRef(activeCanvasViewId);
+  activeCanvasViewIdRef.current = activeCanvasViewId;
+  const isActiveViewLocked = () => {
+    const vid = activeCanvasViewIdRef.current;
+    if (!vid) return false;
+    return !!(graphRef.current?.canvasViews ?? []).find(v => v.id === vid)?.locked;
+  };
   const effectiveWhatIfDSL = tabWhatIfDSL ?? whatIfDSL ?? null;
 
   // Use prop if provided, otherwise fall back to context for active tab id
@@ -871,11 +880,19 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
     const p = nextGraph.postits.find((p: any) => p.id === id);
     if (!p) return;
     Object.assign(p, updates);
-    if (nextGraph.metadata) nextGraph.metadata.updated_at = new Date().toISOString();
+    // Auto-save to active canvas view when minimised state changes (unless locked)
+    let finalGraph = nextGraph;
+    if (activeCanvasViewIdRef.current && ('minimised' in updates) && !isActiveViewLocked()) {
+      finalGraph = updateViewObjectState(
+        finalGraph, activeCanvasViewIdRef.current,
+        id, 'postit', !!p.minimised, (p as any).minimised_anchor,
+      );
+    }
+    if (finalGraph.metadata) finalGraph.metadata.updated_at = new Date().toISOString();
     // Use setGraphDirect (synchronous) — postit updates are never topology changes
     // and the async setGraph wrapper causes stale graphRef during rapid resize/typing
-    setGraphDirect(nextGraph);
-    graphRef.current = nextGraph; // Keep ref in sync for rapid successive calls (e.g. resize)
+    setGraphDirect(finalGraph);
+    graphRef.current = finalGraph; // Keep ref in sync for rapid successive calls (e.g. resize)
     // Debounce history: coalesce rapid changes (typing, resizing) into one undo step
     if (postitHistoryTimerRef.current) clearTimeout(postitHistoryTimerRef.current);
     postitHistoryTimerRef.current = setTimeout(() => {
@@ -951,8 +968,19 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
         })),
       });
     }
-    setGraphDirect(nextGraph);
-    graphRef.current = nextGraph; // Keep ref in sync for rapid successive calls (e.g. resize)
+    // Auto-save to active canvas view when minimised state changes (unless locked)
+    let finalGraph = nextGraph;
+    if (activeCanvasViewIdRef.current && ('minimised' in updates) && !isActiveViewLocked()) {
+      const a = finalGraph.canvasAnalyses?.find((a: any) => a.id === id);
+      if (a) {
+        finalGraph = updateViewObjectState(
+          finalGraph, activeCanvasViewIdRef.current,
+          id, 'analysis', !!a.minimised, (a as any).minimised_anchor,
+        );
+      }
+    }
+    setGraphDirect(finalGraph);
+    graphRef.current = finalGraph; // Keep ref in sync for rapid successive calls (e.g. resize)
     if (analysisHistoryTimerRef.current) clearTimeout(analysisHistoryTimerRef.current);
     analysisHistoryTimerRef.current = setTimeout(() => {
       saveHistoryState('Update canvas analysis');
@@ -1234,7 +1262,13 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
 
   // Minimise / Restore all canvas annotations
   useEffect(() => {
-    const minimiseAll = () => {
+    const minimiseAll = (e: Event) => {
+      const clearView = (e as CustomEvent).detail?.clearView;
+      if (clearView && tabId) {
+        activeCanvasViewIdRef.current = null;
+        tabOperations.updateTabState(tabId, { activeCanvasViewId: null });
+      }
+      window.dispatchEvent(new Event('dagnet:hideConnectors'));
       const g = graphRef.current;
       if (!g) return;
       const next = structuredClone(g);
@@ -1263,12 +1297,23 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
         changed = true;
       }
       if (!changed) return;
+      // Sync active canvas view with new state (unless locked)
+      if (activeCanvasViewIdRef.current && !isActiveViewLocked()) {
+        const view = (next.canvasViews ?? []).find(v => v.id === activeCanvasViewIdRef.current);
+        if (view) view.states = snapshotStates(next);
+      }
       if (next.metadata) next.metadata.updated_at = new Date().toISOString();
       setGraphDirect(next);
       graphRef.current = next;
-      saveHistoryState('Minimise all annotations');
+      saveHistoryState('Shrink all');
     };
-    const restoreAll = () => {
+    const restoreAll = (e: Event) => {
+      const clearView = (e as CustomEvent).detail?.clearView;
+      if (clearView && tabId) {
+        activeCanvasViewIdRef.current = null;
+        tabOperations.updateTabState(tabId, { activeCanvasViewId: null });
+      }
+      window.dispatchEvent(new Event('dagnet:hideConnectors'));
       const g = graphRef.current;
       if (!g) return;
       const next = structuredClone(g);
@@ -1297,10 +1342,14 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
         changed = true;
       }
       if (!changed) return;
+      if (activeCanvasViewIdRef.current && !isActiveViewLocked()) {
+        const view = (next.canvasViews ?? []).find(v => v.id === activeCanvasViewIdRef.current);
+        if (view) view.states = snapshotStates(next);
+      }
       if (next.metadata) next.metadata.updated_at = new Date().toISOString();
       setGraphDirect(next);
       graphRef.current = next;
-      saveHistoryState('Restore all annotations');
+      saveHistoryState('Expand all');
     };
     const getSelectedAnnotationIds = () => {
       const postitIds = new Set<string>();
@@ -1313,6 +1362,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
       return { postitIds, analysisIds };
     };
     const minimiseSelected = () => {
+      window.dispatchEvent(new Event('dagnet:hideConnectors'));
       const g = graphRef.current;
       if (!g) return;
       const { postitIds, analysisIds } = getSelectedAnnotationIds();
@@ -1341,9 +1391,10 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
       if (!changed) return;
       if (next.metadata) next.metadata.updated_at = new Date().toISOString();
       setGraphDirect(next); graphRef.current = next;
-      saveHistoryState('Minimise selected annotations');
+      saveHistoryState('Shrink selected');
     };
     const restoreSelected = () => {
+      window.dispatchEvent(new Event('dagnet:hideConnectors'));
       const g = graphRef.current;
       if (!g) return;
       const { postitIds, analysisIds } = getSelectedAnnotationIds();
@@ -1372,19 +1423,167 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
       if (!changed) return;
       if (next.metadata) next.metadata.updated_at = new Date().toISOString();
       setGraphDirect(next); graphRef.current = next;
-      saveHistoryState('Restore selected annotations');
+      saveHistoryState('Expand selected');
     };
+    // Canvas view operations
+    const handleCreateView = (e: Event) => {
+      const name = (e as CustomEvent).detail?.name || 'New view';
+      const g = graphRef.current;
+      if (!g) return;
+      // Capture current viewport
+      const { transform } = rfStore.getState();
+      const viewport = { x: transform[0], y: transform[1], zoom: transform[2] };
+      const [next, viewId] = createCanvasView(g, name, viewport);
+      // Capture display mode settings on the new view
+      const newView = (next.canvasViews ?? []).find(v => v.id === viewId);
+      if (newView) {
+        newView.viewOverlayMode = viewPrefs?.viewOverlayMode ?? 'none';
+        newView.sankey = viewPrefs?.useSankeyView ?? false;
+      }
+      if (next.metadata) next.metadata.updated_at = new Date().toISOString();
+      setGraphDirect(next); graphRef.current = next;
+      saveHistoryState('Create canvas view');
+      if (tabId) tabOperations.updateTabState(tabId, { activeCanvasViewId: viewId });
+    };
+    const handleApplyView = (e: Event) => {
+      const { viewId, autoCycle } = (e as CustomEvent).detail ?? {};
+      if (!viewId) return;
+      const g = graphRef.current;
+      if (!g) return;
+      // Save current state to the outgoing active view before switching (unless locked)
+      if (activeCanvasViewIdRef.current && !isActiveViewLocked()) {
+        const { transform } = rfStore.getState();
+        const outgoingView = (g.canvasViews ?? []).find(v => v.id === activeCanvasViewIdRef.current);
+        if (outgoingView) {
+          outgoingView.viewport = { x: transform[0], y: transform[1], zoom: transform[2] };
+          outgoingView.viewOverlayMode = viewPrefs?.viewOverlayMode ?? 'none';
+          outgoingView.sankey = viewPrefs?.useSankeyView ?? false;
+        }
+      }
+      window.dispatchEvent(new Event('dagnet:hideConnectors'));
+      const next = applyCanvasView(g, viewId);
+      if (next.metadata) next.metadata.updated_at = new Date().toISOString();
+      setGraphDirect(next); graphRef.current = next;
+      saveHistoryState('Apply canvas view');
+      if (tabId) tabOperations.updateTabState(tabId, { activeCanvasViewId: viewId });
+      // Restore the target view's display settings and viewport
+      const targetView = (next.canvasViews ?? []).find(v => v.id === viewId);
+      if (targetView) {
+        if (targetView.viewOverlayMode !== undefined) viewPrefs?.setViewOverlayMode(targetView.viewOverlayMode);
+        if (targetView.sankey !== undefined) viewPrefs?.setUseSankeyView(targetView.sankey);
+      }
+      if (targetView?.viewport && rfRef.current) {
+        const rf = rfRef.current;
+        const from = rfStore.getState().transform; // [x, y, zoom]
+        const to = targetView.viewport;
+        const dur = autoCycle ? 2000 : 400;
+        const start = performance.now();
+        // Quintic ease-in-out — slow start, fast middle, gentle deceleration
+        const ease = (t: number) => t < 0.5 ? 16 * t * t * t * t * t : 1 - Math.pow(-2 * t + 2, 5) / 2;
+        const step = (now: number) => {
+          const t = Math.min((now - start) / dur, 1);
+          const e = ease(t);
+          try {
+            rf.setViewport({
+              x: from[0] + (to.x - from[0]) * e,
+              y: from[1] + (to.y - from[1]) * e,
+              zoom: from[2] + (to.zoom - from[2]) * e,
+            }, { duration: 0 });
+          } catch {}
+          if (t < 1) requestAnimationFrame(step);
+        };
+        requestAnimationFrame(step);
+      }
+    };
+    const handleDeactivateView = () => {
+      // Save viewport to the outgoing view before deactivating (unless locked)
+      if (activeCanvasViewIdRef.current && !isActiveViewLocked()) {
+        const g = graphRef.current;
+        if (g) {
+          const { transform } = rfStore.getState();
+          const view = (g.canvasViews ?? []).find(v => v.id === activeCanvasViewIdRef.current);
+          if (view) {
+            view.viewport = { x: transform[0], y: transform[1], zoom: transform[2] };
+            view.viewOverlayMode = viewPrefs?.viewOverlayMode ?? 'none';
+            view.sankey = viewPrefs?.useSankeyView ?? false;
+            setGraphDirect(g); graphRef.current = g;
+          }
+        }
+      }
+      if (tabId) tabOperations.updateTabState(tabId, { activeCanvasViewId: null });
+    };
+    const handleDeleteView = (e: Event) => {
+      const viewId = (e as CustomEvent).detail?.viewId;
+      if (!viewId) return;
+      const g = graphRef.current;
+      if (!g) return;
+      const next = deleteCanvasView(g, viewId);
+      if (next.metadata) next.metadata.updated_at = new Date().toISOString();
+      setGraphDirect(next); graphRef.current = next;
+      saveHistoryState('Delete canvas view');
+      if (activeCanvasViewIdRef.current === viewId && tabId) {
+        tabOperations.updateTabState(tabId, { activeCanvasViewId: null });
+      }
+    };
+    const handleRenameView = (e: Event) => {
+      const { viewId, name } = (e as CustomEvent).detail ?? {};
+      if (!viewId || !name) return;
+      const g = graphRef.current;
+      if (!g) return;
+      const next = renameCanvasView(g, viewId, name);
+      if (next.metadata) next.metadata.updated_at = new Date().toISOString();
+      setGraphDirect(next); graphRef.current = next;
+    };
+
+    const handleToggleLock = (e: Event) => {
+      const viewId = (e as CustomEvent).detail?.viewId;
+      if (!viewId) return;
+      const g = graphRef.current;
+      if (!g) return;
+      const next = toggleCanvasViewLocked(g, viewId);
+      if (next.metadata) next.metadata.updated_at = new Date().toISOString();
+      setGraphDirect(next); graphRef.current = next;
+    };
+
     window.addEventListener('dagnet:minimiseAll', minimiseAll);
     window.addEventListener('dagnet:restoreAll', restoreAll);
     window.addEventListener('dagnet:minimiseSelected', minimiseSelected);
     window.addEventListener('dagnet:restoreSelected', restoreSelected);
+    window.addEventListener('dagnet:createCanvasView', handleCreateView);
+    window.addEventListener('dagnet:applyCanvasView', handleApplyView);
+    window.addEventListener('dagnet:deactivateCanvasView', handleDeactivateView);
+    window.addEventListener('dagnet:deleteCanvasView', handleDeleteView);
+    window.addEventListener('dagnet:renameCanvasView', handleRenameView);
+    window.addEventListener('dagnet:toggleCanvasViewLocked', handleToggleLock);
     return () => {
       window.removeEventListener('dagnet:minimiseAll', minimiseAll);
       window.removeEventListener('dagnet:restoreAll', restoreAll);
       window.removeEventListener('dagnet:minimiseSelected', minimiseSelected);
       window.removeEventListener('dagnet:restoreSelected', restoreSelected);
+      window.removeEventListener('dagnet:createCanvasView', handleCreateView);
+      window.removeEventListener('dagnet:applyCanvasView', handleApplyView);
+      window.removeEventListener('dagnet:deactivateCanvasView', handleDeactivateView);
+      window.removeEventListener('dagnet:deleteCanvasView', handleDeleteView);
+      window.removeEventListener('dagnet:renameCanvasView', handleRenameView);
+      window.removeEventListener('dagnet:toggleCanvasViewLocked', handleToggleLock);
     };
-  }, [setGraphDirect, saveHistoryState, rfStore]);
+  }, [setGraphDirect, saveHistoryState, rfStore, tabId, tabOperations]);
+
+  // Dashboard auto-cycle views
+  const dashboardCycleMs = tabForThisCanvas?.editorState?.dashboardViewCycleMs;
+  useEffect(() => {
+    if (!isDashboardMode || !dashboardCycleMs || dashboardCycleMs <= 0) return;
+    const interval = setInterval(() => {
+      const g = graphRef.current;
+      const views = g?.canvasViews ?? [];
+      if (views.length < 2) return;
+      const currentId = activeCanvasViewIdRef.current;
+      const currentIdx = currentId ? views.findIndex(v => v.id === currentId) : -1;
+      const nextIdx = (currentIdx + 1) % views.length;
+      window.dispatchEvent(new CustomEvent('dagnet:applyCanvasView', { detail: { viewId: views[nextIdx].id, autoCycle: true } }));
+    }, dashboardCycleMs);
+    return () => clearInterval(interval);
+  }, [isDashboardMode, dashboardCycleMs]);
 
   // Edge connection hook (extracted from GraphCanvas Phase B3)
   const {
@@ -2007,6 +2206,8 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
 
   // Persist and restore viewport per tab
   const rf = useReactFlow();
+  const rfRef = useRef(rf);
+  rfRef.current = rf;
   useEffect(() => {
     if (!tabId) return;
     const myTab = tabs.find(t => t.id === tabId);
@@ -2380,6 +2581,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
         isDashboardMode={isDashboardMode}
         toggleDashboardMode={toggleDashboardMode}
         viewModeItems={viewModeItems}
+        activeCanvasViewId={activeCanvasViewId}
         tabId={tabId}
         tabs={tabs}
         tabOperations={tabOperations}

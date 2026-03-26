@@ -20,7 +20,7 @@ import { useTheme } from '../../contexts/ThemeContext';
 import { getGraphEditorLayout, getGraphEditorLayoutMinimized, PANEL_TO_TAB_ID } from '../../layouts/graphSidebarLayout';
 import { dockGroups } from '../../layouts/defaultLayout';
 import { ViewPreferencesProvider, useViewPreferencesContext } from '../../contexts/ViewPreferencesContext';
-import { ScenariosProvider, useScenariosContextOptional } from '../../contexts/ScenariosContext';
+import { ScenariosProvider, useScenariosContextOptional, SCENARIO_PALETTE } from '../../contexts/ScenariosContext';
 import { useURLScenarios } from '../../hooks/useURLScenarios';
 import { useDashboardMode } from '../../hooks/useDashboardMode';
 import { useViewOverlayMode } from '../../hooks/useViewOverlayMode';
@@ -168,6 +168,7 @@ function ScenarioLegendWrapper({ tabId }: { tabId: string }) {
   const { operations, tabs } = useTabContext();
   const activeDsl = useGraphStore((s) => s.currentDSL);
   const baseDsl = useGraphStore((s) => (s.graph as any)?.currentQueryDSL ?? null);
+  const canvasViews = useGraphStore((s) => (s.graph as any)?.canvasViews ?? []);
   const { isDashboardMode, toggleDashboardMode } = useDashboardMode();
   const { viewOverlayMode, setViewOverlayMode } = useViewOverlayMode();
   const viewPrefs = useViewPreferencesContext();
@@ -178,6 +179,29 @@ function ScenarioLegendWrapper({ tabId }: { tabId: string }) {
 
   // Build view mode items for the submenu.
   const isSankey = viewPrefs?.useSankeyView ?? false;
+  const dashboardCycleMs = tabs.find(t => t.id === tabId)?.editorState?.dashboardViewCycleMs ?? (isDashboardMode ? 30000 : null);
+  const setDashboardCycleMs = React.useCallback((ms: number | null) => {
+    if (tabId) operations.updateTabState(tabId, { dashboardViewCycleMs: ms });
+  }, [tabId, operations]);
+
+  const CYCLE_OPTIONS: { label: string; ms: number | null }[] = [
+    { label: 'Off', ms: null },
+    { label: '5s', ms: 5000 },
+    { label: '10s', ms: 10000 },
+    { label: '30s', ms: 30000 },
+    { label: '5m', ms: 300000 },
+    { label: '30m', ms: 1800000 },
+  ];
+
+  const effectiveCycleMs = dashboardCycleMs;
+  const dashboardSubmenu = React.useMemo(() =>
+    CYCLE_OPTIONS.map(opt => ({
+      label: `Cycle views: ${opt.label}`,
+      checked: opt.ms === effectiveCycleMs,
+      onClick: () => setDashboardCycleMs(opt.ms),
+    })),
+  [effectiveCycleMs, setDashboardCycleMs]);
+
   const viewModes = React.useMemo(() => [
     {
       id: 'forecast-quality',
@@ -206,16 +230,25 @@ function ScenarioLegendWrapper({ tabId }: { tabId: string }) {
       icon: LayoutDashboard,
       isActive: () => isDashboardMode,
       toggle: () => toggleDashboardMode({ updateUrl: true }),
+      activeSubmenu: dashboardSubmenu,
     },
-  ], [viewOverlayMode, setViewOverlayMode, isDashboardMode, toggleDashboardMode, isSankey, viewPrefs]);
+  ], [viewOverlayMode, setViewOverlayMode, isDashboardMode, toggleDashboardMode, isSankey, viewPrefs, dashboardSubmenu]);
 
   // Forecast quality hides scenario chips; dashboard does not.
   const hideScenarioChips = viewOverlayMode === 'forecast-quality' || viewOverlayMode === 'data-depth';
 
-  const { scenarios, deleteScenario, currentColour, baseColour } = scenariosContext;
+  const { scenarios, deleteScenario, renameScenario, currentColour, baseColour } = scenariosContext;
+
+  // Compute the colour the next scenario would get
+  const nextScenarioColour = React.useMemo(() => {
+    const usedColours = new Set(scenarios.map((s: any) => s.colour));
+    const idx = SCENARIO_PALETTE.findIndex((c: string) => !usedColours.has(c));
+    return idx >= 0 ? SCENARIO_PALETTE[idx] : SCENARIO_PALETTE[scenarios.length % SCENARIO_PALETTE.length];
+  }, [scenarios]);
 
   // Get tab's scenario state
   const currentTab = tabs.find(t => t.id === tabId);
+  const activeCanvasViewId = currentTab?.editorState?.activeCanvasViewId ?? null;
   const scenarioState = currentTab?.editorState?.scenarioState;
   const scenarioOrder = scenarioState?.scenarioOrder || [];
   const visibleScenarioIds = scenarioState?.visibleScenarioIds || [];
@@ -263,6 +296,10 @@ function ScenarioLegendWrapper({ tabId }: { tabId: string }) {
     window.dispatchEvent(new CustomEvent('dagnet:newScenario', { detail: { tabId } }));
   }, [tabId]);
 
+  const handleRenameScenario = React.useCallback(async (scenarioId: string, newName: string) => {
+    try { await renameScenario(scenarioId, newName); } catch (e) { console.error('Failed to rename scenario:', e); }
+  }, [renameScenario]);
+
   const baseVisible = visibleScenarioIds.includes('base');
 
   return (
@@ -284,6 +321,11 @@ function ScenarioLegendWrapper({ tabId }: { tabId: string }) {
       onNewScenario={handleNewScenario}
       viewModes={viewModes}
       hideScenarioChips={hideScenarioChips}
+      canvasViews={canvasViews}
+      activeCanvasViewId={activeCanvasViewId}
+      onRenameScenario={handleRenameScenario}
+      nextScenarioColour={nextScenarioColour}
+      dashboardCycleMs={isDashboardMode ? dashboardCycleMs : null}
     />
   );
 }

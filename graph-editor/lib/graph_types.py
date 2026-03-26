@@ -631,6 +631,32 @@ class CanvasAnalysis(BaseModel):
         return data
 
 
+class CanvasViewObjectState(BaseModel):
+    """Min/max state of a single canvas object within a saved view."""
+    id: str
+    type: Literal["postit", "analysis"]
+    minimised: bool
+    anchor: Optional[Literal["tl", "tr", "bl", "br"]] = None
+
+
+class CanvasViewViewport(BaseModel):
+    """Saved viewport position and zoom for a canvas view."""
+    x: float
+    y: float
+    zoom: float
+
+
+class CanvasView(BaseModel):
+    """Named saved layout state for canvas objects."""
+    id: str
+    name: str
+    states: List[CanvasViewObjectState] = Field(default_factory=list)
+    viewport: Optional[CanvasViewViewport] = None
+    locked: Optional[bool] = None
+    viewOverlayMode: Optional[Literal["none", "forecast-quality", "data-depth"]] = None
+    sankey: Optional[bool] = None
+
+
 class Graph(BaseModel):
     """Complete conversion funnel graph."""
     model_config = ConfigDict(populate_by_name=True)
@@ -642,6 +668,7 @@ class Graph(BaseModel):
     postits: Optional[List[PostIt]] = Field(None, description="Canvas annotations: sticky notes (visual only, not graph semantics)")
     containers: Optional[List[Container]] = Field(None, description="Canvas annotations: grouping rectangles (visual only, not graph semantics)")
     canvasAnalyses: Optional[List[CanvasAnalysis]] = Field(None, description="Canvas annotations: live analyses pinned to the canvas")
+    canvasViews: Optional[List['CanvasView']] = Field(None, description="Named saved layout states for canvas objects (min/max configurations)")
     baseDSL: Optional[str] = Field(None, description="Base DSL that is always applied (e.g. global context filters)")
     currentQueryDSL: Optional[str] = Field(None, description="Current user query DSL for UI persistence")
     dataInterestsDSL: Optional[str] = Field(None, description="Pinned DSL for batch/overnight fetches")

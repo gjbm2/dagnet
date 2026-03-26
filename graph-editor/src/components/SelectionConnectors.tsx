@@ -425,6 +425,8 @@ interface ShapeData {
   isSelected: boolean;
   /** True when visible only because of mouse hover (faint rendering). */
   isHovered: boolean;
+  /** True when visible because the analysis is being dragged. */
+  isDragged: boolean;
   tubeSegments: TubeSegment[];
   nodes: Array<{ centre: Point; radius: number }>;
   connectedNodes: Array<{ centre: Point; radius: number }>;
@@ -515,7 +517,7 @@ export function SelectionConnectors({ graph, controlledSetNodes }: { graph: any;
     // For selected/hovered/dragged analyses: the active tab gets a shape.
     // For persisted overlays: each tab with show_subject_overlay gets its own shape.
     type BaseShape = {
-      id: string; isSelected: boolean; isHovered: boolean; rfNode: any; colour: string;
+      id: string; isSelected: boolean; isHovered: boolean; isDragged: boolean; rfNode: any; colour: string;
       connectedNodes: Array<{ centre: Point; radius: number }>;
       disconnectedNodes: Array<{ centre: Point; radius: number }>;
       allNodes: Array<{ centre: Point; radius: number }>;
@@ -527,7 +529,7 @@ export function SelectionConnectors({ graph, controlledSetNodes }: { graph: any;
     };
 
     const buildShape = (
-      analysisId: string, dsl: string, colour: string, isSelected: boolean, isHovered: boolean, rfNode: any,
+      analysisId: string, dsl: string, colour: string, isSelected: boolean, isHovered: boolean, isDragged: boolean, rfNode: any,
     ): BaseShape | null => {
       const { connectedIds, disconnectedIds, referencedOnPath } = resolveShapeNodes(
         dsl, graph.edges || [], nodeUuidToId,
@@ -536,7 +538,7 @@ export function SelectionConnectors({ graph, controlledSetNodes }: { graph: any;
       console.log('[SelectionConnectors] shape resolve', {
         analysisId,
         dsl,
-        isSelected,
+        isSelected, isHovered, isDragged,
         connectedIds,
         disconnectedIds,
         referencedOnPath: [...referencedOnPath],
@@ -570,7 +572,7 @@ export function SelectionConnectors({ graph, controlledSetNodes }: { graph: any;
       }
 
       return {
-        id: analysisId, isSelected, isHovered, rfNode, colour,
+        id: analysisId, isSelected, isHovered, isDragged, rfNode, colour,
         connectedNodes, disconnectedNodes, allNodes, nodeHumanIds,
         connectedHumanIds, referencedOnPath, referencedNodeIds,
       } as BaseShape;
@@ -580,7 +582,8 @@ export function SelectionConnectors({ graph, controlledSetNodes }: { graph: any;
     for (const a of (graph.canvasAnalyses as any[]).filter((a: any) => visibleIds.has(a.id))) {
       const rfNode = rfNodes.find(n => n.id === `analysis-${a.id}`);
       const isSelected = a.id === selectedAnalysisId;
-      const isHovered = !isSelected && a.id !== draggedAnalysisId && a.id === hoveredAnalysisId;
+      const isDragged = !isSelected && a.id === draggedAnalysisId;
+      const isHovered = !isSelected && !isDragged && a.id === hoveredAnalysisId;
       const activeIdx = activeTabByAnalysis.get(a.id) ?? 0;
       // Ensure content_items exists — legacy in-memory graphs may still have flat fields
       const contentItems: any[] = a.content_items?.length ? a.content_items : [{
@@ -611,9 +614,9 @@ export function SelectionConnectors({ graph, controlledSetNodes }: { graph: any;
         seenDsls.add(dsl);
         const colour = (ci?.display as any)?.subject_overlay_colour || DEFAULT_COLOUR;
         const isPersisted = (ci?.display as any)?.show_subject_overlay === true;
-        const tabIsHovered = isHovered && !isPersisted;
+        const tabIsHovered = isHovered;
         const shapeId = `${a.id}:${tabIdx}`;
-        const shape = buildShape(shapeId, dsl, colour, isSelected, tabIsHovered, rfNode);
+        const shape = buildShape(shapeId, dsl, colour, isSelected, tabIsHovered, isDragged, rfNode);
         if (shape) {
           shape.minimised = !!a.minimised;
           baseShapes.push(shape);
@@ -673,13 +676,13 @@ export function SelectionConnectors({ graph, controlledSetNodes }: { graph: any;
       for (const c of centres) { cx += c.x; cy += c.y; }
 
       return {
-        id: shape.id, isSelected: shape.isSelected, isHovered: shape.isHovered,
+        id: shape.id, isSelected: shape.isSelected, isHovered: shape.isHovered, isDragged: shape.isDragged,
         tubeSegments, nodes, connectedNodes, disconnectedNodes, centres,
         referencedNodeIds: shape.referencedNodeIds,
         nodeHumanIds: shape.nodeHumanIds,
         cx: cx / centres.length, cy: cy / centres.length,
         minRadius: minR, rfNode: shape.rfNode, colour: shape.colour,
-        fillOpacity: shape.isSelected ? 0.08 : shape.isHovered ? 0.015 : 0.03,
+        fillOpacity: shape.isSelected ? 0.08 : shape.isHovered || shape.isDragged ? 0.04 : 0.03,
         minimised: shape.minimised,
       } as ShapeData;
     });
@@ -755,6 +758,17 @@ export function SelectionConnectors({ graph, controlledSetNodes }: { graph: any;
     };
   }, [haloKey, haloSetNodes]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Briefly suppress connector lines during minimise/maximise to avoid jumps
+  const [connectorsHidden, setConnectorsHidden] = useState(false);
+  useEffect(() => {
+    const handler = () => {
+      setConnectorsHidden(true);
+      setTimeout(() => setConnectorsHidden(false), 300);
+    };
+    window.addEventListener('dagnet:hideConnectors', handler);
+    return () => window.removeEventListener('dagnet:hideConnectors', handler);
+  }, []);
+
   if (allShapes.length === 0) return null;
 
   const lineSw = 1.5 / viewport.zoom;
@@ -775,13 +789,16 @@ export function SelectionConnectors({ graph, controlledSetNodes }: { graph: any;
       <g transform={`translate(${viewport.x}, ${viewport.y}) scale(${viewport.zoom})`}>
         {allShapes.map(shape => {
           const c = shape.colour;
-          //                       Selected   Hover/Drag  Persisted
-          const fillOpacity    = shape.isSelected ? 0.08 : shape.isHovered ? 0.04 : 0.03;
-          const outlineOpacity = shape.isSelected ? 0.20 : shape.isHovered ? 0.12 : 0.10;
-          const lineOpacity    = shape.isSelected ? 0.30 : shape.isHovered ? 0.20 : 0.15;
-          const dotOpacity     = shape.isSelected ? 0.50 : shape.isHovered ? 0.35 : 0.25;
+          const active = shape.isSelected || shape.isHovered || shape.isDragged;
+          const persistedMin = !active && shape.minimised;
+          //                       Selected   Hover/Drag                          Persisted (minimised)  Persisted
+          const fillOpacity    = shape.isSelected ? 0.08 : shape.isHovered || shape.isDragged ? 0.04 : persistedMin ? 0.015 : 0.03;
+          const outlineOpacity = shape.isSelected ? 0.20 : shape.isHovered || shape.isDragged ? 0.12 : persistedMin ? 0.05  : 0.10;
+          const lineOpacity    = shape.isSelected ? 0.30 : shape.isHovered || shape.isDragged ? 0.20 : persistedMin ? 0.06  : 0.15;
+          const dotOpacity     = shape.isSelected ? 0.50 : shape.isHovered || shape.isDragged ? 0.35 : persistedMin ? 0.10  : 0.25;
+          if (shape.minimised) console.log('[SelectionConnectors] minimised shape render', { id: shape.id, isHovered: shape.isHovered, isDragged: shape.isDragged, active, persistedMin, fillOpacity });
           // Connector lines: always show for visible shapes (same codepath)
-          const showConnector = !!shape.rfNode;
+          const showConnector = !!shape.rfNode && !connectorsHidden;
 
           let connector: JSX.Element | null = null;
           if (showConnector) {

@@ -122,7 +122,7 @@
 .canvas-annotation-normal:not([data-anchor]) { transform-origin: top left; }
 
 @keyframes dagnet-shrink {
-  from { transform: scale(1.8); opacity: 0.3; }
+  from { transform: scale(1.4); opacity: 0.3; }
   to   { transform: scale(1);   opacity: 1; }
 }
 
@@ -134,6 +134,22 @@
 @keyframes dagnet-grow {
   from { transform: scale(0.6); opacity: 0.3; }
   to   { transform: scale(1);   opacity: 1; }
+}
+
+/* Ghost outline that expands from the minimised icon to show full-size bounds. */
+@keyframes dagnet-ghost-expand {
+  from { transform: scale(0.15); opacity: 0; }
+  to   { transform: scale(1);   opacity: 1; }
+}
+@keyframes dagnet-ghost-collapse {
+  from { transform: scale(1);   opacity: 1; }
+  to   { transform: scale(0.15); opacity: 0; }
+}
+.minimised-ghost-expand {
+  animation: dagnet-ghost-expand 250ms cubic-bezier(0.25, 0.1, 0.25, 1) both;
+}
+.minimised-ghost-collapse {
+  animation: dagnet-ghost-collapse 200ms ease-in both;
 }
 
 /* Selected canvas objects: lift above siblings, full opacity, crisp. */
