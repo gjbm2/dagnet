@@ -3928,13 +3928,24 @@ export default function PropertiesPanel({
                       ))}
                     </div>
                   </div>
+                  {(postit.createdBy || postit.createdAt) && (
+                    <div className="property-row" style={{ opacity: 0.6 }}>
+                      <label className="property-label">Created</label>
+                      <span style={{ fontSize: '11px' }}>
+                        {[
+                          postit.createdBy ? `@${postit.createdBy}` : null,
+                          postit.createdAt ? new Date(postit.createdAt).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: '2-digit' }) : null,
+                        ].filter(Boolean).join(', ')}
+                      </span>
+                    </div>
+                  )}
                 </div>
               </CollapsibleSection>
             </div>
           );
         })()}
       </div>
-      
+
       {/* Image Upload Modal */}
       {showUploadModal && (
         <ImageUploadModal

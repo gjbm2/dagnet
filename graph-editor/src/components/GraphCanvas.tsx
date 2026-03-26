@@ -425,6 +425,30 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
       ? changes.filter((c: any) => c.type !== 'select')
       : changes;
 
+    // For minimised annotations, override dimension changes to use the
+    // minimised size. The ResizeObserver measures the stale full-size wrapper
+    // before our sync effect's style update commits (separate React batch),
+    // so we correct the dimensions here in the same batch.
+    const currentGraph = graphRef.current;
+    if (currentGraph) {
+      const minimisedMap = new Map<string, { w: number; h: number }>();
+      for (const a of (currentGraph.canvasAnalyses || [])) {
+        if (a.minimised) minimisedMap.set(`analysis-${a.id}`, { w: 32, h: 32 });
+      }
+      for (const p of (currentGraph.postits || [])) {
+        if (p.minimised) minimisedMap.set(`postit-${p.id}`, { w: 32, h: 32 });
+      }
+      if (minimisedMap.size > 0) {
+        filtered = filtered.map((c: any) => {
+          if (c.type === 'dimensions' && minimisedMap.has(c.id)) {
+            const { w, h } = minimisedMap.get(c.id)!;
+            return { ...c, dimensions: { width: w, height: h }, updateStyle: true };
+          }
+          return c;
+        });
+      }
+    }
+
     // During active resize, three problems cause the primary node to bounce:
     //
     // 1. ResizeObserver dimension changes (type: 'dimensions' without resizing flag):
@@ -1208,6 +1232,159 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
     return () => window.removeEventListener('dagnet:selectAllNodes', handler);
   }, [setNodes, setEdges, onSelectedNodeChange, onSelectedEdgeChange]);
 
+  // Minimise / Restore all canvas annotations
+  useEffect(() => {
+    const minimiseAll = () => {
+      const g = graphRef.current;
+      if (!g) return;
+      const next = structuredClone(g);
+      let changed = false;
+      const POSTIT_MIN = 32, ANALYSIS_MIN = 32;
+      for (const p of (next.postits ?? [])) {
+        if (p.minimised) continue;
+        const anchor = p.minimised_anchor || 'tl';
+        const dx = (anchor === 'tr' || anchor === 'br') ? (p.width ?? 200) - POSTIT_MIN : 0;
+        const dy = (anchor === 'bl' || anchor === 'br') ? (p.height ?? 200) - POSTIT_MIN : 0;
+        p.minimised = true;
+        p.minimised_anchor = anchor;
+        p.x = (p.x ?? 0) + dx;
+        p.y = (p.y ?? 0) + dy;
+        changed = true;
+      }
+      for (const a of (next.canvasAnalyses ?? [])) {
+        if (a.minimised) continue;
+        const anchor = a.minimised_anchor || 'tl';
+        const dx = (anchor === 'tr' || anchor === 'br') ? (a.width ?? 400) - ANALYSIS_MIN : 0;
+        const dy = (anchor === 'bl' || anchor === 'br') ? (a.height ?? 300) - ANALYSIS_MIN : 0;
+        a.minimised = true;
+        a.minimised_anchor = anchor;
+        a.x = (a.x ?? 0) + dx;
+        a.y = (a.y ?? 0) + dy;
+        changed = true;
+      }
+      if (!changed) return;
+      if (next.metadata) next.metadata.updated_at = new Date().toISOString();
+      setGraphDirect(next);
+      graphRef.current = next;
+      saveHistoryState('Minimise all annotations');
+    };
+    const restoreAll = () => {
+      const g = graphRef.current;
+      if (!g) return;
+      const next = structuredClone(g);
+      let changed = false;
+      const POSTIT_MIN = 40, ANALYSIS_MIN = 32;
+      for (const p of (next.postits ?? [])) {
+        if (!p.minimised) continue;
+        const anchor = p.minimised_anchor || 'tl';
+        const dx = (anchor === 'tr' || anchor === 'br') ? (p.width ?? 200) - POSTIT_MIN : 0;
+        const dy = (anchor === 'bl' || anchor === 'br') ? (p.height ?? 200) - POSTIT_MIN : 0;
+        p.minimised = false;
+        // Keep minimised_anchor so re-minimise remembers the corner
+        p.x = (p.x ?? 0) - dx;
+        p.y = (p.y ?? 0) - dy;
+        changed = true;
+      }
+      for (const a of (next.canvasAnalyses ?? [])) {
+        if (!a.minimised) continue;
+        const anchor = a.minimised_anchor || 'tl';
+        const dx = (anchor === 'tr' || anchor === 'br') ? (a.width ?? 400) - ANALYSIS_MIN : 0;
+        const dy = (anchor === 'bl' || anchor === 'br') ? (a.height ?? 300) - ANALYSIS_MIN : 0;
+        a.minimised = false;
+        // Keep minimised_anchor so re-minimise remembers the corner
+        a.x = (a.x ?? 0) - dx;
+        a.y = (a.y ?? 0) - dy;
+        changed = true;
+      }
+      if (!changed) return;
+      if (next.metadata) next.metadata.updated_at = new Date().toISOString();
+      setGraphDirect(next);
+      graphRef.current = next;
+      saveHistoryState('Restore all annotations');
+    };
+    const getSelectedAnnotationIds = () => {
+      const postitIds = new Set<string>();
+      const analysisIds = new Set<string>();
+      for (const n of rfStore.getState().getNodes()) {
+        if (!n.selected) continue;
+        if (n.id.startsWith('postit-')) postitIds.add(n.id.replace('postit-', ''));
+        else if (n.id.startsWith('analysis-')) analysisIds.add(n.id.replace('analysis-', ''));
+      }
+      return { postitIds, analysisIds };
+    };
+    const minimiseSelected = () => {
+      const g = graphRef.current;
+      if (!g) return;
+      const { postitIds, analysisIds } = getSelectedAnnotationIds();
+      if (postitIds.size === 0 && analysisIds.size === 0) return;
+      const next = structuredClone(g);
+      let changed = false;
+      const POSTIT_MIN = 32, ANALYSIS_MIN = 32;
+      for (const p of (next.postits ?? [])) {
+        if (p.minimised || !postitIds.has(p.id)) continue;
+        const anchor = p.minimised_anchor || 'tl';
+        const dx = (anchor === 'tr' || anchor === 'br') ? (p.width ?? 200) - POSTIT_MIN : 0;
+        const dy = (anchor === 'bl' || anchor === 'br') ? (p.height ?? 200) - POSTIT_MIN : 0;
+        p.minimised = true; p.minimised_anchor = anchor;
+        p.x = (p.x ?? 0) + dx; p.y = (p.y ?? 0) + dy;
+        changed = true;
+      }
+      for (const a of (next.canvasAnalyses ?? [])) {
+        if (a.minimised || !analysisIds.has(a.id)) continue;
+        const anchor = a.minimised_anchor || 'tl';
+        const dx = (anchor === 'tr' || anchor === 'br') ? (a.width ?? 400) - ANALYSIS_MIN : 0;
+        const dy = (anchor === 'bl' || anchor === 'br') ? (a.height ?? 300) - ANALYSIS_MIN : 0;
+        a.minimised = true; a.minimised_anchor = anchor;
+        a.x = (a.x ?? 0) + dx; a.y = (a.y ?? 0) + dy;
+        changed = true;
+      }
+      if (!changed) return;
+      if (next.metadata) next.metadata.updated_at = new Date().toISOString();
+      setGraphDirect(next); graphRef.current = next;
+      saveHistoryState('Minimise selected annotations');
+    };
+    const restoreSelected = () => {
+      const g = graphRef.current;
+      if (!g) return;
+      const { postitIds, analysisIds } = getSelectedAnnotationIds();
+      if (postitIds.size === 0 && analysisIds.size === 0) return;
+      const next = structuredClone(g);
+      let changed = false;
+      const POSTIT_MIN = 32, ANALYSIS_MIN = 32;
+      for (const p of (next.postits ?? [])) {
+        if (!p.minimised || !postitIds.has(p.id)) continue;
+        const anchor = p.minimised_anchor || 'tl';
+        const dx = (anchor === 'tr' || anchor === 'br') ? (p.width ?? 200) - POSTIT_MIN : 0;
+        const dy = (anchor === 'bl' || anchor === 'br') ? (p.height ?? 200) - POSTIT_MIN : 0;
+        p.minimised = false;
+        p.x = (p.x ?? 0) - dx; p.y = (p.y ?? 0) - dy;
+        changed = true;
+      }
+      for (const a of (next.canvasAnalyses ?? [])) {
+        if (!a.minimised || !analysisIds.has(a.id)) continue;
+        const anchor = a.minimised_anchor || 'tl';
+        const dx = (anchor === 'tr' || anchor === 'br') ? (a.width ?? 400) - ANALYSIS_MIN : 0;
+        const dy = (anchor === 'bl' || anchor === 'br') ? (a.height ?? 300) - ANALYSIS_MIN : 0;
+        a.minimised = false;
+        a.x = (a.x ?? 0) - dx; a.y = (a.y ?? 0) - dy;
+        changed = true;
+      }
+      if (!changed) return;
+      if (next.metadata) next.metadata.updated_at = new Date().toISOString();
+      setGraphDirect(next); graphRef.current = next;
+      saveHistoryState('Restore selected annotations');
+    };
+    window.addEventListener('dagnet:minimiseAll', minimiseAll);
+    window.addEventListener('dagnet:restoreAll', restoreAll);
+    window.addEventListener('dagnet:minimiseSelected', minimiseSelected);
+    window.addEventListener('dagnet:restoreSelected', restoreSelected);
+    return () => {
+      window.removeEventListener('dagnet:minimiseAll', minimiseAll);
+      window.removeEventListener('dagnet:restoreAll', restoreAll);
+      window.removeEventListener('dagnet:minimiseSelected', minimiseSelected);
+      window.removeEventListener('dagnet:restoreSelected', restoreSelected);
+    };
+  }, [setGraphDirect, saveHistoryState, rfStore]);
 
   // Edge connection hook (extracted from GraphCanvas Phase B3)
   const {
@@ -2111,7 +2288,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
           nodeStrokeColor={(node) => isCanvasObjectNode(node.id) ? 'transparent' : '#b1b1b7'}
         />
         <GraphIssuesIndicatorOverlay tabId={tabId} />
-        <SelectionConnectors graph={graph} />
+        <SelectionConnectors graph={graph} controlledSetNodes={setNodes} />
 
         {/* Lasso selection rectangle */}
         {isLassoSelecting && lassoStart && lassoEnd && (() => {

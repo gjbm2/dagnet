@@ -86,6 +86,7 @@ export function createPostitInGraph(
   graph: any,
   position: { x: number; y: number },
   size?: { width?: number; height?: number },
+  author?: string,
 ): PostitCreationResult {
   const newId = crypto.randomUUID();
   const nextGraph = structuredClone(graph);
@@ -98,6 +99,8 @@ export function createPostitInGraph(
     height: size?.height && size.height >= 50 ? Math.round(size.height) : 150,
     x: Math.round(position.x),
     y: Math.round(position.y),
+    ...(author ? { createdBy: author } : {}),
+    createdAt: new Date().toISOString(),
   });
   if (nextGraph.metadata) {
     nextGraph.metadata.updated_at = new Date().toISOString();

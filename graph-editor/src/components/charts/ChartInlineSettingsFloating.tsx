@@ -91,10 +91,15 @@ export function ChartFloatingIcon({ containerRef, tray, canvasZoom, defaultAncho
   const posRef = useRef({ x: 0, y: 0 });
   const teardownRef = useRef<(() => void) | null>(null);
   const hoverTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const hoverShowRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  /** Delay before tray expands on hover (ms). Matches CfpPopover HOVER_DELAY. */
+  const TRAY_HOVER_DELAY = 380;
 
   useEffect(() => () => {
     teardownRef.current?.();
     if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
+    if (hoverShowRef.current) clearTimeout(hoverShowRef.current);
   }, []);
 
   useLayoutEffect(() => {
@@ -238,9 +243,13 @@ export function ChartFloatingIcon({ containerRef, tray, canvasZoom, defaultAncho
         }}
         onMouseEnter={() => {
           if (hoverTimerRef.current) { clearTimeout(hoverTimerRef.current); hoverTimerRef.current = null; }
-          if (!isDragging) setHovered(true);
+          if (hoverShowRef.current) { clearTimeout(hoverShowRef.current); hoverShowRef.current = null; }
+          if (!isDragging) {
+            hoverShowRef.current = setTimeout(() => { hoverShowRef.current = null; setHovered(true); }, TRAY_HOVER_DELAY);
+          }
         }}
         onMouseLeave={() => {
+          if (hoverShowRef.current) { clearTimeout(hoverShowRef.current); hoverShowRef.current = null; }
           if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
           hoverTimerRef.current = setTimeout(() => { setHovered(false); hoverTimerRef.current = null; }, 320);
         }}

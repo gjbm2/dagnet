@@ -23,6 +23,8 @@ import {
   AlignVerticalSpaceAround,
   RulerDimensionLine,
   LayoutGrid,
+  Minimize2,
+  Maximize2,
   Trash2,
 } from 'lucide-react';
 import type { AlignCommand, DistributeCommand, EqualSizeCommand } from '../services/alignmentService';
@@ -95,6 +97,19 @@ export function MultiSelectContextMenu({
     });
     items.push({ label: '', onClick: () => {}, divider: true });
   }
+
+  items.push({
+    label: 'Minimise Selected',
+    icon: <Minimize2 size={14} />,
+    onClick: () => window.dispatchEvent(new CustomEvent('dagnet:minimiseSelected')),
+  });
+  items.push({
+    label: 'Restore Selected',
+    icon: <Maximize2 size={14} />,
+    onClick: () => window.dispatchEvent(new CustomEvent('dagnet:restoreSelected')),
+  });
+
+  items.push({ label: '', onClick: () => {}, divider: true });
 
   items.push({
     label: `Delete ${selectedCount} selected`,

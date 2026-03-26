@@ -28,14 +28,21 @@ export function CfpPopover({ icon, title, label, children, active, activeColour,
   const wrapRef = useRef<HTMLSpanElement>(null);
   const popRef = useRef<HTMLDivElement>(null);
   const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const showTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [pos, setPos] = useState<React.CSSProperties>({});
+
+  /** Delay before popover appears on hover (ms). Prevents accidental reveals
+   *  when moving the mouse across the toolbar. */
+  const HOVER_DELAY = 380;
 
   const show = useCallback(() => {
     if (hideTimer.current) { clearTimeout(hideTimer.current); hideTimer.current = null; }
-    setOpen(true);
+    if (showTimer.current) { clearTimeout(showTimer.current); showTimer.current = null; }
+    showTimer.current = setTimeout(() => { showTimer.current = null; setOpen(true); }, HOVER_DELAY);
   }, []);
 
   const scheduleHide = useCallback(() => {
+    if (showTimer.current) { clearTimeout(showTimer.current); showTimer.current = null; }
     if (pinned) return;
     hideTimer.current = setTimeout(() => setOpen(false), 200);
   }, [pinned]);
@@ -46,7 +53,10 @@ export function CfpPopover({ icon, title, label, children, active, activeColour,
     if (hideTimer.current) { clearTimeout(hideTimer.current); hideTimer.current = null; }
   }, []);
 
-  useEffect(() => () => { if (hideTimer.current) clearTimeout(hideTimer.current); }, []);
+  useEffect(() => () => {
+    if (hideTimer.current) clearTimeout(hideTimer.current);
+    if (showTimer.current) clearTimeout(showTimer.current);
+  }, []);
 
   // Close on outside click or Escape when pinned
   useEffect(() => {

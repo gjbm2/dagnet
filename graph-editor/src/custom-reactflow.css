@@ -95,10 +95,45 @@
   pointer-events: auto !important;
 }
 
-/* Canvas analysis and postit nodes: above selection connector overlays */
+/* Canvas analysis and postit nodes: above selection connector overlays. */
 .react-flow__node.react-flow__node-canvasAnalysis,
 .react-flow__node.react-flow__node-postit {
   z-index: 5000 !important;
+}
+
+/* Minimise/restore animation for canvas annotations.
+   Per-corner transform-origin so scale anchors from the correct corner. */
+.canvas-annotation-minimised {
+  animation: dagnet-shrink 150ms ease-out both;
+}
+.canvas-annotation-normal {
+  animation: dagnet-grow 150ms ease-out both;
+}
+.canvas-annotation-minimised[data-anchor="tl"],
+.canvas-annotation-normal[data-anchor="tl"] { transform-origin: top left; }
+.canvas-annotation-minimised[data-anchor="tr"],
+.canvas-annotation-normal[data-anchor="tr"] { transform-origin: top right; }
+.canvas-annotation-minimised[data-anchor="bl"],
+.canvas-annotation-normal[data-anchor="bl"] { transform-origin: bottom left; }
+.canvas-annotation-minimised[data-anchor="br"],
+.canvas-annotation-normal[data-anchor="br"] { transform-origin: bottom right; }
+/* Default (no data-anchor) — top left for backward compat */
+.canvas-annotation-minimised:not([data-anchor]),
+.canvas-annotation-normal:not([data-anchor]) { transform-origin: top left; }
+
+@keyframes dagnet-shrink {
+  from { transform: scale(1.8); opacity: 0.3; }
+  to   { transform: scale(1);   opacity: 1; }
+}
+
+/* Minimised annotations: pointer cursor (click to restore), not grab. */
+.canvas-annotation-minimised {
+  cursor: pointer !important;
+}
+
+@keyframes dagnet-grow {
+  from { transform: scale(0.6); opacity: 0.3; }
+  to   { transform: scale(1);   opacity: 1; }
 }
 
 /* Selected canvas objects: lift above siblings, full opacity, crisp. */

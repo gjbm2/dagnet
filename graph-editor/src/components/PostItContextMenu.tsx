@@ -1,5 +1,5 @@
 import React, { useMemo } from 'react';
-import { Palette, Type, ArrowUpToLine, ArrowUp, ArrowDown, ArrowDownToLine, Copy, Scissors, Trash2 } from 'lucide-react';
+import { Palette, Type, ArrowUpToLine, ArrowUp, ArrowDown, ArrowDownToLine, Copy, Scissors, Trash2, Minimize2, Maximize2 } from 'lucide-react';
 import { ContextMenu, ContextMenuItem } from './ContextMenu';
 import { POSTIT_COLOURS } from './nodes/PostItNode';
 
@@ -20,6 +20,8 @@ interface PostItContextMenuProps {
   onCut: (id: string) => void;
   onDelete: (id: string) => void;
   onClose: () => void;
+  minimised?: boolean;
+  onToggleMinimised?: (id: string) => void;
 }
 
 const COLOUR_NAMES: Record<string, string> = {
@@ -38,7 +40,7 @@ const FONT_SIZE_LABELS: Record<string, string> = {
   XL: 'Extra Large',
 };
 
-export function PostItContextMenu({ x, y, postitId, currentColour, currentFontSize, postitCount, onUpdateColour, onUpdateFontSize, onBringToFront, onBringForward, onSendBackward, onSendToBack, onCopy, onCut, onDelete, onClose }: PostItContextMenuProps) {
+export function PostItContextMenu({ x, y, postitId, currentColour, currentFontSize, postitCount, onUpdateColour, onUpdateFontSize, onBringToFront, onBringForward, onSendBackward, onSendToBack, onCopy, onCut, onDelete, onClose, minimised, onToggleMinimised }: PostItContextMenuProps) {
   const items = useMemo((): ContextMenuItem[] => {
     const colourItems: ContextMenuItem[] = POSTIT_COLOURS.map((colour) => ({
       label: COLOUR_NAMES[colour] || colour,
@@ -67,6 +69,17 @@ export function PostItContextMenu({ x, y, postitId, currentColour, currentFontSi
       );
     }
 
+    if (onToggleMinimised) {
+      result.push(
+        { label: '', onClick: () => {}, divider: true },
+        {
+          label: minimised ? 'Restore' : 'Minimise',
+          icon: minimised ? <Maximize2 size={14} /> : <Minimize2 size={14} />,
+          onClick: () => onToggleMinimised(postitId),
+        },
+      );
+    }
+
     result.push(
       { label: '', onClick: () => {}, divider: true },
       { label: 'Copy', icon: <Copy size={14} />, onClick: () => onCopy(postitId) },
@@ -75,7 +88,7 @@ export function PostItContextMenu({ x, y, postitId, currentColour, currentFontSi
     );
 
     return result;
-  }, [postitId, currentColour, currentFontSize, postitCount, onUpdateColour, onUpdateFontSize, onBringToFront, onBringForward, onSendBackward, onSendToBack, onCopy, onCut, onDelete]);
+  }, [postitId, currentColour, currentFontSize, postitCount, minimised, onUpdateColour, onUpdateFontSize, onBringToFront, onBringForward, onSendBackward, onSendToBack, onCopy, onCut, onDelete, onToggleMinimised]);
 
   return <ContextMenu x={x} y={y} items={items} onClose={onClose} />;
 }

@@ -8,6 +8,173 @@ Entries are reverse-chronological (newest first).
 
 ---
 
+## 26-Mar-26: Forensic synth-vs-production data comparison
+
+### Context
+
+The committed model recovers parameters correctly on synth data
+(synth-mirror-4step PASS, 1.04x on the low-p edge) but inflates p on
+production data (delegated-to-registered: 0.184 vs analytic 0.095,
+1.94x). Same code path, same compiler. The difference must be in the
+data characteristics, not the code.
+
+### Forensic comparison: synth-mirror-4step vs bayes-test-gm-rebuild
+
+Both graphs are 4-step linear chains with the same edge structure
+(2 no-latency + 2 latency). After deduplication, trajectory depth is
+comparable (6-12 distinct y values per active anchor day). The
+meaningful differences are:
+
+| Dimension | Synth | Production | Ratio |
+|---|---|---|---|
+| Anchor days | 100 | 165 | 1.7x |
+| Snapshot fetch window | full 100d | last 45-60d | partial |
+| Anchors with trajectories | ~97 (all) | ~50 (recent only) | 0.5x |
+| Anchors as param-file daily obs | ~3 | 90-179 per edge | 30-60x |
+| BetaBinomial observed RVs | 0 | 2 (no-latency edges) | structural |
+| Denominator (x) variability | 130-190 | 1-945 | ~5x range |
+| Daily traffic | fixed ~1600 | variable (34-25679) | high variance |
+
+### Key structural difference: partial snapshot coverage
+
+In production, snapshot fetching started ~60 days ago. Older anchor
+days (Oct-Jan) have no snapshot rows — only the FE's param file daily
+arrays. The evidence binder supplements these as `CohortDailyObs`
+(single-point observations with completeness).
+
+In synth, the snapshot DB covers the entire simulation period with
+nightly fetches. Every anchor day has a rich trajectory. The param
+file supplementation path is never exercised.
+
+This means production runs a fundamentally different evidence mix:
+trajectories for recent anchors + param-file daily obs for older ones.
+The model was validated only against pure-trajectory evidence.
+
+### The obs_daily BetaBinomial (model.py line 1033-1060)
+
+Inside `_emit_cohort_likelihoods`, window daily obs (>3 points) emit
+a `pm.BetaBinomial` observed RV to anchor p and prevent the p-latency
+tradeoff from drifting. In production, no-latency edges accumulate 39
+window daily obs each → BetaBinomial with shape=(39,). In synth, only
+1 window daily obs → below the threshold, no BetaBinomial emitted.
+
+These BetaBinomial terms constrain p through a different mechanism
+than trajectory DM potentials, and share `sigma_temporal` with
+latency edges. This is a candidate coupling path.
+
+### Approach: progressive synth degradation
+
+Rather than guessing which difference causes the p inflation, we will
+degrade synth data progressively along each vector until the failure
+emerges. This isolates the causal factor.
+
+**Vector 1 — partial snapshot coverage**: Add `snapshot_start_offset`
+to the truth file. The synth generator writes snapshot DB rows only
+for the last N days of fetches. Param file daily arrays still cover
+the full anchor range. The evidence binder will supplement older
+anchor days from the param file, matching production's evidence mix.
+
+**Vector 2 — traffic variability**: Replace fixed daily traffic with
+high-variance draws (matching production's 1-945 denominator range).
+
+**Vector 3 — daily traffic volume**: Reduce mean traffic to match
+production's typical daily counts per edge.
+
+**Vector 4 — anchor range**: Extend to 165 days to match production's
+observation window.
+
+Test each vector independently. The first one that breaks param
+recovery is the culprit.
+
+---
+
+## 25-Mar-26 (cont.): Two-phase sampling design
+
+### Why disconnected_grad failed
+
+`disconnected_grad` blocks gradient but not the log-probability value.
+This creates an inconsistent Hamiltonian: the gradient says "p is
+prior-only" but the energy surface includes cohort potential terms that
+depend on p's value. NUTS requires consistent (logp, dlogp) pairs.
+The result is a corrupted posterior — p drifts away from both the prior
+and the data. This is the well-known "cutting feedback" problem
+(Plummer 2015, Carmona & Nicholls 2025).
+
+### Two-phase design
+
+**Phase 1: Window data + full graph topology**
+- Edge p constrained by window trajectory DMs (with latent latency)
+- Splits: Dirichlet/Multinomial (branch groups)
+- Joins: path products of edge p × convolved edge latencies
+- All gradient flows freely — consistent Hamiltonian
+- Output: posterior means for edge.p and edge.latency
+
+**Phase 2: Cohort data + frozen Phase 1 results**
+- edge.p and edge.latency as `pm.Data` constants from Phase 1
+- Path p = product of frozen edge p values
+- Path latency = convolution of frozen edge latencies
+- Free parameters: drift (cohort vs window deviation), dispersion
+- Cohort trajectory DMs constrain drift/dispersion against frozen
+  baseline — consistent Hamiltonian
+
+### Why joins matter in Phase 1
+
+At a join node c with inbound b→c and e→c: the total arrivals at c
+constrain upstream splits (e.g. a→b vs a→g) conjointly with latency.
+The graph's flow conservation creates cross-edge constraints even for
+window data. Phase 1 needs full topology awareness, not just
+independent edge estimation.
+
+### Implementation approach
+
+Phase 1: call `_emit_cohort_likelihoods` with `skip_cohort_trajectories`
+flag — emits window trajectory potentials and window daily BetaBinomials
+but skips cohort trajectories. Uses live p (no gradient tricks).
+
+Phase 2: separate model with p as constants. To be implemented after
+Phase 1 is validated.
+
+---
+
+## 25-Mar-26 (cont.): Implementing one-directional p constraint
+
+### What we're doing
+
+Removing the p_base/p_window/p_cohort hierarchy. The shared `p_base`
+with non-centred perturbations (eps_window, eps_cohort) allows cohort
+likelihoods to constrain edge p through `p_base`, violating the
+one-directional invariant established below.
+
+### Changes
+
+**model.py** — the `has_window and has_cohort` block (lines 285–336):
+- Remove: `p_base`, `logit_p_base`, `eps_window`, `tau_window`,
+  `logit_p_window`, `p_window` (Deterministic), `eps_cohort`,
+  `tau_cohort`, `logit_p_cohort`, `p_cohort` (Deterministic)
+- Remove: `sigma_temporal` hyperprior (line 74) — no longer needed
+- Replace with: single `p = pm.Beta(...)` constrained by window DM only
+- Pass `disconnected_grad(p)` to `_emit_cohort_likelihoods` as both
+  `p_var` and `p_window_var` — cohort DM constrains latency and
+  dispersion only, cannot influence edge p
+
+**inference.py** — posterior extraction:
+- Update to look for `p_{id}` instead of `p_window_{id}` / `p_cohort_{id}`
+  / `p_base_{id}`
+- Window and cohort slices both report from the same `p` variable
+  (they share a ground truth; the distinction was artificial)
+- Remove model_state extraction for `p_base_alpha/beta` (replaced by
+  `p_alpha/beta`)
+
+### Expected outcome
+
+- Window DM is sole authority on edge p → delegated-to-registered should
+  converge near analytic 0.095
+- Cohort DM constrains latency (mu, sigma, onset) and dispersion (kappa)
+  using frozen p values
+- Simpler model with fewer parameters → faster sampling, cleaner traces
+
+---
+
 ## 25-Mar-26 (cont.): Fundamental model design — window/cohort relationship
 
 ### Observation

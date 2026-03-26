@@ -23,7 +23,7 @@ import { isSnapshotBootChart, logSnapshotBoot, recordSnapshotBootLedgerStage } f
 import { getLastSnappedResize, clearLastSnappedResize } from '@/services/snapService';
 import { groupResizeStart, groupResize, groupResizeEnd } from '../canvas/useGroupResize';
 import { beginResizeGuard, endResizeGuard } from '../canvas/syncGuards';
-import { Loader2, AlertCircle, ServerOff, ExternalLink, Settings2, ChevronDown, Crosshair, SlidersHorizontal, RefreshCw, X } from 'lucide-react';
+import { Loader2, AlertCircle, ServerOff, ExternalLink, Settings2, ChevronDown, Crosshair, SlidersHorizontal, RefreshCw, X, BarChart3 } from 'lucide-react';
 import { chartOperationsService } from '@/services/chartOperationsService';
 import { InlineEditableLabel } from '../InlineEditableLabel';
 import type { AvailableAnalysis } from '@/lib/graphComputeClient';
@@ -36,6 +36,9 @@ import { ChartFloatingIcon } from '../charts/ChartInlineSettingsFloating';
 import { ExpressionToolbarTray } from '../charts/ExpressionToolbarTray';
 import type { ViewMode } from '@/types/chartRecipe';
 import { resolveDisplaySetting, getDisplaySettings, SCALE_WITH_CANVAS_SETTING } from '@/lib/analysisDisplaySettingsRegistry';
+import { MinimiseChevron } from '../canvas/MinimiseChevron';
+import { MinimiseCornerArrows, CORNER_ORIGINS } from '../canvas/MinimiseCornerArrows';
+import type { AnchorCorner } from '../canvas/MinimiseCornerArrows';
 import { filterResultForScenarios } from '@/lib/analysisResultUtils';
 
 interface CanvasAnalysisNodeData {
@@ -47,7 +50,8 @@ interface CanvasAnalysisNodeData {
   onResizeEnd?: () => void;
 }
 
-function CanvasAnalysisNodeInner({ data, selected }: NodeProps<CanvasAnalysisNodeData>) {
+
+function CanvasAnalysisNodeInner({ data, selected, dragging }: NodeProps<CanvasAnalysisNodeData>) {
   const { analysis: analysisProp, tabId, onUpdate, onDelete } = data;
   // ── Store access: use targeted selectors to avoid full-store re-renders ──
   // The full `useGraphStore()` without selector subscribes to EVERY store change,
@@ -59,6 +63,25 @@ function CanvasAnalysisNodeInner({ data, selected }: NodeProps<CanvasAnalysisNod
   // imperative access without reactive re-renders.
   const storeHandle = useGraphStoreApi();
   const analysis = analysisProp;
+  const minimised = !!analysis.minimised;
+  const prevMinimisedRef = useRef(minimised);
+  const prevAnchorRef = useRef<string | undefined>((analysis as any).minimised_anchor);
+  const justRestored = prevMinimisedRef.current && !minimised;
+  const restoredAnchor = justRestored ? (prevAnchorRef.current || 'tl') : undefined;
+  prevMinimisedRef.current = minimised;
+  prevAnchorRef.current = (analysis as any).minimised_anchor;
+  const [hovered, setHovered] = useState(false);
+  const [cornerHint, setCornerHint] = useState<AnchorCorner | null>(null);
+  const lastCornerRef = useRef<AnchorCorner | null>(null);
+  if (cornerHint) lastCornerRef.current = cornerHint;
+  const hintSuppressedUntil = useRef(0);
+  const setCornerHintGuarded = useCallback((c: AnchorCorner | null) => {
+    if (c && Date.now() < hintSuppressedUntil.current) return;
+    setCornerHint(c);
+  }, []);
+  const suppressHint = useCallback(() => { hintSuppressedUntil.current = Date.now() + 500; setCornerHint(null); }, []);
+  // Cancel expand hint when dragging starts
+  if (dragging && cornerHint) setCornerHint(null);
   const contentItems = getContentItems(analysis);
   const [activeContentIndex, setActiveContentIndex] = useState(0);
   // Clamp index if content items shrink
@@ -873,9 +896,195 @@ function CanvasAnalysisNodeInner({ data, selected }: NodeProps<CanvasAnalysisNod
     setTypePickerAnchor(null);
   }, [handleAnalysisTypeChange]);
 
+  const minimisedAnchor = (analysis as any).minimised_anchor as 'tl' | 'tr' | 'bl' | 'br' | undefined;
+
+  const handleMinimise = useCallback((anchor: 'tl' | 'tr' | 'bl' | 'br') => {
+    suppressHint();
+    const mw = 32, mh = 32;
+    const dx = (anchor === 'tr' || anchor === 'br') ? analysis.width - mw : 0;
+    const dy = (anchor === 'bl' || anchor === 'br') ? analysis.height - mh : 0;
+    onUpdate(analysis.id, {
+      minimised: true, minimised_anchor: anchor,
+      x: analysis.x + dx, y: analysis.y + dy,
+    } as any);
+  }, [analysis.id, analysis.x, analysis.y, analysis.width, analysis.height, onUpdate, suppressHint]);
+
+  const handleRestore = useCallback(() => {
+    suppressHint();
+    const anchor = minimisedAnchor || 'tl';
+    const mw = 32, mh = 32;
+    const dx = (anchor === 'tr' || anchor === 'br') ? analysis.width - mw : 0;
+    const dy = (anchor === 'bl' || anchor === 'br') ? analysis.height - mh : 0;
+    onUpdate(analysis.id, {
+      minimised: false,
+      x: analysis.x - dx, y: analysis.y - dy,
+    } as any);
+  }, [analysis.id, analysis.x, analysis.y, analysis.width, analysis.height, minimisedAnchor, onUpdate, suppressHint]);
+
+  // Auto-dismiss hover label after 5s to prevent stale labels
+  useEffect(() => {
+    if (!hovered || !minimised) return;
+    const t = setTimeout(() => setHovered(false), 5000);
+    return () => clearTimeout(t);
+  }, [hovered, minimised]);
+
+  // ── Minimised rendering ──────────────────────────────────────────────
+  if (minimised) {
+    const iconSize = 22;
+    const typeMeta = getAnalysisTypeMeta(contentItem.analysis_type || '');
+    const TypeIcon = typeMeta?.icon || BarChart3;
+    const minimisedLabel = subjectLabel
+      ? `${subjectLabel} — ${contentItem.title || contentItem.analysis_type || 'Analysis'}`
+      : (contentItem.title || contentItem.analysis_type || 'Analysis');
+    return (
+      <>
+        <MinimiseCornerArrows
+          minimisedAnchor={minimisedAnchor || 'tl'}
+          visible={hovered}
+          disabled={dragging || selected}
+          zoom={zoom}
+          nodeWidth={32}
+          nodeHeight={32}
+          colour="var(--text-primary, #555)"
+          onMinimise={handleMinimise}
+          onRestore={handleRestore}
+          onMouseEnter={() => setHovered(true)}
+          onMouseLeave={() => setHovered(false)}
+          onCornerHover={setCornerHintGuarded}
+        />
+
+        {/* Selection UI: delete button + border highlight */}
+        {selected && (
+          <button
+            className="nodrag"
+            onClick={(e) => { e.stopPropagation(); onDelete(analysis.id); }}
+            title="Delete canvas analysis"
+            style={{
+              position: 'absolute', top: -24 / zoom, right: -24 / zoom, width: 20 / zoom, height: 20 / zoom,
+              borderRadius: '50%', border: '1px solid var(--border-primary)', background: 'var(--bg-primary)',
+              color: 'var(--color-danger)', fontSize: 12 / zoom, lineHeight: `${18 / zoom}px`, textAlign: 'center',
+              cursor: 'pointer', zIndex: 10, padding: 0, boxShadow: '0 1px 3px rgba(0,0,0,0.15)',
+            }}
+          >
+            ×
+          </button>
+        )}
+
+        <div
+          style={{
+            transform: cornerHint ? `scale(${(32 + 12) / 32}, ${(32 + 12) / 32})` : 'scale(1)',
+            transformOrigin: CORNER_ORIGINS[cornerHint ?? lastCornerRef.current ?? minimisedAnchor ?? 'tl'],
+            transition: 'transform 300ms cubic-bezier(0.25, 0.1, 0.25, 1) 80ms',
+          }}
+          onClick={(e) => {
+            if (!e.ctrlKey && !e.metaKey && !e.shiftKey) {
+              e.stopPropagation();
+              suppressHint();
+              // Capture restore params NOW (correct at click time), then schedule
+              // the write after d3-drag's interaction guard clears (2 rAFs in onNodeDragStop).
+              const anchor = minimisedAnchor || 'tl';
+              const mw = 32, mh = 32;
+              const dx = (anchor === 'tr' || anchor === 'br') ? analysis.width - mw : 0;
+              const dy = (anchor === 'bl' || anchor === 'br') ? analysis.height - mh : 0;
+              const rid = analysis.id, rx = analysis.x - dx, ry = analysis.y - dy;
+              requestAnimationFrame(() => requestAnimationFrame(() => requestAnimationFrame(() => {
+                onUpdate(rid, { minimised: false, x: rx, y: ry } as any);
+              })));
+            }
+          }}
+        >
+        <div
+          className="canvas-analysis-node canvas-annotation-minimised"
+          data-anchor={minimisedAnchor || 'tl'}
+          onMouseEnter={() => {
+            setHovered(true);
+            if (!selected) setCornerHintGuarded(minimisedAnchor || 'tl');
+            window.dispatchEvent(new CustomEvent('dagnet:analysisHover', { detail: { analysisId: analysis.id } }));
+          }}
+          onMouseLeave={() => {
+            setHovered(false);
+            setCornerHintGuarded(null);
+            window.dispatchEvent(new CustomEvent('dagnet:analysisHover', { detail: { analysisId: null } }));
+          }}
+          style={{
+            width: 32, height: 32,
+            background: 'var(--canvas-analysis-bg, #ffffff)',
+            border: selected ? '2px solid #3b82f6' : '1px solid var(--canvas-analysis-border, #d1d5db)',
+            outline: (selected || contentItem.display?.show_subject_overlay)
+              ? `6px solid ${contentItem.display?.subject_overlay_colour || '#3b82f6'}${selected ? '1a' : '0d'}`
+              : 'none',
+            outlineOffset: -1,
+            borderRadius: 8,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            boxShadow: selected
+              ? '0 0 0 1px #3b82f6, 0 1px 3px rgba(0,0,0,0.08)'
+              : '0 1px 3px rgba(0,0,0,0.08), 0 4px 12px rgba(0,0,0,0.06)',
+            overflow: 'hidden',
+          }}
+        >
+          <TypeIcon size={iconSize} style={{ color: 'var(--canvas-analysis-title, #374151)', opacity: 0.85 }} />
+        </div>
+        </div>
+
+        {/* Hover label — vertically centred with icon */}
+        {hovered && (
+          <div className="nodrag nopan" style={{
+            position: 'absolute', left: cornerHint ? 50 : 38, top: 0, height: 32,
+            display: 'flex', alignItems: 'center',
+            fontSize: 12 / zoom, lineHeight: 1,
+            color: 'var(--canvas-analysis-title, #374151)',
+            whiteSpace: 'nowrap', pointerEvents: 'none', userSelect: 'none',
+            background: 'color-mix(in srgb, var(--canvas-analysis-bg, #ffffff) 70%, transparent)',
+            backdropFilter: 'blur(6px)',
+            borderRadius: 8 / zoom, padding: `${2 / zoom}px ${6 / zoom}px`,
+            transition: 'left 300ms cubic-bezier(0.25, 0.1, 0.25, 1) 80ms',
+          }}>
+            {minimisedLabel}
+          </div>
+        )}
+      </>
+    );
+  }
+
+  // ── Normal rendering ─────────────────────────────────────────────────
   return (
+    <>
+    <MinimiseCornerArrows
+      visible={hovered && !dragging && !selected}
+      zoom={zoom}
+      nodeWidth={analysis.width}
+      nodeHeight={analysis.height}
+      colour="var(--text-primary, #555)"
+      onMinimise={handleMinimise}
+      onRestore={handleRestore}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      onCornerHover={setCornerHintGuarded}
+    />
+    {/* Ghost outline — original bounds while shrinking */}
+    <div style={{
+      position: 'absolute', inset: 0,
+      border: '1.5px dashed var(--canvas-analysis-border, rgba(0,0,0,0.12))',
+      borderRadius: 8,
+      opacity: cornerHint ? 0.8 : 0,
+      transition: cornerHint
+        ? 'opacity 300ms ease 200ms'
+        : 'opacity 200ms ease',
+      pointerEvents: 'none',
+    }} />
     <div
-      className={`canvas-analysis-node${selected ? ' nowheel' : ''}`}
+      className={`canvas-analysis-node${selected ? ' nowheel' : ''}${justRestored ? ' canvas-annotation-normal' : ''}`}
+      {...(restoredAnchor ? { 'data-anchor': restoredAnchor } : {})}
+      onMouseEnter={() => {
+        setHovered(true);
+        window.dispatchEvent(new CustomEvent('dagnet:analysisHover', { detail: { analysisId: analysis.id } }));
+      }}
+      onMouseLeave={() => {
+        setHovered(false);
+        window.dispatchEvent(new CustomEvent('dagnet:analysisHover', { detail: { analysisId: null } }));
+      }}
       style={{
         width: '100%',
         height: '100%',
@@ -892,13 +1101,11 @@ function CanvasAnalysisNodeInner({ data, selected }: NodeProps<CanvasAnalysisNod
         boxShadow: selected
           ? '0 4px 12px rgba(0,0,0,0.10), 0 12px 32px rgba(0,0,0,0.12)'
           : '0 1px 3px rgba(0,0,0,0.08), 0 4px 12px rgba(0,0,0,0.06)',
-        transition: 'box-shadow 0.15s ease-out',
-      }}
-      onMouseEnter={() => {
-        window.dispatchEvent(new CustomEvent('dagnet:analysisHover', { detail: { analysisId: analysis.id } }));
-      }}
-      onMouseLeave={() => {
-        window.dispatchEvent(new CustomEvent('dagnet:analysisHover', { detail: { analysisId: null } }));
+        transform: cornerHint
+          ? `scale(${(analysis.width - 12) / analysis.width}, ${(analysis.height - 12) / analysis.height})`
+          : undefined,
+        transformOrigin: cornerHint ? CORNER_ORIGINS[cornerHint] : undefined,
+        transition: 'transform 300ms cubic-bezier(0.25, 0.1, 0.25, 1) 200ms, box-shadow 0.15s ease-out',
       }}
     >
       <NodeResizer
@@ -1386,6 +1593,7 @@ function CanvasAnalysisNodeInner({ data, selected }: NodeProps<CanvasAnalysisNod
         document.body,
       )}
     </div>
+    </>
   );
 }
 

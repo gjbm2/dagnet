@@ -23,6 +23,7 @@ import { canvasAnalysisTransientCache, contentItemResultCache } from '../../hook
 import { addContentItem, ensureContentItemDsl } from '../../services/canvasAnalysisMutationService';
 import { fileRegistry } from '../../contexts/TabContext';
 import { dataOperationsService } from '../../services/dataOperationsService';
+import { credentialsManager } from '../../lib/credentials';
 
 // Module-level mutable for pending analysis payload (shared with draw-to-place).
 // Mirrors the module-level variable that was in GraphCanvas.
@@ -185,7 +186,8 @@ export function useCanvasCreation({
 
   const addPostitAtPosition = useCallback((x: number, y: number, w?: number, h?: number) => {
     if (!graph) return;
-    const { graph: nextGraph, newId } = createPostitInGraph(graph, { x, y }, { width: w, height: h });
+    const author = credentialsManager.getDefaultGitCredentials()?.userName;
+    const { graph: nextGraph, newId } = createPostitInGraph(graph, { x, y }, { width: w, height: h }, author);
     setGraphDirect(nextGraph);
     saveHistoryState('Add post-it');
     setContextMenu(null);

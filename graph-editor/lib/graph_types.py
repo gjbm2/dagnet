@@ -478,6 +478,10 @@ class PostIt(BaseModel):
     height: float = Field(..., gt=0)
     x: float
     y: float
+    minimised: Optional[bool] = None
+    minimised_anchor: Optional[Literal["tl", "tr", "bl", "br"]] = None
+    createdBy: Optional[str] = Field(None, description="Git username of the creator")
+    createdAt: Optional[str] = Field(None, description="ISO-8601 timestamp of creation")
 
 
 class Container(BaseModel):
@@ -562,6 +566,8 @@ class CanvasAnalysis(BaseModel):
     width: float = Field(..., gt=0)
     height: float = Field(..., gt=0)
     content_items: List[ContentItem] = Field(..., min_length=1)
+    minimised: Optional[bool] = None
+    minimised_anchor: Optional[Literal["tl", "tr", "bl", "br"]] = None
 
     @model_validator(mode='before')
     @classmethod

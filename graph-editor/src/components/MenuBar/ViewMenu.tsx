@@ -307,11 +307,27 @@ export function ViewMenu() {
                 Hide unselected
               </Menubar.Item>
 
-              <Menubar.Item 
-                className="menubar-item" 
+              <Menubar.Item
+                className="menubar-item"
                 onSelect={handleShowAll}
               >
                 Show all
+              </Menubar.Item>
+
+              <Menubar.Separator className="menubar-separator" />
+
+              <Menubar.Item
+                className="menubar-item"
+                onSelect={() => window.dispatchEvent(new CustomEvent('dagnet:minimiseAll'))}
+              >
+                Minimise all annotations
+              </Menubar.Item>
+
+              <Menubar.Item
+                className="menubar-item"
+                onSelect={() => window.dispatchEvent(new CustomEvent('dagnet:restoreAll'))}
+              >
+                Restore all annotations
               </Menubar.Item>
 
               <Menubar.Separator className="menubar-separator" />

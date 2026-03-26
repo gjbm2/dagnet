@@ -441,9 +441,11 @@ interface ShapeData {
   colour: string;
   /** Fill opacity for this shape (varies by selection/hover state). */
   fillOpacity: number;
+  /** True when the parent canvas analysis is minimised. */
+  minimised?: boolean;
 }
 
-export function SelectionConnectors({ graph }: { graph: any }) {
+export function SelectionConnectors({ graph, controlledSetNodes }: { graph: any; controlledSetNodes?: (updater: (nodes: any[]) => any[]) => void }) {
   const viewport = useViewport();
   const rfNodes = useNodes();
   const { draggedAnalysisId } = useDecorationVisibility();
@@ -521,6 +523,7 @@ export function SelectionConnectors({ graph }: { graph: any }) {
       connectedHumanIds: string[];
       referencedOnPath: Set<string>;
       referencedNodeIds: string[];
+      minimised?: boolean;
     };
 
     const buildShape = (
@@ -570,7 +573,7 @@ export function SelectionConnectors({ graph }: { graph: any }) {
         id: analysisId, isSelected, isHovered, rfNode, colour,
         connectedNodes, disconnectedNodes, allNodes, nodeHumanIds,
         connectedHumanIds, referencedOnPath, referencedNodeIds,
-      };
+      } as BaseShape;
     };
 
     const baseShapes: BaseShape[] = [];
@@ -611,7 +614,10 @@ export function SelectionConnectors({ graph }: { graph: any }) {
         const tabIsHovered = isHovered && !isPersisted;
         const shapeId = `${a.id}:${tabIdx}`;
         const shape = buildShape(shapeId, dsl, colour, isSelected, tabIsHovered, rfNode);
-        if (shape) baseShapes.push(shape);
+        if (shape) {
+          shape.minimised = !!a.minimised;
+          baseShapes.push(shape);
+        }
       }
     }
 
@@ -674,6 +680,7 @@ export function SelectionConnectors({ graph }: { graph: any }) {
         cx: cx / centres.length, cy: cy / centres.length,
         minRadius: minR, rfNode: shape.rfNode, colour: shape.colour,
         fillOpacity: shape.isSelected ? 0.08 : shape.isHovered ? 0.015 : 0.03,
+        minimised: shape.minimised,
       } as ShapeData;
     });
   }, [visibleIds, rfNodes, graph, selectedAnalysisId, hoveredAnalysisId, draggedAnalysisId, activeTabByAnalysis]);
@@ -715,8 +722,14 @@ export function SelectionConnectors({ graph }: { graph: any }) {
     return entries.sort().join('|');
   }, [haloMap]);
 
+  // Halo highlight effect — uses the CONTROLLED setNodes (from useNodesState)
+  // rather than useReactFlow().setNodes() to avoid the 'reset' path which
+  // overwrites controlled state (including style) with stale nodeInternals.
+  // This was causing minimised analysis nodes to snap back to full size.
+  const haloSetNodes = controlledSetNodes ?? setNodes;
+
   useEffect(() => {
-    setNodes(nodes => nodes.map(n => {
+    haloSetNodes(nodes => nodes.map(n => {
       const entry = haloMap.get(n.id);
       const had = (n.data as any)?.selectionHighlightColour;
       if (entry) {
@@ -732,7 +745,7 @@ export function SelectionConnectors({ graph }: { graph: any }) {
     }));
 
     return () => {
-      setNodes(nodes => nodes.map(n => {
+      haloSetNodes(nodes => nodes.map(n => {
         if ((n.data as any)?.selectionHighlightColour) {
           const { selectionHighlightColour: _, selectionHighlightOpacity: _o, ...rest } = n.data as any;
           return { ...n, data: rest };
@@ -740,7 +753,7 @@ export function SelectionConnectors({ graph }: { graph: any }) {
         return n;
       }));
     };
-  }, [haloKey, setNodes]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [haloKey, haloSetNodes]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (allShapes.length === 0) return null;
 
@@ -774,8 +787,10 @@ export function SelectionConnectors({ graph }: { graph: any }) {
           if (showConnector) {
             const aX = shape.rfNode.position?.x ?? 0;
             const aY = shape.rfNode.position?.y ?? 0;
-            const aW = (shape.rfNode as any).measured?.width ?? shape.rfNode.width ?? 400;
-            const aH = (shape.rfNode as any).measured?.height ?? shape.rfNode.height ?? 300;
+            // When minimised, use the fixed minimised dimensions — RF measured/width
+            // may still reflect the old full size during the transition.
+            const aW = shape.minimised ? 32 : ((shape.rfNode as any).measured?.width ?? shape.rfNode.width ?? 400);
+            const aH = shape.minimised ? 32 : ((shape.rfNode as any).measured?.height ?? shape.rfNode.height ?? 300);
             const aCx = aX + aW / 2, aCy = aY + aH / 2;
 
             const lines: JSX.Element[] = [];

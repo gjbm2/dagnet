@@ -682,6 +682,7 @@ DEFAULT_SIM_CONFIG = {
     "drift_sigma": 0.0,           # random-walk drift disabled by default
     "seed": 42,
     "growth_rate_mom": 0.0,       # monthly growth rate (0.05 = 5% MoM exponential)
+    "snapshot_start_offset": 0,   # 0 = full coverage; >0 = snapshot DB rows only for last N days
 }
 
 
@@ -1039,11 +1040,13 @@ def simulate_graph(
     # --- Generate observations via nightly fetch model ---
     # arrivals_by_day is needed for window index construction (grouping
     # by from-node arrival day across simulation days).
+    snapshot_start_offset = sim_config.get("snapshot_start_offset", 0)
     snapshot_rows = _generate_observations_nightly(
         topology, sorted_times, sorted_edge_times, actual_traffic,
         hash_lookup, n_days, base_date, failure_rate, rng,
         arrivals_by_day, burn_in_days, total_sim_days, edge_params,
         context_dims=context_dims,
+        snapshot_start_offset=snapshot_start_offset,
     )
 
     # Free the raw person data now
@@ -1194,8 +1197,14 @@ def _generate_observations_nightly(
     total_sim_days: int | None = None,
     edge_params: dict[str, dict] | None = None,
     context_dims: list[dict] | None = None,
+    snapshot_start_offset: int = 0,
 ) -> dict[str, list[dict]]:
     """Generate snapshot rows using nightly fetch simulation.
+
+    When snapshot_start_offset > 0, only fetch nights within the last
+    snapshot_start_offset days produce DB rows.  This simulates
+    production's partial snapshot coverage — the param file still
+    covers the full period, but the snapshot DB only has recent fetches.
 
     Produces two distinct slicings of the same simulated reality:
 
@@ -1390,9 +1399,14 @@ def _generate_observations_nightly(
 
     # ── Determine fetch nights (with failure simulation) ────────────────
     fetch_nights: list[int] = []
+    # snapshot_start_offset > 0: only write DB rows for the last N days
+    # of fetches.  This simulates production's partial snapshot coverage.
+    snapshot_cutoff = (n_days - snapshot_start_offset) if snapshot_start_offset > 0 else 0
     for fn in range(1, n_days + 1):
         if failure_rate > 0 and rng.random() < failure_rate:
             continue
+        if fn <= snapshot_cutoff:
+            continue  # before snapshot window — param file only
         fetch_nights.append(fn)
 
     # ── Generate cohort rows ────────────────────────────────────────────

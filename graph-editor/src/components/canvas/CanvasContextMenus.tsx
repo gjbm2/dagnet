@@ -7,7 +7,7 @@
 
 import React from 'react';
 import type { Edge, Node, Connection } from 'reactflow';
-import { Plus, StickyNote, Square, BarChart3, Clipboard, CheckSquare, Monitor, X, LayoutGrid } from 'lucide-react';
+import { Plus, StickyNote, Square, BarChart3, Clipboard, CheckSquare, Monitor, X, LayoutGrid, Minimize2, Maximize2 } from 'lucide-react';
 import { ContextMenu, type ContextMenuItem } from '../ContextMenu';
 import { NodeContextMenu } from '../NodeContextMenu';
 import { PostItContextMenu } from '../PostItContextMenu';
@@ -245,6 +245,19 @@ export const CanvasContextMenus: React.FC<CanvasContextMenusProps> = React.memo(
         if (copiedNode || copiedSubgraph || nodes.length > 0) {
           paneItems.push({ label: '', onClick: () => {}, divider: true });
         }
+        paneItems.push({
+          label: 'Minimise All',
+          icon: <Minimize2 size={14} />,
+          onClick: () => window.dispatchEvent(new CustomEvent('dagnet:minimiseAll')),
+        });
+        paneItems.push({
+          label: 'Restore All',
+          icon: <Maximize2 size={14} />,
+          onClick: () => window.dispatchEvent(new CustomEvent('dagnet:restoreAll')),
+        });
+        if (nodes.length > 0) {
+          paneItems.push({ label: '', onClick: () => {}, divider: true });
+        }
         if (nodes.length > 0) {
           paneItems.push({
             label: 'Auto Layout',
@@ -402,6 +415,18 @@ export const CanvasContextMenus: React.FC<CanvasContextMenusProps> = React.memo(
                 saveHistoryState('Delete post-it');
                 onSelectedAnnotationChange?.(null, null);
               }
+            }}
+            minimised={!!postit.minimised}
+            onToggleMinimised={(id) => {
+              const nextGraph = structuredClone(graph);
+              const p = nextGraph.postits?.find((pi: any) => pi.id === id);
+              if (p) {
+                p.minimised = !p.minimised;
+                if (nextGraph.metadata) nextGraph.metadata.updated_at = new Date().toISOString();
+                setGraph(nextGraph);
+                saveHistoryState(p.minimised ? 'Minimise post-it' : 'Restore post-it');
+              }
+              setPostitContextMenu(null);
             }}
             onClose={() => setPostitContextMenu(null)}
           />
@@ -782,6 +807,11 @@ export const CanvasContextMenus: React.FC<CanvasContextMenusProps> = React.memo(
             }}
             onDelete={(id) => {
               handleDeleteAnalysis(id);
+            }}
+            minimised={!!analysis.minimised}
+            onToggleMinimised={(id) => {
+              handleUpdateAnalysis(id, { minimised: !analysis.minimised });
+              setAnalysisContextMenu(null);
             }}
             onClose={() => setAnalysisContextMenu(null)}
           />

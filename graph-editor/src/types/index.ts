@@ -1145,6 +1145,13 @@ export interface PostIt {
   height: number;
   x: number;
   y: number;
+  minimised?: boolean;
+  /** Which corner the minimised icon anchors to: tl, tr, bl, br. Default tl. */
+  minimised_anchor?: 'tl' | 'tr' | 'bl' | 'br';
+  /** Git username of the creator (from credentials). */
+  createdBy?: string;
+  /** ISO-8601 timestamp of creation. */
+  createdAt?: string;
 }
 
 export interface Container {
@@ -1199,6 +1206,9 @@ export interface CanvasAnalysis {
   height: number;
   /** Ordered list of content inside this container. */
   content_items: ContentItem[];
+  minimised?: boolean;
+  /** Which corner the minimised icon anchors to: tl, tr, bl, br. Default tl. */
+  minimised_anchor?: 'tl' | 'tr' | 'bl' | 'br';
 }
 
 export interface ConversionGraph {

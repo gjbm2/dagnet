@@ -607,6 +607,7 @@ def _emit_cohort_likelihoods(
     cohort_latency_vars: dict[str, tuple] | None = None,
     kappa=None,
     onset_vars: dict[str, object] | None = None,
+    skip_cohort_trajectories: bool = False,
 ) -> None:
     """Emit cohort likelihoods via pm.Potential (vectorised per obs_type).
 
@@ -662,6 +663,8 @@ def _emit_cohort_likelihoods(
 
     for obs_type, trajs in [("window", window_trajs), ("cohort", cohort_trajs)]:
         if not trajs:
+            continue
+        if skip_cohort_trajectories and obs_type == "cohort":
             continue
 
         # Resolve p expression and latency for this obs_type.

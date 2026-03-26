@@ -41,6 +41,14 @@ import {
 } from '@/lib/nodeEdgeConstants';
 
 // ---------------------------------------------------------------------------
+// Minimised annotation dimensions (canvas pixels)
+// ---------------------------------------------------------------------------
+export const POSTIT_MINIMISED_WIDTH = 32;
+export const POSTIT_MINIMISED_HEIGHT = 32;
+export const ANALYSIS_MINIMISED_WIDTH = 32;
+export const ANALYSIS_MINIMISED_HEIGHT = 32;
+
+// ---------------------------------------------------------------------------
 // Params interface
 // ---------------------------------------------------------------------------
 
@@ -277,11 +285,13 @@ export function useGraphSync(params: UseGraphSyncParams): UseGraphSyncReturn {
       if (!graphAnalysis) return false;
       const rfWidth = typeof node.style?.width === 'number' ? node.style.width : node.width;
       const rfHeight = typeof node.style?.height === 'number' ? node.style.height : node.height;
+      const expectedW = graphAnalysis.minimised ? ANALYSIS_MINIMISED_WIDTH : graphAnalysis.width;
+      const expectedH = graphAnalysis.minimised ? ANALYSIS_MINIMISED_HEIGHT : graphAnalysis.height;
       return node.type !== 'canvasAnalysis'
         || node.position?.x !== (graphAnalysis.x ?? 0)
         || node.position?.y !== (graphAnalysis.y ?? 0)
-        || rfWidth !== graphAnalysis.width
-        || rfHeight !== graphAnalysis.height
+        || rfWidth !== expectedW
+        || rfHeight !== expectedH
         || node.data?.tabId !== tabId
         || JSON.stringify(node.data?.analysis ?? null) !== JSON.stringify(graphAnalysis);
     });
@@ -602,11 +612,19 @@ export function useGraphSync(params: UseGraphSyncParams): UseGraphSyncReturn {
                   });
                 }
               }
+              // When minimised, omit width/height from style — let the inner content
+              // (explicit fixed-size div) drive the RF wrapper size naturally via
+              // ResizeObserver. Setting explicit dimensions on the wrapper fights RF.
+              const postitMinimised = !!graphPostit.minimised;
               return {
                 ...prevNode,
                 zIndex: 5000 + gpIndex,
                 ...(isInteracting ? {} : { position: { x: graphPostit.x ?? 0, y: graphPostit.y ?? 0 } }),
-                ...(guards.isResizing() ? {} : { style: { ...prevNode.style, width: graphPostit.width, height: graphPostit.height } }),
+                ...(guards.isResizing() ? {} : {
+                  style: postitMinimised
+                    ? { width: POSTIT_MINIMISED_WIDTH, height: POSTIT_MINIMISED_HEIGHT }
+                    : { width: graphPostit.width, height: graphPostit.height },
+                }),
                 selected: autoEditNodeId ? prevNode.id === autoEditNodeId : prevNode.selected,
                 data: {
                   ...prevNode.data,
@@ -662,12 +680,16 @@ export function useGraphSync(params: UseGraphSyncParams): UseGraphSyncReturn {
               const prevData = prevNode.data;
               const dataChanged = analysisChanged || prevData?.tabId !== tabId
                 || prevData?.onUpdate !== handleUpdateAnalysis || prevData?.onDelete !== handleDeleteAnalysis;
+              const analysisMinimised = !!graphAnalysis.minimised;
+              const nextStyle = analysisMinimised
+                ? { width: ANALYSIS_MINIMISED_WIDTH, height: ANALYSIS_MINIMISED_HEIGHT }
+                : { width: graphAnalysis.width, height: graphAnalysis.height };
               return {
                 ...prevNode,
                 type: 'canvasAnalysis',
                 zIndex: 5000 + (graph.postits || []).length + (gaIndex >= 0 ? gaIndex : 0),
                 ...(isInteracting ? {} : { position: { x: graphAnalysis.x ?? 0, y: graphAnalysis.y ?? 0 } }),
-                ...(guards.isResizing() ? {} : { style: { ...prevNode.style, width: graphAnalysis.width, height: graphAnalysis.height } }),
+                ...(guards.isResizing() ? {} : { style: nextStyle }),
                 data: dataChanged ? {
                   ...prevData,
                   analysis: stableAnalysis,
@@ -883,13 +905,16 @@ export function useGraphSync(params: UseGraphSyncParams): UseGraphSyncReturn {
             if (!existingPostitIds.has(p.id)) {
               const shouldAutoEdit = autoEditNodeId === `postit-${p.id}`;
               if (shouldAutoEdit) autoEditPostitIdRef.current = null;
+              const newPostitMinimised = !!p.minimised;
               updatedNodes.push({
                 id: `postit-${p.id}`,
                 type: 'postit',
                 position: { x: p.x ?? 0, y: p.y ?? 0 },
                 zIndex: 5000 + pi,
                 selected: shouldAutoEdit,
-                style: { width: p.width, height: p.height },
+                style: newPostitMinimised
+                  ? { width: POSTIT_MINIMISED_WIDTH, height: POSTIT_MINIMISED_HEIGHT }
+                  : { width: p.width, height: p.height },
                 data: {
                   postit: p,
                   onUpdate: handleUpdatePostit,
@@ -908,12 +933,15 @@ export function useGraphSync(params: UseGraphSyncParams): UseGraphSyncReturn {
           for (let ai = 0; ai < graphAnalyses.length; ai++) {
             const analysis = graphAnalyses[ai];
             if (!existingAnalysisIds.has(analysis.id)) {
+              const newAnalysisMinimised = !!analysis.minimised;
               updatedNodes.push({
                 id: `analysis-${analysis.id}`,
                 type: 'canvasAnalysis',
                 position: { x: analysis.x ?? 0, y: analysis.y ?? 0 },
                 zIndex: 5000 + graphPostits.length + ai,
-                style: { width: analysis.width, height: analysis.height },
+                style: newAnalysisMinimised
+                  ? { width: ANALYSIS_MINIMISED_WIDTH, height: ANALYSIS_MINIMISED_HEIGHT }
+                  : { width: analysis.width, height: analysis.height },
                 data: {
                   analysis,
                   tabId,

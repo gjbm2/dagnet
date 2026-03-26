@@ -1,5 +1,5 @@
 import React, { useMemo } from 'react';
-import { Lock, Zap, Code, ArrowUpCircle, SlidersHorizontal, ExternalLink, RefreshCw, ArrowUpToLine, ArrowUp, ArrowDown, ArrowDownToLine, Copy, Scissors, Trash2, Crosshair, Plus } from 'lucide-react';
+import { Lock, Zap, Code, ArrowUpCircle, SlidersHorizontal, ExternalLink, RefreshCw, ArrowUpToLine, ArrowUp, ArrowDown, ArrowDownToLine, Copy, Scissors, Trash2, Crosshair, Plus, Minimize2, Maximize2 } from 'lucide-react';
 import { ContextMenu, ContextMenuItem } from './ContextMenu';
 import type { CanvasAnalysis, ContentItem } from '@/types';
 import type { ChartRecipeScenario } from '../types/chartRecipe';
@@ -121,6 +121,10 @@ interface CanvasAnalysisContextMenuProps {
   onOverlayToggle?: (active: boolean) => void;
   /** Change overlay colour */
   onOverlayColourChange?: (colour: string | null) => void;
+  /** Whether the analysis is currently minimised */
+  minimised?: boolean;
+  /** Toggle minimised state */
+  onToggleMinimised?: (id: string) => void;
 }
 
 export function CanvasAnalysisContextMenu({
@@ -130,6 +134,7 @@ export function CanvasAnalysisContextMenu({
   effectiveChartKind, display, onDisplayChange, onOpenAsTab, onRefresh, hasCachedResult,
   availableAnalyses, onAnalysisTypeChange, onAddTabWithType,
   overlayActive, overlayColour, onOverlayToggle, onOverlayColourChange,
+  minimised, onToggleMinimised,
 }: CanvasAnalysisContextMenuProps) {
   const ci: ContentItem | undefined = analysis.content_items?.[contentItemIndex] || analysis.content_items?.[0];
   const currentTypeId = ci?.analysis_type;
@@ -291,6 +296,17 @@ export function CanvasAnalysisContextMenu({
       );
     }
 
+    if (onToggleMinimised) {
+      result.push(
+        { label: '', onClick: () => {}, divider: true },
+        {
+          label: minimised ? 'Restore' : 'Minimise',
+          icon: minimised ? <Maximize2 size={14} /> : <Minimize2 size={14} />,
+          onClick: () => onToggleMinimised(analysisId),
+        },
+      );
+    }
+
     result.push(
       { label: '', onClick: () => {}, divider: true },
       { label: 'Copy', icon: <Copy size={14} />, onClick: () => onCopy(analysisId) },
@@ -299,7 +315,7 @@ export function CanvasAnalysisContextMenu({
     );
 
     return result;
-  }, [x, y, analysisId, analysis, contentItemIndex, ci, analysisCount, onUpdate, onCaptureFromTab, onUseAsCurrent, onEditScenarioDsl, onBringToFront, onBringForward, onSendBackward, onSendToBack, onCopy, onCut, onDelete, effectiveChartKind, display, onDisplayChange, onOpenAsTab, onRefresh, hasCachedResult, availableAnalyses, onAnalysisTypeChange, currentTypeId, overlayActive, overlayColour, onOverlayToggle, onOverlayColourChange]);
+  }, [x, y, analysisId, analysis, contentItemIndex, ci, analysisCount, minimised, onUpdate, onCaptureFromTab, onUseAsCurrent, onEditScenarioDsl, onBringToFront, onBringForward, onSendBackward, onSendToBack, onCopy, onCut, onDelete, onToggleMinimised, effectiveChartKind, display, onDisplayChange, onOpenAsTab, onRefresh, hasCachedResult, availableAnalyses, onAnalysisTypeChange, currentTypeId, overlayActive, overlayColour, onOverlayToggle, onOverlayColourChange]);
 
   return <ContextMenu x={x} y={y} items={items} onClose={onClose} />;
 }

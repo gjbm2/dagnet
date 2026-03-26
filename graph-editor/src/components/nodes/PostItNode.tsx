@@ -7,6 +7,8 @@ import type { GraphData } from '@/types';
 import { PostItEditor } from './PostItEditor';
 import { useElementTool } from '../../contexts/ElementToolContext';
 import { useTheme } from '../../contexts/ThemeContext';
+import { MinimiseCornerArrows, CORNER_ORIGINS } from '../canvas/MinimiseCornerArrows';
+import type { AnchorCorner } from '../canvas/MinimiseCornerArrows';
 
 type PostItType = NonNullable<GraphData['postits']>[number];
 
@@ -25,6 +27,34 @@ export const POSTIT_COLOURS_DARK: Record<string, string> = {
 
 const FONT_SIZES: Record<string, number> = { S: 6, M: 9, L: 13, XL: 18 };
 
+/** Format an ISO timestamp as a human-readable relative string. */
+function formatRelativeTime(iso: string): string {
+  const then = new Date(iso).getTime();
+  if (Number.isNaN(then)) return '';
+  const diffMs = Date.now() - then;
+  const mins = Math.floor(diffMs / 60_000);
+  if (mins < 1) return 'just now';
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  const days = Math.floor(hrs / 24);
+  if (days < 30) return `${days}d ago`;
+  const months = Math.floor(days / 30);
+  if (months < 12) return `${months}mo ago`;
+  return `${Math.floor(months / 12)}y ago`;
+}
+
+/** Build the attribution string shown beneath / on hover of a post-it. */
+function postitAttribution(postit: PostItType): string | null {
+  const parts: string[] = [];
+  if (postit.createdBy) parts.push(`@${postit.createdBy}`);
+  if (postit.createdAt) {
+    const rel = formatRelativeTime(postit.createdAt);
+    if (rel) parts.push(rel);
+  }
+  return parts.length > 0 ? parts.join(', ') : null;
+}
+
 interface PostItNodeData {
   postit: PostItType;
   onUpdate: (id: string, updates: Partial<PostItType>) => void;
@@ -35,15 +65,33 @@ interface PostItNodeData {
   autoEdit?: boolean;
 }
 
-export default function PostItNode({ data, selected }: NodeProps<PostItNodeData>) {
+export default function PostItNode({ data, selected, dragging }: NodeProps<PostItNodeData>) {
   const { postit, onUpdate, onDelete } = data;
   const { zoom } = useViewport();
   const { activeElementTool } = useElementTool();
   const { theme } = useTheme();
   const dark = theme === 'dark';
   const interactionDisabled = activeElementTool === 'pan';
+  const minimised = !!postit.minimised;
+  const prevMinimisedRef = useRef(minimised);
+  const prevAnchorRef = useRef<string | undefined>((postit as any).minimised_anchor);
+  const justRestored = prevMinimisedRef.current && !minimised;
+  const restoredAnchor = justRestored ? (prevAnchorRef.current || 'tl') : undefined;
+  prevMinimisedRef.current = minimised;
+  prevAnchorRef.current = (postit as any).minimised_anchor;
   const [editing, setEditing] = useState(false);
   const [focusAt, setFocusAt] = useState<{ x: number; y: number } | null>(null);
+  const [hovered, setHovered] = useState(false);
+  const [cornerHint, setCornerHint] = useState<AnchorCorner | null>(null);
+  const lastCornerRef = useRef<AnchorCorner | null>(null);
+  if (cornerHint) lastCornerRef.current = cornerHint;
+  const hintSuppressedUntil = useRef(0);
+  const setCornerHintGuarded = useCallback((c: AnchorCorner | null) => {
+    if (c && Date.now() < hintSuppressedUntil.current) return;
+    setCornerHint(c);
+  }, []);
+  const suppressHint = useCallback(() => { hintSuppressedUntil.current = Date.now() + 500; setCornerHint(null); }, []);
+  if (dragging && cornerHint) setCornerHint(null);
   const resizeTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const pointerDownRef = useRef<{ x: number; y: number; active: boolean }>({ x: 0, y: 0, active: false });
   const didMoveRef = useRef(false);
@@ -175,8 +223,184 @@ export default function PostItNode({ data, selected }: NodeProps<PostItNodeData>
     setEditing(true);
   }, [editing, interactionDisabled]);
 
+  const bgColour = dark ? (POSTIT_COLOURS_DARK[postit.colour] || postit.colour) : postit.colour;
+
+  const minimisedAnchor = (postit as any).minimised_anchor as 'tl' | 'tr' | 'bl' | 'br' | undefined;
+
+  const handleMinimise = useCallback((anchor: 'tl' | 'tr' | 'bl' | 'br') => {
+    suppressHint();
+    const mw = 32, mh = 32;
+    const dx = (anchor === 'tr' || anchor === 'br') ? postit.width - mw : 0;
+    const dy = (anchor === 'bl' || anchor === 'br') ? postit.height - mh : 0;
+    onUpdate(postit.id, {
+      minimised: true, minimised_anchor: anchor,
+      x: postit.x + dx, y: postit.y + dy,
+    } as any);
+  }, [postit.id, postit.x, postit.y, postit.width, postit.height, onUpdate, suppressHint]);
+
+  const handleRestore = useCallback(() => {
+    suppressHint();
+    const anchor = minimisedAnchor || 'tl';
+    const mw = 32, mh = 32;
+    const dx = (anchor === 'tr' || anchor === 'br') ? postit.width - mw : 0;
+    const dy = (anchor === 'bl' || anchor === 'br') ? postit.height - mh : 0;
+    onUpdate(postit.id, {
+      minimised: false,
+      x: postit.x - dx, y: postit.y - dy,
+    } as any);
+  }, [postit.id, postit.x, postit.y, postit.width, postit.height, minimisedAnchor, onUpdate, suppressHint]);
+
+  // Auto-dismiss hover label after 5s to prevent stale labels
+  useEffect(() => {
+    if (!hovered || !minimised) return;
+    const t = setTimeout(() => setHovered(false), 5000);
+    return () => clearTimeout(t);
+  }, [hovered, minimised]);
+
+  // ── Minimised rendering ──────────────────────────────────────────────
+  if (minimised) {
+    const attr = postitAttribution(postit);
+    const minimisedLabel = attr || (postit.text || '').split('\n')[0].slice(0, 40) || 'Post-it';
+    return (
+      <>
+        <MinimiseCornerArrows
+          minimisedAnchor={minimisedAnchor || 'tl'}
+          visible={hovered}
+          disabled={dragging || selected}
+          zoom={zoom}
+          nodeWidth={32}
+          nodeHeight={32}
+          colour={dark ? '#e0e0e0' : '#555'}
+          onMinimise={handleMinimise}
+          onRestore={handleRestore}
+          onMouseEnter={() => setHovered(true)}
+          onMouseLeave={() => setHovered(false)}
+          onCornerHover={setCornerHintGuarded}
+        />
+
+        {/* Selection UI: delete button */}
+        {selected && (
+          <button
+            className="nodrag"
+            onClick={(e) => { e.stopPropagation(); onDelete(postit.id); }}
+            title="Delete post-it"
+            style={{
+              position: 'absolute', top: -24 / zoom, right: -24 / zoom, width: 20 / zoom, height: 20 / zoom,
+              borderRadius: '50%', border: '1px solid var(--border-primary)', background: 'var(--bg-primary)',
+              color: 'var(--color-danger)', fontSize: 12 / zoom, lineHeight: `${18 / zoom}px`, textAlign: 'center',
+              cursor: 'pointer', zIndex: 10, padding: 0, boxShadow: '0 1px 3px rgba(0,0,0,0.15)',
+            }}
+          >
+            ×
+          </button>
+        )}
+
+        <div style={{
+          transform: cornerHint ? `scale(${(32 + 12) / 32}, ${(32 + 12) / 32})` : 'scale(1)',
+          transformOrigin: CORNER_ORIGINS[cornerHint ?? lastCornerRef.current ?? minimisedAnchor ?? 'tl'],
+          transition: 'transform 300ms cubic-bezier(0.25, 0.1, 0.25, 1) 80ms',
+        }}>
+        <div
+          className="canvas-annotation-minimised"
+          data-anchor={minimisedAnchor || 'tl'}
+          onClick={(e) => {
+            if (!e.ctrlKey && !e.metaKey && !e.shiftKey) {
+              e.stopPropagation();
+              suppressHint();
+              const anchor = minimisedAnchor || 'tl';
+              const mw = 32, mh = 32;
+              const dx = (anchor === 'tr' || anchor === 'br') ? postit.width - mw : 0;
+              const dy = (anchor === 'bl' || anchor === 'br') ? postit.height - mh : 0;
+              const rid = postit.id, rx = postit.x - dx, ry = postit.y - dy;
+              requestAnimationFrame(() => requestAnimationFrame(() => requestAnimationFrame(() => {
+                onUpdate(rid, { minimised: false, x: rx, y: ry } as any);
+              })));
+            }
+          }}
+          onMouseEnter={() => { setHovered(true); if (!selected) setCornerHintGuarded(minimisedAnchor || 'tl'); }}
+          onMouseLeave={() => { setHovered(false); setCornerHintGuarded(null); }}
+          style={{
+            width: 32, height: 32,
+            backgroundColor: bgColour,
+            borderRadius: '1px',
+            border: selected ? '2px solid #3b82f6' : '1px solid rgba(0,0,0,0.04)',
+            boxShadow: selected
+              ? '0 0 0 1px #3b82f6, 0 1px 3px rgba(0,0,0,0.15)'
+              : '0 0px 1px rgba(0,0,0,0.04), 0 2px 4px rgba(0,0,0,0.06)',
+            boxSizing: 'border-box',
+            position: 'relative',
+            overflow: 'hidden',
+          }}
+        >
+          {/* Folded corner */}
+          <svg style={{ position: 'absolute', bottom: 0, right: 0 }} width="12" height="12" viewBox="0 0 12 12">
+            <path d="M12 0 L12 12 L0 12 Z" fill={dark ? 'rgba(0,0,0,0.2)' : 'rgba(0,0,0,0.1)'} />
+            <path d="M12 0 L0 12 L0 0 Z" fill={dark ? 'rgba(255,255,255,0.06)' : 'rgba(255,255,255,0.4)'} />
+          </svg>
+        </div>
+        </div>
+
+        {/* Hover label — vertically centred with icon */}
+        {hovered && (
+          <div className="nodrag nopan" style={{
+            position: 'absolute', left: cornerHint ? 50 : 38, top: 0, height: 32,
+            display: 'flex', alignItems: 'center',
+            fontSize: 12 / zoom, lineHeight: 1,
+            color: dark ? 'rgba(255,255,255,0.75)' : 'rgba(0,0,0,0.65)',
+            whiteSpace: 'nowrap', pointerEvents: 'none', userSelect: 'none',
+            background: dark ? 'rgba(30,30,30,0.7)' : 'rgba(255,255,255,0.7)',
+            backdropFilter: 'blur(6px)',
+            borderRadius: 4 / zoom, padding: `${2 / zoom}px ${6 / zoom}px`,
+            transition: 'left 300ms cubic-bezier(0.25, 0.1, 0.25, 1) 80ms',
+          }}>
+            {minimisedLabel}
+          </div>
+        )}
+      </>
+    );
+  }
+
+  // ── Normal rendering ─────────────────────────────────────────────────
   return (
     <>
+      <MinimiseCornerArrows
+        visible={hovered && !dragging && !selected}
+        zoom={zoom}
+        nodeWidth={postit.width}
+        nodeHeight={postit.height}
+        colour={dark ? '#e0e0e0' : '#555'}
+        onMinimise={handleMinimise}
+        onRestore={handleRestore}
+        onMouseEnter={() => setHovered(true)}
+        onMouseLeave={() => setHovered(false)}
+        onCornerHover={setCornerHintGuarded}
+      />
+      {/* Ghost outline — original bounds while shrinking */}
+      <div style={{
+        position: 'absolute', inset: 0,
+        border: `1.5px dashed ${dark ? 'rgba(255,255,255,0.35)' : 'rgba(0,0,0,0.25)'}`,
+        borderRadius: '1px',
+        opacity: cornerHint ? 1 : 0,
+        transition: cornerHint
+          ? 'opacity 300ms ease 200ms'
+          : 'opacity 200ms ease',
+        pointerEvents: 'none',
+      }} />
+      <div
+        className={justRestored ? 'canvas-annotation-normal' : undefined}
+        {...(restoredAnchor ? { 'data-anchor': restoredAnchor } : {})}
+        onMouseEnter={() => setHovered(true)}
+        onMouseLeave={() => setHovered(false)}
+        style={{
+          position: 'relative', width: '100%', height: '100%',
+          transform: cornerHint
+            ? `scale(${(postit.width - 12) / postit.width}, ${(postit.height - 12) / postit.height})`
+            : undefined,
+          transformOrigin: cornerHint ? CORNER_ORIGINS[cornerHint] : undefined,
+          transition: 'transform 300ms cubic-bezier(0.25, 0.1, 0.25, 1) 200ms',
+        }}
+      >
+
       <NodeResizer
         isVisible={selected}
         minWidth={150}
@@ -213,7 +437,7 @@ export default function PostItNode({ data, selected }: NodeProps<PostItNodeData>
         onPointerUp={handlePointerUp}
         style={{
           width: '100%', height: '100%',
-          backgroundColor: dark ? (POSTIT_COLOURS_DARK[postit.colour] || postit.colour) : postit.colour,
+          backgroundColor: bgColour,
           color: dark ? '#e8e0d0' : '#333',
           boxShadow: selected
             ? '0 2px 4px rgba(0,0,0,0.06), 0 8px 16px rgba(0,0,0,0.12), 0 16px 32px rgba(0,0,0,0.08)'
@@ -230,13 +454,10 @@ export default function PostItNode({ data, selected }: NodeProps<PostItNodeData>
             ? 'linear-gradient(to bottom, rgba(255,255,255,0.03) 0%, transparent 40%)'
             : 'linear-gradient(to bottom, transparent 60%, rgba(0,0,0,0.03) 100%)',
         }} />
-        <div style={{
-          position: 'absolute', bottom: 0, right: 0, width: '16px', height: '16px',
-          background: dark
-            ? 'linear-gradient(315deg, rgba(0,0,0,0.15) 0%, transparent 50%)'
-            : 'linear-gradient(315deg, rgba(0,0,0,0.08) 0%, transparent 50%)',
-          pointerEvents: 'none',
-        }} />
+        <svg style={{ position: 'absolute', bottom: 0, right: 0, pointerEvents: 'none' }} width="20" height="20" viewBox="0 0 20 20">
+          <path d="M20 0 L20 20 L0 20 Z" fill={dark ? 'rgba(0,0,0,0.2)' : 'rgba(0,0,0,0.1)'} />
+          <path d="M20 0 L0 20 L0 0 Z" fill={dark ? 'rgba(255,255,255,0.06)' : 'rgba(255,255,255,0.4)'} />
+        </svg>
 
         <PostItEditor
           content={postit.text}
@@ -250,6 +471,22 @@ export default function PostItNode({ data, selected }: NodeProps<PostItNodeData>
           }}
           onChange={handleChange}
         />
+      </div>
+
+      {/* Attribution line below the post-it */}
+      {!editing && (hovered || selected) && (() => {
+        const attr = postitAttribution(postit);
+        return attr ? (
+          <div className="nodrag nopan" style={{
+            position: 'absolute', bottom: -18 / zoom, left: 2 / zoom,
+            fontSize: 11 / zoom, lineHeight: 1,
+            color: dark ? 'rgba(255,255,255,0.35)' : 'rgba(0,0,0,0.32)',
+            whiteSpace: 'nowrap', pointerEvents: 'none', userSelect: 'none',
+          }}>
+            {attr}
+          </div>
+        ) : null;
+      })()}
       </div>
     </>
   );
