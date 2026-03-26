@@ -1,4 +1,11 @@
 # DagNet Release Notes
+## Version 1.8.12b
+**Released:** 26-Mar-26
+
+minimise & maximise analysis objects. also tons of wasted effort with bayes that I'll nevre get back again
+
+---
+
 ## Version 1.8.10b
 **Released:** 25-Mar-26
 
