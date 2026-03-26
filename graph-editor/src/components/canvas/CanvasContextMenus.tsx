@@ -7,7 +7,7 @@
 
 import React from 'react';
 import type { Edge, Node, Connection } from 'reactflow';
-import { Plus, StickyNote, Square, BarChart3, Clipboard, CheckSquare, Monitor, X, LayoutGrid, Minimize2, Maximize2, Layers, Trash2, LockKeyhole, LockOpen } from 'lucide-react';
+import { Plus, StickyNote, Square, BarChart3, Clipboard, CheckSquare, Monitor, X, LayoutGrid, Minimize2, Maximize2, Layers, Trash2, LockKeyhole, LockOpen, LayoutPanelLeft } from 'lucide-react';
 import { ContextMenu, type ContextMenuItem } from '../ContextMenu';
 import { NodeContextMenu } from '../NodeContextMenu';
 import { PostItContextMenu } from '../PostItContextMenu';
@@ -252,32 +252,52 @@ export const CanvasContextMenus: React.FC<CanvasContextMenusProps> = React.memo(
           const viewsSubmenu: ContextMenuItem[] = [];
           const canvasViews = (graph as any)?.canvasViews ?? [];
           const activeViewId = activeCanvasViewId ?? null;
+          // View list
           for (const v of canvasViews) {
             viewsSubmenu.push({
-              label: v.name + (v.locked ? ' 🔒' : ''),
-              icon: v.locked ? <LockKeyhole size={14} /> : <LockOpen size={14} />,
-              checked: v.id === activeViewId,
+              label: v.id === activeViewId ? `● ${v.name}` : v.name,
+              icon: v.locked ? <LockKeyhole size={16} /> : <LockOpen size={16} />,
               onClick: () => window.dispatchEvent(new CustomEvent('dagnet:applyCanvasView', { detail: { viewId: v.id } })),
-              secondaryIcon: <Trash2 size={12} />,
+              secondaryIcon: <Trash2 size={13} />,
               secondaryTitle: 'Delete view',
               onSecondaryClick: () => window.dispatchEvent(new CustomEvent('dagnet:deleteCanvasView', { detail: { viewId: v.id } })),
             });
           }
+          viewsSubmenu.push({
+            label: 'New view',
+            icon: <Plus size={16} />,
+            onClick: () => window.dispatchEvent(new CustomEvent('dagnet:createCanvasView', { detail: { name: `View ${canvasViews.length + 1}` } })),
+          });
+          // Active view settings
           if (activeViewId) {
             const activeView = canvasViews.find((v: any) => v.id === activeViewId);
             if (activeView) {
+              viewsSubmenu.push({ label: '', onClick: () => {}, divider: true });
               viewsSubmenu.push({
-                label: activeView.locked ? 'Unlock current view' : 'Lock current view',
+                label: 'Update scenarios',
+                icon: <Layers size={14} />,
+                checked: activeView.applyScenarios !== false,
+                onClick: () => window.dispatchEvent(new CustomEvent('dagnet:toggleCanvasViewScope', { detail: { viewId: activeViewId, scope: 'applyScenarios' } })),
+              });
+              viewsSubmenu.push({
+                label: 'Update layout',
+                icon: <LayoutPanelLeft size={14} />,
+                checked: activeView.applyLayout !== false,
+                onClick: () => window.dispatchEvent(new CustomEvent('dagnet:toggleCanvasViewScope', { detail: { viewId: activeViewId, scope: 'applyLayout' } })),
+              });
+              viewsSubmenu.push({
+                label: 'Update display mode',
+                icon: <Monitor size={14} />,
+                checked: activeView.applyDisplayMode !== false,
+                onClick: () => window.dispatchEvent(new CustomEvent('dagnet:toggleCanvasViewScope', { detail: { viewId: activeViewId, scope: 'applyDisplayMode' } })),
+              });
+              viewsSubmenu.push({
+                label: activeView.locked ? 'Unlock view' : 'Lock view',
                 icon: activeView.locked ? <LockOpen size={14} /> : <LockKeyhole size={14} />,
                 onClick: () => window.dispatchEvent(new CustomEvent('dagnet:toggleCanvasViewLocked', { detail: { viewId: activeViewId } })),
               });
             }
           }
-          viewsSubmenu.push({
-            label: 'New view',
-            icon: <Plus size={14} />,
-            onClick: () => window.dispatchEvent(new CustomEvent('dagnet:createCanvasView', { detail: { name: `View ${canvasViews.length + 1}` } })),
-          });
           viewsSubmenu.push({ label: '', onClick: () => {}, divider: true });
           viewsSubmenu.push({
             label: 'Expand All',

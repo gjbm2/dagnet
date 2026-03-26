@@ -1223,6 +1223,32 @@ export interface CanvasViewObjectState {
   anchor?: 'tl' | 'tr' | 'bl' | 'br';
 }
 
+/** Visibility and display mode for a pseudo-scenario layer (Current or Base). */
+export interface CanvasViewLayerVisibility {
+  visible: boolean;
+  visibility_mode?: ScenarioVisibilityMode;
+  /** For Current layer: the queryDSL that was active when the view was captured. */
+  queryDSL?: string;
+}
+
+/** Blueprint for recreating a user scenario from a canvas view. */
+export interface CanvasViewScenario {
+  /** For live scenarios: the regenerable DSL fragment. */
+  queryDSL?: string;
+  /** For static scenarios: the frozen parameter diff. */
+  params?: Record<string, any>;
+  name: string;
+  colour: string;
+  is_live: boolean;
+  visible: boolean;
+  /** Position in layer stack (0 = bottom, base-adjacent). */
+  order: number;
+  /** Display basis for this scenario. */
+  visibility_mode?: ScenarioVisibilityMode;
+  /** What-if DSL overlay if present. */
+  whatIfDSL?: string;
+}
+
 /** A named snapshot of which canvas objects are minimised/maximised. */
 export interface CanvasView {
   id: string;
@@ -1235,6 +1261,15 @@ export interface CanvasView {
   /** Display mode settings captured with this view. */
   viewOverlayMode?: ViewOverlayMode;
   sankey?: boolean;
+  /** Pseudo-scenario visibility. */
+  currentLayer?: CanvasViewLayerVisibility;
+  baseLayer?: CanvasViewLayerVisibility;
+  /** User scenario blueprints (ordered by stack position). */
+  scenarios?: CanvasViewScenario[];
+  /** Apply-scope toggles (default true when undefined). */
+  applyScenarios?: boolean;
+  applyLayout?: boolean;
+  applyDisplayMode?: boolean;
 }
 
 export interface ConversionGraph {

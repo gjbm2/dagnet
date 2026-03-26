@@ -238,9 +238,13 @@ def summarise_posteriors(
         safe_eid = _safe_var_name(edge_id)
         p_window_name = f"p_window_{safe_eid}"
         p_cohort_name = f"p_cohort_{safe_eid}"
-        # For window: prefer p_window_recent (drift-adjusted) if available
+        p_single_name = f"p_{safe_eid}"
+        # For window: prefer p_window_recent (drift-adjusted) if available,
+        # then p_window, then p (Phase 1: single p, no hierarchy).
         p_window_recent_name = f"p_window_recent_{safe_eid}"
-        w_name = p_window_recent_name if p_window_recent_name in trace.posterior else p_window_name
+        w_name = (p_window_recent_name if p_window_recent_name in trace.posterior
+                  else p_window_name if p_window_name in trace.posterior
+                  else p_single_name)
 
         if w_name in trace.posterior:
             w_samples = trace.posterior[w_name].values.flatten()
@@ -484,13 +488,15 @@ def summarise_posteriors(
     model_state: dict[str, float] = {}
     for edge_id in topology.edges:
         safe_eid = _safe_var_name(edge_id)
-        # p_base
-        p_base_name = f"p_base_{safe_eid}"
-        if p_base_name in trace.posterior:
-            p_base_samples = trace.posterior[p_base_name].values.flatten()
-            p_base_a, p_base_b = _fit_beta_to_samples(p_base_samples)
-            model_state[f"p_base_alpha_{safe_eid}"] = round(p_base_a, 4)
-            model_state[f"p_base_beta_{safe_eid}"] = round(p_base_b, 4)
+        # p_base (legacy hierarchy) or p (Phase 1: single variable)
+        for p_prefix in ("p_base", "p"):
+            p_name = f"{p_prefix}_{safe_eid}"
+            if p_name in trace.posterior:
+                p_samples = trace.posterior[p_name].values.flatten()
+                p_a, p_b = _fit_beta_to_samples(p_samples)
+                model_state[f"p_base_alpha_{safe_eid}"] = round(p_a, 4)
+                model_state[f"p_base_beta_{safe_eid}"] = round(p_b, 4)
+                break
         # tau_window / tau_cohort
         for prefix in ("tau_window", "tau_cohort"):
             vname = f"{prefix}_{safe_eid}"

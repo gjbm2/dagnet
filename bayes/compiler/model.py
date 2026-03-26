@@ -28,7 +28,8 @@ from .types import (
 
 
 def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
-                features: dict | None = None):
+                features: dict | None = None,
+                phase2_frozen: dict | None = None):
     """Build a PyMC model from the topology and bound evidence.
 
     Returns (pm.Model, model_metadata_dict).
@@ -37,6 +38,12 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
         latent_latency:    if False, skip latent mu/sigma (Phase S behaviour)
         cohort_latency:    if False, skip cohort-level latency hierarchy
         overdispersion:    if False, use Binomial/Multinomial (no per-edge kappa)
+
+    phase2_frozen: if provided, builds Phase 2 (cohort-only) model.
+        Dict maps edge_id → {"p": float, "mu": float, "sigma": float,
+        "onset": float}. Edge p values become constants (no free RV).
+        Only cohort trajectories are emitted. Free parameters: kappa,
+        cohort-level latency (drift from Phase 1 values).
     """
     import pymc as pm
     import pytensor.tensor as pt
@@ -49,8 +56,11 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
     feat_latent_onset = features.get("latent_onset", True)
     feat_window_only = features.get("window_only", False)
     feat_neutral_prior = features.get("neutral_prior", False)
+    is_phase2 = phase2_frozen is not None
 
     diagnostics: list[str] = []
+    phase_label = "Phase 2 (cohort, frozen p)" if is_phase2 else "Phase 1 (window)"
+    diagnostics.append(f"phase: {phase_label}")
     diagnostics.append(f"features: latent_latency={feat_latent_latency}, "
                        f"cohort_latency={feat_cohort_latency}, "
                        f"overdispersion={feat_overdispersion}, "
@@ -71,8 +81,8 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
             bg_edge_ids.add(sib_id)
 
     with pm.Model() as model:
-        # --- Graph-level σ_temporal ---
-        sigma_temporal = pm.HalfNormal("sigma_temporal", sigma=0.5)
+        # sigma_temporal removed — was only used for p_base/p_cohort
+        # hierarchy which is removed in Phase 1 (journal 26-Mar-26).
 
         # --- Per-edge latent onset (independent priors) ---
         # Each edge gets its own onset prior from its histogram data.
@@ -90,29 +100,31 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
                 safe_id = _safe_var_name(edge_id)
                 lp = ev.latency_prior
 
-                # Independent onset prior per edge, informed by histogram.
-                # Non-centred parameterisation centered at the histogram value:
-                #   onset = softplus(onset_prior + eps * uncertainty)
-                # This gives a prior naturally centered near onset_prior,
-                # with spread controlled by the histogram uncertainty.
-                onset_prior_val = max(lp.onset_delta_days, 0.0)
-                onset_sigma = max(lp.onset_uncertainty, 1.0)
+                if is_phase2:
+                    # Phase 2: freeze onset from Phase 1.
+                    frozen = phase2_frozen.get(edge_id, {})
+                    onset_frozen = frozen.get("onset", max(lp.onset_delta_days, 0.0))
+                    onset_var = pt.as_tensor_variable(np.float64(onset_frozen))
+                    onset_vars[edge_id] = onset_var
+                    diagnostics.append(
+                        f"  onset: {edge_id[:8]}… {onset_frozen:.1f}d → frozen (Phase 1)"
+                    )
+                else:
+                    # Independent onset prior per edge, informed by histogram.
+                    onset_prior_val = max(lp.onset_delta_days, 0.0)
+                    onset_sigma = max(lp.onset_uncertainty, 1.0)
 
-                eps_onset = pm.Normal(f"eps_onset_{safe_id}", mu=0, sigma=1)
-                onset_var = pm.Deterministic(
-                    f"onset_{safe_id}",
-                    pt.softplus(onset_prior_val + eps_onset * onset_sigma),
-                )
-                # No soft observation — the prior already centers onset at
-                # onset_prior_val. Adding an observation at the same value
-                # double-constrains onset, preventing the sampler from
-                # exploring the onset-mu correlation ridge.
+                    eps_onset = pm.Normal(f"eps_onset_{safe_id}", mu=0, sigma=1)
+                    onset_var = pm.Deterministic(
+                        f"onset_{safe_id}",
+                        pt.softplus(onset_prior_val + eps_onset * onset_sigma),
+                    )
 
-                onset_vars[edge_id] = onset_var
-                diagnostics.append(
-                    f"  onset: {edge_id[:8]}… histogram={lp.onset_delta_days:.1f}d "
-                    f"(±{lp.onset_uncertainty:.1f}) → latent (independent)"
-                )
+                    onset_vars[edge_id] = onset_var
+                    diagnostics.append(
+                        f"  onset: {edge_id[:8]}… histogram={lp.onset_delta_days:.1f}d "
+                        f"(±{lp.onset_uncertainty:.1f}) → latent (independent)"
+                    )
 
         # --- Branch group Dirichlet priors (Phase B) ---
         # Emit Dirichlet per branch group. Each sibling gets a component;
@@ -120,10 +132,44 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
         bg_p_vars: dict[str, object] = {}  # edge_id → Dirichlet component variable
 
         for group_id, bg in topology.branch_groups.items():
-            _emit_dirichlet_prior(
-                bg, topology, evidence, bg_p_vars, edge_var_names,
-                model, diagnostics, features=features,
-            )
+            if is_phase2:
+                # Phase 2: Dirichlet on drifted p_cohort for mass conservation.
+                # Concentrations centered on Phase 1 frozen p values.
+                # See doc 23 §2.2.
+                safe_group = _safe_var_name(bg.group_id)
+                sibling_edges = []
+                concentrations = []
+                for sib_id in bg.sibling_edge_ids:
+                    ev_sib = evidence.edges.get(sib_id)
+                    if ev_sib is None or ev_sib.skipped:
+                        continue
+                    frozen = phase2_frozen.get(sib_id, {})
+                    p_frozen = frozen.get("p", 0.1)
+                    sibling_edges.append(sib_id)
+                    concentrations.append(p_frozen)
+
+                if sibling_edges:
+                    # kappa scales the Dirichlet concentrations. Must be
+                    # large enough that min(α_i) > 2, otherwise the mode
+                    # drifts toward 0 for low-p edges. See doc 23 §8.
+                    min_p = min(concentrations)
+                    kappa_dir = max(50.0, 5.0 / max(min_p, 0.01))
+                    if not bg.is_exhaustive:
+                        dropout_mean = max(1.0 - sum(concentrations), 0.01)
+                        concentrations.append(dropout_mean)
+                    conc_array = np.array(concentrations, dtype=np.float64) * kappa_dir
+
+                    dir_var = pm.Dirichlet(f"dir_cohort_{safe_group}", a=conc_array)
+                    for i, sib_id in enumerate(sibling_edges):
+                        sib_safe = _safe_var_name(sib_id)
+                        p_sib = pm.Deterministic(f"p_cohort_{sib_safe}", dir_var[i])
+                        bg_p_vars[sib_id] = p_sib
+                        edge_var_names[sib_id] = f"p_cohort_{sib_safe}"
+            else:
+                _emit_dirichlet_prior(
+                    bg, topology, evidence, bg_p_vars, edge_var_names,
+                    model, diagnostics, features=features,
+                )
 
         # --- Per-edge latency variables (Phase D: latent latency) ---
         latency_vars: dict[str, tuple] = {}
@@ -139,30 +185,44 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
                 continue
             if feat_latent_latency and ev.latency_prior is not None and ev.latency_prior.sigma > 0.01:
                 safe_id = _safe_var_name(edge_id)
-                mu_prior = ev.latency_prior.mu
-                sigma_prior = ev.latency_prior.sigma
-                # mu_base ~ Normal centred on prior, moderate uncertainty
-                mu_var = pm.Normal(
-                    f"mu_lat_{safe_id}",
-                    mu=mu_prior,
-                    sigma=max(0.5, sigma_prior),
-                )
-                # sigma_base ~ Gamma with mode at observed dispersion.
-                # NOT HalfNormal (mode at 0 biases sigma toward zero,
-                # making the CDF too steep — see doc 6 §Latency model).
-                from .completeness import gamma_params_from_mode
-                gamma_a, gamma_b = gamma_params_from_mode(
-                    max(sigma_prior, 0.1), spread=0.5,
-                )
-                sigma_var = pm.Gamma(
-                    f"sigma_lat_{safe_id}",
-                    alpha=gamma_a, beta=gamma_b,
-                )
-                latency_vars[edge_id] = (mu_var, sigma_var)
-                diagnostics.append(
-                    f"  latency: {edge_id[:8]}… mu_prior={mu_prior:.3f}, "
-                    f"sigma_prior={sigma_prior:.3f} → latent"
-                )
+
+                if is_phase2:
+                    # Phase 2: freeze edge-level latency from Phase 1.
+                    frozen = phase2_frozen.get(edge_id, {})
+                    mu_frozen = frozen.get("mu", ev.latency_prior.mu)
+                    sigma_frozen = frozen.get("sigma", ev.latency_prior.sigma)
+                    mu_var = pt.as_tensor_variable(np.float64(mu_frozen))
+                    sigma_var = pt.as_tensor_variable(np.float64(max(sigma_frozen, 0.01)))
+                    latency_vars[edge_id] = (mu_var, sigma_var)
+                    diagnostics.append(
+                        f"  latency: {edge_id[:8]}… mu={mu_frozen:.3f}, "
+                        f"sigma={sigma_frozen:.3f} → frozen (Phase 1)"
+                    )
+                else:
+                    mu_prior = ev.latency_prior.mu
+                    sigma_prior = ev.latency_prior.sigma
+                    # mu_base ~ Normal centred on prior, moderate uncertainty
+                    mu_var = pm.Normal(
+                        f"mu_lat_{safe_id}",
+                        mu=mu_prior,
+                        sigma=max(0.5, sigma_prior),
+                    )
+                    # sigma_base ~ Gamma with mode at observed dispersion.
+                    # NOT HalfNormal (mode at 0 biases sigma toward zero,
+                    # making the CDF too steep — see doc 6 §Latency model).
+                    from .completeness import gamma_params_from_mode
+                    gamma_a, gamma_b = gamma_params_from_mode(
+                        max(sigma_prior, 0.1), spread=0.5,
+                    )
+                    sigma_var = pm.Gamma(
+                        f"sigma_lat_{safe_id}",
+                        alpha=gamma_a, beta=gamma_b,
+                    )
+                    latency_vars[edge_id] = (mu_var, sigma_var)
+                    diagnostics.append(
+                        f"  latency: {edge_id[:8]}… mu_prior={mu_prior:.3f}, "
+                        f"sigma_prior={sigma_prior:.3f} → latent"
+                    )
 
 
 
@@ -191,10 +251,11 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
             )
             if path_latency_count == 0:
                 continue
-            # Only create cohort latency vars when path has 2+ latency
-            # edges (FW composition genuinely differs from edge latency).
-            # Single-latency paths use the edge's own latent vars directly.
-            if path_latency_count < 2:
+            # Phase 1: only create cohort latency vars when path has 2+
+            # latency edges (single-latency paths use edge latent vars).
+            # Phase 2: always create — edge latency is frozen, so even
+            # single-latency paths need free cohort latency to fit data.
+            if not is_phase2 and path_latency_count < 2:
                 continue
 
             safe_id = _safe_var_name(edge_id)
@@ -210,46 +271,76 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
 
             onset_prior, mu_path_composed, sigma_path_composed = path_result
 
-            # onset_cohort: path-level onset = sum of edge onsets along path.
-            # When edge onsets are latent (PyTensor), onset_prior is already
-            # a PyTensor sum. Add a small dispersion term.
-            if feat_latent_onset and hasattr(onset_prior, 'name'):
-                # onset_prior is PyTensor (sum of latent edge onsets)
-                eps_onset_path = pm.Normal(f"eps_onset_path_{safe_id}", mu=0, sigma=1)
-                onset_cohort = pm.Deterministic(
-                    f"onset_cohort_{safe_id}",
-                    pt.softplus(onset_prior + eps_onset_path * 1.0),
-                )
-            else:
-                onset_prior_val = float(onset_prior) if not hasattr(onset_prior, 'name') else 5.0
+            # onset_cohort, mu_cohort, sigma_cohort: path-level latency
+            # that can deviate from edge-level FW composition.
+            #
+            # Phase 1: tight non-centred around live edge latency (small tau).
+            # Phase 2: wide priors centred on frozen values — the frozen
+            # latency may be wrong, so the cohort data must be free to pull
+            # these parameters to the correct values.
+            if is_phase2:
+                # Phase 2: wide independent priors centred on frozen values.
+                onset_prior_val = float(onset_prior) if not hasattr(onset_prior, 'eval') else float(onset_prior.eval())
                 onset_cohort = pm.HalfNormal(
                     f"onset_cohort_{safe_id}",
-                    sigma=max(onset_prior_val, 1.0),
+                    sigma=max(onset_prior_val, 2.0),
+                )
+                mu_prior_val = float(mu_path_composed) if not hasattr(mu_path_composed, 'eval') else float(mu_path_composed.eval())
+                mu_cohort = pm.Normal(
+                    f"mu_cohort_{safe_id}",
+                    mu=mu_prior_val,
+                    sigma=max(1.0, abs(mu_prior_val) * 0.5),
+                )
+                sigma_prior_val = float(sigma_path_composed) if not hasattr(sigma_path_composed, 'eval') else float(sigma_path_composed.eval())
+                from .completeness import gamma_params_from_mode
+                gamma_a, gamma_b = gamma_params_from_mode(
+                    max(sigma_prior_val, 0.1), spread=1.0,
+                )
+                sigma_cohort = pm.Gamma(
+                    f"sigma_cohort_{safe_id}",
+                    alpha=gamma_a, beta=gamma_b,
+                )
+            else:
+                # Phase 1: tight non-centred around live edge latency.
+                if feat_latent_onset and hasattr(onset_prior, 'name'):
+                    eps_onset_path = pm.Normal(f"eps_onset_path_{safe_id}", mu=0, sigma=1)
+                    onset_cohort = pm.Deterministic(
+                        f"onset_cohort_{safe_id}",
+                        pt.softplus(onset_prior + eps_onset_path * 1.0),
+                    )
+                else:
+                    onset_prior_val = float(onset_prior) if not hasattr(onset_prior, 'name') else 5.0
+                    onset_cohort = pm.HalfNormal(
+                        f"onset_cohort_{safe_id}",
+                        sigma=max(onset_prior_val, 1.0),
+                    )
+
+                tau_mu_lat = max(path_sigma_ax * 0.5, 0.1)
+                eps_mu_cohort = pm.Normal(f"eps_mu_cohort_{safe_id}", mu=0, sigma=1)
+                mu_cohort = pm.Deterministic(
+                    f"mu_cohort_{safe_id}",
+                    mu_path_composed + eps_mu_cohort * tau_mu_lat,
                 )
 
-            # mu_cohort = mu_path_composed + eps * tau (non-centred)
-            # Gradients flow through mu_path_composed → edge latents
-            tau_mu_lat = max(path_sigma_ax * 0.5, 0.1)
-            eps_mu_cohort = pm.Normal(f"eps_mu_cohort_{safe_id}", mu=0, sigma=1)
-            mu_cohort = pm.Deterministic(
-                f"mu_cohort_{safe_id}",
-                mu_path_composed + eps_mu_cohort * tau_mu_lat,
-            )
-
-            # sigma_cohort = sigma_path_composed + eps * tau (non-centred)
-            tau_sigma_lat = 0.1
-            eps_sigma_cohort = pm.Normal(f"eps_sigma_cohort_{safe_id}", mu=0, sigma=1)
-            sigma_cohort = pm.Deterministic(
-                f"sigma_cohort_{safe_id}",
-                pt.maximum(sigma_path_composed + eps_sigma_cohort * tau_sigma_lat, 0.01),
-            )
+                tau_sigma_lat = 0.1
+                eps_sigma_cohort = pm.Normal(f"eps_sigma_cohort_{safe_id}", mu=0, sigma=1)
+                sigma_cohort = pm.Deterministic(
+                    f"sigma_cohort_{safe_id}",
+                    pt.maximum(sigma_path_composed + eps_sigma_cohort * tau_sigma_lat, 0.01),
+                )
 
             cohort_latency_vars[edge_id] = (onset_cohort, mu_cohort, sigma_cohort)
-            diagnostics.append(
-                f"  cohort_latency: {edge_id[:8]}… "
-                f"mu_path_prior=FW-composed, tau_mu={tau_mu_lat:.3f}, "
-                f"latent_onset={'independent' if feat_latent_onset else 'hardcoded'}"
-            )
+            if is_phase2:
+                diagnostics.append(
+                    f"  cohort_latency: {edge_id[:8]}… "
+                    f"wide priors (Phase 2), latent_onset=independent"
+                )
+            else:
+                diagnostics.append(
+                    f"  cohort_latency: {edge_id[:8]}… "
+                    f"mu_path_prior=FW-composed, tau_mu={tau_mu_lat:.3f}, "
+                    f"latent_onset={'independent' if feat_latent_onset else 'hardcoded'}"
+                )
 
         # --- Per-edge variables and likelihoods ---
         for edge_id in topology.topo_order:
@@ -288,57 +379,59 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
             edge_kappa = pm.Gamma(f"kappa_{safe_id}", alpha=3, beta=0.1) if feat_overdispersion else None
 
             if ev.has_window and ev.has_cohort:
-                if p_base_var is not None:
-                    p_base = p_base_var
-                else:
-                    p_base = pm.Beta(f"p_base_{safe_id}", alpha=alpha, beta=beta_param)
+                if is_phase2:
+                    # Phase 2: cohort trajectories only, p derived from
+                    # Phase 1 with drift. See doc 23 §2.2.
+                    if edge_id in bg_p_vars:
+                        # Branch group edge — p_cohort from Dirichlet
+                        p = bg_p_vars[edge_id]
+                    else:
+                        # Solo edge — per-edge drift from frozen Phase 1 p
+                        frozen = phase2_frozen.get(edge_id, {})
+                        p_frozen_val = frozen.get("p", ev.prob_prior.alpha / (ev.prob_prior.alpha + ev.prob_prior.beta))
+                        logit_p_frozen = np.log(p_frozen_val / (1.0 - p_frozen_val))
 
-                logit_p_base = pm.math.log(p_base / (1 - p_base))
+                        tau_drift = max(et.path_sigma_ax, 0.1) if hasattr(et, 'path_sigma_ax') else 0.1
+                        eps_drift = pm.Normal(f"eps_drift_{safe_id}", mu=0, sigma=1)
+                        p = pm.Deterministic(
+                            f"p_cohort_{safe_id}",
+                            pm.math.sigmoid(logit_p_frozen + eps_drift * tau_drift),
+                        )
+                        edge_var_names[edge_id] = f"p_cohort_{safe_id}"
 
-
-
-                # Window: tight pooling around base (non-centred)
-                tau_window = 0.1
-                eps_window = pm.Normal(f"eps_window_{safe_id}", mu=0, sigma=1)
-                logit_p_window = pm.Deterministic(
-                    f"logit_p_window_{safe_id}",
-                    logit_p_base + eps_window * tau_window,
-                )
-                p_window = pm.Deterministic(
-                    f"p_window_{safe_id}",
-                    pm.math.sigmoid(logit_p_window),
-                )
-
-                # Cohort: path-informed divergence (non-centred)
-                path_sigma_ax = max(et.path_sigma_ax, 0.01)
-                tau_cohort = pm.Deterministic(
-                    f"tau_cohort_{safe_id}",
-                    sigma_temporal * path_sigma_ax,
-                )
-                tau_cohort_safe = pm.math.maximum(tau_cohort, 0.01)
-                eps_cohort = pm.Normal(f"eps_cohort_{safe_id}", mu=0, sigma=1)
-                logit_p_cohort = pm.Deterministic(
-                    f"logit_p_cohort_{safe_id}",
-                    logit_p_base + eps_cohort * tau_cohort_safe,
-                )
-                p_cohort = pm.Deterministic(
-                    f"p_cohort_{safe_id}",
-                    pm.math.sigmoid(logit_p_cohort),
-                )
-
-                if emit_window_binomial:
-                    _emit_window_likelihoods(safe_id, p_window, ev, diagnostics, kappa=edge_kappa)
-                if not feat_window_only:
-                    _emit_cohort_likelihoods(safe_id, p_cohort, ev, diagnostics,
+                    # Emit cohort trajectories only (skip window).
+                    # p_window_var=None signals Phase 2 → skip window trajs.
+                    _emit_cohort_likelihoods(safe_id, p, ev, diagnostics,
                                             topology, edge_var_names, model,
                                             latency_vars=latency_vars,
-                                            p_window_var=p_window,
+                                            p_window_var=None,
                                             cohort_latency_vars=cohort_latency_vars,
                                             kappa=edge_kappa,
-                                            onset_vars=onset_vars)
+                                            onset_vars=onset_vars,
+                                            skip_cohort_trajectories=False)
+                else:
+                    # Phase 1: single p per edge, window data only.
+                    # No p_base/p_window/p_cohort hierarchy — cohort must
+                    # not constrain edge p (journal 25-Mar-26).
+                    if p_base_var is not None:
+                        p = p_base_var
+                    else:
+                        p = pm.Beta(f"p_{safe_id}", alpha=alpha, beta=beta_param)
+
+                    if emit_window_binomial:
+                        _emit_window_likelihoods(safe_id, p, ev, diagnostics, kappa=edge_kappa)
+                    if not feat_window_only:
+                        _emit_cohort_likelihoods(safe_id, p, ev, diagnostics,
+                                                topology, edge_var_names, model,
+                                                latency_vars=latency_vars,
+                                                p_window_var=p,
+                                                cohort_latency_vars=cohort_latency_vars,
+                                                kappa=edge_kappa,
+                                                onset_vars=onset_vars,
+                                                skip_cohort_trajectories=True)
 
                 if edge_id not in edge_var_names:
-                    edge_var_names[edge_id] = f"p_base_{safe_id}"
+                    edge_var_names[edge_id] = f"p_{safe_id}"
 
             elif ev.has_window:
                 if p_base_var is not None:
@@ -369,10 +462,12 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
                     edge_var_names[edge_id] = f"p_{safe_id}"
 
         # --- Branch group Multinomial likelihoods (window obs) ---
-        for group_id, bg in topology.branch_groups.items():
-            _emit_branch_group_multinomial(
-                bg, topology, evidence, edge_var_names, model, diagnostics,
-            )
+        # Phase 2 skips — window data must not constrain cohort p.
+        if not is_phase2:
+            for group_id, bg in topology.branch_groups.items():
+                _emit_branch_group_multinomial(
+                    bg, topology, evidence, edge_var_names, model, diagnostics,
+                )
 
     metadata = {
         "edge_var_names": edge_var_names,
@@ -667,8 +762,8 @@ def _emit_cohort_likelihoods(
         for traj in c_obs.trajectories:
             if len(traj.retrieval_ages) < 2 or traj.n <= 0:
                 continue
-            if not edge_has_latency and traj.obs_type == "window":
-                # No-latency edge: convert trajectory to daily obs.
+            if not edge_has_latency and traj.obs_type == "window" and p_window_var is not None:
+                # No-latency edge (Phase 1 only): convert trajectory to daily obs.
                 # Use the final cumulative y as k (all conversions are
                 # instantaneous, so the final y IS the total converted).
                 from .types import CohortDailyObs
@@ -681,15 +776,14 @@ def _emit_cohort_likelihoods(
                 ))
                 continue
             if traj.obs_type == "window":
-                window_trajs.append(traj)
+                if p_window_var is not None:
+                    window_trajs.append(traj)
+                # else: Phase 2 — skip window trajectories entirely
             else:
                 cohort_trajs.append(traj)
-        # Only include WINDOW daily obs in the BetaBinomial. Cohort daily
-        # obs have anchor denominators (path-level), not from-node
-        # denominators (edge-level). Mixing them under a single per-edge
-        # p variable inflates p for downstream edges.
-        # See journal 25-Mar-26: "cohort path product coupling".
-        if c_obs.daily and "window" in c_obs.slice_dsl:
+        # Only include WINDOW daily obs in the BetaBinomial when
+        # p_window_var is set (Phase 1). Phase 2 skips window data.
+        if c_obs.daily and "window" in c_obs.slice_dsl and p_window_var is not None:
             all_daily.extend(c_obs.daily)
 
     # --- Emit trajectory Potentials ---
@@ -731,7 +825,9 @@ def _emit_cohort_likelihoods(
                     p_alt = _resolve_path_probability(
                         alt_path, ev.edge_id, p_var,
                         topology, edge_var_names, model,
-                        stop_p_gradient=True,
+                        # Phase 1: stop gradient (cohort skipped anyway).
+                        # Phase 2: gradient flows freely to p_cohort.
+                        stop_p_gradient=(p_window_var is not None),
                     )
                     path_result = _resolve_path_latency(
                         alt_path, topology, latency_vars,
@@ -751,12 +847,12 @@ def _emit_cohort_likelihoods(
 
             if not is_mixture:
                 # Single path (no join, or single alternative)
-                # stop_p_gradient: cohort DM constrains latency, not p
-                # (journal 25-Mar-26: edge.p → path.p is one-way).
+                # Phase 1: stop_p_gradient=True (cohort skipped anyway).
+                # Phase 2: gradient flows to p_cohort (doc 23 §2.2).
                 p_expr = _resolve_path_probability(
                     trajs[0].path_edge_ids, ev.edge_id, p_var,
                     topology, edge_var_names, model,
-                    stop_p_gradient=True,
+                    stop_p_gradient=(p_window_var is not None),
                 )
 
         # Resolve latency: latent (Phase D) or fixed (Phase S)?

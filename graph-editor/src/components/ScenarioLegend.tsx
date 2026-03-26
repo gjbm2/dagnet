@@ -10,7 +10,7 @@
 
 import React, { useCallback, useState, useRef, useEffect } from 'react';
 import { Scenario } from '../types/scenarios';
-import { Eye, EyeOff, Images, Image, Square, X, Plus, Minimize2, Maximize2, Check, Trash2, LayoutTemplate, LockKeyhole, LockOpen, type LucideIcon } from 'lucide-react';
+import { Eye, EyeOff, Images, Image, Square, X, Plus, Minimize2, Maximize2, Check, Trash2, LayoutTemplate, LockKeyhole, LockOpen, Layers as LayersIcon, LayoutPanelLeft, Monitor, type LucideIcon } from 'lucide-react';
 import type { ScenarioVisibilityMode, ViewOverlayMode, CanvasView } from '../types';
 import toast from 'react-hot-toast';
 import './ScenarioLegend.css';
@@ -681,32 +681,52 @@ function CanvasViewSubmenuItems({ views, activeViewId, startIndex = 0, onIndex }
             className="scenario-legend-canvas-view-btn"
             onClick={(e) => {
               e.stopPropagation();
+              console.log('[ScenarioLegend] Dispatching dagnet:applyCanvasView', view.id);
               window.dispatchEvent(new CustomEvent('dagnet:applyCanvasView', { detail: { viewId: view.id } }));
             }}
           >
-            {view.locked ? <LockKeyhole size={14} /> : <LockOpen size={14} />}
+            {view.locked ? <LockKeyhole size={16} /> : <LockOpen size={16} />}
             {view.name}
           </button>
-          <button
-            className="scenario-legend-canvas-view-action"
-            onClick={(e) => {
-              e.stopPropagation();
-              window.dispatchEvent(new CustomEvent('dagnet:toggleCanvasViewLocked', { detail: { viewId: view.id } }));
-            }}
-            title={view.locked ? 'Unlock view' : 'Lock view'}
-          >
-            {view.locked ? <LockKeyhole size={11} /> : <LockOpen size={11} />}
-          </button>
-          <button
-            className="scenario-legend-canvas-view-delete"
-            onClick={(e) => {
-              e.stopPropagation();
-              window.dispatchEvent(new CustomEvent('dagnet:deleteCanvasView', { detail: { viewId: view.id } }));
-            }}
-            title="Delete view"
-          >
-            <Trash2 size={12} />
-          </button>
+          {/* Action buttons: scope toggles, gap, lock, delete */}
+          <div className="scenario-legend-canvas-view-actions">
+            <button
+              className={`scenario-legend-canvas-view-action-btn${view.applyScenarios === false ? ' scope-off' : ''}`}
+              onClick={(e) => { e.stopPropagation(); window.dispatchEvent(new CustomEvent('dagnet:toggleCanvasViewScope', { detail: { viewId: view.id, scope: 'applyScenarios' } })); }}
+              title="Update scenarios"
+            >
+              <LayersIcon size={13} />
+            </button>
+            <button
+              className={`scenario-legend-canvas-view-action-btn${view.applyLayout === false ? ' scope-off' : ''}`}
+              onClick={(e) => { e.stopPropagation(); window.dispatchEvent(new CustomEvent('dagnet:toggleCanvasViewScope', { detail: { viewId: view.id, scope: 'applyLayout' } })); }}
+              title="Update layout"
+            >
+              <LayoutPanelLeft size={13} />
+            </button>
+            <button
+              className={`scenario-legend-canvas-view-action-btn${view.applyDisplayMode === false ? ' scope-off' : ''}`}
+              onClick={(e) => { e.stopPropagation(); window.dispatchEvent(new CustomEvent('dagnet:toggleCanvasViewScope', { detail: { viewId: view.id, scope: 'applyDisplayMode' } })); }}
+              title="Update display mode"
+            >
+              <Monitor size={13} />
+            </button>
+            <span className="scenario-legend-canvas-view-actions-gap" />
+            <button
+              className="scenario-legend-canvas-view-action-btn"
+              onClick={(e) => { e.stopPropagation(); window.dispatchEvent(new CustomEvent('dagnet:toggleCanvasViewLocked', { detail: { viewId: view.id } })); }}
+              title={view.locked ? 'Unlock view' : 'Lock view'}
+            >
+              {view.locked ? <LockKeyhole size={13} /> : <LockOpen size={13} />}
+            </button>
+            <button
+              className="scenario-legend-canvas-view-action-btn delete"
+              onClick={(e) => { e.stopPropagation(); window.dispatchEvent(new CustomEvent('dagnet:deleteCanvasView', { detail: { viewId: view.id } })); }}
+              title="Delete view"
+            >
+              <Trash2 size={12} />
+            </button>
+          </div>
         </div>
       ))}
 

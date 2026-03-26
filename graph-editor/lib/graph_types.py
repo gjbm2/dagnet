@@ -646,6 +646,25 @@ class CanvasViewViewport(BaseModel):
     zoom: float
 
 
+class CanvasViewLayerVisibility(BaseModel):
+    """Visibility and display mode for a pseudo-scenario layer (Current or Base)."""
+    visible: bool
+    visibility_mode: Optional[Literal["f+e", "f", "e"]] = None
+
+
+class CanvasViewScenario(BaseModel, extra='allow'):
+    """Blueprint for recreating a user scenario from a canvas view."""
+    queryDSL: Optional[str] = None
+    params: Optional[dict] = None
+    name: str
+    colour: str
+    is_live: bool
+    visible: bool
+    order: int
+    visibility_mode: Optional[Literal["f+e", "f", "e"]] = None
+    whatIfDSL: Optional[str] = None
+
+
 class CanvasView(BaseModel):
     """Named saved layout state for canvas objects."""
     id: str
@@ -655,6 +674,12 @@ class CanvasView(BaseModel):
     locked: Optional[bool] = None
     viewOverlayMode: Optional[Literal["none", "forecast-quality", "data-depth"]] = None
     sankey: Optional[bool] = None
+    currentLayer: Optional[CanvasViewLayerVisibility] = None
+    baseLayer: Optional[CanvasViewLayerVisibility] = None
+    scenarios: Optional[List[CanvasViewScenario]] = None
+    applyScenarios: Optional[bool] = None
+    applyLayout: Optional[bool] = None
+    applyDisplayMode: Optional[bool] = None
 
 
 class Graph(BaseModel):

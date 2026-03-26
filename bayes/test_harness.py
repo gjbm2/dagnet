@@ -310,6 +310,10 @@ def main():
     parser.add_argument("--asat", type=str, default=None,
                         help="Reproduce a historical run: use graph/params from git as of this date "
                              "(ISO: YYYY-MM-DD) and filter snapshot DB to retrieved_at <= this date")
+    parser.add_argument("--dump-evidence", type=str, default=None, metavar="PATH",
+                        help="Dump full bound evidence to JSON file after evidence binding, then stop. "
+                             "Includes every trajectory (n, ages, cumulative_y), daily obs (n, k, completeness), "
+                             "priors, and raw snapshot row counts per edge.")
     args = parser.parse_args()
 
     # NOTE: lock acquisition moved after graph name resolution (below)
@@ -654,6 +658,7 @@ def main():
             **({"tune": args.tune} if args.tune else {}),
             **({"chains": args.chains} if args.chains else {}),
             **({"cores": args.cores} if args.cores else {}),
+            **({"dump_evidence_path": args.dump_evidence} if args.dump_evidence else {}),
         },
         "_job_id": f"harness-{int(time.time())}",
     }

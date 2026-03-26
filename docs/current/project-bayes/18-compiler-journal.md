@@ -8,6 +8,190 @@ Entries are reverse-chronological (newest first).
 
 ---
 
+## 26-Mar-26 (cont.): Phase 1 implementation — window-only pass
+
+### Context
+
+The root cause of p inflation is the `p_base` sharing mechanism. Both
+window and cohort likelihoods constrain `p_base` through the
+`p_window`/`p_cohort` non-centred perturbation hierarchy. The cohort
+path uses `stop_p_gradient`, which blocks gradient but not logp value,
+creating an inconsistent Hamiltonian (see 25-Mar-26 entry). This was
+established earlier but the implementation was abandoned after a false
+positive (window-only mode was returning priors, not fitting data).
+
+### Additional findings (forensic session)
+
+1. **Post-maturation trajectory degeneracy**: production has 57/119
+   window trajectories for delegated-to-registered sitting entirely
+   above t95. These flat trajectories are compatible with both
+   (low p, fast latency) and (high p, slow latency). With neutral
+   priors, NUTS finds the wrong mode → p=0.95 (10x). Fix: improved
+   zero-count dedup to collapse flat trajectories to daily obs
+   (removed `len >= 4` guard, removed unconditional `keep[-1]`).
+
+2. **No-latency DM routing**: no-latency edge trajectories were going
+   through DM with fallback sigma=0.01, giving CDF(1d)=0.5 — wrong
+   for instantaneous conversion. Fix: route no-latency window
+   trajectories to BetaBinomial instead.
+
+3. **Neutral prior canary**: with Beta(1,1) priors, synth recovers
+   p correctly (1.09-1.17x) but production blows up (10x before
+   dedup fix, 1.6x after). The k/n priors were masking the broken
+   model. A correct model should work with neutral priors given the
+   data volume.
+
+### Phase 1 plan
+
+Remove the `p_base`/`p_window`/`p_cohort` hierarchy. Replace with
+single `p = pm.Beta(alpha, beta)` per edge. Remove `sigma_temporal`.
+
+Emit only window likelihoods:
+- Window trajectories (latency edges) → DM potential with `p`
+- Window daily obs (no-latency edges) → BetaBinomial with `p`
+- No cohort trajectories in Phase 1
+
+Topology constraints preserved:
+- **Splits**: Dirichlet/Multinomial for branch groups (unchanged)
+- **Joins**: window trajectories at join-downstream edges use
+  path products of upstream edge p values — gradient flows freely
+  (no `stop_p_gradient` needed since this is all window data)
+
+Implementation: pass `skip_cohort_trajectories=True` to
+`_emit_cohort_likelihoods`, pass single `p` as both `p_var` and
+`p_window_var`.
+
+### Phase 1 results (26-Mar-26)
+
+Phase 1 implemented and tested with neutral priors (Beta(1,1)).
+
+| Edge | Synth | Production |
+|---|---|---|
+| landing-to-created | 1.00x | 1.03x |
+| created-to-delegated | 1.01x | 1.01x |
+| delegated-to-registered | 1.30x | 1.34x |
+| registered-to-success | 1.06x | 1.16x |
+
+The catastrophic synth/prod divergence is gone — both graphs behave
+similarly. The p_base hierarchy was the root cause of production's
+10x blowup. No-latency edges now recover correctly (1.00-1.03x).
+
+**Residual issue — 3rd-hop p inflation (~1.3x)**: both graphs
+overstate delegated-to-registered at ~1.3x with neutral priors. This
+is symmetric between synth and prod, so it's a model geometry issue
+(p-latency tradeoff in the window DM), not a data binding or
+hierarchy issue. The window trajectories alone don't fully break the
+p-latency degeneracy for this low-p edge. This is a SEPARATE problem
+from the cohort pass and needs its own investigation. Likely related
+to the post-maturation trajectory issue identified earlier (flat
+trajectories compatible with both fast/slow latency modes).
+
+**Phase 2 (cohort pass) is still needed** — it provides path-level
+latency, drift, and dispersion estimates. It also requires full
+topology sophistication (joins provide path-level constraints, splits
+provide flow conservation). Phase 2 uses frozen Phase 1 p values as
+`pm.Data` constants — it does NOT adjust edge p. The 1.3x issue must
+be solved in Phase 1's window-only geometry.
+
+### Phase 2 design (revised after first-principles reasoning)
+
+Phase 2 is NOT "frozen p + free cohort p." The relationship is:
+
+```
+edge.p  ──(convolved path, drift in p)──→  path.p
+  ↕                                           ↕
+edge.latency ──(convolved path, drift)──→  path.latency
+```
+
+- **edge.p** and **edge.latency**: frozen constants from Phase 1
+- **path.p**: derived from ∏(edge.p_i) along the path, with drift
+- **path.latency**: derived from convolution of edge latencies, with drift
+- **Drift** and **dispersion** (kappa): the FREE parameters. These
+  define how the cohort-level quantities differ from the window-level
+  quantities. The cohort DM constrains them.
+
+Path.p and path.latency are NOT free variables. They are distributions
+derived from Phase 1 frozen values, characterised by their drift and
+dispersion. The cohort data tells us about drift and dispersion.
+
+**Dirichlet IS needed in Phase 2**: drift can shift split ratios at
+branch groups, and mass conservation must still hold for the derived
+cohort-level quantities.
+
+**Topology in Phase 2**:
+- **Splits**: Dirichlet constrains cohort-level sibling ratios
+  (which may differ from Phase 1 due to drift)
+- **Joins**: path products use frozen edge p with drift → mixture
+  at join nodes. Gradient flows to drift parameters, not to edge p.
+
+### Previous failure to avoid
+
+Last time (25-Mar-26), `feat_window_only=True` skipped the ENTIRE
+call to `_emit_cohort_likelihoods`, meaning no data touched p at all.
+The "perfect" recovery was just the prior. `skip_cohort_trajectories`
+is different — it skips cohort trajectories but KEEPS window
+trajectories and window daily BetaBinomials within the function.
+
+Must verify: after the change, the model has >0 potentials AND the
+window data actually constrains p (not just the prior).
+
+---
+
+## 26-Mar-26 (cont.): Progressive degradation results
+
+### No-latency edge routing fix
+
+**Problem found**: the evidence binder routes data based on retrieval
+count (1 → daily obs → BetaBinomial, ≥2 → trajectory → DM potential).
+For no-latency edges this is an artefact of fetch frequency — there is
+no maturation curve, so all observations are logically (n, k) binomial
+draws. Worse, the DM fallback uses sigma=0.01, giving CDF(1d)=0.5,
+which is numerically wrong for an instantaneous edge.
+
+**Fix**: in `_emit_cohort_likelihoods`, check `edge_has_latency`.
+No-latency window trajectories are converted to `CohortDailyObs` and
+routed to BetaBinomial. Latency trajectories still go through DM.
+
+### Neutral prior as diagnostic canary
+
+Added `neutral_prior` feature flag (Beta(1,1) instead of k/n-derived).
+Results reveal that the production model is fundamentally broken:
+
+| Config | deleg-to-reg ratio |
+|---|---|
+| Synth, full coverage, neutral prior | 1.09x |
+| Synth, partial coverage (50/50), neutral prior | 1.14x |
+| Synth, partial + high traffic CV, neutral prior | 1.17x |
+| **Production, k/n priors** | **1.94x** |
+| **Production, neutral prior** | **10.03x** |
+
+The k/n-derived priors are masking the problem. Without them, the
+production data completely fails to constrain p — the p-latency
+tradeoff runs away. With neutral priors, the synth data still
+constrains p fine (1.09-1.17x). Something about the production data
+shape creates a degeneracy that synth doesn't have.
+
+### Vectors tested so far
+
+| Vector | Synth result (neutral prior) | Verdict |
+|---|---|---|
+| Baseline (full coverage, uniform traffic) | 1.09x | OK |
+| Partial snapshot coverage (50/50) | 1.14x | Mild effect |
+| Partial + high traffic CV (1.0) | 1.17x | Mild effect |
+
+Neither partial coverage nor traffic variability triggers the 10x
+blowup seen on production. The cause is elsewhere.
+
+### Next steps
+
+Need to identify what production data characteristic causes the
+p-latency degeneracy. Candidates still to test:
+- More extreme coverage split (matching prod's ~70/30)
+- Anchor range (165 days vs 100)
+- Something about the data shape itself (not yet identified)
+
+---
+
 ## 26-Mar-26: Forensic synth-vs-production data comparison
 
 ### Context

@@ -525,22 +525,22 @@ def _build_trajectories_for_obs_type(
             # The DM logp for a zero-count bin is gammaln(0+α) - gammaln(α) = 0
             # mathematically. But empirically, preserving pre-onset density
             # is critical for NUTS geometry on edges with onset-mu correlation.
-            if zero_count_filter and len(retrieval_ages) >= 4:
+            if zero_count_filter and len(retrieval_ages) >= 2:
                 # Zero-count bin filter: drop ages where neither y nor x
-                # changed. Likelihood-lossless (gammaln(0+α)-gammaln(α)=0).
-                # Requires smooth clip floors in model.py (doc 20, §6.2)
-                # to prevent dead-gradient regions from disrupting NUTS.
-                # 24-Mar-26. Pending Approach B (Poisson exposure penalty).
+                # changed from the previous kept point. A trajectory of
+                # identical y values (e.g. old anchor days observed twice
+                # post-maturation) collapses to a single point → daily obs.
+                # Likelihood-lossless: gammaln(0+α)-gammaln(α)=0.
+                # See journal 26-Mar-26: post-maturation trajectory fix.
                 keep = [False] * len(retrieval_ages)
-                keep[0] = True
-                keep[-1] = True
+                keep[0] = True  # always keep the first point
 
                 for i in range(1, len(retrieval_ages)):
                     y_changed = cumulative_y[i] != cumulative_y[i - 1]
                     x_changed = cumulative_x[i] != cumulative_x[i - 1]
                     if y_changed or x_changed:
                         keep[i] = True
-                        keep[i - 1] = True
+                        keep[i - 1] = True  # keep the point before a change too
 
                 retrieval_ages = [a for a, k in zip(retrieval_ages, keep) if k]
                 cumulative_y = [y for y, k in zip(cumulative_y, keep) if k]

@@ -355,6 +355,32 @@
         "anchor": { "type": "string", "enum": ["tl", "tr", "bl", "br"] }
       }
     },
+    "CanvasViewLayerVisibility": {
+      "type": "object",
+      "description": "Visibility and display mode for a pseudo-scenario layer.",
+      "additionalProperties": false,
+      "required": ["visible"],
+      "properties": {
+        "visible": { "type": "boolean" },
+        "visibility_mode": { "type": "string", "enum": ["f+e", "f", "e"] }
+      }
+    },
+    "CanvasViewScenario": {
+      "type": "object",
+      "description": "Blueprint for recreating a user scenario from a canvas view.",
+      "required": ["name", "colour", "is_live", "visible", "order"],
+      "properties": {
+        "queryDSL": { "type": "string", "description": "For live scenarios: regenerable DSL fragment" },
+        "params": { "type": "object", "description": "For static scenarios: frozen parameter diff" },
+        "name": { "type": "string" },
+        "colour": { "type": "string" },
+        "is_live": { "type": "boolean" },
+        "visible": { "type": "boolean" },
+        "order": { "type": "integer" },
+        "visibility_mode": { "type": "string", "enum": ["f+e", "f", "e"] },
+        "whatIfDSL": { "type": "string" }
+      }
+    },
     "CanvasView": {
       "type": "object",
       "description": "Named saved layout state for canvas objects (min/max configurations).",
@@ -389,6 +415,25 @@
         "sankey": {
           "type": "boolean",
           "description": "Whether Sankey view is enabled in this view"
+        },
+        "currentLayer": { "$ref": "#/$defs/CanvasViewLayerVisibility" },
+        "baseLayer": { "$ref": "#/$defs/CanvasViewLayerVisibility" },
+        "scenarios": {
+          "type": "array",
+          "description": "User scenario blueprints ordered by stack position",
+          "items": { "$ref": "#/$defs/CanvasViewScenario" }
+        },
+        "applyScenarios": {
+          "type": "boolean",
+          "description": "Whether this view applies/captures scenario state (default true)"
+        },
+        "applyLayout": {
+          "type": "boolean",
+          "description": "Whether this view applies/captures min/max layout state (default true)"
+        },
+        "applyDisplayMode": {
+          "type": "boolean",
+          "description": "Whether this view applies/captures display mode settings (default true)"
         }
       }
     },

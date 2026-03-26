@@ -683,6 +683,7 @@ DEFAULT_SIM_CONFIG = {
     "seed": 42,
     "growth_rate_mom": 0.0,       # monthly growth rate (0.05 = 5% MoM exponential)
     "snapshot_start_offset": 0,   # 0 = full coverage; >0 = snapshot DB rows only for last N days
+    "traffic_cv": 0.0,           # coefficient of variation for daily traffic (0 = Poisson only)
 }
 
 
@@ -883,10 +884,20 @@ def simulate_graph(
     print(f"  Simulating {total_sim_days} days ({burn_in_days} burn-in + {n_days} observable)...", flush=True)
     if growth_rate_mom > 0:
         print(f"  Growth: {growth_rate_mom * 100:.1f}% MoM ({(daily_growth - 1) * 100:.3f}%/day)", flush=True)
+    traffic_cv = sim_config.get("traffic_cv", 0.0)
     for day_idx in range(total_sim_days):
         # Apply exponential growth relative to sim start (day 0 = burn-in start)
         day_mean = mean_daily_traffic * (daily_growth ** day_idx)
-        n_people = int(rng.poisson(day_mean))
+        if traffic_cv > 0:
+            # Negative binomial (Gamma-Poisson mixture) for high-variance traffic.
+            # CV = sqrt(1/mean + 1/r) ≈ 1/sqrt(r) for large mean.
+            # Solve for r: r = mean / (cv^2 * mean - 1), but simpler:
+            # shape r = mean / (cv^2 * mean) = 1/cv^2 when mean is large.
+            r = day_mean / (traffic_cv ** 2 * day_mean)
+            prob = r / (r + day_mean)
+            n_people = int(rng.negative_binomial(r, prob))
+        else:
+            n_people = int(rng.poisson(day_mean))
         actual_traffic.append(n_people)
         if (day_idx + 1) % 20 == 0:
             phase = "burn-in" if day_idx < burn_in_days else "observable"

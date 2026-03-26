@@ -450,6 +450,7 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
   // 3) Else, fall back to window-based default DSL.
   // Also detects existing query mode (cohort vs window) from existing DSL.
   const isInitializedRef = useRef(false);
+  const [reinitTick, setReinitTick] = useState(0);
   useEffect(() => {
     // DIAGNOSTIC — remove after debugging DSL-null-on-boot issue
     const authoritativeDSL_diag = (graphStore as any).getState?.()?.currentDSL || '';
@@ -495,8 +496,28 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
     } else {
       console.log('[WindowSelector] DSL INIT: NO PATH TAKEN (graph is null, waiting...)');
     }
-  }, [graph, window, setGraph, setCurrentDSL, defaultWindowDates, graphStore, queryMode]); // Dependencies
-  
+  }, [graph, window, setGraph, setCurrentDSL, defaultWindowDates, graphStore, queryMode, reinitTick]); // Dependencies
+
+  // Allow external code (e.g. canvas view switching) to re-initialise the DSL state.
+  // Sets graph.currentQueryDSL + resets init flag so the init effect re-runs naturally.
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const dsl = (e as CustomEvent).detail?.dsl;
+      if (!dsl) return;
+      // Set graph.currentQueryDSL so init path 2 picks it up
+      const g = getLatestGraph();
+      if (g) (g as any).currentQueryDSL = dsl;
+      // Clear store's currentDSL so init path 2 runs (not path 1)
+      setCurrentDSL('');
+      // Reset init flag
+      isInitializedRef.current = false;
+      // Force the init effect to re-run
+      setReinitTick(t => t + 1);
+    };
+    globalThis.window.addEventListener('dagnet:reinitDSL', handler);
+    return () => globalThis.window.removeEventListener('dagnet:reinitDSL', handler);
+  }, [getLatestGraph, setCurrentDSL]);
+
   // Parse current context values and key from currentQueryDSL
   const currentContextValues = useMemo(() => {
     if (!graph?.currentQueryDSL) return [];

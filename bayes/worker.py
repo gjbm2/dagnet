@@ -31,6 +31,73 @@ def _log(log_list: list[str], msg: str) -> None:
     print(msg, flush=True)
 
 
+def _dump_evidence(evidence, topology, path: str, log: list[str]) -> None:
+    """Serialise full bound evidence to JSON for forensic inspection."""
+    import json
+    dump = {}
+    for edge_id, ev in evidence.edges.items():
+        if ev.skipped:
+            continue
+        et = topology.edges.get(edge_id)
+        edge_name = et.label if et and hasattr(et, 'label') else edge_id[:12]
+        edge_dump = {
+            "edge_id": edge_id,
+            "edge_name": edge_name,
+            "has_window": ev.has_window,
+            "has_cohort": ev.has_cohort,
+            "has_latency": ev.latency_prior is not None and (
+                ev.latency_prior.sigma > 0.01 or
+                (ev.latency_prior.onset_delta_days or 0) > 0
+            ),
+            "total_n": ev.total_n,
+            "prior": {
+                "alpha": ev.prob_prior.alpha,
+                "beta": ev.prob_prior.beta,
+                "source": ev.prob_prior.source,
+            } if ev.prob_prior else None,
+            "latency_prior": {
+                "mu": ev.latency_prior.mu,
+                "sigma": ev.latency_prior.sigma,
+                "onset": ev.latency_prior.onset_delta_days,
+            } if ev.latency_prior else None,
+            "window_obs": [
+                {"n": w.n, "k": w.k, "completeness": w.completeness}
+                for w in ev.window_obs
+            ],
+            "cohort_obs": [],
+        }
+        for c_obs in ev.cohort_obs:
+            co_dump = {
+                "slice_dsl": c_obs.slice_dsl,
+                "trajectories": [],
+                "daily": [],
+            }
+            for traj in c_obs.trajectories:
+                co_dump["trajectories"].append({
+                    "date": traj.date,
+                    "n": traj.n,
+                    "obs_type": traj.obs_type,
+                    "retrieval_ages": traj.retrieval_ages,
+                    "cumulative_y": traj.cumulative_y,
+                    "cumulative_x": getattr(traj, 'cumulative_x', None),
+                    "recency_weight": getattr(traj, 'recency_weight', 1.0),
+                })
+            for d in c_obs.daily:
+                co_dump["daily"].append({
+                    "date": d.date,
+                    "n": d.n,
+                    "k": d.k,
+                    "age_days": d.age_days,
+                    "completeness": d.completeness,
+                })
+            edge_dump["cohort_obs"].append(co_dump)
+        dump[edge_id] = edge_dump
+
+    with open(path, "w") as f:
+        json.dump(dump, f, indent=2, default=str)
+    _log(log, f"  Evidence dump: {len(dump)} edges → {path} ({os.path.getsize(path)} bytes)")
+
+
 def _log_env_diagnostic(log: list[str]) -> None:
     """Log CPU, BLAS, and sampler info for debugging performance."""
     import os
@@ -396,6 +463,17 @@ def _fit_graph_compiler(payload: dict, report_progress=None) -> dict:
 
         timings["evidence_ms"] = int((time.time() - t0) * 1000) - timings.get("neon_ms", 0) - timings.get("topology_ms", 0)
 
+        # ── Dump evidence (forensic diagnostic) ──
+        dump_path = settings.get("dump_evidence_path")
+        if dump_path:
+            _dump_evidence(evidence, topology, dump_path, log)
+            _log(log, f"Evidence dumped to {dump_path} — stopping.")
+            report("complete", 100, "Evidence dump complete")
+            return _build_result(
+                None, log, timings, t0, result_edges, result_skipped,
+                quality_dict, webhook_response,
+            )
+
         if n_with_data == 0:
             _log(log,"no edges with data — skipping inference")
             error = "no edges with data"
@@ -447,9 +525,121 @@ def _fit_graph_compiler(payload: dict, report_progress=None) -> dict:
             f"divergences={quality.total_divergences}"
         )
 
-        # ── 6. Summarise posteriors ──
-        report("summarising", 100, "Summarising posteriors…")
+        # ── 6. Summarise Phase 1 posteriors ──
+        report("summarising", 100, "Computing diagnostics…")
         inference_result = summarise_posteriors(trace, topology, evidence, metadata, quality)
+
+        # ── 6b. Phase 2: cohort pass with frozen Phase 1 results ──
+        # Extract Phase 1 posterior means and build Phase 2 model.
+        has_cohort_data = any(
+            ev.has_cohort for ev in evidence.edges.values() if not ev.skipped
+        )
+        if has_cohort_data and not settings.get("model_inspect_only"):
+            report("compiling", 0, "Phase 2: building cohort model…")
+            _log(log, "")
+            _log(log, "── Phase 2: cohort pass ──")
+
+            # Extract frozen values from Phase 1 trace
+            phase2_frozen = {}
+            for edge_id in topology.topo_order:
+                et = topology.edges.get(edge_id)
+                ev = evidence.edges.get(edge_id)
+                if et is None or ev is None or ev.skipped:
+                    continue
+                safe_eid = edge_id.replace("-", "_")
+
+                # p: from Phase 1 trace or edge_var_names
+                frozen_edge = {}
+                p_name = f"p_{safe_eid}"
+                if p_name in trace.posterior:
+                    frozen_edge["p"] = float(trace.posterior[p_name].values.mean())
+                elif ev.prob_prior:
+                    frozen_edge["p"] = ev.prob_prior.alpha / (ev.prob_prior.alpha + ev.prob_prior.beta)
+
+                # Latency: mu, sigma, onset from Phase 1 trace
+                mu_name = f"mu_lat_{safe_eid}"
+                sigma_name = f"sigma_lat_{safe_eid}"
+                onset_name = f"onset_{safe_eid}"
+                if mu_name in trace.posterior:
+                    frozen_edge["mu"] = float(trace.posterior[mu_name].values.mean())
+                if sigma_name in trace.posterior:
+                    frozen_edge["sigma"] = float(trace.posterior[sigma_name].values.mean())
+                if onset_name in trace.posterior:
+                    frozen_edge["onset"] = float(trace.posterior[onset_name].values.mean())
+
+                if frozen_edge:
+                    phase2_frozen[edge_id] = frozen_edge
+                    _log(log, f"  frozen {edge_id[:8]}…: {frozen_edge}")
+
+            # Build Phase 2 model
+            model2, metadata2 = build_model(
+                topology, evidence, features=features,
+                phase2_frozen=phase2_frozen,
+            )
+            _log(log, f"  Phase 2 model: {len(model2.free_RVs)} free vars, "
+                       f"{len(model2.observed_RVs)} observed, "
+                       f"{len(model2.potentials)} potentials")
+            for d in metadata2.get("diagnostics", []):
+                _log(log, f"  model2: {d}")
+
+            # Phase 2 model inspection
+            inspection2 = inspect_model(model2, metadata2, topology, evidence)
+            for line in inspection2:
+                _log(log, line)
+
+            # Run Phase 2 MCMC
+            report("sampling", 0, "Phase 2: sampling cohort model…")
+            t_sample2 = time.time()
+            trace2, quality2 = run_inference(model2, sampling_config, report)
+            timings["sampling_phase2_ms"] = int((time.time() - t_sample2) * 1000)
+            _log(log,
+                f"  Phase 2 sampling: {timings['sampling_phase2_ms']}ms, "
+                f"rhat={quality2.max_rhat:.3f}, ess={quality2.min_ess:.0f}, "
+                f"divergences={quality2.total_divergences}"
+            )
+
+            # Log Phase 2 p_cohort values directly from trace
+            for edge_id in topology.topo_order:
+                safe_eid = edge_id.replace("-", "_")
+                p_cohort_name = f"p_cohort_{safe_eid}"
+                if p_cohort_name in trace2.posterior:
+                    samples = trace2.posterior[p_cohort_name].values.flatten()
+                    _log(log, f"  Phase 2 p_cohort {edge_id[:8]}…: "
+                              f"mean={samples.mean():.4f} std={samples.std():.4f}")
+
+            # Summarise Phase 2 — cohort posteriors
+            report("summarising", 100, "Summarising Phase 2…")
+            inference_result2 = summarise_posteriors(
+                trace2, topology, evidence, metadata2, quality2,
+            )
+
+            # Merge Phase 2 cohort results into Phase 1 results.
+            # Phase 2 provides cohort slice posteriors and cohort latency.
+            for post2 in inference_result2.posteriors:
+                # Find matching Phase 1 posterior
+                for post1 in inference_result.posteriors:
+                    if post1.edge_id == post2.edge_id:
+                        # Merge cohort alpha/beta from Phase 2
+                        if post2.cohort_alpha is not None:
+                            post1.cohort_alpha = post2.cohort_alpha
+                            post1.cohort_beta = post2.cohort_beta
+                            post1.cohort_hdi_lower = post2.cohort_hdi_lower
+                            post1.cohort_hdi_upper = post2.cohort_hdi_upper
+                        break
+
+            # Merge cohort latency posteriors from Phase 2.
+            # Copy any cohort-specific latency fields that exist.
+            for eid, lat2 in inference_result2.latency_posteriors.items():
+                lat1 = inference_result.latency_posteriors.get(eid)
+                if lat1:
+                    for attr in ('cohort_onset', 'cohort_mu', 'cohort_sigma',
+                                 'cohort_onset_std', 'cohort_mu_std', 'cohort_sigma_std'):
+                        val = getattr(lat2, attr, None)
+                        if val is not None:
+                            setattr(lat1, attr, val)
+
+            for d in inference_result2.diagnostics:
+                _log(log, f"  inference2: {d}")
 
         quality_dict = {
             "max_rhat": round(quality.max_rhat, 4),
