@@ -30,14 +30,26 @@ is genuine data sparsity (trajectory coverage) not model bias.
   the graph properly on re-runs. Likely a webhook commit or FE pull
   upsert issue. Blocks warm-start and nightly scheduling.
 
+**Open design gaps**:
+- Topology signatures / hashes (doc 10) — not properly implemented.
+  Current code computes a single global hash (stub). Doc 10 specifies
+  per-fit-unit signatures for staleness detection (did the graph
+  structure change since the last fit?). Needs: per-fit-unit
+  fingerprints, staleness detection on FE pull, UI surfacing of stale
+  posteriors, warm-start invalidation when topology changes. Blocks
+  confident nightly scheduling (must know when to invalidate vs
+  warm-start).
+
 **Next priorities**:
 1. Commit and stabilise likelihood rewrite (code changes made, not
    committed)
 2. Fix posterior upsert on subsequent runs
-3. Phase 2 (cohort pass) stabilisation — convergence issues
-4. Phase C (context slices) — prerequisite: doc 21 done ✓
-5. Mixture latency models for bimodal edges (doc 23 §12)
-6. Nightly scheduling — prerequisite: production confidence
+3. Topology signatures (doc 10) — proper implementation
+4. Phase 2 (cohort pass) stabilisation — convergence issues
+5. Phase C (context slices) — prerequisite: doc 21 done ✓
+6. Mixture latency models for bimodal edges (doc 23 §12)
+7. Nightly scheduling — prerequisite: production confidence +
+   topo sigs + upsert fix
 
 ---
 

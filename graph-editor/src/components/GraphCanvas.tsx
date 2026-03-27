@@ -377,7 +377,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
   }, []);
 
   const fitView = useCallback((options?: any) => {
-    rfFitView({ ...options });
+    rfFitView({ maxZoom: 2, ...options });
   }, [rfFitView]);
 
   // Track array reference changes to detect loops
@@ -2662,6 +2662,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
         minZoom={0.1}
         maxZoom={4}
         fitView
+        fitViewOptions={{ maxZoom: 2 }}
         selectionOnDrag={false}
         selectNodesOnDrag={false}
         selectionKeyCode={['Meta', 'Ctrl']}

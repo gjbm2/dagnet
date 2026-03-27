@@ -163,6 +163,14 @@ async function selectNodeById(page: Page, nodeLabel: string) {
   await page.waitForTimeout(500);
 }
 
+/** Click empty canvas area (bottom-right corner, away from fitView'd nodes). */
+async function clickEmptyCanvas(page: Page) {
+  const rfBox = await page.locator('.react-flow').first().boundingBox();
+  if (!rfBox) throw new Error('.react-flow not found');
+  await page.mouse.click(rfBox.x + rfBox.width - 50, rfBox.y + rfBox.height - 50);
+}
+
+
 // ──────────────────────────────────────────────────────────────
 // SPEC 1: Element palette creation with absorbing node + 2 scenarios
 //         should open the analysis-type chooser, not pre-resolve a type
@@ -183,10 +191,9 @@ test.describe('Canvas analysis creation parity', () => {
       window.dispatchEvent(new CustomEvent('dagnet:addAnalysis'));
     });
 
-    // Wait for draw mode, then click on canvas to place chart (default size)
+    // Wait for draw mode, then click empty canvas to place chart (default size)
     await page.waitForTimeout(1000);
-    const canvas = page.locator('.react-flow__pane').first();
-    await canvas.click({ position: { x: 600, y: 400 } });
+    await clickEmptyCanvas(page);
 
     // Wait for canvas analysis node to appear
     const analysisNode = page.locator('.canvas-analysis-node').first();
@@ -257,8 +264,7 @@ test.describe('Live → Custom parity', () => {
     });
 
     await page.waitForTimeout(500);
-    const canvas = page.locator('.react-flow__pane').first();
-    await canvas.click({ position: { x: 600, y: 400 } });
+    await clickEmptyCanvas(page);
 
     const analysisNode = page.locator('.canvas-analysis-node').first();
     await expect(analysisNode).toBeVisible({ timeout: 10_000 });
@@ -312,8 +318,7 @@ test.describe('Chart settings reactivity', () => {
     });
 
     await page.waitForTimeout(500);
-    const canvas = page.locator('.react-flow__pane').first();
-    await canvas.click({ position: { x: 600, y: 400 } });
+    await clickEmptyCanvas(page);
 
     const analysisNode = page.locator('.canvas-analysis-node').first();
     await expect(analysisNode).toBeVisible({ timeout: 10_000 });
@@ -354,8 +359,7 @@ test.describe('Analysis type change reactivity', () => {
     });
 
     await page.waitForTimeout(500);
-    const canvas = page.locator('.react-flow__pane').first();
-    await canvas.click({ position: { x: 600, y: 400 } });
+    await clickEmptyCanvas(page);
 
     const analysisNode = page.locator('.canvas-analysis-node').first();
     await expect(analysisNode).toBeVisible({ timeout: 10_000 });

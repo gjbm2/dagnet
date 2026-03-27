@@ -645,8 +645,14 @@ export function useCanvasCreation({
       const flowPosition = screenToFlowPosition({ x: event.clientX, y: event.clientY });
       addContainerAtPosition(flowPosition.x, flowPosition.y);
       onClearElementTool?.();
+    } else if (activeElementTool === 'new-analysis') {
+      const flowPosition = screenToFlowPosition({ x: event.clientX, y: event.clientY });
+      const payload = pendingAnalysisPayload;
+      pendingAnalysisPayload = null;
+      addCanvasAnalysisAtPosition(flowPosition.x, flowPosition.y, payload || {});
+      onClearElementTool?.();
     }
-  }, [activeElementTool, screenToFlowPosition, addNodeAtPosition, addContainerAtPosition, onClearElementTool]);
+  }, [activeElementTool, screenToFlowPosition, addNodeAtPosition, addContainerAtPosition, addCanvasAnalysisAtPosition, onClearElementTool]);
 
   // -------------------------------------------------------------------------
   // Return
