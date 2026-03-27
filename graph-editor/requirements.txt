@@ -18,9 +18,12 @@ pytest-cov>=4.1.0
 pytest-asyncio>=0.21.0
 
 # Bayes deployment (Modal remote compute)
-# Install with: pip install modal && modal token set
-# Not listed as a pip dependency — installed and authenticated separately.
+# Authenticate separately: modal token set
 # See: deploy-modal.sh, docs/current/project-bayes/5-local-dev-setup.md
+# Not in production requirements (too heavy for Vercel 50MB limit).
+# Install with: pip install modal
+# To persist across venv rebuilds, listed in requirements-local.txt.
+# modal>=1.0.0
 
 # Optional: Statistical enhancement (heavy - for local dev only)
 # Note: numpy/scipy are too large for Vercel deployment

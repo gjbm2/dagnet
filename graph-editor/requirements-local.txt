@@ -1,0 +1,4 @@
+# Local-only dependencies — not deployed to Vercel.
+# Install with: pip install -r requirements-local.txt
+-r requirements.txt
+modal>=1.0.0

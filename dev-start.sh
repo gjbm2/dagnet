@@ -238,7 +238,7 @@ source "${VENV_ACTIVATE}"
 if [ "$INSTALL_PY_DEPS" = true ]; then
     echo -e "${GREEN}📦 Installing Python dependencies...${NC}"
     pip install --upgrade pip
-    cd graph-editor && pip install -r requirements.txt && cd ..
+    cd graph-editor && pip install -r requirements-local.txt && cd ..
 else
     echo -e "${GREEN}✓ Using existing Python environment${NC}"
 fi

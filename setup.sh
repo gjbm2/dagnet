@@ -576,7 +576,7 @@ fi
 # shellcheck source=/dev/null
 source "${VENV_ACTIVATE}"
 python -m pip install --upgrade pip --quiet
-(cd "${ROOT_DIR}/graph-editor" && pip install -r requirements.txt --quiet)
+(cd "${ROOT_DIR}/graph-editor" && pip install -r requirements-local.txt --quiet)
 echo -e "  ${GREEN}Python venv ready${NC}"
 
 echo "  Playwright: installing browsers"

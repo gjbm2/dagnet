@@ -81,7 +81,7 @@ fi
 # shellcheck source=/dev/null
 source "${VENV_ACTIVATE}"
 python -m pip install --upgrade pip
-(cd "${ROOT_DIR}/graph-editor" && pip install -r requirements.txt)
+(cd "${ROOT_DIR}/graph-editor" && pip install -r requirements-local.txt)
 
 echo "==> Installing Playwright browsers"
 (
