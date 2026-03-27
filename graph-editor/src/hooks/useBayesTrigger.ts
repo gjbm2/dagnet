@@ -457,6 +457,14 @@ export function useBayesTrigger(computeMode: BayesComputeMode = 'local') {
               const { getGraphStore } = await import('../contexts/GraphStoreContext');
               const store = getGraphStore(activeTab.fileId);
               if (store) {
+                // Sync FileRegistry → GraphStore BEFORE cascading.
+                // applyPatch wrote _bayes, posteriors, and model_vars to
+                // FileRegistry but not GraphStore. Without this sync the
+                // cascade starts from stale GraphStore data and the final
+                // writeBack at the end overwrites applyPatch's work.
+                const freshGraph = fileRegistry.getFile(activeTab.fileId)?.data;
+                if (freshGraph) store.getState().setGraph(freshGraph as any);
+
                 const currentDSL = store.getState().currentDSL || '';
                 const setGraph = (g: any) => { if (g) store.getState().setGraph(g); };
                 const graph = store.getState().graph;

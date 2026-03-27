@@ -712,7 +712,8 @@ export interface Posterior {
 // ── Graph-edge posterior shapes (projected by cascade, consumed by UI) ───────
 
 /** Probability posterior summary on graph edge.
- *  Projected by the cascade from Posterior.slices["window()"]. UI components
+ *  Projected by the cascade from Posterior.slices. Edge-level fields from
+ *  "window()" slice, path-level fields from "cohort()" slice. UI components
  *  (PosteriorIndicator, bayesQualityTier, ConversionEdge) consume this shape.
  */
 export interface ProbabilityPosterior {
@@ -731,6 +732,12 @@ export interface ProbabilityPosterior {
   divergences: number;
   prior_tier: 'direct_history' | 'trajectory_calibrated' | 'inherited' | 'sibling_pooled' | 'uninformative';
   surprise_z?: number | null;
+  // Path-level (cohort) probability — from cohort() slice
+  path_alpha?: number;
+  path_beta?: number;
+  path_hdi_lower?: number;
+  path_hdi_upper?: number;
+  path_provenance?: 'bayesian' | 'pooled-fallback' | 'point-estimate';
 }
 
 /** Latency posterior summary on graph edge.

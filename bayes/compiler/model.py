@@ -452,13 +452,49 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
                                             onset_vars=onset_vars,
                                             skip_cohort_trajectories=False)
                 else:
-                    # Phase 1: single p per edge, window data only.
-                    # No p_base/p_window/p_cohort hierarchy — cohort must
-                    # not constrain edge p (journal 25-Mar-26).
+                    # Phase 1: hierarchical Beta on p per edge, window data
+                    # only. mu_p is the population mean rate, kappa_p controls
+                    # between-cohort variation. Per-cohort p_i are drawn from
+                    # Beta(mu_p × kappa_p, (1-mu_p) × kappa_p).
+                    # See journal 27-Mar-26 "hierarchical Beta on p".
                     if p_base_var is not None:
                         p = p_base_var
                     else:
                         p = pm.Beta(f"p_{safe_id}", alpha=alpha, beta=beta_param)
+
+                    # Count window trajectories for this edge to create p_i
+                    n_window_trajs = 0
+                    if ev.cohort_obs:
+                        for c_obs in ev.cohort_obs:
+                            for traj in c_obs.trajectories:
+                                if traj.obs_type == "window" and len(traj.retrieval_ages) >= 2 and traj.n > 0:
+                                    edge_has_lat = (
+                                        (ev.latency_prior is not None and
+                                         (ev.latency_prior.sigma > 0.01 or
+                                          (ev.latency_prior.onset_delta_days or 0) > 0))
+                                        or (latency_vars and ev.edge_id in (latency_vars or {}))
+                                    )
+                                    # No-latency trajs get converted to daily, skip them
+                                    if not edge_has_lat:
+                                        continue
+                                    n_window_trajs += 1
+
+                    # Create per-cohort p_i if we have enough trajectories
+                    p_cohort_vec = None
+                    if n_window_trajs >= 3 and feat_overdispersion:
+                        kappa_p = pm.Gamma(f"kappa_p_{safe_id}", alpha=3, beta=0.05)
+                        alpha_p = p * kappa_p
+                        beta_p = (1.0 - p) * kappa_p
+                        p_cohort_vec = pm.Beta(
+                            f"p_i_{safe_id}",
+                            alpha=pt.maximum(alpha_p, 0.01),
+                            beta=pt.maximum(beta_p, 0.01),
+                            shape=n_window_trajs,
+                        )
+                        diagnostics.append(
+                            f"  hierarchical_p: {edge_id[:8]}… "
+                            f"{n_window_trajs} cohort p_i variables"
+                        )
 
                     if emit_window_binomial:
                         _emit_window_likelihoods(safe_id, p, ev, diagnostics, kappa=edge_kappa)
@@ -470,7 +506,8 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
                                                 cohort_latency_vars=cohort_latency_vars,
                                                 kappa=edge_kappa,
                                                 onset_vars=onset_vars,
-                                                skip_cohort_trajectories=True)
+                                                skip_cohort_trajectories=True,
+                                                p_cohort_vec=p_cohort_vec)
 
                 if edge_id not in edge_var_names:
                     edge_var_names[edge_id] = f"p_{safe_id}"
@@ -757,6 +794,7 @@ def _emit_cohort_likelihoods(
     kappa=None,
     onset_vars: dict[str, object] | None = None,
     skip_cohort_trajectories: bool = False,
+    p_cohort_vec=None,
 ) -> None:
     """Emit cohort likelihoods via pm.Potential (vectorised per obs_type).
 
@@ -862,6 +900,7 @@ def _emit_cohort_likelihoods(
         # is used below.
         is_mixture = False  # set True for join-downstream cohort
         mixture_components = []  # list of (p_alt, onset_alt, mu_alt, sigma_alt)
+        _use_p_cohort_vec = False  # set True for hierarchical Beta window trajs
 
         # Phase 2 cohort: use edge p directly with x (from-node count)
         # as denominator instead of path product with a (anchor count).
@@ -886,6 +925,10 @@ def _emit_cohort_likelihoods(
             trajs = rewritten_trajs
         elif obs_type == "window":
             p_expr = p_window_var if p_window_var is not None else p_var
+            # Hierarchical Beta: p_cohort_vec has per-trajectory p_i.
+            # Build a mapping from interval index → trajectory index
+            # so p_per_interval[k] = p_i[traj_of_interval_k].
+            _use_p_cohort_vec = (p_cohort_vec is not None and obs_type == "window")
         else:
             # Check for join-node mixture (multiple path alternatives)
             et_topo = topology.edges.get(ev.edge_id) if topology else None
@@ -1092,8 +1135,9 @@ def _emit_cohort_likelihoods(
 
                 interval_d, interval_n_at_risk, interval_weights = [], [], []
                 curr_indices, prev_indices = [], []
+                traj_idx_per_interval = []
                 age_offset = 0
-                for traj in trajs:
+                for ti, traj in enumerate(trajs):
                     n_ages = len(traj.retrieval_ages)
                     cum_y = traj.cumulative_y
                     w = getattr(traj, 'recency_weight', 1.0)
@@ -1105,6 +1149,7 @@ def _emit_cohort_likelihoods(
                         interval_weights.append(w)
                         curr_indices.append(age_offset + j)
                         prev_indices.append(age_offset + j - 1 if j > 0 else -1)
+                        traj_idx_per_interval.append(ti)
                     age_offset += n_ages
 
                 d_np = np.array(interval_d, dtype=np.float64)
@@ -1114,6 +1159,14 @@ def _emit_cohort_likelihoods(
                 prev_idx_np = np.array(prev_indices, dtype=np.int64)
                 prev_safe = np.where(prev_idx_np >= 0, prev_idx_np, 0)
                 is_first = (prev_idx_np < 0).astype(np.float64)
+                traj_idx_np = np.array(traj_idx_per_interval, dtype=np.int64)
+
+                # Per-interval p: use p_i[traj_index] if hierarchical,
+                # else broadcast scalar p_expr.
+                if _use_p_cohort_vec:
+                    p_per_interval = p_cohort_vec[traj_idx_np]
+                else:
+                    p_per_interval = p_expr
 
                 cdf_curr = cdf_all[curr_idx_np]
                 cdf_prev = cdf_all[prev_safe]
@@ -1122,10 +1175,10 @@ def _emit_cohort_likelihoods(
                 delta_F = pt.maximum(delta_F, 1e-15)
                 # Survival at start of interval: 1 − p × CDF(t_{j−1})
                 F_prev = cdf_prev * (1.0 - is_first)
-                surv_prev = 1.0 - p_expr * F_prev
+                surv_prev = 1.0 - p_per_interval * F_prev
                 surv_prev = pt.maximum(surv_prev, 1e-10)
                 # Conditional hazard: q_j = p × ΔF / (1 − p × F_{j−1})
-                q_j = pt.clip(p_expr * delta_F / surv_prev, 1e-10, 1.0 - 1e-10)
+                q_j = pt.clip(p_per_interval * delta_F / surv_prev, 1e-10, 1.0 - 1e-10)
 
                 logp = pt.sum(weights_np * (
                     d_np * pt.log(q_j) + (n_at_risk_np - d_np) * pt.log(1.0 - q_j)

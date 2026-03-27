@@ -795,7 +795,8 @@ function buildMappingConfigurations(): Map<string, MappingConfiguration> {
         if (!value || typeof value !== 'object' || !value.slices) return value;
         const windowSlice = value.slices['window()'];
         if (!windowSlice) return undefined;
-        // Project ProbabilityPosterior shape from window() slice
+        // Project ProbabilityPosterior shape from window() + cohort() slices
+        const cs = value.slices['cohort()'];
         return {
           distribution: 'beta',
           alpha: windowSlice.alpha,
@@ -812,6 +813,14 @@ function buildMappingConfigurations(): Map<string, MappingConfiguration> {
           divergences: windowSlice.divergences ?? 0,
           prior_tier: value.prior_tier ?? 'uninformative',
           surprise_z: value.surprise_z,
+          // Path-level from cohort() slice
+          ...(cs?.alpha != null ? {
+            path_alpha: cs.alpha,
+            path_beta: cs.beta,
+            path_hdi_lower: cs.p_hdi_lower,
+            path_hdi_upper: cs.p_hdi_upper,
+            path_provenance: cs.provenance ?? 'bayesian',
+          } : {}),
         };
       },
     },

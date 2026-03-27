@@ -262,6 +262,14 @@ export async function applyPatch(patch: BayesPatchFile): Promise<number> {
           provenance: windowSlice.provenance,
           divergences: windowSlice.divergences,
           prior_tier: patchEdge.prior_tier || 'uninformative',
+          // Path-level from cohort() slice
+          ...(cohortSlice?.alpha != null ? {
+            path_alpha: cohortSlice.alpha,
+            path_beta: cohortSlice.beta,
+            path_hdi_lower: cohortSlice.p_hdi_lower,
+            path_hdi_upper: cohortSlice.p_hdi_upper,
+            path_provenance: cohortSlice.provenance,
+          } : {}),
         };
       }
 

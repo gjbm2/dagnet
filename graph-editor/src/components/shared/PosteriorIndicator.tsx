@@ -223,6 +223,43 @@ function ProbabilityPosteriorDetails({ posterior, tier, colour, retrievedAt, the
             </td>
           </tr>
         )}
+
+        {/* ── Path-level (cohort) probability ── */}
+        {(posterior as any).path_alpha != null && (() => {
+          const pa = (posterior as any).path_alpha;
+          const pb = (posterior as any).path_beta;
+          const pathMean = pa / (pa + pb);
+          const pathSd = Math.sqrt(pa * pb / ((pa + pb) ** 2 * (pa + pb + 1)));
+          return (
+            <>
+              <SectionHeader label="Path probability (cohort)" theme={theme} />
+              <tr>
+                <td className="posterior-details-label">p</td>
+                <td className="posterior-details-value">
+                  {fmtPct(pathMean)} ± {fmtPct(pathSd)}
+                </td>
+              </tr>
+              {(posterior as any).path_hdi_lower != null && (
+                <tr>
+                  <td className="posterior-details-label">HDI {fmtPct(posterior.hdi_level)}</td>
+                  <td className="posterior-details-value">
+                    {fmtPct((posterior as any).path_hdi_lower)} — {fmtPct((posterior as any).path_hdi_upper)}
+                  </td>
+                </tr>
+              )}
+              <tr>
+                <td className="posterior-details-label">Beta</td>
+                <td className="posterior-details-value">α={pa.toFixed(2)}  β={pb.toFixed(2)}</td>
+              </tr>
+              {(posterior as any).path_provenance && (
+                <tr>
+                  <td className="posterior-details-label">Provenance</td>
+                  <td className="posterior-details-value">{(posterior as any).path_provenance}</td>
+                </tr>
+              )}
+            </>
+          );
+        })()}
       </tbody>
     </table>
   );

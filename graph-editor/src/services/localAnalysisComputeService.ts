@@ -631,23 +631,28 @@ function buildEdgeForecastTab(
     return;
   }
 
-  // ── Probability posterior ──
+  // ── Probability posterior (edge + path in same section) ──
   if (posterior) {
-    // Core estimate: p from Beta(α, β)
     const a = posterior.alpha, b = posterior.beta;
+    const pa = (posterior as any).path_alpha;
+    const pb = (posterior as any).path_beta;
+    const hasPathProb = pa != null && pb != null && (pa + pb) > 0;
+
     if (a != null && b != null && (a + b) > 0) {
       const pMean = a / (a + b);
       const pSd = Math.sqrt(a * b / ((a + b) ** 2 * (a + b + 1)));
-      data.push({ tab: 'forecast', section: 'Probability', property: 'p (Bayes)', value: `${fmtPct(pMean)} ± ${fmtPct(pSd)}` });
-      data.push({ tab: 'forecast', section: 'Probability', property: 'Beta α / β', value: `${a.toFixed(2)} / ${b.toFixed(2)}` });
+      data.push({ tab: 'forecast', section: 'Probability', property: 'Edge p', value: `${fmtPct(pMean)} ± ${fmtPct(pSd)}` });
     }
-    if (posterior.hdi_level != null && posterior.hdi_lower != null && posterior.hdi_upper != null) {
-      data.push({
-        tab: 'forecast',
-        section: 'Probability',
-        property: `HDI ${fmtPct(posterior.hdi_level)}`,
-        value: `${fmtPct(posterior.hdi_lower)} — ${fmtPct(posterior.hdi_upper)}`,
-      });
+    if (hasPathProb) {
+      const pathMean = pa / (pa + pb);
+      const pathSd = Math.sqrt(pa * pb / ((pa + pb) ** 2 * (pa + pb + 1)));
+      data.push({ tab: 'forecast', section: 'Probability', property: 'Path p', value: `${fmtPct(pathMean)} ± ${fmtPct(pathSd)}` });
+    }
+    if (posterior.hdi_level != null && posterior.hdi_lower != null) {
+      data.push({ tab: 'forecast', section: 'Probability', property: 'Edge HDI', value: `${fmtPct(posterior.hdi_lower)} — ${fmtPct(posterior.hdi_upper)}` });
+    }
+    if (hasPathProb && (posterior as any).path_hdi_lower != null) {
+      data.push({ tab: 'forecast', section: 'Probability', property: 'Path HDI', value: `${fmtPct((posterior as any).path_hdi_lower)} — ${fmtPct((posterior as any).path_hdi_upper)}` });
     }
     if (posterior.evidence_grade != null) {
       const gradeFreshness = posterior.evidence_grade >= 2 ? 'good' : posterior.evidence_grade >= 1 ? 'stale' : 'very-stale';
@@ -657,7 +662,7 @@ function buildEdgeForecastTab(
       data.push({ tab: 'forecast', section: 'Probability', property: 'Prior Tier', value: posterior.prior_tier.replace(/_/g, ' ') });
     }
 
-    // Quality + convergence (RAG-coloured)
+    // Convergence
     const tier = computeQualityTier(posterior);
     const tierFreshness = tier.tier === 'failed' ? 'very-stale'
       : tier.tier === 'warning' ? 'stale'
@@ -684,49 +689,22 @@ function buildEdgeForecastTab(
     }
   }
 
-  // ── Latency posterior ──
+  // ── Latency posterior (edge + path in same section) ──
   if (latPosterior) {
-    // Edge-level (window)
     if (latPosterior.mu_mean != null) {
-      data.push({ tab: 'forecast', section: 'Latency (edge)', property: 'onset', value: `${(latPosterior.onset_delta_days ?? 0).toFixed(1)}d` });
-      data.push({ tab: 'forecast', section: 'Latency (edge)', property: 'μ', value: `${latPosterior.mu_mean.toFixed(4)} ± ${(latPosterior.mu_sd ?? 0).toFixed(4)}` });
-      data.push({ tab: 'forecast', section: 'Latency (edge)', property: 'σ', value: `${latPosterior.sigma_mean.toFixed(4)} ± ${(latPosterior.sigma_sd ?? 0).toFixed(4)}` });
+      data.push({ tab: 'forecast', section: 'Latency', property: 'Edge onset', value: `${(latPosterior.onset_delta_days ?? 0).toFixed(1)}d` });
+      data.push({ tab: 'forecast', section: 'Latency', property: 'Edge μ', value: `${latPosterior.mu_mean.toFixed(4)} ± ${(latPosterior.mu_sd ?? 0).toFixed(4)}` });
+      data.push({ tab: 'forecast', section: 'Latency', property: 'Edge σ', value: `${latPosterior.sigma_mean.toFixed(4)} ± ${(latPosterior.sigma_sd ?? 0).toFixed(4)}` });
     }
-
-    // Path-level (cohort)
     if (latPosterior.path_mu_mean != null) {
-      data.push({ tab: 'forecast', section: 'Latency (path)', property: 'onset', value: `${(latPosterior.path_onset_delta_days ?? 0).toFixed(1)}d` });
-      data.push({ tab: 'forecast', section: 'Latency (path)', property: 'μ', value: `${latPosterior.path_mu_mean.toFixed(4)} ± ${(latPosterior.path_mu_sd ?? 0).toFixed(4)}` });
+      data.push({ tab: 'forecast', section: 'Latency', property: 'Path onset', value: `${(latPosterior.path_onset_delta_days ?? 0).toFixed(1)}d` });
+      data.push({ tab: 'forecast', section: 'Latency', property: 'Path μ', value: `${latPosterior.path_mu_mean.toFixed(4)} ± ${(latPosterior.path_mu_sd ?? 0).toFixed(4)}` });
       if (latPosterior.path_sigma_mean != null) {
-        data.push({ tab: 'forecast', section: 'Latency (path)', property: 'σ', value: `${latPosterior.path_sigma_mean.toFixed(4)} ± ${(latPosterior.path_sigma_sd ?? 0).toFixed(4)}` });
+        data.push({ tab: 'forecast', section: 'Latency', property: 'Path σ', value: `${latPosterior.path_sigma_mean.toFixed(4)} ± ${(latPosterior.path_sigma_sd ?? 0).toFixed(4)}` });
       }
     }
-
-    // t95 HDI
     if (latPosterior.hdi_level != null && latPosterior.hdi_t95_lower != null && latPosterior.hdi_t95_upper != null) {
-      data.push({
-        tab: 'forecast',
-        section: 'Latency (edge)',
-        property: `t95 HDI ${fmtPct(latPosterior.hdi_level)}`,
-        value: `${latPosterior.hdi_t95_lower.toFixed(1)}d — ${latPosterior.hdi_t95_upper.toFixed(1)}d`,
-      });
-    }
-
-    // Latency convergence (only if separate from probability) — RAG-coloured
-    if (latPosterior.rhat != null) {
-      const section = latPosterior.path_mu_mean != null ? 'Latency (path)' : 'Latency (edge)';
-      const rhatFreshness = latPosterior.rhat > 1.1 ? 'very-stale' : latPosterior.rhat > 1.01 ? 'stale' : 'good';
-      data.push({ tab: 'forecast', section, property: 'rhat', value: latPosterior.rhat.toFixed(4), freshness: rhatFreshness });
-    }
-    if (latPosterior.ess != null) {
-      const section = latPosterior.path_mu_mean != null ? 'Latency (path)' : 'Latency (edge)';
-      const essFreshness = latPosterior.ess < 100 ? 'very-stale' : latPosterior.ess < 400 ? 'stale' : 'good';
-      data.push({ tab: 'forecast', section, property: 'ESS', value: fmtNum(Math.round(latPosterior.ess)), freshness: essFreshness });
-    }
-    if (latPosterior.provenance) {
-      const section = latPosterior.path_mu_mean != null ? 'Latency (path)' : 'Latency (edge)';
-      const provFreshness = ['pooled-fallback', 'point-estimate'].includes(latPosterior.provenance) ? 'stale' : undefined;
-      data.push({ tab: 'forecast', section, property: 'Provenance', value: latPosterior.provenance, freshness: provFreshness });
+      data.push({ tab: 'forecast', section: 'Latency', property: `Edge t95 HDI ${fmtPct(latPosterior.hdi_level)}`, value: `${latPosterior.hdi_t95_lower.toFixed(1)}d — ${latPosterior.hdi_t95_upper.toFixed(1)}d` });
     }
   }
 
@@ -900,6 +878,12 @@ function buildSurpriseGaugeResult(graph: ConversionGraph, queryDsl: string): Ana
 
   const p = edge.p || {} as any;
   const modelVars: any[] = p.model_vars || [];
+  const posterior = p.posterior || {};
+
+  // Detect cohort vs window query from the graph's current DSL.
+  // cohort() → use path-level posterior; window() → use edge-level posterior.
+  const currentDSL = (graph as any).currentQueryDSL || '';
+  const isCohortQuery = /\bcohort\s*\(/.test(currentDSL);
 
   // Find reference entry: prefer bayesian, fall back to analytic
   let refEntry = modelVars.find((mv: any) => mv?.source === 'bayesian');
@@ -928,25 +912,37 @@ function buildSurpriseGaugeResult(graph: ConversionGraph, queryDsl: string): Ana
 
   const refProb = refEntry.probability || {};
   const refLat = refEntry.latency || {};
-  const obsProb = obsEntry.probability || {};
   const obsLat = obsEntry.latency || {};
 
-  // Reconstruct Beta params from mean/stdev (method of moments)
-  const refMean = refProb.mean;
-  const refStd = refProb.stdev;
+  // Select reference alpha/beta: path-level for cohort, edge-level for window.
+  // Use actual posterior alpha/beta when available (more precise than MoM reconstruction).
   let alpha: number | null = null;
   let beta_param: number | null = null;
-  if (typeof refMean === 'number' && typeof refStd === 'number' && refMean > 0 && refMean < 1 && refStd > 0) {
-    const v = refStd * refStd;
-    if (v < refMean * (1 - refMean)) {
-      const common = refMean * (1 - refMean) / v - 1;
-      alpha = refMean * common;
-      beta_param = (1 - refMean) * common;
+
+  if (isCohortQuery && posterior.path_alpha != null) {
+    alpha = posterior.path_alpha;
+    beta_param = posterior.path_beta;
+  } else if (posterior.alpha != null) {
+    alpha = posterior.alpha;
+    beta_param = posterior.beta;
+  } else {
+    // Fall back to MoM reconstruction from model_vars mean/stdev
+    const refMean = refProb.mean;
+    const refStd = refProb.stdev;
+    if (typeof refMean === 'number' && typeof refStd === 'number' && refMean > 0 && refMean < 1 && refStd > 0) {
+      const v = refStd * refStd;
+      if (v < refMean * (1 - refMean)) {
+        const common = refMean * (1 - refMean) / v - 1;
+        alpha = refMean * common;
+        beta_param = (1 - refMean) * common;
+      }
     }
   }
 
   // --- p ---
-  const obsPMean = typeof obsProb.mean === 'number' ? obsProb.mean : null;
+  // Use promoted p.mean (the blended value on the edge) as the observed value.
+  // This already reflects visibility mode: f+e → blend, e → evidence, f → forecast.
+  const obsPMean = typeof p.mean === 'number' ? p.mean : null;
   if (alpha !== null && beta_param !== null && obsPMean !== null) {
     // Normal approximation to Beta CDF (good enough for gauge)
     const posteriorMean = alpha / (alpha + beta_param);
@@ -971,8 +967,8 @@ function buildSurpriseGaugeResult(graph: ConversionGraph, queryDsl: string): Ana
   const refMu = refLat?.mu;
   const obsMu = obsLat?.mu;
   // For Bayesian, use posterior SD if available
-  const posterior = (p.latency as any)?.posterior || {};
-  const muSd = posterior.mu_sd || refLat?.mu_sd;
+  const latPosterior = (p.latency as any)?.posterior || {};
+  const muSd = latPosterior.mu_sd || refLat?.mu_sd;
 
   if (typeof refMu === 'number' && typeof obsMu === 'number' && typeof muSd === 'number' && muSd > 0) {
     const z = (obsMu - refMu) / muSd;
@@ -997,7 +993,7 @@ function buildSurpriseGaugeResult(graph: ConversionGraph, queryDsl: string): Ana
   // --- sigma ---
   const refSigma = refLat?.sigma;
   const obsSigma = obsLat?.sigma;
-  const sigmaSd = posterior.sigma_sd || refLat?.sigma_sd;
+  const sigmaSd = latPosterior.sigma_sd || refLat?.sigma_sd;
 
   if (typeof refSigma === 'number' && typeof obsSigma === 'number' && typeof sigmaSd === 'number' && sigmaSd > 0) {
     const z = (obsSigma - refSigma) / sigmaSd;
@@ -1017,8 +1013,8 @@ function buildSurpriseGaugeResult(graph: ConversionGraph, queryDsl: string): Ana
   }
 
   // --- onset (Phase 2 placeholder) ---
-  const onsetMean = posterior.onset_mean;
-  const onsetSd = posterior.onset_sd;
+  const onsetMean = latPosterior.onset_mean;
+  const onsetSd = latPosterior.onset_sd;
   if (typeof onsetMean === 'number' && typeof onsetSd === 'number' && onsetSd > 0) {
     variables.push({
       name: 'onset', label: 'Onset (dead time)',

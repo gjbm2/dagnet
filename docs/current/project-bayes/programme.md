@@ -29,6 +29,14 @@ is genuine data sparsity (trajectory coverage) not model bias.
 - Posterior upsert on subsequent runs — Bayes results do not update
   the graph properly on re-runs. Likely a webhook commit or FE pull
   upsert issue. Blocks warm-start and nightly scheduling.
+- Surprise gauge uses wrong slice — compares analytic rate against
+  Phase 1 window posterior regardless of what's being displayed.
+  Should use cohort posterior when showing cohort maturity.
+- Unrealistically tight posteriors — pure Binomial likelihood gives
+  no overdispersion, posterior SD ≈ ±0.8% when real uncertainty is
+  ±3-5%. Surprise gauge and confidence bands are meaningless.
+  Fix: endpoint-only BetaBinomial for rate (one obs per trajectory,
+  no K-fold bias). See journal 27-Mar-26.
 
 **Open design gaps**:
 - Topology signatures / hashes (doc 10) — not properly implemented.

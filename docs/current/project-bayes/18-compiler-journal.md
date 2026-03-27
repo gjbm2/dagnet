@@ -8,6 +8,195 @@ Entries are reverse-chronological (newest first).
 
 ---
 
+## 27-Mar-26 (cont.): Overdispersion needed for honest uncertainty
+
+### The problem
+
+After replacing DM→Binomial and BB→Binomial, the posterior is
+unrealistically tight. For registered-to-success: α=1629, β=377
+gives posterior SD = ±0.87%. The surprise gauge shows ±0.8%
+confidence interval — implying ~2006 independent observations.
+We don't have that. We have ~50 trajectories and ~95 daily obs.
+
+The Binomial likelihood treats each observation as independent.
+Within a trajectory, interval observations are correlated (same
+cohort, sequential). Across trajectories, there's real
+between-cohort variation (traffic quality, seasonality, etc.)
+that the Binomial doesn't capture. The posterior is too confident.
+
+This matters critically: the surprise gauge and cohort maturity
+confidence bands are high-value outputs of the Bayes engine. With
+unrealistically tight uncertainty, the surprise gauge flags
+everything as "alarming" and confidence bands are sub-pixel.
+
+### Root cause
+
+We removed BetaBinomial (which modelled overdispersion via kappa)
+to eliminate the concentration-dependent p bias. But we also
+eliminated the overdispersion — the posterior lost its honest
+uncertainty.
+
+The DM had the same bias problem AND modelled overdispersion. The
+Binomial has no bias AND no overdispersion. We need the
+overdispersion back without the bias.
+
+### Solution: endpoint-only BetaBinomial for rate
+
+The K-fold concentration bias comes from having K interval-level
+alpha terms all depending on p. The fix: use BetaBinomial on
+trajectory **endpoints only** (one observation per trajectory).
+One α, one β — no K-fold amplification.
+
+**Model structure**:
+- **Shape (latency)**: product-of-conditional-Binomials on
+  trajectory intervals. Constrains CDF shape (onset, mu, sigma).
+  No overdispersion needed — the CDF shape is well-determined.
+- **Rate (p)**: BetaBinomial on trajectory endpoints.
+  y_final ~ BB(n, p × F(age_final), kappa). Constrains p with
+  honest uncertainty. kappa captures between-cohort variation.
+
+For mature trajectories (F ≈ 1): BB(n, p, kappa) directly
+constrains p. Low kappa = high between-cohort variation = wide
+posteriors = honest uncertainty.
+
+This is the shape+rate decomposition done right:
+- Binomial intervals for shape (no bias, no overdispersion needed)
+- BetaBinomial endpoints for rate (no K-fold bias, overdispersion
+  for honest uncertainty)
+
+### Consequences
+
+With honest kappa and realistic α/β:
+- Surprise gauge shows meaningful ±3-5% intervals (not ±0.8%)
+- Cohort maturity confidence bands become visible and informative
+- Surprise detection correctly identifies genuinely unusual
+  behaviour rather than flagging normal variation
+
+### Deeper problem: systematic overweighting of evidence (27-Mar-26)
+
+The overconfident posterior is a symptom of a more fundamental issue.
+A trajectory with n=300 subjects observed at 6 ages is **one
+experiment**, not 6 × 300 independent trials. The product-of-
+conditional-Binomials treats it as sequential independent experiments
+where each interval claims n_j independent Bernoulli trials.
+
+But n=300 people in one cohort share a context (same day, same
+traffic, same product state). The cohort's aggregate conversion rate
+is ONE draw from the distribution of rates. We have ~50 such draws
+(trajectories), not ~15,000 independent trials.
+
+This overweighting affects:
+1. **Point estimates** — the likelihood is so strong that priors,
+   onset observations, and t95 constraints can't compete (we saw
+   this: onset obs provide 65 nats but trajectories provide hundreds)
+2. **Posterior width** — unrealistically tight (±0.8% when real
+   uncertainty is ±3-5%)
+3. **Surprise gauge and confidence bands** — meaningless because
+   posteriors are too confident
+4. **Overfitting risk** — when evidence is rich (many large cohorts),
+   the model will over-fit to noise in individual cohorts
+
+The per-cohort frailty (shared random effect) does NOT fix this. It
+makes intervals within a trajectory correlated, but each interval
+still claims n=300 independent trials. The frailty shifts q_j for
+the whole trajectory but evaluates each shifted q_j against n trials.
+
+This is not unique to our model — it's endemic to any grouped
+survival / CDF modelling exercise that uses product-of-conditional-
+Binomials with large cohort denominators. Needs thorough literature
+research on how this is properly handled.
+
+### Resolution: the Binomial is correctly specified (27-Mar-26)
+
+Three literature reviews established:
+
+1. **The product-of-conditional-Binomials is algebraically identical
+   to the Multinomial** (Feller 1968; Kalbfleisch & Prentice 2002;
+   Cox & Oakes 1984). This is an exact identity, not an approximation.
+   n subjects make n independent allocations into K+1 bins. The Fisher
+   information scales as n, not K×n. No overcounting.
+
+2. **The Fisher information about p from the full trajectory equals
+   the endpoint Fisher information.** Intermediate observations add
+   zero information about the conversion rate — they only add
+   information about CDF shape. p and CDF shape are informationally
+   orthogonal.
+
+3. **The within-cohort likelihood is correctly specified.** The
+   posterior is correctly calibrated for n independent subjects
+   within each cohort. No modification needed to the interval
+   Binomials.
+
+### The real problem: between-cohort variation
+
+The posterior is too tight because we assume all ~50 cohorts share
+exactly the same p. In reality, different cohorts have different
+true conversion rates (traffic quality, day-of-week, seasonality).
+This is a **modelling choice** about the population of cohorts,
+not a flaw in the within-cohort likelihood.
+
+### Solution: hierarchical Beta on p (27-Mar-26)
+
+The cure model literature (Seppa et al. 2014; Yu et al. 2011;
+Peng & Taylor 2014) consistently puts random effects on the cure
+fraction directly, not on the hazard:
+
+```
+p_i ~ Beta(mu_p × kappa, (1 - mu_p) × kappa)   [per cohort]
+q_ij = p_i × ΔF_j / (1 - p_i × F_{j-1})         [uses p_i]
+d_ij ~ Binomial(n_ij, q_ij)                       [correct]
+```
+
+Why this and not shared frailty on the hazard:
+
+- **Standard in literature**: Seppa et al. 2014, Yu et al. 2011
+  all use random effects on cure fraction, not hazard.
+- **Identifiability**: shared frailty on hazard in cure models
+  creates confounds (Price & Manatunga 2001) — frailty and cure
+  fraction compete to explain tail behaviour.
+- **Respects information geometry**: p and CDF shape are
+  informationally orthogonal. Variation lives in p (between-cohort
+  rate differences), not in shape (funnel mechanics are stable).
+- **Better MCMC geometry**: avoids funnel pathology (Neal 2003).
+
+**What this surfaces**: mu_p and kappa populate the existing
+posterior schema fields. alpha = mu_p × kappa, beta = (1-mu_p) ×
+kappa. No schema changes needed. The alpha/beta now encode honest
+uncertainty — both statistical precision AND between-cohort
+variation. Surprise gauge and confidence bands automatically
+become meaningful.
+
+### Implementation plan
+
+1. Per latency edge: `mu_p = pm.Beta(...)`, `kappa_p = pm.Gamma(...)`,
+   `p_i = pm.Beta(mu_p × kappa_p, (1-mu_p) × kappa_p, shape=M)`
+2. Trajectory interval Binomials use `p_i[traj_index]`
+3. Daily Binomials use `mu_p` (each day is its own cohort)
+4. Dirichlet branch groups use `mu_p` (mass conservation)
+5. Onset obs and t95 constraint unchanged (shared latency)
+6. Posterior extraction: moment-match from mu_p samples
+7. kappa_p to `_model_state`
+
+No schema, FE, or webhook changes required.
+
+### References
+
+- Feller (1968), Introduction to Probability Theory, Vol 1
+- Kalbfleisch & Prentice (2002), Statistical Analysis of Failure
+  Time Data, 2nd ed — §2.4: Multinomial equivalence
+- Cox & Oakes (1984), Analysis of Survival Data — §2.5
+- Seppa, Hakulinen & Laara (2014), Cure fraction model with
+  random effects, Stat Med 29:2781
+- Yu, Tiwari & Zou (2011), Mixture cure models with random
+  effects for clustered data
+- Price & Manatunga (2001), identifiability of frailty in cure
+  models
+- Sy & Taylor (2000), EM factorisation exploiting p/latency
+  orthogonality
+- Harrison (2015), OLRE vs BetaBinomial, PeerJ 3:e1114
+
+---
+
 ## 27-Mar-26: Per-retrieval onset observations + t95 constraint
 
 ### Diagnosis: why production latency drifts to nonsense

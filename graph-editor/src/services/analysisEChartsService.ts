@@ -154,7 +154,7 @@ export function buildChartOption(
       break;
 
     case 'surprise_gauge':
-      opt = buildSurpriseGaugeEChartsOption(result, resolvedSettings);
+      opt = buildSurpriseGaugeEChartsOption(result, resolvedSettings, extra?.layout);
       break;
 
     default:
