@@ -125,7 +125,7 @@ export default function ContainerNode({ data, selected }: NodeProps<ContainerNod
           width: '100%', height: '100%',
           backgroundColor: fillBg,
           border: `1.5px dashed ${borderColour}`,
-          borderRadius: '4px',
+          borderRadius: `${4 / zoom}px`,
           boxSizing: 'border-box',
           position: 'relative',
           boxShadow: selected
@@ -141,7 +141,7 @@ export default function ContainerNode({ data, selected }: NodeProps<ContainerNod
             padding: '4px 8px',
             backgroundColor: labelBg,
             borderBottom: `1px solid ${borderColour}`,
-            borderRadius: '3px 3px 0 0',
+            borderRadius: `${3 / zoom}px ${3 / zoom}px 0 0`,
             fontSize: '8px',
             fontWeight: 600,
             color: 'var(--text-primary)',

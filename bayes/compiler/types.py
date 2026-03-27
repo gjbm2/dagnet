@@ -71,6 +71,7 @@ class EdgeTopology:
     onset_delta_days: float = 0.0
     mu_prior: float = 0.0         # derived from lag summaries
     sigma_prior: float = 0.5      # derived from lag summaries
+    t95_days: float | None = None  # from stats pass: onset + exp(mu + 1.645*sigma)
 
     # Bayesian prior reset flag (doc 19): when True, compiler ignores
     # previous bayesian posterior and falls back to analytic-derived priors.
@@ -236,6 +237,7 @@ class LatencyPrior:
     sigma: float = 0.5
     onset_uncertainty: float = 1.0   # sigma for histogram soft observation
     source: str = "lag_summary"   # "lag_summary" | "param_file" | "default"
+    onset_observations: list[float] | None = None  # per-retrieval-date onset values from Amplitude histograms
 
 
 @dataclass

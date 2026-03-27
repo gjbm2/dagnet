@@ -250,7 +250,7 @@ while true; do
             pct=$(echo "$last_line" | grep -oP '\[\s*\K\d+(?=%)' || echo "?")
             elapsed=$(echo "$last_line" | grep -oP '\d+\.\ds' || echo "?")
             stage=$(echo "$last_line" | grep -oP '(compiling|sampling|summarising|startup)' || echo "?")
-            detail=$(echo "$last_line" | sed 's/.*: //')
+            detail=$(echo "$last_line" | sed 's/[^:]*: //')
         else
             pct="?"
             elapsed="?"
@@ -285,40 +285,34 @@ while true; do
     clear
     echo -e "$frame"
 
-    # ── 4. Check for new graphs and auto-rebuild ──
-    # If new harness log files appeared since launch, rebuild the monitor
-    # to add tail panes for them.
-    _cur_graphs=()
+    # ── 4. Absorb new graphs into the status display ──
+    # If new harness log files or recovery graph entries appeared since
+    # launch, add them to the initial set so they show up in the job
+    # table above. We do NOT rebuild/exec — that kills the tmux session.
+    # The tail panes stay fixed (showing the original set); the user can
+    # Ctrl-b R to rebuild if they want new tail panes.
+    _new_found=0
     for f in /tmp/bayes_harness-*.log; do
         [[ -f "$f" && -s "$f" ]] || continue
         _gname=$(basename "$f" .log)
         _gname="${_gname#bayes_harness-}"
-        _glock="/tmp/bayes-harness-${_gname}.lock"
-        if [[ -f "$_glock" ]] && lock_alive "$_glock"; then
-            _cur_graphs+=("$_gname")
+        if ! grep -qxF "$_gname" /tmp/_bayes_monitor_initial_graphs 2>/dev/null; then
+            echo "$_gname" >> /tmp/_bayes_monitor_initial_graphs
+            _new_found=$((_new_found + 1))
         fi
     done
-    # Also check the runner's graph list
     if [[ -f /tmp/bayes_recovery_graphs ]]; then
         while IFS= read -r _rg; do
             [[ -n "$_rg" ]] || continue
-            _found=0
-            for _cg in "${_cur_graphs[@]}"; do
-                [[ "$_cg" == "$_rg" ]] && _found=1 && break
-            done
-            [[ $_found -eq 0 ]] && _cur_graphs+=("$_rg")
+            if ! grep -qxF "$_rg" /tmp/_bayes_monitor_initial_graphs 2>/dev/null; then
+                echo "$_rg" >> /tmp/_bayes_monitor_initial_graphs
+                _new_found=$((_new_found + 1))
+            fi
         done < /tmp/bayes_recovery_graphs
     fi
-
-    # Compare against initial set — if new graphs appeared, trigger rebuild
-    if [[ -f /tmp/_bayes_monitor_initial_graphs ]]; then
-        for _cg in "${_cur_graphs[@]}"; do
-            if ! grep -qxF "$_cg" /tmp/_bayes_monitor_initial_graphs 2>/dev/null; then
-                echo "  New graph detected: $_cg — rebuilding monitor..."
-                sleep 1
-                exec bash "${REPO_ROOT}/scripts/bayes-monitor.sh"
-            fi
-        done
+    if [[ $_new_found -gt 0 ]]; then
+        echo "  ${_new_found} new graph(s) detected — added to status display."
+        echo "  Press Ctrl-b R to rebuild tail panes."
     fi
 
     sleep 4

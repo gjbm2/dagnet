@@ -28,20 +28,26 @@ def run_inference(
     model,
     config: SamplingConfig | None = None,
     report_progress=None,
+    phase_label: str = "",
 ):
-    """Run NUTS sampling via nutpie. Returns (InferenceData, QualityMetrics)."""
+    """Run NUTS sampling via nutpie. Returns (InferenceData, QualityMetrics).
+
+    phase_label: e.g. "Phase 1" or "Phase 2", prefixed to progress messages.
+    """
     import pymc as pm
     import arviz as az
 
     if config is None:
         config = SamplingConfig()
 
+    prefix = f"{phase_label}: " if phase_label else ""
+
     if report_progress:
-        report_progress("sampling", 0, "Starting MCMC (nutpie)…")
+        report_progress("sampling", 0, f"{prefix}Starting MCMC (nutpie)…")
 
     try:
         import nutpie  # noqa: F401
-        trace = _sample_nutpie(model, config, report_progress)
+        trace = _sample_nutpie(model, config, report_progress, phase_label=phase_label)
     except ImportError:
         # Fallback: PyMC native NUTS (no nutpie installed)
         use_callback = report_progress is not None
@@ -57,7 +63,7 @@ def run_inference(
                 phase = "tuning" if draw.tuning else "sampling"
                 report_progress(
                     "sampling", pct,
-                    f"{config.chains} chains {phase}",
+                    f"{prefix}{config.chains} chains {phase}",
                 )
 
         with model:
@@ -74,7 +80,7 @@ def run_inference(
             )
 
     if report_progress:
-        report_progress("summarising", 100, "Computing diagnostics…")
+        report_progress("summarising", 100, f"{prefix}Computing diagnostics…")
 
     # Convergence diagnostics
     rhat_ds = az.rhat(trace)
@@ -534,7 +540,8 @@ _NUTPIE_PROGRESS_TEMPLATE = (
 )
 
 
-def _sample_nutpie(model, config: SamplingConfig, report_progress=None):
+def _sample_nutpie(model, config: SamplingConfig, report_progress=None,
+                   phase_label: str = ""):
     """Sample via nutpie directly, with real progress reporting.
 
     Calls nutpie.compile_pymc_model + nutpie.sample instead of going through
@@ -556,6 +563,8 @@ def _sample_nutpie(model, config: SamplingConfig, report_progress=None):
 
     import threading
 
+    prefix = f"{phase_label}: " if phase_label else ""
+
     # Heartbeat thread: reports elapsed time during both compilation and
     # sampling.  Once the Rust template_callback starts firing with real
     # draw counts, the heartbeat goes quiet.
@@ -573,19 +582,19 @@ def _sample_nutpie(model, config: SamplingConfig, report_progress=None):
                 if not sampling_started.is_set():
                     report_progress(
                         "compiling", 0,
-                        f"Compiling model… {elapsed:.0f}s",
+                        f"{prefix}Compiling model… {elapsed:.0f}s",
                     )
                 # Once sampling_started is set, the Rust callback handles it.
 
         hb_thread = threading.Thread(target=_heartbeat, daemon=True)
         hb_thread.start()
-        report_progress("compiling", 0, "Compiling model…")
+        report_progress("compiling", 0, f"{prefix}Compiling model…")
 
     compiled_model = nutpie.compile_pymc_model(model)
     t_sampling_start = time.time()
 
     if report_progress:
-        report_progress("sampling", 0, "Starting sampler…")
+        report_progress("sampling", 0, f"{prefix}Starting sampler…")
 
     sample_kwargs = dict(
         draws=config.draws,
@@ -616,11 +625,11 @@ def _sample_nutpie(model, config: SamplingConfig, report_progress=None):
                 pct = int(100 * done / total) if total > 0 else 0
 
                 if pct >= 100:
-                    detail = "Finalising…"
+                    detail = f"{prefix}Finalising…"
                 elif nutpie_eta and nutpie_eta != "now":
-                    detail = f"Sampling — {nutpie_eta} remaining"
+                    detail = f"{prefix}Sampling — {nutpie_eta} remaining"
                 else:
-                    detail = "Sampling…"
+                    detail = f"{prefix}Sampling…"
 
                 report_progress("sampling", pct, detail)
             except Exception as exc:
@@ -658,7 +667,8 @@ def _sample_nutpie(model, config: SamplingConfig, report_progress=None):
                 _orig_on_progress(formatted)
                 # Also print to stdout so it appears in Modal logs
                 elapsed_total = time.time() - t_phase_start
-                print(f"[nutpie] {pct}% ({done}/{total}) "
+                phase_tag = f" {phase_label}" if phase_label else ""
+                print(f"[nutpie{phase_tag}] {pct}% ({done}/{total}) "
                       f"elapsed={elapsed_total:.0f}s eta={parts[2].strip()}",
                       flush=True)
 
@@ -692,7 +702,8 @@ def _sample_nutpie(model, config: SamplingConfig, report_progress=None):
             cores = min(config.chains, cores)
 
         compile_ms = int((time.time() - t_phase_start) * 1000)
-        print(f"[nutpie] cores={cores}, os.cpu_count={os.cpu_count()}, "
+        phase_tag = f" {phase_label}" if phase_label else ""
+        print(f"[nutpie{phase_tag}] cores={cores}, os.cpu_count={os.cpu_count()}, "
               f"chains={config.chains}, draws={config.draws}, tune={config.tune}, "
               f"compile={compile_ms}ms", flush=True)
 

@@ -1005,7 +1005,7 @@ function CanvasAnalysisNodeInner({ data, selected, dragging }: NodeProps<CanvasA
                 position: 'absolute', left: ghostLeft, top: ghostTop,
                 width: analysis.width, height: analysis.height,
                 border: '1.5px dashed var(--canvas-analysis-border, rgba(0,0,0,0.12))',
-                borderRadius: 8,
+                borderRadius: 8 / zoom,
                 pointerEvents: 'none',
                 transformOrigin: `${originY} ${originX}`,
               }}
@@ -1047,7 +1047,7 @@ function CanvasAnalysisNodeInner({ data, selected, dragging }: NodeProps<CanvasA
               ? `6px solid ${contentItem.display?.subject_overlay_colour || '#3b82f6'}${selected ? '1a' : '0d'}`
               : 'none',
             outlineOffset: -1,
-            borderRadius: 8,
+            borderRadius: 8 / zoom,
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
@@ -1101,7 +1101,7 @@ function CanvasAnalysisNodeInner({ data, selected, dragging }: NodeProps<CanvasA
     <div style={{
       position: 'absolute', inset: 0,
       border: '1.5px dashed var(--canvas-analysis-border, rgba(0,0,0,0.12))',
-      borderRadius: 8,
+      borderRadius: 8 / zoom,
       opacity: cornerHint ? 0.8 : 0,
       transition: cornerHint
         ? 'opacity 300ms ease 200ms'
@@ -1128,7 +1128,7 @@ function CanvasAnalysisNodeInner({ data, selected, dragging }: NodeProps<CanvasA
           ? `12px solid ${contentItem.display?.subject_overlay_colour || '#3b82f6'}${selected ? '1a' : '0d'}`
           : 'none',
         outlineOffset: -1,
-        borderRadius: 8,
+        borderRadius: 8 / zoom,
         overflow: 'hidden',
         display: 'flex',
         flexDirection: 'column',
@@ -1150,7 +1150,7 @@ function CanvasAnalysisNodeInner({ data, selected, dragging }: NodeProps<CanvasA
         onResize={handleResize}
         onResizeEnd={handleResizeEnd}
         lineStyle={{ display: 'none' }}
-        handleStyle={{ width: 8 / zoom, height: 8 / zoom, borderRadius: 2, backgroundColor: '#3b82f6', border: '1px solid var(--bg-primary)' }}
+        handleStyle={{ width: 8 / zoom, height: 8 / zoom, borderRadius: 2 / zoom, backgroundColor: '#3b82f6', border: '1px solid var(--bg-primary)' }}
       />
 
       {selected && (

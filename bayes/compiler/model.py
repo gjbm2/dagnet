@@ -121,10 +121,33 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
                     )
 
                     onset_vars[edge_id] = onset_var
-                    diagnostics.append(
-                        f"  onset: {edge_id[:8]}… histogram={lp.onset_delta_days:.1f}d "
-                        f"(±{lp.onset_uncertainty:.1f}) → latent (independent)"
-                    )
+
+                    # Per-retrieval onset observations from Amplitude histograms.
+                    # Each observation is the 1% mass point of the lag histogram
+                    # for one retrieval date. This is systematically above the
+                    # model onset (CDF shift) by ~exp(mu + z_0.01 * sigma), but
+                    # sigma_obs absorbs that gap. See journal 26-Mar-26.
+                    onset_obs = getattr(lp, 'onset_observations', None)
+                    if onset_obs and len(onset_obs) >= 3:
+                        onset_obs_np = np.array(onset_obs, dtype=np.float64)
+                        sigma_obs = max(float(np.std(onset_obs_np)), 1.0)
+                        pm.Normal(
+                            f"onset_obs_{safe_id}",
+                            mu=onset_var,
+                            sigma=sigma_obs,
+                            observed=onset_obs_np,
+                        )
+                        diagnostics.append(
+                            f"  onset: {edge_id[:8]}… histogram={lp.onset_delta_days:.1f}d "
+                            f"(±{lp.onset_uncertainty:.1f}) → latent (independent) "
+                            f"+ {len(onset_obs)} Amplitude obs (mean={np.mean(onset_obs_np):.1f}d, "
+                            f"σ_obs={sigma_obs:.1f}d)"
+                        )
+                    else:
+                        diagnostics.append(
+                            f"  onset: {edge_id[:8]}… histogram={lp.onset_delta_days:.1f}d "
+                            f"(±{lp.onset_uncertainty:.1f}) → latent (independent)"
+                        )
 
         # --- Branch group Dirichlet priors (Phase B) ---
         # Emit Dirichlet per branch group. Each sibling gets a component;
@@ -208,8 +231,6 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
                         sigma=max(0.5, sigma_prior),
                     )
                     # sigma_base ~ Gamma with mode at observed dispersion.
-                    # NOT HalfNormal (mode at 0 biases sigma toward zero,
-                    # making the CDF too steep — see doc 6 §Latency model).
                     from .completeness import gamma_params_from_mode
                     gamma_a, gamma_b = gamma_params_from_mode(
                         max(sigma_prior, 0.1), spread=0.5,
@@ -224,7 +245,26 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
                         f"sigma_prior={sigma_prior:.3f} → latent"
                     )
 
-
+                    # t95 soft constraint from analytics pass / user horizon.
+                    # t95 = onset + exp(mu + 1.645 * sigma). Derived from the
+                    # same Amplitude histograms that give us onset, mu, sigma.
+                    # Constrains the joint (onset, mu, sigma) space to prevent
+                    # sigma inflation → t95 = 250d nonsense.
+                    # See journal 27-Mar-26 "Per-retrieval onset observations".
+                    if et.t95_days is not None and edge_id in onset_vars:
+                        t95_analytic = float(et.t95_days)
+                        t95_model = onset_vars[edge_id] + pt.exp(mu_var + 1.645 * sigma_var)
+                        sigma_t95 = max(t95_analytic * 0.2, 2.0)
+                        pm.Normal(
+                            f"t95_obs_{safe_id}",
+                            mu=t95_model,
+                            sigma=sigma_t95,
+                            observed=np.float64(t95_analytic),
+                        )
+                        diagnostics.append(
+                            f"  t95: {edge_id[:8]}… analytic={t95_analytic:.1f}d "
+                            f"(σ_t95={sigma_t95:.1f}d) → soft constraint"
+                        )
 
         # --- Cohort-level latency variables (Phase D step 2.5) ---
         if not feat_cohort_latency:
@@ -281,9 +321,11 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
             if is_phase2:
                 # Phase 2: wide independent priors centred on frozen values.
                 onset_prior_val = float(onset_prior) if not hasattr(onset_prior, 'eval') else float(onset_prior.eval())
-                onset_cohort = pm.HalfNormal(
+                # Onset centred on frozen value via softplus(Normal).
+                eps_onset_cohort = pm.Normal(f"eps_onset_cohort_{safe_id}", mu=0, sigma=1)
+                onset_cohort = pm.Deterministic(
                     f"onset_cohort_{safe_id}",
-                    sigma=max(onset_prior_val, 2.0),
+                    pt.softplus(onset_prior_val + eps_onset_cohort * max(onset_prior_val * 0.3, 1.0)),
                 )
                 mu_prior_val = float(mu_path_composed) if not hasattr(mu_path_composed, 'eval') else float(mu_path_composed.eval())
                 mu_cohort = pm.Normal(
@@ -678,10 +720,13 @@ def _emit_window_likelihoods(
     diagnostics: list[str],
     kappa=None,
 ) -> None:
-    """Emit BetaBinomial likelihoods for window observations (solo edges only).
+    """Emit Binomial likelihoods for window observations (solo edges only).
 
-    BetaBinomial(n, α=p·κ, β=(1-p)·κ) generalises Binomial to allow
-    overdispersion (day-to-day rate variation beyond Binomial noise).
+    Plain Binomial — no overdispersion. BetaBinomial with small kappa has
+    the same concentration-dependent p bias as the DM (gammaln terms with
+    alpha = kappa × p create monotonic upward pressure on p). Binomial
+    avoids this entirely. See journal 26-Mar-26 "Replace DM with textbook
+    Binomial".
     """
     import pymc as pm
 
@@ -690,11 +735,10 @@ def _emit_window_likelihoods(
             continue
         suffix = f"_{i}" if len(ev.window_obs) > 1 else ""
         p_effective = pm.math.clip(p_var * w_obs.completeness, 0.001, 0.999)
-        pm.BetaBinomial(
+        pm.Binomial(
             f"obs_w_{safe_id}{suffix}",
             n=w_obs.n,
-            alpha=p_effective * kappa,
-            beta=(1.0 - p_effective) * kappa,
+            p=p_effective,
             observed=min(w_obs.k, w_obs.n),
         )
 
@@ -781,10 +825,23 @@ def _emit_cohort_likelihoods(
                 # else: Phase 2 — skip window trajectories entirely
             else:
                 cohort_trajs.append(traj)
-        # Only include WINDOW daily obs in the BetaBinomial when
-        # p_window_var is set (Phase 1). Phase 2 skips window data.
-        if c_obs.daily and "window" in c_obs.slice_dsl and p_window_var is not None:
-            all_daily.extend(c_obs.daily)
+        # Phase 1: include WINDOW daily obs in BetaBinomial.
+        # Phase 2: include COHORT daily obs ONLY for first-edge
+        # (where anchor = from_node, so n = x and edge p = path p).
+        # Downstream cohort daily obs have anchor denominators —
+        # can't use per-edge BetaBinomial without path product.
+        if c_obs.daily:
+            if p_window_var is not None and "window" in c_obs.slice_dsl:
+                all_daily.extend(c_obs.daily)
+            elif p_window_var is None and "cohort" in c_obs.slice_dsl:
+                # Phase 2: cohort daily obs for first-edge only.
+                # First edge: n = x = a, so BetaBinomial with edge p.
+                # Downstream: n is mixed (some x, some a) — can't use
+                # BetaBinomial safely. Downstream edges are constrained
+                # indirectly through path products in latency edge DMs.
+                et_topo = topology.edges.get(ev.edge_id) if topology else None
+                if et_topo and len(et_topo.path_edge_ids) <= 1:
+                    all_daily.extend(c_obs.daily)
 
     # --- Emit trajectory Potentials ---
     # See doc 6 § "pm.Potential vectorisation" and § "Phase D: latent latency".
@@ -806,7 +863,28 @@ def _emit_cohort_likelihoods(
         is_mixture = False  # set True for join-downstream cohort
         mixture_components = []  # list of (p_alt, onset_alt, mu_alt, sigma_alt)
 
-        if obs_type == "window":
+        # Phase 2 cohort: use edge p directly with x (from-node count)
+        # as denominator instead of path product with a (anchor count).
+        # This avoids the DM bias toward higher p when a >> y (low
+        # conversion edges). See doc 23 §10.
+        phase2_cohort_use_x = (p_window_var is None and obs_type == "cohort")
+
+        if phase2_cohort_use_x:
+            # Phase 2: edge p directly, x denominator.
+            # Rewrite trajectories to use cumulative_x[-1] as n.
+            p_expr = p_var
+            rewritten_trajs = []
+            for traj in trajs:
+                cx = getattr(traj, 'cumulative_x', None)
+                if cx and len(cx) > 0 and cx[-1] > 0:
+                    # Replace n with x_final (from-node count)
+                    import copy
+                    t2 = copy.copy(traj)
+                    t2.n = cx[-1]
+                    rewritten_trajs.append(t2)
+                # else: skip trajectories without cumulative_x
+            trajs = rewritten_trajs
+        elif obs_type == "window":
             p_expr = p_window_var if p_window_var is not None else p_var
         else:
             # Check for join-node mixture (multiple path alternatives)
@@ -923,34 +1001,28 @@ def _emit_cohort_likelihoods(
                             (ev.latency_prior.onset_delta_days or 0) > 0)))
 
         if has_latent_latency:
-            # Phase D: CDFs are PyTensor expressions of latent (mu, sigma).
+            # Textbook product-of-conditional-Binomials (Gamel et al. 2000;
+            # Yu et al. 2004). See journal 26-Mar-26 "Replace DM with
+            # textbook Binomial likelihood".
             #
-            # Dirichlet-Multinomial logp per trajectory-day:
-            #   Σ_i [logΓ(count_i + κ·prob_i) − logΓ(κ·prob_i)]
-            #   + logΓ(κ) − logΓ(n + κ)
+            # For each interval j:
+            #   q_j = p × ΔF_j / (1 − p × F_{j−1})     (conditional hazard)
+            #   d_j ~ Binomial(n_j, q_j)
             #
-            # For single-path edges:
-            #   prob_i = p·cdf_coeff_i (intervals) or 1−p·CDF_final (remainder)
+            # log L_j = d_j × log(q_j) + (n_j − d_j) × log(1 − q_j)
             #
-            # For join-downstream edges (mixture):
-            #   prob_i = Σ_alt [p_alt · cdf_coeff_alt_i]
-            #   remainder = 1 − Σ_alt [p_alt · CDF_alt_final]
-            #   Each alternative has its own p (product of edge p's along
-            #   that path) and its own CDF (FW-composed latency along that
-            #   path). Gradients flow to ALL path parameters through the sum.
+            # No concentration parameters. No DM. No κ needed for this term.
+            # The Binomial has no artificial bias mechanism — conversion and
+            # survival terms naturally balance.
 
-            # Step 1: Flatten all ages into one array (numpy)
+            # Step 1: Flatten ages and compute CDF
             all_ages_raw = []
             for traj in trajs:
                 all_ages_raw.extend(traj.retrieval_ages)
             ages_raw_np = np.array(all_ages_raw, dtype=np.float64)
             ages_tensor = pt.as_tensor_variable(ages_raw_np)
 
-            # Step 2: Compute CDF at all ages.
-            # For mixture: compute one CDF per alternative and weight by p_alt.
-            # For single-path: compute one CDF (existing behaviour).
             def _compute_cdf_at_ages(onset_val, mu_val, sigma_val):
-                """Compute shifted lognormal CDF at all flattened ages."""
                 onset_is_latent = hasattr(onset_val, 'name')
                 if onset_is_latent:
                     age_minus_onset = ages_tensor - onset_val
@@ -963,138 +1035,112 @@ def _emit_cohort_likelihoods(
                 return 0.5 * pt.erfc(-z)
 
             if is_mixture:
-                # Mixture CDF: Σ_alt [p_alt × CDF_alt(t)]
-                # This is the "effective p×CDF" — already includes p weighting.
+                # Mixture: product-of-conditional-Binomials with
+                # p_cdf_sum = Σ_alt p_alt × CDF_alt(t) as the population
+                # cumulative incidence. Conditional hazard at interval j:
+                #   q_j = (p_cdf_sum(t_j) − p_cdf_sum(t_{j−1})) /
+                #         (1 − p_cdf_sum(t_{j−1}))
                 p_cdf_sum = pt.zeros_like(ages_tensor)
                 for p_alt, onset_alt, mu_alt, sigma_alt in mixture_components:
                     if mu_alt is not None:
                         cdf_alt = _compute_cdf_at_ages(onset_alt, mu_alt, sigma_alt)
                     else:
-                        # Non-latency path: CDF = 1.0 at all ages
                         cdf_alt = pt.ones_like(ages_tensor)
                     p_cdf_sum = p_cdf_sum + p_alt * cdf_alt
-                # p_cdf_sum shape: (N,) — weighted mixture of CDFs
-            else:
-                cdf_all = _compute_cdf_at_ages(onset, mu_var, sigma_var)
 
-            # Step 3: Build index arrays and INTEGER counts (numpy)
-            curr_indices = []
-            prev_indices = []
-            interval_counts = []    # unweighted integer counts
-            interval_weights = []   # per-element recency weight
-            remainder_indices = []
-            remainder_counts_list = []
-            remainder_weights = []
-            n_per_traj = []
+                interval_d, interval_n_at_risk, interval_weights = [], [], []
+                curr_indices, prev_indices = [], []
+                age_offset = 0
+                for traj in trajs:
+                    n_ages = len(traj.retrieval_ages)
+                    cum_y = traj.cumulative_y
+                    w = getattr(traj, 'recency_weight', 1.0)
+                    for j in range(n_ages):
+                        d_j = float(cum_y[0]) if j == 0 else float(max(0, cum_y[j] - cum_y[j-1]))
+                        n_j = float(traj.n) if j == 0 else float(max(0, traj.n - cum_y[j-1]))
+                        interval_d.append(d_j)
+                        interval_n_at_risk.append(n_j)
+                        interval_weights.append(w)
+                        curr_indices.append(age_offset + j)
+                        prev_indices.append(age_offset + j - 1 if j > 0 else -1)
+                    age_offset += n_ages
 
-            age_offset = 0
-            for traj in trajs:
-                n_ages = len(traj.retrieval_ages)
-                cum_y = traj.cumulative_y
-                w = getattr(traj, 'recency_weight', 1.0)
+                d_np = np.array(interval_d, dtype=np.float64)
+                n_at_risk_np = np.array(interval_n_at_risk, dtype=np.float64)
+                weights_np = np.array(interval_weights, dtype=np.float64)
+                curr_idx_np = np.array(curr_indices, dtype=np.int64)
+                prev_idx_np = np.array(prev_indices, dtype=np.int64)
+                prev_safe = np.where(prev_idx_np >= 0, prev_idx_np, 0)
+                is_first = (prev_idx_np < 0).astype(np.float64)
 
-                # First interval
-                curr_indices.append(age_offset)
-                prev_indices.append(-1)
-                interval_counts.append(float(cum_y[0]))
-                interval_weights.append(w)
-
-                # Subsequent intervals
-                for j in range(1, n_ages):
-                    curr_indices.append(age_offset + j)
-                    prev_indices.append(age_offset + j - 1)
-                    interval_counts.append(float(max(0, cum_y[j] - cum_y[j - 1])))
-                    interval_weights.append(w)
-
-                # Remainder
-                remainder_indices.append(age_offset + n_ages - 1)
-                remainder_counts_list.append(float(max(0, traj.n - cum_y[-1])))
-                remainder_weights.append(w)
-                n_per_traj.append(float(traj.n))
-
-                age_offset += n_ages
-
-            # Step 4: Compute interval probabilities via advanced indexing
-            curr_idx_np = np.array(curr_indices, dtype=np.int64)
-            prev_idx_np = np.array(prev_indices, dtype=np.int64)
-            counts_np = np.array(interval_counts, dtype=np.float64)
-            weights_np = np.array(interval_weights, dtype=np.float64)
-            prev_safe = np.where(prev_idx_np >= 0, prev_idx_np, 0)
-            is_first = pt.as_tensor_variable((prev_idx_np < 0).astype(np.float64))
-
-            if is_mixture:
-                # Mixture: interval prob = Σ_alt [p_alt × ΔCDF_alt]
-                # p_cdf_sum already has the weighted sum at each age point
                 pcdf_curr = p_cdf_sum[curr_idx_np]
                 pcdf_prev = p_cdf_sum[prev_safe]
-                # interval_pcdf = p_cdf(t_i) - p_cdf(t_{i-1})
-                interval_pcdf = pcdf_curr - pcdf_prev * (1.0 - is_first)
-                interval_pcdf = _soft_floor(interval_pcdf)
+                # ΔpCDF: p_cdf_sum(t_j) − p_cdf_sum(t_{j−1}), or p_cdf_sum(t_0) for first
+                delta_pcdf = pcdf_curr - pcdf_prev * (1.0 - is_first)
+                # Survival at start of interval: 1 − p_cdf_sum(t_{j−1})
+                surv_prev = 1.0 - pcdf_prev * (1.0 - is_first)
+                surv_prev = pt.maximum(surv_prev, 1e-10)
+                # Conditional hazard
+                q_j = pt.clip(delta_pcdf / surv_prev, 1e-10, 1.0 - 1e-10)
 
-                # α_i = κ · interval_pcdf  (p is already folded into p_cdf_sum)
-                alpha_interval = kappa * interval_pcdf
+                logp = pt.sum(weights_np * (
+                    d_np * pt.log(q_j) + (n_at_risk_np - d_np) * pt.log(1.0 - q_j)
+                ))
             else:
-                # Single path: interval prob = p × ΔCDF
+                # Single-path: product-of-conditional-Binomials.
+                cdf_all = _compute_cdf_at_ages(onset, mu_var, sigma_var)
+
+                interval_d, interval_n_at_risk, interval_weights = [], [], []
+                curr_indices, prev_indices = [], []
+                age_offset = 0
+                for traj in trajs:
+                    n_ages = len(traj.retrieval_ages)
+                    cum_y = traj.cumulative_y
+                    w = getattr(traj, 'recency_weight', 1.0)
+                    for j in range(n_ages):
+                        d_j = float(cum_y[0]) if j == 0 else float(max(0, cum_y[j] - cum_y[j-1]))
+                        n_j = float(traj.n) if j == 0 else float(max(0, traj.n - cum_y[j-1]))
+                        interval_d.append(d_j)
+                        interval_n_at_risk.append(n_j)
+                        interval_weights.append(w)
+                        curr_indices.append(age_offset + j)
+                        prev_indices.append(age_offset + j - 1 if j > 0 else -1)
+                    age_offset += n_ages
+
+                d_np = np.array(interval_d, dtype=np.float64)
+                n_at_risk_np = np.array(interval_n_at_risk, dtype=np.float64)
+                weights_np = np.array(interval_weights, dtype=np.float64)
+                curr_idx_np = np.array(curr_indices, dtype=np.int64)
+                prev_idx_np = np.array(prev_indices, dtype=np.int64)
+                prev_safe = np.where(prev_idx_np >= 0, prev_idx_np, 0)
+                is_first = (prev_idx_np < 0).astype(np.float64)
+
                 cdf_curr = cdf_all[curr_idx_np]
                 cdf_prev = cdf_all[prev_safe]
-                cdf_coeffs = cdf_curr - cdf_prev * (1.0 - is_first)
-                cdf_coeffs = _soft_floor(cdf_coeffs)
-                alpha_interval = kappa * p_expr * cdf_coeffs
+                # ΔF: CDF(t_j) − CDF(t_{j−1})
+                delta_F = cdf_curr - cdf_prev * (1.0 - is_first)
+                delta_F = pt.maximum(delta_F, 1e-15)
+                # Survival at start of interval: 1 − p × CDF(t_{j−1})
+                F_prev = cdf_prev * (1.0 - is_first)
+                surv_prev = 1.0 - p_expr * F_prev
+                surv_prev = pt.maximum(surv_prev, 1e-10)
+                # Conditional hazard: q_j = p × ΔF / (1 − p × F_{j−1})
+                q_j = pt.clip(p_expr * delta_F / surv_prev, 1e-10, 1.0 - 1e-10)
 
-            # Step 5: Dirichlet-Multinomial logp — interval terms
-            alpha_interval = _soft_floor(alpha_interval)
-            logp_intervals = pt.sum(
-                weights_np * (pt.gammaln(counts_np + alpha_interval)
-                              - pt.gammaln(alpha_interval))
-            )
+                logp = pt.sum(weights_np * (
+                    d_np * pt.log(q_j) + (n_at_risk_np - d_np) * pt.log(1.0 - q_j)
+                ))
 
-            # Step 6: DM logp — remainder terms
-            #
-            # The remainder alpha must absorb ALL non-event CDF mass,
-            # including any zero-count intervals that were filtered out
-            # by the evidence binder. By the DM aggregation property,
-            # α_R = κ - Σ(kept interval alphas) per trajectory.
-            # This ensures Σα = κ regardless of which bins were kept.
-            rem_idx_np = np.array(remainder_indices, dtype=np.int64)
-            rem_counts_np = np.array(remainder_counts_list, dtype=np.float64)
-            rem_weights_np = np.array(remainder_weights, dtype=np.float64)
-
-            if is_mixture:
-                pcdf_finals = p_cdf_sum[rem_idx_np]
-                alpha_remainder = kappa * (1.0 - pcdf_finals)
-            else:
-                cdf_finals = cdf_all[rem_idx_np]
-                alpha_remainder = kappa * (1.0 - p_expr * cdf_finals)
-
-            alpha_remainder = _soft_floor(alpha_remainder)
-            logp_remainders = pt.sum(
-                rem_weights_np * (pt.gammaln(rem_counts_np + alpha_remainder)
-                                  - pt.gammaln(alpha_remainder))
-            )
-
-            # Step 7: DM logp — per-trajectory normalisation
-            n_per_traj_np = np.array(n_per_traj, dtype=np.float64)
-            traj_weights_np = np.array(
-                [getattr(t, 'recency_weight', 1.0) for t in trajs],
-                dtype=np.float64,
-            )
-            logp_norm = pt.sum(
-                traj_weights_np * (pt.gammaln(kappa) - pt.gammaln(n_per_traj_np + kappa))
-            )
-
-            logp = logp_intervals + logp_remainders + logp_norm
             n_terms = len(trajs)
 
         else:
-            # Phase S: fixed CDFs — Dirichlet-Multinomial with constant
-            # CDF coefficients. Only κ and p flow through as PyTensor.
-            interval_counts = []
-            interval_alphas = []   # κ · p · cdf_coeff (p is PyTensor, rest constant)
+            # Fixed CDFs: product-of-conditional-Binomials with precomputed
+            # CDF values. Only p flows through as a PyTensor variable.
+            interval_d = []
+            interval_n_at_risk = []
+            interval_cdf_curr = []
+            interval_cdf_prev = []
             interval_weights = []
-            remainder_counts = []
-            remainder_cdf_finals = []
-            remainder_weights = []
-            n_per_traj = []
 
             for traj in trajs:
                 cum_y = traj.cumulative_y
@@ -1106,51 +1152,29 @@ def _emit_cohort_likelihoods(
                 else:
                     cdf_vals = [1.0] * len(traj.retrieval_ages)
 
-                # First interval
-                interval_counts.append(float(cum_y[0]))
-                interval_alphas.append(max(cdf_vals[0], 1e-15))
-                interval_weights.append(w)
-
-                # Subsequent intervals
-                for j in range(1, len(cum_y)):
-                    interval_counts.append(float(max(0, cum_y[j] - cum_y[j - 1])))
-                    interval_alphas.append(max(cdf_vals[j] - cdf_vals[j - 1], 1e-15))
+                for j in range(len(cum_y)):
+                    d_j = float(cum_y[0]) if j == 0 else float(max(0, cum_y[j] - cum_y[j-1]))
+                    n_j = float(traj.n) if j == 0 else float(max(0, traj.n - cum_y[j-1]))
+                    interval_d.append(d_j)
+                    interval_n_at_risk.append(n_j)
+                    interval_cdf_curr.append(cdf_vals[j])
+                    interval_cdf_prev.append(cdf_vals[j-1] if j > 0 else 0.0)
                     interval_weights.append(w)
 
-                remainder_counts.append(float(max(0, traj.n - cum_y[-1])))
-                remainder_cdf_finals.append(min(cdf_vals[-1], 1.0 - 1e-10))
-                remainder_weights.append(w)
-                n_per_traj.append(float(traj.n))
-
-            counts_np = np.array(interval_counts, dtype=np.float64)
-            coeffs_np = np.array(interval_alphas, dtype=np.float64)
+            d_np = np.array(interval_d, dtype=np.float64)
+            n_at_risk_np = np.array(interval_n_at_risk, dtype=np.float64)
+            cdf_curr_np = np.array(interval_cdf_curr, dtype=np.float64)
+            cdf_prev_np = np.array(interval_cdf_prev, dtype=np.float64)
             weights_np = np.array(interval_weights, dtype=np.float64)
 
-            # α_interval = κ · p · cdf_coeff (cdf_coeff is constant)
-            alpha_interval = kappa * p_expr * pt.as_tensor_variable(coeffs_np)
-            alpha_interval = pt.maximum(alpha_interval, 1e-12)
-            logp_intervals = pt.sum(
-                weights_np * (pt.gammaln(counts_np + alpha_interval)
-                              - pt.gammaln(alpha_interval))
-            )
+            delta_F = pt.as_tensor_variable(np.maximum(cdf_curr_np - cdf_prev_np, 1e-15))
+            F_prev = pt.as_tensor_variable(cdf_prev_np)
+            surv_prev = pt.maximum(1.0 - p_expr * F_prev, 1e-10)
+            q_j = pt.clip(p_expr * delta_F / surv_prev, 1e-10, 1.0 - 1e-10)
 
-            rem_counts_np = np.array(remainder_counts, dtype=np.float64)
-            rem_cdf_np = np.array(remainder_cdf_finals, dtype=np.float64)
-            rem_weights_np = np.array(remainder_weights, dtype=np.float64)
-            alpha_remainder = kappa * (1.0 - p_expr * pt.as_tensor_variable(rem_cdf_np))
-            alpha_remainder = _soft_floor(alpha_remainder)
-            logp_remainders = pt.sum(
-                rem_weights_np * (pt.gammaln(rem_counts_np + alpha_remainder)
-                                  - pt.gammaln(alpha_remainder))
-            )
-
-            n_per_traj_np = np.array(n_per_traj, dtype=np.float64)
-            traj_weights_np = np.array(remainder_weights, dtype=np.float64)
-            logp_norm = pt.sum(
-                traj_weights_np * (pt.gammaln(kappa) - pt.gammaln(n_per_traj_np + kappa))
-            )
-
-            logp = logp_intervals + logp_remainders + logp_norm
+            logp = pt.sum(weights_np * (
+                d_np * pt.log(q_j) + (n_at_risk_np - d_np) * pt.log(1.0 - q_j)
+            ))
             n_terms = len(trajs)
 
         pm.Potential(f"traj_{obs_type}_{safe_id}", logp)
@@ -1161,13 +1185,17 @@ def _emit_cohort_likelihoods(
             f"p_type={'edge' if obs_type == 'window' else 'path'}{mixture_str}"
         )
 
-    # --- Single-retrieval days (BetaBinomial p-anchor) ---
-    # Daily BetaBinomials anchor p to the observed conversion rate,
+    # --- Single-retrieval days (Binomial p-anchor) ---
+    # Daily Binomials anchor p to the observed conversion rate,
     # preventing the p-latency tradeoff from drifting to degenerate
-    # modes (p≈1, mu→∞). Without them the trajectory Potentials let
-    # p and latency trade off freely.
+    # modes (p≈1, mu→∞). Plain Binomial — BetaBinomial with small kappa
+    # has the same concentration-dependent p bias as DM (gammaln terms
+    # with alpha = kappa × p monotonically increase in p). With kappa=3,
+    # the BB actually PREFERS higher p on low-conversion edges. Binomial
+    # provides 59 nats of correct signal vs 9.5 nats of wrong signal
+    # from BB. See journal 26-Mar-26.
     # Guard: skip when array is very small (≤3 days) — too few
-    # points to anchor p, and small BetaBinomial arrays trigger a
+    # points to anchor p, and small Binomial arrays trigger a
     # PyTensor composite rewrite bug (bool→float64 on shape≤2).
     if all_daily and len(all_daily) > 3:
         n_arr = np.array([d.n for d in all_daily], dtype=np.int64)
@@ -1182,11 +1210,10 @@ def _emit_cohort_likelihoods(
 
             p_effective = pm.math.clip(p_var * compl_arr, 0.001, 0.999)
 
-            pm.BetaBinomial(
+            pm.Binomial(
                 f"obs_daily_{safe_id}",
                 n=n_arr,
-                alpha=p_effective * kappa,
-                beta=(1.0 - p_effective) * kappa,
+                p=p_effective,
                 observed=k_arr,
             )
 
@@ -1295,10 +1322,11 @@ def _resolve_path_probability(
         # the window p variable. See journal 25-Mar-26.
         p_var = None
         safe_eid = _safe_var_name(eid)
-        if stop_p_gradient:
-            prefixes = ("p_cohort_", "p_base_", "p_")
-        else:
-            prefixes = ("p_window_", "p_base_", "p_")
+        # Search order depends on context:
+        # Phase 1 (stop_p_gradient=True, but cohort skipped): p_cohort_, p_base_, p_
+        # Phase 2 (stop_p_gradient=False): p_cohort_ first (Phase 2 variables)
+        # Phase 1 window: p_window_, p_base_, p_
+        prefixes = ("p_cohort_", "p_window_", "p_base_", "p_")
         for prefix in prefixes:
             candidate = f"{prefix}{safe_eid}"
             for rv in model.deterministics + model.free_RVs:

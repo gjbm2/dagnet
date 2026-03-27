@@ -56,9 +56,8 @@ import { captureTabScenariosToRecipe } from '../services/captureTabScenariosServ
 import { resolveAnalysisType } from '../services/analysisTypeResolutionService';
 import { mutateCanvasAnalysisGraph, deleteCanvasAnalysisFromGraph } from '../services/canvasAnalysisMutationService';
 import { getActiveContentTabIndex } from '../services/activeContentTabTracker';
-import { updateViewObjectState, createCanvasView, applyCanvasView, snapshotStates, deleteCanvasView, renameCanvasView, toggleCanvasViewLocked, toggleCanvasViewScope, snapshotScenarios, scopeEnabled } from '../services/canvasViewService';
+import { updateViewObjectState, createCanvasView, applyCanvasView, snapshotStates, deleteCanvasView, renameCanvasView, reorderCanvasViews, toggleCanvasViewLocked, toggleCanvasViewScope, snapshotScenarios, scopeEnabled } from '../services/canvasViewService';
 import { parseConstraints } from '../lib/queryDSL';
-import { windowFetchPlannerService } from '../services/windowFetchPlannerService';
 import { buildRehydrationPlan, finalisePlan } from '../services/scenarioRehydrationService';
 import { useDashboardMode } from '../hooks/useDashboardMode';
 import { useCopyPaste } from '../hooks/useCopyPaste';
@@ -339,8 +338,6 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
   // Get the store hook for direct .getState() access
   const graphStoreHook = useGraphStore();
   const graphStoreApi = useGraphStoreApi();
-  const setGraphRef = useRef(setGraph);
-  setGraphRef.current = setGraph;
   
   // Recompute edge widths when what-if DSL changes
   // Create a "version" to track changes in what-if state (for reactivity)
@@ -1473,7 +1470,6 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
       try {
       const g = graphRef.current;
       if (!g) return;
-      const previousDsl = graphStoreApi.getState().currentDSL;
       const myTab = tabId ? tabsRef.current.find(t => t.id === tabId) : undefined;
 
       // Save current state to the outgoing active view before switching (unless locked)
@@ -1549,19 +1545,8 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
         }
       }
 
-      // Fetch graph data if the DSL actually changed.
-      // Charts have their own fetch via regenerateScenario; this is for graph edge params.
-      const newDsl = graphStoreApi.getState().currentDSL;
-      if (newDsl && newDsl !== previousDsl) {
-        const fetchGraph = graphRef.current;
-        if (fetchGraph) {
-          windowFetchPlannerService.executeFetchPlan(
-            fetchGraph,
-            (updated) => { if (updated) setGraphRef.current(updated); },
-            newDsl
-          ).catch(err => console.warn('[handleApplyView] Fetch for new DSL failed:', err));
-        }
-      }
+      // Graph edge re-aggregation is handled reactively by useDSLReaggregation hook
+      // (mounted at GraphEditor level). Setting currentDSL above triggers it.
 
       // Rehydrate scenarios
       if (targetView && scopeEnabled(targetView.applyScenarios) && scenariosContextRef.current && tabId) {
@@ -1722,6 +1707,18 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
       setGraphDirect(next); graphRef.current = next;
     };
 
+    const handleReorderViews = (e: Event) => {
+      const { fromIndex, toIndex } = (e as CustomEvent).detail ?? {};
+      if (fromIndex == null || toIndex == null) return;
+      const g = graphRef.current;
+      if (!g) return;
+      const next = reorderCanvasViews(g, fromIndex, toIndex);
+      if (next === g) return; // no-op
+      if (next.metadata) next.metadata.updated_at = new Date().toISOString();
+      setGraphDirect(next); graphRef.current = next;
+      saveHistoryState('Reorder canvas views');
+    };
+
     const handleToggleLock = (e: Event) => {
       const viewId = (e as CustomEvent).detail?.viewId;
       if (!viewId) return;
@@ -1753,6 +1750,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
     window.addEventListener('dagnet:deactivateCanvasView', handleDeactivateView);
     window.addEventListener('dagnet:deleteCanvasView', handleDeleteView);
     window.addEventListener('dagnet:renameCanvasView', handleRenameView);
+    window.addEventListener('dagnet:reorderCanvasViews', handleReorderViews);
     window.addEventListener('dagnet:toggleCanvasViewLocked', handleToggleLock);
     window.addEventListener('dagnet:toggleCanvasViewScope', handleToggleScope);
     return () => {
@@ -1765,6 +1763,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
       window.removeEventListener('dagnet:deactivateCanvasView', handleDeactivateView);
       window.removeEventListener('dagnet:deleteCanvasView', handleDeleteView);
       window.removeEventListener('dagnet:renameCanvasView', handleRenameView);
+      window.removeEventListener('dagnet:reorderCanvasViews', handleReorderViews);
       window.removeEventListener('dagnet:toggleCanvasViewLocked', handleToggleLock);
       window.removeEventListener('dagnet:toggleCanvasViewScope', handleToggleScope);
     };
@@ -2661,6 +2660,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
         edgeTypes={edgeTypes}
         connectionMode={ConnectionMode.Loose}
         minZoom={0.1}
+        maxZoom={4}
         fitView
         selectionOnDrag={false}
         selectNodesOnDrag={false}

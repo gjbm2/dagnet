@@ -263,6 +263,21 @@ export function toggleCanvasViewScope(
   };
 }
 
+/** Reorder canvas views by moving a view from one index to another. */
+export function reorderCanvasViews(
+  graph: ConversionGraph,
+  fromIndex: number,
+  toIndex: number,
+): ConversionGraph {
+  const views = [...(graph.canvasViews ?? [])];
+  if (fromIndex < 0 || fromIndex >= views.length || toIndex < 0 || toIndex >= views.length || fromIndex === toIndex) {
+    return graph;
+  }
+  const [moved] = views.splice(fromIndex, 1);
+  views.splice(toIndex, 0, moved);
+  return { ...graph, canvasViews: views };
+}
+
 /** Rename a canvas view. */
 export function renameCanvasView(
   graph: ConversionGraph,

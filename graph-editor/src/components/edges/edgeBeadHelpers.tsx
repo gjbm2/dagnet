@@ -863,7 +863,7 @@ export function buildBeadDefinitions(
     },
     extractFromLayer: (layerId) => getEdgeLatencyForLayer(layerId, edge, graph, scenariosContext),
     buildLabel: BeadLabelBuilder.buildLatencyLabel,
-    backgroundColor: '#374151', // Dark grey
+    backgroundColor: '#000000',
     hasParameterConnection: false,
     isOverridden: hasAnyOverriddenFlag((edge as any).p?.latency),
     overrideTooltip: (() => {

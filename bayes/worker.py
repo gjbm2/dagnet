@@ -25,6 +25,42 @@ def _noop_progress(stage: str, pct: int, detail: str = "") -> None:
     pass
 
 
+class _ProgressMapper:
+    """Maps per-stage progress into a single monotonic 0-100 overall percentage.
+
+    Each pipeline step is assigned a band [lo, hi] of overall percentage.
+    Sampling steps (which report their own 0-100) are linearly interpolated
+    within their band. Non-sampling steps snap to the band's lo value.
+    "complete" always maps to 100.
+
+    Usage:
+        pm = _ProgressMapper(raw_callback)
+        pm.set_band(5, 15)          # next report() calls map to 5-15%
+        report = pm                  # pm is callable
+        report("compiling", 0, "…") # emits pct=5
+        pm.set_band(15, 55)
+        report("sampling", 50, "…") # emits pct=35  (midpoint of 15-55)
+    """
+
+    def __init__(self, raw_callback):
+        self._raw = raw_callback
+        self._lo = 0
+        self._hi = 100
+
+    def set_band(self, lo: int, hi: int) -> None:
+        self._lo = lo
+        self._hi = hi
+
+    def __call__(self, stage: str, pct: int, detail: str = "") -> None:
+        if stage == "complete":
+            self._raw(stage, 100, detail)
+            return
+        # Map the raw pct (0-100 within this step) to the band
+        overall = self._lo + (pct * (self._hi - self._lo)) // 100
+        overall = max(self._lo, min(self._hi, overall))
+        self._raw(stage, overall, detail)
+
+
 def _log(log_list: list[str], msg: str) -> None:
     """Append to the result log AND print to stdout (visible in Modal logs)."""
     log_list.append(msg)
@@ -340,7 +376,8 @@ def _fit_graph_compiler(payload: dict, report_progress=None) -> dict:
     """Real compiler mode: topology → evidence → PyMC model → MCMC → posteriors."""
     import requests as http
 
-    report = report_progress or _noop_progress
+    progress = _ProgressMapper(report_progress or _noop_progress)
+    report = progress  # all report() calls go through the mapper
 
     log: list[str] = []
     timings: dict[str, int] = {}
@@ -356,6 +393,7 @@ def _fit_graph_compiler(payload: dict, report_progress=None) -> dict:
         _log_env_diagnostic(log)
 
         # ── 1. DB connection ──
+        progress.set_band(0, 3)
         report("startup", 0, "Connecting to database…")
         db_url = payload.get("db_connection", "")
         db_conn = None
@@ -372,6 +410,7 @@ def _fit_graph_compiler(payload: dict, report_progress=None) -> dict:
         timings["neon_ms"] = int((time.time() - t0) * 1000)
 
         # ── 2. Compile: topology analysis ──
+        progress.set_band(3, 5)
         report("compiling", 0, "Analysing topology…")
         from compiler import analyse_topology, bind_evidence, build_model
         from compiler import run_inference, summarise_posteriors
@@ -484,7 +523,31 @@ def _fit_graph_compiler(payload: dict, report_progress=None) -> dict:
             )
 
         # ── 4. Build model ──
-        report("compiling", 0, "Building model…")
+        # Determine up front whether Phase 2 (cohort) will run, so progress
+        # messages can show "Phase 1 of 2" vs "Phase 1 of 1" and so the
+        # overall percentage can be mapped across the full pipeline.
+        has_cohort_data = any(
+            ev.has_cohort for ev in evidence.edges.values() if not ev.skipped
+        )
+        n_phases = 2 if has_cohort_data else 1
+        phase1_label = f"Phase 1 of {n_phases}"
+
+        # Overall % bands: compile and sample each get a chunk, scaled
+        # by whether there are 1 or 2 MCMC phases.
+        if n_phases == 2:
+            P1_COMPILE = (5, 10)
+            P1_SAMPLE  = (10, 48)
+            P1_SUMMARISE = (48, 50)
+            P2_COMPILE = (50, 55)
+            P2_SAMPLE  = (55, 93)
+            P2_SUMMARISE = (93, 95)
+        else:
+            P1_COMPILE = (5, 15)
+            P1_SAMPLE  = (15, 90)
+            P1_SUMMARISE = (90, 95)
+
+        progress.set_band(*P1_COMPILE)
+        report("compiling", 0, f"{phase1_label}: Building model…")
         features = settings.get("features") or {}
         model, metadata = build_model(topology, evidence, features=features)
         _log(log,f"model: {len(model.free_RVs)} free vars, {len(model.observed_RVs)} observed")
@@ -516,8 +579,9 @@ def _fit_graph_compiler(payload: dict, report_progress=None) -> dict:
             random_seed=settings.get("random_seed"),
         )
 
+        progress.set_band(*P1_SAMPLE)
         t_sample = time.time()
-        trace, quality = run_inference(model, sampling_config, report)
+        trace, quality = run_inference(model, sampling_config, report, phase_label=phase1_label)
         timings["sampling_ms"] = int((time.time() - t_sample) * 1000)
         _log(log,
             f"sampling: {timings['sampling_ms']}ms, "
@@ -526,16 +590,16 @@ def _fit_graph_compiler(payload: dict, report_progress=None) -> dict:
         )
 
         # ── 6. Summarise Phase 1 posteriors ──
-        report("summarising", 100, "Computing diagnostics…")
+        progress.set_band(*P1_SUMMARISE)
+        report("summarising", 100, f"{phase1_label}: Computing diagnostics…")
         inference_result = summarise_posteriors(trace, topology, evidence, metadata, quality)
 
         # ── 6b. Phase 2: cohort pass with frozen Phase 1 results ──
         # Extract Phase 1 posterior means and build Phase 2 model.
-        has_cohort_data = any(
-            ev.has_cohort for ev in evidence.edges.values() if not ev.skipped
-        )
+        phase2_label = "Phase 2 of 2"
         if has_cohort_data and not settings.get("model_inspect_only"):
-            report("compiling", 0, "Phase 2: building cohort model…")
+            progress.set_band(*P2_COMPILE)
+            report("compiling", 0, f"{phase2_label}: Building cohort model…")
             _log(log, "")
             _log(log, "── Phase 2: cohort pass ──")
 
@@ -588,9 +652,9 @@ def _fit_graph_compiler(payload: dict, report_progress=None) -> dict:
                 _log(log, line)
 
             # Run Phase 2 MCMC
-            report("sampling", 0, "Phase 2: sampling cohort model…")
+            progress.set_band(*P2_SAMPLE)
             t_sample2 = time.time()
-            trace2, quality2 = run_inference(model2, sampling_config, report)
+            trace2, quality2 = run_inference(model2, sampling_config, report, phase_label=phase2_label)
             timings["sampling_phase2_ms"] = int((time.time() - t_sample2) * 1000)
             _log(log,
                 f"  Phase 2 sampling: {timings['sampling_phase2_ms']}ms, "
@@ -608,7 +672,8 @@ def _fit_graph_compiler(payload: dict, report_progress=None) -> dict:
                               f"mean={samples.mean():.4f} std={samples.std():.4f}")
 
             # Summarise Phase 2 — cohort posteriors
-            report("summarising", 100, "Summarising Phase 2…")
+            progress.set_band(*P2_SUMMARISE)
+            report("summarising", 100, f"{phase2_label}: Computing diagnostics…")
             inference_result2 = summarise_posteriors(
                 trace2, topology, evidence, metadata2, quality2,
             )
@@ -674,6 +739,7 @@ def _fit_graph_compiler(payload: dict, report_progress=None) -> dict:
         _log(log,f"posteriors: {len(result_edges)} edges, {len(result_skipped)} skipped")
 
         # ── 8. Fire webhook ──
+        progress.set_band(95, 100)
         report("delivering", 100, "Delivering results…")
         webhook_url = payload.get("webhook_url", "")
         callback_token = payload.get("callback_token", "")

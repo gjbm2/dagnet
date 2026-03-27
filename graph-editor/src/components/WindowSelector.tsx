@@ -26,6 +26,7 @@ import { BulkScenarioCreationModal } from './modals/BulkScenarioCreationModal';
 import { useFetchData, createFetchItem } from '../hooks/useFetchData';
 import { useBulkScenarioCreation } from '../hooks/useBulkScenarioCreation';
 import { windowFetchPlannerService, type PlannerResult } from '../services/windowFetchPlannerService';
+import { useDSLReaggregationContext } from '../hooks/useDSLReaggregation';
 import { useIsReadOnlyShare } from '../contexts/ShareModeContext';
 import { getSnapshotRetrievalsForEdge, getSnapshotCoverageForEdges } from '../services/snapshotRetrievalsService';
 import { querySelectionUuids } from '../hooks/useQuerySelectionUuids';
@@ -93,8 +94,9 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
   const [isFetching, setIsFetching] = useState(false);
   const [showShimmer, setShowShimmer] = useState(false); // Track shimmer animation
   
-  // Planner-based state
-  const [plannerResult, setPlannerResult] = useState<PlannerResult | null>(null);
+  // Planner result from graph-level hook (useDSLReaggregation)
+  const dslReagg = useDSLReaggregationContext();
+  const plannerResult = dslReagg?.plannerResult ?? null;
   const [isExecutingPlanner, setIsExecutingPlanner] = useState(false);
   
   // Derive UI state from planner result
@@ -711,46 +713,8 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
     return graph?.edges?.some(e => e.p?.id || e.cost_gbp?.id || e.labour_cost?.id) || false;
   }, [graph]);
   
-  // ═══════════════════════════════════════════════════════════════════════════
-  // PLANNER-BASED ANALYSIS
-  // Analyse coverage and staleness whenever DSL changes.
-  // ═══════════════════════════════════════════════════════════════════════════
-  useEffect(() => {
-    if (isExecutingPlanner || isAggregatingRef.current) return;
-    // Skip planner analysis for temporary/historical files — no nudging
-    if (isTemporaryFile) return;
-    
-    const authoritativeDSL = (graphStore as any).getState?.()?.currentDSL || '';
-    if (!authoritativeDSL || !graph) return;
-
-    // Only run planner when the AUTHORITATIVE DSL actually changes.
-    // This prevents repeated PLANNER_ANALYSIS calls for the same DSL
-    // during workspace/graph load and other non-DSL updates.
-    if (lastAnalysedDSLRef.current === authoritativeDSL) {
-      return;
-    }
-    lastAnalysedDSLRef.current = authoritativeDSL;
-    
-    const trigger = isInitialMountRef.current ? 'initial_load' : 'dsl_change';
-    
-    windowFetchPlannerService.analyse(graph, authoritativeDSL, trigger)
-      .then(result => {
-        setPlannerResult(result);
-        isInitialMountRef.current = false;
-        
-        // Show toast if planner says to — but NOT on initial_load, where parameter
-        // files may not yet be in FileRegistry (race with workspace hydration),
-        // causing false "needs fetch" alerts that disappear moments later.
-        if (result.summaries.showToast && result.summaries.toastMessage
-            && result.analysisContext?.trigger !== 'initial_load') {
-          toast(result.summaries.toastMessage, { icon: '⚠️', duration: 4000 });
-        }
-      })
-      .catch(err => {
-        console.error('[WindowSelector] Planner analysis failed:', err);
-      });
-      
-  }, [graph, (graphStore as any).getState?.()?.currentDSL, isExecutingPlanner, isTemporaryFile]);
+  // PLANNER-BASED ANALYSIS: now handled by useDSLReaggregation hook at GraphEditor level.
+  // plannerResult is read from DSLReaggregationContext above.
   
   // Shimmer effect when button needs attention
   useEffect(() => {
@@ -795,70 +759,8 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
     end: endDate,
   }), [startDate, endDate]);
   
-  // ═══════════════════════════════════════════════════════════════════════════
-  // AUTO-AGGREGATION (planner-driven)
-  // When planner says covered (stable or stale), aggregate from cache.
-  // ═══════════════════════════════════════════════════════════════════════════
-  useEffect(() => {
-    if (!plannerResult || plannerResult.status !== 'complete') return;
-    // On initial load we trust the persisted graph state (graph already reflects
-    // the last aggregation for its stored DSL). Do NOT auto-aggregate on
-    // initial_load, otherwise we risk noisy from-file fetches before the user
-    // has changed the query in any way.
-    if (plannerResult.analysisContext?.trigger === 'initial_load') return;
-    // Auto-aggregate for BOTH stable and stale (not for not_covered)
-    if (plannerResult.outcome === 'not_covered') return;
-    if (plannerResult.autoAggregationItems.length === 0) return;
-    if (isAggregatingRef.current) return;
-
-    const authoritativeDSL = (graphStore as any).getState?.()?.currentDSL || '';
-    if (!authoritativeDSL) return;
-
-    // Avoid repeated auto-aggregation loops for the same DSL
-    if (lastAutoAggregatedDSLRef.current === authoritativeDSL) {
-        return;
-      }
-      
-    // Trigger auto-aggregation using existing fetchItems with 'from-file' mode
-          isAggregatingRef.current = true;
-    
-    const items = plannerResult.autoAggregationItems.map(i => 
-      createFetchItem(i.type, i.objectId, i.targetId, { paramSlot: i.paramSlot })
-    );
-    
-    fetchItems(items, { mode: 'from-file' })
-      .then(() => {
-        // CRITICAL: Apply accumulated graph changes to React state
-        // fetchItems updates graphRef.current, we must trigger re-render
-            const updatedGraph = graphRef.current;
-        
-        // DEBUG: Log what we're about to set as the graph
-        const latencyEdges = (updatedGraph?.edges || []).filter((e: any) => e.p?.latency?.completeness !== undefined);
-        console.log('[WindowSelector] fetchItems completed, about to setGraph:', {
-          hasGraph: !!updatedGraph,
-          latencyEdgeCount: latencyEdges.length,
-          sample: latencyEdges.slice(0, 3).map((e: any) => ({
-            id: e.uuid || e.id,
-            pMean: e.p?.mean,
-            completeness: e.p?.latency?.completeness,
-            forecastMean: e.p?.forecast?.mean,
-          })),
-        });
-        
-        if (updatedGraph && setGraph) {
-              setGraph(updatedGraph);
-            }
-            
-        setLastAggregatedWindow(currentWindow);
-        // Track both auto-aggregation DSL and last aggregated DSL
-        lastAutoAggregatedDSLRef.current = authoritativeDSL;
-        lastAggregatedDSLRef.current = authoritativeDSL;
-      })
-      .finally(() => {
-              isAggregatingRef.current = false;
-      });
-      
-  }, [plannerResult, graphStore, currentWindow, setGraph, fetchItems]);
+  // AUTO-AGGREGATION: now handled by useDSLReaggregation hook at GraphEditor level.
+  // The hook watches currentDSL, runs the planner, and auto-aggregates from file when covered.
   
   // Helper: Update window state, currentQueryDSL (historic), AND authoritative DSL
   const updateWindowAndDSL = (start: string, end: string) => {
@@ -1039,8 +941,8 @@ export function WindowSelector({ tabId }: WindowSelectorProps = {}) {
         (g) => { if (g) setGraph(g); },
         authoritativeDSL
       );
-      setPlannerResult(result);
-      
+      // plannerResult will update reactively via useDSLReaggregation after graph changes
+
       // Update lastAggregatedWindow after successful fetch
         setLastAggregatedWindow(currentWindow);
       lastAggregatedDSLRef.current = authoritativeDSL;

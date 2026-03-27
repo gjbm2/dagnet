@@ -14,6 +14,7 @@ import type { ScenarioVisibilityMode, ViewOverlayMode } from '../../types';
 import { computeQualityTier } from '../../utils/bayesQualityTier';
 import { useDataDepthContext } from '../../contexts/DataDepthContext';
 import { depthBeadLabel, formatPct } from '../../services/dataDepthService';
+import { useScenarioHighlight } from '../../contexts/ScenarioHighlightContext';
 import type { ProbabilityPosterior } from '../../types';
 import { BEAD_MARKER_DISTANCE, BEAD_SPACING, BEAD_FONT_SIZE, BEAD_HEIGHT, BEAD_ARRIVAL_FACE_OFFSET } from '../../lib/nodeEdgeConstants';
 import { hasAnyEdgeQueryOverride, listOverriddenFlagPaths } from '../../utils/overrideFlags';
@@ -129,20 +130,21 @@ export function useEdgeBeads(props: EdgeBeadsProps): { svg: React.ReactNode; htm
   
   // Data depth scores from context
   const { scores: dataDepthScores } = useDataDepthContext();
+  const { highlightedScenarioId } = useScenarioHighlight();
 
   // Get bead definitions - memoize with stable dependencies
   const beadDefinitions = useMemo(() => {
     if (!graph || !path || !scenariosContext) {
       return [];
     }
-    
+
     // Create stable key for edge identification
     const edgeKey = edge.uuid || edge.id;
     if (!edgeKey) return [];
-    
+
     // Ensure 'current' is always included if no scenarios are visible
-    const effectiveVisibleIds = visibleScenarioIds.length > 0 
-      ? visibleScenarioIds 
+    const effectiveVisibleIds = visibleScenarioIds.length > 0
+      ? visibleScenarioIds
       : ['current'];
     
     // In Forecast Quality mode, show a single quality tier bead instead of normal beads.
@@ -553,14 +555,21 @@ export function useEdgeBeads(props: EdgeBeadsProps): { svg: React.ReactNode; htm
         
         const segments = extractTextAndColours(bead.displayText);
         
-        // Render as tspan elements within textPath
+        // Render as tspan elements within textPath.
+        // During scenario peek, fade non-matching colour segments.
+        const peekColour = highlightedScenarioId ? (() => {
+          const raw = scenarioColours.get(highlightedScenarioId);
+          return raw ? lightenColour(raw) : null;
+        })() : null;
+
         return segments.map((seg, idx) => {
-          const tspan = (
-            <tspan key={idx} fill={seg.colour} dx={idx === 0 ? 0 : undefined}>
+          // When peeking, fade segments whose colour doesn't match the highlighted scenario
+          const faded = peekColour && seg.colour !== '#FFFFFF' && seg.colour !== peekColour;
+          return (
+            <tspan key={idx} fill={seg.colour} dx={idx === 0 ? 0 : undefined} opacity={faded ? 0.3 : 1} style={{ transition: faded ? 'opacity 3.5s ease' : 'opacity 0.5s ease' }}>
               {seg.text}
             </tspan>
           );
-          return tspan;
         });
       };
       

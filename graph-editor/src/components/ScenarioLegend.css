@@ -22,17 +22,34 @@
 .scenario-legend-chip {
   display: flex;
   align-items: center;
+  box-sizing: border-box;
+  height: 31px;
   gap: 6px;
   padding: 6px 10px;
   border-radius: 16px;
+  border: 1.5px solid transparent;
   color: white;
   font-size: 13px;
   font-weight: 500;
-  transition: opacity 0.2s ease, transform 0.2s ease, box-shadow 0.2s ease;
+  transition: box-shadow 0.2s ease;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
   cursor: pointer;
   overflow: hidden;
-  animation: chipExpandIn 0.3s ease-out;
+  touch-action: none;
+}
+
+/* Expand animation only on genuinely new chips, not re-renders */
+.scenario-legend-chip.chip-enter {
+  animation: chipExpandIn 0.3s ease-out backwards;
+}
+
+.scenario-legend-chip:hover {
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
+}
+
+.scenario-legend-chip.chip-grabbed {
+  opacity: 0 !important;
+  pointer-events: none !important;
 }
 
 /* Animation for chip creation - expands from right edge, pushing other chips */
@@ -41,12 +58,16 @@
     max-width: 0;
     padding-left: 0;
     padding-right: 0;
+    border-width: 0;
+    gap: 0;
     opacity: 0;
   }
   to {
-    max-width: 300px; /* Large enough to accommodate any chip */
+    max-width: 300px;
     padding-left: 10px;
     padding-right: 10px;
+    border-width: 1.5px;
+    gap: 6px;
     opacity: 1;
   }
 }
@@ -74,11 +95,6 @@
 .scenario-legend-chip.invisible {
   /* Opacity set via inline style */
   filter: grayscale(0.5);
-}
-
-.scenario-legend-chip:hover {
-  transform: translateY(-1px);
-  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.25);
 }
 
 .scenario-legend-toggle,
@@ -229,7 +245,9 @@
   pointer-events: auto;
 }
 
-/* Submenu pill — dashed outline, matches New Scenario button height */
+/* Submenu pill — dashed outline, matches New Scenario button height.
+ * Show/hide uses opacity only (no margin/transform) so layout is stable
+ * and inline transform is free for drag-reorder translateY. */
 .scenario-legend-view-pill {
   display: flex;
   align-items: center;
@@ -248,15 +266,25 @@
   color: #374151;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
   opacity: 0;
-  transform: translateY(-4px);
   pointer-events: none;
-  /* Exit: fast uniform fade (no stagger). Entry stagger via inline transitionDelay. */
-  transition: opacity 0.1s ease, transform 0.1s ease, border-color 0.15s ease;
+  transition: opacity 0.1s ease, transform 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
 }
 
 .scenario-legend-view-pill:hover {
-  transform: translateY(-1px) !important;
   border-color: #6b7280;
+  box-shadow: 0 3px 8px rgba(0, 0, 0, 0.2);
+}
+
+.scenario-legend-canvas-view-item:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
+}
+
+/* During drag, suppress hover lift so it doesn't fight shuffle transforms */
+.scenario-legend-canvas-view-item.view-grabbed:hover,
+.scenario-legend-canvas-view-item.view-shuffling:hover {
+  transform: none;
+  box-shadow: none;
 }
 
 .scenario-legend-view-pill.active {
@@ -269,7 +297,6 @@
 .scenario-legend-new-wrapper:hover .scenario-legend-view-pill,
 .scenario-legend-new-wrapper:hover .scenario-legend-submenu-divider {
   opacity: 1;
-  transform: translateY(0);
   pointer-events: auto;
 }
 
@@ -336,6 +363,20 @@
   box-sizing: content-box;
 }
 
+/* Submenu section header */
+.scenario-legend-submenu-header {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #9ca3af;
+  border: none !important;
+  box-shadow: none !important;
+  padding: 2px 8px 0;
+  height: auto;
+  cursor: default;
+}
+
 /* Submenu divider — gap only, no visible line */
 .scenario-legend-submenu-divider {
   height: 0;
@@ -351,12 +392,39 @@
   border-color: #6384a8;
   color: #4b6a8a;
   background: rgba(99, 132, 168, 0.08);
+  cursor: grab;
+  touch-action: none;
+}
+
+.scenario-legend-canvas-view-item:active {
+  cursor: grabbing;
 }
 
 .scenario-legend-canvas-view-item.active {
   border-style: solid;
   border-color: #4b6a8a;
   background: rgba(99, 132, 168, 0.15);
+}
+
+/* Grabbed pill placeholder — stays in flow at full size but invisible */
+.scenario-legend-canvas-view-item.view-grabbed {
+  opacity: 0 !important;
+  pointer-events: none !important;
+  transition: none !important;
+}
+
+/* Suppress transitions during drop snap */
+.scenario-legend-canvas-view-item.view-no-transition {
+  transition: none !important;
+}
+
+/* Floating ghost that follows the cursor — portalled to body */
+.scenario-legend-canvas-view-item.view-ghost {
+  opacity: 0.9 !important;
+  pointer-events: none !important;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.3);
+  border-style: solid;
+  border-color: #3B82F6;
 }
 
 .scenario-legend-canvas-view-item .scenario-legend-canvas-view-btn {
@@ -545,6 +613,11 @@
   .scenario-legend-canvas-view-item.active {
     border-color: #8cb4d8;
     background: rgba(99, 148, 200, 0.18);
+  }
+
+  .scenario-legend-canvas-view-item.view-ghost {
+    border-color: #60a5fa;
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5);
   }
 
   .scenario-legend-canvas-view-action-btn {

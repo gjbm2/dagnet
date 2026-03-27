@@ -26,6 +26,10 @@ import { CfpPopover } from './CfpPopover';
 
 type ChartKind = 'funnel' | 'bridge' | 'histogram' | 'daily_conversions' | 'cohort_maturity' | 'lag_fit' | 'bar_grouped' | 'pie' | 'time_series' | 'info' | 'surprise_gauge';
 
+/** Stable ref so ReactECharts doesn't dispose/reinit on every render. */
+const ECHARTS_OPTS = { renderer: 'svg' as const };
+
+
 export function normaliseChartKind(kind: string | undefined | null): ChartKind | null {
   if (!kind) return null;
   if (kind === 'funnel') return 'funnel';
@@ -304,7 +308,30 @@ export function AnalysisChartContainer(props: {
   const showSubjectSelector = (effectiveKind === 'daily_conversions' || effectiveKind === 'cohort_maturity') && subjectIds.length > 1;
   const { ref: chartViewportRef, width: chartWidthPx, height: chartHeightPx } = useElementSize<HTMLDivElement>();
 
+  // DEV: track which dependency triggers echartsOption recompute
+  const prevDepsRef = useRef<Record<string, any>>({});
   const echartsOption = useMemo(() => {
+    if (import.meta.env.DEV) {
+      const deps: Record<string, any> = {
+        effectiveKind, finalResult, resolvedSettings, hideScenarioLegend,
+        scenarioIdsToRender: displayPlan.scenarioIdsToRender,
+        scenarioVisibilityModes, scenarioDslSubtitleById,
+        effectiveSubjectId, chartWidthPx, chartHeightPx, fillHeight, height,
+        suppressAnimation: props.suppressAnimation,
+      };
+      const prev = prevDepsRef.current;
+      const changed: string[] = [];
+      for (const k of Object.keys(deps)) {
+        if (prev[k] !== deps[k]) changed.push(k);
+      }
+      if (Object.keys(prev).length > 0 && changed.length > 0) {
+        console.log(`[ECharts:memo] recompute — changed deps: [${changed.join(', ')}]`, {
+          analysisId: props.analysisId,
+          changes: Object.fromEntries(changed.map(k => [k, { prev: typeof prev[k] === 'object' ? '(obj)' : prev[k], now: typeof deps[k] === 'object' ? '(obj)' : deps[k] }])),
+        });
+      }
+      prevDepsRef.current = deps;
+    }
     if (!finalResult) return null;
     if (!effectiveKind) return null;
     const finalSettings = hideScenarioLegend
@@ -463,7 +490,25 @@ export function AnalysisChartContainer(props: {
   }, [isDebugDailyConversions, echartsOption, props.analysisId]);
 
   const renderedCallbackFiredRef = useRef(false);
+  const setOptionCountRef = useRef(0);
   const handleChartReady = useCallback((instance: any) => {
+    // DEV: instrument setOption to trace every ECharts redraw
+    if (import.meta.env.DEV && instance && !instance.__dagnet_instrumented) {
+      instance.__dagnet_instrumented = true;
+      let prevOptionRef: any = null;
+      const origSetOption = instance.setOption.bind(instance);
+      instance.setOption = (...args: any[]) => {
+        setOptionCountRef.current += 1;
+        const count = setOptionCountRef.current;
+        const opt = args[0];
+        const sameRef = opt === prevOptionRef;
+        const stack = new Error().stack?.split('\n').slice(1, 6).map((l: string) => l.trim()).join(' ← ');
+        console.log(`[ECharts:setOption] #${count} id=${props.analysisId ?? '?'} notMerge=${args[1]?.notMerge ?? args[1]} series=${opt?.series?.length} sameOptionRef=${sameRef} animation=${opt?.animation} animDur=${opt?.animationDuration}`, { stack });
+        prevOptionRef = opt;
+        return origSetOption(...args);
+      };
+    }
+
     // Fire onRendered once the ECharts instance has finished its first paint.
     // With suppressAnimation, 'finished' fires synchronously during setOption —
     // BEFORE onChartReady is called — so attaching the listener here is too late.
@@ -726,6 +771,7 @@ export function AnalysisChartContainer(props: {
             <ReactECharts
               ref={echartsRef}
               option={echartsOption}
+              opts={ECHARTS_OPTS}
               style={{ height: fillHeight ? '100%' : height, width: '100%' }}
               notMerge
               onEvents={onEvents}

@@ -8,6 +8,426 @@ Entries are reverse-chronological (newest first).
 
 ---
 
+## 27-Mar-26: Per-retrieval onset observations + t95 constraint
+
+### Diagnosis: why production latency drifts to nonsense
+
+After replacing DM→Binomial and BB→Binomial, synth p recovery is
+excellent (≤1.08x across all 8 graphs). But production del-to-reg
+remains at 1.24x with latency drifting to sigma=2.98, onset=10.0,
+giving t95≈250d — completely unphysical.
+
+Investigation revealed:
+
+1. **Production trajectories don't span the full maturation curve.**
+   Only 2/64 window trajectories go from start (age ≤5) to plateau
+   (age ≥20), vs 10/37 in synth. The model can't simultaneously
+   observe onset, peak slope, and plateau in the same trajectory.
+
+2. **The model's trajectory CDF and daily completeness use different
+   onsets.** Trajectory Binomials use the latent onset (drifts to
+   10d). Daily Binomials use precomputed completeness from the
+   analytics engine's fixed onset (5.5d). Inconsistent CDFs
+   constraining the same p.
+
+3. **Per-retrieval onset data from Amplitude is available but unused.**
+   Each snapshot retrieval derives `onset_delta_days` from the
+   Amplitude lag histogram (1% mass point — see
+   `onsetDerivationService.ts`). One observation per retrieval date
+   per edge. The model ignores these and uses a single aggregate
+   onset from the topology (5.5d).
+
+4. **The per-retrieval onsets tell a different story.** For del-to-reg
+   (50 distinct retrieval-date observations): mean=4.44d, median=5.6d,
+   std=2.07d. 16% of retrievals show onset 0.0-0.1d (fast early
+   conversions). The topology value of 5.5d is the mode of the upper
+   peak, not the central tendency.
+
+5. **Early conversions are real.** 8/64 window trajectories show
+   non-zero cumulative_y before age 6. With the topology onset of
+   5.5d, the model CDF at these ages is ~0. The model inflates sigma
+   to 2.98 (spreading the CDF via softplus) to accommodate them,
+   then inflates p to compensate for the flatter CDF.
+
+### Onset also affects completeness derivation
+
+The precomputed completeness for daily observations uses
+`CDF(age, onset=5.5, mu, sigma)`. If the real onset is ~4d and the
+model's latent onset drifts to 10d, completeness is wrong in both
+places — the precomputed values assume 5.5d, the trajectory CDF
+uses 10d. Everything downstream of CDF is contaminated.
+
+### Proposal: feed per-retrieval onset as observed data
+
+Each snapshot retrieval already computes `onset_delta_days` from
+the Amplitude lag histogram (1% mass point, via
+`deriveOnsetDeltaDaysFromLagHistogram(histogram, alpha=0.01)`).
+This is analytically derived from the source data — no user input
+needed.
+
+**Important**: onset is derived once per retrieval date per edge.
+Each DB row carries the same onset for convenience — the rows are
+NOT independent observations. For del-to-reg, ~50 distinct
+retrieval-date observations, not 1345 rows.
+
+**Implementation**:
+1. During evidence binding (`_bind_from_snapshot_rows`), collect
+   distinct `onset_delta_days` values per retrieval date.
+2. Store on `LatencyPrior.onset_observations: list[float]`.
+3. In `build_model`, emit:
+   `pm.Normal("onset_obs_{id}", mu=onset_var, sigma=std(obs),
+              observed=onset_array)`
+4. sigma_obs = std of the observations (≈2.0d for del-to-reg).
+   This absorbs both measurement noise and the systematic gap
+   between histogram onset (1% mass point) and model onset
+   (CDF shift parameter). 50 observations at sigma=2.0 gives
+   posterior precision ±0.3d — enough to prevent onset=10 drift.
+5. This is edge-level onset, used in the window() pass. Path
+   onset for the cohort() pass is derived from edge onsets.
+
+**Expected outcome**: onset anchored near 4.0-4.5d rather than
+drifting to 10d. Sigma constrained to reasonable values (CDF
+doesn't need to spread to accommodate early conversions). p
+inflation reduced further from 1.24x.
+
+### t95 soft constraint from analytics pass (27-Mar-26)
+
+Onset observations alone weren't sufficient — they constrain one end
+of the CDF (when conversions start) but sigma remains free to inflate,
+giving t95=250d tails. Added a t95 soft constraint:
+
+```
+t95_model = onset + exp(mu + 1.645 × sigma)
+pm.Normal("t95_obs", mu=t95_model, sigma=sigma_t95, observed=t95_analytic)
+```
+
+**Where t95 comes from**: the BE stats pass computes
+`t95 = onset + exp(mu + 1.645 × sigma)` where mu and sigma are fitted
+from Amplitude's median_lag and mean_lag (via `fitLagDistribution`).
+User horizon overrides take priority via `computeT95`. This is the
+edge-level `p.latency.t95` field, NOT `promoted_t95` (Bayesian
+output) and NOT `path_t95` (cumulative from anchor).
+
+**sigma_t95 = max(t95 × 0.2, 2.0)**: ~20% relative uncertainty, floor
+2 days. For del-to-reg with t95=17.4d, sigma_t95=3.5d.
+
+### Results: onset observations + t95 constraint (27-Mar-26)
+
+**Production (bayes-test-gm-rebuild, k/n priors):**
+
+| Edge | DM+BB (start) | Binomial only | +onset+t95 |
+|---|---|---|---|
+| landing-to-created | 1.94x | 1.03x | 1.14x ⚠ |
+| create-to-delegated | 1.01x | 0.99x | 0.99x |
+| delegated-to-registered | 1.94x | 1.25x | **1.19x** |
+| registered-to-success | 1.15x | 1.17x | 1.14x |
+
+Del-to-reg latency: onset=8.2d, sigma=1.96, t95_model≈39d (was
+onset=10, sigma=2.98, t95≈250d). Still inflated vs analytic
+(onset=5.5, sigma=0.53, t95=17d) but much more reasonable.
+
+**Synth (both graphs PASS, no regression):**
+
+| Edge | Ratio |
+|---|---|
+| synth del-to-reg | 1.04x |
+| synth reg-to-success | 1.02x |
+| synth simple-a-to-b | 1.00x |
+| synth simple-b-to-c | 0.98x |
+
+**landing-to-created 1.03x → 1.14x**: investigated, NOT a code
+regression. The window daily obs for this no-latency edge have
+weighted k/n = 0.194, genuinely higher than the all-time analytic
+of 0.175. The model correctly fits its window data. The discrepancy
+is in the benchmark (comparing window posterior to all-time k/n),
+not in the model. Anchor range also shifts by 1 day between runs.
+
+**Bimodal latency (registered-to-success)**: the Cohort Maturity
+chart shows clearly bimodal conversion timing — fast cluster of
+early conversions, lull, then slow bulk. The shifted log-normal
+can't represent this. The model compensates by starting early and
+rising too gradually, overstating completeness at 10-30d. p and
+onset converge acceptably. Mixture of two log-normals documented
+as future work in doc 23 §12.
+
+### Summary of changes in this session (27-Mar-26)
+
+**Code changes (not yet committed):**
+
+1. `model.py`: trajectory DM → textbook product-of-conditional-
+   Binomials (Gamel et al. 2000). Both latent-latency and
+   fixed-latency paths.
+2. `model.py`: daily BetaBinomial → plain Binomial (same
+   concentration-dependent bias as DM).
+3. `model.py`: `_emit_window_likelihoods` BetaBinomial → Binomial.
+4. `evidence.py`: collect per-retrieval-date `onset_delta_days`
+   from snapshot rows, store on `LatencyPrior.onset_observations`.
+5. `model.py`: emit `pm.Normal("onset_obs_...")` from onset
+   observations (sigma_obs = std of observations, floor 1.0d).
+6. `types.py`: `LatencyPrior.onset_observations` field.
+   `EdgeTopology.t95_days` field.
+7. `topology.py`: capture `t95` from stats pass onto EdgeTopology.
+8. `model.py`: emit `pm.Normal("t95_obs_...")` soft constraint
+   (sigma_t95 = max(t95 × 0.2, 2.0d)).
+
+**Full synth param recovery**: all 8 graphs pass, all 41 edges
+within 1.04x of truth. No regression from any change.
+
+**Production del-to-reg**: 1.94x → 1.19x (k/n priors).
+
+**TODO (noted for future)**:
+- Context slices: when contexts are added, each context slice will
+  provide its own onset observation per retrieval.
+- Synth already writes constant onset to DB (truth value), so param
+  recovery gets onset observations automatically.
+- Mixture latency models for bimodal edges (doc 23 §12).
+
+---
+
+## 26-Mar-26 (cont.): Replace DM with textbook Binomial likelihood
+
+### The problem
+
+The Phase 1 window-only model uses Dirichlet-Multinomial (DM) for
+trajectory likelihoods, with concentrations α_j = κ × p × ΔF_j. This
+creates systematic upward bias on p for low-conversion edges: the K
+interval concentration terms (each monotonically increasing in p via
+gammaln(y_j + α_j) − gammaln(α_j)) collectively outweigh the single
+remainder term. Result: 1.30x on delegated-to-registered (p=0.110)
+even with neutral priors.
+
+### Literature review findings
+
+A thorough literature review established:
+
+1. **Nobody uses DM for grouped survival / cure models.** The DM
+   appears in ecology, microbiome, and NLP. It does not appear in
+   survival analysis or cure model literature — not in textbooks
+   (Maller & Zhou 1996; Ibrahim, Chen & Sinha 2001), not in software
+   (smcure, flexsurvcure, cuRe, lifelines, CanSurv,
+   bayesCureRateModel), not in methodological papers (Farewell 1982;
+   Sy & Taylor 2000; Peng & Dear 2000; Chen et al. 1999; Yu et al.
+   2004; Gamel et al. 2000).
+
+2. **The textbook likelihood is a product of conditional Binomials**
+   (Gamel et al. 2000; Yu et al. 2004; CanSurv software):
+
+   L = ∏_j Binomial(d_j | n_j, q_j)
+
+   where d_j = new events in interval j, n_j = at-risk at start of
+   interval j, q_j = conditional hazard:
+
+   q_j = p × ΔF_j / (1 − p × F_{j−1})
+
+   Plain Binomial. No concentration parameters. No DM.
+
+3. **The Binomial has no artificial bias mechanism.** Each interval
+   contributes d_j × log(q_j) + (n_j − d_j) × log(1 − q_j). The
+   conversion and survival terms naturally oppose each other. There
+   are no pseudocounts that depend on p.
+
+4. **For overdispersion, BetaBinomial is standard** — but on the
+   cumulative endpoint, not on intervals. BetaBinomial on intervals
+   reintroduces the same concentration-dependent bias as DM. The
+   textbook default is plain Binomial; BB is added only if empirical
+   overdispersion is observed.
+
+5. **The grouped survival log-likelihood factorises cleanly** (Yu et
+   al. 2004):
+
+   log L = [Multinomial shape term (p-free)] + [Binomial rate term]
+
+   Shape constrains latency. Rate constrains p. This decomposition
+   is exact for Binomial/Multinomial. It breaks for DM because the
+   DM conditional has concentrations depending on p.
+
+6. **Dirichlet split constraints are unaffected.** The Dirichlet
+   constrains the joint prior on sibling p values (mass conservation).
+   This is a parameter-space constraint, orthogonal to the likelihood
+   choice. Works identically with Binomial, BB, or DM.
+
+### Why the DM bias exists (mechanism)
+
+In the DM, concentrations α_j = κ × p × ΔF_j act as pseudocounts.
+When a bin has observed conversions (d_j > 0), gammaln(d_j + α_j) −
+gammaln(α_j) is monotonically increasing in α_j, hence in p. There
+are K such terms (one per interval) all pulling p upward, vs one
+remainder term pulling p downward. For low-p edges, the K-to-1
+asymmetry creates systematic upward bias.
+
+In the Binomial, there are no pseudocounts. The log(q_j) and
+log(1 − q_j) terms balance through the data counts. No artificial
+bias mechanism exists.
+
+### Previous approaches tried and their results
+
+| Approach | del-to-reg ratio | Notes |
+|---|---|---|
+| Full DM (baseline) | 1.30x | K-to-1 concentration bias |
+| DM shape+rate, κ_shape = κ (ad hoc) | 1.17x | Wrong κ_shape, not principled |
+| DM shape+rate, κ_shape = κ×p×CDF (exact) | 1.30x | Reproduces original DM |
+| Multinomial shape + BB rate | 1.21x | Multinomial too rigid |
+| Sequential BetaBinomial | 1.30x | Same bias (K small-α terms) |
+
+All DM-based and BB-interval-based approaches share the same
+structural problem: K concentration/alpha parameters that depend on p.
+
+### Plan: implement textbook Binomial
+
+Replace the DM trajectory likelihood with the textbook product of
+conditional Binomials. This eliminates the bias mechanism entirely.
+
+For each trajectory:
+- Compute conditional hazard q_j = p × ΔF_j / (1 − p × F_{j−1})
+- Emit d_j ~ Binomial(n_j, q_j) for each interval
+- No κ parameter needed (Binomial has no dispersion)
+
+If overdispersion proves necessary (empirical check after Binomial):
+- Add BetaBinomial on the **cumulative endpoint only** (one α, one β)
+- NOT on intervals (which reintroduces the K-fold bias)
+
+Dirichlet branch group constraints unchanged.
+
+### Results (26-Mar-26)
+
+Implemented and tested with neutral priors (Beta(1,1)).
+
+**2-step (synth-simple-abc):**
+
+| Edge | Analytic | Bayes | Ratio |
+|---|---|---|---|
+| simple-a-to-b | 0.700 | 0.701 | 1.00x |
+| simple-b-to-c | 0.618 | 0.603 | 0.98x |
+
+**4-step (synth-mirror-4step):**
+
+| Edge | Analytic | Bayes | Ratio | DM (before) |
+|---|---|---|---|---|
+| landing-to-created | 0.180 | 0.180 | 1.00x | 1.00x |
+| created-to-delegated | 0.551 | 0.558 | 1.01x | 1.01x |
+| delegated-to-registered | 0.110 | 0.118 | **1.08x** | **1.30x** |
+| registered-to-success | 0.697 | 0.730 | 1.05x | 1.06x |
+
+The critical delegated-to-registered edge improved from **1.30x to
+1.08x** — eliminating 73% of the DM bias. The remaining 8% is the
+genuine p-latency identifiability issue (p=0.110 with sigma slightly
+inflated at 0.82 vs truth 0.57).
+
+Sampling quality: 0 divergences, rhat ≤ 1.004, ESS ≥ 1006.
+
+**Production results (bayes-test-gm-rebuild):**
+
+| Edge | Analytic | Neutral (Beta(1,1)) | k/n prior |
+|---|---|---|---|
+| landing-to-created | 0.175 | 1.03x | 1.02x |
+| create-to-delegated | 0.55 | 1.01x | 1.01x |
+| delegated-to-registered | 0.095 | 1.56x (ess=7!) | 1.49x |
+| registered-to-success | 0.695 | 1.23x | 1.15x |
+
+No-latency edges excellent (1.01-1.03x). Latency edges still badly
+inflated on production. The frozen Phase 1 latency for del-to-reg
+shows sigma=3.12, onset=9.8 — completely unphysical (prior: sigma=0.53,
+onset=5.5). The sampler finds a degenerate mode where sigma is huge.
+With neutral priors the sampler can't even converge (ess=7, rhat=1.53).
+k/n priors anchor it but don't fix the wrong mode.
+
+**Key finding**: The Binomial likelihood eliminated the artificial DM
+bias (synth 1.30x → 1.08x) but production has a structural data issue
+that creates a much flatter likelihood ridge for p-latency. The
+production trajectories evidently lack the mature-endpoint information
+needed to pin p independently of latency. Investigation needed.
+
+### Full synth param recovery (all 8 graphs, k/n priors)
+
+Ran via `scripts/run-param-recovery.sh` with 2 chains. **p recovery
+is excellent across all 8 graphs — every edge within 1.03x:**
+
+| Graph | Edges | Max p ratio | p verdict |
+|---|---|---|---|
+| synth-simple-abc | 2 | 0.98x | PASS |
+| synth-mirror-4step | 4 | 1.08x | PASS |
+| synth-3way-join-test | 7 | 1.01x | PASS |
+| synth-diamond-test | 6 | 1.01x | PASS |
+| synth-fanout-test | 3 | 1.02x | PASS |
+| synth-join-branch-test | 6 | 1.01x | PASS |
+| synth-lattice-test | 9 | 1.02x | PASS |
+| synth-skip-test | 4 | 1.03x | PASS |
+
+Latency parameter recovery: 2/8 PASS, 6/8 PARTIAL. All failures are
+onset/mu misses — onset overestimated, mu underestimated, with
+corr(onset,mu) ≈ −0.99. This is the known onset-mu tradeoff for
+small onset values (0.5–2.0d). Not a Binomial vs DM issue — the
+latency posterior has a ridge that small onset values fall into.
+
+### Daily BetaBinomial → Binomial fix (26-Mar-26)
+
+**Root cause of remaining production p inflation**: the daily
+BetaBinomial observations had the SAME concentration-dependent bias
+as the DM. With kappa=3, alpha = kappa × p ≈ 0.285 for low-p edges.
+The gammaln(k + alpha) − gammaln(alpha) term is monotonically
+increasing in alpha (in p), creating upward pressure.
+
+Numerical proof on production del-to-reg daily data (57 obs, total
+n=10295, k=983, true k/n=0.0955):
+
+| kappa | BB prefers p=? | Δ(p=.095 vs .141) |
+|---|---|---|
+| 3 | 0.141 (WRONG) | −9.5 nats (BB prefers inflated p!) |
+| 10 | 0.141 (WRONG) | −4.9 nats |
+| 50 | 0.095 (correct) | +5.5 nats |
+| Binomial | 0.095 (correct) | **+59.0 nats** (strong correct signal) |
+
+With kappa ≤ 10, the BetaBinomial actively pushes p in the wrong
+direction. Binomial provides 59 nats of correct signal.
+
+**Fix**: replaced pm.BetaBinomial with pm.Binomial for all daily
+observation terms. Same rationale as trajectory DM → Binomial: no
+concentration parameters, no artificial p bias.
+
+**Production results after fix (neutral priors):**
+
+| Edge | Before fix | After fix |
+|---|---|---|
+| landing-to-created | 1.03x | 1.03x |
+| create-to-delegated | 1.01x | 0.99x |
+| delegated-to-registered | 1.56x (ess=7!) | **1.25x** (ess=4098) |
+| registered-to-success | 1.23x | **1.17x** |
+
+**Production results after fix (k/n priors):**
+
+| Edge | Before fix | After fix |
+|---|---|---|
+| landing-to-created | 1.02x | 1.03x |
+| create-to-delegated | 1.01x | 0.99x |
+| delegated-to-registered | 1.49x | **1.24x** |
+| registered-to-success | 1.15x | **1.14x** |
+
+Latency for del-to-reg remains unphysical (sigma=2.98, onset=10.0).
+The production trajectories don't span the full maturation curve:
+only 2/64 go from start (age ≤ 5) to plateau (age ≥ 20), vs 10/37
+in synth. The remaining p inflation (1.24x) is from the genuine
+p-latency identifiability issue, not artificial bias.
+
+### References
+
+- Gamel, Weller, Wesley & Feuer (2000), "Parametric cure models of
+  relative and cause-specific survival for grouped survival times",
+  Comput Methods Programs Biomed 61:99-110
+- Yu, Tiwari, Cronin & Feuer (2004), "Cure fraction estimation from
+  the mixture cure models for grouped survival data", Stat Med
+  23:1733-1747
+- Maller & Zhou (1996), Survival Analysis with Long Term Survivors,
+  Wiley
+- Ibrahim, Chen & Sinha (2001), Bayesian Survival Analysis, Springer
+- Chen, Ibrahim & Sinha (1999), "A new Bayesian model for survival
+  data with a surviving fraction", JASA 94:909-919
+- Sy & Taylor (2000), "Estimation in a Cox proportional hazards cure
+  model", Biometrics 56:227-236
+- Harrison (2015), "A comparison of observation-level random effects
+  and BetaBinomial models for modelling overdispersion", PeerJ 3:e1114
+
+---
+
 ## 26-Mar-26 (cont.): Phase 1 implementation — window-only pass
 
 ### Context

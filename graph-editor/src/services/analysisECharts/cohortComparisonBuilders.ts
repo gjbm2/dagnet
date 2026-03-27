@@ -495,7 +495,10 @@ export function buildCohortMaturityEChartsOption(
   return {
     tooltip: {
       trigger: 'axis',
-      axisPointer: { type: 'line' },
+      axisPointer: {
+        type: 'cross',
+        lineStyle: { color: c.textMuted, width: 1, type: 'dashed', opacity: 0.6 },
+      },
       ...echartsTooltipStyle(),
       formatter: (params: any) => {
         const items = Array.isArray(params) ? params : [params];
@@ -542,6 +545,15 @@ export function buildCohortMaturityEChartsOption(
       min: settings.x_axis_min ?? 0,
       ...(maxTau !== null && Number.isFinite(maxTau) ? { max: settings.x_axis_max ?? maxTau } : {}),
       axisLabel: { fontSize: 9, color: c.text, formatter: (v: number) => `${Math.round(v)}` },
+      axisPointer: {
+        snap: true,
+        label: {
+          formatter: (p: any) => `${Math.round(p.value)} days`,
+          fontSize: 9, color: c.tooltipText,
+          backgroundColor: c.tooltipBg, borderColor: c.tooltipBorder, borderWidth: 1,
+          padding: [2, 6],
+        },
+      },
     },
     yAxis: {
       type: (settings.y_axis_scale === 'log') ? 'log' : 'value',
@@ -553,6 +565,15 @@ export function buildCohortMaturityEChartsOption(
       nameTextStyle: { fontSize: 8, color: c.text },
       axisLabel: { fontSize: 9, color: c.text, formatter: (v: number) => `${(v * 100).toFixed(0)}%` },
       splitLine: { lineStyle: { color: c.gridLine } },
+      axisPointer: {
+        snap: true,
+        label: {
+          formatter: (p: any) => `${(Number(p.value) * 100).toFixed(1)}%`,
+          fontSize: 9, color: c.tooltipText,
+          backgroundColor: c.tooltipBg, borderColor: c.tooltipBorder, borderWidth: 1,
+          padding: [2, 6],
+        },
+      },
     },
     legend: showLegend ? {
       ...(legendPos === 'bottom' ? { bottom: 4, left: 'center' }

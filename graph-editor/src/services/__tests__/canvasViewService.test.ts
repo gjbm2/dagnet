@@ -14,6 +14,7 @@ import {
   updateViewObjectState,
   deleteCanvasView,
   renameCanvasView,
+  reorderCanvasViews,
   toggleCanvasViewLocked,
   toggleCanvasViewScope,
   scopeEnabled,
@@ -380,6 +381,69 @@ describe('CRUD operations', () => {
     expect(r1.canvasViews![0].locked).toBe(true);
     const r2 = toggleCanvasViewLocked(r1, 'v1');
     expect(r2.canvasViews![0].locked).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// reorderCanvasViews
+// ---------------------------------------------------------------------------
+
+describe('reorderCanvasViews', () => {
+  it('should move a view forward in the array', () => {
+    // A, B, C → move A (0) to index 2 → B, C, A
+    const graph = makeGraph({
+      canvasViews: [
+        { id: 'v1', name: 'A', states: [] },
+        { id: 'v2', name: 'B', states: [] },
+        { id: 'v3', name: 'C', states: [] },
+      ],
+    });
+    const result = reorderCanvasViews(graph, 0, 2);
+    expect(result.canvasViews!.map(v => v.id)).toEqual(['v2', 'v3', 'v1']);
+  });
+
+  it('should move a view backward in the array', () => {
+    // A, B, C → move C (2) to index 0 → C, A, B
+    const graph = makeGraph({
+      canvasViews: [
+        { id: 'v1', name: 'A', states: [] },
+        { id: 'v2', name: 'B', states: [] },
+        { id: 'v3', name: 'C', states: [] },
+      ],
+    });
+    const result = reorderCanvasViews(graph, 2, 0);
+    expect(result.canvasViews!.map(v => v.id)).toEqual(['v3', 'v1', 'v2']);
+  });
+
+  it('should return same graph when fromIndex equals toIndex', () => {
+    const graph = makeGraph({
+      canvasViews: [
+        { id: 'v1', name: 'A', states: [] },
+        { id: 'v2', name: 'B', states: [] },
+      ],
+    });
+    const result = reorderCanvasViews(graph, 1, 1);
+    expect(result).toBe(graph); // identity — no mutation
+  });
+
+  it('should return same graph for out-of-bounds indices', () => {
+    const graph = makeGraph({
+      canvasViews: [{ id: 'v1', name: 'A', states: [] }],
+    });
+    expect(reorderCanvasViews(graph, -1, 0)).toBe(graph);
+    expect(reorderCanvasViews(graph, 0, 5)).toBe(graph);
+  });
+
+  it('should not mutate the original graph', () => {
+    const graph = makeGraph({
+      canvasViews: [
+        { id: 'v1', name: 'A', states: [] },
+        { id: 'v2', name: 'B', states: [] },
+      ],
+    });
+    const result = reorderCanvasViews(graph, 0, 1);
+    expect(graph.canvasViews!.map(v => v.id)).toEqual(['v1', 'v2']); // unchanged
+    expect(result.canvasViews!.map(v => v.id)).toEqual(['v2', 'v1']);
   });
 });
 

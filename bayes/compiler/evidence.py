@@ -433,6 +433,26 @@ def _bind_from_snapshot_rows(
         for d in cohort_daily:
             ev.total_n += d.n
 
+    # Step 4: Collect per-retrieval-date onset observations.
+    # onset_delta_days is derived once per retrieval date per edge from
+    # the Amplitude lag histogram (1% mass point). Each DB row carries
+    # the same onset for that retrieval — rows are NOT independent.
+    # Deduplicate by retrieval date to get one observation per date.
+    if et.has_latency and ev.latency_prior is not None:
+        seen_dates: set[str] = set()
+        onset_obs: list[float] = []
+        for row in rows:
+            onset_val = row.get("onset_delta_days")
+            if onset_val is None:
+                continue
+            ret_date = str(row.get("retrieved_at", ""))[:10]
+            if ret_date in seen_dates:
+                continue
+            seen_dates.add(ret_date)
+            onset_obs.append(float(onset_val))
+        if onset_obs:
+            ev.latency_prior.onset_observations = onset_obs
+
     # Return covered anchor_days so the caller can deduplicate
     # param-file supplementation.
     covered: set[str] = set()

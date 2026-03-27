@@ -1,9 +1,43 @@
 # Project Bayes: Programme
 
-**Status**: Draft
-**Date**: 17-Mar-26
+**Status**: Active
+**Updated**: 27-Mar-26
 **Purpose**: Phased delivery plan for Project Bayes. This doc owns sequencing;
 design docs contain the detail.
+
+### Current status snapshot (27-Mar-26)
+
+**Done**: Async infrastructure, Phase A–D compiler, FE overlay (basic
++ quality + model CDF + confidence bands), unified posterior schema,
+synthetic data generator + 8-graph param recovery suite, two-phase
+model architecture, likelihood rewrite (DM→Binomial), onset
+observations, t95 soft constraint.
+
+**Production fit quality**: del-to-reg p inflation reduced from
+1.94x → 1.19x. No-latency edges ≤1.03x. Synth recovery ≤1.04x
+across all 41 edges in 8 topologies. Remaining production inflation
+is genuine data sparsity (trajectory coverage) not model bias.
+
+**Key architectural decisions locked in (27-Mar-26)**:
+1. Textbook Binomial, not DM/BB — no concentration-parameter bias
+2. Per-retrieval onset from Amplitude histograms — data-driven, no
+   user input
+3. t95 soft constraint from analytics pass — prevents sigma inflation
+4. Two-phase model — window Phase 1, frozen-p Phase 2 with drift
+
+**Open bugs**:
+- Posterior upsert on subsequent runs — Bayes results do not update
+  the graph properly on re-runs. Likely a webhook commit or FE pull
+  upsert issue. Blocks warm-start and nightly scheduling.
+
+**Next priorities**:
+1. Commit and stabilise likelihood rewrite (code changes made, not
+   committed)
+2. Fix posterior upsert on subsequent runs
+3. Phase 2 (cohort pass) stabilisation — convergence issues
+4. Phase C (context slices) — prerequisite: doc 21 done ✓
+5. Mixture latency models for bimodal edges (doc 23 §12)
+6. Nightly scheduling — prerequisite: production confidence
 
 ---
 
@@ -93,13 +127,15 @@ Semantic foundation (parallel, feeds into consumption quality)
 | Visual validation (done) | FE overlay (done), existing analytic curves | Confidence to proceed to Phase B |
 | Phase B posteriors (done) | Phase A proven | FE overlay (Dirichlet), branch group quality |
 | Phase S snapshot evidence (done) | Phase B, FE hash infrastructure, snapshot DB | Richer maturation trajectories, tighter posteriors, enables meaningful slice pooling |
-| Phase D posteriors (done) | Phase S proven | Latent latency, overdispersion (BetaBinomial/DM), recency weighting, cohort latency hierarchy |
+| Phase D posteriors (done, likelihood rewritten 27-Mar-26) | Phase S proven | Latent latency, recency weighting, cohort latency hierarchy. **Likelihood rewrite**: DM→textbook Binomial (Gamel et al. 2000), BB→Binomial for daily obs, per-retrieval onset observations from Amplitude, t95 soft constraint from analytics pass. Two-phase model (window→cohort). See doc 23. |
 | Phase D.O latent onset (done) | Phase D proven | Independent per-edge latent onset (no hierarchy — see journal 23-Mar-26). Graph-level hierarchy removed (no intellectual justification). |
 | Phase D join-node mixture CDF (done) | Phase D proven | Mixture CDF at joins replaces single-path misspecification. All 8 structural topologies converge (journal 24-Mar-26). |
 | Doc 19 promoted_t95 separation (done) | Phase D proven | Separates user-configured t95 (input constraint) from model-output promoted_t95 (consumption). Prevents Bayesian t95 overwriting user's horizon guidance. |
 | Doc 21 unified posterior schema (done 25-Mar-26) | Phase D proven | Single `posterior.slices` keyed by DSL replaces split `posterior` + `latency.posterior`. Per-slice entries carry both probability and latency. `_model_state` for warm-start. Per-obs-type `p_window`/`p_cohort` extraction. Prerequisite for Phase C context slices. |
-| Production graph fit quality (open) | Phase D done | Production graph (`bayes-test-gm-rebuild`) posteriors do not match observed data well. Needs investigation — may be prior sensitivity, evidence binding, or model structure. Blocks production confidence for nightly scheduling. |
+| Production graph fit quality (major progress 27-Mar-26) | Phase D done | Production p inflation (1.94x on del-to-reg) reduced to 1.19x. Root causes: (1) DM likelihood bias → replaced with textbook Binomial, (2) BetaBinomial daily obs bias → replaced with Binomial, (3) onset/sigma drift → anchored with per-retrieval onset obs from Amplitude + t95 soft constraint from analytics pass. Remaining 1.19x is genuine data sparsity (trajectory coverage). See journal 26-27-Mar-26 and doc 23. Synth recovery excellent (≤1.04x across all 8 graphs). |
 | BE stats engine prior discrepancy (open) | Phase D done | Three-way discrepancy between FE stats pass, BE stats engine, and topology `derive_latency_prior` on latency priors. Only topology's crude moment-match gives convergence. See `19-be-stats-engine-bugs.md`. Related to production fit quality. |
+| Mixture latency models (designed, not built) | Phase D proven | Some edges (e.g. registered-to-success) have bimodal conversion timing that a single shifted log-normal cannot fit. Mixture of two log-normals needed. Opt-in per edge. See doc 23 §12. |
+| Phase 2 stabilisation (open) | Phase 1 likelihood rewrite done | Phase 2 (cohort pass with frozen Phase 1 values + drift) has convergence issues on some runs (ess=7). Needs investigation — may be related to Dirichlet drift parameterisation or Phase 1 latency values being passed through. |
 | Model quality gating (designed, not built) | Phase A overlay done | Quality signalling (progress, session log, Graph Issues), auto-enable Forecast Quality, accept/reject preview. See doc 13. |
 | Phase C posteriors (next) | Phase D proven, doc 21 done, test data with contexts | Per-slice visualisation, MECE validation, hierarchical shrinkage, κ recovery |
 | Nightly Bayes fit | Phase C proven, production confidence | Automatic posterior updates after daily fetch. Trigger Bayes fit for `dailyFetch: true` graphs when new snapshot data lands. Uses existing Modal/webhook/git-commit infrastructure — needs scheduling trigger + staleness detection + fit-on-change logic. |

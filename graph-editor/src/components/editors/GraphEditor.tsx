@@ -3,6 +3,7 @@ import { EditorProps, GraphData } from '../../types';
 import { useFileState, useTabContext, fileRegistry } from '../../contexts/TabContext';
 import { GraphStoreProvider, useGraphStore, GraphStoreContext } from '../../contexts/GraphStoreContext';
 import { useVisibleTabs } from '../../contexts/VisibleTabsContext';
+import { useDSLReaggregation, DSLReaggregationProvider } from '../../hooks/useDSLReaggregation';
 import DockLayout, { LayoutData } from 'rc-dock';
 import './GraphEditor.css';
 import GraphCanvas from '../GraphCanvas';
@@ -21,6 +22,7 @@ import { getGraphEditorLayout, getGraphEditorLayoutMinimized, PANEL_TO_TAB_ID } 
 import { dockGroups } from '../../layouts/defaultLayout';
 import { ViewPreferencesProvider, useViewPreferencesContext } from '../../contexts/ViewPreferencesContext';
 import { ScenariosProvider, useScenariosContextOptional, SCENARIO_PALETTE } from '../../contexts/ScenariosContext';
+import { ScenarioHighlightProvider } from '../../contexts/ScenarioHighlightContext';
 import { useURLScenarios } from '../../hooks/useURLScenarios';
 import { useDashboardMode } from '../../hooks/useDashboardMode';
 import { useViewOverlayMode } from '../../hooks/useViewOverlayMode';
@@ -300,6 +302,58 @@ function ScenarioLegendWrapper({ tabId }: { tabId: string }) {
     try { await renameScenario(scenarioId, newName); } catch (e) { console.error('Failed to rename scenario:', e); }
   }, [renameScenario]);
 
+  // Reorder user scenarios by display index (reversed orderedUserScenarios).
+  // The chip legend displays [...orderedUserScenarios].reverse(), so fromIndex/toIndex
+  // are within that reversed array. Convert back to scenarioOrder space and persist.
+  const handleReorderScenario = React.useCallback(async (fromIndex: number, toIndex: number) => {
+    if (!tabId) return;
+    const currentState = operations.getScenarioState(tabId);
+    if (!currentState) return;
+
+    // Build the reversed display order (same as the legend renders)
+    const orderedUser = scenarioOrder.length > 0
+      ? scenarioOrder
+          .filter((id: string) => id !== 'current' && id !== 'base')
+          .map((id: string) => scenarios.find((s: any) => s.id === id))
+          .filter(Boolean)
+      : scenarios;
+    const displayOrder = [...orderedUser].reverse();
+
+    const draggedId = (displayOrder[fromIndex] as any)?.id;
+    const targetId = (displayOrder[toIndex] as any)?.id;
+    if (!draggedId || !targetId || draggedId === targetId) return;
+
+    // Apply the move in the canonical (non-reversed) user order
+    const userOrder = scenarioOrder.filter((id: string) => id !== 'current' && id !== 'base');
+    const from = userOrder.indexOf(draggedId);
+    const to = userOrder.indexOf(targetId);
+    if (from === -1 || to === -1) return;
+    const newUserOrder = [...userOrder];
+    newUserOrder.splice(from, 1);
+    newUserOrder.splice(to, 0, draggedId);
+
+    // Rebuild full scenarioOrder preserving current/base positions
+    const oldFull = currentState.scenarioOrder || [];
+    const newFull: string[] = [];
+    let cursor = 0;
+    for (const id of oldFull) {
+      if (id === 'current' || id === 'base') {
+        newFull.push(id);
+      } else if (cursor < newUserOrder.length) {
+        newFull.push(newUserOrder[cursor++]);
+      }
+    }
+    while (cursor < newUserOrder.length) newFull.push(newUserOrder[cursor++]);
+
+    try {
+      await operations.updateTabState(tabId, {
+        scenarioState: { ...currentState, scenarioOrder: newFull } as any,
+      });
+    } catch (e) {
+      console.error('Failed to reorder scenarios:', e);
+    }
+  }, [tabId, operations, scenarioOrder, scenarios]);
+
   const baseVisible = visibleScenarioIds.includes('base');
 
   return (
@@ -324,6 +378,7 @@ function ScenarioLegendWrapper({ tabId }: { tabId: string }) {
       canvasViews={canvasViews}
       activeCanvasViewId={activeCanvasViewId}
       onRenameScenario={handleRenameScenario}
+      onReorderScenario={handleReorderScenario}
       nextScenarioColour={nextScenarioColour}
       dashboardCycleMs={isDashboardMode ? dashboardCycleMs : null}
     />
@@ -1602,6 +1657,13 @@ const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, r
   
   // Store reference for use in effects/callbacks - memoize to prevent recreation
   const store = useMemo(() => ({ getState: getStoreState }), [getStoreState]);
+
+  // DSL re-aggregation — graph-level hook, always mounted (even in dashboard mode)
+  const dslReaggregation = useDSLReaggregation({
+    graph: graph as any,
+    setGraph: setGraph as any,
+    graphStoreApi: { getState: getStoreState } as any,
+  });
   
   // Phase 1: Revalidation when tab becomes visible
   const prevVisibleRef = useRef(isVisible);
@@ -2096,6 +2158,7 @@ const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, r
       <ElementToolProvider value={elementToolContextValue}>
       <SelectionContext.Provider value={selectionContextValue}>
         <ScenariosProvider fileId={fileId} tabId={tabId}>
+        <ScenarioHighlightProvider>
           <URLScenariosProcessor fileId={fileId} />
           <URLDailyRetrieveAllProcessor fileId={fileId} />
           <PutToBaseRequestProcessor tabId={tabId} />
@@ -2107,6 +2170,7 @@ const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, r
               {canvasComponent}
             </div>
           </ViewPreferencesProvider>
+        </ScenarioHighlightProvider>
         </ScenariosProvider>
       </SelectionContext.Provider>
       </ElementToolProvider>
@@ -2117,12 +2181,14 @@ const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, r
     <ElementToolProvider value={elementToolContextValue}>
     <SelectionContext.Provider value={selectionContextValue}>
       <ScenariosProvider fileId={fileId} tabId={tabId}>
+      <ScenarioHighlightProvider>
       {/* Process URL scenario parameters after graph loads */}
       <URLScenariosProcessor fileId={fileId} />
       <URLDailyRetrieveAllProcessor fileId={fileId} />
       <PutToBaseRequestProcessor tabId={tabId} />
       <ViewPreferencesProvider tabId={tabId}>
-      <div 
+      <DSLReaggregationProvider value={dslReaggregation}>
+      <div
         ref={containerRef}
         className="graph-editor-dock-container"
         style={{ 
@@ -2559,7 +2625,9 @@ const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, r
           />
         )}
     </div>
+      </DSLReaggregationProvider>
       </ViewPreferencesProvider>
+      </ScenarioHighlightProvider>
       </ScenariosProvider>
     </SelectionContext.Provider>
     </ElementToolProvider>

@@ -8,11 +8,13 @@
  * without needing complex JavaScript width calculations.
  */
 
-import React, { useCallback, useState, useRef, useEffect } from 'react';
+import React, { useCallback, useState, useRef, useEffect, useMemo } from 'react';
 import { Scenario } from '../types/scenarios';
 import { Eye, EyeOff, Images, Image, Square, X, Plus, Minimize2, Maximize2, Check, Trash2, LayoutTemplate, LockKeyhole, LockOpen, Layers as LayersIcon, LayoutPanelLeft, Monitor, type LucideIcon } from 'lucide-react';
 import type { ScenarioVisibilityMode, ViewOverlayMode, CanvasView } from '../types';
+import { useScenarioHighlight } from '../contexts/ScenarioHighlightContext';
 import toast from 'react-hot-toast';
+import { createPortal } from 'react-dom';
 import './ScenarioLegend.css';
 
 /** View mode items for the hover submenu. */
@@ -54,6 +56,8 @@ interface ScenarioLegendProps {
   nextScenarioColour?: string;
   /** Dashboard auto-cycle interval in ms (null = off). Drives drain animation on view pill. */
   dashboardCycleMs?: number | null;
+  /** Reorder user scenarios by index within the user-scenario-only list. */
+  onReorderScenario?: (fromIndex: number, toIndex: number) => void;
 }
 
 export function ScenarioLegend({
@@ -79,9 +83,146 @@ export function ScenarioLegend({
   onRenameScenario,
   nextScenarioColour,
   dashboardCycleMs,
+  onReorderScenario,
 }: ScenarioLegendProps) {
   const [deletingIds, setDeletingIds] = useState<string[]>([]);
-  
+  const { highlightedScenarioId, setHighlightedScenarioId } = useScenarioHighlight();
+
+  // Clear peek if the highlighted scenario becomes hidden
+  useEffect(() => {
+    if (highlightedScenarioId && !visibleScenarioIds.includes(highlightedScenarioId)) {
+      setHighlightedScenarioId(null);
+    }
+  }, [highlightedScenarioId, visibleScenarioIds, setHighlightedScenarioId]);
+
+  // Track which chips have had their enter animation — remove the class after it plays
+  // so React DOM reordering can never replay it.
+  // Entrance animation — detected synchronously during render (not in useEffect)
+  // so the chip-enter class is present on the FIRST paint, not one frame late.
+  const knownChipIdsRef = useRef<Set<string>>(new Set());
+  const knownPillIdsRef = useRef<Set<string>>(new Set());
+  const [, forceAnimUpdate] = useState(0);
+
+  // Scenario chips — detect fresh IDs during render
+  const currentScenarioIds = scenarios.map(s => s.id);
+  const freshScenarioIds = currentScenarioIds.filter(id => !knownChipIdsRef.current.has(id));
+  const enterAnimatingIds = useRef(new Set<string>()).current;
+  if (freshScenarioIds.length > 0) {
+    freshScenarioIds.forEach(id => enterAnimatingIds.add(id));
+    knownChipIdsRef.current = new Set(currentScenarioIds);
+  } else if (currentScenarioIds.length !== knownChipIdsRef.current.size) {
+    knownChipIdsRef.current = new Set(currentScenarioIds);
+  }
+
+  // View pill + mode pills — detect fresh IDs during render
+  const activeModeIds = viewModes.filter(m => m.isActive()).map(m => `mode-${m.id}`);
+  const viewPillId = activeCanvasViewId ? [`view-${activeCanvasViewId}`] : [];
+  const currentPillIds = [...viewPillId, ...activeModeIds];
+  const freshPillIds = currentPillIds.filter(id => !knownPillIdsRef.current.has(id));
+  const enterAnimatingPills = useRef(new Set<string>()).current;
+  if (freshPillIds.length > 0) {
+    freshPillIds.forEach(id => enterAnimatingPills.add(id));
+    knownPillIdsRef.current = new Set(currentPillIds);
+  } else if (currentPillIds.length !== knownPillIdsRef.current.size) {
+    knownPillIdsRef.current = new Set(currentPillIds);
+  }
+
+  // Clean up animation classes after they complete (350ms)
+  useEffect(() => {
+    if (freshScenarioIds.length === 0 && freshPillIds.length === 0) return;
+    const t = setTimeout(() => {
+      freshScenarioIds.forEach(id => enterAnimatingIds.delete(id));
+      freshPillIds.forEach(id => enterAnimatingPills.delete(id));
+      forceAnimUpdate(n => n + 1);
+    }, 350);
+    return () => clearTimeout(t);
+  }); // intentionally no deps — runs after every render that had fresh IDs
+
+  // ── Horizontal drag-reorder for user scenario chips ──
+  const CHIP_DRAG_THRESHOLD = 5;
+  const chipPendingRef = useRef<{ idx: number; startX: number; startY: number; pointerId: number } | null>(null);
+  const chipRefs = useRef<(HTMLDivElement | null)[]>([]);
+  const [chipDrag, setChipDrag] = useState<{
+    fromIdx: number; overIdx: number;
+    x: number; y: number; ox: number; oy: number;
+    rect: { width: number; height: number };
+    slotMids: number[]; // X midpoints
+  } | null>(null);
+  const [chipSuppressTransitions, setChipSuppressTransitions] = useState(false);
+  // Frozen drag state kept after drop so shuffle transforms persist until reorder renders
+  const [frozenDrag, setFrozenDrag] = useState<{ fromIdx: number; overIdx: number; rect: { width: number } } | null>(null);
+  // Clear frozen state when scenarioOrder changes (= reorder has rendered)
+  const prevScenarioOrderRef = useRef(scenarioOrder);
+  useEffect(() => {
+    if (prevScenarioOrderRef.current !== scenarioOrder && frozenDrag) {
+      setFrozenDrag(null);
+      // Small delay so React has painted the new order before we re-enable transitions
+      requestAnimationFrame(() => setChipSuppressTransitions(false));
+    }
+    prevScenarioOrderRef.current = scenarioOrder;
+  }, [scenarioOrder, frozenDrag]);
+
+  const onChipPointerDown = useCallback((e: React.PointerEvent, chipIndex: number) => {
+    if (!onReorderScenario) return;
+    if ((e.target as HTMLElement).closest('button')) return;
+    chipPendingRef.current = { idx: chipIndex, startX: e.clientX, startY: e.clientY, pointerId: e.pointerId };
+  }, [onReorderScenario]);
+
+  const startChipDrag = useCallback((chipIndex: number, clientX: number, clientY: number, pointerId: number) => {
+    const el = chipRefs.current[chipIndex];
+    if (!el) return;
+    el.setPointerCapture(pointerId);
+    const slotMids = chipRefs.current.map(ref => {
+      if (!ref) return 0;
+      const r = ref.getBoundingClientRect();
+      return r.left + r.width / 2;
+    });
+    const rect = el.getBoundingClientRect();
+    setChipDrag({
+      fromIdx: chipIndex, overIdx: chipIndex,
+      x: clientX, y: clientY,
+      ox: clientX - rect.left, oy: clientY - rect.top,
+      rect: { width: rect.width, height: rect.height },
+      slotMids,
+    });
+  }, []);
+
+  const onChipPointerMove = useCallback((e: React.PointerEvent) => {
+    const p = chipPendingRef.current;
+    if (p && !chipDrag) {
+      const dx = e.clientX - p.startX;
+      const dy = e.clientY - p.startY;
+      if (dx * dx + dy * dy > CHIP_DRAG_THRESHOLD * CHIP_DRAG_THRESHOLD) {
+        chipPendingRef.current = null;
+        startChipDrag(p.idx, e.clientX, e.clientY, p.pointerId);
+      }
+      return;
+    }
+    if (!chipDrag) return;
+    const x = e.clientX;
+    let closest = 0;
+    let minDist = Infinity;
+    for (let i = 0; i < chipDrag.slotMids.length; i++) {
+      const d = Math.abs(x - chipDrag.slotMids[i]);
+      if (d < minDist) { minDist = d; closest = i; }
+    }
+    setChipDrag(prev => prev ? { ...prev, x: e.clientX, y: e.clientY, overIdx: closest } : null);
+  }, [chipDrag, startChipDrag]);
+
+  const onChipPointerUp = useCallback(() => {
+    chipPendingRef.current = null;
+    if (chipDrag && chipDrag.fromIdx !== chipDrag.overIdx && onReorderScenario) {
+      const { fromIdx, overIdx } = chipDrag;
+      // Freeze the shuffle transforms so they persist until the reorder renders
+      setFrozenDrag({ fromIdx, overIdx, rect: { width: chipDrag.rect.width } });
+      setChipSuppressTransitions(true);
+      setChipDrag(null); // removes ghost, but frozenDrag keeps transforms
+      onReorderScenario(fromIdx, overIdx);
+    } else {
+      setChipDrag(null);
+    }
+  }, [chipDrag, onReorderScenario]);
+
   /**
    * Get simple visibility (eye) icon for a scenario (bool)
    */
@@ -228,6 +369,7 @@ export function ScenarioLegend({
     : scenarios
   );
 
+
   // Width is now handled by CSS - legend is inside canvas panel so it uses parent width naturally
   /**
    * Dashboard-only labelling: in dashboard mode we replace "Current/Base" with DSL strings for clarity.
@@ -246,10 +388,64 @@ export function ScenarioLegend({
 
   return (
     <div className="scenario-legend">
-      {/* Order chips from bottom of stack (left) to top of stack (right) */}
-      {/* Bottom: Original -> User Scenarios (reverse order) -> Current (top) */}
-      
-      {/* 1. Base - bottom of stack, leftmost */}
+      {/* Active canvas view pill — first, as it's determinative (controls scenarios + modes) */}
+      {activeCanvasViewId && (() => {
+        const activeView = canvasViews.find(v => v.id === activeCanvasViewId);
+        if (!activeView) return null;
+        return (
+          <CanvasViewPill
+            key={activeView.id}
+            view={activeView}
+            allViews={canvasViews}
+            cycleMs={dashboardCycleMs}
+            chipEnter={enterAnimatingPills.has(`view-${activeView.id}`)}
+            onDeactivate={() => window.dispatchEvent(new Event('dagnet:deactivateCanvasView'))}
+            onRename={(name) => window.dispatchEvent(new CustomEvent('dagnet:renameCanvasView', { detail: { viewId: activeView.id, name } }))}
+          />
+        );
+      })()}
+
+      {/* Active view mode pills — shown for each active mode */}
+      {viewModes.filter(m => m.isActive()).map(mode => {
+        const ModeIcon = mode.icon;
+        const hasSubmenu = mode.activeSubmenu && mode.activeSubmenu.length > 0;
+        return (
+        <div key={mode.id} className={`scenario-legend-new-wrapper${hasSubmenu ? '' : ' scenario-legend-no-submenu'}`}>
+          <div className={`scenario-legend-chip scenario-legend-mode-pill${enterAnimatingPills.has(`mode-${mode.id}`) ? ' chip-enter' : ''}`}>
+            <span className="scenario-legend-name">{ModeIcon && <ModeIcon size={16} />}{mode.label}</span>
+            <button
+              className="scenario-legend-delete"
+              onClick={(e) => {
+                e.stopPropagation();
+                mode.toggle();
+              }}
+              title={`Exit ${mode.label}`}
+            >
+              <X size={14} />
+            </button>
+          </div>
+          {hasSubmenu && (
+            <div className="scenario-legend-hover-submenu">
+              {mode.activeSubmenu!.map((item, i) => (
+                <button
+                  key={item.label}
+                  className={`scenario-legend-view-pill${item.checked ? ' active' : ''}`}
+                  style={{ transitionDelay: `${(i + 1) * 0.015 + 0.015}s` }}
+                  onClick={(e) => { e.stopPropagation(); item.onClick(); }}
+                >
+                  {item.checked && <Check size={14} />}
+                  {item.label}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+        );
+      })}
+
+      {/* Scenario chips: Base -> User Scenarios -> Current */}
+
+      {/* 1. Base - bottom of stack */}
       {shouldShowChips && showBase && (
         <div
           key="base"
@@ -263,6 +459,8 @@ export function ScenarioLegend({
             e.stopPropagation();
             window.dispatchEvent(new CustomEvent('dagnet:openScenariosPanel'));
           }}
+          onMouseEnter={() => visibleScenarioIds.includes('base') && setHighlightedScenarioId('base')}
+          onMouseLeave={() => visibleScenarioIds.includes('base') && setHighlightedScenarioId(null)}
           onContextMenu={(e) => {
             e.preventDefault();
             window.dispatchEvent(new CustomEvent('dagnet:scenarioContextMenu', {
@@ -299,23 +497,47 @@ export function ScenarioLegend({
       {/* Use scenarioOrder (per-tab), reversed so left = bottom of stack, right = top */}
       {shouldShowChips && [...orderedUserScenarios]
         .reverse()
-        .map(scenario => {
+        .map((scenario, chipIndex) => {
         const isVisible = visibleScenarioIds.includes(scenario.id);
         const colour = getScenarioColour(scenario.id, isVisible);
-        
+        const isChipGrabbed = chipDrag?.fromIdx === chipIndex;
+
+        // Horizontal shuffle: shift chips left/right to open a gap.
+        // Use either the active drag or the frozen post-drop drag for transforms.
+        const activeDrag = chipDrag || frozenDrag;
+        const isFrozenGrabbed = frozenDrag?.fromIdx === chipIndex;
+        let chipTransform = '';
+        if (activeDrag && !isChipGrabbed && !isFrozenGrabbed) {
+          const { fromIdx, overIdx } = activeDrag;
+          const shiftPx = activeDrag.rect.width + 6; // chip width + gap
+          if (fromIdx < overIdx) {
+            if (chipIndex > fromIdx && chipIndex <= overIdx) chipTransform = `translateX(-${shiftPx}px)`;
+          } else if (fromIdx > overIdx) {
+            if (chipIndex >= overIdx && chipIndex < fromIdx) chipTransform = `translateX(${shiftPx}px)`;
+          }
+        }
+
         return (
           <div
             key={scenario.id}
-            className={`scenario-legend-chip ${!isVisible ? 'invisible' : ''} ${deletingIds.includes(scenario.id) ? 'deleting' : ''}`}
+            ref={el => { chipRefs.current[chipIndex] = el; }}
+            className={`scenario-legend-chip${enterAnimatingIds.has(scenario.id) ? ' chip-enter' : ''} ${!isVisible ? 'invisible' : ''} ${deletingIds.includes(scenario.id) ? 'deleting' : ''}${(isChipGrabbed || isFrozenGrabbed) ? ' chip-grabbed' : ''}`}
             style={{
               ...getChipStyle(scenario.id, colour),
-              opacity: isVisible ? 1 : 0.3
+              opacity: (isChipGrabbed || isFrozenGrabbed) ? 0 : (isVisible ? 1 : 0.3),
+              transform: chipTransform || undefined,
+              transition: (isChipGrabbed || isFrozenGrabbed || chipSuppressTransitions) ? 'none' : chipDrag ? 'transform 0.15s ease' : undefined,
             }}
             onClick={(e) => {
               e.stopPropagation();
-              // Focus scenarios panel (same pattern as properties panel)
               window.dispatchEvent(new CustomEvent('dagnet:openScenariosPanel'));
             }}
+            onPointerDown={(e) => onChipPointerDown(e, chipIndex)}
+            onPointerMove={onChipPointerMove}
+            onPointerUp={onChipPointerUp}
+            onPointerCancel={onChipPointerUp}
+            onMouseEnter={() => isVisible && setHighlightedScenarioId(scenario.id)}
+            onMouseLeave={() => isVisible && setHighlightedScenarioId(null)}
             onContextMenu={(e) => {
               e.preventDefault();
               window.dispatchEvent(new CustomEvent('dagnet:scenarioContextMenu', {
@@ -366,7 +588,40 @@ export function ScenarioLegend({
           </div>
         );
       })}
-      
+
+      {/* Floating ghost for chip drag */}
+      {chipDrag && (() => {
+        const reversed = [...orderedUserScenarios].reverse();
+        const s = reversed[chipDrag.fromIdx];
+        if (!s) return null;
+        const isVisible = visibleScenarioIds.includes(s.id);
+        const colour = getScenarioColour(s.id, isVisible);
+        return createPortal(
+          <div
+            className="scenario-legend-chip chip-ghost"
+            style={{
+              ...getChipStyle(s.id, colour),
+              position: 'fixed',
+              left: chipDrag.x - chipDrag.ox,
+              top: chipDrag.y - chipDrag.oy,
+              width: chipDrag.rect.width,
+              height: chipDrag.rect.height,
+              margin: 0,
+              pointerEvents: 'none',
+              zIndex: 9999,
+              opacity: 0.9,
+              boxShadow: '0 6px 20px rgba(0,0,0,0.3)',
+            }}
+          >
+            <span className="scenario-legend-toggle">{getVisibilityIcon(s.id)}</span>
+            <span className="scenario-legend-mode-toggle">{getModeIcon(s.id)}</span>
+            <span className="scenario-legend-name">{s.name}</span>
+            <span className="scenario-legend-delete"><X size={14} /></span>
+          </div>,
+          document.body,
+        );
+      })()}
+
       {/* 3. Current - top of stack, rightmost (before new button) */}
       {shouldShowChips && showCurrent && (
         <div
@@ -381,6 +636,8 @@ export function ScenarioLegend({
             e.stopPropagation();
             window.dispatchEvent(new CustomEvent('dagnet:openScenariosPanel'));
           }}
+          onMouseEnter={() => visibleScenarioIds.includes('current') && setHighlightedScenarioId('current')}
+          onMouseLeave={() => visibleScenarioIds.includes('current') && setHighlightedScenarioId(null)}
           onContextMenu={(e) => {
             e.preventDefault();
             window.dispatchEvent(new CustomEvent('dagnet:scenarioContextMenu', {
@@ -413,59 +670,6 @@ export function ScenarioLegend({
         </div>
       )}
       
-      {/* Active view mode pills — shown for each active mode */}
-      {viewModes.filter(m => m.isActive()).map(mode => {
-        const ModeIcon = mode.icon;
-        const hasSubmenu = mode.activeSubmenu && mode.activeSubmenu.length > 0;
-        return (
-        <div key={mode.id} className={`scenario-legend-new-wrapper${hasSubmenu ? '' : ' scenario-legend-no-submenu'}`}>
-          <div className="scenario-legend-chip scenario-legend-mode-pill">
-            <span className="scenario-legend-name">{ModeIcon && <ModeIcon size={16} />}{mode.label}</span>
-            <button
-              className="scenario-legend-delete"
-              onClick={(e) => {
-                e.stopPropagation();
-                mode.toggle();
-              }}
-              title={`Exit ${mode.label}`}
-            >
-              <X size={14} />
-            </button>
-          </div>
-          {hasSubmenu && (
-            <div className="scenario-legend-hover-submenu">
-              {mode.activeSubmenu!.map((item, i) => (
-                <button
-                  key={item.label}
-                  className={`scenario-legend-view-pill${item.checked ? ' active' : ''}`}
-                  style={{ transitionDelay: `${(i + 1) * 0.03 + 0.03}s` }}
-                  onClick={(e) => { e.stopPropagation(); item.onClick(); }}
-                >
-                  {item.checked && <Check size={14} />}
-                  {item.label}
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
-        );
-      })}
-
-      {/* Active canvas view pill — inline-editable name + dismiss */}
-      {activeCanvasViewId && (() => {
-        const activeView = canvasViews.find(v => v.id === activeCanvasViewId);
-        if (!activeView) return null;
-        return (
-          <CanvasViewPill
-            key={activeView.id}
-            view={activeView}
-            allViews={canvasViews}
-            cycleMs={dashboardCycleMs}
-            onDeactivate={() => window.dispatchEvent(new Event('dagnet:deactivateCanvasView'))}
-            onRename={(name) => window.dispatchEvent(new CustomEvent('dagnet:renameCanvasView', { detail: { viewId: activeView.id, name } }))}
-          />
-        );
-      })()}
 
       {/* + button with hover submenu — not shown in dashboard mode */}
       {!isDashboardMode && (
@@ -490,9 +694,17 @@ export function ScenarioLegend({
           <div className="scenario-legend-hover-submenu">
             {(() => {
               let idx = 0;
-              const delay = () => `${(idx++) * 0.03 + 0.03}s`;
+              const delay = () => `${(idx++) * 0.015 + 0.015}s`;
+              // CanvasViewSubmenuItems will consume: divider + header + N views + New view + divider + Expand + Shrink
+              const viewsSlots = 1 + 1 + canvasViews.length + 1 + 1 + 1 + 1; // divider, "Views" header, views, New view, divider, Expand, Shrink
+              const viewsStartIdx = idx;
+              idx += viewsSlots; // skip past views section so display modes continue the cascade
               return (
                 <>
+                  <CanvasViewSubmenuItems views={canvasViews} activeViewId={activeCanvasViewId} startIndex={viewsStartIdx} showHeader />
+
+                  <div className="scenario-legend-submenu-divider" style={{ transitionDelay: delay(), height: 6 }} />
+                  <div className="scenario-legend-submenu-header scenario-legend-view-pill" style={{ transitionDelay: delay() }}>Display mode</div>
                   {viewModes.map(mode => {
                     const Icon = mode.icon;
                     const d = delay();
@@ -508,8 +720,6 @@ export function ScenarioLegend({
                       </button>
                     );
                   })}
-
-                  <CanvasViewSubmenuItems views={canvasViews} activeViewId={activeCanvasViewId} startIndex={idx} onIndex={() => idx++} />
                 </>
               );
             })()}
@@ -521,10 +731,11 @@ export function ScenarioLegend({
 }
 
 /** Inline-editable pill for the active canvas view, with hover submenu to switch views. */
-function CanvasViewPill({ view, allViews, cycleMs, onDeactivate, onRename }: {
+function CanvasViewPill({ view, allViews, cycleMs, chipEnter, onDeactivate, onRename }: {
   view: CanvasView;
   allViews: CanvasView[];
   cycleMs?: number | null;
+  chipEnter?: boolean;
   onDeactivate: () => void;
   onRename: (name: string) => void;
 }) {
@@ -550,7 +761,7 @@ function CanvasViewPill({ view, allViews, cycleMs, onDeactivate, onRename }: {
 
   return (
     <div className="scenario-legend-new-wrapper scenario-legend-canvas-view-pill-wrapper">
-      <div className="scenario-legend-chip scenario-legend-mode-pill scenario-legend-canvas-view-pill" style={{ position: 'relative', overflow: 'hidden' }}>
+      <div className={`scenario-legend-chip scenario-legend-mode-pill scenario-legend-canvas-view-pill${chipEnter ? ' chip-enter' : ''}`} style={{ position: 'relative', overflow: 'hidden' }}>
         {/* Drain progress — fills L-to-R then resets on cycle */}
         {cycleMs && cycleMs > 0 && (
           <div
@@ -653,29 +864,149 @@ function InlineEditableName({ name, onRename }: { name: string; onRename?: (name
   );
 }
 
-/** Shared canvas view items for hover submenus (used in both main dropdown and pill dropdown). */
-function CanvasViewSubmenuItems({ views, activeViewId, startIndex = 0, onIndex }: {
+/**
+ * Shared canvas view items for hover submenus (used in both main dropdown and pill dropdown).
+ *
+ * Drag-reorder uses pointer events. The grabbed pill is pulled out of flow
+ * (position:fixed, follows cursor). Remaining pills collapse the gap and
+ * shuffle with translateY to show the insertion point. On release the pill
+ * snaps into its new slot.
+ */
+function CanvasViewSubmenuItems({ views, activeViewId, startIndex = 0, onIndex, showHeader = false }: {
   views: CanvasView[];
   activeViewId?: string | null;
   startIndex?: number;
   onIndex?: () => void;
+  showHeader?: boolean;
 }) {
+  const ROW_H = 35; // 31px pill + 4px gap
+  const DRAG_THRESHOLD = 5; // px movement before drag engages
+
+  // Pending = pointerdown recorded but haven't moved enough to start dragging yet.
+  // Drag = actively dragging.
+  const pendingRef = useRef<{ idx: number; startX: number; startY: number; pointerId: number } | null>(null);
+  const [suppressTransitions, setSuppressTransitions] = useState(false);
+
+  const [drag, setDrag] = useState<{
+    fromIdx: number; overIdx: number;
+    x: number; y: number; ox: number; oy: number;
+    rect: { width: number; height: number };
+    slotTops: number[];
+  } | null>(null);
+
+  const pillRefs = useRef<(HTMLDivElement | null)[]>([]);
+
+  const onPointerDown = useCallback((e: React.PointerEvent, viewIndex: number) => {
+    // Only block drag from the action overlay buttons, not the main pill button
+    if ((e.target as HTMLElement).closest('.scenario-legend-canvas-view-actions')) return;
+    // Record intent — actual drag starts after movement threshold
+    pendingRef.current = { idx: viewIndex, startX: e.clientX, startY: e.clientY, pointerId: e.pointerId };
+  }, []);
+
+  const startDrag = useCallback((viewIndex: number, clientX: number, clientY: number, pointerId: number) => {
+    const el = pillRefs.current[viewIndex];
+    if (!el) return;
+    el.setPointerCapture(pointerId);
+
+    const slotTops = pillRefs.current.map(ref => {
+      if (!ref) return 0;
+      const r = ref.getBoundingClientRect();
+      return r.top + r.height / 2;
+    });
+    const rect = el.getBoundingClientRect();
+
+    setDrag({
+      fromIdx: viewIndex,
+      overIdx: viewIndex,
+      x: clientX, y: clientY,
+      ox: clientX - rect.left, oy: clientY - rect.top,
+      rect: { width: rect.width, height: rect.height },
+      slotTops,
+    });
+  }, []);
+
+  const onPointerMove = useCallback((e: React.PointerEvent) => {
+    // Check if we should promote pending → drag
+    const p = pendingRef.current;
+    if (p && !drag) {
+      const dx = e.clientX - p.startX;
+      const dy = e.clientY - p.startY;
+      if (dx * dx + dy * dy > DRAG_THRESHOLD * DRAG_THRESHOLD) {
+        pendingRef.current = null;
+        startDrag(p.idx, e.clientX, e.clientY, p.pointerId);
+      }
+      return;
+    }
+    if (!drag) return;
+    const y = e.clientY;
+    let closest = 0;
+    let minDist = Infinity;
+    for (let i = 0; i < drag.slotTops.length; i++) {
+      const d = Math.abs(y - drag.slotTops[i]);
+      if (d < minDist) { minDist = d; closest = i; }
+    }
+    setDrag(prev => prev ? { ...prev, x: e.clientX, y: e.clientY, overIdx: closest } : null);
+  }, [drag, startDrag]);
+
+  const onPointerUp = useCallback(() => {
+    pendingRef.current = null;
+    if (drag && drag.fromIdx !== drag.overIdx) {
+      const { fromIdx, overIdx } = drag;
+      // Kill transitions so pills snap instantly to new positions on drop
+      setSuppressTransitions(true);
+      setDrag(null);
+      window.dispatchEvent(new CustomEvent('dagnet:reorderCanvasViews', {
+        detail: { fromIndex: fromIdx, toIndex: overIdx },
+      }));
+      // Re-enable transitions next frame
+      requestAnimationFrame(() => setSuppressTransitions(false));
+    } else {
+      setDrag(null);
+    }
+  }, [drag]);
+
   let idx = startIndex;
   const delay = () => {
-    const d = `${(idx++) * 0.03 + 0.03}s`;
+    const d = `${(idx++) * 0.015 + 0.015}s`;
     onIndex?.();
     return d;
   };
 
   return (
     <>
-      <div className="scenario-legend-submenu-divider" style={{ transitionDelay: delay() }} />
+      {!showHeader && <div className="scenario-legend-submenu-divider" style={{ transitionDelay: delay() }} />}
+      {showHeader && <div className="scenario-legend-submenu-header scenario-legend-view-pill" style={{ transitionDelay: delay() }}>Views</div>}
 
-      {views.map(view => (
+      {views.map((view, viewIndex) => {
+        const isGrabbed = drag?.fromIdx === viewIndex;
+
+        // Non-grabbed pills: shift to fill the vacated slot and open the insertion gap
+        let transform = '';
+        if (drag && !isGrabbed) {
+          const { fromIdx, overIdx } = drag;
+          if (fromIdx < overIdx) {
+            // Dragging down: items between source+1..target shift up one slot
+            if (viewIndex > fromIdx && viewIndex <= overIdx) transform = `translateY(-${ROW_H}px)`;
+          } else if (fromIdx > overIdx) {
+            // Dragging up: items between target..source-1 shift down one slot
+            if (viewIndex >= overIdx && viewIndex < fromIdx) transform = `translateY(${ROW_H}px)`;
+          }
+        }
+
+        const staggerDelay = delay();
+        return (
         <div
           key={view.id}
-          className={`scenario-legend-view-pill scenario-legend-canvas-view-item ${view.id === activeViewId ? 'active' : ''}`}
-          style={{ transitionDelay: delay() }}
+          ref={el => { pillRefs.current[viewIndex] = el; }}
+          className={`scenario-legend-view-pill scenario-legend-canvas-view-item${view.id === activeViewId ? ' active' : ''}${isGrabbed ? ' view-grabbed' : ''}${suppressTransitions ? ' view-no-transition' : ''}`}
+          style={{
+            transition: `opacity 0.1s ease ${staggerDelay}, transform 0.15s ease ${staggerDelay}, border-color 0.15s ease ${staggerDelay}, box-shadow 0.15s ease ${staggerDelay}`,
+            transform: transform || undefined,
+          }}
+          onPointerDown={(e) => onPointerDown(e, viewIndex)}
+          onPointerMove={onPointerMove}
+          onPointerUp={onPointerUp}
+          onPointerCancel={onPointerUp}
         >
           <button
             className="scenario-legend-canvas-view-btn"
@@ -728,10 +1059,34 @@ function CanvasViewSubmenuItems({ views, activeViewId, startIndex = 0, onIndex }
             </button>
           </div>
         </div>
-      ))}
+        );
+      })}
+
+      {/* Floating ghost — portalled to document.body so no stacking context can clip it */}
+      {drag && createPortal(
+        <div
+          className="scenario-legend-view-pill scenario-legend-canvas-view-item view-ghost"
+          style={{
+            position: 'fixed',
+            left: drag.x - drag.ox,
+            top: drag.y - drag.oy,
+            width: drag.rect.width,
+            height: drag.rect.height,
+            margin: 0,
+            pointerEvents: 'none',
+            zIndex: 9999,
+          }}
+        >
+          <span className="scenario-legend-canvas-view-btn">
+            {views[drag.fromIdx]?.locked ? <LockKeyhole size={16} /> : <LockOpen size={16} />}
+            {views[drag.fromIdx]?.name}
+          </span>
+        </div>,
+        document.body,
+      )}
 
       <button
-        className="scenario-legend-view-pill scenario-legend-canvas-view-item"
+        className="scenario-legend-view-pill"
         style={{ transitionDelay: delay() }}
         onClick={(e) => {
           e.stopPropagation();
@@ -745,7 +1100,7 @@ function CanvasViewSubmenuItems({ views, activeViewId, startIndex = 0, onIndex }
       <div className="scenario-legend-submenu-divider" style={{ transitionDelay: delay() }} />
 
       <button
-        className="scenario-legend-view-pill scenario-legend-canvas-view-item"
+        className="scenario-legend-view-pill"
         style={{ transitionDelay: delay() }}
         onClick={(e) => {
           e.stopPropagation();
@@ -756,7 +1111,7 @@ function CanvasViewSubmenuItems({ views, activeViewId, startIndex = 0, onIndex }
         Expand all
       </button>
       <button
-        className="scenario-legend-view-pill scenario-legend-canvas-view-item"
+        className="scenario-legend-view-pill"
         style={{ transitionDelay: delay() }}
         onClick={(e) => {
           e.stopPropagation();

@@ -520,14 +520,14 @@ export function chartFontScale(size: number | string | null | undefined): {
 } {
   const base = resolveFontSizePx(size);
   // Scale all roles proportionally from the base.
-  // At base=10 (M): axis=8, label=9, legend=9, data=7, tooltip=10, mark=8.
+  // At base=10 (M): axis=8, label=9, legend=9, data=7, tooltip=12, mark=8.
   const scale = base / FONT_SIZE_DEFAULT;
   return {
     axisTitlePx: Math.round(8 * scale),
     axisLabelPx: Math.round(9 * scale),
     legendPx: Math.round(9 * scale),
     dataLabelPx: Math.round(7 * scale),
-    tooltipPx: Math.round(10 * scale),
+    tooltipPx: Math.round(12 * scale),
     markLabelPx: Math.round(8 * scale),
   };
 }

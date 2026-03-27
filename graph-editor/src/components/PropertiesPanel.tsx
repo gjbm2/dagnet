@@ -386,6 +386,16 @@ function CanvasAnalysisPropertiesSection({ analysisId, graph, setGraph, saveHist
   const isEditingCurrentLayerDsl = editingScenarioId === 'current' && activeCI?.mode === 'live';
   const { currentDSL: graphCurrentDSL } = useGraphStore();
 
+  const kindLabels = useMemo(() => {
+    const viewType = activeCI?.view_type || 'chart';
+    const aType = activeCI?.analysis_type || '';
+    const kinds = getKindsForView(aType, viewType as 'chart' | 'cards' | 'table');
+    if (kinds.length === 0) return undefined;
+    const labels: Record<string, string> = {};
+    for (const k of kinds) labels[k.id] = k.name;
+    return labels;
+  }, [activeCI?.view_type, activeCI?.analysis_type]);
+
   if (!analysis) return <div style={{ textAlign: 'center', color: '#666', padding: '20px' }}>Canvas analysis not found</div>;
 
   return (
@@ -586,15 +596,7 @@ function CanvasAnalysisPropertiesSection({ analysisId, graph, setGraph, saveHist
         }}
         chartKind={activeCI?.kind}
         effectiveChartKind={effectiveChartKind}
-        kindLabels={useMemo(() => {
-          const viewType = activeCI?.view_type || 'chart';
-          const aType = activeCI?.analysis_type || '';
-          const kinds = getKindsForView(aType, viewType as 'chart' | 'cards' | 'table');
-          if (kinds.length === 0) return undefined;
-          const labels: Record<string, string> = {};
-          for (const k of kinds) labels[k.id] = k.name;
-          return labels;
-        }, [activeCI?.view_type, activeCI?.analysis_type])}
+        kindLabels={kindLabels}
         onChartKindChange={(newKind) => {
           const nextGraph = mutateCanvasAnalysisGraph(graph, analysisId, (a) => {
             const ci = a.content_items?.[activeTabIndex] || a.content_items?.[0];

@@ -15,6 +15,7 @@ import { getVisitedNodeIds } from '@/lib/queryDSL';
 import { calculateConfidenceBounds } from '@/utils/confidenceIntervals';
 import { computeQualityTier, qualityTierToColour, qualityTierLabel } from '@/utils/bayesQualityTier';
 import { useDataDepthContext } from '../../contexts/DataDepthContext';
+import { useScenarioHighlight } from '../../contexts/ScenarioHighlightContext';
 import { depthToColour, formatPct, formatN } from '../../services/dataDepthService';
 import type { ProbabilityPosterior } from '@/types';
 import { useEdgeBeads, EdgeBeadsRenderer } from './EdgeBeads';
@@ -2064,7 +2065,12 @@ export default function ConversionEdge({
 
   // Check if this is a hidden current layer (semi-transparent current when not visible)
   const isHiddenCurrent = !data?.scenarioOverlay && (data?.strokeOpacity ?? 1) < 0.1;
-  
+
+  // Scenario highlight: fade non-matching edges when a scenario chip is hovered.
+  const { highlightedScenarioId } = useScenarioHighlight();
+  const edgeScenarioId: string = data?.scenarioOverlay && data.scenarioId ? data.scenarioId : 'current';
+  const isHighlightFaded = highlightedScenarioId != null && edgeScenarioId !== highlightedScenarioId;
+
   return (
     <>
       <defs>
@@ -2248,6 +2254,8 @@ export default function ConversionEdge({
         )}
       </defs>
 
+      {/* Edge paths and visuals — faded during scenario peek */}
+      <g style={isHighlightFaded ? { opacity: 0.3, transition: 'opacity 3.5s ease' } : { transition: 'opacity 0.5s ease' }}>
       {/* Invisible wider hit-area path — makes thin edges (e.g. p=0) easier to select */}
       {edgePath && !data?.scenarioOverlay && (
         <path
@@ -2776,9 +2784,8 @@ export default function ConversionEdge({
             );
           })()}
           
-          {/* Edge Beads - SVG elements rendered directly in edge SVG */}
-          {/* Only render beads if path ref is stable and edge data is available */}
-          {/* DIAGNOSTIC: Skip beads if ?nobeads param set */}
+          </g>
+          {/* Edge Beads — rendered outside fade group so they stay visible during scenario peek */}
           {!data?.suppressLabel && !data?.scenarioOverlay && pathRef.current && fullEdge && scenariosContext && !NO_BEADS_MODE && !shouldSuppressBeads && (() => {
             // Don't render beads until faceDirections are computed (prevents offset flash on first draw)
             if (!data?.useSankeyView) {

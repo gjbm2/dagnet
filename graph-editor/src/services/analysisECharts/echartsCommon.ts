@@ -35,7 +35,7 @@ export function echartsTooltipStyle() {
   return {
     backgroundColor: c.tooltipBg,
     borderColor: c.tooltipBorder,
-    textStyle: { color: c.tooltipText },
+    textStyle: { color: c.tooltipText, fontSize: 12 },
     // Render tooltip as a direct child of <body> so it escapes overflow:hidden
     // containers (canvas analysis nodes, chart viewports, etc.)
     appendToBody: true,
@@ -216,6 +216,7 @@ export function applyCommonSettings(opt: any, settings: Record<string, any>): an
       if (ax.nameTextStyle) ax.nameTextStyle.fontSize = fs.axisTitlePx;
       else if (ax.name) ax.nameTextStyle = { fontSize: fs.axisTitlePx, color: c.text };
       if (ax.axisLabel) ax.axisLabel.fontSize = fs.axisLabelPx;
+      if (ax.axisPointer?.label) ax.axisPointer.label.fontSize = fs.axisLabelPx;
     }
     // Legend
     if (opt.legend && opt.legend.show !== false) {
