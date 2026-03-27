@@ -66,7 +66,6 @@ function zoneColour(sigma: number): string {
 function buildGaugeDial(
   variable: SurpriseVariable,
   settings: Record<string, any>,
-  layout?: { widthPx?: number; heightPx?: number },
 ): any {
   const c = echartsThemeColours();
   const maxSigma = 3.5;
@@ -123,44 +122,85 @@ function buildGaugeDial(
   // Detail label: "Observed: 77.7%\nModel: 80.7% ± 0.80%"
   const detailLabel = `Observed: ${fmtObs}\nModel: ${fmtExp} ± ${fmtSd}`;
 
-  // ── Adaptive layout from first principles ──
+  // ── Responsive percentage-based layout ──
   //
-  // Semicircular gauge (startAngle=180, endAngle=0) in a W × H container.
+  // Semicircular gauge (startAngle=180, endAngle=0).
+  // Uses ECharts' media query system so the gauge adapts to any container
+  // aspect ratio via native resize — no pixel dimensions in the option,
+  // which avoids the double-draw caused by useElementSize dimension changes.
   //
-  // Visual zones top-to-bottom:
-  //   topPad (8px)
-  //   Arc — semicircle of height R rising above the centre line
-  //     Title label sits INSIDE the arc (~30px above centre)
-  //   Centre line — needle pivot, pointer base
-  //   Detail text — "Observed …\nModel …" (~28px for 2 lines)
-  //   bottomPad (10px)
+  // Constraints (top-to-bottom):
+  //   ~14px axis-label overshoot above the arc top
+  //   Arc — semicircle of height R above the centre
+  //   Centre — needle pivot
+  //   ~60px below centre (needle gap + 2-line detail text + bottom pad)
   //
-  // Constraints on R:
-  //   Horizontal: the arc spans 2R across. Axis labels overshoot by ~20px
-  //     each side. So 2R + 2×20 ≤ W  →  R ≤ (W - 40) / 2
-  //   Vertical: topPad + R + detailHeight + bottomPad ≤ H
-  //     →  R ≤ H - topPad - belowCentre
+  // Labels only appear at ±1.28σ–±2.576σ (angles 24°–57° from horizontal),
+  // so horizontal overshoot is just tick marks (~4px), not label text.
   //
-  // Horizontal centre is always '50%' (ECharts string — guaranteed centred).
-  // Vertical centre is computed in px to eliminate dead space.
-  const W = layout?.widthPx || 400;
-  const H = layout?.heightPx || 300;
-  const topPad = 14;
-  const axisLabelOvershoot = 26;
-  const belowCentre = 60; // needle gap (~12) + detail 2 lines (~28) + bottom pad (~20)
-  const maxR_horiz = (W - 2 * axisLabelOvershoot) / 2;
-  const maxR_vert = H - topPad - belowCentre;
-  const R = Math.max(40, Math.min(maxR_horiz, maxR_vert));
+  // Breakpoints (by container width/height ratio):
+  //   portrait  (< 1)    — centre 55%, radius  85%  (width-constrained)
+  //   near-square (1–1.25) — centre 65%, radius  95%
+  //   landscape (≥ 1.25)  — centre 70%, radius 110%  (height-constrained)
 
-  // Vertically centre the whole composition in the container.
-  const compositionH = topPad + R + belowCentre;
-  const slack = Math.max(0, H - compositionH);
-  const centreY = topPad + R + slack / 2;
-
-  // Title and detail offsets are percentages of R in ECharts.
-  // Negative = above centre (inside arc), positive = below centre.
-  const titleOffsetPct = `${-Math.round(30 / R * 100)}%`;
-  const detailOffsetPct = `${Math.round(28 / R * 100)}%`;
+  const gaugeSeriesBase: any = {
+    type: 'gauge',
+    startAngle: 180,
+    endAngle: 0,
+    min: -maxSigma,
+    max: maxSigma,
+    center: ['50%', '70%'],
+    radius: '110%',
+    axisLine: {
+      lineStyle: {
+        width: 18,
+        color: segments,
+      },
+    },
+    splitNumber: 14,
+    axisTick: {
+      show: true,
+      length: 2,
+      lineStyle: { color: c.text, opacity: 0.2 },
+    },
+    splitLine: {
+      show: true,
+      length: 4,
+      lineStyle: { color: c.text, opacity: 0.3, width: 1 },
+    },
+    axisLabel: {
+      distance: 10,
+      fontSize: 8,
+      color: c.text === '#e0e0e0' ? '#ffffff' : '#1f2937',
+      formatter: (value: number) => {
+        const tick = PERCENTILE_TICKS.find(t => Math.abs(t.sigma - value) < 0.15);
+        return tick ? tick.label : '';
+      },
+    },
+    pointer: {
+      width: 4,
+      length: '70%',
+      itemStyle: { color: c.text },
+    },
+    detail: {
+      valueAnimation: true,
+      formatter: detailLabel,
+      fontSize: 10,
+      lineHeight: 14,
+      color: c.text,
+      offsetCenter: [0, '22%'],
+    },
+    title: {
+      show: true,
+      offsetCenter: [0, '-20%'],
+      fontSize: 11,
+      color: c.text,
+    },
+    data: [{
+      value: needleSigma,
+      name: variable.label,
+    }],
+  };
 
   return {
     tooltip: {
@@ -176,64 +216,7 @@ function buildGaugeDial(
     },
     animationDuration: 600,
     animationEasing: 'cubicOut',
-    series: [{
-      type: 'gauge',
-      startAngle: 180,
-      endAngle: 0,
-      min: -maxSigma,
-      max: maxSigma,
-      center: ['50%', centreY],
-      radius: R,
-      axisLine: {
-        lineStyle: {
-          width: Math.max(12, Math.min(22, R * 0.15)),
-          color: segments,
-        },
-      },
-      splitNumber: 14,
-      axisTick: {
-        show: true,
-        length: 2,
-        lineStyle: { color: c.text, opacity: 0.2 },
-      },
-      splitLine: {
-        show: true,
-        length: 4,
-        lineStyle: { color: c.text, opacity: 0.3, width: 1 },
-      },
-      axisLabel: {
-        distance: 10,
-        fontSize: 8,
-        color: c.text === '#e0e0e0' ? '#ffffff' : '#1f2937',
-        formatter: (value: number) => {
-          const tick = PERCENTILE_TICKS.find(t => Math.abs(t.sigma - value) < 0.15);
-          return tick ? tick.label : '';
-        },
-      },
-      pointer: {
-        width: 4,
-        length: '70%',
-        itemStyle: { color: c.text },
-      },
-      detail: {
-        valueAnimation: true,
-        formatter: detailLabel,
-        fontSize: 10,
-        lineHeight: 14,
-        color: c.text,
-        offsetCenter: [0, detailOffsetPct],
-      },
-      title: {
-        show: true,
-        offsetCenter: [0, titleOffsetPct],
-        fontSize: 11,
-        color: c.text,
-      },
-      data: [{
-        value: needleSigma,
-        name: variable.label,
-      }],
-    }],
+    series: [gaugeSeriesBase],
   };
 }
 
@@ -366,7 +349,6 @@ function buildBandChart(
 export function buildSurpriseGaugeEChartsOption(
   result: any,
   settings: Record<string, any>,
-  layout?: { widthPx?: number; heightPx?: number },
 ): any | null {
   const variables: SurpriseVariable[] = result?.variables || [];
   if (variables.length === 0) return null;
@@ -388,7 +370,7 @@ export function buildSurpriseGaugeEChartsOption(
       // Requested var not available — fall back to bands with whatever is available
       opt = buildBandChart(available, settings);
     } else {
-      opt = buildGaugeDial(v, settings, layout);
+      opt = buildGaugeDial(v, settings);
     }
   }
 

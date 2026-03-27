@@ -415,9 +415,8 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
                 p_base_var = None  # will be created below per observation type
 
             # Per-edge overdispersion concentration κ.
-            # BetaBinomial / Dirichlet-Multinomial: large κ → Binomial,
-            # small κ → heavy overdispersion. Each edge learns its own
-            # level from its trajectory data.
+            # Used by branch group DirichletMultinomial split constraints.
+            # Also used by Phase 2 cohort daily BetaBinomial for first-edge.
             edge_kappa = pm.Gamma(f"kappa_{safe_id}", alpha=3, beta=0.1) if feat_overdispersion else None
 
             if ev.has_window and ev.has_cohort:

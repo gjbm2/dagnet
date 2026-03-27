@@ -237,8 +237,9 @@ export const ANALYSIS_TYPES: AnalysisTypeMeta[] = [
     views: {
       cards: [
         { id: 'overview', name: 'Overview' },
+        { id: 'latency', name: 'Latency' },
         { id: 'evidence', name: 'Evidence' },
-        { id: 'forecast', name: 'Forecast' },
+        { id: 'forecast', name: 'Model' },
         { id: 'depth', name: 'Data Depth' },
         { id: 'diagnostics', name: 'Diagnostics' },
       ],

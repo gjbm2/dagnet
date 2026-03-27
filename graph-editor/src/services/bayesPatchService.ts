@@ -303,6 +303,8 @@ export async function applyPatch(patch: BayesPatchFile): Promise<number> {
             path_mu_sd: cohortSlice.mu_sd,
             path_sigma_mean: cohortSlice.sigma_mean,
             path_sigma_sd: cohortSlice.sigma_sd,
+            ...(cohortSlice.hdi_t95_lower != null ? { path_hdi_t95_lower: cohortSlice.hdi_t95_lower, path_hdi_t95_upper: cohortSlice.hdi_t95_upper } : {}),
+            ...(cohortSlice.onset_mu_corr != null ? { path_onset_mu_corr: cohortSlice.onset_mu_corr } : {}),
             path_provenance: cohortSlice.provenance,
           } : {}),
         };

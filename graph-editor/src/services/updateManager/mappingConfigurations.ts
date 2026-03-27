@@ -860,6 +860,8 @@ function buildMappingConfigurations(): Map<string, MappingConfiguration> {
             path_mu_sd: cs.mu_sd,
             path_sigma_mean: cs.sigma_mean,
             path_sigma_sd: cs.sigma_sd,
+            ...(cs.hdi_t95_lower != null ? { path_hdi_t95_lower: cs.hdi_t95_lower, path_hdi_t95_upper: cs.hdi_t95_upper } : {}),
+            ...(cs.onset_mu_corr != null ? { path_onset_mu_corr: cs.onset_mu_corr } : {}),
             path_provenance: cs.provenance,
           } : {}),
         };

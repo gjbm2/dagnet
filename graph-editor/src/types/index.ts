@@ -777,6 +777,9 @@ export interface LatencyPosterior {
   path_mu_sd?: number;
   path_sigma_mean?: number;
   path_sigma_sd?: number;
+  path_hdi_t95_lower?: number;
+  path_hdi_t95_upper?: number;
+  path_onset_mu_corr?: number;
   path_provenance?: 'bayesian' | 'pooled-fallback' | 'point-estimate';
 }
 

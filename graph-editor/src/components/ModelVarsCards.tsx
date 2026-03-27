@@ -35,6 +35,7 @@ import {
   effectivePreference,
 } from '../services/modelVarsResolution';
 import { roundToDecimalPlaces } from '../utils/rounding';
+import { formatRelativeTime } from '../utils/freshnessDisplay';
 import { LATENCY_HORIZON_DECIMAL_PLACES } from '../constants/latency';
 import CollapsibleSection from './CollapsibleSection';
 import { AutomatableField } from './AutomatableField';
@@ -176,15 +177,28 @@ export function ModelVarsCards({
           {bayesian ? (
             <>
               <FieldGroup label="Probability">
-                <RoField label="p" value={fmtPct(bayesian.probability.mean)} />
-                <RoField label="stdev" value={fmt(bayesian.probability.stdev)} />
+                <RoField label="p" value={`${fmtPct(bayesian.probability.mean)} ± ${fmtPct(bayesian.probability.stdev)}`} />
+                {probabilityPosterior?.hdi_lower != null && (
+                  <RoField label="HDI" value={`${fmtPct(probabilityPosterior.hdi_lower)} — ${fmtPct(probabilityPosterior.hdi_upper)}`} />
+                )}
               </FieldGroup>
+              {probabilityPosterior?.path_alpha != null && (() => {
+                const pa = probabilityPosterior.path_alpha!;
+                const pb = probabilityPosterior.path_beta!;
+                const pathMean = pa / (pa + pb);
+                const pathSd = Math.sqrt(pa * pb / ((pa + pb) ** 2 * (pa + pb + 1)));
+                return (
+                  <FieldGroup label="Probability (path)" defaultCollapsed>
+                    <RoField label="p" value={`${fmtPct(pathMean)} ± ${fmtPct(pathSd)}`} />
+                    {(probabilityPosterior as any).path_hdi_lower != null && (
+                      <RoField label="HDI" value={`${fmtPct((probabilityPosterior as any).path_hdi_lower)} — ${fmtPct((probabilityPosterior as any).path_hdi_upper)}`} />
+                    )}
+                  </FieldGroup>
+                );
+              })()}
               {bayesian.latency && (
-                <FieldGroup label="Latency (edge)">
-                  <RoField label="onset δ" value={fmt(bayesian.latency.onset_delta_days, 0)} unit="d" />
-                  {latencyPosterior?.onset_sd != null && (
-                    <RoField label="onset ±" value={fmt(latencyPosterior.onset_sd, 1)} unit="d" />
-                  )}
+                <FieldGroup label="Latency (edge)" defaultCollapsed>
+                  <RoField label="onset δ" value={`${fmt(bayesian.latency.onset_delta_days, 1)}d${latencyPosterior?.onset_sd != null ? ` ± ${fmt(latencyPosterior.onset_sd, 1)}d` : ''}`} />
                   {latencyPosterior?.onset_hdi_lower != null && (
                     <RoField label="onset HDI" value={`${fmt(latencyPosterior.onset_hdi_lower, 1)}d — ${fmt(latencyPosterior.onset_hdi_upper, 1)}d`} />
                   )}
@@ -200,25 +214,28 @@ export function ModelVarsCards({
                 </FieldGroup>
               )}
               {bayesian.latency?.path_mu != null && (
-                <FieldGroup label="Latency (path)">
-                  <RoField label="onset δ" value={fmt(bayesian.latency.path_onset_delta_days, 0)} unit="d" />
-                  {latencyPosterior?.path_onset_sd != null && (
-                    <RoField label="onset ±" value={fmt(latencyPosterior.path_onset_sd, 1)} unit="d" />
-                  )}
+                <FieldGroup label="Latency (path)" defaultCollapsed>
+                  <RoField label="onset δ" value={`${fmt(bayesian.latency.path_onset_delta_days, 1)}d${latencyPosterior?.path_onset_sd != null ? ` ± ${fmt(latencyPosterior.path_onset_sd, 1)}d` : ''}`} />
                   {latencyPosterior?.path_onset_hdi_lower != null && (
                     <RoField label="onset HDI" value={`${fmt(latencyPosterior.path_onset_hdi_lower, 1)}d — ${fmt(latencyPosterior.path_onset_hdi_upper, 1)}d`} />
                   )}
                   <RoField label="μ" value={`${fmt(bayesian.latency.path_mu, 3)}${latencyPosterior?.path_mu_sd != null ? ` ± ${fmt(latencyPosterior.path_mu_sd, 3)}` : ''}`} />
                   <RoField label="σ" value={`${fmt(bayesian.latency.path_sigma, 3)}${latencyPosterior?.path_sigma_sd != null ? ` ± ${fmt(latencyPosterior.path_sigma_sd, 3)}` : ''}`} />
-                  <RoField label="t95" value={fmt(bayesian.latency.path_t95, 1)} unit="d" />
+                  <RoField label="path t95" value={fmt(bayesian.latency.path_t95, 1)} unit="d" />
+                  {latencyPosterior?.path_hdi_t95_lower != null && (
+                    <RoField label="path t95 HDI" value={`${fmt(latencyPosterior.path_hdi_t95_lower, 1)}d — ${fmt(latencyPosterior.path_hdi_t95_upper, 1)}d`} />
+                  )}
+                  {latencyPosterior?.path_onset_mu_corr != null && (
+                    <RoField label="onset↔μ" value={fmt(latencyPosterior.path_onset_mu_corr, 3)} />
+                  )}
                 </FieldGroup>
               )}
               {bayesian.quality && (
-                <FieldGroup label="Quality">
+                <FieldGroup label="Quality" defaultCollapsed>
                   <QualitySection quality={bayesian.quality} />
                 </FieldGroup>
               )}
-              {bayesian.source_at && <RoField label="Fitted" value={bayesian.source_at} />}
+              {bayesian.source_at && <RoField label="Fitted" value={formatRelativeTime(bayesian.source_at) ?? bayesian.source_at} />}
             </>
           ) : (
             <p style={{ color: 'var(--text-muted)', fontStyle: 'italic', fontSize: '12px', margin: 0 }}>
@@ -397,19 +414,26 @@ function PinToggle({ active, pinned, onClick, disabled }: {
 
 // ── Shared layout helpers ───────────────────────────────────────────────────
 
-function FieldGroup({ label, children }: { label: string; children: React.ReactNode }) {
+function FieldGroup({ label, children, defaultCollapsed = false }: { label: string; children: React.ReactNode; defaultCollapsed?: boolean }) {
+  const [collapsed, setCollapsed] = useState(defaultCollapsed);
   return (
     <div style={{ marginTop: '6px' }}>
-      <div style={{ fontSize: '10px', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.04em',
-        color: 'var(--text-muted)', marginBottom: '2px' }}>{label}</div>
-      {children}
+      <div
+        style={{ fontSize: '10px', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.04em',
+          color: 'var(--text-muted)', marginBottom: '2px', cursor: 'pointer', userSelect: 'none' }}
+        onClick={() => setCollapsed(c => !c)}
+      >
+        <span style={{ display: 'inline-block', width: '10px', fontSize: '8px' }}>{collapsed ? '▶' : '▼'}</span>
+        {label}
+      </div>
+      {!collapsed && <div style={{ paddingLeft: '10px' }}>{children}</div>}
     </div>
   );
 }
 
 function RoField({ label, value, unit }: { label: string; value: string; unit?: string }) {
   return (
-    <div className="property-field-inline" style={{ minHeight: '20px', gap: '6px' }}>
+    <div className="property-field-inline" style={{ minHeight: '16px', gap: '6px', marginBottom: '2px' }}>
       <label className="parameter-section-label" style={{ minWidth: '54px', fontSize: '11px' }}>{label}</label>
       <span style={{ fontSize: '11px', fontVariantNumeric: 'tabular-nums', color: 'var(--text-primary)' }}>
         {value}{unit && <span style={{ color: 'var(--text-muted)', fontSize: '10px', marginLeft: '2px' }}>{unit}</span>}
@@ -442,7 +466,7 @@ function LatencyZapOff({ field, label, unit, step, dp, latency, onUpdate, disabl
         onUpdate({ latency: { ...latency, [`${field}_overridden`]: false } });
       }}
     >
-      <div className="property-field-inline" style={{ minHeight: '20px', gap: '6px' }}>
+      <div className="property-field-inline" style={{ minHeight: '16px', gap: '6px', marginBottom: '2px' }}>
         <label className="parameter-section-label" style={{ minWidth: '54px', fontSize: '11px' }}>{label}</label>
         <input
           className="property-input"
@@ -540,7 +564,7 @@ function OutputInput({ label, field, value, dp, pct, unit, overridden, onClearOv
 
   return (
     <AutomatableField label="" value={value ?? ''} overridden={overridden || false} onClearOverride={onClearOverride || (() => {})}>
-      <div className="property-field-inline" style={{ minHeight: '20px', gap: '6px' }}>
+      <div className="property-field-inline" style={{ minHeight: '16px', gap: '6px', marginBottom: '2px' }}>
         <label className="parameter-section-label" style={{ minWidth: '54px', fontSize: '11px' }}>{label}</label>
         <input
           className="property-input"

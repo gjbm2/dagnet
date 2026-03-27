@@ -196,19 +196,41 @@ def summarise_posteriors(
         else:
             samples = trace.posterior[p_var_name].values.flatten()
 
-        # Moment-match Beta
-        alpha, beta_val = _fit_beta_to_samples(samples)
-
-        # HDI (handle both scalar and multi-dimensional variables)
-        hdi = az.hdi(trace, var_names=[p_var_name], hdi_prob=HDI_PROB)
-        hdi_vals = hdi[p_var_name].values
-        if hdi_vals.ndim == 1:
-            hdi_lower = float(hdi_vals[0])
-            hdi_upper = float(hdi_vals[1])
+        # Posterior predictive: if hierarchical Beta (kappa_p) exists,
+        # generate predictive samples that include between-cohort variation.
+        # This gives alpha/beta that reflect real-world uncertainty (both
+        # estimation + cohort variation), not just estimation precision.
+        # See journal 27-Mar-26 "hierarchical Beta on p".
+        kappa_p_name = f"kappa_p_{safe_eid}"
+        if kappa_p_name in trace.posterior:
+            mu_p_samples = samples  # these are mu_p posterior samples
+            kappa_p_samples = trace.posterior[kappa_p_name].values.flatten()
+            # Draw one p_new per MCMC sample from Beta(mu_p * kappa_p, (1-mu_p) * kappa_p)
+            a_samples = np.maximum(mu_p_samples * kappa_p_samples, 0.01)
+            b_samples = np.maximum((1.0 - mu_p_samples) * kappa_p_samples, 0.01)
+            predictive_samples = np.random.beta(a_samples, b_samples)
+            alpha, beta_val = _fit_beta_to_samples(predictive_samples)
+            # HDI from predictive samples
+            pred_hdi = az.hdi(predictive_samples, hdi_prob=HDI_PROB)
+            hdi_lower = float(pred_hdi[0])
+            hdi_upper = float(pred_hdi[1])
+            diagnostics.append(
+                f"  predictive_p {edge_id[:8]}…: mu_p={float(np.mean(mu_p_samples)):.4f}, "
+                f"kappa_p={float(np.mean(kappa_p_samples)):.1f}, "
+                f"pred_alpha={alpha:.1f}, pred_beta={beta_val:.1f}"
+            )
         else:
-            # Multi-dimensional — take first component
-            hdi_lower = float(hdi_vals.flat[0])
-            hdi_upper = float(hdi_vals.flat[1])
+            # No hierarchical Beta — moment-match directly from p samples
+            alpha, beta_val = _fit_beta_to_samples(samples)
+            # HDI (handle both scalar and multi-dimensional variables)
+            hdi = az.hdi(trace, var_names=[p_var_name], hdi_prob=HDI_PROB)
+            hdi_vals = hdi[p_var_name].values
+            if hdi_vals.ndim == 1:
+                hdi_lower = float(hdi_vals[0])
+                hdi_upper = float(hdi_vals[1])
+            else:
+                hdi_lower = float(hdi_vals.flat[0])
+                hdi_upper = float(hdi_vals.flat[1])
 
         # Per-variable diagnostics (handle multi-dimensional Dirichlet components)
         edge_rhat = 0.0
@@ -231,7 +253,9 @@ def summarise_posteriors(
                 f"WARN {edge_id[:8]}…: rhat={edge_rhat:.3f} ess={edge_ess:.0f}"
             )
 
-        # Doc 21: extract p_window and p_cohort separately for per-slice posteriors
+        # Doc 21: extract p_window and p_cohort separately for per-slice posteriors.
+        # When hierarchical Beta exists (kappa_p), use posterior predictive samples
+        # so alpha/beta reflect between-cohort variation, not just estimation precision.
         window_alpha_val = None
         window_beta_val = None
         window_hdi_lo = None
@@ -245,6 +269,26 @@ def summarise_posteriors(
         p_window_name = f"p_window_{safe_eid}"
         p_cohort_name = f"p_cohort_{safe_eid}"
         p_single_name = f"p_{safe_eid}"
+        kappa_p_name = f"kappa_p_{safe_eid}"
+        has_kappa_p = kappa_p_name in trace.posterior
+
+        def _predictive_alpha_beta(p_samples):
+            """If kappa_p exists, generate predictive samples; else moment-match directly."""
+            if has_kappa_p:
+                kp_samples = trace.posterior[kappa_p_name].values.flatten()
+                # Match lengths (may differ if chains/draws differ)
+                n_use = min(len(p_samples), len(kp_samples))
+                a_s = np.maximum(p_samples[:n_use] * kp_samples[:n_use], 0.01)
+                b_s = np.maximum((1.0 - p_samples[:n_use]) * kp_samples[:n_use], 0.01)
+                pred = np.random.beta(a_s, b_s)
+                ab = _fit_beta_to_samples(pred)
+                hdi_vals = az.hdi(pred, hdi_prob=HDI_PROB)
+                return ab[0], ab[1], float(hdi_vals[0]), float(hdi_vals[1])
+            else:
+                ab = _fit_beta_to_samples(p_samples)
+                hdi_vals = az.hdi(p_samples, hdi_prob=HDI_PROB)
+                return ab[0], ab[1], float(hdi_vals[0]), float(hdi_vals[1])
+
         # For window: prefer p_window_recent (drift-adjusted) if available,
         # then p_window, then p (Phase 1: single p, no hierarchy).
         p_window_recent_name = f"p_window_recent_{safe_eid}"
@@ -254,25 +298,25 @@ def summarise_posteriors(
 
         if w_name in trace.posterior:
             w_samples = trace.posterior[w_name].values.flatten()
-            window_alpha_val, window_beta_val = _fit_beta_to_samples(w_samples)
-            w_hdi = az.hdi(w_samples, hdi_prob=HDI_PROB)
-            window_hdi_lo = float(w_hdi[0])
-            window_hdi_hi = float(w_hdi[1])
+            window_alpha_val, window_beta_val, window_hdi_lo, window_hdi_hi = _predictive_alpha_beta(w_samples)
 
         if p_cohort_name in trace.posterior:
             c_samples = trace.posterior[p_cohort_name].values.flatten()
-            cohort_alpha_val, cohort_beta_val = _fit_beta_to_samples(c_samples)
-            c_hdi = az.hdi(c_samples, hdi_prob=HDI_PROB)
-            cohort_hdi_lo = float(c_hdi[0])
-            cohort_hdi_hi = float(c_hdi[1])
+            cohort_alpha_val, cohort_beta_val, cohort_hdi_lo, cohort_hdi_hi = _predictive_alpha_beta(c_samples)
+
+        # Derive mean/stdev from alpha/beta for consistency.
+        # When predictive (hierarchical Beta), alpha/beta encode the
+        # generative distribution — mean and stdev must match.
+        p_mean = float(alpha / (alpha + beta_val)) if (alpha + beta_val) > 0 else float(np.mean(samples))
+        p_stdev = float(np.sqrt(alpha * beta_val / ((alpha + beta_val) ** 2 * (alpha + beta_val + 1)))) if (alpha + beta_val) > 0 else float(np.std(samples))
 
         posteriors.append(PosteriorSummary(
             edge_id=edge_id,
             param_id=ev.param_id,
             alpha=alpha,
             beta=beta_val,
-            mean=float(np.mean(samples)),
-            stdev=float(np.std(samples)),
+            mean=p_mean,
+            stdev=p_stdev,
             hdi_lower=hdi_lower,
             hdi_upper=hdi_upper,
             hdi_level=HDI_PROB,

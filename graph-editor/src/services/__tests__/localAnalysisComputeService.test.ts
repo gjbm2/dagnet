@@ -286,20 +286,19 @@ describe('edge_info tab decomposition', () => {
     expect(response.success).toBe(true);
     const data = response.result!.data;
 
+    // Forecast tab data is now a placeholder — actual rendering is via
+    // BayesPosteriorCard from result.metadata.posteriors
     const forecastRows = data.filter((r: any) => r.tab === 'forecast');
-    const sections = [...new Set(forecastRows.map((r: any) => r.section))];
-    expect(sections).toContain('Probability');
-    expect(sections).toContain('Convergence');
+    expect(forecastRows.length).toBeGreaterThan(0); // placeholder row exists
 
-    // Quality tier should be 'Strong' (grade 3, clean convergence)
-    const tierRow = forecastRows.find((r: any) => r.property === 'Quality');
-    expect(tierRow?.value).toContain('Strong');
-
-    // HDI bounds should be present
-    const hdiRow = forecastRows.find((r: any) => r.property?.includes('HDI'));
-    expect(hdiRow).toBeDefined();
-    expect(hdiRow?.value).toContain('35.0%');
-    expect(hdiRow?.value).toContain('49.0%');
+    // Posteriors attached as metadata for BayesPosteriorCard
+    const posteriors = (response.result as any).metadata?.posteriors;
+    expect(posteriors).toBeDefined();
+    expect(posteriors.probability).toBeDefined();
+    expect(posteriors.probability.alpha).toBe(42);
+    expect(posteriors.probability.beta).toBe(58);
+    expect(posteriors.probability.hdi_lower).toBe(0.35);
+    expect(posteriors.probability.hdi_upper).toBe(0.49);
   });
 });
 

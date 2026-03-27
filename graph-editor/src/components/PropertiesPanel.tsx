@@ -600,7 +600,14 @@ function CanvasAnalysisPropertiesSection({ analysisId, graph, setGraph, saveHist
         onChartKindChange={(newKind) => {
           const nextGraph = mutateCanvasAnalysisGraph(graph, analysisId, (a) => {
             const ci = a.content_items?.[activeTabIndex] || a.content_items?.[0];
-            if (ci) ci.kind = newKind || undefined;
+            if (!ci) return;
+            ci.kind = newKind || undefined;
+            // Update title to match the new kind (cards facets have canonical labels)
+            if (newKind && ci.view_type === 'cards') {
+              const meta = getAnalysisTypeMeta(ci.analysis_type);
+              const kindMeta = meta?.views?.cards?.find((k: any) => k.id === newKind);
+              if (kindMeta) ci.title = kindMeta.name;
+            }
           });
           if (!nextGraph) return;
           setGraph(nextGraph);

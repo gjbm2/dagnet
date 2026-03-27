@@ -179,6 +179,61 @@ become meaningful.
 
 No schema, FE, or webhook changes required.
 
+### First results (27-Mar-26)
+
+Implemented and tested. kappa_p is estimated from data:
+
+| Edge | mu_p | kappa_p | pred SD | old SD |
+|---|---|---|---|---|
+| del-to-reg | 0.109 | 110.6 | ±3.1% | ±0.87% |
+| reg-to-success | 0.774 | 5.2 | ±17% | ±0.87% |
+
+reg-to-success has very low kappa_p (5.2) — high between-cohort
+variation. This matches the bimodal latency observation: different
+cohorts behave very differently on this edge. del-to-reg has higher
+kappa_p (110.6) — more consistent across cohorts.
+
+The predictive alpha/beta are computed in inference by drawing
+p_new ~ Beta(mu_p_s × kappa_p_s, (1-mu_p_s) × kappa_p_s) for
+each MCMC sample, then moment-matching. This automatically combines
+estimation uncertainty + between-cohort variation.
+
+**Per-slice predictive alpha/beta**: fixed. All slices (top-level,
+window, cohort) now use predictive samples. p.mean and p.stdev
+derived from predictive alpha/beta for consistency. FE consumer
+chain traced and verified: inference → webhook → bayesPatchService
+→ ModelVarsCards / PosteriorIndicator / surprise gauge all derive
+from alpha/beta. No FE code changes needed.
+
+### Outstanding issues (27-Mar-26)
+
+1. **No-latency edges**: no hierarchical Beta, no kappa_p. Their
+   posteriors are still too tight. They have only daily Binomial
+   obs, no trajectories to learn kappa_p from. Needs a separate
+   mechanism — possibly BetaBinomial on daily obs, or a prior on
+   kappa derived from analytics-engine data. NOT yet addressed.
+
+2. **kappa_p prior**: Gamma(3, 0.05) — mode=40, mean=60. Ad hoc.
+   Needs validation or principled derivation.
+
+3. **edge_kappa vs kappa_p**: two coexisting kappa variables per
+   latency edge. edge_kappa is used by branch group DM and Phase 2
+   cohort daily obs. kappa_p is used by hierarchical Beta on
+   window trajectories. They serve different purposes but the
+   relationship is not documented or validated. Do NOT remove
+   edge_kappa — it has active consumers.
+
+4. **Full regression**: the hierarchical Beta has only been tested
+   on synth-simple-abc, synth-mirror-4step, and production. Full
+   8-graph suite not yet run.
+
+5. **Phase 2 interaction**: the hierarchical Beta is Phase 1 only.
+   Phase 2 cohort pass uses frozen mu_p from Phase 1. The cohort
+   p_cohort variables do not have their own kappa_p. The cohort
+   slice alpha/beta use the Phase 1 kappa_p for predictive
+   sampling — which may not be appropriate (cohort variation could
+   differ from window variation).
+
 ### References
 
 - Feller (1968), Introduction to Probability Theory, Vol 1

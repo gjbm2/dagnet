@@ -283,18 +283,23 @@ export function ChartSettingsSection({
               label="Kind"
               value={resolvedKindLabels[chartKind || ''] || chartKind || 'auto'}
               overridden={!!chartKind}
-              onClearOverride={() => onChartKindChange(undefined)}
+              onClearOverride={viewMode === 'chart' ? () => onChartKindChange(undefined) : undefined}
             >
               {chartKindOptions.length > 0 ? (
                 <div className="chart-settings-chips">
-                  <button
-                    type="button"
-                    className={`chart-settings-chip${!chartKind ? ' active' : ''}`}
-                    onClick={() => onChartKindChange(undefined)}
-                    style={{ fontStyle: 'italic' }}
-                  >
-                    Auto
-                  </button>
+                  {/* Auto = infer kind from result semantics. Valid for charts (recommended kind from backend).
+                      For cards/table with explicit registry kinds (we're inside chartKindOptions.length > 0),
+                      Auto has no meaning — user must pick a specific facet. */}
+                  {viewMode === 'chart' && (
+                    <button
+                      type="button"
+                      className={`chart-settings-chip${!chartKind ? ' active' : ''}`}
+                      onClick={() => onChartKindChange(undefined)}
+                      style={{ fontStyle: 'italic' }}
+                    >
+                      Auto
+                    </button>
+                  )}
                   {chartKindOptions.map(kind => (
                     <button
                       key={kind}
@@ -313,7 +318,7 @@ export function ChartSettingsSection({
                   value={chartKind || ''}
                   onChange={(e) => onChartKindChange(e.target.value || undefined)}
                 >
-                  <option value="">Auto</option>
+                  {viewMode === 'chart' && <option value="">Auto</option>}
                   {Object.entries(resolvedKindLabels).map(([value, label]) => (
                     <option key={value} value={value}>{label}</option>
                   ))}

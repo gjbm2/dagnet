@@ -544,8 +544,10 @@ function buildEdgeInfoResult(graph: ConversionGraph, dsl: string): AnalysisResul
   // ── Tab: Diagnostics (freshness) ──
   buildFreshnessRows(data, 'diagnostics', graph, edge);
 
-  // Build latency CDF metadata for sparkline rendering
+  // Build metadata for custom card rendering
   const latencyCdf = buildLatencyCdfMeta(edge);
+  const probPosterior = edge.p?.posterior as any;
+  const latPosterior = (edge.p?.latency as any)?.posterior || null;
 
   return {
     analysis_type: 'edge_info',
@@ -564,7 +566,15 @@ function buildEdgeInfoResult(graph: ConversionGraph, dsl: string): AnalysisResul
       chart: { recommended: 'info' },
     },
     data,
-    ...(latencyCdf ? { metadata: { latency_cdf: latencyCdf } } : {}),
+    metadata: {
+      ...(latencyCdf ? { latency_cdf: latencyCdf } : {}),
+      ...((probPosterior || latPosterior) ? {
+        posteriors: {
+          probability: probPosterior || null,
+          latency: latPosterior,
+        },
+      } : {}),
+    },
   };
 }
 
@@ -631,92 +641,11 @@ function buildEdgeForecastTab(
     return;
   }
 
-  // ── Probability posterior (edge + path in same section) ──
-  if (posterior) {
-    const a = posterior.alpha, b = posterior.beta;
-    const pa = (posterior as any).path_alpha;
-    const pb = (posterior as any).path_beta;
-    const hasPathProb = pa != null && pb != null && (pa + pb) > 0;
-
-    if (a != null && b != null && (a + b) > 0) {
-      const pMean = a / (a + b);
-      const pSd = Math.sqrt(a * b / ((a + b) ** 2 * (a + b + 1)));
-      data.push({ tab: 'forecast', section: 'Probability', property: 'Edge p', value: `${fmtPct(pMean)} ± ${fmtPct(pSd)}` });
-    }
-    if (hasPathProb) {
-      const pathMean = pa / (pa + pb);
-      const pathSd = Math.sqrt(pa * pb / ((pa + pb) ** 2 * (pa + pb + 1)));
-      data.push({ tab: 'forecast', section: 'Probability', property: 'Path p', value: `${fmtPct(pathMean)} ± ${fmtPct(pathSd)}` });
-    }
-    if (posterior.hdi_level != null && posterior.hdi_lower != null) {
-      data.push({ tab: 'forecast', section: 'Probability', property: 'Edge HDI', value: `${fmtPct(posterior.hdi_lower)} — ${fmtPct(posterior.hdi_upper)}` });
-    }
-    if (hasPathProb && (posterior as any).path_hdi_lower != null) {
-      data.push({ tab: 'forecast', section: 'Probability', property: 'Path HDI', value: `${fmtPct((posterior as any).path_hdi_lower)} — ${fmtPct((posterior as any).path_hdi_upper)}` });
-    }
-    if (posterior.evidence_grade != null) {
-      const gradeFreshness = posterior.evidence_grade >= 2 ? 'good' : posterior.evidence_grade >= 1 ? 'stale' : 'very-stale';
-      data.push({ tab: 'forecast', section: 'Probability', property: 'Evidence Grade', value: `${posterior.evidence_grade}/3`, freshness: gradeFreshness });
-    }
-    if (posterior.prior_tier) {
-      data.push({ tab: 'forecast', section: 'Probability', property: 'Prior Tier', value: posterior.prior_tier.replace(/_/g, ' ') });
-    }
-
-    // Convergence
-    const tier = computeQualityTier(posterior);
-    const tierFreshness = tier.tier === 'failed' ? 'very-stale'
-      : tier.tier === 'warning' ? 'stale'
-      : tier.tier.startsWith('good') ? 'good'
-      : undefined;
-    data.push({ tab: 'forecast', section: 'Convergence', property: 'Quality', value: `${qualityTierLabel(tier.tier)} — ${tier.reason}`, freshness: tierFreshness });
-    if (posterior.rhat != null) {
-      const rhatFreshness = posterior.rhat > 1.1 ? 'very-stale' : posterior.rhat > 1.01 ? 'stale' : 'good';
-      data.push({ tab: 'forecast', section: 'Convergence', property: 'rhat', value: posterior.rhat.toFixed(4), freshness: rhatFreshness });
-    }
-    if (posterior.ess != null) {
-      const essFreshness = posterior.ess < 100 ? 'very-stale' : posterior.ess < 400 ? 'stale' : 'good';
-      data.push({ tab: 'forecast', section: 'Convergence', property: 'ESS', value: fmtNum(Math.round(posterior.ess)), freshness: essFreshness });
-    }
-    if (posterior.divergences != null && posterior.divergences > 0) {
-      data.push({ tab: 'forecast', section: 'Convergence', property: 'Divergences', value: posterior.divergences.toString(), freshness: 'very-stale' });
-    }
-    if (posterior.provenance) {
-      const provFreshness = ['pooled-fallback', 'point-estimate'].includes(posterior.provenance) ? 'stale' : undefined;
-      data.push({ tab: 'forecast', section: 'Convergence', property: 'Provenance', value: posterior.provenance, freshness: provFreshness });
-    }
-    if (posterior.surprise_z != null && Math.abs(posterior.surprise_z) > 2) {
-      data.push({ tab: 'forecast', section: 'Convergence', property: 'Surprise z', value: posterior.surprise_z.toFixed(1), freshness: 'stale' });
-    }
-  }
-
-  // ── Latency posterior (edge + path in same section) ──
-  if (latPosterior) {
-    if (latPosterior.mu_mean != null) {
-      data.push({ tab: 'forecast', section: 'Latency', property: 'Edge onset', value: `${(latPosterior.onset_delta_days ?? 0).toFixed(1)}d` });
-      data.push({ tab: 'forecast', section: 'Latency', property: 'Edge μ', value: `${latPosterior.mu_mean.toFixed(4)} ± ${(latPosterior.mu_sd ?? 0).toFixed(4)}` });
-      data.push({ tab: 'forecast', section: 'Latency', property: 'Edge σ', value: `${latPosterior.sigma_mean.toFixed(4)} ± ${(latPosterior.sigma_sd ?? 0).toFixed(4)}` });
-    }
-    if (latPosterior.path_mu_mean != null) {
-      data.push({ tab: 'forecast', section: 'Latency', property: 'Path onset', value: `${(latPosterior.path_onset_delta_days ?? 0).toFixed(1)}d` });
-      data.push({ tab: 'forecast', section: 'Latency', property: 'Path μ', value: `${latPosterior.path_mu_mean.toFixed(4)} ± ${(latPosterior.path_mu_sd ?? 0).toFixed(4)}` });
-      if (latPosterior.path_sigma_mean != null) {
-        data.push({ tab: 'forecast', section: 'Latency', property: 'Path σ', value: `${latPosterior.path_sigma_mean.toFixed(4)} ± ${(latPosterior.path_sigma_sd ?? 0).toFixed(4)}` });
-      }
-    }
-    if (latPosterior.hdi_level != null && latPosterior.hdi_t95_lower != null && latPosterior.hdi_t95_upper != null) {
-      data.push({ tab: 'forecast', section: 'Latency', property: `Edge t95 HDI ${fmtPct(latPosterior.hdi_level)}`, value: `${latPosterior.hdi_t95_lower.toFixed(1)}d — ${latPosterior.hdi_t95_upper.toFixed(1)}d` });
-    }
-  }
-
-  // ── Metadata ──
-  if (posterior?.fitted_at) {
-    const relFit = formatRelativeTime(posterior.fitted_at);
-    const fitLevel = getFreshnessLevel(posterior.fitted_at);
-    data.push({
-      tab: 'forecast', section: 'Metadata', property: 'Fitted',
-      value: relFit ? `${relFit} (${posterior.fitted_at})` : posterior.fitted_at,
-      freshness: fitLevel,
-    });
+  // ── Forecast tab: rendered by BayesPosteriorCard via metadata ──
+  // Emit a placeholder row so the tab appears in the tab bar.
+  // Fitted time is shown in the card's convergence footer — no separate Metadata section needed.
+  if (posterior || latPosterior) {
+    data.push({ tab: 'forecast', section: '_', property: '_', value: '' });
   }
 }
 

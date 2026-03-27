@@ -308,25 +308,41 @@ export function AnalysisChartContainer(props: {
   const showSubjectSelector = (effectiveKind === 'daily_conversions' || effectiveKind === 'cohort_maturity') && subjectIds.length > 1;
   const { ref: chartViewportRef, width: chartWidthPx, height: chartHeightPx } = useElementSize<HTMLDivElement>();
 
+  // Layout ref — read at useMemo computation time but NOT a dependency.
+  // Dimension changes are handled by instance.resize() below, not by
+  // rebuilding the option (which caused the double-draw regression).
+  const layoutRef = useRef({ w: 0, h: 0 });
+  layoutRef.current = { w: chartWidthPx, h: chartHeightPx };
+
   const echartsOption = useMemo(() => {
     if (!finalResult) return null;
     if (!effectiveKind) return null;
     const finalSettings = hideScenarioLegend
       ? { ...resolvedSettings, show_legend: false }
       : resolvedSettings;
+    const w = layoutRef.current.w;
+    const h = layoutRef.current.h;
     const opt = buildChartOption(effectiveKind, finalResult, finalSettings, {
       visibleScenarioIds: displayPlan.scenarioIdsToRender,
       scenarioVisibilityModes,
       scenarioDslSubtitleById,
       subjectId: effectiveSubjectId,
       layout: {
-        widthPx: chartWidthPx > 0 ? chartWidthPx : undefined,
-        heightPx: chartHeightPx > 0 ? chartHeightPx : (fillHeight ? undefined : height),
+        widthPx: w > 0 ? w : undefined,
+        heightPx: h > 0 ? h : (fillHeight ? undefined : height),
       },
     });
     if (props.suppressAnimation && opt) opt.animation = false;
     return opt;
-  }, [effectiveKind, finalResult, resolvedSettings, hideScenarioLegend, displayPlan.scenarioIdsToRender, scenarioVisibilityModes, scenarioDslSubtitleById, effectiveSubjectId, chartWidthPx, chartHeightPx, fillHeight, height, props.suppressAnimation]);
+  }, [effectiveKind, finalResult, resolvedSettings, hideScenarioLegend, displayPlan.scenarioIdsToRender, scenarioVisibilityModes, scenarioDslSubtitleById, effectiveSubjectId, fillHeight, height, props.suppressAnimation]);
+
+  // Notify ECharts when the container resizes so percentage-based elements
+  // and media-query breakpoints are re-evaluated.
+  useEffect(() => {
+    if (chartWidthPx <= 0 || chartHeightPx <= 0) return;
+    const instance = echartsRef.current?.getEchartsInstance?.();
+    instance?.resize();
+  }, [chartWidthPx, chartHeightPx]);
 
   // Diagnostic: log when we have a result but no chart option
   useEffect(() => {

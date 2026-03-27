@@ -154,7 +154,7 @@ export function buildChartOption(
       break;
 
     case 'surprise_gauge':
-      opt = buildSurpriseGaugeEChartsOption(result, resolvedSettings, extra?.layout);
+      opt = buildSurpriseGaugeEChartsOption(result, resolvedSettings);
       break;
 
     default:
@@ -470,6 +470,7 @@ export function buildChartOption(
   if ((opt as any).__dagnet_skip_stack_mode) {
     delete (opt as any).__dagnet_skip_stack_mode;
   }
+
   return applyCommonSettings(opt, resolvedSettings);
 }
 

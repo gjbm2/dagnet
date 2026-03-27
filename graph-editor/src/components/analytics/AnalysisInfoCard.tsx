@@ -14,12 +14,13 @@ import React, { useMemo, useCallback } from 'react';
 import ReactECharts from 'echarts-for-react';
 import type { AnalysisResult } from '../../lib/graphComputeClient';
 import { fontSizeZoom } from '../../lib/analysisDisplaySettingsRegistry';
-import { TabbedContainer, type TabDefinition } from '../shared/TabbedContainer';
+// TabbedContainer no longer used — tab bar is handled externally by content item decomposition
 import { freshnessColour, type FreshnessLevel } from '../../utils/freshnessDisplay';
 import { objectTypeTheme, type ObjectType } from '../../theme/objectTypeTheme';
 import { useDataDepthContext } from '../../contexts/DataDepthContext';
 import { useGraphStoreOptional } from '../../contexts/GraphStoreContext';
 import { buildDataDepthInfoRows } from '../../services/dataDepthService';
+import { BayesPosteriorCard } from './BayesPosteriorCard';
 import '../../styles/analysis-info-card.css';
 
 interface AnalysisInfoCardProps {
@@ -58,19 +59,7 @@ interface SectionData {
   rows: RowData[];
 }
 
-// Tab display names
-const TAB_LABELS: Record<string, string> = {
-  overview: 'Overview',
-  structure: 'Structure',
-  evidence: 'Evidence',
-  forecast: 'Model',
-  depth: 'Data Depth',
-  diagnostics: 'Diagnostics',
-};
 
-// Tabs where per-scenario columns make sense (values actually differ by scenario).
-// Other tabs show a single value column even in multi-scenario mode.
-const SCENARIO_AWARE_TABS = new Set(['overview', 'structure']);
 
 export function AnalysisInfoCard({ result, fontSize, defaultTab, onFileLink, tabExtra, kind }: AnalysisInfoCardProps) {
   const sizeZoom = fontSizeZoom(fontSize);
@@ -97,23 +86,13 @@ export function AnalysisInfoCard({ result, fontSize, defaultTab, onFileLink, tab
   }, [result, _ddScores, _ddGraph]);
 
   const allData = enrichedData as Record<string, any>[];
-  // When kind is set, filter to only rows matching that card kind — renders flat (no tab bar).
-  const data = kind ? allData.filter((row: any) => row.tab === kind) : allData;
+  // Filter to rows matching the requested kind (tab). Every render is single-kind.
+  // Legacy content items without kind: fall back to 'overview' if rows have tabs,
+  // else show all rows unfiltered.
+  const effectiveKind = kind || (allData.some(r => r.tab) ? 'overview' : undefined);
+  const data = effectiveKind ? allData.filter((row: any) => row.tab === effectiveKind) : allData;
 
-  // Detect tabs: rows with a `tab` field
-  const tabIds = useMemo(() => {
-    const seen: string[] = [];
-    for (const row of data) {
-      if (row.tab && !seen.includes(row.tab)) {
-        seen.push(row.tab);
-      }
-    }
-    return seen;
-  }, [data]);
-
-  const hasTabs = tabIds.length > 1;
-
-  // Detect scenarios (same as before)
+  // Detect scenarios
   const { scenarioIds, scenarioMeta } = useMemo(() => {
     const hasScenarios = data.some(row => row.scenario_id !== undefined);
     const scIds: string[] = [];
@@ -133,84 +112,37 @@ export function AnalysisInfoCard({ result, fontSize, defaultTab, onFileLink, tab
     return { scenarioIds: scIds, scenarioMeta: scMeta };
   }, [data, result.dimension_values]);
 
-  // Build sections per tab — MUST be unconditional (before early returns) to
-  // keep hook count stable. Skips work when hasTabs is false.
-  const sectionsByTab = useMemo(() => {
-    if (!hasTabs) return {};
-    const result_: Record<string, SectionData[]> = {};
-    for (const tabId of tabIds) {
-      const tabRows = data.filter(row => row.tab === tabId);
-      const isScenarioAware = SCENARIO_AWARE_TABS.has(tabId);
-      result_[tabId] = buildSections(
-        tabRows,
-        isScenarioAware ? scenarioIds : [],
-        isScenarioAware ? scenarioMeta : {},
-      );
-    }
-    return result_;
-  }, [hasTabs, data, tabIds, scenarioIds, scenarioMeta]);
-
   if (data.length === 0) {
     return <div className="info-card-empty">No data</div>;
   }
 
   const latencyCdfMeta = (result as any).metadata?.latency_cdf;
+  const posteriorsMeta = result.analysis_type === 'edge_info'
+    ? (result as any).metadata?.posteriors : undefined;
 
-  if (!hasTabs) {
-    // No tabs — render flat (single tab, faceted view, or no tab field at all)
-    const sections = buildSections(data, scenarioIds, scenarioMeta, result.dimension_values);
-    const extra = kind ? tabExtra?.[kind] : undefined;
-    const showCdf = (kind === 'latency' || !kind) && !!latencyCdfMeta;
+  const sections = buildSections(data, scenarioIds, scenarioMeta, result.dimension_values);
+  const filteredSections = sections.filter(s => s.title !== '_');
+  const extra = effectiveKind ? tabExtra?.[effectiveKind] : undefined;
+  const showCdf = (effectiveKind === 'latency' || !effectiveKind) && !!latencyCdfMeta;
+
+  // Forecast kind with posterior metadata → BayesPosteriorCard
+  if (effectiveKind === 'forecast' && posteriorsMeta) {
     return (
       <div className="info-card" style={sizeZoom !== 1 ? { zoom: sizeZoom } as any : undefined}>
-        <InfoTable sections={sections} scenarioIds={scenarioIds} scenarioMeta={scenarioMeta} onFileLink={onFileLink} />
-        {showCdf && <LatencyCdfTab edge={latencyCdfMeta.edge} path={latencyCdfMeta.path} />}
+        <BayesPosteriorCard probability={posteriorsMeta.probability} latency={posteriorsMeta.latency} />
+        {filteredSections.length > 0 && (
+          <InfoTable sections={filteredSections} scenarioIds={scenarioIds} scenarioMeta={scenarioMeta} onFileLink={onFileLink} />
+        )}
         {extra}
       </div>
     );
   }
 
-  // Tabbed layout
-  const tabs: TabDefinition[] = tabIds.map(id => ({
-    id,
-    label: TAB_LABELS[id] || id,
-  }));
-
-  const panels: Record<string, React.ReactNode> = {};
-  for (const tabId of tabIds) {
-    const isScenarioAware = SCENARIO_AWARE_TABS.has(tabId);
-    const extra = tabExtra?.[tabId];
-    panels[tabId] = (
-      <>
-        <InfoTable
-          sections={sectionsByTab[tabId] || []}
-          scenarioIds={isScenarioAware ? scenarioIds : []}
-          scenarioMeta={isScenarioAware ? scenarioMeta : {}}
-          onFileLink={onFileLink}
-        />
-        {tabId === 'latency' && latencyCdfMeta && (
-          <LatencyCdfTab edge={latencyCdfMeta.edge} path={latencyCdfMeta.path} />
-        )}
-        {extra}
-      </>
-    );
-  }
-
-  // If no latency data rows but we have CDF metadata, add the tab
-  if (latencyCdfMeta && !tabIds.includes('latency')) {
-    const diagIdx = tabs.findIndex(t => t.id === 'diagnostics');
-    const latencyTab = { id: 'latency', label: 'Latency' };
-    if (diagIdx >= 0) {
-      tabs.splice(diagIdx, 0, latencyTab);
-    } else {
-      tabs.push(latencyTab);
-    }
-    panels['latency'] = <LatencyCdfTab edge={latencyCdfMeta.edge} path={latencyCdfMeta.path} />;
-  }
-
   return (
     <div className="info-card" style={sizeZoom !== 1 ? { zoom: sizeZoom } as any : undefined}>
-      <TabbedContainer tabs={tabs} defaultTab={defaultTab} panels={panels} />
+      <InfoTable sections={sections} scenarioIds={scenarioIds} scenarioMeta={scenarioMeta} onFileLink={onFileLink} />
+      {showCdf && <LatencyCdfTab edge={latencyCdfMeta.edge} path={latencyCdfMeta.path} />}
+      {extra}
     </div>
   );
 }
