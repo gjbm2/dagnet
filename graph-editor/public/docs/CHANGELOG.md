@@ -1,4 +1,11 @@
 # DagNet Release Notes
+## Version 1.8.14b
+**Released:** 27-Mar-26
+
+Good progress with model fits. Scenarios in views. Polish.
+
+---
+
 ## Version 1.8.13b
 **Released:** 26-Mar-26
 
