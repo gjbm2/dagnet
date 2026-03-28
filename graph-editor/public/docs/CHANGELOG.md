@@ -1,4 +1,11 @@
 # DagNet Release Notes
+## Version 1.8.16b
+**Released:** 28-Mar-26
+
+Completeness fixes. F estimation improvements.
+
+---
+
 ## Version 1.8.14b
 **Released:** 27-Mar-26
 
