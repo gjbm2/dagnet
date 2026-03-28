@@ -501,8 +501,8 @@ function buildEdgeInfoResult(graph: ConversionGraph, dsl: string): AnalysisResul
           data.push({ tab: 'evidence', section: 'Observations', property: 'Observed Rate', value: fmtPct(ev.k / ev.n) });
         }
       }
-      if (ev.window_from && ev.window_to) {
-        data.push({ tab: 'evidence', section: 'Observations', property: 'Window', value: `${fmtDate(ev.window_from)} — ${fmtDate(ev.window_to)}` });
+      if (ev.scope_from && ev.scope_to) {
+        data.push({ tab: 'evidence', section: 'Observations', property: 'Scope', value: `${fmtDate(ev.scope_from)} — ${fmtDate(ev.scope_to)}` });
       }
       if (ev.source) {
         data.push({ tab: 'evidence', section: 'Observations', property: 'Source', value: ev.source });
@@ -831,17 +831,47 @@ function buildSurpriseGaugeResult(graph: ConversionGraph, queryDsl: string): Ana
     return { analysis_type: 'surprise_gauge', analysis_name: 'Expectation Gauge', variables: [], error: 'No model vars available', semantics: { chart: { recommended: 'surprise_gauge' } }, data: [] } as any;
   }
 
-  // Find observed (analytic entry, different from reference if reference is bayesian)
-  let obsEntry = modelVars.find((mv: any) => mv?.source === 'analytic_be')
+  // Evidence (pure observation — never the blended f+e value). See §5.0.
+  const evidence = p.evidence || {};
+  const evidenceK: number | undefined = evidence.k;
+  const evidenceN: number | undefined = evidence.n;
+
+  // Observed latency from analytic entry (evidence-fitted, not promoted/blended)
+  const obsEntry = modelVars.find((mv: any) => mv?.source === 'analytic_be')
     || modelVars.find((mv: any) => mv?.source === 'analytic');
-  if (!obsEntry) {
-    // Fall back to promoted values
-    obsEntry = { probability: { mean: p.mean }, latency: p.latency };
+  const obsLat = obsEntry?.latency || p.latency || {};
+
+  // Completeness from the topo pass (n-weighted aggregate across cohort dates)
+  const latencyObj = p.latency || {} as any;
+  const cW: number = typeof latencyObj.completeness === 'number' && latencyObj.completeness > 0 ? latencyObj.completeness : 1.0;
+
+  // n_dates for mu/sigma sampling SE — derived from evidence scope dates on the edge
+  let nDates = 1;
+  const evWindowFrom = evidence.scope_from;
+  const evWindowTo = evidence.scope_to;
+  if (evWindowFrom && evWindowTo) {
+    try {
+      const parseUkDate = (s: string): Date | null => {
+        // Parse "d-MMM-yy" or "d-MMM-yyyy" format
+        const m = s.match(/^(\d{1,2})-(\w{3})-(\d{2,4})$/);
+        if (!m) return null;
+        const months: Record<string, number> = { Jan:0, Feb:1, Mar:2, Apr:3, May:4, Jun:5, Jul:6, Aug:7, Sep:8, Oct:9, Nov:10, Dec:11 };
+        const mon = months[m[2]];
+        if (mon === undefined) return null;
+        let yr = parseInt(m[3], 10);
+        if (yr < 100) yr += 2000;
+        return new Date(yr, mon, parseInt(m[1], 10));
+      };
+      const from = parseUkDate(evWindowFrom);
+      const to = parseUkDate(evWindowTo);
+      if (from && to) {
+        nDates = Math.max(1, Math.round((to.getTime() - from.getTime()) / 86400000) + 1);
+      }
+    } catch { /* leave nDates = 1 */ }
   }
 
   const refProb = refEntry.probability || {};
   const refLat = refEntry.latency || {};
-  const obsLat = obsEntry.latency || {};
 
   // Select reference alpha/beta: path-level for cohort, edge-level for window.
   // Use actual posterior alpha/beta when available (more precise than MoM reconstruction).
@@ -869,38 +899,57 @@ function buildSurpriseGaugeResult(graph: ConversionGraph, queryDsl: string): Ana
   }
 
   // --- p ---
-  // Use promoted p.mean (the blended value on the edge) as the observed value.
-  // This already reflects visibility mode: f+e → blend, e → evidence, f → forecast.
-  const obsPMean = typeof p.mean === 'number' ? p.mean : null;
-  if (alpha !== null && beta_param !== null && obsPMean !== null) {
-    // Normal approximation to Beta CDF (good enough for gauge)
-    const posteriorMean = alpha / (alpha + beta_param);
-    const posteriorSd = Math.sqrt(alpha * beta_param / ((alpha + beta_param) ** 2 * (alpha + beta_param + 1)));
-    const z = posteriorSd > 0 ? (obsPMean - posteriorMean) / posteriorSd : 0;
+  // Completeness-adjusted comparison: pure evidence k/n vs posterior Beta(α,β)
+  // scaled by per-date completeness. See surprise-gauge-design.md §5.1.
+  if (alpha !== null && beta_param !== null
+      && typeof evidenceK === 'number' && typeof evidenceN === 'number' && evidenceN > 0) {
+    const muP = alpha / (alpha + beta_param);
+    const sigma2P = (alpha * beta_param) / ((alpha + beta_param) ** 2 * (alpha + beta_param + 1));
+    const obsRate = evidenceK / evidenceN;
+
+    const expected = muP * cW;
+    const varPost = sigma2P * (cW ** 2);
+    const varSamp = expected * (1 - expected) / evidenceN;
+    const combinedSd = Math.sqrt(Math.max(1e-20, varPost + varSamp));
+
+    const z = (obsRate - expected) / combinedSd;
     const quantile = normalCdf(z);
     variables.push({
       name: 'p', label: 'Conversion rate',
       quantile: Math.round(quantile * 1e6) / 1e6,
       sigma: Math.round(z * 1000) / 1000,
-      observed: Math.round(obsPMean * 1e6) / 1e6,
-      expected: Math.round(posteriorMean * 1e6) / 1e6,
-      posterior_sd: Math.round(posteriorSd * 1e6) / 1e6,
+      observed: Math.round(obsRate * 1e6) / 1e6,
+      expected: Math.round(expected * 1e6) / 1e6,
+      expected_longrun: Math.round(muP * 1e6) / 1e6,
+      posterior_sd: Math.round(Math.sqrt(sigma2P) * 1e6) / 1e6,
+      combined_sd: Math.round(combinedSd * 1e6) / 1e6,
+      completeness: Math.round(cW * 1e4) / 1e4,
+      evidence_n: evidenceN,
+      evidence_k: evidenceK,
       zone: classifyZone(quantile),
       available: true,
     });
   } else {
-    variables.push({ name: 'p', label: 'Conversion rate', available: false, reason: 'Missing probability mean/stdev' });
+    const reason = !(typeof evidenceN === 'number' && evidenceN > 0) ? 'No evidence (k/n)' : 'Missing posterior (alpha/beta)';
+    variables.push({ name: 'p', label: 'Conversion rate', available: false, reason });
   }
 
   // --- mu ---
+  // Combined-SD normal approximation: posterior SD + sampling SE. See §5.2.
   const refMu = refLat?.mu;
   const obsMu = obsLat?.mu;
-  // For Bayesian, use posterior SD if available
   const latPosterior = (p.latency as any)?.posterior || {};
   const muSd = latPosterior.mu_sd || refLat?.mu_sd;
+  const sigmaLag = refLat?.sigma || latencyObj.sigma;
 
   if (typeof refMu === 'number' && typeof obsMu === 'number' && typeof muSd === 'number' && muSd > 0) {
-    const z = (obsMu - refMu) / muSd;
+    // obs_se = sqrt(π/2) × σ_lag / sqrt(n_dates)
+    let obsSe = 0;
+    if (typeof sigmaLag === 'number' && sigmaLag > 0 && nDates > 0) {
+      obsSe = Math.sqrt(Math.PI / 2) * sigmaLag / Math.sqrt(nDates);
+    }
+    const combinedSd = Math.sqrt(muSd ** 2 + obsSe ** 2);
+    const z = (obsMu - refMu) / combinedSd;
     const quantile = normalCdf(z);
     const onset = posterior.onset_mean || refLat?.onset_delta_days || 0;
     variables.push({
@@ -912,6 +961,8 @@ function buildSurpriseGaugeResult(graph: ConversionGraph, queryDsl: string): Ana
       expected: Math.round(refMu * 1e4) / 1e4,
       expected_days: Math.round((Math.exp(refMu) + onset) * 10) / 10,
       posterior_sd: Math.round(muSd * 1e4) / 1e4,
+      combined_sd: Math.round(combinedSd * 1e4) / 1e4,
+      n_dates: nDates,
       zone: classifyZone(quantile),
       available: true,
     });
@@ -920,12 +971,19 @@ function buildSurpriseGaugeResult(graph: ConversionGraph, queryDsl: string): Ana
   }
 
   // --- sigma ---
+  // Combined-SD normal approximation with n_dates guard. See §5.2.
   const refSigma = refLat?.sigma;
   const obsSigma = obsLat?.sigma;
   const sigmaSd = latPosterior.sigma_sd || refLat?.sigma_sd;
 
-  if (typeof refSigma === 'number' && typeof obsSigma === 'number' && typeof sigmaSd === 'number' && sigmaSd > 0) {
-    const z = (obsSigma - refSigma) / sigmaSd;
+  if (typeof refSigma === 'number' && typeof obsSigma === 'number' && typeof sigmaSd === 'number' && sigmaSd > 0 && nDates >= 30) {
+    // sigma_se = σ_lag / sqrt(2 × n_dates)
+    let obsSe = 0;
+    if (typeof sigmaLag === 'number' && sigmaLag > 0 && nDates > 0) {
+      obsSe = sigmaLag / Math.sqrt(2 * nDates);
+    }
+    const combinedSd = Math.sqrt(sigmaSd ** 2 + obsSe ** 2);
+    const z = (obsSigma - refSigma) / combinedSd;
     const quantile = normalCdf(z);
     variables.push({
       name: 'sigma', label: 'Latency spread (σ)',
@@ -934,9 +992,13 @@ function buildSurpriseGaugeResult(graph: ConversionGraph, queryDsl: string): Ana
       observed: Math.round(obsSigma * 1e4) / 1e4,
       expected: Math.round(refSigma * 1e4) / 1e4,
       posterior_sd: Math.round(sigmaSd * 1e4) / 1e4,
+      combined_sd: Math.round(combinedSd * 1e4) / 1e4,
+      n_dates: nDates,
       zone: classifyZone(quantile),
       available: true,
     });
+  } else if (nDates < 30 && typeof refSigma === 'number' && typeof obsSigma === 'number') {
+    variables.push({ name: 'sigma', label: 'Latency spread (σ)', available: false, reason: `Insufficient dates (${nDates} < 30) for reliable sigma estimate` });
   } else {
     variables.push({ name: 'sigma', label: 'Latency spread (σ)', available: false, reason: sigmaSd ? 'Missing sigma values' : 'No posterior SD for sigma' });
   }

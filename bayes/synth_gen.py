@@ -107,6 +107,24 @@ GRAPH_CONFIGS: dict[str, dict[str, Any]] = {
         ],
         "base_date": "2025-12-12",
     },
+    "drift3d10d": {
+        "graph_file": "synth-drift3d10d.json",
+        "graph_id": "graph-synth-drift3d10d",
+        "edges": [
+            ("drift3d10d-a-to-b", "b0e8b7b1-b684-4ee6-920f-7c25ee3b6c91", "SYNTH-drift3d10d-a-to-b-w", "SYNTH-drift3d10d-a-to-b-c"),
+            ("drift3d10d-b-to-c", "e7491561-fe3b-412f-ace5-2bd6a57f3112", "SYNTH-drift3d10d-b-to-c-w", "SYNTH-drift3d10d-b-to-c-c"),
+        ],
+        "base_date": "2025-12-12",
+    },
+    "drift10d10d": {
+        "graph_file": "synth-drift10d10d.json",
+        "graph_id": "graph-synth-drift10d10d",
+        "edges": [
+            ("drift10d10d-a-to-b", "9bd28742-1ade-4f0a-b047-457cacfa8712", "SYNTH-drift10d10d-a-to-b-w", "SYNTH-drift10d10d-a-to-b-c"),
+            ("drift10d10d-b-to-c", "5f277cbf-e5da-4af5-a6b2-c735dd2a099e", "SYNTH-drift10d10d-b-to-c-w", "SYNTH-drift10d10d-b-to-c-c"),
+        ],
+        "base_date": "2025-12-12",
+    },
     "skip": {
         "graph_file": "synth-skip-test.json",
         "graph_id": "graph-synth-skip-test",

@@ -232,8 +232,8 @@ export function extractParamDetails(param: any): string {
   
   if (evidence?.n !== undefined) parts.push(`n=${evidence.n}`);
   if (evidence?.k !== undefined) parts.push(`k=${evidence.k}`);
-  if (evidence?.window_from && evidence?.window_to) {
-    parts.push(`window=${formatUK(evidence.window_from)}→${formatUK(evidence.window_to)}`);
+  if (evidence?.scope_from && evidence?.scope_to) {
+    parts.push(`scope=${formatUK(evidence.scope_from)}→${formatUK(evidence.scope_to)}`);
   }
   if (evidence?.source) parts.push(`source=${evidence.source}`);
   if (param.mean !== undefined) parts.push(`p=${(param.mean * 100).toFixed(2)}%`);

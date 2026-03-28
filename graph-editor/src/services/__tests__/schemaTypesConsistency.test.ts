@@ -563,7 +563,7 @@ describe('Schema / TypeScript Types Consistency', () => {
       const evidenceProps = probParamDef.properties?.evidence?.properties || {};
       
       // These fields should be type: string WITHOUT format: date-time
-      for (const field of ['window_from', 'window_to', 'retrieved_at']) {
+      for (const field of ['scope_from', 'scope_to', 'retrieved_at']) {
         const fieldDef = evidenceProps[field] || {};
         expect(fieldDef.type).toBe('string');
         expect(fieldDef.format).not.toBe('date-time'); // Should NOT require ISO format
@@ -610,8 +610,8 @@ describe('Schema / TypeScript Types Consistency', () => {
             evidence: {
               n: 100,
               k: 50,
-              window_from: '24-Nov-25',  // UK format
-              window_to: '30-Nov-25',    // UK format
+              scope_from: '24-Nov-25',  // UK format
+              scope_to: '30-Nov-25',    // UK format
               retrieved_at: '1-Dec-25',  // UK format
               source: 'amplitude-prod'
             }

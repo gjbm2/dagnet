@@ -155,7 +155,7 @@ export function extractParamsFromGraph(graph: Graph | null): ScenarioParams {
  * 
  * NOT IN PARAM PACK (internal/config):
  * - distribution, min, max, alpha, beta
- * - evidence.window_from/to, evidence.retrieved_at, evidence.source
+ * - evidence.scope_from/to, evidence.retrieved_at, evidence.source
  * - latency.latency_parameter, latency.anchor_node_id, latency.mean_lag_days
  */
 function extractEdgeParams(edge: GraphEdge): EdgeParamDiff | null {

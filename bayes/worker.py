@@ -666,10 +666,16 @@ def _fit_graph_compiler(payload: dict, report_progress=None) -> dict:
             for edge_id in topology.topo_order:
                 safe_eid = edge_id.replace("-", "_")
                 p_cohort_name = f"p_cohort_{safe_eid}"
+                eps_drift_name = f"eps_drift_{safe_eid}"
                 if p_cohort_name in trace2.posterior:
                     samples = trace2.posterior[p_cohort_name].values.flatten()
                     _log(log, f"  Phase 2 p_cohort {edge_id[:8]}…: "
                               f"mean={samples.mean():.4f} std={samples.std():.4f}")
+                if eps_drift_name in trace2.posterior:
+                    eps = trace2.posterior[eps_drift_name].values.flatten()
+                    _log(log, f"  Phase 2 eps_drift {edge_id[:8]}…: "
+                              f"mean={eps.mean():.3f} std={eps.std():.3f} "
+                              f"range=[{eps.min():.3f}, {eps.max():.3f}]")
 
             # Summarise Phase 2 — cohort posteriors
             progress.set_band(*P2_SUMMARISE)

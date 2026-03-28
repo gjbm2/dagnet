@@ -20,10 +20,12 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import {
   enhanceGraphLatencies,
   computeBlendedMean,
+  computePerDayBlendedMean,
   computeEdgeLatencyStats,
   calculateCompleteness,
   fitLagDistribution,
   logNormalCDF,
+  toModelSpaceAgeDays,
   getActiveEdges,
   type CohortData,
   type GraphForPath,
@@ -167,19 +169,15 @@ describe('LAG Stats Flow - Expected Values', () => {
       // the blend itself uses cohort-derived totals. Keep this assertion aligned with the fixture.
       expect(e1.evidence?.mean).toBe(0.71);
 
-      const expected = computeBlendedMean({
-        // Use the exact cohort-derived evidence mean (k/n), not a rounded literal.
-        // enhanceGraphLatencies uses cohort totals, so rounding here can create ~1e-3 drift.
-        evidenceMean: evidenceMeanExact,
-        forecastMean: 0.98,
-        completeness: e1.latency.completeness,
-        nQuery: 97,
-        nBaseline: 412,
-      });
-      expect(expected).toBeDefined();
-      expect(e1.blendedMean).toBeCloseTo(expected!, 10);
+      // Per-day blending: each cohort date gets its own blend weight from its
+      // own completeness, then the blended rates are n-weighted.  The result
+      // differs from the aggregate-blend formula (computeBlendedMean) because
+      // per-day blending correctly weights mature vs immature cohorts.
+      // Behavioural invariant: blended mean is between evidence and forecast.
       expect(e1.blendedMean!).toBeGreaterThanOrEqual(0.71);
       expect(e1.blendedMean!).toBeLessThanOrEqual(0.98);
+      // Per-day blend diagnostic should be present.
+      expect(e1.debug?.perDayBlendUsed).toBe(true);
     });
 
     it('uses pure forecast when nQuery is zero (no arrivals yet)', () => {
@@ -1881,3 +1879,327 @@ describe('Phase 3 – Scenario-Aware Active Edges (B3)', () => {
   });
 });
 
+// ============================================================================
+// Per-Day Blend Mathematical Verification
+//
+// These tests verify the mathematical correctness of computePerDayBlendedMean
+// using hand-computed expected values derived from the formulas, with no
+// reference to the implementation internals.
+//
+// The blend formula for each day i:
+//   c_i = logNormalCDF(age_i - onset, mu, sigma)
+//   c_eff_i = c_i^η                           (completeness power)
+//   remaining_i = 1 - c_eff_i
+//   m0_eff_i = λ × n_baseline × remaining_i   (forecast pseudo-sample)
+//   n_eff_i = c_eff_i × n_i                   (effective evidence sample)
+//   w_i = n_eff_i / (m0_eff_i + n_eff_i)      (evidence weight for day i)
+//   blended_rate_i = w_i × (k_i/n_i) + (1 - w_i) × forecast_mean
+//
+// Aggregation:
+//   p.mean = Σ(n_i × blended_rate_i) / Σn_i
+//   c_agg  = Σ(n_i × c_i) / Σn_i
+// ============================================================================
+
+describe('Per-day blend: mathematical correctness', () => {
+  // Lognormal with median ≈ 7.4 days, moderate spread.
+  const MU = 2.0;
+  const SIGMA = 0.5;
+  const ONSET = 0;
+  const FORECAST = 0.80;
+  const N_BASELINE = 500;
+  // Default model: η=1, λ=1 (simplest case for hand calculation).
+  const MODEL = { FORECAST_BLEND_LAMBDA: 1, LATENCY_BLEND_COMPLETENESS_POWER: 1 };
+
+  /** Hand-compute completeness for a given age. */
+  function handCompleteness(age: number, mu: number, sigma: number, onset: number): number {
+    const modelAge = Math.max(0, age - onset);
+    if (modelAge <= 0) return 0;
+    const z = (Math.log(modelAge) - mu) / (sigma * Math.SQRT2);
+    const t = 1 / (1 + 0.3275911 * Math.abs(z));
+    const poly = t * (0.254829592 + t * (-0.284496736 + t * (1.421413741 + t * (-1.453152027 + t * 1.061405429))));
+    const erfVal = 1 - poly * Math.exp(-z * z);
+    return Math.max(0, Math.min(1, 0.5 * (1 + (z >= 0 ? erfVal : -erfVal))));
+  }
+
+  /** Hand-compute blend weight for given completeness and n. */
+  function handWeight(c: number, n: number, nBaseline: number, eta: number, lambda: number): number {
+    const cEff = Math.pow(c, eta);
+    const nEff = cEff * n;
+    const remaining = Math.max(0, 1 - cEff);
+    const m0Eff = lambda * nBaseline * remaining;
+    return (m0Eff + nEff) > 0 ? nEff / (m0Eff + nEff) : 0;
+  }
+
+  /**
+   * Hand-compute the per-day blend with pooled de-biased rate.
+   *
+   * 1. Compute per-day c_i and w_i
+   * 2. Pooled rate = Σk / Σ(n×c)  (minimum-variance unbiased estimator)
+   * 3. Per-day blended rate = w_i × pooledRate + (1-w_i) × forecastMean
+   * 4. Aggregate = Σ(n_i × blendedRate_i) / Σn_i
+   */
+  function handAggregate(
+    cohorts: Array<{ n: number; k: number; age: number }>,
+    forecastMean: number, nBaseline: number, mu: number, sigma: number,
+    onset: number, eta: number, lambda: number
+  ): { blendedMean: number; cAgg: number; wAgg: number; pooledRate: number } {
+    let totalN = 0;
+    let totalK = 0;
+    let effectiveN = 0;
+    let weightedC = 0;
+    let weightedW = 0;
+
+    const days: Array<{ n: number; c: number; w: number }> = [];
+    for (const co of cohorts) {
+      if (co.n <= 0) continue;
+      const c = handCompleteness(co.age, mu, sigma, onset);
+      const w = handWeight(c, co.n, nBaseline, eta, lambda);
+      totalN += co.n;
+      totalK += co.k;
+      effectiveN += co.n * c;
+      weightedC += co.n * c;
+      weightedW += co.n * w;
+      days.push({ n: co.n, c, w });
+    }
+
+    const pooledRate = effectiveN > 0 ? Math.min(1, totalK / effectiveN) : 0;
+
+    let weightedRate = 0;
+    for (const d of days) {
+      const blendedRate = d.w * pooledRate + (1 - d.w) * forecastMean;
+      weightedRate += d.n * blendedRate;
+    }
+
+    return {
+      blendedMean: totalN > 0 ? weightedRate / totalN : 0,
+      pooledRate,
+      cAgg: totalN > 0 ? weightedC / totalN : 0,
+      wAgg: totalN > 0 ? weightedW / totalN : 0,
+    };
+  }
+
+  function makeCohorts(data: Array<{ date: string; n: number; k: number; age: number }>): CohortData[] {
+    return data.map(d => ({ date: d.date, n: d.n, k: d.k, age: d.age }));
+  }
+
+  it('should match hand-computed values for all-mature cohorts (c ≈ 1 → evidence-dominated)', () => {
+    // Ages well past the lognormal median (~7.4d): 60, 65, 70 days.
+    // At these ages, CDF ≈ 1, so w ≈ 1, and blend ≈ evidence.
+    const data = [
+      { date: '1-Oct-25', n: 100, k: 72, age: 60 },
+      { date: '6-Oct-25', n: 120, k: 85, age: 65 },
+      { date: '11-Oct-25', n: 80, k: 58, age: 70 },
+    ];
+    const expected = handAggregate(data, FORECAST, N_BASELINE, MU, SIGMA, ONSET, 1, 1);
+    const result = computePerDayBlendedMean({
+      cohorts: makeCohorts(data),
+      forecastMean: FORECAST,
+      nBaseline: N_BASELINE,
+      cdfMu: MU,
+      cdfSigma: SIGMA,
+      onsetDeltaDays: ONSET,
+    }, MODEL);
+
+    expect(result).toBeDefined();
+    expect(result!.blendedMean).toBeCloseTo(expected.blendedMean, 8);
+    expect(result!.completenessAgg).toBeCloseTo(expected.cAgg, 8);
+    expect(result!.wEvidenceAgg).toBeCloseTo(expected.wAgg, 8);
+
+    // With c ≈ 1 for all days, blended mean should be very close to raw evidence.
+    const rawEvidence = (72 + 85 + 58) / (100 + 120 + 80);
+    expect(result!.blendedMean).toBeCloseTo(rawEvidence, 2);
+    expect(result!.completenessAgg).toBeGreaterThan(0.99);
+  });
+
+  it('should match hand-computed values for all-immature cohorts (c ≈ 0 → forecast-dominated)', () => {
+    // Ages of 1 day — pre-onset or barely post-onset.  CDF ≈ 0.
+    const data = [
+      { date: '1-Dec-25', n: 200, k: 5, age: 1 },
+      { date: '2-Dec-25', n: 180, k: 3, age: 1 },
+      { date: '3-Dec-25', n: 210, k: 4, age: 1 },
+    ];
+    const expected = handAggregate(data, FORECAST, N_BASELINE, MU, SIGMA, ONSET, 1, 1);
+    const result = computePerDayBlendedMean({
+      cohorts: makeCohorts(data),
+      forecastMean: FORECAST,
+      nBaseline: N_BASELINE,
+      cdfMu: MU,
+      cdfSigma: SIGMA,
+      onsetDeltaDays: ONSET,
+    }, MODEL);
+
+    expect(result).toBeDefined();
+    expect(result!.blendedMean).toBeCloseTo(expected.blendedMean, 8);
+    expect(result!.completenessAgg).toBeCloseTo(expected.cAgg, 8);
+
+    // With c ≈ 0 for all days, blended mean should be very close to forecast.
+    expect(result!.blendedMean).toBeCloseTo(FORECAST, 1);
+    expect(result!.completenessAgg).toBeLessThan(0.05);
+  });
+
+  it('should differ from aggregate blend for mixed-maturity sweeps (the core fix)', () => {
+    // Mix of mature (age 60d, c≈1) and immature (age 2d, c≈0) cohorts.
+    // The immature cohorts have LARGE n, so they dominate the aggregate.
+    const data = [
+      { date: '1-Oct-25', n: 50, k: 38, age: 60 },   // mature, evidence_rate = 0.76
+      { date: '6-Oct-25', n: 50, k: 36, age: 65 },   // mature, evidence_rate = 0.72
+      { date: '1-Dec-25', n: 200, k: 10, age: 2 },    // immature, evidence_rate = 0.05
+      { date: '2-Dec-25', n: 200, k: 12, age: 2 },    // immature, evidence_rate = 0.06
+    ];
+
+    const perDayResult = computePerDayBlendedMean({
+      cohorts: makeCohorts(data),
+      forecastMean: FORECAST,
+      nBaseline: N_BASELINE,
+      cdfMu: MU,
+      cdfSigma: SIGMA,
+      onsetDeltaDays: ONSET,
+    }, MODEL);
+    expect(perDayResult).toBeDefined();
+
+    // Hand-computed per-day expected value.
+    const expected = handAggregate(data, FORECAST, N_BASELINE, MU, SIGMA, ONSET, 1, 1);
+    expect(perDayResult!.blendedMean).toBeCloseTo(expected.blendedMean, 8);
+
+    // Now compute what the OLD aggregate blend would have given.
+    const totalN = data.reduce((s, d) => s + d.n, 0);
+    const totalK = data.reduce((s, d) => s + d.k, 0);
+    const aggregateEvidence = totalK / totalN;
+    const aggregateCompleteness = perDayResult!.completenessAgg;
+    const aggregateBlend = computeBlendedMean({
+      evidenceMean: aggregateEvidence,
+      forecastMean: FORECAST,
+      completeness: aggregateCompleteness,
+      nQuery: totalN,
+      nBaseline: N_BASELINE,
+    }, MODEL);
+
+    // The per-day and aggregate blends should differ meaningfully.
+    expect(aggregateBlend).toBeDefined();
+    expect(Math.abs(perDayResult!.blendedMean - aggregateBlend!)).toBeGreaterThan(0.01);
+
+    // Key property: per-day blend correctly lets mature days contribute their
+    // evidence (≈0.74) while immature days lean on forecast (0.80).
+    // The aggregate blend applies a middling weight to all.
+    // Verify the per-day weights reflect this: mature days have w ≈ 1,
+    // immature days have w ≈ 0.
+    const matureDays = perDayResult!.perDayWeights.filter(w => w.c > 0.9);
+    const immatureDays = perDayResult!.perDayWeights.filter(w => w.c < 0.1);
+    expect(matureDays.length).toBe(2);
+    expect(immatureDays.length).toBe(2);
+    for (const d of matureDays) {
+      expect(d.w).toBeGreaterThan(0.8);
+    }
+    for (const d of immatureDays) {
+      expect(d.w).toBeLessThan(0.05);
+    }
+  });
+
+  it('should match hand-computed pooled formula for a single cohort (degenerate case)', () => {
+    const data = [{ date: '15-Nov-25', n: 100, k: 65, age: 30 }];
+
+    const perDayResult = computePerDayBlendedMean({
+      cohorts: makeCohorts(data),
+      forecastMean: FORECAST,
+      nBaseline: N_BASELINE,
+      cdfMu: MU,
+      cdfSigma: SIGMA,
+      onsetDeltaDays: ONSET,
+    }, MODEL);
+    expect(perDayResult).toBeDefined();
+
+    // For a single cohort, pooled rate = k/(n×c) and there's one blend weight.
+    const expected = handAggregate(data, FORECAST, N_BASELINE, MU, SIGMA, ONSET, 1, 1);
+    expect(perDayResult!.blendedMean).toBeCloseTo(expected.blendedMean, 10);
+  });
+
+  it('should skip zero-n cohorts without affecting the result', () => {
+    const dataWithZeros = [
+      { date: '1-Nov-25', n: 100, k: 70, age: 40 },
+      { date: '6-Nov-25', n: 0, k: 0, age: 45 },
+      { date: '11-Nov-25', n: 80, k: 55, age: 50 },
+    ];
+    const dataWithout = [
+      { date: '1-Nov-25', n: 100, k: 70, age: 40 },
+      { date: '11-Nov-25', n: 80, k: 55, age: 50 },
+    ];
+
+    const withZeros = computePerDayBlendedMean({
+      cohorts: makeCohorts(dataWithZeros),
+      forecastMean: FORECAST,
+      nBaseline: N_BASELINE,
+      cdfMu: MU,
+      cdfSigma: SIGMA,
+      onsetDeltaDays: ONSET,
+    }, MODEL);
+    const without = computePerDayBlendedMean({
+      cohorts: makeCohorts(dataWithout),
+      forecastMean: FORECAST,
+      nBaseline: N_BASELINE,
+      cdfMu: MU,
+      cdfSigma: SIGMA,
+      onsetDeltaDays: ONSET,
+    }, MODEL);
+
+    expect(withZeros).toBeDefined();
+    expect(without).toBeDefined();
+    expect(withZeros!.blendedMean).toBeCloseTo(without!.blendedMean, 10);
+    expect(withZeros!.completenessAgg).toBeCloseTo(without!.completenessAgg, 10);
+  });
+
+  it('should respect onset: pre-onset cohorts get c=0 and pure forecast', () => {
+    const ONSET_DAYS = 5;
+    // All cohorts are younger than onset — completeness should be 0.
+    const data = [
+      { date: '1-Dec-25', n: 150, k: 8, age: 2 },
+      { date: '2-Dec-25', n: 160, k: 6, age: 3 },
+      { date: '3-Dec-25', n: 140, k: 5, age: 4 },
+    ];
+
+    const result = computePerDayBlendedMean({
+      cohorts: makeCohorts(data),
+      forecastMean: FORECAST,
+      nBaseline: N_BASELINE,
+      cdfMu: MU,
+      cdfSigma: SIGMA,
+      onsetDeltaDays: ONSET_DAYS,
+    }, MODEL);
+
+    expect(result).toBeDefined();
+    // All days have age < onset, so c = 0, w = 0, blend = forecast.
+    expect(result!.completenessAgg).toBe(0);
+    expect(result!.blendedMean).toBeCloseTo(FORECAST, 10);
+    for (const d of result!.perDayWeights) {
+      expect(d.c).toBe(0);
+      expect(d.w).toBe(0);
+    }
+  });
+
+  it('should produce blended mean bounded by [min(evidence, forecast), max(evidence, forecast)]', () => {
+    // Arbitrary mixed data — the blended mean must always be in the convex hull.
+    const data = [
+      { date: '1-Nov-25', n: 80, k: 48, age: 15 },   // rate = 0.6
+      { date: '10-Nov-25', n: 120, k: 96, age: 25 },  // rate = 0.8
+      { date: '20-Nov-25', n: 60, k: 6, age: 3 },     // rate = 0.1
+    ];
+
+    const result = computePerDayBlendedMean({
+      cohorts: makeCohorts(data),
+      forecastMean: FORECAST,
+      nBaseline: N_BASELINE,
+      cdfMu: MU,
+      cdfSigma: SIGMA,
+      onsetDeltaDays: ONSET,
+    }, MODEL);
+    expect(result).toBeDefined();
+
+    // Per-day rates range from 0.1 to 0.8; forecast is 0.8.
+    // Blended mean must be in [0.1, 0.8] (the convex hull of all per-day
+    // evidence rates and forecast).
+    const allRates = data.map(d => d.k / d.n).concat([FORECAST]);
+    const lo = Math.min(...allRates);
+    const hi = Math.max(...allRates);
+    expect(result!.blendedMean).toBeGreaterThanOrEqual(lo - 1e-10);
+    expect(result!.blendedMean).toBeLessThanOrEqual(hi + 1e-10);
+  });
+});

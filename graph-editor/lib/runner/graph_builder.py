@@ -274,8 +274,8 @@ def _extract_evidence(p_param: Optional[dict]) -> Optional[dict]:
                 'n': evidence.get('n'),
                 'k': evidence.get('k'),
                 'mean': evidence.get('mean'),  # evidence.mean (observed rate)
-                'window_from': evidence.get('window_from'),
-                'window_to': evidence.get('window_to'),
+                'scope_from': evidence.get('scope_from'),
+                'scope_to': evidence.get('scope_to'),
             }
     
     return None

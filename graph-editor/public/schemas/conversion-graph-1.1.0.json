@@ -1014,13 +1014,13 @@
               "minimum": 0,
               "description": "Evidence uncertainty: binomial stdev for the evidence rate (query-time computed scalar)"
             },
-            "window_from": {
+            "scope_from": {
               "type": "string",
-              "description": "Time window start (UK format d-MMM-yy or ISO)"
+              "description": "Temporal scope start — cohort entry dates or window dates (UK format d-MMM-yy or ISO)"
             },
-            "window_to": {
+            "scope_to": {
               "type": "string",
-              "description": "Time window end (UK format d-MMM-yy or ISO)"
+              "description": "Temporal scope end — cohort entry dates or window dates (UK format d-MMM-yy or ISO)"
             },
             "retrieved_at": {
               "type": "string",
@@ -1522,13 +1522,13 @@
               "minimum": 0,
               "description": "Evidence standard deviation (query-time computed scalar)"
             },
-            "window_from": {
+            "scope_from": {
               "type": "string",
-              "description": "Time window start (UK format d-MMM-yy or ISO)"
+              "description": "Temporal scope start — cohort entry dates or window dates (UK format d-MMM-yy or ISO)"
             },
-            "window_to": {
+            "scope_to": {
               "type": "string",
-              "description": "Time window end (UK format d-MMM-yy or ISO)"
+              "description": "Temporal scope end — cohort entry dates or window dates (UK format d-MMM-yy or ISO)"
             },
             "retrieved_at": {
               "type": "string",

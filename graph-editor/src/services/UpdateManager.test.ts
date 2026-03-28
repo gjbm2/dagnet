@@ -131,7 +131,7 @@ describe('UpdateManager', () => {
       // Evidence SHOULD change (never overridden)
       expect(target.p.evidence.n).toBe(1000);
       expect(target.p.evidence.k).toBe(450);
-      expect(target.p.evidence.window_from).toBe('1-Jan-25');
+      expect(target.p.evidence.scope_from).toBe('1-Jan-25');
     });
   });
   
@@ -524,8 +524,8 @@ describe('UpdateManager', () => {
       expect(graphEdge.p.stdev).toBe(0.05);
       expect(graphEdge.p.evidence.n).toBe(1000);
       expect(graphEdge.p.evidence.k).toBe(450);
-      expect(graphEdge.p.evidence.window_from).toBe('1-Jan-25');
-      expect(graphEdge.p.evidence.window_to).toBe('31-Jan-25');
+      expect(graphEdge.p.evidence.scope_from).toBe('1-Jan-25');
+      expect(graphEdge.p.evidence.scope_to).toBe('31-Jan-25');
       
       // Verify changes reported
       expect(result.changes!.length).toBeGreaterThan(0);
@@ -716,7 +716,7 @@ describe('UpdateManager', () => {
       expect(graphEdge.p.mean).toBe(0.4); // 200/500
       expect(graphEdge.p.evidence.n).toBe(500);
       expect(graphEdge.p.evidence.k).toBe(200);
-      expect(graphEdge.p.evidence.window_from).toBeUndefined();
+      expect(graphEdge.p.evidence.scope_from).toBeUndefined();
     });
     
     it('should clamp invalid probabilities from bad n/k data', async () => {

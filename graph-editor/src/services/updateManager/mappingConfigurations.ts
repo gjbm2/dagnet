@@ -143,8 +143,8 @@ function buildMappingConfigurations(): Map<string, MappingConfiguration> {
         distribution: source.p.distribution,
         n: source.p.evidence?.n,
         k: source.p.evidence?.k,
-        window_from: source.p.evidence?.window_from || normalizeToUK(new Date().toISOString()),
-        window_to: source.p.evidence?.window_to
+        window_from: source.p.evidence?.scope_from || normalizeToUK(new Date().toISOString()),
+        window_to: source.p.evidence?.scope_to
       })
     },
     {
@@ -155,8 +155,8 @@ function buildMappingConfigurations(): Map<string, MappingConfiguration> {
         mean: value,
         stdev: source.cost_gbp.stdev,
         distribution: source.cost_gbp.distribution,
-        window_from: source.cost_gbp.evidence?.window_from || normalizeToUK(new Date().toISOString()),
-        window_to: source.cost_gbp.evidence?.window_to
+        window_from: source.cost_gbp.evidence?.scope_from || normalizeToUK(new Date().toISOString()),
+        window_to: source.cost_gbp.evidence?.scope_to
       })
     },
     {
@@ -167,8 +167,8 @@ function buildMappingConfigurations(): Map<string, MappingConfiguration> {
         mean: value,
         stdev: source.labour_cost.stdev,
         distribution: source.labour_cost.distribution,
-        window_from: source.labour_cost.evidence?.window_from || normalizeToUK(new Date().toISOString()),
-        window_to: source.labour_cost.evidence?.window_to
+        window_from: source.labour_cost.evidence?.scope_from || normalizeToUK(new Date().toISOString()),
+        window_to: source.labour_cost.evidence?.scope_to
       })
     }
   ]);
@@ -374,11 +374,11 @@ function buildMappingConfigurations(): Map<string, MappingConfiguration> {
         if (source.p.evidence && source.p.data_source && source.p.data_source.type && source.p.data_source.type !== 'manual') {
           if (source.p.evidence.n !== undefined) entry.n = source.p.evidence.n;
           if (source.p.evidence.k !== undefined) entry.k = source.p.evidence.k;
-          if (source.p.evidence.window_from) entry.window_from = source.p.evidence.window_from;
-          if (source.p.evidence.window_to) entry.window_to = source.p.evidence.window_to;
+          if (source.p.evidence.scope_from) entry.window_from = source.p.evidence.scope_from;
+          if (source.p.evidence.scope_to) entry.window_to = source.p.evidence.scope_to;
         }
 
-        // If no evidence window_from, use current time
+        // If no evidence scope_from, use current time
         if (!entry.window_from) {
           entry.window_from = new Date().toISOString();
         }
@@ -421,11 +421,11 @@ function buildMappingConfigurations(): Map<string, MappingConfiguration> {
         if (source.cost_gbp.evidence) {
           if (source.cost_gbp.evidence.n !== undefined) entry.n = source.cost_gbp.evidence.n;
           if (source.cost_gbp.evidence.k !== undefined) entry.k = source.cost_gbp.evidence.k;
-          if (source.cost_gbp.evidence.window_from) entry.window_from = source.cost_gbp.evidence.window_from;
-          if (source.cost_gbp.evidence.window_to) entry.window_to = source.cost_gbp.evidence.window_to;
+          if (source.cost_gbp.evidence.scope_from) entry.window_from = source.cost_gbp.evidence.scope_from;
+          if (source.cost_gbp.evidence.scope_to) entry.window_to = source.cost_gbp.evidence.scope_to;
         }
 
-        // If no evidence window_from, use current time
+        // If no evidence scope_from, use current time
         if (!entry.window_from) {
           entry.window_from = new Date().toISOString();
         }
@@ -466,11 +466,11 @@ function buildMappingConfigurations(): Map<string, MappingConfiguration> {
         if (source.labour_cost.evidence) {
           if (source.labour_cost.evidence.n !== undefined) entry.n = source.labour_cost.evidence.n;
           if (source.labour_cost.evidence.k !== undefined) entry.k = source.labour_cost.evidence.k;
-          if (source.labour_cost.evidence.window_from) entry.window_from = source.labour_cost.evidence.window_from;
-          if (source.labour_cost.evidence.window_to) entry.window_to = source.labour_cost.evidence.window_to;
+          if (source.labour_cost.evidence.scope_from) entry.window_from = source.labour_cost.evidence.scope_from;
+          if (source.labour_cost.evidence.scope_to) entry.window_to = source.labour_cost.evidence.scope_to;
         }
 
-        // If no evidence window_from, use current time
+        // If no evidence scope_from, use current time
         if (!entry.window_from) {
           entry.window_from = new Date().toISOString();
         }
@@ -691,13 +691,13 @@ function buildMappingConfigurations(): Map<string, MappingConfiguration> {
     },
     {
       sourceField: 'values[latest].window_from',
-      targetField: 'p.evidence.window_from',
+      targetField: 'p.evidence.scope_from',
       condition: isProbType,
       transform: (v) => (typeof v === 'string' ? normalizeToUK(v) : v)
     },
     {
       sourceField: 'values[latest].window_to',
-      targetField: 'p.evidence.window_to',
+      targetField: 'p.evidence.scope_to',
       condition: isProbType,
       transform: (v) => (typeof v === 'string' ? normalizeToUK(v) : v)
     },
@@ -918,13 +918,13 @@ function buildMappingConfigurations(): Map<string, MappingConfiguration> {
     },
     {
       sourceField: 'values[latest].window_from',
-      targetField: 'cost_gbp.evidence.window_from',
+      targetField: 'cost_gbp.evidence.scope_from',
       condition: (source) => source.type === 'cost_gbp' || source.parameter_type === 'cost_gbp',
       transform: (v) => (typeof v === 'string' ? normalizeToUK(v) : v)
     },
     {
       sourceField: 'values[latest].window_to',
-      targetField: 'cost_gbp.evidence.window_to',
+      targetField: 'cost_gbp.evidence.scope_to',
       condition: (source) => source.type === 'cost_gbp' || source.parameter_type === 'cost_gbp',
       transform: (v) => (typeof v === 'string' ? normalizeToUK(v) : v)
     },
@@ -950,13 +950,13 @@ function buildMappingConfigurations(): Map<string, MappingConfiguration> {
     },
     {
       sourceField: 'values[latest].window_from',
-      targetField: 'labour_cost.evidence.window_from',
+      targetField: 'labour_cost.evidence.scope_from',
       condition: (source) => source.type === 'labour_cost' || source.parameter_type === 'labour_cost',
       transform: (v) => (typeof v === 'string' ? normalizeToUK(v) : v)
     },
     {
       sourceField: 'values[latest].window_to',
-      targetField: 'labour_cost.evidence.window_to',
+      targetField: 'labour_cost.evidence.scope_to',
       condition: (source) => source.type === 'labour_cost' || source.parameter_type === 'labour_cost',
       transform: (v) => (typeof v === 'string' ? normalizeToUK(v) : v)
     },
@@ -1233,12 +1233,12 @@ function buildMappingConfigurations(): Map<string, MappingConfiguration> {
     },
     {
       sourceField: 'window_from',
-      targetField: 'p.evidence.window_from',
+      targetField: 'p.evidence.scope_from',
       transform: (v) => (typeof v === 'string' ? normalizeToUK(v) : v)
     },
     {
       sourceField: 'window_to',
-      targetField: 'p.evidence.window_to',
+      targetField: 'p.evidence.scope_to',
       transform: (v) => (typeof v === 'string' ? normalizeToUK(v) : v)
     },
     {

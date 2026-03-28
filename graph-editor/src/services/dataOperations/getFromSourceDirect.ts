@@ -4730,8 +4730,8 @@ export async function getFromSourceDirect(options: {
               ? {
                   n: updateData.n,
                   k: updateData.k,
-                  window_from: updateData.window_from,
-                  window_to: updateData.window_to,
+                  scope_from: updateData.window_from,
+                  scope_to: updateData.window_to,
                   retrieved_at: updateData.retrieved_at,
                   source: updateData.source,
                 }

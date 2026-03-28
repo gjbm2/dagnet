@@ -283,7 +283,9 @@ export function ChartSettingsSection({
               label="Kind"
               value={resolvedKindLabels[chartKind || ''] || chartKind || 'auto'}
               overridden={!!chartKind}
-              onClearOverride={viewMode === 'chart' ? () => onChartKindChange(undefined) : undefined}
+              onClearOverride={() => onChartKindChange(
+                viewMode === 'chart' ? undefined : chartKindOptions[0]
+              )}
             >
               {chartKindOptions.length > 0 ? (
                 <div className="chart-settings-chips">

@@ -8,6 +8,390 @@ Entries are reverse-chronological (newest first).
 
 ---
 
+## 27-Mar-26 (cont.): Phase 2 cohort predictive alpha/beta — design analysis
+
+### Problem statement
+
+Phase 1 has honest between-cohort uncertainty via hierarchical Beta on p
+(kappa_p learned from window trajectories) and BetaBinomial for
+no-latency daily obs. The 2×2 grid:
+
+| | window() | cohort() |
+|---|---|---|
+| latency | hierarchical Beta p_i ✓ | NOT YET ADDRESSED |
+| no-latency | BetaBinomial daily obs ✓ | NOT YET ADDRESSED |
+
+Phase 2 cohort posteriors use moment-matched alpha/beta from the
+p_cohort MCMC samples — too tight because they only capture estimation
+precision, not between-cohort variation. The surprise gauge and
+confidence bands for cohort queries are therefore overconfident.
+
+### The ideal (unrealisable) joint model
+
+If we could fit everything in a single Hamiltonian:
+
+```
+mu_p ~ Beta(prior)
+kappa_window ~ Gamma(prior)        # window between-cohort dispersion
+kappa_cohort ~ Gamma(prior)        # cohort between-cohort dispersion
+
+Window cohort i:  p_w_i ~ Beta(mu_p · kappa_window, (1-mu_p) · kappa_window)
+                  y_w_i ~ Binomial(n, p_w_i · F(t))
+
+Cohort cohort j:  mu_cohort = g(mu_p, drift)
+                  p_c_j ~ Beta(mu_cohort · kappa_cohort, (1-mu_cohort) · kappa_cohort)
+                  y_c_j ~ Binomial(n, p_c_j · F(t))
+```
+
+We can't fit this — doc 23 §1 explains why (inconsistent Hamiltonian
+when window and cohort likelihoods share parameters). The two-phase
+design is an approximation. The question is which phase-split
+approximation best recovers the predictive of the joint model.
+
+### Option A: learn kappa_cohort inside Phase 2
+
+Add hierarchical Beta to the Phase 2 model:
+
+```
+mu_cohort = sigmoid(logit(p_frozen) + eps · tau)      # as now
+kappa_cohort ~ Gamma(prior)                            # NEW
+p_c_j ~ Beta(mu_cohort · kappa_cohort, ...)            # NEW: one per cohort traj
+y_c_j ~ Binomial(n_j, p_c_j · F(t))                   # uses p_c_j not mu_cohort
+```
+
+Predictive: for each MCMC sample (mu_s, kappa_s), draw
+p_new ~ Beta(mu_s · kappa_s, (1-mu_s) · kappa_s).
+
+**Pros:**
+- Structurally correct generative model
+- kappa_cohort estimated from cohort data — measures the right thing
+- Consistent with Phase 1 approach
+
+**Cons:**
+- **Sparse data**: typically 5-15 cohort trajectories (vs 30-60 window).
+  kappa_cohort likely prior-dominated.
+- **Path-level identifiability**: cohort trajectories observe path p
+  (= ∏ edge p_i), not individual edge p. Per-edge kappa_cohort is
+  unidentifiable from path-level observations. Must use either:
+  (a) single shared kappa across all edges (loses edge decomposition), or
+  (b) path-level kappa (not decomposable to edges for reporting).
+- **Phase 2 fragility**: adding per-cohort p_i increases dimensionality
+  of an already-fragile model (ess=7 on some runs).
+
+**Key risk**: with sparse data, the posterior on kappa_cohort is
+dominated by the prior. The "learned" kappa is effectively chosen by
+the analyst via the prior, not by the data. This is no better — and
+arguably more opaque — than explicitly substituting a data-informed
+kappa from another source.
+
+### Option C: inference-time predictive using Phase 1 kappa_p
+
+No Phase 2 model changes. At extraction time in inference.py:
+
+```
+p_cohort_s  ← Phase 2 posterior sample
+kappa_p_s   ← Phase 1 posterior sample (from window data)
+p_new_s ~ Beta(p_cohort_s · kappa_p_s, (1 - p_cohort_s) · kappa_p_s)
+```
+
+For path-level: compound edge-level predictive draws through the path
+product, then moment-match.
+
+**Pros:**
+- Zero Phase 2 model changes — no destabilisation risk
+- kappa_p well-identified from rich window data (30-60 trajectories)
+- Edge-level kappa correctly compounds through path products
+- Conservative: overestimates cohort variation (safe direction for
+  surprise gauge — wider bands, fewer false alarms)
+
+**Cons:**
+- Substitutes kappa_window for kappa_cohort. Correct only if they're
+  approximately equal.
+- Requires plumbing Phase 1 kappa_p samples through to Phase 2
+  extraction.
+- For edges without Phase 1 kappa_p (too few window trajectories):
+  falls back to moment-matching (tight but no worse than today).
+
+### Mathematical comparison
+
+Both produce predictive of the form p_new ~ Beta(mu · kappa, ...).
+The difference is entirely in where kappa comes from:
+
+| | mu_cohort | kappa |
+|---|---|---|
+| Option A | Phase 2 posterior | Phase 2 posterior (from cohort data) |
+| Option C | Phase 2 posterior | Phase 1 posterior (from window data) |
+
+Are kappa_window and kappa_cohort the same quantity? Strictly no —
+window measures daily snapshot variation, cohort measures entry-period
+variation. Same underlying drivers (user heterogeneity, campaigns,
+seasonality) but different aggregation grain. Cohorts formed over a
+week average ~7 days of traffic, so kappa_cohort ≥ kappa_window
+(higher concentration = less dispersed). Using kappa_window is
+therefore conservative.
+
+Option C has a structural advantage at path level: edge-level kappa_p
+from Phase 1 was identified from edge-level window data. It compounds
+through the path product naturally. Option A can only identify a
+path-level kappa from path-level cohort data — losing edge
+decomposition.
+
+### Decision: try Option A first
+
+Option A is the structurally correct model. Test whether it's robust
+despite sparse cohort data and potential identifiability issues. If
+kappa_cohort is prior-dominated or Phase 2 convergence degrades, fall
+back to Option C.
+
+### Option A implementation (27-Mar-26)
+
+**model.py changes:**
+- Phase 2 block: count cohort trajectories (matching phase2_cohort_use_x
+  rewrite filter), create kappa_cohort ~ Gamma(3, 0.05) and
+  p_cohort_i via non-centred logit-normal, shape=N, if N ≥ 3.
+- No-latency edges with n_cohort_trajs=0: kappa_cohort for BetaBinomial
+  on daily obs (first-edge only).
+- _emit_cohort_likelihoods: _use_p_cohort_vec enabled for Phase 2
+  cohort trajectories via phase2_cohort_use_x path.
+
+**inference.py changes:**
+- Top-level predictive: prefers kappa_cohort (Phase 2) over kappa_p
+  (Phase 1).
+- Per-slice: _predictive_alpha_beta takes kappa_var_name parameter.
+  Window slice uses kappa_p; cohort slice uses kappa_cohort (falls
+  back to kappa_p if kappa_cohort absent).
+
+### Convergence investigation (27-Mar-26)
+
+Initial centred Beta parameterisation failed badly:
+
+| Parameterisation | p_cohort_i | Phase 2 ESS | rhat | Diverg. |
+|---|---|---|---|---|
+| Centred Beta (2ch/500d) | 159 | 89 | 1.025 | 0 |
+| Centred Beta (3ch/1000d) | 159 | 59 | 1.035 | 7 |
+| Baseline (no kappa) | 0 | 404 | 1.004 | 0 |
+
+**Root cause**: funnel geometry. Phase 2's p_cohort is nearly fixed
+(small drift from frozen Phase 1), creating a tight parent / dispersed
+children hierarchy. Phase 1 doesn't have this problem because its p
+is a free Beta RV.
+
+**Fix**: non-centred logit-normal parameterisation:
+```
+z_i ~ Normal(0, 1), shape=N
+logit(p_i) = logit(p_cohort) + z_i / sqrt(kappa_cohort)
+p_i = sigmoid(logit(p_i))
+```
+z_i has unit variance regardless of kappa — breaks the funnel.
+
+| Non-centred | p_cohort_i | Phase 2 ESS | rhat | Diverg. |
+|---|---|---|---|---|
+| Latency edges only | 159 | 311 | 1.026 | 0 |
+| All edges | 214 | 228 | 1.020 | 0 |
+
+ESS 59→228 with zero divergences. The centred parameterisation was
+an implementation defect, not a structural problem with Option A.
+
+### No-latency edges on latency paths (27-Mar-26)
+
+For path a→x→y where a→x has latency and x→y is instant:
+- Cohort trajectory for x→y shows maturation (driven by upstream
+  a→x latency)
+- BetaBinomial on daily obs would be WRONG: observations are
+  cumulative, not independent
+- The trajectory Binomial with path CDF is correct: latency
+  resolution in _emit_cohort_likelihoods resolves path latency
+  (from _resolve_path_latency) even for no-latency edges
+- q_j = p_xy × ΔF_ax(t_j) / (1 − p_xy × F_ax(t_{j-1}))
+
+Three sub-cases for no-latency edges in Phase 2:
+1. **First-edge** (path_edge_ids ≤ 1): flat trajectory → n_cohort_trajs=0
+   → BetaBinomial on daily obs (observations genuinely independent)
+2. **Downstream, no-latency path**: flat trajectory → n_cohort_trajs=0
+   → same as case 1 or absent
+3. **Downstream, latency path**: meaningful trajectory with path CDF
+   → n_cohort_trajs > 0 → per-cohort p_i (non-centred)
+
+Removed edge_has_lat guard from trajectory counting — all edges
+with ≥3 cohort trajectories get per-cohort p_i. The natural filters
+route each sub-case correctly.
+
+### Option A results — final (27-Mar-26)
+
+**Production (bayes-test-gm-rebuild)** with non-centred, all edges:
+
+| Edge | p_cohort_i | kappa_cohort | Type |
+|---|---|---|---|
+| del-to-reg (7bb83fbf) | 76 | learned | latency |
+| reg-to-success (97b11265) | 83 | learned | latency |
+| landing-to-created (b91c2820) | 33 | learned | no-lat, no-lat path |
+| create-to-delegated (c64ddc4d) | 22 | learned | no-lat, no-lat path |
+
+Phase 2: ESS=228, rhat=1.020, 0 divergences. 214 per-cohort random
+effects handled by non-centred parameterisation.
+
+Cohort slice posteriors:
+- reg-to-success cohort: α=34.8, β=1.9 (honest width)
+- Honest alpha/beta flow through to path_alpha/path_beta → surprise
+  gauge and confidence bands
+
+**2×2 grid status (final)**:
+
+| | window() | cohort() |
+|---|---|---|
+| latency | hierarchical Beta p_i ✓ | non-centred p_cohort_i ✓ |
+| no-latency | BetaBinomial daily obs ✓ | per-cohort p_i or BB ✓ |
+
+All four quadrants have honest between-cohort uncertainty. No-latency
+edges on latency paths correctly use trajectory Binomials with path
+CDF and per-cohort p_i. No-latency edges on no-latency paths
+naturally collapse to BetaBinomial or absent.
+
+### Full regression (27-Mar-26)
+
+8 synth graphs, 2 chains, 500 draws, 500 tune:
+
+| Graph | Result | Notes |
+|---|---|---|
+| synth-simple-abc | PASS | |
+| synth-mirror-4step | PASS | |
+| synth-fanout-test | PASS | |
+| synth-3way-join-test | PASS | |
+| synth-join-branch-test | PASS | |
+| synth-diamond-test | PARTIAL | 2 onset misses (pre-existing corr) |
+| synth-lattice-test | PARTIAL | 1 onset miss (pre-existing corr) |
+| synth-skip-test | PARTIAL | 1 onset miss (pre-existing corr) |
+
+5/8 clean pass. 3 failures are ALL onset-mu correlation misses
+(corr ≈ -0.95 to -0.99), pre-existing and documented. Zero p
+recovery failures. Zero new regressions from kappa_cohort changes.
+
+### Option A failure: per-cohort p_cohort_i breaks Phase 2 (28-Mar-26)
+
+**Root cause investigation**: Phase 2 p_cohort drifts far from truth
+on synth data (0.50 → 0.835). Systematic investigation:
+
+1. **Not the Dirichlet**: replaced Dirichlet with drift + soft simplex
+   for branch group edges. eps_drift still reached 16σ.
+
+2. **Not the cohort_latency_vars**: disabled free cohort latency,
+   forced FW-composed frozen path CDF. Still drifts.
+
+3. **IS the per-cohort p_cohort_i hierarchy**: with overdispersion=false
+   (no kappa_cohort, no p_cohort_i), p_cohort = 0.509, eps_drift = 0.3.
+   Perfect recovery. ESS=200.
+
+**Mechanism**: the non-centred logit-normal p_cohort_i (96 z_i
+variables) provides enough degrees of freedom to create a spurious
+mode. The model sets p_cohort high (0.835), compensates each z_i
+to pull individual p_cohort_i back toward ~0.50, and the per-cohort
+heterogeneity provides a small per-point likelihood improvement that,
+compounded across 96 trajectories × ~49 ages ≈ 4700 data points,
+overcomes the 128-nat eps_drift prior penalty.
+
+This is NOT a convergence issue (the sampler consistently finds the
+spurious mode). It's a structural interaction between the hierarchical
+random effects and the drift parameterisation.
+
+**Conclusion**: Option A (per-cohort p_cohort_i in Phase 2) is
+structurally incompatible with the Phase 2 drift model. The
+hierarchy's degrees of freedom overwhelm the drift constraint.
+Must use Option C (inference-time predictive from Phase 1 kappa_p).
+
+### Option C implementation challenge (28-Mar-26)
+
+The current `_predictive_alpha_beta` in inference.py looks for
+kappa in `trace.posterior`. For the cohort slice, `trace` is Phase 2's
+trace. Phase 1's `kappa_p` is in Phase 1's trace — a different object.
+
+Current code (line 316):
+```
+cohort_kappa = kappa_cohort_name if has_kappa_cohort else kappa_p_name
+```
+
+This falls back to kappa_p_name, but kappa_p is NOT in Phase 2's
+trace. So it falls through to moment-matching (no kappa → tight
+alpha/beta).
+
+**Fix needed**: plumb Phase 1's kappa_p samples into Phase 2's
+summarisation. Options:
+1. Pass Phase 1 trace (or kappa_p samples dict) to
+   `summarise_posteriors` for Phase 2
+2. Save kappa_p samples to `_model_state` in Phase 1 results and
+   read them back in Phase 2 summarisation
+3. Merge Phase 1 kappa_p variables into Phase 2 trace before
+   summarisation
+
+Option 1 is cleanest: add `phase1_trace` parameter to
+`summarise_posteriors`. When present, look up kappa_p from phase1_trace
+for cohort predictive.
+
+### Remaining concerns
+
+1. Prior Gamma(3, 0.05) is ad hoc for kappa_p. Needs principled
+   derivation.
+2. Non-centred parameterisation is only used for Phase 2 (now moot
+   since Phase 2 won't have per-cohort effects). Phase 1 uses centred
+   Beta (ESS=223 for 117 p_i — adequate but not great). Could benefit
+   from non-centred if Phase 1 ESS degrades on larger graphs.
+3. Phase 2 branch group Dirichlet vs drift+simplex: the Dirichlet
+   allowed too much p freedom (p-CDF ridge), but the drift+simplex
+   fix should be kept even without kappa_cohort, because the
+   Dirichlet was the original source of the production p_cohort
+   drift (0.77→0.95).
+
+### Phase 2 cohort p drift experiment (27-Mar-26)
+
+**Question**: is the Phase 2 p_cohort drift (0.77→0.95 on production)
+a structural logic error or a data quality issue?
+
+**Method**: created two synth variants with 2 consecutive latency
+edges, p=0.5 for both, varying upstream latency:
+- Variant A: a→b 3d median, b→c 10d median
+- Variant B: a→b 10d median, b→c 10d median
+
+If cohort p differs from window p, it should ONLY be because of
+elapsed time between edge and path conversions (a→x latency). With
+constant synth p (no temporal drift), cohort p should equal window p.
+
+**Results**:
+
+| Variant | Edge | Truth p | Phase 1 p | Phase 2 p_cohort | Ph2 drift |
+|---|---|---|---|---|---|
+| A (3d+10d) | a→b | 0.500 | 0.699 | 0.699 | +0.0% |
+| A (3d+10d) | b→c | 0.500 | 0.607 | 0.613 | +0.6% |
+| B (10d+10d) | a→b | 0.500 | 0.699 | 0.700 | +0.1% |
+| B (10d+10d) | b→c | 0.500 | 0.607 | 0.613 | +0.6% |
+
+**Findings**:
+1. **Phase 2 drift is negligible on clean synth** (< 1%). The
+   variants are identical — upstream latency duration makes no
+   difference. The Phase 2 p-latency tradeoff is NOT triggering.
+2. **The production 0.77→0.95 drift is a data/sparsity phenomenon**,
+   not a structural logic error. Clean synth data constrains the
+   CDF well enough to prevent the degenerate mode.
+3. **BUT: Phase 1 is massively inflated** — truth p=0.500, Phase 1
+   recovers 0.699 and 0.607 (40% and 21% inflation). This is a
+   Phase 1 p inflation issue that has not been seen on the standard
+   synth suite. Needs investigation — possibly specific to p=0.5
+   with these latency params, or a new regression.
+
+### Cohort maturity curve wiring defect (27-Mar-26)
+
+The BE analysis handler (`api_handlers.py`) reads `p.forecast.mean`
+for the model CDF curve. This is always the window/promoted p,
+regardless of query type. For cohort queries, the curve should use
+the cohort posterior p.
+
+The `model_vars[bayesian].probability.mean` is also always derived
+from window alpha/beta (bayesPatchService.ts line 326). No cohort
+probability is carried in model_vars.
+
+Tracked in programme.md as a wiring defect, independent of the
+Phase 2 p_cohort drift issue.
+
+---
+
 ## 27-Mar-26 (cont.): Overdispersion needed for honest uncertainty
 
 ### The problem
@@ -207,11 +591,17 @@ from alpha/beta. No FE code changes needed.
 
 ### Outstanding issues (27-Mar-26)
 
-1. **No-latency edges**: no hierarchical Beta, no kappa_p. Their
-   posteriors are still too tight. They have only daily Binomial
-   obs, no trajectories to learn kappa_p from. Needs a separate
-   mechanism — possibly BetaBinomial on daily obs, or a prior on
-   kappa derived from analytics-engine data. NOT yet addressed.
+1. **No-latency edges**: FIXED (27-Mar-26). BetaBinomial on daily
+   obs with learned kappa_p. One observation per cohort (one day),
+   no K-fold amplification. kappa_p estimated from day-to-day
+   variation in k/n. Synth regression passes (all 41 edges ≤1.08x).
+   Synth kappa_p values are high (197-334) because synth has no
+   genuine between-cohort variation — correct behaviour.
+   Predictive SD now realistic: landing-to-created ±2.2% (was
+   ±0.14%), created-to-delegated ±3.6% (was ±0.4%).
+   Caveat: gammaln bias present when alpha = mu_p × kappa_p < 5.
+   For our no-latency edges (p ≥ 0.15) this requires kappa_p < 28,
+   which would indicate very high between-cohort variation.
 
 2. **kappa_p prior**: Gamma(3, 0.05) — mode=40, mean=60. Ad hoc.
    Needs validation or principled derivation.
@@ -227,12 +617,10 @@ from alpha/beta. No FE code changes needed.
    on synth-simple-abc, synth-mirror-4step, and production. Full
    8-graph suite not yet run.
 
-5. **Phase 2 interaction**: the hierarchical Beta is Phase 1 only.
-   Phase 2 cohort pass uses frozen mu_p from Phase 1. The cohort
-   p_cohort variables do not have their own kappa_p. The cohort
-   slice alpha/beta use the Phase 1 kappa_p for predictive
-   sampling — which may not be appropriate (cohort variation could
-   differ from window variation).
+5. **Phase 2 interaction**: RESOLVED (27-Mar-26). Phase 2 now has
+   its own kappa_cohort per edge with per-cohort p_cohort_i.
+   Extraction uses kappa_cohort for cohort predictive alpha/beta.
+   See "Option A implementation" section above.
 
 ### References
 

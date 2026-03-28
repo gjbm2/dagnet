@@ -136,7 +136,7 @@ describe('Spec: getKindsForView returns registry-driven kind options', () => {
     const kinds = getKindsForView('edge_info', 'cards');
 
     const ids = kinds.map(k => k.id);
-    expect(ids).toEqual(['overview', 'evidence', 'forecast', 'depth', 'diagnostics']);
+    expect(ids).toEqual(['overview', 'latency', 'evidence', 'forecast', 'depth', 'diagnostics']);
     // Each kind has a human name
     for (const k of kinds) {
       expect(k.name).toBeTruthy();

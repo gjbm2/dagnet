@@ -36,13 +36,27 @@ edges:
     p.mean set to complement probability
 ```
 
-**Critical structural requirements** (integrity checker will flag these):
+**Critical structural requirements**:
 - Every non-absorbing node needs a complement edge to an absorbing node
 - `fromHandle` must have `-out` suffix (e.g. `right-out`, `bottom-out`)
 - `toHandle` must NOT have `-out` suffix (e.g. `left`, `top`)
 - `p.cohort_anchor_event_id` must be set on all evented edges
 - `p.latency.anchor_node_id` must reference the start node's ID
 - Edge UUIDs must be valid v4 format
+- ALL UUIDs (nodes + edges) must be unique across all synth graphs —
+  shared UUIDs cause DB data collisions between graphs
+- Dropout edge `p.mean` must equal `1 - truth_p` for the sibling
+  main edge (mass conservation)
+
+**Validating structural integrity** (MANDATORY before generating data):
+```bash
+bash graph-ops/scripts/validate-graph.sh graphs/synth-{name}.json
+bash graph-ops/scripts/validate-graph.sh graphs/synth-{name}.json --deep  # also runs production IntegrityCheckService via Vitest
+```
+This runs 23 structural checks (JSON validity, node/event bindings,
+edge references, UUID uniqueness, handle format, mass conservation,
+parameter bindings, simulation guard, etc.). Fix ALL errors before
+proceeding to data generation.
 
 **Do NOT set** on graph edges: `mu`, `sigma`, `onset_delta_days`, `t95`,
 `path_t95`, `forecast.mean`, `p.mean`, `p.n`. These are derived by the
@@ -249,6 +263,10 @@ Alternatively, trigger a Bayes fit from the FE:
 | Symptom | Cause | Fix |
 |---------|-------|-----|
 | "No snapshot data" | Stale hashes in DB from prior runs | `DELETE FROM snapshots WHERE param_id LIKE '%synth-%'` then regenerate |
+| 0 edges resolved in hash step | Missing param files | Must run with `--write-files` to create param YAMLs before hashes can be computed |
+| Two graphs produce identical hashes | Shared event names / node structure | Every graph needs unique event IDs — hashes are derived from event `provider_event_names`, not edge UUIDs |
+| DB data collision between graphs | Shared UUIDs across graphs | NEVER copy a graph JSON and only rename `p.id` — generate fresh UUIDs for ALL nodes and edges |
+| Phase 1 p recovery matches wrong truth | DB data from another graph | Check hashes are unique per graph. If two graphs share hashes, the last `synth_gen` run wins |
 | Model curve right-shifted | `anchor_median_lag` computed as A→Y instead of A→X | Fix in synth_gen: use `from_node_arrival` not `to_node_arrival` |
 | `x: 0` on all cohort points | Cohort rows missing `x` field | Ensure synth_gen writes `x = count_by_age(from_times, age)` on cohort rows |
 | `cohort_edge_fallback` mode | `path_mu`/`path_sigma` not derived | Stats pass needs `anchor_median_lag_days` in param file cohort values[] |

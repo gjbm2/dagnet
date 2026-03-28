@@ -23,15 +23,15 @@ class Evidence(BaseModel):
     k: Optional[int] = Field(None, ge=0, description="Number of successes")
     mean: Optional[float] = Field(None, ge=0, description="Evidence probability: raw observed rate = k/n (query-time computed scalar)")
     stdev: Optional[float] = Field(None, ge=0, description="Evidence uncertainty: binomial stdev for the evidence rate (query-time computed scalar)")
-    window_from: Optional[str] = Field(None, description="Time window start (UK format: d-MMM-yy or ISO)")
-    window_to: Optional[str] = Field(None, description="Time window end (UK format: d-MMM-yy or ISO)")
+    scope_from: Optional[str] = Field(None, description="Temporal scope start — cohort entry dates or window dates (UK format: d-MMM-yy or ISO)")
+    scope_to: Optional[str] = Field(None, description="Temporal scope end — cohort entry dates or window dates (UK format: d-MMM-yy or ISO)")
     retrieved_at: Optional[str] = Field(None, description="When this data was retrieved (UK format or ISO)")
     source: Optional[str] = Field(None, description="Connection name used for this retrieval")
     path: Optional[Literal["direct", "file"]] = Field(None, description="How this data was retrieved: 'direct' = fetched directly from connection, 'file' = synced from parameter file")
     full_query: Optional[str] = Field(None, description="Complete DSL query string used for this fetch (includes base query + window + context)")
     debug_trace: Optional[str] = Field(None, description="Complete execution trace as JSON string for debugging/provenance")
-    
-    @field_validator('window_from', 'window_to', 'retrieved_at', mode='before')
+
+    @field_validator('scope_from', 'scope_to', 'retrieved_at', mode='before')
     @classmethod
     def convert_datetime_to_str(cls, v):
         """Accept both datetime and str, convert datetime to ISO string."""

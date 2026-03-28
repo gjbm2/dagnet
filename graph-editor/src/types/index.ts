@@ -478,8 +478,8 @@ export interface Evidence {
   /** Evidence uncertainty: binomial stdev for the evidence rate */
   stdev?: number;
   
-  window_from?: string; // Time window start (ISO date-time)
-  window_to?: string; // Time window end (ISO date-time)
+  scope_from?: string; // Temporal scope start — cohort entry dates or window dates (UK format)
+  scope_to?: string; // Temporal scope end — cohort entry dates or window dates (UK format)
   retrieved_at?: string; // When data was retrieved (ISO date-time)
   source?: string; // Connection name used for this retrieval
   path?: 'direct' | 'file'; // How data was retrieved: 'direct' = fetched from connection, 'file' = synced from parameter file

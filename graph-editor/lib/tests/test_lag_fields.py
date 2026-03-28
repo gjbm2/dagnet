@@ -29,8 +29,8 @@ class TestLAGFieldExtraction:
                 'n': 1000,
                 'k': 720,
                 'mean': 0.68,  # observed rate (may differ from blended mean)
-                'window_from': '2025-01-01',
-                'window_to': '2025-01-07',
+                'scope_from': '2025-01-01',
+                'scope_to': '2025-01-07',
             }
         }
         
@@ -40,8 +40,8 @@ class TestLAGFieldExtraction:
         assert evidence['n'] == 1000
         assert evidence['k'] == 720
         assert evidence['mean'] == 0.68
-        assert evidence['window_from'] == '2025-01-01'
-        assert evidence['window_to'] == '2025-01-07'
+        assert evidence['scope_from'] == '2025-01-01'
+        assert evidence['scope_to'] == '2025-01-07'
 
     def test_extract_forecast_fields(self):
         """Forecast should include mean, k, stdev."""

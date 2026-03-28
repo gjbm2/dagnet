@@ -509,7 +509,7 @@ export class UpdateManager {
     updates: {
       mean?: number;
       stdev?: number;
-      evidence?: { n?: number; k?: number; window_from?: string; window_to?: string; retrieved_at?: string; source?: string };
+      evidence?: { n?: number; k?: number; scope_from?: string; scope_to?: string; retrieved_at?: string; source?: string };
       data_source?: any;
     },
     options: {
@@ -590,12 +590,12 @@ export class UpdateManager {
         condEntry.p.evidence.k = updates.evidence.k;
         changesApplied++;
       }
-      if (updates.evidence.window_from !== undefined) {
-        condEntry.p.evidence.window_from = normalizeToUK(updates.evidence.window_from);
+      if (updates.evidence.scope_from !== undefined) {
+        condEntry.p.evidence.scope_from = normalizeToUK(updates.evidence.scope_from);
         changesApplied++;
       }
-      if (updates.evidence.window_to !== undefined) {
-        condEntry.p.evidence.window_to = normalizeToUK(updates.evidence.window_to);
+      if (updates.evidence.scope_to !== undefined) {
+        condEntry.p.evidence.scope_to = normalizeToUK(updates.evidence.scope_to);
         changesApplied++;
       }
       if (updates.evidence.retrieved_at !== undefined) {

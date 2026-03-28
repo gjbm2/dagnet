@@ -455,11 +455,12 @@ describe('normaliseCanvasAnalysis: legacy migration', () => {
 // ---------------------------------------------------------------------------
 
 describe('getKindsForView: registry-driven kind options', () => {
-  it('should return 5 card kinds for edge_info cards view', () => {
+  it('should return 6 card kinds for edge_info cards view', () => {
     const kinds = getKindsForView('edge_info', 'cards');
-    expect(kinds.length).toBe(5);
+    expect(kinds.length).toBe(6);
     const ids = kinds.map(k => k.id);
     expect(ids).toContain('overview');
+    expect(ids).toContain('latency');
     expect(ids).toContain('evidence');
     expect(ids).toContain('forecast');
     expect(ids).toContain('depth');

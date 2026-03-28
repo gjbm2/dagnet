@@ -118,10 +118,10 @@ function formatEvidenceTooltip(evidence?: Evidence): string | undefined {
   if (evidence.k !== undefined) {
     parts.push(`k=${evidence.k}`);
   }
-  if (evidence.window_from && evidence.window_to) {
-    const from = new Date(evidence.window_from).toLocaleDateString();
-    const to = new Date(evidence.window_to).toLocaleDateString();
-    parts.push(`Window: ${from} - ${to}`);
+  if (evidence.scope_from && evidence.scope_to) {
+    const from = new Date(evidence.scope_from).toLocaleDateString();
+    const to = new Date(evidence.scope_to).toLocaleDateString();
+    parts.push(`Scope: ${from} - ${to}`);
   }
   if (evidence.source) {
     parts.push(`Source: ${evidence.source}`);

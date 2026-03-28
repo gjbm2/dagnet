@@ -158,6 +158,158 @@ export function computeBlendedMean(
   return wEvidence * evidenceMean + (1 - wEvidence) * forecastMean;
 }
 
+// =============================================================================
+// Per-Day Blending (correct aggregation across mixed-maturity sweeps)
+// =============================================================================
+
+/**
+ * Inputs for per-day blending across a cohort/window sweep.
+ *
+ * Instead of computing a single blend weight from aggregate completeness,
+ * this blends per-day: each date gets its own blend weight from its own
+ * completeness, then the blended rates are n-weighted to produce the
+ * aggregate p.mean.  Mature cohorts contribute nearly pure evidence;
+ * immature cohorts are forecast-dominated.
+ */
+export interface PerDayBlendInputs {
+  /** Per-day cohort data (n, k, age per date) */
+  cohorts: CohortData[];
+  /** Forecast conversion rate from mature window baseline */
+  forecastMean: number;
+  /** Baseline sample size from window slice (for λ scaling) */
+  nBaseline: number;
+  /** Lognormal CDF params for completeness evaluation */
+  cdfMu: number;
+  cdfSigma: number;
+  /** Optional second sigma (moment-fit) for tail-constraint one-way safety */
+  cdfSigmaMoments?: number;
+  tailConstraintApplied?: boolean;
+  /** Onset shift in days */
+  onsetDeltaDays?: number;
+}
+
+export interface PerDayBlendResult {
+  /** Correctly blended p.mean across the sweep */
+  blendedMean: number;
+  /** N-weighted aggregate completeness (display scalar, unchanged formula) */
+  completenessAgg: number;
+  /** Diagnostic: per-day blend weights */
+  perDayWeights: Array<{ date: string; n: number; c: number; w: number; rate: number }>;
+  /** Diagnostic: aggregate evidence weight */
+  wEvidenceAgg: number;
+}
+
+/**
+ * Compute blended p.mean by blending per-day, then n-weighted aggregation.
+ *
+ * For each date i in the sweep:
+ *   c_i = CDF(age_i)
+ *   w_i = blend weight from c_i, n_i, nBaseline, λ, η
+ *   blended_rate_i = w_i × (k_i/n_i) + (1 - w_i) × forecastMean
+ *
+ * Then:
+ *   p.mean = Σ(n_i × blended_rate_i) / Σn_i
+ *   c_agg  = Σ(n_i × c_i) / Σn_i  (display scalar)
+ *
+ * This ensures mature cohorts contribute nearly pure evidence while
+ * immature cohorts lean on the forecast — the correct behaviour when
+ * a sweep covers recent immature data alongside older mature data.
+ */
+export function computePerDayBlendedMean(
+  inputs: PerDayBlendInputs,
+  model?: Pick<ForecastingModelSettings, 'FORECAST_BLEND_LAMBDA' | 'LATENCY_BLEND_COMPLETENESS_POWER'>
+): PerDayBlendResult | undefined {
+  const { cohorts, forecastMean, nBaseline, cdfMu, cdfSigma, onsetDeltaDays } = inputs;
+
+  if (nBaseline <= 0 || !Number.isFinite(forecastMean) || cohorts.length === 0) {
+    return undefined;
+  }
+
+  const completenessPower =
+    typeof model?.LATENCY_BLEND_COMPLETENESS_POWER === 'number' && Number.isFinite(model.LATENCY_BLEND_COMPLETENESS_POWER)
+      ? model.LATENCY_BLEND_COMPLETENESS_POWER
+      : LATENCY_BLEND_COMPLETENESS_POWER;
+  const lambda =
+    typeof model?.FORECAST_BLEND_LAMBDA === 'number' && Number.isFinite(model.FORECAST_BLEND_LAMBDA)
+      ? model.FORECAST_BLEND_LAMBDA
+      : FORECAST_BLEND_LAMBDA;
+
+  const useTailConstraint = inputs.tailConstraintApplied && inputs.cdfSigmaMoments !== undefined;
+
+  // Pass 1: compute per-day completeness, blend weights, and accumulate
+  // totals for the pooled de-biased rate  p̂ = Σk / Σ(n×c).
+  const days: Array<{ date: string; n: number; k: number; c: number; w: number }> = [];
+  let totalN = 0;
+  let totalK = 0;
+  let effectiveN = 0;  // Σ(n_i × c_i) — completeness-weighted population
+  let weightedCompleteness = 0;
+  let weightedW = 0;
+
+  for (const cohort of cohorts) {
+    if (cohort.n <= 0) continue;
+
+    // Per-day completeness (same logic as calculateCompletenessWithTailConstraint)
+    const ageXDays = toModelSpaceAgeDays(onsetDeltaDays, cohort.age);
+    let c_i: number;
+    if (useTailConstraint) {
+      const F_moments = logNormalCDF(ageXDays, cdfMu, inputs.cdfSigmaMoments!);
+      const F_constrained = logNormalCDF(ageXDays, cdfMu, cdfSigma);
+      c_i = Math.min(F_moments, F_constrained);
+    } else {
+      c_i = logNormalCDF(ageXDays, cdfMu, cdfSigma);
+    }
+    c_i = Math.max(0, Math.min(1, c_i));
+
+    // Per-day blend weight (same formula as computeBlendedMean)
+    const cEff = c_i > 0 ? Math.min(1, Math.max(0, Math.pow(c_i, completenessPower))) : 0;
+    const nEff = cEff * cohort.n;
+    const remaining = Math.max(0, 1 - cEff);
+    const m0Eff = lambda * nBaseline * remaining;
+    const w_i = (m0Eff + nEff) > 0 ? (nEff / (m0Eff + nEff)) : 0;
+
+    totalN += cohort.n;
+    totalK += cohort.k;
+    effectiveN += cohort.n * c_i;
+    weightedCompleteness += cohort.n * c_i;
+    weightedW += cohort.n * w_i;
+
+    days.push({ date: cohort.date, n: cohort.n, k: cohort.k, c: c_i, w: w_i });
+  }
+
+  if (totalN <= 0) return undefined;
+
+  // Pooled de-biased rate: minimum-variance unbiased estimator for the
+  // true long-run rate p, given k_i ~ Binomial(n_i, p × c_i).
+  // This pools all data before de-biasing, so per-day noise cancels
+  // rather than amplifying.  Naturally weights each day by n_i × c_i
+  // (its information content).
+  const pooledRate = effectiveN > 0 ? Math.min(1, totalK / effectiveN) : 0;
+
+  // Pass 2: apply per-day weights to the pooled rate.
+  let weightedBlendedRate = 0;
+  const perDayWeights: PerDayBlendResult['perDayWeights'] = [];
+
+  for (const day of days) {
+    const blendedRate_i = day.w * pooledRate + (1 - day.w) * forecastMean;
+    weightedBlendedRate += day.n * blendedRate_i;
+
+    perDayWeights.push({
+      date: day.date,
+      n: day.n,
+      c: day.c,
+      w: day.w,
+      rate: blendedRate_i,
+    });
+  }
+
+  return {
+    blendedMean: weightedBlendedRate / totalN,
+    completenessAgg: weightedCompleteness / totalN,
+    perDayWeights,
+    wEvidenceAgg: weightedW / totalN,
+  };
+}
+
 export interface EnhancedAggregation {
   method: string;
   n: number;
@@ -1715,6 +1867,18 @@ export interface EdgeLAGValues {
 
     /** Whether evidenceMeanUsedForBlend was Bayesian completeness-adjusted */
     evidenceMeanBayesAdjusted?: boolean;
+
+    // === Per-day blend diagnostics ===
+    /** Whether per-day blending was used (true) or aggregate fallback (false) */
+    perDayBlendUsed?: boolean;
+    /** Number of per-day blend entries */
+    perDayCount?: number;
+    /** Min/max per-day evidence weight across the sweep */
+    perDayWMin?: number;
+    perDayWMax?: number;
+    /** Min/max per-day completeness across the sweep */
+    perDayCMin?: number;
+    perDayCMax?: number;
   };
 }
 
@@ -2426,6 +2590,23 @@ export function enhanceGraphLatencies(
       // the implied t95 is >= authoritative path_t95.
       // ---------------------------------------------------------------------
       let completenessUsed = latencyStats.completeness;
+      // Track which CDF params and cohorts produced completenessUsed, so the
+      // per-day blend uses the same model.  Defaults: edge-level CDF on
+      // adjusted cohorts (window mode or cohort fallback).
+      let blendCdfMu = latencyStats.completeness_cdf.mu;
+      let blendCdfSigma = latencyStats.completeness_cdf.sigma;
+      let blendCdfSigmaMoments = latencyStats.completeness_cdf.sigma_moments;
+      let blendCdfTailApplied = latencyStats.completeness_cdf.tail_constraint_applied;
+      let blendOnsetDeltaDays = edgeOnsetDeltaDays ?? 0;
+      // For edge-level completeness, ages were anchor-adjusted; for A→Y path
+      // completeness, raw ages are used.  Track which cohort array to iterate.
+      // Mirror the adjustment done inside computeEdgeLatencyStats.
+      let blendCohorts = (!isWindowMode && (anchorMedianLag > 0 || cohortsScoped.some(c => c.anchor_median_lag_days)))
+        ? cohortsScoped.map(c => ({
+            ...c,
+            age: Math.max(0, c.age - (c.anchor_median_lag_days ?? anchorMedianLag)),
+          }))
+        : cohortsScoped;
       let pathMu: number | undefined;
       let pathSigma: number | undefined;
       // Path onset: DP sum of edge onsets along the path (deterministic shift, not FW).
@@ -2543,6 +2724,14 @@ export function enhanceGraphLatencies(
                 completenessUsed = ayCompleteness;
                 completenessMode = 'cohort_path_anchored';
                 completenessTailConstraintApplied = ayCdfParams.tail_constraint_applied;
+                // Update blend CDF params to match the A→Y path model.
+                // Raw ages (cohortsScoped) are correct here — the A→Y CDF
+                // already accounts for the full path from anchor.
+                blendCdfMu = ayCdfParams.mu;
+                blendCdfSigma = ayCdfParams.sigma;
+                blendCdfSigmaMoments = ayCdfParams.sigma_moments;
+                blendCdfTailApplied = ayCdfParams.tail_constraint_applied;
+                blendCohorts = cohortsScoped;
               }
             }
           }
@@ -2988,52 +3177,85 @@ export function enhanceGraphLatencies(
         sumCohortN > 0 &&
         edgeEvidenceN >= sumCohortN * 2;
 
-      // Phase 2: p.mean is computed ONLY via the canonical blend (computeBlendedMean),
-      // in both window() and cohort() modes.
+      // Phase 2: p.mean is computed via per-day blending when daily cohort data
+      // is available — each date gets its own blend weight from its own
+      // completeness, so mature cohorts contribute nearly pure evidence while
+      // immature cohorts lean on the forecast.  Falls back to aggregate blend
+      // when per-day data is unavailable (e.g. sampled fixtures with header totals).
       const nQueryRawForBlend = cohortsLookSampled && typeof edgeEvidenceN === 'number' ? edgeEvidenceN : nQuery;
-      // If we de-bias evidence by dividing by completeness, information content drops ~1/completeness².
-      // Reduce the effective query population accordingly so immature cohorts remain forecast-dominant.
       const nQueryForBlend = nQueryRawForBlend;
+      const nBaselineUsed = nBaseline > 0 ? nBaseline : nQueryForBlend;
 
-      const blendedMeanFromBlend = computeBlendedMean({
+      // Try per-day blend first (preferred — correct for mixed-maturity sweeps).
+      const perDayResult = (blendCohorts.length > 0 && !cohortsLookSampled)
+        ? computePerDayBlendedMean({
+            cohorts: blendCohorts,
+            forecastMean: forecastMean ?? 0,
+            nBaseline: nBaselineUsed,
+            cdfMu: blendCdfMu,
+            cdfSigma: blendCdfSigma,
+            cdfSigmaMoments: blendCdfSigmaMoments,
+            tailConstraintApplied: blendCdfTailApplied,
+            onsetDeltaDays: blendOnsetDeltaDays,
+          }, MODEL)
+        : undefined;
+
+      // Fallback: aggregate blend (sampled fixtures or empty cohorts).
+      const blendedMeanFromBlend = perDayResult?.blendedMean ?? computeBlendedMean({
         evidenceMean: evidenceMeanForBlend,
         forecastMean: forecastMean ?? 0,
         completeness,
         nQuery: nQueryForBlend,
-        nBaseline: nBaseline > 0 ? nBaseline : nQueryForBlend,
+        nBaseline: nBaselineUsed,
       }, MODEL);
 
       // Capture blend diagnostics for session logging
       if (edgeLAGValues.debug) {
-        const nBaselineUsed = nBaseline > 0 ? nBaseline : nQueryForBlend;
         if (nBaselineUsed === nQueryForBlend && nBaseline === 0) {
           nBaselineSource = 'fallback_to_nQuery';
         }
 
-        // Mirror computeBlendedMean weighting so logs can explain low forecasts
-        const completenessPower =
-          typeof MODEL.LATENCY_BLEND_COMPLETENESS_POWER === 'number' && Number.isFinite(MODEL.LATENCY_BLEND_COMPLETENESS_POWER)
-            ? MODEL.LATENCY_BLEND_COMPLETENESS_POWER
-            : LATENCY_BLEND_COMPLETENESS_POWER;
-        const completenessForBlendWeight =
-          Number.isFinite(completeness as number) && (completeness as number) > 0
-            ? Math.min(1, Math.max(0, Math.pow(completeness as number, completenessPower)))
-            : 0;
-        const nEff = completenessForBlendWeight * (nQueryForBlend ?? 0);
-        const lambda =
-          typeof MODEL.FORECAST_BLEND_LAMBDA === 'number' && Number.isFinite(MODEL.FORECAST_BLEND_LAMBDA)
-            ? MODEL.FORECAST_BLEND_LAMBDA
-            : FORECAST_BLEND_LAMBDA;
-        const m0 = lambda * (nBaselineUsed ?? 0);
-        const remaining = Math.max(0, 1 - completenessForBlendWeight);
-        const m0Eff = m0 * remaining;
-        const wEvidence = (m0Eff + nEff) > 0 ? (nEff / (m0Eff + nEff)) : 0;
-
         edgeLAGValues.debug.nQuery = nQueryForBlend;
         edgeLAGValues.debug.nBaseline = nBaselineUsed;
         edgeLAGValues.debug.nBaselineSource = nBaselineSource;
-        edgeLAGValues.debug.wEvidence = wEvidence;
-        edgeLAGValues.debug.completenessForBlendWeight = completenessForBlendWeight;
+
+        if (perDayResult) {
+          // Per-day blend was used — log actual per-day diagnostics.
+          edgeLAGValues.debug.wEvidence = perDayResult.wEvidenceAgg;
+          edgeLAGValues.debug.completenessForBlendWeight = perDayResult.completenessAgg;
+          edgeLAGValues.debug.perDayBlendUsed = true;
+          edgeLAGValues.debug.perDayCount = perDayResult.perDayWeights.length;
+          const weights = perDayResult.perDayWeights;
+          if (weights.length > 0) {
+            edgeLAGValues.debug.perDayWMin = Math.min(...weights.map(w => w.w));
+            edgeLAGValues.debug.perDayWMax = Math.max(...weights.map(w => w.w));
+            edgeLAGValues.debug.perDayCMin = Math.min(...weights.map(w => w.c));
+            edgeLAGValues.debug.perDayCMax = Math.max(...weights.map(w => w.c));
+          }
+        } else {
+          // Aggregate blend fallback — mirror the old weight calculation for logs.
+          const completenessPower =
+            typeof MODEL.LATENCY_BLEND_COMPLETENESS_POWER === 'number' && Number.isFinite(MODEL.LATENCY_BLEND_COMPLETENESS_POWER)
+              ? MODEL.LATENCY_BLEND_COMPLETENESS_POWER
+              : LATENCY_BLEND_COMPLETENESS_POWER;
+          const completenessForBlendWeight =
+            Number.isFinite(completeness as number) && (completeness as number) > 0
+              ? Math.min(1, Math.max(0, Math.pow(completeness as number, completenessPower)))
+              : 0;
+          const nEff = completenessForBlendWeight * (nQueryForBlend ?? 0);
+          const lambda =
+            typeof MODEL.FORECAST_BLEND_LAMBDA === 'number' && Number.isFinite(MODEL.FORECAST_BLEND_LAMBDA)
+              ? MODEL.FORECAST_BLEND_LAMBDA
+              : FORECAST_BLEND_LAMBDA;
+          const m0 = lambda * (nBaselineUsed ?? 0);
+          const remaining = Math.max(0, 1 - completenessForBlendWeight);
+          const m0Eff = m0 * remaining;
+          const wEvidence = (m0Eff + nEff) > 0 ? (nEff / (m0Eff + nEff)) : 0;
+
+          edgeLAGValues.debug.wEvidence = wEvidence;
+          edgeLAGValues.debug.completenessForBlendWeight = completenessForBlendWeight;
+          edgeLAGValues.debug.perDayBlendUsed = false;
+        }
 
         if (bestWindowMeta) {
           edgeLAGValues.debug.baselineWindowSliceDSL = bestWindowMeta.sliceDSL;

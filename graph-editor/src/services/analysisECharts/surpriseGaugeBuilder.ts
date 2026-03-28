@@ -116,11 +116,18 @@ function buildGaugeDial(
       ? `${variable.expected_days}d`
       : variable.expected.toFixed(3);
   const fmtSd = variable.name === 'p'
-    ? `${(variable.posterior_sd * 100).toFixed(2)}%`
-    : variable.posterior_sd.toFixed(4);
+    ? `${((variable as any).combined_sd != null ? (variable as any).combined_sd * 100 : variable.posterior_sd * 100).toFixed(2)}%`
+    : ((variable as any).combined_sd ?? variable.posterior_sd).toFixed(4);
 
-  // Detail label: "Observed: 77.7%\nModel: 80.7% ± 0.80%"
-  const detailLabel = `Observed: ${fmtObs}\nModel: ${fmtExp} ± ${fmtSd}`;
+  // Evidence line: "Evidence (347/472): 73.5%"  — value bold, label normal
+  // Expected line: "Expected (91% complete): 84.4% ± 5.63%"
+  const nkSuffix = variable.name === 'p' && variable.evidence_k != null && variable.evidence_n != null
+    ? ` (${variable.evidence_k}/${variable.evidence_n})`
+    : '';
+  const completenessNote = variable.name === 'p' && (variable as any).completeness != null
+    ? ` (${Math.round((variable as any).completeness * 100)}% complete)`
+    : '';
+  const detailLabel = `{lbl|Evidence${nkSuffix}:} {val|${fmtObs}}\n{lbl|Expected${completenessNote}:} {val|${fmtExp}} {lbl|\u00b1 ${fmtSd}}`;
 
   // ── Responsive percentage-based layout ──
   //
@@ -145,6 +152,7 @@ function buildGaugeDial(
 
   const gaugeSeriesBase: any = {
     type: 'gauge',
+    animation: true,
     startAngle: 180,
     endAngle: 0,
     min: -maxSigma,
@@ -189,6 +197,10 @@ function buildGaugeDial(
       lineHeight: 14,
       color: c.text,
       offsetCenter: [0, '22%'],
+      rich: {
+        lbl: { fontSize: 10, fontWeight: 'normal', color: c.text === '#e0e0e0' ? '#9ca3af' : '#6b7280' },
+        val: { fontSize: 10, fontWeight: 'bold', color: c.text },
+      },
     },
     title: {
       show: true,

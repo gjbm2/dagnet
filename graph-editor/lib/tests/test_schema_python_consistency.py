@@ -121,8 +121,8 @@ class TestGraphSchemaConsistency:
                     'evidence': {
                         'n': 100,
                         'k': 50,
-                        'window_from': '24-Nov-25',  # UK format
-                        'window_to': '30-Nov-25',    # UK format
+                        'scope_from': '24-Nov-25',  # UK format
+                        'scope_to': '30-Nov-25',    # UK format
                         'retrieved_at': '1-Dec-25',  # UK format
                         'source': 'amplitude-prod'  # Connection name
                     }
@@ -138,7 +138,7 @@ class TestGraphSchemaConsistency:
         
         # Should parse with Pydantic
         graph = Graph(**graph_with_dates)
-        assert graph.edges[0].p.evidence.window_from == '24-Nov-25'
+        assert graph.edges[0].p.evidence.scope_from == '24-Nov-25'
         assert graph.metadata.updated_at == '2-Dec-25'
     
     def test_graph_with_iso_dates_validates(self, schema):
@@ -234,7 +234,7 @@ class TestEvidenceSchemaConsistency:
         # Schema should NOT have format: date-time (which requires ISO)
         props = schema.get('properties', {})
         
-        for date_field in ['window_from', 'window_to', 'retrieved_at']:
+        for date_field in ['scope_from', 'scope_to', 'retrieved_at']:
             field_def = props.get(date_field, {})
             # Should be type: string without format: date-time
             assert field_def.get('type') == 'string', f"{date_field} should be string"
@@ -245,13 +245,13 @@ class TestEvidenceSchemaConsistency:
         evidence = Evidence(
             n=100,
             k=50,
-            window_from='24-Nov-25',
-            window_to='30-Nov-25',
+            scope_from='24-Nov-25',
+            scope_to='30-Nov-25',
             retrieved_at='1-Dec-25',
             source='amplitude'
         )
-        assert evidence.window_from == '24-Nov-25'
-        assert evidence.window_to == '30-Nov-25'
+        assert evidence.scope_from == '24-Nov-25'
+        assert evidence.scope_to == '30-Nov-25'
         assert evidence.retrieved_at == '1-Dec-25'
 
 

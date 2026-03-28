@@ -110,12 +110,16 @@ describe('Cohort path-anchored evidence de-biasing (right-censor correction)', (
     expect(evidenceUsed).toBeGreaterThanOrEqual(evidenceRaw);
     expect(evidenceUsed).toBeLessThanOrEqual(1);
 
-    // Blended mean should reflect evidenceUsed (not evidenceRaw).
+    // Per-day blend uses the pooled de-biased rate (Σk / Σ(n×c)) with
+    // per-day weights.  The exact formula no longer matches the aggregate
+    // blend (wEvidence × evidenceUsed + ...) — see perDayBlendPooledRate.test.ts
+    // for the precise invariant.  Here we verify the directional property:
+    // the blend must exceed what you'd get from raw (un-de-biased) evidence,
+    // confirming that de-biasing is active.
     const blended = edgeValue!.blendedMean!;
     const blendedUsingRaw = wEvidence * evidenceRaw + (1 - wEvidence) * forecastMean;
-    const blendedUsingUsed = wEvidence * evidenceUsed + (1 - wEvidence) * forecastMean;
-    expect(blended).toBeCloseTo(blendedUsingUsed, 6);
     expect(blended).toBeGreaterThan(blendedUsingRaw);
+    expect(blended).toBeLessThan(forecastMean);
   });
 
   it('does not de-bias evidenceMean in window mode', () => {

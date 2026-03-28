@@ -156,38 +156,43 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
 
         for group_id, bg in topology.branch_groups.items():
             if is_phase2:
-                # Phase 2: Dirichlet on drifted p_cohort for mass conservation.
-                # Concentrations centered on Phase 1 frozen p values.
-                # See doc 23 §2.2.
+                # Phase 2: per-edge drift + soft simplex for mass
+                # conservation. Replaces the Dirichlet which gave p
+                # too much freedom (kappa=50 ≈ ±7% SD), enabling the
+                # p-CDF identifiability ridge in the cure model. The
+                # drift mechanism (tau ≈ 0.1) constrains p to ±2.5%
+                # of frozen, blocking the ridge. The simplex potential
+                # enforces mass conservation (Σ p_i ≤ 1).
+                # See journal 28-Mar-26.
                 safe_group = _safe_var_name(bg.group_id)
-                sibling_edges = []
-                concentrations = []
+                sibling_p_vars = []
                 for sib_id in bg.sibling_edge_ids:
                     ev_sib = evidence.edges.get(sib_id)
                     if ev_sib is None or ev_sib.skipped:
                         continue
+                    sib_safe = _safe_var_name(sib_id)
                     frozen = phase2_frozen.get(sib_id, {})
-                    p_frozen = frozen.get("p", 0.1)
-                    sibling_edges.append(sib_id)
-                    concentrations.append(p_frozen)
+                    p_frozen_val = frozen.get("p", 0.1)
+                    logit_p_frozen = np.log(max(p_frozen_val, 1e-6) / max(1.0 - p_frozen_val, 1e-6))
+                    et_sib = topology.edges.get(sib_id)
+                    tau_drift = max(et_sib.path_sigma_ax, 0.1) if et_sib and hasattr(et_sib, 'path_sigma_ax') else 0.1
+                    eps_drift = pm.Normal(f"eps_drift_{sib_safe}", mu=0, sigma=1)
+                    p_sib = pm.Deterministic(
+                        f"p_cohort_{sib_safe}",
+                        pm.math.sigmoid(logit_p_frozen + eps_drift * tau_drift),
+                    )
+                    bg_p_vars[sib_id] = p_sib
+                    edge_var_names[sib_id] = f"p_cohort_{sib_safe}"
+                    sibling_p_vars.append(p_sib)
 
-                if sibling_edges:
-                    # kappa scales the Dirichlet concentrations. Must be
-                    # large enough that min(α_i) > 2, otherwise the mode
-                    # drifts toward 0 for low-p edges. See doc 23 §8.
-                    min_p = min(concentrations)
-                    kappa_dir = max(50.0, 5.0 / max(min_p, 0.01))
-                    if not bg.is_exhaustive:
-                        dropout_mean = max(1.0 - sum(concentrations), 0.01)
-                        concentrations.append(dropout_mean)
-                    conc_array = np.array(concentrations, dtype=np.float64) * kappa_dir
-
-                    dir_var = pm.Dirichlet(f"dir_cohort_{safe_group}", a=conc_array)
-                    for i, sib_id in enumerate(sibling_edges):
-                        sib_safe = _safe_var_name(sib_id)
-                        p_sib = pm.Deterministic(f"p_cohort_{sib_safe}", dir_var[i])
-                        bg_p_vars[sib_id] = p_sib
-                        edge_var_names[sib_id] = f"p_cohort_{sib_safe}"
+                # Soft simplex: penalise Σ p_i > 1 (mass conservation).
+                if sibling_p_vars:
+                    p_sum = pt.add(*sibling_p_vars) if len(sibling_p_vars) > 1 else sibling_p_vars[0]
+                    # Log-barrier: becomes -∞ as sum → 1, zero penalty when sum << 1.
+                    pm.Potential(
+                        f"simplex_cohort_{safe_group}",
+                        pt.log(pt.maximum(1.0 - p_sum, 1e-10)),
+                    )
             else:
                 _emit_dirichlet_prior(
                     bg, topology, evidence, bg_p_vars, edge_var_names,
@@ -293,9 +298,11 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
                 continue
             # Phase 1: only create cohort latency vars when path has 2+
             # latency edges (single-latency paths use edge latent vars).
-            # Phase 2: always create — edge latency is frozen, so even
-            # single-latency paths need free cohort latency to fit data.
-            if not is_phase2 and path_latency_count < 2:
+            # Phase 2: use FW-composed frozen path latency (no free
+            # cohort latency). Free cohort latency + free p creates
+            # the cure model p×F identifiability problem. Frozen CDF
+            # means only p (via drift) is free. See journal 28-Mar-26.
+            if path_latency_count < 2:
                 continue
 
             safe_id = _safe_var_name(edge_id)
@@ -424,7 +431,7 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
                     # Phase 2: cohort trajectories only, p derived from
                     # Phase 1 with drift. See doc 23 §2.2.
                     if edge_id in bg_p_vars:
-                        # Branch group edge — p_cohort from Dirichlet
+                        # Branch group edge — p_cohort from drift + simplex
                         p = bg_p_vars[edge_id]
                     else:
                         # Solo edge — per-edge drift from frozen Phase 1 p
@@ -442,6 +449,9 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
 
                     # Emit cohort trajectories only (skip window).
                     # p_window_var=None signals Phase 2 → skip window trajs.
+                    # Phase 2 uses scalar p_cohort (no per-cohort effects).
+                    # Between-cohort uncertainty is added at extraction time
+                    # using Phase 1's kappa_p (Option C). See journal 28-Mar-26.
                     _emit_cohort_likelihoods(safe_id, p, ev, diagnostics,
                                             topology, edge_var_names, model,
                                             latency_vars=latency_vars,
@@ -480,10 +490,11 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
 
                     # Create per-cohort p_i if we have enough trajectories
                     p_cohort_vec = None
+                    kappa_p_var = None
                     if n_window_trajs >= 3 and feat_overdispersion:
-                        kappa_p = pm.Gamma(f"kappa_p_{safe_id}", alpha=3, beta=0.05)
-                        alpha_p = p * kappa_p
-                        beta_p = (1.0 - p) * kappa_p
+                        kappa_p_var = pm.Gamma(f"kappa_p_{safe_id}", alpha=3, beta=0.05)
+                        alpha_p = p * kappa_p_var
+                        beta_p = (1.0 - p) * kappa_p_var
                         p_cohort_vec = pm.Beta(
                             f"p_i_{safe_id}",
                             alpha=pt.maximum(alpha_p, 0.01),
@@ -493,6 +504,15 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
                         diagnostics.append(
                             f"  hierarchical_p: {edge_id[:8]}… "
                             f"{n_window_trajs} cohort p_i variables"
+                        )
+                    elif n_window_trajs == 0 and feat_overdispersion:
+                        # No-latency edge: no trajectories (all converted to
+                        # daily obs). Create kappa_p for BetaBinomial on daily
+                        # obs to capture between-cohort variation.
+                        kappa_p_var = pm.Gamma(f"kappa_p_{safe_id}", alpha=3, beta=0.05)
+                        diagnostics.append(
+                            f"  hierarchical_p: {edge_id[:8]}… "
+                            f"no-latency, kappa_p for daily BetaBinomial"
                         )
 
                     if emit_window_binomial:
@@ -506,7 +526,8 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
                                                 kappa=edge_kappa,
                                                 onset_vars=onset_vars,
                                                 skip_cohort_trajectories=True,
-                                                p_cohort_vec=p_cohort_vec)
+                                                p_cohort_vec=p_cohort_vec,
+                                                kappa_p=kappa_p_var)
 
                 if edge_id not in edge_var_names:
                     edge_var_names[edge_id] = f"p_{safe_id}"
@@ -794,6 +815,7 @@ def _emit_cohort_likelihoods(
     onset_vars: dict[str, object] | None = None,
     skip_cohort_trajectories: bool = False,
     p_cohort_vec=None,
+    kappa_p=None,
 ) -> None:
     """Emit cohort likelihoods via pm.Potential (vectorised per obs_type).
 
@@ -1262,12 +1284,25 @@ def _emit_cohort_likelihoods(
 
             p_effective = pm.math.clip(p_var * compl_arr, 0.001, 0.999)
 
-            pm.Binomial(
-                f"obs_daily_{safe_id}",
-                n=n_arr,
-                p=p_effective,
-                observed=k_arr,
-            )
+            if kappa_p is not None and not edge_has_latency:
+                # No-latency edge with kappa_p: BetaBinomial to capture
+                # between-cohort variation. One obs per cohort, no K-fold
+                # bias. Completeness=1.0 so p_effective = p_var.
+                # See journal 27-Mar-26.
+                pm.BetaBinomial(
+                    f"obs_daily_{safe_id}",
+                    n=n_arr,
+                    alpha=p_effective * kappa_p,
+                    beta=(1.0 - p_effective) * kappa_p,
+                    observed=k_arr,
+                )
+            else:
+                pm.Binomial(
+                    f"obs_daily_{safe_id}",
+                    n=n_arr,
+                    p=p_effective,
+                    observed=k_arr,
+                )
 
 
 def _resolve_path_latency(

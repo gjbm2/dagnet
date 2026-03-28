@@ -336,13 +336,6 @@ export function AnalysisChartContainer(props: {
     return opt;
   }, [effectiveKind, finalResult, resolvedSettings, hideScenarioLegend, displayPlan.scenarioIdsToRender, scenarioVisibilityModes, scenarioDslSubtitleById, effectiveSubjectId, fillHeight, height, props.suppressAnimation]);
 
-  // Notify ECharts when the container resizes so percentage-based elements
-  // and media-query breakpoints are re-evaluated.
-  useEffect(() => {
-    if (chartWidthPx <= 0 || chartHeightPx <= 0) return;
-    const instance = echartsRef.current?.getEchartsInstance?.();
-    instance?.resize();
-  }, [chartWidthPx, chartHeightPx]);
 
   // Diagnostic: log when we have a result but no chart option
   useEffect(() => {

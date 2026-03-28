@@ -32,11 +32,29 @@ is genuine data sparsity (trajectory coverage) not model bias.
 - Surprise gauge uses wrong slice — compares analytic rate against
   Phase 1 window posterior regardless of what's being displayed.
   Should use cohort posterior when showing cohort maturity.
-- Unrealistically tight posteriors — pure Binomial likelihood gives
-  no overdispersion, posterior SD ≈ ±0.8% when real uncertainty is
-  ±3-5%. Surprise gauge and confidence bands are meaningless.
-  Fix: endpoint-only BetaBinomial for rate (one obs per trajectory,
-  no K-fold bias). See journal 27-Mar-26.
+- **Cohort maturity curve uses window p, not cohort p** — the BE
+  analysis handler reads `p.forecast.mean` (always window/promoted)
+  for the model CDF curve. For cohort queries it should use the
+  cohort posterior p. The `model_vars[bayesian].probability.mean`
+  is also always window alpha/beta. Neither source carries cohort p.
+  Needs: (a) model_vars to carry cohort probability separately, or
+  (b) the analysis handler to read `posterior.path_alpha/path_beta`
+  directly for cohort queries. Tracked as wiring defect, independent
+  of the Phase 2 p_cohort drift issue below.
+- **Phase 2 p_cohort drift to degenerate mode** — on production
+  graph, registered-to-success Phase 2 p_cohort drifts from frozen
+  0.77 to 0.95. Compensated by degenerate cohort latency (onset=20d,
+  mu=-1.6, sigma=4.9). Root cause: tau_drift = path_sigma_ax = 0.37,
+  allowing logit(p) to shift by ±1.5 (1σ). Combined with p-latency
+  tradeoff, the model finds a degenerate high-p mode. Flows into
+  path_alpha/path_beta → surprise gauge shows wrong baseline.
+  Needs: tighter drift constraint or latency regularisation in
+  Phase 2. See journal 27-Mar-26.
+- ~~Unrealistically tight posteriors~~ — FIXED (27-Mar-26).
+  Hierarchical Beta on p (Phase 1 kappa_p + Phase 2 kappa_cohort)
+  with non-centred logit-normal parameterisation. All four quadrants
+  of window/cohort × latency/no-latency now have honest between-
+  cohort uncertainty. See journal 27-Mar-26.
 
 **Open design gaps**:
 - Topology signatures / hashes (doc 10) — not properly implemented.

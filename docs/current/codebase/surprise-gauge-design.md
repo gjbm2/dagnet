@@ -1,7 +1,7 @@
 # Surprise Gauge Analysis Type
 
-**Status**: Phase 1 implementation in progress
-**Date**: 24-Mar-26
+**Status**: Phase 1 — statistical correction in progress
+**Date**: 27-Mar-26 (revised; original 24-Mar-26)
 
 ---
 
@@ -61,9 +61,9 @@ Axis is linear in σ but tick labels show percentiles (50%, 80%, 90%,
 
 | Variable | Posterior | Observed evidence | Derivation |
 |----------|----------|-------------------|------------|
-| **p** | Beta(α, β) | k, n from values entry | Exact Beta CDF: `quantile = Beta_CDF(k/n, α, β)` |
-| **mu** | mu_mean ± mu_sd | `median_lag_days` from values entry | `obs_mu = ln(median_lag - onset_mean)`, normal CDF |
-| **sigma** | sigma_mean ± sigma_sd | `mean_lag_days` / `median_lag_days` | `obs_sigma = sqrt(2 × ln(mean/median))`, normal CDF. Guard: n ≥ 30 |
+| **p** | Beta(α, β) | `evidence.k`, `evidence.n` from edge | Completeness-adjusted normal approx (see §5.1) |
+| **mu** | mu_mean ± mu_sd | `median_lag_days` from analytic model_vars | `obs_mu = ln(median_lag - onset_mean)`, combined-SD normal (see §5.2) |
+| **sigma** | sigma_mean ± sigma_sd | `mean_lag_days` / `median_lag_days` from analytic model_vars | `obs_sigma = sqrt(2 × ln(mean/median))`, combined-SD normal (see §5.2). Guard: n_dates ≥ 30 |
 
 ### Phase 2 — requires snapshot DB query (BE has access)
 
@@ -76,42 +76,123 @@ Axis is linear in σ but tick labels show percentiles (50%, 80%, 90%,
 
 ## 5. Statistical tests
 
-### p — exact posterior predictive
+### 5.0 Evidence-only comparison (all variables)
 
-The posterior is Beta(α, β). For observed k out of n, the posterior
-predictive is Beta-Binomial(n, α, β). The quantile is:
+The surprise gauge always compares **pure evidence** against the
+model posterior. It never uses the blended f+e value from `p.mean`.
+
+**Why**: In f+e visibility mode, `p.mean` is a weighted blend of
+forecast and evidence. The forecast component is *derived from* the
+posterior being tested against. Comparing a model-contaminated value
+back against its own source is circular — it dampens surprise
+regardless of what the data actually shows. The gauge must answer
+"is the data surprising given the model?", which requires keeping
+model and observation separate.
+
+**Sources**:
+- **p**: `evidence.k` / `evidence.n` on the edge (raw counts, never blended)
+- **mu, sigma**: from the `analytic_be` (preferred) or `analytic`
+  model_vars entry (evidence-fitted lag parameters, not the promoted
+  latency which may incorporate forecast adjustments)
+- **f-only mode**: gauge shows "no evidence available" — comparing
+  a forecast against its own posterior is meaningless
+
+### 5.1 p — completeness-adjusted posterior predictive
+
+#### The problem: cohort maturity
+
+The query window (e.g. `window(-7d:)`) spans multiple daily cohorts,
+each at a different stage of maturation. The model posterior Beta(α, β)
+describes the **long-run** conversion rate, but a cohort that is only
+3 days old has only observed a fraction of its eventual conversions.
+
+Naively comparing `evidence.k / evidence.n` against the posterior's
+long-run rate would systematically flag every recent window as
+"surprisingly low" — not because the data is surprising, but because
+the cohorts are immature.
+
+#### Completeness: read from the edge
+
+The topo pass computes `edge.p.latency.completeness` (c̄_w) as the
+n-weighted average completeness across cohort dates:
 
 ```
-quantile = BetaBinomial_CDF(k, n, α, β)
+c̄_w = Σ(n_d × c_d) / n_total
 ```
 
-This accounts for both posterior uncertainty and sampling noise.
-No normal approximation needed.
+The surprise gauge reads this value directly — it does not recompute
+completeness. This is the same value used by the per-day blending
+loop for p.mean.
 
-### mu, sigma — normal approximation
-
-The posterior marginals are approximately normal. The observed value
-has its own sampling variance:
+#### Corrected z-score
 
 ```
-For mu:   obs = ln(median_lag - onset_mean)
-          obs_se ≈ sqrt(π/2) × sigma_mean / sqrt(n)
+μ_p      = α / (α + β)
+σ²_p     = α·β / ((α+β)² · (α+β+1))
+
+c̄_w     = edge.p.latency.completeness
+n_total  = evidence.n
+k_total  = evidence.k
+
+expected = μ_p × c̄_w
+var_post = σ²_p × c̄_w²                       # posterior uncertainty
+var_samp = expected × (1 − expected) / n_total  # binomial sampling noise
+combined = sqrt(var_post + var_samp)
+
+z        = (k_total/n_total − expected) / combined
+quantile = Φ(z)
+```
+
+#### Behaviour at limits
+
+- **Fully mature window** (c̄_w ≈ 1): reduces to the simple
+  posterior-vs-observation comparison with binomial sampling noise.
+- **Immature window** (c̄_w small): expected rate is low
+  (μ_p × c̄_w), so a low observed rate is not surprising.
+- **Large n**: sampling variance shrinks, z is driven by whether
+  the rate genuinely deviates from the completeness-adjusted
+  expectation.
+- **No lag model** (completeness unavailable): fall back to c̄_w = 1
+  (assume full maturity).
+
+### 5.2 mu, sigma — combined-SD normal approximation
+
+The posterior marginals for mu and sigma are approximately normal.
+The observed values are aggregated across n_dates daily cohorts in
+the window, so their sampling variance depends on n_dates.
+
+```
+n_dates = (anchor_to − anchor_from).days + 1
+
+For mu:   obs = ln(median_lag − onset_mean)
+          obs_se = sqrt(π/2) × σ_lag / sqrt(n_dates)
           combined_sd = sqrt(mu_sd² + obs_se²)
-          z = (obs - mu_mean) / combined_sd
+          z = (obs − mu_mean) / combined_sd
           quantile = Φ(z)
 
 For sigma: obs = sqrt(2 × ln(mean_lag / median_lag))
-           Guard: skip if n < 30 or mean_lag ≤ median_lag
-           combined_sd = sqrt(sigma_sd² + sampling_var)
-           z = (obs - sigma_mean) / combined_sd
+           Guard: skip if n_dates < 30 or mean_lag ≤ median_lag
+           sigma_se = σ_lag / sqrt(2 × n_dates)
+           combined_sd = sqrt(sigma_sd² + sigma_se²)
+           z = (obs − sigma_mean) / combined_sd
            quantile = Φ(z)
 ```
 
-### onset, path_onset — normal approximation (Phase 2)
+The sqrt(π/2) factor for mu is the asymptotic relative efficiency of
+the sample median of a log-normal. The 1/sqrt(2n) factor for sigma
+comes from the sampling distribution of the log-normal scale parameter.
+
+**Note**: completeness does not directly bias mu/sigma. These are
+estimated from the lag distribution of conversions that *did* occur,
+regardless of how many cohorts are still maturing. There is a subtle
+selection bias with very young cohorts (only fast converters observed),
+but this is second-order and not corrected in Phase 1.
+
+### 5.3 onset, path_onset — normal approximation (Phase 2)
 
 ```
 obs = heuristic from snapshot DB (e.g. 5th percentile of lag)
-z = (obs - onset_mean) / onset_sd
+z = (obs − onset_mean) / onset_sd
 quantile = Φ(z)
 ```
 
@@ -126,26 +207,25 @@ to absorb it.
 
 ### Phase 1
 
-**Backend** (`api_handlers.py`):
-- New handler for `analysis_type: 'surprise_gauge'`
-- Reads Bayesian model vars entry from graph edge (`model_vars[]`
-  where `source === 'bayesian'`)
-- Reads current evidence from parameter file values (k, n,
-  median_lag_days, mean_lag_days)
-- Computes quantile per selected variable(s)
-- Returns: `{ variables: [{ name, quantile, observed, expected,
-  posterior_sd, zone, label }] }`
+**Backend** (`api_handlers.py` — `_compute_surprise_gauge()`):
+- Read `evidence.k`, `evidence.n` from edge (not `p.mean`)
+- Read `completeness` (c̄_w) from `edge.p.latency`
+- Read posterior α, β from raw posterior or MoM reconstruction
+- Compute completeness-adjusted z-score per §5.1
+- Read `anchor_from`/`anchor_to` from `subj` for n_dates (mu/sigma)
+- Compute combined-SD z-scores for mu/sigma per §5.2
+- Return: `{ variables: [{ name, quantile, sigma, observed, expected,
+  posterior_sd, zone, label, completeness_used }] }`
 
-**Frontend**:
-- Register `surprise_gauge` analysis type in `analysisTypes.ts`
+**Frontend** (`localAnalysisComputeService.ts` — `buildSurpriseGaugeResult()`):
+- Mirror the BE logic for offline/preview fallback
+- Use `evidence.k`/`evidence.n`, not `p.mean`
+- Use `latency.completeness` for completeness-adjusted expectation
+
+**Display** (already implemented):
 - ECharts gauge series for single-var dial
-- Custom horizontal band renderer for multi-var/multi-scenario
+- Horizontal band renderer for multi-var/multi-scenario
 - Display settings: variable selector, orientation toggle
-
-**Display settings** (registry):
-- `surprise_var`: radio (p, mu, sigma) — default p
-- `surprise_layout`: auto / dial / bands
-- Standard legend, font size, animation settings
 
 ### Phase 2
 
@@ -177,13 +257,30 @@ snapshotContract: {
 ## 8. Design principles
 
 1. **All computation in the BE.** The FE renders what it's given.
-2. **Exact test for p** (Beta-Binomial predictive). Normal
-   approximation for the rest.
-3. **Sampling noise matters.** The surprise score must account for
-   both posterior uncertainty AND observation noise. A single week
-   with k=2, n=50 is noisy — the gauge should reflect that.
-4. **Guard rails.** Skip sigma when n < 30. Skip onset/path_onset
+   (The FE has a local fallback for offline/preview, but the BE
+   is authoritative.)
+2. **Evidence only.** The gauge compares pure evidence against the
+   model. Never use the blended f+e value — it's circular (see §5.0).
+   In f-only mode, show "no evidence available."
+3. **Completeness-adjusted expectation.** The model's long-run rate
+   is scaled by c̄_w (n-weighted average completeness across the
+   window's cohort dates) to produce the expected evidence rate at the
+   window's aggregate maturity. The gauge measures deviation from
+   *what the model predicts you should see at this maturity*, not
+   from the long-run rate (see §5.1).
+4. **Completeness from the topo pass.** The surprise gauge reads
+   `edge.p.latency.completeness` (c̄_w) directly — it does not
+   recompute completeness. This is the same n-weighted aggregate
+   already computed by the topo pass and used by the per-day blending
+   loop.
+5. **Sampling noise matters.** The surprise score must account for
+   both posterior uncertainty AND observation noise. A single day
+   with k=2, n=50 is noisy — the gauge should reflect that. A 30-day
+   window with k=600, n=1500 is precise — the gauge should reflect
+   that too.
+6. **Guard rails.** Skip sigma when n_dates < 30. Skip onset/path_onset
    when snapshot data is insufficient. Show "insufficient data"
-   rather than a misleading gauge.
-5. **Linear-in-σ axis, percentile labels.** Uniform visual spacing,
+   rather than a misleading gauge. Fall back to c_d = 1 when no
+   lag model is available (assume full maturity).
+7. **Linear-in-σ axis, percentile labels.** Uniform visual spacing,
    familiar units.

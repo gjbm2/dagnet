@@ -73,7 +73,7 @@
  * - p.latency.completeness, p.latency.t95, p.latency.median_lag_days
  * 
  * NOT IN PARAM PACK (internal/config):
- * - evidence.n, evidence.k, evidence.window_from/to, etc.
+ * - evidence.n, evidence.k, evidence.scope_from/to, etc.
  * - latency.latency_parameter, latency.anchor_node_id, latency.mean_lag_days
  * - distribution, min, max, alpha, beta
  */
@@ -745,7 +745,7 @@ describe('Sample File Query Flow E2E', () => {
       // Verify evidence basis fields ARE present (requested for scenario data sanity checking)
       expect(paramPack).toHaveProperty('e.checkout-to-payment.p.evidence.n');
       expect(paramPack).toHaveProperty('e.checkout-to-payment.p.evidence.k');
-      expect(paramPack).not.toHaveProperty('e.checkout-to-payment.p.evidence.window_from');
+      expect(paramPack).not.toHaveProperty('e.checkout-to-payment.p.evidence.scope_from');
       expect(paramPack).not.toHaveProperty('e.checkout-to-payment.p.latency.latency_parameter');
       expect(paramPack).not.toHaveProperty('e.checkout-to-payment.p.latency.anchor_node_id');
       expect(paramPack).not.toHaveProperty('e.checkout-to-payment.p.distribution');

@@ -133,6 +133,7 @@ def summarise_posteriors(
     evidence: BoundEvidence,
     metadata: dict,
     quality: QualityMetrics,
+    phase1_kappa: dict[str, "np.ndarray"] | None = None,
 ) -> InferenceResult:
     """Extract posterior summaries from the MCMC trace.
 
@@ -196,10 +197,11 @@ def summarise_posteriors(
         else:
             samples = trace.posterior[p_var_name].values.flatten()
 
-        # Posterior predictive: if hierarchical Beta (kappa_p) exists,
-        # generate predictive samples that include between-cohort variation.
-        # This gives alpha/beta that reflect real-world uncertainty (both
-        # estimation + cohort variation), not just estimation precision.
+        # Posterior predictive: if hierarchical Beta (kappa_p or
+        # kappa_cohort) exists, generate predictive samples that include
+        # between-cohort variation. This gives alpha/beta that reflect
+        # real-world uncertainty (both estimation + cohort variation),
+        # not just estimation precision.
         # See journal 27-Mar-26 "hierarchical Beta on p".
         kappa_p_name = f"kappa_p_{safe_eid}"
         if kappa_p_name in trace.posterior:
@@ -272,14 +274,12 @@ def summarise_posteriors(
         kappa_p_name = f"kappa_p_{safe_eid}"
         has_kappa_p = kappa_p_name in trace.posterior
 
-        def _predictive_alpha_beta(p_samples):
-            """If kappa_p exists, generate predictive samples; else moment-match directly."""
-            if has_kappa_p:
-                kp_samples = trace.posterior[kappa_p_name].values.flatten()
-                # Match lengths (may differ if chains/draws differ)
-                n_use = min(len(p_samples), len(kp_samples))
-                a_s = np.maximum(p_samples[:n_use] * kp_samples[:n_use], 0.01)
-                b_s = np.maximum((1.0 - p_samples[:n_use]) * kp_samples[:n_use], 0.01)
+        def _predictive_alpha_beta(p_samples, kappa_samples=None):
+            """Generate predictive samples using kappa if available; else moment-match."""
+            if kappa_samples is not None:
+                n_use = min(len(p_samples), len(kappa_samples))
+                a_s = np.maximum(p_samples[:n_use] * kappa_samples[:n_use], 0.01)
+                b_s = np.maximum((1.0 - p_samples[:n_use]) * kappa_samples[:n_use], 0.01)
                 pred = np.random.beta(a_s, b_s)
                 ab = _fit_beta_to_samples(pred)
                 hdi_vals = az.hdi(pred, hdi_prob=HDI_PROB)
@@ -288,6 +288,14 @@ def summarise_posteriors(
                 ab = _fit_beta_to_samples(p_samples)
                 hdi_vals = az.hdi(p_samples, hdi_prob=HDI_PROB)
                 return ab[0], ab[1], float(hdi_vals[0]), float(hdi_vals[1])
+
+        # Resolve kappa_p samples — from this trace (Phase 1) or from
+        # phase1_kappa (passed through for Phase 2 Option C).
+        kp_samples = None
+        if has_kappa_p:
+            kp_samples = trace.posterior[kappa_p_name].values.flatten()
+        elif phase1_kappa and safe_eid in phase1_kappa:
+            kp_samples = phase1_kappa[safe_eid]
 
         # For window: prefer p_window_recent (drift-adjusted) if available,
         # then p_window, then p (Phase 1: single p, no hierarchy).
@@ -298,11 +306,16 @@ def summarise_posteriors(
 
         if w_name in trace.posterior:
             w_samples = trace.posterior[w_name].values.flatten()
-            window_alpha_val, window_beta_val, window_hdi_lo, window_hdi_hi = _predictive_alpha_beta(w_samples)
+            window_alpha_val, window_beta_val, window_hdi_lo, window_hdi_hi = _predictive_alpha_beta(
+                w_samples, kappa_samples=kp_samples)
 
         if p_cohort_name in trace.posterior:
             c_samples = trace.posterior[p_cohort_name].values.flatten()
-            cohort_alpha_val, cohort_beta_val, cohort_hdi_lo, cohort_hdi_hi = _predictive_alpha_beta(c_samples)
+            # Option C: use Phase 1's kappa_p for cohort predictive.
+            # kp_samples comes from Phase 1 trace (via phase1_kappa dict).
+            # See journal 28-Mar-26.
+            cohort_alpha_val, cohort_beta_val, cohort_hdi_lo, cohort_hdi_hi = _predictive_alpha_beta(
+                c_samples, kappa_samples=kp_samples)
 
         # Derive mean/stdev from alpha/beta for consistency.
         # When predictive (hierarchical Beta), alpha/beta encode the

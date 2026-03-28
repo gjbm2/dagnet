@@ -1708,8 +1708,8 @@ export async function getParameterFromFile(options: {
         const stdevChange = result.changes.find((c: { field: string }) => c.field === 'p.stdev');
         const nChange = result.changes.find((c: { field: string }) => c.field === 'p.evidence.n');
         const kChange = result.changes.find((c: { field: string }) => c.field === 'p.evidence.k');
-        const windowFromChange = result.changes.find((c: { field: string }) => c.field === 'p.evidence.window_from');
-        const windowToChange = result.changes.find((c: { field: string }) => c.field === 'p.evidence.window_to');
+        const windowFromChange = result.changes.find((c: { field: string }) => c.field === 'p.evidence.scope_from');
+        const windowToChange = result.changes.find((c: { field: string }) => c.field === 'p.evidence.scope_to');
         const retrievedAtChange = result.changes.find((c: { field: string }) => c.field === 'p.evidence.retrieved_at');
         const sourceChange = result.changes.find((c: { field: string }) => c.field === 'p.evidence.source');
         
@@ -1732,8 +1732,8 @@ export async function getParameterFromFile(options: {
             evidence: (nChange || kChange) ? {
               n: nChange?.newValue,
               k: kChange?.newValue,
-              window_from: windowFromChange?.newValue,
-              window_to: windowToChange?.newValue,
+              scope_from: windowFromChange?.newValue,
+              scope_to: windowToChange?.newValue,
               retrieved_at: retrievedAtChange?.newValue,
               source: sourceChange?.newValue,
             } : undefined

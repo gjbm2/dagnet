@@ -57,8 +57,8 @@ describe('UpdateManager external_to_graph parameter mapping', () => {
     expect(updated.p.evidence.n).toBe(100);
     expect(updated.p.evidence.k).toBe(25);
     expect(updated.p.evidence.mean).toBeCloseTo(0.25, 6);
-    expect(updated.p.evidence.window_from).toBe(normalizeToUK(source.window_from));
-    expect(updated.p.evidence.window_to).toBe(normalizeToUK(source.window_to));
+    expect(updated.p.evidence.scope_from).toBe(normalizeToUK(source.window_from));
+    expect(updated.p.evidence.scope_to).toBe(normalizeToUK(source.window_to));
   });
 });
 

@@ -103,18 +103,22 @@ export function BayesPosteriorCard({ probability, latency, theme = 'dark' }: Pro
   const edgeLatRows = hasEdgeLat ? (
     <>
       <Row label="onset" value={`${fmt(lat!.onset_delta_days ?? lat!.onset_mean, 1)}d${lat!.onset_sd != null ? ` ± ${fmt(lat!.onset_sd, 1)}d` : ''}`} />
+      {lat!.onset_hdi_lower != null && <Row label="onset HDI" value={`${fmt(lat!.onset_hdi_lower, 1)}d — ${fmt(lat!.onset_hdi_upper, 1)}d`} />}
       <Row label="μ" value={`${fmt(lat!.mu_mean, 3)} ± ${fmt(lat!.mu_sd, 3)}`} />
       <Row label="σ" value={`${fmt(lat!.sigma_mean, 3)} ± ${fmt(lat!.sigma_sd, 3)}`} />
-      {lat!.hdi_t95_lower != null && <Row label="t95" value={`${fmt(lat!.hdi_t95_lower, 1)}d — ${fmt(lat!.hdi_t95_upper, 1)}d`} />}
+      {lat!.hdi_t95_lower != null && <Row label="t95 HDI" value={`${fmt(lat!.hdi_t95_lower, 1)}d — ${fmt(lat!.hdi_t95_upper, 1)}d`} />}
+      {lat!.onset_mu_corr != null && <Row label="onset↔μ" value={fmt(lat!.onset_mu_corr, 3)} />}
     </>
   ) : null;
 
   const pathLatRows = hasPathLat ? (
     <>
       <Row label="onset" value={`${fmt(lat!.path_onset_delta_days, 1)}d${lat!.path_onset_sd != null ? ` ± ${fmt(lat!.path_onset_sd, 1)}d` : ''}`} />
+      {lat!.path_onset_hdi_lower != null && <Row label="onset HDI" value={`${fmt(lat!.path_onset_hdi_lower, 1)}d — ${fmt(lat!.path_onset_hdi_upper, 1)}d`} />}
       <Row label="μ" value={`${fmt(lat!.path_mu_mean, 3)} ± ${fmt(lat!.path_mu_sd, 3)}`} />
       <Row label="σ" value={`${fmt(lat!.path_sigma_mean, 3)} ± ${fmt(lat!.path_sigma_sd, 3)}`} />
-      {(lat as any)?.path_hdi_t95_lower != null && <Row label="t95" value={`${fmt((lat as any).path_hdi_t95_lower, 1)}d — ${fmt((lat as any).path_hdi_t95_upper, 1)}d`} />}
+      {(lat as any)?.path_hdi_t95_lower != null && <Row label="t95 HDI" value={`${fmt((lat as any).path_hdi_t95_lower, 1)}d — ${fmt((lat as any).path_hdi_t95_upper, 1)}d`} />}
+      {(lat as any)?.path_onset_mu_corr != null && <Row label="onset↔μ" value={fmt((lat as any).path_onset_mu_corr, 3)} />}
     </>
   ) : null;
 

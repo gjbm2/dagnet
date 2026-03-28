@@ -220,8 +220,19 @@ def _compute_surprise_gauge(
             'onset_delta_days': ref_lat.get('onset_delta_days') or 0,
         }
 
-    # Find the analytic model vars entry as "observed" (evidence-derived values).
-    # Prefer analytic_be, fall back to analytic.
+    # --- Evidence (pure observation — never the blended f+e value) ---
+    # See surprise-gauge-design.md §5.0: gauge always compares pure evidence
+    # against the model posterior to avoid circular comparison.
+    evidence = p.get('evidence') or {}
+    evidence_k = evidence.get('k')
+    evidence_n = evidence.get('n')
+
+    # Completeness from the topo pass (n-weighted aggregate across cohort dates).
+    c_w = latency.get('completeness')
+    if not isinstance(c_w, (int, float)) or c_w <= 0:
+        c_w = 1.0  # Default: assume fully mature when no lag model
+
+    # --- Observed latency params (from analytic evidence, not promoted/blended) ---
     analytic_entry = next(
         (mv for mv in model_vars if isinstance(mv, dict) and mv.get('source') == 'analytic_be'),
         next(
@@ -229,30 +240,31 @@ def _compute_surprise_gauge(
             None,
         ),
     )
-
-    # Also get the promoted values from the edge as a fallback
-    promoted_prob = p.get('mean')
-    promoted_lat = p.get('latency') or {}
-
-    # Use analytic entry if available, else promoted values
-    obs_prob_mean = None
     obs_lat_mu = None
     obs_lat_sigma = None
-
     if analytic_entry:
-        a_prob = analytic_entry.get('probability') or {}
         a_lat = analytic_entry.get('latency') or {}
-        obs_prob_mean = a_prob.get('mean')
         obs_lat_mu = a_lat.get('mu')
         obs_lat_sigma = a_lat.get('sigma')
-
-    # Fallback to promoted values
-    if obs_prob_mean is None:
-        obs_prob_mean = promoted_prob
+    # Fallback to promoted latency only for mu/sigma (not for p)
+    promoted_lat = p.get('latency') or {}
     if obs_lat_mu is None:
         obs_lat_mu = promoted_lat.get('mu')
     if obs_lat_sigma is None:
         obs_lat_sigma = promoted_lat.get('sigma')
+
+    # n_dates for mu/sigma sampling SE
+    anchor_from_str = subj.get('anchor_from')
+    anchor_to_str = subj.get('anchor_to')
+    n_dates = 1
+    if anchor_from_str and anchor_to_str:
+        try:
+            from datetime import date as date_type
+            af = date_type.fromisoformat(str(anchor_from_str)[:10])
+            at = date_type.fromisoformat(str(anchor_to_str)[:10])
+            n_dates = max(1, (at - af).days + 1)
+        except (ValueError, TypeError):
+            pass
 
     # Zone classification from quantile
     def classify_zone(q: float) -> str:
@@ -272,46 +284,68 @@ def _compute_surprise_gauge(
     variables = []
 
     # --- p (conversion rate) ---
-    # Compare analytic p.mean against Bayesian Beta(α,β) posterior.
+    # Completeness-adjusted comparison: pure evidence k/n vs posterior Beta(α,β)
+    # scaled by per-date completeness. See surprise-gauge-design.md §5.1.
     b_alpha = b_alpha_raw
     b_beta_param = b_beta_raw
 
     if (isinstance(b_alpha, (int, float)) and isinstance(b_beta_param, (int, float))
             and b_alpha > 0 and b_beta_param > 0
-            and isinstance(obs_prob_mean, (int, float)) and obs_prob_mean >= 0):
-        posterior_mean = b_alpha / (b_alpha + b_beta_param)
-        posterior_sd = bayes_prob.get('stdev', 0)
-        # Exact Beta CDF: where does the observed rate fall in the posterior?
-        quantile = float(beta_dist.cdf(float(obs_prob_mean), b_alpha, b_beta_param))
+            and isinstance(evidence_k, (int, float)) and isinstance(evidence_n, (int, float))
+            and evidence_n > 0):
+        mu_p = b_alpha / (b_alpha + b_beta_param)
+        sigma2_p = (b_alpha * b_beta_param) / ((b_alpha + b_beta_param) ** 2 * (b_alpha + b_beta_param + 1))
+        obs_rate = float(evidence_k) / float(evidence_n)
+
+        # Completeness-adjusted expected rate and variance (§5.1)
+        expected = mu_p * c_w
+        var_post = sigma2_p * (c_w ** 2)
+        # Sampling variance at the expected rate
+        var_samp = expected * (1.0 - expected) / float(evidence_n)
+        combined_sd = math.sqrt(max(1e-20, var_post + var_samp))
+
+        z = (obs_rate - expected) / combined_sd
+        quantile = float(norm_dist.cdf(z))
         variables.append({
             'name': 'p',
             'label': 'Conversion rate',
             'quantile': round(quantile, 6),
-            'sigma': round(sigma_from_quantile(quantile), 3),
-            'observed': round(float(obs_prob_mean), 6),
-            'expected': round(posterior_mean, 6),
-            'posterior_sd': round(float(posterior_sd), 6),
+            'sigma': round(z, 3),
+            'observed': round(obs_rate, 6),
+            'expected': round(expected, 6),
+            'expected_longrun': round(mu_p, 6),
+            'posterior_sd': round(math.sqrt(sigma2_p), 6),
+            'combined_sd': round(combined_sd, 6),
+            'completeness': round(c_w, 4),
             'zone': classify_zone(quantile),
             'available': True,
         })
     else:
+        reason = 'No evidence (k/n)' if not (isinstance(evidence_n, (int, float)) and evidence_n > 0) else 'Missing posterior (alpha/beta)'
         variables.append({
             'name': 'p',
             'label': 'Conversion rate',
             'available': False,
-            'reason': 'Missing Bayesian posterior (alpha/beta) or analytic p.mean',
+            'reason': reason,
         })
 
     # --- mu (latency location) ---
-    # Compare analytic mu against Bayesian mu posterior.
+    # Combined-SD normal approximation: posterior SD + sampling SE. See §5.2.
     b_mu_mean = ref_lat_params.get('mu_mean')
     b_mu_sd = ref_lat_params.get('mu_sd')
     b_onset_mean = ref_lat_params.get('onset_mean') or ref_lat_params.get('onset_delta_days') or 0
+    # sigma_lag for sampling SE of median
+    sigma_lag = ref_lat_params.get('sigma_mean') or latency.get('sigma')
 
     if (isinstance(b_mu_mean, (int, float)) and isinstance(b_mu_sd, (int, float))
             and b_mu_sd > 0
             and isinstance(obs_lat_mu, (int, float))):
-        z = (float(obs_lat_mu) - float(b_mu_mean)) / float(b_mu_sd)
+        # obs_se = sqrt(π/2) × σ_lag / sqrt(n_dates)
+        obs_se = 0.0
+        if isinstance(sigma_lag, (int, float)) and sigma_lag > 0 and n_dates > 0:
+            obs_se = math.sqrt(math.pi / 2) * float(sigma_lag) / math.sqrt(n_dates)
+        combined_sd = math.sqrt(float(b_mu_sd) ** 2 + obs_se ** 2)
+        z = (float(obs_lat_mu) - float(b_mu_mean)) / combined_sd
         quantile = float(norm_dist.cdf(z))
         variables.append({
             'name': 'mu',
@@ -323,6 +357,8 @@ def _compute_surprise_gauge(
             'expected': round(float(b_mu_mean), 4),
             'expected_days': round(math.exp(float(b_mu_mean)) + float(b_onset_mean), 1),
             'posterior_sd': round(float(b_mu_sd), 4),
+            'combined_sd': round(combined_sd, 4),
+            'n_dates': n_dates,
             'zone': classify_zone(quantile),
             'available': True,
         })
@@ -335,14 +371,20 @@ def _compute_surprise_gauge(
         })
 
     # --- sigma (latency spread) ---
-    # Compare analytic sigma against Bayesian sigma posterior.
+    # Combined-SD normal approximation with n_dates guard. See §5.2.
     b_sigma_mean_val = ref_lat_params.get('sigma_mean')
     b_sigma_sd = ref_lat_params.get('sigma_sd')
 
     if (isinstance(b_sigma_mean_val, (int, float)) and isinstance(b_sigma_sd, (int, float))
             and b_sigma_sd > 0
-            and isinstance(obs_lat_sigma, (int, float))):
-        z = (float(obs_lat_sigma) - float(b_sigma_mean_val)) / float(b_sigma_sd)
+            and isinstance(obs_lat_sigma, (int, float))
+            and n_dates >= 30):
+        # sigma_se = σ_lag / sqrt(2 × n_dates)
+        obs_se = 0.0
+        if isinstance(sigma_lag, (int, float)) and sigma_lag > 0 and n_dates > 0:
+            obs_se = float(sigma_lag) / math.sqrt(2 * n_dates)
+        combined_sd = math.sqrt(float(b_sigma_sd) ** 2 + obs_se ** 2)
+        z = (float(obs_lat_sigma) - float(b_sigma_mean_val)) / combined_sd
         quantile = float(norm_dist.cdf(z))
         variables.append({
             'name': 'sigma',
@@ -352,8 +394,17 @@ def _compute_surprise_gauge(
             'observed': round(float(obs_lat_sigma), 4),
             'expected': round(float(b_sigma_mean_val), 4),
             'posterior_sd': round(float(b_sigma_sd), 4),
+            'combined_sd': round(combined_sd, 4),
+            'n_dates': n_dates,
             'zone': classify_zone(quantile),
             'available': True,
+        })
+    elif n_dates < 30 and isinstance(b_sigma_mean_val, (int, float)) and isinstance(obs_lat_sigma, (int, float)):
+        variables.append({
+            'name': 'sigma',
+            'label': 'Latency spread (σ)',
+            'available': False,
+            'reason': f'Insufficient dates ({n_dates} < 30) for reliable sigma estimate',
         })
     else:
         variables.append({
