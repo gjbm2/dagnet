@@ -831,6 +831,13 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
             result['bayes_mu_sd'] = float(bayes_mu_sd)
         if (isinstance(bayes_sigma_sd, (int, float)) and math.isfinite(bayes_sigma_sd) and bayes_sigma_sd > 0):
             result['bayes_sigma_sd'] = float(bayes_sigma_sd)
+        # Onset-mu correlation (for covariance-aware confidence bands)
+        bayes_onset_mu_corr = lat_posterior.get('onset_mu_corr')
+        if isinstance(bayes_onset_mu_corr, (int, float)) and math.isfinite(bayes_onset_mu_corr):
+            result['bayes_onset_mu_corr'] = float(bayes_onset_mu_corr)
+        bayes_path_onset_mu_corr = lat_posterior.get('path_onset_mu_corr')
+        if isinstance(bayes_path_onset_mu_corr, (int, float)) and math.isfinite(bayes_path_onset_mu_corr):
+            result['bayes_path_onset_mu_corr'] = float(bayes_path_onset_mu_corr)
         # Bayesian latency posterior — path-level (cohort)
         bayes_path_mu = lat_posterior.get('path_mu_mean')
         bayes_path_sigma = lat_posterior.get('path_sigma_mean')
@@ -1418,70 +1425,39 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
                                 },
                             }
 
-                            # Bayesian confidence bands (delta method)
+                            # Bayesian confidence bands (covariance-aware delta method)
                             if src_name == 'bayesian':
-                                band_mu_sd = src_params.get('mu_sd') or src_params.get('path_mu_sd')
-                                band_sigma_sd = src_params.get('sigma_sd') or src_params.get('path_sigma_sd') or 0.0
-                                band_onset_sd = src_params.get('onset_sd') or src_params.get('path_onset_sd') or 0.0
+                                from runner.confidence_bands import compute_confidence_band
+                                band_mu_sd = src_params.get('mu_sd') or 0.0
+                                band_sigma_sd = src_params.get('sigma_sd') or 0.0
+                                band_onset_sd = src_params.get('onset_sd') or 0.0
                                 band_p_sd = src_params.get('p_stdev', 0.0)
+                                band_onset_mu_corr = model_params.get('bayes_path_onset_mu_corr') if cdf_mode == 'cohort_path' else model_params.get('bayes_onset_mu_corr', 0.0)
+                                if band_onset_mu_corr is None:
+                                    band_onset_mu_corr = 0.0
 
-                                _band_level_z = {
-                                    '80': 1.282, '90': 1.645,
-                                    '95': 1.960, '99': 2.576,
-                                }
                                 _bl = str(_ds.get('bayes_band_level', '90'))
+                                _level_map = {'80': 0.80, '90': 0.90, '95': 0.95, '99': 0.99}
+                                band_level = _level_map.get(_bl)
 
-                                if _bl != 'off' and band_mu_sd is not None and band_mu_sd > 0:
-                                    band_k = _band_level_z.get(_bl, 1.645)
-                                    sqrt_2pi = math.sqrt(2.0 * math.pi)
-                                    p_val = s_fm
-
-                                    band_upper = []
-                                    band_lower = []
-                                    for tau in range(0, axis_tau_max + 1):
-                                        cdf_val = compute_completeness(float(tau), s_mu, s_sigma, s_onset)
-                                        cdf_val = max(0.0, min(1.0, float(cdf_val)))
-                                        rate = p_val * cdf_val
-
-                                        model_age = float(tau) - s_onset
-                                        if model_age > 0 and s_sigma > 0:
-                                            z = (math.log(model_age) - s_mu) / s_sigma
-                                            phi_z = math.exp(-0.5 * z * z) / sqrt_2pi
-                                            dcdf_dmu = -phi_z / s_sigma
-                                            dcdf_dsigma = -phi_z * z / s_sigma
-
-                                            var_rate = 0.0
-                                            if band_p_sd > 0:
-                                                var_rate += (cdf_val ** 2) * (band_p_sd ** 2)
-                                            var_rate += (p_val * dcdf_dmu) ** 2 * (band_mu_sd ** 2)
-                                            if band_sigma_sd > 0:
-                                                var_rate += (p_val * dcdf_dsigma) ** 2 * (band_sigma_sd ** 2)
-                                            if band_onset_sd > 0 and model_age > 0:
-                                                dcdf_donset = -phi_z / (s_sigma * model_age)
-                                                var_rate += (p_val * dcdf_donset) ** 2 * (band_onset_sd ** 2)
-
-                                            sd_rate = math.sqrt(var_rate)
-                                            ru = rate + band_k * sd_rate
-                                            rl = max(0.0, rate - band_k * sd_rate)
-                                        else:
-                                            if band_p_sd > 0 and cdf_val > 0:
-                                                sd_rate = cdf_val * band_p_sd
-                                                ru = rate + band_k * sd_rate
-                                                rl = max(0.0, rate - band_k * sd_rate)
-                                            else:
-                                                ru = rate
-                                                rl = rate
-
-                                        band_upper.append({
-                                            'tau_days': tau,
-                                            'model_rate': round(ru, 8),
-                                        })
-                                        band_lower.append({
-                                            'tau_days': tau,
-                                            'model_rate': round(rl, 8),
-                                        })
-                                    src_entry['band_upper'] = band_upper
-                                    src_entry['band_lower'] = band_lower
+                                if _bl != 'off' and band_mu_sd > 0 and band_level is not None:
+                                    ages = list(range(0, axis_tau_max + 1))
+                                    upper_rates, lower_rates = compute_confidence_band(
+                                        ages=ages,
+                                        p=s_fm, mu=s_mu, sigma=s_sigma, onset=s_onset,
+                                        p_sd=band_p_sd, mu_sd=band_mu_sd,
+                                        sigma_sd=band_sigma_sd, onset_sd=band_onset_sd,
+                                        onset_mu_corr=band_onset_mu_corr,
+                                        level=band_level,
+                                    )
+                                    src_entry['band_upper'] = [
+                                        {'tau_days': t, 'model_rate': round(r, 8)}
+                                        for t, r in zip(ages, upper_rates)
+                                    ]
+                                    src_entry['band_lower'] = [
+                                        {'tau_days': t, 'model_rate': round(r, 8)}
+                                        for t, r in zip(ages, lower_rates)
+                                    ]
 
                             source_curve_results[src_name] = src_entry
 

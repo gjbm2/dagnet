@@ -8,6 +8,85 @@ Entries are reverse-chronological (newest first).
 
 ---
 
+## 29-Mar-26: Stable baseline established; two open model issues
+
+### Current state
+
+Synth regression: **8/10 pass** (simple-abc and drift3d10d fail on
+pre-existing onset-mu correlation). Prod 4-step: **converges with
+warm-start** (all edges bayesian, ESS 5k–15k, rhat ≤ 1.003).
+
+Key changes this session:
+- **Synth context data fix**: `emit_context_slices` flag in truth files
+  (default false). Synth gen was emitting per-context rows with different
+  p values; aggregation produced rate heterogeneity the model couldn't fit.
+- **Warm-start quality guard**: `_warm_start_acceptable()` gates on
+  rhat < 1.10 and ESS ≥ 100. Prevents poisoned posteriors from cascading.
+- **Full warm-start wiring**: kappa, kappa_p, cohort latency (mu, sigma,
+  onset) now read from previous posterior `_model_state` and `cohort()`
+  slice. Previously only p, mu_lat, sigma_lat, onset were warm-started.
+- **Endpoint BetaBinomial**: replaces per-trajectory p_i hierarchy.
+  y_final ~ BB(n, p×F(age), kappa_p) with latent CDF gradients.
+- **run_regression.py fix**: parses param_recovery output before checking
+  exit code (was misclassifying PARTIAL as HARNESS FAIL).
+
+### Open issue 1: Path dispersion estimation is broken
+
+**Symptom**: registered-to-success on prod 4-step:
+- Edge (window) Williams kappa = 14 → **stdev ≈ 10%**
+- Path (cohort) Williams kappa = 459 → **stdev ≈ 2%**
+
+Path dispersion should be ≥ edge dispersion (paths accumulate upstream
+uncertainty). Currently it's 5× tighter — inverted.
+
+**Root cause**: cohort trajectories have small denominators (median n=19).
+The Binomial sampling variance (binom_var = p(1-p)/n) is large at small n,
+nearly equalling the observed variance. Williams bc_var = obs_var - binom_var
+≈ 0, so kappa → ∞. The real between-cohort variation is present but
+invisible beneath the sampling noise floor.
+
+This is the doc 25 kappa discrepancy. The `max(mcmc, williams)` rule
+(inference.py:424) was NOT requested — it should be reverted to side-by-side
+comparison. But the underlying estimation problem remains: Williams breaks
+down when denominators are small relative to the between-cohort signal.
+
+**Potential approaches** (not yet attempted):
+- Use only mature, large-denominator observations for Williams
+- Derive path kappa analytically from edge kappa (κ_path ≤ κ_edge)
+- Use a hierarchical model for cohort p instead of post-hoc Williams
+
+### Open issue 2: Path latency posteriors too tight
+
+**Symptom**: registered-to-success cohort latency on prod 4-step:
+- onset = 16.5 ± 0.2 (±1.2% — implausibly tight for 4-edge path)
+- sigma = 2.87 ± 0.047 (±1.6%)
+- For comparison, edge onset = 4.3 ± 0.15 (±3.5%)
+
+Path onset should have ≥ RSS of edge onset uncertainties. Currently
+tighter than any individual edge.
+
+**Root cause**: same as issue 1 — the cohort trajectory likelihood with
+small-denominator observations over-constrains path-level parameters.
+Each trajectory with n=19 is treated as an independent observation, but
+the information content per trajectory is low. With 85 such trajectories,
+the model infers falsely precise path latency.
+
+### Open issue 3: Onset-mu correlation
+
+corr(onset, mu) ≈ -0.99 on short-latency first edges (onset ≈ 1d).
+Causes 2/10 synth failures and required warm-start for
+delegated-to-registered to converge on prod.
+
+Structural identifiability issue: shifting onset left while increasing mu
+(or vice versa) produces nearly identical CDFs. The shifted-lognormal
+parameterisation has an inherent ridge when onset is small relative to
+the lognormal body.
+
+Not yet addressed. Potential approaches: reparameterisation (e.g. t50
+instead of onset+mu), stronger onset prior, or marginalising onset.
+
+---
+
 ## 29-Mar-26: Kappa discrepancy investigation (doc 25)
 
 ### Root cause 1: synth_gen per-user kappa produces no between-day overdispersion

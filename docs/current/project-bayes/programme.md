@@ -9,74 +9,84 @@ design docs contain the detail.
 
 **Done**: Async infrastructure, Phase A–D compiler, FE overlay (basic
 + quality + model CDF + confidence bands), unified posterior schema,
-synthetic data generator + 8-graph param recovery suite, two-phase
-model architecture, likelihood rewrite (DM→Binomial), onset
+synthetic data generator + 10-graph param recovery suite, two-phase
+model architecture (posterior-as-prior), likelihood rewrite
+(DM→Binomial), endpoint BetaBinomial for rate estimation, onset
 observations, t95 soft constraint, posterior slice resolution (doc 25),
-Phase 2 join-node CDF fix.
+Phase 2 join-node CDF fix, full warm-start wiring with quality guard,
+synth context data fix (`emit_context_slices` truth flag).
 
-**Production fit quality**: del-to-reg p inflation reduced from
-1.94x → 1.19x. No-latency edges ≤1.03x. Synth recovery ≤1.04x
-across all 41 edges in 8 topologies. Remaining production inflation
-is genuine data sparsity (trajectory coverage) not model bias.
+**Synth regression**: 8/10 pass. 2 onset-mu correlation failures
+(simple-abc, drift3d10d) — pre-existing structural issue.
 
-**Key architectural decisions locked in (27-Mar-26)**:
+**Production fit quality (bayes-test-gm-rebuild)**:
+- All 4 edges converge (ESS 5k–15k, rhat ≤ 1.003) with warm-start.
+- del-to-reg: p=0.114 (analytic 0.095, ratio 1.20x) — latency edge.
+- reg-to-success: edge p=0.788, cohort p=0.808.
+- No-latency edges ≤ 1.01x analytic.
+- First-run (no warm-start): del-to-reg fails to converge (ESS=6)
+  due to topology priors being far from posterior mode. Warm-start
+  or neutral priors required.
+
+**Key architectural decisions locked in**:
 1. Textbook Binomial, not DM/BB — no concentration-parameter bias
-2. Per-retrieval onset from Amplitude histograms — data-driven, no
-   user input
+2. Per-retrieval onset from Amplitude histograms — data-driven
 3. t95 soft constraint from analytics pass — prevents sigma inflation
-4. Two-phase model — window Phase 1, frozen-p Phase 2 with drift
+4. Two-phase model — window Phase 1, frozen-p Phase 2 with
+   posterior-as-prior (ESS-decayed Dirichlet/Beta)
+5. Endpoint BetaBinomial for between-cohort rate variation (kappa_p)
+6. Williams (1982) post-hoc for between-cohort kappa estimation
+7. Quality-gated warm-start (rhat < 1.10, ESS ≥ 100)
 
 **Resolved bugs** (29-Mar-26 sweep):
 - ~~Posterior upsert on subsequent runs~~ — **FIXED 29-Mar-26**.
 - ~~Posterior slice projection is not query-driven~~ — **FIXED
-  29-Mar-26**. `resolvePosteriorSlice()` in new
-  `posteriorSliceResolution.ts`; cascade calls
-  `projectProbabilityPosterior`/`projectLatencyPosterior`;
-  per-scenario re-projection via `reprojectPosteriorForDsl()` in
-  `analysisComputePreparationService.ts`. See doc 25.
-- ~~Surprise gauge uses wrong slice~~ — **FIXED 29-Mar-26**. Now uses
-  `resolveActiveModelVars()` respecting quality gate and source
-  preference. See doc 25 §3.1–3.2.
+  29-Mar-26**. See doc 25.
+- ~~Surprise gauge uses wrong slice~~ — **FIXED 29-Mar-26**. See
+  doc 25 §3.1–3.2.
 - ~~Cohort maturity curve uses window p, not cohort p~~ — **FIXED
-  29-Mar-26**. BE analysis handler extracts `posterior_p =
-  alpha/(alpha+beta)` from re-projected posterior slice; prefers it
-  over `forecast_mean` for model CDF scaling. See doc 25 §3.3.
-- ~~Phase 2 p_cohort drift~~ — TWO root causes found and fixed:
-  (a) Branch group Dirichlet → drift+simplex (tau=0.1, ±2.5%).
-  (b) Free cohort_latency_vars → frozen FW-composed path CDF for
-  single-edge paths. See journal 28-Mar-26.
-- ~~Cohort between-cohort uncertainty~~ — Per-cohort random effects
-  (Option A) failed and reverted. Replaced with empirical variance
-  (Williams 1982 moment estimator). Post-processing only. See
-  journal 28-Mar-26.
-- ~~Unrealistically tight posteriors~~ — Phase 1 FIXED (27-Mar-26)
-  via hierarchical Beta on p (kappa_p).
-- ~~Phase 2 join-node CDF~~ — **FIXED 29-Mar-26**.
-  `phase2_cohort_use_x` now detects join-downstream edges and builds
-  mixture CDF. See journal 29-Mar-26.
+  29-Mar-26**. See doc 25 §3.3.
+- ~~Phase 2 p_cohort drift~~ — **FIXED**. Posterior-as-prior
+  Dirichlet/Beta with ESS decay. See doc 24, journal 28-Mar-26.
+- ~~Phase 2 convergence~~ — **FIXED**. Was ESS=7; now ESS=5k+ with
+  warm-start, 100% converged.
+- ~~Synth context data corruption~~ — **FIXED 29-Mar-26**.
+  `emit_context_slices` flag; synth gen now emits bare slices by
+  default.
+- ~~Warm-start gaps~~ — **FIXED 29-Mar-26**. kappa, kappa_p, cohort
+  latency (mu, sigma, onset) now all warm-started from previous
+  posterior with quality gate.
+- ~~run_regression.py misclassification~~ — **FIXED 29-Mar-26**.
+  Parses param_recovery output before checking exit code.
 
 **Open issues**:
 
-*Model quality*:
-- **Ad hoc hyperparameters** — kappa_p Gamma(3, 0.05), edge_kappa
-  Gamma(3, 0.1), fallback ESS=20 for missing Phase 1 posteriors,
-  Gamma spread parameters. Need: principled derivation from
-  empirical data or uninformative defaults where data is absent.
-- **Onset-mu correlation** — corr(onset, mu) ≈ -0.95 to -0.99 on
-  short-onset edges (onset ≤ 1d). Affects 4/10 synth graphs
-  (diamond, lattice, skip, simple-abc first edge, drift3d10d first
-  edge). p recovery unaffected — purely latency parameters. Onset
-  observations from Amplitude partially mitigate. Needs: stronger
-  onset constraint, reparameterisation, or joint onset-mu prior.
-  See journal 27-Mar-26.
-- **Phase 2 stabilisation** — convergence issues on some runs
-  (ess=7). Join-node CDF fix applied; remaining ESS/convergence
-  investigation needed. May be Dirichlet drift parameterisation or
-  Phase 1 latency pass-through.
-- **BE stats engine prior discrepancy** — three-way discrepancy
-  between FE stats pass, BE stats engine, and topology
-  `derive_latency_prior` on latency priors. Only topology's crude
-  moment-match gives convergence. See `19-be-stats-engine-bugs.md`.
+*Model quality — NEXT PRIORITIES*:
+- **Path dispersion estimation broken** — cohort Williams gives
+  kappa=459 (stdev ≈ 2%) when edge Williams gives 14 (stdev ≈ 10%).
+  Path should be ≥ edge. Root cause: small cohort denominators
+  (median n=19) inflate Binomial sampling variance, leaving near-zero
+  between-cohort variance. The `max(mcmc, williams)` kappa rule
+  (inference.py:424) was not requested — revert to side-by-side.
+  See doc 25, journal 29-Mar-26.
+- **Path latency posteriors too tight** — cohort onset=16.5±0.2
+  (±1.2%), sigma=2.87±0.047 (±1.6%). Should be ≥ RSS of edge
+  uncertainties. Same root cause: small-denominator cohort
+  trajectories over-constrain path parameters. See journal 29-Mar-26.
+- **Onset-mu correlation** — corr ≈ -0.99 on short-latency first
+  edges. 2/10 synth failures, requires warm-start for prod
+  del-to-reg. Structural identifiability issue in shifted-lognormal
+  parameterisation. Needs: reparameterisation (t50?), stronger onset
+  prior, or onset marginalisation. See journal 27-Mar-26.
+
+*Other open*:
+- **Ad hoc hyperparameters** — kappa priors, fallback ESS, Gamma
+  spread. Need principled derivation.
+- **Hash mismatch (FE vs harness)** — `compute_snapshot_subjects.mjs`
+  sets context def hashes to `{}` while FE populates them. Produces
+  same results in practice but architecturally wrong.
+- **BE stats engine prior discrepancy** — three-way discrepancy.
+  See `19-be-stats-engine-bugs.md`.
 
 *Not yet built*:
 - **Topology signatures** (doc 10) — current code computes a single
@@ -105,13 +115,18 @@ is genuine data sparsity (trajectory coverage) not model bias.
   not blocking.
 
 **Next priorities**:
-1. Commit and stabilise all current code changes (likelihood rewrite,
-   doc 25 fixes, join-node CDF fix)
-2. Phase 2 stabilisation — ESS/convergence investigation
-3. Topology signatures (doc 10) — proper implementation
-4. Phase C (context slices) — prerequisites done
-5. Nightly scheduling — prerequisite: production confidence +
-   topo sigs
+1. **Fix path dispersion estimation** — the surprise gauge and
+   confidence bands for cohort (path) slices are meaningless until
+   path kappa is correct. Investigate: mature-only Williams,
+   analytic derivation from edge kappa, or hierarchical cohort model.
+2. **Fix onset-mu correlation** — reparameterise or add stronger
+   onset constraints. Blocks 2/10 synth graphs and first-run
+   convergence on prod.
+3. Commit and stabilise all current code changes.
+4. Topology signatures (doc 10) — proper implementation.
+5. Phase C (context slices) — prerequisites done.
+6. Nightly scheduling — prerequisite: production confidence +
+   topo sigs.
 
 ---
 
