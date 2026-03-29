@@ -29,18 +29,21 @@ is genuine data sparsity (trajectory coverage) not model bias.
 - Posterior upsert on subsequent runs — Bayes results do not update
   the graph properly on re-runs. Likely a webhook commit or FE pull
   upsert issue. Blocks warm-start and nightly scheduling.
+- **Posterior slice projection is not query-driven** — the cascade
+  hardcodes `slices['window()']` and `slices['cohort()']` when
+  projecting `posterior.slices` onto graph edges. Contexted slices
+  are ignored; window/cohort selection isn't driven by the query DSL.
+  Root cause of the two bugs below. Fix: shared `resolvePosteriorSlice()`
+  helper in cascade + analysis graph composition. See doc 25.
 - Surprise gauge uses wrong slice — compares analytic rate against
   Phase 1 window posterior regardless of what's being displayed.
-  Should use cohort posterior when showing cohort maturity.
+  Also ignores quality gate on reference entry (`gate_passed` not
+  checked). Subsumes into doc 25 §3.1–3.2.
 - **Cohort maturity curve uses window p, not cohort p** — the BE
   analysis handler reads `p.forecast.mean` (always window/promoted)
-  for the model CDF curve. For cohort queries it should use the
-  cohort posterior p. The `model_vars[bayesian].probability.mean`
-  is also always window alpha/beta. Neither source carries cohort p.
-  Needs: (a) model_vars to carry cohort probability separately, or
-  (b) the analysis handler to read `posterior.path_alpha/path_beta`
-  directly for cohort queries. Tracked as wiring defect, independent
-  of the Phase 2 p_cohort drift issue below.
+  for the model CDF curve. Once the cascade projects the right slice
+  (doc 25 §2), the BE reads `p.posterior.alpha/(alpha+beta)` instead.
+  Subsumes into doc 25 §3.3.
 - **Phase 2 p_cohort drift** — TWO root causes found and fixed:
   (a) Branch group Dirichlet gave p too much freedom (kappa=50 ≈
   ±7% SD). Fixed: replaced with drift+simplex (tau=0.1, ±2.5%).
@@ -92,9 +95,13 @@ is genuine data sparsity (trajectory coverage) not model bias.
 2. Fix posterior upsert on subsequent runs
 3. Topology signatures (doc 10) — proper implementation
 4. Phase 2 (cohort pass) stabilisation — convergence issues
-5. Phase C (context slices) — prerequisite: doc 21 done ✓
-6. Mixture latency models for bimodal edges (doc 23 §12)
-7. Nightly scheduling — prerequisite: production confidence +
+5. Posterior slice resolution (doc 25) — query-driven cascade
+   projection + analysis type fixes. Prerequisite for correct
+   cohort/context model consumption. Unblocks Phase C consumption.
+6. Phase C (context slices) — prerequisite: doc 21 done ✓, doc 25
+   provides the consumption pathway
+7. Mixture latency models for bimodal edges (doc 23 §12)
+8. Nightly scheduling — prerequisite: production confidence +
    topo sigs + upsert fix
 
 ---
@@ -130,6 +137,7 @@ is genuine data sparsity (trajectory coverage) not model bias.
 | **Join-node convergence** | `bayes-join-node-convergence-briefing.md` | Join-node latency model geometry. Resolved by mixture CDF (journal 23-Mar-26). |
 | **Statistical domain summary** | `statistical-domain-summary.md` | Reference: statistical foundations and domain concepts. |
 | **Sampling performance** | `22-sampling-performance.md` | MCMC performance bottleneck analysis: compilation time, GPU vs CPU research, optimisation paths (compilation fix, dev-mode draws, more chains, NumPyro vectorised, faster cloud CPUs). Experiment protocol. |
+| **Posterior slice resolution** | `25-posterior-slice-resolution-and-analysis-type-review.md` | Query-driven posterior slice projection in cascade + analysis graph composition. Systematic review of all analysis types for correct promoted scalars, window/cohort/context sensitivity, and chart visualisation. |
 
 **Context**: `../codebase/APP_ARCHITECTURE.md` (app architecture),
 `../project-db/` (snapshot DB)

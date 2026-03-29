@@ -48,6 +48,7 @@ interface SurpriseVariable {
   reason?: string;
   evidence_n?: number;
   evidence_k?: number;
+  evidence_retrieved_at?: string;
   observed_days?: number;
   expected_days?: number;
 }
@@ -119,8 +120,8 @@ function buildGaugeDial(
     ? `${((variable as any).combined_sd != null ? (variable as any).combined_sd * 100 : variable.posterior_sd * 100).toFixed(2)}%`
     : ((variable as any).combined_sd ?? variable.posterior_sd).toFixed(4);
 
-  // Evidence line: "Evidence (347/472): 73.5%"  — value bold, label normal
-  // Expected line: "Expected (91% complete): 84.4% ± 5.63%"
+  // Evidence line: "Evidence (9/156): 5.8%"  — value bold, label normal
+  // Expected line: "Expected (23% complete): 6.4% ± 4.30%"
   const nkSuffix = variable.name === 'p' && variable.evidence_k != null && variable.evidence_n != null
     ? ` (${variable.evidence_k}/${variable.evidence_n})`
     : '';
@@ -128,6 +129,12 @@ function buildGaugeDial(
     ? ` (${Math.round((variable as any).completeness * 100)}% complete)`
     : '';
   const detailLabel = `{lbl|Evidence${nkSuffix}:} {val|${fmtObs}}\n{lbl|Expected${completenessNote}:} {val|${fmtExp}} {lbl|\u00b1 ${fmtSd}}`;
+
+  // Gauge title: "Conversion rate\n@ 10-Mar-26" (data date as smaller subtitle)
+  const retrievedAtStr = variable.evidence_retrieved_at;
+  const gaugeTitle = retrievedAtStr
+    ? `${variable.label}\n{sub|@ ${retrievedAtStr}}`
+    : variable.label;
 
   // ── Responsive percentage-based layout ──
   //
@@ -207,10 +214,13 @@ function buildGaugeDial(
       offsetCenter: [0, '-20%'],
       fontSize: 11,
       color: c.text,
+      rich: {
+        sub: { fontSize: 9, color: c.text === '#e0e0e0' ? '#9ca3af' : '#6b7280' },
+      },
     },
     data: [{
       value: needleSigma,
-      name: variable.label,
+      name: gaugeTitle,
     }],
   };
 
@@ -219,9 +229,10 @@ function buildGaugeDial(
       ...echartsTooltipStyle(),
       formatter: () => {
         const pctLabel = `${(variable.quantile * 100).toFixed(1)}th percentile`;
-        return `<strong>${variable.label}</strong><br/>` +
+        const dateLine = retrievedAtStr ? `<br/><span style="color:#9ca3af">Data as-at ${retrievedAtStr}</span>` : '';
+        return `<strong>${variable.label}</strong>${dateLine}<br/>` +
           `Observed: ${fmtObs}<br/>` +
-          `Model: ${fmtExp} ± ${fmtSd}<br/>` +
+          `Model: ${fmtExp} ± ${fmtSd}${completenessNote ? ` ${completenessNote}` : ''}<br/>` +
           `Position: ${pctLabel} (${variable.sigma > 0 ? '+' : ''}${variable.sigma.toFixed(2)}σ)<br/>` +
           `Verdict: ${variable.zone}`;
       },

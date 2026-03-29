@@ -698,6 +698,7 @@ DEFAULT_SIM_CONFIG = {
     "kappa_sim_default": 50.0,     # moderate overdispersion (Beta-Binomial)
     "failure_rate": 0.05,          # 5% of fetch nights fail
     "drift_sigma": 0.0,           # random-walk drift disabled by default
+    "drift_rate": 0.0,            # deterministic linear drift (logit/day), e.g. -0.01 = p decreases
     "seed": 42,
     "growth_rate_mom": 0.0,       # monthly growth rate (0.05 = 5% MoM exponential)
     "snapshot_start_offset": 0,   # 0 = full coverage; >0 = snapshot DB rows only for last N days
@@ -742,6 +743,7 @@ def simulate_graph(
     mean_daily_traffic = sim_config["mean_daily_traffic"]
     kappa_default = sim_config["kappa_sim_default"]
     drift_sigma = sim_config["drift_sigma"]
+    drift_rate = sim_config.get("drift_rate", 0.0)
     failure_rate = sim_config["failure_rate"]
     seed = sim_config["seed"]
     base_date_str = sim_config.get("base_date", "2025-11-01")
@@ -799,13 +801,23 @@ def simulate_graph(
         for sib_id in bg.sibling_edge_ids:
             edge_to_bg[sib_id] = bg.group_id
 
-    # --- Random-walk drift (logit scale, per-edge) ---
-    # drift_path[edge_id] = array of total_sim_days logit offsets
+    # --- Drift (logit scale, per-edge) ---
+    # drift_path[edge_id] = array of total_sim_days logit offsets.
+    # Two modes (composable):
+    #   drift_rate: deterministic linear drift (logit/day)
+    #   drift_sigma: random-walk drift (logit SD/day)
     drift_paths: dict[str, np.ndarray] = {}
-    if drift_sigma > 0:
+    if drift_sigma > 0 or drift_rate != 0:
         for edge_id in edge_params:
-            increments = rng.normal(0.0, drift_sigma, size=total_sim_days)
-            drift_paths[edge_id] = np.cumsum(increments)
+            # Linear component: drift_rate × day_index
+            linear = drift_rate * np.arange(total_sim_days, dtype=np.float64)
+            # Stochastic component: cumulative random walk
+            if drift_sigma > 0:
+                increments = rng.normal(0.0, drift_sigma, size=total_sim_days)
+                stochastic = np.cumsum(increments)
+            else:
+                stochastic = np.zeros(total_sim_days)
+            drift_paths[edge_id] = linear + stochastic
     else:
         zero_path = np.zeros(total_sim_days)
         for edge_id in edge_params:
@@ -1092,6 +1104,7 @@ def simulate_graph(
         "kappa_default": kappa_default,
         "failure_rate": failure_rate,
         "drift_sigma": drift_sigma,
+        "drift_rate": drift_rate,
         "total_rows": total_rows,
         "base_date": base_date_str,
         "edge_daily": edge_daily,
@@ -2324,6 +2337,8 @@ Examples:
                         help="Fetch failure rate 0-1 (default: 0.05)")
     parser.add_argument("--drift", type=float, default=None,
                         help="Drift sigma for random-walk on p (default: 0 = off)")
+    parser.add_argument("--drift-rate", type=float, default=None,
+                        help="Deterministic linear drift on logit(p) per day (e.g. -0.01)")
     parser.add_argument("--growth", type=float, default=None,
                         help="MoM growth rate (0.05 = 5%% MoM exponential, default: 0 = flat)")
     parser.add_argument("--dry-run", action="store_true",
@@ -2433,6 +2448,7 @@ Examples:
         "kappa_sim_default": args.kappa,
         "failure_rate": args.failure_rate,
         "drift_sigma": args.drift,
+        "drift_rate": args.drift_rate,
         "growth_rate_mom": args.growth,
     }
     sim_config = _get_sim_config(truth, cli_overrides)

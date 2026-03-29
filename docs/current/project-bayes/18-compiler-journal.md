@@ -99,15 +99,30 @@ residuals. Independent of the model — measures actual between-
 cohort variation for honest alpha/beta in the cohort posterior.
 Already implemented in inference.py.
 
-### Implementation sequence
+### Implementation and results
 
-1. First: implement and test Phase 2 with σ²_drift = 0 (all edges
-   frozen at full Phase 1 precision). This is the baseline — no
-   drift, just posterior-as-prior. Confirm p recovery is correct
-   on synth drift graphs.
-2. Then: add σ²_drift estimation from Phase 1 data. Confirm that
-   synth graphs with drift_sigma > 0 in truth recover correctly.
-3. Then: validate on production.
+**Step 1** (drift=0 baseline): confirmed. p_cohort ≈ 0.50 on both
+synth drift graphs (truth=0.50). Full regression: 6/10 pass, 4
+pre-existing onset misses. Zero new regressions. Production:
+registered-to-success p_cohort = 0.802 (was 0.950 with old
+approach).
+
+**Step 2** (drift estimation + ESS decay):
+- F²-weighted lag-variance estimator: no thresholds, naturally
+  downweights immature trajectories. Correctly returns σ²_drift=0
+  for synth with no drift.
+- ESS decay: scale = 1/(1 + elapsed × σ²_drift / V₁). Elapsed =
+  upstream path latency (a→x), excluding this edge. First edges
+  always get elapsed=0 → no decay.
+- Deterministic drift test (drift_rate=-0.01/day on logit):
+  Phase 2 p_cohort moves in the correct direction for the second
+  edge (elapsed≈11d). Phase 1=0.352, Phase 2=0.338, expected
+  shifted truth=0.302. Direction correct; magnitude partial (prior
+  still pulls). Consistent with calibrated ESS decay.
+- synth_gen extended with `--drift-rate` for deterministic linear
+  drift testing (alongside existing `--drift` for random walk).
+- Full regression with drift changes: same 6/10 pass, 4 onset
+  misses. No regressions.
 
 ---
 

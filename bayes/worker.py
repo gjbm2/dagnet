@@ -664,6 +664,68 @@ def _fit_graph_compiler(payload: dict, report_progress=None) -> dict:
                         parts.append(f"onset={frozen_edge['onset']:.2f}±{frozen_edge['onset_sd']:.2f}")
                     _log(log, f"  phase1_posterior {edge_id[:8]}…: {', '.join(parts)}")
 
+            # Estimate per-edge drift rate from Phase 1 daily rates.
+            # Uses lag-variance method: σ²_drift = max(0, (Var(Δ⁷) - Var(Δ¹))/6).
+            # See doc 24 §4.
+            from compiler.completeness import shifted_lognormal_cdf as _slc
+            for edge_id, frozen_edge in phase2_frozen.items():
+                ev = evidence.edges.get(edge_id)
+                et = topology.edges.get(edge_id)
+                if ev is None or et is None or not ev.cohort_obs:
+                    continue
+
+                # Collect per-anchor-day maturity-adjusted implied p.
+                # Use window trajectories (each from a different anchor day).
+                onset = frozen_edge.get("onset", 0.0)
+                mu = frozen_edge.get("mu", 0.0)
+                sigma = frozen_edge.get("sigma", 0.01)
+                daily_p = {}  # anchor_day → (implied_p, F_weight)
+                for c_obs in ev.cohort_obs:
+                    for traj in c_obs.trajectories:
+                        if traj.obs_type != "window":
+                            continue
+                        if len(traj.retrieval_ages) < 2 or traj.n <= 0:
+                            continue
+                        y_final = traj.cumulative_y[-1] if traj.cumulative_y else 0
+                        age_final = traj.retrieval_ages[-1]
+                        f_age = max(_slc(age_final, onset, mu, sigma), 0.01)
+                        p_imp = y_final / (traj.n * f_age)
+                        p_imp = min(max(p_imp, 0.001), 0.999)
+                        day_key = traj.date if hasattr(traj, 'date') and traj.date else str(id(traj))
+                        daily_p[day_key] = (p_imp, f_age)
+
+                # Sort by date and compute F²-weighted lag-variance.
+                # Weight by min(F_t, F_{t+k})² to downweight differences
+                # involving immature trajectories where the maturity
+                # adjustment amplifies noise. No threshold needed.
+                # See doc 24 §4.
+                sorted_days = sorted(daily_p.keys())
+                p_series = _np.array([daily_p[d][0] for d in sorted_days])
+                f_series = _np.array([daily_p[d][1] for d in sorted_days])
+
+                if len(p_series) >= 25:
+                    # Lag-1: weighted by min(F_t, F_{t+1})²
+                    diff1 = p_series[1:] - p_series[:-1]
+                    w1 = _np.minimum(f_series[1:], f_series[:-1]) ** 2
+                    var1 = float(_np.average(diff1 ** 2, weights=w1))
+
+                    # Lag-7: weighted by min(F_t, F_{t+7})²
+                    diff7 = p_series[7:] - p_series[:-7]
+                    w7 = _np.minimum(f_series[7:], f_series[:-7]) ** 2
+                    var7 = float(_np.average(diff7 ** 2, weights=w7))
+
+                    drift_sigma2 = max(0.0, (var7 - var1) / 6.0)
+
+                    frozen_edge["drift_sigma2"] = drift_sigma2
+                    _log(log, f"  drift {edge_id[:8]}…: σ²_drift={drift_sigma2:.8f} "
+                              f"(wvar1={var1:.6f}, wvar7={var7:.6f}, "
+                              f"n_days={len(p_series)}, "
+                              f"F_range=[{f_series.min():.2f}, {f_series.max():.2f}])")
+                else:
+                    frozen_edge["drift_sigma2"] = 0.0
+                    _log(log, f"  drift {edge_id[:8]}…: insufficient data "
+                              f"({len(p_series)} days < 25) → σ²_drift=0")
+
             # Build Phase 2 model
             model2, metadata2 = build_model(
                 topology, evidence, features=features,

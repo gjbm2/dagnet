@@ -12,6 +12,7 @@ import { parseDSL } from '../lib/queryDSL';
 import { computeQualityTier, qualityTierLabel } from '../utils/bayesQualityTier';
 import { formatRelativeTime, getFreshnessLevel } from '../utils/freshnessDisplay';
 import { resolveActiveModelVars, effectivePreference } from './modelVarsResolution';
+import { logNormalCDF, toModelSpaceAgeDays } from './lagDistributionUtils';
 
 // Analysis types that support local FE compute
 const LOCAL_COMPUTE_TYPES = new Set(['node_info', 'edge_info', 'surprise_gauge']);
@@ -738,6 +739,91 @@ function fmtDate(d: string | Date): string {
 
 // ── Surprise Gauge ─────────────────────────────────────────────────────
 
+/**
+ * Recompute completeness at min(asat, retrieved_at) so the gauge comparison
+ * matches when the evidence was actually captured, not "now".
+ *
+ * The topo-pass stores completeness computed with queryDate=now. When evidence
+ * is stale (retrieved_at < now), this overstates completeness relative to the
+ * k/n the user actually has. We recompute using the CDF params already on the
+ * latency object (mu, sigma, onset_delta_days) and the cohort scope dates.
+ *
+ * Falls back to the stored completeness when CDF params or retrieved_at are
+ * absent (backward compatibility with graphs that predate these fields).
+ */
+function _computeCompletenessAtRetrievedAt(
+  latencyObj: Record<string, any>,
+  evidenceObj: Record<string, any>,
+  retrievedAt: string | undefined,
+): number {
+  const storedCompleteness: number =
+    typeof latencyObj.completeness === 'number' && latencyObj.completeness > 0
+      ? latencyObj.completeness
+      : 1.0;
+
+  // Need CDF params + retrieved_at to recompute
+  const mu = latencyObj.mu;
+  const sigma = latencyObj.sigma;
+  const onset = latencyObj.onset_delta_days ?? 0;
+  if (typeof mu !== 'number' || typeof sigma !== 'number' || !retrievedAt) {
+    return storedCompleteness;
+  }
+
+  // Parse retrieved_at to a Date
+  const refDate = _parseLooseDate(retrievedAt);
+  if (!refDate) return storedCompleteness;
+
+  // Use evidence scope_from/scope_to (on p.evidence) as the cohort date range.
+  // Approximate via midpoint — the topo pass uses n-weighted average across
+  // individual cohort dates, but we don't have per-date data here.
+  const scopeFrom = evidenceObj?.scope_from;
+  const scopeTo = evidenceObj?.scope_to;
+
+  if (scopeFrom && scopeTo) {
+    const fromD = _parseLooseDate(scopeFrom);
+    const toD = _parseLooseDate(scopeTo);
+    if (fromD && toD) {
+      const midMs = (fromD.getTime() + toD.getTime()) / 2;
+      const midDate = new Date(midMs);
+      const ageDays = Math.max(0, (refDate.getTime() - midDate.getTime()) / 86400000);
+      const ageModel = toModelSpaceAgeDays(onset, ageDays);
+      const c = logNormalCDF(ageModel, mu, sigma);
+      if (Number.isFinite(c) && c > 0) return c;
+    }
+  }
+
+  // Fallback: stored completeness (computed at topo-pass time)
+  return storedCompleteness;
+}
+
+function _parseLooseDate(s: string): Date | null {
+  // Try UK format: d-MMM-yy or d-MMM-yyyy
+  const ukMatch = s.match(/^(\d{1,2})-(\w{3})-(\d{2,4})$/);
+  if (ukMatch) {
+    const months: Record<string, number> = {
+      Jan: 0, Feb: 1, Mar: 2, Apr: 3, May: 4, Jun: 5,
+      Jul: 6, Aug: 7, Sep: 8, Oct: 9, Nov: 10, Dec: 11,
+    };
+    const mon = months[ukMatch[2]];
+    if (mon !== undefined) {
+      let yr = parseInt(ukMatch[3], 10);
+      if (yr < 100) yr += 2000;
+      return new Date(yr, mon, parseInt(ukMatch[1], 10));
+    }
+  }
+  // Try ISO
+  const d = new Date(s);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+function _formatRetrievedAtForDisplay(retrievedAt: string | undefined): string | undefined {
+  if (!retrievedAt) return undefined;
+  const d = _parseLooseDate(retrievedAt);
+  if (!d) return undefined;
+  const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  return `${d.getDate()}-${months[d.getMonth()]}-${String(d.getFullYear()).slice(-2)}`;
+}
+
 /** Normal CDF approximation (Abramowitz & Stegun 26.2.17). */
 function normalCdf(z: number): number {
   if (!Number.isFinite(z)) return 0.5;
@@ -841,9 +927,16 @@ function buildSurpriseGaugeResult(graph: ConversionGraph, queryDsl: string): Ana
     || modelVars.find((mv: any) => mv?.source === 'analytic');
   const obsLat = obsEntry?.latency || p.latency || {};
 
-  // Completeness from the topo pass (n-weighted aggregate across cohort dates)
+  // Completeness: recompute at min(asat, retrieved_at) so that the gauge
+  // comparison matches the actual observation date, not "now".
+  // The topo-pass completeness (p.latency.completeness) uses queryDate=now,
+  // but evidence k/n is frozen at retrieved_at.
   const latencyObj = p.latency || {} as any;
-  const cW: number = typeof latencyObj.completeness === 'number' && latencyObj.completeness > 0 ? latencyObj.completeness : 1.0;
+  // Use p.data_source.retrieved_at (synced from param file values[latest].data_source),
+  // NOT p.evidence.retrieved_at which gets overwritten to new Date() by "Get from source".
+  const dataSource = (p as any).data_source || {};
+  const evidenceRetrievedAt: string | undefined = dataSource.retrieved_at || (evidence as any)?.retrieved_at;
+  const cW = _computeCompletenessAtRetrievedAt(latencyObj, evidence, evidenceRetrievedAt);
 
   // n_dates for mu/sigma sampling SE — derived from evidence scope dates on the edge
   let nDates = 1;
@@ -926,6 +1019,7 @@ function buildSurpriseGaugeResult(graph: ConversionGraph, queryDsl: string): Ana
       completeness: Math.round(cW * 1e4) / 1e4,
       evidence_n: evidenceN,
       evidence_k: evidenceK,
+      evidence_retrieved_at: _formatRetrievedAtForDisplay(evidenceRetrievedAt),
       zone: classifyZone(quantile),
       available: true,
     });

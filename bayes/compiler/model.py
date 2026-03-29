@@ -233,6 +233,31 @@ MU_PRIOR_SIGMA_FLOOR = 0.5
 FALLBACK_PRIOR_ESS = 20.0
 
 
+def _ess_decay_scale(
+    p_alpha: float, p_beta: float,
+    elapsed_days: float,
+    drift_sigma2: float,
+) -> float:
+    """Compute ESS decay scale for posterior-as-prior.
+
+    scale = 1 / (1 + elapsed × σ²_drift / V₁)
+
+    Where V₁ = p(1-p) / (α+β) is Phase 1 posterior variance.
+    Returns a scale factor in (0, 1] to multiply α and β by.
+    See doc 24 §3.1.
+    """
+    if drift_sigma2 <= 0 or elapsed_days <= 0:
+        return 1.0
+    ess = p_alpha + p_beta
+    if ess <= 0:
+        return 1.0
+    p_mean = p_alpha / ess
+    v_phase1 = p_mean * (1.0 - p_mean) / ess
+    if v_phase1 <= 0:
+        return 1.0
+    return 1.0 / (1.0 + elapsed_days * drift_sigma2 / v_phase1)
+
+
 def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
                 features: dict | None = None,
                 phase2_frozen: dict | None = None):
@@ -472,9 +497,28 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
                     p_alpha = frozen.get("p_alpha")
                     if p_alpha is not None:
                         p_beta = frozen.get("p_beta", 1.0)
+                        # ESS decay: scale α, β by elapsed time × drift rate
+                        et_sib = topology.edges.get(sib_id)
+                        # Elapsed time = median upstream path latency (a→x),
+                        # NOT including this edge's own latency.
+                        # For first edges: path has 1 edge → no upstream → elapsed=0.
+                        elapsed = 0.0
+                        if et_sib and len(et_sib.path_edge_ids) > 1:
+                            # Upstream edges exist. Use the edge's onset sum
+                            # + median of upstream latency as approximation.
+                            upstream_onset = 0.0
+                            for uid in et_sib.path_edge_ids[:-1]:
+                                ut = topology.edges.get(uid)
+                                if ut and ut.has_latency:
+                                    uf = phase2_frozen.get(uid, {})
+                                    upstream_onset += uf.get("onset", 0.0)
+                                    upstream_onset += np.exp(uf.get("mu", 0.0))
+                            elapsed = upstream_onset
+                        drift_s2 = frozen.get("drift_sigma2", 0.0)
+                        scale = _ess_decay_scale(p_alpha, p_beta, elapsed, drift_s2)
                         sibling_edges.append(sib_id)
-                        dir_alphas.append(p_alpha)
-                        dir_beta_sum = p_beta  # for single-sibling: dropout = β
+                        dir_alphas.append(max(p_alpha * scale, DIRICHLET_CONC_FLOOR))
+                        dir_beta_sum = max(p_beta * scale, DIRICHLET_CONC_FLOOR)
                     else:
                         # No Phase 1 posterior — use moderate prior
                         p_mean = frozen.get("p", 0.1)
@@ -865,13 +909,24 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
                         p_alpha = frozen.get("p_alpha")
                         p_beta = frozen.get("p_beta")
                         if p_alpha is not None and p_beta is not None:
-                            # Phase 1 posterior as prior. No ESS cap —
-                            # ESS decay (step 2) will scale these when
-                            # drift estimation is added. For now (drift=0),
-                            # full Phase 1 precision.
+                            # Phase 1 posterior as prior with ESS decay.
+                            # Scale = 1/(1 + elapsed × σ²_drift / V₁).
+                            # See doc 24 §3.1.
+                            # Elapsed = upstream path latency (a→x), not
+                            # including this edge. First edges: elapsed=0.
+                            elapsed = 0.0
+                            if len(et.path_edge_ids) > 1:
+                                for uid in et.path_edge_ids[:-1]:
+                                    ut = topology.edges.get(uid)
+                                    if ut and ut.has_latency:
+                                        uf = phase2_frozen.get(uid, {})
+                                        elapsed += uf.get("onset", 0.0)
+                                        elapsed += np.exp(uf.get("mu", 0.0))
+                            drift_s2 = frozen.get("drift_sigma2", 0.0)
+                            scale = _ess_decay_scale(p_alpha, p_beta, elapsed, drift_s2)
                             p = pm.Beta(f"p_cohort_{safe_id}",
-                                        alpha=max(p_alpha, DIRICHLET_CONC_FLOOR),
-                                        beta=max(p_beta, DIRICHLET_CONC_FLOOR))
+                                        alpha=max(p_alpha * scale, DIRICHLET_CONC_FLOOR),
+                                        beta=max(p_beta * scale, DIRICHLET_CONC_FLOOR))
                         else:
                             # No Phase 1 posterior — fallback to evidence prior
                             p_mean = frozen.get("p", ev.prob_prior.alpha / (ev.prob_prior.alpha + ev.prob_prior.beta))
@@ -1752,7 +1807,7 @@ def _emit_cohort_likelihoods(
 
                 # Conditional hazard: probability of converting in this
                 # interval, given you haven't converted yet.
-                q_j = pt.clip(delta_pcdf / surv_prev, P_CLIP_LO, P_CLIP_HI)
+                q_j = pt.clip(delta_pcdf / surv_prev, SURVIVAL_FLOOR, 1.0 - SURVIVAL_FLOOR)
 
                 # Binomial log-likelihood for each interval, weighted by
                 # recency, summed across all intervals and trajectories.
@@ -1824,7 +1879,7 @@ def _emit_cohort_likelihoods(
                 # Conditional hazard: probability of converting in this
                 # interval, given you haven't yet.
                 #   q_j = p × ΔF / (1 − p × F_{j−1})
-                q_j = pt.clip(p_per_interval * delta_F / surv_prev, P_CLIP_LO, P_CLIP_HI)
+                q_j = pt.clip(p_per_interval * delta_F / surv_prev, SURVIVAL_FLOOR, 1.0 - SURVIVAL_FLOOR)
 
                 # Binomial log-likelihood, weighted and summed.
                 logp = pt.sum(weights_np * (
@@ -1873,7 +1928,7 @@ def _emit_cohort_likelihoods(
             delta_F = pt.as_tensor_variable(np.maximum(cdf_curr_np - cdf_prev_np, CDF_INCREMENT_FLOOR))
             F_prev = pt.as_tensor_variable(cdf_prev_np)
             surv_prev = pt.maximum(1.0 - p_expr * F_prev, SURVIVAL_FLOOR)
-            q_j = pt.clip(p_expr * delta_F / surv_prev, P_CLIP_LO, P_CLIP_HI)
+            q_j = pt.clip(p_expr * delta_F / surv_prev, SURVIVAL_FLOOR, 1.0 - SURVIVAL_FLOOR)
 
             logp = pt.sum(weights_np * (
                 d_np * pt.log(q_j) + (n_at_risk_np - d_np) * pt.log(1.0 - q_j)

@@ -14,6 +14,7 @@ import {
   hasLocalCompute,
   mergeBackendAugmentation,
 } from '../localAnalysisComputeService';
+import { buildSurpriseGaugeEChartsOption } from '../analysisECharts/surpriseGaugeBuilder';
 import type { ConversionGraph } from '../../types';
 
 // Minimal graph fixture
@@ -458,5 +459,228 @@ describe('mergeBackendAugmentation does not destroy info shape', () => {
     // info types. The fix is upstream: don't call augmentation for info types at all.
     // This test documents the current (expected post-fix) behaviour where
     // mergeBackendAugmentation is NOT called for info types.
+  });
+});
+
+// ── Surprise gauge: completeness-at-retrieved_at ────────────────────────
+
+/**
+ * Build a graph fixture with a fully-specified edge suitable for surprise_gauge.
+ *
+ * The edge has:
+ *   - Bayesian posterior (alpha/beta) so the gauge can compute expected p
+ *   - Latency CDF params (mu, sigma, onset_delta_days) for completeness
+ *   - Evidence with k/n, scope dates, and optionally retrieved_at
+ *   - A stored completeness on p.latency (as the topo pass would produce)
+ */
+function makeSurpriseGraph(overrides?: {
+  data_source_retrieved_at?: string;
+  evidence_retrieved_at?: string;
+  stored_completeness?: number;
+  mu?: number;
+  sigma?: number;
+  onset_delta_days?: number;
+  scope_from?: string;
+  scope_to?: string;
+}): ConversionGraph {
+  const mu = overrides?.mu ?? 2.5;
+  const sigma = overrides?.sigma ?? 0.6;
+  const onset = overrides?.onset_delta_days ?? 2;
+  const storedC = overrides?.stored_completeness ?? 0.71;
+
+  return {
+    nodes: [
+      { id: 'A', uuid: 'uuid-a', label: 'Node A', type: 'normal' } as any,
+      { id: 'B', uuid: 'uuid-b', label: 'Node B', type: 'normal' } as any,
+    ],
+    edges: [{
+      id: 'A-to-B', uuid: 'uuid-e1', from: 'uuid-a', to: 'uuid-b',
+      p: {
+        mean: 0.08,
+        model_vars: [{
+          source: 'bayesian',
+          probability: { mean: 0.084, stdev: 0.02 },
+          latency: { mu, sigma, onset_delta_days: onset },
+        }],
+        posterior: { alpha: 4.2, beta: 45.8 },
+        evidence: {
+          n: 156, k: 9,
+          scope_from: overrides?.scope_from ?? '1-Mar-26',
+          scope_to: overrides?.scope_to ?? '20-Mar-26',
+          // evidence.retrieved_at may be overwritten to "now" by Get from source —
+          // the code should prefer p.data_source.retrieved_at over this.
+          ...(overrides?.evidence_retrieved_at !== undefined
+            ? { retrieved_at: overrides.evidence_retrieved_at }
+            : {}),
+        },
+        // p.data_source.retrieved_at comes from param file sync (actual fetch date)
+        ...(overrides?.data_source_retrieved_at !== undefined
+          ? { data_source: { retrieved_at: overrides.data_source_retrieved_at, type: 'amplitude' } }
+          : {}),
+        latency: {
+          completeness: storedC,
+          mu, sigma,
+          onset_delta_days: onset,
+          t95: 30,
+        },
+      },
+    } as any],
+    metadata: {} as any,
+  };
+}
+
+describe('surprise_gauge: completeness anchored to retrieved_at', () => {
+  it('should use completeness computed at data_source.retrieved_at, not the stored topo-pass value', () => {
+    // Setup: data actually fetched 20-Mar-26, scope midpoint ~ 10-Mar-26
+    // Stored completeness (computed by topo pass at ~29-Mar-26) = 0.71
+    // Completeness at retrieved_at should be ~0.24 (much lower)
+    // evidence.retrieved_at is set to today by "Get from source" — must be ignored
+    const graph = makeSurpriseGraph({
+      data_source_retrieved_at: '2026-03-20T12:00:00Z',
+      evidence_retrieved_at: '2026-03-29T12:00:00Z', // stale — overwritten by cache read
+      stored_completeness: 0.71,
+    });
+
+    const response = computeLocalResult(graph, 'surprise_gauge', 'from(A).to(B)');
+    expect(response.success).toBe(true);
+
+    const pVar = response.result!.variables.find((v: any) => v.name === 'p');
+    expect(pVar).toBeDefined();
+    expect(pVar.available).toBe(true);
+
+    // The completeness used should be recomputed at data_source.retrieved_at (~0.24),
+    // NOT the stored value (0.71) and NOT based on evidence.retrieved_at (today)
+    expect(pVar.completeness).toBeLessThan(0.5);
+    expect(pVar.completeness).toBeGreaterThan(0.1);
+
+    // The expected value (muP * completeness) should reflect the lower completeness
+    const muP = 4.2 / (4.2 + 45.8); // 0.084
+    expect(pVar.expected).toBeLessThan(muP * 0.5);
+    expect(pVar.expected).toBeGreaterThan(muP * 0.1);
+  });
+
+  it('should prefer data_source.retrieved_at over evidence.retrieved_at', () => {
+    // data_source.retrieved_at = 10 days ago (actual fetch)
+    // evidence.retrieved_at = today (overwritten by cache read)
+    // The gauge must use the data_source date
+    const graph = makeSurpriseGraph({
+      data_source_retrieved_at: '2026-03-20T12:00:00Z',
+      evidence_retrieved_at: '2026-03-29T12:00:00Z',
+      stored_completeness: 0.90,
+    });
+
+    const response = computeLocalResult(graph, 'surprise_gauge', 'from(A).to(B)');
+    const pVar = response.result!.variables.find((v: any) => v.name === 'p');
+
+    // Should show the actual fetch date (20-Mar), not the cache-read date (29-Mar)
+    expect(pVar.evidence_retrieved_at).toBe('20-Mar-26');
+  });
+
+  it('should fall back to stored completeness when no retrieved_at is available anywhere', () => {
+    // No data_source, no evidence.retrieved_at → use stored completeness
+    const graph = makeSurpriseGraph({
+      stored_completeness: 0.71,
+    });
+
+    const response = computeLocalResult(graph, 'surprise_gauge', 'from(A).to(B)');
+    const pVar = response.result!.variables.find((v: any) => v.name === 'p');
+    expect(pVar.completeness).toBeCloseTo(0.71, 2);
+  });
+
+  it('should fall back to evidence.retrieved_at when data_source is absent', () => {
+    // No data_source, but evidence.retrieved_at is set (pre-migration data)
+    const graph = makeSurpriseGraph({
+      evidence_retrieved_at: '2026-03-20T12:00:00Z',
+      stored_completeness: 0.71,
+    });
+
+    const response = computeLocalResult(graph, 'surprise_gauge', 'from(A).to(B)');
+    const pVar = response.result!.variables.find((v: any) => v.name === 'p');
+
+    // Should recompute at evidence.retrieved_at since data_source is absent
+    expect(pVar.completeness).toBeLessThan(0.5);
+    expect(pVar.evidence_retrieved_at).toBe('20-Mar-26');
+  });
+
+  it('should fall back to stored completeness when latency CDF params are absent', () => {
+    // retrieved_at is present but no mu/sigma → can't recompute, use stored
+    const graph = makeSurpriseGraph({
+      data_source_retrieved_at: '2026-03-20T12:00:00Z',
+      stored_completeness: 0.85,
+    });
+    // Remove CDF params from latency
+    (graph.edges[0].p as any).latency.mu = undefined;
+    (graph.edges[0].p as any).latency.sigma = undefined;
+
+    const response = computeLocalResult(graph, 'surprise_gauge', 'from(A).to(B)');
+    const pVar = response.result!.variables.find((v: any) => v.name === 'p');
+    expect(pVar.completeness).toBeCloseTo(0.85, 2);
+  });
+
+  it('should surface evidence_retrieved_at as a UK-formatted date from data_source', () => {
+    const graph = makeSurpriseGraph({
+      data_source_retrieved_at: '2026-03-20T12:00:00Z',
+    });
+
+    const response = computeLocalResult(graph, 'surprise_gauge', 'from(A).to(B)');
+    const pVar = response.result!.variables.find((v: any) => v.name === 'p');
+
+    expect(pVar.evidence_retrieved_at).toBe('20-Mar-26');
+  });
+
+  it('should leave evidence_retrieved_at undefined when no retrieved_at is available', () => {
+    const graph = makeSurpriseGraph({});
+
+    const response = computeLocalResult(graph, 'surprise_gauge', 'from(A).to(B)');
+    const pVar = response.result!.variables.find((v: any) => v.name === 'p');
+
+    expect(pVar.evidence_retrieved_at).toBeUndefined();
+  });
+});
+
+describe('surprise_gauge ECharts: @ date subtitle', () => {
+  it('should include @ date in gauge title when evidence_retrieved_at is present', () => {
+    const result = {
+      analysis_type: 'surprise_gauge',
+      variables: [{
+        name: 'p', label: 'Conversion rate',
+        quantile: 0.15, sigma: -1.04,
+        observed: 0.058, expected: 0.064,
+        posterior_sd: 0.02, combined_sd: 0.043,
+        completeness: 0.23,
+        evidence_n: 156, evidence_k: 9,
+        evidence_retrieved_at: '10-Mar-26',
+        zone: 'expected', available: true,
+      }],
+    };
+
+    const option = buildSurpriseGaugeEChartsOption(result, { surprise_var: 'p' });
+    expect(option).toBeDefined();
+
+    // The gauge series data[0].name should contain the @ date subtitle
+    const series = option.series[0];
+    expect(series.data[0].name).toContain('Conversion rate');
+    expect(series.data[0].name).toContain('{sub|@ 10-Mar-26}');
+  });
+
+  it('should show plain label without @ when evidence_retrieved_at is absent', () => {
+    const result = {
+      analysis_type: 'surprise_gauge',
+      variables: [{
+        name: 'p', label: 'Conversion rate',
+        quantile: 0.5, sigma: 0,
+        observed: 0.08, expected: 0.08,
+        posterior_sd: 0.02, combined_sd: 0.02,
+        completeness: 0.95,
+        evidence_n: 200, evidence_k: 16,
+        zone: 'expected', available: true,
+      }],
+    };
+
+    const option = buildSurpriseGaugeEChartsOption(result, { surprise_var: 'p' });
+    const series = option.series[0];
+
+    expect(series.data[0].name).toBe('Conversion rate');
+    expect(series.data[0].name).not.toContain('{sub|');
   });
 });
