@@ -41,20 +41,40 @@ is genuine data sparsity (trajectory coverage) not model bias.
   (b) the analysis handler to read `posterior.path_alpha/path_beta`
   directly for cohort queries. Tracked as wiring defect, independent
   of the Phase 2 p_cohort drift issue below.
-- **Phase 2 p_cohort drift to degenerate mode** — on production
-  graph, registered-to-success Phase 2 p_cohort drifts from frozen
-  0.77 to 0.95. Compensated by degenerate cohort latency (onset=20d,
-  mu=-1.6, sigma=4.9). Root cause: tau_drift = path_sigma_ax = 0.37,
-  allowing logit(p) to shift by ±1.5 (1σ). Combined with p-latency
-  tradeoff, the model finds a degenerate high-p mode. Flows into
-  path_alpha/path_beta → surprise gauge shows wrong baseline.
-  Needs: tighter drift constraint or latency regularisation in
-  Phase 2. See journal 27-Mar-26.
-- ~~Unrealistically tight posteriors~~ — FIXED (27-Mar-26).
-  Hierarchical Beta on p (Phase 1 kappa_p + Phase 2 kappa_cohort)
-  with non-centred logit-normal parameterisation. All four quadrants
-  of window/cohort × latency/no-latency now have honest between-
-  cohort uncertainty. See journal 27-Mar-26.
+- **Phase 2 p_cohort drift** — TWO root causes found and fixed:
+  (a) Branch group Dirichlet gave p too much freedom (kappa=50 ≈
+  ±7% SD). Fixed: replaced with drift+simplex (tau=0.1, ±2.5%).
+  (b) Free cohort_latency_vars enabled p-CDF ridge (cure model
+  identifiability). Fixed: frozen FW-composed path CDF for
+  single-edge paths. See journal 28-Mar-26.
+- **Cohort between-cohort uncertainty** — Phase 2 per-cohort random
+  effects (Option A) failed: the z_i hierarchy creates a spurious
+  mode that traps the sampler (p_cohort inflates to 0.835 on synth
+  with truth=0.5). Reverted. Replaced with empirical variance
+  approach: Williams (1982) moment estimator on maturity-adjusted
+  per-cohort residuals. Post-processing only, no model changes.
+  Implementation in progress. See journal 28-Mar-26.
+- ~~Unrealistically tight posteriors~~ — Phase 1 FIXED (27-Mar-26)
+  via hierarchical Beta on p (kappa_p). Phase 2 cohort posteriors
+  will use empirical kappa from Williams method (in progress).
+
+**Open model issues**:
+- **Ad hoc hyperparameters** — several model priors are arbitrary,
+  not derived from data: kappa_p Gamma(3, 0.05), edge_kappa
+  Gamma(3, 0.1), fallback ESS=20 for missing Phase 1 posteriors,
+  Gamma spread parameters. These affect posterior width and
+  overdispersion estimates. Need: principled derivation from
+  empirical data (e.g. kappa_p prior from pre-MCMC scatter in
+  daily rates) or uninformative defaults where data is absent.
+- **Onset-mu correlation** — corr(onset, mu) ≈ -0.95 to -0.99 on
+  short-onset edges (onset ≤ 1d). Causes onset to inflate and mu to
+  compensate. Affects 4-5 of 10 synth graphs (diamond, lattice,
+  skip, simple-abc first edge, drift3d10d first edge). p recovery
+  is unaffected — this is purely a latency parameter issue. The
+  onset observations from Amplitude partially mitigate but don't
+  eliminate on short-onset edges. Needs: either stronger onset
+  constraint, reparameterisation to break the correlation, or
+  joint onset-mu prior. See journal 27-Mar-26.
 
 **Open design gaps**:
 - Topology signatures / hashes (doc 10) — not properly implemented.

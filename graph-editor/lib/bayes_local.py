@@ -58,15 +58,17 @@ def _run_fit_graph(job_id: str, payload: dict) -> None:
         result = fit_graph(payload, report_progress=progress_fn)
 
         with _lock:
-            _jobs[job_id]['status'] = 'complete'
-            _jobs[job_id]['result'] = result
+            if job_id in _jobs:
+                _jobs[job_id]['status'] = 'complete'
+                _jobs[job_id]['result'] = result
 
     except Exception as e:
         import traceback
         traceback.print_exc()
         with _lock:
-            _jobs[job_id]['status'] = 'failed'
-            _jobs[job_id]['error'] = str(e)
+            if job_id in _jobs:
+                _jobs[job_id]['status'] = 'failed'
+                _jobs[job_id]['error'] = str(e)
     finally:
         # Clean up progress entry
         _progress.pop(job_id, None)

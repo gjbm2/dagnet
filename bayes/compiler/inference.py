@@ -127,6 +127,109 @@ def run_inference(
     return trace, quality
 
 
+def _estimate_cohort_kappa(
+    ev,
+    et,
+    topology,
+    p_cohort_mean: float,
+    diagnostics: list[str],
+) -> float | None:
+    """Estimate between-cohort dispersion from trajectory residuals.
+
+    Williams (1982) / Crowder (1978) moment estimator. For each cohort
+    trajectory, computes the maturity-adjusted implied p, then estimates
+    kappa from the empirical variance minus the expected Binomial
+    sampling variance.
+
+    Returns kappa (Beta concentration) or None if insufficient data.
+    """
+    from .completeness import shifted_lognormal_cdf
+
+    if not ev.cohort_obs:
+        return None
+
+    # Resolve the CDF parameters for this edge's path.
+    # Use frozen Phase 1 latency (edge-level or path-level).
+    onset = 0.0
+    mu = 0.0
+    sigma = 0.01
+    if et.has_latency:
+        # Path latency if available, else edge latency
+        if hasattr(et, 'path_latency') and et.path_latency:
+            onset = et.path_latency.path_delta
+            mu = et.path_latency.path_mu
+            sigma = et.path_latency.path_sigma
+        elif ev.latency_prior:
+            onset = ev.latency_prior.onset_delta_days or 0.0
+            mu = ev.latency_prior.mu
+            sigma = ev.latency_prior.sigma
+
+    # Collect per-cohort implied p from cohort trajectories.
+    p_implied = []
+    n_values = []
+    f_values = []
+    for c_obs in ev.cohort_obs:
+        for traj in c_obs.trajectories:
+            if traj.obs_type != "cohort":
+                continue
+            if len(traj.retrieval_ages) < 2 or traj.n <= 0:
+                continue
+            cx = getattr(traj, 'cumulative_x', None)
+            if not cx or len(cx) == 0 or cx[-1] <= 0:
+                continue
+            # Maturity-adjusted implied p for this cohort
+            x_final = cx[-1]
+            y_final = traj.cumulative_y[-1] if traj.cumulative_y else 0
+            age_final = traj.retrieval_ages[-1]
+            f_age = shifted_lognormal_cdf(age_final, onset, mu, sigma)
+            f_age = max(f_age, 0.01)  # avoid division by zero
+            p_imp = y_final / (x_final * f_age)
+            p_imp = min(max(p_imp, 0.001), 0.999)  # clamp
+            p_implied.append(p_imp)
+            n_values.append(x_final)
+            f_values.append(f_age)
+
+    if len(p_implied) < 5:
+        return None
+
+    import numpy as _np
+    p_arr = _np.array(p_implied)
+    n_arr = _np.array(n_values, dtype=_np.float64)
+    f_arr = _np.array(f_values)
+
+    p_bar = float(_np.mean(p_arr))
+    observed_var = float(_np.var(p_arr, ddof=1))
+
+    # Expected Binomial sampling variance (Williams 1982):
+    # Each p_implied_i = y_i / (x_i × F_i) has sampling variance
+    # ≈ p(1-p) / (n_i × F_i) from the Binomial.
+    binomial_var = float(_np.mean(
+        p_bar * (1.0 - p_bar) / (n_arr * f_arr)
+    ))
+
+    between_cohort_var = max(observed_var - binomial_var, 0.0)
+    if between_cohort_var < 1e-10:
+        # No detectable between-cohort variation — very high kappa.
+        # Return a large kappa (effectively Binomial, no overdispersion).
+        diagnostics.append(
+            f"  empirical_kappa {ev.edge_id[:8]}…: no detectable "
+            f"between-cohort variation (obs_var={observed_var:.6f}, "
+            f"binom_var={binomial_var:.6f}, n_cohorts={len(p_arr)})"
+        )
+        return 500.0
+
+    kappa = p_bar * (1.0 - p_bar) / between_cohort_var - 1.0
+    kappa = max(kappa, 1.0)  # floor at 1
+
+    diagnostics.append(
+        f"  empirical_kappa {ev.edge_id[:8]}…: kappa={kappa:.1f} "
+        f"(p_bar={p_bar:.4f}, obs_var={observed_var:.6f}, "
+        f"binom_var={binomial_var:.6f}, bc_var={between_cohort_var:.6f}, "
+        f"n_cohorts={len(p_arr)})"
+    )
+    return kappa
+
+
 def summarise_posteriors(
     trace,
     topology: TopologyAnalysis,
@@ -289,13 +392,10 @@ def summarise_posteriors(
                 hdi_vals = az.hdi(p_samples, hdi_prob=HDI_PROB)
                 return ab[0], ab[1], float(hdi_vals[0]), float(hdi_vals[1])
 
-        # Resolve kappa_p samples — from this trace (Phase 1) or from
-        # phase1_kappa (passed through for Phase 2 Option C).
+        # Resolve kappa_p samples for window predictive (Phase 1 only).
         kp_samples = None
         if has_kappa_p:
             kp_samples = trace.posterior[kappa_p_name].values.flatten()
-        elif phase1_kappa and safe_eid in phase1_kappa:
-            kp_samples = phase1_kappa[safe_eid]
 
         # For window: prefer p_window_recent (drift-adjusted) if available,
         # then p_window, then p (Phase 1: single p, no hierarchy).
@@ -311,11 +411,21 @@ def summarise_posteriors(
 
         if p_cohort_name in trace.posterior:
             c_samples = trace.posterior[p_cohort_name].values.flatten()
-            # Option C: use Phase 1's kappa_p for cohort predictive.
-            # kp_samples comes from Phase 1 trace (via phase1_kappa dict).
-            # See journal 28-Mar-26.
-            cohort_alpha_val, cohort_beta_val, cohort_hdi_lo, cohort_hdi_hi = _predictive_alpha_beta(
-                c_samples, kappa_samples=kp_samples)
+            # Empirical kappa from Williams method on cohort trajectory
+            # residuals. Measures actual between-cohort variation from
+            # data, not proxied from window kappa. See journal 28-Mar-26.
+            cohort_kappa_empirical = _estimate_cohort_kappa(
+                ev, et, topology, float(np.mean(c_samples)), diagnostics,
+            )
+            if cohort_kappa_empirical is not None:
+                # Convert scalar kappa to array matching p_cohort samples
+                kappa_arr = np.full_like(c_samples, cohort_kappa_empirical)
+                cohort_alpha_val, cohort_beta_val, cohort_hdi_lo, cohort_hdi_hi = _predictive_alpha_beta(
+                    c_samples, kappa_samples=kappa_arr)
+            else:
+                # Insufficient cohort data — fall back to moment-matching
+                cohort_alpha_val, cohort_beta_val, cohort_hdi_lo, cohort_hdi_hi = _predictive_alpha_beta(
+                    c_samples)
 
         # Derive mean/stdev from alpha/beta for consistency.
         # When predictive (hierarchical Beta), alpha/beta encode the

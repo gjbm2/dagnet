@@ -8,6 +8,204 @@ Entries are reverse-chronological (newest first).
 
 ---
 
+## 29-Mar-26: Phase 2 drift constraint — ESS decay with empirical drift rate
+
+### The physical constraint on drift
+
+The ONLY reason 2.edge.p can differ from 1.edge.p is temporal
+drift — the true conversion rate at edge x→y changed between the
+window observation period and the cohort observation period. The
+amount of possible drift is bounded by the ELAPSED TIME between
+window and cohort observations of this edge, which equals the
+median path latency from anchor a to this edge's from-node x.
+
+- If median(a→x) = 0 (first edge): no time elapsed, no drift
+  possible. 2.edge.p must equal 1.edge.p.
+- If median(a→x) = 30d: ~30 days for rate to change. Some drift
+  is possible.
+
+Same logic applies to 2.path.latency: the path CDF can only
+diverge from FW-composed 1.edge latencies to the extent that time
+has passed (plus the structural FW approximation error).
+
+### ESS decay mechanism
+
+Phase 1 posterior Beta(α, β) → Phase 2 prior Beta(α×s, β×s) where
+the scale factor s depends on elapsed time and drift rate:
+
+```
+s = 1 / (1 + elapsed × σ²_drift / V_phase1)
+```
+
+- V_phase1 = p(1-p) / (α+β) — Phase 1 posterior variance
+- elapsed = median path latency a→x (from topology)
+- σ²_drift = daily drift variance (estimated from Phase 1 data)
+
+Properties:
+- elapsed=0 → s=1 → full Phase 1 precision (frozen)
+- elapsed→∞ → s→0 → uninformative (cohort data dominates)
+- σ²_drift=0 → s=1 for all edges (no drift, all frozen)
+- Rational decay 1/(1+t/τ), not exponential — this is the exact
+  formula for adding drift variance to the prior
+
+### Estimating σ²_drift from Phase 1 data
+
+Model: p_obs(t) = p_true(t) + ε(t), where p_true follows a
+random walk with daily increment variance σ²_drift and ε is
+observation noise with variance σ²_noise.
+
+For observations k days apart:
+```
+Var(Δ^(k)) = k × σ²_drift + 2 × σ²_noise
+```
+
+Linear in k. The slope is σ²_drift. Using lag 1 and lag 7:
+```
+σ²_drift = max(0, (Var(Δ⁷) - Var(Δ¹)) / 6)
+```
+
+If Var(Δ⁷) ≤ Var(Δ¹): no detectable drift → σ²_drift = 0.
+
+Data source: per-anchor-day implied rates from Phase 1 evidence.
+For each anchor day's trajectory endpoint:
+`p_day = y_final / (n × F(age_final))`.
+
+### Conservative defaults
+
+- σ²_drift = 0 when: no detectable drift, fewer than 25 anchor
+  days, or no per-day rates available. Default = no drift = prior
+  stays at full Phase 1 precision = essentially frozen.
+- The conservative direction is correct: assuming no drift when
+  uncertain is safer than assuming drift (which creates p-CDF
+  ridge vulnerability).
+
+### Phase 2 model structure summary
+
+| Variable | Level | Type | Prior |
+|---|---|---|---|
+| 2.edge.p | edge | free Beta | 1.edge.p posterior, ESS-decayed by elapsed time |
+| 2.path.p | path | derived | product of 2.edge.p |
+| 2.edge.latency | edge | frozen | 1.edge.latency posterior means |
+| 2.path.latency | path | free | FW-composed 1.edge, width from propagated 1.edge posterior SDs |
+| 2.path.CDF | path | derived | from 2.path.latency |
+
+Branch groups: Dirichlet on 2.edge.p values with Phase 1
+posterior-derived concentrations (ESS-decayed).
+
+### Empirical between-cohort kappa (post-model)
+
+Williams (1982) moment estimator on maturity-adjusted trajectory
+residuals. Independent of the model — measures actual between-
+cohort variation for honest alpha/beta in the cohort posterior.
+Already implemented in inference.py.
+
+### Implementation sequence
+
+1. First: implement and test Phase 2 with σ²_drift = 0 (all edges
+   frozen at full Phase 1 precision). This is the baseline — no
+   drift, just posterior-as-prior. Confirm p recovery is correct
+   on synth drift graphs.
+2. Then: add σ²_drift estimation from Phase 1 data. Confirm that
+   synth graphs with drift_sigma > 0 in truth recover correctly.
+3. Then: validate on production.
+
+---
+
+## 28-Mar-26: Phase 2 redesign — posterior-as-prior (approach 3)
+
+### Motivation
+
+The current Phase 2 freezes Phase 1 edge parameters to point
+estimates and uses hardcoded leashes (tau_drift=0.1 for p,
+max(1.0, |mu|×0.5) for cohort latency). This discards Phase 1's
+posterior precision — the "weight" of window evidence doesn't
+influence Phase 2's freedom. The result:
+
+1. p-CDF ridge: cohort latency priors are too wide, enabling the
+   cure model identifiability problem (p inflates, CDF compensates)
+2. Arbitrary drift: tau_drift=0.1 regardless of whether Phase 1
+   determined p to ±0.002 or ±0.05
+3. Option A (per-cohort random effects) failed: the hierarchy's
+   degrees of freedom create a spurious mode that traps the sampler
+4. Branch group Dirichlet gave p too much freedom (replaced with
+   drift+simplex, but that's a workaround)
+
+Root cause: the phase boundary collapses posterior → point estimate,
+losing precision. This is approach 1 ("freeze and condition") from
+the staged estimation taxonomy. We need approach 3 ("propagate the
+edge posterior into pass 2").
+
+### Proposed design
+
+**Phase 1** — unchanged. Fits edge parameters from window data.
+Produces full posteriors on p, mu, sigma, onset, kappa_p per edge.
+
+**Phase 2** — each edge gets free variables whose priors ARE
+Phase 1's posteriors (moment-matched to parametric distributions):
+
+```
+p_cohort ~ Beta(α_phase1, β_phase1)
+mu_cohort ~ Normal(mu_mean_phase1, mu_sd_phase1)
+sigma_cohort ~ Gamma(fitted from Phase 1 posterior)
+onset_cohort ~ fitted from Phase 1 posterior
+```
+
+Key properties:
+- Prior widths = Phase 1 posterior SDs → evidence weight flows
+  through automatically
+- No eps_drift, no tau_drift, no hardcoded prior widths
+- Cohort likelihood updates these naturally — drift emerges from
+  data, not from explicit parameterisation
+- p-CDF ridge eliminated: latency priors are tight (proportional
+  to Phase 1 precision), CDF can't reshape freely
+- Branch groups: Dirichlet on p_cohort values, with concentrations
+  from Phase 1 posterior (inherently calibrated)
+- No phase2_cohort_use_x rewrite needed: use path p (product of
+  edge p_cohort) with anchor denominator — the natural
+  parameterisation for cohort observations
+- Path CDF: FW-compose Phase 2's edge latency variables along path
+  (variables, not frozen constants — but pulled tight by Phase 1
+  posterior priors)
+
+**Extraction** — Williams method for empirical between-cohort kappa
+on trajectory residuals (already implemented). If Phase 2's posterior
+uncertainty is already honest (from proper uncertainty propagation),
+may not need Williams — to be evaluated empirically.
+
+### What this eliminates
+
+- eps_drift / tau_drift mechanism
+- Hardcoded cohort_latency prior widths (max(1.0, ...))
+- phase2_cohort_use_x denominator rewrite
+- drift+simplex workaround for branch groups
+- The entire Option A / kappa_cohort / per-cohort z_i apparatus
+
+### What remains independent
+
+- Join-node CDF fix: must build weighted mixture of incident path
+  CDFs for join-downstream edges. Structural/topological bug,
+  independent of Phase 2 parameterisation.
+- Williams method for between-cohort kappa: post-model residual
+  estimation. Keep for now; evaluate whether Phase 2's posterior
+  width is sufficient after approach 3 is implemented.
+
+### Implementation plan
+
+1. In worker.py: after Phase 1, extract posterior distributions per
+   edge (moment-match p→Beta, mu→Normal, sigma→Gamma, onset→fitted)
+2. In model.py build_model: when phase2_frozen is provided, create
+   free variables with Phase 1 posterior-derived priors instead of
+   frozen constants + drift
+3. Remove phase2_cohort_use_x: use path p (product via
+   _resolve_path_probability) with anchor denominator
+4. FW-compose Phase 2's latency variables (not frozen tensors) for
+   path CDF
+5. Branch groups: standard Dirichlet with Phase 1 posterior-derived
+   concentrations
+6. Test on synth drift graphs, standard regression suite, production
+
+---
+
 ## 27-Mar-26 (cont.): Phase 2 cohort predictive alpha/beta — design analysis
 
 ### Problem statement
@@ -298,47 +496,110 @@ structurally incompatible with the Phase 2 drift model. The
 hierarchy's degrees of freedom overwhelm the drift constraint.
 Must use Option C (inference-time predictive from Phase 1 kappa_p).
 
-### Option C implementation challenge (28-Mar-26)
+### Option C superseded by empirical variance approach (28-Mar-26)
 
-The current `_predictive_alpha_beta` in inference.py looks for
-kappa in `trace.posterior`. For the cohort slice, `trace` is Phase 2's
-trace. Phase 1's `kappa_p` is in Phase 1's trace — a different object.
+Option C proposed plumbing Phase 1's kappa_p samples through to
+Phase 2 extraction — using window between-cohort variation as a
+proxy for cohort between-cohort variation. This was the fallback
+after Option A failed. However:
 
-Current code (line 316):
-```
-cohort_kappa = kappa_cohort_name if has_kappa_cohort else kappa_p_name
-```
+1. Plumbing is awkward (Phase 1 trace not available during Phase 2
+   summarisation — needs new parameter or state passing)
+2. Window kappa_p measures the wrong thing (daily snapshot variation
+   includes compositional mixing; entry-cohort variation does not)
+3. The approximation is conservative but imprecise — overestimates
+   variation for slow-maturing edges
 
-This falls back to kappa_p_name, but kappa_p is NOT in Phase 2's
-trace. So it falls through to moment-matching (no kappa → tight
-alpha/beta).
+### Empirical variance approach (28-Mar-26)
 
-**Fix needed**: plumb Phase 1's kappa_p samples into Phase 2's
-summarisation. Options:
-1. Pass Phase 1 trace (or kappa_p samples dict) to
-   `summarise_posteriors` for Phase 2
-2. Save kappa_p samples to `_model_state` in Phase 1 results and
-   read them back in Phase 2 summarisation
-3. Merge Phase 1 kappa_p variables into Phase 2 trace before
-   summarisation
+Instead of estimating between-cohort variation within the MCMC
+(Option A, failed) or proxying from Phase 1 (Option C, imprecise),
+compute it directly from the cohort trajectory residuals after the
+model runs.
 
-Option 1 is cleanest: add `phase1_trace` parameter to
-`summarise_posteriors`. When present, look up kappa_p from phase1_trace
-for cohort predictive.
+**Method**: Williams (1982) / Crowder (1978) moment estimator.
+
+1. Phase 2 fits scalar p_cohort per edge (no per-cohort effects)
+2. For each cohort trajectory i, compute maturity-adjusted implied p:
+   `p_implied_i = y_final_i / (x_final_i × F(age_final_i))`
+   where F is the frozen Phase 1 CDF
+3. Observed variance: `s² = var(p_implied_i)`
+4. Subtract expected Binomial sampling variance:
+   `binomial_var = mean(p_hat × F_i × (1-p_hat×F_i) / n_i)`
+5. Between-cohort variance: `σ²_bc = max(s² - binomial_var, 0) / mean(F_i²)`
+6. Moment-match to Beta: `kappa = p_bar(1-p_bar) / σ²_bc - 1`
+7. Predictive: `alpha = p_bar × kappa, beta = (1-p_bar) × kappa`
+
+**Advantages over Option A and C**:
+- Uses actual cohort data (not a window proxy)
+- No model changes (post-processing only in inference.py)
+- Can't create spurious modes or trap the sampler
+- Works with frozen Phase 1 CDF (already available)
+- The same residuals serve double duty: kappa estimation AND model
+  fit quality diagnostic (are residuals well-behaved, centred on
+  zero, any systematic pattern by age or cohort date?)
+
+**Theoretical cost of two-step vs joint estimation**: negligible
+at our data sizes. The efficiency loss is O(1/n²) for the mean and
+O(1/n) for the variance (n = number of cohorts). With n ≈ 96, this
+is dominated by the between-cohort term. REML (restricted maximum
+likelihood) is the classical analogue — standard practice for
+variance estimation in mixed models.
+
+**Implementation**: entirely in `summarise_posteriors` in
+inference.py. For each edge with cohort trajectories:
+- Access trajectory data from `evidence.edges[edge_id].cohort_obs`
+- Compute F(age) from frozen Phase 1 latency (already in topology
+  or latency_posteriors)
+- Compute kappa_empirical from Williams method
+- Use for cohort predictive alpha/beta
+
+### Phase 2 join-node CDF defect (28-Mar-26)
+
+For join-downstream edges (e.g. c→d where c has incident paths
+a→b→c and a→e→c), Phase 1's likelihood correctly builds a mixture:
+`p_cdf_sum(t) = Σ_alt p_path_alt × CDF_path_alt(t)`.
+
+Phase 2 with `phase2_cohort_use_x` does NOT build this mixture. It
+enters the phase2_cohort_use_x branch before the join-detection
+code runs, resolves latency from `trajs[0].path_edge_ids` (one
+arbitrary path), and uses that single FW-composed CDF. Other
+incident paths are ignored.
+
+This is a concrete bug for join-node graphs (diamond, lattice,
+join-branch synth graphs and any production graph with joins).
+Does not affect linear graphs (simple-abc, mirror-4step, drift
+variants).
+
+Fix: phase2_cohort_use_x needs to detect join-downstream edges
+(via `path_alternatives`) and build the mixture CDF, same as
+Phase 1's `else` branch does.
+
+### Phase 2 should use Phase 1 evidence weight (28-Mar-26)
+
+Currently Phase 2 freezes Phase 1 edge params to point values,
+losing the posterior precision. The drift tau and cohort latency
+prior widths are hardcoded, not derived from Phase 1's posterior
+uncertainty. This means the "weight" of window evidence does not
+influence how much freedom Phase 2's drift/latency have.
+
+Proposed fix: set drift tau and cohort latency prior widths
+proportional to Phase 1's posterior SDs. This carries the window
+evidence weight through the phase boundary without sharing
+variables (preserving Hamiltonian consistency).
 
 ### Remaining concerns
 
-1. Prior Gamma(3, 0.05) is ad hoc for kappa_p. Needs principled
-   derivation.
-2. Non-centred parameterisation is only used for Phase 2 (now moot
-   since Phase 2 won't have per-cohort effects). Phase 1 uses centred
-   Beta (ESS=223 for 117 p_i — adequate but not great). Could benefit
-   from non-centred if Phase 1 ESS degrades on larger graphs.
-3. Phase 2 branch group Dirichlet vs drift+simplex: the Dirichlet
-   allowed too much p freedom (p-CDF ridge), but the drift+simplex
-   fix should be kept even without kappa_cohort, because the
-   Dirichlet was the original source of the production p_cohort
-   drift (0.77→0.95).
+1. Prior Gamma(3, 0.05) is ad hoc for Phase 1 kappa_p. Needs
+   principled derivation.
+2. Phase 1 centred Beta parameterisation (ESS=223 for 117 p_i).
+   Could benefit from non-centred if ESS degrades on larger graphs.
+3. Phase 2 drift+simplex fix (replacing Dirichlet for branch group
+   edges) should be kept — the Dirichlet was the original source of
+   the production p_cohort drift (0.77→0.95).
+4. Residual diagnostics (model fit quality check) should be
+   implemented alongside the variance estimation — same data,
+   different question. Track as future work.
 
 ### Phase 2 cohort p drift experiment (27-Mar-26)
 

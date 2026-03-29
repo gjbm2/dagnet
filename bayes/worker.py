@@ -603,7 +603,11 @@ def _fit_graph_compiler(payload: dict, report_progress=None) -> dict:
             _log(log, "")
             _log(log, "── Phase 2: cohort pass ──")
 
-            # Extract frozen values from Phase 1 trace
+            # Extract Phase 1 posterior distributions for Phase 2 priors.
+            # Approach 3 (posterior-as-prior): carry forward full
+            # posterior precision, not just point estimates.
+            # See journal 28-Mar-26 "Phase 2 redesign".
+            import numpy as _np
             phase2_frozen = {}
             for edge_id in topology.topo_order:
                 et = topology.edges.get(edge_id)
@@ -612,28 +616,53 @@ def _fit_graph_compiler(payload: dict, report_progress=None) -> dict:
                     continue
                 safe_eid = edge_id.replace("-", "_")
 
-                # p: from Phase 1 trace or edge_var_names
                 frozen_edge = {}
+
+                # p: moment-match Phase 1 posterior to Beta(α, β)
                 p_name = f"p_{safe_eid}"
                 if p_name in trace.posterior:
-                    frozen_edge["p"] = float(trace.posterior[p_name].values.mean())
+                    p_samples = trace.posterior[p_name].values.flatten()
+                    p_mean = float(p_samples.mean())
+                    p_std = float(p_samples.std())
+                    frozen_edge["p"] = p_mean
+                    frozen_edge["p_sd"] = p_std
+                    # Moment-match to Beta
+                    if p_std > 1e-6 and 0 < p_mean < 1:
+                        v = p_std ** 2
+                        common = p_mean * (1 - p_mean) / v - 1
+                        if common > 0:
+                            frozen_edge["p_alpha"] = max(p_mean * common, 0.5)
+                            frozen_edge["p_beta"] = max((1 - p_mean) * common, 0.5)
                 elif ev.prob_prior:
                     frozen_edge["p"] = ev.prob_prior.alpha / (ev.prob_prior.alpha + ev.prob_prior.beta)
 
-                # Latency: mu, sigma, onset from Phase 1 trace
+                # Latency: mean + sd from Phase 1 trace
                 mu_name = f"mu_lat_{safe_eid}"
                 sigma_name = f"sigma_lat_{safe_eid}"
                 onset_name = f"onset_{safe_eid}"
                 if mu_name in trace.posterior:
-                    frozen_edge["mu"] = float(trace.posterior[mu_name].values.mean())
+                    mu_s = trace.posterior[mu_name].values.flatten()
+                    frozen_edge["mu"] = float(mu_s.mean())
+                    frozen_edge["mu_sd"] = float(mu_s.std())
                 if sigma_name in trace.posterior:
-                    frozen_edge["sigma"] = float(trace.posterior[sigma_name].values.mean())
+                    sig_s = trace.posterior[sigma_name].values.flatten()
+                    frozen_edge["sigma"] = float(sig_s.mean())
+                    frozen_edge["sigma_sd"] = float(sig_s.std())
                 if onset_name in trace.posterior:
-                    frozen_edge["onset"] = float(trace.posterior[onset_name].values.mean())
+                    on_s = trace.posterior[onset_name].values.flatten()
+                    frozen_edge["onset"] = float(on_s.mean())
+                    frozen_edge["onset_sd"] = float(on_s.std())
 
                 if frozen_edge:
                     phase2_frozen[edge_id] = frozen_edge
-                    _log(log, f"  frozen {edge_id[:8]}…: {frozen_edge}")
+                    parts = [f"p={frozen_edge.get('p', 0):.4f}±{frozen_edge.get('p_sd', 0):.4f}"]
+                    if 'mu' in frozen_edge:
+                        parts.append(f"mu={frozen_edge['mu']:.3f}±{frozen_edge['mu_sd']:.3f}")
+                    if 'sigma' in frozen_edge:
+                        parts.append(f"sigma={frozen_edge['sigma']:.3f}±{frozen_edge['sigma_sd']:.3f}")
+                    if 'onset' in frozen_edge:
+                        parts.append(f"onset={frozen_edge['onset']:.2f}±{frozen_edge['onset_sd']:.2f}")
+                    _log(log, f"  phase1_posterior {edge_id[:8]}…: {', '.join(parts)}")
 
             # Build Phase 2 model
             model2, metadata2 = build_model(

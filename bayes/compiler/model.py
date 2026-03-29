@@ -1,21 +1,153 @@
 """
 Model builder: TopologyAnalysis + BoundEvidence → pm.Model.
 
-Model structure:
-  - Graph-level σ_temporal (learned temporal volatility)
-  - Per-edge independent onset priors (no graph-level sharing)
-  - Per-edge κ (overdispersion concentration: BetaBinomial/DM)
-  - Per-edge onset (latent, doc 18; or fixed when latent_onset=False)
-  - Solo edges: p ~ Beta(α, β)
-  - Branch groups: [p_1, ..., p_K, p_dropout] ~ Dirichlet(α_vec)
-    - Exhaustive groups omit the dropout component
-  - If window + cohort: p_base, p_window (tight), p_cohort (path-informed)
-  - Solo edges: window obs → BetaBinomial(n, p·κ, (1-p)·κ)
-  - Branch groups: window obs → DirichletMultinomial(n, κ·p_vec)
-  - Trajectory obs → Dirichlet-Multinomial logp via pm.Potential
-  - Daily cohort obs → BetaBinomial(n, p·κ, (1-p)·κ)
+PURPOSE
+-------
+This module is the statistical core of the Bayes compiler. It takes a
+graph structure (which edges exist, how they branch and join) and
+observed data (how many users converted along each edge, measured at
+various points in time), and builds a probabilistic model that can be
+"fitted" to learn the true underlying conversion rates and timing.
+
+The model is expressed in PyMC, a probabilistic programming library.
+PyMC uses MCMC sampling (specifically the NUTS algorithm) to explore
+the space of plausible paramueter values given the data. The output is
+a posterior distribution: not a single "answer" but a cloud of
+plausible values for every parameter, capturing uncertainty.
 
 This is the only module that imports PyMC.
+
+GLOSSARY OF STATISTICAL TERMS
+------------------------------
+The code uses statistical shorthand throughout. Here is a plain-English
+guide to the key terms:
+
+  p (probability / conversion rate)
+      The fraction of users who take a particular edge. E.g. if 100
+      users see a signup page and 30 sign up, p ≈ 0.30.
+
+  Beta(α, β)
+      A probability distribution over values between 0 and 1 — perfect
+      for modelling conversion rates. α and β encode prior belief:
+      α = "pseudo-successes", β = "pseudo-failures". Higher values =
+      more confident prior. Beta(1, 1) = "I have no idea" (uniform).
+
+  Dirichlet(α_vec)
+      The multi-way generalisation of Beta. Used when a user can take
+      one of K mutually exclusive edges from the same node (a "branch
+      group"). Produces K probabilities that sum to 1. Each α_i
+      encodes prior belief about the i-th branch's share.
+
+  onset (delay before any conversions can occur)
+      Many business processes have a minimum waiting time. E.g. a
+      subscription trial lasts 7 days — no one can convert before
+      day 7. Onset is that minimum delay, in days. "Latent onset"
+      means we let the model learn the true onset from data rather
+      than fixing it.
+
+  latency (the timing distribution of conversions)
+      After onset, conversions don't all happen instantly — they
+      spread out over time following a shifted lognormal distribution.
+      Two parameters control the shape:
+        mu (μ)    — log-scale centre. exp(μ) ≈ median delay after onset.
+        sigma (σ) — log-scale spread. Larger σ = more spread out.
+      "Latent latency" means we let the model learn μ and σ from data.
+
+  CDF (cumulative distribution function) / completeness
+      CDF(t) = the fraction of eventual conversions that have happened
+      by time t. At t = onset, CDF = 0. As t → ∞, CDF → 1.
+      "Completeness" is CDF evaluated at the retrieval age — it tells
+      us what fraction of conversions we expect to have observed so far.
+
+  Fenton-Wilkinson (FW) composition
+      When a user must traverse multiple edges in sequence (a path),
+      the total delay is the sum of individual delays. The FW method
+      approximates the sum of lognormal delays as a single lognormal,
+      giving us (μ_path, σ_path) for the whole path.
+
+  κ (kappa / overdispersion concentration)
+      Real data is "noisier" than a simple coin-flip model predicts —
+      conversion rates vary day-to-day. κ controls how much extra
+      noise to allow. Higher κ = less overdispersion (closer to
+      idealized coin flips). Used in BetaBinomial and
+      DirichletMultinomial likelihoods.
+
+  BetaBinomial(n, α, β)
+      Like Binomial (n coin flips) but the coin's bias itself varies.
+      Models day-to-day variation in conversion rate. α = p·κ,
+      β = (1-p)·κ, so the mean is still p but with extra variance.
+
+  DirichletMultinomial(n, α_vec)
+      Multi-way BetaBinomial — for branch groups where users choose
+      one of K options. Accounts for overdispersion across branches.
+
+  Binomial(n, p)
+      The simplest count model: n independent trials, each succeeding
+      with probability p. Used where overdispersion is not needed
+      (e.g. window observations, daily anchoring).
+
+  pm.Potential(logp)
+      A way to add a custom log-probability term to the model. Used
+      for the product-of-conditional-Binomials likelihood (see below)
+      because PyMC has no built-in distribution for that shape.
+
+  Product-of-conditional-Binomials
+      The key likelihood for trajectory data (a cohort observed at
+      multiple ages). Instead of treating the whole trajectory as one
+      observation, we decompose it into intervals:
+        - At each age t_j, some new conversions d_j occurred
+        - The "at-risk" population n_j is those who haven't converted yet
+        - The conditional probability q_j = p × ΔF_j / (1 − p × F_{j−1})
+          where ΔF_j is the CDF increment over the interval
+        - Each interval is an independent Binomial(n_j, q_j)
+      This decomposition lets the shape of the maturation curve
+      (when conversions happen over time) constrain both p and the
+      latency parameters simultaneously.
+
+  Non-centred parameterisation
+      A numerical trick for MCMC sampling. Instead of sampling
+      x ~ Normal(μ, σ) directly (which creates a "funnel" that NUTS
+      struggles with), we sample eps ~ Normal(0, 1) and compute
+      x = μ + eps × σ. Mathematically identical, but much easier for
+      the sampler to explore.
+
+  softplus(x) = log(1 + exp(x))
+      A smooth approximation to max(0, x). Used to enforce positivity
+      (e.g. onset must be ≥ 0) without creating a hard boundary that
+      would block MCMC gradients.
+
+  disconnected_grad / stop_p_gradient
+      Tells the MCMC sampler "don't let this data influence that
+      parameter". Used to prevent cohort observations from distorting
+      upstream edge probabilities — cohort data should constrain the
+      terminal edge's p, not every edge on the path.
+
+  Phase 1 vs Phase 2
+      Phase 1 fits the model to "window" data (recent, high-quality
+      aggregate observations). Phase 2 then uses Phase 1's learned
+      values as priors and fits to "cohort" data (longitudinal
+      per-cohort trajectories that are noisier but richer).
+
+  posterior-as-prior
+      Phase 2's approach: take Phase 1's learned distribution (the
+      posterior) and use it directly as Phase 2's prior. This carries
+      Phase 1's evidence forward without double-counting.
+
+MODEL STRUCTURE SUMMARY
+-----------------------
+  1. Per-edge onset priors (independent, from histogram data)
+  2. Per-edge probability priors:
+     - Solo edges: p ~ Beta(α, β)
+     - Branch groups: [p_1, ..., p_K, p_dropout] ~ Dirichlet(α_vec)
+       (exhaustive groups omit the dropout component)
+  3. Per-edge latency priors: μ ~ Normal, σ ~ Gamma
+  4. Per-edge overdispersion: κ ~ Gamma
+  5. Cohort-level latency (path-composed, can deviate from edge-level)
+  6. Likelihoods:
+     - Window observations → Binomial(n, p × completeness)
+     - Branch group window → DirichletMultinomial(n, κ × p_vec)
+     - Trajectory cohort → product-of-conditional-Binomials via Potential
+     - Daily cohort → Binomial(n, p × completeness) or BetaBinomial
 """
 
 from __future__ import annotations
@@ -27,23 +159,138 @@ from .types import (
 )
 
 
+# ---------------------------------------------------------------------------
+# Constants
+# ---------------------------------------------------------------------------
+
+# Statistical ---
+# 95th percentile of the standard normal distribution.  Exact value:
+# scipy.stats.norm.ppf(0.95).  Used to compute t95, the time by which
+# 95% of conversions have occurred under a shifted lognormal latency
+# model:  t95 = onset + exp(μ + Z_95 × σ).
+Z_95 = 1.645
+
+# Numerical floors ---
+# Gradient-safe minimum values that prevent log(0), division by zero,
+# or degenerate distributions in the PyTensor computation graph.
+# Chosen to be small enough to never affect real results but large
+# enough for float64 stability.  The exact values are not critical —
+# anything in the same order-of-magnitude neighbourhood works.
+LOG_ARG_FLOOR = 1e-30       # argument to pt.log()
+CDF_INCREMENT_FLOOR = 1e-15  # ΔF (CDF change over a trajectory interval)
+SURVIVAL_FLOOR = 1e-10       # 1 − p×F (fraction not yet converted)
+EFFECTIVE_AGE_FLOOR = 1e-6   # age − onset on fixed-onset path (numpy)
+
+# Probability clipping ---
+# Bounds for effective probabilities passed to Binomial / BetaBinomial
+# likelihoods and Multinomial dropout.  Prevents log(0) in the
+# log-likelihood and avoids numerical issues at the boundaries.
+# The exact values are a judgment call — 0.001 is safely below any
+# realistic conversion rate at sample sizes of hundreds/thousands.
+P_CLIP_LO = 0.001
+P_CLIP_HI = 0.999
+
+# Overdispersion (kappa) prior ---
+# Per-edge κ ~ Gamma(α, β) controls how "noisy" daily conversion
+# rates are beyond simple coin-flip variance.  Higher κ = less noise.
+#
+# ARBITRARY: these are weakly informative modelling choices.
+#   Window:  Gamma(3, 0.1)  → mode = (α−1)/β = 20.
+#   Cohort:  Gamma(3, 0.05) → mode = 40 (tighter, because between-
+#            cohort variation is partially absorbed by the trajectory).
+# Different α or β would change inference.  α=3 gives a broad,
+# unimodal prior; β sets the scale.
+KAPPA_ALPHA = 3.0
+KAPPA_BETA_WINDOW = 0.1
+KAPPA_BETA_COHORT = 0.05
+
+# Dirichlet / Beta concentration floor ---
+# Minimum concentration parameter for Dirichlet and Beta priors.
+# At 0.5 the distribution is slightly "spiky" (favours extremes);
+# 1.0 would be uniform.  0.5 is a standard weakly-informative
+# choice in Bayesian practice.  Must be > 0.
+DIRICHLET_CONC_FLOOR = 0.5
+
+# Latency sigma floor ---
+# Minimum meaningful log-scale spread for a lognormal latency
+# distribution.  Below this the lognormal is effectively a point
+# mass — there is no timing distribution to learn.  Not arbitrary:
+# 0.01 in log-scale ≈ 1% relative spread around the median.
+SIGMA_FLOOR = 0.01
+
+# Mu prior sigma floor ---
+# Minimum uncertainty on the mu (latency centre) prior.  Ensures the
+# sampler has enough room to explore even when the histogram-derived
+# estimate looks confident.
+MU_PRIOR_SIGMA_FLOOR = 0.5
+
+# Fallback prior effective sample size ---
+# When no Phase 1 posterior is available, we construct a weakly
+# informative Beta prior: Beta(p × ESS, (1−p) × ESS).
+# ARBITRARY: 20 pseudo-observations.  10 or 50 would change how
+# quickly observed data overwhelms the prior.  20 is a conventional
+# weak-prior choice.
+FALLBACK_PRIOR_ESS = 20.0
+
+
 def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
                 features: dict | None = None,
                 phase2_frozen: dict | None = None):
     """Build a PyMC model from the topology and bound evidence.
 
+    This is the main entry point. It walks the graph in topological order
+    (upstream edges first) and emits PyMC random variables and likelihoods
+    for each edge. The result is a fully specified probabilistic model that
+    MCMC can sample from.
+
     Returns (pm.Model, model_metadata_dict).
 
-    features: optional dict of boolean feature flags for A/B testing:
-        latent_latency:    if False, skip latent mu/sigma (Phase S behaviour)
-        cohort_latency:    if False, skip cohort-level latency hierarchy
-        overdispersion:    if False, use Binomial/Multinomial (no per-edge kappa)
+    Parameters
+    ----------
+    topology : TopologyAnalysis
+        The graph structure: which edges exist, their latency properties,
+        branch groups, join nodes, and topological ordering.
 
-    phase2_frozen: if provided, builds Phase 2 (cohort-only) model.
-        Dict maps edge_id → {"p": float, "mu": float, "sigma": float,
-        "onset": float}. Edge p values become constants (no free RV).
-        Only cohort trajectories are emitted. Free parameters: kappa,
-        cohort-level latency (drift from Phase 1 values).
+    evidence : BoundEvidence
+        Observed data bound to each edge: sample sizes, conversion counts,
+        cohort trajectories, and derived priors (from warm-start or analytics).
+
+    features : dict, optional
+        Boolean feature flags for A/B testing model variants:
+          latent_latency : bool (default True)
+              If True, μ and σ are free parameters the model learns.
+              If False, they are fixed at their prior values (Phase S).
+          cohort_latency : bool (default True)
+              If True, create separate path-level latency variables for
+              cohort observations (can deviate from edge-level estimates).
+          overdispersion : bool (default True)
+              If True, add per-edge κ for BetaBinomial/DirichletMultinomial.
+              If False, use plain Binomial/Multinomial (no day-to-day noise).
+          latent_onset : bool (default True)
+              If True, onset is a learned parameter. If False, fixed at prior.
+          window_only : bool (default False)
+              If True, skip all cohort likelihoods (debug/ablation flag).
+          neutral_prior : bool (default False)
+              If True, use Beta(1,1) / uniform priors (ignore evidence priors).
+
+    phase2_frozen : dict, optional
+        If provided, builds a Phase 2 model. This dict maps
+        edge_id → {"p": float, "mu": float, "sigma": float,
+        "onset": float, "p_alpha": float, "p_beta": float, ...}.
+        Phase 1's learned values become constants or tight priors;
+        only cohort trajectories contribute new information.
+
+    Build order
+    -----------
+    The model is constructed in this sequence (each section is marked
+    with a "---" separator in the code below):
+
+      1. Onset priors         — per-edge minimum delay before conversions
+      2. Branch group priors  — Dirichlet for sibling edges
+      3. Latency priors       — per-edge μ, σ (timing distribution shape)
+      4. Cohort latency       — path-level latency for cohort observations
+      5. Per-edge p & likelihoods — probability + observed data terms
+      6. Branch group Multinomial — shared-denominator constraint for siblings
     """
     import pymc as pm
     import pytensor.tensor as pt
@@ -84,10 +331,24 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
         # sigma_temporal removed — was only used for p_base/p_cohort
         # hierarchy which is removed in Phase 1 (journal 26-Mar-26).
 
-        # --- Per-edge latent onset (independent priors) ---
-        # Each edge gets its own onset prior from its histogram data.
-        # No graph-level sharing — onset is a property of each specific
-        # business process, not a graph-wide characteristic.
+        # =============================================================
+        # SECTION 1: PER-EDGE ONSET PRIORS
+        # =============================================================
+        # Onset = the minimum number of days before any conversion can
+        # happen on this edge. Example: a 7-day free trial means
+        # onset ≈ 7 — nobody can convert (purchase) before day 7.
+        #
+        # Each edge gets its own onset, learned independently from its
+        # Amplitude histogram data. There is no graph-wide sharing
+        # because onset is specific to each business process.
+        #
+        # The onset variable is constrained to be positive via
+        # softplus (a smooth version of max(0, x)) so the sampler
+        # never explores negative delays.
+        #
+        # Phase 2: onset is frozen at the Phase 1 posterior value —
+        # cohort data does not re-learn onset.
+        # =============================================================
         onset_vars: dict[str, object] = {}
         if feat_latent_onset:
             for edge_id in topology.topo_order:
@@ -101,7 +362,9 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
                 lp = ev.latency_prior
 
                 if is_phase2:
-                    # Phase 2: freeze onset from Phase 1.
+                    # Phase 2: onset is a constant (not learned). We take
+                    # the value from Phase 1's posterior and lock it in.
+                    # Path-level onset is handled separately in Section 4.
                     frozen = phase2_frozen.get(edge_id, {})
                     onset_frozen = frozen.get("onset", max(lp.onset_delta_days, 0.0))
                     onset_var = pt.as_tensor_variable(np.float64(onset_frozen))
@@ -110,7 +373,15 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
                         f"  onset: {edge_id[:8]}… {onset_frozen:.1f}d → frozen (Phase 1)"
                     )
                 else:
-                    # Independent onset prior per edge, informed by histogram.
+                    # Phase 1: onset is a free parameter the model learns.
+                    #
+                    # Non-centred parameterisation (see glossary):
+                    #   eps_onset ~ Normal(0, 1)          ← unit noise
+                    #   onset = softplus(prior + eps × σ) ← shift & ensure ≥ 0
+                    #
+                    # onset_prior_val: best guess from Amplitude histogram
+                    #   (the 1st-percentile lag — where conversions first appear)
+                    # onset_sigma: how uncertain that guess is (in days)
                     onset_prior_val = max(lp.onset_delta_days, 0.0)
                     onset_sigma = max(lp.onset_uncertainty, 1.0)
 
@@ -123,10 +394,15 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
                     onset_vars[edge_id] = onset_var
 
                     # Per-retrieval onset observations from Amplitude histograms.
-                    # Each observation is the 1% mass point of the lag histogram
-                    # for one retrieval date. This is systematically above the
-                    # model onset (CDF shift) by ~exp(mu + z_0.01 * sigma), but
-                    # sigma_obs absorbs that gap. See journal 26-Mar-26.
+                    #
+                    # We have multiple measurements of onset — one per retrieval
+                    # date. Each measurement is the point where 1% of the lag
+                    # histogram's mass has accumulated (the "left tail").
+                    # These observed values are systematically above the true
+                    # onset (because the CDF rises gradually, so the 1% point
+                    # is always slightly right of zero), but sigma_obs absorbs
+                    # that bias. More observations = tighter constraint on onset.
+                    # See journal 26-Mar-26.
                     onset_obs = getattr(lp, 'onset_observations', None)
                     if onset_obs and len(onset_obs) >= 3:
                         onset_obs_np = np.array(onset_obs, dtype=np.float64)
@@ -149,49 +425,83 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
                             f"(±{lp.onset_uncertainty:.1f}) → latent (independent)"
                         )
 
-        # --- Branch group Dirichlet priors (Phase B) ---
-        # Emit Dirichlet per branch group. Each sibling gets a component;
-        # non-exhaustive groups get a phantom dropout component.
+        # =============================================================
+        # SECTION 2: BRANCH GROUP DIRICHLET PRIORS
+        # =============================================================
+        # When a node has multiple outgoing edges (e.g. a user can
+        # choose Plan A, Plan B, or leave), those edges form a "branch
+        # group". Their probabilities must sum to ≤ 1 (you can only
+        # pick one option).
+        #
+        # A Dirichlet distribution enforces this constraint naturally:
+        # it produces K numbers that sum to 1, each representing one
+        # branch's share. For non-exhaustive groups (some users don't
+        # take any branch), we add a "dropout" component to absorb the
+        # remainder.
+        #
+        # Phase 2: the Dirichlet concentrations come directly from
+        # Phase 1's posterior (posterior-as-prior approach). This
+        # carries forward Phase 1's learned proportions as the starting
+        # point for cohort fitting.
+        # =============================================================
         bg_p_vars: dict[str, object] = {}  # edge_id → Dirichlet component variable
 
         for group_id, bg in topology.branch_groups.items():
             if is_phase2:
-                # Phase 2: per-edge drift + soft simplex for mass
-                # conservation. Replaces the Dirichlet which gave p
-                # too much freedom (kappa=50 ≈ ±7% SD), enabling the
-                # p-CDF identifiability ridge in the cure model. The
-                # drift mechanism (tau ≈ 0.1) constrains p to ±2.5%
-                # of frozen, blocking the ridge. The simplex potential
-                # enforces mass conservation (Σ p_i ≤ 1).
-                # See journal 28-Mar-26.
+                # Phase 2: use Phase 1's learned distribution as Phase 2's
+                # starting point (posterior-as-prior).
+                #
+                # Concretely: if Phase 1 learned that Branch A has p ≈ 0.3
+                # with posterior Beta(α=30, β=70), we create a Dirichlet
+                # with concentrations [30, 70] — this encodes the same
+                # knowledge. The Phase 2 cohort data then updates from there.
+                #
+                # For a single sibling + dropout: Dir(α, β) is equivalent
+                # to Beta(α, β). For multiple siblings: each gets its α_i,
+                # and the dropout gets the remainder.
+                # See doc 24 §3.1.
                 safe_group = _safe_var_name(bg.group_id)
-                sibling_p_vars = []
+                sibling_edges = []
+                dir_alphas = []  # Dirichlet concentration per sibling
+                dir_beta_sum = 0.0  # for dropout component
                 for sib_id in bg.sibling_edge_ids:
                     ev_sib = evidence.edges.get(sib_id)
                     if ev_sib is None or ev_sib.skipped:
                         continue
-                    sib_safe = _safe_var_name(sib_id)
                     frozen = phase2_frozen.get(sib_id, {})
-                    p_frozen_val = frozen.get("p", 0.1)
-                    logit_p_frozen = np.log(max(p_frozen_val, 1e-6) / max(1.0 - p_frozen_val, 1e-6))
-                    et_sib = topology.edges.get(sib_id)
-                    tau_drift = max(et_sib.path_sigma_ax, 0.1) if et_sib and hasattr(et_sib, 'path_sigma_ax') else 0.1
-                    eps_drift = pm.Normal(f"eps_drift_{sib_safe}", mu=0, sigma=1)
-                    p_sib = pm.Deterministic(
-                        f"p_cohort_{sib_safe}",
-                        pm.math.sigmoid(logit_p_frozen + eps_drift * tau_drift),
-                    )
-                    bg_p_vars[sib_id] = p_sib
-                    edge_var_names[sib_id] = f"p_cohort_{sib_safe}"
-                    sibling_p_vars.append(p_sib)
+                    p_alpha = frozen.get("p_alpha")
+                    if p_alpha is not None:
+                        p_beta = frozen.get("p_beta", 1.0)
+                        sibling_edges.append(sib_id)
+                        dir_alphas.append(p_alpha)
+                        dir_beta_sum = p_beta  # for single-sibling: dropout = β
+                    else:
+                        # No Phase 1 posterior — use moderate prior
+                        p_mean = frozen.get("p", 0.1)
+                        sibling_edges.append(sib_id)
+                        dir_alphas.append(max(p_mean * FALLBACK_PRIOR_ESS, DIRICHLET_CONC_FLOOR))
+                        dir_beta_sum = max((1 - p_mean) * FALLBACK_PRIOR_ESS, DIRICHLET_CONC_FLOOR)
 
-                # Soft simplex: penalise Σ p_i > 1 (mass conservation).
-                if sibling_p_vars:
-                    p_sum = pt.add(*sibling_p_vars) if len(sibling_p_vars) > 1 else sibling_p_vars[0]
-                    # Log-barrier: becomes -∞ as sum → 1, zero penalty when sum << 1.
-                    pm.Potential(
-                        f"simplex_cohort_{safe_group}",
-                        pt.log(pt.maximum(1.0 - p_sum, 1e-10)),
+                if sibling_edges:
+                    if not bg.is_exhaustive:
+                        # Single main + dropout: Dir(α₁, β₁)
+                        # Multi-sibling + dropout: Dir(α₁, α₂, ..., remainder)
+                        if len(sibling_edges) == 1:
+                            dir_alphas.append(dir_beta_sum)
+                        else:
+                            remainder = max(dir_beta_sum - sum(dir_alphas[1:]), DIRICHLET_CONC_FLOOR)
+                            dir_alphas.append(remainder)
+                    conc_array = np.array(dir_alphas, dtype=np.float64)
+
+                    dir_var = pm.Dirichlet(f"dir_cohort_{safe_group}", a=conc_array)
+                    for i, sib_id in enumerate(sibling_edges):
+                        sib_safe = _safe_var_name(sib_id)
+                        p_sib = pm.Deterministic(f"p_cohort_{sib_safe}", dir_var[i])
+                        bg_p_vars[sib_id] = p_sib
+                        edge_var_names[sib_id] = f"p_cohort_{sib_safe}"
+                    diagnostics.append(
+                        f"  branch_group_cohort {safe_group}: "
+                        f"Dir({', '.join(f'{a:.1f}' for a in conc_array)})"
                     )
             else:
                 _emit_dirichlet_prior(
@@ -199,7 +509,28 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
                     model, diagnostics, features=features,
                 )
 
-        # --- Per-edge latency variables (Phase D: latent latency) ---
+        # =============================================================
+        # SECTION 3: PER-EDGE LATENCY VARIABLES
+        # =============================================================
+        # Latency describes *when* conversions happen after onset.
+        # The timing follows a shifted lognormal distribution:
+        #
+        #   delay = onset + LN(μ, σ)
+        #
+        # where LN(μ, σ) is a lognormal random variable:
+        #   μ (mu) controls the centre: exp(μ) ≈ median delay after onset
+        #   σ (sigma) controls the spread: larger σ = longer tail
+        #
+        # Example: μ = 2.0, σ = 0.8 means median delay ≈ 7.4 days after
+        # onset, with a long right tail (some users take much longer).
+        #
+        # When latent_latency is enabled (the default), μ and σ are free
+        # parameters that the model learns from the maturation curve
+        # shape. When disabled, they are fixed at their prior values.
+        #
+        # Phase 2: μ and σ are frozen at Phase 1 posterior values.
+        # Cohort-level latency (Section 4) is free to deviate.
+        # =============================================================
         latency_vars: dict[str, tuple] = {}
         cohort_latency_vars: dict[str, tuple] = {}
 
@@ -211,31 +542,38 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
             ev = evidence.edges.get(edge_id)
             if et is None or ev is None or ev.skipped:
                 continue
-            if feat_latent_latency and ev.latency_prior is not None and ev.latency_prior.sigma > 0.01:
+            if feat_latent_latency and ev.latency_prior is not None and ev.latency_prior.sigma > SIGMA_FLOOR:
                 safe_id = _safe_var_name(edge_id)
 
                 if is_phase2:
-                    # Phase 2: freeze edge-level latency from Phase 1.
+                    # Phase 2: 2.edge.latency is frozen (constants).
+                    # 2.path.latency is free (cohort_latency_vars) with
+                    # priors from FW-composed 1.edge posteriors.
+                    # See journal 28-Mar-26 "approach 3".
                     frozen = phase2_frozen.get(edge_id, {})
                     mu_frozen = frozen.get("mu", ev.latency_prior.mu)
                     sigma_frozen = frozen.get("sigma", ev.latency_prior.sigma)
                     mu_var = pt.as_tensor_variable(np.float64(mu_frozen))
-                    sigma_var = pt.as_tensor_variable(np.float64(max(sigma_frozen, 0.01)))
+                    sigma_var = pt.as_tensor_variable(np.float64(max(sigma_frozen, SIGMA_FLOOR)))
                     latency_vars[edge_id] = (mu_var, sigma_var)
                     diagnostics.append(
                         f"  latency: {edge_id[:8]}… mu={mu_frozen:.3f}, "
                         f"sigma={sigma_frozen:.3f} → frozen (Phase 1)"
                     )
                 else:
+                    # Phase 1: μ and σ are free parameters the model learns.
                     mu_prior = ev.latency_prior.mu
                     sigma_prior = ev.latency_prior.sigma
-                    # mu_base ~ Normal centred on prior, moderate uncertainty
+
                     mu_var = pm.Normal(
                         f"mu_lat_{safe_id}",
                         mu=mu_prior,
-                        sigma=max(0.5, sigma_prior),
+                        sigma=max(MU_PRIOR_SIGMA_FLOOR, sigma_prior),
                     )
-                    # sigma_base ~ Gamma with mode at observed dispersion.
+                    # σ ~ Gamma: must be positive, with mode at the observed
+                    # dispersion. gamma_params_from_mode converts
+                    # (mode, spread) → Gamma(α, β) such that the peak of
+                    # the distribution sits at mode.
                     from .completeness import gamma_params_from_mode
                     gamma_a, gamma_b = gamma_params_from_mode(
                         max(sigma_prior, 0.1), spread=0.5,
@@ -250,15 +588,18 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
                         f"sigma_prior={sigma_prior:.3f} → latent"
                     )
 
-                    # t95 soft constraint from analytics pass / user horizon.
-                    # t95 = onset + exp(mu + 1.645 * sigma). Derived from the
-                    # same Amplitude histograms that give us onset, mu, sigma.
-                    # Constrains the joint (onset, mu, sigma) space to prevent
-                    # sigma inflation → t95 = 250d nonsense.
+                    # t95 soft constraint: prevents unrealistic timing.
+                    #
+                    # t95 is the time by which 95% of conversions have
+                    # Without this constraint, the sampler can inflate σ
+                    # (making the tail very long) to explain low conversion
+                    # counts — "conversions are coming, just very slowly".
+                    # The t95 observation says "no, 95% of conversions
+                    # happen within X days based on the histogram data".
                     # See journal 27-Mar-26 "Per-retrieval onset observations".
                     if et.t95_days is not None and edge_id in onset_vars:
                         t95_analytic = float(et.t95_days)
-                        t95_model = onset_vars[edge_id] + pt.exp(mu_var + 1.645 * sigma_var)
+                        t95_model = onset_vars[edge_id] + pt.exp(mu_var + Z_95 * sigma_var)
                         sigma_t95 = max(t95_analytic * 0.2, 2.0)
                         pm.Normal(
                             f"t95_obs_{safe_id}",
@@ -271,14 +612,40 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
                             f"(σ_t95={sigma_t95:.1f}d) → soft constraint"
                         )
 
-        # --- Cohort-level latency variables (Phase D step 2.5) ---
+        # =============================================================
+        # SECTION 4: COHORT-LEVEL LATENCY VARIABLES
+        # =============================================================
+        # When a user traverses a multi-edge path (e.g. A → B → C),
+        # the total delay from A to C is the sum of individual edge
+        # delays. Section 3 learned each edge's delay independently.
+        # Here we create path-level latency variables for cohort
+        # observations that can deviate from the edge-level sum.
+        #
+        # Why? Because edge-level estimates come from window data
+        # (high quality, but edge-by-edge). Cohort data observes the
+        # whole path at once — it might reveal that the composed
+        # (summed) latency is slightly different from what the
+        # individual edges suggest.
+        #
+        # Implementation: non-centred parameterisation (see glossary).
+        # onset_cohort = softplus(onset_path + eps × τ)
+        # mu_cohort    = mu_path + eps × τ_mu
+        # sigma_cohort = max(sigma_path + eps × τ_sigma, 0.01)
+        #
+        # The τ values control how far cohort latency can drift from
+        # the edge-composed values. Small τ = tight coupling; the
+        # cohort data can nudge but not override the edge estimates.
+        #
+        # Only created when the path has ≥ 2 latency edges. Single-
+        # latency paths have path CDF = edge CDF (no composition
+        # needed, no room for divergence).
+        #
+        # Phase 2: wider priors (more room to drift) because the
+        # frozen Phase 1 latency may be wrong — cohort data must be
+        # free to correct it.
+        # =============================================================
         if not feat_cohort_latency:
             diagnostics.append("  FEATURE OFF: cohort_latency — no cohort latency hierarchy")
-        # Non-centred parameterisation: cohort latency = FW-composed
-        # edge latency + deviation. This keeps the cohort data
-        # constraining the edge-level latents (gradients flow through
-        # the FW composition) while allowing path-informed divergence.
-        # Mirrors the p_cohort = logit(p_base) + eps * tau pattern.
         for edge_id in topology.topo_order:
             if not feat_cohort_latency:
                 break
@@ -296,17 +663,16 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
             )
             if path_latency_count == 0:
                 continue
-            # Phase 1: only create cohort latency vars when path has 2+
-            # latency edges (single-latency paths use edge latent vars).
-            # Phase 2: use FW-composed frozen path latency (no free
-            # cohort latency). Free cohort latency + free p creates
-            # the cure model p×F identifiability problem. Frozen CDF
-            # means only p (via drift) is free. See journal 28-Mar-26.
+            # Only create cohort latency vars when path has 2+ latency
+            # edges. Single-latency paths (no upstream latency) have
+            # 2.path.CDF = 2.edge.CDF (frozen), which is correct because
+            # elapsed time a→x = 0 means no divergence is possible.
+            # See doc 24 §6.4.
             if path_latency_count < 2:
                 continue
 
             safe_id = _safe_var_name(edge_id)
-            path_sigma_ax = max(et.path_sigma_ax, 0.01)
+            path_sigma_ax = max(et.path_sigma_ax, SIGMA_FLOOR)
 
             # FW-composed path latency from edge-level latents
             path_result = _resolve_path_latency(
@@ -319,31 +685,64 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
             onset_prior, mu_path_composed, sigma_path_composed = path_result
 
             # onset_cohort, mu_cohort, sigma_cohort: path-level latency
-            # that can deviate from edge-level FW composition.
+            # that can deviate from the edge-level composed values.
             #
-            # Phase 1: tight non-centred around live edge latency (small tau).
-            # Phase 2: wide priors centred on frozen values — the frozen
-            # latency may be wrong, so the cohort data must be free to pull
-            # these parameters to the correct values.
+            # Phase 1: tight coupling — small τ means cohort latency
+            #   stays close to the edge-level sum. Cohort data can
+            #   nudge the path latency but not override it.
+            # Phase 2: wide priors — Phase 1's frozen latency may be
+            #   wrong, so cohort data must be free to pull these
+            #   parameters to better values.
             if is_phase2:
-                # Phase 2: wide independent priors centred on frozen values.
+                # Phase 2: path-level latency with priors derived from
+                # Phase 1 edge-level posteriors.
+                #
+                # The idea: Phase 1 learned each edge's latency. We compose
+                # those into a path-level prediction, then let cohort data
+                # refine it. The prior width for each path parameter comes
+                # from Phase 1's posterior uncertainty — if Phase 1 was
+                # confident about an edge, the path prior is tight there.
+                #
+                # Uncertainty propagation: since path onset = Σ edge onsets,
+                # the path onset SD = √(Σ edge_onset_SD²) — uncertainties
+                # add in quadrature (Pythagorean theorem for independent
+                # errors). Same approach for μ and σ (approximate for FW
+                # composition, but conservative — slightly overestimates
+                # uncertainty, which is safe).
+                # See journal 28-Mar-26 "approach 3".
                 onset_prior_val = float(onset_prior) if not hasattr(onset_prior, 'eval') else float(onset_prior.eval())
-                # Onset centred on frozen value via softplus(Normal).
+
+                path_onset_sd = 0.0
+                path_mu_sd = 0.0
+                path_sigma_sd = 0.0
+                for pid in et.path_edge_ids:
+                    pf = phase2_frozen.get(pid, {})
+                    path_onset_sd += pf.get("onset_sd", 0.5) ** 2
+                    path_mu_sd += pf.get("mu_sd", 0.1) ** 2
+                    path_sigma_sd += pf.get("sigma_sd", 0.05) ** 2
+                path_onset_sd = max(path_onset_sd ** 0.5, 0.1)
+                path_mu_sd = max(path_mu_sd ** 0.5, 0.02)
+                path_sigma_sd = max(path_sigma_sd ** 0.5, SIGMA_FLOOR)
+
+                # onset_cohort: softplus(Normal) centred on composed value
                 eps_onset_cohort = pm.Normal(f"eps_onset_cohort_{safe_id}", mu=0, sigma=1)
                 onset_cohort = pm.Deterministic(
                     f"onset_cohort_{safe_id}",
-                    pt.softplus(onset_prior_val + eps_onset_cohort * max(onset_prior_val * 0.3, 1.0)),
+                    pt.softplus(onset_prior_val + eps_onset_cohort * path_onset_sd),
                 )
+                # mu_cohort: Normal centred on FW-composed value
                 mu_prior_val = float(mu_path_composed) if not hasattr(mu_path_composed, 'eval') else float(mu_path_composed.eval())
                 mu_cohort = pm.Normal(
                     f"mu_cohort_{safe_id}",
                     mu=mu_prior_val,
-                    sigma=max(1.0, abs(mu_prior_val) * 0.5),
+                    sigma=path_mu_sd,
                 )
+                # sigma_cohort: Gamma with mode at composed value
                 sigma_prior_val = float(sigma_path_composed) if not hasattr(sigma_path_composed, 'eval') else float(sigma_path_composed.eval())
                 from .completeness import gamma_params_from_mode
                 gamma_a, gamma_b = gamma_params_from_mode(
-                    max(sigma_prior_val, 0.1), spread=1.0,
+                    max(sigma_prior_val, 0.1),
+                    spread=max(path_sigma_sd / max(sigma_prior_val, 0.1), 0.05),
                 )
                 sigma_cohort = pm.Gamma(
                     f"sigma_cohort_{safe_id}",
@@ -375,7 +774,7 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
                 eps_sigma_cohort = pm.Normal(f"eps_sigma_cohort_{safe_id}", mu=0, sigma=1)
                 sigma_cohort = pm.Deterministic(
                     f"sigma_cohort_{safe_id}",
-                    pt.maximum(sigma_path_composed + eps_sigma_cohort * tau_sigma_lat, 0.01),
+                    pt.maximum(sigma_path_composed + eps_sigma_cohort * tau_sigma_lat, SIGMA_FLOOR),
                 )
 
             cohort_latency_vars[edge_id] = (onset_cohort, mu_cohort, sigma_cohort)
@@ -391,7 +790,32 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
                     f"latent_onset={'independent' if feat_latent_onset else 'hardcoded'}"
                 )
 
-        # --- Per-edge variables and likelihoods ---
+        # =============================================================
+        # SECTION 5: PER-EDGE PROBABILITY VARIABLES AND LIKELIHOODS
+        # =============================================================
+        # This is the main loop. For each edge, we:
+        #
+        #   1. Determine the probability variable (p):
+        #      - Branch group edge → p comes from the Dirichlet (Section 2)
+        #      - Solo edge → p ~ Beta(α, β) (independent prior)
+        #
+        #   2. Create an overdispersion parameter κ ~ Gamma if enabled
+        #
+        #   3. Emit likelihood terms that connect p to observed data:
+        #      - Window observations → Binomial (how many converted?)
+        #      - Cohort trajectories → product-of-conditional-Binomials
+        #        (how did conversions accumulate over time?)
+        #      - Daily cohort obs → Binomial or BetaBinomial
+        #
+        # The code handles four cases based on what data is available:
+        #   - has_window AND has_cohort (the richest case)
+        #   - has_window only
+        #   - has_cohort only
+        #   - neither (prior-only edge — no data constrains p)
+        #
+        # Phase 2: window observations are skipped (already used in
+        # Phase 1). Only cohort data provides new information.
+        # =============================================================
         for edge_id in topology.topo_order:
             et = topology.edges.get(edge_id)
             ev = evidence.edges.get(edge_id)
@@ -421,37 +845,44 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
                     beta_param = ev.prob_prior.beta
                 p_base_var = None  # will be created below per observation type
 
-            # Per-edge overdispersion concentration κ.
-            # Used by branch group DirichletMultinomial split constraints.
-            # Also used by Phase 2 cohort daily BetaBinomial for first-edge.
-            edge_kappa = pm.Gamma(f"kappa_{safe_id}", alpha=3, beta=0.1) if feat_overdispersion else None
+            edge_kappa = pm.Gamma(f"kappa_{safe_id}", alpha=KAPPA_ALPHA, beta=KAPPA_BETA_WINDOW) if feat_overdispersion else None
 
+            # --- Case A: edge has BOTH window and cohort data ---
             if ev.has_window and ev.has_cohort:
                 if is_phase2:
-                    # Phase 2: cohort trajectories only, p derived from
-                    # Phase 1 with drift. See doc 23 §2.2.
+                    # Phase 2: p is a free variable whose prior encodes
+                    # Phase 1's learned distribution (posterior-as-prior).
+                    # Window data is NOT re-used — only cohort data
+                    # provides new information.
+                    # See journal 28-Mar-26.
                     if edge_id in bg_p_vars:
-                        # Branch group edge — p_cohort from drift + simplex
+                        # Branch group edge — p_cohort from Dirichlet
+                        # (concentrations from Phase 1 posterior)
                         p = bg_p_vars[edge_id]
                     else:
-                        # Solo edge — per-edge drift from frozen Phase 1 p
+                        # Solo edge — Beta prior from Phase 1 posterior
                         frozen = phase2_frozen.get(edge_id, {})
-                        p_frozen_val = frozen.get("p", ev.prob_prior.alpha / (ev.prob_prior.alpha + ev.prob_prior.beta))
-                        logit_p_frozen = np.log(p_frozen_val / (1.0 - p_frozen_val))
-
-                        tau_drift = max(et.path_sigma_ax, 0.1) if hasattr(et, 'path_sigma_ax') else 0.1
-                        eps_drift = pm.Normal(f"eps_drift_{safe_id}", mu=0, sigma=1)
-                        p = pm.Deterministic(
-                            f"p_cohort_{safe_id}",
-                            pm.math.sigmoid(logit_p_frozen + eps_drift * tau_drift),
-                        )
+                        p_alpha = frozen.get("p_alpha")
+                        p_beta = frozen.get("p_beta")
+                        if p_alpha is not None and p_beta is not None:
+                            # Phase 1 posterior as prior. No ESS cap —
+                            # ESS decay (step 2) will scale these when
+                            # drift estimation is added. For now (drift=0),
+                            # full Phase 1 precision.
+                            p = pm.Beta(f"p_cohort_{safe_id}",
+                                        alpha=max(p_alpha, DIRICHLET_CONC_FLOOR),
+                                        beta=max(p_beta, DIRICHLET_CONC_FLOOR))
+                        else:
+                            # No Phase 1 posterior — fallback to evidence prior
+                            p_mean = frozen.get("p", ev.prob_prior.alpha / (ev.prob_prior.alpha + ev.prob_prior.beta))
+                            p = pm.Beta(f"p_cohort_{safe_id}",
+                                        alpha=max(p_mean * FALLBACK_PRIOR_ESS, DIRICHLET_CONC_FLOOR),
+                                        beta=max((1 - p_mean) * FALLBACK_PRIOR_ESS, DIRICHLET_CONC_FLOOR))
                         edge_var_names[edge_id] = f"p_cohort_{safe_id}"
 
                     # Emit cohort trajectories only (skip window).
                     # p_window_var=None signals Phase 2 → skip window trajs.
-                    # Phase 2 uses scalar p_cohort (no per-cohort effects).
-                    # Between-cohort uncertainty is added at extraction time
-                    # using Phase 1's kappa_p (Option C). See journal 28-Mar-26.
+                    # See journal 28-Mar-26.
                     _emit_cohort_likelihoods(safe_id, p, ev, diagnostics,
                                             topology, edge_var_names, model,
                                             latency_vars=latency_vars,
@@ -461,10 +892,20 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
                                             onset_vars=onset_vars,
                                             skip_cohort_trajectories=False)
                 else:
-                    # Phase 1: hierarchical Beta on p per edge, window data
-                    # only. mu_p is the population mean rate, kappa_p controls
-                    # between-cohort variation. Per-cohort p_i are drawn from
-                    # Beta(mu_p × kappa_p, (1-mu_p) × kappa_p).
+                    # Phase 1: hierarchical Beta on p.
+                    #
+                    # The "hierarchical" part: instead of one p for all cohorts,
+                    # each cohort gets its own p_i drawn from:
+                    #   p_i ~ Beta(p × κ_p, (1-p) × κ_p)
+                    #
+                    # This means:
+                    #   p   = the population-average conversion rate
+                    #   κ_p = how tightly individual cohorts cluster around p
+                    #         (higher κ_p = less cohort-to-cohort variation)
+                    #   p_i = the actual rate for cohort i (can vary around p)
+                    #
+                    # This captures real-world variation: Monday's cohort might
+                    # convert at 28%, Tuesday's at 33%, etc.
                     # See journal 27-Mar-26 "hierarchical Beta on p".
                     if p_base_var is not None:
                         p = p_base_var
@@ -479,7 +920,7 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
                                 if traj.obs_type == "window" and len(traj.retrieval_ages) >= 2 and traj.n > 0:
                                     edge_has_lat = (
                                         (ev.latency_prior is not None and
-                                         (ev.latency_prior.sigma > 0.01 or
+                                         (ev.latency_prior.sigma > SIGMA_FLOOR or
                                           (ev.latency_prior.onset_delta_days or 0) > 0))
                                         or (latency_vars and ev.edge_id in (latency_vars or {}))
                                     )
@@ -492,7 +933,7 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
                     p_cohort_vec = None
                     kappa_p_var = None
                     if n_window_trajs >= 3 and feat_overdispersion:
-                        kappa_p_var = pm.Gamma(f"kappa_p_{safe_id}", alpha=3, beta=0.05)
+                        kappa_p_var = pm.Gamma(f"kappa_p_{safe_id}", alpha=KAPPA_ALPHA, beta=KAPPA_BETA_COHORT)
                         alpha_p = p * kappa_p_var
                         beta_p = (1.0 - p) * kappa_p_var
                         p_cohort_vec = pm.Beta(
@@ -509,7 +950,7 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
                         # No-latency edge: no trajectories (all converted to
                         # daily obs). Create kappa_p for BetaBinomial on daily
                         # obs to capture between-cohort variation.
-                        kappa_p_var = pm.Gamma(f"kappa_p_{safe_id}", alpha=3, beta=0.05)
+                        kappa_p_var = pm.Gamma(f"kappa_p_{safe_id}", alpha=KAPPA_ALPHA, beta=KAPPA_BETA_COHORT)
                         diagnostics.append(
                             f"  hierarchical_p: {edge_id[:8]}… "
                             f"no-latency, kappa_p for daily BetaBinomial"
@@ -532,6 +973,7 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
                 if edge_id not in edge_var_names:
                     edge_var_names[edge_id] = f"p_{safe_id}"
 
+            # --- Case B: edge has ONLY window data ---
             elif ev.has_window:
                 if p_base_var is not None:
                     p = p_base_var
@@ -541,6 +983,7 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
                 if emit_window_binomial:
                     _emit_window_likelihoods(safe_id, p, ev, diagnostics, kappa=edge_kappa)
 
+            # --- Case C: edge has ONLY cohort data ---
             elif ev.has_cohort:
                 if p_base_var is not None:
                     p = p_base_var
@@ -555,13 +998,23 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
                                             kappa=edge_kappa,
                                             onset_vars=onset_vars)
 
+            # --- Case D: no data — prior-only edge ---
             else:
                 if p_base_var is None:
                     p = pm.Beta(f"p_{safe_id}", alpha=alpha, beta=beta_param)
                     edge_var_names[edge_id] = f"p_{safe_id}"
 
-        # --- Branch group Multinomial likelihoods (window obs) ---
-        # Phase 2 skips — window data must not constrain cohort p.
+        # =============================================================
+        # SECTION 6: BRANCH GROUP MULTINOMIAL LIKELIHOODS
+        # =============================================================
+        # For branch groups (sibling edges from the same node), the
+        # individual Binomials from Section 5 don't enforce the
+        # constraint that sibling conversion counts must sum to ≤ n.
+        # The Multinomial (or DirichletMultinomial) enforces this
+        # "shared denominator" constraint: given n users at the parent
+        # node, k₁ + k₂ + ... + k_dropout = n.
+        #
+        # Phase 2 skips this — window data was already used in Phase 1.
         if not is_phase2:
             for group_id, bg in topology.branch_groups.items():
                 _emit_branch_group_multinomial(
@@ -593,16 +1046,29 @@ def _emit_dirichlet_prior(
     diagnostics: list[str],
     features: dict | None = None,
 ) -> None:
-    """Emit a Dirichlet prior for a branch group.
+    """Emit a Dirichlet prior for a branch group (Phase 1 only).
+
+    A branch group is a set of sibling edges from the same source node.
+    Example: from a "landing page" node, users can go to "signup",
+    "pricing", or "leave" — those three edges form a branch group.
+
+    The Dirichlet distribution generates K probabilities that sum to 1,
+    naturally enforcing the constraint that a user can only take one path.
 
     For non-exhaustive groups: K siblings + 1 dropout component.
-    For exhaustive groups: K siblings, no dropout.
+        The dropout absorbs users who don't take any sibling edge.
+    For exhaustive groups: K siblings, no dropout (all users take one).
 
-    Each sibling's probability is a Deterministic slice of the Dirichlet
-    draw, stored in bg_p_vars[edge_id] and edge_var_names[edge_id].
+    The concentration vector α controls the prior shape:
+      - α_i = prior_mean_i × κ, where κ is a shared concentration
+      - Higher κ = more confident in the prior proportions
+      - κ is derived from the number of components (modest, to avoid
+        over-concentrating — the real information comes from the data)
 
-    The Dirichlet concentration vector is derived from each sibling's
-    evidence-based prior (alpha, beta → concentration for that component).
+    Each sibling's p is stored as a Deterministic slice of the Dirichlet
+    draw: p_i = weights[i]. This lets the rest of the model reference
+    each sibling's probability individually while maintaining the
+    simplex constraint (probabilities sum to 1).
     """
     import pymc as pm
 
@@ -623,15 +1089,19 @@ def _emit_dirichlet_prior(
         # Not enough siblings — fall back to independent Betas (solo treatment)
         return
 
-    # Build concentration vector from per-edge priors.
-    # Each edge's Beta(α, β) implies a marginal mean of α/(α+β).
-    # For the Dirichlet, we want the concentration to reflect both the
-    # expected proportion and the confidence. We use the prior means
-    # scaled by a shared concentration parameter κ.
+    # Build the Dirichlet concentration vector from per-edge priors.
     #
-    # κ controls overall confidence. We derive it from the geometric
-    # mean of the per-edge prior ESS (α+β), capped to avoid
-    # over-concentration.
+    # Each edge has a Beta(α, β) prior on its conversion rate.
+    # The mean of that Beta is α/(α+β) — the expected proportion.
+    # Example: Beta(3, 7) → mean = 0.3 → we expect 30% of users
+    # to take this branch.
+    #
+    # To build the Dirichlet, we scale each mean by a shared κ:
+    #   α_dirichlet_i = mean_i × κ
+    # κ controls how confident the prior is. We keep it modest
+    # (scales gently with the number of branches) so the data
+    # dominates. Over-concentrating creates "funnel" geometry
+    # that makes MCMC sampling difficult.
     import numpy as np
 
     prior_means = []
@@ -670,8 +1140,7 @@ def _emit_dirichlet_prior(
     # Build Dirichlet concentration vector
     alpha_vec = [m * kappa for m in prior_means]
 
-    # Floor each component at 0.5 to avoid degenerate Dirichlet
-    alpha_vec = [max(a, 0.5) for a in alpha_vec]
+    alpha_vec = [max(a, DIRICHLET_CONC_FLOOR) for a in alpha_vec]
 
     weights = pm.Dirichlet(f"weights_{safe_group}", a=alpha_vec)
 
@@ -698,16 +1167,23 @@ def _identify_branch_group_window_edges(
     evidence: BoundEvidence,
     diagnostics: list[str],
 ) -> set[str]:
-    """Identify edges whose window obs will be handled by a Multinomial.
+    """Decide which branch-group edges get a shared Multinomial likelihood
+    instead of individual per-edge Binomials.
 
-    An edge qualifies if:
-      - It's in a branch group
-      - It has window observations (either window_obs or window trajectories)
+    Background: when sibling edges share a source node, the Multinomial
+    enforces mass conservation — the number of users who take Branch A
+    plus Branch B plus dropout must equal the total at the source.
+    Individual Binomials don't enforce this constraint.
+
+    An edge qualifies for the shared Multinomial if:
+      - It's in a branch group (has siblings)
+      - It has window observations (conversion counts)
       - At least one sibling also has window observations
-      - Total sibling k doesn't exceed shared n (counts are consistent)
+      - Total sibling conversions (Σ k_i) don't exceed n (sanity check:
+        you can't have more conversions across branches than users)
 
-    Returns the set of edge IDs whose window Binomials should NOT be
-    emitted per-edge (the Multinomial covers them).
+    Returns the set of edge IDs whose individual window Binomials should
+    be suppressed (the shared Multinomial in Section 6 handles them).
     """
     result: set[str] = set()
 
@@ -779,11 +1255,19 @@ def _emit_window_likelihoods(
 ) -> None:
     """Emit Binomial likelihoods for window observations (solo edges only).
 
-    Plain Binomial — no overdispersion. BetaBinomial with small kappa has
-    the same concentration-dependent p bias as the DM (gammaln terms with
-    alpha = kappa × p create monotonic upward pressure on p). Binomial
-    avoids this entirely. See journal 26-Mar-26 "Replace DM with textbook
-    Binomial".
+    Window observations are simple aggregate counts: "out of n users who
+    reached this node, k converted". This is a textbook Binomial setup:
+      k ~ Binomial(n, p × completeness)
+
+    The completeness factor adjusts for maturation: if we're observing
+    the edge after only 10 days but 95% of conversions take up to 30 days,
+    completeness ≈ 0.6 — we expect to see only 60% of eventual conversions.
+    Without this adjustment, incomplete data would underestimate p.
+
+    We use plain Binomial (not BetaBinomial) because BetaBinomial with
+    small κ has a systematic upward bias on p: its gammaln terms with
+    α = κ×p create monotonic upward pressure. Binomial avoids this.
+    See journal 26-Mar-26.
     """
     import pymc as pm
 
@@ -791,7 +1275,7 @@ def _emit_window_likelihoods(
         if w_obs.n <= 0:
             continue
         suffix = f"_{i}" if len(ev.window_obs) > 1 else ""
-        p_effective = pm.math.clip(p_var * w_obs.completeness, 0.001, 0.999)
+        p_effective = pm.math.clip(p_var * w_obs.completeness, P_CLIP_LO, P_CLIP_HI)
         pm.Binomial(
             f"obs_w_{safe_id}{suffix}",
             n=w_obs.n,
@@ -817,24 +1301,43 @@ def _emit_cohort_likelihoods(
     p_cohort_vec=None,
     kappa_p=None,
 ) -> None:
-    """Emit cohort likelihoods via pm.Potential (vectorised per obs_type).
+    """Emit cohort likelihoods — the most complex likelihood in the model.
 
-    Trajectory Cohort days (multiple retrieval ages) → vectorised
-    Multinomial log-probability via pm.Potential (one per obs_type per
-    edge). Single-retrieval days → pm.Binomial with completeness.
+    WHAT THIS DOES (plain English)
+    ------------------------------
+    Cohort data tracks groups of users over time. For each cohort (e.g.
+    "users who arrived on 1-Mar"), we observe how many have converted at
+    various ages (e.g. after 1 day, 7 days, 14 days, 30 days). This
+    creates a "maturation curve" — conversions accumulate over time.
 
-    p_var is the primary probability variable (p_cohort for hierarchical
-    edges, p for solo edges). p_window_var, if provided, is used for
-    window-type trajectories instead of p_var — ensuring window data
-    constrains p_window (tight pooling) not p_cohort (path-informed).
+    The shape of this curve tells us TWO things simultaneously:
+      1. The conversion rate (p) — what fraction will eventually convert
+      2. The timing (onset, μ, σ) — when those conversions happen
 
-    cohort_latency_vars: if provided, maps edge_id → (onset_cohort,
-    mu_cohort, sigma_cohort) for cohort-level path latency. Cohort
-    trajectories use these instead of FW-composed edge latency.
+    This function emits the likelihood terms that connect these parameters
+    to the observed maturation curves.
 
-    Phase D: when latency_vars contains latent (mu, sigma) for this edge
-    or upstream edges, CDFs are PyTensor expressions and the trajectory
-    shape constrains latency jointly with probability.
+    TWO TYPES OF COHORT DATA
+    -------------------------
+    1. Trajectories: a cohort observed at multiple ages → decomposed into
+       intervals using the product-of-conditional-Binomials method (see
+       glossary). This is the main workhorse — it constrains both p and
+       latency simultaneously.
+
+    2. Daily observations: a single (n, k) count per day → simple
+       Binomial. Used to anchor p when trajectory data is sparse.
+
+    KEY PARAMETERS
+    ---------------
+    p_var: the primary probability variable for this edge.
+    p_window_var: if provided, used for "window"-type trajectories (which
+        should constrain the window p, not the cohort p). Set to None in
+        Phase 2 to signal "skip window trajectories entirely".
+    cohort_latency_vars: path-level (onset, μ, σ) that can differ from
+        edge-level latency — used for "cohort"-type trajectories.
+    p_cohort_vec: if provided, per-trajectory p_i variables from the
+        hierarchical Beta model (each cohort gets its own p).
+    kappa_p: between-cohort overdispersion for no-latency edges.
 
     See doc 6 § "Efficient emission: pm.Potential vectorisation".
     """
@@ -843,20 +1346,27 @@ def _emit_cohort_likelihoods(
     import pytensor.tensor as pt
     from .completeness import shifted_lognormal_cdf
 
-    # Collect all trajectories across CohortObservation objects,
-    # grouped by obs_type. Each obs_type gets one Potential.
+    # ---- STEP 1: Collect and route trajectories ----
+    #
+    # Trajectories come in two types:
+    #   "window" — denominator is the from-node count (edge-level CDF)
+    #   "cohort" — denominator grows as upstream conversions arrive (path-level CDF)
+    #
+    # We also collect "daily" observations: single-age (n, k) counts
+    # that anchor p without the complexity of trajectory decomposition.
     window_trajs = []
     cohort_trajs = []
     all_daily = []
 
-    # Determine if this edge has any latency. No-latency edges should
-    # NOT go through DM trajectories — there is no maturation curve to
-    # trace, so a trajectory of identical y values is informationally
-    # equivalent to a single (n, k) observation. Route them to
-    # BetaBinomial instead.  See journal 26-Mar-26.
+    # Check if this edge has meaningful latency (delay > 0). Edges with
+    # no latency (e.g. instant redirects) have flat maturation curves —
+    # every observation shows the same conversion count regardless of
+    # age. There is no curve shape to learn from, so we convert these
+    # trajectories into simple daily (n, k) observations instead.
+    # See journal 26-Mar-26.
     edge_has_latency = (
         (ev.latency_prior is not None and
-         (ev.latency_prior.sigma > 0.01 or
+         (ev.latency_prior.sigma > SIGMA_FLOOR or
           (ev.latency_prior.onset_delta_days or 0) > 0))
         or (latency_vars and ev.edge_id in (latency_vars or {}))
     )
@@ -902,7 +1412,19 @@ def _emit_cohort_likelihoods(
                 if et_topo and len(et_topo.path_edge_ids) <= 1:
                     all_daily.extend(c_obs.daily)
 
-    # --- Emit trajectory Potentials ---
+    # ---- STEP 2: Emit trajectory Potentials ----
+    #
+    # For each trajectory (a cohort observed at multiple ages), we
+    # compute a log-probability using the product-of-conditional-
+    # Binomials decomposition (see glossary). This is added to the
+    # model as a pm.Potential — a custom log-probability term.
+    #
+    # The loop below handles "window" and "cohort" trajectories
+    # separately because they use different p expressions and
+    # different latency variables:
+    #   window → edge-level p and edge-level CDF
+    #   cohort → path-level p (product of upstream p's) and path CDF
+    #
     # See doc 6 § "pm.Potential vectorisation" and § "Phase D: latent latency".
     latency_vars = latency_vars or {}
 
@@ -912,21 +1434,26 @@ def _emit_cohort_likelihoods(
         if skip_cohort_trajectories and obs_type == "cohort":
             continue
 
-        # Resolve p expression and latency for this obs_type.
+        # ---- STEP 2a: Resolve the p expression for this obs_type ----
         #
-        # For cohort observations downstream of a join node, the edge
-        # may have multiple path_alternatives. In that case, we compute
-        # a mixture: Σ_alt [p_alt × CDF_alt(t)] rather than a single
-        # p × CDF. The mixture flag controls which DM likelihood path
-        # is used below.
+        # For window trajectories: p = edge-level p (straightforward).
+        # For cohort trajectories: p = product of p's along the path
+        #   from anchor to this edge's target node.
+        #
+        # Special case — join nodes: if a user can reach this edge via
+        # multiple paths (e.g. A→B→D or A→C→D), we compute a mixture:
+        #   expected_conversions(t) = Σ_alt [p_alt × CDF_alt(t)]
+        # where each alternative path has its own p and latency.
         is_mixture = False  # set True for join-downstream cohort
         mixture_components = []  # list of (p_alt, onset_alt, mu_alt, sigma_alt)
         _use_p_cohort_vec = False  # set True for hierarchical Beta window trajs
 
-        # Phase 2 cohort: use edge p directly with x (from-node count)
-        # as denominator instead of path product with a (anchor count).
-        # This avoids the DM bias toward higher p when a >> y (low
-        # conversion edges). See doc 23 §10.
+        # Phase 2 cohort: use the from-node count (x) as denominator
+        # instead of the anchor count (a). This is important because
+        # for deep edges, a >> y (anchor count is much larger than
+        # conversions), which creates bias toward higher p. Using x
+        # (the count at the immediately preceding node) avoids this.
+        # See doc 23 §10.
         phase2_cohort_use_x = (p_window_var is None and obs_type == "cohort")
 
         if phase2_cohort_use_x:
@@ -997,10 +1524,22 @@ def _emit_cohort_likelihoods(
                     stop_p_gradient=(p_window_var is not None),
                 )
 
-        # Resolve latency: latent (Phase D) or fixed (Phase S)?
-        # For window: edge-level latency only.
-        # For cohort: path-level composed from per-edge latents.
-        # (For mixture cohort, latency is resolved per-component above.)
+        # ---- STEP 2b: Resolve the latency (CDF shape) ----
+        #
+        # The CDF tells us what fraction of eventual conversions have
+        # happened by age t. We need (onset, μ, σ) to compute it.
+        #
+        # Two modes:
+        #   Latent (Phase D): onset, μ, σ are PyTensor variables that the
+        #     sampler is learning. The CDF is a differentiable expression,
+        #     so the trajectory shape constrains latency AND p jointly.
+        #   Fixed (Phase S): onset, μ, σ are constants. Only p is learned.
+        #
+        # For window obs: use this edge's latency.
+        # For cohort obs: use the path-composed latency (from Section 4
+        #   or FW-composed from individual edges).
+        # For mixture obs: each path component has its own latency
+        #   (already resolved in Step 2a above).
         has_latent_latency = False
         onset_vars = onset_vars or {}
         if is_mixture:
@@ -1045,7 +1584,7 @@ def _emit_cohort_likelihoods(
             if obs_type == "window":
                 onset = ev.latency_prior.onset_delta_days if ev.latency_prior else 0.0
                 mu_fixed = ev.latency_prior.mu if ev.latency_prior else 0.0
-                sigma_fixed = ev.latency_prior.sigma if ev.latency_prior else 0.01
+                sigma_fixed = ev.latency_prior.sigma if ev.latency_prior else SIGMA_FLOOR
             else:
                 et = topology.edges.get(ev.edge_id) if topology else None
                 if et and hasattr(et, 'path_latency') and et.path_latency:
@@ -1057,29 +1596,61 @@ def _emit_cohort_likelihoods(
                     mu_fixed = ev.latency_prior.mu
                     sigma_fixed = ev.latency_prior.sigma
                 else:
-                    onset, mu_fixed, sigma_fixed = 0.0, 0.0, 0.01
+                    onset, mu_fixed, sigma_fixed = 0.0, 0.0, SIGMA_FLOOR
 
         has_any_latency = (has_latent_latency or
                           (ev.latency_prior is not None and
-                           (ev.latency_prior.sigma > 0.01 or
+                           (ev.latency_prior.sigma > SIGMA_FLOOR or
                             (ev.latency_prior.onset_delta_days or 0) > 0)))
 
+        # ---- STEP 2c: Compute the trajectory likelihood ----
         if has_latent_latency:
-            # Textbook product-of-conditional-Binomials (Gamel et al. 2000;
-            # Yu et al. 2004). See journal 26-Mar-26 "Replace DM with
-            # textbook Binomial likelihood".
+            # ============================================================
+            # PRODUCT-OF-CONDITIONAL-BINOMIALS LIKELIHOOD
+            # ============================================================
+            # References: Gamel et al. 2000; Yu et al. 2004.
+            # See journal 26-Mar-26.
             #
-            # For each interval j:
-            #   q_j = p × ΔF_j / (1 − p × F_{j−1})     (conditional hazard)
+            # INTUITION (worked example):
+            # Suppose 1000 users arrived, and we observe conversions at
+            # ages 7d, 14d, 30d:
+            #   age  7d: 50 conversions so far  (cum_y[0] = 50)
+            #   age 14d: 120 conversions so far (cum_y[1] = 120)
+            #   age 30d: 180 conversions so far (cum_y[2] = 180)
+            #
+            # We decompose into intervals:
+            #   Interval 0 (0→7d):  d₀ = 50 new conversions
+            #     At risk: n₀ = 1000 (everyone)
+            #   Interval 1 (7→14d): d₁ = 70 new conversions
+            #     At risk: n₁ = 950 (1000 − 50 already converted)
+            #   Interval 2 (14→30d): d₂ = 60 new conversions
+            #     At risk: n₂ = 880 (1000 − 120 already converted)
+            #
+            # For each interval, the conditional probability of converting
+            # (given you haven't already) is:
+            #   q_j = p × ΔF_j / (1 − p × F_{j−1})
+            #
+            # Where:
+            #   p = the ultimate conversion rate (what we're learning)
+            #   F_j = CDF(age_j) = fraction of eventual conversions by age_j
+            #   ΔF_j = F_j − F_{j-1} = CDF increment over this interval
+            #   p × F_{j-1} = fraction of original population already converted
+            #   1 − p × F_{j-1} = fraction still "at risk"
+            #
+            # Each interval is an independent Binomial:
             #   d_j ~ Binomial(n_j, q_j)
+            #   log L_j = d_j × log(q_j) + (n_j − d_j) × log(1 − q_j)
             #
-            # log L_j = d_j × log(q_j) + (n_j − d_j) × log(1 − q_j)
+            # The total log-likelihood is Σ log L_j across all intervals
+            # across all trajectories, added to the model via pm.Potential.
             #
-            # No concentration parameters. No DM. No κ needed for this term.
-            # The Binomial has no artificial bias mechanism — conversion and
-            # survival terms naturally balance.
+            # WHY THIS WORKS: the CDF shape constrains the latency
+            # parameters (onset, μ, σ) while the overall level constrains
+            # p. Both are learned simultaneously. No overdispersion κ is
+            # needed — the Binomial has no artificial bias mechanism.
+            # ============================================================
 
-            # Step 1: Flatten ages and compute CDF
+            # Flatten all retrieval ages into one array for vectorised CDF.
             all_ages_raw = []
             for traj in trajs:
                 all_ages_raw.extend(traj.retrieval_ages)
@@ -1087,31 +1658,58 @@ def _emit_cohort_likelihoods(
             ages_tensor = pt.as_tensor_variable(ages_raw_np)
 
             def _compute_cdf_at_ages(onset_val, mu_val, sigma_val):
+                """Evaluate the shifted lognormal CDF at all retrieval ages.
+
+                CDF(t) = P(delay ≤ t) where delay = onset + LN(μ, σ).
+
+                Steps:
+                  1. Subtract onset: effective_age = t − onset
+                     (softplus if onset is latent, to keep gradients smooth)
+                  2. Take log: log_age = log(effective_age)
+                  3. Standardise: z = (log_age − μ) / (σ × √2)
+                  4. Apply the complementary error function:
+                     CDF = 0.5 × erfc(−z)
+
+                This is mathematically equivalent to the standard lognormal
+                CDF but expressed in terms of erfc (which PyTensor handles
+                efficiently with stable gradients).
+                """
                 onset_is_latent = hasattr(onset_val, 'name')
                 if onset_is_latent:
+                    # Latent onset: use softplus to smoothly handle ages
+                    # near or below onset (avoids log(negative))
                     age_minus_onset = ages_tensor - onset_val
                     effective_ages = pt.softplus(age_minus_onset)
-                    log_ages = pt.log(pt.maximum(effective_ages, 1e-30))
+                    log_ages = pt.log(pt.maximum(effective_ages, LOG_ARG_FLOOR))
                 else:
-                    effective_ages_np = np.maximum(ages_raw_np - float(onset_val), 1e-6)
+                    # Fixed onset: simple subtraction, floor at tiny positive
+                    effective_ages_np = np.maximum(ages_raw_np - float(onset_val), EFFECTIVE_AGE_FLOOR)
                     log_ages = pt.log(pt.as_tensor_variable(effective_ages_np))
                 z = (log_ages - mu_val) / (sigma_val * pt.sqrt(2.0))
                 return 0.5 * pt.erfc(-z)
 
             if is_mixture:
-                # Mixture: product-of-conditional-Binomials with
-                # p_cdf_sum = Σ_alt p_alt × CDF_alt(t) as the population
-                # cumulative incidence. Conditional hazard at interval j:
-                #   q_j = (p_cdf_sum(t_j) − p_cdf_sum(t_{j−1})) /
-                #         (1 − p_cdf_sum(t_{j−1}))
+                # MIXTURE PATH: join-node downstream edge.
+                # Multiple paths reach this edge (e.g. A→B→D and A→C→D).
+                # The population cumulative incidence is the weighted sum:
+                #   p_cdf_sum(t) = Σ_alt p_alt × CDF_alt(t)
+                # where p_alt is the path probability and CDF_alt is the
+                # path-level maturation curve.
                 p_cdf_sum = pt.zeros_like(ages_tensor)
                 for p_alt, onset_alt, mu_alt, sigma_alt in mixture_components:
                     if mu_alt is not None:
                         cdf_alt = _compute_cdf_at_ages(onset_alt, mu_alt, sigma_alt)
                     else:
+                        # No latency on this path → all conversions instant
                         cdf_alt = pt.ones_like(ages_tensor)
                     p_cdf_sum = p_cdf_sum + p_alt * cdf_alt
 
+                # Decompose each trajectory into intervals.
+                # For each interval j within a trajectory:
+                #   d_j = new conversions in this interval
+                #   n_j = population still at risk (not yet converted)
+                #   w   = recency weight (newer cohorts count more)
+                #   curr_indices/prev_indices = pointers into the CDF array
                 interval_d, interval_n_at_risk, interval_weights = [], [], []
                 curr_indices, prev_indices = [], []
                 age_offset = 0
@@ -1120,7 +1718,9 @@ def _emit_cohort_likelihoods(
                     cum_y = traj.cumulative_y
                     w = getattr(traj, 'recency_weight', 1.0)
                     for j in range(n_ages):
+                        # d_j: new conversions = cum_y[j] − cum_y[j−1]
                         d_j = float(cum_y[0]) if j == 0 else float(max(0, cum_y[j] - cum_y[j-1]))
+                        # n_j: at-risk = total − already converted
                         n_j = float(traj.n) if j == 0 else float(max(0, traj.n - cum_y[j-1]))
                         interval_d.append(d_j)
                         interval_n_at_risk.append(n_j)
@@ -1137,23 +1737,39 @@ def _emit_cohort_likelihoods(
                 prev_safe = np.where(prev_idx_np >= 0, prev_idx_np, 0)
                 is_first = (prev_idx_np < 0).astype(np.float64)
 
+                # Look up mixture CDF values at each interval boundary.
                 pcdf_curr = p_cdf_sum[curr_idx_np]
                 pcdf_prev = p_cdf_sum[prev_safe]
-                # ΔpCDF: p_cdf_sum(t_j) − p_cdf_sum(t_{j−1}), or p_cdf_sum(t_0) for first
-                delta_pcdf = pcdf_curr - pcdf_prev * (1.0 - is_first)
-                # Survival at start of interval: 1 − p_cdf_sum(t_{j−1})
-                surv_prev = 1.0 - pcdf_prev * (1.0 - is_first)
-                surv_prev = pt.maximum(surv_prev, 1e-10)
-                # Conditional hazard
-                q_j = pt.clip(delta_pcdf / surv_prev, 1e-10, 1.0 - 1e-10)
 
+                # ΔpCDF = change in cumulative incidence over this interval.
+                # For the first interval (is_first=1), prev is zero.
+                delta_pcdf = pcdf_curr - pcdf_prev * (1.0 - is_first)
+
+                # Survival = fraction of population NOT yet converted
+                # at the start of this interval.
+                surv_prev = 1.0 - pcdf_prev * (1.0 - is_first)
+                surv_prev = pt.maximum(surv_prev, SURVIVAL_FLOOR)
+
+                # Conditional hazard: probability of converting in this
+                # interval, given you haven't converted yet.
+                q_j = pt.clip(delta_pcdf / surv_prev, P_CLIP_LO, P_CLIP_HI)
+
+                # Binomial log-likelihood for each interval, weighted by
+                # recency, summed across all intervals and trajectories.
                 logp = pt.sum(weights_np * (
                     d_np * pt.log(q_j) + (n_at_risk_np - d_np) * pt.log(1.0 - q_j)
                 ))
             else:
-                # Single-path: product-of-conditional-Binomials.
+                # SINGLE-PATH: product-of-conditional-Binomials (common case).
+                # Same mathematics as the mixture case above, but with a
+                # single (onset, μ, σ) and a single p (or per-cohort p_i).
+
+                # Compute the CDF at every retrieval age (vectorised).
                 cdf_all = _compute_cdf_at_ages(onset, mu_var, sigma_var)
 
+                # Decompose trajectories into intervals (same as mixture).
+                # traj_idx_per_interval tracks which trajectory each interval
+                # belongs to — needed for hierarchical p_i indexing.
                 interval_d, interval_n_at_risk, interval_weights = [], [], []
                 curr_indices, prev_indices = [], []
                 traj_idx_per_interval = []
@@ -1182,25 +1798,35 @@ def _emit_cohort_likelihoods(
                 is_first = (prev_idx_np < 0).astype(np.float64)
                 traj_idx_np = np.array(traj_idx_per_interval, dtype=np.int64)
 
-                # Per-interval p: use p_i[traj_index] if hierarchical,
-                # else broadcast scalar p_expr.
+                # Resolve p for each interval:
+                #   Hierarchical mode: each trajectory has its own p_i
+                #   Standard mode: all intervals share the same p
                 if _use_p_cohort_vec:
                     p_per_interval = p_cohort_vec[traj_idx_np]
                 else:
                     p_per_interval = p_expr
 
+                # Look up CDF values at interval boundaries.
                 cdf_curr = cdf_all[curr_idx_np]
                 cdf_prev = cdf_all[prev_safe]
-                # ΔF: CDF(t_j) − CDF(t_{j−1})
+
+                # ΔF = CDF increment over this interval (how much of the
+                # maturation curve was "used up" in this time window).
                 delta_F = cdf_curr - cdf_prev * (1.0 - is_first)
-                delta_F = pt.maximum(delta_F, 1e-15)
-                # Survival at start of interval: 1 − p × CDF(t_{j−1})
+                delta_F = pt.maximum(delta_F, CDF_INCREMENT_FLOOR)
+
+                # Survival = fraction not yet converted at interval start.
+                # p × F_{j-1} = fraction of original pop already converted.
                 F_prev = cdf_prev * (1.0 - is_first)
                 surv_prev = 1.0 - p_per_interval * F_prev
-                surv_prev = pt.maximum(surv_prev, 1e-10)
-                # Conditional hazard: q_j = p × ΔF / (1 − p × F_{j−1})
-                q_j = pt.clip(p_per_interval * delta_F / surv_prev, 1e-10, 1.0 - 1e-10)
+                surv_prev = pt.maximum(surv_prev, SURVIVAL_FLOOR)
 
+                # Conditional hazard: probability of converting in this
+                # interval, given you haven't yet.
+                #   q_j = p × ΔF / (1 − p × F_{j−1})
+                q_j = pt.clip(p_per_interval * delta_F / surv_prev, P_CLIP_LO, P_CLIP_HI)
+
+                # Binomial log-likelihood, weighted and summed.
                 logp = pt.sum(weights_np * (
                     d_np * pt.log(q_j) + (n_at_risk_np - d_np) * pt.log(1.0 - q_j)
                 ))
@@ -1208,8 +1834,11 @@ def _emit_cohort_likelihoods(
             n_terms = len(trajs)
 
         else:
-            # Fixed CDFs: product-of-conditional-Binomials with precomputed
-            # CDF values. Only p flows through as a PyTensor variable.
+            # FIXED-CDF PATH (Phase S or no latent latency).
+            # Same product-of-conditional-Binomials mathematics, but the
+            # CDF values are precomputed as plain floats (not PyTensor
+            # variables). Only p flows through as a learnable parameter.
+            # This is faster but cannot learn latency from the data.
             interval_d = []
             interval_n_at_risk = []
             interval_cdf_curr = []
@@ -1241,10 +1870,10 @@ def _emit_cohort_likelihoods(
             cdf_prev_np = np.array(interval_cdf_prev, dtype=np.float64)
             weights_np = np.array(interval_weights, dtype=np.float64)
 
-            delta_F = pt.as_tensor_variable(np.maximum(cdf_curr_np - cdf_prev_np, 1e-15))
+            delta_F = pt.as_tensor_variable(np.maximum(cdf_curr_np - cdf_prev_np, CDF_INCREMENT_FLOOR))
             F_prev = pt.as_tensor_variable(cdf_prev_np)
-            surv_prev = pt.maximum(1.0 - p_expr * F_prev, 1e-10)
-            q_j = pt.clip(p_expr * delta_F / surv_prev, 1e-10, 1.0 - 1e-10)
+            surv_prev = pt.maximum(1.0 - p_expr * F_prev, SURVIVAL_FLOOR)
+            q_j = pt.clip(p_expr * delta_F / surv_prev, P_CLIP_LO, P_CLIP_HI)
 
             logp = pt.sum(weights_np * (
                 d_np * pt.log(q_j) + (n_at_risk_np - d_np) * pt.log(1.0 - q_j)
@@ -1259,18 +1888,26 @@ def _emit_cohort_likelihoods(
             f"p_type={'edge' if obs_type == 'window' else 'path'}{mixture_str}"
         )
 
-    # --- Single-retrieval days (Binomial p-anchor) ---
-    # Daily Binomials anchor p to the observed conversion rate,
-    # preventing the p-latency tradeoff from drifting to degenerate
-    # modes (p≈1, mu→∞). Plain Binomial — BetaBinomial with small kappa
-    # has the same concentration-dependent p bias as DM (gammaln terms
-    # with alpha = kappa × p monotonically increase in p). With kappa=3,
-    # the BB actually PREFERS higher p on low-conversion edges. Binomial
-    # provides 59 nats of correct signal vs 9.5 nats of wrong signal
-    # from BB. See journal 26-Mar-26.
-    # Guard: skip when array is very small (≤3 days) — too few
-    # points to anchor p, and small Binomial arrays trigger a
-    # PyTensor composite rewrite bug (bool→float64 on shape≤2).
+    # ---- STEP 3: Daily observations (p-anchor) ----
+    #
+    # Daily observations are simple (n, k) counts: "on this date, n users
+    # arrived and k converted". Unlike trajectories, these are single
+    # measurements — no maturation curve, just one snapshot per day.
+    #
+    # Their purpose is to ANCHOR p to the observed conversion rate.
+    # Without them, the trajectory likelihood has a tradeoff between
+    # p and latency: the model could explain low observed conversions
+    # either as "low p" or as "high p but very slow latency (most
+    # conversions haven't happened yet)". The daily anchor breaks this
+    # degeneracy by directly constraining p.
+    #
+    # We use plain Binomial (not BetaBinomial) for the same reason as
+    # window obs: BetaBinomial with small κ has an upward bias on p.
+    # Exception: no-latency edges use BetaBinomial with κ_p to capture
+    # between-cohort variation (since there is no trajectory to do that).
+    #
+    # Guard: skip when ≤ 3 days — too few points to anchor p, and
+    # small arrays trigger a PyTensor rewrite bug.
     if all_daily and len(all_daily) > 3:
         n_arr = np.array([d.n for d in all_daily], dtype=np.int64)
         k_arr = np.array([min(d.k, d.n) for d in all_daily], dtype=np.int64)
@@ -1282,7 +1919,7 @@ def _emit_cohort_likelihoods(
             k_arr = k_arr[mask]
             compl_arr = compl_arr[mask]
 
-            p_effective = pm.math.clip(p_var * compl_arr, 0.001, 0.999)
+            p_effective = pm.math.clip(p_var * compl_arr, P_CLIP_LO, P_CLIP_HI)
 
             if kappa_p is not None and not edge_has_latency:
                 # No-latency edge with kappa_p: BetaBinomial to capture
@@ -1311,14 +1948,26 @@ def _resolve_path_latency(
     latency_vars: dict[str, tuple],
     onset_vars: dict[str, object] | None = None,
 ) -> tuple | None:
-    """Compose path-level latency from per-edge latents via FW chain.
+    """Compose path-level latency from individual edge latencies.
 
-    Returns (onset, mu_composed, sigma_composed) or None if no latency.
-    Uses latent variables where available, fixed priors otherwise.
+    When a user traverses edges A → B → C, the total delay is the sum
+    of individual edge delays. Since each edge's delay is lognormal,
+    the sum is approximately lognormal (via Fenton-Wilkinson composition).
 
-    onset_vars: if provided (Phase D.O), edge-level latent onset variables
-    are summed instead of fixed onset_delta_days. This makes path_delta
-    differentiable — NUTS gradients flow through to edge onset.
+    This function:
+      1. Sums onsets: path_onset = onset_A + onset_B + onset_C
+      2. Composes (μ, σ) pairs via FW chain: the result is a single
+         (μ_path, σ_path) that approximates the sum of lognormals.
+
+    Uses latent (PyTensor) variables where available (the model is
+    learning them), and falls back to fixed prior values otherwise.
+
+    Returns (onset, mu_composed, sigma_composed) or None if no
+    latency edges exist on the path.
+
+    onset_vars: if provided, edge-level latent onset variables are
+    summed (as differentiable PyTensor expressions) instead of fixed
+    values. This lets MCMC gradients flow through to edge onsets.
     """
     import pytensor.tensor as pt
     from .completeness import pt_fw_chain
@@ -1371,19 +2020,27 @@ def _resolve_path_probability(
     model,
     stop_p_gradient: bool = False,
 ):
-    """Compute p_path = product of p variables along the path.
+    """Compute the path probability: p_path = p_A × p_B × ... × p_current.
 
-    For the first edge from anchor, p_path = current_p_var.
-    For downstream edges, p_path includes upstream p's.
+    For a cohort observation at edge C on path A → B → C, the fraction
+    of anchor-node users who reach C's target is the product of all
+    edge probabilities along the path: p_A × p_B × p_C.
 
-    stop_p_gradient: if True, wrap only the UPSTREAM edges' product
-        in disconnected_grad, leaving the current/terminal edge free
-        to receive gradient. This means cohort DM constrains the
-        terminal edge's p (conditional on upstream estimates) but
-        cannot distort upstream edges. See journal 25-Mar-26 (cont.):
-        the earlier version wrapped the ENTIRE product, which made
-        cohort data unable to constrain ANY edge's p — causing deep
-        funnel edges with sparse window data to be prior-dominated.
+    For the first edge from anchor (no upstream edges), p_path = p_current.
+
+    stop_p_gradient: controls whether cohort data can influence upstream
+        edges' probabilities via MCMC gradients.
+
+        If True: the upstream product (p_A × p_B) is wrapped in
+        disconnected_grad — the sampler treats it as a constant when
+        computing gradients for p_A and p_B. Only p_current (the
+        terminal edge) receives gradient from this likelihood term.
+
+        Why this matters: without this, a single noisy cohort observation
+        at edge C could distort the well-constrained estimates of p_A
+        and p_B (which have their own window data). The gradient stop
+        says "cohort data constrains the terminal edge, not the whole
+        path". See journal 25-Mar-26.
     """
     from pytensor.gradient import disconnected_grad
 
@@ -1452,17 +2109,31 @@ def _emit_branch_group_multinomial(
     model,
     diagnostics: list[str],
 ) -> None:
-    """Emit Multinomial likelihood for a branch group's window observations.
+    """Emit a shared Multinomial (or DirichletMultinomial) likelihood for
+    a branch group's window observations.
 
-    Phase B: siblings are Dirichlet components (simplex-constrained).
-    The Multinomial enforces shared-denominator mass conservation.
-    Each sibling's p_window (or p if window-only) is a component.
-    The dropout component comes from the Dirichlet (non-exhaustive) or
-    is absent (exhaustive).
+    This enforces the "shared denominator" constraint: if 1000 users
+    arrived at the source node and 300 took Branch A and 200 took
+    Branch B, then at most 500 took any branch (300 + 200 ≤ 1000).
+    The Multinomial naturally enforces this — individual per-edge
+    Binomials do not.
 
-    Cohort daily observations are handled per-edge via _emit_cohort_likelihoods
-    (different completeness per sibling per day makes a shared Multinomial
-    impractical for cohort data).
+    Structure of the Multinomial:
+      p_vec = [p_A × completeness_A, p_B × completeness_B, ..., dropout]
+      observed = [k_A, k_B, ..., n − Σk]
+
+    For exhaustive groups (no dropout), p_vec sums to 1 and
+    observed sums to n. For non-exhaustive groups, the dropout
+    component absorbs users who didn't take any branch.
+
+    If overdispersion is enabled (κ exists), uses DirichletMultinomial
+    instead of plain Multinomial — this allows the observed proportions
+    to vary more than a simple coin-flip model would predict.
+
+    Note: cohort daily observations are NOT handled here — each sibling
+    may have different completeness on different days, making a shared
+    Multinomial impractical. They are handled per-edge in
+    _emit_cohort_likelihoods.
     """
     import pymc as pm
     import pytensor.tensor as pt
@@ -1567,7 +2238,7 @@ def _emit_branch_group_multinomial(
         # The Dirichlet already constrains Σ p_i + p_dropout = 1,
         # so dropout = 1 - Σ p_effective_siblings (adjusted for completeness).
         p_dropout = 1.0 - pt.sum(p_stack)
-        p_dropout_safe = pt.maximum(p_dropout, 0.001)
+        p_dropout_safe = pt.maximum(p_dropout, P_CLIP_LO)
         p_full = pt.concatenate([p_stack, pt.stack([p_dropout_safe])])
         dropout_k = shared_n - total_k
         k_full = np.array(k_observed + [dropout_k], dtype=np.int64)
@@ -1575,8 +2246,10 @@ def _emit_branch_group_multinomial(
 
     safe_group = _safe_var_name(bg.group_id)
 
-    # Use the first sibling's κ for the branch group DM.
-    # Siblings share a source node so share overdispersion characteristics.
+    # Use the first sibling's κ for the entire branch group.
+    # Siblings share a source node, so they share the same level of
+    # day-to-day noise (overdispersion). If κ exists, use
+    # DirichletMultinomial (overdispersed); otherwise plain Multinomial.
     first_sib_id = sibling_info[0]["edge_id"]
     first_safe = _safe_var_name(first_sib_id)
     kappa_var = None
