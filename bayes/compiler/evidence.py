@@ -91,6 +91,9 @@ def bind_evidence(
         if et.has_latency:
             ev.latency_prior = _resolve_latency_prior(et, pf_data)
 
+        # --- Warm-start: kappa, kappa_p, cohort latency ---
+        _resolve_warm_start_extras(ev, et, pf_data)
+
         # --- Parse values[] entries ---
         values = pf_data.get("values") or []
         for v in values:
@@ -247,6 +250,9 @@ def bind_snapshot_evidence(
         if et.has_latency:
             ev.latency_prior = _resolve_latency_prior(et, pf_data)
 
+        # --- Warm-start: kappa, kappa_p, cohort latency ---
+        _resolve_warm_start_extras(ev, et, pf_data)
+
         # --- Evidence: merge snapshot rows + param file ---
         #
         # Snapshot rows provide rich multi-retrieval trajectories per
@@ -387,13 +393,66 @@ def _bind_from_snapshot_rows(
     window_by_day: dict[str, list[dict]] = defaultdict(list)
     cohort_by_day: dict[str, list[dict]] = defaultdict(list)
 
+    # Aggregate context-prefixed rows into bare window()/cohort().
+    # Context slices are MECE — summing their x and y values for the
+    # same (anchor_day, retrieved_at) recovers the aggregate row.
+    # Until Phase C per-context modelling is built, the compiler
+    # operates on aggregate data only. If a bare aggregate row already
+    # exists, it takes precedence (context rows for that retrieval are
+    # dropped). See doc 25.
+    agg_window: dict[str, dict[str, dict]] = defaultdict(dict)  # anchor → ret → row
+    agg_cohort: dict[str, dict[str, dict]] = defaultdict(dict)
+    n_ctx_aggregated = 0
+
     for row in rows:
         anchor_day = str(row.get("anchor_day", ""))
         slice_key = str(row.get("slice_key", ""))
+        ret_key = str(row.get("retrieved_at", ""))
+        is_ctx = "context(" in slice_key
+
         if _is_cohort(slice_key):
-            cohort_by_day[anchor_day].append(row)
+            bucket = agg_cohort
+        elif _is_window(slice_key):
+            bucket = agg_window
         else:
-            window_by_day[anchor_day].append(row)
+            continue
+
+        day_bucket = bucket[anchor_day]
+        if ret_key in day_bucket:
+            existing = day_bucket[ret_key]
+            if is_ctx and "context(" not in str(existing.get("slice_key", "")):
+                # Bare aggregate already present — skip context row
+                n_ctx_aggregated += 1
+                continue
+            if is_ctx:
+                # Sum into existing context-aggregated row
+                existing["x"] = (existing.get("x") or 0) + (row.get("x") or 0)
+                existing["y"] = (existing.get("y") or 0) + (row.get("y") or 0)
+                if row.get("a") is not None and existing.get("a") is not None:
+                    existing["a"] = existing["a"] + row["a"]
+                n_ctx_aggregated += 1
+                continue
+            else:
+                # Bare aggregate replaces any prior context-aggregated row
+                day_bucket[ret_key] = dict(row)
+                n_ctx_aggregated += 1
+                continue
+        else:
+            day_bucket[ret_key] = dict(row)
+            if is_ctx:
+                n_ctx_aggregated += 1
+
+    # Flatten aggregated rows back into per-day lists
+    for anchor_day, ret_map in agg_window.items():
+        window_by_day[anchor_day].extend(ret_map.values())
+    for anchor_day, ret_map in agg_cohort.items():
+        cohort_by_day[anchor_day].extend(ret_map.values())
+
+    if n_ctx_aggregated > 0:
+        diagnostics.append(
+            f"INFO edge {ev.edge_id[:8]}…: aggregated {n_ctx_aggregated} "
+            f"context-prefixed rows into bare window()/cohort()"
+        )
 
     # Step 2: Build trajectories for each obs_type.
     _settings = settings or {}
@@ -877,6 +936,24 @@ def _retrieval_age(anchor_day: str, retrieved_at: str, today: datetime) -> float
 # Prior resolution
 # ---------------------------------------------------------------------------
 
+# Warm-start quality gates.  If the previous posterior didn't converge,
+# using it as a prior can poison subsequent runs.  Only accept warm-start
+# when rhat is acceptable AND ESS is non-trivial.
+_WARM_START_RHAT_MAX = 1.10
+_WARM_START_ESS_MIN = 100
+
+
+def _warm_start_acceptable(slice_data: dict) -> bool:
+    """Return True if the posterior slice meets quality gates for warm-start."""
+    rhat = slice_data.get("rhat")
+    ess = slice_data.get("ess")
+    if rhat is not None and float(rhat) > _WARM_START_RHAT_MAX:
+        return False
+    if ess is not None and float(ess) < _WARM_START_ESS_MIN:
+        return False
+    return True
+
+
 def _resolve_latency_prior(et, pf_data: dict | None) -> LatencyPrior:
     """Resolve latency prior for an edge (doc 21: warm-start from posterior).
 
@@ -897,7 +974,8 @@ def _resolve_latency_prior(et, pf_data: dict | None) -> LatencyPrior:
                 ws = slices.get("window()", {})
                 prev_mu = ws.get("mu_mean")
                 prev_sigma = ws.get("sigma_mean")
-                if prev_mu is not None and prev_sigma is not None:
+                if (prev_mu is not None and prev_sigma is not None
+                        and _warm_start_acceptable(ws)):
                     lat_mu = float(prev_mu)
                     lat_sigma = float(prev_sigma)
                     lat_source = "warm_start"
@@ -933,7 +1011,8 @@ def _resolve_prior(pf_data: dict, topo_fingerprint: str) -> ProbabilityPrior:
         slices = posterior.get("slices")
         if isinstance(slices, dict):
             window_slice = slices.get("window()", {})
-            if window_slice.get("alpha") and window_slice.get("beta"):
+            if (window_slice.get("alpha") and window_slice.get("beta")
+                    and _warm_start_acceptable(window_slice)):
                 alpha_raw = window_slice["alpha"]
                 beta_raw = window_slice["beta"]
         # Fallback: _model_state.p_base_alpha/beta (hierarchy anchor)
@@ -1010,6 +1089,61 @@ def _resolve_prior(pf_data: dict, topo_fingerprint: str) -> ProbabilityPrior:
             )
 
     return ProbabilityPrior(alpha=1.0, beta=1.0, source="uninformative")
+
+
+def _resolve_warm_start_extras(ev, et, pf_data: dict | None) -> None:
+    """Populate kappa, kappa_p, and cohort latency warm-start from previous posterior.
+
+    Reads from posterior._model_state (kappa, kappa_p) and
+    posterior.slices["cohort()"] (path latency).  All values are
+    quality-gated via the window() slice — if the previous run didn't
+    converge, none of these warm-starts are used.
+    """
+    if not isinstance(pf_data, dict):
+        return
+    posterior = pf_data.get("posterior")
+    if not isinstance(posterior, dict):
+        return
+
+    # Quality gate: check window() slice convergence.
+    # All warm-start extras are gated on the same quality check as
+    # p and latency — if the previous run was bad, skip everything.
+    slices = posterior.get("slices")
+    if isinstance(slices, dict):
+        ws = slices.get("window()", {})
+        if not _warm_start_acceptable(ws):
+            return
+    else:
+        return
+
+    # kappa and kappa_p from _model_state
+    ms = posterior.get("_model_state") or {}
+    safe_eid = ev.edge_id.replace("-", "_")
+
+    kappa_key = f"kappa_{safe_eid}"
+    if kappa_key in ms:
+        val = float(ms[kappa_key])
+        if val > 0:
+            ev.kappa_warm = val
+
+    kappa_p_key = f"kappa_p_{safe_eid}"
+    if kappa_p_key in ms:
+        val = float(ms[kappa_p_key])
+        if val > 0:
+            ev.kappa_p_warm = val
+
+    # Cohort (path) latency from cohort() slice
+    cs = slices.get("cohort()", {})
+    if cs and _warm_start_acceptable(cs):
+        c_mu = cs.get("mu_mean")
+        c_sigma = cs.get("sigma_mean")
+        c_onset = cs.get("onset_mean")
+        if c_mu is not None and c_sigma is not None:
+            ev.cohort_latency_warm = {
+                "mu": float(c_mu),
+                "sigma": float(c_sigma),
+                "onset": float(c_onset) if c_onset is not None else None,
+            }
 
 
 # ---------------------------------------------------------------------------

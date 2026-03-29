@@ -99,6 +99,11 @@ export function resolvePosteriorSlice(
  * Project a ProbabilityPosterior shape from posterior slices, given the
  * effective query DSL. Used by the cascade and analysis graph composition.
  *
+ * Edge-level fields ALWAYS come from window() and path-level fields ALWAYS
+ * come from cohort(), regardless of which mode the DSL selects. The DSL
+ * controls which slice is "active" for analysis routing, but the edge/path
+ * semantic split is fixed: window = edge, cohort = path.
+ *
  * Returns the shape that goes onto `p.posterior` on the graph edge, or
  * undefined if no suitable slice exists.
  */
@@ -108,48 +113,43 @@ export function projectProbabilityPosterior(
 ): Record<string, any> | undefined {
   if (!posterior?.slices) return undefined;
 
-  const primary = resolvePosteriorSlice(posterior.slices, effectiveDsl);
-  if (!primary) return undefined;
-
-  // Also try the "other" mode for path-level fields
-  const primaryMode = detectTemporalMode(effectiveDsl);
-  const otherMode = primaryMode === 'window' ? 'cohort' : 'window';
+  // Edge-level: always from window(). Path-level: always from cohort().
+  // Context dimensions from the DSL are preserved for both lookups.
   const dims = extractSliceDimensions(effectiveDsl || '');
-  const otherKey = dims ? `${dims}.${otherMode}()` : `${otherMode}()`;
-  const otherNorm = canonicaliseSliceKeyForMatching(otherKey);
+  const windowSlice = _findSliceByMode(posterior.slices, 'window', dims);
+  const cohortSlice = _findSliceByMode(posterior.slices, 'cohort', dims);
 
-  // Find the other-mode slice for path-level fields
-  let otherSlice: SlicePosteriorEntry | undefined;
-  for (const [rawKey, entry] of Object.entries(posterior.slices)) {
-    if (canonicaliseSliceKeyForMatching(rawKey) === otherNorm) {
-      otherSlice = entry;
-      break;
-    }
-  }
+  // Need at least the window slice for edge-level fields
+  const edgeSlice = windowSlice;
+  if (!edgeSlice) return undefined;
+
+  // The "active" slice determines analysis-level metadata (ESS, rhat)
+  const activeMode = detectTemporalMode(effectiveDsl);
+  const activeSlice = activeMode === 'cohort' ? (cohortSlice ?? edgeSlice) : edgeSlice;
 
   return {
     distribution: 'beta',
-    alpha: primary.alpha,
-    beta: primary.beta,
-    hdi_lower: primary.p_hdi_lower,
-    hdi_upper: primary.p_hdi_upper,
+    alpha: edgeSlice.alpha,
+    beta: edgeSlice.beta,
+    hdi_lower: edgeSlice.p_hdi_lower,
+    hdi_upper: edgeSlice.p_hdi_upper,
     hdi_level: posterior.hdi_level ?? 0.9,
-    ess: primary.ess,
-    rhat: primary.rhat,
-    evidence_grade: primary.evidence_grade ?? 0,
+    ess: activeSlice.ess,
+    rhat: activeSlice.rhat,
+    evidence_grade: activeSlice.evidence_grade ?? 0,
     fitted_at: posterior.fitted_at,
     fingerprint: posterior.fingerprint,
-    provenance: primary.provenance ?? 'bayesian',
-    divergences: primary.divergences ?? 0,
+    provenance: edgeSlice.provenance ?? 'bayesian',
+    divergences: activeSlice.divergences ?? 0,
     prior_tier: posterior.prior_tier ?? 'uninformative',
     surprise_z: posterior.surprise_z,
-    // Path-level from the other mode's slice
-    ...(otherSlice?.alpha != null ? {
-      path_alpha: otherSlice.alpha,
-      path_beta: otherSlice.beta,
-      path_hdi_lower: otherSlice.p_hdi_lower,
-      path_hdi_upper: otherSlice.p_hdi_upper,
-      path_provenance: otherSlice.provenance ?? 'bayesian',
+    // Path-level from cohort() slice
+    ...(cohortSlice?.alpha != null ? {
+      path_alpha: cohortSlice.alpha,
+      path_beta: cohortSlice.beta,
+      path_hdi_lower: cohortSlice.p_hdi_lower,
+      path_hdi_upper: cohortSlice.p_hdi_upper,
+      path_provenance: cohortSlice.provenance ?? 'bayesian',
     } : {}),
   };
 }
@@ -157,6 +157,10 @@ export function projectProbabilityPosterior(
 /**
  * Project a LatencyPosterior shape from posterior slices, given the
  * effective query DSL. Used by the cascade and analysis graph composition.
+ *
+ * Edge-level latency ALWAYS comes from window() and path-level latency
+ * ALWAYS comes from cohort(), regardless of DSL mode. See
+ * projectProbabilityPosterior for rationale.
  *
  * Returns the shape that goes onto `p.latency.posterior` on the graph edge,
  * or undefined if no suitable slice has latency data.
@@ -167,51 +171,71 @@ export function projectLatencyPosterior(
 ): Record<string, any> | undefined {
   if (!posterior?.slices) return undefined;
 
-  const primary = resolvePosteriorSlice(posterior.slices, effectiveDsl);
-  if (!primary?.mu_mean) return undefined;
-
-  const primaryMode = detectTemporalMode(effectiveDsl);
-  const otherMode = primaryMode === 'window' ? 'cohort' : 'window';
   const dims = extractSliceDimensions(effectiveDsl || '');
-  const otherKey = dims ? `${dims}.${otherMode}()` : `${otherMode}()`;
-  const otherNorm = canonicaliseSliceKeyForMatching(otherKey);
+  const windowSlice = _findSliceByMode(posterior.slices, 'window', dims);
+  const cohortSlice = _findSliceByMode(posterior.slices, 'cohort', dims);
 
-  let otherSlice: SlicePosteriorEntry | undefined;
-  for (const [rawKey, entry] of Object.entries(posterior.slices)) {
-    if (canonicaliseSliceKeyForMatching(rawKey) === otherNorm) {
-      otherSlice = entry;
-      break;
-    }
-  }
+  // Edge-level latency from window() slice
+  const edgeSlice = windowSlice;
+  if (!edgeSlice?.mu_mean) return undefined;
+
+  const activeMode = detectTemporalMode(effectiveDsl);
+  const activeSlice = activeMode === 'cohort' ? (cohortSlice ?? edgeSlice) : edgeSlice;
 
   return {
     distribution: 'lognormal',
-    onset_delta_days: primary.onset_mean ?? 0,
-    mu_mean: primary.mu_mean,
-    mu_sd: primary.mu_sd,
-    sigma_mean: primary.sigma_mean,
-    sigma_sd: primary.sigma_sd,
-    hdi_t95_lower: primary.hdi_t95_lower,
-    hdi_t95_upper: primary.hdi_t95_upper,
+    onset_delta_days: edgeSlice.onset_mean ?? 0,
+    mu_mean: edgeSlice.mu_mean,
+    mu_sd: edgeSlice.mu_sd,
+    sigma_mean: edgeSlice.sigma_mean,
+    sigma_sd: edgeSlice.sigma_sd,
+    hdi_t95_lower: edgeSlice.hdi_t95_lower,
+    hdi_t95_upper: edgeSlice.hdi_t95_upper,
     hdi_level: posterior.hdi_level ?? 0.9,
-    ess: primary.ess,
-    rhat: primary.rhat,
+    ess: activeSlice.ess,
+    rhat: activeSlice.rhat,
     fitted_at: posterior.fitted_at,
     fingerprint: posterior.fingerprint,
-    provenance: primary.provenance ?? 'bayesian',
-    ...(primary.onset_mean != null ? { onset_mean: primary.onset_mean, onset_sd: primary.onset_sd } : {}),
-    ...(primary.onset_mu_corr != null ? { onset_mu_corr: primary.onset_mu_corr } : {}),
-    // Path-level from the other mode's slice
-    ...(otherSlice?.mu_mean != null ? {
-      path_onset_delta_days: otherSlice.onset_mean,
-      path_onset_sd: otherSlice.onset_sd,
-      path_mu_mean: otherSlice.mu_mean,
-      path_mu_sd: otherSlice.mu_sd,
-      path_sigma_mean: otherSlice.sigma_mean,
-      path_sigma_sd: otherSlice.sigma_sd,
-      ...(otherSlice.hdi_t95_lower != null ? { path_hdi_t95_lower: otherSlice.hdi_t95_lower, path_hdi_t95_upper: otherSlice.hdi_t95_upper } : {}),
-      ...(otherSlice.onset_mu_corr != null ? { path_onset_mu_corr: otherSlice.onset_mu_corr } : {}),
-      path_provenance: otherSlice.provenance,
+    provenance: edgeSlice.provenance ?? 'bayesian',
+    ...(edgeSlice.onset_mean != null ? { onset_mean: edgeSlice.onset_mean, onset_sd: edgeSlice.onset_sd } : {}),
+    ...(edgeSlice.onset_mu_corr != null ? { onset_mu_corr: edgeSlice.onset_mu_corr } : {}),
+    // Path-level from cohort() slice
+    ...(cohortSlice?.mu_mean != null ? {
+      path_onset_delta_days: cohortSlice.onset_mean,
+      path_onset_sd: cohortSlice.onset_sd,
+      path_mu_mean: cohortSlice.mu_mean,
+      path_mu_sd: cohortSlice.mu_sd,
+      path_sigma_mean: cohortSlice.sigma_mean,
+      path_sigma_sd: cohortSlice.sigma_sd,
+      ...(cohortSlice.hdi_t95_lower != null ? { path_hdi_t95_lower: cohortSlice.hdi_t95_lower, path_hdi_t95_upper: cohortSlice.hdi_t95_upper } : {}),
+      ...(cohortSlice.onset_mu_corr != null ? { path_onset_mu_corr: cohortSlice.onset_mu_corr } : {}),
+      path_provenance: cohortSlice.provenance,
     } : {}),
   };
+}
+
+// ── Internal helpers ────────────────────────────────────────────────────────
+
+/**
+ * Find a slice by explicit temporal mode, optionally scoped to context dims.
+ * Tries context-qualified key first, then bare mode aggregate.
+ */
+function _findSliceByMode(
+  slices: Record<string, SlicePosteriorEntry>,
+  mode: 'window' | 'cohort',
+  dims: string,
+): SlicePosteriorEntry | undefined {
+  // Try context-qualified first (e.g. "context(channel:google).window()")
+  if (dims) {
+    const qualifiedKey = canonicaliseSliceKeyForMatching(`${dims}.${mode}()`);
+    for (const [rawKey, entry] of Object.entries(slices)) {
+      if (canonicaliseSliceKeyForMatching(rawKey) === qualifiedKey) return entry;
+    }
+  }
+  // Fallback: bare aggregate (e.g. "window()")
+  const bareKey = `${mode}()`;
+  for (const [rawKey, entry] of Object.entries(slices)) {
+    if (canonicaliseSliceKeyForMatching(rawKey) === bareKey) return entry;
+  }
+  return undefined;
 }

@@ -175,15 +175,31 @@ def _compute_surprise_gauge(
     ref_lat = reference_entry.get('latency') or {}
 
     latency = p.get('latency') or {}
-    raw_posterior = latency.get('posterior') or {}
+    lat_posterior = latency.get('posterior') or {}
+    prob_posterior = p.get('posterior') or {}
+
+    # --- Determine query mode for window/cohort selection ---
+    query_dsl = data.get('query_dsl') or ''
+    subj_slice_keys = subj.get('slice_keys') or []
+    has_cohort_slice = any('cohort(' in str(sk) for sk in subj_slice_keys)
+    is_cohort = has_cohort_slice or ('cohort(' in query_dsl)
 
     # --- Build reference distribution params ---
-    # For Bayesian: use raw posterior (alpha/beta, mu_mean/mu_sd, etc.)
-    # For analytic: reconstruct from mean/stdev (method of moments for Beta)
+    # For Bayesian: read directly from p.posterior (probability) and
+    # p.latency.posterior (latency). These are the authoritative MCMC
+    # output. In cohort mode, use path-level fields.
+    # For analytic: reconstruct from model_vars mean/stdev.
 
-    # Probability: alpha/beta
-    b_alpha_raw = raw_posterior.get('alpha') if reference_source == 'bayesian' else None
-    b_beta_raw = raw_posterior.get('beta') if reference_source == 'bayesian' else None
+    # Probability: alpha/beta from p.posterior (the correct object)
+    b_alpha_raw = None
+    b_beta_raw = None
+    if reference_source == 'bayesian':
+        if is_cohort:
+            b_alpha_raw = prob_posterior.get('path_alpha')
+            b_beta_raw = prob_posterior.get('path_beta')
+        if b_alpha_raw is None or b_beta_raw is None:
+            b_alpha_raw = prob_posterior.get('alpha')
+            b_beta_raw = prob_posterior.get('beta')
     if b_alpha_raw is None or b_beta_raw is None:
         # Reconstruct from mean/stdev using method of moments
         b_mean = ref_prob.get('mean')
@@ -198,16 +214,28 @@ def _compute_surprise_gauge(
                 b_beta_raw = (1 - m) * common
 
     # Latency: mu_mean/mu_sd, sigma_mean/sigma_sd, onset
+    # For Bayesian in cohort mode: use path-level posterior fields.
     if reference_source == 'bayesian':
-        ref_lat_params = {
-            'mu_mean': raw_posterior.get('mu_mean') or ref_lat.get('mu'),
-            'mu_sd': raw_posterior.get('mu_sd'),
-            'sigma_mean': raw_posterior.get('sigma_mean') or ref_lat.get('sigma'),
-            'sigma_sd': raw_posterior.get('sigma_sd'),
-            'onset_mean': raw_posterior.get('onset_mean'),
-            'onset_sd': raw_posterior.get('onset_sd'),
-            'onset_delta_days': raw_posterior.get('onset_delta_days') or ref_lat.get('onset_delta_days') or 0,
-        }
+        if is_cohort and lat_posterior.get('path_mu_mean') is not None:
+            ref_lat_params = {
+                'mu_mean': lat_posterior.get('path_mu_mean'),
+                'mu_sd': lat_posterior.get('path_mu_sd'),
+                'sigma_mean': lat_posterior.get('path_sigma_mean'),
+                'sigma_sd': lat_posterior.get('path_sigma_sd'),
+                'onset_mean': lat_posterior.get('path_onset_delta_days'),
+                'onset_sd': lat_posterior.get('path_onset_sd'),
+                'onset_delta_days': lat_posterior.get('path_onset_delta_days') or 0,
+            }
+        else:
+            ref_lat_params = {
+                'mu_mean': lat_posterior.get('mu_mean') or ref_lat.get('mu'),
+                'mu_sd': lat_posterior.get('mu_sd'),
+                'sigma_mean': lat_posterior.get('sigma_mean') or ref_lat.get('sigma'),
+                'sigma_sd': lat_posterior.get('sigma_sd'),
+                'onset_mean': lat_posterior.get('onset_mean'),
+                'onset_sd': lat_posterior.get('onset_sd'),
+                'onset_delta_days': lat_posterior.get('onset_delta_days') or ref_lat.get('onset_delta_days') or 0,
+            }
     else:
         # Analytic: no posterior SDs available for latency params
         ref_lat_params = {
@@ -646,11 +674,15 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
             return None
         p = edge.get('p') or {}
         latency = p.get('latency') or {}
-        mu = latency.get('mu')
-        sigma = latency.get('sigma')
+        lat_posterior = latency.get('posterior') or {}
+        prob_posterior = p.get('posterior') or {}
+
+        # Edge-level latency: prefer posterior (MCMC) over flat (stats pass).
+        mu = lat_posterior.get('mu_mean') or latency.get('mu')
+        sigma = lat_posterior.get('sigma_mean') or latency.get('sigma')
         if not isinstance(mu, (int, float)) or not isinstance(sigma, (int, float)):
             return None
-        onset = latency.get('onset_delta_days') or 0
+        onset = lat_posterior.get('onset_delta_days') or latency.get('onset_delta_days') or 0
         forecast = p.get('forecast') or {}
         forecast_mean = forecast.get('mean')
         t95 = latency.get('t95')
@@ -662,28 +694,51 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
         }
         if isinstance(forecast_mean, (int, float)) and math.isfinite(forecast_mean) and forecast_mean > 0:
             result['forecast_mean'] = float(forecast_mean)
-        # Doc 25 §3.3: posterior p from the re-projected slice (preferred over forecast_mean)
-        posterior = p.get('posterior') or {}
-        post_alpha = posterior.get('alpha')
-        post_beta = posterior.get('beta')
+        # Doc 25 §3.3: posterior p from the re-projected slice.
+        # After the posteriorSliceResolution fix, alpha/beta always carry
+        # window (edge-level) values and path_alpha/path_beta carry cohort
+        # (path-level) values. Extract both so the caller can pick the
+        # correct one based on query mode.
+        post_alpha = prob_posterior.get('alpha')
+        post_beta = prob_posterior.get('beta')
         if (isinstance(post_alpha, (int, float)) and isinstance(post_beta, (int, float))
                 and post_alpha > 0 and post_beta > 0):
             result['posterior_p'] = float(post_alpha) / (float(post_alpha) + float(post_beta))
-        # Probability posterior uncertainty (for confidence bands)
-        p_stdev = p.get('stdev')
+        path_alpha = prob_posterior.get('path_alpha')
+        path_beta = prob_posterior.get('path_beta')
+        if (isinstance(path_alpha, (int, float)) and isinstance(path_beta, (int, float))
+                and path_alpha > 0 and path_beta > 0):
+            result['posterior_p_cohort'] = float(path_alpha) / (float(path_alpha) + float(path_beta))
+        # Probability posterior uncertainty (for confidence bands).
+        # Prefer posterior-derived SD (from alpha/beta) over the flat p.stdev
+        # which is the blended analytic estimate, not the MCMC posterior width.
+        _post_p_sd = None
+        if (isinstance(post_alpha, (int, float)) and isinstance(post_beta, (int, float))
+                and post_alpha > 0 and post_beta > 0):
+            _s = post_alpha + post_beta
+            _post_p_sd = math.sqrt(post_alpha * post_beta / (_s * _s * (_s + 1)))
+        _post_p_cohort_sd = None
+        if (isinstance(path_alpha, (int, float)) and isinstance(path_beta, (int, float))
+                and path_alpha > 0 and path_beta > 0):
+            _s = path_alpha + path_beta
+            _post_p_cohort_sd = math.sqrt(path_alpha * path_beta / (_s * _s * (_s + 1)))
+        p_stdev = _post_p_sd or p.get('stdev')
         if isinstance(p_stdev, (int, float)) and math.isfinite(p_stdev) and p_stdev > 0:
             result['p_stdev'] = float(p_stdev)
+        if _post_p_cohort_sd is not None:
+            result['p_stdev_cohort'] = float(_post_p_cohort_sd)
         if isinstance(t95, (int, float)) and math.isfinite(t95) and t95 > 0:
             result['t95'] = float(t95)
         if isinstance(path_t95, (int, float)) and math.isfinite(path_t95) and path_t95 > 0:
             result['path_t95'] = float(path_t95)
-        path_mu = latency.get('path_mu')
-        path_sigma = latency.get('path_sigma')
+        # Path-level latency: prefer posterior over flat fields.
+        path_mu = lat_posterior.get('path_mu_mean') or latency.get('path_mu')
+        path_sigma = lat_posterior.get('path_sigma_mean') or latency.get('path_sigma')
         if isinstance(path_mu, (int, float)) and math.isfinite(path_mu):
             result['path_mu'] = float(path_mu)
         if isinstance(path_sigma, (int, float)) and math.isfinite(path_sigma) and path_sigma > 0:
             result['path_sigma'] = float(path_sigma)
-        path_onset = latency.get('path_onset_delta_days')
+        path_onset = lat_posterior.get('path_onset_delta_days') or latency.get('path_onset_delta_days')
         if isinstance(path_onset, (int, float)) and math.isfinite(path_onset) and path_onset >= 0:
             result['path_onset_delta_days'] = float(path_onset)
         # Per-source model vars — extract latency params from each source
@@ -1184,8 +1239,12 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
                 is_gap_epoch = any(str(sk) == '__epoch_gap__' for sk in subj_slice_keys)
 
                 if analysis_type == 'cohort_maturity' and ('forecast_mean' in model_params or 'posterior_p' in model_params) and not is_gap_epoch:
-                    # Doc 25 §3.3: prefer posterior_p (from re-projected slice) over forecast_mean
-                    forecast_mean = model_params.get('posterior_p') or model_params.get('forecast_mean')
+                    # Doc 25 §3.3: prefer posterior p over forecast_mean.
+                    # In cohort mode, use cohort p (path-level); in window mode, use window p (edge-level).
+                    if not is_window and 'posterior_p_cohort' in model_params:
+                        forecast_mean = model_params['posterior_p_cohort']
+                    else:
+                        forecast_mean = model_params.get('posterior_p') or model_params.get('forecast_mean')
 
                     cdf_mu = mu
                     cdf_sigma = sigma
@@ -1268,27 +1327,69 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
                                     'mode': 'cohort_path_method_b',
                                 }
 
-                        # --- Per-source model curves (from model_vars[]) ---
+                        # --- Per-source model curves ---
                         # Each source gets its own CDF curve, enabling the
                         # frontend to toggle analytic/analytic_be/bayesian overlays
                         # independently via display settings.
+                        #
+                        # Bayesian source: reads directly from the posterior on
+                        # the graph edge (the authoritative Bayes data), NOT from
+                        # model_vars which is a copy that may be stale/incomplete.
+                        # Analytic sources: read from model_vars as before.
                         source_curves = model_params.get('source_curves') or {}
                         _ds = data.get('display_settings') or {}
                         source_curve_results: Dict[str, Any] = {}
+
+                        # Build the bayesian source curve from the posterior
+                        # directly — this is the canonical Bayes output.
+                        if 'bayes_mu' in model_params:
+                            if cdf_mode == 'cohort_path' and 'bayes_path_mu' in model_params:
+                                s_mu = model_params['bayes_path_mu']
+                                s_sigma = model_params['bayes_path_sigma']
+                                s_onset = model_params.get('bayes_path_onset', 0.0)
+                                s_mu_sd = model_params.get('bayes_path_mu_sd')
+                                s_sigma_sd = model_params.get('bayes_path_sigma_sd')
+                                s_onset_sd = model_params.get('bayes_path_onset_sd')
+                            else:
+                                s_mu = model_params['bayes_mu']
+                                s_sigma = model_params['bayes_sigma']
+                                s_onset = model_params.get('bayes_onset', 0.0)
+                                s_mu_sd = model_params.get('bayes_mu_sd')
+                                s_sigma_sd = model_params.get('bayes_sigma_sd')
+                                s_onset_sd = model_params.get('bayes_onset_sd')
+                            if not is_window and 'posterior_p_cohort' in model_params:
+                                s_fm = model_params['posterior_p_cohort']
+                            elif 'posterior_p' in model_params:
+                                s_fm = model_params['posterior_p']
+                            else:
+                                s_fm = forecast_mean
+                            bayes_entry_dict: Dict[str, Any] = {
+                                'mu': s_mu, 'sigma': s_sigma,
+                                'onset_delta_days': s_onset,
+                                'forecast_mean': s_fm,
+                            }
+                            if s_mu_sd is not None:
+                                bayes_entry_dict['mu_sd'] = s_mu_sd
+                            if s_sigma_sd is not None:
+                                bayes_entry_dict['sigma_sd'] = s_sigma_sd
+                            if s_onset_sd is not None:
+                                bayes_entry_dict['onset_sd'] = s_onset_sd
+                            if not is_window and 'p_stdev_cohort' in model_params:
+                                bayes_entry_dict['p_stdev'] = model_params['p_stdev_cohort']
+                            elif 'p_stdev' in model_params:
+                                bayes_entry_dict['p_stdev'] = model_params['p_stdev']
+                            source_curves['bayesian'] = bayes_entry_dict
+
                         for src_name, src_params in source_curves.items():
                             s_mu = src_params.get('mu')
                             s_sigma = src_params.get('sigma')
                             s_onset = src_params.get('onset_delta_days', 0.0)
                             s_fm = src_params.get('forecast_mean', forecast_mean)
-                            # Doc 25 §3.4: For bayesian source, prefer posterior_p
-                            # (from re-projected slice) over the source's own forecast_mean
-                            if src_name == 'bayesian' and 'posterior_p' in model_params:
-                                s_fm = model_params['posterior_p']
                             if s_mu is None or s_sigma is None:
                                 continue
 
-                            # For cohort_path mode, prefer path-level params
-                            if cdf_mode == 'cohort_path':
+                            # For non-bayesian sources in cohort mode, use path params
+                            if cdf_mode == 'cohort_path' and src_name != 'bayesian':
                                 s_pmu = src_params.get('path_mu')
                                 s_psigma = src_params.get('path_sigma')
                                 s_ponset = src_params.get('path_onset_delta_days')

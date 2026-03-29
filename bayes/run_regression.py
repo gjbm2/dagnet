@@ -446,7 +446,12 @@ def run_regression(args) -> list[dict]:
                 })
                 continue
 
-            if run_result["exit_code"] != 0:
+            # Parse output even on non-zero exit — param_recovery.py exits 1
+            # for PARTIAL recovery (z-score misses), not just crashes. Only
+            # treat as a true harness failure if parsing yields no results.
+            parsed = _parse_recovery_output(run_result["output"])
+
+            if run_result["exit_code"] != 0 and not parsed.get("edges"):
                 print(f"  {name}: HARNESS FAIL (exit {run_result['exit_code']}) [{elapsed:.0f}s]")
                 results.append({
                     "graph_name": name,
@@ -459,8 +464,6 @@ def run_regression(args) -> list[dict]:
                 })
                 continue
 
-            # Parse + assert
-            parsed = _parse_recovery_output(run_result["output"])
             assertion = assert_recovery(name, parsed, g["truth"])
             results.append(assertion)
 

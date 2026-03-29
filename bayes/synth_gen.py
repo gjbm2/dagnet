@@ -829,7 +829,6 @@ def simulate_graph(
     # for p (p_eff = p_base × Π p_mult) and additively for mu
     # (mu_eff = mu_base + Σ mu_offset).
     context_dims = truth.get("context_dimensions", [])
-    user_kappa = sim_config.get("user_kappa", sim_config.get("kappa_sim_default", 100.0))
 
     # Pre-build context lookup: dim_id → [{id, weight, edges: {pid → {p_mult, mu_offset}}}]
     ctx_lookup: list[dict] = []
@@ -891,15 +890,22 @@ def simulate_graph(
         # Apply context p multiplier, clamp to (0, 1)
         p_ctx = min(max(p_drifted * p_mult, 1e-6), 1.0 - 1e-6)
 
-        # Per-user Beta draw (user_kappa controls within-context variation)
-        alpha = p_ctx * user_kappa
-        beta_param = (1.0 - p_ctx) * user_kappa
-        alpha = max(alpha, 0.001)
-        beta_param = max(beta_param, 0.001)
-        p_user = float(rng.beta(alpha, beta_param))
-
         mu_user = base_mu + mu_offset
-        return p_user, mu_user
+        return p_ctx, mu_user
+
+    # Per-day Beta draws for between-day overdispersion.
+    # kappa_sim controls how much the daily conversion rate varies around
+    # its expected value. The draw is per (day, edge, context-combo) so
+    # all users sharing the same day+edge+context get the same p.
+    # This produces genuine between-day variation that the model's κ
+    # can detect — unlike per-user draws which average out at n≫1.
+    day_kappa = sim_config.get("kappa_sim_default", 100.0)
+
+    def _draw_day_p(p_expected: float) -> float:
+        """Draw a single day-level p from Beta(p*kappa, (1-p)*kappa)."""
+        alpha = max(p_expected * day_kappa, 0.001)
+        beta_param = max((1.0 - p_expected) * day_kappa, 0.001)
+        return float(rng.beta(alpha, beta_param))
 
     # --- Person-level simulation ---
     # Runs for total_sim_days (burn_in + n_days). The first burn_in_days
@@ -938,6 +944,25 @@ def simulate_graph(
         for eid in edge_params:
             day_drift[eid] = float(drift_paths[eid][day_idx])
 
+        # Pre-draw day-level p for each (edge, context-combo).
+        # All users sharing the same day+edge+context get the same p.
+        # This creates between-day overdispersion (controlled by kappa_sim).
+        # Context combos are built from context dimension values.
+        _day_p_cache: dict[tuple, float] = {}
+
+        def _get_day_p(edge_id: str, user_contexts: dict[str, str],
+                       base_p: float, drift_offset: float) -> float:
+            """Return the day-level p for this edge+context combo (cached per day)."""
+            ctx_key = tuple(sorted(user_contexts.items()))
+            cache_key = (edge_id, ctx_key)
+            if cache_key not in _day_p_cache:
+                # Get the expected p (after context effects + drift, before kappa draw)
+                p_expected, _ = _compute_user_params(
+                    user_contexts, edge_id, base_p, 0.0, drift_offset,
+                )
+                _day_p_cache[cache_key] = _draw_day_p(p_expected)
+            return _day_p_cache[cache_key]
+
         # Simulate each person
         day_arrivals: list[dict] = []
         for _ in range(n_people):
@@ -949,16 +974,19 @@ def simulate_graph(
                     user_contexts[cl["id"]] = cl["values"][choice]["id"]
                 # TODO: non-MECE dimensions (user can belong to multiple values)
 
-            # Compute per-user effective params per edge
+            # Use day-level p (shared by all users in this context on this day)
             user_probs: dict[str, float] = {}
             user_mus: dict[str, float] = {}
             for eid, ep in edge_params.items():
-                p_user, mu_user = _compute_user_params(
+                user_probs[eid] = _get_day_p(
+                    eid, user_contexts,
+                    ep["p"], day_drift[eid],
+                )
+                _, mu_user = _compute_user_params(
                     user_contexts, eid,
                     ep["p"], ep.get("mu", 0.0),
                     day_drift[eid],
                 )
-                user_probs[eid] = p_user
                 user_mus[eid] = mu_user
 
             person: dict[str, Any] = {"_contexts": user_contexts}
@@ -1082,12 +1110,19 @@ def simulate_graph(
     # arrivals_by_day is needed for window index construction (grouping
     # by from-node arrival day across simulation days).
     snapshot_start_offset = sim_config.get("snapshot_start_offset", 0)
+    # emit_context_slices: when True, emit per-context rows instead of
+    # bare aggregate rows.  Defaults to False — the compiler doesn't yet
+    # support per-context modelling (Phase C).  Set to True in the truth
+    # file to test context-aware pipelines.
+    emit_context_slices = truth.get("emit_context_slices", False)
+
     snapshot_rows = _generate_observations_nightly(
         topology, sorted_times, sorted_edge_times, actual_traffic,
         hash_lookup, n_days, base_date, failure_rate, rng,
         arrivals_by_day, burn_in_days, total_sim_days, edge_params,
         context_dims=context_dims,
         snapshot_start_offset=snapshot_start_offset,
+        emit_context_slices=emit_context_slices,
     )
 
     # Free the raw person data now
@@ -1240,6 +1275,7 @@ def _generate_observations_nightly(
     edge_params: dict[str, dict] | None = None,
     context_dims: list[dict] | None = None,
     snapshot_start_offset: int = 0,
+    emit_context_slices: bool = False,
 ) -> dict[str, list[dict]]:
     """Generate snapshot rows using nightly fetch simulation.
 
@@ -1262,9 +1298,12 @@ def _generate_observations_nightly(
       y = count of those who reached to_node by retrieval age (relative to
         from_node arrival day)
 
-    When context_dims is provided, also emits per-context rows with
-    slice_keys like "context(channel:organic).cohort()" alongside the
-    aggregate rows. All context slices share the same core_hash.
+    When context_dims is provided AND emit_context_slices is True, emits
+    per-context rows with slice_keys like "context(channel:organic).cohort()"
+    instead of bare aggregate rows.  When emit_context_slices is False
+    (default), always emits bare aggregate rows regardless of context_dims.
+    Context effects still influence the simulation (per-user p/mu variation)
+    but only aggregate observations are written.
 
     The window and cohort rows trace DIFFERENT populations for the same edge:
     window groups by from-node arrival day, cohort groups by anchor entry day.
@@ -1492,48 +1531,51 @@ def _generate_observations_nightly(
                 y_cohort = _count_by_age(edge_times, age)
 
                 lstats = edge_latency_stats.get(edge_id, {})
-                # Aggregate cohort row
-                result[edge_id].append({
-                    "param_id": pid,
-                    "core_hash": c_hash,
-                    "slice_key": "cohort()",
-                    "anchor_day": anchor_day_str,
-                    "retrieved_at": retrieved_at,
-                    "a": n_people,
-                    "x": x_cohort,
-                    "y": y_cohort,
-                    "median_lag_days": lstats.get("median_lag_days"),
-                    "mean_lag_days": lstats.get("mean_lag_days"),
-                    "anchor_median_lag_days": lstats.get("anchor_median_lag_days"),
-                    "anchor_mean_lag_days": lstats.get("anchor_mean_lag_days"),
-                    "onset_delta_days": lstats.get("onset"),
-                })
-                n_cohort_rows += 1
+                if not ctx_keys or not emit_context_slices:
+                    # Bare aggregate cohort row
+                    result[edge_id].append({
+                        "param_id": pid,
+                        "core_hash": c_hash,
+                        "slice_key": "cohort()",
+                        "anchor_day": anchor_day_str,
+                        "retrieved_at": retrieved_at,
+                        "a": n_people,
+                        "x": x_cohort,
+                        "y": y_cohort,
+                        "median_lag_days": lstats.get("median_lag_days"),
+                        "mean_lag_days": lstats.get("mean_lag_days"),
+                        "anchor_median_lag_days": lstats.get("anchor_median_lag_days"),
+                        "anchor_mean_lag_days": lstats.get("anchor_mean_lag_days"),
+                        "onset_delta_days": lstats.get("onset"),
+                    })
+                    n_cohort_rows += 1
 
-                # Per-context cohort rows (same core_hash, different slice_key)
-                for ck in ctx_keys:
-                    ctx_from = ctx_sorted_times[ck][sim_day].get(et.from_node, [])
-                    ctx_edge = ctx_sorted_edge_times[ck][sim_day].get(edge_id, [])
-                    ctx_a = ctx_anchor_traffic[ck][sim_day]
-                    ctx_x = _count_by_age(ctx_from, age)
-                    ctx_y = _count_by_age(ctx_edge, age)
-                    if ctx_a > 0:
-                        result[edge_id].append({
-                            "param_id": pid,
-                            "core_hash": c_hash,
-                            "slice_key": f"{ck}.cohort()",
-                            "anchor_day": anchor_day_str,
-                            "retrieved_at": retrieved_at,
-                            "a": ctx_a,
-                            "x": ctx_x,
-                            "y": ctx_y,
-                            "median_lag_days": lstats.get("median_lag_days"),
-                            "mean_lag_days": lstats.get("mean_lag_days"),
-                            "anchor_median_lag_days": lstats.get("anchor_median_lag_days"),
-                            "anchor_mean_lag_days": lstats.get("anchor_mean_lag_days"),
-                            "onset_delta_days": lstats.get("onset"),
-                        })
-                        n_cohort_rows += 1
+                # Per-context cohort rows (emitted instead of aggregate
+                # when emit_context_slices is True — matches prod behaviour)
+                if emit_context_slices:
+                    for ck in ctx_keys:
+                        ctx_from = ctx_sorted_times[ck][sim_day].get(et.from_node, [])
+                        ctx_edge = ctx_sorted_edge_times[ck][sim_day].get(edge_id, [])
+                        ctx_a = ctx_anchor_traffic[ck][sim_day]
+                        ctx_x = _count_by_age(ctx_from, age)
+                        ctx_y = _count_by_age(ctx_edge, age)
+                        if ctx_a > 0:
+                            result[edge_id].append({
+                                "param_id": pid,
+                                "core_hash": c_hash,
+                                "slice_key": f"{ck}.cohort()",
+                                "anchor_day": anchor_day_str,
+                                "retrieved_at": retrieved_at,
+                                "a": ctx_a,
+                                "x": ctx_x,
+                                "y": ctx_y,
+                                "median_lag_days": lstats.get("median_lag_days"),
+                                "mean_lag_days": lstats.get("mean_lag_days"),
+                                "anchor_median_lag_days": lstats.get("anchor_median_lag_days"),
+                                "anchor_mean_lag_days": lstats.get("anchor_mean_lag_days"),
+                                "onset_delta_days": lstats.get("onset"),
+                            })
+                            n_cohort_rows += 1
 
         if (fi + 1) % 10 == 0:
             print(f"  Cohort observations: {fi + 1}/{len(fetch_nights)} nights, {n_cohort_rows} rows", flush=True)
@@ -1580,46 +1622,49 @@ def _generate_observations_nightly(
 
                 if total_x > 0:
                     lstats = edge_latency_stats.get(edge_id, {})
-                    # Aggregate window row
-                    result[edge_id].append({
-                        "param_id": pid,
-                        "core_hash": w_hash,
-                        "slice_key": "window()",
-                        "anchor_day": anchor_day_str,
-                        "retrieved_at": retrieved_at,
-                        "a": None,
-                        "x": total_x,
-                        "y": y_window,
-                        "median_lag_days": lstats.get("median_lag_days"),
-                        "mean_lag_days": lstats.get("mean_lag_days"),
-                        "onset_delta_days": lstats.get("onset"),
-                    })
-                    n_window_rows += 1
-
-                    # Per-context window rows
-                    for ck in ctx_keys:
-                        ctx_edge_window = ctx_window_sorted.get(ck, {}).get(edge_id, {})
-                        ctx_entry = ctx_edge_window.get(abs_from_day)
-                        if ctx_entry is None:
-                            continue
-                        ctx_x, ctx_conv = ctx_entry
-                        if ctx_x <= 0:
-                            continue
-                        ctx_y_w = bisect.bisect_right(ctx_conv, float(w_age))
+                    if not ctx_keys or not emit_context_slices:
+                        # Bare aggregate window row
                         result[edge_id].append({
                             "param_id": pid,
                             "core_hash": w_hash,
-                            "slice_key": f"{ck}.window()",
+                            "slice_key": "window()",
                             "anchor_day": anchor_day_str,
                             "retrieved_at": retrieved_at,
                             "a": None,
-                            "x": ctx_x,
-                            "y": ctx_y_w,
+                            "x": total_x,
+                            "y": y_window,
                             "median_lag_days": lstats.get("median_lag_days"),
                             "mean_lag_days": lstats.get("mean_lag_days"),
                             "onset_delta_days": lstats.get("onset"),
                         })
                         n_window_rows += 1
+
+                    # Per-context window rows (emitted instead of aggregate
+                    # when emit_context_slices is True)
+                    if emit_context_slices:
+                        for ck in ctx_keys:
+                            ctx_edge_window = ctx_window_sorted.get(ck, {}).get(edge_id, {})
+                            ctx_entry = ctx_edge_window.get(abs_from_day)
+                            if ctx_entry is None:
+                                continue
+                            ctx_x, ctx_conv = ctx_entry
+                            if ctx_x <= 0:
+                                continue
+                            ctx_y_w = bisect.bisect_right(ctx_conv, float(w_age))
+                            result[edge_id].append({
+                                "param_id": pid,
+                                "core_hash": w_hash,
+                                "slice_key": f"{ck}.window()",
+                                "anchor_day": anchor_day_str,
+                                "retrieved_at": retrieved_at,
+                                "a": None,
+                                "x": ctx_x,
+                                "y": ctx_y_w,
+                                "median_lag_days": lstats.get("median_lag_days"),
+                                "mean_lag_days": lstats.get("mean_lag_days"),
+                                "onset_delta_days": lstats.get("onset"),
+                            })
+                            n_window_rows += 1
 
         if (fi + 1) % 10 == 0:
             print(f"  Window observations: {fi + 1}/{len(fetch_nights)} nights, {n_window_rows} rows", flush=True)
@@ -1987,56 +2032,57 @@ def write_parameter_files(
         if hash_lookup and pid in hash_lookup and "cohort_sig" in hash_lookup[pid]:
             cohort_entry["query_signature"] = hash_lookup[pid]["cohort_sig"]
 
-        # Context-qualified values[] entries (one per context value per obs type)
+        # Context-qualified values[] entries (one per context value per obs type).
+        # Only emitted when emit_context_slices is True in the truth file.
         context_entries: list[dict] = []
-        context_dims = truth.get("context_dimensions", [])
-        for dim in context_dims:
-            for v in dim.get("values", []):
-                ctx_prefix = f"context({dim['id']}:{v['id']})"
-                # Context window entry
-                ctx_window: dict[str, Any] = {
-                    "mean": round(mean, 6),  # approximate — context-specific would be better
-                    "n": total_n,
-                    "k": total_k,
-                    "n_daily": n_daily,
-                    "k_daily": k_daily,
-                    "dates": dates,
-                    "window_from": _format_date_dmy(base_date),
-                    "window_to": _format_date_dmy(end_date),
-                    "sliceDSL": f"{ctx_prefix}.{window_dsl}",
-                    "median_lag_days": median_lag_daily,
-                    "mean_lag_days": mean_lag_daily,
-                    "latency": {"onset_delta_days": onset},
-                    "data_source": {"type": "synthetic", "retrieved_at": now_str, "full_query": query},
-                    "forecast": round(mean, 6),
-                }
-                if hash_lookup and pid in hash_lookup and "window_sig" in hash_lookup[pid]:
-                    ctx_window["query_signature"] = hash_lookup[pid]["window_sig"]
-                context_entries.append(ctx_window)
+        emit_ctx = truth.get("emit_context_slices", False)
+        if emit_ctx:
+            context_dims = truth.get("context_dimensions", [])
+            for dim in context_dims:
+                for v in dim.get("values", []):
+                    ctx_prefix = f"context({dim['id']}:{v['id']})"
+                    ctx_window: dict[str, Any] = {
+                        "mean": round(mean, 6),
+                        "n": total_n,
+                        "k": total_k,
+                        "n_daily": n_daily,
+                        "k_daily": k_daily,
+                        "dates": dates,
+                        "window_from": _format_date_dmy(base_date),
+                        "window_to": _format_date_dmy(end_date),
+                        "sliceDSL": f"{ctx_prefix}.{window_dsl}",
+                        "median_lag_days": median_lag_daily,
+                        "mean_lag_days": mean_lag_daily,
+                        "latency": {"onset_delta_days": onset},
+                        "data_source": {"type": "synthetic", "retrieved_at": now_str, "full_query": query},
+                        "forecast": round(mean, 6),
+                    }
+                    if hash_lookup and pid in hash_lookup and "window_sig" in hash_lookup[pid]:
+                        ctx_window["query_signature"] = hash_lookup[pid]["window_sig"]
+                    context_entries.append(ctx_window)
 
-                # Context cohort entry
-                ctx_cohort: dict[str, Any] = {
-                    "mean": round(mean, 6),
-                    "n": total_n,
-                    "k": total_k,
-                    "n_daily": n_daily,
-                    "k_daily": k_daily,
-                    "dates": dates,
-                    "anchor_n_daily": anchor_n_daily,
-                    "cohort_from": _format_date_dmy(base_date),
-                    "cohort_to": _format_date_dmy(end_date),
-                    "sliceDSL": f"{ctx_prefix}.{cohort_dsl}",
-                    "median_lag_days": median_lag_daily,
-                    "mean_lag_days": mean_lag_daily,
-                    "anchor_median_lag_days": anchor_median_daily,
-                    "anchor_mean_lag_days": anchor_mean_daily,
-                    "latency": {"onset_delta_days": onset},
-                    "data_source": {"type": "synthetic", "retrieved_at": now_str, "full_query": query},
-                    "forecast": round(mean, 6),
-                }
-                if hash_lookup and pid in hash_lookup and "cohort_sig" in hash_lookup[pid]:
-                    ctx_cohort["query_signature"] = hash_lookup[pid]["cohort_sig"]
-                context_entries.append(ctx_cohort)
+                    ctx_cohort: dict[str, Any] = {
+                        "mean": round(mean, 6),
+                        "n": total_n,
+                        "k": total_k,
+                        "n_daily": n_daily,
+                        "k_daily": k_daily,
+                        "dates": dates,
+                        "anchor_n_daily": anchor_n_daily,
+                        "cohort_from": _format_date_dmy(base_date),
+                        "cohort_to": _format_date_dmy(end_date),
+                        "sliceDSL": f"{ctx_prefix}.{cohort_dsl}",
+                        "median_lag_days": median_lag_daily,
+                        "mean_lag_days": mean_lag_daily,
+                        "anchor_median_lag_days": anchor_median_daily,
+                        "anchor_mean_lag_days": anchor_mean_daily,
+                        "latency": {"onset_delta_days": onset},
+                        "data_source": {"type": "synthetic", "retrieved_at": now_str, "full_query": query},
+                        "forecast": round(mean, 6),
+                    }
+                    if hash_lookup and pid in hash_lookup and "cohort_sig" in hash_lookup[pid]:
+                        ctx_cohort["query_signature"] = hash_lookup[pid]["cohort_sig"]
+                    context_entries.append(ctx_cohort)
 
         param_data = {
             "id": file_id,
@@ -2110,11 +2156,12 @@ def set_simulation_guard(
 
             temporal = f"window({window_from}:{window_to});cohort({window_from}:{window_to})"
 
-            # Add context dimensions to DSL if present in truth.
-            # Format: (window;cohort)(context(dim1);context(dim2))
+            # Add context dimensions to DSL only when emit_context_slices
+            # is True.  Format: (window;cohort)(context(dim1);context(dim2))
             # The FE expands this as a cartesian product.
+            emit_ctx = (truth or {}).get("emit_context_slices", False)
             context_dims = (truth or {}).get("context_dimensions", [])
-            if context_dims:
+            if emit_ctx and context_dims:
                 ctx_parts = ";".join(f"context({d['id']})" for d in context_dims)
                 dsl = f"({temporal})({ctx_parts})"
             else:

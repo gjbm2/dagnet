@@ -271,6 +271,14 @@ class EdgeEvidence:
     # Total observations across all entries
     total_n: int = 0
 
+    # Warm-start hints from previous posterior (quality-gated).
+    # None = no warm-start available; model uses default hyperparameters.
+    kappa_warm: float | None = None
+    kappa_p_warm: float | None = None
+
+    # Cohort (path) latency warm-start from previous posterior.
+    cohort_latency_warm: dict | None = None  # {mu, sigma, onset} or None
+
     # Phase C: context slices
     slice_groups: dict[str, SliceGroup] = field(default_factory=dict)
     has_slices: bool = False

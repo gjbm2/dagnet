@@ -134,6 +134,7 @@ def _estimate_cohort_kappa(
     p_cohort_mean: float,
     diagnostics: list[str],
     obs_type_filter: str = "cohort",
+    phase2_frozen: dict | None = None,
 ) -> float | None:
     """Estimate between-cohort dispersion from trajectory residuals.
 
@@ -149,33 +150,48 @@ def _estimate_cohort_kappa(
     if not ev.cohort_obs:
         return None
 
-    # Resolve the CDF parameters.
-    # Window obs: edge-level CDF (observation age is from edge entry).
-    # Cohort obs: path-level CDF (observation age is from anchor entry).
+    # Resolve the CDF parameters from Phase 1 POSTERIOR (not prior).
+    # The posterior is more accurate — the prior CDF can overestimate
+    # maturity at early ages, biasing p_implied low and inflating
+    # variance. See journal 29-Mar-26.
+    # Window obs: edge-level CDF (age from edge entry).
+    # Cohort obs: path-level CDF (age from anchor entry).
     onset = 0.0
     mu = 0.0
     sigma = 0.01
     if et.has_latency:
-        if obs_type_filter == "window" and ev.latency_prior:
-            # Window: edge CDF
-            onset = ev.latency_prior.onset_delta_days or 0.0
-            mu = ev.latency_prior.mu
-            sigma = ev.latency_prior.sigma
-        elif hasattr(et, 'path_latency') and et.path_latency:
-            # Cohort: path CDF
-            onset = et.path_latency.path_delta
-            mu = et.path_latency.path_mu
-            sigma = et.path_latency.path_sigma
-        elif ev.latency_prior:
-            onset = ev.latency_prior.onset_delta_days or 0.0
-            mu = ev.latency_prior.mu
-            sigma = ev.latency_prior.sigma
+        # Try Phase 1 posterior first (from latency_posteriors if available,
+        # or from the trace via phase2_frozen which carries posterior means)
+        safe_eid = ev.edge_id.replace("-", "_")
+        if obs_type_filter == "window":
+            # Window: edge CDF from posterior
+            if phase2_frozen and ev.edge_id in phase2_frozen:
+                pf = phase2_frozen[ev.edge_id]
+                onset = pf.get("onset", ev.latency_prior.onset_delta_days if ev.latency_prior else 0.0)
+                mu = pf.get("mu", ev.latency_prior.mu if ev.latency_prior else 0.0)
+                sigma = pf.get("sigma", ev.latency_prior.sigma if ev.latency_prior else 0.01)
+            elif ev.latency_prior:
+                onset = ev.latency_prior.onset_delta_days or 0.0
+                mu = ev.latency_prior.mu
+                sigma = ev.latency_prior.sigma
+        else:
+            # Cohort: path CDF from topology (FW-composed from posteriors)
+            if hasattr(et, 'path_latency') and et.path_latency:
+                onset = et.path_latency.path_delta
+                mu = et.path_latency.path_mu
+                sigma = et.path_latency.path_sigma
+            elif ev.latency_prior:
+                onset = ev.latency_prior.onset_delta_days or 0.0
+                mu = ev.latency_prior.mu
+                sigma = ev.latency_prior.sigma
 
     # Collect per-cohort implied p from BOTH cohort trajectories
     # AND cohort daily obs. Trajectories give multi-retrieval days
     # (endpoint y/x). Daily obs give single-retrieval days (k/n).
     # Together they cover nearly all anchor days.
-    # Filter: denominator >= 3 and F(age) >= 0.5.
+    # Filter: denominator >= 3 and F(age) >= 0.9.
+    # Maturity gate at 0.9: immature observations have amplified CDF
+    # error that inflates variance and drives kappa down. See doc 25.
     p_implied = []
     n_values = []
     f_values = []
@@ -198,7 +214,7 @@ def _estimate_cohort_kappa(
             y_final = traj.cumulative_y[-1] if traj.cumulative_y else 0
             age_final = traj.retrieval_ages[-1]
             f_age = shifted_lognormal_cdf(age_final, onset, mu, sigma)
-            if f_age < 0.5:
+            if f_age < 0.9:
                 n_skipped_f += 1
                 continue
             p_imp = y_final / (x_final * f_age)
@@ -223,7 +239,7 @@ def _estimate_cohort_kappa(
                     continue
                 age = getattr(d_obs, 'age_days', 0) or 0
                 f_age = shifted_lognormal_cdf(age, onset, mu, sigma)
-                if f_age < 0.5:
+                if f_age < 0.9:
                     n_skipped_f += 1
                     continue
                 p_imp = d_obs.k / (d_obs.n * f_age)
@@ -246,6 +262,18 @@ def _estimate_cohort_kappa(
     p_arr = _np.array(p_implied)
     n_arr = _np.array(n_values, dtype=_np.float64)
     f_arr = _np.array(f_values)
+
+    # DEBUG: dump actual values for kappa forensics
+    diagnostics.append(
+        f"  kappa_debug {ev.edge_id[:8]}…: "
+        f"n_obs={len(p_arr)}, "
+        f"p_implied=[{_np.min(p_arr):.4f}..{_np.max(p_arr):.4f}] "
+        f"std={_np.std(p_arr):.6f}, "
+        f"n_denom=[{_np.min(n_arr):.0f}..{_np.max(n_arr):.0f}] "
+        f"median={_np.median(n_arr):.0f}, "
+        f"F=[{_np.min(f_arr):.3f}..{_np.max(f_arr):.3f}], "
+        f"obs_type={obs_type_filter}"
+    )
 
     p_bar = float(_np.mean(p_arr))
     # F²-weighted observed variance — downweights observations
@@ -281,7 +309,8 @@ def _estimate_cohort_kappa(
         f"  empirical_kappa {ev.edge_id[:8]}…: kappa={kappa:.1f} "
         f"(p_bar={p_bar:.4f}, obs_var={observed_var:.6f}, "
         f"binom_var={binomial_var:.6f}, bc_var={between_cohort_var:.6f}, "
-        f"n_cohorts={len(p_arr)})"
+        f"n_cohorts={len(p_arr)}, "
+        f"cdf=[{onset:.1f},{mu:.3f},{sigma:.3f}])"
     )
     return kappa
 
@@ -362,21 +391,46 @@ def summarise_posteriors(
         # real-world uncertainty (both estimation + cohort variation),
         # not just estimation precision.
         # See journal 27-Mar-26 "hierarchical Beta on p".
-        # Between-cohort kappa: use Williams estimator on window
-        # trajectory data (post-MCMC, fixed CDF from posterior means).
-        # This replaces the MCMC kappa_p which confounds genuine
-        # between-cohort variation with latency-induced posterior
-        # coupling. See journal 29-Mar-26.
-        kappa_window = _estimate_cohort_kappa(
-            ev, et, topology, float(np.mean(samples)), diagnostics,
-            obs_type_filter="window",
-        )
+        # Between-cohort kappa from MCMC (endpoint BetaBinomial).
+        # The endpoint BB decouples rate dispersion from CDF shape,
+        # giving an honest kappa_p. See journal 29-Mar-26.
         kappa_p_name = f"kappa_p_{safe_eid}"
         mcmc_kappa = float(np.mean(trace.posterior[kappa_p_name].values.flatten())) if kappa_p_name in trace.posterior else None
 
-        effective_kappa = kappa_window if kappa_window is not None else mcmc_kappa
+        # Post-MCMC Williams on window trajectories for comparison.
+        # Build posterior latency dict from trace for CDF adjustment.
+        post_latency = {}
+        mu_lat_name = f"mu_lat_{safe_eid}"
+        sigma_lat_name = f"sigma_lat_{safe_eid}"
+        onset_lat_name = f"onset_{safe_eid}"
+        if mu_lat_name in trace.posterior:
+            post_latency[edge_id] = {
+                "mu": float(trace.posterior[mu_lat_name].values.mean()),
+                "sigma": float(trace.posterior[sigma_lat_name].values.mean()) if sigma_lat_name in trace.posterior else (ev.latency_prior.sigma if ev.latency_prior else 0.5),
+                "onset": float(trace.posterior[onset_lat_name].values.mean()) if onset_lat_name in trace.posterior else (ev.latency_prior.onset_delta_days if ev.latency_prior else 0.0),
+            }
+        williams_kappa = _estimate_cohort_kappa(
+            ev, et, topology, float(np.mean(samples)), diagnostics,
+            obs_type_filter="window",
+            phase2_frozen=post_latency,
+        )
+
+        # Use the HIGHER kappa (tighter, less dispersed) of the two.
+        # MCMC kappa_p can be too low at small n (confounds noise).
+        # Williams can be too low if data is insufficient.
+        # Taking the max is conservative — narrower bands.
+        effective_kappa = None
+        if mcmc_kappa is not None and williams_kappa is not None:
+            effective_kappa = max(mcmc_kappa, williams_kappa)
+        elif mcmc_kappa is not None:
+            effective_kappa = mcmc_kappa
+        elif williams_kappa is not None:
+            effective_kappa = williams_kappa
+
         if effective_kappa is not None:
             mu_p_samples = samples
+            kappa_p_samples = trace.posterior[kappa_p_name].values.flatten() if kappa_p_name in trace.posterior else np.full_like(samples, effective_kappa)
+            # Use effective_kappa for the predictive (scalar, not MCMC samples)
             kappa_arr = np.full_like(mu_p_samples, effective_kappa)
             a_samples = np.maximum(mu_p_samples * kappa_arr, 0.01)
             b_samples = np.maximum((1.0 - mu_p_samples) * kappa_arr, 0.01)
@@ -387,8 +441,9 @@ def summarise_posteriors(
             hdi_upper = float(pred_hdi[1])
             diagnostics.append(
                 f"  predictive_p {edge_id[:8]}…: mu_p={float(np.mean(mu_p_samples)):.4f}, "
-                f"kappa_williams={effective_kappa:.1f}"
-                f"{f', kappa_mcmc={mcmc_kappa:.1f}' if mcmc_kappa else ''}, "
+                f"kappa_mcmc={mcmc_kappa or 0:.1f}, "
+                f"kappa_williams={williams_kappa or 0:.1f}, "
+                f"kappa_used={effective_kappa:.1f}, "
                 f"pred_alpha={alpha:.1f}, pred_beta={beta_val:.1f}"
             )
         else:
@@ -742,10 +797,14 @@ def summarise_posteriors(
             vname = f"{prefix}_{safe_eid}"
             if vname in trace.posterior:
                 model_state[vname] = round(float(np.mean(trace.posterior[vname].values.flatten())), 4)
-        # kappa
+        # kappa (window BetaBinomial dispersion)
         kappa_name = f"kappa_{safe_eid}"
         if kappa_name in trace.posterior:
             model_state[kappa_name] = round(float(np.mean(trace.posterior[kappa_name].values.flatten())), 2)
+        # kappa_p (between-cohort p dispersion)
+        kappa_p_name = f"kappa_p_{safe_eid}"
+        if kappa_p_name in trace.posterior:
+            model_state[kappa_p_name] = round(float(np.mean(trace.posterior[kappa_p_name].values.flatten())), 2)
     # Graph-level onset hyperpriors
     for vname in ("onset_hyper_mu", "tau_onset"):
         if vname in trace.posterior:

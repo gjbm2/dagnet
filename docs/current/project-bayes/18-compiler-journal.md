@@ -8,6 +8,80 @@ Entries are reverse-chronological (newest first).
 
 ---
 
+## 29-Mar-26: Kappa discrepancy investigation (doc 25)
+
+### Root cause 1: synth_gen per-user kappa produces no between-day overdispersion
+
+synth_gen drew per-user p from `Beta(p×kappa, (1-p)×kappa)` — each
+of 5000 users/day got an independent draw. Law of large numbers:
+the day-level rate y/n converges to p with only Binomial-level
+noise (SD ≈ 0.006), not BetaBinomial (SD ≈ 0.064 for kappa=50).
+The model's kappa (which measures between-day variation) sees
+effectively infinite kappa — no overdispersion to recover.
+
+**Fix**: per-day draws. One `p_day ~ Beta(p×kappa, (1-p)×kappa)`
+per (day, edge, context-combo). All users on that day share the
+same p. Produces genuine between-day variation visible in aggregate
+data.
+
+Verified: after fix, synth-simple-abc edge A→B shows
+`std(p_implied)=0.038` (was 0.007), `kappa_williams=150` (was
+50000+). Expected effective aggregate kappa ≈ 120 (reduced from
+truth 50 by context-mixing: organic p_mult=1.2, paid p_mult=0.7).
+
+### Root cause 2: synth_gen emitting both aggregate and context rows
+
+synth_gen emitted both bare `window()`/`cohort()` rows (x=5000) and
+context-prefixed rows like `context(channel:organic).window()` (x=2997).
+Production only has context rows for contexted edges. The evidence
+binder's first-wins dedup on `retrieved_at` could pick a context row
+over the aggregate row, halving the denominator and suppressing
+between-day variance.
+
+**Fix**: synth_gen emits context-only rows when `context_dimensions`
+exist; bare aggregate rows when no contexts. Matches prod behaviour.
+
+Evidence binder extended with MECE context aggregation: sums x and y
+across context rows for the same (anchor_day, retrieved_at) to recover
+the aggregate. Bare aggregate rows take precedence where they exist.
+
+### Root cause 3 (harness-specific): missing warm-start priors
+
+The test harness reads param files from the data repo working tree.
+After FE Bayes runs commit posteriors to git, the local checkout
+doesn't have them until pulled. Without warm-start:
+
+- Harness uses topology latency priors (onset=5.5, mu=1.607, sigma=0.527)
+- FE uses warm-start priors (onset=9.6, mu=-1.244, sigma=2.813)
+- del-to-reg with topology priors hits onset-mu ridge: corr=-0.999, ess=3
+- del-to-reg with warm-start converges cleanly: corr=-0.836, ess=5922
+
+Confirmed: harness with `--warmstart` (two-pass) or `neutral_prior=true`
+converges. Posteriors match FE within 1% on p, latency params in same
+region. The failure was prior-dependent sampler initialisation, not a
+model regression.
+
+**Key finding**: the k/n-derived p prior + topology latency prior
+combination creates a tight p-latency ridge for del-to-reg that the
+sampler can't cross in 500 tune steps. Neutral p priors (Beta(1,1))
+give enough freedom; warm-start priors start near the mode. Both
+converge.
+
+### Maturity filter (F ≥ 0.9) on endpoint BB and Williams
+
+Added to both estimators (model.py and inference.py). Excludes
+immature endpoints where CDF error amplifies apparent variance.
+Not yet validated on regenerated synth data.
+
+### Remaining work
+
+- Regenerate all 8 synth graphs (per-day kappa + context-only)
+- Full regression suite on regenerated data
+- Validate maturity filter on synth kappa recovery
+- Harness: pull data repo or add warm-start fallback
+
+---
+
 ## 29-Mar-26: Phase 2 join-node CDF fix (applied)
 
 The `phase2_cohort_use_x` branch entered before the join-detection code

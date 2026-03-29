@@ -143,7 +143,7 @@ export class GraphComputeClient {
   private readonly MAX_CACHE_SIZE = 50; // Prevent unbounded growth
   // Cache-buster for cohort maturity normalisation semantics. Increment when the
   // cohort_maturity result interpretation changes (e.g. progress curve / axis semantics).
-  private readonly COHORT_MATURITY_CACHE_VERSION = 16;
+  private readonly COHORT_MATURITY_CACHE_VERSION = 17;
 
   constructor(baseUrl: string = API_BASE_URL, useMock: boolean = USE_MOCK) {
     this.baseUrl = baseUrl;

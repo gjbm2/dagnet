@@ -218,6 +218,14 @@ DIRICHLET_CONC_FLOOR = 0.5
 # 0.01 in log-scale ≈ 1% relative spread around the median.
 SIGMA_FLOOR = 0.01
 
+# Maturity floor ---
+# Minimum CDF completeness for a daily observation to enter drift
+# or dispersion estimation.  Below this threshold, dividing by F
+# amplifies noise (at F=0.5, 2× amplification; at F=0.1, 10×).
+# 0.9 means ≤1.11× amplification — effectively no noise injection.
+# PROVISIONAL: to be surfaced as an FE setting via fit guidance.
+MATURITY_FLOOR = 0.9
+
 # Mu prior sigma floor ---
 # Minimum uncertainty on the mu (latency centre) prior.  Ensures the
 # sampler has enough room to explore even when the histogram-derived
@@ -768,25 +776,39 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
                 path_mu_sd = max(path_mu_sd ** 0.5, 0.02)
                 path_sigma_sd = max(path_sigma_sd ** 0.5, SIGMA_FLOOR)
 
-                # onset_cohort: softplus(Normal) centred on composed value
+                # Cohort latency: use warm-start from previous posterior if
+                # available (quality-gated), otherwise FW-composed.
+                cw = ev.cohort_latency_warm
+                if cw is not None:
+                    ws_onset = cw.get("onset") or onset_prior_val
+                    ws_mu = cw["mu"]
+                    ws_sigma = cw["sigma"]
+                    diagnostics.append(
+                        f"  cohort_latency: {edge_id[:8]}… "
+                        f"warm_start (onset={ws_onset:.1f}, mu={ws_mu:.3f}, sigma={ws_sigma:.3f})"
+                    )
+                else:
+                    ws_onset = onset_prior_val
+                    ws_mu = float(mu_path_composed) if not hasattr(mu_path_composed, 'eval') else float(mu_path_composed.eval())
+                    ws_sigma = float(sigma_path_composed) if not hasattr(sigma_path_composed, 'eval') else float(sigma_path_composed.eval())
+
+                # onset_cohort: softplus(Normal) centred on composed/warm-start value
                 eps_onset_cohort = pm.Normal(f"eps_onset_cohort_{safe_id}", mu=0, sigma=1)
                 onset_cohort = pm.Deterministic(
                     f"onset_cohort_{safe_id}",
-                    pt.softplus(onset_prior_val + eps_onset_cohort * path_onset_sd),
+                    pt.softplus(ws_onset + eps_onset_cohort * path_onset_sd),
                 )
-                # mu_cohort: Normal centred on FW-composed value
-                mu_prior_val = float(mu_path_composed) if not hasattr(mu_path_composed, 'eval') else float(mu_path_composed.eval())
+                # mu_cohort: Normal centred on FW-composed or warm-start value
                 mu_cohort = pm.Normal(
                     f"mu_cohort_{safe_id}",
-                    mu=mu_prior_val,
+                    mu=ws_mu,
                     sigma=path_mu_sd,
                 )
-                # sigma_cohort: Gamma with mode at composed value
-                sigma_prior_val = float(sigma_path_composed) if not hasattr(sigma_path_composed, 'eval') else float(sigma_path_composed.eval())
+                # sigma_cohort: Gamma with mode at composed or warm-start value
                 from .completeness import gamma_params_from_mode
                 gamma_a, gamma_b = gamma_params_from_mode(
-                    max(sigma_prior_val, 0.1),
-                    spread=max(path_sigma_sd / max(sigma_prior_val, 0.1), 0.05),
+                    max(ws_sigma, 0.1),
+                    spread=max(path_sigma_sd / max(ws_sigma, 0.1), 0.05),
                 )
                 sigma_cohort = pm.Gamma(
                     f"sigma_cohort_{safe_id}",
@@ -822,7 +844,7 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
                 )
 
             cohort_latency_vars[edge_id] = (onset_cohort, mu_cohort, sigma_cohort)
-            if is_phase2:
+            if is_phase2 and cw is None:
                 diagnostics.append(
                     f"  cohort_latency: {edge_id[:8]}… "
                     f"wide priors (Phase 2), latent_onset=independent"
@@ -889,7 +911,17 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
                     beta_param = ev.prob_prior.beta
                 p_base_var = None  # will be created below per observation type
 
-            edge_kappa = pm.Gamma(f"kappa_{safe_id}", alpha=KAPPA_ALPHA, beta=KAPPA_BETA_WINDOW) if feat_overdispersion else None
+            if feat_overdispersion:
+                # Warm-start kappa from previous posterior if available;
+                # otherwise use default hyperparameters.
+                if ev.kappa_warm is not None:
+                    from .completeness import gamma_params_from_mode
+                    _ka, _kb = gamma_params_from_mode(ev.kappa_warm, spread=0.5)
+                    edge_kappa = pm.Gamma(f"kappa_{safe_id}", alpha=_ka, beta=_kb)
+                else:
+                    edge_kappa = pm.Gamma(f"kappa_{safe_id}", alpha=KAPPA_ALPHA, beta=KAPPA_BETA_WINDOW)
+            else:
+                edge_kappa = None
 
             # --- Case A: edge has BOTH window and cohort data ---
             if ev.has_window and ev.has_cohort:
@@ -971,49 +1003,20 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
                     else:
                         p = pm.Beta(f"p_{safe_id}", alpha=alpha, beta=beta_param)
 
-                    # Count window trajectories for this edge to create p_i
-                    n_window_trajs = 0
-                    if ev.cohort_obs:
-                        for c_obs in ev.cohort_obs:
-                            for traj in c_obs.trajectories:
-                                if traj.obs_type == "window" and len(traj.retrieval_ages) >= 2 and traj.n > 0:
-                                    edge_has_lat = (
-                                        (ev.latency_prior is not None and
-                                         (ev.latency_prior.sigma > SIGMA_FLOOR or
-                                          (ev.latency_prior.onset_delta_days or 0) > 0))
-                                        or (latency_vars and ev.edge_id in (latency_vars or {}))
-                                    )
-                                    # No-latency trajs get converted to daily, skip them
-                                    if not edge_has_lat:
-                                        continue
-                                    n_window_trajs += 1
-
-                    # Create per-cohort p_i if we have enough trajectories
-                    p_cohort_vec = None
+                    # Shape + rate decomposition (doc 24, journal 29-Mar-26):
+                    # - Shape: trajectory intervals with shared p → CDF
+                    # - Rate: endpoint BetaBinomial with kappa_p → p + dispersion
+                    # No per-trajectory p_i. The intervals use shared p for
+                    # all trajectories. The endpoint BB captures between-cohort
+                    # variation independently of the CDF coupling.
                     kappa_p_var = None
-                    if n_window_trajs >= 3 and feat_overdispersion:
-                        kappa_p_var = pm.Gamma(f"kappa_p_{safe_id}", alpha=KAPPA_ALPHA, beta=KAPPA_BETA_COHORT)
-                        alpha_p = p * kappa_p_var
-                        beta_p = (1.0 - p) * kappa_p_var
-                        p_cohort_vec = pm.Beta(
-                            f"p_i_{safe_id}",
-                            alpha=pt.maximum(alpha_p, 0.01),
-                            beta=pt.maximum(beta_p, 0.01),
-                            shape=n_window_trajs,
-                        )
-                        diagnostics.append(
-                            f"  hierarchical_p: {edge_id[:8]}… "
-                            f"{n_window_trajs} cohort p_i variables"
-                        )
-                    elif n_window_trajs == 0 and feat_overdispersion:
-                        # No-latency edge: no trajectories (all converted to
-                        # daily obs). Create kappa_p for BetaBinomial on daily
-                        # obs to capture between-cohort variation.
-                        kappa_p_var = pm.Gamma(f"kappa_p_{safe_id}", alpha=KAPPA_ALPHA, beta=KAPPA_BETA_COHORT)
-                        diagnostics.append(
-                            f"  hierarchical_p: {edge_id[:8]}… "
-                            f"no-latency, kappa_p for daily BetaBinomial"
-                        )
+                    if feat_overdispersion:
+                        if ev.kappa_p_warm is not None:
+                            from .completeness import gamma_params_from_mode
+                            _kpa, _kpb = gamma_params_from_mode(ev.kappa_p_warm, spread=0.5)
+                            kappa_p_var = pm.Gamma(f"kappa_p_{safe_id}", alpha=_kpa, beta=_kpb)
+                        else:
+                            kappa_p_var = pm.Gamma(f"kappa_p_{safe_id}", alpha=KAPPA_ALPHA, beta=KAPPA_BETA_COHORT)
 
                     if emit_window_binomial:
                         _emit_window_likelihoods(safe_id, p, ev, diagnostics, kappa=edge_kappa)
@@ -1025,9 +1028,76 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
                                                 cohort_latency_vars=cohort_latency_vars,
                                                 kappa=edge_kappa,
                                                 onset_vars=onset_vars,
-                                                skip_cohort_trajectories=True,
-                                                p_cohort_vec=p_cohort_vec,
-                                                kappa_p=kappa_p_var)
+                                                skip_cohort_trajectories=True)
+
+                    # Endpoint BetaBinomial: one observation per window
+                    # trajectory. y_final ~ BB(n, p×F(age), kappa_p).
+                    # Captures between-cohort rate variation, decoupled
+                    # from CDF shape (which the intervals handle).
+                    if kappa_p_var is not None and ev.cohort_obs:
+                        from .completeness import shifted_lognormal_cdf
+                        ep_onset = ev.latency_prior.onset_delta_days if ev.latency_prior else 0.0
+                        ep_mu = ev.latency_prior.mu if ev.latency_prior else 0.0
+                        ep_sigma = ev.latency_prior.sigma if ev.latency_prior else 0.01
+                        # Use latent vars if available
+                        if edge_id in latency_vars:
+                            ep_mu_var, ep_sigma_var = latency_vars[edge_id]
+                        else:
+                            ep_mu_var = pt.as_tensor_variable(np.float64(ep_mu))
+                            ep_sigma_var = pt.as_tensor_variable(np.float64(ep_sigma))
+                        if edge_id in onset_vars:
+                            ep_onset_var = onset_vars[edge_id]
+                        else:
+                            ep_onset_var = pt.as_tensor_variable(np.float64(ep_onset))
+
+                        ep_n_list = []
+                        ep_y_list = []
+                        ep_ages_list = []
+                        ep_n_skipped_immature = 0
+                        for c_obs in ev.cohort_obs:
+                            for traj in c_obs.trajectories:
+                                if traj.obs_type != "window":
+                                    continue
+                                if len(traj.retrieval_ages) < 2 or traj.n <= 0:
+                                    continue
+                                # Maturity gate: exclude endpoints where CDF < 0.9.
+                                # Immature endpoints have amplified CDF error that
+                                # contaminates kappa_p estimation. See doc 25.
+                                ep_f = shifted_lognormal_cdf(
+                                    traj.retrieval_ages[-1], ep_onset, ep_mu, ep_sigma)
+                                if ep_f < 0.9:
+                                    ep_n_skipped_immature += 1
+                                    continue
+                                ep_n_list.append(traj.n)
+                                ep_y_list.append(min(traj.cumulative_y[-1], traj.n) if traj.cumulative_y else 0)
+                                ep_ages_list.append(traj.retrieval_ages[-1])
+
+                        if len(ep_n_list) >= 3:
+                            ep_n = np.array(ep_n_list, dtype=np.int64)
+                            ep_y = np.array(ep_y_list, dtype=np.int64)
+                            ep_ages = np.array(ep_ages_list, dtype=np.float64)
+
+                            # CDF at endpoint ages (latent — gradients flow)
+                            ages_t = pt.as_tensor_variable(ep_ages)
+                            age_minus_onset = ages_t - ep_onset_var
+                            eff_ages = pt.softplus(age_minus_onset)
+                            log_ages = pt.log(pt.maximum(eff_ages, 1e-30))
+                            z = (log_ages - ep_mu_var) / (ep_sigma_var * pt.sqrt(2.0))
+                            f_endpoints = 0.5 * pt.erfc(-z)
+
+                            p_eff = pm.math.clip(p * f_endpoints, 1e-6, 1.0 - 1e-6)
+                            pm.BetaBinomial(
+                                f"endpoint_bb_{safe_id}",
+                                n=ep_n,
+                                alpha=p_eff * kappa_p_var,
+                                beta=(1.0 - p_eff) * kappa_p_var,
+                                observed=ep_y,
+                            )
+                            diagnostics.append(
+                                f"  endpoint_bb: {edge_id[:8]}… "
+                                f"{len(ep_n_list)} mature endpoints"
+                                f" ({ep_n_skipped_immature} immature excluded, F<0.9)"
+                            )
 
                 if edge_id not in edge_var_names:
                     edge_var_names[edge_id] = f"p_{safe_id}"

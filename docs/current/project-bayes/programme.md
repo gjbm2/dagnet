@@ -51,8 +51,13 @@ is genuine data sparsity (trajectory coverage) not model bias.
   journal 28-Mar-26.
 - ~~Unrealistically tight posteriors~~ — Phase 1 FIXED (27-Mar-26)
   via hierarchical Beta on p (kappa_p).
+- ~~Phase 2 join-node CDF~~ — **FIXED 29-Mar-26**.
+  `phase2_cohort_use_x` now detects join-downstream edges and builds
+  mixture CDF. See journal 29-Mar-26.
 
-**Open model issues**:
+**Open issues**:
+
+*Model quality*:
 - **Ad hoc hyperparameters** — kappa_p Gamma(3, 0.05), edge_kappa
   Gamma(3, 0.1), fallback ESS=20 for missing Phase 1 posteriors,
   Gamma spread parameters. Need: principled derivation from
@@ -64,26 +69,48 @@ is genuine data sparsity (trajectory coverage) not model bias.
   observations from Amplitude partially mitigate. Needs: stronger
   onset constraint, reparameterisation, or joint onset-mu prior.
   See journal 27-Mar-26.
+- **Phase 2 stabilisation** — convergence issues on some runs
+  (ess=7). Join-node CDF fix applied; remaining ESS/convergence
+  investigation needed. May be Dirichlet drift parameterisation or
+  Phase 1 latency pass-through.
+- **BE stats engine prior discrepancy** — three-way discrepancy
+  between FE stats pass, BE stats engine, and topology
+  `derive_latency_prior` on latency priors. Only topology's crude
+  moment-match gives convergence. See `19-be-stats-engine-bugs.md`.
 
-**Open design gaps**:
-- Topology signatures / hashes (doc 10) — not properly implemented.
-  Current code computes a single global hash (stub). Doc 10 specifies
-  per-fit-unit signatures for staleness detection (did the graph
-  structure change since the last fit?). Needs: per-fit-unit
-  fingerprints, staleness detection on FE pull, UI surfacing of stale
-  posteriors, warm-start invalidation when topology changes. Blocks
-  confident nightly scheduling (must know when to invalidate vs
-  warm-start).
+*Not yet built*:
+- **Topology signatures** (doc 10) — current code computes a single
+  global hash (stub). Needs: per-fit-unit fingerprints, staleness
+  detection on FE pull, UI surfacing of stale posteriors, warm-start
+  invalidation when topology changes. Blocks nightly scheduling.
+- **Model quality gating** (doc 13) — quality signalling (progress,
+  session log, Graph Issues), auto-enable Forecast Quality,
+  accept/reject preview. Designed, not built.
+- **Mixture latency models** (doc 23 §12) — bimodal edges
+  (e.g. registered-to-success) need mixture of two log-normals.
+  Designed, not built.
+- **Phase C posteriors** — context slice pooling, hierarchical
+  shrinkage, per-slice visualisation. Prerequisites done
+  (doc 21 ✓, doc 25 ✓).
+- **Nightly Bayes fit** — automatic posterior updates after daily
+  fetch. Needs: production confidence + topo sigs.
+- **FE stats deletion** — ~4000 lines. Parity confirmed at
+  edge-level; graph-level pipeline shows ~1% drift in orchestration
+  layer (Bayesian evidence adjustment, sampled-cohort detection,
+  n_baseline selection). Needs investigation before deletion.
+- **Lag array defect** (doc 16) — window-type values[] entries have
+  zero lag arrays; blocks sensible first-run latency priors.
+- **Sampling performance** (doc 22) — compilation time (155s on
+  branch graph), GPU experiment, dev-mode draws. Quality-of-life,
+  not blocking.
 
 **Next priorities**:
 1. Commit and stabilise all current code changes (likelihood rewrite,
    doc 25 fixes, join-node CDF fix)
-2. Topology signatures (doc 10) — proper implementation
-3. Phase 2 (cohort pass) stabilisation — convergence issues
-   (join-node CDF fix applied; remaining: ESS/convergence on some runs)
-4. Phase C (context slices) — prerequisites done (doc 21 ✓, doc 25 ✓)
-5. Mixture latency models for bimodal edges (doc 23 §12)
-6. Nightly scheduling — prerequisite: production confidence +
+2. Phase 2 stabilisation — ESS/convergence investigation
+3. Topology signatures (doc 10) — proper implementation
+4. Phase C (context slices) — prerequisites done
+5. Nightly scheduling — prerequisite: production confidence +
    topo sigs
 
 ---

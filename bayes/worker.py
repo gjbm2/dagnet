@@ -664,67 +664,120 @@ def _fit_graph_compiler(payload: dict, report_progress=None) -> dict:
                         parts.append(f"onset={frozen_edge['onset']:.2f}±{frozen_edge['onset_sd']:.2f}")
                     _log(log, f"  phase1_posterior {edge_id[:8]}…: {', '.join(parts)}")
 
-            # Estimate per-edge drift rate from Phase 1 daily rates.
-            # Uses lag-variance method: σ²_drift = max(0, (Var(Δ⁷) - Var(Δ¹))/6).
-            # See doc 24 §4.
-            from compiler.completeness import shifted_lognormal_cdf as _slc
+            # Estimate per-edge drift rate via variogram on mature daily obs.
+            #
+            # Uses daily (n, k, completeness) observations — NOT trajectories.
+            # No CDF division needed: mature daily obs (completeness ≥
+            # MATURITY_FLOOR) give clean p = k/n directly.
+            #
+            # Computes variogram at two lags:
+            #   γ(1)  — noise baseline (day-to-day variation)
+            #   γ(T)  — noise + drift at the relevant timescale
+            # where T = median upstream path latency (anchor → from-node)
+            # from the pre-MCMC stats pass (avoids onset-mu circular dep).
+            #
+            # If γ(T) is not significantly > γ(1), σ²_drift = 0 (no drift).
+            # Pairs weighted by min(n_t, n_{t+lag}) to downweight sparse days.
+            # Effective sample size at lag T corrected for overlap: n_eff ≈ N/T.
+            import math as _math
+            from compiler.model import MATURITY_FLOOR as _MAT_FLOOR
+
             for edge_id, frozen_edge in phase2_frozen.items():
                 ev = evidence.edges.get(edge_id)
                 et = topology.edges.get(edge_id)
                 if ev is None or et is None or not ev.cohort_obs:
+                    frozen_edge["drift_sigma2"] = 0.0
                     continue
 
-                # Collect per-anchor-day maturity-adjusted implied p.
-                # Use window trajectories (each from a different anchor day).
-                onset = frozen_edge.get("onset", 0.0)
-                mu = frozen_edge.get("mu", 0.0)
-                sigma = frozen_edge.get("sigma", 0.01)
-                daily_p = {}  # anchor_day → (implied_p, F_weight)
+                # 1. Collect mature daily obs from ALL slice groups.
+                #    Per anchor day, keep the highest-completeness entry.
+                best_by_day: dict[str, tuple] = {}  # day → (p, n, completeness)
                 for c_obs in ev.cohort_obs:
-                    for traj in c_obs.trajectories:
-                        if traj.obs_type != "window":
+                    if not c_obs.daily:
+                        continue
+                    for d_obs in c_obs.daily:
+                        if d_obs.completeness < _MAT_FLOOR:
                             continue
-                        if len(traj.retrieval_ages) < 2 or traj.n <= 0:
+                        if d_obs.n <= 0:
                             continue
-                        y_final = traj.cumulative_y[-1] if traj.cumulative_y else 0
-                        age_final = traj.retrieval_ages[-1]
-                        f_age = max(_slc(age_final, onset, mu, sigma), 0.01)
-                        p_imp = y_final / (traj.n * f_age)
-                        p_imp = min(max(p_imp, 0.001), 0.999)
-                        day_key = traj.date if hasattr(traj, 'date') and traj.date else str(id(traj))
-                        daily_p[day_key] = (p_imp, f_age)
+                        k = min(d_obs.k, d_obs.n)
+                        p_val = k / d_obs.n
+                        day_key = str(d_obs.date) if hasattr(d_obs, 'date') else str(id(d_obs))
+                        prev = best_by_day.get(day_key)
+                        if prev is None or d_obs.completeness > prev[2]:
+                            best_by_day[day_key] = (p_val, d_obs.n, d_obs.completeness)
 
-                # Sort by date and compute F²-weighted lag-variance.
-                # Weight by min(F_t, F_{t+k})² to downweight differences
-                # involving immature trajectories where the maturity
-                # adjustment amplifies noise. No threshold needed.
-                # See doc 24 §4.
-                sorted_days = sorted(daily_p.keys())
-                p_series = _np.array([daily_p[d][0] for d in sorted_days])
-                f_series = _np.array([daily_p[d][1] for d in sorted_days])
+                sorted_days = sorted(best_by_day.keys())
+                n_days = len(sorted_days)
 
-                if len(p_series) >= 25:
-                    # Lag-1: weighted by min(F_t, F_{t+1})²
-                    diff1 = p_series[1:] - p_series[:-1]
-                    w1 = _np.minimum(f_series[1:], f_series[:-1]) ** 2
-                    var1 = float(_np.average(diff1 ** 2, weights=w1))
-
-                    # Lag-7: weighted by min(F_t, F_{t+7})²
-                    diff7 = p_series[7:] - p_series[:-7]
-                    w7 = _np.minimum(f_series[7:], f_series[:-7]) ** 2
-                    var7 = float(_np.average(diff7 ** 2, weights=w7))
-
-                    drift_sigma2 = max(0.0, (var7 - var1) / 6.0)
-
-                    frozen_edge["drift_sigma2"] = drift_sigma2
-                    _log(log, f"  drift {edge_id[:8]}…: σ²_drift={drift_sigma2:.8f} "
-                              f"(wvar1={var1:.6f}, wvar7={var7:.6f}, "
-                              f"n_days={len(p_series)}, "
-                              f"F_range=[{f_series.min():.2f}, {f_series.max():.2f}])")
-                else:
+                if n_days < 5:
                     frozen_edge["drift_sigma2"] = 0.0
-                    _log(log, f"  drift {edge_id[:8]}…: insufficient data "
-                              f"({len(p_series)} days < 25) → σ²_drift=0")
+                    _log(log, f"  drift {edge_id[:8]}…: {n_days} mature daily obs → σ²_drift=0")
+                    continue
+
+                p_arr = _np.array([best_by_day[d][0] for d in sorted_days])
+                n_arr = _np.array([best_by_day[d][1] for d in sorted_days], dtype=_np.float64)
+
+                # 2. Compute T = median upstream path latency (anchor → from-node).
+                #    Uses pre-MCMC topology values (stats pass), not Phase 1
+                #    posterior, to avoid onset-mu correlation circular dependency.
+                #    Upstream = full path (anchor→target) minus this edge's own
+                #    latency contribution.
+                t_median = 0.0
+                if hasattr(et, 'path_latency') and et.path_latency:
+                    pl = et.path_latency
+                    full_path_median = (pl.path_delta or 0) + _math.exp(pl.path_mu or 0)
+                    if et.has_latency:
+                        this_edge_median = (et.onset_delta_days or 0) + _math.exp(et.mu_prior or 0)
+                    else:
+                        this_edge_median = 0.0
+                    t_median = max(full_path_median - this_edge_median, 0.0)
+                t_lag = max(int(round(t_median)), 1)
+
+                # 3. Compute γ(1) — noise baseline.
+                if n_days >= 2:
+                    diff1 = p_arr[1:] - p_arr[:-1]
+                    w1 = _np.minimum(n_arr[1:], n_arr[:-1])
+                    gamma1 = 0.5 * float(_np.average(diff1 ** 2, weights=w1))
+                    n_pairs_1 = len(diff1)
+                else:
+                    gamma1 = 0.0
+                    n_pairs_1 = 0
+
+                # 4. Compute γ(T) — drift-scale variogram.
+                if n_days > t_lag:
+                    diff_t = p_arr[t_lag:] - p_arr[:-t_lag]
+                    w_t = _np.minimum(n_arr[t_lag:], n_arr[:-t_lag])
+                    gamma_t = 0.5 * float(_np.average(diff_t ** 2, weights=w_t))
+                    n_pairs_t = len(diff_t)
+                    n_eff_t = max(n_pairs_t / t_lag, 1.0)  # overlap correction
+                else:
+                    gamma_t = gamma1
+                    n_pairs_t = 0
+                    n_eff_t = 0
+
+                # 5. Significance test: is γ(T) > γ(1)?
+                significant = False
+                drift_sigma2 = 0.0
+                if n_eff_t >= 2 and n_pairs_1 >= 2 and gamma1 > 0:
+                    se1 = gamma1 / _math.sqrt(max(n_pairs_1, 1))
+                    se_t = gamma_t / _math.sqrt(max(n_eff_t, 1))
+                    se = _math.sqrt(se1 ** 2 + se_t ** 2)
+                    if se > 0:
+                        z = (gamma_t - gamma1) / se
+                        significant = z > 1.96
+                        if significant and t_lag > 1:
+                            drift_sigma2 = max(0.0, (gamma_t - gamma1) / (t_lag - 1))
+
+                frozen_edge["drift_sigma2"] = drift_sigma2
+                _log(log, f"  drift {edge_id[:8]}…: "
+                          f"σ²_drift={drift_sigma2:.8f} "
+                          f"({'SIG' if significant else 'ns'}) "
+                          f"γ(1)={gamma1:.6f} (n={n_pairs_1}), "
+                          f"γ({t_lag})={gamma_t:.6f} (n_eff={n_eff_t:.0f}), "
+                          f"n_days={n_days}, "
+                          f"F_range=[{min(best_by_day[d][2] for d in sorted_days):.2f}, "
+                          f"{max(best_by_day[d][2] for d in sorted_days):.2f}])")
 
             # Build Phase 2 model
             model2, metadata2 = build_model(
@@ -790,12 +843,18 @@ def _fit_graph_compiler(payload: dict, report_progress=None) -> dict:
                         break
 
             # Merge cohort latency posteriors from Phase 2.
-            # Copy any cohort-specific latency fields that exist.
+            # Phase 2's path-level latency (onset, mu, sigma) overrides
+            # Phase 1's cruder FW-composed values on the same attributes.
             for eid, lat2 in inference_result2.latency_posteriors.items():
                 lat1 = inference_result.latency_posteriors.get(eid)
                 if lat1:
-                    for attr in ('cohort_onset', 'cohort_mu', 'cohort_sigma',
-                                 'cohort_onset_std', 'cohort_mu_std', 'cohort_sigma_std'):
+                    for attr in (
+                        'path_onset_delta_days', 'path_onset_sd',
+                        'path_onset_hdi_lower', 'path_onset_hdi_upper',
+                        'path_mu_mean', 'path_mu_sd',
+                        'path_sigma_mean', 'path_sigma_sd',
+                        'path_provenance',
+                    ):
                         val = getattr(lat2, attr, None)
                         if val is not None:
                             setattr(lat1, attr, val)

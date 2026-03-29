@@ -339,6 +339,7 @@ export async function applyPatch(patch: BayesPatchFile): Promise<number> {
                 path_mu: cohortSlice.mu_mean,
                 path_sigma: cohortSlice.sigma_mean,
                 path_t95: Math.exp(cohortSlice.mu_mean + 1.645 * (cohortSlice.sigma_mean ?? 0)) + (cohortSlice.onset_mean ?? 0),
+                path_onset_delta_days: cohortSlice.onset_mean ?? 0,
               } : {}),
             },
           } : {}),

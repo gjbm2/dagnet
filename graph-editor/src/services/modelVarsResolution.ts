@@ -91,6 +91,7 @@ export interface PromotionResult {
     path_mu?: number;
     path_sigma?: number;
     path_t95?: number;
+    path_onset_delta_days?: number;
   };
   /** Which source was selected */
   activeSource: ModelVarsEntry['source'];
@@ -116,6 +117,7 @@ export function promoteModelVars(
           path_mu: entry.latency.path_mu,
           path_sigma: entry.latency.path_sigma,
           path_t95: entry.latency.path_t95,
+          path_onset_delta_days: entry.latency.path_onset_delta_days,
         }
       : undefined,
     activeSource: entry.source,
@@ -154,6 +156,7 @@ export function applyPromotion(
     if (result.latency.path_mu !== undefined) p.latency.path_mu = result.latency.path_mu;
     if (result.latency.path_sigma !== undefined) p.latency.path_sigma = result.latency.path_sigma;
     if (result.latency.path_t95 !== undefined) p.latency.promoted_path_t95 = result.latency.path_t95;
+    if (result.latency.path_onset_delta_days !== undefined) p.latency.path_onset_delta_days = result.latency.path_onset_delta_days;
   }
 
   return result.activeSource;
