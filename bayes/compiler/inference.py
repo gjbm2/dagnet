@@ -133,6 +133,7 @@ def _estimate_cohort_kappa(
     topology,
     p_cohort_mean: float,
     diagnostics: list[str],
+    obs_type_filter: str = "cohort",
 ) -> float | None:
     """Estimate between-cohort dispersion from trajectory residuals.
 
@@ -148,14 +149,20 @@ def _estimate_cohort_kappa(
     if not ev.cohort_obs:
         return None
 
-    # Resolve the CDF parameters for this edge's path.
-    # Use frozen Phase 1 latency (edge-level or path-level).
+    # Resolve the CDF parameters.
+    # Window obs: edge-level CDF (observation age is from edge entry).
+    # Cohort obs: path-level CDF (observation age is from anchor entry).
     onset = 0.0
     mu = 0.0
     sigma = 0.01
     if et.has_latency:
-        # Path latency if available, else edge latency
-        if hasattr(et, 'path_latency') and et.path_latency:
+        if obs_type_filter == "window" and ev.latency_prior:
+            # Window: edge CDF
+            onset = ev.latency_prior.onset_delta_days or 0.0
+            mu = ev.latency_prior.mu
+            sigma = ev.latency_prior.sigma
+        elif hasattr(et, 'path_latency') and et.path_latency:
+            # Cohort: path CDF
             onset = et.path_latency.path_delta
             mu = et.path_latency.path_mu
             sigma = et.path_latency.path_sigma
@@ -164,32 +171,75 @@ def _estimate_cohort_kappa(
             mu = ev.latency_prior.mu
             sigma = ev.latency_prior.sigma
 
-    # Collect per-cohort implied p from cohort trajectories.
+    # Collect per-cohort implied p from BOTH cohort trajectories
+    # AND cohort daily obs. Trajectories give multi-retrieval days
+    # (endpoint y/x). Daily obs give single-retrieval days (k/n).
+    # Together they cover nearly all anchor days.
+    # Filter: denominator >= 3 and F(age) >= 0.5.
     p_implied = []
     n_values = []
     f_values = []
+    n_skipped_x = 0
+    n_skipped_f = 0
+    seen_dates = set()  # avoid double-counting
+
     for c_obs in ev.cohort_obs:
+        # 1. Trajectory endpoints (multi-retrieval anchor days)
         for traj in c_obs.trajectories:
-            if traj.obs_type != "cohort":
+            if traj.obs_type != obs_type_filter:
                 continue
             if len(traj.retrieval_ages) < 2 or traj.n <= 0:
                 continue
             cx = getattr(traj, 'cumulative_x', None)
-            if not cx or len(cx) == 0 or cx[-1] <= 0:
+            if not cx or len(cx) == 0 or cx[-1] < 3:
+                n_skipped_x += 1
                 continue
-            # Maturity-adjusted implied p for this cohort
             x_final = cx[-1]
             y_final = traj.cumulative_y[-1] if traj.cumulative_y else 0
             age_final = traj.retrieval_ages[-1]
             f_age = shifted_lognormal_cdf(age_final, onset, mu, sigma)
-            f_age = max(f_age, 0.01)  # avoid division by zero
+            if f_age < 0.5:
+                n_skipped_f += 1
+                continue
             p_imp = y_final / (x_final * f_age)
-            p_imp = min(max(p_imp, 0.001), 0.999)  # clamp
+            p_imp = min(max(p_imp, 0.001), 0.999)
             p_implied.append(p_imp)
             n_values.append(x_final)
             f_values.append(f_age)
+            if hasattr(traj, 'date') and traj.date:
+                seen_dates.add(traj.date)
+
+        # 2. Daily obs (single-retrieval anchor days)
+        # Now that the evidence binder uses x (from-node) as
+        # denominator for all obs types, daily obs are edge-level
+        # rates — compatible with trajectory endpoints.
+        if c_obs.daily and obs_type_filter in getattr(c_obs, 'slice_dsl', ''):
+            for d_obs in c_obs.daily:
+                d_key = getattr(d_obs, 'date', None)
+                if d_key and d_key in seen_dates:
+                    continue
+                if d_obs.n < 3:
+                    n_skipped_x += 1
+                    continue
+                age = getattr(d_obs, 'age_days', 0) or 0
+                f_age = shifted_lognormal_cdf(age, onset, mu, sigma)
+                if f_age < 0.5:
+                    n_skipped_f += 1
+                    continue
+                p_imp = d_obs.k / (d_obs.n * f_age)
+                p_imp = min(max(p_imp, 0.001), 0.999)
+                p_implied.append(p_imp)
+                n_values.append(d_obs.n)
+                f_values.append(f_age)
+                if d_key:
+                    seen_dates.add(d_key)
 
     if len(p_implied) < 5:
+        diagnostics.append(
+            f"  empirical_kappa {ev.edge_id[:8]}…: insufficient data "
+            f"({len(p_implied)} cohorts after filtering, "
+            f"skipped {n_skipped_x} low-x, {n_skipped_f} immature)"
+        )
         return None
 
     import numpy as _np
@@ -198,13 +248,19 @@ def _estimate_cohort_kappa(
     f_arr = _np.array(f_values)
 
     p_bar = float(_np.mean(p_arr))
-    observed_var = float(_np.var(p_arr, ddof=1))
+    # F²-weighted observed variance — downweights observations
+    # where the maturity adjustment amplifies noise.
+    w = f_arr ** 2
+    p_mean_w = float(_np.average(p_arr, weights=w))
+    observed_var = float(_np.average((p_arr - p_mean_w) ** 2, weights=w))
 
     # Expected Binomial sampling variance (Williams 1982):
     # Each p_implied_i = y_i / (x_i × F_i) has sampling variance
-    # ≈ p(1-p) / (n_i × F_i) from the Binomial.
-    binomial_var = float(_np.mean(
-        p_bar * (1.0 - p_bar) / (n_arr * f_arr)
+    # ≈ p(1-p) / (n_i × F_i²) from the Binomial (the 1/F²
+    # comes from the maturity adjustment inflating noise).
+    binomial_var = float(_np.average(
+        p_bar * (1.0 - p_bar) / (n_arr * f_arr ** 2),
+        weights=w,
     ))
 
     between_cohort_var = max(observed_var - binomial_var, 0.0)
@@ -306,22 +362,33 @@ def summarise_posteriors(
         # real-world uncertainty (both estimation + cohort variation),
         # not just estimation precision.
         # See journal 27-Mar-26 "hierarchical Beta on p".
+        # Between-cohort kappa: use Williams estimator on window
+        # trajectory data (post-MCMC, fixed CDF from posterior means).
+        # This replaces the MCMC kappa_p which confounds genuine
+        # between-cohort variation with latency-induced posterior
+        # coupling. See journal 29-Mar-26.
+        kappa_window = _estimate_cohort_kappa(
+            ev, et, topology, float(np.mean(samples)), diagnostics,
+            obs_type_filter="window",
+        )
         kappa_p_name = f"kappa_p_{safe_eid}"
-        if kappa_p_name in trace.posterior:
-            mu_p_samples = samples  # these are mu_p posterior samples
-            kappa_p_samples = trace.posterior[kappa_p_name].values.flatten()
-            # Draw one p_new per MCMC sample from Beta(mu_p * kappa_p, (1-mu_p) * kappa_p)
-            a_samples = np.maximum(mu_p_samples * kappa_p_samples, 0.01)
-            b_samples = np.maximum((1.0 - mu_p_samples) * kappa_p_samples, 0.01)
+        mcmc_kappa = float(np.mean(trace.posterior[kappa_p_name].values.flatten())) if kappa_p_name in trace.posterior else None
+
+        effective_kappa = kappa_window if kappa_window is not None else mcmc_kappa
+        if effective_kappa is not None:
+            mu_p_samples = samples
+            kappa_arr = np.full_like(mu_p_samples, effective_kappa)
+            a_samples = np.maximum(mu_p_samples * kappa_arr, 0.01)
+            b_samples = np.maximum((1.0 - mu_p_samples) * kappa_arr, 0.01)
             predictive_samples = np.random.beta(a_samples, b_samples)
             alpha, beta_val = _fit_beta_to_samples(predictive_samples)
-            # HDI from predictive samples
             pred_hdi = az.hdi(predictive_samples, hdi_prob=HDI_PROB)
             hdi_lower = float(pred_hdi[0])
             hdi_upper = float(pred_hdi[1])
             diagnostics.append(
                 f"  predictive_p {edge_id[:8]}…: mu_p={float(np.mean(mu_p_samples)):.4f}, "
-                f"kappa_p={float(np.mean(kappa_p_samples)):.1f}, "
+                f"kappa_williams={effective_kappa:.1f}"
+                f"{f', kappa_mcmc={mcmc_kappa:.1f}' if mcmc_kappa else ''}, "
                 f"pred_alpha={alpha:.1f}, pred_beta={beta_val:.1f}"
             )
         else:

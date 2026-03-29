@@ -8,6 +8,25 @@ Entries are reverse-chronological (newest first).
 
 ---
 
+## 29-Mar-26: Phase 2 join-node CDF fix (applied)
+
+The `phase2_cohort_use_x` branch entered before the join-detection code
+ran, so join-downstream edges resolved latency from `trajs[0].path_edge_ids`
+(one arbitrary path) and ignored the other incident paths entirely.
+
+**Fix**: inside the `phase2_cohort_use_x` block, check `path_alternatives`
+first. If 2+ alternatives exist, build the mixture CDF (same components as
+Phase 1's `else` branch: path-product p, FW-composed latency per
+alternative) and keep the original anchor-denominator trajectories. Only
+apply the x-denominator rewrite when the edge is NOT a join-downstream
+mixture.
+
+This is a structural/topological fix, independent of the Phase 2
+parameterisation approach (approach 3, drift constraints, etc.). Affects
+diamond, lattice, join-branch graphs and any production graph with joins.
+
+---
+
 ## 29-Mar-26: Phase 2 drift constraint — ESS decay with empirical drift rate
 
 ### The physical constraint on drift
@@ -197,9 +216,8 @@ may not need Williams — to be evaluated empirically.
 
 ### What remains independent
 
-- Join-node CDF fix: must build weighted mixture of incident path
-  CDFs for join-downstream edges. Structural/topological bug,
-  independent of Phase 2 parameterisation.
+- ~~Join-node CDF fix~~: done 29-Mar-26. phase2_cohort_use_x now
+  detects join-downstream edges and builds mixture CDF.
 - Williams method for between-cohort kappa: post-model residual
   estimation. Keep for now; evaluate whether Phase 2's posterior
   width is sufficient after approach 3 is implemented.
@@ -569,7 +587,7 @@ inference.py. For each edge with cohort trajectories:
 - Compute kappa_empirical from Williams method
 - Use for cohort predictive alpha/beta
 
-### Phase 2 join-node CDF defect (28-Mar-26)
+### Phase 2 join-node CDF defect (28-Mar-26) — **FIXED 29-Mar-26**
 
 For join-downstream edges (e.g. c→d where c has incident paths
 a→b→c and a→e→c), Phase 1's likelihood correctly builds a mixture:

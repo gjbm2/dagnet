@@ -1512,6 +1512,28 @@ export interface MergeOptions {
  * @param mergeOptions Additional options (cohort mode, latency summary)
  * @returns Values array with merged entry for this slice family
  */
+
+/**
+ * Extract the most recent original source fetch timestamp from a set of values entries.
+ *
+ * Checks source_retrieved_at first (already-aggregated entries), then falls back
+ * to retrieved_at (original entries from Amplitude). Returns the max across all
+ * entries, preserving the actual API fetch timestamp through aggregation cycles.
+ */
+function _latestRetrievedAt(values: ParameterValue[]): string {
+  let latest = '';
+  for (const v of values) {
+    const ds = (v as any).data_source;
+    // Prefer source_retrieved_at (re-aggregated), fall back to retrieved_at (original)
+    const ra = ds?.source_retrieved_at || ds?.retrieved_at;
+    if (ra) {
+      const s = ra instanceof Date ? ra.toISOString() : String(ra);
+      if (s > latest) latest = s;
+    }
+  }
+  return latest || new Date().toISOString();
+}
+
 export function mergeTimeSeriesIntoParameter(
   existingValues: ParameterValue[],
   newTimeSeries: Array<TimeSeriesPointWithLatency>,
@@ -1721,10 +1743,11 @@ export function mergeTimeSeriesIntoParameter(
       data_source: {
         type: (dataSourceType || 'api') as 'amplitude' | 'api' | 'manual' | 'sheets' | 'statsig',
         retrieved_at: new Date().toISOString(),
+        source_retrieved_at: _latestRetrievedAt(existingCohortSlices),
         ...(fullQuery && { full_query: fullQuery }),
       },
     };
-    
+
     // 8) Remove old cohort slice for this family, add merged slice
     const remaining = existingValues.filter(v => {
       if (!isCohortModeValue(v)) return true;
@@ -2034,6 +2057,7 @@ export function mergeTimeSeriesIntoParameter(
     data_source: {
       type: (dataSourceType || 'api') as 'amplitude' | 'api' | 'manual' | 'sheets' | 'statsig',
       retrieved_at: new Date().toISOString(),
+      source_retrieved_at: _latestRetrievedAt(existingForSlice),
       ...(fullQuery && { full_query: fullQuery }),
     },
   };

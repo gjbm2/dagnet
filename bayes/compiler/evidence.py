@@ -490,15 +490,13 @@ def _build_trajectories_for_obs_type(
                 seen_ret[ret_key] = r
         deduped = sorted(seen_ret.values(), key=lambda r: str(r.get("retrieved_at", "")))
 
-        # Resolve denominator: max x for window (x grows as more data
-        # arrives — early retrievals have incomplete counts), max a for cohort.
-        # Uses the same aggregation logic as derive_cohort_maturity.
-        if obs_type == "window":
-            denom = max((_safe_int(r.get("x")) or 0 for r in deduped), default=0)
-            denom = denom if denom > 0 else None
-        else:
-            denom = max((_safe_int(r.get("a")) or 0 for r in deduped), default=0)
-            denom = denom if denom > 0 else None
+        # Resolve denominator: always use x (from-node count).
+        # Both window and cohort observations are edge-level: y/x
+        # is the edge conversion rate. The anchor count (a) is only
+        # relevant for display (path rate y/a), not for modelling.
+        # For first edges, a = x (anchor IS the from-node).
+        denom = max((_safe_int(r.get("x")) or 0 for r in deduped), default=0)
+        denom = denom if denom > 0 else None
 
         if denom is None or denom <= 0:
             continue

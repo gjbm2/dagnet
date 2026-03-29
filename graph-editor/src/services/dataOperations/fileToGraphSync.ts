@@ -1297,6 +1297,9 @@ export async function getParameterFromFile(options: {
             data_source: {
               type: latestValueWithSource?.data_source?.type || 'file',
               retrieved_at: new Date().toISOString(),
+              source_retrieved_at: latestValueWithSource?.data_source?.source_retrieved_at
+                || latestValueWithSource?.data_source?.retrieved_at
+                || new Date().toISOString(),
               // NOTE: data_source.query removed - unused and caused type mismatches with Python
               full_query: latestValueWithSource?.data_source?.full_query,
             },

@@ -11,6 +11,33 @@ import {
 } from './snapshotSubjectResolutionService';
 import type { Graph, ScenarioVisibilityMode } from '../types';
 import { resolveComputeAffectingDisplay } from '../lib/analysisDisplaySettingsRegistry';
+import { projectProbabilityPosterior, projectLatencyPosterior } from './posteriorSliceResolution';
+
+// ── Posterior re-projection (doc 25 §2.2) ───────────────────────────────────
+// After building a per-scenario analysis graph, re-project the posterior
+// from the stashed _posteriorSlices using that scenario's effective DSL.
+// This ensures each scenario graph carries the right posterior for its
+// query context (window vs cohort, contexted vs aggregate).
+
+function reprojectPosteriorForDsl(graph: Graph, effectiveDsl: string): void {
+  const edges = (graph as any)?.edges;
+  if (!Array.isArray(edges)) return;
+
+  for (const edge of edges) {
+    const stashed = edge?.p?._posteriorSlices;
+    if (!stashed?.slices) continue;
+
+    const probResult = projectProbabilityPosterior(stashed, effectiveDsl);
+    if (probResult) {
+      edge.p.posterior = probResult;
+    }
+
+    const latResult = projectLatencyPosterior(stashed, effectiveDsl);
+    if (latResult && edge.p.latency) {
+      edge.p.latency.posterior = latResult;
+    }
+  }
+}
 
 type ScenarioLike = {
   id: string;
@@ -337,6 +364,7 @@ export async function prepareAnalysisComputeInputs(
       );
 
       const effectiveQueryDsl = getQueryDslForScenario(scenarioId);
+      reprojectPosteriorForDsl(scenarioGraph, effectiveQueryDsl);
       scenarios.push({
         scenario_id: scenarioId,
         name: params.getScenarioName(scenarioId),
@@ -377,16 +405,19 @@ export async function prepareAnalysisComputeInputs(
       }
       scenarioGraph = applyProbabilityVisibilityModeToGraph(scenarioGraph, visibilityMode);
 
+      const effectiveQueryDsl = composeScenarioDsl(
+        augmentDSLWithConstraint(params.currentDSL || '', scenario.effective_dsl || ''),
+        params.chartCurrentLayerDsl,
+      );
+      reprojectPosteriorForDsl(scenarioGraph, effectiveQueryDsl);
+
       return {
         scenario_id: scenario.scenario_id,
         name: scenario.name || scenario.scenario_id,
         colour: scenario.colour || '#808080',
         visibility_mode: visibilityMode,
         graph: scenarioGraph,
-        effective_query_dsl: composeScenarioDsl(
-          augmentDSLWithConstraint(params.currentDSL || '', scenario.effective_dsl || ''),
-          params.chartCurrentLayerDsl,
-        ),
+        effective_query_dsl: effectiveQueryDsl,
       };
     });
     const currentIdx = builtScenarios.findIndex((s) => s.scenario_id === 'current');

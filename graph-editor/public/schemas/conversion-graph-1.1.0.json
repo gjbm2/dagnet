@@ -1064,7 +1064,11 @@
             },
             "retrieved_at": {
               "type": "string",
-              "description": "When data was retrieved (UK format or ISO)"
+              "description": "When data was last aggregated or cached (UK format or ISO)"
+            },
+            "source_retrieved_at": {
+              "type": "string",
+              "description": "When data was originally fetched from the external source (e.g. Amplitude). Preserved through aggregation cycles."
             },
             "edited_at": {
               "type": "string",
@@ -1572,7 +1576,11 @@
             },
             "retrieved_at": {
               "type": "string",
-              "description": "When data was retrieved (UK format or ISO)"
+              "description": "When data was last aggregated or cached (UK format or ISO)"
+            },
+            "source_retrieved_at": {
+              "type": "string",
+              "description": "When data was originally fetched from the external source (e.g. Amplitude). Preserved through aggregation cycles."
             },
             "edited_at": {
               "type": "string",

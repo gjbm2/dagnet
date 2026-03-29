@@ -503,7 +503,11 @@ properties:
             retrieved_at:
               type: string
               format: date-time
-              description: "Timestamp when data was retrieved from external source"
+              description: "Timestamp when data was last aggregated or cached"
+            source_retrieved_at:
+              type: string
+              format: date-time
+              description: "Timestamp when data was originally fetched from the external source (e.g. Amplitude). Preserved through aggregation cycles."
             edited_at:
               type: string
               format: date-time

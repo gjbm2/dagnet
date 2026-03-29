@@ -19,6 +19,7 @@ import type {
 
 import { normalizeToUK } from '../../lib/dateFormat';
 import { roundToDP, roundHorizonDays } from './roundingUtils';
+import { projectProbabilityPosterior, projectLatencyPosterior } from '../posteriorSliceResolution';
 
 // ============================================================
 // Helpers
@@ -782,88 +783,47 @@ function buildMappingConfigurations(): Map<string, MappingConfiguration> {
     { sourceField: 'latency.path_sigma', targetField: 'p.latency.path_sigma', condition: isProbType },
     { sourceField: 'latency.path_onset_delta_days', targetField: 'p.latency.path_onset_delta_days', condition: isProbType },
 
-    // Bayesian posteriors (doc 21: unified posterior schema)
+    // Bayesian posteriors (doc 21: unified posterior schema, doc 25: slice resolution)
     // File has posterior.slices with unified entries. We project onto graph
     // edge in the shapes UI components expect (ProbabilityPosterior on
-    // p.posterior, LatencyPosterior on p.latency.posterior). Strips
-    // fit_history/slices/_model_state from the graph copy.
+    // p.posterior, LatencyPosterior on p.latency.posterior).
+    // The cascade defaults to window() (effectiveDsl = ''); per-scenario
+    // re-projection happens in the analysis graph composition (doc 25 §2.2).
+    // Raw slices are stashed at p._posteriorSlices for re-projection.
     {
       sourceField: 'posterior',
       targetField: 'p.posterior',
       condition: (source) => isProbType(source) && source.posterior?.slices !== undefined,
       transform: (value: any) => {
         if (!value || typeof value !== 'object' || !value.slices) return value;
-        const windowSlice = value.slices['window()'];
-        if (!windowSlice) return undefined;
-        // Project ProbabilityPosterior shape from window() + cohort() slices
-        const cs = value.slices['cohort()'];
-        return {
-          distribution: 'beta',
-          alpha: windowSlice.alpha,
-          beta: windowSlice.beta,
-          hdi_lower: windowSlice.p_hdi_lower,
-          hdi_upper: windowSlice.p_hdi_upper,
-          hdi_level: value.hdi_level ?? 0.9,
-          ess: windowSlice.ess,
-          rhat: windowSlice.rhat,
-          evidence_grade: windowSlice.evidence_grade ?? 0,
-          fitted_at: value.fitted_at,
-          fingerprint: value.fingerprint,
-          provenance: windowSlice.provenance ?? 'bayesian',
-          divergences: windowSlice.divergences ?? 0,
-          prior_tier: value.prior_tier ?? 'uninformative',
-          surprise_z: value.surprise_z,
-          // Path-level from cohort() slice
-          ...(cs?.alpha != null ? {
-            path_alpha: cs.alpha,
-            path_beta: cs.beta,
-            path_hdi_lower: cs.p_hdi_lower,
-            path_hdi_upper: cs.p_hdi_upper,
-            path_provenance: cs.provenance ?? 'bayesian',
-          } : {}),
-        };
+        return projectProbabilityPosterior(value, '');
       },
     },
-    // Latency posterior — projected from unified posterior.slices onto p.latency.posterior
+    // Latency posterior — projected from unified posterior.slices
     {
       sourceField: 'posterior',
       targetField: 'p.latency.posterior',
-      condition: (source) => isProbType(source) && source.posterior?.slices?.['window()']?.mu_mean !== undefined,
+      condition: (source) => isProbType(source) && source.posterior?.slices !== undefined,
       transform: (value: any) => {
         if (!value || typeof value !== 'object' || !value.slices) return undefined;
-        const ws = value.slices['window()'];
-        const cs = value.slices['cohort()'];
-        if (!ws?.mu_mean) return undefined;
-        // Project LatencyPosterior shape from window + cohort slices
+        return projectLatencyPosterior(value, '');
+      },
+    },
+    // Stash raw posterior.slices on graph edge for per-scenario re-projection (doc 25 §2.2)
+    {
+      sourceField: 'posterior',
+      targetField: 'p._posteriorSlices',
+      condition: (source) => isProbType(source) && source.posterior?.slices !== undefined,
+      transform: (value: any) => {
+        if (!value || typeof value !== 'object' || !value.slices) return undefined;
+        // Stash the full posterior (slices + metadata) so re-projection has everything
         return {
-          distribution: 'lognormal',
-          onset_delta_days: ws.onset_mean ?? 0,
-          mu_mean: ws.mu_mean,
-          mu_sd: ws.mu_sd,
-          sigma_mean: ws.sigma_mean,
-          sigma_sd: ws.sigma_sd,
-          hdi_t95_lower: ws.hdi_t95_lower,
-          hdi_t95_upper: ws.hdi_t95_upper,
-          hdi_level: value.hdi_level ?? 0.9,
-          ess: ws.ess,
-          rhat: ws.rhat,
+          slices: value.slices,
           fitted_at: value.fitted_at,
           fingerprint: value.fingerprint,
-          provenance: ws.provenance ?? 'bayesian',
-          ...(ws.onset_mean != null ? { onset_mean: ws.onset_mean, onset_sd: ws.onset_sd } : {}),
-          ...(ws.onset_mu_corr != null ? { onset_mu_corr: ws.onset_mu_corr } : {}),
-          // Path-level from cohort() slice
-          ...(cs?.mu_mean != null ? {
-            path_onset_delta_days: cs.onset_mean,
-            path_onset_sd: cs.onset_sd,
-            path_mu_mean: cs.mu_mean,
-            path_mu_sd: cs.mu_sd,
-            path_sigma_mean: cs.sigma_mean,
-            path_sigma_sd: cs.sigma_sd,
-            ...(cs.hdi_t95_lower != null ? { path_hdi_t95_lower: cs.hdi_t95_lower, path_hdi_t95_upper: cs.hdi_t95_upper } : {}),
-            ...(cs.onset_mu_corr != null ? { path_onset_mu_corr: cs.onset_mu_corr } : {}),
-            path_provenance: cs.provenance,
-          } : {}),
+          hdi_level: value.hdi_level,
+          prior_tier: value.prior_tier,
+          surprise_z: value.surprise_z,
         };
       },
     },

@@ -4016,6 +4016,7 @@ export async function getFromSourceDirect(options: {
           ? 'statsig'
           : 'api',
         retrieved_at: retrievalBatchAtISO,
+        source_retrieved_at: retrievalBatchAtISO,
         // NOTE: data_source.query removed - unused and caused type mismatches with Python
         full_query: queryPayload.query || JSON.stringify(queryPayload),
       };

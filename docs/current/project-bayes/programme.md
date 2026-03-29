@@ -1,17 +1,18 @@
 # Project Bayes: Programme
 
 **Status**: Active
-**Updated**: 27-Mar-26
+**Updated**: 29-Mar-26
 **Purpose**: Phased delivery plan for Project Bayes. This doc owns sequencing;
 design docs contain the detail.
 
-### Current status snapshot (27-Mar-26)
+### Current status snapshot (29-Mar-26)
 
 **Done**: Async infrastructure, Phase A–D compiler, FE overlay (basic
 + quality + model CDF + confidence bands), unified posterior schema,
 synthetic data generator + 8-graph param recovery suite, two-phase
 model architecture, likelihood rewrite (DM→Binomial), onset
-observations, t95 soft constraint.
+observations, t95 soft constraint, posterior slice resolution (doc 25),
+Phase 2 join-node CDF fix.
 
 **Production fit quality**: del-to-reg p inflation reduced from
 1.94x → 1.19x. No-latency edges ≤1.03x. Synth recovery ≤1.04x
@@ -25,59 +26,44 @@ is genuine data sparsity (trajectory coverage) not model bias.
 3. t95 soft constraint from analytics pass — prevents sigma inflation
 4. Two-phase model — window Phase 1, frozen-p Phase 2 with drift
 
-**Open bugs**:
-- Posterior upsert on subsequent runs — Bayes results do not update
-  the graph properly on re-runs. Likely a webhook commit or FE pull
-  upsert issue. Blocks warm-start and nightly scheduling.
-- **Posterior slice projection is not query-driven** — the cascade
-  hardcodes `slices['window()']` and `slices['cohort()']` when
-  projecting `posterior.slices` onto graph edges. Contexted slices
-  are ignored; window/cohort selection isn't driven by the query DSL.
-  Root cause of the two bugs below. Fix: shared `resolvePosteriorSlice()`
-  helper in cascade + analysis graph composition. See doc 25.
-- Surprise gauge uses wrong slice — compares analytic rate against
-  Phase 1 window posterior regardless of what's being displayed.
-  Also ignores quality gate on reference entry (`gate_passed` not
-  checked). Subsumes into doc 25 §3.1–3.2.
-- **Cohort maturity curve uses window p, not cohort p** — the BE
-  analysis handler reads `p.forecast.mean` (always window/promoted)
-  for the model CDF curve. Once the cascade projects the right slice
-  (doc 25 §2), the BE reads `p.posterior.alpha/(alpha+beta)` instead.
-  Subsumes into doc 25 §3.3.
-- **Phase 2 p_cohort drift** — TWO root causes found and fixed:
-  (a) Branch group Dirichlet gave p too much freedom (kappa=50 ≈
-  ±7% SD). Fixed: replaced with drift+simplex (tau=0.1, ±2.5%).
-  (b) Free cohort_latency_vars enabled p-CDF ridge (cure model
-  identifiability). Fixed: frozen FW-composed path CDF for
+**Resolved bugs** (29-Mar-26 sweep):
+- ~~Posterior upsert on subsequent runs~~ — **FIXED 29-Mar-26**.
+- ~~Posterior slice projection is not query-driven~~ — **FIXED
+  29-Mar-26**. `resolvePosteriorSlice()` in new
+  `posteriorSliceResolution.ts`; cascade calls
+  `projectProbabilityPosterior`/`projectLatencyPosterior`;
+  per-scenario re-projection via `reprojectPosteriorForDsl()` in
+  `analysisComputePreparationService.ts`. See doc 25.
+- ~~Surprise gauge uses wrong slice~~ — **FIXED 29-Mar-26**. Now uses
+  `resolveActiveModelVars()` respecting quality gate and source
+  preference. See doc 25 §3.1–3.2.
+- ~~Cohort maturity curve uses window p, not cohort p~~ — **FIXED
+  29-Mar-26**. BE analysis handler extracts `posterior_p =
+  alpha/(alpha+beta)` from re-projected posterior slice; prefers it
+  over `forecast_mean` for model CDF scaling. See doc 25 §3.3.
+- ~~Phase 2 p_cohort drift~~ — TWO root causes found and fixed:
+  (a) Branch group Dirichlet → drift+simplex (tau=0.1, ±2.5%).
+  (b) Free cohort_latency_vars → frozen FW-composed path CDF for
   single-edge paths. See journal 28-Mar-26.
-- **Cohort between-cohort uncertainty** — Phase 2 per-cohort random
-  effects (Option A) failed: the z_i hierarchy creates a spurious
-  mode that traps the sampler (p_cohort inflates to 0.835 on synth
-  with truth=0.5). Reverted. Replaced with empirical variance
-  approach: Williams (1982) moment estimator on maturity-adjusted
-  per-cohort residuals. Post-processing only, no model changes.
-  Implementation in progress. See journal 28-Mar-26.
+- ~~Cohort between-cohort uncertainty~~ — Per-cohort random effects
+  (Option A) failed and reverted. Replaced with empirical variance
+  (Williams 1982 moment estimator). Post-processing only. See
+  journal 28-Mar-26.
 - ~~Unrealistically tight posteriors~~ — Phase 1 FIXED (27-Mar-26)
-  via hierarchical Beta on p (kappa_p). Phase 2 cohort posteriors
-  will use empirical kappa from Williams method (in progress).
+  via hierarchical Beta on p (kappa_p).
 
 **Open model issues**:
-- **Ad hoc hyperparameters** — several model priors are arbitrary,
-  not derived from data: kappa_p Gamma(3, 0.05), edge_kappa
+- **Ad hoc hyperparameters** — kappa_p Gamma(3, 0.05), edge_kappa
   Gamma(3, 0.1), fallback ESS=20 for missing Phase 1 posteriors,
-  Gamma spread parameters. These affect posterior width and
-  overdispersion estimates. Need: principled derivation from
-  empirical data (e.g. kappa_p prior from pre-MCMC scatter in
-  daily rates) or uninformative defaults where data is absent.
+  Gamma spread parameters. Need: principled derivation from
+  empirical data or uninformative defaults where data is absent.
 - **Onset-mu correlation** — corr(onset, mu) ≈ -0.95 to -0.99 on
-  short-onset edges (onset ≤ 1d). Causes onset to inflate and mu to
-  compensate. Affects 4-5 of 10 synth graphs (diamond, lattice,
-  skip, simple-abc first edge, drift3d10d first edge). p recovery
-  is unaffected — this is purely a latency parameter issue. The
-  onset observations from Amplitude partially mitigate but don't
-  eliminate on short-onset edges. Needs: either stronger onset
-  constraint, reparameterisation to break the correlation, or
-  joint onset-mu prior. See journal 27-Mar-26.
+  short-onset edges (onset ≤ 1d). Affects 4/10 synth graphs
+  (diamond, lattice, skip, simple-abc first edge, drift3d10d first
+  edge). p recovery unaffected — purely latency parameters. Onset
+  observations from Amplitude partially mitigate. Needs: stronger
+  onset constraint, reparameterisation, or joint onset-mu prior.
+  See journal 27-Mar-26.
 
 **Open design gaps**:
 - Topology signatures / hashes (doc 10) — not properly implemented.
@@ -90,19 +76,15 @@ is genuine data sparsity (trajectory coverage) not model bias.
   warm-start).
 
 **Next priorities**:
-1. Commit and stabilise likelihood rewrite (code changes made, not
-   committed)
-2. Fix posterior upsert on subsequent runs
-3. Topology signatures (doc 10) — proper implementation
-4. Phase 2 (cohort pass) stabilisation — convergence issues
-5. Posterior slice resolution (doc 25) — query-driven cascade
-   projection + analysis type fixes. Prerequisite for correct
-   cohort/context model consumption. Unblocks Phase C consumption.
-6. Phase C (context slices) — prerequisite: doc 21 done ✓, doc 25
-   provides the consumption pathway
-7. Mixture latency models for bimodal edges (doc 23 §12)
-8. Nightly scheduling — prerequisite: production confidence +
-   topo sigs + upsert fix
+1. Commit and stabilise all current code changes (likelihood rewrite,
+   doc 25 fixes, join-node CDF fix)
+2. Topology signatures (doc 10) — proper implementation
+3. Phase 2 (cohort pass) stabilisation — convergence issues
+   (join-node CDF fix applied; remaining: ESS/convergence on some runs)
+4. Phase C (context slices) — prerequisites done (doc 21 ✓, doc 25 ✓)
+5. Mixture latency models for bimodal edges (doc 23 §12)
+6. Nightly scheduling — prerequisite: production confidence +
+   topo sigs
 
 ---
 
@@ -201,7 +183,7 @@ Semantic foundation (parallel, feeds into consumption quality)
 | Production graph fit quality (major progress 27-Mar-26) | Phase D done | Production p inflation (1.94x on del-to-reg) reduced to 1.19x. Root causes: (1) DM likelihood bias → replaced with textbook Binomial, (2) BetaBinomial daily obs bias → replaced with Binomial, (3) onset/sigma drift → anchored with per-retrieval onset obs from Amplitude + t95 soft constraint from analytics pass. Remaining 1.19x is genuine data sparsity (trajectory coverage). See journal 26-27-Mar-26 and doc 23. Synth recovery excellent (≤1.04x across all 8 graphs). |
 | BE stats engine prior discrepancy (open) | Phase D done | Three-way discrepancy between FE stats pass, BE stats engine, and topology `derive_latency_prior` on latency priors. Only topology's crude moment-match gives convergence. See `19-be-stats-engine-bugs.md`. Related to production fit quality. |
 | Mixture latency models (designed, not built) | Phase D proven | Some edges (e.g. registered-to-success) have bimodal conversion timing that a single shifted log-normal cannot fit. Mixture of two log-normals needed. Opt-in per edge. See doc 23 §12. |
-| Phase 2 stabilisation (open) | Phase 1 likelihood rewrite done | Phase 2 (cohort pass with frozen Phase 1 values + drift) has convergence issues on some runs (ess=7). Needs investigation — may be related to Dirichlet drift parameterisation or Phase 1 latency values being passed through. |
+| Phase 2 stabilisation (open) | Phase 1 likelihood rewrite done | Phase 2 (cohort pass with frozen Phase 1 values + drift) has convergence issues on some runs (ess=7). Needs investigation — may be related to Dirichlet drift parameterisation or Phase 1 latency values being passed through. **Join-node CDF fix applied 29-Mar-26**: `phase2_cohort_use_x` now detects join-downstream edges and builds mixture CDF (was picking one arbitrary path). |
 | Model quality gating (designed, not built) | Phase A overlay done | Quality signalling (progress, session log, Graph Issues), auto-enable Forecast Quality, accept/reject preview. See doc 13. |
 | Phase C posteriors (next) | Phase D proven, doc 21 done, test data with contexts | Per-slice visualisation, MECE validation, hierarchical shrinkage, κ recovery |
 | Nightly Bayes fit | Phase C proven, production confidence | Automatic posterior updates after daily fetch. Trigger Bayes fit for `dailyFetch: true` graphs when new snapshot data lands. Uses existing Modal/webhook/git-commit infrastructure — needs scheduling trigger + staleness detection + fit-on-change logic. |

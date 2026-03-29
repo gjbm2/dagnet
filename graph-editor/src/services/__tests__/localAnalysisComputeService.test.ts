@@ -501,6 +501,7 @@ function makeSurpriseGraph(overrides?: {
           source: 'bayesian',
           probability: { mean: 0.084, stdev: 0.02 },
           latency: { mu, sigma, onset_delta_days: onset },
+          quality: { gate_passed: true, rhat: 1.001, ess: 500, divergences: 0, evidence_grade: 3 },
         }],
         posterior: { alpha: 4.2, beta: 45.8 },
         evidence: {
@@ -513,9 +514,10 @@ function makeSurpriseGraph(overrides?: {
             ? { retrieved_at: overrides.evidence_retrieved_at }
             : {}),
         },
-        // p.data_source.retrieved_at comes from param file sync (actual fetch date)
+        // p.data_source.source_retrieved_at: original Amplitude fetch date, preserved
+        // through aggregation. p.data_source.retrieved_at is aggregation time (unreliable).
         ...(overrides?.data_source_retrieved_at !== undefined
-          ? { data_source: { retrieved_at: overrides.data_source_retrieved_at, type: 'amplitude' } }
+          ? { data_source: { source_retrieved_at: overrides.data_source_retrieved_at, retrieved_at: new Date().toISOString(), type: 'amplitude' } }
           : {}),
         latency: {
           completeness: storedC,
@@ -635,6 +637,20 @@ describe('surprise_gauge: completeness anchored to retrieved_at', () => {
     const pVar = response.result!.variables.find((v: any) => v.name === 'p');
 
     expect(pVar.evidence_retrieved_at).toBeUndefined();
+  });
+
+  it('should handle Date objects for retrieved_at (js-yaml parses YAML datetimes as Date)', () => {
+    // YAML datetime values arrive as Date objects, not strings
+    const graph = makeSurpriseGraph({
+      data_source_retrieved_at: new Date('2026-03-16T06:09:29.529Z') as any,
+    });
+
+    const response = computeLocalResult(graph, 'surprise_gauge', 'from(A).to(B)');
+    const pVar = response.result!.variables.find((v: any) => v.name === 'p');
+
+    expect(pVar.evidence_retrieved_at).toBe('16-Mar-26');
+    // Completeness should be recomputed at 16-Mar, not today
+    expect(pVar.completeness).toBeLessThan(0.5);
   });
 });
 

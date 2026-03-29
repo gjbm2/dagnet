@@ -754,17 +754,22 @@ function fmtDate(d: string | Date): string {
 function _computeCompletenessAtRetrievedAt(
   latencyObj: Record<string, any>,
   evidenceObj: Record<string, any>,
-  retrievedAt: string | undefined,
+  retrievedAt: string | Date | undefined,
 ): number {
   const storedCompleteness: number =
     typeof latencyObj.completeness === 'number' && latencyObj.completeness > 0
       ? latencyObj.completeness
       : 1.0;
 
-  // Need CDF params + retrieved_at to recompute
-  const mu = latencyObj.mu;
-  const sigma = latencyObj.sigma;
-  const onset = latencyObj.onset_delta_days ?? 0;
+  // Use path-level CDF params when available (cohort queries use A→Y path
+  // completeness, not edge-level X→Y). Path params include upstream latency
+  // and produce significantly lower completeness for downstream edges.
+  const pathMu = latencyObj.path_mu;
+  const pathSigma = latencyObj.path_sigma;
+  const hasPathParams = typeof pathMu === 'number' && typeof pathSigma === 'number';
+  const mu = hasPathParams ? pathMu : latencyObj.mu;
+  const sigma = hasPathParams ? pathSigma : latencyObj.sigma;
+  const onset = (hasPathParams ? (latencyObj.path_onset_delta_days ?? latencyObj.onset_delta_days) : latencyObj.onset_delta_days) ?? 0;
   if (typeof mu !== 'number' || typeof sigma !== 'number' || !retrievedAt) {
     return storedCompleteness;
   }
@@ -796,7 +801,11 @@ function _computeCompletenessAtRetrievedAt(
   return storedCompleteness;
 }
 
-function _parseLooseDate(s: string): Date | null {
+function _parseLooseDate(s: string | Date | unknown): Date | null {
+  // js-yaml parses YAML datetimes as Date objects
+  if (s instanceof Date) return Number.isNaN(s.getTime()) ? null : s;
+  if (typeof s !== 'string' || !s) return null;
+
   // Try UK format: d-MMM-yy or d-MMM-yyyy
   const ukMatch = s.match(/^(\d{1,2})-(\w{3})-(\d{2,4})$/);
   if (ukMatch) {
@@ -816,7 +825,7 @@ function _parseLooseDate(s: string): Date | null {
   return Number.isNaN(d.getTime()) ? null : d;
 }
 
-function _formatRetrievedAtForDisplay(retrievedAt: string | undefined): string | undefined {
+function _formatRetrievedAtForDisplay(retrievedAt: string | Date | unknown): string | undefined {
   if (!retrievedAt) return undefined;
   const d = _parseLooseDate(retrievedAt);
   if (!d) return undefined;
@@ -895,20 +904,17 @@ function buildSurpriseGaugeResult(graph: ConversionGraph, queryDsl: string): Ana
   const modelVars: any[] = p.model_vars || [];
   const posterior = p.posterior || {};
 
-  // Detect cohort vs window query from the graph's current DSL.
-  // cohort() → use path-level posterior; window() → use edge-level posterior.
-  const currentDSL = (graph as any).currentQueryDSL || '';
-  const isCohortQuery = /\bcohort\s*\(/.test(currentDSL);
-
-  // Find reference entry: prefer bayesian, fall back to analytic
-  let refEntry = modelVars.find((mv: any) => mv?.source === 'bayesian');
+  // Doc 25 §3.1–3.2: Use resolveActiveModelVars to respect quality gate and
+  // source preference hierarchy. The graph-level and edge-level preferences
+  // determine which model_vars entry is the reference.
+  // Doc 25 §2: After Phase 3 re-projection, p.posterior already carries the
+  // correct slice for the active query (window/cohort/contexted). No need
+  // for isCohortQuery branching — just read alpha/beta directly.
+  const pref = effectivePreference(p.model_source_preference, (graph as any).model_source_preference);
+  const refEntry = resolveActiveModelVars(modelVars, pref);
   if (refEntry) {
-    referenceSource = 'bayesian';
-  } else {
-    refEntry = modelVars.find((mv: any) => mv?.source === 'analytic_be')
-      || modelVars.find((mv: any) => mv?.source === 'analytic');
-    if (refEntry) {
-      referenceSource = refEntry.source;
+    referenceSource = refEntry.source;
+    if (refEntry.source !== 'bayesian') {
       hint = 'Run Bayes model for better indicators';
     }
   }
@@ -932,10 +938,12 @@ function buildSurpriseGaugeResult(graph: ConversionGraph, queryDsl: string): Ana
   // The topo-pass completeness (p.latency.completeness) uses queryDate=now,
   // but evidence k/n is frozen at retrieved_at.
   const latencyObj = p.latency || {} as any;
-  // Use p.data_source.retrieved_at (synced from param file values[latest].data_source),
-  // NOT p.evidence.retrieved_at which gets overwritten to new Date() by "Get from source".
+  // Use source_retrieved_at: the original Amplitude API fetch timestamp, preserved
+  // through aggregation cycles. Falls back to retrieved_at on data_source (original
+  // param file entries), then evidence.retrieved_at.
   const dataSource = (p as any).data_source || {};
-  const evidenceRetrievedAt: string | undefined = dataSource.retrieved_at || (evidence as any)?.retrieved_at;
+  const evidenceRetrievedAt: string | Date | undefined =
+    dataSource.source_retrieved_at || dataSource.retrieved_at || (evidence as any)?.retrieved_at;
   const cW = _computeCompletenessAtRetrievedAt(latencyObj, evidence, evidenceRetrievedAt);
 
   // n_dates for mu/sigma sampling SE — derived from evidence scope dates on the edge
@@ -966,15 +974,13 @@ function buildSurpriseGaugeResult(graph: ConversionGraph, queryDsl: string): Ana
   const refProb = refEntry.probability || {};
   const refLat = refEntry.latency || {};
 
-  // Select reference alpha/beta: path-level for cohort, edge-level for window.
-  // Use actual posterior alpha/beta when available (more precise than MoM reconstruction).
+  // Select reference alpha/beta from posterior.
+  // Doc 25 §3.2: After re-projection (Phase 3), p.posterior.alpha/beta already
+  // carry the correct slice for the active query context. Read directly.
   let alpha: number | null = null;
   let beta_param: number | null = null;
 
-  if (isCohortQuery && posterior.path_alpha != null) {
-    alpha = posterior.path_alpha;
-    beta_param = posterior.path_beta;
-  } else if (posterior.alpha != null) {
+  if (posterior.alpha != null) {
     alpha = posterior.alpha;
     beta_param = posterior.beta;
   } else {
@@ -1122,7 +1128,7 @@ function buildSurpriseGaugeResult(graph: ConversionGraph, queryDsl: string): Ana
     variables,
     reference_source: referenceSource,
     hint,
-    promoted_source: p.model_source_preference || 'best_available',
+    promoted_source: pref,
   } as any;
 }
 

@@ -43,7 +43,8 @@ class Evidence(BaseModel):
 class DataSource(BaseModel):
     """Provenance information for parameter data."""
     type: str = Field(..., description="Data source type (from connections.yaml, e.g., 'amplitude', 'manual', 'sheets')")
-    retrieved_at: Optional[str] = Field(None, description="When data was retrieved (UK format or ISO)")
+    retrieved_at: Optional[str] = Field(None, description="When data was last aggregated or cached (UK format or ISO)")
+    source_retrieved_at: Optional[str] = Field(None, description="When data was originally fetched from the external source (e.g. Amplitude). Preserved through aggregation cycles.")
     edited_at: Optional[str] = Field(None, description="When data was last edited (UK format or ISO)")
     # NOTE: 'query' field removed - was unused and caused type confusion (Dict expected but string stored)
     full_query: Optional[str] = Field(None, description="Complete DSL query string used for retrieval")

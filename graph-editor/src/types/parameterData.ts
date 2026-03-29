@@ -77,6 +77,7 @@ export interface ParameterValue {
       | 'statsig'
       | 'optimizely';
     retrieved_at?: string;
+    source_retrieved_at?: string;
     edited_at?: string;
     query?: any;
     full_query?: string;

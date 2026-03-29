@@ -627,7 +627,13 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
                 model_params['onset_delta_days'], 'cohort_edge_fallback')
 
     def _read_edge_model_params(graph: Any, target_id: str) -> Optional[Dict[str, float]]:
-        """Read mu/sigma/onset/t95/path_t95 and forecast.mean from graph edge."""
+        """Read mu/sigma/onset/t95/path_t95, forecast.mean, and posterior p from graph edge.
+
+        Doc 25 §3.3: After Phase 3 re-projection, p.posterior.alpha/beta on
+        the graph edge carry the correct slice for the active query context.
+        We compute posterior_p = alpha/(alpha+beta) and prefer it over
+        forecast_mean for model CDF scaling.
+        """
         if not graph or not target_id:
             return None
         edges = graph.get('edges', []) if isinstance(graph, dict) else []
@@ -656,6 +662,13 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
         }
         if isinstance(forecast_mean, (int, float)) and math.isfinite(forecast_mean) and forecast_mean > 0:
             result['forecast_mean'] = float(forecast_mean)
+        # Doc 25 §3.3: posterior p from the re-projected slice (preferred over forecast_mean)
+        posterior = p.get('posterior') or {}
+        post_alpha = posterior.get('alpha')
+        post_beta = posterior.get('beta')
+        if (isinstance(post_alpha, (int, float)) and isinstance(post_beta, (int, float))
+                and post_alpha > 0 and post_beta > 0):
+            result['posterior_p'] = float(post_alpha) / (float(post_alpha) + float(post_beta))
         # Probability posterior uncertainty (for confidence bands)
         p_stdev = p.get('stdev')
         if isinstance(p_stdev, (int, float)) and math.isfinite(p_stdev) and p_stdev > 0:
@@ -1170,8 +1183,9 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
                 # Uses the same resolved params as annotation (doc 1 §17.1).
                 is_gap_epoch = any(str(sk) == '__epoch_gap__' for sk in subj_slice_keys)
 
-                if analysis_type == 'cohort_maturity' and 'forecast_mean' in model_params and not is_gap_epoch:
-                    forecast_mean = model_params['forecast_mean']
+                if analysis_type == 'cohort_maturity' and ('forecast_mean' in model_params or 'posterior_p' in model_params) and not is_gap_epoch:
+                    # Doc 25 §3.3: prefer posterior_p (from re-projected slice) over forecast_mean
+                    forecast_mean = model_params.get('posterior_p') or model_params.get('forecast_mean')
 
                     cdf_mu = mu
                     cdf_sigma = sigma
@@ -1266,6 +1280,10 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
                             s_sigma = src_params.get('sigma')
                             s_onset = src_params.get('onset_delta_days', 0.0)
                             s_fm = src_params.get('forecast_mean', forecast_mean)
+                            # Doc 25 §3.4: For bayesian source, prefer posterior_p
+                            # (from re-projected slice) over the source's own forecast_mean
+                            if src_name == 'bayesian' and 'posterior_p' in model_params:
+                                s_fm = model_params['posterior_p']
                             if s_mu is None or s_sigma is None:
                                 continue
 

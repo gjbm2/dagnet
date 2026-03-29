@@ -906,6 +906,7 @@ export interface ProbabilityParam {
   data_source?: { // Provenance information
     type: string; // Data source type (from connections.yaml, e.g., 'amplitude', 'manual', 'sheets')
     retrieved_at?: string;
+    source_retrieved_at?: string; // Original API fetch timestamp, preserved through aggregation cycles
     edited_at?: string;
     // NOTE: 'query' field removed - was unused and caused type mismatch with Python (Dict vs string)
     full_query?: string; // Full DSL query string (e.g., "from(a).to(b).visited(c)")
@@ -977,6 +978,7 @@ export interface CostParam {
   data_source?: { // Provenance information
     type: string; // Data source type (from connections.yaml, e.g., 'amplitude', 'manual', 'sheets')
     retrieved_at?: string;
+    source_retrieved_at?: string; // Original API fetch timestamp, preserved through aggregation cycles
     edited_at?: string;
     full_query?: string; // Full DSL query string
     debug_trace?: string;

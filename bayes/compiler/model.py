@@ -935,9 +935,13 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
                                         beta=max((1 - p_mean) * FALLBACK_PRIOR_ESS, DIRICHLET_CONC_FLOOR))
                         edge_var_names[edge_id] = f"p_cohort_{safe_id}"
 
+                    # Phase 2 dispersion: no per-cohort random effects
+                    # (Option A fails on production — ESS=7 with 218
+                    # random effects). Between-cohort kappa is estimated
+                    # post-model via Williams method in inference.py.
+                    # See journal 29-Mar-26.
+
                     # Emit cohort trajectories only (skip window).
-                    # p_window_var=None signals Phase 2 → skip window trajs.
-                    # See journal 28-Mar-26.
                     _emit_cohort_likelihoods(safe_id, p, ev, diagnostics,
                                             topology, edge_var_names, model,
                                             latency_vars=latency_vars,
@@ -1513,19 +1517,55 @@ def _emit_cohort_likelihoods(
 
         if phase2_cohort_use_x:
             # Phase 2: edge p directly, x denominator.
-            # Rewrite trajectories to use cumulative_x[-1] as n.
-            p_expr = p_var
-            rewritten_trajs = []
-            for traj in trajs:
-                cx = getattr(traj, 'cumulative_x', None)
-                if cx and len(cx) > 0 and cx[-1] > 0:
-                    # Replace n with x_final (from-node count)
-                    import copy
-                    t2 = copy.copy(traj)
-                    t2.n = cx[-1]
-                    rewritten_trajs.append(t2)
-                # else: skip trajectories without cumulative_x
-            trajs = rewritten_trajs
+            #
+            # Join-node check: if this edge is downstream of a join
+            # (multiple incident paths), we must build a mixture CDF
+            # rather than picking one arbitrary path. The x-denominator
+            # shortcut does not handle mixtures, so join-downstream
+            # edges fall back to the standard mixture approach with
+            # anchor denominator and path-product p.
+            # See journal 28-Mar-26 "Phase 2 join-node CDF defect".
+            et_topo = topology.edges.get(ev.edge_id) if topology else None
+            path_alts = et_topo.path_alternatives if et_topo else []
+
+            if len(path_alts) > 1:
+                # Join-downstream: build mixture (same as non-Phase-2).
+                onset_vars = onset_vars or {}
+                for alt_path in path_alts:
+                    p_alt = _resolve_path_probability(
+                        alt_path, ev.edge_id, p_var,
+                        topology, edge_var_names, model,
+                        stop_p_gradient=False,  # Phase 2: gradient flows
+                    )
+                    path_result = _resolve_path_latency(
+                        alt_path, topology, latency_vars,
+                        onset_vars=onset_vars,
+                    )
+                    if path_result is not None:
+                        onset_alt, mu_alt, sigma_alt = path_result
+                        mixture_components.append((p_alt, onset_alt, mu_alt, sigma_alt))
+                    else:
+                        mixture_components.append((p_alt, 0.0, None, None))
+
+                if len(mixture_components) >= 2:
+                    is_mixture = True
+                    p_expr = None
+                    # Keep original trajs (a-denominator) for mixture
+
+            if not is_mixture:
+                # Non-join or collapsed join: x-denominator shortcut.
+                p_expr = p_var
+                rewritten_trajs = []
+                for traj in trajs:
+                    cx = getattr(traj, 'cumulative_x', None)
+                    if cx and len(cx) > 0 and cx[-1] > 0:
+                        # Replace n with x_final (from-node count)
+                        import copy
+                        t2 = copy.copy(traj)
+                        t2.n = cx[-1]
+                        rewritten_trajs.append(t2)
+                    # else: skip trajectories without cumulative_x
+                trajs = rewritten_trajs
         elif obs_type == "window":
             p_expr = p_window_var if p_window_var is not None else p_var
             # Hierarchical Beta: p_cohort_vec has per-trajectory p_i.
