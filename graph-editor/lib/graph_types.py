@@ -71,6 +71,7 @@ class LatencyConfig(BaseModel):
     path_t95_overridden: bool = Field(False, description="If true, user manually set path_t95")
     promoted_t95: Optional[float] = Field(None, ge=0, description="Winning model's t95 (written by applyPromotion, read-only for consumption)")
     promoted_path_t95: Optional[float] = Field(None, ge=0, description="Winning model's path_t95 (written by applyPromotion, read-only for consumption)")
+    promoted_onset_delta_days: Optional[float] = Field(None, ge=0, description="Winning model's onset_delta_days (written by applyPromotion, read-only for consumption)")
     onset_delta_days: Optional[float] = Field(None, ge=0, description="Onset delay in days - minimum time before conversions begin (aggregated from window slices)")
     onset_delta_days_overridden: bool = Field(False, description="If true, user manually set onset_delta_days")
     median_lag_days: Optional[float] = Field(None, ge=0, description="Weighted median lag in days (display only)")

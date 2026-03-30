@@ -2090,8 +2090,18 @@ export async function persistGraphMasteredLatencyToParameterFiles(args: {
       // Doc 19: copy promoted values to t95/path_t95 on the edge so that
       // putParameterToFile (which copies the latency block) persists the
       // model output. Only when not overridden (checked above).
+      // onset: same pattern as t95
+      const promotedOnset = lat?.promoted_onset_delta_days;
+      const shouldWriteOnset =
+        lat?.latency_parameter === true &&
+        lat?.onset_delta_days_overridden !== true &&
+        typeof promotedOnset === 'number' &&
+        Number.isFinite(promotedOnset) &&
+        promotedOnset >= 0;
+
       if (shouldWriteT95) lat.t95 = promotedT95;
       if (shouldWritePath) lat.path_t95 = promotedPathT95;
+      if (shouldWriteOnset) lat.onset_delta_days = promotedOnset;
 
       await dataOperationsService.putParameterToFile({
         paramId,
@@ -2127,7 +2137,7 @@ export function selectLatencyToApplyForTopoPass(
     t95: number;
     completeness: number;
     path_t95: number;
-    onset_delta_days?: number;
+    promoted_onset_delta_days?: number;
     mu?: number;
     sigma?: number;
     path_mu?: number;
@@ -2150,7 +2160,7 @@ export function selectLatencyToApplyForTopoPass(
   t95: number;
   completeness: number;
   path_t95: number;
-  onset_delta_days?: number;
+  promoted_onset_delta_days?: number;
   mu?: number;
   sigma?: number;
   path_mu?: number;
@@ -2181,9 +2191,9 @@ export function selectLatencyToApplyForTopoPass(
     completeness: computed.completeness,
     // Still apply computed path_t95 (UpdateManager will respect path_t95_overridden).
     path_t95: computed.path_t95,
-    // onset_delta_days is aggregated in the topo pass from window() slice histograms and should
+    // promoted_onset_delta_days is aggregated in the topo pass from window() slice histograms and should
     // still be applied, even when we preserve median/mean from the file.
-    onset_delta_days: computed.onset_delta_days,
+    promoted_onset_delta_days: computed.promoted_onset_delta_days,
     // mu/sigma: always from the topo pass (fitted model params for offline completeness).
     mu: computed.mu,
     sigma: computed.sigma,

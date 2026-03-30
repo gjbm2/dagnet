@@ -414,8 +414,9 @@ function buildEdgeInfoResult(graph: ConversionGraph, dsl: string): AnalysisResul
       if (lat.t95 !== undefined) {
         data.push({ tab: 'latency', section: 'Edge', property: 't95', value: `${lat.t95.toFixed(1)}d` });
       }
-      if (lat.onset_delta_days !== undefined) {
-        data.push({ tab: 'latency', section: 'Edge', property: 'Onset', value: `${lat.onset_delta_days.toFixed(1)}d` });
+      const onsetDisplay = lat.promoted_onset_delta_days ?? lat.onset_delta_days;
+      if (onsetDisplay !== undefined) {
+        data.push({ tab: 'latency', section: 'Edge', property: 'Onset', value: `${onsetDisplay.toFixed(1)}d` });
       }
       if (lat.completeness !== undefined) {
         data.push({ tab: 'latency', section: 'Edge', property: 'Completeness', value: fmtPct(lat.completeness) });
@@ -596,7 +597,7 @@ function buildLatencyCdfMeta(edge: GraphEdge): Record<string, any> | null {
   // Edge-level CDF params (from analytic LAG pass or Bayesian posterior)
   const edgeMu = lat.posterior?.mu_mean ?? lat.mu;
   const edgeSigma = lat.posterior?.sigma_mean ?? lat.sigma;
-  const edgeOnset = lat.posterior?.onset_delta_days ?? lat.onset_delta_days ?? 0;
+  const edgeOnset = lat.posterior?.onset_delta_days ?? lat.promoted_onset_delta_days ?? lat.onset_delta_days ?? 0;
   if (typeof edgeMu === 'number' && typeof edgeSigma === 'number' && edgeSigma > 0) {
     result.edge = { mu: edgeMu, sigma: edgeSigma, onset: edgeOnset, t95: lat.promoted_t95 ?? lat.t95 };
   }
@@ -777,7 +778,8 @@ function _computeCompletenessAtRetrievedAt(
   const hasPathParams = typeof pathMu === 'number' && typeof pathSigma === 'number';
   const mu = hasPathParams ? pathMu : latencyObj.mu;
   const sigma = hasPathParams ? pathSigma : latencyObj.sigma;
-  const onset = (hasPathParams ? (latencyObj.path_onset_delta_days ?? latencyObj.onset_delta_days) : latencyObj.onset_delta_days) ?? 0;
+  const edgeOnsetFallback = latencyObj.promoted_onset_delta_days ?? latencyObj.onset_delta_days;
+  const onset = (hasPathParams ? (latencyObj.path_onset_delta_days ?? edgeOnsetFallback) : edgeOnsetFallback) ?? 0;
   if (typeof mu !== 'number' || typeof sigma !== 'number' || !retrievedAt) {
     return storedCompleteness;
   }
@@ -1059,7 +1061,7 @@ function buildSurpriseGaugeResult(graph: ConversionGraph, queryDsl: string): Ana
     const combinedSd = Math.sqrt(muSd ** 2 + obsSe ** 2);
     const z = (obsMu - refMu) / combinedSd;
     const quantile = normalCdf(z);
-    const onset = posterior.onset_mean || refLat?.onset_delta_days || 0;
+    const onset = posterior.onset_mean || refLat?.promoted_onset_delta_days || refLat?.onset_delta_days || 0;
     variables.push({
       name: 'mu', label: 'Latency location (μ)',
       quantile: Math.round(quantile * 1e6) / 1e6,

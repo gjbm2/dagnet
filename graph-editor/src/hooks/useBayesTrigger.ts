@@ -481,6 +481,20 @@ export function useBayesTrigger(computeMode: BayesComputeMode = 'local') {
                   });
                   cascaded++;
                 }
+                // Copy promoted latency outputs → input fields (onset, t95, path_t95)
+                // so the next model run reads the latest output as its input.
+                // Respects override locks: if overridden=true, the input stays
+                // at the user's value and the promoted output is not copied.
+                // This closes the input→model→output→input cycle within a session.
+                const { persistGraphMasteredLatencyToParameterFiles } = await import('../services/fetchDataService');
+                const graphForPersist = store.getState().graph;
+                if (graphForPersist) {
+                  await persistGraphMasteredLatencyToParameterFiles({
+                    graph: graphForPersist as any,
+                    setGraph,
+                  });
+                }
+
                 // Sync the cascaded graph back to FileRegistry/IDB.
                 // setGraph updates GraphStore in-memory but doesn't
                 // immediately persist to IDB. Explicit updateFile ensures

@@ -109,6 +109,10 @@ properties:
         type: number
         minimum: 0
         description: "Winning model's path_t95 (written by applyPromotion, read-only for consumption)"
+      promoted_onset_delta_days:
+        type: number
+        minimum: 0
+        description: "Winning model's onset_delta_days (written by applyPromotion, read-only for consumption)"
       bayes_reset:
         type: boolean
         description: "When true, Bayesian compiler ignores previous posterior and uses analytic-derived priors. Cleared after successful run."

@@ -544,6 +544,11 @@ export interface LatencyConfig {
   /** Winning model's path_t95 — written by applyPromotion, read by consumption. */
   promoted_path_t95?: number;
 
+  /** Winning model's onset_delta_days — written by applyPromotion, read by consumption.
+   *  Separate from onset_delta_days (user-configured input) to avoid circular dependency.
+   */
+  promoted_onset_delta_days?: number;
+
   /** Onset delay in days - minimum time before conversions begin.
    *  Aggregated from window() slice histograms (min of per-slice onset values).
    *  Used for shifted lognormal latency fitting and maturity calculations.

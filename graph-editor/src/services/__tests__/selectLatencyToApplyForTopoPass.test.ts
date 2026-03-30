@@ -11,7 +11,7 @@ describe('selectLatencyToApplyForTopoPass', () => {
       t95: 6.1,
       completeness: 0.91,
       path_t95: 8.43,
-      onset_delta_days: 3,
+      promoted_onset_delta_days: 3,
     };
 
     const existing = {
@@ -29,7 +29,7 @@ describe('selectLatencyToApplyForTopoPass', () => {
     expect(selected.t95).toBe(computed.t95);
     expect(selected.path_t95).toBe(computed.path_t95);
     expect(selected.completeness).toBe(computed.completeness);
-    expect(selected.onset_delta_days).toBe(computed.onset_delta_days);
+    expect(selected.promoted_onset_delta_days).toBe(computed.promoted_onset_delta_days);
   });
 
   it('returns computed latency unchanged when not preserving from-file summary', () => {
@@ -39,7 +39,7 @@ describe('selectLatencyToApplyForTopoPass', () => {
       t95: 6.1,
       completeness: 0.91,
       path_t95: 8.43,
-      onset_delta_days: 0,
+      promoted_onset_delta_days: 0,
     };
 
     const selected = selectLatencyToApplyForTopoPass(computed, { completeness: 0.1 }, false);
@@ -53,7 +53,7 @@ describe('selectLatencyToApplyForTopoPass', () => {
       t95: 6.1,
       completeness: 0.91,
       path_t95: 8.43,
-      onset_delta_days: 2,
+      promoted_onset_delta_days: 2,
     };
 
     const selected = selectLatencyToApplyForTopoPass(computed, { completeness: 0.2 }, true);
@@ -67,7 +67,7 @@ describe('selectLatencyToApplyForTopoPass', () => {
       t95: 6.1,
       completeness: 0.91,
       path_t95: 8.43,
-      onset_delta_days: 3,
+      promoted_onset_delta_days: 3,
       mu: 1.609,
       sigma: 0.8,
     };
@@ -95,7 +95,7 @@ describe('selectLatencyToApplyForTopoPass', () => {
       t95: 6.1,
       completeness: 0.91,
       path_t95: 8.43,
-      onset_delta_days: 3,
+      promoted_onset_delta_days: 3,
       mu: 1.609,
       sigma: 0.8,
       path_mu: 2.5,
@@ -130,7 +130,7 @@ describe('selectLatencyToApplyForTopoPass', () => {
       t95: 6.1,
       completeness: 0.91,
       path_t95: 8.43,
-      onset_delta_days: 3,
+      promoted_onset_delta_days: 3,
       mu: 1.609,
       sigma: 0.8,
       path_mu: 2.5,
@@ -178,7 +178,7 @@ describe('selectLatencyToApplyForTopoPass', () => {
       t95: 6.1,
       completeness: 0.91,
       path_t95: 8.43,
-      onset_delta_days: 3,
+      promoted_onset_delta_days: 3,
       mu: 1.609,
       sigma: 0.8,
     };
@@ -202,7 +202,7 @@ describe('selectLatencyToApplyForTopoPass', () => {
     expect(e1?.p?.latency?.sigma).toBe(0.8);
   });
 
-  it('from-file topo pass: selected onset persists onto graph via UpdateManager', () => {
+  it('from-file topo pass: selected promoted_onset_delta_days persists onto graph via UpdateManager', () => {
     // This reproduces the exact app flow:
     // - Stage‑2 (from-file) chooses which latency fields to apply
     // - UpdateManager.applyBatchLAGValues writes onto edge.p.latency (respecting overrides)
@@ -232,7 +232,7 @@ describe('selectLatencyToApplyForTopoPass', () => {
       t95: 6.1,
       completeness: 0.91,
       path_t95: 8.43,
-      onset_delta_days: 3,
+      promoted_onset_delta_days: 3,
     };
 
     // Existing (file-derived) latency summary that we preserve in from-file mode.
@@ -261,7 +261,7 @@ describe('selectLatencyToApplyForTopoPass', () => {
     );
 
     const e1 = next.edges.find((e: any) => e.uuid === 'e1' || e.id === 'e1');
-    expect(e1?.p?.latency?.onset_delta_days).toBe(3);
+    expect(e1?.p?.latency?.promoted_onset_delta_days).toBe(3);
   });
 });
 

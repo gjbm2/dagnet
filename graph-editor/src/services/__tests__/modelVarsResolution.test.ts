@@ -260,7 +260,8 @@ describe('applyPromotion', () => {
     // Doc 19: t95 and path_t95 write to promoted_* fields to avoid circular dependency.
     expect(p.latency?.t95).toBe(0); // user-configured value unchanged
     expect(p.latency?.promoted_t95).toBe(40); // model output in promoted field
-    expect(p.latency?.onset_delta_days).toBe(2.5);
+    expect(p.latency?.onset_delta_days).toBe(0); // user-configured value unchanged
+    expect(p.latency?.promoted_onset_delta_days).toBe(2.5); // model output in promoted field
     expect(p.latency?.path_mu).toBe(2.9);
     expect(p.latency?.path_sigma).toBe(0.85);
     expect(p.latency?.path_t95).toBeUndefined(); // user-configured value unchanged (was not set)

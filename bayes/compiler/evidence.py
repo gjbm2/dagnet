@@ -986,9 +986,12 @@ def _resolve_latency_prior(et, pf_data: dict | None) -> LatencyPrior:
                     lat_mu = float(prev_mu)
                     lat_sigma = float(prev_sigma)
                     lat_source = "warm_start"
-                    prev_onset = ws.get("onset_mean")
-                    if prev_onset is not None:
-                        onset = float(prev_onset)
+                    # onset: do NOT override from warm-start. The graph
+                    # edge's onset_delta_days is the current value — either
+                    # promoted from the last model run or user-edited.
+                    # Overriding it here would discard user edits.
+                    # mu/sigma are different: the graph edge carries stats
+                    # pass values which the posterior improves upon.
 
     return LatencyPrior(
         onset_delta_days=onset,

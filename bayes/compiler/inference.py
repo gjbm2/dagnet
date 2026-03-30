@@ -335,6 +335,38 @@ def _estimate_cohort_kappa(
     f_arr = _np.array(f_values)
     w_arr = _np.array(recency_weights)
 
+    # --- TEMPORARY PHASE B DIAGNOSTIC ---
+    # Also dump age distribution from best_by_day for insight
+    _all_ages = [v[3] for v in best_by_day.values()]
+    _all_f = [v[2] for v in best_by_day.values()]
+    _filtered_ages = [v[3] for v in best_by_day.values() if v[2] < DISPERSION_F_THRESHOLD]
+    if _filtered_ages:
+        print(f"[DIAG-B-AGE] {ev.edge_id[:20]:20s} {obs_type_filter:6s} | "
+              f"filtered ages: min={min(_filtered_ages):.2f} max={max(_filtered_ages):.2f} "
+              f"F_at_those_ages: {[f'{f:.3f}' for f in sorted([v[2] for v in best_by_day.values() if v[2] < DISPERSION_F_THRESHOLD])[:5]]}", flush=True)
+
+    _rates = k_arr / _np.maximum(n_arr * f_arr, 1)
+    _p_bar = float(k_arr.sum() / (n_arr * f_arr).sum())
+    # Williams MoM on raw (n, k) — ignoring F for comparison
+    _K = len(k_arr)
+    _w = n_arr
+    _w_sum = _w.sum()
+    _rates_raw = k_arr / _np.maximum(n_arr, 1)
+    _p_bar_raw = float(k_arr.sum() / n_arr.sum())
+    _ssq = float(_np.sum(_w * (_rates_raw - _p_bar_raw) ** 2) / (_K - 1))
+    _n_tilde = float((_w_sum - _np.sum(_w ** 2) / _w_sum) / (_K - 1))
+    _rho_num = _ssq - _p_bar_raw * (1 - _p_bar_raw)
+    _rho_den = _p_bar_raw * (1 - _p_bar_raw) * (_n_tilde - 1)
+    _mom_kappa = ((1 - _rho_num / _rho_den) / (_rho_num / _rho_den)) if _rho_den > 0 and _rho_num > 0 else None
+    print(f"[DIAG-B] {ev.edge_id[:20]:20s} {obs_type_filter:6s} | "
+          f"n_days={_K:3d} n_skip_x={n_skipped_x:3d} n_skip_f={n_skipped_f:3d} | "
+          f"n=[{_np.min(n_arr):.0f}..{_np.max(n_arr):.0f}] med={_np.median(n_arr):.0f} | "
+          f"F=[{_np.min(f_arr):.3f}..{_np.max(f_arr):.3f}] | "
+          f"rate_raw: mean={_p_bar_raw:.4f} std={_np.std(_rates_raw):.6f} | "
+          f"MoM_kappa={'%.1f' % _mom_kappa if _mom_kappa else 'None':>7s} | "
+          f"cdf=({onset:.1f},{mu:.3f},{sigma:.3f})", flush=True)
+    # --- END TEMPORARY ---
+
     eff_n = float(_np.sum(w_arr) ** 2 / _np.sum(w_arr ** 2)) if _np.sum(w_arr) > 0 else 0
     p_implied = k_arr / (n_arr * f_arr)
     p_implied = _np.clip(p_implied, 0.001, 0.999)

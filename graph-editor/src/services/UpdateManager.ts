@@ -2163,10 +2163,9 @@ export class UpdateManager {
           targetP.latency.path_t95 = this.roundHorizonDays(update.latency.path_t95);
         }
       }
-      // onset_delta_days: only write if not overridden and value provided
-      if ((update.latency as any).onset_delta_days !== undefined && 
-          targetP.latency.onset_delta_days_overridden !== true) {
-        targetP.latency.onset_delta_days = (update.latency as any).onset_delta_days;
+      // promoted_onset_delta_days: write model output to promoted field (not input field)
+      if ((update.latency as any).promoted_onset_delta_days !== undefined) {
+        targetP.latency.promoted_onset_delta_days = (update.latency as any).promoted_onset_delta_days;
       }
       // mu/sigma: fitted model params (internal, always written when available)
       if ((update.latency as any).mu !== undefined) {

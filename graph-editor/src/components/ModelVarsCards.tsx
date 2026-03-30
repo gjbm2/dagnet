@@ -530,7 +530,7 @@ function OutputCardBody({ onCommit, onStartEdit, onClearFieldOverride, promotedM
           {/* Doc 19: t95 is read-only in Output card — user edits the input constraint elsewhere */}
           <RoField label="t95" value={fmt(promotedLatency.promoted_t95 ?? promotedLatency.t95, 1)} unit="d" />
           {/* Doc 19: onset is read-only in Output card — user edits the input constraint in Zone 1b above */}
-          <RoField label="onset" value={fmt(promotedLatency.onset_delta_days, 0)} unit="d" />
+          <RoField label="onset" value={fmt(promotedLatency.promoted_onset_delta_days ?? promotedLatency.onset_delta_days, 0)} unit="d" />
         </FieldGroup>
       )}
       {/* Path-level latency — shown whenever path values exist (topological, not gated on edge latency) */}

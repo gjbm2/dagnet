@@ -1324,6 +1324,8 @@ export interface GraphEdgeForPath {
       promoted_t95?: number;
       /** Doc 19: winning model's path_t95 (written by applyPromotion). */
       promoted_path_t95?: number;
+      /** Winning model's onset_delta_days (written by applyPromotion). */
+      promoted_onset_delta_days?: number;
       median_lag_days?: number;
       mean_lag_days?: number;
       completeness?: number;
@@ -1769,7 +1771,7 @@ export interface EdgeLAGValues {
     t95: number;
     completeness: number;
     path_t95: number;
-    onset_delta_days?: number;  // Aggregated onset delay from window slices (min)
+    promoted_onset_delta_days?: number;  // Aggregated onset delay from window slices (written to promoted field)
     mu?: number;     // Fitted log-normal mu (for offline completeness + parity comparison)
     sigma?: number;  // Fitted log-normal sigma (for offline completeness + parity comparison)
     path_mu?: number;   // Path-level A→Y mu (Fenton–Wilkinson combined)
@@ -2799,7 +2801,7 @@ export function enhanceGraphLatencies(
           path_t95: edgePathT95,
           mu: latencyStats.completeness_cdf.mu,
           sigma: latencyStats.completeness_cdf.sigma,
-          onset_delta_days: edgeOnsetDeltaDays,
+          promoted_onset_delta_days: edgeOnsetDeltaDays,
           path_mu: pathMu,
           path_sigma: pathSigma,
           path_onset_delta_days: pathOnset,
@@ -3412,7 +3414,7 @@ export function enhanceGraphLatencies(
             path_t95: edgePathT95, // Shared with base edge
             mu: cpLatencyStats.completeness_cdf.mu,
             sigma: cpLatencyStats.completeness_cdf.sigma,
-            onset_delta_days: cpOnsetDeltaDays,
+            promoted_onset_delta_days: cpOnsetDeltaDays,
             path_onset_delta_days: pathOnset, // Shared with base edge (same physical path)
           },
         };

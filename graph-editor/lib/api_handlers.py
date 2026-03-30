@@ -682,7 +682,7 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
         sigma = lat_posterior.get('sigma_mean') or latency.get('sigma')
         if not isinstance(mu, (int, float)) or not isinstance(sigma, (int, float)):
             return None
-        onset = lat_posterior.get('onset_delta_days') or latency.get('onset_delta_days') or 0
+        onset = lat_posterior.get('onset_delta_days') or latency.get('promoted_onset_delta_days') or latency.get('onset_delta_days') or 0
         forecast = p.get('forecast') or {}
         forecast_mean = forecast.get('mean')
         t95 = latency.get('promoted_t95') or latency.get('t95')
