@@ -14,9 +14,7 @@
 import { db } from '../db/appDatabase';
 import { computeQuerySignature } from './dataOperations/querySignature';
 import { computeShortCoreHash } from './coreHashService';
-import { parseSignature } from './signatureMatchingService';
 import { sessionLogService } from './sessionLogService';
-import type { ContextDefinition } from './contextRegistry';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
@@ -103,17 +101,9 @@ class CommitHashGuardService {
         continue;
       }
 
-      // Step 3: Compare old and new to detect hash-relevant changes
+      // Step 3: Parse old content
       const oldData = typeof oldContent === 'string' ? JSON.parse(oldContent) : oldContent;
       const newData = file.data;
-
-      // Quick check: has anything hash-relevant changed?
-      // For events: provider_event_names, amplitude_filters
-      // For contexts: the full definition (values, otherPolicy, etc.)
-      // We compute this properly by comparing hashes below, but skip obviously unchanged files
-      if (JSON.stringify(oldData) === JSON.stringify(newData)) {
-        continue;
-      }
 
       // Step 4: Find affected parameters
       const fileType = file.type as 'event' | 'context';
@@ -245,7 +235,7 @@ class CommitHashGuardService {
         results.push({
           paramLabel,
           paramId,
-          graphName: graph.name || graphFile.fileId,
+          graphName: graph.metadata?.name || graph.name || graphFile.fileId,
           graphFileId: graphFile.fileId,
           oldCoreHash,
           newCoreHash,
@@ -259,11 +249,12 @@ class CommitHashGuardService {
   /**
    * Resolve the parameter ID for an edge.
    */
-  private resolveParamId(edge: any, graph: any): string | undefined {
-    // Parameters are typically stored with IDs matching the edge
+  private resolveParamId(edge: any, _graph: any): string | undefined {
+    // Check common locations where parameter ID is stored on edges
     if (edge.p?.id) return edge.p.id;
+    if (edge.paramId) return edge.paramId;
 
-    // Fall back to deriving from from/to node IDs
+    // Fall back to deriving from from/to node IDs in the query
     const fromMatch = edge.query?.match(/from\(([^)]+)\)/);
     const toMatch = edge.query?.match(/to\(([^)]+)\)/);
     if (fromMatch && toMatch) {
@@ -280,22 +271,44 @@ class CommitHashGuardService {
     paramId: string,
     workspace: { repository: string; branch: string },
   ): Promise<string | null> {
-    // Try workspace-prefixed ID first
-    const prefixedId = `${workspace.repository}-${workspace.branch}-${paramId}`;
-    let paramFile = await db.files.get(prefixedId);
-    if (!paramFile) {
-      paramFile = await db.files.get(paramId);
+    // Try multiple ID patterns used in IDB
+    const candidates = [
+      `${workspace.repository}-${workspace.branch}-${paramId}`,  // workspace-prefixed
+      paramId,                                                     // bare
+      `parameter-${paramId}`,                                      // type-prefixed
+      `${workspace.repository}-${workspace.branch}-parameter-${paramId}`, // both
+    ];
+
+    let paramFile: any = null;
+    for (const id of candidates) {
+      paramFile = await db.files.get(id);
+      if (paramFile?.data) break;
     }
+
+    // Fallback: scan all parameter files for matching id in data
+    if (!paramFile?.data) {
+      const allParams = await db.files.where('type').equals('parameter').toArray();
+      const scoped = allParams.filter(f =>
+        f.source?.repository === workspace.repository &&
+        f.source?.branch === workspace.branch
+      );
+      paramFile = scoped.find(f => (f.data as any)?.id === paramId);
+    }
+
     if (!paramFile?.data) return null;
 
-    // Find a value with query_signature
+    // Find a value with query_signature and compute the short core_hash
+    // (same format used by the snapshot DB)
     const values = (paramFile.data as any).values;
     if (!Array.isArray(values)) return null;
 
     for (const val of values) {
       if (val.query_signature) {
-        const parsed = parseSignature(val.query_signature);
-        if (parsed.coreHash) return parsed.coreHash;
+        try {
+          return await computeShortCoreHash(val.query_signature);
+        } catch {
+          continue;
+        }
       }
     }
 
@@ -337,9 +350,10 @@ class CommitHashGuardService {
         }
       }
 
+      const connectionName = edge.p?.connection || 'amplitude';
       const signature = await computeQuerySignature(
         { context: contextKeys.map(k => ({ key: k })), event_filters: {}, case: [] },
-        'amplitude', // Default connection
+        connectionName,
         graph,
         edge,
         [...new Set(contextKeys)].sort(),

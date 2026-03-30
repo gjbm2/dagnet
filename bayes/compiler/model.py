@@ -191,15 +191,19 @@ P_CLIP_LO = 0.001
 P_CLIP_HI = 0.999
 
 # Overdispersion (kappa) prior ---
-# Per-edge κ ~ Gamma(α, β) controls how "noisy" daily conversion
-# rates are beyond simple coin-flip variance.  Higher κ = less noise.
+# Per-edge κ controls how "noisy" daily conversion rates are beyond
+# simple coin-flip variance.  Higher κ = less noise.
 #
-# ARBITRARY: these are weakly informative modelling choices.
-#   Window:  Gamma(3, 0.1)  → mode = (α−1)/β = 20.
-#   Cohort:  Gamma(3, 0.05) → mode = 40 (tighter, because between-
-#            cohort variation is partially absorbed by the trajectory).
-# Different α or β would change inference.  α=3 gives a broad,
-# unimodal prior; β sets the scale.
+# LogNormal prior on κ (Normal on log κ):
+#   log(κ) ~ Normal(LOG_KAPPA_MU, LOG_KAPPA_SIGMA)
+#   Centre ≈ 30, 95% CI ≈ [2, 500].
+# LogNormal has better gradient geometry than Gamma for NUTS and
+# naturally covers orders of magnitude. Stan community consensus.
+# See journal 30-Mar-26 "Dispersion estimation".
+import math as _math
+LOG_KAPPA_MU = _math.log(30.0)     # centre at κ ≈ 30
+LOG_KAPPA_SIGMA = 1.5               # 95% CI: [2, 500]
+# Legacy constants kept for reference / warm-start fallback
 KAPPA_ALPHA = 3.0
 KAPPA_BETA_WINDOW = 0.1
 KAPPA_BETA_COHORT = 0.05
@@ -939,14 +943,20 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
                 p_base_var = None  # will be created below per observation type
 
             if feat_overdispersion:
-                # Warm-start kappa from previous posterior if available;
+                # LogNormal prior on κ: log(κ) ~ Normal(mu, sigma).
+                # Warm-start centres the prior on the previous posterior;
                 # otherwise use default hyperparameters.
+                # See journal 30-Mar-26 "Dispersion estimation".
                 if ev.kappa_warm is not None:
-                    from .completeness import gamma_params_from_mode
-                    _ka, _kb = gamma_params_from_mode(ev.kappa_warm, spread=0.5)
-                    edge_kappa = pm.Gamma(f"kappa_{safe_id}", alpha=_ka, beta=_kb)
+                    _log_kappa_mu = np.log(max(ev.kappa_warm, 1.0))
+                    _log_kappa_sigma = 1.0  # tighter than default — warm-start
                 else:
-                    edge_kappa = pm.Gamma(f"kappa_{safe_id}", alpha=KAPPA_ALPHA, beta=KAPPA_BETA_WINDOW)
+                    _log_kappa_mu = LOG_KAPPA_MU
+                    _log_kappa_sigma = LOG_KAPPA_SIGMA
+                _log_kappa = pm.Normal(f"log_kappa_{safe_id}",
+                                       mu=_log_kappa_mu, sigma=_log_kappa_sigma)
+                edge_kappa = pm.Deterministic(f"kappa_{safe_id}",
+                                              pt.exp(_log_kappa))
             else:
                 edge_kappa = None
 
@@ -1030,20 +1040,14 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
                     else:
                         p = pm.Beta(f"p_{safe_id}", alpha=alpha, beta=beta_param)
 
-                    # Shape + rate decomposition (doc 24, journal 29-Mar-26):
+                    # Shape + rate decomposition (journal 30-Mar-26):
                     # - Shape: trajectory intervals with shared p → CDF
-                    # - Rate: endpoint BetaBinomial with kappa_p → p + dispersion
+                    # - Rate: endpoint BetaBinomial with edge_kappa → p + dispersion
+                    #   + daily window obs BetaBinomial → p + dispersion
                     # No per-trajectory p_i. The intervals use shared p for
-                    # all trajectories. The endpoint BB captures between-cohort
-                    # variation independently of the CDF coupling.
-                    kappa_p_var = None
-                    if feat_overdispersion:
-                        if ev.kappa_p_warm is not None:
-                            from .completeness import gamma_params_from_mode
-                            _kpa, _kpb = gamma_params_from_mode(ev.kappa_p_warm, spread=0.5)
-                            kappa_p_var = pm.Gamma(f"kappa_p_{safe_id}", alpha=_kpa, beta=_kpb)
-                        else:
-                            kappa_p_var = pm.Gamma(f"kappa_p_{safe_id}", alpha=KAPPA_ALPHA, beta=KAPPA_BETA_COHORT)
+                    # all trajectories. The endpoint BB and daily BB capture
+                    # between-day variation independently of the CDF coupling.
+                    # One unified κ per edge (no separate kappa_p).
 
                     if emit_window_binomial:
                         _emit_window_likelihoods(safe_id, p, ev, diagnostics, kappa=edge_kappa)
@@ -1058,10 +1062,11 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
                                                 skip_cohort_trajectories=True)
 
                     # Endpoint BetaBinomial: one observation per window
-                    # trajectory. y_final ~ BB(n, p×F(age), kappa_p).
-                    # Captures between-cohort rate variation, decoupled
+                    # trajectory. y_final ~ BB(n, p×F(age), kappa).
+                    # Captures between-day rate variation, decoupled
                     # from CDF shape (which the intervals handle).
-                    if kappa_p_var is not None and ev.cohort_obs:
+                    # Uses unified edge_kappa (journal 30-Mar-26).
+                    if edge_kappa is not None and ev.cohort_obs:
                         from .completeness import shifted_lognormal_cdf
                         ep_onset = ev.latency_prior.onset_delta_days if ev.latency_prior else 0.0
                         ep_mu = ev.latency_prior.mu if ev.latency_prior else 0.0
@@ -1116,8 +1121,8 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
                             pm.BetaBinomial(
                                 f"endpoint_bb_{safe_id}",
                                 n=ep_n,
-                                alpha=p_eff * kappa_p_var,
-                                beta=(1.0 - p_eff) * kappa_p_var,
+                                alpha=p_eff * edge_kappa,
+                                beta=(1.0 - p_eff) * edge_kappa,
                                 observed=ep_y,
                             )
                             diagnostics.append(
@@ -1455,7 +1460,6 @@ def _emit_cohort_likelihoods(
     onset_vars: dict[str, object] | None = None,
     skip_cohort_trajectories: bool = False,
     p_cohort_vec=None,
-    kappa_p=None,
 ) -> None:
     """Emit cohort likelihoods — the most complex likelihood in the model.
 
@@ -1493,7 +1497,7 @@ def _emit_cohort_likelihoods(
         edge-level latency — used for "cohort"-type trajectories.
     p_cohort_vec: if provided, per-trajectory p_i variables from the
         hierarchical Beta model (each cohort gets its own p).
-    kappa_p: between-cohort overdispersion for no-latency edges.
+    (kappa_p removed — unified into kappa, journal 30-Mar-26)
 
     See doc 6 § "Efficient emission: pm.Potential vectorisation".
     """
@@ -2093,10 +2097,13 @@ def _emit_cohort_likelihoods(
     # conversions haven't happened yet)". The daily anchor breaks this
     # degeneracy by directly constraining p.
     #
-    # We use plain Binomial (not BetaBinomial) for the same reason as
-    # window obs: BetaBinomial with small κ has an upward bias on p.
-    # Exception: no-latency edges use BetaBinomial with κ_p to capture
-    # between-cohort variation (since there is no trajectory to do that).
+    # Daily obs: BetaBinomial with κ to capture between-day rate
+    # variation. Each daily obs is an independent draw from
+    # Beta(p·κ, (1-p)·κ) — this is the primary data source for
+    # constraining κ within the MCMC (journal 30-Mar-26).
+    #
+    # When κ is not available (feat_overdispersion=False), fall back
+    # to plain Binomial.
     #
     # Guard: skip when ≤ 3 days — too few points to anchor p, and
     # small arrays trigger a PyTensor rewrite bug.
@@ -2113,16 +2120,13 @@ def _emit_cohort_likelihoods(
 
             p_effective = pm.math.clip(p_var * compl_arr, P_CLIP_LO, P_CLIP_HI)
 
-            if kappa_p is not None and not edge_has_latency:
-                # No-latency edge with kappa_p: BetaBinomial to capture
-                # between-cohort variation. One obs per cohort, no K-fold
-                # bias. Completeness=1.0 so p_effective = p_var.
-                # See journal 27-Mar-26.
+            if kappa is not None:
+                # BetaBinomial: per-day overdispersion.
                 pm.BetaBinomial(
                     f"obs_daily_{safe_id}",
                     n=n_arr,
-                    alpha=p_effective * kappa_p,
-                    beta=(1.0 - p_effective) * kappa_p,
+                    alpha=p_effective * kappa,
+                    beta=(1.0 - p_effective) * kappa,
                     observed=k_arr,
                 )
             else:

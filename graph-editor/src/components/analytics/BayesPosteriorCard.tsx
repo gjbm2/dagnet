@@ -28,9 +28,13 @@ interface Props {
   /** Path-level t95 point estimate (days) — from edge.p.latency.path_t95 */
   pathT95?: number | null;
   theme?: 'light' | 'dark';
+  /** Reset priors for next Bayesian run (non-destructive). */
+  onResetPriors?: () => void;
+  /** Delete all fit history (destructive — requires caller to confirm first). */
+  onDeleteHistory?: () => void;
 }
 
-export function BayesPosteriorCard({ probability, latency, t95, pathT95, theme = 'dark' }: Props) {
+export function BayesPosteriorCard({ probability, latency, t95, pathT95, theme = 'dark', onResetPriors, onDeleteHistory }: Props) {
   const post = probability;
   const lat = latency;
 
@@ -156,6 +160,37 @@ export function BayesPosteriorCard({ probability, latency, t95, pathT95, theme =
         )}
       </div>
       {footer}
+      {(onResetPriors || onDeleteHistory) && (
+        <div style={{
+          display: 'flex', gap: 12, padding: '4px 0 2px',
+          fontSize: 10, lineHeight: '15px',
+        }}>
+          {onResetPriors && (
+            <button
+              onClick={onResetPriors}
+              style={{
+                background: 'none', border: 'none', padding: 0, cursor: 'pointer',
+                color: 'var(--text-muted, #999)', fontSize: 10, textDecoration: 'underline',
+              }}
+              title="Reset priors for next Bayesian run (non-destructive)"
+            >
+              Reset priors
+            </button>
+          )}
+          {onDeleteHistory && (
+            <button
+              onClick={onDeleteHistory}
+              style={{
+                background: 'none', border: 'none', padding: 0, cursor: 'pointer',
+                color: 'var(--text-muted, #999)', fontSize: 10, textDecoration: 'underline',
+              }}
+              title="Delete all fit history (irreversible)"
+            >
+              Delete history
+            </button>
+          )}
+        </div>
+      )}
       <BayesModelRateChart
         edgeP={edgePMean} edgeMu={lat?.mu_mean} edgeSigma={lat?.sigma_mean} edgeOnset={lat?.onset_delta_days ?? lat?.onset_mean}
         edgePSd={edgePSd} edgeMuSd={lat?.mu_sd} edgeSigmaSd={lat?.sigma_sd} edgeOnsetSd={lat?.onset_sd}

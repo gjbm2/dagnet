@@ -26,6 +26,8 @@ import { AutoUpdateChartsMenubarItem } from './AutoUpdateChartsMenubarItem';
 import { useLagHorizons } from '../../hooks/useLagHorizons';
 import { useBayesTrigger } from '../../hooks/useBayesTrigger';
 import type { BayesComputeMode } from '../../hooks/useBayesTrigger';
+import { useDialog } from '../../contexts/DialogContext';
+import { resetPriorsForAllParams, deleteHistoryForAllParams } from '../../services/bayesPriorService';
 
 /**
  * Data Menu
@@ -126,7 +128,39 @@ export function DataMenu() {
     setGraph: handleSetGraph as any,
     getCurrentDsl: () => graphStore?.getState().currentDSL || '',
   });
-  
+
+  // Bayesian prior management (doc 19 §4.5)
+  const { showConfirm } = useDialog();
+  const handleResetAllPriors = useCallback(async () => {
+    const ok = await showConfirm({
+      title: 'Reset Bayesian Priors',
+      message: 'Reset Bayesian priors for all parameters on this graph?\n\n' +
+        'On the next Bayesian fit, each edge will start from analytic-derived priors ' +
+        'instead of previous posteriors. Previous posteriors remain in history.',
+      confirmLabel: 'Reset Priors',
+      cancelLabel: 'Cancel',
+    });
+    if (!ok) return;
+    const getGraph = () => (graphStore?.getState().graph as any) || null;
+    const count = await resetPriorsForAllParams(getGraph);
+    toast.success(`Reset priors on ${count} parameter(s)`);
+  }, [graphStore, showConfirm]);
+
+  const handleDeleteAllHistory = useCallback(async () => {
+    const ok = await showConfirm({
+      title: 'Delete Bayesian History',
+      message: 'Permanently delete all Bayesian fit history for every parameter on this graph?\n\n' +
+        'Fit history is used for volatility estimation and cannot be recovered.',
+      confirmLabel: 'Delete History',
+      cancelLabel: 'Cancel',
+      confirmVariant: 'danger',
+    });
+    if (!ok) return;
+    const getGraph = () => (graphStore?.getState().graph as any) || null;
+    const count = await deleteHistoryForAllParams(getGraph);
+    toast.success(`Deleted fit history from ${count} parameter(s)`);
+  }, [graphStore, showConfirm]);
+
   // Track selection state (will be wired up later)
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
@@ -925,7 +959,7 @@ export function DataMenu() {
             </Menubar.Portal>
           </Menubar.Sub>
           
-          {/* Bayesian fit */}
+          {/* Bayesian fit + prior management */}
           <Menubar.Item
             className="menubar-item"
             onSelect={() => void bayesTrigger()}
@@ -934,6 +968,20 @@ export function DataMenu() {
             {bayesIsActive
               ? (bayesStatus === 'submitting' ? 'Submitting Bayesian fit…' : 'Bayesian fit running…')
               : 'Run Bayesian Fit…'}
+          </Menubar.Item>
+          <Menubar.Item
+            className="menubar-item"
+            onSelect={() => void handleResetAllPriors()}
+            disabled={!graphStore}
+          >
+            Reset Bayesian Priors…
+          </Menubar.Item>
+          <Menubar.Item
+            className="menubar-item"
+            onSelect={() => void handleDeleteAllHistory()}
+            disabled={!graphStore}
+          >
+            Delete Bayesian History…
           </Menubar.Item>
 
           <Menubar.Separator className="menubar-separator" />

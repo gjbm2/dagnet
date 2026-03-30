@@ -428,4 +428,11 @@ function mergePosteriorsIntoParam(
   if (paramDoc.latency?.posterior) {
     delete paramDoc.latency.posterior;
   }
+
+  // Doc 19 §4.5: clear bayes_reset after successful posterior write.
+  // The flag told the evidence binder to skip warm-start on this run;
+  // now that a fresh posterior exists, the flag is no longer needed.
+  if (paramDoc.latency?.bayes_reset) {
+    delete paramDoc.latency.bayes_reset;
+  }
 }

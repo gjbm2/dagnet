@@ -16,6 +16,7 @@ import { MenuBar } from './components/MenuBar';
 import { NavigatorContent } from './components/Navigator';
 import { TabContextMenu } from './components/TabContextMenu';
 import { CommitModal } from './components/CommitModal';
+import { HashMappingModal } from './components/modals/HashMappingModal';
 import { SwitchBranchModal } from './components/modals/SwitchBranchModal';
 import { gitService } from './services/gitService';
 import { getEditorComponent } from './components/editors';
@@ -616,8 +617,8 @@ function MainAppShellContent() {
     preselectedFiles: string[];
   }>({ isOpen: false, preselectedFiles: [] });
 
-  // Centralized commit handler - uses shared hook
-  const { handleCommitFiles } = useCommitHandler();
+  // Centralized commit handler - uses shared hook (includes hash guard state)
+  const { handleCommitFiles, hashGuardState, handleHashGuardConfirm, handleHashGuardCancel } = useCommitHandler();
 
   // Custom groups - NO panelExtra, we'll position Navigator separately
   const customGroups = useMemo(() => ({
@@ -1880,6 +1881,15 @@ function MainAppShellContent() {
             onClose={() => setCommitModalState({ isOpen: false, preselectedFiles: [] })}
             onCommit={handleCommitFiles}
             preselectedFiles={commitModalState.preselectedFiles}
+          />
+        )}
+
+        {/* Hash guard modal (commit-time pre-commit gate for event/context changes) */}
+        {hashGuardState.isOpen && hashGuardState.result && (
+          <HashMappingModal
+            result={hashGuardState.result}
+            onConfirm={handleHashGuardConfirm}
+            onCancel={handleHashGuardCancel}
           />
         )}
 

@@ -29,6 +29,8 @@ Reuse existing entities where the semantics match. Don't create duplicates.
 
 **When**: You need to map a graph concept to an analytics provider event.
 
+**Hash mappings**: New event files do not need hash mappings — there are no historical snapshots to preserve. Hash mappings are only needed when *modifying* existing files. See [manage-hash-mappings.md](manage-hash-mappings.md).
+
 **File**: `<data-dir>/events/<id>.yaml`
 
 ```yaml
@@ -197,6 +199,8 @@ Add to `<data-dir>/parameters-index.yaml` under `parameters:`:
 ## Context
 
 **When**: You need a new segmentation dimension (rare — usually reuse existing contexts).
+
+**Hash mappings**: New context files do not need hash mappings. Hash mappings are only needed when *modifying* existing context definitions. See [manage-hash-mappings.md](manage-hash-mappings.md).
 
 **File**: `<data-dir>/contexts/<id>.yaml`
 

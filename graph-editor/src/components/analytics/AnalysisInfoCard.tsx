@@ -21,6 +21,8 @@ import { useDataDepthContext } from '../../contexts/DataDepthContext';
 import { useGraphStoreOptional } from '../../contexts/GraphStoreContext';
 import { buildDataDepthInfoRows } from '../../services/dataDepthService';
 import { BayesPosteriorCard } from './BayesPosteriorCard';
+import { resetPriorsForParam, deleteHistoryForParam } from '../../services/bayesPriorService';
+import toast from 'react-hot-toast';
 import '../../styles/analysis-info-card.css';
 
 interface AnalysisInfoCardProps {
@@ -39,6 +41,10 @@ interface AnalysisInfoCardProps {
    * Used by multi-content-item containers where each content item shows one card kind.
    */
   kind?: string;
+  /** Bayes prior reset callback (single edge). */
+  onResetPriors?: () => void;
+  /** Bayes history delete callback (single edge — caller should confirm first). */
+  onDeleteHistory?: () => void;
 }
 
 interface RowData {
@@ -61,7 +67,7 @@ interface SectionData {
 
 
 
-export function AnalysisInfoCard({ result, fontSize, defaultTab, onFileLink, tabExtra, kind }: AnalysisInfoCardProps) {
+export function AnalysisInfoCard({ result, fontSize, defaultTab, onFileLink, tabExtra, kind, onResetPriors, onDeleteHistory }: AnalysisInfoCardProps) {
   const sizeZoom = fontSizeZoom(fontSize);
 
   // ── Data Depth score enrichment ──
@@ -125,11 +131,32 @@ export function AnalysisInfoCard({ result, fontSize, defaultTab, onFileLink, tab
   const extra = effectiveKind ? tabExtra?.[effectiveKind] : undefined;
   const showCdf = (effectiveKind === 'latency' || !effectiveKind) && !!latencyCdfMeta;
 
+  // ── Bayes prior reset / history delete callbacks ──
+  // Built from posteriorsMeta.paramId when available (avoids threading from every rendering site).
+  const bayesParamId = posteriorsMeta?.paramId as string | undefined;
+  const handleResetPriors = useCallback(() => {
+    if (!bayesParamId) return;
+    void resetPriorsForParam(bayesParamId).then(ok => {
+      if (ok) toast.success('Priors will reset on next Bayesian run');
+    });
+  }, [bayesParamId]);
+  const handleDeleteHistory = useCallback(() => {
+    if (!bayesParamId) return;
+    // eslint-disable-next-line no-restricted-globals
+    if (!confirm('Delete all Bayesian fit history for this parameter?\n\nFit history is used for volatility estimation and cannot be recovered.')) return;
+    void deleteHistoryForParam(bayesParamId).then(ok => {
+      if (ok) toast.success('Fit history deleted');
+      else toast('No fit history to delete');
+    });
+  }, [bayesParamId]);
+  const resolvedResetPriors = onResetPriors || (bayesParamId ? handleResetPriors : undefined);
+  const resolvedDeleteHistory = onDeleteHistory || (bayesParamId ? handleDeleteHistory : undefined);
+
   // Forecast kind with posterior metadata → BayesPosteriorCard
   if (effectiveKind === 'forecast' && posteriorsMeta) {
     return (
       <div className="info-card" style={sizeZoom !== 1 ? { zoom: sizeZoom } as any : undefined}>
-        <BayesPosteriorCard probability={posteriorsMeta.probability} latency={posteriorsMeta.latency} t95={posteriorsMeta.t95} pathT95={posteriorsMeta.path_t95} />
+        <BayesPosteriorCard probability={posteriorsMeta.probability} latency={posteriorsMeta.latency} t95={posteriorsMeta.t95} pathT95={posteriorsMeta.path_t95} onResetPriors={resolvedResetPriors} onDeleteHistory={resolvedDeleteHistory} />
         {filteredSections.length > 0 && (
           <InfoTable sections={filteredSections} scenarioIds={scenarioIds} scenarioMeta={scenarioMeta} onFileLink={onFileLink} />
         )}

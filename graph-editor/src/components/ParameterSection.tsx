@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { Info, Clock, RefreshCcw } from 'lucide-react';
 import { EnhancedSelector } from './EnhancedSelector';
 import { ConnectionControl } from './ConnectionControl';
@@ -16,6 +16,8 @@ import { roundToDecimalPlaces } from '../utils/rounding';
 import { PosteriorIndicator } from './shared/PosteriorIndicator';
 import { ModelVarsCards } from './ModelVarsCards';
 import { resolveActiveModelVars, effectivePreference } from '../services/modelVarsResolution';
+import { resetPriorsForParam, deleteHistoryForParam } from '../services/bayesPriorService';
+import toast from 'react-hot-toast';
 import { useTheme } from '../contexts/ThemeContext';
 import './ParameterSection.css';
 
@@ -110,6 +112,24 @@ export function ParameterSection({
   const { graph: currentGraph, setGraph } = useGraphStore();
   const { theme } = useTheme();
   const [isRefreshingAnchor, setIsRefreshingAnchor] = useState(false);
+
+  // Bayes prior reset / history delete (doc 19 §4.5)
+  const bayesParamId = param?.id as string | undefined;
+  const handleBayesResetPriors = useCallback(() => {
+    if (!bayesParamId) return;
+    void resetPriorsForParam(bayesParamId).then(ok => {
+      if (ok) toast.success('Priors will reset on next Bayesian run');
+    });
+  }, [bayesParamId]);
+  const handleBayesDeleteHistory = useCallback(() => {
+    if (!bayesParamId) return;
+    // eslint-disable-next-line no-restricted-globals
+    if (!confirm('Delete all Bayesian fit history for this parameter?\n\nFit history is used for volatility estimation and cannot be recovered.')) return;
+    void deleteHistoryForParam(bayesParamId).then(ok => {
+      if (ok) toast.success('Fit history deleted');
+      else toast('No fit history to delete');
+    });
+  }, [bayesParamId]);
 
   // §17.1: When model_vars exists on a probability param, the cards replace
   // the flat scalar layout (mean slider, stdev, latency fields, posterior indicator).
@@ -618,6 +638,9 @@ export function ParameterSection({
           disabled={disabled}
           latencyPosterior={param!.latency?.posterior as any}
           probabilityPosterior={param!.posterior as any}
+          paramId={bayesParamId}
+          onResetPriors={bayesParamId ? handleBayesResetPriors : undefined}
+          onDeleteHistory={bayesParamId ? handleBayesDeleteHistory : undefined}
         />
       )}
 

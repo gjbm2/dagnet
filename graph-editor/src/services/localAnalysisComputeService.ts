@@ -574,6 +574,7 @@ function buildEdgeInfoResult(graph: ConversionGraph, dsl: string): AnalysisResul
         posteriors: {
           probability: probPosterior || null,
           latency: latPosterior,
+          paramId: edge.p?.id || null,
           // Model tab: use bayesian model_vars t95, not promoted scalars
           ...(() => {
             const bayesMv = (edge.p?.model_vars as any[])?.find((mv: any) => mv.source === 'bayesian');

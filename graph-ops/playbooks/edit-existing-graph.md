@@ -11,6 +11,7 @@ How to modify an existing graph in the data repo.
 1. **Read the graph** — understand its current structure, nodes, and edges
 2. **Read the parameters** — understand which edges have data and what their queries are
 3. **Identify the change** — what needs to happen and what it affects
+4. **Hash impact** — if editing event or context files, check whether snapshot hashes are affected. See [manage-hash-mappings.md](manage-hash-mappings.md) for the full workflow
 
 ---
 
@@ -62,6 +63,7 @@ How to modify an existing graph in the data repo.
 1. Update the node file's `event_id` field
 2. If the new event doesn't exist, create it (see [create-entities.md](create-entities.md))
 3. **Check**: All parameters with queries referencing this node may need their data refreshed
+4. **Hash impact**: Changing event binding changes snapshot hashes. See [manage-hash-mappings.md](manage-hash-mappings.md)
 
 ### Rename a Node ID
 

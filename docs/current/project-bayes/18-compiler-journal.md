@@ -8,6 +8,53 @@ Entries are reverse-chronological (newest first).
 
 ---
 
+## 30-Mar-26: Softplus onset leakage — root cause of onset-mu-sigma ridge
+
+### Problem
+After fixing the Phase 2 warm-start issue (doc 26), onset still
+drifts upward. Phase 1 del-to-reg converges at onset=9.56 despite
+49 Amplitude onset observations with mean=4.0d. The 124-nat penalty
+from onset obs should be overwhelming, but the trajectory likelihood
+pulls harder.
+
+### Root cause: softplus CDF leakage
+The shifted lognormal CDF computes `effective_age = softplus(age - onset)`.
+Softplus never reaches zero: at age=7 with onset=9.5,
+`softplus(-2.5) = 0.079`. With sigma=2.8, `Φ((ln(0.079)+1.3)/2.8) = 0.33`.
+The model "sees" 33% of conversions by age 7 despite onset being 9.5.
+
+This creates a **degenerate mode**: (high onset, very negative mu,
+very large sigma) produces a CDF shape similar to the correct mode
+(low onset, moderate mu, moderate sigma) because the softplus leaks
+mass below onset and the huge sigma amplifies it.
+
+Evidence that this is an identifiability ridge, not systematic bias:
+the model sometimes fits well (lands on the good end of the ridge)
+and sometimes catastrophically badly (lands on the degenerate end).
+The grey-line actual CDF shows conversions starting at ~7d, but the
+model can produce onset=9.5 or onset=22 depending on where on the
+ridge the sampler lands.
+
+### CDF comparison (both produce similar shapes)
+| Age | Correct (5, 1.1, 0.9) | Degenerate (9.5, -1.3, 2.8) |
+|-----|------------------------|------------------------------|
+| 5d  | 0.05                   | 0.13                         |
+| 7d  | 0.35                   | 0.33                         |
+| 10d | 0.72                   | 0.68                         |
+| 15d | 0.91                   | 0.86                         |
+
+### Fix: sharpen softplus (attempt A)
+Replace `softplus(x)` with `softplus(k·x) / k` where k > 1. This
+preserves differentiability but makes the leakage below onset
+negligible. At k=5, leakage 2.5d below onset drops from 0.079 to
+~1e-6, collapsing the ridge.
+
+Alternative options (not yet tried):
+- B: Hard onset boundary (CDF=0 analytically for age < onset)
+- C: Reparameterise as (t10, t50, t90) percentiles
+
+---
+
 ## 30-Mar-26: Dispersion estimation — abandon external MLE, use MCMC κ
 
 ### Background
@@ -58,13 +105,52 @@ actually constrained by data. The MCMC approach is superior because:
 - This is what the statistical literature recommends (Strategy C:
   joint estimation)
 
-### Next step
+### Data design for Phase 1 κ
 
-Before touching code: reason through exactly what data Phase 1 κ
-should see. The key distinction is trajectories (one cohort observed
-at multiple ages — for latency estimation) vs daily rates (independent
-draws from the daily p distribution — for κ estimation). These must
-not be conflated. See subsequent entry for the data design.
+**Trajectories vs endpoints — the key distinction:**
+- A trajectory is one anchor day observed at multiple retrieval ages.
+  It's ONE sample of that day's p, showing maturation over time.
+  Multiple ages are NOT independent — they're the same cohort growing.
+  Purpose: constrain CDF shape (onset, μ, σ).
+- An endpoint is the final (n, k) for one anchor day at maximum
+  maturity. Multiple endpoints from different anchor days ARE
+  independent draws from Beta(p·κ, (1-p)·κ).
+  Purpose: constrain p + κ.
+
+**Double-counting risk:** the current endpoint BetaBinomial and the
+trajectory product-of-conditional-Binomials both touch the same data
+(the endpoint is the final interval of the trajectory). This is
+partial double-counting (Liu & Goudie 2022, JRSS-B). It over-weights
+the endpoint evidence and can distort κ.
+
+**The design (shape + rate decomposition — standard "cure model"
+factorisation from survival analysis literature):**
+
+1. Trajectories → product-of-conditional-Binomials for latency ONLY
+   (onset, μ, σ). Uses shared p. No κ.
+2. Per-day window endpoints → BetaBinomial(n, p·F·κ, (1-p·F)·κ)
+   for p + κ. One observation per anchor day, sufficiently mature.
+3. The endpoint observations must be EXCLUDED from the trajectory
+   intervals to avoid double-counting. Concretely: if a day appears
+   as a trajectory, don't also use its endpoint in the BB. Use the
+   BB for single-retrieval days (daily obs) and trajectory endpoints
+   that are NOT part of the trajectory likelihood.
+4. Unify kappa and kappa_p into one variable per edge.
+5. Switch κ prior from Gamma(3, 0.1) to LogNormal:
+   log_kappa ~ Normal(log(30), 1.5), covering κ ∈ [2, 500].
+   Better gradient geometry for NUTS (Stan community consensus).
+
+**Accepting fundamental limits:** with 50-170 anchor days and
+n~15-100 per day, κ is only reliably estimable when κ < 30
+(ρ > 0.03). For milder overdispersion, the posterior is
+prior-dominated. This is normal. Report ρ = 1/(κ+1) with
+uncertainty, not a point estimate of κ.
+
+**Why not per-day random effects?** Drawing p_d ~ Beta(p·κ,
+(1-p)·κ) per trajectory is the cleanest joint estimation but
+previously caused ESS=7 with 218 random effects. The endpoint BB
+with shared p avoids this while still constraining κ from per-day
+variation.
 
 ---
 

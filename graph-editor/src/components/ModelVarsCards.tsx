@@ -25,7 +25,6 @@ import type {
   ModelSource,
   ModelSourcePreference,
   GraphModelSourcePreference,
-  ModelVarsQuality,
   LatencyConfig,
   LatencyPosterior,
   ProbabilityPosterior,
@@ -35,10 +34,11 @@ import {
   effectivePreference,
 } from '../services/modelVarsResolution';
 import { roundToDecimalPlaces } from '../utils/rounding';
-import { formatRelativeTime } from '../utils/freshnessDisplay';
 import { LATENCY_HORIZON_DECIMAL_PLACES } from '../constants/latency';
 import CollapsibleSection from './CollapsibleSection';
 import { AutomatableField } from './AutomatableField';
+import { BayesPosteriorCard } from './analytics/BayesPosteriorCard';
+import { useTheme } from '../contexts/ThemeContext';
 import './ModelVarsCards.css';
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -60,6 +60,12 @@ interface ModelVarsCardsProps {
   /** Bayesian posteriors — full dispersion data for inline display */
   latencyPosterior?: LatencyPosterior;
   probabilityPosterior?: ProbabilityPosterior;
+  /** Parameter ID — used to wire prior reset / history delete actions */
+  paramId?: string;
+  /** Reset priors for next Bayesian run (non-destructive). */
+  onResetPriors?: () => void;
+  /** Delete all fit history (destructive — requires caller to confirm first). */
+  onDeleteHistory?: () => void;
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -86,7 +92,9 @@ export function ModelVarsCards({
   promotedLatency, latencyEnabled,
   onUpdate, disabled = false,
   latencyPosterior, probabilityPosterior,
+  paramId, onResetPriors, onDeleteHistory,
 }: ModelVarsCardsProps) {
+  const { theme } = useTheme();
   const pref = effectivePreference(edgePreference, graphPreference);
   const activeEntry = resolveActiveModelVars(modelVars, pref);
   const activeSource = activeEntry?.source;
@@ -175,68 +183,15 @@ export function ModelVarsCards({
           }
         >
           {bayesian ? (
-            <>
-              <FieldGroup label="Probability">
-                <RoField label="p" value={`${fmtPct(bayesian.probability.mean)} ± ${fmtPct(bayesian.probability.stdev)}`} />
-                {probabilityPosterior?.hdi_lower != null && (
-                  <RoField label="HDI" value={`${fmtPct(probabilityPosterior.hdi_lower)} — ${fmtPct(probabilityPosterior.hdi_upper)}`} />
-                )}
-              </FieldGroup>
-              {probabilityPosterior?.path_alpha != null && (() => {
-                const pa = probabilityPosterior.path_alpha!;
-                const pb = probabilityPosterior.path_beta!;
-                const pathMean = pa / (pa + pb);
-                const pathSd = Math.sqrt(pa * pb / ((pa + pb) ** 2 * (pa + pb + 1)));
-                return (
-                  <FieldGroup label="Probability (path)" defaultCollapsed>
-                    <RoField label="p" value={`${fmtPct(pathMean)} ± ${fmtPct(pathSd)}`} />
-                    {(probabilityPosterior as any).path_hdi_lower != null && (
-                      <RoField label="HDI" value={`${fmtPct((probabilityPosterior as any).path_hdi_lower)} — ${fmtPct((probabilityPosterior as any).path_hdi_upper)}`} />
-                    )}
-                  </FieldGroup>
-                );
-              })()}
-              {bayesian.latency && (
-                <FieldGroup label="Latency (edge)" defaultCollapsed>
-                  <RoField label="onset δ" value={`${fmt(bayesian.latency.onset_delta_days, 1)}d${latencyPosterior?.onset_sd != null ? ` ± ${fmt(latencyPosterior.onset_sd, 1)}d` : ''}`} />
-                  {latencyPosterior?.onset_hdi_lower != null && (
-                    <RoField label="onset HDI" value={`${fmt(latencyPosterior.onset_hdi_lower, 1)}d — ${fmt(latencyPosterior.onset_hdi_upper, 1)}d`} />
-                  )}
-                  <RoField label="μ" value={`${fmt(bayesian.latency.mu, 3)}${latencyPosterior?.mu_sd != null ? ` ± ${fmt(latencyPosterior.mu_sd, 3)}` : ''}`} />
-                  <RoField label="σ" value={`${fmt(bayesian.latency.sigma, 3)}${latencyPosterior?.sigma_sd != null ? ` ± ${fmt(latencyPosterior.sigma_sd, 3)}` : ''}`} />
-                  <RoField label="t95" value={fmt(bayesian.latency.t95, 1)} unit="d" />
-                  {latencyPosterior?.hdi_t95_lower != null && (
-                    <RoField label="t95 HDI" value={`${fmt(latencyPosterior.hdi_t95_lower, 1)}d — ${fmt(latencyPosterior.hdi_t95_upper, 1)}d`} />
-                  )}
-                  {latencyPosterior?.onset_mu_corr != null && (
-                    <RoField label="onset↔μ" value={fmt(latencyPosterior.onset_mu_corr, 3)} />
-                  )}
-                </FieldGroup>
-              )}
-              {bayesian.latency?.path_mu != null && (
-                <FieldGroup label="Latency (path)" defaultCollapsed>
-                  <RoField label="onset δ" value={`${fmt(bayesian.latency.path_onset_delta_days, 1)}d${latencyPosterior?.path_onset_sd != null ? ` ± ${fmt(latencyPosterior.path_onset_sd, 1)}d` : ''}`} />
-                  {latencyPosterior?.path_onset_hdi_lower != null && (
-                    <RoField label="onset HDI" value={`${fmt(latencyPosterior.path_onset_hdi_lower, 1)}d — ${fmt(latencyPosterior.path_onset_hdi_upper, 1)}d`} />
-                  )}
-                  <RoField label="μ" value={`${fmt(bayesian.latency.path_mu, 3)}${latencyPosterior?.path_mu_sd != null ? ` ± ${fmt(latencyPosterior.path_mu_sd, 3)}` : ''}`} />
-                  <RoField label="σ" value={`${fmt(bayesian.latency.path_sigma, 3)}${latencyPosterior?.path_sigma_sd != null ? ` ± ${fmt(latencyPosterior.path_sigma_sd, 3)}` : ''}`} />
-                  <RoField label="path t95" value={fmt(bayesian.latency.path_t95, 1)} unit="d" />
-                  {latencyPosterior?.path_hdi_t95_lower != null && (
-                    <RoField label="path t95 HDI" value={`${fmt(latencyPosterior.path_hdi_t95_lower, 1)}d — ${fmt(latencyPosterior.path_hdi_t95_upper, 1)}d`} />
-                  )}
-                  {latencyPosterior?.path_onset_mu_corr != null && (
-                    <RoField label="onset↔μ" value={fmt(latencyPosterior.path_onset_mu_corr, 3)} />
-                  )}
-                </FieldGroup>
-              )}
-              {bayesian.quality && (
-                <FieldGroup label="Quality" defaultCollapsed>
-                  <QualitySection quality={bayesian.quality} />
-                </FieldGroup>
-              )}
-              {bayesian.source_at && <RoField label="Fitted" value={formatRelativeTime(bayesian.source_at) ?? bayesian.source_at} />}
-            </>
+            <BayesPosteriorCard
+              probability={probabilityPosterior}
+              latency={latencyPosterior}
+              t95={bayesian.latency?.t95}
+              pathT95={bayesian.latency?.path_t95}
+              theme={theme}
+              onResetPriors={onResetPriors}
+              onDeleteHistory={onDeleteHistory}
+            />
           ) : (
             <p style={{ color: 'var(--text-muted)', fontStyle: 'italic', fontSize: '12px', margin: 0 }}>
               No Bayesian model available.
@@ -596,24 +551,3 @@ function OutputInput({ label, field, value, dp, pct, unit, overridden, onClearOv
   );
 }
 
-// ── Quality section (§17.2.1) ───────────────────────────────────────────────
-
-function QualitySection({ quality }: { quality: ModelVarsQuality }) {
-  const passed = quality.gate_passed;
-  return (
-    <>
-      <span className="collapsible-section-badge"
-        style={{
-          display: 'inline-block', marginBottom: '4px',
-          background: passed ? 'var(--color-success-bg)' : 'var(--color-danger-bg)',
-          color: passed ? 'var(--color-success)' : 'var(--color-danger)',
-        }}>
-        {passed ? 'Gate passed' : 'Gate failed'}
-      </span>
-      <RoField label="r̂" value={fmt(quality.rhat, 4)} />
-      <RoField label="ESS" value={String(Math.round(quality.ess))} />
-      {quality.divergences > 0 && <RoField label="div" value={String(quality.divergences)} />}
-      <RoField label="evidence" value={`${quality.evidence_grade}/3`} />
-    </>
-  );
-}

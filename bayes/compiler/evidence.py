@@ -966,6 +966,7 @@ def _resolve_latency_prior(et, pf_data: dict | None) -> LatencyPrior:
 
     Priority:
       1. Previous Bayesian posterior (posterior.slices["window()"].mu_mean/sigma_mean)
+         — SKIPPED if bayes_reset flag is set (doc 19 §4.5)
       2. Topology-derived from graph edge (mu_prior/sigma_prior from stats pass)
     """
     onset = et.onset_delta_days
@@ -973,7 +974,14 @@ def _resolve_latency_prior(et, pf_data: dict | None) -> LatencyPrior:
     lat_sigma = et.sigma_prior
     lat_source = "topology"
 
+    # Doc 19 §4.5: when bayes_reset is set, skip warm-start from posterior
+    # and fall back to analytic-derived priors (topology-derived mu/sigma).
+    bayes_reset = False
     if isinstance(pf_data, dict):
+        latency_block = pf_data.get("latency") or {}
+        bayes_reset = bool(latency_block.get("bayes_reset"))
+
+    if isinstance(pf_data, dict) and not bayes_reset:
         posterior = pf_data.get("posterior")
         if isinstance(posterior, dict):
             slices = posterior.get("slices")
@@ -1007,16 +1015,20 @@ def _resolve_prior(pf_data: dict, topo_fingerprint: str) -> ProbabilityPrior:
 
     Priority:
       1. Warm-start from previous posterior (if structurally compatible)
+         — SKIPPED if bayes_reset flag is set (doc 19 §4.5)
       2. Moment-matched from current point estimates
       3. Uninformative Beta(1, 1)
     """
+    # Doc 19 §4.5: when bayes_reset is set, skip warm-start from posterior.
+    bayes_reset = bool((pf_data.get("latency") or {}).get("bayes_reset"))
+
     # Doc 21: read warm-start alpha/beta from posterior.slices["window()"]
     # (unified schema) or fall back to _model_state p_base, then legacy
     # top-level posterior.alpha/beta for backwards compatibility.
     posterior = pf_data.get("posterior")
     alpha_raw = None
     beta_raw = None
-    if isinstance(posterior, dict):
+    if isinstance(posterior, dict) and not bayes_reset:
         # Unified schema (doc 21): slices["window()"].alpha/beta
         slices = posterior.get("slices")
         if isinstance(slices, dict):
@@ -1126,7 +1138,7 @@ def _resolve_warm_start_extras(ev, et, pf_data: dict | None) -> None:
     else:
         return
 
-    # kappa and kappa_p from _model_state
+    # kappa from _model_state (unified, journal 30-Mar-26)
     ms = posterior.get("_model_state") or {}
     safe_eid = ev.edge_id.replace("-", "_")
 
@@ -1135,12 +1147,6 @@ def _resolve_warm_start_extras(ev, et, pf_data: dict | None) -> None:
         val = float(ms[kappa_key])
         if val > 0:
             ev.kappa_warm = val
-
-    kappa_p_key = f"kappa_p_{safe_eid}"
-    if kappa_p_key in ms:
-        val = float(ms[kappa_p_key])
-        if val > 0:
-            ev.kappa_p_warm = val
 
     # Cohort (path) latency from cohort() slice
     cs = slices.get("cohort()", {})

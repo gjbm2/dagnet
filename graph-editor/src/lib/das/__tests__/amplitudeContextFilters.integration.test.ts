@@ -489,3 +489,176 @@ describe('Amplitude Adapter Context Filter Processing', () => {
   });
 });
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// Full Pipeline: context definition → buildDslFromEdge → DAS adapter → s= param
+//
+// Tests the complete chain from a context YAML definition with type=behavioral
+// through to the final Amplitude API URL. No pre-built context_filters —
+// everything flows from the context registry lookup.
+// ═══════════════════════════════════════════════════════════════════════════════
+
+import { buildDslFromEdge } from '../buildDslFromEdge';
+import { parseConstraints } from '../../queryDSL';
+import { contextRegistry } from '../../../services/contextRegistry';
+
+describe('Full Pipeline: behavioral context → buildDslFromEdge → DAS adapter', () => {
+  let runner: DASRunner;
+  let mockHttpExecutor: MockHttpExecutor;
+  let connectionProvider: RealConnectionProvider;
+  let credentialsManager: CredentialsManager;
+
+  const variantContext = {
+    id: 'energy-variant',
+    name: 'Energy Flow Variant',
+    description: 'Which energy flow variant the user entered',
+    type: 'categorical',
+    otherPolicy: 'computed',
+    values: [
+      {
+        id: 'energy-v2',
+        label: 'Energy V2',
+        sources: {
+          amplitude: {
+            type: 'behavioral',
+            event_type: 'Flow Started',
+            filter_property: 'flowId',
+            filter_value: 'tell_us_about_your_energy',
+            time_type: 'rolling',
+            time_value: 366,
+          }
+        }
+      },
+      {
+        id: 'energy-v1',
+        label: 'Energy V1',
+        sources: {
+          amplitude: {
+            type: 'behavioral',
+            event_type: 'Flow Started',
+            filter_property: 'flowId',
+            filter_value: 'energy_switch_old',
+            time_type: 'rolling',
+            time_value: 366,
+          }
+        }
+      },
+      { id: 'other', label: 'Other' },
+    ],
+    metadata: { created_at: '30-Mar-26', version: '1.0.0', status: 'active' },
+  };
+
+  const graph = {
+    nodes: [
+      { id: 'signup', uuid: 'uuid-signup', event_id: 'household-created' },
+      { id: 'delegated', uuid: 'uuid-delegated', event_id: 'household-delegated' },
+    ],
+    edges: [
+      { id: 'signup-to-delegated', from: 'uuid-signup', to: 'uuid-delegated',
+        query: 'from(signup).to(delegated)', p: { mean: 0.5 } },
+    ],
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockHttpExecutor = new MockHttpExecutor();
+    connectionProvider = new RealConnectionProvider();
+    credentialsManager = CredentialsManager.getInstance();
+
+    vi.spyOn(credentialsManager, 'loadCredentials').mockResolvedValue({
+      success: true, source: 'mock' as any,
+    });
+    vi.spyOn(credentialsManager, 'getProviderCredentials').mockReturnValue({
+      api_key: 'test-api-key', secret_key: 'test-secret-key',
+    });
+
+    runner = new DASRunner(mockHttpExecutor, credentialsManager, connectionProvider);
+  });
+
+  it('should produce correct Amplitude behavioural segment from context definition through full pipeline', async () => {
+    // Mock context registry to return our variant context
+    vi.spyOn(contextRegistry, 'getContext').mockResolvedValue(variantContext as any);
+    vi.spyOn(contextRegistry, 'getSourceMapping').mockImplementation(
+      async (key: string, value: string, source: string) => {
+        if (key !== 'energy-variant' || source !== 'amplitude') return undefined;
+        const val = variantContext.values.find(v => v.id === value);
+        return val?.sources?.amplitude;
+      }
+    );
+
+    // Step 1: Parse constraints from DSL string (as the fetch planner would)
+    const constraints = parseConstraints('context(energy-variant:energy-v2)');
+
+    // Step 2: Build query payload via buildDslFromEdge (real code, real context registry)
+    const edge = graph.edges[0];
+    const { queryPayload } = await buildDslFromEdge(edge, graph, 'amplitude', undefined, constraints);
+
+    // Verify context_filters were populated by buildDslFromEdge
+    expect(queryPayload.context_filters).toBeDefined();
+    expect(queryPayload.context_filters!.length).toBeGreaterThan(0);
+    expect(queryPayload.context_filters![0].type).toBe('behavioral');
+
+    // Step 3: Feed through DAS runner (real connections.yaml adapter)
+    const result = await runner.execute('amplitude-prod', queryPayload, {
+      window: { start: '2025-11-22T00:00:00Z', end: '2025-11-28T23:59:59Z' },
+      edgeId: 'test-edge',
+      eventDefinitions: {},
+    });
+
+    expect(result.success).toBe(true);
+
+    // Step 4: Verify the final Amplitude API URL has the correct s= parameter
+    const url = mockHttpExecutor.lastRequest!.url;
+    const urlObj = new URL(url);
+    const segmentParam = urlObj.searchParams.get('s');
+    expect(segmentParam).not.toBeNull();
+
+    const segments = JSON.parse(segmentParam!);
+    const behavSeg = segments.find((s: any) => s.type === 'event' && s.event_type === 'Flow Started');
+
+    expect(behavSeg).toBeDefined();
+    expect(behavSeg.op).toBe('>=');
+    expect(behavSeg.value).toBe(1);
+    expect(behavSeg.time_type).toBe('rolling');
+    expect(behavSeg.time_value).toBe(366);
+    expect(behavSeg.filters).toEqual([
+      {
+        subprop_type: 'event',
+        subprop_key: 'flowId',
+        subprop_op: 'is',
+        subprop_value: ['tell_us_about_your_energy'],
+      }
+    ]);
+  });
+
+  it('should produce correct "did NOT perform" segment for computed other through full pipeline', async () => {
+    vi.spyOn(contextRegistry, 'getContext').mockResolvedValue(variantContext as any);
+
+    const constraints = parseConstraints('context(energy-variant:other)');
+    const edge = graph.edges[0];
+    const { queryPayload } = await buildDslFromEdge(edge, graph, 'amplitude', undefined, constraints);
+
+    expect(queryPayload.context_filters).toBeDefined();
+    expect(queryPayload.context_filters![0].type).toBe('behavioral');
+    expect(queryPayload.context_filters![0].behavioral_op).toBe('=');
+    expect(queryPayload.context_filters![0].behavioral_value).toBe(0);
+
+    const result = await runner.execute('amplitude-prod', queryPayload, {
+      window: { start: '2025-11-22T00:00:00Z', end: '2025-11-28T23:59:59Z' },
+      edgeId: 'test-edge',
+      eventDefinitions: {},
+    });
+
+    expect(result.success).toBe(true);
+
+    const url = mockHttpExecutor.lastRequest!.url;
+    const urlObj = new URL(url);
+    const segments = JSON.parse(urlObj.searchParams.get('s')!);
+
+    const complementSeg = segments.find((s: any) => s.type === 'event' && s.event_type === 'Flow Started');
+    expect(complementSeg).toBeDefined();
+    expect(complementSeg.op).toBe('=');
+    expect(complementSeg.value).toBe(0);
+    expect(complementSeg.filters).toEqual([]);
+  });
+});
+

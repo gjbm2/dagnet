@@ -569,20 +569,12 @@ def summarise_posteriors(
         else:
             samples = trace.posterior[p_var_name].values.flatten()
 
-        # Posterior predictive: if hierarchical Beta (kappa_p or
-        # kappa_cohort) exists, generate predictive samples that include
-        # between-cohort variation. This gives alpha/beta that reflect
-        # real-world uncertainty (both estimation + cohort variation),
-        # not just estimation precision.
-        # See journal 27-Mar-26 "hierarchical Beta on p".
-        # Between-cohort kappa from MCMC (endpoint BetaBinomial).
-        # The endpoint BB decouples rate dispersion from CDF shape,
-        # giving an honest kappa_p. See journal 29-Mar-26.
-        kappa_p_name = f"kappa_p_{safe_eid}"
-        mcmc_kappa = float(np.mean(trace.posterior[kappa_p_name].values.flatten())) if kappa_p_name in trace.posterior else None
+        # MCMC kappa: the unified per-edge κ from Phase 1, constrained
+        # by daily BetaBinomial + endpoint BB (journal 30-Mar-26).
+        kappa_name = f"kappa_{safe_eid}"
+        mcmc_kappa = float(np.mean(trace.posterior[kappa_name].values.flatten())) if kappa_name in trace.posterior else None
 
-        # Post-MCMC Williams on window trajectories for comparison.
-        # Build posterior latency dict from trace for CDF adjustment.
+        # Post-MCMC MLE on window data for diagnostic comparison.
         post_latency = {}
         mu_lat_name = f"mu_lat_{safe_eid}"
         sigma_lat_name = f"sigma_lat_{safe_eid}"
@@ -593,7 +585,7 @@ def summarise_posteriors(
                 "sigma": float(trace.posterior[sigma_lat_name].values.mean()) if sigma_lat_name in trace.posterior else (ev.latency_prior.sigma if ev.latency_prior else 0.5),
                 "onset": float(trace.posterior[onset_lat_name].values.mean()) if onset_lat_name in trace.posterior else (ev.latency_prior.onset_delta_days if ev.latency_prior else 0.0),
             }
-        williams_kappa = _estimate_cohort_kappa(
+        mle_kappa = _estimate_cohort_kappa(
             ev, et, topology, float(np.mean(samples)), diagnostics,
             obs_type_filter="window",
             phase2_frozen=post_latency,
@@ -601,18 +593,15 @@ def summarise_posteriors(
             today_date=_today,
         )
 
-        # Report both MCMC and Williams kappa side by side for
-        # diagnostic comparison. Use Williams as the effective kappa
-        # — it's the post-hoc estimate from actual between-cohort
-        # variation. MCMC kappa_p captures something different
-        # (endpoint BB dispersion within the model).
-        effective_kappa = williams_kappa if williams_kappa is not None else mcmc_kappa
+        # MCMC kappa is the source of truth. MLE is diagnostic only.
+        # See journal 30-Mar-26 "abandon external MLE".
+        effective_kappa = mcmc_kappa
 
         if effective_kappa is not None:
             mu_p_samples = samples
-            kappa_p_samples = trace.posterior[kappa_p_name].values.flatten() if kappa_p_name in trace.posterior else np.full_like(samples, effective_kappa)
-            # Use effective_kappa for the predictive (scalar, not MCMC samples)
-            kappa_arr = np.full_like(mu_p_samples, effective_kappa)
+            # Use MCMC kappa samples for the predictive (full posterior)
+            kappa_samples = trace.posterior[kappa_name].values.flatten() if kappa_name in trace.posterior else np.full_like(samples, effective_kappa)
+            kappa_arr = kappa_samples[:len(mu_p_samples)]
             a_samples = np.maximum(mu_p_samples * kappa_arr, 0.01)
             b_samples = np.maximum((1.0 - mu_p_samples) * kappa_arr, 0.01)
             predictive_samples = np.random.beta(a_samples, b_samples)
@@ -623,7 +612,7 @@ def summarise_posteriors(
             diagnostics.append(
                 f"  predictive_p {edge_id[:8]}…: mu_p={float(np.mean(mu_p_samples)):.4f}, "
                 f"kappa_mcmc={mcmc_kappa or 0:.1f}, "
-                f"kappa_williams={williams_kappa or 0:.1f}, "
+                f"kappa_mle={mle_kappa or 0:.1f}, "
                 f"kappa_used={effective_kappa:.1f}, "
                 f"pred_alpha={alpha:.1f}, pred_beta={beta_val:.1f}"
             )
@@ -662,8 +651,8 @@ def summarise_posteriors(
             )
 
         # Doc 21: extract p_window and p_cohort separately for per-slice posteriors.
-        # When hierarchical Beta exists (kappa_p), use posterior predictive samples
-        # so alpha/beta reflect between-cohort variation, not just estimation precision.
+        # When kappa exists, use posterior predictive samples so alpha/beta
+        # reflect between-day variation, not just estimation precision.
         window_alpha_val = None
         window_beta_val = None
         window_hdi_lo = None
@@ -677,8 +666,8 @@ def summarise_posteriors(
         p_window_name = f"p_window_{safe_eid}"
         p_cohort_name = f"p_cohort_{safe_eid}"
         p_single_name = f"p_{safe_eid}"
-        kappa_p_name = f"kappa_p_{safe_eid}"
-        has_kappa_p = kappa_p_name in trace.posterior
+        kappa_name_local = f"kappa_{safe_eid}"
+        has_kappa = kappa_name_local in trace.posterior
 
         def _predictive_alpha_beta(p_samples, kappa_samples=None):
             """Generate predictive samples using kappa if available; else moment-match."""
@@ -695,10 +684,10 @@ def summarise_posteriors(
                 hdi_vals = az.hdi(p_samples, hdi_prob=HDI_PROB)
                 return ab[0], ab[1], float(hdi_vals[0]), float(hdi_vals[1])
 
-        # Resolve kappa_p samples for window predictive (Phase 1 only).
+        # Resolve kappa samples for window predictive.
         kp_samples = None
-        if has_kappa_p:
-            kp_samples = trace.posterior[kappa_p_name].values.flatten()
+        if has_kappa:
+            kp_samples = trace.posterior[kappa_name_local].values.flatten()
 
         # For window: prefer p_window_recent (drift-adjusted) if available,
         # then p_window, then p (Phase 1: single p, no hierarchy).
@@ -993,14 +982,10 @@ def summarise_posteriors(
             vname = f"{prefix}_{safe_eid}"
             if vname in trace.posterior:
                 model_state[vname] = round(float(np.mean(trace.posterior[vname].values.flatten())), 4)
-        # kappa (window BetaBinomial dispersion)
+        # kappa (unified per-edge overdispersion, journal 30-Mar-26)
         kappa_name = f"kappa_{safe_eid}"
         if kappa_name in trace.posterior:
             model_state[kappa_name] = round(float(np.mean(trace.posterior[kappa_name].values.flatten())), 2)
-        # kappa_p (between-cohort p dispersion)
-        kappa_p_name = f"kappa_p_{safe_eid}"
-        if kappa_p_name in trace.posterior:
-            model_state[kappa_p_name] = round(float(np.mean(trace.posterior[kappa_p_name].values.flatten())), 2)
     # Graph-level onset hyperpriors
     for vname in ("onset_hyper_mu", "tau_onset"):
         if vname in trace.posterior:
