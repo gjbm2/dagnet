@@ -34,6 +34,65 @@ Cohort improved dramatically (459 → 86) — MLE extracts signal that
 Williams couldn't see. Window still stuck at 15 — confirmed as CDF
 maturity contamination, not statistical power.
 
+### Dual-dispersion insight: entry-day vs step-day kappa
+
+**Root cause of window kappa suppression (κ=350 vs truth=50)**:
+
+The synth gen draws p_day per (anchor_entry_day, edge). For a
+downstream edge like registered-to-success, a window observation
+on calendar day D contains people who entered the funnel on
+~10 different entry days (spread by upstream latency 7-17d).
+Each entry day had an independent p_day draw. The mixture
+averages out the per-entry-day variation by ~1/√10, giving
+effective window kappa ≈ 50 × 10 = 500. This matches the
+observed κ=350 (same order).
+
+**This is not a bug in the estimator — it's a synth gen limitation.**
+
+In reality, between-day variation has TWO independent sources:
+
+1. **Entry-day (user-cohort) kappa**: the quality of users entering
+   on a particular day. Tied to anchor entry day. Naturally
+   attenuates downstream as upstream latency mixes cohorts.
+   This is what the synth gen currently produces.
+
+2. **Step-day (nodal) kappa**: conditions at each step on the
+   calendar day of conversion (product changes, UI issues,
+   seasonality). Drawn per (calendar_day_at_from_node, edge).
+   Does NOT attenuate — fresh variation at each step.
+
+**Observation structure matches dispersion type**:
+
+| Estimator | What it measures | Why |
+|---|---|---|
+| **Cohort MLE** | Entry-day (user) dispersion | Cohort groups by entry day → preserves entry-day variation, mixes step-day variation |
+| **Window MLE** | Step-day (nodal) dispersion | Window groups by from-node arrival day → preserves step-day variation, mixes entry-day variation |
+
+**For the surprise gauge / confidence bands**: the user asks
+"how much might the next cohort's rate vary?" — that's entry-day
+dispersion → cohort kappa. Step-day variation is real but captures
+a different source of uncertainty.
+
+**Implications for estimation**:
+- cohort() slice predictive → use cohort-derived kappa (Phase 2)
+- window() slice predictive → use window-derived kappa (Phase 1)
+- No cross-pollination between the two
+- The current max(mcmc, williams) rule conflated these
+
+**Implications for synth gen**:
+- Add step-day kappa: `p_step ~ Beta(p×κ_step, (1-p)×κ_step)`
+  drawn per (calendar_day_at_from_node, edge).
+- Keep entry-day kappa (existing) as a separate parameter.
+- Test assertions: cohort MLE should recover entry-day kappa;
+  window MLE should recover step-day kappa.
+
+**Implications for test assertions**:
+- Phase 2 cohort MLE for entry-day kappa: should match
+  `kappa_sim_default` (or per-edge `kappa_entry`)
+- Phase 1 window MLE for step-day kappa: should match per-edge
+  `kappa_step` (new truth parameter)
+- These are DIFFERENT quantities and should be tested separately
+
 ### Correct CDF-adjusted likelihood (no improvement)
 
 Replaced the ad-hoc α_eff/β_eff CDF adjustment with the

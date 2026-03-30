@@ -144,6 +144,8 @@ def analyse_topology(graph_snapshot: dict) -> TopologyAnalysis:
         # User horizon override on graph edge takes priority via computeT95.
         t95_raw = latency.get("t95")
         t95_days = float(t95_raw) if t95_raw is not None and float(t95_raw) > 0 else None
+        path_t95_raw = latency.get("path_t95")
+        path_t95_days = float(path_t95_raw) if path_t95_raw is not None and float(path_t95_raw) > 0 else None
 
         edges[edge_id] = EdgeTopology(
             edge_id=edge_id,
@@ -157,6 +159,7 @@ def analyse_topology(graph_snapshot: dict) -> TopologyAnalysis:
             mu_prior=mu_prior,
             sigma_prior=sigma_prior,
             t95_days=t95_days,
+            path_t95_days=path_t95_days,
         )
 
     # 5. Topological sort (BFS from anchor)

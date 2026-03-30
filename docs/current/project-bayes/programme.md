@@ -62,17 +62,32 @@ synth context data fix (`emit_context_slices` truth flag).
 **Open issues**:
 
 *Model quality — NEXT PRIORITIES*:
-- **Path dispersion estimation broken** — cohort Williams gives
-  kappa=459 (stdev ≈ 2%) when edge Williams gives 14 (stdev ≈ 10%).
-  Path should be ≥ edge. Root cause: small cohort denominators
-  (median n=19) inflate Binomial sampling variance, leaving near-zero
-  between-cohort variance. The `max(mcmc, williams)` kappa rule
-  (inference.py:424) was not requested — revert to side-by-side.
-  See doc 25, journal 29-Mar-26.
+- **Dispersion estimation: dual-kappa model** — between-day
+  variation has two independent sources: (1) entry-day (user-cohort)
+  kappa — quality of users entering on a given day, attenuates
+  downstream as upstream latency mixes cohorts; (2) step-day
+  (nodal) kappa — conditions at each step on the calendar day of
+  conversion, does NOT attenuate. Cohort MLE measures #1, window
+  MLE measures #2. Currently conflated. See journal 30-Mar-26.
+  - **Synth gen**: add step-day kappa (`kappa_step` in truth,
+    drawn per calendar_day_at_from_node × edge). Current synth
+    gen only has entry-day kappa → window dispersion artificially
+    suppressed for downstream edges.
+  - **Estimator**: replaced Williams with BetaBinomial MLE
+    (ρ-parameterised, recency-weighted, CDF-adjusted via
+    quadrature). Working for cohort at 10× traffic (κ=49 vs
+    truth 50). Window needs step-day kappa in synth gen to test.
+  - **Cohort path CDF wrong**: uses topology defaults (onset=0)
+    instead of posterior. Immature cohorts pass F≥0.9 filter.
+    Needs: use Phase 1/2 posterior path CDF.
+  - **Test assertions**: Phase 2 cohort MLE should recover
+    entry-day kappa; Phase 1 window MLE should recover step-day
+    kappa. Test separately.
 - **Path latency posteriors too tight** — cohort onset=16.5±0.2
   (±1.2%), sigma=2.87±0.047 (±1.6%). Should be ≥ RSS of edge
-  uncertainties. Same root cause: small-denominator cohort
-  trajectories over-constrain path parameters. See journal 29-Mar-26.
+  uncertainties. Likely same cohort path CDF issue — immature
+  cohort trajectories over-constrain path parameters.
+  See journal 29-Mar-26.
 - **Onset-mu correlation** — corr ≈ -0.99 on short-latency first
   edges. 2/10 synth failures, requires warm-start for prod
   del-to-reg. Structural identifiability issue in shifted-lognormal

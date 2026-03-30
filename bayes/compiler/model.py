@@ -844,6 +844,33 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
                 )
 
             cohort_latency_vars[edge_id] = (onset_cohort, mu_cohort, sigma_cohort)
+
+            # Path-level t95 soft constraint (same role as edge t95 in
+            # Phase 1). Prevents onset_cohort from drifting up and
+            # sigma_cohort from inflating — the combination produces
+            # absurdly long path_t95 (>100d) that doesn't match the data.
+            # The user-configured or stats-pass-derived path_t95 acts as
+            # a prior on the path's 95th percentile timing.
+            # See journal 29-Mar-26 "cohort onset drift".
+            if et.path_t95_days is not None:
+                path_t95_analytic = float(et.path_t95_days)
+                path_t95_model = onset_cohort + pt.exp(mu_cohort + Z_95 * sigma_cohort)
+                # Strength from settings (default 0.1 = moderately strong).
+                # Window t95 uses 0.2 but also has onset obs anchoring the
+                # left end. Path has no onset obs, so needs tighter t95.
+                path_t95_strength = features.get("path_t95_prior_strength", 0.1)
+                sigma_path_t95 = max(path_t95_analytic * path_t95_strength, 2.0)
+                pm.Normal(
+                    f"path_t95_obs_{safe_id}",
+                    mu=path_t95_model,
+                    sigma=sigma_path_t95,
+                    observed=np.float64(path_t95_analytic),
+                )
+                diagnostics.append(
+                    f"  path_t95: {edge_id[:8]}… analytic={path_t95_analytic:.1f}d "
+                    f"(σ_path_t95={sigma_path_t95:.1f}d) → soft constraint"
+                )
+
             if is_phase2:
                 if cw is None:
                     diagnostics.append(

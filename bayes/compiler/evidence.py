@@ -593,6 +593,12 @@ def _build_trajectories_for_obs_type(
                 cumulative_y.append(y)
                 cumulative_x.append(x)
 
+            # Preserve the unfiltered max age for maturity calculations
+            # (e.g. dispersion estimation).  The zero-count filter below
+            # may collapse post-maturation points, making retrieval_ages[-1]
+            # appear younger than the actual latest retrieval.
+            unfiltered_max_age = retrieval_ages[-1] if retrieval_ages else 0.0
+
             # Merge consecutive zero-count intervals ONLY after the curve
             # has started maturing (after first non-zero y). Pre-onset
             # zero-count ages are preserved — they constrain onset location.
@@ -632,6 +638,7 @@ def _build_trajectories_for_obs_type(
                     cumulative_y=cumulative_y,
                     cumulative_x=cumulative_x,
                     path_edge_ids=et.path_edge_ids,
+                    max_retrieval_age=unfiltered_max_age,
                 ))
             elif len(retrieval_ages) == 1:
                 _append_single_obs(

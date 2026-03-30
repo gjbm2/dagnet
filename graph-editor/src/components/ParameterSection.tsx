@@ -432,6 +432,159 @@ export function ParameterSection({
         </div>
       )}
 
+      {/* §17.1 zone 1b: Latency input priors (onset, t95, path_t95).
+          These are model INPUTS — user-configurable priors that constrain
+          the Bayesian and analytic fits. Shown above the cards so the
+          input→model→output flow is visually clear. Always visible when
+          latency tracking is enabled, regardless of model_vars. */}
+      {showLatency && (param?.latency?.latency_parameter === true) && (
+        <div style={{ marginBottom: '16px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+              {/* Onset delay (days) */}
+              <AutomatableField
+                label=""
+                value={param?.latency?.onset_delta_days ?? ''}
+                overridden={param?.latency?.onset_delta_days_overridden || false}
+                onClearOverride={() => {
+                  onUpdate({
+                    latency: {
+                      ...param?.latency,
+                      onset_delta_days_overridden: false,
+                    },
+                  });
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <label className="parameter-section-label" style={{ minWidth: '65px' }}>Onset</label>
+                  <input
+                    type="number"
+                    value={localOnsetDeltaDays}
+                    onChange={(e) => setLocalOnsetDeltaDays(e.target.value)}
+                    onBlur={() => {
+                      const value = parseFloat(localOnsetDeltaDays);
+                      const onsetRaw = isNaN(value) || value < 0 ? undefined : value;
+                      const onset_delta_days =
+                        onsetRaw === undefined
+                          ? undefined
+                          : roundToDecimalPlaces(onsetRaw, 0);
+                      setLocalOnsetDeltaDays(onset_delta_days === undefined ? '' : String(onset_delta_days));
+                      onUpdate({
+                        latency: {
+                          ...param?.latency,
+                          onset_delta_days,
+                          onset_delta_days_overridden: true,
+                        },
+                      });
+                    }}
+                    min={0}
+                    step={1}
+                    disabled={disabled}
+                    className="parameter-input"
+                    style={{ width: '70px' }}
+                    placeholder="(computed)"
+                    title="Onset delay before conversions begin — prior for Bayesian fit, constraint for analytic fit"
+                  />
+                  <span style={{ fontSize: '12px', color: '#6B7280' }}>days</span>
+                </div>
+              </AutomatableField>
+
+              {/* Edge t95 */}
+              <AutomatableField
+                label=""
+                value={param?.latency?.t95 ?? ''}
+                overridden={param?.latency?.t95_overridden || false}
+                onClearOverride={() => {
+                  onUpdate({
+                    latency: {
+                      ...param?.latency,
+                      t95_overridden: false
+                    }
+                  });
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <label className="parameter-section-label" style={{ minWidth: '65px' }}>Edge t95</label>
+                  <input
+                    type="number"
+                    value={localT95}
+                    onChange={(e) => setLocalT95(e.target.value)}
+                    onBlur={() => {
+                      const value = parseFloat(localT95);
+                      const t95Raw = isNaN(value) || value < 0 ? undefined : value;
+                      const t95 =
+                        t95Raw === undefined
+                          ? undefined
+                          : roundToDecimalPlaces(t95Raw, LATENCY_HORIZON_DECIMAL_PLACES);
+                      setLocalT95(t95 === undefined ? '' : String(t95));
+                      onUpdate({
+                        latency: {
+                          ...param?.latency,
+                          t95,
+                          t95_overridden: true,
+                        }
+                      });
+                    }}
+                    min={0}
+                    step={0.01}
+                    disabled={disabled}
+                    className="parameter-input"
+                    style={{ width: '70px' }}
+                    placeholder="(computed)"
+                    title="95th percentile lag in days — prior for Bayesian fit, constraint for analytic fit"
+                  />
+                  <span style={{ fontSize: '12px', color: '#6B7280' }}>days</span>
+                </div>
+              </AutomatableField>
+
+              {/* Path t95 */}
+              <AutomatableField
+                label=""
+                value={param?.latency?.path_t95 ?? ''}
+                overridden={param?.latency?.path_t95_overridden || false}
+                onClearOverride={() => {
+                  onUpdate({
+                    latency: {
+                      ...param?.latency,
+                      path_t95_overridden: false
+                    }
+                  });
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <label className="parameter-section-label" style={{ minWidth: '65px' }}>Path t95</label>
+                  <input
+                    type="number"
+                    value={localPathT95}
+                    onChange={(e) => setLocalPathT95(e.target.value)}
+                    onBlur={() => {
+                      const value = parseFloat(localPathT95);
+                      const pathT95Raw = isNaN(value) || value < 0 ? undefined : value;
+                      const path_t95 =
+                        pathT95Raw === undefined
+                          ? undefined
+                          : roundToDecimalPlaces(pathT95Raw, LATENCY_HORIZON_DECIMAL_PLACES);
+                      setLocalPathT95(path_t95 === undefined ? '' : String(path_t95));
+                      onUpdate({
+                        latency: {
+                          ...param?.latency,
+                          path_t95,
+                          path_t95_overridden: true,
+                        }
+                      });
+                    }}
+                    min={0}
+                    step={0.01}
+                    disabled={disabled}
+                    className="parameter-input"
+                    style={{ width: '70px' }}
+                    placeholder="(computed)"
+                    title="Cumulative path t95 from anchor — prior for Bayesian cohort fit"
+                  />
+                  <span style={{ fontSize: '12px', color: '#6B7280' }}>days</span>
+                </div>
+              </AutomatableField>
+        </div>
+      )}
+
       {/* §17.1 zone 2: Model Vars Cards — three-card source layout */}
       {hasModelVars && (
         <ModelVarsCards
@@ -562,168 +715,17 @@ export function ParameterSection({
         </>
       )}
       
-      {/* Legacy latency fields — only in non-model_vars mode */}
-      {showLatency && !hasModelVars && (param?.latency?.latency_parameter === true) && (
-        <div style={{ marginBottom: '16px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
-            <>
-              {/* Edge t95 */}
-              <AutomatableField
-                label=""
-                value={param?.latency?.t95 ?? ''}
-                overridden={param?.latency?.t95_overridden || false}
-                onClearOverride={() => {
-                  onUpdate({
-                    latency: {
-                      ...param?.latency,
-                      t95_overridden: false
-                    }
-                  });
-                }}
-              >
-                <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                  <label className="parameter-section-label" style={{ minWidth: '65px' }}>Edge t95</label>
-                  <input
-                    type="number"
-                    value={localT95}
-                    onChange={(e) => setLocalT95(e.target.value)}
-                    onBlur={() => {
-                      const value = parseFloat(localT95);
-                      const t95Raw = isNaN(value) || value < 0 ? undefined : value;
-                      const t95 =
-                        t95Raw === undefined
-                          ? undefined
-                          : roundToDecimalPlaces(t95Raw, LATENCY_HORIZON_DECIMAL_PLACES);
-                      setLocalT95(t95 === undefined ? '' : String(t95));
-                      onUpdate({
-                        latency: {
-                          ...param?.latency,
-                          t95,
-                          t95_overridden: true,
-                        }
-                      });
-                    }}
-                    min={0}
-                    step={0.01}
-                    disabled={disabled}
-                    className="parameter-input"
-                    style={{ width: '70px' }}
-                    placeholder="(computed)"
-                    title="95th percentile lag in days for this edge (computed from historical data or set manually)"
-                  />
-                  <span style={{ fontSize: '12px', color: '#6B7280' }}>days</span>
-                </div>
-              </AutomatableField>
-
-              {/* Path t95 */}
-              <AutomatableField
-                label=""
-                value={param?.latency?.path_t95 ?? ''}
-                overridden={param?.latency?.path_t95_overridden || false}
-                onClearOverride={() => {
-                  onUpdate({
-                    latency: {
-                      ...param?.latency,
-                      path_t95_overridden: false
-                    }
-                  });
-                }}
-              >
-                <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                  <label className="parameter-section-label" style={{ minWidth: '65px' }}>Path t95</label>
-                  <input
-                    type="number"
-                    value={localPathT95}
-                    onChange={(e) => setLocalPathT95(e.target.value)}
-                    onBlur={() => {
-                      const value = parseFloat(localPathT95);
-                      const pathT95Raw = isNaN(value) || value < 0 ? undefined : value;
-                      const path_t95 =
-                        pathT95Raw === undefined
-                          ? undefined
-                          : roundToDecimalPlaces(pathT95Raw, LATENCY_HORIZON_DECIMAL_PLACES);
-                      setLocalPathT95(path_t95 === undefined ? '' : String(path_t95));
-                      onUpdate({
-                        latency: {
-                          ...param?.latency,
-                          path_t95,
-                          path_t95_overridden: true,
-                        }
-                      });
-                    }}
-                    min={0}
-                    step={0.01}
-                    disabled={disabled}
-                    className="parameter-input"
-                    style={{ width: '70px' }}
-                    placeholder="(computed)"
-                    title="Cumulative path latency from anchor to this edge (computed from topo pass or set manually)"
-                  />
-                  <span style={{ fontSize: '12px', color: '#6B7280' }}>days</span>
-                </div>
-              </AutomatableField>
-
-              {/* Onset delay (days) */}
-              <AutomatableField
-                label=""
-                value={param?.latency?.onset_delta_days ?? ''}
-                overridden={param?.latency?.onset_delta_days_overridden || false}
-                onClearOverride={() => {
-                  onUpdate({
-                    latency: {
-                      ...param?.latency,
-                      onset_delta_days_overridden: false,
-                    },
-                  });
-                }}
-              >
-                <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                  <label className="parameter-section-label" style={{ minWidth: '65px' }}>Onset</label>
-                  <input
-                    type="number"
-                    value={localOnsetDeltaDays}
-                    onChange={(e) => setLocalOnsetDeltaDays(e.target.value)}
-                    onBlur={() => {
-                      const value = parseFloat(localOnsetDeltaDays);
-                      const onsetRaw = isNaN(value) || value < 0 ? undefined : value;
-                      const onset_delta_days =
-                        onsetRaw === undefined
-                          ? undefined
-                          : roundToDecimalPlaces(onsetRaw, 0);
-                      setLocalOnsetDeltaDays(onset_delta_days === undefined ? '' : String(onset_delta_days));
-                      onUpdate({
-                        latency: {
-                          ...param?.latency,
-                          onset_delta_days,
-                          onset_delta_days_overridden: true,
-                        },
-                      });
-                    }}
-                    min={0}
-                    step={1}
-                    disabled={disabled}
-                    className="parameter-input"
-                    style={{ width: '70px' }}
-                    placeholder="(computed)"
-                    title="Onset delay before conversions begin, derived from the first non-zero histogram bin (window slices only) or set manually"
-                  />
-                  <span style={{ fontSize: '12px', color: '#6B7280' }}>days</span>
-                </div>
-              </AutomatableField>
-
-              {/* Latency posterior indicator badge */}
-              {param?.latency?.posterior && (
-                <div style={{ marginTop: '4px' }}>
-                  <PosteriorIndicator
-                    posterior={param.latency.posterior as any}
-                    retrievedAt={param.evidence?.retrieved_at}
-                    theme={theme === 'dark' ? 'dark' : 'light'}
-                    activeSource={activeModelSource}
-                    t95={(param.latency as any).promoted_t95 ?? param.latency.t95}
-                    pathT95={(param.latency as any).promoted_path_t95 ?? param.latency.path_t95}
-                  />
-                </div>
-              )}
-            </>
+      {/* Legacy posterior indicator — only in non-model_vars mode */}
+      {showLatency && !hasModelVars && (param?.latency?.latency_parameter === true) && param?.latency?.posterior && (
+        <div style={{ marginBottom: '16px' }}>
+          <PosteriorIndicator
+            posterior={param.latency.posterior as any}
+            retrievedAt={param.evidence?.retrieved_at}
+            theme={theme === 'dark' ? 'dark' : 'light'}
+            activeSource={activeModelSource}
+            t95={(param.latency as any).promoted_t95 ?? param.latency.t95}
+            pathT95={(param.latency as any).promoted_path_t95 ?? param.latency.path_t95}
+          />
         </div>
       )}
 

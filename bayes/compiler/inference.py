@@ -189,34 +189,61 @@ def _estimate_cohort_kappa(
                 mu = ev.latency_prior.mu
                 sigma = ev.latency_prior.sigma
         else:
-            # Cohort: path CDF from topology (FW-composed from posteriors)
-            if hasattr(et, 'path_latency') and et.path_latency:
-                onset = et.path_latency.path_delta
-                mu = et.path_latency.path_mu
-                sigma = et.path_latency.path_sigma
-            elif ev.latency_prior:
-                onset = ev.latency_prior.onset_delta_days or 0.0
-                mu = ev.latency_prior.mu
-                sigma = ev.latency_prior.sigma
+            # Cohort: path CDF = FW composition of all edges along the
+            # path from anchor to this edge's target node.
+            # Use posterior per-edge latency (from phase2_frozen) when
+            # available; fall back to topology path_latency.
+            path_composed = False
+            if phase2_frozen and hasattr(et, 'path_edge_ids') and et.path_edge_ids:
+                from .completeness import fw_chain
+                components = []
+                path_onset = 0.0
+                for pid in et.path_edge_ids:
+                    pf = phase2_frozen.get(pid, {})
+                    e_onset = pf.get("onset", 0.0)
+                    e_mu = pf.get("mu", 0.0)
+                    e_sigma = pf.get("sigma", 0.01)
+                    path_onset += e_onset
+                    if e_sigma > 0.001:
+                        components.append((e_mu, e_sigma))
+                if components:
+                    fw = fw_chain(components)
+                    onset = path_onset
+                    mu = fw.mu
+                    sigma = fw.sigma
+                    path_composed = True
+            if not path_composed:
+                if hasattr(et, 'path_latency') and et.path_latency:
+                    onset = et.path_latency.path_delta
+                    mu = et.path_latency.path_mu
+                    sigma = et.path_latency.path_sigma
+                elif ev.latency_prior:
+                    onset = ev.latency_prior.onset_delta_days or 0.0
+                    mu = ev.latency_prior.mu
+                    sigma = ev.latency_prior.sigma
 
-    # Collect per-anchor-day (k, n) pairs from BOTH trajectories
-    # (endpoint y/x) and daily obs (k/n).  Together they cover
-    # nearly all anchor days.
+    # Collect one (k, n) per anchor day — the MOST MATURE observation.
+    #
+    # For dispersion estimation we want the final rate per anchor day,
+    # not the growth trajectory.  Trajectories show how k/n evolves
+    # with retrieval age (useful for CDF fitting), but for kappa we
+    # only need one settled rate per day.
+    #
+    # Strategy: for each anchor day, keep the observation with the
+    # highest F (most mature).  Daily obs and trajectory endpoints
+    # are both candidates.  Prefer the more mature one.
     #
     # Filters:
-    #   - denominator >= 3 (too few people to measure a rate)
-    #   - F >= DISPERSION_F_THRESHOLD (CDF adjustment too noisy)
+    #   - denominator >= 3
+    #   - F >= DISPERSION_F_THRESHOLD
     # Weighting:
     #   - recency (halflife decay — consistent with model)
     import math as _math
     _ln2 = _math.log(2)
-    k_values = []
-    n_values = []
-    f_values = []
-    recency_weights = []
+    # best_by_day: date → (k, n, f, age)
+    best_by_day: dict[str, tuple] = {}
     n_skipped_x = 0
     n_skipped_f = 0
-    seen_dates = set()
 
     def _recency_weight(date_str):
         if not date_str or not today_date:
@@ -235,7 +262,32 @@ def _estimate_cohort_kappa(
         except (ValueError, TypeError):
             return 1.0
 
+    def _consider(date_key, k_val, n_val, age_val, f_val):
+        """Keep the most mature observation per anchor day."""
+        if date_key is None:
+            return
+        prev = best_by_day.get(date_key)
+        if prev is None or f_val > prev[2]:
+            best_by_day[date_key] = (k_val, n_val, f_val, age_val)
+
     for c_obs in ev.cohort_obs:
+        # Daily obs: one per anchor day at a single retrieval age
+        if c_obs.daily and obs_type_filter in getattr(c_obs, 'slice_dsl', ''):
+            for d_obs in c_obs.daily:
+                d_key = getattr(d_obs, 'date', None)
+                if d_obs.n < 3:
+                    n_skipped_x += 1
+                    continue
+                age = getattr(d_obs, 'age_days', 0) or 0
+                f_age = shifted_lognormal_cdf(age, onset, mu, sigma)
+                _consider(d_key, min(d_obs.k, d_obs.n), d_obs.n, age, f_age)
+
+        # Trajectory endpoints: use the LAST retrieval point.
+        # For F calculation, use max_retrieval_age (the true latest
+        # observation age before zero-count filtering collapsed
+        # post-maturation points).  The (k, n) values are correct
+        # at the filtered endpoint — y stopped changing — but the
+        # filtered age underestimates maturity.
         for traj in c_obs.trajectories:
             if traj.obs_type != obs_type_filter:
                 continue
@@ -245,40 +297,26 @@ def _estimate_cohort_kappa(
             if not cx or len(cx) == 0 or cx[-1] < 3:
                 n_skipped_x += 1
                 continue
-            x_final = cx[-1]
-            y_final = min(traj.cumulative_y[-1] if traj.cumulative_y else 0, x_final)
-            age_final = traj.retrieval_ages[-1]
-            f_age = shifted_lognormal_cdf(age_final, onset, mu, sigma)
-            if f_age < DISPERSION_F_THRESHOLD:
-                n_skipped_f += 1
-                continue
-            k_values.append(y_final)
-            n_values.append(x_final)
-            f_values.append(f_age)
-            recency_weights.append(
-                _recency_weight(getattr(traj, 'date', None)))
-            if hasattr(traj, 'date') and traj.date:
-                seen_dates.add(traj.date)
+            # Use unfiltered max age for maturity; fall back to
+            # filtered endpoint age if not available.
+            age_for_f = getattr(traj, 'max_retrieval_age', None) or traj.retrieval_ages[-1]
+            f_age = shifted_lognormal_cdf(age_for_f, onset, mu, sigma)
+            y_final = min(traj.cumulative_y[-1] if traj.cumulative_y else 0, cx[-1])
+            _consider(getattr(traj, 'date', None), y_final, cx[-1], age_for_f, f_age)
 
-        if c_obs.daily and obs_type_filter in getattr(c_obs, 'slice_dsl', ''):
-            for d_obs in c_obs.daily:
-                d_key = getattr(d_obs, 'date', None)
-                if d_key and d_key in seen_dates:
-                    continue
-                if d_obs.n < 3:
-                    n_skipped_x += 1
-                    continue
-                age = getattr(d_obs, 'age_days', 0) or 0
-                f_age = shifted_lognormal_cdf(age, onset, mu, sigma)
-                if f_age < DISPERSION_F_THRESHOLD:
-                    n_skipped_f += 1
-                    continue
-                k_values.append(min(d_obs.k, d_obs.n))
-                n_values.append(d_obs.n)
-                f_values.append(f_age)
-                recency_weights.append(_recency_weight(d_key))
-                if d_key:
-                    seen_dates.add(d_key)
+    # Apply F threshold and collect survivors
+    k_values = []
+    n_values = []
+    f_values = []
+    recency_weights = []
+    for date_key, (k_val, n_val, f_val, age_val) in best_by_day.items():
+        if f_val < DISPERSION_F_THRESHOLD:
+            n_skipped_f += 1
+            continue
+        k_values.append(k_val)
+        n_values.append(n_val)
+        f_values.append(f_val)
+        recency_weights.append(_recency_weight(date_key))
 
     if len(k_values) < 5:
         diagnostics.append(
@@ -447,6 +485,30 @@ def summarise_posteriors(
 
     edge_var_names = metadata.get("edge_var_names", {})
     rhat_ds = az.rhat(trace)
+
+    # Build posterior latency dict for ALL edges — used by both
+    # window and cohort kappa estimation (CDF adjustment).
+    _all_post_latency: dict[str, dict] = {}
+    for _eid in topology.edges:
+        _seid = _safe_var_name(_eid)
+        _mu_name = f"mu_lat_{_seid}"
+        _sigma_name = f"sigma_lat_{_seid}"
+        _onset_name = f"onset_{_seid}"
+        if _mu_name in trace.posterior:
+            _all_post_latency[_eid] = {
+                "mu": float(trace.posterior[_mu_name].values.mean()),
+                "sigma": float(trace.posterior[_sigma_name].values.mean()) if _sigma_name in trace.posterior else 0.5,
+                "onset": float(trace.posterior[_onset_name].values.mean()) if _onset_name in trace.posterior else 0.0,
+            }
+        else:
+            # No latent latency for this edge — use evidence prior if available
+            _ev = evidence.edges.get(_eid)
+            if _ev and _ev.latency_prior:
+                _all_post_latency[_eid] = {
+                    "mu": _ev.latency_prior.mu,
+                    "sigma": _ev.latency_prior.sigma,
+                    "onset": _ev.latency_prior.onset_delta_days or 0.0,
+                }
     ess_ds = az.ess(trace)
 
     posteriors: list[PosteriorSummary] = []
@@ -649,6 +711,7 @@ def summarise_posteriors(
             # data, not proxied from window kappa. See journal 28-Mar-26.
             cohort_kappa_empirical = _estimate_cohort_kappa(
                 ev, et, topology, float(np.mean(c_samples)), diagnostics,
+                phase2_frozen=_all_post_latency,
                 recency_half_life=_recency_hl,
                 today_date=_today,
             )

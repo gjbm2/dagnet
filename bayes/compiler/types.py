@@ -72,6 +72,7 @@ class EdgeTopology:
     mu_prior: float = 0.0         # derived from lag summaries
     sigma_prior: float = 0.5      # derived from lag summaries
     t95_days: float | None = None  # from stats pass: onset + exp(mu + 1.645*sigma)
+    path_t95_days: float | None = None  # cumulative path horizon from topo pass
 
     # Bayesian prior reset flag (doc 19): when True, compiler ignores
     # previous bayesian posterior and falls back to analytic-derived priors.
@@ -166,8 +167,9 @@ class CohortDailyTrajectory:
     date: str
     n: int                                  # denominator: x for window, a for cohort
     obs_type: str = "cohort"                # "window" | "cohort"
-    retrieval_ages: list[float] = field(default_factory=list)   # sorted ascending
+    retrieval_ages: list[float] = field(default_factory=list)   # sorted ascending (post-filter)
     cumulative_y: list[int] = field(default_factory=list)       # monotonised target counts
+    max_retrieval_age: float | None = None  # unfiltered max age (for maturity calc)
     cumulative_x: list[int] = field(default_factory=list)       # from-node arrivals per age (cohort)
     path_edge_ids: list[str] = field(default_factory=list)      # edges on path (for p_path)
     recency_weight: float = 1.0     # exp(-ln2 * age / half_life), 1.0 = most recent

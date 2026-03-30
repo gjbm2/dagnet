@@ -695,7 +695,8 @@ def derive_truth_from_graph(graph_snapshot: dict, topology) -> dict:
 DEFAULT_SIM_CONFIG = {
     "mean_daily_traffic": 5000,
     "n_days": 100,
-    "kappa_sim_default": 50.0,     # moderate overdispersion (Beta-Binomial)
+    "kappa_sim_default": 50.0,     # entry-day (user-cohort) overdispersion
+    "kappa_step_default": 50.0,    # step-day (nodal) overdispersion — drawn per (calendar_day_at_from_node, edge)
     "failure_rate": 0.05,          # 5% of fetch nights fail
     "drift_sigma": 0.0,           # random-walk drift disabled by default
     "drift_rate": 0.0,            # deterministic linear drift (logit/day), e.g. -0.01 = p decreases
@@ -893,19 +894,38 @@ def simulate_graph(
         mu_user = base_mu + mu_offset
         return p_ctx, mu_user
 
-    # Per-day Beta draws for between-day overdispersion.
-    # kappa_sim controls how much the daily conversion rate varies around
-    # its expected value. The draw is per (day, edge, context-combo) so
-    # all users sharing the same day+edge+context get the same p.
-    # This produces genuine between-day variation that the model's κ
-    # can detect — unlike per-user draws which average out at n≫1.
+    # Two independent sources of between-day overdispersion:
+    #
+    # 1. Entry-day (user-cohort) kappa: drawn per (entry_day, edge).
+    #    Represents user quality variation by entry day. Visible in
+    #    cohort observations; attenuates in window for downstream edges
+    #    (upstream latency mixes entry days).
+    #
+    # 2. Step-day (nodal) kappa: drawn per (calendar_day_at_from_node,
+    #    edge). Represents conditions at each step on the conversion day.
+    #    Visible in window observations; attenuates in cohort (cohort
+    #    members convert at the step on different days).
+    #
+    # Effective p = entry_day_p × (step_day_p / p_expected)
+    # This composes both deviations multiplicatively.
     day_kappa = sim_config.get("kappa_sim_default", 100.0)
+    step_kappa = sim_config.get("kappa_step_default", day_kappa)
 
-    def _draw_day_p(p_expected: float) -> float:
+    def _draw_day_p(p_expected: float, kappa: float) -> float:
         """Draw a single day-level p from Beta(p*kappa, (1-p)*kappa)."""
-        alpha = max(p_expected * day_kappa, 0.001)
-        beta_param = max((1.0 - p_expected) * day_kappa, 0.001)
+        alpha = max(p_expected * kappa, 0.001)
+        beta_param = max((1.0 - p_expected) * kappa, 0.001)
         return float(rng.beta(alpha, beta_param))
+
+    # Step-day cache: (calendar_day, edge_id) → p_step
+    _step_day_cache: dict[tuple[int, str], float] = {}
+
+    def _get_step_day_p(calendar_day: int, edge_id: str, p_expected: float) -> float:
+        """Return the step-day p for this edge on this calendar day (cached)."""
+        key = (calendar_day, edge_id)
+        if key not in _step_day_cache:
+            _step_day_cache[key] = _draw_day_p(p_expected, step_kappa)
+        return _step_day_cache[key]
 
     # --- Person-level simulation ---
     # Runs for total_sim_days (burn_in + n_days). The first burn_in_days
@@ -952,15 +972,14 @@ def simulate_graph(
 
         def _get_day_p(edge_id: str, user_contexts: dict[str, str],
                        base_p: float, drift_offset: float) -> float:
-            """Return the day-level p for this edge+context combo (cached per day)."""
+            """Return the entry-day p for this edge+context combo (cached per day)."""
             ctx_key = tuple(sorted(user_contexts.items()))
             cache_key = (edge_id, ctx_key)
             if cache_key not in _day_p_cache:
-                # Get the expected p (after context effects + drift, before kappa draw)
                 p_expected, _ = _compute_user_params(
                     user_contexts, edge_id, base_p, 0.0, drift_offset,
                 )
-                _day_p_cache[cache_key] = _draw_day_p(p_expected)
+                _day_p_cache[cache_key] = _draw_day_p(p_expected, day_kappa)
             return _day_p_cache[cache_key]
 
         # Simulate each person
@@ -995,6 +1014,8 @@ def simulate_graph(
                 topology, adj_out, edge_params, user_probs,
                 edge_to_bg, rng,
                 user_mus=user_mus,
+                day_idx=day_idx,
+                step_day_fn=_get_step_day_p,
             )
             day_arrivals.append(person)
 
@@ -1159,13 +1180,14 @@ def _traverse(
     edge_to_bg: dict[str, str],
     rng: np.random.Generator,
     user_mus: dict[str, float] | None = None,
+    day_idx: int = 0,
+    step_day_fn=None,
 ) -> None:
     """Recursively traverse the DAG for one person.
 
     Uses day_probs (per-user effective probabilities after context +
-    drift + user Beta draw) for conversion draws, and edge_params for
-    base latency. If user_mus is provided, overrides mu per edge
-    (context-adjusted).
+    drift + entry-day Beta draw) for conversion draws, modulated by
+    step_day_fn if provided (step-day nodal variation).
     """
     person[node_id] = t_current
 
@@ -1184,11 +1206,25 @@ def _traverse(
             solo_edges.append(eid)
 
     # Branch groups: Multinomial draw — one branch per person
+    cal_day = day_idx + int(t_current)  # calendar day at this node
+
     for _bg_id, siblings in bg_grouped.items():
         evented = [eid for eid in siblings if topology.edges[eid].param_id]
         unevented = [eid for eid in siblings if not topology.edges[eid].param_id]
 
-        evented_probs = [day_probs[eid] for eid in evented]
+        # Compose entry-day p with step-day p (multiplicative).
+        # entry_p × (step_p / p_expected) gives the effective p.
+        evented_probs = []
+        for eid in evented:
+            p_entry = day_probs[eid]
+            if step_day_fn is not None:
+                p_expected = edge_params[eid]["p"]
+                p_step = step_day_fn(cal_day, eid, p_expected)
+                p_eff = min(max(p_entry * (p_step / p_expected), 0.001), 0.999)
+            else:
+                p_eff = p_entry
+            evented_probs.append(p_eff)
+
         dropout = max(0.0, 1.0 - sum(evented_probs))
 
         all_probs = evented_probs + [dropout]
@@ -1203,19 +1239,27 @@ def _traverse(
             chosen_eid = evented[choice]
             _take_edge(chosen_eid, t_current, person, topology,
                        adj_out, edge_params, day_probs, edge_to_bg, rng,
-                       user_mus=user_mus)
+                       user_mus=user_mus, day_idx=day_idx,
+                       step_day_fn=step_day_fn)
         elif unevented:
             chosen_eid = rng.choice(unevented)
             et = topology.edges[chosen_eid]
             person[et.to_node] = t_current
 
-    # Solo edges: independent Bernoulli
+    # Solo edges: independent Bernoulli (with step-day modulation)
     for eid in solo_edges:
-        p = day_probs[eid]
-        if rng.random() < p:
+        p_entry = day_probs[eid]
+        if step_day_fn is not None:
+            p_expected = edge_params[eid]["p"]
+            p_step = step_day_fn(cal_day, eid, p_expected)
+            p_eff = min(max(p_entry * (p_step / p_expected), 0.001), 0.999)
+        else:
+            p_eff = p_entry
+        if rng.random() < p_eff:
             _take_edge(eid, t_current, person, topology,
                        adj_out, edge_params, day_probs, edge_to_bg, rng,
-                       user_mus=user_mus)
+                       user_mus=user_mus, day_idx=day_idx,
+                       step_day_fn=step_day_fn)
 
 
 def _take_edge(
@@ -1225,12 +1269,13 @@ def _take_edge(
     topology,
     adj_out, edge_params, day_probs, edge_to_bg, rng,
     user_mus: dict[str, float] | None = None,
+    day_idx: int = 0,
+    step_day_fn=None,
 ) -> None:
     """Person takes an edge: draw latency, record arrival, recurse.
 
     Records both node arrival (node_id → t) and edge traversal
     (edge:<edge_id> → t_arrival) so per-edge counts work at joins.
-    If user_mus is provided, uses per-user context-adjusted mu.
     """
     et = topology.edges[edge_id]
     params = edge_params[edge_id]
@@ -1247,7 +1292,8 @@ def _take_edge(
     person[f"edge:{edge_id}"] = t_arrival
     _traverse(et.to_node, t_arrival, person, topology,
               adj_out, edge_params, day_probs, edge_to_bg, rng,
-              user_mus=user_mus)
+              user_mus=user_mus, day_idx=day_idx,
+              step_day_fn=step_day_fn)
 
 
 # ---------------------------------------------------------------------------
