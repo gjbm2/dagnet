@@ -10,6 +10,7 @@
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { sessionLogService, LogEntry, LogLevel, OperationContext } from '../../services/sessionLogService';
+import { copyToClipboard } from '../../utils/copyToClipboard';
 import './SessionLogViewer.css';
 
 interface SessionLogViewerProps {
@@ -153,7 +154,7 @@ export function SessionLogViewer({ fileId }: SessionLogViewerProps) {
         return value;
       }));
       
-      await navigator.clipboard.writeText(JSON.stringify(cleanEntry, null, 2));
+      await copyToClipboard(JSON.stringify(cleanEntry, null, 2));
       // Could show a toast here, but keeping it simple
     } catch (err) {
       console.error('Failed to copy log entry:', err);
@@ -180,7 +181,7 @@ export function SessionLogViewer({ fileId }: SessionLogViewerProps) {
         return value;
       }));
       
-      await navigator.clipboard.writeText(JSON.stringify(cleanEntries, null, 2));
+      await copyToClipboard(JSON.stringify(cleanEntries, null, 2));
       // Brief visual feedback - the button text could flash or we could use a toast
       // Keeping it simple without toast dependency
     } catch (err) {

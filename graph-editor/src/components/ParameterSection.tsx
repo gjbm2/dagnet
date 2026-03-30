@@ -718,6 +718,8 @@ export function ParameterSection({
                     retrievedAt={param.evidence?.retrieved_at}
                     theme={theme === 'dark' ? 'dark' : 'light'}
                     activeSource={activeModelSource}
+                    t95={(param.latency as any).promoted_t95 ?? param.latency.t95}
+                    pathT95={(param.latency as any).promoted_path_t95 ?? param.latency.path_t95}
                   />
                 </div>
               )}

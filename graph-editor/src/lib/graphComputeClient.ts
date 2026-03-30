@@ -421,8 +421,8 @@ export class GraphComputeClient {
         if (!graph || !targetId) return { t95Days: null, pathT95Days: null };
         const edges: any[] = Array.isArray(graph?.edges) ? graph.edges : [];
         const e = edges.find((x: any) => String(x?.uuid || x?.id || '') === String(targetId));
-        const t95 = e?.p?.latency?.t95 ?? e?.p?.t95 ?? null;
-        const pathT95 = e?.p?.latency?.path_t95 ?? e?.p?.path_t95 ?? null;
+        const t95 = e?.p?.latency?.promoted_t95 ?? e?.p?.latency?.t95 ?? e?.p?.t95 ?? null;
+        const pathT95 = e?.p?.latency?.promoted_path_t95 ?? e?.p?.latency?.path_t95 ?? e?.p?.path_t95 ?? null;
         const t95Days = (typeof t95 === 'number' && Number.isFinite(t95)) ? t95 : null;
         const pathT95Days = (typeof pathT95 === 'number' && Number.isFinite(pathT95)) ? pathT95 : null;
         return { t95Days, pathT95Days };

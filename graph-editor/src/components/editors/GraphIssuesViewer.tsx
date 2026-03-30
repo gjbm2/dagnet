@@ -13,6 +13,7 @@ import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { graphIssuesService, GraphIssue, GraphIssuesState } from '../../services/graphIssuesService';
 import { useTabContext } from '../../contexts/TabContext';
 import toast from 'react-hot-toast';
+import { copyToClipboard } from '../../utils/copyToClipboard';
 import './GraphIssuesViewer.css';
 import { getSeverityIcon, type IssueSeverity } from '../issues/issueIcons';
 
@@ -297,7 +298,7 @@ export function GraphIssuesViewer({ fileId, tabId }: GraphIssuesViewerProps) {
           categories: Array.from(categoryFilter),
         },
       });
-      await navigator.clipboard.writeText(text);
+      await copyToClipboard(text);
       toast.success(`Copied ${filteredIssues.length} issue${filteredIssues.length === 1 ? '' : 's'}`);
     } catch (error) {
       console.error('Failed to copy issues:', error);
@@ -603,7 +604,7 @@ function IssueRow({ issue, onNavigate }: IssueRowProps) {
       edgeUuid: issue.edgeUuid
     };
     try {
-      await navigator.clipboard.writeText(JSON.stringify(objectData, null, 2));
+      await copyToClipboard(JSON.stringify(objectData, null, 2));
     } catch (err) {
       console.error('Failed to copy:', err);
     }

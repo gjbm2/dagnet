@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { DiffEditor } from '@monaco-editor/react';
 import './Modal.css';
 import './MergeConflictModal.css';
+import { copyToClipboard } from '../../utils/copyToClipboard';
 
 export interface ConflictFile {
   fileId: string;
@@ -247,7 +248,7 @@ export function MergeConflictModal({
                   baseContent: c.baseContent,
                   mergedContent: c.mergedContent,
                 }));
-                navigator.clipboard.writeText(JSON.stringify(dump, null, 2));
+                copyToClipboard(JSON.stringify(dump, null, 2));
               }}
               title="Copy all conflict data as JSON to clipboard"
             >

@@ -1491,6 +1491,24 @@ def _generate_observations_nightly(
             continue
         fetch_nights.append(fn)
 
+    # Pre-draw per-retrieval-date onset observations with noise.
+    # In production, Amplitude computes onset per retrieval date from the
+    # lag histogram (1% mass point). Different retrieval dates give slightly
+    # different onset estimates due to finite sample size. We simulate
+    # this with Gaussian noise around the truth onset.
+    # Default: 10% of onset or 0.1d, whichever is larger.
+    onset_obs_by_edge: dict[str, dict[int, float]] = {}  # edge → fetch_night → noisy onset
+    if edge_params:
+        for edge_id, ep in edge_params.items():
+            onset = ep.get("onset", 0.0)
+            if onset <= 0:
+                continue
+            obs_sigma = ep.get("onset_obs_sigma", max(onset * 0.1, 0.1))
+            onset_obs_by_edge[edge_id] = {}
+            for fn in fetch_nights:
+                noisy = max(0.0, float(rng.normal(onset, obs_sigma)))
+                onset_obs_by_edge[edge_id][fn] = round(noisy, 2)
+
     # ── Generate cohort rows ────────────────────────────────────────────
     # Cohort: anchor_day = simulation day (within observable window only),
     # a = anchor entrants, y = people from that sim day who reached
@@ -1546,7 +1564,7 @@ def _generate_observations_nightly(
                         "mean_lag_days": lstats.get("mean_lag_days"),
                         "anchor_median_lag_days": lstats.get("anchor_median_lag_days"),
                         "anchor_mean_lag_days": lstats.get("anchor_mean_lag_days"),
-                        "onset_delta_days": lstats.get("onset"),
+                        "onset_delta_days": onset_obs_by_edge.get(edge_id, {}).get(fetch_night, lstats.get("onset")),
                     })
                     n_cohort_rows += 1
 
@@ -1573,7 +1591,7 @@ def _generate_observations_nightly(
                                 "mean_lag_days": lstats.get("mean_lag_days"),
                                 "anchor_median_lag_days": lstats.get("anchor_median_lag_days"),
                                 "anchor_mean_lag_days": lstats.get("anchor_mean_lag_days"),
-                                "onset_delta_days": lstats.get("onset"),
+                                "onset_delta_days": onset_obs_by_edge.get(edge_id, {}).get(fetch_night, lstats.get("onset")),
                             })
                             n_cohort_rows += 1
 
@@ -1635,7 +1653,7 @@ def _generate_observations_nightly(
                             "y": y_window,
                             "median_lag_days": lstats.get("median_lag_days"),
                             "mean_lag_days": lstats.get("mean_lag_days"),
-                            "onset_delta_days": lstats.get("onset"),
+                            "onset_delta_days": onset_obs_by_edge.get(edge_id, {}).get(fetch_night, lstats.get("onset")),
                         })
                         n_window_rows += 1
 
@@ -1662,7 +1680,7 @@ def _generate_observations_nightly(
                                 "y": ctx_y_w,
                                 "median_lag_days": lstats.get("median_lag_days"),
                                 "mean_lag_days": lstats.get("mean_lag_days"),
-                                "onset_delta_days": lstats.get("onset"),
+                                "onset_delta_days": onset_obs_by_edge.get(edge_id, {}).get(fetch_night, lstats.get("onset")),
                             })
                             n_window_rows += 1
 

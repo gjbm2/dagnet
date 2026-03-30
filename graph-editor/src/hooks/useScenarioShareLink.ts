@@ -4,6 +4,7 @@ import toast from 'react-hot-toast';
 import { fileRegistry } from '../contexts/TabContext';
 import { useScenariosContextOptional } from '../contexts/ScenariosContext';
 import { shareLinkService, extractIdentityFromFileSource, resolveShareSecretForLinkGeneration } from '../services/shareLinkService';
+import { copyToClipboard } from '../utils/copyToClipboard';
 
 export interface UseScenarioShareLinkResult {
   canShareScenario: (scenarioId: string) => boolean;
@@ -86,7 +87,7 @@ export function useScenarioShareLink(fileId: string, tabId: string | undefined):
     async (scenarioId: string) => {
       try {
         const url = await buildScenarioUrl(scenarioId, 'static');
-        await navigator.clipboard.writeText(url);
+        await copyToClipboard(url);
         const warning = shareLinkService.getShareUrlSoftWarning(url);
         if (warning) toast(warning);
         toast.success('Scenario share link copied!');
@@ -101,7 +102,7 @@ export function useScenarioShareLink(fileId: string, tabId: string | undefined):
     async (scenarioId: string) => {
       try {
         const url = await buildScenarioUrl(scenarioId, 'live');
-        await navigator.clipboard.writeText(url);
+        await copyToClipboard(url);
         const warning = shareLinkService.getShareUrlSoftWarning(url);
         if (warning) toast(warning);
         toast.success('Live scenario share link copied!');

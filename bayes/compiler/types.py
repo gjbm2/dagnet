@@ -403,6 +403,8 @@ class LatencyPosteriorSummary:
     path_mu_sd: float | None = None
     path_sigma_mean: float | None = None
     path_sigma_sd: float | None = None
+    path_hdi_t95_lower: float | None = None
+    path_hdi_t95_upper: float | None = None
     path_provenance: str | None = None
 
     def to_webhook_dict(self) -> dict[str, Any]:
@@ -442,6 +444,8 @@ class LatencyPosteriorSummary:
             result["path_mu_sd"] = round(self.path_mu_sd, 4) if self.path_mu_sd is not None else None
             result["path_sigma_mean"] = round(self.path_sigma_mean, 4) if self.path_sigma_mean is not None else None
             result["path_sigma_sd"] = round(self.path_sigma_sd, 4) if self.path_sigma_sd is not None else None
+            result["path_hdi_t95_lower"] = round(self.path_hdi_t95_lower, 1) if self.path_hdi_t95_lower is not None else None
+            result["path_hdi_t95_upper"] = round(self.path_hdi_t95_upper, 1) if self.path_hdi_t95_upper is not None else None
             result["path_provenance"] = self.path_provenance or self.provenance
         return result
 

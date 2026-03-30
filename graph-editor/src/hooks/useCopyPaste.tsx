@@ -19,6 +19,7 @@
 
 import React, { createContext, useContext, useState, useCallback, ReactNode } from 'react';
 import toast from 'react-hot-toast';
+import { copyToClipboard } from '../utils/copyToClipboard';
 import { GraphNode, GraphEdge, PostIt } from '../types';
 
 // ============================================================================
@@ -158,7 +159,7 @@ export function useCopyPaste() {
     
     // Write to system clipboard (best effort - for external paste like Ctrl+V)
     try {
-      await navigator.clipboard.writeText(JSON.stringify(data, null, 2));
+      await copyToClipboard(JSON.stringify(data, null, 2));
     } catch (e) {
       // Clipboard write failed - not critical, memory cache still works
       console.warn('[useCopyPaste] Clipboard write failed (memory cache still works):', e);
@@ -208,7 +209,7 @@ export function useCopyPaste() {
     };
     
     try {
-      await navigator.clipboard.writeText(JSON.stringify(data, null, 2));
+      await copyToClipboard(JSON.stringify(data, null, 2));
     } catch (e) {
       console.warn('[useCopyPaste] Clipboard write failed (memory cache still works):', e);
     }

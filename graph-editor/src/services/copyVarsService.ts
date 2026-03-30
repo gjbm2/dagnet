@@ -12,6 +12,7 @@
 import { extractParamsFromSelection } from './GraphParamExtractor';
 import { flattenParams } from './ParamPackDSLService';
 import type { Graph } from '../types';
+import { copyToClipboard } from '../utils/copyToClipboard';
 
 export interface CopyVarsResult {
   success: boolean;
@@ -73,7 +74,7 @@ export async function copyVarsToClipboard(
     }
     
     // Copy to clipboard
-    await navigator.clipboard.writeText(output);
+    await copyToClipboard(output);
     
     return {
       success: true,

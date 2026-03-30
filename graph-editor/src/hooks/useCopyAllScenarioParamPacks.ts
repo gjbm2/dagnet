@@ -6,6 +6,7 @@ import { formatScenarioParamPacksForClipboard } from '../services/scenarioParamP
 import { getComposedParamsForLayer } from '../services/CompositionService';
 import { useGraphStore } from '../contexts/GraphStoreContext';
 import { LIVE_EMPTY_DIFF_DSL } from '../services/scenarioRegenerationService';
+import { copyToClipboard } from '../utils/copyToClipboard';
 
 export function useCopyAllScenarioParamPacks(tabId?: string) {
   const scenariosContext = useScenariosContextOptional();
@@ -90,7 +91,7 @@ export function useCopyAllScenarioParamPacks(tabId?: string) {
     });
 
     try {
-      await navigator.clipboard.writeText(text);
+      await copyToClipboard(text);
       // totalScenarioCount excludes special layers; this is just for "orphan smell".
       return { ok: true, scenarioCount, totalScenarioCount: scenariosContext.scenarios.length, byteLength };
     } catch (e) {

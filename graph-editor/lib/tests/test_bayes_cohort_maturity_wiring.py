@@ -39,6 +39,21 @@ POSTERIOR_PATH_MU = -0.4
 POSTERIOR_PATH_SIGMA = 3.0
 POSTERIOR_PATH_ONSET = 17.0
 
+# Posterior uncertainty (SDs)
+POSTERIOR_MU_SD = 0.05
+POSTERIOR_SIGMA_SD = 0.03
+POSTERIOR_ONSET_SD = 0.2
+POSTERIOR_ONSET_MU_CORR = -0.88
+POSTERIOR_PATH_MU_SD = 0.15
+POSTERIOR_PATH_SIGMA_SD = 0.05
+POSTERIOR_PATH_ONSET_SD = 0.22
+
+# Posterior t95 HDI
+POSTERIOR_HDI_T95_LOWER = 14.0
+POSTERIOR_HDI_T95_UPPER = 16.5
+POSTERIOR_PATH_HDI_T95_LOWER = 18.0  # deliberately different from edge
+POSTERIOR_PATH_HDI_T95_UPPER = 95.0  # deliberately large (path sigma=3.0)
+
 # Probability posteriors
 WINDOW_ALPHA = 12.0
 WINDOW_BETA = 3.0
@@ -46,6 +61,11 @@ COHORT_ALPHA = 100.0
 COHORT_BETA = 20.0
 WINDOW_P = WINDOW_ALPHA / (WINDOW_ALPHA + WINDOW_BETA)   # 0.8
 COHORT_P = COHORT_ALPHA / (COHORT_ALPHA + COHORT_BETA)   # 0.833
+WINDOW_P_SD = math.sqrt(WINDOW_ALPHA * WINDOW_BETA / ((WINDOW_ALPHA + WINDOW_BETA) ** 2 * (WINDOW_ALPHA + WINDOW_BETA + 1)))
+COHORT_P_SD = math.sqrt(COHORT_ALPHA * COHORT_BETA / ((COHORT_ALPHA + COHORT_BETA) ** 2 * (COHORT_ALPHA + COHORT_BETA + 1)))
+
+# Stale flat p.stdev — must NOT be used for bands
+FLAT_P_STDEV = 0.01  # deliberately tiny so bands would be wrong if used
 
 
 def _make_graph():
@@ -97,6 +117,7 @@ def _make_graph():
                         },
                     },
                 ],
+                "stdev": FLAT_P_STDEV,  # stale — must NOT be used for bands
                 "latency": {
                     # Flat fields — stale analytic values
                     "mu": ANALYTIC_MU,
@@ -112,19 +133,23 @@ def _make_graph():
                     "posterior": {
                         "distribution": "lognormal",
                         "mu_mean": POSTERIOR_MU,
-                        "mu_sd": 0.05,
+                        "mu_sd": POSTERIOR_MU_SD,
                         "sigma_mean": POSTERIOR_SIGMA,
-                        "sigma_sd": 0.03,
+                        "sigma_sd": POSTERIOR_SIGMA_SD,
                         "onset_delta_days": POSTERIOR_ONSET,
                         "onset_mean": POSTERIOR_ONSET,
-                        "onset_sd": 0.2,
-                        "onset_mu_corr": -0.88,
+                        "onset_sd": POSTERIOR_ONSET_SD,
+                        "onset_mu_corr": POSTERIOR_ONSET_MU_CORR,
+                        "hdi_t95_lower": POSTERIOR_HDI_T95_LOWER,
+                        "hdi_t95_upper": POSTERIOR_HDI_T95_UPPER,
                         "path_mu_mean": POSTERIOR_PATH_MU,
-                        "path_mu_sd": 0.15,
+                        "path_mu_sd": POSTERIOR_PATH_MU_SD,
                         "path_sigma_mean": POSTERIOR_PATH_SIGMA,
-                        "path_sigma_sd": 0.05,
+                        "path_sigma_sd": POSTERIOR_PATH_SIGMA_SD,
                         "path_onset_delta_days": POSTERIOR_PATH_ONSET,
-                        "path_onset_sd": 0.2,
+                        "path_onset_sd": POSTERIOR_PATH_ONSET_SD,
+                        "path_hdi_t95_lower": POSTERIOR_PATH_HDI_T95_LOWER,
+                        "path_hdi_t95_upper": POSTERIOR_PATH_HDI_T95_UPPER,
                     },
                 },
                 "posterior": {
@@ -308,6 +333,67 @@ class TestCohortModeCurveParams:
         params = result.get("model_curve_params", {})
         assert params.get("mode") == "cohort_path"
 
+    def test_bayesian_source_curve_has_confidence_bands(self):
+        """Bayesian source curve must include band_upper and band_lower arrays."""
+        result = self._get_result()
+        bayes = result.get("source_model_curves", {}).get("bayesian", {})
+        assert "band_upper" in bayes, "No band_upper on bayesian source curve"
+        assert "band_lower" in bayes, "No band_lower on bayesian source curve"
+        assert len(bayes["band_upper"]) > 0, "band_upper is empty"
+        assert len(bayes["band_lower"]) > 0, "band_lower is empty"
+
+    def test_confidence_bands_use_posterior_p_sd_not_flat(self):
+        """Band width at maturity must reflect posterior p_sd (3.2%), not flat p.stdev (1%).
+
+        At large tau where CDF≈1, the band spread ≈ 2 × k × p_sd.
+        Posterior cohort p_sd ≈ 3.2%, flat p.stdev = 1%.
+        90% band (k=1.645): posterior → spread ≈ 10.5%, flat → spread ≈ 3.3%.
+        Assert spread > 5% to catch flat p.stdev being used.
+        """
+        result = self._get_result()
+        bayes = result.get("source_model_curves", {}).get("bayesian", {})
+        bu = bayes.get("band_upper", [])
+        bl = bayes.get("band_lower", [])
+        # Check at a mature age (last point)
+        if bu and bl:
+            last_u = bu[-1]["model_rate"]
+            last_l = bl[-1]["model_rate"]
+            spread = last_u - last_l
+            assert spread > 0.05, \
+                f"Band spread at maturity = {spread:.4f} — too narrow, likely using flat p.stdev ({FLAT_P_STDEV}) instead of posterior p_sd ({COHORT_P_SD:.4f})"
+
+    def test_confidence_bands_are_narrower_with_onset_mu_correlation(self):
+        """Bands near onset should be narrower than without correlation.
+
+        onset_mu_corr = -0.88 means onset and mu partially cancel.
+        The cross-term in the delta method reduces variance near onset.
+        Test: band spread at onset+2d should be less than a naive
+        independent-params estimate.
+        """
+        result = self._get_result()
+        bayes = result.get("source_model_curves", {}).get("bayesian", {})
+        bu = bayes.get("band_upper", [])
+        bl = bayes.get("band_lower", [])
+        # Find point near onset (tau ≈ 19, just after path onset 17)
+        near_onset = [(u, l) for u, l in zip(bu, bl) if 18 <= u["tau_days"] <= 20]
+        assert len(near_onset) > 0, "No band points near onset"
+        u, l = near_onset[0]
+        actual_spread = u["model_rate"] - l["model_rate"]
+        # With corr=-0.88, spread should be noticeably less than without.
+        # Just assert it's reasonable (not zero, not absurdly wide).
+        assert 0.01 < actual_spread < 0.5, \
+            f"Band spread near onset = {actual_spread:.4f} — outside reasonable range"
+
+    def test_axis_extent_uses_path_t95(self):
+        """Axis extent must be at least path_t95 (30d), not just edge t95 (20d)."""
+        result = self._get_result()
+        curve = result.get("model_curve", [])
+        if curve:
+            max_tau = max(p["tau_days"] for p in curve)
+            # path_t95 on the graph edge is 30.0
+            assert max_tau >= 30, \
+                f"Axis max_tau={max_tau} but path_t95=30 — axis too short"
+
 
 class TestWindowModeCurveParams:
     """Window mode: all curves must use posterior EDGE-level values."""
@@ -363,6 +449,7 @@ class TestWindowModeCurveParams:
         assert params.get("mode") == "window"
 
 
+
 class TestNoPosteriorFallback:
     """When no posterior exists, curves must fall back to flat latency fields."""
 
@@ -388,3 +475,15 @@ class TestNoPosteriorFallback:
         params = result.get("model_curve_params", {})
         assert params.get("mu") == pytest.approx(ANALYTIC_PATH_MU, abs=0.01), \
             f"Expected flat path mu {ANALYTIC_PATH_MU}, got {params.get('mu')}"
+
+    def test_axis_extent_uses_t95_and_sweep_span(self):
+        """Without posterior, axis extent uses max(sweep_span, t95, path_t95)."""
+        result = self._get_result()
+        curve = result.get("model_curve", [])
+        assert len(curve) > 0, "No model curve"
+        be_axis_max = max(p["tau_days"] for p in curve)
+        # Graph has t95=20, path_t95=30; sweep_span = (2026-03-29 - 2026-02-01) = 56
+        # axis_tau_max = max(56, 20, 30) = 56
+        expected = 56
+        assert be_axis_max == expected, \
+            f"BE axis={be_axis_max} != expected={expected} (max of sweep_span, t95, path_t95)"

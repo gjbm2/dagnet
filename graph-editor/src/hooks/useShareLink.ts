@@ -13,6 +13,7 @@ import { fileRegistry } from '../contexts/TabContext';
 import { shareLinkService, extractIdentityFromFileSource, resolveShareSecretForLinkGeneration } from '../services/shareLinkService';
 import { useIsReadOnlyShare } from '../contexts/ShareModeContext';
 import { sessionLogService } from '../services/sessionLogService';
+import { copyToClipboard } from '../utils/copyToClipboard';
 import toast from 'react-hot-toast';
 
 export interface UseShareLinkResult {
@@ -155,7 +156,7 @@ export function useShareLink(fileId: string | undefined): UseShareLinkResult {
               identity: fileInfo.identity,
             });
       
-      await navigator.clipboard.writeText(url);
+      await copyToClipboard(url);
       const warning = shareLinkService.getShareUrlSoftWarning(url);
       if (warning) {
         toast(warning);
@@ -234,7 +235,7 @@ export function useShareLink(fileId: string | undefined): UseShareLinkResult {
         }
       }
       
-      await navigator.clipboard.writeText(url);
+      await copyToClipboard(url);
       const warning = shareLinkService.getShareUrlSoftWarning(url);
       if (warning) {
         toast(warning);
@@ -266,7 +267,7 @@ export function useShareLink(fileId: string | undefined): UseShareLinkResult {
       const base = `${window.location.origin}${window.location.pathname}`;
       const url = `${base}?graph=${encodeURIComponent(graph)}&branch=${encodeURIComponent(branch)}`;
 
-      await navigator.clipboard.writeText(url);
+      await copyToClipboard(url);
       toast.success('Working link copied!');
 
       sessionLogService.success('session', 'SHARE_WORKING_LINK_COPIED',

@@ -129,7 +129,7 @@ export function AnalysisInfoCard({ result, fontSize, defaultTab, onFileLink, tab
   if (effectiveKind === 'forecast' && posteriorsMeta) {
     return (
       <div className="info-card" style={sizeZoom !== 1 ? { zoom: sizeZoom } as any : undefined}>
-        <BayesPosteriorCard probability={posteriorsMeta.probability} latency={posteriorsMeta.latency} />
+        <BayesPosteriorCard probability={posteriorsMeta.probability} latency={posteriorsMeta.latency} t95={posteriorsMeta.t95} pathT95={posteriorsMeta.path_t95} />
         {filteredSections.length > 0 && (
           <InfoTable sections={filteredSections} scenarioIds={scenarioIds} scenarioMeta={scenarioMeta} onFileLink={onFileLink} />
         )}
@@ -380,12 +380,10 @@ function erf(x: number): number {
   return sign * y;
 }
 
-interface CdfParams { mu: number; sigma: number; onset: number }
+interface CdfParams { mu: number; sigma: number; onset: number; t95?: number }
 
 function buildCombinedCdfOption(edge?: CdfParams, path?: CdfParams) {
-  const edgeT95 = edge ? Math.exp(edge.mu + 1.645 * edge.sigma) + edge.onset : 0;
-  const pathT95 = path ? Math.exp(path.mu + 1.645 * path.sigma) + path.onset : 0;
-  const maxDays = Math.ceil(Math.max(edgeT95, pathT95, 5) * 1.3);
+  const maxDays = Math.ceil(Math.max(edge?.t95 ?? 0, path?.t95 ?? 0, 5));
   const steps = Math.min(maxDays, 80);
 
   const edgeData: [number, number][] = [];

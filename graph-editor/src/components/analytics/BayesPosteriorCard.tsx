@@ -1,19 +1,15 @@
 /**
  * BayesPosteriorCard — posterior display for edge_info Model tab.
  *
- * Wide: two-column (Edge | Path) with whitespace separation.
- * Narrow: stacked single-column.
+ * Uses CSS flex-wrap for responsive two-column (wide) / stacked (narrow) layout.
  * No grid lines — uses spacing and muted headers like the rest of the app.
  */
 
 import React, { useMemo } from 'react';
 import ReactECharts from 'echarts-for-react';
-import { useElementSize } from '../../hooks/useElementSize';
 import type { ProbabilityPosterior, LatencyPosterior } from '../../types';
 import { computeQualityTier, qualityTierToColour, qualityTierLabel } from '../../utils/bayesQualityTier';
 import { formatRelativeTime, getFreshnessLevel, freshnessColour } from '../../utils/freshnessDisplay';
-
-const WIDE_BREAKPOINT = 340;
 
 function fmtPct(v: number | null | undefined): string {
   if (v == null) return '–';
@@ -27,13 +23,14 @@ function fmt(v: number | null | undefined, dp = 4): string {
 interface Props {
   probability?: ProbabilityPosterior | null;
   latency?: LatencyPosterior | null;
+  /** Edge-level t95 point estimate (days) — from edge.p.latency.t95 */
+  t95?: number | null;
+  /** Path-level t95 point estimate (days) — from edge.p.latency.path_t95 */
+  pathT95?: number | null;
   theme?: 'light' | 'dark';
 }
 
-export function BayesPosteriorCard({ probability, latency, theme = 'dark' }: Props) {
-  const { ref, width } = useElementSize<HTMLDivElement>();
-  const wide = width >= WIDE_BREAKPOINT;
-
+export function BayesPosteriorCard({ probability, latency, t95, pathT95, theme = 'dark' }: Props) {
   const post = probability;
   const lat = latency;
 
@@ -46,7 +43,7 @@ export function BayesPosteriorCard({ probability, latency, theme = 'dark' }: Pro
   const hasPath = hasPathP || hasPathLat;
 
   if (!hasEdgeP && !hasEdgeLat) {
-    return <div ref={ref} style={{ padding: 10, color: 'var(--text-muted)', fontStyle: 'italic', fontSize: 12 }}>No posterior available</div>;
+    return <div style={{ padding: 10, color: 'var(--text-muted)', fontStyle: 'italic', fontSize: 12 }}>No posterior available</div>;
   }
 
   const edgePMean = hasEdgeP ? post!.alpha / (post!.alpha + post!.beta) : null;
@@ -135,71 +132,37 @@ export function BayesPosteriorCard({ probability, latency, theme = 'dark' }: Pro
     </div>
   ) : null;
 
-  // ── Wide: two columns ──
-  if (wide && hasPath) {
-    const colStyle: React.CSSProperties = { flex: 1, minWidth: 0 };
-    return (
-      <div ref={ref} style={{ padding: '4px 10px 6px' }}>
-        {/* Column headers */}
-        <div style={{ display: 'flex', gap: 20, marginBottom: 2 }}>
-          <div style={{ ...colStyle, fontSize: 9, fontWeight: 500, textTransform: 'uppercase', letterSpacing: '0.03em', color: 'var(--text-muted, #888)' }}>
+  // ── Single responsive layout: flex-wrap gives two columns when wide, stacks when narrow ──
+  return (
+    <div style={{ padding: '4px 10px 6px' }}>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0 20px' }}>
+        {/* Edge column */}
+        <div style={{ flex: '1 1 150px', minWidth: 0 }}>
+          <div style={{ fontSize: 9, fontWeight: 500, textTransform: 'uppercase', letterSpacing: '0.03em', color: 'var(--text-muted, #888)', marginBottom: 2 }}>
             Edge (window)
           </div>
-          <div style={{ ...colStyle, fontSize: 9, fontWeight: 500, textTransform: 'uppercase', letterSpacing: '0.03em', color: 'var(--text-muted, #888)' }}>
-            Path (cohort)
-          </div>
+          {edgeProbRows && <><SectionLabel>Probability</SectionLabel>{edgeProbRows}</>}
+          {edgeLatRows && <><SectionLabel>Latency</SectionLabel>{edgeLatRows}</>}
         </div>
-
-        {/* Probability */}
-        {(edgeProbRows || pathProbRows) && (
-          <>
-            <SectionLabel>Probability</SectionLabel>
-            <div style={{ display: 'flex', gap: 20 }}>
-              <div style={colStyle}>{edgeProbRows}</div>
-              <div style={colStyle}>{pathProbRows}</div>
+        {/* Path column */}
+        {hasPath && (
+          <div style={{ flex: '1 1 150px', minWidth: 0 }}>
+            <div style={{ fontSize: 9, fontWeight: 500, textTransform: 'uppercase', letterSpacing: '0.03em', color: 'var(--text-muted, #888)', marginBottom: 2 }}>
+              Path (cohort)
             </div>
-          </>
+            {pathProbRows && <><SectionLabel>Probability</SectionLabel>{pathProbRows}</>}
+            {pathLatRows && <><SectionLabel>Latency</SectionLabel>{pathLatRows}</>}
+          </div>
         )}
-
-        {/* Latency */}
-        {(edgeLatRows || pathLatRows) && (
-          <>
-            <SectionLabel>Latency</SectionLabel>
-            <div style={{ display: 'flex', gap: 20 }}>
-              <div style={colStyle}>{edgeLatRows}</div>
-              <div style={colStyle}>{pathLatRows}</div>
-            </div>
-          </>
-        )}
-
-        {footer}
-        <BayesModelRateChart
-          edgeP={edgePMean} edgeMu={lat?.mu_mean} edgeSigma={lat?.sigma_mean} edgeOnset={lat?.onset_delta_days ?? lat?.onset_mean}
-          edgePSd={edgePSd} edgeMuSd={lat?.mu_sd} edgeSigmaSd={lat?.sigma_sd} edgeOnsetSd={lat?.onset_sd}
-          edgeOnsetMuCorr={lat?.onset_mu_corr}
-          pathP={pathPMean} pathMu={lat?.path_mu_mean} pathSigma={lat?.path_sigma_mean} pathOnset={lat?.path_onset_delta_days}
-          pathPSd={pathPSd} pathMuSd={lat?.path_mu_sd} pathSigmaSd={lat?.path_sigma_sd} pathOnsetSd={lat?.path_onset_sd}
-          pathOnsetMuCorr={(lat as any)?.path_onset_mu_corr}
-        />
       </div>
-    );
-  }
-
-  // ── Narrow: stacked ──
-  return (
-    <div ref={ref} style={{ padding: '4px 10px 6px' }}>
-      {edgeProbRows && <><SectionLabel>Probability</SectionLabel>{edgeProbRows}</>}
-      {pathProbRows && <><SectionLabel>Probability (path)</SectionLabel>{pathProbRows}</>}
-      {edgeLatRows && <><SectionLabel>Latency (edge)</SectionLabel>{edgeLatRows}</>}
-      {pathLatRows && <><SectionLabel>Latency (path)</SectionLabel>{pathLatRows}</>}
       {footer}
       <BayesModelRateChart
         edgeP={edgePMean} edgeMu={lat?.mu_mean} edgeSigma={lat?.sigma_mean} edgeOnset={lat?.onset_delta_days ?? lat?.onset_mean}
         edgePSd={edgePSd} edgeMuSd={lat?.mu_sd} edgeSigmaSd={lat?.sigma_sd} edgeOnsetSd={lat?.onset_sd}
-        edgeOnsetMuCorr={lat?.onset_mu_corr}
+        edgeOnsetMuCorr={lat?.onset_mu_corr} edgeT95={t95}
         pathP={pathPMean} pathMu={lat?.path_mu_mean} pathSigma={lat?.path_sigma_mean} pathOnset={lat?.path_onset_delta_days}
         pathPSd={pathPSd} pathMuSd={lat?.path_mu_sd} pathSigmaSd={lat?.path_sigma_sd} pathOnsetSd={lat?.path_onset_sd}
-        pathOnsetMuCorr={(lat as any)?.path_onset_mu_corr}
+        pathOnsetMuCorr={(lat as any)?.path_onset_mu_corr} pathT95={pathT95}
       />
     </div>
   );
@@ -274,10 +237,10 @@ function computeBands(
 interface ModelRateChartProps {
   edgeP?: number | null; edgeMu?: number | null; edgeSigma?: number | null; edgeOnset?: number | null;
   edgePSd?: number | null; edgeMuSd?: number | null; edgeSigmaSd?: number | null; edgeOnsetSd?: number | null;
-  edgeOnsetMuCorr?: number | null;
+  edgeOnsetMuCorr?: number | null; edgeT95?: number | null;
   pathP?: number | null; pathMu?: number | null; pathSigma?: number | null; pathOnset?: number | null;
   pathPSd?: number | null; pathMuSd?: number | null; pathSigmaSd?: number | null; pathOnsetSd?: number | null;
-  pathOnsetMuCorr?: number | null;
+  pathOnsetMuCorr?: number | null; pathT95?: number | null;
 }
 
 /** Build a polygon band series (custom renderer) for ECharts. */
@@ -303,9 +266,7 @@ const BayesModelRateChart = React.memo(function BayesModelRateChart(props: Model
   if (!hasEdge && !hasPath) return null;
 
   const option = useMemo(() => {
-    const edgeT95 = hasEdge ? Math.exp(props.edgeMu! + 1.645 * props.edgeSigma!) + (props.edgeOnset ?? 0) : 0;
-    const pathT95 = hasPath ? Math.exp(props.pathMu! + 1.645 * props.pathSigma!) + (props.pathOnset ?? 0) : 0;
-    const maxDays = Math.ceil(Math.max(edgeT95, pathT95, 5) * 1.5);
+    const maxDays = Math.ceil(Math.max(props.edgeT95 ?? 0, props.pathT95 ?? 0, 5));
     const steps = Math.min(maxDays, 120);
     const ages = Array.from({ length: steps + 1 }, (_, i) => (i / steps) * maxDays);
 
@@ -383,9 +344,9 @@ const BayesModelRateChart = React.memo(function BayesModelRateChart(props: Model
     };
   }, [
     props.edgeP, props.edgeMu, props.edgeSigma, props.edgeOnset,
-    props.edgePSd, props.edgeMuSd, props.edgeSigmaSd, props.edgeOnsetSd, props.edgeOnsetMuCorr,
+    props.edgePSd, props.edgeMuSd, props.edgeSigmaSd, props.edgeOnsetSd, props.edgeOnsetMuCorr, props.edgeT95,
     props.pathP, props.pathMu, props.pathSigma, props.pathOnset,
-    props.pathPSd, props.pathMuSd, props.pathSigmaSd, props.pathOnsetSd, props.pathOnsetMuCorr,
+    props.pathPSd, props.pathMuSd, props.pathSigmaSd, props.pathOnsetSd, props.pathOnsetMuCorr, props.pathT95,
     hasEdge, hasPath,
   ]);
 

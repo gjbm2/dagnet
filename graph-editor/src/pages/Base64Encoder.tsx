@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { Box, Button, TextField, Typography, Paper, Alert } from '@mui/material';
+import { copyToClipboard } from '../utils/copyToClipboard';
 
 export default function Base64Encoder() {
   const [base64Output, setBase64Output] = useState('');
@@ -35,7 +36,7 @@ export default function Base64Encoder() {
   };
 
   const handleCopy = () => {
-    navigator.clipboard.writeText(base64Output);
+    copyToClipboard(base64Output);
   };
 
   return (

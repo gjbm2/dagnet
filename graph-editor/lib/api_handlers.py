@@ -685,8 +685,8 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
         onset = lat_posterior.get('onset_delta_days') or latency.get('onset_delta_days') or 0
         forecast = p.get('forecast') or {}
         forecast_mean = forecast.get('mean')
-        t95 = latency.get('t95')
-        path_t95 = latency.get('path_t95')
+        t95 = latency.get('promoted_t95') or latency.get('t95')
+        path_t95 = latency.get('promoted_path_t95') or latency.get('path_t95')
         result: Dict[str, Any] = {
             'mu': float(mu),
             'sigma': float(sigma),
@@ -824,6 +824,13 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
             bayes_onset_sd = lat_posterior.get('onset_sd')
             if isinstance(bayes_onset_sd, (int, float)) and math.isfinite(bayes_onset_sd) and bayes_onset_sd > 0:
                 result['bayes_onset_sd'] = float(bayes_onset_sd)
+        # t95 HDI (for axis extents and display)
+        for _prefix, _src_prefix in [('bayes_', ''), ('bayes_path_', 'path_')]:
+            for _bound in ('lower', 'upper'):
+                _key = f'{_src_prefix}hdi_t95_{_bound}'
+                _val = lat_posterior.get(_key)
+                if isinstance(_val, (int, float)) and math.isfinite(_val) and _val > 0:
+                    result[f'{_prefix}hdi_t95_{_bound}'] = float(_val)
         # Bayesian latency posterior — uncertainty (for confidence bands)
         bayes_mu_sd = lat_posterior.get('mu_sd')
         bayes_sigma_sd = lat_posterior.get('sigma_sd')
@@ -1257,9 +1264,8 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
                     cdf_sigma = sigma
                     cdf_onset = onset
 
-                    # Extend curve well beyond t95 so it covers the full displayed
-                    # chart axis. Use sweep_to − anchor_from as a baseline, and
-                    # ensure at least 2× the t95 horizon so the plateau is visible.
+                    # Axis extent: max(upper_hdi(t95), upper_hdi(path_t95), sweep_span).
+                    # Uses posterior HDI values directly — no recomputation from params.
                     anchor_from_str = subj.get('anchor_from', '')
                     sweep_to_str = subj.get('sweep_to', '')
                     sweep_span = None
@@ -1271,20 +1277,11 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
                     except (ValueError, TypeError):
                         pass
 
-                    t95_extent = None
-                    try:
-                        t95_model = log_normal_inverse_cdf(0.95, cdf_mu, cdf_sigma)
-                        t95_extent = int(math.ceil((t95_model + cdf_onset) * 2)) + 1
-                    except Exception:
-                        pass
+                    # t95 / path_t95 point estimates from the graph edge — always present
+                    edge_t95_val = model_params.get('t95')
+                    path_t95_val = model_params.get('path_t95')
 
-                    # Also include path_t95 — the frontend may use it for the axis
-                    # extent (when it detects cohort mode from query_dsl).
-                    edge_path_t95_extent = model_params.get('path_t95')
-                    if not isinstance(edge_path_t95_extent, (int, float)) or not math.isfinite(edge_path_t95_extent) or edge_path_t95_extent <= 0:
-                        edge_path_t95_extent = None
-
-                    candidates = [c for c in [sweep_span, t95_extent, edge_path_t95_extent] if c and c > 0]
+                    candidates = [c for c in [sweep_span, edge_t95_val, path_t95_val] if c and c > 0]
                     axis_tau_max = int(math.ceil(max(candidates))) if candidates else None
 
                     if axis_tau_max and axis_tau_max > 0:

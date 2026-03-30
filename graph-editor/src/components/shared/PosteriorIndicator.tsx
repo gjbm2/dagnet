@@ -30,9 +30,13 @@ interface PosteriorIndicatorProps {
   badgeOnly?: boolean;
   /** Active model variable source (doc 15 §14.4) — shown in popover metadata */
   activeSource?: ModelSource | null;
+  /** Edge-level t95 point estimate (days) — for sparkline axis extent */
+  t95?: number | null;
+  /** Path-level t95 point estimate (days) — for sparkline axis extent */
+  pathT95?: number | null;
 }
 
-export function PosteriorIndicator({ posterior, retrievedAt, theme = 'dark', badgeOnly = false, activeSource }: PosteriorIndicatorProps) {
+export function PosteriorIndicator({ posterior, retrievedAt, theme = 'dark', badgeOnly = false, activeSource, t95, pathT95 }: PosteriorIndicatorProps) {
   if (!posterior) return null;
 
   const tier = computeQualityTier(posterior);
@@ -87,7 +91,7 @@ export function PosteriorIndicator({ posterior, retrievedAt, theme = 'dark', bad
           onMouseEnter={handleEnter}
           onMouseLeave={handleLeave}
         >
-          <PosteriorDetails posterior={posterior} retrievedAt={retrievedAt} theme={theme} activeSource={activeSource} />
+          <PosteriorDetails posterior={posterior} retrievedAt={retrievedAt} theme={theme} activeSource={activeSource} t95={t95} pathT95={pathT95} />
         </div>,
         document.body,
       )}
@@ -104,10 +108,12 @@ interface PosteriorDetailsProps {
   retrievedAt?: string | number | null;
   theme?: 'light' | 'dark';
   activeSource?: ModelSource | null;
+  t95?: number | null;
+  pathT95?: number | null;
 }
 
 /** Renders a compact diagnostic summary table. Reusable in popovers and panels. */
-export function PosteriorDetails({ posterior, retrievedAt, theme = 'dark', activeSource }: PosteriorDetailsProps) {
+export function PosteriorDetails({ posterior, retrievedAt, theme = 'dark', activeSource, t95, pathT95 }: PosteriorDetailsProps) {
   const tier = computeQualityTier(posterior);
   const colour = qualityTierToColour(tier.tier, theme);
   const isProbability = 'evidence_grade' in posterior;
@@ -115,7 +121,7 @@ export function PosteriorDetails({ posterior, retrievedAt, theme = 'dark', activ
   if (isProbability) {
     return <ProbabilityPosteriorDetails posterior={posterior as ProbabilityPosterior} tier={tier} colour={colour} retrievedAt={retrievedAt} theme={theme!} activeSource={activeSource} />;
   }
-  return <LatencyPosteriorDetails posterior={posterior as LatencyPosterior} tier={tier} colour={colour} retrievedAt={retrievedAt} theme={theme!} activeSource={activeSource} />;
+  return <LatencyPosteriorDetails posterior={posterior as LatencyPosterior} tier={tier} colour={colour} retrievedAt={retrievedAt} theme={theme!} activeSource={activeSource} t95={t95} pathT95={pathT95} />;
 }
 
 function SectionHeader({ label, theme }: { label: string; theme: 'light' | 'dark' }) {
@@ -265,9 +271,10 @@ function ProbabilityPosteriorDetails({ posterior, tier, colour, retrievedAt, the
   );
 }
 
-function LatencyPosteriorDetails({ posterior, tier, colour, retrievedAt, theme, activeSource }: {
+function LatencyPosteriorDetails({ posterior, tier, colour, retrievedAt, theme, activeSource, t95, pathT95 }: {
   posterior: LatencyPosterior; tier: ReturnType<typeof computeQualityTier>; colour: string;
   retrievedAt?: string | number | null; theme: 'light' | 'dark'; activeSource?: ModelSource | null;
+  t95?: number | null; pathT95?: number | null;
 }) {
   const hasPath = posterior.path_mu_mean != null;
 
@@ -353,7 +360,7 @@ function LatencyPosteriorDetails({ posterior, tier, colour, retrievedAt, theme, 
         {/* ── Sparkline ── */}
         <tr>
           <td colSpan={2}>
-            <LatencyCdfSparkline posterior={posterior} theme={theme} />
+            <LatencyCdfSparkline posterior={posterior} theme={theme} t95={t95} pathT95={pathT95} />
           </td>
         </tr>
 
@@ -433,7 +440,7 @@ function erf(x: number): number {
   return sign * y;
 }
 
-function LatencyCdfSparkline({ posterior, theme = 'dark' }: { posterior: LatencyPosterior; theme?: 'light' | 'dark' }) {
+function LatencyCdfSparkline({ posterior, theme = 'dark', t95, pathT95 }: { posterior: LatencyPosterior; theme?: 'light' | 'dark'; t95?: number | null; pathT95?: number | null }) {
   const option = useMemo(() => {
     const edgeMu = posterior.mu_mean;
     const edgeSigma = posterior.sigma_mean;
@@ -443,10 +450,7 @@ function LatencyCdfSparkline({ posterior, theme = 'dark' }: { posterior: Latency
     const pathOnset = posterior.path_onset_delta_days ?? 0;
     const hasPath = pathMu != null && pathSigma != null;
 
-    // Determine x-axis range: enough to show both curves reaching ~95%
-    const edgeT95 = Math.exp(edgeMu + 1.645 * edgeSigma) + edgeOnset;
-    const pathT95 = hasPath ? Math.exp(pathMu! + 1.645 * pathSigma!) + pathOnset : edgeT95;
-    const maxDays = Math.ceil(Math.max(edgeT95, pathT95) * 1.3);
+    const maxDays = Math.ceil(Math.max(t95 ?? 0, pathT95 ?? 0, 5));
     const steps = Math.min(maxDays, 80);
 
     const edgeData: [number, number][] = [];
@@ -492,7 +496,7 @@ function LatencyCdfSparkline({ posterior, theme = 'dark' }: { posterior: Latency
       ],
       tooltip: { show: false },
     };
-  }, [posterior, theme]);
+  }, [posterior, theme, t95, pathT95]);
 
   return (
     <ReactECharts

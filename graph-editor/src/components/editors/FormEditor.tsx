@@ -11,6 +11,7 @@ import { MonacoWidget, TabbedArrayWidget, AccordionObjectFieldTemplate, ThreeCol
 import { FileCode } from 'lucide-react';
 import { CredsShareLinkModal } from '../modals/CredsShareLinkModal';
 import { useTheme } from '../../contexts/ThemeContext';
+import { copyToClipboard } from '../../utils/copyToClipboard';
 
 // Threshold for "large" file warning (in characters when JSON stringified)
 const LARGE_FILE_WARNING_THRESHOLD = 15000;  // ~15KB
@@ -290,7 +291,7 @@ export function FormEditor({ fileId, tabId, readonly = false }: EditorProps & { 
           }
           // Single-line JSON is easiest to paste into env var value fields.
           const envJson = JSON.stringify(formData);
-          await navigator.clipboard.writeText(envJson);
+          await copyToClipboard(envJson);
           setCopyEnvJsonStatus({ kind: 'ok', message: 'Copied env JSON to clipboard' });
           setTimeout(() => setCopyEnvJsonStatus({ kind: 'idle' }), 2500);
         } catch (e) {
@@ -922,7 +923,7 @@ function Base64EncoderContent() {
   };
 
   const handleCopy = () => {
-    navigator.clipboard.writeText(base64Output);
+    copyToClipboard(base64Output);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };

@@ -1058,6 +1058,19 @@ design; implementation is post-Phase A.
 
 ---
 
+## Post-build clean-up items
+
+### Bayes session log verbosity (30-Mar-26)
+
+The session log receives the full Python worker `log` array on every
+bayes run (evidence detail, model summary, variable mapping, sampling
+diagnostics). Useful during development but too noisy for normal use.
+Gate the detailed output behind a `diagnostic` boolean (user-settable
+in display settings or a dev toggle). When false, only emit a compact
+summary (edges fitted, quality, timing).
+
+---
+
 ## Compiler structural debt (23-Mar-26)
 
 Code-level concerns identified by reviewing the compiler implementation

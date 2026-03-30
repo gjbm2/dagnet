@@ -8,6 +8,60 @@ Entries are reverse-chronological (newest first).
 
 ---
 
+## 30-Mar-26: Path dispersion investigation
+
+### Changes made
+- Replaced Williams moment estimator with BetaBinomial MLE
+  (scipy.optimize L-BFGS-B on betaln log-likelihood). Same inputs,
+  more efficient extraction of between-cohort signal when per-obs n
+  is small. Williams subtracts two similar numbers (obs_var - binom_var);
+  MLE uses full likelihood shape.
+- Added recency weighting (halflife from settings) to dispersion
+  estimation for consistency with model recency weighting.
+- Tightened F threshold to named const DISPERSION_F_THRESHOLD (0.90).
+- Reverted max(mcmc, williams) to use Williams/MLE only, keeping
+  MCMC kappa_p visible for diagnostic comparison.
+
+### Results on production (registered-to-success)
+
+| Estimator | Window κ | Cohort κ | Mature-only baseline |
+|---|---|---|---|
+| Williams (before) | 14 | 459 | ~110 |
+| Williams + recency | 11 | 248 | ~110 |
+| BB-MLE + recency | **15** | **86** | ~110 |
+
+Cohort improved dramatically (459 → 86) — MLE extracts signal that
+Williams couldn't see. Window still stuck at 15 — confirmed as CDF
+maturity contamination, not statistical power.
+
+### Suspected production data / data-binding defect
+
+Investigation of no-latency first edges (landing-to-created,
+create-to-delegated) revealed:
+- Window kappa=51, cohort kappa=28 for landing-to-created. These
+  MUST be identical — same population, no path, a=x.
+- Raw DB data: x values match exactly, y differs by 1-3 due to
+  different retrieval dates (window fetched 2 days later). Not a
+  data corruption issue — real trickle of late conversions.
+- But kappa 51 vs 28 is a 2× difference from the same reality.
+  Suggests MLE is sensitive to small input perturbations, AND/OR
+  the evidence binder is constructing different trajectory structures
+  from nearly-identical data (different retrieval density → different
+  trajectory/daily split → different endpoints).
+
+**Strong suspicion**: production snapshot data and/or the evidence
+binder's trajectory construction has defects that corrupt the
+dispersion signal. The data complexity (multiple overlapping
+slice_keys, context aggregation, PLACEHOLDER hashes from synth
+mirror coexisting in DB, different retrieval coverage per obs type)
+makes it very difficult to reason about correctness forensically.
+
+**Decision**: pivot to synth-mirror-4step with known kappa to
+validate the full pipeline (synth gen → DB → evidence binder → MLE)
+in a controlled setting before debugging production further.
+
+---
+
 ## 29-Mar-26: Stable baseline established; two open model issues
 
 ### Current state

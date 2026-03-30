@@ -238,7 +238,7 @@ def _parse_recovery_output(output: str) -> dict:
             # Parse: "mu    truth=  2.300  post=  2.114±0.004     Δ=0.186  [OK]"
             param_match = re.match(
                 r"(mu|sigma|onset|p)\s+truth=\s*([\d.]+)\s+post=\s*([\d.]+)±([\d.]+)\s+"
-                r"(?:Δ|z)=([\d.]+)\s+\[(OK|MISS)\]",
+                r"(?:Δ|z)=\s*([\d.]+)\s+\[(OK|MISS)\]",
                 line,
             )
             if param_match:
@@ -388,6 +388,13 @@ def run_regression(args) -> list[dict]:
     max_parallel = max(1, max_parallel)
 
     runnable = [g for g in graphs if not g.get("_bootstrap_failed")]
+    # Sort largest graphs first so they start immediately and don't
+    # overlap with each other — prevents OOM from two heavy graphs
+    # running concurrently.
+    runnable.sort(
+        key=lambda g: len(g.get("truth", {}).get("edges", {})),
+        reverse=True,
+    )
     print(f"Core budget: {available_cores} available, {cores_per_run} per run "
           f"({chains} chains), max {max_parallel} parallel")
     print(f"Running {len(runnable)} graphs...")
@@ -453,6 +460,15 @@ def run_regression(args) -> list[dict]:
 
             if run_result["exit_code"] != 0 and not parsed.get("edges"):
                 print(f"  {name}: HARNESS FAIL (exit {run_result['exit_code']}) [{elapsed:.0f}s]")
+                # Dump captured output so failures are diagnosable
+                out = run_result.get("output", "").strip()
+                if out:
+                    for line in out.split("\n")[-20:]:
+                        print(f"    | {line}")
+                # Also write to recovery log
+                recovery_log = f"/tmp/bayes_recovery-{name}.log"
+                with open(recovery_log, "w") as f:
+                    f.write(run_result.get("output", ""))
                 results.append({
                     "graph_name": name,
                     "passed": False,

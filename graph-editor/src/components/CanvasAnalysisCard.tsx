@@ -565,7 +565,7 @@ export function CanvasAnalysisCard({
           </div>
 
         {/* Content area */}
-        <div ref={contentAreaRef} style={{ flex: 1, overflow: 'hidden', position: 'relative', minHeight: 0, ...contentZoomStyle }}>
+        <div ref={contentAreaRef} style={{ flex: 1, overflow: 'auto', position: 'relative', minHeight: 0, ...contentZoomStyle }}>
           {/* Interaction overlay when not selected (pinned mode) */}
           {!interactive && (
             <div style={{ position: 'absolute', inset: 0, zIndex: 10, cursor: 'grab' }} />

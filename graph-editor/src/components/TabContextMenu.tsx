@@ -12,6 +12,7 @@ import { useShareLink } from '../hooks/useShareLink';
 import { useManageSnapshots } from '../hooks/useManageSnapshots';
 import { usePullFile } from '../hooks/usePullFile';
 import { usePullAll } from '../hooks/usePullAll';
+import { copyToClipboard } from '../utils/copyToClipboard';
 
 interface TabContextMenuProps {
   tabId: string;
@@ -347,7 +348,7 @@ export function TabContextMenu({ tabId, x, y, onClose, onRequestCommit }: TabCon
     // Info
     items.push({
       label: 'Copy File ID',
-      onClick: () => navigator.clipboard.writeText(tab.fileId)
+      onClick: () => copyToClipboard(tab.fileId)
     });
     
     return items;

@@ -13,6 +13,7 @@
  */
 
 import React, { useState, useMemo, useCallback } from 'react';
+import { copyToClipboard } from '../../utils/copyToClipboard';
 import { X, Copy, Check, Share2, LayoutDashboard, Layers, Zap, Link } from 'lucide-react';
 import { useTabContext, fileRegistry } from '../../contexts/TabContext';
 import { shareLinkService, extractIdentityFromFileSource, resolveShareSecretForLinkGeneration } from '../../services/shareLinkService';
@@ -139,7 +140,7 @@ export function ShareLinkModal({ isOpen, onClose }: ShareLinkModalProps) {
         }
         const base = `${window.location.origin}${window.location.pathname}`;
         const url = `${base}?graph=${encodeURIComponent(graph)}&branch=${encodeURIComponent(branch)}`;
-        await navigator.clipboard.writeText(url);
+        await copyToClipboard(url);
         setCopied(true);
         setTimeout(() => setCopied(false), 2000);
         sessionLogService.success('session', 'SHARE_WORKING_LINK_COPIED', `Working link copied: ${graph} @ ${branch}`);
@@ -212,7 +213,7 @@ export function ShareLinkModal({ isOpen, onClose }: ShareLinkModalProps) {
           }
         }
         
-        await navigator.clipboard.writeText(url);
+        await copyToClipboard(url);
         setCopied(true);
         setTimeout(() => setCopied(false), 2000);
 
@@ -265,7 +266,7 @@ export function ShareLinkModal({ isOpen, onClose }: ShareLinkModalProps) {
           url = res.url;
         }
 
-        await navigator.clipboard.writeText(url);
+        await copyToClipboard(url);
         setCopied(true);
         setTimeout(() => setCopied(false), 2000);
 

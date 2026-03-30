@@ -592,7 +592,8 @@ def _fit_graph_compiler(payload: dict, report_progress=None) -> dict:
         # ── 6. Summarise Phase 1 posteriors ──
         progress.set_band(*P1_SUMMARISE)
         report("summarising", 100, f"{phase1_label}: Computing diagnostics…")
-        inference_result = summarise_posteriors(trace, topology, evidence, metadata, quality)
+        inference_result = summarise_posteriors(trace, topology, evidence, metadata, quality,
+                                                settings=settings)
 
         # ── 6b. Phase 2: cohort pass with frozen Phase 1 results ──
         # Extract Phase 1 posterior means and build Phase 2 model.
@@ -826,6 +827,7 @@ def _fit_graph_compiler(payload: dict, report_progress=None) -> dict:
             report("summarising", 100, f"{phase2_label}: Computing diagnostics…")
             inference_result2 = summarise_posteriors(
                 trace2, topology, evidence, metadata2, quality2,
+                settings=settings,
             )
 
             # Merge Phase 2 cohort results into Phase 1 results.
@@ -853,11 +855,15 @@ def _fit_graph_compiler(payload: dict, report_progress=None) -> dict:
                         'path_onset_hdi_lower', 'path_onset_hdi_upper',
                         'path_mu_mean', 'path_mu_sd',
                         'path_sigma_mean', 'path_sigma_sd',
+                        'path_hdi_t95_lower', 'path_hdi_t95_upper',
                         'path_provenance',
                     ):
                         val = getattr(lat2, attr, None)
                         if val is not None:
                             setattr(lat1, attr, val)
+                        if attr == 'path_hdi_t95_lower':
+                            print(f"[DIAG merge] {eid[:20]}: path_hdi_t95_lower lat2={getattr(lat2, 'path_hdi_t95_lower', None)}, "
+                                  f"lat1_after={getattr(lat1, 'path_hdi_t95_lower', None)}", flush=True)
 
             for d in inference_result2.diagnostics:
                 _log(log, f"  inference2: {d}")
@@ -874,7 +880,17 @@ def _fit_graph_compiler(payload: dict, report_progress=None) -> dict:
 
         for post in inference_result.posteriors:
             lat_post = inference_result.latency_posteriors.get(post.edge_id)
+            if lat_post:
+                _log(log, f"  path_hdi_t95 diag {post.edge_id[:20]}: "
+                     f"path_hdi_t95_lower={lat_post.path_hdi_t95_lower}, "
+                     f"path_hdi_t95_upper={lat_post.path_hdi_t95_upper}, "
+                     f"edge_hdi_t95_lower={lat_post.hdi_t95_lower}")
             slices = _build_unified_slices(post, lat_post)
+            cohort_s = slices.get('cohort()')
+            if cohort_s:
+                _log(log, f"  cohort_slice diag {post.edge_id[:20]}: "
+                     f"hdi_t95_lower={cohort_s.get('hdi_t95_lower', 'OMITTED')}, "
+                     f"mu_mean={cohort_s.get('mu_mean')}")
 
             edge_entry: dict = {
                 "param_id": post.param_id,
@@ -1117,8 +1133,8 @@ def _build_unified_slices(
             "mu_sd": round(lat.path_mu_sd, 4) if lat.path_mu_sd is not None else None,
             "sigma_mean": round(lat.path_sigma_mean, 4) if lat.path_sigma_mean is not None else None,
             "sigma_sd": round(lat.path_sigma_sd, 4) if lat.path_sigma_sd is not None else None,
-            "hdi_t95_lower": round(lat.hdi_t95_lower, 1),  # TODO: path-level t95 HDI
-            "hdi_t95_upper": round(lat.hdi_t95_upper, 1),
+            **({"hdi_t95_lower": round(lat.path_hdi_t95_lower, 1), "hdi_t95_upper": round(lat.path_hdi_t95_upper, 1)}
+               if lat.path_hdi_t95_lower is not None else {}),
         }
         if lat.path_onset_delta_days is not None:
             cohort["onset_mean"] = round(lat.path_onset_delta_days, 2)

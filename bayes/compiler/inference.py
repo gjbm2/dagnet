@@ -127,6 +127,14 @@ def run_inference(
     return trace, quality
 
 
+
+# Maturity threshold for dispersion estimation.  Observations with
+# F below this are excluded — the CDF adjustment amplifies noise
+# too much.  Survivors are used in BetaBinomial MLE with recency
+# weighting.
+DISPERSION_F_THRESHOLD = 0.90
+
+
 def _estimate_cohort_kappa(
     ev,
     et,
@@ -135,13 +143,19 @@ def _estimate_cohort_kappa(
     diagnostics: list[str],
     obs_type_filter: str = "cohort",
     phase2_frozen: dict | None = None,
+    recency_half_life: float = 30.0,
+    today_date=None,
 ) -> float | None:
-    """Estimate between-cohort dispersion from trajectory residuals.
+    """Estimate between-cohort dispersion via BetaBinomial MLE.
 
-    Williams (1982) / Crowder (1978) moment estimator. For each cohort
-    trajectory, computes the maturity-adjusted implied p, then estimates
-    kappa from the empirical variance minus the expected Binomial
-    sampling variance.
+    For each anchor day, collects (k, n) — conversions and denominator.
+    Fits BetaBinomial(n, α, β) by maximum likelihood to estimate the
+    concentration κ = α + β.  More efficient than Williams moment
+    estimation when per-observation n is small (the Binomial noise is
+    large relative to the between-cohort signal).
+
+    Observations are weighted by recency (halflife decay) for
+    consistency with the model.  Maturity-gated by DISPERSION_F_THRESHOLD.
 
     Returns kappa (Beta concentration) or None if insufficient data.
     """
@@ -185,22 +199,43 @@ def _estimate_cohort_kappa(
                 mu = ev.latency_prior.mu
                 sigma = ev.latency_prior.sigma
 
-    # Collect per-cohort implied p from BOTH cohort trajectories
-    # AND cohort daily obs. Trajectories give multi-retrieval days
-    # (endpoint y/x). Daily obs give single-retrieval days (k/n).
-    # Together they cover nearly all anchor days.
-    # Filter: denominator >= 3 and F(age) >= 0.9.
-    # Maturity gate at 0.9: immature observations have amplified CDF
-    # error that inflates variance and drives kappa down. See doc 25.
-    p_implied = []
+    # Collect per-anchor-day (k, n) pairs from BOTH trajectories
+    # (endpoint y/x) and daily obs (k/n).  Together they cover
+    # nearly all anchor days.
+    #
+    # Filters:
+    #   - denominator >= 3 (too few people to measure a rate)
+    #   - F >= DISPERSION_F_THRESHOLD (CDF adjustment too noisy)
+    # Weighting:
+    #   - recency (halflife decay — consistent with model)
+    import math as _math
+    _ln2 = _math.log(2)
+    k_values = []
     n_values = []
     f_values = []
+    recency_weights = []
     n_skipped_x = 0
     n_skipped_f = 0
-    seen_dates = set()  # avoid double-counting
+    seen_dates = set()
+
+    def _recency_weight(date_str):
+        if not date_str or not today_date:
+            return 1.0
+        try:
+            from datetime import datetime
+            if isinstance(today_date, datetime):
+                td = today_date
+            else:
+                td = datetime.fromisoformat(str(today_date))
+            dt = datetime.fromisoformat(str(date_str)[:10])
+            age_days = (td - dt).days
+            if age_days < 0:
+                return 1.0
+            return _math.exp(-_ln2 * age_days / recency_half_life)
+        except (ValueError, TypeError):
+            return 1.0
 
     for c_obs in ev.cohort_obs:
-        # 1. Trajectory endpoints (multi-retrieval anchor days)
         for traj in c_obs.trajectories:
             if traj.obs_type != obs_type_filter:
                 continue
@@ -211,24 +246,20 @@ def _estimate_cohort_kappa(
                 n_skipped_x += 1
                 continue
             x_final = cx[-1]
-            y_final = traj.cumulative_y[-1] if traj.cumulative_y else 0
+            y_final = min(traj.cumulative_y[-1] if traj.cumulative_y else 0, x_final)
             age_final = traj.retrieval_ages[-1]
             f_age = shifted_lognormal_cdf(age_final, onset, mu, sigma)
-            if f_age < 0.9:
+            if f_age < DISPERSION_F_THRESHOLD:
                 n_skipped_f += 1
                 continue
-            p_imp = y_final / (x_final * f_age)
-            p_imp = min(max(p_imp, 0.001), 0.999)
-            p_implied.append(p_imp)
+            k_values.append(y_final)
             n_values.append(x_final)
             f_values.append(f_age)
+            recency_weights.append(
+                _recency_weight(getattr(traj, 'date', None)))
             if hasattr(traj, 'date') and traj.date:
                 seen_dates.add(traj.date)
 
-        # 2. Daily obs (single-retrieval anchor days)
-        # Now that the evidence binder uses x (from-node) as
-        # denominator for all obs types, daily obs are edge-level
-        # rates — compatible with trajectory endpoints.
         if c_obs.daily and obs_type_filter in getattr(c_obs, 'slice_dsl', ''):
             for d_obs in c_obs.daily:
                 d_key = getattr(d_obs, 'date', None)
@@ -239,80 +270,157 @@ def _estimate_cohort_kappa(
                     continue
                 age = getattr(d_obs, 'age_days', 0) or 0
                 f_age = shifted_lognormal_cdf(age, onset, mu, sigma)
-                if f_age < 0.9:
+                if f_age < DISPERSION_F_THRESHOLD:
                     n_skipped_f += 1
                     continue
-                p_imp = d_obs.k / (d_obs.n * f_age)
-                p_imp = min(max(p_imp, 0.001), 0.999)
-                p_implied.append(p_imp)
+                k_values.append(min(d_obs.k, d_obs.n))
                 n_values.append(d_obs.n)
                 f_values.append(f_age)
+                recency_weights.append(_recency_weight(d_key))
                 if d_key:
                     seen_dates.add(d_key)
 
-    if len(p_implied) < 5:
+    if len(k_values) < 5:
         diagnostics.append(
             f"  empirical_kappa {ev.edge_id[:8]}…: insufficient data "
-            f"({len(p_implied)} cohorts after filtering, "
+            f"({len(k_values)} cohorts after filtering, "
             f"skipped {n_skipped_x} low-x, {n_skipped_f} immature)"
         )
         return None
 
     import numpy as _np
-    p_arr = _np.array(p_implied)
+    from scipy.special import betaln as _betaln
+    from scipy.optimize import minimize as _minimize
+
+    k_arr = _np.array(k_values, dtype=_np.float64)
     n_arr = _np.array(n_values, dtype=_np.float64)
     f_arr = _np.array(f_values)
+    w_arr = _np.array(recency_weights)
 
-    # DEBUG: dump actual values for kappa forensics
+    eff_n = float(_np.sum(w_arr) ** 2 / _np.sum(w_arr ** 2)) if _np.sum(w_arr) > 0 else 0
+    p_implied = k_arr / (n_arr * f_arr)
+    p_implied = _np.clip(p_implied, 0.001, 0.999)
+
     diagnostics.append(
         f"  kappa_debug {ev.edge_id[:8]}…: "
-        f"n_obs={len(p_arr)}, "
-        f"p_implied=[{_np.min(p_arr):.4f}..{_np.max(p_arr):.4f}] "
-        f"std={_np.std(p_arr):.6f}, "
+        f"n_obs={len(k_arr)}, n_eff={eff_n:.0f}, "
+        f"p_implied=[{_np.min(p_implied):.4f}..{_np.max(p_implied):.4f}] "
+        f"std={_np.std(p_implied):.6f}, "
         f"n_denom=[{_np.min(n_arr):.0f}..{_np.max(n_arr):.0f}] "
         f"median={_np.median(n_arr):.0f}, "
         f"F=[{_np.min(f_arr):.3f}..{_np.max(f_arr):.3f}], "
         f"obs_type={obs_type_filter}"
     )
 
-    p_bar = float(_np.mean(p_arr))
-    # F²-weighted observed variance — downweights observations
-    # where the maturity adjustment amplifies noise.
-    w = f_arr ** 2
-    p_mean_w = float(_np.average(p_arr, weights=w))
-    observed_var = float(_np.average((p_arr - p_mean_w) ** 2, weights=w))
+    # BetaBinomial MLE with exact CDF-adjusted likelihood.
+    #
+    # Generative model:
+    #   p_day ~ Beta(α, β)              [between-day rate variation]
+    #   k ~ Binomial(n, p_day × F)      [observed conversions, F = maturity]
+    #
+    # The log-likelihood for observation (k, n, F) integrates out p:
+    #   P(k|n,F,α,β) = C(n,k) ∫₀¹ (pF)^k (1-pF)^(n-k) Beta(p|α,β) dp
+    #
+    # For F=1 this is the standard BetaBinomial (closed form via betaln).
+    # For F<1, we use numerical quadrature (scipy.integrate.quad).
+    # With n ≤ 250 and F ≥ 0.9, the integrand is well-behaved.
+    from scipy.integrate import quad as _quad
+    from scipy.special import gammaln as _gammaln
 
-    # Expected Binomial sampling variance (Williams 1982):
-    # Each p_implied_i = y_i / (x_i × F_i) has sampling variance
-    # ≈ p(1-p) / (n_i × F_i²) from the Binomial (the 1/F²
-    # comes from the maturity adjustment inflating noise).
-    binomial_var = float(_np.average(
-        p_bar * (1.0 - p_bar) / (n_arr * f_arr ** 2),
-        weights=w,
-    ))
-
-    between_cohort_var = max(observed_var - binomial_var, 0.0)
-    if between_cohort_var < 1e-10:
-        # No detectable between-cohort variation — very high kappa.
-        # Return a large kappa (effectively Binomial, no overdispersion).
-        diagnostics.append(
-            f"  empirical_kappa {ev.edge_id[:8]}…: no detectable "
-            f"between-cohort variation (obs_var={observed_var:.6f}, "
-            f"binom_var={binomial_var:.6f}, n_cohorts={len(p_arr)})"
+    def _log_lik_one(k_i, n_i, f_i, a, b):
+        """Log P(k|n,F,α,β) for a single observation."""
+        if abs(f_i - 1.0) < 1e-8:
+            # F≈1: standard BetaBinomial (fast, exact)
+            return float(
+                _gammaln(n_i + 1) - _gammaln(k_i + 1) - _gammaln(n_i - k_i + 1)
+                + _betaln(k_i + a, n_i - k_i + b) - _betaln(a, b)
+            )
+        # F<1: numerical quadrature
+        log_binom_coeff = (
+            _gammaln(n_i + 1) - _gammaln(k_i + 1) - _gammaln(n_i - k_i + 1)
         )
-        return 500.0
+        log_beta_norm = _betaln(a, b)
 
-    kappa = p_bar * (1.0 - p_bar) / between_cohort_var - 1.0
-    kappa = max(kappa, 1.0)  # floor at 1
+        def integrand(p):
+            pf = p * f_i
+            if pf <= 0 or pf >= 1:
+                if k_i == 0 and pf <= 0:
+                    binom_part = (1.0) ** (n_i - k_i)
+                elif k_i == n_i and pf >= 1:
+                    binom_part = 1.0
+                else:
+                    return 0.0
+            else:
+                binom_part = pf ** k_i * (1.0 - pf) ** (n_i - k_i)
+            beta_part = p ** (a - 1) * (1.0 - p) ** (b - 1)
+            return binom_part * beta_part
 
-    diagnostics.append(
-        f"  empirical_kappa {ev.edge_id[:8]}…: kappa={kappa:.1f} "
-        f"(p_bar={p_bar:.4f}, obs_var={observed_var:.6f}, "
-        f"binom_var={binomial_var:.6f}, bc_var={between_cohort_var:.6f}, "
-        f"n_cohorts={len(p_arr)}, "
-        f"cdf=[{onset:.1f},{mu:.3f},{sigma:.3f}])"
-    )
-    return kappa
+        val, _ = _quad(integrand, 0, 1, limit=50)
+        if val <= 0:
+            return -1e10  # effectively -inf
+        return float(log_binom_coeff - log_beta_norm + _np.log(val))
+
+    # Precompute which observations need quadrature vs closed form
+    _is_mature = _np.abs(f_arr - 1.0) < 1e-8
+    _n_quad = int(_np.sum(~_is_mature))
+
+    def _neg_loglik(log_params):
+        a = _np.exp(log_params[0])
+        b = _np.exp(log_params[1])
+        # Mature observations: vectorised BetaBinomial (fast)
+        ll_mature = _np.where(
+            _is_mature,
+            w_arr * (_betaln(k_arr + a, n_arr - k_arr + b) - _betaln(a, b)),
+            0.0,
+        )
+        total = float(_np.sum(ll_mature))
+        # Semi-mature observations: per-observation quadrature
+        for i in range(len(k_arr)):
+            if not _is_mature[i]:
+                total += float(w_arr[i]) * _log_lik_one(
+                    k_arr[i], n_arr[i], f_arr[i], a, b)
+        return -total
+
+    # Starting values from moment estimate
+    p_bar = float(_np.average(p_implied, weights=w_arr))
+    p_bar = max(min(p_bar, 0.999), 0.001)
+    kappa_init = 50.0
+    a0 = p_bar * kappa_init
+    b0 = (1.0 - p_bar) * kappa_init
+
+    try:
+        result = _minimize(
+            _neg_loglik,
+            x0=[_np.log(a0), _np.log(b0)],
+            method='L-BFGS-B',
+            bounds=[(-5, 15), (-5, 15)],
+        )
+        if result.success:
+            alpha_hat = float(_np.exp(result.x[0]))
+            beta_hat = float(_np.exp(result.x[1]))
+            kappa = alpha_hat + beta_hat
+            kappa = max(kappa, 1.0)
+            kappa = min(kappa, 5000.0)
+            mu_hat = alpha_hat / kappa
+            diagnostics.append(
+                f"  empirical_kappa {ev.edge_id[:8]}…: kappa={kappa:.1f} "
+                f"(BB-MLE, mu={mu_hat:.4f}, alpha={alpha_hat:.1f}, beta={beta_hat:.1f}, "
+                f"n_cohorts={len(k_arr)}, n_eff={eff_n:.0f}, n_quad={_n_quad}, "
+                f"cdf=[{onset:.1f},{mu:.3f},{sigma:.3f}])"
+            )
+            return kappa
+        else:
+            diagnostics.append(
+                f"  empirical_kappa {ev.edge_id[:8]}…: MLE failed to converge "
+                f"({result.message}), n_cohorts={len(k_arr)}"
+            )
+            return None
+    except Exception as e:
+        diagnostics.append(
+            f"  empirical_kappa {ev.edge_id[:8]}…: MLE error ({e}), "
+            f"n_cohorts={len(k_arr)}"
+        )
+        return None
 
 
 def summarise_posteriors(
@@ -322,6 +430,7 @@ def summarise_posteriors(
     metadata: dict,
     quality: QualityMetrics,
     phase1_kappa: dict[str, "np.ndarray"] | None = None,
+    settings: dict | None = None,
 ) -> InferenceResult:
     """Extract posterior summaries from the MCMC trace.
 
@@ -330,6 +439,11 @@ def summarise_posteriors(
     """
     import arviz as az
     import numpy as np
+    from datetime import datetime
+
+    _settings = settings or {}
+    _recency_hl = float(_settings.get("RECENCY_HALF_LIFE_DAYS", 30))
+    _today = datetime.now()
 
     edge_var_names = metadata.get("edge_var_names", {})
     rhat_ds = az.rhat(trace)
@@ -413,19 +527,16 @@ def summarise_posteriors(
             ev, et, topology, float(np.mean(samples)), diagnostics,
             obs_type_filter="window",
             phase2_frozen=post_latency,
+            recency_half_life=_recency_hl,
+            today_date=_today,
         )
 
-        # Use the HIGHER kappa (tighter, less dispersed) of the two.
-        # MCMC kappa_p can be too low at small n (confounds noise).
-        # Williams can be too low if data is insufficient.
-        # Taking the max is conservative — narrower bands.
-        effective_kappa = None
-        if mcmc_kappa is not None and williams_kappa is not None:
-            effective_kappa = max(mcmc_kappa, williams_kappa)
-        elif mcmc_kappa is not None:
-            effective_kappa = mcmc_kappa
-        elif williams_kappa is not None:
-            effective_kappa = williams_kappa
+        # Report both MCMC and Williams kappa side by side for
+        # diagnostic comparison. Use Williams as the effective kappa
+        # — it's the post-hoc estimate from actual between-cohort
+        # variation. MCMC kappa_p captures something different
+        # (endpoint BB dispersion within the model).
+        effective_kappa = williams_kappa if williams_kappa is not None else mcmc_kappa
 
         if effective_kappa is not None:
             mu_p_samples = samples
@@ -538,6 +649,8 @@ def summarise_posteriors(
             # data, not proxied from window kappa. See journal 28-Mar-26.
             cohort_kappa_empirical = _estimate_cohort_kappa(
                 ev, et, topology, float(np.mean(c_samples)), diagnostics,
+                recency_half_life=_recency_hl,
+                today_date=_today,
             )
             if cohort_kappa_empirical is not None:
                 # Convert scalar kappa to array matching p_cohort samples
@@ -744,6 +857,13 @@ def summarise_posteriors(
 
                 path_provenance = "bayesian"
 
+                # Path-level t95 HDI from posterior samples
+                onset_for_path_t95 = onset_c_samples if onset_c_samples is not None else np.full_like(mu_c_samples, path_onset)
+                path_t95_samples = np.exp(mu_c_samples + 1.645 * sigma_c_samples) + onset_for_path_t95
+                path_t95_hdi = az.hdi(path_t95_samples, hdi_prob=HDI_PROB)
+                path_hdi_t95_lower = float(path_t95_hdi[0])
+                path_hdi_t95_upper = float(path_t95_hdi[1])
+
                 # Attach to existing latency posterior (or create one)
                 if edge_id in latency_posteriors:
                     lat = latency_posteriors[edge_id]
@@ -755,7 +875,12 @@ def summarise_posteriors(
                     lat.path_mu_sd = path_mu_sd
                     lat.path_sigma_mean = path_sigma
                     lat.path_sigma_sd = path_sigma_sd
+                    lat.path_hdi_t95_lower = path_hdi_t95_lower
+                    lat.path_hdi_t95_upper = path_hdi_t95_upper
                     lat.path_provenance = path_provenance
+                    # DIAGNOSTIC
+                    print(f"[DIAG inference] {edge_id[:20]}: path_hdi_t95={path_hdi_t95_lower:.1f}—{path_hdi_t95_upper:.1f} "
+                          f"(mu={path_mu:.3f}, sigma={path_sigma:.3f}, onset={path_onset:.1f})", flush=True)
 
                 diagnostics.append(
                     f"  cohort_latency {edge_id[:8]}…: onset={path_onset:.1f}"

@@ -573,6 +573,14 @@ function buildEdgeInfoResult(graph: ConversionGraph, dsl: string): AnalysisResul
         posteriors: {
           probability: probPosterior || null,
           latency: latPosterior,
+          // Model tab: use bayesian model_vars t95, not promoted scalars
+          ...(() => {
+            const bayesMv = (edge.p?.model_vars as any[])?.find((mv: any) => mv.source === 'bayesian');
+            return {
+              t95: bayesMv?.latency?.t95,
+              path_t95: bayesMv?.latency?.path_t95,
+            };
+          })(),
         },
       } : {}),
     },
@@ -590,7 +598,7 @@ function buildLatencyCdfMeta(edge: GraphEdge): Record<string, any> | null {
   const edgeSigma = lat.posterior?.sigma_mean ?? lat.sigma;
   const edgeOnset = lat.posterior?.onset_delta_days ?? lat.onset_delta_days ?? 0;
   if (typeof edgeMu === 'number' && typeof edgeSigma === 'number' && edgeSigma > 0) {
-    result.edge = { mu: edgeMu, sigma: edgeSigma, onset: edgeOnset };
+    result.edge = { mu: edgeMu, sigma: edgeSigma, onset: edgeOnset, t95: lat.promoted_t95 ?? lat.t95 };
   }
 
   // Path-level CDF params (from Bayesian posterior path_* fields, or analytic path_mu/path_sigma)
@@ -598,7 +606,7 @@ function buildLatencyCdfMeta(edge: GraphEdge): Record<string, any> | null {
   const pathSigma = lat.posterior?.path_sigma_mean ?? lat.path_sigma;
   const pathOnset = lat.posterior?.path_onset_delta_days ?? lat.path_onset_delta_days ?? edgeOnset;
   if (typeof pathMu === 'number' && typeof pathSigma === 'number' && pathSigma > 0) {
-    result.path = { mu: pathMu, sigma: pathSigma, onset: pathOnset };
+    result.path = { mu: pathMu, sigma: pathSigma, onset: pathOnset, t95: lat.promoted_path_t95 ?? lat.path_t95 };
   }
 
   return Object.keys(result).length > 0 ? result : null;

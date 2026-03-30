@@ -439,7 +439,7 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
                     onset_obs = getattr(lp, 'onset_observations', None)
                     if onset_obs and len(onset_obs) >= 3:
                         onset_obs_np = np.array(onset_obs, dtype=np.float64)
-                        sigma_obs = max(float(np.std(onset_obs_np)), 1.0)
+                        sigma_obs = max(float(np.std(onset_obs_np)), 0.01)
                         pm.Normal(
                             f"onset_obs_{safe_id}",
                             mu=onset_var,
@@ -844,11 +844,13 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
                 )
 
             cohort_latency_vars[edge_id] = (onset_cohort, mu_cohort, sigma_cohort)
-            if is_phase2 and cw is None:
-                diagnostics.append(
-                    f"  cohort_latency: {edge_id[:8]}… "
-                    f"wide priors (Phase 2), latent_onset=independent"
-                )
+            if is_phase2:
+                if cw is None:
+                    diagnostics.append(
+                        f"  cohort_latency: {edge_id[:8]}… "
+                        f"wide priors (Phase 2), latent_onset=independent"
+                    )
+                # Phase 2 with warm start already logged at line 786-788
             else:
                 diagnostics.append(
                     f"  cohort_latency: {edge_id[:8]}… "

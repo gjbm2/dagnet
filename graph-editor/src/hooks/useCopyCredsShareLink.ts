@@ -1,6 +1,7 @@
 import { useCallback, useMemo } from 'react';
 import type { CredentialsData } from '../types/credentials';
 import { buildCredsShareUrl, buildGitOnlyCredentialsForShare } from '../services/credentialsShareLinkService';
+import { copyToClipboard } from '../utils/copyToClipboard';
 
 export function useCopyCredsShareLink(allCredentials: CredentialsData | null | undefined) {
   const baseUrl = useMemo(() => {
@@ -25,13 +26,7 @@ export function useCopyCredsShareLink(allCredentials: CredentialsData | null | u
       try {
         const url = buildUrlForRepo(repoName);
 
-        if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
-          await navigator.clipboard.writeText(url);
-          return { ok: true, url };
-        }
-
-        // Fallback (older browsers / non-secure contexts)
-        window.prompt('Copy this link:', url);
+        await copyToClipboard(url);
         return { ok: true, url };
       } catch (e) {
         return { ok: false, error: e instanceof Error ? e.message : String(e) };
