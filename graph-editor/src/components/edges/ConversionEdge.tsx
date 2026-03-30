@@ -2721,7 +2721,7 @@ export default function ConversionEdge({
             
             // Lag-adjusted speed: slower chevrons for edges with higher lag.
             // Use median_lag_days from display data, fall back to t95 from config.
-            const lagDays = data?.edgeLatencyDisplay?.median_days ?? fullEdge?.p?.latency?.t95;
+            const lagDays = data?.edgeLatencyDisplay?.median_days ?? fullEdge?.p?.latency?.promoted_t95 ?? fullEdge?.p?.latency?.t95;
             const effectiveSpeed = CHEVRON_SPEED * computeChevronSpeedFactor(lagDays);
             
             const animationDuration = pathLength / effectiveSpeed;

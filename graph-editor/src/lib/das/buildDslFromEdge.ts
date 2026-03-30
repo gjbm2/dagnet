@@ -468,7 +468,7 @@ export async function buildDslFromEdge(
       try {
         for (const e of (graph?.edges || [])) {
           const lat = (e as any)?.p?.latency;
-          const v = (lat?.path_t95 ?? lat?.t95);
+          const v = (lat?.promoted_path_t95 ?? lat?.path_t95 ?? lat?.promoted_t95 ?? lat?.t95);
           if (v !== undefined && v !== null && Number(v) > 0) {
             graphMaxT95 = graphMaxT95 === undefined ? Number(v) : Math.max(graphMaxT95, Number(v));
           }
@@ -477,7 +477,7 @@ export async function buildDslFromEdge(
         // ignore and fall back
       }
       
-      let pathT95 = edge.p?.latency?.path_t95;
+      let pathT95 = edge.p?.latency?.promoted_path_t95 ?? edge.p?.latency?.path_t95;
       
       // If path_t95 not stored, compute it on-the-fly from the graph
       // Use edge's anchor_node_id (from MSMDC) as the traversal start point
@@ -500,8 +500,8 @@ export async function buildDslFromEdge(
               p: e.p ? {
                 latency: e.p.latency ? {
                   latency_parameter: e.p.latency.latency_parameter,
-                  t95: e.p.latency.t95,
-                  path_t95: e.p.latency.path_t95,
+                  t95: e.p.latency.promoted_t95 ?? e.p.latency.t95,
+                  path_t95: e.p.latency.promoted_path_t95 ?? e.p.latency.path_t95,
                 } : undefined,
                 mean: e.p.mean,
               } : undefined,

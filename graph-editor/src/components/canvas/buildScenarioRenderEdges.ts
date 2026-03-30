@@ -681,7 +681,7 @@ export function buildScenarioRenderEdges(params: BuildScenarioRenderEdgesParams)
           // Raw data
           median_days,
           completeness_pct: hasCompletenessData ? completeness! * 100 : undefined,
-          t95: baseLatency.t95,
+          t95: baseLatency.promoted_t95 ?? baseLatency.t95,
           p_evidence,
           p_forecast,
           p_mean,
