@@ -318,24 +318,25 @@ def _estimate_cohort_kappa(
     #   p_day ~ Beta(α, β)              [between-day rate variation]
     #   k ~ Binomial(n, p_day × F)      [observed conversions, F = maturity]
     #
-    # The log-likelihood for observation (k, n, F) integrates out p:
-    #   P(k|n,F,α,β) = C(n,k) ∫₀¹ (pF)^k (1-pF)^(n-k) Beta(p|α,β) dp
+    # Parameterised as (μ, log ρ) where μ = α/(α+β), ρ = 1/(κ+1).
+    # The ρ parameterisation has better numerical conditioning than
+    # (α, β) or (μ, κ) — Fisher information for κ scales as 1/κ⁴,
+    # making the likelihood surface flat for large κ.  In contrast,
+    # the likelihood has meaningful curvature in log(ρ) even when ρ
+    # is small.  See Crowder (1978), Ridout et al (1999).
     #
-    # For F=1 this is the standard BetaBinomial (closed form via betaln).
-    # For F<1, we use numerical quadrature (scipy.integrate.quad).
-    # With n ≤ 250 and F ≥ 0.9, the integrand is well-behaved.
+    # For F=1: standard BetaBinomial (closed form via betaln).
+    # For F<1: numerical quadrature (scipy.integrate.quad).
     from scipy.integrate import quad as _quad
     from scipy.special import gammaln as _gammaln
 
     def _log_lik_one(k_i, n_i, f_i, a, b):
         """Log P(k|n,F,α,β) for a single observation."""
         if abs(f_i - 1.0) < 1e-8:
-            # F≈1: standard BetaBinomial (fast, exact)
             return float(
                 _gammaln(n_i + 1) - _gammaln(k_i + 1) - _gammaln(n_i - k_i + 1)
                 + _betaln(k_i + a, n_i - k_i + b) - _betaln(a, b)
             )
-        # F<1: numerical quadrature
         log_binom_coeff = (
             _gammaln(n_i + 1) - _gammaln(k_i + 1) - _gammaln(n_i - k_i + 1)
         )
@@ -345,28 +346,29 @@ def _estimate_cohort_kappa(
             pf = p * f_i
             if pf <= 0 or pf >= 1:
                 if k_i == 0 and pf <= 0:
-                    binom_part = (1.0) ** (n_i - k_i)
-                elif k_i == n_i and pf >= 1:
-                    binom_part = 1.0
-                else:
-                    return 0.0
-            else:
-                binom_part = pf ** k_i * (1.0 - pf) ** (n_i - k_i)
-            beta_part = p ** (a - 1) * (1.0 - p) ** (b - 1)
-            return binom_part * beta_part
+                    return (1.0 - p) ** (b - 1) * p ** (a - 1)
+                return 0.0
+            return pf ** k_i * (1.0 - pf) ** (n_i - k_i) * p ** (a - 1) * (1.0 - p) ** (b - 1)
 
         val, _ = _quad(integrand, 0, 1, limit=50)
         if val <= 0:
-            return -1e10  # effectively -inf
+            return -1e10
         return float(log_binom_coeff - log_beta_norm + _np.log(val))
 
-    # Precompute which observations need quadrature vs closed form
     _is_mature = _np.abs(f_arr - 1.0) < 1e-8
     _n_quad = int(_np.sum(~_is_mature))
 
-    def _neg_loglik(log_params):
-        a = _np.exp(log_params[0])
-        b = _np.exp(log_params[1])
+    def _neg_loglik(params):
+        """Negative log-likelihood in (μ, log ρ) parameterisation."""
+        mu_p = params[0]
+        rho = _np.exp(params[1])
+        # Convert to (α, β): κ = (1-ρ)/ρ, α = μκ, β = (1-μ)κ
+        kap = (1.0 - rho) / rho
+        a = mu_p * kap
+        b = (1.0 - mu_p) * kap
+        if a <= 0 or b <= 0:
+            return 1e10
+
         # Mature observations: vectorised BetaBinomial (fast)
         ll_mature = _np.where(
             _is_mature,
@@ -381,30 +383,28 @@ def _estimate_cohort_kappa(
                     k_arr[i], n_arr[i], f_arr[i], a, b)
         return -total
 
-    # Starting values from moment estimate
+    # Starting values
     p_bar = float(_np.average(p_implied, weights=w_arr))
     p_bar = max(min(p_bar, 0.999), 0.001)
-    kappa_init = 50.0
-    a0 = p_bar * kappa_init
-    b0 = (1.0 - p_bar) * kappa_init
+    rho_init = 0.02  # corresponds to kappa ≈ 50
 
     try:
         result = _minimize(
             _neg_loglik,
-            x0=[_np.log(a0), _np.log(b0)],
+            x0=[p_bar, _np.log(rho_init)],
             method='L-BFGS-B',
-            bounds=[(-5, 15), (-5, 15)],
+            bounds=[(0.001, 0.999), (-10, -0.001)],  # ρ in [~0.00005, ~0.999]
         )
         if result.success:
-            alpha_hat = float(_np.exp(result.x[0]))
-            beta_hat = float(_np.exp(result.x[1]))
-            kappa = alpha_hat + beta_hat
+            mu_hat = float(result.x[0])
+            rho_hat = float(_np.exp(result.x[1]))
+            kappa = (1.0 - rho_hat) / rho_hat
             kappa = max(kappa, 1.0)
             kappa = min(kappa, 5000.0)
-            mu_hat = alpha_hat / kappa
+            sd_hat = _np.sqrt(mu_hat * (1 - mu_hat) * rho_hat)
             diagnostics.append(
                 f"  empirical_kappa {ev.edge_id[:8]}…: kappa={kappa:.1f} "
-                f"(BB-MLE, mu={mu_hat:.4f}, alpha={alpha_hat:.1f}, beta={beta_hat:.1f}, "
+                f"(BB-MLE, mu={mu_hat:.4f}, rho={rho_hat:.5f}, sd={sd_hat:.4f}, "
                 f"n_cohorts={len(k_arr)}, n_eff={eff_n:.0f}, n_quad={_n_quad}, "
                 f"cdf=[{onset:.1f},{mu:.3f},{sigma:.3f}])"
             )

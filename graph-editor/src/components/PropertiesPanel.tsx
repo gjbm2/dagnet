@@ -1346,10 +1346,10 @@ export default function PropertiesPanel({
           ...(p.latency?.mu != null ? {
             latency: {
               mu: p.latency.mu, sigma: p.latency.sigma ?? 0,
-              t95: (p.latency as any).promoted_t95 ?? p.latency.t95 ?? 0, onset_delta_days: p.latency.onset_delta_days ?? 0,
+              t95: p.latency.t95 ?? 0, onset_delta_days: p.latency.onset_delta_days ?? 0,
               ...(p.latency.path_mu != null ? { path_mu: p.latency.path_mu } : {}),
               ...(p.latency.path_sigma != null ? { path_sigma: p.latency.path_sigma } : {}),
-              ...(p.latency.path_t95 != null ? { path_t95: (p.latency as any).promoted_path_t95 ?? p.latency.path_t95 } : {}),
+              ...(p.latency.path_t95 != null ? { path_t95: p.latency.path_t95 } : {}),
             },
           } : {}),
         };

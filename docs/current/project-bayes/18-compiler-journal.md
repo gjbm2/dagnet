@@ -34,6 +34,40 @@ Cohort improved dramatically (459 → 86) — MLE extracts signal that
 Williams couldn't see. Window still stuck at 15 — confirmed as CDF
 maturity contamination, not statistical power.
 
+### Correct CDF-adjusted likelihood (no improvement)
+
+Replaced the ad-hoc α_eff/β_eff CDF adjustment with the
+mathematically correct integral:
+
+```
+P(k|n,F,α,β) = C(n,k) ∫₀¹ (pF)^k (1-pF)^(n-k) Beta(p|α,β) dp
+```
+
+For F≈1: closed-form BetaBinomial. For F<1: scipy.integrate.quad.
+Result: essentially identical to the ad-hoc version. With F≥0.9,
+the approximation was adequate. The bias is not from the likelihood.
+
+### Kappa estimation is ill-conditioned (literature finding)
+
+Literature review (Crowder 1978, Prentice 1986, Ridout et al 1999,
+Donner & Klar 2000) reveals the core issue:
+
+- Fisher information for κ scales as **1/κ⁴**. Estimating κ=50 is
+  10,000× harder than κ=5.
+- For K=100 groups, n=15/group, ρ=0.02 (κ=50): the asymptotic SD
+  of the MLE for κ is ~770. The 95% CI spans [25, ∞).
+- **But**: ρ itself (= 1/(κ+1)) IS estimable. SD(ρ̂) ≈ 0.01,
+  giving 95% CI [0.001, 0.04]. Between-group SD of p (≈ 6.4%)
+  has CI [1.5%, 9%].
+- The problem is parameterisation: (α, β) or (μ, κ) have flat
+  likelihood surfaces in the κ direction. Reparameterising to
+  (μ, log ρ) gives the optimiser better curvature.
+
+**Decision**: reparameterise MLE from (log α, log β) to (μ, log ρ).
+Same model, same likelihood, better numerical conditioning. Convert
+back to κ at the end. The point estimate improves (less bias from
+flat surfaces) but the fundamental uncertainty is irreducible.
+
 ### Suspected production data / data-binding defect
 
 Investigation of no-latency first edges (landing-to-created,

@@ -193,8 +193,8 @@ function extractEdgeParams(edge: GraphEdge): EdgeParamDiff | null {
     if (pAny.latency) {
       const latency: any = {};
       if (pAny.latency.completeness !== undefined) latency.completeness = pAny.latency.completeness;
-      if (pAny.latency.t95 !== undefined) latency.t95 = pAny.latency.promoted_t95 ?? pAny.latency.t95;
-      if (pAny.latency.path_t95 !== undefined) latency.path_t95 = pAny.latency.promoted_path_t95 ?? pAny.latency.path_t95;
+      if (pAny.latency.t95 !== undefined) latency.t95 = pAny.latency.t95;
+      if (pAny.latency.path_t95 !== undefined) latency.path_t95 = pAny.latency.path_t95;
       if (pAny.latency.median_lag_days !== undefined) latency.median_lag_days = pAny.latency.median_lag_days;
       if (Object.keys(latency).length > 0) p.latency = latency;
     }
