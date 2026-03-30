@@ -1,6 +1,9 @@
 # Private repo workspace config (contains local directory names)
 .private-repos.conf
 
+# Claude Code worktrees
+.claude/worktrees/
+
 # Dependencies
 node_modules/
 */node_modules/
