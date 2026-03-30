@@ -7,6 +7,10 @@
           {
             "type": "command",
             "command": "bash .claude/hooks/gate-check.sh"
+          },
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/validate-graph-commit.sh"
           }
         ]
       },
