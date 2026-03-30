@@ -37,6 +37,21 @@ export interface ContextFilterObject {
   values: string[];        // Values to match
   pattern?: string;        // Regex pattern (if op is 'matches')
   patternFlags?: string;   // Regex flags (e.g., 'i' for case-insensitive)
+  // Behavioural segment filter fields (for variant-type contexts).
+  // When type='behavioral', the adapter emits an Amplitude behavioral segment
+  // ("user has/hasn't done event X") instead of a property-based segment.
+  type?: 'property' | 'behavioral';  // default: 'property' (absence = property)
+  event_type?: string;               // Amplitude event name
+  filters?: Array<{                  // Event property sub-filters
+    subprop_type: string;
+    subprop_key: string;
+    subprop_op: string;
+    subprop_value: string[];
+  }>;
+  behavioral_op?: '>=' | '=';       // '>=' = performed, '=' = did not perform
+  behavioral_value?: number;          // count threshold (1 for performed, 0 for not)
+  time_type?: 'rolling';
+  time_value?: number;                // lookback in days (default: 366)
 }
 
 /**
@@ -818,14 +833,42 @@ async function buildFilterObjectForContextValue(
   
   // Get mapping for regular values or explicit "other"
   const mapping = await contextRegistry.getSourceMapping(key, value, source);
-  
+
   // Regular value: use mapping
   if (!mapping) {
     throw new Error(`No ${source} mapping for ${key}:${value}`);
   }
-  
+
+  // Behavioural mapping: "user has done event X where property = Y"
+  if (mapping.type === 'behavioral') {
+    if (!mapping.event_type) {
+      throw new Error(`Behavioral mapping for ${key}:${value} missing event_type`);
+    }
+    const filters: ContextFilterObject['filters'] = [];
+    if (mapping.filter_property && mapping.filter_value) {
+      filters.push({
+        subprop_type: 'event',
+        subprop_key: mapping.filter_property,
+        subprop_op: 'is',
+        subprop_value: [mapping.filter_value],
+      });
+    }
+    return {
+      field: key,
+      op: 'is',
+      values: [],
+      type: 'behavioral',
+      event_type: mapping.event_type,
+      filters,
+      behavioral_op: '>=',
+      behavioral_value: 1,
+      time_type: mapping.time_type || 'rolling',
+      time_value: mapping.time_value ?? 366,
+    };
+  }
+
   const field = mapping.field || key;
-  
+
   // If pattern provided, return regex filter
   if (mapping.pattern) {
     return {
@@ -836,7 +879,7 @@ async function buildFilterObjectForContextValue(
       patternFlags: mapping.patternFlags || ''
     };
   }
-  
+
   // If explicit filter string provided, parse it to extract value
   if (mapping.filter) {
     // Parse simple filter: "field == 'value'" or "field = 'value'"
@@ -867,7 +910,7 @@ async function buildFilterObjectForContextValue(
       values: [mapping.filter]
     };
   }
-  
+
   throw new Error(`Mapping for ${key}:${value} has neither filter nor pattern`);
 }
 
@@ -915,7 +958,26 @@ async function buildComputedOtherFilterObject(
   contextDef: any
 ): Promise<ContextFilterObject> {
   const explicitValues = contextDef.values.filter((v: any) => v.id !== 'other');
-  
+
+  // Check if this is a behavioural context (any explicit value has type='behavioral').
+  // For behavioural contexts, "other" = "user has NOT done the discriminating event".
+  const firstBehavioral = explicitValues.find((v: any) => v.sources?.[source]?.type === 'behavioral');
+  if (firstBehavioral) {
+    const mapping = firstBehavioral.sources[source];
+    return {
+      field: key,
+      op: 'is',
+      values: [],
+      type: 'behavioral',
+      event_type: mapping.event_type,
+      filters: [],  // No sub-filters: "user has NOT done this event at all"
+      behavioral_op: '=',
+      behavioral_value: 0,
+      time_type: mapping.time_type || 'rolling',
+      time_value: mapping.time_value ?? 366,
+    };
+  }
+
   const allValues: string[] = [];
   let field: string = key;
   

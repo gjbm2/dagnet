@@ -347,9 +347,27 @@ connections:
                 console.warn(`[Amplitude Adapter] Legacy string filter not supported: ${filterObj}`);
                 continue;
               }
-              
+
+              // Behavioural context filter: "user has/hasn't done event X"
+              // Used for variant-type contexts where the discriminating event
+              // determines user population (not a user property).
+              if (filterObj.type === 'behavioral') {
+                const seg = {
+                  type: "event",
+                  event_type: filterObj.event_type,
+                  filters: filterObj.filters || [],
+                  op: filterObj.behavioral_op || ">=",
+                  value: filterObj.behavioral_value ?? 1,
+                  time_type: filterObj.time_type || "rolling",
+                  time_value: filterObj.time_value ?? 366
+                };
+                segments.push(seg);
+                console.log(`[Amplitude Adapter] Added behavioral context segment: ${filterObj.event_type} ${seg.op} ${seg.value} (${seg.time_type} ${seg.time_value}d)`);
+                continue;
+              }
+
               const prop = normalizeProp(filterObj.field);
-              
+
               if (filterObj.pattern) {
                 // Regex pattern - Amplitude doesn't support regex on segments directly
                 // Extract literal values from regex patterns like "^(Paid Social|paidsocial)$"

@@ -776,35 +776,38 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
                 path_mu_sd = max(path_mu_sd ** 0.5, 0.02)
                 path_sigma_sd = max(path_sigma_sd ** 0.5, SIGMA_FLOOR)
 
-                # Cohort latency: use warm-start from previous posterior if
-                # available (quality-gated), otherwise FW-composed.
-                cw = ev.cohort_latency_warm
-                if cw is not None:
-                    ws_onset = cw.get("onset") or onset_prior_val
-                    ws_mu = cw["mu"]
-                    ws_sigma = cw["sigma"]
-                    diagnostics.append(
-                        f"  cohort_latency: {edge_id[:8]}… "
-                        f"warm_start (onset={ws_onset:.1f}, mu={ws_mu:.3f}, sigma={ws_sigma:.3f})"
-                    )
-                else:
-                    ws_onset = onset_prior_val
-                    ws_mu = float(mu_path_composed) if not hasattr(mu_path_composed, 'eval') else float(mu_path_composed.eval())
-                    ws_sigma = float(sigma_path_composed) if not hasattr(sigma_path_composed, 'eval') else float(sigma_path_composed.eval())
+                # Cohort latency: always use Phase 1 composed values.
+                #
+                # Doc 26: Phase 2 receives NO priors from external sources
+                # (param files). All priors derive from Phase 1 of the
+                # current run. The previous cohort_latency_warm path
+                # created a self-reinforcing onset drift loop by injecting
+                # stale cohort posteriors that bypassed Phase 1 entirely.
+                #
+                # Centre: FW-composed Phase 1 edge posteriors
+                # Width: quadrature-composed Phase 1 SDs (computed above)
+                ws_onset = onset_prior_val
+                ws_mu = float(mu_path_composed) if not hasattr(mu_path_composed, 'eval') else float(mu_path_composed.eval())
+                ws_sigma = float(sigma_path_composed) if not hasattr(sigma_path_composed, 'eval') else float(sigma_path_composed.eval())
+                diagnostics.append(
+                    f"  cohort_latency: {edge_id[:8]}… "
+                    f"phase1_composed (onset={ws_onset:.1f}, mu={ws_mu:.3f}, sigma={ws_sigma:.3f}, "
+                    f"sd_onset={path_onset_sd:.2f}, sd_mu={path_mu_sd:.3f}, sd_sigma={path_sigma_sd:.3f})"
+                )
 
-                # onset_cohort: softplus(Normal) centred on composed/warm-start value
+                # onset_cohort: softplus(Normal) centred on Phase 1 composed value
                 eps_onset_cohort = pm.Normal(f"eps_onset_cohort_{safe_id}", mu=0, sigma=1)
                 onset_cohort = pm.Deterministic(
                     f"onset_cohort_{safe_id}",
                     pt.softplus(ws_onset + eps_onset_cohort * path_onset_sd),
                 )
-                # mu_cohort: Normal centred on FW-composed or warm-start value
+                # mu_cohort: Normal centred on FW-composed value
                 mu_cohort = pm.Normal(
                     f"mu_cohort_{safe_id}",
                     mu=ws_mu,
                     sigma=path_mu_sd,
                 )
-                # sigma_cohort: Gamma with mode at composed or warm-start value
+                # sigma_cohort: Gamma with mode at FW-composed value
                 from .completeness import gamma_params_from_mode
                 gamma_a, gamma_b = gamma_params_from_mode(
                     max(ws_sigma, 0.1),
@@ -872,12 +875,7 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
                 )
 
             if is_phase2:
-                if cw is None:
-                    diagnostics.append(
-                        f"  cohort_latency: {edge_id[:8]}… "
-                        f"wide priors (Phase 2), latent_onset=independent"
-                    )
-                # Phase 2 with warm start already logged at line 786-788
+                pass  # Phase 2 cohort latency already logged above
             else:
                 diagnostics.append(
                     f"  cohort_latency: {edge_id[:8]}… "

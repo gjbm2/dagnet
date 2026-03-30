@@ -43,6 +43,13 @@ export interface SourceMapping {
   filter?: string;
   pattern?: string;
   patternFlags?: string;
+  // Behavioural segment filter fields (for variant-type contexts)
+  type?: 'property' | 'behavioral';  // default: 'property' (absence = property)
+  event_type?: string;               // Amplitude event name (when type='behavioral')
+  filter_property?: string;          // Event property to filter on
+  filter_value?: string;             // Value to match
+  time_type?: 'rolling';             // Lookback window type
+  time_value?: number;               // Lookback window in days (default: 366)
 }
 
 export interface ContextSection {

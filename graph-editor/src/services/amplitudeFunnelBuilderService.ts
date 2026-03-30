@@ -209,6 +209,22 @@ export async function buildAmplitudeFunnelDefinition(options: FunnelBuildOptions
   const contextFilters = await buildContextFilters(parsed, 'amplitude');
   if (contextFilters) {
     for (const filterObj of contextFilters) {
+      // Behavioural context filter: "user has/hasn't done event X"
+      if (filterObj.type === 'behavioral') {
+        conditions.push({
+          type: 'event',
+          event_type: filterObj.event_type,
+          filters: filterObj.filters || [],
+          op: filterObj.behavioral_op || '>=',
+          value: filterObj.behavioral_value ?? 1,
+          time_type: filterObj.time_type || 'rolling',
+          time_value: filterObj.time_value ?? 366,
+          group_type: 'User',
+        });
+        continue;
+      }
+
+      // Property-based context filter (existing behaviour)
       const prop = normalizeProp(filterObj.field);
       const values = filterObj.pattern
         ? extractLiteralAlternativesFromPattern(filterObj.pattern)

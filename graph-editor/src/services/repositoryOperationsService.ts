@@ -1039,7 +1039,8 @@ class RepositoryOperationsService {
     repository: string,
     showTripleChoice: (options: any) => Promise<'primary' | 'secondary' | 'cancel'>,
     onPullRequested?: () => Promise<void>,
-    onProgress?: (completed: number, total: number, phase: 'uploading' | 'finalising') => void
+    onProgress?: (completed: number, total: number, phase: 'uploading' | 'finalising') => void,
+    onHashGuard?: (result: import('./commitHashGuardService').HashGuardResult) => Promise<import('./commitHashGuardService').HashChangeItem[]>,
   ): Promise<void> {
     // Start hierarchical log for commit operation
     const logOpId = sessionLogService.startOperation(
@@ -1217,6 +1218,59 @@ class RepositoryOperationsService {
           undefined,
           { filePath: file.path });
       }
+
+    // ═══════════════════════════════════════════════════════════════
+    // HASH GUARD: Detect hash-breaking changes in event/context files
+    // and offer to create hash-mappings.json entries before pushing.
+    // ═══════════════════════════════════════════════════════════════
+    if (onHashGuard) {
+      try {
+        const { commitHashGuardService } = await import('./commitHashGuardService');
+        const guardResult = await commitHashGuardService.detectHashChanges(
+          files || [],
+          async (path: string, br: string) => {
+            const fileResult = await gitService.getFileContent(path, br);
+            if (!fileResult.success || !fileResult.data) return null;
+            return fileResult.data;
+          },
+          { repository, branch }
+        );
+
+        if (guardResult && guardResult.totalMappings > 0) {
+          const selectedItems = await onHashGuard(guardResult);
+
+          if (selectedItems.length > 0) {
+            // Write hash-mappings.json entries for selected items
+            const { hashMappingsService } = await import('./hashMappingsService');
+            for (const item of selectedItems) {
+              // Each parameter generates 2 mapping entries (window + cohort)
+              // but both use the same old/new core_hash pair
+              await hashMappingsService.addMapping(
+                item.oldCoreHash,
+                item.newCoreHash,
+                'equivalent',
+                `Hash guard: ${item.changedFile} changed, preserving ${item.paramLabel} in ${item.graphName}`
+              );
+            }
+
+            // Add hash-mappings.json to the commit if it was modified
+            const mappingsFile = await hashMappingsService.getMappingsFile();
+            if (mappingsFile) {
+              filesToCommit.push({
+                path: mappingsFile.path || 'hash-mappings.json',
+                content: JSON.stringify(mappingsFile.data, null, 2),
+              });
+              sessionLogService.addChild(logOpId, 'info', 'HASH_GUARD_MAPPINGS',
+                `Added ${selectedItems.length} hash mapping(s) to commit`);
+            }
+          }
+        }
+      } catch (err) {
+        console.warn('[CommitFiles] Hash guard failed (non-blocking):', err);
+        sessionLogService.addChild(logOpId, 'warning', 'HASH_GUARD_ERROR',
+          `Hash guard failed: ${(err as Error).message}`);
+      }
+    }
 
     // Commit and push
     const result = await gitService.commitAndPushFiles(filesToCommit, message, branch, onProgress);

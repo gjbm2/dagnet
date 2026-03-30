@@ -42,15 +42,80 @@ The guard runs as a pre-commit gate (like merge conflict resolution). It may dir
 1. Identify dirty event/context files in the changeset
 2. For each: compute old hash (from last committed version via git HEAD — unambiguous baseline) and new hash (from current IDB state)
 3. If any hashes changed:
-   a. Scan all graphs in the repository for edges/parameters that reference the changed files (directly or indirectly via node event_id or context key in queries/dataInterestsDSL)
+   a. Trace the dependency tree to find all affected parameters (see Dependency Tracing below)
    b. For each affected parameter: read current `core_hash` from the stored `query_signature` (the OLD hash matching snapshots in the DB). Compute new `core_hash` by running `computeQuerySignature` with the updated definitions.
-   c. Present the mapping UI: "These definition changes affect snapshot hashes in N parameters across M graphs. Select which to preserve historical snapshot access for." Checkbox list grouped by graph, select all by default, with select all / select none.
+   c. Present the hash mapping modal (see UI Treatment below)
    d. User confirms selections
-4. For selected parameters: write `hash-mappings.json` entries (old `core_hash` ↔ new `core_hash`). This dirties `hash-mappings.json`.
-5. For unselected parameters: user acknowledges the break. Old snapshots become orphaned (still recoverable via Signature Links UI if needed later).
+4. For selected parameters: write `hash-mappings.json` entries (old `core_hash` ↔ new `core_hash`). This dirties `hash-mappings.json`. Each checked parameter generates 2 entries (window + cohort mode — always bundled).
+5. For unselected parameters: no mapping written. Old snapshots become orphaned (still recoverable via Signature Links UI if needed later).
 6. Commit proceeds with the full changeset: edited event/context files + updated `hash-mappings.json`. Single atomic commit.
 
 **This handles all hash-breaking changes uniformly**: adding context values, changing event filters, modifying source mappings, changing `otherPolicy`, renaming provider event names — any edit that changes what goes into the hash.
+
+#### Dependency Tracing
+
+The dependency tree differs by file type:
+
+**Event file change**: event → node(s) that bind it via `event_id` → edges whose queries reference those nodes (as from, to, visited, exclude) → graphs containing those edges. A node typically sits at the junction of multiple edges (it's the "to" of one and the "from" of another), so one event change fans out to multiple edges.
+
+**Context file change**: context → graphs whose `dataInterestsDSL` references the context key → ALL edges in those graphs. No intermediate node concept. The context applies to the graph as a whole.
+
+#### Decision Granularity
+
+Although `hash-mappings.json` entries are pure hash↔hash links (no `param_id`, no graph reference), the *choice* of which entries to generate is per-parameter. Each parameter has a unique `core_hash` (different from/to events → different coreHash), so selecting "preserve parameter A but not parameter B" means generating mapping entries for A's hash pair but not B's.
+
+Window and cohort modes for the same parameter produce different `core_hash` values (because `cohort_mode` is in the coreCanonical), but they are never independent decisions — if you preserve one, you preserve both. Each checked parameter generates 2 mapping entries.
+
+#### UI Treatment: Hash Mapping Modal
+
+The modal uses the existing `showTripleChoice` callback pattern (service calls a UI callback, does not import components). It appears between the commit modal and the actual push — same position as the "remote is ahead" gate.
+
+**Layout**: A bespoke tree-checkbox component (not AG Grid — too heavy for a commit-time modal). Three levels: **changed file → graph → parameter**. Tri-state checkboxes at each level: checking/unchecking a parent cascades to all children. Indeterminate state on parent when children are mixed.
+
+**Default state**: All checked, all collapsed. The common case (preserve everything) is: glance at the file-level summary, click Commit. Two seconds.
+
+**Collapsed view** (default):
+
+```
+┌──────────────────────────────────────────────────────┐
+│  Snapshot Hash Mappings              [✓ All] [☐ None]│
+│                                                      │
+│  ☑ ▶ contexts/channel.yaml          40 params        │
+│  ☑ ▶ events/event-x.yaml             8 params        │
+│  ☑ ▶ events/event-y.yaml             4 params        │
+│                                                      │
+│  Checked items get hash mappings preserving          │
+│  historical snapshot access.                         │
+│                                                      │
+│  [Commit]  [Cancel]                                  │
+└──────────────────────────────────────────────────────┘
+```
+
+**Expanded one level** (file → graphs):
+
+```
+│  ☑ ▼ contexts/channel.yaml          40 params        │
+│    ☑ ▶ conversion-flow-v2            24 params        │
+│    ☑ ▶ energy-funnel                 16 params        │
+│  ☑ ▶ events/event-x.yaml             8 params        │
+```
+
+**Expanded two levels** (file → graph → parameters):
+
+```
+│    ☑ ▼ conversion-flow-v2            24 params        │
+│      ☑ household-created → delegated                  │
+│      ☑ household-created → abandoned                  │
+│      ☐ energy-switch → success                        │
+│      ☐ energy-switch → failure                        │
+│      ...                                              │
+```
+
+**For context file changes**: all edges in the graph are affected equally (same cause). The user may still want per-parameter control — e.g., "preserve top-of-funnel params but break bottom-of-funnel where the context change genuinely alters the population."
+
+**For event file changes**: only edges referencing the changed event's node are affected. Fewer items, more targeted. The graph-level grouping shows "via node X" context so the user understands why these specific edges are affected.
+
+**Component**: ~100–150 lines of React. A `<ul>` with indentation, expand/collapse toggles, and tri-state checkboxes. Uses `createPortal` with the same styling as existing modals (z-index 10001, sits on top of commit modal).
 
 **Why commit-time is the right trigger**:
 
@@ -65,10 +130,10 @@ The guard runs as a pre-commit gate (like merge conflict resolution). It may dir
 
 - File created (no git HEAD version) → skip guard, nothing to preserve
 - File deleted → guard fires for affected parameters (hash effectively removed)
-- Multiple dirty files in one commit → guard finds affected parameters for all, produces separate mapping entries
-- Parameter with no stored `query_signature` (never fetched) → skip mapping, nothing to preserve
-- Shared parameter referenced by multiple edges → deduplicate, produce one mapping entry
-- No affected graphs → guard is silent
+- Multiple dirty files in one commit → guard finds affected parameters for all changed files, grouped by file then graph then parameter
+- Parameter with no stored `query_signature` (never fetched) → skip, nothing to preserve
+- Shared parameter referenced by multiple edges → deduplicate, one row per unique parameter
+- No affected graphs → guard is silent, commit proceeds normally
 
 ### 2. Behavioural Segment Filters for Variant Contexts
 

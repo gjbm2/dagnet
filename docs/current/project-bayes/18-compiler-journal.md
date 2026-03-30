@@ -8,6 +8,104 @@ Entries are reverse-chronological (newest first).
 
 ---
 
+## 30-Mar-26: Dispersion estimation — abandon external MLE, use MCMC κ
+
+### Background
+
+We spent significant effort building a BetaBinomial MLE in
+`_estimate_cohort_kappa` to estimate per-edge κ post-hoc (after MCMC).
+This was added because Phase 1 MCMC κ "wasn't settling". The MLE runs
+outside the model, on snapshot data, with maturity filtering, CDF
+adjustment, recency weighting, and best-per-day selection.
+
+### Investigation findings
+
+1. **The MLE estimator works on clean data.** Direct BetaBinomial draws
+   with known κ are recovered accurately by both MLE and Williams MoM.
+   The estimator itself is not broken.
+
+2. **Through the pipeline, results are inconsistent.** At 10× traffic,
+   the pipeline MLE returns κ ranging from 11 to 687 across edges.
+   At 1× traffic, similar inconsistency. The pipeline adds complexity
+   (F adjustment, quadrature for F < 1, maturity filtering, recency
+   weighting) that distorts the clean signal.
+
+3. **Bug found: no-latency F computation.** `_estimate_cohort_kappa`
+   recomputed F from the CDF instead of using the evidence binder's
+   pre-computed `completeness`. For no-latency edges (onset=0, mu=0,
+   sigma=0.01), CDF(1.0 day) = 0.5, so 92% of observations were
+   wrongly filtered as immature. Fixed by checking `et.has_latency`.
+
+4. **Phase 1 MCMC κ is unconstrained.** The Phase 1 κ posterior
+   (30 ± 17) is indistinguishable from its prior Gamma(3, 0.1) which
+   has mean=30, std≈17. The data isn't informing κ because:
+   - Window aggregate obs use plain Binomial (no κ)
+   - Trajectories use product-of-conditional-Binomials (no κ)
+   - Only branch group DirichletMultinomial uses κ — one aggregate
+     observation, not per-day
+
+   This is why the external MLE was added. But the MLE is the wrong
+   solution — it replicates what the MCMC should do, but worse.
+
+### Decision
+
+**Abandon the external MLE approach.** Instead, make Phase 1 MCMC κ
+actually constrained by data. The MCMC approach is superior because:
+- Joint estimation with p, latency, onset (correlations handled)
+- Full posterior distribution (uncertainty for free)
+- Uses the actual likelihood on the actual data
+- No ad-hoc pipeline (F adjustment, quadrature, maturity filter)
+- This is what the statistical literature recommends (Strategy C:
+  joint estimation)
+
+### Next step
+
+Before touching code: reason through exactly what data Phase 1 κ
+should see. The key distinction is trajectories (one cohort observed
+at multiple ages — for latency estimation) vs daily rates (independent
+draws from the daily p distribution — for κ estimation). These must
+not be conflated. See subsequent entry for the data design.
+
+---
+
+## 30-Mar-26: Phase 2 cohort onset drift (doc 26)
+
+### Problem
+Phase 2 cohort onset drifts to ~20-23d even when Phase 1 converges
+at ~9d. Visible in cohort maturity chart: Bayesian CDF shows 0%
+until age ~22d then vertical jump, while actual data rises from
+age ~7d. Setting onset on the graph edge has no effect.
+
+### Root cause
+`ev.cohort_latency_warm` reads `posterior.slices["cohort()"].onset_mean`
+from the param file (previous run's output) and uses it as the prior
+centre for `onset_cohort` in Phase 2 model Section 4. This bypasses
+Phase 1 of the current run entirely. With a tight prior SD (~0.6d
+from Phase 1 quadrature) centred at 20.6d, the sampler cannot escape
+to the correct value (~9d) — that would require a ~22-sigma move.
+
+### Structural insight
+Phase 2 should receive NO priors from external sources (param files).
+All Phase 2 priors derive from Phase 1 of the current run. This is
+the same principle as Phase 2 edge probability (doc 24 §3.1):
+- Centre from Phase 1 posteriors (composed along path)
+- Width from Phase 1 uncertainties (quadrature)
+- Freedom proportional to FW composition reliability
+
+The warm-start from previous cohort posterior is architecturally
+wrong — it's a shortcut that creates a self-reinforcing drift loop.
+
+### Fix
+Remove `cohort_latency_warm` override from model.py Section 4.
+Always use composed Phase 1 values (onset_prior_val, mu_path_composed,
+sigma_path_composed) as prior centres. The quadrature-composed SDs
+from Phase 1 posteriors (already computed as path_onset_sd, path_mu_sd,
+path_sigma_sd) provide principled widths.
+
+See doc 26 for full analysis.
+
+---
+
 ## 30-Mar-26: Path dispersion investigation
 
 ### Changes made

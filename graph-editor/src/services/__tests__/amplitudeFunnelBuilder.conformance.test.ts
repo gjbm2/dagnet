@@ -360,6 +360,71 @@ describe('Segment conditions — conformance with DAS adapter', () => {
     });
   });
 
+  it('behavioural context() produces event segment condition (matches DAS adapter)', async () => {
+    // Override context registry mock for behavioural context
+    const { contextRegistry } = await import('../../services/contextRegistry');
+    vi.mocked(contextRegistry.getContext).mockResolvedValue({
+      id: 'variant',
+      values: [
+        {
+          id: 'treatment',
+          label: 'Treatment',
+          sources: {
+            amplitude: {
+              type: 'behavioral',
+              event_type: 'Flow Started',
+              filter_property: 'flowId',
+              filter_value: 'energy_v2',
+              time_type: 'rolling',
+              time_value: 366,
+            }
+          }
+        },
+        { id: 'other', label: 'Other' },
+      ],
+      otherPolicy: 'computed',
+    } as any);
+    vi.mocked(contextRegistry.getSourceMapping).mockResolvedValue({
+      type: 'behavioral',
+      event_type: 'Flow Started',
+      filter_property: 'flowId',
+      filter_value: 'energy_v2',
+      time_type: 'rolling',
+      time_value: 366,
+    } as any);
+
+    const result = await buildAmplitudeFunnelDefinition({
+      selectedNodeIds: ['a'],
+      graphNodes: [makeNode('a', 'event-a')],
+      graphEdges: [],
+      effectiveDsl: 'from(a).context(variant:treatment)',
+      appId: 'test-app-id',
+    });
+
+    // DAS adapter would produce: { type: "event", event_type: "Flow Started", filters: [...], op: ">=", value: 1, ... }
+    // Funnel builder should produce matching segment condition
+    const conditions = result.definition.params.segments[0].conditions;
+    const behavioralCondition = conditions.find((c: any) => c.type === 'event' && c.event_type === 'Flow Started');
+    expect(behavioralCondition).toBeDefined();
+    expect(behavioralCondition).toEqual(expect.objectContaining({
+      type: 'event',
+      event_type: 'Flow Started',
+      op: '>=',
+      value: 1,
+      time_type: 'rolling',
+      time_value: 366,
+      group_type: 'User',
+    }));
+    expect(behavioralCondition.filters).toEqual([
+      {
+        subprop_type: 'event',
+        subprop_key: 'flowId',
+        subprop_op: 'is',
+        subprop_value: ['energy_v2'],
+      }
+    ]);
+  });
+
   it('warns and ignores visitedAny() because it is not representable in current funnel segments', async () => {
     const result = await buildAmplitudeFunnelDefinition({
       selectedNodeIds: ['a', 'b'],

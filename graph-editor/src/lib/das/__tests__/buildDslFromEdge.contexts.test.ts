@@ -551,5 +551,176 @@ describe('buildDslFromEdge - Context Filter Extensions', () => {
       expect(result.end).toBeUndefined();
     });
   });
+
+  // ===========================================
+  // Behavioural Context Filter Tests
+  // ===========================================
+
+  describe('buildContextFilters — behavioural source mappings', () => {
+
+    const variantContext: ContextDefinition = {
+      id: 'variant',
+      name: 'Variant',
+      description: 'A/B test variant',
+      type: 'categorical',
+      otherPolicy: 'computed',
+      values: [
+        {
+          id: 'treatment',
+          label: 'Treatment',
+          sources: {
+            amplitude: {
+              type: 'behavioral',
+              event_type: 'Flow Started',
+              filter_property: 'flowId',
+              filter_value: 'energy_v2',
+              time_type: 'rolling',
+              time_value: 366,
+            }
+          }
+        },
+        {
+          id: 'control',
+          label: 'Control',
+          sources: {
+            amplitude: {
+              type: 'behavioral',
+              event_type: 'Flow Started',
+              filter_property: 'flowId',
+              filter_value: 'energy_v1',
+              time_type: 'rolling',
+              time_value: 366,
+            }
+          }
+        },
+      ],
+      metadata: { created_at: '2026-03-30T00:00:00Z', version: '1.0.0', status: 'active' }
+    };
+
+    const edge = {
+      id: 'test-edge',
+      from: 'a',
+      to: 'b',
+      p: { mean: 0.5 },
+      query: 'from(a).to(b)'
+    };
+    const graph = {
+      nodes: [
+        { id: 'a', event_id: 'event-a' },
+        { id: 'b', event_id: 'event-b' }
+      ],
+      edges: [edge]
+    };
+
+    it('should produce behavioural ContextFilterObject for type=behavioral source mapping', async () => {
+      vi.spyOn(contextRegistry, 'getContext').mockResolvedValue(variantContext);
+      vi.spyOn(contextRegistry, 'getSourceMapping').mockResolvedValue(
+        variantContext.values[0].sources!.amplitude
+      );
+
+      const constraints = parseConstraints('context(variant:treatment)');
+      const { queryPayload: result } = await buildDslFromEdge(edge, graph, 'amplitude', undefined, constraints);
+
+      expect(result.context_filters).toBeDefined();
+      expect(result.context_filters).toHaveLength(1);
+
+      const filter = result.context_filters![0];
+      expect(filter.type).toBe('behavioral');
+      expect(filter.event_type).toBe('Flow Started');
+      expect(filter.behavioral_op).toBe('>=');
+      expect(filter.behavioral_value).toBe(1);
+      expect(filter.time_type).toBe('rolling');
+      expect(filter.time_value).toBe(366);
+      expect(filter.filters).toEqual([
+        {
+          subprop_type: 'event',
+          subprop_key: 'flowId',
+          subprop_op: 'is',
+          subprop_value: ['energy_v2'],
+        }
+      ]);
+    });
+
+    it('should produce "did NOT perform" complement for otherPolicy=computed on behavioural context', async () => {
+      vi.spyOn(contextRegistry, 'getContext').mockResolvedValue(variantContext);
+
+      const constraints = parseConstraints('context(variant:other)');
+      const { queryPayload: result } = await buildDslFromEdge(edge, graph, 'amplitude', undefined, constraints);
+
+      expect(result.context_filters).toBeDefined();
+      expect(result.context_filters).toHaveLength(1);
+
+      const filter = result.context_filters![0];
+      expect(filter.type).toBe('behavioral');
+      expect(filter.event_type).toBe('Flow Started');
+      expect(filter.behavioral_op).toBe('=');
+      expect(filter.behavioral_value).toBe(0);
+      expect(filter.filters).toEqual([]);  // No sub-filters: "user has NOT done this event at all"
+      expect(filter.time_value).toBe(366);
+    });
+
+    it('should produce property-based filter when source mapping has no type field (backward compat)', async () => {
+      const channelContext: ContextDefinition = {
+        id: 'channel',
+        name: 'Channel',
+        description: 'Marketing channel',
+        type: 'categorical',
+        values: [
+          { id: 'google', label: 'Google', sources: { amplitude: { filter: "utm_source == 'google'" } } },
+        ],
+        metadata: { created_at: '2025-01-01T00:00:00Z', version: '1.0.0', status: 'active' }
+      };
+
+      vi.spyOn(contextRegistry, 'getContext').mockResolvedValue(channelContext);
+      vi.spyOn(contextRegistry, 'getSourceMapping').mockResolvedValue(
+        channelContext.values[0].sources!.amplitude
+      );
+
+      const constraints = parseConstraints('context(channel:google)');
+      const { queryPayload: result } = await buildDslFromEdge(edge, graph, 'amplitude', undefined, constraints);
+
+      expect(result.context_filters).toBeDefined();
+      const filter = result.context_filters![0];
+      expect(filter.type).toBeUndefined();  // No type field = property-based
+      expect(filter.field).toBe('utm_source');
+      expect(filter.op).toBe('is');
+      expect(filter.values).toEqual(['google']);
+    });
+
+    it('should handle behavioural source mapping without filter_property (event-only, no sub-filter)', async () => {
+      const simpleVariantContext: ContextDefinition = {
+        ...variantContext,
+        values: [
+          {
+            id: 'activated',
+            label: 'Activated',
+            sources: {
+              amplitude: {
+                type: 'behavioral',
+                event_type: 'Account Activated',
+                time_type: 'rolling',
+                time_value: 366,
+              }
+            }
+          },
+        ],
+      };
+
+      vi.spyOn(contextRegistry, 'getContext').mockResolvedValue(simpleVariantContext);
+      vi.spyOn(contextRegistry, 'getSourceMapping').mockResolvedValue(
+        simpleVariantContext.values[0].sources!.amplitude
+      );
+
+      const constraints = parseConstraints('context(variant:activated)');
+      const { queryPayload: result } = await buildDslFromEdge(edge, graph, 'amplitude', undefined, constraints);
+
+      const filter = result.context_filters![0];
+      expect(filter.type).toBe('behavioral');
+      expect(filter.event_type).toBe('Account Activated');
+      expect(filter.filters).toEqual([]);  // No sub-filter when filter_property absent
+      expect(filter.behavioral_op).toBe('>=');
+      expect(filter.behavioral_value).toBe(1);
+    });
+  });
 });
 

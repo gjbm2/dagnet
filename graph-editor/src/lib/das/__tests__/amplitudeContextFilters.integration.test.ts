@@ -293,6 +293,159 @@ describe('Amplitude Adapter Context Filter Processing', () => {
     expect(platformFilter.values).toContain('iOS');
   });
 
+  it('should process behavioural context_filter into event segment (variant context)', async () => {
+    const queryPayload = {
+      from: 'household-created',
+      to: 'household-delegated',
+      context_filters: [
+        {
+          field: 'variant',
+          op: 'is',
+          values: [],
+          type: 'behavioral',
+          event_type: 'Flow Started',
+          filters: [
+            {
+              subprop_type: 'event',
+              subprop_key: 'flowId',
+              subprop_op: 'is',
+              subprop_value: ['energy_v2'],
+            }
+          ],
+          behavioral_op: '>=',
+          behavioral_value: 1,
+          time_type: 'rolling',
+          time_value: 366,
+        }
+      ]
+    };
+
+    const result = await runner.execute('amplitude-prod', queryPayload, {
+      window: { start: '2025-11-22T00:00:00Z', end: '2025-11-28T23:59:59Z' },
+      edgeId: 'test-edge',
+      eventDefinitions: {}
+    });
+
+    expect(result.success).toBe(true);
+
+    const url = mockHttpExecutor.lastRequest!.url;
+    const urlObj = new URL(url);
+    const segmentParam = urlObj.searchParams.get('s');
+    expect(segmentParam).not.toBeNull();
+
+    const segments = JSON.parse(segmentParam!);
+
+    // Should have an event-type segment (behavioural), not a property-type segment
+    const behavioralSeg = segments.find((s: any) => s.type === 'event' && s.event_type === 'Flow Started');
+    expect(behavioralSeg).toBeDefined();
+    expect(behavioralSeg.op).toBe('>=');
+    expect(behavioralSeg.value).toBe(1);
+    expect(behavioralSeg.time_type).toBe('rolling');
+    expect(behavioralSeg.time_value).toBe(366);
+    expect(behavioralSeg.filters).toEqual([
+      {
+        subprop_type: 'event',
+        subprop_key: 'flowId',
+        subprop_op: 'is',
+        subprop_value: ['energy_v2'],
+      }
+    ]);
+  });
+
+  it('should process behavioural complement (did NOT perform) into event segment', async () => {
+    const queryPayload = {
+      from: 'household-created',
+      to: 'household-delegated',
+      context_filters: [
+        {
+          field: 'variant',
+          op: 'is',
+          values: [],
+          type: 'behavioral',
+          event_type: 'Flow Started',
+          filters: [],
+          behavioral_op: '=',
+          behavioral_value: 0,
+          time_type: 'rolling',
+          time_value: 366,
+        }
+      ]
+    };
+
+    const result = await runner.execute('amplitude-prod', queryPayload, {
+      window: { start: '2025-11-22T00:00:00Z', end: '2025-11-28T23:59:59Z' },
+      edgeId: 'test-edge',
+      eventDefinitions: {}
+    });
+
+    expect(result.success).toBe(true);
+
+    const url = mockHttpExecutor.lastRequest!.url;
+    const urlObj = new URL(url);
+    const segmentParam = urlObj.searchParams.get('s');
+    expect(segmentParam).not.toBeNull();
+
+    const segments = JSON.parse(segmentParam!);
+
+    const complementSeg = segments.find((s: any) => s.type === 'event' && s.event_type === 'Flow Started');
+    expect(complementSeg).toBeDefined();
+    expect(complementSeg.op).toBe('=');
+    expect(complementSeg.value).toBe(0);
+    expect(complementSeg.filters).toEqual([]);
+  });
+
+  it('should handle mixed property + behavioural context_filters', async () => {
+    const queryPayload = {
+      from: 'household-created',
+      to: 'household-delegated',
+      context_filters: [
+        {
+          field: 'utm_medium',
+          op: 'is',
+          values: ['cpc']
+        },
+        {
+          field: 'variant',
+          op: 'is',
+          values: [],
+          type: 'behavioral',
+          event_type: 'Flow Started',
+          filters: [
+            { subprop_type: 'event', subprop_key: 'flowId', subprop_op: 'is', subprop_value: ['energy_v2'] }
+          ],
+          behavioral_op: '>=',
+          behavioral_value: 1,
+          time_type: 'rolling',
+          time_value: 366,
+        }
+      ]
+    };
+
+    const result = await runner.execute('amplitude-prod', queryPayload, {
+      window: { start: '2025-11-22T00:00:00Z', end: '2025-11-28T23:59:59Z' },
+      edgeId: 'test-edge',
+      eventDefinitions: {}
+    });
+
+    expect(result.success).toBe(true);
+
+    const url = mockHttpExecutor.lastRequest!.url;
+    const urlObj = new URL(url);
+    const segmentParam = urlObj.searchParams.get('s');
+    expect(segmentParam).not.toBeNull();
+
+    const segments = JSON.parse(segmentParam!);
+
+    // Should have BOTH a property segment (utm_medium) and a behavioural segment (Flow Started)
+    const propSeg = segments.find((s: any) => s.prop === 'gp:utm_medium');
+    expect(propSeg).toBeDefined();
+    expect(propSeg.values).toContain('cpc');
+
+    const behavSeg = segments.find((s: any) => s.type === 'event' && s.event_type === 'Flow Started');
+    expect(behavSeg).toBeDefined();
+    expect(behavSeg.op).toBe('>=');
+  });
+
   it('should handle multiple context_filters (AND logic)', async () => {
     const queryPayload = {
       from: 'household-created',
