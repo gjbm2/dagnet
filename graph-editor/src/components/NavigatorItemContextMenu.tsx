@@ -13,7 +13,7 @@ import { NewFileModal } from './NewFileModal';
 import { RenameModal } from './RenameModal';
 import { gitService } from '../services/gitService';
 import { fileRegistry } from '../contexts/TabContext';
-import { copyToClipboard } from '../utils/copyToClipboard';
+import { copyToClipboard as writeToSystemClipboard } from '../utils/copyToClipboard';
 import { fileOperationsService } from '../services/fileOperationsService';
 import { repositoryOperationsService } from '../services/repositoryOperationsService';
 import { useShareLink } from '../hooks/useShareLink';
@@ -557,11 +557,11 @@ export function NavigatorItemContextMenu({ item, x, y, onClose, visibleFileIds }
   // Info
   menuItems.push({
     label: 'Copy Name',
-    onClick: () => copyToClipboard(item.name)
+    onClick: () => writeToSystemClipboard(item.name)
   });
   menuItems.push({
     label: 'Copy Path',
-    onClick: () => copyToClipboard(item.path)
+    onClick: () => writeToSystemClipboard(item.path)
   });
 
   const handleCreateFile = async (name: string, type: ObjectType) => {

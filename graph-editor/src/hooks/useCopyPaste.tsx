@@ -19,7 +19,7 @@
 
 import React, { createContext, useContext, useState, useCallback, ReactNode } from 'react';
 import toast from 'react-hot-toast';
-import { copyToClipboard } from '../utils/copyToClipboard';
+import { copyToClipboard as writeToSystemClipboard } from '../utils/copyToClipboard';
 import { GraphNode, GraphEdge, PostIt } from '../types';
 
 // ============================================================================
@@ -158,16 +158,14 @@ export function useCopyPaste() {
     };
     
     // Write to system clipboard (best effort - for external paste like Ctrl+V)
-    try {
-      await copyToClipboard(JSON.stringify(data, null, 2));
-    } catch (e) {
-      // Clipboard write failed - not critical, memory cache still works
-      console.warn('[useCopyPaste] Clipboard write failed (memory cache still works):', e);
+    const clipboardOk = await writeToSystemClipboard(JSON.stringify(data, null, 2));
+    if (!clipboardOk) {
+      console.warn('[useCopyPaste] Clipboard write failed (memory cache still works)');
     }
-    
+
     // Store in memory cache (this is what our paste menus use)
     setCopiedItem(data);
-    
+
     console.log('[useCopyPaste] Copied to memory cache:', data);
     
     // User feedback
@@ -208,12 +206,11 @@ export function useCopyPaste() {
       timestamp: Date.now(),
     };
     
-    try {
-      await copyToClipboard(JSON.stringify(data, null, 2));
-    } catch (e) {
-      console.warn('[useCopyPaste] Clipboard write failed (memory cache still works):', e);
+    const clipboardOk = await writeToSystemClipboard(JSON.stringify(data, null, 2));
+    if (!clipboardOk) {
+      console.warn('[useCopyPaste] Clipboard write failed (memory cache still works)');
     }
-    
+
     setCopiedItem(data);
     
     const parts: string[] = [];

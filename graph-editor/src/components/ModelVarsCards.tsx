@@ -313,8 +313,7 @@ export function ModelVarsCards({
               </FieldGroup>
               {analytic.latency && (
                 <FieldGroup label="Latency (edge)">
-                  <LatencyZapOff field="onset_delta_days" label="onset δ" unit="d" step={1} dp={0}
-                    latency={promotedLatency} onUpdate={onUpdate} disabled={disabled} />
+                  <RoField label="onset δ" value={fmt(analytic.latency.onset_delta_days, 0)} unit="d" />
                   <RoField label="μ" value={fmt(analytic.latency.mu, 3)} />
                   <RoField label="σ" value={fmt(analytic.latency.sigma, 3)} />
                   <LatencyZapOff field="t95" label="t95" unit="d" step={0.01} dp={LATENCY_HORIZON_DECIMAL_PLACES}
@@ -530,9 +529,8 @@ function OutputCardBody({ onCommit, onStartEdit, onClearFieldOverride, promotedM
           <RoField label="σ" value={fmt(promotedLatency.sigma, 3)} />
           {/* Doc 19: t95 is read-only in Output card — user edits the input constraint elsewhere */}
           <RoField label="t95" value={fmt(promotedLatency.promoted_t95 ?? promotedLatency.t95, 1)} unit="d" />
-          <OutputInput label="onset" field="onset_delta_days" value={promotedLatency.onset_delta_days} dp={0} unit="d"
-            overridden={promotedLatency.onset_delta_days_overridden} onClearOverride={() => onClearFieldOverride('onset_delta_days_overridden', true)}
-            onCommit={onCommit} onStartEdit={onStartEdit} disabled={disabled} />
+          {/* Doc 19: onset is read-only in Output card — user edits the input constraint in Zone 1b above */}
+          <RoField label="onset" value={fmt(promotedLatency.onset_delta_days, 0)} unit="d" />
         </FieldGroup>
       )}
       {/* Path-level latency — shown whenever path values exist (topological, not gated on edge latency) */}

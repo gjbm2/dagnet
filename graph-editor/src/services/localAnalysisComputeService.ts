@@ -939,7 +939,7 @@ function buildSurpriseGaugeResult(graph: ConversionGraph, queryDsl: string): Ana
   // Observed latency from analytic entry (evidence-fitted, not promoted/blended)
   const obsEntry = modelVars.find((mv: any) => mv?.source === 'analytic_be')
     || modelVars.find((mv: any) => mv?.source === 'analytic');
-  const obsLat = obsEntry?.latency || p.latency || {};
+  const obsLat: Record<string, any> = obsEntry?.latency || p.latency || {};
 
   // Completeness: recompute at min(asat, retrieved_at) so that the gauge
   // comparison matches the actual observation date, not "now".
@@ -980,7 +980,7 @@ function buildSurpriseGaugeResult(graph: ConversionGraph, queryDsl: string): Ana
   }
 
   const refProb = refEntry.probability || {};
-  const refLat = refEntry.latency || {};
+  const refLat: Record<string, any> = refEntry.latency || {};
 
   // Select reference alpha/beta from posterior.
   // Doc 25 §3.2: After re-projection (Phase 3), p.posterior.alpha/beta already
@@ -1046,7 +1046,7 @@ function buildSurpriseGaugeResult(graph: ConversionGraph, queryDsl: string): Ana
   // Combined-SD normal approximation: posterior SD + sampling SE. See §5.2.
   const refMu = refLat?.mu;
   const obsMu = obsLat?.mu;
-  const latPosterior = (p.latency as any)?.posterior || {};
+  const latPosterior: Record<string, any> = (p.latency as any)?.posterior || {};
   const muSd = latPosterior.mu_sd || refLat?.mu_sd;
   const sigmaLag = refLat?.sigma || latencyObj.sigma;
 

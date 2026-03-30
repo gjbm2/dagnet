@@ -139,23 +139,27 @@ export function ParameterSection({
   const [localOnsetDeltaDays, setLocalOnsetDeltaDays] = useState<string>(
     formatOptionalNumber(param?.latency?.onset_delta_days, 0)
   );
+  const onsetEditingRef = React.useRef(false);
+  const onsetLatencySnapshotRef = React.useRef<Record<string, any> | null>(null);
   // Note: isSettingsModalOpen state moved into ConnectionControl component
-  
+
   // Sync local state when param changes externally
   useEffect(() => {
     setLocalQuery(param?.query || '');
   }, [param?.query]);
-  
+
   useEffect(() => {
     setLocalT95(formatOptionalNumber(param?.latency?.t95, LATENCY_HORIZON_DECIMAL_PLACES));
   }, [param?.latency?.t95]);
-  
+
   useEffect(() => {
     setLocalPathT95(formatOptionalNumber(param?.latency?.path_t95, LATENCY_HORIZON_DECIMAL_PLACES));
   }, [param?.latency?.path_t95]);
 
   useEffect(() => {
-    setLocalOnsetDeltaDays(formatOptionalNumber(param?.latency?.onset_delta_days, 0));
+    if (!onsetEditingRef.current) {
+      setLocalOnsetDeltaDays(formatOptionalNumber(param?.latency?.onset_delta_days, 0));
+    }
   }, [param?.latency?.onset_delta_days]);
 
   const handleRefreshCohortAnchor = async () => {
@@ -432,7 +436,7 @@ export function ParameterSection({
         </div>
       )}
 
-      {/* §17.1 zone 1b: Latency input priors (onset, t95, path_t95).
+      {/* §17.1 zone 1b: Latency input priors (t95, path_t95).
           These are model INPUTS — user-configurable priors that constrain
           the Bayesian and analytic fits. Shown above the cards so the
           input→model→output flow is visually clear. Always visible when
@@ -458,8 +462,15 @@ export function ParameterSection({
                   <input
                     type="number"
                     value={localOnsetDeltaDays}
+                    onFocus={() => {
+                      onsetEditingRef.current = true;
+                      // Snapshot latency at focus time — before any background
+                      // stats pass can overwrite onset_delta_days on the prop.
+                      onsetLatencySnapshotRef.current = { ...param?.latency };
+                    }}
                     onChange={(e) => setLocalOnsetDeltaDays(e.target.value)}
                     onBlur={() => {
+                      onsetEditingRef.current = false;
                       const value = parseFloat(localOnsetDeltaDays);
                       const onsetRaw = isNaN(value) || value < 0 ? undefined : value;
                       const onset_delta_days =
@@ -467,9 +478,14 @@ export function ParameterSection({
                           ? undefined
                           : roundToDecimalPlaces(onsetRaw, 0);
                       setLocalOnsetDeltaDays(onset_delta_days === undefined ? '' : String(onset_delta_days));
+                      // Use the latency snapshot from focus time, not the
+                      // current prop (which may have been overwritten by a
+                      // background stats pass while the user was typing).
+                      const latencyBase = onsetLatencySnapshotRef.current ?? param?.latency ?? {};
+                      onsetLatencySnapshotRef.current = null;
                       onUpdate({
                         latency: {
-                          ...param?.latency,
+                          ...latencyBase,
                           onset_delta_days,
                           onset_delta_days_overridden: true,
                         },
