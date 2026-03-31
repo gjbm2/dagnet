@@ -258,7 +258,7 @@ properties:
           type: number
       fit_history:
         type: array
-        description: "Rolling array of posterior snapshots — one entry per fit date"
+        description: "Rolling array of full-fidelity posterior snapshots — one entry per fit date (doc 27)"
         items:
           type: object
           properties:
@@ -268,20 +268,55 @@ properties:
             fingerprint:
               type: string
               description: "Model hash at time of fit"
+            hdi_level:
+              type: number
+              description: "HDI level used for this fit (e.g. 0.9)"
+            prior_tier:
+              type: string
+              description: "Prior tier that produced this fit"
             slices:
               type: object
-              description: "Slim per-slice snapshots keyed by slice DSL"
+              description: "Per-slice posterior snapshots keyed by slice DSL (same shape as posterior.slices)"
               additionalProperties:
                 type: object
+                required: [alpha, beta]
                 properties:
                   alpha:
                     type: number
                   beta:
                     type: number
+                  p_hdi_lower:
+                    type: number
+                  p_hdi_upper:
+                    type: number
                   mu_mean:
+                    type: number
+                  mu_sd:
                     type: number
                   sigma_mean:
                     type: number
+                  sigma_sd:
+                    type: number
+                  onset_mean:
+                    type: number
+                  onset_sd:
+                    type: number
+                  hdi_t95_lower:
+                    type: number
+                  hdi_t95_upper:
+                    type: number
+                  onset_mu_corr:
+                    type: number
+                  ess:
+                    type: number
+                  rhat:
+                    type: number
+                  divergences:
+                    type: integer
+                  evidence_grade:
+                    type: integer
+                  provenance:
+                    type: string
           additionalProperties: false
     additionalProperties: false
 

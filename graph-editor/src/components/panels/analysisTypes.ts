@@ -1,10 +1,11 @@
 /**
  * Analysis Type Metadata
- * 
+ *
  * Static metadata for all analysis types including icons, descriptions,
  * and selection hints. This is merged with the backend's availability info.
  */
 
+import React from 'react';
 import {
   BarChart3,
   GitBranch,
@@ -28,6 +29,8 @@ import {
   Gauge,
   type LucideIcon,
 } from 'lucide-react';
+import { MinimisedSurpriseGauge } from '../charts/MinimisedSurpriseGauge';
+import { MinimisedBridgeView } from '../charts/MinimisedBridgeView';
 
 // ============================================================
 // Snapshot Contract — declares DB read requirements for an analysis type
@@ -74,6 +77,17 @@ export interface ViewSpec {
   table?: KindMeta[];
 }
 
+/**
+ * Custom minimised renderer for an analysis type.
+ * Returns a React node to show instead of the generic icon when minimised,
+ * or null to fall back to the generic icon (e.g. when data is unavailable).
+ */
+export type MinimisedRenderer = (props: {
+  result: any;
+  settings: Record<string, any>;
+  label?: string;
+}) => React.ReactNode | null;
+
 export interface AnalysisTypeMeta {
   id: string;
   name: string;
@@ -87,6 +101,17 @@ export interface AnalysisTypeMeta {
   /** If true, this type is used by backend pipelines only (e.g. Bayes compiler)
    *  and should never appear in user-facing selectors or chart/satellite UI. */
   internal?: boolean;
+  /**
+   * Optional custom renderer for minimised state on the canvas.
+   * When provided (and returns non-null), replaces the generic 32×32 icon
+   * with a richer indicator (e.g. coloured dot + arrow + label).
+   */
+  renderMinimised?: MinimisedRenderer;
+  /**
+   * Dimensions for the custom minimised state. Defaults to { width: 32, height: 32 }.
+   * Only used when renderMinimised is provided and returns non-null.
+   */
+  minimisedSize?: { width: number; height: number };
 }
 
 /**
@@ -124,6 +149,8 @@ export const ANALYSIS_TYPES: AnalysisTypeMeta[] = [
     shortDescription: 'Explain Reach Probability change between two scenarios',
     selectionHint: 'Requires exactly 2 visible scenarios. Select a single end node with to()',
     icon: ArrowLeftRight,
+    renderMinimised: (props) => React.createElement(MinimisedBridgeView, props),
+    minimisedSize: { width: 144, height: 48 },
   },
   {
     id: 'path_through',
@@ -318,6 +345,8 @@ export const ANALYSIS_TYPES: AnalysisTypeMeta[] = [
     shortDescription: 'How surprising is current evidence given the Bayesian posterior',
     selectionHint: 'Use from(a).to(b) to select an edge',
     icon: Gauge,
+    renderMinimised: (props) => React.createElement(MinimisedSurpriseGauge, props),
+    minimisedSize: { width: 56, height: 36 },
   },
   // Bayes fit — not a user-visible analysis type. Used internally by
   // useBayesTrigger to build snapshot subjects for the compiler's

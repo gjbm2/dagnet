@@ -11,9 +11,10 @@
  * Pure functions, no side effects.
  */
 
-import type { SlicePosteriorEntry, Posterior } from '../types';
+import type { SlicePosteriorEntry, Posterior, FitHistoryEntry } from '../types';
 import { extractSliceDimensions } from './sliceIsolation';
 import { canonicaliseSliceKeyForMatching } from '../lib/sliceKeyNormalisation';
+import { parseUKDate } from '../lib/dateFormat';
 
 // ── Temporal mode detection ─────────────────────────────────────────────────
 
@@ -238,4 +239,73 @@ function _findSliceByMode(
     if (canonicaliseSliceKeyForMatching(rawKey) === bareKey) return entry;
   }
   return undefined;
+}
+
+// ── asat posterior resolution (doc 27 §5) ─────────────────────────────────
+
+/**
+ * Resolve the historical posterior for an asat query.
+ *
+ * Semantics: "what would the user have seen if they ran this query on
+ * `asatDate`?" Returns the most recent fit whose `fitted_at <= asatDate`.
+ *
+ * Selection order:
+ *   1. If the current posterior's `fitted_at <= asatDate`, return it directly.
+ *   2. Otherwise search `fit_history` for the most recent entry on or before.
+ *   3. If no entry matches, return undefined — strict, no fallback.
+ *
+ * When a fit_history entry is selected, a synthetic `Posterior`-shaped object
+ * is constructed so callers can pass it to the existing projection functions
+ * without adaptation.
+ *
+ * @param posterior  The full Posterior from the parameter file
+ * @param asatDate   UK date string (d-MMM-yy) from the parsed query constraints
+ * @returns A Posterior-shaped object for the historical fit, or undefined
+ */
+export function resolveAsatPosterior(
+  posterior: Posterior | undefined,
+  asatDate: string,
+): Posterior | undefined {
+  if (!posterior) return undefined;
+
+  let asatMs: number;
+  try {
+    asatMs = parseUKDate(asatDate).getTime();
+  } catch {
+    return undefined;
+  }
+
+  // 1. Check current posterior first
+  try {
+    const currentMs = parseUKDate(posterior.fitted_at).getTime();
+    if (currentMs <= asatMs) return posterior;
+  } catch { /* parse failure on current — fall through to history */ }
+
+  // 2. Search fit_history for most recent on-or-before
+  const history = posterior.fit_history;
+  if (!history || history.length === 0) return undefined;
+
+  let best: FitHistoryEntry | undefined;
+  let bestMs = -Infinity;
+
+  for (const entry of history) {
+    try {
+      const entryMs = parseUKDate(entry.fitted_at).getTime();
+      if (entryMs <= asatMs && entryMs > bestMs) {
+        best = entry;
+        bestMs = entryMs;
+      }
+    } catch { /* skip unparseable entries */ }
+  }
+
+  if (!best) return undefined;
+
+  // 3. Construct synthetic Posterior from the history entry
+  return {
+    fitted_at: best.fitted_at,
+    fingerprint: best.fingerprint,
+    hdi_level: best.hdi_level ?? posterior.hdi_level ?? 0.9,
+    prior_tier: (best.prior_tier ?? posterior.prior_tier ?? 'uninformative') as Posterior['prior_tier'],
+    slices: best.slices as Record<string, SlicePosteriorEntry>,
+  };
 }

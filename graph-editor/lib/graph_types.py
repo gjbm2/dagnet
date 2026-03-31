@@ -167,21 +167,43 @@ class SlicePosteriorEntry(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
 
-class SlimSlice(BaseModel):
-    """Slim per-slice snapshot within a fit_history entry (drift tracking)."""
+class FitHistorySlice(BaseModel):
+    """Per-slice snapshot within a fit_history entry (doc 27 §3).
+    Same fields as SlicePosteriorEntry but all optional except alpha/beta,
+    for backward compatibility with legacy entries that only stored slim data.
+    """
+    # Probability (always present)
     alpha: float
     beta_param: float = Field(..., alias='beta')
+    p_hdi_lower: Optional[float] = None
+    p_hdi_upper: Optional[float] = None
+    # Latency
     mu_mean: Optional[float] = None
+    mu_sd: Optional[float] = None
     sigma_mean: Optional[float] = None
+    sigma_sd: Optional[float] = None
+    onset_mean: Optional[float] = None
+    onset_sd: Optional[float] = None
+    hdi_t95_lower: Optional[float] = None
+    hdi_t95_upper: Optional[float] = None
+    onset_mu_corr: Optional[float] = None
+    # Quality
+    ess: Optional[float] = None
+    rhat: Optional[float] = None
+    divergences: Optional[int] = Field(None, ge=0)
+    evidence_grade: Optional[int] = Field(None, ge=0, le=3)
+    provenance: Optional[Literal['bayesian', 'pooled-fallback', 'point-estimate', 'skipped']] = None
 
     model_config = ConfigDict(populate_by_name=True)
 
 
 class FitHistoryEntry(BaseModel):
-    """Unified fit_history entry — one per fit date (doc 21 §3.4)."""
+    """Full-fidelity fit_history entry — one per fit date (doc 27 §3)."""
     fitted_at: str
     fingerprint: str
-    slices: Dict[str, SlimSlice]
+    slices: Dict[str, FitHistorySlice]
+    hdi_level: Optional[float] = None
+    prior_tier: Optional[Literal['direct_history', 'trajectory_calibrated', 'inherited', 'sibling_pooled', 'uninformative']] = None
 
 
 class Posterior(BaseModel):

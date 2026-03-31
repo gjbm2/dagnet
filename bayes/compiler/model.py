@@ -452,7 +452,12 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
                     onset_obs = getattr(lp, 'onset_observations', None)
                     if onset_obs and len(onset_obs) >= 3:
                         onset_obs_np = np.array(onset_obs, dtype=np.float64)
-                        sigma_obs = max(float(np.std(onset_obs_np)), 0.01)
+                        raw_std = float(np.std(onset_obs_np))
+                        # Floor: if observations have near-zero variance
+                        # (e.g. all zero for onset=0 edges), use 1.0 day —
+                        # histogram bin resolution, not false precision.
+                        # Otherwise keep the original 0.01 floor.
+                        sigma_obs = max(raw_std, 1.0 if raw_std < 1e-6 else 0.01)
                         onset_obs_mean = float(np.mean(onset_obs_np))
                         n_obs = len(onset_obs_np)
 
@@ -469,8 +474,9 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
                         # mean, corrected for temporal dependence.
                         #
                         # See journal 30-Mar-26 "onset obs over-precision".
-                        if n_obs >= 4:
+                        if n_obs >= 4 and np.std(onset_obs_np) > 1e-9:
                             rho = float(np.corrcoef(onset_obs_np[:-1], onset_obs_np[1:])[0, 1])
+                            rho = rho if np.isfinite(rho) else 0.0
                             rho = max(min(rho, 0.99), 0.0)  # clamp to [0, 0.99]
                         else:
                             rho = 0.0

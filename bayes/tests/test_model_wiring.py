@@ -401,7 +401,206 @@ class TestFeatureFlagDiagnostics:
         })
 
         diag = metadata.get("diagnostics", [])
-        assert len(diag) > 0
-        first = diag[0]
-        assert "latent_onset=True" in first
-        assert "latent_latency=True" in first
+        assert len(diag) > 1
+        features_line = diag[1]
+        assert "latent_onset=True" in features_line
+        assert "latent_latency=True" in features_line
+
+
+# ===========================================================================
+# Warm-start from unified posterior schema (doc 21 §6)
+# ===========================================================================
+
+class TestWarmStartLatencyFromUnifiedSlices:
+    """Latency prior warm-start reads from posterior.slices['window()'] (doc 21 §6.2)."""
+
+    def test_latency_warm_start_uses_slice_mu_sigma(self):
+        """posterior.slices['window()'].mu_mean/sigma_mean → latency prior warm_start."""
+        graph, params = _solo_edge_with_latency(mu=2.0, sigma=0.5)
+        # Inject a previous unified posterior into the param file
+        params["param-a-b"]["posterior"] = {
+            "fitted_at": "1-Feb-25",
+            "fingerprint": "prev-fp",
+            "hdi_level": 0.9,
+            "prior_tier": "direct_history",
+            "slices": {
+                "window()": {
+                    "alpha": 80, "beta": 200,
+                    "mu_mean": 2.5, "mu_sd": 0.06,
+                    "sigma_mean": 0.35, "sigma_sd": 0.03,
+                    "ess": 1000, "rhat": 1.002,
+                },
+            },
+        }
+
+        _, _, _, evidence = _build(graph, params)
+
+        ev = evidence.edges.get("edge-a-b")
+        assert ev is not None
+        assert ev.latency_prior is not None
+        assert ev.latency_prior.source == "warm_start"
+        # Should use posterior values, not topology defaults
+        assert ev.latency_prior.mu == pytest.approx(2.5, abs=0.01)
+        assert ev.latency_prior.sigma == pytest.approx(0.35, abs=0.01)
+
+    def test_latency_warm_start_rejected_on_poor_convergence(self):
+        """rhat > 1.10 in window() slice → warm-start rejected, falls back to topology."""
+        graph, params = _solo_edge_with_latency(mu=2.0, sigma=0.5)
+        params["param-a-b"]["posterior"] = {
+            "fitted_at": "1-Feb-25",
+            "fingerprint": "prev-fp",
+            "hdi_level": 0.9,
+            "prior_tier": "direct_history",
+            "slices": {
+                "window()": {
+                    "alpha": 80, "beta": 200,
+                    "mu_mean": 2.5, "sigma_mean": 0.35,
+                    "ess": 50, "rhat": 1.20,   # poor convergence
+                },
+            },
+        }
+
+        _, _, _, evidence = _build(graph, params)
+
+        ev = evidence.edges.get("edge-a-b")
+        assert ev is not None
+        assert ev.latency_prior is not None
+        assert ev.latency_prior.source == "topology"
+        # Should use topology defaults, not posterior values
+        assert ev.latency_prior.mu == pytest.approx(2.0, abs=0.01)
+
+
+class TestWarmStartProbabilityFromUnifiedSlices:
+    """Probability prior warm-start reads from posterior.slices['window()'] (doc 21 §6.2)."""
+
+    def test_probability_warm_start_uses_slice_alpha_beta(self):
+        """posterior.slices['window()'].alpha/beta → probability prior warm_start."""
+        graph, params = _solo_edge_with_latency(p_true=0.3)
+        params["param-a-b"]["posterior"] = {
+            "fitted_at": "1-Feb-25",
+            "fingerprint": "prev-fp",
+            "hdi_level": 0.9,
+            "prior_tier": "direct_history",
+            "slices": {
+                "window()": {
+                    "alpha": 80, "beta": 200,
+                    "mu_mean": 2.0, "sigma_mean": 0.4,
+                    "ess": 1000, "rhat": 1.002,
+                },
+            },
+        }
+
+        _, _, _, evidence = _build(graph, params)
+
+        ev = evidence.edges.get("edge-a-b")
+        assert ev is not None
+        assert ev.prob_prior is not None
+        assert ev.prob_prior.source == "warm_start"
+        # Warm-start alpha/beta may be ESS-capped, but mean should approximate
+        # the posterior mean (80 / (80+200) ≈ 0.286)
+        warm_mean = ev.prob_prior.alpha / (ev.prob_prior.alpha + ev.prob_prior.beta)
+        assert warm_mean == pytest.approx(80 / 280, abs=0.02)
+
+    def test_probability_warm_start_rejected_on_poor_convergence(self):
+        """rhat > 1.10 → warm-start rejected, falls back to moment-matched."""
+        graph, params = _solo_edge_with_latency(p_true=0.3)
+        params["param-a-b"]["posterior"] = {
+            "fitted_at": "1-Feb-25",
+            "fingerprint": "prev-fp",
+            "hdi_level": 0.9,
+            "prior_tier": "direct_history",
+            "slices": {
+                "window()": {
+                    "alpha": 80, "beta": 200,
+                    "ess": 50, "rhat": 1.20,  # poor
+                },
+            },
+        }
+
+        _, _, _, evidence = _build(graph, params)
+
+        ev = evidence.edges.get("edge-a-b")
+        assert ev is not None
+        assert ev.prob_prior is not None
+        assert ev.prob_prior.source != "warm_start"
+
+
+class TestWarmStartKappaFromModelState:
+    """Kappa warm-start reads from posterior._model_state (doc 21 §6.1)."""
+
+    def test_kappa_warm_start_from_model_state(self):
+        """posterior._model_state.kappa_{edge_id} → warm-start kappa on evidence."""
+        graph, params = _solo_edge_with_latency()
+        safe_id = "edge_a_b"
+        params["param-a-b"]["posterior"] = {
+            "fitted_at": "1-Feb-25",
+            "fingerprint": "prev-fp",
+            "hdi_level": 0.9,
+            "prior_tier": "direct_history",
+            "slices": {
+                "window()": {
+                    "alpha": 80, "beta": 200,
+                    "mu_mean": 2.0, "sigma_mean": 0.4,
+                    "ess": 1000, "rhat": 1.002,
+                },
+            },
+            "_model_state": {
+                f"kappa_{safe_id}": 23.7,
+            },
+        }
+
+        _, _, _, evidence = _build(graph, params)
+
+        ev = evidence.edges.get("edge-a-b")
+        assert ev is not None
+        assert ev.kappa_warm == pytest.approx(23.7, abs=0.01)
+
+    def test_kappa_warm_start_absent_without_model_state(self):
+        """No _model_state → kappa_warmstart is None."""
+        graph, params = _solo_edge_with_latency()
+        # No posterior at all
+        _, _, _, evidence = _build(graph, params)
+
+        ev = evidence.edges.get("edge-a-b")
+        assert ev is not None
+        assert ev.kappa_warm is None
+
+
+class TestWarmStartCohortLatencyFromCohortSlice:
+    """Cohort (path) latency warm-start reads from posterior.slices['cohort()'] (doc 21 §6.2)."""
+
+    def test_cohort_latency_warm_start_from_cohort_slice(self):
+        """posterior.slices['cohort()'].mu_mean → cohort latency warm-start."""
+        graph, params = _two_latency_edges(onset_1=3.0, onset_2=7.0)
+        # B→C has 2-edge path, so cohort latency is active
+        params["param-b-c"]["posterior"] = {
+            "fitted_at": "1-Feb-25",
+            "fingerprint": "prev-fp",
+            "hdi_level": 0.9,
+            "prior_tier": "direct_history",
+            "slices": {
+                "window()": {
+                    "alpha": 80, "beta": 200,
+                    "mu_mean": 2.0, "sigma_mean": 0.5,
+                    "ess": 1000, "rhat": 1.002,
+                },
+                "cohort()": {
+                    "alpha": 70, "beta": 180,
+                    "mu_mean": 2.8, "sigma_mean": 0.6,
+                    "onset_mean": 12.0,
+                    "ess": 800, "rhat": 1.005,
+                },
+            },
+        }
+
+        _, _, _, evidence = _build(graph, params, features={
+            "latent_onset": True,
+            "cohort_latency": True,
+        })
+
+        ev = evidence.edges.get("edge-b-c")
+        assert ev is not None
+        # Cohort warm-start should be populated
+        assert ev.cohort_latency_warm is not None
+        assert ev.cohort_latency_warm["mu"] == pytest.approx(2.8, abs=0.01)
+        assert ev.cohort_latency_warm["sigma"] == pytest.approx(0.6, abs=0.01)

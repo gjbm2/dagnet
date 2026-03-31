@@ -14,10 +14,11 @@ import type { ModelVarsEntry, ModelVarsQuality } from '../types';
 import { fileRegistry } from '../contexts/TabContext';
 import { sessionLogService } from './sessionLogService';
 import { upsertModelVars, ukDateNow, applyPromotion } from './modelVarsResolution';
+import { parseUKDate } from '../lib/dateFormat';
+import { BAYES_FIT_HISTORY_MAX_DAYS, BAYES_FIT_HISTORY_INTERVAL_DAYS } from '../constants/latency';
+import type { FitHistorySlice } from '../types';
 
 console.log('[bayesPatchService] Module loaded');
-
-const FIT_HISTORY_MAX_ENTRIES = 100; // TODO: move to ForecastingSettings
 
 // ── Quality gate for model_vars (doc 15 §3) ────────────────────────────────
 // Same thresholds as bayesQualityTier 'failed' tier.
@@ -383,26 +384,44 @@ function mergePosteriorsIntoParam(
   // from the Bayesian posterior. The Bayesian mean lives in posterior.slices
   // and in model_vars.
 
-  // Append existing slices to fit_history BEFORE overwriting
+  // Append existing slices to fit_history BEFORE overwriting (doc 27 §3)
   const existingPosterior = paramDoc.posterior;
   const fitHistory: any[] = existingPosterior?.fit_history ?? [];
   if (existingPosterior?.slices && Object.keys(existingPosterior.slices).length > 0) {
-    const slimSlices: Record<string, any> = {};
-    for (const [key, s] of Object.entries<any>(existingPosterior.slices)) {
-      slimSlices[key] = {
-        alpha: s.alpha,
-        beta: s.beta,
-        ...(s.mu_mean != null ? { mu_mean: s.mu_mean } : {}),
-        ...(s.sigma_mean != null ? { sigma_mean: s.sigma_mean } : {}),
-      };
+    // Interval filtering: skip append if last entry is too recent (doc 27 §4.3)
+    let shouldAppend = true;
+    if (BAYES_FIT_HISTORY_INTERVAL_DAYS > 0 && fitHistory.length > 0) {
+      const lastEntry = fitHistory[fitHistory.length - 1];
+      try {
+        const lastDate = parseUKDate(lastEntry.fitted_at);
+        const existingDate = parseUKDate(existingPosterior.fitted_at ?? fittedAt);
+        const daysDiff = (existingDate.getTime() - lastDate.getTime()) / (1000 * 60 * 60 * 24);
+        if (daysDiff < BAYES_FIT_HISTORY_INTERVAL_DAYS) shouldAppend = false;
+      } catch { /* parse failure — append anyway */ }
     }
-    fitHistory.push({
-      fitted_at: existingPosterior.fitted_at ?? fittedAt,
-      fingerprint: existingPosterior.fingerprint ?? fingerprint,
-      slices: slimSlices,
-    });
-    if (fitHistory.length > FIT_HISTORY_MAX_ENTRIES) {
-      fitHistory.splice(0, fitHistory.length - FIT_HISTORY_MAX_ENTRIES);
+
+    if (shouldAppend) {
+      // Full-fidelity: store complete SlicePosteriorEntry, not slim subset
+      fitHistory.push({
+        fitted_at: existingPosterior.fitted_at ?? fittedAt,
+        fingerprint: existingPosterior.fingerprint ?? fingerprint,
+        hdi_level: existingPosterior.hdi_level ?? 0.9,
+        prior_tier: existingPosterior.prior_tier ?? 'uninformative',
+        slices: { ...existingPosterior.slices },
+      });
+
+      // Date-based eviction: remove entries older than max_days (doc 27 §4.2)
+      if (fitHistory.length > 1) {
+        try {
+          const newestDate = parseUKDate(fitHistory[fitHistory.length - 1].fitted_at);
+          const cutoffMs = newestDate.getTime() - BAYES_FIT_HISTORY_MAX_DAYS * 24 * 60 * 60 * 1000;
+          const firstKeep = fitHistory.findIndex((e: any) => {
+            try { return parseUKDate(e.fitted_at).getTime() >= cutoffMs; }
+            catch { return true; }
+          });
+          if (firstKeep > 0) fitHistory.splice(0, firstKeep);
+        } catch { /* parse failure — skip eviction */ }
+      }
     }
   }
 

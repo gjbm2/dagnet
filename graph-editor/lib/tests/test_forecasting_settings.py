@@ -55,8 +55,8 @@ class TestForecastingSettingsDefaults:
     def test_bayes_fit_history_interval_days(self):
         assert ForecastingSettings().bayes_fit_history_interval_days == 0
 
-    def test_bayes_fit_history_max_entries(self):
-        assert ForecastingSettings().bayes_fit_history_max_entries == 100
+    def test_bayes_fit_history_max_days(self):
+        assert ForecastingSettings().bayes_fit_history_max_days == 100
 
 
 class TestSettingsFromDict:

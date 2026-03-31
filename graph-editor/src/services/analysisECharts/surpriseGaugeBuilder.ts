@@ -7,18 +7,32 @@
  *  3. One scenario, multiple vars → horizontal bands (normalised axis)
  *
  * Axis: linear in σ, labelled in percentiles.
- * Colour zones: green (expected) → yellow → amber → red → dark red (alarming).
+ * Colour schemes:
+ *  - symmetric (R-A-G-A-R): green centre, red both tails — "any surprise is concerning"
+ *  - directional_positive (R-A-G): red left, green right — "higher is better"
+ *  - directional_negative (G-A-R): green left, red right — "lower is better"
  */
 
 import { echartsThemeColours, echartsTooltipStyle } from './echartsCommon';
 
-// Zone boundaries in σ units and their colours
-const ZONES = [
+export type ColourScheme = 'symmetric' | 'directional_positive' | 'directional_negative';
+
+// Zone boundaries in σ units and their colours (used for symmetric mode)
+export const ZONES = [
   { maxSigma: 1.28,  colour: '#22c55e', label: 'Expected' },     // green
   { maxSigma: 1.645, colour: '#eab308', label: 'Noteworthy' },   // yellow
   { maxSigma: 1.96,  colour: '#f59e0b', label: 'Unusual' },      // amber
   { maxSigma: 2.576, colour: '#ef4444', label: 'Surprising' },   // red
   { maxSigma: 3.5,   colour: '#991b1b', label: 'Alarming' },     // dark red
+];
+
+// Directional gradient: 5 stops from "bad" to "good"
+export const DIRECTIONAL_COLOURS = [
+  { colour: '#991b1b', label: 'Alarming' },    // dark red
+  { colour: '#ef4444', label: 'Concerning' },   // red
+  { colour: '#f59e0b', label: 'Cautionary' },   // amber
+  { colour: '#eab308', label: 'Noteworthy' },   // yellow
+  { colour: '#22c55e', label: 'Favourable' },   // green
 ];
 
 // Confidence band labels — symmetric ±, showing the CI boundary
@@ -35,7 +49,7 @@ const PERCENTILE_TICKS = [
   { sigma: 2.576,  label: '99%' },
 ];
 
-interface SurpriseVariable {
+export interface SurpriseVariable {
   name: string;
   label: string;
   quantile: number;
@@ -53,54 +67,91 @@ interface SurpriseVariable {
   expected_days?: number;
 }
 
-function zoneColour(sigma: number): string {
-  const absSigma = Math.abs(sigma);
-  for (const z of ZONES) {
-    if (absSigma <= z.maxSigma) return z.colour;
+/**
+ * Resolve the zone colour for a given sigma value under a colour scheme.
+ *
+ * - symmetric: colour depends on |σ| (distance from centre in either direction)
+ * - directional_positive: linear gradient from red (left / negative σ) to green (right / positive σ)
+ * - directional_negative: linear gradient from green (left / negative σ) to red (right / positive σ)
+ */
+export function zoneColour(sigma: number, scheme: ColourScheme = 'symmetric'): string {
+  if (scheme === 'symmetric') {
+    const absSigma = Math.abs(sigma);
+    for (const z of ZONES) {
+      if (absSigma <= z.maxSigma) return z.colour;
+    }
+    return ZONES[ZONES.length - 1].colour;
   }
-  return ZONES[ZONES.length - 1].colour;
+
+  // Directional: map sigma linearly from [-3.5, +3.5] to a 5-stop gradient
+  const maxSigma = 3.5;
+  // Normalise to [0, 1] where 0 = far negative, 1 = far positive
+  let t = (sigma + maxSigma) / (2 * maxSigma);
+  t = Math.max(0, Math.min(1, t));
+  // For directional_negative, reverse so that positive sigma = bad
+  if (scheme === 'directional_negative') t = 1 - t;
+
+  const idx = Math.min(Math.floor(t * DIRECTIONAL_COLOURS.length), DIRECTIONAL_COLOURS.length - 1);
+  return DIRECTIONAL_COLOURS[idx].colour;
 }
 
 /**
  * Build the semicircular gauge dial for a single variable.
  */
+function buildGaugeSegments(scheme: ColourScheme): [number, string][] {
+  const maxSigma = 3.5;
+
+  if (scheme === 'symmetric') {
+    // ECharts axisLine.color: [offset, colour] means "this colour fills from
+    // the previous offset TO this offset".
+    //
+    // Gauge range: sigma -3.5 (offset 0) to +3.5 (offset 1), centre at 0.5.
+    // Zone layout (negative side, positive side mirrors):
+    //   alarming:   sigma ±3.5   to ±2.576  (offsets 0.000↔0.132, 0.868↔1.000)
+    //   surprising: sigma ±2.576 to ±1.96   (offsets 0.132↔0.220, 0.780↔0.868)
+    //   unusual:    sigma ±1.96  to ±1.645  (offsets 0.220↔0.265, 0.735↔0.780)
+    //   noteworthy: sigma ±1.645 to ±1.28   (offsets 0.265↔0.317, 0.683↔0.735)
+    //   expected:   sigma ±1.28  to 0       (offsets 0.317↔0.500, 0.500↔0.683)
+    const segments: [number, string][] = [];
+    const negZones = [...ZONES].reverse(); // alarming → expected
+
+    // Negative side: each entry [endOffset, colour] fills prev→endOffset.
+    for (let i = 0; i < negZones.length; i++) {
+      const innerSigma = i < negZones.length - 1 ? negZones[i + 1].maxSigma : 0;
+      const endOffset = 0.5 - (innerSigma / maxSigma) * 0.5;
+      segments.push([endOffset, negZones[i].colour]);
+    }
+
+    // Positive side: expected → alarming
+    for (let i = 0; i < ZONES.length; i++) {
+      const endOffset = 0.5 + (ZONES[i].maxSigma / maxSigma) * 0.5;
+      segments.push([endOffset, ZONES[i].colour]);
+    }
+    segments.push([1, ZONES[ZONES.length - 1].colour]);
+    return segments;
+  }
+
+  // Directional: linear gradient across the full range
+  const colours = scheme === 'directional_positive'
+    ? DIRECTIONAL_COLOURS         // red → green (left to right)
+    : [...DIRECTIONAL_COLOURS].reverse();  // green → red (left to right)
+  const segments: [number, string][] = [];
+  const n = colours.length;
+  for (let i = 0; i < n; i++) {
+    segments.push([(i + 1) / n, colours[i].colour]);
+  }
+  return segments;
+}
+
 function buildGaugeDial(
   variable: SurpriseVariable,
   settings: Record<string, any>,
 ): any {
   const c = echartsThemeColours();
   const maxSigma = 3.5;
+  const scheme = (settings.surprise_colour_scheme || 'symmetric') as ColourScheme;
 
-  // Build colour bands as axisLine segments (symmetric: -maxSigma to +maxSigma)
-  const colourStops: [number, string][] = [];
-  const allBoundaries = [0, ...ZONES.map(z => z.maxSigma)];
-  for (let i = 0; i < ZONES.length; i++) {
-    const from = i === 0 ? 0 : allBoundaries[i];
-    const to = allBoundaries[i + 1];
-    const normFrom = (maxSigma - from) / (2 * maxSigma);
-    const normTo = (maxSigma - to) / (2 * maxSigma);
-    // Left side (below expected)
-    colourStops.push([1 - normFrom, ZONES[i].colour]);
-    // Right side (above expected) — mirror
-    const rightFrom = (maxSigma + from) / (2 * maxSigma);
-    const rightTo = (maxSigma + to) / (2 * maxSigma);
-  }
-
-  // Simpler approach: build symmetric colour array
-  const segments: [number, string][] = [];
-  // Negative side (reversed zones)
-  for (let i = ZONES.length - 1; i >= 0; i--) {
-    const boundary = (maxSigma - ZONES[i].maxSigma) / (2 * maxSigma);
-    segments.push([boundary, ZONES[i].colour]);
-  }
-  // Centre
-  segments.push([0.5, ZONES[0].colour]);
-  // Positive side
-  for (let i = 0; i < ZONES.length; i++) {
-    const boundary = (maxSigma + ZONES[i].maxSigma) / (2 * maxSigma);
-    segments.push([boundary, ZONES[i].colour]);
-  }
-  segments.push([1, ZONES[ZONES.length - 1].colour]);
+  const segments = buildGaugeSegments(scheme);
 
   // Clamp needle to visible range
   const needleSigma = Math.max(-maxSigma, Math.min(maxSigma, variable.sigma));
@@ -247,40 +298,63 @@ function buildGaugeDial(
  * Build horizontal band chart for multiple variables (normalised axis)
  * or multiple scenarios (shared axis).
  */
+function buildBandMarkAreas(scheme: ColourScheme): any[] {
+  const maxSigma = 3.5;
+  const markAreas: any[] = [];
+
+  if (scheme === 'symmetric') {
+    const prevBoundaries = [0, ...ZONES.map(z => z.maxSigma)];
+    for (let i = 0; i < ZONES.length; i++) {
+      const from = prevBoundaries[i];
+      const to = prevBoundaries[i + 1];
+      // Positive side
+      markAreas.push({
+        itemStyle: { color: ZONES[i].colour, opacity: 0.15 },
+        xAxis: from, x2Axis: to,
+      });
+      // Negative side
+      markAreas.push({
+        itemStyle: { color: ZONES[i].colour, opacity: 0.15 },
+        xAxis: -to, x2Axis: -from,
+      });
+    }
+  } else {
+    // Directional: evenly spaced bands across the full range
+    const colours = scheme === 'directional_positive'
+      ? DIRECTIONAL_COLOURS
+      : [...DIRECTIONAL_COLOURS].reverse();
+    const n = colours.length;
+    const step = (2 * maxSigma) / n;
+    for (let i = 0; i < n; i++) {
+      markAreas.push({
+        itemStyle: { color: colours[i].colour, opacity: 0.15 },
+        xAxis: -maxSigma + i * step,
+        x2Axis: -maxSigma + (i + 1) * step,
+      });
+    }
+  }
+  return markAreas;
+}
+
 function buildBandChart(
   variables: SurpriseVariable[],
   settings: Record<string, any>,
 ): any {
   const c = echartsThemeColours();
   const maxSigma = 3.5;
+  const scheme = (settings.surprise_colour_scheme || 'symmetric') as ColourScheme;
 
   const available = variables.filter(v => v.available);
   if (available.length === 0) return null;
 
   const categories = available.map(v => v.label);
 
-  // Background colour bands (symmetric zones)
-  const markAreas: any[] = [];
-  const prevBoundaries = [0, ...ZONES.map(z => z.maxSigma)];
-  for (let i = 0; i < ZONES.length; i++) {
-    const from = prevBoundaries[i];
-    const to = prevBoundaries[i + 1];
-    // Positive side
-    markAreas.push({
-      itemStyle: { color: ZONES[i].colour, opacity: 0.15 },
-      xAxis: from, x2Axis: to,
-    });
-    // Negative side
-    markAreas.push({
-      itemStyle: { color: ZONES[i].colour, opacity: 0.15 },
-      xAxis: -to, x2Axis: -from,
-    });
-  }
+  const markAreas = buildBandMarkAreas(scheme);
 
   // Scatter points — one per variable at its σ position
   const scatterData = available.map((v, i) => ({
     value: [Math.max(-maxSigma, Math.min(maxSigma, v.sigma)), i],
-    itemStyle: { color: zoneColour(v.sigma), borderColor: c.text, borderWidth: 1 },
+    itemStyle: { color: zoneColour(v.sigma, scheme), borderColor: c.text, borderWidth: 1 },
     label: {
       show: true,
       position: 'right',
@@ -380,7 +454,7 @@ export function buildSurpriseGaugeEChartsOption(
   if (available.length === 0) return null;
 
   // Which variable(s) to show — respect the display setting
-  const selectedVar = settings.surprise_var || 'all';
+  const selectedVar = settings.surprise_var || 'p';
 
   let opt: any;
   if (selectedVar === 'all') {
@@ -397,22 +471,39 @@ export function buildSurpriseGaugeEChartsOption(
     }
   }
 
-  // Add hint label when not using Bayesian posteriors
+  // Add warning indicator + hint label when not using Bayesian posteriors
   const hint = result?.hint;
   if (opt && hint) {
     const c = echartsThemeColours();
-    opt.graphic = [{
-      type: 'text',
-      right: 8,
-      bottom: 4,
-      style: {
-        text: hint,
-        fontSize: 9,
-        fill: c.text === '#e0e0e0' ? '#6b7280' : '#9ca3af',
-        fontStyle: 'italic',
+    const hintColour = c.text === '#e0e0e0' ? '#6b7280' : '#9ca3af';
+    opt.graphic = [
+      // ⚠ warning icon (top-right)
+      {
+        type: 'text',
+        right: 6,
+        top: 4,
+        style: {
+          text: '⚠',
+          fontSize: 14,
+          fill: '#f59e0b',
+        },
+        silent: true,
+        z: 100,
       },
-      silent: true,
-    }];
+      // Hint text (bottom-right)
+      {
+        type: 'text',
+        right: 8,
+        bottom: 4,
+        style: {
+          text: hint,
+          fontSize: 9,
+          fill: hintColour,
+          fontStyle: 'italic',
+        },
+        silent: true,
+      },
+    ];
   }
 
   return opt;

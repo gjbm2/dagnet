@@ -448,19 +448,19 @@ export const LATENCY_MIN_EFFECTIVE_SAMPLE_SIZE = 150;
 // =============================================================================
 
 /**
- * Minimum days between retained fit_history entries.
- * The worker runs nightly but only appends to fit_history if at least
- * this many days have passed since the last entry.
+ * Minimum days between retained fit_history entries (doc 27 §4).
+ * 0 (default) = store every fit. Positive value = skip append if the
+ * most recent entry is younger than this many days.
  */
 export const BAYES_FIT_HISTORY_INTERVAL_DAYS = 0;
 
 /**
- * Maximum fit_history entries per posterior.
- * Oldest entries are evicted when the cap is reached.
- * At default settings (interval=0, max=100) this gives ~100 days of daily snapshots.
- * TODO (doc 27): rename to BAYES_FIT_HISTORY_MAX_DAYS and implement date-based eviction.
+ * Maximum age in days of the oldest retained fit_history entry (doc 27 §4).
+ * Entries older than `newest_fitted_at - max_days` are evicted on each fit.
+ * At default settings (interval=0, max_days=100) this gives ~100 days of
+ * daily snapshots.
  */
-export const BAYES_FIT_HISTORY_MAX_ENTRIES = 100;
+export const BAYES_FIT_HISTORY_MAX_DAYS = 100;
 
 // =============================================================================
 // Forecasting Settings (wire format for Python backend)
@@ -490,9 +490,9 @@ export interface ForecastingSettings {
   blend_completeness_power: number;
   // Evidence scope
   fit_left_censor_days: number;
-  // Bayesian fit_history retention
+  // Bayesian fit_history retention (doc 27)
   bayes_fit_history_interval_days: number;
-  bayes_fit_history_max_entries: number;
+  bayes_fit_history_max_days: number;
 }
 
 /**
@@ -513,7 +513,7 @@ export function buildForecastingSettings(): ForecastingSettings {
     blend_completeness_power: LATENCY_BLEND_COMPLETENESS_POWER,
     fit_left_censor_days: LATENCY_FE_FIT_LEFT_CENSOR_DAYS,
     bayes_fit_history_interval_days: BAYES_FIT_HISTORY_INTERVAL_DAYS,
-    bayes_fit_history_max_entries: BAYES_FIT_HISTORY_MAX_ENTRIES,
+    bayes_fit_history_max_days: BAYES_FIT_HISTORY_MAX_DAYS,
   };
 }
 

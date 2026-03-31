@@ -196,6 +196,7 @@ class TestLatencyWebhookDict:
             "path_onset_hdi_lower", "path_onset_hdi_upper",
             "path_mu_mean", "path_mu_sd",
             "path_sigma_mean", "path_sigma_sd",
+            "path_hdi_t95_lower", "path_hdi_t95_upper",
             "path_provenance",
         }
         assert d.keys() == expected_keys

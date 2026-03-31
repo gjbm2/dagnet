@@ -104,8 +104,9 @@ _model_state:
 ### 2.4 Unified `fit_history`
 
 One `fit_history` array with one entry per fit date. Each entry carries
-slim per-slice snapshots (probability `alpha`/`beta` + optionally latency
-`mu_mean`/`sigma_mean` for trajectory calibration).
+full-fidelity per-slice snapshots (same shape as `SlicePosteriorEntry`)
+plus `hdi_level` and `prior_tier` to be self-describing. See doc 27 for
+the retention policy and asat query path.
 
 ---
 
@@ -190,11 +191,40 @@ posterior:
       provenance: "bayesian"
 
   fit_history:
+    # Full-fidelity entries (doc 27): same shape as posterior.slices
     - fitted_at: "17-Mar-26"
       fingerprint: "def456ghi"
+      hdi_level: 0.9
+      prior_tier: "direct_history"
       slices:
-        "window()": { alpha: 40.1, beta: 115.2, mu_mean: 1.85 }
-        "cohort()": { alpha: 35.0, beta: 108.0, mu_mean: 2.38 }
+        "window()":
+          alpha: 40.1
+          beta: 115.2
+          p_hdi_lower: 0.21
+          p_hdi_upper: 0.32
+          mu_mean: 1.85
+          mu_sd: 0.06
+          sigma_mean: 0.36
+          sigma_sd: 0.03
+          ess: 1050
+          rhat: 1.003
+          divergences: 0
+          evidence_grade: 3
+          provenance: "bayesian"
+        "cohort()":
+          alpha: 35.0
+          beta: 108.0
+          p_hdi_lower: 0.19
+          p_hdi_upper: 0.34
+          mu_mean: 2.38
+          mu_sd: 0.09
+          sigma_mean: 0.50
+          sigma_sd: 0.04
+          ess: 780
+          rhat: 1.008
+          divergences: 0
+          evidence_grade: 3
+          provenance: "bayesian"
 
 latency:
   latency_parameter: true
@@ -258,9 +288,12 @@ their DSL and get the right values.
 |---|---|---|
 | `fitted_at` | string | UK date of this historical fit |
 | `fingerprint` | string | Model hash at time of fit |
-| `slices` | Record<string, SlimSlice> | Per-slice snapshot |
+| `hdi_level` | float | HDI level used for this fit (e.g. 0.9) |
+| `prior_tier` | string | Prior tier that produced this fit |
+| `slices` | Record<string, SlicePosteriorEntry> | Full-fidelity per-slice snapshot (doc 27) |
 
-Where `SlimSlice` is: `{ alpha, beta, mu_mean?, sigma_mean? }`.
+Legacy entries may have only `{ alpha, beta, mu_mean?, sigma_mean? }` —
+see doc 27 §3.4 for backward compatibility handling.
 
 ---
 

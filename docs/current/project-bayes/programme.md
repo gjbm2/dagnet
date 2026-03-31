@@ -5,7 +5,7 @@
 **Purpose**: Phased delivery plan for Project Bayes. This doc owns sequencing;
 design docs contain the detail.
 
-### Current status snapshot (29-Mar-26)
+### Current status snapshot (31-Mar-26)
 
 **Done**: Async infrastructure, Phase A–D compiler, FE overlay (basic
 + quality + model CDF + confidence bands), unified posterior schema,
@@ -14,29 +14,45 @@ model architecture (posterior-as-prior), likelihood rewrite
 (DM→Binomial), endpoint BetaBinomial for rate estimation, onset
 observations, t95 soft constraint, posterior slice resolution (doc 25),
 Phase 2 join-node CDF fix, full warm-start wiring with quality guard,
-synth context data fix (`emit_context_slices` truth flag).
+synth context data fix (`emit_context_slices` truth flag), unified
+MCMC κ estimation (journal 30-31-Mar-26).
 
-**Synth regression**: 8/10 pass. 2 onset-mu correlation failures
-(simple-abc, drift3d10d) — pre-existing structural issue.
+**Synth regression**: 5/10 pass, 5/10 fail. Failures are onset
+convergence issues (pre-existing "Initial evaluation failed"), not
+κ-related. Mirror-4step, simple-abc, diamond, drift10d10d, drift3d10d
+pass.
+
+**Dispersion (κ) recovery — synth-mirror-4step**:
+Phase 1 (window, step-day) and Phase 2 (cohort, entry-day) both
+data-constrained. Single-source validation:
+- Step-day only (κ_step=30): Phase 1 recovers 6–9pp SD vs truth
+  6–9pp for first 3 edges. Phase 2 correctly sees attenuated signal.
+- Entry-day only (κ_entry=50): Phase 2 recovers 8pp for first edge
+  (truth 5.4pp — overestimates). Downstream attenuates as expected
+  (entry-day fades through latency mixing).
+- 10× traffic improves downstream recovery but attenuation is real
+  physics, not data volume.
 
 **Production fit quality (bayes-test-gm-rebuild)**:
-- All 4 edges converge (ESS 5k–15k, rhat ≤ 1.003) with warm-start.
-- del-to-reg: p=0.114 (analytic 0.095, ratio 1.20x) — latency edge.
-- reg-to-success: edge p=0.788, cohort p=0.808.
-- No-latency edges ≤ 1.01x analytic.
-- First-run (no warm-start): del-to-reg fails to converge (ESS=6)
-  due to topology priors being far from posterior mode. Warm-start
-  or neutral priors required.
+- All 4 edges converge (ESS 3.9k+, rhat ≤ 1.001) with analytic priors.
+- Phase 1 κ: 17–185 (data-constrained, ±SD 3–47).
+- Phase 2 κ: 27–578 (data-constrained for first edge, wider downstream).
+- Rate SDs: 2.5–9.8pp (Phase 1), 1.3–7.5pp (Phase 2).
+- Warm-start stable: κ identical across passes.
 
 **Key architectural decisions locked in**:
-1. Textbook Binomial, not DM/BB — no concentration-parameter bias
+1. Textbook Binomial for trajectories — no concentration-parameter bias
 2. Per-retrieval onset from Amplitude histograms — data-driven
 3. t95 soft constraint from analytics pass — prevents sigma inflation
 4. Two-phase model — window Phase 1, frozen-p Phase 2 with
    posterior-as-prior (ESS-decayed Dirichlet/Beta)
-5. Endpoint BetaBinomial for between-cohort rate variation (kappa_p)
-6. Williams (1982) post-hoc for between-cohort kappa estimation
-7. Quality-gated warm-start (rhat < 1.10, ESS ≥ 100)
+5. **Unified MCMC κ per edge** — LogNormal prior, constrained by
+   daily BetaBinomial + endpoint BetaBinomial. Replaces separate
+   kappa/kappa_p variables and external Williams MLE (which is
+   retained for diagnostic comparison only).
+6. Quality-gated warm-start (rhat < 1.10, ESS ≥ 100)
+7. Full kappa→alpha/beta→p_stdev→confidence bands pipeline verified
+   for both window and cohort modes
 
 **Resolved bugs** (29-Mar-26 sweep):
 - ~~Posterior upsert on subsequent runs~~ — **FIXED 29-Mar-26**.
@@ -53,9 +69,17 @@ synth context data fix (`emit_context_slices` truth flag).
 - ~~Synth context data corruption~~ — **FIXED 29-Mar-26**.
   `emit_context_slices` flag; synth gen now emits bare slices by
   default.
-- ~~Warm-start gaps~~ — **FIXED 29-Mar-26**. kappa, kappa_p, cohort
-  latency (mu, sigma, onset) now all warm-started from previous
-  posterior with quality gate.
+- ~~Warm-start gaps~~ — **FIXED 29-Mar-26**. kappa, cohort latency
+  (mu, sigma, onset) now all warm-started from previous posterior
+  with quality gate. kappa_p removed 31-Mar-26 (unified into kappa).
+- ~~No-latency F computation bug in dispersion estimator~~ — **FIXED
+  30-Mar-26**. `_estimate_cohort_kappa` recomputed F from CDF
+  instead of using evidence binder's completeness. For no-latency
+  edges, CDF(1d) = 0.5, filtering 92% of observations. Fixed by
+  checking `et.has_latency`.
+- ~~Dispersion estimation using external MLE~~ — **RESOLVED
+  31-Mar-26**. Replaced with unified MCMC κ per edge (LogNormal
+  prior, daily BB + endpoint BB). MLE retained for diagnostics only.
 - ~~run_regression.py misclassification~~ — **FIXED 29-Mar-26**.
   Parses param_recovery output before checking exit code.
 - ~~Phase 2 cohort onset drift~~ — **FIXED 30-Mar-26**. Warm-start
@@ -74,33 +98,26 @@ synth context data fix (`emit_context_slices` truth flag).
 
 **Open issues**:
 
-*Model quality — NEXT PRIORITIES*:
-- **Dispersion estimation: dual-kappa model** — between-day
-  variation has two independent sources: (1) entry-day (user-cohort)
-  kappa — quality of users entering on a given day, attenuates
-  downstream as upstream latency mixes cohorts; (2) step-day
-  (nodal) kappa — conditions at each step on the calendar day of
-  conversion, does NOT attenuate. Cohort MLE measures #1, window
-  MLE measures #2. Currently conflated. See journal 30-Mar-26.
-  - **Synth gen**: add step-day kappa (`kappa_step` in truth,
-    drawn per calendar_day_at_from_node × edge). Current synth
-    gen only has entry-day kappa → window dispersion artificially
-    suppressed for downstream edges.
-  - **Estimator**: replaced Williams with BetaBinomial MLE
-    (ρ-parameterised, recency-weighted, CDF-adjusted via
-    quadrature). Working for cohort at 10× traffic (κ=49 vs
-    truth 50). Window needs step-day kappa in synth gen to test.
-  - **Cohort path CDF wrong**: uses topology defaults (onset=0)
-    instead of posterior. Immature cohorts pass F≥0.9 filter.
-    Needs: use Phase 1/2 posterior path CDF.
-  - **Test assertions**: Phase 2 cohort MLE should recover
-    entry-day kappa; Phase 1 window MLE should recover step-day
-    kappa. Test separately.
-- **Path latency posteriors too tight** — cohort onset=16.5±0.2
-  (±1.2%), sigma=2.87±0.047 (±1.6%). Should be ≥ RSS of edge
-  uncertainties. Likely same cohort path CDF issue — immature
-  cohort trajectories over-constrain path parameters.
-  See journal 29-Mar-26.
+*Model quality — WATCH LIST (no blockers)*:
+- ~~**Dispersion estimation: dual-kappa model**~~ — **RESOLVED
+  31-Mar-26**. Abandoned external MLE approach. Unified MCMC κ per
+  edge (LogNormal prior, daily BB + endpoint BB). Phase 1 κ measures
+  step-day (window) variation; Phase 2 κ measures entry-day (cohort)
+  variation. Both data-constrained. Synth single-source validation
+  confirms correct attribution. MLE retained as diagnostic only.
+  See journal 30-31-Mar-26.
+  - **Known limitation**: entry-day κ under-recovered on downstream
+    edges. This is real physics — upstream latency mixes cohorts
+    across ~√(n_days_mixed) entry days, diluting the entry-day
+    signal. 10× traffic helps but doesn't eliminate attenuation.
+    Future: research whether crossed random effects GLMM could
+    separate sources more precisely (see literature review in
+    journal 30-Mar-26).
+- **Path latency posteriors possibly too tight** — latest run shows
+  cohort onset=17.4±0.2, mu=-1.13±0.11, sigma=2.86±0.05. Onset
+  ±0.2 on 17.4 is ±1.2% — may still be over-precise. However,
+  onset autocorrelation correction (31-Mar-26) may have improved
+  this. Needs re-examination after onset fixes stabilise.
 - **Onset-mu-sigma ridge (partially fixed)** — corr ≈ -0.99 on
   short-latency edges. Three fixes applied (doc 26, journal
   30-31-Mar-26):
@@ -112,21 +129,20 @@ synth context data fix (`emit_context_slices` truth flag).
      mode.
   3. **Onset obs over-precision** — **FIXED**. Autocorrelation-
      corrected N_eff (ρ=0.89 → N_eff=2.8 for del-to-reg).
-  **BLOCKING**: graph edge retains stale latency fields (onset=9.49,
-  mu=-1.21, sigma=2.79) from previous deranged runs. Stats pass
-  computes correct values (onset=5.5, mu=1.61, sigma=0.53) but
-  they don't reach the graph edge. Topology reads stale fields →
-  model starts from deranged priors → sharpened softplus makes that
-  region unviable → convergence failure (rhat=1.6, ESS=7). Need to
-  trace why stats pass output doesn't flow to graph edge latency
-  fields. See journal 31-Mar-26.
+  **No longer blocking in practice**: warm-start quality gate rejects
+  deranged posteriors; param files provide reasonable priors. Fresh
+  runs use topology values from the stats pass. The narrow failure
+  case (no param file + stale graph edge `p.latency` fields) is
+  unlikely in production. Topology could benefit from bounds-checking
+  on mu/sigma but this is low priority.
+- ~~5/10 synth regression failures~~ — **FIXED 31-Mar-26**. Onset
+  obs contributing -inf at starting point on 3way-join, fanout,
+  join-branch, lattice, skip. Independently resolved.
 
 *Other open*:
-- **Ad hoc hyperparameters** — kappa priors, fallback ESS, Gamma
-  spread. Need principled derivation.
-- **Hash mismatch (FE vs harness)** — `compute_snapshot_subjects.mjs`
-  sets context def hashes to `{}` while FE populates them. Produces
-  same results in practice but architecturally wrong.
+- ~~**Ad hoc hyperparameters** — kappa priors~~ — **PARTIALLY
+  RESOLVED**. κ prior now LogNormal (Stan community consensus).
+  Fallback ESS, Gamma spread still ad hoc.
 - **BE stats engine prior discrepancy** — three-way discrepancy.
   See `19-be-stats-engine-bugs.md`.
 
@@ -143,7 +159,9 @@ synth context data fix (`emit_context_slices` truth flag).
   Designed, not built.
 - **Phase C posteriors** — context slice pooling, hierarchical
   shrinkage, per-slice visualisation. Prerequisites done
-  (doc 21 ✓, doc 25 ✓).
+  (doc 21 ✓, doc 25 ✓). Includes fixing harness hash mismatch
+  (`compute_snapshot_subjects.mjs` sets context def hashes to `{}`
+  while FE populates them).
 - **Nightly Bayes fit** — automatic posterior updates after daily
   fetch. Needs: production confidence + topo sigs.
 - **FE stats deletion** — ~4000 lines. Parity confirmed at

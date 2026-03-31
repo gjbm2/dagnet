@@ -917,30 +917,36 @@ function CanvasAnalysisNodeInner({ data, selected, dragging }: NodeProps<CanvasA
 
   const minimisedAnchor = (analysis as any).minimised_anchor as 'tl' | 'tr' | 'bl' | 'br' | undefined;
 
+  // Dynamic minimised dimensions — use analysis type's declared size if available
+  const typeMeta = getAnalysisTypeMeta(contentItem?.analysis_type || '');
+  const minimisedDims = (typeMeta?.renderMinimised && typeMeta?.minimisedSize)
+    ? typeMeta.minimisedSize
+    : { width: 32, height: 32 };
+
   const handleMinimise = useCallback((anchor: 'tl' | 'tr' | 'bl' | 'br') => {
     suppressHint();
     window.dispatchEvent(new Event('dagnet:hideConnectors'));
-    const mw = 32, mh = 32;
+    const mw = minimisedDims.width, mh = minimisedDims.height;
     const dx = (anchor === 'tr' || anchor === 'br') ? analysis.width - mw : 0;
     const dy = (anchor === 'bl' || anchor === 'br') ? analysis.height - mh : 0;
     onUpdate(analysis.id, {
       minimised: true, minimised_anchor: anchor,
       x: analysis.x + dx, y: analysis.y + dy,
     } as any);
-  }, [analysis.id, analysis.x, analysis.y, analysis.width, analysis.height, onUpdate, suppressHint]);
+  }, [analysis.id, analysis.x, analysis.y, analysis.width, analysis.height, minimisedDims.width, minimisedDims.height, onUpdate, suppressHint]);
 
   const handleRestore = useCallback(() => {
     suppressHint();
     window.dispatchEvent(new Event('dagnet:hideConnectors'));
     const anchor = minimisedAnchor || 'tl';
-    const mw = 32, mh = 32;
+    const mw = minimisedDims.width, mh = minimisedDims.height;
     const dx = (anchor === 'tr' || anchor === 'br') ? analysis.width - mw : 0;
     const dy = (anchor === 'bl' || anchor === 'br') ? analysis.height - mh : 0;
     onUpdate(analysis.id, {
       minimised: false,
       x: analysis.x - dx, y: analysis.y - dy,
     } as any);
-  }, [analysis.id, analysis.x, analysis.y, analysis.width, analysis.height, minimisedAnchor, onUpdate, suppressHint]);
+  }, [analysis.id, analysis.x, analysis.y, analysis.width, analysis.height, minimisedAnchor, minimisedDims.width, minimisedDims.height, onUpdate, suppressHint]);
 
   // Auto-dismiss hover label after 5s to prevent stale labels
   useEffect(() => {
@@ -952,11 +958,21 @@ function CanvasAnalysisNodeInner({ data, selected, dragging }: NodeProps<CanvasA
   // ── Minimised rendering ──────────────────────────────────────────────
   if (minimised) {
     const iconSize = 22;
-    const typeMeta = getAnalysisTypeMeta(contentItem.analysis_type || '');
     const TypeIcon = typeMeta?.icon || BarChart3;
     const minimisedLabel = subjectLabel
       ? `${subjectLabel} — ${contentItem.title || contentItem.analysis_type || 'Analysis'}`
       : (contentItem.title || contentItem.analysis_type || 'Analysis');
+    const mw = minimisedDims.width;
+    const mh = minimisedDims.height;
+
+    // Try custom minimised renderer — falls back to generic icon if null
+    const cachedResult = contentItemResultCache.get(contentItem?.id) || canvasAnalysisResultCache.get(analysis.id) || result;
+    const resolvedSettings = contentItem?.display as Record<string, any> || {};
+    const customContent = typeMeta?.renderMinimised
+      ? typeMeta.renderMinimised({ result: cachedResult, settings: resolvedSettings, label: subjectLabel })
+      : null;
+    const hasCustomContent = customContent != null;
+
     return (
       <>
         <MinimiseCornerArrows
@@ -964,8 +980,8 @@ function CanvasAnalysisNodeInner({ data, selected, dragging }: NodeProps<CanvasA
           visible={hovered}
           disabled={dragging || selected}
           zoom={zoom}
-          nodeWidth={32}
-          nodeHeight={32}
+          nodeWidth={mw}
+          nodeHeight={mh}
           colour="var(--text-primary, #555)"
           onMinimise={handleMinimise}
           onRestore={handleRestore}
@@ -994,8 +1010,8 @@ function CanvasAnalysisNodeInner({ data, selected, dragging }: NodeProps<CanvasA
         {/* Ghost outline showing full-size bounds on hover */}
         {(() => {
           const anchor = minimisedAnchor || 'tl';
-          const ghostLeft = (anchor === 'tr' || anchor === 'br') ? -(analysis.width - 32) : 0;
-          const ghostTop = (anchor === 'bl' || anchor === 'br') ? -(analysis.height - 32) : 0;
+          const ghostLeft = (anchor === 'tr' || anchor === 'br') ? -(analysis.width - mw) : 0;
+          const ghostTop = (anchor === 'bl' || anchor === 'br') ? -(analysis.height - mh) : 0;
           const originX = (anchor === 'tr' || anchor === 'br') ? 'right' : 'left';
           const originY = (anchor === 'bl' || anchor === 'br') ? 'bottom' : 'top';
           return (
@@ -1022,7 +1038,6 @@ function CanvasAnalysisNodeInner({ data, selected, dragging }: NodeProps<CanvasA
               suppressHint();
               window.dispatchEvent(new Event('dagnet:hideConnectors'));
               const anchor = minimisedAnchor || 'tl';
-              const mw = 32, mh = 32;
               const dx = (anchor === 'tr' || anchor === 'br') ? analysis.width - mw : 0;
               const dy = (anchor === 'bl' || anchor === 'br') ? analysis.height - mh : 0;
               const rid = analysis.id, rx = analysis.x - dx, ry = analysis.y - dy;
@@ -1040,32 +1055,48 @@ function CanvasAnalysisNodeInner({ data, selected, dragging }: NodeProps<CanvasA
             window.dispatchEvent(new CustomEvent('dagnet:analysisHover', { detail: { analysisId: null } }));
           }}
           style={{
-            width: 32, height: 32,
-            background: 'var(--canvas-analysis-bg, #ffffff)',
-            border: selected ? '2px solid #3b82f6' : '1px solid var(--canvas-analysis-border, #d1d5db)',
-            outline: (selected || contentItem.display?.show_subject_overlay)
-              ? `6px solid ${contentItem.display?.subject_overlay_colour || '#3b82f6'}${selected ? '1a' : '0d'}`
-              : 'none',
+            width: mw, height: mh,
+            ...(hasCustomContent ? {
+              // Custom minimised content: soft box — present but quiet
+              background: 'color-mix(in srgb, var(--canvas-analysis-bg, #ffffff) 50%, transparent)',
+              border: selected ? '2px solid #3b82f6' : '0.5px solid rgba(0,0,0,0.08)',
+              outline: selected
+                ? `6px solid ${contentItem.display?.subject_overlay_colour || '#3b82f6'}1a`
+                : 'none',
+              boxShadow: selected
+                ? '0 0 0 1px #3b82f6'
+                : '0 1px 2px rgba(0,0,0,0.06)',
+            } : {
+              // Generic icon: standard boxed appearance
+              background: 'var(--canvas-analysis-bg, #ffffff)',
+              border: selected ? '2px solid #3b82f6' : '1px solid var(--canvas-analysis-border, #d1d5db)',
+              outline: (selected || contentItem.display?.show_subject_overlay)
+                ? `6px solid ${contentItem.display?.subject_overlay_colour || '#3b82f6'}${selected ? '1a' : '0d'}`
+                : 'none',
+              boxShadow: selected
+                ? '0 0 0 1px #3b82f6, 0 1px 3px rgba(0,0,0,0.08)'
+                : '0 1px 3px rgba(0,0,0,0.08), 0 4px 12px rgba(0,0,0,0.06)',
+            }),
             outlineOffset: -1,
             borderRadius: 8 / zoom,
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
-            boxShadow: selected
-              ? '0 0 0 1px #3b82f6, 0 1px 3px rgba(0,0,0,0.08)'
-              : '0 1px 3px rgba(0,0,0,0.08), 0 4px 12px rgba(0,0,0,0.06)',
             overflow: 'hidden',
           }}
         >
-          <TypeIcon size={iconSize} style={{ color: 'var(--canvas-analysis-title, #374151)', opacity: 0.85 }} />
+          {hasCustomContent
+            ? customContent
+            : <TypeIcon size={iconSize} style={{ color: 'var(--canvas-analysis-title, #374151)', opacity: 0.85 }} />
+          }
         </div>
 
-        {/* Hover label — vertically centred with icon */}
+        {/* Hover label — vertically centred beside the minimised box */}
         {hovered && (
           <div className="nodrag nopan" style={{
             position: 'absolute',
-            ...((minimisedAnchor === 'tr' || minimisedAnchor === 'br') ? { right: 34 } : { left: 34 }),
-            top: 0, height: 32,
+            ...((minimisedAnchor === 'tr' || minimisedAnchor === 'br') ? { right: mw + 2 } : { left: mw + 2 }),
+            top: 0, height: mh,
             display: 'flex', alignItems: 'center',
             fontSize: 12 / zoom, lineHeight: 1,
             color: 'var(--canvas-analysis-title, #374151)',

@@ -284,8 +284,16 @@ export function buildCohortMaturityEChartsOption(
     }
     // Bayesian confidence band (filled polygon between upper and lower curves).
     // Part of the promoted view — shown when promoted source is Bayesian.
-    const bandUpper = showPromoted ? entry?.bayesBandUpper : undefined;
-    const bandLower = showPromoted ? entry?.bayesBandLower : undefined;
+    // Resolve band data: prefer legacy fields, fall back to per-source bayesian
+    // band when promoted source is bayesian (legacy fields are no longer emitted).
+    let bandUpper = showPromoted ? entry?.bayesBandUpper : undefined;
+    let bandLower = showPromoted ? entry?.bayesBandLower : undefined;
+    if (showPromoted && !bandUpper) {
+      const srcBayes = entry?.sourceModelCurves?.bayesian;
+      if (srcBayes?.band_upper) bandUpper = srcBayes.band_upper;
+      if (srcBayes?.band_lower) bandLower = srcBayes.band_lower;
+    }
+    let promotedBandRendered = false;
     if (Array.isArray(bandUpper) && bandUpper.length > 0 && Array.isArray(bandLower) && bandLower.length > 0) {
       const bandColour = c.text === '#e0e0e0' ? 'rgba(96,165,250,0.18)' : 'rgba(37,99,235,0.15)';
       const upperPts = bandUpper
@@ -293,6 +301,7 @@ export function buildCohortMaturityEChartsOption(
       const lowerPts = bandLower
         .filter((p: any) => typeof p?.tau_days === 'number' && typeof p?.model_rate === 'number');
       if (upperPts.length > 0 && lowerPts.length > 0) {
+        promotedBandRendered = true;
         // Each data item: [tau, upper_rate, lower_rate]
         const polyData = upperPts.map((p: any, i: number) => {
           const lower = i < lowerPts.length ? lowerPts[i].model_rate : p.model_rate;
@@ -377,8 +386,8 @@ export function buildCohortMaturityEChartsOption(
           }
         }
 
-        // Bayesian confidence band from per-source data
-        if (srcName === 'bayesian') {
+        // Bayesian confidence band from per-source data (skip if already rendered by promoted view)
+        if (srcName === 'bayesian' && !promotedBandRendered) {
           const bandUpper = (srcData as any)?.band_upper;
           const bandLower = (srcData as any)?.band_lower;
           if (Array.isArray(bandUpper) && bandUpper.length > 0 && Array.isArray(bandLower) && bandLower.length > 0) {

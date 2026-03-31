@@ -1037,7 +1037,23 @@ export const CHART_DISPLAY_SETTINGS: Record<string, DisplaySettingDef[]> = {
         { value: 'sigma', label: 'σ (spread)' },
         { value: 'all', label: 'All' },
       ],
-      defaultValue: 'all',
+      defaultValue: 'p',
+      propsPanel: true,
+      inline: 'brief',
+      contextMenu: true,
+      computeAffecting: false,
+    },
+    {
+      key: 'surprise_colour_scheme',
+      label: 'Colour scheme',
+      shortLabel: 'Colours',
+      type: 'radio',
+      options: [
+        { value: 'symmetric', label: 'R-A-G-A-R' },
+        { value: 'directional_positive', label: 'R-A-G' },
+        { value: 'directional_negative', label: 'G-A-R' },
+      ],
+      defaultValue: 'symmetric',
       propsPanel: true,
       inline: 'brief',
       contextMenu: true,
@@ -1210,6 +1226,18 @@ export interface ContextMenuSettingItem {
 }
 
 /**
+ * Context menu option icon builders — keyed by setting key → option value.
+ * Returns a React node (e.g. gradient swatch) shown before the option label.
+ */
+const CONTEXT_MENU_OPTION_ICONS: Record<string, Record<string | number, () => React.ReactNode>> = {
+  surprise_colour_scheme: {
+    symmetric: () => React.createElement('span', { className: 'colour-scheme-swatch colour-scheme-swatch--symmetric' }),
+    directional_positive: () => React.createElement('span', { className: 'colour-scheme-swatch colour-scheme-swatch--directional-positive' }),
+    directional_negative: () => React.createElement('span', { className: 'colour-scheme-swatch colour-scheme-swatch--directional-negative' }),
+  },
+};
+
+/**
  * Build context menu items from display settings marked contextMenu: true.
  * Used by CanvasAnalysisContextMenu to render the Display submenu.
  *
@@ -1237,10 +1265,12 @@ export function buildContextMenuSettingItems(
         onClick: () => onChange(setting.key, !isOn),
       });
     } else if ((setting.type === 'radio' || setting.type === 'select') && setting.options) {
+      const iconBuilders = CONTEXT_MENU_OPTION_ICONS[setting.key];
       const submenu = setting.options.map((opt) => ({
         label: opt.label,
         checked: value == opt.value,
         onClick: () => onChange(setting.key, opt.value),
+        ...(iconBuilders?.[opt.value] ? { icon: iconBuilders[opt.value]() } : {}),
       }));
       result.push({ label: setting.label, onClick: () => {}, submenu });
     }

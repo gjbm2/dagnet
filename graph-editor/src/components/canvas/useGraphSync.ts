@@ -40,13 +40,28 @@ import {
   IMAGE_VIEW_NODE_HEIGHT,
 } from '@/lib/nodeEdgeConstants';
 
+import { getAnalysisTypeMeta } from '../panels/analysisTypes';
+import { getActiveContentItem } from '@/utils/canvasAnalysisAccessors';
+
 // ---------------------------------------------------------------------------
 // Minimised annotation dimensions (canvas pixels)
 // ---------------------------------------------------------------------------
 export const POSTIT_MINIMISED_WIDTH = 32;
 export const POSTIT_MINIMISED_HEIGHT = 32;
+/** Default minimised dimensions — overridden per analysis type when a custom renderer declares a size. */
 export const ANALYSIS_MINIMISED_WIDTH = 32;
 export const ANALYSIS_MINIMISED_HEIGHT = 32;
+
+/** Look up the minimised dimensions for an analysis object, using the
+ *  analysis type's declared minimisedSize if available, else defaults. */
+export function getAnalysisMinimisedDims(analysis: any): { width: number; height: number } {
+  const ci = getActiveContentItem(analysis);
+  const meta = ci?.analysis_type ? getAnalysisTypeMeta(ci.analysis_type) : undefined;
+  if (meta?.renderMinimised && meta.minimisedSize) {
+    return meta.minimisedSize;
+  }
+  return { width: ANALYSIS_MINIMISED_WIDTH, height: ANALYSIS_MINIMISED_HEIGHT };
+}
 
 // ---------------------------------------------------------------------------
 // Params interface
@@ -285,8 +300,9 @@ export function useGraphSync(params: UseGraphSyncParams): UseGraphSyncReturn {
       if (!graphAnalysis) return false;
       const rfWidth = typeof node.style?.width === 'number' ? node.style.width : node.width;
       const rfHeight = typeof node.style?.height === 'number' ? node.style.height : node.height;
-      const expectedW = graphAnalysis.minimised ? ANALYSIS_MINIMISED_WIDTH : graphAnalysis.width;
-      const expectedH = graphAnalysis.minimised ? ANALYSIS_MINIMISED_HEIGHT : graphAnalysis.height;
+      const minDims = getAnalysisMinimisedDims(graphAnalysis);
+      const expectedW = graphAnalysis.minimised ? minDims.width : graphAnalysis.width;
+      const expectedH = graphAnalysis.minimised ? minDims.height : graphAnalysis.height;
       return node.type !== 'canvasAnalysis'
         || node.position?.x !== (graphAnalysis.x ?? 0)
         || node.position?.y !== (graphAnalysis.y ?? 0)
@@ -681,8 +697,9 @@ export function useGraphSync(params: UseGraphSyncParams): UseGraphSyncReturn {
               const dataChanged = analysisChanged || prevData?.tabId !== tabId
                 || prevData?.onUpdate !== handleUpdateAnalysis || prevData?.onDelete !== handleDeleteAnalysis;
               const analysisMinimised = !!graphAnalysis.minimised;
+              const minDimsUpdate = getAnalysisMinimisedDims(graphAnalysis);
               const nextStyle = analysisMinimised
-                ? { width: ANALYSIS_MINIMISED_WIDTH, height: ANALYSIS_MINIMISED_HEIGHT }
+                ? { width: minDimsUpdate.width, height: minDimsUpdate.height }
                 : { width: graphAnalysis.width, height: graphAnalysis.height };
               return {
                 ...prevNode,
@@ -940,7 +957,7 @@ export function useGraphSync(params: UseGraphSyncParams): UseGraphSyncReturn {
                 position: { x: analysis.x ?? 0, y: analysis.y ?? 0 },
                 zIndex: 5000 + graphPostits.length + ai,
                 style: newAnalysisMinimised
-                  ? { width: ANALYSIS_MINIMISED_WIDTH, height: ANALYSIS_MINIMISED_HEIGHT }
+                  ? getAnalysisMinimisedDims(analysis)
                   : { width: analysis.width, height: analysis.height },
                 data: {
                   analysis,

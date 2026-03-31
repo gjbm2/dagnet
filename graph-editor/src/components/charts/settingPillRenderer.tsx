@@ -35,6 +35,19 @@ const OPTION_ICONS: Record<string, Record<string | number, React.ComponentType<{
   legend_position: { top: ArrowUp, bottom: ArrowDown, left: ArrowLeft, right: ArrowRight },
 };
 
+/** Inline gradient swatch for colour scheme radio pills. */
+function ColourSchemeSwatch({ variant }: { variant: string }) {
+  return <span className={`colour-scheme-swatch colour-scheme-swatch--${variant}`} />;
+}
+
+const OPTION_CUSTOM_RENDERERS: Record<string, Record<string | number, () => React.ReactNode>> = {
+  surprise_colour_scheme: {
+    symmetric: () => <ColourSchemeSwatch variant="symmetric" />,
+    directional_positive: () => <ColourSchemeSwatch variant="directional-positive" />,
+    directional_negative: () => <ColourSchemeSwatch variant="directional-negative" />,
+  },
+};
+
 const OPTION_SHORT_LABELS: Record<string, Record<string | number, string>> = {
   time_grouping: { day: 'D', week: 'W', month: 'M' },
   stack_mode: { grouped: 'Grp', stacked: 'Stk', stacked_100: '100%' },
@@ -94,6 +107,7 @@ function renderTrayRadio(
       {setting.options.map(opt => {
         const Icon = icons?.[opt.value];
         const short = shorts?.[opt.value];
+        const customRenderer = OPTION_CUSTOM_RENDERERS[setting.key]?.[opt.value];
         // Use loose equality for value comparison to handle string/number coercion
         // (e.g. font_size stored as "10" vs option value 10)
         const isActive = value == opt.value;
@@ -105,7 +119,7 @@ function renderTrayRadio(
             onClick={() => onChange(setting.key, opt.value)}
             title={`${setting.label}: ${opt.label}`}
           >
-            {Icon ? <Icon size={13} /> : (short || opt.label)}
+            {customRenderer ? customRenderer() : Icon ? <Icon size={13} /> : (short || opt.label)}
           </button>
         );
       })}
@@ -140,6 +154,7 @@ export function renderTraySettingBare(
     return setting.options.map(opt => {
       const Icon = icons?.[opt.value];
       const short = shorts?.[opt.value];
+      const customRenderer = OPTION_CUSTOM_RENDERERS[setting.key]?.[opt.value];
       const isActive = value == opt.value;
       return (
         <button
@@ -149,7 +164,7 @@ export function renderTraySettingBare(
           onClick={() => onChange(setting.key, opt.value)}
           title={`${setting.label}: ${opt.label}`}
         >
-          {Icon ? <Icon size={13} /> : (short || opt.label)}
+          {customRenderer ? customRenderer() : Icon ? <Icon size={13} /> : (short || opt.label)}
         </button>
       );
     });

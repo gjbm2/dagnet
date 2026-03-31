@@ -816,7 +816,8 @@ function buildMappingConfigurations(): Map<string, MappingConfiguration> {
       condition: (source) => isProbType(source) && source.posterior?.slices !== undefined,
       transform: (value: any) => {
         if (!value || typeof value !== 'object' || !value.slices) return undefined;
-        // Stash the full posterior (slices + metadata) so re-projection has everything
+        // Stash the full posterior (slices + metadata + fit_history) so
+        // re-projection has everything, including asat resolution (doc 27 §5)
         return {
           slices: value.slices,
           fitted_at: value.fitted_at,
@@ -824,6 +825,7 @@ function buildMappingConfigurations(): Map<string, MappingConfiguration> {
           hdi_level: value.hdi_level,
           prior_tier: value.prior_tier,
           surprise_z: value.surprise_z,
+          ...(value.fit_history ? { fit_history: value.fit_history } : {}),
         };
       },
     },

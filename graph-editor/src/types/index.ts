@@ -646,10 +646,11 @@ export interface ModelVarsEntry {
 
 // ── Bayesian posterior types (doc 21: unified posterior schema) ──────────────
 //
-// FILE-LEVEL types (Posterior, SlicePosteriorEntry, FitHistoryEntry):
+// FILE-LEVEL types (Posterior, SlicePosteriorEntry, FitHistoryEntry, FitHistorySlice):
 //   Define the shape of `posterior` on parameter files. Per-slice entries carry
 //   both probability and latency fields. These are what the compiler writes and
-//   the warm-start reads.
+//   the warm-start reads. FitHistorySlice is a permissive variant of
+//   SlicePosteriorEntry for backward compat with legacy entries (doc 27).
 //
 // GRAPH-EDGE types (ProbabilityPosterior, LatencyPosterior):
 //   Define the shape projected onto graph edges by the cascade in
@@ -683,19 +684,22 @@ export interface SlicePosteriorEntry {
   provenance: 'bayesian' | 'pooled-fallback' | 'point-estimate' | 'skipped';
 }
 
-/** Slim per-slice snapshot within a fit_history entry (drift tracking) */
-export interface SlimSlice {
+/** Per-slice snapshot within a fit_history entry (doc 27 §3).
+ *  Same fields as SlicePosteriorEntry but all optional except alpha/beta,
+ *  for backward compatibility with legacy entries that only stored slim data.
+ */
+export type FitHistorySlice = Partial<SlicePosteriorEntry> & {
   alpha: number;
   beta: number;
-  mu_mean?: number;
-  sigma_mean?: number;
-}
+};
 
-/** Unified fit_history entry — one per fit date (doc 21 §3.4) */
+/** Full-fidelity fit_history entry — one per fit date (doc 27 §3) */
 export interface FitHistoryEntry {
   fitted_at: string;             // UK date (d-MMM-yy)
   fingerprint: string;
-  slices: Record<string, SlimSlice>;
+  slices: Record<string, FitHistorySlice>;
+  hdi_level?: number;            // HDI level used for this fit (e.g. 0.9)
+  prior_tier?: string;           // Prior tier that produced this fit
 }
 
 /** File-level unified posterior (doc 21 §3.3).

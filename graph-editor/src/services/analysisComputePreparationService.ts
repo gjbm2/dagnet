@@ -11,28 +11,52 @@ import {
 } from './snapshotSubjectResolutionService';
 import type { Graph, ScenarioVisibilityMode } from '../types';
 import { resolveComputeAffectingDisplay } from '../lib/analysisDisplaySettingsRegistry';
-import { projectProbabilityPosterior, projectLatencyPosterior } from './posteriorSliceResolution';
+import { projectProbabilityPosterior, projectLatencyPosterior, resolveAsatPosterior } from './posteriorSliceResolution';
+import { parseConstraints } from '../lib/queryDSL';
 
-// ── Posterior re-projection (doc 25 §2.2) ───────────────────────────────────
+// ── Posterior re-projection (doc 25 §2.2, doc 27 §5.4) ─────────────────────
 // After building a per-scenario analysis graph, re-project the posterior
 // from the stashed _posteriorSlices using that scenario's effective DSL.
 // This ensures each scenario graph carries the right posterior for its
 // query context (window vs cohort, contexted vs aggregate).
+//
+// When the effective DSL contains asat(), the posterior is resolved from
+// fit_history (doc 27 §5) before projection. If no historical fit exists
+// on or before the asat date, the posterior is cleared (strict, no fallback).
 
 function reprojectPosteriorForDsl(graph: Graph, effectiveDsl: string): void {
   const edges = (graph as any)?.edges;
   if (!Array.isArray(edges)) return;
 
+  // Parse asat date from the effective DSL (if present)
+  let asatDate: string | null = null;
+  try {
+    const parsed = parseConstraints(effectiveDsl);
+    asatDate = parsed.asat;
+  } catch { /* no asat */ }
+
   for (const edge of edges) {
     const stashed = edge?.p?._posteriorSlices;
     if (!stashed?.slices) continue;
 
-    const probResult = projectProbabilityPosterior(stashed, effectiveDsl);
+    // If asat is active, resolve the historical posterior (doc 27 §5.2)
+    const posteriorToProject = asatDate
+      ? resolveAsatPosterior(stashed, asatDate)
+      : stashed;
+
+    if (!posteriorToProject) {
+      // No fit exists on or before the asat date — clear posterior (strict)
+      edge.p.posterior = undefined;
+      if (edge.p.latency) edge.p.latency.posterior = undefined;
+      continue;
+    }
+
+    const probResult = projectProbabilityPosterior(posteriorToProject, effectiveDsl);
     if (probResult) {
       edge.p.posterior = probResult;
     }
 
-    const latResult = projectLatencyPosterior(stashed, effectiveDsl);
+    const latResult = projectLatencyPosterior(posteriorToProject, effectiveDsl);
     if (latResult && edge.p.latency) {
       edge.p.latency.posterior = latResult;
     }

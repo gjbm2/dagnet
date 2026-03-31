@@ -1588,6 +1588,30 @@
   color: #dc2626;
 }
 
+/* --- Colour scheme gradient swatches --- */
+
+.colour-scheme-swatch {
+  display: inline-block;
+  width: 28px;
+  height: 10px;
+  border-radius: 3px;
+  vertical-align: middle;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+}
+.colour-scheme-swatch--symmetric {
+  background: linear-gradient(to right, #991b1b, #ef4444, #f59e0b, #eab308, #22c55e, #eab308, #f59e0b, #ef4444, #991b1b);
+}
+.colour-scheme-swatch--directional-positive {
+  background: linear-gradient(to right, #991b1b, #ef4444, #f59e0b, #eab308, #22c55e);
+}
+.colour-scheme-swatch--directional-negative {
+  background: linear-gradient(to right, #22c55e, #eab308, #f59e0b, #ef4444, #991b1b);
+}
+
+[data-theme="dark"] .colour-scheme-swatch {
+  border-color: rgba(255, 255, 255, 0.15);
+}
+
 /* --- Popover (display settings, more actions) --- */
 
 .cfp-popover-anchor {
