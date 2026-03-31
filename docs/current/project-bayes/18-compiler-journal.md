@@ -54,6 +54,26 @@ Open question: should onset be constrained more strongly (e.g. by
 the t95 constraint geometry), or is onset=0.5 + mu=2.25 actually
 the correct decomposition for this edge?
 
+### FE convergence failure (additional finding)
+
+Even after `bayes_reset`, the FE can't converge because:
+1. `onset_delta_days` on the graph edge is **9.49** (stale from
+   previous deranged Bayes run). The stats pass computes onset=5.5
+   but writes to `promoted_onset_delta_days`, not `onset_delta_days`.
+   The topology reads `onset_delta_days` → stale value persists.
+2. The FE's `LAG_T95_FIT_IMPROVEMENT` inflates sigma from 0.527
+   to 1.240 to match t95. Combined with onset=9.5, this puts the
+   prior in the region the sharpened softplus makes unviable.
+3. The harness converges because it reads stats pass values directly
+   (onset=5.5, mu=1.607, sigma=0.527) — the real analytical values.
+
+**Root cause**: the stats pass → graph edge write-back for onset
+doesn't complete. `promoted_onset_delta_days` is written but
+`onset_delta_days` (which the topology reads) is not updated.
+This is the same `promoted_onset_delta_days` cycle issue identified
+in doc 26 §5 — the input→output→input loop isn't closing for
+onset on the graph edge.
+
 ---
 
 ## 30-Mar-26: Softplus onset leakage — root cause of onset-mu-sigma ridge

@@ -106,7 +106,7 @@ export function DataMenu() {
   
   // Centralized fetch hook - all fetch operations go through this
   // CRITICAL: Uses graphStore.currentDSL as AUTHORITATIVE source, NOT graph.currentQueryDSL!
-  const { fetchItem } = useFetchData({
+  const { fetchItem, fetchItems } = useFetchData({
     graph: graph as any,
     setGraph: handleSetGraph as any,
     currentDSL: () => graphStore?.getState().currentDSL || '',  // AUTHORITATIVE DSL from graphStore
@@ -143,8 +143,22 @@ export function DataMenu() {
     if (!ok) return;
     const getGraph = () => (graphStore?.getState().graph as any) || null;
     const count = await resetPriorsForAllParams(getGraph);
-    toast.success(`Reset priors on ${count} parameter(s)`);
-  }, [graphStore, showConfirm]);
+    if (count === 0) return;
+    toast.success(`Reset priors on ${count} parameter(s) — running stats pass with analytic source`);
+
+    // Trigger from-file stats pass so analytic values are promoted immediately.
+    // The in-place gate invalidation ensures the fetch pipeline's clone inherits
+    // gate_passed=false, so applyPromotion falls through to analytic.
+    const freshGraph = getGraph();
+    if (freshGraph?.edges) {
+      const items = (freshGraph.edges as any[])
+        .filter((e: any) => e.p?.id)
+        .map((e: any) => createFetchItem('parameter', e.p.id, e.uuid || e.id, { paramSlot: 'p' }));
+      if (items.length > 0) {
+        await fetchItems(items, { mode: 'from-file', writeLagHorizonsToGraph: true });
+      }
+    }
+  }, [graphStore, showConfirm, fetchItems]);
 
   const handleDeleteAllHistory = useCallback(async () => {
     const ok = await showConfirm({

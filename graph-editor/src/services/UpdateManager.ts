@@ -2163,9 +2163,13 @@ export class UpdateManager {
           targetP.latency.path_t95 = this.roundHorizonDays(update.latency.path_t95);
         }
       }
-      // promoted_onset_delta_days: write model output to promoted field (not input field)
+      // onset_delta_days: write stats-pass output to both promoted and input fields.
+      // Mirrors t95 pattern: the input field is what the compiler reads for priors.
       if ((update.latency as any).promoted_onset_delta_days !== undefined) {
         targetP.latency.promoted_onset_delta_days = (update.latency as any).promoted_onset_delta_days;
+        if (writeHorizonsToGraph && targetP.latency.onset_delta_days_overridden !== true) {
+          targetP.latency.onset_delta_days = (update.latency as any).promoted_onset_delta_days;
+        }
       }
       // mu/sigma: fitted model params (internal, always written when available)
       if ((update.latency as any).mu !== undefined) {

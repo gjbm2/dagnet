@@ -77,6 +77,7 @@ export function AnalysisInfoCard({ result, fontSize, defaultTab, onFileLink, tab
   // or directly (faceted card view).
   const { scores: _ddScores } = useDataDepthContext();
   const _ddGraph: any = useGraphStoreOptional((s: any) => s?.graph);
+  const _ddSetGraph: any = useGraphStoreOptional((s: any) => s?.setGraph);
   const enrichedData = useMemo(() => {
     const raw = result.data || [];
     if (result.analysis_type !== 'edge_info' || !_ddScores || !_ddGraph?.edges) return raw;
@@ -136,10 +137,13 @@ export function AnalysisInfoCard({ result, fontSize, defaultTab, onFileLink, tab
   const bayesParamId = posteriorsMeta?.paramId as string | undefined;
   const handleResetPriors = useCallback(() => {
     if (!bayesParamId) return;
-    void resetPriorsForParam(bayesParamId).then(ok => {
-      if (ok) toast.success('Priors will reset on next Bayesian run');
+    void resetPriorsForParam(bayesParamId, _ddGraph && _ddSetGraph
+      ? { graph: _ddGraph, setGraph: _ddSetGraph }
+      : undefined,
+    ).then(ok => {
+      if (ok) toast.success('Priors reset — source reverted to analytic');
     });
-  }, [bayesParamId]);
+  }, [bayesParamId, _ddGraph, _ddSetGraph]);
   const handleDeleteHistory = useCallback(() => {
     if (!bayesParamId) return;
     // eslint-disable-next-line no-restricted-globals

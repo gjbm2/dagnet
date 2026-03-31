@@ -1,7 +1,7 @@
 # Project Bayes: Programme
 
 **Status**: Active
-**Updated**: 29-Mar-26
+**Updated**: 31-Mar-26
 **Purpose**: Phased delivery plan for Project Bayes. This doc owns sequencing;
 design docs contain the detail.
 
@@ -58,6 +58,19 @@ synth context data fix (`emit_context_slices` truth flag).
   posterior with quality gate.
 - ~~run_regression.py misclassification~~ — **FIXED 29-Mar-26**.
   Parses param_recovery output before checking exit code.
+- ~~Phase 2 cohort onset drift~~ — **FIXED 30-Mar-26**. Warm-start
+  from previous cohort posterior bypassed Phase 1. Removed
+  `cohort_latency_warm` override; all Phase 2 priors now derive
+  from Phase 1. See doc 26.
+- ~~Softplus onset leakage~~ — **FIXED 30-Mar-26**. Standard
+  softplus leaked CDF mass below onset, enabling degenerate mode.
+  Sharpened softplus (k=5) collapses the ridge.
+- ~~Onset obs √N over-precision~~ — **FIXED 31-Mar-26**.
+  Autocorrelation-corrected N_eff prevents claiming ±0.15d
+  precision on a quantity that varies by ±2.4d.
+- ~~Test assertions for promoted_onset~~ — **FIXED 31-Mar-26**.
+  6 test files (20 tests) updated for `onset_delta_days` →
+  `promoted_onset_delta_days` rename.
 
 **Open issues**:
 
@@ -88,11 +101,25 @@ synth context data fix (`emit_context_slices` truth flag).
   uncertainties. Likely same cohort path CDF issue — immature
   cohort trajectories over-constrain path parameters.
   See journal 29-Mar-26.
-- **Onset-mu correlation** — corr ≈ -0.99 on short-latency first
-  edges. 2/10 synth failures, requires warm-start for prod
-  del-to-reg. Structural identifiability issue in shifted-lognormal
-  parameterisation. Needs: reparameterisation (t50?), stronger onset
-  prior, or onset marginalisation. See journal 27-Mar-26.
+- **Onset-mu-sigma ridge (partially fixed)** — corr ≈ -0.99 on
+  short-latency edges. Three fixes applied (doc 26, journal
+  30-31-Mar-26):
+  1. ~~Phase 2 warm-start bypass~~ — **FIXED**. Removed
+     `cohort_latency_warm`; Phase 2 priors now derive from Phase 1
+     composed values only.
+  2. ~~Softplus CDF leakage~~ — **FIXED**. Sharpened softplus (k=5)
+     collapses the degenerate (high onset, negative mu, huge sigma)
+     mode.
+  3. **Onset obs over-precision** — **FIXED**. Autocorrelation-
+     corrected N_eff (ρ=0.89 → N_eff=2.8 for del-to-reg).
+  **BLOCKING**: graph edge retains stale latency fields (onset=9.49,
+  mu=-1.21, sigma=2.79) from previous deranged runs. Stats pass
+  computes correct values (onset=5.5, mu=1.61, sigma=0.53) but
+  they don't reach the graph edge. Topology reads stale fields →
+  model starts from deranged priors → sharpened softplus makes that
+  region unviable → convergence failure (rhat=1.6, ESS=7). Need to
+  trace why stats pass output doesn't flow to graph edge latency
+  fields. See journal 31-Mar-26.
 
 *Other open*:
 - **Ad hoc hyperparameters** — kappa priors, fallback ESS, Gamma
@@ -130,13 +157,15 @@ synth context data fix (`emit_context_slices` truth flag).
   not blocking.
 
 **Next priorities**:
-1. **Fix path dispersion estimation** — the surprise gauge and
+1. **BLOCKING: Stats pass write-back to graph edge** — stats pass
+   computes correct onset/mu/sigma but they don't reach the graph
+   edge's latency fields. Stale deranged values persist → model
+   can't converge. Trace the write-back path in
+   `statisticalEnhancementService.ts` / `modelVarsResolution.ts`.
+2. **Fix path dispersion estimation** — the surprise gauge and
    confidence bands for cohort (path) slices are meaningless until
    path kappa is correct. Investigate: mature-only Williams,
    analytic derivation from edge kappa, or hierarchical cohort model.
-2. **Fix onset-mu correlation** — reparameterise or add stronger
-   onset constraints. Blocks 2/10 synth graphs and first-run
-   convergence on prod.
 3. Commit and stabilise all current code changes.
 4. Topology signatures (doc 10) — proper implementation.
 5. Phase C (context slices) — prerequisites done.

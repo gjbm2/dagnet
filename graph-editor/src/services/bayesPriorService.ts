@@ -11,13 +11,67 @@ import { fileRegistry } from '../contexts/TabContext';
 import { sessionLogService } from './sessionLogService';
 import type { GraphData } from '../types';
 
+// ── Graph preference revert (internal) ──────────────────────────────────────
+
 /**
- * Set `latency.bayes_reset: true` on a single parameter file.
+ * Invalidate the bayesian model_vars entry on matching edges so that
+ * bayesianIfGated() falls through to analytic on the next promotion.
+ *
+ * Sets quality.gate_passed = false (entry stays for reference/display).
+ * Also clears any explicit bayesian pin so the preference resolves via
+ * best_available → bayesianIfGated() → gate fails → analytic.
+ */
+function invalidateBayesianOnEdges(
+  graph: GraphData,
+  paramId: string,
+): boolean {
+  let changed = false;
+  for (const edge of (graph.edges ?? []) as any[]) {
+    if (edge.p?.id !== paramId) continue;
+
+    // Clear explicit bayesian pin
+    if (edge.p.model_source_preference === 'bayesian' ||
+        edge.p.model_source_preference_overridden) {
+      delete edge.p.model_source_preference;
+      delete edge.p.model_source_preference_overridden;
+      changed = true;
+    }
+
+    // Fail the gate on the bayesian model_vars entry
+    if (Array.isArray(edge.p.model_vars)) {
+      const bayesEntry = edge.p.model_vars.find((v: any) => v.source === 'bayesian');
+      if (bayesEntry) {
+        if (!bayesEntry.quality) bayesEntry.quality = {};
+        bayesEntry.quality.gate_passed = false;
+        changed = true;
+      }
+    }
+  }
+  return changed;
+}
+
+// ── Single-param operations ─────────────────────────────────────────────────
+
+/**
+ * Set `latency.bayes_reset: true` on a single parameter file and revert
+ * the edge's model source preference away from bayesian.
+ *
  * Non-destructive: previous posterior remains in fit_history.
  * The evidence binder will ignore the bayesian posterior on the next run
  * and fall back to analytic-derived priors.
+ *
+ * When `graphMutation` is provided the service also clears any bayesian
+ * pin on the matching graph edge(s), so the next stats pass promotes the
+ * analytic entry (with fresh latency values) instead of the stale
+ * bayesian entry.
  */
-export async function resetPriorsForParam(paramId: string): Promise<boolean> {
+export async function resetPriorsForParam(
+  paramId: string,
+  graphMutation?: {
+    graph: GraphData;
+    setGraph: (g: GraphData) => void;
+  },
+): Promise<boolean> {
   const fileId = `parameter-${paramId}`;
   const entry = fileRegistry.getFile(fileId);
   if (!entry) {
@@ -33,6 +87,17 @@ export async function resetPriorsForParam(paramId: string): Promise<boolean> {
   await fileRegistry.updateFile(fileId, doc);
   sessionLogService.info('data-update', 'BAYES_RESET_SET',
     `Set bayes_reset on ${paramId} — next run will use analytic priors`);
+
+  // Invalidate bayesian entry directly on the live graph (in-place).
+  // The caller triggers a from-file fetch immediately after, which clones
+  // this graph — the clone inherits the invalidated gates.
+  if (graphMutation) {
+    if (invalidateBayesianOnEdges(graphMutation.graph, paramId)) {
+      sessionLogService.info('data-update', 'BAYES_RESET_GATE_INVALIDATED',
+        `Invalidated bayesian gate for ${paramId} — analytic will be promoted`);
+    }
+  }
+
   return true;
 }
 
@@ -83,8 +148,15 @@ export async function deleteHistoryForParam(paramId: string): Promise<boolean> {
   return false;
 }
 
+// ── Bulk operations ─────────────────────────────────────────────────────────
+
 /**
- * Bulk: set `bayes_reset` on all parameter files referenced by graph edges.
+ * Bulk: set `bayes_reset` on all parameter files referenced by graph edges
+ * and revert any edge-level bayesian pins.
+ *
+ * When `setGraph` is provided, also reverts graph-level preference if it
+ * is 'bayesian', ensuring the whole graph falls back to analytic.
+ *
  * Returns the number of parameters updated.
  */
 export async function resetPriorsForAllParams(
@@ -104,11 +176,51 @@ export async function resetPriorsForAllParams(
     if (!paramId || seen.has(paramId)) continue;
     seen.add(paramId);
 
+    // Param file flag only — graph preference is reverted in bulk below
     const ok = await resetPriorsForParam(paramId);
     if (ok) {
       count++;
       sessionLogService.addChild(logOpId, 'info', 'BAYES_RESET_EDGE',
         `Reset priors: ${paramId}`);
+    }
+  }
+
+  // Invalidate bayesian entries + clear bayesian pins directly on the live graph.
+  //
+  // CRITICAL: Mutate in-place rather than clone+setGraph.  The caller will
+  // immediately trigger a from-file fetch that clones this graph, runs the
+  // stats pass + applyPromotion, and calls setGraph with the enhanced result.
+  // If we clone+setGraph here, the fetch's final setGraph overwrites our
+  // changes (race condition observed in production).  In-place mutation
+  // ensures the fetch's clone inherits the invalidated gates.
+  if (count > 0) {
+    const liveGraph = getGraph();
+    if (liveGraph) {
+      for (const edge of (liveGraph.edges ?? []) as any[]) {
+        // Clear explicit bayesian pin
+        if (edge.p?.model_source_preference === 'bayesian' ||
+            edge.p?.model_source_preference_overridden) {
+          delete edge.p.model_source_preference;
+          delete edge.p.model_source_preference_overridden;
+        }
+
+        // Fail the gate on bayesian model_vars entry
+        if (Array.isArray(edge.p?.model_vars)) {
+          const bayesEntry = edge.p.model_vars.find((v: any) => v.source === 'bayesian');
+          if (bayesEntry) {
+            if (!bayesEntry.quality) bayesEntry.quality = {};
+            bayesEntry.quality.gate_passed = false;
+          }
+        }
+      }
+
+      // Graph-level: revert to best_available if pinned to bayesian
+      if ((liveGraph as any).model_source_preference === 'bayesian') {
+        (liveGraph as any).model_source_preference = 'best_available';
+      }
+
+      sessionLogService.info('data-update', 'BAYES_RESET_ALL_GATES_INVALIDATED',
+        'Invalidated bayesian gates on all edges — analytic will be promoted');
     }
   }
 

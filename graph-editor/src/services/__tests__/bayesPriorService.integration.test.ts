@@ -120,6 +120,40 @@ describe('bayesPriorService — single-param operations', () => {
     expect(result).toBe(false);
   });
 
+  it('should invalidate bayesian gate in-place on matching edge when graphMutation is provided', async () => {
+    await registerParam('test-param', makeParamFile('test-param', { posterior: true }));
+    const graph: any = {
+      edges: [
+        { uuid: 'e1', p: {
+          id: 'test-param',
+          model_source_preference: 'bayesian',
+          model_source_preference_overridden: true,
+          model_vars: [{ source: 'bayesian', probability: { mean: 0.15 }, quality: { gate_passed: true } }],
+        } },
+        { uuid: 'e2', p: {
+          id: 'other-param',
+          model_source_preference: 'bayesian',
+          model_vars: [{ source: 'bayesian', probability: { mean: 0.20 }, quality: { gate_passed: true } }],
+        } },
+      ],
+    };
+
+    const setGraph = vi.fn();
+    await resetPriorsForParam('test-param', { graph, setGraph });
+
+    // In-place mutation: matching edge has preference cleared, gate failed
+    const e1 = graph.edges.find((e: any) => e.uuid === 'e1');
+    expect(e1.p.model_source_preference).toBeUndefined();
+    expect(e1.p.model_source_preference_overridden).toBeUndefined();
+    expect(e1.p.model_vars[0].quality.gate_passed).toBe(false);
+    // Unrelated edge: completely untouched
+    const e2 = graph.edges.find((e: any) => e.uuid === 'e2');
+    expect(e2.p.model_source_preference).toBe('bayesian');
+    expect(e2.p.model_vars[0].quality.gate_passed).toBe(true);
+    // setGraph is NOT called — mutation is in-place for the fetch pipeline to pick up
+    expect(setGraph).not.toHaveBeenCalled();
+  });
+
   it('should create latency block if absent when setting bayes_reset', async () => {
     const doc = { id: 'bare-param', values: [] };
     await registerParam('bare-param', doc);
@@ -206,6 +240,98 @@ describe('bayesPriorService — bulk operations', () => {
     expect(count).toBe(2);
     expect(getParamDoc('param-a').latency.bayes_reset).toBe(true);
     expect(getParamDoc('param-b').latency.bayes_reset).toBe(true);
+  });
+
+  it('should invalidate bayesian gates in-place and clear bayesian pins (no setGraph needed)', async () => {
+    await registerParam('param-a', makeParamFile('param-a', { posterior: true }));
+    await registerParam('param-b', makeParamFile('param-b', { posterior: true }));
+    const graph: any = {
+      nodes: [
+        { uuid: 'anchor', id: 'anchor', entry: { is_start: true } },
+        { uuid: 't1', id: 't1' },
+        { uuid: 't2', id: 't2' },
+      ],
+      edges: [
+        { uuid: 'e1', from: 'anchor', to: 't1', p: {
+          id: 'param-a',
+          model_source_preference: 'bayesian',
+          model_source_preference_overridden: true,
+          model_vars: [
+            { source: 'analytic', probability: { mean: 0.12 } },
+            { source: 'bayesian', probability: { mean: 0.15 }, quality: { gate_passed: true } },
+          ],
+        } },
+        { uuid: 'e2', from: 'anchor', to: 't2', p: {
+          id: 'param-b',
+          model_source_preference: 'analytic',
+          model_vars: [
+            { source: 'bayesian', probability: { mean: 0.20 }, quality: { gate_passed: true } },
+          ],
+        } },
+      ],
+    };
+
+    const count = await resetPriorsForAllParams(() => graph);
+
+    expect(count).toBe(2);
+    // In-place: edge 1 bayesian pin cleared, bayesian gate failed
+    const e1 = graph.edges.find((e: any) => e.uuid === 'e1');
+    expect(e1.p.model_source_preference).toBeUndefined();
+    expect(e1.p.model_source_preference_overridden).toBeUndefined();
+    const e1Bayes = e1.p.model_vars.find((v: any) => v.source === 'bayesian');
+    expect(e1Bayes.quality.gate_passed).toBe(false);
+    // Analytic entry untouched
+    const e1Analytic = e1.p.model_vars.find((v: any) => v.source === 'analytic');
+    expect(e1Analytic.probability.mean).toBe(0.12);
+
+    // Edge 2: analytic preference unchanged, bayesian gate failed
+    const e2 = graph.edges.find((e: any) => e.uuid === 'e2');
+    expect(e2.p.model_source_preference).toBe('analytic');
+    const e2Bayes = e2.p.model_vars.find((v: any) => v.source === 'bayesian');
+    expect(e2Bayes.quality.gate_passed).toBe(false);
+  });
+
+  it('should revert graph-level bayesian preference to best_available in-place', async () => {
+    await registerParam('param-a', makeParamFile('param-a', { posterior: true }));
+    const graph: any = {
+      model_source_preference: 'bayesian',
+      nodes: [
+        { uuid: 'anchor', id: 'anchor', entry: { is_start: true } },
+        { uuid: 't1', id: 't1' },
+      ],
+      edges: [
+        { uuid: 'e1', from: 'anchor', to: 't1', p: {
+          id: 'param-a',
+          model_vars: [{ source: 'bayesian', probability: { mean: 0.1 }, quality: { gate_passed: true } }],
+        } },
+      ],
+    };
+
+    await resetPriorsForAllParams(() => graph);
+
+    expect(graph.model_source_preference).toBe('best_available');
+    const e1Bayes = graph.edges[0].p.model_vars.find((v: any) => v.source === 'bayesian');
+    expect(e1Bayes.quality.gate_passed).toBe(false);
+  });
+
+  it('should leave non-bayesian preferences untouched during in-place mutation', async () => {
+    await registerParam('param-a', makeParamFile('param-a', { posterior: true }));
+    const graph: any = {
+      model_source_preference: 'best_available',
+      nodes: [
+        { uuid: 'anchor', id: 'anchor', entry: { is_start: true } },
+        { uuid: 't1', id: 't1' },
+      ],
+      edges: [
+        { uuid: 'e1', from: 'anchor', to: 't1', p: { id: 'param-a', model_source_preference: 'analytic' } },
+      ],
+    };
+
+    await resetPriorsForAllParams(() => graph);
+
+    // Non-bayesian preferences preserved
+    expect(graph.model_source_preference).toBe('best_available');
+    expect(graph.edges[0].p.model_source_preference).toBe('analytic');
   });
 
   it('should deduplicate when multiple edges reference the same param', async () => {

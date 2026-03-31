@@ -17,6 +17,7 @@ import { PosteriorIndicator } from './shared/PosteriorIndicator';
 import { ModelVarsCards } from './ModelVarsCards';
 import { resolveActiveModelVars, effectivePreference } from '../services/modelVarsResolution';
 import { resetPriorsForParam, deleteHistoryForParam } from '../services/bayesPriorService';
+import { fetchItems as fetchItemsBatch, createFetchItem } from '../services/fetchDataService';
 import toast from 'react-hot-toast';
 import { useTheme } from '../contexts/ThemeContext';
 import './ParameterSection.css';
@@ -115,12 +116,25 @@ export function ParameterSection({
 
   // Bayes prior reset / history delete (doc 19 §4.5)
   const bayesParamId = param?.id as string | undefined;
-  const handleBayesResetPriors = useCallback(() => {
+  const handleBayesResetPriors = useCallback(async () => {
     if (!bayesParamId) return;
-    void resetPriorsForParam(bayesParamId).then(ok => {
-      if (ok) toast.success('Priors will reset on next Bayesian run');
-    });
-  }, [bayesParamId]);
+    const ok = await resetPriorsForParam(bayesParamId, currentGraph
+      ? { graph: currentGraph, setGraph }
+      : undefined,
+    );
+    if (!ok) return;
+    toast.success('Priors reset — running stats pass with analytic source');
+
+    // Trigger from-file stats pass so analytic values are promoted immediately
+    const freshGraph = currentGraph;
+    if (freshGraph && objectId) {
+      const items = [createFetchItem('parameter', bayesParamId, objectId, { paramSlot: 'p' })];
+      const dsl = (freshGraph as any).currentQueryDSL || '';
+      if (dsl) {
+        await fetchItemsBatch(items, { mode: 'from-file', writeLagHorizonsToGraph: true }, freshGraph as any, setGraph as any, dsl);
+      }
+    }
+  }, [bayesParamId, currentGraph, setGraph, objectId]);
   const handleBayesDeleteHistory = useCallback(() => {
     if (!bayesParamId) return;
     // eslint-disable-next-line no-restricted-globals
