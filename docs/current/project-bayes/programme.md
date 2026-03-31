@@ -140,11 +140,10 @@ data-constrained. Single-source validation:
   join-branch, lattice, skip. Independently resolved.
 
 *Other open*:
-- ~~**Ad hoc hyperparameters** — kappa priors~~ — **PARTIALLY
-  RESOLVED**. κ prior now LogNormal (Stan community consensus).
-  Fallback ESS, Gamma spread still ad hoc.
-- **BE stats engine prior discrepancy** — three-way discrepancy.
-  See `19-be-stats-engine-bugs.md`.
+- ~~**Ad hoc hyperparameters**~~ — **RESOLVED 31-Mar-26**. All model
+  constants promoted to user-configurable settings (settings.yaml,
+  FE forecasting settings, Python dataclass). 17 Bayes settings
+  added with defaults, documentation, and tests.
 
 *Not yet built*:
 - **Topology signatures** (doc 10) — current code computes a single
@@ -168,27 +167,43 @@ data-constrained. Single-source validation:
   edge-level; graph-level pipeline shows ~1% drift in orchestration
   layer (Bayesian evidence adjustment, sampled-cohort detection,
   n_baseline selection). Needs investigation before deletion.
-- **Lag array defect** (doc 16) — window-type values[] entries have
-  zero lag arrays; blocks sensible first-run latency priors.
+- **Lag array defect** (doc 16) — window-type values[] entries had
+  zero lag arrays (20-Mar-26). Current data (31-Mar-26) shows
+  partial population (71/207 nonzero for test graph window slice).
+  May be partially fixed. Low priority — warm-start bypasses
+  first-run prior issue, and onset histogram observations provide
+  direct data-driven onset priors.
 - **Sampling performance** (doc 22) — compilation time (155s on
   branch graph), GPU experiment, dev-mode draws. Quality-of-life,
   not blocking.
+- **Bayes quality nudge** — after Bayes run with quality warnings,
+  operation toast shows "See Forecast Quality" action button.
+  Implemented 31-Mar-26.
+- **BE stats engine prior discrepancy** (doc 19) — three-way
+  discrepancy between FE, BE, and topology latency priors. Only
+  topology value produces convergent MCMC. Needs: CohortData fix,
+  parity test, prior unification. Low priority — warm-start
+  bypasses this path.
+- **Kappa discrepancy investigation** (doc 25) — 12× difference
+  between window and cohort Williams kappa traced to maturity
+  adjustment (CDF). Superseded by MCMC κ approach (31-Mar-26)
+  which avoids the CDF adjustment entirely. Doc 25 findings are
+  historical context only.
 
 **Next priorities**:
-1. **BLOCKING: Stats pass write-back to graph edge** — stats pass
-   computes correct onset/mu/sigma but they don't reach the graph
-   edge's latency fields. Stale deranged values persist → model
-   can't converge. Trace the write-back path in
-   `statisticalEnhancementService.ts` / `modelVarsResolution.ts`.
-2. **Fix path dispersion estimation** — the surprise gauge and
-   confidence bands for cohort (path) slices are meaningless until
-   path kappa is correct. Investigate: mature-only Williams,
-   analytic derivation from edge kappa, or hierarchical cohort model.
+1. ~~BLOCKING: Stats pass write-back to graph edge~~ — **no longer
+   blocking** (31-Mar-26). Warm-start quality gate + param files
+   provide good priors; stale topology values only bite in narrow
+   edge case. Bounds-checking on topology mu/sigma is low priority.
+2. ~~Fix path dispersion estimation~~ — **RESOLVED 31-Mar-26**.
+   Unified MCMC κ per edge for both Phase 1 (window) and Phase 2
+   (cohort). Surprise gauge and confidence bands now use MCMC κ
+   posteriors directly.
 3. Commit and stabilise all current code changes.
-4. Topology signatures (doc 10) — proper implementation.
-5. Phase C (context slices) — prerequisites done.
-6. Nightly scheduling — prerequisite: production confidence +
-   topo sigs.
+4. **Topology signatures** (doc 10) — blocks nightly scheduling.
+5. **Nightly Bayes fit** — trigger as part of nightly fetch. Needs #4.
+6. **Phase C** (context slices) — prerequisites done.
+7. **FE stats deletion** — ~4000 lines, mostly confirmed parity.
 
 ---
 

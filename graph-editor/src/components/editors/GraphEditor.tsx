@@ -33,6 +33,7 @@ import { SelectorModal } from '../SelectorModal';
 import { ItemBase } from '../../hooks/useItemFiltering';
 import { WindowSelector } from '../WindowSelector';
 import { ScenarioLegend } from '../ScenarioLegend';
+import { ScenarioContextMenu } from '../ScenarioContextMenu';
 import { DataDepthLegend } from '../DataDepthLegend';
 import { DataDepthProvider } from '../../contexts/DataDepthContext';
 import { useDataDepthScores } from '../../hooks/useDataDepthScores';
@@ -1271,6 +1272,7 @@ const GraphEditorInner = React.memo(function GraphEditorInner({ fileId, tabId, r
               Static share mode is view-first: do not render the WindowSelector machinery at all. */}
           {!isDashboardMode && !readonly && <WindowSelector tabId={tabId} />}
           {tabId && <ScenarioLegendWrapper tabId={tabId} />}
+          {tabId && <ScenarioContextMenu tabId={tabId} />}
         </div>
       </DataDepthOverlayProvider>
     );

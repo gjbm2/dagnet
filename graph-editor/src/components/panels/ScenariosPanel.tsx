@@ -21,7 +21,6 @@ import { Scenario } from '../../types/scenarios';
 import { ScenarioEditorModal } from '../modals/ScenarioEditorModal';
 import { ScenarioQueryEditModal } from '../modals/ScenarioQueryEditModal';
 import { ToBaseConfirmModal } from '../modals/ToBaseConfirmModal';
-import { ContextMenu, ContextMenuItem } from '../ContextMenu';
 import { ScenarioLayerList } from './ScenarioLayerList';
 import type { ScenarioLayerItem } from '../../types/scenarioLayerList';
 import WhatIfAnalysisControl from '../WhatIfAnalysisControl';
@@ -29,7 +28,6 @@ import { parseConstraints } from '@/lib/queryDSL';
 import { computeInheritedDSL, computeEffectiveFetchDSL, deriveBaseDSLForRebase, LIVE_EMPTY_DIFF_DSL, diffQueryDSLFromBase } from '../../services/scenarioRegenerationService';
 import { fetchDataService } from '../../services/fetchDataService';
 import { useCopyAllScenarioParamPacks } from '../../hooks/useCopyAllScenarioParamPacks';
-import { useScenarioShareLink } from '../../hooks/useScenarioShareLink';
 import { getScenarioVisibilityOverlayStyle } from '../../lib/scenarioVisibilityModeStyles';
 import { 
   Images,
@@ -130,14 +128,10 @@ export default function ScenariosPanel({ tabId, hideHeader = false }: ScenariosP
   }
   
   const { scenarios, listScenarios, renameScenario, updateScenarioColour, deleteScenario, captureScenario, createBlank, openInEditor, closeEditor, editorOpenScenarioId, flatten, setCurrentParams, baseParams, currentParams, composeVisibleParams, currentColour, baseColour, setCurrentColour, setBaseColour, createLiveScenario, createLiveScenarioFromCurrentDelta, regenerateScenario, regenerateAllLive, putToBase, baseDSL } = scenariosContext;
-  const currentTabForShare = tabs.find(t => t.id === tabId);
-  const graphFileIdForShare = currentTabForShare?.fileId || '';
-  const { canShareScenario, copyStaticScenarioShareLink, copyLiveScenarioShareLink } = useScenarioShareLink(graphFileIdForShare, tabId);
   
   const [showCreateMenu, setShowCreateMenu] = useState(false);
   const [menuPosition, setMenuPosition] = useState<{ x: number; y: number } | null>(null);
   const [pendingBlankScenarioId, setPendingBlankScenarioId] = useState<string | null>(null);
-  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; scenarioId: string } | null>(null);
   const menuButtonRef = useRef<HTMLButtonElement>(null);
   
   // Query edit modal state for live scenarios
@@ -524,17 +518,10 @@ export default function ScenariosPanel({ tabId, hideHeader = false }: ScenariosP
       handleCreateLiveScenario('everything');
     };
     
-    const handleScenarioContextMenu = (e: CustomEvent) => {
-      const { x, y, scenarioId } = e.detail;
-      setContextMenu({ x, y, scenarioId });
-    };
-    
     window.addEventListener('dagnet:newScenario', handleNewScenarioEvent as EventListener);
-    window.addEventListener('dagnet:scenarioContextMenu', handleScenarioContextMenu as EventListener);
-    
+
     return () => {
       window.removeEventListener('dagnet:newScenario', handleNewScenarioEvent as EventListener);
-      window.removeEventListener('dagnet:scenarioContextMenu', handleScenarioContextMenu as EventListener);
     };
   }, [handleCreateLiveScenario]);
   
@@ -803,195 +790,14 @@ export default function ScenariosPanel({ tabId, hideHeader = false }: ScenariosP
   }, [graphStore, baseDSL, hasLiveScenarios]);
   
   /**
-   * Show only this scenario (hide all others)
-   */
-  const handleShowOnly = useCallback(async (scenarioId: string) => {
-    if (!tabId) return;
-    
-    try {
-      console.log(`[ScenariosPanel] Show only: ${scenarioId}`);
-      const currentState = operations.getScenarioState(tabId);
-      console.log(`[ScenariosPanel] Current visible IDs:`, currentState?.visibleScenarioIds);
-      
-      await operations.setVisibleScenarios(tabId, [scenarioId]);
-      
-      const newState = operations.getScenarioState(tabId);
-      console.log(`[ScenariosPanel] New visible IDs:`, newState?.visibleScenarioIds);
-      
-      toast.success('Showing only this scenario');
-    } catch (error) {
-      console.error('Failed to show only:', error);
-      toast.error('Failed to show only');
-    }
-  }, [tabId, operations]);
-  
-  /**
-   * Use as current - copies this scenario to current, overwriting and resetting whatifs
-   */
-  const handleUseAsCurrent = useCallback(async (scenarioId: string) => {
-    if (!tabId) return;
-    
-    try {
-      if (scenarioId === 'base') {
-        // Use base params as current
-        setCurrentParams(baseParams);
-      } else if (scenarioId === 'current') {
-        // Already current, nothing to do
-        return;
-      } else {
-        // Find the scenario
-        const scenario = scenarios.find(s => s.id === scenarioId);
-        if (!scenario) {
-          toast.error('Scenario not found');
-          return;
-        }
-        
-        // Compose all layers up to and including this scenario
-        const scenarioState = operations.getScenarioState(tabId);
-        const visibleScenarioIds = scenarioState?.visibleScenarioIds || [];
-        const scenarioIndex = visibleScenarioIds.indexOf(scenarioId);
-        
-        // Get all visible scenarios up to this one
-        const layersUpToThis = scenarioIndex >= 0 
-          ? visibleScenarioIds.slice(0, scenarioIndex + 1).filter(id => id !== 'current' && id !== 'base')
-          : [scenarioId];
-        
-        // Compose params: base + all layers up to this one
-        const composedParams = composeVisibleParams(layersUpToThis);
-        setCurrentParams(composedParams);
-      }
-      
-      // Clear any whatIfDSL
-      await operations.updateTabState(tabId, { whatIfDSL: null });
-      
-      // Make current visible if it's not already
-      const scenarioState = operations.getScenarioState(tabId);
-      if (scenarioState && !scenarioState.visibleScenarioIds.includes('current')) {
-        await operations.toggleScenarioVisibility(tabId, 'current');
-      }
-      
-      toast.success('Copied to current');
-    } catch (error) {
-      console.error('Failed to use as current:', error);
-      toast.error('Failed to use as current');
-    }
-  }, [tabId, operations, scenarios, baseParams, setCurrentParams, composeVisibleParams]);
-  
-  /**
-   * Merge down - applies this scenario to the next visible layer down in the stack
-   */
-  const handleMergeDown = useCallback(async (scenarioId: string) => {
-    if (!tabId) return;
-    
-    try {
-      // TODO: Implement merge down logic properly
-      // This should compose this scenario's params onto the next visible layer below
-      console.log(`[ScenariosPanel] Merge down: ${scenarioId}`);
-      toast.error('Merge down - not yet implemented');
-    } catch (error) {
-      console.error('Failed to merge down:', error);
-      toast.error('Failed to merge down');
-    }
-  }, [tabId]);
-  
-  /**
-   * Build context menu items for a scenario
-   */
-  const buildContextMenuItems = useCallback((scenarioId: string): ContextMenuItem[] => {
-    const isVisible = visibleScenarioIds.includes(scenarioId);
-    const scenario = scenarios.find(s => s.id === scenarioId);
-    const isUserScenario = scenario !== undefined; // Not 'current' or 'base'
-    
-    // Find next visible layer down in stack
-    // visibleScenarioIds order: [top layer, ..., bottom layer] 
-    // Typically: ['current', 'scenario-n', ..., 'scenario-1', 'base']
-    const currentIndex = visibleScenarioIds.indexOf(scenarioId);
-    // Can merge down if this layer is not 'base' (original)
-    // Even if there's no visible layer below, we can always merge to 'base' (original)
-    // Exception: 'current' shouldn't merge down (it's ephemeral, use "use as current" instead)
-    const hasLayerBelow = scenarioId !== 'base' && scenarioId !== 'current';
-    
-    const items: ContextMenuItem[] = [];
-    
-    // Show/Hide
-    items.push({
-      label: isVisible ? 'Hide' : 'Show',
-      onClick: () => handleToggleVisibility(scenarioId)
-    });
-    
-    // Show only
-    items.push({
-      label: 'Show only',
-      onClick: () => handleShowOnly(scenarioId)
-    });
-    
-    items.push({ label: '', onClick: () => {}, divider: true });
-    
-    // Edit
-    items.push({
-      label: 'Edit',
-      onClick: () => handleOpenEditor(scenarioId)
-    });
-
-    // Share (scenario-level share; Phase 3)
-    if (canShareScenario(scenarioId)) {
-      items.push({
-        label: 'Share link (static)',
-        onClick: () => void copyStaticScenarioShareLink(scenarioId),
-      });
-      items.push({
-        label: 'Share link (live)',
-        onClick: () => void copyLiveScenarioShareLink(scenarioId),
-      });
-    }
-    
-    // Use as current (not for current itself)
-    if (scenarioId !== 'current') {
-      items.push({
-        label: 'Use as current',
-        onClick: () => handleUseAsCurrent(scenarioId)
-      });
-    }
-    
-    // Merge down (only if there's a layer below)
-    if (hasLayerBelow) {
-      items.push({
-        label: 'Merge down',
-        onClick: () => handleMergeDown(scenarioId)
-      });
-    }
-    
-    // Delete (not for current or base)
-    if (isUserScenario) {
-      items.push({ label: '', onClick: () => {}, divider: true });
-      items.push({
-        label: 'Delete',
-        onClick: () => handleDelete(scenarioId)
-      });
-    }
-    
-    return items;
-  }, [
-    visibleScenarioIds,
-    scenarios,
-    handleToggleVisibility,
-    handleShowOnly,
-    handleOpenEditor,
-    handleUseAsCurrent,
-    handleMergeDown,
-    handleDelete,
-    canShareScenario,
-    copyStaticScenarioShareLink,
-    copyLiveScenarioShareLink,
-  ]);
-  
-  /**
    * Handle context menu on scenario
    */
   const handleContextMenu = useCallback((e: React.MouseEvent, scenarioId: string) => {
     e.preventDefault();
     e.stopPropagation();
-    setContextMenu({ x: e.clientX, y: e.clientY, scenarioId });
+    window.dispatchEvent(new CustomEvent('dagnet:scenarioContextMenu', {
+      detail: { x: e.clientX, y: e.clientY, scenarioId },
+    }));
   }, []);
   
   /**
@@ -1302,15 +1108,6 @@ export default function ScenariosPanel({ tabId, hideHeader = false }: ScenariosP
       />
       </div>
     
-    {/* Context Menu */}
-    {contextMenu && (
-      <ContextMenu
-        x={contextMenu.x}
-        y={contextMenu.y}
-        items={buildContextMenuItems(contextMenu.scenarioId)}
-        onClose={() => setContextMenu(null)}
-      />
-    )}
     
     {/* Editor Modal */}
     <ScenarioEditorModal

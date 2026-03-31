@@ -512,7 +512,7 @@ export class GraphComputeClient {
       // Collect model CDF curves from backend results, keyed by subject_id.
       // When multiple epochs collapse into one subject, keep the longest curve
       // (the gap epoch typically has a short or empty curve).
-      const modelCurveBySubject = new Map<string, { curve: Array<{ tau_days: number; model_rate: number }>; params: Record<string, number>; bayesCurve?: Array<{ tau_days: number; model_rate: number }>; bayesParams?: Record<string, number> }>();
+      const modelCurveBySubject = new Map<string, { curve: Array<{ tau_days: number; model_rate: number }>; params: Record<string, number>; bayesCurve?: Array<{ tau_days: number; model_rate: number }>; bayesParams?: Record<string, number>; sourceModelCurves?: Record<string, any>; promotedSource?: string }>();
       for (const b of blocks) {
         const r = b.result;
         if (r?.model_curve && Array.isArray(r.model_curve) && r.model_curve.length > 0) {
@@ -544,6 +544,17 @@ export class GraphComputeClient {
             }
             modelCurveBySubject.set(b.subject_id, entry);
           }
+        }
+      }
+
+      // Collect BE-computed fan chart data keyed by subject_id.
+      // The BE computes midpoint/fan_upper/fan_lower per τ using proper
+      // upstream x forecasting and Bayesian dispersion.
+      const fanChartBySubject = new Map<string, Record<string, { midpoint: number; fan_upper: number | null; fan_lower: number | null }>>();
+      for (const b of blocks) {
+        const fc = b.result?.fan_chart;
+        if (fc && typeof fc === 'object') {
+          fanChartBySubject.set(b.subject_id, fc);
         }
       }
 
@@ -621,7 +632,12 @@ export class GraphComputeClient {
         //   sumProjY, sumProjX   → projected rate = sumProjY / sumProjX
         //
         // This naturally produces a monotonic cumulative distribution.
-        type TauBucket = { sumY: number; sumX: number; sumProjY: number; sumProjX: number; count: number; projCount: number };
+        type TauBucket = {
+          sumY: number; sumX: number;           // all evidence (incl. carry-forward)
+          sumYLive: number; sumXLive: number;    // evidence from cohorts still alive at τ
+          sumProjY: number; sumProjX: number;
+          count: number; projCount: number; liveCount: number;
+        };
         const buckets = new Map<number, TauBucket>();
 
         // Collect all detailed points for this scenario+subject.
@@ -661,12 +677,21 @@ export class GraphComputeClient {
           _accepted++;
 
           let b = buckets.get(tau);
-          if (!b) { b = { sumY: 0, sumX: 0, sumProjY: 0, sumProjX: 0, count: 0, projCount: 0 }; buckets.set(tau, b); }
+          if (!b) { b = { sumY: 0, sumX: 0, sumYLive: 0, sumXLive: 0, sumProjY: 0, sumProjX: 0, count: 0, projCount: 0, liveCount: 0 }; buckets.set(tau, b); }
+
+          // Is this cohort still "alive" at this τ?  i.e. τ ≤ its max observed age.
+          const cohortMaxAge = B ? (dayDiffUTC(B, ad) ?? 0) : 0;
+          const isLive = tau <= cohortMaxAge;
 
           if (y !== null && Number.isFinite(y)) {
             b.sumY += y;
             b.sumX += x;
             b.count += 1;
+            if (isLive) {
+              b.sumYLive += y;
+              b.sumXLive += x;
+              b.liveCount += 1;
+            }
           }
           if (projY !== null && Number.isFinite(projY)) {
             b.sumProjY += projY;
@@ -680,11 +705,28 @@ export class GraphComputeClient {
           bucketCount: buckets.size, tauMax,
         });
 
+        // Look up BE-computed fan chart data for this subject.
+        const fanChart = fanChartBySubject.get(subjectId);
+
         // Emit one row per τ that has data.
         for (const [tau, b] of Array.from(buckets.entries()).sort((a, c) => a[0] - c[0])) {
-          const baseRate = (b.sumX > 0 && b.count > 0) ? (b.sumY / b.sumX) : null;
+          // Live evidence rate: only from cohorts that genuinely have data at
+          // this τ (not carry-forward from dropped cohorts).
+          const evidenceRate = (b.sumXLive > 0 && b.liveCount > 0) ? (b.sumYLive / b.sumXLive) : null;
           const projRate = (b.sumProjX > 0 && b.projCount > 0) ? (b.sumProjY / b.sumProjX) : null;
-          const baseRateClipped = (B && tau > tauFutureMax) ? null : baseRate;
+          const evidenceRateClipped = (B && tau > tauFutureMax) ? null : evidenceRate;
+          const projRateClamped = (projRate !== null && Number.isFinite(projRate)) ? Math.max(0, Math.min(1, projRate)) : null;
+
+          // Fan data from the BE (midpoint, fan_upper, fan_lower).
+          // The BE computes these using proper upstream x forecasting
+          // and Bayesian dispersion.  The FE just passes them through.
+          const fanEntry = fanChart?.[String(tau)];
+          const midpoint = (fanEntry?.midpoint !== undefined && fanEntry?.midpoint !== null)
+            ? Number(fanEntry.midpoint) : null;
+          const fanUpper = (fanEntry?.fan_upper !== undefined && fanEntry?.fan_upper !== null)
+            ? Number(fanEntry.fan_upper) : null;
+          const fanLower = (fanEntry?.fan_lower !== undefined && fanEntry?.fan_lower !== null)
+            ? Number(fanEntry.fan_lower) : null;
 
           const row = {
             analysis_type: 'cohort_maturity',
@@ -697,8 +739,11 @@ export class GraphComputeClient {
             x_covered: b.sumX > 0 ? b.sumX : null,
             y_base: b.count > 0 ? b.sumY : null,
             y_projected: b.projCount > 0 ? b.sumProjY : null,
-            rate: (baseRateClipped !== null && Number.isFinite(baseRateClipped)) ? Math.max(0, Math.min(1, baseRateClipped)) : null,
-            projected_rate: (projRate !== null && Number.isFinite(projRate)) ? Math.max(0, Math.min(1, projRate)) : null,
+            rate: (evidenceRateClipped !== null && Number.isFinite(evidenceRateClipped)) ? Math.max(0, Math.min(1, evidenceRateClipped)) : null,
+            projected_rate: projRateClamped,
+            midpoint,
+            fan_upper: fanUpper,
+            fan_lower: fanLower,
             cohorts_covered_base: b.count,
             cohorts_covered_projected: b.projCount,
             tau_solid_max: tauSolidMax,
@@ -709,6 +754,45 @@ export class GraphComputeClient {
 
           const k = `${scenarioId}||${subjectId}||tau:${tau}`;
           dataByKey.set(k, row);
+        }
+
+        // Emit rows for τ values that the BE fan chart covers but the
+        // bucket data doesn't (epoch C — beyond tauFutureMax).
+        if (fanChart) {
+          for (const [tauStr, fanEntry] of Object.entries(fanChart)) {
+            const tau = Number(tauStr);
+            if (!Number.isFinite(tau)) continue;
+            const k = `${scenarioId}||${subjectId}||tau:${tau}`;
+            if (dataByKey.has(k)) continue; // real data takes precedence
+
+            const midpoint = fanEntry?.midpoint ?? null;
+            const fanUpper = fanEntry?.fan_upper ?? null;
+            const fanLower = fanEntry?.fan_lower ?? null;
+
+            dataByKey.set(k, {
+              analysis_type: 'cohort_maturity',
+              scenario_id: scenarioId,
+              subject_id: subjectId,
+              tau_days: tau,
+              boundary_date: B,
+              window_from: anchorFromIso,
+              window_to: anchorToIso,
+              x_covered: null,
+              y_base: null,
+              y_projected: null,
+              rate: null,
+              projected_rate: midpoint, // epoch C: midpoint IS the best estimate
+              midpoint,
+              fan_upper: fanUpper,
+              fan_lower: fanLower,
+              cohorts_covered_base: 0,
+              cohorts_covered_projected: 0,
+              tau_solid_max: tauSolidMax,
+              tau_future_max: tauFutureMax,
+              t95_days: latency.t95Days,
+              path_t95_days: latency.pathT95Days,
+            } as Record<string, any>);
+          }
         }
       }
 

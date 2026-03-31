@@ -91,6 +91,11 @@ export function buildCohortMaturityEChartsOption(
     tauDays: number;
     baseRate: number | null;
     projectedRate: number | null;
+    midpoint: number | null;
+    fanUpper: number | null;
+    fanLower: number | null;
+    tauSolidMax: number | null;
+    tauFutureMax: number | null;
     cohortsExpected: number | null;
     cohortsInDenom: number | null;
     cohortsCoveredBase: number | null;
@@ -110,6 +115,11 @@ export function buildCohortMaturityEChartsOption(
       tauDays: tau,
       baseRate: parse(r?.rate),
       projectedRate: parse(r?.projected_rate),
+      midpoint: parse(r?.midpoint),
+      fanUpper: parse(r?.fan_upper),
+      fanLower: parse(r?.fan_lower),
+      tauSolidMax: parse(r?.tau_solid_max),
+      tauFutureMax: parse(r?.tau_future_max),
       cohortsExpected: parse(r?.cohorts_expected),
       cohortsInDenom: parse(r?.cohorts_in_denominator),
       cohortsCoveredBase: parse(r?.cohorts_covered_base),
@@ -157,6 +167,10 @@ export function buildCohortMaturityEChartsOption(
     const colour = scenarioMeta?.[scenarioId]?.colour;
     const points = (byScenario.get(scenarioId) || []).slice().sort((a, b) => a.tauDays - b.tauDays);
 
+    // Per-scenario epoch boundaries (each scenario has its own anchor range).
+    const sSolidMax = points.reduce((m, p) => p.tauSolidMax !== null ? Math.max(m, p.tauSolidMax) : m, 0);
+    const sFutureMax = points.reduce((m, p) => p.tauFutureMax !== null ? Math.max(m, p.tauFutureMax) : m, 0);
+
     const mode = extra?.scenarioVisibilityModes?.[scenarioId]
       ?? (scenarioMeta?.[scenarioId]?.visibility_mode as any)
       ?? 'f+e';
@@ -183,77 +197,130 @@ export function buildCohortMaturityEChartsOption(
       continue;
     }
 
-    const baseSolidPts = points.filter(p => p.tauDays <= solidMax).map(p => ({ value: [p.tauDays, p.baseRate] as [number, number | null], ...toMeta(p) }));
-    const baseDashedPts = points.filter(p => p.tauDays >= solidMax && p.tauDays <= futureMax).map(p => ({ value: [p.tauDays, p.baseRate] as [number, number | null], ...toMeta(p) }));
-    const futureForecastPts = points.filter(p => p.tauDays >= futureMax).map(p => ({ value: [p.tauDays, p.projectedRate] as [number, number | null], ...toMeta(p) }));
-    const crownProjPts = points.filter(p => p.tauDays >= solidMax && p.tauDays <= futureMax).map(p => ({ value: [p.tauDays, p.projectedRate] as [number, number | null], ...toMeta(p) }));
+    // Solid line (epoch A): complete evidence — all cohorts present.
+    const solidPts = points.filter(p => p.tauDays <= sSolidMax).map(p => ({ value: [p.tauDays, p.baseRate] as [number, number | null], ...toMeta(p) }));
+    // Dashed line (epoch B): incomplete evidence — some cohorts dropped out.
+    const dashedEvidencePts = points.filter(p => p.tauDays >= sSolidMax && p.tauDays <= sFutureMax).map(p => ({ value: [p.tauDays, p.baseRate] as [number, number | null], ...toMeta(p) }));
+    // Dotted line (epochs B+C): best estimate midpoint — evidence + model for missing cohorts.
+    // Continuous from B through C; in epoch A midpoint ≈ evidence (no value in showing it).
+    const midpointPts = points.filter(p => p.tauDays >= sSolidMax && p.midpoint !== null).map(p => ({ value: [p.tauDays, p.midpoint] as [number, number | null], ...toMeta(p) }));
 
-    if (mode === 'f+e') {
-      const sCrownUpper = mkLine({
-        id: `${scenarioId}::crownUpper`, colour, lineType: 'dashed', opacity: 0,
-        data: crownProjPts, areaStyle: { color: colour || '#111827', opacity: 0.15 },
+    const sSolid = mkLine({
+      id: `${scenarioId}::solid`, name, colour, lineType: 'solid',
+      data: solidPts, showSymbol: solidPts.length <= 12,
+    });
+    if (sSolid) seriesOut.push(sSolid);
+
+    if (mode === 'f+e' || mode === 'f') {
+      const sDashedEv = mkLine({
+        id: `${scenarioId}::dashedEvidence`, colour, lineType: 'dashed', opacity: 0.75,
+        data: dashedEvidencePts,
       });
-      const sCrownMask = mkLine({
-        id: `${scenarioId}::crownMask`, colour, lineType: 'dashed', opacity: 0,
-        data: baseDashedPts, areaStyle: { color: c.bg === '#1e1e1e' ? '#1e1e1e' : '#ffffff', opacity: 1 },
+      if (sDashedEv) seriesOut.push(sDashedEv);
+
+      const sMidpoint = mkLine({
+        id: `${scenarioId}::midpoint`, colour, lineType: 'dotted', opacity: 0.6,
+        data: midpointPts,
       });
-      if (sCrownUpper) seriesOut.push(sCrownUpper);
-      if (sCrownMask) seriesOut.push(sCrownMask);
+      if (sMidpoint) seriesOut.push(sMidpoint);
     }
 
-    const sBaseSolid = mkLine({
-      id: `${scenarioId}::baseSolid`, name, colour, lineType: 'solid',
-      data: baseSolidPts, showSymbol: baseSolidPts.length <= 12,
-    });
-    const sBaseDashed = mkLine({
-      id: `${scenarioId}::baseDashed`, colour, lineType: 'dashed',
-      data: baseDashedPts,
-    });
-    if (sBaseSolid) seriesOut.push(sBaseSolid);
-    if (sBaseDashed) seriesOut.push(sBaseDashed);
+    // Fan chart polygon — per-scenario uncertainty band in the scenario colour.
+    // Rendered behind the data lines (z:2).  Each row carries pre-computed
+    // fan_upper / fan_lower for epochs A+B.  For epoch C (beyond futureMax),
+    // the fan extends using model band data directly (w_f = 1, centre = model rate).
+    if (mode !== 'e') {
+      const fanPoly: Array<[number, number, number]> = [];
 
-    if (mode === 'f+e') {
-      const sFuture = mkLine({
-        id: `${scenarioId}::futureForecast`, colour, lineType: 'dashed', opacity: 0.75,
-        data: futureForecastPts,
-      });
-      if (sFuture) seriesOut.push(sFuture);
+      // All epochs: fan_upper/fan_lower are pre-computed on each row
+      // by graphComputeClient (epochs A+B from evidence+band, epoch C
+      // from evidence+model_delta+band).
+      for (const p of points) {
+        if (p.fanUpper !== null && p.fanLower !== null && p.fanUpper !== p.fanLower) {
+          fanPoly.push([p.tauDays, p.fanUpper, p.fanLower]);
+        }
+      }
+
+      if (fanPoly.length > 0) {
+        const fanColour = c.text === '#e0e0e0'
+          ? (colour || 'rgba(200,200,200,0.18)')
+          : (colour || 'rgba(100,100,100,0.15)');
+        seriesOut.push({
+          id: `${scenarioId}::fan`,
+          type: 'custom' as any,
+          coordinateSystem: 'cartesian2d',
+          encode: { x: 0, y: 1 },
+          renderItem: (params: any, api: any) => {
+            if (params.dataIndex !== 0) return;
+            const pts: number[][] = [];
+            for (let i = 0; i < fanPoly.length; i++) {
+              pts.push(api.coord([fanPoly[i][0], fanPoly[i][1]]));
+            }
+            for (let i = fanPoly.length - 1; i >= 0; i--) {
+              pts.push(api.coord([fanPoly[i][0], fanPoly[i][2]]));
+            }
+            return {
+              type: 'polygon',
+              shape: { points: pts, smooth: 0.3 },
+              style: {
+                fill: typeof fanColour === 'string' && fanColour.startsWith('rgba')
+                  ? fanColour
+                  : `${fanColour}25`,
+                stroke: 'none',
+              },
+              silent: true,
+            };
+          },
+          data: fanPoly,
+          z: 2,
+          silent: true,
+        });
+      }
     }
   }
+
+  // Model overlay neutral colour — always in scope for legend data builder.
+  const modelColour = c.text === '#e0e0e0' ? '#9ca3af' : '#6b7280'; // grey-400 / grey-500
 
   // Model CDF overlay
   const modelCurves = result?.metadata?.model_curves;
   if (modelCurves && typeof modelCurves === 'object') {
     const entry = modelCurves[effectiveSubjectId];
-    // Promoted model curve — shown by default (show_model_promoted defaults to true)
+    // ── Model overlay styling ──────────────────────────────────────────
+    // Colours are reserved for scenarios.  Model sources are distinguished
+    // by stroke style only, using a single neutral colour.
+    // Dash patterns per source (large enough to read in legend key):
+    //   Bayesian   = dotted             ·····
+    //   FE         = dot/dash           ─ · ─ · ─
+    //   BE         = dot-dot/dash       ─ ·· ─ ·· ─
+    const MODEL_DASH: Record<string, number[]> = {
+      bayesian:    [3, 3],
+      analytic:    [12, 5, 3, 5],
+      analytic_be: [12, 4, 3, 4, 3, 4],
+    };
+    const MODEL_LABEL: Record<string, string> = {
+      bayesian: 'Bayesian', analytic: 'Analytic (FE)', analytic_be: 'Analytic (BE)',
+    };
+
     const showPromoted = settings.show_model_promoted !== false;
     const promotedSource: string = entry?.params?.promoted_source || entry?.promotedSource || 'analytic';
-
-    // Colour the promoted CDF by its actual source
-    const promotedSourceColours: Record<string, [string, string]> = {
-      bayesian:    ['#60a5fa', '#2563eb'],
-      analytic:    ['#f87171', '#dc2626'],
-      analytic_be: ['#a78bfa', '#7c3aed'],
-    };
-    const promotedColourPair = promotedSourceColours[promotedSource] || promotedSourceColours.analytic;
-    const promotedColour = c.text === '#e0e0e0' ? promotedColourPair[0] : promotedColourPair[1];
-    const promotedDash = promotedSource === 'bayesian' ? 'dashed' : 'dotted';
+    const isBayesianPromoted = promotedSource === 'bayesian';
 
     if (showPromoted && entry?.curve && Array.isArray(entry.curve) && entry.curve.length > 0) {
       const data = entry.curve
         .filter((p: any) => typeof p?.tau_days === 'number' && typeof p?.model_rate === 'number')
         .map((p: any) => ({ value: [p.tau_days, p.model_rate] }));
       if (data.length > 0) {
-        const sourceLabel = promotedSource === 'bayesian' ? 'Bayesian' : promotedSource === 'analytic_be' ? 'Analytic (BE)' : 'Analytic';
+        const dash = MODEL_DASH[promotedSource] || MODEL_DASH.analytic;
         seriesOut.push({
           id: 'model_cdf',
-          name: `Promoted: ${sourceLabel}`,
+          name: MODEL_LABEL[promotedSource] || promotedSource,
           type: 'line',
           showSymbol: false,
           smooth: true,
           connectNulls: false,
-          lineStyle: { width: 2, color: promotedColour, type: promotedDash as any, opacity: 0.85 },
-          itemStyle: { color: promotedColour },
+          lineStyle: { width: 2, color: modelColour, type: dash as any, opacity: 0.85 },
+          itemStyle: { color: modelColour },
           emphasis: { disabled: true },
           z: 10,
           data,
@@ -266,15 +333,12 @@ export function buildCohortMaturityEChartsOption(
         }
       }
     }
-    // Method B comparison curve (old raw-anchor approach) — only relevant
-    // when promoted source is analytic (compares two onset approaches).
-    const isBayesianPromoted = promotedSource === 'bayesian';
+    // Method B comparison curve — only relevant when promoted source is analytic.
     if (showPromoted && !isBayesianPromoted && entry?.methodBCurve && Array.isArray(entry.methodBCurve) && entry.methodBCurve.length > 0) {
       const methodBData = entry.methodBCurve
         .filter((p: any) => typeof p?.tau_days === 'number' && typeof p?.model_rate === 'number')
         .map((p: any) => ({ value: [p.tau_days, p.model_rate] }));
       if (methodBData.length > 0) {
-        const methodBColour = c.text === '#e0e0e0' ? '#4ade80' : '#16a34a';
         seriesOut.push({
           id: 'model_cdf_method_b',
           name: 'Analytic B (old)',
@@ -282,8 +346,8 @@ export function buildCohortMaturityEChartsOption(
           showSymbol: false,
           smooth: true,
           connectNulls: false,
-          lineStyle: { width: 2, color: methodBColour, type: 'dashed', opacity: 0.7 },
-          itemStyle: { color: methodBColour },
+          lineStyle: { width: 2, color: modelColour, type: [2, 2] as any, opacity: 0.5 },
+          itemStyle: { color: modelColour },
           emphasis: { disabled: true },
           z: 10,
           data: methodBData,
@@ -296,8 +360,8 @@ export function buildCohortMaturityEChartsOption(
         }
       }
     }
-    // Bayesian confidence band — only show when promoted source IS bayesian.
-    // Resolve band data: prefer legacy fields, fall back to per-source bayesian band.
+    // Bayesian confidence band — only when promoted source IS bayesian.
+    // Rendered as a hatched polygon (diagonal lines) to stay neutral on colour.
     let bandUpper = (showPromoted && isBayesianPromoted) ? entry?.bayesBandUpper : undefined;
     let bandLower = (showPromoted && isBayesianPromoted) ? entry?.bayesBandLower : undefined;
     if (showPromoted && isBayesianPromoted && !bandUpper) {
@@ -307,19 +371,19 @@ export function buildCohortMaturityEChartsOption(
     }
     let promotedBandRendered = false;
     if (Array.isArray(bandUpper) && bandUpper.length > 0 && Array.isArray(bandLower) && bandLower.length > 0) {
-      const bandColour = c.text === '#e0e0e0' ? 'rgba(96,165,250,0.18)' : 'rgba(37,99,235,0.15)';
       const upperPts = bandUpper
         .filter((p: any) => typeof p?.tau_days === 'number' && typeof p?.model_rate === 'number');
       const lowerPts = bandLower
         .filter((p: any) => typeof p?.tau_days === 'number' && typeof p?.model_rate === 'number');
       if (upperPts.length > 0 && lowerPts.length > 0) {
         promotedBandRendered = true;
-        // Each data item: [tau, upper_rate, lower_rate]
         const polyData = upperPts.map((p: any, i: number) => {
           const lower = i < lowerPts.length ? lowerPts[i].model_rate : p.model_rate;
           return [p.tau_days, p.model_rate, lower];
         });
-        const fill = bandColour;
+        // Pure diagonal hatch — no solid fill.
+        const hatchGap = 5;
+        const hatchStroke = c.text === '#e0e0e0' ? 'rgba(156,163,175,0.45)' : 'rgba(107,114,128,0.40)';
         seriesOut.push({
           id: 'bayes_band',
           name: `Bayes ${settings.bayes_band_level || '90'}% band`,
@@ -327,28 +391,31 @@ export function buildCohortMaturityEChartsOption(
           coordinateSystem: 'cartesian2d',
           encode: { x: 0, y: 1 },
           renderItem: (params: any, api: any) => {
-            // Draw the full polygon on the first data point only.
-            // api.value() only reads the CURRENT dataIndex, so we use the
-            // closure-captured polyData directly and convert via api.coord().
             if (params.dataIndex !== 0) return;
-            const points: number[][] = [];
-            // Upper curve left → right
-            for (let i = 0; i < polyData.length; i++) {
-              points.push(api.coord([polyData[i][0], polyData[i][1]]));
-            }
-            // Lower curve right → left
-            for (let i = polyData.length - 1; i >= 0; i--) {
-              points.push(api.coord([polyData[i][0], polyData[i][2]]));
+            const pts: number[][] = [];
+            for (let i = 0; i < polyData.length; i++) pts.push(api.coord([polyData[i][0], polyData[i][1]]));
+            for (let i = polyData.length - 1; i >= 0; i--) pts.push(api.coord([polyData[i][0], polyData[i][2]]));
+            // Diagonal hatch lines clipped to band polygon — no background fill.
+            let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+            for (const p of pts) { minX = Math.min(minX, p[0]); maxX = Math.max(maxX, p[0]); minY = Math.min(minY, p[1]); maxY = Math.max(maxY, p[1]); }
+            const h = maxY - minY;
+            const diag = (maxX - minX) + h;
+            const lines: any[] = [];
+            for (let d = 0; d < diag; d += hatchGap) {
+              lines.push({ type: 'line', shape: { x1: minX + d, y1: minY, x2: minX + d - h, y2: maxY }, style: { stroke: hatchStroke, lineWidth: 1 }, silent: true });
             }
             return {
-              type: 'polygon',
-              shape: { points, smooth: 0.3 },
-              style: { fill, stroke: 'none' },
+              type: 'group',
+              children: [{
+                type: 'group',
+                children: lines,
+                clipPath: { type: 'polygon', shape: { points: pts, smooth: 0.3 } },
+              }],
               silent: true,
             };
           },
           data: polyData,
-          z: 9,
+          z: 1,
           silent: true,
         });
       }
@@ -358,10 +425,10 @@ export function buildCohortMaturityEChartsOption(
     // Falls back to the legacy bayesCurve/methodBCurve if sourceModelCurves not present.
     const sourceModelCurves = entry?.sourceModelCurves;
     if (sourceModelCurves && typeof sourceModelCurves === 'object') {
-      const sourceStyles: Record<string, { colour: [string, string]; dash: string; name: string; settingKey: string; z: number }> = {
-        analytic:    { colour: ['#f87171', '#dc2626'], dash: 'dotted',  name: 'Analytic (FE)', settingKey: 'show_model_analytic',    z: 10 },
-        analytic_be: { colour: ['#a78bfa', '#7c3aed'], dash: 'dotted',  name: 'Analytic (BE)', settingKey: 'show_model_analytic_be', z: 10 },
-        bayesian:    { colour: ['#60a5fa', '#2563eb'], dash: 'dashed',  name: 'Bayesian',      settingKey: 'show_model_bayesian',    z: 11 },
+      const sourceStyles: Record<string, { dash: number[]; name: string; settingKey: string; z: number }> = {
+        analytic:    { dash: MODEL_DASH.analytic,    name: 'Analytic (FE)', settingKey: 'show_model_analytic',    z: 10 },
+        analytic_be: { dash: MODEL_DASH.analytic_be, name: 'Analytic (BE)', settingKey: 'show_model_analytic_be', z: 10 },
+        bayesian:    { dash: MODEL_DASH.bayesian,    name: 'Bayesian',      settingKey: 'show_model_bayesian',    z: 11 },
       };
 
       for (const [srcName, srcData] of Object.entries(sourceModelCurves)) {
@@ -379,7 +446,6 @@ export function buildCohortMaturityEChartsOption(
           .map((p: any) => ({ value: [p.tau_days, p.model_rate] }));
         if (curveData.length === 0) continue;
 
-        const colour = c.text === '#e0e0e0' ? style.colour[0] : style.colour[1];
         seriesOut.push({
           id: `model_cdf_${srcName}`,
           name: style.name,
@@ -387,8 +453,8 @@ export function buildCohortMaturityEChartsOption(
           showSymbol: false,
           smooth: true,
           connectNulls: false,
-          lineStyle: { width: 2, color: colour, type: style.dash as any, opacity: 0.85 },
-          itemStyle: { color: colour },
+          lineStyle: { width: 2, color: modelColour, type: style.dash as any, opacity: 0.85 },
+          itemStyle: { color: modelColour },
           emphasis: { disabled: true },
           z: style.z,
           data: curveData,
@@ -402,17 +468,16 @@ export function buildCohortMaturityEChartsOption(
 
         // Bayesian confidence band from per-source data (skip if already rendered by promoted view)
         if (srcName === 'bayesian' && !promotedBandRendered) {
-          const bandUpper = (srcData as any)?.band_upper;
-          const bandLower = (srcData as any)?.band_lower;
-          if (Array.isArray(bandUpper) && bandUpper.length > 0 && Array.isArray(bandLower) && bandLower.length > 0) {
-            const bandColour = c.text === '#e0e0e0' ? 'rgba(96,165,250,0.18)' : 'rgba(37,99,235,0.15)';
-            const upperPts = bandUpper
-              .filter((p: any) => typeof p?.tau_days === 'number' && typeof p?.model_rate === 'number');
-            const lowerPts = bandLower
-              .filter((p: any) => typeof p?.tau_days === 'number' && typeof p?.model_rate === 'number');
-            if (upperPts.length > 0 && lowerPts.length > 0) {
-              const polyData = upperPts.map((p: any, i: number) => {
-                const lower = i < lowerPts.length ? lowerPts[i].model_rate : p.model_rate;
+          const bandUpperSrc = (srcData as any)?.band_upper;
+          const bandLowerSrc = (srcData as any)?.band_lower;
+          if (Array.isArray(bandUpperSrc) && bandUpperSrc.length > 0 && Array.isArray(bandLowerSrc) && bandLowerSrc.length > 0) {
+            const hatchStrokeSrc = c.text === '#e0e0e0' ? 'rgba(156,163,175,0.45)' : 'rgba(107,114,128,0.40)';
+            const hatchGapSrc = 5;
+            const upperPtsSrc = bandUpperSrc.filter((p: any) => typeof p?.tau_days === 'number' && typeof p?.model_rate === 'number');
+            const lowerPtsSrc = bandLowerSrc.filter((p: any) => typeof p?.tau_days === 'number' && typeof p?.model_rate === 'number');
+            if (upperPtsSrc.length > 0 && lowerPtsSrc.length > 0) {
+              const polyDataSrc = upperPtsSrc.map((p: any, i: number) => {
+                const lower = i < lowerPtsSrc.length ? lowerPtsSrc[i].model_rate : p.model_rate;
                 return [p.tau_days, p.model_rate, lower];
               });
               seriesOut.push({
@@ -423,21 +488,23 @@ export function buildCohortMaturityEChartsOption(
                 encode: { x: 0, y: 1 },
                 renderItem: (params: any, api: any) => {
                   if (params.dataIndex !== 0) return;
-                  const points: number[][] = [];
-                  for (let i = 0; i < polyData.length; i++) {
-                    points.push(api.coord([polyData[i][0], polyData[i][1]]));
-                  }
-                  for (let i = polyData.length - 1; i >= 0; i--) {
-                    points.push(api.coord([polyData[i][0], polyData[i][2]]));
+                  const pts: number[][] = [];
+                  for (let i = 0; i < polyDataSrc.length; i++) pts.push(api.coord([polyDataSrc[i][0], polyDataSrc[i][1]]));
+                  for (let i = polyDataSrc.length - 1; i >= 0; i--) pts.push(api.coord([polyDataSrc[i][0], polyDataSrc[i][2]]));
+                  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+                  for (const p of pts) { minX = Math.min(minX, p[0]); maxX = Math.max(maxX, p[0]); minY = Math.min(minY, p[1]); maxY = Math.max(maxY, p[1]); }
+                  const h = maxY - minY; const diag = (maxX - minX) + h;
+                  const lines: any[] = [];
+                  for (let d = 0; d < diag; d += hatchGapSrc) {
+                    lines.push({ type: 'line', shape: { x1: minX + d, y1: minY, x2: minX + d - h, y2: maxY }, style: { stroke: hatchStrokeSrc, lineWidth: 1 }, silent: true });
                   }
                   return {
-                    type: 'polygon',
-                    shape: { points, smooth: 0.3 },
-                    style: { fill: bandColour, stroke: 'none' },
+                    type: 'group',
+                    children: [{ type: 'group', children: lines, clipPath: { type: 'polygon', shape: { points: pts, smooth: 0.3 } } }],
                     silent: true,
                   };
                 },
-                data: polyData,
+                data: polyDataSrc,
                 z: 9,
                 silent: true,
               });
@@ -452,7 +519,6 @@ export function buildCohortMaturityEChartsOption(
           .filter((p: any) => typeof p?.tau_days === 'number' && typeof p?.model_rate === 'number')
           .map((p: any) => ({ value: [p.tau_days, p.model_rate] }));
         if (bayesData.length > 0) {
-          const bayesColour = c.text === '#e0e0e0' ? '#60a5fa' : '#2563eb';
           seriesOut.push({
             id: 'model_cdf_bayes',
             name: 'Bayesian Model',
@@ -460,8 +526,8 @@ export function buildCohortMaturityEChartsOption(
             showSymbol: false,
             smooth: true,
             connectNulls: false,
-            lineStyle: { width: 2, color: bayesColour, type: 'dashed', opacity: 0.85 },
-            itemStyle: { color: bayesColour },
+            lineStyle: { width: 2, color: modelColour, type: MODEL_DASH.bayesian as any, opacity: 0.85 },
+            itemStyle: { color: modelColour },
             emphasis: { disabled: true },
             z: 11,
             data: bayesData,
@@ -483,6 +549,14 @@ export function buildCohortMaturityEChartsOption(
   let maxRate = 0;
   for (const s of seriesOut) {
     if (s.id === 'bayes_band') continue; // handled below via raw upper data
+    // Fan series data is [tau, upper, lower] arrays — check index 1 (upper).
+    if (typeof s.id === 'string' && s.id.endsWith('::fan')) {
+      for (const d of (s.data || [])) {
+        const v = Array.isArray(d) ? d[1] : undefined;
+        if (typeof v === 'number' && Number.isFinite(v) && v > maxRate) maxRate = v;
+      }
+      continue;
+    }
     for (const d of (s.data || [])) {
       const v = d?.value?.[1];
       if (typeof v === 'number' && Number.isFinite(v) && v > maxRate) maxRate = v;
@@ -508,7 +582,10 @@ export function buildCohortMaturityEChartsOption(
       }
     }
   }
-  const yMax = settings.y_axis_max ?? Math.min(1.0, Math.max(0.05, Math.ceil((maxRate * 1.2) * 20) / 20));
+  const yMaxAuto = Math.min(1.0, Math.max(0.05, Math.ceil((maxRate * 1.2) * 20) / 20));
+  const yMaxSetting = settings.rate_extent ?? settings.y_axis_max;
+  const yMax = (yMaxSetting && yMaxSetting !== 'auto' && Number.isFinite(Number(yMaxSetting)))
+    ? Number(yMaxSetting) : yMaxAuto;
   const showLegend = settings.show_legend ?? true;
   const legendPos = (settings.legend_position as string) || 'top';
 
@@ -566,7 +643,11 @@ export function buildCohortMaturityEChartsOption(
       nameGap: 30,
       nameTextStyle: { fontSize: 8, color: c.text },
       min: settings.x_axis_min ?? 0,
-      ...(maxTau !== null && Number.isFinite(maxTau) ? { max: settings.x_axis_max ?? maxTau } : {}),
+      ...(() => {
+        const ext = settings.tau_extent ?? settings.x_axis_max;
+        if (ext && ext !== 'auto' && Number.isFinite(Number(ext))) return { max: Number(ext) };
+        return maxTau !== null && Number.isFinite(maxTau) ? { max: maxTau } : {};
+      })(),
       axisLabel: { fontSize: 9, color: c.text, formatter: (v: number) => `${Math.round(v)}` },
       axisPointer: {
         snap: true,
@@ -603,8 +684,18 @@ export function buildCohortMaturityEChartsOption(
         : legendPos === 'left' ? { top: 'middle', left: 4, orient: 'vertical' as const }
         : legendPos === 'right' ? { top: 'middle', right: 4, orient: 'vertical' as const }
         : { top: 14, left: 12 }),
-      textStyle: { fontSize: 8, color: c.text }, icon: 'roundRect', itemGap: 6, itemWidth: 12, itemHeight: 8,
-      data: seriesOut.map(s => s.name).filter(Boolean),
+      textStyle: { fontSize: 8, color: c.text }, itemGap: 6, itemWidth: 36, itemHeight: 8,
+      data: seriesOut.filter(s => s.name).map(s => {
+        const isModel = typeof s.id === 'string' && (s.id.startsWith('model_cdf') || s.id === 'bayes_band' || s.id === 'bayes_band_source');
+        const isBand = typeof s.id === 'string' && (s.id === 'bayes_band' || s.id === 'bayes_band_source');
+        if (isBand) {
+          // Hatched band: use a tiny SVG path of diagonal lines as the icon
+          return { name: s.name, icon: 'path://M0,0L4,8M4,0L8,8M8,0L12,8', itemStyle: { color: 'none', borderColor: modelColour, borderWidth: 1 } };
+        }
+        // Scenario series: coloured rectangle. Model series: no icon override
+        // so ECharts draws the actual lineStyle (dash pattern) from the series.
+        return isModel ? { name: s.name } : { name: s.name, icon: 'roundRect' };
+      }),
     } : { show: false },
     series: seriesOut,
     dagnet_meta: {

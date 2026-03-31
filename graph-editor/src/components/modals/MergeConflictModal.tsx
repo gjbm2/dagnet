@@ -85,9 +85,9 @@ export function MergeConflictModal({
     setResolutions(next);
   };
 
-  const handleAcceptMergedAll = () => {
+  const handleAcceptAll = (resolution: ConflictResolution) => {
     const next = new Map(resolutions);
-    for (const c of conflicts) next.set(c.fileId, 'merged');
+    for (const c of conflicts) next.set(c.fileId, resolution);
     setResolutions(next);
   };
 
@@ -228,11 +228,27 @@ export function MergeConflictModal({
           <div className="footer-batch-actions">
             <button
               className="button batch primary"
-              onClick={handleAcceptMergedAll}
+              onClick={() => handleAcceptAll('merged')}
               disabled={isResolving}
               title="Accept the auto-merged result for all files"
             >
               Accept Merged for all
+            </button>
+            <button
+              className="button batch"
+              onClick={() => handleAcceptAll('remote')}
+              disabled={isResolving}
+              title="Use the remote version for all files"
+            >
+              Accept Remote for all
+            </button>
+            <button
+              className="button batch"
+              onClick={() => handleAcceptAll('local')}
+              disabled={isResolving}
+              title="Keep the local version for all files"
+            >
+              Accept Local for all
             </button>
             <button
               className="button secondary"

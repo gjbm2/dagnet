@@ -109,10 +109,10 @@ export function registerStalenessNudgeJobs(): void {
 
       if (!updateSignal.isOutdated) return;
 
-      // Dashboard mode: auto-reload.
+      // Dashboard mode: auto-reload (no banner — nobody to click it).
       if (nc.isDashboardMode) {
-        const didReload = stalenessNudgeService.maybeAutoReloadForUpdate(APP_VERSION, now, storage);
-        if (didReload) return;
+        stalenessNudgeService.maybeAutoReloadForUpdate(APP_VERSION, now, storage);
+        return;
       }
 
       // Interactive mode: show banner.

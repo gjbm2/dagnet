@@ -451,25 +451,14 @@ const COHORT_MATURITY_RESULT = {
 };
 
 describe('buildCohortMaturityEChartsOption', () => {
-  it('should produce series with segment split (solid + dashed + future)', () => {
+  it('should produce solid + dashed evidence series (midpoint requires model data)', () => {
     const option = buildCohortMaturityEChartsOption(COHORT_MATURITY_RESULT, {}, { visibleScenarioIds: ['current'] });
     expect(option).not.toBeNull();
-    expect(option.series.length).toBeGreaterThanOrEqual(3);
 
     const ids = option.series.map((s: any) => s.id);
-    expect(ids).toContain('current::baseSolid');
-    expect(ids).toContain('current::baseDashed');
-    expect(ids).toContain('current::futureForecast');
-  });
-
-  it('should include crown fill series in f+e mode', () => {
-    const option = buildCohortMaturityEChartsOption(COHORT_MATURITY_RESULT, {}, {
-      visibleScenarioIds: ['current'],
-      scenarioVisibilityModes: { current: 'f+e' },
-    });
-    const ids = option.series.map((s: any) => s.id);
-    expect(ids).toContain('current::crownUpper');
-    expect(ids).toContain('current::crownMask');
+    expect(ids).toContain('current::solid');
+    expect(ids).toContain('current::dashedEvidence');
+    // midpoint series only present when model curve data provides it
   });
 
   it('should render forecast-only in f mode', () => {
@@ -488,10 +477,10 @@ describe('buildCohortMaturityEChartsOption', () => {
       scenarioVisibilityModes: { current: 'e' },
     });
     const ids = option.series.map((s: any) => s.id);
-    expect(ids).toContain('current::baseSolid');
-    expect(ids).toContain('current::baseDashed');
-    expect(ids).not.toContain('current::crownUpper');
-    expect(ids).not.toContain('current::futureForecast');
+    expect(ids).toContain('current::solid');
+    expect(ids).not.toContain('current::dashedEvidence');
+    expect(ids).not.toContain('current::midpoint');
+    expect(ids).not.toContain('current::fan');
   });
 
   it('should embed dagnet_meta with subject_id and date ranges', () => {

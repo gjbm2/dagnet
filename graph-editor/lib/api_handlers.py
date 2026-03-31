@@ -1507,6 +1507,51 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
                             result['source_model_curves'] = source_curve_results
                             result['promoted_source'] = _promoted_source or model_params.get('promoted_source', 'best_available')
 
+                    # ── Cohort maturity fan chart ──────────────────────
+                    # Compute per-τ midpoint + fan bounds using upstream x
+                    # forecasting and this edge's y forecast.
+                    if (analysis_type == 'cohort_maturity'
+                            and 'frames' in result
+                            and subj.get('anchor_from') and subj.get('anchor_to')
+                            and subj.get('sweep_to')):
+                        try:
+                            from runner.cohort_forecast import compute_cohort_maturity_fan
+
+                            # Build band/model lookups from source curves (bayesian)
+                            _src_bayes = source_curve_results.get('bayesian', {}) if source_curve_results else {}
+                            _band_upper_by_tau: Dict[int, float] = {}
+                            _band_lower_by_tau: Dict[int, float] = {}
+                            for pt in (_src_bayes.get('band_upper') or []):
+                                if isinstance(pt, dict) and 'tau_days' in pt and 'model_rate' in pt:
+                                    _band_upper_by_tau[int(pt['tau_days'])] = float(pt['model_rate'])
+                            for pt in (_src_bayes.get('band_lower') or []):
+                                if isinstance(pt, dict) and 'tau_days' in pt and 'model_rate' in pt:
+                                    _band_lower_by_tau[int(pt['tau_days'])] = float(pt['model_rate'])
+                            # Model curve rate (promoted)
+                            _model_rate_by_tau: Dict[int, float] = {}
+                            for pt in (result.get('model_curve') or []):
+                                if isinstance(pt, dict) and 'tau_days' in pt and 'model_rate' in pt:
+                                    _model_rate_by_tau[int(pt['tau_days'])] = float(pt['model_rate'])
+
+                            fan_data = compute_cohort_maturity_fan(
+                                frames=result['frames'],
+                                graph=graph,
+                                target_edge_id=target_id,
+                                edge_params=model_params,
+                                band_upper_by_tau=_band_upper_by_tau,
+                                band_lower_by_tau=_band_lower_by_tau,
+                                model_rate_by_tau=_model_rate_by_tau,
+                                anchor_from=subj['anchor_from'],
+                                anchor_to=subj['anchor_to'],
+                                sweep_to=subj['sweep_to'],
+                            )
+                            if fan_data:
+                                result['fan_chart'] = {
+                                    str(tau): vals for tau, vals in fan_data.items()
+                                }
+                        except Exception as e:
+                            print(f"[cohort_maturity_fan] Error computing fan: {e}")
+
             per_subject_results.append({
                 "subject_id": subj.get('subject_id'),
                 "success": True,
