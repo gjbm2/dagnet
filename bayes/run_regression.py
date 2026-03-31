@@ -86,9 +86,11 @@ DEFAULT_THRESHOLDS = {
 
 def discover_and_preflight(
     data_repo: str,
-    graph_filter: str | None = None,
+    graph_filter: str | list[str] | None = None,
 ) -> list[dict]:
     """Discover synth graphs and check data integrity.
+
+    graph_filter: single name, list of names, or None for all.
 
     Returns list of dicts, each with:
         graph_name, truth_path, truth, status, reason, needs_bootstrap
@@ -97,7 +99,10 @@ def discover_and_preflight(
 
     graphs = discover_synth_graphs(data_repo)
     if graph_filter:
-        graphs = [g for g in graphs if g["graph_name"] == graph_filter]
+        if isinstance(graph_filter, str):
+            graph_filter = [graph_filter]
+        allowed = set(graph_filter)
+        graphs = [g for g in graphs if g["graph_name"] in allowed]
 
     results = []
     for g in graphs:

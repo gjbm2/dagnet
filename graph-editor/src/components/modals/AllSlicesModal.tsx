@@ -16,7 +16,11 @@ import toast from 'react-hot-toast';
 import type { GraphData } from '../../types';
 import { requestPutToBase } from '../../hooks/usePutToBaseRequestListener';
 import { useTheme } from '../../contexts/ThemeContext';
+import { enumerateFetchTargets } from '../../services/fetchTargetEnumerationService';
 import './Modal.css';
+
+/** Warn (not block) when estimated total API calls exceed this threshold. */
+const API_CALL_WARNING_THRESHOLD = 100;
 
 interface AllSlicesModalProps {
   isOpen: boolean;
@@ -100,8 +104,22 @@ export function AllSlicesModal({
 
   const selectedSlices = useMemo(() => slices.filter(s => s.selected), [slices]);
 
+  const fetchTargetCount = useMemo(
+    () => graph ? enumerateFetchTargets(graph as any).length : 0,
+    [graph],
+  );
+  const estimatedApiCalls = selectedSlices.length * fetchTargetCount;
+
   const executeAllSlicesFetch = () => {
     if (!graph || selectedSlices.length === 0) return;
+
+    if (estimatedApiCalls > API_CALL_WARNING_THRESHOLD) {
+      const ok = window.confirm(
+        `This will make ~${estimatedApiCalls} API calls to Amplitude ` +
+        `(${selectedSlices.length} slices × ${fetchTargetCount} params). Continue?`
+      );
+      if (!ok) return;
+    }
 
     // Derive workspace identity from the active graph file for DB coverage preflight.
     const activeTab = activeTabId ? tabs.find(t => t.id === activeTabId) : undefined;
@@ -205,9 +223,9 @@ export function AllSlicesModal({
                 <div style={{ fontSize: '13px', color: '#666' }}>
                   {selectedSlices.length} selected
                 </div>
-                {slices.length > 50 && (
+                {estimatedApiCalls > API_CALL_WARNING_THRESHOLD && (
                   <div style={{ marginTop: '8px', padding: '8px', background: dark ? '#3b2f0e' : '#FEF3C7', borderRadius: '4px', fontSize: '12px', color: dark ? '#fbbf24' : '#854D0E' }}>
-                    ⚠️ {slices.length} slices is a large number and may take considerable time
+                    ⚠️ ~{estimatedApiCalls} Amplitude API calls ({selectedSlices.length} slices × {fetchTargetCount} params)
                   </div>
                 )}
               </div>

@@ -549,7 +549,7 @@ def _fit_graph_compiler(payload: dict, report_progress=None) -> dict:
         progress.set_band(*P1_COMPILE)
         report("compiling", 0, f"{phase1_label}: Building model…")
         features = settings.get("features") or {}
-        model, metadata = build_model(topology, evidence, features=features)
+        model, metadata = build_model(topology, evidence, features=features, settings=settings)
         _log(log,f"model: {len(model.free_RVs)} free vars, {len(model.observed_RVs)} observed")
         for d in metadata.get("diagnostics", []):
             _log(log,f"  model: {d}")
@@ -571,11 +571,11 @@ def _fit_graph_compiler(payload: dict, report_progress=None) -> dict:
 
         # ── 5. Run inference ──
         sampling_config = SamplingConfig(
-            draws=settings.get("draws", 2000),
-            tune=settings.get("tune", 1000),
-            chains=settings.get("chains", 4),
+            draws=int(settings.get("draws", settings.get("bayes_draws", 2000))),
+            tune=int(settings.get("tune", settings.get("bayes_tune", 1000))),
+            chains=int(settings.get("chains", settings.get("bayes_chains", 4))),
             cores=settings.get("cores"),
-            target_accept=settings.get("target_accept", 0.90),
+            target_accept=float(settings.get("target_accept", settings.get("bayes_target_accept", 0.90))),
             random_seed=settings.get("random_seed"),
         )
 
@@ -784,6 +784,7 @@ def _fit_graph_compiler(payload: dict, report_progress=None) -> dict:
             model2, metadata2 = build_model(
                 topology, evidence, features=features,
                 phase2_frozen=phase2_frozen,
+                settings=settings,
             )
             _log(log, f"  Phase 2 model: {len(model2.free_RVs)} free vars, "
                        f"{len(model2.observed_RVs)} observed, "

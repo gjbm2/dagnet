@@ -95,9 +95,13 @@ function parseExpression(dsl: string): string[] {
       const prefix = trimmed.substring(0, parenEnd + 1);
       const suffix = trimmed.substring(parenEnd + 1);
       
-      // Parse prefix, distribute suffix
+      // Parse prefix, distribute suffix (re-parse so semicolons in suffix are expanded)
       const prefixBranches = parseExpression(prefix);
-      return prefixBranches.map(b => b + suffix);
+      const branches: string[] = [];
+      for (const b of prefixBranches) {
+        branches.push(...parseExpression(b + suffix));
+      }
+      return branches;
     }
   }
   

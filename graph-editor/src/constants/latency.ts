@@ -493,12 +493,55 @@ export interface ForecastingSettings {
   // Bayesian fit_history retention (doc 27)
   bayes_fit_history_interval_days: number;
   bayes_fit_history_max_days: number;
+  // Bayesian model priors
+  bayes_log_kappa_mu: number;
+  bayes_log_kappa_sigma: number;
+  bayes_fallback_prior_ess: number;
+  bayes_dirichlet_conc_floor: number;
+  bayes_sigma_floor: number;
+  bayes_mu_prior_sigma_floor: number;
+  bayes_maturity_floor: number;
+  bayes_softplus_sharpness: number;
+  // Bayesian convergence thresholds
+  bayes_rhat_threshold: number;
+  bayes_ess_threshold: number;
+  bayes_warm_start_rhat_max: number;
+  bayes_warm_start_ess_min: number;
+  bayes_hdi_prob: number;
+  // Bayesian sampling
+  bayes_draws: number;
+  bayes_tune: number;
+  bayes_chains: number;
+  bayes_target_accept: number;
 }
 
 /**
  * Build the ForecastingSettings object for inclusion in API requests.
  * Single choke-point: all constants are bundled here.
  */
+// ── Bayesian model priors (defaults match Python dataclass) ──
+export const BAYES_LOG_KAPPA_MU = 3.4012;          // log(30) — κ prior centre
+export const BAYES_LOG_KAPPA_SIGMA = 1.5;           // κ prior width → 95% CI [2, 500]
+export const BAYES_FALLBACK_PRIOR_ESS = 20;         // fallback Beta prior ESS
+export const BAYES_DIRICHLET_CONC_FLOOR = 0.5;      // min Beta/Dirichlet concentration
+export const BAYES_SIGMA_FLOOR = 0.01;              // min latency σ (no-latency threshold)
+export const BAYES_MU_PRIOR_SIGMA_FLOOR = 0.5;      // min μ prior uncertainty
+export const BAYES_MATURITY_FLOOR = 0.9;            // min CDF for dispersion estimation
+export const BAYES_SOFTPLUS_SHARPNESS = 5.0;        // onset boundary sharpness
+
+// ── Bayesian convergence thresholds ──
+export const BAYES_RHAT_THRESHOLD = 1.05;           // max rhat for convergence
+export const BAYES_ESS_THRESHOLD = 400;             // min ESS for convergence
+export const BAYES_WARM_START_RHAT_MAX = 1.10;      // warm-start quality gate
+export const BAYES_WARM_START_ESS_MIN = 100;        // warm-start quality gate
+export const BAYES_HDI_PROB = 0.90;                 // credible interval probability
+
+// ── Bayesian sampling ──
+export const BAYES_DRAWS = 2000;                    // MCMC draws per chain
+export const BAYES_TUNE = 1000;                     // MCMC warmup per chain
+export const BAYES_CHAINS = 4;                      // number of MCMC chains
+export const BAYES_TARGET_ACCEPT = 0.90;            // NUTS target acceptance
+
 export function buildForecastingSettings(): ForecastingSettings {
   return {
     min_fit_converters: LATENCY_MIN_FIT_CONVERTERS,
@@ -514,6 +557,23 @@ export function buildForecastingSettings(): ForecastingSettings {
     fit_left_censor_days: LATENCY_FE_FIT_LEFT_CENSOR_DAYS,
     bayes_fit_history_interval_days: BAYES_FIT_HISTORY_INTERVAL_DAYS,
     bayes_fit_history_max_days: BAYES_FIT_HISTORY_MAX_DAYS,
+    bayes_log_kappa_mu: BAYES_LOG_KAPPA_MU,
+    bayes_log_kappa_sigma: BAYES_LOG_KAPPA_SIGMA,
+    bayes_fallback_prior_ess: BAYES_FALLBACK_PRIOR_ESS,
+    bayes_dirichlet_conc_floor: BAYES_DIRICHLET_CONC_FLOOR,
+    bayes_sigma_floor: BAYES_SIGMA_FLOOR,
+    bayes_mu_prior_sigma_floor: BAYES_MU_PRIOR_SIGMA_FLOOR,
+    bayes_maturity_floor: BAYES_MATURITY_FLOOR,
+    bayes_softplus_sharpness: BAYES_SOFTPLUS_SHARPNESS,
+    bayes_rhat_threshold: BAYES_RHAT_THRESHOLD,
+    bayes_ess_threshold: BAYES_ESS_THRESHOLD,
+    bayes_warm_start_rhat_max: BAYES_WARM_START_RHAT_MAX,
+    bayes_warm_start_ess_min: BAYES_WARM_START_ESS_MIN,
+    bayes_hdi_prob: BAYES_HDI_PROB,
+    bayes_draws: BAYES_DRAWS,
+    bayes_tune: BAYES_TUNE,
+    bayes_chains: BAYES_CHAINS,
+    bayes_target_accept: BAYES_TARGET_ACCEPT,
   };
 }
 

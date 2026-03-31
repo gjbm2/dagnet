@@ -58,6 +58,60 @@ class TestForecastingSettingsDefaults:
     def test_bayes_fit_history_max_days(self):
         assert ForecastingSettings().bayes_fit_history_max_days == 100
 
+    # ── Bayesian model priors ──
+    def test_bayes_log_kappa_mu(self):
+        assert abs(ForecastingSettings().bayes_log_kappa_mu - 3.4012) < 0.001
+
+    def test_bayes_log_kappa_sigma(self):
+        assert ForecastingSettings().bayes_log_kappa_sigma == 1.5
+
+    def test_bayes_fallback_prior_ess(self):
+        assert ForecastingSettings().bayes_fallback_prior_ess == 20.0
+
+    def test_bayes_dirichlet_conc_floor(self):
+        assert ForecastingSettings().bayes_dirichlet_conc_floor == 0.5
+
+    def test_bayes_sigma_floor(self):
+        assert ForecastingSettings().bayes_sigma_floor == 0.01
+
+    def test_bayes_mu_prior_sigma_floor(self):
+        assert ForecastingSettings().bayes_mu_prior_sigma_floor == 0.5
+
+    def test_bayes_maturity_floor(self):
+        assert ForecastingSettings().bayes_maturity_floor == 0.9
+
+    def test_bayes_softplus_sharpness(self):
+        assert ForecastingSettings().bayes_softplus_sharpness == 5.0
+
+    # ── Bayesian convergence thresholds ──
+    def test_bayes_rhat_threshold(self):
+        assert ForecastingSettings().bayes_rhat_threshold == 1.05
+
+    def test_bayes_ess_threshold(self):
+        assert ForecastingSettings().bayes_ess_threshold == 400.0
+
+    def test_bayes_warm_start_rhat_max(self):
+        assert ForecastingSettings().bayes_warm_start_rhat_max == 1.10
+
+    def test_bayes_warm_start_ess_min(self):
+        assert ForecastingSettings().bayes_warm_start_ess_min == 100.0
+
+    def test_bayes_hdi_prob(self):
+        assert ForecastingSettings().bayes_hdi_prob == 0.90
+
+    # ── Bayesian sampling ──
+    def test_bayes_draws(self):
+        assert ForecastingSettings().bayes_draws == 2000.0
+
+    def test_bayes_tune(self):
+        assert ForecastingSettings().bayes_tune == 1000.0
+
+    def test_bayes_chains(self):
+        assert ForecastingSettings().bayes_chains == 4.0
+
+    def test_bayes_target_accept(self):
+        assert ForecastingSettings().bayes_target_accept == 0.90
+
 
 class TestSettingsFromDict:
 

@@ -108,6 +108,11 @@ export interface AnalysisTypeMeta {
    */
   renderMinimised?: MinimisedRenderer;
   /**
+   * Optional label override for the minimised hover title.
+   * Receives the same props as renderMinimised; returns a string or null to use the default.
+   */
+  minimisedLabel?: (props: { result: any; settings: Record<string, any>; label?: string }) => string | null;
+  /**
    * Dimensions for the custom minimised state. Defaults to { width: 32, height: 32 }.
    * Only used when renderMinimised is provided and returns non-null.
    */
@@ -346,7 +351,15 @@ export const ANALYSIS_TYPES: AnalysisTypeMeta[] = [
     selectionHint: 'Use from(a).to(b) to select an edge',
     icon: Gauge,
     renderMinimised: (props) => React.createElement(MinimisedSurpriseGauge, props),
-    minimisedSize: { width: 56, height: 36 },
+    minimisedLabel: ({ result, settings, label }) => {
+      const selectedVar = settings?.surprise_var || 'p';
+      if (selectedVar === 'all' || !result?.variables) return null;
+      const v = result.variables.find((x: any) => x.available && x.name === selectedVar);
+      if (!v) return null;
+      const subject = label ? ` — ${label}` : '';
+      return `${v.label} (${v.name})${subject}`;
+    },
+    minimisedSize: { width: 32, height: 32 },
   },
   // Bayes fit — not a user-visible analysis type. Used internally by
   // useBayesTrigger to build snapshot subjects for the compiler's

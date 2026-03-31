@@ -281,7 +281,8 @@ def _ess_decay_scale(
 
 def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
                 features: dict | None = None,
-                phase2_frozen: dict | None = None):
+                phase2_frozen: dict | None = None,
+                settings: dict | None = None):
     """Build a PyMC model from the topology and bound evidence.
 
     This is the main entry point. It walks the graph in topological order
@@ -343,6 +344,7 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
     import numpy as np
 
     features = features or {}
+    _s = settings or {}
     feat_latent_latency = features.get("latent_latency", True)
     feat_cohort_latency = features.get("cohort_latency", True)
     feat_overdispersion = features.get("overdispersion", True)
@@ -350,6 +352,17 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
     feat_window_only = features.get("window_only", False)
     feat_neutral_prior = features.get("neutral_prior", False)
     is_phase2 = phase2_frozen is not None
+
+    # Settings-driven model constants (fall back to module-level defaults).
+    # Keys match the UPPER_CASE convention used in settings.yaml and the FE.
+    _log_kappa_mu_default = float(_s.get("BAYES_LOG_KAPPA_MU", _s.get("bayes_log_kappa_mu", LOG_KAPPA_MU)))
+    _log_kappa_sigma_default = float(_s.get("BAYES_LOG_KAPPA_SIGMA", _s.get("bayes_log_kappa_sigma", LOG_KAPPA_SIGMA)))
+    _fallback_prior_ess = float(_s.get("BAYES_FALLBACK_PRIOR_ESS", _s.get("bayes_fallback_prior_ess", FALLBACK_PRIOR_ESS)))
+    _s_dirichlet_conc_floor = float(_s.get("BAYES_DIRICHLET_CONC_FLOOR", _s.get("bayes_dirichlet_conc_floor", DIRICHLET_CONC_FLOOR)))
+    _sigma_floor = float(_s.get("BAYES_SIGMA_FLOOR", _s.get("bayes_sigma_floor", SIGMA_FLOOR)))
+    _mu_prior_sigma_floor = float(_s.get("BAYES_MU_PRIOR_SIGMA_FLOOR", _s.get("bayes_mu_prior_sigma_floor", MU_PRIOR_SIGMA_FLOOR)))
+    _maturity_floor = float(_s.get("BAYES_MATURITY_FLOOR", _s.get("bayes_maturity_floor", MATURITY_FLOOR)))
+    _softplus_k = float(_s.get("BAYES_SOFTPLUS_SHARPNESS", _s.get("bayes_softplus_sharpness", SOFTPLUS_SHARPNESS)))
 
     diagnostics: list[str] = []
     phase_label = "Phase 2 (cohort, frozen p)" if is_phase2 else "Phase 1 (window)"
@@ -569,14 +582,14 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
                         drift_s2 = frozen.get("drift_sigma2", 0.0)
                         scale = _ess_decay_scale(p_alpha, p_beta, elapsed, drift_s2)
                         sibling_edges.append(sib_id)
-                        dir_alphas.append(max(p_alpha * scale, DIRICHLET_CONC_FLOOR))
-                        dir_beta_sum = max(p_beta * scale, DIRICHLET_CONC_FLOOR)
+                        dir_alphas.append(max(p_alpha * scale, _s_dirichlet_conc_floor))
+                        dir_beta_sum = max(p_beta * scale, _s_dirichlet_conc_floor)
                     else:
                         # No Phase 1 posterior — use moderate prior
                         p_mean = frozen.get("p", 0.1)
                         sibling_edges.append(sib_id)
-                        dir_alphas.append(max(p_mean * FALLBACK_PRIOR_ESS, DIRICHLET_CONC_FLOOR))
-                        dir_beta_sum = max((1 - p_mean) * FALLBACK_PRIOR_ESS, DIRICHLET_CONC_FLOOR)
+                        dir_alphas.append(max(p_mean * _fallback_prior_ess, _s_dirichlet_conc_floor))
+                        dir_beta_sum = max((1 - p_mean) * _fallback_prior_ess, _s_dirichlet_conc_floor)
 
                 if sibling_edges:
                     if not bg.is_exhaustive:
@@ -585,7 +598,7 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
                         if len(sibling_edges) == 1:
                             dir_alphas.append(dir_beta_sum)
                         else:
-                            remainder = max(dir_beta_sum - sum(dir_alphas[1:]), DIRICHLET_CONC_FLOOR)
+                            remainder = max(dir_beta_sum - sum(dir_alphas[1:]), _s_dirichlet_conc_floor)
                             dir_alphas.append(remainder)
                     conc_array = np.array(dir_alphas, dtype=np.float64)
 
@@ -602,7 +615,7 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
             else:
                 _emit_dirichlet_prior(
                     bg, topology, evidence, bg_p_vars, edge_var_names,
-                    model, diagnostics, features=features,
+                    model, diagnostics, features=features, settings=_s,
                 )
 
         # =============================================================
@@ -638,7 +651,7 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
             ev = evidence.edges.get(edge_id)
             if et is None or ev is None or ev.skipped:
                 continue
-            if feat_latent_latency and ev.latency_prior is not None and ev.latency_prior.sigma > SIGMA_FLOOR:
+            if feat_latent_latency and ev.latency_prior is not None and ev.latency_prior.sigma > _sigma_floor:
                 safe_id = _safe_var_name(edge_id)
 
                 if is_phase2:
@@ -650,7 +663,7 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
                     mu_frozen = frozen.get("mu", ev.latency_prior.mu)
                     sigma_frozen = frozen.get("sigma", ev.latency_prior.sigma)
                     mu_var = pt.as_tensor_variable(np.float64(mu_frozen))
-                    sigma_var = pt.as_tensor_variable(np.float64(max(sigma_frozen, SIGMA_FLOOR)))
+                    sigma_var = pt.as_tensor_variable(np.float64(max(sigma_frozen, _sigma_floor)))
                     latency_vars[edge_id] = (mu_var, sigma_var)
                     diagnostics.append(
                         f"  latency: {edge_id[:8]}… mu={mu_frozen:.3f}, "
@@ -664,7 +677,7 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
                     mu_var = pm.Normal(
                         f"mu_lat_{safe_id}",
                         mu=mu_prior,
-                        sigma=max(MU_PRIOR_SIGMA_FLOOR, sigma_prior),
+                        sigma=max(_mu_prior_sigma_floor, sigma_prior),
                     )
                     # σ ~ Gamma: must be positive, with mode at the observed
                     # dispersion. gamma_params_from_mode converts
@@ -768,7 +781,7 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
                 continue
 
             safe_id = _safe_var_name(edge_id)
-            path_sigma_ax = max(et.path_sigma_ax, SIGMA_FLOOR)
+            path_sigma_ax = max(et.path_sigma_ax, _sigma_floor)
 
             # FW-composed path latency from edge-level latents
             path_result = _resolve_path_latency(
@@ -818,7 +831,7 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
                     path_sigma_sd += pf.get("sigma_sd", 0.05) ** 2
                 path_onset_sd = max(path_onset_sd ** 0.5, 0.1)
                 path_mu_sd = max(path_mu_sd ** 0.5, 0.02)
-                path_sigma_sd = max(path_sigma_sd ** 0.5, SIGMA_FLOOR)
+                path_sigma_sd = max(path_sigma_sd ** 0.5, _sigma_floor)
 
                 # Cohort latency: always use Phase 1 composed values.
                 #
@@ -887,7 +900,7 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
                 eps_sigma_cohort = pm.Normal(f"eps_sigma_cohort_{safe_id}", mu=0, sigma=1)
                 sigma_cohort = pm.Deterministic(
                     f"sigma_cohort_{safe_id}",
-                    pt.maximum(sigma_path_composed + eps_sigma_cohort * tau_sigma_lat, SIGMA_FLOOR),
+                    pt.maximum(sigma_path_composed + eps_sigma_cohort * tau_sigma_lat, _sigma_floor),
                 )
 
             cohort_latency_vars[edge_id] = (onset_cohort, mu_cohort, sigma_cohort)
@@ -991,8 +1004,8 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
                     _log_kappa_mu = np.log(max(ev.kappa_warm, 1.0))
                     _log_kappa_sigma = 1.0  # tighter than default — warm-start
                 else:
-                    _log_kappa_mu = LOG_KAPPA_MU
-                    _log_kappa_sigma = LOG_KAPPA_SIGMA
+                    _log_kappa_mu = _log_kappa_mu_default
+                    _log_kappa_sigma = _log_kappa_sigma_default
                 _log_kappa = pm.Normal(f"log_kappa_{safe_id}",
                                        mu=_log_kappa_mu, sigma=_log_kappa_sigma)
                 edge_kappa = pm.Deterministic(f"kappa_{safe_id}",
@@ -1034,14 +1047,14 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
                             drift_s2 = frozen.get("drift_sigma2", 0.0)
                             scale = _ess_decay_scale(p_alpha, p_beta, elapsed, drift_s2)
                             p = pm.Beta(f"p_cohort_{safe_id}",
-                                        alpha=max(p_alpha * scale, DIRICHLET_CONC_FLOOR),
-                                        beta=max(p_beta * scale, DIRICHLET_CONC_FLOOR))
+                                        alpha=max(p_alpha * scale, _s_dirichlet_conc_floor),
+                                        beta=max(p_beta * scale, _s_dirichlet_conc_floor))
                         else:
                             # No Phase 1 posterior — fallback to evidence prior
                             p_mean = frozen.get("p", ev.prob_prior.alpha / (ev.prob_prior.alpha + ev.prob_prior.beta))
                             p = pm.Beta(f"p_cohort_{safe_id}",
-                                        alpha=max(p_mean * FALLBACK_PRIOR_ESS, DIRICHLET_CONC_FLOOR),
-                                        beta=max((1 - p_mean) * FALLBACK_PRIOR_ESS, DIRICHLET_CONC_FLOOR))
+                                        alpha=max(p_mean * _fallback_prior_ess, _s_dirichlet_conc_floor),
+                                        beta=max((1 - p_mean) * _fallback_prior_ess, _s_dirichlet_conc_floor))
                         edge_var_names[edge_id] = f"p_cohort_{safe_id}"
 
                     # Phase 2 dispersion: cohort endpoint BetaBinomial
@@ -1056,7 +1069,8 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
                                             cohort_latency_vars=cohort_latency_vars,
                                             kappa=edge_kappa,
                                             onset_vars=onset_vars,
-                                            skip_cohort_trajectories=False)
+                                            skip_cohort_trajectories=False,
+                                            settings=_s)
 
                     # Cohort endpoint BetaBinomial: one observation per
                     # entry-day cohort trajectory. y_final ~ BB(a, p_path×F_path, κ).
@@ -1188,7 +1202,8 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
                                                 cohort_latency_vars=cohort_latency_vars,
                                                 kappa=edge_kappa,
                                                 onset_vars=onset_vars,
-                                                skip_cohort_trajectories=True)
+                                                skip_cohort_trajectories=True,
+                                                settings=_s)
 
                     # Endpoint BetaBinomial: one observation per window
                     # trajectory. y_final ~ BB(n, p×F(age), kappa).
@@ -1241,7 +1256,7 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
                             # CDF at endpoint ages (latent — gradients flow)
                             ages_t = pt.as_tensor_variable(ep_ages)
                             age_minus_onset = ages_t - ep_onset_var
-                            eff_ages = pt.softplus(SOFTPLUS_SHARPNESS * age_minus_onset) / SOFTPLUS_SHARPNESS
+                            eff_ages = pt.softplus(_softplus_k * age_minus_onset) / _softplus_k
                             log_ages = pt.log(pt.maximum(eff_ages, 1e-30))
                             z = (log_ages - ep_mu_var) / (ep_sigma_var * pt.sqrt(2.0))
                             f_endpoints = 0.5 * pt.erfc(-z)
@@ -1286,7 +1301,8 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
                                             latency_vars=latency_vars,
                                             cohort_latency_vars=cohort_latency_vars,
                                             kappa=edge_kappa,
-                                            onset_vars=onset_vars)
+                                            onset_vars=onset_vars,
+                                            settings=_s)
 
             # --- Case D: no data — prior-only edge ---
             else:
@@ -1335,6 +1351,7 @@ def _emit_dirichlet_prior(
     model,
     diagnostics: list[str],
     features: dict | None = None,
+    settings: dict | None = None,
 ) -> None:
     """Emit a Dirichlet prior for a branch group (Phase 1 only).
 
@@ -1361,6 +1378,9 @@ def _emit_dirichlet_prior(
     simplex constraint (probabilities sum to 1).
     """
     import pymc as pm
+
+    _s = settings or {}
+    _s_conc_floor = float(_s.get("BAYES_DIRICHLET_CONC_FLOOR", _s.get("bayes_dirichlet_conc_floor", DIRICHLET_CONC_FLOOR)))
 
     safe_group = _safe_var_name(bg.group_id)
 
@@ -1430,7 +1450,7 @@ def _emit_dirichlet_prior(
     # Build Dirichlet concentration vector
     alpha_vec = [m * kappa for m in prior_means]
 
-    alpha_vec = [max(a, DIRICHLET_CONC_FLOOR) for a in alpha_vec]
+    alpha_vec = [max(a, _s_conc_floor) for a in alpha_vec]
 
     weights = pm.Dirichlet(f"weights_{safe_group}", a=alpha_vec)
 
@@ -1589,6 +1609,7 @@ def _emit_cohort_likelihoods(
     onset_vars: dict[str, object] | None = None,
     skip_cohort_trajectories: bool = False,
     p_cohort_vec=None,
+    settings: dict | None = None,
 ) -> None:
     """Emit cohort likelihoods — the most complex likelihood in the model.
 
@@ -1635,6 +1656,10 @@ def _emit_cohort_likelihoods(
     import pytensor.tensor as pt
     from .completeness import shifted_lognormal_cdf
 
+    _s = settings or {}
+    _sigma_floor = float(_s.get("BAYES_SIGMA_FLOOR", _s.get("bayes_sigma_floor", SIGMA_FLOOR)))
+    _softplus_k = float(_s.get("BAYES_SOFTPLUS_SHARPNESS", _s.get("bayes_softplus_sharpness", SOFTPLUS_SHARPNESS)))
+
     # ---- STEP 1: Collect and route trajectories ----
     #
     # Trajectories come in two types:
@@ -1655,7 +1680,7 @@ def _emit_cohort_likelihoods(
     # See journal 26-Mar-26.
     edge_has_latency = (
         (ev.latency_prior is not None and
-         (ev.latency_prior.sigma > SIGMA_FLOOR or
+         (ev.latency_prior.sigma > _sigma_floor or
           (ev.latency_prior.onset_delta_days or 0) > 0))
         or (latency_vars and ev.edge_id in (latency_vars or {}))
     )
@@ -1909,7 +1934,7 @@ def _emit_cohort_likelihoods(
             if obs_type == "window":
                 onset = ev.latency_prior.onset_delta_days if ev.latency_prior else 0.0
                 mu_fixed = ev.latency_prior.mu if ev.latency_prior else 0.0
-                sigma_fixed = ev.latency_prior.sigma if ev.latency_prior else SIGMA_FLOOR
+                sigma_fixed = ev.latency_prior.sigma if ev.latency_prior else _sigma_floor
             else:
                 et = topology.edges.get(ev.edge_id) if topology else None
                 if et and hasattr(et, 'path_latency') and et.path_latency:
@@ -1921,11 +1946,11 @@ def _emit_cohort_likelihoods(
                     mu_fixed = ev.latency_prior.mu
                     sigma_fixed = ev.latency_prior.sigma
                 else:
-                    onset, mu_fixed, sigma_fixed = 0.0, 0.0, SIGMA_FLOOR
+                    onset, mu_fixed, sigma_fixed = 0.0, 0.0, _sigma_floor
 
         has_any_latency = (has_latent_latency or
                           (ev.latency_prior is not None and
-                           (ev.latency_prior.sigma > SIGMA_FLOOR or
+                           (ev.latency_prior.sigma > _sigma_floor or
                             (ev.latency_prior.onset_delta_days or 0) > 0)))
 
         # ---- STEP 2c: Compute the trajectory likelihood ----
@@ -2007,7 +2032,7 @@ def _emit_cohort_likelihoods(
                     # (onset, mu, sigma) ridge. Sharpened version
                     # collapses the ridge. See journal 30-Mar-26.
                     age_minus_onset = ages_tensor - onset_val
-                    effective_ages = pt.softplus(SOFTPLUS_SHARPNESS * age_minus_onset) / SOFTPLUS_SHARPNESS
+                    effective_ages = pt.softplus(_softplus_k * age_minus_onset) / _softplus_k
                     log_ages = pt.log(pt.maximum(effective_ages, LOG_ARG_FLOOR))
                 else:
                     # Fixed onset: simple subtraction, floor at tiny positive

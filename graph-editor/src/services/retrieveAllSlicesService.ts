@@ -346,6 +346,7 @@ class RetrieveAllSlicesService {
     let totalDaysFetched = 0;
     let aborted = false;
     const sliceStats: SliceStat[] = [];
+    let highVolumeWarned = false;
 
     // For progress reporting
     let runningTotalProcessed = 0;
@@ -400,6 +401,17 @@ class RetrieveAllSlicesService {
         );
 
         totalItems += fetchPlan.items.length;
+
+        if (!highVolumeWarned && totalItems > 100) {
+          highVolumeWarned = true;
+          sessionLogService.warning(
+            'data-fetch',
+            'BATCH_HIGH_VOLUME',
+            `High volume retrieve: ~${totalSlices * fetchPlan.items.length} API calls (${totalSlices} slices × ${fetchPlan.items.length} items)`,
+            undefined,
+            { totalSlices, itemsPerSlice: fetchPlan.items.length },
+          );
+        }
 
         // Track per-slice stats
         let sliceCached = 0;

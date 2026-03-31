@@ -49,7 +49,7 @@ export function PinnedQueryModal({ isOpen, currentDSL, dailyFetch, onSave, onClo
       try {
         // Use TypeScript DSL explosion (local, fast)
         const slices = await explodeDSL(draftDSL);
-        setImpliedSlices(slices.slice(0, 20)); // Show first 20
+        setImpliedSlices(slices);
         setSliceCount(slices.length);
       } catch (err) {
         console.error('Failed to explode DSL:', err);
@@ -171,11 +171,6 @@ export function PinnedQueryModal({ isOpen, currentDSL, dailyFetch, onSave, onClo
               {impliedSlices.map((slice, i) => (
                 <li key={i} style={{ padding: '4px 0', fontSize: '12px', fontFamily: 'Monaco, monospace', color: '#374151' }}>{slice}</li>
               ))}
-              {sliceCount > 20 && (
-                <li style={{ padding: '4px 0', fontStyle: 'italic', color: '#6B7280', fontSize: '12px' }}>
-                  ... and {sliceCount - 20} more slices
-                </li>
-              )}
             </ul>
           </div>
           

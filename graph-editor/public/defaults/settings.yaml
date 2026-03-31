@@ -36,6 +36,62 @@ forecasting:
   # tails would otherwise be incorrectly suppressed.
   LATENCY_MAX_MEAN_MEDIAN_RATIO: 999999
 
+  # ── Bayesian model priors ──────────────────────────────────
+
+  # Centre of LogNormal prior on κ (overdispersion concentration).
+  # log(30) ≈ 3.4. Higher = expect less day-to-day rate variation.
+  BAYES_LOG_KAPPA_MU: 3.4012
+
+  # Width of LogNormal prior on κ. 1.5 → 95% CI ≈ [2, 500].
+  BAYES_LOG_KAPPA_SIGMA: 1.5
+
+  # Effective sample size for fallback Beta prior (no Phase 1 posterior).
+  BAYES_FALLBACK_PRIOR_ESS: 20
+
+  # Minimum Beta/Dirichlet concentration. 0.5 = Jeffreys prior.
+  BAYES_DIRICHLET_CONC_FLOOR: 0.5
+
+  # Minimum latency σ. Below this, edge treated as instant (no latency).
+  BAYES_SIGMA_FLOOR: 0.01
+
+  # Minimum uncertainty on latency μ prior (exploration room for sampler).
+  BAYES_MU_PRIOR_SIGMA_FLOOR: 0.5
+
+  # Minimum CDF completeness for observations in dispersion estimation.
+  BAYES_MATURITY_FLOOR: 0.9
+
+  # Softplus onset sharpness. Higher = sharper cutoff below onset.
+  BAYES_SOFTPLUS_SHARPNESS: 5.0
+
+  # ── Bayesian convergence thresholds ──────────────────────────
+
+  # Max Gelman-Rubin statistic for convergence.
+  BAYES_RHAT_THRESHOLD: 1.05
+
+  # Min effective sample size for convergence.
+  BAYES_ESS_THRESHOLD: 400
+
+  # Quality gate for accepting previous posterior as warm-start.
+  BAYES_WARM_START_RHAT_MAX: 1.10
+  BAYES_WARM_START_ESS_MIN: 100
+
+  # Credible interval probability (0.90 = 90% HDI).
+  BAYES_HDI_PROB: 0.90
+
+  # ── Bayesian sampling ────────────────────────────────────────
+
+  # MCMC draws per chain (post-warmup).
+  BAYES_DRAWS: 2000
+
+  # MCMC warmup iterations per chain.
+  BAYES_TUNE: 1000
+
+  # Number of MCMC chains.
+  BAYES_CHAINS: 4
+
+  # NUTS target acceptance rate.
+  BAYES_TARGET_ACCEPT: 0.90
+
 development:
   debugGitOperations: false
 

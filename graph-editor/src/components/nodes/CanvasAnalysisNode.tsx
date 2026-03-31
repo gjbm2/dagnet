@@ -959,15 +959,18 @@ function CanvasAnalysisNodeInner({ data, selected, dragging }: NodeProps<CanvasA
   if (minimised) {
     const iconSize = 22;
     const TypeIcon = typeMeta?.icon || BarChart3;
-    const minimisedLabel = subjectLabel
-      ? `${subjectLabel} — ${contentItem.title || contentItem.analysis_type || 'Analysis'}`
-      : (contentItem.title || contentItem.analysis_type || 'Analysis');
     const mw = minimisedDims.width;
     const mh = minimisedDims.height;
 
     // Try custom minimised renderer — falls back to generic icon if null
     const cachedResult = contentItemResultCache.get(contentItem?.id) || canvasAnalysisResultCache.get(analysis.id) || result;
     const resolvedSettings = contentItem?.display as Record<string, any> || {};
+
+    const defaultLabel = subjectLabel
+      ? `${subjectLabel} — ${contentItem.title || contentItem.analysis_type || 'Analysis'}`
+      : (contentItem.title || contentItem.analysis_type || 'Analysis');
+    const minimisedLabel = typeMeta?.minimisedLabel?.({ result: cachedResult, settings: resolvedSettings, label: subjectLabel })
+      || defaultLabel;
     const customContent = typeMeta?.renderMinimised
       ? typeMeta.renderMinimised({ result: cachedResult, settings: resolvedSettings, label: subjectLabel })
       : null;

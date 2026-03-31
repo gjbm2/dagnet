@@ -71,6 +71,63 @@ class ForecastingSettings:
     bayes_fit_history_max_days: float = 100
     """Maximum age in days of the oldest retained fit_history entry (doc 27 §4)."""
 
+    # ── Bayesian model priors ─────────────────────────────────
+
+    bayes_log_kappa_mu: float = 3.4012
+    """Centre of LogNormal prior on κ (overdispersion). log(30) ≈ 3.4. Higher = less overdispersion expected."""
+
+    bayes_log_kappa_sigma: float = 1.5
+    """Width of LogNormal prior on κ. 1.5 gives 95% CI ≈ [2, 500]."""
+
+    bayes_fallback_prior_ess: float = 20.0
+    """Effective sample size for fallback Beta prior when no Phase 1 posterior is available."""
+
+    bayes_dirichlet_conc_floor: float = 0.5
+    """Minimum concentration for Beta/Dirichlet priors. 0.5 = weakly informative (Jeffreys)."""
+
+    bayes_sigma_floor: float = 0.01
+    """Minimum latency σ (log-scale spread). Below this the edge is treated as no-latency."""
+
+    bayes_mu_prior_sigma_floor: float = 0.5
+    """Minimum uncertainty on latency μ prior. Ensures sampler has room to explore."""
+
+    bayes_maturity_floor: float = 0.9
+    """Minimum CDF completeness (F) for observations to enter dispersion/drift estimation."""
+
+    bayes_softplus_sharpness: float = 5.0
+    """Sharpness of softplus onset boundary. Higher = sharper cutoff below onset."""
+
+    # ── Bayesian convergence thresholds ───────────────────────
+
+    bayes_rhat_threshold: float = 1.05
+    """Maximum Gelman-Rubin statistic for a parameter to be considered converged."""
+
+    bayes_ess_threshold: float = 400.0
+    """Minimum effective sample size for a parameter to be considered converged."""
+
+    bayes_warm_start_rhat_max: float = 1.10
+    """Maximum rhat to accept a previous posterior as warm-start prior."""
+
+    bayes_warm_start_ess_min: float = 100.0
+    """Minimum ESS to accept a previous posterior as warm-start prior."""
+
+    bayes_hdi_prob: float = 0.90
+    """Credible interval probability for posterior summaries (0.90 = 90% HDI)."""
+
+    # ── Bayesian sampling configuration ───────────────────────
+
+    bayes_draws: float = 2000.0
+    """MCMC post-warmup samples per chain."""
+
+    bayes_tune: float = 1000.0
+    """MCMC warmup/tuning iterations per chain."""
+
+    bayes_chains: float = 4.0
+    """Number of independent MCMC chains."""
+
+    bayes_target_accept: float = 0.90
+    """NUTS target acceptance rate. Higher = more conservative but slower."""
+
 
 def settings_from_dict(d: Optional[Dict[str, Any]]) -> ForecastingSettings:
     """
