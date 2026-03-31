@@ -1,4 +1,11 @@
 # DagNet Release Notes
+## Version 1.9.0b
+**Released:** 31-Mar-26
+
+"Context support for event segemnts.
+
+---
+
 ## Version 1.8.17b
 **Released:** 31-Mar-26
 
