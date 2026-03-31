@@ -18,6 +18,7 @@ export type OperationStatus =
   | 'countdown'
   | 'running'
   | 'complete'
+  | 'warning'
   | 'error'
   | 'cancelled';
 
@@ -124,6 +125,7 @@ const MAX_RECENT = 20;
 
 const TERMINAL_STATUSES: ReadonlySet<OperationStatus> = new Set([
   'complete',
+  'warning',
   'error',
   'cancelled',
 ]);
@@ -327,7 +329,7 @@ class OperationRegistryService {
    */
   complete(
     id: string,
-    outcome: 'complete' | 'error' | 'cancelled',
+    outcome: 'complete' | 'warning' | 'error' | 'cancelled',
     error?: string,
     action?: { label: string; onClick: () => void },
   ): void {
@@ -384,7 +386,10 @@ class OperationRegistryService {
     this.emit();
 
     const code =
-      status === 'complete' ? 'OP_COMPLETE' : status === 'error' ? 'OP_ERROR' : 'OP_CANCELLED';
+      status === 'complete' ? 'OP_COMPLETE'
+      : status === 'warning' ? 'OP_WARNING'
+      : status === 'error' ? 'OP_ERROR'
+      : 'OP_CANCELLED';
     auditOperationEvent(code, `Operation ${status}: ${op.label}`, {
       operationId: id,
       kind: op.kind,

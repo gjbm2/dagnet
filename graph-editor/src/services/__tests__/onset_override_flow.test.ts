@@ -1,15 +1,15 @@
 /**
  * Onset Delta Days Override Flow Tests
- * 
+ *
  * Tests that user-set onset_delta_days values (marked with onset_delta_days_overridden: true)
  * are preserved through data fetch and LAG pass cycles.
- * 
- * DESIGN PRINCIPLE:
- * - When onset_delta_days_overridden is true, the computed onset from LAG pass
- *   should NOT overwrite the user's manual value.
- * - This allows users to override onset for edges where the histogram data
- *   doesn't accurately reflect the true onset delay.
- * 
+ *
+ * DESIGN PRINCIPLE (promoted pattern):
+ * - The LAG/stats pass writes to promoted_onset_delta_days (model output)
+ * - The user's onset_delta_days (model input) is never overwritten by the pass
+ * - onset_delta_days_overridden controls whether the input or promoted value
+ *   feeds into the next model run (handled by modelVarsResolution, not here)
+ *
  * @vitest-environment node
  */
 
@@ -17,8 +17,8 @@ import { describe, it, expect } from 'vitest';
 import { UpdateManager } from '../UpdateManager';
 
 describe('onset_delta_days Override Flow', () => {
-  describe('applyBatchLAGValues respects overrides', () => {
-    it('should NOT overwrite onset when onset_delta_days_overridden is true', () => {
+  describe('applyBatchLAGValues writes promoted field', () => {
+    it('should NOT overwrite onset_delta_days when override is true, but should write promoted', () => {
       const um = new UpdateManager();
       const graph: any = {
         nodes: [{ id: 'A' }, { id: 'B' }],
@@ -45,7 +45,7 @@ describe('onset_delta_days Override Flow', () => {
             t95: 30,
             completeness: 0.9,
             path_t95: 30,
-            onset_delta_days: 3,  // Computed value - should be ignored due to override
+            promoted_onset_delta_days: 3,
           },
         },
       ]);
@@ -53,9 +53,10 @@ describe('onset_delta_days Override Flow', () => {
       const e = next.edges.find((x: any) => x.id === 'A-B');
       expect(e.p.latency.onset_delta_days).toBe(10); // User value preserved
       expect(e.p.latency.onset_delta_days_overridden).toBe(true);
+      expect(e.p.latency.promoted_onset_delta_days).toBe(3); // Promoted always written
     });
 
-    it('should overwrite onset when onset_delta_days_overridden is false', () => {
+    it('should write promoted_onset_delta_days when override is false', () => {
       const um = new UpdateManager();
       const graph: any = {
         nodes: [{ id: 'A' }, { id: 'B' }],
@@ -82,16 +83,17 @@ describe('onset_delta_days Override Flow', () => {
             t95: 30,
             completeness: 0.9,
             path_t95: 30,
-            onset_delta_days: 3,
+            promoted_onset_delta_days: 3,
           },
         },
       ]);
 
       const e = next.edges.find((x: any) => x.id === 'A-B');
-      expect(e.p.latency.onset_delta_days).toBe(3); // Computed value applied
+      expect(e.p.latency.onset_delta_days).toBe(10); // Input untouched
+      expect(e.p.latency.promoted_onset_delta_days).toBe(3); // Promoted written
     });
 
-    it('should overwrite onset when onset_delta_days_overridden is undefined', () => {
+    it('should write promoted_onset_delta_days when override is undefined', () => {
       const um = new UpdateManager();
       const graph: any = {
         nodes: [{ id: 'A' }, { id: 'B' }],
@@ -118,13 +120,14 @@ describe('onset_delta_days Override Flow', () => {
             t95: 30,
             completeness: 0.9,
             path_t95: 30,
-            onset_delta_days: 3,
+            promoted_onset_delta_days: 3,
           },
         },
       ]);
 
       const e = next.edges.find((x: any) => x.id === 'A-B');
-      expect(e.p.latency.onset_delta_days).toBe(3); // Computed value applied
+      expect(e.p.latency.onset_delta_days).toBe(10); // Input untouched
+      expect(e.p.latency.promoted_onset_delta_days).toBe(3); // Promoted written
     });
   });
 
@@ -156,7 +159,7 @@ describe('onset_delta_days Override Flow', () => {
             t95: 30,
             completeness: 0.9,
             path_t95: 30,
-            // onset_delta_days NOT provided
+            // promoted_onset_delta_days NOT provided
           },
         },
       ]);
@@ -168,7 +171,7 @@ describe('onset_delta_days Override Flow', () => {
   });
 
   describe('Conditional probability override flow', () => {
-    it('should respect onset override for conditional_p[i].p.latency', () => {
+    it('should preserve conditional onset when overridden, but write promoted', () => {
       const um = new UpdateManager();
       const graph: any = {
         nodes: [{ id: 'A' }, { id: 'B' }],
@@ -202,7 +205,7 @@ describe('onset_delta_days Override Flow', () => {
             t95: 30,
             completeness: 0.9,
             path_t95: 30,
-            onset_delta_days: 5,  // Computed - should be ignored
+            promoted_onset_delta_days: 5,
           },
         },
       ]);
@@ -210,9 +213,10 @@ describe('onset_delta_days Override Flow', () => {
       const e = next.edges.find((x: any) => x.id === 'A-B');
       expect(e.conditional_p[0].p.latency.onset_delta_days).toBe(15); // User value preserved
       expect(e.conditional_p[0].p.latency.onset_delta_days_overridden).toBe(true);
+      expect(e.conditional_p[0].p.latency.promoted_onset_delta_days).toBe(5); // Promoted written
     });
 
-    it('should update conditional onset when not overridden', () => {
+    it('should write promoted for conditional onset when not overridden', () => {
       const um = new UpdateManager();
       const graph: any = {
         nodes: [{ id: 'A' }, { id: 'B' }],
@@ -246,13 +250,14 @@ describe('onset_delta_days Override Flow', () => {
             t95: 30,
             completeness: 0.9,
             path_t95: 30,
-            onset_delta_days: 5,
+            promoted_onset_delta_days: 5,
           },
         },
       ]);
 
       const e = next.edges.find((x: any) => x.id === 'A-B');
-      expect(e.conditional_p[0].p.latency.onset_delta_days).toBe(5); // Computed value applied
+      expect(e.conditional_p[0].p.latency.onset_delta_days).toBe(15); // Input untouched
+      expect(e.conditional_p[0].p.latency.promoted_onset_delta_days).toBe(5); // Promoted written
     });
   });
 
@@ -284,13 +289,14 @@ describe('onset_delta_days Override Flow', () => {
             t95: 30,
             completeness: 0.9,
             path_t95: 30,
-            onset_delta_days: 5,  // Computed non-zero - should be ignored
+            promoted_onset_delta_days: 5,
           },
         },
       ]);
 
       const e = next.edges.find((x: any) => x.id === 'A-B');
       expect(e.p.latency.onset_delta_days).toBe(0); // User's 0 preserved
+      expect(e.p.latency.promoted_onset_delta_days).toBe(5); // Promoted still written
     });
 
     it('should handle newly computed onset when no prior value exists', () => {
@@ -317,13 +323,13 @@ describe('onset_delta_days Override Flow', () => {
             t95: 30,
             completeness: 0.9,
             path_t95: 30,
-            onset_delta_days: 5,
+            promoted_onset_delta_days: 5,
           },
         },
       ]);
 
       const e = next.edges.find((x: any) => x.id === 'A-B');
-      expect(e.p.latency.onset_delta_days).toBe(5); // New value applied
+      expect(e.p.latency.promoted_onset_delta_days).toBe(5); // Promoted written
     });
   });
 });

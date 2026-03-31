@@ -43,6 +43,8 @@ function statusIcon(status: Operation['status']): React.ReactNode {
       return <span className="ops-toast-item-icon"><span className="ops-toast-spinner small" /></span>;
     case 'complete':
       return <span className="ops-toast-item-icon" style={{ color: 'var(--success-color, #4caf50)' }}>✓</span>;
+    case 'warning':
+      return <span className="ops-toast-item-icon" style={{ color: '#f59e0b' }}>⚠</span>;
     case 'error':
       return <span className="ops-toast-item-icon" style={{ color: '#ef4444' }}>✗</span>;
     case 'cancelled':
@@ -89,8 +91,8 @@ function pickPrimary(active: Operation[]): Operation | undefined {
 /** Determine the fade class for a completed operation. */
 function fadeClass(op: Operation, now: number, isHovered: boolean): string {
   if (isHovered) return '';
-  // Errors persist until manually dismissed — no fading.
-  if (op.status === 'error') return '';
+  // Errors and warnings persist until manually dismissed — no fading.
+  if (op.status === 'error' || op.status === 'warning') return '';
   if (!op.completedAtMs) return '';
   const age = now - op.completedAtMs;
   if (age < OPAQUE_HOLD_MS) return '';
@@ -100,8 +102,8 @@ function fadeClass(op: Operation, now: number, isHovered: boolean): string {
 
 /** Should this completed op still be visible? */
 function isVisible(op: Operation, now: number, isHovered: boolean): boolean {
-  // Errors always visible until dismissed.
-  if (op.status === 'error') return true;
+  // Errors and warnings always visible until dismissed.
+  if (op.status === 'error' || op.status === 'warning') return true;
   if (isHovered) return true;
   if (!op.completedAtMs) return true;
   return now - op.completedAtMs < REMOVE_DELAY_MS;
@@ -163,7 +165,7 @@ function ProgressBar({ op, className }: { op: Operation; className?: string }) {
 
   const barClass = [
     'ops-toast-bar',
-    op.status === 'complete' ? 'complete' : '',
+    op.status === 'complete' || op.status === 'warning' ? 'complete' : '',
     op.status === 'error' ? 'error' : '',
     op.status === 'countdown' ? 'countdown' : '',
     isIndeterminate ? 'indeterminate' : '',
@@ -215,7 +217,7 @@ function PrimaryRow({ op }: { op: Operation }) {
   const progressDetail = op.progress?.detail;
 
   const isCountdown = op.status === 'countdown';
-  const isNonTerminal = op.status !== 'complete' && op.status !== 'error' && op.status !== 'cancelled';
+  const isNonTerminal = op.status !== 'complete' && op.status !== 'warning' && op.status !== 'error' && op.status !== 'cancelled';
 
   const handlePauseResume = useCallback(() => {
     if (op.countdownPaused) {
@@ -281,7 +283,7 @@ function PrimaryRow({ op }: { op: Operation }) {
 /** A compact row in the expanded list for a single operation. */
 function ListItem({ op, fade }: { op: Operation; fade: string }) {
   const pct = progressPercent(op);
-  const isTerminal = op.status === 'complete' || op.status === 'error' || op.status === 'cancelled';
+  const isTerminal = op.status === 'complete' || op.status === 'warning' || op.status === 'error' || op.status === 'cancelled';
 
   return (
     <div className={`ops-toast-item ${fade}`}>
@@ -306,7 +308,7 @@ function ListItem({ op, fade }: { op: Operation; fade: string }) {
         {op.progress && op.progress.total > 0 && !isTerminal && (
           <div className="ops-toast-item-bar">
             <div
-              className={`ops-toast-item-bar-fill ${op.status === 'complete' ? 'complete' : ''} ${op.status === 'error' ? 'error' : ''}`}
+              className={`ops-toast-item-bar-fill ${op.status === 'complete' || op.status === 'warning' ? 'complete' : ''} ${op.status === 'error' ? 'error' : ''}`}
               style={{ width: `${pct ?? 0}%` }}
             />
           </div>
@@ -438,10 +440,10 @@ export function OperationsToast(): React.ReactElement | null {
   // Build lists: other active ops (always visible) + recent (hover-only).
   const otherActive = active.filter((o) => o !== primary);
 
-  // Actionable errors (e.g. "Resolve conflicts") must be always-visible,
+  // Actionable errors/warnings must be always-visible,
   // not buried in the hover-only recent list where the button is unreachable.
-  const actionableRecent = visibleRecent.filter((o) => o.status === 'error' && o.action);
-  const nonActionableRecent = visibleRecent.filter((o) => !(o.status === 'error' && o.action));
+  const actionableRecent = visibleRecent.filter((o) => (o.status === 'error' || o.status === 'warning') && o.action);
+  const nonActionableRecent = visibleRecent.filter((o) => !((o.status === 'error' || o.status === 'warning') && o.action));
 
   if (!hasContent || dismissed) return null;
 
@@ -451,7 +453,7 @@ export function OperationsToast(): React.ReactElement | null {
     !isHovered &&
     visibleRecent.length > 0 &&
     visibleRecent.every((o) => {
-      if (o.status === 'error') return false;
+      if (o.status === 'error' || o.status === 'warning') return false;
       return o.completedAtMs ? now - o.completedAtMs >= OPAQUE_HOLD_MS : false;
     })
       ? 'ops-toast-container-fading'
@@ -522,8 +524,15 @@ export function OperationsToast(): React.ReactElement | null {
 /** Brief completion display when no active ops remain. */
 function CompletionRow({ op }: { op: Operation }) {
   const outcomeClass =
-    op.status === 'error' ? 'has-errors' : op.status === 'cancelled' ? 'cancelled' : 'success';
-  const icon = op.status === 'error' ? '⚠️' : op.status === 'cancelled' ? '⏹️' : '✅';
+    op.status === 'error' ? 'has-errors'
+    : op.status === 'warning' ? 'has-warnings'
+    : op.status === 'cancelled' ? 'cancelled'
+    : 'success';
+  const icon =
+    op.status === 'error' ? '⚠️'
+    : op.status === 'warning' ? '⚠️'
+    : op.status === 'cancelled' ? '⏹️'
+    : '✅';
 
   const labelLines = op.label.split('\n');
 

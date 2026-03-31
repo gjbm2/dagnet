@@ -47,7 +47,11 @@ export interface SourceMapping {
   type?: 'property' | 'behavioral';  // default: 'property' (absence = property)
   event_type?: string;               // Amplitude event name (when type='behavioral')
   filter_property?: string;          // Event property to filter on
-  filter_value?: string;             // Value to match
+  filter_value?: string;             // Single value to match (implies op='is')
+  filter_op?: 'is' | 'is not';      // Operator for filter (default: 'is')
+  filter_values?: string[];          // Multiple values (used with 'is not' for complement)
+  behavioral_op?: '>=' | '=';       // '>=' = performed (default), '=' = did not perform
+  behavioral_value?: number;          // Count threshold (default: 1 for >=, 0 for =)
   time_type?: 'rolling';             // Lookback window type
   time_value?: number;               // Lookback window in days (default: 366)
 }

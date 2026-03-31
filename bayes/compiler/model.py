@@ -181,6 +181,15 @@ CDF_INCREMENT_FLOOR = 1e-15  # ΔF (CDF change over a trajectory interval)
 SURVIVAL_FLOOR = 1e-10       # 1 − p×F (fraction not yet converted)
 EFFECTIVE_AGE_FLOOR = 1e-6   # age − onset on fixed-onset path (numpy)
 
+# Softplus sharpness for onset boundary ---
+# Standard softplus(x) = ln(1 + eˣ) leaks mass below onset: at x=-2.5
+# softplus = 0.079, and with large sigma the CDF is non-trivially > 0.
+# This creates a degenerate mode on the (onset, mu, sigma) ridge.
+# Sharpened softplus: softplus(k·x) / k → same shape but leakage
+# drops exponentially with k. At k=5, softplus(-2.5) → ~7e-7.
+# See journal 30-Mar-26 "Softplus onset leakage".
+SOFTPLUS_SHARPNESS = 5.0
+
 # Probability clipping ---
 # Bounds for effective probabilities passed to Binomial / BetaBinomial
 # likelihoods and Multinomial dropout.  Prevents log(0) in the
@@ -444,17 +453,42 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
                     if onset_obs and len(onset_obs) >= 3:
                         onset_obs_np = np.array(onset_obs, dtype=np.float64)
                         sigma_obs = max(float(np.std(onset_obs_np)), 0.01)
+                        onset_obs_mean = float(np.mean(onset_obs_np))
+                        n_obs = len(onset_obs_np)
+
+                        # Effective sample size corrected for autocorrelation.
+                        #
+                        # Onset genuinely varies over time — nearby dates
+                        # have correlated values. Raw N overstates the
+                        # independent information, giving √N precision
+                        # that is over-confident.
+                        #
+                        # N_eff = N × (1 - ρ) / (1 + ρ) where ρ is the
+                        # lag-1 autocorrelation of the onset series.
+                        # σ_eff = σ_obs / √N_eff: the precision of the
+                        # mean, corrected for temporal dependence.
+                        #
+                        # See journal 30-Mar-26 "onset obs over-precision".
+                        if n_obs >= 4:
+                            rho = float(np.corrcoef(onset_obs_np[:-1], onset_obs_np[1:])[0, 1])
+                            rho = max(min(rho, 0.99), 0.0)  # clamp to [0, 0.99]
+                        else:
+                            rho = 0.0
+                        n_eff = max(n_obs * (1 - rho) / (1 + rho), 1.0)
+                        sigma_eff = sigma_obs / max(n_eff ** 0.5, 1.0)
+
                         pm.Normal(
                             f"onset_obs_{safe_id}",
                             mu=onset_var,
-                            sigma=sigma_obs,
-                            observed=onset_obs_np,
+                            sigma=sigma_eff,
+                            observed=np.float64(onset_obs_mean),
                         )
                         diagnostics.append(
                             f"  onset: {edge_id[:8]}… histogram={lp.onset_delta_days:.1f}d "
                             f"(±{lp.onset_uncertainty:.1f}) → latent (independent) "
-                            f"+ {len(onset_obs)} Amplitude obs (mean={np.mean(onset_obs_np):.1f}d, "
-                            f"σ_obs={sigma_obs:.1f}d)"
+                            f"+ {n_obs} Amplitude obs (mean={onset_obs_mean:.1f}d, "
+                            f"σ_obs={sigma_obs:.1f}d, ρ={rho:.2f}, "
+                            f"N_eff={n_eff:.1f}, σ_eff={sigma_eff:.2f}d)"
                         )
                     else:
                         diagnostics.append(
@@ -1112,7 +1146,7 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
                             # CDF at endpoint ages (latent — gradients flow)
                             ages_t = pt.as_tensor_variable(ep_ages)
                             age_minus_onset = ages_t - ep_onset_var
-                            eff_ages = pt.softplus(age_minus_onset)
+                            eff_ages = pt.softplus(SOFTPLUS_SHARPNESS * age_minus_onset) / SOFTPLUS_SHARPNESS
                             log_ages = pt.log(pt.maximum(eff_ages, 1e-30))
                             z = (log_ages - ep_mu_var) / (ep_sigma_var * pt.sqrt(2.0))
                             f_endpoints = 0.5 * pt.erfc(-z)
@@ -1872,10 +1906,13 @@ def _emit_cohort_likelihoods(
                 """
                 onset_is_latent = hasattr(onset_val, 'name')
                 if onset_is_latent:
-                    # Latent onset: use softplus to smoothly handle ages
-                    # near or below onset (avoids log(negative))
+                    # Latent onset: sharpened softplus to handle ages
+                    # near or below onset. Standard softplus leaks mass
+                    # below onset, enabling a degenerate mode on the
+                    # (onset, mu, sigma) ridge. Sharpened version
+                    # collapses the ridge. See journal 30-Mar-26.
                     age_minus_onset = ages_tensor - onset_val
-                    effective_ages = pt.softplus(age_minus_onset)
+                    effective_ages = pt.softplus(SOFTPLUS_SHARPNESS * age_minus_onset) / SOFTPLUS_SHARPNESS
                     log_ages = pt.log(pt.maximum(effective_ages, LOG_ARG_FLOOR))
                 else:
                     # Fixed onset: simple subtraction, floor at tiny positive

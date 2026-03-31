@@ -1241,24 +1241,25 @@ class RepositoryOperationsService {
 
           if (selectedItems.length > 0) {
             // Write hash-mappings.json entries for selected items
-            const { hashMappingsService } = await import('./hashMappingsService');
+            const { addMapping, getMappingsFile } = await import('./hashMappingsService');
             for (const item of selectedItems) {
               // Each parameter generates 2 mapping entries (window + cohort)
               // but both use the same old/new core_hash pair
-              await hashMappingsService.addMapping(
-                item.oldCoreHash,
-                item.newCoreHash,
-                'equivalent',
-                `Hash guard: ${item.changedFile} changed, preserving ${item.paramLabel} in ${item.graphName}`
-              );
+              await addMapping({
+                core_hash: item.oldCoreHash,
+                equivalent_to: item.newCoreHash,
+                operation: 'equivalent',
+                weight: 1,
+                reason: `Hash guard: ${item.changedFile} changed, preserving ${item.paramLabel} in ${item.graphName}`,
+              });
             }
 
             // Add hash-mappings.json to the commit if it was modified
-            const mappingsFile = await hashMappingsService.getMappingsFile();
-            if (mappingsFile) {
+            const mappingsFile = getMappingsFile();
+            if (mappingsFile && mappingsFile.mappings.length > 0) {
               filesToCommit.push({
-                path: mappingsFile.path || 'hash-mappings.json',
-                content: JSON.stringify(mappingsFile.data, null, 2),
+                path: 'hash-mappings.json',
+                content: JSON.stringify(mappingsFile, null, 2),
               });
               sessionLogService.addChild(logOpId, 'info', 'HASH_GUARD_MAPPINGS',
                 `Added ${selectedItems.length} hash mapping(s) to commit`);

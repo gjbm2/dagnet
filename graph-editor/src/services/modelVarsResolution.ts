@@ -34,7 +34,7 @@ export function effectivePreference(
  *
  * Selection logic (doc 15 §3):
  *   manual     → manual entry if present, else fall through to best_available
- *   bayesian   → bayesian entry if present AND gate_passed, else analytic
+ *   bayesian   → bayesian entry if present, else analytic
  *   analytic   → analytic entry
  *   best_available → bayesian (if present + gated), else analytic
  *
@@ -66,7 +66,7 @@ export function resolveActiveModelVars(
     case 'manual':
       return find('manual') ?? bestAvailable();
     case 'bayesian':
-      return bayesianIfGated() ?? analyticBest();
+      return find('bayesian') ?? analyticBest();
     case 'analytic_be':
       return find('analytic_be') ?? find('analytic');
     case 'analytic':

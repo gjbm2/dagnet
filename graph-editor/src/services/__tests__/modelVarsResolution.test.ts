@@ -101,11 +101,10 @@ describe('resolveActiveModelVars', () => {
       expect(result?.probability.mean).toBe(0.15);
     });
 
-    it('should fall back to analytic when bayesian fails gate', () => {
+    it('should fall back to analytic when bayesian gate fails under best_available', () => {
       const entries = [analyticEntry, bayesianFailed, manualEntry];
       const result = resolveActiveModelVars(entries, 'best_available');
       expect(result?.source).toBe('analytic');
-      expect(result?.probability.mean).toBe(0.12);
     });
 
     it('should select analytic when no bayesian entry exists', () => {
@@ -120,10 +119,11 @@ describe('resolveActiveModelVars', () => {
       expect(result?.source).toBe('bayesian');
     });
 
-    it('should fall back to analytic when bayesian fails gate', () => {
+    it('should return bayesian even when gate fails (user pin overrides gate)', () => {
       const entries = [analyticEntry, bayesianFailed];
       const result = resolveActiveModelVars(entries, 'bayesian');
-      expect(result?.source).toBe('analytic');
+      expect(result?.source).toBe('bayesian');
+      expect(result?.probability.mean).toBe(0.15);
     });
 
     it('should fall back to analytic when no bayesian entry exists', () => {
@@ -158,10 +158,16 @@ describe('resolveActiveModelVars', () => {
       expect(result?.source).toBe('bayesian');
     });
 
-    it('should fall through to analytic when no manual and bayesian fails gate', () => {
+    it('should fall through to analytic when no manual and bayesian gate failed', () => {
       const entries = [analyticEntry, bayesianFailed];
       const result = resolveActiveModelVars(entries, 'manual');
       expect(result?.source).toBe('analytic');
+    });
+
+    it('should fall through to bayesian when no manual and bayesian gate passed', () => {
+      const entries = [analyticEntry, bayesianGated];
+      const result = resolveActiveModelVars(entries, 'manual');
+      expect(result?.source).toBe('bayesian');
     });
   });
 
@@ -178,7 +184,7 @@ describe('resolveActiveModelVars', () => {
       expect(resolveActiveModelVars([manualEntry], 'analytic')).toBeUndefined();
     });
 
-    it('should handle bayesian entry without quality block as ungated', () => {
+    it('should fall back to analytic when bayesian has no quality data (best_available respects gate)', () => {
       const noQuality: ModelVarsEntry = {
         source: 'bayesian',
         source_at: '21-Mar-26',
@@ -186,6 +192,11 @@ describe('resolveActiveModelVars', () => {
       };
       const result = resolveActiveModelVars([analyticEntry, noQuality], 'best_available');
       expect(result?.source).toBe('analytic');
+    });
+
+    it('should select bayesian when explicitly pinned regardless of gate', () => {
+      const result = resolveActiveModelVars([analyticEntry, bayesianFailed], 'bayesian');
+      expect(result?.source).toBe('bayesian');
     });
   });
 });

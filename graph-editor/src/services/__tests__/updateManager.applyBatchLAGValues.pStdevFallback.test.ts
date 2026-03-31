@@ -55,7 +55,7 @@ describe('UpdateManager.applyBatchLAGValues', () => {
       {
         edgeId: 'A-B',
         conditionalIndex: 0,
-        latency: { t95: 10, completeness: 1, path_t95: 10, onset_delta_days: 3 },
+        latency: { t95: 10, completeness: 1, path_t95: 10, promoted_onset_delta_days: 3 },
         blendedMean: 0.4,
         evidence: { mean: 0.3, n: 100, k: 30, stdev: 0.01 },
       },
@@ -68,7 +68,7 @@ describe('UpdateManager.applyBatchLAGValues', () => {
     expect(e.conditional_p[0].p.mean).toBe(0.4);
     expect(e.conditional_p[0].p.evidence.stdev).toBe(0.01);
     expect(e.conditional_p[0].p.stdev).toBe(0.01);
-    expect(e.conditional_p[0].p.latency.onset_delta_days).toBe(3);
+    expect(e.conditional_p[0].p.latency.promoted_onset_delta_days).toBe(3);
   });
 
   it('respects onset_delta_days_overridden for conditional_p[i].p.latency when conditionalIndex is provided', () => {
@@ -98,12 +98,13 @@ describe('UpdateManager.applyBatchLAGValues', () => {
       {
         edgeId: 'A-B',
         conditionalIndex: 0,
-        latency: { t95: 10, completeness: 1, path_t95: 10, onset_delta_days: 3 },
+        latency: { t95: 10, completeness: 1, path_t95: 10, promoted_onset_delta_days: 3 },
       },
     ]);
 
     const e = next.edges.find((x: any) => x.id === 'A-B');
-    expect(e.conditional_p[0].p.latency.onset_delta_days).toBe(9);
+    expect(e.conditional_p[0].p.latency.onset_delta_days).toBe(9); // User value preserved
+    expect(e.conditional_p[0].p.latency.promoted_onset_delta_days).toBe(3); // Promoted always written
   });
 
   it('populates p.stdev from existing p.evidence.stdev even when update.evidence.stdev is not provided', () => {

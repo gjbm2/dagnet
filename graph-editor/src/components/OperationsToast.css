@@ -438,6 +438,10 @@
   border-left: 3px solid var(--warning-color, #ff9800);
 }
 
+.ops-toast-completion.has-warnings {
+  border-left: 3px solid #f59e0b;
+}
+
 .ops-toast-completion.cancelled {
   border-left: 3px solid var(--text-secondary, #a0a0a0);
 }

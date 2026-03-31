@@ -1377,6 +1377,7 @@ export default function PropertiesPanel({
 
       // For drag interactions (sliders) and instant preference changes, we
       // update the graph directly. Committed updates go through graphMutationService.
+      let nextForMutation = next;
       if (_noHistory) {
         setGraph(next);
       } else {
@@ -1387,7 +1388,6 @@ export default function PropertiesPanel({
         // - preserve the origin edge value
         // - respect sibling override flags
         // - respect parameter locks (param id / connection)
-        let nextForMutation = next;
         try {
           if (
             paramSlot === 'p' &&
@@ -1418,10 +1418,10 @@ export default function PropertiesPanel({
       // are recomputed using the newly promoted latency params.
       if (sourceChanged && !_noHistory) {
         try {
-          const currentDsl = (graph as any)?.currentQueryDSL;
+          const currentDsl = currentDSL || (nextForMutation as any)?.currentQueryDSL;
           if (currentDsl) {
             const { runStage2EnhancementsAndInboundN } = await import('../services/fetchDataService');
-            const updatedGraph = graph; // graph state is already updated via setGraph
+            const updatedGraph = nextForMutation; // use the graph WITH the user's change — stale closure would overwrite it
             if (updatedGraph) {
               // Collect fetch items for the affected edges
               const items = (updatedGraph as any).edges

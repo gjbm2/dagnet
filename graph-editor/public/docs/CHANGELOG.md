@@ -1,4 +1,11 @@
 # DagNet Release Notes
+## Version 1.8.17b
+**Released:** 31-Mar-26
+
+**Variant contexts & hash guard.** Context definitions can now use behavioural segment filters to partition users by event properties (e.g. A/B test variants) without editing event files. Commit-time hash guard detects when event/context edits break snapshot hashes and offers to create mappings preserving historical data. CLI tools (`compute-hash`, `diff-hash`, `add-mapping`) for hash management during agentic graph editing. See `graph-ops/playbooks/manage-hash-mappings.md`.
+
+---
+
 ## Version 1.8.16b
 **Released:** 28-Mar-26
 

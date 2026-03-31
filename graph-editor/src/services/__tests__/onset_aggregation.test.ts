@@ -121,7 +121,7 @@ describe('onset_delta_days Aggregation', () => {
       
       const edgeResult = result.edgeValues.find(v => v.edgeUuid === 'start-to-a');
       expect(edgeResult).toBeDefined();
-      expect(edgeResult!.latency.onset_delta_days).toBe(2);
+      expect(edgeResult!.latency.promoted_onset_delta_days).toBe(2);
     });
   });
 
@@ -140,7 +140,7 @@ describe('onset_delta_days Aggregation', () => {
       const edgeResult = result.edgeValues.find(v => v.edgeUuid === 'start-to-a');
       expect(edgeResult).toBeDefined();
       // Default β is 0.5 (weighted median). With equal weights, this selects the smaller value (3).
-      expect(edgeResult!.latency.onset_delta_days).toBe(3);
+      expect(edgeResult!.latency.promoted_onset_delta_days).toBe(3);
     });
   });
 
@@ -158,7 +158,7 @@ describe('onset_delta_days Aggregation', () => {
       
       const edgeResult = result.edgeValues.find(v => v.edgeUuid === 'start-to-a');
       expect(edgeResult).toBeDefined();
-      expect(edgeResult!.latency.onset_delta_days).toBe(4);
+      expect(edgeResult!.latency.promoted_onset_delta_days).toBe(4);
     });
   });
 
@@ -176,7 +176,7 @@ describe('onset_delta_days Aggregation', () => {
       
       const edgeResult = result.edgeValues.find(v => v.edgeUuid === 'start-to-a');
       expect(edgeResult).toBeDefined();
-      expect(edgeResult!.latency.onset_delta_days).toBe(5); // cohort excluded, only window used
+      expect(edgeResult!.latency.promoted_onset_delta_days).toBe(5); // cohort excluded, only window used
     });
   });
 
@@ -194,7 +194,7 @@ describe('onset_delta_days Aggregation', () => {
       
       const edgeResult = result.edgeValues.find(v => v.edgeUuid === 'start-to-a');
       expect(edgeResult).toBeDefined();
-      expect(edgeResult!.latency.onset_delta_days).toBeUndefined();
+      expect(edgeResult!.latency.promoted_onset_delta_days).toBeUndefined();
     });
 
     it('should return undefined onset when window slices have no onset data', () => {
@@ -209,7 +209,7 @@ describe('onset_delta_days Aggregation', () => {
       
       const edgeResult = result.edgeValues.find(v => v.edgeUuid === 'start-to-a');
       expect(edgeResult).toBeDefined();
-      expect(edgeResult!.latency.onset_delta_days).toBeUndefined();
+      expect(edgeResult!.latency.promoted_onset_delta_days).toBeUndefined();
     });
   });
 
@@ -224,7 +224,7 @@ describe('onset_delta_days Aggregation', () => {
       
       const edgeResult = result.edgeValues.find(v => v.edgeUuid === 'start-to-a');
       expect(edgeResult).toBeDefined();
-      expect(edgeResult!.latency.onset_delta_days).toBe(0);
+      expect(edgeResult!.latency.promoted_onset_delta_days).toBe(0);
     });
 
     it('should handle mixed slices correctly', () => {
@@ -242,7 +242,7 @@ describe('onset_delta_days Aggregation', () => {
       
       const edgeResult = result.edgeValues.find(v => v.edgeUuid === 'start-to-a');
       expect(edgeResult).toBeDefined();
-      expect(edgeResult!.latency.onset_delta_days).toBe(3);
+      expect(edgeResult!.latency.promoted_onset_delta_days).toBe(3);
     });
   });
 });

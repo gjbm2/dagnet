@@ -492,6 +492,7 @@ export function useBayesTrigger(computeMode: BayesComputeMode = 'local') {
                   await persistGraphMasteredLatencyToParameterFiles({
                     graph: graphForPersist as any,
                     setGraph,
+                    edgeIds: (graphForPersist as any).edges?.map((e: any) => e.uuid || e.id).filter(Boolean) || [],
                   });
                 }
 
@@ -516,9 +517,52 @@ export function useBayesTrigger(computeMode: BayesComputeMode = 'local') {
               `Patch fetch/apply failed: ${e.message}. Patch remains in git for next pull.`);
           }
         }
-        // Report complete AFTER patch application so consumers see posteriors
-        setState({ status: 'complete', jobId, error: null, lastResult: record });
-        operationRegistryService.complete(opId, 'complete', undefined);
+        // Report complete AFTER patch application so consumers see posteriors.
+        // Include quality gate summary in the completion label (doc 13 §1.2).
+        {
+          const graphFile = fileRegistry.getFile(activeTab.fileId);
+          const bayesMeta = (graphFile?.data as any)?._bayes;
+          const quality = bayesMeta?.quality as { converged_pct: number; max_rhat: number | null; min_ess: number | null } | undefined;
+
+          if (quality) {
+            const { computeGraphQualityTier } = await import('../utils/bayesQualityTier');
+            const { tier, label: qualityLabel } = computeGraphQualityTier(quality);
+            const completionLabel = `Bayes complete — ${qualityLabel}`;
+            operationRegistryService.setLabel(opId, completionLabel);
+
+            const isWarning = tier === 'poor' || tier === 'very poor';
+            setState({ status: 'complete', jobId, error: null, lastResult: record });
+            operationRegistryService.complete(opId, isWarning ? 'warning' : 'complete', undefined);
+
+            // Per-edge quality breakdown in session log (doc 13 §1.3)
+            const { computeQualityTier } = await import('../utils/bayesQualityTier');
+            const { getGraphStore } = await import('../contexts/GraphStoreContext');
+            const store = getGraphStore(activeTab.fileId);
+            const edges = store?.getState().graph?.edges || [];
+            const failedEdges: string[] = [];
+            const warnEdges: string[] = [];
+            for (const edge of edges) {
+              if (!edge.p?.posterior) continue;
+              const edgeTier = computeQualityTier(edge.p.posterior);
+              const edgeName = edge.p?.id || edge.uuid || edge.id || '?';
+              if (edgeTier.tier === 'failed') failedEdges.push(`${edgeName}: ${edgeTier.reason}`);
+              else if (edgeTier.tier === 'warning') warnEdges.push(`${edgeName}: ${edgeTier.reason}`);
+            }
+
+            if (failedEdges.length > 0 || warnEdges.length > 0) {
+              const detail = [
+                ...(failedEdges.length > 0 ? [`Failed (${failedEdges.length}):`, ...failedEdges.map(e => `  ${e}`)] : []),
+                ...(warnEdges.length > 0 ? [`Warning (${warnEdges.length}):`, ...warnEdges.map(e => `  ${e}`)] : []),
+              ].join('\n');
+              sessionLogService.warning('bayes', 'BAYES_QUALITY_GATES',
+                `Quality gates: ${failedEdges.length} failed, ${warnEdges.length} warning`,
+                detail, { jobId });
+            }
+          } else {
+            setState({ status: 'complete', jobId, error: null, lastResult: record });
+            operationRegistryService.complete(opId, 'complete', undefined);
+          }
+        }
       } else {
         setState({ status: 'failed', jobId, error: finalStatus.error ?? null, lastResult: record });
         operationRegistryService.complete(opId, 'error', finalStatus.error);

@@ -127,6 +127,116 @@ When creating a brand new event or context file, there are no historical snapsho
 
 ---
 
+---
+
+## Pattern: Variant Contexts with Behavioural Segment Filters
+
+When an event has a property that discriminates between variants (e.g. `blueprintVariant` on the "Blueprint Viewed" event), you can lift this into a context with behavioural segment filters. This lets you compare variant performance without editing event files.
+
+### Example: Blueprint Variants
+
+The event "Blueprint Viewed" has a property `blueprintVariant` with values like `onboardingBlueprintLowIntent` and `onboardingBlueprintHighIntent`. To track these as a context:
+
+```yaml
+id: blueprint-variant
+name: Blueprint Variant
+type: categorical
+otherPolicy: explicit
+values:
+  # Named variants: "user has done Blueprint Viewed where blueprintVariant = X"
+  - id: low-intent
+    label: Low Intent
+    sources:
+      amplitude:
+        type: behavioral
+        event_type: "Blueprint Viewed"
+        filter_property: blueprintVariant
+        filter_value: onboardingBlueprintLowIntent
+        time_type: rolling
+        time_value: 366
+
+  - id: high-intent
+    label: High Intent
+    sources:
+      amplitude:
+        type: behavioral
+        event_type: "Blueprint Viewed"
+        filter_property: blueprintVariant
+        filter_value: onboardingBlueprintHighIntent
+        time_type: rolling
+        time_value: 366
+
+  # Other: "user has done Blueprint Viewed but NOT with these variant values"
+  - id: other
+    label: Other variant
+    sources:
+      amplitude:
+        type: behavioral
+        event_type: "Blueprint Viewed"
+        filter_property: blueprintVariant
+        filter_op: is not
+        filter_values:
+          - onboardingBlueprintLowIntent
+          - onboardingBlueprintHighIntent
+        time_type: rolling
+        time_value: 366
+
+  # None: "user has NOT done Blueprint Viewed at all"
+  - id: none
+    label: No blueprint
+    sources:
+      amplitude:
+        type: behavioral
+        event_type: "Blueprint Viewed"
+        behavioral_op: "="
+        behavioral_value: 0
+        time_type: rolling
+        time_value: 366
+
+metadata:
+  created_at: 30-Mar-26
+  version: 1.0.0
+  status: active
+```
+
+### What each value produces in the Amplitude API
+
+| Value | Amplitude segment | Population |
+|-------|------------------|------------|
+| `low-intent` | "user has done Blueprint Viewed where blueprintVariant = onboardingBlueprintLowIntent, >= 1 time" | Users who saw the low-intent blueprint |
+| `high-intent` | "user has done Blueprint Viewed where blueprintVariant = onboardingBlueprintHighIntent, >= 1 time" | Users who saw the high-intent blueprint |
+| `other` | "user has done Blueprint Viewed where blueprintVariant is not [low, high], >= 1 time" | Users who saw a blueprint with some other variant value |
+| `none` | "user has done Blueprint Viewed = 0 times" | Users who never saw any blueprint |
+
+MECE: low-intent + high-intent + other + none = all users.
+
+### Key fields on behavioural source mappings
+
+| Field | Required | Purpose |
+|-------|----------|---------|
+| `type: behavioral` | Yes | Distinguishes from property-based mappings |
+| `event_type` | Yes | The Amplitude event name |
+| `filter_property` | No | Event property to filter on |
+| `filter_value` | No | Single value (implies `filter_op: is`) |
+| `filter_op` | No | `is` (default) or `is not` |
+| `filter_values` | No | Array of values (use with `is not` for complement) |
+| `behavioral_op` | No | `>=` (default, user performed) or `=` (user did NOT perform) |
+| `behavioral_value` | No | Count threshold (default: 1 for `>=`, 0 for `=`) |
+| `time_type` | No | `rolling` (default) |
+| `time_value` | No | Lookback days (default: 366) |
+
+### Adding to a graph
+
+Add the context to the graph's `dataInterestsDSL`:
+
+```
+(window(-30d:);cohort(-30d:)).context(channel).context(blueprint-variant)
+```
+
+No event file changes needed. Each variant slice is fetched with the appropriate segment filter. Adding new variant values later just requires editing the context file and creating hash mappings (see workflow above).
+
+---
+
 ## Troubleshooting
 
 ### "No edges in this graph reference event/context X"

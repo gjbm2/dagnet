@@ -115,3 +115,16 @@ Doc 24 §3.4 already specified this design correctly:
 The implementation diverged by adding the `cohort_latency_warm`
 override. This fix brings the implementation back in line with the
 design.
+
+## 5. Deeper Issue: Softplus Onset Leakage
+
+Removing the warm-start fixed the self-reinforcing loop but onset
+still drifts (Phase 1 del-to-reg: 9.56d vs Amplitude obs mean 4.0d).
+The root cause is deeper: the softplus used in the CDF computation
+leaks mass below onset. Combined with large sigma, this allows a
+degenerate (onset, mu, sigma) mode that mimics the correct CDF shape.
+The sampler lands on this ridge unpredictably — sometimes fitting
+well, sometimes catastrophically.
+
+See journal 30-Mar-26 "Softplus onset leakage" for full analysis
+and fix options.

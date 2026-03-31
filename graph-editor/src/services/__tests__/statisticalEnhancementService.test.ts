@@ -1386,7 +1386,7 @@ describe('enhanceGraphLatencies', () => {
     // Conditional output
     const cp0 = result.edgeValues.find((v) => v.edgeUuid === 'start-to-a' && v.conditionalIndex === 0);
     expect(cp0).toBeDefined();
-    expect(cp0!.latency.onset_delta_days).toBe(4);
+    expect(cp0!.latency.promoted_onset_delta_days).toBe(4);
   });
 
   it('should compute cumulative path_t95 for downstream edges', () => {

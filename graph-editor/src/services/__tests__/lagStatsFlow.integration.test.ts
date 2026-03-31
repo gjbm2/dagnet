@@ -1657,7 +1657,7 @@ describe('Phase 3 – Scenario-Aware Active Edges (B3)', () => {
       expect(e1Result).toBeDefined();
       
       // §0.3: onset_delta_days should be extracted from window slice and included in EdgeLAGValues
-      expect(e1Result!.latency.onset_delta_days).toBe(3);
+      expect(e1Result!.latency.promoted_onset_delta_days).toBe(3);
     });
 
     it('t95 and path_t95 are inclusive of onset (user-space horizons)', () => {
@@ -1697,7 +1697,7 @@ describe('Phase 3 – Scenario-Aware Active Edges (B3)', () => {
       const resultA = enhanceGraphLatencies(makeGraph(), paramLookupA, queryDate, helpers, cohortWindow);
       const e1A = resultA.edgeValues.find(v => v.edgeUuid === 'e1');
       expect(e1A).toBeDefined();
-      expect(e1A!.latency.onset_delta_days).toBe(0);
+      expect(e1A!.latency.promoted_onset_delta_days).toBe(0);
 
       // Case B: onset = 3, but keep model-space distribution fixed by shifting user-space median lag by +3.
       const paramLookupB = new Map();
@@ -1708,7 +1708,7 @@ describe('Phase 3 – Scenario-Aware Active Edges (B3)', () => {
       const resultB = enhanceGraphLatencies(makeGraph(), paramLookupB, queryDate, helpers, cohortWindow);
       const e1B = resultB.edgeValues.find(v => v.edgeUuid === 'e1');
       expect(e1B).toBeDefined();
-      expect(e1B!.latency.onset_delta_days).toBe(3);
+      expect(e1B!.latency.promoted_onset_delta_days).toBe(3);
 
       // t95 and path_t95 are stored/displayed in user-space (T-space), so they must increase by δ.
       expect(e1B!.latency.t95).toBeCloseTo(e1A!.latency.t95 + 3, 6);
@@ -1785,10 +1785,10 @@ describe('Phase 3 – Scenario-Aware Active Edges (B3)', () => {
       expect(e1Result).toBeDefined();
       
       // §0.3: Weighted median should select the dominant slice onset (5), not the min (2).
-      expect(e1Result!.latency.onset_delta_days).toBe(5);
+      expect(e1Result!.latency.promoted_onset_delta_days).toBe(5);
 
       // And ensure that this min() result is what is written onto the graph edge
-      // (this is what the frontend UI reads: edge.p.latency.onset_delta_days).
+      // (this is what the frontend UI reads: edge.p.latency.promoted_onset_delta_days).
       const um = new UpdateManager();
       const nextGraph = um.applyBatchLAGValues(
         graph as any,
@@ -1803,7 +1803,7 @@ describe('Phase 3 – Scenario-Aware Active Edges (B3)', () => {
         { writeHorizonsToGraph: true }
       );
       const e1 = (nextGraph as any).edges.find((e: any) => e.uuid === 'e1' || e.id === 'e1');
-      expect(e1?.p?.latency?.onset_delta_days).toBe(5);
+      expect(e1?.p?.latency?.promoted_onset_delta_days).toBe(5);
     });
     
     it('does not blindly prefer uncontexted slices; weighting by window date-count controls aggregation', () => {
@@ -1874,7 +1874,7 @@ describe('Phase 3 – Scenario-Aware Active Edges (B3)', () => {
       expect(e1Result).toBeDefined();
       
       // §0.3: Weighted median should select the dominant-weight slice onset (4).
-      expect(e1Result!.latency.onset_delta_days).toBe(4);
+      expect(e1Result!.latency.promoted_onset_delta_days).toBe(4);
     });
   });
 });

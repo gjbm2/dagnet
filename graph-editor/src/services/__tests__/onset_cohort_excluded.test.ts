@@ -113,7 +113,7 @@ describe('onset_delta_days Cohort Exclusion', () => {
       
       const edgeResult = result.edgeValues.find(v => v.edgeUuid === 'start-to-a');
       expect(edgeResult).toBeDefined();
-      expect(edgeResult!.latency.onset_delta_days).toBeUndefined();
+      expect(edgeResult!.latency.promoted_onset_delta_days).toBeUndefined();
     });
 
     it('should ignore onset from cohort(date,context) slices', () => {
@@ -128,7 +128,7 @@ describe('onset_delta_days Cohort Exclusion', () => {
       
       const edgeResult = result.edgeValues.find(v => v.edgeUuid === 'start-to-a');
       expect(edgeResult).toBeDefined();
-      expect(edgeResult!.latency.onset_delta_days).toBeUndefined();
+      expect(edgeResult!.latency.promoted_onset_delta_days).toBeUndefined();
     });
 
     it('should use window onset even when cohort has lower value', () => {
@@ -144,7 +144,7 @@ describe('onset_delta_days Cohort Exclusion', () => {
       
       const edgeResult = result.edgeValues.find(v => v.edgeUuid === 'start-to-a');
       expect(edgeResult).toBeDefined();
-      expect(edgeResult!.latency.onset_delta_days).toBe(5); // cohort with lower value ignored
+      expect(edgeResult!.latency.promoted_onset_delta_days).toBe(5); // cohort with lower value ignored
     });
 
     it('should use window onset even when cohort has onset=0', () => {
@@ -160,7 +160,7 @@ describe('onset_delta_days Cohort Exclusion', () => {
       
       const edgeResult = result.edgeValues.find(v => v.edgeUuid === 'start-to-a');
       expect(edgeResult).toBeDefined();
-      expect(edgeResult!.latency.onset_delta_days).toBe(3);
+      expect(edgeResult!.latency.promoted_onset_delta_days).toBe(3);
     });
   });
 
@@ -180,7 +180,7 @@ describe('onset_delta_days Cohort Exclusion', () => {
       
       const edgeResult = result.edgeValues.find(v => v.edgeUuid === 'start-to-a');
       expect(edgeResult).toBeDefined();
-      expect(edgeResult!.latency.onset_delta_days).toBeUndefined();
+      expect(edgeResult!.latency.promoted_onset_delta_days).toBeUndefined();
     });
   });
 
@@ -202,7 +202,7 @@ describe('onset_delta_days Cohort Exclusion', () => {
       const edgeResult = result.edgeValues.find(v => v.edgeUuid === 'start-to-a');
       expect(edgeResult).toBeDefined();
       // Default β is 0.5 (weighted median). With equal weights, this selects the smaller value (3).
-      expect(edgeResult!.latency.onset_delta_days).toBe(3);
+      expect(edgeResult!.latency.promoted_onset_delta_days).toBe(3);
     });
   });
 
@@ -221,7 +221,7 @@ describe('onset_delta_days Cohort Exclusion', () => {
       
       const edgeResult = result.edgeValues.find(v => v.edgeUuid === 'start-to-a');
       expect(edgeResult).toBeDefined();
-      expect(edgeResult!.latency.onset_delta_days).toBeUndefined();
+      expect(edgeResult!.latency.promoted_onset_delta_days).toBeUndefined();
     });
 
     it('should correctly identify window slices by DSL pattern', () => {
@@ -240,7 +240,7 @@ describe('onset_delta_days Cohort Exclusion', () => {
       const edgeResult = result.edgeValues.find(v => v.edgeUuid === 'start-to-a');
       expect(edgeResult).toBeDefined();
       // No hard "uncontexted precedence": weighted median across all window slices.
-      expect(edgeResult!.latency.onset_delta_days).toBe(3);
+      expect(edgeResult!.latency.promoted_onset_delta_days).toBe(3);
     });
   });
 });

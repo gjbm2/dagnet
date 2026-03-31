@@ -122,11 +122,16 @@ export function ModelVarsCards({
   const handleToggle = useCallback((source: ModelSourcePreference) => {
     if (disabled) return;
     if (edgePreferenceOverridden && edgePreference === source) {
+      // Already pinned to this source → unpin (revert to auto)
       onUpdate({ model_source_preference: undefined, model_source_preference_overridden: false });
+    } else if (activeSource === source && !edgePreferenceOverridden) {
+      // Auto-selected but user is turning it OFF → pin to manual (user decision)
+      onUpdate({ model_source_preference: 'manual', model_source_preference_overridden: true });
     } else {
+      // Not active or pinned elsewhere → pin to this source
       onUpdate({ model_source_preference: source, model_source_preference_overridden: true });
     }
-  }, [disabled, edgePreference, edgePreferenceOverridden, onUpdate]);
+  }, [disabled, edgePreference, edgePreferenceOverridden, activeSource, onUpdate]);
 
   // Output field commit: just set the field + override flag.
   // updateEdgeParam handles manual model_vars entry creation centrally (doc 15 §5.3).

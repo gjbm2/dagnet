@@ -824,8 +824,8 @@ async function buildFilterObjectForContextValue(
     
     if (otherPolicy === 'explicit') {
       const mapping = await contextRegistry.getSourceMapping(key, value, source);
-      if (!mapping || (!mapping.filter && !mapping.pattern)) {
-        throw new Error(`otherPolicy='explicit' but no filter/pattern defined for ${key}:other`);
+      if (!mapping || (!mapping.filter && !mapping.pattern && mapping.type !== 'behavioral')) {
+        throw new Error(`otherPolicy='explicit' but no filter/pattern/behavioral defined for ${key}:other`);
       }
       // Fall through to use the mapping
     }
@@ -839,20 +839,33 @@ async function buildFilterObjectForContextValue(
     throw new Error(`No ${source} mapping for ${key}:${value}`);
   }
 
-  // Behavioural mapping: "user has done event X where property = Y"
+  // Behavioural mapping: "user has/hasn't done event X [where property op values]"
   if (mapping.type === 'behavioral') {
     if (!mapping.event_type) {
       throw new Error(`Behavioral mapping for ${key}:${value} missing event_type`);
     }
     const filters: ContextFilterObject['filters'] = [];
-    if (mapping.filter_property && mapping.filter_value) {
-      filters.push({
-        subprop_type: 'event',
-        subprop_key: mapping.filter_property,
-        subprop_op: 'is',
-        subprop_value: [mapping.filter_value],
-      });
+    const filterOp = mapping.filter_op || 'is';
+
+    if (mapping.filter_property) {
+      // Determine filter values: explicit array or single value
+      const filterValues = mapping.filter_values
+        || (mapping.filter_value ? [mapping.filter_value] : []);
+
+      if (filterValues.length > 0) {
+        filters.push({
+          subprop_type: 'event',
+          subprop_key: mapping.filter_property,
+          subprop_op: filterOp,
+          subprop_value: filterValues,
+        });
+      }
     }
+
+    // behavioral_op/behavioral_value from mapping override defaults
+    const behavioralOp = mapping.behavioral_op || '>=';
+    const behavioralValue = mapping.behavioral_value ?? (behavioralOp === '=' ? 0 : 1);
+
     return {
       field: key,
       op: 'is',
@@ -860,8 +873,8 @@ async function buildFilterObjectForContextValue(
       type: 'behavioral',
       event_type: mapping.event_type,
       filters,
-      behavioral_op: '>=',
-      behavioral_value: 1,
+      behavioral_op: behavioralOp,
+      behavioral_value: behavioralValue,
       time_type: mapping.time_type || 'rolling',
       time_value: mapping.time_value ?? 366,
     };

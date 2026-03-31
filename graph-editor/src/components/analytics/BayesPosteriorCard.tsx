@@ -385,5 +385,9 @@ const BayesModelRateChart = React.memo(function BayesModelRateChart(props: Model
     hasEdge, hasPath,
   ]);
 
-  return <ReactECharts option={option} style={{ height: 150, marginTop: 6 }} notMerge lazyUpdate />;
+  return (
+    <div style={{ width: '100%', aspectRatio: '2.5 / 1', maxHeight: 320, marginTop: 6 }}>
+      <ReactECharts option={option} style={{ width: '100%', height: '100%' }} notMerge lazyUpdate />
+    </div>
+  );
 });

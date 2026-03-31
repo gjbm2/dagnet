@@ -499,5 +499,9 @@ function buildCombinedCdfOption(edge?: CdfParams, path?: CdfParams) {
 const LatencyCdfTab = React.memo(function LatencyCdfTab({ edge, path }: { edge?: CdfParams; path?: CdfParams }) {
   if (!edge && !path) return null;
   const option = useMemo(() => buildCombinedCdfOption(edge, path), [edge, path]);
-  return <ReactECharts option={option} style={{ height: 140 }} notMerge lazyUpdate />;
+  return (
+    <div style={{ width: '100%', aspectRatio: '2.5 / 1', maxHeight: 320 }}>
+      <ReactECharts option={option} style={{ width: '100%', height: '100%' }} notMerge lazyUpdate />
+    </div>
+  );
 });

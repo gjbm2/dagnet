@@ -8,6 +8,54 @@ Entries are reverse-chronological (newest first).
 
 ---
 
+## 31-Mar-26: Onset obs precision — autocorrelation correction
+
+### Problem
+With sharpened softplus (k=5), Phase 1 onset posterior for del-to-reg
+is 3.31±0.15d — implausibly precise (±4 hours). The 49 onset
+observations have σ=2.4d but the model treats them as independent
+measurements of a fixed onset, giving σ/√49 = 0.34d precision.
+
+### Root cause
+The onset observations are a time series (one per retrieval date).
+Onset genuinely varies over time — the σ=2.4d is real temporal
+variation, not measurement noise. Nearby dates are correlated
+(ρ=0.89 for del-to-reg), so N=49 overstates the independent
+information.
+
+### Two approaches tried
+
+**A. Single observation** — emit one obs at the series mean with
+σ = the full data variability (σ_obs). This treats all variation as
+irreducible onset dispersion. Result: onset collapsed to 0.55d —
+too weak an anchor against the trajectory pull. The onset-mu ridge
+runs in the low-onset direction (onset→0, mu absorbs the delay).
+
+**B. Autocorrelation-corrected N_eff** — compute lag-1 autocorrelation
+ρ, then N_eff = N × (1-ρ)/(1+ρ), σ_eff = σ_obs/√N_eff. For
+del-to-reg: ρ=0.89 → N_eff=2.8 → σ_eff=1.41d. Result: onset=0.55
+still (σ_eff not tight enough to resist trajectory pull), but
+converged well (rhat=1.002).
+
+### Status
+Currently using approach B (autocorrelation correction). Both
+approaches give onset ~0.5d for del-to-reg — the trajectory data
+pulls onset to near zero regardless, because with sharpened softplus
+the onset-mu ridge now favours low onset + high mu (the reverse of
+the old problem). The onset obs (at any reasonable strength) cannot
+anchor onset at ~4d against the trajectory's preference for ~0d.
+
+It is not yet clear whether the onset=0.5d solution is genuinely
+better (valid S-curve, mu=2.25 puts median at 9.5d above onset)
+or whether onset should be closer to 4d. Need to compare CDF fit
+visually against the actual data.
+
+Open question: should onset be constrained more strongly (e.g. by
+the t95 constraint geometry), or is onset=0.5 + mu=2.25 actually
+the correct decomposition for this edge?
+
+---
+
 ## 30-Mar-26: Softplus onset leakage — root cause of onset-mu-sigma ridge
 
 ### Problem

@@ -142,3 +142,30 @@ export function qualityTierLabel(tier: QualityTierLevel): string {
     case 'no-data': return 'No data';
   }
 }
+
+// ── Graph-level composite quality (doc 13 §1.1) ───────────
+
+export type GraphQualityTierWord = 'good' | 'fair' | 'poor' | 'very poor';
+
+/**
+ * Derive a composite quality word from the graph-level `_bayes.quality`
+ * fields written by applyPatch. Thresholds per doc 13 §1.1.
+ */
+export function computeGraphQualityTier(quality: {
+  converged_pct: number;
+  max_rhat: number | null;
+}): { tier: GraphQualityTierWord; label: string } {
+  const pct = quality.converged_pct;
+  const rhat = quality.max_rhat ?? 0;
+
+  if (pct >= 90 && rhat < 1.02) {
+    return { tier: 'good', label: `${pct}% converged (good)` };
+  }
+  if (pct >= 70 && rhat < 1.05) {
+    return { tier: 'fair', label: `${pct}% converged, max rhat ${rhat.toFixed(2)} (fair)` };
+  }
+  if (pct >= 50 && rhat < 1.10) {
+    return { tier: 'poor', label: `${pct}% converged, max rhat ${rhat.toFixed(2)} (poor)` };
+  }
+  return { tier: 'very poor', label: `${pct}% converged, max rhat ${rhat.toFixed(2)} (very poor)` };
+}
