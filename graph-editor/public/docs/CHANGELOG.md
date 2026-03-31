@@ -1,4 +1,11 @@
 # DagNet Release Notes
+## Version 1.9.3b
+**Released:** 31-Mar-26
+
+Fixed exploding dsl issue
+
+---
+
 ## Version 1.9.1b
 **Released:** 31-Mar-26
 
