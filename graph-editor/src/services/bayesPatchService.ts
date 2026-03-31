@@ -17,7 +17,7 @@ import { upsertModelVars, ukDateNow, applyPromotion } from './modelVarsResolutio
 
 console.log('[bayesPatchService] Module loaded');
 
-const FIT_HISTORY_MAX_ENTRIES = 20;
+const FIT_HISTORY_MAX_ENTRIES = 100; // TODO: move to ForecastingSettings
 
 // ── Quality gate for model_vars (doc 15 §3) ────────────────────────────────
 // Same thresholds as bayesQualityTier 'failed' tier.

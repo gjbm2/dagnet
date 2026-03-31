@@ -65,10 +65,10 @@ class ForecastingSettings:
 
     # ── Bayesian fit_history retention ─────────────────────────
 
-    bayes_fit_history_interval_days: float = 7
+    bayes_fit_history_interval_days: float = 1
     """Minimum days between retained fit_history entries."""
 
-    bayes_fit_history_max_entries: float = 12
+    bayes_fit_history_max_entries: float = 100
     """Maximum fit_history entries per posterior."""
 
 

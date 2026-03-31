@@ -452,14 +452,14 @@ export const LATENCY_MIN_EFFECTIVE_SAMPLE_SIZE = 150;
  * The worker runs nightly but only appends to fit_history if at least
  * this many days have passed since the last entry.
  */
-export const BAYES_FIT_HISTORY_INTERVAL_DAYS = 7;
+export const BAYES_FIT_HISTORY_INTERVAL_DAYS = 1;
 
 /**
  * Maximum fit_history entries per posterior.
  * Oldest entries are evicted when the cap is reached.
- * At default settings (interval=7, max=12) this gives ~3 months of weekly snapshots.
+ * At default settings (interval=1, max=100) this gives ~100 days of daily snapshots.
  */
-export const BAYES_FIT_HISTORY_MAX_ENTRIES = 12;
+export const BAYES_FIT_HISTORY_MAX_ENTRIES = 100;
 
 // =============================================================================
 // Forecasting Settings (wire format for Python backend)
