@@ -1038,13 +1038,11 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
                                         beta=max((1 - p_mean) * FALLBACK_PRIOR_ESS, DIRICHLET_CONC_FLOOR))
                         edge_var_names[edge_id] = f"p_cohort_{safe_id}"
 
-                    # Phase 2 dispersion: no per-cohort random effects
-                    # (Option A fails on production — ESS=7 with 218
-                    # random effects). Between-cohort kappa is estimated
-                    # post-model via Williams method in inference.py.
-                    # See journal 29-Mar-26.
+                    # Phase 2 dispersion: cohort endpoint BetaBinomial
+                    # constrains κ from between-cohort variation, mirroring
+                    # Phase 1's window endpoint BB. See journal 31-Mar-26.
 
-                    # Emit cohort trajectories only (skip window).
+                    # Emit cohort trajectories (skip window).
                     _emit_cohort_likelihoods(safe_id, p, ev, diagnostics,
                                             topology, edge_var_names, model,
                                             latency_vars=latency_vars,
@@ -1053,6 +1051,97 @@ def build_model(topology: TopologyAnalysis, evidence: BoundEvidence,
                                             kappa=edge_kappa,
                                             onset_vars=onset_vars,
                                             skip_cohort_trajectories=False)
+
+                    # Cohort endpoint BetaBinomial: one observation per
+                    # entry-day cohort trajectory. y_final ~ BB(a, p_path×F_path, κ).
+                    # Captures between-cohort rate variation. Uses path CDF
+                    # (from cohort_latency_vars or frozen Phase 1 latency).
+                    if edge_kappa is not None and ev.cohort_obs:
+                        from .completeness import shifted_lognormal_cdf
+
+                        # Resolve path CDF parameters for this edge.
+                        # Prefer latent cohort_latency_vars (gradients flow);
+                        # fall back to frozen Phase 1 or topology defaults.
+                        _clv = cohort_latency_vars or {}
+                        if edge_id in _clv:
+                            _ep_onset_var, _ep_mu_var, _ep_sigma_var = _clv[edge_id]
+                            _ep_onset_f = et.path_latency.path_delta if et.path_latency else 0.0
+                            _ep_mu_f = 0.0
+                            _ep_sigma_f = 0.01
+                        else:
+                            # Fixed CDF from Phase 1 frozen or topology
+                            _pf = phase2_frozen.get(edge_id, {}) if phase2_frozen else {}
+                            if et.path_latency:
+                                _ep_onset_f = _pf.get("path_onset", et.path_latency.path_delta)
+                                _ep_mu_f = _pf.get("path_mu", et.path_latency.path_mu)
+                                _ep_sigma_f = _pf.get("path_sigma", et.path_latency.path_sigma)
+                            elif et.has_latency and ev.latency_prior:
+                                _ep_onset_f = ev.latency_prior.onset_delta_days or 0.0
+                                _ep_mu_f = ev.latency_prior.mu
+                                _ep_sigma_f = ev.latency_prior.sigma
+                            else:
+                                _ep_onset_f = 0.0
+                                _ep_mu_f = 0.0
+                                _ep_sigma_f = 0.01
+                            _ep_onset_var = pt.as_tensor_variable(np.float64(_ep_onset_f))
+                            _ep_mu_var = pt.as_tensor_variable(np.float64(_ep_mu_f))
+                            _ep_sigma_var = pt.as_tensor_variable(np.float64(_ep_sigma_f))
+
+                        _cep_n = []
+                        _cep_y = []
+                        _cep_ages = []
+                        _cep_skipped = 0
+                        for c_obs in ev.cohort_obs:
+                            for traj in c_obs.trajectories:
+                                if traj.obs_type != "cohort":
+                                    continue
+                                if len(traj.retrieval_ages) < 2 or traj.n <= 0:
+                                    continue
+                                # Maturity gate: path CDF at endpoint age.
+                                # No-latency first edges: F=1.0 always.
+                                if not et.has_latency:
+                                    _cep_f = 1.0
+                                else:
+                                    _age = getattr(traj, 'max_retrieval_age', None) or traj.retrieval_ages[-1]
+                                    _cep_f = shifted_lognormal_cdf(_age, _ep_onset_f, _ep_mu_f, _ep_sigma_f)
+                                if _cep_f < 0.9:
+                                    _cep_skipped += 1
+                                    continue
+                                _cep_n.append(traj.n)
+                                _cep_y.append(min(traj.cumulative_y[-1], traj.n) if traj.cumulative_y else 0)
+                                _age = getattr(traj, 'max_retrieval_age', None) or traj.retrieval_ages[-1]
+                                _cep_ages.append(_age)
+
+                        if len(_cep_n) >= 3:
+                            _cep_n_arr = np.array(_cep_n, dtype=np.int64)
+                            _cep_y_arr = np.array(_cep_y, dtype=np.int64)
+                            _cep_ages_arr = np.array(_cep_ages, dtype=np.float64)
+
+                            if not et.has_latency:
+                                # No latency: F=1.0, p_eff = p
+                                _cep_p_eff = pm.math.clip(p, 1e-6, 1.0 - 1e-6)
+                            else:
+                                # CDF at endpoint ages (latent — gradients flow)
+                                _cep_ages_t = pt.as_tensor_variable(_cep_ages_arr)
+                                _cep_age_minus_onset = _cep_ages_t - _ep_onset_var
+                                _cep_eff_ages = pt.softplus(_cep_age_minus_onset)
+                                _cep_log_ages = pt.log(pt.maximum(_cep_eff_ages, 1e-30))
+                                _cep_z = (_cep_log_ages - _ep_mu_var) / (_ep_sigma_var * pt.sqrt(2.0))
+                                _cep_f_endpoints = 0.5 * pt.erfc(-_cep_z)
+                                _cep_p_eff = pm.math.clip(p * _cep_f_endpoints, 1e-6, 1.0 - 1e-6)
+
+                            pm.BetaBinomial(
+                                f"cohort_endpoint_bb_{safe_id}",
+                                n=_cep_n_arr,
+                                alpha=_cep_p_eff * edge_kappa,
+                                beta=(1.0 - _cep_p_eff) * edge_kappa,
+                                observed=_cep_y_arr,
+                            )
+                            diagnostics.append(
+                                f"  cohort_endpoint_bb: {edge_id[:8]}… "
+                                f"{len(_cep_n)} mature endpoints"
+                                f" ({_cep_skipped} immature excluded, F<0.9)"
+                            )
                 else:
                     # Phase 1: hierarchical Beta on p.
                     #

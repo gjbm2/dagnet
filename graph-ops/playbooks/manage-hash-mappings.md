@@ -111,13 +111,33 @@ When editing event or context files in the data repo, agents MUST follow this pr
 3. **After editing**: run `diff-hash` again to detect hash changes
 4. **For each changed hash**: run `add-mapping` with the old and new `core_hash` and a descriptive reason
 5. **Include `hash-mappings.json`** in the commit alongside the edited files
-6. **If uncertain** whether a change is hash-breaking (e.g. changing a `description` field), run `diff-hash` anyway — the tool will confirm "unchanged" and the agent can proceed without a mapping
+6. **Verify**: run the integrity check to confirm hash chain continuity (see Verification below)
+7. **If uncertain** whether a change is hash-breaking (e.g. changing a `description` field), run `diff-hash` anyway — the tool will confirm "unchanged" and the agent can proceed without a mapping
+
+### Verification: Hash Chain Integrity Check
+
+After creating mappings, **always verify** that the hash chain is intact. The integrity service (Phase 9) traces the full mapping chain for every parameter and reports breaks.
+
+**CLI (recommended for agents)**:
+```bash
+bash graph-ops/scripts/validate-graph.sh graphs/<graph-name>.json --deep
+```
+
+Look for `hash-continuity` issues in the output:
+- **info** "Hash chain intact across N signature epochs" — all good, mappings are working
+- **warning** "Hash chain broken Nd ago" — a mapping is missing. Run `diff-hash` to identify the gap and `add-mapping` to bridge it
+- **warning** "Parameter has no snapshot data (graph is Nd old)" — parameter has never been fetched, which may indicate a misconfiguration
+
+**In-app**: File Menu → "Check Integrity..." runs the same check. Hash continuity issues appear in the report under the 🔑 category.
+
+The check traces every `query_signature` stored on every parameter value, computes whether it's reachable from the current hash via the mapping closure, and reports the earliest date where the chain breaks. A fully intact chain means all historical snapshot data is accessible.
 
 ### What NOT to do
 
 - Never edit `hash-mappings.json` by hand — use `add-mapping` to ensure format correctness
 - Never skip the `diff-hash` step because "it's just a small change" — any edit to `amplitude_filters`, `provider_event_names`, source mappings, or `otherPolicy` is hash-breaking
 - Never create mappings speculatively — only create them when `diff-hash` confirms a hash change
+- Never skip the verification step — `diff-hash` confirms individual hashes changed, but only the integrity check confirms the full chain is intact across all parameters
 
 ---
 

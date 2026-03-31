@@ -32,7 +32,8 @@ type IssueCategory =
   | 'metadata'
   | 'sync'
   | 'image'
-  | 'face-alignment';
+  | 'face-alignment'
+  | 'hash-continuity';
 
 export interface GraphIssue {
   id: string;

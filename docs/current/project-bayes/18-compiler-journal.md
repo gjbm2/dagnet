@@ -220,6 +220,59 @@ previously caused ESS=7 with 218 random effects. The endpoint BB
 with shared p avoids this while still constraining κ from per-day
 variation.
 
+### Phase 1 results (after implementation)
+
+Phase 1 κ now data-constrained via daily BetaBinomial + endpoint BB.
+Production results (simple graph, warm-start stable across passes):
+
+| Edge                    |   p   |   κ   |  ±SD  | Rate SD |
+|-------------------------|-------|-------|-------|---------|
+| landing-to-created      | 0.188 |  49.1 |   6.5 |  5.5pp  |
+| create-to-delegated     | 0.556 | 160.0 |  31.4 |  3.8pp  |
+| delegated-to-registered | 0.120 | 184.8 |  46.2 |  2.5pp  |
+| registered-to-success   | 0.831 |  19.7 |   6.2 |  9.8pp  |
+
+### Phase 2 κ design
+
+Phase 2 needs the same pattern for cohort trajectories. Each cohort
+trajectory endpoint gives one (a, y_final) per entry day. Multiple
+entry days are independent. Feed into
+BetaBinomial(a, p_path × F_path × κ, (1 − p_path × F_path) × κ).
+
+This κ measures PATH-level between-cohort variation — how much does
+the entire path's conversion rate vary across entry-day cohorts.
+That's the right quantity for the cohort surprise gauge.
+
+First edge: daily cohort obs already go through BetaBinomial (from
+the daily obs change). Downstream edges need cohort trajectory
+endpoint BB, mirroring the Phase 1 window endpoint BB.
+
+### Synth validation strategy for κ
+
+Once Phase 2 κ is implemented, validate with synth data using
+controlled single-source tests:
+
+1. **Step-day only**: set `kappa_sim_default` (entry-day) very high
+   (effectively 0 user-level dispersion), keep `kappa_step_default`
+   = 30. Window (Phase 1) should recover κ ≈ 30. Cohort (Phase 2)
+   should see attenuated/absent signal.
+
+2. **Entry-day only**: set `kappa_step_default` very high,
+   keep `kappa_sim_default` = 50. Cohort (Phase 2) should recover
+   κ ≈ 50 for edges close to anchor, weaker signal downstream.
+   Window (Phase 1) should see attenuated/absent signal.
+
+**Rationale**: window() queries measure variation at the from-node
+(calendar day at x) → pick up step-day (nodal) dispersion. Cohort
+queries measure variation across entry-day cohorts (anchored at a)
+→ pick up entry-day (user-cohort) dispersion. The entry-day signal
+fades downstream as upstream latency mixes cohorts, but should be
+strong near anchor.
+
+Testing each source independently confirms the model correctly
+attributes dispersion to the right mechanism before testing both
+sources together.
+
 ---
 
 ## 30-Mar-26: Phase 2 cohort onset drift (doc 26)

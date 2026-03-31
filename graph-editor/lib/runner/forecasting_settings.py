@@ -65,11 +65,11 @@ class ForecastingSettings:
 
     # ── Bayesian fit_history retention ─────────────────────────
 
-    bayes_fit_history_interval_days: float = 1
-    """Minimum days between retained fit_history entries."""
+    bayes_fit_history_interval_days: float = 0
+    """Minimum days between retained fit_history entries. 0 = store every fit."""
 
     bayes_fit_history_max_entries: float = 100
-    """Maximum fit_history entries per posterior."""
+    """Maximum fit_history entries per posterior. TODO (doc 27): rename to max_days, implement date-based eviction."""
 
 
 def settings_from_dict(d: Optional[Dict[str, Any]]) -> ForecastingSettings:

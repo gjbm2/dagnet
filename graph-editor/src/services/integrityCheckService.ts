@@ -3247,7 +3247,7 @@ export class IntegrityCheckService {
     try {
       const { computeQuerySignature } = await import('./dataOperations/querySignature');
       const { computeShortCoreHash } = await import('./coreHashService');
-      const { getMappings, getClosureSet } = await import('./hashMappingsService');
+      const { getMappings } = await import('./hashMappingsService');
 
       const mappings = getMappings();
       const paramFiles = allFiles.filter((f: any) => f.type === 'parameter');
@@ -3297,6 +3297,7 @@ export class IntegrityCheckService {
       }
 
       // ─── Per-graph, per-parameter hash continuity ───────────────────────
+      const { traceHashChain } = await import('./hashChainService');
       const now = Date.now();
       const RECENT_THRESHOLD_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 
@@ -3324,13 +3325,12 @@ export class IntegrityCheckService {
           );
           if (!paramFile?.data?.values) continue;
 
-          // Get stored signature from any value
-          const storedSig = paramFile.data.values.find((v: any) => v.query_signature);
+          // Check if any value has a signature at all
+          const hasAnySignature = paramFile.data.values.some((v: any) => v.query_signature);
 
-          // ── No stored signature: parameter never fetched ──
-          if (!storedSig?.query_signature) {
+          if (!hasAnySignature) {
+            // Parameter never fetched
             if (graphCreatedAt && (now - graphCreatedAt) > RECENT_THRESHOLD_MS) {
-              // Graph is older than 7 days but this parameter has never been fetched
               issues.push({
                 fileId: paramFile.fileId,
                 type: 'parameter' as ObjectType,
@@ -3342,67 +3342,82 @@ export class IntegrityCheckService {
                 suggestion: 'Fetch data for this parameter, or check whether the edge query and event bindings are correct',
               });
             }
-            // Graph is recent (<7d) — no warning, it may just not have been fetched yet
             continue;
           }
 
-          // ── Has stored signature: check if current definition still matches ──
-          let currentSig: string;
+          // Compute current hash from current definitions
+          let currentHash: string;
           try {
             const contextKeys: string[] = [];
             const dsl = graph.dataInterestsDSL || '';
             for (const m of dsl.matchAll(/context\(([^):]+)/g)) contextKeys.push(m[1]);
 
-            currentSig = await computeQuerySignature(
+            const currentSig = await computeQuerySignature(
               { context: contextKeys.map((k: string) => ({ key: k })), event_filters: {}, case: [] },
               edge.p?.connection || 'amplitude',
               graph, edge, [...new Set(contextKeys)].sort(),
               undefined, eventDefs,
             );
-          } catch {
-            continue;
-          }
-
-          let storedHash: string;
-          let currentHash: string;
-          try {
-            storedHash = await computeShortCoreHash(storedSig.query_signature);
             currentHash = await computeShortCoreHash(currentSig);
           } catch {
             continue;
           }
 
-          if (storedHash === currentHash) continue; // All good — current definitions match stored data
+          // Trace the full hash chain for this parameter
+          const chain = await traceHashChain(currentHash, paramFile.data.values, mappings);
 
-          // Hashes differ — check if a mapping bridges them
-          const closure = getClosureSet(currentHash, mappings);
-          const bridged = closure.some(e => e.core_hash === storedHash);
+          if (chain.chainIntact) {
+            // Chain is fully intact — if there are multiple epochs with mappings, note it
+            if (chain.epochs.length > 1) {
+              issues.push({
+                fileId: paramFile.fileId,
+                type: 'parameter' as ObjectType,
+                severity: 'info',
+                category: 'hash-continuity',
+                message: `Hash chain intact across ${chain.epochs.length} signature epochs (${chain.earliestReachableDate || '?'} → present)`,
+                field: 'query_signature',
+                details: `Graph: ${graphName}, edge: ${edge.query}`,
+              });
+            }
+            continue;
+          }
 
-          if (bridged) {
+          // Chain is broken — determine severity based on when the break is
+          if (chain.breakAgeDays !== null && chain.breakAgeDays <= 7) {
+            // Break within last 7 days — warning (recent data potentially orphaned)
+            issues.push({
+              fileId: paramFile.fileId,
+              type: 'parameter' as ObjectType,
+              severity: 'warning',
+              category: 'hash-continuity',
+              message: `Hash chain broken ${chain.breakAgeDays}d ago — recent snapshot data may be orphaned`,
+              field: 'query_signature',
+              details: `Graph: ${graphName}, edge: ${edge.query}. Break at ${chain.earliestBreakDate}. Reachable history: ${chain.earliestReachableDate || 'none'} → present. ${chain.epochs.filter(e => !e.reachable).length} unreachable epoch(s).`,
+              suggestion: 'Run diff-hash and add-mapping CLI tools to bridge the gap',
+            });
+          } else if (chain.breakAgeDays !== null) {
+            // Break older than 7 days — info (historical gap, less urgent)
             issues.push({
               fileId: paramFile.fileId,
               type: 'parameter' as ObjectType,
               severity: 'info',
               category: 'hash-continuity',
-              message: `Signature changed but bridged by hash mapping (${storedHash.substring(0, 10)}… → ${currentHash.substring(0, 10)}…)`,
+              message: `Hash chain has historical gap (break at ${chain.earliestBreakDate}, ${chain.breakAgeDays}d ago)`,
               field: 'query_signature',
-              details: `Graph: ${graphName}, edge: ${edge.query}`,
+              details: `Graph: ${graphName}, edge: ${edge.query}. Reachable history: ${chain.earliestReachableDate || 'none'} → present. ${chain.epochs.filter(e => !e.reachable).length} unreachable epoch(s).`,
+              suggestion: 'Consider creating hash mappings to restore access to older snapshot data',
             });
           } else {
-            // Hash discontinuity — no mapping bridges old to new
-            const severity = (graphCreatedAt && (now - graphCreatedAt) > RECENT_THRESHOLD_MS)
-              ? 'warning' as const   // Mature graph: likely has historical data being orphaned
-              : 'info' as const;     // Recent graph: less likely to have significant history
-
+            // Break with unknown date
             issues.push({
               fileId: paramFile.fileId,
               type: 'parameter' as ObjectType,
-              severity,
+              severity: 'warning',
               category: 'hash-continuity',
-              message: `Hash discontinuity — snapshot signature changed with no mapping`,
+              message: `Hash chain broken — snapshot data may be orphaned`,
               field: 'query_signature',
-              details: `Graph: ${graphName} (${graphAgeDays !== null ? graphAgeDays + 'd old' : 'age unknown'}), edge: ${edge.query}. Stored: ${storedHash.substring(0, 10)}…, current: ${currentHash.substring(0, 10)}…`,
-              suggestion: `Run diff-hash and add-mapping CLI tools, or create a mapping via the commit guard`,
+              details: `Graph: ${graphName}, edge: ${edge.query}. ${chain.epochs.filter(e => !e.reachable).length} unreachable epoch(s) with no date information.`,
+              suggestion: 'Run diff-hash and add-mapping CLI tools to bridge the gap',
             });
           }
         }
