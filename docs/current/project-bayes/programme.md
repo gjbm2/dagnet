@@ -151,9 +151,9 @@ data-constrained. Single-source validation:
   global hash (stub). Needs: per-fit-unit fingerprints, staleness
   detection on FE pull, UI surfacing of stale posteriors, warm-start
   invalidation when topology changes. Blocks nightly scheduling.
-- **Model quality gating** (doc 13) — quality signalling (progress,
-  session log, Graph Issues), auto-enable Forecast Quality,
-  accept/reject preview. Designed, not built.
+- ~~**Model quality gating** (doc 13)~~ — **DONE**. Quality tiers
+  (failed/warning/good-0..3), graph-level composite, colour mapping,
+  PosteriorIndicator component, edge beads. Wired into UI.
 - **Mixture latency models** (doc 23 §12) — bimodal edges
   (e.g. registered-to-success) need mixture of two log-normals.
   Designed, not built.

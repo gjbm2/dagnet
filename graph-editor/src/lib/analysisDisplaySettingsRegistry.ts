@@ -950,14 +950,14 @@ export const CHART_DISPLAY_SETTINGS: Record<string, DisplaySettingDef[]> = {
     {
       key: 'show_model_promoted',
       label: 'Model: promoted',
-      shortLabel: 'Promoted',
+      shortLabel: 'Best',
       type: 'checkbox',
       defaultValue: true,
       propsPanel: true,
       inline: 'brief',
       contextMenu: false,
       computeAffecting: false,
-      group: 'model_overlays',
+      group: 'Model',
     },
     {
       key: 'show_model_analytic',
@@ -969,7 +969,7 @@ export const CHART_DISPLAY_SETTINGS: Record<string, DisplaySettingDef[]> = {
       inline: 'brief',
       contextMenu: false,
       computeAffecting: false,
-      group: 'model_overlays',
+      group: 'Model',
     },
     {
       key: 'show_model_analytic_be',
@@ -981,7 +981,7 @@ export const CHART_DISPLAY_SETTINGS: Record<string, DisplaySettingDef[]> = {
       inline: 'brief',
       contextMenu: false,
       computeAffecting: false,
-      group: 'model_overlays',
+      group: 'Model',
     },
     {
       key: 'show_model_bayesian',
@@ -993,7 +993,7 @@ export const CHART_DISPLAY_SETTINGS: Record<string, DisplaySettingDef[]> = {
       inline: 'brief',
       contextMenu: false,
       computeAffecting: false,
-      group: 'model_overlays',
+      group: 'Model',
     },
     {
       key: 'bayes_band_level',

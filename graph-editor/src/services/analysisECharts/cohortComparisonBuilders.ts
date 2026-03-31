@@ -227,20 +227,32 @@ export function buildCohortMaturityEChartsOption(
     const entry = modelCurves[effectiveSubjectId];
     // Promoted model curve — shown by default (show_model_promoted defaults to true)
     const showPromoted = settings.show_model_promoted !== false;
+    const promotedSource: string = entry?.params?.promoted_source || entry?.promotedSource || 'analytic';
+
+    // Colour the promoted CDF by its actual source
+    const promotedSourceColours: Record<string, [string, string]> = {
+      bayesian:    ['#60a5fa', '#2563eb'],
+      analytic:    ['#f87171', '#dc2626'],
+      analytic_be: ['#a78bfa', '#7c3aed'],
+    };
+    const promotedColourPair = promotedSourceColours[promotedSource] || promotedSourceColours.analytic;
+    const promotedColour = c.text === '#e0e0e0' ? promotedColourPair[0] : promotedColourPair[1];
+    const promotedDash = promotedSource === 'bayesian' ? 'dashed' : 'dotted';
+
     if (showPromoted && entry?.curve && Array.isArray(entry.curve) && entry.curve.length > 0) {
       const data = entry.curve
         .filter((p: any) => typeof p?.tau_days === 'number' && typeof p?.model_rate === 'number')
         .map((p: any) => ({ value: [p.tau_days, p.model_rate] }));
       if (data.length > 0) {
-        const promotedColour = c.text === '#e0e0e0' ? '#f87171' : '#dc2626';
+        const sourceLabel = promotedSource === 'bayesian' ? 'Bayesian' : promotedSource === 'analytic_be' ? 'Analytic (BE)' : 'Analytic';
         seriesOut.push({
           id: 'model_cdf',
-          name: 'Promoted model',
+          name: `Promoted: ${sourceLabel}`,
           type: 'line',
           showSymbol: false,
           smooth: true,
           connectNulls: false,
-          lineStyle: { width: 2, color: promotedColour, type: 'dotted', opacity: 0.7 },
+          lineStyle: { width: 2, color: promotedColour, type: promotedDash as any, opacity: 0.85 },
           itemStyle: { color: promotedColour },
           emphasis: { disabled: true },
           z: 10,
@@ -254,8 +266,10 @@ export function buildCohortMaturityEChartsOption(
         }
       }
     }
-    // Method B comparison curve (old raw-anchor approach) — green, part of promoted view
-    if (showPromoted && entry?.methodBCurve && Array.isArray(entry.methodBCurve) && entry.methodBCurve.length > 0) {
+    // Method B comparison curve (old raw-anchor approach) — only relevant
+    // when promoted source is analytic (compares two onset approaches).
+    const isBayesianPromoted = promotedSource === 'bayesian';
+    if (showPromoted && !isBayesianPromoted && entry?.methodBCurve && Array.isArray(entry.methodBCurve) && entry.methodBCurve.length > 0) {
       const methodBData = entry.methodBCurve
         .filter((p: any) => typeof p?.tau_days === 'number' && typeof p?.model_rate === 'number')
         .map((p: any) => ({ value: [p.tau_days, p.model_rate] }));
@@ -282,13 +296,11 @@ export function buildCohortMaturityEChartsOption(
         }
       }
     }
-    // Bayesian confidence band (filled polygon between upper and lower curves).
-    // Part of the promoted view — shown when promoted source is Bayesian.
-    // Resolve band data: prefer legacy fields, fall back to per-source bayesian
-    // band when promoted source is bayesian (legacy fields are no longer emitted).
-    let bandUpper = showPromoted ? entry?.bayesBandUpper : undefined;
-    let bandLower = showPromoted ? entry?.bayesBandLower : undefined;
-    if (showPromoted && !bandUpper) {
+    // Bayesian confidence band — only show when promoted source IS bayesian.
+    // Resolve band data: prefer legacy fields, fall back to per-source bayesian band.
+    let bandUpper = (showPromoted && isBayesianPromoted) ? entry?.bayesBandUpper : undefined;
+    let bandLower = (showPromoted && isBayesianPromoted) ? entry?.bayesBandLower : undefined;
+    if (showPromoted && isBayesianPromoted && !bandUpper) {
       const srcBayes = entry?.sourceModelCurves?.bayesian;
       if (srcBayes?.band_upper) bandUpper = srcBayes.band_upper;
       if (srcBayes?.band_lower) bandLower = srcBayes.band_lower;
@@ -357,6 +369,8 @@ export function buildCohortMaturityEChartsOption(
         if (!style) continue;
         // Check display setting — default off unless explicitly enabled
         if (!settings[style.settingKey]) continue;
+        // Skip if this source is already rendered as the promoted curve
+        if (showPromoted && srcName === promotedSource) continue;
 
         const srcCurve = (srcData as any)?.curve;
         if (!Array.isArray(srcCurve) || srcCurve.length === 0) continue;

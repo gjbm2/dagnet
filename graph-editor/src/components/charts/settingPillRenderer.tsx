@@ -245,8 +245,10 @@ export function renderTraySettings(
       } else if (groupSettings.length === 1) {
         out.push(renderTraySetting(s, display, onChange));
       } else {
-        const labelSetting = groupSettings.find(g => g.shortLabel) || groupSettings.find(g => g.type === 'radio');
-        const groupLabel = labelSetting?.shortLabel || labelSetting?.label || s.group;
+        // For groups with a radio, use its shortLabel as the group header.
+        // For all-checkbox groups, use the group key directly (it should be a display-friendly name).
+        const radioSetting = groupSettings.find(g => g.type === 'radio');
+        const groupLabel = radioSetting?.shortLabel || radioSetting?.label || s.group;
         out.push(
           <span key={`grp-${s.group}`} className="cfp-pill-group" title={groupLabel}>
             <span className="cfp-group-label">{groupLabel}</span>

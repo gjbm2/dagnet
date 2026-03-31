@@ -634,6 +634,21 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
     analysis_type = data.get('analysis_type', 'lag_histogram')
     scenarios = data.get('scenarios', [])
 
+    def _resolve_promoted_source(model_params: Dict[str, Any], source_curves: Dict[str, Any]) -> Optional[str]:
+        """Determine the actual promoted model source.
+
+        Priority: explicit preference > bayesian > analytic_be > analytic.
+        Returns the source name string, or None if no source available.
+        """
+        msp = model_params.get('promoted_source', 'best_available')
+        if msp and msp != 'best_available' and msp in source_curves:
+            return msp
+        # best_available: prefer bayesian > analytic_be > analytic
+        for candidate in ('bayesian', 'analytic_be', 'analytic'):
+            if candidate in source_curves:
+                return candidate
+        return None
+
     def _resolve_completeness_params(model_params: Dict[str, Any], is_window: bool) -> tuple:
         """Select mu/sigma/onset based on query mode and path param availability.
 
@@ -1264,6 +1279,35 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
                     cdf_sigma = sigma
                     cdf_onset = onset
 
+                    # Resolve the actual promoted source and override CDF params
+                    # to use that source's latency, not the mixed generic params.
+                    # Without this, cohort mode uses analytic path_mu/path_sigma
+                    # even when the promoted source should be bayesian.
+                    _src_curves = model_params.get('source_curves') or {}
+                    _promoted_source = _resolve_promoted_source(model_params, _src_curves)
+                    if _promoted_source and _promoted_source in _src_curves:
+                        _ps = _src_curves[_promoted_source]
+                        if cdf_mode == 'cohort_path' and _promoted_source != 'bayesian':
+                            _p_mu = _ps.get('path_mu')
+                            _p_sigma = _ps.get('path_sigma')
+                            if _p_mu is not None and _p_sigma is not None and _p_sigma > 0:
+                                cdf_mu = _p_mu
+                                cdf_sigma = _p_sigma
+                                cdf_onset = _ps.get('path_onset_delta_days', _ps.get('onset_delta_days', 0.0))
+                        elif _promoted_source == 'bayesian':
+                            # Bayesian: prefer path params from model_params (from posterior),
+                            # fall back to edge-level bayesian params.
+                            _bp_mu = model_params.get('bayes_path_mu')
+                            _bp_sigma = model_params.get('bayes_path_sigma')
+                            if cdf_mode == 'cohort_path' and _bp_mu is not None and _bp_sigma is not None and _bp_sigma > 0:
+                                cdf_mu = _bp_mu
+                                cdf_sigma = _bp_sigma
+                                cdf_onset = model_params.get('bayes_path_onset', model_params.get('bayes_onset', 0.0))
+                            else:
+                                cdf_mu = model_params.get('bayes_mu', cdf_mu)
+                                cdf_sigma = model_params.get('bayes_sigma', cdf_sigma)
+                                cdf_onset = model_params.get('bayes_onset', cdf_onset)
+
                     # Axis extent: max(upper_hdi(t95), upper_hdi(path_t95), sweep_span).
                     # Uses posterior HDI values directly — no recomputation from params.
                     anchor_from_str = subj.get('anchor_from', '')
@@ -1301,6 +1345,7 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
                             'onset_delta_days': cdf_onset,
                             'forecast_mean': forecast_mean,
                             'mode': cdf_mode,
+                            'promoted_source': _promoted_source or 'unknown',
                         }
 
                         # Method B comparison curve (old approach)
@@ -1460,7 +1505,7 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
 
                         if source_curve_results:
                             result['source_model_curves'] = source_curve_results
-                            result['promoted_source'] = model_params.get('promoted_source', 'best_available')
+                            result['promoted_source'] = _promoted_source or model_params.get('promoted_source', 'best_available')
 
             per_subject_results.append({
                 "subject_id": subj.get('subject_id'),

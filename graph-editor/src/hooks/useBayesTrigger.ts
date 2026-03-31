@@ -24,6 +24,7 @@ export type BayesTriggerStatus = 'idle' | 'submitting' | 'running' | 'complete' 
 export type BayesComputeMode = 'local' | 'modal';
 
 import { PYTHON_API_BASE } from '../lib/pythonApiBase';
+import { useViewOverlayMode } from './useViewOverlayMode';
 
 /** URLs for local dev mode (Python server, webhook on Vite dev server). */
 const LOCAL_SUBMIT_URL = `${PYTHON_API_BASE}/api/bayes/submit`;
@@ -43,6 +44,7 @@ interface BayesTriggerState {
 export function useBayesTrigger(computeMode: BayesComputeMode = 'local') {
   const { state: navState } = useNavigatorContext();
   const { tabs, activeTabId } = useTabContext();
+  const { setViewOverlayMode } = useViewOverlayMode();
 
   const [state, setState] = useState<BayesTriggerState>({
     status: 'idle',
@@ -530,11 +532,8 @@ export function useBayesTrigger(computeMode: BayesComputeMode = 'local') {
             const completionLabel = `Bayes complete — ${qualityLabel}`;
             operationRegistryService.setLabel(opId, completionLabel);
 
-            const isWarning = tier === 'poor' || tier === 'very poor';
-            setState({ status: 'complete', jobId, error: null, lastResult: record });
-            operationRegistryService.complete(opId, isWarning ? 'warning' : 'complete', undefined);
-
-            // Per-edge quality breakdown in session log (doc 13 §1.3)
+            // Per-edge quality breakdown (doc 13 §1.3) — check BEFORE
+            // completing the operation so we can attach an action button.
             const { computeQualityTier } = await import('../utils/bayesQualityTier');
             const { getGraphStore } = await import('../contexts/GraphStoreContext');
             const store = getGraphStore(activeTab.fileId);
@@ -558,6 +557,17 @@ export function useBayesTrigger(computeMode: BayesComputeMode = 'local') {
                 `Quality gates: ${failedEdges.length} failed, ${warnEdges.length} warning`,
                 detail, { jobId });
             }
+
+            const isWarning = tier === 'poor' || tier === 'very poor';
+            const hasEdgeIssues = failedEdges.length > 0 || warnEdges.length > 0;
+            const showAction = isWarning || hasEdgeIssues;
+            setState({ status: 'complete', jobId, error: null, lastResult: record });
+            operationRegistryService.complete(
+              opId,
+              (isWarning || hasEdgeIssues) ? 'warning' : 'complete',
+              undefined,
+              showAction ? { label: 'See Forecast Quality', onClick: () => setViewOverlayMode('forecast-quality') } : undefined,
+            );
           } else {
             setState({ status: 'complete', jobId, error: null, lastResult: record });
             operationRegistryService.complete(opId, 'complete', undefined);
