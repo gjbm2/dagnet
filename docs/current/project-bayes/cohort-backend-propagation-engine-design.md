@@ -458,12 +458,16 @@ The first is scalar mode for graph overlays. It evaluates the active
 query frontier only and returns per-edge query-time outputs such as
 completeness, `p.mean`, `p.n`, forecast mass, and debug or provenance
 information. This mode is meant to update the graph view after the FE
-has already shown a provisional approximation.
+has already shown a provisional approximation. The FE commissions this
+per scenario; the BE returns aggregate scalars that flow into param
+packs — the existing carrier for per-scenario derived state.
 
 The second is trajectory mode for analysis consumers. For
 `cohort_maturity`, it evaluates the same graph-wide state across a `tau`
 grid for the selected subject edge and returns per-`tau` aggregated rows
-plus optional per-Cohort diagnostics. Other forecasted analyses could
+plus optional per-Cohort diagnostics. The FE commissions this
+separately, sending all visible scenario graphs and snapshot subjects
+in a single multi-scenario request. Other forecasted analyses could
 reuse the same machinery with simpler `window()` semantics. This removes
 the current duplication where graph scalars and analysis rows are
 derived from different approximations.
@@ -483,28 +487,162 @@ That distinction is part of the user contract; otherwise the fallback
 path becomes invisible and analysts cannot tell whether they are seeing
 the approximate or authoritative answer.
 
-## 10. File surface and likely implementation shape
+### 9.1 State model: what persists, what is recomputed
 
-The new engine should live in `graph-editor/lib/runner/` near the
-existing cohort machinery, not in the FE stats pass. A new module is
-likely cleaner than continuing to accrete logic inside
-`cohort_forecast.py`, because the new engine has a broader scope than
-one chart.
+**Param packs carry aggregate scalars only.** The BE stats pass
+(scalar mode) returns per-edge `p.mean`, `completeness`,
+`forecast.mean`, `p.n`, and `forecast_k` — the same quantities the
+FE currently approximates, but derived from graph-aware topological
+propagation. These flow into param packs per scenario, which is the
+existing mechanism for per-scenario derived state on the canvas.
+Param packs are not extended with per-Cohort-day data.
+
+**Per-Cohort-day state is not persisted.** The graph walk that derives
+per-Cohort `x_propagated(d)`, `completeness(d)`, and `basis_tier(d)`
+is deterministic and sub-millisecond for realistic graph sizes (10
+edges × 100 Cohort days ≈ 1000 posterior-predictive evaluations,
+fully vectorised). It is cheap enough to recompute per analysis
+commission. The analysis handler already receives all scenario graphs
+and snapshot subjects in the request; it has everything it needs to
+redo the walk without cached intermediates.
+
+**Consequence: no shared state between scalar and trajectory modes.**
+The two modes share Python libraries and the propagation algorithm,
+but not data. The FE sends snapshot subjects to the BE for the stats
+pass, and sends them again when it commissions an analysis chart.
+This is redundant at the data level but architecturally simple: no
+cross-request cache, no stale-state management, no coupling between
+the two commission lifecycles.
+
+**Escape hatch.** If graph scale grows to the point where the
+deterministic walk becomes expensive (many more edges, much deeper
+Cohort history), param packs could be extended with a richer
+per-Cohort structure. This would be a nested object within the param
+pack, suppressed from the scenario palette edit modal UI but
+available to BE analysis handlers. This is not needed for the initial
+design and should be deferred until profiling shows recomputation is
+a bottleneck.
+
+## 10. Library decomposition and reuse
+
+The propagation engine decomposes into six capabilities. Four are
+shared libraries reusable by both the scalar stats pass and
+`cohort_maturity` analysis. Two are mode-specific.
+
+### 10.1 Shared libraries (new)
+
+These do not exist today as standalone functions. They are currently
+either absent, inlined in the MC loop, or approximated by shortcuts.
+
+**Graph-wide evidence binder.** Takes FE-planned snapshot subjects
+for all edges in the active slice, queries the snapshot DB via
+`snapshot_service.query_snapshots_for_sweep()`, and returns a
+structured binding: `Dict[edge_id, Dict[anchor_day,
+FrozenObservation]]` where `FrozenObservation` holds `(a, x_frozen,
+y_frozen, age, retrieved_at, slice_key)`.
+
+Today: `stats_engine.enhance_graph_latencies()` receives
+pre-aggregated `CohortData` per edge — it does not bind from
+snapshot rows directly. `cohort_forecast.compute_cohort_maturity_rows()`
+binds evidence for the subject edge only. The new binder does
+graph-wide binding in one pass.
+
+Reuse by `cohort_maturity`: replaces the per-subject-edge binding
+currently done via `cohort_maturity_derivation.derive_cohort_maturity()`
+for upstream edges. The subject edge's own frame derivation may still
+use the existing derivation module for its richer per-retrieval-day
+frame history.
+
+**Per-Cohort posterior predictive evaluator.** Given `(x_frozen,
+y_frozen, age)` and a posterior slice `(α, β, μ, σ, onset)`,
+computes `y_forecast(τ)` using the Bayesian posterior predictive
+formula from `cohort-maturity-full-bayes-design.md` §7.
+
+Today: this formula is implemented in `cohort_forecast.py` (lines
+945–976) but embedded inside the MC loop, not callable
+independently. The new library factors it out as a pure function:
+`posterior_predictive_y(frozen, posterior, tau_grid) → array`.
+
+Reuse by `cohort_maturity`: the chart's midpoint and per-MC-draw `y`
+both call this same function. Currently they do, but through the
+monolithic `compute_cohort_maturity_rows`.
+
+**Topological `x` propagator for `cohort()` mode.** Walks the graph
+in topological order. At each node, sums `y_forecast` from all
+incoming edges per Cohort day to produce `x_propagated(d)` for each
+outgoing edge. Leading edges (from anchor/start nodes) get
+`x_propagated = a_d` directly from the Cohort anchor population.
+
+Today: does not exist. `stats_engine` propagates `forecast_k`
+(aggregate scalar) topologically. `cohort_forecast` uses the
+CDF-ratio shortcut with a hard guard at 0.01 (line 789). The new
+propagator works per Cohort day using the posterior predictive
+evaluator above.
+
+Reuse by `cohort_maturity`: this is the core fix for the chart's
+upstream `x` problem. The chart calls the propagator to get
+per-Cohort-day `x_propagated` instead of using the ratio shortcut.
+
+**Basis-tier resolver.** For each `(edge, Cohort day)`, determines
+which of the four basis tiers (Section 7.1) applies: (1) promoted
+model + evidence, (2) promoted model only, (3) no model +
+evidence, (4) nothing. Selects the forecasting path accordingly and
+tags provenance.
+
+Today: does not exist. The current code either has a posterior or
+doesn't, with no structured fallback chain.
+
+Reuse by `cohort_maturity`: the chart needs the same resolution to
+decide per-Cohort whether to use posterior predictive or
+point-estimate fallback, and to report provenance in the response.
+
+### 10.2 Mode-specific capabilities
+
+**Deterministic frontier aggregation (scalar mode only).** Collapses
+per-Cohort-day propagated state into aggregate per-edge scalars:
+`p.mean`, `completeness`, `p.n`, `forecast_k`. This is the output
+that flows into param packs. `cohort_maturity` does not need this —
+it works per Cohort day, not aggregate.
+
+This extends or replaces the current
+`stats_engine.enhance_graph_latencies()` topological pass. The
+existing Fenton-Wilkinson path composition, `compute_blended_mean`,
+and `compute_completeness` remain useful within this aggregation
+step.
+
+**Graph-wide MC with shared upstream draws (trajectory mode only).**
+Samples posteriors per edge, propagates draws through the graph via
+the topological `x` propagator, collects quantiles after the full
+walk. This is the primary consumer for `cohort_maturity` fan bands.
+
+Today: the MC in `cohort_forecast.py` (lines 682–846) samples
+per-edge and uses point-estimate upstream CDF. The new version
+replaces the upstream CDF with per-draw propagated `x` from the
+shared topological propagator. The per-draw `y` formula, quantile
+extraction, and fan-band output remain largely unchanged.
+
+### 10.3 File surface
+
+The shared libraries (10.1) should live in a new module in
+`graph-editor/lib/runner/`, separate from `cohort_forecast.py` and
+`stats_engine.py`. Both consumers import from it.
 
 The existing modules that should be reused rather than replaced are
-`graph-editor/lib/snapshot_service.py` for raw reads,
-`graph-editor/lib/runner/cohort_maturity_derivation.py` for subject-edge
-frame derivation where still useful, and the FE snapshot-subject
-planning stack under `graph-editor/src/services/`.
-`graph-editor/lib/api_handlers.py` should become a thin orchestration
-layer that requests either scalar mode or trajectory mode from the new
-backend engine.
+`snapshot_service.py` for raw DB reads,
+`cohort_maturity_derivation.py` for subject-edge frame derivation
+where still useful, `forecast_application.compute_completeness()`
+for the maturity model, and the FE snapshot-subject planning stack
+under `graph-editor/src/services/`.
+
+`api_handlers.py` should become a thin orchestration layer that
+calls the shared libraries + mode-specific logic for each
+commission type.
 
 The existing FE fast path in
 `graph-editor/src/services/statisticalEnhancementService.ts` should
-remain in place initially as a provisional approximation. The BE engine
-should arrive as a second-stage authoritative answer, not as a
-prerequisite for every UI interaction.
+remain in place initially as a provisional approximation. The BE
+engine should arrive as a second-stage authoritative answer, not as
+a prerequisite for every UI interaction.
 
 ## 11. Recommended delivery phases
 
