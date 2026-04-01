@@ -580,9 +580,6 @@ export interface LatencyConfig {
   /** Path-level Σ onset_delta_days along path (DP sum, internal, not UI-exposed) */
   path_onset_delta_days?: number;
 
-  /** UK date (d-MMM-yy) when the model was last fitted (staleness detection, not UI-exposed) */
-  model_trained_at?: string;
-
   // NOTE: Bayesian latency posterior no longer lives here. It is in the
   // file-level Posterior.slices (doc 21). The cascade projects a LatencyPosterior
   // summary onto the graph edge for UI consumption.

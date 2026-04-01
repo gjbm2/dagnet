@@ -258,6 +258,9 @@ describe('GraphComputeClient - Cohort maturity epoch stitching', () => {
             frames: [
               { as_at_date: '2025-10-01', data_points: [{ anchor_day: '2025-10-01', x: 10, y: 1 }] },
             ],
+            maturity_rows: [
+              { tau_days: 0, rate: 0.1, y_base: 1, tau_solid_max: 0, tau_future_max: 1, boundary_date: '2025-10-01' },
+            ],
           },
         },
         {
@@ -267,6 +270,9 @@ describe('GraphComputeClient - Cohort maturity epoch stitching', () => {
             analysis_type: 'cohort_maturity',
             frames: [
               { as_at_date: '2025-10-02', data_points: [{ anchor_day: '2025-10-01', x: 20, y: 2 }] },
+            ],
+            maturity_rows: [
+              { tau_days: 1, rate: 0.1, y_base: 2, tau_solid_max: 1, tau_future_max: 2, boundary_date: '2025-10-02' },
             ],
           },
         },
@@ -375,21 +381,22 @@ describe('GraphComputeClient - Cohort Maturity Normalisation', () => {
     };
   }
 
-  it('should produce τ-indexed rows from group-by-age aggregation', () => {
-    // Single anchor day (2025-10-01). One frame at τ=3 (as_at 2025-10-04).
-    // Group-by-age: data point has age = Oct 4 − Oct 1 = 3 → single row at τ=3.
+  it('should produce τ-indexed rows from BE-computed maturity_rows', () => {
+    // Single anchor day (2025-10-01). BE computes a single maturity row at τ=3.
     const frames = [
       { as_at_date: '2025-10-01', data_points: [], total_y: 0 },
-      { as_at_date: '2025-10-02', data_points: [], total_y: 0 },
-      { as_at_date: '2025-10-03', data_points: [], total_y: 0 },
-      {
-        as_at_date: '2025-10-04',
+      { as_at_date: '2025-10-04',
         data_points: [{ anchor_day: '2025-10-01', y: 42, x: 100, a: 1000, rate: 0.42 }],
         total_y: 42,
       },
     ];
+    const maturity_rows = [
+      { tau_days: 3, rate: 0.42, y_base: 42, tau_solid_max: 3, tau_future_max: 30, boundary_date: '2025-10-04' },
+    ];
 
     const raw = buildRawResponse(frames);
+    // Inject maturity_rows into the subject result (BE provides these).
+    raw.scenarios[0].subjects[0].result.maturity_rows = maturity_rows;
     const request = buildRequest();
 
     const result = (client as any).normaliseSnapshotCohortMaturityResponse(raw, request);
@@ -398,7 +405,6 @@ describe('GraphComputeClient - Cohort Maturity Normalisation', () => {
     expect(result!.success).toBe(true);
 
     const data = result!.result!.data;
-    // Only τ=3 has data (gap frames have no data points → no τ rows).
     expect(data.length).toBe(1);
     expect(data[0].tau_days).toBe(3);
     expect(data[0].rate).toBeCloseTo(0.42);
@@ -425,38 +431,40 @@ describe('GraphComputeClient - Cohort Maturity Normalisation', () => {
     expect(data).toHaveLength(0);
   });
 
-  it('should produce monotonically increasing evidence rate with sparse frames', () => {
-    // Single anchor day (2025-10-01). Three observation frames at increasing ages.
-    // Y grows over time (cumulative conversions). Rate must be monotonically increasing.
+  it('should pass through BE-computed maturity_rows with monotonically increasing rates', () => {
+    // BE computes τ-indexed rows with monotonically increasing rates.
     const frames = [
       {
         as_at_date: '2025-10-10',
-        data_points: [{ anchor_day: '2025-10-01', y: 10, x: 100, a: 1000, rate: 0.10, projected_y: 20, completeness: 0.5 }],
+        data_points: [{ anchor_day: '2025-10-01', y: 10, x: 100, a: 1000, rate: 0.10 }],
         total_y: 10,
       },
       {
         as_at_date: '2025-10-20',
-        data_points: [{ anchor_day: '2025-10-01', y: 30, x: 100, a: 1000, rate: 0.30, projected_y: 40, completeness: 0.75 }],
+        data_points: [{ anchor_day: '2025-10-01', y: 30, x: 100, a: 1000, rate: 0.30 }],
         total_y: 30,
       },
       {
         as_at_date: '2025-10-21',
         is_synthetic: true,
-        data_points: [{ anchor_day: '2025-10-01', y: 31, x: 100, a: 1000, rate: 0.31, projected_y: 40, completeness: 0.775 }],
+        data_points: [{ anchor_day: '2025-10-01', y: 31, x: 100, a: 1000, rate: 0.31 }],
         total_y: 31,
       },
     ];
+    const maturity_rows = [
+      { tau_days: 9, rate: 0.10, projected_rate: 0.20, y_base: 10, tau_solid_max: 20, tau_future_max: 30, boundary_date: '2025-10-21' },
+      { tau_days: 19, rate: 0.30, projected_rate: 0.40, y_base: 30, tau_solid_max: 20, tau_future_max: 30, boundary_date: '2025-10-21' },
+      { tau_days: 20, rate: 0.31, y_base: 31, tau_solid_max: 20, tau_future_max: 30, boundary_date: '2025-10-21' },
+    ];
 
     const raw = buildRawResponse(frames);
+    raw.scenarios[0].subjects[0].result.maturity_rows = maturity_rows;
     const request: any = {
       analysis_type: 'cohort_maturity',
       query_dsl: 'from(a).to(b).cohort(1-Oct-25,31-Oct-25)',
       scenarios: [{
         scenario_id: 'sc1',
         scenario_name: 'Baseline',
-        graph: {
-          edges: [{ uuid: 'edge-1', p: { latency: { t95: 10, path_t95: 20 } } }],
-        },
         snapshot_subjects: [{
           subject_id: 'subj1',
           subject_label: 'a → b',
@@ -477,7 +485,6 @@ describe('GraphComputeClient - Cohort Maturity Normalisation', () => {
     const result = (client as any).normaliseSnapshotCohortMaturityResponse(raw, request);
     const data = result!.result!.data;
 
-    // 3 data points at τ=9 (Oct 10), τ=19 (Oct 20), τ=20 (Oct 21 synthetic).
     expect(data).toHaveLength(3);
 
     const tau9 = data.find((r: any) => r.tau_days === 9);
@@ -500,10 +507,8 @@ describe('GraphComputeClient - Cohort Maturity Normalisation', () => {
     expect(tau20.rate).toBeGreaterThanOrEqual(tau19.rate);
   });
 
-  it('should produce correct rates for non-latency edge with multiple anchor days', () => {
-    // Non-latency edge: 3 anchor days (Oct 1–3). Real frames at Oct 3–5.
-    // Each frame has data for all 3 anchors. Group-by-age produces multiple τ values.
-    // At each τ, rate = Σ Y / Σ X across the anchor days at that age.
+  it('should pass through BE-computed rates for non-latency edge with multiple anchor days', () => {
+    // BE computes per-τ aggregated rates across anchor days.
     const frames = [
       {
         as_at_date: '2025-10-03',
@@ -524,15 +529,22 @@ describe('GraphComputeClient - Cohort Maturity Normalisation', () => {
         total_y: 60,
       },
     ];
+    // BE-computed τ-indexed rows (aggregated across anchor days at each age).
+    const maturity_rows = [
+      { tau_days: 0, rate: 0.30 },
+      { tau_days: 1, rate: 0.25 },
+      { tau_days: 2, rate: 0.15 },
+      { tau_days: 3, rate: 0.10 },
+    ];
 
     const raw = buildRawResponse(frames, 'sc1', 'subj1');
+    raw.scenarios[0].subjects[0].result.maturity_rows = maturity_rows;
     const request: any = {
       analysis_type: 'cohort_maturity',
       query_dsl: 'from(a).to(b).cohort(1-Oct-25,3-Oct-25)',
       scenarios: [{
         scenario_id: 'sc1',
         scenario_name: 'Baseline',
-        graph: { edges: [{ uuid: 'edge-1', p: {} }] },
         snapshot_subjects: [{
           subject_id: 'subj1',
           subject_label: 'a → b',
@@ -555,12 +567,6 @@ describe('GraphComputeClient - Cohort Maturity Normalisation', () => {
     expect(result).not.toBeNull();
     const data = result!.result!.data;
 
-    // Frame Oct 3 contributes: Oct 1 at τ=2, Oct 2 at τ=1, Oct 3 at τ=0.
-    // Frame Oct 4 contributes: Oct 1 at τ=3, Oct 2 at τ=2, Oct 3 at τ=1.
-    // τ=0: only Oct 3 from Oct 3 frame → rate = 30/100 = 0.30
-    // τ=1: Oct 2 (Oct 3 frame) + Oct 3 (Oct 4 frame) → (20+30)/(100+100) = 0.25
-    // τ=2: Oct 1 (Oct 3 frame) + Oct 2 (Oct 4 frame) → (10+20)/(100+100) = 0.15
-    // τ=3: Oct 1 (Oct 4 frame) → rate = 10/100 = 0.10
     expect(data.length).toBe(4);
     const byTau = Object.fromEntries(data.map((r: any) => [r.tau_days, r]));
     expect(byTau[0].rate).toBeCloseTo(0.30);
@@ -580,8 +586,13 @@ describe('GraphComputeClient - Cohort Maturity Normalisation', () => {
         total_y: 52,
       },
     ];
+    // Need at least one maturity_row so the result doesn't take the "empty" branch.
+    const maturity_rows = [
+      { tau_days: 3, rate: 0.42 },
+    ];
 
     const raw = buildRawResponse(frames);
+    raw.scenarios[0].subjects[0].result.maturity_rows = maturity_rows;
     const request = buildRequest('from(a).to(b).window(1-Oct-25:31-Oct-25)');
     const result = (client as any).normaliseSnapshotCohortMaturityResponse(raw, request);
 

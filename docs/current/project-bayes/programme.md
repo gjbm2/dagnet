@@ -1135,6 +1135,36 @@ design; implementation is post-Phase A.
 
 ---
 
+## Date coherence: fitted_at / model_trained_at / source_at (31-Mar-26)
+
+**Problem**: Bayes posteriors carry dates in multiple places that can
+become inconsistent:
+- `posterior.fitted_at` — on the probability posterior (graph + param file)
+- `latency.posterior.fitted_at` — on the latency posterior (graph + param file)
+- `latency.model_trained_at` — on the latency block (graph only)
+- `_posteriorSlices.fitted_at` — on the posterior slices (param file)
+- `model_vars[].source_at` — per-source model vars (graph)
+
+When `asat()` is used, `resolveAsatPosterior` checks `posterior.fitted_at`
+to decide whether the posterior is valid for that historical view. If
+`fitted_at` on ANY of these is after the `asat` date, the posterior is
+rejected and the edge has no Bayes params for that analysis.
+
+**Current mess**:
+- `fitted_at` exists on both graph and param file; they can diverge
+- `model_trained_at` is only on graph, only on edges with `latency_parameter: true`
+- `source_at` on model_vars may differ from `fitted_at` (manual edits)
+- Not all edges with Bayes posteriors have `model_trained_at`
+
+**Needs**: A single authoritative timestamp for "when was this model fit"
+that is consistent across all surfaces. `bayesPatchService` should set
+all date fields atomically from one source. `resolveAsatPosterior` should
+check one canonical field, not fish through multiple.
+
+**Priority**: Medium — blocks reliable `asat()` testing of fan charts.
+
+---
+
 ## Post-build clean-up items
 
 ### Bayes session log verbosity (30-Mar-26)

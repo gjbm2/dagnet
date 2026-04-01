@@ -53,7 +53,7 @@ export function CountdownBanner(props: {
   return (
     <div
       className="countdown-banner"
-      style={{ top: topPx, zIndex }}
+      style={{ zIndex }}
       role="status"
       aria-live="polite"
     >
@@ -87,7 +87,7 @@ export function CountdownBanner(props: {
         {actionLabel && onAction && (
           <button
             type="button"
-            className={`countdown-banner-btn${!isCountdown ? ' primary' : ''}`}
+            className="countdown-banner-btn primary"
             onClick={onAction}
             disabled={actionDisabled}
             title={actionTitle}

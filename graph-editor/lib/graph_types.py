@@ -82,7 +82,6 @@ class LatencyConfig(BaseModel):
     path_mu: Optional[float] = Field(None, description="Path-level A→Y log-normal mu (Fenton–Wilkinson, internal)")
     path_sigma: Optional[float] = Field(None, ge=0, description="Path-level A→Y log-normal sigma (Fenton–Wilkinson, internal)")
     path_onset_delta_days: Optional[float] = Field(None, ge=0, description="Path-level Σ onset_delta_days along path (DP sum, internal)")
-    model_trained_at: Optional[str] = Field(None, description="UK date (d-MMM-yy) when the model was last fitted (staleness detection)")
     # NOTE: Bayesian latency posterior no longer lives here (doc 21).
     # It is in the file-level Posterior.slices. No posterior field on LatencyConfig.
 

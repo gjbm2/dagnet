@@ -38,7 +38,6 @@ class FitResult:
     # Persisted on graph edge (flat scalars)
     mu: float
     sigma: float
-    model_trained_at: str  # UK date string (d-MMM-yy), set by caller
 
     # Derived (useful for callers, not persisted)
     t95_days: float
@@ -384,7 +383,6 @@ def fit_model_from_evidence(
     t95_constraint: Optional[float] = None,
     onset_override: Optional[float] = None,
     use_authoritative_t95: bool = False,
-    model_trained_at: str = '',
     training_window: Optional[Dict[str, str]] = None,
     settings_signature: Optional[str] = None,
     reference_date: Optional[date] = None,
@@ -398,7 +396,6 @@ def fit_model_from_evidence(
         rows: Raw snapshot rows (from query_snapshots / query_snapshots_for_sweep).
         settings: Forecasting settings from the frontend.
         t95_constraint: Authoritative t95 from graph edge (one-way sigma constraint).
-        model_trained_at: UK date string for provenance (set by caller).
         training_window: {anchor_from, anchor_to} ISO dates for provenance.
         settings_signature: Hash of settings for provenance.
         reference_date: Reference date for recency weighting (default: latest anchor_day).
@@ -429,7 +426,6 @@ def fit_model_from_evidence(
         return FitResult(
             mu=0.0,
             sigma=settings.default_sigma,
-            model_trained_at=model_trained_at,
             t95_days=0.0,
             onset_delta_days=0.0,
             quality_ok=False,
@@ -456,7 +452,6 @@ def fit_model_from_evidence(
         return FitResult(
             mu=0.0,
             sigma=settings.default_sigma,
-            model_trained_at=model_trained_at,
             t95_days=0.0,
             onset_delta_days=agg_onset or 0.0,
             quality_ok=False,
@@ -542,7 +537,6 @@ def fit_model_from_evidence(
     return FitResult(
         mu=mu,
         sigma=sigma,
-        model_trained_at=model_trained_at,
         t95_days=t95_days,
         onset_delta_days=agg_onset or 0.0,
         quality_ok=initial_fit.empirical_quality_ok,

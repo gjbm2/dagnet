@@ -162,7 +162,7 @@ class TestFitModelFromEvidence:
             _row(f'2026-01-{d:02d}', 100, 40, median_lag=5.0, mean_lag=7.0)
             for d in range(1, 11)  # 10 anchor days, 400 total converters
         ]
-        result = fit_model_from_evidence(rows, DEFAULTS, model_trained_at='10-Feb-26')
+        result = fit_model_from_evidence(rows, DEFAULTS)
         assert result.quality_ok
         # FE parity: FitResult.total_k reflects the recency-weighted converter count
         # used for the quality gate (not raw ΣY).
@@ -170,7 +170,6 @@ class TestFitModelFromEvidence:
         assert result.mu > 0
         assert result.sigma > 0
         assert result.t95_days > 0
-        assert result.model_trained_at == '10-Feb-26'
         assert result.evidence_anchor_days == 10
 
     def test_insufficient_converters(self):
@@ -255,11 +254,9 @@ class TestFitModelFromEvidence:
         rows = [_row('2026-01-01', 100, 40, median_lag=5.0, mean_lag=7.0)]
         result = fit_model_from_evidence(
             rows, DEFAULTS,
-            model_trained_at='10-Feb-26',
             training_window={'anchor_from': '2026-01-01', 'anchor_to': '2026-01-10'},
             settings_signature='abc123',
         )
-        assert result.model_trained_at == '10-Feb-26'
         assert result.training_window == {'anchor_from': '2026-01-01', 'anchor_to': '2026-01-10'}
         assert result.settings_signature == 'abc123'
 

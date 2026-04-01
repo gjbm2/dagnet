@@ -137,9 +137,6 @@ properties:
         type: number
         minimum: 0
         description: "Path-level A→Y log-normal sigma (Fenton–Wilkinson, internal)"
-      model_trained_at:
-        type: string
-        description: "UK date (d-MMM-yy) when the model was last fitted (staleness detection)"
       # NOTE: No posterior sub-block under latency (doc 21). Bayesian latency
       # posteriors live in the top-level posterior.slices entries.
     additionalProperties: false

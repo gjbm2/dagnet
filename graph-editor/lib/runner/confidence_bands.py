@@ -1,32 +1,26 @@
 """
 Confidence bands for shifted-lognormal CDF model curves.
 
-Computes pointwise uncertainty bands around rate(t) = p × CDF(t; onset, μ, σ)
-using the multivariate delta method with full covariance structure.
+Two band types:
 
-The four parameters (p, μ, σ, onset) may be correlated — particularly onset
-and μ, which trade off on short-onset edges (corr ≈ -0.9). Ignoring this
-covariance overestimates the band width because the opposing movements
-partially cancel.
+1. **Unconditional** (model overlay): Monte Carlo over posterior samples.
+   Draws θ ~ MVN(posterior_mean, Σ), computes rate(τ) = p × CDF(τ; θ),
+   extracts quantiles.
 
-Usage:
-    from runner.confidence_bands import compute_confidence_band
+2. **Conditional** (fan chart): Same Monte Carlo approach, but each draw's
+   forecast is conditioned on observed evidence per Cohort.  Implemented
+   in cohort_forecast.py, not here.
 
-    upper, lower = compute_confidence_band(
-        ages=range(0, 100),
-        p=0.83, mu=-0.35, sigma=2.98, onset=16.8,
-        p_sd=0.033, mu_sd=0.146, sigma_sd=0.048, onset_sd=0.22,
-        onset_mu_corr=-0.88,
-        level=0.90,
-    )
+The Monte Carlo approach replaces the delta method, which breaks down
+near the onset where rate(τ) is highly nonlinear w.r.t. θ.
 """
 from __future__ import annotations
 
 import math
 from typing import Sequence
 
-# Standard normal PDF constant
-_SQRT_2PI = math.sqrt(2.0 * math.pi)
+import numpy as np
+from scipy.special import ndtr
 
 # z-multipliers for common confidence levels
 _LEVEL_Z = {
@@ -35,6 +29,8 @@ _LEVEL_Z = {
     0.95: 1.960,
     0.99: 2.576,
 }
+
+MC_SAMPLES = 2000
 
 
 def _shifted_lognormal_cdf(t: float, onset: float, mu: float, sigma: float) -> float:
@@ -61,80 +57,66 @@ def compute_confidence_band(
 ) -> tuple[list[float], list[float]]:
     """Compute upper and lower confidence bands for rate(t) = p × CDF(t).
 
-    Uses the multivariate delta method:
-        Var(rate) = J × Σ × Jᵀ
-    where J is the Jacobian [∂rate/∂p, ∂rate/∂μ, ∂rate/∂σ, ∂rate/∂onset]
-    and Σ is the 4×4 covariance matrix.
-
-    Currently models one off-diagonal covariance: Cov(onset, μ) from the
-    supplied correlation. Other cross-terms (e.g. μ-σ) are assumed zero.
-    Additional correlations can be added when posterior data provides them.
+    Uses Monte Carlo: draws θ from the posterior approximation (MVN),
+    computes rate(τ) for each draw, extracts quantiles.  This correctly
+    handles nonlinearity near the onset and naturally respects [0, 1].
 
     Args:
         ages: sequence of age values (days) at which to evaluate.
-        p, mu, sigma, onset: model parameters.
+        p, mu, sigma, onset: model parameters (posterior means).
         p_sd, mu_sd, sigma_sd, onset_sd: posterior standard deviations.
         onset_mu_corr: correlation between onset and mu posteriors.
         level: confidence level (0.80, 0.90, 0.95, 0.99).
 
     Returns:
-        (upper, lower): lists of rate values at each age.
+        (upper, lower): lists of rate values at each age, within [0, 1].
     """
-    k = _LEVEL_Z.get(level, 1.645)
+    ages_arr = np.asarray(ages, dtype=float)
+    T = len(ages_arr)
 
-    upper: list[float] = []
-    lower: list[float] = []
+    # If no uncertainty, return the point estimate
+    if p_sd <= 0 and mu_sd <= 0 and sigma_sd <= 0 and onset_sd <= 0:
+        rates = []
+        for t in ages:
+            cdf = _shifted_lognormal_cdf(float(t), onset, mu, sigma)
+            rates.append(max(0.0, min(1.0, p * cdf)))
+        return rates[:], rates[:]
 
-    for t in ages:
-        cdf = _shifted_lognormal_cdf(float(t), onset, mu, sigma)
-        rate = p * cdf
+    # Build posterior covariance: [p, mu, sigma, onset]
+    sds = np.array([p_sd, mu_sd, sigma_sd, onset_sd])
+    cov = np.diag(sds ** 2)
+    cov[3, 1] = cov[1, 3] = onset_mu_corr * onset_sd * mu_sd
 
-        age = float(t) - onset
+    theta_mean = np.array([p, mu, sigma, onset])
+    rng = np.random.default_rng(42)
+    samples = rng.multivariate_normal(theta_mean, cov, size=MC_SAMPLES)
 
-        if age > 0 and sigma > 0:
-            z = (math.log(age) - mu) / sigma
-            phi = math.exp(-0.5 * z * z) / _SQRT_2PI
+    # Clip to valid ranges
+    samples[:, 0] = np.clip(samples[:, 0], 1e-6, 1 - 1e-6)  # p
+    samples[:, 2] = np.clip(samples[:, 2], 0.01, 20.0)       # sigma > 0
 
-            # Partial derivatives of CDF w.r.t. each parameter
-            dcdf_dmu = -phi / sigma
-            dcdf_dsigma = -phi * z / sigma
-            dcdf_donset = -phi / (sigma * age)
+    # Compute rate(τ) = p × CDF(τ; onset, mu, sigma) for each draw
+    # Shape: (S, T)
+    p_s = samples[:, 0][:, None]       # (S, 1)
+    mu_s = samples[:, 1][:, None]      # (S, 1)
+    sigma_s = samples[:, 2][:, None]   # (S, 1)
+    onset_s = samples[:, 3][:, None]   # (S, 1)
 
-            # Jacobian: ∂rate/∂θ for each parameter
-            dr_dp = cdf
-            dr_dmu = p * dcdf_dmu
-            dr_dsigma = p * dcdf_dsigma
-            dr_donset = p * dcdf_donset
+    t_shifted = ages_arr[None, :] - onset_s  # (S, T)
+    t_shifted = np.maximum(t_shifted, 1e-12)
+    z = (np.log(t_shifted) - mu_s) / sigma_s  # (S, T)
+    cdf_arr = ndtr(z)
+    # Zero out pre-onset
+    cdf_arr = np.where(ages_arr[None, :] > onset_s, cdf_arr, 0.0)
+    rate_arr = p_s * cdf_arr
+    rate_arr = np.clip(rate_arr, 0.0, 1.0)
 
-            # Diagonal variance terms
-            var_rate = 0.0
-            if p_sd > 0:
-                var_rate += dr_dp ** 2 * p_sd ** 2
-            if mu_sd > 0:
-                var_rate += dr_dmu ** 2 * mu_sd ** 2
-            if sigma_sd > 0:
-                var_rate += dr_dsigma ** 2 * sigma_sd ** 2
-            if onset_sd > 0:
-                var_rate += dr_donset ** 2 * onset_sd ** 2
+    # Extract quantiles
+    alpha = (1.0 - level) / 2.0  # e.g. 0.05 for 90%
+    lo_pct = alpha * 100
+    hi_pct = (1.0 - alpha) * 100
 
-            # Off-diagonal: Cov(onset, mu) = corr × onset_sd × mu_sd
-            if onset_mu_corr != 0.0 and onset_sd > 0 and mu_sd > 0:
-                cov_onset_mu = onset_mu_corr * onset_sd * mu_sd
-                var_rate += 2.0 * dr_donset * dr_dmu * cov_onset_mu
-
-            # Guard against numerical noise producing negative variance
-            var_rate = max(var_rate, 0.0)
-            sd_rate = math.sqrt(var_rate)
-            upper.append(min(1.0, rate + k * sd_rate))
-            lower.append(max(0.0, rate - k * sd_rate))
-        else:
-            # Before onset or degenerate sigma: only p uncertainty
-            if p_sd > 0 and cdf > 0:
-                sd_rate = cdf * p_sd
-                upper.append(min(1.0, rate + k * sd_rate))
-                lower.append(max(0.0, rate - k * sd_rate))
-            else:
-                upper.append(rate)
-                lower.append(rate)
+    lower = np.percentile(rate_arr, lo_pct, axis=0).tolist()
+    upper = np.percentile(rate_arr, hi_pct, axis=0).tolist()
 
     return upper, lower

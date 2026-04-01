@@ -143,7 +143,7 @@ export class GraphComputeClient {
   private readonly MAX_CACHE_SIZE = 50; // Prevent unbounded growth
   // Cache-buster for cohort maturity normalisation semantics. Increment when the
   // cohort_maturity result interpretation changes (e.g. progress curve / axis semantics).
-  private readonly COHORT_MATURITY_CACHE_VERSION = 17;
+  private readonly COHORT_MATURITY_CACHE_VERSION = 19;
 
   constructor(baseUrl: string = API_BASE_URL, useMock: boolean = USE_MOCK) {
     this.baseUrl = baseUrl;
@@ -371,10 +371,6 @@ export class GraphComputeClient {
       }
 
       // Aggregate to tabular rows for charting:
-      // New semantics (11-Feb-26): age-aligned maturity curve.
-      // One row per (scenario_id, subject_id, tau_days).
-      const dataByKey = new Map<string, Record<string, any>>();
-
       // Prefer metadata from the first valid block.
       const firstMeta = (() => {
         const b = blocks.find(bb => isCohortMaturityResult(bb.result));
@@ -415,17 +411,6 @@ export class GraphComputeClient {
           return Math.max(0, Math.floor((st - sf) / (24 * 60 * 60 * 1000)));
         };
         return candidates.slice().sort((a, b) => spanDays(a) - spanDays(b))[0] || candidates[0];
-      };
-
-      const readLatencyDays = (graph: any, targetId: string | undefined): { t95Days: number | null; pathT95Days: number | null } => {
-        if (!graph || !targetId) return { t95Days: null, pathT95Days: null };
-        const edges: any[] = Array.isArray(graph?.edges) ? graph.edges : [];
-        const e = edges.find((x: any) => String(x?.uuid || x?.id || '') === String(targetId));
-        const t95 = e?.p?.latency?.promoted_t95 ?? e?.p?.latency?.t95 ?? e?.p?.t95 ?? null;
-        const pathT95 = e?.p?.latency?.promoted_path_t95 ?? e?.p?.latency?.path_t95 ?? e?.p?.path_t95 ?? null;
-        const t95Days = (typeof t95 === 'number' && Number.isFinite(t95)) ? t95 : null;
-        const pathT95Days = (typeof pathT95 === 'number' && Number.isFinite(pathT95)) ? pathT95 : null;
-        return { t95Days, pathT95Days };
       };
 
       const dayDiffUTC = (asAtISO: string, anchorToISO: string): number | null => {
@@ -547,265 +532,44 @@ export class GraphComputeClient {
         }
       }
 
-      // Collect BE-computed fan chart data keyed by subject_id.
-      // The BE computes midpoint/fan_upper/fan_lower per τ using proper
-      // upstream x forecasting and Bayesian dispersion.
-      const fanChartBySubject = new Map<string, Record<string, { midpoint: number; fan_upper: number | null; fan_lower: number | null }>>();
-      for (const b of blocks) {
-        const fc = b.result?.fan_chart;
-        if (fc && typeof fc === 'object') {
-          fanChartBySubject.set(b.subject_id, fc);
-        }
-      }
+      // ── Per-τ rows: BE-computed ──────────────────────────────────────
+      // The BE computes complete per-τ rows (rate, midpoint, fan bounds)
+      // in compute_cohort_maturity_rows using proper upstream x forecasting
+      // and Bayesian dispersion.  The FE just passes them through.
+      // Scenario and subject IDs are added here from the request context.
+      const data: Array<Record<string, any>> = [];
 
-      // Build age-aligned maturity curve rows (τ-axis) per (scenario, subject).
-      // - Boundary date B: end of sweep (or latest available real frame).
-      // - Fixed denominator X_full: sum of X at B across the cohort set (as known at B).
-      // - Base rate R_base(τ): sum of evidenced Y at min(B, a+τ) over X_full.
-      // - Projected rate R_proj(τ): sum of Y at (a+τ), using future synthetic frames where needed.
-      // IMPORTANT:
-      // Keep axis stable even when ALL frames are empty by deriving the scenario/subject
-      // set from the request payload (not from observed data points).
       const scenarioSubjectKeys = Array.from(new Set(Array.from(subjectPayloadsByScenarioSubject.keys())));
-
       for (const ssKey of scenarioSubjectKeys) {
         const [scenarioId, subjectId] = ssKey.split('||');
-        const payloadKey = `${scenarioId}||${subjectId}`;
-        const payload = subjectPayloadByScenarioSubject.get(payloadKey);
-        const payloads = subjectPayloadsByScenarioSubject.get(payloadKey) || [];
 
-        const anchorFrom =
-          payloads.find((p) => typeof p?.anchor_from === 'string' && p.anchor_from)?.anchor_from
-          || payload?.anchor_from
-          || firstMeta?.anchor_range?.from
-          || firstMeta?.anchor_from;
-        const anchorTo =
-          payloads.find((p) => typeof p?.anchor_to === 'string' && p.anchor_to)?.anchor_to
-          || payload?.anchor_to
-          || firstMeta?.anchor_range?.to
-          || firstMeta?.anchor_to;
-
-        const sweepTo =
-          payloads.filter((p) => typeof p?.sweep_to === 'string' && p.sweep_to).map((p) => String(p.sweep_to)).sort().slice(-1)[0]
-          || (typeof payload?.sweep_to === 'string' ? String(payload.sweep_to) : undefined)
-          || firstMeta?.sweep_range?.to
-          || firstMeta?.sweep_to;
-
-        const latency = readLatencyDays(
-          (request.scenarios || []).find((s) => String(s?.scenario_id) === String(scenarioId))?.graph,
-          payload?.target?.targetId,
+        // Collect maturity_rows from ALL matching blocks (epoch stitching).
+        // Each epoch produces its own maturity_rows covering its sweep range.
+        const matchingBlocks = blocks.filter((b) =>
+          String(b.scenario_id) === String(scenarioId) && String(b.subject_id) === String(subjectId)
         );
-
-        const axisMode: 'cohort' | 'window' = (() => {
-          const q = String(request?.query_dsl || '');
-          if (q.includes('window(') || q.includes('.window(')) return 'window';
-          return 'cohort';
-        })();
-
-        const B = (typeof sweepTo === 'string' && sweepTo) ? String(sweepTo).slice(0, 10) : null;
-        const anchorFromIso = (typeof anchorFrom === 'string' && anchorFrom) ? String(anchorFrom).slice(0, 10) : null;
-        const anchorToIso = (typeof anchorTo === 'string' && anchorTo) ? String(anchorTo).slice(0, 10) : null;
-
-        const tauSolidMax = (B && anchorToIso) ? Math.max(0, dayDiffUTC(B, anchorToIso) ?? 0) : 0;
-        const tauFutureMax = (B && anchorFromIso) ? Math.max(0, dayDiffUTC(B, anchorFromIso) ?? 0) : 0;
-
-        const tauMax = (() => {
-          // Use the date-span as the hard upper bound (the actual data range).
-          // Latency t95/path_t95 from the FE graph may be stale if the graph
-          // hasn't been reloaded; the date-span is always authoritative.
-          if (B && anchorFromIso) {
-            const span = dayDiffUTC(B, anchorFromIso);
-            if (span !== null && Number.isFinite(span) && span >= 0) return Math.floor(span);
-          }
-          const v = axisMode === 'window' ? latency.t95Days : latency.pathT95Days;
-          if (typeof v === 'number' && Number.isFinite(v) && v > 0) return Math.floor(v);
-          return 0;
-        })();
-
-        // ── Group-by-age aggregation ──────────────────────────────────
-        // Instead of iterating τ and looking up per-anchor-day frames
-        // (which fails with sparse data), iterate the data points we
-        // actually HAVE and bucket them by age τ = as_at_date − anchor_day.
-        //
-        // For each τ bucket we accumulate:
-        //   sumY, sumX           → evidence rate = sumY / sumX
-        //   sumProjY, sumProjX   → projected rate = sumProjY / sumProjX
-        //
-        // This naturally produces a monotonic cumulative distribution.
-        type TauBucket = {
-          sumY: number; sumX: number;           // all evidence (incl. carry-forward)
-          sumYLive: number; sumXLive: number;    // evidence from cohorts still alive at τ
-          sumProjY: number; sumProjX: number;
-          count: number; projCount: number; liveCount: number;
-        };
-        const buckets = new Map<number, TauBucket>();
-
-        // Collect all detailed points for this scenario+subject.
-        const allPoints = Array.from(cohortPointsByKey.values());
-        const points = allPoints.filter((r: any) =>
-          String(r?.scenario_id) === String(scenarioId) && String(r?.subject_id) === String(subjectId)
-        );
-
-        // DEV diagnostic — remove after synth debugging
-        if (allPoints.length > 0 && points.length === 0) {
-          const sample = allPoints[0];
-          console.warn('[CohortMaturity] 0 points after scenario+subject filter', {
-            scenarioId, subjectId, allPointsCount: allPoints.length,
-            sampleScenarioId: sample?.scenario_id, sampleSubjectId: sample?.subject_id,
-          });
-        }
-        // DEV diagnostic counters
-        let _skipNoDate = 0, _skipTau = 0, _skipX = 0, _accepted = 0;
-        console.log('[CohortMaturity] tau aggregation', {
-          scenarioId, subjectId, pointsCount: points.length, tauMax,
-          latencyT95: latency.t95Days, latencyPathT95: latency.pathT95Days, axisMode, B,
-          sample0: points[0] ? { as_at_date: points[0].as_at_date, anchor_day: points[0].anchor_day, x: points[0].x, y: points[0].y } : null,
-        });
-
-        for (const p of points) {
-          const asAt = String(p?.as_at_date || '').slice(0, 10);
-          const ad = String(p?.anchor_day || '').slice(0, 10);
-          if (!asAt || !ad) { _skipNoDate++; continue; }
-
-          const tau = dayDiffUTC(asAt, ad);
-          if (tau === null || !Number.isFinite(tau) || tau < 0 || tau > tauMax) { _skipTau++; continue; }
-
-          const y = p?.y === null || p?.y === undefined ? null : Number(p.y);
-          const x = p?.x === null || p?.x === undefined ? null : Number(p.x);
-          const projY = p?.projected_y === null || p?.projected_y === undefined ? null : Number(p.projected_y);
-          if (x === null || !Number.isFinite(x) || x <= 0) { _skipX++; continue; }
-          _accepted++;
-
-          let b = buckets.get(tau);
-          if (!b) { b = { sumY: 0, sumX: 0, sumYLive: 0, sumXLive: 0, sumProjY: 0, sumProjX: 0, count: 0, projCount: 0, liveCount: 0 }; buckets.set(tau, b); }
-
-          // Is this cohort still "alive" at this τ?  i.e. τ ≤ its max observed age.
-          const cohortMaxAge = B ? (dayDiffUTC(B, ad) ?? 0) : 0;
-          const isLive = tau <= cohortMaxAge;
-
-          if (y !== null && Number.isFinite(y)) {
-            b.sumY += y;
-            b.sumX += x;
-            b.count += 1;
-            if (isLive) {
-              b.sumYLive += y;
-              b.sumXLive += x;
-              b.liveCount += 1;
-            }
-          }
-          if (projY !== null && Number.isFinite(projY)) {
-            b.sumProjY += projY;
-            b.sumProjX += x;
-            b.projCount += 1;
-          }
-        }
-
-        console.log('[CohortMaturity] bucket result', {
-          subjectId, accepted: _accepted, skipNoDate: _skipNoDate, skipTau: _skipTau, skipX: _skipX,
-          bucketCount: buckets.size, tauMax,
-        });
-
-        // Look up BE-computed fan chart data for this subject.
-        const fanChart = fanChartBySubject.get(subjectId);
-
-        // Emit one row per τ that has data.
-        for (const [tau, b] of Array.from(buckets.entries()).sort((a, c) => a[0] - c[0])) {
-          // Live evidence rate: only from cohorts that genuinely have data at
-          // this τ (not carry-forward from dropped cohorts).
-          const evidenceRate = (b.sumXLive > 0 && b.liveCount > 0) ? (b.sumYLive / b.sumXLive) : null;
-          const projRate = (b.sumProjX > 0 && b.projCount > 0) ? (b.sumProjY / b.sumProjX) : null;
-          const evidenceRateClipped = (B && tau > tauFutureMax) ? null : evidenceRate;
-          const projRateClamped = (projRate !== null && Number.isFinite(projRate)) ? Math.max(0, Math.min(1, projRate)) : null;
-
-          // Fan data from the BE (midpoint, fan_upper, fan_lower).
-          // The BE computes these using proper upstream x forecasting
-          // and Bayesian dispersion.  The FE just passes them through.
-          const fanEntry = fanChart?.[String(tau)];
-          const midpoint = (fanEntry?.midpoint !== undefined && fanEntry?.midpoint !== null)
-            ? Number(fanEntry.midpoint) : null;
-          const fanUpper = (fanEntry?.fan_upper !== undefined && fanEntry?.fan_upper !== null)
-            ? Number(fanEntry.fan_upper) : null;
-          const fanLower = (fanEntry?.fan_lower !== undefined && fanEntry?.fan_lower !== null)
-            ? Number(fanEntry.fan_lower) : null;
-
-          const row = {
-            analysis_type: 'cohort_maturity',
-            scenario_id: scenarioId,
-            subject_id: subjectId,
-            tau_days: tau,
-            boundary_date: B,
-            window_from: anchorFromIso,
-            window_to: anchorToIso,
-            x_covered: b.sumX > 0 ? b.sumX : null,
-            y_base: b.count > 0 ? b.sumY : null,
-            y_projected: b.projCount > 0 ? b.sumProjY : null,
-            rate: (evidenceRateClipped !== null && Number.isFinite(evidenceRateClipped)) ? Math.max(0, Math.min(1, evidenceRateClipped)) : null,
-            projected_rate: projRateClamped,
-            midpoint,
-            fan_upper: fanUpper,
-            fan_lower: fanLower,
-            cohorts_covered_base: b.count,
-            cohorts_covered_projected: b.projCount,
-            tau_solid_max: tauSolidMax,
-            tau_future_max: tauFutureMax,
-            t95_days: latency.t95Days,
-            path_t95_days: latency.pathT95Days,
-          } as Record<string, any>;
-
-          const k = `${scenarioId}||${subjectId}||tau:${tau}`;
-          dataByKey.set(k, row);
-        }
-
-        // Emit rows for τ values that the BE fan chart covers but the
-        // bucket data doesn't (epoch C — beyond tauFutureMax).
-        if (fanChart) {
-          for (const [tauStr, fanEntry] of Object.entries(fanChart)) {
-            const tau = Number(tauStr);
-            if (!Number.isFinite(tau)) continue;
-            const k = `${scenarioId}||${subjectId}||tau:${tau}`;
-            if (dataByKey.has(k)) continue; // real data takes precedence
-
-            const midpoint = fanEntry?.midpoint ?? null;
-            const fanUpper = fanEntry?.fan_upper ?? null;
-            const fanLower = fanEntry?.fan_lower ?? null;
-
-            dataByKey.set(k, {
+        for (const block of matchingBlocks) {
+          const beRows: Array<Record<string, any>> = block?.result?.maturity_rows || [];
+          for (const row of beRows) {
+            data.push({
               analysis_type: 'cohort_maturity',
               scenario_id: scenarioId,
               subject_id: subjectId,
-              tau_days: tau,
-              boundary_date: B,
-              window_from: anchorFromIso,
-              window_to: anchorToIso,
-              x_covered: null,
-              y_base: null,
-              y_projected: null,
-              rate: null,
-              projected_rate: midpoint, // epoch C: midpoint IS the best estimate
-              midpoint,
-              fan_upper: fanUpper,
-              fan_lower: fanLower,
-              cohorts_covered_base: 0,
-              cohorts_covered_projected: 0,
-              tau_solid_max: tauSolidMax,
-              tau_future_max: tauFutureMax,
-              t95_days: latency.t95Days,
-              path_t95_days: latency.pathT95Days,
-            } as Record<string, any>);
+              ...row,
+            });
           }
         }
       }
 
-      const data: Array<Record<string, any>> = Array.from(dataByKey.values())
-        .sort((a, b) => {
-          const sa = String(a.scenario_id || '');
-          const sb = String(b.scenario_id || '');
-          if (sa !== sb) return sa.localeCompare(sb);
-          const ua = String(a.subject_id || '');
-          const ub = String(b.subject_id || '');
-          if (ua !== ub) return ua.localeCompare(ub);
-          return Number(a.tau_days ?? 0) - Number(b.tau_days ?? 0);
-        });
+      data.sort((a, b) => {
+        const sa = String(a.scenario_id || '');
+        const sb = String(b.scenario_id || '');
+        if (sa !== sb) return sa.localeCompare(sb);
+        const ua = String(a.subject_id || '');
+        const ub = String(b.subject_id || '');
+        if (ua !== ub) return ua.localeCompare(ub);
+        return Number(a.tau_days ?? 0) - Number(b.tau_days ?? 0);
+      });
 
       if (data.length === 0) {
         // Return a proper empty cohort maturity result (not null) so the chart
@@ -1622,6 +1386,7 @@ export class GraphComputeClient {
   ): Promise<AnalysisResponse> {
     const bypassCache = this.shouldBypassCache();
     const snapshotSig = snapshotSubjectsSignature(snapshotSubjects);
+    const testFixture = new URLSearchParams(window.location.search).get('test_fixture');
 
     const displaySig = displaySettings ? JSON.stringify(displaySettings) : '';
     const cacheKey =
@@ -1629,7 +1394,8 @@ export class GraphComputeClient {
       + `|vis:${visibilityMode}`
       + (snapshotSig ? `|snap:${this.hashString(snapshotSig)}` : '')
       + (analysisType === 'cohort_maturity' ? `|cmv:${this.COHORT_MATURITY_CACHE_VERSION}` : '')
-      + (displaySig ? `|ds:${this.hashString(displaySig)}` : '');
+      + (displaySig ? `|ds:${this.hashString(displaySig)}` : '')
+      + (testFixture ? `|tf:${testFixture}:${new URLSearchParams(window.location.search).toString()}` : '');
     if (!bypassCache) {
       const cached = this.analysisCache.get(cacheKey);
       if (cached && Date.now() - cached.timestamp < this.CACHE_TTL_MS) {
@@ -1668,11 +1434,22 @@ export class GraphComputeClient {
       ...(snapshotSubjects?.length ? { snapshot_subjects: snapshotSubjects } : {}),
     };
 
+    // Collect test fixture override params from URL (?tf_onset=2&tf_mu=1.2 etc.)
+    const tfOverrides: Record<string, string> = {};
+    if (testFixture) {
+      const sp = new URLSearchParams(window.location.search);
+      for (const k of ['tf_onset', 'tf_mu', 'tf_sigma', 'tf_factor']) {
+        const v = sp.get(k);
+        if (v) tfOverrides[k] = v;
+      }
+    }
+
     const request: AnalysisRequest = {
       scenarios: [scenarioEntry],
       query_dsl: queryDsl,
       analysis_type: analysisType,
       ...(displaySettings ? { display_settings: displaySettings } : {}),
+      ...(testFixture ? { test_fixture: testFixture, ...tfOverrides } : {}),
     };
 
     const response = await fetch(`${this.baseUrl}/api/runner/analyze`, {
@@ -1802,13 +1579,15 @@ export class GraphComputeClient {
       .map(s => `${s.scenario_id}:${this.hashString(this.graphSignature(s.graph))}`)
       .join(',');
 
+    const multiTestFixture = new URLSearchParams(window.location.search).get('test_fixture');
     const multiDisplaySig = displaySettings ? JSON.stringify(displaySettings) : '';
     const cacheKey =
       `multi|graphs:${scenarioGraphKey}|dsl:${queryDsl || ''}|type:${analysisType || ''}|scenarios:${scenarioIds.join(',')}`
       + `|vis:${visibilityModes}`
       + (snapshotSig ? `|snap:${this.hashString(snapshotSig)}` : '')
       + (analysisType === 'cohort_maturity' ? `|cmv:${this.COHORT_MATURITY_CACHE_VERSION}` : '')
-      + (multiDisplaySig ? `|ds:${this.hashString(multiDisplaySig)}` : '');
+      + (multiDisplaySig ? `|ds:${this.hashString(multiDisplaySig)}` : '')
+      + (multiTestFixture ? `|tf:${multiTestFixture}:${new URLSearchParams(window.location.search).toString()}` : '');
     
     // Check cache first (unless explicitly bypassed via URL params for debugging).
     if (!bypassCache) {
@@ -1843,6 +1622,15 @@ export class GraphComputeClient {
       return result;
     }
 
+    const multiTfOverrides: Record<string, string> = {};
+    if (multiTestFixture) {
+      const sp = new URLSearchParams(window.location.search);
+      for (const k of ['tf_onset', 'tf_mu', 'tf_sigma', 'tf_factor']) {
+        const v = sp.get(k);
+        if (v) multiTfOverrides[k] = v;
+      }
+    }
+
     const request: AnalysisRequest = {
       scenarios: scenarios.map(s => ({
         scenario_id: s.scenario_id,
@@ -1855,6 +1643,7 @@ export class GraphComputeClient {
       query_dsl: queryDsl,
       analysis_type: analysisType,
       ...(displaySettings ? { display_settings: displaySettings } : {}),
+      ...(multiTestFixture ? { test_fixture: multiTestFixture, ...multiTfOverrides } : {}),
     };
 
     // DEV/forensics: make the exact compute boundary payload easy to copy without
@@ -2093,6 +1882,8 @@ export interface AnalysisRequest {
   forecasting_settings?: import('../constants/latency').ForecastingSettings;
   /** Compute-affecting display settings (e.g. bayes_band_level). */
   display_settings?: Record<string, unknown>;
+  /** Test fixture name — when set, BE loads synthetic data instead of snapshot DB. */
+  test_fixture?: string;
 }
 
 /**

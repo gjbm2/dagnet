@@ -154,13 +154,12 @@ describe('mergeLatencyConfig', () => {
 
   it('should always use file for file-mastered fields (no override mechanism)', () => {
     const result = mergeLatencyConfig(
-      { mu: 2.5, sigma: 0.8, model_trained_at: '1-Jan-26' },
-      { mu: 3.0, sigma: 1.2, model_trained_at: '5-Feb-26' },
+      { mu: 2.5, sigma: 0.8 },
+      { mu: 3.0, sigma: 1.2 },
     );
 
     expect(result?.mu).toBe(2.5);
     expect(result?.sigma).toBe(0.8);
-    expect(result?.model_trained_at).toBe('1-Jan-26');
   });
 
   it('should use graph wholesale when file has no latency', () => {

@@ -1724,6 +1724,17 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
       if (!viewId) return;
       const g = graphRef.current;
       if (!g) return;
+      const view = (g.canvasViews ?? []).find(v => v.id === viewId);
+
+      // Snapshot current state into the view on every toggle:
+      // - Locking: captures what the user wants to freeze.
+      // - Unlocking: captures what accumulated while locked, so auto-save starts from truth.
+      if (view && scopeEnabled(view.applyLayout)) {
+        const { transform } = rfStore.getState();
+        view.viewport = { x: transform[0], y: transform[1], zoom: transform[2] };
+        view.states = snapshotStates(g);
+      }
+
       const next = toggleCanvasViewLocked(g, viewId);
       if (next.metadata) next.metadata.updated_at = new Date().toISOString();
       setGraphDirect(next); graphRef.current = next;
@@ -2616,6 +2627,15 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
                         lastSavedViewportRef.current = viewportToSave;
                       } catch {}
                     });
+                  }
+
+                  // Auto-save viewport into the active canvas view (if unlocked).
+                  if (shouldSaveViewport && activeCanvasViewIdRef.current && !isActiveViewLocked()) {
+                    const g = graphRef.current;
+                    const view = g ? (g.canvasViews ?? []).find(v => v.id === activeCanvasViewIdRef.current) : null;
+                    if (view && scopeEnabled(view.applyLayout)) {
+                      view.viewport = viewportToSave;
+                    }
                   }
                 });
               }

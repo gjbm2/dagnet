@@ -66,7 +66,7 @@ const GRAPH_MASTERED_LATENCY_KEYS: ReadonlyArray<keyof LatencyConfig> = [
  * The graph cascades override-gated fields when the file isn't locked, and
  * always provides inherently graph-mastered fields (anchor_node_id).
  *
- * File-mastered fields (mu, sigma, path_mu, path_sigma, model_trained_at,
+ * File-mastered fields (mu, sigma, path_mu, path_sigma,
  * completeness, median_lag_days, mean_lag_days, posterior) always come from
  * the file — they have no override mechanism.
  */

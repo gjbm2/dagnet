@@ -87,6 +87,7 @@ export function buildCohortMaturityEChartsOption(
   if (!hasAnySignal) return null;
 
   // Parse rows into per-scenario point arrays
+  type FanBands = Record<string, [number, number]>;  // e.g. { '80': [lo, hi], '90': ... }
   type RowPoint = {
     tauDays: number;
     baseRate: number | null;
@@ -94,6 +95,7 @@ export function buildCohortMaturityEChartsOption(
     midpoint: number | null;
     fanUpper: number | null;
     fanLower: number | null;
+    fanBands: FanBands | null;
     tauSolidMax: number | null;
     tauFutureMax: number | null;
     cohortsExpected: number | null;
@@ -111,6 +113,17 @@ export function buildCohortMaturityEChartsOption(
     const parse = (v: any) => (v === null || v === undefined) ? null : (Number.isFinite(Number(v)) ? Number(v) : null);
 
     if (!byScenario.has(sid)) byScenario.set(sid, []);
+    // Parse fan_bands: { '80': [lo, hi], '90': [lo, hi], ... }
+    let fanBands: FanBands | null = null;
+    if (r?.fan_bands && typeof r.fan_bands === 'object') {
+      fanBands = {};
+      for (const [level, bounds] of Object.entries(r.fan_bands)) {
+        if (Array.isArray(bounds) && bounds.length === 2) {
+          fanBands[level] = [Number(bounds[0]), Number(bounds[1])];
+        }
+      }
+    }
+
     byScenario.get(sid)!.push({
       tauDays: tau,
       baseRate: parse(r?.rate),
@@ -118,6 +131,7 @@ export function buildCohortMaturityEChartsOption(
       midpoint: parse(r?.midpoint),
       fanUpper: parse(r?.fan_upper),
       fanLower: parse(r?.fan_lower),
+      fanBands,
       tauSolidMax: parse(r?.tau_solid_max),
       tauFutureMax: parse(r?.tau_future_max),
       cohortsExpected: parse(r?.cohorts_expected),
@@ -225,53 +239,77 @@ export function buildCohortMaturityEChartsOption(
       if (sMidpoint) seriesOut.push(sMidpoint);
     }
 
-    // Fan chart polygon — per-scenario uncertainty band in the scenario colour.
-    // Rendered behind the data lines (z:2).  Each row carries pre-computed
-    // fan_upper / fan_lower for epochs A+B.  For epoch C (beyond futureMax),
-    // the fan extends using model band data directly (w_f = 1, centre = model rate).
+    // Fan chart polygons — per-scenario uncertainty bands.
+    // Blend mode: 4 overlaid semi-transparent polygons (99/95/90/80%).
+    // Single-band mode: one polygon at the selected level.
+    // Each layer is ~5% alpha so they build up gently and multiple
+    // scenarios remain visible through each other.
     if (mode !== 'e') {
-      const fanPoly: Array<[number, number, number]> = [];
+      const bandSetting = String(settings.bayes_band_level ?? 'blend');
+      const isOff = bandSetting === 'off' || bandSetting === 'Off';
+      const isBlend = !isOff && (bandSetting === 'blend' || bandSetting === 'Blend');
 
-      // All epochs: fan_upper/fan_lower are pre-computed on each row
-      // by graphComputeClient (epochs A+B from evidence+band, epoch C
-      // from evidence+model_delta+band).
-      for (const p of points) {
-        if (p.fanUpper !== null && p.fanLower !== null && p.fanUpper !== p.fanLower) {
-          fanPoly.push([p.tauDays, p.fanUpper, p.fanLower]);
-        }
+      // Determine which band levels to draw (widest first for correct layering)
+      const bandLevels = isOff
+        ? []
+        : isBlend
+          ? ['99', '95', '90', '80']
+          : [bandSetting];
+
+      // Base colour for fan (hex without alpha)
+      const baseHex = colour || (c.text === '#e0e0e0' ? '#c8c8c8' : '#646464');
+
+      // Debug: check if points have fan_bands with real width
+      const _dbgFanPts = points.filter(p => p.fanBands && Object.values(p.fanBands).some(b => b[1] - b[0] > 0.001));
+      console.log(`[fan_debug] scenario=${scenarioId} bandSetting=${bandSetting} isOff=${isOff} isBlend=${isBlend} levels=${bandLevels.join(',')} pts_with_bands=${_dbgFanPts.length}/${points.length} mode=${mode}`);
+      if (_dbgFanPts.length > 0) {
+        const _s = _dbgFanPts[0];
+        console.log(`[fan_debug] sample tau=${_s.tauDays} bands=`, _s.fanBands);
       }
 
-      if (fanPoly.length > 0) {
-        const fanColour = c.text === '#e0e0e0'
-          ? (colour || 'rgba(200,200,200,0.18)')
-          : (colour || 'rgba(100,100,100,0.15)');
+      for (const level of bandLevels) {
+        // Build polygon data from fan_bands or fallback to fan_upper/fan_lower
+        const poly: Array<[number, number, number]> = [];
+        for (const p of points) {
+          if (p.fanBands && p.fanBands[level]) {
+            const [lo, hi] = p.fanBands[level];
+            if (Number.isFinite(lo) && Number.isFinite(hi)) {
+              poly.push([p.tauDays, hi, lo]);
+            }
+          } else if (!isBlend && p.fanUpper !== null && p.fanLower !== null) {
+            // Single-band fallback (rows without fan_bands)
+            poly.push([p.tauDays, p.fanUpper, p.fanLower]);
+          }
+        }
+
+        if (poly.length === 0) continue;
+
+        // Alpha: ~5% per layer in blend, ~15% for single band
+        const alphaHex = isBlend ? '0D' : '26';  // 0D = 5%, 26 = 15%
+        const fillColour = `${baseHex}${alphaHex}`;
+
         seriesOut.push({
-          id: `${scenarioId}::fan`,
+          id: `${scenarioId}::fan::${level}`,
           type: 'custom' as any,
           coordinateSystem: 'cartesian2d',
           encode: { x: 0, y: 1 },
           renderItem: (params: any, api: any) => {
             if (params.dataIndex !== 0) return;
             const pts: number[][] = [];
-            for (let i = 0; i < fanPoly.length; i++) {
-              pts.push(api.coord([fanPoly[i][0], fanPoly[i][1]]));
+            for (let i = 0; i < poly.length; i++) {
+              pts.push(api.coord([poly[i][0], poly[i][1]]));
             }
-            for (let i = fanPoly.length - 1; i >= 0; i--) {
-              pts.push(api.coord([fanPoly[i][0], fanPoly[i][2]]));
+            for (let i = poly.length - 1; i >= 0; i--) {
+              pts.push(api.coord([poly[i][0], poly[i][2]]));
             }
             return {
               type: 'polygon',
-              shape: { points: pts, smooth: 0.3 },
-              style: {
-                fill: typeof fanColour === 'string' && fanColour.startsWith('rgba')
-                  ? fanColour
-                  : `${fanColour}25`,
-                stroke: 'none',
-              },
+              shape: { points: pts, smooth: false },
+              style: { fill: fillColour, stroke: 'none' },
               silent: true,
             };
           },
-          data: fanPoly,
+          data: poly,
           z: 2,
           silent: true,
         });
@@ -386,7 +424,7 @@ export function buildCohortMaturityEChartsOption(
         const hatchStroke = c.text === '#e0e0e0' ? 'rgba(156,163,175,0.45)' : 'rgba(107,114,128,0.40)';
         seriesOut.push({
           id: 'bayes_band',
-          name: `Bayes ${settings.bayes_band_level || '90'}% band`,
+          name: 'Bayes 90% band',
           type: 'custom' as any,
           coordinateSystem: 'cartesian2d',
           encode: { x: 0, y: 1 },
@@ -409,7 +447,7 @@ export function buildCohortMaturityEChartsOption(
               children: [{
                 type: 'group',
                 children: lines,
-                clipPath: { type: 'polygon', shape: { points: pts, smooth: 0.3 } },
+                clipPath: { type: 'polygon', shape: { points: pts, smooth: false } },
               }],
               silent: true,
             };
@@ -482,7 +520,7 @@ export function buildCohortMaturityEChartsOption(
               });
               seriesOut.push({
                 id: 'bayes_band_source',
-                name: `Bayes ${settings.bayes_band_level || '90'}% band`,
+                name: 'Bayes 90% band',
                 type: 'custom' as any,
                 coordinateSystem: 'cartesian2d',
                 encode: { x: 0, y: 1 },
@@ -500,7 +538,7 @@ export function buildCohortMaturityEChartsOption(
                   }
                   return {
                     type: 'group',
-                    children: [{ type: 'group', children: lines, clipPath: { type: 'polygon', shape: { points: pts, smooth: 0.3 } } }],
+                    children: [{ type: 'group', children: lines, clipPath: { type: 'polygon', shape: { points: pts, smooth: false } } }],
                     silent: true,
                   };
                 },
@@ -645,8 +683,9 @@ export function buildCohortMaturityEChartsOption(
       min: settings.x_axis_min ?? 0,
       ...(() => {
         const ext = settings.tau_extent ?? settings.x_axis_max;
-        if (ext && ext !== 'auto' && Number.isFinite(Number(ext))) return { max: Number(ext) };
-        return maxTau !== null && Number.isFinite(maxTau) ? { max: maxTau } : {};
+        if (ext && ext !== 'auto' && ext !== 'Auto' && Number.isFinite(Number(ext))) return { max: Number(ext) };
+        // Auto: let ECharts determine from the data (no max constraint)
+        return {};
       })(),
       axisLabel: { fontSize: 9, color: c.text, formatter: (v: number) => `${Math.round(v)}` },
       axisPointer: {

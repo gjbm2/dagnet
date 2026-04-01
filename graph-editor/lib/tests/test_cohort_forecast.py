@@ -8,7 +8,7 @@ from runner.cohort_forecast import (
     get_incoming_edges,
     find_edge_by_id,
     upstream_arrival_rate,
-    compute_cohort_maturity_fan,
+    compute_cohort_maturity_rows,
 )
 
 
@@ -218,7 +218,7 @@ class TestUpstreamArrivalRate:
         assert upstream_arrival_rate(50, graph, 'B') is None
 
 
-# ── compute_cohort_maturity_fan ────────────────────────────────────────
+# ── compute_cohort_maturity_rows ────────────────────────────────────────
 
 
 # Graph: A --e_up--> B --e_target--> C
@@ -256,89 +256,91 @@ FAN_FRAMES = [
 
 FAN_EDGE_PARAMS = {
     'mu': 2.5, 'sigma': 0.5, 'onset_delta_days': 2.0, 'forecast_mean': 0.15,
+    'bayes_mu_sd': 0.3, 'bayes_sigma_sd': 0.1,
+    'bayes_onset_sd': 0.5, 'p_stdev': 0.03,
+    'bayes_onset_mu_corr': 0.0,
 }
 
-# Simple band data for τ 10..20
-FAN_BAND_UPPER = {tau: 0.18 for tau in range(10, 21)}
-FAN_BAND_LOWER = {tau: 0.08 for tau in range(10, 21)}
-FAN_MODEL_RATE = {tau: 0.13 for tau in range(10, 21)}
+
+def _call_rows(**overrides):
+    """Helper to call compute_cohort_maturity_rows with test defaults."""
+    kwargs = dict(
+        frames=FAN_FRAMES, graph=FAN_GRAPH, target_edge_id='e_target',
+        edge_params=FAN_EDGE_PARAMS,
+        anchor_from='2026-03-01', anchor_to='2026-03-05', sweep_to='2026-03-15',
+    )
+    kwargs.update(overrides)
+    return compute_cohort_maturity_rows(**kwargs)
 
 
-class TestComputeCohortMaturityFan:
-    def test_returns_data_for_epoch_b(self):
-        fan = compute_cohort_maturity_fan(
-            frames=FAN_FRAMES,
-            graph=FAN_GRAPH,
-            target_edge_id='e_target',
-            edge_params=FAN_EDGE_PARAMS,
-            band_upper_by_tau=FAN_BAND_UPPER,
-            band_lower_by_tau=FAN_BAND_LOWER,
-            model_rate_by_tau=FAN_MODEL_RATE,
-            anchor_from='2026-03-01',
-            anchor_to='2026-03-05',
-            sweep_to='2026-03-15',
-        )
-        # tau_solid_max = 10, tau_future_max = 14
-        # Should have entries for τ 10..20 (band extent)
-        assert len(fan) > 0
-        assert 10 in fan
-        assert 14 in fan
-        assert 20 in fan
+def _by_tau(rows):
+    """Index rows by tau_days for easy lookup."""
+    return {r['tau_days']: r for r in rows}
 
-    def test_midpoint_is_between_zero_and_one(self):
-        fan = compute_cohort_maturity_fan(
-            frames=FAN_FRAMES, graph=FAN_GRAPH, target_edge_id='e_target',
-            edge_params=FAN_EDGE_PARAMS,
-            band_upper_by_tau=FAN_BAND_UPPER, band_lower_by_tau=FAN_BAND_LOWER,
-            model_rate_by_tau=FAN_MODEL_RATE,
-            anchor_from='2026-03-01', anchor_to='2026-03-05', sweep_to='2026-03-15',
-        )
-        for tau, vals in fan.items():
-            assert 0 <= vals['midpoint'] <= 1, f"midpoint out of range at τ={tau}"
 
-    def test_fan_upper_ge_midpoint_ge_fan_lower(self):
-        fan = compute_cohort_maturity_fan(
-            frames=FAN_FRAMES, graph=FAN_GRAPH, target_edge_id='e_target',
-            edge_params=FAN_EDGE_PARAMS,
-            band_upper_by_tau=FAN_BAND_UPPER, band_lower_by_tau=FAN_BAND_LOWER,
-            model_rate_by_tau=FAN_MODEL_RATE,
-            anchor_from='2026-03-01', anchor_to='2026-03-05', sweep_to='2026-03-15',
-        )
-        for tau, vals in fan.items():
-            if vals['fan_upper'] is not None and vals['fan_lower'] is not None:
-                assert vals['fan_upper'] >= vals['midpoint'] >= vals['fan_lower'], \
-                    f"fan ordering violated at τ={tau}: {vals}"
+class TestComputeCohortMaturityRows:
+    def test_returns_rows_covering_epochs_b_and_c(self):
+        rows = _call_rows()
+        taus = _by_tau(rows)
+        assert len(rows) > 0
+        # Epoch B: 10 ≤ τ ≤ 14 (tau_solid_max..tau_future_max)
+        assert 10 in taus
+        assert 14 in taus
+        # Epoch C: τ > 14 (from model/band extent)
+        assert 20 in taus
+
+    def test_each_row_has_required_fields(self):
+        rows = _call_rows()
+        required = {'tau_days', 'rate', 'projected_rate', 'midpoint',
+                     'fan_upper', 'fan_lower', 'tau_solid_max', 'tau_future_max'}
+        for r in rows:
+            assert required.issubset(r.keys()), f"missing fields at τ={r.get('tau_days')}: {required - r.keys()}"
+
+    def test_evidence_rate_null_in_epoch_c(self):
+        rows = _call_rows()
+        for r in rows:
+            if r['tau_days'] > 14:  # tau_future_max
+                assert r['rate'] is None, f"rate should be null in epoch C at τ={r['tau_days']}"
+
+    def test_midpoint_null_in_epoch_a(self):
+        rows = _call_rows()
+        for r in rows:
+            if r['tau_days'] < 10:  # strictly before tau_solid_max
+                assert r['midpoint'] is None, f"midpoint should be null in epoch A at τ={r['tau_days']}"
+
+    def test_midpoint_in_range(self):
+        rows = _call_rows()
+        for r in rows:
+            if r['midpoint'] is not None:
+                assert 0 <= r['midpoint'] <= 1, f"midpoint out of range at τ={r['tau_days']}"
+
+    def test_fan_ordering(self):
+        rows = _call_rows()
+        for r in rows:
+            if r['fan_upper'] is not None and r['fan_lower'] is not None and r['midpoint'] is not None:
+                assert r['fan_upper'] >= r['midpoint'] >= r['fan_lower'], \
+                    f"fan ordering violated at τ={r['tau_days']}: upper={r['fan_upper']}, mid={r['midpoint']}, lower={r['fan_lower']}"
+
+    def test_epoch_c_midpoint_nonzero(self):
+        taus = _by_tau(_call_rows())
+        assert taus[20]['midpoint'] is not None
+        assert taus[20]['midpoint'] > 0
+
+    def test_epoch_c_projected_rate_and_midpoint_both_positive(self):
+        """In epoch C, both projected_rate and midpoint should be present and positive."""
+        taus = _by_tau(_call_rows())
+        assert taus[20]['projected_rate'] is not None
+        assert taus[20]['projected_rate'] > 0
+        assert taus[20]['midpoint'] is not None
+        assert taus[20]['midpoint'] > 0
 
     def test_returns_empty_for_missing_edge(self):
-        fan = compute_cohort_maturity_fan(
-            frames=FAN_FRAMES, graph=FAN_GRAPH, target_edge_id='nonexistent',
-            edge_params=FAN_EDGE_PARAMS,
-            band_upper_by_tau=FAN_BAND_UPPER, band_lower_by_tau=FAN_BAND_LOWER,
-            model_rate_by_tau=FAN_MODEL_RATE,
-            anchor_from='2026-03-01', anchor_to='2026-03-05', sweep_to='2026-03-15',
-        )
-        assert fan == {}
+        assert _call_rows(target_edge_id='nonexistent') == []
 
     def test_returns_empty_for_no_frames(self):
-        fan = compute_cohort_maturity_fan(
-            frames=[], graph=FAN_GRAPH, target_edge_id='e_target',
-            edge_params=FAN_EDGE_PARAMS,
-            band_upper_by_tau=FAN_BAND_UPPER, band_lower_by_tau=FAN_BAND_LOWER,
-            model_rate_by_tau=FAN_MODEL_RATE,
-            anchor_from='2026-03-01', anchor_to='2026-03-05', sweep_to='2026-03-15',
-        )
-        assert fan == {}
+        assert _call_rows(frames=[]) == []
 
-    def test_epoch_c_uses_forecast_x(self):
-        """Beyond tau_future_max (14), all cohorts are dropped — x should be forecast."""
-        fan = compute_cohort_maturity_fan(
-            frames=FAN_FRAMES, graph=FAN_GRAPH, target_edge_id='e_target',
-            edge_params=FAN_EDGE_PARAMS,
-            band_upper_by_tau=FAN_BAND_UPPER, band_lower_by_tau=FAN_BAND_LOWER,
-            model_rate_by_tau=FAN_MODEL_RATE,
-            anchor_from='2026-03-01', anchor_to='2026-03-05', sweep_to='2026-03-15',
-        )
-        # At τ=20, all cohorts dropped, midpoint should be non-zero
-        # (upstream is forecasting x arrivals, edge is forecasting y)
-        assert 20 in fan
-        assert fan[20]['midpoint'] > 0
+    def test_rows_sorted_by_tau(self):
+        rows = _call_rows()
+        taus = [r['tau_days'] for r in rows]
+        assert taus == sorted(taus)

@@ -1320,10 +1320,6 @@
           "minimum": 0,
           "description": "Path-level A\u2192Y log-normal sigma (Fenton\u2013Wilkinson, internal)"
         },
-        "model_trained_at": {
-          "type": "string",
-          "description": "UK date (d-MMM-yy) when the model was last fitted (staleness detection)"
-        },
         "posterior": {
           "type": "object",
           "description": "Bayesian posterior for latency parameters (written by fitting engine)",

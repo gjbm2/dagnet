@@ -221,33 +221,60 @@ function erf(x: number): number {
 }
 
 const SQRT_2PI = Math.sqrt(2 * Math.PI);
+const RATE_EPS = 1e-12;
 
-/** Compute the SD of rate(t) via the covariance-aware delta method. */
-function rateSd(
+function logit(p: number): number {
+  const c = Math.max(RATE_EPS, Math.min(1 - RATE_EPS, p));
+  return Math.log(c / (1 - c));
+}
+
+function expit(x: number): number {
+  if (x > 500) return 1;
+  if (x < -500) return 0;
+  return 1 / (1 + Math.exp(-x));
+}
+
+/**
+ * Compute the SD of logit(rate(t)) via the covariance-aware delta method.
+ *
+ * The Jacobian is transformed to logit space element-wise BEFORE the
+ * quadratic form, so the 1/(rate*(1-rate)) factor cancels correctly
+ * with the vanishing ∂rate/∂θ_i near rate ≈ 0.
+ * Matches the approach in confidence_bands.py.
+ */
+function logitRateSd(
   t: number, p: number, mu: number, sigma: number, onset: number,
   pSd: number, muSd: number, sigmaSd: number, onsetSd: number,
   onsetMuCorr: number,
 ): number {
   const cdf = shiftedLognormalCdf(t, onset, mu, sigma);
+  const rate = p * cdf;
+  if (rate < RATE_EPS) return 0;
+
+  const rateC = Math.max(RATE_EPS, Math.min(1 - RATE_EPS, rate));
+  const scale = 1 / (rateC * (1 - rateC));
+
   const age = t - onset;
   if (age > 0 && sigma > 0) {
     const z = (Math.log(age) - mu) / sigma;
     const phi = Math.exp(-0.5 * z * z) / SQRT_2PI;
-    const drDp = cdf;
-    const drDmu = p * (-phi / sigma);
-    const drDsigma = p * (-phi * z / sigma);
-    const drDonset = p * (-phi / (sigma * age));
+    // Rate-space Jacobian → logit-space Jacobian (element-wise)
+    const jP     = cdf * scale;
+    const jMu    = p * (-phi / sigma) * scale;
+    const jSigma = p * (-phi * z / sigma) * scale;
+    const jOnset = p * (-phi / (sigma * age)) * scale;
     let v = 0;
-    if (pSd > 0) v += drDp ** 2 * pSd ** 2;
-    if (muSd > 0) v += drDmu ** 2 * muSd ** 2;
-    if (sigmaSd > 0) v += drDsigma ** 2 * sigmaSd ** 2;
-    if (onsetSd > 0) v += drDonset ** 2 * onsetSd ** 2;
+    if (pSd > 0)     v += jP ** 2 * pSd ** 2;
+    if (muSd > 0)    v += jMu ** 2 * muSd ** 2;
+    if (sigmaSd > 0) v += jSigma ** 2 * sigmaSd ** 2;
+    if (onsetSd > 0) v += jOnset ** 2 * onsetSd ** 2;
     if (onsetMuCorr !== 0 && onsetSd > 0 && muSd > 0) {
-      v += 2 * drDonset * drDmu * onsetMuCorr * onsetSd * muSd;
+      v += 2 * jOnset * jMu * onsetMuCorr * onsetSd * muSd;
     }
     return Math.sqrt(Math.max(v, 0));
   }
-  if (pSd > 0 && cdf > 0) return cdf * pSd;
+  // Pre-onset: only p sensitivity
+  if (pSd > 0 && cdf > 0) return cdf * pSd * scale;
   return 0;
 }
 
@@ -260,11 +287,16 @@ function computeBands(
   const u99: number[] = []; const l99: number[] = [];
   for (const t of ages) {
     const rate = p * shiftedLognormalCdf(t, onset, mu, sigma);
-    const sd = rateSd(t, p, mu, sigma, onset, pSd, muSd, sigmaSd, onsetSd, onsetMuCorr);
-    u90.push(Math.min(1, rate + 1.645 * sd));
-    l90.push(Math.max(0, rate - 1.645 * sd));
-    u99.push(Math.min(1, rate + 2.576 * sd));
-    l99.push(Math.max(0, rate - 2.576 * sd));
+    if (rate < RATE_EPS) {
+      u90.push(0); l90.push(0); u99.push(0); l99.push(0);
+      continue;
+    }
+    const sdLogit = logitRateSd(t, p, mu, sigma, onset, pSd, muSd, sigmaSd, onsetSd, onsetMuCorr);
+    const eta = logit(rate);
+    u90.push(expit(eta + 1.645 * sdLogit));
+    l90.push(expit(eta - 1.645 * sdLogit));
+    u99.push(expit(eta + 2.576 * sdLogit));
+    l99.push(expit(eta - 2.576 * sdLogit));
   }
   return { u90, l90, u99, l99 };
 }

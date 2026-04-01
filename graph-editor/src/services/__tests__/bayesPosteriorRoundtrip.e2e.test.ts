@@ -127,7 +127,6 @@ describe('Bayes posterior — real Git roundtrip', () => {
           onset_delta_days: 1.2,
           t95: 25.5,
           latency_parameter: true,
-          model_trained_at: '16-Mar-26',
           // NOTE: no latency.posterior — doc 21 removes it
         },
         posterior: UNIFIED_POSTERIOR,

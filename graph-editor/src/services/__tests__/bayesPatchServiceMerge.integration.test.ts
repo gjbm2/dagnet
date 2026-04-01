@@ -236,21 +236,6 @@ describe('bayesPatchService — unified posterior merge (doc 21)', () => {
     expect(doc.latency.bayes_reset).toBeUndefined();
   });
 
-  it('should update latency.model_trained_at when latency data present', async () => {
-    const paramDoc: any = {
-      id: 'param-edge-1',
-      values: [],
-      latency: { latency_parameter: true },
-    };
-    await registerParam('param-edge-1', paramDoc);
-    await registerGraph('graph-test', { edges: [] });
-
-    await applyPatch(makePatch());
-
-    const doc = getDoc('parameter-param-edge-1');
-    expect(doc.latency.model_trained_at).toBe('15-Mar-26');
-  });
-
   it('should not write fit_history or _model_state when edge has no slices', async () => {
     const patch = makePatch({
       edges: [{

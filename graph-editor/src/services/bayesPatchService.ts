@@ -436,13 +436,6 @@ function mergePosteriorsIntoParam(
     ...(fitHistory.length > 0 ? { fit_history: fitHistory } : {}),
   };
 
-  // Update latency.model_trained_at if latency data present
-  const windowSlice = slices['window()'];
-  if (windowSlice?.mu_mean != null) {
-    if (!paramDoc.latency) paramDoc.latency = {};
-    paramDoc.latency.model_trained_at = fittedAt;
-  }
-
   // Remove legacy latency.posterior if it exists (doc 21: no longer used)
   if (paramDoc.latency?.posterior) {
     delete paramDoc.latency.posterior;

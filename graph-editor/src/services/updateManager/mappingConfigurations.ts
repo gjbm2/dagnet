@@ -311,7 +311,7 @@ function buildMappingConfigurations(): Map<string, MappingConfiguration> {
       requiresIgnoreOverrideFlags: true,
       condition: (source) => source.p?.latency?.onset_delta_days_overridden !== undefined && source.p?.id
     },
-    // mu, sigma, model_trained_at: fitted model params (internal, no override flags)
+    // mu, sigma: fitted model params (internal, no override flags)
     // Synced to file so they survive git commit/clone and are available offline.
     {
       sourceField: 'p.latency.mu',
@@ -322,11 +322,6 @@ function buildMappingConfigurations(): Map<string, MappingConfiguration> {
       sourceField: 'p.latency.sigma',
       targetField: 'latency.sigma',
       condition: (source) => source.p?.latency?.sigma !== undefined && source.p?.id
-    },
-    {
-      sourceField: 'p.latency.model_trained_at',
-      targetField: 'latency.model_trained_at',
-      condition: (source) => source.p?.latency?.model_trained_at !== undefined && source.p?.id
     },
     // path_mu, path_sigma: path-level A→Y CDF params (Fenton–Wilkinson, internal)
     {
@@ -774,10 +769,9 @@ function buildMappingConfigurations(): Map<string, MappingConfiguration> {
       condition: isProbType
     },
     { sourceField: 'latency.onset_delta_days_overridden', targetField: 'p.latency.onset_delta_days_overridden', requiresIgnoreOverrideFlags: true },
-    // mu, sigma, model_trained_at: fitted model params (internal, no override flags)
+    // mu, sigma: fitted model params (internal, no override flags)
     { sourceField: 'latency.mu', targetField: 'p.latency.mu', condition: isProbType },
     { sourceField: 'latency.sigma', targetField: 'p.latency.sigma', condition: isProbType },
-    { sourceField: 'latency.model_trained_at', targetField: 'p.latency.model_trained_at', condition: isProbType },
     // path_mu, path_sigma, path_onset_delta_days: path-level A→Y CDF params (Fenton–Wilkinson, internal)
     { sourceField: 'latency.path_mu', targetField: 'p.latency.path_mu', condition: isProbType },
     { sourceField: 'latency.path_sigma', targetField: 'p.latency.path_sigma', condition: isProbType },

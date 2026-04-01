@@ -707,6 +707,11 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
             'sigma': float(sigma),
             'onset_delta_days': float(onset) if isinstance(onset, (int, float)) else 0.0,
         }
+        # Evidence retrieval date — needed for tau_observed in fan chart.
+        evidence = p.get('evidence') or {}
+        ev_retrieved = evidence.get('retrieved_at')
+        if isinstance(ev_retrieved, str) and ev_retrieved:
+            result['evidence_retrieved_at'] = ev_retrieved
         if isinstance(forecast_mean, (int, float)) and math.isfinite(forecast_mean) and forecast_mean > 0:
             result['forecast_mean'] = float(forecast_mean)
         # Doc 25 §3.3: posterior p from the re-projected slice.
@@ -879,6 +884,24 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
             bayes_path_onset_sd = lat_posterior.get('path_onset_sd')
             if isinstance(bayes_path_onset_sd, (int, float)) and math.isfinite(bayes_path_onset_sd) and bayes_path_onset_sd > 0:
                 result['bayes_path_onset_sd'] = float(bayes_path_onset_sd)
+
+        # ── Fallback SDs from model_vars (source_curves) ──────────────
+        # The SDs may live in model_vars[bayesian].latency rather than
+        # in lat_posterior directly.  Promote them to top-level if not
+        # already set from the posterior.
+        bayes_sc = source_curves.get('bayesian') if source_curves else None
+        if bayes_sc:
+            for _src_key, _dst_key in [
+                ('mu_sd', 'bayes_mu_sd'), ('sigma_sd', 'bayes_sigma_sd'),
+                ('onset_sd', 'bayes_onset_sd'), ('p_stdev', 'p_stdev'),
+                ('path_mu_sd', 'bayes_path_mu_sd'), ('path_sigma_sd', 'bayes_path_sigma_sd'),
+                ('path_onset_sd', 'bayes_path_onset_sd'),
+            ]:
+                if _dst_key not in result:
+                    _v = bayes_sc.get(_src_key)
+                    if isinstance(_v, (int, float)) and math.isfinite(_v) and _v > 0:
+                        result[_dst_key] = float(_v)
+
         return result
 
     def _append_synthetic_cohort_maturity_frames(args: Dict[str, Any]) -> None:
@@ -1219,6 +1242,63 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
             graph = scenario.get('graph') or {}
             target_id = (subj.get('target') or {}).get('targetId')
             model_params = _read_edge_model_params(graph, target_id)
+
+            # ── Test fixture: override model_params with fixture values ──
+            # When a test fixture is active, the model curves / confidence
+            # bands / maturity rows must ALL use the fixture's params, not
+            # whatever the real graph edge happens to have.
+            _test_fixture = data.get('test_fixture') or data.get('display_settings', {}).get('test_fixture')
+            if _test_fixture and analysis_type == 'cohort_maturity':
+                from runner.cohort_forecast import load_test_fixture as _ltf
+                _fixture_data = _ltf(_test_fixture)  # frames are static, never regenerated
+                _ep = dict(_fixture_data['edge_params'])  # copy — we'll apply URL overrides
+
+                # tf_ URL params override the MODEL, not the evidence.
+                # This lets you move the Bayes curve / fan while keeping
+                # evidence fixed, to see how the model fits the data.
+                for _src, _dst in [('tf_onset', 'onset_delta_days'), ('tf_mu', 'mu'), ('tf_sigma', 'sigma')]:
+                    _v = data.get(_src) or data.get('display_settings', {}).get(_src)
+                    if _v is not None:
+                        _ep[_dst] = float(_v)
+                _tf_factor = data.get('tf_factor') or data.get('display_settings', {}).get('tf_factor')
+                if _tf_factor is not None:
+                    _ep['forecast_mean'] = _ep['forecast_mean'] * float(_tf_factor)
+
+                # Also update edge_params in the fixture data so maturity rows use the same model
+                _fixture_data['edge_params'] = _ep
+
+                # Compute posterior_p from fixture graph's alpha/beta
+                _fg = _fixture_data['graph']
+                _fe = next((e for e in _fg.get('edges', []) if e.get('uuid') == _fixture_data['target_edge_id']), {})
+                _fp = (_fe.get('p') or {}).get('posterior') or {}
+                _fa, _fb = _fp.get('alpha', 0), _fp.get('beta', 0)
+                _posterior_p = _fa / (_fa + _fb) if _fa > 0 and _fb > 0 else _ep.get('forecast_mean', 0.83)
+                # If tf_factor changed p, override posterior_p too
+                if _tf_factor is not None:
+                    _posterior_p = _ep['forecast_mean']
+                _p_sd_from_beta = math.sqrt(_fa * _fb / ((_fa + _fb) ** 2 * (_fa + _fb + 1))) if _fa > 0 and _fb > 0 else _ep.get('p_stdev', 0.05)
+                model_params = {
+                    'mu': _ep['mu'],
+                    'sigma': _ep['sigma'],
+                    'onset_delta_days': _ep['onset_delta_days'],
+                    'forecast_mean': _ep['forecast_mean'],
+                    'posterior_p': _posterior_p,
+                    'p_stdev': _ep.get('p_stdev', _p_sd_from_beta),
+                    'evidence_retrieved_at': _ep.get('evidence_retrieved_at'),
+                    # Bayes keys (drive the promoted/bayesian model curve)
+                    'bayes_mu': _ep['mu'],
+                    'bayes_sigma': _ep['sigma'],
+                    'bayes_onset': _ep['onset_delta_days'],
+                    'bayes_mu_sd': _ep.get('bayes_mu_sd', 0.0),
+                    'bayes_sigma_sd': _ep.get('bayes_sigma_sd', 0.0),
+                    'bayes_onset_sd': _ep.get('bayes_onset_sd', 0.0),
+                    'bayes_onset_mu_corr': _ep.get('bayes_onset_mu_corr', 0.0),
+                    'promoted_source': 'bayesian',
+                }
+                print(f"[test_fixture] model_params: mu={_ep['mu']} sigma={_ep['sigma']} "
+                      f"onset={_ep['onset_delta_days']} p={_ep['forecast_mean']:.4f} "
+                      f"posterior_p={_posterior_p:.4f}")
+
             if model_params and result:
                 # Determine query mode once — used by both annotation and chart CDF.
                 # See doc 1 §16.1 truth table: annotation and chart must use the
@@ -1478,11 +1558,11 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
                                 if band_onset_mu_corr is None:
                                     band_onset_mu_corr = 0.0
 
-                                _bl = str(_ds.get('bayes_band_level', '90'))
-                                _level_map = {'80': 0.80, '90': 0.90, '95': 0.95, '99': 0.99}
-                                band_level = _level_map.get(_bl)
+                                # Model overlay band always uses 90% — independent of
+                                # the fan chart band setting (which controls the fan only).
+                                band_level = 0.90
 
-                                if _bl != 'off' and band_mu_sd > 0 and band_level is not None:
+                                if band_mu_sd > 0:
                                     ages = list(range(0, axis_tau_max + 1))
                                     upper_rates, lower_rates = compute_confidence_band(
                                         ages=ages,
@@ -1507,50 +1587,74 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
                             result['source_model_curves'] = source_curve_results
                             result['promoted_source'] = _promoted_source or model_params.get('promoted_source', 'best_available')
 
-                    # ── Cohort maturity fan chart ──────────────────────
-                    # Compute per-τ midpoint + fan bounds using upstream x
-                    # forecasting and this edge's y forecast.
+                    # ── Cohort maturity complete rows ──────────────────
+                    # Compute per-τ rows with rate, midpoint, fan bounds.
+                    # All computation here — the FE just draws.
                     if (analysis_type == 'cohort_maturity'
                             and 'frames' in result
                             and subj.get('anchor_from') and subj.get('anchor_to')
                             and subj.get('sweep_to')):
                         try:
-                            from runner.cohort_forecast import compute_cohort_maturity_fan
+                            from runner.cohort_forecast import compute_cohort_maturity_rows
 
-                            # Build band/model lookups from source curves (bayesian)
-                            _src_bayes = source_curve_results.get('bayesian', {}) if source_curve_results else {}
-                            _band_upper_by_tau: Dict[int, float] = {}
-                            _band_lower_by_tau: Dict[int, float] = {}
-                            for pt in (_src_bayes.get('band_upper') or []):
-                                if isinstance(pt, dict) and 'tau_days' in pt and 'model_rate' in pt:
-                                    _band_upper_by_tau[int(pt['tau_days'])] = float(pt['model_rate'])
-                            for pt in (_src_bayes.get('band_lower') or []):
-                                if isinstance(pt, dict) and 'tau_days' in pt and 'model_rate' in pt:
-                                    _band_lower_by_tau[int(pt['tau_days'])] = float(pt['model_rate'])
-                            # Model curve rate (promoted)
-                            _model_rate_by_tau: Dict[int, float] = {}
-                            for pt in (result.get('model_curve') or []):
-                                if isinstance(pt, dict) and 'tau_days' in pt and 'model_rate' in pt:
-                                    _model_rate_by_tau[int(pt['tau_days'])] = float(pt['model_rate'])
+                            # Resolve band level from display settings
+                            _bl_str = str(_ds.get('bayes_band_level', 'blend'))
+                            _bl_map = {'80': 0.80, '90': 0.90, '95': 0.95, '99': 0.99, 'blend': 0.90}
+                            _fan_band_level = _bl_map.get(_bl_str, 0.90)
 
-                            fan_data = compute_cohort_maturity_fan(
-                                frames=result['frames'],
-                                graph=graph,
-                                target_edge_id=target_id,
-                                edge_params=model_params,
-                                band_upper_by_tau=_band_upper_by_tau,
-                                band_lower_by_tau=_band_lower_by_tau,
-                                model_rate_by_tau=_model_rate_by_tau,
-                                anchor_from=subj['anchor_from'],
-                                anchor_to=subj['anchor_to'],
-                                sweep_to=subj['sweep_to'],
-                            )
-                            if fan_data:
-                                result['fan_chart'] = {
-                                    str(tau): vals for tau, vals in fan_data.items()
-                                }
+                            # Test fixture fork: reuse _fixture_data loaded above
+                            # (edge_params already have tf_ overrides applied).
+                            if _test_fixture:
+                                maturity_rows = compute_cohort_maturity_rows(**_fixture_data, band_level=_fan_band_level)
+                            else:
+                                maturity_rows = compute_cohort_maturity_rows(
+                                    frames=result['frames'],
+                                    graph=graph,
+                                    target_edge_id=target_id,
+                                    edge_params=model_params,
+                                    anchor_from=subj['anchor_from'],
+                                    anchor_to=subj['anchor_to'],
+                                    sweep_to=subj['sweep_to'],
+                                    is_window=is_window,
+                                    axis_tau_max=axis_tau_max,
+                                    band_level=_fan_band_level,
+                                )
+                            _sd_keys = {k: v for k, v in model_params.items() if 'sd' in k.lower() or 'stdev' in k.lower() or 'corr' in k.lower()}
+                            print(f"[cohort_maturity_rows] Computed {len(maturity_rows)} rows for {subj.get('subject_id', '?')[:40]}  is_window={is_window}  SDs={_sd_keys}")
+                            if maturity_rows:
+                                result['maturity_rows'] = maturity_rows
                         except Exception as e:
-                            print(f"[cohort_maturity_fan] Error computing fan: {e}")
+                            print(f"[cohort_maturity_rows] Error: {e}")
+                            import traceback; traceback.print_exc()
+
+            # ── Fallback maturity rows (no Bayes params) ─────────
+            # If the model_params guard above didn't fire, still produce
+            # basic maturity_rows (rate/projected_rate, no fan/midpoint)
+            # so the FE has data to draw.
+            if (analysis_type == 'cohort_maturity'
+                    and result and 'frames' in result
+                    and 'maturity_rows' not in result
+                    and subj.get('anchor_from') and subj.get('anchor_to')
+                    and subj.get('sweep_to')):
+                try:
+                    from runner.cohort_forecast import compute_cohort_maturity_rows
+                    _graph = graph if graph else (scenario.get('graph') or {})
+                    _tid = target_id if target_id else ((subj.get('target') or {}).get('targetId') or '')
+                    _is_win = 'window(' in str(data.get('query_dsl', ''))
+                    maturity_rows = compute_cohort_maturity_rows(
+                        frames=result['frames'],
+                        graph=_graph,
+                        target_edge_id=_tid,
+                        edge_params={},
+                        anchor_from=subj['anchor_from'],
+                        anchor_to=subj['anchor_to'],
+                        sweep_to=subj['sweep_to'],
+                        is_window=_is_win,
+                    )
+                    if maturity_rows:
+                        result['maturity_rows'] = maturity_rows
+                except Exception as e:
+                    print(f"[cohort_maturity_rows fallback] Error: {e}")
 
             per_subject_results.append({
                 "subject_id": subj.get('subject_id'),
@@ -2464,11 +2568,6 @@ def handle_lag_recompute_models(data: Dict[str, Any]) -> Dict[str, Any]:
     # Accept both ISO with offset and Zulu suffix.
     as_at = datetime.fromisoformat(as_at_str.replace('Z', '+00:00')) if as_at_str else None
 
-    # UK date for model_trained_at provenance.
-    from datetime import date as _date
-    today = _date.today()
-    model_trained_at = today.strftime('%-d-%b-%y')
-
     # ── Process each subject ──────────────────────────────────
     results = []
     for subj in subjects:
@@ -2557,7 +2656,6 @@ def handle_lag_recompute_models(data: Dict[str, Any]) -> Dict[str, Any]:
             t95_constraint=t95_constraint,
             onset_override=onset_override,
             use_authoritative_t95=True,
-            model_trained_at=model_trained_at,
             training_window=training_window or None,
             settings_signature=sig,
             reference_datetime=as_at,
@@ -2569,7 +2667,6 @@ def handle_lag_recompute_models(data: Dict[str, Any]) -> Dict[str, Any]:
             'success': True,
             'mu': fit.mu,
             'sigma': fit.sigma,
-            'model_trained_at': fit.model_trained_at,
             't95_days': fit.t95_days,
             'onset_delta_days': fit.onset_delta_days,
             'quality_ok': fit.quality_ok,
