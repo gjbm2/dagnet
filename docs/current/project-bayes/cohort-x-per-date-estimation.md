@@ -101,10 +101,11 @@ by `stats_engine.fw_compose_pair()`). These describe the expected
 arrival rate from the anchor population through to the from-node via
 edge `e_i`.
 
-For each Cohort date `s` and each tau `τ`, compute:
+The model-derived upstream arrival curve for Cohort date `s` at
+age `τ` is:
 
 ```
-x(s, τ) = Σ_i  a_s × p_path_i × CDF_path_i(τ)
+x_model(s, τ) = Σ_i  a_s × p_path_i × CDF_path_i(τ)
 ```
 
 where `a_s` is the anchor population for Cohort date `s`,
@@ -112,20 +113,53 @@ where `a_s` is the anchor population for Cohort date `s`,
 to the from-node via edge `e_i`, and `CDF_path_i(τ)` is the
 path-level latency CDF evaluated at `τ`.
 
+However, the model curve alone is not used directly as `x`. Where
+observed data exists, it takes precedence. The per-Cohort rule is:
+
+```
+x(s, τ) =
+  x_observed(s, τ)                              if τ ≤ tau_max_s
+  max(x_model(s, τ), x_frozen_s)                if τ > tau_max_s
+```
+
+That is: for ages where the Cohort has actual observed arrivals
+(from the sweep data), use those. For ages beyond the observation
+frontier, use the model forecast, floored at the last observed
+value. Arrivals cannot un-happen, so the forecast must never fall
+below what was actually seen.
+
+The floor matters in practice. If the path model underestimates
+arrivals for a particular Cohort (model predicts 80 arrivals by
+`tau_max`, but 100 were observed), without the floor the denominator
+would shrink below observed `y`, producing impossible rates > 1.
+
+At the chart level, the epoch boundaries fall out naturally:
+- **Epoch A** (all Cohorts mature at this `τ`): every Cohort
+  contributes observed `x`. Pure evidence.
+- **Epoch B** (some Cohorts mature, some immature): mature Cohorts
+  contribute observed `x`, immature Cohorts contribute the floored
+  model forecast.
+- **Epoch C** (all Cohorts immature): all Cohorts contribute the
+  floored model forecast.
+
 This gives a per-Cohort-date, per-tau `x` estimate that reflects:
 - The correct shape of the upstream latency distribution per `s`
 - The correct scaling by anchor population per `s`
 - Summation across all incident edges at joins (not just one
   "dominant" upstream edge)
+- Observed data where available, model forecast only where needed
 
 ### 3.2 What this does NOT do
 
-This `x(s, τ)` is purely model-derived. It is not conditioned on
-any observed upstream data. If the actual arrival pattern at the
-from-node deviates from what the path latency model predicts (because
-the lognormal fit is poor, or the Fenton-Wilkinson composition is
-loose, or the real data is non-stationary), the `x` estimate will
-be off.
+The model-derived `x_model(s, τ)` is not conditioned on any
+observed upstream data. If the actual arrival pattern at the
+from-node deviates from what the path latency model predicts
+(because the lognormal fit is poor, or the Fenton-Wilkinson
+composition is loose, or the real data is non-stationary), the
+forecast beyond the observation frontier will be off. The floor at
+`x_frozen_s` prevents the forecast from being *lower* than reality,
+but does not correct it if the model *overestimates* future
+arrivals.
 
 This is acceptable as a first stage because:
 - The `y`-forecasting on the subject edge IS conditioned on actual
@@ -150,50 +184,159 @@ object sent to the BE in the analysis commission request.
 
 ### 3.4 Integration with the Bayesian `y` forecast
 
-The per-Cohort-date `x(s, τ)` from this approach replaces the
-current `x_forecast_arr` in the MC loop
-(`cohort_forecast.py:787–792`). The rest of the Bayesian `y`
-computation (§7.1 of the Bayes design doc) continues unchanged:
+The per-Cohort `x(s, τ)` from this approach replaces the current
+`x_forecast_arr` in the MC loop (`cohort_forecast.py:787–792`).
+The subject-edge Bayesian `y` forecast continues to condition on
+the subject edge's own frozen evidence — `x_frozen_s` and `k_s`
+from the snapshot — not on the model-derived `x`.
 
 For each MC draw `b`, for each Cohort date `s`:
 
 ```
 c_s^(b) = CDF(tau_max_s; θ^(b))
-n_eff_s = x(s, tau_max_s) × c_s^(b)
+n_eff_s = x_frozen_s × c_s^(b)
 E[r | data, θ^(b)] = (α₀ + k_s) / (α₀ + β₀ + n_eff_s)
-y_forecast_s^(b)(τ) = k_s + x(s, tau_max_s) × [CDF(τ; θ^(b)) − c_s^(b)] × E[r | data, θ^(b)]
+y_forecast_s^(b)(τ) = k_s + x_frozen_s × [CDF(τ; θ^(b)) − c_s^(b)] × E[r | data, θ^(b)]
 ```
 
-Note that `n_eff` uses `x(s, tau_max_s)` — the model-derived
-arrivals at the observation point for this Cohort date — rather
-than `x_frozen_s`. This means the Bayesian update is conditioned
-on the model's view of how many people had arrived, not on the
-snapshot's frozen count. The `k_s` (observed conversions) is still
-from the snapshot.
+The `y` forecast uses `x_frozen_s` (observed arrivals at the
+subject edge) as the conditioning datum, because that is what was
+actually observed at the edge. The model-derived `x(s, τ)` is used
+only as the **denominator** when computing rates `y/x` for the
+chart — it tells us how many people are expected to be in scope at
+each `τ`, not how many the subject edge has seen convert.
 
-For the **deterministic midpoint**, the same substitution applies
-but using posterior means rather than per-draw values.
+For the **deterministic midpoint**, the same logic applies using
+posterior means rather than per-draw values.
 
 ### 3.5 MC draws for upstream uncertainty
 
-In Option 1, `x(s, τ)` is deterministic (uses point-estimate path
-params). This means the fan bands reflect only target-edge parameter
-uncertainty, not upstream uncertainty. This is the same limitation
-as the current code.
+In Option 1, `x_model(s, τ)` is deterministic (uses point-estimate
+path params). This means the fan bands reflect only target-edge
+parameter uncertainty, not upstream uncertainty. This is the same
+limitation as the current code.
 
 To include upstream uncertainty in the fan, the MC draws could
 sample `p_path_i` and `CDF_path_i` from their own posteriors per
-draw. This is straightforward: the path params derive from edge
-posteriors already available on the graph. Each draw `b` would
-produce `x^(b)(s, τ)` from drawn path params, and the fan would
-widen to reflect upstream model uncertainty. This is an incremental
-enhancement within Option 1, not a separate option.
+draw. The path params derive from edge posteriors already available
+on the graph. Each draw `b` would produce `x_model^(b)(s, τ)` from
+drawn path params, and the fan would widen to reflect upstream model
+uncertainty. This is an incremental enhancement within Option 1,
+not a separate option.
 
 ---
 
-## 4. Option 2: Upstream-evidence-conditioned `x(s, τ)`
+## 4. Option 1b: Subject-conditioned upstream forecast (optional refinement)
 
-### 4.1 Approach
+### 4.1 Motivation
+
+Option 1 uses the model forecast for `x` beyond the observation
+frontier, floored at `x_frozen_s`. This means the model-derived
+total `x_model(s, tau_max_s)` may differ from the observed
+`x_frozen_s` — the model could predict either more or fewer
+arrivals than were actually seen by `tau_max_s`. Option 1 handles
+the "fewer" case via the floor, but the "more" case (model
+overestimates) is uncorrected: the model's forward projection
+starts from a base that doesn't match reality.
+
+Option 1b addresses this by conditioning the upstream model
+forecast on the observed subject `x_frozen_s`. It should only be
+implemented if Option 1 fans show visible artefacts from
+model-data divergence on real `cohort()` data. It is not needed if
+the model's `x` estimates are close enough to observed values in
+practice.
+
+### 4.2 The conditioning problem
+
+At a join, `x` is not a unitary distribution. It is the sum of
+latent upstream arrival components, one per incoming edge:
+`x_s(τ) = Σ_i x_i,s(τ)`. The observed `x_frozen_s` is the sum at
+the frontier: `Σ_i x_i,s(tau_max_s) = x_frozen_s`.
+
+Conditioning the joint upstream forecast on this observed sum is
+non-trivial because:
+- The conditioning is on the **sum**, not on the individual
+  components.
+- Once conditioned on the sum, the components become jointly
+  coupled — if one route contributed more than expected, the others
+  must have contributed less.
+- The posterior over the components lives on a partition constrained
+  by `x_frozen_s`, with negative dependence induced by the sum
+  constraint.
+
+### 4.3 Approach
+
+For each Cohort date `s`:
+
+1. Compute the model's prior expected arrivals per incoming edge
+   at the frontier:
+   `m_i(s) = a_s × p_path_i × CDF_path_i(tau_max_s)`
+
+2. Derive frontier allocation weights that account for both
+   route share and maturity:
+   `w_i(s) = m_i(s) / Σ_j m_j(s)`
+
+3. Allocate the observed total across routes:
+   `z_i,s = x_frozen_s × w_i(s)`
+
+4. Forecast each component forward from its allocated count using
+   that route's own remaining-tail model:
+   `x_i,s(τ) = z_i,s + a_s × p_path_i × [CDF_path_i(τ) − CDF_path_i(tau_max_s)]`
+   floored at `z_i,s` (arrivals cannot un-happen per route).
+
+5. Sum back to the node total:
+   `x_s(τ) = Σ_i x_i,s(τ)`
+
+At `τ = tau_max_s`, `x_s = Σ_i z_i,s = x_frozen_s` exactly. For
+`τ > tau_max_s`, each component grows at its own rate.
+
+The allocation weights `w_i(s)` can optionally be shrunk toward an
+empirical route-share estimate derived from the latest `asat`-safe
+upstream `frozen_y` values, if available. This should be treated as
+a weak correction (small shrinkage strength), not hard evidence —
+the upstream `frozen_y` is not same-Cohort data and mixes maturity
+and route effects.
+
+### 4.4 Per-Cohort rule (same structure as Option 1)
+
+```
+x(s, τ) =
+  x_observed(s, τ)                              if τ ≤ tau_max_s
+  max(x_conditioned(s, τ), x_frozen_s)          if τ > tau_max_s
+```
+
+where `x_conditioned(s, τ)` is the component-sum forecast from
+§4.3 step 5. The floor is a safety guard; the conditioning should
+already ensure monotonicity because each component only adds
+non-negative remaining mass.
+
+### 4.5 What this adds over Option 1
+
+Option 1b ensures the upstream forecast passes through the observed
+`x_frozen_s` at the frontier, so there is no model-data gap at the
+observation point. Forward from there, the per-route decomposition
+means routes with different maturities grow at different rates,
+which is slightly more realistic than Option 1's aggregate model
+curve.
+
+The improvement is most visible when `x_model(s, tau_max_s)`
+differs materially from `x_frozen_s` — i.e., when the path model
+is a poor predictor of actual arrivals for specific Cohort dates.
+
+### 4.6 Limitations
+
+The latent partition of `x_frozen_s` across routes is prior-driven
+(model path shares × maturity). Without upstream per-Cohort
+snapshot evidence, the allocation is not identified by data. This
+is why Option 1b is an approximation, not a full solve. Option 2
+replaces the prior-driven allocation with actual upstream Cohort
+evidence per edge, which is qualitatively cleaner.
+
+---
+
+## 5. Option 2: Upstream-evidence-conditioned `x(s, τ)`
+
+### 5.1 Approach
 
 For each upstream incident edge `e_i`, for each Cohort date `s`,
 obtain the frozen observation `(x_frozen_i(s), y_frozen_i(s))` from
@@ -218,7 +361,7 @@ This conditions the upstream `y` forecast on actual per-Cohort-date
 evidence at each upstream edge, then derives `x` at the subject
 edge's from-node as the sum of those forecasts.
 
-### 4.2 What this adds over Option 1
+### 5.2 What this adds over Options 1/1b
 
 Option 1 uses the model's view of arrival rates. Option 2 conditions
 on actual observed `(x, y)` per upstream edge per Cohort date. The
@@ -237,7 +380,7 @@ differs from using raw frozen values. The improvement is most
 visible for immature Cohorts where the Bayesian update meaningfully
 blends prior and evidence.
 
-### 4.3 Data requirements
+### 5.3 Data requirements
 
 | Data source | Target edge | Upstream edges |
 |-------------|-------------|----------------|
@@ -256,7 +399,7 @@ the subject edge's hashes. The BE receives these, queries snapshot
 rows for each upstream edge, and uses them in the per-Cohort-date
 Bayesian forecast.
 
-### 4.4 Scope of upstream evidence
+### 5.4 Scope of upstream evidence
 
 Only the **immediate incident edges** to the subject edge's
 from-node require snapshot data. The Bayesian posterior predictive
@@ -279,7 +422,7 @@ not condition on deeper upstream evidence, so the posterior is wider
 than it would be with full recursive propagation. This is honest
 uncertainty, not systematic error.
 
-### 4.5 Integration with the Bayesian `y` forecast
+### 5.5 Integration with the Bayesian `y` forecast
 
 The per-Cohort-date `x(s, τ)` from Option 2 replaces
 `x_forecast_arr` in the MC loop in the same way as Option 1
@@ -297,35 +440,49 @@ implications are discussed in
 
 ---
 
-## 5. Comparison
+## 6. Comparison
 
-| | Current | Option 1 | Option 2 |
-|---|---------|----------|----------|
-| `x` per Cohort date `s` | No — single `x_frozen` per Cohort, same CDF ratio for all `s` | Yes — model-derived `x(s, τ)` using path params × `a_s` | Yes — evidence-conditioned `y_forecast` per upstream edge per `s`, summed |
-| Shape of `x(τ)` distribution | CDF ratio from one upstream edge, cliff at 0.01 guard | Correct shape from path-level latency model, sum across all incident edges | Correct shape, conditioned on actual upstream observations |
-| Upstream data needed | None (point-estimate model vars) | None (path params already on graph) | Snapshot hashes for immediate upstream incident edges |
-| FE plumbing change | None | None | FE must send upstream edge hashes in analysis commission |
-| Conditioning on actual upstream observations | No | No | Yes |
-| Upstream uncertainty in fan | No | Optional (sample path params per MC draw) | Yes (sample upstream posteriors per draw) |
-| Main improvement | — | Per-Cohort-date shape; eliminates ratio cliff; correct join summation | All of Option 1, plus evidence-conditioned upstream forecast |
+| | Current | Option 1 | Option 1b | Option 2 |
+|---|---------|----------|-----------|----------|
+| `x` per Cohort date `s` | No — single `x_frozen`, same CDF ratio for all `s` | Yes — model-derived, observed where available | Yes — conditioned on subject `x_frozen_s` | Yes — conditioned on upstream per-edge evidence |
+| Shape of `x(τ)` | CDF ratio from one edge, cliff at 0.01 | Path-level model, sum across incident edges | Same shape, anchored at observed frontier | Correct shape from upstream Bayesian forecast |
+| Observed `x` used | As ratio anchor only | In epoch A; as floor in B/C | As conditioning datum at frontier | Directly per upstream edge per `s` |
+| Upstream data needed | None | None (path params on graph) | None (path params + subject `x_frozen`) | Snapshot hashes for incident edges |
+| FE plumbing change | None | None | None | FE sends upstream hashes |
+| Conditioning on upstream observations | No | No | On subject total only (prior-driven partition) | Yes — per edge per Cohort date |
+| Upstream uncertainty in fan | No | Optional (sample path params) | Optional (sample path params) | Yes (sample upstream posteriors) |
+| Complexity | Low | Low | Medium (partition solve) | Medium (snapshot plumbing) |
+| Main improvement | — | Per-date shape; ratio cliff gone; join sum | Anchors forecast at observed `x` | Evidence-conditioned upstream |
 
 ---
 
-## 6. Recommended delivery
+## 7. Recommended delivery
 
-**Stage 1: Option 1.** Implement model-derived `x(s, τ)` using
-path-level forecast vars already on the graph. No new data plumbing.
-Fixes the per-Cohort-date shape problem and eliminates the CDF-ratio
-cliff. Evaluate the resulting fan quality on real data.
+**Stage 1: Option 1.** Implement model-derived `x(s, τ)` with the
+observed/forecast per-Cohort rule (§3.1) using path-level forecast
+vars already on the graph. No new data plumbing. Fixes the
+per-Cohort-date shape problem, eliminates the CDF-ratio cliff, and
+uses observed `x` where available. Evaluate the resulting fan
+quality on real `cohort()` data.
 
-**Stage 2: Option 2 (if needed).** If Stage 1 fans show visible
-artefacts from model-data divergence on upstream edges, add upstream
-snapshot hashes to the analysis commission and implement
-evidence-conditioned upstream forecasting. This is a data plumbing
-change (FE sends more hashes) plus a BE change (query + bind
-upstream snapshots, run posterior predictive per upstream edge per
-Cohort date).
+**Stage 1b: Option 1b (if needed).** If Stage 1 fans show a visible
+gap between `x_model(s, tau_max_s)` and `x_frozen_s` for immature
+Cohorts — i.e., the model's arrival prediction at the frontier
+doesn't match what was actually observed — implement the
+subject-conditioned partition (§4). This anchors the forward
+forecast at observed `x_frozen_s` per Cohort, at the cost of a
+prior-driven latent allocation across incoming routes. Only build
+this if the gap matters visually.
 
-The decision to proceed to Stage 2 should be based on visual
-inspection of Stage 1 fans against real `cohort()` data with known
-upstream behaviour, not on theoretical considerations.
+**Stage 2: Option 2 (if needed).** If Stages 1/1b fans still show
+artefacts from model-data divergence on upstream edges — e.g., an
+upstream edge with non-stationary behaviour that the model doesn't
+capture — add upstream snapshot hashes to the analysis commission
+and implement evidence-conditioned upstream forecasting (§5). This
+is a data plumbing change (FE sends more hashes) plus a BE change
+(query + bind upstream snapshots, run posterior predictive per
+upstream edge per Cohort date).
+
+Each stage decision should be based on visual inspection of fans
+against real `cohort()` data with known upstream behaviour, not on
+theoretical considerations.
