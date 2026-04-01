@@ -19,6 +19,11 @@ import { graphComputeClient } from '../lib/graphComputeClient';
 import { db } from '../db/appDatabase';
 import { fileRegistry } from '../contexts/TabContext';
 import { getGraphStore } from '../contexts/GraphStoreContext';
+import { jobSchedulerService } from '../services/jobSchedulerService';
+import { stalenessNudgeService } from '../services/stalenessNudgeService';
+import { getNudgeContext, updateNudgeContext, registerStalenessNudgeJobs } from '../services/stalenessNudgeJobs';
+import { credentialsManager } from '../lib/credentials';
+import { startNonBlockingPull, isNonBlockingPullActive } from '../services/nonBlockingPullService';
 
 export function installE2eHooks(): void {
   if (!import.meta.env.DEV) return;
@@ -145,6 +150,15 @@ export function installE2eHooks(): void {
     // Expose fileRegistry and getGraphStore for E2E tests
     (window as any).fileRegistry = fileRegistry;
     (window as any).__dagnet_getGraphStore = getGraphStore;
+    // Expose scheduler/staleness services for auto-pull E2E tests
+    (window as any).__dagnet_jobScheduler = jobSchedulerService;
+    (window as any).__dagnet_stalenessNudgeService = stalenessNudgeService;
+    (window as any).__dagnet_getNudgeContext = getNudgeContext;
+    (window as any).__dagnet_updateNudgeContext = updateNudgeContext;
+    (window as any).__dagnet_registerStalenessNudgeJobs = registerStalenessNudgeJobs;
+    (window as any).__dagnet_startNonBlockingPull = startNonBlockingPull;
+    (window as any).__dagnet_isNonBlockingPullActive = isNonBlockingPullActive;
+    (window as any).__dagnet_credentialsManager = credentialsManager;
 
     (window as any).dagnetE2e = {
       /**

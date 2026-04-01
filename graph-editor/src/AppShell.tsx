@@ -70,7 +70,6 @@ function MainAppShellContent() {
   const { state: navState, operations: navOperations } = useNavigatorContext();
   const dialogOps = useDialog();
   const { updateFromLayout } = useVisibleTabs();
-  const { modals: stalenessNudgeModals } = useStalenessNudges();
   useURLDailyRetrieveAllQueue();
   const [dockLayoutRef, setDockLayoutRef] = useState<DockLayout | null>(null);
   const recentlyClosedRef = useRef<Set<string>>(new Set());
@@ -1893,9 +1892,6 @@ function MainAppShellContent() {
           />
         )}
 
-        {/* Safety nudge modals (currently: pull conflict resolution UI) */}
-        {stalenessNudgeModals}
-
         {/* Auth Expired Modal */}
         {showAuthExpiredModal && (() => {
           const oauthAvailable = !!import.meta.env.VITE_GITHUB_OAUTH_CLIENT_ID;
@@ -2149,6 +2145,11 @@ function AppShellContent() {
   const { isProjectionMode } = useProjectionMode();
   useBootProgress();
   useOpsDemoMode();
+  // Staleness nudges must run in ALL modes (including dashboard) so that
+  // the git-remote-check job is registered and auto-pull can fire.
+  // Previously this was only called inside MainAppShellContent, which is
+  // not mounted in dashboard mode — so dashboard devices never auto-pulled.
+  const { modals: stalenessNudgeModals } = useStalenessNudges();
   if (isDashboardMode) {
     return (
       <>
@@ -2159,6 +2160,7 @@ function AppShellContent() {
         <ShareChartBootstrapper />
         <ShareBundleBootstrapper />
         <DashboardShell />
+        {stalenessNudgeModals}
       </>
     );
   }
@@ -2174,6 +2176,7 @@ function AppShellContent() {
       <ShareChartBootstrapper />
       <ShareBundleBootstrapper />
       <MainAppShellContent />
+      {stalenessNudgeModals}
     </>
   );
 }

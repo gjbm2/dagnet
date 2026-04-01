@@ -1897,6 +1897,8 @@ export interface SnapshotSubjectPayload {
   param_id: string;
   canonical_signature: string;
   core_hash: string;
+  /** FE-computed hash-family closure from hash-mappings.json. */
+  equivalent_hashes: Array<{ core_hash: string; operation: string; weight: number }>;
   read_mode: string;
   anchor_from: string;
   anchor_to: string;

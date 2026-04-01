@@ -1140,6 +1140,7 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
                     anchor_to=date.fromisoformat(subj['anchor_to']),
                     sweep_from=sweep_from,
                     sweep_to=sweep_to,
+                    equivalent_hashes=subj.get('equivalent_hashes'),
                 )
 
                 print(f"[snapshot_analyze] cohort_maturity result: {len(rows)} rows")
@@ -1182,6 +1183,7 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
                     anchor_to=date.fromisoformat(subj['anchor_to']),
                     sweep_from=sweep_from,
                     sweep_to=sweep_to,
+                    equivalent_hashes=subj.get('equivalent_hashes'),
                 )
 
                 scenario_rows += len(rows)

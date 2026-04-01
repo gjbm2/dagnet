@@ -481,6 +481,21 @@ def compute_cohort_maturity_rows(
                         upstream_beta = (1.0 - _up_p) * 20.0
                     break
 
+    # ── Path-level prior for cohort-mode y-forecast ──────────────────
+    # In cohort mode, y_forecast uses a_pop × path_CDF × path_rate.
+    # path_rate = P(anchor entrant converts at to-node) = upstream_p × edge_p.
+    # alpha_0/beta_0 encode the EDGE rate — we need separate path-level
+    # alpha/beta so y/x → edge_rate at τ→∞ (not y/x → 1.0).
+    path_alpha: float = alpha_0
+    path_beta: float = beta_0
+    if not is_window and upstream_params is not None:
+        _up_p = upstream_params['p']
+        _path_p = edge_p * _up_p  # path rate = edge rate × upstream rate
+        # Use the edge's concentration (κ = α₀+β₀) scaled to the path rate
+        _kappa_path = alpha_0 + beta_0
+        path_alpha = _path_p * _kappa_path
+        path_beta = (1.0 - _path_p) * _kappa_path
+
     # ── Per-Cohort info from last frame ────────────────────────────────
     cohort_info: Dict[str, Dict[str, Any]] = {}
     last_frame = None
@@ -649,6 +664,9 @@ def compute_cohort_maturity_rows(
               f"onset={upstream_params.get('onset'):.4f} "
               f"alpha={upstream_alpha:.4f} beta={upstream_beta:.4f} "
               f"up_prior_rate={upstream_alpha/(upstream_alpha+upstream_beta):.6f}")
+        print(f"[BAYES_path] path_alpha={path_alpha:.4f} path_beta={path_beta:.4f} "
+              f"path_prior_rate={path_alpha/(path_alpha+path_beta):.6f} "
+              f"expected_y_x_ratio_at_inf={path_alpha/(path_alpha+path_beta) / (upstream_alpha/(upstream_alpha+upstream_beta)):.4f}")
     # Also write to file for debugging
     try:
         with open('/tmp/mc_diag.log', 'a') as _f:
@@ -747,31 +765,37 @@ def compute_cohort_maturity_rows(
             if N_i > 0:
                 # ── Normal case: Cohort has from-node arrivals ──
                 # Bayesian posterior predictive per MC draw.
-                # c_i^(b) = CDF(tau_max; θ^(b)) for each draw (already q_at_a).
-                # n_eff^(b) = N_i × c_i^(b).
-                # Posterior mean rate: (α₀ + k_i) / (α₀ + β₀ + n_eff^(b)).
-                # y_forecast = k_i + N_i × max(0, CDF(τ;θ^(b)) − c_i^(b)) × posterior_rate^(b)
-                c_i_b = q_at_a[:, None]  # (S, 1) — completeness per draw
-                n_eff_b = N_i * c_i_b    # (S, 1) — effective trials per draw
-                post_rate_b = (alpha_0 + k_i) / (alpha_0 + beta_0 + n_eff_b)  # (S, 1)
+                c_i_b = q_at_a[:, None]  # (S, 1) — path completeness per draw
                 remaining_cdf = np.maximum(q - c_i_b, 0.0)  # (S, T)
-                y_forecast = k_i + N_i * remaining_cdf * post_rate_b  # (S, T)
 
                 if is_window or upstream_q is None:
+                    # Window mode: x fixed, y from edge CDF × posterior rate
+                    n_eff_b = N_i * c_i_b  # (S, 1)
+                    post_rate_b = (alpha_0 + k_i) / (alpha_0 + beta_0 + n_eff_b)  # (S, 1)
+                    y_forecast = k_i + N_i * remaining_cdf * post_rate_b  # (S, T)
                     x_forecast_arr = np.full((S, T), N_i)
                     y_forecast = np.clip(y_forecast, k_i, N_i)
                 else:
-                    # Cohort mode: Bayesian upstream x-forecast per MC draw.
-                    # upstream_q is the upstream CDF array (S, T).
-                    # a_pop = anchor population for this Cohort.
-                    a_pop = c.get('a_frozen', N_i) or N_i or 1.0
+                    # Cohort mode: x grows, y grows.  Both use CDF ratios
+                    # on N_i (x_frozen) — no a_pop.
+
+                    # x_forecast: upstream CDF ratio, guarded.
+                    # When upstream CDF at tau_max is near zero, the CDF
+                    # ratio explodes — fall back to x_frozen.
                     up_q_at_a = upstream_q[:, a_idx:a_idx+1]  # (S, 1)
-                    # Bayesian update on upstream arrival rate per draw
-                    n_eff_up_b = a_pop * up_q_at_a  # (S, 1)
-                    up_post_rate_b = (upstream_alpha + N_i) / (upstream_alpha + upstream_beta + n_eff_up_b)  # (S, 1)
-                    remaining_up_cdf = np.maximum(upstream_q - up_q_at_a, 0.0)  # (S, T)
-                    x_forecast_arr = N_i + a_pop * remaining_up_cdf * up_post_rate_b  # (S, T)
+                    # Per-draw: use ratio where CDF is big enough, else x_frozen
+                    up_q_at_a_safe = np.maximum(up_q_at_a, 1e-12)
+                    x_forecast_arr = np.where(
+                        up_q_at_a > 0.01,
+                        N_i * upstream_q / up_q_at_a_safe,
+                        np.full((S, T), N_i),
+                    )
                     x_forecast_arr = np.maximum(x_forecast_arr, N_i)
+
+                    # y_forecast: edge Bayesian rate × x_frozen (same as window)
+                    n_eff_b = N_i * c_i_b  # (S, 1)
+                    post_rate_b = (alpha_0 + k_i) / (alpha_0 + beta_0 + n_eff_b)  # (S, 1)
+                    y_forecast = k_i + N_i * remaining_cdf * post_rate_b  # (S, T)
                     y_forecast = np.clip(y_forecast, k_i, x_forecast_arr)
             else:
                 # ── No observations: skip this Cohort ──
@@ -922,36 +946,41 @@ def compute_cohort_maturity_rows(
                 cdf_at_tau = _cdf(tau)
 
                 if is_window or upstream_params is None:
-                    x_forecast = x_frozen  # window: x fixed
+                    # Window mode: x fixed, y forecast from edge CDF
+                    x_forecast = x_frozen
+                    n_eff = x_frozen * c_i
+                    posterior_rate = (alpha_0 + y_frozen) / (alpha_0 + beta_0 + n_eff)
+                    y_forecast = y_frozen + x_frozen * max(0.0, cdf_at_tau - c_i) * posterior_rate
+                    y_forecast = min(x_forecast, y_forecast)
                 else:
-                    # Cohort mode: Bayesian upstream x-forecast.
-                    # a_i = anchor population, x_frozen = from-node arrivals observed so far.
-                    # upstream CDF tells us what fraction of a_i have arrived by a given τ.
-                    a_pop = c.get('a_frozen', x_frozen) or x_frozen
+                    # Cohort mode: x grows (upstream arrivals), y grows
+                    # (conversions).  Both use x_frozen as base — no a_pop.
+
+                    # x_forecast: upstream CDF ratio on x_frozen.
+                    # x_frozen × CDF(τ)/CDF(tau_max) extrapolates arrivals.
+                    # When CDF(tau_max) is near zero, arrivals haven't
+                    # meaningfully started — x_forecast ≈ x_frozen.
                     up_cdf_at_tau_max = _upstream_cdf(c['tau_max'])
                     up_cdf_at_tau = _upstream_cdf(tau)
-                    # Bayesian update on upstream arrival rate
-                    n_eff_up = a_pop * up_cdf_at_tau_max
-                    up_post_rate = (upstream_alpha + x_frozen) / (upstream_alpha + upstream_beta + n_eff_up)
-                    x_forecast = x_frozen + a_pop * max(0.0, up_cdf_at_tau - up_cdf_at_tau_max) * up_post_rate
-                    x_forecast = max(x_forecast, x_frozen)  # x can only grow
+                    if up_cdf_at_tau_max > 1e-6:
+                        x_forecast = x_frozen * up_cdf_at_tau / up_cdf_at_tau_max
+                    else:
+                        x_forecast = x_frozen
+                    x_forecast = max(x_forecast, x_frozen)
 
-                # Bayesian update: posterior rate given this Cohort's evidence.
-                # n_eff = x × completeness = effective resolved trials.
-                # Posterior: Beta(α₀ + k, β₀ + n_eff − k).
-                n_eff = x_frozen * c_i
-                posterior_rate = (alpha_0 + y_frozen) / (alpha_0 + beta_0 + n_eff)
-                # Forecast: observed + remaining window × posterior rate
-                y_forecast = y_frozen + x_forecast * max(0.0, cdf_at_tau - c_i) * posterior_rate
-                # Clamp: rate can't exceed 1.0 per Cohort
-                y_forecast = min(x_forecast, y_forecast)
+                    # y_forecast: edge CDF ratio with Bayesian rate
+                    # Same formula as window mode — x_frozen base, edge rate.
+                    n_eff = x_frozen * c_i
+                    posterior_rate = (alpha_0 + y_frozen) / (alpha_0 + beta_0 + n_eff)
+                    y_forecast = y_frozen + x_frozen * max(0.0, cdf_at_tau - c_i) * posterior_rate
+                    y_forecast = min(x_forecast, y_forecast)
 
                 if tau == 10 or tau == 20 or tau == 30:
                     print(f"[MID_cohort] tau={tau} ad={c['anchor_day']} tau_max={c['tau_max']} "
-                          f"x_frz={x_frozen:.1f} y_frz={y_frozen:.1f} a_pop={c.get('a_frozen', 0):.0f} "
+                          f"x_frz={x_frozen:.1f} y_frz={y_frozen:.1f} "
                           f"c_i={c_i:.6f} cdf_tau={cdf_at_tau:.6f} "
                           f"x_fc={x_forecast:.1f} y_fc={y_forecast:.2f} "
-                          f"n_eff={n_eff:.2f} post_r={posterior_rate:.6f}")
+                          f"post_r={posterior_rate:.6f} rate={y_forecast/max(x_forecast,0.01):.4f}")
 
                 total_x_aug += x_forecast
                 total_y_aug += y_forecast

@@ -31,7 +31,7 @@ import { extractSliceDimensions } from './sliceIsolation';
 import { contextRegistry } from './contextRegistry';
 import { verifyAllCombinationsExist } from './dimensionalReductionService';
 import { querySnapshotRetrievals, type SnapshotRetrievalSummaryRow } from './snapshotWriteService';
-import { getClosureSet } from './hashMappingsService';
+import { getClosureSet, type ClosureEntry } from './hashMappingsService';
 
 function isDev(): boolean {
   try {
@@ -157,6 +157,13 @@ export interface SnapshotSubjectRequest {
 
   /** Slice keys: explicit families → N keys; broad/unfiltered → [''] */
   slice_keys: string[];
+
+  // === Hash-family closure (FE-computed, BE uses as opaque DB coordinates) ===
+
+  /** Equivalent core_hashes reachable from `core_hash` via hash-mappings.json.
+   *  Empty array when no equivalences exist. Always present so the BE can
+   *  distinguish "FE computed closure and it's empty" from "FE didn't send". */
+  equivalent_hashes: ClosureEntry[];
 
   // === Provenance (used for logging AND for graph lookups) ===
 
@@ -608,6 +615,7 @@ export async function mapFetchPlanToSnapshotSubjects(args: {
           param_id: paramId,
           canonical_signature: item.querySignature,
           core_hash: coreHash,
+          equivalent_hashes: getClosureSet(coreHash),
           read_mode: contract.readMode,
           anchor_from: timeBounds.anchorFrom,
           anchor_to: timeBounds.anchorTo,
@@ -636,6 +644,7 @@ export async function mapFetchPlanToSnapshotSubjects(args: {
           param_id: paramId,
           canonical_signature: item.querySignature,
           core_hash: coreHash,
+          equivalent_hashes: getClosureSet(coreHash),
           read_mode: contract.readMode,
           anchor_from: timeBounds.anchorFrom,
           anchor_to: timeBounds.anchorTo,
@@ -710,6 +719,7 @@ export async function mapFetchPlanToSnapshotSubjects(args: {
           epochs: epochs.map((e) => ({ from: e.from, to: e.to, slice_keys: e.sliceKeys })),
         });
       }
+      const closureSet = getClosureSet(coreHash);
       epochs.forEach((ep, i) => {
         subjects.push({
           subject_id: `${item.itemKey}${EPOCH_SUBJECT_ID_SEP}${i}`,
@@ -717,6 +727,7 @@ export async function mapFetchPlanToSnapshotSubjects(args: {
           param_id: paramId,
           canonical_signature: item.querySignature,
           core_hash: coreHash,
+          equivalent_hashes: closureSet,
           read_mode: contract.readMode,
           anchor_from: timeBounds.anchorFrom,
           anchor_to: timeBounds.anchorTo,
@@ -747,6 +758,7 @@ export async function mapFetchPlanToSnapshotSubjects(args: {
         param_id: paramId,
         canonical_signature: item.querySignature,
         core_hash: coreHash,
+        equivalent_hashes: getClosureSet(coreHash),
         read_mode: 'sweep_simple' as any,
         anchor_from: timeBounds.anchorFrom,
         anchor_to: timeBounds.anchorTo,
@@ -768,6 +780,7 @@ export async function mapFetchPlanToSnapshotSubjects(args: {
       param_id: paramId,
       canonical_signature: item.querySignature,
       core_hash: coreHash,
+      equivalent_hashes: getClosureSet(coreHash),
       read_mode: contract.readMode,
       anchor_from: timeBounds.anchorFrom,
       anchor_to: timeBounds.anchorTo,

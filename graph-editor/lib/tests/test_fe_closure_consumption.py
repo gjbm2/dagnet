@@ -23,6 +23,7 @@ load_dotenv(os.path.join(os.path.dirname(__file__), '../../.env.local'))
 from snapshot_service import (
     append_snapshots,
     query_snapshots,
+    query_snapshots_for_sweep,
     query_snapshot_retrievals,
     batch_anchor_coverage,
     get_batch_inventory_v2,
@@ -318,8 +319,72 @@ class TestFEClosureConsumption:
         assert ch_a in all_members, f"Seed hash {ch_a} missing from family members"
         assert ch_b in all_members, f"Equivalent hash {ch_b} missing from family members"
 
-    # fc009 removed: tested DB bypass which is moot now that the
-    # signature_equivalence table has been dropped.
+    # ── query_snapshots_for_sweep ─────────────────────────────────────────
+
+    def test_fc009_sweep_positive_expansion(self):
+        """FC-009: query_snapshots_for_sweep with equivalent_hashes returns seed + equivalent rows.
+
+        This is the gap that allowed interactive analysis (cohort_maturity,
+        sweep_simple) to bind only the seed hash while Bayes and coverage
+        preflight correctly expanded via closure sets.
+        """
+        pid = make_param_id('fc009')
+        sig_a = '{"c":"fc009-a","x":{}}'
+        sig_b = '{"c":"fc009-b","x":{}}'
+        ch_a = short_core_hash_from_canonical_signature(sig_a)
+        ch_b = short_core_hash_from_canonical_signature(sig_b)
+
+        # A covers Dec 1-2, B covers Dec 3
+        append_for_test(param_id=pid, canonical_signature=sig_a, slice_key='window(1-Dec-25:3-Dec-25)',
+                        rows=make_rows(['2025-12-01', '2025-12-02']))
+        append_for_test(param_id=pid, canonical_signature=sig_b, slice_key='window(1-Dec-25:3-Dec-25)',
+                        rows=make_rows(['2025-12-03']))
+
+        # Without closure: only A's rows
+        rows_no_closure = query_snapshots_for_sweep(
+            param_id=pid,
+            core_hash=ch_a,
+            slice_keys=['window()'],
+            anchor_from=date(2025, 12, 1),
+            anchor_to=date(2025, 12, 3),
+        )
+        returned_hashes_no = {r['core_hash'] for r in rows_no_closure}
+        assert returned_hashes_no == {ch_a}, f"Without closure expected only seed; got {returned_hashes_no}"
+        assert len(rows_no_closure) == 2
+
+        # With FE-supplied closure: A + B rows
+        rows_with_closure = query_snapshots_for_sweep(
+            param_id=pid,
+            core_hash=ch_a,
+            slice_keys=['window()'],
+            anchor_from=date(2025, 12, 1),
+            anchor_to=date(2025, 12, 3),
+            equivalent_hashes=[
+                {'core_hash': ch_b, 'operation': 'equivalent', 'weight': 1.0},
+            ],
+        )
+        returned_hashes_with = {r['core_hash'] for r in rows_with_closure}
+        assert ch_a in returned_hashes_with, f"Seed hash {ch_a} missing from sweep results"
+        assert ch_b in returned_hashes_with, f"Equivalent hash {ch_b} missing from sweep results"
+        assert len(rows_with_closure) == 3  # 2 (A) + 1 (B)
+
+    def test_fc009b_sweep_empty_closure_no_expansion(self):
+        """FC-009b: query_snapshots_for_sweep with empty equivalent_hashes = no expansion."""
+        pid = make_param_id('fc009')  # Reuse FC-009 data
+        sig_a = '{"c":"fc009-a","x":{}}'
+        ch_a = short_core_hash_from_canonical_signature(sig_a)
+
+        rows = query_snapshots_for_sweep(
+            param_id=pid,
+            core_hash=ch_a,
+            slice_keys=['window()'],
+            anchor_from=date(2025, 12, 1),
+            anchor_to=date(2025, 12, 3),
+            equivalent_hashes=[],
+        )
+        returned_hashes = {r['core_hash'] for r in rows}
+        assert returned_hashes == {ch_a}
+        assert len(rows) == 2
 
     def test_fc010_cross_param_expansion_works(self):
         """FC-010: FE-supplied closure works across param_id boundaries.
