@@ -166,6 +166,47 @@ def find_edge_by_id(
     )
 
 
+def compute_reach_probability(
+    graph: Dict[str, Any],
+    node_id: str,
+    _visited: Optional[set] = None,
+) -> float:
+    """Compute reach probability from anchor/start nodes to `node_id`.
+
+    Walks backward through the DAG, multiplying edge conversion rates
+    (p.mean) along each path.  At joins, sums across incoming routes.
+    Start nodes (no incoming edges) have reach = 1.0.
+
+    Returns the fraction of anchor population expected to arrive at
+    `node_id`.  This is Π(edge_p) along each path, summed at joins.
+    """
+    if _visited is None:
+        _visited = set()
+    if node_id in _visited:
+        return 0.0  # cycle guard (should not happen in DAG)
+    _visited.add(node_id)
+
+    incoming = get_incoming_edges(graph, node_id)
+    if not incoming:
+        # Start/anchor node — reach = 1.0
+        return 1.0
+
+    total = 0.0
+    for edge in incoming:
+        # Edge conversion rate (y/x semantics).
+        p_obj = edge.get('p') or {}
+        edge_p = p_obj.get('mean', 0.0)
+        if not isinstance(edge_p, (int, float)) or edge_p <= 0:
+            continue
+        from_node = get_edge_from_node(edge)
+        if not from_node:
+            continue
+        upstream_reach = compute_reach_probability(graph, from_node, _visited)
+        total += upstream_reach * float(edge_p)
+
+    return min(total, 1.0)  # cap at 1.0
+
+
 # ── Upstream arrival forecasting ───────────────────────────────────────
 
 
@@ -452,33 +493,38 @@ def compute_cohort_maturity_rows(
             up_sigma,
         )
 
-    # ── Upstream CDF params (cohort mode only) ────────────────────────
+    # ── Upstream params (cohort mode only) ─────────────────────────────
     # In cohort() mode, x grows with τ.  To forecast x beyond tau_max,
-    # we need the upstream CDF (path from anchor to this edge's from-node).
-    # Read from incoming edges' path-level Bayes params.
+    # we need the reach probability to the subject's from-node and the
+    # path-level latency CDF.
+    #
+    # Option 1 (cohort-x-per-date-estimation.md §3):
+    #   x_model(s, τ) = a_s × reach(from_node) × CDF_path(τ)
+    # where reach = product of edge rates from anchor to from_node,
+    # and CDF_path = composed path latency from anchor to from_node.
+    upstream_params_list: List[Dict[str, float]] = []
+    reach_at_from_node: float = 0.0
     upstream_params: Optional[Dict[str, float]] = None
     upstream_alpha: float = 0.0
     upstream_beta: float = 0.0
     if not is_window and target_edge is not None:
         from_node_id = get_edge_from_node(target_edge)
         if from_node_id:
+            reach_at_from_node = compute_reach_probability(graph, from_node_id)
             incoming = get_incoming_edges(graph, from_node_id)
-            # Use the first incoming edge with valid params.
-            # For multi-input nodes, upstream_arrival_rate sums — but for
-            # the MC draws we need a single CDF.  Use the dominant edge.
             for inc_edge in incoming:
                 params = read_edge_cohort_params(inc_edge)
                 if params:
-                    upstream_params = params
-                    # Upstream prior for Bayesian x-forecast (Phase 2).
-                    upstream_alpha = params.get('alpha', 0.0)
-                    upstream_beta = params.get('beta', 0.0)
-                    if upstream_alpha <= 0 or upstream_beta <= 0:
-                        # Fall back: weak prior from upstream p with κ=20
-                        _up_p = params['p']
-                        upstream_alpha = _up_p * 20.0
-                        upstream_beta = (1.0 - _up_p) * 20.0
-                    break
+                    upstream_params_list.append(params)
+            # First valid edge for alpha-beta.
+            if upstream_params_list:
+                upstream_params = upstream_params_list[0]
+                upstream_alpha = upstream_params.get('alpha', 0.0)
+                upstream_beta = upstream_params.get('beta', 0.0)
+                if upstream_alpha <= 0 or upstream_beta <= 0:
+                    _up_p = upstream_params['p']
+                    upstream_alpha = _up_p * 20.0
+                    upstream_beta = (1.0 - _up_p) * 20.0
 
     # ── Path-level prior for cohort-mode y-forecast ──────────────────
     # In cohort mode, y_forecast uses a_pop × path_CDF × path_rate.
@@ -705,8 +751,10 @@ def compute_cohort_maturity_rows(
         T = len(tau_grid)
         S = MC_SAMPLES
 
-        # Compute q_b(tau) = p^(b) × CDF(tau; onset^(b), mu^(b), sigma^(b))
-        # Shape: (S, T)
+        # Compute per-draw latency CDF and conversion fraction.
+        # cdf_arr = pure latency CDF (timing only), used for n_eff / posterior update.
+        # q = p × CDF (conversion fraction), used for total converted by τ.
+        # The Bayes design doc (§2.3) defines n_eff = x × CDF(tau_max), NOT x × p × CDF.
         p_s = samples[:, 0]       # (S,)
         mu_s = samples[:, 1]      # (S,)
         sigma_s = samples[:, 2]   # (S,)
@@ -715,33 +763,45 @@ def compute_cohort_maturity_rows(
         t_shifted = tau_grid[None, :] - onset_s[:, None]  # (S, T)
         t_shifted = np.maximum(t_shifted, 1e-12)
         z = (np.log(t_shifted) - mu_s[:, None]) / sigma_s[:, None]  # (S, T)
-        cdf_arr = _ndtr(z)  # (S, T)
+        cdf_arr = _ndtr(z)  # (S, T) — pure latency CDF
         # Zero out pre-onset
         cdf_arr = np.where(tau_grid[None, :] > onset_s[:, None], cdf_arr, 0.0)
-        q = p_s[:, None] * cdf_arr  # (S, T)
+        cdf_arr = np.clip(cdf_arr, 0.0, 1.0)
+        q = p_s[:, None] * cdf_arr  # (S, T) — conversion fraction p × CDF
         q = np.clip(q, 0.0, 1.0)
 
-        # ── Upstream CDF for cohort mode (x grows with τ) ──────────────
-        # Build upstream_q: (S, T) array of upstream CDF values per draw.
-        # In window mode this is None (x is fixed).
-        upstream_q = None
-        if not is_window and upstream_params is not None:
-            up_p = upstream_params['p']
-            up_mu = upstream_params['mu']
-            up_sigma = upstream_params['sigma']
-            up_onset = upstream_params['onset']
-            # Use the SAME draws for upstream (shared posterior).
-            # Scale onset/mu draws proportionally to upstream params.
-            # For simplicity, use the point estimate for upstream CDF
-            # (upstream uncertainty is secondary to target edge uncertainty).
-            up_shifted = tau_grid[None, :] - up_onset  # (1, T)
-            up_shifted = np.maximum(up_shifted, 1e-12)
-            up_z = (np.log(up_shifted) - up_mu) / up_sigma
-            upstream_q = up_p * _ndtr(up_z)  # (1, T) broadcast
-            upstream_q = np.where(tau_grid[None, :] > up_onset, upstream_q, 0.0)
-            upstream_q = np.clip(upstream_q, 0.0, 1.0)
-            # Broadcast to (S, T) — same across draws for now
-            upstream_q = np.broadcast_to(upstream_q, (S, T)).copy()
+        # ── Upstream path CDF for cohort mode (x grows with τ) ─────────
+        # Option 1 (cohort-x-per-date-estimation.md §3):
+        #   x_model(s, τ) = a_s × reach(from_node) × CDF_path(τ)
+        # where reach = product of edge rates from anchor to from_node
+        # (computed above), and CDF_path = the path-level latency CDF.
+        #
+        # The CDF shape comes from upstream edges' path-level latency
+        # params.  We use a weighted average CDF across incoming edges
+        # (weighted by each route's edge rate contribution).
+        # The reach probability provides the correct scaling.
+        upstream_path_cdf = None  # (T,) — path latency CDF shape
+        if not is_window and upstream_params_list and reach_at_from_node > 0:
+            # Weighted-average CDF across incoming routes.
+            # Weight = each upstream edge's p (its share of arrivals at the node).
+            total_weight = 0.0
+            upstream_path_cdf = np.zeros(T)
+            for _up in upstream_params_list:
+                _up_p = _up['p']
+                _up_mu = _up['mu']
+                _up_sigma = _up['sigma']
+                _up_onset = _up.get('onset', 0.0)
+                _up_shifted = tau_grid - _up_onset  # (T,)
+                _up_shifted = np.maximum(_up_shifted, 1e-12)
+                _up_z = (np.log(_up_shifted) - _up_mu) / _up_sigma
+                _up_cdf = _ndtr(_up_z)  # (T,) — pure latency CDF (no p)
+                _up_cdf = np.where(tau_grid > _up_onset, _up_cdf, 0.0)
+                _up_cdf = np.clip(_up_cdf, 0.0, 1.0)
+                upstream_path_cdf += _up_p * _up_cdf
+                total_weight += _up_p
+            if total_weight > 0:
+                upstream_path_cdf /= total_weight  # normalise to [0, 1]
+            upstream_path_cdf = np.clip(upstream_path_cdf, 0.0, 1.0)
 
         # Per-Cohort conditional forecast, aggregated
         # Window mode: rate_agg^(b)(tau) = Σ y_i^(b) / Σ x_i  (x fixed)
@@ -757,52 +817,45 @@ def compute_cohort_maturity_rows(
             a_i = c['tau_max']
             ad_str = c['anchor_day'].isoformat()
 
-            # q at observation point: (S,)
             a_idx = min(a_i, T - 1)
-            q_at_a = q[:, a_idx]  # (S,)
+            # Pure latency CDF at observation point (without p) — for Bayesian update.
+            # Design doc §2.3: c_i = CDF(tau_max), n_eff = x × c_i.
+            cdf_at_a = cdf_arr[:, a_idx]  # (S,)
+            c_i_b = cdf_at_a[:, None]     # (S, 1)
+            remaining_cdf = np.maximum(cdf_arr - c_i_b, 0.0)  # (S, T)
 
-            if N_i > 0:
-                # ── Normal case: Cohort has from-node arrivals ──
-                # Bayesian posterior predictive per MC draw.
-                c_i_b = q_at_a[:, None]  # (S, 1) — path completeness per draw
-                remaining_cdf = np.maximum(q - c_i_b, 0.0)  # (S, T)
-
-                if is_window or upstream_q is None:
-                    # Window mode: x fixed, y from edge CDF × posterior rate
-                    n_eff_b = N_i * c_i_b  # (S, 1)
-                    post_rate_b = (alpha_0 + k_i) / (alpha_0 + beta_0 + n_eff_b)  # (S, 1)
-                    y_forecast = k_i + N_i * remaining_cdf * post_rate_b  # (S, T)
-                    x_forecast_arr = np.full((S, T), N_i)
-                    y_forecast = np.clip(y_forecast, k_i, N_i)
-                else:
-                    # Cohort mode: x grows, y grows.  Both use CDF ratios
-                    # on N_i (x_frozen) — no a_pop.
-
-                    # x_forecast: upstream CDF ratio, guarded.
-                    # When upstream CDF at tau_max is near zero, the CDF
-                    # ratio explodes — fall back to x_frozen.
-                    up_q_at_a = upstream_q[:, a_idx:a_idx+1]  # (S, 1)
-                    # Per-draw: use ratio where CDF is big enough, else x_frozen
-                    up_q_at_a_safe = np.maximum(up_q_at_a, 1e-12)
-                    x_forecast_arr = np.where(
-                        up_q_at_a > 0.01,
-                        N_i * upstream_q / up_q_at_a_safe,
-                        np.full((S, T), N_i),
-                    )
-                    x_forecast_arr = np.maximum(x_forecast_arr, N_i)
-
-                    # y_forecast: edge Bayesian rate × x_frozen (same as window)
-                    n_eff_b = N_i * c_i_b  # (S, 1)
-                    post_rate_b = (alpha_0 + k_i) / (alpha_0 + beta_0 + n_eff_b)  # (S, 1)
-                    y_forecast = k_i + N_i * remaining_cdf * post_rate_b  # (S, T)
-                    y_forecast = np.clip(y_forecast, k_i, x_forecast_arr)
+            if is_window or upstream_path_cdf is None:
+                # Window mode: x fixed, y from edge CDF × posterior rate.
+                if N_i <= 0:
+                    continue  # No arrivals in window mode → skip.
+                n_eff_b = N_i * c_i_b  # (S, 1)
+                post_rate_b = (alpha_0 + k_i) / (alpha_0 + beta_0 + n_eff_b)  # (S, 1)
+                y_forecast = k_i + N_i * remaining_cdf * post_rate_b  # (S, T)
+                x_forecast_arr = np.full((S, T), N_i)
+                y_forecast = np.clip(y_forecast, k_i, N_i)
             else:
-                # ── No observations: skip this Cohort ──
-                # Cohort has x=0 (nobody reached from-node yet).
-                # Can't compute an edge rate (y/x) with x=0.
-                # Exclude from aggregate — the fan reflects uncertainty
-                # from Cohorts that have actual data only.
-                continue
+                # Cohort mode: x grows with τ.
+                # Option 1 (cohort-x-per-date-estimation.md §3):
+                #   x_model(s, τ) = a_s × reach(from_node) × CDF_path(τ)
+                # reach = product of edge rates from anchor to from-node.
+                # CDF_path = weighted-average path latency CDF.
+                # Floored at x_frozen_s.
+                x_model = a_pop * reach_at_from_node * upstream_path_cdf  # (T,)
+                x_model_floored = np.maximum(x_model, N_i)  # floor at x_frozen
+
+                x_forecast_arr = np.broadcast_to(
+                    x_model_floored[None, :], (S, T)
+                ).copy()
+
+                # y_forecast: Bayesian posterior predictive.
+                # n_eff from x_frozen (observed trials — posterior confidence).
+                # Forward projection from x_at_frontier (scalar — the model's
+                # estimate of arrivals at the observation point).
+                x_at_frontier = float(x_model_floored[a_idx])
+                n_eff_b = N_i * c_i_b  # (S, 1) — from OBSERVED arrivals
+                post_rate_b = (alpha_0 + k_i) / (alpha_0 + beta_0 + n_eff_b)  # (S, 1)
+                y_forecast = k_i + x_at_frontier * remaining_cdf * post_rate_b  # (S, T)
+                y_forecast = np.clip(y_forecast, k_i, x_forecast_arr)
 
             # Mature ages: use observed (x, y) — same across all draws.
             # In cohort mode, cohort_at_tau is sparse (not every τ has data).
@@ -927,16 +980,27 @@ def compute_cohort_maturity_rows(
         for c in cohort_list:
             ad_str = c['anchor_day'].isoformat()
             if tau <= c['tau_max']:
-                # Mature: use per-τ observed values
+                # Mature: use per-τ observed values.
+                # In cohort mode, cohort_at_tau is sparse — carry forward
+                # the last known (x, y) for this Cohort (both monotonic).
                 obs = cohort_at_tau.get(ad_str, {}).get(tau)
                 if obs:
                     total_x_aug += obs[0]
                     total_y_aug += obs[1]
+                elif is_window:
+                    total_x_aug += c['x_frozen']
+                    # y stays 0 (no observation at this τ)
                 else:
-                    # No data at this τ — use x_frozen (fixed in window),
-                    # y=0 (not y_frozen, which is end-state conversions)
-                    total_x_aug += c['x_frozen'] if is_window else 0.0
-                    # y stays 0
+                    # Cohort mode sparse: find last known (x, y) at τ' ≤ τ.
+                    tau_data = cohort_at_tau.get(ad_str, {})
+                    last_x, last_y = 0.0, 0.0
+                    for t_prev in range(tau, -1, -1):
+                        prev_obs = tau_data.get(t_prev)
+                        if prev_obs:
+                            last_x, last_y = prev_obs[0], prev_obs[1]
+                            break
+                    total_x_aug += last_x
+                    total_y_aug += last_y
             else:
                 # Immature: Bayesian posterior predictive
                 x_frozen = c['x_frozen']
@@ -944,7 +1008,7 @@ def compute_cohort_maturity_rows(
                 c_i = _cdf(c['tau_max'])
                 cdf_at_tau = _cdf(tau)
 
-                if is_window or upstream_params is None:
+                if is_window or not upstream_params_list or reach_at_from_node <= 0:
                     # Window mode: x fixed, y forecast from edge CDF
                     x_forecast = x_frozen
                     n_eff = x_frozen * c_i
@@ -952,26 +1016,36 @@ def compute_cohort_maturity_rows(
                     y_forecast = y_frozen + x_frozen * max(0.0, cdf_at_tau - c_i) * posterior_rate
                     y_forecast = min(x_forecast, y_forecast)
                 else:
-                    # Cohort mode: x grows (upstream arrivals), y grows
-                    # (conversions).  Both use x_frozen as base — no a_pop.
+                    # Cohort mode: x grows with τ.
+                    # Option 1: x_model = a_s × reach(from_node) × CDF_path(τ)
+                    a_pop = c.get('a_frozen', x_frozen) or x_frozen or 1.0
 
-                    # x_forecast: upstream CDF ratio on x_frozen.
-                    # x_frozen × CDF(τ)/CDF(tau_max) extrapolates arrivals.
-                    # When CDF(tau_max) is near zero, arrivals haven't
-                    # meaningfully started — x_forecast ≈ x_frozen.
-                    up_cdf_at_tau_max = _upstream_cdf(c['tau_max'])
-                    up_cdf_at_tau = _upstream_cdf(tau)
-                    if up_cdf_at_tau_max > 1e-6:
-                        x_forecast = x_frozen * up_cdf_at_tau / up_cdf_at_tau_max
-                    else:
-                        x_forecast = x_frozen
-                    x_forecast = max(x_forecast, x_frozen)
+                    # Weighted-average path CDF at tau and at frontier.
+                    cdf_at_tau_w = 0.0
+                    cdf_at_frontier_w = 0.0
+                    total_w = 0.0
+                    for _up in upstream_params_list:
+                        _up_sigma = _up.get('sigma', 0.0)
+                        if _up_sigma > 0:
+                            _up_p = _up['p']
+                            cdf_at_tau_w += _up_p * _shifted_lognormal_cdf(
+                                tau, _up.get('onset', 0.0), _up['mu'], _up_sigma)
+                            cdf_at_frontier_w += _up_p * _shifted_lognormal_cdf(
+                                c['tau_max'], _up.get('onset', 0.0), _up['mu'], _up_sigma)
+                            total_w += _up_p
+                    if total_w > 0:
+                        cdf_at_tau_w /= total_w
+                        cdf_at_frontier_w /= total_w
 
-                    # y_forecast: edge CDF ratio with Bayesian rate
-                    # Same formula as window mode — x_frozen base, edge rate.
+                    x_forecast = max(a_pop * reach_at_from_node * cdf_at_tau_w, x_frozen)
+                    x_at_frontier = max(a_pop * reach_at_from_node * cdf_at_frontier_w, x_frozen)
+
+                    # y_forecast: Bayesian posterior predictive.
+                    # n_eff from x_frozen (observed trials — posterior confidence).
+                    # Forward projection from x_at_frontier (model arrivals at frontier).
                     n_eff = x_frozen * c_i
                     posterior_rate = (alpha_0 + y_frozen) / (alpha_0 + beta_0 + n_eff)
-                    y_forecast = y_frozen + x_frozen * max(0.0, cdf_at_tau - c_i) * posterior_rate
+                    y_forecast = y_frozen + x_at_frontier * max(0.0, cdf_at_tau - c_i) * posterior_rate
                     y_forecast = min(x_forecast, y_forecast)
 
                 if tau == 10 or tau == 20 or tau == 30:

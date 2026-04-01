@@ -25,7 +25,10 @@
       "WebFetch(domain:deepwiki.com)",
       "WebFetch(domain:bitsquid.blogspot.com)",
       "WebFetch(domain:people.cs.vt.edu)",
-      "Bash(PYTHONPATH=graph-editor/lib python -c \":*)"
+      "Bash(PYTHONPATH=graph-editor/lib python -c \":*)",
+      "Bash(chmod +x /tmp/analyze.sh)",
+      "Bash(bash /tmp/analyze.sh)",
+      "Bash(xargs -I {} bash -c 'echo \"=== {} ===\" && head -30 {}')"
     ]
   },
   "hooks": {
