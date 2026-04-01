@@ -438,6 +438,22 @@ Before writing any `describe()` or `it()` blocks, the agent must produce a brief
 
 This is non-negotiable. Jumping straight to test code without a design step is a violation, just as coding without an agreed plan violates Section 0.5. The design does not need to be long — a few bullet points suffice — but it must exist and be shown to the user before code is written.
 
+### Prefer Blind Tests When Practicable
+
+**Default posture**: write tests from the **specification/contract**, not from the implementation. A "blind" test is one written (or designed) without reading the code under test — it asserts what the function/service *should* do based on its contract, not what it *happens* to do based on current implementation details.
+
+**Why this matters**: tests shaped by reading the implementation tend to mirror its structure and assumptions, including its bugs. A blind test is more likely to catch the cases the implementer didn't think of, because the test author is reasoning from the contract outward rather than the code inward.
+
+**When to apply**:
+- **New functionality**: design and write tests from the spec/plan *before* or *without* reading the implementation. This is the ideal case.
+- **Bug fixes**: write a failing test that reproduces the reported behaviour *before* reading the fix. The test should encode the correct behaviour from the user's perspective.
+- **Existing code with no tests**: read the *contract* (types, docstrings, calling code) rather than the implementation body to derive test cases.
+
+**When blind testing is not practicable**:
+- Complex internal wiring where the contract is implicit and only discoverable by reading the code (e.g. cache invalidation ordering, IDB prefix conventions). In these cases, read the code — but still frame assertions around *observable outcomes*, not implementation steps.
+
+**The key discipline**: even when you have read the implementation, write assertions about **what** the system produces, not **how** it produces it. Assert on outputs, state changes, and side effects — not on internal method call order or intermediate variables.
+
 ### CRUD Smoke Tests Are MANDATORY for New Features
 
 **CRITICAL**: When building a new feature (e.g. canvas analysis, new panel, new creation flow), the agent MUST write CRUD smoke tests that exercise the **actual creation/read/update/delete paths** as they will be used by the user. These are NOT optional. They are the FIRST tests to write, not an afterthought.
