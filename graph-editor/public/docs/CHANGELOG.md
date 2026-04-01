@@ -1,4 +1,11 @@
 # DagNet Release Notes
+## Version 1.9.7b
+**Released:** 1-Apr-26
+
+Fix to dashboarda auto-pull
+
+---
+
 ## Version 1.9.5b
 **Released:** 1-Apr-26
 
