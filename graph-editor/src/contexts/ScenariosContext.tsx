@@ -335,9 +335,9 @@ export function ScenariosProvider({ children, fileId, tabId }: ScenariosProvider
           .where('fileId')
           .equals(fileId)
           .toArray();
-        
+
         console.log(`ScenariosContext: Loaded ${savedScenarios.length} scenarios for file ${fileId}`);
-        
+
         // Remove fileId from scenario objects (it's just for DB indexing)
         // Also migrate old 'color' property to 'colour' if present
         const scenarios = savedScenarios.map(({ fileId: _fileId, ...scenario }) => {
@@ -357,9 +357,42 @@ export function ScenariosProvider({ children, fileId, tabId }: ScenariosProvider
         setScenariosLoaded(true);
       }
     };
-    
+
     loadScenarios();
   }, [fileId]);
+
+  // Seed scenarios from graph JSON when IndexedDB is empty.
+  // Handles graphs loaded from Git with authored scenarios (blueprint variants, what-if overrides)
+  // that haven't been opened in this browser yet. Runs once when graph data arrives after
+  // the initial IndexedDB load found nothing.
+  useEffect(() => {
+    if (!fileId || !scenariosLoaded || scenarios.length > 0 || !graph) return;
+    const graphAny = graph as any;
+    if (!Array.isArray(graphAny.scenarios) || graphAny.scenarios.length === 0) return;
+
+    const seedFromGraph = async () => {
+      try {
+        // Double-check IndexedDB is still empty (guard against race)
+        const existing = await db.scenarios.where('fileId').equals(fileId).count();
+        if (existing > 0) return;
+
+        await db.scenarios.bulkPut(
+          graphAny.scenarios.map((s: any) => ({ ...s, fileId }))
+        );
+        console.log(`ScenariosContext: Seeded ${graphAny.scenarios.length} scenarios from graph JSON for ${fileId}`);
+
+        // Reload into state
+        const saved = await db.scenarios.where('fileId').equals(fileId).toArray();
+        const hydrated = saved.map(({ fileId: _fid, ...s }) => s as Scenario);
+        setScenarios(hydrated);
+      } catch (e) {
+        console.warn('ScenariosContext: Failed to seed scenarios from graph JSON', e);
+      }
+    };
+    seedFromGraph();
+    // Only re-run when the graph identity changes (not on every edit) — keyed by node count as a proxy
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fileId, scenariosLoaded, scenarios.length, graph?.nodes?.length]);
 
   // Save scenarios to IndexedDB whenever they change
   useEffect(() => {
