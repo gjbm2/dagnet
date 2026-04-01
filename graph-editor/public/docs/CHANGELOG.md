@@ -1,4 +1,11 @@
 # DagNet Release Notes
+## Version 1.9.5b
+**Released:** 1-Apr-26
+
+Most of the way to proper fancharts...just one cohort() defect to fix
+
+---
+
 ## Version 1.9.3b
 **Released:** 31-Mar-26
 
