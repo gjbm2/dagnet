@@ -2201,24 +2201,6 @@ export function TabProvider({ children }: { children: React.ReactNode }) {
       data
     );
 
-    // Seed scenarios from graph JSON into IndexedDB when opening a graph.
-    // Without this, scenarios authored in the JSON (e.g. blueprint variants, what-if overrides)
-    // are never visible in the Scenarios panel because ScenariosContext only reads from IndexedDB.
-    if (item.type === 'graph' && Array.isArray(data?.scenarios) && data.scenarios.length > 0) {
-      try {
-        // Only seed if IndexedDB has no scenarios for this file yet (don't overwrite user edits)
-        const existing = await db.scenarios.where('fileId').equals(fileId).count();
-        if (existing === 0) {
-          await db.scenarios.bulkPut(
-            data.scenarios.map((s: any) => ({ ...s, fileId }))
-          );
-          console.log(`[TabContext.openTab] Seeded ${data.scenarios.length} scenarios from graph JSON for ${fileId}`);
-        }
-      } catch (e) {
-        console.warn('[TabContext.openTab] Failed to seed scenarios from graph JSON', e);
-      }
-    }
-
     // Create new tab
     const defaultEditorState = viewMode === 'interactive' && fileId.startsWith('graph-') ? {
       useUniformScaling: false,
