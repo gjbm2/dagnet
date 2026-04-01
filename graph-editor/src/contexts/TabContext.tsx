@@ -1100,26 +1100,26 @@ export function TabProvider({ children }: { children: React.ReactNode }) {
       // Import share mode utilities
       const { isShareMode } = await import('../lib/shareBootResolver');
       
-      // In share mode, skip workspace tab restoration and related init
-      // Share sessions are isolated and don't use the user's workspace state
+      // In share mode or retrieveall mode, skip workspace tab restoration.
+      // Share sessions are isolated; retrieveall sessions start fresh and let
+      // the automation job open only the tabs it needs after pulling latest.
+      const isRetrieveAllMode = new URLSearchParams(window.location.search).has('retrieveall');
       if (isShareMode()) {
         console.log('[TabContext] Share mode detected - skipping workspace tab restoration');
-        // Still initialise credentials + defaults-backed files that affect query semantics.
-        // In share mode we do NOT restore workspace tabs/state, but we *do* need:
-        // - connections.yaml (capabilities like supports_native_exclude, provider mappings)
-        // - settings.yaml (forecasting knobs) so computed results match authoring.
-        await initializeCredentials();
-        await initializeConnections();
-        await initializeSettings();
-        await initializeHashMappings();
-      } else {
-        // Normal workspace boot
-        await loadTabsFromDB();
-        await initializeCredentials();
-        await initializeConnections();
-        await initializeSettings();
-        await initializeHashMappings();
+      } else if (isRetrieveAllMode) {
+        console.log('[TabContext] retrieveall mode detected - skipping workspace tab restoration');
       }
+
+      // Always initialise credentials + defaults-backed files that affect query
+      // semantics (connections, settings, hash-mappings). Only restore tabs in
+      // normal workspace boot — share mode and retrieveall start with a blank slate.
+      if (!isShareMode() && !isRetrieveAllMode) {
+        await loadTabsFromDB();
+      }
+      await initializeCredentials();
+      await initializeConnections();
+      await initializeSettings();
+      await initializeHashMappings();
       
       await loadFromURLData();
 

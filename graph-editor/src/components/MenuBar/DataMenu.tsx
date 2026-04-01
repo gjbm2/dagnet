@@ -20,7 +20,7 @@ import { useFetchData, createFetchItem, type FetchMode } from '../../hooks/useFe
 import { useRetrieveAllSlices } from '../../hooks/useRetrieveAllSlices';
 import { useRetrieveAllSlicesRequestListener } from '../../hooks/useRetrieveAllSlicesRequestListener';
 import { PinnedQueryModal } from '../modals/PinnedQueryModal';
-import { DailyFetchManagerModal } from '../modals/DailyFetchManagerModal';
+import { DailyFetchManagerModal, type DailyFetchSaveResult } from '../modals/DailyFetchManagerModal';
 import { db } from '../../db/appDatabase';
 import { AutoUpdateChartsMenubarItem } from './AutoUpdateChartsMenubarItem';
 import { useLagHorizons } from '../../hooks/useLagHorizons';
@@ -28,6 +28,10 @@ import { useBayesTrigger } from '../../hooks/useBayesTrigger';
 import type { BayesComputeMode } from '../../hooks/useBayesTrigger';
 import { useDialog } from '../../contexts/DialogContext';
 import { resetPriorsForAllParams, deleteHistoryForAllParams } from '../../services/bayesPriorService';
+import { useCommitHandler } from '../../hooks/useCommitHandler';
+import { repositoryOperationsService } from '../../services/repositoryOperationsService';
+import { operationRegistryService } from '../../services/operationRegistryService';
+import { useOperationCountdown } from '../../hooks/useOperationCountdown';
 
 /**
  * Data Menu
@@ -45,11 +49,86 @@ export function DataMenu() {
   const activeTab = tabs.find(t => t.id === activeTabId);
   const isGraphTab = activeTab?.fileId.startsWith('graph-') && activeTab?.viewMode === 'interactive';
   
-  // Daily Fetch Manager modal state
+  // Daily Fetch Manager modal state + auto-commit countdown
   const [showDailyFetchManager, setShowDailyFetchManager] = useState(false);
   const workspace = navState.selectedRepo && navState.selectedBranch
     ? { repository: navState.selectedRepo, branch: navState.selectedBranch }
     : null;
+  const { handleCommitFiles } = useCommitHandler();
+  const DAILY_FETCH_COMMIT_OP = 'daily-fetch-auto-commit';
+  const DAILY_FETCH_COUNTDOWN_SECONDS = 30;
+  const dailyFetchChangedIdsRef = useRef<string[]>([]);
+  const [dailyFetchCountdownEnabled, setDailyFetchCountdownEnabled] = useState(false);
+  const [dailyFetchLabel, setDailyFetchLabel] = useState('');
+
+  const handleDailyFetchExpire = useCallback(async () => {
+    setDailyFetchCountdownEnabled(false);
+    const changedFileIds = dailyFetchChangedIdsRef.current;
+    const repo = navState.selectedRepo;
+    const branch = navState.selectedBranch;
+    if (!repo || !branch || changedFileIds.length === 0) return;
+
+    operationRegistryService.setStatus(DAILY_FETCH_COMMIT_OP, 'running');
+    operationRegistryService.setLabel(DAILY_FETCH_COMMIT_OP, 'Committing dailyFetch changes...');
+
+    try {
+      const committable = await repositoryOperationsService.getCommittableFiles(repo, branch);
+      const prefix = `${repo}-${branch}-`;
+      const filesToCommit = committable.filter(f => {
+        const canonical = f.fileId.startsWith(prefix) ? f.fileId.substring(prefix.length) : f.fileId;
+        return changedFileIds.some(id => {
+          const cid = id.startsWith(prefix) ? id.substring(prefix.length) : id;
+          return cid === canonical;
+        });
+      });
+
+      if (filesToCommit.length === 0) {
+        operationRegistryService.complete(DAILY_FETCH_COMMIT_OP, 'complete', 'No changes to commit');
+        return;
+      }
+
+      await handleCommitFiles(filesToCommit, 'Update dailyFetch settings', branch, undefined, repo);
+      operationRegistryService.complete(DAILY_FETCH_COMMIT_OP, 'complete', `Committed ${filesToCommit.length} graph(s)`);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Unknown error';
+      operationRegistryService.complete(DAILY_FETCH_COMMIT_OP, 'error', msg);
+    } finally {
+      dailyFetchChangedIdsRef.current = [];
+    }
+  }, [navState.selectedRepo, navState.selectedBranch, handleCommitFiles]);
+
+  const handleDailyFetchSaved = useCallback((result: import('../modals/DailyFetchManagerModal').DailyFetchSaveResult) => {
+    const parts: string[] = [];
+    if (result.enabled > 0) parts.push(`${result.enabled} enabled`);
+    if (result.disabled > 0) parts.push(`${result.disabled} disabled`);
+    const summary = parts.join(', ');
+    const label = `Committing dailyFetch changes (${summary})`;
+
+    dailyFetchChangedIdsRef.current = result.changedFileIds;
+    setDailyFetchLabel(label);
+
+    operationRegistryService.register({
+      id: DAILY_FETCH_COMMIT_OP,
+      kind: 'daily-fetch-commit',
+      label,
+      status: 'countdown',
+      cancellable: true,
+      onCancel: () => {
+        setDailyFetchCountdownEnabled(false);
+        operationRegistryService.complete(DAILY_FETCH_COMMIT_OP, 'cancelled');
+        dailyFetchChangedIdsRef.current = [];
+      },
+    });
+
+    setDailyFetchCountdownEnabled(true);
+  }, []);
+
+  useOperationCountdown({
+    operationId: DAILY_FETCH_COMMIT_OP,
+    durationSeconds: DAILY_FETCH_COUNTDOWN_SECONDS,
+    onExpire: handleDailyFetchExpire,
+    enabled: dailyFetchCountdownEnabled,
+  });
 
   // For global menu actions (like latency horizon recompute), we need a graph store even if the
   // *currently focused* tab is not the interactive graph tab (e.g. user is viewing a parameter file).
@@ -1094,6 +1173,7 @@ export function DataMenu() {
       isOpen={showDailyFetchManager}
       onClose={() => setShowDailyFetchManager(false)}
       workspace={workspace}
+      onSaved={handleDailyFetchSaved}
     />
   </>
   );

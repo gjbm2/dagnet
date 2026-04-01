@@ -138,18 +138,23 @@ class DailyFetchService {
         }
       }
 
-      // Sync to FileRegistry using canonical (unprefixed) fileId
+      // Sync to FileRegistry using canonical (unprefixed) fileId.
+      // Use the registry's live data as the base so we don't clobber unsaved
+      // edits the user may have made in an open tab.
       const registryFile = fileRegistry.getFile(canonicalFileId);
       if (registryFile) {
-        // FileRegistry.updateFile expects the *file data*, not a FileState-shaped wrapper.
-        // Passing a wrapper would corrupt the in-memory graph shape and break UI reads (e.g. dailyFetch checkbox).
-        fileRegistry.updateFile(canonicalFileId, updatedData);
+        const liveData = registryFile.data as GraphData;
+        fileRegistry.updateFile(canonicalFileId, { ...liveData, dailyFetch });
       }
 
-      // Sync to GraphStore using canonical (unprefixed) fileId
+      // Sync to GraphStore using canonical (unprefixed) fileId.
+      // Same principle: merge into the store's current graph, not the IDB snapshot.
       const store = getGraphStore(canonicalFileId);
       if (store) {
-        store.getState().setGraph(updatedData);
+        const liveGraph = store.getState().graph;
+        if (liveGraph) {
+          store.getState().setGraph({ ...liveGraph, dailyFetch });
+        }
       }
     }
 

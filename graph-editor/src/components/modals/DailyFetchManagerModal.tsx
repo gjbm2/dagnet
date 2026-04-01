@@ -16,13 +16,24 @@ import { useTheme } from '../../contexts/ThemeContext';
 import { dailyFetchService, type GraphListItem, type DailyFetchChange } from '../../services/dailyFetchService';
 import './Modal.css';
 
+export interface DailyFetchSaveResult {
+  /** Number of graphs that were enabled. */
+  enabled: number;
+  /** Number of graphs that were disabled. */
+  disabled: number;
+  /** The fileIds that were changed (for scoped commit). */
+  changedFileIds: string[];
+}
+
 interface DailyFetchManagerModalProps {
   isOpen: boolean;
   onClose: () => void;
   workspace: { repository: string; branch: string } | null;
+  /** Called after changes are successfully applied to IDB. Caller can use this to trigger auto-commit. */
+  onSaved?: (result: DailyFetchSaveResult) => void;
 }
 
-export function DailyFetchManagerModal({ isOpen, onClose, workspace }: DailyFetchManagerModalProps) {
+export function DailyFetchManagerModal({ isOpen, onClose, workspace, onSaved }: DailyFetchManagerModalProps) {
   const { theme } = useTheme();
   const dark = theme === 'dark';
   const [allGraphs, setAllGraphs] = useState<GraphListItem[]>([]);
@@ -110,7 +121,11 @@ export function DailyFetchManagerModal({ isOpen, onClose, workspace }: DailyFetc
         dailyFetch,
       }));
       await dailyFetchService.applyChanges(changes);
+
+      const enabled = changes.filter(c => c.dailyFetch).length;
+      const disabled = changes.filter(c => !c.dailyFetch).length;
       onClose();
+      onSaved?.({ enabled, disabled, changedFileIds: changes.map(c => c.graphFileId) });
     } catch (err) {
       console.error('[DailyFetchManagerModal] Failed to save:', err);
     } finally {

@@ -9,8 +9,14 @@ export interface UseOperationCountdownOptions {
   operationId: string;
   /** Countdown duration in seconds. */
   durationSeconds: number;
-  /** Banner spec (excluding id — the operation ID is used). */
-  banner: Omit<BannerSpec, 'id'>;
+  /**
+   * Optional banner spec (excluding id — the operation ID is used).
+   * When provided, a CountdownBanner is shown via BannerHost for the
+   * duration of the countdown (e.g. app-reload, retrieve-all commencement).
+   * When omitted, the countdown appears only in the OperationsToast — the
+   * standard behaviour for routine operations like auto-pull or auto-commit.
+   */
+  banner?: Omit<BannerSpec, 'id'>;
   /** Called when the countdown reaches zero. Caller should transition the op to 'running'. */
   onExpire: () => void;
   /** If false / undefined the countdown is not started. Allows conditional activation. */
@@ -18,12 +24,17 @@ export interface UseOperationCountdownOptions {
 }
 
 /**
- * Wires countdownService + bannerManagerService + operationRegistryService together
- * for an operation that starts with a "this will happen unless you cancel" countdown.
+ * Wires countdownService + operationRegistryService together for an operation
+ * that starts with a "this will happen unless you cancel" countdown.
  *
- * Supports pause/resume: when the registry's `countdownPaused` flag is set (e.g. by the
- * toast UI), this hook cancels the underlying timer and freezes the seconds. On resume,
- * it restarts the timer with the frozen duration.
+ * The countdown always appears in the OperationsToast (bottom-centre progress
+ * indicator) with pause/resume and cancel support. When a `banner` spec is
+ * provided, a top-of-app CountdownBanner is also shown — reserve this for
+ * high-visibility events like app reloads or retrieve-all commencement.
+ *
+ * Supports pause/resume: when the registry's `countdownPaused` flag is set
+ * (e.g. by the toast UI), this hook cancels the underlying timer and freezes
+ * the seconds. On resume, it restarts the timer with the frozen duration.
  *
  * Usage:
  *   1. Register the operation in the registry (status: 'countdown' or 'pending').
@@ -40,6 +51,8 @@ export function useOperationCountdown(options: UseOperationCountdownOptions): vo
   const bannerRef = useRef(banner);
   bannerRef.current = banner;
 
+  const hasBanner = !!banner;
+
   // Watch the operation for pause/resume changes.
   const op = useOperation(operationId);
   const isPaused = op?.countdownPaused ?? false;
@@ -52,10 +65,20 @@ export function useOperationCountdown(options: UseOperationCountdownOptions): vo
 
     const countdownKey = `op:${operationId}`;
 
-    // Set the banner.
-    bannerManagerService.setBanner({
-      ...bannerRef.current,
-      id: operationId,
+    // Set the banner (only when requested).
+    if (bannerRef.current) {
+      bannerManagerService.setBanner({
+        ...bannerRef.current,
+        id: operationId,
+      });
+    }
+
+    // Sync countdown ticks into the registry.
+    const unsubscribe = countdownService.subscribe(() => {
+      const state = countdownService.getState(countdownKey);
+      if (state?.isActive) {
+        operationRegistryService.setCountdown(operationId, state.secondsRemaining);
+      }
     });
 
     // Start the countdown timer.
@@ -64,7 +87,7 @@ export function useOperationCountdown(options: UseOperationCountdownOptions): vo
       durationSeconds,
       onExpire: () => {
         timerActiveRef.current = false;
-        bannerManagerService.clearBanner(operationId);
+        if (hasBanner) bannerManagerService.clearBanner(operationId);
         onExpireRef.current();
       },
       audit: {
@@ -78,21 +101,13 @@ export function useOperationCountdown(options: UseOperationCountdownOptions): vo
     });
     timerActiveRef.current = true;
 
-    // Sync countdown ticks into the registry.
-    const unsubscribe = countdownService.subscribe(() => {
-      const state = countdownService.getState(countdownKey);
-      if (state?.isActive) {
-        operationRegistryService.setCountdown(operationId, state.secondsRemaining);
-      }
-    });
-
     return () => {
       unsubscribe();
       countdownService.cancelCountdown(countdownKey);
       timerActiveRef.current = false;
-      bannerManagerService.clearBanner(operationId);
+      if (hasBanner) bannerManagerService.clearBanner(operationId);
     };
-  }, [operationId, durationSeconds, enabled]);
+  }, [operationId, durationSeconds, enabled, hasBanner]);
 
   // Handle pause/resume by stopping/restarting the countdownService timer.
   useEffect(() => {
@@ -113,7 +128,7 @@ export function useOperationCountdown(options: UseOperationCountdownOptions): vo
           durationSeconds: remaining,
           onExpire: () => {
             timerActiveRef.current = false;
-            bannerManagerService.clearBanner(operationId);
+            if (hasBanner) bannerManagerService.clearBanner(operationId);
             onExpireRef.current();
           },
           audit: {
@@ -128,5 +143,5 @@ export function useOperationCountdown(options: UseOperationCountdownOptions): vo
         timerActiveRef.current = true;
       }
     }
-  }, [isPaused, enabled, operationId, op?.status, op?.countdownSecondsRemaining]);
+  }, [isPaused, enabled, operationId, op?.status, op?.countdownSecondsRemaining, hasBanner]);
 }
