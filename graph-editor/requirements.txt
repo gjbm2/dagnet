@@ -1,32 +1,15 @@
-# Python Graph Compute Dependencies
-# Keep minimal for Vercel 50MB size limit
+# Vercel production dependencies — ONLY packages imported by api/python-api.py
+# at runtime.  Vercel auto-installs from this file.  Keep it lean.
+#
+# For local dev (FastAPI dev-server, pytest, Modal CLI), use:
+#   pip install -r requirements-local.txt
 
-# Core dependencies (production)
+# Core
 networkx>=3.2
 pydantic>=2.0.0
-psycopg2-binary>=2.9.0  # Postgres driver for snapshot DB
-requests>=2.31.0        # HTTP client for Bayes webhook callbacks
-pyyaml>=6.0             # YAML parsing (runner adaptor, Modal worker)
+psycopg2-binary>=2.9.0
+pyyaml>=6.0
 
-# Development dependencies (local only, not deployed to Vercel)
-# Install with: pip install -r requirements.txt
-fastapi>=0.104.0
-uvicorn[standard]>=0.24.0
-python-dotenv>=1.0.0    # .env.local loading in tests and dev server
-pytest>=7.4.0
-pytest-cov>=4.1.0
-pytest-asyncio>=0.21.0
-
-# Bayes deployment (Modal remote compute)
-# Authenticate separately: modal token set
-# See: deploy-modal.sh, docs/current/project-bayes/5-local-dev-setup.md
-# Not in production requirements (too heavy for Vercel 50MB limit).
-# Install with: pip install modal
-# To persist across venv rebuilds, listed in requirements-local.txt.
-# modal>=1.0.0
-
-# Statistical / numerical (used by cohort_forecast, confidence_bands)
-# NOTE: These add ~50MB.  Vercel 50MB limit may require a slim build
-# strategy if other deps grow — but the BE code path needs them.
+# Statistical / numerical (confidence_bands, cohort_forecast, stats_enhancement)
 numpy>=1.24.0
 scipy>=1.10.0
