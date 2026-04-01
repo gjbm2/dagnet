@@ -724,11 +724,15 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
         if (isinstance(post_alpha, (int, float)) and isinstance(post_beta, (int, float))
                 and post_alpha > 0 and post_beta > 0):
             result['posterior_p'] = float(post_alpha) / (float(post_alpha) + float(post_beta))
+            result['posterior_alpha'] = float(post_alpha)
+            result['posterior_beta'] = float(post_beta)
         path_alpha = prob_posterior.get('path_alpha')
         path_beta = prob_posterior.get('path_beta')
         if (isinstance(path_alpha, (int, float)) and isinstance(path_beta, (int, float))
                 and path_alpha > 0 and path_beta > 0):
             result['posterior_p_cohort'] = float(path_alpha) / (float(path_alpha) + float(path_beta))
+            result['posterior_path_alpha'] = float(path_alpha)
+            result['posterior_path_beta'] = float(path_beta)
         # Probability posterior uncertainty (for confidence bands).
         # Prefer posterior-derived SD (from alpha/beta) over the flat p.stdev
         # which is the blended analytic estimate, not the MCMC posterior width.

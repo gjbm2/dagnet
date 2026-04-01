@@ -10,6 +10,7 @@
 #   --all           Show every matching mark window, not just the last.
 #   --console-only  Only extract from the browser-console stream.
 #   --session-only  Only extract from the session-log stream.
+#   --python-only   Only extract from the Python server stream.
 #
 # TRIM MODE:
 #   scripts/extract-mark-logs.sh --trim [N]
@@ -26,6 +27,7 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 CONSOLE_LOG="$REPO_ROOT/debug/tmp.browser-console.jsonl"
 SESSION_LOG="$REPO_ROOT/debug/tmp.session-log.jsonl"
+PYTHON_LOG="$REPO_ROOT/debug/tmp.python-server.jsonl"
 SNAPSHOTS_DIR="$REPO_ROOT/debug/graph-snapshots"
 
 # ── Argument parsing ────────────────────────────────────────────────
@@ -33,6 +35,7 @@ LABEL=""
 ALL=false
 CONSOLE_ONLY=false
 SESSION_ONLY=false
+PYTHON_ONLY=false
 TRIM_MODE=false
 TRIM_KEEP=20000
 
@@ -41,6 +44,7 @@ for arg in "$@"; do
     --all)          ALL=true ;;
     --console-only) CONSOLE_ONLY=true ;;
     --session-only) SESSION_ONLY=true ;;
+    --python-only)  PYTHON_ONLY=true ;;
     --trim)         TRIM_MODE=true ;;
     -*)             echo "Unknown flag: $arg" >&2; exit 1 ;;
     *)
@@ -56,7 +60,7 @@ done
 
 if [[ "$TRIM_MODE" != "true" && -z "$LABEL" ]]; then
   echo "Usage:" >&2
-  echo "  scripts/extract-mark-logs.sh <mark-label> [--all] [--console-only | --session-only]" >&2
+  echo "  scripts/extract-mark-logs.sh <mark-label> [--all] [--console-only | --session-only | --python-only]" >&2
   echo "  scripts/extract-mark-logs.sh --trim [N]   (default N=20000)" >&2
   exit 1
 fi
@@ -193,8 +197,9 @@ if [[ "$TRIM_MODE" == "true" ]]; then
   echo "║  extract-mark-logs --trim: keeping last $TRIM_KEEP lines"
   echo "╚══════════════════════════════════════════════════════════════╝"
   echo ""
-  trim_file "$CONSOLE_LOG" "$TRIM_KEEP" '"kind":"mark"'
-  trim_file "$SESSION_LOG" "$TRIM_KEEP" '"operation":"DEV_MARK"'
+  trim_file "$CONSOLE_LOG" "$TRIM_KEEP" '"kind" *: *"mark"'
+  trim_file "$SESSION_LOG" "$TRIM_KEEP" '"operation" *: *"DEV_MARK"'
+  trim_file "$PYTHON_LOG"  "$TRIM_KEEP" '"kind" *: *"mark"'
   echo ""
   echo "Done."
   exit 0
@@ -207,17 +212,24 @@ echo "║  extract-mark-logs: searching for mark '$LABEL'"
 echo "╚══════════════════════════════════════════════════════════════╝"
 
 # Console stream
-if [[ "$SESSION_ONLY" != "true" ]]; then
+if [[ "$SESSION_ONLY" != "true" && "$PYTHON_ONLY" != "true" ]]; then
   echo ""
   echo "━━━ CONSOLE STREAM ━━━"
-  extract_window "$CONSOLE_LOG" "\"kind\":\"mark\".*$LABEL" "console" '"kind":"mark"'
+  extract_window "$CONSOLE_LOG" "\"kind\" *: *\"mark\".*$LABEL" "console" '"kind" *: *"mark"'
 fi
 
 # Session stream
-if [[ "$CONSOLE_ONLY" != "true" ]]; then
+if [[ "$CONSOLE_ONLY" != "true" && "$PYTHON_ONLY" != "true" ]]; then
   echo ""
   echo "━━━ SESSION STREAM ━━━"
-  extract_window "$SESSION_LOG" "\"operation\":\"DEV_MARK\".*$LABEL" "session" '"operation":"DEV_MARK"'
+  extract_window "$SESSION_LOG" "\"operation\" *: *\"DEV_MARK\".*$LABEL" "session" '"operation" *: *"DEV_MARK"'
+fi
+
+# Python server stream
+if [[ "$CONSOLE_ONLY" != "true" && "$SESSION_ONLY" != "true" ]]; then
+  echo ""
+  echo "━━━ PYTHON SERVER STREAM ━━━"
+  extract_window "$PYTHON_LOG" "\"kind\" *: *\"mark\".*$LABEL" "python" '"kind" *: *"mark"'
 fi
 
 # Graph snapshots

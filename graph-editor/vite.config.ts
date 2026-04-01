@@ -111,6 +111,13 @@ export default defineConfig(({ mode }) => {
                 const sessionOutPath = process.env.DAGNET_SESSION_LOG_PATH
                   ? path.resolve(process.env.DAGNET_SESSION_LOG_PATH)
                   : repoSessionDefault;
+                // Python server log — marks are propagated here so
+                // extract-mark-logs.sh can window the Python stream too.
+                const pythonLogDefault = path.resolve(__dirname, '..', 'debug', 'tmp.python-server.jsonl');
+                const pythonLogPath = process.env.DAGNET_PYTHON_LOG_PATH
+                  ? path.resolve(process.env.DAGNET_PYTHON_LOG_PATH)
+                  : pythonLogDefault;
+
                 const snapshotEndpoint = '/__dagnet/graph-snapshot';
                 const repoSnapshotDirDefault = path.resolve(__dirname, '..', 'debug', 'graph-snapshots');
                 const snapshotDir = process.env.DAGNET_GRAPH_SNAPSHOT_DIR
@@ -248,6 +255,32 @@ export default defineConfig(({ mode }) => {
                           }
                         } finally {
                           fs.closeSync(fd);
+                        }
+
+                        // Propagate marks to Python server log so
+                        // extract-mark-logs.sh can window it by mark.
+                        const marks = entries.filter(
+                          (e: any) => e?.kind === 'mark' || e?.operation === 'DEV_MARK'
+                        );
+                        if (marks.length > 0) {
+                          try {
+                            fs.mkdirSync(path.dirname(pythonLogPath), { recursive: true });
+                            const pyFd = fs.openSync(pythonLogPath, 'a');
+                            try {
+                              for (const m of marks) {
+                                const markEntry = {
+                                  kind: 'mark' as const,
+                                  ts_ms: m.ts_ms ?? Date.now(),
+                                  label: m.label ?? m.message ?? 'mark',
+                                };
+                                fs.writeSync(pyFd, `${JSON.stringify(markEntry)}\n`, undefined, 'utf8');
+                              }
+                            } finally {
+                              fs.closeSync(pyFd);
+                            }
+                          } catch {
+                            // best-effort
+                          }
                         }
 
                         res.statusCode = 200;

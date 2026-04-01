@@ -25,8 +25,8 @@ pytest-asyncio>=0.21.0
 # To persist across venv rebuilds, listed in requirements-local.txt.
 # modal>=1.0.0
 
-# Optional: Statistical enhancement (heavy - for local dev only)
-# Note: numpy/scipy are too large for Vercel deployment
-# Install with: pip install numpy scipy
-# numpy>=1.24.0
-# scipy>=1.10.0
+# Statistical / numerical (used by cohort_forecast, confidence_bands)
+# NOTE: These add ~50MB.  Vercel 50MB limit may require a slim build
+# strategy if other deps grow — but the BE code path needs them.
+numpy>=1.24.0
+scipy>=1.10.0

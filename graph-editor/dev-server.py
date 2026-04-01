@@ -951,13 +951,14 @@ if __name__ == "__main__":
 
     # Read port from environment variable, default to 9000
     port = int(os.environ.get("PYTHON_API_PORT", "9000"))
-    
+
     print("")
     print("🚀 DagNet Python Graph Compute Server")
     print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
     print(f"📍 Server:     http://localhost:{port}")
     print(f"📖 API Docs:   http://localhost:{port}/docs")
     print("🔄 Auto-reload enabled")
+    print(f"📝 Python logs: debug/tmp.python-server.jsonl")
     print("")
     print("Available endpoints:")
     print("  GET  /                            - Health check")
@@ -979,7 +980,7 @@ if __name__ == "__main__":
     print(f"💡 Port: {port} (set via PYTHON_API_PORT env var)")
     print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
     print("")
-    
+
     uvicorn.run(
         "dev-server:app",
         host="0.0.0.0",

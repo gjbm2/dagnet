@@ -111,12 +111,29 @@ def read_edge_cohort_params(
     if prob is None or prob <= 0:
         return None
 
-    return {
+    # Alpha/beta for Bayesian upstream x-forecast (Phase 2).
+    # Prefer path-level (cohort) over window-level.
+    _alpha: Optional[float] = None
+    _beta: Optional[float] = None
+    if (isinstance(path_alpha, (int, float)) and isinstance(path_beta, (int, float))
+            and path_alpha > 0 and path_beta > 0):
+        _alpha = float(path_alpha)
+        _beta = float(path_beta)
+    elif (isinstance(post_alpha, (int, float)) and isinstance(post_beta, (int, float))
+            and post_alpha > 0 and post_beta > 0):
+        _alpha = float(post_alpha)
+        _beta = float(post_beta)
+
+    result: Dict[str, float] = {
         'p': float(prob),
         'mu': float(mu),
         'sigma': float(sigma),
         'onset': float(onset) if isinstance(onset, (int, float)) else 0.0,
     }
+    if _alpha is not None and _beta is not None:
+        result['alpha'] = _alpha
+        result['beta'] = _beta
+    return result
 
 
 # ── Graph topology helpers ─────────────────────────────────────────────
@@ -387,16 +404,62 @@ def compute_cohort_maturity_rows(
 
     has_bayes = edge_sigma > 0 and edge_p > 0
 
+    # ── Bayesian prior (α₀, β₀) for per-Cohort rate updating ─────────
+    # Used by the Bayesian posterior predictive (midpoint + MC fan).
+    # Prefer raw alpha/beta from edge posterior; fall back to method of
+    # moments from (p, p_stdev); last resort: weak prior from forecast_mean.
+    alpha_0: float = 0.0
+    beta_0: float = 0.0
+    if not is_window:
+        _raw_a = edge_params.get('posterior_path_alpha', 0.0) or 0.0
+        _raw_b = edge_params.get('posterior_path_beta', 0.0) or 0.0
+    else:
+        _raw_a = edge_params.get('posterior_alpha', 0.0) or 0.0
+        _raw_b = edge_params.get('posterior_beta', 0.0) or 0.0
+    if _raw_a > 0 and _raw_b > 0:
+        alpha_0 = float(_raw_a)
+        beta_0 = float(_raw_b)
+    elif edge_p > 0 and edge_p_sd > 0:
+        # Method of moments: κ = p(1−p)/σ² − 1
+        _var = edge_p_sd ** 2
+        _pq = edge_p * (1.0 - edge_p)
+        if _var < _pq:  # valid only when σ² < p(1-p)
+            _kappa = _pq / _var - 1.0
+            alpha_0 = edge_p * _kappa
+            beta_0 = (1.0 - edge_p) * _kappa
+    if alpha_0 <= 0 or beta_0 <= 0:
+        # Weak prior from forecast_mean with κ_default = 20
+        _KAPPA_DEFAULT = 20.0
+        _p_prior = edge_p if edge_p > 0 else 0.5
+        alpha_0 = _p_prior * _KAPPA_DEFAULT
+        beta_0 = (1.0 - _p_prior) * _KAPPA_DEFAULT
+
     def _cdf(tau: float) -> float:
         if edge_sigma <= 0:
             return 0.0
         return _shifted_lognormal_cdf(tau, edge_onset, edge_mu, edge_sigma)
+
+    def _upstream_cdf(tau: float) -> float:
+        """Upstream CDF at age τ (cohort mode only)."""
+        if upstream_params is None:
+            return 0.0
+        up_sigma = upstream_params.get('sigma', 0.0)
+        if up_sigma <= 0:
+            return 0.0
+        return _shifted_lognormal_cdf(
+            tau,
+            upstream_params.get('onset', 0.0),
+            upstream_params.get('mu', 0.0),
+            up_sigma,
+        )
 
     # ── Upstream CDF params (cohort mode only) ────────────────────────
     # In cohort() mode, x grows with τ.  To forecast x beyond tau_max,
     # we need the upstream CDF (path from anchor to this edge's from-node).
     # Read from incoming edges' path-level Bayes params.
     upstream_params: Optional[Dict[str, float]] = None
+    upstream_alpha: float = 0.0
+    upstream_beta: float = 0.0
     if not is_window and target_edge is not None:
         from_node_id = get_edge_from_node(target_edge)
         if from_node_id:
@@ -408,6 +471,14 @@ def compute_cohort_maturity_rows(
                 params = read_edge_cohort_params(inc_edge)
                 if params:
                     upstream_params = params
+                    # Upstream prior for Bayesian x-forecast (Phase 2).
+                    upstream_alpha = params.get('alpha', 0.0)
+                    upstream_beta = params.get('beta', 0.0)
+                    if upstream_alpha <= 0 or upstream_beta <= 0:
+                        # Fall back: weak prior from upstream p with κ=20
+                        _up_p = params['p']
+                        upstream_alpha = _up_p * 20.0
+                        upstream_beta = (1.0 - _up_p) * 20.0
                     break
 
     # ── Per-Cohort info from last frame ────────────────────────────────
@@ -569,6 +640,15 @@ def compute_cohort_maturity_rows(
                f"edge_mu={edge_mu} edge_sigma={edge_sigma} edge_onset={edge_onset} "
                f"cohorts={len(cohort_list)} is_window={is_window}")
     print(_mc_msg)
+    # Bayesian prior diagnostic
+    print(f"[BAYES_prior] alpha_0={alpha_0:.4f} beta_0={beta_0:.4f} "
+          f"prior_rate={alpha_0/(alpha_0+beta_0):.6f}")
+    if upstream_params is not None:
+        print(f"[BAYES_upstream] p={upstream_params.get('p'):.6f} "
+              f"mu={upstream_params.get('mu'):.4f} sigma={upstream_params.get('sigma'):.4f} "
+              f"onset={upstream_params.get('onset'):.4f} "
+              f"alpha={upstream_alpha:.4f} beta={upstream_beta:.4f} "
+              f"up_prior_rate={upstream_alpha/(upstream_alpha+upstream_beta):.6f}")
     # Also write to file for debugging
     try:
         with open('/tmp/mc_diag.log', 'a') as _f:
@@ -666,17 +746,31 @@ def compute_cohort_maturity_rows(
 
             if N_i > 0:
                 # ── Normal case: Cohort has from-node arrivals ──
-                # Conditional forecast: k_i + remaining × CDF ratio
-                denom = np.maximum(1.0 - q_at_a[:, None], 1e-10)
-                y_forecast = k_i + (N_i - k_i) * np.maximum(q - q_at_a[:, None], 0.0) / denom
+                # Bayesian posterior predictive per MC draw.
+                # c_i^(b) = CDF(tau_max; θ^(b)) for each draw (already q_at_a).
+                # n_eff^(b) = N_i × c_i^(b).
+                # Posterior mean rate: (α₀ + k_i) / (α₀ + β₀ + n_eff^(b)).
+                # y_forecast = k_i + N_i × max(0, CDF(τ;θ^(b)) − c_i^(b)) × posterior_rate^(b)
+                c_i_b = q_at_a[:, None]  # (S, 1) — completeness per draw
+                n_eff_b = N_i * c_i_b    # (S, 1) — effective trials per draw
+                post_rate_b = (alpha_0 + k_i) / (alpha_0 + beta_0 + n_eff_b)  # (S, 1)
+                remaining_cdf = np.maximum(q - c_i_b, 0.0)  # (S, T)
+                y_forecast = k_i + N_i * remaining_cdf * post_rate_b  # (S, T)
 
                 if is_window or upstream_q is None:
                     x_forecast_arr = np.full((S, T), N_i)
                     y_forecast = np.clip(y_forecast, k_i, N_i)
                 else:
-                    up_q_at_a = upstream_q[:, a_idx:a_idx+1]
-                    up_q_at_a_safe = np.maximum(up_q_at_a, 1e-10)
-                    x_forecast_arr = N_i * upstream_q / up_q_at_a_safe
+                    # Cohort mode: Bayesian upstream x-forecast per MC draw.
+                    # upstream_q is the upstream CDF array (S, T).
+                    # a_pop = anchor population for this Cohort.
+                    a_pop = c.get('a_frozen', N_i) or N_i or 1.0
+                    up_q_at_a = upstream_q[:, a_idx:a_idx+1]  # (S, 1)
+                    # Bayesian update on upstream arrival rate per draw
+                    n_eff_up_b = a_pop * up_q_at_a  # (S, 1)
+                    up_post_rate_b = (upstream_alpha + N_i) / (upstream_alpha + upstream_beta + n_eff_up_b)  # (S, 1)
+                    remaining_up_cdf = np.maximum(upstream_q - up_q_at_a, 0.0)  # (S, T)
+                    x_forecast_arr = N_i + a_pop * remaining_up_cdf * up_post_rate_b  # (S, T)
                     x_forecast_arr = np.maximum(x_forecast_arr, N_i)
                     y_forecast = np.clip(y_forecast, k_i, x_forecast_arr)
             else:
@@ -821,26 +915,43 @@ def compute_cohort_maturity_rows(
                     total_x_aug += c['x_frozen'] if is_window else 0.0
                     # y stays 0
             else:
-                # Immature: calibrated CDF ratio (window mode: x fixed)
+                # Immature: Bayesian posterior predictive
                 x_frozen = c['x_frozen']
                 y_frozen = c['y_frozen']
-                cdf_at_tau_max = _cdf(c['tau_max'])
+                c_i = _cdf(c['tau_max'])
                 cdf_at_tau = _cdf(tau)
 
-                if is_window:
+                if is_window or upstream_params is None:
                     x_forecast = x_frozen  # window: x fixed
                 else:
-                    x_forecast = x_frozen  # TODO Phase 2: upstream x forecast
+                    # Cohort mode: Bayesian upstream x-forecast.
+                    # a_i = anchor population, x_frozen = from-node arrivals observed so far.
+                    # upstream CDF tells us what fraction of a_i have arrived by a given τ.
+                    a_pop = c.get('a_frozen', x_frozen) or x_frozen
+                    up_cdf_at_tau_max = _upstream_cdf(c['tau_max'])
+                    up_cdf_at_tau = _upstream_cdf(tau)
+                    # Bayesian update on upstream arrival rate
+                    n_eff_up = a_pop * up_cdf_at_tau_max
+                    up_post_rate = (upstream_alpha + x_frozen) / (upstream_alpha + upstream_beta + n_eff_up)
+                    x_forecast = x_frozen + a_pop * max(0.0, up_cdf_at_tau - up_cdf_at_tau_max) * up_post_rate
+                    x_forecast = max(x_forecast, x_frozen)  # x can only grow
 
-                if cdf_at_tau_max > 0.01:
-                    y_forecast = y_frozen * cdf_at_tau / cdf_at_tau_max
-                    # Clamp: rate can't exceed 1.0 per Cohort
-                    y_forecast = min(x_forecast, y_forecast)
-                else:
-                    # CDF(tau_max) too small — model is a poor fit at this
-                    # Cohort's observation point.  Fall back to frozen values
-                    # rather than producing an exploding ratio.
-                    y_forecast = y_frozen
+                # Bayesian update: posterior rate given this Cohort's evidence.
+                # n_eff = x × completeness = effective resolved trials.
+                # Posterior: Beta(α₀ + k, β₀ + n_eff − k).
+                n_eff = x_frozen * c_i
+                posterior_rate = (alpha_0 + y_frozen) / (alpha_0 + beta_0 + n_eff)
+                # Forecast: observed + remaining window × posterior rate
+                y_forecast = y_frozen + x_forecast * max(0.0, cdf_at_tau - c_i) * posterior_rate
+                # Clamp: rate can't exceed 1.0 per Cohort
+                y_forecast = min(x_forecast, y_forecast)
+
+                if tau == 10 or tau == 20 or tau == 30:
+                    print(f"[MID_cohort] tau={tau} ad={c['anchor_day']} tau_max={c['tau_max']} "
+                          f"x_frz={x_frozen:.1f} y_frz={y_frozen:.1f} a_pop={c.get('a_frozen', 0):.0f} "
+                          f"c_i={c_i:.6f} cdf_tau={cdf_at_tau:.6f} "
+                          f"x_fc={x_forecast:.1f} y_fc={y_forecast:.2f} "
+                          f"n_eff={n_eff:.2f} post_r={posterior_rate:.6f}")
 
                 total_x_aug += x_forecast
                 total_y_aug += y_forecast
