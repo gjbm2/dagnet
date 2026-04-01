@@ -1,26 +1,4 @@
 {
-  "hooks": {
-    "PreToolUse": [
-      {
-        "matcher": "Bash",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash .claude/hooks/gate-check.sh"
-          }
-        ]
-      },
-      {
-        "matcher": "Edit|Write",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash .claude/hooks/guard-gate-files.sh"
-          }
-        ]
-      }
-    ]
-  },
   "permissions": {
     "allow": [
       "Bash(time curl:*)",
@@ -46,7 +24,30 @@
       "WebFetch(domain:vitest.dev)",
       "WebFetch(domain:deepwiki.com)",
       "WebFetch(domain:bitsquid.blogspot.com)",
-      "WebFetch(domain:people.cs.vt.edu)"
+      "WebFetch(domain:people.cs.vt.edu)",
+      "Bash(PYTHONPATH=graph-editor/lib python -c \":*)"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/gate-check.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/guard-gate-files.sh"
+          }
+        ]
+      }
     ]
   }
 }

@@ -11,5 +11,6 @@ psycopg2-binary>=2.9.0
 pyyaml>=6.0
 
 # Statistical / numerical (confidence_bands, cohort_forecast, stats_enhancement)
+# scipy removed — only ndtr (normal CDF) was used, replaced with Abramowitz & Stegun erf.
+# scipy remains available locally via requirements-local.txt (stats_enhancement fallback).
 numpy>=1.24.0
-scipy>=1.10.0

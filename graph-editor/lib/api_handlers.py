@@ -116,7 +116,43 @@ def _compute_surprise_gauge(
         { analysis_type, variables: [{ name, quantile, observed, expected,
           posterior_sd, zone, label, available }] }
     """
-    from scipy.stats import beta as beta_dist, norm as norm_dist
+    # Pure-math normal CDF/PPF — avoids scipy on Vercel (Lambda size limit).
+    def norm_cdf(z: float) -> float:
+        return 0.5 * math.erfc(-z / math.sqrt(2.0))
+
+    def norm_ppf(q: float) -> float:
+        """Inverse normal CDF (Acklam approximation, max |error| < 1.15e-9)."""
+        if q <= 0:
+            return float('-inf')
+        if q >= 1:
+            return float('inf')
+        # Coefficients
+        a = (-3.969683028665376e+01, 2.209460984245205e+02,
+             -2.759285104469687e+02, 1.383577518672690e+02,
+             -3.066479806614716e+01, 2.506628277459239e+00)
+        b = (-5.447609879822406e+01, 1.615858368580409e+02,
+             -1.556989798598866e+02, 6.680131188771972e+01,
+             -1.328068155288572e+01)
+        c = (-7.784894002430293e-03, -3.223964580411365e-01,
+             -2.400758277161838e+00, -2.549732539343734e+00,
+             4.374664141464968e+00, 2.938163982698783e+00)
+        d = (7.784695709041462e-03, 3.224671290700398e-01,
+             2.445134137142996e+00, 3.754408661907416e+00)
+        p_low = 0.02425
+        p_high = 1 - p_low
+        if q < p_low:
+            r = math.sqrt(-2.0 * math.log(q))
+            return (((((c[0]*r+c[1])*r+c[2])*r+c[3])*r+c[4])*r+c[5]) / \
+                   ((((d[0]*r+d[1])*r+d[2])*r+d[3])*r+1)
+        elif q <= p_high:
+            r = q - 0.5
+            r2 = r * r
+            return (((((a[0]*r2+a[1])*r2+a[2])*r2+a[3])*r2+a[4])*r2+a[5])*r / \
+                   (((((b[0]*r2+b[1])*r2+b[2])*r2+b[3])*r2+b[4])*r2+1)
+        else:
+            r = math.sqrt(-2.0 * math.log(1 - q))
+            return -(((((c[0]*r+c[1])*r+c[2])*r+c[3])*r+c[4])*r+c[5]) / \
+                    ((((d[0]*r+d[1])*r+d[2])*r+d[3])*r+1)
 
     result: Dict[str, Any] = {
         'analysis_type': 'surprise_gauge',
@@ -307,7 +343,7 @@ def _compute_surprise_gauge(
     def sigma_from_quantile(q: float) -> float:
         """Convert quantile to signed σ distance from centre."""
         q_clamped = max(1e-6, min(1 - 1e-6, q))
-        return norm_dist.ppf(q_clamped)
+        return norm_ppf(q_clamped)
 
     variables = []
 
@@ -333,7 +369,7 @@ def _compute_surprise_gauge(
         combined_sd = math.sqrt(max(1e-20, var_post + var_samp))
 
         z = (obs_rate - expected) / combined_sd
-        quantile = float(norm_dist.cdf(z))
+        quantile = float(norm_cdf(z))
         variables.append({
             'name': 'p',
             'label': 'Conversion rate',
@@ -374,7 +410,7 @@ def _compute_surprise_gauge(
             obs_se = math.sqrt(math.pi / 2) * float(sigma_lag) / math.sqrt(n_dates)
         combined_sd = math.sqrt(float(b_mu_sd) ** 2 + obs_se ** 2)
         z = (float(obs_lat_mu) - float(b_mu_mean)) / combined_sd
-        quantile = float(norm_dist.cdf(z))
+        quantile = float(norm_cdf(z))
         variables.append({
             'name': 'mu',
             'label': 'Latency location (μ)',
@@ -413,7 +449,7 @@ def _compute_surprise_gauge(
             obs_se = float(sigma_lag) / math.sqrt(2 * n_dates)
         combined_sd = math.sqrt(float(b_sigma_sd) ** 2 + obs_se ** 2)
         z = (float(obs_lat_sigma) - float(b_sigma_mean_val)) / combined_sd
-        quantile = float(norm_dist.cdf(z))
+        quantile = float(norm_cdf(z))
         variables.append({
             'name': 'sigma',
             'label': 'Latency spread (σ)',

@@ -6,6 +6,9 @@
 
 -r requirements.txt
 
+# scipy (stats_enhancement uses scipy.stats.beta.interval and linregress locally)
+scipy>=1.10.0
+
 # Dev server (dev-server.py uses FastAPI + Uvicorn)
 fastapi>=0.104.0
 uvicorn[standard]>=0.24.0

@@ -255,8 +255,6 @@ def _regenerate_frames(
     follows a DIFFERENT distribution shape than the model believes.
     """
     from datetime import date, timedelta
-    from scipy.stats import norm as _norm
-
     # Model params (what the model believes — unchanged)
     ep = data['edge_params']
     p_model = ep['forecast_mean']
@@ -271,7 +269,8 @@ def _regenerate_frames(
     def cdf(tau: float, onset: float, mu: float, sigma: float) -> float:
         if tau <= onset:
             return 0.0
-        return float(_norm.cdf((math.log(tau - onset) - mu) / sigma))
+        z = (math.log(tau - onset) - mu) / sigma
+        return 0.5 * math.erfc(-z / math.sqrt(2.0))
 
     anchor_from = date.fromisoformat(data['anchor_from'])
     anchor_to = date.fromisoformat(data['anchor_to'])
@@ -684,7 +683,7 @@ def compute_cohort_maturity_rows(
 
     if has_bayes and edge_mu_sd > 0:
         import numpy as np
-        from scipy.special import ndtr
+        from .confidence_bands import _ndtr
 
         # Build posterior covariance matrix
         # Order: [p, mu, sigma, onset]
@@ -716,7 +715,7 @@ def compute_cohort_maturity_rows(
         t_shifted = tau_grid[None, :] - onset_s[:, None]  # (S, T)
         t_shifted = np.maximum(t_shifted, 1e-12)
         z = (np.log(t_shifted) - mu_s[:, None]) / sigma_s[:, None]  # (S, T)
-        cdf_arr = ndtr(z)  # (S, T)
+        cdf_arr = _ndtr(z)  # (S, T)
         # Zero out pre-onset
         cdf_arr = np.where(tau_grid[None, :] > onset_s[:, None], cdf_arr, 0.0)
         q = p_s[:, None] * cdf_arr  # (S, T)
@@ -738,7 +737,7 @@ def compute_cohort_maturity_rows(
             up_shifted = tau_grid[None, :] - up_onset  # (1, T)
             up_shifted = np.maximum(up_shifted, 1e-12)
             up_z = (np.log(up_shifted) - up_mu) / up_sigma
-            upstream_q = up_p * ndtr(up_z)  # (1, T) broadcast
+            upstream_q = up_p * _ndtr(up_z)  # (1, T) broadcast
             upstream_q = np.where(tau_grid[None, :] > up_onset, upstream_q, 0.0)
             upstream_q = np.clip(upstream_q, 0.0, 1.0)
             # Broadcast to (S, T) — same across draws for now
