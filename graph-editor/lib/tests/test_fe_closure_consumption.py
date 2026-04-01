@@ -486,3 +486,173 @@ class TestRegressionGuards:
             msg = 'Production code still references signature_equivalence table:\n'
             msg += '\n'.join(f'  {v}' for v in violations)
             assert False, msg
+
+
+class TestHandlerClosureForwarding:
+    """
+    Handler-level integration tests: _handle_snapshot_analyze_subjects must
+    forward equivalent_hashes to the DB query functions for ALL read modes.
+
+    These tests exercise the actual dispatch layer that was the site of the
+    original bug — the DB functions already support equivalent_hashes, but
+    the handler wasn't passing it through for sweep and raw_snapshots paths.
+    """
+
+    def test_hcf001_raw_snapshots_handler_forwards_closure(self):
+        """HCF-001: lag_histogram (raw_snapshots read mode) handler returns rows
+        from both seed and equivalent hashes when equivalent_hashes is provided.
+
+        This is an end-to-end handler test: it calls _handle_snapshot_analyze_subjects
+        with real DB data and verifies the analysis result includes evidence from
+        equivalent hashes — proving the handler forwarded the closure to query_snapshots.
+        """
+        from api_handlers import _handle_snapshot_analyze_subjects
+
+        pid = make_param_id('hcf001')
+        sig_a = '{"c":"hcf001-a","x":{}}'
+        sig_b = '{"c":"hcf001-b","x":{}}'
+        ch_a = short_core_hash_from_canonical_signature(sig_a)
+        ch_b = short_core_hash_from_canonical_signature(sig_b)
+
+        # Seed DB: hash A has 2 rows, hash B has 1 row.
+        append_for_test(param_id=pid, canonical_signature=sig_a,
+                        slice_key='window(1-Dec-25:3-Dec-25)',
+                        rows=make_rows(['2025-12-01', '2025-12-02']))
+        append_for_test(param_id=pid, canonical_signature=sig_b,
+                        slice_key='window(1-Dec-25:3-Dec-25)',
+                        rows=make_rows(['2025-12-03']))
+
+        closure = [{'core_hash': ch_b, 'operation': 'equivalent', 'weight': 1.0}]
+
+        # Call the handler with equivalent_hashes on the subject.
+        result_with = _handle_snapshot_analyze_subjects({
+            'analysis_type': 'lag_histogram',
+            'scenarios': [{
+                'scenario_id': 'base',
+                'name': 'Base',
+                'graph': {'nodes': [], 'edges': []},
+                'snapshot_subjects': [{
+                    'subject_id': 'test-subj',
+                    'param_id': pid,
+                    'core_hash': ch_a,
+                    'canonical_signature': sig_a,
+                    'read_mode': 'raw_snapshots',
+                    'anchor_from': '2025-12-01',
+                    'anchor_to': '2025-12-03',
+                    'slice_keys': ['window()'],
+                    'equivalent_hashes': closure,
+                    'target': {'targetId': 'e1'},
+                }],
+            }],
+        })
+
+        # Single scenario + single subject → handler flattens the response.
+        # The handler should have found 3 rows (2 from A + 1 from B).
+        assert result_with['success'] is True
+        assert result_with['rows_analysed'] == 3, \
+            f"Expected 3 rows (seed + equivalent); got {result_with['rows_analysed']}"
+
+        # Without closure: only 2 rows from seed hash A.
+        result_without = _handle_snapshot_analyze_subjects({
+            'analysis_type': 'lag_histogram',
+            'scenarios': [{
+                'scenario_id': 'base',
+                'name': 'Base',
+                'graph': {'nodes': [], 'edges': []},
+                'snapshot_subjects': [{
+                    'subject_id': 'test-subj',
+                    'param_id': pid,
+                    'core_hash': ch_a,
+                    'canonical_signature': sig_a,
+                    'read_mode': 'raw_snapshots',
+                    'anchor_from': '2025-12-01',
+                    'anchor_to': '2025-12-03',
+                    'slice_keys': ['window()'],
+                    'equivalent_hashes': [],
+                    'target': {'targetId': 'e1'},
+                }],
+            }],
+        })
+
+        assert result_without['rows_analysed'] == 2, \
+            f"Expected 2 rows (seed only); got {result_without['rows_analysed']}"
+
+    def test_hcf002_sweep_handler_forwards_closure(self):
+        """HCF-002: cohort_maturity (sweep read mode) handler returns rows from
+        both seed and equivalent hashes when equivalent_hashes is provided.
+        """
+        from api_handlers import _handle_snapshot_analyze_subjects
+
+        pid = make_param_id('hcf002')
+        sig_a = '{"c":"hcf002-a","x":{}}'
+        sig_b = '{"c":"hcf002-b","x":{}}'
+        ch_a = short_core_hash_from_canonical_signature(sig_a)
+        ch_b = short_core_hash_from_canonical_signature(sig_b)
+
+        # Use a retrieved_at in a known date range so sweep_from/sweep_to can match.
+        fixed_retrieved_at = datetime(2025, 12, 2, 12, 0, 0, tzinfo=timezone.utc)
+        append_for_test(param_id=pid, canonical_signature=sig_a,
+                        slice_key='window(1-Dec-25:3-Dec-25)',
+                        rows=make_rows(['2025-12-01', '2025-12-02']),
+                        retrieved_at=fixed_retrieved_at)
+        append_for_test(param_id=pid, canonical_signature=sig_b,
+                        slice_key='window(1-Dec-25:3-Dec-25)',
+                        rows=make_rows(['2025-12-03']),
+                        retrieved_at=fixed_retrieved_at)
+
+        closure = [{'core_hash': ch_b, 'operation': 'equivalent', 'weight': 1.0}]
+
+        result_with = _handle_snapshot_analyze_subjects({
+            'analysis_type': 'cohort_maturity',
+            'scenarios': [{
+                'scenario_id': 'base',
+                'name': 'Base',
+                'graph': {'nodes': [], 'edges': []},
+                'snapshot_subjects': [{
+                    'subject_id': 'test-subj',
+                    'param_id': pid,
+                    'core_hash': ch_a,
+                    'canonical_signature': sig_a,
+                    'read_mode': 'cohort_maturity',
+                    'anchor_from': '2025-12-01',
+                    'anchor_to': '2025-12-03',
+                    'sweep_from': '2025-12-01',
+                    'sweep_to': '2025-12-03',
+                    'slice_keys': ['window()'],
+                    'equivalent_hashes': closure,
+                    'target': {'targetId': 'e1'},
+                }],
+            }],
+        })
+
+        # Single scenario + single subject → handler flattens the response.
+        assert result_with['success'] is True
+        assert result_with['rows_analysed'] == 3, \
+            f"Expected 3 rows (seed + equivalent); got {result_with['rows_analysed']}"
+
+        # Without closure: only 2 rows.
+        result_without = _handle_snapshot_analyze_subjects({
+            'analysis_type': 'cohort_maturity',
+            'scenarios': [{
+                'scenario_id': 'base',
+                'name': 'Base',
+                'graph': {'nodes': [], 'edges': []},
+                'snapshot_subjects': [{
+                    'subject_id': 'test-subj',
+                    'param_id': pid,
+                    'core_hash': ch_a,
+                    'canonical_signature': sig_a,
+                    'read_mode': 'cohort_maturity',
+                    'anchor_from': '2025-12-01',
+                    'anchor_to': '2025-12-03',
+                    'sweep_from': '2025-12-01',
+                    'sweep_to': '2025-12-03',
+                    'slice_keys': ['window()'],
+                    'equivalent_hashes': [],
+                    'target': {'targetId': 'e1'},
+                }],
+            }],
+        })
+
+        assert result_without['rows_analysed'] == 2, \
+            f"Expected 2 rows (seed only); got {result_without['rows_analysed']}"

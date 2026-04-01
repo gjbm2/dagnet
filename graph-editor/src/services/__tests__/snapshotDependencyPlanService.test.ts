@@ -918,3 +918,136 @@ describe('snapshotDependencyPlanService', () => {
 
 });
 
+// ============================================================
+// Integration: equivalent_hashes derived from real hash-mappings
+// ============================================================
+
+describe('equivalent_hashes integration (real FileRegistry + hashMappingsService)', () => {
+  // The core_hash of VALID_SIG '{"c":"abc123","x":{}}' is deterministic.
+  // We seed hash-mappings.json with equivalence edges referencing it.
+  const VALID_SIG = '{"c":"abc123","x":{}}';
+  const EQUIVALENT_HASH_B = 'fake-hash-B-for-test';
+  const EQUIVALENT_HASH_C = 'fake-hash-C-for-test';
+
+  const WORKSPACE = { repository: 'myrepo', branch: 'main' };
+
+  function makePlan(items: Partial<FetchPlanItem>[]): FetchPlan {
+    return {
+      version: 1,
+      createdAt: '2025-12-01T00:00:00Z',
+      referenceNow: '2025-12-01T00:00:00Z',
+      dsl: 'window(1-Nov-25:30-Nov-25)',
+      items: items.map(item => ({
+        itemKey: item.itemKey ?? `parameter:${item.objectId ?? 'p1'}:${item.targetId ?? 'e1'}:${item.slot ?? ''}:${item.conditionalIndex ?? ''}`,
+        type: item.type ?? 'parameter',
+        objectId: item.objectId ?? 'p1',
+        targetId: item.targetId ?? 'e1',
+        slot: item.slot,
+        conditionalIndex: item.conditionalIndex,
+        mode: item.mode ?? 'window',
+        sliceFamily: item.sliceFamily ?? '',
+        querySignature: item.querySignature ?? VALID_SIG,
+        classification: item.classification ?? 'covered',
+        windows: item.windows ?? [],
+      })) as FetchPlanItem[],
+    };
+  }
+
+  function makeGraph(edges: Array<{ uuid: string; from: string; to: string }>) {
+    return {
+      nodes: [
+        { id: 'A', uuid: 'node-a' },
+        { id: 'B', uuid: 'node-b' },
+        { id: 'C', uuid: 'node-c' },
+      ],
+      edges: edges.map(e => ({
+        uuid: e.uuid,
+        from: e.from,
+        to: e.to,
+        p: { id: `param-${e.uuid}` },
+      })),
+    } as any;
+  }
+
+  let seedCoreHash: string;
+
+  beforeAll(async () => {
+    // Compute the real core_hash for VALID_SIG — this is what the mapper will derive.
+    seedCoreHash = await computeShortCoreHash(VALID_SIG);
+  });
+
+  beforeEach(async () => {
+    contextRegistry.clearCache();
+    (querySnapshotRetrievals as any).mockReset?.();
+
+    // Seed FileRegistry with hash-mappings.json containing known equivalence edges.
+    // This is the real data path: mapper → getClosureSet → getMappings → fileRegistry.
+    await fileRegistry.registerFile('hash-mappings', {
+      fileId: 'hash-mappings',
+      type: 'hash-mappings',
+      path: 'hash-mappings.json',
+      data: {
+        version: 1,
+        mappings: [
+          { core_hash: seedCoreHash, equivalent_to: EQUIVALENT_HASH_B, operation: 'equivalent', weight: 1.0 },
+          { core_hash: EQUIVALENT_HASH_B, equivalent_to: EQUIVALENT_HASH_C, operation: 'equivalent', weight: 1.0 },
+        ],
+      },
+      lastModified: Date.now(),
+      viewTabs: [],
+      isDirty: false,
+      originalData: undefined,
+    } as any);
+  });
+
+  // Each read mode branch in the mapper is a separate code path that must
+  // independently include equivalent_hashes. One representative analysis type
+  // per read mode is sufficient: the type system enforces the field on all paths,
+  // and the integration proves getClosureSet is called with the real core_hash.
+  const READ_MODE_REPRESENTATIVES = [
+    { analysisType: 'lag_histogram', label: 'raw_snapshots', queryDsl: 'from(A).to(B).window(1-Nov-25:30-Nov-25)' },
+    { analysisType: 'lag_fit', label: 'sweep_simple', queryDsl: 'from(A).to(B).window(1-Nov-25:30-Nov-25)' },
+    { analysisType: 'cohort_maturity', label: 'cohort_maturity', queryDsl: 'from(A).to(B).cohort(1-Oct-25:31-Oct-25)', planMode: 'cohort' as const },
+  ];
+
+  for (const { analysisType, label, queryDsl, planMode } of READ_MODE_REPRESENTATIVES) {
+    it(`should derive equivalent_hashes from real hash-mappings for ${label} (${analysisType})`, async () => {
+      // For cohort_maturity, the preflight call will fail — triggers the fallback path.
+      if (analysisType === 'cohort_maturity') {
+        (querySnapshotRetrievals as any).mockRejectedValue(new Error('no DB'));
+      }
+
+      const plan = makePlan([{
+        targetId: 'e1',
+        objectId: 'p1',
+        mode: planMode ?? 'window',
+      }]);
+      const graph = makeGraph([{ uuid: 'e1', from: 'node-a', to: 'node-b' }]);
+
+      const result = await mapFetchPlanToSnapshotSubjects({
+        plan,
+        analysisType,
+        graph,
+        selectedEdgeUuids: [],
+        workspace: WORKSPACE,
+        queryDsl,
+      });
+
+      // Compute what the real closure should be from the seeded mappings.
+      const expectedClosure = getClosureSet(seedCoreHash);
+
+      // Sanity: the closure must contain our two equivalents (transitive: seed→B→C).
+      const closureHashes = expectedClosure.map(e => e.core_hash).sort();
+      expect(closureHashes).toEqual([EQUIVALENT_HASH_B, EQUIVALENT_HASH_C].sort());
+
+      // Every subject must carry the same closure, derived from real data.
+      expect(result).toBeDefined();
+      expect(result!.subjects.length).toBeGreaterThanOrEqual(1);
+      for (const subj of result!.subjects) {
+        expect(subj.core_hash).toBe(seedCoreHash);
+        expect(subj.equivalent_hashes).toEqual(expectedClosure);
+      }
+    });
+  }
+});
+

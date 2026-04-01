@@ -329,6 +329,13 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
     if (!vid) return false;
     return !!(graphRef.current?.canvasViews ?? []).find(v => v.id === vid)?.locked;
   };
+
+  /** Capture the current viewport as a resolution-independent node-space bounding box. */
+  const captureViewportBounds = () => {
+    const { transform, width, height } = rfStore.getState();
+    return viewportToBounds(transform, width, height)
+      ?? { x: transform[0], y: transform[1], zoom: transform[2] };
+  };
   const effectiveWhatIfDSL = tabWhatIfDSL ?? whatIfDSL ?? null;
 
   // Use prop if provided, otherwise fall back to context for active tab id
@@ -1440,9 +1447,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
       const name = (e as CustomEvent).detail?.name || 'New view';
       const g = graphRef.current;
       if (!g) return;
-      // Capture current viewport as node-space bounds (resolution-independent)
-      const { transform, width: cw, height: ch } = rfStore.getState();
-      const viewport = viewportToBounds(transform, cw, ch) ?? { x: transform[0], y: transform[1], zoom: transform[2] };
+      const viewport = captureViewportBounds();
       const [next, viewId] = createCanvasView(g, name, viewport);
       const newView = (next.canvasViews ?? []).find(v => v.id === viewId);
       if (newView) {
@@ -1477,9 +1482,8 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
       if (activeCanvasViewIdRef.current && !isActiveViewLocked()) {
         const outgoingView = (g.canvasViews ?? []).find(v => v.id === activeCanvasViewIdRef.current);
         if (outgoingView) {
-          const { transform, width: cw2, height: ch2 } = rfStore.getState();
           if (scopeEnabled(outgoingView.applyLayout)) {
-            outgoingView.viewport = viewportToBounds(transform, cw2, ch2) ?? { x: transform[0], y: transform[1], zoom: transform[2] };
+            outgoingView.viewport = captureViewportBounds();
           }
           if (scopeEnabled(outgoingView.applyDisplayMode)) {
             outgoingView.viewOverlayMode = viewPrefsRef.current?.viewOverlayMode ?? 'none';
@@ -1668,8 +1672,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
           const view = (g.canvasViews ?? []).find(v => v.id === activeCanvasViewIdRef.current);
           if (view) {
             if (scopeEnabled(view.applyLayout)) {
-              const { transform, width: cw3, height: ch3 } = rfStore.getState();
-              view.viewport = viewportToBounds(transform, cw3, ch3) ?? { x: transform[0], y: transform[1], zoom: transform[2] };
+              view.viewport = captureViewportBounds();
             }
             if (scopeEnabled(view.applyDisplayMode)) {
               view.viewOverlayMode = viewPrefsRef.current?.viewOverlayMode ?? 'none';
@@ -1737,8 +1740,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
       // - Locking: captures what the user wants to freeze.
       // - Unlocking: captures what accumulated while locked, so auto-save starts from truth.
       if (view && scopeEnabled(view.applyLayout)) {
-        const { transform, width: cw4, height: ch4 } = rfStore.getState();
-        view.viewport = viewportToBounds(transform, cw4, ch4) ?? { x: transform[0], y: transform[1], zoom: transform[2] };
+        view.viewport = captureViewportBounds();
         view.states = snapshotStates(g);
       }
 
@@ -2641,11 +2643,7 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
                     const g = graphRef.current;
                     const view = g ? (g.canvasViews ?? []).find(v => v.id === activeCanvasViewIdRef.current) : null;
                     if (view && scopeEnabled(view.applyLayout)) {
-                      const { width: cwAuto, height: chAuto } = rfStore.getState();
-                      view.viewport = viewportToBounds(
-                        [viewportToSave.x, viewportToSave.y, viewportToSave.zoom],
-                        cwAuto, chAuto,
-                      ) ?? viewportToSave;
+                      view.viewport = captureViewportBounds();
                     }
                   }
                 });
