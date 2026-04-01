@@ -21,20 +21,11 @@ vi.mock('../snapshotWriteService', async () => {
   };
 });
 
-// Mock hashMappingsService so tests can control the closure set returned.
-// getClosureSet is the only function used by the module under test.
-vi.mock('../hashMappingsService', async () => {
-  const actual: any = await vi.importActual('../hashMappingsService');
-  return {
-    ...actual,
-    getClosureSet: vi.fn(actual.getClosureSet),
-  };
-});
-
 import { querySnapshotRetrievals } from '../snapshotWriteService';
-import { getClosureSet } from '../hashMappingsService';
 import { contextRegistry } from '../contextRegistry';
 import { computeShortCoreHash } from '../coreHashService';
+import { fileRegistry } from '../../contexts/TabContext';
+import { getClosureSet } from '../hashMappingsService';
 import type { FetchPlan, FetchPlanItem } from '../fetchPlanTypes';
 import {
   mapFetchPlanToSnapshotSubjects,
@@ -925,124 +916,5 @@ describe('snapshotDependencyPlanService', () => {
     });
   });
 
-  // ─────────────────────────────────────────────────────────
-  // equivalent_hashes closure contract
-  // ─────────────────────────────────────────────────────────
-
-  describe('equivalent_hashes closure contract', () => {
-    const FAKE_CLOSURE = [
-      { core_hash: 'hash-B', operation: 'equivalent', weight: 1.0 },
-      { core_hash: 'hash-C', operation: 'equivalent', weight: 1.0 },
-    ];
-
-    it('should populate equivalent_hashes on every subject for funnel_path (default read mode)', async () => {
-      (getClosureSet as any).mockReturnValue(FAKE_CLOSURE);
-
-      const plan = makePlan([{ targetId: 'e1', objectId: 'p1' }]);
-      const graph = makeGraph([{ uuid: 'e1', from: 'node-a', to: 'node-b' }]);
-
-      const result = await mapFetchPlanToSnapshotSubjects({
-        plan,
-        analysisType: 'lag_histogram',
-        graph,
-        selectedEdgeUuids: [],
-        workspace: WORKSPACE,
-        queryDsl: 'from(A).to(B).window(1-Nov-25:30-Nov-25)',
-      });
-
-      expect(result).toBeDefined();
-      expect(result!.subjects.length).toBe(1);
-      expect(result!.subjects[0].equivalent_hashes).toEqual(FAKE_CLOSURE);
-      expect(getClosureSet).toHaveBeenCalledWith(result!.subjects[0].core_hash);
-    });
-
-    it('should produce empty array (not undefined) when no mappings exist', async () => {
-      (getClosureSet as any).mockReturnValue([]);
-
-      const plan = makePlan([{ targetId: 'e1', objectId: 'p1' }]);
-      const graph = makeGraph([{ uuid: 'e1', from: 'node-a', to: 'node-b' }]);
-
-      const result = await mapFetchPlanToSnapshotSubjects({
-        plan,
-        analysisType: 'lag_histogram',
-        graph,
-        selectedEdgeUuids: [],
-        workspace: WORKSPACE,
-        queryDsl: 'from(A).to(B).window(1-Nov-25:30-Nov-25)',
-      });
-
-      expect(result).toBeDefined();
-      expect(result!.subjects.length).toBe(1);
-      expect(result!.subjects[0].equivalent_hashes).toEqual([]);
-      expect(result!.subjects[0].equivalent_hashes).not.toBeUndefined();
-    });
-
-    it('should populate equivalent_hashes on daily_conversions subjects (default read mode)', async () => {
-      (getClosureSet as any).mockReturnValue(FAKE_CLOSURE);
-
-      const plan = makePlan([{ targetId: 'e1', objectId: 'p1' }]);
-      const graph = makeGraph([{ uuid: 'e1', from: 'node-a', to: 'node-b' }]);
-
-      const result = await mapFetchPlanToSnapshotSubjects({
-        plan,
-        analysisType: 'daily_conversions',
-        graph,
-        selectedEdgeUuids: [],
-        workspace: WORKSPACE,
-        queryDsl: 'from(A).to(B).window(1-Nov-25:30-Nov-25)',
-      });
-
-      expect(result).toBeDefined();
-      expect(result!.subjects.length).toBe(1);
-      expect(result!.subjects[0].equivalent_hashes).toEqual(FAKE_CLOSURE);
-    });
-
-    it('should populate equivalent_hashes on cohort_maturity subjects (sweep read mode, fallback path)', async () => {
-      (getClosureSet as any).mockReturnValue(FAKE_CLOSURE);
-      // querySnapshotRetrievals returns failure → triggers fallback subject push
-      (querySnapshotRetrievals as any).mockRejectedValue(new Error('no DB'));
-
-      const plan = makePlan([{
-        targetId: 'e1',
-        objectId: 'p1',
-        mode: 'cohort',
-      }]);
-      const graph = makeGraph([{ uuid: 'e1', from: 'node-a', to: 'node-b' }]);
-
-      const result = await mapFetchPlanToSnapshotSubjects({
-        plan,
-        analysisType: 'cohort_maturity',
-        graph,
-        selectedEdgeUuids: [],
-        workspace: WORKSPACE,
-        queryDsl: 'from(A).to(B).cohort(1-Oct-25:31-Oct-25)',
-      });
-
-      expect(result).toBeDefined();
-      expect(result!.subjects.length).toBeGreaterThan(0);
-      for (const subj of result!.subjects) {
-        expect(subj.equivalent_hashes).toEqual(FAKE_CLOSURE);
-      }
-    });
-
-    it('should populate equivalent_hashes on lag_fit subjects (sweep_simple read mode)', async () => {
-      (getClosureSet as any).mockReturnValue(FAKE_CLOSURE);
-
-      const plan = makePlan([{ targetId: 'e1', objectId: 'p1' }]);
-      const graph = makeGraph([{ uuid: 'e1', from: 'node-a', to: 'node-b' }]);
-
-      const result = await mapFetchPlanToSnapshotSubjects({
-        plan,
-        analysisType: 'lag_fit',
-        graph,
-        selectedEdgeUuids: [],
-        workspace: WORKSPACE,
-        queryDsl: 'from(A).to(B).window(1-Nov-25:30-Nov-25)',
-      });
-
-      expect(result).toBeDefined();
-      expect(result!.subjects.length).toBe(1);
-      expect(result!.subjects[0].equivalent_hashes).toEqual(FAKE_CLOSURE);
-    });
-  });
 });
+

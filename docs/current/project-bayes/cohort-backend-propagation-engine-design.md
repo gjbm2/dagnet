@@ -265,6 +265,93 @@ is the graph identity that keeps `x` and `y` coherent. The current
 "pick one upstream edge" or "use one upstream summary curve" shortcuts
 should disappear from the authoritative BE path.
 
+### 7.1 Join semantics under incomplete inputs
+
+The graph builder enforces a DAG (`nx.is_directed_acyclic_graph` at
+build time), so topological ordering is guaranteed. The harder problem
+is that real joins will routinely have incomplete inputs.
+
+For each incoming edge at a join, the engine has one of four levels of
+basis for forecasting `y` on that edge:
+
+1. **Promoted model vars + Cohort evidence.** Full posterior
+   predictive: the edge's fitted posterior updated with this Cohort
+   day's observed `(x, y)`. This is the best case.
+
+2. **Promoted model vars, no evidence for this Cohort day.** Prior
+   predictive: the fitted posterior applied with no Cohort-specific
+   observation update. Uncertainty is wider but the forecast is still
+   model-informed. This is also what handles mismatched anchor-day
+   ranges — if edge A has Cohorts {1-Jan to 31-Mar} and edge B has
+   {1-Feb to 30-Apr}, the engine takes the union of anchor days and
+   each edge uses its prior predictive for days outside its evidence
+   range.
+
+3. **No promoted model vars + Cohort evidence.** The Bayes fit failed
+   quality gates, so no posterior exists, but snapshot rows are
+   available. The engine should use the edge's frequentist `p.mean`
+   and latency params as a point-estimate fallback:
+   `y_forecast(d, τ) = p.mean × x_frozen(d) × CDF(τ) / CDF(τ_max)`.
+   This is essentially the current ratio-based path — not
+   authoritative, but grounded in real data. No MC draws are possible
+   for this edge; it contributes a deterministic term to the join.
+
+4. **No promoted model vars, no evidence.** The engine should use the
+   same frequentist `p.mean × a_d × CDF(τ)` as a weak point
+   estimate. This is the least reliable tier.
+
+The important property is that the engine does not branch on these
+cases. It evaluates every (edge, Cohort day) pair with whatever basis
+is available, and the quality of the forecast degrades continuously as
+the basis weakens. No special-case rules, no intersection logic, no
+"require all incoming edges" gates.
+
+**Provenance tracking and surfacing.** The engine should tag each
+edge contribution at a join with its basis tier (1–4). This metadata
+flows through three existing systems:
+
+*Engine response contract.* The BE response for each subject edge
+should include a `propagation_quality` block:
+
+- `upstream_basis`: map of upstream edge ID → basis tier used
+- `evidence_backed_mass_frac`: fraction of arrival mass from tiers
+  1–2 vs tiers 3–4
+- `has_point_estimate_upstream`: boolean — true if any incoming edge
+  contributed a deterministic-only term (tiers 3–4)
+
+*Graph issues* (`graphIssuesService` / `integrityCheckService`). When
+the engine detects tier 3–4 upstream edges feeding a join, it should
+emit a graph issue with `category: 'semantic'`, `severity: 'warning'`,
+attached to the downstream edge's `edgeUuid`. Message:
+"Upstream edge {id} has no promoted model — fan bands at this edge
+understate uncertainty." This appears in the existing
+GraphIssuesViewer and the canvas indicator overlay. It is a static
+structural fact about the graph, not a per-query transient.
+
+*Forecast quality overlay* (`forecast-quality` view overlay mode).
+The existing `computeQualityTier()` evaluates per-edge posterior
+health and drives the quality tier bead in `EdgeBeads` when the
+`forecast-quality` overlay is active. The propagation engine should
+elaborate this construct rather than creating a parallel reporting
+path.
+
+Concretely: `computeQualityTier()` currently scores based on the
+edge's own posterior diagnostics (rhat, ESS, divergences, evidence
+grade). The engine should extend this with an upstream propagation
+dimension: even if this edge has a healthy posterior, its forecast
+quality is degraded if upstream joins fed it point-estimate-only
+mass. When `has_point_estimate_upstream` is true, the effective
+quality tier should be capped at `'warning'` with `reason` indicating
+the upstream gap. This flows through the existing forecast-quality
+bead colour and tooltip without new UI components.
+
+*Chart-level indicator.* The `cohort_maturity` chart should display a
+small warning icon when `has_point_estimate_upstream` is true in the
+response. Tooltip: "Fan bands may be narrower than true uncertainty —
+one or more upstream edges lacked a Bayesian model." No band style
+changes, no shaded regions — a single indicator that the fan is
+conditional on point-estimate upstream assumptions.
+
 ## 8. Deterministic and Monte Carlo execution
 
 The same engine should support two execution styles.
@@ -284,6 +371,84 @@ The critical rule is that uncertainty must be propagated through the
 graph, not added afterwards from marginal summaries. Summing upstream
 quantiles or using separately sampled upstream and downstream paths would
 break covariance structure and yield visibly wrong fan behaviour.
+
+### 8.1 Cross-edge posterior independence and the partition problem
+
+The current per-edge MC draws from `MVN(θ_e, Σ_e)` where
+`θ = [p, μ, σ, onset]`, independently per edge. Within a single edge
+this is correct: the covariance between onset and μ is captured in Σ,
+and the draws produce well-behaved fans.
+
+The graph propagation engine introduces a structural coupling that the
+independent-draw model does not account for: **shared denominators at
+fan-out nodes**.
+
+Consider node F with one upstream edge U and two downstream edges D1
+and D2. Under the proposed engine:
+
+- At draw `b`, the engine samples `θ_U^(b)` and propagates
+  `y_U^(b)(τ)` forward. This becomes the shared denominator
+  `x_{D1}^(b) = x_{D2}^(b)`.
+- D1 and D2 each draw their own `θ_{D1}^(b)` and `θ_{D2}^(b)`
+  independently.
+- The engine then computes `y_{D1}^(b)` and `y_{D2}^(b)` from
+  these independent draws, each conditional on the shared `x^(b)`.
+
+Two problems arise from this:
+
+**Denominator-induced spurious correlation.** When the upstream draw
+happens to be high (large `x^(b)`), both D1 and D2 see a large
+denominator. Their posterior rates are pulled toward their prior means
+because the large denominator dilutes the evidence signal. When the
+upstream draw is low, both rates become more volatile. This creates a
+correlation structure in downstream rates that is an artefact of the
+sampling scheme, not a reflection of real uncertainty. In a single-
+edge fan display (the primary `cohort_maturity` consumer), this
+distortion is invisible because only one edge's marginal fan is
+shown. It would become visible if the engine ever needed to display
+joint fans across sibling edges.
+
+**Mass conservation violation.** If D1 and D2 are the only outflows
+from node F, then `y_{D1} + y_{D2} ≤ x` must hold — you cannot
+convert more people than arrived. But because D1 and D2 draw rates
+independently, some draws will produce `y_{D1}^(b) + y_{D2}^(b) >
+x^(b)`. These are impossible paths. For a single-edge fan the
+violation is hidden (each edge's marginal fan is valid in isolation),
+but it means the sampled joint distribution includes physically
+impossible states.
+
+**Why the current single-edge code avoids this.** Today, the MC in
+`cohort_forecast.py` uses a point-estimate upstream CDF (scalar
+`up_p`, `up_mu`, `up_sigma`) — it does not draw from the upstream
+posterior. This means upstream uncertainty is ignored entirely, but
+the denominator is constant across draws, so no spurious correlation
+or partition violation occurs. The proposed engine deliberately
+introduces upstream draws to capture upstream uncertainty, which is
+the right goal, but it inherits these two structural side-effects.
+
+**Recommended posture for Phase 3.** For the primary consumer (single-
+edge `cohort_maturity` trajectory), the independent-draw-per-edge
+scheme with shared upstream `x` is an acceptable mean-field
+approximation. Each edge's marginal fan is correct in shape and
+width; only the joint distribution across sibling edges is
+approximate. The engine should:
+
+1. Document this as a known approximation in the response contract.
+2. Clip per-draw `y_e^(b)` to `[0, x^(b)]` at each edge to prevent
+   individual edges from exceeding their denominator in any single
+   draw.
+3. Not attempt to enforce the sum constraint `Σ y_e ≤ x` across
+   sibling edges in Phase 3. This would require Dirichlet partition
+   sampling or a copula, which is additional modelling complexity that
+   is not justified until joint fan display is a real consumer need.
+
+If a future consumer requires joint fans across sibling edges (e.g. a
+stacked area chart of outflows from one node), the right fix is
+Dirichlet partition sampling: at each fan-out node, sample a
+Dirichlet over outgoing edge rates conditional on the node's arrival
+mass, so that draws respect the partition constraint by construction.
+This is a modelling extension, not a bug fix, and should be scoped
+separately.
 
 ## 9. Two consumer modes
 
@@ -343,10 +508,11 @@ prerequisite for every UI interaction.
 
 ## 11. Recommended delivery phases
 
-Phase 1 should fix the hash-family plumbing for analysis so the BE reads
-the same snapshot family as Bayes fitting and fetch coverage. Without
-that, graph-wide evidence binding will remain inconsistent regardless of
-forecasting quality.
+Phase 1 (complete): hash-family plumbing. `equivalent_hashes` now flows
+end-to-end from FE planning (`getClosureSet`) through
+`graphComputeClient` request construction to `api_handlers.py`
+extraction and forwarding to all `snapshot_service` query paths. The BE
+reads the same snapshot family as Bayes fitting and fetch coverage.
 
 Phase 2 should implement scalar mode in the BE using graph-wide binding
 plus mode-aware propagation at the current query frontier. This gives a

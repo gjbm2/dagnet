@@ -1267,13 +1267,24 @@ export interface CanvasViewScenario {
   whatIfDSL?: string;
 }
 
+/** Legacy pixel-space viewport (fragile across resolutions). */
+export interface ViewportPixel { x: number; y: number; zoom: number }
+
+/** Resolution-independent viewport: node-space bounding box of the visible region. */
+export interface ViewportBounds { x: number; y: number; width: number; height: number }
+
+/** Type guard: is this a bounds-based viewport (has width/height)? */
+export function isViewportBounds(v: ViewportPixel | ViewportBounds): v is ViewportBounds {
+  return 'width' in v && 'height' in v;
+}
+
 /** A named snapshot of which canvas objects are minimised/maximised. */
 export interface CanvasView {
   id: string;
   name: string;
   states: CanvasViewObjectState[];
-  /** Saved viewport position and zoom. */
-  viewport?: { x: number; y: number; zoom: number };
+  /** Saved viewport — either legacy pixel coords or resolution-independent bounds. */
+  viewport?: ViewportPixel | ViewportBounds;
   /** When true, auto-save of state changes is suppressed. */
   locked?: boolean;
   /** Display mode settings captured with this view. */

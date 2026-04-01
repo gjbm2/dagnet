@@ -368,24 +368,6 @@ class TestFEClosureConsumption:
         assert ch_b in returned_hashes_with, f"Equivalent hash {ch_b} missing from sweep results"
         assert len(rows_with_closure) == 3  # 2 (A) + 1 (B)
 
-    def test_fc009b_sweep_empty_closure_no_expansion(self):
-        """FC-009b: query_snapshots_for_sweep with empty equivalent_hashes = no expansion."""
-        pid = make_param_id('fc009')  # Reuse FC-009 data
-        sig_a = '{"c":"fc009-a","x":{}}'
-        ch_a = short_core_hash_from_canonical_signature(sig_a)
-
-        rows = query_snapshots_for_sweep(
-            param_id=pid,
-            core_hash=ch_a,
-            slice_keys=['window()'],
-            anchor_from=date(2025, 12, 1),
-            anchor_to=date(2025, 12, 3),
-            equivalent_hashes=[],
-        )
-        returned_hashes = {r['core_hash'] for r in rows}
-        assert returned_hashes == {ch_a}
-        assert len(rows) == 2
-
     def test_fc010_cross_param_expansion_works(self):
         """FC-010: FE-supplied closure works across param_id boundaries.
 

@@ -50,6 +50,18 @@ export function DashboardModeProvider({ children }: { children: React.ReactNode 
     return { isDashboardMode, setDashboardMode, toggleDashboardMode };
   }, [isDashboardMode]);
 
+  // E2E hook: allow Playwright to toggle dashboard mode via custom event
+  useEffect(() => {
+    if (!import.meta.env.DEV) return;
+    const handler = () => setIsDashboardMode(prev => {
+      const next = !prev;
+      setUrlParam('dashboard', next);
+      return next;
+    });
+    window.addEventListener('dagnet:e2e:toggleDashboard', handler);
+    return () => window.removeEventListener('dagnet:e2e:toggleDashboard', handler);
+  }, []);
+
   return (
     <DashboardModeContext.Provider value={value}>
       {children}

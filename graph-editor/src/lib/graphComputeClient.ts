@@ -127,6 +127,7 @@ function snapshotSubjectsSignature(subjects?: SnapshotSubjectPayload[]): string 
       s.sweep_from || '',
       s.sweep_to || '',
       Array.isArray(s.slice_keys) ? s.slice_keys.join(',') : '',
+      Array.isArray(s.equivalent_hashes) ? s.equivalent_hashes.map(e => e.core_hash).sort().join(',') : '',
     ].join('|'))
     .sort()
     .join('||');

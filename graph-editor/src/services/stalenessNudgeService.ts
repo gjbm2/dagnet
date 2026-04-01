@@ -558,8 +558,10 @@ class StalenessNudgeService {
     branch: string;
     isShareLive: boolean;
     shareGraph?: string;
+    /** Override the remote-check interval (e.g. shorter in dashboard mode). */
+    remoteCheckIntervalMs?: number;
   }): Promise<CollectedGitSignal> {
-    const { nowMs, storage, repository, branch, isShareLive, shareGraph } = opts;
+    const { nowMs, storage, repository, branch, isShareLive, shareGraph, remoteCheckIntervalMs } = opts;
 
     let gitPullDue = false;
     let detectedRemoteSha: string | null = null;
@@ -608,7 +610,7 @@ class StalenessNudgeService {
     } else {
       // Last checked timestamp (if any), even if we don't check in this run.
       lastRemoteCheckedAtMs = safeGetNumber(storage, LS.lastRemoteCheckAtMs(`${repository}-${branch}`));
-      const shouldCheck = this.shouldCheckRemoteHead(repository, branch, nowMs, storage);
+      const shouldCheck = this.shouldCheckRemoteHead(repository, branch, nowMs, storage, remoteCheckIntervalMs);
       if (shouldCheck) {
         const status = await this.getRemoteAheadStatus(repository, branch, storage);
         localSha = status.localSha;
@@ -748,12 +750,13 @@ class StalenessNudgeService {
     repository: string,
     branch: string,
     nowMs: number = safeNow(),
-    storage: StorageLike = defaultStorage()
+    storage: StorageLike = defaultStorage(),
+    intervalOverrideMs?: number
   ): boolean {
     const repoBranch = `${repository}-${branch}`;
     const lastCheck = safeGetNumber(storage, LS.lastRemoteCheckAtMs(repoBranch));
     if (lastCheck === undefined) return true;
-    return nowMs - lastCheck > STALENESS_NUDGE_REMOTE_CHECK_INTERVAL_MS;
+    return nowMs - lastCheck > (intervalOverrideMs ?? STALENESS_NUDGE_REMOTE_CHECK_INTERVAL_MS);
   }
 
   /**

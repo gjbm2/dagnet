@@ -18,6 +18,7 @@ import { APP_VERSION } from '../version';
 import {
   STALENESS_NUDGE_APP_VERSION_CHECK_INTERVAL_MS,
   STALENESS_NUDGE_REMOTE_CHECK_INTERVAL_MS,
+  STALENESS_NUDGE_DASHBOARD_REMOTE_CHECK_INTERVAL_MS,
   STALENESS_NUDGE_MIN_REPEAT_MS,
 } from '../constants/staleness';
 
@@ -137,12 +138,14 @@ export function registerStalenessNudgeJobs(): void {
     },
   });
 
-  // ---- git-remote-check: periodic(30min), triggerOnFocus, boot-gated -----
+  // ---- git-remote-check: periodic(10min), triggerOnFocus, boot-gated -----
+  // Timer fires every 10 min (dashboard cadence). In interactive mode,
+  // shouldCheckRemoteHead still gates the actual network call at 30 min.
   jobSchedulerService.registerJob({
     id: 'git-remote-check',
     schedule: {
       type: 'periodic',
-      intervalMs: STALENESS_NUDGE_REMOTE_CHECK_INTERVAL_MS,
+      intervalMs: STALENESS_NUDGE_DASHBOARD_REMOTE_CHECK_INTERVAL_MS,
       triggerOnFocus: true,
     },
     bootGated: true,
@@ -165,6 +168,7 @@ export function registerStalenessNudgeJobs(): void {
         branch: nc.branch,
         isShareLive: nc.isShareLive,
         shareGraph: nc.shareGraph,
+        remoteCheckIntervalMs: nc.isDashboardMode ? STALENESS_NUDGE_DASHBOARD_REMOTE_CHECK_INTERVAL_MS : undefined,
       });
 
       const retrieveSignalCollected = await stalenessNudgeService.collectRetrieveSignal({

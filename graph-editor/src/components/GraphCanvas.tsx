@@ -56,7 +56,8 @@ import { captureTabScenariosToRecipe } from '../services/captureTabScenariosServ
 import { resolveAnalysisType } from '../services/analysisTypeResolutionService';
 import { mutateCanvasAnalysisGraph, deleteCanvasAnalysisFromGraph } from '../services/canvasAnalysisMutationService';
 import { getActiveContentTabIndex } from '../services/activeContentTabTracker';
-import { updateViewObjectState, createCanvasView, applyCanvasView, snapshotStates, deleteCanvasView, renameCanvasView, reorderCanvasViews, toggleCanvasViewLocked, toggleCanvasViewScope, snapshotScenarios, scopeEnabled } from '../services/canvasViewService';
+import { updateViewObjectState, createCanvasView, applyCanvasView, snapshotStates, deleteCanvasView, renameCanvasView, reorderCanvasViews, toggleCanvasViewLocked, toggleCanvasViewScope, snapshotScenarios, scopeEnabled, viewportToBounds, boundsToViewport } from '../services/canvasViewService';
+import { isViewportBounds } from '../types';
 import { parseConstraints } from '../lib/queryDSL';
 import { buildRehydrationPlan, finalisePlan } from '../services/scenarioRehydrationService';
 import { useDashboardMode } from '../hooks/useDashboardMode';
@@ -1439,9 +1440,9 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
       const name = (e as CustomEvent).detail?.name || 'New view';
       const g = graphRef.current;
       if (!g) return;
-      // Capture current viewport
-      const { transform } = rfStore.getState();
-      const viewport = { x: transform[0], y: transform[1], zoom: transform[2] };
+      // Capture current viewport as node-space bounds (resolution-independent)
+      const { transform, width: cw, height: ch } = rfStore.getState();
+      const viewport = viewportToBounds(transform, cw, ch) ?? { x: transform[0], y: transform[1], zoom: transform[2] };
       const [next, viewId] = createCanvasView(g, name, viewport);
       const newView = (next.canvasViews ?? []).find(v => v.id === viewId);
       if (newView) {
@@ -1476,9 +1477,9 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
       if (activeCanvasViewIdRef.current && !isActiveViewLocked()) {
         const outgoingView = (g.canvasViews ?? []).find(v => v.id === activeCanvasViewIdRef.current);
         if (outgoingView) {
-          const { transform } = rfStore.getState();
+          const { transform, width: cw2, height: ch2 } = rfStore.getState();
           if (scopeEnabled(outgoingView.applyLayout)) {
-            outgoingView.viewport = { x: transform[0], y: transform[1], zoom: transform[2] };
+            outgoingView.viewport = viewportToBounds(transform, cw2, ch2) ?? { x: transform[0], y: transform[1], zoom: transform[2] };
           }
           if (scopeEnabled(outgoingView.applyDisplayMode)) {
             outgoingView.viewOverlayMode = viewPrefsRef.current?.viewOverlayMode ?? 'none';
@@ -1633,7 +1634,13 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
       if (targetView?.viewport && scopeEnabled(targetView.applyLayout) && rfRef.current) {
         const rf = rfRef.current;
         const from = rfStore.getState().transform;
-        const to = targetView.viewport;
+        // Resolve target: bounds-based viewports adapt to current container size;
+        // legacy pixel viewports are used as-is (backwards compatibility).
+        const vp = targetView.viewport;
+        const { width: cwRestore, height: chRestore } = rfStore.getState();
+        const to = isViewportBounds(vp)
+          ? boundsToViewport(vp, cwRestore, chRestore)
+          : vp;
         const dur = autoCycle ? 2000 : 400;
         const start = performance.now();
         const ease = (t: number) => t < 0.5 ? 16 * t * t * t * t * t : 1 - Math.pow(-2 * t + 2, 5) / 2;
@@ -1661,8 +1668,8 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
           const view = (g.canvasViews ?? []).find(v => v.id === activeCanvasViewIdRef.current);
           if (view) {
             if (scopeEnabled(view.applyLayout)) {
-              const { transform } = rfStore.getState();
-              view.viewport = { x: transform[0], y: transform[1], zoom: transform[2] };
+              const { transform, width: cw3, height: ch3 } = rfStore.getState();
+              view.viewport = viewportToBounds(transform, cw3, ch3) ?? { x: transform[0], y: transform[1], zoom: transform[2] };
             }
             if (scopeEnabled(view.applyDisplayMode)) {
               view.viewOverlayMode = viewPrefsRef.current?.viewOverlayMode ?? 'none';
@@ -1730,8 +1737,8 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
       // - Locking: captures what the user wants to freeze.
       // - Unlocking: captures what accumulated while locked, so auto-save starts from truth.
       if (view && scopeEnabled(view.applyLayout)) {
-        const { transform } = rfStore.getState();
-        view.viewport = { x: transform[0], y: transform[1], zoom: transform[2] };
+        const { transform, width: cw4, height: ch4 } = rfStore.getState();
+        view.viewport = viewportToBounds(transform, cw4, ch4) ?? { x: transform[0], y: transform[1], zoom: transform[2] };
         view.states = snapshotStates(g);
       }
 
@@ -2634,7 +2641,11 @@ function CanvasInner({ onSelectedNodeChange, onSelectedEdgeChange, onSelectedAnn
                     const g = graphRef.current;
                     const view = g ? (g.canvasViews ?? []).find(v => v.id === activeCanvasViewIdRef.current) : null;
                     if (view && scopeEnabled(view.applyLayout)) {
-                      view.viewport = viewportToSave;
+                      const { width: cwAuto, height: chAuto } = rfStore.getState();
+                      view.viewport = viewportToBounds(
+                        [viewportToSave.x, viewportToSave.y, viewportToSave.zoom],
+                        cwAuto, chAuto,
+                      ) ?? viewportToSave;
                     }
                   }
                 });

@@ -11,6 +11,7 @@ export const STALENESS_NUDGE_RETRIEVE_ALL_SLICES_AFTER_MS = 24 * 60 * 60 * 1000;
  * This just gates how frequently we make the network call to check remote HEAD.
  */
 export const STALENESS_NUDGE_REMOTE_CHECK_INTERVAL_MS = 30 * 60 * 1000; // 30m
+export const STALENESS_NUDGE_DASHBOARD_REMOTE_CHECK_INTERVAL_MS = 10 * 60 * 1000; // 10m
 
 /**
  * How often to check if a newer client has been deployed (for reload nudge).

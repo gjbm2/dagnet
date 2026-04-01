@@ -1252,6 +1252,7 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
                     anchor_from=date.fromisoformat(subj['anchor_from']),
                     anchor_to=date.fromisoformat(subj['anchor_to']),
                     as_at=as_at,
+                    equivalent_hashes=subj.get('equivalent_hashes'),
                 )
 
                 scenario_rows += len(rows)
@@ -1780,6 +1781,7 @@ def _handle_snapshot_analyze_legacy(data: Dict[str, Any]) -> Dict[str, Any]:
         anchor_from=date.fromisoformat(snapshot_query['anchor_from']),
         anchor_to=date.fromisoformat(snapshot_query['anchor_to']),
         as_at=as_at,
+        equivalent_hashes=snapshot_query.get('equivalent_hashes'),
     )
     
     if not rows:

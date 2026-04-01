@@ -7,7 +7,8 @@
  * state are captured and applied.
  */
 
-import type { ConversionGraph, CanvasView, CanvasViewObjectState, CanvasViewScenario, CanvasViewLayerVisibility } from '@/types';
+import type { ConversionGraph, CanvasView, CanvasViewObjectState, CanvasViewScenario, CanvasViewLayerVisibility, ViewportBounds, ViewportPixel } from '@/types';
+import { isViewportBounds } from '@/types';
 
 /** Generate a short random ID for new views. */
 function newId(): string {
@@ -17,6 +18,57 @@ function newId(): string {
 /** Check if an apply-scope toggle is enabled (undefined = true). */
 export function scopeEnabled(value: boolean | undefined): boolean {
   return value !== false;
+}
+
+// ---------------------------------------------------------------------------
+// Viewport ↔ bounds conversion (resolution-independent view storage)
+// ---------------------------------------------------------------------------
+
+/**
+ * Convert a ReactFlow transform + container size into a node-space bounding box.
+ * Returns undefined if container dimensions are invalid (not yet rendered).
+ */
+export function viewportToBounds(
+  transform: [number, number, number],
+  containerWidth: number,
+  containerHeight: number,
+): ViewportBounds | undefined {
+  const [tx, ty, zoom] = transform;
+  if (!containerWidth || !containerHeight || !zoom) return undefined;
+  return {
+    x: -tx / zoom,
+    y: -ty / zoom,
+    width: containerWidth / zoom,
+    height: containerHeight / zoom,
+  };
+}
+
+/**
+ * Convert a node-space bounding box into a ReactFlow viewport for the current container.
+ * Centres the bounds if aspect ratios differ. Clamps zoom to [minZoom, maxZoom].
+ */
+export function boundsToViewport(
+  bounds: ViewportBounds,
+  containerWidth: number,
+  containerHeight: number,
+  maxZoom = 2,
+  minZoom = 0.1,
+): ViewportPixel {
+  if (!bounds.width || !bounds.height || !containerWidth || !containerHeight) {
+    return { x: 0, y: 0, zoom: 1 };
+  }
+  const zoomX = containerWidth / bounds.width;
+  const zoomY = containerHeight / bounds.height;
+  let zoom = Math.min(zoomX, zoomY);
+  zoom = Math.max(minZoom, Math.min(maxZoom, zoom));
+
+  // Centre the bounds in the container
+  const scaledWidth = bounds.width * zoom;
+  const scaledHeight = bounds.height * zoom;
+  const x = -bounds.x * zoom + (containerWidth - scaledWidth) / 2;
+  const y = -bounds.y * zoom + (containerHeight - scaledHeight) / 2;
+
+  return { x, y, zoom };
 }
 
 /** Snapshot the current min/max state of all canvas objects into an array. */
@@ -100,7 +152,7 @@ export function snapshotScenarios(
 export function createCanvasView(
   graph: ConversionGraph,
   name: string,
-  viewport?: { x: number; y: number; zoom: number },
+  viewport?: ViewportPixel | ViewportBounds,
 ): [ConversionGraph, string] {
   const id = newId();
   const view: CanvasView = { id, name, states: snapshotStates(graph), viewport };
