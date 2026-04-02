@@ -213,6 +213,14 @@
           "maximum": 16,
           "default": 4
         },
+        "COHORT_DRIFT_FRACTION": {
+          "type": "number",
+          "title": "Cohort Drift Fraction",
+          "description": "Controls how much per-cohort variation is allowed around the global Bayesian posterior in the cohort maturity fan chart.\n\nThe fan chart uses a hierarchical model: all cohorts share the global posterior (p, mu, sigma, onset), but each cohort can drift from it. This setting controls the drift magnitude as a fraction of the posterior variance on transformed scales.\n\nEffects:\n- 0: no per-cohort drift (all cohorts use the global posterior exactly)\n- 0.1–0.2: modest drift (typical default)\n- 0.5–1.0: large drift (each cohort can deviate substantially from the model)\n\nHigher values produce wider fan bands. Lower values produce narrower, more model-dominated bands.",
+          "minimum": 0,
+          "maximum": 2,
+          "default": 0.20
+        },
         "BAYES_TARGET_ACCEPT": {
           "type": "number",
           "title": "NUTS Target Accept",

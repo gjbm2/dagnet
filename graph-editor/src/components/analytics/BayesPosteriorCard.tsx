@@ -220,83 +220,127 @@ function erf(x: number): number {
   return sign * y;
 }
 
-const SQRT_2PI = Math.sqrt(2 * Math.PI);
 const RATE_EPS = 1e-12;
 
-function logit(p: number): number {
-  const c = Math.max(RATE_EPS, Math.min(1 - RATE_EPS, p));
-  return Math.log(c / (1 - c));
-}
-
-function expit(x: number): number {
-  if (x > 500) return 1;
-  if (x < -500) return 0;
-  return 1 / (1 + Math.exp(-x));
+/**
+ * Cholesky decomposition of a 4×4 symmetric positive-semidefinite matrix.
+ * Returns lower-triangular L such that L × Lᵀ = A.
+ * Falls back to diagonal sqrt if the matrix isn't positive-definite.
+ */
+function cholesky4(a: number[][]): number[][] {
+  const L = [[0,0,0,0],[0,0,0,0],[0,0,0,0],[0,0,0,0]];
+  for (let i = 0; i < 4; i++) {
+    for (let j = 0; j <= i; j++) {
+      let sum = a[i][j];
+      for (let k = 0; k < j; k++) sum -= L[i][k] * L[j][k];
+      if (i === j) {
+        if (sum <= 0) sum = a[i][i] > 0 ? a[i][i] * 1e-8 : 1e-16;
+        L[i][j] = Math.sqrt(sum);
+      } else {
+        L[i][j] = L[j][j] > 0 ? sum / L[j][j] : 0;
+      }
+    }
+  }
+  return L;
 }
 
 /**
- * Compute the SD of logit(rate(t)) via the covariance-aware delta method.
+ * Compute confidence bands via the unscented transform (sigma points).
  *
- * The Jacobian is transformed to logit space element-wise BEFORE the
- * quadratic form, so the 1/(rate*(1-rate)) factor cancels correctly
- * with the vanishing ∂rate/∂θ_i near rate ≈ 0.
- * Matches the approach in confidence_bands.py.
+ * Uses 2n+1 = 9 deterministic sigma points for θ = [p, mu, sigma, onset].
+ * Evaluates rate(t) = p × CDF(t; onset, mu, sigma) at each point,
+ * computes weighted mean and variance, then derives bands via normal
+ * quantiles.  Handles the onset nonlinearity correctly (no Jacobian),
+ * respects the onset-mu correlation, and is trivially fast (9 CDF
+ * evaluations per tau step).
  */
-function logitRateSd(
-  t: number, p: number, mu: number, sigma: number, onset: number,
-  pSd: number, muSd: number, sigmaSd: number, onsetSd: number,
-  onsetMuCorr: number,
-): number {
-  const cdf = shiftedLognormalCdf(t, onset, mu, sigma);
-  const rate = p * cdf;
-  if (rate < RATE_EPS) return 0;
-
-  const rateC = Math.max(RATE_EPS, Math.min(1 - RATE_EPS, rate));
-  const scale = 1 / (rateC * (1 - rateC));
-
-  const age = t - onset;
-  if (age > 0 && sigma > 0) {
-    const z = (Math.log(age) - mu) / sigma;
-    const phi = Math.exp(-0.5 * z * z) / SQRT_2PI;
-    // Rate-space Jacobian → logit-space Jacobian (element-wise)
-    const jP     = cdf * scale;
-    const jMu    = p * (-phi / sigma) * scale;
-    const jSigma = p * (-phi * z / sigma) * scale;
-    const jOnset = p * (-phi / (sigma * age)) * scale;
-    let v = 0;
-    if (pSd > 0)     v += jP ** 2 * pSd ** 2;
-    if (muSd > 0)    v += jMu ** 2 * muSd ** 2;
-    if (sigmaSd > 0) v += jSigma ** 2 * sigmaSd ** 2;
-    if (onsetSd > 0) v += jOnset ** 2 * onsetSd ** 2;
-    if (onsetMuCorr !== 0 && onsetSd > 0 && muSd > 0) {
-      v += 2 * jOnset * jMu * onsetMuCorr * onsetSd * muSd;
-    }
-    return Math.sqrt(Math.max(v, 0));
-  }
-  // Pre-onset: only p sensitivity
-  if (pSd > 0 && cdf > 0) return cdf * pSd * scale;
-  return 0;
-}
-
 function computeBands(
   ages: number[], p: number, mu: number, sigma: number, onset: number,
   pSd: number, muSd: number, sigmaSd: number, onsetSd: number,
   onsetMuCorr: number,
 ): { u90: number[]; l90: number[]; u99: number[]; l99: number[] } {
+  const n = 4; // parameter dimension
+  // Tuning: kappa=3-n=−1 is standard for Gaussian; alpha/beta from UKF literature.
+  const alpha = 1e-3;
+  const beta = 2;
+  const kappa = 3 - n;
+  const lambda = alpha * alpha * (n + kappa) - n;
+  const c = n + lambda;
+  const sqrtC = Math.sqrt(c);
+
+  // Weights
+  const w0m = lambda / c;
+  const w0c = lambda / c + (1 - alpha * alpha + beta);
+  const wi = 1 / (2 * c);
+
+  // Build covariance matrix [p, mu, sigma, onset]
+  const sds = [pSd, muSd, sigmaSd, onsetSd];
+  const cov: number[][] = [
+    [sds[0]**2, 0, 0, 0],
+    [0, sds[1]**2, 0, 0],
+    [0, 0, sds[2]**2, 0],
+    [0, 0, 0, sds[3]**2],
+  ];
+  // onset-mu correlation
+  cov[3][1] = cov[1][3] = onsetMuCorr * onsetSd * muSd;
+
+  const L = cholesky4(cov);
+  const mean = [p, mu, sigma, onset];
+
+  // Generate 2n+1 = 9 sigma points
+  const sigmaPoints: number[][] = [mean.slice()];
+  for (let i = 0; i < n; i++) {
+    const plus = mean.slice();
+    const minus = mean.slice();
+    for (let j = 0; j < n; j++) {
+      plus[j] += sqrtC * L[j][i];
+      minus[j] -= sqrtC * L[j][i];
+    }
+    // Clip to valid ranges
+    plus[0] = Math.max(1e-6, Math.min(1 - 1e-6, plus[0]));   // p ∈ (0,1)
+    minus[0] = Math.max(1e-6, Math.min(1 - 1e-6, minus[0]));
+    plus[2] = Math.max(0.01, plus[2]);                         // sigma > 0
+    minus[2] = Math.max(0.01, minus[2]);
+    sigmaPoints.push(plus);
+    sigmaPoints.push(minus);
+  }
+
+  const weights_m = [w0m, ...Array(2 * n).fill(wi)];
+  const weights_c = [w0c, ...Array(2 * n).fill(wi)];
+
   const u90: number[] = []; const l90: number[] = [];
   const u99: number[] = []; const l99: number[] = [];
+
   for (const t of ages) {
-    const rate = p * shiftedLognormalCdf(t, onset, mu, sigma);
-    if (rate < RATE_EPS) {
-      u90.push(0); l90.push(0); u99.push(0); l99.push(0);
-      continue;
+    // Evaluate rate at each sigma point
+    const rates: number[] = [];
+    for (const sp of sigmaPoints) {
+      const r = Math.max(0, Math.min(1, sp[0] * shiftedLognormalCdf(t, sp[3], sp[1], sp[2])));
+      rates.push(r);
     }
-    const sdLogit = logitRateSd(t, p, mu, sigma, onset, pSd, muSd, sigmaSd, onsetSd, onsetMuCorr);
-    const eta = logit(rate);
-    u90.push(expit(eta + 1.645 * sdLogit));
-    l90.push(expit(eta - 1.645 * sdLogit));
-    u99.push(expit(eta + 2.576 * sdLogit));
-    l99.push(expit(eta - 2.576 * sdLogit));
+
+    // Weighted mean
+    let wmean = 0;
+    for (let i = 0; i < rates.length; i++) wmean += weights_m[i] * rates[i];
+    wmean = Math.max(0, Math.min(1, wmean));
+
+    // Weighted variance
+    let wvar = 0;
+    for (let i = 0; i < rates.length; i++) {
+      const d = rates[i] - wmean;
+      wvar += weights_c[i] * d * d;
+    }
+    const sd = Math.sqrt(Math.max(wvar, 0));
+
+    if (sd < RATE_EPS || wmean < RATE_EPS) {
+      u90.push(wmean); l90.push(wmean); u99.push(wmean); l99.push(wmean);
+    } else {
+      // Bands in rate space, clamped to [0, 1]
+      u90.push(Math.min(1, wmean + 1.645 * sd));
+      l90.push(Math.max(0, wmean - 1.645 * sd));
+      u99.push(Math.min(1, wmean + 2.576 * sd));
+      l99.push(Math.max(0, wmean - 2.576 * sd));
+    }
   }
   return { u90, l90, u99, l99 };
 }

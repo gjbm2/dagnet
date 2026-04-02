@@ -942,7 +942,7 @@ def enhance_graph_latencies(
             # D1 FIX: Window mode cohorts are not anchored at A, so do NOT apply
             # anchor travel-time adjustment (mirrors FE line 2516: !isWindowMode).
             latency_stats = compute_edge_latency_stats(
-                cohorts,
+                cohorts_scoped,
                 agg_median,
                 agg_mean,
                 DEFAULT_T95_DAYS,

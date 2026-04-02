@@ -2724,7 +2724,10 @@ export function enhanceGraphLatencies(
       let completenessAuthoritativeT95Days: number | undefined;
       let completenessTailConstraintApplied: boolean | undefined;
 
-      if (!isWindowMode) {
+      // Always compute path params (path_mu, path_sigma) — they're needed on
+      // model_vars for cohort-mode source curve rendering regardless of the
+      // current query mode.  Only the completeness override is cohort-specific.
+      {
         // Determine authoritative path_t95 (days) for A→Y tail pull.
         //
         // IMPORTANT:
@@ -2825,7 +2828,9 @@ export function enhanceGraphLatencies(
                 edgeOnsetDeltaDays ?? 0
               );
 
-              if (Number.isFinite(ayCompleteness)) {
+              if (Number.isFinite(ayCompleteness) && !isWindowMode) {
+                // Completeness override is cohort-mode only — window mode
+                // uses edge-level completeness.
                 completenessUsed = ayCompleteness;
                 completenessMode = 'cohort_path_anchored';
                 completenessTailConstraintApplied = ayCdfParams.tail_constraint_applied;
@@ -2861,6 +2866,11 @@ export function enhanceGraphLatencies(
       if (pathMu === undefined) {
         pathMu = nodePathMu.get(nodeId);
         pathSigma = nodePathSigma.get(nodeId);
+      }
+      // Fallback (d): first edge from anchor — path IS the edge itself.
+      if (pathMu === undefined && latencyStats.fit.mu !== undefined) {
+        pathMu = latencyStats.completeness_cdf.mu;
+        pathSigma = latencyStats.completeness_cdf.sigma;
       }
       
       console.log('[LAG_TOPO_COMPUTED] stats:', {

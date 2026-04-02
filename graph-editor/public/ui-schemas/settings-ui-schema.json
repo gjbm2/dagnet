@@ -70,6 +70,13 @@
             "BAYES_CHAINS",
             "BAYES_TARGET_ACCEPT"
           ]
+        },
+        {
+          "title": "Cohort Maturity Fan Chart",
+          "description": "Controls the posterior predictive fan chart for cohort maturity analysis. The fan uses hierarchical per-cohort drift over all four parameters.",
+          "fields": [
+            "COHORT_DRIFT_FRACTION"
+          ]
         }
       ]
     },
@@ -151,6 +158,9 @@
     },
     "BAYES_TARGET_ACCEPT": {
       "ui:help": "NUTS acceptance rate. Higher = smaller steps, fewer divergences.\n\n0.80 (aggressive) · 0.90 (standard) · 0.95–0.99 (conservative)."
+    },
+    "COHORT_DRIFT_FRACTION": {
+      "ui:help": "Per-cohort drift as a fraction of posterior variance.\n\n0 (off) · 0.1–0.2 (modest, default 0.20) · 0.5–1.0 (large drift, wider bands)."
     }
   },
 

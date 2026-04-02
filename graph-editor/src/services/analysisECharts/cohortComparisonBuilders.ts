@@ -16,6 +16,82 @@ import {
   getScenarioTitleWithBasis,
 } from './echartsCommon';
 
+// ─── Band fill patterns ─────────────────────────────────────────────────────
+
+type BandPattern = 'diagonal' | 'reverse_diagonal' | 'stipple';
+
+/**
+ * Generate ECharts graphic children for a fill pattern clipped to a polygon.
+ * All three patterns produce lines or circles inside the bounding box,
+ * then the caller clips them to the polygon boundary.
+ */
+function generatePatternChildren(
+  pts: number[][],
+  pattern: BandPattern,
+  stroke: string,
+): any[] {
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+  for (const p of pts) {
+    minX = Math.min(minX, p[0]); maxX = Math.max(maxX, p[0]);
+    minY = Math.min(minY, p[1]); maxY = Math.max(maxY, p[1]);
+  }
+  const h = maxY - minY;
+  const w = maxX - minX;
+  const children: any[] = [];
+
+  if (pattern === 'diagonal') {
+    const gap = 5;
+    const diag = w + h;
+    for (let d = 0; d < diag; d += gap) {
+      children.push({
+        type: 'line',
+        shape: { x1: minX + d, y1: minY, x2: minX + d - h, y2: maxY },
+        style: { stroke, lineWidth: 1 },
+        silent: true,
+      });
+    }
+  } else if (pattern === 'reverse_diagonal') {
+    const gap = 5;
+    const diag = w + h;
+    for (let d = 0; d < diag; d += gap) {
+      children.push({
+        type: 'line',
+        shape: { x1: minX + d - h, y1: minY, x2: minX + d, y2: maxY },
+        style: { stroke, lineWidth: 1 },
+        silent: true,
+      });
+    }
+  } else if (pattern === 'stipple') {
+    const gap = 6;
+    const r = 1;
+    for (let x = minX + gap / 2; x < maxX; x += gap) {
+      for (let y = minY + gap / 2; y < maxY; y += gap) {
+        children.push({
+          type: 'circle',
+          shape: { cx: x, cy: y, r },
+          style: { fill: stroke },
+          silent: true,
+        });
+      }
+    }
+  }
+  return children;
+}
+
+/** SVG path legend icons for each band pattern. */
+const BAND_PATTERN_ICONS: Record<BandPattern, string> = {
+  diagonal: 'path://M0,0L4,8M4,0L8,8M8,0L12,8',
+  reverse_diagonal: 'path://M4,0L0,8M8,0L4,8M12,0L8,8',
+  stipple: 'path://M2,2A1,1,0,1,1,2,2.01M6,6A1,1,0,1,1,6,6.01M10,2A1,1,0,1,1,10,2.01M2,6A1,1,0,1,1,2,6.01M10,6A1,1,0,1,1,10,6.01M6,2A1,1,0,1,1,6,2.01',
+};
+
+/** Map source name → band fill pattern. */
+const SOURCE_BAND_PATTERNS: Record<string, BandPattern> = {
+  bayesian: 'diagonal',
+  analytic: 'stipple',
+  analytic_be: 'reverse_diagonal',
+};
+
 // ─── Builders ───────────────────────────────────────────────────────────────
 
 /**
@@ -319,7 +395,7 @@ export function buildCohortMaturityEChartsOption(
             }
             return {
               type: 'polygon',
-              shape: { points: pts, smooth: false },
+              shape: { points: pts, smooth: 0.3 },
               style: { fill: fillColour, stroke: 'none' },
               silent: true,
             };
@@ -427,6 +503,7 @@ export function buildCohortMaturityEChartsOption(
       if (srcWithBands?.band_lower) bandLower = srcWithBands.band_lower;
     }
     let promotedBandRendered = false;
+    const bandStroke = c.text === '#e0e0e0' ? 'rgba(156,163,175,0.45)' : 'rgba(107,114,128,0.40)';
     if (Array.isArray(bandUpper) && bandUpper.length > 0 && Array.isArray(bandLower) && bandLower.length > 0) {
       const upperPts = bandUpper
         .filter((p: any) => typeof p?.tau_days === 'number' && typeof p?.model_rate === 'number');
@@ -438,12 +515,10 @@ export function buildCohortMaturityEChartsOption(
           const lower = i < lowerPts.length ? lowerPts[i].model_rate : p.model_rate;
           return [p.tau_days, p.model_rate, lower];
         });
-        // Pure diagonal hatch — no solid fill.
-        const hatchGap = 5;
-        const hatchStroke = c.text === '#e0e0e0' ? 'rgba(156,163,175,0.45)' : 'rgba(107,114,128,0.40)';
+        const promotedPattern: BandPattern = SOURCE_BAND_PATTERNS[promotedSource] || 'diagonal';
         seriesOut.push({
           id: 'bayes_band',
-          name: 'Bayes 90% band',
+          name: `Promoted 90% band`,
           type: 'custom' as any,
           coordinateSystem: 'cartesian2d',
           encode: { x: 0, y: 1 },
@@ -452,20 +527,11 @@ export function buildCohortMaturityEChartsOption(
             const pts: number[][] = [];
             for (let i = 0; i < polyData.length; i++) pts.push(api.coord([polyData[i][0], polyData[i][1]]));
             for (let i = polyData.length - 1; i >= 0; i--) pts.push(api.coord([polyData[i][0], polyData[i][2]]));
-            // Diagonal hatch lines clipped to band polygon — no background fill.
-            let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
-            for (const p of pts) { minX = Math.min(minX, p[0]); maxX = Math.max(maxX, p[0]); minY = Math.min(minY, p[1]); maxY = Math.max(maxY, p[1]); }
-            const h = maxY - minY;
-            const diag = (maxX - minX) + h;
-            const lines: any[] = [];
-            for (let d = 0; d < diag; d += hatchGap) {
-              lines.push({ type: 'line', shape: { x1: minX + d, y1: minY, x2: minX + d - h, y2: maxY }, style: { stroke: hatchStroke, lineWidth: 1 }, silent: true });
-            }
             return {
               type: 'group',
               children: [{
                 type: 'group',
-                children: lines,
+                children: generatePatternChildren(pts, promotedPattern, bandStroke),
                 clipPath: { type: 'polygon', shape: { points: pts, smooth: false } },
               }],
               silent: true,
@@ -523,13 +589,13 @@ export function buildCohortMaturityEChartsOption(
           }
         }
 
-        // Confidence band from per-source data (any source with band data, skip if already rendered)
-        if (!promotedBandRendered) {
+        // Per-source confidence band — each source gets its own pattern.
+        // Renders independently (not gated by promotedBandRendered) so
+        // multiple source bands can be visible simultaneously.
+        {
           const bandUpperSrc = (srcData as any)?.band_upper;
           const bandLowerSrc = (srcData as any)?.band_lower;
           if (Array.isArray(bandUpperSrc) && bandUpperSrc.length > 0 && Array.isArray(bandLowerSrc) && bandLowerSrc.length > 0) {
-            const hatchStrokeSrc = c.text === '#e0e0e0' ? 'rgba(156,163,175,0.45)' : 'rgba(107,114,128,0.40)';
-            const hatchGapSrc = 5;
             const upperPtsSrc = bandUpperSrc.filter((p: any) => typeof p?.tau_days === 'number' && typeof p?.model_rate === 'number');
             const lowerPtsSrc = bandLowerSrc.filter((p: any) => typeof p?.tau_days === 'number' && typeof p?.model_rate === 'number');
             if (upperPtsSrc.length > 0 && lowerPtsSrc.length > 0) {
@@ -537,9 +603,11 @@ export function buildCohortMaturityEChartsOption(
                 const lower = i < lowerPtsSrc.length ? lowerPtsSrc[i].model_rate : p.model_rate;
                 return [p.tau_days, p.model_rate, lower];
               });
+              const srcPattern: BandPattern = SOURCE_BAND_PATTERNS[srcName] || 'diagonal';
+              const bandName = `${style.name} 90% band`;
               seriesOut.push({
-                id: 'bayes_band_source',
-                name: 'Bayes 90% band',
+                id: `band_${srcName}`,
+                name: bandName,
                 type: 'custom' as any,
                 coordinateSystem: 'cartesian2d',
                 encode: { x: 0, y: 1 },
@@ -548,16 +616,13 @@ export function buildCohortMaturityEChartsOption(
                   const pts: number[][] = [];
                   for (let i = 0; i < polyDataSrc.length; i++) pts.push(api.coord([polyDataSrc[i][0], polyDataSrc[i][1]]));
                   for (let i = polyDataSrc.length - 1; i >= 0; i--) pts.push(api.coord([polyDataSrc[i][0], polyDataSrc[i][2]]));
-                  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
-                  for (const p of pts) { minX = Math.min(minX, p[0]); maxX = Math.max(maxX, p[0]); minY = Math.min(minY, p[1]); maxY = Math.max(maxY, p[1]); }
-                  const h = maxY - minY; const diag = (maxX - minX) + h;
-                  const lines: any[] = [];
-                  for (let d = 0; d < diag; d += hatchGapSrc) {
-                    lines.push({ type: 'line', shape: { x1: minX + d, y1: minY, x2: minX + d - h, y2: maxY }, style: { stroke: hatchStrokeSrc, lineWidth: 1 }, silent: true });
-                  }
                   return {
                     type: 'group',
-                    children: [{ type: 'group', children: lines, clipPath: { type: 'polygon', shape: { points: pts, smooth: false } } }],
+                    children: [{
+                      type: 'group',
+                      children: generatePatternChildren(pts, srcPattern, bandStroke),
+                      clipPath: { type: 'polygon', shape: { points: pts, smooth: false } },
+                    }],
                     silent: true,
                   };
                 },
@@ -749,11 +814,14 @@ export function buildCohortMaturityEChartsOption(
         : { top: 14, left: 12 }),
       textStyle: { fontSize: 8, color: c.text }, itemGap: 6, itemWidth: 36, itemHeight: 8,
       data: seriesOut.filter(s => s.name).map(s => {
-        const isModel = typeof s.id === 'string' && (s.id.startsWith('model_cdf') || s.id === 'bayes_band' || s.id === 'bayes_band_source');
-        const isBand = typeof s.id === 'string' && (s.id === 'bayes_band' || s.id === 'bayes_band_source');
+        const isModel = typeof s.id === 'string' && (s.id.startsWith('model_cdf') || s.id === 'bayes_band' || s.id.startsWith('band_'));
+        const isBand = typeof s.id === 'string' && (s.id === 'bayes_band' || s.id.startsWith('band_'));
         if (isBand) {
-          // Hatched band: use a tiny SVG path of diagonal lines as the icon
-          return { name: s.name, icon: 'path://M0,0L4,8M4,0L8,8M8,0L12,8', itemStyle: { color: 'none', borderColor: modelColour, borderWidth: 1 } };
+          // Pattern-specific legend icon based on source
+          const bandSrcName = typeof s.id === 'string' && s.id.startsWith('band_') ? s.id.slice(5) : 'bayesian';
+          const bandPattern: BandPattern = SOURCE_BAND_PATTERNS[bandSrcName] || 'diagonal';
+          const icon = BAND_PATTERN_ICONS[bandPattern];
+          return { name: s.name, icon, itemStyle: { color: 'none', borderColor: modelColour, borderWidth: 1 } };
         }
         // Scenario series: coloured rectangle. Model series: no icon override
         // so ECharts draws the actual lineStyle (dash pattern) from the series.

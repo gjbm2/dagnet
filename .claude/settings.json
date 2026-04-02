@@ -29,11 +29,13 @@
       "Bash(chmod +x /tmp/analyze.sh)",
       "Bash(bash /tmp/analyze.sh)",
       "Bash(xargs -I {} bash -c 'echo \"=== {} ===\" && head -30 {}')",
-      "Edit(/.claude/skills/handover/**)"
+      "Edit(/.claude/skills/handover/**)",
+      "Bash(npx esbuild:*)"
     ],
     "additionalDirectories": [
       "/home/reg/dev/dagnet/.claude",
-      "/home/reg/dev/dagnet/.claude/skills"
+      "/home/reg/dev/dagnet/.claude/skills",
+      "/home/reg/dev/dagnet/.claude/commands"
     ]
   },
   "hooks": {

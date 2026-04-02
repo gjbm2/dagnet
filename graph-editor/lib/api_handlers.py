@@ -838,31 +838,33 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
             mv_pmean = mv_prob.get('mean')
             if isinstance(mv_pmean, (int, float)) and math.isfinite(mv_pmean) and mv_pmean > 0:
                 entry['forecast_mean'] = float(mv_pmean)
-            # Bayesian uncertainty (for confidence bands)
-            if src == 'bayesian':
-                mv_q = mv.get('quality') or {}
-                mv_prob_stdev = mv_prob.get('stdev')
-                if isinstance(mv_prob_stdev, (int, float)) and math.isfinite(mv_prob_stdev) and mv_prob_stdev > 0:
-                    entry['p_stdev'] = float(mv_prob_stdev)
-                mv_mu_sd = mv_lat.get('mu_sd')
-                mv_sigma_sd = mv_lat.get('sigma_sd')
-                mv_onset_sd = mv_lat.get('onset_sd')
-                if isinstance(mv_mu_sd, (int, float)) and math.isfinite(mv_mu_sd) and mv_mu_sd > 0:
-                    entry['mu_sd'] = float(mv_mu_sd)
-                if isinstance(mv_sigma_sd, (int, float)) and math.isfinite(mv_sigma_sd) and mv_sigma_sd > 0:
-                    entry['sigma_sd'] = float(mv_sigma_sd)
-                if isinstance(mv_onset_sd, (int, float)) and math.isfinite(mv_onset_sd) and mv_onset_sd > 0:
-                    entry['onset_sd'] = float(mv_onset_sd)
-                # Path-level uncertainty
-                mv_pmu_sd = mv_lat.get('path_mu_sd')
-                mv_psigma_sd = mv_lat.get('path_sigma_sd')
-                mv_ponset_sd = mv_lat.get('path_onset_sd')
-                if isinstance(mv_pmu_sd, (int, float)) and math.isfinite(mv_pmu_sd) and mv_pmu_sd > 0:
-                    entry['path_mu_sd'] = float(mv_pmu_sd)
-                if isinstance(mv_psigma_sd, (int, float)) and math.isfinite(mv_psigma_sd) and mv_psigma_sd > 0:
-                    entry['path_sigma_sd'] = float(mv_psigma_sd)
-                if isinstance(mv_ponset_sd, (int, float)) and math.isfinite(mv_ponset_sd) and mv_ponset_sd > 0:
-                    entry['path_onset_sd'] = float(mv_ponset_sd)
+            # Uncertainty params (for confidence bands) — extract for all sources.
+            # Bayesian source may carry its own SDs in model_vars; analytic/analytic_be
+            # typically don't, so the band computation step falls back to edge-level
+            # heuristic SDs from model_params.
+            mv_q = mv.get('quality') or {}
+            mv_prob_stdev = mv_prob.get('stdev')
+            if isinstance(mv_prob_stdev, (int, float)) and math.isfinite(mv_prob_stdev) and mv_prob_stdev > 0:
+                entry['p_stdev'] = float(mv_prob_stdev)
+            mv_mu_sd = mv_lat.get('mu_sd')
+            mv_sigma_sd = mv_lat.get('sigma_sd')
+            mv_onset_sd = mv_lat.get('onset_sd')
+            if isinstance(mv_mu_sd, (int, float)) and math.isfinite(mv_mu_sd) and mv_mu_sd > 0:
+                entry['mu_sd'] = float(mv_mu_sd)
+            if isinstance(mv_sigma_sd, (int, float)) and math.isfinite(mv_sigma_sd) and mv_sigma_sd > 0:
+                entry['sigma_sd'] = float(mv_sigma_sd)
+            if isinstance(mv_onset_sd, (int, float)) and math.isfinite(mv_onset_sd) and mv_onset_sd > 0:
+                entry['onset_sd'] = float(mv_onset_sd)
+            # Path-level uncertainty
+            mv_pmu_sd = mv_lat.get('path_mu_sd')
+            mv_psigma_sd = mv_lat.get('path_sigma_sd')
+            mv_ponset_sd = mv_lat.get('path_onset_sd')
+            if isinstance(mv_pmu_sd, (int, float)) and math.isfinite(mv_pmu_sd) and mv_pmu_sd > 0:
+                entry['path_mu_sd'] = float(mv_pmu_sd)
+            if isinstance(mv_psigma_sd, (int, float)) and math.isfinite(mv_psigma_sd) and mv_psigma_sd > 0:
+                entry['path_sigma_sd'] = float(mv_psigma_sd)
+            if isinstance(mv_ponset_sd, (int, float)) and math.isfinite(mv_ponset_sd) and mv_ponset_sd > 0:
+                entry['path_onset_sd'] = float(mv_ponset_sd)
             source_curves[src] = entry
         if source_curves:
             result['source_curves'] = source_curves
@@ -1147,6 +1149,57 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
         per_subject_results: List[Dict[str, Any]] = []
         scenario_rows = 0
 
+        # ── Epoch unification for cohort_maturity ─────────────────
+        # Group epoch siblings (baseId::epoch:0, baseId::epoch:1, ...)
+        # so we can merge their frames into a single call to
+        # compute_cohort_maturity_rows.  This avoids overlapping tau
+        # ranges and zigzag fan artifacts at epoch boundaries.
+        def _base_subject_id(sid: str) -> str:
+            idx = str(sid).find('::epoch:')
+            return str(sid)[:idx] if idx >= 0 else str(sid)
+
+        # Collect frames per base subject across epoch subjects.
+        # Key: base_subject_id → list of (subj, frames) from each epoch.
+        _epoch_frames: Dict[str, List[Any]] = {}
+        _epoch_subjects: Dict[str, List[Any]] = {}
+        for subj in subjects:
+            if subj.get('read_mode') == 'cohort_maturity' and analysis_type == 'cohort_maturity':
+                base_sid = _base_subject_id(subj.get('subject_id', ''))
+                if base_sid not in _epoch_subjects:
+                    _epoch_subjects[base_sid] = []
+                _epoch_subjects[base_sid].append(subj)
+
+        # Pre-fetch frames for all cohort_maturity epoch subjects
+        for base_sid, epoch_subjs in _epoch_subjects.items():
+            merged_frames = []
+            for subj in epoch_subjs:
+                # Skip gap epochs
+                subj_slice_keys = subj.get('slice_keys', [''])
+                if any(str(sk) == '__epoch_gap__' for sk in subj_slice_keys):
+                    continue
+                sweep_from = date.fromisoformat(subj['sweep_from']) if subj.get('sweep_from') else None
+                sweep_to = date.fromisoformat(subj['sweep_to']) if subj.get('sweep_to') else None
+                rows = query_snapshots_for_sweep(
+                    param_id=subj['param_id'],
+                    core_hash=subj['core_hash'],
+                    slice_keys=subj_slice_keys,
+                    anchor_from=date.fromisoformat(subj['anchor_from']),
+                    anchor_to=date.fromisoformat(subj['anchor_to']),
+                    sweep_from=sweep_from,
+                    sweep_to=sweep_to,
+                    equivalent_hashes=subj.get('equivalent_hashes'),
+                )
+                print(f"[epoch_unify] base={base_sid[:40]} epoch_anchor={subj['anchor_from']}..{subj['anchor_to']} rows={len(rows)}")
+                scenario_rows += len(rows)
+                if rows:
+                    frames = derive_cohort_maturity(
+                        rows,
+                        sweep_from=subj.get('sweep_from'),
+                        sweep_to=subj.get('sweep_to'),
+                    ).get('frames', [])
+                    merged_frames.extend(frames)
+            _epoch_frames[base_sid] = merged_frames
+
         for subj in subjects:
             # Validate required fields (all frontend-computed)
             if not subj.get('param_id'):
@@ -1177,47 +1230,42 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
                 continue
 
             if read_mode == 'cohort_maturity':
-                # Cohort maturity: use sweep query
-                sweep_from = date.fromisoformat(subj['sweep_from']) if subj.get('sweep_from') else None
-                sweep_to = date.fromisoformat(subj['sweep_to']) if subj.get('sweep_to') else None
+                # ── Epoch-unified cohort maturity ─────────────────────
+                # Frames were pre-fetched and merged across epoch subjects
+                # in the epoch unification block above.  Use the merged
+                # frames for the BASE subject only; skip epoch siblings.
+                base_sid = _base_subject_id(subj.get('subject_id', ''))
+                subj_sid = str(subj.get('subject_id', ''))
+                is_epoch_sibling = '::epoch:' in subj_sid and subj_sid != base_sid + '::epoch:0'
+                is_gap = any(str(sk) == '__epoch_gap__' for sk in subj.get('slice_keys', ['']))
 
-                print(f"[snapshot_analyze] cohort_maturity query: "
-                      f"param_id={subj['param_id']}, core_hash={subj['core_hash']}, "
-                      f"slice_keys={subj.get('slice_keys', [''])}, "
-                      f"anchor_from={subj['anchor_from']}, anchor_to={subj['anchor_to']}, "
-                      f"sweep_from={sweep_from}, sweep_to={sweep_to}")
+                if is_gap or is_epoch_sibling:
+                    # Gap epochs and non-primary epoch siblings are handled
+                    # by the unified computation on the primary epoch.
+                    # Emit a minimal result so the response shape is correct.
+                    per_subject_results.append({
+                        "subject_id": subj.get('subject_id'),
+                        "success": True,
+                        "result": {"analysis_type": analysis_type, "frames": []},
+                        "rows_analysed": 0,
+                    })
+                    continue
 
-                rows = query_snapshots_for_sweep(
-                    param_id=subj['param_id'],
-                    core_hash=subj['core_hash'],
-                    slice_keys=subj.get('slice_keys', ['']),
-                    anchor_from=date.fromisoformat(subj['anchor_from']),
-                    anchor_to=date.fromisoformat(subj['anchor_to']),
-                    sweep_from=sweep_from,
-                    sweep_to=sweep_to,
-                    equivalent_hashes=subj.get('equivalent_hashes'),
-                )
+                # Use merged frames from all epochs for this base subject
+                merged = _epoch_frames.get(base_sid, [])
+                print(f"[epoch_unify] computing unified maturity for {base_sid[:40]} "
+                      f"merged_frames={len(merged)} epochs={len(_epoch_subjects.get(base_sid, []))}")
 
-                print(f"[snapshot_analyze] cohort_maturity result: {len(rows)} rows")
-
-                scenario_rows += len(rows)
-
-                if not rows:
-                    # Zero rows is valid (e.g. asat before first retrieval,
-                    # gap epoch).  Derive empty frames but do NOT skip —
-                    # the maturity computation below can still produce a
-                    # model-only chart (epoch C, pure forecast).
+                if merged:
+                    result = {'frames': merged, 'analysis_type': analysis_type}
+                else:
                     result = derive_cohort_maturity(
                         [],
                         sweep_from=subj.get('sweep_from'),
                         sweep_to=subj.get('sweep_to'),
                     )
-
-                result = derive_cohort_maturity(
-                    rows,
-                    sweep_from=subj.get('sweep_from'),
-                    sweep_to=subj.get('sweep_to'),
-                )
+                # rows count already accumulated during pre-fetch
+                rows = []  # avoid double-counting
             elif read_mode == 'sweep_simple':
                 # Simple sweep (no epoch splitting) — used by lag_fit
                 sweep_from = date.fromisoformat(subj['sweep_from']) if subj.get('sweep_from') else None
@@ -1576,7 +1624,9 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
                             if s_mu is None or s_sigma is None:
                                 continue
 
-                            # For non-bayesian sources in cohort mode, use path params
+                            # For non-bayesian sources in cohort mode, use path params.
+                            # No fallback to edge params — if path params are missing,
+                            # skip this source entirely so the defect is visible.
                             if cdf_mode == 'cohort_path' and src_name != 'bayesian':
                                 s_pmu = src_params.get('path_mu')
                                 s_psigma = src_params.get('path_sigma')
@@ -1586,6 +1636,9 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
                                     s_sigma = s_psigma
                                     if s_ponset is not None:
                                         s_onset = s_ponset
+                                else:
+                                    print(f"[source_curve] SKIPPING {src_name}: cohort_path mode but path_mu={s_pmu} path_sigma={s_psigma} — FE topo pass did not produce path params")
+                                    continue
 
                             s_curve = []
                             for tau in range(0, axis_tau_max + 1):
@@ -1606,39 +1659,56 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
                                 },
                             }
 
-                            # Bayesian confidence bands (covariance-aware delta method)
-                            if src_name == 'bayesian':
-                                from runner.confidence_bands import compute_confidence_band
-                                band_mu_sd = src_params.get('mu_sd') or 0.0
-                                band_sigma_sd = src_params.get('sigma_sd') or 0.0
-                                band_onset_sd = src_params.get('onset_sd') or 0.0
-                                band_p_sd = src_params.get('p_stdev', 0.0)
-                                band_onset_mu_corr = model_params.get('bayes_path_onset_mu_corr') if cdf_mode == 'cohort_path' else model_params.get('bayes_onset_mu_corr', 0.0)
-                                if band_onset_mu_corr is None:
-                                    band_onset_mu_corr = 0.0
+                            # Confidence bands (covariance-aware delta method) — all sources.
+                            # In cohort_path mode, use path-level SDs to match the
+                            # path-level mu/sigma the curve uses.
+                            from runner.confidence_bands import compute_confidence_band
+                            _use_path = (cdf_mode == 'cohort_path')
+                            band_mu_sd = (
+                                (src_params.get('path_mu_sd') if _use_path else None)
+                                or src_params.get('mu_sd')
+                                or model_params.get('bayes_path_mu_sd' if _use_path else 'bayes_mu_sd', 0.0)
+                                or 0.0
+                            )
+                            band_sigma_sd = (
+                                (src_params.get('path_sigma_sd') if _use_path else None)
+                                or src_params.get('sigma_sd')
+                                or model_params.get('bayes_path_sigma_sd' if _use_path else 'bayes_sigma_sd', 0.0)
+                                or 0.0
+                            )
+                            band_onset_sd = (
+                                (src_params.get('path_onset_sd') if _use_path else None)
+                                or src_params.get('onset_sd')
+                                or model_params.get('bayes_path_onset_sd' if _use_path else 'bayes_onset_sd', 0.0)
+                                or 0.0
+                            )
+                            band_p_sd = src_params.get('p_stdev', 0.0) or model_params.get('p_stdev', 0.0) or 0.0
+                            band_onset_mu_corr = model_params.get('bayes_path_onset_mu_corr') if _use_path else model_params.get('bayes_onset_mu_corr', 0.0)
+                            if band_onset_mu_corr is None:
+                                band_onset_mu_corr = 0.0
 
-                                # Model overlay band always uses 90% — independent of
-                                # the fan chart band setting (which controls the fan only).
-                                band_level = 0.90
+                            # Model overlay band always uses 90% — independent of
+                            # the fan chart band setting (which controls the fan only).
+                            band_level = 0.90
 
-                                if band_mu_sd > 0:
-                                    ages = list(range(0, axis_tau_max + 1))
-                                    upper_rates, lower_rates, _median_rates = compute_confidence_band(
-                                        ages=ages,
-                                        p=s_fm, mu=s_mu, sigma=s_sigma, onset=s_onset,
-                                        p_sd=band_p_sd, mu_sd=band_mu_sd,
-                                        sigma_sd=band_sigma_sd, onset_sd=band_onset_sd,
-                                        onset_mu_corr=band_onset_mu_corr,
-                                        level=band_level,
-                                    )
-                                    src_entry['band_upper'] = [
-                                        {'tau_days': t, 'model_rate': round(r, 8)}
-                                        for t, r in zip(ages, upper_rates)
-                                    ]
-                                    src_entry['band_lower'] = [
-                                        {'tau_days': t, 'model_rate': round(r, 8)}
-                                        for t, r in zip(ages, lower_rates)
-                                    ]
+                            if band_mu_sd > 0:
+                                ages = list(range(0, axis_tau_max + 1))
+                                upper_rates, lower_rates, _median_rates = compute_confidence_band(
+                                    ages=ages,
+                                    p=s_fm, mu=s_mu, sigma=s_sigma, onset=s_onset,
+                                    p_sd=band_p_sd, mu_sd=band_mu_sd,
+                                    sigma_sd=band_sigma_sd, onset_sd=band_onset_sd,
+                                    onset_mu_corr=band_onset_mu_corr,
+                                    level=band_level,
+                                )
+                                src_entry['band_upper'] = [
+                                    {'tau_days': t, 'model_rate': round(r, 8)}
+                                    for t, r in zip(ages, upper_rates)
+                                ]
+                                src_entry['band_lower'] = [
+                                    {'tau_days': t, 'model_rate': round(r, 8)}
+                                    for t, r in zip(ages, lower_rates)
+                                ]
 
                             source_curve_results[src_name] = src_entry
 
@@ -1655,6 +1725,12 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
                             and subj.get('sweep_to')):
                         try:
                             from runner.cohort_forecast import compute_cohort_maturity_rows
+
+                            # Thread COHORT_DRIFT_FRACTION from forecasting settings
+                            _fc_settings = data.get('forecasting_settings') or {}
+                            _drift = _fc_settings.get('COHORT_DRIFT_FRACTION')
+                            if _drift is not None and model_params:
+                                model_params['cohort_drift_fraction'] = float(_drift)
 
                             # Resolve band level from display settings
                             _bl_str = str(_ds.get('bayes_band_level', 'blend'))
@@ -1680,14 +1756,32 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
                                     anchor_node_id=_fixture_data.get('anchor_node_id'),
                                 )
                             else:
+                                # For unified epoch subjects, derive the date
+                                # range from the actual frames (not subject
+                                # metadata, which may all carry the same epoch).
+                                _all_anchor_days = []
+                                for _f in result.get('frames', []):
+                                    for _dp in (_f.get('data_points') or []):
+                                        _ad = _dp.get('anchor_day')
+                                        if _ad:
+                                            _all_anchor_days.append(str(_ad)[:10])
+                                _epoch_sibs = _epoch_subjects.get(base_sid, [subj])
+                                if _all_anchor_days:
+                                    _unified_anchor_from = min(_all_anchor_days)
+                                    _unified_anchor_to = max(_all_anchor_days)
+                                else:
+                                    _unified_anchor_from = min(s['anchor_from'] for s in _epoch_sibs)
+                                    _unified_anchor_to = max(s['anchor_to'] for s in _epoch_sibs)
+                                _unified_sweep_to = max(s.get('sweep_to', s['anchor_to']) for s in _epoch_sibs)
+
                                 maturity_rows = compute_cohort_maturity_rows(
                                     frames=result['frames'],
                                     graph=graph,
                                     target_edge_id=target_id,
                                     edge_params=model_params,
-                                    anchor_from=subj['anchor_from'],
-                                    anchor_to=subj['anchor_to'],
-                                    sweep_to=subj['sweep_to'],
+                                    anchor_from=_unified_anchor_from,
+                                    anchor_to=_unified_anchor_to,
+                                    sweep_to=_unified_sweep_to,
                                     is_window=is_window,
                                     axis_tau_max=axis_tau_max,
                                     band_level=_fan_band_level,

@@ -948,6 +948,21 @@ export const CHART_DISPLAY_SETTINGS: Record<string, DisplaySettingDef[]> = {
     ...COMMON_MOVING_AVERAGE_SETTINGS,
     ...COMMON_CONFIDENCE_SETTINGS,
     {
+      key: 'chart_mode',
+      label: 'Chart mode',
+      shortLabel: 'Mode',
+      type: 'radio',
+      options: [
+        { value: 'rate', label: 'Rate (%)' },
+        { value: 'count', label: 'Count (k)' },
+      ],
+      defaultValue: 'rate',
+      propsPanel: true,
+      inline: 'brief',
+      contextMenu: false,
+      computeAffecting: false,
+    },
+    {
       key: 'show_model_promoted',
       label: 'Model: promoted',
       shortLabel: 'Best',

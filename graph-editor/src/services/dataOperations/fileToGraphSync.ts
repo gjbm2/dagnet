@@ -1783,9 +1783,39 @@ export async function getParameterFromFile(options: {
       applyChanges(nextGraph.edges[edgeIndex], result.changes);
 
       // MODEL_VARS: Upsert analytic entry built by UpdateManager (doc 15 §5.1)
+      // Preserve path params from the existing entry — the parameter file doesn't
+      // contain path_mu/path_sigma (they're topo-pass-derived), so the new entry
+      // from UpdateManager won't have them.  Without this, every from-file
+      // re-aggregation clobbers path params written by the previous topo pass.
       const analyticEntry = (result.metadata as any)?.analyticModelVarsEntry;
       if (analyticEntry && nextGraph.edges[edgeIndex].p) {
         const { upsertModelVars, applyPromotion } = await import('../modelVarsResolution');
+        const existingAnalytic = nextGraph.edges[edgeIndex].p.model_vars?.find(
+          (v: any) => v.source === 'analytic'
+        );
+        if (existingAnalytic?.latency && analyticEntry.latency) {
+          const prevLat = existingAnalytic.latency;
+          // Carry forward topo-pass-derived fields that the file doesn't contain
+          if (analyticEntry.latency.path_mu == null && prevLat.path_mu != null) {
+            analyticEntry.latency.path_mu = prevLat.path_mu;
+          }
+          if (analyticEntry.latency.path_sigma == null && prevLat.path_sigma != null) {
+            analyticEntry.latency.path_sigma = prevLat.path_sigma;
+          }
+          if (analyticEntry.latency.path_t95 == null && prevLat.path_t95 != null) {
+            analyticEntry.latency.path_t95 = prevLat.path_t95;
+          }
+          if (analyticEntry.latency.path_onset_delta_days == null && prevLat.path_onset_delta_days != null) {
+            analyticEntry.latency.path_onset_delta_days = prevLat.path_onset_delta_days;
+          }
+          // Also preserve dispersion SDs
+          for (const sdKey of ['mu_sd', 'sigma_sd', 'onset_sd', 'onset_mu_corr',
+                               'path_mu_sd', 'path_sigma_sd', 'path_onset_sd'] as const) {
+            if ((analyticEntry.latency as any)[sdKey] == null && (prevLat as any)[sdKey] != null) {
+              (analyticEntry.latency as any)[sdKey] = (prevLat as any)[sdKey];
+            }
+          }
+        }
         upsertModelVars(nextGraph.edges[edgeIndex].p, analyticEntry);
         // Run resolution to update promoted scalars (doc 15 §8)
         applyPromotion(nextGraph.edges[edgeIndex].p, nextGraph.model_source_preference);

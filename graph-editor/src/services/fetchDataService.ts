@@ -1833,17 +1833,21 @@ export async function runStage2EnhancementsAndInboundN(
             existing.probability.mean = pInfinity;
           }
 
-          // Update latency from topo pass (may have been missing at UpdateManager time)
+          // Update latency from topo pass (may have been missing at UpdateManager time).
+          // Preserve existing path params when the current topo pass doesn't produce
+          // them (e.g. window mode doesn't compute path_mu/path_sigma).
           if (ev.latency?.mu != null) {
+            const prev = existing.latency || {};
             existing.latency = {
               mu: ev.latency.mu!,
               sigma: ev.latency.sigma!,
               t95: ev.latency.t95,
               onset_delta_days: ev.latency.promoted_onset_delta_days ?? 0,
-              ...(ev.latency.path_mu != null ? { path_mu: ev.latency.path_mu } : {}),
-              ...(ev.latency.path_sigma != null ? { path_sigma: ev.latency.path_sigma } : {}),
-              ...(ev.latency.path_t95 != null ? { path_t95: ev.latency.path_t95 } : {}),
-              ...(ev.latency.path_onset_delta_days != null ? { path_onset_delta_days: ev.latency.path_onset_delta_days } : {}),
+              // Path params: use new value if available, otherwise preserve previous
+              ...((ev.latency.path_mu ?? prev.path_mu) != null ? { path_mu: ev.latency.path_mu ?? prev.path_mu } : {}),
+              ...((ev.latency.path_sigma ?? prev.path_sigma) != null ? { path_sigma: ev.latency.path_sigma ?? prev.path_sigma } : {}),
+              ...((ev.latency.path_t95 ?? prev.path_t95) != null ? { path_t95: ev.latency.path_t95 ?? prev.path_t95 } : {}),
+              ...((ev.latency.path_onset_delta_days ?? prev.path_onset_delta_days) != null ? { path_onset_delta_days: ev.latency.path_onset_delta_days ?? prev.path_onset_delta_days } : {}),
               // Heuristic dispersion
               ...(ev.latency.mu_sd != null ? { mu_sd: ev.latency.mu_sd } : {}),
               ...(ev.latency.sigma_sd != null ? { sigma_sd: ev.latency.sigma_sd } : {}),

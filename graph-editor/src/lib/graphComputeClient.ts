@@ -549,16 +549,28 @@ export class GraphComputeClient {
         const matchingBlocks = blocks.filter((b) =>
           String(b.scenario_id) === String(scenarioId) && String(b.subject_id) === String(subjectId)
         );
+        // Deduplicate overlapping tau_days across epochs.
+        // Later epochs (more recent cohorts) have more mature data at
+        // lower taus, so their rows take precedence.  Use a Map keyed
+        // by tau_days to keep only one row per tau per subject.
+        const rowByTau = new Map<number, Record<string, any>>();
         for (const block of matchingBlocks) {
           const beRows: Array<Record<string, any>> = block?.result?.maturity_rows || [];
           for (const row of beRows) {
-            data.push({
-              analysis_type: 'cohort_maturity',
-              scenario_id: scenarioId,
-              subject_id: subjectId,
-              ...row,
-            });
+            const tau = Number(row.tau_days ?? -1);
+            const existing = rowByTau.get(tau);
+            if (!existing || (row.cohorts_expected ?? 0) > (existing.cohorts_expected ?? 0)) {
+              rowByTau.set(tau, {
+                analysis_type: 'cohort_maturity',
+                scenario_id: scenarioId,
+                subject_id: subjectId,
+                ...row,
+              });
+            }
           }
+        }
+        for (const row of rowByTau.values()) {
+          data.push(row);
         }
       }
 
