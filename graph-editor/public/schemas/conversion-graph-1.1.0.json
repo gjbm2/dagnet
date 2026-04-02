@@ -1276,6 +1276,40 @@
           "minimum": 0,
           "description": "Winning model's onset_delta_days (written by applyPromotion, read-only for consumption)"
         },
+        "promoted_mu_sd": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Posterior SD of promoted μ (read-only, from model_vars)"
+        },
+        "promoted_sigma_sd": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Posterior SD of promoted σ (read-only, from model_vars)"
+        },
+        "promoted_onset_sd": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Posterior SD of promoted onset (read-only, from model_vars)"
+        },
+        "promoted_onset_mu_corr": {
+          "type": "number",
+          "description": "Posterior correlation between onset and μ (identifiability diagnostic)"
+        },
+        "promoted_path_mu_sd": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Posterior SD of promoted path μ (read-only, from model_vars)"
+        },
+        "promoted_path_sigma_sd": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Posterior SD of promoted path σ (read-only, from model_vars)"
+        },
+        "promoted_path_onset_sd": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Posterior SD of promoted path onset (read-only, from model_vars)"
+        },
         "onset_delta_days": {
           "type": "number",
           "minimum": 0,
@@ -1352,6 +1386,82 @@
               "type": "number",
               "minimum": 0,
               "description": "Posterior SD of \u03c3"
+            },
+            "onset_mean": {
+              "type": "number",
+              "description": "Posterior mean onset (latent)"
+            },
+            "onset_sd": {
+              "type": "number",
+              "minimum": 0,
+              "description": "Posterior SD of onset"
+            },
+            "onset_hdi_lower": {
+              "type": "number",
+              "minimum": 0,
+              "description": "Lower HDI bound for onset (days)"
+            },
+            "onset_hdi_upper": {
+              "type": "number",
+              "minimum": 0,
+              "description": "Upper HDI bound for onset (days)"
+            },
+            "onset_mu_corr": {
+              "type": "number",
+              "description": "Posterior correlation between onset and \u03bc"
+            },
+            "path_mu_mean": {
+              "type": "number",
+              "description": "Path-level posterior mean of \u03bc"
+            },
+            "path_mu_sd": {
+              "type": "number",
+              "minimum": 0,
+              "description": "Path-level posterior SD of \u03bc"
+            },
+            "path_sigma_mean": {
+              "type": "number",
+              "minimum": 0,
+              "description": "Path-level posterior mean of \u03c3"
+            },
+            "path_sigma_sd": {
+              "type": "number",
+              "minimum": 0,
+              "description": "Path-level posterior SD of \u03c3"
+            },
+            "path_onset_delta_days": {
+              "type": "number",
+              "minimum": 0,
+              "description": "Path-level onset (sum of edge onsets)"
+            },
+            "path_onset_sd": {
+              "type": "number",
+              "minimum": 0,
+              "description": "Path-level posterior SD of onset"
+            },
+            "path_onset_hdi_lower": {
+              "type": "number",
+              "minimum": 0,
+              "description": "Path-level lower HDI bound for onset (days)"
+            },
+            "path_onset_hdi_upper": {
+              "type": "number",
+              "minimum": 0,
+              "description": "Path-level upper HDI bound for onset (days)"
+            },
+            "path_onset_mu_corr": {
+              "type": "number",
+              "description": "Path-level posterior correlation between onset and \u03bc"
+            },
+            "path_hdi_t95_lower": {
+              "type": "number",
+              "minimum": 0,
+              "description": "Path-level lower HDI bound for t95 (days)"
+            },
+            "path_hdi_t95_upper": {
+              "type": "number",
+              "minimum": 0,
+              "description": "Path-level upper HDI bound for t95 (days)"
             },
             "hdi_t95_lower": {
               "type": "number",

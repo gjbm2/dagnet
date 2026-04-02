@@ -2,30 +2,21 @@
  * FormEditor — shared styles for rjsf custom templates & widgets
  *
  * Naming convention:  .fe-<element>[-modifier]
- * All selectors are prefixed with `.fe-` to avoid collisions.
  * ═══════════════════════════════════════════════════════════════ */
 
-/* ── Design tokens (CSS custom properties) ──────────────────── */
+/* ── Design tokens ────────────────────────────────────────────── */
 :root {
   --fe-grid-columns: 10% 50% 40%;
-  --fe-grid-gap: 16px;
-
-  --fe-label-font-size: 13px;
+  --fe-grid-gap: 12px;
+  --fe-label-font-size: 12px;
   --fe-label-font-weight: 500;
-
   --fe-description-font-size: 11px;
-  --fe-description-color: var(--text-muted, #6c757d);
-  --fe-description-line-height: 1.4;
-
+  --fe-description-color: var(--text-muted, #999);
+  --fe-description-line-height: 1.3;
   --fe-required-color: #d32f2f;
-
   --fe-field-margin-bottom: 12px;
-  --fe-container-margin-bottom: 16px;
-  --fe-group-field-margin-bottom: 8px;
-
-  /* Root-level header alignment (aligns with the field column) */
-  --fe-header-margin-left: calc(10% + 16px);
-  --fe-header-width: 50%;
+  --fe-container-margin-bottom: 12px;
+  --fe-group-field-margin-bottom: 10px;
 }
 
 /* ── Three-column field layout ──────────────────────────────── */
@@ -44,8 +35,8 @@
 /* Column 1: label */
 .fe-field-label {
   text-align: right;
-  padding-top: 8px;
-  padding-right: 8px;
+  padding-top: 10px;
+  padding-right: 4px;
   font-weight: var(--fe-label-font-weight);
   white-space: normal;
   word-break: break-word;
@@ -54,6 +45,7 @@
 .fe-field-label label {
   margin: 0;
   font-size: var(--fe-label-font-size);
+  color: var(--text-secondary, #666);
 }
 
 .fe-field-label .fe-required {
@@ -61,7 +53,7 @@
   margin-left: 2px;
 }
 
-/* Column 2: input + errors + help */
+/* Column 2: input */
 .fe-field-input {
   width: 100%;
   min-width: 0;
@@ -71,13 +63,12 @@
 .fe-field-description {
   font-size: var(--fe-description-font-size);
   color: var(--fe-description-color);
-  padding-top: 8px;
-  padding-right: 8px;
+  padding-top: 10px;
   line-height: var(--fe-description-line-height);
   word-break: break-word;
 }
 
-/* Container (object/array) wrapper — no grid, just spacing */
+/* Container wrapper — minimal spacing */
 .fe-container {
   margin-bottom: var(--fe-container-margin-bottom);
 }
@@ -89,39 +80,35 @@
 }
 
 .fe-object-title {
-  margin-bottom: 8px;
+  margin-bottom: 4px;
   font-size: 1rem;
   font-weight: 500;
   text-transform: capitalize;
 }
 
 .fe-object-title--root {
-  font-size: 1.25rem;
+  font-size: 1.1rem;
   font-weight: 600;
-  margin-left: var(--fe-header-margin-left);
-  width: var(--fe-header-width);
-  max-width: var(--fe-header-width);
 }
 
 .fe-object-description {
-  margin-bottom: var(--fe-container-margin-bottom);
+  margin-bottom: 8px;
+  font-size: var(--fe-description-font-size);
+  color: var(--fe-description-color);
 }
 
 .fe-object-description--root {
-  margin-bottom: 32px;
-  margin-left: var(--fe-header-margin-left);
-  width: var(--fe-header-width);
-  max-width: var(--fe-header-width);
+  margin-bottom: 16px;
 }
 
 /* ── Single accordion ───────────────────────────────────────── */
 
 .fe-accordion-description {
-  margin-bottom: var(--fe-container-margin-bottom);
+  margin-bottom: 8px;
 }
 
 .fe-accordion-field {
-  margin-bottom: var(--fe-container-margin-bottom);
+  margin-bottom: var(--fe-group-field-margin-bottom);
 }
 
 .fe-accordion-required {
@@ -132,7 +119,9 @@
 /* ── Grouped accordion ──────────────────────────────────────── */
 
 .fe-group-description {
-  margin-bottom: var(--fe-container-margin-bottom);
+  margin-bottom: 8px;
+  font-size: var(--fe-description-font-size);
+  color: var(--fe-description-color);
 }
 
 .fe-group-field {
@@ -140,5 +129,78 @@
 }
 
 .fe-group-unclaimed {
-  margin-top: var(--fe-container-margin-bottom);
+  margin-top: 8px;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+ * MUI overrides — scoped to .form-editor-wrapper
+ * Hide duplicate labels, tighten spacing.
+ * ═══════════════════════════════════════════════════════════════ */
+
+/*
+ * Column 2 must contain ONLY the bare interactive element.
+ * Our three-column layout provides label (col 1) and description (col 3).
+ * Everything RJSF/MUI renders as label or description inside the widget
+ * is redundant and must be suppressed.
+ */
+
+/* ── Labels ── */
+
+/* Floating labels inside text inputs */
+.fe-field .MuiInputLabel-root,
+.fe-field .MuiFormLabel-root {
+  display: none !important;
+}
+
+/* Checkbox/radio label text (field name) — col 1 already shows it */
+.fe-field .MuiFormControlLabel-label {
+  display: none !important;
+}
+
+/* Remove the notched-outline gap MUI reserves for floating labels */
+.fe-field .MuiOutlinedInput-notchedOutline legend {
+  display: none !important;
+}
+
+/* ── Descriptions ── */
+
+/* Helper text under inputs — col 3 already shows it */
+.fe-field .MuiFormHelperText-root {
+  display: none !important;
+}
+
+/* Description Typography RJSF renders above checkboxes/widgets */
+.fe-field-input > .MuiTypography-root {
+  display: none !important;
+}
+
+/* ── Spacing ── */
+
+/* Remove top margin MUI adds for the label slot */
+.fe-field .MuiFormControl-root {
+  margin-top: 0 !important;
+}
+
+/* Tighten text input padding */
+.fe-field .MuiOutlinedInput-input {
+  padding: 8px 12px !important;
+  font-size: 13px !important;
+}
+
+/* Tighten select padding */
+.fe-field .MuiSelect-select {
+  padding: 8px 12px !important;
+  font-size: 13px !important;
+}
+
+/* Checkboxes: compact */
+.fe-field .MuiCheckbox-root {
+  padding: 4px !important;
+}
+
+/* Full width within field column */
+.fe-field-input .MuiTextField-root,
+.fe-field-input .MuiFormControl-root,
+.fe-field-input .MuiAutocomplete-root {
+  width: 100% !important;
 }

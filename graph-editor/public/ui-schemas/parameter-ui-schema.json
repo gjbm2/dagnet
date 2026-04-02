@@ -1,123 +1,55 @@
 {
-  "ui:order": ["id", "name", "type", "query", "query_overridden", "n_query", "n_query_overridden", "connection", "connection_string", "latency", "posterior", "force_replace_at_ms", "value", "values", "metadata"],
-  "id": {
-    "ui:description": ""
-  },
-  "name": {
-    "ui:description": ""
+  "ui:order": ["id", "name", "type", "query", "query_overridden", "n_query", "n_query_overridden", "connection", "connection_string", "latency", "posterior", "force_replace_at_ms", "values", "metadata"],
+  "ui:options": {
+    "groups": [
+      {
+        "title": "Identity",
+        "fields": ["id", "name", "type"],
+        "defaultExpanded": true
+      },
+      {
+        "title": "Query & Connection",
+        "fields": ["query", "query_overridden", "n_query", "n_query_overridden", "connection", "connection_string"]
+      },
+      {
+        "title": "Latency",
+        "fields": ["latency"]
+      },
+      {
+        "title": "Bayesian Posterior",
+        "fields": ["posterior", "force_replace_at_ms"]
+      }
+    ]
   },
   "type": {
-    "ui:widget": "select",
-    "ui:description": ""
+    "ui:widget": "select"
   },
   "query": {
-    "ui:description": "",
     "ui:help": "DSL: from(node-id).to(node-id)"
   },
-  "query_overridden": {
-    "ui:description": ""
-  },
   "n_query": {
-    "ui:description": "",
-    "ui:help": "Optional: explicit query for n (denominator) when it differs from k query"
-  },
-  "n_query_overridden": {
-    "ui:description": ""
+    "ui:help": "Optional: explicit n query when denominator differs from k query"
   },
   "connection": {
-    "ui:description": "",
-    "ui:help": "Connection from connections.yaml (e.g., amplitude-prod)"
+    "ui:help": "Connection from connections.yaml"
   },
   "connection_string": {
     "ui:widget": "MonacoWidget",
     "ui:options": {
       "language": "json",
-      "height": "100px"
+      "height": "80px"
     },
-    "ui:description": "",
-    "ui:help": "Provider JSON (e.g., {\"range\": \"Sheet1!A1:B10\"})"
+    "ui:help": "Provider-specific JSON overrides"
   },
-  "latency": {
-    "ui:options": {
-      "accordion": true
-    },
-    "ui:description": "Latency tracking configuration",
-    "latency_parameter": {
-      "ui:description": "Enable latency tracking for this parameter"
-    },
-    "t95": {
-      "ui:description": "t95 horizon in days (95th percentile lag)"
-    },
-    "path_t95": {
-      "ui:description": "Cumulative path t95 in days (computed)"
-    },
-    "anchor_node_id": {
-      "ui:description": "Anchor node for cohort queries"
-    }
+  "latency": {},
+  "posterior": {
+    "ui:field": "NullField"
   },
   "force_replace_at_ms": {
-    "ui:widget": "hidden",
-    "ui:description": ""
+    "ui:field": "NullField"
   },
   "values": {
-    "ui:options": {
-      "orderable": true,
-      "tabField": "window_from"
-    },
-    "items": {
-      "ui:title": " ",
-      "mean": {},
-      "stdev": {},
-      "n": {},
-      "k": {},
-      "distribution": {
-        "ui:widget": "select"
-      },
-      "window_from": {},
-      "window_to": {},
-      "context_id": {},
-      "k_daily": { "ui:widget": "hidden" },
-      "n_daily": { "ui:widget": "hidden" },
-      "dates": { "ui:widget": "hidden" },
-      "median_lag_days": { "ui:widget": "hidden" },
-      "mean_lag_days": { "ui:widget": "hidden" },
-      "anchor_n_daily": { "ui:widget": "hidden" },
-      "anchor_median_lag_days": { "ui:widget": "hidden" },
-      "anchor_mean_lag_days": { "ui:widget": "hidden" },
-      "forecast": { "ui:widget": "hidden" },
-      "latency": { "ui:widget": "hidden" },
-      "anchor_latency": { "ui:widget": "hidden" },
-      "query_signature": { "ui:widget": "hidden" },
-      "window_from_inclusive": { "ui:widget": "hidden" },
-      "window_to_inclusive": { "ui:widget": "hidden" },
-      "cohort_window_from": { "ui:widget": "hidden" },
-      "cohort_window_to": { "ui:widget": "hidden" },
-      "data_source": {
-        "ui:options": {
-          "accordion": true
-        },
-        "type": {
-          "ui:widget": "select"
-        },
-        "url": {},
-        "retrieved_at": {},
-        "edited_at": {},
-        "author": {},
-        "query": {
-          "ui:widget": "MonacoWidget",
-          "ui:options": {
-            "language": "json",
-            "height": "80px"
-          }
-        },
-        "notes": {
-          "ui:widget": "textarea",
-          "ui:options": {
-            "rows": 2
-          }
-        }
-      }
-    }
+    "ui:field": "ValuesTableField"
   },
   "metadata": {
     "ui:options": {
@@ -129,26 +61,20 @@
         "rows": 2
       }
     },
-    "description_overridden": {},
-    "units": {},
-    "tags": {
-      "ui:options": {
-        "orderable": true
-      }
-    },
     "status": {
       "ui:widget": "select"
     },
-    "version": {},
-    "author": {},
-    "created_at": {},
-    "updated_at": {},
     "constraints": {
       "ui:options": {
         "accordion": true
       }
     },
     "aliases": {
+      "ui:options": {
+        "orderable": true
+      }
+    },
+    "tags": {
       "ui:options": {
         "orderable": true
       }

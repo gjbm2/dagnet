@@ -1612,6 +1612,7 @@ export async function runStage2EnhancementsAndInboundN(
 
                 for (const edge of edgesMissingHorizons) {
                   const edgeId = edge.uuid || edge.id;
+                  if (!edgeId || !edge.p?.latency) continue;
                   const paramValues = paramLookup.get(edgeId);
                   if (!paramValues || paramValues.length === 0) continue;
 
@@ -1650,12 +1651,14 @@ export async function runStage2EnhancementsAndInboundN(
                   if (!stats.fit || !Number.isFinite(stats.fit.mu) || !Number.isFinite(stats.fit.sigma)) continue;
 
                   // Write to graph edge (so topo pass can read them)
-                  edge.p.latency.mu = stats.fit.mu;
-                  edge.p.latency.sigma = stats.fit.sigma;
-                  edge.p.latency.t95 = stats.t95;
+                  const ep = edge.p!;
+                  const lat = ep.latency!;
+                  lat.mu = stats.fit.mu;
+                  lat.sigma = stats.fit.sigma;
+                  lat.t95 = stats.t95;
 
                   // Rebuild analytic model_vars entry with latency
-                  const pid = edge.p.id;
+                  const pid = ep.id;
                   const pf = pid ? fileRegistry.getFile(`parameter-${pid}`)?.data : null;
                   const latestValue = (pf as any)?.values?.[0];
                   if (latestValue) {
@@ -1673,7 +1676,7 @@ export async function runStage2EnhancementsAndInboundN(
                         onset_delta_days: onsetDeltaDays,
                       },
                     };
-                    upsertModelVars(edge.p, analyticEntry);
+                    upsertModelVars(ep, analyticEntry);
                   }
                   bootstrapped++;
                 }
@@ -1841,7 +1844,19 @@ export async function runStage2EnhancementsAndInboundN(
               ...(ev.latency.path_sigma != null ? { path_sigma: ev.latency.path_sigma } : {}),
               ...(ev.latency.path_t95 != null ? { path_t95: ev.latency.path_t95 } : {}),
               ...(ev.latency.path_onset_delta_days != null ? { path_onset_delta_days: ev.latency.path_onset_delta_days } : {}),
+              // Heuristic dispersion
+              ...(ev.latency.mu_sd != null ? { mu_sd: ev.latency.mu_sd } : {}),
+              ...(ev.latency.sigma_sd != null ? { sigma_sd: ev.latency.sigma_sd } : {}),
+              ...(ev.latency.onset_sd != null ? { onset_sd: ev.latency.onset_sd } : {}),
+              ...(ev.latency.onset_mu_corr != null ? { onset_mu_corr: ev.latency.onset_mu_corr } : {}),
+              ...(ev.latency.path_mu_sd != null ? { path_mu_sd: ev.latency.path_mu_sd } : {}),
+              ...(ev.latency.path_sigma_sd != null ? { path_sigma_sd: ev.latency.path_sigma_sd } : {}),
+              ...(ev.latency.path_onset_sd != null ? { path_onset_sd: ev.latency.path_onset_sd } : {}),
             };
+          }
+          // Update probability.stdev with heuristic p_sd if available
+          if (ev.latency?.p_sd != null && Number.isFinite(ev.latency.p_sd) && ev.latency.p_sd > 0) {
+            existing.probability.stdev = ev.latency.p_sd;
           }
         }
         // Re-run promotion so promoted scalars reflect updated entries

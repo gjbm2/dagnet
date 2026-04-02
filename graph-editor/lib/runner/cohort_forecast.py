@@ -956,13 +956,31 @@ def compute_cohort_maturity_rows(
     for tau in range(0, max_tau + 1):
         b = buckets.get(tau)
 
-        # Evidence rate from pre-computed observed arrays.
+        # Evidence rate (e+f mode): observed_y / blended_x.
+        # Epoch A (all mature): observed x — pure evidence, no model.
+        # Epoch B (mixed): mature Cohorts use observed x, immature use
+        # model x (x_at_tau).  This creates a natural transition as
+        # Cohorts move from observed to forecast denominators.
+        # Only show circle at taus with real observation data.
         evidence_rate: Optional[float] = None
+        ev_y_total: Optional[float] = None
+        ev_x_total: Optional[float] = None
         if tau <= tau_future_max:
-            ev_y = sum(c['obs_y'][tau] for c in cohort_list)
-            ev_x = sum(c['obs_x'][tau] for c in cohort_list)
-            if ev_x > 0:
-                evidence_rate = max(0.0, min(1.0, ev_y / ev_x))
+            has_real_obs = any(
+                tau in cohort_at_tau.get(c['anchor_day'].isoformat(), {})
+                for c in cohort_list if tau <= c['tau_max']
+            )
+            if has_real_obs:
+                ev_y_total = 0.0
+                ev_x_total = 0.0
+                for c in cohort_list:
+                    if tau <= c['tau_max']:
+                        ev_x_total += c['obs_x'][tau]
+                    else:
+                        ev_x_total += c['x_at_tau'][tau] if tau < len(c['x_at_tau']) else c['x_frontier']
+                    ev_y_total += c['obs_y'][tau]
+                if ev_x_total > 0:
+                    evidence_rate = max(0.0, min(1.0, ev_y_total / ev_x_total))
 
         # Projected rate from backend annotation
         projected_rate: Optional[float] = None
@@ -976,12 +994,11 @@ def compute_cohort_maturity_rows(
 
         for c in cohort_list:
             if tau <= c['tau_max']:
-                # Mature: use pre-computed observed values.
+                # Mature: observed x and y — pure evidence.
                 total_x_aug += c['obs_x'][tau]
                 total_y_aug += c['obs_y'][tau]
             else:
-                # Immature: Bayesian posterior predictive.
-                # x from pre-computed array, y from posterior rate forecast.
+                # Immature: forecast x from model, forecast y from posterior.
                 x_frozen = c['x_frozen']
                 y_frozen = c['y_frozen']
                 c_i = _cdf(c['tau_max'])
@@ -1062,6 +1079,11 @@ def compute_cohort_maturity_rows(
             'boundary_date': str(sweep_to)[:10],
             'cohorts_covered_base': b.mature_count if b else 0,
             'cohorts_covered_projected': b.proj_count if b else 0,
+            # Tooltip components: evidence y, blended x, forecast y
+            'evidence_y': round(ev_y_total, 1) if ev_y_total is not None else None,
+            'evidence_x': round(ev_x_total, 1) if ev_x_total is not None else None,
+            'forecast_y': round(total_y_aug, 1) if midpoint is not None else None,
+            'forecast_x': round(total_x_aug, 1) if midpoint is not None else None,
         }
         if fan_bands:
             row['fan_bands'] = fan_bands

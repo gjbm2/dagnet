@@ -188,7 +188,12 @@ EFFECTIVE_AGE_FLOOR = 1e-6   # age − onset on fixed-onset path (numpy)
 # Sharpened softplus: softplus(k·x) / k → same shape but leakage
 # drops exponentially with k. At k=5, softplus(-2.5) → ~7e-7.
 # See journal 30-Mar-26 "Softplus onset leakage".
-SOFTPLUS_SHARPNESS = 5.0
+#
+# Raised from 5→8 on 2-Apr-26: sensitivity sweep showed k=8 has lower
+# NUTS warmup failure rate on prod data (~0/9 vs ~1/3 at k=5). The
+# onset-mu ridge causes stochastic convergence failures; higher k
+# reduces but does not eliminate this. See journal 2-Apr-26.
+SOFTPLUS_SHARPNESS = 5.0  # fallback only; canonical default in settings.yaml
 
 # Probability clipping ---
 # Bounds for effective probabilities passed to Binomial / BetaBinomial

@@ -942,6 +942,25 @@ def _handle_snapshot_analyze_subjects(data: Dict[str, Any]) -> Dict[str, Any]:
                     if isinstance(_v, (int, float)) and math.isfinite(_v) and _v > 0:
                         result[_dst_key] = float(_v)
 
+        # ── Fallback SDs from promoted latency (heuristic dispersion) ──
+        # When no Bayesian posterior or source_curves SDs are available,
+        # read from promoted_*_sd fields on the edge latency block.
+        # These are written by applyPromotion from the winning model_vars entry.
+        if latency:
+            for _src_key, _dst_key in [
+                ('promoted_mu_sd', 'bayes_mu_sd'),
+                ('promoted_sigma_sd', 'bayes_sigma_sd'),
+                ('promoted_onset_sd', 'bayes_onset_sd'),
+                ('promoted_onset_mu_corr', 'bayes_onset_mu_corr'),
+                ('promoted_path_mu_sd', 'bayes_path_mu_sd'),
+                ('promoted_path_sigma_sd', 'bayes_path_sigma_sd'),
+                ('promoted_path_onset_sd', 'bayes_path_onset_sd'),
+            ]:
+                if _dst_key not in result:
+                    _v = latency.get(_src_key)
+                    if isinstance(_v, (int, float)) and math.isfinite(_v) and (_v > 0 or 'corr' in _src_key):
+                        result[_dst_key] = float(_v)
+
         return result
 
     def _append_synthetic_cohort_maturity_frames(args: Dict[str, Any]) -> None:
@@ -2867,6 +2886,15 @@ def handle_stats_topo_pass(data: Dict[str, Any]) -> Dict[str, Any]:
             'p_evidence': ev.p_evidence,
             'forecast_available': ev.forecast_available,
             'blended_mean': ev.blended_mean,
+            # Heuristic dispersion
+            'p_sd': ev.p_sd,
+            'mu_sd': ev.mu_sd,
+            'sigma_sd': ev.sigma_sd,
+            'onset_sd': ev.onset_sd,
+            'onset_mu_corr': ev.onset_mu_corr,
+            'path_mu_sd': ev.path_mu_sd,
+            'path_sigma_sd': ev.path_sigma_sd,
+            'path_onset_sd': ev.path_onset_sd,
         })
 
     return {

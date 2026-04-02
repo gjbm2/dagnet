@@ -265,6 +265,13 @@ class TestParityEdgeLatencyStats:
         assert result.p_infinity == pytest.approx(0.5663243456570916, abs=TOL_PIPELINE)
         assert result.forecast_available is True
 
+        # Heuristic dispersion (design doc §3) — must match FE
+        assert result.p_sd == pytest.approx(0.015535674711082496, abs=TOL)
+        assert result.mu_sd == pytest.approx(0.05223762396706334, abs=TOL)
+        assert result.sigma_sd == pytest.approx(0.036357386281076084, abs=TOL)
+        assert result.onset_sd == pytest.approx(0.2, abs=TOL)
+        assert result.onset_mu_corr == pytest.approx(-0.3, abs=TOL)
+
 
 # ── Vector 7: Graph-level parity — enhance_graph_latencies ──────────────────
 # Same 3-edge linear graph A → B → C → D as FE Vector 7.

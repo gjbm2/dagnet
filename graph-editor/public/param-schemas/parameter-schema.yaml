@@ -12,131 +12,193 @@ additionalProperties: false
 
 properties:
   id:
+    title: "ID"
     type: string
     pattern: '^[a-zA-Z0-9_-]+$'
     minLength: 1
     maxLength: 64
-    description: "Unique parameter identifier (letters, numbers, hyphens, underscores)"
+    description: "Unique identifier (letters, numbers, hyphens, underscores)"
     examples: ["conversion-rate-baseline", "Email_Campaign_Cost", "checkout-duration"]
-  
+
   name:
+    title: "Name"
     type: string
     minLength: 3
     maxLength: 128
-    description: "Human-readable parameter name"
+    description: "Human-readable display name"
     examples: ["Baseline Conversion Rate", "Email Campaign Cost", "Checkout Duration"]
-  
+
   type:
+    title: "Type"
     type: string
     enum: [probability, cost_gbp, labour_cost]
-    description: "Parameter type classification"
-  
+    description: "Parameter type"
+
   query:
+    title: "Query"
     type: string
     pattern: '^from\([a-zA-Z0-9_-]+\)\.to\([a-zA-Z0-9_-]+\)'
-    description: "Query expression for data retrieval using DSL syntax"
+    description: "DSL query for data retrieval"
     examples:
       - "from(checkout).to(purchase)"
       - "from(cart).to(checkout).exclude(abandoned)"
       - "from(landing).to(signup).visited(feature-view)"
       - "from(checkout).to(purchase).case(test-2025:treatment)"
-  
+
   query_overridden:
+    title: "Query (manual)"
     type: boolean
     default: false
-    description: "If true, query was manually edited and should not be auto-regenerated"
-  
+    description: "Query was manually edited; won't be auto-regenerated"
+
   n_query:
+    title: "n query"
     type: string
     pattern: '^(from\([a-zA-Z0-9_-]+\)\.)?to\([a-zA-Z0-9_-]+\)'
-    description: "Optional explicit query for n (denominator) when it differs from k query. Used when 'from' node shares an event with siblings and n can't be derived by stripping upstream conditions."
+    description: "Explicit denominator query when n differs from k query"
     examples:
       - "to(landing-page)"
       - "to(household-created)"
       - "from(landing).to(feature-view)"
       - "from(checkout).to(cart-confirm)"
-  
+
   n_query_overridden:
+    title: "n query (manual)"
     type: boolean
     default: false
-    description: "If true, n_query was manually edited and should not be auto-regenerated"
-  
+    description: "n query was manually edited; won't be auto-regenerated"
+
   connection:
+    title: "Connection"
     type: string
     description: "Connection name from connections.yaml"
-  
+
   connection_string:
+    title: "Connection string"
     type: string
-    description: "JSON blob of provider-specific settings for parameter-specific overrides"
+    description: "Provider-specific JSON overrides"
   
   # LAG: Edge-level latency configuration (see design.md §3.1)
   latency:
+    title: "Latency"
     type: object
-    description: "Latency configuration for edges with time-delayed conversions"
+    description: "Edge-level latency configuration"
     properties:
       latency_parameter:
+        title: "Enabled"
         type: boolean
-        description: "Explicit enablement flag. true = latency tracking enabled."
+        description: "Latency tracking enabled for this edge"
       latency_parameter_overridden:
+        title: "Enabled (manual)"
         type: boolean
-        description: "If true, user manually set latency_parameter"
+        description: "User manually set the enabled flag"
       anchor_node_id:
+        title: "Anchor node"
         type: string
         pattern: '^[a-zA-Z0-9_-]+$'
-        description: "Anchor node for cohort queries (furthest upstream START node)"
+        description: "Furthest upstream START node for cohort queries"
       anchor_node_id_overridden:
+        title: "Anchor (manual)"
         type: boolean
-        description: "If true, user manually set anchor_node_id"
+        description: "User manually set the anchor node"
       t95:
+        title: "t95 (days)"
         type: number
         minimum: 0
-        description: "95th percentile lag in days (computed from fitted log-normal CDF)"
+        description: "95th percentile lag in days (from fitted log-normal CDF)"
       t95_overridden:
+        title: "t95 (manual)"
         type: boolean
-        description: "If true, user manually set t95"
+        description: "User manually set t95"
       path_t95:
+        title: "Path t95 (days)"
         type: number
         minimum: 0
-        description: "Cumulative path latency (t95) from anchor to this edge"
+        description: "Cumulative path latency from anchor to this edge"
       path_t95_overridden:
+        title: "Path t95 (manual)"
         type: boolean
-        description: "If true, user manually set path_t95"
+        description: "User manually set path t95"
       promoted_t95:
+        title: "Promoted t95"
         type: number
         minimum: 0
-        description: "Winning model's t95 (written by applyPromotion, read-only for consumption)"
+        description: "Winning model's t95 (read-only)"
       promoted_path_t95:
+        title: "Promoted path t95"
         type: number
         minimum: 0
-        description: "Winning model's path_t95 (written by applyPromotion, read-only for consumption)"
+        description: "Winning model's path t95 (read-only)"
       promoted_onset_delta_days:
+        title: "Promoted onset"
         type: number
         minimum: 0
-        description: "Winning model's onset_delta_days (written by applyPromotion, read-only for consumption)"
+        description: "Winning model's onset delta (read-only)"
+      promoted_mu_sd:
+        title: "Promoted μ SD"
+        type: number
+        minimum: 0
+        description: "Posterior SD of promoted μ (read-only, from model_vars)"
+      promoted_sigma_sd:
+        title: "Promoted σ SD"
+        type: number
+        minimum: 0
+        description: "Posterior SD of promoted σ (read-only, from model_vars)"
+      promoted_onset_sd:
+        title: "Promoted onset SD"
+        type: number
+        minimum: 0
+        description: "Posterior SD of promoted onset (read-only, from model_vars)"
+      promoted_onset_mu_corr:
+        title: "Promoted onset–μ correlation"
+        type: number
+        description: "Posterior correlation between onset and μ (read-only, identifiability diagnostic)"
+      promoted_path_mu_sd:
+        title: "Promoted path μ SD"
+        type: number
+        minimum: 0
+        description: "Posterior SD of promoted path μ (read-only, from model_vars)"
+      promoted_path_sigma_sd:
+        title: "Promoted path σ SD"
+        type: number
+        minimum: 0
+        description: "Posterior SD of promoted path σ (read-only, from model_vars)"
+      promoted_path_onset_sd:
+        title: "Promoted path onset SD"
+        type: number
+        minimum: 0
+        description: "Posterior SD of promoted path onset (read-only, from model_vars)"
       bayes_reset:
+        title: "Reset priors"
         type: boolean
-        description: "When true, Bayesian compiler ignores previous posterior and uses analytic-derived priors. Cleared after successful run."
+        description: "Ignore previous posterior, use analytic priors. Cleared after run."
       onset_delta_days:
+        title: "Onset delay (days)"
         type: number
         minimum: 0
-        description: "Onset delay in days - minimum time before conversions begin (aggregated from window slices)"
+        description: "Minimum time before conversions begin"
       onset_delta_days_overridden:
+        title: "Onset (manual)"
         type: boolean
-        description: "If true, user manually set onset_delta_days"
+        description: "User manually set onset delay"
       mu:
+        title: "μ (log-normal)"
         type: number
-        description: "Fitted log-normal mu parameter (internal, not UI-exposed)"
+        description: "Fitted log-normal μ parameter (internal)"
       sigma:
+        title: "σ (log-normal)"
         type: number
         minimum: 0
-        description: "Fitted log-normal sigma parameter (internal, not UI-exposed)"
+        description: "Fitted log-normal σ parameter (internal)"
       path_mu:
+        title: "Path μ"
         type: number
-        description: "Path-level A→Y log-normal mu (Fenton–Wilkinson, internal)"
+        description: "Path-level A→Y log-normal μ (Fenton–Wilkinson)"
       path_sigma:
+        title: "Path σ"
         type: number
         minimum: 0
-        description: "Path-level A→Y log-normal sigma (Fenton–Wilkinson, internal)"
+        description: "Path-level A→Y log-normal σ (Fenton–Wilkinson)"
       # NOTE: No posterior sub-block under latency (doc 21). Bayesian latency
       # posteriors live in the top-level posterior.slices entries.
     additionalProperties: false
@@ -145,8 +207,9 @@ properties:
   # probability and latency fields. Replaces the old split between
   # top-level posterior (probability) and latency.posterior.
   posterior:
+    title: "Posterior"
     type: object
-    description: "Unified Bayesian posterior (doc 21). Per-slice entries carry both probability and latency."
+    description: "Unified Bayesian posterior — per-slice probability and latency"
     properties:
       fitted_at:
         type: string
@@ -318,8 +381,9 @@ properties:
     additionalProperties: false
 
   force_replace_at_ms:
+    title: "Force replace marker"
     type: number
-    description: "Epoch ms marker requesting a one-shot force-replace on pull (used when data is explicitly cleared to prevent stale data resurrection via 3-way merge)."
+    description: "Epoch ms marker for one-shot force-replace on pull"
   
   values:
     type: array
@@ -568,82 +632,97 @@ properties:
       additionalProperties: false
   
   metadata:
+    title: "Metadata"
     type: object
     required: [description, created_at, author, version]
     properties:
       description:
+        title: "Description"
         type: string
         minLength: 10
         maxLength: 500
-        description: "Description of the parameter"
-      
+        description: "What this parameter measures"
+
       description_overridden:
+        title: "Description (manual)"
         type: boolean
         default: false
-        description: "If true, description was manually edited and should not be auto-updated"
-      
+        description: "Description was manually edited; won't be auto-updated"
+
       units:
+        title: "Units"
         type: string
         maxLength: 32
         description: "Units of measurement"
         examples: ["probability", "USD", "seconds", "days", "percentage"]
-      
+
       constraints:
+        title: "Constraints"
         type: object
         properties:
           min:
+            title: "Min"
             type: number
             description: "Minimum allowed value"
           max:
+            title: "Max"
             type: number
             description: "Maximum allowed value"
           discrete:
+            title: "Discrete"
             type: boolean
             default: false
-            description: "Whether parameter takes discrete values only"
+            description: "Only discrete values allowed"
           step:
+            title: "Step"
             type: number
             minimum: 0
             description: "Step size for discrete parameters"
         additionalProperties: false
-      
+
       tags:
+        title: "Tags"
         type: array
         items:
           type: string
           pattern: '^[a-zA-Z0-9_-]+$'
         uniqueItems: true
         maxItems: 10
-        description: "Tags for categorization and search"
+        description: "Categorisation tags"
         examples: [["conversion", "checkout", "baseline"], ["email", "marketing", "cost"]]
-      
+
       created_at:
+        title: "Created"
         type: string
         format: date-time
         description: "When parameter was created"
-      
+
       updated_at:
+        title: "Updated"
         type: string
         format: date-time
-        description: "When parameter was last updated"
-      
+        description: "When parameter was last modified"
+
       author:
+        title: "Author"
         type: string
         minLength: 2
         maxLength: 64
-        description: "Author or team responsible for this parameter"
-      
+        description: "Person or team responsible"
+
       version:
+        title: "Version"
         type: string
         pattern: '^\d+\.\d+\.\d+$'
-        description: "Semantic version of this parameter definition"
+        description: "Semantic version (e.g. 1.0.0)"
         examples: ["1.0.0", "1.2.3", "2.0.0"]
-      
+
       status:
+        title: "Status"
         type: string
         enum: [active, deprecated, draft, archived]
         default: "active"
-        description: "Current status of the parameter"
+        description: "Current lifecycle status"
       
       aliases:
         type: array

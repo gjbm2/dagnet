@@ -92,6 +92,14 @@ export interface PromotionResult {
     path_sigma?: number;
     path_t95?: number;
     path_onset_delta_days?: number;
+    // Heuristic dispersion
+    mu_sd?: number;
+    sigma_sd?: number;
+    onset_sd?: number;
+    onset_mu_corr?: number;
+    path_mu_sd?: number;
+    path_sigma_sd?: number;
+    path_onset_sd?: number;
   };
   /** Which source was selected */
   activeSource: ModelVarsEntry['source'];
@@ -157,6 +165,14 @@ export function applyPromotion(
     if (result.latency.path_sigma !== undefined) p.latency.path_sigma = result.latency.path_sigma;
     if (result.latency.path_t95 !== undefined) p.latency.promoted_path_t95 = result.latency.path_t95;
     if (result.latency.path_onset_delta_days !== undefined) p.latency.path_onset_delta_days = result.latency.path_onset_delta_days;
+    // Heuristic dispersion — promote SDs alongside point values
+    if (result.latency.mu_sd !== undefined) p.latency.promoted_mu_sd = result.latency.mu_sd;
+    if (result.latency.sigma_sd !== undefined) p.latency.promoted_sigma_sd = result.latency.sigma_sd;
+    if (result.latency.onset_sd !== undefined) p.latency.promoted_onset_sd = result.latency.onset_sd;
+    if (result.latency.onset_mu_corr !== undefined) p.latency.promoted_onset_mu_corr = result.latency.onset_mu_corr;
+    if (result.latency.path_mu_sd !== undefined) p.latency.promoted_path_mu_sd = result.latency.path_mu_sd;
+    if (result.latency.path_sigma_sd !== undefined) p.latency.promoted_path_sigma_sd = result.latency.path_sigma_sd;
+    if (result.latency.path_onset_sd !== undefined) p.latency.promoted_path_onset_sd = result.latency.path_onset_sd;
   }
 
   return result.activeSource;

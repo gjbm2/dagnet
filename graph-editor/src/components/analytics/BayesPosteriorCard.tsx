@@ -191,7 +191,7 @@ export function BayesPosteriorCard({ probability, latency, t95, pathT95, theme =
           )}
         </div>
       )}
-      <BayesModelRateChart
+      <ModelRateChart
         edgeP={edgePMean} edgeMu={lat?.mu_mean} edgeSigma={lat?.sigma_mean} edgeOnset={lat?.onset_delta_days ?? lat?.onset_mean}
         edgePSd={edgePSd} edgeMuSd={lat?.mu_sd} edgeSigmaSd={lat?.sigma_sd} edgeOnsetSd={lat?.onset_sd}
         edgeOnsetMuCorr={lat?.onset_mu_corr} edgeT95={t95}
@@ -301,7 +301,7 @@ function computeBands(
   return { u90, l90, u99, l99 };
 }
 
-interface ModelRateChartProps {
+export interface ModelRateChartProps {
   edgeP?: number | null; edgeMu?: number | null; edgeSigma?: number | null; edgeOnset?: number | null;
   edgePSd?: number | null; edgeMuSd?: number | null; edgeSigmaSd?: number | null; edgeOnsetSd?: number | null;
   edgeOnsetMuCorr?: number | null; edgeT95?: number | null;
@@ -327,7 +327,11 @@ function bandPolygon(name: string, ages: number[], upper: number[], lower: numbe
   };
 }
 
-const BayesModelRateChart = React.memo(function BayesModelRateChart(props: ModelRateChartProps) {
+/** Source-agnostic CDF spark chart with optional confidence bands.
+ *  Exported as ModelRateChart for use by ModelCard and other consumers.
+ *  Renders edge (solid) and path (dashed) CDF curves with 90%/99% bands when SDs are provided.
+ */
+export const ModelRateChart = React.memo(function ModelRateChart(props: ModelRateChartProps) {
   const hasEdge = props.edgeP != null && props.edgeMu != null && props.edgeSigma != null;
   const hasPath = props.pathP != null && props.pathMu != null && props.pathSigma != null;
   if (!hasEdge && !hasPath) return null;

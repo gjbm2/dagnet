@@ -621,11 +621,13 @@ def compute_edge_latency_stats(
 
     # §3.3 Latency scale uncertainty: ~0.87 × σ / √totalK
     sigma_is_default = (not fit.empirical_quality_ok) or abs(sigma_for_sd - LATENCY_DEFAULT_SIGMA) < 1e-9
-    sigma_sd_raw = 0.25 if sigma_is_default else 0.87 * sigma_for_sd / math.sqrt(n_lag)
+    sigma_sd_raw = 0.10 if sigma_is_default else 0.87 * sigma_for_sd / math.sqrt(n_lag)
     sigma_sd = max(sigma_sd_raw * quality_inflation, 0.02)
 
-    # §3.4 Onset uncertainty: max(1.0, 0.25 × onset)
-    onset_sd = max(1.0, 0.25 * onset_delta_days)
+    # §3.4 Onset uncertainty: max(0.2, 0.10 × onset), capped at 1.0
+    # Onset has outsized influence on band width near the CDF inflection point.
+    # Bayesian posteriors give onset_sd ≈ 0.1–0.3.
+    onset_sd = min(1.0, max(0.2, 0.10 * onset_delta_days))
 
     # §3.5 Onset-mu correlation: structural prior
     onset_mu_corr = -0.3 if onset_delta_days > 0 else 0.0
@@ -678,6 +680,9 @@ class EdgeLAGValues:
     sigma_sd: float = 0.0
     onset_sd: float = 0.0
     onset_mu_corr: float = 0.0
+    path_mu_sd: float = 0.0
+    path_sigma_sd: float = 0.0
+    path_onset_sd: float = 0.0
 
 
 @dataclass
@@ -759,6 +764,10 @@ def enhance_graph_latencies(
     node_path_mu: Dict[str, Optional[float]] = {anchor_id: None}
     node_path_sigma: Dict[str, Optional[float]] = {anchor_id: None}
     node_path_onset: Dict[str, float] = {anchor_id: 0.0}
+    # Heuristic dispersion DP state (quadrature sum through topo pass)
+    node_path_mu_sd: Dict[str, float] = {anchor_id: 0.0}
+    node_path_sigma_sd: Dict[str, float] = {anchor_id: 0.0}
+    node_path_onset_sd: Dict[str, float] = {anchor_id: 0.0}
     node_median_lag_prior: Dict[str, float] = {anchor_id: 0.0}
     node_dominant_edge: Dict[str, str] = {}  # D9 FIX: track winning edge for tie-breaking
 
@@ -836,16 +845,27 @@ def enhance_graph_latencies(
                     node_path_mu, node_path_sigma, node_path_onset,
                     edge_path_t95, node_path_t95, 0.0,
                     node_dominant_edge,
+                    node_path_mu_sd, node_path_sigma_sd, node_path_onset_sd,
                 )
                 _decrement_and_enqueue(to_node, in_degree, queue)
                 continue
 
-            # D4 FIX: Edge t95 from graph — prefer promoted_t95 (model output) over
-            # t95 (user-configured input), matching FE's use of promoted horizons.
-            stored_t95 = lat_block.get("promoted_t95") or lat_block.get("t95")
-            if not (isinstance(stored_t95, (int, float)) and math.isfinite(stored_t95) and stored_t95 > 0):
-                stored_t95 = None
-            effective_horizon = stored_t95 if (has_latency and stored_t95) else (stored_t95 or DEFAULT_T95_DAYS if has_latency else path_t95_to_node)
+            # D4 FIX (revised): Two distinct t95 values serve different purposes.
+            #
+            # user_t95: raw edge.p.latency.t95 — user's authoritative tail constraint.
+            #   Used as fit input (improveFitWithT95 drags sigma to match this).
+            #   Reading promoted_t95 here would create a feedback loop.
+            #
+            # effective_t95: promoted_t95 ?? t95 — best available horizon estimate.
+            #   Used for path accumulation, completeness, window planning.
+            #   Matches FE's computePathT95 which reads promoted_t95 first.
+            raw_t95 = lat_block.get("t95")
+            user_t95 = raw_t95 if (isinstance(raw_t95, (int, float)) and math.isfinite(raw_t95) and raw_t95 > 0) else None
+
+            promoted_t95 = lat_block.get("promoted_t95")
+            effective_t95 = promoted_t95 if (isinstance(promoted_t95, (int, float)) and math.isfinite(promoted_t95) and promoted_t95 > 0) else user_t95
+
+            effective_horizon = effective_t95 if (has_latency and effective_t95) else (effective_t95 or DEFAULT_T95_DAYS if has_latency else path_t95_to_node)
 
             # Get cohort data for this edge
             cohorts = param_lookup.get(edge_id, [])
@@ -853,8 +873,9 @@ def enhance_graph_latencies(
                 _propagate_path_state(
                     edge_id, node_id, to_node,
                     node_path_mu, node_path_sigma, node_path_onset,
-                    edge_path_t95, node_path_t95, path_t95_to_node + (stored_t95 or DEFAULT_T95_DAYS if has_latency else 0),
+                    edge_path_t95, node_path_t95, path_t95_to_node + (effective_t95 or DEFAULT_T95_DAYS if has_latency else 0),
                     node_dominant_edge,
+                    node_path_mu_sd, node_path_sigma_sd, node_path_onset_sd,
                 )
                 _decrement_and_enqueue(to_node, in_degree, queue)
                 continue
@@ -928,7 +949,7 @@ def enhance_graph_latencies(
                 anchor_median_lag=anchor_median_lag,
                 fit_total_k_override=total_k_weighted,
                 p_infinity_cohorts_override=cohorts_for_fit,
-                edge_t95=stored_t95,
+                edge_t95=user_t95,
                 recency_half_life_days=s.recency_half_life_days,
                 onset_delta_days=onset,
                 max_mean_median_ratio=s.max_mean_median_ratio,
@@ -1013,6 +1034,14 @@ def enhance_graph_latencies(
             if path_mu is None:
                 path_mu = node_path_mu.get(node_id)
                 path_sigma = node_path_sigma.get(node_id)
+
+            # Path-level SDs: quadrature sum of edge SD + upstream path SD
+            up_mu_sd = node_path_mu_sd.get(node_id, 0.0)
+            up_sigma_sd = node_path_sigma_sd.get(node_id, 0.0)
+            up_onset_sd = node_path_onset_sd.get(node_id, 0.0)
+            path_mu_sd = math.sqrt(latency_stats.mu_sd ** 2 + up_mu_sd ** 2)
+            path_sigma_sd = math.sqrt(latency_stats.sigma_sd ** 2 + up_sigma_sd ** 2)
+            path_onset_sd = math.sqrt(latency_stats.onset_sd ** 2 + up_onset_sd ** 2)
 
             # Cohort-mode completeness: A→Y path-anchored
             completeness_used = latency_stats.completeness
@@ -1182,6 +1211,9 @@ def enhance_graph_latencies(
                 node_path_mu[to_node] = path_mu if has_latency else (path_mu or node_path_mu.get(node_id))
                 node_path_sigma[to_node] = path_sigma if has_latency else (path_sigma or node_path_sigma.get(node_id))
                 node_path_onset[to_node] = max(node_path_onset.get(to_node, 0.0), path_onset)
+                node_path_mu_sd[to_node] = path_mu_sd
+                node_path_sigma_sd[to_node] = path_sigma_sd
+                node_path_onset_sd[to_node] = path_onset_sd
 
             # R3 FIX: Median lag prior propagation — prefer window-slice baseline
             # (FE lines 3071-3090: uses windowAggregateFn for the prior, not agg_median)
@@ -1223,6 +1255,15 @@ def enhance_graph_latencies(
                 p_evidence=round(latency_stats.p_evidence, 6),
                 forecast_available=latency_stats.forecast_available,
                 blended_mean=round(blended, 6) if blended is not None else None,
+                # Heuristic dispersion
+                p_sd=round(latency_stats.p_sd, 6),
+                mu_sd=round(latency_stats.mu_sd, 6),
+                sigma_sd=round(latency_stats.sigma_sd, 6),
+                onset_sd=round(latency_stats.onset_sd, 4),
+                onset_mu_corr=round(latency_stats.onset_mu_corr, 4),
+                path_mu_sd=round(path_mu_sd, 6),
+                path_sigma_sd=round(path_sigma_sd, 6),
+                path_onset_sd=round(path_onset_sd, 4),
             ))
 
             # R4 FIX: Process conditional_p probabilities (FE lines 3102-3210)
@@ -1308,6 +1349,9 @@ def _propagate_path_state(
     node_path_mu: Dict, node_path_sigma: Dict, node_path_onset: Dict,
     edge_path_t95: Dict, node_path_t95: Dict, t95_val: float,
     node_dominant_edge: Optional[Dict[str, str]] = None,
+    node_path_mu_sd: Optional[Dict[str, float]] = None,
+    node_path_sigma_sd: Optional[Dict[str, float]] = None,
+    node_path_onset_sd: Optional[Dict[str, float]] = None,
 ) -> None:
     """Propagate path DP state through a skipped/no-data edge."""
     edge_path_t95[edge_id] = t95_val
@@ -1324,6 +1368,12 @@ def _propagate_path_state(
             node_path_onset.get(to_node, 0.0),
             node_path_onset.get(from_node, 0.0),
         )
+        if node_path_mu_sd is not None:
+            node_path_mu_sd[to_node] = node_path_mu_sd.get(from_node, 0.0)
+        if node_path_sigma_sd is not None:
+            node_path_sigma_sd[to_node] = node_path_sigma_sd.get(from_node, 0.0)
+        if node_path_onset_sd is not None:
+            node_path_onset_sd[to_node] = node_path_onset_sd.get(from_node, 0.0)
 
 
 def _decrement_and_enqueue(

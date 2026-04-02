@@ -94,7 +94,7 @@ class ForecastingSettings:
     bayes_maturity_floor: float = 0.9
     """Minimum CDF completeness (F) for observations to enter dispersion/drift estimation."""
 
-    bayes_softplus_sharpness: float = 5.0
+    bayes_softplus_sharpness: float = 8.0
     """Sharpness of softplus onset boundary. Higher = sharper cutoff below onset."""
 
     # ── Bayesian convergence thresholds ───────────────────────

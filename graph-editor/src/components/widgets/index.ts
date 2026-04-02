@@ -17,6 +17,8 @@ export {
 export { TabbedArrayWidget } from './TabbedArrayWidget';
 export { AccordionObjectFieldTemplate } from './AccordionObjectFieldTemplate';
 export { ThreeColumnFieldTemplate } from './ThreeColumnFieldTemplate';
+export { NullField } from './NullField';
+export { ValuesTableField } from './ValuesTableField';
 
 // Future widgets will be exported here:
 // export { ConnectionSelectorWidget } from './ConnectionSelectorWidget';

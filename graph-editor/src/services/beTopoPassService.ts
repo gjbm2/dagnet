@@ -33,6 +33,15 @@ interface BeTopoEdgeResult {
   p_evidence: number;
   forecast_available: boolean;
   blended_mean?: number;
+  // Heuristic dispersion
+  p_sd?: number;
+  mu_sd?: number;
+  sigma_sd?: number;
+  onset_sd?: number;
+  onset_mu_corr?: number;
+  path_mu_sd?: number;
+  path_sigma_sd?: number;
+  path_onset_sd?: number;
 }
 
 /**
@@ -266,7 +275,7 @@ export async function runBeTopoPass(
       probability: {
         // p∞ (forecast) when available, else evidence rate as fallback
         mean: edge.p_infinity ?? edge.p_evidence,
-        stdev: 0, // analytic has no p∞ uncertainty estimate
+        stdev: edge.p_sd ?? 0,
       },
       ...(edge.mu != null ? {
         latency: {
@@ -280,6 +289,14 @@ export async function runBeTopoPass(
             path_t95: edge.path_t95,
             path_onset_delta_days: edge.path_onset_delta_days,
           } : {}),
+          // Heuristic dispersion from BE topo pass
+          ...(edge.mu_sd != null ? { mu_sd: edge.mu_sd } : {}),
+          ...(edge.sigma_sd != null ? { sigma_sd: edge.sigma_sd } : {}),
+          ...(edge.onset_sd != null ? { onset_sd: edge.onset_sd } : {}),
+          ...(edge.onset_mu_corr != null ? { onset_mu_corr: edge.onset_mu_corr } : {}),
+          ...(edge.path_mu_sd != null ? { path_mu_sd: edge.path_mu_sd } : {}),
+          ...(edge.path_sigma_sd != null ? { path_sigma_sd: edge.path_sigma_sd } : {}),
+          ...(edge.path_onset_sd != null ? { path_onset_sd: edge.path_onset_sd } : {}),
         },
       } : {}),
     };

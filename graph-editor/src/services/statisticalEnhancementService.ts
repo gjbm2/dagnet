@@ -1315,11 +1315,13 @@ export function computeEdgeLatencyStats(
 
   // §3.3 Latency scale uncertainty: ~0.87 × σ / √totalK
   const sigmaIsDefault = !fit.empirical_quality_ok || sigmaForSd === LATENCY_DEFAULT_SIGMA;
-  const sigmaSdRaw = sigmaIsDefault ? 0.25 : 0.87 * sigmaForSd / Math.sqrt(nLag);
+  const sigmaSdRaw = sigmaIsDefault ? 0.10 : 0.87 * sigmaForSd / Math.sqrt(nLag);
   const sigmaSd = Math.max(sigmaSdRaw * qualityInflation, 0.02);
 
-  // §3.4 Onset uncertainty: max(1.0, 0.25 × onset)
-  const onsetSd = Math.max(1.0, 0.25 * onsetDeltaDays);
+  // §3.4 Onset uncertainty: max(0.2, 0.10 × onset), capped at 1.0
+  // Onset has outsized influence on band width near the CDF inflection point
+  // (∂rate/∂onset peaks there). Bayesian posteriors give onset_sd ≈ 0.1–0.3.
+  const onsetSd = Math.min(1.0, Math.max(0.2, 0.10 * onsetDeltaDays));
 
   // §3.5 Onset-mu correlation: structural prior
   const onsetMuCorr = onsetDeltaDays > 0 ? -0.3 : 0.0;
@@ -2167,10 +2169,17 @@ export function enhanceGraphLatencies(
   // DP state: path-level onset = sum of edge onsets along path from anchor.
   // Mirrors PathLatency.path_delta in bayes/compiler/topology.py.
   const nodePathOnset = new Map<string, number>();
+  // DP state: path-level SDs for heuristic dispersion propagation (quadrature sum).
+  const nodePathMuSd = new Map<string, number>();
+  const nodePathSigmaSd = new Map<string, number>();
+  const nodePathOnsetSd = new Map<string, number>();
   for (const startId of startNodes) {
     nodePathMu.set(startId, undefined);
     nodePathSigma.set(startId, undefined);
     nodePathOnset.set(startId, 0);
+    nodePathMuSd.set(startId, 0);
+    nodePathSigmaSd.set(startId, 0);
+    nodePathOnsetSd.set(startId, 0);
   }
   const edgePathMuInPass = new Map<string, number | undefined>();
   const edgePathSigmaInPass = new Map<string, number | undefined>();
@@ -2278,6 +2287,9 @@ export function enhanceGraphLatencies(
           nodePathMu.set(toNodeId, skipFromMu);
           nodePathSigma.set(toNodeId, skipFromSigma);
           nodePathOnset.set(toNodeId, Math.max(nodePathOnset.get(toNodeId) ?? 0, skipFromOnset));
+          nodePathMuSd.set(toNodeId, nodePathMuSd.get(nodeId) ?? 0);
+          nodePathSigmaSd.set(toNodeId, nodePathSigmaSd.get(nodeId) ?? 0);
+          nodePathOnsetSd.set(toNodeId, nodePathOnsetSd.get(nodeId) ?? 0);
         }
         const newInDegree = (inDegree.get(toNodeId) ?? 1) - 1;
         inDegree.set(toNodeId, newInDegree);
@@ -2314,6 +2326,9 @@ export function enhanceGraphLatencies(
           nodePathMu.set(toNodeId, skipFromMu);
           nodePathSigma.set(toNodeId, skipFromSigma);
           nodePathOnset.set(toNodeId, Math.max(nodePathOnset.get(toNodeId) ?? 0, skipFromOnset2));
+          nodePathMuSd.set(toNodeId, nodePathMuSd.get(nodeId) ?? 0);
+          nodePathSigmaSd.set(toNodeId, nodePathSigmaSd.get(nodeId) ?? 0);
+          nodePathOnsetSd.set(toNodeId, nodePathOnsetSd.get(nodeId) ?? 0);
         }
         const newInDegree = (inDegree.get(toNodeId) ?? 1) - 1;
         inDegree.set(toNodeId, newInDegree);
@@ -2383,6 +2398,9 @@ export function enhanceGraphLatencies(
           nodePathMu.set(toNodeId, skipFromMu3);
           nodePathSigma.set(toNodeId, skipFromSigma3);
           nodePathOnset.set(toNodeId, Math.max(nodePathOnset.get(toNodeId) ?? 0, skipFromOnset3));
+          nodePathMuSd.set(toNodeId, nodePathMuSd.get(nodeId) ?? 0);
+          nodePathSigmaSd.set(toNodeId, nodePathSigmaSd.get(nodeId) ?? 0);
+          nodePathOnsetSd.set(toNodeId, nodePathOnsetSd.get(nodeId) ?? 0);
         }
         const newInDegree = (inDegree.get(toNodeId) ?? 1) - 1;
         inDegree.set(toNodeId, newInDegree);
@@ -2876,6 +2894,15 @@ export function enhanceGraphLatencies(
         return dsl.includes('window(') && !dsl.includes('cohort(');
       }).length;
       
+      // Path-level SDs: quadrature sum of edge SD + upstream path SD.
+      // Approximate but captures that path uncertainty grows with path length.
+      const upMuSd = nodePathMuSd?.get(nodeId) ?? 0;
+      const upSigmaSd = nodePathSigmaSd?.get(nodeId) ?? 0;
+      const upOnsetSd = nodePathOnsetSd?.get(nodeId) ?? 0;
+      const pathMuSd = Math.sqrt(latencyStats.mu_sd ** 2 + upMuSd ** 2);
+      const pathSigmaSd = Math.sqrt(latencyStats.sigma_sd ** 2 + upSigmaSd ** 2);
+      const pathOnsetSd = Math.sqrt(latencyStats.onset_sd ** 2 + upOnsetSd ** 2);
+
       const edgeLAGValues: EdgeLAGValues = {
         edgeUuid,
         latency: {
@@ -2890,6 +2917,16 @@ export function enhanceGraphLatencies(
           path_mu: pathMu,
           path_sigma: pathSigma,
           path_onset_delta_days: pathOnset,
+          // Edge-level heuristic dispersion
+          mu_sd: latencyStats.mu_sd,
+          sigma_sd: latencyStats.sigma_sd,
+          onset_sd: latencyStats.onset_sd,
+          onset_mu_corr: latencyStats.onset_mu_corr,
+          p_sd: latencyStats.p_sd,
+          // Path-level heuristic dispersion (quadrature sum)
+          path_mu_sd: pathMuSd > 0 ? pathMuSd : undefined,
+          path_sigma_sd: pathSigmaSd > 0 ? pathSigmaSd : undefined,
+          path_onset_sd: pathOnsetSd > 0 ? pathOnsetSd : undefined,
         },
         debug: {
           queryDate: queryDate.toISOString().split('T')[0],
@@ -3382,6 +3419,9 @@ export function enhanceGraphLatencies(
         nodePathMu.set(toNodeId, pathMu);
         nodePathSigma.set(toNodeId, pathSigma);
         nodePathOnset.set(toNodeId, Math.max(nodePathOnset.get(toNodeId) ?? 0, pathOnset));
+        nodePathMuSd.set(toNodeId, pathMuSd);
+        nodePathSigmaSd.set(toNodeId, pathSigmaSd);
+        nodePathOnsetSd.set(toNodeId, pathOnsetSd);
       }
       nodePathT95.set(toNodeId, Math.max(currentTargetT95, edgePathT95));
       

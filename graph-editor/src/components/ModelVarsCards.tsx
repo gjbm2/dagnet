@@ -38,6 +38,7 @@ import { LATENCY_HORIZON_DECIMAL_PLACES } from '../constants/latency';
 import CollapsibleSection from './CollapsibleSection';
 import { AutomatableField } from './AutomatableField';
 import { BayesPosteriorCard } from './analytics/BayesPosteriorCard';
+import { ModelCard } from './analytics/ModelCard';
 import { useTheme } from '../contexts/ThemeContext';
 import './ModelVarsCards.css';
 
@@ -220,29 +221,9 @@ export function ModelVarsCards({
           }
         >
           {analyticBe ? (
-            <>
-              <FieldGroup label="Probability">
-                <RoField label="p" value={fmtPct(analyticBe.probability.mean)} />
-                <RoField label="stdev" value={fmt(analyticBe.probability.stdev)} />
-              </FieldGroup>
-              {analyticBe.latency && (
-                <FieldGroup label="Latency (edge)">
-                  <RoField label="onset δ" value={fmt(analyticBe.latency.onset_delta_days, 0)} unit="d" />
-                  <RoField label="μ" value={fmt(analyticBe.latency.mu, 3)} />
-                  <RoField label="σ" value={fmt(analyticBe.latency.sigma, 3)} />
-                  <RoField label="t95" value={fmt(analyticBe.latency.t95, 1)} unit="d" />
-                </FieldGroup>
-              )}
-              {analyticBe.latency?.path_mu != null && (
-                <FieldGroup label="Latency (path)">
-                  <RoField label="path μ" value={fmt(analyticBe.latency.path_mu, 3)} />
-                  <RoField label="path σ" value={fmt(analyticBe.latency.path_sigma, 3)} />
-                  <RoField label="path onset" value={fmt(analyticBe.latency.path_onset_delta_days, 0)} unit="d" />
-                  <RoField label="path t95" value={fmt(analyticBe.latency.path_t95, 1)} unit="d" />
-                </FieldGroup>
-              )}
-              {analyticBe.source_at && <RoField label="Computed" value={analyticBe.source_at} />}
-            </>
+            <ModelCard entry={analyticBe} t95={promotedLatency?.promoted_t95 ?? promotedLatency?.t95}
+              pathT95={promotedLatency?.promoted_path_t95 ?? promotedLatency?.path_t95}
+              timestampLabel="Computed" />
           ) : (
             <p style={{ color: 'var(--text-muted)', fontStyle: 'italic', fontSize: '12px', margin: 0 }}>
               No BE analytic data. Run the BE topo pass to populate.
@@ -267,29 +248,20 @@ export function ModelVarsCards({
         >
           {analytic ? (
             <>
-              <FieldGroup label="Probability">
-                <RoField label="p" value={fmtPct(analytic.probability.mean)} />
-                <RoField label="stdev" value={fmt(analytic.probability.stdev)} />
-              </FieldGroup>
+              <ModelCard entry={analytic} t95={promotedLatency?.promoted_t95 ?? promotedLatency?.t95}
+                pathT95={promotedLatency?.promoted_path_t95 ?? promotedLatency?.path_t95}
+                timestampLabel="Retrieved" />
+              {/* t95 override controls (FE analytic card affordance) */}
               {analytic.latency && (
-                <FieldGroup label="Latency (edge)">
-                  <RoField label="onset δ" value={fmt(analytic.latency.onset_delta_days, 0)} unit="d" />
-                  <RoField label="μ" value={fmt(analytic.latency.mu, 3)} />
-                  <RoField label="σ" value={fmt(analytic.latency.sigma, 3)} />
+                <div style={{ padding: '0 10px' }}>
                   <LatencyZapOff field="t95" label="t95" unit="d" step={0.01} dp={LATENCY_HORIZON_DECIMAL_PLACES}
                     latency={promotedLatency} onUpdate={onUpdate} disabled={disabled} />
-                </FieldGroup>
+                  {analytic.latency?.path_mu != null && (
+                    <LatencyZapOff field="path_t95" label="path t95" unit="d" step={0.01} dp={LATENCY_HORIZON_DECIMAL_PLACES}
+                      latency={promotedLatency} onUpdate={onUpdate} disabled={disabled} />
+                  )}
+                </div>
               )}
-              {analytic.latency?.path_mu != null && (
-                <FieldGroup label="Latency (path)">
-                  <RoField label="path μ" value={fmt(analytic.latency.path_mu, 3)} />
-                  <RoField label="path σ" value={fmt(analytic.latency.path_sigma, 3)} />
-                  <RoField label="path onset" value={fmt(analytic.latency.path_onset_delta_days, 0)} unit="d" />
-                  <LatencyZapOff field="path_t95" label="path t95" unit="d" step={0.01} dp={LATENCY_HORIZON_DECIMAL_PLACES}
-                    latency={promotedLatency} onUpdate={onUpdate} disabled={disabled} />
-                </FieldGroup>
-              )}
-              {analytic.source_at && <RoField label="Retrieved" value={analytic.source_at} />}
             </>
           ) : (
             <p style={{ color: 'var(--text-muted)', fontStyle: 'italic', fontSize: '12px', margin: 0 }}>

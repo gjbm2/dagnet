@@ -81,7 +81,7 @@ class TestForecastingSettingsDefaults:
         assert ForecastingSettings().bayes_maturity_floor == 0.9
 
     def test_bayes_softplus_sharpness(self):
-        assert ForecastingSettings().bayes_softplus_sharpness == 5.0
+        assert ForecastingSettings().bayes_softplus_sharpness == 8.0
 
     # ── Bayesian convergence thresholds ──
     def test_bayes_rhat_threshold(self):

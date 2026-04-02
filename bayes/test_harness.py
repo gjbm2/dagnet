@@ -119,6 +119,14 @@ def _load_env(path: str) -> dict:
     return env
 
 
+def _load_settings_json(path: str) -> dict:
+    """Load extra settings from a JSON file."""
+    if not path or not os.path.isfile(path):
+        return {}
+    with open(path) as f:
+        return json.load(f)
+
+
 def _load_truth_file(graph_path: str) -> dict:
     """Load .truth.yaml sidecar if it exists."""
     truth_path = graph_path.replace(".json", ".truth.yaml")
@@ -291,6 +299,14 @@ def main():
                         help="Graph name (without .json) or shortcut: "
                              "simple=bayes-test-gm-rebuild, branch=conversion-flow-v2-recs-collapsed. "
                              "Any graph file in the data repo's graphs/ dir works.")
+    parser.add_argument("--graph-path", default=None,
+                        help="Absolute path to a graph JSON file (overrides --graph). "
+                             "Param files still loaded from the data repo unless --params-dir is given.")
+    parser.add_argument("--hash-source", default=None,
+                        help="Absolute path to graph file used for hash computation (default: same as --graph-path). "
+                             "Use this when running a patched graph whose structural hashes must match the original.")
+    parser.add_argument("--params-dir", default=None,
+                        help="Absolute path to a directory of parameter YAML files (overrides data repo).")
     parser.add_argument("--warmstart", action="store_true",
                         help="Two-pass: run once, feed posteriors back as priors, run again")
     parser.add_argument("--preflight-only", action="store_true",
@@ -310,6 +326,9 @@ def main():
     parser.add_argument("--asat", type=str, default=None,
                         help="Reproduce a historical run: use graph/params from git as of this date "
                              "(ISO: YYYY-MM-DD) and filter snapshot DB to retrieved_at <= this date")
+    parser.add_argument("--settings-json", type=str, default=None, metavar="PATH",
+                        help="Path to a JSON file of extra settings to merge into the payload "
+                             "(e.g. prior_overrides for sensitivity testing).")
     parser.add_argument("--dump-evidence", type=str, default=None, metavar="PATH",
                         help="Dump full bound evidence to JSON file after evidence binding, then stop. "
                              "Includes every trajectory (n, ages, cumulative_y), daily obs (n, k, completeness), "
@@ -364,11 +383,25 @@ def main():
         "simple": "bayes-test-gm-rebuild",
         "branch": "conversion-flow-v2-recs-collapsed",
     }
-    graph_name = GRAPH_SHORTCUTS.get(args.graph, args.graph)
-    _acquire_lock(graph_name)
-    graph_file = f"{graph_name}.json"
 
-    if asat_date:
+    if args.graph_path:
+        # Absolute path mode — bypass data repo lookup
+        graph_path = os.path.abspath(args.graph_path)
+        if not os.path.isfile(graph_path):
+            print(f"ERROR: Graph not found: {graph_path}")
+            sys.exit(1)
+        graph_name = os.path.basename(graph_path).replace(".json", "")
+        _acquire_lock(graph_name)
+        with open(graph_path) as f:
+            graph = json.load(f)
+        graph_file = os.path.basename(graph_path)
+        if asat_date:
+            print("WARNING: --asat is ignored when --graph-path is used")
+            asat_date = None
+    elif asat_date:
+        graph_name = GRAPH_SHORTCUTS.get(args.graph, args.graph)
+        _acquire_lock(graph_name)
+        graph_file = f"{graph_name}.json"
         # Load graph from git at the asat date
         import subprocess as _sp
         asat_iso = asat_date.isoformat()
@@ -410,6 +443,9 @@ def main():
         print(f"  Loaded {len(param_files_asat)} param files from git at {asat_iso}")
         graph_path = os.path.join(data_repo_path, "graphs", graph_file)  # still needed for hash computation
     else:
+        graph_name = GRAPH_SHORTCUTS.get(args.graph, args.graph)
+        _acquire_lock(graph_name)
+        graph_file = f"{graph_name}.json"
         graph_path = os.path.join(data_repo_path, "graphs", graph_file)
         if not os.path.isfile(graph_path):
             print(f"ERROR: Graph not found: {graph_path}")
@@ -432,7 +468,8 @@ def main():
 
     # --- Compute FE-authoritative hashes via Node.js ---
     print("\n── Compute hashes (Node.js) ──")
-    fe_data = _compute_fe_hashes(graph_path)
+    hash_source_path = args.hash_source or graph_path
+    fe_data = _compute_fe_hashes(hash_source_path)
     _edges = [(e["param_id"], e["edge_uuid"], e["window_hash"], e["cohort_hash"])
               for e in fe_data["edges"]]
     print(f"  {len(_edges)} edges resolved")
@@ -454,9 +491,19 @@ def main():
     print(f"  Anchor range: {anchor_from} → {anchor_to}")
 
     # --- Load param files ---
-    if asat_date and param_files_asat:
+    if args.params_dir:
+        param_files = {}
+        params_dir = os.path.abspath(args.params_dir)
+        for fname in os.listdir(params_dir):
+            if fname.endswith(".yaml") and "index" not in fname:
+                with open(os.path.join(params_dir, fname)) as f:
+                    param_id = fname.replace(".yaml", "")
+                    param_files[f"parameter-{param_id}"] = yaml.safe_load(f)
+        print(f"  Using {len(param_files)} param files from: {params_dir}")
+    elif asat_date and param_files_asat:
         param_files = param_files_asat
         print(f"  Using {len(param_files)} param files from git (asat {asat_date})")
+        params_dir = None
     else:
         param_files = {}
         params_dir = os.path.join(data_repo_path, "parameters")
@@ -659,6 +706,7 @@ def main():
             **({"chains": args.chains} if args.chains else {}),
             **({"cores": args.cores} if args.cores else {}),
             **({"dump_evidence_path": args.dump_evidence} if args.dump_evidence else {}),
+            **(_load_settings_json(args.settings_json) if args.settings_json else {}),
         },
         "_job_id": f"harness-{int(time.time())}",
     }

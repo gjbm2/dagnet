@@ -144,10 +144,10 @@
         "BAYES_SOFTPLUS_SHARPNESS": {
           "type": "number",
           "title": "Softplus Onset Sharpness",
-          "description": "Sharpness of the softplus function used to model the onset boundary in the Bayesian latency likelihood.\n\nHigher values produce a sharper cutoff below the onset day (closer to a step function); lower values produce a smoother transition. The softplus avoids the discontinuity of a hard cutoff, which improves MCMC sampling stability.\n\nIndicative values:\n- 1–2: very smooth transition\n- 5: moderate sharpness (default)\n- 10–20: very sharp (close to a hard cutoff).",
+          "description": "Sharpness of the softplus function used to model the onset boundary in the Bayesian latency likelihood.\n\nHigher values produce a sharper cutoff below the onset day (closer to a step function); lower values produce a smoother transition. The softplus avoids the discontinuity of a hard cutoff, which improves MCMC sampling stability.\n\nIndicative values:\n- 1–2: very smooth transition\n- 5: moderate sharpness\n- 8: default (raised from 5 on 2-Apr-26 for better NUTS warmup stability)\n- 10–20: very sharp (close to a hard cutoff).",
           "minimum": 0.1,
           "maximum": 50,
-          "default": 5.0
+          "default": 8.0
         },
         "BAYES_RHAT_THRESHOLD": {
           "type": "number",

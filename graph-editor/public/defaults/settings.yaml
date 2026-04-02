@@ -61,7 +61,7 @@ forecasting:
   BAYES_MATURITY_FLOOR: 0.9
 
   # Softplus onset sharpness. Higher = sharper cutoff below onset.
-  BAYES_SOFTPLUS_SHARPNESS: 5.0
+  BAYES_SOFTPLUS_SHARPNESS: 8.0
 
   # ── Bayesian convergence thresholds ──────────────────────────
 

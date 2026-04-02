@@ -65,7 +65,7 @@ const FULL_DEFAULTS = {
     BAYES_SIGMA_FLOOR: 0.01,
     BAYES_MU_PRIOR_SIGMA_FLOOR: 0.5,
     BAYES_MATURITY_FLOOR: 0.9,
-    BAYES_SOFTPLUS_SHARPNESS: 5.0,
+    BAYES_SOFTPLUS_SHARPNESS: 8.0,
     BAYES_RHAT_THRESHOLD: 1.05,
     BAYES_ESS_THRESHOLD: 400,
     BAYES_WARM_START_RHAT_MAX: 1.10,
@@ -186,7 +186,7 @@ describe('seedSettings merge integration', () => {
     expect(forecasting.BAYES_SIGMA_FLOOR).toBe(0.01);
     expect(forecasting.BAYES_MU_PRIOR_SIGMA_FLOOR).toBe(0.5);
     expect(forecasting.BAYES_MATURITY_FLOOR).toBe(0.9);
-    expect(forecasting.BAYES_SOFTPLUS_SHARPNESS).toBe(5.0);
+    expect(forecasting.BAYES_SOFTPLUS_SHARPNESS).toBe(8.0);
     expect(forecasting.BAYES_RHAT_THRESHOLD).toBe(1.05);
     expect(forecasting.BAYES_ESS_THRESHOLD).toBe(400);
     expect(forecasting.BAYES_WARM_START_RHAT_MAX).toBe(1.10);

@@ -549,6 +549,15 @@ export interface LatencyConfig {
    */
   promoted_onset_delta_days?: number;
 
+  // Promoted dispersion fields (written by applyPromotion from model_vars SDs)
+  promoted_mu_sd?: number;
+  promoted_sigma_sd?: number;
+  promoted_onset_sd?: number;
+  promoted_onset_mu_corr?: number;
+  promoted_path_mu_sd?: number;
+  promoted_path_sigma_sd?: number;
+  promoted_path_onset_sd?: number;
+
   /** Onset delay in days - minimum time before conversions begin.
    *  Aggregated from window() slice histograms (min of per-slice onset values).
    *  Used for shifted lognormal latency fitting and maturity calculations.

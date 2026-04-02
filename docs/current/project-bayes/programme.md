@@ -163,10 +163,14 @@ data-constrained. Single-source validation:
   while FE populates them).
 - **Nightly Bayes fit** — automatic posterior updates after daily
   fetch. Needs: production confidence + topo sigs.
-- **FE stats deletion** — ~4000 lines. Parity confirmed at
-  edge-level; graph-level pipeline shows ~1% drift in orchestration
-  layer (Bayesian evidence adjustment, sampled-cohort detection,
-  n_baseline selection). Needs investigation before deletion.
+- **FE stats deletion** — ~4000 lines. Parity consolidation
+  (2-Apr-26) resolved 10 orchestration deltas (D1–D10); graph-level
+  parity now proven via synthetic 3-edge graph (Vector 7). Live
+  fixture improved from 15 mismatches to 1 (stale blended_mean).
+  Horizon bootstrap moved to FE (no BE network dependency).
+  Remaining issues: onset fallback discrepancy (D11), EdgeContext
+  structural fragility (Pattern A), cohortsForFit empty-set fallback.
+  See detailed section below.
 - **Lag array defect** (doc 16) — window-type values[] entries had
   zero lag arrays (20-Mar-26). Current data (31-Mar-26) shows
   partial population (71/207 nonzero for test graph window slice).
@@ -203,7 +207,9 @@ data-constrained. Single-source validation:
 4. **Topology signatures** (doc 10) — blocks nightly scheduling.
 5. **Nightly Bayes fit** — trigger as part of nightly fetch. Needs #4.
 6. **Phase C** (context slices) — prerequisites done.
-7. **FE stats deletion** — ~4000 lines, mostly confirmed parity.
+7. **FE stats deletion** — ~4000 lines. Graph-level parity proven
+   (2-Apr-26). Remaining: D11 onset discrepancy design decision,
+   Pattern A fragility review, heuristic dispersion FE parity.
 
 ---
 
@@ -386,12 +392,47 @@ fitting owner.
   - **Status (24-Mar-26)**: Core stats primitives (fit, CDF, inverseCDF, blended
     mean, FW composition) and edge-level pipeline (`computeEdgeLatencyStats` /
     `compute_edge_latency_stats`) confirmed in parity via contract tests
-    (`statsParity.contract.test.ts` + `test_stats_parity_contract.py`). However,
-    the graph-level pipeline (`enhance_graph_latencies` vs FE Stage-2) shows ~1%
-    drift on completeness and blended_mean. The drift is in the orchestration
-    layer: Bayesian evidence adjustment, sampled-cohort detection, n_baseline
-    selection from edge context. This needs investigation before FE stats deletion
-    can proceed.
+    (`statsParity.contract.test.ts` + `test_stats_parity_contract.py`).
+  - **Status (2-Apr-26)**: Parity consolidation pass resolved 10 orchestration
+    deltas (D1–D10). Graph-level parity now proven via Vector 7 (synthetic
+    3-edge graph — FE and BE match at rounding tolerance). Live fixture
+    improved from 15 mismatches to 1. Detailed plan and ledger at
+    `.claude/plans/inherited-floating-crown.md`. Changes:
+    - D1: `query_mode` threaded to BE (window/cohort semantics match)
+    - D2: `compute_per_day_blended_mean` ported to BE (exact match proven)
+    - D3: BE request builder uses runtime settings (IDB overrides)
+    - D4: t95 split: `user_t95` (fit constraint) vs `effective_t95` (horizon)
+    - D5: FE active-edge set sent to BE
+    - D6+D7: UK date parsing, left-censor alignment
+    - D8: Rounding tolerance in parity comparison
+    - D9: Deterministic traversal order (sorted queue + edge-ID tie-breaking)
+    - D10: Graph-level parity test (Vector 7) added to both FE and BE contracts
+    - Horizon bootstrap moved from BE network call to FE-only fitting
+  - **Remaining issues (2-Apr-26)**:
+    - **D11 — Onset fallback discrepancy**: FE `enhanceGraphLatencies` derives
+      `edgeOnsetDeltaDays` only from window() slices in `paramValues`, defaulting
+      to 0 when none exist. BE falls back to graph-stored `onset_delta_days`.
+      These are semantically different scalars (window-derived onset vs
+      user/file-stored onset). In cohort-mode-only queries with non-zero graph
+      onset, FE and BE diverge. Needs design decision — not a safe fallback.
+    - **Pattern A — EdgeContext structural fragility**: FE recomputes onset,
+      forecastMean, cohortsScoped, and nBaseline live from `paramValues`. BE
+      depends on pre-computed values in `edge_contexts` sent by the FE request
+      builder (`beTopoPassService.ts`). If the request builder misses a field,
+      BE silently falls back to different values (graph-stored or defaults).
+      Any new paramValues-derived input added to FE must have a corresponding
+      `edge_contexts` entry — otherwise BE silently diverges.
+    - **cohortsForFit empty-set fallback**: FE keeps the empty set after
+      left-censoring (all cohorts older than censor window). BE falls back to
+      the full uncensored set. Minor — only affects edges where all cohorts
+      exceed the 100-day censor.
+    - **D12 — Heuristic dispersion parity**: Both FE and BE now compute
+      heuristic dispersions (`p_sd`, `mu_sd`, `sigma_sd`, `onset_sd`,
+      `onset_mu_corr`) per `heuristic-dispersion-design.md` §3. Edge-level
+      parity confirmed at 1e-9 tolerance via Vector 6 contract test.
+      Path-level propagation (quadrature sum: `path_mu_sd`, `path_sigma_sd`,
+      `path_onset_sd`) implemented on both sides. `beTopoPassService.ts`
+      passes all dispersion fields through to `analytic_be` model_vars.
 - Disable FE topo/LAG fitting pass
 - Delete FE fitting codepaths: `statisticalEnhancementService.ts`,
   `lagDistributionUtils.ts`, `forecastingParityService.ts`, and related modules
@@ -403,8 +444,8 @@ fitting owner.
 `computeEdgeLatencyStats`, `approximateLogNormalSumFit`, or any other fitting
 function. Build and lint confirm zero references.
 
-**Design detail**: Model contract, section 14.3. Detailed plan in
-`../project-db/analysis-forecasting-implementation-plan.md`.
+**Design detail**: Model contract, section 14.3. Detailed plan and ledger at
+`.claude/plans/inherited-floating-crown.md`.
 
 ---
 
@@ -1294,3 +1335,79 @@ filters + cohort mode + latency). Different param names on different
 branches querying the same edge produce the same `core_hash`.
 `query_snapshots` queries by `core_hash` alone (no `param_id` in WHERE),
 so snapshot data is shared across branches and param names by design.
+
+---
+
+## Heuristic Dispersion for Non-Bayes Stats Pass (2-Apr-26)
+
+**Status: PLUMBING COMPLETE — CALIBRATION NOT COMPLETE. BLOCKED.**
+
+### What is done
+
+Full pipeline wired end-to-end: FE + BE stats passes compute heuristic
+SDs → written to model_vars → promoted to edge → read by
+`_read_edge_model_params` → consumed by cohort maturity fan chart and
+confidence bands → rendered by widened chart gates. `ModelCard`
+component generalises the Bayesian card for all sources. JSON schema
+updated. Parity test for SD field sanity ranges added.
+
+Design: `heuristic-dispersion-design.md`. Date model fix and
+`snapshot_date` rename also done in same session.
+
+### What is NOT done — dispersion values are not sane
+
+**The heuristic SD formulas are not calibrated against real data.** The
+current constants were guessed, producing confidence bands that span
+0–100% at the CDF inflection point. This is because:
+
+1. **`onset_sd` has outsized influence.** ∂rate/∂onset peaks at the CDF
+   inflection point. The delta method amplifies onset_sd enormously
+   there. A 1-day onset uncertainty (the original floor) produces bands
+   covering the entire chart. The current floor (0.2 days) is still a
+   guess.
+
+2. **Default-sigma `sigma_sd` is a guess.** When sigma falls back to
+   0.5 (mean lag unavailable), sigma_sd = 0.10 (20% relative) has no
+   principled basis.
+
+3. **No empirical validation.** The formulas have never been compared
+   against Bayesian posterior SDs from real edges.
+
+### Required calibration work
+
+1. **Pull real edges** from the data repo that have both analytic fits
+   AND Bayesian posteriors. For each edge, record the Bayesian posterior
+   SDs (ground truth) and compute what the heuristic formulas produce
+   from the same input cohort data. Compare.
+
+2. **Understand onset_sd from the Bayesian compiler.** The compiler
+   computes `onset_sd = std(onset_samples)` from MCMC. What data
+   structure drives this? The heuristic should approximate the same
+   sensitivity — likely from the spread of per-cohort onset estimates
+   (the IQR/SD of the input to the D2 weighted-quantile estimator).
+
+3. **Derive onset_sd from onset estimator inputs, not from the point
+   estimate alone.** The current formula uses only the onset value. It
+   should use the per-cohort onset data — their spread IS the
+   uncertainty. This data is available in the stats pass.
+
+4. **Handle default-sigma properly.** Derive sigma_sd from the range of
+   plausible sigma values given the quality gate thresholds, not from a
+   guessed percentage.
+
+5. **Visual validation.** Bands should be wider than Bayesian (less
+   info) but not orders of magnitude wider. Should narrow with more
+   data. Should be consistent across edge types.
+
+### Files to change
+
+- `statisticalEnhancementService.ts` — FE onset_sd and sigma_sd formulas
+- `stats_engine.py` — BE mirror
+- `heuristic-dispersion-design.md` — §3.3, §3.4 with calibrated derivations
+- `test_stats_engine_parity.py` — update expected ranges after calibration
+
+### Risk if not completed
+
+Bands will be either too wide (noise covering the chart — current state)
+or too narrow (hiding real uncertainty). Either undermines user trust.
+**This feature must not ship until calibrated.**

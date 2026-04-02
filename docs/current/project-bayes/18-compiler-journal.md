@@ -4137,3 +4137,120 @@ testing:
 5. **155s compilation time for 49 vars is suspicious**: the simple
    graph (24 vars) compiles in 3s. Likely a representation issue in
    the PyTensor graph, not inherent model complexity.
+
+---
+
+## 2-Apr-26 — Onset-mu ridge: stochastic NUTS warmup failure
+
+### Problem
+
+Production 4-step graph (`bayes-test-gm-rebuild`) intermittently fails
+to converge on edge `7bb83fbf` (delegated-to-registered): rhat≈1.53,
+ess=7, while all other edges converge cleanly. The failure is
+non-deterministic — the same graph with identical data converges on
+some runs and not others.
+
+### Investigation: prior sensitivity
+
+Built `bayes/prior_sensitivity.py` to run the same graph with 6
+different prior configurations in parallel (via `test_harness.py`
+subprocesses). Prior overrides injected via `settings.prior_overrides`
+in `evidence.py`, bypassing the stats pass.
+
+**Results (all configs use the same data, same model structure):**
+
+| Config           | mu_prior | onset_prior | rhat  | ESS  |
+|------------------|----------|-------------|-------|------|
+| prod             | 1.607    | 5.5         | 1.529 | 7    |
+| neutral          | 0.0      | 0.0         | 1.532 | 7    |
+| wide             | 1.607    | 5.5         | 1.537 | 7    |
+| shifted          | 2.367    | 2.75        | 1.001 | 1401 |
+| no_onset         | 1.607    | 0.0         | 1.531 | 7    |
+| posterior_seeded | 2.246    | 0.45        | 1.002 | 2851 |
+
+**Key finding**: convergence depends on mu prior proximity to the
+posterior (≈2.2), not onset prior. Configs with mu_prior near 2.2
+converge; those with mu_prior at 0 or 1.6 fail. The onset prior
+is irrelevant — `shifted` converges with onset_prior=2.75 (far from
+posterior≈0.5) while `no_onset` fails with onset_prior=0.0 (close).
+
+This rules out "bad priors" as the explanation. The model geometry
+has a ridge in (mu, onset) space that NUTS cannot traverse during
+warmup when starting far from the posterior in the mu dimension.
+The mass matrix calibrated early in warmup is wrong for the region
+the sampler needs to reach.
+
+### Investigation: softplus sharpness sweep
+
+Built `bayes/softplus_sweep.py` to test k ∈ {0.5, 1.0, 2.0, 3.0,
+5.0, 8.0}. Then repeated k=3, k=5, k=8 three times each.
+
+**Single-run sweep:**
+
+| k   | rhat  | ESS  | onset | Notes                              |
+|-----|-------|------|-------|------------------------------------|
+| 0.5 | FAIL  | —    | 11.3  | Degenerate mode (onset drift)      |
+| 1.0 | FAIL  | —    | —     | Crashed                            |
+| 2.0 | 1.735 | 6    | 0.38  | Did not converge                   |
+| 3.0 | 1.003 | 1250 | 0.62  | Converged                          |
+| 5.0 | 1.538 | 7    | 0.45  | Did not converge                   |
+| 8.0 | 1.004 | 1146 | 0.60  | Converged                          |
+
+**Repeated runs (3× each):**
+
+| k   | Converged | Failed | Notes                              |
+|-----|-----------|--------|------------------------------------|
+| 3.0 | 2/3       | 1/3    |                                    |
+| 5.0 | 2/3       | 1/3    |                                    |
+| 8.0 | 3/3       | 0/3    |                                    |
+
+All converged runs find the same posterior: mu≈2.23, sigma≈0.40,
+onset≈0.60. The failure is stochastic — a warmup initialisation
+lottery, not a systematic geometry problem from any particular k.
+
+k=0.5 and k=1.0 reintroduce the degenerate mode from the 30-Mar-26
+journal entry (onset drifts to 11d). k≥3 prevents this. k=8 had the
+best empirical convergence rate in our small sample.
+
+### Action taken
+
+Raised `SOFTPLUS_SHARPNESS` default from 5 → 8. This reduces but
+does not eliminate the stochastic warmup failure.
+
+### Open questions (requires further work)
+
+1. **Is this specific to this edge/graph or generic?** The 4-step
+   graph has one edge (del-to-reg) with low conversion rate (≈11%),
+   high latency (median ≈9d), and onset near zero. This combination
+   may create a particularly sharp onset-mu ridge. Need to test on
+   more graphs — the branch graph and synth graphs — to see if the
+   same stochastic failure appears.
+
+2. **Would better chain initialisation help?** Currently chains
+   initialise from the prior. If we initialised near the stats pass
+   point estimate (mu, onset from the CDF fit), the sampler would
+   start close to the posterior and avoid the ridge traverse. This
+   is standard practice in Stan (`init="last"` or custom init).
+
+3. **Would reparameterisation break the ridge?** The onset-mu
+   correlation (≈-0.78) is structural: shifting onset trades off
+   against mu to maintain CDF shape. A non-centred parameterisation
+   or a "total latency" reparameterisation might decouple them.
+
+4. **Is more warmup sufficient?** These tests used tune=300. The
+   prod run uses tune=1000. More warmup gives NUTS more time to
+   adapt its mass matrix, which might be enough. But it's papering
+   over the geometry rather than fixing it.
+
+### Tools built
+
+- `bayes/prior_sensitivity.py` — parallel prior sensitivity probe
+  via `test_harness.py` subprocesses. Uses `settings.prior_overrides`.
+- `bayes/softplus_sweep.py` — parallel softplus sharpness sweep.
+- `settings.prior_overrides` in `evidence.py` — compiler-level
+  prior injection keyed by edge UUID prefix. No graph/param file
+  mutation needed.
+- `test_harness.py --settings-json` — merge arbitrary settings from
+  a JSON file into the harness payload.
+- `test_harness.py --graph-path` / `--hash-source` / `--params-dir`
+  — run harness against graphs/params outside the data repo.

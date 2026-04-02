@@ -102,6 +102,10 @@ export function buildCohortMaturityEChartsOption(
     cohortsInDenom: number | null;
     cohortsCoveredBase: number | null;
     cohortsCoveredProjected: number | null;
+    evidenceY: number | null;
+    evidenceX: number | null;
+    forecastY: number | null;
+    forecastX: number | null;
   };
   const byScenario = new Map<string, RowPoint[]>();
   for (const r of filteredRows) {
@@ -138,6 +142,10 @@ export function buildCohortMaturityEChartsOption(
       cohortsInDenom: parse(r?.cohorts_in_denominator),
       cohortsCoveredBase: parse(r?.cohorts_covered_base),
       cohortsCoveredProjected: parse(r?.cohorts_covered_projected),
+      evidenceY: parse(r?.evidence_y),
+      evidenceX: parse(r?.evidence_x),
+      forecastY: parse(r?.forecast_y),
+      forecastX: parse(r?.forecast_x),
     });
   }
 
@@ -198,6 +206,10 @@ export function buildCohortMaturityEChartsOption(
       cohortsInDenom: p.cohortsInDenom,
       cohortsCoveredBase: p.cohortsCoveredBase,
       cohortsCoveredProjected: p.cohortsCoveredProjected,
+      evidenceY: p.evidenceY,
+      evidenceX: p.evidenceX,
+      forecastY: p.forecastY,
+      forecastX: p.forecastX,
     });
 
     if (mode === 'f') {
@@ -222,6 +234,7 @@ export function buildCohortMaturityEChartsOption(
     const sSolid = mkLine({
       id: `${scenarioId}::solid`, name, colour, lineType: 'solid',
       data: solidPts, showSymbol: solidPts.length <= 12,
+      smooth: true,
     });
     if (sSolid) seriesOut.push(sSolid);
 
@@ -229,12 +242,14 @@ export function buildCohortMaturityEChartsOption(
       const sDashedEv = mkLine({
         id: `${scenarioId}::dashedEvidence`, colour, lineType: 'dashed', opacity: 0.75,
         data: dashedEvidencePts,
+        smooth: true,
       });
       if (sDashedEv) seriesOut.push(sDashedEv);
 
       const sMidpoint = mkLine({
         id: `${scenarioId}::midpoint`, colour, lineType: 'dotted', opacity: 0.6,
         data: midpointPts,
+        smooth: true,
       });
       if (sMidpoint) seriesOut.push(sMidpoint);
     }
@@ -398,14 +413,18 @@ export function buildCohortMaturityEChartsOption(
         }
       }
     }
-    // Bayesian confidence band — only when promoted source IS bayesian.
+    // Confidence band — rendered when promoted source has band data (Bayesian or heuristic dispersion).
     // Rendered as a hatched polygon (diagonal lines) to stay neutral on colour.
-    let bandUpper = (showPromoted && isBayesianPromoted) ? entry?.bayesBandUpper : undefined;
-    let bandLower = (showPromoted && isBayesianPromoted) ? entry?.bayesBandLower : undefined;
-    if (showPromoted && isBayesianPromoted && !bandUpper) {
+    const hasDispersion = showPromoted && (entry?.bayesBandUpper || entry?.params?.bayes_mu_sd > 0);
+    let bandUpper = hasDispersion ? entry?.bayesBandUpper : undefined;
+    let bandLower = hasDispersion ? entry?.bayesBandLower : undefined;
+    if (hasDispersion && !bandUpper) {
+      // Fallback: check per-source curves for band data (any source, not just bayesian)
+      const srcPromoted = entry?.sourceModelCurves?.[promotedSource];
       const srcBayes = entry?.sourceModelCurves?.bayesian;
-      if (srcBayes?.band_upper) bandUpper = srcBayes.band_upper;
-      if (srcBayes?.band_lower) bandLower = srcBayes.band_lower;
+      const srcWithBands = srcPromoted?.band_upper ? srcPromoted : srcBayes;
+      if (srcWithBands?.band_upper) bandUpper = srcWithBands.band_upper;
+      if (srcWithBands?.band_lower) bandLower = srcWithBands.band_lower;
     }
     let promotedBandRendered = false;
     if (Array.isArray(bandUpper) && bandUpper.length > 0 && Array.isArray(bandLower) && bandLower.length > 0) {
@@ -504,8 +523,8 @@ export function buildCohortMaturityEChartsOption(
           }
         }
 
-        // Bayesian confidence band from per-source data (skip if already rendered by promoted view)
-        if (srcName === 'bayesian' && !promotedBandRendered) {
+        // Confidence band from per-source data (any source with band data, skip if already rendered)
+        if (!promotedBandRendered) {
           const bandUpperSrc = (srcData as any)?.band_upper;
           const bandLowerSrc = (srcData as any)?.band_lower;
           if (Array.isArray(bandUpperSrc) && bandUpperSrc.length > 0 && Array.isArray(bandLowerSrc) && bandLowerSrc.length > 0) {
@@ -656,8 +675,13 @@ export function buildCohortMaturityEChartsOption(
           .map((it: any) => `${it?.seriesName || 'Scenario'}: <strong>${fmtPercent(it?.value?.[1])}</strong>`);
 
         const extra_: string[] = [];
-        if (best?.baseRate !== null && best?.baseRate !== undefined) extra_.push(`Evidenced: <strong>${fmtPercent(best.baseRate)}</strong>`);
-        if (best?.projectedRate !== null && best?.projectedRate !== undefined) extra_.push(`Projected: <strong>${fmtPercent(best.projectedRate)}</strong>`);
+        // Components for epoch B debugging
+        if (best?.evidenceY != null) extra_.push(`evidence y: <strong>${best.evidenceY.toFixed(0)}</strong>`);
+        if (best?.evidenceX != null) extra_.push(`evidence x: <strong>${best.evidenceX.toFixed(0)}</strong>`);
+        if (best?.forecastX != null) extra_.push(`forecast x: <strong>${best.forecastX.toFixed(0)}</strong>`);
+        if (best?.forecastY != null) extra_.push(`forecast y: <strong>${best.forecastY.toFixed(0)}</strong>`);
+        if (best?.baseRate !== null && best?.baseRate !== undefined) extra_.push(`evidence rate: <strong>${fmtPercent(best.baseRate)}</strong>`);
+        if (best?.projectedRate !== null && best?.projectedRate !== undefined) extra_.push(`projected: <strong>${fmtPercent(best.projectedRate)}</strong>`);
         const modelItem = items.find((it: any) => it?.seriesId === 'model_cdf');
         if (modelItem) {
           const mv = modelItem?.value?.[1];

@@ -91,6 +91,9 @@ def bind_evidence(
         if et.has_latency:
             ev.latency_prior = _resolve_latency_prior(et, pf_data)
 
+        # --- Settings-level prior overrides (e.g. sensitivity testing) ---
+        _apply_prior_overrides(ev, et, edge_id, settings)
+
         # --- Warm-start: kappa, kappa_p, cohort latency ---
         _resolve_warm_start_extras(ev, et, pf_data)
 
@@ -249,6 +252,9 @@ def bind_snapshot_evidence(
         # --- Latency prior (doc 21: warm-start from previous posterior) ---
         if et.has_latency:
             ev.latency_prior = _resolve_latency_prior(et, pf_data)
+
+        # --- Settings-level prior overrides (e.g. sensitivity testing) ---
+        _apply_prior_overrides(ev, et, edge_id, settings)
 
         # --- Warm-start: kappa, kappa_p, cohort latency ---
         _resolve_warm_start_extras(ev, et, pf_data)
@@ -959,6 +965,52 @@ def _warm_start_acceptable(slice_data: dict) -> bool:
     if ess is not None and float(ess) < _WARM_START_ESS_MIN:
         return False
     return True
+
+
+def _apply_prior_overrides(ev, et, edge_id: str, settings: dict) -> None:
+    """Apply settings-level prior overrides for sensitivity testing.
+
+    settings.prior_overrides is a dict keyed by edge UUID (or prefix).
+    Each value is a dict with optional keys:
+        mu, sigma, onset_delta_days  — latency prior overrides
+        alpha, beta                  — probability prior overrides
+
+    Example settings payload:
+        {"prior_overrides": {"7bb83fbf": {"onset_delta_days": 0, "mu": 2.0}}}
+    """
+    overrides = settings.get("prior_overrides")
+    if not overrides or not isinstance(overrides, dict):
+        return
+
+    # Match by prefix
+    matched = None
+    for prefix, ov in overrides.items():
+        if edge_id.startswith(prefix):
+            matched = ov
+            break
+    if not matched:
+        return
+
+    # Latency overrides
+    if ev.latency_prior is not None:
+        if "mu" in matched:
+            ev.latency_prior.mu = float(matched["mu"])
+        if "sigma" in matched:
+            ev.latency_prior.sigma = float(matched["sigma"])
+        if "onset_delta_days" in matched:
+            ev.latency_prior.onset_delta_days = float(matched["onset_delta_days"])
+            ev.latency_prior.onset_uncertainty = max(1.0, float(matched["onset_delta_days"]) * 0.3)
+        ev.latency_prior.source = "override"
+
+    # Probability prior overrides
+    if "alpha" in matched and "beta" in matched:
+        ev.prob_prior = ProbabilityPrior(
+            alpha=float(matched["alpha"]),
+            beta=float(matched["beta"]),
+            source="override",
+        )
+
+
 
 
 def _resolve_latency_prior(et, pf_data: dict | None) -> LatencyPrior:

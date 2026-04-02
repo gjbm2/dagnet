@@ -46,7 +46,7 @@ export function AccordionObjectFieldTemplate(props: ObjectFieldTemplateProps) {
   const { title, description, properties, uiSchema, schema } = props;
 
   // ── Mode 1: Grouped accordion ──
-  const groups: FieldGroup[] | undefined = uiSchema?.['ui:options']?.groups;
+  const groups = uiSchema?.['ui:options']?.groups as FieldGroup[] | undefined;
   if (Array.isArray(groups) && groups.length > 0) {
     return (
       <GroupedAccordion

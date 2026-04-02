@@ -170,21 +170,20 @@ mu and sigma, it is not fitted from the lag distribution, so we cannot
 derive its uncertainty from the same sampling theory.
 
 ```
-onset_sd = max(1.0, 0.25 * onset)
-```
-
-When onset = 0 (no dead-time):
-
-```
-onset_sd = 1.0
+onset_sd = min(1.0, max(0.2, 0.10 * onset))
 ```
 
 **Rationale:**
-- 25% relative uncertainty is conservative but not uninformative
-- Floor of 1.0 day prevents zero SD — even "no onset" has ~1 day
-  uncertainty about whether a short delay exists
+- Onset has outsized influence on band width near the CDF inflection
+  point because ∂rate/∂onset peaks there. The delta method amplifies
+  onset uncertainty enormously in that region.
+- Bayesian posteriors typically give onset_sd ≈ 0.1–0.3 days.
+- Floor of 0.2 days (not 1.0 — that produced bands spanning 0–100%).
+- 10% relative uncertainty (not 25% — onset is relatively well-
+  determined by the data).
+- Capped at 1.0 day to prevent extreme values for large onsets.
 - Not sample-size dependent because onset derivation uses a different
-  estimation method (weighted quantile of per-cohort onsets)
+  estimation method (weighted quantile of per-cohort onsets).
 
 ### 3.5 Onset-mu correlation: `onset_mu_corr`
 
@@ -740,7 +739,7 @@ Stats Pass (FE or BE)
 | p | 0.50 | 0.005 | Beta(5001, 5001): very tight |
 | mu | 1.44 (median=4.2 days) | 0.009 | 1.25 * 0.5 / sqrt(5000) |
 | sigma | 0.50 | 0.006 | 0.87 * 0.5 / sqrt(5000) |
-| onset | 2.0 days | 1.0 | max(1.0, 0.5) = 1.0 |
+| onset | 2.0 days | 0.2 | max(0.2, 0.10×2.0) = 0.2, floor |
 
 Fan width: very narrow. Appropriate — we have lots of data.
 
@@ -751,7 +750,7 @@ Fan width: very narrow. Appropriate — we have lots of data.
 | p | 0.25 | 0.030 | Beta(51, 151) |
 | mu | 2.30 (median=10 days) | 0.088 | 1.25 * 0.5 / sqrt(50) |
 | sigma | 0.50 | 0.061 | 0.87 * 0.5 / sqrt(50) |
-| onset | 0.0 days | 1.0 | floor |
+| onset | 0.0 days | 0.2 | max(0.2, 0) = 0.2, floor |
 
 Fan width: moderate. Appropriate — limited data, visible uncertainty.
 
@@ -762,7 +761,7 @@ Fan width: moderate. Appropriate — limited data, visible uncertainty.
 | p | 0.15 | 0.100 | floor (totalK < 30) |
 | mu | 1.10 (median=3 days) | 0.228 | 1.25 * 0.5 / sqrt(15), then 2x quality inflation |
 | sigma | 0.50 (default) | 0.250 | default sigma -> 0.25 |
-| onset | 1.0 days | 1.0 | floor |
+| onset | 1.0 days | 0.2 | max(0.2, 0.10×1.0) = 0.2, floor |
 
 Fan width: wide. Appropriate — very little data, honest uncertainty.
 Quality gate failure triggers 2x inflation on mu_sd.

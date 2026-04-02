@@ -527,7 +527,7 @@ export const BAYES_DIRICHLET_CONC_FLOOR = 0.5;      // min Beta/Dirichlet concen
 export const BAYES_SIGMA_FLOOR = 0.01;              // min latency σ (no-latency threshold)
 export const BAYES_MU_PRIOR_SIGMA_FLOOR = 0.5;      // min μ prior uncertainty
 export const BAYES_MATURITY_FLOOR = 0.9;            // min CDF for dispersion estimation
-export const BAYES_SOFTPLUS_SHARPNESS = 5.0;        // onset boundary sharpness
+export const BAYES_SOFTPLUS_SHARPNESS = 8.0;        // onset boundary sharpness
 
 // ── Bayesian convergence thresholds ──
 export const BAYES_RHAT_THRESHOLD = 1.05;           // max rhat for convergence

@@ -551,6 +551,42 @@ function buildEdgeInfoResult(graph: ConversionGraph, dsl: string): AnalysisResul
   const probPosterior = edge.p?.posterior as any;
   const latPosterior = (edge.p?.latency as any)?.posterior || null;
 
+  // Build posteriors metadata — from Bayesian posterior if available,
+  // else from promoted model_vars latency (heuristic dispersion).
+  let posteriorsMeta: Record<string, any> | undefined;
+  if (probPosterior || latPosterior) {
+    // Bayesian posterior available
+    const bayesMv = (edge.p?.model_vars as any[])?.find((mv: any) => mv.source === 'bayesian');
+    posteriorsMeta = {
+      probability: probPosterior || null,
+      latency: latPosterior,
+      paramId: edge.p?.id || null,
+      t95: bayesMv?.latency?.t95,
+      path_t95: bayesMv?.latency?.path_t95,
+    };
+  } else if (edge.p?.latency?.mu != null && edge.p?.latency?.promoted_mu_sd != null) {
+    // No Bayesian posterior, but promoted model_vars with heuristic dispersion.
+    // Build a LatencyPosterior-shaped object from promoted fields.
+    const lat = edge.p.latency as any;
+    posteriorsMeta = {
+      probability: null,
+      latency: {
+        mu_mean: lat.mu, mu_sd: lat.promoted_mu_sd,
+        sigma_mean: lat.sigma, sigma_sd: lat.promoted_sigma_sd,
+        onset_delta_days: lat.promoted_onset_delta_days ?? lat.onset_delta_days,
+        onset_sd: lat.promoted_onset_sd,
+        onset_mu_corr: lat.promoted_onset_mu_corr,
+        path_mu_mean: lat.path_mu, path_mu_sd: lat.promoted_path_mu_sd,
+        path_sigma_mean: lat.path_sigma, path_sigma_sd: lat.promoted_path_sigma_sd,
+        path_onset_delta_days: lat.path_onset_delta_days,
+        path_onset_sd: lat.promoted_path_onset_sd,
+      },
+      paramId: edge.p?.id || null,
+      t95: lat.promoted_t95 ?? lat.t95,
+      path_t95: lat.promoted_path_t95 ?? lat.path_t95,
+    };
+  }
+
   return {
     analysis_type: 'edge_info',
     analysis_name: `Edge: ${edgeLabel}`,
@@ -570,21 +606,7 @@ function buildEdgeInfoResult(graph: ConversionGraph, dsl: string): AnalysisResul
     data,
     metadata: {
       ...(latencyCdf ? { latency_cdf: latencyCdf } : {}),
-      ...((probPosterior || latPosterior) ? {
-        posteriors: {
-          probability: probPosterior || null,
-          latency: latPosterior,
-          paramId: edge.p?.id || null,
-          // Model tab: use bayesian model_vars t95, not promoted scalars
-          ...(() => {
-            const bayesMv = (edge.p?.model_vars as any[])?.find((mv: any) => mv.source === 'bayesian');
-            return {
-              t95: bayesMv?.latency?.t95,
-              path_t95: bayesMv?.latency?.path_t95,
-            };
-          })(),
-        },
-      } : {}),
+      ...(posteriorsMeta ? { posteriors: posteriorsMeta } : {}),
     },
   };
 }

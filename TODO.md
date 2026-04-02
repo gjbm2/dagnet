@@ -15,6 +15,8 @@
 
 - We should remove the parity testing piece and complete cutover of BE stats service soon
 
+- **Live parity fixture stale — `TestTopoPassLiveFixture.test_live_parity` skipped** (2-Apr-26): Golden fixture (`debug/tmp.topo-pass-golden.json`) was captured before D2/D4/D5/D9 parity fixes landed. `completeness` and `blended_mean` diverge because the BE now uses `compute_per_day_blended_mean()`. Recapture fixture from a fresh FE fetch, then remove the `@pytest.mark.skip` in `lib/tests/test_stats_engine_parity.py`.
+
 - **Daily automation audit 28-Feb-26 — two serious issues need investigation** (see `docs/current/daily-automation-audit-28-feb-26.md`):
   1. **Git commit race (CRITICAL):** "Tree SHA does not exist" failure during sequential graph commits — the retry-after-pull logic does not re-resolve the base tree SHA, causing the retry to fail with the same stale tree. Recovered after a second full cycle, but ~13 min delay and session flagged as error. Investigate `repositoryOperationsService.ts` commit flow and `gitService.ts` tree creation.
   2. **Forecasting parity drift (HIGH):** 9 edges across 2 graphs have severe FE vs BE forecast divergence (worst: 64.7% mu drift, 37.1% mu on another graph). Evidence data matches; the drift is in the lognormal fit parameters. Likely related to the known stale `onset_delta_days` defect (see below). Reinforces urgency of BE stats cutover.
