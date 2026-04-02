@@ -135,15 +135,27 @@ export function ParameterSection({
       }
     }
   }, [bayesParamId, currentGraph, setGraph, objectId]);
-  const handleBayesDeleteHistory = useCallback(() => {
+  const handleBayesDeleteHistory = useCallback(async () => {
     if (!bayesParamId) return;
     // eslint-disable-next-line no-restricted-globals
     if (!confirm('Delete all Bayesian fit history for this parameter?\n\nFit history is used for volatility estimation and cannot be recovered.')) return;
-    void deleteHistoryForParam(bayesParamId).then(ok => {
-      if (ok) toast.success('Fit history deleted');
-      else toast('No fit history to delete');
-    });
-  }, [bayesParamId]);
+    const ok = await deleteHistoryForParam(bayesParamId, currentGraph
+      ? { graph: currentGraph, setGraph }
+      : undefined,
+    );
+    if (!ok) { toast('No posterior to delete'); return; }
+    toast.success('Posterior deleted');
+
+    // Trigger from-file stats pass so the graph re-renders with posterior cleared
+    const freshGraph = currentGraph;
+    if (freshGraph && objectId) {
+      const items = [createFetchItem('parameter', bayesParamId, objectId, { paramSlot: 'p' })];
+      const dsl = (freshGraph as any).currentQueryDSL || '';
+      if (dsl) {
+        await fetchItemsBatch(items, { mode: 'from-file', writeLagHorizonsToGraph: true }, freshGraph as any, setGraph as any, dsl);
+      }
+    }
+  }, [bayesParamId, currentGraph, setGraph, objectId]);
 
   // §17.1: When model_vars exists on a probability param, the cards replace
   // the flat scalar layout (mean slider, stdev, latency fields, posterior indicator).

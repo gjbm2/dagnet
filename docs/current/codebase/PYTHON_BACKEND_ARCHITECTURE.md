@@ -40,7 +40,7 @@ Key client methods: `health()`, `parseQuery()`, `generateAllParameters()`, `enha
 
 | Endpoint | Method | Purpose |
 |----------|--------|---------|
-| `/api/stats-enhance` | POST | Statistical enhancement (MCMC, Bayesian inference, trend detection) |
+| `/api/stats-enhance` | POST | Generic raw-aggregation enhancement (`mcmc`, `bayesian-complex`, `trend-aware`, `robust`) via `lib/stats_enhancement.py`; distinct from the analytic topo pass |
 | `/api/runner/analyze` | POST | Run analysis on snapshot data |
 | `/api/runner/available-analyses` | POST | List available analysis types for a graph |
 
@@ -48,8 +48,8 @@ Key client methods: `health()`, `parseQuery()`, `generateAllParameters()`, `enha
 
 | Endpoint | Method | Purpose |
 |----------|--------|---------|
-| `/api/lag/recompute-models` | POST | Recompute latency/lag fit models for edges |
-| `/api/lag/topo-pass` | POST | Topology pass: aggregate lag data across cohort dates |
+| `/api/lag/recompute-models` | POST | Recompute latency/lag fit models from snapshot DB evidence via `lib/runner/lag_model_fitter.py` |
+| `/api/lag/topo-pass` | POST | Live BE analytic topo pass: Python port of the FE Stage-2 / `enhanceGraphLatencies` flow via `lib/runner/stats_engine.py` |
 
 ### Bayes service (Modal)
 
@@ -157,7 +157,9 @@ SlicePosteriorEntry: alpha, beta_param, p_hdi_lower/upper, mu/sigma mean/sd, ons
 | `lib/query_dsl.py` | DSL parsing and compilation |
 | `lib/bayes_local.py` | Local Bayes service (dev) |
 | `lib/snapshot_service.py` | Snapshot DB queries (PostgreSQL/Neon) |
-| `lib/stats_enhancement.py` | Statistical enhancement (trends, MCMC) |
+| `lib/stats_enhancement.py` | Generic `/api/stats-enhance` helpers for raw-aggregation enhancement (trends, MCMC-style summaries, robust stats) |
+| `lib/runner/stats_engine.py` | Live BE analytic topo pass behind `/api/lag/topo-pass` |
+| `lib/runner/lag_model_fitter.py` | Snapshot-evidence lag model fitting behind `/api/lag/recompute-models` |
 | `lib/graph_select.py` | Graph topology filtering |
 | `src/lib/graphComputeClient.ts` | Frontend client (caching, mock mode) |
 | `src/lib/pythonApiBase.ts` | Base URL resolution |

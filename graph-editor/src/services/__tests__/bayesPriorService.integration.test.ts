@@ -3,7 +3,7 @@
  *
  * Tests the FE-side operations:
  *   - resetPriorsForParam: sets bayes_reset flag on param file
- *   - deleteHistoryForParam: removes fit_history from param file
+ *   - deleteHistoryForParam: removes entire posterior from param file
  *   - clearBayesResetForParam: clears the flag after successful fit
  *   - Bulk variants: iterate all graph edges
  *
@@ -183,27 +183,25 @@ describe('bayesPriorService — single-param operations', () => {
     expect(isParamDirty('test-param')).toBe(false);
   });
 
-  it('should delete fit_history from posterior and mark dirty', async () => {
+  it('should delete entire posterior and mark dirty', async () => {
     await registerParam('test-param', makeParamFile('test-param', { posterior: true, fitHistory: true }));
 
     const result = await deleteHistoryForParam('test-param');
 
     expect(result).toBe(true);
     const doc = getParamDoc('test-param');
-    expect(doc.posterior).toBeDefined();
-    expect(doc.posterior.fit_history).toBeUndefined();
-    // Slices should still be present
-    expect(doc.posterior.slices).toBeDefined();
-    expect(doc.posterior.slices['window()']).toBeDefined();
+    expect(doc.posterior).toBeUndefined();
     expect(isParamDirty('test-param')).toBe(true);
   });
 
-  it('should return false when no fit_history exists', async () => {
+  it('should delete posterior even when no fit_history exists', async () => {
     await registerParam('test-param', makeParamFile('test-param', { posterior: true }));
 
     const result = await deleteHistoryForParam('test-param');
 
-    expect(result).toBe(false);
+    expect(result).toBe(true);
+    const doc = getParamDoc('test-param');
+    expect(doc.posterior).toBeUndefined();
   });
 
   it('should return false when param file has no posterior at all', async () => {
@@ -371,8 +369,131 @@ describe('bayesPriorService — bulk operations', () => {
     const count = await deleteHistoryForAllParams(() => graph as any);
 
     expect(count).toBe(2);
-    expect(getParamDoc('param-a').posterior.fit_history).toBeUndefined();
-    expect(getParamDoc('param-b').posterior.fit_history).toBeUndefined();
+    expect(getParamDoc('param-a').posterior).toBeUndefined();
+    expect(getParamDoc('param-b').posterior).toBeUndefined();
+  });
+
+  it('should clear posterior, _posteriorSlices, and latency.posterior from live graph edges after bulk delete', async () => {
+    await registerParam('param-a', makeParamFile('param-a', { posterior: true, fitHistory: true }));
+    await registerParam('param-b', makeParamFile('param-b', { posterior: true }));
+    // Simulate real graph edges that have posterior data hydrated onto them
+    // (this is what UpdateManager does when loading from param files)
+    const graph: any = {
+      nodes: [
+        { uuid: 'anchor', id: 'anchor', entry: { is_start: true } },
+        { uuid: 't1', id: 't1' },
+        { uuid: 't2', id: 't2' },
+      ],
+      edges: [
+        { uuid: 'e1', from: 'anchor', to: 't1', p: {
+          id: 'param-a',
+          posterior: { alpha: 80, beta: 200, ess: 500, rhat: 1.001, evidence_grade: 3, distribution: 'beta' },
+          _posteriorSlices: { slices: { 'window()': { alpha: 80, beta: 200 } }, fitted_at: '1-Feb-25' },
+          latency: { latency_parameter: true, posterior: { mu_mean: 2.5, sigma_mean: 0.35, ess: 400, rhat: 1.002 } },
+          model_source_preference: 'bayesian',
+          model_vars: [{ source: 'bayesian', probability: { mean: 0.15 }, quality: { gate_passed: true } }],
+        } },
+        { uuid: 'e2', from: 'anchor', to: 't2', p: {
+          id: 'param-b',
+          posterior: { alpha: 60, beta: 150, ess: 300, rhat: 1.05, evidence_grade: 2, distribution: 'beta' },
+          _posteriorSlices: { slices: { 'window()': { alpha: 60, beta: 150 } }, fitted_at: '1-Jan-25' },
+          latency: { latency_parameter: true, posterior: { mu_mean: 1.8, sigma_mean: 0.5, ess: 250, rhat: 1.01 } },
+          model_vars: [{ source: 'bayesian', probability: { mean: 0.20 }, quality: { gate_passed: true } }],
+        } },
+      ],
+    };
+
+    const count = await deleteHistoryForAllParams(() => graph);
+
+    expect(count).toBe(2);
+
+    // Param files: posterior removed
+    expect(getParamDoc('param-a').posterior).toBeUndefined();
+    expect(getParamDoc('param-b').posterior).toBeUndefined();
+
+    // Live graph edge 1: all posterior data cleared
+    const e1 = graph.edges[0];
+    expect(e1.p.posterior).toBeUndefined();
+    expect(e1.p._posteriorSlices).toBeUndefined();
+    expect(e1.p.latency.posterior).toBeUndefined();
+    expect(e1.p.model_source_preference).toBeUndefined();
+    expect(e1.p.model_vars[0].quality.gate_passed).toBe(false);
+
+    // Live graph edge 2: all posterior data cleared
+    const e2 = graph.edges[1];
+    expect(e2.p.posterior).toBeUndefined();
+    expect(e2.p._posteriorSlices).toBeUndefined();
+    expect(e2.p.latency.posterior).toBeUndefined();
+    expect(e2.p.model_vars[0].quality.gate_passed).toBe(false);
+  });
+
+  it('should clear posterior data from single edge when graphMutation is provided to deleteHistoryForParam', async () => {
+    await registerParam('test-param', makeParamFile('test-param', { posterior: true, fitHistory: true }));
+    const graph: any = {
+      edges: [
+        { uuid: 'e1', p: {
+          id: 'test-param',
+          posterior: { alpha: 80, beta: 200, ess: 500, rhat: 1.001, distribution: 'beta' },
+          _posteriorSlices: { slices: { 'window()': { alpha: 80, beta: 200 } }, fitted_at: '1-Feb-25' },
+          latency: { latency_parameter: true, posterior: { mu_mean: 2.5, ess: 400, rhat: 1.002 } },
+          model_source_preference: 'bayesian',
+          model_vars: [{ source: 'bayesian', quality: { gate_passed: true } }],
+        } },
+        { uuid: 'e2', p: {
+          id: 'other-param',
+          posterior: { alpha: 50, beta: 100 },
+          _posteriorSlices: { slices: { 'window()': { alpha: 50, beta: 100 } } },
+        } },
+      ],
+    };
+    const setGraph = vi.fn();
+
+    const result = await deleteHistoryForParam('test-param', { graph, setGraph });
+
+    expect(result).toBe(true);
+    // Param file: posterior removed
+    expect(getParamDoc('test-param').posterior).toBeUndefined();
+
+    // Matching edge: all posterior data cleared
+    const e1 = graph.edges[0];
+    expect(e1.p.posterior).toBeUndefined();
+    expect(e1.p._posteriorSlices).toBeUndefined();
+    expect(e1.p.latency.posterior).toBeUndefined();
+    expect(e1.p.model_source_preference).toBeUndefined();
+    expect(e1.p.model_vars[0].quality.gate_passed).toBe(false);
+
+    // Unrelated edge: completely untouched
+    const e2 = graph.edges[1];
+    expect(e2.p.posterior).toEqual({ alpha: 50, beta: 100 });
+    expect(e2.p._posteriorSlices).toBeDefined();
+  });
+
+  it('should clear stale graph edge posteriors even when param files have no posterior (idempotent)', async () => {
+    // Simulate: param files already had posterior deleted in a previous run,
+    // but graph edges still carry stale hydrated posterior data
+    await registerParam('param-a', makeParamFile('param-a'));  // NO posterior on param file
+    const graph: any = {
+      edges: [
+        { uuid: 'e1', p: {
+          id: 'param-a',
+          posterior: { alpha: 80, beta: 200, ess: 500, rhat: 1.001, distribution: 'beta' },
+          _posteriorSlices: { slices: { 'window()': { alpha: 80, beta: 200 } } },
+          latency: { latency_parameter: true, posterior: { mu_mean: 2.5, ess: 400, rhat: 1.002 } },
+          model_vars: [{ source: 'bayesian', quality: { gate_passed: true } }],
+        } },
+      ],
+    };
+
+    const count = await deleteHistoryForAllParams(() => graph);
+
+    // count > 0 because edges were cleared even though no param files were updated
+    expect(count).toBeGreaterThan(0);
+    // Graph edge: all posterior data cleared
+    const e1 = graph.edges[0];
+    expect(e1.p.posterior).toBeUndefined();
+    expect(e1.p._posteriorSlices).toBeUndefined();
+    expect(e1.p.latency.posterior).toBeUndefined();
+    expect(e1.p.model_vars[0].quality.gate_passed).toBe(false);
   });
 
   it('should return 0 when graph has no edges', async () => {

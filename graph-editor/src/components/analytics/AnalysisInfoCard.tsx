@@ -148,11 +148,20 @@ export function AnalysisInfoCard({ result, fontSize, defaultTab, onFileLink, tab
     if (!bayesParamId) return;
     // eslint-disable-next-line no-restricted-globals
     if (!confirm('Delete all Bayesian fit history for this parameter?\n\nFit history is used for volatility estimation and cannot be recovered.')) return;
-    void deleteHistoryForParam(bayesParamId).then(ok => {
-      if (ok) toast.success('Fit history deleted');
-      else toast('No fit history to delete');
+    void deleteHistoryForParam(bayesParamId, _ddGraph && _ddSetGraph
+      ? { graph: _ddGraph, setGraph: _ddSetGraph }
+      : undefined,
+    ).then(ok => {
+      if (!ok) { toast('No posterior to delete'); return; }
+      toast.success('Posterior deleted');
+      // Force graph re-render so forecast quality view updates immediately.
+      // The in-place mutation cleared edge.p.posterior; shallow-cloning the
+      // graph gives React a new reference to trigger the update.
+      if (_ddGraph && _ddSetGraph) {
+        _ddSetGraph({ ..._ddGraph, edges: [...(_ddGraph.edges ?? [])] });
+      }
     });
-  }, [bayesParamId]);
+  }, [bayesParamId, _ddGraph, _ddSetGraph]);
   const resolvedResetPriors = onResetPriors || (bayesParamId ? handleResetPriors : undefined);
   const resolvedDeleteHistory = onDeleteHistory || (bayesParamId ? handleDeleteHistory : undefined);
 

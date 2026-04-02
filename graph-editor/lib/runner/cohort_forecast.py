@@ -534,21 +534,6 @@ def compute_cohort_maturity_rows(
                     upstream_alpha = _up_p * 20.0
                     upstream_beta = (1.0 - _up_p) * 20.0
 
-    # ── Path-level prior for cohort-mode y-forecast ──────────────────
-    # In cohort mode, y_forecast uses a_pop × path_CDF × path_rate.
-    # path_rate = P(anchor entrant converts at to-node) = upstream_p × edge_p.
-    # alpha_0/beta_0 encode the EDGE rate — we need separate path-level
-    # alpha/beta so y/x → edge_rate at τ→∞ (not y/x → 1.0).
-    path_alpha: float = alpha_0
-    path_beta: float = beta_0
-    if not is_window and upstream_params is not None:
-        _up_p = upstream_params['p']
-        _path_p = edge_p * _up_p  # path rate = edge rate × upstream rate
-        # Use the edge's concentration (κ = α₀+β₀) scaled to the path rate
-        _kappa_path = alpha_0 + beta_0
-        path_alpha = _path_p * _kappa_path
-        path_beta = (1.0 - _path_p) * _kappa_path
-
     # ── Per-Cohort info from last frame ────────────────────────────────
     cohort_info: Dict[str, Dict[str, Any]] = {}
     last_frame = None
@@ -718,6 +703,78 @@ def compute_cohort_maturity_rows(
         except Exception:
             pass
 
+    # ── Pre-compute dense per-Cohort arrays ───────────────────────────
+    # Computed ONCE here, consumed by MC loop, evidence rate, and midpoint.
+    # Eliminates scattered is_window branches at each consumption point.
+    #
+    # For each Cohort:
+    #   obs_x[tau]  — observed x with carry-forward (dense, 0..max_tau)
+    #   obs_y[tau]  — observed y with carry-forward (dense, 0..max_tau)
+    #   x_at_tau[tau] — what x IS at each tau:
+    #       window: flat N_i
+    #       cohort: a_pop × reach × CDF_path(τ), floored at N_i
+    #   x_frontier  — x at the frontier (tau_max)
+    for c in cohort_list:
+        N_i = c['x_frozen']
+        a_i = c['tau_max']
+        ad_str = c['anchor_day'].isoformat()
+        a_pop = c.get('a_frozen', N_i) or N_i or 1.0
+        tau_data = cohort_at_tau.get(ad_str, {})
+
+        # ── observed x/y with carry-forward ───────────────────────
+        obs_x = [0.0] * (max_tau + 1)
+        obs_y = [0.0] * (max_tau + 1)
+        # Window: x is always N_i. Cohort: x only known at observed taus.
+        last_x = float(N_i) if is_window else 0.0
+        last_y = 0.0
+        for t in range(max_tau + 1):
+            if t <= a_i:
+                obs = tau_data.get(t)
+                if obs:
+                    last_x = obs[0]
+                    last_y = obs[1]
+                elif is_window:
+                    last_x = float(N_i)
+                    # last_y carries forward
+                obs_x[t] = last_x
+                obs_y[t] = last_y
+            else:
+                # Beyond frontier: carry-forward frozen values
+                obs_x[t] = last_x if last_x > 0 else float(N_i)
+                obs_y[t] = last_y
+        c['obs_x'] = obs_x
+        c['obs_y'] = obs_y
+
+        # ── x at each tau (flat or model-derived) ─────────────────
+        if is_window or upstream_path_cdf is None or reach_at_from_node <= 0:
+            c['x_at_tau'] = [float(N_i)] * (max_tau + 1)
+            c['x_frontier'] = float(N_i)
+        else:
+            # Cohort: a_pop × reach × CDF_path(τ), floored at N_i.
+            # upstream_path_cdf is (T,) where T = max_tau+1 from the MC grid.
+            # But it's only available inside the MC block (computed from tau_grid).
+            # For the pre-computation, use point-estimate upstream CDF.
+            x_arr = [0.0] * (max_tau + 1)
+            total_w = 0.0
+            weighted_cdf = [0.0] * (max_tau + 1)
+            for _up in upstream_params_list:
+                _up_sigma = _up.get('sigma', 0.0)
+                if _up_sigma > 0:
+                    _up_p = _up['p']
+                    for t in range(max_tau + 1):
+                        cdf_val = _shifted_lognormal_cdf(
+                            float(t), _up.get('onset', 0.0), _up['mu'], _up_sigma)
+                        weighted_cdf[t] += _up_p * cdf_val
+                    total_w += _up_p
+            if total_w > 0:
+                for t in range(max_tau + 1):
+                    weighted_cdf[t] /= total_w
+            for t in range(max_tau + 1):
+                x_arr[t] = max(a_pop * reach_at_from_node * weighted_cdf[t], float(N_i))
+            c['x_at_tau'] = x_arr
+            a_idx = min(a_i, max_tau)
+            c['x_frontier'] = x_arr[a_idx]
+
     # ── Monte Carlo fan bands ────────────────────────────────────────
     _mc_msg = (f"[MC_diag] has_bayes={has_bayes} edge_mu_sd={edge_mu_sd} edge_sigma_sd={edge_sigma_sd} "
                f"edge_onset_sd={edge_onset_sd} edge_p_sd={edge_p_sd} edge_p={edge_p} "
@@ -733,9 +790,6 @@ def compute_cohort_maturity_rows(
               f"onset={upstream_params.get('onset'):.4f} "
               f"alpha={upstream_alpha:.4f} beta={upstream_beta:.4f} "
               f"up_prior_rate={upstream_alpha/(upstream_alpha+upstream_beta):.6f}")
-        print(f"[BAYES_path] path_alpha={path_alpha:.4f} path_beta={path_beta:.4f} "
-              f"path_prior_rate={path_alpha/(path_alpha+path_beta):.6f} "
-              f"expected_y_x_ratio_at_inf={path_alpha/(path_alpha+path_beta) / (upstream_alpha/(upstream_alpha+upstream_beta)):.4f}")
     # Also write to file for debugging
     try:
         with open('/tmp/mc_diag.log', 'a') as _f:
@@ -891,66 +945,32 @@ def compute_cohort_maturity_rows(
         for c in cohort_list:
             N_i = c['x_frozen']
             k_i = c['y_frozen']
-            a_pop = c.get('a_frozen', N_i) or N_i or 1.0  # anchor population
             a_i = c['tau_max']
-            ad_str = c['anchor_day'].isoformat()
+            x_frontier = c['x_frontier']
+
+            if N_i <= 0 and x_frontier <= 0:
+                continue  # No arrivals and no model arrivals → skip.
 
             a_idx = min(a_i, T - 1)
 
-            if is_window or upstream_path_cdf is None:
-                # Window mode: forecast with conditioned draws.
-                # y = k + N × remaining_cdf × p (conditioned p and CDF).
-                if N_i <= 0:
-                    continue  # No arrivals in window mode → skip.
-                cdf_at_a = cdf_arr[:, a_idx]      # (S,)
-                c_i_b = cdf_at_a[:, None]          # (S, 1)
-                remaining_cdf = np.maximum(cdf_arr - c_i_b, 0.0)  # (S, T)
-                n_eff_b = N_i * c_i_b                              # (S, 1)
-                y_forecast = k_i + N_i * remaining_cdf * p_s[:, None]  # (S, T)
-                x_forecast_arr = np.full((S, T), N_i)
-                y_forecast = np.clip(y_forecast, k_i, N_i)
-            else:
-                # Cohort mode: same conditioned draws, growing x.
-                cdf_at_a = cdf_arr[:, a_idx]      # (S,)
-                c_i_b = cdf_at_a[:, None]          # (S, 1)
-                remaining_cdf = np.maximum(cdf_arr - c_i_b, 0.0)  # (S, T)
+            # x forecast from pre-computed array (flat or model-derived)
+            x_tau_arr = np.array(c['x_at_tau'][:T])           # (T,)
+            x_forecast_arr = np.broadcast_to(
+                x_tau_arr[None, :], (S, T)
+            ).copy()
 
-                # Option 1 (cohort-x-per-date-estimation.md §3):
-                #   x_model(s, τ) = a_s × reach(from_node) × CDF_path(τ)
-                x_model = a_pop * reach_at_from_node * upstream_path_cdf  # (T,)
-                x_model_floored = np.maximum(x_model, N_i)  # floor at x_frozen
+            # y forecast: k + x_frontier × remaining_cdf × p (conditioned)
+            cdf_at_a = cdf_arr[:, a_idx]                       # (S,)
+            c_i_b = cdf_at_a[:, None]                           # (S, 1)
+            remaining_cdf = np.maximum(cdf_arr - c_i_b, 0.0)   # (S, T)
+            n_eff_b = N_i * c_i_b                               # (S, 1)
+            y_forecast = k_i + x_frontier * remaining_cdf * p_s[:, None]  # (S, T)
+            y_forecast = np.clip(y_forecast, k_i, x_forecast_arr)
 
-                x_forecast_arr = np.broadcast_to(
-                    x_model_floored[None, :], (S, T)
-                ).copy()
-
-                x_at_frontier = float(x_model_floored[a_idx])
-                n_eff_b = N_i * c_i_b                              # (S, 1)
-                y_forecast = k_i + x_at_frontier * remaining_cdf * p_s[:, None]  # (S, T)
-                y_forecast = np.clip(y_forecast, k_i, x_forecast_arr)
-
-            # Mature ages: use observed (x, y) — same across all draws.
-            # In cohort mode, cohort_at_tau is sparse (not every τ has data).
-            # Carry forward the last known (x, y) — both can only increase,
-            # so carry-forward is monotonically correct.
-            # In window mode, x is fixed at N_i for all τ.
-            observed_x = np.zeros(T)
-            observed_y = np.zeros(T)
-            tau_data = cohort_at_tau.get(ad_str, {})
-            last_x = 0.0 if not is_window else float(N_i)
-            last_y = 0.0
-            for t_idx in range(T):
-                t_val = int(tau_grid[t_idx])
-                if t_val <= a_i:
-                    obs = tau_data.get(t_val)
-                    if obs:
-                        last_x = obs[0]
-                        last_y = obs[1]
-                    elif is_window:
-                        last_x = float(N_i)
-                        # last_y stays as previous (carry-forward)
-                    observed_x[t_idx] = last_x
-                    observed_y[t_idx] = last_y
+            # Mature ages: use pre-computed observed (x, y) arrays.
+            # Carry-forward already baked in during pre-computation.
+            observed_x = np.array(c['obs_x'][:T])   # (T,)
+            observed_y = np.array(c['obs_y'][:T])   # (T,)
 
             # Combine: observed where mature, forecast where immature
             mature_mask = tau_grid <= a_i  # (T,) bool

@@ -30,9 +30,34 @@ for the cohort maturity fan chart and related forecasting work.
 
 ## Current implementation state (2-Apr-26)
 
-### What was implemented today
+### Major changes this session (2-Apr-26)
 
-**Option 1 cohort-mode `x` estimation** in `cohort_forecast.py`:
+**Importance-weighted MC fan chart** — complete rewrite of the MC
+dispersion mechanism in `cohort_forecast.py`:
+
+- **Importance sampling** replaces all previous rate-draw approaches
+  (per-Cohort Beta draw, pooled Beta, raw MVN p, posterior mean).
+  For each MC draw θ^(b) from the MVN posterior, computes the
+  Binomial likelihood of the observed Cohort data, normalises to
+  importance weights, and resamples.  This conditions ALL parameters
+  (p, mu, sigma, onset) on the window evidence — not just p.
+- **Zero-maturity degeneration** verified: at zero maturity, no
+  evidence → uniform weights → fan = confidence band.  Tested in
+  `TestWindowZeroMaturityDegeneration::test_fan_equals_confidence_band_at_zero_maturity`.
+- **Fan narrows with evidence**: more Cohorts / more data → stronger
+  conditioning → narrower fan.  Tested in
+  `TestWindowZeroMaturityDegeneration::test_fan_narrows_with_evidence`.
+- **Unified window/cohort codepath**: the MC forecast loop is now
+  a single path.  The only branch is how x is computed: flat N_i
+  (window) vs a_pop × reach × CDF_path(τ) (cohort).
+- **`compute_confidence_band`** now returns (upper, lower, median)
+  — third element added for like-for-like comparison with fan median.
+- **Anchor window filter** added: Cohorts outside [anchor_from,
+  anchor_to] are now excluded from the forecast.
+- **tau_max fix**: uses last frame's snapshot date, not sweep_to,
+  so Cohorts aren't treated as "mature" for days beyond the data.
+
+### Cohort-mode `x` estimation (from prior session)
 
 - `compute_reach_probability()`: walks the DAG backward from the
   subject edge's from-node, multiplying edge rates (`p.mean`) to
@@ -42,20 +67,14 @@ for the cohort maturity fan chart and related forecasting work.
   incoming edges. Floored at `x_frozen`.
 - Per-Cohort rule: observed `x` where `τ ≤ tau_max`, model forecast
   (floored) where `τ > tau_max`.
-- Cohort-mode `y` uses Beta posterior draw (`rng.beta`) for rate
-  dispersion. Window mode uses posterior mean (unchanged).
-- Window mode uses `q = p × CDF` for `c_i` and `remaining_cdf`
-  (preserving original `p` dispersion mechanism). Cohort mode uses
-  pure `cdf_arr`.
-- Zero-maturity diagnostic (`[DIAG_0d]`) active for Cohorts with
-  `tau_max ≤ 5`, both modes.
 
 ### What was NOT changed
 
-- Window mode MC path: structurally identical to pre-session code.
-  Fan dispersion confirmed visually correct.
-- Deterministic midpoint: updated for Option 1 `x_model` and
-  carry-forward in cohort-mode sparse data, but no Beta draw.
+- Deterministic midpoint: still uses per-Cohort posterior mean with
+  `alpha_0/beta_0`.  Not yet updated to use importance-weighted
+  draws (the midpoint is deterministic, not stochastic, so
+  importance weighting doesn't directly apply — it would need a
+  different approach).
 - FE: no changes. No new data plumbing.
 
 ---
@@ -65,36 +84,39 @@ for the cohort maturity fan chart and related forecasting work.
 All open calibration and implementation issues are tracked in two
 locations. This section indexes them to avoid confusion.
 
+### From this session
+
+- **`path_alpha/path_beta` dead code**: deleted. The `path_` prefix
+  in this app refers to the cohort-level posterior on the same edge
+  (not upstream DAG path). Already handled correctly by the
+  `posterior_path_alpha/beta` source selection at lines 461-466.
+
+- **Production data testing blocked**: Bayes fit requires
+  `BAYES_WEBHOOK_SECRET` in `.env.local` (now added) but the local
+  Bayes roundtrip has a model fit issue. Test fixture works correctly.
+
 ### From `cohort-maturity-full-bayes-design.md`
 
 - **§7.5 — y projection base**: the frontier-conditioned formula
   gives depressed rates for low-maturity Cohorts because `y` is
   anchored at `x_at_frontier` while `x` grows to full model
-  population. A per-tau projection was tested and visually better
-  but mathematically incorrect (double time-scaling). Correct
-  convolution formula needed.
+  population. Correct convolution formula needed.
 
 - **§11 — Known implementation defects**: shared-ancestor bug in
   DAG reach traversal, reach not anchored to query anchor node,
   inconsistent probability sources, silent latency fallback,
-  per-node cap distortion. These are implementation bugs in the
-  current `cohort_forecast.py` Option 1 code.
+  per-node cap distortion.
 
 ### From `cohort-x-per-date-estimation.md`
 
-- **§8.1 — Zero-maturity degeneration invariant**: both `window()`
-  and `cohort()` must degenerate to `p × CDF_edge(τ)` as maturity
-  → 0. Not yet confirmed. Diagnostic dump (`[DIAG_0d]`) is in
-  place to decompose the divergence. Next step: run `window(-0d:)`
-  and `cohort(-0d:)` queries and analyse the diagnostic output to
-  identify which terms block degeneration.
-  **This is the highest priority open issue.**
+- **§8.1 — Zero-maturity degeneration invariant**: RESOLVED for
+  window mode.  Both tests pass.  Cohort mode not yet verified.
 
-- **§8.2 — Stochastic denominator**: cohort-mode `x` is
-  deterministic across MC draws. Proposal 2A (sample upstream path
-  terms per draw) and 2B (consistency fix: `compute_reach_probability`
-  uses `edge.p.mean` while CDF weights use `read_edge_cohort_params`
-  path posterior — pick one source).
+- **§8.2 — Stochastic denominator**: cohort-mode `x` is still
+  deterministic across MC draws (uses point-estimate upstream CDF).
+  The importance weighting conditions (mu, sigma, onset) on evidence
+  which partially addresses this, but upstream CDF is not yet
+  per-draw.
 
 ### Key design decision: window vs cohort CDF basis
 

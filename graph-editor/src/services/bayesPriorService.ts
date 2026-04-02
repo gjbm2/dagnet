@@ -20,10 +20,14 @@ import type { GraphData } from '../types';
  * Sets quality.gate_passed = false (entry stays for reference/display).
  * Also clears any explicit bayesian pin so the preference resolves via
  * best_available → bayesianIfGated() → gate fails → analytic.
+ *
+ * When `clearPosterior` is true, also removes edge.p.posterior so that
+ * the forecast quality overlay immediately reflects no-data (grey).
  */
 function invalidateBayesianOnEdges(
   graph: GraphData,
   paramId: string,
+  opts?: { clearPosterior?: boolean },
 ): boolean {
   let changed = false;
   for (const edge of (graph.edges ?? []) as any[]) {
@@ -45,6 +49,15 @@ function invalidateBayesianOnEdges(
         bayesEntry.quality.gate_passed = false;
         changed = true;
       }
+    }
+
+    // Remove posterior + stashed slices from the live graph edge so
+    // forecast quality view immediately shows no-data, and the
+    // re-projection pipeline doesn't resurrect stale posterior data.
+    if (opts?.clearPosterior) {
+      if (edge.p.posterior) { delete edge.p.posterior; changed = true; }
+      if (edge.p._posteriorSlices) { delete edge.p._posteriorSlices; changed = true; }
+      if (edge.p.latency?.posterior) { delete edge.p.latency.posterior; changed = true; }
     }
   }
   return changed;
@@ -122,11 +135,21 @@ export async function clearBayesResetForParam(paramId: string): Promise<void> {
 }
 
 /**
- * Delete all fit_history from a single parameter file's posterior block.
- * Destructive: fit_history is used for volatility/meta-dispersion estimation.
+ * Delete the entire posterior block from a single parameter file.
+ * Destructive: removes posterior, fit_history, and all diagnostics.
  * Caller should confirm with the user before calling.
+ *
+ * When `graphMutation` is provided, also invalidates the bayesian
+ * model_vars entry and clears any bayesian pin on matching edges,
+ * so the forecast quality view immediately reflects no-data state.
  */
-export async function deleteHistoryForParam(paramId: string): Promise<boolean> {
+export async function deleteHistoryForParam(
+  paramId: string,
+  graphMutation?: {
+    graph: GraphData;
+    setGraph: (g: GraphData) => void;
+  },
+): Promise<boolean> {
   const fileId = `parameter-${paramId}`;
   const entry = fileRegistry.getFile(fileId);
   if (!entry) {
@@ -135,14 +158,22 @@ export async function deleteHistoryForParam(paramId: string): Promise<boolean> {
     return false;
   }
 
-  if (entry.data?.posterior?.fit_history) {
+  if (entry.data?.posterior) {
     const doc = { ...entry.data };
-    const posterior = { ...doc.posterior };
-    delete posterior.fit_history;
-    doc.posterior = posterior;
+    delete doc.posterior;
     await fileRegistry.updateFile(fileId, doc);
     sessionLogService.info('data-update', 'BAYES_HISTORY_DELETED',
-      `Deleted fit_history from ${paramId}`);
+      `Deleted posterior from ${paramId}`);
+
+    // Invalidate bayesian entry and clear posterior on the live graph
+    // so forecast quality view immediately shows no-data.
+    if (graphMutation) {
+      if (invalidateBayesianOnEdges(graphMutation.graph, paramId, { clearPosterior: true })) {
+        sessionLogService.info('data-update', 'BAYES_HISTORY_DELETE_GATE_INVALIDATED',
+          `Invalidated bayesian gate and cleared posterior for ${paramId}`);
+      }
+    }
+
     return true;
   }
   return false;
@@ -230,7 +261,9 @@ export async function resetPriorsForAllParams(
 }
 
 /**
- * Bulk: delete fit_history from all parameter files referenced by graph edges.
+ * Bulk: delete posterior from all parameter files referenced by graph edges.
+ * Also invalidates bayesian model_vars entries and clears bayesian pins
+ * on the live graph so forecast quality view reflects no-data immediately.
  * Returns the number of parameters updated.
  */
 export async function deleteHistoryForAllParams(
@@ -241,7 +274,7 @@ export async function deleteHistoryForAllParams(
 
   const logOpId = sessionLogService.startOperation(
     'info', 'data-update', 'BAYES_HISTORY_DELETE_ALL',
-    'Delete Bayesian fit history for all parameters');
+    'Delete Bayesian posteriors for all parameters');
 
   let count = 0;
   const seen = new Set<string>();
@@ -250,15 +283,56 @@ export async function deleteHistoryForAllParams(
     if (!paramId || seen.has(paramId)) continue;
     seen.add(paramId);
 
+    // Param file deletion only — graph edges invalidated in bulk below
     const ok = await deleteHistoryForParam(paramId);
     if (ok) {
       count++;
       sessionLogService.addChild(logOpId, 'info', 'BAYES_HISTORY_DELETE_EDGE',
-        `Deleted history: ${paramId}`);
+        `Deleted posterior: ${paramId}`);
+    }
+  }
+
+  // ALWAYS invalidate bayesian entries + clear posterior data on the live
+  // graph (in-place), regardless of whether param files had anything to
+  // delete. The graph edges may still carry stale posterior/slices from a
+  // previous hydration even after param files were cleaned in an earlier run.
+  const liveGraph = getGraph();
+  let edgesCleared = false;
+  if (liveGraph) {
+    for (const edge of (liveGraph.edges ?? []) as any[]) {
+      // Clear explicit bayesian pin
+      if (edge.p?.model_source_preference === 'bayesian' ||
+          edge.p?.model_source_preference_overridden) {
+        delete edge.p.model_source_preference;
+        delete edge.p.model_source_preference_overridden;
+        edgesCleared = true;
+      }
+
+      // Fail the gate on bayesian model_vars entry
+      if (Array.isArray(edge.p?.model_vars)) {
+        const bayesEntry = edge.p.model_vars.find((v: any) => v.source === 'bayesian');
+        if (bayesEntry) {
+          if (!bayesEntry.quality) bayesEntry.quality = {};
+          bayesEntry.quality.gate_passed = false;
+          edgesCleared = true;
+        }
+      }
+
+      // Clear posterior + stashed slices so forecast quality view shows
+      // no-data and re-projection doesn't resurrect stale data
+      if (edge.p?.posterior) { delete edge.p.posterior; edgesCleared = true; }
+      if (edge.p?._posteriorSlices) { delete edge.p._posteriorSlices; edgesCleared = true; }
+      if (edge.p?.latency?.posterior) { delete edge.p.latency.posterior; edgesCleared = true; }
+    }
+
+    if (edgesCleared) {
+      sessionLogService.info('data-update', 'BAYES_HISTORY_DELETE_ALL_EDGES_CLEARED',
+        'Cleared posteriors and bayesian gates on all edges');
     }
   }
 
   sessionLogService.endOperation(logOpId, 'success',
-    `Deleted fit history from ${count} parameter(s)`);
-  return count;
+    `Deleted posteriors from ${count} parameter(s)`);
+  // Return max of count and edgesCleared so caller knows work was done
+  return edgesCleared ? Math.max(count, 1) : count;
 }

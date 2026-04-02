@@ -62,6 +62,22 @@ the file first — never modify, truncate, or delete.**
 
 ---
 
+## Agent Warm Start (MANDATORY at session start)
+
+**Before doing ANY work**, read these foundational docs in full. They take ~5 minutes and prevent the most common multi-attempt failures. This is not optional — skipping this step is the single biggest cause of wasted iterations.
+
+**Read in full (every session)**:
+1. `docs/current/codebase/SYNC_SYSTEM_OVERVIEW.md` — where data lives (4 layers: param file → graph edge → stashed slices → React render tree), how it flows between Git/IDB/FileRegistry/GraphStore/ReactFlow, known races, suppression mechanisms, and the "posterior propagation lesson" that explains why clearing state from one layer is useless unless you handle all four
+2. `docs/current/codebase/RESERVED_QUERY_TERMS_GLOSSARY.md` — term definitions (Cohort vs cohort(), window mode vs cohort mode, edge-level vs path-level latency, anchor_median_lag_days) that affect every subsystem
+3. `docs/current/codebase/DEV_ENVIRONMENT_AND_HMR.md` — staleness diagnostic section only (5-step checklist). Do NOT blame HMR for bugs unless this checklist confirms code staleness.
+
+**Then check for handover notes**:
+4. List `docs/current/handover/` — if a recent handover exists for your work area, read it in full before starting
+
+**Why this exists**: agents repeatedly spend 3-6 attempts on fixes that would have been one-shot with this context. The sync overview alone would have prevented the 6-attempt posterior deletion failure (each attempt missed a different layer). The glossary prevents misusing cohort/window semantics. The HMR doc prevents false staleness diagnoses.
+
+---
+
 ## Instant-Action Triggers (DO IMMEDIATELY — NO THINKING, NO SEARCHING)
 
 These are **non-negotiable reflexes**. When the user's message matches a trigger, execute the action **as your very first tool call** before doing anything else. Do not search for files, do not reason about the problem, do not read code. Just run the command.
@@ -141,7 +157,7 @@ These are **not** DagNet core code. They are context repos for inspection and tr
 This repo is large and subtle; over-confidence causes regressions. The assistant must default to *cautious, systematic* work.
 
 **Before proposing or implementing a semantic change** (e.g. “X should be part of the cache signature”):
-- **Read the relevant codebase architecture doc(s) first**: see the categorised index in *Architecture Patterns → Codebase architecture docs* below. These docs encode hard-won understanding of how each subsystem works — reading them before touching code prevents re-deriving context and avoids known pitfalls.
+- **Confirm warm start completed**: if you haven't read the 3 foundational docs in *Agent Warm Start* above, do that first. Then consult the *Task-Type Reading Guide* in *Architecture Patterns* below for task-specific docs.
 - **TRIPLE-SEARCH** the repo for existing implementations and prior decisions (`grep` + `codebase_search`), including docs in `docs/current/`.
 - **Trace the full path** for the behaviour: UI entry points → hooks → services → storage/adapters → caches → persistence formats.
 - **Identify all call sites** and *all* related “signature/key” mechanisms (often there are multiple caches with different purposes).
@@ -290,106 +306,102 @@ Use `sessionLogService` from `services/sessionLogService.ts`:
 ## Architecture Patterns
 
 ### Codebase architecture docs (`docs/current/codebase/`)
-This folder contains hard-won understanding of how our dependencies and subsystems actually work internally. Three rules:
 
-1. **Before touching a subsystem**: find the matching doc(s) in the index below and read them first. This prevents re-deriving expensive context and avoids known pitfalls.
-2. **Before debugging a system-level problem**: check this folder for an existing doc on the subsystem. Reading it first will save hours.
-3. **After resolving a system-level problem that required non-obvious understanding**: add or update a doc in this folder encoding the mental model. If you fought a dependency's internals to understand behaviour that isn't documented anywhere obvious, that understanding belongs here.
+Hard-won understanding of how subsystems actually work. Two rules:
+1. **Before debugging a system-level problem**: check for an existing doc. Reading it first saves hours.
+2. **After resolving a problem that required non-obvious understanding**: add or update a doc encoding the mental model.
 
-#### Doc index by subsystem
+#### Task-Type Reading Guide
 
-**Persistence & sync** (read these before touching IDB, FileRegistry, dirty tracking, or git ops):
-- `INDEXEDDB_PERSISTENCE_LAYER.md` — IDB schema, tables, workspace prefix contract, dual-storage invariant
-- `FILE_REGISTRY_LIFECYCLE.md` — In-memory cache, dirty tracking, registry-to-IDB sync
-- `GIT_OPERATIONS_ARCHITECTURE.md` — Clone/pull/push/commit, atomic Git Data API, non-blocking pull
-- `MERGE_CONFLICT_RESOLUTION.md` — 3-way merge (text + structural JSON), conflict resolution UI
-- `GRAPH_WRITE_SYNC_ARCHITECTURE.md` — Multi-stage sync pipeline, graph write propagation
-- `SYNC_ENGINE_GUARD_STATE_MACHINE.md` — 9-ref guard state machine in GraphCanvas
-- `STATE_MANAGEMENT_REFERENCE.md` — State layers across the graph editor
+Identify your task type below, then read the listed docs **before writing any code**. Docs marked **(full)** must be read completely; **(skim)** means read the overview sections and consult detail sections as needed; **(ref)** means look up specific entries only when you hit a relevant term or mechanism.
 
-**Graph mutation & computation** (read these before modifying graph structure, node IDs, queries, or analysis types):
-- `GRAPH_MUTATION_UPDATE_MANAGER.md` — Edit propagation, node ID renaming, 5-direction mapping system
-- `DSL_PARSING_ARCHITECTURE.md` — queryDSL.ts as single source of truth
-- `DATA_RETRIEVAL_QUERIES.md` — Three purposes of query DSL strings
-- `RESERVED_QUERY_TERMS_GLOSSARY.md` — Reserved terms used across FE, BE, tests, docs
-- `FETCH_PLANNING_PRINCIPLES.md` — Fill missing + refresh stale, single-codepath contract
+**Fixing a state/sync/dirty-tracking bug**:
+- SYNC_SYSTEM_OVERVIEW.md **(full)** — the 4-layer propagation model, all sync flows, known races
+- GRAPH_WRITE_SYNC_ARCHITECTURE.md **(full)** — store↔file sync detail, suppression windows
+- INDEXEDDB_PERSISTENCE_LAYER.md **(skim)** — prefix contract, dual-storage invariant
+- FILE_REGISTRY_LIFECYCLE.md **(skim)** — dirty detection, initialisation phase
+- SYNC_ENGINE_GUARD_STATE_MACHINE.md **(ref)** — look up specific guard refs when you encounter them
 
-**Analysis & charts** (read these before modifying analysis types, charts, or canvas analyses):
-- `CHART_PIPELINE_ARCHITECTURE.md` — Recipes, hydration, compute, display planning, staleness
-- `CANVAS_ANALYSIS_FEATURE.md` — Container+content model, three-mode scenarios, computation
-- `ANALYSIS_RETURN_SCHEMA.md` — Standard declarative schema for analysis runners
-- `adding-analysis-types.md` — Checklist for new analysis types
-- `surprise-gauge-design.md` — Surprise analysis type design
+**Modifying git operations (pull/push/commit/clone)**:
+- GIT_OPERATIONS_ARCHITECTURE.md **(full)** — service layering, atomic commit, credentials
+- INDEXEDDB_PERSISTENCE_LAYER.md **(skim)** — workspace prefix contract
+- MERGE_CONFLICT_RESOLUTION.md **(full if touching merge)** — 3-way merge, conflict UI
 
-**Scenarios & what-if** (read these before modifying scenario overlays, composition, or what-if mode):
-- `SCENARIO_SYSTEM_ARCHITECTURE.md` — Overlays, composition, regeneration, rehydration, provenance
-- `WHAT_IF_ANALYSIS.md` — Override types, DSL, effective probability computation
+**Modifying graph structure, node IDs, or queries**:
+- GRAPH_MUTATION_UPDATE_MANAGER.md **(full)** — edit propagation, node ID renaming, override flags
+- DSL_PARSING_ARCHITECTURE.md **(skim)** — queryDSL.ts as single source of truth
+- DATA_RETRIEVAL_QUERIES.md **(skim)** — three purposes of query DSL strings
+- FETCH_PLANNING_PRINCIPLES.md **(ref)** — fill missing + refresh stale contract
 
-**Parameters & model variables** (read these before modifying parameters, param packs, or model vars):
-- `PARAMETER_SYSTEM.md` — Data model, extraction, param packs, model variable resolution, schemas
+**Adding or modifying analysis types / charts / canvas analyses**:
+- adding-analysis-types.md **(full)** — checklist
+- CHART_PIPELINE_ARCHITECTURE.md **(full)** — recipes, hydration, compute, display planning
+- CANVAS_ANALYSIS_FEATURE.md **(full if touching canvas)** — container+content, three-mode scenarios
+- ANALYSIS_RETURN_SCHEMA.md **(ref)** — result schema contract
 
-**Statistical & Bayesian** (read these before modifying Bayes, forecasting, or probability blending):
-- `STATISTICAL_DOMAIN_SUMMARY.md` — Statistical architecture, data pipeline, Bayesian programme
-- `BAYESIAN_ENGINE_RESEARCH.md` — Bayesian tool research findings
-- `PROBABILITY_BLENDING.md` — Blending cohort-mode latency edge probabilities
-- `cohort-maturity-forecast-design.md` — Cohort maturity forecast chart design
+**Modifying scenarios, what-if, or parameter overlays**:
+- SCENARIO_SYSTEM_ARCHITECTURE.md **(full)** — composition, regeneration, provenance
+- WHAT_IF_ANALYSIS.md **(full if touching what-if)** — override types, DSL, effective probability
 
-**Snapshot DB** (read these before modifying snapshot storage, retrieval, or signatures):
-- `SNAPSHOT_DB_ARCHITECTURE.md` — Data model and objectives
-- `SNAPSHOT_DB_CONTEXT_EPOCHS.md` — Context epochs for regime safety
-- `SNAPSHOT_DB_SIGNATURES.md` — Flexible signature matching for archival identity
-- `SNAPSHOT_FIELD_SEMANTICS.md` — Field meanings by slice_key type
-- `snapshot-db-data-paths.md` — Data flow from Amplitude through Bayes via snapshots table
+**Modifying parameters, param packs, or model variables**:
+- PARAMETER_SYSTEM.md **(full)** — data model, extraction, model variable resolution
+- FE_BE_STATS_PARALLELISM.md **(skim)** — analytic vs analytic_be entries, transition plan
 
-**Hash & signature infrastructure** (read these before modifying hashing, signature matching, or rename resilience):
-- `HASH_SIGNATURE_INFRASTRUCTURE.md` — Core hash, structured signatures, mappings, chain tracing, commit guard
+**Modifying statistical/Bayesian/forecasting logic**:
+- FE_BE_STATS_PARALLELISM.md **(full)** — why both FE and BE run the topo pass, parity comparison
+- STATISTICAL_DOMAIN_SUMMARY.md **(full)** — statistical architecture, data pipeline
+- PROBABILITY_BLENDING.md **(skim)** — blending cohort-mode latency edge probabilities
 
-**Lag & time-to-conversion** (read these before modifying lag analysis, horizons, or projections):
-- `LAG_ANALYSIS_SUBSYSTEM.md` — Lag fit, horizons, mixture aggregation
-- `PROJECTION_MODE.md` — Future conversion projection via convolution
-- `DATE_MODEL_COHORT_MATURITY.md` — Canonical date concepts (anchor, reference, data dates)
+**Modifying snapshot DB, signatures, or hash infrastructure**:
+- SNAPSHOT_DB_ARCHITECTURE.md **(full)** — data model and objectives
+- SNAPSHOT_FIELD_SEMANTICS.md **(full)** — field meanings by slice_key type
+- HASH_SIGNATURE_INFRASTRUCTURE.md **(full)** — core hash, matching, mappings, chain tracing
+- SNAPSHOT_DB_SIGNATURES.md **(skim)** — flexible signature matching
+- SNAPSHOT_DB_CONTEXT_EPOCHS.md **(ref)** — context epochs
+- snapshot-db-data-paths.md **(ref)** — data flow through snapshots table
 
-**Data retrieval & slices** (read these before modifying retrieve-all, slice planning, or data depth):
-- `SLICE_PLANNING_RETRIEVAL.md` — Retrieve-all planning and execution
-- `DATA_DEPTH_SCORING.md` — Three-dimension composite coverage scoring
-- `CONTEXT_SYSTEM.md` — Context registration, MECE aggregation, fallback
+**Modifying lag analysis, horizons, or projections**:
+- LAG_ANALYSIS_SUBSYSTEM.md **(full)** — lag fit, horizons, mixture aggregation
+- PROJECTION_MODE.md **(full if touching projection)** — convolution computation
+- DATE_MODEL_COHORT_MATURITY.md **(skim)** — canonical date concepts
 
-**Automation & scheduling** (read these before modifying daily fetch, automation runs, or staleness):
-- `AUTOMATION_PIPELINE.md` — Daily fetch, retrieve-all automation, run logging
-- `JOB_SCHEDULER.md` — Unified system for all automated/recurring work
-- `STALENESS_AND_AUTO_UPDATE.md` — Nudges, jobs, auto-update policy
+**Modifying data fetching, retrieve-all, or slice planning**:
+- SLICE_PLANNING_RETRIEVAL.md **(full)** — retrieve-all planning and execution
+- CONTEXT_SYSTEM.md **(skim)** — context registration, MECE aggregation
+- DATA_DEPTH_SCORING.md **(ref)** — coverage scoring
 
-**Share & collaboration** (read these before modifying share links, live share, or bundles):
-- `SHARE_AND_LIVE_SHARE.md` — Static/live shares, boot/hydration/sync lifecycle, bundles
-- `URL_PARAMS.md` — Supported URL parameters
+**Modifying automation, scheduling, or staleness**:
+- AUTOMATION_PIPELINE.md **(full)** — daily fetch, retrieve-all automation, run logging
+- JOB_SCHEDULER.md **(skim)** — unified system for recurring work
+- STALENESS_AND_AUTO_UPDATE.md **(skim)** — nudges, auto-update policy
 
-**Python backend** (read these before modifying API handlers, MSMDC, or compute server):
-- `PYTHON_BACKEND_ARCHITECTURE.md` — FastAPI endpoints, MSMDC, Bayes, FE-BE communication
+**Modifying share links, live share, or bundles**:
+- SHARE_AND_LIVE_SHARE.md **(full)** — static/live shares, boot/hydration/sync
+- URL_PARAMS.md **(ref)** — supported URL parameters
 
-**Canvas & rendering** (read these before modifying ReactFlow, edge rendering, or canvas layout):
-- `CANVAS_RENDERING_ARCHITECTURE.md` — Two-tier z-index model, transform pipeline
-- `REACTFLOW_CONTROLLED_MODE.md` — Controlled mode pitfalls and reliable patterns
-- `EDGE_RENDERING_PERF_ROOT_CAUSE.md` — Beads/chevrons performance root cause
+**Modifying ReactFlow canvas, edge rendering, or layout**:
+- REACTFLOW_CONTROLLED_MODE.md **(full)** — controlled mode pitfalls and reliable patterns
+- CANVAS_RENDERING_ARCHITECTURE.md **(skim)** — z-index model, transform pipeline
+- EDGE_RENDERING_PERF_ROOT_CAUSE.md **(ref)** — beads/chevrons performance
 
-**UI layout** (read these before modifying sidebar, panels, or dock system):
-- `SIDEBAR_AND_PANELS_ARCHITECTURE.md` — Nested rc-dock system, panel state persistence
+**Modifying Python backend, MSMDC, or compute server**:
+- PYTHON_BACKEND_ARCHITECTURE.md **(full)** — FastAPI endpoints, MSMDC, Bayes, FE-BE communication
 
-**Credentials** (read these before modifying auth, OAuth, or credential loading):
-- `CREDENTIALS_INIT_FLOW.md` — Three-tier credentials system, initialisation sequence
-
-**Images** (read these before modifying image upload, compression, or serving):
-- `IMAGE_HANDLING.md` — Upload, compression, blob URL serving
-
-**Dev tooling & diagnostics**:
-- `DEV_LOG_STREAMING.md` — Three JSONL log streams for debugging
-- `GRAPH_OPS_TOOLING.md` — Graph validation and management tools
-- `INTEGRITY_CHECK_ADDITIONS.md` — Structural integrity checks
-- `TEST_COVERAGE_SURVEY.md` — Test coverage analysis
-
-**Product & architecture overview**:
-- `APP_ARCHITECTURE.md` — Browser-based graph editor overview
-- `COMPLEXITY_ANALYSIS.md` — Most complex aspects of DagNet
-- `COMPETITIVE_ANALYSIS.md` — Competitive landscape analysis
+**Other subsystem docs** (consult when relevant):
+- `SIDEBAR_AND_PANELS_ARCHITECTURE.md` — nested rc-dock, panel persistence
+- `CREDENTIALS_INIT_FLOW.md` — three-tier credentials, initialisation
+- `IMAGE_HANDLING.md` — upload, compression, blob URL serving
+- `APP_ARCHITECTURE.md` — browser-based graph editor overview
+- `COMPLEXITY_ANALYSIS.md` — most complex aspects of DagNet
+- `COMPETITIVE_ANALYSIS.md` — competitive landscape
+- `cohort-maturity-forecast-design.md` — cohort maturity forecast chart
+- `surprise-gauge-design.md` — surprise analysis type
+- `BAYESIAN_ENGINE_RESEARCH.md` — Bayesian tool research
+- `DEV_LOG_STREAMING.md` — three JSONL log streams
+- `GRAPH_OPS_TOOLING.md` — graph validation tools
+- `INTEGRITY_CHECK_ADDITIONS.md` — structural integrity checks
+- `TEST_COVERAGE_SURVEY.md` — test coverage analysis
+- `STATE_MANAGEMENT_REFERENCE.md` — state layers reference
 
 ### Service Layer Pattern
 ```typescript

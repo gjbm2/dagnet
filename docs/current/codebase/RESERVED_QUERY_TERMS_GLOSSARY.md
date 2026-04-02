@@ -50,6 +50,46 @@ The system must therefore treat `asat()` as affecting:
 The system must not mix historical evidence with a posterior fitted
 after the requested `asat()` date.
 
+## Query modes
+
+**Window mode**
+
+The query semantics selected by a `window()` clause. In window mode:
+- The Cohort is defined at the edge's `from_node` (users who arrived on that date)
+- `x` is **fixed** within the window-anchored subject
+- Latency is **edge-level** (time from `from_node` to `to_node` only)
+- Completeness is evaluated against the edge's own lag distribution
+
+**Cohort mode**
+
+The query semantics selected by a `cohort()` clause. In cohort mode:
+- The Cohort is defined at the anchor node `a` (users who entered `a` on that date)
+- `x` is **growing** — upstream arrivals are still maturing, so `x` increases with age
+- Latency is **path-level** (accumulated from anchor `a` through all upstream edges to `to_node`)
+- Completeness is evaluated against the path-level lag distribution (Fenton-Wilkinson composition of upstream edges)
+
+## Latency semantics
+
+**Edge-level latency**
+
+The time-to-conversion for a single X→Y transition. Measured by the edge's own lag distribution.
+
+Fields: `t95`, `mu`, `sigma`, `median_lag_days`, `mean_lag_days`, `onset_delta_days`
+
+**Path-level latency**
+
+The accumulated time-to-conversion from anchor A through all upstream edges to Y. Derived via Fenton-Wilkinson log-normal convolution of upstream edge-level distributions. Not directly observed — always computed.
+
+Fields: `path_t95`, `path_mu`, `path_sigma`, `path_onset_delta_days`
+
+**`anchor_median_lag_days`**
+
+The upstream path lag from anchor `a` to the edge's `from_node` (A→X), **NOT** from anchor to `to_node` (A→Y). This is the single most important semantic distinction in the snapshot field model. It represents how long it took the Cohort to reach the edge's starting point, which determines:
+- The age offset when evaluating cohort-mode completeness for this edge
+- The path-adjusted CDF: `P(reach to_node by age t | entered anchor) = F_edge(t - anchor_median_lag_days)`
+
+See SNAPSHOT_FIELD_SEMANTICS.md for full field-by-field semantics.
+
 ## Data-shape terms
 
 **`anchor_day`**

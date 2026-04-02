@@ -3644,26 +3644,22 @@ pipeline. Used by both `synth_gen.py` (DB writes) and `test_harness.py`
 the same FE hashes and prints PASS/FAIL per subject. Pipeline aborts
 if any subject has 0 rows.
 
-**Stats pass**: Python port of FE `fitLagDistribution` in
-`graph-editor/lib/stats_enhancement.py`. Derives mu/sigma/onset/t95
-from parameter file lag data. Runs in memory (doesn't write to disk).
-Called by harness before building payload.
+**Historical note (2-Apr-26)**: this journal section referred to an
+earlier Python prototype in `graph-editor/lib/stats_enhancement.py`.
+That legacy `compute_stats_pass()` path has since been removed. The live
+Python analytic topo pass is now `graph-editor/lib/runner/stats_engine.py`
+(`enhance_graph_latencies()`), and the Bayes harness calls that live path
+before building payloads.
 
-### Blocked: FE stats pass not available in Python
+### Historical blocker: FE stats pass was not yet available in Python
 
-The Bayes compiler needs priors (mu, sigma, onset, t95, forecast.mean)
-on graph edges. These come from the FE "stats pass" which fits a
-lognormal CDF to the maturation trajectories. Currently only implemented
-in TypeScript (`statisticalEnhancementService.ts`).
+At this point in the journal, the Bayes compiler needed priors (mu,
+sigma, onset, t95, forecast.mean) on graph edges, but the full FE
+stats/topo pass had not yet been ported to the Python runner stack.
 
-For synthetic data graphs, we either:
-1. Fake priors from the truth config (current hack)
-2. Port the stats pass to Python (overdue, enables automated compiler
-   development iteration)
-
-Option 2 is next — the stats pass is conceptually simple (scipy
-curve_fit on lognormal CDF, ~50–100 lines) and unblocks the full
-generate → stats → compile → evaluate loop.
+That blocker is now resolved by the `runner.stats_engine` path used by
+the harness; this section is retained as historical context for the
+earlier development sequence.
 
 ---
 

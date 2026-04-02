@@ -251,8 +251,20 @@ export function DataMenu() {
     if (!ok) return;
     const getGraph = () => (graphStore?.getState().graph as any) || null;
     const count = await deleteHistoryForAllParams(getGraph);
-    toast.success(`Deleted fit history from ${count} parameter(s)`);
-  }, [graphStore, showConfirm]);
+    toast.success(count > 0 ? `Deleted posteriors from ${count} parameter(s)` : 'No posteriors to delete');
+
+    // Trigger from-file stats pass so the graph re-renders with posteriors
+    // cleared (forecast quality view shows no-data immediately).
+    const freshGraph = getGraph();
+    if (freshGraph?.edges) {
+      const items = (freshGraph.edges as any[])
+        .filter((e: any) => e.p?.id)
+        .map((e: any) => createFetchItem('parameter', e.p.id, e.uuid || e.id, { paramSlot: 'p' }));
+      if (items.length > 0) {
+        await fetchItems(items, { mode: 'from-file', writeLagHorizonsToGraph: true });
+      }
+    }
+  }, [graphStore, showConfirm, fetchItems]);
 
   // Track selection state (will be wired up later)
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
